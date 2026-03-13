@@ -9,19 +9,21 @@ type Registry struct {
 	fallback Adapter
 }
 
-// NewRegistry creates a registry with built-in adapters.
-// The generic adapter is always the fallback.
+// NewRegistry creates an empty registry. Callers must register adapters
+// and set a fallback before use.
 func NewRegistry() *Registry {
-	return &Registry{
-		adapters: nil, // no specific adapters yet; pi, pytest, etc. added later
-		fallback: NewGeneric(0),
-	}
+	return &Registry{}
 }
 
 // Register adds an adapter to the registry. Adapters are tried in
-// registration order; first match wins. The generic fallback is always last.
+// registration order; first match wins.
 func (r *Registry) Register(a Adapter) {
 	r.adapters = append(r.adapters, a)
+}
+
+// SetFallback sets the catch-all adapter used when nothing matches.
+func (r *Registry) SetFallback(a Adapter) {
+	r.fallback = a
 }
 
 // Resolve picks the adapter for the given command.
@@ -29,7 +31,7 @@ func (r *Registry) Register(a Adapter) {
 // Priority:
 //  1. GMUX_ADAPTER env var — explicit override, bypass matching
 //  2. Walk registered adapters, first Match() wins
-//  3. Generic fallback
+//  3. Fallback (generic)
 func (r *Registry) Resolve(command []string) Adapter {
 	// Tier 1: explicit override
 	if name := os.Getenv("GMUX_ADAPTER"); name != "" {
@@ -38,9 +40,7 @@ func (r *Registry) Resolve(command []string) Adapter {
 				return a
 			}
 		}
-		// If explicit name doesn't match any registered adapter,
-		// fall through to matching (don't error — might be a typo,
-		// better to degrade gracefully)
+		// Unknown name — fall through gracefully
 	}
 
 	// Tier 2: auto-match
@@ -50,6 +50,11 @@ func (r *Registry) Resolve(command []string) Adapter {
 		}
 	}
 
-	// Tier 3: generic fallback
-	return r.fallback
+	// Tier 3: fallback
+	if r.fallback != nil {
+		return r.fallback
+	}
+
+	// Should never happen if registry is properly initialized
+	return nil
 }

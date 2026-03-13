@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/cli/gmux-run/internal/adapter"
+	"github.com/gmuxapp/gmux/cli/gmux-run/internal/adapter/adapters"
 	"github.com/gmuxapp/gmux/cli/gmux-run/internal/naming"
 	"github.com/gmuxapp/gmux/cli/gmux-run/internal/ptyserver"
 	"github.com/gmuxapp/gmux/cli/gmux-run/internal/session"
@@ -44,8 +45,10 @@ func main() {
 	sessionID := naming.SessionID()
 	sockPath := filepath.Join("/tmp/gmux-sessions", sessionID+".sock")
 
-	// Resolve adapter
+	// Resolve adapter — specific adapters first, generic fallback last
 	registry := adapter.NewRegistry()
+	registry.Register(adapters.NewPi())
+	registry.SetFallback(adapters.NewGeneric(0))
 	a := registry.Resolve(args)
 
 	// Let adapter prepare the command and env
@@ -105,7 +108,7 @@ func main() {
 	fmt.Println("serving...")
 
 	// Start silence checker for generic adapter
-	if g, ok := a.(*adapter.Generic); ok {
+	if g, ok := a.(*adapters.Generic); ok {
 		go func() {
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
