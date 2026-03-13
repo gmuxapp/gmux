@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gmux.app/schemas/session-metadata-v1.json",
+  "title": "gmux session metadata v1",
+  "type": "object",
+  "required": [
+    "version",
+    "session_id",
+    "abduco_name",
+    "kind",
+    "command",
+    "cwd",
+    "state",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "abduco_name": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "enum": ["pi", "generic", "opencode"] },
+    "command": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "cwd": { "type": "string", "minLength": 1 },
+    "state": {
+      "type": "string",
+      "enum": ["starting", "running", "waiting", "idle", "exited", "error"]
+    },
+    "created_at": { "type": "number" },
+    "updated_at": { "type": "number" }
+  },
+  "additionalProperties": true
+}
