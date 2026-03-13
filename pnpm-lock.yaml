@@ -17,13 +17,25 @@ importers:
 
   apps/gmux-api:
     dependencies:
+      '@gmux/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@hono/node-server':
         specifier: ^1.14.1
         version: 1.19.11(hono@4.12.7)
+      '@trpc/server':
+        specifier: ^11.6.0
+        version: 11.12.0(typescript@5.9.3)
       hono:
         specifier: ^4.7.2
         version: 4.12.7
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
     devDependencies:
+      '@types/node':
+        specifier: ^24.3.0
+        version: 24.12.0
       tsx:
         specifier: ^4.19.3
         version: 4.21.0
@@ -32,26 +44,32 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^3.0.7
-        version: 3.2.4(tsx@4.21.0)
+        version: 3.2.4(@types/node@24.12.0)(tsx@4.21.0)
 
   apps/gmux-web:
     dependencies:
+      '@gmux/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@trpc/client':
+        specifier: ^11.6.0
+        version: 11.12.0(@trpc/server@11.12.0(typescript@5.9.3))(typescript@5.9.3)
       preact:
         specifier: ^10.26.4
         version: 10.29.0
     devDependencies:
       '@preact/preset-vite':
         specifier: ^2.10.2
-        version: 2.10.3(@babel/core@7.29.0)(preact@10.29.0)(rollup@4.59.0)(vite@6.4.1(tsx@4.21.0))
+        version: 2.10.3(@babel/core@7.29.0)(preact@10.29.0)(rollup@4.59.0)(vite@6.4.1(@types/node@24.12.0)(tsx@4.21.0))
       typescript:
         specifier: ^5.8.2
         version: 5.9.3
       vite:
         specifier: ^6.2.0
-        version: 6.4.1(tsx@4.21.0)
+        version: 6.4.1(@types/node@24.12.0)(tsx@4.21.0)
       vitest:
         specifier: ^3.0.7
-        version: 3.2.4(tsx@4.21.0)
+        version: 3.2.4(@types/node@24.12.0)(tsx@4.21.0)
 
   packages/protocol:
     dependencies:
@@ -64,7 +82,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^3.0.7
-        version: 3.2.4(tsx@4.21.0)
+        version: 3.2.4(@types/node@24.12.0)(tsx@4.21.0)
 
 packages:
 
@@ -707,6 +725,17 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@trpc/client@11.12.0':
+    resolution: {integrity: sha512-zTwFKQdE99pvNm7kXFdHo5xIQpGqpQJHtqVkT9o+i8h/0fbDOUBEEbFVICiMsNA+GiXskoaDRX2l+z6ir+Ug3w==}
+    peerDependencies:
+      '@trpc/server': 11.12.0
+      typescript: '>=5.7.2'
+
+  '@trpc/server@11.12.0':
+    resolution: {integrity: sha512-rpZnf5FUjNndE/AjGIy+FvEHR52iBd0u0wySqWCwXj67wraj3qCuBr5Opcf0Te/g67C/YztqceFkLoG0r4mp4Q==}
+    peerDependencies:
+      typescript: '>=5.7.2'
+
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
@@ -715,6 +744,9 @@ packages:
 
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
+
+  '@types/node@24.12.0':
+    resolution: {integrity: sha512-GYDxsZi3ChgmckRT9HPU0WEhKLP08ev/Yfcq2AstjrDASOYCSXeyjDsHg4v5t4jOj7cyDX3vmprafKlWIG9MXQ==}
 
   '@vitest/expect@3.2.4':
     resolution: {integrity: sha512-Io0yyORnB6sikFlt8QW5K7slY4OjqNX9jmJQ02QDda8lyM6B5oNgVWoSoKPac8/kgnCUzuHQKrSLtu/uOqqrig==}
@@ -1025,6 +1057,9 @@ packages:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
     hasBin: true
+
+  undici-types@7.16.0:
+    resolution: {integrity: sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw==}
 
   update-browserslist-db@1.2.3:
     resolution: {integrity: sha512-Js0m9cx+qOgDxo0eMiFGEueWztz+d4+M3rGlmKPT+T4IS/jP4ylw3Nwpu6cpTTP8R1MAC1kF4VbdLt3ARf209w==}
@@ -1460,18 +1495,18 @@ snapshots:
   '@moonrepo/core-windows-x64-msvc@2.0.4':
     optional: true
 
-  '@preact/preset-vite@2.10.3(@babel/core@7.29.0)(preact@10.29.0)(rollup@4.59.0)(vite@6.4.1(tsx@4.21.0))':
+  '@preact/preset-vite@2.10.3(@babel/core@7.29.0)(preact@10.29.0)(rollup@4.59.0)(vite@6.4.1(@types/node@24.12.0)(tsx@4.21.0))':
     dependencies:
       '@babel/core': 7.29.0
       '@babel/plugin-transform-react-jsx': 7.28.6(@babel/core@7.29.0)
       '@babel/plugin-transform-react-jsx-development': 7.27.1(@babel/core@7.29.0)
-      '@prefresh/vite': 2.4.12(preact@10.29.0)(vite@6.4.1(tsx@4.21.0))
+      '@prefresh/vite': 2.4.12(preact@10.29.0)(vite@6.4.1(@types/node@24.12.0)(tsx@4.21.0))
       '@rollup/pluginutils': 5.3.0(rollup@4.59.0)
       babel-plugin-transform-hook-names: 1.0.2(@babel/core@7.29.0)
       debug: 4.4.3
       picocolors: 1.1.1
-      vite: 6.4.1(tsx@4.21.0)
-      vite-prerender-plugin: 0.5.12(vite@6.4.1(tsx@4.21.0))
+      vite: 6.4.1(@types/node@24.12.0)(tsx@4.21.0)
+      vite-prerender-plugin: 0.5.12(vite@6.4.1(@types/node@24.12.0)(tsx@4.21.0))
     transitivePeerDependencies:
       - preact
       - rollup
@@ -1485,7 +1520,7 @@ snapshots:
 
   '@prefresh/utils@1.2.1': {}
 
-  '@prefresh/vite@2.4.12(preact@10.29.0)(vite@6.4.1(tsx@4.21.0))':
+  '@prefresh/vite@2.4.12(preact@10.29.0)(vite@6.4.1(@types/node@24.12.0)(tsx@4.21.0))':
     dependencies:
       '@babel/core': 7.29.0
       '@prefresh/babel-plugin': 0.5.3
@@ -1493,7 +1528,7 @@ snapshots:
       '@prefresh/utils': 1.2.1
       '@rollup/pluginutils': 4.2.1
       preact: 10.29.0
-      vite: 6.4.1(tsx@4.21.0)
+      vite: 6.4.1(@types/node@24.12.0)(tsx@4.21.0)
     transitivePeerDependencies:
       - supports-color
 
@@ -1585,6 +1620,15 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.59.0':
     optional: true
 
+  '@trpc/client@11.12.0(@trpc/server@11.12.0(typescript@5.9.3))(typescript@5.9.3)':
+    dependencies:
+      '@trpc/server': 11.12.0(typescript@5.9.3)
+      typescript: 5.9.3
+
+  '@trpc/server@11.12.0(typescript@5.9.3)':
+    dependencies:
+      typescript: 5.9.3
+
   '@types/chai@5.2.3':
     dependencies:
       '@types/deep-eql': 4.0.2
@@ -1594,6 +1638,10 @@ snapshots:
 
   '@types/estree@1.0.8': {}
 
+  '@types/node@24.12.0':
+    dependencies:
+      undici-types: 7.16.0
+
   '@vitest/expect@3.2.4':
     dependencies:
       '@types/chai': 5.2.3
@@ -1602,13 +1650,13 @@ snapshots:
       chai: 5.3.3
       tinyrainbow: 2.0.0
 
-  '@vitest/mocker@3.2.4(vite@6.4.1(tsx@4.21.0))':
+  '@vitest/mocker@3.2.4(vite@6.4.1(@types/node@24.12.0)(tsx@4.21.0))':
     dependencies:
       '@vitest/spy': 3.2.4
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 6.4.1(tsx@4.21.0)
+      vite: 6.4.1(@types/node@24.12.0)(tsx@4.21.0)
 
   '@vitest/pretty-format@3.2.4':
     dependencies:
@@ -1929,19 +1977,21 @@ snapshots:
 
   typescript@5.9.3: {}
 
+  undici-types@7.16.0: {}
+
   update-browserslist-db@1.2.3(browserslist@4.28.1):
     dependencies:
       browserslist: 4.28.1
       escalade: 3.2.0
       picocolors: 1.1.1
 
-  vite-node@3.2.4(tsx@4.21.0):
+  vite-node@3.2.4(@types/node@24.12.0)(tsx@4.21.0):
     dependencies:
       cac: 6.7.14
       debug: 4.4.3
       es-module-lexer: 1.7.0
       pathe: 2.0.3
-      vite: 6.4.1(tsx@4.21.0)
+      vite: 6.4.1(@types/node@24.12.0)(tsx@4.21.0)
     transitivePeerDependencies:
       - '@types/node'
       - jiti
@@ -1956,7 +2006,7 @@ snapshots:
       - tsx
       - yaml
 
-  vite-prerender-plugin@0.5.12(vite@6.4.1(tsx@4.21.0)):
+  vite-prerender-plugin@0.5.12(vite@6.4.1(@types/node@24.12.0)(tsx@4.21.0)):
     dependencies:
       kolorist: 1.8.0
       magic-string: 0.30.21
@@ -1964,9 +2014,9 @@ snapshots:
       simple-code-frame: 1.3.0
       source-map: 0.7.6
       stack-trace: 1.0.0-pre2
-      vite: 6.4.1(tsx@4.21.0)
+      vite: 6.4.1(@types/node@24.12.0)(tsx@4.21.0)
 
-  vite@6.4.1(tsx@4.21.0):
+  vite@6.4.1(@types/node@24.12.0)(tsx@4.21.0):
     dependencies:
       esbuild: 0.25.12
       fdir: 6.5.0(picomatch@4.0.3)
@@ -1975,14 +2025,15 @@ snapshots:
       rollup: 4.59.0
       tinyglobby: 0.2.15
     optionalDependencies:
+      '@types/node': 24.12.0
       fsevents: 2.3.3
       tsx: 4.21.0
 
-  vitest@3.2.4(tsx@4.21.0):
+  vitest@3.2.4(@types/node@24.12.0)(tsx@4.21.0):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/expect': 3.2.4
-      '@vitest/mocker': 3.2.4(vite@6.4.1(tsx@4.21.0))
+      '@vitest/mocker': 3.2.4(vite@6.4.1(@types/node@24.12.0)(tsx@4.21.0))
       '@vitest/pretty-format': 3.2.4
       '@vitest/runner': 3.2.4
       '@vitest/snapshot': 3.2.4
@@ -2000,9 +2051,11 @@ snapshots:
       tinyglobby: 0.2.15
       tinypool: 1.1.1
       tinyrainbow: 2.0.0
-      vite: 6.4.1(tsx@4.21.0)
-      vite-node: 3.2.4(tsx@4.21.0)
+      vite: 6.4.1(@types/node@24.12.0)(tsx@4.21.0)
+      vite-node: 3.2.4(@types/node@24.12.0)(tsx@4.21.0)
       why-is-node-running: 2.3.0
+    optionalDependencies:
+      '@types/node': 24.12.0
     transitivePeerDependencies:
       - jiti
       - less

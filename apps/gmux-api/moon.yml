@@ -2,13 +2,21 @@ language: javascript
 
 tasks:
   dev:
-    command: tsx watch src/server.ts
+    command: pnpm exec tsx watch src/server.ts
+    deps:
+      - protocol:build
   build:
-    command: tsc -p tsconfig.json
+    command: pnpm exec tsc -p tsconfig.json
+    deps:
+      - protocol:build
     inputs:
       - "src/**/*"
       - "tsconfig.json"
   test:
-    command: vitest run
+    command: pnpm exec vitest run --passWithNoTests
+    deps:
+      - protocol:build
   lint:
-    command: tsc --noEmit
+    command: pnpm exec tsc --noEmit
+    deps:
+      - protocol:build
