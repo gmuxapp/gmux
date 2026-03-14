@@ -2,13 +2,14 @@ language: bash
 
 tasks:
   dev:
-    command: go run ./cmd/gmuxd
+    command: watchexec -r -e go -- go run ./cmd/gmuxd
   build:
-    command: go build ./cmd/gmuxd
+    command: go build -o gmuxd ./cmd/gmuxd
     inputs:
       - "cmd/**/*"
+      - "internal/**/*"
       - "go.mod"
   test:
     command: go test ./...
   lint:
-    command: go test ./...
+    command: go vet ./...

@@ -17,10 +17,12 @@ import (
 
 func main() {
 	sessions := store.New()
+	subs := discovery.NewSubscriptions(sessions)
 
 	// Start socket-based discovery (scans /tmp/gmux-sessions/*.sock)
+	// Discovery also subscribes to each runner's /events SSE for live updates.
 	stopDiscovery := make(chan struct{})
-	go discovery.Watch(sessions, 3*time.Second, stopDiscovery)
+	go discovery.Watch(sessions, subs, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
 	mux := http.NewServeMux()
@@ -81,7 +83,7 @@ func main() {
 		}
 
 		log.Printf("register: %s at %s", req.SessionID, req.SocketPath)
-		if err := discovery.Register(sessions, req.SocketPath); err != nil {
+		if err := discovery.Register(sessions, subs, req.SocketPath); err != nil {
 			log.Printf("register: failed to query meta for %s: %v", req.SessionID, err)
 			writeError(w, http.StatusBadGateway, "runner_unreachable", err.Error())
 			return
@@ -106,6 +108,7 @@ func main() {
 		}
 
 		sessions.Remove(req.SessionID)
+		subs.Unsubscribe(req.SessionID)
 		writeJSON(w, map[string]any{"ok": true})
 	})
 

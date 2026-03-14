@@ -26,9 +26,11 @@ func socketDir() string {
 }
 
 // Watch periodically scans for Unix sockets and queries their /meta.
-func Watch(sessions *store.Store, interval time.Duration, stop <-chan struct{}) {
+// When a new session is found, it subscribes to the runner's /events SSE
+// for real-time status/meta/exit updates.
+func Watch(sessions *store.Store, subs *Subscriptions, interval time.Duration, stop <-chan struct{}) {
 	// Initial scan immediately
-	Scan(sessions)
+	Scan(sessions, subs)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -36,16 +38,18 @@ func Watch(sessions *store.Store, interval time.Duration, stop <-chan struct{}) 
 	for {
 		select {
 		case <-stop:
+			subs.UnsubscribeAll()
 			return
 		case <-ticker.C:
-			Scan(sessions)
+			Scan(sessions, subs)
 		}
 	}
 }
 
 // Scan finds all .sock files and queries each runner's /meta endpoint.
-// Reachable sockets → upsert session. Unreachable → remove + cleanup.
-func Scan(sessions *store.Store) {
+// Reachable sockets → upsert session + subscribe to /events.
+// Unreachable → remove + cleanup + unsubscribe.
+func Scan(sessions *store.Store, subs *Subscriptions) {
 	dir := socketDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -76,6 +80,10 @@ func Scan(sessions *store.Store) {
 
 		seen[sess.ID] = true
 		sessions.Upsert(*sess)
+		// Subscribe to runner /events for real-time updates
+		if subs != nil {
+			subs.Subscribe(sess.ID, sockPath)
+		}
 	}
 
 	// Remove sessions whose sockets no longer exist
@@ -84,19 +92,25 @@ func Scan(sessions *store.Store) {
 			// Check if socket file still exists
 			if _, err := os.Stat(s.SocketPath); os.IsNotExist(err) {
 				sessions.Remove(s.ID)
+				if subs != nil {
+					subs.Unsubscribe(s.ID)
+				}
 			}
 		}
 	}
 }
 
 // Register handles a registration request from gmux-run.
-// Immediately queries the runner's /meta and adds to store.
-func Register(sessions *store.Store, socketPath string) error {
+// Immediately queries the runner's /meta, adds to store, and subscribes to /events.
+func Register(sessions *store.Store, subs *Subscriptions, socketPath string) error {
 	sess, err := queryMeta(socketPath)
 	if err != nil {
 		return err
 	}
 	sessions.Upsert(*sess)
+	if subs != nil {
+		subs.Subscribe(sess.ID, socketPath)
+	}
 	return nil
 }
 
