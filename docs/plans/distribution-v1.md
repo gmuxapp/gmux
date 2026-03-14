@@ -9,7 +9,7 @@ Define how gmux is shipped without adding Electron complexity in v1.
 ### Native
 
 - `gmuxd` (primary runtime binary)
-- `gmux-run` (launcher/metadata binary)
+- `gmuxr` (launcher/metadata binary)
 
 Both ship as platform-specific artifacts with checksums.
 

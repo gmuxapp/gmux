@@ -15,7 +15,7 @@ coverage
 bin/
 *.test
 services/gmuxd/gmuxd
-cli/gmux-run/gmux-run
+cli/gmuxr/gmuxr
 
 # env
 .env

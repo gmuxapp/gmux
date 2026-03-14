@@ -17,9 +17,9 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
-	"github.com/gmuxapp/gmux/cli/gmux-run/internal/adapter"
-	"github.com/gmuxapp/gmux/cli/gmux-run/internal/ringbuf"
-	"github.com/gmuxapp/gmux/cli/gmux-run/internal/session"
+	"github.com/gmuxapp/gmux/cli/gmuxr/internal/adapter"
+	"github.com/gmuxapp/gmux/cli/gmuxr/internal/ringbuf"
+	"github.com/gmuxapp/gmux/cli/gmuxr/internal/session"
 	"nhooyr.io/websocket"
 )
 

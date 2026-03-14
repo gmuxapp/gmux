@@ -5,27 +5,27 @@
 
 ## Context
 
-gmux-run is a full server: it holds the PTY, serves WebSocket, maintains a scrollback buffer, and knows everything about its session. Yet gmuxd discovers sessions by polling JSON metadata files that gmux-run writes to `/tmp/gmux-meta/`. This creates:
+gmuxr is a full server: it holds the PTY, serves WebSocket, maintains a scrollback buffer, and knows everything about its session. Yet gmuxd discovers sessions by polling JSON metadata files that gmuxr writes to `/tmp/gmux-meta/`. This creates:
 
 1. **Redundant state** — metadata files duplicate what the runner already knows
 2. **Polling latency** — gmuxd scans every 2s; new sessions appear with delay
-3. **Stale file cleanup** — if gmux-run crashes, metadata files linger
+3. **Stale file cleanup** — if gmuxr crashes, metadata files linger
 4. **No reverse channel** — gmuxd cannot query or subscribe to runner state changes
 5. **File I/O as IPC** — fragile, hard to test, hard to extend
 
-Meanwhile, gmux-run has a unique privilege that no other tool in this space has: **it sits between the user and the child process.** It owns the PTY. It sees all output. It knows the command. It can modify the launch. cmux is a terminal (sees output, doesn't own the process). Codex/Claude Desktop are the process (can't generalize). gmux-run is the **launcher** — it can recognize, adapt, and monitor any command.
+Meanwhile, gmuxr has a unique privilege that no other tool in this space has: **it sits between the user and the child process.** It owns the PTY. It sees all output. It knows the command. It can modify the launch. cmux is a terminal (sees output, doesn't own the process). Codex/Claude Desktop are the process (can't generalize). gmuxr is the **launcher** — it can recognize, adapt, and monitor any command.
 
 ## Decision
 
 Three changes:
 
 1. **The runner is the source of truth.** gmuxd queries runners via their Unix sockets, not files.
-2. **Adapters make the runner intelligent.** An adapter library teaches gmux-run how to launch, monitor, and discover sessions for specific tools — without any configuration from the user or cooperation from the child.
+2. **Adapters make the runner intelligent.** An adapter library teaches gmuxr how to launch, monitor, and discover sessions for specific tools — without any configuration from the user or cooperation from the child.
 3. **Session schema v2** (see `docs/protocol/session-schema-v2.md`) defines a two-layer state model: process state (owned by gmux) and application status (reported by adapters).
 
 ### Part 1: Adapters
 
-An adapter tells gmux-run how to work with a specific kind of child process. Adapters are Go interfaces compiled into gmux-run, with a path to external adapters later.
+An adapter tells gmuxr how to work with a specific kind of child process. Adapters are Go interfaces compiled into gmuxr, with a path to external adapters later.
 
 ```go
 type Adapter interface {
@@ -53,7 +53,7 @@ type Adapter interface {
     Sidecar(ctx SidecarContext) <-chan Status
 
     // Resumable returns sessions that can be resumed.
-    // Called by gmuxd, not gmux-run. Returns nil if this adapter
+    // Called by gmuxd, not gmuxr. Returns nil if this adapter
     // doesn't support resumable sessions.
     Resumable() []ResumableSession
 }
@@ -119,7 +119,7 @@ func (a *PiAdapter) Resumable() []ResumableSession {
 }
 ```
 
-**What this gives the user:** `gmux-run pi` just works. The adapter injects the right flags, watches pi's session file, maps pi's internal states to gmux Status events (agent thinking → `active`, waiting for user → `attention`, task complete → `success`). No configuration.
+**What this gives the user:** `gmuxr pi` just works. The adapter injects the right flags, watches pi's session file, maps pi's internal states to gmux Status events (agent thinking → `active`, waiting for user → `attention`, task complete → `success`). No configuration.
 
 #### Example: `pytest` adapter
 
@@ -150,7 +150,7 @@ func (a *PytestAdapter) Monitor(output []byte) *Status {
 }
 ```
 
-**What this gives the user:** `gmux-run pytest tests/` shows live test progress in the sidebar. The dot pulses green while tests run, shows count, goes red on failure, green check on all-pass.
+**What this gives the user:** `gmuxr pytest tests/` shows live test progress in the sidebar. The dot pulses green while tests run, shows count, goes red on failure, green check on all-pass.
 
 #### Example: `generic` adapter (fallback)
 
@@ -171,11 +171,11 @@ Always matches. Provides baseline "it's alive and producing output" status.
 
 #### Adapter selection
 
-On `gmux-run <command>`:
+On `gmuxr <command>`:
 
 1. **Explicit override**: if `GMUX_ADAPTER=<name>` is set in the environment, use that adapter directly. Skips matching entirely. This is the escape hatch for weird wrappers, aliases, or nix/corepack indirection where binary name matching can't work.
    ```bash
-   GMUX_ADAPTER=pi gmux-run my-custom-pi-wrapper --flags
+   GMUX_ADAPTER=pi gmuxr my-custom-pi-wrapper --flags
    ```
 2. **Auto-match**: walk the adapter list in priority order, call `Match(command)` on each. First match wins.
 3. **Fallback**: `generic` is always last (catch-all).
@@ -207,7 +207,7 @@ What this deliberately **skips**: `which` resolution, `--help` probing, shebang 
 
 ### Part 2: Runner serves state on its Unix socket
 
-gmux-run already serves WebSocket at `/` on its Unix socket. We add HTTP endpoints:
+gmuxr already serves WebSocket at `/` on its Unix socket. We add HTTP endpoints:
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
@@ -260,11 +260,11 @@ data: {"exit_code":0}
 
 ### Part 2b: Child awareness protocol
 
-The child process needs to know it's running inside gmux-run, and how to talk back. This is the contract between the runner and any child — used by adapters' `Prepare()`, by tools that want native gmux integration, and by the `PUT /status` escape hatch.
+The child process needs to know it's running inside gmuxr, and how to talk back. This is the contract between the runner and any child — used by adapters' `Prepare()`, by tools that want native gmux integration, and by the `PUT /status` escape hatch.
 
 #### Environment variables
 
-gmux-run sets these in every child's environment:
+gmuxr sets these in every child's environment:
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
@@ -376,13 +376,13 @@ On startup (and periodically as fallback), gmuxd scans `/tmp/gmux-sessions/*.soc
 2. If reachable → add session to cache, subscribe to `/events`
 3. If unreachable → stale socket, clean up
 
-As a fast path, gmux-run tries `POST /v1/register` on gmuxd (`localhost:8790`) at startup. Best-effort: if gmuxd isn't running, the runner continues normally.
+As a fast path, gmuxr tries `POST /v1/register` on gmuxd (`localhost:8790`) at startup. Best-effort: if gmuxd isn't running, the runner continues normally.
 
 #### Resumable sessions: adapter discovery
 
 gmuxd also holds an adapter registry (same adapter code, or a subset). Periodically (or on demand), it calls `Resumable()` on each adapter and merges results into the session list.
 
-Resumable sessions appear in the sidebar with `alive: false` and a distinct visual treatment. Clicking one triggers gmuxd to call `gmux-run` with the adapter's `ResumeCommand`.
+Resumable sessions appear in the sidebar with `alive: false` and a distinct visual treatment. Clicking one triggers gmuxd to call `gmuxr` with the adapter's `ResumeCommand`.
 
 ```
 Sidebar:
@@ -414,15 +414,15 @@ The store caches what runners report, not a source of truth:
 ### What's removed
 
 - `/tmp/gmux-meta/` directory and all metadata file I/O
-- `metadata` package in gmux-run (replaced by in-memory state + adapters)
+- `metadata` package in gmuxr (replaced by in-memory state + adapters)
 - File polling in gmuxd discovery (replaced by socket scan + SSE subscription)
 - `AbducoName` field throughout (legacy from abduco era)
-- `kind` flag on gmux-run (replaced by adapter auto-detection via `Match`)
+- `kind` flag on gmuxr (replaced by adapter auto-detection via `Match`)
 
 ## Architecture
 
 ```
-                         gmux-run (per session)
+                         gmuxr (per session)
 ┌────────────────────────────────────────────────────────────┐
 │                                                            │
 │  ┌──────────┐    ┌──────────┐    ┌──────────────────────┐  │
@@ -454,7 +454,7 @@ The store caches what runners report, not a source of truth:
 │    GET  /v1/sessions  ←──────────────────────┘              │
 │    GET  /v1/events (SSE) ←── cache events                   │
 │    WS   /ws/{id}     ←── proxy to runner socket             │
-│    POST /v1/sessions/{id}/resume ←── launch gmux-run        │
+│    POST /v1/sessions/{id}/resume ←── launch gmuxr        │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -462,7 +462,7 @@ The store caches what runners report, not a source of truth:
 ## Implementation Plan
 
 ### Phase 1: Adapter interface + built-in adapters
-- Define `Adapter` interface in `cli/gmux-run/internal/adapter/`
+- Define `Adapter` interface in `cli/gmuxr/internal/adapter/`
 - Implement `generic` adapter (fallback: output activity → `active`)
 - Implement `pi` adapter (match `pi` command, sidecar watches session file)
 - Adapter registry with priority-ordered matching
@@ -483,7 +483,7 @@ The store caches what runners report, not a source of truth:
 ### Phase 4: Resumable sessions
 - Add `Resumable()` to pi adapter (scan `~/.pi/sessions/`)
 - gmuxd merges resumable sessions into cache with `alive: false`
-- Add `POST /v1/sessions/{id}/resume` → spawns `gmux-run` with resume command
+- Add `POST /v1/sessions/{id}/resume` → spawns `gmuxr` with resume command
 - Sidebar shows resumable sessions with distinct visual treatment
 
 ### Phase 5: Community adapter path (future)
@@ -494,7 +494,7 @@ The store caches what runners report, not a source of truth:
 ## Consequences
 
 ### Positive
-- **Zero-config intelligence** — `gmux-run pi` just works; adapter handles everything
+- **Zero-config intelligence** — `gmuxr pi` just works; adapter handles everything
 - **Zero stale state** — socket reachable = alive; no files to clean up
 - **Zero-latency discovery** — registration is immediate
 - **Lossless gmuxd restart** — re-scan sockets, full state recovered
@@ -504,7 +504,7 @@ The store caches what runners report, not a source of truth:
 
 ### Negative
 - Adapter `Monitor()` is called on every PTY read — must be cheap (no regex compilation per call)
-- Built-in adapters couple gmux-run to knowledge of specific tools (but generic fallback always works)
+- Built-in adapters couple gmuxr to knowledge of specific tools (but generic fallback always works)
 - Sidecar goroutines add per-session overhead (lightweight, but nonzero)
 
 ### Neutral

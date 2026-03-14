@@ -7,7 +7,7 @@
 ## Current ADRs
 
 - `0001` component split + local sidecar boundary
-- `0002` `gmux-run` ownership for launch + metadata authority
+- `0002` `gmuxr` ownership for launch + metadata authority
 - `0003` web-first distribution model (native binaries, no Electron in v1)
 
 ## Current plans

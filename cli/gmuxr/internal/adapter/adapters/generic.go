@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gmuxapp/gmux/cli/gmux-run/internal/adapter"
+	"github.com/gmuxapp/gmux/cli/gmuxr/internal/adapter"
 )
 
 // Generic is the fallback adapter. It matches all commands and produces

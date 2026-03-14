@@ -10,7 +10,7 @@ Use 4 components:
 1. gmux UI (web)
 2. gmux API/BFF (TypeScript, tRPC for frontend)
 3. gmuxd (native node daemon, REST)
-4. gmux-run (native wrapper + metadata authority)
+4. gmuxr (native wrapper + metadata authority)
 
 Protocol boundaries:
 

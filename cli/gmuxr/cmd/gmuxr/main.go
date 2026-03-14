@@ -14,17 +14,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gmuxapp/gmux/cli/gmux-run/internal/adapter"
-	"github.com/gmuxapp/gmux/cli/gmux-run/internal/adapter/adapters"
-	"github.com/gmuxapp/gmux/cli/gmux-run/internal/naming"
-	"github.com/gmuxapp/gmux/cli/gmux-run/internal/ptyserver"
-	"github.com/gmuxapp/gmux/cli/gmux-run/internal/session"
+	"github.com/gmuxapp/gmux/cli/gmuxr/internal/adapter"
+	"github.com/gmuxapp/gmux/cli/gmuxr/internal/adapter/adapters"
+	"github.com/gmuxapp/gmux/cli/gmuxr/internal/naming"
+	"github.com/gmuxapp/gmux/cli/gmuxr/internal/ptyserver"
+	"github.com/gmuxapp/gmux/cli/gmuxr/internal/session"
 )
 
 const version = "0.1.0"
 
 func main() {
-	log.SetPrefix("gmux-run: ")
+	log.SetPrefix("gmuxr: ")
 	log.SetFlags(0)
 
 	title := flag.String("title", "", "optional session title")
@@ -168,7 +168,7 @@ func registerWithGmuxd(sessionID, socketPath string) {
 		"socket_path": socketPath,
 	})
 
-	// Retry a few times — gmux-run may start before the HTTP server is ready
+	// Retry a few times — gmuxr may start before the HTTP server is ready
 	for i := 0; i < 5; i++ {
 		if i > 0 {
 			time.Sleep(500 * time.Millisecond)

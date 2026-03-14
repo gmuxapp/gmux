@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gmuxapp/gmux/cli/gmux-run/internal/adapter"
+	"github.com/gmuxapp/gmux/cli/gmuxr/internal/adapter"
 )
 
 // State is the in-memory session state served by GET /meta.

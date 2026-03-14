@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-// Schema v2 — matches gmux-run's GET /meta and gmuxd's store.Session
+// Schema v2 — matches gmuxr's GET /meta and gmuxd's store.Session
 
 export const StatusStateSchema = z.enum([
   'active',

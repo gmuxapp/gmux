@@ -24,7 +24,7 @@
 | `cwd` | string | Working directory |
 | `kind` | string | Adapter kind: `"generic"`, `"pi"`, `"opencode"`, etc. |
 
-### Process State (owned by gmux-run, authoritative)
+### Process State (owned by gmuxr, authoritative)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -34,7 +34,7 @@
 | `started_at` | ISO 8601 | When the process was started |
 | `exited_at` | ISO 8601 \| null | When the process exited |
 
-### Display (set by child or gmux-run, mutable)
+### Display (set by child or gmuxr, mutable)
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -45,7 +45,7 @@
 
 ### Status Object (set by child process)
 
-The child process can report its own status via a well-known mechanism (env variable pointing to gmux-run's socket, or escape sequences). This is advisory — gmux renders it but doesn't interpret it.
+The child process can report its own status via a well-known mechanism (env variable pointing to gmuxr's socket, or escape sequences). This is advisory — gmux renders it but doesn't interpret it.
 
 ```typescript
 interface Status {
@@ -80,7 +80,7 @@ The `label` is the human-readable text. The `state` determines the visual treatm
 
 Option A — **Environment variable + HTTP** (preferred):
 ```bash
-# gmux-run sets this in the child's environment
+# gmuxr sets this in the child's environment
 GMUX_SOCKET=/tmp/gmux-sessions/sess-abc123.sock
 
 # Child (or a hook) sets status via HTTP on the same socket
@@ -90,7 +90,7 @@ curl --unix-socket $GMUX_SOCKET http://localhost/status \
 
 Option B — **OSC escape sequences** (terminal-native, like cmux):
 ```bash
-# OSC 7777 ; json ST  (custom, parsed by gmux-run's PTY reader)
+# OSC 7777 ; json ST  (custom, parsed by gmuxr's PTY reader)
 printf '\e]7777;{"label":"waiting","state":"attention"}\e\\'
 ```
 

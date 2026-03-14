@@ -1,0 +1,15 @@
+language: bash
+
+tasks:
+  dev:
+    command: watchexec -r -e go -- go run ./cmd/gmuxr -- pi
+  build:
+    command: go build -o gmuxr ./cmd/gmuxr
+    inputs:
+      - "cmd/**/*"
+      - "internal/**/*"
+      - "go.mod"
+  test:
+    command: go test ./...
+  lint:
+    command: go vet ./...

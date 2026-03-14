@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/gmuxapp/gmux/cli/gmux-run/internal/adapter"
+	"github.com/gmuxapp/gmux/cli/gmuxr/internal/adapter"
 )
 
 func TestNewState(t *testing.T) {

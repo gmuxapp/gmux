@@ -10,8 +10,8 @@
 
 ## Rethink checkpoints (must answer before code import)
 
-- Is this logic still necessary with `gmux-run` as metadata authority?
-- Is this concern in the right component boundary (web/api/gmuxd/gmux-run)?
+- Is this logic still necessary with `gmuxr` as metadata authority?
+- Is this concern in the right component boundary (web/api/gmuxd/gmuxr)?
 - Can this be represented as a contract/type instead of ad-hoc behavior?
 - Does this preserve single source of truth on the server side?
 - Can we test this behavior in isolation (unit) and end-to-end (lifecycle)?
@@ -52,7 +52,7 @@
 - [x] add events SSE endpoint
 - [ ] add local file-backed persistence/reconciliation
 
-## Phase 4 — gmux-run bootstrap (native)
+## Phase 4 — gmuxr bootstrap (native)
 
 - [ ] implement adapter interface (pi + generic)
 - [ ] implement metadata writer and transition updates
@@ -71,7 +71,7 @@ Candidate reuse areas:
 Candidate rewrite areas:
 
 - code coupled to old naming/runtime assumptions
-- implicit mapping heuristics now replaced by gmux-run metadata authority
+- implicit mapping heuristics now replaced by gmuxr metadata authority
 - mixed UI/server state ownership patterns
 
 ## Phase 6 — end-to-end reliability
@@ -83,7 +83,7 @@ Candidate rewrite areas:
 
 ## Phase 7 — packaging and distribution
 
-- [ ] define gmuxd/gmux-run release pipeline (native artifacts + checksums)
+- [ ] define gmuxd/gmuxr release pipeline (native artifacts + checksums)
 - [ ] package web assets into gmuxd local distribution
 - [ ] define gmux-api deployment packaging (container + node runtime path)
 - [ ] integrate patched abduco distribution strategy

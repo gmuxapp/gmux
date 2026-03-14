@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gmuxapp/gmux/cli/gmux-run/internal/adapter"
+	"github.com/gmuxapp/gmux/cli/gmuxr/internal/adapter"
 )
 
 // --- Generic adapter tests ---

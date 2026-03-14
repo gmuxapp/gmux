@@ -50,7 +50,7 @@ func TestEndToEnd(t *testing.T) {
 
 	repoRoot := findRepoRoot(t)
 	gmuxdBin := buildBinary(t, repoRoot, "services/gmuxd/cmd/gmuxd")
-	gmuxRunBin := buildBinary(t, repoRoot, "cli/gmux-run/cmd/gmux-run")
+	gmuxRunBin := buildBinary(t, repoRoot, "cli/gmuxr/cmd/gmuxr")
 
 	// Use a temp dir for sockets to avoid polluting /tmp
 	socketDir := t.TempDir()

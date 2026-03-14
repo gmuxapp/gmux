@@ -11,7 +11,7 @@
 ### What is versioned for users
 
 - `gmuxd` binary versions
-- `gmux-run` binary versions
+- `gmuxr` binary versions
 - optional `gmux-api` deployment image tags
 
 ### What is not published (v1)

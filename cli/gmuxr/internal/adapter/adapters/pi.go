@@ -3,7 +3,7 @@ package adapters
 import (
 	"path/filepath"
 
-	"github.com/gmuxapp/gmux/cli/gmux-run/internal/adapter"
+	"github.com/gmuxapp/gmux/cli/gmuxr/internal/adapter"
 )
 
 // Pi is the adapter for the pi coding agent.

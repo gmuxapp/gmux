@@ -22,13 +22,13 @@ Meanwhile, the core problem is simple:
 
 ## Decision
 
-**gmux-run holds the PTY directly and serves a WebSocket endpoint.** This replaces both abduco and ttyd with a single Go binary.
+**gmuxr holds the PTY directly and serves a WebSocket endpoint.** This replaces both abduco and ttyd with a single Go binary.
 
 ### Architecture
 
 ```
 ┌─────────────────────────────────────┐
-│ gmux-run (per session)              │
+│ gmuxr (per session)              │
 │  ├── PTY (creack/pty + exec)        │
 │  ├── WebSocket on Unix socket       │
 │  ├── Metadata writer                │
@@ -40,7 +40,7 @@ Meanwhile, the core problem is simple:
 │  ├── Session discovery              │
 │  ├── REST API + SSE events          │
 │  └── WebSocket reverse proxy        │
-│       /ws/{session_id} → gmux-run   │
+│       /ws/{session_id} → gmuxr   │
 └──────────┬──────────────────────────┘
            │ TCP (HTTP/WS)
 ┌──────────┴──────────────────────────┐
@@ -66,8 +66,8 @@ This is simpler than ttyd's protocol (no type-byte prefix) and directly compatib
 
 ### Session persistence model
 
-- gmux-run IS the session. Process alive = session alive.
-- No double-fork daemonization needed: gmux-run itself is the long-lived process.
+- gmuxr IS the session. Process alive = session alive.
+- No double-fork daemonization needed: gmuxr itself is the long-lived process.
 - Detach = close WebSocket. Reattach = new WebSocket connection.
 - Multiple concurrent viewers supported (fan-out PTY output to all connected clients; only first non-readonly client sends input).
 
@@ -81,11 +81,11 @@ gmuxd discovers these alongside metadata files, proxies WebSocket connections to
 
 ### Scrollback (future)
 
-gmux-run can maintain a ring buffer of recent PTY output. On new WebSocket connection, replay the buffer before switching to live — solving the "blank screen on reattach" problem that neither abduco nor ttyd could solve.
+gmuxr can maintain a ring buffer of recent PTY output. On new WebSocket connection, replay the buffer before switching to live — solving the "blank screen on reattach" problem that neither abduco nor ttyd could solve.
 
 ## Implementation plan
 
-### Phase 1: PTY server in gmux-run
+### Phase 1: PTY server in gmuxr
 - [ ] Add `internal/ptyserver` package using `github.com/creack/pty`
 - [ ] Fork+exec command in PTY
 - [ ] Serve WebSocket on Unix socket
@@ -94,7 +94,7 @@ gmux-run can maintain a ring buffer of recent PTY output. On new WebSocket conne
 - [ ] Detect child exit, clean up socket
 
 ### Phase 2: gmuxd WebSocket proxy
-- [ ] Add `/ws/{session_id}` endpoint that proxies to gmux-run's Unix socket
+- [ ] Add `/ws/{session_id}` endpoint that proxies to gmuxr's Unix socket
 - [ ] Pass through binary frames transparently
 
 ### Phase 3: xterm.js integration in gmux-web
@@ -104,7 +104,7 @@ gmux-run can maintain a ring buffer of recent PTY output. On new WebSocket conne
 - [ ] Terminal appears in detail panel on session select
 
 ### Phase 4: Scrollback replay (future)
-- [ ] Ring buffer in gmux-run (configurable size, default 100KB)
+- [ ] Ring buffer in gmuxr (configurable size, default 100KB)
 - [ ] Replay on new connection before switching to live stream
 - [ ] Optional: persist scrollback to disk for crash recovery
 

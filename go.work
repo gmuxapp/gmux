@@ -2,6 +2,6 @@ go 1.26
 
 use (
 	./services/gmuxd
-	./cli/gmux-run
+	./cli/gmuxr
 	./tests/e2e
 )

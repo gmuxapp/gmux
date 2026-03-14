@@ -1,11 +1,11 @@
-# ADR-0002: gmux-run owns launch integration + metadata emission
+# ADR-0002: gmuxr owns launch integration + metadata emission
 
 - Status: Accepted
 - Date: 2026-03-13
 
 ## Decision
 
-`gmux-run` is the authoritative launcher integration point for connectable sessions.
+`gmuxr` is the authoritative launcher integration point for connectable sessions.
 
 Responsibilities:
 

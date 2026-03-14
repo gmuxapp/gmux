@@ -25,7 +25,7 @@ We also want to avoid scope creep while stabilizing core lifecycle/runtime behav
 
 - Primary distributed artifacts are native binaries:
   - `gmuxd`
-  - `gmux-run`
+  - `gmuxr`
 - TypeScript apps are build/runtime components, not npm-published products.
 - `apps/gmux-api` is packaged for deployment (container + node runtime option), not as an npm app package for end users.
 
