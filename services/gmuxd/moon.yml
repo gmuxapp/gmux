@@ -2,7 +2,9 @@ language: bash
 
 tasks:
   dev:
-    script: watchexec -r -e go -- 'go build -o ../../bin/gmuxd ./cmd/gmuxd && exec ../../bin/gmuxd'
+    script: |
+      ../../scripts/free-port.sh 8790
+      exec watchexec -r -e go -- 'go build -o ../../bin/gmuxd ./cmd/gmuxd && exec ../../bin/gmuxd'
     deps:
       - gmuxr:build
     preset: server

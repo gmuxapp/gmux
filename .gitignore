@@ -27,3 +27,4 @@ cli/gmuxr/gmuxr
 .env.*
 !.env.example
 test-results/
+tests/pi-adapter/pi-adapter

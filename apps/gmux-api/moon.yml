@@ -2,7 +2,9 @@ language: javascript
 
 tasks:
   dev:
-    command: pnpm exec tsx watch src/server.ts
+    script: |
+      ../../scripts/free-port.sh 8787
+      exec pnpm exec tsx watch src/server.ts
     deps:
       - protocol:build
     preset: server
