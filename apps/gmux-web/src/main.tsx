@@ -100,7 +100,6 @@ async function launchSession(launcherId: string, cwd?: string): Promise<void> {
 
 // Track pending launches globally so App can auto-select new sessions
 let _pendingLaunchAt = 0
-function getPendingLaunchAt() { return _pendingLaunchAt }
 
 function LaunchButton({ cwd, className }: { cwd?: string; className?: string }) {
   const [state, setState] = useState<'idle' | 'loading' | 'open' | 'launching'>('idle')
@@ -788,6 +787,7 @@ function App() {
           const envelope = JSON.parse(e.data)
           const session = envelope.session ?? envelope
           const updated = toUISession(session)
+          let isNew = false
           setSessions(prev => {
             const idx = prev.findIndex(s => s.id === updated.id)
             if (idx >= 0) {
@@ -795,8 +795,14 @@ function App() {
               next[idx] = updated
               return next
             }
+            isNew = true
             return [...prev, updated]
           })
+          // Auto-select newly launched sessions
+          if (isNew && _pendingLaunchAt && Date.now() - _pendingLaunchAt < 10_000) {
+            _pendingLaunchAt = 0
+            setSelectedId(updated.id)
+          }
         } catch {}
       })
       source.addEventListener('session-remove', (e) => {
