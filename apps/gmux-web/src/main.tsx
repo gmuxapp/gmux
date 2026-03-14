@@ -803,13 +803,17 @@ function App() {
             _pendingLaunchAt = 0
             setSelectedId(updated.id)
           }
-        } catch {}
+        } catch (err) {
+          console.warn('session-upsert: bad event', err)
+        }
       })
       source.addEventListener('session-remove', (e) => {
         try {
           const { id } = JSON.parse(e.data)
           setSessions(prev => prev.filter(s => s.id !== id))
-        } catch {}
+        } catch (err) {
+          console.warn('session-remove: bad event', err)
+        }
       })
       return () => source.close()
     }
