@@ -178,6 +178,7 @@ func (s *Server) serve() {
 	mux.HandleFunc("PUT /status", s.handlePutStatus)
 	mux.HandleFunc("PATCH /meta", s.handlePatchMeta)
 	mux.HandleFunc("GET /events", s.handleEvents)
+	mux.HandleFunc("POST /kill", s.handleKill)
 
 	// WebSocket terminal attach (fallback for / with Upgrade header)
 	mux.HandleFunc("/", s.handleWS)
@@ -246,6 +247,15 @@ func (s *Server) handlePatchMeta(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.state.PatchMeta(patch.Title, patch.Subtitle)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
+	if s.cmd.Process != nil {
+		// Send SIGTERM to the child process group for clean shutdown
+		syscall.Kill(-s.cmd.Process.Pid, syscall.SIGTERM)
+		log.Printf("ptyserver: sent SIGTERM to child pid %d", s.cmd.Process.Pid)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

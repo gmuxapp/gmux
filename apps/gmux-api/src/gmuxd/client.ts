@@ -50,5 +50,18 @@ export function createGmuxdClient(baseUrl: string) {
       const json = await response.json()
       return AttachEnvelopeSchema.parse(json).data
     },
+
+    async killSession(sessionId: string) {
+      const response = await fetch(`${normalizedBaseUrl}/v1/sessions/${sessionId}/kill`, {
+        method: 'POST',
+      })
+
+      if (!response.ok) {
+        throw new Error(`gmuxd kill failed: ${response.status} ${response.statusText}`)
+      }
+
+      const json = await response.json()
+      return json
+    },
   }
 }
