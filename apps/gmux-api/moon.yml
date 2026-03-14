@@ -5,6 +5,7 @@ tasks:
     command: pnpm exec tsx watch src/server.ts
     deps:
       - protocol:build
+    preset: server
   build:
     command: pnpm exec tsc -p tsconfig.json
     deps:

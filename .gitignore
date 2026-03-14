@@ -13,7 +13,8 @@ coverage
 .astro
 
 # go
-bin/
+bin/*
+!bin/.keep
 *.test
 services/gmuxd/gmuxd
 cli/gmuxr/gmuxr
@@ -25,3 +26,4 @@ cli/gmuxr/gmuxr
 .env
 .env.*
 !.env.example
+test-results/

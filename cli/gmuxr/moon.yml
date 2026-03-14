@@ -2,9 +2,10 @@ language: bash
 
 tasks:
   dev:
-    command: watchexec -r -e go -- go run ./cmd/gmuxr -- pi
+    script: watchexec -r -e go -- 'go build -o ../../bin/gmuxr ./cmd/gmuxr && exec ../../bin/gmuxr -- pi'
+    preset: server
   build:
-    command: go build -o gmuxr ./cmd/gmuxr
+    script: go build -o ../../bin/gmuxr ./cmd/gmuxr
     inputs:
       - "cmd/**/*"
       - "internal/**/*"

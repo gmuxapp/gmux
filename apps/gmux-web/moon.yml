@@ -5,6 +5,7 @@ tasks:
     command: pnpm exec vite
     deps:
       - protocol:build
+    preset: server
   build:
     command: pnpm exec vite build
     deps:
