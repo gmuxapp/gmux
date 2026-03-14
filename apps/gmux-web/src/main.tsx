@@ -8,7 +8,7 @@ import './styles.css'
 import { attachKeyboardHandler } from './keyboard'
 import { createReplayBuffer } from './replay'
 
-import type { Session, Folder, SessionStatus } from './mock-data'
+import type { Session, Folder } from './mock-data'
 import { getMockFolders, groupByFolder } from './mock-data'
 import type { Session as ProtocolSession } from '@gmux/protocol'
 
@@ -257,18 +257,6 @@ function dotClass(session: Session): string {
   if (!session.alive) return 'dead'
   if (!session.status) return 'paused'
   return session.status.state
-}
-
-function statusColor(state: string): string {
-  const map: Record<string, string> = {
-    active: 'var(--status-active)',
-    attention: 'var(--status-attention)',
-    success: 'var(--status-success)',
-    error: 'var(--status-error)',
-    paused: 'var(--status-paused)',
-    info: 'var(--status-info)',
-  }
-  return map[state] ?? 'var(--text-muted)'
 }
 
 function folderDotColor(folder: Folder): string | null {

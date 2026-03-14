@@ -8,11 +8,12 @@
     "build": "moon run :build",
     "dev": "moon run :dev",
     "test": "moon run :test",
-    "lint": "moon run :lint",
+    "lint": "biome lint . && moon run :lint",
     "check": "moon check :build :test",
     "graph": "moon project-graph"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.7",
     "@moonrepo/cli": "^2.0.4",
     "typescript": "^5.8.2"
   }
