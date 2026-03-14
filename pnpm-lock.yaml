@@ -54,15 +54,12 @@ importers:
       '@trpc/client':
         specifier: ^11.6.0
         version: 11.12.0(@trpc/server@11.12.0(typescript@5.9.3))(typescript@5.9.3)
-      '@xterm/addon-attach':
-        specifier: ^0.12.0
-        version: 0.12.0
       '@xterm/addon-fit':
-        specifier: ^0.11.0
-        version: 0.11.0
+        specifier: file:vendor/xterm-addon-fit-0.11.0.tgz
+        version: file:apps/gmux-web/vendor/xterm-addon-fit-0.11.0.tgz
       '@xterm/xterm':
-        specifier: ^6.0.0
-        version: 6.0.0
+        specifier: file:vendor/xterm-xterm-6.0.0.tgz
+        version: file:apps/gmux-web/vendor/xterm-xterm-6.0.0.tgz
       preact:
         specifier: ^10.26.4
         version: 10.29.0
@@ -786,14 +783,13 @@ packages:
   '@vitest/utils@3.2.4':
     resolution: {integrity: sha512-fB2V0JFrQSMsCo9HiSq3Ezpdv4iYaXRG1Sx8edX3MwxfyNn83mKiGzOcH+Fkxt4MHxr3y42fQi1oeAInqgX2QA==}
 
-  '@xterm/addon-attach@0.12.0':
-    resolution: {integrity: sha512-1lxvXM4JYSm60lbFmE8WMOy2oF2ip3Ye8jWorSAmwy7x8FiC53netEJ5RguL8+FSRj79MUQsNCb2hprY2QA2ig==}
+  '@xterm/addon-fit@file:apps/gmux-web/vendor/xterm-addon-fit-0.11.0.tgz':
+    resolution: {integrity: sha512-ufrSIYEU9ngL1jALT0FMoXnCUPcMOyfzwkcoaPo656voLoGXZO0cKHqPRJ8UZvEqFHwxurYjbAa3f9hixgrY2g==, tarball: file:apps/gmux-web/vendor/xterm-addon-fit-0.11.0.tgz}
+    version: 0.11.0
 
-  '@xterm/addon-fit@0.11.0':
-    resolution: {integrity: sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==}
-
-  '@xterm/xterm@6.0.0':
-    resolution: {integrity: sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==}
+  '@xterm/xterm@file:apps/gmux-web/vendor/xterm-xterm-6.0.0.tgz':
+    resolution: {integrity: sha512-8R+KafnyfMrU++2otuv8/QgGaPwjg4G2udeUGP8SJKp09hdRoHl/MGd41NXuMEgtuHDEd+5kpLQkQFHy4/nkIw==, tarball: file:apps/gmux-web/vendor/xterm-xterm-6.0.0.tgz}
+    version: 6.0.0
 
   assertion-error@2.0.1:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
@@ -1702,11 +1698,9 @@ snapshots:
       loupe: 3.2.1
       tinyrainbow: 2.0.0
 
-  '@xterm/addon-attach@0.12.0': {}
+  '@xterm/addon-fit@file:apps/gmux-web/vendor/xterm-addon-fit-0.11.0.tgz': {}
 
-  '@xterm/addon-fit@0.11.0': {}
-
-  '@xterm/xterm@6.0.0': {}
+  '@xterm/xterm@file:apps/gmux-web/vendor/xterm-xterm-6.0.0.tgz': {}
 
   assertion-error@2.0.1: {}
 
