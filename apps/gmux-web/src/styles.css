@@ -345,11 +345,26 @@ body {
   height: var(--header-height);
   display: flex;
   align-items: center;
+  justify-content: space-between;
   padding: 0 20px;
-  gap: 8px;
+  gap: 12px;
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   overflow: hidden;
+}
+
+.main-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.main-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .main-header-title {
@@ -361,6 +376,28 @@ body {
   white-space: nowrap;
 }
 
+.main-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.main-header-cwd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.main-header-sep {
+  opacity: 0.5;
+}
+
+.main-header-kind {
+  opacity: 0.7;
+}
+
 .main-header-subtitle {
   font-size: 12px;
   color: var(--text-muted);
@@ -370,13 +407,30 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
   font-size: 12px;
   padding: 3px 10px;
   border-radius: 12px;
   font-weight: 500;
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.header-kill-btn {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1;
+  transition: all 0.15s ease;
+}
+
+.header-kill-btn:hover {
+  background: rgba(191, 97, 106, 0.15);
+  border-color: var(--status-error);
+  color: var(--status-error);
 }
 
 .main-header-status.active {
@@ -421,6 +475,32 @@ body {
 }
 
 /* ── Empty State ── */
+
+.state-message {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.state-icon {
+  font-size: 32px;
+  opacity: 0.5;
+}
+
+.state-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.state-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+}
 
 .empty-state {
   flex: 1;

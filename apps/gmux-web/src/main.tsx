@@ -45,6 +45,14 @@ async function fetchSessions(): Promise<Session[]> {
   return data.map(toUISession)
 }
 
+async function killSession(sessionId: string): Promise<void> {
+  await fetch('/trpc/sessions.kill', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
+  })
+}
+
 const NORD_TERM_THEME = {
   background: '#242933',
   foreground: '#d8dee9',
@@ -295,9 +303,9 @@ function SessionDetail({ session }: { session: Session }) {
 
       <div class="session-actions">
         {session.alive ? (
-          <button class="btn btn-danger">Kill Session</button>
+          <button class="btn btn-danger" onClick={() => killSession(session.id)}>Kill Session</button>
         ) : (
-          <button class="btn btn-primary">Resume Session</button>
+          <button class="btn btn-primary" disabled>Resume Session</button>
         )}
       </div>
     </div>
@@ -516,7 +524,7 @@ function EmptyState() {
   )
 }
 
-function MainHeader({ session }: { session: Session | null }) {
+function MainHeader({ session, onKill }: { session: Session | null; onKill?: (id: string) => void }) {
   if (!session) {
     return (
       <div class="main-header">
@@ -527,31 +535,51 @@ function MainHeader({ session }: { session: Session | null }) {
     )
   }
 
+  const shortCwd = session.cwd.replace(/^\/home\/[^/]+/, '~')
+
   return (
     <div class="main-header">
-      <div class="main-header-title">{session.title}</div>
-      {session.subtitle && (
-        <div class="main-header-subtitle">{session.subtitle}</div>
-      )}
-      {session.status && (
-        <div class={`main-header-status ${session.status.state}`}>
-          <span
-            class={`session-dot ${session.status.state}`}
-            style={{ width: 6, height: 6 }}
-          />
-          {session.status.label}
+      <div class="main-header-left">
+        <div class="main-header-title">{session.title}</div>
+        <div class="main-header-meta">
+          <span class="main-header-cwd">{shortCwd}</span>
+          <span class="main-header-sep">·</span>
+          <span class="main-header-kind">{session.kind}</span>
         </div>
-      )}
+      </div>
+      <div class="main-header-right">
+        {session.status && (
+          <div class={`main-header-status ${session.status.state}`}>
+            <span
+              class={`session-dot ${session.status.state}`}
+              style={{ width: 6, height: 6 }}
+            />
+            {session.status.label}
+          </div>
+        )}
+        {session.alive && onKill && (
+          <button
+            class="header-kill-btn"
+            onClick={() => onKill(session.id)}
+            title="Kill session"
+          >
+            X
+          </button>
+        )}
+      </div>
     </div>
   )
 }
 
 // ── App ──
 
+type ConnectionState = 'connecting' | 'connected' | 'error'
+
 function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [connState, setConnState] = useState<ConnectionState>('connecting')
 
   // Load data
   useEffect(() => {
@@ -559,6 +587,7 @@ function App() {
       const mockFolders = getMockFolders()
       const allSessions = mockFolders.flatMap(f => f.sessions)
       setSessions(allSessions)
+      setConnState('connected')
       // Auto-select: attention > active > any alive
       const attention = allSessions.find(s => s.alive && s.status?.state === 'attention')
       const active = allSessions.find(s => s.alive && s.status?.state === 'active')
@@ -568,18 +597,24 @@ function App() {
       // Fetch initial session list
       fetchSessions().then(list => {
         setSessions(list)
+        setConnState('connected')
         // Auto-select first alive session
         const attention = list.find(s => s.alive && s.status?.state === 'attention')
         const active = list.find(s => s.alive && s.status?.state === 'active')
         const first = attention ?? active ?? list.find(s => s.alive)
         if (first && !selectedId) setSelectedId(first.id)
-      }).catch(err => console.error('Failed to fetch sessions:', err))
+      }).catch(err => {
+        console.error('Failed to fetch sessions:', err)
+        setConnState('error')
+      })
 
       // Subscribe to SSE for live updates
       const source = new EventSource('/api/events')
-      source.addEventListener('session-update', (e) => {
+      source.addEventListener('session-upsert', (e) => {
         try {
-          const updated = toUISession(JSON.parse(e.data))
+          const envelope = JSON.parse(e.data)
+          const session = envelope.session ?? envelope
+          const updated = toUISession(session)
           setSessions(prev => {
             const idx = prev.findIndex(s => s.id === updated.id)
             if (idx >= 0) {
@@ -601,11 +636,39 @@ function App() {
     }
   }, [])
 
-  const folders = useMemo(() => groupByFolder(sessions), [sessions])
+  // URL param filtering: ?project=name or ?cwd=/path
+  const filteredSessions = useMemo(() => {
+    const params = new URLSearchParams(location.search)
+    const project = params.get('project')
+    const cwdFilter = params.get('cwd')
+    if (!project && !cwdFilter) return sessions
+    return sessions.filter(s => {
+      if (project && !s.cwd.toLowerCase().includes(project.toLowerCase())) return false
+      if (cwdFilter && !s.cwd.startsWith(cwdFilter)) return false
+      return true
+    })
+  }, [sessions])
+
+  const folders = useMemo(() => groupByFolder(filteredSessions), [filteredSessions])
   const selected = useMemo(
     () => sessions.find(s => s.id === selectedId) ?? null,
     [sessions, selectedId],
   )
+
+  // Auto-select only when nothing is selected (initial load).
+  // When a selected session dies, we let the user decide — don't override their click.
+  const hasAutoSelected = useRef(false)
+  useEffect(() => {
+    if (!selectedId && !hasAutoSelected.current && filteredSessions.length > 0) {
+      hasAutoSelected.current = true
+      const best =
+        filteredSessions.find(s => s.alive && s.status?.state === 'attention') ??
+        filteredSessions.find(s => s.alive && s.status?.state === 'active') ??
+        filteredSessions.find(s => s.alive) ??
+        filteredSessions[0]
+      if (best) setSelectedId(best.id)
+    }
+  }, [filteredSessions, selectedId])
 
   const handleSelect = useCallback((id: string) => {
     setSelectedId(id)
@@ -631,9 +694,24 @@ function App() {
           <div class="sidebar-logo" style={{ marginLeft: 8 }}>gmux</div>
         </div>
 
-        <MainHeader session={selected} />
+        <MainHeader session={selected} onKill={killSession} />
 
-        {selected ? (
+        {connState === 'connecting' ? (
+          <div class="state-message">
+            <div class="state-icon">⋯</div>
+            <div class="state-title">Connecting</div>
+            <div class="state-subtitle">Reaching gmuxd…</div>
+          </div>
+        ) : connState === 'error' ? (
+          <div class="state-message">
+            <div class="state-icon" style={{ color: 'var(--status-error)' }}>⚠</div>
+            <div class="state-title">Connection failed</div>
+            <div class="state-subtitle">Could not reach gmuxd. Is it running?</div>
+            <button class="btn btn-primary" style={{ marginTop: 12 }} onClick={() => location.reload()}>
+              Retry
+            </button>
+          </div>
+        ) : selected ? (
           canAttach ? (
             <TerminalView sessionId={selected.id} />
           ) : (
