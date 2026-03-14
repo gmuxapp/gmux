@@ -2,7 +2,6 @@ package adapters
 
 import (
 	"testing"
-	"time"
 
 	"github.com/gmuxapp/gmux/cli/gmuxr/internal/adapter"
 )
@@ -10,24 +9,24 @@ import (
 // --- Generic adapter tests ---
 
 func TestGenericMatchAll(t *testing.T) {
-	g := NewGeneric(0)
+	g := NewShell()
 	if !g.Match([]string{"anything"}) {
-		t.Fatal("generic should match any command")
+		t.Fatal("shell should match any command")
 	}
 	if !g.Match([]string{}) {
-		t.Fatal("generic should match empty command")
+		t.Fatal("shell should match empty command")
 	}
 }
 
 func TestGenericName(t *testing.T) {
-	g := NewGeneric(0)
-	if g.Name() != "generic" {
-		t.Fatalf("expected 'generic', got %q", g.Name())
+	g := NewShell()
+	if g.Name() != "shell" {
+		t.Fatalf("expected 'shell', got %q", g.Name())
 	}
 }
 
 func TestGenericPreparePassthrough(t *testing.T) {
-	g := NewGeneric(0)
+	g := NewShell()
 	cmd, env := g.Prepare(adapter.PrepareContext{
 		Command: []string{"echo", "hello"},
 	})
@@ -39,46 +38,70 @@ func TestGenericPreparePassthrough(t *testing.T) {
 	}
 }
 
-func TestGenericMonitorFirstOutput(t *testing.T) {
-	g := NewGeneric(time.Second)
+func TestShellMonitorPlainOutput(t *testing.T) {
+	g := NewShell()
 	status := g.Monitor([]byte("hello"))
-	if status == nil {
-		t.Fatal("first output should produce status")
-	}
-	if status.State != "active" {
-		t.Fatalf("expected 'active', got %q", status.State)
-	}
-}
-
-func TestGenericMonitorSubsequentOutput(t *testing.T) {
-	g := NewGeneric(time.Second)
-	g.Monitor([]byte("first"))
-	status := g.Monitor([]byte("second"))
 	if status != nil {
-		t.Fatal("subsequent output should not produce status (no change)")
+		t.Fatal("shell should not report status for plain output")
 	}
 }
 
-func TestGenericCheckSilence(t *testing.T) {
-	g := NewGeneric(10 * time.Millisecond)
-	if s := g.CheckSilence(); s != nil {
-		t.Fatal("no output yet, should return nil")
-	}
+func TestShellCheckSilenceNoop(t *testing.T) {
+	g := NewShell()
 	g.Monitor([]byte("hello"))
 	if s := g.CheckSilence(); s != nil {
-		t.Fatal("just produced output, should not be silent")
+		t.Fatal("shell should never report silence status")
 	}
-	time.Sleep(20 * time.Millisecond)
-	status := g.CheckSilence()
+}
+
+// --- OSC title parsing tests ---
+
+func TestParseOSCTitleBEL(t *testing.T) {
+	// ESC ] 0 ; hello BEL
+	data := []byte("\x1b]0;my title\x07 more data")
+	title := parseOSCTitle(data)
+	if title != "my title" {
+		t.Fatalf("expected 'my title', got %q", title)
+	}
+}
+
+func TestParseOSCTitleST(t *testing.T) {
+	// ESC ] 2 ; hello ESC backslash
+	data := []byte("\x1b]2;window title\x1b\\ more")
+	title := parseOSCTitle(data)
+	if title != "window title" {
+		t.Fatalf("expected 'window title', got %q", title)
+	}
+}
+
+func TestParseOSCTitleNone(t *testing.T) {
+	data := []byte("hello world no escape here")
+	title := parseOSCTitle(data)
+	if title != "" {
+		t.Fatalf("expected empty, got %q", title)
+	}
+}
+
+func TestParseOSCTitleEmbedded(t *testing.T) {
+	// Title buried in other output
+	data := []byte("some output\r\n\x1b]0;~/dev/gmux\x07prompt $ ")
+	title := parseOSCTitle(data)
+	if title != "~/dev/gmux" {
+		t.Fatalf("expected '~/dev/gmux', got %q", title)
+	}
+}
+
+func TestShellMonitorTitleUpdate(t *testing.T) {
+	g := NewShell()
+	status := g.Monitor([]byte("\x1b]0;fish: ~/dev\x07"))
 	if status == nil {
-		t.Fatal("should detect silence")
+		t.Fatal("should return status")
 	}
-	if status.State != "paused" {
-		t.Fatalf("expected 'paused', got %q", status.State)
+	if status.Title != "fish: ~/dev" {
+		t.Fatalf("expected title 'fish: ~/dev', got %q", status.Title)
 	}
-	status = g.Monitor([]byte("more"))
-	if status == nil || status.State != "active" {
-		t.Fatal("output after silence should produce 'active'")
+	if status.State != "" {
+		t.Fatalf("expected no state, got %q", status.State)
 	}
 }
 

@@ -51,6 +51,25 @@ export function createGmuxdClient(baseUrl: string) {
       return AttachEnvelopeSchema.parse(json).data
     },
 
+    async getConfig() {
+      const json = await getJson('/v1/config')
+      return json.data
+    },
+
+    async launchSession(opts: { launcher_id?: string; command?: string[]; cwd?: string }) {
+      const response = await fetch(`${normalizedBaseUrl}/v1/launch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(opts),
+      })
+
+      if (!response.ok) {
+        throw new Error(`gmuxd launch failed: ${response.status} ${response.statusText}`)
+      }
+
+      return response.json()
+    },
+
     async killSession(sessionId: string) {
       const response = await fetch(`${normalizedBaseUrl}/v1/sessions/${sessionId}/kill`, {
         method: 'POST',

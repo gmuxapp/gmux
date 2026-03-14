@@ -31,7 +31,7 @@ func (r *Registry) SetFallback(a Adapter) {
 // Priority:
 //  1. GMUX_ADAPTER env var — explicit override, bypass matching
 //  2. Walk registered adapters, first Match() wins
-//  3. Fallback (generic)
+//  3. Fallback (shell)
 func (r *Registry) Resolve(command []string) Adapter {
 	// Tier 1: explicit override
 	if name := os.Getenv("GMUX_ADAPTER"); name != "" {

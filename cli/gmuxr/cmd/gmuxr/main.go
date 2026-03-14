@@ -27,6 +27,14 @@ func main() {
 	log.SetPrefix("gmuxr: ")
 	log.SetFlags(0)
 
+	// Subcommand: gmuxr adapters → print launcher JSON and exit
+	if len(os.Args) > 1 && os.Args[1] == "adapters" {
+		// Import adapters package to trigger init() registrations
+		out, _ := json.Marshal(adapters.Launchers)
+		fmt.Println(string(out))
+		return
+	}
+
 	title := flag.String("title", "", "optional session title")
 	cwd := flag.String("cwd", "", "working directory (default: current)")
 	flag.Parse()
@@ -52,10 +60,12 @@ func main() {
 	}
 	sockPath := filepath.Join(socketDir, sessionID+".sock")
 
-	// Resolve adapter — specific adapters first, generic fallback last
+	// Resolve adapter — registered adapters first, shell fallback
 	registry := adapter.NewRegistry()
-	registry.Register(adapters.NewPi())
-	registry.SetFallback(adapters.NewGeneric(0))
+	for _, a := range adapters.All {
+		registry.Register(a)
+	}
+	registry.SetFallback(adapters.Fallback())
 	a := registry.Resolve(args)
 
 	// Let adapter prepare the command and env
@@ -66,10 +76,15 @@ func main() {
 		SocketPath: sockPath,
 	})
 
-	// Build session title
+	// Build session title — use basename for the command if it's a path
 	sessionTitle := *title
 	if sessionTitle == "" {
-		sessionTitle = strings.Join(args, " ")
+		display := make([]string, len(args))
+		copy(display, args)
+		if len(display) > 0 && strings.Contains(display[0], "/") {
+			display[0] = filepath.Base(display[0])
+		}
+		sessionTitle = strings.Join(display, " ")
 	}
 
 	// Create in-memory session state (replaces metadata files)
@@ -117,23 +132,7 @@ func main() {
 	// Register with gmuxd (best-effort, non-blocking)
 	go registerWithGmuxd(sessionID, sockPath)
 
-	// Start silence checker for generic adapter
-	if g, ok := a.(*adapters.Generic); ok {
-		go func() {
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-srv.Done():
-					return
-				case <-ticker.C:
-					if status := g.CheckSilence(); status != nil {
-						state.SetStatus(status)
-					}
-				}
-			}
-		}()
-	}
+
 
 	// Handle signals — clean shutdown
 	sigCh := make(chan os.Signal, 1)

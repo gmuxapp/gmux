@@ -23,7 +23,7 @@ function toUISession(s: ProtocolSession): Session {
     created_at: s.created_at ?? new Date().toISOString(),
     command: s.command ?? [],
     cwd: s.cwd ?? '',
-    kind: s.kind ?? 'generic',
+    kind: s.kind ?? 'shell',
     alive: s.alive,
     pid: s.pid ?? null,
     exit_code: s.exit_code ?? null,
@@ -53,22 +53,186 @@ async function killSession(sessionId: string): Promise<void> {
   })
 }
 
-const NORD_TERM_THEME = {
-  background: '#242933',
-  foreground: '#d8dee9',
-  cursor: '#d8dee9',
-  cursorAccent: '#242933',
-  selectionBackground: '#434c5ecc',
-  black: '#3b4252',
-  red: '#bf616a',
+// ── Launcher types & config ──
+
+interface LauncherDef {
+  id: string
+  label: string
+  command: string[]
+  description?: string
+}
+
+interface LaunchConfig {
+  default_launcher: string
+  launchers: LauncherDef[]
+}
+
+let _configCache: LaunchConfig | null = null
+
+async function fetchConfig(): Promise<LaunchConfig> {
+  if (_configCache) return _configCache
+  try {
+    const resp = await fetch('/trpc/config')
+    const json = await resp.json()
+    _configCache = json.result?.data ?? json.data ?? json
+    return _configCache!
+  } catch {
+    return { default_launcher: 'shell', launchers: [{ id: 'shell', label: 'Shell', command: [] }] }
+  }
+}
+
+async function launchSession(launcherId: string, cwd?: string): Promise<void> {
+  await fetch('/trpc/sessions.launch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ launcher_id: launcherId, cwd }),
+  })
+}
+
+// ── LaunchButton — transforms into inline menu on click ──
+//
+// Idle:      [+]
+// Open:      [+ button becomes default item] → other items appear below
+// Launching: [spinner]
+//
+// Double-click works because the default item occupies the exact same
+// position as the + button. First click opens, second click hits default.
+
+// Track pending launches globally so App can auto-select new sessions
+let _pendingLaunchAt = 0
+function getPendingLaunchAt() { return _pendingLaunchAt }
+
+function LaunchButton({ cwd, className }: { cwd?: string; className?: string }) {
+  const [state, setState] = useState<'idle' | 'loading' | 'open' | 'launching'>('idle')
+  const [config, setConfig] = useState<LaunchConfig | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // Pre-fetch config on first hover so open is instant
+  const handleMouseEnter = () => {
+    if (!config) fetchConfig().then(setConfig)
+  }
+
+  const handleClick = (e: MouseEvent) => {
+    e.stopPropagation()
+    if (state === 'idle') {
+      if (config) {
+        setState('open')
+      } else {
+        setState('loading')
+        fetchConfig().then(cfg => {
+          setConfig(cfg)
+          setState('open')
+        })
+      }
+    } else if (state === 'open') {
+      setState('idle')
+    }
+  }
+
+  const handleLaunch = (id: string) => {
+    setState('launching')
+    _pendingLaunchAt = Date.now()
+    launchSession(id, cwd).finally(() => {
+      // Reset after a short delay to show spinner
+      setTimeout(() => setState('idle'), 600)
+    })
+  }
+
+  // Close on outside click
+  useEffect(() => {
+    if (state !== 'open') return
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setState('idle')
+      }
+    }
+    const timer = setTimeout(() => document.addEventListener('mousedown', handler), 0)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('mousedown', handler)
+    }
+  }, [state])
+
+  // Close on Escape
+  useEffect(() => {
+    if (state !== 'open') return
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') setState('idle') }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [state])
+
+  const isOpen = state === 'open' && config
+  const isLoading = state === 'launching' || state === 'loading'
+
+  let defaultLauncher: LauncherDef | undefined
+  let others: LauncherDef[] = []
+  if (isOpen && config) {
+    defaultLauncher = config.launchers.find(l => l.id === config.default_launcher)
+    others = config.launchers.filter(l => l.id !== config.default_launcher)
+  }
+
+  // Always render the + button for stable layout. Menu overlays on top.
+  return (
+    <div class={`launch-container ${className ?? ''}`} ref={containerRef} onMouseEnter={handleMouseEnter}>
+      <button
+        class={`launch-btn ${isLoading ? 'loading' : ''}`}
+        title={cwd ? `New session in ${cwd}` : 'New session in ~'}
+        onClick={handleClick}
+      >
+        {isLoading ? (
+          <svg viewBox="0 0 16 16" width="14" height="14" class="spin">
+            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-dasharray="28" stroke-dashoffset="8" stroke-linecap="round" />
+          </svg>
+        ) : '+'}
+      </button>
+      {isOpen && (
+        <div class="launch-inline-menu">
+          {defaultLauncher && (
+            <button
+              class="launch-inline-item launch-inline-default"
+              onClick={(e) => { e.stopPropagation(); handleLaunch(defaultLauncher!.id) }}
+            >
+              <span class="launch-inline-label">{defaultLauncher.label}</span>
+              <span class="launch-inline-desc">{defaultLauncher.description ?? ''}</span>
+            </button>
+          )}
+          {others.length > 0 && (
+            <div class="launch-inline-divider" />
+          )}
+          {others.map((l, i) => (
+            <button
+              key={l.id}
+              class="launch-inline-item"
+              style={{ animationDelay: `${(i + 1) * 50}ms` }}
+              onClick={(e) => { e.stopPropagation(); handleLaunch(l.id) }}
+            >
+              <span class="launch-inline-label">{l.label}</span>
+              <span class="launch-inline-desc">{l.description ?? ''}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const TERM_THEME = {
+  background: '#1f2330',   // oklch(13% 0.015 250)
+  foreground: '#d5dae6',   // oklch(88% 0.01 250)
+  cursor: '#d5dae6',
+  cursorAccent: '#1f2330',
+  selectionBackground: '#3a4259cc',
+  black: '#2e3447',
+  red: '#c25d66',
   green: '#a3be8c',
   yellow: '#ebcb8b',
   blue: '#81a1c1',
   magenta: '#b48ead',
   cyan: '#88c0d0',
-  white: '#e5e9f0',
+  white: '#d5dae6',
   brightBlack: '#4c566a',
-  brightRed: '#bf616a',
+  brightRed: '#c25d66',
   brightGreen: '#a3be8c',
   brightYellow: '#ebcb8b',
   brightBlue: '#81a1c1',
@@ -109,25 +273,23 @@ function statusColor(state: string): string {
 }
 
 function folderDotColor(folder: Folder): string | null {
-  // Show the highest-priority state across all sessions
-  const priorities = ['attention', 'error', 'active', 'info', 'success', 'paused']
-  for (const p of priorities) {
-    if (folder.sessions.some(s => s.alive && s.status?.state === p)) {
-      return statusColor(p)
-    }
-  }
-  if (folder.sessions.some(s => s.alive)) return statusColor('paused')
+  // Attention (needs input) takes priority — warm dot
+  if (folder.sessions.some(s => s.alive && s.status?.state === 'attention'))
+    return 'oklch(72% 0.17 55)'
+  // Active (working) — accent cyan
+  if (folder.sessions.some(s => s.alive && s.status?.state === 'active'))
+    return 'var(--accent)'
   return null
 }
 
 // ── Components ──
 
-function SessionDot({ session }: { session: Session }) {
-  return (
-    <div class="session-dot-wrap">
-      <span class={`session-dot ${dotClass(session)}`} />
-    </div>
-  )
+/** Determine if a session should show a right-side indicator dot and which kind. */
+function sessionIndicator(session: Session): 'working' | 'needs-input' | null {
+  if (!session.alive || !session.status) return null
+  if (session.status.state === 'attention') return 'needs-input'
+  if (session.status.state === 'active') return 'working'
+  return null
 }
 
 function SessionItem({
@@ -139,14 +301,15 @@ function SessionItem({
   selected: boolean
   onClick: () => void
 }) {
+  const indicator = sessionIndicator(session)
+
   return (
     <div
       class={`session-item ${selected ? 'selected' : ''} ${!session.alive ? 'dead' : ''}`}
       onClick={onClick}
     >
-      <SessionDot session={session} />
       <div class="session-content">
-        <div class="session-title">{session.title}</div>
+        <div class={`session-title${session.unread ? ' unread' : ''}`}>{session.title}</div>
         <div class="session-meta">
           {session.status && (
             <>
@@ -155,7 +318,7 @@ function SessionItem({
             </>
           )}
           <span class="session-time">{formatAge(session.created_at)}</span>
-          {session.kind !== 'generic' && (
+          {session.kind !== 'shell' && (
             <>
               <span class="session-meta-sep">·</span>
               <span>{session.kind}</span>
@@ -163,7 +326,11 @@ function SessionItem({
           )}
         </div>
       </div>
-      {session.unread && <div class="unread-badge" />}
+      {indicator && (
+        <div class="session-indicator">
+          <span class={`session-indicator-dot ${indicator}`} />
+        </div>
+      )}
     </div>
   )
 }
@@ -192,6 +359,7 @@ function FolderGroup({
         <div class="folder-count">
           {aliveCount > 0 ? aliveCount : folder.sessions.length}
         </div>
+        <LaunchButton cwd={folder.path} className="folder-launch-btn" />
       </div>
       {expanded && (
         <div class="folder-sessions">
@@ -229,6 +397,7 @@ function Sidebar({
         <div class="sidebar-header">
           <div class="sidebar-logo">gmux</div>
           <div class="sidebar-badge">alpha</div>
+          <LaunchButton className="sidebar-launch-btn" />
         </div>
         <div class="sidebar-scroll">
           {folders.map(f => (
@@ -341,7 +510,7 @@ function TerminalView({ sessionId }: { sessionId: string }) {
     disposed.current = false
 
     const term = new Terminal({
-      theme: NORD_TERM_THEME,
+      theme: TERM_THEME,
       fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
       fontSize: 14,
       cursorBlink: true,
@@ -415,7 +584,7 @@ function TerminalView({ sessionId }: { sessionId: string }) {
     function connect() {
       if (disposed.current) return
 
-      // Close previous connection
+      // Close previous connection (reconnect case, not session switch)
       if (wsRef.current) {
         wsRef.current.close()
         wsRef.current = null
@@ -543,8 +712,12 @@ function MainHeader({ session, onKill }: { session: Session | null; onKill?: (id
         <div class="main-header-title">{session.title}</div>
         <div class="main-header-meta">
           <span class="main-header-cwd">{shortCwd}</span>
-          <span class="main-header-sep">·</span>
-          <span class="main-header-kind">{session.kind}</span>
+          {session.kind !== 'shell' && (
+            <>
+              <span class="main-header-sep">·</span>
+              <span class="main-header-kind">{session.kind}</span>
+            </>
+          )}
         </div>
       </div>
       <div class="main-header-right">
@@ -552,7 +725,7 @@ function MainHeader({ session, onKill }: { session: Session | null; onKill?: (id
           <div class={`main-header-status ${session.status.state}`}>
             <span
               class={`session-dot ${session.status.state}`}
-              style={{ width: 6, height: 6 }}
+              style={{ width: 5, height: 5 }}
             />
             {session.status.label}
           </div>

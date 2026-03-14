@@ -319,16 +319,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.clients[client] = struct{}{}
 	s.mu.Unlock()
 
-	if len(snapshot) > 0 {
-		// Wrap scrollback replay in synchronized output (DEC 2026) so xterm
-		// renders the entire replay as one atomic frame — no flicker.
-		//
-		// Inside the sync block we include terminal reset sequences so xterm
-		// clears its internal state before writing the scrollback. This means
-		// the frontend never needs to call clear()/reset() — the old content
-		// is replaced atomically when xterm processes ESU.
-		//
-		// Sequence: BSU → reset(scroll region, cursor home, erase all) → scrollback → ESU
+	// Always send reset frame — even with empty scrollback.
+	// This ensures switching to a new/empty session clears previous content.
+	// Wrapped in DEC 2026 synchronized output so xterm renders atomically.
+	// Sequence: BSU → reset(scroll region, cursor home, erase all) → scrollback → ESU
+	{
 		bsu := []byte("\x1b[?2026h")                      // Begin Synchronized Update
 		resetSeq := []byte("\x1b[r\x1b[H\x1b[2J\x1b[3J") // Reset scroll region + cursor home + erase display + erase scrollback
 		esu := []byte("\x1b[?2026l")                       // End Synchronized Update
@@ -400,7 +395,13 @@ func (s *Server) readPTY() {
 			// Feed adapter monitor (cheap, no alloc expected)
 			if s.adapter != nil {
 				if status := s.adapter.Monitor(data); status != nil {
-					s.state.SetStatus(status)
+					if status.Title != "" {
+						s.state.SetTitle(status.Title)
+						status.Title = "" // don't leak into status JSON
+					}
+					if status.State != "" {
+						s.state.SetStatus(status)
+					}
 				}
 			}
 

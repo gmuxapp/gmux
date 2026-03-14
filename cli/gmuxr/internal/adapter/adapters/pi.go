@@ -6,6 +6,16 @@ import (
 	"github.com/gmuxapp/gmux/cli/gmuxr/internal/adapter"
 )
 
+func init() {
+	Launchers = append(Launchers, Launcher{
+		ID:          "pi",
+		Label:       "pi",
+		Command:     []string{"pi"},
+		Description: "Coding agent",
+	})
+	All = append(All, NewPi())
+}
+
 // Pi is the adapter for the pi coding agent.
 // It recognizes `pi` and `pi-coding-agent` commands, injects session
 // tracking, and monitors PTY output for agent state transitions.

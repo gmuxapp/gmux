@@ -14,6 +14,10 @@ export const appRouter = t.router({
     return { ok: true, gmuxd: health }
   }),
 
+  config: t.procedure.query(async ({ ctx }) => {
+    return ctx.gmuxd.getConfig()
+  }),
+
   sessions: t.router({
     list: t.procedure.query(async ({ ctx }) => {
       return ctx.gmuxd.listSessions()
@@ -37,6 +41,18 @@ export const appRouter = t.router({
       )
       .mutation(async ({ ctx, input }) => {
         return ctx.gmuxd.killSession(input.sessionId)
+      }),
+
+    launch: t.procedure
+      .input(
+        z.object({
+          launcher_id: z.string().optional(),
+          command: z.array(z.string()).optional(),
+          cwd: z.string().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        return ctx.gmuxd.launchSession(input)
       }),
   }),
 })

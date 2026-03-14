@@ -10,6 +10,7 @@ type Status struct {
 	Label string `json:"label"`           // Short text: "thinking", "3/10 passed"
 	State string `json:"state"`           // active|attention|success|error|paused|info
 	Icon  string `json:"icon,omitempty"`  // Optional icon hint
+	Title string `json:"title,omitempty"` // If set, updates the session title
 }
 
 // Adapter teaches gmux-run how to work with a specific child process.
