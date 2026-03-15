@@ -798,8 +798,14 @@ function TerminalView({
                   }
                 })
               } else {
-                // Not the owner — adopt the owner's size from session state.
-                applyPassiveTerminalSize()
+                // Not the owner — resize xterm to match the PTY immediately
+                // using the dimensions included in the control message.
+                const t = termRef.current
+                const cols = msg.cols as number | undefined
+                const rows = msg.rows as number | undefined
+                if (t && cols && rows) {
+                  t.resize(cols, rows)
+                }
               }
               return
             }

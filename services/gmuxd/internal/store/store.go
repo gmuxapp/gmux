@@ -98,6 +98,17 @@ func (s *Store) Upsert(sess Session) {
 	})
 }
 
+// GetTerminalSize returns the current terminal dimensions for a session.
+func (s *Store) GetTerminalSize(id string) (cols, rows uint16, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sess, exists := s.sessions[id]
+	if !exists {
+		return 0, 0, false
+	}
+	return sess.TerminalCols, sess.TerminalRows, true
+}
+
 // SetTerminalSize updates the terminal dimensions for a session and broadcasts
 // the change. Called by the WS proxy when the resize owner sends a resize.
 func (s *Store) SetTerminalSize(id string, cols, rows uint16) bool {

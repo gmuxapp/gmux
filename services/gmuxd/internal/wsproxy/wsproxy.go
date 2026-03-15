@@ -19,10 +19,10 @@ import (
 	"nhooyr.io/websocket"
 )
 
-// TerminalSizeUpdater is called when the resize owner sends a resize.
-// Implemented by store.Store.SetTerminalSize.
-type TerminalSizeUpdater interface {
+// SessionStore provides terminal-size read/write for the proxy.
+type SessionStore interface {
 	SetTerminalSize(sessionID string, cols, rows uint16) bool
+	GetTerminalSize(sessionID string) (cols, rows uint16, ok bool)
 }
 
 // conn tracks a single client WebSocket connection to a session.
@@ -41,7 +41,7 @@ type sessionConns struct {
 // Proxy manages WebSocket proxying and resize ownership.
 type Proxy struct {
 	resolve SocketResolver
-	sizer   TerminalSizeUpdater
+	sizer   SessionStore
 
 	mu       sync.Mutex
 	sessions map[string]*sessionConns // sessionID → connections
@@ -52,7 +52,7 @@ type Proxy struct {
 type SocketResolver func(sessionID string) (string, error)
 
 // New creates a new WebSocket proxy.
-func New(resolve SocketResolver, sizer TerminalSizeUpdater) *Proxy {
+func New(resolve SocketResolver, sizer SessionStore) *Proxy {
 	return &Proxy{
 		resolve:  resolve,
 		sizer:    sizer,
@@ -305,7 +305,7 @@ func (p *Proxy) claimOwnership(ctx context.Context, c *conn) {
 }
 
 // sendResizeState sends a resize_state control message to a client telling
-// it whether it's the resize owner.
+// it whether it's the resize owner, and the current terminal dimensions.
 func (p *Proxy) sendResizeState(ctx context.Context, c *conn) {
 	p.mu.Lock()
 	sc := p.sessions[c.sessionID]
@@ -316,11 +316,17 @@ func (p *Proxy) sendResizeState(ctx context.Context, c *conn) {
 	isOwner := sc.ownerID == c.id
 	p.mu.Unlock()
 
-	msg, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"type":     "resize_state",
 		"is_owner": isOwner,
-	})
+	}
+	// Include current terminal size so passive clients can resize immediately.
+	if cols, rows, ok := p.sizer.GetTerminalSize(c.sessionID); ok && cols > 0 && rows > 0 {
+		payload["cols"] = cols
+		payload["rows"] = rows
+	}
 
+	msg, _ := json.Marshal(payload)
 	// Best-effort — if the write fails the connection is closing anyway.
 	_ = c.ws.Write(ctx, websocket.MessageText, msg)
 }
