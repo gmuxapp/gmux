@@ -28,9 +28,9 @@ func socketDir() string {
 // Watch periodically scans for Unix sockets and queries their /meta.
 // When a new session is found, it subscribes to the runner's /events SSE
 // for real-time status/meta/exit updates.
-func Watch(sessions *store.Store, subs *Subscriptions, interval time.Duration, stop <-chan struct{}) {
+func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, interval time.Duration, stop <-chan struct{}) {
 	// Initial scan immediately
-	Scan(sessions, subs)
+	Scan(sessions, subs, fileMon)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -41,7 +41,7 @@ func Watch(sessions *store.Store, subs *Subscriptions, interval time.Duration, s
 			subs.UnsubscribeAll()
 			return
 		case <-ticker.C:
-			Scan(sessions, subs)
+			Scan(sessions, subs, fileMon)
 		}
 	}
 }
@@ -49,7 +49,7 @@ func Watch(sessions *store.Store, subs *Subscriptions, interval time.Duration, s
 // Scan finds all .sock files and queries each runner's /meta endpoint.
 // Reachable sockets → upsert session + subscribe to /events.
 // Unreachable → remove + cleanup + unsubscribe.
-func Scan(sessions *store.Store, subs *Subscriptions) {
+func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor) {
 	dir := socketDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -98,10 +98,14 @@ func Scan(sessions *store.Store, subs *Subscriptions) {
 			continue
 		}
 
+		_, existed := sessions.Get(sess.ID)
 		seen[sess.ID] = true
 		sessions.Upsert(*sess)
 		if subs != nil {
 			subs.Subscribe(sess.ID, sockPath)
+		}
+		if !existed && fileMon != nil {
+			fileMon.NotifyNewSession(sess.ID)
 		}
 	}
 
@@ -115,6 +119,9 @@ func Scan(sessions *store.Store, subs *Subscriptions) {
 				if subs != nil {
 					subs.Unsubscribe(s.ID)
 				}
+				if fileMon != nil {
+					fileMon.NotifySessionDied(s.ID)
+				}
 			}
 		}
 	}
@@ -124,7 +131,7 @@ func Scan(sessions *store.Store, subs *Subscriptions) {
 // Immediately queries the runner's /meta, adds to store, and subscribes to /events.
 // If there's a pending resume matching this session's cwd+kind, the existing
 // store entry is updated in-place rather than creating a new one.
-func Register(sessions *store.Store, subs *Subscriptions, socketPath string, resumes *PendingResumes) error {
+func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, socketPath string, resumes *PendingResumes) error {
 	newSess, err := queryMeta(socketPath)
 	if err != nil {
 		return err
@@ -146,6 +153,9 @@ func Register(sessions *store.Store, subs *Subscriptions, socketPath string, res
 				if subs != nil {
 					subs.Subscribe(existingID, socketPath)
 				}
+				if fileMon != nil {
+					fileMon.NotifyNewSession(existingID)
+				}
 				log.Printf("register: merged resumed session %s ← %s", existingID, newSess.ID)
 				return nil
 			}
@@ -155,6 +165,9 @@ func Register(sessions *store.Store, subs *Subscriptions, socketPath string, res
 	sessions.Upsert(*newSess)
 	if subs != nil {
 		subs.Subscribe(newSess.ID, socketPath)
+	}
+	if fileMon != nil {
+		fileMon.NotifyNewSession(newSess.ID)
 	}
 	return nil
 }

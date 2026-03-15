@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -25,12 +24,9 @@ func init() {
 }
 
 // Pi is the adapter for the pi coding agent.
-// Recognizes pi/pi-coding-agent commands and monitors PTY output for
-// spinner patterns to report active/idle status. Implements SessionFiler,
-// FileMonitor, and Resumer for session file discovery and resume.
-type Pi struct {
-	wasActive bool // tracks whether last Monitor call returned active
-}
+// Status is driven by the JSONL session file (FileMonitor), not PTY output.
+// Implements SessionFiler, FileMonitor, and Resumer.
+type Pi struct{}
 
 func NewPi() *Pi { return &Pi{} }
 
@@ -70,30 +66,10 @@ func (p *Pi) Launchers() []adapter.Launcher {
 	}}
 }
 
-// Spinner characters used by pi's TUI (braille pattern dots).
-var piSpinnerChars = [][]byte{
-	[]byte("⠋"), []byte("⠙"), []byte("⠹"), []byte("⠸"),
-	[]byte("⠼"), []byte("⠴"), []byte("⠦"), []byte("⠧"),
-	[]byte("⠇"), []byte("⠏"),
-}
-
-// Monitor detects pi's spinner pattern in PTY output.
-// Returns Working=true when spinner is visible, Working=false when it stops.
-func (p *Pi) Monitor(output []byte) *adapter.Status {
-	for _, sc := range piSpinnerChars {
-		if idx := bytes.Index(output, sc); idx >= 0 {
-			rest := output[idx+len(sc):]
-			if bytes.Contains(rest, []byte("Working")) {
-				p.wasActive = true
-				return &adapter.Status{Label: "working", Working: true}
-			}
-		}
-	}
-	// Spinner not found — if we were previously active, clear working state
-	if p.wasActive {
-		p.wasActive = false
-		return &adapter.Status{}
-	}
+// Monitor is a no-op for the pi adapter — status is driven by the
+// JSONL session file via FileMonitor.ParseNewLines instead of PTY output.
+// This avoids flicker from spinner redraws.
+func (p *Pi) Monitor(_ []byte) *adapter.Status {
 	return nil
 }
 
@@ -202,6 +178,11 @@ func (p *Pi) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 
 // ParseNewLines receives lines appended to an attributed session file
 // and returns events for meaningful changes.
+//
+// Signals:
+//   - session_info with name → title update
+//   - message role:"user" → working (assistant will respond) + title from first user text
+//   - message role:"assistant" stopReason:"stop" → idle (turn complete)
 func (p *Pi) ParseNewLines(lines []string) []adapter.FileEvent {
 	var events []adapter.FileEvent
 	for _, line := range lines {
@@ -224,6 +205,39 @@ func (p *Pi) ParseNewLines(lines []string) []adapter.FileEvent {
 				events = append(events, adapter.FileEvent{
 					Title: strings.TrimSpace(si.Name),
 				})
+			}
+
+		case "message":
+			var msg struct {
+				Message *struct {
+					Role       string `json:"role"`
+					StopReason string `json:"stopReason"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(line), &msg); err != nil || msg.Message == nil {
+				continue
+			}
+
+			switch msg.Message.Role {
+			case "user":
+				// User submitted a message — assistant will start working.
+				events = append(events, adapter.FileEvent{
+					Status: &adapter.Status{Label: "working", Working: true},
+				})
+				// Use first user message text as title hint.
+				if text := extractFirstUserText(line); text != "" {
+					events = append(events, adapter.FileEvent{
+						Title: truncateTitle(text, 80),
+					})
+				}
+
+			case "assistant":
+				if msg.Message.StopReason == "stop" {
+					// Assistant finished its turn — no more tool calls.
+					events = append(events, adapter.FileEvent{
+						Status: &adapter.Status{Label: "waiting for input"},
+					})
+				}
 			}
 		}
 	}

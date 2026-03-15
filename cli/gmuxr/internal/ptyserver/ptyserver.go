@@ -206,6 +206,7 @@ func (s *Server) serve() {
 
 	// HTTP endpoints (checked first via explicit paths)
 	mux.HandleFunc("GET /meta", s.handleMeta)
+	mux.HandleFunc("GET /scrollback/text", s.handleScrollbackText)
 	mux.HandleFunc("PUT /status", s.handlePutStatus)
 	mux.HandleFunc("PATCH /meta", s.handlePatchMeta)
 	mux.HandleFunc("GET /events", s.handleEvents)
@@ -226,6 +227,25 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+// handleScrollbackText returns the tail of the scrollback as ANSI-stripped
+// plain text, suitable for content-similarity matching (ADR-0009).
+func (s *Server) handleScrollbackText(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	raw := s.scrollback.Snapshot()
+	s.mu.Unlock()
+
+	text := adapter.NormalizeScrollback(raw)
+
+	// Return only the tail — 2000 chars is plenty for similarity matching.
+	const maxChars = 2000
+	if len(text) > maxChars {
+		text = text[len(text)-maxChars:]
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write([]byte(text))
 }
 
 func (s *Server) handlePutStatus(w http.ResponseWriter, r *http.Request) {

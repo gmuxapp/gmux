@@ -71,37 +71,14 @@ func TestPiDiscover(t *testing.T) {
 	_ = NewPi().Discover()
 }
 
-func TestPiMonitorPlainOutput(t *testing.T) {
-	if NewPi().Monitor([]byte("some output")) != nil {
-		t.Fatal("should return nil for non-spinner output")
-	}
-}
-
-func TestPiMonitorSpinner(t *testing.T) {
+func TestPiMonitorNoOp(t *testing.T) {
+	// Pi Monitor is a no-op — status is driven by FileMonitor.
 	pi := NewPi()
-
-	// Spinner detected → working
-	s := pi.Monitor([]byte("⠋ Working..."))
-	if s == nil {
-		t.Fatal("should detect spinner")
+	if pi.Monitor([]byte("⠋ Working...")) != nil {
+		t.Fatal("should return nil (file-driven, not PTY)")
 	}
-	if !s.Working || s.Label != "working" {
-		t.Fatalf("expected Working=true label=working, got Working=%v label=%s", s.Working, s.Label)
-	}
-
-	// Non-spinner after working → clear
-	s = pi.Monitor([]byte("some normal output"))
-	if s == nil {
-		t.Fatal("should return clear signal after working")
-	}
-	if s.Working {
-		t.Fatal("expected Working=false")
-	}
-
-	// Non-spinner when already cleared → nil (no change)
-	s = pi.Monitor([]byte("more normal output"))
-	if s != nil {
-		t.Fatal("should return nil when not transitioning")
+	if pi.Monitor([]byte("some output")) != nil {
+		t.Fatal("should return nil")
 	}
 }
 
@@ -209,19 +186,57 @@ func TestParseSessionFileStringContent(t *testing.T) {
 func TestParseNewLinesNameChange(t *testing.T) {
 	events := NewPi().ParseNewLines([]string{
 		`{"type":"session_info","name":"My new name"}`,
-		`{"type":"message","id":"u1","message":{"role":"user","content":"hello"}}`,
 	})
 	if len(events) != 1 || events[0].Title != "My new name" {
 		t.Errorf("expected 1 title event, got %v", events)
 	}
 }
 
-func TestParseNewLinesNoEvents(t *testing.T) {
+func TestParseNewLinesUserMessage(t *testing.T) {
 	events := NewPi().ParseNewLines([]string{
-		`{"type":"message","id":"u1","message":{"role":"user","content":"hello"}}`,
+		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"Fix the bug"}]}}`,
+	})
+	// Should produce: working status + title from user text
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events (status + title), got %d", len(events))
+	}
+	if events[0].Status == nil || !events[0].Status.Working {
+		t.Error("expected working=true status")
+	}
+	if events[1].Title != "Fix the bug" {
+		t.Errorf("expected title from user text, got %q", events[1].Title)
+	}
+}
+
+func TestParseNewLinesAssistantStop(t *testing.T) {
+	events := NewPi().ParseNewLines([]string{
+		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Done."}]}}`,
+	})
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Status == nil || events[0].Status.Working {
+		t.Error("expected working=false status on stop")
+	}
+}
+
+func TestParseNewLinesAssistantToolUse(t *testing.T) {
+	// toolUse stopReason means assistant is still working — no event
+	events := NewPi().ParseNewLines([]string{
+		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"toolUse","content":[]}}`,
 	})
 	if len(events) != 0 {
-		t.Errorf("expected 0 events, got %d", len(events))
+		t.Errorf("expected 0 events for toolUse, got %d", len(events))
+	}
+}
+
+func TestParseNewLinesToolResult(t *testing.T) {
+	// toolResult messages should not generate events
+	events := NewPi().ParseNewLines([]string{
+		`{"type":"message","id":"tr1","message":{"role":"toolResult","content":""}}`,
+	})
+	if len(events) != 0 {
+		t.Errorf("expected 0 events for toolResult, got %d", len(events))
 	}
 }
 

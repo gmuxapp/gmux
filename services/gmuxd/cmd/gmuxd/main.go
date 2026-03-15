@@ -148,10 +148,17 @@ func main() {
 	subs := discovery.NewSubscriptions(sessions)
 	pendingResumes := discovery.NewPendingResumes()
 
+	// Start file monitor — watches adapter session directories with inotify
+	// to extract title and working status from JSONL files.
+	fileMon := discovery.NewFileMonitor(sessions)
+	stopFileMon := make(chan struct{})
+	go fileMon.Run(stopFileMon)
+	defer close(stopFileMon)
+
 	// Start socket-based discovery (scans /tmp/gmux-sessions/*.sock)
 	// Discovery also subscribes to each runner's /events SSE for live updates.
 	stopDiscovery := make(chan struct{})
-	go discovery.Watch(sessions, subs, 3*time.Second, stopDiscovery)
+	go discovery.Watch(sessions, subs, fileMon, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
 	// Start session file scanner — discovers resumable sessions from
@@ -227,7 +234,7 @@ func main() {
 		}
 
 		log.Printf("register: %s at %s", req.SessionID, req.SocketPath)
-		if err := discovery.Register(sessions, subs, req.SocketPath, pendingResumes); err != nil {
+		if err := discovery.Register(sessions, subs, fileMon, req.SocketPath, pendingResumes); err != nil {
 			log.Printf("register: failed to query meta for %s: %v", req.SessionID, err)
 			writeError(w, http.StatusBadGateway, "runner_unreachable", err.Error())
 			return
