@@ -46,19 +46,20 @@ function toUISession(s: ProtocolSession): Session {
 }
 
 async function fetchSessions(): Promise<Session[]> {
-  const resp = await fetch('/trpc/sessions.list')
+  const resp = await fetch('/v1/sessions')
   const json = await resp.json()
-  // tRPC wraps in { result: { data: [...] } }
-  const data: ProtocolSession[] = json?.result?.data ?? []
+  const data: ProtocolSession[] = json?.data ?? []
   return data.map(toUISession)
 }
 
-async function postAction(endpoint: string, body: Record<string, unknown>): Promise<void> {
+async function postAction(endpoint: string, body?: Record<string, unknown>): Promise<void> {
   try {
     const resp = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      ...(body ? {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      } : {}),
     })
     if (!resp.ok) console.warn(`${endpoint} failed:`, resp.status, await resp.text().catch(() => ''))
   } catch (err) {
@@ -67,15 +68,15 @@ async function postAction(endpoint: string, body: Record<string, unknown>): Prom
 }
 
 async function killSession(sessionId: string): Promise<void> {
-  await postAction('/trpc/sessions.kill', { sessionId })
+  await postAction(`/v1/sessions/${sessionId}/kill`)
 }
 
 async function dismissSession(sessionId: string): Promise<void> {
-  await postAction('/trpc/sessions.dismiss', { sessionId })
+  await postAction(`/v1/sessions/${sessionId}/dismiss`)
 }
 
 async function resumeSession(sessionId: string): Promise<void> {
-  await postAction('/trpc/sessions.resume', { sessionId })
+  await postAction(`/v1/sessions/${sessionId}/resume`)
 }
 
 // ── Launcher types & config ──
@@ -98,9 +99,9 @@ let _configCache: LaunchConfig | null = null
 async function fetchConfig(): Promise<LaunchConfig> {
   if (_configCache) return _configCache
   try {
-    const resp = await fetch('/trpc/config')
+    const resp = await fetch('/v1/config')
     const json = await resp.json()
-    _configCache = json.result?.data ?? json.data ?? json
+    _configCache = json.data ?? json
     return _configCache!
   } catch {
     return { default_launcher: 'shell', launchers: [{ id: 'shell', label: 'Shell', command: [], available: true }] }
@@ -108,7 +109,7 @@ async function fetchConfig(): Promise<LaunchConfig> {
 }
 
 async function launchSession(launcherId: string, cwd?: string): Promise<void> {
-  await postAction('/trpc/sessions.launch', { launcher_id: launcherId, cwd })
+  await postAction('/v1/launch', { launcher_id: launcherId, cwd })
 }
 
 
@@ -1079,7 +1080,7 @@ function App() {
       })
 
       // Subscribe to SSE for live updates
-      const source = new EventSource('/api/events')
+      const source = new EventSource('/v1/events')
       let sseConnected = false
       source.addEventListener('open', () => {
         if (sseConnected) {
