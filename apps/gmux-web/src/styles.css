@@ -49,7 +49,7 @@ body {
   font-family: 'Source Sans 3', -apple-system, BlinkMacSystemFont, sans-serif;
   background: var(--bg);
   color: var(--text);
-  font-size: 13px;
+  font-size: 14px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -87,7 +87,7 @@ body {
 
 .sidebar-logo {
   font-family: 'Instrument Sans', sans-serif;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.04em;
   color: var(--text);
@@ -230,7 +230,7 @@ body {
   text-align: left;
   transition: background 0.1s ease;
   color: var(--text);
-  font-size: 13px;
+  font-size: 14px;
   white-space: nowrap;
 }
 
@@ -248,7 +248,7 @@ body {
 }
 
 .launch-inline-desc {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   margin-left: auto;
 }
@@ -372,7 +372,7 @@ body {
 }
 
 .session-title {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 400;
   color: var(--text);
   overflow: hidden;
@@ -388,7 +388,7 @@ body {
 }
 
 .session-time {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
@@ -399,7 +399,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   line-height: 1.3;
 }
@@ -448,7 +448,7 @@ body {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-family: 'Source Sans 3', sans-serif;
   cursor: pointer;
   text-align: left;
@@ -473,7 +473,7 @@ body {
   border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 13px;
   font-family: 'Source Sans 3', sans-serif;
   cursor: pointer;
   text-align: center;
@@ -501,7 +501,7 @@ body {
   border-radius: 4px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 13px;
   font-family: 'Source Sans 3', sans-serif;
   cursor: pointer;
   transition: background 0.1s;
@@ -558,7 +558,7 @@ body {
 
 .main-header-title {
   font-family: 'Source Sans 3', sans-serif;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text);
   overflow: hidden;
@@ -571,7 +571,7 @@ body {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
 }
 
@@ -593,7 +593,7 @@ body {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
   flex-shrink: 0;
@@ -610,7 +610,7 @@ body {
   padding: 3px 7px;
   border-radius: 4px;
   font-family: 'Source Sans 3', sans-serif;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
@@ -677,7 +677,7 @@ body {
   gap: 8px;
   background: oklch(from #0f141a l c h / 0.85);
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 14px;
   z-index: 10;
 }
 
@@ -712,7 +712,7 @@ body {
   width: max-content;
   min-width: 100%;
   min-height: 100%;
-  padding: 0 6px;
+  padding: 0 6px 6px 6px;
   margin: 0 auto; /* center the character grid horizontally */
 }
 
@@ -742,13 +742,13 @@ body {
 }
 
 .state-title {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--text-secondary);
 }
 
 .state-subtitle {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-muted);
 }
 
@@ -768,7 +768,7 @@ body {
 }
 
 .empty-state-title {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--text-secondary);
 }
@@ -781,7 +781,7 @@ body {
 
 .empty-state-launch-btn {
   font-family: 'Source Sans 3', sans-serif;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   padding: 10px 20px;
   border-radius: 6px;
@@ -807,7 +807,7 @@ body {
 }
 
 .empty-state-launch-btn .launch-desc {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
   color: var(--text-muted);
 }
@@ -858,7 +858,7 @@ body {
   }
 
   .main-header-status {
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .terminal-container .xterm {
@@ -901,7 +901,7 @@ body {
     padding: 0 12px;
     flex: 0 0 auto;
     font-family: 'Source Sans 3', sans-serif;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     letter-spacing: 0.01em;
     display: inline-flex;
@@ -948,7 +948,7 @@ body {
 
 .btn {
   font-family: 'Source Sans 3', sans-serif;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   padding: 5px 12px;
   border-radius: 4px;
