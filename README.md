@@ -6,13 +6,24 @@ Launch any command as a managed session. gmux gives you a live, interactive term
 
 No Electron, no desktop app. Just a browser and two small binaries.
 
+## Install
+
 ```bash
+brew install gmuxapp/tap/gmux
+```
+
+Or download from [GitHub Releases](https://github.com/gmuxapp/gmux/releases).
+
+## Quick start
+
+```bash
+gmuxd &                     # start the daemon (once)
 gmuxr pi                    # launch a coding agent
 gmuxr -- pytest --watch     # launch a test watcher
 gmuxr -- make build         # or literally any command
 ```
 
-Open `localhost:5173` — all three sessions are there, grouped by project, with live status indicators. Click one to attach a full terminal. The same xterm.js that powers the VS Code terminal, running in your browser.
+Open `localhost:8790` — all three sessions are there, grouped by project, with live status indicators. Click one to attach a full terminal. The same xterm.js that powers the VS Code terminal, running in your browser.
 
 ## How it works
 

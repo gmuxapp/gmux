@@ -1,0 +1,86 @@
+version: 2
+
+before:
+  hooks:
+    - bash -c 'cd apps/gmux-web && npx vite build'
+    - bash -c 'rm -rf services/gmuxd/cmd/gmuxd/web/assets services/gmuxd/cmd/gmuxd/web/favicon.svg services/gmuxd/cmd/gmuxd/web/manifest.json && cp -r apps/gmux-web/dist/* services/gmuxd/cmd/gmuxd/web/'
+
+builds:
+  - id: gmuxd
+    main: ./cmd/gmuxd
+    dir: services/gmuxd
+    binary: gmuxd
+    env:
+      - CGO_ENABLED=0
+      - GOWORK={{ .Env.GOWORK }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+  - id: gmuxr
+    main: ./cmd/gmuxr
+    dir: cli/gmuxr
+    binary: gmuxr
+    env:
+      - CGO_ENABLED=0
+      - GOWORK={{ .Env.GOWORK }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: default
+    ids:
+      - gmuxd
+      - gmuxr
+    name_template: "gmux_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: darwin
+        formats:
+          - zip
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+homebrew_casks:
+  - name: gmux
+    repository:
+      owner: gmuxapp
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/gmuxapp/gmux"
+    description: "Terminal session orchestration — manage AI agents, test runners, and long-running processes from your browser"
+    license: "MIT"
+    binaries:
+      - gmuxd
+      - gmuxr
+    caveats: |
+      Start the daemon:
+        gmuxd
+
+      Then open http://localhost:8790 in your browser.
+
+      Launch a session:
+        gmuxr pi              # coding agent
+        gmuxr -- pytest -x    # test runner
+        gmuxr -- make build   # any command
