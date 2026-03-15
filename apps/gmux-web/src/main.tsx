@@ -620,14 +620,14 @@ function TerminalView({
   }, [])
 
   // Send claim_resize over WS to take resize ownership from another device.
+  // The proxy confirms via resize_state, which triggers fit+resize after
+  // React removes the overlay from the DOM.
   const claimResize = useCallback(() => {
     const ws = wsRef.current
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'claim_resize' }))
     }
-    // Optimistically fit — the proxy will confirm ownership via resize_state.
-    fitAndResize()
-  }, [fitAndResize])
+  }, [])
 
   // Terminal + keyboard setup (stable across session changes).
   useEffect(() => {
@@ -786,13 +786,17 @@ function TerminalView({
               setIsResizeOwner(nowOwner)
               if (nowOwner) {
                 // We just became the owner — fit to our viewport and resize.
-                const f = fitRef.current
-                const t = termRef.current
-                if (f && t) {
-                  f.fit()
-                  sendResize(wsRef.current, f, t)
-                  setViewportSize(getProposedTerminalSize(f))
-                }
+                // Defer to next frame so React can flush the DOM first
+                // (e.g. removing the resize overlay that takes up space).
+                requestAnimationFrame(() => {
+                  const f = fitRef.current
+                  const t = termRef.current
+                  if (f && t) {
+                    f.fit()
+                    sendResize(wsRef.current, f, t)
+                    setViewportSize(getProposedTerminalSize(f))
+                  }
+                })
               } else {
                 // Not the owner — adopt the owner's size from session state.
                 applyPassiveTerminalSize()
