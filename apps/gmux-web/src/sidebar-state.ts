@@ -5,7 +5,7 @@
  * Frontend owns this state; gmuxd just provides the session catalog.
  */
 
-import type { Session } from './mock-data'
+import type { Session } from './types'
 
 const STORAGE_KEY = 'gmux-sidebar-state'
 

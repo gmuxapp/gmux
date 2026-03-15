@@ -6,39 +6,8 @@
  * various states to exercise all UI paths.
  */
 
-export interface SessionStatus {
-  label: string
-  working: boolean
-}
-
-export interface Session {
-  id: string
-  created_at: string
-  command: string[]
-  cwd: string
-  kind: string
-  alive: boolean
-  pid: number | null
-  exit_code: number | null
-  started_at: string
-  exited_at: string | null
-  title: string
-  subtitle: string
-  status: SessionStatus | null
-  unread: boolean
-  resumable?: boolean
-  resume_key?: string
-  close_action?: 'minimize' | 'dismiss'
-  socket_path: string
-  terminal_cols?: number
-  terminal_rows?: number
-}
-
-export interface Folder {
-  name: string      // display name (basename of cwd)
-  path: string      // full path
-  sessions: Session[]
-}
+import type { Session, Folder } from './types'
+export type { Session, Folder, SessionStatus } from './types'
 
 function ago(minutes: number): string {
   const d = new Date(Date.now() - minutes * 60_000)
@@ -210,42 +179,7 @@ const MOCK_SESSIONS: Session[] = [
   },
 ]
 
-/** Group sessions by cwd into folders, sorted by most recent activity. */
-export function groupByFolder(sessions: Session[]): Folder[] {
-  const map = new Map<string, Session[]>()
-  for (const s of sessions) {
-    const existing = map.get(s.cwd) || []
-    existing.push(s)
-    map.set(s.cwd, existing)
-  }
-
-  const folders: Folder[] = []
-  for (const [path, sessions] of map) {
-    const parts = path.split('/')
-    folders.push({
-      name: parts[parts.length - 1],
-      path,
-      sessions: sessions.sort((a, b) => {
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      }),
-    })
-  }
-
-  // Sort: folders with working sessions first, then alive, then rest
-  const statePriority = (f: Folder): number => {
-    if (f.sessions.some(s => s.alive && s.status?.working)) return 0
-    if (f.sessions.some(s => s.alive)) return 1
-    return 2
-  }
-  return folders.sort((a, b) => {
-    const pa = statePriority(a)
-    const pb = statePriority(b)
-    if (pa !== pb) return pa - pb
-    const aMax = Math.max(...a.sessions.map(s => new Date(s.created_at).getTime()))
-    const bMax = Math.max(...b.sessions.map(s => new Date(s.created_at).getTime()))
-    return bMax - aMax
-  })
-}
+import { groupByFolder } from './types'
 
 export function getMockSessions(): Session[] {
   return MOCK_SESSIONS

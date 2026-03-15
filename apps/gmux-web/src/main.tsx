@@ -10,8 +10,9 @@ import { attachKeyboardHandler } from './keyboard'
 import { createReplayBuffer } from './replay'
 import { createSidebarState } from './sidebar-state'
 
-import type { Session, Folder } from './mock-data'
-import { getMockFolders, groupByFolder } from './mock-data'
+import type { Session, Folder } from './types'
+import { groupByFolder } from './types'
+import { getMockFolders } from './mock-data'
 import type { Session as ProtocolSession } from '@gmux/protocol'
 
 // ── Config ──
@@ -35,12 +36,12 @@ function toUISession(s: ProtocolSession): Session {
     subtitle: s.subtitle ?? '',
     status: s.status ?? null,
     unread: s.unread ?? false,
-    resumable: (s as any).resumable ?? false,
-    resume_key: (s as any).resume_key ?? '',
+    resumable: s.resumable ?? false,
+    resume_key: s.resume_key ?? '',
     close_action: s.close_action ?? (s.alive ? 'dismiss' : undefined),
     socket_path: s.socket_path ?? '',
-    terminal_cols: (s as any).terminal_cols ?? undefined,
-    terminal_rows: (s as any).terminal_rows ?? undefined,
+    terminal_cols: s.terminal_cols ?? undefined,
+    terminal_rows: s.terminal_rows ?? undefined,
   }
 }
 
@@ -52,28 +53,29 @@ async function fetchSessions(): Promise<Session[]> {
   return data.map(toUISession)
 }
 
+async function postAction(endpoint: string, body: Record<string, unknown>): Promise<void> {
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!resp.ok) console.warn(`${endpoint} failed:`, resp.status, await resp.text().catch(() => ''))
+  } catch (err) {
+    console.warn(`${endpoint} error:`, err)
+  }
+}
+
 async function killSession(sessionId: string): Promise<void> {
-  await fetch('/trpc/sessions.kill', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId }),
-  })
+  await postAction('/trpc/sessions.kill', { sessionId })
 }
 
 async function dismissSession(sessionId: string): Promise<void> {
-  await fetch('/trpc/sessions.dismiss', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId }),
-  })
+  await postAction('/trpc/sessions.dismiss', { sessionId })
 }
 
 async function resumeSession(sessionId: string): Promise<void> {
-  await fetch('/trpc/sessions.resume', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId }),
-  })
+  await postAction('/trpc/sessions.resume', { sessionId })
 }
 
 // ── Launcher types & config ──
@@ -106,11 +108,7 @@ async function fetchConfig(): Promise<LaunchConfig> {
 }
 
 async function launchSession(launcherId: string, cwd?: string): Promise<void> {
-  await fetch('/trpc/sessions.launch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ launcher_id: launcherId, cwd }),
-  })
+  await postAction('/trpc/sessions.launch', { launcher_id: launcherId, cwd })
 }
 
 
@@ -1048,6 +1046,12 @@ function App() {
   // Subscribe to sidebar state changes for re-render
   useEffect(() => sidebarState.subscribe(() => forceUpdate(n => n + 1)), [])
 
+  // Refresh timestamps every 60s
+  useEffect(() => {
+    const timer = setInterval(() => forceUpdate(n => n + 1), 60_000)
+    return () => clearInterval(timer)
+  }, [])
+
   // Sync sidebar visibility whenever sessions change
   useEffect(() => { sidebarState.syncSessions(sessions) }, [sessions])
 
@@ -1076,6 +1080,14 @@ function App() {
 
       // Subscribe to SSE for live updates
       const source = new EventSource('/api/events')
+      let sseConnected = false
+      source.addEventListener('open', () => {
+        if (sseConnected) {
+          // Reconnected after a drop — do a full refresh to catch missed events
+          fetchSessions().then(list => setSessions(list)).catch(() => {})
+        }
+        sseConnected = true
+      })
       source.addEventListener('session-upsert', (e) => {
         try {
           const envelope = JSON.parse(e.data)
