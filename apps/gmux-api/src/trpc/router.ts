@@ -43,6 +43,16 @@ export const appRouter = t.router({
         return ctx.gmuxd.killSession(input.sessionId)
       }),
 
+    dismiss: t.procedure
+      .input(
+        z.object({
+          sessionId: z.string().min(1),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        return ctx.gmuxd.dismissSession(input.sessionId)
+      }),
+
     launch: t.procedure
       .input(
         z.object({

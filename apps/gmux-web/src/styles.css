@@ -424,6 +424,13 @@ body {
 .session-item:hover .session-time { opacity: 0; }
 .session-close-btn:hover { background: oklch(28% 0.015 250); color: var(--text); }
 
+/* On touch devices (no hover), show interactive buttons permanently */
+@media (hover: none) {
+  .session-close-btn { opacity: 1; }
+  .session-time { opacity: 0; }
+  .launch-container.folder-launch-btn { opacity: 1; }
+}
+
 /* ── Show more / hide folder buttons ── */
 .show-more-btn,
 .folder-hide-btn {

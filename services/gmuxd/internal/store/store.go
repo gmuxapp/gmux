@@ -80,8 +80,10 @@ func (s *Store) Get(id string) (Session, bool) {
 }
 
 func (s *Store) Upsert(sess Session) {
-	// Derive close_action: live + resume-capable → minimize (−), everything else → dismiss (×)
-	if sess.Alive && sess.ResumeKey != "" {
+	// Derive close_action:
+	//   alive + resume-capable kind → minimize (−) — killing will yield a resumable session
+	//   everything else → dismiss (×) — remove from store
+	if sess.Alive && sess.Kind != "" && sess.Kind != "shell" && sess.Kind != "generic" {
 		sess.CloseAction = "minimize"
 	} else {
 		sess.CloseAction = "dismiss"

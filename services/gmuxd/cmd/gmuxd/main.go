@@ -463,6 +463,32 @@ func main() {
 			}
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
 
+		case "dismiss":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
+				return
+			}
+			sess, ok := sessions.Get(sessionID)
+			if !ok {
+				writeError(w, http.StatusNotFound, "not_found", "session not found")
+				return
+			}
+			// Kill if still alive.
+			if sess.SocketPath != "" && sess.Alive {
+				if err := discovery.KillSession(sess.SocketPath); err != nil {
+					log.Printf("dismiss: %s: runner kill failed: %v", sessionID, err)
+				}
+			}
+			// Remove from store — broadcasts session-remove to all clients.
+			sessions.Remove(sessionID)
+			if subs != nil {
+				subs.Unsubscribe(sessionID)
+			}
+			if fileMon != nil {
+				fileMon.NotifySessionDied(sessionID)
+			}
+			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
+
 		default:
 			http.NotFound(w, r)
 		}

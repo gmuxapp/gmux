@@ -61,6 +61,14 @@ async function killSession(sessionId: string): Promise<void> {
   })
 }
 
+async function dismissSession(sessionId: string): Promise<void> {
+  await fetch('/trpc/sessions.dismiss', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
+  })
+}
+
 async function resumeSession(sessionId: string): Promise<void> {
   await fetch('/trpc/sessions.resume', {
     method: 'POST',
@@ -639,7 +647,6 @@ function TerminalView({
       theme: TERM_THEME,
       fontFamily: "'Fira Code', monospace",
       fontSize: 13,
-      lineHeight: 0.8,
       cursorBlink: true,
     })
     const fitAddon = new FitAddon()
@@ -1000,7 +1007,7 @@ function App() {
   const [launchers, setLaunchers] = useState<LauncherDef[]>([])
   const [sidebarVersion, forceUpdate] = useState(0) // re-render on sidebar state change
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
-  const dismissedIds = useRef(new Set<string>())
+
   const deviceId = useMemo(() => getDeviceId(), [])
 
   useEffect(() => { fetchConfig().then(cfg => setLaunchers(cfg.launchers)) }, [])
@@ -1041,8 +1048,6 @@ function App() {
           const envelope = JSON.parse(e.data)
           const session = envelope.session ?? envelope
           const updated = toUISession(session)
-          // Ignore updates for sessions the user has dismissed
-          if (dismissedIds.current.has(updated.id)) return
           let isNew = false
           setSessions(prev => {
             const idx = prev.findIndex(s => s.id === updated.id)
@@ -1118,13 +1123,10 @@ function App() {
       // Kill but keep — will become resumable via SSE
       killSession(session.id)
     } else {
-      // Dismiss: remove from sidebar state + sessions list immediately
-      const cwd = session.cwd ?? '~'
-      const key = session.resume_key ?? session.id
-      sidebarState.dismissSession(cwd, key)
-      dismissedIds.current.add(session.id)
+      // Dismiss: kill + remove from backend store (won't return on reload).
+      dismissSession(session.id)
+      // Optimistic local removal so it disappears immediately.
       setSessions(prev => prev.filter(s => s.id !== session.id))
-      if (session.alive) killSession(session.id)
       if (selectedId === session.id) setSelectedId(null)
     }
   }, [selectedId])

@@ -83,6 +83,19 @@ export function createGmuxdClient(baseUrl: string) {
       return json
     },
 
+    async dismissSession(sessionId: string) {
+      const response = await fetch(`${normalizedBaseUrl}/v1/sessions/${sessionId}/dismiss`, {
+        method: 'POST',
+      })
+
+      if (!response.ok) {
+        throw new Error(`gmuxd dismiss failed: ${response.status} ${response.statusText}`)
+      }
+
+      const json = await response.json()
+      return json
+    },
+
     async setResizeOwner(sessionId: string, deviceId: string, cols: number, rows: number) {
       const response = await fetch(`${normalizedBaseUrl}/v1/sessions/${sessionId}/resize-owner`, {
         method: 'POST',
