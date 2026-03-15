@@ -1,20 +1,12 @@
 // Package adapters contains all built-in adapter implementations.
-// Each adapter gets its own file. Community adapters follow the same pattern.
+// Each adapter gets its own file. To add an adapter, see docs/adapters.md.
 package adapters
 
 import "github.com/gmuxapp/gmux/packages/adapter"
 
-// Launcher describes how to start a new session with a given adapter.
-type Launcher struct {
-	ID          string   `json:"id"`
-	Label       string   `json:"label"`
-	Command     []string `json:"command"`
-	Description string   `json:"description,omitempty"`
-}
-
 // Launchers lists all adapters that can be launched from the UI.
 // Shell is not here — it's always added by gmuxd as the default.
-var Launchers []Launcher
+var Launchers []adapter.Launcher
 
 // All contains instances of all non-fallback adapters, registered via init().
 var All []adapter.Adapter

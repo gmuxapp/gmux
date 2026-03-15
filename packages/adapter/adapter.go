@@ -40,6 +40,14 @@ type EnvContext struct {
 	SocketPath string
 }
 
+// Launcher describes how to start a new session with a given adapter.
+type Launcher struct {
+	ID          string   `json:"id"`
+	Label       string   `json:"label"`
+	Command     []string `json:"command"`
+	Description string   `json:"description,omitempty"`
+}
+
 // BaseName extracts the base name of a command argument, stripping path.
 func BaseName(arg string) string {
 	return filepath.Base(arg)

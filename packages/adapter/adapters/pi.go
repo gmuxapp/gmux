@@ -19,7 +19,7 @@ var (
 )
 
 func init() {
-	Launchers = append(Launchers, Launcher{
+	Launchers = append(Launchers, adapter.Launcher{
 		ID:          "pi",
 		Label:       "pi",
 		Command:     []string{"pi"},
