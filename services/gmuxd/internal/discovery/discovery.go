@@ -100,12 +100,14 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor) {
 
 		sess, err := queryMeta(sockPath)
 		if err != nil {
-			log.Printf("discovery: %s unreachable: %v", sessionID, err)
-			os.Remove(sockPath)
-			if sess, ok := sessions.Get(sessionID); ok && sess.Alive {
-				sess.Alive = false
-				sessions.Upsert(sess)
+			// Only log if this was a previously-known live session.
+			// Stale sockets from killed processes are silently cleaned up.
+			if existing, ok := sessions.Get(sessionID); ok && existing.Alive {
+				log.Printf("discovery: %s unreachable: %v", sessionID, err)
+				existing.Alive = false
+				sessions.Upsert(existing)
 			}
+			os.Remove(sockPath)
 			if subs != nil {
 				subs.Unsubscribe(sessionID)
 			}
