@@ -101,7 +101,8 @@ alow = ["user@github"]
 	}
 }
 
-func TestLoadRejectsEnabledWithEmptyAllow(t *testing.T) {
+func TestLoadAllowsEnabledWithEmptyAllow(t *testing.T) {
+	// Empty allow list is valid — the node owner is auto-whitelisted at runtime.
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	writeConfig(t, dir, `
@@ -110,12 +111,12 @@ enabled = true
 hostname = "gmux"
 `)
 
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error for enabled with empty allow")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("empty allow with enabled should be valid (owner auto-added at runtime): %v", err)
 	}
-	if !strings.Contains(err.Error(), "allow is empty") {
-		t.Errorf("error = %q, want mention of empty allow", err)
+	if !cfg.Tailscale.Enabled {
+		t.Error("should be enabled")
 	}
 }
 

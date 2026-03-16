@@ -55,7 +55,9 @@ Every request (HTTP and WebSocket upgrade) is authenticated by calling tailscale
 
 This is not a token or cookie that could be stolen — it's derived from tailscale's WireGuard key exchange. You cannot forge a WhoIs identity without possessing the peer's private key.
 
-**Fail-closed:** If the allow list is empty, gmuxd refuses to start the tailscale listener entirely. There is no "allow all" default.
+**Owner auto-whitelisted:** The tailscale account that owns the node is automatically added to the allow list at startup. This means the minimal config (`enabled = true`) gives access to you and only you.
+
+**Fail-closed for others:** Additional users in the `allow` list are checked strictly. There is no "allow all" default — only the node owner and explicitly listed login names can connect.
 
 **Denied connections are logged** with the peer's login name and device name for auditing.
 
@@ -80,6 +82,18 @@ Login names are stable identities tied to the user's authentication provider (Gi
 ### LAN access
 
 There is currently no way to expose gmux on the local network. LAN access would require token-based authentication (since there's no identity layer on a LAN), and we haven't implemented that. This may be added in the future behind a separate listener.
+
+## Config validation
+
+The config file (`~/.config/gmux/config.toml`) is strictly validated at startup. gmuxd refuses to start if:
+
+- **Unknown keys** are present — a typo like `alow` instead of `allow` would silently result in a default (empty) allow list. Unknown keys are a hard error.
+- **Allow entries don't look like login names** — entries without `@` are rejected (e.g. `"not-a-login"` instead of `"user@github"`).
+- **Hostname is empty** when tailscale is enabled.
+- **Port is out of range** (must be 1–65535).
+- **Invalid TOML syntax**.
+
+No config file is fine — safe defaults are used (localhost only, tailscale disabled).
 
 ## Runner security
 

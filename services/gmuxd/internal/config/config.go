@@ -90,12 +90,8 @@ func validate(cfg Config) error {
 		return fmt.Errorf("port %d is out of range (1-65535)", cfg.Port)
 	}
 
-	// Tailscale: enabled requires a non-empty allow list.
-	if cfg.Tailscale.Enabled && len(cfg.Tailscale.Allow) == 0 {
-		return fmt.Errorf("tailscale.enabled is true but tailscale.allow is empty — no one would be able to connect")
-	}
-
-	// Tailscale: warn-as-error for allow entries missing "@" (likely not a login name).
+	// Tailscale: allow list entries must look like login names.
+	// An empty allow list is fine — the node owner is auto-whitelisted at runtime.
 	for _, entry := range cfg.Tailscale.Allow {
 		if !strings.Contains(entry, "@") {
 			return fmt.Errorf("tailscale.allow entry %q doesn't look like a login name (expected format: user@provider)", entry)

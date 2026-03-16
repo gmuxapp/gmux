@@ -37,3 +37,29 @@ func TestIsAllowedEmptyList(t *testing.T) {
 		t.Error("empty allow list should deny everyone")
 	}
 }
+
+func TestAddIfMissing(t *testing.T) {
+	// Adds when not present.
+	list := addIfMissing(nil, "alice@github")
+	if len(list) != 1 || list[0] != "alice@github" {
+		t.Errorf("got %v", list)
+	}
+
+	// Doesn't duplicate (exact case).
+	list = addIfMissing([]string{"alice@github"}, "alice@github")
+	if len(list) != 1 {
+		t.Errorf("got %v, want no duplicate", list)
+	}
+
+	// Doesn't duplicate (case-insensitive).
+	list = addIfMissing([]string{"Alice@GitHub"}, "alice@github")
+	if len(list) != 1 {
+		t.Errorf("got %v, want no duplicate (case-insensitive)", list)
+	}
+
+	// Adds different user.
+	list = addIfMissing([]string{"alice@github"}, "bob@github")
+	if len(list) != 2 {
+		t.Errorf("got %v, want 2 entries", list)
+	}
+}

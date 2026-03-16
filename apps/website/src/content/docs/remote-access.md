@@ -29,16 +29,15 @@ Create or edit `~/.config/gmux/config.toml`:
 [tailscale]
 enabled = true
 hostname = "gmux"
-allow = ["you@github"]
 ```
+
+That's it. Your own tailscale account is automatically whitelisted — gmuxd detects the node owner at startup.
 
 | Field | Description |
 |---|---|
 | `enabled` | Start the tailscale listener. Default `false`. |
 | `hostname` | The machine name on your tailnet. This becomes `gmux.your-tailnet.ts.net`. |
-| `allow` | **Required.** List of tailscale login names that can connect. If empty, gmuxd refuses to start the listener (fail-closed). |
-
-Your tailscale login name is shown in the [tailscale admin console](https://login.tailscale.com/admin/machines) or by running `tailscale status`.
+| `allow` | Additional tailscale login names that can connect. Your own account is always included automatically. |
 
 ### 3. Restart gmuxd
 
@@ -51,6 +50,7 @@ gmuxr pi  # or any command — gmuxd starts automatically
 Look for the log line:
 
 ```
+tsauth: node owner you@github auto-whitelisted
 tsauth: listening on https://gmux (allowed: [you@github])
 ```
 
@@ -79,19 +79,16 @@ The tailscale listener is a second, independent listener. The localhost listener
 
 ## Multiple users
 
-If you're pair-programming or want a colleague to see your sessions:
+Your own account is always included. To also grant access to a colleague:
 
 ```toml
 [tailscale]
 enabled = true
 hostname = "gmux"
-allow = [
-  "you@github",
-  "colleague@github",
-]
+allow = ["colleague@github"]
 ```
 
-Everyone on the allow list gets the same full access. There are no permission levels — if someone can connect, they can see and interact with all sessions. Only add people you trust with terminal access to your machine.
+Everyone on the allow list (plus you) gets the same full access. There are no permission levels — if someone can connect, they can see and interact with all sessions. Only add people you trust with terminal access to your machine.
 
 ## Troubleshooting
 

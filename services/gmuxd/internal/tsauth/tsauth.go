@@ -39,10 +39,6 @@ type Listener struct {
 // Start joins the tailnet and begins serving handler over HTTPS on :443.
 // It blocks in a goroutine — call Shutdown to stop.
 func Start(cfg Config, stateDir string, handler http.Handler) (*Listener, error) {
-	if len(cfg.Allow) == 0 {
-		return nil, fmt.Errorf("tsauth: tailscale.allow is empty — no one would be able to connect (fail-closed)")
-	}
-
 	srv := &tsnet.Server{
 		Hostname: cfg.Hostname,
 		Dir:      filepath.Join(stateDir, "tsnet"),
@@ -58,6 +54,15 @@ func Start(cfg Config, stateDir string, handler http.Handler) (*Listener, error)
 		srv.Close()
 		return nil, fmt.Errorf("tsauth: local client: %w", err)
 	}
+
+	// Auto-whitelist the node owner's tailscale account.
+	ownerLogin, err := resolveOwnerLogin(lc)
+	if err != nil {
+		srv.Close()
+		return nil, fmt.Errorf("tsauth: could not determine node owner: %w", err)
+	}
+	cfg.Allow = addIfMissing(cfg.Allow, ownerLogin)
+	log.Printf("tsauth: node owner %s auto-whitelisted", ownerLogin)
 
 	l := &Listener{
 		srv: srv,
@@ -129,27 +134,39 @@ func (l *Listener) isAllowed(loginName string) bool {
 	return false
 }
 
-// WaitReady blocks until the tsnet server has a tailscale IP, or ctx is cancelled.
-func (l *Listener) WaitReady(ctx context.Context) error {
-	deadline := time.After(30 * time.Second)
-	tick := time.NewTicker(500 * time.Millisecond)
-	defer tick.Stop()
+// resolveOwnerLogin fetches the tailscale status and returns the login name
+// of the user who owns this node.
+func resolveOwnerLogin(lc *tailscale.LocalClient) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-deadline:
-			return fmt.Errorf("tsauth: timed out waiting for tailscale IP")
-		case <-tick.C:
-			status, err := l.lc.Status(ctx)
-			if err != nil {
-				continue
-			}
-			if status.Self != nil && len(status.Self.TailscaleIPs) > 0 {
-				log.Printf("tsauth: tailscale IP: %s", status.Self.TailscaleIPs[0])
-				return nil
-			}
+	status, err := lc.Status(ctx)
+	if err != nil {
+		return "", fmt.Errorf("status: %w", err)
+	}
+	if status.Self == nil {
+		return "", fmt.Errorf("no self node in status")
+	}
+
+	// status.Self.UserID maps to a profile in status.User.
+	profile, ok := status.User[status.Self.UserID]
+	if !ok {
+		return "", fmt.Errorf("no user profile for UserID %d", status.Self.UserID)
+	}
+	if profile.LoginName == "" {
+		return "", fmt.Errorf("empty login name for UserID %d", status.Self.UserID)
+	}
+
+	return profile.LoginName, nil
+}
+
+// addIfMissing appends entry to the list if not already present (case-insensitive).
+func addIfMissing(list []string, entry string) []string {
+	entryLower := strings.ToLower(entry)
+	for _, existing := range list {
+		if strings.ToLower(existing) == entryLower {
+			return list
 		}
 	}
+	return append(list, entry)
 }
