@@ -146,50 +146,6 @@ import heroMobile from '../assets/hero-mobile.png'
     </div>
   </section>
 
-  <!-- Status -->
-  <section class="section" id="status">
-    <div class="section-inner">
-      <h2>What works today</h2>
-      <div class="status-grid">
-        <div class="status-item works">
-          <span class="status-dot"></span>
-          <div>
-            <h3>Working</h3>
-            <ul>
-              <li>Live terminal output in any browser</li>
-              <li>Sessions organized by project folder</li>
-              <li>Tools can report their own status (thinking, running tests, waiting)</li>
-              <li>Mobile interface with keyboard and touch</li>
-              <li>Built-in support for the Pi coding agent</li>
-              <li>Works with any command out of the box</li>
-            </ul>
-          </div>
-        </div>
-        <div class="status-item untested">
-          <span class="status-dot"></span>
-          <div>
-            <h3>Untested</h3>
-            <ul>
-              <li>Claude Code, Cursor, Codex, and other coding agents</li>
-              <li>Viewing sessions from multiple machines</li>
-            </ul>
-          </div>
-        </div>
-        <div class="status-item planned">
-          <span class="status-dot"></span>
-          <div>
-            <h3>Planned</h3>
-            <ul>
-              <li>Notifications when a session needs attention</li>
-              <li>Sessions that survive restarts</li>
-              <li>Deeper integrations for specific tools</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
   <!-- Footer -->
   <footer class="footer">
     <div class="footer-inner">
@@ -235,8 +191,6 @@ import heroMobile from '../assets/hero-mobile.png'
     --text-secondary: oklch(65% 0.01 250);
     --text-muted: oklch(48% 0.01 250);
     --accent: oklch(72% 0.1 195);
-    --green: oklch(72% 0.14 145);
-    --amber: oklch(68% 0.12 70);
     --border: oklch(22% 0.015 250);
     --border-subtle: oklch(18% 0.01 250);
     --code-bg: oklch(16% 0.015 250);
@@ -624,50 +578,6 @@ import heroMobile from '../assets/hero-mobile.png'
     font-size: 0.95rem;
   }
 
-  /* Status grid */
-  .status-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    gap: 2rem;
-    margin-top: 2rem;
-  }
-
-  .status-item {
-    display: flex;
-    gap: 0.75rem;
-    align-items: flex-start;
-  }
-
-  .status-dot {
-    flex-shrink: 0;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    margin-top: 8px;
-  }
-
-  .status-item.works .status-dot { background: var(--green); }
-  .status-item.untested .status-dot { background: var(--amber); }
-  .status-item.planned .status-dot { background: var(--text-muted); }
-
-  .status-item h3 {
-    font-size: 1rem;
-    font-weight: 600;
-    margin-bottom: 0.5rem;
-  }
-
-  .status-item ul {
-    list-style: none;
-    padding: 0;
-  }
-
-  .status-item li {
-    color: var(--text-secondary);
-    font-size: 0.9rem;
-    line-height: 1.6;
-    padding: 0.15rem 0;
-  }
-
   /* --- Footer --- */
   .footer {
     padding: 2rem 0;
@@ -733,7 +643,6 @@ import heroMobile from '../assets/hero-mobile.png'
     /* Steps: keep number beside text, just shrink the number */
     .step-num { width: 28px; height: 28px; font-size: 0.8rem; }
 
-    .status-grid { grid-template-columns: 1fr; }
 
     .footer-links { font-size: 0.8rem; gap: 0.6rem; }
   }
