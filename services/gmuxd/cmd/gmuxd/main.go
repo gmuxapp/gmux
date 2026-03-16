@@ -522,7 +522,8 @@ func main() {
 
 	mux.Handle("/", spaHandler())
 
-	addr := envOr("GMUXD_ADDR", "127.0.0.1:8790")
+	port := envOr("GMUXD_PORT", "8790")
+	addr := "127.0.0.1:" + port
 	log.Printf("gmuxd listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
