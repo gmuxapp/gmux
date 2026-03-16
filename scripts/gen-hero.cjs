@@ -81,8 +81,9 @@ async function composite(browser, desktopPath, mobilePath) {
   const desktopB64 = fs.readFileSync(desktopPath).toString('base64')
   const mobileB64 = fs.readFileSync(mobilePath).toString('base64')
 
+  // Viewport must be large enough to contain the canvas at CSS size (half pixel size)
   const page = await browser.newPage({
-    viewport: { width: 1600, height: 1100 },
+    viewport: { width: 1800, height: 1400 },
     deviceScaleFactor: 2,
   })
 
@@ -97,87 +98,84 @@ async function composite(browser, desktopPath, mobilePath) {
         mobile.src = 'data:image/png;base64,${mobileB64}'
         await mobile.decode()
 
-        // Both images are @2x (2200x1400 desktop, 780x1520 mobile)
-        // Scale down to ~75% to keep canvas manageable while sharp
-        const scale = 0.75
-        const dW = desktop.width * scale
-        const dH = desktop.height * scale
-        const mOrigW = mobile.width
-        const mOrigH = mobile.height
+        // Both images are @2x — draw at full pixel size for max sharpness
+        const dW = desktop.width   // 2200
+        const dH = desktop.height  // 1400
 
-        // Phone at ~30% of desktop width
-        const phoneScale = 0.30
+        // Phone drawn large — it's the star of the show
+        // ~40% of desktop width so it's prominent and in front
+        const phoneScale = 0.40
         const mDrawW = dW * phoneScale
-        const mDrawH = (mOrigH / mOrigW) * mDrawW
+        const mDrawH = (mobile.height / mobile.width) * mDrawW
 
-        const pad = 50
-        const canvasW = dW + mDrawW * 0.45 + pad * 2
-        const canvasH = dH + mDrawH * 0.32 + pad * 2
+        const pad = 80
+        const canvasW = dW + mDrawW * 0.35 + pad * 2
+        const canvasH = Math.max(dH, mDrawH) + pad * 2
 
         const c = document.getElementById('c')
         c.width = canvasW
         c.height = canvasH
+        // CSS size = half canvas for 2x density display
         c.style.width = (canvasW / 2) + 'px'
         c.style.height = (canvasH / 2) + 'px'
 
         const ctx = c.getContext('2d')
-        // No ctx.scale — we draw at native pixel resolution
 
         const dx = pad
-        const dy = pad
+        const dy = pad + (canvasH - 2 * pad - dH) * 0.3  // slightly above center
 
         // Desktop shadow
         ctx.save()
-        ctx.shadowColor = 'rgba(0,0,0,0.3)'
-        ctx.shadowBlur = 80
-        ctx.shadowOffsetY = 24
-        roundRect(ctx, dx, dy, dW, dH, 20)
+        ctx.shadowColor = 'rgba(0,0,0,0.35)'
+        ctx.shadowBlur = 100
+        ctx.shadowOffsetY = 30
+        roundRect(ctx, dx, dy, dW, dH, 24)
         ctx.fillStyle = '#0f141a'
         ctx.fill()
         ctx.restore()
 
-        // Desktop image
+        // Desktop image — drawn at 1:1 pixel ratio (no scaling)
         ctx.save()
-        roundRect(ctx, dx, dy, dW, dH, 20)
+        roundRect(ctx, dx, dy, dW, dH, 24)
         ctx.clip()
-        ctx.drawImage(desktop, 0, 0, desktop.width, desktop.height, dx, dy, dW, dH)
+        ctx.drawImage(desktop, dx, dy)
         ctx.restore()
 
         // Desktop border
         ctx.save()
-        roundRect(ctx, dx, dy, dW, dH, 20)
-        ctx.strokeStyle = 'rgba(255,255,255,0.07)'
-        ctx.lineWidth = 1.5
+        roundRect(ctx, dx, dy, dW, dH, 24)
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)'
+        ctx.lineWidth = 2
         ctx.stroke()
         ctx.restore()
 
-        // Phone position — overlapping bottom-right, fully visible
-        const bezel = 10
-        const mx = dx + dW - mDrawW * 0.15
-        const my = dy + dH - mDrawH * 0.75
+        // Phone position — overlapping right side, vertically centered, in front
+        const bezel = 14
+        const mx = dx + dW - mDrawW * 0.25
+        const my = dy + (dH - mDrawH) * 0.5
 
-        // Phone shadow
+        // Phone shadow (larger, more dramatic since phone is in front)
         ctx.save()
-        ctx.shadowColor = 'rgba(0,0,0,0.45)'
-        ctx.shadowBlur = 60
-        ctx.shadowOffsetX = -8
-        ctx.shadowOffsetY = 16
-        roundRect(ctx, mx - bezel, my - bezel, mDrawW + bezel * 2, mDrawH + bezel * 2, 36)
+        ctx.shadowColor = 'rgba(0,0,0,0.5)'
+        ctx.shadowBlur = 80
+        ctx.shadowOffsetX = -12
+        ctx.shadowOffsetY = 20
+        roundRect(ctx, mx - bezel, my - bezel, mDrawW + bezel * 2, mDrawH + bezel * 2, 48)
         ctx.fillStyle = '#111'
         ctx.fill()
         ctx.restore()
 
         // Bezel highlight
         ctx.save()
-        roundRect(ctx, mx - bezel, my - bezel, mDrawW + bezel * 2, mDrawH + bezel * 2, 36)
-        ctx.strokeStyle = 'rgba(255,255,255,0.1)'
-        ctx.lineWidth = 1.5
+        roundRect(ctx, mx - bezel, my - bezel, mDrawW + bezel * 2, mDrawH + bezel * 2, 48)
+        ctx.strokeStyle = 'rgba(255,255,255,0.12)'
+        ctx.lineWidth = 2
         ctx.stroke()
         ctx.restore()
 
         // Phone screen
         ctx.save()
-        roundRect(ctx, mx, my, mDrawW, mDrawH, 26)
+        roundRect(ctx, mx, my, mDrawW, mDrawH, 34)
         ctx.clip()
         ctx.drawImage(mobile, 0, 0, mobile.width, mobile.height, mx, my, mDrawW, mDrawH)
         ctx.restore()

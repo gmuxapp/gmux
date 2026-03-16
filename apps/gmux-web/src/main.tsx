@@ -12,13 +12,16 @@ import { createSidebarState } from './sidebar-state'
 
 import type { Session, Folder } from './types'
 import { groupByFolder } from './types'
-import { getMockFolders } from './mock-data'
-import { MOCK_TERMINAL_CONTENT, MOCK_SCREENSHOTS } from './mock-terminal'
+import { getMockFolders, MOCK_BY_ID } from './mock-data/index'
+import { installCopySession } from './mock-data/export-session'
 import type { Session as ProtocolSession } from '@gmux/protocol'
 
 // ── Config ──
 
 const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
+
+// Debug: __gmuxCopySession() in devtools console
+installCopySession()
 
 /** Map protocol session (partial fields) to UI session (all fields required) */
 function toUISession(s: ProtocolSession): Session {
@@ -648,6 +651,7 @@ function TerminalView({
     setViewportSize(getProposedTerminalSize(fitAddon))
     termRef.current = term
     fitRef.current = fitAddon
+    ;(window as any).__gmuxTerm = term
 
     const sendRawInput = (data: string) => {
       const ws = wsRef.current
@@ -715,6 +719,7 @@ function TerminalView({
       wsRef.current?.close()
       wsRef.current = null
       onInputReady?.(null)
+      if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
       term.dispose()
       termRef.current = null
       fitRef.current = null
@@ -890,16 +895,6 @@ function TerminalView({
 
 /** Read-only xterm instance showing pre-baked ANSI content for mock/demo mode. */
 function MockTerminal({ sessionId }: { sessionId: string }) {
-  const screenshot = MOCK_SCREENSHOTS[sessionId]
-
-  if (screenshot) {
-    return (
-      <div class="terminal-shell terminal-screenshot">
-        <img src={screenshot} alt="Terminal screenshot" />
-      </div>
-    )
-  }
-
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -918,16 +913,25 @@ function MockTerminal({ sessionId }: { sessionId: string }) {
     term.open(containerRef.current)
     fit.fit()
 
-    const content = MOCK_TERMINAL_CONTENT[sessionId]
-    if (content) {
-      term.write(content)
+    const mock = MOCK_BY_ID[sessionId]
+    if (mock?.terminal) {
+      // Normalize \n to \r\n so xterm carriage-returns to column 0 on each line.
+      term.write(mock.terminal.replace(/\r?\n/g, '\r\n'), () => {
+        if (mock.cursorX != null && mock.cursorY != null) {
+          term.write(`\x1b[${mock.cursorY + 1};${mock.cursorX + 1}H`)
+        }
+      })
     }
+
+    // Expose for debug: window.__gmuxTerm
+    ;(window as any).__gmuxTerm = term
 
     const onResize = () => fit.fit()
     window.addEventListener('resize', onResize)
 
     return () => {
       window.removeEventListener('resize', onResize)
+      if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
       term.dispose()
     }
   }, [sessionId])
@@ -1192,10 +1196,11 @@ function App() {
     () => allFolders.filter(f => !sidebarState.isFolderVisible(f.path)),
     [allFolders, sidebarVersion],
   )
-  const selected = useMemo(
-    () => sessions.find(s => s.id === selectedId) ?? null,
-    [sessions, selectedId],
-  )
+  const selected = useMemo(() => {
+    const s = sessions.find(s => s.id === selectedId) ?? null
+    ;(window as any).__gmuxSession = s
+    return s
+  }, [sessions, selectedId])
 
   // Auto-select only when nothing is selected (initial load).
   // When a selected session dies, we let the user decide — don't override their click.
