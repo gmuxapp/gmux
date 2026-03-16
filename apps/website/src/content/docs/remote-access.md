@@ -3,6 +3,10 @@ title: Remote Access
 description: Access gmux from your phone, tablet, or another machine over tailscale.
 ---
 
+:::danger[Full shell access]
+Anyone you grant remote access to can run arbitrary commands on your machine, read all terminal output (including secrets), and interact with every session. Treat the allow list like your SSH `authorized_keys` — only add people you fully trust.
+:::
+
 By default, gmux only listens on localhost. To access it from another device — your phone on the couch, a laptop in another room, or a tablet on the go — you can enable the built-in tailscale listener.
 
 ## Why tailscale?
