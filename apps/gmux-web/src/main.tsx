@@ -13,7 +13,7 @@ import { createSidebarState } from './sidebar-state'
 import type { Session, Folder } from './types'
 import { groupByFolder } from './types'
 import { getMockFolders } from './mock-data'
-import { MOCK_TERMINAL_CONTENT } from './mock-terminal'
+import { MOCK_TERMINAL_CONTENT, MOCK_SCREENSHOTS } from './mock-terminal'
 import type { Session as ProtocolSession } from '@gmux/protocol'
 
 // ── Config ──
@@ -890,6 +890,16 @@ function TerminalView({
 
 /** Read-only xterm instance showing pre-baked ANSI content for mock/demo mode. */
 function MockTerminal({ sessionId }: { sessionId: string }) {
+  const screenshot = MOCK_SCREENSHOTS[sessionId]
+
+  if (screenshot) {
+    return (
+      <div class="terminal-shell terminal-screenshot">
+        <img src={screenshot} alt="Terminal screenshot" />
+      </div>
+    )
+  }
+
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {

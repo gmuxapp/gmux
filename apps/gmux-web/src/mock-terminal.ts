@@ -276,3 +276,16 @@ export const MOCK_TERMINAL_CONTENT: Record<string, string> = {
   'sess-v4w5x6': piRateLimiting,
   'sess-y7z8a9': piTerraform,
 }
+
+/**
+ * Map of session ID → screenshot image path (relative to public/).
+ * Sessions with a screenshot show the image instead of an xterm instance.
+ * Place screenshots in public/screenshots/ and reference them here.
+ *
+ * Example:
+ *   'sess-a1b2c3': '/screenshots/adapter-system.png',
+ */
+export const MOCK_SCREENSHOTS: Record<string, string> = {
+  // Add captured screenshots here:
+  // 'sess-a1b2c3': '/screenshots/adapter-system.png',
+}
