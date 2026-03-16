@@ -63,16 +63,15 @@ func (g *Shell) Launchers() []adapter.Launcher {
 	}}
 }
 
-func (g *Shell) Monitor(output []byte) *adapter.Status {
-	if title := parseOSCTitle(output); title != "" {
-		return &adapter.Status{Title: title}
-	}
+func (g *Shell) Monitor(_ []byte) *adapter.Status {
+	// Shell title parsing is handled centrally in gmuxr so all sessions
+	// can use terminal titles as a fallback, not just shell sessions.
 	return nil
 }
 
-// parseOSCTitle extracts the title from OSC 0 or OSC 2 escape sequences.
+// ParseOSCTitle extracts the title from OSC 0 or OSC 2 escape sequences.
 // Handles both BEL (\x07) and ST (ESC \) terminators.
-func parseOSCTitle(data []byte) string {
+func ParseOSCTitle(data []byte) string {
 	for i := 0; i < len(data)-4; i++ {
 		if data[i] != 0x1b || data[i+1] != ']' {
 			continue

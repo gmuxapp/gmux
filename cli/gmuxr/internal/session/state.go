@@ -24,9 +24,9 @@ type State struct {
 	Kind      string   `json:"kind"` // adapter name
 
 	// Process state (owned by runner)
-	Alive    bool   `json:"alive"`
-	Pid      int    `json:"pid"`
-	ExitCode *int   `json:"exit_code"`
+	Alive     bool   `json:"alive"`
+	Pid       int    `json:"pid"`
+	ExitCode  *int   `json:"exit_code"`
 	StartedAt string `json:"started_at"`
 	ExitedAt  string `json:"exited_at,omitempty"`
 
@@ -45,6 +45,12 @@ type State struct {
 
 	// Subscribers for /events SSE
 	subs []chan Event
+
+	// Title precedence state (not serialized):
+	// adapter title > shell/OSC title > base title.
+	baseTitle    string `json:"-"`
+	shellTitle   string `json:"-"`
+	adapterTitle string `json:"-"`
 }
 
 // Event is sent over SSE to /events subscribers.
@@ -55,28 +61,35 @@ type Event struct {
 
 // Config for creating a new session state.
 type Config struct {
-	ID         string
-	Command    []string
-	Cwd        string
-	Kind       string
-	SocketPath string
-	Title      string
-	BinaryHash string
+	ID          string
+	Command     []string
+	Cwd         string
+	Kind        string
+	SocketPath  string
+	Title       string
+	TitlePinned bool // true for explicit/user-provided titles that should beat shell fallback
+	BinaryHash  string
 }
 
 // New creates a new session state.
 func New(cfg Config) *State {
 	now := time.Now().UTC().Format(time.RFC3339)
+	adapterTitle := ""
+	if cfg.TitlePinned {
+		adapterTitle = cfg.Title
+	}
 	return &State{
-		ID:         cfg.ID,
-		CreatedAt:  now,
-		Command:    cfg.Command,
-		Cwd:        cfg.Cwd,
-		Kind:       cfg.Kind,
-		SocketPath: cfg.SocketPath,
-		Title:      cfg.Title,
-		BinaryHash: cfg.BinaryHash,
-		Alive:      false,
+		ID:           cfg.ID,
+		CreatedAt:    now,
+		Command:      cfg.Command,
+		Cwd:          cfg.Cwd,
+		Kind:         cfg.Kind,
+		SocketPath:   cfg.SocketPath,
+		Title:        cfg.Title,
+		BinaryHash:   cfg.BinaryHash,
+		Alive:        false,
+		baseTitle:    cfg.Title,
+		adapterTitle: adapterTitle,
 	}
 }
 
@@ -118,33 +131,74 @@ func (s *State) SetStatus(status *adapter.Status) {
 	s.emit(Event{Type: "status", Data: status})
 }
 
-// SetTitle updates the display title.
-func (s *State) SetTitle(title string) {
+func (s *State) resolvedTitleLocked() string {
+	if s.adapterTitle != "" {
+		return s.adapterTitle
+	}
+	if s.shellTitle != "" {
+		return s.shellTitle
+	}
+	return s.baseTitle
+}
+
+func (s *State) emitMetaLocked() {
+	s.emit(Event{Type: "meta", Data: map[string]string{"title": s.Title, "subtitle": s.Subtitle}})
+}
+
+// SetAdapterTitle updates the high-priority adapter title. Empty clears it,
+// allowing shell title (if any) to become visible again.
+func (s *State) SetAdapterTitle(title string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.Title = title
-	s.emit(Event{Type: "meta", Data: map[string]string{"title": title, "subtitle": s.Subtitle}})
+	s.adapterTitle = title
+	resolved := s.resolvedTitleLocked()
+	if resolved == s.Title {
+		return
+	}
+	s.Title = resolved
+	s.emitMetaLocked()
 }
+
+// SetShellTitle updates the fallback shell/OSC title. It is only visible when
+// no adapter title is currently set.
+func (s *State) SetShellTitle(title string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.shellTitle = title
+	resolved := s.resolvedTitleLocked()
+	if resolved == s.Title {
+		return
+	}
+	s.Title = resolved
+	s.emitMetaLocked()
+}
+
+// SetTitle updates the display title.
+// Deprecated: use SetAdapterTitle or SetShellTitle so precedence is preserved.
+func (s *State) SetTitle(title string) { s.SetAdapterTitle(title) }
 
 // SetSubtitle updates the display subtitle.
 func (s *State) SetSubtitle(subtitle string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Subtitle = subtitle
-	s.emit(Event{Type: "meta", Data: map[string]string{"title": s.Title, "subtitle": subtitle}})
+	s.emitMetaLocked()
 }
 
 // PatchMeta updates title and/or subtitle from a partial update.
+// Title patches are treated as adapter titles (higher priority than shell titles).
+// An empty title clears the adapter title, revealing the shell or base title.
 func (s *State) PatchMeta(title, subtitle *string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if title != nil {
-		s.Title = *title
+		s.adapterTitle = *title
+		s.Title = s.resolvedTitleLocked()
 	}
 	if subtitle != nil {
 		s.Subtitle = *subtitle
 	}
-	s.emit(Event{Type: "meta", Data: map[string]string{"title": s.Title, "subtitle": s.Subtitle}})
+	s.emitMetaLocked()
 }
 
 // JSON returns the full state as JSON bytes.

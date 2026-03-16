@@ -92,13 +92,14 @@ func main() {
 
 	// Create in-memory session state (replaces metadata files)
 	state := session.New(session.Config{
-		ID:         sessionID,
-		Command:    args,
-		Cwd:        workDir,
-		Kind:       a.Name(),
-		SocketPath: sockPath,
-		Title:      sessionTitle,
-		BinaryHash: binhash.Self(),
+		ID:          sessionID,
+		Command:     args,
+		Cwd:         workDir,
+		Kind:        a.Name(),
+		SocketPath:  sockPath,
+		Title:       sessionTitle,
+		TitlePinned: *title != "",
+		BinaryHash:  binhash.Self(),
 	})
 
 	// Common env vars — set for every child, per ADR-0005

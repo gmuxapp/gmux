@@ -19,7 +19,9 @@
 package discovery
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"net"
@@ -313,6 +315,9 @@ func (fm *FileMonitor) handleFileChange(path string) {
 	}
 	for _, evt := range events {
 		if evt.Title != "" {
+			// Keep gmuxr authoritative for title precedence: patch the runner so
+			// future shell/OSC title updates stay below the adapter title.
+			_ = patchRunnerMeta(ms.socketPath, evt.Title, "")
 			sess.Title = evt.Title
 		}
 		if evt.Status != nil {
@@ -379,6 +384,38 @@ func (fm *FileMonitor) attributeFileLocked(dir, filePath string) string {
 // New sessions are not eagerly attributed to an existing file.
 // Attribution only happens on an actual write/create event for a JSONL file.
 // This avoids reusing the title from the most recent old session in the same cwd.
+
+func patchRunnerMeta(socketPath, title, subtitle string) error {
+	payload, err := json.Marshal(map[string]string{
+		"title":    title,
+		"subtitle": subtitle,
+	})
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.DialTimeout("unix", socketPath, 2*time.Second)
+			},
+		},
+		Timeout: 3 * time.Second,
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, "http://localhost/meta", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
 
 // --- Watch management ---
 

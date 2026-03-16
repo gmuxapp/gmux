@@ -90,6 +90,41 @@ func TestPatchMeta(t *testing.T) {
 	}
 }
 
+func TestShellTitleUsedAsFallbackUntilAdapterTitleArrives(t *testing.T) {
+	s := New(Config{ID: "sess-1", Command: []string{"pi"}, Title: "pi", Kind: "pi"})
+
+	s.SetShellTitle("~/dev/project")
+	if s.Title != "~/dev/project" {
+		t.Fatalf("expected shell fallback title, got %q", s.Title)
+	}
+
+	s.SetAdapterTitle("fix auth bug")
+	if s.Title != "fix auth bug" {
+		t.Fatalf("expected adapter title to win, got %q", s.Title)
+	}
+
+	s.SetShellTitle("~/dev/other")
+	if s.Title != "fix auth bug" {
+		t.Fatalf("expected adapter title to keep winning, got %q", s.Title)
+	}
+}
+
+func TestClearingAdapterTitleRevealsShellTitle(t *testing.T) {
+	s := New(Config{ID: "sess-1", Command: []string{"pi"}, Title: "pi", Kind: "pi"})
+
+	s.SetShellTitle("~/dev/project")
+	s.SetAdapterTitle("named task")
+	if s.Title != "named task" {
+		t.Fatalf("expected adapter title, got %q", s.Title)
+	}
+
+	empty := ""
+	s.PatchMeta(&empty, nil)
+	if s.Title != "~/dev/project" {
+		t.Fatalf("expected shell title after clearing adapter title, got %q", s.Title)
+	}
+}
+
 func TestJSON(t *testing.T) {
 	s := New(Config{
 		ID:         "sess-json",

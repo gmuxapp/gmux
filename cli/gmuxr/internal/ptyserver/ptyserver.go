@@ -17,9 +17,10 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
-	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/cli/gmuxr/internal/ringbuf"
 	"github.com/gmuxapp/gmux/cli/gmuxr/internal/session"
+	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"nhooyr.io/websocket"
 )
 
@@ -27,10 +28,10 @@ const defaultScrollbackSize = 128 * 1024 // 128KB
 
 // ResizeMsg is the JSON message clients send to resize the terminal.
 type ResizeMsg struct {
-	Type       string `json:"type"`
-	Cols       uint16 `json:"cols"`
-	Rows       uint16 `json:"rows"`
-	PixelWidth uint16 `json:"pixelWidth,omitempty"`
+	Type        string `json:"type"`
+	Cols        uint16 `json:"cols"`
+	Rows        uint16 `json:"rows"`
+	PixelWidth  uint16 `json:"pixelWidth,omitempty"`
 	PixelHeight uint16 `json:"pixelHeight,omitempty"`
 }
 
@@ -49,7 +50,7 @@ type Server struct {
 	localOut io.Writer // optional local terminal output sink
 
 	done chan struct{} // closed when child exits
-	err  error        // child exit error
+	err  error         // child exit error
 }
 
 type wsClient struct {
@@ -371,9 +372,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Wrapped in DEC 2026 synchronized output so xterm renders atomically.
 	// Sequence: BSU → reset(scroll region, cursor home, erase all) → scrollback → ESU
 	{
-		bsu := []byte("\x1b[?2026h")                      // Begin Synchronized Update
+		bsu := []byte("\x1b[?2026h")                     // Begin Synchronized Update
 		resetSeq := []byte("\x1b[r\x1b[H\x1b[2J\x1b[3J") // Reset scroll region + cursor home + erase display + erase scrollback
-		esu := []byte("\x1b[?2026l")                       // End Synchronized Update
+		esu := []byte("\x1b[?2026l")                     // End Synchronized Update
 		frame := make([]byte, 0, len(bsu)+len(resetSeq)+len(snapshot)+len(esu))
 		frame = append(frame, bsu...)
 		frame = append(frame, resetSeq...)
@@ -444,11 +445,16 @@ func (s *Server) readPTY() {
 		if n > 0 {
 			data := buf[:n]
 
+			// All sessions parse OSC titles as a fallback title source.
+			if title := adapters.ParseOSCTitle(data); title != "" {
+				s.state.SetShellTitle(title)
+			}
+
 			// Feed adapter monitor (cheap, no alloc expected)
 			if s.adapter != nil {
 				if status := s.adapter.Monitor(data); status != nil {
 					if status.Title != "" {
-						s.state.SetTitle(status.Title)
+						s.state.SetAdapterTitle(status.Title)
 						status.Title = "" // don't leak into status JSON
 					}
 					s.state.SetStatus(status)

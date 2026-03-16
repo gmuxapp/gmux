@@ -63,26 +63,26 @@ func TestShellDoesNotImplementCapabilities(t *testing.T) {
 // --- OSC title parsing ---
 
 func TestParseOSCTitleBEL(t *testing.T) {
-	if title := parseOSCTitle([]byte("\x1b]0;my title\x07 more")); title != "my title" {
+	if title := ParseOSCTitle([]byte("\x1b]0;my title\x07 more")); title != "my title" {
 		t.Fatalf("expected 'my title', got %q", title)
 	}
 }
 
 func TestParseOSCTitleST(t *testing.T) {
-	if title := parseOSCTitle([]byte("\x1b]2;window title\x1b\\ more")); title != "window title" {
+	if title := ParseOSCTitle([]byte("\x1b]2;window title\x1b\\ more")); title != "window title" {
 		t.Fatalf("expected 'window title', got %q", title)
 	}
 }
 
 func TestParseOSCTitleNone(t *testing.T) {
-	if title := parseOSCTitle([]byte("hello world")); title != "" {
+	if title := ParseOSCTitle([]byte("hello world")); title != "" {
 		t.Fatalf("expected empty, got %q", title)
 	}
 }
 
 func TestParseOSCTitleEmbedded(t *testing.T) {
 	data := []byte("output\r\n\x1b]0;~/dev/gmux\x07prompt $ ")
-	if title := parseOSCTitle(data); title != "~/dev/gmux" {
+	if title := ParseOSCTitle(data); title != "~/dev/gmux" {
 		t.Fatalf("expected '~/dev/gmux', got %q", title)
 	}
 }
