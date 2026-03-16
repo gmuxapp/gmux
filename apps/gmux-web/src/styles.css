@@ -2,6 +2,14 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Instrument+Sans:wght@700&family=JetBrains+Mono:ital,wght@1,400;1,500&family=Source+Sans+3:wght@400;500;600;700&display=swap');
 
+code {
+  font-family: 'Fira Code', monospace;
+  font-size: 0.85em;
+  background: oklch(19% 0.015 250);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+}
+
 :root {
   /* Surfaces — widened gaps for clearer distinction */
   --bg: oklch(12% 0.015 250);
