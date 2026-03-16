@@ -102,12 +102,12 @@ body {
   padding: 0 6px;
   border-radius: 999px;
   background: oklch(22% 0.015 250);
-  color: var(--text-muted);
-  font-size: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
   font-weight: 500;
   line-height: 1;
   letter-spacing: 0.01em;
-  transform: translateY(1px);
+  transform: translateY(2px);
 }
 
 .sidebar-scroll {
