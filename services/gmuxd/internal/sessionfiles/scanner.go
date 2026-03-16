@@ -115,7 +115,7 @@ func (sc *Scanner) Scan() {
 					Title:     info.Title,
 					ResumeKey: info.ID,
 					Resumable: true,
-					Status:    &store.Status{Label: "resumable"},
+					Status:    nil,
 				}
 
 				sc.store.Upsert(sess)
