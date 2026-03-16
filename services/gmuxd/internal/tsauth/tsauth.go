@@ -5,9 +5,11 @@
 // handler as the localhost listener, but wrapped in middleware that:
 //  1. Enforces HTTPS (tsnet provides automatic Let's Encrypt certs).
 //  2. Checks the connecting peer's tailscale identity (via WhoIs) against
-//     a configured allow list of login names and/or device names.
+//     an allow list of login names.
 //
-// The allow list is fail-closed: if empty, all connections are rejected.
+// The node owner's tailscale account is automatically added to the allow
+// list at startup. Additional users can be added via config. Peers not
+// on the list are rejected with 403.
 package tsauth
 
 import (

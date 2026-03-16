@@ -31,9 +31,9 @@ type TailscaleConfig struct {
 	// Default "gmux".
 	Hostname string `toml:"hostname"`
 
-	// Allow is the list of tailscale login names permitted to connect
-	// (e.g. "user@github"). Matched against the peer's UserProfile.LoginName.
-	// Empty list with enabled=true is a hard error (fail-closed).
+	// Allow is the list of additional tailscale login names permitted to connect
+	// (e.g. "user@github"). The node owner is always auto-whitelisted at runtime.
+	// Entries are matched against the peer's UserProfile.LoginName.
 	Allow []string `toml:"allow"`
 }
 

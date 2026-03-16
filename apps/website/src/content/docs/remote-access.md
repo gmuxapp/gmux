@@ -92,7 +92,7 @@ Everyone on the allow list (plus you) gets the same full access. There are no pe
 
 ## Troubleshooting
 
-**"tsauth: tailscale.allow is empty"** — You enabled tailscale but didn't add anyone to the allow list. This is intentional: an empty list means no access, so gmuxd won't start a listener that nobody can use.
+**"tsauth: could not determine node owner"** — gmuxd couldn't identify your tailscale account. Make sure tailscale is logged in (`tailscale status`) and try again.
 
 **Can't reach the hostname** — Make sure both devices are on the same tailnet and that MagicDNS is enabled in your tailscale admin console.
 
