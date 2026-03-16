@@ -61,6 +61,25 @@ gmuxr -- make build         # different project — shows as separate folder
 
 All sessions appear in the sidebar, grouped by the directory you launched them from.
 
+## App mode
+
+For a standalone window without browser chrome (no address bar, no tabs), launch with `--app`:
+
+```bash
+# Chrome / Chromium
+google-chrome --app=http://localhost:8790
+# or
+chromium --app=http://localhost:8790
+
+# macOS
+open -na "Google Chrome" --args --app=http://localhost:8790
+
+# Edge
+msedge --app=http://localhost:8790
+```
+
+This gives gmux its own window and taskbar entry — feels like a native app. You can also "Install" it as a PWA from the browser menu (⋮ → Install gmux) for the same effect with a desktop shortcut.
+
 ## Mobile
 
 Open the same URL on your phone. The terminal is fully interactive — tap `esc`, `tab`, `ctrl`, arrow keys, and `enter` from the bottom bar.
