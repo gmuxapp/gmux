@@ -23,30 +23,27 @@ pnpm install          # JS dependencies + moon
 Run all services with watch/HMR:
 
 ```bash
-./dev
+moon run :dev
 ```
 
 This starts:
 - **gmuxd** (`:8790`) — Go, auto-restarts on `.go` changes via watchexec
 - **gmux-web** (`:5173`) — Vite HMR, proxies `/v1/*` and `/ws/*` to gmuxd
-- **gmuxr** — Go runner launching `pi`, auto-restarts via watchexec
 
-Ctrl+C stops everything.
-
-**No manual kill needed.** When gmuxd starts, it asks any existing instance on the same port to shut down gracefully (`POST /v1/shutdown`) before binding. Restarts via watchexec or re-running `./dev` are seamless.
+**No manual kill needed.** When gmuxd starts, it asks any existing instance on the same port to shut down gracefully (`POST /v1/shutdown`) before binding.
 
 To run services individually:
 
 ```bash
-pnpm moon run gmuxd:dev        # just gmuxd with watchexec
-pnpm moon run gmux-web:dev     # just vite
+moon run gmuxd:dev        # just gmuxd with watchexec
+moon run gmux-web:dev     # just vite
 ```
 
 ## Tests & linting
 
 ```bash
-pnpm moon run :test    # all tests (Go + JS)
-pnpm moon run :lint    # all lint/typecheck
+moon run :test    # all tests (Go + JS)
+moon run :lint    # all lint/typecheck
 ```
 
 ## Project structure
