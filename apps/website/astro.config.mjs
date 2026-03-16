@@ -22,6 +22,7 @@ export default defineConfig({
           items: [
             { label: 'Introduction', slug: 'introduction' },
             { label: 'Quick Start', slug: 'quick-start' },
+            { label: 'Remote Access', slug: 'remote-access' },
           ],
         },
         {
@@ -29,6 +30,7 @@ export default defineConfig({
           items: [
             { label: 'Architecture', slug: 'architecture' },
             { label: 'Adapters', slug: 'adapters' },
+            { label: 'Security', slug: 'security' },
           ],
         },
         {
