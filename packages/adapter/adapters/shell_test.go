@@ -87,12 +87,11 @@ func TestParseOSCTitleEmbedded(t *testing.T) {
 	}
 }
 
-func TestShellMonitorTitleUpdate(t *testing.T) {
+func TestShellMonitorNil(t *testing.T) {
+	// Shell.Monitor() always returns nil — title parsing is handled
+	// centrally in gmux, not per-adapter.
 	s := NewShell().Monitor([]byte("\x1b]0;fish: ~/dev\x07"))
-	if s == nil {
-		t.Fatal("should return status")
-	}
-	if s.Title != "fish: ~/dev" {
-		t.Fatalf("expected 'fish: ~/dev', got %q", s.Title)
+	if s != nil {
+		t.Fatalf("expected nil, got %+v", s)
 	}
 }

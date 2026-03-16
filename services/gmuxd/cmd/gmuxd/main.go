@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -551,6 +553,14 @@ func main() {
 	srv := &http.Server{Addr: addr, Handler: mux}
 
 	mux.HandleFunc("POST /v1/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		// Only allow shutdown from localhost — this endpoint is used by
+		// new gmuxd instances to take over the port, not by remote users.
+		// On the tailscale listener, RemoteAddr is a tailnet IP, not loopback.
+		remoteHost, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if remoteHost != "127.0.0.1" && remoteHost != "::1" {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
 		writeJSON(w, map[string]any{"ok": true})
 		log.Printf("shutdown requested — exiting")
 		go func() {
@@ -574,10 +584,25 @@ func main() {
 		defer tsListener.Shutdown()
 	}
 
+	// ── Signal handling for graceful shutdown ──
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		log.Printf("received %v — shutting down", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		srv.Shutdown(ctx)
+	}()
+
 	// ── Localhost listener (always, no auth) ──
 
 	log.Printf("gmuxd %s listening on %s", version, addr)
-	log.Fatal(srv.ListenAndServe())
+	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
+	log.Printf("gmuxd stopped")
 }
 
 // requestShutdown asks an existing gmuxd on the same address to shut down,

@@ -17,7 +17,7 @@ bin/*
 !bin/.keep
 *.test
 services/gmuxd/gmuxd
-cli/gmuxr/gmuxr
+cli/gmux/gmux
 
 # ralph state
 .ralph
