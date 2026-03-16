@@ -33,7 +33,7 @@ This starts:
 
 Ctrl+C stops everything.
 
-**No manual kill needed.** gmuxd writes a PID file (`~/.local/state/gmux/gmuxd.pid`) at startup. If a previous instance is still running, it is automatically shut down before the new one binds the port. Restarts via watchexec or re-running `./dev` are seamless.
+**No manual kill needed.** When gmuxd starts, it asks any existing instance on the same port to shut down gracefully (`POST /v1/shutdown`) before binding. Restarts via watchexec or re-running `./dev` are seamless.
 
 To run services individually:
 

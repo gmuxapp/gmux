@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,7 +20,6 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/pidfile"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsauth"
@@ -142,13 +142,6 @@ func launchGmuxr(gmuxrBin string, command []string, cwd string) (int, error) {
 }
 
 func main() {
-	// Acquire PID file — signals any existing gmuxd to shut down.
-	cleanupPID, err := pidfile.Acquire(stateDir())
-	if err != nil {
-		log.Fatalf("pidfile: %v", err)
-	}
-	defer cleanupPID()
-
 	gmuxrBin := resolveGmuxr() // resolve once, use everywhere
 	if gmuxrBin != "" {
 		log.Printf("gmuxr: %s", gmuxrBin)
@@ -547,6 +540,25 @@ func main() {
 
 	// Env var overrides config file port.
 	port := envOr("GMUXD_PORT", fmt.Sprintf("%d", cfg.Port))
+	addr := "127.0.0.1:" + port
+
+	// ── Shutdown endpoint (used by new instances to take over the port) ──
+
+	srv := &http.Server{Addr: addr, Handler: mux}
+
+	mux.HandleFunc("POST /v1/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"ok": true})
+		log.Printf("shutdown requested — exiting")
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			srv.Shutdown(ctx)
+		}()
+	})
+
+	// ── Take over from any existing gmuxd on this port ──
+
+	requestShutdown(addr)
 
 	// ── Optional tailscale listener ──
 
@@ -564,9 +576,39 @@ func main() {
 
 	// ── Localhost listener (always, no auth) ──
 
-	addr := "127.0.0.1:" + port
 	log.Printf("gmuxd listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	log.Fatal(srv.ListenAndServe())
+}
+
+// requestShutdown asks an existing gmuxd on the same address to shut down,
+// then waits for the port to become available. This replaces PID files —
+// the port itself is the lock.
+func requestShutdown(addr string) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Post("http://"+addr+"/v1/shutdown", "", nil)
+	if err != nil {
+		return // Nothing listening — port is free.
+	}
+	resp.Body.Close()
+	log.Printf("asked existing gmuxd at %s to shut down", addr)
+
+	// Wait for the port to become available.
+	deadline := time.After(5 * time.Second)
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-deadline:
+			log.Printf("warning: timed out waiting for %s to free up", addr)
+			return
+		case <-tick.C:
+			resp, err := client.Get("http://" + addr + "/v1/health")
+			if err != nil {
+				return // Port is free.
+			}
+			resp.Body.Close()
+		}
+	}
 }
 
 // stateDir returns the gmux state directory (~/.local/state/gmux).
