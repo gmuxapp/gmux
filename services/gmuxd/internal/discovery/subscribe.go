@@ -22,8 +22,9 @@ type Subscriptions struct {
 	active map[string]context.CancelFunc // sessionID → cancel
 	store  *store.Store
 	// OnExit is called after a session exit event is processed.
-	// Used to transition resumable sessions immediately on exit.
-	OnExit func(sess *store.Session)
+	// Returns true if the session was transitioned to resumable
+	// (caller should not set exit status).
+	OnExit func(sess *store.Session) bool
 }
 
 func NewSubscriptions(s *store.Store) *Subscriptions {
@@ -206,13 +207,13 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		sess.ExitCode = &exit.ExitCode
 		sess.ExitedAt = time.Now().UTC().Format(time.RFC3339)
 		// Let the OnExit hook set the resume command before upsert.
-		// If the session becomes resumable, clear status entirely.
-		// Otherwise show the exit status.
+		// If it returns true, the session transitioned to resumable —
+		// don't overwrite with exit status.
+		resumed := false
 		if sub.OnExit != nil {
-			sub.OnExit(&sess)
+			resumed = sub.OnExit(&sess)
 		}
-		if sess.Status == nil {
-			// OnExit didn't clear it — show exit label.
+		if !resumed {
 			if exit.ExitCode == 0 {
 				sess.Status = &store.Status{Label: "completed"}
 			} else {

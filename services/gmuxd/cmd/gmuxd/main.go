@@ -179,11 +179,13 @@ func main() {
 
 	// When a session exits, derive the resume command so it transitions
 	// to resumable immediately — no "exited" limbo state.
-	subs.OnExit = func(sess *store.Session) {
+	subs.OnExit = func(sess *store.Session) bool {
 		if cmd := fileMon.ResolveResumeCommand(sess); cmd != nil {
 			sess.Command = cmd
 			sess.Status = nil // clear exit status for clean resumable display
+			return true
 		}
+		return false
 	}
 	stopFileMon := make(chan struct{})
 	go fileMon.Run(stopFileMon)

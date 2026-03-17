@@ -127,13 +127,18 @@ func (s *Store) isResumableKind(kind string) bool {
 
 func (s *Store) Upsert(sess Session) {
 	sess.Title = resolveTitle(sess)
-	resumable := s.isResumableKind(sess.Kind)
-	// Derive resumable: dead + resume-capable kind + has a resume command.
-	sess.Resumable = !sess.Alive && resumable && len(sess.Command) > 0
-	// Derive close_action:
-	//   alive + resume-capable kind → minimize (−) — killing will yield a resumable session
-	//   everything else → dismiss (×) — remove from store
-	if sess.Alive && resumable {
+	resumeKind := s.isResumableKind(sess.Kind)
+	// A session is resumable only if it has an attributed file (ResumeKey).
+	// Without a file, there's nothing to resume — the original command
+	// would just start a fresh session.
+	hasFile := sess.ResumeKey != ""
+	sess.Resumable = !sess.Alive && resumeKind && hasFile && len(sess.Command) > 0
+	// close_action:
+	//   alive + resume-capable kind + has file → minimize (−)
+	//   everything else → dismiss (×)
+	// Before file attribution, even resumable-kind sessions get × because
+	// killing them produces nothing to resume.
+	if sess.Alive && resumeKind && hasFile {
 		sess.CloseAction = "minimize"
 	} else {
 		sess.CloseAction = "dismiss"

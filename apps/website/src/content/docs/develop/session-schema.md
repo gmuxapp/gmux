@@ -41,9 +41,9 @@ description: The session metadata model shared between gmux, gmuxd, and the web 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `resumable` | boolean | Derived: `!alive && resume-capable kind && command present`. Never set manually. |
-| `resume_key` | string \| null | Session file ID, set during file attribution. Used to deduplicate live sessions against file-discovered entries. |
-| `close_action` | string | Derived: `"minimize"` for alive resume-capable sessions, `"dismiss"` otherwise. Controls the close button (− vs ×). |
+| `resumable` | boolean | Derived: `!alive && resume-capable kind && has resume_key && command present`. Never set manually. |
+| `resume_key` | string \| null | Session file ID, set during file attribution. Required for a session to be resumable or show the minimize button. |
+| `close_action` | string | Derived: `"minimize"` for alive sessions with a resume-capable kind **and** an attributed file (`resume_key`), `"dismiss"` otherwise. Before file attribution, even resume-capable sessions show ×. |
 | `command` | string[] | For resumable dead sessions, this is the resume command (e.g. `["claude", "--resume", "abc"]`). For alive sessions, the original launch command. |
 
 ### Display (set by child or gmux, mutable)

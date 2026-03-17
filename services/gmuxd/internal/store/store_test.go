@@ -93,6 +93,138 @@ func TestSubscribe(t *testing.T) {
 	}
 }
 
+// --- Derived field tests ---
+
+func newStoreWithKinds() *Store {
+	s := New()
+	s.SetResumableKinds(map[string]bool{"claude": true, "codex": true, "pi": true})
+	return s
+}
+
+func TestDerivedResumable_AliveSessionNeverResumable(t *testing.T) {
+	s := newStoreWithKinds()
+	s.Upsert(Session{
+		ID: "s1", Kind: "claude", Alive: true,
+		Command: []string{"claude", "--resume", "abc"}, ResumeKey: "abc",
+	})
+	got, _ := s.Get("s1")
+	if got.Resumable {
+		t.Error("alive session should never be resumable")
+	}
+}
+
+func TestDerivedResumable_DeadWithFileAndCommand(t *testing.T) {
+	s := newStoreWithKinds()
+	s.Upsert(Session{
+		ID: "s1", Kind: "claude", Alive: false,
+		Command: []string{"claude", "--resume", "abc"}, ResumeKey: "abc",
+	})
+	got, _ := s.Get("s1")
+	if !got.Resumable {
+		t.Error("dead session with resume kind + file + command should be resumable")
+	}
+}
+
+func TestDerivedResumable_DeadNoFile(t *testing.T) {
+	s := newStoreWithKinds()
+	// Session from resumable adapter but no file was ever attributed.
+	s.Upsert(Session{
+		ID: "s1", Kind: "claude", Alive: false,
+		Command: []string{"claude"},
+	})
+	got, _ := s.Get("s1")
+	if got.Resumable {
+		t.Error("dead session without ResumeKey should NOT be resumable")
+	}
+}
+
+func TestDerivedResumable_DeadNoCommand(t *testing.T) {
+	s := newStoreWithKinds()
+	s.Upsert(Session{
+		ID: "s1", Kind: "claude", Alive: false, ResumeKey: "abc",
+	})
+	got, _ := s.Get("s1")
+	if got.Resumable {
+		t.Error("dead session without command should NOT be resumable")
+	}
+}
+
+func TestDerivedResumable_ShellNeverResumable(t *testing.T) {
+	s := newStoreWithKinds()
+	s.Upsert(Session{
+		ID: "s1", Kind: "shell", Alive: false,
+		Command: []string{"/bin/bash"}, ResumeKey: "x",
+	})
+	got, _ := s.Get("s1")
+	if got.Resumable {
+		t.Error("shell sessions should never be resumable")
+	}
+}
+
+func TestDerivedCloseAction_AliveWithFile(t *testing.T) {
+	s := newStoreWithKinds()
+	s.Upsert(Session{
+		ID: "s1", Kind: "pi", Alive: true,
+		Command: []string{"pi"}, ResumeKey: "sess-123",
+	})
+	got, _ := s.Get("s1")
+	if got.CloseAction != "minimize" {
+		t.Errorf("alive session with file should get minimize, got %q", got.CloseAction)
+	}
+}
+
+func TestDerivedCloseAction_AliveNoFile(t *testing.T) {
+	s := newStoreWithKinds()
+	// Alive session from resumable adapter, but no file attributed yet.
+	s.Upsert(Session{
+		ID: "s1", Kind: "pi", Alive: true,
+		Command: []string{"pi"},
+	})
+	got, _ := s.Get("s1")
+	if got.CloseAction != "dismiss" {
+		t.Errorf("alive session without file should get dismiss, got %q", got.CloseAction)
+	}
+}
+
+func TestDerivedCloseAction_DeadResumable(t *testing.T) {
+	s := newStoreWithKinds()
+	s.Upsert(Session{
+		ID: "s1", Kind: "claude", Alive: false,
+		Command: []string{"claude", "--resume", "abc"}, ResumeKey: "abc",
+	})
+	got, _ := s.Get("s1")
+	if got.CloseAction != "dismiss" {
+		t.Errorf("dead resumable session should get dismiss (× to remove), got %q", got.CloseAction)
+	}
+}
+
+func TestDerivedCloseAction_Shell(t *testing.T) {
+	s := newStoreWithKinds()
+	s.Upsert(Session{ID: "s1", Kind: "shell", Alive: true, Command: []string{"/bin/bash"}})
+	got, _ := s.Get("s1")
+	if got.CloseAction != "dismiss" {
+		t.Errorf("shell session should always get dismiss, got %q", got.CloseAction)
+	}
+}
+
+func TestDerivedCloseAction_TransitionOnFileAttribution(t *testing.T) {
+	s := newStoreWithKinds()
+	// Start alive with no file — dismiss.
+	s.Upsert(Session{ID: "s1", Kind: "claude", Alive: true, Command: []string{"claude"}})
+	got, _ := s.Get("s1")
+	if got.CloseAction != "dismiss" {
+		t.Errorf("before attribution: expected dismiss, got %q", got.CloseAction)
+	}
+
+	// File gets attributed — minimize.
+	got.ResumeKey = "sess-abc"
+	s.Upsert(got)
+	got, _ = s.Get("s1")
+	if got.CloseAction != "minimize" {
+		t.Errorf("after attribution: expected minimize, got %q", got.CloseAction)
+	}
+}
+
 func TestSetTerminalSize(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Kind: "shell", Alive: true})
