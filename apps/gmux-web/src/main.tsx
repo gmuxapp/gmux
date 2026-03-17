@@ -1243,7 +1243,9 @@ function App() {
   useEffect(() => {
     if (!selectedId && !hasAutoSelected.current && filteredSessions.length > 0) {
       hasAutoSelected.current = true
-      const best = filteredSessions.find(s => s.alive) ?? filteredSessions[0]
+      // Only auto-select alive sessions — dead/resumable sessions
+      // are selected by explicit click only.
+      const best = filteredSessions.find(s => s.alive)
       if (best) setSelectedId(best.id)
     }
   }, [filteredSessions, selectedId])
