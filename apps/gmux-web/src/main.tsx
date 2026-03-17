@@ -1267,6 +1267,10 @@ function App() {
     sidebarState.hideFolder(cwd)
   }, [])
 
+  // Track sessions with pending resume — don't deselect while waiting
+  // for the SSE upsert that will set alive: true.
+  const pendingResumeRef = useRef<string | null>(null)
+
   const handleSelect = useCallback((id: string) => {
     setSelectedId(id)
     setCtrlArmed(false)
@@ -1274,15 +1278,36 @@ function App() {
     // (alive: true, socket_path set) via SSE upsert, then the terminal opens.
     const sess = sessions.find(s => s.id === id)
     if (sess?.resumable) {
-      resumeSession(id).catch(err => console.error('resume failed:', err))
+      pendingResumeRef.current = id
+      resumeSession(id).catch(err => {
+        console.error('resume failed:', err)
+        if (pendingResumeRef.current === id) {
+          pendingResumeRef.current = null
+          setSelectedId(null)
+        }
+      })
     }
   }, [sessions])
+
+  // Clear pending resume once the session comes alive.
+  useEffect(() => {
+    if (selected?.alive && pendingResumeRef.current === selectedId) {
+      pendingResumeRef.current = null
+    }
+  }, [selected?.alive, selectedId])
 
   const canAttach = !!selected?.alive && !USE_MOCK
 
   useEffect(() => {
-    if (!canAttach) setCtrlArmed(false)
-  }, [canAttach])
+    if (!canAttach) {
+      setCtrlArmed(false)
+      // Selected = what the terminal shows. No terminal → deselect.
+      // Skip if a resume is in flight — the session will become alive shortly.
+      if (selectedId && selected && !selected.alive && pendingResumeRef.current !== selectedId) {
+        setSelectedId(null)
+      }
+    }
+  }, [canAttach, selectedId, selected])
 
   const handleTerminalInputReady = useCallback((send: ((data: string) => void) | null) => {
     terminalInputRef.current = send
