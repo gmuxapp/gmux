@@ -2,6 +2,11 @@
 
 Full commit-level changelogs are on each [GitHub release](https://github.com/gmuxapp/gmux/releases). This file tracks user-facing highlights only.
 
+## v0.2.4
+
+- File attribution refactored into adapter interface (`FileAttributor`)
+- Codex adapter now attributes session files
+
 ## v0.2.3
 
 - Fixed Homebrew tap (was empty after cleanup)
