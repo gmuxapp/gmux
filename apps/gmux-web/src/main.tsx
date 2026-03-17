@@ -1273,6 +1273,7 @@ function App() {
       })
       return
     }
+    setResumingId(null) // cancel any pending resume auto-select
     setSelectedId(id)
     setCtrlArmed(false)
   }, [sessions])

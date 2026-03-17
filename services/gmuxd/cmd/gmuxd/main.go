@@ -440,6 +440,7 @@ func main() {
 
 			pid, err := launchGmux(gmuxBin, sess.Command, sess.Cwd)
 			if err != nil {
+				pendingResumes.Take(sess.Command) // clean up on failure
 				log.Printf("resume: failed to start gmux: %v", err)
 				writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
 				return
