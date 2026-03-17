@@ -42,7 +42,6 @@ function toUISession(s: ProtocolSession): Session {
     unread: s.unread ?? false,
     resumable: s.resumable ?? false,
     resume_key: s.resume_key ?? '',
-    close_action: s.close_action ?? (s.alive ? 'dismiss' : undefined),
     socket_path: s.socket_path ?? '',
     terminal_cols: s.terminal_cols ?? undefined,
     terminal_rows: s.terminal_rows ?? undefined,
@@ -333,7 +332,7 @@ function SessionItem({
 
   return (
     <div
-      class={`session-item ${selected ? 'selected' : ''} ${!session.alive && !session.resumable ? 'dead' : ''}`}
+      class={`session-item ${selected ? 'selected' : ''}`}
       onClick={onClick}
     >
       <span class={`session-dot-indicator ${dotState}`} />

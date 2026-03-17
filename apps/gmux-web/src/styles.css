@@ -376,10 +376,6 @@ body {
   min-width: 0;
 }
 
-.session-item.dead .session-title {
-  color: var(--text-secondary);
-}
-
 .session-time {
   font-size: 12px;
   color: var(--text-muted);

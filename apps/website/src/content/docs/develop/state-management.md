@@ -95,7 +95,6 @@ These are computed in `Upsert()`, never set manually:
 |---|---|
 | `title` | `adapter_title` > `shell_title` > `CommandTitler` > adapter kind (see below) |
 | `resumable` | `!alive && resume-capable kind && has resume_key && has command` |
-| `close_action` | `"minimize"` if alive + resume-capable kind + has resume_key, else `"dismiss"` |
 
 A session is only resume-capable if its adapter implements the `Resumer` interface. The set of resume-capable kinds is built from the compiled adapter set at startup.
 

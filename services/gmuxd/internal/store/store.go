@@ -25,7 +25,6 @@ type Session struct {
 	Unread       bool     `json:"unread"`
 	Resumable    bool     `json:"resumable,omitempty"`
 	ResumeKey    string   `json:"resume_key,omitempty"`
-	CloseAction  string   `json:"close_action,omitempty"`
 	SocketPath   string   `json:"socket_path,omitempty"`
 	TerminalCols uint16   `json:"terminal_cols,omitempty"`
 	TerminalRows uint16   `json:"terminal_rows,omitempty"`
@@ -145,16 +144,6 @@ func (s *Store) Upsert(sess Session) {
 	// would just start a fresh session.
 	hasFile := sess.ResumeKey != ""
 	sess.Resumable = !sess.Alive && resumeKind && hasFile && len(sess.Command) > 0
-	// close_action:
-	//   alive + resume-capable kind + has file → minimize (−)
-	//   everything else → dismiss (×)
-	// Before file attribution, even resumable-kind sessions get × because
-	// killing them produces nothing to resume.
-	if sess.Alive && resumeKind && hasFile {
-		sess.CloseAction = "minimize"
-	} else {
-		sess.CloseAction = "dismiss"
-	}
 	s.mu.Lock()
 	s.sessions[sess.ID] = sess
 	s.mu.Unlock()
