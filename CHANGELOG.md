@@ -2,7 +2,7 @@
 
 Full commit-level changelogs are on each [GitHub release](https://github.com/gmuxapp/gmux/releases). This file tracks user-facing highlights only.
 
-## Unreleased
+## v0.3.0
 
 Sidebar redesign, file attribution fixes, integration tests.
 
