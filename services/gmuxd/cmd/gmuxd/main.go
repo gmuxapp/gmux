@@ -445,14 +445,9 @@ func main() {
 				return
 			}
 
-			// Update in-place: session is now starting.
-			// Register() will merge in the live session data (socket, pid)
-			// when gmux calls POST /v1/register.
-			sess.Alive = true
-			sess.SocketPath = "" // clear stale socket — prevents discovery from marking us dead
-			sess.Status = &store.Status{Working: true}
-			sessions.Upsert(sess)
-
+			// Don't modify the session here. It stays dead/resumable until
+			// the runner calls POST /register and Register() merges it.
+			// The frontend shows a local "resuming" indicator.
 			log.Printf("resume: started gmux pid=%d for %s cwd=%s", pid, sessionID, sess.Cwd)
 			writeJSON(w, map[string]any{
 				"ok":   true,

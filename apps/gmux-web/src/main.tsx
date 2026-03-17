@@ -319,15 +319,17 @@ function sessionDotState(session: Session): 'working' | 'unread' | 'none' {
 function SessionItem({
   session,
   selected,
+  resuming,
   onClick,
   onClose,
 }: {
   session: Session
   selected: boolean
+  resuming?: boolean
   onClick: () => void
   onClose?: () => void
 }) {
-  const dotState = sessionDotState(session)
+  const dotState = resuming ? 'working' : sessionDotState(session)
   const closeAction = session.close_action
   const showKind = false
 
@@ -367,6 +369,7 @@ function SessionItem({
 function FolderGroup({
   folder,
   selectedId,
+  resumingId,
   onSelect,
   onCloseSession,
   onHideFolder,
@@ -374,6 +377,7 @@ function FolderGroup({
 }: {
   folder: Folder
   selectedId: string | null
+  resumingId: string | null
   onSelect: (id: string) => void
   onCloseSession: (session: Session) => void
   onHideFolder: (cwd: string) => void
@@ -401,6 +405,7 @@ function FolderGroup({
             key={s.id}
             session={s}
             selected={selectedId === s.id}
+            resuming={resumingId === s.id}
             onClick={() => onSelect(s.id)}
             onClose={() => onCloseSession(s)}
           />
@@ -429,6 +434,7 @@ function FolderGroup({
             key={s.id}
             session={s}
             selected={selectedId === s.id}
+            resuming={resumingId === s.id}
             onClick={() => onSelect(s.id)}
             onClose={() => onCloseSession(s)}
           />
@@ -442,6 +448,7 @@ function Sidebar({
   folders,
   hiddenFolders,
   selectedId,
+  resumingId,
   onSelect,
   onCloseSession,
   onHideFolder,
@@ -453,6 +460,7 @@ function Sidebar({
   folders: Folder[]
   hiddenFolders: Folder[]
   selectedId: string | null
+  resumingId: string | null
   onSelect: (id: string) => void
   onCloseSession: (session: Session) => void
   onHideFolder: (cwd: string) => void
@@ -478,6 +486,7 @@ function Sidebar({
               key={f.path}
               folder={f}
               selectedId={selectedId}
+              resumingId={resumingId}
               onSelect={(id) => {
                 onSelect(id)
                 onClose()
@@ -1244,62 +1253,65 @@ function App() {
     }
   }, [filteredSessions, selectedId])
 
+  // --- Actions: send to backend, wait for SSE. No optimistic updates. ---
+
+  // resumingId is pure UI state — shows a spinner while waiting for the
+  // backend to confirm the session is alive. Not session state.
+  const [resumingId, setResumingId] = useState<string | null>(null)
+
   const handleCloseSession = useCallback((session: Session) => {
     if (session.close_action === 'minimize') {
-      // Kill but keep — will become resumable via SSE
       killSession(session.id)
     } else {
-      // Dismiss: kill + remove from backend store (won't return on reload).
       dismissSession(session.id)
-      // Optimistic local removal so it disappears immediately.
-      setSessions(prev => prev.filter(s => s.id !== session.id))
-      if (selectedId === session.id) setSelectedId(null)
+      // No optimistic removal — SSE session-remove will update the list.
     }
-  }, [selectedId])
+  }, [])
 
   const handleHideFolder = useCallback((cwd: string) => {
     sidebarState.hideFolder(cwd)
   }, [])
 
-  // Track sessions with pending resume — don't deselect while waiting
-  // for the SSE upsert that will set alive: true.
-  const pendingResumeRef = useRef<string | null>(null)
-
   const handleSelect = useCallback((id: string) => {
-    setSelectedId(id)
-    setCtrlArmed(false)
-    // If resumable, resume it. The session will transition in-place
-    // (alive: true, socket_path set) via SSE upsert, then the terminal opens.
     const sess = sessions.find(s => s.id === id)
     if (sess?.resumable) {
-      pendingResumeRef.current = id
+      // Resume: show spinner, send request, wait for SSE to make it alive.
+      setResumingId(id)
       resumeSession(id).catch(err => {
         console.error('resume failed:', err)
-        if (pendingResumeRef.current === id) {
-          pendingResumeRef.current = null
-          setSelectedId(null)
-        }
+        setResumingId(prev => prev === id ? null : prev)
       })
+      return
     }
+    setSelectedId(id)
+    setCtrlArmed(false)
   }, [sessions])
 
-  // Clear pending resume once the session comes alive.
+  // When a resumed session comes alive, select it.
   useEffect(() => {
-    if (selected?.alive && pendingResumeRef.current === selectedId) {
-      pendingResumeRef.current = null
+    if (resumingId) {
+      const sess = sessions.find(s => s.id === resumingId)
+      if (sess?.alive && sess?.socket_path) {
+        setSelectedId(resumingId)
+        setResumingId(null)
+      }
     }
-  }, [selected?.alive, selectedId])
+  }, [sessions, resumingId])
+
+  // Resume timeout — clear after 10s if the session never came alive.
+  useEffect(() => {
+    if (!resumingId) return
+    const t = setTimeout(() => setResumingId(null), 10_000)
+    return () => clearTimeout(t)
+  }, [resumingId])
 
   const canAttach = !!selected?.alive && !!selected?.socket_path && !USE_MOCK
 
+  // Selected = what the terminal shows. No terminal → deselect.
   useEffect(() => {
-    if (!canAttach) {
-      setCtrlArmed(false)
-      // Selected = what the terminal shows. No terminal → deselect.
-      // Skip if a resume is in flight — the session will become alive shortly.
-      if (selectedId && selected && !selected.alive && pendingResumeRef.current !== selectedId) {
-        setSelectedId(null)
-      }
+    if (!canAttach) setCtrlArmed(false)
+    if (selectedId && selected && !selected.alive) {
+      setSelectedId(null)
     }
   }, [canAttach, selectedId, selected])
 
@@ -1326,6 +1338,7 @@ function App() {
         folders={folders}
         hiddenFolders={hiddenFolders}
         selectedId={selectedId}
+        resumingId={resumingId}
         onSelect={handleSelect}
         onCloseSession={handleCloseSession}
         onHideFolder={handleHideFolder}
@@ -1360,11 +1373,6 @@ function App() {
             onCtrlConsumed={handleCtrlConsumed}
             onInputReady={handleTerminalInputReady}
           />
-        ) : selected?.alive && !selected?.socket_path ? (
-          <div class="state-message">
-            <div class="state-icon">⋯</div>
-            <div class="state-title">Starting</div>
-          </div>
         ) : (
           <EmptyState launchers={launchers} health={health} />
         )}

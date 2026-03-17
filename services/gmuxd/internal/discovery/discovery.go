@@ -73,7 +73,7 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, resu
 		return
 	}
 
-	// Build set of sockets already tracked (from merged resumes).
+	// Build set of sockets already tracked by a store session.
 	trackedSockets := make(map[string]bool)
 	for _, s := range sessions.List() {
 		if s.SocketPath != "" {
@@ -81,80 +81,42 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, resu
 		}
 	}
 
-	seen := make(map[string]bool)
-
+	// Phase 1: discover new sockets → Register is the single entry
+	// point for creating/merging sessions.
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sock") {
 			continue
 		}
-
 		sockPath := filepath.Join(dir, entry.Name())
-		sessionID := strings.TrimSuffix(entry.Name(), ".sock")
-
-		// Skip if this socket is already tracked by an existing session
-		// (e.g., a merged resume that kept a different session ID).
 		if trackedSockets[sockPath] {
-			seen[sessionID] = true
-			continue
+			continue // already tracked
 		}
-
-		sess, err := queryMeta(sockPath)
-		if err != nil {
-			// Only log if this was a previously-known live session.
-			// Stale sockets from killed processes are silently cleaned up.
-			if existing, ok := sessions.Get(sessionID); ok && existing.Alive {
-				log.Printf("discovery: %s unreachable: %v", sessionID, err)
-				existing.Alive = false
-				sessions.Upsert(existing)
-			}
-			os.Remove(sockPath)
-			if subs != nil {
-				subs.Unsubscribe(sessionID)
-			}
-			continue
-		}
-
-		markStale(sess)
-
-		// Skip sessions whose command matches a pending resume.
-		// Register() will handle the merge when the runner calls in.
-		if resumes != nil && resumes.Has(sess.Command) {
-			seen[sess.ID] = true
-			continue
-		}
-
-		_, existed := sessions.Get(sess.ID)
-		seen[sess.ID] = true
-		sessions.Upsert(*sess)
-		if subs != nil {
-			subs.Subscribe(sess.ID, sockPath)
-		}
-		if !existed && fileMon != nil {
-			fileMon.NotifyNewSession(sess.ID)
+		if err := Register(sessions, subs, fileMon, sockPath, resumes); err != nil {
+			os.Remove(sockPath) // unreachable — clean up stale socket
 		}
 	}
 
-	// Mark unseen live sessions as dead (socket gone)
-	// Dead sessions are kept in the store for UI visibility.
+	// Phase 2: detect dead sessions (socket file gone).
 	for _, s := range sessions.List() {
-		if !seen[s.ID] && s.Alive && s.SocketPath != "" {
-			if _, err := os.Stat(s.SocketPath); os.IsNotExist(err) {
-				s.Alive = false
-				s.Status = nil // clear stale live status (e.g. "working")
-				// Resolve resume command BEFORE cleaning up file monitor state.
-				if fileMon != nil {
-					if cmd := fileMon.ResolveResumeCommand(&s); cmd != nil {
-						s.Command = cmd
-					}
-				}
-				sessions.Upsert(s)
-				if subs != nil {
-					subs.Unsubscribe(s.ID)
-				}
-				if fileMon != nil {
-					fileMon.NotifySessionDied(s.ID)
-				}
+		if !s.Alive || s.SocketPath == "" {
+			continue
+		}
+		if _, err := os.Stat(s.SocketPath); err == nil {
+			continue // socket still exists
+		}
+		s.Alive = false
+		s.Status = nil
+		if fileMon != nil {
+			if cmd := fileMon.ResolveResumeCommand(&s); cmd != nil {
+				s.Command = cmd
 			}
+		}
+		sessions.Upsert(s)
+		if subs != nil {
+			subs.Unsubscribe(s.ID)
+		}
+		if fileMon != nil {
+			fileMon.NotifySessionDied(s.ID)
 		}
 	}
 }
