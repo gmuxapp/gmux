@@ -908,8 +908,7 @@ function TerminalView({
         <div ref={containerRef} class="terminal-container" />
         {termLoading && (
           <div class="terminal-loading">
-            <span class="terminal-loading-dot" />
-            Starting…
+            Waiting for output…
           </div>
         )}
       </div>
