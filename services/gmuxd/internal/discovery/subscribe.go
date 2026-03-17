@@ -215,7 +215,7 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		}
 		if !resumed {
 			if exit.ExitCode == 0 {
-				sess.Status = &store.Status{Label: "completed"}
+				sess.Status = nil // clean exit — no label needed
 			} else {
 				sess.Status = &store.Status{Label: fmt.Sprintf("exited (%d)", exit.ExitCode)}
 			}

@@ -132,11 +132,11 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor) {
 		if !seen[s.ID] && s.Alive && s.SocketPath != "" {
 			if _, err := os.Stat(s.SocketPath); os.IsNotExist(err) {
 				s.Alive = false
+				s.Status = nil // clear stale live status (e.g. "working")
 				// Resolve resume command BEFORE cleaning up file monitor state.
 				if fileMon != nil {
 					if cmd := fileMon.ResolveResumeCommand(&s); cmd != nil {
 						s.Command = cmd
-						s.Status = nil
 					}
 				}
 				sessions.Upsert(s)

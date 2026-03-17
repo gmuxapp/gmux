@@ -222,7 +222,7 @@ func (p *Pi) ParseNewLines(lines []string) []adapter.FileEvent {
 			case "user":
 				// User submitted a message — assistant will start working.
 				events = append(events, adapter.FileEvent{
-					Status: &adapter.Status{Label: "working", Working: true},
+					Status: &adapter.Status{Working: true},
 				})
 				// Use first user message text as title hint.
 				if text := extractFirstUserText(line); text != "" {

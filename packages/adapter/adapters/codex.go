@@ -237,7 +237,7 @@ func (c *Codex) ParseNewLines(lines []string) []adapter.FileEvent {
 			case "user_message":
 				// User submitted a prompt — assistant will start working.
 				events = append(events, adapter.FileEvent{
-					Status: &adapter.Status{Label: "working", Working: true},
+					Status: &adapter.Status{Working: true},
 				})
 				// Apply pending user text as title.
 				if pendingUserText != "" {

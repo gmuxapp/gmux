@@ -66,34 +66,21 @@ Stale detection allows the UI to show a visual indicator on sessions running an 
 
 ### Status Object (set by child process)
 
-The child process can report its own status via a well-known mechanism (env variable pointing to gmux's socket, or escape sequences). This is advisory — gmux renders it but doesn't interpret it.
+Status is **null by default** and should only be set when it carries meaningful information. The absence of status is the normal state — a session exists, it's alive or dead, and the dot color already communicates that.
 
 ```typescript
 interface Status {
-  label: string       // Short text: "thinking", "waiting", "error", "building"
-  state: StatusState  // Semantic bucket for styling
-  icon?: string       // Optional icon hint (emoji or icon name)
+  label: string    // Short text, shown next to the dot. Only set when informative.
+  working: boolean // Pulsing dot animation. Don't also set a label — the dot is enough.
 }
-
-type StatusState =
-  | "active"    // Working, processing (pulsing/animated indicator)
-  | "attention" // Needs user input, approval needed (alert indicator)
-  | "success"   // Completed successfully (green check)
-  | "error"     // Something went wrong (red indicator)
-  | "paused"    // Idle but resumable (dim/grey indicator)
-  | "info"      // Informational, no urgency (subtle indicator)
 ```
 
-#### Why these six states?
+#### Design principle: no status is the default
 
-Research across all apps shows the same fundamental question: **what color/animation should the dot be?**
-
-- **active** = Codex `in-progress`, T3 `running`, Claude Code's "agent working" spinner
-- **attention** = Codex approval prompts, pi `waiting_for_user`, cmux notification rings
-- **success** = Codex `completed`, T3 turn `completed`
-- **error** = Codex `failed`/`error`, T3 turn `failed`
-- **paused** = Claude Code `archived`, T3 `ready`, idle sessions
-- **info** = cmux `info` log level, general status display
+- **`null`** — normal. Alive sessions show a steady dot, dead sessions are dimmed.
+- **`working: true`** — pulsing dot, no label needed. The animation says "something is happening."
+- **`label` without `working`** — informational text like `"exited (1)"` or `"tests: 3 failed"`. Use sparingly — only when the label tells the user something they can't already see.
+- **Don't set `"completed"`, `"idle"`, or `"working"` as labels.** These repeat what the dot and alive/dead state already show.
 
 The `label` is the human-readable text. The `state` determines the visual treatment. This decouples "what the app says" from "how gmux renders it."
 

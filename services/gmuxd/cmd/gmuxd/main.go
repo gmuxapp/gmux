@@ -449,7 +449,7 @@ func main() {
 			// Register() will merge in the live session data (socket, pid)
 			// when gmux calls POST /v1/register.
 			sess.Alive = true
-			sess.Status = &store.Status{Label: "starting", Working: true}
+			sess.Status = &store.Status{Working: true}
 			sessions.Upsert(sess)
 
 			log.Printf("resume: started gmux pid=%d for %s cwd=%s", pid, sessionID, sess.Cwd)
