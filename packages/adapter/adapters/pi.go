@@ -13,10 +13,11 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ adapter.Launchable   = (*Pi)(nil)
-	_ adapter.SessionFiler = (*Pi)(nil)
-	_ adapter.FileMonitor  = (*Pi)(nil)
-	_ adapter.Resumer      = (*Pi)(nil)
+	_ adapter.Launchable      = (*Pi)(nil)
+	_ adapter.SessionFiler    = (*Pi)(nil)
+	_ adapter.FileMonitor     = (*Pi)(nil)
+	_ adapter.FileAttributor  = (*Pi)(nil)
+	_ adapter.Resumer         = (*Pi)(nil)
 )
 
 func init() {
@@ -275,6 +276,18 @@ func ListSessionFiles(dir string) []string {
 		}
 	}
 	return files
+}
+
+// --- FileAttributor ---
+
+// AttributeFile matches a file to a session using content similarity between
+// the file's conversation text and each candidate's terminal scrollback.
+func (p *Pi) AttributeFile(filePath string, candidates []adapter.FileCandidate) string {
+	fileText, err := ExtractPiText(filePath)
+	if err != nil {
+		return ""
+	}
+	return attributeByScrollback(fileText, candidates)
 }
 
 // ExtractPiText reads a pi JSONL session file and extracts conversation

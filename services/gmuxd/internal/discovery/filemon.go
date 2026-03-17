@@ -46,6 +46,7 @@ type FileMonitor struct {
 	rootDirs     map[string]bool              // session root dirs being watched
 	sessions     map[string]*monitoredSession // sessionID → info
 	attributions map[string]string            // filePath → sessionID (sticky)
+	activeFiles  map[string]string            // sessionID → filePath (tracks current file for ResumeKey)
 	fileOffsets  map[string]int64             // filePath → read offset
 	// pendingDirs maps a session directory path to session IDs that need it.
 	// Used when a session dir doesn't exist yet — we watch the root and
@@ -77,6 +78,7 @@ func NewFileMonitor(s *store.Store) *FileMonitor {
 		rootDirs:     make(map[string]bool),
 		sessions:     make(map[string]*monitoredSession),
 		attributions: make(map[string]string),
+		activeFiles:  make(map[string]string),
 		fileOffsets:  make(map[string]int64),
 		pendingDirs:  make(map[string][]string),
 	}
@@ -114,7 +116,6 @@ func (fm *FileMonitor) Run(stop <-chan struct{}) {
 // handleFSEvent dispatches a single fsnotify event.
 func (fm *FileMonitor) handleFSEvent(event fsnotify.Event) {
 	name := event.Name
-	log.Printf("filemon: event %s %s", event.Op, name)
 
 	if event.Has(fsnotify.Create) {
 		// A new entry was created. Could be:
@@ -305,6 +306,7 @@ func (fm *FileMonitor) NotifySessionDied(sessionID string) {
 
 	ms, exists := fm.sessions[sessionID]
 	delete(fm.sessions, sessionID)
+	delete(fm.activeFiles, sessionID)
 
 	// Remove attributions pointing to this session.
 	for path, sid := range fm.attributions {
@@ -361,23 +363,13 @@ func (fm *FileMonitor) handleFileChange(path string) {
 	if !attributed {
 		sessionID = fm.attributeFileLocked(dir, path)
 		if sessionID == "" {
-			log.Printf("filemon: no attribution for %s (no candidates in dir %s)", filepath.Base(path), dir)
 			return
 		}
-		log.Printf("filemon: attributed %s → %s", filepath.Base(path), sessionID)
-
-		// First attribution: set ResumeKey on the live session so it
-		// can transition to resumable seamlessly when it exits.
-		if ms, ok := fm.sessions[sessionID]; ok {
-			if info, err := ms.filer.ParseSessionFile(path); err == nil && info.ID != "" {
-				if sess, ok := fm.store.Get(sessionID); ok && sess.ResumeKey == "" {
-					sess.ResumeKey = info.ID
-					log.Printf("filemon: set resume_key=%s on %s", info.ID, sessionID)
-					fm.store.Upsert(sess)
-				}
-			}
-		}
 	}
+
+	// Track active file per session. When the active file changes
+	// (e.g. /new or /resume in the tool's TUI), update ResumeKey.
+	fm.updateActiveFileLocked(sessionID, path)
 
 	ms, ok := fm.sessions[sessionID]
 	if !ok {
@@ -419,7 +411,39 @@ func (fm *FileMonitor) handleFileChange(path string) {
 	fm.store.Upsert(sess)
 }
 
-// --- Attribution (ADR-0009) ---
+// --- Active file tracking ---
+
+// updateActiveFileLocked sets the active file for a session and updates
+// ResumeKey when the file changes. This handles /new and /resume commands
+// in the tool's TUI, which start writing to a different session file.
+func (fm *FileMonitor) updateActiveFileLocked(sessionID, filePath string) {
+	prev := fm.activeFiles[sessionID]
+	if prev == filePath {
+		return // same file, nothing to do
+	}
+	fm.activeFiles[sessionID] = filePath
+
+	ms, ok := fm.sessions[sessionID]
+	if !ok {
+		return
+	}
+	info, err := ms.filer.ParseSessionFile(filePath)
+	if err != nil || info.ID == "" {
+		return
+	}
+
+	sess, ok := fm.store.Get(sessionID)
+	if !ok {
+		return
+	}
+	if sess.ResumeKey == info.ID {
+		return // already correct
+	}
+	sess.ResumeKey = info.ID
+	fm.store.Upsert(sess)
+}
+
+// --- Attribution ---
 
 // attributeFileLocked determines which session a file belongs to.
 func (fm *FileMonitor) attributeFileLocked(dir, filePath string) string {
@@ -440,69 +464,30 @@ func (fm *FileMonitor) attributeFileLocked(dir, filePath string) string {
 		return candidates[0].id
 	}
 
-	// Multiple sessions — try metadata matching first (works for all adapters),
-	// then fall back to content similarity.
-
-	// Strategy 1: Parse the file's session header for cwd + timestamp and match
-	// against live sessions. Works for any adapter whose ParseSessionFile returns
-	// Cwd and Created (e.g. Codex, where all sessions share today's date dir).
-	if info, err := candidates[0].filer.ParseSessionFile(filePath); err == nil && info.Cwd != "" {
-		var metaBestID string
-		var metaBestDelta time.Duration = 1<<63 - 1
-		for _, ms := range candidates {
-			if ms.cwd != info.Cwd {
-				continue
+	// Multiple sessions — delegate to the adapter's FileAttributor if available.
+	attr, hasAttr := candidates[0].adapter.(adapter.FileAttributor)
+	if hasAttr {
+		fileCandidates := make([]adapter.FileCandidate, len(candidates))
+		for i, ms := range candidates {
+			fc := adapter.FileCandidate{
+				SessionID: ms.id,
+				Cwd:       ms.cwd,
 			}
-			sess, ok := fm.store.Get(ms.id)
-			if !ok {
-				continue
+			if sess, ok := fm.store.Get(ms.id); ok {
+				fc.StartedAt, _ = time.Parse(time.RFC3339, sess.StartedAt)
 			}
-			startedAt, err := time.Parse(time.RFC3339, sess.StartedAt)
-			if err != nil {
-				continue
-			}
-			delta := info.Created.Sub(startedAt).Abs()
-			if delta < metaBestDelta {
-				metaBestDelta = delta
-				metaBestID = ms.id
-			}
+			fc.Scrollback = fetchScrollbackText(ms.socketPath)
+			fileCandidates[i] = fc
 		}
-		if metaBestID != "" && metaBestDelta < 5*time.Minute {
-			fm.attributions[filePath] = metaBestID
-			return metaBestID
+		if id := attr.AttributeFile(filePath, fileCandidates); id != "" {
+			fm.attributions[filePath] = id
+			return id
 		}
 	}
 
-	// Strategy 2: Content similarity matching (scrollback vs file tail).
-	fileText, err := adapters.ExtractPiText(filePath)
-	if err != nil || fileText == "" {
-		// Can't extract — fall back to first candidate but still store it.
-		fm.attributions[filePath] = candidates[0].id
-		return candidates[0].id
-	}
-	fileTail := tail(fileText, 500)
-
-	bestID := ""
-	bestScore := 0.0
-
-	for _, ms := range candidates {
-		scrollback := fetchScrollbackText(ms.socketPath)
-		if scrollback == "" {
-			continue
-		}
-		score := similarityScore(fileTail, tail(scrollback, 2000))
-		if score > bestScore {
-			bestScore = score
-			bestID = ms.id
-		}
-	}
-
-	if bestScore < 0.3 || bestID == "" {
-		bestID = candidates[0].id
-	}
-
-	fm.attributions[filePath] = bestID
-	return bestID
+	// Fallback: first candidate.
+	fm.attributions[filePath] = candidates[0].id
+	return candidates[0].id
 }
 
 // New sessions are not eagerly attributed to an existing file.
@@ -588,50 +573,6 @@ func (fm *FileMonitor) readNewLines(path string, readAll bool) []string {
 		}
 	}
 	return result
-}
-
-// --- Similarity matching (ADR-0009) ---
-
-func similarityScore(fileTail, scrollbackTail string) float64 {
-	if len(fileTail) == 0 || len(scrollbackTail) == 0 {
-		return 0
-	}
-	lcs := longestCommonSubstring(fileTail, scrollbackTail)
-	return float64(lcs) / float64(len(fileTail))
-}
-
-func longestCommonSubstring(a, b string) int {
-	if len(a) > len(b) {
-		a, b = b, a
-	}
-	prev := make([]int, len(a)+1)
-	curr := make([]int, len(a)+1)
-	best := 0
-
-	for j := 1; j <= len(b); j++ {
-		for i := 1; i <= len(a); i++ {
-			if a[i-1] == b[j-1] {
-				curr[i] = prev[i-1] + 1
-				if curr[i] > best {
-					best = curr[i]
-				}
-			} else {
-				curr[i] = 0
-			}
-		}
-		prev, curr = curr, prev
-		for i := range curr {
-			curr[i] = 0
-		}
-	}
-	return best
-}
-
-func tail(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[len(s)-n:]
 }
 
 // --- Network helpers ---

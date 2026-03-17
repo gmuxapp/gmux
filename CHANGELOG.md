@@ -2,6 +2,10 @@
 
 Full commit-level changelogs are on each [GitHub release](https://github.com/gmuxapp/gmux/releases). This file tracks user-facing highlights only.
 
+## v0.2.3
+
+- Fixed Homebrew tap (was empty after cleanup)
+
 ## v0.2.2
 
 - Switched Homebrew distribution from cask to formula (install command unchanged)

@@ -17,6 +17,7 @@ var (
 	_ adapter.SessionFiler       = (*Codex)(nil)
 	_ adapter.SessionFileLister  = (*Codex)(nil)
 	_ adapter.FileMonitor        = (*Codex)(nil)
+	_ adapter.FileAttributor     = (*Codex)(nil)
 	_ adapter.Resumer            = (*Codex)(nil)
 )
 
@@ -261,6 +262,19 @@ func (c *Codex) ParseNewLines(lines []string) []adapter.FileEvent {
 		}
 	}
 	return events
+}
+
+// --- FileAttributor ---
+
+// AttributeFile matches a file to a session using the file's session_meta
+// header (cwd + timestamp proximity). Codex uses date-nested directories
+// shared by all sessions, so metadata matching is essential.
+func (c *Codex) AttributeFile(filePath string, candidates []adapter.FileCandidate) string {
+	info, err := c.ParseSessionFile(filePath)
+	if err != nil {
+		return ""
+	}
+	return attributeByMetadata(info, candidates)
 }
 
 // --- Resumer ---

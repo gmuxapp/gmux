@@ -60,7 +60,7 @@ changelog:
       - "^test:"
       - "^chore:"
 
-brews:
+homebrew_casks:
   - name: gmux
     repository:
       owner: gmuxapp
@@ -69,11 +69,9 @@ brews:
     homepage: "https://gmux.app"
     description: "See every running process in your browser"
     license: "MIT"
-    install: |
-      bin.install "gmux"
-      bin.install "gmuxd"
-    test: |
-      assert_match version.to_s, shell_output("#{bin}/gmux --version")
+    binaries:
+      - gmux
+      - gmuxd
     caveats: |
       Launch a session:
         gmux claude           # coding agent

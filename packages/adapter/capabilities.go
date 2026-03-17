@@ -63,6 +63,28 @@ type SessionFileLister interface {
 	ListSessionFiles() []string
 }
 
+// FileCandidate describes a live session that could own a file.
+// Passed to FileAttributor.AttributeFile for matching.
+type FileCandidate struct {
+	SessionID  string
+	Cwd        string
+	StartedAt  time.Time
+	Scrollback string // recent terminal text; empty if unavailable
+}
+
+// FileAttributor is optionally implemented by adapters that need custom
+// file-to-session matching when multiple live sessions share a watch
+// directory. Without it, the daemon falls back to the first candidate.
+//
+// The daemon handles the trivial single-candidate case automatically —
+// AttributeFile is only called with len(candidates) >= 2.
+type FileAttributor interface {
+	// AttributeFile returns the session ID of the candidate that owns
+	// the file, or "" if no candidate matches. The daemon provides
+	// scrollback text when available.
+	AttributeFile(filePath string, candidates []FileCandidate) string
+}
+
 // Resumer is implemented by adapters whose sessions can be resumed
 // after the process exits.
 type Resumer interface {

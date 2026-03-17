@@ -14,10 +14,11 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ adapter.Launchable   = (*Claude)(nil)
-	_ adapter.SessionFiler = (*Claude)(nil)
-	_ adapter.FileMonitor  = (*Claude)(nil)
-	_ adapter.Resumer      = (*Claude)(nil)
+	_ adapter.Launchable      = (*Claude)(nil)
+	_ adapter.SessionFiler    = (*Claude)(nil)
+	_ adapter.FileMonitor     = (*Claude)(nil)
+	_ adapter.FileAttributor  = (*Claude)(nil)
+	_ adapter.Resumer         = (*Claude)(nil)
 )
 
 func init() {
@@ -296,6 +297,19 @@ func (c *Claude) ParseNewLines(lines []string) []adapter.FileEvent {
 		}
 	}
 	return events
+}
+
+// --- FileAttributor ---
+
+// AttributeFile matches a file to a session using metadata (cwd + timestamp
+// proximity). Claude uses per-cwd directories, so this is usually trivial —
+// but multiple concurrent sessions in the same project can share a dir.
+func (c *Claude) AttributeFile(filePath string, candidates []adapter.FileCandidate) string {
+	info, err := c.ParseSessionFile(filePath)
+	if err != nil {
+		return ""
+	}
+	return attributeByMetadata(info, candidates)
 }
 
 // --- Resumer ---

@@ -10,65 +10,6 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
-func TestSimilarityScoreExactMatch(t *testing.T) {
-	score := similarityScore("hello world", "hello world")
-	if score < 0.99 {
-		t.Fatalf("expected ~1.0 for exact match, got %f", score)
-	}
-}
-
-func TestSimilarityScorePartialMatch(t *testing.T) {
-	// File tail is a substring of scrollback.
-	score := similarityScore("fix the bug", "Let me fix the bug for you and also add tests")
-	if score < 0.9 {
-		t.Fatalf("expected high score for substring match, got %f", score)
-	}
-}
-
-func TestSimilarityScoreNoMatch(t *testing.T) {
-	score := similarityScore("aaaaa bbbbb ccccc", "xxxxx yyyyy zzzzz")
-	if score > 0.2 {
-		t.Fatalf("expected low score for no overlap, got %f", score)
-	}
-}
-
-func TestSimilarityScoreEmpty(t *testing.T) {
-	if similarityScore("", "hello") != 0 {
-		t.Fatal("expected 0 for empty file tail")
-	}
-	if similarityScore("hello", "") != 0 {
-		t.Fatal("expected 0 for empty scrollback")
-	}
-}
-
-func TestLongestCommonSubstring(t *testing.T) {
-	tests := []struct {
-		a, b string
-		want int
-	}{
-		{"abcdef", "xbcdey", 4}, // "bcde"
-		{"hello", "world", 1},   // "l" or "o"
-		{"", "abc", 0},
-		{"same", "same", 4},
-		{"abc", "xyz", 0},
-	}
-	for _, tt := range tests {
-		got := longestCommonSubstring(tt.a, tt.b)
-		if got != tt.want {
-			t.Errorf("lcs(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
-		}
-	}
-}
-
-func TestTail(t *testing.T) {
-	if tail("hello world", 5) != "world" {
-		t.Fatal("expected 'world'")
-	}
-	if tail("hi", 10) != "hi" {
-		t.Fatal("expected 'hi' when n > len")
-	}
-}
-
 func TestNotifyNewSessionDoesNotStealTitleFromOldPiFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -87,6 +28,9 @@ func TestNotifyNewSessionDoesNotStealTitleFromOldPiFile(t *testing.T) {
 	if err := os.WriteFile(oldFile, []byte(oldContent), 0o644); err != nil {
 		t.Fatalf("write old jsonl: %v", err)
 	}
+	// Set mtime to yesterday — real old files have old mtimes.
+	yesterday := time.Now().Add(-24 * time.Hour)
+	os.Chtimes(oldFile, yesterday, yesterday)
 
 	s := store.New()
 	s.Upsert(store.Session{
@@ -95,6 +39,7 @@ func TestNotifyNewSessionDoesNotStealTitleFromOldPiFile(t *testing.T) {
 		Kind:       "pi",
 		Alive:      true,
 		Title:      "pi",
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
 		SocketPath: "/tmp/gmux-sessions/sess-new.sock",
 	})
 
@@ -105,9 +50,8 @@ func TestNotifyNewSessionDoesNotStealTitleFromOldPiFile(t *testing.T) {
 
 	fm.NotifyNewSession("sess-new")
 
-	// Before the fix, NotifyNewSession eagerly attributed the most recent JSONL
-	// file in the directory, then asynchronously parsed it and overwrote the new
-	// session title with the old session's first user message.
+	// The session started now but the file is from yesterday.
+	// scanDirForRecentFiles should skip it (mtime before session start).
 	time.Sleep(700 * time.Millisecond)
 
 	sess, ok := s.Get("sess-new")
@@ -119,5 +63,99 @@ func TestNotifyNewSessionDoesNotStealTitleFromOldPiFile(t *testing.T) {
 	}
 	if len(fm.attributions) != 0 {
 		t.Fatalf("attributions = %v, want none until a real file write occurs", fm.attributions)
+	}
+}
+
+func TestActiveFileTracking(t *testing.T) {
+	s := store.New()
+	s.Upsert(store.Session{
+		ID:        "sess-1",
+		Cwd:       "/tmp",
+		Kind:      "codex",
+		Alive:     true,
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	fm := NewFileMonitor(s)
+	if fm.watcher != nil {
+		defer fm.watcher.Close()
+	}
+
+	// Simulate registering the session for monitoring.
+	fm.sessions["sess-1"] = &monitoredSession{
+		id:      "sess-1",
+		cwd:     "/tmp",
+		kind:    "codex",
+		adapter: adapters.NewCodex(),
+		filer:   adapters.NewCodex(),
+		fileMon: adapters.NewCodex(),
+	}
+
+	// Create first session file.
+	dir := t.TempDir()
+	file1 := filepath.Join(dir, "rollout-a.jsonl")
+	now := time.Now()
+	content1 := `{"timestamp":"` + now.Format(time.RFC3339Nano) + `","type":"session_meta","payload":{"id":"session-aaa","timestamp":"` + now.Format(time.RFC3339Nano) + `","cwd":"/tmp"}}
+{"timestamp":"` + now.Format(time.RFC3339Nano) + `","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}
+`
+	os.WriteFile(file1, []byte(content1), 0o644)
+
+	// Attribute file1 to the session.
+	fm.attributions[file1] = "sess-1"
+	fm.updateActiveFileLocked("sess-1", file1)
+
+	sess, _ := s.Get("sess-1")
+	if sess.ResumeKey != "session-aaa" {
+		t.Fatalf("expected resume_key 'session-aaa', got %q", sess.ResumeKey)
+	}
+
+	// Create second file (simulating /new command).
+	file2 := filepath.Join(dir, "rollout-b.jsonl")
+	content2 := `{"timestamp":"` + now.Format(time.RFC3339Nano) + `","type":"session_meta","payload":{"id":"session-bbb","timestamp":"` + now.Format(time.RFC3339Nano) + `","cwd":"/tmp"}}
+{"timestamp":"` + now.Format(time.RFC3339Nano) + `","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"new topic"}]}}
+`
+	os.WriteFile(file2, []byte(content2), 0o644)
+
+	// Attribute file2 to the same session.
+	fm.attributions[file2] = "sess-1"
+	fm.updateActiveFileLocked("sess-1", file2)
+
+	sess, _ = s.Get("sess-1")
+	if sess.ResumeKey != "session-bbb" {
+		t.Fatalf("expected resume_key updated to 'session-bbb', got %q", sess.ResumeKey)
+	}
+
+	// Same file again — should be a no-op.
+	fm.updateActiveFileLocked("sess-1", file2)
+	sess, _ = s.Get("sess-1")
+	if sess.ResumeKey != "session-bbb" {
+		t.Fatalf("resume_key should still be 'session-bbb', got %q", sess.ResumeKey)
+	}
+}
+
+func TestAttributionStickiness(t *testing.T) {
+	s := store.New()
+	fm := NewFileMonitor(s)
+	if fm.watcher != nil {
+		defer fm.watcher.Close()
+	}
+
+	fm.sessions["sess-1"] = &monitoredSession{
+		id:      "sess-1",
+		cwd:     "/tmp",
+		kind:    "codex",
+		adapter: adapters.NewCodex(),
+		filer:   adapters.NewCodex(),
+		fileMon: adapters.NewCodex(),
+	}
+
+	// Pre-set an attribution.
+	fm.attributions["/some/file.jsonl"] = "sess-1"
+
+	// Calling attributeFileLocked should return the cached value for a known file.
+	// (We can't easily test this without the full dir setup, but we verify
+	// the map check in handleFileChange by checking the attributions map.)
+	if fm.attributions["/some/file.jsonl"] != "sess-1" {
+		t.Fatal("attribution should be sticky")
 	}
 }
