@@ -63,12 +63,14 @@ type Store struct {
 	sessions        map[string]Session
 	subscribers     map[*subscriber]struct{}
 	resumableKinds  map[string]bool
+	dismissed       map[string]bool // dismissed ResumeKeys — prevents scanner re-adding
 }
 
 func New() *Store {
 	return &Store{
 		sessions:    make(map[string]Session),
 		subscribers: make(map[*subscriber]struct{}),
+		dismissed:   make(map[string]bool),
 	}
 }
 
@@ -76,6 +78,13 @@ func New() *Store {
 // Derived from the compiled adapter set at startup.
 func (s *Store) SetResumableKinds(kinds map[string]bool) {
 	s.resumableKinds = kinds
+}
+
+// IsDismissed returns true if a resume key was previously dismissed by the user.
+func (s *Store) IsDismissed(resumeKey string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.dismissed[resumeKey]
 }
 
 func (s *Store) List() []Session {
@@ -189,8 +198,11 @@ func (s *Store) SetTerminalSize(id string, cols, rows uint16) bool {
 
 func (s *Store) Remove(id string) bool {
 	s.mu.Lock()
-	_, ok := s.sessions[id]
+	sess, ok := s.sessions[id]
 	if ok {
+		if sess.ResumeKey != "" {
+			s.dismissed[sess.ResumeKey] = true
+		}
 		delete(s.sessions, id)
 	}
 	s.mu.Unlock()

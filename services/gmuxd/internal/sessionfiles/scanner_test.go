@@ -95,6 +95,34 @@ func TestScanSkipsDuplicates(t *testing.T) {
 	}
 }
 
+func TestScanSkipsDismissed(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	sessID := "aaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	writePiSession(t, tmpHome, "/tmp/project", sessID, "hello")
+
+	s := newTestStore()
+	sc := New(s)
+	sc.Scan()
+
+	if len(s.List()) != 1 {
+		t.Fatal("expected 1 session from initial scan")
+	}
+
+	// Dismiss the session — simulates user clicking ×.
+	s.Remove(s.List()[0].ID)
+	if len(s.List()) != 0 {
+		t.Fatal("expected 0 sessions after dismiss")
+	}
+
+	// Rescan — dismissed session should NOT come back.
+	sc.Scan()
+	if len(s.List()) != 0 {
+		t.Errorf("expected 0 sessions after rescan, got %d", len(s.List()))
+	}
+}
+
 func TestScanUsesFileHeaderCwd(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)

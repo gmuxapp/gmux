@@ -90,7 +90,7 @@ func (sc *Scanner) Scan() {
 				continue
 			}
 
-			if existing[info.ID] {
+			if existing[info.ID] || sc.store.IsDismissed(info.ID) {
 				continue
 			}
 
