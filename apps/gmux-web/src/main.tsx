@@ -329,8 +329,7 @@ function SessionItem({
 }) {
   const dotState = sessionDotState(session)
   const closeAction = session.close_action
-  // Only show kind if it's not the default
-  const showKind = session.kind !== 'shell' && session.kind !== 'pi'
+  const showKind = false
 
   return (
     <div
@@ -1036,12 +1035,7 @@ function MainHeader({ session, onKill }: { session: Session | null; onKill?: (id
         </div>
         <div class="main-header-meta">
           <span class="main-header-cwd">{shortCwd}</span>
-          {session.kind !== 'shell' && (
-            <>
-              <span class="main-header-sep">·</span>
-              <span class="main-header-kind">{session.kind}</span>
-            </>
-          )}
+
         </div>
       </div>
       <div class="main-header-right">
