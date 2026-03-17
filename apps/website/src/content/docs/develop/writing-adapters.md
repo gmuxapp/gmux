@@ -197,6 +197,7 @@ An adapter implements only what it needs:
 | Adapter | Base (`Discover`/`Match`/`Env`/`Monitor`) | Launchable | SessionFiler | FileMonitor | Resumer |
 |---------|------|------------|-------------|-------------|---------|
 | Shell | ✓ | ✓ | — | — | — |
+| Claude | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Pi | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## Testing

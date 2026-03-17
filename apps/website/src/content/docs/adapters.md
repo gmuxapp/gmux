@@ -19,9 +19,10 @@ Without an adapter, gmux still tracks whether the process is alive — but with 
 You don't configure adapters. gmux recognizes tools by their command name:
 
 ```bash
+gmux claude        # → claude adapter
 gmux pi            # → pi adapter
 gmux bash          # → shell adapter (fallback)
-gmux make build # → shell adapter (fallback)
+gmux make build    # → shell adapter (fallback)
 ```
 
 If no specific adapter matches, the **shell** adapter handles it.
@@ -31,6 +32,14 @@ If no specific adapter matches, the **shell** adapter handles it.
 ### Shell (default)
 
 Always active. Tracks terminal title changes so your shell's `PS1` or tool-set window titles appear in the sidebar.
+
+### Claude Code
+
+Active when `claude` is installed. Provides:
+
+- Live status detection (working while assistant responds, idle when done)
+- Session titles from conversation files or Claude's auto-generated titles
+- Resumable sessions — exited sessions stay in the sidebar, click to resume via `claude --resume`
 
 ### Pi
 
