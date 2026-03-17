@@ -35,6 +35,9 @@ importers:
       '@xterm/addon-image':
         specifier: github:mgabor3141/xterm.js#fix/image-addon-hidpi&path:addons/addon-image
         version: https://codeload.github.com/mgabor3141/xterm.js/tar.gz/da8c3baed8c5f7c93dc9b8db9508d1b83f0536dc#path:addons/addon-image
+      '@xterm/addon-webgl':
+        specifier: 0.20.0-beta.194
+        version: 0.20.0-beta.194(@xterm/xterm@6.1.0-beta.195)
       '@xterm/xterm':
         specifier: 6.1.0-beta.195
         version: 6.1.0-beta.195
@@ -1176,6 +1179,11 @@ packages:
   '@xterm/addon-image@https://codeload.github.com/mgabor3141/xterm.js/tar.gz/da8c3baed8c5f7c93dc9b8db9508d1b83f0536dc#path:addons/addon-image':
     resolution: {path: addons/addon-image, tarball: https://codeload.github.com/mgabor3141/xterm.js/tar.gz/da8c3baed8c5f7c93dc9b8db9508d1b83f0536dc}
     version: 0.9.0
+
+  '@xterm/addon-webgl@0.20.0-beta.194':
+    resolution: {integrity: sha512-aX4yGkHyoJVmxh3ZVMha7CYdTFu7tuzTJ0ljyXKAVFrdO+Wve4luK8w3wLmxuvqa9LWA9muMx/bGeEWtwD/Nlg==}
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.195
 
   '@xterm/xterm@6.1.0-beta.195':
     resolution: {integrity: sha512-lLVfI3T4pX4W4qrbf2Qhdq5Pa00FkOOUz9vlOm6f1r5wel1mUafeJL8zacfsUVdc03MsCKHRyZkLubmDEnabcw==}
@@ -3508,6 +3516,10 @@ snapshots:
       '@xterm/xterm': 6.1.0-beta.195
 
   '@xterm/addon-image@https://codeload.github.com/mgabor3141/xterm.js/tar.gz/da8c3baed8c5f7c93dc9b8db9508d1b83f0536dc#path:addons/addon-image': {}
+
+  '@xterm/addon-webgl@0.20.0-beta.194(@xterm/xterm@6.1.0-beta.195)':
+    dependencies:
+      '@xterm/xterm': 6.1.0-beta.195
 
   '@xterm/xterm@6.1.0-beta.195': {}
 
