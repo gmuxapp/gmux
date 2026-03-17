@@ -205,15 +205,19 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		sess.Alive = false
 		sess.ExitCode = &exit.ExitCode
 		sess.ExitedAt = time.Now().UTC().Format(time.RFC3339)
-		// Set exit label — exit_code conveys success/error
-		if exit.ExitCode == 0 {
-			sess.Status = &store.Status{Label: "completed"}
-		} else {
-			sess.Status = &store.Status{Label: fmt.Sprintf("exited (%d)", exit.ExitCode)}
-		}
 		// Let the OnExit hook set the resume command before upsert.
+		// If the session becomes resumable, clear status entirely.
+		// Otherwise show the exit status.
 		if sub.OnExit != nil {
 			sub.OnExit(&sess)
+		}
+		if sess.Status == nil {
+			// OnExit didn't clear it — show exit label.
+			if exit.ExitCode == 0 {
+				sess.Status = &store.Status{Label: "completed"}
+			} else {
+				sess.Status = &store.Status{Label: fmt.Sprintf("exited (%d)", exit.ExitCode)}
+			}
 		}
 		sub.store.Upsert(sess)
 

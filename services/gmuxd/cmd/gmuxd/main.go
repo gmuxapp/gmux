@@ -161,6 +161,7 @@ func main() {
 	sessions := store.New()
 	subs := discovery.NewSubscriptions(sessions)
 	pendingResumes := discovery.NewPendingResumes()
+	var resumeMu sync.Mutex
 
 	// Start file monitor — watches adapter session directories with inotify
 	// to extract title and working status from JSONL files.
@@ -404,6 +405,10 @@ func main() {
 				writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
 				return
 			}
+			// Serialize resume attempts to prevent double-click races.
+			resumeMu.Lock()
+			defer resumeMu.Unlock()
+
 			sess, ok := sessions.Get(sessionID)
 			if !ok {
 				writeError(w, http.StatusNotFound, "not_found", "session not found")
