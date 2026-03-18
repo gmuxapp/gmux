@@ -29,3 +29,4 @@ Open **[localhost:8790](http://localhost:8790)**. Sessions appear in the sidebar
 - [Remote Access](/remote-access) — access gmux from your phone or another machine
 - [Configuration](/configuration) — config file, environment variables, file paths
 - [Architecture](/architecture) — how the pieces fit together
+- [Troubleshooting](/troubleshooting) — dashboard not opening, sessions not appearing, version mismatches

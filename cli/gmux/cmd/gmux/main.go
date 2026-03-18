@@ -181,9 +181,7 @@ func main() {
 
 	// Auto-start gmuxd if not running (one-shot, never retried), then register.
 	gmuxdAddr := configuredGmuxdAddr()
-	if started := ensureGmuxd(gmuxdAddr); started && interactive {
-		fmt.Fprintf(os.Stderr, "  UI: %s\n", gmuxdAddr)
-	}
+	ensureGmuxd(gmuxdAddr)
 	go registerWithGmuxd(sessionID, sockPath)
 
 	if interactive {
@@ -306,7 +304,6 @@ func ensureGmuxd(gmuxdAddr string) bool {
 		}
 	}()
 
-	fmt.Fprintf(os.Stderr, "gmux: auto-started gmuxd at %s — gmuxd -h\n", gmuxdAddr)
 	return true
 }
 

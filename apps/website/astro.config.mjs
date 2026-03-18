@@ -25,6 +25,7 @@ export default defineConfig({
             { label: 'Using the UI', slug: 'using-the-ui' },
             { label: 'Remote Access', slug: 'remote-access' },
             { label: 'Configuration', slug: 'configuration' },
+            { label: 'Troubleshooting', slug: 'troubleshooting' },
           ],
         },
         {
