@@ -67,6 +67,7 @@ body {
 .app-layout {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   width: 100%;
 }
 
@@ -531,6 +532,7 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   background: var(--bg);
 }
 
@@ -644,6 +646,7 @@ body {
 
 .terminal-shell {
   flex: 1;
+  min-height: 0;
   position: relative;
   overflow: auto;
   background: #0f141a;
@@ -668,8 +671,10 @@ body {
 }
 
 .terminal-container {
+  width: 100%;
+  height: 100%;
   min-width: 100%;
-  min-height: 100%;
+  min-height: 0;
   position: relative;
   overflow: visible;
   background: #0f141a;
@@ -760,7 +765,8 @@ body {
 .terminal-container .xterm {
   width: max-content;
   min-width: 100%;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
   padding: 0 6px 6px 6px;
   margin: 0 auto; /* center the character grid horizontally */
 }
