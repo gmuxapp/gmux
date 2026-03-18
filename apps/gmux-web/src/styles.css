@@ -735,6 +735,31 @@ body {
   z-index: 10;
 }
 
+.terminal-scroll-end {
+  position: absolute;
+  bottom: 12px;
+  right: 16px;
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid oklch(from var(--border) l c h / 0.6);
+  background: oklch(from #1a2233 l c h / 0.72);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: inherit;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 20;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  pointer-events: auto;
+}
+
+.terminal-scroll-end:hover {
+  background: oklch(from #1a2233 l c h / 0.92);
+  color: var(--text);
+}
+
 .terminal-loading-dot {
   width: 6px;
   height: 6px;
@@ -999,7 +1024,7 @@ body {
     appearance: none;
     border: 1px solid var(--border-strong);
     background: var(--bg-surface);
-    color: var(--text-secondary);
+    color: oklch(76% 0.012 250);
     border-radius: 6px;
     min-height: 36px;
     min-width: 36px;
@@ -1007,7 +1032,7 @@ body {
     flex: 0 0 auto;
     font-family: 'Source Sans 3', sans-serif;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
     display: inline-flex;
     align-items: center;
     justify-content: center;

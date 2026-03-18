@@ -147,7 +147,7 @@ async function launchSession(launcherId: string, cwd?: string): Promise<void> {
 // Track pending launches globally so App can auto-select new sessions
 let _pendingLaunchAt = 0
 
-function LaunchButton({ cwd, className }: { cwd?: string; className?: string }) {
+function LaunchButton({ cwd, className, onLaunch }: { cwd?: string; className?: string; onLaunch?: () => void }) {
   const [state, setState] = useState<'idle' | 'loading' | 'open' | 'launching'>('idle')
   const [config, setConfig] = useState<LaunchConfig | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -177,6 +177,7 @@ function LaunchButton({ cwd, className }: { cwd?: string; className?: string }) 
   const handleLaunch = (id: string) => {
     setState('launching')
     _pendingLaunchAt = Date.now()
+    onLaunch?.()
     launchSession(id, cwd).finally(() => {
       // Reset after a short delay to show spinner
       setTimeout(() => setState('idle'), 600)
@@ -437,7 +438,7 @@ function Sidebar({
         <div class="sidebar-header">
           <div class="sidebar-logo">gmux</div>
           <div class="sidebar-badge">alpha</div>
-          <LaunchButton className="sidebar-launch-btn" />
+          <LaunchButton className="sidebar-launch-btn" onLaunch={onClose} />
         </div>
         <div class="sidebar-scroll">
           {folders.map(f => (
@@ -593,24 +594,47 @@ function MainHeader({ session, onKill }: { session: Session | null; onKill?: (id
   )
 }
 
+// ── Mobile nav icons ─────────────────────────────────────────────────────────
+// Shared stroke style: round caps/joins, 1.8px weight, currentColor.
+// Word-jump icons use a vertical boundary bar to signal "skip to word edge".
+
+const S = { fill: 'none', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-linecap': 'round' as const, 'stroke-linejoin': 'round' as const }
+
+// All plain arrows: 14×14 viewbox, 6-unit shaft, arrowhead ±3 from centre, centred at (7,7).
+const IconUp    = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M7 10V4m0 0-3 3m3-3 3 3"/></svg>
+const IconDown  = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M7 4v6m0 0-3-3m3 3 3-3"/></svg>
+const IconLeft  = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M10 7H4m0 0 3-3M4 7l3 3"/></svg>
+const IconRight = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M4 7h6m0 0-3-3m3 3-3 3"/></svg>
+
+// Word-jump: 18×14 viewbox. Bar height matches arrow span (y 3–11). 7-unit shaft, 2.5-unit gap to bar.
+// |← jump to start of previous word
+const IconWordLeft  = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="3.5" y1="3" x2="3.5" y2="11"/><path d="M13 7H6m0 0 3-3M6 7l3 3"/></svg>
+// →| jump to end of next word
+const IconWordRight = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="14.5" y1="3" x2="14.5" y2="11"/><path d="M5 7h7m0 0-3-3m3 3-3 3"/></svg>
+// ↵ return — stem drops from top-right, curves into a horizontal shaft pointing left
+const IconReturn = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M12 4V5.5Q12 7 10 7H4m0 0 3-3M4 7l3 3"/></svg>
+
 function MobileTerminalBar({
   canSend,
   ctrlArmed,
   onMenu,
   onSend,
   onToggleCtrl,
+  onFocusTerminal,
 }: {
   canSend: boolean
   ctrlArmed: boolean
   onMenu: () => void
   onSend: (data: string) => void
   onToggleCtrl: () => void
+  onFocusTerminal: () => void
 }) {
-  // Prevent mousedown/touchstart default on terminal key buttons so they
-  // don't steal focus from the terminal's hidden textarea (which would
-  // close the mobile keyboard). The menu button is excluded — opening
-  // the sidebar should be allowed to blur.
+  // Prevent blur from stealing focus away from the terminal on mousedown,
+  // while still allowing individual onClick handlers to refocus as needed.
   const keepFocus = (ev: Event) => ev.preventDefault()
+
+  // Send a sequence and re-focus the terminal (opens the keyboard on mobile).
+  const tap = (seq: string) => { onSend(seq); onFocusTerminal() }
 
   return (
     <div class="mobile-bottom-bar" aria-label="Mobile terminal controls">
@@ -619,20 +643,43 @@ function MobileTerminalBar({
       </button>
       <div class="mobile-bottom-sep" />
       <div class="mobile-terminal-actions" role="toolbar" aria-label="Terminal keys" onMouseDown={keepFocus}>
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => onSend('\x1b')} title="Escape">esc</button>
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => onSend('\t')} title="Tab">tab</button>
+
+        {/* Position 1: esc  ──or──  ↑ when ctrl armed */}
+        {ctrlArmed
+          ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b[A')} title="Up arrow"><IconUp /></button>
+          : <button class="mobile-bottom-action" disabled={!canSend} onClick={() => onSend('\x1b')} title="Escape">esc</button>
+        }
+
+        {/* Position 2: tab  ──or──  ↓ when ctrl armed */}
+        {ctrlArmed
+          ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b[B')} title="Down arrow"><IconDown /></button>
+          : <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\t')} title="Tab">tab</button>
+        }
+
+        {/* ctrl toggle — opens keyboard so the user can type the modified key */}
         <button
           class={`mobile-bottom-action ${ctrlArmed ? 'armed' : ''}`}
           disabled={!canSend}
-          onClick={onToggleCtrl}
+          onClick={() => { onToggleCtrl(); onFocusTerminal() }}
           title={ctrlArmed ? 'Ctrl armed for next typed key' : 'Arm Ctrl for next typed key'}
           aria-pressed={ctrlArmed}
         >
           ctrl
         </button>
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => onSend('\x1b[A')} title="Up arrow">↑</button>
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => onSend('\x1b[B')} title="Down arrow">↓</button>
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => onSend('\n')} title="Enter">↵</button>
+
+        {/* Position 4: ←  ──or──  word-left when ctrl armed */}
+        {ctrlArmed
+          ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b[1;5D')} title="Word left"><IconWordLeft /></button>
+          : <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b[D')} title="Left arrow"><IconLeft /></button>
+        }
+
+        {/* Position 5: →  ──or──  word-right when ctrl armed */}
+        {ctrlArmed
+          ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b[1;5C')} title="Word right"><IconWordRight /></button>
+          : <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b[C')} title="Right arrow"><IconRight /></button>
+        }
+
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\n')} title="Enter"><IconReturn /></button>
       </div>
     </div>
   )
@@ -668,6 +715,7 @@ function App() {
   const [health, setHealth] = useState<HealthData | null>(null)
   const [sidebarVersion, forceUpdate] = useState(0) // re-render on sidebar state change
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
+  const terminalFocusRef = useRef<(() => void) | null>(null)
 
   useEffect(() => { fetchConfig().then(cfg => setLaunchers(cfg.launchers)) }, [])
   useEffect(() => { fetchHealth().then(setHealth) }, [])
@@ -851,6 +899,14 @@ function App() {
     terminalInputRef.current = send
   }, [])
 
+  const handleTerminalFocusReady = useCallback((focus: (() => void) | null) => {
+    terminalFocusRef.current = focus
+  }, [])
+
+  const handleFocusTerminal = useCallback(() => {
+    terminalFocusRef.current?.()
+  }, [])
+
   const handleMobileInput = useCallback((data: string) => {
     terminalInputRef.current?.(data)
   }, [])
@@ -903,6 +959,7 @@ function App() {
             ctrlArmed={ctrlArmed}
             onCtrlConsumed={handleCtrlConsumed}
             onInputReady={handleTerminalInputReady}
+            onFocusReady={handleTerminalFocusReady}
           />
         ) : (
           <EmptyState launchers={launchers} health={health} />
@@ -914,6 +971,7 @@ function App() {
           onMenu={() => setSidebarOpen(true)}
           onSend={handleMobileInput}
           onToggleCtrl={handleToggleCtrl}
+          onFocusTerminal={handleFocusTerminal}
         />
       </div>
     </div>

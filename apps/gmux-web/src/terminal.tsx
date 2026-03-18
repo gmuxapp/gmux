@@ -195,11 +195,13 @@ export function TerminalView({
   ctrlArmed,
   onCtrlConsumed,
   onInputReady,
+  onFocusReady,
 }: {
   session: Session
   ctrlArmed: boolean
   onCtrlConsumed: () => void
   onInputReady?: (send: ((data: string) => void) | null) => void
+  onFocusReady?: (focus: (() => void) | null) => void
 }) {
   const shellRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -222,6 +224,8 @@ export function TerminalView({
 
   const [termLoading, setTermLoading] = useState(true)
   const [viewportSize, setViewportSize] = useState<TerminalSize | null>(null)
+  const [scrolledUp, setScrolledUp] = useState(false)
+  const SCROLL_THRESHOLD = 3 // rows above bottom before showing the button
   // Track the last PTY size we know about so we can derive the pill.
   const [ptySize, setPtySize] = useState<TerminalSize | null>(null)
 
@@ -316,9 +320,15 @@ export function TerminalView({
     }
 
     onInputReady?.(sendRawInput)
+    onFocusReady?.(() => focusTerminalInput(term))
 
     const dataDisposable = term.onData((data) => sendInput(data))
     attachKeyboardHandler(term, sendInput)
+
+    const scrollDisposable = term.onScroll(() => {
+      const buf = term.buffer.active
+      setScrolledUp(buf.baseY - buf.viewportY > SCROLL_THRESHOLD)
+    })
 
     const handleGlobalKeydown = (ev: KeyboardEvent) => {
       const tag = (ev.target as HTMLElement)?.tagName
@@ -479,10 +489,13 @@ export function TerminalView({
       shell?.removeEventListener('touchend', handleTouchEndCapture, true)
       shell?.removeEventListener('touchcancel', clearTouchPan, true)
       dataDisposable.dispose()
+      scrollDisposable.dispose()
+      setScrolledUp(false)
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       wsRef.current?.close()
       wsRef.current = null
       onInputReady?.(null)
+      onFocusReady?.(null)
       if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
       term.dispose()
       termRef.current = null
@@ -668,6 +681,16 @@ export function TerminalView({
         <div class="terminal-loading">
           Waiting for output…
         </div>
+      )}
+      {scrolledUp && (
+        <button
+          type="button"
+          class="terminal-scroll-end"
+          onClick={() => termRef.current?.scrollToBottom()}
+          title="Scroll to bottom"
+        >
+          End ↓
+        </button>
       )}
     </div>
   )
