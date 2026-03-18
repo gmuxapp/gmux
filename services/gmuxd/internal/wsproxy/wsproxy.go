@@ -2,9 +2,10 @@
 // session sockets. Browser connects to gmuxd /ws/{session_id}, gmuxd proxies
 // bidirectionally to the gmux-run Unix socket for that session.
 //
-// The proxy also manages terminal resize ownership: only one client at a time
-// is the "resize owner" whose resize messages are forwarded to the runner.
-// Other clients are passive and receive the owner's terminal size via SSE.
+// The proxy is a transparent pipe: resize messages from any client are
+// forwarded to the runner, and terminal_resize events from the runner are
+// forwarded to all clients. The browser decides locally whether to drive
+// resize or follow (pill). No ownership tracking lives here.
 package wsproxy
 
 import (
@@ -25,27 +26,13 @@ type SessionStore interface {
 	GetTerminalSize(sessionID string) (cols, rows uint16, ok bool)
 }
 
-// conn tracks a single client WebSocket connection to a session.
-type conn struct {
-	id        string // opaque connection ID
-	sessionID string
-	ws        *websocket.Conn
-}
-
-// sessionConns tracks all connections to a session and which one owns resize.
-type sessionConns struct {
-	conns   []*conn
-	ownerID string // connection ID of the current resize owner ("" = none)
-}
-
-// Proxy manages WebSocket proxying and resize ownership.
+// Proxy manages WebSocket proxying between browsers and runners.
 type Proxy struct {
 	resolve SocketResolver
 	sizer   SessionStore
 
 	mu       sync.Mutex
-	sessions map[string]*sessionConns // sessionID → connections
-	nextID   uint64
+	sessions map[string][]*websocket.Conn // sessionID → browser connections
 }
 
 // SocketResolver maps a session ID to a Unix socket path.
@@ -56,7 +43,7 @@ func New(resolve SocketResolver, sizer SessionStore) *Proxy {
 	return &Proxy{
 		resolve:  resolve,
 		sizer:    sizer,
-		sessions: make(map[string]*sessionConns),
+		sessions: make(map[string][]*websocket.Conn),
 	}
 }
 
@@ -102,12 +89,8 @@ func (p *Proxy) Handler() http.HandlerFunc {
 			return
 		}
 
-		// Register this connection.
-		c := p.addConn(sessionID, clientConn)
-		log.Printf("wsproxy: proxying %s conn=%s via %s", sessionID, c.id, sockPath)
-
-		// Tell this client whether it's the resize owner.
-		p.sendResizeState(ctx, c)
+		p.addConn(sessionID, clientConn)
+		log.Printf("wsproxy: proxying %s via %s", sessionID, sockPath)
 
 		// Read limits must exceed the scrollback buffer size (128KB)
 		clientConn.SetReadLimit(256 * 1024)
@@ -118,18 +101,18 @@ func (p *Proxy) Handler() http.HandlerFunc {
 		var wg sync.WaitGroup
 		wg.Add(2)
 
-		// Backend → Client (PTY output + resize acks).
+		// Backend → Client (PTY output + terminal_resize events).
 		go func() {
 			defer wg.Done()
 			defer proxyCancel()
-			p.proxyBackendToClient(proxyCtx, c, backendConn, clientConn)
+			p.proxyBackendToClient(proxyCtx, sessionID, backendConn, clientConn)
 		}()
 
-		// Client → Backend (keyboard input + resize): intercept control messages.
+		// Client → Backend (keyboard input + resize).
 		go func() {
 			defer wg.Done()
 			defer proxyCancel()
-			p.proxyClientToBackend(proxyCtx, c, clientConn, backendConn)
+			p.proxyClientToBackend(proxyCtx, clientConn, backendConn)
 		}()
 
 		wg.Wait()
@@ -137,201 +120,42 @@ func (p *Proxy) Handler() http.HandlerFunc {
 		clientConn.Close(websocket.StatusNormalClosure, "")
 		backendConn.Close(websocket.StatusNormalClosure, "")
 
-		// Unregister and maybe reassign resize owner.
-		p.removeConn(c)
-		log.Printf("wsproxy: session %s conn=%s disconnected", sessionID, c.id)
+		p.removeConn(sessionID, clientConn)
+		log.Printf("wsproxy: session %s disconnected", sessionID)
 	}
 }
 
-// proxyClientToBackend reads messages from the client and either forwards
-// them to the backend or handles them as control messages.
-func (p *Proxy) proxyClientToBackend(ctx context.Context, c *conn, client, backend *websocket.Conn) {
+// proxyClientToBackend forwards all client messages to the backend.
+// Resize messages are tagged with source=web_client before forwarding.
+func (p *Proxy) proxyClientToBackend(ctx context.Context, client, backend *websocket.Conn) {
 	for {
 		typ, data, err := client.Read(ctx)
 		if err != nil {
 			return
 		}
 
-		// Text messages might be JSON control messages (resize, claim_resize).
+		// Tag resize messages with source so the runner can include it in
+		// terminal_resize broadcasts.
 		if typ == websocket.MessageText {
-			if p.handleControlMessage(ctx, c, data, backend) {
-				continue // consumed — don't forward
+			var peek struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(data, &peek) == nil && peek.Type == "resize" {
+				if augmented, err := injectField(data, "source", "web_client"); err == nil {
+					data = augmented
+				}
 			}
 		}
 
-		// Forward everything else to the backend.
 		if err := backend.Write(ctx, typ, data); err != nil {
 			return
 		}
 	}
 }
 
-// controlMsg is the minimal shape we peek at from client JSON messages.
-type controlMsg struct {
-	Type string `json:"type"`
-	Seq  uint64 `json:"seq,omitempty"`
-	Cols uint16 `json:"cols"`
-	Rows uint16 `json:"rows"`
-}
-
-// handleControlMessage checks if a client message is a resize or claim_resize.
-// Returns true if the message was consumed (should not be forwarded).
-func (p *Proxy) handleControlMessage(ctx context.Context, c *conn, data []byte, backend *websocket.Conn) bool {
-	var msg controlMsg
-	if err := json.Unmarshal(data, &msg); err != nil {
-		return false // not JSON — forward as-is
-	}
-
-	switch msg.Type {
-	case "resize":
-		p.mu.Lock()
-		sc := p.sessions[c.sessionID]
-		isOwner := sc != nil && sc.ownerID == c.id
-		p.mu.Unlock()
-
-		if !isOwner {
-			return true // drop — only the owner can resize
-		}
-
-		// Forward to backend runner. The runner will broadcast resize_applied
-		// after the PTY resize has been processed; we update shared size state
-		// when that ack comes back.
-		if err := backend.Write(ctx, websocket.MessageText, data); err != nil {
-			return true
-		}
-		return true
-
-	case "claim_resize":
-		p.claimOwnership(ctx, c)
-		return true
-
-	default:
-		return false // unknown type — forward to backend
-	}
-}
-
-// addConn registers a new connection. First connection becomes resize owner.
-func (p *Proxy) addConn(sessionID string, ws *websocket.Conn) *conn {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	p.nextID++
-	c := &conn{
-		id:        fmt.Sprintf("c%d", p.nextID),
-		sessionID: sessionID,
-		ws:        ws,
-	}
-
-	sc, ok := p.sessions[sessionID]
-	if !ok {
-		sc = &sessionConns{}
-		p.sessions[sessionID] = sc
-	}
-	sc.conns = append(sc.conns, c)
-
-	// First connection becomes resize owner automatically.
-	if sc.ownerID == "" {
-		sc.ownerID = c.id
-	}
-
-	return c
-}
-
-// removeConn unregisters a connection. If the owner disconnects,
-// ownership passes to the next connected client.
-func (p *Proxy) removeConn(c *conn) {
-	p.mu.Lock()
-
-	sc, ok := p.sessions[c.sessionID]
-	if !ok {
-		p.mu.Unlock()
-		return
-	}
-
-	// Remove from list.
-	for i, existing := range sc.conns {
-		if existing.id == c.id {
-			sc.conns = append(sc.conns[:i], sc.conns[i+1:]...)
-			break
-		}
-	}
-
-	// If no connections left, clean up.
-	if len(sc.conns) == 0 {
-		delete(p.sessions, c.sessionID)
-		p.mu.Unlock()
-		return
-	}
-
-	// If this was the owner, promote the next connection.
-	var newOwner *conn
-	if sc.ownerID == c.id {
-		sc.ownerID = sc.conns[0].id
-		newOwner = sc.conns[0]
-	}
-	p.mu.Unlock()
-
-	// Notify the new owner outside the lock.
-	if newOwner != nil {
-		p.sendResizeState(context.Background(), newOwner)
-	}
-}
-
-// claimOwnership makes a connection the resize owner for its session.
-func (p *Proxy) claimOwnership(ctx context.Context, c *conn) {
-	p.mu.Lock()
-	sc, ok := p.sessions[c.sessionID]
-	if !ok {
-		p.mu.Unlock()
-		return
-	}
-
-	wasOwner := sc.ownerID
-	sc.ownerID = c.id
-
-	// Collect all connections to notify.
-	conns := make([]*conn, len(sc.conns))
-	copy(conns, sc.conns)
-	p.mu.Unlock()
-
-	// Notify everyone: the new owner and former owner both need updated state.
-	for _, cc := range conns {
-		if cc.id == c.id || cc.id == wasOwner {
-			p.sendResizeState(ctx, cc)
-		}
-	}
-}
-
-// sendResizeState sends a resize_state control message to a client telling
-// it whether it's the resize owner, and the current terminal dimensions.
-func (p *Proxy) sendResizeState(ctx context.Context, c *conn) {
-	p.mu.Lock()
-	sc := p.sessions[c.sessionID]
-	if sc == nil {
-		p.mu.Unlock()
-		return
-	}
-	isOwner := sc.ownerID == c.id
-	p.mu.Unlock()
-
-	payload := map[string]any{
-		"type":     "resize_state",
-		"is_owner": isOwner,
-	}
-	// Include current terminal size so passive clients can resize immediately.
-	if cols, rows, ok := p.sizer.GetTerminalSize(c.sessionID); ok && cols > 0 && rows > 0 {
-		payload["cols"] = cols
-		payload["rows"] = rows
-	}
-
-	msg, _ := json.Marshal(payload)
-	// Best-effort — if the write fails the connection is closing anyway.
-	_ = c.ws.Write(ctx, websocket.MessageText, msg)
-}
-
-// proxyBackendToClient forwards backend messages to the browser and updates
-// shared terminal-size state on resize_applied acknowledgements.
-func (p *Proxy) proxyBackendToClient(ctx context.Context, c *conn, src, dst *websocket.Conn) {
+// proxyBackendToClient forwards backend messages to the browser and intercepts
+// terminal_resize events to update the store's terminal dimensions.
+func (p *Proxy) proxyBackendToClient(ctx context.Context, sessionID string, src, dst *websocket.Conn) {
 	for {
 		typ, data, err := src.Read(ctx)
 		if err != nil {
@@ -339,10 +163,14 @@ func (p *Proxy) proxyBackendToClient(ctx context.Context, c *conn, src, dst *web
 		}
 
 		if typ == websocket.MessageText {
-			var msg controlMsg
-			if err := json.Unmarshal(data, &msg); err == nil && msg.Type == "resize_applied" {
+			var msg struct {
+				Type string `json:"type"`
+				Cols uint16 `json:"cols"`
+				Rows uint16 `json:"rows"`
+			}
+			if json.Unmarshal(data, &msg) == nil && msg.Type == "terminal_resize" {
 				if msg.Cols > 0 && msg.Rows > 0 {
-					p.sizer.SetTerminalSize(c.sessionID, msg.Cols, msg.Rows)
+					p.sizer.SetTerminalSize(sessionID, msg.Cols, msg.Rows)
 				}
 			}
 		}
@@ -351,4 +179,39 @@ func (p *Proxy) proxyBackendToClient(ctx context.Context, c *conn, src, dst *web
 			return
 		}
 	}
+}
+
+func (p *Proxy) addConn(sessionID string, ws *websocket.Conn) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sessions[sessionID] = append(p.sessions[sessionID], ws)
+}
+
+func (p *Proxy) removeConn(sessionID string, ws *websocket.Conn) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	conns := p.sessions[sessionID]
+	for i, c := range conns {
+		if c == ws {
+			p.sessions[sessionID] = append(conns[:i], conns[i+1:]...)
+			break
+		}
+	}
+	if len(p.sessions[sessionID]) == 0 {
+		delete(p.sessions, sessionID)
+	}
+}
+
+// injectField adds or overwrites a string field in a JSON object.
+func injectField(data []byte, key, value string) ([]byte, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	v, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	m[key] = v
+	return json.Marshal(m)
 }

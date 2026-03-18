@@ -29,11 +29,12 @@ const defaultScrollbackSize = 128 * 1024 // 128KB
 // ResizeMsg is the JSON message clients send to resize the terminal.
 type ResizeMsg struct {
 	Type        string `json:"type"`
-	Seq         uint64 `json:"seq,omitempty"`
 	Cols        uint16 `json:"cols"`
 	Rows        uint16 `json:"rows"`
 	PixelWidth  uint16 `json:"pixelWidth,omitempty"`
 	PixelHeight uint16 `json:"pixelHeight,omitempty"`
+	// Source identifies who triggered the resize: "local_tty" or "web_client".
+	Source string `json:"source,omitempty"`
 }
 
 // Server holds a PTY and serves WebSocket connections.
@@ -196,8 +197,9 @@ func (s *Server) WritePTY(p []byte) (int, error) {
 }
 
 // Resize changes the PTY window size and signals the child.
+// Called by the local terminal (localterm) on SIGWINCH — always tagged as local_tty.
 func (s *Server) Resize(cols, rows uint16) {
-	s.resize(ResizeMsg{Cols: cols, Rows: rows})
+	s.resize(ResizeMsg{Cols: cols, Rows: rows, Source: "local_tty"})
 }
 
 // Shutdown closes the listener and all connections.
@@ -427,15 +429,18 @@ func (s *Server) resize(msg ResizeMsg) {
 		syscall.Kill(-s.cmd.Process.Pid, syscall.SIGWINCH)
 	}
 
-	if msg.Seq == 0 {
-		return
+	// Update runner session state — discovery/subscribe.go learns via SSE.
+	if s.state != nil {
+		s.state.SetTerminalSize(msg.Cols, msg.Rows)
 	}
 
+	// Broadcast terminal_resize to all connected WS clients so every browser
+	// can update its xterm size and the proxy can update ownership/store.
 	payload, err := json.Marshal(map[string]any{
-		"type": "resize_applied",
-		"seq":  msg.Seq,
-		"cols": msg.Cols,
-		"rows": msg.Rows,
+		"type":   "terminal_resize",
+		"cols":   msg.Cols,
+		"rows":   msg.Rows,
+		"source": msg.Source,
 	})
 	if err != nil {
 		return

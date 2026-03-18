@@ -230,6 +230,19 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		}
 		sub.store.Upsert(sess)
 
+	case "terminal_resize":
+		var resize struct {
+			Cols uint16 `json:"cols"`
+			Rows uint16 `json:"rows"`
+		}
+		if err := json.Unmarshal(data, &resize); err != nil {
+			log.Printf("subscribe: %s: bad terminal_resize event: %v", sessionID, err)
+			return
+		}
+		sess.TerminalCols = resize.Cols
+		sess.TerminalRows = resize.Rows
+		sub.store.Upsert(sess)
+
 	default:
 		log.Printf("subscribe: %s: unknown event type: %s", sessionID, eventType)
 	}

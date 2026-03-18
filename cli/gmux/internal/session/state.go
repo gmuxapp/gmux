@@ -39,6 +39,10 @@ type State struct {
 	Status   *adapter.Status `json:"status"`
 	Unread   bool            `json:"unread"`
 
+	// Terminal size (updated by the runner whenever PTY is resized).
+	TerminalCols uint16 `json:"terminal_cols,omitempty"`
+	TerminalRows uint16 `json:"terminal_rows,omitempty"`
+
 	// Transport
 	SocketPath string `json:"socket_path"`
 
@@ -174,6 +178,19 @@ func (s *State) SetSubtitle(subtitle string) {
 	defer s.mu.Unlock()
 	s.Subtitle = subtitle
 	s.emitMetaLocked()
+}
+
+// SetTerminalSize records the current PTY dimensions and emits a terminal_resize
+// event so gmuxd discovery can update the store without relying on the proxy.
+func (s *State) SetTerminalSize(cols, rows uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.TerminalCols = cols
+	s.TerminalRows = rows
+	s.emit(Event{Type: "terminal_resize", Data: map[string]uint16{
+		"cols": cols,
+		"rows": rows,
+	}})
 }
 
 func (s *State) emitMetaLocked() {
