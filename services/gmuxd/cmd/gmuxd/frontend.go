@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-//go:embed web/*
+//go:embed all:web
 var webFS embed.FS
 
 // spaHandler serves the embedded frontend as a single-page application.

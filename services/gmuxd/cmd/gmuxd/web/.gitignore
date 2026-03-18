@@ -1,5 +1,4 @@
-# Build output from vite — overwritten by build script.
-# Only index.html placeholder is tracked.
+# Build output from vite — overwritten by scripts/build.sh.
+# Nothing is tracked; go:embed picks up whatever build.sh produces.
 *
 !.gitignore
-!index.html
