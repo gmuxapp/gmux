@@ -2,6 +2,10 @@
 
 Full commit-level changelogs are on each [GitHub release](https://github.com/gmuxapp/gmux/releases). This file tracks user-facing highlights only.
 
+## v0.4.0
+
+- **Mobile terminal input + passive panning** — tapping the terminal now re-focuses xterm on mobile, and when a session is sized for another device you can drag to pan the oversized terminal in the browser
+
 ## v0.3.0
 
 Sidebar redesign, file attribution fixes, integration tests.

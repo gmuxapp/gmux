@@ -647,6 +647,12 @@ body {
   position: relative;
   overflow: auto;
   background: #0f141a;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.terminal-shell-passive {
+  touch-action: none;
 }
 
 .terminal-screenshot {

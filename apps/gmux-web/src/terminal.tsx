@@ -10,7 +10,19 @@ import type { Session } from './types'
 
 // ── Config ──
 
-const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
+const SEARCH = new URLSearchParams(location.search)
+const USE_MOCK = import.meta.env.VITE_MOCK === '1' || SEARCH.has('mock')
+const USE_WEBGL = SEARCH.get('renderer') !== 'canvas'
+const PRESERVE_WEBGL_DRAWING_BUFFER = SEARCH.has('preserveDrawingBuffer') || SEARCH.has('screenshot')
+
+function loadPreferredRenderer(term: Terminal) {
+  if (!USE_WEBGL) return
+  try {
+    term.loadAddon(new WebglAddon({ preserveDrawingBuffer: PRESERVE_WEBGL_DRAWING_BUFFER }))
+  } catch {
+    /* falls back to DOM renderer */
+  }
+}
 
 export const TERM_THEME = {
   background: '#0f141a',            // --bg-surface
@@ -116,6 +128,7 @@ export function TerminalView({
   onCtrlConsumed: () => void
   onInputReady?: (send: ((data: string) => void) | null) => void
 }) {
+  const shellRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -173,6 +186,18 @@ export function TerminalView({
     }
   }, [])
 
+  const focusTerminal = useCallback(() => {
+    termRef.current?.focus()
+  }, [])
+
+  const handleShellClick = useCallback((ev: MouseEvent) => {
+    const target = ev.target
+    if (target instanceof HTMLElement && target.closest('button, input, textarea, select, a, label, [role="button"]')) {
+      return
+    }
+    focusTerminal()
+  }, [focusTerminal])
+
   // Terminal + keyboard setup (stable across session changes).
   useEffect(() => {
     if (!containerRef.current || USE_MOCK) return
@@ -188,7 +213,7 @@ export function TerminalView({
     term.loadAddon(fitAddon)
     term.loadAddon(new ImageAddon())
     term.open(containerRef.current)
-    try { term.loadAddon(new WebglAddon()) } catch { /* falls back to DOM renderer */ }
+    loadPreferredRenderer(term)
     fitAddon.fit()
     setViewportSize(getProposedTerminalSize(fitAddon))
     termRef.current = term
@@ -229,6 +254,96 @@ export function TerminalView({
     }
     window.addEventListener('keydown', handleGlobalKeydown, true)
 
+    const shell = shellRef.current
+    const isInteractiveTarget = (target: EventTarget | null) => target instanceof HTMLElement
+      && !!target.closest('button, input, textarea, select, a, label, [role="button"]')
+    const touchPanState = {
+      active: false,
+      moved: false,
+      startX: 0,
+      startY: 0,
+      startScrollLeft: 0,
+      startScrollTop: 0,
+    }
+
+    const handlePointerDownCapture = (ev: PointerEvent) => {
+      if (!isResizeOwnerRef.current) return
+      if (ev.button !== 0) return
+      if (isInteractiveTarget(ev.target)) return
+      term.focus()
+    }
+
+    const handleTouchStartCapture = (ev: TouchEvent) => {
+      if (ev.touches.length !== 1 || isInteractiveTarget(ev.target)) {
+        touchPanState.active = false
+        touchPanState.moved = false
+        return
+      }
+
+      const host = shellRef.current
+      if (!host) {
+        touchPanState.active = false
+        touchPanState.moved = false
+        return
+      }
+
+      if (isResizeOwnerRef.current) {
+        term.focus()
+        touchPanState.active = false
+        touchPanState.moved = false
+        return
+      }
+
+      touchPanState.active = true
+      touchPanState.moved = false
+      touchPanState.startX = ev.touches[0].clientX
+      touchPanState.startY = ev.touches[0].clientY
+      touchPanState.startScrollLeft = host.scrollLeft
+      touchPanState.startScrollTop = host.scrollTop
+    }
+
+    const handleTouchMoveCapture = (ev: TouchEvent) => {
+      if (isResizeOwnerRef.current || !touchPanState.active || ev.touches.length !== 1) return
+
+      const host = shellRef.current
+      if (!host) return
+
+      const touch = ev.touches[0]
+      const deltaX = touch.clientX - touchPanState.startX
+      const deltaY = touch.clientY - touchPanState.startY
+      if (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6) {
+        touchPanState.moved = true
+      }
+
+      const canScrollX = host.scrollWidth > host.clientWidth
+      const canScrollY = host.scrollHeight > host.clientHeight
+      if (!canScrollX && !canScrollY) return
+
+      if (canScrollX) host.scrollLeft = touchPanState.startScrollLeft - deltaX
+      if (canScrollY) host.scrollTop = touchPanState.startScrollTop - deltaY
+      ev.preventDefault()
+      ev.stopPropagation()
+    }
+
+    const handleTouchEndCapture = () => {
+      if (!isResizeOwnerRef.current && touchPanState.active && !touchPanState.moved) {
+        term.focus()
+      }
+      touchPanState.active = false
+      touchPanState.moved = false
+    }
+
+    const clearTouchPan = () => {
+      touchPanState.active = false
+      touchPanState.moved = false
+    }
+
+    shell?.addEventListener('pointerdown', handlePointerDownCapture, true)
+    shell?.addEventListener('touchstart', handleTouchStartCapture, { capture: true, passive: false })
+    shell?.addEventListener('touchmove', handleTouchMoveCapture, { capture: true, passive: false })
+    shell?.addEventListener('touchend', handleTouchEndCapture, true)
+    shell?.addEventListener('touchcancel', clearTouchPan, true)
+
     const onWindowResize = () => {
       if (!isResizeOwnerRef.current) {
         // Not the owner — adopt the owner's size from SSE.
@@ -256,6 +371,11 @@ export function TerminalView({
       disposed.current = true
       window.removeEventListener('keydown', handleGlobalKeydown, true)
       window.removeEventListener('resize', onWindowResize)
+      shell?.removeEventListener('pointerdown', handlePointerDownCapture, true)
+      shell?.removeEventListener('touchstart', handleTouchStartCapture, true)
+      shell?.removeEventListener('touchmove', handleTouchMoveCapture, true)
+      shell?.removeEventListener('touchend', handleTouchEndCapture, true)
+      shell?.removeEventListener('touchcancel', clearTouchPan, true)
       dataDisposable.dispose()
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       wsRef.current?.close()
@@ -400,7 +520,11 @@ export function TerminalView({
   }
 
   return (
-    <div class="terminal-shell">
+    <div
+      ref={shellRef}
+      class={`terminal-shell ${showResizeOverlay ? 'terminal-shell-passive' : ''}`}
+      onClick={handleShellClick}
+    >
       <div ref={containerRef} class="terminal-container" />
       {showResizeOverlay && (
         <button
@@ -440,7 +564,7 @@ export function MockTerminal({ sessionId }: { sessionId: string }) {
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(containerRef.current)
-    try { term.loadAddon(new WebglAddon()) } catch { /* falls back to DOM renderer */ }
+    loadPreferredRenderer(term)
     fit.fit()
 
     const mock = MOCK_BY_ID[sessionId]
