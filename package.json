@@ -8,6 +8,7 @@
     "build": "moon run :build",
     "dev": "./scripts/dev-kill.sh && moon run :dev",
     "test": "moon run :test",
+    "test:e2e": "npx playwright test --config e2e/playwright.config.ts",
     "lint": "biome lint . && moon run :lint",
     "check": "moon check :build :test",
     "graph": "moon project-graph"
@@ -15,6 +16,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.7",
     "@moonrepo/cli": "^2.0.4",
+    "@playwright/test": "^1.58.2",
     "playwright": "^1.58.2",
     "typescript": "^5.8.2"
   }

@@ -1,0 +1,127 @@
+import { spawn, execSync, type ChildProcess } from 'child_process'
+import * as fs from 'fs'
+import * as net from 'net'
+import * as os from 'os'
+import * as path from 'path'
+import type { FullConfig } from '@playwright/test'
+
+const ROOT = path.resolve(__dirname, '..')
+const GMUXD = path.join(ROOT, 'bin', 'gmuxd')
+const GMUX = path.join(ROOT, 'bin', 'gmux')
+
+// Shared state file so teardown can find the PIDs and tmpDir.
+const STATE_FILE = path.join(os.tmpdir(), 'gmux-e2e-state.json')
+
+/** Find a free port by briefly binding to :0. */
+async function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer()
+    srv.listen(0, '127.0.0.1', () => {
+      const port = (srv.address() as net.AddressInfo).port
+      srv.close(() => resolve(port))
+    })
+    srv.on('error', reject)
+  })
+}
+
+async function waitForHealth(port: number, timeoutMs = 15_000): Promise<void> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/health`)
+      if (resp.ok) return
+    } catch { /* retry */ }
+    await new Promise(r => setTimeout(r, 200))
+  }
+  throw new Error(`gmuxd did not become healthy on port ${port} within ${timeoutMs}ms`)
+}
+
+async function waitForSession(port: number, timeoutMs = 15_000): Promise<string> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/sessions`)
+      const body = await resp.json() as { data: Array<{ id: string; alive: boolean }> }
+      const alive = body.data.filter(s => s.alive)
+      if (alive.length > 0) return alive[0].id
+    } catch { /* retry */ }
+    await new Promise(r => setTimeout(r, 200))
+  }
+  throw new Error(`No alive session found on port ${port} within ${timeoutMs}ms`)
+}
+
+export default async function globalSetup(config: FullConfig) {
+  // Ensure binaries exist
+  if (!fs.existsSync(GMUXD) || !fs.existsSync(GMUX)) {
+    throw new Error(`Binaries not found. Run ./scripts/build.sh first.\n  GMUXD: ${GMUXD}\n  GMUX: ${GMUX}`)
+  }
+
+  const port = await freePort()
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmux-e2e-'))
+  const socketDir = path.join(tmpDir, 'sockets')
+  const configDir = path.join(tmpDir, 'config')
+  const stateDir = path.join(tmpDir, 'state')
+  fs.mkdirSync(socketDir)
+  fs.mkdirSync(configDir)
+  fs.mkdirSync(stateDir)
+
+  const env: Record<string, string> = {
+    PATH: process.env.PATH || '',
+    HOME: process.env.HOME || '',
+    TERM: 'xterm-256color',
+    GMUX_SOCKET_DIR: socketDir,
+    GMUXD_PORT: String(port),
+    GMUXD_ADDR: `127.0.0.1:${port}`,
+    XDG_CONFIG_HOME: configDir,   // no config file → Tailscale disabled
+    XDG_STATE_HOME: stateDir,
+  }
+
+  const pids: number[] = []
+
+  // Start gmuxd
+  const gmuxd = spawn(GMUXD, ['start'], {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
+  })
+  if (gmuxd.pid) pids.push(gmuxd.pid)
+
+  gmuxd.stderr?.on('data', (d: Buffer) => {
+    if (process.env.DEBUG) process.stderr.write(`[gmuxd] ${d}`)
+  })
+  gmuxd.on('exit', (code) => {
+    if (process.env.DEBUG) console.error(`[gmuxd] exited with code ${code}`)
+  })
+
+  await waitForHealth(port)
+
+  // Start a test shell session (non-interactive — no local terminal attach)
+  const gmux = spawn(GMUX, ['--', 'bash', '-c', 'echo READY; while true; do sleep 60; done'], {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
+  })
+  if (gmux.pid) pids.push(gmux.pid)
+
+  gmux.stderr?.on('data', (d: Buffer) => {
+    if (process.env.DEBUG) process.stderr.write(`[gmux] ${d}`)
+  })
+
+  // Wait for the session to appear in gmuxd
+  const sessionId = await waitForSession(port)
+
+  // Save state for teardown and for test config
+  fs.writeFileSync(STATE_FILE, JSON.stringify({
+    tmpDir,
+    pids,
+    sessionId,
+    port,
+  }))
+
+  // Playwright reads baseURL from config, but config is evaluated before
+  // globalSetup. So we write the port to an env file that the config reads.
+  // Actually, we'll update the config to read from the state file.
+  // For now, set env vars for the test processes.
+  process.env.GMUXD_TEST_PORT = String(port)
+  process.env.GMUX_TEST_SESSION_ID = sessionId
+}
