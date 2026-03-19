@@ -304,6 +304,7 @@ function SessionItem({
     <div
       class={`session-item ${selected ? 'selected' : ''}`}
       onClick={onClick}
+      onAuxClick={(e) => { if (e.button === 1 && onClose) { e.preventDefault(); onClose() } }}
     >
       <span class={`session-dot-indicator ${dotState}`} />
       <div class="session-content">
