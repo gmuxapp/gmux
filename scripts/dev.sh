@@ -25,7 +25,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEV_PORT=8791
 DEV_VITE_PORT=5173
 DEV_SOCKET_DIR="/tmp/gmux-dev-sessions"
-DEV_STATE_DIR="/tmp/gmux-dev-state"
+# Persistent state dir so tailscale auth survives reboots (tsnet keeps its
+# private key and auth token here). Only session sockets live in /tmp.
+DEV_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/gmux-dev"
 
 # ── Prepare directories and config ──
 
