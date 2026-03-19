@@ -161,6 +161,80 @@ func TestDerivedResumable_ShellNeverResumable(t *testing.T) {
 	}
 }
 
+func TestUpdateAtomic(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", AdapterTitle: "original"})
+
+	ok := s.Update("s1", func(sess *Session) {
+		sess.AdapterTitle = "updated"
+	})
+	if !ok {
+		t.Fatal("expected update to succeed")
+	}
+	got, _ := s.Get("s1")
+	if got.AdapterTitle != "updated" {
+		t.Fatalf("expected 'updated', got %q", got.AdapterTitle)
+	}
+	if got.Title != "updated" {
+		t.Fatalf("expected resolved title 'updated', got %q", got.Title)
+	}
+}
+
+func TestUpdateMissing(t *testing.T) {
+	s := New()
+	if s.Update("nonexistent", func(sess *Session) {
+		sess.AdapterTitle = "x"
+	}) {
+		t.Fatal("expected update on missing session to return false")
+	}
+}
+
+func TestUpdatePreservesOtherFields(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "s1", Kind: "pi",
+		AdapterTitle: "my title",
+		Status:       &Status{Working: true},
+	})
+	// Update only the title — status should be preserved.
+	s.Update("s1", func(sess *Session) {
+		sess.AdapterTitle = "new title"
+	})
+	got, _ := s.Get("s1")
+	if got.AdapterTitle != "new title" {
+		t.Fatalf("expected 'new title', got %q", got.AdapterTitle)
+	}
+	if got.Status == nil || !got.Status.Working {
+		t.Fatal("expected working status to be preserved")
+	}
+}
+
+func TestUpdateBroadcasts(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi"})
+	ch, cancel := s.Subscribe()
+	defer cancel()
+
+	// Drain the subscription channel from the initial Upsert
+	select {
+	case <-ch:
+	default:
+	}
+
+	s.Update("s1", func(sess *Session) {
+		sess.AdapterTitle = "via update"
+	})
+
+	select {
+	case ev := <-ch:
+		if ev.Type != "session-upsert" || ev.Session.AdapterTitle != "via update" {
+			t.Fatalf("unexpected event: %+v", ev)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for broadcast from Update")
+	}
+}
+
 func TestSetTerminalSize(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Kind: "shell", Alive: true})

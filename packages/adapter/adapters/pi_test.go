@@ -205,6 +205,43 @@ func TestParseNewLinesUserMessage(t *testing.T) {
 	}
 }
 
+func TestParseNewLinesNameDoesNotAffectStatus(t *testing.T) {
+	// session_info (name) entries must not emit any status event.
+	// This ensures /name during an agent turn doesn't clear working state.
+	events := NewPi().ParseNewLines([]string{
+		`{"type":"session_info","name":"My project"}`,
+	})
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Title != "My project" {
+		t.Errorf("expected title 'My project', got %q", events[0].Title)
+	}
+	if events[0].Status != nil {
+		t.Error("session_info must NOT produce a status event — would clear working state")
+	}
+}
+
+func TestParseNewLinesNameAmidToolUse(t *testing.T) {
+	// Simulates /name during an agent turn: the batch contains toolUse messages
+	// and a session_info entry. Only the title should change; no status events.
+	events := NewPi().ParseNewLines([]string{
+		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"toolUse","content":[]}}`,
+		`{"type":"message","id":"tr1","message":{"role":"toolResult","content":""}}`,
+		`{"type":"session_info","name":"Refactoring auth"}`,
+		`{"type":"message","id":"a2","message":{"role":"assistant","stopReason":"toolUse","content":[]}}`,
+	})
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (title only), got %d", len(events))
+	}
+	if events[0].Title != "Refactoring auth" {
+		t.Errorf("expected title, got %q", events[0].Title)
+	}
+	if events[0].Status != nil {
+		t.Error("should not produce status events")
+	}
+}
+
 func TestParseNewLinesAssistantStop(t *testing.T) {
 	events := NewPi().ParseNewLines([]string{
 		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Done."}]}}`,

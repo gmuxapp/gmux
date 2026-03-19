@@ -368,7 +368,11 @@ func (fm *FileMonitor) handleFileChange(path string) {
 		// New attribution — parse the full file for initial title.
 		// This handles "name > first user message > (new)" correctly
 		// without requiring ParseNewLines to track message order.
-		fm.setTitleFromFile(sessionID, path)
+		if title := fm.deriveTitleFromFile(sessionID, path); title != "" {
+			fm.store.Update(sessionID, func(s *store.Session) {
+				s.AdapterTitle = title
+			})
+		}
 	}
 
 	// Track active file per session. When the active file changes
@@ -390,67 +394,62 @@ func (fm *FileMonitor) handleFileChange(path string) {
 
 	events := ms.fileMon.ParseNewLines(lines)
 
-	sess, ok := fm.store.Get(sessionID)
-	if !ok {
-		return
-	}
-
 	// If adapter title is still unset (file was attributed before any user
 	// messages), re-derive it from the full file. This catches the common
 	// case where the tool creates the file on launch but only writes user
-	// messages later.
-	if sess.AdapterTitle == "" || sess.AdapterTitle == "(new)" {
-		fm.setTitleFromFile(sessionID, path)
-		// Re-read session after potential title update.
-		if s, ok := fm.store.Get(sessionID); ok {
-			sess = s
-		}
+	// messages later. Derive the title outside the lock (file I/O), then
+	// apply atomically with a condition check inside Update.
+	title := fm.deriveTitleFromFile(sessionID, path)
+	if title != "" {
+		fm.store.Update(sessionID, func(s *store.Session) {
+			if s.AdapterTitle == "" || s.AdapterTitle == "(new)" {
+				s.AdapterTitle = title
+			}
+		})
 	}
 
 	if len(events) == 0 {
 		return
 	}
 
-	for _, evt := range events {
-		if evt.Title != "" {
-			sess.AdapterTitle = evt.Title
-		}
-		if evt.Status != nil {
-			if evt.Status.Label == "" && !evt.Status.Working {
-				sess.Status = nil // clear — no meaningful info to show
-			} else {
-				sess.Status = &store.Status{
-					Label:   evt.Status.Label,
-					Working: evt.Status.Working,
+	// Apply all events atomically to avoid races with the SSE subscriber.
+	fm.store.Update(sessionID, func(sess *store.Session) {
+		for _, evt := range events {
+			if evt.Title != "" {
+				sess.AdapterTitle = evt.Title
+			}
+			if evt.Status != nil {
+				if evt.Status.Label == "" && !evt.Status.Working {
+					sess.Status = nil // clear — no meaningful info to show
+				} else {
+					sess.Status = &store.Status{
+						Label:   evt.Status.Label,
+						Working: evt.Status.Working,
+					}
 				}
 			}
 		}
-	}
-	fm.store.Upsert(sess)
+	})
 }
 
-// setTitleFromFile parses the full session file and sets the adapter title
-// on the store entry. Called once on first attribution to derive the initial
-// title (name > first user message) without relying on ParseNewLines.
-func (fm *FileMonitor) setTitleFromFile(sessionID, filePath string) {
+// deriveTitleFromFile parses the full session file and returns the best title
+// (name > first user message > ""). Called on first attribution and when
+// the adapter title is still unset, to derive the initial title without
+// relying on ParseNewLines. Returns "" if no title can be derived.
+func (fm *FileMonitor) deriveTitleFromFile(sessionID, filePath string) string {
 	ms, ok := fm.sessions[sessionID]
 	if !ok {
-		return
+		return ""
 	}
 	filer, ok := ms.adapter.(adapter.SessionFiler)
 	if !ok {
-		return
+		return ""
 	}
 	info, err := filer.ParseSessionFile(filePath)
 	if err != nil || info.Title == "" {
-		return
+		return ""
 	}
-	sess, ok := fm.store.Get(sessionID)
-	if !ok {
-		return
-	}
-	sess.AdapterTitle = info.Title
-	fm.store.Upsert(sess)
+	return info.Title
 }
 
 // --- Active file tracking ---
@@ -474,15 +473,9 @@ func (fm *FileMonitor) updateActiveFileLocked(sessionID, filePath string) {
 		return
 	}
 
-	sess, ok := fm.store.Get(sessionID)
-	if !ok {
-		return
-	}
-	if sess.ResumeKey == info.ID {
-		return // already correct
-	}
-	sess.ResumeKey = info.ID
-	fm.store.Upsert(sess)
+	fm.store.Update(sessionID, func(sess *store.Session) {
+		sess.ResumeKey = info.ID
+	})
 }
 
 // --- Attribution ---

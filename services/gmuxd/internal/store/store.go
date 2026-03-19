@@ -155,6 +155,33 @@ func (s *Store) Upsert(sess Session) {
 	})
 }
 
+// Update atomically reads a session, applies a modifier function, and writes
+// it back. This prevents read-modify-write races between concurrent updaters
+// (e.g. the file monitor and the SSE subscriber goroutines).
+// Returns false if the session doesn't exist.
+func (s *Store) Update(id string, fn func(*Session)) bool {
+	s.mu.Lock()
+	sess, ok := s.sessions[id]
+	if !ok {
+		s.mu.Unlock()
+		return false
+	}
+	fn(&sess)
+	sess.Title = s.resolveTitle(sess)
+	resumeKind := s.isResumableKind(sess.Kind)
+	hasFile := sess.ResumeKey != ""
+	sess.Resumable = !sess.Alive && resumeKind && hasFile && len(sess.Command) > 0
+	s.sessions[id] = sess
+	s.mu.Unlock()
+
+	s.broadcast(Event{
+		Type:    "session-upsert",
+		ID:      id,
+		Session: &sess,
+	})
+	return true
+}
+
 // GetTerminalSize returns the current terminal dimensions for a session.
 func (s *Store) GetTerminalSize(id string) (cols, rows uint16, ok bool) {
 	s.mu.RLock()

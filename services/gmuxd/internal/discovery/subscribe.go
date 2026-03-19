@@ -162,12 +162,6 @@ func (sub *Subscriptions) runSubscription(ctx context.Context, sessionID, socket
 }
 
 func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, data []byte) {
-	sess, ok := sub.store.Get(sessionID)
-	if !ok {
-		// Session was removed from store — we'll get cleaned up
-		return
-	}
-
 	switch eventType {
 	case "status":
 		var status store.Status
@@ -175,8 +169,9 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			log.Printf("subscribe: %s: bad status event: %v", sessionID, err)
 			return
 		}
-		sess.Status = &status
-		sub.store.Upsert(sess)
+		sub.store.Update(sessionID, func(sess *store.Session) {
+			sess.Status = &status
+		})
 
 	case "meta":
 		var meta struct {
@@ -189,19 +184,20 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			log.Printf("subscribe: %s: bad meta event: %v", sessionID, err)
 			return
 		}
-		if meta.ShellTitle != nil {
-			sess.ShellTitle = *meta.ShellTitle
-		}
-		if meta.AdapterTitle != nil && *meta.AdapterTitle != "" {
-			sess.AdapterTitle = *meta.AdapterTitle
-		}
-		if meta.Subtitle != nil {
-			sess.Subtitle = *meta.Subtitle
-		}
-		if meta.Unread != nil {
-			sess.Unread = *meta.Unread
-		}
-		sub.store.Upsert(sess)
+		sub.store.Update(sessionID, func(sess *store.Session) {
+			if meta.ShellTitle != nil {
+				sess.ShellTitle = *meta.ShellTitle
+			}
+			if meta.AdapterTitle != nil && *meta.AdapterTitle != "" {
+				sess.AdapterTitle = *meta.AdapterTitle
+			}
+			if meta.Subtitle != nil {
+				sess.Subtitle = *meta.Subtitle
+			}
+			if meta.Unread != nil {
+				sess.Unread = *meta.Unread
+			}
+		})
 
 	case "exit":
 		var exit struct {
@@ -209,6 +205,11 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		}
 		if err := json.Unmarshal(data, &exit); err != nil {
 			log.Printf("subscribe: %s: bad exit event: %v", sessionID, err)
+			return
+		}
+		// Read the session for the OnExit hook which needs the full session.
+		sess, ok := sub.store.Get(sessionID)
+		if !ok {
 			return
 		}
 		sess.Alive = false
@@ -239,9 +240,10 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			log.Printf("subscribe: %s: bad terminal_resize event: %v", sessionID, err)
 			return
 		}
-		sess.TerminalCols = resize.Cols
-		sess.TerminalRows = resize.Rows
-		sub.store.Upsert(sess)
+		sub.store.Update(sessionID, func(sess *store.Session) {
+			sess.TerminalCols = resize.Cols
+			sess.TerminalRows = resize.Rows
+		})
 
 	default:
 		log.Printf("subscribe: %s: unknown event type: %s", sessionID, eventType)
