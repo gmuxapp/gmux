@@ -48,7 +48,7 @@ export function attachKeyboardHandler(term: Terminal, send: SendFn): void {
       return false
     }
 
-    // Ctrl+V → paste from clipboard    // Ctrl+V: let xterm handle paste natively via its textarea paste event.
+    // Ctrl+V: let xterm handle paste natively via its textarea paste event.
     // Don't intercept — doing so causes double paste.
 
     return true

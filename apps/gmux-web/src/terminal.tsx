@@ -196,12 +196,16 @@ export function TerminalView({
   session,
   ctrlArmed,
   onCtrlConsumed,
+  altArmed,
+  onAltConsumed,
   onInputReady,
   onFocusReady,
 }: {
   session: Session
   ctrlArmed: boolean
   onCtrlConsumed: () => void
+  altArmed: boolean
+  onAltConsumed: () => void
   onInputReady?: (send: ((data: string) => void) | null) => void
   onFocusReady?: (focus: (() => void) | null) => void
 }) {
@@ -215,6 +219,7 @@ export function TerminalView({
   const currentSessionId = useRef(session.id)
   const currentSessionRef = useRef(session)
   const ctrlArmedRef = useRef(ctrlArmed)
+  const altArmedRef = useRef(altArmed)
   const termIoRef = useRef<ReturnType<typeof createTerminalIO> | null>(null)
   const termEpochRef = useRef(0)
 
@@ -234,6 +239,7 @@ export function TerminalView({
   currentSessionId.current = session.id
   currentSessionRef.current = session
   ctrlArmedRef.current = ctrlArmed
+  altArmedRef.current = altArmed
 
   const queueResize = useCallback((size: TerminalSize) => {
     termIoRef.current?.requestResize(size, termEpochRef.current)
@@ -317,6 +323,12 @@ export function TerminalView({
           sendRawInput(ctrlData)
           return
         }
+      }
+      if (altArmedRef.current) {
+        altArmedRef.current = false
+        onAltConsumed()
+        sendRawInput('\x1b' + data)
+        return
       }
       sendRawInput(data)
     }
