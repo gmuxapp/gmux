@@ -307,7 +307,14 @@ export function TerminalView({
     setViewportSize(shellRef.current ? measureTerminalFit(term, shellRef.current) : getProposedTerminalSize(fitAddon))
     termRef.current = term
     fitRef.current = fitAddon
-    termIoRef.current = createTerminalIO(term)
+    termIoRef.current = createTerminalIO(term, {
+      getState() {
+        const buf = term.buffer.active
+        return { viewportY: buf.viewportY, baseY: buf.baseY }
+      },
+      scrollToLine(line: number) { term.scrollToLine(line) },
+      scrollToBottom() { term.scrollToBottom() },
+    })
     ;(window as any).__gmuxTerm = term
 
     const sendRawInput = (data: string) => {
