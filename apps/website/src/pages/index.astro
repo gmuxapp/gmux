@@ -41,13 +41,20 @@ import PostHog from '../components/posthog.astro'
           Check in from your desktop or&nbsp;your&nbsp;phone.
         </p>
         <div class="hero-install">
-          <div class="install-cmd" id="install-cmd">
-            <code>brew install gmuxapp/tap/gmux</code>
-            <button class="copy-btn" id="copy-btn" aria-label="Copy to clipboard">
-              <svg class="copy-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-              <svg class="check-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none"><polyline points="20 6 9 17 4 12"/></svg>
-            </button>
+          <div class="install-box">
+            <div class="install-tabs" id="install-tabs">
+              <button class="tab-btn active" data-os="mac">macOS</button>
+              <button class="tab-btn" data-os="linux">Linux</button>
+            </div>
+            <div class="install-cmd" id="install-cmd">
+              <code data-cmd-mac="brew install gmuxapp/tap/gmux" data-cmd-linux="curl -sSfL https://gmux.app/install.sh | sh">brew install gmuxapp/tap/gmux</code>
+              <button class="copy-btn" id="copy-btn" aria-label="Copy to clipboard">
+                <svg class="copy-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                <svg class="check-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none"><polyline points="20 6 9 17 4 12"/></svg>
+              </button>
+            </div>
           </div>
+          <a class="script-link" href="/install.sh">What does this script do?</a>
         </div>
         <div class="hero-actions">
           <a href="/quick-start/" class="hero-cta">Quick start</a>
@@ -134,7 +141,7 @@ import PostHog from '../components/posthog.astro'
         <div class="feature">
           <h3>Nothing to configure</h3>
           <p>
-            One <code>brew install</code>, secure defaults works&nbsp;out&nbsp;of&nbsp;the&nbsp;box.
+            One install command, secure defaults works&nbsp;out&nbsp;of&nbsp;the&nbsp;box.
           </p>
         </div>
       </div>
@@ -146,13 +153,20 @@ import PostHog from '../components/posthog.astro'
     <div class="section-inner cta-inner">
       <h2>Try it in two&nbsp;minutes</h2>
       <div class="cta-install">
-        <div class="install-cmd" id="install-cmd-bottom">
-          <code>brew install gmuxapp/tap/gmux</code>
-          <button class="copy-btn" id="copy-btn-bottom" aria-label="Copy to clipboard">
-            <svg class="copy-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-            <svg class="check-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none"><polyline points="20 6 9 17 4 12"/></svg>
-          </button>
+        <div class="install-box">
+          <div class="install-tabs" id="install-tabs-bottom">
+            <button class="tab-btn active" data-os="mac">macOS</button>
+            <button class="tab-btn" data-os="linux">Linux</button>
+          </div>
+          <div class="install-cmd" id="install-cmd-bottom">
+            <code data-cmd-mac="brew install gmuxapp/tap/gmux" data-cmd-linux="curl -sSfL https://gmux.app/install.sh | sh">brew install gmuxapp/tap/gmux</code>
+            <button class="copy-btn" id="copy-btn-bottom" aria-label="Copy to clipboard">
+              <svg class="copy-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+              <svg class="check-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none"><polyline points="20 6 9 17 4 12"/></svg>
+            </button>
+          </div>
         </div>
+        <a class="script-link" href="/install.sh">What does this script do?</a>
       </div>
       <a href="/quick-start/" class="hero-cta">Quick start</a>
     </div>
@@ -183,11 +197,56 @@ import PostHog from '../components/posthog.astro'
   </footer>
 
   <script>
+    const commands = {
+      mac: 'brew install gmuxapp/tap/gmux',
+      linux: 'curl -sSfL https://gmux.app/install.sh | sh',
+    }
+
+    // Detect OS from user agent
+    function detectOS() {
+      const ua = navigator.userAgent || navigator.platform || ''
+      if (/Linux/.test(ua)) return 'linux'
+      return 'mac'
+    }
+
+    // Switch all tab groups to a given OS
+    function switchOS(os) {
+      document.querySelectorAll('.install-tabs').forEach(tabs => {
+        tabs.querySelectorAll('.tab-btn').forEach(btn => {
+          btn.classList.toggle('active', btn.dataset.os === os)
+        })
+      })
+      document.querySelectorAll('.install-cmd code[data-cmd-mac]').forEach(code => {
+        code.textContent = commands[os]
+      })
+      document.querySelectorAll('.script-link').forEach(link => {
+        link.style.visibility = os === 'linux' ? 'visible' : 'hidden'
+      })
+    }
+
+    // Reorder tabs so the detected OS comes first
+    function reorderTabs(os) {
+      document.querySelectorAll('.install-tabs').forEach(tabs => {
+        const btns = [...tabs.querySelectorAll('.tab-btn')]
+        const first = btns.find(b => b.dataset.os === os)
+        if (first && first !== btns[0]) {
+          tabs.insertBefore(first, btns[0])
+        }
+      })
+    }
+
+    // Wire up tab clicks (synced across both tab groups)
+    document.querySelectorAll('.install-tabs .tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => switchOS(btn.dataset.os))
+    })
+
+    // Copy button
     function setupCopyBtn(id) {
       const btn = document.getElementById(id)
       if (!btn) return
       btn.addEventListener('click', () => {
-        navigator.clipboard.writeText('brew install gmuxapp/tap/gmux')
+        const code = btn.closest('.install-cmd').querySelector('code')
+        navigator.clipboard.writeText(code.textContent)
         const copy = btn.querySelector('.copy-icon')
         const check = btn.querySelector('.check-icon')
         if (copy && check) {
@@ -202,6 +261,16 @@ import PostHog from '../components/posthog.astro'
     }
     setupCopyBtn('copy-btn')
     setupCopyBtn('copy-btn-bottom')
+
+    // Auto-detect on load
+    const detected = detectOS()
+    reorderTabs(detected)
+    switchOS(detected)
+
+    // Reveal after OS detection to avoid flash of wrong command
+    document.querySelectorAll('.install-box').forEach(box => {
+      box.classList.add('ready')
+    })
   </script>
 </body>
 </html>
@@ -352,23 +421,92 @@ import PostHog from '../components/posthog.astro'
   }
 
   .hero-install {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
     margin-bottom: 1rem;
   }
 
-  .install-cmd {
+  .install-box {
     display: inline-flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--code-bg);
+    opacity: 0;
+  }
+
+  .install-box.ready {
+    opacity: 1;
+    transition: opacity 0.15s;
+  }
+
+  .install-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .tab-btn {
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 0.78rem;
+    font-weight: 500;
+    padding: 0.35rem 0.85rem;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    position: relative;
+    transition: color 0.15s;
+  }
+
+  .tab-btn.active {
+    color: var(--text);
+    background: oklch(18% 0.015 250);
+  }
+
+  .tab-btn.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: oklch(18% 0.015 250);
+  }
+
+  .tab-btn:hover:not(.active) {
+    color: var(--text-secondary);
+  }
+
+  .script-link {
+    visibility: hidden;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-top: 0.4rem;
+  }
+
+  .script-link:hover {
+    color: var(--text-secondary);
+  }
+
+  .install-cmd {
+    display: flex;
     align-items: center;
     gap: 0.75rem;
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.5rem 0.65rem 0.5rem 0.85rem;
+    background: oklch(18% 0.015 250);
+    padding: 0.55rem 0.65rem 0.55rem 0.85rem;
     font-family: 'Fira Code', 'JetBrains Mono', monospace;
     font-size: 0.85rem;
     color: var(--text);
   }
 
-  .install-cmd code { font-size: inherit; }
+  .install-cmd code {
+    font-size: inherit;
+    background: none;
+    padding: 0;
+    border-radius: 0;
+  }
 
   .copy-btn {
     background: none;
@@ -625,8 +763,11 @@ import PostHog from '../components/posthog.astro'
     margin-bottom: 0;
   }
 
-  .cta-install .install-cmd {
-    width: auto;
+  .cta-install {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
   }
 
   /* --- Footer --- */
@@ -695,16 +836,21 @@ import PostHog from '../components/posthog.astro'
     .hero h1 { font-size: 2rem; }
     .hero-sub { font-size: 1rem; }
 
-    .install-cmd {
+    .install-box {
+      display: flex;
       width: 100%;
+    }
+
+    .install-cmd {
       justify-content: space-between;
-      padding-right: 0.65rem;
     }
 
     .install-cmd code {
       white-space: nowrap;
       overflow-x: auto;
       scrollbar-width: none;
+      flex: 1;
+      min-width: 0;
     }
     .install-cmd code::-webkit-scrollbar { display: none; }
 

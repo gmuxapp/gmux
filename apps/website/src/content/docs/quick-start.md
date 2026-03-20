@@ -5,8 +5,14 @@ description: Install gmux and launch your first session in under a minute.
 
 ## Install
 
+**macOS** (Homebrew):
 ```bash
 brew install gmuxapp/tap/gmux
+```
+
+**Linux** (or macOS without Homebrew):
+```bash
+curl -sSfL https://gmux.app/install.sh | sh
 ```
 
 Or download both binaries (`gmuxd` + `gmux`) from [GitHub Releases](https://github.com/gmuxapp/gmux/releases).
