@@ -26,6 +26,18 @@ importers:
 
   apps/gmux-web:
     dependencies:
+      '@fontsource/fira-code':
+        specifier: ^5.2.7
+        version: 5.2.7
+      '@fontsource/instrument-sans':
+        specifier: ^5.2.8
+        version: 5.2.8
+      '@fontsource/jetbrains-mono':
+        specifier: ^5.2.8
+        version: 5.2.8
+      '@fontsource/source-sans-3':
+        specifier: ^5.2.9
+        version: 5.2.9
       '@gmux/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -616,6 +628,18 @@ packages:
 
   '@expressive-code/plugin-text-markers@0.41.7':
     resolution: {integrity: sha512-Ewpwuc5t6eFdZmWlFyeuy3e1PTQC0jFvw2Q+2bpcWXbOZhPLsT7+h8lsSIJxb5mS7wZko7cKyQ2RLYDyK6Fpmw==}
+
+  '@fontsource/fira-code@5.2.7':
+    resolution: {integrity: sha512-tnB9NNund9TwIym8/7DMJe573nlPEQb+fKUV5GL8TBYXjIhDvL0D7mgmNVNQUPhXp+R7RylQeiBdkA4EbOHPGQ==}
+
+  '@fontsource/instrument-sans@5.2.8':
+    resolution: {integrity: sha512-TJRYVbjZPx4DGMMU5lb5eFKrP3iLe9h7rz8Pk+dP958IZKiyHjYGXXwQZapVbBXcQN+YOiviVhAWxrjv8g6Z6g==}
+
+  '@fontsource/jetbrains-mono@5.2.8':
+    resolution: {integrity: sha512-6w8/SG4kqvIMu7xd7wt6x3idn1Qux3p9N62s6G3rfldOUYHpWcc2FKrqf+Vo44jRvqWj2oAtTHrZXEP23oSKwQ==}
+
+  '@fontsource/source-sans-3@5.2.9':
+    resolution: {integrity: sha512-u3ymIq4rfmCCyB9MEw/sFR5lPVJ1yTNXmIMbUz+9kVCFIHvNtfzXOEBuvkg3Tk0zhmioPeJ28ZK5smZ7TurezQ==}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -3026,6 +3050,14 @@ snapshots:
   '@expressive-code/plugin-text-markers@0.41.7':
     dependencies:
       '@expressive-code/core': 0.41.7
+
+  '@fontsource/fira-code@5.2.7': {}
+
+  '@fontsource/instrument-sans@5.2.8': {}
+
+  '@fontsource/jetbrains-mono@5.2.8': {}
+
+  '@fontsource/source-sans-3@5.2.9': {}
 
   '@img/colour@1.1.0': {}
 

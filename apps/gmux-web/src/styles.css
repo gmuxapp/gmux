@@ -1,6 +1,6 @@
 /* gmux — session orchestration UI */
 
-@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Instrument+Sans:wght@700&family=JetBrains+Mono:ital,wght@1,400;1,500&family=Source+Sans+3:wght@400;500;600;700&display=swap');
+@import './fonts.css';
 
 code {
   font-family: 'Fira Code', monospace;
@@ -875,18 +875,22 @@ body {
   50% { opacity: 1; }
 }
 
-/* Use JetBrains Mono for italic glyphs since Fira Code has no italic variant */
+/* Use JetBrains Mono for italic glyphs since Fira Code has no italic variant.
+   The bundled JetBrains Mono italic files (from fonts.css) are referenced here
+   so we don't depend on the font being installed on the system. */
 @font-face {
   font-family: 'Fira Code';
   font-style: italic;
   font-weight: 400;
-  src: local('JetBrains Mono Italic'), local('JetBrainsMono-Italic');
+  src: local('JetBrains Mono Italic'), local('JetBrainsMono-Italic'),
+       url('@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-italic.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Fira Code';
   font-style: italic;
   font-weight: 500;
-  src: local('JetBrains Mono Medium Italic'), local('JetBrainsMono-MediumItalic');
+  src: local('JetBrains Mono Medium Italic'), local('JetBrainsMono-MediumItalic'),
+       url('@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-italic.woff2') format('woff2');
 }
 
 .terminal-container .xterm {

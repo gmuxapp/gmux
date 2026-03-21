@@ -11,6 +11,10 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@fontsource/fira-code": "^5.2.7",
+    "@fontsource/instrument-sans": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/source-sans-3": "^5.2.9",
     "@gmux/protocol": "workspace:*",
     "@trpc/client": "^11.6.0",
     "@xterm/addon-fit": "0.12.0-beta.195",

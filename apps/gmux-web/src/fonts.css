@@ -1,0 +1,18 @@
+/* Self-hosted fonts via @fontsource. No external network requests at runtime. */
+
+/* Fira Code — code blocks and terminal */
+@import '@fontsource/fira-code/400.css';
+@import '@fontsource/fira-code/500.css';
+
+/* Source Sans 3 — body text */
+@import '@fontsource/source-sans-3/400.css';
+@import '@fontsource/source-sans-3/500.css';
+@import '@fontsource/source-sans-3/600.css';
+@import '@fontsource/source-sans-3/700.css';
+
+/* Instrument Sans — logo/branding */
+@import '@fontsource/instrument-sans/700.css';
+
+/* JetBrains Mono italic — fallback for Fira Code italic (which has none) */
+@import '@fontsource/jetbrains-mono/400-italic.css';
+@import '@fontsource/jetbrains-mono/500-italic.css';
