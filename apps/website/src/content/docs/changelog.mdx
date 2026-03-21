@@ -33,23 +33,20 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ## v0.5.0
 
-### Remote access
-
-- **`gmuxd remote` command.** Single command to set up and diagnose remote access. Creates the config file, checks whether HTTPS and MagicDNS are enabled, surfaces the Tailscale login URL when registration is needed, and shows the connection status when everything is working.
-- **Setup hint in the UI.** The empty state page shows "run `gmuxd remote` to enable remote access" when Tailscale isn't configured.
-- **Docs rewrite.** The [remote access](/remote-access/) page now leads with `gmuxd remote`, documents MagicDNS as a prerequisite, explains that gmux registers as its own Tailscale device, and covers cross-tailnet sharing with the TLS certificate/tailnet name gotcha.
-
 ### Notifications
 
-- **Daemon-driven OS notifications.** When a background session finishes or produces new output, gmux shows an OS notification. The daemon decides whether, when, and where to notify based on real-time presence tracking across all connected browsers.
-- **Smart suppression.** No notification fires if you're already focused on gmux (the sidebar dot is enough). A 5-second grace period cancels the notification if you switch back before it fires.
-- **Cross-device routing.** If your desktop has been idle for 2+ minutes but your phone was recently active, the notification routes to the phone.
-- **Tab title badge.** The browser tab shows `(1) gmux` when sessions have unread output, visible without switching tabs.
+- **OS notifications.** Background sessions that finish or produce new output trigger a notification. The daemon tracks presence across all connected browsers, suppresses notifications when you're already looking at gmux, and routes to whichever device was most recently active.
+- **Tab title badge.** `(1) gmux` when sessions have unread output.
 
-### Reliability
+### Remote access
 
-- **Scroll position preserved during screen redraws.** When agents use synchronized output (DEC 2026) for screen updates, the viewport position is saved before the update and restored afterward, preventing the terminal from jumping to the top during output bursts.
-- **WebSocket snapshot ordering fix.** The PTY server now holds its lock across the entire snapshot send, preventing a race where live output could interleave with the scrollback replay frame.
+- **`gmuxd remote` command.** Sets up Tailscale config, checks prerequisites (HTTPS, MagicDNS), surfaces the login URL when needed, and shows connection status. The UI hints at this command when Tailscale isn't configured.
+
+### Terminal
+
+- **Auto-resize.** Viewport changes now reliably resize the terminal. Multiple tabs at the same size all stay in sync; another device resizing shows the pill.
+- **Scroll position preserved during synchronized output.** Screen redraws (DEC 2026 BSU/ESU) no longer jump the viewport.
+- And more bugfixes to continue to close the gap to native emulators
 
 ## v0.4.7
 

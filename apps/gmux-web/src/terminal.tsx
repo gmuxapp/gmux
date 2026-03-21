@@ -223,18 +223,18 @@ export function TerminalView({
   const termIoRef = useRef<ReturnType<typeof createTerminalIO> | null>(null)
   const termEpochRef = useRef(0)
 
-  // "Driving" tracks whether this client is actively resizing the PTY.
-  // Used only by onViewportResize to decide whether to re-fit on keyboard
-  // open/close (driving) or keep xterm pinned to the PTY size (passive).
-  // The pill does NOT read this — it is derived purely from ptySize vs viewportSize.
-  const isDrivingRef = useRef(false)
-
   const [termLoading, setTermLoading] = useState(true)
+  const [wsState, setWsState] = useState<'connecting' | 'open' | 'lost'>('connecting')
   const [viewportSize, setViewportSize] = useState<TerminalSize | null>(null)
   const [scrolledUp, setScrolledUp] = useState(false)
   const SCROLL_THRESHOLD = 3 // rows above bottom before showing the button
   // Track the last PTY size we know about so we can derive the pill.
   const [ptySize, setPtySize] = useState<TerminalSize | null>(null)
+
+  // Refs shadow viewportSize/ptySize for use inside event handlers that
+  // must not trigger effect re-runs but need current values.
+  const viewportSizeRef = useRef<TerminalSize | null>(null)
+  const ptySizeRef = useRef<TerminalSize | null>(null)
 
   currentSessionId.current = session.id
   currentSessionRef.current = session
@@ -261,14 +261,13 @@ export function TerminalView({
     if (!term || !shell) return
 
     const dims = measureTerminalFit(term, shell)
-    setViewportSize(dims)
+    setViewportSize(dims); viewportSizeRef.current = dims
     if (!dims) return
 
     // Optimistically sync ptySize so the pill hides immediately, before the
     // server echoes the resize back. Without this, ptySize would lag behind
     // viewportSize for one round-trip, causing a spurious pill flash.
-    setPtySize(dims)
-    isDrivingRef.current = true
+    setPtySize(dims); ptySizeRef.current = dims
     queueResize(dims)
     announceResize(ws, dims)
   }, [queueResize])
@@ -304,7 +303,8 @@ export function TerminalView({
     // Initial fit: use FitAddon for the first resize (before shellRef is
     // guaranteed stable), then switch to measureTerminalFit for everything after.
     fitAddon.fit()
-    setViewportSize(shellRef.current ? measureTerminalFit(term, shellRef.current) : getProposedTerminalSize(fitAddon))
+    const initialVp = shellRef.current ? measureTerminalFit(term, shellRef.current) : getProposedTerminalSize(fitAddon)
+    setViewportSize(initialVp); viewportSizeRef.current = initialVp
     termRef.current = term
     fitRef.current = fitAddon
     termIoRef.current = createTerminalIO(term, {
@@ -413,8 +413,11 @@ export function TerminalView({
         touchPanState.moved = true
       }
 
-      // In driving mode, just track movement — let xterm handle the gesture.
-      if (isDrivingRef.current) return
+      // If viewport matches PTY (in sync), no overflow to pan — let xterm
+      // handle the gesture for selection/scrollback.
+      const vp = viewportSizeRef.current
+      const pty = ptySizeRef.current
+      if (vp && pty && vp.cols === pty.cols && vp.rows === pty.rows) return
 
       const canScrollX = host.scrollWidth > host.clientWidth
       const canScrollY = host.scrollHeight > host.clientHeight
@@ -473,16 +476,25 @@ export function TerminalView({
 
         const t = termRef.current
         const s = shellRef.current
-        if (t && s) setViewportSize(measureTerminalFit(t, s))
+        if (!t || !s) return
 
-        if (!isDrivingRef.current) {
-          // Passive — keep xterm at PTY size, update viewport for pill derivation.
-          const current = currentSessionRef.current
-          if (current.terminal_cols && current.terminal_rows) {
-            queueResize({ cols: current.terminal_cols, rows: current.terminal_rows })
-          }
-        } else {
+        const newVp = measureTerminalFit(t, s)
+
+        // Were we in sync before this viewport change?
+        const vp = viewportSizeRef.current
+        const pty = ptySizeRef.current
+        const wasInSync = vp != null && pty != null
+          && vp.cols === pty.cols && vp.rows === pty.rows
+
+        setViewportSize(newVp); viewportSizeRef.current = newVp
+
+        if (wasInSync && newVp) {
+          // Viewport matched PTY — this client is actively using the terminal.
+          // Auto-resize to follow the viewport change.
           fitAndResize()
+        } else if (pty) {
+          // Out of sync (pill visible) — keep xterm at PTY size.
+          queueResize(pty)
         }
 
         // Re-focus after the viewport settles. iOS blurs the xterm textarea
@@ -498,11 +510,10 @@ export function TerminalView({
       }, 80) // 80 ms debounce — keyboard animation typically takes ~250 ms
     }
 
-    if (vv) {
-      vv.addEventListener('resize', onViewportResize)
-    } else {
-      window.addEventListener('resize', onViewportResize)
-    }
+    // Listen on both: visualViewport fires for soft keyboard / pinch-zoom,
+    // window fires for browser window resize / Playwright setViewportSize.
+    window.addEventListener('resize', onViewportResize)
+    if (vv) vv.addEventListener('resize', onViewportResize)
 
     return () => {
       if (resizeTimer !== null) clearTimeout(resizeTimer)
@@ -531,14 +542,19 @@ export function TerminalView({
     }
   }, [onCtrlConsumed, onInputReady])
 
-  // Keep passive terminals in sync with the PTY size from session metadata.
+  // Keep out-of-sync terminals at the PTY size from session metadata.
   // This covers the case where the session is switched or the store updates
   // terminal size without a WS terminal_resize (e.g. from SSE discovery).
   useEffect(() => {
-    if (!termRef.current || USE_MOCK || isDrivingRef.current) return
+    if (!termRef.current || USE_MOCK) return
+    // Skip if we're in sync — our fitAndResize already set the right size.
+    const vp = viewportSizeRef.current
+    const pty = ptySizeRef.current
+    if (vp && pty && vp.cols === pty.cols && vp.rows === pty.rows) return
+
     if (session.terminal_cols && session.terminal_rows) {
       const size = { cols: session.terminal_cols, rows: session.terminal_rows }
-      setPtySize(size)
+      setPtySize(size); ptySizeRef.current = size
       queueResize(size)
     }
   }, [session.id, session.terminal_cols, session.terminal_rows, queueResize])
@@ -553,11 +569,11 @@ export function TerminalView({
     termEpochRef.current = epoch
     termIoRef.current.reset(epoch)
 
-    // Always start passive on new connection.
-    isDrivingRef.current = false
-    // Reset ptySize so a stale value from a previous session can't trigger a
+    // Reset sizes so stale values from a previous session can't trigger a
     // spurious pill while the loading overlay is visible (before ws.onopen).
-    setPtySize(null)
+    setPtySize(null); ptySizeRef.current = null
+    setViewportSize(null); viewportSizeRef.current = null
+    setWsState('connecting')
 
     setTermLoading(true)
 
@@ -594,17 +610,18 @@ export function TerminalView({
 
       ws.onopen = () => {
         attempt = 0
+        setWsState('open')
 
-        // Always take over resize on connect — this device is clearly
-        // the one the user is actively interacting with.
-        isDrivingRef.current = true
+        // Take over resize on connect — this device is clearly the one
+        // the user is actively interacting with. Set both viewportSize and
+        // ptySize to the same value so we're "in sync" from the start.
         const t = termRef.current
         const s = shellRef.current
         if (t && s) {
           const dims = measureTerminalFit(t, s)
-          setViewportSize(dims)
+          setViewportSize(dims); viewportSizeRef.current = dims
           if (dims) {
-            setPtySize(dims)
+            setPtySize(dims); ptySizeRef.current = dims
             queueResize(dims)
             announceResize(ws, dims)
           }
@@ -621,8 +638,9 @@ export function TerminalView({
               const cols = msg.cols as number | undefined
               const rows = msg.rows as number | undefined
               if (cols && rows) {
-                setPtySize({ cols, rows })
-                queueResize({ cols, rows })
+                const size = { cols, rows }
+                setPtySize(size); ptySizeRef.current = size
+                queueResize(size)
               }
               return
             }
@@ -632,18 +650,8 @@ export function TerminalView({
               const rows = msg.rows as number | undefined
               if (cols && rows) {
                 const size = { cols, rows }
-                setPtySize(size)
+                setPtySize(size); ptySizeRef.current = size
                 queueResize(size)
-
-                // Any server-confirmed resize means we're no longer the active
-                // driver. We don't use msg.source to discriminate — 'web_client'
-                // is shared across all browser tabs, so we can't tell whether a
-                // resize came from us or another tab. Stopping driving is always
-                // safe: if we sent this resize ourselves, ptySize already equals
-                // viewportSize (set optimistically in fitAndResize / ws.onopen),
-                // so the pill stays hidden. If another client resized to a
-                // different size, ptySize !== viewportSize and the pill appears.
-                isDrivingRef.current = false
               }
               return
             }
@@ -673,6 +681,7 @@ export function TerminalView({
       }
 
       ws.onclose = () => {
+        setWsState(prev => prev === 'open' ? 'lost' : prev)
         if (disposed.current || intentionalClose) return
         if (currentSessionId.current !== session.id) return
 
@@ -702,7 +711,9 @@ export function TerminalView({
   // fitAndResize and ws.onopen both set ptySize = viewportSize optimistically,
   // so the pill self-clears the moment we start a resize — before the server
   // echoes it back.
-  const showResizePill = session.alive
+  const showDisconnectedPill = wsState === 'lost'
+  const showResizePill = !showDisconnectedPill
+    && session.alive
     && ptySize != null && viewportSize != null
     && (viewportSize.cols !== ptySize.cols || viewportSize.rows !== ptySize.rows)
 
@@ -716,16 +727,25 @@ export function TerminalView({
       class={`terminal-shell ${showResizePill ? 'terminal-shell-passive' : ''}`}
       onClick={handleShellClick}
     >
-      <div ref={containerRef} class="terminal-container" />
-      {showResizePill && (
-        <button
-          type="button"
-          class="terminal-resize-overlay"
-          onClick={() => fitAndResize()}
-        >
-          Sized for another device, click to resize
-        </button>
+      {showDisconnectedPill && (
+        <div class="terminal-resize-anchor">
+          <div class="terminal-disconnected-pill">
+            Connection lost, reconnecting…
+          </div>
+        </div>
       )}
+      {showResizePill && (
+        <div class="terminal-resize-anchor">
+          <button
+            type="button"
+            class="terminal-resize-overlay"
+            onClick={() => fitAndResize()}
+          >
+            Sized for another device, click to resize
+          </button>
+        </div>
+      )}
+      <div ref={containerRef} class="terminal-container" />
       {termLoading && (
         <div class="terminal-loading">
           Waiting for output…

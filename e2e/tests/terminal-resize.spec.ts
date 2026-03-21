@@ -43,7 +43,7 @@ test.describe('terminal resize', () => {
       await clickPill(page)
     }
 
-    // Now resize the viewport — terminal should follow
+    // Now resize the viewport — terminal should follow automatically
     await page.setViewportSize({ width: 900, height: 600 })
     await page.waitForTimeout(1000)
     const small = await getTermState(page)

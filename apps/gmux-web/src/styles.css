@@ -744,26 +744,38 @@ body {
   background: #0f141a;
 }
 
-.terminal-resize-overlay {
-  position: fixed;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
+/* Zero-height sticky anchor: sticks to the top of .terminal-shell's scroll
+   viewport without pushing .terminal-container down. The pill inside
+   overflows visually but doesn't affect layout. */
+.terminal-resize-anchor {
+  position: sticky;
+  top: 0;
+  height: 0;
+  overflow: visible;
+  display: flex;
+  justify-content: center;
   z-index: 12;
+  pointer-events: none;
+}
+
+.terminal-resize-overlay {
+  pointer-events: auto;
+  position: relative;
+  top: 12px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   max-width: min(calc(100% - 24px), 460px);
-  padding: 7px 12px;
+  padding: 10px 16px;
   border: 1px solid color-mix(in oklch, var(--accent) 22%, var(--border-strong));
   border-radius: 999px;
-  background: color-mix(in oklch, var(--bg-sidebar) 76%, #0f141a 24% / 0.82);
+  background: color-mix(in oklch, var(--bg-sidebar) 76%, #0f141a 24%);
   color: color-mix(in oklch, var(--text) 88%, var(--accent));
   box-shadow: 0 8px 24px oklch(0% 0 0 / 0.28);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1;
   letter-spacing: 0.01em;
   cursor: pointer;
@@ -772,7 +784,7 @@ body {
 }
 
 .terminal-resize-overlay:hover {
-  background: color-mix(in oklch, var(--bg-sidebar) 70%, var(--accent) 10% / 0.9);
+  background: color-mix(in oklch, var(--bg-sidebar) 68%, var(--accent) 12%);
   border-color: color-mix(in oklch, var(--accent) 34%, var(--border-strong));
   color: var(--text);
 }
@@ -783,6 +795,31 @@ body {
   box-shadow:
     0 0 0 1px color-mix(in oklch, var(--accent) 45%, transparent),
     0 8px 24px oklch(0% 0 0 / 0.28);
+}
+
+.terminal-disconnected-pill {
+  pointer-events: none;
+  position: relative;
+  top: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(calc(100% - 24px), 460px);
+  padding: 10px 16px;
+  border: 1px solid oklch(0.45 0.12 20 / 0.5);
+  border-radius: 999px;
+  background: oklch(0.22 0.06 20 / 0.88);
+  color: oklch(0.78 0.1 20);
+  box-shadow:
+    0 8px 24px oklch(0% 0 0 / 0.28),
+    0 0 12px oklch(0.5 0.15 20 / 0.12);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 
 .terminal-loading {
