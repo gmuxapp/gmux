@@ -3,6 +3,7 @@ package adapters
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -416,5 +417,29 @@ func TestListSessionFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "c.txt"), []byte("nope"), 0644)
 	if len(ListSessionFiles(dir)) != 2 {
 		t.Fatal("expected 2 jsonl files")
+	}
+}
+
+// --- extractPiText ---
+
+func TestExtractPiTextIncludesToolResult(t *testing.T) {
+	path := writeTempJSONL(t,
+		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp"}`,
+		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"run tests"}]}}`,
+		`{"type":"message","id":"tr1","message":{"role":"toolResult","content":"PASS: 5 tests passed"}}`,
+		`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"text","text":"All tests pass."}]}}`,
+	)
+	text, err := extractPiText(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "run tests") {
+		t.Error("missing user message text")
+	}
+	if !strings.Contains(text, "PASS: 5 tests passed") {
+		t.Error("missing toolResult text")
+	}
+	if !strings.Contains(text, "All tests pass") {
+		t.Error("missing assistant text")
 	}
 }

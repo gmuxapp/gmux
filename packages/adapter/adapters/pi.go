@@ -300,19 +300,29 @@ func ListSessionFiles(dir string) []string {
 
 // --- FileAttributor ---
 
-// AttributeFile matches a file to a session using content similarity between
-// the file's conversation text and each candidate's terminal scrollback.
+// AttributeFile matches a session file to a live session using content
+// similarity between the file's conversation text and each candidate's
+// terminal scrollback.
+//
+// The file text is extracted from all message types (user, assistant,
+// toolResult) and compared against each candidate's scrollback after
+// stripping box-drawing characters, markdown formatting, and collapsing
+// whitespace. These normalizations are needed because the scrollback is
+// a terminal rendering of the same content the file stores as structured
+// JSONL.
 func (p *Pi) AttributeFile(filePath string, candidates []adapter.FileCandidate) string {
-	fileText, err := ExtractPiText(filePath)
+	fileText, err := extractPiText(filePath)
 	if err != nil {
 		return ""
 	}
-	return attributeByScrollback(fileText, candidates)
+	return attributeByScrollbackNormalized(fileText, candidates)
 }
 
-// ExtractPiText reads a pi JSONL session file and extracts conversation
-// text suitable for similarity matching (ADR-0009).
-func ExtractPiText(path string) (string, error) {
+// extractPiText reads a pi JSONL session file and extracts conversation
+// text from all message types (user, assistant, and toolResult) suitable
+// for similarity matching against terminal scrollback. Including tool
+// output is important because it dominates the scrollback display.
+func extractPiText(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -320,7 +330,7 @@ func ExtractPiText(path string) (string, error) {
 
 	var out strings.Builder
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		if line == "" || !strings.Contains(line, `"text"`) {
+		if line == "" {
 			continue
 		}
 		var entry struct {
@@ -332,23 +342,25 @@ func ExtractPiText(path string) (string, error) {
 		if err := json.Unmarshal([]byte(line), &entry); err != nil || entry.Message == nil {
 			continue
 		}
+		// Try array of content blocks (user/assistant messages).
 		var blocks []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		}
-		if err := json.Unmarshal(entry.Message.Content, &blocks); err != nil {
-			var s string
-			if err := json.Unmarshal(entry.Message.Content, &s); err == nil {
-				out.WriteString(s)
-				out.WriteByte(' ')
+		if err := json.Unmarshal(entry.Message.Content, &blocks); err == nil {
+			for _, b := range blocks {
+				if b.Text != "" {
+					out.WriteString(b.Text)
+					out.WriteByte(' ')
+				}
 			}
 			continue
 		}
-		for _, b := range blocks {
-			if b.Type == "text" && b.Text != "" {
-				out.WriteString(b.Text)
-				out.WriteByte(' ')
-			}
+		// Try plain string (toolResult content).
+		var s string
+		if err := json.Unmarshal(entry.Message.Content, &s); err == nil && s != "" {
+			out.WriteString(s)
+			out.WriteByte(' ')
 		}
 	}
 	return out.String(), nil
@@ -399,6 +411,7 @@ func truncateTitle(s string, maxLen int) string {
 	}
 	return s[:cut] + "…"
 }
+
 
 var (
 	errEmpty      = &parseError{"empty file"}

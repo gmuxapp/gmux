@@ -1,6 +1,8 @@
 package adapters
 
 import (
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -35,6 +37,61 @@ func attributeByScrollback(fileText string, candidates []adapter.FileCandidate) 
 		return ""
 	}
 	return bestID
+}
+
+// attributeByScrollbackNormalized is like attributeByScrollback but
+// strips TUI chrome and normalizes formatting before comparison.
+// Both the file text and scrollback represent the same conversation,
+// but the scrollback is a terminal rendering with box-drawing borders,
+// status bars, and collapsed whitespace, while the file text is raw
+// JSONL content with markdown formatting and newlines. Cleaning both
+// sides makes the underlying conversation text match.
+//
+// Uses a 200-char file tail (not 500) because the scrollback is a
+// narrow window and a shorter tail is more likely to overlap with
+// the visible screen.
+func attributeByScrollbackNormalized(fileText string, candidates []adapter.FileCandidate) string {
+	if fileText == "" {
+		return ""
+	}
+	fileTail := cleanForMatching(tail(fileText, 200))
+	if len(fileTail) < 20 {
+		return "" // too short for reliable matching
+	}
+
+	bestID := ""
+	bestScore := 0.0
+
+	for _, c := range candidates {
+		if c.Scrollback == "" {
+			continue
+		}
+		sbTail := cleanForMatching(tail(c.Scrollback, 2000))
+		score := similarityScore(fileTail, sbTail)
+		if score > bestScore {
+			bestScore = score
+			bestID = c.SessionID
+		}
+	}
+
+	if bestScore < 0.3 {
+		return ""
+	}
+	return bestID
+}
+
+// boxDrawing matches box-drawing characters used by TUI borders.
+var boxDrawing = regexp.MustCompile("[─━│┌┐└┘├┤┬┴┼╭╮╰╯║═╔╗╚╝╠╣╦╩╬]+")
+
+// cleanForMatching strips TUI chrome (box-drawing borders), markdown
+// formatting (backticks, bold markers), and collapses whitespace.
+// This brings terminal-rendered text and JSONL source text into the
+// same form for LCS comparison.
+func cleanForMatching(s string) string {
+	s = boxDrawing.ReplaceAllString(s, " ")
+	s = strings.ReplaceAll(s, "`", "")
+	s = strings.ReplaceAll(s, "*", "")
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // attributeByMetadata picks the candidate whose cwd and start time best

@@ -229,26 +229,36 @@ func (fm *FileMonitor) NotifyNewSession(sessionID string) {
 	fm.addWatchLocked(dir)
 	log.Printf("filemon: watching %s for session %s (kind=%s)", dir, sessionID, sess.Kind)
 
-	// Eagerly scan for the most recently modified file. This catches files
-	// written before the watch was set up (e.g. gmuxd restart, or file
-	// written between launch and watch registration). Attribution logic
-	// in the adapter handles matching by cwd + timestamp proximity.
+	// Eagerly scan for session files. This catches files written before
+	// the watch was set up (e.g. gmuxd restart, or file written between
+	// launch and watch registration). All files are tried so that each
+	// live session can find its own file via the adapter's AttributeFile
+	// timestamp matching. Unmatched files are rejected cheaply (the pi
+	// adapter only reads the header line for timestamp comparison).
 	fm.mu.Unlock()
-	fm.scanDirMostRecent(dir)
+	fm.scanDirForSessions(dir)
 	fm.mu.Lock()
 }
 
-// scanDirMostRecent processes the most recently modified .jsonl file in a
-// directory. This catches files written before the watch was set up (e.g.
-// gmuxd restart). Only the newest file is tried — the adapter's
-// AttributeFile decides if it matches a live session (by cwd + timestamp).
-func (fm *FileMonitor) scanDirMostRecent(dir string) {
+// scanDirForSessions processes all .jsonl files in a directory, newest
+// first. This catches files written before the watch was set up (e.g.
+// gmuxd restart). Processing all files allows each live session to find
+// its own initial file via the adapter's AttributeFile timestamp matching.
+// Files that don't match any session are rejected cheaply (header-only
+// parsing) without reading the full content.
+func (fm *FileMonitor) scanDirForSessions(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
-	var newest string
-	var newestMod time.Time
+
+	// Collect files sorted newest-first so the most relevant files
+	// (actively written) get attributed before older ones.
+	type fileEntry struct {
+		path    string
+		modTime time.Time
+	}
+	var files []fileEntry
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
@@ -257,13 +267,21 @@ func (fm *FileMonitor) scanDirMostRecent(dir string) {
 		if err != nil {
 			continue
 		}
-		if info.ModTime().After(newestMod) {
-			newestMod = info.ModTime()
-			newest = filepath.Join(dir, e.Name())
+		files = append(files, fileEntry{
+			path:    filepath.Join(dir, e.Name()),
+			modTime: info.ModTime(),
+		})
+	}
+
+	// Sort newest first.
+	for i := 1; i < len(files); i++ {
+		for j := i; j > 0 && files[j].modTime.After(files[j-1].modTime); j-- {
+			files[j], files[j-1] = files[j-1], files[j]
 		}
 	}
-	if newest != "" {
-		fm.handleFileChange(newest)
+
+	for _, f := range files {
+		fm.handleFileChange(f.path)
 	}
 }
 
@@ -505,9 +523,9 @@ func (fm *FileMonitor) attributeFileLocked(dir, filePath string) string {
 			if sess, ok := fm.store.Get(ms.id); ok {
 				fc.StartedAt, _ = time.Parse(time.RFC3339, sess.StartedAt)
 			}
-			// Always fetch scrollback — needed for single-candidate
-			// attribution too (pi uses scrollback similarity to avoid
-			// matching old files from previous sessions in the same dir).
+			// Populate scrollback for adapters that use content-similarity
+			// matching. Currently unused (all adapters use timestamp or
+			// metadata matching), but part of the FileCandidate contract.
 			fc.Scrollback = fetchScrollbackText(ms.socketPath)
 			fileCandidates[i] = fc
 		}
@@ -516,7 +534,22 @@ func (fm *FileMonitor) attributeFileLocked(dir, filePath string) string {
 			log.Printf("filemon: attributed %s → %s", filepath.Base(filePath), id)
 			return id
 		}
-		return "" // adapter rejected the file
+
+		// Adapter couldn't match by content/timestamp. For single-candidate
+		// dirs, fall back if the file was just written (mtime within 30s).
+		// This handles /new files during live operation without racing with
+		// sequential session registration during startup scans (where old
+		// files would have stale mtimes).
+		if len(candidates) == 1 {
+			if info, err := os.Stat(filePath); err == nil {
+				if time.Since(info.ModTime()) < 30*time.Second {
+					fm.attributions[filePath] = candidates[0].id
+					log.Printf("filemon: attributed %s → %s (fresh single-candidate)", filepath.Base(filePath), candidates[0].id)
+					return candidates[0].id
+				}
+			}
+		}
+		return ""
 	}
 
 	// No FileAttributor — trivial attribution to first candidate.
