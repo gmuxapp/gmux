@@ -24,7 +24,7 @@ When `gmux` starts, it checks the running daemon's version via `/v1/health`. If 
 
 All install methods handle this: Homebrew's postflight hook and the `curl | sh` installer both restart the daemon if it was running. Manual installs get the same behavior on the next `gmux` invocation.
 
-Dev builds (`version=dev`) skip version checking and never replace — this avoids churn when running `dev.sh` alongside a production daemon.
+Dev builds (`version=dev`) skip version checking and never replace — this avoids churn when running `dev-server.sh` alongside a production daemon.
 
 ## Contract versioning
 
