@@ -351,7 +351,7 @@ export function TerminalView({
     const dataDisposable = term.onData((data) => sendInput(data))
     attachKeyboardHandler(term, sendInput)
     const disposePasteHandler = attachPasteHandler(term, containerRef.current!, sendRawInput)
-    const disposeMobileHandler = attachMobileInputHandler(term, sendRawInput)
+    const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
 
     const scrollDisposable = term.onScroll(() => {
       const buf = term.buffer.active

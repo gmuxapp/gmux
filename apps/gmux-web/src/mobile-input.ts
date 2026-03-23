@@ -1,88 +1,115 @@
 /**
  * Mobile keyboard input fixes for xterm.js.
  *
- * Problem: mobile keyboards (iOS autocorrect, Android predictive text) replace
- * words in xterm's hidden textarea rather than appending. xterm.js only
- * handles `inputType === 'insertText'` in its `_inputEvent` handler and has
- * no `beforeinput` listener at all, so replacement events either get ignored
- * or fall through to the composition path, causing the corrected text to be
- * concatenated after the original.
+ * Problem: mobile keyboards (iOS autocorrect, dictation, predictive text)
+ * replace words in xterm's hidden textarea rather than appending. The
+ * replacement is signaled by a non-collapsed selection (selectionStart <
+ * selectionEnd) in a beforeinput event. xterm.js doesn't distinguish
+ * replacements from appends: its _inputEvent handler sends the full ev.data
+ * for every insertText event, so each replacement re-sends the entire text
+ * that was already on screen, causing cascading duplication.
  *
- * Fix: intercept `beforeinput` events with `inputType === 'insertReplacementText'`
- * on the textarea, translate them into the terminal-compatible sequence of
- * backspaces (to erase the old text) followed by the replacement text, and
- * call `preventDefault()` so the `input` event never fires and xterm never
- * sees the change.
+ * iOS Safari fires these replacements as inputType='insertText' (not
+ * 'insertReplacementText'), so we must handle both.
  *
- * This works because xterm's textarea accumulates typed characters (cleared
- * only on blur, Enter, or Ctrl+C). When a replacement fires, the textarea
- * still contains the original text and selectionStart/selectionEnd mark the
- * range being replaced.
+ * Fix: two-phase interception.
+ *
+ *   beforeinput (textarea, capture): when we detect a replacement (selStart <
+ *   selEnd), send backspaces to erase from the replacement start to the end
+ *   of the textarea (everything that was already sent to the PTY). Save the
+ *   replacement text and any suffix for phase two.
+ *
+ *   input (container, capture): fires before xterm's handler on the textarea
+ *   because capture goes parent-first. We stopImmediatePropagation() to
+ *   prevent xterm from also sending ev.data, then send the replacement text
+ *   plus the preserved suffix ourselves.
+ *
+ * This approach never calls preventDefault(), so it works regardless of
+ * whether the browser considers beforeinput cancelable for the given
+ * inputType and element type (a known cross-browser inconsistency).
  *
  * Assumption: the terminal cursor sits right after the last character in the
- * textarea, so backspace count = (textarea.value.length - selectionStart).
- * This holds for the normal mobile typing flow where autocorrect fires
- * immediately after typing a space or tapping a suggestion. It would break
- * if the user moved the terminal cursor (e.g. arrow keys) without the
- * textarea being cleared, but mobile on-screen keyboards don't have arrow
- * keys and autocorrect doesn't fire in that scenario.
+ * textarea. This holds for the normal mobile typing flow where replacements
+ * fire immediately after typing. Mobile on-screen keyboards don't have arrow
+ * keys, and autocorrect/dictation don't fire after cursor movement.
  *
- * Not yet handled: voice dictation, which uses composition events rather than
- * `insertReplacementText`. The `/_/input-diagnostics` page can be used to
- * collect real event traces to guide a future fix for that case.
+ * See also: /_/input-diagnostics for collecting real event traces.
  */
 import type { Terminal } from '@xterm/xterm'
 
 type SendFn = (data: string) => void
+
+interface PendingReplacement {
+  newText: string
+  suffix: string
+}
 
 /**
  * Attach a handler that intercepts mobile keyboard word-replacement events
  * and translates them into terminal-compatible input sequences.
  *
  * Must be called after `term.open()` so `term.textarea` exists.
+ * `container` should be the parent element of xterm's textarea (needed to
+ * intercept input events in the capture phase before xterm sees them).
  * `send` should be the raw PTY send function (not sendInput, to avoid
- * ctrl/alt modifier interference, same as paste).
+ * ctrl/alt modifier interference; same convention as paste).
  *
  * Returns a cleanup function.
  */
 export function attachMobileInputHandler(
   term: Terminal,
+  container: HTMLElement,
   send: SendFn,
 ): () => void {
   const textarea = term.textarea
   if (!textarea) return () => {}
 
-  const handler = (ev: InputEvent) => {
-    if (ev.inputType !== 'insertReplacementText') return
+  let pending: PendingReplacement | null = null
 
-    // The replacement text comes from ev.data (most browsers) or
-    // ev.dataTransfer (Safari for some spell-check corrections).
-    const newText = ev.data ?? ev.dataTransfer?.getData('text/plain') ?? ''
-    if (!newText) return
+  // Phase 1: detect replacement and send backspaces.
+  const onBeforeInput = (ev: InputEvent) => {
+    if (ev.inputType !== 'insertText' && ev.inputType !== 'insertReplacementText') return
 
     const start = textarea.selectionStart ?? 0
     const end = textarea.selectionEnd ?? start
 
-    // If nothing is selected, this isn't really a replacement.
+    // Collapsed selection = normal append, let xterm handle it.
     if (start === end) return
 
-    // Everything from `start` to the end of the textarea was already sent to
-    // the PTY. Erase it all, then re-send replacement + preserved suffix.
+    const newText = ev.data ?? ev.dataTransfer?.getData('text/plain') ?? ''
+    if (!newText) return
+
     const suffix = textarea.value.substring(end)
     const charsToErase = textarea.value.length - start
 
-    ev.preventDefault()
-    ev.stopImmediatePropagation()
+    // Erase from the replacement start to the end of the textarea.
+    // All of this text was already sent to the PTY.
+    send('\x7f'.repeat(charsToErase))
 
-    send('\x7f'.repeat(charsToErase) + newText + suffix)
-
-    // Keep the textarea in sync so the keyboard's internal model matches.
-    const prefix = textarea.value.substring(0, start)
-    textarea.value = prefix + newText + suffix
-    textarea.selectionStart = textarea.selectionEnd = start + newText.length
+    // Phase 2 will send the replacement text + suffix after we prevent
+    // xterm from double-sending ev.data.
+    pending = { newText, suffix }
   }
 
-  // Capture phase so we fire before any other listeners on this element.
-  textarea.addEventListener('beforeinput', handler, { capture: true })
-  return () => textarea.removeEventListener('beforeinput', handler, { capture: true })
+  // Phase 2: intercept the input event before xterm, send replacement + suffix.
+  // Registered on the container (parent) so capture phase fires before
+  // xterm's capture-phase handler on the textarea itself.
+  const onInput = (ev: Event) => {
+    if (!pending) return
+    const { newText, suffix } = pending
+    pending = null
+
+    // Prevent xterm's _inputEvent from also sending ev.data.
+    ev.stopImmediatePropagation()
+
+    send(newText + suffix)
+  }
+
+  textarea.addEventListener('beforeinput', onBeforeInput, { capture: true })
+  container.addEventListener('input', onInput, { capture: true })
+
+  return () => {
+    textarea.removeEventListener('beforeinput', onBeforeInput, { capture: true })
+    container.removeEventListener('input', onInput, { capture: true })
+  }
 }
