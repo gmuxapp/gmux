@@ -45,7 +45,7 @@ jobs:
 
             Review the changelog entry, edit if needed, then merge.
             Merging creates the `${{ steps.version.outputs.version }}` tag and triggers the release build.
-          branch: release/${{ steps.version.outputs.version }}
+          branch: release/next
           delete-branch: true
 
   # When the release PR itself merges (deleting changeset files), this

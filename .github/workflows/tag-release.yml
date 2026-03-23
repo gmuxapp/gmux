@@ -1,6 +1,6 @@
 name: Tag Release
 
-# When a release PR (branch: release/vX.Y.Z) is merged, create the
+# When the release PR (branch: release/next) is merged, create the
 # git tag. This triggers the existing release.yml GoReleaser workflow.
 on:
   pull_request:
@@ -14,7 +14,7 @@ jobs:
   tag:
     if: >-
       github.event.pull_request.merged &&
-      startsWith(github.event.pull_request.head.ref, 'release/v')
+      github.event.pull_request.head.ref == 'release/next'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,11 +24,12 @@ jobs:
 
       - name: Extract version and create tag
         run: |
-          branch="${{ github.event.pull_request.head.ref }}"
-          version="${branch#release/}"
+          # PR title is "release: v0.5.2" — extract the version.
+          title="${{ github.event.pull_request.title }}"
+          version=$(echo "$title" | grep -oP 'v\d+\.\d+\.\d+')
 
-          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Could not extract valid version from branch '$branch'"
+          if [[ -z "$version" ]]; then
+            echo "::error::Could not extract version from PR title '$title'"
             exit 1
           fi
 
