@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { ImageAddon } from '@xterm/addon-image'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { attachKeyboardHandler, attachPasteHandler } from './keyboard'
+import { attachMobileInputHandler } from './mobile-input'
 import { createReplayBuffer } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 import { MOCK_BY_ID } from './mock-data/index'
@@ -350,6 +351,7 @@ export function TerminalView({
     const dataDisposable = term.onData((data) => sendInput(data))
     attachKeyboardHandler(term, sendInput)
     const disposePasteHandler = attachPasteHandler(term, containerRef.current!, sendRawInput)
+    const disposeMobileHandler = attachMobileInputHandler(term, sendRawInput)
 
     const scrollDisposable = term.onScroll(() => {
       const buf = term.buffer.active
@@ -526,6 +528,7 @@ export function TerminalView({
       shell?.removeEventListener('touchend', handleTouchEndCapture, true)
       shell?.removeEventListener('touchcancel', clearTouchPan, true)
       disposePasteHandler()
+      disposeMobileHandler()
       dataDisposable.dispose()
       scrollDisposable.dispose()
       setScrolledUp(false)
