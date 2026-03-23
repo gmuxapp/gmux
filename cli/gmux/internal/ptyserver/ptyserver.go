@@ -44,7 +44,7 @@ type Server struct {
 	ptmx       *os.File
 	sockPath   string
 	listener   net.Listener
-	scrollback *ringbuf.RingBuf
+	scrollback *ringbuf.TermWriter
 	adapter    adapter.Adapter
 	state      *session.State
 
@@ -144,7 +144,7 @@ func New(cfg Config) (*Server, error) {
 		ptmx:       ptmx,
 		sockPath:   cfg.SocketPath,
 		listener:   listener,
-		scrollback: ringbuf.New(scrollbackSize),
+		scrollback: ringbuf.NewTermWriter(ringbuf.New(scrollbackSize)),
 		adapter:    cfg.Adapter,
 		state:      cfg.State,
 		clients:    make(map[*wsClient]struct{}),
