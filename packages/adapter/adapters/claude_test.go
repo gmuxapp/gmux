@@ -275,7 +275,7 @@ func TestClaudeParseSessionFileNoSessionID(t *testing.T) {
 func TestClaudeParseNewLinesCustomTitle(t *testing.T) {
 	events := NewClaude().ParseNewLines([]string{
 		`{"type":"custom-title","customTitle":"My session title","sessionId":"abc"}`,
-	})
+	}, "")
 	if len(events) != 1 || events[0].Title != "My session title" {
 		t.Errorf("expected 1 title event, got %v", events)
 	}
@@ -284,7 +284,7 @@ func TestClaudeParseNewLinesCustomTitle(t *testing.T) {
 func TestClaudeParseNewLinesUserMessage(t *testing.T) {
 	events := NewClaude().ParseNewLines([]string{
 		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Fix the bug"}]},"uuid":"u1"}`,
-	})
+	}, "")
 	// Should produce: working status only (title comes from ParseSessionFile on attribution)
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event (status), got %d", len(events))
@@ -298,7 +298,7 @@ func TestClaudeParseNewLinesAssistantTextOnly(t *testing.T) {
 	// Text-only assistant = turn complete
 	events := NewClaude().ParseNewLines([]string{
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"stop_reason":null},"uuid":"a1"}`,
-	})
+	}, "")
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
@@ -311,7 +311,7 @@ func TestClaudeParseNewLinesAssistantToolUse(t *testing.T) {
 	// tool_use in content = still working, emit working=true to re-assert.
 	events := NewClaude().ParseNewLines([]string{
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"bash","input":{"command":"ls"}}],"stop_reason":null},"uuid":"a1"}`,
-	})
+	}, "")
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event for tool_use, got %d", len(events))
 	}
@@ -324,7 +324,7 @@ func TestClaudeParseNewLinesAssistantThinkingOnly(t *testing.T) {
 	// thinking-only = intermediate, no event
 	events := NewClaude().ParseNewLines([]string{
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Let me think..."}],"stop_reason":null},"uuid":"a1"}`,
-	})
+	}, "")
 	if len(events) != 0 {
 		t.Errorf("expected 0 events for thinking-only, got %d", len(events))
 	}
@@ -334,7 +334,7 @@ func TestClaudeParseNewLinesAssistantTextAndToolUse(t *testing.T) {
 	// Text + tool_use = still working (tool_use takes priority)
 	events := NewClaude().ParseNewLines([]string{
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll run a command"},{"type":"tool_use","id":"t1","name":"bash","input":{"command":"ls"}}],"stop_reason":null},"uuid":"a1"}`,
-	})
+	}, "")
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event for text+tool_use, got %d", len(events))
 	}
@@ -347,7 +347,7 @@ func TestClaudeParseNewLinesAssistantAborted(t *testing.T) {
 	// User pressed Esc — stop_reason="stop_sequence" with text content → idle.
 	events := NewClaude().ParseNewLines([]string{
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I was saying..."}],"stop_reason":"stop_sequence"},"uuid":"a1"}`,
-	})
+	}, "")
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
@@ -363,7 +363,7 @@ func TestClaudeParseNewLinesFullTurnCycle(t *testing.T) {
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"bash","input":{}}],"stop_reason":null},"uuid":"a1"}`,
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"bash","input":{}}],"stop_reason":null},"uuid":"a2"}`,
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn"},"uuid":"a3"}`,
-	})
+	}, "")
 	// user=working, tool_use=working, tool_use=working, end_turn=idle
 	if len(events) != 4 {
 		t.Fatalf("expected 4 events, got %d", len(events))
@@ -384,7 +384,7 @@ func TestClaudeParseNewLinesIgnoresNonMessageTypes(t *testing.T) {
 		`{"type":"system","subtype":"local_command","content":"output"}`,
 		`{"type":"queue-operation","operation":"dequeue"}`,
 		`{"type":"last-prompt","prompt":"something"}`,
-	})
+	}, "")
 	if len(events) != 0 {
 		t.Errorf("expected 0 events for non-message types, got %d", len(events))
 	}
@@ -394,7 +394,7 @@ func TestClaudeParseNewLinesSystemMessage(t *testing.T) {
 	// System messages should not generate events
 	events := NewClaude().ParseNewLines([]string{
 		`{"type":"system","subtype":"local_command","message":"command output"}`,
-	})
+	}, "")
 	if len(events) != 0 {
 		t.Errorf("expected 0 events for system, got %d", len(events))
 	}
@@ -405,7 +405,7 @@ func TestClaudeParseNewLinesMultiTurn(t *testing.T) {
 		`{"type":"user","message":{"role":"user","content":"Fix it"},"uuid":"u1"}`,
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"bash","input":{}}],"stop_reason":null},"uuid":"a1"}`,
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"All done."}],"stop_reason":"end_turn"},"uuid":"a2"}`,
-	})
+	}, "")
 	// user → working, tool_use → working, text → idle
 	if len(events) != 3 {
 		t.Fatalf("expected 3 events, got %d: %v", len(events), events)

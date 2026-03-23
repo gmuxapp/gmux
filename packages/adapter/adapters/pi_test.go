@@ -186,7 +186,7 @@ func TestParseSessionFileStringContent(t *testing.T) {
 func TestParseNewLinesNameChange(t *testing.T) {
 	events := NewPi().ParseNewLines([]string{
 		`{"type":"session_info","name":"My new name"}`,
-	})
+	}, "")
 	if len(events) != 1 || events[0].Title != "My new name" {
 		t.Errorf("expected 1 title event, got %v", events)
 	}
@@ -195,7 +195,7 @@ func TestParseNewLinesNameChange(t *testing.T) {
 func TestParseNewLinesUserMessage(t *testing.T) {
 	events := NewPi().ParseNewLines([]string{
 		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"Fix the bug"}]}}`,
-	})
+	}, "")
 	// Should produce: working status only (title comes from ParseSessionFile on attribution)
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event (status), got %d", len(events))
@@ -210,7 +210,7 @@ func TestParseNewLinesNameDoesNotAffectStatus(t *testing.T) {
 	// This ensures /name during an agent turn doesn't clear working state.
 	events := NewPi().ParseNewLines([]string{
 		`{"type":"session_info","name":"My project"}`,
-	})
+	}, "")
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
@@ -230,7 +230,7 @@ func TestParseNewLinesNameAmidToolUse(t *testing.T) {
 		`{"type":"message","id":"tr1","message":{"role":"toolResult","content":""}}`,
 		`{"type":"session_info","name":"Refactoring auth"}`,
 		`{"type":"message","id":"a2","message":{"role":"assistant","stopReason":"toolUse","content":[]}}`,
-	})
+	}, "")
 	// toolUse events emit working=true, session_info emits title.
 	var hasTitle bool
 	var lastWorking *bool
@@ -254,7 +254,7 @@ func TestParseNewLinesNameAmidToolUse(t *testing.T) {
 func TestParseNewLinesAssistantStop(t *testing.T) {
 	events := NewPi().ParseNewLines([]string{
 		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Done."}]}}`,
-	})
+	}, "")
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
@@ -267,7 +267,7 @@ func TestParseNewLinesAssistantToolUse(t *testing.T) {
 	// toolUse stopReason means assistant is still working — emit working=true.
 	events := NewPi().ParseNewLines([]string{
 		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"toolUse","content":[]}}`,
-	})
+	}, "")
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event for toolUse, got %d", len(events))
 	}
@@ -280,7 +280,7 @@ func TestParseNewLinesAssistantAborted(t *testing.T) {
 	// User pressed Esc — agent is idle.
 	events := NewPi().ParseNewLines([]string{
 		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"aborted","content":[]}}`,
-	})
+	}, "")
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
@@ -289,36 +289,130 @@ func TestParseNewLinesAssistantAborted(t *testing.T) {
 	}
 }
 
-func TestParseNewLinesAssistantError(t *testing.T) {
-	// Generation error — agent is idle (may auto-retry).
+func TestParseNewLinesAssistantErrorSingle(t *testing.T) {
+	// A single error should NOT change state — a retry is expected.
+	// The file has only 1 error, well below the exhausted threshold.
+	path := writeTempJSONL(t,
+		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp"}`,
+		`{"type":"message","id":"u1","message":{"role":"user","content":"fix bug"}}`,
+		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+	)
 	events := NewPi().ParseNewLines([]string{
 		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"error","content":[]}}`,
-	})
+	}, path)
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events for single error (retry pending), got %d", len(events))
+	}
+}
+
+func TestParseNewLinesAssistantErrorExhausted(t *testing.T) {
+	// 4 consecutive errors = retries exhausted. The agent gave up; emit idle.
+	path := writeTempJSONL(t,
+		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp"}`,
+		`{"type":"message","id":"u1","message":{"role":"user","content":"fix bug"}}`,
+		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+		`{"type":"message","id":"a2","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+		`{"type":"message","id":"a3","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+		`{"type":"message","id":"a4","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+	)
+	events := NewPi().ParseNewLines([]string{
+		`{"type":"message","id":"a4","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+	}, path)
 	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
+		t.Fatalf("expected 1 event (exhausted → idle), got %d", len(events))
 	}
 	if events[0].Status == nil || events[0].Status.Working {
-		t.Error("expected working=false on error")
+		t.Error("expected working=false after exhausted retries")
+	}
+}
+
+func TestParseNewLinesErrorExhaustedIgnoresCustomEvents(t *testing.T) {
+	// Custom/extension events between errors should not break the count.
+	path := writeTempJSONL(t,
+		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp"}`,
+		`{"type":"message","id":"u1","message":{"role":"user","content":"fix bug"}}`,
+		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+		`{"type":"custom","customType":"jj-checkpoint","data":{}}`,
+		`{"type":"message","id":"a2","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+		`{"type":"label","id":"l1","label":"jj:abc"}`,
+		`{"type":"message","id":"a3","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+		`{"type":"custom","customType":"jj-checkpoint","data":{}}`,
+		`{"type":"message","id":"a4","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+	)
+	events := NewPi().ParseNewLines([]string{
+		`{"type":"message","id":"a4","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+	}, path)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (exhausted), got %d", len(events))
+	}
+	if events[0].Status == nil || events[0].Status.Working {
+		t.Error("expected idle after 4 errors with interleaved custom events")
 	}
 }
 
 func TestParseNewLinesErrorAutoRetry(t *testing.T) {
-	// Error followed by automatic retry (toolUse). The last status should
-	// be working=true — the error cleared it, but the retry re-asserted it.
+	// Error followed by automatic retry (toolUse) in the same batch.
+	// The error produces no state change (only 1 in file); toolUse re-asserts working.
+	path := writeTempJSONL(t,
+		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp"}`,
+		`{"type":"message","id":"u1","message":{"role":"user","content":"fix bug"}}`,
+		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+		`{"type":"message","id":"a2","message":{"role":"assistant","stopReason":"toolUse","content":[]}}`,
+	)
 	events := NewPi().ParseNewLines([]string{
 		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"error","content":[]}}`,
 		`{"type":"message","id":"a2","message":{"role":"assistant","stopReason":"toolUse","content":[]}}`,
-	})
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(events))
+	}, path)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (toolUse only), got %d", len(events))
 	}
-	// First: error → idle
+	if events[0].Status == nil || !events[0].Status.Working {
+		t.Error("expected working=true (retry continues)")
+	}
+}
+
+func TestParseNewLinesErrorNoFilePath(t *testing.T) {
+	// When no file path is available (empty string), error should not
+	// change state (safe default: assume retry is coming).
+	events := NewPi().ParseNewLines([]string{
+		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+	}, "")
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events with no file path, got %d", len(events))
+	}
+}
+
+func TestParseNewLinesErrorRespectsCustomRetryConfig(t *testing.T) {
+	// When project-level settings set maxRetries=1, exhaustion threshold
+	// is 2 (1 original + 1 retry). Two consecutive errors should go idle.
+	dir := t.TempDir()
+
+	// Write project-level pi settings with maxRetries=1.
+	piDir := filepath.Join(dir, ".pi")
+	os.MkdirAll(piDir, 0o755)
+	os.WriteFile(filepath.Join(piDir, "settings.json"),
+		[]byte(`{"retry":{"maxRetries":1}}`), 0o644)
+
+	path := filepath.Join(dir, "session.jsonl")
+	var content string
+	for _, line := range []string{
+		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"` + dir + `"}`,
+		`{"type":"message","id":"u1","message":{"role":"user","content":"fix bug"}}`,
+		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+		`{"type":"message","id":"a2","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+	} {
+		content += line + "\n"
+	}
+	os.WriteFile(path, []byte(content), 0o644)
+
+	events := NewPi().ParseNewLines([]string{
+		`{"type":"message","id":"a2","message":{"role":"assistant","stopReason":"error","content":[]}}`,
+	}, path)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (exhausted with maxRetries=1), got %d", len(events))
+	}
 	if events[0].Status == nil || events[0].Status.Working {
-		t.Error("first event should be idle (error)")
-	}
-	// Second: toolUse → working again
-	if events[1].Status == nil || !events[1].Status.Working {
-		t.Error("second event should be working (retry)")
+		t.Error("expected idle after exhausted retries with custom config")
 	}
 }
 
@@ -331,7 +425,7 @@ func TestParseNewLinesFullTurnCycle(t *testing.T) {
 		`{"type":"message","id":"a2","message":{"role":"assistant","stopReason":"toolUse","content":[]}}`,
 		`{"type":"message","id":"tr2","message":{"role":"toolResult","content":""}}`,
 		`{"type":"message","id":"a3","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Done."}]}}`,
-	})
+	}, "")
 	// user=working, toolUse=working, toolUse=working, stop=idle
 	// (toolResult has no events)
 	if len(events) != 4 {
@@ -356,9 +450,34 @@ func TestParseNewLinesIgnoresNonMessageTypes(t *testing.T) {
 		`{"type":"thinking_level_change","id":"tl1","thinkingLevel":"high"}`,
 		`{"type":"custom_message","id":"cm1"}`,
 		`{"type":"image","id":"i1"}`,
-	})
+	}, "")
 	if len(events) != 0 {
 		t.Errorf("expected 0 events for non-message types, got %d", len(events))
+	}
+}
+
+func TestParseNewLinesUnknownStopReason(t *testing.T) {
+	// Unknown stopReasons (e.g. from future protocol versions) must not
+	// change state. This prevents extensions or new features from
+	// accidentally clearing the working indicator.
+	events := NewPi().ParseNewLines([]string{
+		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"someNewReason","content":[]}}`,
+	}, "")
+	if len(events) != 0 {
+		t.Errorf("expected 0 events for unknown stopReason, got %d", len(events))
+	}
+}
+
+func TestParseNewLinesCustomExtensionEvents(t *testing.T) {
+	// Extensions can emit custom event types. These must be silently
+	// ignored and never disrupt the current state.
+	events := NewPi().ParseNewLines([]string{
+		`{"type":"extension_progress","id":"ep1","progress":0.5}`,
+		`{"type":"custom_diagnostic","severity":"warning","message":"slow query"}`,
+		`{"type":"metrics","cpu":42,"memory":1024}`,
+	}, "")
+	if len(events) != 0 {
+		t.Errorf("expected 0 events for custom extension types, got %d", len(events))
 	}
 }
 
@@ -366,7 +485,7 @@ func TestParseNewLinesToolResult(t *testing.T) {
 	// toolResult messages should not generate events
 	events := NewPi().ParseNewLines([]string{
 		`{"type":"message","id":"tr1","message":{"role":"toolResult","content":""}}`,
-	})
+	}, "")
 	if len(events) != 0 {
 		t.Errorf("expected 0 events for toolResult, got %d", len(events))
 	}

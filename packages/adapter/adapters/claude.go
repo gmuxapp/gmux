@@ -225,7 +225,7 @@ func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error)
 //       stop_reason="end_turn"       → idle (normal completion)
 //       stop_reason="stop_sequence"  → idle (user pressed Esc)
 //       thinking-only                → intermediate, ignored
-func (c *Claude) ParseNewLines(lines []string) []adapter.FileEvent {
+func (c *Claude) ParseNewLines(lines []string, _ string) []adapter.FileEvent {
 	var events []adapter.FileEvent
 	for _, line := range lines {
 		if line == "" {

@@ -187,11 +187,12 @@ func (p *Pi) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 //   - "toolUse" → working (tool loop continues)
 //   - "stop"    → idle (turn complete)
 //   - "aborted" → idle (user cancelled via Esc)
-//   - "error"   → idle (generation failed)
+//   - "error"   → idle only if retries exhausted (4+ consecutive errors
+//     in the file); otherwise no change (retry expected)
 //
-// Non-message types (text, toolCall, thinking, model_change, compaction,
-// branch_summary, thinking_level_change, custom_message, image) are ignored.
-func (p *Pi) ParseNewLines(lines []string) []adapter.FileEvent {
+// Unknown event types and unknown stopReasons produce no state change.
+// Extensions can emit custom events; these must not disrupt existing state.
+func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.FileEvent {
 	var events []adapter.FileEvent
 	for _, line := range lines {
 		if line == "" {
@@ -237,8 +238,6 @@ func (p *Pi) ParseNewLines(lines []string) []adapter.FileEvent {
 				switch msg.Message.StopReason {
 				case "toolUse":
 					// Assistant wants to call tools — agent loop continues.
-					// Emit working to re-assert status after any preceding
-					// error/abort that may have cleared it.
 					events = append(events, adapter.FileEvent{
 						Status: &adapter.Status{Working: true},
 					})
@@ -253,16 +252,116 @@ func (p *Pi) ParseNewLines(lines []string) []adapter.FileEvent {
 						Status: &adapter.Status{},
 					})
 				case "error":
-					// Generation failed — agent is idle (may auto-retry,
-					// in which case the next toolUse will re-set working).
-					events = append(events, adapter.FileEvent{
-						Status: &adapter.Status{},
-					})
+					// Errors are often transient (overloaded, rate-limited)
+					// and pi retries automatically. A single error should
+					// not change state. But when retries are exhausted,
+					// the agent has given up and is idle. Read the file
+					// to count consecutive errors and check the retry limit.
+					if filePath != "" {
+						count, cwd := countTrailingErrors(filePath)
+						if count >= piMaxRetries(cwd) {
+							events = append(events, adapter.FileEvent{
+								Status: &adapter.Status{},
+							})
+						}
+					}
+				// Unknown stopReasons: no state change.
 				}
 			}
 		}
 	}
 	return events
+}
+
+// piDefaultMaxRetries is the fallback when settings can't be read.
+// Pi's default is maxRetries=3, so exhaustion = 1 original + 3 retries = 4.
+const piDefaultMaxRetries = 4
+
+// piMaxRetries reads pi's retry setting from its config files.
+// Returns maxRetries+1 (the total number of error messages when exhausted).
+// Pi merges ~/.pi/agent/settings.json (global) with <cwd>/.pi/settings.json
+// (project-level); project settings take precedence.
+func piMaxRetries(cwd string) int {
+	read := func(path string) int {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return -1
+		}
+		var cfg struct {
+			Retry *struct {
+				MaxRetries *int `json:"maxRetries"`
+			} `json:"retry"`
+		}
+		if err := json.Unmarshal(data, &cfg); err != nil || cfg.Retry == nil || cfg.Retry.MaxRetries == nil {
+			return -1
+		}
+		return *cfg.Retry.MaxRetries
+	}
+
+	// Project-level overrides global (matches pi's deepMergeSettings).
+	if cwd != "" {
+		if v := read(filepath.Join(cwd, ".pi", "settings.json")); v >= 0 {
+			return v + 1
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return piDefaultMaxRetries
+	}
+	if v := read(filepath.Join(home, ".pi", "agent", "settings.json")); v >= 0 {
+		return v + 1
+	}
+	return piDefaultMaxRetries
+}
+
+// countTrailingErrors reads a pi session file and counts consecutive
+// assistant error messages from the end, ignoring non-message lines
+// (custom events, labels, etc.). Also extracts the cwd from the
+// session header for config lookup.
+func countTrailingErrors(filePath string) (count int, cwd string) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return 0, ""
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+
+	// Extract cwd from the session header (first line).
+	if len(lines) > 0 {
+		var header struct {
+			Type string `json:"type"`
+			Cwd  string `json:"cwd"`
+		}
+		if err := json.Unmarshal([]byte(lines[0]), &header); err == nil && header.Type == "session" {
+			cwd = header.Cwd
+		}
+	}
+
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
+		if line == "" {
+			continue
+		}
+		var entry struct {
+			Type    string `json:"type"`
+			Message *struct {
+				Role       string `json:"role"`
+				StopReason string `json:"stopReason"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		// Skip non-message lines (custom events, labels, etc.)
+		if entry.Type != "message" {
+			continue
+		}
+		if entry.Message != nil && entry.Message.Role == "assistant" && entry.Message.StopReason == "error" {
+			count++
+		} else {
+			break // hit a non-error message, stop counting
+		}
+	}
+	return count, cwd
 }
 
 // --- Resumer ---

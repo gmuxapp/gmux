@@ -170,11 +170,13 @@ Implement this if your tool writes session or conversation files to disk.
 
 ```go
 type FileMonitor interface {
-    ParseNewLines(lines []string) []FileEvent
+    ParseNewLines(lines []string, filePath string) []FileEvent
 }
 ```
 
 Implement this if appended file content should update the live sidebar. Return `FileEvent` values with a `Title` or `Status`.
+
+The `filePath` parameter is the attributed session file being monitored. Adapters can read it to inspect preceding context when needed (e.g. counting consecutive errors to detect exhausted retries). Pass `""` in tests that don't need file context.
 
 ### `FileAttributor`
 

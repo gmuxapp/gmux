@@ -49,8 +49,11 @@ type SessionFiler interface {
 // inotify fires on an attributed file.
 type FileMonitor interface {
 	// ParseNewLines receives lines appended since the last read.
+	// filePath is the attributed session file being monitored; adapters
+	// may read it to inspect preceding context (e.g. counting consecutive
+	// errors to detect exhausted retries).
 	// Returns events that should update the session's state.
-	ParseNewLines(lines []string) []FileEvent
+	ParseNewLines(lines []string, filePath string) []FileEvent
 }
 
 // SessionFileLister is an optional extension of SessionFiler for adapters

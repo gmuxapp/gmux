@@ -134,11 +134,11 @@ Use this when a tool stores session state on disk and gmux should be able to dis
 
 ```go
 type FileMonitor interface {
-    ParseNewLines(lines []string) []FileEvent
+    ParseNewLines(lines []string, filePath string) []FileEvent
 }
 ```
 
-Use this when new file content should update the live sidebar. `gmuxd` tracks offsets and passes only appended lines.
+Use this when new file content should update the live sidebar. `gmuxd` tracks offsets and passes only appended lines. The `filePath` parameter gives adapters access to the full session file for context lookups (e.g. reading preceding events).
 
 Typical uses:
 - title changes

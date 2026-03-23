@@ -209,7 +209,7 @@ func TestCodexParseNewLinesUserMessage(t *testing.T) {
 	events := NewCodex().ParseNewLines([]string{
 		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the bug"}]}}`,
 		`{"type":"event_msg","payload":{"type":"user_message"}}`,
-	})
+	}, "")
 	// Should produce: working status only (title comes from ParseSessionFile on attribution)
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -222,7 +222,7 @@ func TestCodexParseNewLinesUserMessage(t *testing.T) {
 func TestCodexParseNewLinesTaskComplete(t *testing.T) {
 	events := NewCodex().ParseNewLines([]string{
 		`{"type":"event_msg","payload":{"type":"task_complete"}}`,
-	})
+	}, "")
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
@@ -234,7 +234,7 @@ func TestCodexParseNewLinesTaskComplete(t *testing.T) {
 func TestCodexParseNewLinesTurnAborted(t *testing.T) {
 	events := NewCodex().ParseNewLines([]string{
 		`{"type":"event_msg","payload":{"type":"turn_aborted"}}`,
-	})
+	}, "")
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
@@ -249,7 +249,7 @@ func TestCodexParseNewLinesSkipsSystemContext(t *testing.T) {
 		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context><cwd>/tmp</cwd></environment_context>"}]}}`,
 		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the bug"}]}}`,
 		`{"type":"event_msg","payload":{"type":"user_message"}}`,
-	})
+	}, "")
 	// Should produce: working status only (title comes from ParseSessionFile)
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
@@ -263,7 +263,7 @@ func TestCodexParseNewLinesAgentMessage(t *testing.T) {
 	// agent_message alone should not generate events
 	events := NewCodex().ParseNewLines([]string{
 		`{"type":"event_msg","payload":{"type":"agent_message"}}`,
-	})
+	}, "")
 	if len(events) != 0 {
 		t.Errorf("expected 0 events for agent_message, got %d", len(events))
 	}
@@ -277,7 +277,7 @@ func TestCodexParseNewLinesMultiTurn(t *testing.T) {
 		`{"type":"response_item","payload":{"type":"function_call_output"}}`,
 		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}]}}`,
 		`{"type":"event_msg","payload":{"type":"task_complete"}}`,
-	})
+	}, "")
 	// user_message → working, task_complete → idle
 	if len(events) != 2 {
 		t.Fatalf("expected 2 events, got %d: %v", len(events), events)

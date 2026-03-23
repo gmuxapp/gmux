@@ -9,7 +9,7 @@ gmux has built-in support for [pi](https://github.com/mariozechner/pi-coding-age
 
 ### Live status
 
-The sidebar shows when pi is actively working. gmux detects pi's spinner animation and reports it as **working** (pulsing cyan dot). When the spinner stops, the dot disappears.
+The sidebar shows when pi is actively working. gmux monitors pi's session file for message events and reports the agent as **working** (pulsing cyan dot) while it is processing. When the turn completes, the dot disappears.
 
 ### Session titles from conversations
 
@@ -79,10 +79,17 @@ Attribution is sticky: once a file is matched to a session, it stays matched unt
 
 ### Status detection
 
-gmux watches pi's PTY output for its braille spinner characters (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) followed by "Working...". When detected, the session's status updates to `active` with the label "working". This is a lightweight heuristic — no parsing of pi's internal state, just pattern matching on the terminal output.
+Status is driven by pi's JSONL session file, not PTY output. gmuxd watches for appended message entries and infers the agent's state:
+
+- **user message** → working (assistant will respond)
+- **assistant with `stopReason: "toolUse"`** → working (tool loop continues)
+- **assistant with `stopReason: "stop"`** → idle (turn complete)
+- **assistant with `stopReason: "aborted"`** → idle (user cancelled)
+- **assistant with `stopReason: "error"`** → no change unless retries are exhausted. Pi auto-retries transient errors (overloaded, rate-limited). gmux reads the file to count consecutive errors and only transitions to idle when the count reaches pi's retry limit (default 3 retries, configurable via `retry.maxRetries` in pi's settings).
+
+Unknown event types (including custom extension events) are silently ignored and never disrupt the current state.
 
 ## Limitations
 
-- **Status is spinner-only for now.** gmux doesn't yet distinguish between "thinking", "writing code", or "waiting for tool approval". It reports "working" for any active spinner.
 - **Title appears after the first turn.** Pi creates the session file on launch but doesn't write conversation content until the first assistant response completes. The title (derived from your first message) appears once that write happens.
 - **Multi-instance attribution needs content matching.** If you run two pi sessions in the same directory, gmux uses content similarity to attribute files. This works well in practice but has a one-write delay for initial attribution.

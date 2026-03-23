@@ -392,7 +392,7 @@ func (fm *FileMonitor) handleFileChange(path string) {
 		return
 	}
 
-	events := ms.fileMon.ParseNewLines(lines)
+	events := ms.fileMon.ParseNewLines(lines, path)
 
 	// If adapter title is still unset (file was attributed before any user
 	// messages), re-derive it from the full file. This catches the common

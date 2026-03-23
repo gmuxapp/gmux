@@ -209,7 +209,7 @@ func (c *Codex) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) 
 //
 // Signals (from response_item lines):
 //   - role:"user" type:"message" → extract text for title hint
-func (c *Codex) ParseNewLines(lines []string) []adapter.FileEvent {
+func (c *Codex) ParseNewLines(lines []string, _ string) []adapter.FileEvent {
 	var events []adapter.FileEvent
 
 	for _, line := range lines {
