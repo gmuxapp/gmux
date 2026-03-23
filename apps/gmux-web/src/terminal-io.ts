@@ -39,10 +39,12 @@ export interface TerminalIO {
  * is idle. This avoids xterm async-parser races (eg image addon + resize).
  *
  * Scroll preservation: when a write chunk contains BSU (Begin Synchronized
- * Update), the current scroll state is saved. After the chunk containing ESU
- * (End Synchronized Update) is written, the scroll position is restored on
- * the next animation frame (after xterm's deferred viewport sync runs).
- * This prevents screen redraws from disrupting the user's scroll position.
+ * Update), we note whether the user was at the bottom. When the chunk
+ * containing ESU (End Synchronized Update) is written, we capture xterm's
+ * post-parse viewportY (which already accounts for scrollback evictions),
+ * then restore it on the next animation frame. This prevents screen redraws
+ * from disrupting the user's scroll position while correctly tracking content
+ * that shifts as old lines fall off the scrollback buffer.
  */
 export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor): TerminalIO {
   let currentEpoch = 0
@@ -51,7 +53,10 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
   let pendingResize: (TerminalSize & { epoch: number }) | null = null
 
   // Scroll preservation across BSU/ESU blocks.
-  let savedScroll: { viewportY: number; wasAtBottom: boolean } | null = null
+  // Only wasAtBottom is saved at BSU time. The actual viewportY is captured
+  // later, at ESU write-callback time, after xterm has processed the data
+  // and adjusted viewportY for any scrollback evictions.
+  let savedScroll: { wasAtBottom: boolean } | null = null
   let restoreRAF: number | null = null
 
   const dropStaleFront = () => {
@@ -68,7 +73,7 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
     if (!scroll || savedScroll) return // already saved, or no accessor
     if (startsWith(data, BSU) || containsSequence(data, BSU)) {
       const { viewportY, baseY } = scroll.getState()
-      savedScroll = { viewportY, wasAtBottom: baseY - viewportY <= 3 }
+      savedScroll = { wasAtBottom: baseY - viewportY <= 3 }
     }
   }
 
@@ -76,6 +81,13 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
    * If this chunk contains ESU, schedule a scroll restore on the next
    * animation frame. xterm defers its viewport sync during synchronized
    * output, so we must restore AFTER that deferred sync runs.
+   *
+   * We capture viewportY HERE (in the write callback, after xterm has parsed
+   * the data) rather than at BSU time. This is critical: xterm adjusts
+   * viewportY during parsing when scrollback lines are evicted, so the
+   * post-parse value correctly accounts for content that shifted out of the
+   * buffer. Using the pre-BSU value would restore a stale position, causing
+   * the viewport to drift as old lines are evicted.
    */
   const maybeRestoreScroll = (data: Uint8Array): void => {
     if (!scroll || !savedScroll) return
@@ -83,6 +95,11 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
 
     const snap = savedScroll
     savedScroll = null
+
+    // Capture the adjusted viewportY now, after xterm has processed the
+    // data (including any scrollback evictions) but before the deferred
+    // viewport DOM sync runs.
+    const { viewportY: adjustedY } = scroll.getState()
 
     // Cancel any previous pending restore (e.g. nested BSU/ESU).
     if (restoreRAF !== null) cancelAnimationFrame(restoreRAF)
@@ -92,13 +109,15 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
       const { viewportY, baseY } = scroll.getState()
       const currentlyAtBottom = baseY - viewportY <= 3
       if (snap.wasAtBottom || currentlyAtBottom) {
-        // Was at bottom before BSU, or something else already scrolled us
-        // to bottom (e.g. replay's scrollToBottom) — stay there.
+        // Was at bottom before BSU, or user/code scrolled to bottom during
+        // the BSU block — stay there.
         scroll.scrollToBottom()
       } else {
-        // User was scrolled up — restore their position, clamped to the
-        // new buffer range (scrollback may have been cleared/resized).
-        scroll.scrollToLine(Math.min(snap.viewportY, baseY))
+        // User was scrolled up — restore the post-parse position, clamped
+        // to the current buffer range. We use adjustedY (captured after xterm
+        // processed the data) rather than a pre-BSU snapshot, so scrollback
+        // evictions are already accounted for.
+        scroll.scrollToLine(Math.min(adjustedY, baseY))
       }
     })
   }
