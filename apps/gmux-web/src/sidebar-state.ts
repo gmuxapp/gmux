@@ -1,7 +1,8 @@
 /**
  * Sidebar folder visibility — stored in localStorage.
  *
- * Tracks which folder cwds are visible in the sidebar.
+ * Tracks which folder paths are visible in the sidebar. Paths are keyed
+ * by workspace root (when sessions share a VCS root) or cwd otherwise.
  * New folders auto-show when they have live sessions.
  */
 
@@ -49,9 +50,10 @@ export function createSidebarState() {
       let changed = false
       for (const s of sessions) {
         if (!s.alive) continue
-        const cwd = s.cwd ?? '~'
-        if (!state.visibleFolders.includes(cwd)) {
-          state.visibleFolders.push(cwd)
+        // Track by the grouping key: workspace root if set, otherwise cwd.
+        const key = s.workspace_root || s.cwd || '~'
+        if (!state.visibleFolders.includes(key)) {
+          state.visibleFolders.push(key)
           changed = true
         }
       }

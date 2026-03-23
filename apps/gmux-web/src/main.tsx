@@ -32,6 +32,7 @@ function toUISession(s: ProtocolSession): Session {
     created_at: s.created_at ?? new Date().toISOString(),
     command: s.command ?? [],
     cwd: s.cwd ?? '',
+    workspace_root: s.workspace_root ?? undefined,
     kind: s.kind ?? 'shell',
     alive: s.alive,
     pid: s.pid ?? null,

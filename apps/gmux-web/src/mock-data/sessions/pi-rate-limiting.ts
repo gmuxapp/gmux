@@ -12,6 +12,7 @@ export default {
   created_at: ago(60),
   command: ['pi'],
   cwd: '/home/user/dev/api',
+  workspace_root: '/home/user/dev/api',
   kind: 'pi',
   alive: true,
   pid: 56789,

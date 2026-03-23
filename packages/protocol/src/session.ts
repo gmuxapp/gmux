@@ -12,6 +12,7 @@ export const SessionSchema = z.object({
   created_at: z.string().optional(),
   command: z.array(z.string()).optional(),
   cwd: z.string().optional(),
+  workspace_root: z.string().optional(),
   kind: z.string().default('shell'),
   alive: z.boolean(),
   pid: z.number().optional().nullable(),

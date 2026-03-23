@@ -19,6 +19,7 @@ export default {
   created_at: ago(8),
   command: ['claude'],
   cwd: '/home/user/dev/gmux',
+  workspace_root: '/home/user/dev/gmux',
   kind: 'shell',
   alive: true,
   pid: 133425,

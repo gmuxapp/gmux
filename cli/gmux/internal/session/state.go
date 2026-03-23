@@ -17,11 +17,12 @@ type State struct {
 	mu sync.RWMutex
 
 	// Core identity (immutable after creation)
-	ID        string   `json:"id"`
-	CreatedAt string   `json:"created_at"`
-	Command   []string `json:"command"`
-	Cwd       string   `json:"cwd"`
-	Kind      string   `json:"kind"`
+	ID             string   `json:"id"`
+	CreatedAt      string   `json:"created_at"`
+	Command        []string `json:"command"`
+	Cwd            string   `json:"cwd"`
+	Kind           string   `json:"kind"`
+	WorkspaceRoot  string   `json:"workspace_root,omitempty"`
 
 	// Process state (owned by runner)
 	Alive     bool   `json:"alive"`
@@ -61,25 +62,27 @@ type Event struct {
 
 // Config for creating a new session state.
 type Config struct {
-	ID         string
-	Command    []string
-	Cwd        string
-	Kind       string
-	SocketPath string
-	BinaryHash string
+	ID            string
+	Command       []string
+	Cwd           string
+	Kind          string
+	SocketPath    string
+	BinaryHash    string
+	WorkspaceRoot string
 }
 
 // New creates a new session state.
 func New(cfg Config) *State {
 	return &State{
-		ID:         cfg.ID,
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		Command:    cfg.Command,
-		Cwd:        cfg.Cwd,
-		Kind:       cfg.Kind,
-		SocketPath: cfg.SocketPath,
-		BinaryHash: cfg.BinaryHash,
-		Alive:      false,
+		ID:            cfg.ID,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		Command:       cfg.Command,
+		Cwd:           cfg.Cwd,
+		Kind:          cfg.Kind,
+		WorkspaceRoot: cfg.WorkspaceRoot,
+		SocketPath:    cfg.SocketPath,
+		BinaryHash:    cfg.BinaryHash,
+		Alive:         false,
 	}
 }
 

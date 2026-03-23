@@ -22,6 +22,7 @@ import (
 	"github.com/gmuxapp/gmux/cli/gmux/internal/naming"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/ptyserver"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
+	"github.com/gmuxapp/gmux/cli/gmux/internal/workspace"
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 )
@@ -119,14 +120,18 @@ func main() {
 		SocketPath: sockPath,
 	})
 
+	// Detect VCS workspace root for grouping related sessions.
+	wsRoot := workspace.DetectRoot(workDir)
+
 	// Create in-memory session state
 	state := session.New(session.Config{
-		ID:         sessionID,
-		Command:    args,
-		Cwd:        workDir,
-		Kind:       a.Name(),
-		SocketPath: sockPath,
-		BinaryHash: binhash.Self(),
+		ID:            sessionID,
+		Command:       args,
+		Cwd:           workDir,
+		Kind:          a.Name(),
+		WorkspaceRoot: wsRoot,
+		SocketPath:    sockPath,
+		BinaryHash:    binhash.Self(),
 	})
 
 	// If user provided an explicit title, treat it as an adapter-level title

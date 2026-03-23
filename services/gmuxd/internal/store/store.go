@@ -7,11 +7,12 @@ import (
 
 // Session matches the schema v2 model served by gmux-run's GET /meta.
 type Session struct {
-	ID           string   `json:"id"`
-	CreatedAt    string   `json:"created_at,omitempty"`
-	Command      []string `json:"command,omitempty"`
-	Cwd          string   `json:"cwd,omitempty"`
-	Kind         string   `json:"kind"`
+	ID            string   `json:"id"`
+	CreatedAt     string   `json:"created_at,omitempty"`
+	Command       []string `json:"command,omitempty"`
+	Cwd           string   `json:"cwd,omitempty"`
+	Kind          string   `json:"kind"`
+	WorkspaceRoot string   `json:"workspace_root,omitempty"`
 	Alive        bool     `json:"alive"`
 	Pid          int      `json:"pid,omitempty"`
 	ExitCode     *int     `json:"exit_code,omitempty"`

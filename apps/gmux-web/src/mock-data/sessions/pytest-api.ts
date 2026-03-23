@@ -12,6 +12,7 @@ export default {
   created_at: ago(25),
   command: ['pytest', 'tests/', '-v'],
   cwd: '/home/user/dev/api',
+  workspace_root: '/home/user/dev/api',
   kind: 'shell',
   alive: true,
   pid: 45678,

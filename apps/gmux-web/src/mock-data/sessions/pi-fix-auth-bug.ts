@@ -17,6 +17,7 @@ export default {
   created_at: ago(15),
   command: ['pi'],
   cwd: '/home/user/dev/gmux',
+  workspace_root: '/home/user/dev/gmux',
   kind: 'pi',
   alive: false,
   pid: 23456,

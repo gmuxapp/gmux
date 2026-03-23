@@ -121,6 +121,8 @@ func (sc *Scanner) Scan() {
 				AdapterTitle: info.Title,
 				ResumeKey:    info.ID,
 				// Resumable is derived by Upsert from !Alive + Kind + Command.
+				// TODO: detect WorkspaceRoot for resumable sessions so they
+				// group correctly in the sidebar before being resumed.
 			}
 
 			sc.store.Upsert(sess)

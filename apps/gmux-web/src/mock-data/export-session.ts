@@ -220,6 +220,9 @@ function generateFile(session: Session, terminal: string, cursorX: number, curso
   lines.push(`  created_at: ago(0),`)
   lines.push(`  command: ${JSON.stringify(session.command)},`)
   lines.push(`  cwd: '${session.cwd}',`)
+  if (session.workspace_root) {
+    lines.push(`  workspace_root: '${session.workspace_root}',`)
+  }
   lines.push(`  kind: '${session.kind}',`)
   lines.push(`  alive: ${session.alive},`)
   lines.push(`  pid: ${session.pid},`)
