@@ -691,25 +691,6 @@ body {
 
 .main-header-status.working { color: var(--accent); }
 
-.header-kill-btn {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 3px 7px;
-  border-radius: 4px;
-  font-family: 'Source Sans 3', sans-serif;
-  font-size: 13px;
-  line-height: 1;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.header-kill-btn:hover {
-  background: oklch(22% 0.04 25);
-  border-color: var(--status-error);
-  color: var(--status-error);
-}
-
 .terminal-shell {
   flex: 1;
   min-height: 0;

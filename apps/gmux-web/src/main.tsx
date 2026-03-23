@@ -589,7 +589,7 @@ function EmptyState({ launchers, health }: { launchers: LauncherDef[]; health: H
   )
 }
 
-function MainHeader({ session, onKill }: { session: Session | null; onKill?: (id: string) => void }) {
+function MainHeader({ session }: { session: Session | null }) {
   if (!session) {
     return (
       <div class="main-header">
@@ -628,15 +628,7 @@ function MainHeader({ session, onKill }: { session: Session | null; onKill?: (id
             {session.status.label}
           </div>
         )}
-        {session.alive && onKill && (
-          <button
-            class="header-kill-btn"
-            onClick={() => onKill(session.id)}
-            title="Kill session"
-          >
-            X
-          </button>
-        )}
+
       </div>
     </div>
   )
@@ -1185,7 +1177,7 @@ function App() {
       />
 
       <div class="main-panel">
-        <MainHeader session={selected} onKill={killSession} />
+        <MainHeader session={selected} />
 
         {connState === 'connecting' ? (
           <div class="state-message">
