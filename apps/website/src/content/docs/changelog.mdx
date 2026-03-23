@@ -31,6 +31,15 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ---
 
+## v0.5.2
+
+- **Fixed mobile keyboard word replacement.** iOS autocorrect and Android
+  predictive text would concatenate the corrected word after the original
+  instead of replacing it. Replacement events are now intercepted and
+  translated into the correct terminal backspace + retype sequence.
+
+---
+
 ## v0.5.1
 
 ### Performance
