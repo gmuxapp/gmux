@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  js:
+    name: JS (lint, build, test)
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Biome lint
+        run: pnpm exec biome lint .
+
+      - name: Build protocol
+        run: cd packages/protocol && pnpm exec tsc -p tsconfig.json
+
+      - name: Typecheck web
+        run: cd apps/gmux-web && pnpm exec tsc --noEmit
+
+      - name: Test protocol
+        run: cd packages/protocol && pnpm exec vitest run --passWithNoTests
+
+      - name: Test web
+        run: cd apps/gmux-web && pnpm exec vitest run --passWithNoTests
+
+      - name: Build web
+        run: cd apps/gmux-web && pnpm exec vite build
+
+  go:
+    name: Go (lint, build, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Vet
+        run: |
+          go vet ./cli/gmux/...
+          go vet ./packages/adapter/...
+          go vet ./services/gmuxd/...
+        env:
+          GOWORK: ${{ github.workspace }}/go.work
+
+      - name: Build
+        run: |
+          go build ./cli/gmux/...
+          go build ./services/gmuxd/...
+        env:
+          GOWORK: ${{ github.workspace }}/go.work
+
+      - name: Test
+        run: |
+          go test ./cli/gmux/...
+          go test ./packages/adapter/...
+          go test ./services/gmuxd/...
+        env:
+          GOWORK: ${{ github.workspace }}/go.work
