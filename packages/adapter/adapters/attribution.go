@@ -10,37 +10,9 @@ import (
 
 // --- Shared attribution helpers ---
 
-// attributeByScrollback picks the candidate whose scrollback text best
-// matches the file text. Returns "" if no candidate scores above the
-// threshold. Used by adapters with per-cwd directories (pi, claude).
-func attributeByScrollback(fileText string, candidates []adapter.FileCandidate) string {
-	if fileText == "" {
-		return ""
-	}
-	fileTail := tail(fileText, 500)
-
-	bestID := ""
-	bestScore := 0.0
-
-	for _, c := range candidates {
-		if c.Scrollback == "" {
-			continue
-		}
-		score := similarityScore(fileTail, tail(c.Scrollback, 2000))
-		if score > bestScore {
-			bestScore = score
-			bestID = c.SessionID
-		}
-	}
-
-	if bestScore < 0.3 {
-		return ""
-	}
-	return bestID
-}
-
-// attributeByScrollbackNormalized is like attributeByScrollback but
-// strips TUI chrome and normalizes formatting before comparison.
+// attributeByScrollbackNormalized matches a file to a session by
+// comparing conversation text against terminal scrollback, after
+// stripping TUI chrome and normalizing formatting.
 // Both the file text and scrollback represent the same conversation,
 // but the scrollback is a terminal rendering with box-drawing borders,
 // status bars, and collapsed whitespace, while the file text is raw

@@ -72,49 +72,6 @@ func TestTail(t *testing.T) {
 	}
 }
 
-// --- attributeByScrollback ---
-
-func TestAttributeByScrollbackSingleMatch(t *testing.T) {
-	candidates := []adapter.FileCandidate{
-		{SessionID: "a", Scrollback: "completely different text"},
-		{SessionID: "b", Scrollback: "Let me fix the auth bug for you"},
-	}
-	id := attributeByScrollback("fix the auth bug", candidates)
-	if id != "b" {
-		t.Fatalf("expected 'b', got %q", id)
-	}
-}
-
-func TestAttributeByScrollbackNoMatch(t *testing.T) {
-	candidates := []adapter.FileCandidate{
-		{SessionID: "a", Scrollback: "aaaaa bbbbb"},
-		{SessionID: "b", Scrollback: "ccccc ddddd"},
-	}
-	id := attributeByScrollback("xxxxx yyyyy zzzzz", candidates)
-	if id != "" {
-		t.Fatalf("expected empty (no match), got %q", id)
-	}
-}
-
-func TestAttributeByScrollbackEmptyFile(t *testing.T) {
-	candidates := []adapter.FileCandidate{
-		{SessionID: "a", Scrollback: "hello"},
-	}
-	if id := attributeByScrollback("", candidates); id != "" {
-		t.Fatalf("expected empty, got %q", id)
-	}
-}
-
-func TestAttributeByScrollbackNoScrollback(t *testing.T) {
-	candidates := []adapter.FileCandidate{
-		{SessionID: "a", Scrollback: ""},
-		{SessionID: "b", Scrollback: ""},
-	}
-	if id := attributeByScrollback("hello world", candidates); id != "" {
-		t.Fatalf("expected empty, got %q", id)
-	}
-}
-
 // --- attributeByScrollbackNormalized ---
 
 func TestAttributeByScrollbackNormalizedCleaning(t *testing.T) {
