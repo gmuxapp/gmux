@@ -6,4 +6,14 @@ Never add new state without justification. Before adding a field, ask: who owns 
 
 ## Changesets
 
-PRs with user-facing changes must include a `.changesets/<name>.md` file. Keep the entry to one or two sentences describing what changed for the user. See `.changesets/README.md` for format.
+PRs with user-facing changes must include a `.changesets/<name>.md` file:
+
+```markdown
+---
+bump: patch
+---
+
+- Fixed mobile keyboard autocorrect duplicating text.
+```
+
+`bump`: `patch`, `minor`, or `major`. Body is a bullet (`- `) with one or two sentences describing what changed for the user.

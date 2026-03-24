@@ -39,87 +39,43 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ## v0.6.0
 
-- **Smarter scrollback storage.** Loading spinners and screen clears no longer
-  waste scrollback buffer space. Spinner frames that overwrite each other via
-  carriage return are collapsed to just the final frame, and screen clears
-  (`ESC[2J` / `ESC[3J`) discard pre-clear content from the buffer.
-
-- **Fixed mobile keyboard word replacement.** iOS autocorrect and Android
-  predictive text would concatenate the corrected word after the original
-  instead of replacing it. Replacement events are now intercepted and
-  translated into the correct terminal backspace + retype sequence.
-
-- **Fixed scroll position drifting when scrollback is full.** When the user
-  was scrolled up and new output arrived in synchronized update blocks,
-  the viewport would gradually drift as old lines were evicted from the
-  scrollback buffer. The scroll position now correctly tracks content
-  through scrollback eviction.
-
-- **Workspace-aware sidebar grouping.** Sessions in jj workspaces or git
-  worktrees that share the same repository are now grouped under a single
-  folder in the sidebar. For example, sessions running in
-  `~/dev/gmux/.grove/teak` and `~/dev/gmux` collapse into one "gmux" group
-  instead of appearing as separate folders.
+- **Smarter scrollback storage.** Loading spinners and screen clears no longer waste scrollback buffer space. Spinner frames that overwrite each other via carriage return are collapsed to just the final frame, and screen clears (`ESC[2J` / `ESC[3J`) discard pre-clear content from the buffer.
+- **Fixed mobile keyboard word replacement.** iOS autocorrect and Android predictive text would concatenate the corrected word after the original instead of replacing it.
+- **Fixed scroll position drifting when scrollback is full.** When the user was scrolled up and new output arrived in synchronized update blocks, the viewport would gradually drift as old lines were evicted from the scrollback buffer.
+- **Workspace-aware sidebar grouping.** Sessions in jj workspaces or git worktrees that share the same repository are now grouped under a single folder in the sidebar.
 
 ---
 
 ## v0.5.1
 
-### Performance
-
-- **Faster reconnects for long sessions.** Redundant SIGWINCH signals on reconnect caused TUI apps (opencode, pi, Claude Code) to redraw their entire screen on top of the scrollback replay. Resizes that don't change the terminal dimensions are now skipped.
+- **Faster reconnects for long sessions.** Redundant SIGWINCH signals on reconnect caused TUI apps to redraw their entire screen on top of the scrollback replay. Resizes that don't change the terminal dimensions are now skipped.
 - **Coalesced terminal output.** PTY output is batched (up to 8ms/32KB) before sending to the browser, reducing WebSocket overhead during heavy output.
-
-### Dev tooling
-
-- **Isolated dev environments.** `dev-server.sh` and `dev-session.sh` (renamed from `dev.sh`/`dev-env.sh`) now derive ports, socket dirs, and state dirs from the worktree path. Multiple grove worktrees run simultaneously without collisions.
+- **Isolated dev environments.** `dev-server.sh` and `dev-session.sh` now derive ports, socket dirs, and state dirs from the worktree path. Multiple grove worktrees run simultaneously without collisions.
 
 ---
 
 ## v0.5.0
 
-### Notifications
-
-- **OS notifications.** Background sessions that finish or produce new output trigger a notification. The daemon tracks presence across all connected browsers, suppresses notifications when you're already looking at gmux, and routes to whichever device was most recently active.
+- **OS notifications.** Background sessions that finish or produce new output trigger a notification. Suppressed when you're already looking at gmux, routed to whichever device was most recently active.
 - **Tab title badge.** `(1) gmux` when sessions have unread output.
-
-### Remote access
-
-- **`gmuxd remote` command.** Sets up Tailscale config, checks prerequisites (HTTPS, MagicDNS), surfaces the login URL when needed, and shows connection status. The UI hints at this command when Tailscale isn't configured.
-
-### Terminal
-
-- **Auto-resize.** Viewport changes now reliably resize the terminal. Multiple tabs at the same size all stay in sync; another device resizing shows the pill.
+- **`gmuxd remote` command.** Sets up Tailscale config, checks prerequisites, and shows connection status.
+- **Auto-resize.** Viewport changes now reliably resize the terminal. Multiple tabs at the same size all stay in sync.
 - **Scroll position preserved during synchronized output.** Screen redraws (DEC 2026 BSU/ESU) no longer jump the viewport.
-- And more bugfixes to continue to close the gap to native emulators
-- **Self-hosted fonts.** All Google Fonts are now bundled at build time. gmux makes zero external network requests when running on localhost.
+- **Self-hosted fonts.** All Google Fonts are now bundled at build time. Zero external network requests on localhost.
 
 ## v0.4.7
 
-### Install
-
 - **Linux support.** `curl -sSfL https://gmux.app/install.sh | sh` detects OS and architecture, downloads from GitHub Releases, and verifies SHA-256 checksums.
-- **Auto-update notifications.** gmux checks for new releases in the background and shows them in the sidebar and CLI. No latency impact, no nagging.
-
-### Website
-
+- **Auto-update notifications.** gmux checks for new releases in the background and shows them in the sidebar and CLI.
 - **Changelog on the docs site.** You're looking at it.
 
 ## v0.4.4
 
-### Reliability
-
 - **Working indicator no longer gets stuck.** Pi's `aborted` (Esc) and `error` stop reasons are now handled; previously only `stop` cleared the indicator.
 - **Session titles appear reliably.** Fixed a race between the file monitor and SSE subscriber that could silently overwrite title and status updates.
-- **`/name` no longer clears working state.** Store updates are now atomic (new `Store.Update` method), preventing concurrent goroutines from clobbering each other's fields.
-- **Seamless daemon upgrade.** `gmux` detects version mismatches with the running daemon and replaces it automatically. Homebrew installs restart the daemon in the background during `brew upgrade`.
-
-### Terminal
-
+- **Atomic store updates.** `Store.Update` method prevents concurrent goroutines from clobbering each other's fields.
+- **Seamless daemon upgrade.** `gmux` detects version mismatches with the running daemon and replaces it automatically.
 - **Scroll-to-bottom after reconnect.** Switching sessions no longer pins the view to old scrollback content.
-
-### Paste
-
 - **Proper paste handling.** Pasted text is sent correctly to the terminal.
 
 ## v0.4.3
@@ -130,23 +86,15 @@ v0.4.3 rounds out the mobile terminal keyboard. The toolbar gains an **Alt modif
 
 ## v0.4.1
 
-### Terminal
-
-- **Serialized terminal writes.** Xterm writes and resizes are queued so the async parser never races with resize (fixes image addon + resize glitches).
-- **Stable fit measurement.** Terminal size is now measured from the shell viewport directly instead of relying on FitAddon's container measurement, which was affected by terminal content, scrollbars, and sidebar state.
-- **Unified resize model.** `terminal_resize` event replaces the old `resize_state` / `claim_resize` protocol. Resize pill is derived from viewport vs PTY size mismatch.
-- **Connect takes over resize.** Opening the UI on a device automatically sizes the terminal to fit, instead of starting passive.
-
-### Mobile
-
-- **Tap to focus.** Tapping the terminal opens the soft keyboard on mobile (works around xterm's hidden textarea not triggering keyboard activation).
-- **Keyboard-aware layout.** The app tracks `visualViewport` height so the terminal resizes above the on-screen keyboard instead of being covered by it.
-- **Passive panning.** When a session is sized for another device, drag to pan the oversized terminal in the browser. Tap still focuses.
+- **Serialized terminal writes.** Xterm writes and resizes are queued so the async parser never races with resize.
+- **Stable fit measurement.** Terminal size measured from the shell viewport directly instead of FitAddon's container measurement.
+- **Unified resize model.** `terminal_resize` event replaces the old `resize_state` / `claim_resize` protocol.
+- **Connect takes over resize.** Opening the UI on a device automatically sizes the terminal to fit.
+- **Tap to focus.** Tapping the terminal opens the soft keyboard on mobile.
+- **Keyboard-aware layout.** The app tracks `visualViewport` height so the terminal resizes above the on-screen keyboard.
+- **Passive panning.** When a session is sized for another device, drag to pan the oversized terminal.
 - **Accessory bar keeps keyboard open.** Tapping esc, tab, ctrl, arrows, or enter no longer dismisses the soft keyboard.
-
-### Developer experience
-
-- **Dev environment.** `scripts/dev-server.sh` starts an isolated dev instance with vite HMR, Go file watching, and Tailscale access on a separate port.
+- **Dev environment.** `scripts/dev-server.sh` starts an isolated dev instance with vite HMR, Go file watching, and Tailscale access.
 
 ## v0.4.0
 
