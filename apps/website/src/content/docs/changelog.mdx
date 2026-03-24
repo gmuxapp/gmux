@@ -37,6 +37,13 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ---
 
+## v0.6.1
+
+- Fixed mobile keyboard autocorrect, predictive text, and voice dictation duplicating text. ([#20](https://github.com/gmuxapp/gmux/pull/20))
+- **Smarter error handling for pi sessions.** Transient API errors (overloaded, rate-limited) no longer flicker the sidebar status. gmux stays in the working state while pi retries, and only shows a red error dot when all retries are exhausted. The dot clears when you view the session or send a new message. ([#22](https://github.com/gmuxapp/gmux/pull/22))
+- **Removed kill button from session header.** The X button was easy to tap accidentally; sessions can still be killed from the sidebar. ([#18](https://github.com/gmuxapp/gmux/pull/18))
+
+---
 ## v0.6.0
 
 - **Smarter scrollback storage.** Loading spinners and screen clears no longer waste scrollback buffer space. Spinner frames that overwrite each other via carriage return are collapsed to just the final frame, and screen clears (`ESC[2J` / `ESC[3J`) discard pre-clear content from the buffer.
