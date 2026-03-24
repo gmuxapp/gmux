@@ -61,17 +61,15 @@ This is not a token or cookie that could be stolen — it's derived from tailsca
 
 **Denied connections are logged** with the peer's login name and device name for auditing.
 
+## Network listener (advanced)
+
+For containers and VPN setups, gmuxd can optionally bind a second listener to a network address, protected by a 256-bit bearer token. This is an escape hatch for environments where Tailscale isn't available, not a general-purpose remote access method.
+
+The token protects against unauthorized access but **not eavesdropping**. The connection is plain HTTP. On an untrusted network, an attacker who can intercept traffic can steal the token and gain full terminal access. This is acceptable when the network layer provides encryption (WireGuard tunnel, Docker bridge) but dangerous on open WiFi.
+
+See [Network Listener](/develop/network-listener) for setup, threat model, and usage.
+
 ## What we explicitly decided against
-
-### Binding to `0.0.0.0` with token auth
-
-Token-based auth (bearer tokens, API keys) is a valid pattern, but it has footguns in this context:
-
-- **Tokens in URLs**: Browsers can't set custom headers on WebSocket upgrades or initial page loads. Tokens end up in query parameters, which appear in server logs, browser history, and `Referer` headers.
-- **Cookie scope**: A stolen auth cookie grants full terminal access until it expires.
-- **Exposure without auth**: A misconfigured or missing token would expose the server with no protection. The failure mode is silent and catastrophic.
-
-Tailscale's identity model avoids all of these: there are no tokens to leak, no cookies to steal, and no way to connect without a valid tailscale identity.
 
 ### Device name matching
 
@@ -79,9 +77,9 @@ The allow list matches login names only, not device names. While tailscale devic
 
 Login names are stable identities tied to the user's authentication provider (GitHub, Google, etc.). For per-device access control, use [tailscale ACLs](https://tailscale.com/kb/1018/acls).
 
-### LAN access
+### Unauthenticated LAN access
 
-There is currently no way to expose gmux on the local network. LAN access would require token-based authentication (since there's no identity layer on a LAN), and we haven't implemented that. This may be added in the future behind a separate listener.
+There is no way to expose gmux on the network without authentication. The network listener always requires a bearer token. There is no "disable auth" option, even for development.
 
 ## Config validation
 

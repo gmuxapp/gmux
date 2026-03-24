@@ -19,9 +19,11 @@ import (
 
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/notify"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
@@ -158,6 +160,7 @@ Usage: gmuxd <command> [options]
 Commands:
   start [--replace]  Start the gmux daemon
   remote             Set up or check remote access via Tailscale
+  auth-link          Show the network listener URL and auth token
   shutdown           Ask the running gmux daemon to stop
   version            Show gmuxd version
   help               Show this help
@@ -250,6 +253,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintf(stdout, "gmuxd: no running daemon found at %s\n", addr)
 		}
 		return 0
+	case "auth-link":
+		if len(args) > 0 {
+			_, _ = fmt.Fprintf(stderr, "gmuxd auth-link: unexpected arguments: %s\n", strings.Join(args, " "))
+			return 2
+		}
+		return runAuthLink(stdout, stderr)
 	case "version":
 		if len(args) > 0 {
 			_, _ = fmt.Fprintf(stderr, "gmuxd version: unexpected arguments: %s\n", strings.Join(args, " "))
@@ -369,6 +378,11 @@ func serve(replace bool, stderr io.Writer) int {
 	// the health handler can include the tailscale URL.
 	var tsListener *tsauth.Listener
 
+	// networkAddr and networkToken are set below if the network listener
+	// is enabled. Declared here so the health handler can report the address.
+	var networkToken string
+	var networkAddr string
+
 	// ── Health + Capabilities ──
 
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
@@ -384,6 +398,9 @@ func serve(replace bool, stderr io.Writer) int {
 				data["tailscale_url"] = "https://" + diag.FQDN
 			}
 			data["tailscale"] = diag
+		}
+		if networkAddr != "" {
+			data["network_listen"] = networkAddr
 		}
 		if v := updateChecker.Available(); v != "" {
 			data["update_available"] = v
@@ -863,6 +880,37 @@ func serve(replace bool, stderr io.Writer) int {
 		defer tsListener.Shutdown()
 	}
 
+	// ── Optional network listener (VPN / container use) ──
+
+	var netSrv *http.Server
+	if resolved, err := cfg.ResolveNetworkListen(); err != nil {
+		log.Fatalf("FATAL: network listener: %v", err)
+	} else if resolved != "" {
+		networkAddr = resolved
+
+		tok, err := authtoken.LoadOrCreate(stateDir())
+		if err != nil {
+			log.Fatalf("FATAL: %v", err)
+		}
+		networkToken = tok
+
+		authedHandler := netauth.Middleware(networkToken, mux)
+		netSrv = &http.Server{Addr: networkAddr, Handler: authedHandler}
+
+		netLn, err := net.Listen("tcp", networkAddr)
+		if err != nil {
+			log.Fatalf("FATAL: network listener on %s: %v", networkAddr, err)
+		}
+
+		log.Printf("network listener on %s (token-authenticated)", networkAddr)
+		log.Printf("auth token: %s", networkToken)
+		go func() {
+			if err := netSrv.Serve(netLn); err != http.ErrServerClosed {
+				log.Printf("network listener: %v", err)
+			}
+		}()
+	}
+
 	// ── Signal handling for graceful shutdown ──
 
 	sigCh := make(chan os.Signal, 1)
@@ -872,6 +920,9 @@ func serve(replace bool, stderr io.Writer) int {
 		log.Printf("received %v — shutting down", sig)
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
+		if netSrv != nil {
+			netSrv.Shutdown(ctx)
+		}
 		srv.Shutdown(ctx)
 	}()
 
@@ -917,6 +968,39 @@ func requestShutdown(addr string) bool {
 			resp.Body.Close()
 		}
 	}
+}
+
+func runAuthLink(stdout, stderr io.Writer) int {
+	cfg, err := config.Load()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
+		return 1
+	}
+
+	netAddr, err := cfg.ResolveNetworkListen()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
+		return 1
+	}
+	if netAddr == "" {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: network listener is not configured\n")
+		_, _ = fmt.Fprintf(stderr, "  Set GMUXD_LISTEN=<ip> or add [network] listen = \"<ip>\" to %s\n", config.Path())
+		return 1
+	}
+
+	token, err := authtoken.LoadOrCreate(stateDir())
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
+		return 1
+	}
+
+	url := fmt.Sprintf("http://%s/auth/login?token=%s", netAddr, token)
+
+	_, _ = fmt.Fprintf(stdout, "Network listener: %s\n", netAddr)
+	_, _ = fmt.Fprintf(stdout, "Auth token:       %s\n", token)
+	_, _ = fmt.Fprintf(stdout, "\nOpen this URL to authenticate:\n  %s\n", url)
+
+	return 0
 }
 
 // stateDir returns the gmux state directory (~/.local/state/gmux).

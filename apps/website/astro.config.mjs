@@ -55,6 +55,7 @@ export default defineConfig({
             { label: 'Writing an Adapter', slug: 'develop/writing-adapters' },
             { label: 'Integration Tests', slug: 'develop/integration-tests' },
             { label: 'Terminal Data Pipeline', slug: 'develop/terminal-data-pipeline' },
+            { label: 'Network Listener', slug: 'develop/network-listener' },
           ],
         },
         {

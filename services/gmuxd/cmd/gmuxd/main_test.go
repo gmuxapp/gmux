@@ -5,6 +5,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -256,6 +257,40 @@ func TestPrepareDaemonAddrReplacesRunningDaemon(t *testing.T) {
 	case <-shutdownDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for shutdown")
+	}
+}
+
+func TestRunAuthLinkNoNetworkListener(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GMUXD_LISTEN", "")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"auth-link"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("expected exit code 1, got %d", code)
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("not configured")) {
+		t.Fatalf("expected 'not configured' message, got %q", stderr.String())
+	}
+}
+
+func TestRunAuthLinkWithNetworkListener(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("XDG_STATE_HOME", dir)
+	t.Setenv("GMUXD_LISTEN", "10.0.0.5")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"auth-link"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr=%q", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "10.0.0.5:8790") {
+		t.Errorf("expected address in output, got %q", out)
+	}
+	if !strings.Contains(out, "/auth/login?token=") {
+		t.Errorf("expected auth URL in output, got %q", out)
 	}
 }
 

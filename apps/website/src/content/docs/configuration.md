@@ -22,6 +22,11 @@ port = 8790
 enabled = false
 hostname = "gmux"       # → gmux.your-tailnet.ts.net
 allow = []               # additional login names (owner is auto-whitelisted)
+
+# Optional network listener for containers and VPN setups.
+# See develop/network-listener for setup and security implications.
+# [network]
+# listen = "10.0.0.5"
 ```
 
 ### Strict validation
@@ -43,8 +48,9 @@ This is intentional — silent fallback to defaults is dangerous for security se
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `GMUXD_PORT` | Listen port (overrides config file) | `8790` |
+| `GMUXD_LISTEN` | Bind a [network listener](/develop/network-listener) to this address | *(disabled)* |
 | `XDG_CONFIG_HOME` | Base directory for config file | `~/.config` |
-| `XDG_STATE_HOME` | Base directory for runtime state (tsnet) | `~/.local/state` |
+| `XDG_STATE_HOME` | Base directory for runtime state | `~/.local/state` |
 
 ### gmux (session runner)
 
@@ -73,6 +79,7 @@ See [Adapter Architecture](/develop/adapter-architecture) for how to use the chi
 |------|---------|------------|
 | `~/.config/gmux/config.toml` | Config file | User |
 | `~/.local/state/gmux/tsnet/` | Tailscale state (when enabled) | gmuxd |
+| `~/.local/state/gmux/auth-token` | Network listener bearer token | gmuxd |
 | `/tmp/gmux-sessions/*.sock` | Live session Unix sockets | gmux |
 
 ### Adapter-specific paths
@@ -97,4 +104,4 @@ GMUXD_PORT=9999 gmuxd start
 
 For daemon commands, run `gmuxd -h`.
 
-The env var takes precedence over the config file. The listen address is always `127.0.0.1` — see [Security](/security) for why.
+The env var takes precedence over the config file. The localhost listener always binds to `127.0.0.1`. For binding to other addresses, see [Network Listener](/develop/network-listener).
