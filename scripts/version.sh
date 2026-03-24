@@ -84,12 +84,31 @@ new_version="$major.$minor.$patch_v"
 
 # ── Collect changelog entries ──
 
+# Derive the GitHub repo URL for PR links.
+remote_url=$(git remote get-url origin 2>/dev/null || true)
+repo_url=$(echo "$remote_url" | sed -E 's|\.git$||; s|^git@github\.com:|https://github.com/|')
+
 # Extract body (everything after the second ---) from each changeset.
+# Each entry becomes a bullet point with a PR link appended.
 entries=""
 for f in "${changesets[@]}"; do
   body=$(awk '/^---$/{n++; next} n>=2{print}' "$f")
   body=$(echo "$body" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba}')
-  entries+="$body"$'\n\n'
+  if [[ "$body" != "- "* ]]; then
+    body="- $body"
+  fi
+
+  # Find the PR that introduced this changeset (from merge commit message).
+  pr_num=""
+  commit_msg=$(git log --diff-filter=A -1 --format='%s' -- "$f" 2>/dev/null || true)
+  if [[ "$commit_msg" =~ \(#([0-9]+)\) ]]; then
+    pr_num="${BASH_REMATCH[1]}"
+  fi
+  if [[ -n "$pr_num" && -n "$repo_url" ]]; then
+    body+=" ([#${pr_num}](${repo_url}/pull/${pr_num}))"
+  fi
+
+  entries+="$body"$'\n'
 done
 # Remove trailing newlines
 entries=$(echo "$entries" | sed -e :a -e '/^\n*$/{$d;N;ba}')
@@ -120,8 +139,7 @@ new_section="## v${new_version}
 
 ${entries}
 
----
-"
+---"
 
 if grep -q '^## v[0-9]' "$CHANGELOG"; then
   # Insert before the first version heading
