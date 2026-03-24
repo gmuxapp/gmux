@@ -1,5 +1,6 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import mermaid from 'astro-mermaid';
 
 export default defineConfig({
   site: 'https://gmux.app',
@@ -53,6 +54,7 @@ export default defineConfig({
             { label: 'Adapter Architecture', slug: 'develop/adapter-architecture' },
             { label: 'Writing an Adapter', slug: 'develop/writing-adapters' },
             { label: 'Integration Tests', slug: 'develop/integration-tests' },
+            { label: 'Terminal Data Pipeline', slug: 'develop/terminal-data-pipeline' },
           ],
         },
         {
@@ -69,5 +71,6 @@ export default defineConfig({
         Head: './src/components/Head.astro',
       },
     }),
+    mermaid(),
   ],
 });

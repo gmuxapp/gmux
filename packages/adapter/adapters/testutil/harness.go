@@ -72,7 +72,7 @@ func StartGmuxd(t *testing.T) *Gmuxd {
 	addr := fmt.Sprintf("http://localhost:%d", port)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, gmuxdBin)
+	cmd := exec.CommandContext(ctx, gmuxdBin, "start")
 	configDir := t.TempDir() // empty config — no tailscale, no custom settings
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("GMUXD_PORT=%d", port),

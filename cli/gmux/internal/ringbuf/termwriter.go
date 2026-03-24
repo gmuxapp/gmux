@@ -8,9 +8,20 @@ package ringbuf
 const maxPendingLine = 64 * 1024
 
 // TermWriter wraps a RingBuf with terminal-awareness. It collapses
-// carriage-return overwrites (e.g. spinner frames) and resets on screen
-// clears, so the scrollback buffer stores meaningful content rather than
-// redundant animation frames.
+// carriage-return overwrites (e.g. spinner frames) so the scrollback
+// buffer stores meaningful content rather than redundant animation frames.
+//
+// Screen clear sequences (ESC[2J, ESC[3J) are passed through as regular
+// content rather than resetting the buffer. This preserves scrollback for
+// TUI apps like pi and claude that use clears as part of normal rendering.
+// WebSocket clients that replay the scrollback will process the clear
+// sequences naturally, showing only post-clear content on screen.
+//
+// CR handling accounts for PTY line discipline: the kernel's onlcr flag
+// translates \n to \r\n, so a program writing \r\n produces \r\r\n on the
+// master side. Any run of \r characters followed by \n is treated as a
+// single CRLF line terminator. Only \r followed by a printable character
+// (not \r or \n) triggers line-overwrite collapsing.
 //
 // Only complete lines (terminated by \n) are flushed to the ring buffer.
 // The current partial line is held in memory until a newline arrives or
@@ -30,9 +41,8 @@ func NewTermWriter(rb *RingBuf) *TermWriter {
 	return &TermWriter{rb: rb}
 }
 
-// Write processes terminal data, collapsing CR-overwritten content and
-// resetting the buffer on screen clears, then writes complete lines to
-// the underlying RingBuf.
+// Write processes terminal data, collapsing CR-overwritten content,
+// then writes complete lines to the underlying RingBuf.
 func (tw *TermWriter) Write(data []byte) {
 	for i := 0; i < len(data); {
 		// Resolve a CR that was deferred from the previous chunk.
@@ -46,39 +56,54 @@ func (tw *TermWriter) Write(data []byte) {
 				i++
 				continue
 			}
-			// Bare CR confirmed: discard current line content.
+			if data[i] == '\r' {
+				// Another CR: skip the pending one and let this new CR
+				// be processed normally (handles \r\r\n from PTY onlcr).
+				i++
+				// Look ahead: if this \r is also at chunk end, defer again.
+				if i >= len(data) {
+					tw.pendingCR = true
+					continue
+				}
+				if data[i] == '\n' {
+					// \r\r\n: treat as CRLF.
+					tw.currentLine = append(tw.currentLine, '\r', '\n')
+					tw.rb.Write(tw.currentLine)
+					tw.currentLine = tw.currentLine[:0]
+					i++
+					continue
+				}
+				// \r\r followed by non-LF: bare CR, discard line.
+				tw.currentLine = tw.currentLine[:0]
+				continue
+			}
+			// Bare CR confirmed (followed by non-CR, non-LF): discard.
 			tw.currentLine = tw.currentLine[:0]
 			// Fall through to process data[i] normally.
 		}
 
-		// Check for erase-display sequences: ESC [ 2 J or ESC [ 3 J.
-		if data[i] == 0x1b {
-			if n := matchClear(data[i:]); n > 0 {
-				tw.currentLine = tw.currentLine[:0]
-				tw.rb.Reset()
-				i += n
-				continue
-			}
-		}
-
 		switch data[i] {
 		case '\r':
-			if i+1 < len(data) {
-				if data[i+1] == '\n' {
-					// CRLF: flush line.
-					tw.currentLine = append(tw.currentLine, '\r', '\n')
-					tw.rb.Write(tw.currentLine)
-					tw.currentLine = tw.currentLine[:0]
-					i += 2
-				} else {
-					// Bare CR: discard current line (overwrite).
-					tw.currentLine = tw.currentLine[:0]
-					i++
-				}
-			} else {
-				// CR at end of chunk; defer until next Write.
+			// Scan past consecutive CRs to find the terminating byte.
+			// \r+\n → CRLF (flush line). \r+<other> → bare CR (discard line).
+			j := i + 1
+			for j < len(data) && data[j] == '\r' {
+				j++
+			}
+			if j >= len(data) {
+				// All CRs at end of chunk; defer.
 				tw.pendingCR = true
-				i++
+				i = j
+			} else if data[j] == '\n' {
+				// \r+\n: CRLF, flush line.
+				tw.currentLine = append(tw.currentLine, '\r', '\n')
+				tw.rb.Write(tw.currentLine)
+				tw.currentLine = tw.currentLine[:0]
+				i = j + 1
+			} else {
+				// \r+<non-LF>: bare CR, discard current line (overwrite).
+				tw.currentLine = tw.currentLine[:0]
+				i = j
 			}
 
 		case '\n':
@@ -91,7 +116,7 @@ func (tw *TermWriter) Write(data []byte) {
 			// Scan ahead to the next control byte for bulk append.
 			start := i
 			i++
-			for i < len(data) && data[i] != '\r' && data[i] != '\n' && data[i] != 0x1b {
+			for i < len(data) && data[i] != '\r' && data[i] != '\n' {
 				i++
 			}
 			tw.currentLine = append(tw.currentLine, data[start:i]...)
@@ -142,16 +167,4 @@ func (tw *TermWriter) Reset() {
 	tw.rb.Reset()
 	tw.currentLine = tw.currentLine[:0]
 	tw.pendingCR = false
-}
-
-// matchClear checks if data starts with ESC [ 2 J (erase display) or
-// ESC [ 3 J (erase scrollback) and returns the sequence length, or 0.
-func matchClear(data []byte) int {
-	if len(data) < 4 {
-		return 0
-	}
-	if data[0] == 0x1b && data[1] == '[' && (data[2] == '2' || data[2] == '3') && data[3] == 'J' {
-		return 4
-	}
-	return 0
 }

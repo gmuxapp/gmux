@@ -55,7 +55,7 @@ func TestTermWriter_ConsecutiveCRs(t *testing.T) {
 	tw := NewTermWriter(New(256))
 	tw.Write([]byte("aaa\r\r\rbbb"))
 	got := tw.Snapshot()
-	// Each \r clears currentLine; only the final content survives.
+	// Multiple CRs followed by non-LF: bare CR, only final content survives.
 	if !bytes.Equal(got, []byte("bbb")) {
 		t.Errorf("got %q, want %q", got, "bbb")
 	}
@@ -109,23 +109,31 @@ func TestTermWriter_BareCR_DeferredThenResolved(t *testing.T) {
 	}
 }
 
-func TestTermWriter_ClearScreen_ED2(t *testing.T) {
+// Clear sequences are passed through as regular content, not used to reset.
+// TUI apps (pi, claude) use clears as part of normal rendering; resetting
+// would discard meaningful conversation content. WebSocket clients that
+// replay the scrollback will process the escape sequences naturally.
+
+func TestTermWriter_ClearScreen_PassedThrough(t *testing.T) {
 	tw := NewTermWriter(New(256))
 	tw.Write([]byte("before clear\n"))
 	tw.Write([]byte("\x1b[2Jafter clear"))
 	got := tw.Snapshot()
-	if !bytes.Equal(got, []byte("after clear")) {
-		t.Errorf("got %q, want %q", got, "after clear")
+	// Both pre- and post-clear content are preserved.
+	want := "before clear\n\x1b[2Jafter clear"
+	if !bytes.Equal(got, []byte(want)) {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
-func TestTermWriter_ClearScrollback_ED3(t *testing.T) {
+func TestTermWriter_ClearScrollback_PassedThrough(t *testing.T) {
 	tw := NewTermWriter(New(256))
 	tw.Write([]byte("line1\nline2\nline3\n"))
 	tw.Write([]byte("\x1b[3Jfresh start"))
 	got := tw.Snapshot()
-	if !bytes.Equal(got, []byte("fresh start")) {
-		t.Errorf("got %q, want %q", got, "fresh start")
+	want := "line1\nline2\nline3\n\x1b[3Jfresh start"
+	if !bytes.Equal(got, []byte(want)) {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
@@ -133,17 +141,10 @@ func TestTermWriter_ClearInMiddleOfChunk(t *testing.T) {
 	tw := NewTermWriter(New(256))
 	tw.Write([]byte("junk\x1b[2Jgood stuff\n"))
 	got := tw.Snapshot()
-	if !bytes.Equal(got, []byte("good stuff\n")) {
-		t.Errorf("got %q, want %q", got, "good stuff\n")
-	}
-}
-
-func TestTermWriter_MultipleClearsKeepsLast(t *testing.T) {
-	tw := NewTermWriter(New(256))
-	tw.Write([]byte("a\x1b[2Jb\x1b[2Jc\n"))
-	got := tw.Snapshot()
-	if !bytes.Equal(got, []byte("c\n")) {
-		t.Errorf("got %q, want %q", got, "c\n")
+	// Clear is passed through as content.
+	want := "junk\x1b[2Jgood stuff\n"
+	if !bytes.Equal(got, []byte(want)) {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
@@ -240,5 +241,120 @@ func TestTermWriter_Len(t *testing.T) {
 	// "abc\n" flushed to ring (4 bytes), "def" pending (3 bytes)
 	if tw.Len() != 7 {
 		t.Errorf("expected len 7, got %d", tw.Len())
+	}
+}
+
+// --- PTY onlcr tests: \r\r\n handling ---
+// The kernel PTY line discipline (onlcr) converts \n to \r\n. When a
+// program writes \r\n, the master side sees \r\r\n. The TermWriter must
+// treat any run of \r followed by \n as a CRLF line terminator, not as
+// a bare CR that discards line content.
+
+func TestTermWriter_CRCRLF_PreservesContent(t *testing.T) {
+	tw := NewTermWriter(New(256))
+	tw.Write([]byte("hello world\r\r\n"))
+	got := tw.Snapshot()
+	want := "hello world\r\n"
+	if !bytes.Equal(got, []byte(want)) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTermWriter_CRCRLF_MultipleLines(t *testing.T) {
+	tw := NewTermWriter(New(1024))
+	tw.Write([]byte("line one\r\r\nline two\r\r\nline three\r\r\n"))
+	got := tw.Snapshot()
+	want := "line one\r\nline two\r\nline three\r\n"
+	if !bytes.Equal(got, []byte(want)) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTermWriter_CRCRLF_SplitAcrossChunks(t *testing.T) {
+	tw := NewTermWriter(New(256))
+	// \r\r\n split: first chunk ends with \r, second starts with \r\n
+	tw.Write([]byte("content\r"))
+	tw.Write([]byte("\r\n"))
+	got := tw.Snapshot()
+	want := "content\r\n"
+	if !bytes.Equal(got, []byte(want)) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTermWriter_CRCRLF_SplitAfterSecondCR(t *testing.T) {
+	tw := NewTermWriter(New(256))
+	// \r\r\n split: first chunk ends with \r\r, second starts with \n
+	tw.Write([]byte("content\r\r"))
+	tw.Write([]byte("\n"))
+	got := tw.Snapshot()
+	want := "content\r\n"
+	if !bytes.Equal(got, []byte(want)) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTermWriter_TripleCRLF(t *testing.T) {
+	tw := NewTermWriter(New(256))
+	// Three CRs followed by LF: still a line terminator.
+	tw.Write([]byte("hello\r\r\r\n"))
+	got := tw.Snapshot()
+	want := "hello\r\n"
+	if !bytes.Equal(got, []byte(want)) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTermWriter_PiLikeOutput(t *testing.T) {
+	// Simulates pi's actual output pattern: ANSI-styled lines ending in \r\r\n,
+	// with a clear sequence in between renders.
+	tw := NewTermWriter(New(4096))
+	tw.Write([]byte("\x1b[38;2;102;102;102mversion\x1b[39m v0.62.0\r\r\n"))
+	tw.Write([]byte("\x1b[38;2;102;102;102mmodel\x1b[39m claude-haiku-4-5\r\r\n"))
+	tw.Write([]byte("\r\r\n"))
+	tw.Write([]byte("> say hello\r\r\n"))
+	tw.Write([]byte("\r\r\n"))
+	tw.Write([]byte("Hello! How can I help you today?\r\r\n"))
+
+	got := tw.Snapshot()
+	// All lines should be preserved.
+	if !bytes.Contains(got, []byte("version")) {
+		t.Errorf("missing 'version' in snapshot: %q", got)
+	}
+	if !bytes.Contains(got, []byte("say hello")) {
+		t.Errorf("missing 'say hello' in snapshot: %q", got)
+	}
+	if !bytes.Contains(got, []byte("Hello! How can I help you today?")) {
+		t.Errorf("missing response in snapshot: %q", got)
+	}
+}
+
+func TestTermWriter_PiClearThenRedraw(t *testing.T) {
+	// Pi does ESC[2J ESC[H ESC[3J then redraws the status bar.
+	// The clear sequences should be passed through, preserving pre-clear content.
+	tw := NewTermWriter(New(4096))
+	tw.Write([]byte("conversation content\r\r\n"))
+	tw.Write([]byte("more content\r\r\n"))
+	tw.Write([]byte("\x1b[2J\x1b[H\x1b[3J"))
+	tw.Write([]byte("status bar\r\r\n"))
+
+	got := tw.Snapshot()
+	// Pre-clear content is preserved in the buffer.
+	if !bytes.Contains(got, []byte("conversation content")) {
+		t.Errorf("pre-clear content lost: %q", got)
+	}
+	if !bytes.Contains(got, []byte("status bar")) {
+		t.Errorf("post-clear content missing: %q", got)
+	}
+}
+
+func TestTermWriter_SpinnerThenCRCRLF(t *testing.T) {
+	// Spinner frames followed by completion with \r\r\n
+	tw := NewTermWriter(New(256))
+	tw.Write([]byte("⠋ building\r⠙ building\r✓ done\r\r\n"))
+	got := tw.Snapshot()
+	want := "✓ done\r\n"
+	if !bytes.Equal(got, []byte(want)) {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
