@@ -1,7 +1,9 @@
 package adapters
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -318,14 +320,45 @@ func (p *Pi) AttributeFile(filePath string, candidates []adapter.FileCandidate) 
 	return attributeByScrollbackNormalized(fileText, candidates)
 }
 
-// extractPiText reads a pi JSONL session file and extracts conversation
-// text from all message types (user, assistant, and toolResult) suitable
-// for similarity matching against terminal scrollback. Including tool
-// output is important because it dominates the scrollback display.
+// extractPiText reads the tail of a pi JSONL session file and extracts
+// conversation text from all message types (user, assistant, toolResult).
+// Including tool output is important because it dominates the scrollback.
+//
+// Only the last 32KB is read since we only need tail(200) of the
+// extracted text. Session files can be tens of MB; reading them fully
+// for every unattributed file in a directory would be costly on startup.
 func extractPiText(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	const maxRead = 32 * 1024
+
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+
+	offset := info.Size() - maxRead
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > 0 {
+		f.Seek(offset, 0)
+	}
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return "", err
+	}
+
+	// If we seeked into the middle of a line, skip the partial first line.
+	if offset > 0 {
+		if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
+			data = data[idx+1:]
+		}
 	}
 
 	var out strings.Builder

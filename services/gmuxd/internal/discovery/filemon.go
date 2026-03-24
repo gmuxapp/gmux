@@ -523,9 +523,7 @@ func (fm *FileMonitor) attributeFileLocked(dir, filePath string) string {
 			if sess, ok := fm.store.Get(ms.id); ok {
 				fc.StartedAt, _ = time.Parse(time.RFC3339, sess.StartedAt)
 			}
-			// Populate scrollback for adapters that use content-similarity
-			// matching. Currently unused (all adapters use timestamp or
-			// metadata matching), but part of the FileCandidate contract.
+			// Fetch scrollback for content-similarity matching (pi).
 			fc.Scrollback = fetchScrollbackText(ms.socketPath)
 			fileCandidates[i] = fc
 		}

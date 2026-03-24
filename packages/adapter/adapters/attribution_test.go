@@ -290,6 +290,44 @@ func TestPiAttributeFileRejectsShortContent(t *testing.T) {
 	}
 }
 
+func TestPiAttributeFileDisambiguatesSharedDir(t *testing.T) {
+	// Two sessions in the same cwd, each with distinct scrollback.
+	// The file's tool output matches one session's scrollback.
+	candidates := []adapter.FileCandidate{
+		{SessionID: "session-a", Scrollback: "── $ go test ./... ok pkg/auth 0.3s ok pkg/store 0.1s ──"},
+		{SessionID: "session-b", Scrollback: "── $ jj diff --stat api/handler.go 42 +++--- Committed as abc123 ──"},
+	}
+	pi := NewPi()
+
+	// File A: contains go test output matching session-a's scrollback.
+	dirA := t.TempDir()
+	pathA := dirA + "/fileA.jsonl"
+	writeFile(pathA, `{"type":"session","id":"s1","cwd":"/tmp","timestamp":"2026-01-01T00:00:00Z"}
+{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"run all tests"}]}}
+{"type":"message","id":"tr1","message":{"role":"toolResult","content":"ok pkg/auth 0.3s\nok pkg/store 0.1s"}}
+{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"text","text":"All packages pass."}]}}
+`)
+
+	// File B: contains jj output matching session-b's scrollback.
+	dirB := t.TempDir()
+	pathB := dirB + "/fileB.jsonl"
+	writeFile(pathB, `{"type":"session","id":"s2","cwd":"/tmp","timestamp":"2026-01-01T00:00:00Z"}
+{"type":"message","id":"u2","message":{"role":"user","content":[{"type":"text","text":"check the diff and commit"}]}}
+{"type":"message","id":"tr2","message":{"role":"toolResult","content":"api/handler.go | 42 +++---"}}
+{"type":"message","id":"a2","message":{"role":"assistant","content":[{"type":"text","text":"Committed as abc123."}]}}
+`)
+
+	idA := pi.AttributeFile(pathA, candidates)
+	idB := pi.AttributeFile(pathB, candidates)
+
+	if idA != "session-a" {
+		t.Errorf("file A: expected session-a, got %q", idA)
+	}
+	if idB != "session-b" {
+		t.Errorf("file B: expected session-b, got %q", idB)
+	}
+}
+
 // --- Codex AttributeFile ---
 
 func TestCodexAttributeFile(t *testing.T) {
