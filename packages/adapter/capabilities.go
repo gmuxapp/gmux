@@ -73,11 +73,12 @@ type FileCandidate struct {
 }
 
 // FileAttributor is optionally implemented by adapters that need custom
-// file-to-session matching when multiple live sessions share a watch
-// directory. Without it, the daemon falls back to the first candidate.
+// file-to-session matching. Without it, the daemon falls back to the
+// first candidate.
 //
-// The daemon handles the trivial single-candidate case automatically —
-// AttributeFile is only called with len(candidates) >= 2.
+// AttributeFile is called for every candidate count (including 1).
+// Returning "" rejects the file; for single-candidate cases, the daemon
+// may still attribute via a freshness-based fallback (mtime < 30s).
 type FileAttributor interface {
 	// AttributeFile returns the session ID of the candidate that owns
 	// the file, or "" if no candidate matches. The daemon provides
