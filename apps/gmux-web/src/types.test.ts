@@ -76,6 +76,22 @@ describe('groupByFolder', () => {
     expect(folders[0].path).toBe('/dev/a')
   })
 
+  it('groups sessions by cwd within a workspace folder', () => {
+    const sessions = [
+      makeSession({ id: 'a1', cwd: '/repo/.grove/cedar', workspace_root: '/repo', created_at: '2026-03-24T09:00:00Z' }),
+      makeSession({ id: 'b1', cwd: '/repo',              workspace_root: '/repo', created_at: '2026-03-24T09:05:00Z' }),
+      makeSession({ id: 'a2', cwd: '/repo/.grove/cedar', workspace_root: '/repo', created_at: '2026-03-24T09:10:00Z' }),
+      makeSession({ id: 'b2', cwd: '/repo',              workspace_root: '/repo', created_at: '2026-03-24T08:00:00Z' }),
+    ]
+
+    const folders = groupByFolder(sessions)
+    expect(folders).toHaveLength(1)
+    // Sessions cluster by cwd (lexicographic), newest first within each group.
+    // /repo < /repo/.grove/cedar, so b sessions come first.
+    const ids = folders[0].sessions.map(s => s.id)
+    expect(ids).toEqual(['b1', 'b2', 'a2', 'a1'])
+  })
+
   it('sorts working folders before alive before dead', () => {
     const sessions = [
       makeSession({ id: 'dead', cwd: '/dead', alive: false }),

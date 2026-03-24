@@ -61,6 +61,9 @@ export function groupByFolder(sessions: Session[]): Folder[] {
       name: parts[parts.length - 1],
       path: key,
       sessions: bucketSessions.sort((a, b) => {
+        // Group by cwd so sessions in the same directory stay together,
+        // then sort newest-first within each cwd group.
+        if (a.cwd !== b.cwd) return a.cwd < b.cwd ? -1 : 1
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       }),
     })
