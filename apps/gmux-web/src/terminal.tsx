@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { ImageAddon } from '@xterm/addon-image'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { attachKeyboardHandler, attachPasteHandler } from './keyboard'
 import { attachMobileInputHandler } from './mobile-input'
@@ -295,10 +296,19 @@ export function TerminalView({
       fontFamily: "'Fira Code', monospace",
       fontSize: 13,
       cursorBlink: true,
+      // Handle OSC 8 hyperlinks (program-emitted links): open in a new tab.
+      // Without this, xterm shows a confirm() dialog with a security warning.
+      linkHandler: {
+        activate(_event, text) {
+          window.open(text, '_blank', 'noopener')
+        },
+      },
     })
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     term.loadAddon(new ImageAddon())
+    // Detect plain-text URLs in terminal output and make them clickable.
+    term.loadAddon(new WebLinksAddon())
     term.open(containerRef.current)
     loadPreferredRenderer(term)
     // Initial fit: use FitAddon for the first resize (before shellRef is
