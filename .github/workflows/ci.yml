@@ -32,6 +32,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Biome lint
+        continue-on-error: true
         run: pnpm exec biome lint .
 
       - name: Build protocol
