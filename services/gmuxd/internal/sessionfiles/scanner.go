@@ -12,6 +12,7 @@ import (
 
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
+	"github.com/gmuxapp/gmux/packages/workspace"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
@@ -112,17 +113,16 @@ func (sc *Scanner) Scan() {
 			}
 
 			sess := store.Session{
-				ID:           "file-" + info.ID[:8],
-				CreatedAt:    info.Created.UTC().Format(time.RFC3339),
-				Command:      cmd,
-				Cwd:          cwd,
-				Kind:         a.Name(),
-				Alive:        false,
-				AdapterTitle: info.Title,
-				ResumeKey:    info.ID,
+				ID:            "file-" + info.ID[:8],
+				CreatedAt:     info.Created.UTC().Format(time.RFC3339),
+				Command:       cmd,
+				Cwd:           cwd,
+				Kind:          a.Name(),
+				WorkspaceRoot: workspace.DetectRoot(cwd),
+				Alive:         false,
+				AdapterTitle:  info.Title,
+				ResumeKey:     info.ID,
 				// Resumable is derived by Upsert from !Alive + Kind + Command.
-				// TODO: detect WorkspaceRoot for resumable sessions so they
-				// group correctly in the sidebar before being resumed.
 			}
 
 			sc.store.Upsert(sess)
