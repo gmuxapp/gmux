@@ -83,13 +83,20 @@ function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
     }
   })
 
+  const resizeCalls: Array<{ cols: number; rows: number }> = []
+  /** Optional callback to simulate xterm's resize side-effects (e.g. viewportY changes). */
+  let onResize: ((cols: number, rows: number) => void) | null = null
+
   const io = createTerminalIO(
     {
       write(data, callback) {
         writes.push(typeof data === 'string' ? data : new TextDecoder().decode(data))
         pending.push(() => callback?.())
       },
-      resize() {},
+      resize(cols, rows) {
+        resizeCalls.push({ cols, rows })
+        onResize?.(cols, rows)
+      },
     },
     scroll,
   )
@@ -100,6 +107,9 @@ function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
     scroll,
     scrollToLineCalls,
     scrollToBottomCalls,
+    resizeCalls,
+    /** Set a callback to simulate xterm viewport side-effects during resize. */
+    set onResize(fn: ((cols: number, rows: number) => void) | null) { onResize = fn },
 
     /** Current scroll state (convenience). */
     get viewportY() { return viewportY },
@@ -423,6 +433,100 @@ describe('scroll preservation across BSU/ESU', () => {
     // Should respect the user's scroll-to-bottom, not yank back to 45.
     expect(h.viewportY).toBe(h.baseY)
     expect(h.scrollToBottomCalls.length).toBeGreaterThan(0)
+    h.cleanup()
+  })
+
+  it('defers resize between split BSU and ESU chunks', () => {
+    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
+    h.io.reset(1)
+    h.addLines(100) // at capacity, baseY=100
+    h.userScrollTo(50)
+
+    // Simulate xterm's resize resetting viewportY to 0 (reflow side-effect).
+    h.onResize = () => { h.userScrollTo(0) }
+
+    // BSU in first chunk (no ESU yet)
+    const bsuChunk = new Uint8Array([...BSU, ...enc('partial')])
+    h.io.enqueue(bsuChunk, 1)
+    h.flushOne(3) // viewportY adjusted to 47
+
+    // A resize arrives while queue is empty (between BSU and ESU).
+    // Without the fix, pump() would process it now, resetting viewportY
+    // to 0 before the ESU capture, corrupting adjustedY.
+    h.io.requestResize({ cols: 80, rows: 20 }, 1)
+
+    // The resize should NOT have been applied yet (savedScroll is set).
+    expect(h.resizeCalls).toEqual([])
+    expect(h.viewportY).toBe(47)
+
+    // ESU in second chunk
+    const esuChunk = new Uint8Array([...enc('rest'), ...ESU])
+    h.io.enqueue(esuChunk, 1)
+    h.flushOne(3) // viewportY adjusted to 44
+
+    // Still no resize (restoreRAF is now pending).
+    expect(h.resizeCalls).toEqual([])
+
+    // rAF: restores scroll to the correct position (44), then flushes
+    // the deferred resize. The resize side-effect changes viewportY after.
+    h.flushRAF()
+
+    // Scroll restore targeted the correct line (44), not 0.
+    expect(h.scrollToLineCalls).toContain(44)
+    // The resize was applied after scroll restore, not before.
+    expect(h.resizeCalls).toEqual([{ cols: 80, rows: 20 }])
+
+    h.cleanup()
+  })
+
+  it('defers resize between ESU write-callback and restore rAF', () => {
+    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
+    h.io.reset(1)
+    h.addLines(100)
+    h.userScrollTo(50)
+
+    // Simulate xterm's resize resetting viewportY to 0 (reflow side-effect).
+    h.onResize = () => { h.userScrollTo(0) }
+
+    // Single chunk with BSU + content + ESU
+    h.io.enqueue(wrapBSU('output'), 1)
+    h.flushOne(5) // viewportY adjusted to 45
+
+    // Resize arrives after ESU write-callback but before rAF fires.
+    // Without the fix, pump() would process it now since the queue is
+    // empty and savedScroll was just cleared.
+    h.io.requestResize({ cols: 80, rows: 20 }, 1)
+
+    // The resize should NOT have been applied yet (restoreRAF pending).
+    expect(h.resizeCalls).toEqual([])
+    expect(h.viewportY).toBe(45)
+
+    // rAF restores scroll, then flushes the deferred resize.
+    h.flushRAF()
+
+    // Scroll was restored to 45 BEFORE resize ran. Resize then ran and
+    // reset viewportY to 0, but that's expected: the resize legitimately
+    // changes layout. The important thing is the scroll restore wasn't
+    // corrupted by a resize that snuck in before it could run.
+    expect(h.resizeCalls).toEqual([{ cols: 80, rows: 20 }])
+
+    h.cleanup()
+  })
+
+  it('processes resize normally when no BSU/ESU is in flight', () => {
+    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
+    h.io.reset(1)
+    h.addLines(50)
+    h.userScrollTo(20)
+
+    // Regular write (no BSU/ESU), then resize.
+    h.io.enqueue(enc('output'), 1)
+    h.flushOne(0)
+
+    h.io.requestResize({ cols: 120, rows: 40 }, 1)
+    // Resize should fire immediately (no BSU/ESU block, no pending rAF).
+    expect(h.resizeCalls).toEqual([{ cols: 120, rows: 40 }])
+
     h.cleanup()
   })
 

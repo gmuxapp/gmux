@@ -119,6 +119,9 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
         // evictions are already accounted for.
         scroll.scrollToLine(Math.min(adjustedY, baseY))
       }
+      // Flush any resize that was deferred while the BSU/ESU block or
+      // restore rAF was in progress.
+      pump()
     })
   }
 
@@ -139,7 +142,16 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
       return
     }
 
-    if (pendingResize && pendingResize.epoch === currentEpoch) {
+    // Defer resize while a BSU/ESU block is in progress (savedScroll set)
+    // or a scroll-restore rAF is pending. A resize between BSU and ESU
+    // (when they arrive in separate WebSocket messages) would change
+    // viewportY, causing the ESU restore to capture a post-resize position
+    // instead of the user's actual scroll position. Similarly, a resize
+    // between the ESU write-callback and the restore rAF would invalidate
+    // the captured adjustedY. The deferred resize is flushed from the rAF
+    // callback after scroll is restored.
+    if (pendingResize && pendingResize.epoch === currentEpoch
+        && !savedScroll && restoreRAF === null) {
       const { cols, rows } = pendingResize
       pendingResize = null
       term.resize(cols, rows)
