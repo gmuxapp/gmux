@@ -1139,6 +1139,7 @@ body {
      Pseudo-elements don't expand the hit-box, so taps outside the button
      border still pass through correctly. */
   .mobile-bottom-action.menu-btn.bg-working::after,
+  .mobile-bottom-action.menu-btn.bg-error::after,
   .mobile-bottom-action.menu-btn.bg-unread::after {
     content: '';
     position: absolute;
@@ -1152,7 +1153,8 @@ body {
     box-shadow: 0 0 0 1.5px var(--bg-base);
   }
   .mobile-bottom-action.menu-btn.bg-working::after { background: var(--accent); }
-  .mobile-bottom-action.menu-btn.bg-unread::after  { background: var(--unread); }
+  .mobile-bottom-action.menu-btn.bg-error::after   { background: var(--status-error); }
+  .mobile-bottom-action.menu-btn.bg-unread::after   { background: var(--unread); }
 
   /* Arrival pulse on the hamburger badge — reuses the same keyframes timing */
   .mobile-bottom-action.menu-btn.bg-arriving::after {
@@ -1233,7 +1235,8 @@ body {
   .mobile-bottom-action.menu-btn.bg-arriving::after {
     animation: none;
   }
-  .session-dot-indicator.working {
+  .session-dot-indicator.working,
+  .session-dot-indicator.error {
     animation: none;
   }
 }

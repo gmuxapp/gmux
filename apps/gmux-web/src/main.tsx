@@ -289,9 +289,8 @@ function formatAge(iso: string): string {
 
 /** Determine the dot indicator state for a session. */
 function sessionDotState(session: Session): 'working' | 'error' | 'unread' | 'none' {
-  if (session.alive && session.status?.working && session.status?.error) return 'error'
+  if (session.alive && session.status?.error)   return 'error'
   if (session.alive && session.status?.working) return 'working'
-  if (session.alive && session.status?.error) return 'error'
   if (session.unread) return 'unread'
   return 'none'
 }

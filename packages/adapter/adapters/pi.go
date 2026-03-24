@@ -187,8 +187,8 @@ func (p *Pi) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 //   - "toolUse" → working (tool loop continues)
 //   - "stop"    → idle (turn complete)
 //   - "aborted" → idle (user cancelled via Esc)
-//   - "error"   → idle only if retries exhausted (4+ consecutive errors
-//     in the file); otherwise no change (retry expected)
+//   - "error"   → error state only if retries exhausted (consecutive errors
+//     reach pi's retry limit); otherwise no change (retry expected)
 //
 // Unknown event types and unknown stopReasons produce no state change.
 // Extensions can emit custom events; these must not disrupt existing state.

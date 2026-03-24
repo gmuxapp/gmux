@@ -85,7 +85,7 @@ Status is driven by pi's JSONL session file, not PTY output. gmuxd watches for a
 - **assistant with `stopReason: "toolUse"`** → working (tool loop continues)
 - **assistant with `stopReason: "stop"`** → idle (turn complete)
 - **assistant with `stopReason: "aborted"`** → idle (user cancelled)
-- **assistant with `stopReason: "error"`** → no change unless retries are exhausted. Pi auto-retries transient errors (overloaded, rate-limited). gmux reads the file to count consecutive errors and only transitions to idle when the count reaches pi's retry limit (default 3 retries, configurable via `retry.maxRetries` in pi's settings).
+- **assistant with `stopReason: "error"`** → no change unless retries are exhausted. Pi auto-retries transient errors (overloaded, rate-limited). gmux reads the file to count consecutive errors and only flags an error when the count reaches pi's retry limit (default 3 retries, configurable via `retry.maxRetries` in pi's settings). Exhausted errors show a red dot in the sidebar; the dot clears when you view the session or send a new message.
 
 Unknown event types (including custom extension events) are silently ignored and never disrupt the current state.
 
