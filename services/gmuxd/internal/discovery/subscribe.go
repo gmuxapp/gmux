@@ -196,6 +196,11 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			}
 			if meta.Unread != nil {
 				sess.Unread = *meta.Unread
+				// Clear error state when user views the session (unread=false).
+				// Error is an enhanced unread indicator; viewing acknowledges it.
+				if !*meta.Unread && sess.Status != nil && sess.Status.Error {
+					sess.Status.Error = false
+				}
 			}
 		})
 

@@ -288,8 +288,10 @@ function formatAge(iso: string): string {
 // ── Components ──
 
 /** Determine the dot indicator state for a session. */
-function sessionDotState(session: Session): 'working' | 'unread' | 'none' {
+function sessionDotState(session: Session): 'working' | 'error' | 'unread' | 'none' {
+  if (session.alive && session.status?.working && session.status?.error) return 'error'
   if (session.alive && session.status?.working) return 'working'
+  if (session.alive && session.status?.error) return 'error'
   if (session.unread) return 'unread'
   return 'none'
 }
@@ -307,7 +309,9 @@ function SessionItem({
   onClick: () => void
   onClose?: () => void
 }) {
-  const dotState = resuming ? 'working' : sessionDotState(session)
+  const rawDotState = resuming ? 'working' : sessionDotState(session)
+  // Error is an enhanced unread: viewing the session acknowledges it.
+  const dotState = (selected && rawDotState === 'error') ? 'none' : rawDotState
   const arrival = useArrivalPulse(dotState)
 
   return (
@@ -620,9 +624,9 @@ function MainHeader({ session }: { session: Session | null }) {
       </div>
       <div class="main-header-right">
         {session.status && session.status.label && (
-          <div class={`main-header-status ${session.status.working ? 'working' : ''}`}>
+          <div class={`main-header-status ${session.status.error ? 'error' : session.status.working ? 'working' : ''}`}>
             <span
-              class={`session-dot ${session.status.working ? 'working' : 'idle'}`}
+              class={`session-dot ${session.status.error ? 'error' : session.status.working ? 'working' : 'idle'}`}
               style={{ width: 5, height: 5 }}
             />
             {session.status.label}
@@ -677,7 +681,7 @@ function MobileTerminalBar({
   canSend: boolean
   ctrlArmed: boolean
   altArmed: boolean
-  backgroundActivity: 'working' | 'unread' | 'none'
+  backgroundActivity: 'working' | 'error' | 'unread' | 'none'
   onMenu: () => void
   onSend: (data: string) => void
   onToggleCtrl: () => void
@@ -960,9 +964,10 @@ function App() {
     return s
   }, [sessions, selectedId])
 
-  // Dot indicator for the hamburger: any *other* alive session that is busy or unread.
-  const backgroundActivity = useMemo((): 'working' | 'unread' | 'none' => {
+  // Dot indicator for the hamburger: any *other* alive session that is busy, errored, or unread.
+  const backgroundActivity = useMemo((): 'working' | 'error' | 'unread' | 'none' => {
     const others = sessions.filter(s => s.id !== selectedId && s.alive)
+    if (others.some(s => s.status?.error))   return 'error'
     if (others.some(s => s.status?.working)) return 'working'
     if (others.some(s => s.unread))          return 'unread'
     return 'none'

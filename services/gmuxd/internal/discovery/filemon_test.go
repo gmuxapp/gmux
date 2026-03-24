@@ -263,7 +263,7 @@ func TestPiExhaustedErrorClearsWorking(t *testing.T) {
 		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"fix bug"}]}}`,
 	)
 
-	// 4 consecutive errors = retries exhausted → idle.
+	// 4 consecutive errors = retries exhausted → error state (not working, error=true).
 	simulateFileWrite(t, fm, "sess-pi", path,
 		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"error","content":[]}}`,
 	)
@@ -277,8 +277,14 @@ func TestPiExhaustedErrorClearsWorking(t *testing.T) {
 		`{"type":"message","id":"a4","message":{"role":"assistant","stopReason":"error","content":[]}}`,
 	)
 	sess, _ := s.Get("sess-pi")
-	if sess.Status != nil {
-		t.Fatalf("expected nil status (idle) after exhausted retries, got %+v", sess.Status)
+	if sess.Status == nil {
+		t.Fatal("expected error status after exhausted retries, got nil")
+	}
+	if sess.Status.Working {
+		t.Error("expected working=false after exhausted retries")
+	}
+	if !sess.Status.Error {
+		t.Error("expected error=true after exhausted retries")
 	}
 }
 

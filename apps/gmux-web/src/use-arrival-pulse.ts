@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 /**
- * Detects a working→unread transition and returns 'arriving' for the
- * duration of the CSS animation, then clears itself.
+ * Detects a working→unread or error→unread transition and returns
+ * 'arriving' for the duration of the CSS animation, then clears itself.
  *
  * Shared between the sidebar session dots and the mobile hamburger badge.
  */
 export function useArrivalPulse(
-  currentState: 'working' | 'unread' | 'none',
+  currentState: 'working' | 'error' | 'unread' | 'none',
 ): 'arriving' | null {
   const prevRef = useRef(currentState)
   const [arriving, setArriving] = useState(false)
@@ -17,7 +17,7 @@ export function useArrivalPulse(
     const prev = prevRef.current
     prevRef.current = currentState
 
-    if (prev === 'working' && currentState === 'unread') {
+    if ((prev === 'working' || prev === 'error') && currentState === 'unread') {
       // Cancel any in-flight timer from a previous arrival
       if (timerRef.current) clearTimeout(timerRef.current)
       setArriving(true)

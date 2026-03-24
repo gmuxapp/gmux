@@ -306,7 +306,8 @@ func TestParseNewLinesAssistantErrorSingle(t *testing.T) {
 }
 
 func TestParseNewLinesAssistantErrorExhausted(t *testing.T) {
-	// 4 consecutive errors = retries exhausted. The agent gave up; emit idle.
+	// 4 consecutive errors = retries exhausted. The agent gave up;
+	// emit error (not working, error=true for red dot).
 	path := writeTempJSONL(t,
 		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp"}`,
 		`{"type":"message","id":"u1","message":{"role":"user","content":"fix bug"}}`,
@@ -319,10 +320,13 @@ func TestParseNewLinesAssistantErrorExhausted(t *testing.T) {
 		`{"type":"message","id":"a4","message":{"role":"assistant","stopReason":"error","content":[]}}`,
 	}, path)
 	if len(events) != 1 {
-		t.Fatalf("expected 1 event (exhausted → idle), got %d", len(events))
+		t.Fatalf("expected 1 event (exhausted → error), got %d", len(events))
 	}
 	if events[0].Status == nil || events[0].Status.Working {
 		t.Error("expected working=false after exhausted retries")
+	}
+	if !events[0].Status.Error {
+		t.Error("expected error=true after exhausted retries")
 	}
 }
 
@@ -346,7 +350,10 @@ func TestParseNewLinesErrorExhaustedIgnoresCustomEvents(t *testing.T) {
 		t.Fatalf("expected 1 event (exhausted), got %d", len(events))
 	}
 	if events[0].Status == nil || events[0].Status.Working {
-		t.Error("expected idle after 4 errors with interleaved custom events")
+		t.Error("expected working=false after 4 errors with interleaved custom events")
+	}
+	if !events[0].Status.Error {
+		t.Error("expected error=true after 4 errors with interleaved custom events")
 	}
 }
 
@@ -412,7 +419,10 @@ func TestParseNewLinesErrorRespectsCustomRetryConfig(t *testing.T) {
 		t.Fatalf("expected 1 event (exhausted with maxRetries=1), got %d", len(events))
 	}
 	if events[0].Status == nil || events[0].Status.Working {
-		t.Error("expected idle after exhausted retries with custom config")
+		t.Error("expected working=false after exhausted retries with custom config")
+	}
+	if !events[0].Status.Error {
+		t.Error("expected error=true after exhausted retries with custom config")
 	}
 }
 

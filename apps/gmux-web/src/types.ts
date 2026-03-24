@@ -1,6 +1,7 @@
 export interface SessionStatus {
   label: string
   working: boolean
+  error?: boolean
 }
 
 export interface Session {

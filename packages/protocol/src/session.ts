@@ -5,6 +5,7 @@ import { z } from 'zod'
 export const SessionStatusSchema = z.object({
   label: z.string(),
   working: z.boolean(),
+  error: z.boolean().optional().default(false),
 }).nullable()
 
 export const SessionSchema = z.object({

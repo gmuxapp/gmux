@@ -42,6 +42,7 @@ type Session struct {
 type Status struct {
 	Label   string `json:"label"`
 	Working bool   `json:"working"`
+	Error   bool   `json:"error,omitempty"`
 }
 
 type Event struct {

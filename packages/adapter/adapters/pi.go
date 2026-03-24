@@ -253,15 +253,16 @@ func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.FileEvent 
 					})
 				case "error":
 					// Errors are often transient (overloaded, rate-limited)
-					// and pi retries automatically. A single error should
-					// not change state. But when retries are exhausted,
-					// the agent has given up and is idle. Read the file
-					// to count consecutive errors and check the retry limit.
+					// and pi retries automatically. While retries are
+					// pending, don't change state (stay working). When
+					// retries are exhausted, signal error so the frontend
+					// can show a red dot.
 					if filePath != "" {
 						count, cwd := countTrailingErrors(filePath)
 						if count >= piMaxRetries(cwd) {
+							// Retries exhausted — agent gave up.
 							events = append(events, adapter.FileEvent{
-								Status: &adapter.Status{},
+								Status: &adapter.Status{Error: true},
 							})
 						}
 					}

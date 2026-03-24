@@ -9,6 +9,7 @@ import "path/filepath"
 type Status struct {
 	Label   string `json:"label"`             // display text ("working", "3/5 passed")
 	Working bool   `json:"working"`           // true while adapter is busy (spinner, building)
+	Error   bool   `json:"error,omitempty"`   // true when the adapter hit a retryable error (red dot)
 	Title   string `json:"title,omitempty"`   // if set, updates the session title (transient)
 }
 

@@ -363,6 +363,11 @@ body {
   background: var(--unread);
 }
 
+.session-dot-indicator.error {
+  background: var(--status-error);
+  animation: subtle-pulse 2.5s ease-in-out infinite;
+}
+
 /* Arrival pulse — plays once when a dot transitions from working→unread.
    Premove (squish inward) → burst (overshoot outward with glow) → settle. */
 .session-dot-indicator.arriving {
@@ -588,6 +593,7 @@ body {
 }
 
 .session-dot.working { background: var(--accent); }
+.session-dot.error   { background: var(--status-error); }
 .session-dot.idle    { background: var(--text-muted); }
 .session-dot.unread  { background: var(--unread); }
 
@@ -690,6 +696,7 @@ body {
 }
 
 .main-header-status.working { color: var(--accent); }
+.main-header-status.error   { color: var(--status-error); }
 
 .terminal-shell {
   flex: 1;

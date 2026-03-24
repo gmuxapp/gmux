@@ -419,12 +419,13 @@ func (fm *FileMonitor) handleFileChange(path string) {
 				sess.AdapterTitle = evt.Title
 			}
 			if evt.Status != nil {
-				if evt.Status.Label == "" && !evt.Status.Working {
+				if evt.Status.Label == "" && !evt.Status.Working && !evt.Status.Error {
 					sess.Status = nil // clear — no meaningful info to show
 				} else {
 					sess.Status = &store.Status{
 						Label:   evt.Status.Label,
 						Working: evt.Status.Working,
+						Error:   evt.Status.Error,
 					}
 				}
 			}
