@@ -180,6 +180,54 @@ func TestScanRefreshesDead(t *testing.T) {
 	}
 }
 
+func TestScanSetsWorkspaceRoot(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// Create a fake git repo so workspace.DetectRoot resolves it.
+	repoDir := filepath.Join(tmpHome, "projects", "myrepo")
+	os.MkdirAll(filepath.Join(repoDir, ".git"), 0o755)
+
+	// Create a pi session file whose cwd is inside the repo.
+	subdir := filepath.Join(repoDir, "src", "pkg")
+	os.MkdirAll(subdir, 0o755)
+	writePiSession(t, tmpHome, subdir, "aaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "refactor")
+
+	s := newTestStore()
+	sc := New(s)
+	sc.Scan()
+
+	sessions := s.List()
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].WorkspaceRoot != repoDir {
+		t.Errorf("workspace_root = %q, want %q", sessions[0].WorkspaceRoot, repoDir)
+	}
+}
+
+func TestScanWorkspaceRootEmptyWithoutVCS(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// cwd with no .git or .jj — WorkspaceRoot should be empty.
+	plainDir := filepath.Join(tmpHome, "no-vcs")
+	os.MkdirAll(plainDir, 0o755)
+	writePiSession(t, tmpHome, plainDir, "aaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "hello")
+
+	s := newTestStore()
+	sc := New(s)
+	sc.Scan()
+
+	sessions := s.List()
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].WorkspaceRoot != "" {
+		t.Errorf("workspace_root = %q, want empty", sessions[0].WorkspaceRoot)
+	}
+}
+
 func TestPurgeStaleSessions(t *testing.T) {
 	s := newTestStore()
 

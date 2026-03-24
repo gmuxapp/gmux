@@ -3,6 +3,7 @@ go 1.26.1
 use (
 	./cli/gmux
 	./packages/adapter
+	./packages/workspace
 	./services/gmuxd
 	./tests/e2e
 )

@@ -22,7 +22,7 @@ import (
 	"github.com/gmuxapp/gmux/cli/gmux/internal/naming"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/ptyserver"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
-	"github.com/gmuxapp/gmux/cli/gmux/internal/workspace"
+	"github.com/gmuxapp/gmux/packages/workspace"
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 )
