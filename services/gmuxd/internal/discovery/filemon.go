@@ -67,9 +67,19 @@ type monitoredSession struct {
 }
 
 func NewFileMonitor(s *store.Store) *FileMonitor {
+	return NewFileMonitorWithAttributions(s, loadAttributions())
+}
+
+// NewFileMonitorWithAttributions creates a FileMonitor pre-seeded with
+// the given attributions. Used by NewFileMonitor (with persisted state
+// from disk) and by tests.
+func NewFileMonitorWithAttributions(s *store.Store, attrs map[string]string) *FileMonitor {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("filemon: failed to create watcher: %v", err)
+	}
+	if attrs == nil {
+		attrs = make(map[string]string)
 	}
 	return &FileMonitor{
 		store:        s,
@@ -77,7 +87,7 @@ func NewFileMonitor(s *store.Store) *FileMonitor {
 		watchedDirs:  make(map[string]bool),
 		rootDirs:     make(map[string]bool),
 		sessions:     make(map[string]*monitoredSession),
-		attributions: make(map[string]string),
+		attributions: attrs,
 		activeFiles:  make(map[string]string),
 		fileOffsets:  make(map[string]int64),
 		pendingDirs:  make(map[string][]string),
@@ -327,11 +337,16 @@ func (fm *FileMonitor) NotifySessionDied(sessionID string) {
 	delete(fm.activeFiles, sessionID)
 
 	// Remove attributions pointing to this session.
+	changed := false
 	for path, sid := range fm.attributions {
 		if sid == sessionID {
 			delete(fm.attributions, path)
 			delete(fm.fileOffsets, path)
+			changed = true
 		}
+	}
+	if changed {
+		fm.persistAttributionsLocked()
 	}
 
 	// Remove from pending dirs.
@@ -497,6 +512,12 @@ func (fm *FileMonitor) updateActiveFileLocked(sessionID, filePath string) {
 	})
 }
 
+// persistAttributionsLocked writes the current attributions to disk.
+// Must be called with fm.mu held.
+func (fm *FileMonitor) persistAttributionsLocked() {
+	saveAttributions(fm.attributions, fm.sessions)
+}
+
 // --- Attribution ---
 
 // attributeFileLocked determines which session a file belongs to.
@@ -530,6 +551,7 @@ func (fm *FileMonitor) attributeFileLocked(dir, filePath string) string {
 		}
 		if id := attr.AttributeFile(filePath, fileCandidates); id != "" {
 			fm.attributions[filePath] = id
+			fm.persistAttributionsLocked()
 			log.Printf("filemon: attributed %s → %s", filepath.Base(filePath), id)
 			return id
 		}
@@ -543,6 +565,7 @@ func (fm *FileMonitor) attributeFileLocked(dir, filePath string) string {
 			if info, err := os.Stat(filePath); err == nil {
 				if time.Since(info.ModTime()) < 30*time.Second {
 					fm.attributions[filePath] = candidates[0].id
+					fm.persistAttributionsLocked()
 					log.Printf("filemon: attributed %s → %s (fresh single-candidate)", filepath.Base(filePath), candidates[0].id)
 					return candidates[0].id
 				}
@@ -553,6 +576,7 @@ func (fm *FileMonitor) attributeFileLocked(dir, filePath string) string {
 
 	// No FileAttributor — trivial attribution to first candidate.
 	fm.attributions[filePath] = candidates[0].id
+	fm.persistAttributionsLocked()
 	return candidates[0].id
 }
 
