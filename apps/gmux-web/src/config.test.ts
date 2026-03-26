@@ -290,6 +290,18 @@ describe('resolveKeybinds', () => {
     expect(match!.action).toBe('sendText')
   })
 
+  it('canonicalizes modifier aliases (control = ctrl, cmd = meta)', () => {
+    // "control+c" must override the default "ctrl+c" binding
+    const user: Keybind[] = [
+      { key: 'control+c', action: 'sendText', args: 'overridden' },
+    ]
+    const resolved = resolveKeybinds(user)
+    const ctrlC = resolved.filter(r => r.baseKey === 'c' && r.ctrl)
+    expect(ctrlC.length).toBe(1)
+    expect(ctrlC[0].action).toBe('sendText')
+    expect(ctrlC[0].args).toBe('overridden')
+  })
+
   it('warns about entries missing key or action', () => {
     const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     resolveKeybinds([{ key: '', action: 'sendText' }])

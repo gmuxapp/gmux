@@ -163,7 +163,6 @@ export function mergeThemeConfig(user: ThemeConfig | null | undefined): ITermina
   return { ...merged, theme }
 }
 
-
 // ── Keybinds config ──
 
 export interface Keybind {
@@ -293,9 +292,10 @@ const MODIFIER_NAMES = new Set(['ctrl', 'control', 'shift', 'alt', 'meta', 'cmd'
 
 /**
  * Normalize a key string for deduplication.
- * Separates modifiers from the base key (using the same modifier list as
- * parseKeyCombo), sorts modifiers alphabetically, lowercases everything.
+ * Canonicalizes modifier aliases (control→ctrl, cmd/super→meta), sorts
+ * modifiers alphabetically, and lowercases everything.
  * e.g. "Ctrl+Alt+T" and "alt+ctrl+t" both become "alt+ctrl+t"
+ * e.g. "control+c" and "ctrl+c" both become "ctrl+c"
  * Handles non-standard ordering like "enter+shift" → "shift+enter".
  */
 function normalizeKeyString(key: string): string {
@@ -303,7 +303,9 @@ function normalizeKeyString(key: string): string {
   const mods: string[] = []
   let baseKey = ''
   for (const part of parts) {
-    if (MODIFIER_NAMES.has(part)) mods.push(part)
+    if (part === 'ctrl' || part === 'control') mods.push('ctrl')
+    else if (part === 'meta' || part === 'cmd' || part === 'super') mods.push('meta')
+    else if (MODIFIER_NAMES.has(part)) mods.push(part)
     else baseKey = part
   }
   mods.sort()
@@ -320,7 +322,6 @@ export function eventMatchesKeybind(ev: KeyboardEvent, kb: ResolvedKeybind): boo
   if (ev.metaKey !== kb.meta) return false
   return ev.key.toLowerCase() === kb.baseKey
 }
-
 
 // ── Fetching ──
 
