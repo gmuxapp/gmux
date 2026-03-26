@@ -658,6 +658,8 @@ const IconWordLeft  = () => <svg viewBox="0 0 18 14" width="20" height="16" {...
 const IconWordRight = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="14.5" y1="3" x2="14.5" y2="11"/><path d="M5 7h7m0 0-3-3m3 3-3 3"/></svg>
 // ↵ return — stem drops from top-right, curves into a horizontal shaft pointing left
 const IconReturn = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M11.5 4.5V5.5Q11.5 7 9.5 7H3m0 0 3-3M3 7l3 3"/></svg>
+// 📋 paste — clipboard with down-arrow suggesting "paste into"
+const IconPaste = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><rect x="3" y="3" width="8" height="9" rx="1"/><path d="M5.5 3V2.5a1.5 1.5 0 0 1 3 0V3"/><path d="M7 7v3m0 0-1.5-1.5M7 10l1.5-1.5"/></svg>
 // 🔔 bell — used for notification permission button
 const IconBell = ({ muted }: { muted?: boolean }) => (
   <svg viewBox="0 0 14 14" width="14" height="14" {...S} style={{ opacity: muted ? 0.4 : 1 }}>
@@ -675,6 +677,7 @@ function MobileTerminalBar({
   backgroundActivity,
   onMenu,
   onSend,
+  onPaste,
   onToggleCtrl,
   onToggleAlt,
   onFocusTerminal,
@@ -685,6 +688,7 @@ function MobileTerminalBar({
   backgroundActivity: 'working' | 'error' | 'unread' | 'none'
   onMenu: () => void
   onSend: (data: string) => void
+  onPaste: () => void
   onToggleCtrl: () => void
   onToggleAlt: () => void
   onFocusTerminal: () => void
@@ -812,7 +816,10 @@ function MobileTerminalBar({
           </button>
         ))}
 
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\n')} title="Enter"><IconReturn /></button>
+        {ctrlArmed
+          ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => { onPaste(); onFocusTerminal() }} title="Paste from clipboard"><IconPaste /></button>
+          : <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\n')} title="Enter"><IconReturn /></button>
+        }
       </div>
     </div>
   )
@@ -850,6 +857,7 @@ function App() {
   const [sidebarVersion, forceUpdate] = useState(0) // re-render on sidebar state change
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   const terminalFocusRef = useRef<(() => void) | null>(null)
+  const terminalPasteRef = useRef<((text: string) => void) | null>(null)
 
   // Notification permission — not reactive, so we keep a tick to force a re-read after
   // requestPermission() resolves.
@@ -1072,6 +1080,19 @@ function App() {
     terminalInputRef.current?.(data)
   }, [])
 
+  const handleTerminalPasteReady = useCallback((paste: ((text: string) => void) | null) => {
+    terminalPasteRef.current = paste
+  }, [])
+
+  const handleMobilePaste = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText()
+      if (text) terminalPasteRef.current?.(text)
+    } catch {
+      // Clipboard read denied or unavailable; ignore silently.
+    }
+  }, [])
+
   const handleToggleCtrl = useCallback(() => {
     if (!canAttach) return
     setCtrlArmed((armed) => !armed)
@@ -1219,6 +1240,7 @@ function App() {
             altArmed={altArmed}
             onAltConsumed={handleAltConsumed}
             onInputReady={handleTerminalInputReady}
+            onPasteReady={handleTerminalPasteReady}
             onFocusReady={handleTerminalFocusReady}
           />
         ) : (
@@ -1232,6 +1254,7 @@ function App() {
           backgroundActivity={backgroundActivity}
           onMenu={() => setSidebarOpen(true)}
           onSend={handleMobileInput}
+          onPaste={handleMobilePaste}
           onToggleCtrl={handleToggleCtrl}
           onToggleAlt={handleToggleAlt}
           onFocusTerminal={handleFocusTerminal}

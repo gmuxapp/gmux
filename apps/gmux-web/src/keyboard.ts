@@ -91,6 +91,21 @@ function executeAction(kb: ResolvedKeybind, term: Terminal, send: SendFn): boole
 }
 
 /**
+ * Normalize and optionally bracket-wrap text for pasting into a terminal.
+ * Shared by the DOM paste handler and the mobile paste button.
+ */
+export function formatPasteText(text: string, bracketedPasteMode: boolean): string {
+  // Normalize line endings to \r (carriage return = terminal Enter).
+  const normalized = text.replace(/\r?\n/g, '\r')
+  if (bracketedPasteMode) {
+    // Sanitize ESC so nothing inside the text can break out of the bracket.
+    const sanitized = normalized.replace(/\x1b/g, '\u241b')
+    return `\x1b[200~${sanitized}\x1b[201~`
+  }
+  return normalized
+}
+
+/**
  * Attach a paste handler to the terminal container using the DOM capture phase.
  *
  * By listening with { capture: true } on an ancestor of xterm's internal
@@ -133,21 +148,7 @@ export function attachPasteHandler(
     ev.stopPropagation()
     ev.preventDefault()
 
-    // Always normalize line endings to \r (carriage return = terminal Enter).
-    // Matches xterm's prepareTextForTerminal, done unconditionally before
-    // any bracket wrapping, because that is what PTY applications expect.
-    const normalized = text.replace(/\r?\n/g, '\r')
-
-    if (term.modes.bracketedPasteMode) {
-      // Sanitize ESC characters so that nothing inside the pasted text can
-      // terminate the bracket early or inject escape sequences.
-      // xterm uses U+241B SYMBOL FOR ESCAPE as the stand-in, matching
-      // what bracketTextForPaste does internally.
-      const sanitized = normalized.replace(/\x1b/g, '\u241b')
-      send(`\x1b[200~${sanitized}\x1b[201~`)
-    } else {
-      send(normalized)
-    }
+    send(formatPasteText(text, term.modes.bracketedPasteMode))
   }
 
   container.addEventListener('paste', handler, { capture: true })
