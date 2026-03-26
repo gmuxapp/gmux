@@ -41,6 +41,77 @@ The config file is strictly validated at startup. gmuxd refuses to start if:
 
 This is intentional — silent fallback to defaults is dangerous for security settings. See [Security](/security) for the reasoning.
 
+## Terminal theme
+
+`~/.config/gmux/theme.jsonc`
+
+Customize terminal appearance: colors, font, cursor, scrollback, and more. All fields are optional; anything you omit uses the built-in default.
+
+```jsonc
+{
+  "fontSize": 14,
+  "fontFamily": "'JetBrains Mono', monospace",
+  "cursorStyle": "bar",
+  "cursorBlink": true,
+  "scrollback": 10000,
+  "theme": {
+    "background": "#282a36",
+    "foreground": "#f8f8f2"
+    // ... any xterm.js ITheme color keys
+  }
+}
+```
+
+You can drop in a [Windows Terminal theme](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/windowsterminal) and it works out of the box: `purple`/`brightPurple` are automatically mapped to `magenta`/`brightMagenta`, and the `name` field is ignored.
+
+Numeric values are clamped to safe ranges (e.g. fontSize 6-48, scrollback 0-100,000). Unknown keys produce a console warning.
+
+## Terminal keybinds
+
+`~/.config/gmux/keybinds.jsonc`
+
+Remap keys the browser steals, send raw text, or disable built-in bindings. The file is a JSON array of keybind entries:
+
+```jsonc
+[
+  // Remap Ctrl+Alt+T to send Ctrl+T (browser steals Ctrl+T for new tab)
+  { "key": "ctrl+alt+t", "action": "sendKeys", "args": "ctrl+t" },
+
+  // Send raw text to the terminal
+  { "key": "ctrl+alt+g", "action": "sendText", "args": "git status\r" },
+
+  // Disable a built-in binding
+  { "key": "ctrl+alt+w", "action": "none" }
+]
+```
+
+### Actions
+
+| Action | Description |
+|--------|-------------|
+| `sendKeys` | Parse `args` as a key combo and send its escape sequence (e.g. `"ctrl+t"` sends `^T`) |
+| `sendText` | Send `args` as raw text to the PTY |
+| `copyOrInterrupt` | Copy selection to clipboard if text is selected, otherwise send SIGINT |
+| `none` | Disable this key binding (removes a built-in default) |
+
+### Key format
+
+Key combos are case-insensitive and support these modifiers: `ctrl`, `shift`, `alt`, `meta` (or `cmd`/`super`). Modifier order doesn't matter: `ctrl+alt+t` and `Alt+Ctrl+T` are the same.
+
+Arrow keys can use short names: `left`, `right`, `up`, `down`. Named keys like `enter`, `escape`, `tab`, `backspace`, `home`, `end`, `delete` are also supported.
+
+### The `secondary` modifier
+
+The virtual modifier `secondary` resolves to **Cmd** on macOS and **Ctrl** everywhere else. This lets you write cross-platform keybinds:
+
+```jsonc
+{ "key": "secondary+alt+t", "action": "sendKeys", "args": "ctrl+t" }
+```
+
+### User entries override defaults
+
+User keybinds override built-in defaults that share the same key combo. To see the current defaults, check [Keyboard shortcuts](/using-the-ui#keyboard-shortcuts).
+
 ## Environment variables
 
 ### gmuxd (daemon)
@@ -77,7 +148,9 @@ See [Adapter Architecture](/develop/adapter-architecture) for how to use the chi
 
 | Path | Purpose | Created by |
 |------|---------|------------|
-| `~/.config/gmux/config.toml` | Config file | User |
+| `~/.config/gmux/config.toml` | Daemon config (port, network, tailscale) | User |
+| `~/.config/gmux/theme.jsonc` | Terminal appearance (colors, font, cursor) | User |
+| `~/.config/gmux/keybinds.jsonc` | Key-to-action mappings | User |
 | `~/.local/state/gmux/tsnet/` | Tailscale state (when enabled) | gmuxd |
 | `~/.local/state/gmux/auth-token` | Network listener bearer token | gmuxd |
 | `/tmp/gmux-sessions/*.sock` | Live session Unix sockets | gmux |

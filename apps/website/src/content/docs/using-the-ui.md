@@ -74,14 +74,40 @@ The empty state (when no session is selected) also shows launch buttons.
 
 ## Keyboard shortcuts
 
-Most keys pass straight through to the terminal. A few are intercepted:
+Most keys pass straight through to the terminal. A few are intercepted by default, with different bindings per platform:
+
+### All platforms
 
 | Shortcut | Action |
 |----------|--------|
-| **Ctrl+C** | If text is selected: copy to clipboard. Otherwise: sends SIGINT to the process (normal Ctrl+C) |
-| **Ctrl+V** | Paste from clipboard |
-| **Ctrl+Alt+T** | Sends Ctrl+T to the terminal (browsers steal Ctrl+T for new tab) |
-| **Shift+Enter** | Sends a plain newline (some terminals treat Shift+Enter differently) |
+| **Ctrl+C** | If text is selected: copy to clipboard. Otherwise: sends SIGINT (normal Ctrl+C) |
+| **Ctrl+V** / **Cmd+V** | Paste from clipboard |
+| **Shift+Enter** | Sends a plain newline (blocks Kitty keyboard protocol sequence) |
+
+### Linux / Windows
+
+Browsers reserve Ctrl+T, Ctrl+N, and Ctrl+W for tab management. These Ctrl+Alt workarounds send the original key to the terminal:
+
+| Shortcut | Sends |
+|----------|-------|
+| **Ctrl+Alt+T** | Ctrl+T (transpose-chars in readline) |
+| **Ctrl+Alt+N** | Ctrl+N (next-history in readline) |
+| **Ctrl+Alt+W** | Ctrl+W (backward-kill-word in readline) |
+
+### Mac
+
+On Mac the browser steals Cmd+T/N/W instead, leaving Ctrl+T/N/W free. These bindings match iTerm2 and macOS Terminal conventions:
+
+| Shortcut | Action |
+|----------|--------|
+| **Cmd+Left** | Home (beginning of line) |
+| **Cmd+Right** | End (end of line) |
+| **Cmd+Backspace** | Delete to start of line |
+| **Cmd+K** | Clear screen |
+
+### Customizing keybinds
+
+All default keybinds can be overridden or disabled via `~/.config/gmux/keybinds.jsonc`. See [Configuration](/configuration#terminal-keybinds) for details.
 
 :::tip[App mode]
 Browsers reserve many shortcuts (Ctrl+T, Ctrl+N, Ctrl+W, etc.) that don't reach the terminal. Run gmux as a standalone app to get full keyboard pass-through:
