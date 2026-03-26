@@ -73,16 +73,29 @@ function measureTerminalFit(
   if (!xtermEl) return null
 
   // Read the xterm element's padding (our CSS sets padding on .xterm).
+  // Use parseFloat (not parseInt) to preserve sub-pixel precision under zoom.
   const style = getComputedStyle(xtermEl)
-  const padX = parseInt(style.paddingLeft) + parseInt(style.paddingRight)
-  const padY = parseInt(style.paddingTop) + parseInt(style.paddingBottom)
+  const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
+  const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
 
-  // Measure the shell — the stable flex-allocated viewport.
+  // Measure the shell, the stable flex-allocated viewport.
   const availW = shellEl.clientWidth - padX - reserveWidth
   const availH = shellEl.clientHeight - padY
 
-  const cols = Math.max(2, Math.floor(availW / dims.css.cell.width))
+  let cols = Math.max(2, Math.floor(availW / dims.css.cell.width))
   const rows = Math.max(1, Math.floor(availH / dims.css.cell.height))
+
+  // Guard against 1px overflow: xterm computes screen width as
+  // Math.round(device.cell.width * cols / dpr). Because css.cell.width is
+  // derived from rounded values (round(device_canvas / dpr) / cols), it can
+  // be slightly smaller than the true character width. This makes floor()
+  // occasionally produce one extra column whose screen pixel width rounds up
+  // past availW, causing 1px horizontal scroll.
+  const dpr = window.devicePixelRatio || 1
+  if (dims.device.cell.width > 0) {
+    const predictedWidth = Math.round(dims.device.cell.width * cols / dpr)
+    if (predictedWidth > availW && cols > 2) cols--
+  }
 
   return { cols, rows }
 }
