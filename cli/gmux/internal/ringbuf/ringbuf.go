@@ -70,6 +70,14 @@ func (r *RingBuf) Len() int {
 	return r.pos
 }
 
+// Full returns true if the buffer has wrapped around at least once,
+// meaning the snapshot may start at an arbitrary byte boundary.
+func (r *RingBuf) Full() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.full
+}
+
 // Reset clears the buffer.
 func (r *RingBuf) Reset() {
 	r.mu.Lock()

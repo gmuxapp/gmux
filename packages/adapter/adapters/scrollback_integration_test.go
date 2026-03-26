@@ -166,11 +166,11 @@ func TestScrollbackShellPreservesOutput(t *testing.T) {
 	}
 }
 
-// TestScrollbackShellClearDoesNotWipe verifies that ESC[2J (clear screen)
-// in a shell session does not wipe earlier output from the scrollback.
-// The clear sequence is passed through so WebSocket clients process it
-// natively, but the ring buffer retains pre-clear content.
-func TestScrollbackShellClearDoesNotWipe(t *testing.T) {
+// TestScrollbackShellClearDiscardsOldContent verifies that ESC[2J (clear
+// screen) in a shell session discards prior scrollback content. The ring
+// buffer resets on clear so that reconnecting clients see a clean screen
+// instead of stale pre-clear lines.
+func TestScrollbackShellClearDiscardsOldContent(t *testing.T) {
 	g := testutil.StartGmuxd(t)
 	cwd := t.TempDir()
 
@@ -192,9 +192,9 @@ func TestScrollbackShellClearDoesNotWipe(t *testing.T) {
 	if !strings.Contains(text, "AFTER_CLEAR_MARKER") {
 		t.Errorf("scrollback missing post-clear content")
 	}
-	// Pre-clear content is preserved in the ring buffer (clear sequences
-	// are passed through rather than resetting the buffer).
-	if !strings.Contains(text, "BEFORE_CLEAR_MARKER") {
-		t.Errorf("scrollback missing pre-clear content (clear wiped the buffer)")
+	// Pre-clear content is discarded: the ring buffer resets on ESC[2J
+	// so that session replay starts clean.
+	if strings.Contains(text, "BEFORE_CLEAR_MARKER") {
+		t.Errorf("pre-clear content should be discarded after clear, but found BEFORE_CLEAR_MARKER")
 	}
 }
