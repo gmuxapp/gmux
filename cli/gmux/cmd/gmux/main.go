@@ -89,6 +89,35 @@ func main() {
 		return
 	}
 
+	// Nested gmux detection: if we're running interactively inside an
+	// existing gmux session, re-exec as a detached headless process instead
+	// of doing PTY passthrough (which would nest PTY-within-PTY). The
+	// detached process registers with gmuxd and the session appears in the
+	// gmux UI. The original process returns immediately to the parent shell.
+	if os.Getenv("GMUX") == "1" && localterm.IsInteractive() {
+		self, err := os.Executable()
+		if err != nil {
+			log.Fatalf("cannot find own binary: %v", err)
+		}
+		devNull, err := os.Open(os.DevNull)
+		if err != nil {
+			log.Fatalf("cannot open %s: %v", os.DevNull, err)
+		}
+		defer devNull.Close()
+
+		cmd := exec.Command(self, os.Args[1:]...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		cmd.Stdin = devNull
+		cmd.Stdout = devNull
+		cmd.Stderr = devNull
+		if err := cmd.Start(); err != nil {
+			log.Fatalf("failed to start background session: %v", err)
+		}
+		cmd.Process.Release()
+		fmt.Fprintf(os.Stderr, "started %s in background (visible in gmux)\n", strings.Join(args, " "))
+		return
+	}
+
 	workDir := *cwd
 	if workDir == "" {
 		var err error
