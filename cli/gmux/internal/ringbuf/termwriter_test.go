@@ -109,40 +109,38 @@ func TestTermWriter_BareCR_DeferredThenResolved(t *testing.T) {
 	}
 }
 
-// Clear sequences are passed through as regular content, not used to reset.
-// TUI apps (pi, claude) use clears as part of normal rendering; resetting
-// would discard meaningful conversation content. WebSocket clients that
-// replay the scrollback will process the escape sequences naturally.
+// Clear sequences (ESC[2J, ESC[3J) discard prior scrollback content.
+// The ring buffer is the source of truth for session replay, so pre-clear
+// content must be removed to avoid rendering garbage when a client
+// connects and replays the snapshot. See clear_test.go for thorough coverage.
 
-func TestTermWriter_ClearScreen_PassedThrough(t *testing.T) {
+func TestTermWriter_ClearScreen_DiscardsOldContent(t *testing.T) {
 	tw := NewTermWriter(New(256))
 	tw.Write([]byte("before clear\n"))
 	tw.Write([]byte("\x1b[2Jafter clear"))
 	got := tw.Snapshot()
-	// Both pre- and post-clear content are preserved.
-	want := "before clear\n\x1b[2Jafter clear"
+	want := "after clear"
 	if !bytes.Equal(got, []byte(want)) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
-func TestTermWriter_ClearScrollback_PassedThrough(t *testing.T) {
+func TestTermWriter_ClearScrollback_DiscardsOldContent(t *testing.T) {
 	tw := NewTermWriter(New(256))
 	tw.Write([]byte("line1\nline2\nline3\n"))
 	tw.Write([]byte("\x1b[3Jfresh start"))
 	got := tw.Snapshot()
-	want := "line1\nline2\nline3\n\x1b[3Jfresh start"
+	want := "fresh start"
 	if !bytes.Equal(got, []byte(want)) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
-func TestTermWriter_ClearInMiddleOfChunk(t *testing.T) {
+func TestTermWriter_ClearInMiddleOfChunk_DiscardsOld(t *testing.T) {
 	tw := NewTermWriter(New(256))
 	tw.Write([]byte("junk\x1b[2Jgood stuff\n"))
 	got := tw.Snapshot()
-	// Clear is passed through as content.
-	want := "junk\x1b[2Jgood stuff\n"
+	want := "good stuff\n"
 	if !bytes.Equal(got, []byte(want)) {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -331,7 +329,7 @@ func TestTermWriter_PiLikeOutput(t *testing.T) {
 
 func TestTermWriter_PiClearThenRedraw(t *testing.T) {
 	// Pi does ESC[2J ESC[H ESC[3J then redraws the status bar.
-	// The clear sequences should be passed through, preserving pre-clear content.
+	// The clear discards pre-clear content; only post-clear survives.
 	tw := NewTermWriter(New(4096))
 	tw.Write([]byte("conversation content\r\r\n"))
 	tw.Write([]byte("more content\r\r\n"))
@@ -339,9 +337,9 @@ func TestTermWriter_PiClearThenRedraw(t *testing.T) {
 	tw.Write([]byte("status bar\r\r\n"))
 
 	got := tw.Snapshot()
-	// Pre-clear content is preserved in the buffer.
-	if !bytes.Contains(got, []byte("conversation content")) {
-		t.Errorf("pre-clear content lost: %q", got)
+	// Pre-clear content is gone.
+	if bytes.Contains(got, []byte("conversation content")) {
+		t.Errorf("pre-clear content should be discarded: %q", got)
 	}
 	if !bytes.Contains(got, []byte("status bar")) {
 		t.Errorf("post-clear content missing: %q", got)
