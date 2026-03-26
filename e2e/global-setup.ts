@@ -76,7 +76,6 @@ export default async function globalSetup(config: FullConfig) {
     TERM: 'xterm-256color',
     GMUX_SOCKET_DIR: socketDir,
     GMUXD_PORT: String(port),
-    GMUXD_ADDR: `127.0.0.1:${port}`,
     XDG_CONFIG_HOME: configDir,   // no config file → Tailscale disabled
     XDG_STATE_HOME: stateDir,
   }

@@ -44,7 +44,7 @@ fi
 
 # ── Prepare directories and config ──
 
-mkdir -p "$DEV_SOCKET_DIR" "$DEV_STATE_DIR/config/gmux" "$DEV_STATE_DIR/state"
+mkdir -p "$DEV_SOCKET_DIR" "$DEV_STATE_DIR/config/gmux" "$DEV_STATE_DIR/state" "$DEV_STATE_DIR/pi-agent"
 
 cat > "$DEV_STATE_DIR/config/gmux/config.toml" << EOF
 port = $DEV_PORT
@@ -61,6 +61,7 @@ export GMUX_SOCKET_DIR="$DEV_SOCKET_DIR"
 export XDG_CONFIG_HOME="$DEV_STATE_DIR/config"
 export XDG_STATE_HOME="$DEV_STATE_DIR/state"
 export GMUXD_DEV_PROXY="http://localhost:$DEV_VITE_PORT"
+export PI_CODING_AGENT_DIR="$DEV_STATE_DIR/pi-agent"
 
 # ── Install deps + build ──
 
@@ -120,6 +121,7 @@ watchexec \
     XDG_CONFIG_HOME='$DEV_STATE_DIR/config' \\
     XDG_STATE_HOME='$DEV_STATE_DIR/state' \\
     GMUXD_DEV_PROXY='http://localhost:$DEV_VITE_PORT' \\
+    PI_CODING_AGENT_DIR='$DEV_STATE_DIR/pi-agent' \\
     '$DEV_BIN_DIR/gmuxd-dev' start --replace
   " &
 PIDS+=($!)

@@ -398,8 +398,8 @@ func startGmuxd(gmuxdBin string, args []string) bool {
 }
 
 func configuredGmuxdAddr() string {
-	if gmuxdAddr := os.Getenv("GMUXD_ADDR"); gmuxdAddr != "" {
-		return gmuxdAddr
+	if port := os.Getenv("GMUXD_PORT"); port != "" {
+		return "http://localhost:" + port
 	}
 	return "http://localhost:8790"
 }

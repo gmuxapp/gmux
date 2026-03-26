@@ -79,7 +79,13 @@ func (p *Pi) Monitor(_ []byte) *adapter.Status {
 // --- SessionFiler ---
 
 // SessionRootDir returns pi's top-level sessions directory.
+// Respects PI_CODING_AGENT_DIR (pi's own env var for overriding the
+// agent data directory, default ~/.pi/agent). This lets dev instances
+// use an isolated session store.
 func (p *Pi) SessionRootDir() string {
+	if dir := os.Getenv("PI_CODING_AGENT_DIR"); dir != "" {
+		return filepath.Join(dir, "sessions")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""

@@ -539,6 +539,26 @@ func TestSessionDirEncoding(t *testing.T) {
 	}
 }
 
+func TestSessionRootDirRespectsEnvVar(t *testing.T) {
+	custom := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", custom)
+	root := NewPi().SessionRootDir()
+	want := filepath.Join(custom, "sessions")
+	if root != want {
+		t.Errorf("expected %s, got %s", want, root)
+	}
+}
+
+func TestSessionRootDirDefaultWithoutEnvVar(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	root := NewPi().SessionRootDir()
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, ".pi", "agent", "sessions")
+	if root != want {
+		t.Errorf("expected %s, got %s", want, root)
+	}
+}
+
 func TestListSessionFiles(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.jsonl"), []byte("{}"), 0644)

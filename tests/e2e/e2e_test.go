@@ -89,7 +89,7 @@ func TestEndToEnd(t *testing.T) {
 	runCmd := exec.CommandContext(runCtx, gmuxRunBin, "bash", "-c", "echo hello-from-e2e; sleep 60")
 	runCmd.Dir = repoRoot
 	runCmd.Env = append(os.Environ(),
-		fmt.Sprintf("GMUXD_ADDR=%s", gmuxdAddr),
+		fmt.Sprintf("GMUXD_PORT=%d", port),
 	)
 
 	// Capture stdout to extract session ID and socket path
