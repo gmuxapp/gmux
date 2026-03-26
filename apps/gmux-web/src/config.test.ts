@@ -73,6 +73,19 @@ describe('mergeThemeConfig', () => {
     expect(mergeThemeConfig({ minimumContrastRatio: 50 }).minimumContrastRatio).toBe(21)
   })
 
+  it('normalizes purple to magenta when theme comes via mergeThemeConfig', () => {
+    const opts = mergeThemeConfig({
+      theme: { purple: '#ff79c6', brightPurple: '#ff92df', background: '#282a36' },
+    })
+    const theme = opts.theme as Record<string, unknown>
+    expect(theme.magenta).toBe('#ff79c6')
+    expect(theme.brightMagenta).toBe('#ff92df')
+    expect(theme.background).toBe('#282a36')
+    // purple/brightPurple should not leak into the ITheme object
+    expect(theme.purple).toBeUndefined()
+    expect(theme.brightPurple).toBeUndefined()
+  })
+
   it('warns about unknown keys', () => {
     const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     mergeThemeConfig({ bogusKey: 42 } as any)
@@ -214,6 +227,12 @@ describe('keyComboToSequence', () => {
     // alt+ctrl+a = ESC + \x01
     expect(keyComboToSequence('alt+ctrl+a')).toBe('\x1b\x01')
   })
+
+  it('returns empty string for unrecognized named keys', () => {
+    // Keys like "f1", "arrowup" have no simple escape sequence mapping.
+    // The function should return empty rather than something wrong.
+    expect(keyComboToSequence('f1')).toBe('')
+  })
 })
 
 // ── Keybind resolution ──
@@ -283,6 +302,25 @@ describe('resolveKeybinds', () => {
     resolveKeybinds([{ key: 'ctrl+x', action: 'bogusAction' }])
     expect(spy).toHaveBeenCalledWith(expect.stringContaining('unknown action'))
     spy.mockRestore()
+  })
+
+  it('returns defaults when given empty array', () => {
+    const resolved = resolveKeybinds([])
+    expect(resolved.length).toBe(DEFAULT_KEYBINDS.length)
+  })
+
+  it('handles non-standard modifier order (base key first)', () => {
+    // "enter+shift" should still override the default "shift+enter"
+    const user: Keybind[] = [
+      { key: 'enter+shift', action: 'sendText', args: 'overridden' },
+    ]
+    const resolved = resolveKeybinds(user)
+    const match = resolved.find(r => r.baseKey === 'enter' && r.shift)
+    expect(match).toBeDefined()
+    expect(match!.args).toBe('overridden')
+    // Should have replaced, not added alongside the default.
+    const enterBindings = resolved.filter(r => r.baseKey === 'enter' && r.shift)
+    expect(enterBindings.length).toBe(1)
   })
 })
 

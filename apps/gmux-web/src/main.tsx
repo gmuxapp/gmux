@@ -7,9 +7,8 @@ import { createSidebarState } from './sidebar-state'
 import { connectPresence } from './presence'
 import type { NotifyMessage, CancelMessage } from './presence'
 import { TerminalView } from './terminal'
-import { fetchTerminalConfig, mergeThemeConfig, resolveKeybinds, type TerminalConfig } from './config'
 import type { ITerminalOptions } from '@xterm/xterm'
-import type { ResolvedKeybind } from './config'
+import { fetchTerminalConfig, mergeThemeConfig, resolveKeybinds, type ResolvedKeybind } from './config'
 import { useArrivalPulse } from './use-arrival-pulse'
 
 import type { Session, Folder } from './types'
@@ -1210,7 +1209,7 @@ function App() {
               Retry
             </button>
           </div>
-        ) : selected && (canAttach || USE_MOCK) ? (
+        ) : selected && (canAttach || USE_MOCK) && terminalOptions && keybinds ? (
           <TerminalView
             session={selected}
             terminalOptions={terminalOptions}

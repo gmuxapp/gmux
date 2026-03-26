@@ -289,16 +289,25 @@ export function resolveKeybinds(user: Keybind[] | null | undefined): ResolvedKey
   return result
 }
 
+const MODIFIER_NAMES = new Set(['ctrl', 'control', 'shift', 'alt', 'meta', 'cmd', 'super'])
+
 /**
  * Normalize a key string for deduplication.
- * Sorts modifiers alphabetically, lowercases everything.
+ * Separates modifiers from the base key (using the same modifier list as
+ * parseKeyCombo), sorts modifiers alphabetically, lowercases everything.
  * e.g. "Ctrl+Alt+T" and "alt+ctrl+t" both become "alt+ctrl+t"
+ * Handles non-standard ordering like "enter+shift" → "shift+enter".
  */
 function normalizeKeyString(key: string): string {
   const parts = key.toLowerCase().split('+')
-  const base = parts.pop()!
-  parts.sort()
-  return [...parts, base].join('+')
+  const mods: string[] = []
+  let baseKey = ''
+  for (const part of parts) {
+    if (MODIFIER_NAMES.has(part)) mods.push(part)
+    else baseKey = part
+  }
+  mods.sort()
+  return [...mods, baseKey].join('+')
 }
 
 /**

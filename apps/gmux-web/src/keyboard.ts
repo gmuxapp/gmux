@@ -11,7 +11,6 @@ import type { Terminal } from '@xterm/xterm'
 import {
   eventMatchesKeybind,
   keyComboToSequence,
-  resolveKeybinds,
   type ResolvedKeybind,
 } from './config'
 
@@ -27,13 +26,11 @@ type SendFn = (data: string) => void
 export function attachKeyboardHandler(
   term: Terminal,
   send: SendFn,
-  keybinds?: ResolvedKeybind[],
+  keybinds: ResolvedKeybind[],
 ): void {
-  const bindings = keybinds ?? resolveKeybinds(null)
-
   term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
     // Check each resolved keybind against the event.
-    for (const kb of bindings) {
+    for (const kb of keybinds) {
       if (!eventMatchesKeybind(ev, kb)) continue
 
       // For shift+enter we need to block all event types (keydown, keypress,

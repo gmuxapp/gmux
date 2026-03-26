@@ -4,9 +4,9 @@ import { FitAddon } from '@xterm/addon-fit'
 import { ImageAddon } from '@xterm/addon-image'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { attachKeyboardHandler, attachPasteHandler } from './keyboard'
-import { DEFAULT_THEME_COLORS, mergeThemeConfig, resolveKeybinds, type ResolvedKeybind } from './config'
 import type { ITerminalOptions } from '@xterm/xterm'
+import { attachKeyboardHandler, attachPasteHandler } from './keyboard'
+import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { createReplayBuffer } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
@@ -193,8 +193,8 @@ function focusTerminalInput(term: Terminal | null): void {
 
 export function TerminalView({
   session,
-  terminalOptions: userTermOpts,
-  keybinds: userKeybinds,
+  terminalOptions,
+  keybinds,
   ctrlArmed,
   onCtrlConsumed,
   altArmed,
@@ -203,8 +203,8 @@ export function TerminalView({
   onFocusReady,
 }: {
   session: Session
-  terminalOptions?: ITerminalOptions | null
-  keybinds?: ResolvedKeybind[] | null
+  terminalOptions: ITerminalOptions
+  keybinds: ResolvedKeybind[]
   ctrlArmed: boolean
   onCtrlConsumed: () => void
   altArmed: boolean
@@ -292,17 +292,15 @@ export function TerminalView({
     if (!containerRef.current || USE_MOCK) return
     disposed.current = false
 
-    // Merge user terminal options with defaults. Non-serializable options
-    // (linkHandler) are added here since they can't live in JSON config.
-    const termOpts: ITerminalOptions = {
-      ...(userTermOpts ?? mergeThemeConfig(null)),
+    // Add non-serializable options that can't live in JSON config.
+    const term = new Terminal({
+      ...terminalOptions,
       linkHandler: {
         activate(_event, text) {
           window.open(text, '_blank', 'noopener')
         },
       },
-    }
-    const term = new Terminal(termOpts)
+    })
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     term.loadAddon(new ImageAddon())
@@ -358,7 +356,7 @@ export function TerminalView({
     onFocusReady?.(() => focusTerminalInput(term))
 
     const dataDisposable = term.onData((data) => sendInput(data))
-    attachKeyboardHandler(term, sendInput, userKeybinds ?? resolveKeybinds(null))
+    attachKeyboardHandler(term, sendInput, keybinds)
     const disposePasteHandler = attachPasteHandler(term, containerRef.current!, sendRawInput)
     const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
 
