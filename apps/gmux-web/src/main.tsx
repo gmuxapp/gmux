@@ -7,6 +7,9 @@ import { createSidebarState } from './sidebar-state'
 import { connectPresence } from './presence'
 import type { NotifyMessage, CancelMessage } from './presence'
 import { TerminalView } from './terminal'
+import { fetchTerminalConfig, mergeThemeConfig, resolveKeybinds, type TerminalConfig } from './config'
+import type { ITerminalOptions } from '@xterm/xterm'
+import type { ResolvedKeybind } from './config'
 import { useArrivalPulse } from './use-arrival-pulse'
 
 import type { Session, Folder } from './types'
@@ -857,8 +860,17 @@ function App() {
   const presenceRef       = useRef<ReturnType<typeof connectPresence> | null>(null)
   const lastInteractionRef = useRef(Date.now() / 1000)
 
+  const [terminalOptions, setTerminalOptions] = useState<ITerminalOptions | null>(null)
+  const [keybinds, setKeybinds] = useState<ResolvedKeybind[] | null>(null)
+
   useEffect(() => { fetchConfig().then(cfg => setLaunchers(cfg.launchers)) }, [])
   useEffect(() => { fetchHealth().then(setHealth) }, [])
+  useEffect(() => {
+    fetchTerminalConfig().then(tc => {
+      setTerminalOptions(mergeThemeConfig(tc.themeConfig))
+      setKeybinds(resolveKeybinds(tc.keybindsConfig))
+    })
+  }, [])
 
   // Subscribe to sidebar state changes for re-render
   useEffect(() => sidebarState.subscribe(() => forceUpdate(n => n + 1)), [])
@@ -1201,6 +1213,8 @@ function App() {
         ) : selected && (canAttach || USE_MOCK) ? (
           <TerminalView
             session={selected}
+            terminalOptions={terminalOptions}
+            keybinds={keybinds}
             ctrlArmed={ctrlArmed}
             onCtrlConsumed={handleCtrlConsumed}
             altArmed={altArmed}

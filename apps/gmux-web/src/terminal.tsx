@@ -5,6 +5,8 @@ import { ImageAddon } from '@xterm/addon-image'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { attachKeyboardHandler, attachPasteHandler } from './keyboard'
+import { DEFAULT_THEME_COLORS, mergeThemeConfig, resolveKeybinds, type ResolvedKeybind } from './config'
+import type { ITerminalOptions } from '@xterm/xterm'
 import { attachMobileInputHandler } from './mobile-input'
 import { createReplayBuffer } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
@@ -23,29 +25,11 @@ function loadPreferredRenderer(term: Terminal) {
   }
 }
 
-export const TERM_THEME = {
-  background: '#0f141a',            // --bg-surface
-  foreground: '#d3d8de',            // --text
-  cursor: '#d3d8de',                // --text
-  cursorAccent: '#0f141a',          // --bg-surface
-  selectionBackground: '#2a3a4acc', // visible selection with slight blue tint
-  black: '#151b21',                 // --border
-  red: '#c25d66',
-  green: '#a3be8c',
-  yellow: '#ebcb8b',
-  blue: '#81a1c1',
-  magenta: '#b48ead',
-  cyan: '#49b8b8',                  // --accent
-  white: '#d3d8de',                 // --text
-  brightBlack: '#595e63',           // --text-muted
-  brightRed: '#d06c75',
-  brightGreen: '#b4d19a',
-  brightYellow: '#f0d9a0',
-  brightBlue: '#93b3d1',
-  brightMagenta: '#c9a3c4',
-  brightCyan: '#5fcece',
-  brightWhite: '#eceff4',
-}
+/**
+ * Re-export for backward compat (used by input-diagnostics.tsx).
+ * The actual colors now live in config.ts as DEFAULT_THEME_COLORS.
+ */
+export const TERM_THEME = DEFAULT_THEME_COLORS
 
 // ── Utilities ──
 
@@ -209,6 +193,8 @@ function focusTerminalInput(term: Terminal | null): void {
 
 export function TerminalView({
   session,
+  terminalOptions: userTermOpts,
+  keybinds: userKeybinds,
   ctrlArmed,
   onCtrlConsumed,
   altArmed,
@@ -217,6 +203,8 @@ export function TerminalView({
   onFocusReady,
 }: {
   session: Session
+  terminalOptions?: ITerminalOptions | null
+  keybinds?: ResolvedKeybind[] | null
   ctrlArmed: boolean
   onCtrlConsumed: () => void
   altArmed: boolean
@@ -304,19 +292,17 @@ export function TerminalView({
     if (!containerRef.current || USE_MOCK) return
     disposed.current = false
 
-    const term = new Terminal({
-      theme: TERM_THEME,
-      fontFamily: "'Fira Code', monospace",
-      fontSize: 13,
-      cursorBlink: true,
-      // Handle OSC 8 hyperlinks (program-emitted links): open in a new tab.
-      // Without this, xterm shows a confirm() dialog with a security warning.
+    // Merge user terminal options with defaults. Non-serializable options
+    // (linkHandler) are added here since they can't live in JSON config.
+    const termOpts: ITerminalOptions = {
+      ...(userTermOpts ?? mergeThemeConfig(null)),
       linkHandler: {
         activate(_event, text) {
           window.open(text, '_blank', 'noopener')
         },
       },
-    })
+    }
+    const term = new Terminal(termOpts)
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     term.loadAddon(new ImageAddon())
@@ -372,7 +358,7 @@ export function TerminalView({
     onFocusReady?.(() => focusTerminalInput(term))
 
     const dataDisposable = term.onData((data) => sendInput(data))
-    attachKeyboardHandler(term, sendInput)
+    attachKeyboardHandler(term, sendInput, userKeybinds ?? resolveKeybinds(null))
     const disposePasteHandler = attachPasteHandler(term, containerRef.current!, sendRawInput)
     const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
 

@@ -428,6 +428,26 @@ func serve(replace bool, stderr io.Writer) int {
 		writeJSON(w, map[string]any{"ok": true, "data": cfg})
 	})
 
+	// Terminal appearance and keybind config (read from disk on each request
+	// so users can edit and refresh without restarting gmuxd).
+	mux.HandleFunc("GET /v1/terminal-config", func(w http.ResponseWriter, r *http.Request) {
+		theme, themeErr := config.LoadTerminalTheme()
+		keybinds, kbErr := config.LoadKeybinds()
+		if themeErr != nil {
+			log.Printf("terminal-config: theme: %v", themeErr)
+		}
+		if kbErr != nil {
+			log.Printf("terminal-config: keybinds: %v", kbErr)
+		}
+		writeJSON(w, map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"theme":    theme,
+				"keybinds": keybinds,
+			},
+		})
+	})
+
 	// ── Sessions ──
 
 	mux.HandleFunc("GET /v1/sessions", func(w http.ResponseWriter, r *http.Request) {
