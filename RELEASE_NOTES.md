@@ -1,6 +1,17 @@
-- **Clean scrollback on screen clear, better ring buffer wrapping.** When the 128KB scrollback buffer wraps around,
-  snapshots now start at the first complete line boundary instead of mid-line or
-  mid-escape-sequence. ([#36](https://github.com/gmuxapp/gmux/pull/36))
-- **Session attributions survive gmuxd restart.** File-to-session attributions
-  are now persisted to `attributions.json` inside the /tmp/gmux-sessions directory. ([#33](https://github.com/gmuxapp/gmux/pull/33))
-- Fixed 1px horizontal scroll when the terminal is auto-fitted to the viewport ([#32](https://github.com/gmuxapp/gmux/pull/32))
+- **Fixed dev instances unable to connect to their backend.** The `gmux` CLI
+  now reads `GMUXD_PORT` directly (same env var as `gmuxd`), so a single
+  export is sufficient for both binaries. The redundant `GMUXD_ADDR` env var
+  has been removed.
+
+- **Dev instances now isolate pi session storage.** The pi adapter respects
+  `PI_CODING_AGENT_DIR`, and the dev scripts export it to an instance-specific
+  directory. Sessions launched from a dev instance no longer appear in (or
+  pollute) your real pi session history. ([#39](https://github.com/gmuxapp/gmux/pull/39))
+- **Nested gmux detection.** Running `gmux <command>` inside an existing gmux
+  session no longer creates a PTY-within-PTY nest. Instead, the session is
+  launched in the background and appears in the gmux UI automatically. ([#37](https://github.com/gmuxapp/gmux/pull/37))
+- **User-configurable terminal settings.** Two new config files in `~/.config/gmux/` let you customize the terminal without rebuilding:
+  - `theme.jsonc`: colors, font, cursor style, scrollback, and more. Drop in a [Windows Terminal theme](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/windowsterminal) and it works out of the box.
+  - `keybinds.jsonc`: remap keys the browser steals (Ctrl+T, Ctrl+N, Ctrl+W) to PTY sequences via `sendKeys`, send raw text with `sendText`, or disable built-in bindings with `"none"`. A virtual `secondary` modifier resolves to Cmd on macOS and Ctrl elsewhere for cross-platform keybinds.
+- **Platform-aware default keybinds.** On Linux, Ctrl+Alt+T/N/W send Ctrl+T/N/W (workaround for browser-stolen shortcuts). On Mac, Cmd+Left/Right send Home/End, Cmd+Backspace deletes to start of line, and Cmd+K clears the screen, matching iTerm2 conventions.
+- **No restart required.** Config files are read from disk on each page load, so edit and refresh. ([#35](https://github.com/gmuxapp/gmux/pull/35))
