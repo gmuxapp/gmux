@@ -56,7 +56,7 @@ This is intentional — silent fallback to defaults is dangerous for security se
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `GMUXD_ADDR` | Full URL of gmuxd (for registration) | `http://localhost:8790` |
+| `GMUXD_PORT` | Port to reach gmuxd on localhost (shared with gmuxd) | `8790` |
 | `GMUX_ADAPTER` | Force a specific adapter instead of auto-detection | *(auto)* |
 | `GMUX_SOCKET_DIR` | Directory for session Unix sockets | `/tmp/gmux-sessions` |
 

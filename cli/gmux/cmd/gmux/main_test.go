@@ -7,6 +7,25 @@ import (
 	"testing"
 )
 
+func TestConfiguredGmuxdAddr(t *testing.T) {
+	tests := []struct {
+		name string
+		port string
+		want string
+	}{
+		{"default", "", "http://localhost:8790"},
+		{"custom port", "9999", "http://localhost:9999"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GMUXD_PORT", tt.port)
+			if got := configuredGmuxdAddr(); got != tt.want {
+				t.Errorf("configuredGmuxdAddr() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // healthHandler returns an HTTP handler that serves /v1/health with the given version.
 func healthHandler(ver string) http.Handler {
 	mux := http.NewServeMux()
