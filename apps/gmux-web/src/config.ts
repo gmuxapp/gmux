@@ -12,6 +12,17 @@
  */
 import type { ITerminalOptions, ITheme } from '@xterm/xterm'
 
+// ── Platform detection ──
+
+/**
+ * Platform-aware "secondary" modifier: resolves to Cmd (meta) on macOS/iOS,
+ * Ctrl on everything else. Lets users write cross-platform keybinds like
+ * "secondary+alt+t" that do the right thing on each OS.
+ */
+const IS_MAC = typeof navigator !== 'undefined' &&
+  /mac|iphone|ipad|ipod/i.test(navigator.platform ?? '')
+export const SECONDARY_MOD: 'meta' | 'ctrl' = IS_MAC ? 'meta' : 'ctrl'
+
 // ── Theme config ──
 
 /** User-facing schema for theme.jsonc. All fields optional; merged over defaults. */
@@ -166,7 +177,11 @@ export function mergeThemeConfig(user: ThemeConfig | null | undefined): ITermina
 // ── Keybinds config ──
 
 export interface Keybind {
-  /** Key combo, e.g. "ctrl+alt+t", "shift+enter". Case-insensitive. */
+  /**
+   * Key combo, e.g. "ctrl+alt+t", "shift+enter". Case-insensitive.
+   * The virtual modifier "secondary" resolves to Cmd on macOS and Ctrl elsewhere,
+   * so "secondary+alt+t" works on both platforms.
+   */
   key: string
   /**
    * Action to perform. Known actions:
@@ -195,7 +210,7 @@ const KNOWN_ACTIONS = new Set(['sendText', 'sendKeys', 'copyOrInterrupt', 'none'
 export const DEFAULT_KEYBINDS: Keybind[] = [
   { key: 'shift+enter', action: 'sendText', args: '\n' },
   { key: 'ctrl+c', action: 'copyOrInterrupt' },
-  { key: 'ctrl+alt+t', action: 'sendKeys', args: 'ctrl+t' },
+  { key: 'secondary+alt+t', action: 'sendKeys', args: 'ctrl+t' },
 ]
 
 /**
@@ -211,6 +226,7 @@ export function parseKeyCombo(combo: string): { ctrl: boolean; shift: boolean; a
     else if (part === 'shift') mods.shift = true
     else if (part === 'alt') mods.alt = true
     else if (part === 'meta' || part === 'cmd' || part === 'super') mods.meta = true
+    else if (part === 'secondary') mods[SECONDARY_MOD] = true
     else baseKey = part
   }
   return { ...mods, baseKey }
@@ -288,7 +304,7 @@ export function resolveKeybinds(user: Keybind[] | null | undefined): ResolvedKey
   return result
 }
 
-const MODIFIER_NAMES = new Set(['ctrl', 'control', 'shift', 'alt', 'meta', 'cmd', 'super'])
+const MODIFIER_NAMES = new Set(['ctrl', 'control', 'shift', 'alt', 'meta', 'cmd', 'super', 'secondary'])
 
 /**
  * Normalize a key string for deduplication.
@@ -303,8 +319,8 @@ function normalizeKeyString(key: string): string {
   const mods: string[] = []
   let baseKey = ''
   for (const part of parts) {
-    if (part === 'ctrl' || part === 'control') mods.push('ctrl')
-    else if (part === 'meta' || part === 'cmd' || part === 'super') mods.push('meta')
+    if (part === 'ctrl' || part === 'control' || (part === 'secondary' && SECONDARY_MOD === 'ctrl')) mods.push('ctrl')
+    else if (part === 'meta' || part === 'cmd' || part === 'super' || (part === 'secondary' && SECONDARY_MOD === 'meta')) mods.push('meta')
     else if (MODIFIER_NAMES.has(part)) mods.push(part)
     else baseKey = part
   }

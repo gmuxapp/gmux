@@ -8,6 +8,7 @@ import {
   eventMatchesKeybind,
   DEFAULT_THEME_COLORS,
   DEFAULT_KEYBINDS,
+  SECONDARY_MOD,
   type Keybind,
   type ResolvedKeybind,
 } from './config'
@@ -189,6 +190,20 @@ describe('parseKeyCombo', () => {
     expect(parseKeyCombo('cmd+k').meta).toBe(true)
     expect(parseKeyCombo('super+k').meta).toBe(true)
   })
+
+  it('resolves "secondary" to the platform-specific modifier', () => {
+    const r = parseKeyCombo('secondary+c')
+    // In the test environment (jsdom, non-Mac), secondary resolves to ctrl.
+    expect(r[SECONDARY_MOD]).toBe(true)
+    expect(r.baseKey).toBe('c')
+  })
+
+  it('resolves "secondary" with other modifiers', () => {
+    const r = parseKeyCombo('secondary+alt+t')
+    expect(r[SECONDARY_MOD]).toBe(true)
+    expect(r.alt).toBe(true)
+    expect(r.baseKey).toBe('t')
+  })
 })
 
 // ── Key combo to escape sequence ──
@@ -228,6 +243,11 @@ describe('keyComboToSequence', () => {
     expect(keyComboToSequence('alt+ctrl+a')).toBe('\x1b\x01')
   })
 
+  it('resolves secondary in sendKeys args (non-Mac: secondary = ctrl)', () => {
+    // "secondary+t" should produce the same sequence as "ctrl+t" on non-Mac.
+    expect(keyComboToSequence('secondary+t')).toBe(keyComboToSequence(`${SECONDARY_MOD}+t`))
+  })
+
   it('returns empty string for unrecognized named keys', () => {
     // Keys like "f1", "arrowup" have no simple escape sequence mapping.
     // The function should return empty rather than something wrong.
@@ -244,7 +264,7 @@ describe('resolveKeybinds', () => {
     const keys = resolved.map(r => r.key)
     expect(keys).toContain('shift+enter')
     expect(keys).toContain('ctrl+c')
-    expect(keys).toContain('ctrl+alt+t')
+    expect(keys).toContain('secondary+alt+t')
   })
 
   it('adds new user keybinds', () => {
@@ -271,6 +291,8 @@ describe('resolveKeybinds', () => {
   })
 
   it('disables a keybind with action "none"', () => {
+    // The default "secondary+alt+t" resolves to ctrl+alt+t in tests (non-Mac).
+    // Disabling via the resolved form should work.
     const user: Keybind[] = [
       { key: 'ctrl+alt+t', action: 'none' },
     ]
@@ -288,6 +310,25 @@ describe('resolveKeybinds', () => {
     const match = resolved.find(r => r.baseKey === 't' && r.ctrl && r.alt)
     expect(match).toBeDefined()
     expect(match!.action).toBe('sendText')
+  })
+
+  it('resolves "secondary" to platform modifier in defaults', () => {
+    // The default "secondary+alt+t" should resolve to ctrl+alt+t on non-Mac.
+    const resolved = resolveKeybinds(null)
+    const match = resolved.find(r => r.baseKey === 't' && r.alt)
+    expect(match).toBeDefined()
+    expect(match![SECONDARY_MOD]).toBe(true)
+  })
+
+  it('allows user to override default "secondary" keybind with resolved form', () => {
+    // User writes "ctrl+alt+t" (the resolved form) to override the default "secondary+alt+t".
+    const user: Keybind[] = [
+      { key: 'ctrl+alt+t', action: 'sendText', args: 'custom' },
+    ]
+    const resolved = resolveKeybinds(user)
+    const matches = resolved.filter(r => r.baseKey === 't' && r.ctrl && r.alt)
+    expect(matches.length).toBe(1)
+    expect(matches[0].action).toBe('sendText')
   })
 
   it('canonicalizes modifier aliases (control = ctrl, cmd = meta)', () => {
@@ -374,5 +415,15 @@ describe('eventMatchesKeybind', () => {
   it('is case-insensitive on key name', () => {
     const kb = makeKeybind('ctrl+t')
     expect(eventMatchesKeybind(makeEvent({ ctrlKey: true, key: 'T' }), kb)).toBe(true)
+  })
+
+  it('matches secondary+c against the platform modifier', () => {
+    const kb = makeKeybind('secondary+c')
+    // In test env (non-Mac), secondary = ctrl.
+    const modKey = SECONDARY_MOD === 'meta' ? 'metaKey' : 'ctrlKey'
+    expect(eventMatchesKeybind(makeEvent({ [modKey]: true, key: 'c' }), kb)).toBe(true)
+    // The other modifier should not match.
+    const otherKey = SECONDARY_MOD === 'meta' ? 'ctrlKey' : 'metaKey'
+    expect(eventMatchesKeybind(makeEvent({ [otherKey]: true, key: 'c' }), kb)).toBe(false)
   })
 })
