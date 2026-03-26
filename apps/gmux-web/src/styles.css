@@ -890,8 +890,6 @@ body {
 }
 
 /* Hide xterm's native scrollbar — scrollback is handled by the PTY replay buffer */
-/* Hide xterm's native viewport scrollbar — we handle scroll via the outer
-   .terminal-shell container and xterm's custom scrollable element. */
 /* Override viewport background — xterm sets it to black inline before theme applies */
 .terminal-container .xterm-viewport {
   overflow-y: hidden !important;
