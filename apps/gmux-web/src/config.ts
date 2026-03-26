@@ -208,9 +208,29 @@ export interface ResolvedKeybind extends Keybind {
 const KNOWN_ACTIONS = new Set(['sendText', 'sendKeys', 'copyOrInterrupt', 'none'])
 
 export const DEFAULT_KEYBINDS: Keybind[] = [
+  // ── Universal ──
   { key: 'shift+enter', action: 'sendText', args: '\n' },
   { key: 'ctrl+c', action: 'copyOrInterrupt' },
-  { key: 'secondary+alt+t', action: 'sendKeys', args: 'ctrl+t' },
+
+  // ── Linux/Windows: workarounds for browser-stolen shortcuts ──
+  // Chrome/Firefox reserve Ctrl+T/N/W for tab management; they cannot be
+  // intercepted by JavaScript.  Ctrl+Alt+<key> is the conventional workaround.
+  ...(!IS_MAC ? [
+    { key: 'ctrl+alt+t', action: 'sendKeys', args: 'ctrl+t' },
+    { key: 'ctrl+alt+n', action: 'sendKeys', args: 'ctrl+n' },
+    { key: 'ctrl+alt+w', action: 'sendKeys', args: 'ctrl+w' },
+  ] : []),
+
+  // ── Mac: native terminal conventions ──
+  // On Mac the browser steals Cmd+T/N/W instead, leaving Ctrl+T/N/W free,
+  // so no workarounds are needed.  These bindings replicate iTerm2 / macOS
+  // Terminal behavior that xterm.js does not provide out of the box.
+  ...(IS_MAC ? [
+    { key: 'meta+left',      action: 'sendKeys', args: 'home' },
+    { key: 'meta+right',     action: 'sendKeys', args: 'end' },
+    { key: 'meta+backspace', action: 'sendKeys', args: 'ctrl+u' },
+    { key: 'meta+k',         action: 'sendKeys', args: 'ctrl+l' },
+  ] : []),
 ]
 
 /**
@@ -254,6 +274,12 @@ export function keyComboToSequence(combo: string): string {
     seq = '\t'
   } else if (baseKey === 'backspace') {
     seq = '\x7f'
+  } else if (baseKey === 'home') {
+    seq = '\x1b[H'
+  } else if (baseKey === 'end') {
+    seq = '\x1b[F'
+  } else if (baseKey === 'delete' || baseKey === 'del') {
+    seq = '\x1b[3~'
   } else if (baseKey.length === 1) {
     seq = baseKey
   }
@@ -329,6 +355,17 @@ function normalizeKeyString(key: string): string {
 }
 
 /**
+ * Short key names used in keybind configs mapped to their KeyboardEvent.key
+ * values (lowercased).  Lets users write "meta+left" instead of "meta+arrowleft".
+ */
+const KEY_ALIASES: Record<string, string> = {
+  left: 'arrowleft',
+  right: 'arrowright',
+  up: 'arrowup',
+  down: 'arrowdown',
+}
+
+/**
  * Test whether a KeyboardEvent matches a resolved keybind.
  */
 export function eventMatchesKeybind(ev: KeyboardEvent, kb: ResolvedKeybind): boolean {
@@ -336,7 +373,8 @@ export function eventMatchesKeybind(ev: KeyboardEvent, kb: ResolvedKeybind): boo
   if (ev.shiftKey !== kb.shift) return false
   if (ev.altKey !== kb.alt) return false
   if (ev.metaKey !== kb.meta) return false
-  return ev.key.toLowerCase() === kb.baseKey
+  const expected = KEY_ALIASES[kb.baseKey] ?? kb.baseKey
+  return ev.key.toLowerCase() === expected
 }
 
 // ── Fetching ──

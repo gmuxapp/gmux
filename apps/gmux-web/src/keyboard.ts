@@ -37,6 +37,7 @@ export function attachKeyboardHandler(
       // keyup) to prevent the Kitty keyboard protocol sequence from leaking.
       if (kb.baseKey === 'enter' && kb.shift) {
         if (ev.type === 'keydown') executeAction(kb, term, send)
+        ev.preventDefault()
         return false
       }
 
@@ -44,7 +45,13 @@ export function attachKeyboardHandler(
       if (ev.type !== 'keydown') return true
 
       const handled = executeAction(kb, term, send)
-      if (handled) return false
+      if (handled) {
+        // Prevent browser default (e.g. Cmd+Left navigating back on Mac).
+        // xterm.js does not call preventDefault when the custom handler
+        // returns false, so we must do it ourselves.
+        ev.preventDefault()
+        return false
+      }
     }
 
     return true

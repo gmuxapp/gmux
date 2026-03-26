@@ -13,6 +13,9 @@ import {
   type ResolvedKeybind,
 } from './config'
 
+// In the test environment (jsdom), navigator.platform is empty so IS_MAC = false.
+// Default keybinds therefore contain the Linux set (ctrl+alt+t/n/w), not the Mac set.
+
 // ── Theme merging ──
 
 describe('mergeThemeConfig', () => {
@@ -243,6 +246,19 @@ describe('keyComboToSequence', () => {
     expect(keyComboToSequence('alt+ctrl+a')).toBe('\x1b\x01')
   })
 
+  it('converts home to CSI H', () => {
+    expect(keyComboToSequence('home')).toBe('\x1b[H')
+  })
+
+  it('converts end to CSI F', () => {
+    expect(keyComboToSequence('end')).toBe('\x1b[F')
+  })
+
+  it('converts delete to CSI 3~', () => {
+    expect(keyComboToSequence('delete')).toBe('\x1b[3~')
+    expect(keyComboToSequence('del')).toBe('\x1b[3~')
+  })
+
   it('resolves secondary in sendKeys args (non-Mac: secondary = ctrl)', () => {
     // "secondary+t" should produce the same sequence as "ctrl+t" on non-Mac.
     expect(keyComboToSequence('secondary+t')).toBe(keyComboToSequence(`${SECONDARY_MOD}+t`))
@@ -262,21 +278,24 @@ describe('resolveKeybinds', () => {
     const resolved = resolveKeybinds(null)
     expect(resolved.length).toBe(DEFAULT_KEYBINDS.length)
     const keys = resolved.map(r => r.key)
+    // Universal
     expect(keys).toContain('shift+enter')
     expect(keys).toContain('ctrl+c')
-    expect(keys).toContain('secondary+alt+t')
+    // Linux defaults (test env is non-Mac)
+    expect(keys).toContain('ctrl+alt+t')
+    expect(keys).toContain('ctrl+alt+n')
+    expect(keys).toContain('ctrl+alt+w')
   })
 
   it('adds new user keybinds', () => {
     const user: Keybind[] = [
-      { key: 'ctrl+alt+n', action: 'sendKeys', args: 'ctrl+n' },
+      { key: 'ctrl+alt+x', action: 'sendKeys', args: 'ctrl+x' },
     ]
     const resolved = resolveKeybinds(user)
     expect(resolved.length).toBe(DEFAULT_KEYBINDS.length + 1)
-    const added = resolved.find(r => r.baseKey === 'n')
+    const added = resolved.find(r => r.baseKey === 'x' && r.ctrl && r.alt)
     expect(added).toBeDefined()
-    expect(added!.ctrl).toBe(true)
-    expect(added!.alt).toBe(true)
+    expect(added!.action).toBe('sendKeys')
   })
 
   it('overrides a default keybind', () => {
@@ -291,8 +310,6 @@ describe('resolveKeybinds', () => {
   })
 
   it('disables a keybind with action "none"', () => {
-    // The default "secondary+alt+t" resolves to ctrl+alt+t in tests (non-Mac).
-    // Disabling via the resolved form should work.
     const user: Keybind[] = [
       { key: 'ctrl+alt+t', action: 'none' },
     ]
@@ -312,23 +329,21 @@ describe('resolveKeybinds', () => {
     expect(match!.action).toBe('sendText')
   })
 
-  it('resolves "secondary" to platform modifier in defaults', () => {
-    // The default "secondary+alt+t" should resolve to ctrl+alt+t on non-Mac.
+  it('includes Linux workarounds in non-Mac defaults', () => {
     const resolved = resolveKeybinds(null)
-    const match = resolved.find(r => r.baseKey === 't' && r.alt)
-    expect(match).toBeDefined()
-    expect(match![SECONDARY_MOD]).toBe(true)
-  })
+    // ctrl+alt+t/n/w should be present in test env (non-Mac)
+    const ctrlAltT = resolved.find(r => r.baseKey === 't' && r.ctrl && r.alt)
+    expect(ctrlAltT).toBeDefined()
+    expect(ctrlAltT!.action).toBe('sendKeys')
+    expect(ctrlAltT!.args).toBe('ctrl+t')
 
-  it('allows user to override default "secondary" keybind with resolved form', () => {
-    // User writes "ctrl+alt+t" (the resolved form) to override the default "secondary+alt+t".
-    const user: Keybind[] = [
-      { key: 'ctrl+alt+t', action: 'sendText', args: 'custom' },
-    ]
-    const resolved = resolveKeybinds(user)
-    const matches = resolved.filter(r => r.baseKey === 't' && r.ctrl && r.alt)
-    expect(matches.length).toBe(1)
-    expect(matches[0].action).toBe('sendText')
+    const ctrlAltN = resolved.find(r => r.baseKey === 'n' && r.ctrl && r.alt)
+    expect(ctrlAltN).toBeDefined()
+    expect(ctrlAltN!.args).toBe('ctrl+n')
+
+    const ctrlAltW = resolved.find(r => r.baseKey === 'w' && r.ctrl && r.alt)
+    expect(ctrlAltW).toBeDefined()
+    expect(ctrlAltW!.args).toBe('ctrl+w')
   })
 
   it('canonicalizes modifier aliases (control = ctrl, cmd = meta)', () => {
@@ -415,6 +430,35 @@ describe('eventMatchesKeybind', () => {
   it('is case-insensitive on key name', () => {
     const kb = makeKeybind('ctrl+t')
     expect(eventMatchesKeybind(makeEvent({ ctrlKey: true, key: 'T' }), kb)).toBe(true)
+  })
+
+  it('matches "left" against ArrowLeft (key alias)', () => {
+    const kb = makeKeybind('meta+left')
+    expect(eventMatchesKeybind(makeEvent({ metaKey: true, key: 'ArrowLeft' }), kb)).toBe(true)
+  })
+
+  it('matches "right" against ArrowRight (key alias)', () => {
+    const kb = makeKeybind('meta+right')
+    expect(eventMatchesKeybind(makeEvent({ metaKey: true, key: 'ArrowRight' }), kb)).toBe(true)
+  })
+
+  it('matches "up" and "down" against ArrowUp/ArrowDown', () => {
+    const up = makeKeybind('ctrl+up')
+    expect(eventMatchesKeybind(makeEvent({ ctrlKey: true, key: 'ArrowUp' }), up)).toBe(true)
+    const down = makeKeybind('ctrl+down')
+    expect(eventMatchesKeybind(makeEvent({ ctrlKey: true, key: 'ArrowDown' }), down)).toBe(true)
+  })
+
+  it('matches Home and End keys directly', () => {
+    const home = makeKeybind('meta+home')
+    expect(eventMatchesKeybind(makeEvent({ metaKey: true, key: 'Home' }), home)).toBe(true)
+    const end = makeKeybind('meta+end')
+    expect(eventMatchesKeybind(makeEvent({ metaKey: true, key: 'End' }), end)).toBe(true)
+  })
+
+  it('matches Backspace key directly', () => {
+    const kb = makeKeybind('meta+backspace')
+    expect(eventMatchesKeybind(makeEvent({ metaKey: true, key: 'Backspace' }), kb)).toBe(true)
   })
 
   it('matches secondary+c against the platform modifier', () => {
