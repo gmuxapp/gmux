@@ -19,21 +19,10 @@ import (
 
 // Config is the top-level gmuxd configuration.
 type Config struct {
-	Port      int             `toml:"port"`
-	Network   NetworkConfig   `toml:"network"`
-	Tailscale TailscaleConfig `toml:"tailscale"`
-}
+	// Port is the TCP port for the HTTP listener (default 8790).
+	Port int `toml:"port"`
 
-// NetworkConfig controls the optional network listener.
-// This binds gmuxd to an additional address beyond localhost, protected
-// by a bearer token. Intended for use behind a VPN or in containers,
-// not for direct exposure to untrusted networks.
-type NetworkConfig struct {
-	// Listen is the address to bind the network listener to
-	// (e.g. "10.0.0.5", "0.0.0.0"). Empty means disabled.
-	// The port from the top-level config is used unless overridden here
-	// with "addr:port" syntax.
-	Listen string `toml:"listen"`
+	Tailscale TailscaleConfig `toml:"tailscale"`
 }
 
 // TailscaleConfig controls the optional tailscale (tsnet) listener.
@@ -41,8 +30,8 @@ type TailscaleConfig struct {
 	// Enabled starts a tsnet listener on the tailnet. Default false.
 	Enabled bool `toml:"enabled"`
 
-	// Hostname is the tailscale machine name (e.g. "gmuxd" → gmuxd.tailnet.ts.net).
-	// Default "gmuxd".
+	// Hostname is the tailscale machine name (e.g. "gmux" -> gmux.tailnet.ts.net).
+	// Default "gmux".
 	Hostname string `toml:"hostname"`
 
 	// Allow is the list of additional tailscale login names permitted to connect
@@ -104,13 +93,6 @@ func validate(cfg Config) error {
 		return fmt.Errorf("port %d is out of range (1-65535)", cfg.Port)
 	}
 
-	// Network listener validation.
-	if cfg.Network.Listen != "" {
-		if err := validateNetworkListen(cfg.Network.Listen); err != nil {
-			return fmt.Errorf("network.listen: %w", err)
-		}
-	}
-
 	// Tailscale: allow list entries must look like login names.
 	// An empty allow list is fine — the node owner is auto-whitelisted at runtime.
 	for _, entry := range cfg.Tailscale.Allow {
@@ -127,32 +109,26 @@ func validate(cfg Config) error {
 	return nil
 }
 
-// validateNetworkListen checks that the listen address is safe to bind to.
-// Accepts: RFC 1918 (10/8, 172.16/12, 192.168/16), link-local (169.254/16),
-// CGNAT (100.64/10, used by Tailscale/WireGuard), Docker bridge (172.17/16
-// falls under 172.16/12), unspecified (0.0.0.0 / ::, for containers), and
-// IPv6 ULA (fd00::/8).
-// Rejects: loopback (use the default listener), public IPs (use Tailscale).
-func validateNetworkListen(addr string) error {
-	// Strip port if present (e.g. "10.0.0.5:9999").
-	host := addr
-	if h, _, err := net.SplitHostPort(addr); err == nil {
-		host = h
-	}
-
-	ip := net.ParseIP(host)
+// validateListen checks that the listen address is safe to bind to.
+// Accepts: loopback (127.0.0.1, ::1), RFC 1918 (10/8, 172.16/12, 192.168/16),
+// link-local (169.254/16), CGNAT (100.64/10, used by Tailscale/WireGuard),
+// Docker bridge (172.17/16 falls under 172.16/12), unspecified (0.0.0.0 / ::,
+// for containers), and IPv6 ULA (fd00::/8).
+// Rejects: public IPs (use Tailscale for internet-facing access).
+func validateListen(addr string) error {
+	ip := net.ParseIP(addr)
 	if ip == nil {
 		return fmt.Errorf("%q is not a valid IP address", addr)
+	}
+
+	// Allow loopback (default).
+	if ip.IsLoopback() {
+		return nil
 	}
 
 	// Allow 0.0.0.0 / :: (all interfaces) for container use.
 	if ip.IsUnspecified() {
 		return nil
-	}
-
-	// Reject loopback.
-	if ip.IsLoopback() {
-		return fmt.Errorf("%q is a loopback address (the default listener already binds to localhost)", addr)
 	}
 
 	// Allow private, link-local, and CGNAT ranges.
@@ -193,31 +169,19 @@ func defaults() Config {
 	}
 }
 
-// ResolveNetworkListen returns the effective network listen address,
-// considering both the config file and the GMUXD_LISTEN env var.
-// The env var takes precedence. Returns "" if network listening is disabled.
-// The returned address always includes a port (defaults to cfg.Port).
-func (cfg Config) ResolveNetworkListen() (string, error) {
-	listen := cfg.Network.Listen
+// ListenAddr returns the effective TCP listen address (host:port).
+// The bind address is controlled by the GMUXD_LISTEN env var
+// (default "127.0.0.1"). The port comes from the config file.
+func (cfg Config) ListenAddr() (string, error) {
+	listen := "127.0.0.1"
 	if env := os.Getenv("GMUXD_LISTEN"); env != "" {
 		listen = env
-	}
-	if listen == "" {
-		return "", nil
-	}
-
-	// Validate the address (env var bypasses config validation).
-	if err := validateNetworkListen(listen); err != nil {
-		return "", err
+		if err := validateListen(listen); err != nil {
+			return "", err
+		}
 	}
 
-	// Ensure the address includes a port.
-	if _, _, err := net.SplitHostPort(listen); err != nil {
-		// No port specified; use the main config port.
-		listen = net.JoinHostPort(listen, fmt.Sprintf("%d", cfg.Port))
-	}
-
-	return listen, nil
+	return net.JoinHostPort(listen, fmt.Sprintf("%d", cfg.Port)), nil
 }
 
 // Path returns the path to the config file.
@@ -228,3 +192,5 @@ func Path() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "gmux", "config.toml")
 }
+
+

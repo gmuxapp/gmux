@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -22,9 +24,10 @@ import (
 	"github.com/gmuxapp/gmux/cli/gmux/internal/naming"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/ptyserver"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
-	"github.com/gmuxapp/gmux/packages/workspace"
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
+	"github.com/gmuxapp/gmux/packages/workspace"
+	"github.com/gmuxapp/gmux/packages/paths"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
@@ -53,15 +56,15 @@ func main() {
 
 	// No args → open the UI in a browser.
 	if len(args) == 0 {
-		gmuxdAddr := configuredGmuxdAddr()
-		ensureGmuxd(gmuxdAddr)
+		ensureGmuxd()
 
 		// Wait for gmuxd to be reachable before opening browser.
-		client := &http.Client{Timeout: 3 * time.Second}
+		client := gmuxdClient()
+		baseURL := gmuxdBaseURL()
 		var healthBody []byte
 		ready := false
 		for range 15 {
-			if resp, err := client.Get(gmuxdAddr + "/v1/health"); err == nil {
+			if resp, err := client.Get(baseURL + "/v1/health"); err == nil {
 				body, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				if resp.StatusCode == 200 {
@@ -73,11 +76,20 @@ func main() {
 			time.Sleep(200 * time.Millisecond)
 		}
 		if !ready {
-			log.Fatalf("gmuxd is not running at %s (check %s/gmuxd.log for errors)", gmuxdAddr, os.TempDir())
+			log.Fatalf("gmuxd is not running (check %s/gmuxd.log for errors)", os.TempDir())
+		}
+
+		// Parse health response for TCP address and auth token.
+		listenAddr := parseHealthField(healthBody, "listen")
+		token := parseHealthField(healthBody, "auth_token")
+
+		browserURL := "http://" + listenAddr
+		if token != "" {
+			browserURL = fmt.Sprintf("http://%s/auth/login?token=%s", listenAddr, token)
 		}
 
 		// Print access URLs.
-		fmt.Fprintf(os.Stderr, "  local:  %s\n", gmuxdAddr)
+		fmt.Fprintf(os.Stderr, "  local:  http://%s\n", listenAddr)
 		if tsURL := parseTailscaleURL(healthBody); tsURL != "" {
 			fmt.Fprintf(os.Stderr, "  remote: %s\n", maskTailscaleURL(tsURL))
 		}
@@ -85,7 +97,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "  update: %s available — %s\n", updateVer, upgradeHint())
 		}
 
-		openBrowser(gmuxdAddr)
+		openBrowser(browserURL)
 		return
 	}
 
@@ -217,8 +229,7 @@ func main() {
 	}
 
 	// Auto-start gmuxd if not running (one-shot, never retried), then register.
-	gmuxdAddr := configuredGmuxdAddr()
-	ensureGmuxd(gmuxdAddr)
+	ensureGmuxd()
 	go registerWithGmuxd(sessionID, sockPath)
 
 	if interactive {
@@ -291,13 +302,11 @@ func main() {
 
 // ensureGmuxd checks if gmuxd is reachable and starts it if not.
 // If a daemon is running but reports a different version, it is replaced
-// with --replace so the child process always talks to a compatible daemon.
+// so the child process always talks to a compatible daemon.
 // Called once at startup — if gmuxd dies later, we don't restart it.
 // Returns true if gmuxd was started (or replaced) by this call.
-func ensureGmuxd(gmuxdAddr string) bool {
-	// Quick health check — if it's already running at our version, nothing to do.
-	needsStart, needsReplace := gmuxdNeedsStart(gmuxdAddr)
-	if !needsStart {
+func ensureGmuxd() bool {
+	if !gmuxdNeedsStart() {
 		return false
 	}
 
@@ -307,32 +316,26 @@ func ensureGmuxd(gmuxdAddr string) bool {
 		return false
 	}
 
-	args := []string{"start"}
-	if needsReplace {
-		args = append(args, "--replace")
-	}
-	return startGmuxd(gmuxdBin, args)
+	// gmuxd start always replaces any existing daemon.
+	return startGmuxd(gmuxdBin, []string{"start"})
 }
 
-// gmuxdNeedsStart checks the running daemon. Returns (needsStart, needsReplace).
-// needsStart=false means a compatible daemon is already running.
-// needsStart=true, needsReplace=false means no daemon is running.
-// needsStart=true, needsReplace=true means a stale daemon needs replacing.
-func gmuxdNeedsStart(gmuxdAddr string) (needsStart, needsReplace bool) {
+// gmuxdNeedsStart checks the running daemon.
+func gmuxdNeedsStart() bool {
 	// "dev" builds never replace — avoids churn during development.
 	if version == "dev" {
-		healthy := gmuxdHealthy(gmuxdAddr, 500*time.Millisecond)
-		return !healthy, false
+		return !gmuxdHealthy(500 * time.Millisecond)
 	}
 
-	client := &http.Client{Timeout: 500 * time.Millisecond}
-	resp, err := client.Get(gmuxdAddr + "/v1/health")
+	client := gmuxdClient()
+	client.Timeout = 500 * time.Millisecond
+	resp, err := client.Get(gmuxdBaseURL() + "/v1/health")
 	if err != nil {
-		return true, false // not running
+		return true // not running
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return true, false // not healthy
+		return true // not healthy
 	}
 
 	var health struct {
@@ -342,15 +345,11 @@ func gmuxdNeedsStart(gmuxdAddr string) (needsStart, needsReplace bool) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	if json.Unmarshal(body, &health) != nil {
-		return false, false // can't parse, leave it alone
+		return false // can't parse, leave it alone
 	}
 
-	if health.Data.Version == version {
-		return false, false // same version, all good
-	}
-
-	// Running but stale — needs replacement.
-	return true, true
+	// Same version: no action needed. Different version: replace.
+	return health.Data.Version != version
 }
 
 // findGmuxdBin locates the gmuxd binary: sibling first, then PATH.
@@ -397,16 +396,29 @@ func startGmuxd(gmuxdBin string, args []string) bool {
 	return true
 }
 
-func configuredGmuxdAddr() string {
-	if port := os.Getenv("GMUXD_PORT"); port != "" {
-		return "http://localhost:" + port
+// gmuxdClient returns an HTTP client connected to gmuxd via Unix socket.
+func gmuxdClient() *http.Client {
+	sockPath := paths.SocketPath()
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.DialTimeout("unix", sockPath, 2*time.Second)
+			},
+		},
+		Timeout: 5 * time.Second,
 	}
-	return "http://localhost:8790"
 }
 
-func gmuxdHealthy(gmuxdAddr string, timeout time.Duration) bool {
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Get(gmuxdAddr + "/v1/health")
+// gmuxdBaseURL returns the base URL for gmuxd HTTP requests.
+// The host is ignored by the Unix socket transport.
+func gmuxdBaseURL() string {
+	return "http://localhost"
+}
+
+func gmuxdHealthy(timeout time.Duration) bool {
+	client := gmuxdClient()
+	client.Timeout = timeout
+	resp, err := client.Get(gmuxdBaseURL() + "/v1/health")
 	if err != nil {
 		return false
 	}
@@ -415,7 +427,7 @@ func gmuxdHealthy(gmuxdAddr string, timeout time.Duration) bool {
 }
 
 func registerWithGmuxd(sessionID, socketPath string) {
-	gmuxdAddr := configuredGmuxdAddr()
+	baseURL := gmuxdBaseURL()
 
 	payload, _ := json.Marshal(map[string]string{
 		"session_id":  sessionID,
@@ -427,8 +439,8 @@ func registerWithGmuxd(sessionID, socketPath string) {
 		if i > 0 {
 			time.Sleep(500 * time.Millisecond)
 		}
-		client := &http.Client{Timeout: 2 * time.Second}
-		resp, err := client.Post(gmuxdAddr+"/v1/register", "application/json", bytes.NewReader(payload))
+		client := gmuxdClient()
+		resp, err := client.Post(baseURL+"/v1/register", "application/json", bytes.NewReader(payload))
 		if err != nil {
 			continue
 		}
@@ -447,18 +459,6 @@ func (f ptyWriterFunc) Write(p []byte) (int, error) { return f(p) }
 // openBrowser opens the gmux UI. Prefers Chrome/Chromium in --app mode
 // for a standalone window; falls back to the default browser.
 func openBrowser(url string) {
-	// Wait briefly for gmuxd to be ready if we just started it.
-	client := &http.Client{Timeout: 500 * time.Millisecond}
-	for range 10 {
-		if resp, err := client.Get(url + "/v1/health"); err == nil {
-			ok := resp.StatusCode == 200
-			resp.Body.Close()
-			if ok {
-				break
-			}
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
 
 	// Strategy: default browser if Chromium-based → app mode, else
 	// any installed Chromium → app mode, else system default.
@@ -610,6 +610,26 @@ func isChromiumDesktop(desktop string) bool {
 	return strings.Contains(d, "chrome") || strings.Contains(d, "chromium")
 }
 
+// parseHealthField extracts a string field from the data object
+// of a /v1/health JSON response.
+func parseHealthField(body []byte, field string) string {
+	var resp struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if json.Unmarshal(body, &resp) != nil {
+		return ""
+	}
+	raw, ok := resp.Data[field]
+	if !ok {
+		return ""
+	}
+	var val string
+	if json.Unmarshal(raw, &val) != nil {
+		return ""
+	}
+	return val
+}
+
 // parseTailscaleURL extracts the tailscale_url from a /v1/health JSON response.
 func parseTailscaleURL(body []byte) string {
 	var resp struct {
@@ -684,11 +704,11 @@ func maskTailscaleURL(url string) string {
 }
 
 func deregisterFromGmuxd(sessionID string) {
-	gmuxdAddr := configuredGmuxdAddr()
+	baseURL := gmuxdBaseURL()
 
 	payload, _ := json.Marshal(map[string]string{"session_id": sessionID})
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Post(gmuxdAddr+"/v1/deregister", "application/json", bytes.NewReader(payload))
+	client := gmuxdClient()
+	resp, err := client.Post(baseURL+"/v1/deregister", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return
 	}

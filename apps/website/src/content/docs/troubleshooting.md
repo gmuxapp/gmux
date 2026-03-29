@@ -15,7 +15,7 @@ cat /tmp/gmuxd.log
 
 Common causes:
 
-- **Port already in use** — something else is on port 8790. Change it in `~/.config/gmux/config.toml` (`port = 9999`) or via `GMUXD_PORT=9999`.
+- **Port already in use** — something else is on port 8790. Change it in `~/.config/gmux/config.toml` (`port = 9999`).
 - **Config file error** — gmuxd refuses to start with unknown keys or invalid values. The log will say which key. See [Configuration](/configuration).
 - **`gmuxd` not in PATH** — `gmux` looks for `gmuxd` as a sibling binary first, then in `PATH`. Make sure both are installed together (e.g. via `brew install gmuxapp/tap/gmux`).
 
@@ -35,4 +35,4 @@ After updating, the old daemon is replaced automatically:
 - **`curl | sh` installer**: restarts the daemon if it was running
 - **Manual installs**: the next `gmux` invocation detects the version mismatch and replaces the daemon
 
-To force a restart manually: `gmuxd shutdown && gmuxd start`.
+To force a restart manually: `gmuxd stop && gmuxd start`, or just `gmuxd start` (it replaces any running instance).

@@ -20,7 +20,7 @@ gmuxd detects whether running gmux sessions match the current build using binary
 
 ## Automatic daemon upgrade
 
-When `gmux` starts, it checks the running daemon's version via `/v1/health`. If the daemon reports a different version, `gmux` replaces it with `gmuxd start --replace`. This happens transparently — existing sessions stay alive, and the new daemon rediscovers them.
+When `gmux` starts, it checks the running daemon's version via `/v1/health`. If the daemon reports a different version, `gmux` replaces it automatically. This happens transparently — existing sessions stay alive, and the new daemon rediscovers them.
 
 All install methods handle this: Homebrew's postflight hook and the `curl | sh` installer both restart the daemon if it was running. Manual installs get the same behavior on the next `gmux` invocation.
 

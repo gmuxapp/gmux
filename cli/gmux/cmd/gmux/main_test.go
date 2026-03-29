@@ -2,32 +2,28 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
-	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
-func TestConfiguredGmuxdAddr(t *testing.T) {
-	tests := []struct {
-		name string
-		port string
-		want string
-	}{
-		{"default", "", "http://localhost:8790"},
-		{"custom port", "9999", "http://localhost:9999"},
+// startTestSocketDaemon starts a minimal gmuxd on a Unix socket
+// at the standard SocketPath() location under a temp XDG_STATE_HOME.
+// Returns the state dir (for t.Setenv) and a cleanup func.
+func startTestSocketDaemon(t *testing.T, ver string) (stateDir string, cleanup func()) {
+	t.Helper()
+	stateDir = t.TempDir()
+	sockDir := filepath.Join(stateDir, "gmux")
+	os.MkdirAll(sockDir, 0o700)
+	sockPath := filepath.Join(sockDir, "gmuxd.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("GMUXD_PORT", tt.port)
-			if got := configuredGmuxdAddr(); got != tt.want {
-				t.Errorf("configuredGmuxdAddr() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
 
-// healthHandler returns an HTTP handler that serves /v1/health with the given version.
-func healthHandler(ver string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -40,7 +36,14 @@ func healthHandler(ver string) http.Handler {
 			},
 		})
 	})
-	return mux
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(ln)
+	time.Sleep(50 * time.Millisecond)
+
+	return stateDir, func() {
+		srv.Close()
+		os.Remove(sockPath)
+	}
 }
 
 func TestGmuxdNeedsStart_NotRunning(t *testing.T) {
@@ -48,13 +51,10 @@ func TestGmuxdNeedsStart_NotRunning(t *testing.T) {
 	version = "0.4.4"
 	defer func() { version = old }()
 
-	// No server → not running → needsStart, no replace.
-	needsStart, needsReplace := gmuxdNeedsStart("http://127.0.0.1:1")
-	if !needsStart {
-		t.Error("expected needsStart=true when daemon is unreachable")
-	}
-	if needsReplace {
-		t.Error("expected needsReplace=false when daemon is unreachable")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	if !gmuxdNeedsStart() {
+		t.Error("expected true when daemon is unreachable")
 	}
 }
 
@@ -63,15 +63,12 @@ func TestGmuxdNeedsStart_SameVersion(t *testing.T) {
 	version = "0.4.4"
 	defer func() { version = old }()
 
-	srv := httptest.NewServer(healthHandler("0.4.4"))
-	defer srv.Close()
+	stateDir, cleanup := startTestSocketDaemon(t, "0.4.4")
+	defer cleanup()
+	t.Setenv("XDG_STATE_HOME", stateDir)
 
-	needsStart, needsReplace := gmuxdNeedsStart(srv.URL)
-	if needsStart {
-		t.Error("expected needsStart=false when versions match")
-	}
-	if needsReplace {
-		t.Error("expected needsReplace=false when versions match")
+	if gmuxdNeedsStart() {
+		t.Error("expected false when versions match")
 	}
 }
 
@@ -80,15 +77,12 @@ func TestGmuxdNeedsStart_OlderVersion(t *testing.T) {
 	version = "0.4.4"
 	defer func() { version = old }()
 
-	srv := httptest.NewServer(healthHandler("0.4.3"))
-	defer srv.Close()
+	stateDir, cleanup := startTestSocketDaemon(t, "0.4.3")
+	defer cleanup()
+	t.Setenv("XDG_STATE_HOME", stateDir)
 
-	needsStart, needsReplace := gmuxdNeedsStart(srv.URL)
-	if !needsStart {
-		t.Error("expected needsStart=true when daemon is older")
-	}
-	if !needsReplace {
-		t.Error("expected needsReplace=true when daemon is older")
+	if !gmuxdNeedsStart() {
+		t.Error("expected true when daemon is older")
 	}
 }
 
@@ -97,16 +91,12 @@ func TestGmuxdNeedsStart_NewerVersion(t *testing.T) {
 	version = "0.4.3"
 	defer func() { version = old }()
 
-	// Daemon is newer than us — still replace so versions match.
-	srv := httptest.NewServer(healthHandler("0.4.4"))
-	defer srv.Close()
+	stateDir, cleanup := startTestSocketDaemon(t, "0.4.4")
+	defer cleanup()
+	t.Setenv("XDG_STATE_HOME", stateDir)
 
-	needsStart, needsReplace := gmuxdNeedsStart(srv.URL)
-	if !needsStart {
-		t.Error("expected needsStart=true when versions differ")
-	}
-	if !needsReplace {
-		t.Error("expected needsReplace=true when versions differ")
+	if !gmuxdNeedsStart() {
+		t.Error("expected true when versions differ")
 	}
 }
 
@@ -115,16 +105,12 @@ func TestGmuxdNeedsStart_DevNeverReplaces(t *testing.T) {
 	version = "dev"
 	defer func() { version = old }()
 
-	// Daemon running with a release version, but we're dev — should not replace.
-	srv := httptest.NewServer(healthHandler("0.4.3"))
-	defer srv.Close()
+	stateDir, cleanup := startTestSocketDaemon(t, "0.4.3")
+	defer cleanup()
+	t.Setenv("XDG_STATE_HOME", stateDir)
 
-	needsStart, needsReplace := gmuxdNeedsStart(srv.URL)
-	if needsStart {
-		t.Error("expected needsStart=false for dev build when daemon is healthy")
-	}
-	if needsReplace {
-		t.Error("dev builds must never replace")
+	if gmuxdNeedsStart() {
+		t.Error("dev builds must not replace a healthy daemon")
 	}
 }
 
@@ -133,50 +119,23 @@ func TestGmuxdNeedsStart_DevStartsWhenNotRunning(t *testing.T) {
 	version = "dev"
 	defer func() { version = old }()
 
-	needsStart, needsReplace := gmuxdNeedsStart("http://127.0.0.1:1")
-	if !needsStart {
-		t.Error("expected needsStart=true for dev build when daemon is not running")
-	}
-	if needsReplace {
-		t.Error("dev builds must never replace")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	if !gmuxdNeedsStart() {
+		t.Error("expected true for dev build when daemon is not running")
 	}
 }
 
-func TestGmuxdNeedsStart_UnparseableHealth(t *testing.T) {
-	old := version
-	version = "0.4.4"
-	defer func() { version = old }()
+func TestParseHealthField(t *testing.T) {
+	body := []byte(`{"ok":true,"data":{"listen":"127.0.0.1:8790","auth_token":"abc123","version":"1.0.0"}}`)
 
-	// Server returns 200 but garbage body.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("not json"))
-	}))
-	defer srv.Close()
-
-	needsStart, needsReplace := gmuxdNeedsStart(srv.URL)
-	if needsStart {
-		t.Error("expected needsStart=false when health is unparseable (leave it alone)")
+	if got := parseHealthField(body, "listen"); got != "127.0.0.1:8790" {
+		t.Errorf("listen = %q", got)
 	}
-	if needsReplace {
-		t.Error("expected needsReplace=false when health is unparseable")
+	if got := parseHealthField(body, "auth_token"); got != "abc123" {
+		t.Errorf("auth_token = %q", got)
 	}
-}
-
-func TestGmuxdNeedsStart_Non200(t *testing.T) {
-	old := version
-	version = "0.4.4"
-	defer func() { version = old }()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
-
-	needsStart, needsReplace := gmuxdNeedsStart(srv.URL)
-	if !needsStart {
-		t.Error("expected needsStart=true when health returns non-200")
-	}
-	if needsReplace {
-		t.Error("expected needsReplace=false when health returns non-200 (treat as not running)")
+	if got := parseHealthField(body, "nonexistent"); got != "" {
+		t.Errorf("nonexistent = %q, want empty", got)
 	}
 }

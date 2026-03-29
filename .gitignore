@@ -29,3 +29,4 @@ cli/gmux/gmux
 !.env.example
 test-results/
 tests/pi-adapter/pi-adapter
+gmux gmuxd

@@ -19,6 +19,7 @@ import (
 
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
+	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
@@ -29,6 +30,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsauth"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/update"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/wsproxy"
 	"nhooyr.io/websocket"
@@ -155,13 +157,14 @@ func launchGmux(gmuxBin string, command []string, cwd string) (int, error) {
 func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintf(w, `gmuxd %s
 
-Usage: gmuxd <command> [options]
+Usage: gmuxd [command]
 
 Commands:
-  start [--replace]  Start the gmux daemon
+  start              Start the gmux daemon (default if no command given)
+  stop               Stop the running daemon
+  status             Show daemon health, listeners, and sessions
+  auth               Show the auth URL and token
   remote             Set up or check remote access via Tailscale
-  auth-link          Show the network listener URL and auth token
-  shutdown           Ask the running gmux daemon to stop
   version            Show gmuxd version
   help               Show this help
 
@@ -171,45 +174,14 @@ Tip:
 `, version)
 }
 
-func daemonAddr() (string, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return "", err
-	}
-	port := envOr("GMUXD_PORT", fmt.Sprintf("%d", cfg.Port))
-	return "127.0.0.1:" + port, nil
-}
-
-func daemonRunning(addr string) bool {
-	client := &http.Client{Timeout: 500 * time.Millisecond}
-	resp, err := client.Get("http://" + addr + "/v1/health")
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
-}
-
-func prepareDaemonAddr(addr string, replace bool, stderr io.Writer) int {
-	if replace {
-		requestShutdown(addr)
-		if daemonRunning(addr) {
-			_, _ = fmt.Fprintf(stderr, "gmuxd: existing daemon at %s did not shut down\n", addr)
-			return 1
-		}
-		return 0
-	}
-	if daemonRunning(addr) {
-		_, _ = fmt.Fprintf(stderr, "gmuxd: already running at %s (use 'gmuxd start --replace' to replace it)\n", addr)
-		return 1
-	}
-	return 0
+func socketPath() string {
+	return paths.SocketPath()
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	// No args = start daemon (the "put me in a service file" invocation).
 	if len(args) == 0 {
-		printUsage(stdout)
-		return 0
+		return serve(stderr)
 	}
 
 	cmd := args[0]
@@ -217,48 +189,47 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	switch cmd {
 	case "start":
-		replace := false
 		for _, arg := range args {
 			switch arg {
-			case "--replace":
-				replace = true
 			case "-h", "--help":
-				_, _ = fmt.Fprintf(stdout, "Usage: gmuxd start [--replace]\n")
+				_, _ = fmt.Fprintf(stdout, "Usage: gmuxd start\n\nStarts the daemon, replacing any existing instance.\n")
 				return 0
 			default:
 				_, _ = fmt.Fprintf(stderr, "gmuxd start: unknown option %q\n", arg)
 				return 2
 			}
 		}
-		return serve(replace, stderr)
+		return serve(stderr)
+	case "stop":
+		if len(args) > 0 {
+			_, _ = fmt.Fprintf(stderr, "gmuxd stop: unexpected arguments: %s\n", strings.Join(args, " "))
+			return 2
+		}
+		sock := socketPath()
+		if unixipc.Shutdown(sock) {
+			_, _ = fmt.Fprintf(stdout, "gmuxd: stopped\n")
+		} else {
+			_, _ = fmt.Fprintf(stdout, "gmuxd: no running daemon found\n")
+		}
+		return 0
+	case "status":
+		if len(args) > 0 {
+			_, _ = fmt.Fprintf(stderr, "gmuxd status: unexpected arguments: %s\n", strings.Join(args, " "))
+			return 2
+		}
+		return runStatus(stdout, stderr)
+	case "auth":
+		if len(args) > 0 {
+			_, _ = fmt.Fprintf(stderr, "gmuxd auth: unexpected arguments: %s\n", strings.Join(args, " "))
+			return 2
+		}
+		return runAuth(stdout, stderr)
 	case "remote":
 		if len(args) > 0 {
 			_, _ = fmt.Fprintf(stderr, "gmuxd remote: unexpected arguments: %s\n", strings.Join(args, " "))
 			return 2
 		}
 		return runRemote(stdout, stderr)
-	case "shutdown":
-		if len(args) > 0 {
-			_, _ = fmt.Fprintf(stderr, "gmuxd shutdown: unexpected arguments: %s\n", strings.Join(args, " "))
-			return 2
-		}
-		addr, err := daemonAddr()
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
-			return 1
-		}
-		if requestShutdown(addr) {
-			_, _ = fmt.Fprintf(stdout, "gmuxd: shutdown requested for %s\n", addr)
-		} else {
-			_, _ = fmt.Fprintf(stdout, "gmuxd: no running daemon found at %s\n", addr)
-		}
-		return 0
-	case "auth-link":
-		if len(args) > 0 {
-			_, _ = fmt.Fprintf(stderr, "gmuxd auth-link: unexpected arguments: %s\n", strings.Join(args, " "))
-			return 2
-		}
-		return runAuthLink(stdout, stderr)
 	case "version":
 		if len(args) > 0 {
 			_, _ = fmt.Fprintf(stderr, "gmuxd version: unexpected arguments: %s\n", strings.Join(args, " "))
@@ -280,7 +251,7 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func serve(replace bool, stderr io.Writer) int {
+func serve(stderr io.Writer) int {
 	gmuxBin := resolveGmux() // resolve once, use everywhere
 	if gmuxBin != "" {
 		log.Printf("gmux: %s", gmuxBin)
@@ -378,10 +349,10 @@ func serve(replace bool, stderr io.Writer) int {
 	// the health handler can include the tailscale URL.
 	var tsListener *tsauth.Listener
 
-	// networkAddr and networkToken are set below if the network listener
-	// is enabled. Declared here so the health handler can report the address.
-	var networkToken string
-	var networkAddr string
+	// tcpAddr and authToken are resolved after config load. Declared here
+	// so the health handler can report the address.
+	var tcpAddr string
+	var authToken string
 
 	// ── Health + Capabilities ──
 
@@ -399,11 +370,14 @@ func serve(replace bool, stderr io.Writer) int {
 			}
 			data["tailscale"] = diag
 		}
-		if networkAddr != "" {
-			data["network_listen"] = networkAddr
-		}
+		data["listen"] = tcpAddr
 		if v := updateChecker.Available(); v != "" {
 			data["update_available"] = v
+		}
+		// Include auth token only on Unix socket connections (local IPC).
+		// On TCP, the requester already proved they have the token.
+		if r.RemoteAddr == "@" || strings.HasPrefix(r.RemoteAddr, "/") || r.RemoteAddr == "" {
+			data["auth_token"] = authToken
 		}
 		writeJSON(w, map[string]any{"ok": true, "data": data})
 	})
@@ -855,40 +829,88 @@ func serve(replace bool, stderr io.Writer) int {
 
 	mux.Handle("/", spaHandler())
 
-	addr, err := daemonAddr()
-	if err != nil {
-		log.Fatalf("FATAL: %v", err)
-	}
+	// ── Load config ──
 
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("FATAL: %v", err)
 	}
-	if code := prepareDaemonAddr(addr, replace, stderr); code != 0 {
-		return code
+
+	// ── Resolve TCP listen address and auth token ──
+
+	resolved, err := cfg.ListenAddr()
+	if err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
+	tcpAddr = resolved
+
+	tok, err := authtoken.LoadOrCreate(paths.StateDir())
+	if err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
+	authToken = tok
+
+	// ── Replace any existing daemon via Unix socket ──
+
+	sock := socketPath()
+	if err := unixipc.Replace(sock); err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
+		return 1
 	}
 
-	// ── Shutdown endpoint (used by new instances to take over the port) ──
+	// ── Shutdown endpoint (Unix socket only) ──
+	// The netauth middleware blocks this on TCP.
+	// Tailscale also blocks it (peer identity, not localhost).
 
-	srv := &http.Server{Addr: addr, Handler: mux}
+	var sockSrv *http.Server
+	var tcpSrv *http.Server
 
 	mux.HandleFunc("POST /v1/shutdown", func(w http.ResponseWriter, r *http.Request) {
-		// Only allow shutdown from localhost — this endpoint is used by
-		// new gmuxd instances to take over the port, not by remote users.
-		// On the tailscale listener, RemoteAddr is a tailnet IP, not loopback.
-		remoteHost, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if remoteHost != "127.0.0.1" && remoteHost != "::1" {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
 		writeJSON(w, map[string]any{"ok": true})
 		log.Printf("shutdown requested — exiting")
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			srv.Shutdown(ctx)
+			if tcpSrv != nil {
+				tcpSrv.Shutdown(ctx)
+			}
+			if sockSrv != nil {
+				sockSrv.Shutdown(ctx)
+			}
+			unixipc.Cleanup(sock)
 		}()
 	})
+
+	// ── Unix socket listener (local IPC, no auth) ──
+
+	sockLn, err := unixipc.Listen(sock)
+	if err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
+	sockSrv = &http.Server{Handler: mux}
+	go func() {
+		if err := sockSrv.Serve(sockLn); err != http.ErrServerClosed {
+			log.Printf("unix socket listener: %v", err)
+		}
+	}()
+	log.Printf("unix socket: %s", sock)
+
+	// ── TCP listener (always, token-authenticated) ──
+
+	authedHandler := netauth.Middleware(authToken, mux)
+	tcpSrv = &http.Server{Addr: tcpAddr, Handler: authedHandler}
+
+	tcpLn, err := net.Listen("tcp", tcpAddr)
+	if err != nil {
+		log.Fatalf("FATAL: tcp listener on %s: %v", tcpAddr, err)
+	}
+
+	log.Printf("tcp listener on %s (token-authenticated)", tcpAddr)
+	go func() {
+		if err := tcpSrv.Serve(tcpLn); err != http.ErrServerClosed {
+			log.Printf("tcp listener: %v", err)
+		}
+	}()
 
 	// ── Optional tailscale listener ──
 
@@ -896,140 +918,104 @@ func serve(replace bool, stderr io.Writer) int {
 		tsListener = tsauth.Start(tsauth.Config{
 			Hostname: cfg.Tailscale.Hostname,
 			Allow:    cfg.Tailscale.Allow,
-		}, stateDir(), mux)
+		}, paths.StateDir(), mux)
 		defer tsListener.Shutdown()
-	}
-
-	// ── Optional network listener (VPN / container use) ──
-
-	var netSrv *http.Server
-	if resolved, err := cfg.ResolveNetworkListen(); err != nil {
-		log.Fatalf("FATAL: network listener: %v", err)
-	} else if resolved != "" {
-		networkAddr = resolved
-
-		tok, err := authtoken.LoadOrCreate(stateDir())
-		if err != nil {
-			log.Fatalf("FATAL: %v", err)
-		}
-		networkToken = tok
-
-		authedHandler := netauth.Middleware(networkToken, mux)
-		netSrv = &http.Server{Addr: networkAddr, Handler: authedHandler}
-
-		netLn, err := net.Listen("tcp", networkAddr)
-		if err != nil {
-			log.Fatalf("FATAL: network listener on %s: %v", networkAddr, err)
-		}
-
-		log.Printf("network listener on %s (token-authenticated)", networkAddr)
-		log.Printf("auth token: %s", networkToken)
-		go func() {
-			if err := netSrv.Serve(netLn); err != http.ErrServerClosed {
-				log.Printf("network listener: %v", err)
-			}
-		}()
 	}
 
 	// ── Signal handling for graceful shutdown ──
 
+	log.Printf("gmuxd %s ready", version)
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-sigCh
-		log.Printf("received %v — shutting down", sig)
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if netSrv != nil {
-			netSrv.Shutdown(ctx)
-		}
-		srv.Shutdown(ctx)
-	}()
+	sig := <-sigCh
+	log.Printf("received %v — shutting down", sig)
 
-	// ── Localhost listener (always, no auth) ──
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	tcpSrv.Shutdown(ctx)
+	sockSrv.Shutdown(ctx)
+	unixipc.Cleanup(sock)
 
-	log.Printf("gmuxd %s listening on %s", version, addr)
-	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-		log.Fatal(err)
-	}
 	log.Printf("gmuxd stopped")
 	return 0
 }
 
-// requestShutdown asks an existing gmuxd on the same address to shut down,
-// then waits for the port to become available. This replaces PID files —
-// the port itself is the lock.
-func requestShutdown(addr string) bool {
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Post("http://"+addr+"/v1/shutdown", "", nil)
+// runStatus queries the running daemon via Unix socket and prints health info.
+func runStatus(stdout, stderr io.Writer) int {
+	sock := socketPath()
+	client := unixipc.Client(sock)
+
+	resp, err := client.Get("http://localhost/v1/health")
 	if err != nil {
-		return false
+		_, _ = fmt.Fprintf(stderr, "gmuxd: not running (socket: %s)\n", sock)
+		return 1
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return false
-	}
-	log.Printf("asked existing gmuxd at %s to shut down", addr)
 
-	// Wait for the port to become available.
-	deadline := time.After(5 * time.Second)
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		select {
-		case <-deadline:
-			log.Printf("warning: timed out waiting for %s to free up", addr)
-			return true
-		case <-tick.C:
-			resp, err := client.Get("http://" + addr + "/v1/health")
-			if err != nil {
-				return true
-			}
-			resp.Body.Close()
-		}
+	var health struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Version         string `json:"version"`
+			Status          string `json:"status"`
+			Listen          string `json:"listen"`
+			TailscaleURL    string `json:"tailscale_url,omitempty"`
+			UpdateAvailable string `json:"update_available,omitempty"`
+		} `json:"data"`
 	}
-}
-
-func runAuthLink(stdout, stderr io.Writer) int {
-	cfg, err := config.Load()
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil || !health.OK {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: unexpected health response\n")
 		return 1
 	}
 
-	netAddr, err := cfg.ResolveNetworkListen()
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
-		return 1
+	_, _ = fmt.Fprintf(stdout, "gmuxd %s (%s)\n", health.Data.Version, health.Data.Status)
+	_, _ = fmt.Fprintf(stdout, "  tcp:    %s\n", health.Data.Listen)
+	_, _ = fmt.Fprintf(stdout, "  socket: %s\n", sock)
+	if health.Data.TailscaleURL != "" {
+		_, _ = fmt.Fprintf(stdout, "  remote: %s\n", health.Data.TailscaleURL)
 	}
-	if netAddr == "" {
-		_, _ = fmt.Fprintf(stderr, "gmuxd: network listener is not configured\n")
-		_, _ = fmt.Fprintf(stderr, "  Set GMUXD_LISTEN=<ip> or add [network] listen = \"<ip>\" to %s\n", config.Path())
-		return 1
+	if health.Data.UpdateAvailable != "" {
+		_, _ = fmt.Fprintf(stdout, "  update: %s available\n", health.Data.UpdateAvailable)
 	}
-
-	token, err := authtoken.LoadOrCreate(stateDir())
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
-		return 1
-	}
-
-	url := fmt.Sprintf("http://%s/auth/login?token=%s", netAddr, token)
-
-	_, _ = fmt.Fprintf(stdout, "Network listener: %s\n", netAddr)
-	_, _ = fmt.Fprintf(stdout, "Auth token:       %s\n", token)
-	_, _ = fmt.Fprintf(stdout, "\nOpen this URL to authenticate:\n  %s\n", url)
-
 	return 0
 }
 
-// stateDir returns the gmux state directory (~/.local/state/gmux).
-func stateDir() string {
-	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "gmux")
+// runAuth queries the running daemon for the TCP address and auth token.
+func runAuth(stdout, stderr io.Writer) int {
+	sock := socketPath()
+	client := unixipc.Client(sock)
+
+	resp, err := client.Get("http://localhost/v1/health")
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: not running (socket: %s)\n", sock)
+		return 1
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "state", "gmux")
+	defer resp.Body.Close()
+
+	var health struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Listen    string `json:"listen"`
+			AuthToken string `json:"auth_token"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil || !health.OK {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: unexpected health response\n")
+		return 1
+	}
+
+	if health.Data.AuthToken == "" {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: could not retrieve auth token\n")
+		return 1
+	}
+
+	url := fmt.Sprintf("http://%s/auth/login?token=%s", health.Data.Listen, health.Data.AuthToken)
+
+	_, _ = fmt.Fprintf(stdout, "Listen:     %s\n", health.Data.Listen)
+	_, _ = fmt.Fprintf(stdout, "Auth token: %s\n", health.Data.AuthToken)
+	_, _ = fmt.Fprintf(stdout, "\nOpen this URL to authenticate:\n  %s\n", url)
+
+	return 0
 }
 
 func sendSSE(w http.ResponseWriter, event string, payload any) {
@@ -1054,9 +1040,4 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
-func envOr(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
-}
+

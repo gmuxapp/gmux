@@ -4,12 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 )
 
 const remoteDocsURL = "https://gmux.app/remote-access/"
@@ -25,7 +24,7 @@ func runRemote(stdout, stderr io.Writer) int {
 	if !cfg.Tailscale.Enabled {
 		code = remoteSetup(cfg, stdout, stderr)
 	} else {
-		code = remoteStatus(cfg, stdout, stderr)
+		code = remoteStatus(stdout, stderr)
 	}
 
 	fmt.Fprintln(stdout)
@@ -64,21 +63,13 @@ func remoteSetup(cfg config.Config, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "Created %s with tailscale enabled.\n\n", cfgPath)
 	}
 
-	// Check if daemon is running.
-	addr, err := daemonAddr()
-	if err != nil {
-		fmt.Fprintf(stderr, "gmuxd remote: %v\n", err)
-		return 1
-	}
-
+	sock := socketPath()
 	if configExists {
-		// They need to edit the file themselves, then restart.
 		fmt.Fprintln(stdout, "Then restart the daemon:")
-		fmt.Fprintln(stdout, "  gmuxd start --replace")
-	} else if daemonRunning(addr) {
-		// We created the config; they just need to restart.
+		fmt.Fprintln(stdout, "  gmuxd start")
+	} else if unixipc.Healthy(sock) {
 		fmt.Fprintln(stdout, "Restart the daemon to connect to your tailnet:")
-		fmt.Fprintln(stdout, "  gmuxd start --replace")
+		fmt.Fprintln(stdout, "  gmuxd start")
 	} else {
 		fmt.Fprintln(stdout, "Start the daemon to connect to your tailnet:")
 		fmt.Fprintln(stdout, "  gmuxd start")
@@ -91,35 +82,25 @@ func remoteSetup(cfg config.Config, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// remoteStatus shows the current tailscale connection state.
-func remoteStatus(cfg config.Config, stdout, stderr io.Writer) int {
-	addr, err := daemonAddr()
-	if err != nil {
-		fmt.Fprintf(stderr, "gmuxd remote: %v\n", err)
-		return 1
-	}
+// remoteStatus shows the current tailscale connection state via IPC.
+func remoteStatus(stdout, stderr io.Writer) int {
+	sock := socketPath()
+	client := unixipc.Client(sock)
 
-	if !daemonRunning(addr) {
+	resp, err := client.Get("http://localhost/v1/health")
+	if err != nil {
 		fmt.Fprintln(stdout, "Remote access is enabled in config but the daemon is not running.")
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stdout, "Start it with:")
 		fmt.Fprintln(stdout, "  gmuxd start")
 		return 0
 	}
-
-	// Query health endpoint for tailscale diagnostic info.
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://" + addr + "/v1/health")
-	if err != nil {
-		fmt.Fprintf(stderr, "gmuxd remote: cannot reach daemon at %s: %v\n", addr, err)
-		return 1
-	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
 	var health struct {
 		OK   bool `json:"ok"`
 		Data struct {
+			Listen       string `json:"listen"`
 			TailscaleURL string `json:"tailscale_url"`
 			Tailscale    *struct {
 				FQDN     string `json:"fqdn"`
@@ -129,24 +110,23 @@ func remoteStatus(cfg config.Config, stdout, stderr io.Writer) int {
 			} `json:"tailscale"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(body, &health); err != nil || !health.OK {
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil || !health.OK {
 		fmt.Fprintf(stderr, "gmuxd remote: unexpected health response\n")
 		return 1
 	}
 
 	ts := health.Data.Tailscale
 
-	fmt.Fprintf(stdout, "  local:  http://%s\n", addr)
+	fmt.Fprintf(stdout, "  local:  http://%s\n", health.Data.Listen)
 
 	if ts == nil {
-		// Old daemon without tailscale diag info.
 		if health.Data.TailscaleURL != "" {
 			fmt.Fprintf(stdout, "  remote: %s\n", health.Data.TailscaleURL)
 		}
 		return 0
 	}
 
-	// Needs login — this is the most common first-run issue.
+	// Needs login.
 	if ts.AuthURL != "" {
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stdout, "Tailscale needs login. Visit this URL to register the device:")
@@ -159,7 +139,6 @@ func remoteStatus(cfg config.Config, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout)
 
-	// Check prerequisites.
 	problems := 0
 	if !ts.HTTPS {
 		fmt.Fprintln(stdout, "  ✗ HTTPS is not enabled in your tailnet")
@@ -180,7 +159,7 @@ func remoteStatus(cfg config.Config, stdout, stderr io.Writer) int {
 	if ts.FQDN == "" {
 		fmt.Fprintln(stdout, "Tailscale is enabled but not yet connected.")
 		fmt.Fprintln(stdout, "The device may still be registering. Restart with:")
-		fmt.Fprintln(stdout, "  gmuxd start --replace")
+		fmt.Fprintln(stdout, "  gmuxd start")
 		return 0
 	}
 

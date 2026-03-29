@@ -17,18 +17,22 @@ gmux runs an HTTP server that serves a web UI, a REST API, and WebSocket connect
 
 This is equivalent to SSH access. The server must not be reachable by anyone who shouldn't have it.
 
-## Default posture: localhost only
+## Default posture: localhost only, always authenticated
 
-gmuxd binds to `127.0.0.1:8790` by default. This means:
+gmuxd uses two listeners:
+
+1. **Unix socket** (`~/.local/state/gmux/gmuxd.sock`) for local CLI-to-daemon IPC. No authentication needed; access is enforced by filesystem permissions (0600 socket, 0700 directory). This socket cannot be forwarded by VS Code, Docker, or SSH.
+
+2. **TCP listener** (`127.0.0.1:8790` by default) for browser access. All connections require a bearer token or session cookie. There is no unauthenticated TCP access.
+
+By default, the TCP listener binds to `127.0.0.1`:
 
 - ✅ Accessible from the local machine only
 - ❌ Not reachable from LAN, even without a firewall
 - ❌ Not reachable from tailscale or other VPNs
 - ❌ Not reachable from the internet
 
-There is no configuration that changes the bind address of the localhost listener. The interface is hardcoded. The port can be changed via `GMUXD_PORT` or the config file, but it always binds to `127.0.0.1`.
-
-This is a deliberate design choice. Earlier versions accepted a full address (including interface) via environment variable, which made it easy to accidentally bind to all interfaces (`0.0.0.0`). That path was removed.
+The bind address can be changed via the `GMUXD_LISTEN` environment variable for container and VPN deployments. The port can be changed in the config file.
 
 ## Remote access: tailscale only
 
@@ -61,13 +65,13 @@ This is not a token or cookie that could be stolen — it's derived from tailsca
 
 **Denied connections are logged** with the peer's login name and device name for auditing.
 
-## Network listener (advanced)
+## TCP authentication
 
-For containers and VPN setups, gmuxd can optionally bind a second listener to a network address, protected by a 256-bit bearer token. This is an escape hatch for environments where Tailscale isn't available, not a general-purpose remote access method.
+All TCP connections are protected by a **256-bit bearer token** generated on first start and persisted at `~/.local/state/gmux/auth-token`. Every request must present this token via an `Authorization: Bearer <token>` header or an HTTP-only session cookie.
 
-The token protects against unauthorized access but **not eavesdropping**. The connection is plain HTTP. On an untrusted network, an attacker who can intercept traffic can steal the token and gain full terminal access. This is acceptable when the network layer provides encryption (WireGuard tunnel, Docker bridge) but dangerous on open WiFi.
+The token protects against unauthorized access but **not eavesdropping**. The connection is plain HTTP. On an untrusted network, an attacker who can intercept traffic can steal the token and gain full terminal access. This is acceptable when the TCP listener binds to localhost (default), when the network layer provides encryption (WireGuard tunnel, Docker bridge), or in container port-forwarding scenarios.
 
-See [Network Listener](/develop/network-listener) for setup, threat model, and usage.
+See [Network Listener](/develop/network-listener) for container and VPN setup.
 
 ## What we explicitly decided against
 
@@ -77,9 +81,9 @@ The allow list matches login names only, not device names. While tailscale devic
 
 Login names are stable identities tied to the user's authentication provider (GitHub, Google, etc.). For per-device access control, use [tailscale ACLs](https://tailscale.com/kb/1018/acls).
 
-### Unauthenticated LAN access
+### Unauthenticated access
 
-There is no way to expose gmux on the network without authentication. The network listener always requires a bearer token. There is no "disable auth" option, even for development.
+There is no unauthenticated TCP listener. All TCP connections require a bearer token. There is no "disable auth" option, even for development. The Unix socket is the only unauthenticated path, and it is protected by filesystem permissions.
 
 ## Config validation
 

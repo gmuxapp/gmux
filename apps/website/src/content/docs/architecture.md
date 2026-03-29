@@ -29,7 +29,7 @@ One per machine. It:
 
 `gmuxd` is stateless — if it restarts, it rediscovers running sessions. On startup it hashes the `gmux` binary it ships with; sessions running a different build are marked **stale** so the UI can flag them.
 
-`gmux` auto-starts `gmuxd` if it isn't already running. If a daemon from an older version is detected, `gmux` automatically replaces it with `--replace` so the child process always talks to a compatible daemon.
+`gmux` auto-starts `gmuxd` if it isn't already running. If a daemon from an older version is detected, `gmux` automatically replaces it so the child process always talks to a compatible daemon.
 
 Configuration lives in `~/.config/gmux/config.toml`. See [Security](/security) and [Remote Access](/remote-access) for details.
 
@@ -52,7 +52,7 @@ gmux ──Unix socket──→ gmuxd ──HTTP/SSE/WS──→ browser
 
 ## API surface
 
-All served by `gmuxd` on a single port (default `:8790`):
+Served by `gmuxd` on a Unix socket (local IPC) and a TCP listener (default `127.0.0.1:8790`, token-authenticated):
 
 | Endpoint | Purpose |
 |---|---|

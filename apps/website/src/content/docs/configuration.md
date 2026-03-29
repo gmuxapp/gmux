@@ -12,7 +12,7 @@ gmux works out of the box with no configuration. This page documents everything 
 gmuxd reads this file at startup. Create it manually — gmuxd never writes to it. If the file doesn't exist, safe defaults are used.
 
 ```toml
-# Listen port for the localhost HTTP server.
+# TCP port for the HTTP listener.
 # Default: 8790
 port = 8790
 
@@ -22,11 +22,6 @@ port = 8790
 enabled = false
 hostname = "gmux"       # → gmux.your-tailnet.ts.net
 allow = []               # additional login names (owner is auto-whitelisted)
-
-# Optional network listener for containers and VPN setups.
-# See develop/network-listener for setup and security implications.
-# [network]
-# listen = "10.0.0.5"
 ```
 
 ### Strict validation
@@ -36,7 +31,7 @@ The config file is strictly validated at startup. gmuxd refuses to start if:
 - **Unknown keys** are present — catches typos like `alow` instead of `allow`
 - **`allow` entries don't contain `@`** — likely not a valid tailscale login name
 - **`hostname` is empty** when tailscale is enabled
-- **`port` is out of range** (must be 1–65535)
+- **`port` is out of range** (must be 1-65535)
 - **TOML syntax is invalid**
 
 This is intentional — silent fallback to defaults is dangerous for security settings. See [Security](/security) for the reasoning.
@@ -118,16 +113,15 @@ User keybinds override built-in defaults that share the same key combo. To see t
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `GMUXD_PORT` | Listen port (overrides config file) | `8790` |
-| `GMUXD_LISTEN` | Bind a [network listener](/develop/network-listener) to this address | *(disabled)* |
+| `GMUXD_LISTEN` | TCP bind address | `127.0.0.1` |
 | `XDG_CONFIG_HOME` | Base directory for config file | `~/.config` |
-| `XDG_STATE_HOME` | Base directory for runtime state | `~/.local/state` |
+| `XDG_STATE_HOME` | Base directory for runtime state (socket, auth token) | `~/.local/state` |
 
-### gmux (session runner)
+### gmux (CLI and session runner)
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `GMUXD_PORT` | Port to reach gmuxd on localhost (shared with gmuxd) | `8790` |
+
 | `GMUX_ADAPTER` | Force a specific adapter instead of auto-detection | *(auto)* |
 | `GMUX_SOCKET_DIR` | Directory for session Unix sockets | `/tmp/gmux-sessions` |
 
@@ -148,11 +142,12 @@ See [Adapter Architecture](/develop/adapter-architecture) for how to use the chi
 
 | Path | Purpose | Created by |
 |------|---------|------------|
-| `~/.config/gmux/config.toml` | Daemon config (port, network, tailscale) | User |
+| `~/.config/gmux/config.toml` | Daemon config (port, tailscale) | User |
 | `~/.config/gmux/theme.jsonc` | Terminal appearance (colors, font, cursor) | User |
 | `~/.config/gmux/keybinds.jsonc` | Key-to-action mappings | User |
+| `~/.local/state/gmux/gmuxd.sock` | Daemon Unix socket (local IPC) | gmuxd |
+| `~/.local/state/gmux/auth-token` | Bearer token for TCP authentication | gmuxd |
 | `~/.local/state/gmux/tsnet/` | Tailscale state (when enabled) | gmuxd |
-| `~/.local/state/gmux/auth-token` | Network listener bearer token | gmuxd |
 | `/tmp/gmux-sessions/*.sock` | Live session Unix sockets | gmux |
 
 ### Adapter-specific paths
@@ -163,18 +158,20 @@ See [Adapter Architecture](/develop/adapter-architecture) for how to use the chi
 
 ## Port
 
-The default port is **8790**. To change it, set it in the config file or via environment variable:
+The default port is **8790**. To change it in the config file:
 
 ```toml
 port = 9999
 ```
 
-Or:
+## Bind address
+
+By default, the TCP listener binds to `127.0.0.1` (localhost only). All TCP connections require bearer token authentication.
+
+To bind to all interfaces (containers, VPN setups):
 
 ```bash
-GMUXD_PORT=9999 gmuxd start
+GMUXD_LISTEN=0.0.0.0 gmuxd start
 ```
 
-For daemon commands, run `gmuxd -h`.
-
-The env var takes precedence over the config file. The localhost listener always binds to `127.0.0.1`. For binding to other addresses, see [Network Listener](/develop/network-listener).
+The bind address is controlled exclusively by the `GMUXD_LISTEN` environment variable. It is not a config file option because it is a deployment concern, not a user preference.

@@ -30,7 +30,7 @@ This starts:
 - **gmuxd** (`:8790`) — Go, auto-restarts on `.go` changes via watchexec
 - **gmux-web** (`:5173`) — Vite HMR, proxies `/v1/*` and `/ws/*` to gmuxd
 
-**No manual kill needed.** When gmuxd starts, it asks any existing instance on the same port to shut down gracefully (`POST /v1/shutdown`) before binding.
+**No manual kill needed.** When gmuxd starts, it asks any existing instance to shut down gracefully via the Unix socket before binding.
 
 To run services individually:
 

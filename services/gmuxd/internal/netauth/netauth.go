@@ -42,8 +42,8 @@ func Middleware(token string, next http.Handler) http.Handler {
 			return
 		}
 
-		// Shutdown is a localhost-only operation (used by gmuxd start --replace).
-		// Block it entirely on the network listener regardless of auth.
+		// Shutdown is a local-only operation (available via Unix socket).
+		// Block it entirely on the TCP listener regardless of auth.
 		if r.URL.Path == "/v1/shutdown" {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
@@ -216,7 +216,7 @@ func serveLoginPage(w http.ResponseWriter, errMsg string) {
            placeholder="Paste token here" autocomplete="off">
     <button type="submit">Sign In</button>
   </form>
-  <p class="hint">Find your token by running <code>gmuxd auth-link</code> on the host machine.</p>
+  <p class="hint">Find your token by running <code>gmuxd auth</code> on the host machine.</p>
 </div>
 </body>
 </html>`))

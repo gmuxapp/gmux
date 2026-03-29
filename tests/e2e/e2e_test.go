@@ -56,16 +56,27 @@ func TestEndToEnd(t *testing.T) {
 	socketDir := t.TempDir()
 	t.Setenv("GMUX_SOCKET_DIR", socketDir)
 
-	// Find a free port for gmuxd
+	// State dir for Unix socket and auth token
+	stateDir := t.TempDir()
+	gmuxdSock := filepath.Join(stateDir, "gmux", "gmuxd.sock")
+
+	// Use a free port for the TCP listener
 	port := freePort(t)
-	gmuxdAddr := fmt.Sprintf("http://localhost:%d", port)
+	configDir := t.TempDir()
+	cfgDir := filepath.Join(configDir, "gmux")
+	os.MkdirAll(cfgDir, 0o755)
+	os.WriteFile(filepath.Join(cfgDir, "config.toml"),
+		[]byte(fmt.Sprintf("port = %d\n", port)), 0o644)
 
 	// ── Start gmuxd ──
 	gmuxdCtx, gmuxdCancel := context.WithCancel(context.Background())
 	defer gmuxdCancel()
 
-	gmuxdCmd := exec.CommandContext(gmuxdCtx, gmuxdBin, "start")
-	gmuxdCmd.Env = append(os.Environ(), fmt.Sprintf("GMUXD_PORT=%d", port))
+	gmuxdCmd := exec.CommandContext(gmuxdCtx, gmuxdBin)
+	gmuxdCmd.Env = append(os.Environ(),
+		fmt.Sprintf("XDG_CONFIG_HOME=%s", configDir),
+		fmt.Sprintf("XDG_STATE_HOME=%s", stateDir),
+	)
 	gmuxdCmd.Stdout = os.Stdout
 	gmuxdCmd.Stderr = os.Stderr
 	if err := gmuxdCmd.Start(); err != nil {
@@ -73,11 +84,11 @@ func TestEndToEnd(t *testing.T) {
 	}
 	defer gmuxdCmd.Process.Kill()
 
-	// Wait for gmuxd to be ready
-	waitForHTTP(t, gmuxdAddr+"/v1/health", 5*time.Second)
+	// Wait for gmuxd to be ready via Unix socket
+	waitForSocket(t, gmuxdSock, 5*time.Second)
 
 	// Verify empty sessions
-	sessions := listSessions(t, gmuxdAddr)
+	sessions := listSessions(t, gmuxdSock)
 	if len(sessions) != 0 {
 		t.Fatalf("expected 0 sessions, got %d", len(sessions))
 	}
@@ -89,7 +100,7 @@ func TestEndToEnd(t *testing.T) {
 	runCmd := exec.CommandContext(runCtx, gmuxRunBin, "bash", "-c", "echo hello-from-e2e; sleep 60")
 	runCmd.Dir = repoRoot
 	runCmd.Env = append(os.Environ(),
-		fmt.Sprintf("GMUXD_PORT=%d", port),
+		fmt.Sprintf("XDG_STATE_HOME=%s", stateDir),
 	)
 
 	// Capture stdout to extract session ID and socket path
@@ -112,7 +123,7 @@ func TestEndToEnd(t *testing.T) {
 	var found *session
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		sessions = listSessions(t, gmuxdAddr)
+		sessions = listSessions(t, gmuxdSock)
 		for i := range sessions {
 			if sessions[i].ID == sessionID {
 				found = &sessions[i]
@@ -159,7 +170,7 @@ func TestEndToEnd(t *testing.T) {
 
 	// Wait for gmuxd to pick up the status change (next scan)
 	time.Sleep(4 * time.Second)
-	sessions = listSessions(t, gmuxdAddr)
+	sessions = listSessions(t, gmuxdSock)
 	for i := range sessions {
 		if sessions[i].ID == sessionID {
 			found = &sessions[i]
@@ -183,7 +194,7 @@ func TestEndToEnd(t *testing.T) {
 
 	// Give gmuxd time to scan and detect stale socket
 	time.Sleep(5 * time.Second)
-	sessions = listSessions(t, gmuxdAddr)
+	sessions = listSessions(t, gmuxdSock)
 	for _, s := range sessions {
 		if s.ID == sessionID {
 			t.Error("session should have been removed after runner exit")
@@ -238,11 +249,19 @@ func freePort(t *testing.T) int {
 	return port
 }
 
-func waitForHTTP(t *testing.T, url string, timeout time.Duration) {
+func waitForSocket(t *testing.T, sockPath string, timeout time.Duration) {
 	t.Helper()
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.DialTimeout("unix", sockPath, time.Second)
+			},
+		},
+		Timeout: 2 * time.Second,
+	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(url)
+		resp, err := client.Get("http://localhost/v1/health")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
@@ -251,7 +270,7 @@ func waitForHTTP(t *testing.T, url string, timeout time.Duration) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s", url)
+	t.Fatalf("timed out waiting for gmuxd on socket %s", sockPath)
 }
 
 func parseRunOutput(t *testing.T, r io.Reader) (sessionID, socketPath string) {
@@ -284,9 +303,17 @@ func parseRunOutput(t *testing.T, r io.Reader) (sessionID, socketPath string) {
 	return
 }
 
-func listSessions(t *testing.T, gmuxdAddr string) []session {
+func listSessions(t *testing.T, sockPath string) []session {
 	t.Helper()
-	resp, err := http.Get(gmuxdAddr + "/v1/sessions")
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.DialTimeout("unix", sockPath, time.Second)
+			},
+		},
+		Timeout: 2 * time.Second,
+	}
+	resp, err := client.Get("http://localhost/v1/sessions")
 	if err != nil {
 		t.Fatalf("list sessions: %v", err)
 	}

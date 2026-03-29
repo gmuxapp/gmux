@@ -23,7 +23,7 @@ fi
 
 gmux-dev() {
   GMUX_SOCKET_DIR="$_GMUX_DEV_SOCKET_DIR" \
-  GMUXD_PORT="$_GMUX_DEV_PORT" \
+  XDG_STATE_HOME="$_GMUX_DEV_STATE_DIR/state" \
   PI_CODING_AGENT_DIR="$_GMUX_DEV_STATE_DIR/pi-agent" \
   "$_GMUX_DEV_ROOT/bin/gmux-dev" "$@"
 }

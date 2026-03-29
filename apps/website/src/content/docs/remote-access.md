@@ -94,7 +94,7 @@ This gives you `https://gmux-desktop.your-tailnet.ts.net` and `https://gmux-lapt
 Restart the daemon to apply the new config:
 
 ```bash
-gmuxd start --replace
+gmuxd start
 ```
 
 **Important:** gmux registers as its own device in your tailnet, separate from the machine it runs on. On first start, gmuxd prints a Tailscale login URL:
@@ -143,7 +143,7 @@ This check runs on every HTTP request and WebSocket upgrade — there are no ses
 
 ## The localhost listener is unchanged
 
-The tailscale listener is a second, independent listener. The localhost listener (`127.0.0.1:8790`) continues to work exactly as before, with no authentication. Local access is always available — you can't lock yourself out by misconfiguring tailscale.
+The tailscale listener is a second, independent listener. The localhost TCP listener (`127.0.0.1:8790`) continues to work with token authentication. The Unix socket provides unauthenticated local IPC. Local access is always available — you can't lock yourself out by misconfiguring tailscale.
 
 ## Sharing with another tailnet
 
@@ -170,7 +170,7 @@ enabled = true
 allow = ["your-other-account@github"]
 ```
 
-Then restart gmuxd: `gmuxd start --replace`.
+Then restart gmuxd: `gmuxd start`.
 
 ### HTTPS and tailnet names
 
@@ -194,11 +194,11 @@ allow = ["your-other-account@github"]
 
 Run `gmuxd remote` to diagnose most issues. It checks whether the daemon is running, whether the Tailscale device is registered, and whether HTTPS and MagicDNS are enabled.
 
-**`ERR_NAME_NOT_RESOLVED` in the browser** — the device isn't registered in your tailnet, or MagicDNS is disabled. Run `gmuxd remote` to check. If the device isn't registered, restart with `gmuxd start --replace` and look for the login URL.
+**`ERR_NAME_NOT_RESOLVED` in the browser** — the device isn't registered in your tailnet, or MagicDNS is disabled. Run `gmuxd remote` to check. If the device isn't registered, restart with `gmuxd start` and look for the login URL.
 
-**gmux doesn't appear in the Tailscale dashboard** — gmux registers as its own device, not through the machine's tailscale. You need to visit the login URL printed by `gmuxd start --replace`. Run `gmuxd remote` to see if it's still waiting for registration.
+**gmux doesn't appear in the Tailscale dashboard** — gmux registers as its own device, not through the machine's tailscale. You need to visit the login URL printed by `gmuxd start`. Run `gmuxd remote` to see if it's still waiting for registration.
 
-**"tsauth: could not determine node owner"** — gmuxd couldn't identify your tailscale account. This usually means the login flow wasn't completed. Restart with `gmuxd start --replace` and visit the login URL.
+**"tsauth: could not determine node owner"** — gmuxd couldn't identify your tailscale account. This usually means the login flow wasn't completed. Restart with `gmuxd start` and visit the login URL.
 
 **Certificate warning** — HTTPS certificates aren't enabled in your tailnet. Enable them in your [tailscale DNS settings](https://login.tailscale.com/admin/dns), then restart gmuxd.
 

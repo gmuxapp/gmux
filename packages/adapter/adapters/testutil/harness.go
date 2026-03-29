@@ -47,9 +47,11 @@ type Status struct {
 
 // Gmuxd manages a gmuxd process for testing.
 type Gmuxd struct {
-	Addr string
-	t    *testing.T
-	cmd  *exec.Cmd
+	Addr   string // TCP address (for browser-like access)
+	Socket string // Unix socket path (for IPC)
+	client *http.Client
+	t      *testing.T
+	cmd    *exec.Cmd
 	cancel context.CancelFunc
 }
 
@@ -70,14 +72,22 @@ func StartGmuxd(t *testing.T) *Gmuxd {
 	socketDir := t.TempDir()
 	port := freePort(t)
 	addr := fmt.Sprintf("http://localhost:%d", port)
+	stateDir := t.TempDir()
+	gmuxdSock := filepath.Join(stateDir, "gmux", "gmuxd.sock")
+	configDir := t.TempDir()
+
+	// Write config with the chosen port.
+	cfgDir := filepath.Join(configDir, "gmux")
+	os.MkdirAll(cfgDir, 0o755)
+	os.WriteFile(filepath.Join(cfgDir, "config.toml"),
+		[]byte(fmt.Sprintf("port = %d\n", port)), 0o644)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, gmuxdBin, "start")
-	configDir := t.TempDir() // empty config — no tailscale, no custom settings
+	cmd := exec.CommandContext(ctx, gmuxdBin)
 	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("GMUXD_PORT=%d", port),
 		fmt.Sprintf("GMUX_SOCKET_DIR=%s", socketDir),
 		fmt.Sprintf("XDG_CONFIG_HOME=%s", configDir),
+		fmt.Sprintf("XDG_STATE_HOME=%s", stateDir),
 		fmt.Sprintf("PATH=%s:%s", filepath.Dir(gmuxBin), os.Getenv("PATH")),
 	)
 	cmd.Stdout = os.Stdout
@@ -88,14 +98,24 @@ func StartGmuxd(t *testing.T) *Gmuxd {
 		t.Fatalf("start gmuxd: %v", err)
 	}
 
-	g := &Gmuxd{Addr: addr, t: t, cmd: cmd, cancel: cancel}
+	// Build a Unix socket HTTP client for IPC.
+	sockClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.DialTimeout("unix", gmuxdSock, 2*time.Second)
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	g := &Gmuxd{Addr: addr, Socket: gmuxdSock, client: sockClient, t: t, cmd: cmd, cancel: cancel}
 	t.Cleanup(func() {
 		cancel()
 		cmd.Process.Kill()
 		cmd.Wait()
 	})
 
-	waitForHTTP(t, addr+"/v1/health", 5*time.Second)
+	waitForSocket(t, gmuxdSock, 5*time.Second)
 	return g
 }
 
@@ -104,7 +124,7 @@ func (g *Gmuxd) Launch(command []string, cwd string) Session {
 	g.t.Helper()
 	cmdJSON, _ := json.Marshal(command)
 	body := fmt.Sprintf(`{"command":%s,"cwd":%q}`, cmdJSON, cwd)
-	resp, err := http.Post(g.Addr+"/v1/launch", "application/json", strings.NewReader(body))
+	resp, err := g.client.Post("http://localhost/v1/launch", "application/json", strings.NewReader(body))
 	if err != nil {
 		g.t.Fatalf("launch: %v", err)
 	}
@@ -121,7 +141,7 @@ func (g *Gmuxd) Launch(command []string, cwd string) Session {
 // Sessions returns all current sessions.
 func (g *Gmuxd) Sessions() []Session {
 	g.t.Helper()
-	resp, err := http.Get(g.Addr + "/v1/sessions")
+	resp, err := g.client.Get("http://localhost/v1/sessions")
 	if err != nil {
 		g.t.Fatalf("list sessions: %v", err)
 	}
@@ -281,17 +301,27 @@ func freePort(t *testing.T) int {
 	return port
 }
 
-func waitForHTTP(t *testing.T, url string, timeout time.Duration) {
+func waitForSocket(t *testing.T, sockPath string, timeout time.Duration) {
 	t.Helper()
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.DialTimeout("unix", sockPath, time.Second)
+			},
+		},
+		Timeout: 2 * time.Second,
+	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if resp, err := http.Get(url); err == nil {
+		if resp, err := client.Get("http://localhost/v1/health"); err == nil {
 			resp.Body.Close()
-			if resp.StatusCode == 200 { return }
+			if resp.StatusCode == 200 {
+				return
+			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s", url)
+	t.Fatalf("timed out waiting for gmuxd on socket %s", sockPath)
 }
 
 func unixClient(socketPath string) *http.Client {

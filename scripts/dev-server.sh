@@ -56,7 +56,6 @@ EOF
 
 # ── Shared env ──
 
-export GMUXD_PORT="$DEV_PORT"
 export GMUX_SOCKET_DIR="$DEV_SOCKET_DIR"
 export XDG_CONFIG_HOME="$DEV_STATE_DIR/config"
 export XDG_STATE_HOME="$DEV_STATE_DIR/state"
@@ -97,7 +96,7 @@ sleep 1
 # ── Start gmuxd (serves everything on one port) ──
 
 echo "→ Starting gmuxd on port $DEV_PORT..."
-"$DEV_BIN_DIR/gmuxd-dev" start --replace &
+"$DEV_BIN_DIR/gmuxd-dev" start &
 PIDS+=($!)
 
 # ── Watch Go files → rebuild + restart gmuxd ──
@@ -116,13 +115,12 @@ watchexec \
     (cd '$ROOT/cli/gmux' && go build -o '$DEV_BIN_DIR/gmux-dev' ./cmd/gmux) &&
     (cd '$ROOT/services/gmuxd' && go build -o '$DEV_BIN_DIR/gmuxd-dev' ./cmd/gmuxd) &&
     echo '→ Restarting gmuxd-dev ($INSTANCE_NAME)...' &&
-    GMUXD_PORT=$DEV_PORT \\
     GMUX_SOCKET_DIR=$DEV_SOCKET_DIR \\
     XDG_CONFIG_HOME='$DEV_STATE_DIR/config' \\
     XDG_STATE_HOME='$DEV_STATE_DIR/state' \\
     GMUXD_DEV_PROXY='http://localhost:$DEV_VITE_PORT' \\
     PI_CODING_AGENT_DIR='$DEV_STATE_DIR/pi-agent' \\
-    '$DEV_BIN_DIR/gmuxd-dev' start --replace
+    '$DEV_BIN_DIR/gmuxd-dev' start
   " &
 PIDS+=($!)
 

@@ -140,7 +140,7 @@ main() {
   # If gmuxd was already running, restart it
   # Running sessions are not affected, they reconnect automatically.
   if curl -sSf http://localhost:8790/v1/health > /dev/null 2>&1; then
-    "${INSTALL_DIR}/gmuxd" start --replace 2>/dev/null || true
+    "${INSTALL_DIR}/gmuxd" start 2>/dev/null || true
     echo "Restarted gmuxd (running sessions are safe)"
   fi
 

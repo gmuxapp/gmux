@@ -48,11 +48,6 @@ func TestE2E(t *testing.T) {
 	srv := httptest.NewServer(authed)
 	defer srv.Close()
 
-	// Also start an "unprotected" localhost server with the same mux for
-	// comparison, simulating gmuxd's localhost listener.
-	localhost := httptest.NewServer(mux)
-	defer localhost.Close()
-
 	noFollow := &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -412,18 +407,6 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
-	// ── Localhost listener comparison ──
-
-	t.Run("localhost listener needs no auth", func(t *testing.T) {
-		resp, err := http.Get(localhost.URL + "/v1/sessions")
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != 200 {
-			t.Errorf("localhost: got %d, want 200", resp.StatusCode)
-		}
-	})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
