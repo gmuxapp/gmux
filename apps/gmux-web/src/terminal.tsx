@@ -446,12 +446,24 @@ export function TerminalView({
     const handleTouchEndCapture = () => {
       if (touchPanState.active && !touchPanState.moved) {
         focusTerminalInput(term)
-        term.scrollToBottom()
-        const host = shellRef.current
-        if (host) {
-          host.scrollTop = host.scrollHeight
-          host.scrollLeft = 0
-        }
+        // Defer scroll so synthesized mouse events (which the browser fires
+        // after touchend returns) reach xterm's Linkifier at the current
+        // scroll position. Without this, scrollToBottom() changes the
+        // viewport before the Linkifier can resolve the link under the tap
+        // coordinates, making link taps a no-op on mobile.
+        //
+        // setTimeout(0) and not rAF: synthesized mouse events fire as part
+        // of the current user interaction, before queued tasks. rAF timing
+        // relative to synthesized events is unspecified and varies by
+        // browser; on some it fires before them, reproducing the bug.
+        setTimeout(() => {
+          term.scrollToBottom()
+          const host = shellRef.current
+          if (host) {
+            host.scrollTop = host.scrollHeight
+            host.scrollLeft = 0
+          }
+        }, 0)
       }
       touchPanState.active = false
       touchPanState.moved = false
