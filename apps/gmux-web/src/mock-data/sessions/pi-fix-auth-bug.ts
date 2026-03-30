@@ -18,6 +18,7 @@ export default {
   command: ['pi'],
   cwd: '/home/user/dev/gmux',
   workspace_root: '/home/user/dev/gmux',
+  remotes: { origin: 'github.com/gmuxapp/gmux' },
   kind: 'pi',
   alive: false,
   pid: 23456,

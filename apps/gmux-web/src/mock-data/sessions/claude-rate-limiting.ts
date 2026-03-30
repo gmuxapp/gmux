@@ -20,6 +20,7 @@ export default {
   command: ['claude'],
   cwd: '/home/user/dev/gmux',
   workspace_root: '/home/user/dev/gmux',
+  remotes: { origin: 'github.com/gmuxapp/gmux' },
   kind: 'shell',
   alive: true,
   pid: 133425,

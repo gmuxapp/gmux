@@ -13,6 +13,7 @@ export default {
   command: ['pi'],
   cwd: '/home/user/dev/api',
   workspace_root: '/home/user/dev/api',
+  remotes: { origin: 'github.com/gmuxapp/api' },
   kind: 'pi',
   alive: true,
   pid: 56789,

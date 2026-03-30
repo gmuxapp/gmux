@@ -112,13 +112,15 @@ func (sc *Scanner) Scan() {
 				continue
 			}
 
+			wsRoot := workspace.DetectRoot(cwd)
 			sess := store.Session{
 				ID:            "file-" + info.ID[:8],
 				CreatedAt:     info.Created.UTC().Format(time.RFC3339),
 				Command:       cmd,
 				Cwd:           cwd,
 				Kind:          a.Name(),
-				WorkspaceRoot: workspace.DetectRoot(cwd),
+				WorkspaceRoot: wsRoot,
+				Remotes:       workspace.DetectRemotes(wsRoot),
 				Alive:         false,
 				AdapterTitle:  info.Title,
 				ResumeKey:     info.ID,
