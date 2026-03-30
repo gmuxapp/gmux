@@ -174,9 +174,7 @@ Tip:
 `, version)
 }
 
-func socketPath() string {
-	return paths.SocketPath()
-}
+
 
 func run(args []string, stdout, stderr io.Writer) int {
 	// No args = start daemon (the "put me in a service file" invocation).
@@ -205,7 +203,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintf(stderr, "gmuxd stop: unexpected arguments: %s\n", strings.Join(args, " "))
 			return 2
 		}
-		sock := socketPath()
+		sock := paths.SocketPath()
 		if unixipc.Shutdown(sock) {
 			_, _ = fmt.Fprintf(stdout, "gmuxd: stopped\n")
 		} else {
@@ -852,7 +850,7 @@ func serve(stderr io.Writer) int {
 
 	// ── Replace any existing daemon via Unix socket ──
 
-	sock := socketPath()
+	sock := paths.SocketPath()
 	if err := unixipc.Replace(sock); err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
 		return 1
@@ -943,7 +941,7 @@ func serve(stderr io.Writer) int {
 
 // runStatus queries the running daemon via Unix socket and prints health info.
 func runStatus(stdout, stderr io.Writer) int {
-	sock := socketPath()
+	sock := paths.SocketPath()
 	client := unixipc.Client(sock)
 
 	resp, err := client.Get("http://localhost/v1/health")
@@ -982,7 +980,7 @@ func runStatus(stdout, stderr io.Writer) int {
 
 // runAuth queries the running daemon for the TCP address and auth token.
 func runAuth(stdout, stderr io.Writer) int {
-	sock := socketPath()
+	sock := paths.SocketPath()
 	client := unixipc.Client(sock)
 
 	resp, err := client.Get("http://localhost/v1/health")

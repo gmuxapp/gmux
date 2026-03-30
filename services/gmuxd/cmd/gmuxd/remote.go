@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 )
@@ -63,7 +64,7 @@ func remoteSetup(cfg config.Config, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "Created %s with tailscale enabled.\n\n", cfgPath)
 	}
 
-	sock := socketPath()
+	sock := paths.SocketPath()
 	if configExists {
 		fmt.Fprintln(stdout, "Then restart the daemon:")
 		fmt.Fprintln(stdout, "  gmuxd start")
@@ -84,7 +85,7 @@ func remoteSetup(cfg config.Config, stdout, stderr io.Writer) int {
 
 // remoteStatus shows the current tailscale connection state via IPC.
 func remoteStatus(stdout, stderr io.Writer) int {
-	sock := socketPath()
+	sock := paths.SocketPath()
 	client := unixipc.Client(sock)
 
 	resp, err := client.Get("http://localhost/v1/health")

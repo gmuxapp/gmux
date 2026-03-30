@@ -193,4 +193,3 @@ func Path() string {
 	return filepath.Join(home, ".config", "gmux", "config.toml")
 }
 
-
