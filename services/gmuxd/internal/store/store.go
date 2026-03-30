@@ -12,7 +12,8 @@ type Session struct {
 	Command       []string `json:"command,omitempty"`
 	Cwd           string   `json:"cwd,omitempty"`
 	Kind          string   `json:"kind"`
-	WorkspaceRoot string   `json:"workspace_root,omitempty"`
+	WorkspaceRoot string            `json:"workspace_root,omitempty"`
+	Remotes       map[string]string `json:"remotes,omitempty"`
 	Alive        bool     `json:"alive"`
 	Pid          int      `json:"pid,omitempty"`
 	ExitCode     *int     `json:"exit_code,omitempty"`

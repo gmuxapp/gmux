@@ -14,6 +14,7 @@ export default {
   command: ['pi'],
   cwd: '/home/user/dev/gmux/.grove/teak',
   workspace_root: '/home/user/dev/gmux',
+  remotes: { origin: 'github.com/gmuxapp/gmux' },
   kind: 'pi',
   alive: true,
   pid: 12345,

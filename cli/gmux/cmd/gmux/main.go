@@ -161,8 +161,9 @@ func main() {
 		SocketPath: sockPath,
 	})
 
-	// Detect VCS workspace root for grouping related sessions.
+	// Detect VCS workspace root and remotes for grouping related sessions.
 	wsRoot := workspace.DetectRoot(workDir)
+	remotes := workspace.DetectRemotes(wsRoot)
 
 	// Create in-memory session state
 	state := session.New(session.Config{
@@ -171,6 +172,7 @@ func main() {
 		Cwd:           workDir,
 		Kind:          a.Name(),
 		WorkspaceRoot: wsRoot,
+		Remotes:       remotes,
 		SocketPath:    sockPath,
 		BinaryHash:    binhash.Self(),
 	})

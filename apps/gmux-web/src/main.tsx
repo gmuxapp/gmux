@@ -35,6 +35,7 @@ function toUISession(s: ProtocolSession): Session {
     command: s.command ?? [],
     cwd: s.cwd ?? '',
     workspace_root: s.workspace_root ?? undefined,
+    remotes: s.remotes ?? undefined,
     kind: s.kind ?? 'shell',
     alive: s.alive,
     pid: s.pid ?? null,
@@ -376,7 +377,7 @@ function FolderGroup({
     <div class="folder">
       <div class="folder-header">
         <div class="folder-name">{folder.name}</div>
-        <LaunchButton cwd={folder.path} className="folder-launch-btn" />
+        <LaunchButton cwd={folder.sessions[0]?.cwd} className="folder-launch-btn" />
       </div>
       <div class="folder-sessions">
         {live.map(s => (

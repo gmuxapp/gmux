@@ -2,7 +2,8 @@
  * Sidebar folder visibility — stored in localStorage.
  *
  * Tracks which folder paths are visible in the sidebar. Paths are keyed
- * by workspace root (when sessions share a VCS root) or cwd otherwise.
+ * by the same grouping used in groupByFolder: the most common remote URL
+ * when remotes are present, workspace root, or cwd as fallback.
  * New folders auto-show when they have live sessions.
  */
 
@@ -50,8 +51,7 @@ export function createSidebarState() {
       let changed = false
       for (const s of sessions) {
         if (!s.alive) continue
-        // Track by the grouping key: workspace root if set, otherwise cwd.
-        const key = s.workspace_root || s.cwd || '~'
+        const key = sessionGroupKey(s)
         if (!state.visibleFolders.includes(key)) {
           state.visibleFolders.push(key)
           changed = true
@@ -79,3 +79,18 @@ export function createSidebarState() {
 }
 
 export type SidebarStateManager = ReturnType<typeof createSidebarState>
+
+/**
+ * Derive the grouping key for a single session. Used to track folder
+ * visibility independently of the full groupByFolder union-find.
+ * Returns the first remote URL (origin preferred), workspace root, or cwd.
+ */
+function sessionGroupKey(s: Session): string {
+  if (s.remotes) {
+    // Prefer origin, fall back to first available.
+    if (s.remotes.origin) return s.remotes.origin
+    const values = Object.values(s.remotes)
+    if (values.length > 0) return values[0]
+  }
+  return s.workspace_root || s.cwd || '~'
+}

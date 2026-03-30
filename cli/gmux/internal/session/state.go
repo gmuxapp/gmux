@@ -22,7 +22,8 @@ type State struct {
 	Command        []string `json:"command"`
 	Cwd            string   `json:"cwd"`
 	Kind           string   `json:"kind"`
-	WorkspaceRoot  string   `json:"workspace_root,omitempty"`
+	WorkspaceRoot  string            `json:"workspace_root,omitempty"`
+	Remotes        map[string]string `json:"remotes,omitempty"`
 
 	// Process state (owned by runner)
 	Alive     bool   `json:"alive"`
@@ -69,6 +70,7 @@ type Config struct {
 	SocketPath    string
 	BinaryHash    string
 	WorkspaceRoot string
+	Remotes       map[string]string
 }
 
 // New creates a new session state.
@@ -80,6 +82,7 @@ func New(cfg Config) *State {
 		Cwd:           cfg.Cwd,
 		Kind:          cfg.Kind,
 		WorkspaceRoot: cfg.WorkspaceRoot,
+		Remotes:       cfg.Remotes,
 		SocketPath:    cfg.SocketPath,
 		BinaryHash:    cfg.BinaryHash,
 		Alive:         false,

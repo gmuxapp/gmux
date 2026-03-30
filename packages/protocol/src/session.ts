@@ -14,6 +14,7 @@ export const SessionSchema = z.object({
   command: z.array(z.string()).optional(),
   cwd: z.string().optional(),
   workspace_root: z.string().optional(),
+  remotes: z.record(z.string()).optional(),
   kind: z.string().default('shell'),
   alive: z.boolean(),
   pid: z.number().optional().nullable(),

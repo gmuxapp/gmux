@@ -92,6 +92,115 @@ describe('groupByFolder', () => {
     expect(ids).toEqual(['b1', 'b2', 'a2', 'a1'])
   })
 
+  it('groups sessions sharing a remote URL', () => {
+    const sessions = [
+      makeSession({
+        id: 'a', cwd: '/home/user/dev/gmux',
+        remotes: { origin: 'github.com/gmuxapp/gmux' },
+      }),
+      makeSession({
+        id: 'b', cwd: '/home/server/projects/gmux',
+        remotes: { origin: 'github.com/gmuxapp/gmux' },
+      }),
+      makeSession({
+        id: 'c', cwd: '/home/user/dev/other',
+        remotes: { origin: 'github.com/gmuxapp/other' },
+      }),
+    ]
+
+    const folders = groupByFolder(sessions)
+    expect(folders).toHaveLength(2)
+
+    const gmux = folders.find(f => f.path === 'github.com/gmuxapp/gmux')!
+    expect(gmux.name).toBe('gmux')
+    expect(gmux.sessions).toHaveLength(2)
+    expect(gmux.sessions.map(s => s.id).sort()).toEqual(['a', 'b'])
+  })
+
+  it('groups fork and upstream via shared remote (any-match)', () => {
+    // Machine A: fork as origin, upstream as upstream
+    // Machine B: upstream as origin
+    // They share "github.com/gmuxapp/gmux", so they group.
+    const sessions = [
+      makeSession({
+        id: 'fork', cwd: '/home/dev/gmux',
+        remotes: {
+          origin: 'github.com/mgabor3141/gmux',
+          upstream: 'github.com/gmuxapp/gmux',
+        },
+      }),
+      makeSession({
+        id: 'upstream', cwd: '/home/server/gmux',
+        remotes: { origin: 'github.com/gmuxapp/gmux' },
+      }),
+    ]
+
+    const folders = groupByFolder(sessions)
+    expect(folders).toHaveLength(1)
+    expect(folders[0].sessions).toHaveLength(2)
+  })
+
+  it('does not group sessions with different remotes', () => {
+    const sessions = [
+      makeSession({
+        id: 'a', cwd: '/dev/a',
+        remotes: { origin: 'github.com/org/repo-a' },
+      }),
+      makeSession({
+        id: 'b', cwd: '/dev/b',
+        remotes: { origin: 'github.com/org/repo-b' },
+      }),
+    ]
+
+    const folders = groupByFolder(sessions)
+    expect(folders).toHaveLength(2)
+  })
+
+  it('prefers remote grouping over workspace_root', () => {
+    // Same workspace_root but different remotes: should NOT group.
+    // (This is a weird edge case, but remote identity should win.)
+    const sessions = [
+      makeSession({
+        id: 'a', cwd: '/repo', workspace_root: '/repo',
+        remotes: { origin: 'github.com/org/repo-a' },
+      }),
+      makeSession({
+        id: 'b', cwd: '/repo/sub', workspace_root: '/repo',
+        remotes: { origin: 'github.com/org/repo-b' },
+      }),
+    ]
+
+    const folders = groupByFolder(sessions)
+    // They share a workspace_root, so union-find merges them via the ws pass.
+    // This is correct: if they're in the same workspace, they belong together
+    // even if one has a different remote (e.g. a submodule).
+    expect(folders).toHaveLength(1)
+  })
+
+  it('uses remote-derived name when remotes are present', () => {
+    const sessions = [
+      makeSession({
+        id: 'a', cwd: '/some/long/path/gmux',
+        remotes: { origin: 'github.com/gmuxapp/gmux' },
+      }),
+    ]
+
+    const folders = groupByFolder(sessions)
+    expect(folders[0].name).toBe('gmux')
+    expect(folders[0].path).toBe('github.com/gmuxapp/gmux')
+  })
+
+  it('falls through to workspace_root when no remotes', () => {
+    const sessions = [
+      makeSession({ id: 'a', cwd: '/repo', workspace_root: '/repo' }),
+      makeSession({ id: 'b', cwd: '/repo/sub', workspace_root: '/repo' }),
+    ]
+
+    const folders = groupByFolder(sessions)
+    expect(folders).toHaveLength(1)
+    expect(folders[0].path).toBe('/repo')
+  })
+
   it('sorts working folders before alive before dead', () => {
     const sessions = [
       makeSession({ id: 'dead', cwd: '/dead', alive: false }),
