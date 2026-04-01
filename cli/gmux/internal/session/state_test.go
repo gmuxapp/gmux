@@ -152,3 +152,29 @@ func TestUnsubscribe(t *testing.T) {
 		t.Fatal("channel should be closed")
 	}
 }
+
+func TestEmitActivityThrottles(t *testing.T) {
+	s := New(Config{ID: "s", Command: []string{"echo"}, Kind: "generic"})
+	ch := s.Subscribe()
+	defer s.Unsubscribe(ch)
+
+	// First call should emit.
+	s.EmitActivity()
+	select {
+	case evt := <-ch:
+		if evt.Type != "activity" {
+			t.Fatalf("expected 'activity' event, got %q", evt.Type)
+		}
+	default:
+		t.Fatal("expected activity event from first call")
+	}
+
+	// Immediate second call should be throttled (no event).
+	s.EmitActivity()
+	select {
+	case evt := <-ch:
+		t.Fatalf("expected no event (throttled), got %q", evt.Type)
+	default:
+		// good, throttled
+	}
+}

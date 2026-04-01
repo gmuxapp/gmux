@@ -305,6 +305,9 @@ func TestClaudeParseNewLinesAssistantTextOnly(t *testing.T) {
 	if events[0].Status == nil || events[0].Status.Working {
 		t.Error("expected working=false status on text-only assistant")
 	}
+	if events[0].Unread == nil || !*events[0].Unread {
+		t.Error("expected unread=true on text-only assistant (turn complete)")
+	}
 }
 
 func TestClaudeParseNewLinesAssistantToolUse(t *testing.T) {
@@ -317,6 +320,9 @@ func TestClaudeParseNewLinesAssistantToolUse(t *testing.T) {
 	}
 	if events[0].Status == nil || !events[0].Status.Working {
 		t.Error("expected working=true for tool_use (agent loop continues)")
+	}
+	if events[0].Unread != nil {
+		t.Error("expected unread=nil for tool_use (still working)")
 	}
 }
 
@@ -345,6 +351,7 @@ func TestClaudeParseNewLinesAssistantTextAndToolUse(t *testing.T) {
 
 func TestClaudeParseNewLinesAssistantAborted(t *testing.T) {
 	// User pressed Esc — stop_reason="stop_sequence" with text content → idle.
+	// Still marks unread because the response contains text the user hasn't seen.
 	events := NewClaude().ParseNewLines([]string{
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I was saying..."}],"stop_reason":"stop_sequence"},"uuid":"a1"}`,
 	}, "")
@@ -353,6 +360,9 @@ func TestClaudeParseNewLinesAssistantAborted(t *testing.T) {
 	}
 	if events[0].Status == nil || events[0].Status.Working {
 		t.Error("expected working=false on stop_sequence (abort)")
+	}
+	if events[0].Unread == nil || !*events[0].Unread {
+		t.Error("expected unread=true (response has text content)")
 	}
 }
 

@@ -870,7 +870,7 @@ function App() {
   const [launchers, setLaunchers] = useState<LauncherDef[]>([])
   const [health, setHealth] = useState<HealthData | null>(null)
   const [sidebarVersion, forceUpdate] = useState(0) // re-render on sidebar state change
-  const { isActive: isSessionActive, handleActivity } = useActivityTracker()
+  const { isActive: isSessionActive, handleActivity, activityVersion } = useActivityTracker()
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   const terminalFocusRef = useRef<(() => void) | null>(null)
   const terminalPasteRef = useRef<((text: string) => void) | null>(null)
@@ -1012,7 +1012,7 @@ function App() {
     if (others.some(s => s.unread))          return 'unread'
     if (others.some(s => isSessionActive(s.id))) return 'active'
     return 'none'
-  }, [sessions, selectedId, isSessionActive])
+  }, [sessions, selectedId, isSessionActive, activityVersion])
 
   // Count of unread sessions (excluding selected). Used as a generation counter
   // so the hamburger badge re-animates when a new session becomes unread.

@@ -366,8 +366,6 @@ body {
 .session-dot-indicator.active {
   background: transparent;
   border: 1.5px solid var(--active);
-  opacity: 0.8;
-  transition: opacity 0.4s ease-out;
 }
 
 .session-dot-indicator.unread {
@@ -606,7 +604,6 @@ body {
 .session-dot.working {
   background: transparent;
   border: 1.5px solid var(--accent);
-  box-sizing: border-box;
 }
 .session-dot.error   { background: var(--status-error); }
 .session-dot.idle    { background: var(--text-muted); }
@@ -1262,9 +1259,6 @@ body {
   .session-dot-indicator.working,
   .session-dot-indicator.error {
     animation: none;
-  }
-  .session-dot-indicator.active {
-    transition: none;
   }
 }
 

@@ -8,11 +8,13 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
  * Returns:
  * - isActive(id): whether a session is currently showing the active indicator
  * - handleActivity(id): call when a session-activity event arrives
+ * - activityVersion: counter that increments on every activity state change;
+ *   use as a useMemo dependency to recompute derived state
  */
 export function useActivityTracker(fadeMs = 3000) {
   // Map of sessionId → timeout handle. Presence = active.
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
-  const [, tick] = useState(0)
+  const [activityVersion, tick] = useState(0)
 
   const handleActivity = useCallback((sessionId: string) => {
     const timers = timersRef.current
@@ -21,7 +23,7 @@ export function useActivityTracker(fadeMs = 3000) {
 
     timers.set(sessionId, setTimeout(() => {
       timers.delete(sessionId)
-      tick(n => n + 1) // trigger re-render
+      tick(n => n + 1) // trigger re-render when activity expires
     }, fadeMs))
 
     tick(n => n + 1) // trigger re-render to show immediately
@@ -36,5 +38,5 @@ export function useActivityTracker(fadeMs = 3000) {
     for (const t of timersRef.current.values()) clearTimeout(t)
   }, [])
 
-  return { isActive, handleActivity }
+  return { isActive, handleActivity, activityVersion }
 }

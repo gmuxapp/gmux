@@ -262,6 +262,9 @@ func TestParseNewLinesAssistantStop(t *testing.T) {
 	if events[0].Status == nil || events[0].Status.Working {
 		t.Error("expected working=false status on stop")
 	}
+	if events[0].Unread == nil || !*events[0].Unread {
+		t.Error("expected unread=true on stop (turn complete)")
+	}
 }
 
 func TestParseNewLinesAssistantToolUse(t *testing.T) {
@@ -287,6 +290,10 @@ func TestParseNewLinesAssistantAborted(t *testing.T) {
 	}
 	if events[0].Status == nil || events[0].Status.Working {
 		t.Error("expected working=false on aborted")
+	}
+	// Aborted = user-initiated cancel, not a completed turn. No unread.
+	if events[0].Unread != nil {
+		t.Error("expected unread=nil on aborted (user cancelled, no new content)")
 	}
 }
 

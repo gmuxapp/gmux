@@ -235,6 +235,41 @@ func TestUpdateBroadcasts(t *testing.T) {
 	}
 }
 
+func TestBroadcastDoesNotMutateState(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "shell", Alive: true})
+	ch, cancel := s.Subscribe()
+	defer cancel()
+
+	// Drain the initial upsert.
+	select {
+	case <-ch:
+	default:
+	}
+
+	// Broadcast a transient event.
+	s.Broadcast(Event{Type: "session-activity", ID: "s1"})
+
+	// Subscriber should receive the event.
+	select {
+	case ev := <-ch:
+		if ev.Type != "session-activity" || ev.ID != "s1" {
+			t.Fatalf("unexpected event: %+v", ev)
+		}
+		if ev.Session != nil {
+			t.Fatal("session-activity should not carry session data")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for broadcast event")
+	}
+
+	// Session state should be unchanged.
+	got, _ := s.Get("s1")
+	if !got.Alive {
+		t.Fatal("session state should not be mutated by Broadcast")
+	}
+}
+
 func TestSetTerminalSize(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Kind: "shell", Alive: true})
