@@ -238,8 +238,15 @@ func (c *Codex) ParseNewLines(lines []string, _ string) []adapter.FileEvent {
 					Status: &adapter.Status{Working: true},
 				})
 
-			case "task_complete", "turn_cancelled", "turn_aborted":
-				// Turn finished — clear status.
+			case "task_complete":
+				// Agent finished work — clear status, mark unread.
+				events = append(events, adapter.FileEvent{
+					Status: &adapter.Status{},
+					Unread: adapter.BoolPtr(true),
+				})
+
+			case "turn_cancelled", "turn_aborted":
+				// User-initiated cancel — clear status but no unread.
 				events = append(events, adapter.FileEvent{
 					Status: &adapter.Status{},
 				})

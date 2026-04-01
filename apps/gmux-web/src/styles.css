@@ -27,11 +27,14 @@ code {
   --border: oklch(22% 0.015 250);
   --border-strong: oklch(28% 0.015 250);
 
-  /* Accent — working state */
+  /* Accent — used for selection bars, buttons, links */
   --accent: oklch(72% 0.1 195);
 
-  /* Unread — warm amber, clearly distinct from cyan */
-  --unread: oklch(78% 0.12 70);
+  /* Unread — blue, signals "needs attention" */
+  --unread: oklch(72% 0.1 195);
+
+  /* Active — muted, for transient output activity */
+  --active: oklch(62% 0.025 250);
 
   /* Status */
   --status-error: oklch(65% 0.18 25);
@@ -355,8 +358,14 @@ body {
 }
 
 .session-dot-indicator.working {
-  background: var(--accent);
+  background: transparent;
+  border: 1.5px solid var(--accent);
   animation: subtle-pulse 2.5s ease-in-out infinite;
+}
+
+.session-dot-indicator.active {
+  background: transparent;
+  border: 1.5px solid var(--active);
 }
 
 .session-dot-indicator.unread {
@@ -377,8 +386,8 @@ body {
 @keyframes dot-arrival {
   0%   { transform: scale(1);   box-shadow: 0 0 0 0 transparent; }
   12%  { transform: scale(0.6); box-shadow: 0 0 0 0 transparent; }
-  42%  { transform: scale(1.9); box-shadow: 0 0 6px 2px oklch(78% 0.12 70 / 0.45); }
-  62%  { transform: scale(0.95); box-shadow: 0 0 3px 1px oklch(78% 0.12 70 / 0.2); }
+  42%  { transform: scale(1.9); box-shadow: 0 0 6px 2px oklch(72% 0.1 195 / 0.45); }
+  62%  { transform: scale(0.95); box-shadow: 0 0 3px 1px oklch(72% 0.1 195 / 0.2); }
   80%  { transform: scale(1.08); box-shadow: 0 0 0 0 transparent; }
   100% { transform: scale(1);   box-shadow: 0 0 0 0 transparent; }
 }
@@ -592,7 +601,10 @@ body {
   flex-shrink: 0;
 }
 
-.session-dot.working { background: var(--accent); }
+.session-dot.working {
+  background: transparent;
+  border: 1.5px solid var(--accent);
+}
 .session-dot.error   { background: var(--status-error); }
 .session-dot.idle    { background: var(--text-muted); }
 .session-dot.unread  { background: var(--unread); }
@@ -1152,7 +1164,16 @@ body {
     /* Ring in the page background so the dot reads cleanly against the button border */
     box-shadow: 0 0 0 1.5px var(--bg-base);
   }
-  .mobile-bottom-action.menu-btn.bg-working::after { background: var(--accent); }
+  .mobile-bottom-action.menu-btn.bg-working::after {
+    background: transparent;
+    border: 1.5px solid var(--accent);
+    box-sizing: border-box;
+  }
+  .mobile-bottom-action.menu-btn.bg-active::after {
+    background: transparent;
+    border: 1.5px solid var(--active);
+    box-sizing: border-box;
+  }
   .mobile-bottom-action.menu-btn.bg-error::after   { background: var(--status-error); }
   .mobile-bottom-action.menu-btn.bg-unread::after   { background: var(--unread); }
 

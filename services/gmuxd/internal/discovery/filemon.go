@@ -462,6 +462,9 @@ func (fm *FileMonitor) handleFileChange(path string) {
 					}
 				}
 			}
+			if evt.Unread != nil {
+				sess.Unread = *evt.Unread
+			}
 		}
 	})
 }

@@ -229,6 +229,9 @@ func TestCodexParseNewLinesTaskComplete(t *testing.T) {
 	if events[0].Status == nil || events[0].Status.Working {
 		t.Error("expected working=false")
 	}
+	if events[0].Unread == nil || !*events[0].Unread {
+		t.Error("expected unread=true on task_complete")
+	}
 }
 
 func TestCodexParseNewLinesTurnAborted(t *testing.T) {
@@ -240,6 +243,10 @@ func TestCodexParseNewLinesTurnAborted(t *testing.T) {
 	}
 	if events[0].Status == nil || events[0].Status.Working {
 		t.Error("expected working=false on turn_aborted")
+	}
+	// User-initiated cancel: no unread.
+	if events[0].Unread != nil {
+		t.Error("expected unread=nil on turn_aborted (user cancelled)")
 	}
 }
 

@@ -1,40 +1,64 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 /**
- * Detects a working→unread or error→unread transition and returns
- * 'arriving' for the duration of the CSS animation, then clears itself.
+ * Fires the "arriving" CSS animation whenever the dot transitions to 'unread'.
  *
- * Shared between the sidebar session dots and the mobile hamburger badge.
+ * Triggers on any state → unread transition (none, active, working, error).
+ *
+ * Optional `generation` parameter: when provided, a change in generation
+ * while the state is already 'unread' re-fires the animation. Used by the
+ * mobile hamburger badge so that a second session becoming unread still
+ * draws attention even though the aggregate state stays 'unread'.
  */
 export function useArrivalPulse(
-  currentState: 'working' | 'error' | 'unread' | 'none',
+  currentState: 'working' | 'error' | 'unread' | 'active' | 'none',
+  generation?: number,
 ): 'arriving' | null {
-  const prevRef = useRef(currentState)
+  const prevStateRef = useRef(currentState)
+  const prevGenRef = useRef(generation)
   const [arriving, setArriving] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  useEffect(() => {
-    const prev = prevRef.current
-    prevRef.current = currentState
-
-    if ((prev === 'working' || prev === 'error') && currentState === 'unread') {
-      // Cancel any in-flight timer from a previous arrival
-      if (timerRef.current) clearTimeout(timerRef.current)
-      setArriving(true)
-      // Match the CSS animation duration (520ms) + small buffer
-      timerRef.current = setTimeout(() => {
-        setArriving(false)
-        timerRef.current = null
-      }, 560)
-    } else if (currentState !== 'unread') {
-      // If state changed away from unread, cancel any pending arrival
-      if (timerRef.current) {
-        clearTimeout(timerRef.current)
-        timerRef.current = null
-      }
+  const fire = () => {
+    if (timerRef.current) clearTimeout(timerRef.current)
+    setArriving(true)
+    // Match the CSS animation duration (520ms) + small buffer
+    timerRef.current = setTimeout(() => {
       setArriving(false)
+      timerRef.current = null
+    }, 560)
+  }
+
+  const cancel = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
     }
-  }, [currentState])
+    setArriving(false)
+  }
+
+  useEffect(() => {
+    const prevState = prevStateRef.current
+    const prevGen = prevGenRef.current
+    prevStateRef.current = currentState
+    prevGenRef.current = generation
+
+    if (currentState === 'unread') {
+      // State just transitioned to unread
+      if (prevState !== 'unread') {
+        fire()
+        return
+      }
+      // State was already unread but generation increased (new unread session)
+      if (generation !== undefined && prevGen !== undefined && generation > prevGen) {
+        fire()
+        return
+      }
+    } else {
+      // Moved away from unread, cancel any in-flight animation
+      cancel()
+    }
+  }, [currentState, generation])
 
   // Cleanup on unmount
   useEffect(() => () => {
