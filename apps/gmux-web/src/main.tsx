@@ -10,6 +10,7 @@ import { TerminalView } from './terminal'
 import type { ITerminalOptions } from '@xterm/xterm'
 import { fetchTerminalConfig, mergeThemeConfig, resolveKeybinds, type ResolvedKeybind } from './config'
 import { useArrivalPulse } from './use-arrival-pulse'
+import { useActivityTracker } from './use-activity'
 
 import type { Session, Folder } from './types'
 import { groupByFolder } from './types'
@@ -290,11 +291,14 @@ function formatAge(iso: string): string {
 
 // ── Components ──
 
+type DotState = 'working' | 'error' | 'unread' | 'active' | 'none'
+
 /** Determine the dot indicator state for a session. */
-function sessionDotState(session: Session): 'working' | 'error' | 'unread' | 'none' {
+function sessionDotState(session: Session, isActive?: boolean): DotState {
   if (session.alive && session.status?.error)   return 'error'
   if (session.alive && session.status?.working) return 'working'
   if (session.unread) return 'unread'
+  if (isActive) return 'active'
   return 'none'
 }
 
@@ -302,16 +306,18 @@ function SessionItem({
   session,
   selected,
   resuming,
+  isActive,
   onClick,
   onClose,
 }: {
   session: Session
   selected: boolean
   resuming?: boolean
+  isActive?: boolean
   onClick: () => void
   onClose?: () => void
 }) {
-  const rawDotState = resuming ? 'working' : sessionDotState(session)
+  const rawDotState = resuming ? 'working' : sessionDotState(session, isActive)
   // Error is an enhanced unread: viewing the session acknowledges it.
   const dotState = (selected && rawDotState === 'error') ? 'none' : rawDotState
   const arrival = useArrivalPulse(dotState)
@@ -351,6 +357,7 @@ function FolderGroup({
   folder,
   selectedId,
   resumingId,
+  isSessionActive,
   onSelect,
   onCloseSession,
   onHideFolder,
@@ -358,6 +365,7 @@ function FolderGroup({
   folder: Folder
   selectedId: string | null
   resumingId: string | null
+  isSessionActive: (id: string) => boolean
   onSelect: (id: string) => void
   onCloseSession: (session: Session) => void
   onHideFolder: (cwd: string) => void
@@ -385,6 +393,7 @@ function FolderGroup({
             key={s.id}
             session={s}
             selected={selectedId === s.id}
+            isActive={isSessionActive(s.id)}
             onClick={() => onSelect(s.id)}
             onClose={() => onCloseSession(s)}
           />
@@ -428,6 +437,7 @@ function Sidebar({
   hiddenFolders,
   selectedId,
   resumingId,
+  isSessionActive,
   onSelect,
   onCloseSession,
   onHideFolder,
@@ -442,6 +452,7 @@ function Sidebar({
   hiddenFolders: Folder[]
   selectedId: string | null
   resumingId: string | null
+  isSessionActive: (id: string) => boolean
   onSelect: (id: string) => void
   onCloseSession: (session: Session) => void
   onHideFolder: (cwd: string) => void
@@ -483,6 +494,7 @@ function Sidebar({
               folder={f}
               selectedId={selectedId}
               resumingId={resumingId}
+              isSessionActive={isSessionActive}
               onSelect={(id) => {
                 onSelect(id)
                 onClose()
@@ -676,6 +688,7 @@ function MobileTerminalBar({
   ctrlArmed,
   altArmed,
   backgroundActivity,
+  unreadCount,
   onMenu,
   onSend,
   onPaste,
@@ -686,7 +699,8 @@ function MobileTerminalBar({
   canSend: boolean
   ctrlArmed: boolean
   altArmed: boolean
-  backgroundActivity: 'working' | 'error' | 'unread' | 'none'
+  backgroundActivity: DotState
+  unreadCount: number
   onMenu: () => void
   onSend: (data: string) => void
   onPaste: () => void
@@ -694,7 +708,7 @@ function MobileTerminalBar({
   onToggleAlt: () => void
   onFocusTerminal: () => void
 }) {
-  const arrival = useArrivalPulse(backgroundActivity)
+  const arrival = useArrivalPulse(backgroundActivity, unreadCount)
 
   // Prevent blur from stealing focus away from the terminal on mousedown,
   // while still allowing individual onClick handlers to refocus as needed.
@@ -856,6 +870,7 @@ function App() {
   const [launchers, setLaunchers] = useState<LauncherDef[]>([])
   const [health, setHealth] = useState<HealthData | null>(null)
   const [sidebarVersion, forceUpdate] = useState(0) // re-render on sidebar state change
+  const { isActive: isSessionActive, handleActivity } = useActivityTracker()
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   const terminalFocusRef = useRef<(() => void) | null>(null)
   const terminalPasteRef = useRef<((text: string) => void) | null>(null)
@@ -951,6 +966,12 @@ function App() {
           console.warn('session-remove: bad event', err)
         }
       })
+      source.addEventListener('session-activity', (e) => {
+        try {
+          const { id } = JSON.parse(e.data)
+          if (id) handleActivity(id)
+        } catch {}
+      })
       return () => source.close()
     }
   }, [])
@@ -984,13 +1005,21 @@ function App() {
   }, [sessions, selectedId])
 
   // Dot indicator for the hamburger: any *other* alive session that is busy, errored, or unread.
-  const backgroundActivity = useMemo((): 'working' | 'error' | 'unread' | 'none' => {
+  const backgroundActivity = useMemo((): DotState => {
     const others = sessions.filter(s => s.id !== selectedId && s.alive)
     if (others.some(s => s.status?.error))   return 'error'
     if (others.some(s => s.status?.working)) return 'working'
     if (others.some(s => s.unread))          return 'unread'
+    if (others.some(s => isSessionActive(s.id))) return 'active'
     return 'none'
-  }, [sessions, selectedId])
+  }, [sessions, selectedId, isSessionActive])
+
+  // Count of unread sessions (excluding selected). Used as a generation counter
+  // so the hamburger badge re-animates when a new session becomes unread.
+  const unreadCount = useMemo(
+    () => sessions.filter(s => s.id !== selectedId && s.alive && s.unread).length,
+    [sessions, selectedId],
+  )
 
   // Auto-select: pick first attachable session on initial load.
   const hasAutoSelected = useRef(false)
@@ -1202,6 +1231,7 @@ function App() {
         hiddenFolders={hiddenFolders}
         selectedId={selectedId}
         resumingId={resumingId}
+        isSessionActive={isSessionActive}
         onSelect={handleSelect}
         onCloseSession={handleCloseSession}
         onHideFolder={handleHideFolder}
@@ -1253,6 +1283,7 @@ function App() {
           ctrlArmed={ctrlArmed}
           altArmed={altArmed}
           backgroundActivity={backgroundActivity}
+          unreadCount={unreadCount}
           onMenu={() => setSidebarOpen(true)}
           onSend={handleMobileInput}
           onPaste={handleMobilePaste}
