@@ -250,9 +250,10 @@ func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.FileEvent 
 						Status: &adapter.Status{Working: true},
 					})
 				case "stop":
-					// Assistant finished its turn — clear status.
+					// Assistant finished its turn — clear status, mark unread.
 					events = append(events, adapter.FileEvent{
 						Status: &adapter.Status{},
+						Unread: adapter.BoolPtr(true),
 					})
 				case "aborted":
 					// User pressed Esc to cancel — agent is idle.

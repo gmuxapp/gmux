@@ -236,6 +236,14 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		}
 		sub.store.Upsert(sess)
 
+	case "activity":
+		// Transient signal: terminal produced output with no attached clients.
+		// Forward to the store's subscribers without mutating state.
+		sub.store.Broadcast(store.Event{
+			Type: "session-activity",
+			ID:   sessionID,
+		})
+
 	case "terminal_resize":
 		var resize struct {
 			Cols uint16 `json:"cols"`

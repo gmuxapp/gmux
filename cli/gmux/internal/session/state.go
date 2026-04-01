@@ -53,6 +53,9 @@ type State struct {
 
 	// SSE subscribers (not serialized)
 	subs []chan Event
+
+	// Throttle for activity events — at most one per interval.
+	lastActivity time.Time
 }
 
 // Event is sent over SSE to /events subscribers.
@@ -146,6 +149,23 @@ func (s *State) SetUnread(unread bool) {
 	}
 	s.Unread = unread
 	s.emit(Event{Type: "meta", Data: map[string]any{"unread": unread}})
+}
+
+// activityThrottle is the minimum interval between activity events.
+const activityThrottle = 2 * time.Second
+
+// EmitActivity sends a lightweight "activity" event to signal that
+// the terminal produced output. Throttled to at most once per 2s.
+// This is not stored state — it's a transient signal for the frontend.
+func (s *State) EmitActivity() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	if now.Sub(s.lastActivity) < activityThrottle {
+		return
+	}
+	s.lastActivity = now
+	s.emit(Event{Type: "activity", Data: nil})
 }
 
 // SetStatus updates the application status (from adapter or child).

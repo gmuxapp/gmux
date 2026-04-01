@@ -16,7 +16,11 @@ type SessionFileInfo struct {
 type FileEvent struct {
 	Title  string
 	Status *Status
+	Unread *bool // if non-nil, sets the session's unread flag
 }
+
+// BoolPtr returns a pointer to v. Convenience for setting FileEvent.Unread.
+func BoolPtr(v bool) *bool { return &v }
 
 // Launchable is implemented by adapters that want to expose one or more
 // launch presets in the UI.

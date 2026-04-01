@@ -292,6 +292,7 @@ func (c *Claude) ParseNewLines(lines []string, _ string) []adapter.FileEvent {
 				// or streaming null stop_reason). All mean idle.
 				events = append(events, adapter.FileEvent{
 					Status: &adapter.Status{},
+					Unread: adapter.BoolPtr(true),
 				})
 			// thinking-only = intermediate, no event.
 			}

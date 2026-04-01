@@ -531,7 +531,7 @@ func (s *Server) readPTY() {
 		s.mu.Unlock()
 
 		if !hasRemoteClients && s.state != nil {
-			s.state.SetUnread(true)
+			s.state.EmitActivity()
 		}
 
 		if localOut != nil {

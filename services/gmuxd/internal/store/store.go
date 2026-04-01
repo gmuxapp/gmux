@@ -254,6 +254,13 @@ func (s *Store) Subscribe() (<-chan Event, func()) {
 	return sub.ch, cancel
 }
 
+// Broadcast sends an event to all subscribers without modifying stored state.
+// Used for transient signals (e.g. session-activity) that the frontend needs
+// but that shouldn't be persisted in the session model.
+func (s *Store) Broadcast(ev Event) {
+	s.broadcast(ev)
+}
+
 func (s *Store) broadcast(ev Event) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
