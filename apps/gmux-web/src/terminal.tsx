@@ -97,12 +97,29 @@ function announceResize(ws: WebSocket | null, dims: TerminalSize): void {
   ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
 }
 
+/**
+ * Translate a character into its Ctrl+<key> sequence.
+ *
+ * Lowercase letters produce the traditional ASCII control code (Ctrl+a = 0x01).
+ * Uppercase letters imply Shift was held on the keyboard; since there is no
+ * traditional encoding for Ctrl+Shift+letter, we emit a CSI u (fixterms /
+ * Kitty keyboard protocol) sequence: ESC [ <codepoint> ; <modifiers> u
+ * where modifiers = 1 + Shift(1) + Ctrl(4) = 6.
+ */
 function ctrlSequenceFor(data: string): string | null {
   if (data.length !== 1) return null
 
   const ch = data
-  if (/[a-z]/i.test(ch)) {
-    return String.fromCharCode(ch.toUpperCase().charCodeAt(0) - 64)
+
+  // Uppercase letter → Ctrl+Shift via CSI u.
+  if (ch >= 'A' && ch <= 'Z') {
+    const codepoint = ch.toLowerCase().charCodeAt(0)
+    return `\x1b[${codepoint};6u`
+  }
+
+  // Lowercase letter → traditional control code.
+  if (ch >= 'a' && ch <= 'z') {
+    return String.fromCharCode(ch.charCodeAt(0) - 96)  // a=1, b=2, …, z=26
   }
 
   switch (ch) {

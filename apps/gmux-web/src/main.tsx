@@ -669,8 +669,8 @@ const IconRight = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><
 const IconWordLeft  = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="3.5" y1="3" x2="3.5" y2="11"/><path d="M13 7H6m0 0 3-3M6 7l3 3"/></svg>
 // →| jump to end of next word
 const IconWordRight = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="14.5" y1="3" x2="14.5" y2="11"/><path d="M5 7h7m0 0-3-3m3 3-3 3"/></svg>
-// ↵ return — stem drops from top-right, curves into a horizontal shaft pointing left
-const IconReturn = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M11.5 4.5V5.5Q11.5 7 9.5 7H3m0 0 3-3M3 7l3 3"/></svg>
+// ▶ send — filled triangle pointing right (submit / send message)
+const IconSend = () => <svg viewBox="0 0 14 14" width="16" height="16" fill="currentColor" stroke="none"><path d="M3 2.5l8 4.5-8 4.5V8.5L7.5 7 3 5.5z"/></svg>
 // 📋 paste — clipboard with down-arrow suggesting "paste into"
 const IconPaste = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><rect x="3" y="3" width="8" height="9" rx="1"/><path d="M5.5 3V2.5a1.5 1.5 0 0 1 3 0V3"/><path d="M7 7v3m0 0-1.5-1.5M7 10l1.5-1.5"/></svg>
 // 🔔 bell — used for notification permission button
@@ -833,7 +833,7 @@ function MobileTerminalBar({
 
         {ctrlArmed
           ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => { onPaste(); onFocusTerminal() }} title="Paste from clipboard"><IconPaste /></button>
-          : <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\n')} title="Enter"><IconReturn /></button>
+          : <button class="mobile-bottom-action send-btn" disabled={!canSend} onClick={() => tap('\r')} title="Send"><IconSend /></button>
         }
       </div>
     </div>

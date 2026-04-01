@@ -17,8 +17,25 @@ import {
 type SendFn = (data: string) => void
 
 /**
+ * Detect a touch-primary device (coarse pointer).
+ *
+ * Uses only the pointer media query, NOT maxTouchPoints, so the result
+ * matches the CSS `@media (pointer: coarse)` query that controls mobile
+ * toolbar visibility. A touchscreen laptop (pointer: fine, touchpoints > 0)
+ * correctly stays in desktop mode: Enter sends \r and there is no toolbar.
+ */
+function isTouchDevice(): boolean {
+  return window.matchMedia('(pointer: coarse)').matches
+}
+
+/**
  * Attach custom key event handler to an xterm Terminal.
  * Must be called before AttachAddon is loaded so it intercepts first.
+ *
+ * On mobile (touch) devices, bare Enter sends \n (newline) instead of \r
+ * (carriage return / submit). This lets mobile users compose multi-line
+ * input; the dedicated send button in the mobile toolbar handles submission.
+ * Desktop behavior is unchanged: Enter sends \r as usual.
  *
  * Paste (Ctrl+V / right-click / middle-click) is handled separately by
  * attachPasteHandler, which intercepts at the container level.
@@ -29,6 +46,17 @@ export function attachKeyboardHandler(
   keybinds: ResolvedKeybind[],
 ): void {
   term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
+    // Mobile Enter → newline (not submit).
+    // Bare Enter with no modifiers on a touch device sends \n so the user
+    // can compose multi-line messages. The mobile toolbar send button sends
+    // \r when they are ready to submit.
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey
+        && isTouchDevice()) {
+      if (ev.type === 'keydown') send('\n')
+      ev.preventDefault()
+      return false
+    }
+
     // Check each resolved keybind against the event.
     for (const kb of keybinds) {
       if (!eventMatchesKeybind(ev, kb)) continue
@@ -93,16 +121,28 @@ function executeAction(kb: ResolvedKeybind, term: Terminal, send: SendFn): boole
 /**
  * Normalize and optionally bracket-wrap text for pasting into a terminal.
  * Shared by the DOM paste handler and the mobile paste button.
+ *
+ * With bracketedPasteMode on, the receiving app owns newline handling, so
+ * we normalize to \r inside the brackets (standard terminal convention).
+ *
+ * With bracketedPasteMode off, newlines are kept as \n. This preserves the
+ * distinction between \n (literal newline) and \r (Enter / submit) so that
+ * applications running in raw mode (coding agents, editors) can treat pasted
+ * newlines as content rather than as command submissions. Shells that treat
+ * both \n and \r as accept-line are unaffected.
  */
 export function formatPasteText(text: string, bracketedPasteMode: boolean): string {
-  // Normalize line endings to \r (carriage return = terminal Enter).
-  const normalized = text.replace(/\r?\n/g, '\r')
   if (bracketedPasteMode) {
+    // Normalize to \r inside brackets (standard terminal paste convention).
+    const normalized = text.replace(/\r?\n/g, '\r')
     // Sanitize ESC so nothing inside the text can break out of the bracket.
     const sanitized = normalized.replace(/\x1b/g, '\u241b')
     return `\x1b[200~${sanitized}\x1b[201~`
   }
-  return normalized
+
+  // Non-bracketed: keep \n so pasted newlines stay as newlines.
+  // Normalize \r\n → \n and bare \r → \n for consistency.
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
 }
 
 /**
@@ -119,16 +159,13 @@ export function formatPasteText(text: string, bracketedPasteMode: boolean): stri
  * - We need to own the bracketed-paste / newline conversion ourselves so it is
  *   always correct regardless of what mobile modifier state is active.
  *
- * Newline handling (matches xterm's prepareTextForTerminal + bracketTextForPaste):
- * - \r?\n is always converted to \r (carriage return) first. This is the
- *   terminal "Enter" signal and is what PTY applications expect regardless of
- *   bracketed mode.
- * - Bracketed paste mode (CSI ? 2004 h): the normalized text is then wrapped
- *   in \x1b[200~ ... \x1b[201~, and any ESC characters inside it are replaced
- *   with U+241B (SYMBOL FOR ESCAPE). This prevents an embedded \x1b[201~
- *   from terminating the bracket early and injecting commands.
- * - Non-bracketed mode: the \r-normalized text is sent as-is. Each \r becomes
- *   a command submission, which is expected raw-PTY behaviour.
+ * Newline handling:
+ * - Bracketed paste mode (CSI ? 2004 h): \r?\n → \r (standard convention),
+ *   then wrapped in \x1b[200~ ... \x1b[201~. ESC characters inside are
+ *   replaced with U+241B to prevent bracket escape.
+ * - Non-bracketed mode: newlines stay as \n so that applications running in
+ *   raw mode can distinguish pasted newlines (\n) from Enter (\r). Shells
+ *   that treat both as accept-line are unaffected.
  *
  * `send` should be sendRawInput (not sendInput) so that paste is never
  * transformed by the ctrl/alt modifier logic.

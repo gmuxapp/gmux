@@ -1062,7 +1062,33 @@ body {
   z-index: 90;
 }
 
+/* Narrow viewport: compact padding and smaller text. */
 @media (max-width: 640px) {
+  .main-header {
+    padding: 0 12px;
+  }
+
+  .main-header-meta {
+    display: none;
+  }
+
+  .main-header-status {
+    font-size: 11px;
+  }
+
+  .terminal-container .xterm {
+    padding: 0 4px 4px;
+  }
+
+  .session-item {
+    padding: 8px 10px 8px 14px;
+  }
+}
+
+/* Touch devices: sidebar becomes an overlay, mobile toolbar appears.
+   Uses pointer:coarse so tablets in landscape still get touch controls,
+   while a desktop user with a narrow window keeps the sidebar visible. */
+@media (pointer: coarse) {
   .sidebar {
     position: fixed;
     left: 0;
@@ -1083,22 +1109,6 @@ body {
 
   .main-panel {
     width: 100%;
-  }
-
-  .main-header {
-    padding: 0 12px;
-  }
-
-  .main-header-meta {
-    display: none;
-  }
-
-  .main-header-status {
-    font-size: 11px;
-  }
-
-  .terminal-container .xterm {
-    padding: 0 4px 4px;
   }
 
   .mobile-bottom-bar {
@@ -1201,8 +1211,8 @@ body {
     color: var(--text);
   }
 
-  .session-item {
-    padding: 8px 10px 8px 14px;
+  .mobile-bottom-action.send-btn {
+    color: var(--accent);
   }
 }
 
