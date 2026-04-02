@@ -382,6 +382,27 @@ export function TerminalView({
     const disposePasteHandler = attachPasteHandler(term, containerRef.current!, sendRawInput)
     const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
 
+    // OSC 52 clipboard: applications (e.g. pi /copy) write
+    //   ESC ] 52 ; <selection> ; <base64-payload> BEL
+    // to set the system clipboard. The payload is UTF-8 text encoded as
+    // base64. Decode and write via the Clipboard API.
+    const osc52Disposable = term.parser.registerOscHandler(52, (data) => {
+      const semi = data.indexOf(';')
+      if (semi < 0) return false
+      const payload = data.substring(semi + 1)
+      if (payload === '?') return false // clipboard read request; not supported
+      try {
+        // atob() decodes base64 to a Latin-1 binary string. The underlying
+        // bytes are UTF-8, so we must re-decode through TextDecoder.
+        const bytes = Uint8Array.from(atob(payload), c => c.charCodeAt(0))
+        const text = new TextDecoder().decode(bytes)
+        navigator.clipboard.writeText(text).catch(() => {})
+      } catch {
+        // invalid base64; ignore
+      }
+      return true
+    })
+
     const scrollDisposable = term.onScroll(() => {
       const buf = term.buffer.active
       setScrolledUp(buf.baseY - buf.viewportY > SCROLL_THRESHOLD)
@@ -570,6 +591,7 @@ export function TerminalView({
       shell?.removeEventListener('touchcancel', clearTouchPan, true)
       disposePasteHandler()
       disposeMobileHandler()
+      osc52Disposable.dispose()
       dataDisposable.dispose()
       scrollDisposable.dispose()
       setScrolledUp(false)
