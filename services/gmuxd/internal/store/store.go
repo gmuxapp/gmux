@@ -33,6 +33,10 @@ type Session struct {
 	TerminalRows  uint16            `json:"terminal_rows,omitempty"`
 	Stale         bool              `json:"stale,omitempty"`
 
+	// Slug is a stable identifier for URL routing.
+	// Unique within a (project, kind) pair.
+	Slug string `json:"slug,omitempty"`
+
 	// ── Internal fields (excluded from API via MarshalJSON) ──
 
 	// Title inputs: resolveTitle merges these by precedence into Title
@@ -42,6 +46,7 @@ type Session struct {
 
 	// ResumeKey is the session-file ID used for resume. The derived
 	// Resumable bool (API-visible) is what the frontend needs.
+	// Also used by project session arrays for stable membership.
 	ResumeKey string `json:"resume_key,omitempty"`
 
 	// BinaryHash is the sha256 of the gmux binary that owns this session.
@@ -74,6 +79,8 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		TerminalCols  uint16            `json:"terminal_cols,omitempty"`
 		TerminalRows  uint16            `json:"terminal_rows,omitempty"`
 		Stale         bool              `json:"stale,omitempty"`
+		Slug          string            `json:"slug,omitempty"`
+		ResumeKey     string            `json:"resume_key,omitempty"`
 	}
 	return json.Marshal(wire{
 		ID: s.ID, CreatedAt: s.CreatedAt, Command: s.Command,
@@ -84,6 +91,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		Unread: s.Unread, Resumable: s.Resumable,
 		SocketPath: s.SocketPath, TerminalCols: s.TerminalCols,
 		TerminalRows: s.TerminalRows, Stale: s.Stale,
+		Slug: s.Slug, ResumeKey: s.ResumeKey,
 	})
 }
 

@@ -230,6 +230,7 @@ func (s *Server) serve() {
 	mux.HandleFunc("GET /meta", s.handleMeta)
 	mux.HandleFunc("GET /scrollback/text", s.handleScrollbackText)
 	mux.HandleFunc("PUT /status", s.handlePutStatus)
+	mux.HandleFunc("PUT /slug", s.handlePutSlug)
 	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("POST /kill", s.handleKill)
 
@@ -290,6 +291,21 @@ func (s *Server) handlePutStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.state.SetStatus(&status)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePutSlug(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 256))
+	if err != nil {
+		http.Error(w, "read error", http.StatusBadRequest)
+		return
+	}
+	slug := string(body)
+	if slug == "" {
+		http.Error(w, "slug is empty", http.StatusBadRequest)
+		return
+	}
+	s.state.SetSlug(slug)
 	w.WriteHeader(http.StatusNoContent)
 }
 

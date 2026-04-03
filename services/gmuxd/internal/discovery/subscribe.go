@@ -179,6 +179,7 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			AdapterTitle *string `json:"adapter_title"`
 			Subtitle     *string `json:"subtitle"`
 			Unread       *bool   `json:"unread"`
+			Slug         *string `json:"slug"`
 		}
 		if err := json.Unmarshal(data, &meta); err != nil {
 			log.Printf("subscribe: %s: bad meta event: %v", sessionID, err)
@@ -194,13 +195,14 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			if meta.Subtitle != nil {
 				sess.Subtitle = *meta.Subtitle
 			}
-			if meta.Unread != nil {
+				if meta.Unread != nil {
 				sess.Unread = *meta.Unread
-				// Clear error state when user views the session (unread=false).
-				// Error is an enhanced unread indicator; viewing acknowledges it.
 				if !*meta.Unread && sess.Status != nil && sess.Status.Error {
 					sess.Status.Error = false
 				}
+			}
+			if meta.Slug != nil && *meta.Slug != "" {
+				sess.Slug = *meta.Slug
 			}
 		})
 

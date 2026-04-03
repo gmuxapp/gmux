@@ -25,6 +25,7 @@ export interface Session {
   socket_path: string
   terminal_cols?: number
   terminal_rows?: number
+  slug?: string
   stale?: boolean
 }
 
