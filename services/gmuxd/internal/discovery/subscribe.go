@@ -195,7 +195,7 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			if meta.Subtitle != nil {
 				sess.Subtitle = *meta.Subtitle
 			}
-				if meta.Unread != nil {
+			if meta.Unread != nil {
 				sess.Unread = *meta.Unread
 				if !*meta.Unread && sess.Status != nil && sess.Status.Error {
 					sess.Status.Error = false

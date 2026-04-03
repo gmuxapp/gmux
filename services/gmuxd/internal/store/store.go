@@ -38,7 +38,10 @@ type Session struct {
 	Stale         bool              `json:"stale,omitempty"`
 
 	// Slug is a stable identifier for URL routing.
-	// Unique within a (project, kind) pair.
+	// Auto-derived from resume_key, command, or session ID when the
+	// adapter doesn't provide one. Unique within a kind (not per-project,
+	// since project assignment can change). Adapters can override via
+	// the runner's PUT /slug endpoint.
 	Slug string `json:"slug,omitempty"`
 
 	// ── Internal fields (excluded from API via MarshalJSON) ──

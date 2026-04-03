@@ -148,7 +148,7 @@ async function launchSession(launcherId: string, cwd?: string): Promise<void> {
 }
 
 
-// ── LaunchButton — transforms into inline menu on click ──
+// ── LaunchButton - transforms into inline menu on click ──
 //
 // Idle:      [+]
 // Open:      [+ button becomes default item] → other items appear below
@@ -669,16 +669,16 @@ const IconDown  = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><
 const IconLeft  = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M10 7H4m0 0 3-3M4 7l3 3"/></svg>
 const IconRight = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M4 7h6m0 0-3-3m3 3-3 3"/></svg>
 
-// Word-jump: 18×14 viewbox. Bar height matches arrow span (y 3–11). 7-unit shaft, 2.5-unit gap to bar.
+// Word-jump: 18×14 viewbox. Bar height matches arrow span (y 3-11). 7-unit shaft, 2.5-unit gap to bar.
 // |← jump to start of previous word
 const IconWordLeft  = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="3.5" y1="3" x2="3.5" y2="11"/><path d="M13 7H6m0 0 3-3M6 7l3 3"/></svg>
 // →| jump to end of next word
 const IconWordRight = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="14.5" y1="3" x2="14.5" y2="11"/><path d="M5 7h7m0 0-3-3m3 3-3 3"/></svg>
-// ▶ send — filled triangle pointing right (submit / send message)
+// ▶ send - filled triangle pointing right (submit / send message)
 const IconSend = () => <svg viewBox="0 0 14 14" width="16" height="16" fill="currentColor" stroke="none"><path d="M3 2.5l8 4.5-8 4.5V8.5L7.5 7 3 5.5z"/></svg>
-// 📋 paste — clipboard with down-arrow suggesting "paste into"
+// 📋 paste - clipboard with down-arrow suggesting "paste into"
 const IconPaste = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><rect x="3" y="3" width="8" height="9" rx="1"/><path d="M5.5 3V2.5a1.5 1.5 0 0 1 3 0V3"/><path d="M7 7v3m0 0-1.5-1.5M7 10l1.5-1.5"/></svg>
-// 🔔 bell — used for notification permission button
+// 🔔 bell - used for notification permission button
 const IconBell = ({ muted }: { muted?: boolean }) => (
   <svg viewBox="0 0 14 14" width="14" height="14" {...S} style={{ opacity: muted ? 0.4 : 1 }}>
     <path d="M7 2a4 4 0 0 1 4 4v2.5l1 1.5H2l1-1.5V6a4 4 0 0 1 4-4Z"/>
@@ -731,7 +731,7 @@ function MobileTerminalBar({
   //  • Pointer leaving the button before release: solved with setPointerCapture so
   //    pointerup always fires on the element that started the hold.
   //  • Race between clearHold() and a queued timer callback calling setHoldWordMode(true):
-  //    solved with a generation counter — the callback checks gen before touching state.
+  //    solved with a generation counter - the callback checks gen before touching state.
   const [holdWordMode, setHoldWordMode] = useState(false)
   const holdTimer1   = useRef<ReturnType<typeof setTimeout>  | null>(null)
   const holdTimer2   = useRef<ReturnType<typeof setTimeout>  | null>(null)
@@ -757,7 +757,7 @@ function MobileTerminalBar({
       holdInterval.current = setInterval(() => tap(arrowSeq), 50)
       // Phase 2: switch to word navigation
       holdTimer2.current = setTimeout(() => {
-        if (holdGen.current !== gen) return          // clearHold already ran — don't override false→true
+        if (holdGen.current !== gen) return          // clearHold already ran - don't override false→true
         clearInterval(holdInterval.current!)
         holdInterval.current = null
         setHoldWordMode(true)
@@ -868,7 +868,7 @@ function App() {
 
   const loc = useLocation()
   const [sessions, setSessions] = useState<Session[]>([])
-  const [selectedId, setSelectedIdRaw] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [connState, setConnState] = useState<ConnectionState>('connecting')
   const [ctrlArmed, setCtrlArmed] = useState(false)
@@ -878,23 +878,15 @@ function App() {
   const [sidebarVersion, forceUpdate] = useState(0) // re-render on sidebar state change
   const { isActive: isSessionActive, handleActivity, activityVersion } = useActivityTracker()
 
-  // URL-aware session selection: push URL when selecting, resolve URL on load.
-  const setSelectedId = useCallback((id: string | null) => {
-    setSelectedIdRaw(id)
-    if (!id) return
-    // Find the session and its project to build the URL.
-    const sess = sessions.find(s => s.id === id)
-    if (!sess) return
-    const project = matchSession(sess, sidebarState.configured)
-    if (!project) return
-    const url = sessionPath(project.slug, sess)
-    if (loc.path !== url) loc.route(url, true)
-  }, [sessions, sidebarVersion, loc])
+  // Ref for selectedId so effects can read the latest value without
+  // adding it to their dependency arrays (avoids circular triggers).
+  const selectedIdRef = useRef(selectedId)
+  selectedIdRef.current = selectedId
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   const terminalFocusRef = useRef<(() => void) | null>(null)
   const terminalPasteRef = useRef<((text: string) => void) | null>(null)
 
-  // Notification permission — not reactive, so we keep a tick to force a re-read after
+  // Notification permission - not reactive, so we keep a tick to force a re-read after
   // requestPermission() resolves.
   const [, forceNotifPermUpdate] = useState(0)
   const notifPermission: NotifPermission = 'Notification' in window ? Notification.permission : 'unavailable'
@@ -947,7 +939,7 @@ function App() {
       let sseConnected = false
       source.addEventListener('open', () => {
         if (sseConnected) {
-          // Reconnected after a drop — do a full refresh to catch missed events
+          // Reconnected after a drop - do a full refresh to catch missed events
           sidebarState.fetchProjects()
           fetchSessions().then(list => setSessions(list)).catch(() => {})
         }
@@ -1039,33 +1031,44 @@ function App() {
     [sessions, selectedId],
   )
 
-  // URL-based session resolution: on initial load, try to resolve the URL path
-  // to a session. Falls back to auto-select if URL doesn't match.
-  const hasAutoSelected = useRef(false)
-  useEffect(() => {
-    if (hasAutoSelected.current || filteredSessions.length === 0) return
-    if (selectedId) { hasAutoSelected.current = true; return }
+  // --- URL <-> selection sync ---
+  // Two effects form a bidirectional binding between the URL bar and selectedId.
+  // Effect A: URL changes (initial load, browser back/forward) resolve to a session.
+  // Effect B: selection or session data changes update the URL bar.
+  // Loop prevention: effects check whether the value actually changed before writing.
 
-    // Try URL resolution first.
+  // Effect A: URL -> selection.
+  useEffect(() => {
+    if (filteredSessions.length === 0) return
     const parsed = parseSessionPath(loc.path)
     if (parsed.project) {
       const resolved = resolveSessionFromPath(parsed, sidebarState.configured, filteredSessions)
-      if (resolved) {
-        hasAutoSelected.current = true
-        setSelectedIdRaw(resolved) // don't push URL back, we're already on it
+      if (resolved && resolved !== selectedIdRef.current) {
+        setSelectedId(resolved)
         return
       }
     }
+    // No URL match: auto-select if nothing is selected yet.
+    if (!selectedIdRef.current) {
+      const best = filteredSessions.find(s => s.alive && s.socket_path)
+      if (best) setSelectedId(best.id)
+    }
+  }, [loc.path, filteredSessions, sidebarVersion])
 
-    // Fallback: pick first attachable session.
-    hasAutoSelected.current = true
-    const best = filteredSessions.find(s => s.alive && s.socket_path)
-    if (best) setSelectedId(best.id)
-  }, [filteredSessions, selectedId, sidebarVersion])
+  // Effect B: selection -> URL.
+  useEffect(() => {
+    if (!selectedId) return
+    const sess = sessions.find(s => s.id === selectedId)
+    if (!sess) return
+    const project = matchSession(sess, sidebarState.configured)
+    if (!project) return
+    const url = sessionPath(project.slug, sess)
+    if (loc.path !== url) loc.route(url, true) // replace, don't create history entries
+  }, [selectedId, sessions, sidebarVersion])
 
   // --- Actions: send to backend, wait for SSE. No optimistic updates. ---
 
-  // resumingId is pure UI state — shows a spinner while waiting for the
+  // resumingId is pure UI state - shows a spinner while waiting for the
   // backend to confirm the session is alive. Not session state.
   const [resumingId, setResumingId] = useState<string | null>(null)
 
@@ -1109,7 +1112,7 @@ function App() {
     }
   }, [sessions, resumingId])
 
-  // Resume timeout — clear after 10s if the session never came alive.
+  // Resume timeout - clear after 10s if the session never came alive.
   useEffect(() => {
     if (!resumingId) return
     const t = setTimeout(() => setResumingId(null), 10_000)
@@ -1282,7 +1285,7 @@ function App() {
           <div class="state-message">
             <div class="state-icon">⋯</div>
             <div class="state-title">Connecting</div>
-            <div class="state-subtitle">Reaching gmuxd…</div>
+            <div class="state-subtitle">Reaching gmuxd...</div>
           </div>
         ) : connState === 'error' ? (
           <div class="state-message">

@@ -354,6 +354,40 @@ func TestSlugStableOnUpdate(t *testing.T) {
 	}
 }
 
+func TestSlugFreedAfterRemove(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Command: []string{"pi"}})
+	s1, _ := s.Get("s1")
+	originalSlug := s1.Slug // should be "pi"
+
+	s.Remove("s1")
+
+	// New session with same derived slug should get the slug without a suffix.
+	s.Upsert(Session{ID: "s2", Kind: "pi", Command: []string{"pi"}})
+	s2, _ := s.Get("s2")
+	if s2.Slug != originalSlug {
+		t.Fatalf("expected slug %q to be reusable after remove, got %q", originalSlug, s2.Slug)
+	}
+}
+
+func TestSlugAdapterOverrideViaUpdate(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Command: []string{"pi"}})
+	original, _ := s.Get("s1")
+	if original.Slug != "pi" {
+		t.Fatalf("expected auto-derived slug 'pi', got %q", original.Slug)
+	}
+
+	// Adapter provides a slug later via meta event.
+	s.Update("s1", func(sess *Session) {
+		sess.Slug = "fix-auth-bug"
+	})
+	updated, _ := s.Get("s1")
+	if updated.Slug != "fix-auth-bug" {
+		t.Fatalf("expected adapter slug 'fix-auth-bug', got %q", updated.Slug)
+	}
+}
+
 func TestSetTerminalSize(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Kind: "shell", Alive: true})
