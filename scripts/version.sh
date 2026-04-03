@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Consume .changesets/*.md files, update changelog.mdx, print new version.
+# Scan merged PRs since the last tag, generate release notes, open a PR.
 #
-# This script is called by the version workflow. It can also be run
-# locally to preview what the next release will look like.
+# PR titles must follow conventional commits:
+#   feat: ...     → minor bump
+#   fix: ...      → patch bump
+#   feat!: ...    → major bump (breaking)
+#   fix!: ...     → major bump (breaking)
+#
+# Other prefixes (ci:, docs:, refactor:, etc.) are not releasable.
 #
 # Usage:
 #   scripts/version.sh           # apply changes
@@ -11,69 +16,114 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CHANGELOG="$ROOT/apps/website/src/content/docs/changelog.mdx"
-CHANGESETS_DIR="$ROOT/.changesets"
 
 DRY_RUN=false
 if [[ "${1:-}" == "--dry-run" ]]; then
   DRY_RUN=true
 fi
 
-# ── Collect changeset files ──
+# ── Skip release commits ──
 
-shopt -s nullglob
-files=("$CHANGESETS_DIR"/*.md)
-shopt -u nullglob
-
-# Filter out README.md
-changesets=()
-for f in "${files[@]}"; do
-  [[ "$(basename "$f")" == "README.md" ]] && continue
-  changesets+=("$f")
-done
-
-if [[ ${#changesets[@]} -eq 0 ]]; then
-  echo "No changesets found." >&2
+# Skip if HEAD is a release commit (squash merge: "release: vX.Y.Z",
+# merge commit: "Merge pull request #N from .../release/next").
+head_msg=$(git log -1 --format='%s')
+if [[ "$head_msg" =~ ^release:\ v[0-9] ]] || [[ "$head_msg" =~ release/next ]]; then
+  echo "Release commit, skipping." >&2
   exit 0
 fi
 
-# ── Validate and determine bump level (highest wins) ──
+# ── Find PRs since last tag ──
 
-bump="patch"
-errors=()
-for f in "${changesets[@]}"; do
-  name="$(basename "$f")"
-  # Parse bump from YAML frontmatter (between --- lines)
-  level=$(awk '/^---$/{n++; next} n==1 && /^bump:/{print $2}' "$f" | tr -d '[:space:]')
-  case "$level" in
+last_tag=$(git tag -l 'v*' | sort -V | tail -1)
+
+if [[ -z "$last_tag" ]]; then
+  # No tags yet; scan entire history.
+  git_range="HEAD"
+  last_tag="v0.0.0"
+else
+  git_range="${last_tag}..HEAD"
+fi
+
+pr_nums=()
+while IFS= read -r line; do
+  if [[ "$line" =~ \(#([0-9]+)\) ]]; then
+    pr_nums+=("${BASH_REMATCH[1]}")
+  elif [[ "$line" =~ ^Merge\ pull\ request\ #([0-9]+) ]]; then
+    pr_nums+=("${BASH_REMATCH[1]}")
+  fi
+done < <(git log "${git_range}" --format='%s' --first-parent)
+
+# Deduplicate and sort.
+if [[ ${#pr_nums[@]} -gt 0 ]]; then
+  mapfile -t pr_nums < <(printf '%s\n' "${pr_nums[@]}" | sort -un)
+fi
+
+# ── Classify PRs by conventional commit prefix ──
+
+remote_url=$(git remote get-url origin 2>/dev/null || true)
+repo_url=$(echo "$remote_url" | sed -E 's|\.git$||; s|^git@github\.com:|https://github.com/|')
+
+bump="none"
+declare -A pr_bumps
+declare -A pr_titles
+declare -A pr_bodies
+breaking_items=()
+feature_items=()
+fix_items=()
+
+cc_re='^(feat|fix)(\([^)]+\))?(!)?: .+$'
+
+for pr_num in "${pr_nums[@]}"; do
+  pr_json=$(gh pr view "$pr_num" --json title,body 2>/dev/null || echo '{}')
+  title=$(echo "$pr_json" | jq -r '.title // ""')
+  body=$(echo "$pr_json" | jq -r '.body // ""')
+
+  # Parse conventional commit prefix: type(scope)!: description
+  if [[ "$title" =~ $cc_re ]]; then
+    type="${BASH_REMATCH[1]}"
+    breaking="${BASH_REMATCH[3]}"
+  else
+    # Not a releasable PR (ci:, docs:, refactor:, etc.)
+    continue
+  fi
+
+  # Determine bump level.
+  if [[ -n "$breaking" ]]; then
+    bump_level="major"
+  elif [[ "$type" == "feat" ]]; then
+    bump_level="minor"
+  else
+    bump_level="patch"
+  fi
+
+  pr_bumps[$pr_num]="$bump_level"
+  pr_titles[$pr_num]="$title"
+  pr_bodies[$pr_num]="$body"
+
+  # Track overall bump (highest wins).
+  case "$bump_level" in
     major) bump="major" ;;
     minor) [[ "$bump" != "major" ]] && bump="minor" ;;
-    patch) ;;
-    "") errors+=("$name: missing 'bump' field in frontmatter") ;;
-    *) errors+=("$name: invalid bump level '$level' (expected patch, minor, or major)") ;;
+    patch) [[ "$bump" == "none" ]] && bump="patch" ;;
   esac
 
-  # Validate that the body isn't empty
-  body=$(awk '/^---$/{n++; next} n>=2{print}' "$f" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba}')
-  if [[ -z "$body" ]]; then
-    errors+=("$name: empty body (write the changelog entry after the --- frontmatter)")
-  fi
+  # Build PR list item.
+  item="- ${title} ([#${pr_num}](${repo_url}/pull/${pr_num}))"
+  case "$bump_level" in
+    major) breaking_items+=("$item") ;;
+    minor) feature_items+=("$item") ;;
+    patch) fix_items+=("$item") ;;
+  esac
 done
 
-if [[ ${#errors[@]} -gt 0 ]]; then
-  echo "Changeset validation errors:" >&2
-  for err in "${errors[@]}"; do
-    echo "  - $err" >&2
-  done
-  exit 1
+if [[ "$bump" == "none" ]]; then
+  echo "No releasable PRs since ${last_tag}." >&2
+  exit 0
 fi
 
 # ── Compute new version ──
 
-# Use the highest semver tag across all branches, not just ancestors of HEAD.
-current=$(git tag -l 'v*' | sort -V | tail -1)
-current="${current:-v0.0.0}"
-current="${current#v}"
-
+current="${last_tag#v}"
 IFS='.' read -r major minor patch_v <<< "$current"
 case "$bump" in
   major) major=$((major + 1)); minor=0; patch_v=0 ;;
@@ -82,67 +132,14 @@ case "$bump" in
 esac
 new_version="$major.$minor.$patch_v"
 
-# ── Map changesets to PRs ──
+# ── Build LLM input ──
 
-# Derive the GitHub repo URL for PR links.
-remote_url=$(git remote get-url origin 2>/dev/null || true)
-repo_url=$(echo "$remote_url" | sed -E 's|\.git$||; s|^git@github\.com:|https://github.com/|')
-
-declare -A pr_bumps       # pr_num -> highest bump level (major > minor > patch)
-declare -A pr_changelogs  # pr_num -> concatenated changeset bodies
-
-for f in "${changesets[@]}"; do
-  file_bump=$(awk '/^---$/{n++; next} n==1 && /^bump:/{print $2}' "$f" | tr -d '[:space:]')
-  body=$(awk '/^---$/{n++; next} n>=2{print}' "$f")
-  body=$(echo "$body" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba}')
-
-  # Find the PR that introduced this changeset (from merge commit message).
-  pr_num=""
-  commit_msg=$(git log --diff-filter=A -1 --format='%s' -- "$f" 2>/dev/null || true)
-  if [[ "$commit_msg" =~ \(#([0-9]+)\) ]]; then
-    pr_num="${BASH_REMATCH[1]}"
-  fi
-
-  # Track highest bump per PR.
-  if [[ -n "$pr_num" ]]; then
-    existing="${pr_bumps[$pr_num]:-}"
-    case "$file_bump" in
-      major) pr_bumps[$pr_num]="major" ;;
-      minor) [[ "$existing" != "major" ]] && pr_bumps[$pr_num]="minor" ;;
-      patch) [[ -z "$existing" ]] && pr_bumps[$pr_num]="patch" ;;
-    esac
-    pr_changelogs[$pr_num]+="$body"$'\n'
-  fi
-done
-
-# ── Fetch PR content and build list ──
-
-declare -A pr_titles
 llm_input=""
-breaking_items=()
-feature_items=()
-fix_items=()
-
 for pr_num in $(echo "${!pr_bumps[@]}" | tr ' ' '\n' | sort -n); do
-  pr_json=$(gh pr view "$pr_num" --json title,body 2>/dev/null || echo '{}')
-  pr_title=$(echo "$pr_json" | jq -r '.title // "#'"$pr_num"'"')
-  pr_body=$(echo "$pr_json" | jq -r '.body // ""')
-  pr_titles[$pr_num]="$pr_title"
-
-  llm_input+="## ${pr_title} (#${pr_num})"$'\n\n'
-  llm_input+="### Changelog note"$'\n'
-  llm_input+="${pr_changelogs[$pr_num]:-}"$'\n\n'
-  if [[ -n "$pr_body" ]]; then
-    llm_input+="### PR description"$'\n'
-    llm_input+="${pr_body}"$'\n\n'
+  llm_input+="## ${pr_titles[$pr_num]} (#${pr_num})"$'\n\n'
+  if [[ -n "${pr_bodies[$pr_num]}" ]]; then
+    llm_input+="${pr_bodies[$pr_num]}"$'\n\n'
   fi
-
-  item="- ${pr_title} ([#${pr_num}](${repo_url}/pull/${pr_num}))"
-  case "${pr_bumps[$pr_num]}" in
-    major) breaking_items+=("$item") ;;
-    minor) feature_items+=("$item") ;;
-    patch) fix_items+=("$item") ;;
-  esac
 done
 
 # ── Summarize ──
@@ -184,22 +181,10 @@ if $DRY_RUN; then
 fi
 
 # ── Write release notes file ──
-#
-# GoReleaser uses this via --release-notes to populate the GitHub Release body.
-# The --- separator lets scripts/notify-discord.sh extract just the summary.
 
-cat > "$ROOT/RELEASE_NOTES.md" <<EOF
-${summary}
-
----
-
-${pr_list}
-EOF
+printf '%s\n\n---\n\n%s\n' "$summary" "$pr_list" > "$ROOT/RELEASE_NOTES.md"
 
 # ── Update changelog.mdx ──
-#
-# Insert new version section before the first "## v" heading.
-# If no such heading exists, append to the end.
 
 new_section="## v${new_version}
 
@@ -210,7 +195,6 @@ ${pr_list}
 ---"
 
 if grep -q '^## v[0-9]' "$CHANGELOG"; then
-  # Insert before the first version heading
   awk -v section="$new_section" '
     !inserted && /^## v[0-9]/ {
       printf "%s\n", section
@@ -219,17 +203,9 @@ if grep -q '^## v[0-9]' "$CHANGELOG"; then
     { print }
   ' "$CHANGELOG" > "$CHANGELOG.tmp"
 else
-  # No version headings yet, append
   cp "$CHANGELOG" "$CHANGELOG.tmp"
   printf '\n%s\n' "$new_section" >> "$CHANGELOG.tmp"
 fi
 mv "$CHANGELOG.tmp" "$CHANGELOG"
 
-# ── Delete consumed changesets ──
-
-for f in "${changesets[@]}"; do
-  rm "$f"
-done
-
 echo "Updated $CHANGELOG"
-echo "Deleted ${#changesets[@]} changeset(s)"

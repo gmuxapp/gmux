@@ -63,19 +63,18 @@ ${input}"
   max_tokens=500
 else
   prompt="gmux is an open-source terminal multiplexer with a web UI. Below \
-is the content for a release. Each entry has a user-facing changelog note \
-followed by the PR description for context. Summarize them into a Discord \
-message for the project's community server.
+are the pull requests in this release. Summarize them into a message for the \
+project's community Discord server.
 
-Base the summary on the changelog notes, not the PR implementation details. \
-The PR descriptions are background context to help you understand the change, \
-not content to surface to users.
+Focus on user-facing impact, not implementation details. The PR descriptions \
+are context to help you understand the changes; summarize what matters to \
+someone using the tool, not building it.
 
 Be direct, technical, and accurate. Assume readers are developers who use \
 the tool daily. No hype, no filler, no calls to action.
 
 Group by change type, skipping empty sections: breaking changes first, then \
-features, then fixes. Multiple entries may be part of the same effort; cover \
+features, then fixes. Multiple PRs may be part of the same effort; cover \
 them once. A link to the full changelog follows the summary, so focus on the \
 highlights rather than being exhaustive.
 
