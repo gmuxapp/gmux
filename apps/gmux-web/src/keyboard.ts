@@ -1,11 +1,14 @@
 /**
  * Terminal keyboard handling.
  *
- * Intercepts browser-level shortcuts that conflict with terminal usage
- * and translates them into the correct PTY input sequences.
+ * The keymap (from config.ts) is the source of truth for every keyboard
+ * shortcut: clipboard operations, UI actions, navigation remaps, and
+ * browser-stolen key workarounds. xterm.js only handles terminal input
+ * (characters, control codes, escape sequences). Nothing is left to
+ * implicit xterm.js or browser passthrough.
  *
- * Keybindings are data-driven: the resolved keybind list (from config.ts)
- * is iterated on each keydown. Each entry maps a key combo to an action.
+ * Keybindings are data-driven: the resolved keybind list is iterated on
+ * each keydown. Each entry maps a key combo to an action.
  */
 import type { Terminal } from '@xterm/xterm'
 import {
@@ -37,12 +40,15 @@ function isTouchDevice(): boolean {
  * input; the dedicated send button in the mobile toolbar handles submission.
  * Desktop behavior is unchanged: Enter sends \r as usual.
  *
- * Paste (Ctrl+V / right-click / middle-click) is handled separately by
- * attachPasteHandler, which intercepts at the container level.
+ * Keyboard-triggered paste (Ctrl+V, Cmd+V, Ctrl+Shift+V) is handled here
+ * via the `paste` action, which reads the clipboard through the Clipboard
+ * API. Non-keyboard paste (right-click, middle-click, mobile paste button)
+ * is handled separately by attachPasteHandler via the DOM paste event.
  */
 export function attachKeyboardHandler(
   term: Terminal,
   send: SendFn,
+  sendRaw: SendFn,
   keybinds: ResolvedKeybind[],
 ): void {
   term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
@@ -64,7 +70,7 @@ export function attachKeyboardHandler(
       // For shift+enter we need to block all event types (keydown, keypress,
       // keyup) to prevent the Kitty keyboard protocol sequence from leaking.
       if (kb.baseKey === 'enter' && kb.shift) {
-        if (ev.type === 'keydown') executeAction(kb, term, send)
+        if (ev.type === 'keydown') executeAction(kb, term, send, sendRaw)
         ev.preventDefault()
         return false
       }
@@ -72,7 +78,7 @@ export function attachKeyboardHandler(
       // For other bindings, only act on keydown.
       if (ev.type !== 'keydown') return true
 
-      const handled = executeAction(kb, term, send)
+      const handled = executeAction(kb, term, send, sendRaw)
       if (handled) {
         // Prevent browser default (e.g. Cmd+Left navigating back on Mac).
         // xterm.js does not call preventDefault when the custom handler
@@ -89,8 +95,17 @@ export function attachKeyboardHandler(
 /**
  * Execute a keybind action. Returns true if the event should be consumed
  * (not passed to xterm), false if xterm should still process it.
+ *
+ * `send` is the input channel (may apply mobile ctrl/alt arm modifiers).
+ * `sendRaw` bypasses modifier logic, used by paste to avoid corrupting
+ * clipboard content.
  */
-function executeAction(kb: ResolvedKeybind, term: Terminal, send: SendFn): boolean {
+function executeAction(
+  kb: ResolvedKeybind,
+  term: Terminal,
+  send: SendFn,
+  sendRaw: SendFn,
+): boolean {
   switch (kb.action) {
     case 'sendText':
       send(kb.args ?? '')
@@ -112,6 +127,35 @@ function executeAction(kb: ResolvedKeybind, term: Terminal, send: SendFn): boole
       // No selection: let xterm handle it (sends SIGINT).
       return false
     }
+
+    case 'copy': {
+      const sel = term.getSelection()
+      if (sel) {
+        navigator.clipboard.writeText(sel)
+        term.clearSelection()
+      }
+      // Always consume the event, even with no selection.
+      // Unlike copyOrInterrupt, never falls through to SIGINT.
+      return true
+    }
+
+    case 'paste': {
+      // Read from the Clipboard API and send to the PTY. Uses sendRaw to
+      // bypass mobile ctrl/alt arm logic (same as the DOM paste handler).
+      // Requires clipboard-read permission; silently ignored if denied.
+      navigator.clipboard.readText().then(text => {
+        if (text) {
+          sendRaw(formatPasteText(text, term.modes.bracketedPasteMode))
+        }
+      }).catch(() => {
+        // Clipboard API not available or permission denied.
+      })
+      return true
+    }
+
+    case 'selectAll':
+      term.selectAll()
+      return true
 
     default:
       return false

@@ -86,40 +86,52 @@ The empty state (when no session is selected) also shows launch buttons.
 
 ## Keyboard shortcuts
 
-Most keys pass straight through to the terminal. A few are intercepted by default, with different bindings per platform:
+gmux ships a complete default keymap. Every shortcut is explicit; nothing relies on implicit browser or xterm.js passthrough. Keys not listed here go straight to the terminal.
 
 ### All platforms
 
 | Shortcut | Action |
 |----------|--------|
-| **Ctrl+C** | If text is selected: copy to clipboard. Otherwise: sends SIGINT (normal Ctrl+C) |
-| **Ctrl+V** / **Cmd+V** | Paste from clipboard |
-| **Shift+Enter** | Sends a plain newline (blocks Kitty keyboard protocol sequence) |
+| **Shift+Enter** | Sends a plain newline (`\n`) instead of Enter |
+| **Ctrl+C** | If text is selected: copy to clipboard. Otherwise: sends SIGINT |
 
 ### Linux / Windows
 
-Browsers reserve Ctrl+T, Ctrl+N, and Ctrl+W for tab management. These Ctrl+Alt workarounds send the original key to the terminal:
-
-| Shortcut | Sends |
-|----------|-------|
-| **Ctrl+Alt+T** | Ctrl+T (transpose-chars in readline) |
-| **Ctrl+Alt+N** | Ctrl+N (next-history in readline) |
-| **Ctrl+Alt+W** | Ctrl+W (backward-kill-word in readline) |
+| Shortcut | Action |
+|----------|--------|
+| **Ctrl+Shift+C** | Copy selection to clipboard |
+| **Ctrl+V** | Paste from clipboard |
+| **Ctrl+Shift+V** | Paste from clipboard |
+| **Ctrl+Alt+T** | Sends Ctrl+T (transpose-chars; browser steals Ctrl+T) |
+| **Ctrl+Alt+N** | Sends Ctrl+N (next-history; browser steals Ctrl+N) |
+| **Ctrl+Alt+W** | Sends Ctrl+W (backward-kill-word; browser steals Ctrl+W) |
 
 ### Mac
 
-On Mac the browser steals Cmd+T/N/W instead, leaving Ctrl+T/N/W free. These bindings match iTerm2 and macOS Terminal conventions:
-
 | Shortcut | Action |
 |----------|--------|
+| **Cmd+C** | Copy selection to clipboard |
+| **Cmd+V** | Paste from clipboard |
+| **Cmd+A** | Select all terminal content |
 | **Cmd+Left** | Home (beginning of line) |
 | **Cmd+Right** | End (end of line) |
-| **Cmd+Backspace** | Delete to start of line |
-| **Cmd+K** | Clear screen |
+| **Cmd+Backspace** | Delete to start of line (sends Ctrl+U) |
+| **Cmd+K** | Clear screen (sends Ctrl+L) |
+
+### Why explicit bindings?
+
+Browsers sit between the keyboard and the terminal, and different platforms have different conventions:
+
+- **Ctrl+C** could mean copy (browser) or SIGINT (terminal). gmux checks for a selection first.
+- **Ctrl+V** on Linux: without interception, xterm.js sends `\x16` (quoted-insert) to the terminal *before* the browser fires the paste event. gmux intercepts the keydown to avoid this.
+- **Cmd+C/V** on Mac: without interception, these take a three-hop path through the browser's clipboard DOM events into xterm.js. gmux handles them directly.
+- **Ctrl+Shift+C/V**: browsers do NOT map these to copy/paste. They must be explicit keybinds.
+
+This is why gmux owns the full keymap rather than relying on passthrough.
 
 ### Customizing keybinds
 
-All default keybinds can be overridden or disabled via `~/.config/gmux/keybinds.jsonc`. See [Configuration](/configuration#terminal-keybinds) for details.
+All defaults can be overridden or disabled via `~/.config/gmux/keybinds.jsonc`. See [Configuration](/configuration#terminal-keybinds) for the full reference, actions list, and starter templates.
 
 :::tip[App mode]
 Browsers reserve many shortcuts (Ctrl+T, Ctrl+N, Ctrl+W, etc.) that don't reach the terminal. Run gmux as a standalone app to get full keyboard pass-through:

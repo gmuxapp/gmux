@@ -188,6 +188,9 @@ export interface Keybind {
    *   sendText        — send args as raw text to PTY
    *   sendKeys        — parse args as key combo, send escape sequence
    *   copyOrInterrupt — copy selection if any, else send SIGINT
+   *   copy            — copy selection to clipboard (no SIGINT fallback)
+   *   paste           — read clipboard and send to PTY
+   *   selectAll       — select all terminal content
    *   none            — disable this binding (used to suppress a built-in)
    */
   action: string
@@ -205,32 +208,62 @@ export interface ResolvedKeybind extends Keybind {
   baseKey: string
 }
 
-const KNOWN_ACTIONS = new Set(['sendText', 'sendKeys', 'copyOrInterrupt', 'none'])
+const KNOWN_ACTIONS = new Set(['sendText', 'sendKeys', 'copyOrInterrupt', 'copy', 'paste', 'selectAll', 'none'])
 
-export const DEFAULT_KEYBINDS: Keybind[] = [
-  // ── Universal ──
+/**
+ * Default keybinds, split by platform.
+ *
+ * These are the source of truth for all keyboard shortcuts. Every key combo
+ * that does something other than "send bytes to the terminal" is listed here.
+ * xterm.js only handles terminal input (characters, control codes, escape
+ * sequences); all UI and clipboard actions go through this keymap.
+ *
+ * User keybinds from ~/.config/gmux/keybinds.jsonc are layered on top:
+ * same-key entries override, action "none" disables a default.
+ */
+
+const UNIVERSAL_KEYBINDS: Keybind[] = [
   { key: 'shift+enter', action: 'sendText', args: '\n' },
   { key: 'ctrl+c', action: 'copyOrInterrupt' },
+]
 
-  // ── Linux/Windows: workarounds for browser-stolen shortcuts ──
+/** Linux / Windows defaults. */
+const LINUX_KEYBINDS: Keybind[] = [
+  // Clipboard: standard Linux terminal shortcuts (GNOME Terminal, Konsole,
+  // Alacritty, Windows Terminal). Ctrl+V is intercepted here rather than
+  // left to the browser passthrough so that xterm.js does not send \x16
+  // (quoted-insert) to the PTY before the paste content arrives.
+  { key: 'ctrl+shift+c', action: 'copy' },
+  { key: 'ctrl+v',       action: 'paste' },
+  { key: 'ctrl+shift+v', action: 'paste' },
+
   // Chrome/Firefox reserve Ctrl+T/N/W for tab management; they cannot be
   // intercepted by JavaScript.  Ctrl+Alt+<key> is the conventional workaround.
-  ...(!IS_MAC ? [
-    { key: 'ctrl+alt+t', action: 'sendKeys', args: 'ctrl+t' },
-    { key: 'ctrl+alt+n', action: 'sendKeys', args: 'ctrl+n' },
-    { key: 'ctrl+alt+w', action: 'sendKeys', args: 'ctrl+w' },
-  ] : []),
+  { key: 'ctrl+alt+t', action: 'sendKeys', args: 'ctrl+t' },
+  { key: 'ctrl+alt+n', action: 'sendKeys', args: 'ctrl+n' },
+  { key: 'ctrl+alt+w', action: 'sendKeys', args: 'ctrl+w' },
+]
 
-  // ── Mac: native terminal conventions ──
-  // On Mac the browser steals Cmd+T/N/W instead, leaving Ctrl+T/N/W free,
-  // so no workarounds are needed.  These bindings replicate iTerm2 / macOS
-  // Terminal behavior that xterm.js does not provide out of the box.
-  ...(IS_MAC ? [
-    { key: 'meta+left',      action: 'sendKeys', args: 'home' },
-    { key: 'meta+right',     action: 'sendKeys', args: 'end' },
-    { key: 'meta+backspace', action: 'sendKeys', args: 'ctrl+u' },
-    { key: 'meta+k',         action: 'sendKeys', args: 'ctrl+l' },
-  ] : []),
+/** macOS defaults. Replicate iTerm2 / macOS Terminal conventions. */
+const MAC_KEYBINDS: Keybind[] = [
+  // Clipboard and selection: explicit bindings replace the implicit xterm.js
+  // passthrough chain (keydown → browser clipboard DOM event → xterm handler)
+  // so that every shortcut is visible, overridable, and consistently handled.
+  { key: 'meta+c', action: 'copy' },
+  { key: 'meta+v', action: 'paste' },
+  { key: 'meta+a', action: 'selectAll' },
+
+  // Navigation: Cmd+arrow produces Home/End (iTerm2 convention).
+  // Without these, Cmd+Left navigates the browser back.
+  { key: 'meta+left',      action: 'sendKeys', args: 'home' },
+  { key: 'meta+right',     action: 'sendKeys', args: 'end' },
+  { key: 'meta+backspace', action: 'sendKeys', args: 'ctrl+u' },
+  { key: 'meta+k',         action: 'sendKeys', args: 'ctrl+l' },
+]
+
+export const DEFAULT_KEYBINDS: Keybind[] = [
+  ...UNIVERSAL_KEYBINDS,
+  ...(IS_MAC ? MAC_KEYBINDS : LINUX_KEYBINDS),
 ]
 
 /**
@@ -280,6 +313,20 @@ export function keyComboToSequence(combo: string): string {
     seq = '\x1b[F'
   } else if (baseKey === 'delete' || baseKey === 'del') {
     seq = '\x1b[3~'
+  } else if (baseKey === 'up' || baseKey === 'arrowup') {
+    seq = '\x1b[A'
+  } else if (baseKey === 'down' || baseKey === 'arrowdown') {
+    seq = '\x1b[B'
+  } else if (baseKey === 'right' || baseKey === 'arrowright') {
+    seq = '\x1b[C'
+  } else if (baseKey === 'left' || baseKey === 'arrowleft') {
+    seq = '\x1b[D'
+  } else if (baseKey === 'pageup' || baseKey === 'page_up') {
+    seq = '\x1b[5~'
+  } else if (baseKey === 'pagedown' || baseKey === 'page_down') {
+    seq = '\x1b[6~'
+  } else if (baseKey === 'insert' || baseKey === 'ins') {
+    seq = '\x1b[2~'
   } else if (baseKey.length === 1) {
     seq = baseKey
   }

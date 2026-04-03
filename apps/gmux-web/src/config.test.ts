@@ -264,9 +264,34 @@ describe('keyComboToSequence', () => {
     expect(keyComboToSequence('secondary+t')).toBe(keyComboToSequence(`${SECONDARY_MOD}+t`))
   })
 
+  it('converts arrow keys', () => {
+    expect(keyComboToSequence('up')).toBe('\x1b[A')
+    expect(keyComboToSequence('down')).toBe('\x1b[B')
+    expect(keyComboToSequence('right')).toBe('\x1b[C')
+    expect(keyComboToSequence('left')).toBe('\x1b[D')
+    // Long-form aliases also work.
+    expect(keyComboToSequence('arrowup')).toBe('\x1b[A')
+    expect(keyComboToSequence('arrowleft')).toBe('\x1b[D')
+  })
+
+  it('converts page up and page down', () => {
+    expect(keyComboToSequence('pageup')).toBe('\x1b[5~')
+    expect(keyComboToSequence('page_up')).toBe('\x1b[5~')
+    expect(keyComboToSequence('pagedown')).toBe('\x1b[6~')
+    expect(keyComboToSequence('page_down')).toBe('\x1b[6~')
+  })
+
+  it('converts insert', () => {
+    expect(keyComboToSequence('insert')).toBe('\x1b[2~')
+    expect(keyComboToSequence('ins')).toBe('\x1b[2~')
+  })
+
+  it('prefixes arrow keys with ESC for alt combos', () => {
+    expect(keyComboToSequence('alt+left')).toBe('\x1b\x1b[D')
+    expect(keyComboToSequence('alt+up')).toBe('\x1b\x1b[A')
+  })
+
   it('returns empty string for unrecognized named keys', () => {
-    // Keys like "f1", "arrowup" have no simple escape sequence mapping.
-    // The function should return empty rather than something wrong.
     expect(keyComboToSequence('f1')).toBe('')
   })
 })
@@ -282,6 +307,9 @@ describe('resolveKeybinds', () => {
     expect(keys).toContain('shift+enter')
     expect(keys).toContain('ctrl+c')
     // Linux defaults (test env is non-Mac)
+    expect(keys).toContain('ctrl+shift+c')
+    expect(keys).toContain('ctrl+v')
+    expect(keys).toContain('ctrl+shift+v')
     expect(keys).toContain('ctrl+alt+t')
     expect(keys).toContain('ctrl+alt+n')
     expect(keys).toContain('ctrl+alt+w')
@@ -329,9 +357,23 @@ describe('resolveKeybinds', () => {
     expect(match!.action).toBe('sendText')
   })
 
-  it('includes Linux workarounds in non-Mac defaults', () => {
+  it('includes Linux clipboard and workaround defaults (non-Mac)', () => {
     const resolved = resolveKeybinds(null)
-    // ctrl+alt+t/n/w should be present in test env (non-Mac)
+
+    // Clipboard
+    const ctrlShiftC = resolved.find(r => r.baseKey === 'c' && r.ctrl && r.shift)
+    expect(ctrlShiftC).toBeDefined()
+    expect(ctrlShiftC!.action).toBe('copy')
+
+    const ctrlV = resolved.find(r => r.baseKey === 'v' && r.ctrl && !r.shift)
+    expect(ctrlV).toBeDefined()
+    expect(ctrlV!.action).toBe('paste')
+
+    const ctrlShiftV = resolved.find(r => r.baseKey === 'v' && r.ctrl && r.shift)
+    expect(ctrlShiftV).toBeDefined()
+    expect(ctrlShiftV!.action).toBe('paste')
+
+    // Browser-stolen key workarounds
     const ctrlAltT = resolved.find(r => r.baseKey === 't' && r.ctrl && r.alt)
     expect(ctrlAltT).toBeDefined()
     expect(ctrlAltT!.action).toBe('sendKeys')
@@ -346,13 +388,25 @@ describe('resolveKeybinds', () => {
     expect(ctrlAltW!.args).toBe('ctrl+w')
   })
 
+  it('recognizes copy, paste, and selectAll as valid actions', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    resolveKeybinds([
+      { key: 'ctrl+shift+c', action: 'copy' },
+      { key: 'ctrl+v', action: 'paste' },
+      { key: 'ctrl+shift+a', action: 'selectAll' },
+    ])
+    expect(spy).not.toHaveBeenCalledWith(expect.stringContaining('unknown action'))
+    spy.mockRestore()
+  })
+
   it('canonicalizes modifier aliases (control = ctrl, cmd = meta)', () => {
     // "control+c" must override the default "ctrl+c" binding
     const user: Keybind[] = [
       { key: 'control+c', action: 'sendText', args: 'overridden' },
     ]
     const resolved = resolveKeybinds(user)
-    const ctrlC = resolved.filter(r => r.baseKey === 'c' && r.ctrl)
+    // Filter for bare ctrl+c (not ctrl+shift+c, which is a separate default).
+    const ctrlC = resolved.filter(r => r.baseKey === 'c' && r.ctrl && !r.shift)
     expect(ctrlC.length).toBe(1)
     expect(ctrlC[0].action).toBe('sendText')
     expect(ctrlC[0].args).toBe('overridden')
