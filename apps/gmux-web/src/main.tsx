@@ -12,8 +12,8 @@ import { fetchTerminalConfig, mergeThemeConfig, resolveKeybinds, type ResolvedKe
 import { useArrivalPulse } from './use-arrival-pulse'
 import { useActivityTracker } from './use-activity'
 
-import type { Session, Folder } from './types'
-import { groupByFolder } from './types'
+import type { Session, Folder, DiscoveredProject } from './types'
+import { buildProjectFolders } from './types'
 import { getMockFolders } from './mock-data/index'
 import { installCopySession } from './mock-data/export-session'
 import type { Session as ProtocolSession } from '@gmux/protocol'
@@ -360,7 +360,7 @@ function FolderGroup({
   isSessionActive,
   onSelect,
   onCloseSession,
-  onHideFolder,
+  onHideProject,
 }: {
   folder: Folder
   selectedId: string | null
@@ -368,7 +368,7 @@ function FolderGroup({
   isSessionActive: (id: string) => boolean
   onSelect: (id: string) => void
   onCloseSession: (session: Session) => void
-  onHideFolder: (cwd: string) => void
+  onHideProject: (slug: string) => void
 }) {
   const [showResumable, setShowResumable] = useState(false)
 
@@ -412,7 +412,7 @@ function FolderGroup({
           )}
           <button
             class="folder-action-btn"
-            onClick={() => onHideFolder(folder.path)}
+            onClick={() => onHideProject(folder.path)}
           >
             Hide
           </button>
@@ -434,14 +434,14 @@ function FolderGroup({
 
 function Sidebar({
   folders,
-  hiddenFolders,
+  discovered,
   selectedId,
   resumingId,
   isSessionActive,
   onSelect,
   onCloseSession,
-  onHideFolder,
-  onShowFolder,
+  onHideProject,
+  onAddProject,
   open,
   onClose,
   health,
@@ -449,21 +449,21 @@ function Sidebar({
   onRequestNotifPermission,
 }: {
   folders: Folder[]
-  hiddenFolders: Folder[]
+  discovered: DiscoveredProject[]
   selectedId: string | null
   resumingId: string | null
   isSessionActive: (id: string) => boolean
   onSelect: (id: string) => void
   onCloseSession: (session: Session) => void
-  onHideFolder: (cwd: string) => void
-  onShowFolder: (cwd: string) => void
+  onHideProject: (slug: string) => void
+  onAddProject: (req: { remote?: string; paths?: string[] }) => void
   open: boolean
   onClose: () => void
   health: HealthData | null
   notifPermission: NotifPermission
   onRequestNotifPermission: () => void
 }) {
-  const [showFolderPicker, setShowFolderPicker] = useState(false)
+  const [showProjectPicker, setShowProjectPicker] = useState(false)
 
   return (
     <>
@@ -500,32 +500,35 @@ function Sidebar({
                 onClose()
               }}
               onCloseSession={onCloseSession}
-              onHideFolder={onHideFolder}
+              onHideProject={onHideProject}
             />
           ))}
         </div>
-        {(hiddenFolders.length > 0 || notifPermission === 'default' || notifPermission === 'denied') && (
+        {(discovered.length > 0 || notifPermission === 'default' || notifPermission === 'denied') && (
           <div class="sidebar-footer">
-            {hiddenFolders.length > 0 && (
+            {discovered.length > 0 && (
               <>
                 <button
                   class="add-folder-btn"
-                  onClick={() => setShowFolderPicker(v => !v)}
+                  onClick={() => setShowProjectPicker(v => !v)}
                 >
-                  + Add folder
+                  + Add project
                 </button>
-                {showFolderPicker && (
+                {showProjectPicker && (
                   <div class="folder-picker">
-                    {hiddenFolders.map(f => (
+                    {discovered.map(d => (
                       <button
-                        key={f.path}
+                        key={d.suggested_slug}
                         class="folder-picker-item"
                         onClick={() => {
-                          onShowFolder(f.path)
-                          setShowFolderPicker(false)
+                          onAddProject(d.remote ? { remote: d.remote } : { paths: d.paths })
+                          setShowProjectPicker(false)
                         }}
                       >
-                        <span class="folder-picker-name">{f.name}</span>
+                        <span class="folder-picker-name">{d.suggested_slug}</span>
+                        <span class="folder-picker-detail">
+                          {d.remote || d.paths[0]}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -908,9 +911,6 @@ function App() {
     return () => clearInterval(timer)
   }, [])
 
-  // Sync sidebar visibility whenever sessions change
-  useEffect(() => { sidebarState.syncSessions(sessions) }, [sessions])
-
   // Load data
   useEffect(() => {
     if (USE_MOCK) {
@@ -919,6 +919,7 @@ function App() {
       setSessions(allSessions)
       setConnState('connected')
     } else {
+      sidebarState.fetchProjects()
       fetchSessions().then(list => {
         setSessions(list)
         setConnState('connected')
@@ -933,6 +934,7 @@ function App() {
       source.addEventListener('open', () => {
         if (sseConnected) {
           // Reconnected after a drop — do a full refresh to catch missed events
+          sidebarState.fetchProjects()
           fetchSessions().then(list => setSessions(list)).catch(() => {})
         }
         sseConnected = true
@@ -976,6 +978,9 @@ function App() {
           if (id) handleActivity(id)
         } catch {}
       })
+      source.addEventListener('projects-update', () => {
+        sidebarState.handleProjectsUpdate()
+      })
       return () => source.close()
     }
   }, [])
@@ -993,14 +998,9 @@ function App() {
     })
   }, [sessions])
 
-  const allFolders = useMemo(() => groupByFolder(filteredSessions), [filteredSessions])
   const folders = useMemo(
-    () => allFolders.filter(f => sidebarState.isFolderVisible(f.path)),
-    [allFolders, sidebarVersion],
-  )
-  const hiddenFolders = useMemo(
-    () => allFolders.filter(f => !sidebarState.isFolderVisible(f.path)),
-    [allFolders, sidebarVersion],
+    () => buildProjectFolders(sidebarState.configured, filteredSessions),
+    [filteredSessions, sidebarVersion],
   )
   const selected = useMemo(() => {
     const s = sessions.find(s => s.id === selectedId) ?? null
@@ -1049,8 +1049,8 @@ function App() {
     }
   }, [])
 
-  const handleHideFolder = useCallback((cwd: string) => {
-    sidebarState.hideFolder(cwd)
+  const handleHideProject = useCallback((slug: string) => {
+    sidebarState.hideProject(slug)
   }, [])
 
   const handleSelect = useCallback((id: string) => {
@@ -1232,14 +1232,14 @@ function App() {
     <div class="app-layout">
       <Sidebar
         folders={folders}
-        hiddenFolders={hiddenFolders}
+        discovered={sidebarState.discovered}
         selectedId={selectedId}
         resumingId={resumingId}
         isSessionActive={isSessionActive}
         onSelect={handleSelect}
         onCloseSession={handleCloseSession}
-        onHideFolder={handleHideFolder}
-        onShowFolder={(cwd) => sidebarState.showFolder(cwd)}
+        onHideProject={handleHideProject}
+        onAddProject={(req) => sidebarState.addProject(req)}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         health={health}

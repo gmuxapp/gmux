@@ -593,6 +593,15 @@ body {
 }
 
 .folder-picker-item:hover { background: var(--bg-hover); }
+.folder-picker-name { font-weight: 500; }
+.folder-picker-detail {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Status dot — used in header */
 .session-dot {
