@@ -3,6 +3,7 @@ import {
   mergeThemeConfig,
   normalizeThemeColors,
   resolveKeybinds,
+  parseKeybindsFile,
   parseKeyCombo,
   keyComboToSequence,
   eventMatchesKeybind,
@@ -264,9 +265,34 @@ describe('keyComboToSequence', () => {
     expect(keyComboToSequence('secondary+t')).toBe(keyComboToSequence(`${SECONDARY_MOD}+t`))
   })
 
+  it('converts arrow keys', () => {
+    expect(keyComboToSequence('up')).toBe('\x1b[A')
+    expect(keyComboToSequence('down')).toBe('\x1b[B')
+    expect(keyComboToSequence('right')).toBe('\x1b[C')
+    expect(keyComboToSequence('left')).toBe('\x1b[D')
+    // Long-form aliases also work.
+    expect(keyComboToSequence('arrowup')).toBe('\x1b[A')
+    expect(keyComboToSequence('arrowleft')).toBe('\x1b[D')
+  })
+
+  it('converts page up and page down', () => {
+    expect(keyComboToSequence('pageup')).toBe('\x1b[5~')
+    expect(keyComboToSequence('page_up')).toBe('\x1b[5~')
+    expect(keyComboToSequence('pagedown')).toBe('\x1b[6~')
+    expect(keyComboToSequence('page_down')).toBe('\x1b[6~')
+  })
+
+  it('converts insert', () => {
+    expect(keyComboToSequence('insert')).toBe('\x1b[2~')
+    expect(keyComboToSequence('ins')).toBe('\x1b[2~')
+  })
+
+  it('prefixes arrow keys with ESC for alt combos', () => {
+    expect(keyComboToSequence('alt+left')).toBe('\x1b\x1b[D')
+    expect(keyComboToSequence('alt+up')).toBe('\x1b\x1b[A')
+  })
+
   it('returns empty string for unrecognized named keys', () => {
-    // Keys like "f1", "arrowup" have no simple escape sequence mapping.
-    // The function should return empty rather than something wrong.
     expect(keyComboToSequence('f1')).toBe('')
   })
 })
@@ -282,6 +308,9 @@ describe('resolveKeybinds', () => {
     expect(keys).toContain('shift+enter')
     expect(keys).toContain('ctrl+c')
     // Linux defaults (test env is non-Mac)
+    expect(keys).toContain('ctrl+shift+c')
+    expect(keys).toContain('ctrl+v')
+    expect(keys).toContain('ctrl+shift+v')
     expect(keys).toContain('ctrl+alt+t')
     expect(keys).toContain('ctrl+alt+n')
     expect(keys).toContain('ctrl+alt+w')
@@ -329,9 +358,23 @@ describe('resolveKeybinds', () => {
     expect(match!.action).toBe('sendText')
   })
 
-  it('includes Linux workarounds in non-Mac defaults', () => {
+  it('includes Linux clipboard and workaround defaults (non-Mac)', () => {
     const resolved = resolveKeybinds(null)
-    // ctrl+alt+t/n/w should be present in test env (non-Mac)
+
+    // Clipboard
+    const ctrlShiftC = resolved.find(r => r.baseKey === 'c' && r.ctrl && r.shift)
+    expect(ctrlShiftC).toBeDefined()
+    expect(ctrlShiftC!.action).toBe('copy')
+
+    const ctrlV = resolved.find(r => r.baseKey === 'v' && r.ctrl && !r.shift)
+    expect(ctrlV).toBeDefined()
+    expect(ctrlV!.action).toBe('paste')
+
+    const ctrlShiftV = resolved.find(r => r.baseKey === 'v' && r.ctrl && r.shift)
+    expect(ctrlShiftV).toBeDefined()
+    expect(ctrlShiftV!.action).toBe('paste')
+
+    // Browser-stolen key workarounds
     const ctrlAltT = resolved.find(r => r.baseKey === 't' && r.ctrl && r.alt)
     expect(ctrlAltT).toBeDefined()
     expect(ctrlAltT!.action).toBe('sendKeys')
@@ -346,13 +389,48 @@ describe('resolveKeybinds', () => {
     expect(ctrlAltW!.args).toBe('ctrl+w')
   })
 
+  it('uses Linux clipboard defaults when macCommandIsCtrl is true', () => {
+    // On non-Mac (test env), macCommandIsCtrl has no effect on defaults.
+    // But we can verify the resolveKeybinds parameter is accepted and
+    // doesn't break anything.
+    const resolved = resolveKeybinds(null, true)
+    // Should still have Linux defaults in test env (IS_MAC = false).
+    expect(resolved.find(r => r.baseKey === 'c' && r.ctrl && r.shift)!.action).toBe('copy')
+    expect(resolved.find(r => r.baseKey === 'v' && r.ctrl && !r.shift)!.action).toBe('paste')
+  })
+
+  it('accepts object-format keybinds config with macCommandIsCtrl', () => {
+    // Simulate what fetchTerminalConfig does with an object-format file.
+    // The parseKeybindsFile function is internal, but we can test through
+    // resolveKeybinds by verifying user bindings still apply.
+    const user: Keybind[] = [
+      { key: 'ctrl+alt+x', action: 'sendKeys', args: 'ctrl+x' },
+    ]
+    const resolved = resolveKeybinds(user, true)
+    const ctrlAltX = resolved.find(r => r.baseKey === 'x' && r.ctrl && r.alt)
+    expect(ctrlAltX).toBeDefined()
+    expect(ctrlAltX!.action).toBe('sendKeys')
+  })
+
+  it('recognizes copy, paste, and selectAll as valid actions', () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    resolveKeybinds([
+      { key: 'ctrl+shift+c', action: 'copy' },
+      { key: 'ctrl+v', action: 'paste' },
+      { key: 'ctrl+shift+a', action: 'selectAll' },
+    ])
+    expect(spy).not.toHaveBeenCalledWith(expect.stringContaining('unknown action'))
+    spy.mockRestore()
+  })
+
   it('canonicalizes modifier aliases (control = ctrl, cmd = meta)', () => {
     // "control+c" must override the default "ctrl+c" binding
     const user: Keybind[] = [
       { key: 'control+c', action: 'sendText', args: 'overridden' },
     ]
     const resolved = resolveKeybinds(user)
-    const ctrlC = resolved.filter(r => r.baseKey === 'c' && r.ctrl)
+    // Filter for bare ctrl+c (not ctrl+shift+c, which is a separate default).
+    const ctrlC = resolved.filter(r => r.baseKey === 'c' && r.ctrl && !r.shift)
     expect(ctrlC.length).toBe(1)
     expect(ctrlC[0].action).toBe('sendText')
     expect(ctrlC[0].args).toBe('overridden')
@@ -389,6 +467,83 @@ describe('resolveKeybinds', () => {
     // Should have replaced, not added alongside the default.
     const enterBindings = resolved.filter(r => r.baseKey === 'enter' && r.shift)
     expect(enterBindings.length).toBe(1)
+  })
+
+  it('secondary+letter overrides same-modifier defaults without affecting others', () => {
+    // Simulates the Mac Cmd-as-Ctrl template on Linux (secondary = ctrl).
+    // secondary+c normalizes to ctrl+c, overriding the universal default.
+    // secondary+a adds a new ctrl+a binding.
+    // Existing ctrl+shift+c and ctrl+shift+v must be unaffected.
+    const template: Keybind[] = [
+      { key: 'secondary+c', action: 'copyOrInterrupt' },
+      { key: 'secondary+v', action: 'paste' },
+      { key: 'secondary+a', action: 'sendKeys', args: 'ctrl+a' },
+      { key: 'secondary+k', action: 'sendKeys', args: 'ctrl+k' },
+    ]
+    const resolved = resolveKeybinds(template)
+
+    // Overrides: same action on Linux (no-op), different action on Mac.
+    const ctrlC = resolved.find(r => r.baseKey === 'c' && r.ctrl && !r.shift)
+    expect(ctrlC!.action).toBe('copyOrInterrupt')
+
+    const ctrlV = resolved.find(r => r.baseKey === 'v' && r.ctrl && !r.shift)
+    expect(ctrlV!.action).toBe('paste')
+
+    // New bindings from template.
+    const ctrlA = resolved.find(r => r.baseKey === 'a' && r.ctrl)
+    expect(ctrlA).toBeDefined()
+    expect(ctrlA!.action).toBe('sendKeys')
+    expect(ctrlA!.args).toBe('ctrl+a')
+
+    // Untouched defaults: ctrl+shift+c and ctrl+shift+v survive.
+    expect(resolved.find(r => r.baseKey === 'c' && r.ctrl && r.shift)!.action).toBe('copy')
+    expect(resolved.find(r => r.baseKey === 'v' && r.ctrl && r.shift)!.action).toBe('paste')
+  })
+
+  it('disables a new clipboard default with action "none"', () => {
+    const user: Keybind[] = [
+      { key: 'ctrl+v', action: 'none' },
+      { key: 'ctrl+shift+c', action: 'none' },
+    ]
+    const resolved = resolveKeybinds(user)
+    expect(resolved.find(r => r.baseKey === 'v' && r.ctrl && !r.shift)).toBeUndefined()
+    expect(resolved.find(r => r.baseKey === 'c' && r.ctrl && r.shift)).toBeUndefined()
+    // ctrl+shift+v should still be present (not disabled).
+    expect(resolved.find(r => r.baseKey === 'v' && r.ctrl && r.shift)).toBeDefined()
+  })
+})
+
+// ── keybinds.jsonc file parsing ──
+
+describe('parseKeybindsFile', () => {
+  it('returns defaults for null/undefined', () => {
+    expect(parseKeybindsFile(null)).toEqual({ macCommandIsCtrl: false, bindings: null })
+    expect(parseKeybindsFile(undefined)).toEqual({ macCommandIsCtrl: false, bindings: null })
+  })
+
+  it('treats an array as bindings (backward compatible)', () => {
+    const arr = [{ key: 'ctrl+a', action: 'sendKeys', args: 'ctrl+a' }]
+    const result = parseKeybindsFile(arr)
+    expect(result.macCommandIsCtrl).toBe(false)
+    expect(result.bindings).toBe(arr)
+  })
+
+  it('reads macCommandIsCtrl from object format', () => {
+    const result = parseKeybindsFile({ macCommandIsCtrl: true })
+    expect(result.macCommandIsCtrl).toBe(true)
+    expect(result.bindings).toBeNull()
+  })
+
+  it('reads bindings from object format', () => {
+    const bindings = [{ key: 'ctrl+x', action: 'sendKeys', args: 'ctrl+x' }]
+    const result = parseKeybindsFile({ macCommandIsCtrl: true, bindings })
+    expect(result.macCommandIsCtrl).toBe(true)
+    expect(result.bindings).toBe(bindings)
+  })
+
+  it('treats non-boolean macCommandIsCtrl as false', () => {
+    expect(parseKeybindsFile({ macCommandIsCtrl: 'yes' }).macCommandIsCtrl).toBe(false)
+    expect(parseKeybindsFile({ macCommandIsCtrl: 1 }).macCommandIsCtrl).toBe(false)
   })
 })
 
@@ -469,5 +624,51 @@ describe('eventMatchesKeybind', () => {
     // The other modifier should not match.
     const otherKey = SECONDARY_MOD === 'meta' ? 'ctrlKey' : 'metaKey'
     expect(eventMatchesKeybind(makeEvent({ [otherKey]: true, key: 'c' }), kb)).toBe(false)
+  })
+
+  it('discriminates ctrl+v from ctrl+shift+v', () => {
+    const ctrlV = makeKeybind('ctrl+v')
+    const ctrlShiftV = makeKeybind('ctrl+shift+v')
+    const evCtrlV = makeEvent({ ctrlKey: true, key: 'v' })
+    const evCtrlShiftV = makeEvent({ ctrlKey: true, shiftKey: true, key: 'v' })
+
+    expect(eventMatchesKeybind(evCtrlV, ctrlV)).toBe(true)
+    expect(eventMatchesKeybind(evCtrlV, ctrlShiftV)).toBe(false)
+    expect(eventMatchesKeybind(evCtrlShiftV, ctrlShiftV)).toBe(true)
+    expect(eventMatchesKeybind(evCtrlShiftV, ctrlV)).toBe(false)
+  })
+
+  it('matches ctrl+shift+c (multi-modifier)', () => {
+    const kb = makeKeybind('ctrl+shift+c')
+    expect(eventMatchesKeybind(
+      makeEvent({ ctrlKey: true, shiftKey: true, key: 'c' }), kb,
+    )).toBe(true)
+    // Must reject when only one modifier is present.
+    expect(eventMatchesKeybind(
+      makeEvent({ ctrlKey: true, key: 'c' }), kb,
+    )).toBe(false)
+    expect(eventMatchesKeybind(
+      makeEvent({ shiftKey: true, key: 'c' }), kb,
+    )).toBe(false)
+  })
+
+  it('matches short key aliases against browser key names', () => {
+    // Users can write short names; browsers report the full name.
+    // Each alias must resolve to the correct KeyboardEvent.key.
+    expect(eventMatchesKeybind(
+      makeEvent({ key: 'Escape' }), makeKeybind('esc'),
+    )).toBe(true)
+    expect(eventMatchesKeybind(
+      makeEvent({ key: 'Delete' }), makeKeybind('del'),
+    )).toBe(true)
+    expect(eventMatchesKeybind(
+      makeEvent({ key: 'Insert' }), makeKeybind('ins'),
+    )).toBe(true)
+    expect(eventMatchesKeybind(
+      makeEvent({ key: 'PageUp' }), makeKeybind('page_up'),
+    )).toBe(true)
+    expect(eventMatchesKeybind(
+      makeEvent({ key: 'PageDown' }), makeKeybind('page_down'),
+    )).toBe(true)
   })
 })

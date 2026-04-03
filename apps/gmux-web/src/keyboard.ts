@@ -1,15 +1,19 @@
 /**
  * Terminal keyboard handling.
  *
- * Intercepts browser-level shortcuts that conflict with terminal usage
- * and translates them into the correct PTY input sequences.
+ * The keymap (from config.ts) is the source of truth for every keyboard
+ * shortcut: clipboard operations, UI actions, navigation remaps, and
+ * browser-stolen key workarounds. xterm.js only handles terminal input
+ * (characters, control codes, escape sequences). Nothing is left to
+ * implicit xterm.js or browser passthrough.
  *
- * Keybindings are data-driven: the resolved keybind list (from config.ts)
- * is iterated on each keydown. Each entry maps a key combo to an action.
+ * Keybindings are data-driven: the resolved keybind list is iterated on
+ * each keydown. Each entry maps a key combo to an action.
  */
 import type { Terminal } from '@xterm/xterm'
 import {
   eventMatchesKeybind,
+  IS_MAC,
   keyComboToSequence,
   type ResolvedKeybind,
 } from './config'
@@ -37,13 +41,17 @@ function isTouchDevice(): boolean {
  * input; the dedicated send button in the mobile toolbar handles submission.
  * Desktop behavior is unchanged: Enter sends \r as usual.
  *
- * Paste (Ctrl+V / right-click / middle-click) is handled separately by
- * attachPasteHandler, which intercepts at the container level.
+ * Keyboard-triggered paste (Ctrl+V, Cmd+V, Ctrl+Shift+V) is handled here
+ * via the `paste` action, which reads the clipboard through the Clipboard
+ * API. Non-keyboard paste (right-click, middle-click, mobile paste button)
+ * is handled separately by attachPasteHandler via the DOM paste event.
  */
 export function attachKeyboardHandler(
   term: Terminal,
   send: SendFn,
+  sendRaw: SendFn,
   keybinds: ResolvedKeybind[],
+  macCommandIsCtrl = false,
 ): void {
   term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
     // Mobile Enter → newline (not submit).
@@ -57,6 +65,36 @@ export function attachKeyboardHandler(
       return false
     }
 
+    // macCommandIsCtrl: on Mac, Cmd+<character> is treated as Ctrl+<character>.
+    // Transform the event for keybind matching, then synthesize the ctrl
+    // sequence if no keybind handles it. Only applies to single-character
+    // keys; Cmd+arrow/backspace keep their default behavior.
+    if (macCommandIsCtrl && IS_MAC && ev.metaKey && !ev.ctrlKey && ev.key.length === 1) {
+      if (ev.type !== 'keydown') {
+        ev.preventDefault()
+        return false
+      }
+
+      // Match keybinds as if Ctrl were pressed instead of Cmd.
+      const virtualMods = {
+        ctrlKey: true, shiftKey: ev.shiftKey,
+        altKey: ev.altKey, metaKey: false,
+        key: ev.key,
+      } as KeyboardEvent
+
+      for (const kb of keybinds) {
+        if (!eventMatchesKeybind(virtualMods, kb)) continue
+        const handled = executeAction(kb, term, send, sendRaw)
+        if (handled) { ev.preventDefault(); return false }
+      }
+
+      // No keybind matched. Synthesize the ctrl code directly.
+      const seq = ctrlSequenceFor(ev.key)
+      if (seq) send(seq)
+      ev.preventDefault()
+      return false
+    }
+
     // Check each resolved keybind against the event.
     for (const kb of keybinds) {
       if (!eventMatchesKeybind(ev, kb)) continue
@@ -64,7 +102,7 @@ export function attachKeyboardHandler(
       // For shift+enter we need to block all event types (keydown, keypress,
       // keyup) to prevent the Kitty keyboard protocol sequence from leaking.
       if (kb.baseKey === 'enter' && kb.shift) {
-        if (ev.type === 'keydown') executeAction(kb, term, send)
+        if (ev.type === 'keydown') executeAction(kb, term, send, sendRaw)
         ev.preventDefault()
         return false
       }
@@ -72,7 +110,7 @@ export function attachKeyboardHandler(
       // For other bindings, only act on keydown.
       if (ev.type !== 'keydown') return true
 
-      const handled = executeAction(kb, term, send)
+      const handled = executeAction(kb, term, send, sendRaw)
       if (handled) {
         // Prevent browser default (e.g. Cmd+Left navigating back on Mac).
         // xterm.js does not call preventDefault when the custom handler
@@ -89,8 +127,17 @@ export function attachKeyboardHandler(
 /**
  * Execute a keybind action. Returns true if the event should be consumed
  * (not passed to xterm), false if xterm should still process it.
+ *
+ * `send` is the input channel (may apply mobile ctrl/alt arm modifiers).
+ * `sendRaw` bypasses modifier logic, used by paste to avoid corrupting
+ * clipboard content.
  */
-function executeAction(kb: ResolvedKeybind, term: Terminal, send: SendFn): boolean {
+function executeAction(
+  kb: ResolvedKeybind,
+  term: Terminal,
+  send: SendFn,
+  sendRaw: SendFn,
+): boolean {
   switch (kb.action) {
     case 'sendText':
       send(kb.args ?? '')
@@ -113,14 +160,80 @@ function executeAction(kb: ResolvedKeybind, term: Terminal, send: SendFn): boole
       return false
     }
 
+    case 'copy': {
+      const sel = term.getSelection()
+      if (sel) {
+        navigator.clipboard.writeText(sel)
+        term.clearSelection()
+      }
+      // Always consume the event, even with no selection.
+      // Unlike copyOrInterrupt, never falls through to SIGINT.
+      return true
+    }
+
+    case 'paste': {
+      // Read from the Clipboard API and send to the PTY. Uses sendRaw to
+      // bypass mobile ctrl/alt arm logic (same as the DOM paste handler).
+      // Requires clipboard-read permission in a secure context with a user
+      // gesture (keydown qualifies). Falls back with a console warning if
+      // the browser denies access.
+      navigator.clipboard.readText().then(text => {
+        if (text) {
+          sendRaw(formatPasteText(text, term.modes.bracketedPasteMode))
+        }
+      }).catch((err) => {
+        console.warn('Paste failed: clipboard access denied.', err)
+      })
+      return true
+    }
+
+    case 'selectAll':
+      term.selectAll()
+      return true
+
     default:
       return false
   }
 }
 
 /**
+ * Translate a single character into its Ctrl+<key> sequence.
+ *
+ * Lowercase letters produce the traditional ASCII control code (a=\x01).
+ * Uppercase letters imply Shift, emitting a CSI u (Kitty keyboard protocol)
+ * sequence: ESC [ <codepoint> ; 6 u  (modifiers = 1 + Shift(1) + Ctrl(4) = 6).
+ * Special characters (@, [, \, ], ^, _, ?) produce their standard Ctrl codes.
+ *
+ * Returns null for characters with no Ctrl equivalent.
+ */
+export function ctrlSequenceFor(ch: string): string | null {
+  if (ch.length !== 1) return null
+
+  // Uppercase letter: Ctrl+Shift via CSI u.
+  if (ch >= 'A' && ch <= 'Z') {
+    return `\x1b[${ch.toLowerCase().charCodeAt(0)};6u`
+  }
+  // Lowercase letter: traditional control code.
+  if (ch >= 'a' && ch <= 'z') {
+    return String.fromCharCode(ch.charCodeAt(0) - 96) // a=1, b=2, ..., z=26
+  }
+  switch (ch) {
+    case '@':    return '\x00'
+    case '[':    return '\x1b'
+    case '\\':   return '\x1c'
+    case ']':    return '\x1d'
+    case '^':    return '\x1e'
+    case '_':    return '\x1f'
+    case '?':    return '\x7f'
+    case '\x7f': return '\x08' // Backspace: Ctrl+H
+    default:     return null
+  }
+}
+
+/**
  * Normalize and optionally bracket-wrap text for pasting into a terminal.
- * Shared by the DOM paste handler and the mobile paste button.
+ * Shared by the keybind paste action, the DOM paste handler, and the mobile
+ * paste button.
  *
  * With bracketedPasteMode on, the receiving app owns newline handling, so
  * we normalize to \r inside the brackets (standard terminal convention).
@@ -148,6 +261,10 @@ export function formatPasteText(text: string, bracketedPasteMode: boolean): stri
 /**
  * Attach a paste handler to the terminal container using the DOM capture phase.
  *
+ * Handles non-keyboard paste: right-click, middle-click (X11), mobile paste
+ * button, and browser Edit menu. Keyboard-triggered paste (Ctrl+V, Cmd+V,
+ * Ctrl+Shift+V) goes through the keymap's `paste` action instead.
+ *
  * By listening with { capture: true } on an ancestor of xterm's internal
  * textarea, we intercept the paste event *before* xterm's own handler fires.
  * stopPropagation() keeps the event from reaching the textarea at all, so
@@ -158,14 +275,6 @@ export function formatPasteText(text: string, bracketedPasteMode: boolean): stri
  *   an armed alt/ctrl modifier would corrupt pasted text.
  * - We need to own the bracketed-paste / newline conversion ourselves so it is
  *   always correct regardless of what mobile modifier state is active.
- *
- * Newline handling:
- * - Bracketed paste mode (CSI ? 2004 h): \r?\n → \r (standard convention),
- *   then wrapped in \x1b[200~ ... \x1b[201~. ESC characters inside are
- *   replaced with U+241B to prevent bracket escape.
- * - Non-bracketed mode: newlines stay as \n so that applications running in
- *   raw mode can distinguish pasted newlines (\n) from Enter (\r). Shells
- *   that treat both as accept-line are unaffected.
  *
  * `send` should be sendRawInput (not sendInput) so that paste is never
  * transformed by the ctrl/alt modifier logic.

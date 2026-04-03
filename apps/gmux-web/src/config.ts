@@ -19,7 +19,7 @@ import type { ITerminalOptions, ITheme } from '@xterm/xterm'
  * Ctrl on everything else. Lets users write cross-platform keybinds like
  * "secondary+alt+t" that do the right thing on each OS.
  */
-const IS_MAC = typeof navigator !== 'undefined' &&
+export const IS_MAC = typeof navigator !== 'undefined' &&
   /mac|iphone|ipad|ipod/i.test(navigator.platform ?? '')
 export const SECONDARY_MOD: 'meta' | 'ctrl' = IS_MAC ? 'meta' : 'ctrl'
 
@@ -188,6 +188,9 @@ export interface Keybind {
    *   sendText        — send args as raw text to PTY
    *   sendKeys        — parse args as key combo, send escape sequence
    *   copyOrInterrupt — copy selection if any, else send SIGINT
+   *   copy            — copy selection to clipboard (no SIGINT fallback)
+   *   paste           — read clipboard and send to PTY
+   *   selectAll       — select all terminal content
    *   none            — disable this binding (used to suppress a built-in)
    */
   action: string
@@ -205,33 +208,86 @@ export interface ResolvedKeybind extends Keybind {
   baseKey: string
 }
 
-const KNOWN_ACTIONS = new Set(['sendText', 'sendKeys', 'copyOrInterrupt', 'none'])
+const KNOWN_ACTIONS = new Set(['sendText', 'sendKeys', 'copyOrInterrupt', 'copy', 'paste', 'selectAll', 'none'])
 
-export const DEFAULT_KEYBINDS: Keybind[] = [
-  // ── Universal ──
+/**
+ * Default keybinds, split by platform.
+ *
+ * These are the source of truth for all keyboard shortcuts. Every key combo
+ * that does something other than "send bytes to the terminal" is listed here.
+ * xterm.js only handles terminal input (characters, control codes, escape
+ * sequences); all UI and clipboard actions go through this keymap.
+ *
+ * User keybinds from ~/.config/gmux/keybinds.jsonc are layered on top:
+ * same-key entries override, action "none" disables a default.
+ */
+
+const UNIVERSAL_KEYBINDS: Keybind[] = [
   { key: 'shift+enter', action: 'sendText', args: '\n' },
   { key: 'ctrl+c', action: 'copyOrInterrupt' },
+]
 
-  // ── Linux/Windows: workarounds for browser-stolen shortcuts ──
+/** Linux / Windows defaults. */
+const LINUX_KEYBINDS: Keybind[] = [
+  // Clipboard: standard Linux terminal shortcuts (GNOME Terminal, Konsole,
+  // Alacritty, Windows Terminal). Ctrl+V is intercepted here rather than
+  // left to the browser passthrough so that xterm.js does not send \x16
+  // (quoted-insert) to the PTY before the paste content arrives.
+  { key: 'ctrl+shift+c', action: 'copy' },
+  { key: 'ctrl+v',       action: 'paste' },
+  { key: 'ctrl+shift+v', action: 'paste' },
+
   // Chrome/Firefox reserve Ctrl+T/N/W for tab management; they cannot be
   // intercepted by JavaScript.  Ctrl+Alt+<key> is the conventional workaround.
-  ...(!IS_MAC ? [
-    { key: 'ctrl+alt+t', action: 'sendKeys', args: 'ctrl+t' },
-    { key: 'ctrl+alt+n', action: 'sendKeys', args: 'ctrl+n' },
-    { key: 'ctrl+alt+w', action: 'sendKeys', args: 'ctrl+w' },
-  ] : []),
-
-  // ── Mac: native terminal conventions ──
-  // On Mac the browser steals Cmd+T/N/W instead, leaving Ctrl+T/N/W free,
-  // so no workarounds are needed.  These bindings replicate iTerm2 / macOS
-  // Terminal behavior that xterm.js does not provide out of the box.
-  ...(IS_MAC ? [
-    { key: 'meta+left',      action: 'sendKeys', args: 'home' },
-    { key: 'meta+right',     action: 'sendKeys', args: 'end' },
-    { key: 'meta+backspace', action: 'sendKeys', args: 'ctrl+u' },
-    { key: 'meta+k',         action: 'sendKeys', args: 'ctrl+l' },
-  ] : []),
+  { key: 'ctrl+alt+t', action: 'sendKeys', args: 'ctrl+t' },
+  { key: 'ctrl+alt+n', action: 'sendKeys', args: 'ctrl+n' },
+  { key: 'ctrl+alt+w', action: 'sendKeys', args: 'ctrl+w' },
 ]
+
+/** macOS defaults. Replicate iTerm2 / macOS Terminal conventions. */
+const MAC_KEYBINDS: Keybind[] = [
+  // Clipboard and selection: explicit bindings replace the implicit xterm.js
+  // passthrough chain (keydown → browser clipboard DOM event → xterm handler)
+  // so that every shortcut is visible, overridable, and consistently handled.
+  { key: 'meta+c', action: 'copy' },
+  { key: 'meta+v', action: 'paste' },
+  { key: 'meta+a', action: 'selectAll' },
+
+  // Navigation: Cmd+arrow produces Home/End (iTerm2 convention).
+  // Without these, Cmd+Left navigates the browser back.
+  { key: 'meta+left',      action: 'sendKeys', args: 'home' },
+  { key: 'meta+right',     action: 'sendKeys', args: 'end' },
+  { key: 'meta+backspace', action: 'sendKeys', args: 'ctrl+u' },
+  { key: 'meta+k',         action: 'sendKeys', args: 'ctrl+l' },
+]
+
+/**
+ * Mac navigation keybinds preserved when macCommandIsCtrl is enabled.
+ * Cmd+arrow and Cmd+Backspace keep their iTerm2 behavior; only
+ * Cmd+<character> is remapped to Ctrl.
+ */
+const MAC_NAVIGATION_KEYBINDS: Keybind[] = [
+  { key: 'meta+left',      action: 'sendKeys', args: 'home' },
+  { key: 'meta+right',     action: 'sendKeys', args: 'end' },
+  { key: 'meta+backspace', action: 'sendKeys', args: 'ctrl+u' },
+]
+
+/**
+ * Build the default keybind list for the current platform.
+ *
+ * When macCommandIsCtrl is true on Mac, the defaults use the Linux clipboard
+ * bindings (ctrl+c, ctrl+v, ctrl+shift+c, ctrl+shift+v) so that the
+ * meta→ctrl transformation in the keyboard handler matches them. Mac
+ * navigation shortcuts (Cmd+Left/Right/Backspace) are preserved.
+ */
+function buildDefaults(macCommandIsCtrl: boolean): Keybind[] {
+  if (IS_MAC && macCommandIsCtrl) {
+    return [...UNIVERSAL_KEYBINDS, ...LINUX_KEYBINDS, ...MAC_NAVIGATION_KEYBINDS]
+  }
+  return [...UNIVERSAL_KEYBINDS, ...(IS_MAC ? MAC_KEYBINDS : LINUX_KEYBINDS)]
+}
+
+export const DEFAULT_KEYBINDS: Keybind[] = buildDefaults(false)
 
 /**
  * Parse a key combo string into modifier flags and a base key.
@@ -280,6 +336,20 @@ export function keyComboToSequence(combo: string): string {
     seq = '\x1b[F'
   } else if (baseKey === 'delete' || baseKey === 'del') {
     seq = '\x1b[3~'
+  } else if (baseKey === 'up' || baseKey === 'arrowup') {
+    seq = '\x1b[A'
+  } else if (baseKey === 'down' || baseKey === 'arrowdown') {
+    seq = '\x1b[B'
+  } else if (baseKey === 'right' || baseKey === 'arrowright') {
+    seq = '\x1b[C'
+  } else if (baseKey === 'left' || baseKey === 'arrowleft') {
+    seq = '\x1b[D'
+  } else if (baseKey === 'pageup' || baseKey === 'page_up') {
+    seq = '\x1b[5~'
+  } else if (baseKey === 'pagedown' || baseKey === 'page_down') {
+    seq = '\x1b[6~'
+  } else if (baseKey === 'insert' || baseKey === 'ins') {
+    seq = '\x1b[2~'
   } else if (baseKey.length === 1) {
     seq = baseKey
   }
@@ -296,13 +366,20 @@ export function keyComboToSequence(combo: string): string {
  * Merge user keybinds with built-in defaults.
  * User entries override built-ins with the same normalized key.
  * Returns fully resolved keybinds (with parsed modifiers).
+ *
+ * When macCommandIsCtrl is true, the defaults are adjusted for Mac so
+ * that Cmd+character events (transformed to Ctrl by the keyboard handler)
+ * match the Linux-style ctrl bindings.
  */
-export function resolveKeybinds(user: Keybind[] | null | undefined): ResolvedKeybind[] {
+export function resolveKeybinds(
+  user: Keybind[] | null | undefined,
+  macCommandIsCtrl = false,
+): ResolvedKeybind[] {
   // Build a map of keybinds, keyed by normalized combo.
   const map = new Map<string, Keybind>()
 
-  // Defaults first.
-  for (const kb of DEFAULT_KEYBINDS) {
+  // Defaults first (platform-aware).
+  for (const kb of buildDefaults(macCommandIsCtrl)) {
     map.set(normalizeKeyString(kb.key), kb)
   }
 
@@ -357,12 +434,23 @@ function normalizeKeyString(key: string): string {
 /**
  * Short key names used in keybind configs mapped to their KeyboardEvent.key
  * values (lowercased).  Lets users write "meta+left" instead of "meta+arrowleft".
+ *
+ * Every alias accepted by keyComboToSequence (for sendKeys) must also be
+ * listed here so that eventMatchesKeybind can match the corresponding
+ * KeyboardEvent. Without an entry, a keybind using the alias would produce
+ * the correct escape sequence but never fire because the event key name
+ * (e.g. "escape") wouldn't match the alias (e.g. "esc").
  */
 const KEY_ALIASES: Record<string, string> = {
   left: 'arrowleft',
   right: 'arrowright',
   up: 'arrowup',
   down: 'arrowdown',
+  esc: 'escape',
+  del: 'delete',
+  ins: 'insert',
+  page_up: 'pageup',
+  page_down: 'pagedown',
 }
 
 /**
@@ -382,6 +470,33 @@ export function eventMatchesKeybind(ev: KeyboardEvent, kb: ResolvedKeybind): boo
 export interface TerminalConfig {
   themeConfig: ThemeConfig | null
   keybindsConfig: Keybind[] | null
+  macCommandIsCtrl: boolean
+}
+
+/**
+ * Parse keybinds.jsonc content. Accepts either:
+ *   - An array of keybinds (original format, backward compatible)
+ *   - An object with optional macCommandIsCtrl and bindings fields
+ *
+ * ```jsonc
+ * // Array format:
+ * [ { "key": "ctrl+alt+t", "action": "sendKeys", "args": "ctrl+t" } ]
+ *
+ * // Object format:
+ * { "macCommandIsCtrl": true, "bindings": [ ... ] }
+ * ```
+ */
+export function parseKeybindsFile(raw: unknown): { macCommandIsCtrl: boolean; bindings: Keybind[] | null } {
+  if (!raw) return { macCommandIsCtrl: false, bindings: null }
+  if (Array.isArray(raw)) return { macCommandIsCtrl: false, bindings: raw }
+  if (typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>
+    return {
+      macCommandIsCtrl: obj.macCommandIsCtrl === true,
+      bindings: Array.isArray(obj.bindings) ? obj.bindings as Keybind[] : null,
+    }
+  }
+  return { macCommandIsCtrl: false, bindings: null }
 }
 
 /**
@@ -391,14 +506,16 @@ export interface TerminalConfig {
 export async function fetchTerminalConfig(): Promise<TerminalConfig> {
   try {
     const resp = await fetch('/v1/terminal-config')
-    if (!resp.ok) return { themeConfig: null, keybindsConfig: null }
+    if (!resp.ok) return { themeConfig: null, keybindsConfig: null, macCommandIsCtrl: false }
     const json = await resp.json()
     const data = json.data ?? {}
+    const kb = parseKeybindsFile(data.keybinds)
     return {
       themeConfig: data.theme ?? null,
-      keybindsConfig: data.keybinds ?? null,
+      keybindsConfig: kb.bindings,
+      macCommandIsCtrl: kb.macCommandIsCtrl,
     }
   } catch {
-    return { themeConfig: null, keybindsConfig: null }
+    return { themeConfig: null, keybindsConfig: null, macCommandIsCtrl: false }
   }
 }

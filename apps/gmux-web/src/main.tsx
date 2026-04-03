@@ -885,13 +885,15 @@ function App() {
 
   const [terminalOptions, setTerminalOptions] = useState<ITerminalOptions | null>(null)
   const [keybinds, setKeybinds] = useState<ResolvedKeybind[] | null>(null)
+  const [macCommandIsCtrl, setMacCommandIsCtrl] = useState(false)
 
   useEffect(() => { fetchConfig().then(cfg => setLaunchers(cfg.launchers)) }, [])
   useEffect(() => { fetchHealth().then(setHealth) }, [])
   useEffect(() => {
     fetchTerminalConfig().then(tc => {
       setTerminalOptions(mergeThemeConfig(tc.themeConfig))
-      setKeybinds(resolveKeybinds(tc.keybindsConfig))
+      setMacCommandIsCtrl(tc.macCommandIsCtrl)
+      setKeybinds(resolveKeybinds(tc.keybindsConfig, tc.macCommandIsCtrl))
     })
   }, [])
 
@@ -1266,6 +1268,7 @@ function App() {
             session={selected}
             terminalOptions={terminalOptions}
             keybinds={keybinds}
+            macCommandIsCtrl={macCommandIsCtrl}
             ctrlArmed={ctrlArmed}
             onCtrlConsumed={handleCtrlConsumed}
             altArmed={altArmed}

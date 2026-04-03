@@ -65,7 +65,9 @@ Numeric values are clamped to safe ranges (e.g. fontSize 6-48, scrollback 0-100,
 
 `~/.config/gmux/keybinds.jsonc`
 
-Remap keys the browser steals, send raw text, or disable built-in bindings. The file is a JSON array of keybind entries:
+gmux ships a complete default keymap that is the source of truth for every keyboard shortcut. Every key combo that does something other than "send bytes to the terminal" is listed explicitly; nothing relies on implicit browser or xterm.js passthrough.
+
+Your `keybinds.jsonc` file layers on top: same-key entries override the defaults, and the `none` action disables a default. The file can be a JSON array or an object (see [macCommandIsCtrl](#maccommandisctrl) for the object format):
 
 ```jsonc
 [
@@ -87,25 +89,96 @@ Remap keys the browser steals, send raw text, or disable built-in bindings. The 
 | `sendKeys` | Parse `args` as a key combo and send its escape sequence (e.g. `"ctrl+t"` sends `^T`) |
 | `sendText` | Send `args` as raw text to the PTY |
 | `copyOrInterrupt` | Copy selection to clipboard if text is selected, otherwise send SIGINT |
+| `copy` | Copy selection to clipboard (does nothing if no selection; never sends SIGINT) |
+| `paste` | Read system clipboard and send contents to the PTY |
+| `selectAll` | Select all terminal content |
 | `none` | Disable this key binding (removes a built-in default) |
 
 ### Key format
 
 Key combos are case-insensitive and support these modifiers: `ctrl`, `shift`, `alt`, `meta` (or `cmd`/`super`). Modifier order doesn't matter: `ctrl+alt+t` and `Alt+Ctrl+T` are the same.
 
-Arrow keys can use short names: `left`, `right`, `up`, `down`. Named keys like `enter`, `escape`, `tab`, `backspace`, `home`, `end`, `delete` are also supported.
+Supported key names: `enter`, `escape` (`esc`), `tab`, `backspace`, `home`, `end`, `delete` (`del`), `insert` (`ins`), `pageup` (`page_up`), `pagedown` (`page_down`), `left`, `right`, `up`, `down`.
 
 ### The `secondary` modifier
 
-The virtual modifier `secondary` resolves to **Cmd** on macOS and **Ctrl** everywhere else. This lets you write cross-platform keybinds:
+The virtual modifier `secondary` resolves to **Cmd** on macOS and **Ctrl** everywhere else. Useful for cross-platform configs:
 
 ```jsonc
 { "key": "secondary+alt+t", "action": "sendKeys", "args": "ctrl+t" }
 ```
 
+Note: `secondary` works well for keys that do the same thing on both platforms. For copy/paste it is less useful because the shortcuts differ (Ctrl+Shift+C on Linux vs. Cmd+C on Mac), so the defaults handle each platform separately.
+
 ### User entries override defaults
 
-User keybinds override built-in defaults that share the same key combo. To see the current defaults, check [Keyboard shortcuts](/using-the-ui#keyboard-shortcuts).
+User keybinds override built-in defaults that share the same key combo. See [Keyboard shortcuts](/using-the-ui#keyboard-shortcuts) for the full default keymap.
+
+### Starter templates
+
+These are ready to paste into `~/.config/gmux/keybinds.jsonc`.
+
+**Quick commands** -- bind key combos to common shell commands:
+
+```jsonc
+[
+  { "key": "ctrl+alt+g", "action": "sendText", "args": "git status\r" },
+  { "key": "ctrl+alt+d", "action": "sendText", "args": "git diff\r" },
+  { "key": "ctrl+alt+l", "action": "sendText", "args": "git log --oneline -20\r" }
+]
+```
+
+**Vim-friendly** -- disable the Ctrl+C copy behavior so Ctrl+C always sends SIGINT (useful if you use visual mode for copying):
+
+```jsonc
+[
+  { "key": "ctrl+c", "action": "none" }
+]
+```
+
+**Disable all browser workarounds** -- if you run gmux as a PWA or `--app` window, the browser doesn't steal Ctrl+T/N/W, so the Ctrl+Alt workarounds are unnecessary:
+
+```jsonc
+[
+  { "key": "ctrl+alt+t", "action": "none" },
+  { "key": "ctrl+alt+n", "action": "none" },
+  { "key": "ctrl+alt+w", "action": "none" }
+]
+```
+
+### macCommandIsCtrl
+
+On Mac, Command is the primary modifier, but terminals expect Ctrl. By default gmux maps a handful of Cmd shortcuts (copy, paste, select all, navigation). If you want *every* Cmd+character to send its Ctrl equivalent instead, use the object format with `macCommandIsCtrl`:
+
+```jsonc
+{
+  "macCommandIsCtrl": true
+}
+```
+
+With this enabled:
+
+- **Cmd+A** sends Ctrl+A (beginning of line), not Select All
+- **Cmd+K** sends Ctrl+K (kill to end of line)
+- **Cmd+R** sends Ctrl+R (reverse search)
+- **Cmd+C** still copies when text is selected, sends Ctrl+C (SIGINT) otherwise
+- **Cmd+V** still pastes
+- **Cmd+Shift+C** copies (Ctrl+Shift+C binding from the Linux defaults)
+- **Cmd+Shift+A** sends Ctrl+Shift+A (CSI u / Kitty keyboard protocol sequence)
+- **Cmd+Left/Right/Backspace** keep their navigation behavior (Home, End, delete to start of line)
+
+Only single-character keys are remapped. Non-character keys (arrows, backspace, function keys) pass through to their normal keybinds. On Linux this option has no effect.
+
+You can combine it with additional bindings:
+
+```jsonc
+{
+  "macCommandIsCtrl": true,
+  "bindings": [
+    { "key": "ctrl+alt+g", "action": "sendText", "args": "git status\r" }
+  ]
+}
+```
 
 ## Environment variables
 
