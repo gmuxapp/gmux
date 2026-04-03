@@ -183,10 +183,19 @@ func (s *Store) Upsert(sess Session) {
 	sess.Title = s.resolveTitle(sess)
 	sess.Resumable = !sess.Alive && len(sess.Command) > 0
 	s.mu.Lock()
-	s.resolveSlug(&sess)
-	s.sessions[sess.ID] = sess
+	removed, skip := s.resolveDuplicateResumeKeysLocked(sess)
+	if !skip {
+		s.resolveSlug(&sess)
+		s.sessions[sess.ID] = sess
+	}
 	s.mu.Unlock()
 
+	for _, id := range removed {
+		s.broadcast(Event{Type: "session-remove", ID: id})
+	}
+	if skip {
+		return
+	}
 	s.broadcast(Event{
 		Type:    "session-upsert",
 		ID:      sess.ID,
@@ -208,10 +217,19 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 	fn(&sess)
 	sess.Title = s.resolveTitle(sess)
 	sess.Resumable = !sess.Alive && len(sess.Command) > 0
-	s.resolveSlug(&sess)
-	s.sessions[id] = sess
+	removed, skip := s.resolveDuplicateResumeKeysLocked(sess)
+	if !skip {
+		s.resolveSlug(&sess)
+		s.sessions[id] = sess
+	}
 	s.mu.Unlock()
 
+	for _, rid := range removed {
+		s.broadcast(Event{Type: "session-remove", ID: rid})
+	}
+	if skip {
+		return true
+	}
 	s.broadcast(Event{
 		Type:    "session-upsert",
 		ID:      id,
@@ -251,6 +269,44 @@ func (s *Store) SetTerminalSize(id string, cols, rows uint16) bool {
 		Session: &sess,
 	})
 	return true
+}
+
+// resolveDuplicateResumeKeysLocked deduplicates sessions that represent the
+// same logical resumable session (same ResumeKey) under different IDs.
+//
+// Typical case: a dead file-scanned shadow (file-xxxx) and a live runner
+// session (sess-xxxx) for the same underlying conversation.
+//
+// Rules:
+//   - alive beats dead
+//   - non-file IDs beat file-* shadow IDs
+//   - when a dead shadow arrives while a live session exists, skip it
+func (s *Store) resolveDuplicateResumeKeysLocked(sess Session) (removed []string, skip bool) {
+	if sess.ResumeKey == "" {
+		return nil, false
+	}
+	for id, other := range s.sessions {
+		if id == sess.ID || other.ResumeKey != sess.ResumeKey {
+			continue
+		}
+
+		incomingFile := strings.HasPrefix(sess.ID, "file-")
+		otherFile := strings.HasPrefix(other.ID, "file-")
+
+		switch {
+		case sess.Alive && !other.Alive:
+			delete(s.sessions, id)
+			removed = append(removed, id)
+		case !sess.Alive && other.Alive:
+			return removed, true
+		case !incomingFile && otherFile:
+			delete(s.sessions, id)
+			removed = append(removed, id)
+		case incomingFile && !otherFile:
+			return removed, true
+		}
+	}
+	return removed, false
 }
 
 func (s *Store) Remove(id string) bool {

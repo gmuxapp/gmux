@@ -218,6 +218,72 @@ func TestUpdateBroadcasts(t *testing.T) {
 	}
 }
 
+func TestUpsertAliveSessionRemovesDeadShadowWithSameResumeKey(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "file-abc", Kind: "pi", Alive: false,
+		Command: []string{"pi"}, ResumeKey: "rk-1", AdapterTitle: "shadow",
+	})
+	s.Upsert(Session{
+		ID: "sess-123", Kind: "pi", Alive: true,
+		ResumeKey: "rk-1", AdapterTitle: "live",
+	})
+
+	items := s.List()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 session, got %d: %+v", len(items), items)
+	}
+	if items[0].ID != "sess-123" {
+		t.Fatalf("expected live session to remain, got %q", items[0].ID)
+	}
+}
+
+func TestUpsertDeadShadowSkippedWhenAliveSessionExists(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "sess-123", Kind: "pi", Alive: true,
+		ResumeKey: "rk-1", AdapterTitle: "live",
+	})
+	s.Upsert(Session{
+		ID: "file-abc", Kind: "pi", Alive: false,
+		Command: []string{"pi"}, ResumeKey: "rk-1", AdapterTitle: "shadow",
+	})
+
+	items := s.List()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 session, got %d: %+v", len(items), items)
+	}
+	if items[0].ID != "sess-123" {
+		t.Fatalf("expected live session to remain, got %q", items[0].ID)
+	}
+}
+
+func TestUpdateResumeKeyOnAliveSessionRemovesDeadShadow(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "file-abc", Kind: "pi", Alive: false,
+		Command: []string{"pi"}, ResumeKey: "rk-1", AdapterTitle: "shadow",
+	})
+	s.Upsert(Session{
+		ID: "sess-123", Kind: "pi", Alive: true, AdapterTitle: "live",
+	})
+
+	ok := s.Update("sess-123", func(sess *Session) {
+		sess.ResumeKey = "rk-1"
+	})
+	if !ok {
+		t.Fatal("expected update to succeed")
+	}
+
+	items := s.List()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 session, got %d: %+v", len(items), items)
+	}
+	if items[0].ID != "sess-123" {
+		t.Fatalf("expected live session to remain, got %q", items[0].ID)
+	}
+}
+
 func TestBroadcastDoesNotMutateState(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Kind: "shell", Alive: true})
