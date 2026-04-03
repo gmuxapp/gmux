@@ -244,13 +244,12 @@ describe('matchSession', () => {
     expect(matchSession(sess, projects)?.slug).toBe('gmux')
   })
 
-  it('path-only project takes precedence over remote project path fallback', () => {
+  it('falls back to path matching when no remote matches', () => {
     const sess = makeSession({ id: 's3', cwd: '/dev/yapp/deep' })
     expect(matchSession(sess, projects)?.slug).toBe('yapp')
   })
 
-  it('remote project falls back to its paths', () => {
-    // Session in gmux directory but without remotes
+  it('uses project paths when a session has no remotes', () => {
     const sess = makeSession({ id: 's4', cwd: '/dev/gmux/src' })
     expect(matchSession(sess, projects)?.slug).toBe('gmux')
   })
@@ -258,6 +257,42 @@ describe('matchSession', () => {
   it('returns null for unmatched sessions', () => {
     const sess = makeSession({ id: 's5', cwd: '/other/place' })
     expect(matchSession(sess, projects)).toBeNull()
+  })
+
+  it('lets remote-backed child projects beat a vague parent path', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'mg', paths: ['/home/mg'] },
+      { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/home/mg/dev/gmux'] },
+      { slug: 'dots', remote: 'github.com/mgabor3141/dots', paths: ['/home/mg/.local/share/chezmoi'] },
+    ]
+
+    const gmuxSession = makeSession({
+      id: 'g1',
+      cwd: '/home/mg/dev/gmux/src',
+      remotes: { origin: 'git@github.com:gmuxapp/gmux.git' },
+    })
+    expect(matchSession(gmuxSession, projects)?.slug).toBe('gmux')
+
+    const dotsSession = makeSession({
+      id: 'd1',
+      cwd: '/home/mg/.local/share/chezmoi',
+      remotes: { origin: 'git@github.com:mgabor3141/dots.git' },
+    })
+    expect(matchSession(dotsSession, projects)?.slug).toBe('dots')
+  })
+
+  it('keeps nested workspaces under the remote-matched project', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'teak', paths: ['/home/user/dev/gmux/.grove/teak'] },
+      { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/home/user/dev/gmux'] },
+    ]
+
+    const sess = makeSession({
+      id: 'w1',
+      cwd: '/home/user/dev/gmux/.grove/teak/src',
+      remotes: { origin: 'git@github.com:gmuxapp/gmux.git' },
+    })
+    expect(matchSession(sess, projects)?.slug).toBe('gmux')
   })
 })
 

@@ -2,10 +2,9 @@
 // which sessions appear in the sidebar.
 //
 // Every project has filesystem paths (where the code lives). An optional
-// remote URL enables cross-machine matching. Match precedence: path-only
-// projects first (longest prefix), then remote-matched, then remote
-// projects falling back to their paths. State is persisted to
-// projects.json in the state directory.
+// remote URL enables cross-machine matching. Match precedence: remote
+// matches first, then path matches with longest prefix. State is
+// persisted to projects.json in the state directory.
 package projects
 
 import (
@@ -123,46 +122,16 @@ func (s *State) Validate() error {
 
 // Match returns the project that best matches the given session.
 //
-// Precedence (first match wins):
-//  1. Path-matched projects (no remote), longest prefix.
-//  2. Remote-matched projects, by remote URL.
-//  3. Remote-matched projects, falling back to path prefix.
-//     This catches sessions that are physically inside a project
-//     directory but don't have remotes set (e.g. new repos).
+// Precedence:
+//  1. Remote-matched projects, by remote URL.
+//  2. Path matches across all projects, longest prefix wins.
 //
 // Returns nil if no project matches.
 func (s *State) Match(cwd, workspaceRoot string, remotes map[string]string) *Item {
 	normCwd := NormalizePath(cwd)
 	normWS := NormalizePath(workspaceRoot)
 
-	// Phase 1: path-matched projects (no remote), longest prefix wins.
-	// These are projects that opted into path-based matching.
-	var best *Item
-	bestLen := 0
-
-	for i := range s.Items {
-		item := &s.Items[i]
-		if item.Remote != "" {
-			continue
-		}
-		for _, p := range item.Paths {
-			norm := NormalizePath(p)
-			if norm == "" {
-				continue
-			}
-			if pathUnder(normCwd, norm) || pathUnder(normWS, norm) {
-				if len(norm) > bestLen {
-					bestLen = len(norm)
-					best = item
-				}
-			}
-		}
-	}
-	if best != nil {
-		return best
-	}
-
-	// Phase 2: remote-matched projects, by remote URL.
+	// Phase 1: remote-matched projects, by remote URL.
 	for i := range s.Items {
 		item := &s.Items[i]
 		if item.Remote == "" {
@@ -176,16 +145,11 @@ func (s *State) Match(cwd, workspaceRoot string, remotes map[string]string) *Ite
 		}
 	}
 
-	// Phase 3: remote-matched projects, falling back to their paths.
-	// A session might be inside a project directory but lack remotes
-	// (e.g. newly cloned repo before first push, or a non-VCS subdirectory).
-	best = nil
-	bestLen = 0
+	// Phase 2: any path match, longest prefix wins.
+	var best *Item
+	bestLen := 0
 	for i := range s.Items {
 		item := &s.Items[i]
-		if item.Remote == "" {
-			continue // already checked in phase 1
-		}
 		for _, p := range item.Paths {
 			norm := NormalizePath(p)
 			if norm == "" {

@@ -235,7 +235,7 @@ func TestMatchRemoteBased(t *testing.T) {
 	}
 }
 
-func TestMatchPathPrecedenceOverRemote(t *testing.T) {
+func TestMatchRemotePrecedenceOverPath(t *testing.T) {
 	s := &State{Items: []Item{
 		{Slug: "teak", Paths: []string{"/home/user/dev/gmux/.grove/teak"}},
 		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
@@ -243,12 +243,13 @@ func TestMatchPathPrecedenceOverRemote(t *testing.T) {
 
 	remotes := map[string]string{"origin": "git@github.com:gmuxapp/gmux.git"}
 
-	// Session in teak directory with the gmux remote: path wins.
+	// Session in teak directory with the gmux remote: remote wins so workspaces
+	// group under the same project.
 	m := s.Match("/home/user/dev/gmux/.grove/teak/src", "", remotes)
-	if m == nil || m.Slug != "teak" {
-		t.Errorf("expected teak (path precedence), got %v", m)
+	if m == nil || m.Slug != "gmux" {
+		t.Errorf("expected gmux (remote precedence), got %v", m)
 	}
-	// Session in main gmux directory: only remote matches.
+	// Session in main gmux directory: remote also matches.
 	m = s.Match("/home/user/dev/gmux/src", "", remotes)
 	if m == nil || m.Slug != "gmux" {
 		t.Errorf("expected gmux (remote), got %v", m)
@@ -270,6 +271,24 @@ func TestMatchLongestPrefixWins(t *testing.T) {
 	m = s.Match("/home/user/dev/gmux/src/main.go", "", nil)
 	if m == nil || m.Slug != "parent" {
 		t.Errorf("expected parent, got %v", m)
+	}
+}
+
+func TestMatchSpecificChildPathBeatsVagueParentEvenForRemoteProject(t *testing.T) {
+	s := &State{Items: []Item{
+		{Slug: "home", Paths: []string{"/home/mg"}},
+		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/mg/dev/gmux"}},
+		{Slug: "dots", Remote: "github.com/mgabor3141/dots", Paths: []string{"/home/mg/.local/share/chezmoi"}},
+	}}
+
+	m := s.Match("/home/mg/dev/gmux/src", "", map[string]string{"origin": "git@github.com:gmuxapp/gmux.git"})
+	if m == nil || m.Slug != "gmux" {
+		t.Errorf("expected gmux, got %v", m)
+	}
+
+	m = s.Match("/home/mg/.local/share/chezmoi", "", map[string]string{"origin": "git@github.com:mgabor3141/dots.git"})
+	if m == nil || m.Slug != "dots" {
+		t.Errorf("expected dots, got %v", m)
 	}
 }
 

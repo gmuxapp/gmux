@@ -153,32 +153,14 @@ function pathUnder(candidate: string | undefined, base: string): boolean {
  * Returns the project that best matches a session, or null.
  *
  * Precedence (mirrors Go State.Match):
- *  1. Path-matched projects (no remote), longest prefix.
- *  2. Remote-matched projects, by remote URL.
- *  3. Remote-matched projects, falling back to path prefix
- *     (catches sessions without remotes inside a project directory).
+ *  1. Remote-matched projects, by remote URL.
+ *  2. Path matches across all projects, longest prefix wins.
  */
 export function matchSession(
   session: Session,
   projects: ProjectItem[],
 ): ProjectItem | null {
-  // Phase 1: path-matched projects (no remote), longest prefix wins.
-  let best: ProjectItem | null = null
-  let bestLen = 0
-  for (const project of projects) {
-    if (project.remote) continue
-    for (const p of project.paths) {
-      if (pathUnder(session.cwd, p) || pathUnder(session.workspace_root, p)) {
-        if (p.length > bestLen) {
-          bestLen = p.length
-          best = project
-        }
-      }
-    }
-  }
-  if (best) return best
-
-  // Phase 2: remote-matched projects.
+  // Phase 1: remote-matched projects.
   if (session.remotes) {
     for (const project of projects) {
       if (!project.remote) continue
@@ -191,11 +173,10 @@ export function matchSession(
     }
   }
 
-  // Phase 3: remote-matched projects, falling back to their paths.
-  best = null
-  bestLen = 0
+  // Phase 2: any path match, longest prefix wins.
+  let best: ProjectItem | null = null
+  let bestLen = 0
   for (const project of projects) {
-    if (!project.remote) continue
     for (const p of project.paths) {
       if (pathUnder(session.cwd, p) || pathUnder(session.workspace_root, p)) {
         if (p.length > bestLen) {
