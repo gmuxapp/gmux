@@ -1,3 +1,74 @@
+// --- URL routing ---
+
+/** Parse a URL path into project/adapter/slug segments. */
+export function parseSessionPath(path: string): {
+  project?: string
+  adapter?: string
+  slug?: string
+} {
+  // Strip leading slash and split.
+  const parts = path.replace(/^\//, '').split('/').filter(Boolean)
+  if (parts.length === 0) return {}
+  // Skip internal routes.
+  if (parts[0] === '_') return {}
+  if (parts.length === 1) return { project: parts[0] }
+  if (parts.length === 2) return { project: parts[0], adapter: parts[1] }
+  return { project: parts[0], adapter: parts[1], slug: parts[2] }
+}
+
+/** Build a URL path for a session within a project. */
+export function sessionPath(
+  projectSlug: string,
+  session: { kind: string; slug?: string; id: string },
+): string {
+  const slug = session.slug || session.id.slice(0, 8)
+  return `/${projectSlug}/${session.kind}/${slug}`
+}
+
+/**
+ * Resolve a parsed URL path to a session ID.
+ * Returns null if no matching session is found.
+ */
+export function resolveSessionFromPath(
+  parsed: { project?: string; adapter?: string; slug?: string },
+  projects: ProjectItem[],
+  sessions: Session[],
+): string | null {
+  if (!parsed.project) return null
+
+  // Find the project by slug.
+  const project = projects.find(p => p.slug === parsed.project)
+  if (!project) return null
+
+  // Match sessions to this project.
+  const projectSessions = sessions.filter(
+    s => matchSession(s, projects)?.slug === parsed.project,
+  )
+
+  if (!parsed.adapter) {
+    // /:project only - return first alive session, or first session.
+    const alive = projectSessions.find(s => s.alive)
+    return alive?.id ?? projectSessions[0]?.id ?? null
+  }
+
+  // Filter by adapter kind.
+  const adapterSessions = projectSessions.filter(s => s.kind === parsed.adapter)
+
+  if (!parsed.slug) {
+    // /:project/:adapter only - return first alive, or first.
+    const alive = adapterSessions.find(s => s.alive)
+    return alive?.id ?? adapterSessions[0]?.id ?? null
+  }
+
+  // Full match: /:project/:adapter/:slug
+  // Try exact slug match first, then prefix match on session ID.
+  const exact = adapterSessions.find(s => s.slug === parsed.slug)
+  if (exact) return exact.id
+
+  const byId = adapterSessions.find(s => s.id.startsWith(parsed.slug!))
+  return byId?.id ?? null
+}
+
 export interface SessionStatus {
   label: string
   working: boolean

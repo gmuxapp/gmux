@@ -1,6 +1,6 @@
 import { render } from 'preact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { LocationProvider, Router, Route, lazy } from 'preact-iso'
+import { LocationProvider, Router, Route, lazy, useLocation } from 'preact-iso'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 import { createSidebarState } from './sidebar-state'
@@ -13,7 +13,7 @@ import { useArrivalPulse } from './use-arrival-pulse'
 import { useActivityTracker } from './use-activity'
 
 import type { Session, Folder, DiscoveredProject } from './types'
-import { buildProjectFolders } from './types'
+import { buildProjectFolders, parseSessionPath, sessionPath, resolveSessionFromPath, matchSession } from './types'
 import { getMockFolders } from './mock-data/index'
 import { installCopySession } from './mock-data/export-session'
 import type { Session as ProtocolSession } from '@gmux/protocol'
@@ -866,8 +866,9 @@ function App() {
     return () => vv.removeEventListener('resize', update)
   }, [])
 
+  const loc = useLocation()
   const [sessions, setSessions] = useState<Session[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedIdRaw] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [connState, setConnState] = useState<ConnectionState>('connecting')
   const [ctrlArmed, setCtrlArmed] = useState(false)
@@ -876,6 +877,19 @@ function App() {
   const [health, setHealth] = useState<HealthData | null>(null)
   const [sidebarVersion, forceUpdate] = useState(0) // re-render on sidebar state change
   const { isActive: isSessionActive, handleActivity, activityVersion } = useActivityTracker()
+
+  // URL-aware session selection: push URL when selecting, resolve URL on load.
+  const setSelectedId = useCallback((id: string | null) => {
+    setSelectedIdRaw(id)
+    if (!id) return
+    // Find the session and its project to build the URL.
+    const sess = sessions.find(s => s.id === id)
+    if (!sess) return
+    const project = matchSession(sess, sidebarState.configured)
+    if (!project) return
+    const url = sessionPath(project.slug, sess)
+    if (loc.path !== url) loc.route(url, true)
+  }, [sessions, sidebarVersion, loc])
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   const terminalFocusRef = useRef<(() => void) | null>(null)
   const terminalPasteRef = useRef<((text: string) => void) | null>(null)
@@ -1025,15 +1039,29 @@ function App() {
     [sessions, selectedId],
   )
 
-  // Auto-select: pick first attachable session on initial load.
+  // URL-based session resolution: on initial load, try to resolve the URL path
+  // to a session. Falls back to auto-select if URL doesn't match.
   const hasAutoSelected = useRef(false)
   useEffect(() => {
-    if (!selectedId && !hasAutoSelected.current && filteredSessions.length > 0) {
-      hasAutoSelected.current = true
-      const best = filteredSessions.find(s => s.alive && s.socket_path)
-      if (best) setSelectedId(best.id)
+    if (hasAutoSelected.current || filteredSessions.length === 0) return
+    if (selectedId) { hasAutoSelected.current = true; return }
+
+    // Try URL resolution first.
+    const parsed = parseSessionPath(loc.path)
+    if (parsed.project) {
+      const resolved = resolveSessionFromPath(parsed, sidebarState.configured, filteredSessions)
+      if (resolved) {
+        hasAutoSelected.current = true
+        setSelectedIdRaw(resolved) // don't push URL back, we're already on it
+        return
+      }
     }
-  }, [filteredSessions, selectedId])
+
+    // Fallback: pick first attachable session.
+    hasAutoSelected.current = true
+    const best = filteredSessions.find(s => s.alive && s.socket_path)
+    if (best) setSelectedId(best.id)
+  }, [filteredSessions, selectedId, sidebarVersion])
 
   // --- Actions: send to backend, wait for SSE. No optimistic updates. ---
 
