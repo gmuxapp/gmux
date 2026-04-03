@@ -8,6 +8,7 @@
 #   ROLE_FEATURE   - Discord role ID for feature releases
 #   ROLE_PATCH     - Discord role ID for patch releases
 set -euo pipefail
+trap 'echo "error: ${BASH_SOURCE}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 if [[ -z "${WEBHOOK_URL:-}" ]]; then
   echo "DISCORD_WEBHOOK_URL not set, skipping notification"

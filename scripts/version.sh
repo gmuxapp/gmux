@@ -8,6 +8,7 @@
 #   scripts/version.sh           # apply changes
 #   scripts/version.sh --dry-run # print version and entries, change nothing
 set -euo pipefail
+trap 'echo "error: ${BASH_SOURCE}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CHANGELOG="$ROOT/apps/website/src/content/docs/changelog.mdx"

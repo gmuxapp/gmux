@@ -8,6 +8,7 @@
 # Falls back to a placeholder (or truncation for --condense) if the API is
 # unavailable or OPENROUTER_API_KEY is not set.
 set -euo pipefail
+trap 'echo "error: ${BASH_SOURCE}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 condense=false
 if [[ "${1:-}" == "--condense" ]]; then
@@ -32,11 +33,11 @@ fi
 
 # First free model in OpenRouter's default ordering (correlates with
 # popularity) with a reasonable context window.
-model=$(curl -sf 'https://openrouter.ai/api/v1/models' | jq -r '
+model=$(curl -sf 'https://openrouter.ai/api/v1/models' 2>/dev/null | jq -r '
   [.data[]
     | select(.id | endswith(":free"))
     | select(.context_length >= 32000)
-  ] | .[0].id')
+  ] | .[0].id' 2>/dev/null || true)
 
 if [[ -z "$model" || "$model" == "null" ]]; then
   echo "Could not select a model." >&2
@@ -103,7 +104,7 @@ for attempt in 1 2 3; do
         max_tokens: $max_tokens
       }')")
 
-  result=$(echo "$response" | jq -r '.choices[0].message.content // empty')
+  result=$(echo "$response" | jq -r '.choices[0].message.content // empty' 2>/dev/null || true)
   if [[ -n "$result" ]]; then
     echo "$result"
     exit 0
