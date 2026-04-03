@@ -105,6 +105,7 @@ export interface Session {
 export interface Folder {
   name: string      // display name (project slug or derived name)
   path: string      // project slug (used as key)
+  launchCwd: string // filesystem path for launching new sessions
   sessions: Session[]
 }
 
@@ -113,8 +114,7 @@ export interface Folder {
 export interface ProjectItem {
   slug: string
   remote?: string
-  paths?: string[]
-  hidden?: boolean
+  paths: string[]
 }
 
 export interface DiscoveredProject {
@@ -152,11 +152,11 @@ export function matchSession(
   session: Session,
   projects: ProjectItem[],
 ): ProjectItem | null {
-  // Phase 1: path-based projects, longest prefix wins.
+  // Phase 1: path-matched projects (no remote), longest prefix wins.
   let bestPath: ProjectItem | null = null
   let bestLen = 0
   for (const project of projects) {
-    if (!project.paths) continue
+    if (project.remote) continue // remote-matched, skip in this phase
     for (const p of project.paths) {
       if (pathUnder(session.cwd, p) || pathUnder(session.workspace_root, p)) {
         if (p.length > bestLen) {
@@ -168,7 +168,7 @@ export function matchSession(
   }
   if (bestPath) return bestPath
 
-  // Phase 2: remote-based projects.
+  // Phase 2: remote-matched projects.
   if (session.remotes) {
     for (const project of projects) {
       if (!project.remote) continue
@@ -186,35 +186,32 @@ export function matchSession(
 
 /**
  * Build Folder[] from configured projects + live sessions.
- * Each visible project becomes a folder with its matched sessions.
+ * Each project becomes a folder with its matched sessions.
  * Order follows the project list order (user-controlled).
  */
 export function buildProjectFolders(
   projects: ProjectItem[],
   sessions: Session[],
 ): Folder[] {
-  // Pre-allocate buckets for visible projects.
   const buckets = new Map<string, Session[]>()
   for (const project of projects) {
-    if (!project.hidden) buckets.set(project.slug, [])
+    buckets.set(project.slug, [])
   }
 
-  // Match each session to a project.
   for (const session of sessions) {
     const matched = matchSession(session, projects)
-    if (matched && !matched.hidden && buckets.has(matched.slug)) {
+    if (matched && buckets.has(matched.slug)) {
       buckets.get(matched.slug)!.push(session)
     }
   }
 
-  // Build folders in project order.
   const folders: Folder[] = []
   for (const project of projects) {
-    if (project.hidden) continue
     const matched = buckets.get(project.slug) || []
     folders.push({
       name: project.slug,
       path: project.slug,
+      launchCwd: project.paths[0],
       sessions: matched.sort((a, b) => {
         if (a.cwd !== b.cwd) return a.cwd < b.cwd ? -1 : 1
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()

@@ -489,20 +489,25 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		// Derive slug from the match rule.
+		if len(req.Paths) == 0 {
+			writeError(w, http.StatusBadRequest, "bad_request", "paths required")
+			return
+		}
+
+		// Normalize inputs.
+		for i, p := range req.Paths {
+			req.Paths[i] = projects.NormalizePath(p)
+		}
+		if req.Remote != "" {
+			req.Remote = projects.NormalizeRemote(req.Remote)
+		}
+
+		// Derive slug: prefer remote repo name, fall back to first path basename.
 		var slug string
 		if req.Remote != "" {
 			slug = projects.SlugFromRemote(req.Remote)
-			req.Remote = projects.NormalizeRemote(req.Remote)
-		} else if len(req.Paths) > 0 {
-			slug = projects.SlugFromPath(req.Paths[0])
-			// Normalize all paths.
-			for i, p := range req.Paths {
-				req.Paths[i] = projects.NormalizePath(p)
-			}
 		} else {
-			writeError(w, http.StatusBadRequest, "bad_request", "remote or paths required")
-			return
+			slug = projects.SlugFromPath(req.Paths[0])
 		}
 
 		state, err := projects.Load(stateDir)
@@ -514,11 +519,10 @@ func serve(stderr io.Writer) int {
 
 		slug = projects.UniqueSlug(slug, state.Items)
 
-		item := projects.Item{Slug: slug}
-		if req.Remote != "" {
-			item.Remote = req.Remote
-		} else {
-			item.Paths = req.Paths
+		item := projects.Item{
+			Slug:   slug,
+			Remote: req.Remote,
+			Paths:  req.Paths,
 		}
 
 		state.Items = append(state.Items, item)

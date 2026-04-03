@@ -68,22 +68,6 @@ export function createSidebarState() {
       fetchProjects()
     },
 
-    /** Hide a project (keep it configured but remove from sidebar). */
-    async hideProject(slug: string) {
-      const items = data.configured.map(item =>
-        item.slug === slug ? { ...item, hidden: true } : item
-      )
-      await putProjects(items)
-    },
-
-    /** Unhide a project. */
-    async showProject(slug: string) {
-      const items = data.configured.map(item =>
-        item.slug === slug ? { ...item, hidden: false } : item
-      )
-      await putProjects(items)
-    },
-
     /** Remove a project from the configured list. */
     async removeProject(slug: string) {
       const items = data.configured.filter(item => item.slug !== slug)
@@ -91,7 +75,7 @@ export function createSidebarState() {
     },
 
     /** Add a discovered project. */
-    async addProject(req: { remote?: string; paths?: string[] }) {
+    async addProject(req: { remote?: string; paths: string[] }) {
       try {
         const resp = await fetch('/v1/projects/add', {
           method: 'POST',

@@ -22,8 +22,8 @@ func TestSaveAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	original := &State{
 		Items: []Item{
-			{Slug: "gmux", Remote: "github.com/gmuxapp/gmux"},
-			{Slug: "scripts", Paths: []string{"/home/user/scripts"}, Hidden: true},
+			{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
+			{Slug: "scripts", Paths: []string{"/home/user/scripts"}},
 		},
 	}
 	if err := original.Save(dir); err != nil {
@@ -49,7 +49,7 @@ func TestSaveAndLoad(t *testing.T) {
 	if loaded.Items[0].Slug != "gmux" || loaded.Items[0].Remote != "github.com/gmuxapp/gmux" {
 		t.Errorf("item 0 = %+v", loaded.Items[0])
 	}
-	if loaded.Items[1].Slug != "scripts" || !loaded.Items[1].Hidden {
+	if loaded.Items[1].Slug != "scripts" {
 		t.Errorf("item 1 = %+v", loaded.Items[1])
 	}
 }
@@ -78,7 +78,7 @@ func TestLoadCorruptedFile(t *testing.T) {
 
 func TestValidateValid(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux"},
+		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
 		{Slug: "scripts", Paths: []string{"/home/user/scripts"}},
 	}}
 	if err := s.Validate(); err != nil {
@@ -128,21 +128,31 @@ func TestValidateDuplicateSlug(t *testing.T) {
 	}
 }
 
-func TestValidateBothRemoteAndPaths(t *testing.T) {
+func TestValidateRemoteWithPaths(t *testing.T) {
+	// Remote-based projects should also have paths (for launch directory).
 	s := &State{Items: []Item{
 		{Slug: "foo", Remote: "github.com/org/repo", Paths: []string{"/tmp"}},
 	}}
-	if err := s.Validate(); err == nil {
-		t.Fatal("expected error for both remote and paths")
+	if err := s.Validate(); err != nil {
+		t.Fatalf("remote + paths should be valid: %v", err)
 	}
 }
 
-func TestValidateNeitherRemoteNorPaths(t *testing.T) {
+func TestValidateNoPaths(t *testing.T) {
 	s := &State{Items: []Item{
 		{Slug: "foo"},
 	}}
 	if err := s.Validate(); err == nil {
-		t.Fatal("expected error for neither remote nor paths")
+		t.Fatal("expected error for missing paths")
+	}
+}
+
+func TestValidateRemoteWithoutPaths(t *testing.T) {
+	s := &State{Items: []Item{
+		{Slug: "foo", Remote: "github.com/org/repo"},
+	}}
+	if err := s.Validate(); err == nil {
+		t.Fatal("expected error for remote without paths")
 	}
 }
 
@@ -197,7 +207,7 @@ func TestMatchPathBased(t *testing.T) {
 
 func TestMatchRemoteBased(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux"},
+		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
 	}}
 
 	// Match via HTTPS-style remote.
@@ -228,7 +238,7 @@ func TestMatchRemoteBased(t *testing.T) {
 func TestMatchPathPrecedenceOverRemote(t *testing.T) {
 	s := &State{Items: []Item{
 		{Slug: "teak", Paths: []string{"/home/user/dev/gmux/.grove/teak"}},
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux"},
+		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
 	}}
 
 	remotes := map[string]string{"origin": "git@github.com:gmuxapp/gmux.git"}
@@ -265,7 +275,7 @@ func TestMatchLongestPrefixWins(t *testing.T) {
 
 func TestMatchNoMatch(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux"},
+		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
 		{Slug: "scripts", Paths: []string{"/home/user/scripts"}},
 	}}
 	m := s.Match("/home/user/dev/other", "", map[string]string{"origin": "github.com/other/repo"})
@@ -383,7 +393,7 @@ func TestUniqueSlugWithConflict(t *testing.T) {
 
 func TestDiscoveredBasic(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux"},
+		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/dev/gmux"}},
 	}}
 
 	sessions := []SessionInfo{

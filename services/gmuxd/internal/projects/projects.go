@@ -19,12 +19,14 @@ import (
 const fileName = "projects.json"
 
 // Item is a user-configured project entry.
-// Exactly one of Remote or Paths must be set.
+// Item is a user-configured project entry.
+// Every project has Paths (where the code lives on disk).
+// Remote is optional: when set, matching uses the remote URL
+// instead of paths, enabling cross-machine and cross-clone grouping.
 type Item struct {
 	Slug   string   `json:"slug"`
 	Remote string   `json:"remote,omitempty"`
-	Paths  []string `json:"paths,omitempty"`
-	Hidden bool     `json:"hidden,omitempty"`
+	Paths  []string `json:"paths"`
 }
 
 // State holds the ordered list of configured projects.
@@ -77,7 +79,7 @@ func (s *State) Save(stateDir string) error {
 
 // Validate checks the state for consistency:
 //   - Each item has a valid, non-empty slug.
-//   - Each item has exactly one of Remote or Paths.
+//   - Each item has at least one path.
 //   - No duplicate slugs.
 //   - No exact duplicate normalized paths across items.
 //   - Nesting (one path under another) is allowed.
@@ -97,13 +99,8 @@ func (s *State) Validate() error {
 		}
 		slugs[item.Slug] = true
 
-		hasRemote := item.Remote != ""
-		hasPaths := len(item.Paths) > 0
-		if hasRemote && hasPaths {
-			return fmt.Errorf("item %q: has both remote and paths", item.Slug)
-		}
-		if !hasRemote && !hasPaths {
-			return fmt.Errorf("item %q: has neither remote nor paths", item.Slug)
+		if len(item.Paths) == 0 {
+			return fmt.Errorf("item %q: paths is empty", item.Slug)
 		}
 
 		for _, p := range item.Paths {
@@ -121,7 +118,9 @@ func (s *State) Validate() error {
 }
 
 // Match returns the project that best matches the given session.
-// Precedence: path-based (longest prefix) before remote-based.
+// Precedence: path-matched projects (longest prefix) before
+// remote-matched projects. A project with a Remote set matches
+// by remote URL; a project without Remote matches by paths.
 // Returns nil if no project matches.
 func (s *State) Match(cwd, workspaceRoot string, remotes map[string]string) *Item {
 	normCwd := NormalizePath(cwd)

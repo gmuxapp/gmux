@@ -27,25 +27,23 @@ This document describes the replacement, delivered in three steps:
 A project is a user-configured entry that matches sessions to a named group in the sidebar. Each project has:
 
 - A **slug** (URL-safe identifier, e.g. `gmux`)
-- A **match rule**: either a remote URL or a list of filesystem paths (never both)
-- A **hidden** flag (for projects the user wants to keep configured but not shown)
+- One or more **paths** (where the code lives on disk, used for launching sessions)
+- An optional **remote URL** (when set, matching uses the remote instead of paths)
 
 ### Match rules
 
-A project matches sessions by one of two mechanisms:
+Every project has filesystem paths. If a project also has a remote URL, matching uses the remote; otherwise matching uses the paths.
 
-**Remote-based:** The project stores a single normalized remote URL (e.g. `github.com/gmuxapp/gmux`). A session matches if any of its remotes equals this URL. This handles forks (origin vs upstream), multiple clones, cross-machine grouping, and worktrees automatically.
+**Remote-matched:** The project stores a normalized remote URL (e.g. `github.com/gmuxapp/gmux`). A session matches if any of its remotes equals this URL. This handles forks (origin vs upstream), multiple clones, cross-machine grouping, and worktrees automatically. The paths are still stored for context (launch directory, display) but are not used for matching.
 
-**Path-based:** The project stores one or more absolute filesystem paths. A session matches if its cwd or workspace_root is under one of these paths (prefix match). This handles local-only repos, scratch directories, and intentional carve-outs from remote-based projects.
-
-A project uses one or the other, never both. This removes ambiguity and gives the user explicit control over what each project captures.
+**Path-matched:** The project has no remote URL. A session matches if its cwd or workspace_root is under one of the project's paths (prefix match). This handles local-only repos, scratch directories, and intentional carve-outs from remote-matched projects.
 
 ### Match precedence
 
 When a session could match multiple projects, the most specific match wins:
 
-1. **Path-based projects, longest prefix first.** A project claiming `/home/mg/dev/gmux/.grove/teak` beats one claiming `/home/mg/dev/gmux` for sessions in the teak directory.
-2. **Remote-based projects.** Checked only if no path-based project matched.
+1. **Path-matched projects, longest prefix first.** A project claiming `/home/mg/dev/gmux/.grove/teak` beats one claiming `/home/mg/dev/gmux` for sessions in the teak directory.
+2. **Remote-matched projects.** Checked only if no path-matched project matched.
 3. **Unmatched sessions** are not shown in the sidebar. They appear in the "discovered" list as candidates for the user to add.
 
 Two projects claiming the exact same normalized path is a validation error. Nesting (one path under another) is valid and intentional, with longest prefix winning.
@@ -57,14 +55,14 @@ Stored at `~/.local/state/gmux/projects.json`:
 ```json
 {
   "items": [
-    { "slug": "gmux", "remote": "github.com/gmuxapp/gmux" },
+    { "slug": "gmux", "remote": "github.com/gmuxapp/gmux", "paths": ["/home/mg/dev/gmux"] },
     { "slug": "teak", "paths": ["/home/mg/dev/gmux/.grove/teak"] },
-    { "slug": "scripts", "paths": ["/home/mg/scripts"], "hidden": true }
+    { "slug": "scripts", "paths": ["/home/mg/scripts"] }
   ]
 }
 ```
 
-Each item has a `slug`, exactly one of `remote` or `paths`, and an optional `hidden` flag. The array order is the display order.
+Every item has a `slug` and `paths`. Items with a `remote` match by remote URL; items without match by paths. The array order is the display order.
 
 New installations start with an empty list. The sidebar shows "no projects configured" with a prompt to add one.
 
@@ -92,17 +90,11 @@ The `GET /v1/projects` response includes both:
 
 Discovered entries include both the remote (if available) and paths so the UI can show context. When the user adds one, the match rule is chosen automatically: remote if available, paths otherwise. The user can override this in the manage UI.
 
-### Hidden projects
-
-Any project can be hidden. Hidden projects don't appear in the sidebar, but their match rules still apply: sessions matching a hidden project are not shown in the discovered list either. This prevents hidden projects from resurfacing as "new" discoveries.
-
-Hidden projects with active sessions show a badge on the "Manage projects" button.
-
 ### API
 
 **`GET /v1/projects`**: returns configured projects and discovered (unmatched) session groups.
 
-**`PUT /v1/projects`**: replaces the entire project list. The frontend sends the complete ordered list on every mutation (reorder, hide, unhide, remove, rename). Project lists are small, so full replacement avoids conflict resolution. Validates: no duplicate paths after normalization, each item has exactly one of `remote`/`paths`. Broadcasts `projects-update` SSE event to all clients.
+**`PUT /v1/projects`**: replaces the entire project list. The frontend sends the complete ordered list on every mutation (reorder, remove, rename). Project lists are small, so full replacement avoids conflict resolution. Validates: no duplicate paths after normalization, every item has paths. Broadcasts `projects-update` SSE event to all clients.
 
 **`POST /v1/projects/add`**: adds a single project. Used by the "add project" flow. Derives the slug from the remote URL repo name or directory basename. Rejects duplicate match rules. Broadcasts SSE.
 
@@ -112,7 +104,7 @@ The session file scanner is scoped to configured projects:
 
 **Before**: walk all adapter session root directories, discover every resumable session for every project.
 
-**After**: for each non-hidden project, check each adapter's session directory for that project's paths. Only discover resumable sessions for projects the user has configured.
+**After**: for each configured project, check each adapter's session directory for that project's paths. Only discover resumable sessions for projects the user has configured.
 
 This scoping makes adapters like OpenCode viable. Instead of requiring a central session directory, the scanner checks `<path>/.opencode/opencode.db` for each configured project path.
 
@@ -154,12 +146,10 @@ First-time users see:
 ┌──────────────────────────────────────────────┐
 │  Manage projects                          X  │
 │                                              │
-│  ≡  gmux                                👁   │
+│  ≡  gmux                                 ✕   │
 │     github.com/gmuxapp/gmux                  │
-│  ≡  teak                                👁   │
+│  ≡  teak                                 ✕   │
 │     ~/dev/gmux/.grove/teak                   │
-│                                              │
-│  ▸ Show 1 hidden                             │
 │                                              │
 │  ── Discovered ──────────────────────────    │
 │  other-project (2 sessions)        [Add]     │
@@ -174,8 +164,7 @@ First-time users see:
 **Elements:**
 
 - **Drag handles** (`≡`): reorder projects in the sidebar.
-- **Visibility toggle** (`👁`): hide/unhide. Hidden projects move to the hidden section.
-- **Hidden section**: expandable, with unhide and remove buttons.
+- **Remove button** (`✕`): removes the project. Sessions become discoverable again.
 - **Discovered section**: shows unmatched session groups with an Add button.
 - **Path input**: type or paste a path to add a project manually.
 - **Active session count**: subtle indicator per project.
@@ -185,16 +174,14 @@ First-time users see:
 The sidebar is a pure function of the project state and live session data:
 
 ```
-visibleProjects = state.items.filter(item => !item.hidden)
-
-for each project in visibleProjects:
+for each project in state.items:
   sessions = allSessions.filter(s => project.matches(s))
   render project heading (project slug)
   render all matched sessions, sorted by time
+  launch button uses project.paths[0] as cwd
 
 footer:
   render "Manage projects" button
-    with badge if any hidden projects have active sessions
 ```
 
 No transition state, no imperative show/hide logic. The sidebar re-renders when the state or session list changes.

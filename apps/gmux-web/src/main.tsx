@@ -360,7 +360,7 @@ function FolderGroup({
   isSessionActive,
   onSelect,
   onCloseSession,
-  onHideProject,
+  onRemoveProject,
 }: {
   folder: Folder
   selectedId: string | null
@@ -368,7 +368,7 @@ function FolderGroup({
   isSessionActive: (id: string) => boolean
   onSelect: (id: string) => void
   onCloseSession: (session: Session) => void
-  onHideProject: (slug: string) => void
+  onRemoveProject: (slug: string) => void
 }) {
   const [showResumable, setShowResumable] = useState(false)
 
@@ -385,7 +385,7 @@ function FolderGroup({
     <div class="folder">
       <div class="folder-header">
         <div class="folder-name">{folder.name}</div>
-        <LaunchButton cwd={folder.sessions[0]?.cwd} className="folder-launch-btn" />
+        <LaunchButton cwd={folder.sessions[0]?.cwd ?? folder.launchCwd} className="folder-launch-btn" />
       </div>
       <div class="folder-sessions">
         {live.map(s => (
@@ -412,9 +412,9 @@ function FolderGroup({
           )}
           <button
             class="folder-action-btn"
-            onClick={() => onHideProject(folder.path)}
+            onClick={() => onRemoveProject(folder.path)}
           >
-            Hide
+            Remove
           </button>
         </div>
         {showResumable && resumable.map(s => (
@@ -440,7 +440,7 @@ function Sidebar({
   isSessionActive,
   onSelect,
   onCloseSession,
-  onHideProject,
+  onRemoveProject,
   onAddProject,
   open,
   onClose,
@@ -455,8 +455,8 @@ function Sidebar({
   isSessionActive: (id: string) => boolean
   onSelect: (id: string) => void
   onCloseSession: (session: Session) => void
-  onHideProject: (slug: string) => void
-  onAddProject: (req: { remote?: string; paths?: string[] }) => void
+  onRemoveProject: (slug: string) => void
+  onAddProject: (req: { remote?: string; paths: string[] }) => void
   open: boolean
   onClose: () => void
   health: HealthData | null
@@ -500,7 +500,7 @@ function Sidebar({
                 onClose()
               }}
               onCloseSession={onCloseSession}
-              onHideProject={onHideProject}
+              onRemoveProject={onRemoveProject}
             />
           ))}
         </div>
@@ -521,7 +521,7 @@ function Sidebar({
                         key={d.suggested_slug}
                         class="folder-picker-item"
                         onClick={() => {
-                          onAddProject(d.remote ? { remote: d.remote } : { paths: d.paths })
+                          onAddProject({ remote: d.remote, paths: d.paths })
                           setShowProjectPicker(false)
                         }}
                       >
@@ -1080,8 +1080,8 @@ function App() {
     }
   }, [])
 
-  const handleHideProject = useCallback((slug: string) => {
-    sidebarState.hideProject(slug)
+  const handleRemoveProject = useCallback((slug: string) => {
+    sidebarState.removeProject(slug)
   }, [])
 
   const handleSelect = useCallback((id: string) => {
@@ -1269,7 +1269,7 @@ function App() {
         isSessionActive={isSessionActive}
         onSelect={handleSelect}
         onCloseSession={handleCloseSession}
-        onHideProject={handleHideProject}
+        onRemoveProject={handleRemoveProject}
         onAddProject={(req) => sidebarState.addProject(req)}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
