@@ -345,13 +345,14 @@ func TestTermWriter_ClearPreservesPostContent_CRLF(t *testing.T) {
 }
 
 func TestTermWriter_ClearThenSpinner(t *testing.T) {
-	// Clear followed by spinner frames: only final frame survives.
+	// Clear followed by spinner frames. All frames preserved with \r;
+	// on replay, \r returns to col 1 and each frame overwrites the previous.
 	tw := NewTermWriter(New(256))
 	tw.Write([]byte("old junk\n"))
 	tw.Write([]byte("\x1b[2J"))
 	tw.Write([]byte("⠋ loading\r⠙ loading\r✓ done\n"))
 	got := tw.Snapshot()
-	want := "✓ done\n"
+	want := "⠋ loading\r⠙ loading\r✓ done\n"
 	if !bytes.Equal(got, []byte(want)) {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -363,8 +364,10 @@ func TestTermWriter_LenAfterClear(t *testing.T) {
 	if tw.Len() == 0 {
 		t.Fatal("expected non-zero len before clear")
 	}
+	// After clear, only "short\n" remains.
 	tw.Write([]byte("\x1b[2Jshort\n"))
-	if tw.Len() != len("short\n") {
-		t.Errorf("Len after clear: got %d, want %d", tw.Len(), len("short\n"))
+	want := len("short\n")
+	if tw.Len() != want {
+		t.Errorf("Len after clear: got %d, want %d", tw.Len(), want)
 	}
 }

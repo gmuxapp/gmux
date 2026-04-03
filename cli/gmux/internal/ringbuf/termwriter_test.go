@@ -42,12 +42,15 @@ func TestTermWriter_CRLFSplitAcrossChunks(t *testing.T) {
 	}
 }
 
-func TestTermWriter_BareCR_Collapses(t *testing.T) {
+func TestTermWriter_BareCR_FlushesWithCR(t *testing.T) {
+	// Bare CR flushes currentLine + \r to the ring buffer instead of
+	// discarding. This preserves cursor-positioning sequences. On replay,
+	// the \r returns the cursor to column 1 and new content overwrites.
 	tw := NewTermWriter(New(256))
 	tw.Write([]byte("old content\rnew stuff"))
 	got := tw.Snapshot()
-	if !bytes.Equal(got, []byte("new stuff")) {
-		t.Errorf("got %q, want %q", got, "new stuff")
+	if !bytes.Equal(got, []byte("old content\rnew stuff")) {
+		t.Errorf("got %q, want %q", got, "old content\rnew stuff")
 	}
 }
 
@@ -55,9 +58,11 @@ func TestTermWriter_ConsecutiveCRs(t *testing.T) {
 	tw := NewTermWriter(New(256))
 	tw.Write([]byte("aaa\r\r\rbbb"))
 	got := tw.Snapshot()
-	// Multiple CRs followed by non-LF: bare CR, only final content survives.
-	if !bytes.Equal(got, []byte("bbb")) {
-		t.Errorf("got %q, want %q", got, "bbb")
+	// Multiple CRs followed by non-LF: bare CR, flushed with \r.
+	// On replay: "aaa\r" renders "aaa" then returns to col 1,
+	// "bbb" overwrites.
+	if !bytes.Equal(got, []byte("aaa\rbbb")) {
+		t.Errorf("got %q, want %q", got, "aaa\rbbb")
 	}
 }
 
@@ -65,7 +70,9 @@ func TestTermWriter_Spinner(t *testing.T) {
 	tw := NewTermWriter(New(256))
 	tw.Write([]byte("⠋ Loading...\r⠙ Loading...\r⠹ Loading...\r⠸ Loading..."))
 	got := tw.Snapshot()
-	want := "⠸ Loading..."
+	// All frames preserved with \r. On replay, each \r returns to col 1
+	// and the next frame overwrites. Visual result: "⠸ Loading..."
+	want := "⠋ Loading...\r⠙ Loading...\r⠹ Loading...\r⠸ Loading..."
 	if !bytes.Equal(got, []byte(want)) {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -75,7 +82,7 @@ func TestTermWriter_SpinnerThenNewline(t *testing.T) {
 	tw := NewTermWriter(New(256))
 	tw.Write([]byte("⠋ Building\r⠙ Building\r✓ Done\n"))
 	got := tw.Snapshot()
-	want := "✓ Done\n"
+	want := "⠋ Building\r⠙ Building\r✓ Done\n"
 	if !bytes.Equal(got, []byte(want)) {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -87,7 +94,7 @@ func TestTermWriter_SpinnerAcrossChunks(t *testing.T) {
 	tw.Write([]byte("\r⠙ Loading..."))
 	tw.Write([]byte("\r⠹ Done\n"))
 	got := tw.Snapshot()
-	want := "⠹ Done\n"
+	want := "⠋ Loading...\r⠙ Loading...\r⠹ Done\n"
 	if !bytes.Equal(got, []byte(want)) {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -101,11 +108,11 @@ func TestTermWriter_BareCR_DeferredThenResolved(t *testing.T) {
 	if !bytes.Equal(snap, []byte("old stuff\r")) {
 		t.Errorf("pending snapshot: got %q, want %q", snap, "old stuff\r")
 	}
-	// Non-LF byte confirms bare CR: old content is discarded.
+	// Non-LF byte confirms bare CR: flushed with \r.
 	tw.Write([]byte("new"))
 	got := tw.Snapshot()
-	if !bytes.Equal(got, []byte("new")) {
-		t.Errorf("after resolve: got %q, want %q", got, "new")
+	if !bytes.Equal(got, []byte("old stuff\rnew")) {
+		t.Errorf("after resolve: got %q, want %q", got, "old stuff\rnew")
 	}
 }
 
@@ -158,10 +165,11 @@ func TestTermWriter_ANSICodesPreserved(t *testing.T) {
 
 func TestTermWriter_CRWithANSISpinner(t *testing.T) {
 	tw := NewTermWriter(New(256))
-	// Colored spinner frames: each frame re-sets color, so no state is lost.
+	// Colored spinner frames preserved with \r. On replay, each \r
+	// returns to col 1 and the next frame overwrites visually.
 	tw.Write([]byte("\x1b[32m⠋\x1b[0m Loading...\r\x1b[32m⠙\x1b[0m Loading...\r\x1b[32m⠹\x1b[0m Done!\n"))
 	got := tw.Snapshot()
-	want := "\x1b[32m⠹\x1b[0m Done!\n"
+	want := "\x1b[32m⠋\x1b[0m Loading...\r\x1b[32m⠙\x1b[0m Loading...\r\x1b[32m⠹\x1b[0m Done!\n"
 	if !bytes.Equal(got, []byte(want)) {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -173,7 +181,7 @@ func TestTermWriter_MixedLinesAndSpinners(t *testing.T) {
 	tw.Write([]byte("⠋ building\r⠙ building\r⠹ building\r✓ built\n"))
 	tw.Write([]byte("Step 2: testing\n"))
 	got := tw.Snapshot()
-	want := "Step 1: compiling\n✓ built\nStep 2: testing\n"
+	want := "Step 1: compiling\n⠋ building\r⠙ building\r⠹ building\r✓ built\nStep 2: testing\n"
 	if !bytes.Equal(got, []byte(want)) {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -347,11 +355,12 @@ func TestTermWriter_PiClearThenRedraw(t *testing.T) {
 }
 
 func TestTermWriter_SpinnerThenCRCRLF(t *testing.T) {
-	// Spinner frames followed by completion with \r\r\n
+	// Spinner frames followed by completion with \r\r\n.
+	// All frames preserved with \r; the final \r\r\n is a CRLF.
 	tw := NewTermWriter(New(256))
 	tw.Write([]byte("⠋ building\r⠙ building\r✓ done\r\r\n"))
 	got := tw.Snapshot()
-	want := "✓ done\r\n"
+	want := "⠋ building\r⠙ building\r✓ done\r\n"
 	if !bytes.Equal(got, []byte(want)) {
 		t.Errorf("got %q, want %q", got, want)
 	}
