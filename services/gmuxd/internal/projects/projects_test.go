@@ -273,6 +273,36 @@ func TestMatchLongestPrefixWins(t *testing.T) {
 	}
 }
 
+func TestMatchRemoteProjectFallsBackToPath(t *testing.T) {
+	s := &State{Items: []Item{
+		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
+	}}
+
+	// Session has no remotes (e.g. new git init that hasn't pushed).
+	// Should still match via the project's paths as a fallback.
+	if m := s.Match("/home/user/dev/gmux/src", "", nil); m == nil || m.Slug != "gmux" {
+		t.Error("expected remote project to fall back to path match")
+	}
+	// Session outside the project directory with no remotes: no match.
+	if m := s.Match("/home/user/dev/other", "", nil); m != nil {
+		t.Errorf("expected no match, got %q", m.Slug)
+	}
+}
+
+func TestMatchPathProjectStillTakesPrecedenceOverRemoteFallback(t *testing.T) {
+	s := &State{Items: []Item{
+		{Slug: "teak", Paths: []string{"/home/user/dev/gmux/.grove/teak"}},
+		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
+	}}
+
+	// Session in teak directory with no remotes.
+	// Path-matched project (teak) should win over remote project's path fallback (gmux).
+	m := s.Match("/home/user/dev/gmux/.grove/teak/src", "", nil)
+	if m == nil || m.Slug != "teak" {
+		t.Errorf("expected teak (path precedence), got %v", m)
+	}
+}
+
 func TestMatchNoMatch(t *testing.T) {
 	s := &State{Items: []Item{
 		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
