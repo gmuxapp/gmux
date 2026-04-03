@@ -19,7 +19,7 @@ import type { ITerminalOptions, ITheme } from '@xterm/xterm'
  * Ctrl on everything else. Lets users write cross-platform keybinds like
  * "secondary+alt+t" that do the right thing on each OS.
  */
-const IS_MAC = typeof navigator !== 'undefined' &&
+export const IS_MAC = typeof navigator !== 'undefined' &&
   /mac|iphone|ipad|ipod/i.test(navigator.platform ?? '')
 export const SECONDARY_MOD: 'meta' | 'ctrl' = IS_MAC ? 'meta' : 'ctrl'
 
@@ -261,10 +261,33 @@ const MAC_KEYBINDS: Keybind[] = [
   { key: 'meta+k',         action: 'sendKeys', args: 'ctrl+l' },
 ]
 
-export const DEFAULT_KEYBINDS: Keybind[] = [
-  ...UNIVERSAL_KEYBINDS,
-  ...(IS_MAC ? MAC_KEYBINDS : LINUX_KEYBINDS),
+/**
+ * Mac navigation keybinds preserved when macCommandIsCtrl is enabled.
+ * Cmd+arrow and Cmd+Backspace keep their iTerm2 behavior; only
+ * Cmd+<character> is remapped to Ctrl.
+ */
+const MAC_NAVIGATION_KEYBINDS: Keybind[] = [
+  { key: 'meta+left',      action: 'sendKeys', args: 'home' },
+  { key: 'meta+right',     action: 'sendKeys', args: 'end' },
+  { key: 'meta+backspace', action: 'sendKeys', args: 'ctrl+u' },
 ]
+
+/**
+ * Build the default keybind list for the current platform.
+ *
+ * When macCommandIsCtrl is true on Mac, the defaults use the Linux clipboard
+ * bindings (ctrl+c, ctrl+v, ctrl+shift+c, ctrl+shift+v) so that the
+ * meta→ctrl transformation in the keyboard handler matches them. Mac
+ * navigation shortcuts (Cmd+Left/Right/Backspace) are preserved.
+ */
+function buildDefaults(macCommandIsCtrl: boolean): Keybind[] {
+  if (IS_MAC && macCommandIsCtrl) {
+    return [...UNIVERSAL_KEYBINDS, ...LINUX_KEYBINDS, ...MAC_NAVIGATION_KEYBINDS]
+  }
+  return [...UNIVERSAL_KEYBINDS, ...(IS_MAC ? MAC_KEYBINDS : LINUX_KEYBINDS)]
+}
+
+export const DEFAULT_KEYBINDS: Keybind[] = buildDefaults(false)
 
 /**
  * Parse a key combo string into modifier flags and a base key.
@@ -343,13 +366,20 @@ export function keyComboToSequence(combo: string): string {
  * Merge user keybinds with built-in defaults.
  * User entries override built-ins with the same normalized key.
  * Returns fully resolved keybinds (with parsed modifiers).
+ *
+ * When macCommandIsCtrl is true, the defaults are adjusted for Mac so
+ * that Cmd+character events (transformed to Ctrl by the keyboard handler)
+ * match the Linux-style ctrl bindings.
  */
-export function resolveKeybinds(user: Keybind[] | null | undefined): ResolvedKeybind[] {
+export function resolveKeybinds(
+  user: Keybind[] | null | undefined,
+  macCommandIsCtrl = false,
+): ResolvedKeybind[] {
   // Build a map of keybinds, keyed by normalized combo.
   const map = new Map<string, Keybind>()
 
-  // Defaults first.
-  for (const kb of DEFAULT_KEYBINDS) {
+  // Defaults first (platform-aware).
+  for (const kb of buildDefaults(macCommandIsCtrl)) {
     map.set(normalizeKeyString(kb.key), kb)
   }
 
@@ -440,6 +470,33 @@ export function eventMatchesKeybind(ev: KeyboardEvent, kb: ResolvedKeybind): boo
 export interface TerminalConfig {
   themeConfig: ThemeConfig | null
   keybindsConfig: Keybind[] | null
+  macCommandIsCtrl: boolean
+}
+
+/**
+ * Parse keybinds.jsonc content. Accepts either:
+ *   - An array of keybinds (original format, backward compatible)
+ *   - An object with optional macCommandIsCtrl and bindings fields
+ *
+ * ```jsonc
+ * // Array format:
+ * [ { "key": "ctrl+alt+t", "action": "sendKeys", "args": "ctrl+t" } ]
+ *
+ * // Object format:
+ * { "macCommandIsCtrl": true, "bindings": [ ... ] }
+ * ```
+ */
+export function parseKeybindsFile(raw: unknown): { macCommandIsCtrl: boolean; bindings: Keybind[] | null } {
+  if (!raw) return { macCommandIsCtrl: false, bindings: null }
+  if (Array.isArray(raw)) return { macCommandIsCtrl: false, bindings: raw }
+  if (typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>
+    return {
+      macCommandIsCtrl: obj.macCommandIsCtrl === true,
+      bindings: Array.isArray(obj.bindings) ? obj.bindings as Keybind[] : null,
+    }
+  }
+  return { macCommandIsCtrl: false, bindings: null }
 }
 
 /**
@@ -449,14 +506,16 @@ export interface TerminalConfig {
 export async function fetchTerminalConfig(): Promise<TerminalConfig> {
   try {
     const resp = await fetch('/v1/terminal-config')
-    if (!resp.ok) return { themeConfig: null, keybindsConfig: null }
+    if (!resp.ok) return { themeConfig: null, keybindsConfig: null, macCommandIsCtrl: false }
     const json = await resp.json()
     const data = json.data ?? {}
+    const kb = parseKeybindsFile(data.keybinds)
     return {
       themeConfig: data.theme ?? null,
-      keybindsConfig: data.keybinds ?? null,
+      keybindsConfig: kb.bindings,
+      macCommandIsCtrl: kb.macCommandIsCtrl,
     }
   } catch {
-    return { themeConfig: null, keybindsConfig: null }
+    return { themeConfig: null, keybindsConfig: null, macCommandIsCtrl: false }
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatPasteText } from './keyboard'
+import { ctrlSequenceFor, formatPasteText } from './keyboard'
 
 describe('formatPasteText', () => {
   // ── Bracketed paste mode ──────────────────────────────────────────────────
@@ -45,5 +45,32 @@ describe('formatPasteText', () => {
     expect(formatPasteText('hello world', false)).toBe('hello world')
     expect(formatPasteText('hello world', true))
       .toBe('\x1b[200~hello world\x1b[201~')
+  })
+})
+
+describe('ctrlSequenceFor', () => {
+  it('produces traditional control codes for lowercase letters', () => {
+    expect(ctrlSequenceFor('a')).toBe('\x01')
+    expect(ctrlSequenceFor('c')).toBe('\x03')
+    expect(ctrlSequenceFor('z')).toBe('\x1a')
+  })
+
+  it('produces CSI u sequences for uppercase letters (Ctrl+Shift)', () => {
+    // Ctrl+Shift+A: ESC [ 97 ; 6 u
+    expect(ctrlSequenceFor('A')).toBe('\x1b[97;6u')
+    expect(ctrlSequenceFor('C')).toBe('\x1b[99;6u')
+    expect(ctrlSequenceFor('Z')).toBe('\x1b[122;6u')
+  })
+
+  it('handles special characters', () => {
+    expect(ctrlSequenceFor('[')).toBe('\x1b')  // ESC
+    expect(ctrlSequenceFor(']')).toBe('\x1d')  // GS
+    expect(ctrlSequenceFor('\\')).toBe('\x1c') // FS
+  })
+
+  it('returns null for multi-character strings and unknown chars', () => {
+    expect(ctrlSequenceFor('ab')).toBeNull()
+    expect(ctrlSequenceFor('1')).toBeNull()
+    expect(ctrlSequenceFor('')).toBeNull()
   })
 })

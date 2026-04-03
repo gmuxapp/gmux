@@ -13,6 +13,7 @@
 import type { Terminal } from '@xterm/xterm'
 import {
   eventMatchesKeybind,
+  IS_MAC,
   keyComboToSequence,
   type ResolvedKeybind,
 } from './config'
@@ -50,6 +51,7 @@ export function attachKeyboardHandler(
   send: SendFn,
   sendRaw: SendFn,
   keybinds: ResolvedKeybind[],
+  macCommandIsCtrl = false,
 ): void {
   term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
     // Mobile Enter → newline (not submit).
@@ -59,6 +61,36 @@ export function attachKeyboardHandler(
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey
         && isTouchDevice()) {
       if (ev.type === 'keydown') send('\n')
+      ev.preventDefault()
+      return false
+    }
+
+    // macCommandIsCtrl: on Mac, Cmd+<character> is treated as Ctrl+<character>.
+    // Transform the event for keybind matching, then synthesize the ctrl
+    // sequence if no keybind handles it. Only applies to single-character
+    // keys; Cmd+arrow/backspace keep their default behavior.
+    if (macCommandIsCtrl && IS_MAC && ev.metaKey && !ev.ctrlKey && ev.key.length === 1) {
+      if (ev.type !== 'keydown') {
+        ev.preventDefault()
+        return false
+      }
+
+      // Match keybinds as if Ctrl were pressed instead of Cmd.
+      const virtualMods = {
+        ctrlKey: true, shiftKey: ev.shiftKey,
+        altKey: ev.altKey, metaKey: false,
+        key: ev.key,
+      } as KeyboardEvent
+
+      for (const kb of keybinds) {
+        if (!eventMatchesKeybind(virtualMods, kb)) continue
+        const handled = executeAction(kb, term, send, sendRaw)
+        if (handled) { ev.preventDefault(); return false }
+      }
+
+      // No keybind matched. Synthesize the ctrl code directly.
+      const seq = ctrlSequenceFor(ev.key)
+      if (seq) send(seq)
       ev.preventDefault()
       return false
     }
@@ -161,6 +193,40 @@ function executeAction(
 
     default:
       return false
+  }
+}
+
+/**
+ * Translate a single character into its Ctrl+<key> sequence.
+ *
+ * Lowercase letters produce the traditional ASCII control code (a=\x01).
+ * Uppercase letters imply Shift, emitting a CSI u (Kitty keyboard protocol)
+ * sequence: ESC [ <codepoint> ; 6 u  (modifiers = 1 + Shift(1) + Ctrl(4) = 6).
+ * Special characters (@, [, \, ], ^, _, ?) produce their standard Ctrl codes.
+ *
+ * Returns null for characters with no Ctrl equivalent.
+ */
+export function ctrlSequenceFor(ch: string): string | null {
+  if (ch.length !== 1) return null
+
+  // Uppercase letter: Ctrl+Shift via CSI u.
+  if (ch >= 'A' && ch <= 'Z') {
+    return `\x1b[${ch.toLowerCase().charCodeAt(0)};6u`
+  }
+  // Lowercase letter: traditional control code.
+  if (ch >= 'a' && ch <= 'z') {
+    return String.fromCharCode(ch.charCodeAt(0) - 96) // a=1, b=2, ..., z=26
+  }
+  switch (ch) {
+    case '@':    return '\x00'
+    case '[':    return '\x1b'
+    case '\\':   return '\x1c'
+    case ']':    return '\x1d'
+    case '^':    return '\x1e'
+    case '_':    return '\x1f'
+    case '?':    return '\x7f'
+    case '\x7f': return '\x08' // Backspace: Ctrl+H
+    default:     return null
   }
 }
 

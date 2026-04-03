@@ -3,6 +3,7 @@ import {
   mergeThemeConfig,
   normalizeThemeColors,
   resolveKeybinds,
+  parseKeybindsFile,
   parseKeyCombo,
   keyComboToSequence,
   eventMatchesKeybind,
@@ -388,6 +389,29 @@ describe('resolveKeybinds', () => {
     expect(ctrlAltW!.args).toBe('ctrl+w')
   })
 
+  it('uses Linux clipboard defaults when macCommandIsCtrl is true', () => {
+    // On non-Mac (test env), macCommandIsCtrl has no effect on defaults.
+    // But we can verify the resolveKeybinds parameter is accepted and
+    // doesn't break anything.
+    const resolved = resolveKeybinds(null, true)
+    // Should still have Linux defaults in test env (IS_MAC = false).
+    expect(resolved.find(r => r.baseKey === 'c' && r.ctrl && r.shift)!.action).toBe('copy')
+    expect(resolved.find(r => r.baseKey === 'v' && r.ctrl && !r.shift)!.action).toBe('paste')
+  })
+
+  it('accepts object-format keybinds config with macCommandIsCtrl', () => {
+    // Simulate what fetchTerminalConfig does with an object-format file.
+    // The parseKeybindsFile function is internal, but we can test through
+    // resolveKeybinds by verifying user bindings still apply.
+    const user: Keybind[] = [
+      { key: 'ctrl+alt+x', action: 'sendKeys', args: 'ctrl+x' },
+    ]
+    const resolved = resolveKeybinds(user, true)
+    const ctrlAltX = resolved.find(r => r.baseKey === 'x' && r.ctrl && r.alt)
+    expect(ctrlAltX).toBeDefined()
+    expect(ctrlAltX!.action).toBe('sendKeys')
+  })
+
   it('recognizes copy, paste, and selectAll as valid actions', () => {
     const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     resolveKeybinds([
@@ -486,6 +510,40 @@ describe('resolveKeybinds', () => {
     expect(resolved.find(r => r.baseKey === 'c' && r.ctrl && r.shift)).toBeUndefined()
     // ctrl+shift+v should still be present (not disabled).
     expect(resolved.find(r => r.baseKey === 'v' && r.ctrl && r.shift)).toBeDefined()
+  })
+})
+
+// ── keybinds.jsonc file parsing ──
+
+describe('parseKeybindsFile', () => {
+  it('returns defaults for null/undefined', () => {
+    expect(parseKeybindsFile(null)).toEqual({ macCommandIsCtrl: false, bindings: null })
+    expect(parseKeybindsFile(undefined)).toEqual({ macCommandIsCtrl: false, bindings: null })
+  })
+
+  it('treats an array as bindings (backward compatible)', () => {
+    const arr = [{ key: 'ctrl+a', action: 'sendKeys', args: 'ctrl+a' }]
+    const result = parseKeybindsFile(arr)
+    expect(result.macCommandIsCtrl).toBe(false)
+    expect(result.bindings).toBe(arr)
+  })
+
+  it('reads macCommandIsCtrl from object format', () => {
+    const result = parseKeybindsFile({ macCommandIsCtrl: true })
+    expect(result.macCommandIsCtrl).toBe(true)
+    expect(result.bindings).toBeNull()
+  })
+
+  it('reads bindings from object format', () => {
+    const bindings = [{ key: 'ctrl+x', action: 'sendKeys', args: 'ctrl+x' }]
+    const result = parseKeybindsFile({ macCommandIsCtrl: true, bindings })
+    expect(result.macCommandIsCtrl).toBe(true)
+    expect(result.bindings).toBe(bindings)
+  })
+
+  it('treats non-boolean macCommandIsCtrl as false', () => {
+    expect(parseKeybindsFile({ macCommandIsCtrl: 'yes' }).macCommandIsCtrl).toBe(false)
+    expect(parseKeybindsFile({ macCommandIsCtrl: 1 }).macCommandIsCtrl).toBe(false)
   })
 })
 

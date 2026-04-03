@@ -118,6 +118,10 @@ gmux ships a complete default keymap. Every shortcut is explicit; nothing relies
 | **Cmd+Backspace** | Delete to start of line (sends Ctrl+U) |
 | **Cmd+K** | Clear screen (sends Ctrl+L) |
 
+:::note[macCommandIsCtrl]
+If you prefer every Cmd+character to send its Ctrl equivalent (Cmd+A = beginning of line, Cmd+K = kill to end, Cmd+R = reverse search, etc.), set `macCommandIsCtrl` in your keybinds config. See [Configuration](/configuration#maccommandisctrl).
+:::
+
 ### Why explicit bindings?
 
 Browsers sit between the keyboard and the terminal, and different platforms have different conventions:

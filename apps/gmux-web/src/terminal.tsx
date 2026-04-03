@@ -5,7 +5,7 @@ import { ImageAddon } from '@xterm/addon-image'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import type { ITerminalOptions } from '@xterm/xterm'
-import { attachKeyboardHandler, attachPasteHandler, formatPasteText } from './keyboard'
+import { attachKeyboardHandler, attachPasteHandler, ctrlSequenceFor, formatPasteText } from './keyboard'
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { createReplayBuffer } from './replay'
@@ -97,53 +97,6 @@ function announceResize(ws: WebSocket | null, dims: TerminalSize): void {
   ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
 }
 
-/**
- * Translate a character into its Ctrl+<key> sequence.
- *
- * Lowercase letters produce the traditional ASCII control code (Ctrl+a = 0x01).
- * Uppercase letters imply Shift was held on the keyboard; since there is no
- * traditional encoding for Ctrl+Shift+letter, we emit a CSI u (fixterms /
- * Kitty keyboard protocol) sequence: ESC [ <codepoint> ; <modifiers> u
- * where modifiers = 1 + Shift(1) + Ctrl(4) = 6.
- */
-function ctrlSequenceFor(data: string): string | null {
-  if (data.length !== 1) return null
-
-  const ch = data
-
-  // Uppercase letter → Ctrl+Shift via CSI u.
-  if (ch >= 'A' && ch <= 'Z') {
-    const codepoint = ch.toLowerCase().charCodeAt(0)
-    return `\x1b[${codepoint};6u`
-  }
-
-  // Lowercase letter → traditional control code.
-  if (ch >= 'a' && ch <= 'z') {
-    return String.fromCharCode(ch.charCodeAt(0) - 96)  // a=1, b=2, …, z=26
-  }
-
-  switch (ch) {
-    case '@':
-      return '\x00'
-    case '[':
-      return '\x1b'
-    case '\\':
-      return '\x1c'
-    case ']':
-      return '\x1d'
-    case '^':
-      return '\x1e'
-    case '_':
-      return '\x1f'
-    case '?':
-      return '\x7f'
-    case '\x7f': // Backspace → Ctrl+H (backward-kill-char / word-erase depending on app)
-      return '\x08'
-    default:
-      return null
-  }
-}
-
 function focusTerminalInput(term: Terminal | null): void {
   if (!term) return
 
@@ -212,6 +165,7 @@ export function TerminalView({
   session,
   terminalOptions,
   keybinds,
+  macCommandIsCtrl,
   ctrlArmed,
   onCtrlConsumed,
   altArmed,
@@ -223,6 +177,7 @@ export function TerminalView({
   session: Session
   terminalOptions: ITerminalOptions
   keybinds: ResolvedKeybind[]
+  macCommandIsCtrl: boolean
   ctrlArmed: boolean
   onCtrlConsumed: () => void
   altArmed: boolean
@@ -378,7 +333,7 @@ export function TerminalView({
     onFocusReady?.(() => focusTerminalInput(term))
 
     const dataDisposable = term.onData((data) => sendInput(data))
-    attachKeyboardHandler(term, sendInput, sendRawInput, keybinds)
+    attachKeyboardHandler(term, sendInput, sendRawInput, keybinds, macCommandIsCtrl)
     const disposePasteHandler = attachPasteHandler(term, containerRef.current!, sendRawInput)
     const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
 

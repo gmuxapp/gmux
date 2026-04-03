@@ -67,7 +67,7 @@ Numeric values are clamped to safe ranges (e.g. fontSize 6-48, scrollback 0-100,
 
 gmux ships a complete default keymap that is the source of truth for every keyboard shortcut. Every key combo that does something other than "send bytes to the terminal" is listed explicitly; nothing relies on implicit browser or xterm.js passthrough.
 
-Your `keybinds.jsonc` file layers on top: same-key entries override the defaults, and the `none` action disables a default. The file is a JSON array:
+Your `keybinds.jsonc` file layers on top: same-key entries override the defaults, and the `none` action disables a default. The file can be a JSON array or an object (see [macCommandIsCtrl](#maccommandisctrl) for the object format):
 
 ```jsonc
 [
@@ -146,49 +146,38 @@ These are ready to paste into `~/.config/gmux/keybinds.jsonc`.
 ]
 ```
 
-**Mac Cmd-as-Ctrl** -- makes Command behave like Ctrl for terminal shortcuts on Mac. On Linux this changes nothing (secondary resolves to Ctrl, which already sends control codes natively). On Mac, Cmd+A sends Ctrl+A (beginning of line) instead of Select All, Cmd+K sends Ctrl+K (kill to end of line), Cmd+R sends Ctrl+R (reverse search), and so on. Cmd+C still copies when text is selected (otherwise sends SIGINT), and Cmd+V still pastes:
+### macCommandIsCtrl
+
+On Mac, Command is the primary modifier, but terminals expect Ctrl. By default gmux maps a handful of Cmd shortcuts (copy, paste, select all, navigation). If you want *every* Cmd+character to send its Ctrl equivalent instead, use the object format with `macCommandIsCtrl`:
 
 ```jsonc
-[
-  // Clipboard: Cmd+C copies when there's a selection, sends Ctrl+C otherwise.
-  // Cmd+V pastes. These override the Mac defaults with the same behavior.
-  { "key": "secondary+c", "action": "copyOrInterrupt" },
-  { "key": "secondary+v", "action": "paste" },
+{
+  "macCommandIsCtrl": true
+}
+```
 
-  // Line editing (readline / shell)
-  { "key": "secondary+a", "action": "sendKeys", "args": "ctrl+a" },
-  { "key": "secondary+e", "action": "sendKeys", "args": "ctrl+e" },
-  { "key": "secondary+f", "action": "sendKeys", "args": "ctrl+f" },
-  { "key": "secondary+b", "action": "sendKeys", "args": "ctrl+b" },
-  { "key": "secondary+d", "action": "sendKeys", "args": "ctrl+d" },
-  { "key": "secondary+h", "action": "sendKeys", "args": "ctrl+h" },
-  { "key": "secondary+t", "action": "sendKeys", "args": "ctrl+t" },
+With this enabled:
 
-  // Kill and yank
-  { "key": "secondary+k", "action": "sendKeys", "args": "ctrl+k" },
-  { "key": "secondary+u", "action": "sendKeys", "args": "ctrl+u" },
-  { "key": "secondary+w", "action": "sendKeys", "args": "ctrl+w" },
-  { "key": "secondary+y", "action": "sendKeys", "args": "ctrl+y" },
+- **Cmd+A** sends Ctrl+A (beginning of line), not Select All
+- **Cmd+K** sends Ctrl+K (kill to end of line)
+- **Cmd+R** sends Ctrl+R (reverse search)
+- **Cmd+C** still copies when text is selected, sends Ctrl+C (SIGINT) otherwise
+- **Cmd+V** still pastes
+- **Cmd+Shift+C** copies (Ctrl+Shift+C binding from the Linux defaults)
+- **Cmd+Shift+A** sends Ctrl+Shift+A (CSI u / Kitty keyboard protocol sequence)
+- **Cmd+Left/Right/Backspace** keep their navigation behavior (Home, End, delete to start of line)
 
-  // History
-  { "key": "secondary+r", "action": "sendKeys", "args": "ctrl+r" },
-  { "key": "secondary+s", "action": "sendKeys", "args": "ctrl+s" },
-  { "key": "secondary+p", "action": "sendKeys", "args": "ctrl+p" },
-  { "key": "secondary+n", "action": "sendKeys", "args": "ctrl+n" },
-  { "key": "secondary+o", "action": "sendKeys", "args": "ctrl+o" },
-  { "key": "secondary+g", "action": "sendKeys", "args": "ctrl+g" },
+Only single-character keys are remapped. Non-character keys (arrows, backspace, function keys) pass through to their normal keybinds. On Linux this option has no effect.
 
-  // Screen and signals
-  { "key": "secondary+l", "action": "sendKeys", "args": "ctrl+l" },
-  { "key": "secondary+z", "action": "sendKeys", "args": "ctrl+z" },
-  { "key": "secondary+x", "action": "sendKeys", "args": "ctrl+x" },
-  { "key": "secondary+q", "action": "sendKeys", "args": "ctrl+q" },
+You can combine it with additional bindings:
 
-  // Less common (ctrl+i = tab, ctrl+j = newline, ctrl+m = enter)
-  { "key": "secondary+i", "action": "sendKeys", "args": "ctrl+i" },
-  { "key": "secondary+j", "action": "sendKeys", "args": "ctrl+j" },
-  { "key": "secondary+m", "action": "sendKeys", "args": "ctrl+m" }
-]
+```jsonc
+{
+  "macCommandIsCtrl": true,
+  "bindings": [
+    { "key": "ctrl+alt+g", "action": "sendText", "args": "git status\r" }
+  ]
+}
 ```
 
 ## Environment variables
