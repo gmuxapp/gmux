@@ -444,6 +444,49 @@ describe('resolveKeybinds', () => {
     const enterBindings = resolved.filter(r => r.baseKey === 'enter' && r.shift)
     expect(enterBindings.length).toBe(1)
   })
+
+  it('secondary+letter overrides same-modifier defaults without affecting others', () => {
+    // Simulates the Mac Cmd-as-Ctrl template on Linux (secondary = ctrl).
+    // secondary+c normalizes to ctrl+c, overriding the universal default.
+    // secondary+a adds a new ctrl+a binding.
+    // Existing ctrl+shift+c and ctrl+shift+v must be unaffected.
+    const template: Keybind[] = [
+      { key: 'secondary+c', action: 'copyOrInterrupt' },
+      { key: 'secondary+v', action: 'paste' },
+      { key: 'secondary+a', action: 'sendKeys', args: 'ctrl+a' },
+      { key: 'secondary+k', action: 'sendKeys', args: 'ctrl+k' },
+    ]
+    const resolved = resolveKeybinds(template)
+
+    // Overrides: same action on Linux (no-op), different action on Mac.
+    const ctrlC = resolved.find(r => r.baseKey === 'c' && r.ctrl && !r.shift)
+    expect(ctrlC!.action).toBe('copyOrInterrupt')
+
+    const ctrlV = resolved.find(r => r.baseKey === 'v' && r.ctrl && !r.shift)
+    expect(ctrlV!.action).toBe('paste')
+
+    // New bindings from template.
+    const ctrlA = resolved.find(r => r.baseKey === 'a' && r.ctrl)
+    expect(ctrlA).toBeDefined()
+    expect(ctrlA!.action).toBe('sendKeys')
+    expect(ctrlA!.args).toBe('ctrl+a')
+
+    // Untouched defaults: ctrl+shift+c and ctrl+shift+v survive.
+    expect(resolved.find(r => r.baseKey === 'c' && r.ctrl && r.shift)!.action).toBe('copy')
+    expect(resolved.find(r => r.baseKey === 'v' && r.ctrl && r.shift)!.action).toBe('paste')
+  })
+
+  it('disables a new clipboard default with action "none"', () => {
+    const user: Keybind[] = [
+      { key: 'ctrl+v', action: 'none' },
+      { key: 'ctrl+shift+c', action: 'none' },
+    ]
+    const resolved = resolveKeybinds(user)
+    expect(resolved.find(r => r.baseKey === 'v' && r.ctrl && !r.shift)).toBeUndefined()
+    expect(resolved.find(r => r.baseKey === 'c' && r.ctrl && r.shift)).toBeUndefined()
+    // ctrl+shift+v should still be present (not disabled).
+    expect(resolved.find(r => r.baseKey === 'v' && r.ctrl && r.shift)).toBeDefined()
+  })
 })
 
 // ── Event matching ──
@@ -523,5 +566,51 @@ describe('eventMatchesKeybind', () => {
     // The other modifier should not match.
     const otherKey = SECONDARY_MOD === 'meta' ? 'ctrlKey' : 'metaKey'
     expect(eventMatchesKeybind(makeEvent({ [otherKey]: true, key: 'c' }), kb)).toBe(false)
+  })
+
+  it('discriminates ctrl+v from ctrl+shift+v', () => {
+    const ctrlV = makeKeybind('ctrl+v')
+    const ctrlShiftV = makeKeybind('ctrl+shift+v')
+    const evCtrlV = makeEvent({ ctrlKey: true, key: 'v' })
+    const evCtrlShiftV = makeEvent({ ctrlKey: true, shiftKey: true, key: 'v' })
+
+    expect(eventMatchesKeybind(evCtrlV, ctrlV)).toBe(true)
+    expect(eventMatchesKeybind(evCtrlV, ctrlShiftV)).toBe(false)
+    expect(eventMatchesKeybind(evCtrlShiftV, ctrlShiftV)).toBe(true)
+    expect(eventMatchesKeybind(evCtrlShiftV, ctrlV)).toBe(false)
+  })
+
+  it('matches ctrl+shift+c (multi-modifier)', () => {
+    const kb = makeKeybind('ctrl+shift+c')
+    expect(eventMatchesKeybind(
+      makeEvent({ ctrlKey: true, shiftKey: true, key: 'c' }), kb,
+    )).toBe(true)
+    // Must reject when only one modifier is present.
+    expect(eventMatchesKeybind(
+      makeEvent({ ctrlKey: true, key: 'c' }), kb,
+    )).toBe(false)
+    expect(eventMatchesKeybind(
+      makeEvent({ shiftKey: true, key: 'c' }), kb,
+    )).toBe(false)
+  })
+
+  it('matches short key aliases against browser key names', () => {
+    // Users can write short names; browsers report the full name.
+    // Each alias must resolve to the correct KeyboardEvent.key.
+    expect(eventMatchesKeybind(
+      makeEvent({ key: 'Escape' }), makeKeybind('esc'),
+    )).toBe(true)
+    expect(eventMatchesKeybind(
+      makeEvent({ key: 'Delete' }), makeKeybind('del'),
+    )).toBe(true)
+    expect(eventMatchesKeybind(
+      makeEvent({ key: 'Insert' }), makeKeybind('ins'),
+    )).toBe(true)
+    expect(eventMatchesKeybind(
+      makeEvent({ key: 'PageUp' }), makeKeybind('page_up'),
+    )).toBe(true)
+    expect(eventMatchesKeybind(
+      makeEvent({ key: 'PageDown' }), makeKeybind('page_down'),
+    )).toBe(true)
   })
 })

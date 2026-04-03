@@ -404,12 +404,23 @@ function normalizeKeyString(key: string): string {
 /**
  * Short key names used in keybind configs mapped to their KeyboardEvent.key
  * values (lowercased).  Lets users write "meta+left" instead of "meta+arrowleft".
+ *
+ * Every alias accepted by keyComboToSequence (for sendKeys) must also be
+ * listed here so that eventMatchesKeybind can match the corresponding
+ * KeyboardEvent. Without an entry, a keybind using the alias would produce
+ * the correct escape sequence but never fire because the event key name
+ * (e.g. "escape") wouldn't match the alias (e.g. "esc").
  */
 const KEY_ALIASES: Record<string, string> = {
   left: 'arrowleft',
   right: 'arrowright',
   up: 'arrowup',
   down: 'arrowdown',
+  esc: 'escape',
+  del: 'delete',
+  ins: 'insert',
+  page_up: 'pageup',
+  page_down: 'pagedown',
 }
 
 /**

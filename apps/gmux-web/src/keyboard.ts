@@ -142,13 +142,15 @@ function executeAction(
     case 'paste': {
       // Read from the Clipboard API and send to the PTY. Uses sendRaw to
       // bypass mobile ctrl/alt arm logic (same as the DOM paste handler).
-      // Requires clipboard-read permission; silently ignored if denied.
+      // Requires clipboard-read permission in a secure context with a user
+      // gesture (keydown qualifies). Falls back with a console warning if
+      // the browser denies access.
       navigator.clipboard.readText().then(text => {
         if (text) {
           sendRaw(formatPasteText(text, term.modes.bracketedPasteMode))
         }
-      }).catch(() => {
-        // Clipboard API not available or permission denied.
+      }).catch((err) => {
+        console.warn('Paste failed: clipboard access denied.', err)
       })
       return true
     }
@@ -164,7 +166,8 @@ function executeAction(
 
 /**
  * Normalize and optionally bracket-wrap text for pasting into a terminal.
- * Shared by the DOM paste handler and the mobile paste button.
+ * Shared by the keybind paste action, the DOM paste handler, and the mobile
+ * paste button.
  *
  * With bracketedPasteMode on, the receiving app owns newline handling, so
  * we normalize to \r inside the brackets (standard terminal convention).
@@ -192,6 +195,10 @@ export function formatPasteText(text: string, bracketedPasteMode: boolean): stri
 /**
  * Attach a paste handler to the terminal container using the DOM capture phase.
  *
+ * Handles non-keyboard paste: right-click, middle-click (X11), mobile paste
+ * button, and browser Edit menu. Keyboard-triggered paste (Ctrl+V, Cmd+V,
+ * Ctrl+Shift+V) goes through the keymap's `paste` action instead.
+ *
  * By listening with { capture: true } on an ancestor of xterm's internal
  * textarea, we intercept the paste event *before* xterm's own handler fires.
  * stopPropagation() keeps the event from reaching the textarea at all, so
@@ -202,14 +209,6 @@ export function formatPasteText(text: string, bracketedPasteMode: boolean): stri
  *   an armed alt/ctrl modifier would corrupt pasted text.
  * - We need to own the bracketed-paste / newline conversion ourselves so it is
  *   always correct regardless of what mobile modifier state is active.
- *
- * Newline handling:
- * - Bracketed paste mode (CSI ? 2004 h): \r?\n → \r (standard convention),
- *   then wrapped in \x1b[200~ ... \x1b[201~. ESC characters inside are
- *   replaced with U+241B to prevent bracket escape.
- * - Non-bracketed mode: newlines stay as \n so that applications running in
- *   raw mode can distinguish pasted newlines (\n) from Enter (\r). Shells
- *   that treat both as accept-line are unaffected.
  *
  * `send` should be sendRawInput (not sendInput) so that paste is never
  * transformed by the ctrl/alt modifier logic.
