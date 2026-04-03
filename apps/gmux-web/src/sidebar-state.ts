@@ -11,10 +11,11 @@ import type { ProjectItem, DiscoveredProject } from './types'
 export interface ProjectsData {
   configured: ProjectItem[]
   discovered: DiscoveredProject[]
+  unmatchedActiveCount: number
 }
 
 export function createSidebarState() {
-  let data: ProjectsData = { configured: [], discovered: [] }
+  let data: ProjectsData = { configured: [], discovered: [], unmatchedActiveCount: 0 }
   const listeners = new Set<() => void>()
 
   function notify() {
@@ -29,6 +30,7 @@ export function createSidebarState() {
         data = {
           configured: json.data.configured ?? [],
           discovered: json.data.discovered ?? [],
+          unmatchedActiveCount: json.data.unmatched_active_count ?? 0,
         }
         notify()
       }
@@ -59,6 +61,7 @@ export function createSidebarState() {
 
     get configured(): ProjectItem[] { return data.configured },
     get discovered(): DiscoveredProject[] { return data.discovered },
+    get unmatchedActiveCount(): number { return data.unmatchedActiveCount },
 
     /** Fetch project state from the server. Call on mount and SSE reconnect. */
     fetchProjects,

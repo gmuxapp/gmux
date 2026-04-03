@@ -12,7 +12,7 @@ import { fetchTerminalConfig, mergeThemeConfig, resolveKeybinds, type ResolvedKe
 import { useArrivalPulse } from './use-arrival-pulse'
 import { useActivityTracker } from './use-activity'
 
-import type { Session, Folder, DiscoveredProject } from './types'
+import type { Session, Folder } from './types'
 import { buildProjectFolders, parseSessionPath, sessionPath, resolveSessionFromPath, matchSession } from './types'
 import { getMockFolders } from './mock-data/index'
 import { installCopySession } from './mock-data/export-session'
@@ -360,7 +360,6 @@ function FolderGroup({
   isSessionActive,
   onSelect,
   onCloseSession,
-  onRemoveProject,
 }: {
   folder: Folder
   selectedId: string | null
@@ -368,18 +367,10 @@ function FolderGroup({
   isSessionActive: (id: string) => boolean
   onSelect: (id: string) => void
   onCloseSession: (session: Session) => void
-  onRemoveProject: (slug: string) => void
 }) {
-  const [showResumable, setShowResumable] = useState(false)
-
-  // Split sessions: live (top section) vs resumable (bottom drawer)
-  const live: Session[] = []
-  const resumable: Session[] = []
-  for (const s of folder.sessions) {
-    if (s.alive) live.push(s)
-    else if (s.resumable) resumable.push(s)
-    // Non-resumable dead sessions are not shown
-  }
+  // Show alive sessions + resumable sessions that died on their own.
+  // Non-resumable dead sessions are filtered out.
+  const visible = folder.sessions.filter(s => s.alive || s.resumable)
 
   return (
     <div class="folder">
@@ -388,42 +379,14 @@ function FolderGroup({
         <LaunchButton cwd={folder.sessions[0]?.cwd ?? folder.launchCwd} className="folder-launch-btn" />
       </div>
       <div class="folder-sessions">
-        {live.map(s => (
+        {visible.map(s => (
           <SessionItem
             key={s.id}
             session={s}
             selected={selectedId === s.id}
+            resuming={resumingId === s.id}
             isActive={isSessionActive(s.id)}
             onClick={() => onSelect(s.id)}
-            onClose={() => onCloseSession(s)}
-          />
-        ))}
-        <div class="folder-actions">
-          {resumable.length > 0 && (
-            <button
-              class="folder-action-btn"
-              onClick={() => setShowResumable(v => !v)}
-            >
-              {showResumable ? 'Hide previous' : `Resume previous (${resumable.length})`}
-            </button>
-          )}
-          {resumable.length > 0 && (
-            <span class="folder-action-sep">·</span>
-          )}
-          <button
-            class="folder-action-btn"
-            onClick={() => onRemoveProject(folder.path)}
-          >
-            Remove
-          </button>
-        </div>
-        {showResumable && resumable.map(s => (
-          <SessionItem
-            key={s.id}
-            session={s}
-            selected={false}
-            resuming={resumingId === s.id}
-            onClick={() => { setShowResumable(false); onSelect(s.id) }}
             onClose={() => onCloseSession(s)}
           />
         ))}
@@ -434,14 +397,13 @@ function FolderGroup({
 
 function Sidebar({
   folders,
-  discovered,
+  unmatchedActiveCount,
   selectedId,
   resumingId,
   isSessionActive,
   onSelect,
   onCloseSession,
-  onRemoveProject,
-  onAddProject,
+  onManageProjects,
   open,
   onClose,
   health,
@@ -449,21 +411,20 @@ function Sidebar({
   onRequestNotifPermission,
 }: {
   folders: Folder[]
-  discovered: DiscoveredProject[]
+  unmatchedActiveCount: number
   selectedId: string | null
   resumingId: string | null
   isSessionActive: (id: string) => boolean
   onSelect: (id: string) => void
   onCloseSession: (session: Session) => void
-  onRemoveProject: (slug: string) => void
-  onAddProject: (req: { remote?: string; paths: string[] }) => void
+  onManageProjects: () => void
   open: boolean
   onClose: () => void
   health: HealthData | null
   notifPermission: NotifPermission
   onRequestNotifPermission: () => void
 }) {
-  const [showProjectPicker, setShowProjectPicker] = useState(false)
+  const hasProjects = folders.length > 0
 
   return (
     <>
@@ -488,7 +449,7 @@ function Sidebar({
           <LaunchButton className="sidebar-launch-btn" onLaunch={onClose} />
         </div>
         <div class="sidebar-scroll">
-          {folders.map(f => (
+          {hasProjects ? folders.map(f => (
             <FolderGroup
               key={f.path}
               folder={f}
@@ -500,53 +461,37 @@ function Sidebar({
                 onClose()
               }}
               onCloseSession={onCloseSession}
-              onRemoveProject={onRemoveProject}
             />
-          ))}
-        </div>
-        {(discovered.length > 0 || notifPermission === 'default' || notifPermission === 'denied') && (
-          <div class="sidebar-footer">
-            {discovered.length > 0 && (
-              <>
-                <button
-                  class="add-folder-btn"
-                  onClick={() => setShowProjectPicker(v => !v)}
-                >
-                  + Add project
-                </button>
-                {showProjectPicker && (
-                  <div class="folder-picker">
-                    {discovered.map(d => (
-                      <button
-                        key={d.suggested_slug}
-                        class="folder-picker-item"
-                        onClick={() => {
-                          onAddProject({ remote: d.remote, paths: d.paths })
-                          setShowProjectPicker(false)
-                        }}
-                      >
-                        <span class="folder-picker-name">{d.suggested_slug}</span>
-                        <span class="folder-picker-detail">
-                          {d.remote || d.paths[0]}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-            {notifPermission === 'default' && (
-              <button class="notif-btn" onClick={onRequestNotifPermission}>
-                <IconBell /> Enable notifications
-              </button>
-            )}
-            {notifPermission === 'denied' && (
-              <div class="notif-denied">
-                <IconBell muted /> Notifications blocked in browser settings
+          )) : (
+            <div class="sidebar-empty">
+              <div class="sidebar-empty-title">No projects yet</div>
+              <div class="sidebar-empty-body">
+                Projects group your sessions by repository.
               </div>
+              <button class="sidebar-empty-action" onClick={onManageProjects}>
+                Add a project
+              </button>
+            </div>
+          )}
+        </div>
+        <div class="sidebar-footer">
+          <button class="manage-projects-btn" onClick={onManageProjects}>
+            Manage projects
+            {unmatchedActiveCount > 0 && (
+              <span class="manage-projects-badge">{unmatchedActiveCount}</span>
             )}
-          </div>
-        )}
+          </button>
+          {notifPermission === 'default' && (
+            <button class="notif-btn" onClick={onRequestNotifPermission}>
+              <IconBell /> Enable notifications
+            </button>
+          )}
+          {notifPermission === 'denied' && (
+            <div class="notif-denied">
+              <IconBell muted /> Notifications blocked in browser settings
+            </div>
+          )}
+        </div>
       </aside>
     </>
   )
@@ -1072,16 +1017,10 @@ function App() {
   // backend to confirm the session is alive. Not session state.
   const [resumingId, setResumingId] = useState<string | null>(null)
 
+  // Dismiss always: kills if alive, removes from project array, gone from sidebar.
+  // Sessions that die on their own (crash, restart) stay as resumable.
   const handleCloseSession = useCallback((session: Session) => {
-    if (session.alive) {
-      killSession(session.id)
-    } else {
-      dismissSession(session.id)
-    }
-  }, [])
-
-  const handleRemoveProject = useCallback((slug: string) => {
-    sidebarState.removeProject(slug)
+    dismissSession(session.id)
   }, [])
 
   const handleSelect = useCallback((id: string) => {
@@ -1263,14 +1202,13 @@ function App() {
     <div class="app-layout">
       <Sidebar
         folders={folders}
-        discovered={sidebarState.discovered}
+        unmatchedActiveCount={sidebarState.unmatchedActiveCount}
         selectedId={selectedId}
         resumingId={resumingId}
         isSessionActive={isSessionActive}
         onSelect={handleSelect}
         onCloseSession={handleCloseSession}
-        onRemoveProject={handleRemoveProject}
-        onAddProject={(req) => sidebarState.addProject(req)}
+        onManageProjects={() => { /* TODO: open modal */ }}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         health={health}

@@ -484,30 +484,46 @@ body {
 }
 
 /* ── Folder actions (show more · hide) ── */
-.folder-actions {
+/* ── Sidebar empty state ── */
+.sidebar-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  padding: 3px 14px 3px 29px; /* align with session text (14px + 7px dot + 8px gap) */
-  gap: 6px;
+  justify-content: center;
+  padding: 32px 20px;
+  text-align: center;
+  flex: 1;
 }
 
-.folder-action-btn {
-  border: none;
+.sidebar-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.sidebar-empty-body {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-bottom: 14px;
+}
+
+.sidebar-empty-action {
+  border: 1px dashed var(--border);
+  border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 13px;
   font-family: 'Source Sans 3', sans-serif;
+  padding: 6px 16px;
   cursor: pointer;
-  padding: 0;
-  transition: color 0.1s;
+  transition: border-color 0.15s, color 0.15s;
 }
 
-.folder-action-btn:hover { color: var(--text-secondary); }
-
-.folder-action-sep {
-  color: var(--text-muted);
-  font-size: 12px;
-  opacity: 0.5;
+.sidebar-empty-action:hover {
+  border-color: var(--accent);
+  color: var(--text-secondary);
 }
 
 /* ── Sidebar footer ── */
@@ -517,24 +533,41 @@ body {
   border-top: 1px solid var(--border);
 }
 
-.add-folder-btn {
-  display: block;
+.manage-projects-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   width: 100%;
   padding: 6px 10px;
-  border: 1px dashed var(--border);
+  border: none;
   border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
   font-size: 13px;
   font-family: 'Source Sans 3', sans-serif;
   cursor: pointer;
-  text-align: center;
-  transition: border-color 0.15s, color 0.15s;
+  transition: color 0.15s, background 0.15s;
 }
 
-.add-folder-btn:hover {
-  border-color: var(--accent);
+.manage-projects-btn:hover {
   color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.manage-projects-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .notif-btn {
@@ -568,39 +601,6 @@ body {
   padding: 5px 10px;
   color: var(--text-muted);
   font-size: 12px;
-}
-
-.folder-picker {
-  margin-top: 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.folder-picker-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 5px 10px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-family: 'Source Sans 3', sans-serif;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.folder-picker-item:hover { background: var(--bg-hover); }
-.folder-picker-name { font-weight: 500; }
-.folder-picker-detail {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-left: 8px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Status dot — used in header */
