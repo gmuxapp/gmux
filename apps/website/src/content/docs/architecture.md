@@ -11,6 +11,7 @@ One per session. It:
 
 - Launches the child process under a PTY
 - Owns the live session state (title, status, working flag)
+- Maintains a scrollback ring buffer for session replay on reconnect
 - Exposes the session on a Unix socket (metadata, events, terminal attach)
 - Runs adapter logic over child output
 
@@ -49,6 +50,19 @@ gmux ──Unix socket──→ gmuxd ──HTTP/SSE/WS──→ browser
 4. The browser fetches sessions from `GET /v1/sessions` and subscribes to `GET /v1/events`
 5. When you click a session, the browser opens a WebSocket to `/ws/{id}` — gmuxd proxies this to the runner's socket
 6. Terminal I/O flows directly between browser and runner through the proxy
+
+## Scrollback replay
+
+Each `gmux` runner maintains a 128KB ring buffer (`TermWriter`) that captures PTY output for session replay. When a browser connects (or switches sessions), the runner sends the buffered content so the terminal shows the session's current state immediately.
+
+The ring buffer applies two transformations to the raw PTY stream:
+
+- **Screen clear detection.** `ESC[2J` and `ESC[3J` reset the buffer, discarding all prior content. This prevents stale pre-clear output from appearing on reconnect.
+- **Bare CR flushing.** A carriage return followed by non-newline content (common in TUI renderers for cursor positioning) flushes the pending line to the buffer with the CR preserved. On replay, the terminal's native CR handling returns the cursor to column 1, producing correct overwrites for both spinner-style animations and TUI frame transitions.
+
+When the ring buffer wraps (content exceeds 128KB since the last clear), the snapshot trims to the last frame-start marker: either a BSU sequence (`ESC[?2026h`, used by pi-tui for synchronized output) or a cursor-home (`ESC[H`). This ensures replay starts at a complete TUI render frame rather than mid-stream, preventing stale frames from producing duplicate content. Plain shell output (no frame markers) falls back to trimming at the first newline.
+
+The replay frame is wrapped in DEC 2026 synchronized output markers (BSU/ESU) so the browser terminal can buffer the entire replay and render it atomically.
 
 ## API surface
 
