@@ -292,6 +292,33 @@ describe('buildProjectFolders', () => {
     const folders = buildProjectFolders(projects, [])
     expect(folders[0].launchCwd).toBe('/dev/proj')
   })
+
+  it('excludes dead sessions not in the project sessions array', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'proj', paths: ['/dev/proj'], sessions: ['kept-id'] },
+    ]
+    const sessions = [
+      makeSession({ id: 'kept-id', cwd: '/dev/proj', alive: false, resumable: true }),
+      makeSession({ id: 'old-dead', cwd: '/dev/proj', alive: false, resumable: true }),
+      makeSession({ id: 'alive-1', cwd: '/dev/proj', alive: true }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    const ids = folders[0].sessions.map(s => s.id)
+    expect(ids).toContain('alive-1')   // alive: always shown
+    expect(ids).toContain('kept-id')   // dead but in array: shown
+    expect(ids).not.toContain('old-dead') // dead, not in array: hidden
+  })
+
+  it('matches dead sessions by resume_key in array', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'proj', paths: ['/dev/proj'], sessions: ['my-resume-key'] },
+    ]
+    const sessions = [
+      makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: false, resumable: true, resume_key: 'my-resume-key' }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    expect(folders[0].sessions).toHaveLength(1)
+  })
 })
 
 // --- URL routing ---

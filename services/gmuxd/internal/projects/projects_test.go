@@ -800,3 +800,33 @@ func TestManagerBroadcastCalled(t *testing.T) {
 		t.Errorf("expected still 1 broadcast after no-op, got %d", called)
 	}
 }
+
+func TestManagerAutoAssignAllAlive(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{
+			{Slug: "gmux", Paths: []string{"/dev/gmux"}},
+			{Slug: "yapp", Paths: []string{"/dev/yapp"}},
+		}
+		return true
+	})
+
+	sessions := []SessionInfo{
+		{ID: "s1", Cwd: "/dev/gmux/src", Alive: true},
+		{ID: "s2", Cwd: "/dev/yapp", Alive: true},
+		{ID: "s3", Cwd: "/dev/gmux", Alive: false}, // dead: should be skipped
+		{ID: "s4", Cwd: "/other", Alive: true},      // unmatched: should be skipped
+	}
+
+	mgr.AutoAssignAllAlive(sessions)
+
+	state, _ := mgr.Load()
+	if len(state.Items[0].Sessions) != 1 || state.Items[0].Sessions[0] != "s1" {
+		t.Errorf("gmux sessions: expected [s1], got %v", state.Items[0].Sessions)
+	}
+	if len(state.Items[1].Sessions) != 1 || state.Items[1].Sessions[0] != "s2" {
+		t.Errorf("yapp sessions: expected [s2], got %v", state.Items[1].Sessions)
+	}
+}

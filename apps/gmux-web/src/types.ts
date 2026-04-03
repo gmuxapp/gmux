@@ -222,10 +222,28 @@ export function buildProjectFolders(
     buckets.set(project.slug, [])
   }
 
+  // Build a lookup of session keys per project for dead-session filtering.
+  // Alive sessions show by match rules (immediate, no auto-assign lag).
+  // Dead sessions only show if they're in the project's sessions array
+  // (i.e., they were alive while the project existed).
+  const arrayKeys = new Map<string, Set<string>>()
+  for (const project of projects) {
+    arrayKeys.set(project.slug, new Set(project.sessions ?? []))
+  }
+
   for (const session of sessions) {
     const matched = matchSession(session, projects)
-    if (matched && buckets.has(matched.slug)) {
+    if (!matched || !buckets.has(matched.slug)) continue
+
+    if (session.alive) {
       buckets.get(matched.slug)!.push(session)
+    } else {
+      // Dead session: only include if it's in the project's sessions array.
+      const keys = arrayKeys.get(matched.slug)!
+      const key = session.resume_key || session.id
+      if (keys.has(key) || keys.has(session.id)) {
+        buckets.get(matched.slug)!.push(session)
+      }
     }
   }
 

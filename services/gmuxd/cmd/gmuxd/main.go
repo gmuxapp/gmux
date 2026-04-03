@@ -556,6 +556,9 @@ func serve(stderr io.Writer) int {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
 			return
 		}
+		// Populate the new project's sessions array with alive matches
+		// immediately, so the frontend sees them on the first fetch.
+		projectMgr.AutoAssignAllAlive(buildSessionInfos(sessions))
 		writeJSON(w, map[string]any{"ok": true, "data": item})
 	})
 

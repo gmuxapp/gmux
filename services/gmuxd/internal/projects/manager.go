@@ -106,6 +106,35 @@ func (m *Manager) AutoAssignSession(info SessionInfo) string {
 	return assigned
 }
 
+// AutoAssignAllAlive iterates all sessions and adds alive ones to their
+// matching projects in a single atomic update. Called after adding a
+// project so that existing alive sessions populate the array immediately
+// rather than waiting for the next session-upsert event.
+func (m *Manager) AutoAssignAllAlive(sessions []SessionInfo) {
+	err := m.Update(func(state *State) bool {
+		changed := false
+		for _, info := range sessions {
+			if !info.Alive {
+				continue
+			}
+			key := SessionKey(info.ID, info.ResumeKey)
+			if state.FindSessionProject(key) != "" {
+				continue
+			}
+			match := state.Match(info.Cwd, info.WorkspaceRoot, info.Remotes)
+			if match == nil {
+				continue
+			}
+			state.AddSession(match.Slug, key)
+			changed = true
+		}
+		return changed
+	})
+	if err != nil {
+		log.Printf("projects: auto-assign-all error: %v", err)
+	}
+}
+
 // DismissSession removes a session from its project's sessions list.
 // Returns the project slug if the session was found.
 func (m *Manager) DismissSession(id, resumeKey string) string {
