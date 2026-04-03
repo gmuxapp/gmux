@@ -19,14 +19,16 @@ import (
 const fileName = "projects.json"
 
 // Item is a user-configured project entry.
-// Item is a user-configured project entry.
 // Every project has Paths (where the code lives on disk).
 // Remote is optional: when set, matching uses the remote URL
 // instead of paths, enabling cross-machine and cross-clone grouping.
+// Sessions is an ordered list of session keys (resume_key or session ID)
+// that belong to this project. Controls sidebar order and visibility.
 type Item struct {
-	Slug   string   `json:"slug"`
-	Remote string   `json:"remote,omitempty"`
-	Paths  []string `json:"paths"`
+	Slug     string   `json:"slug"`
+	Remote   string   `json:"remote,omitempty"`
+	Paths    []string `json:"paths"`
+	Sessions []string `json:"sessions,omitempty"`
 }
 
 // State holds the ordered list of configured projects.
@@ -321,6 +323,81 @@ func UniqueSlug(slug string, items []Item) string {
 	}
 }
 
+// --- Session membership ---
+
+// AddSession appends a session key to a project's sessions list if not
+// already present. Returns true if the session was added.
+func (s *State) AddSession(slug, key string) bool {
+	for i := range s.Items {
+		if s.Items[i].Slug != slug {
+			continue
+		}
+		for _, existing := range s.Items[i].Sessions {
+			if existing == key {
+				return false // already present
+			}
+		}
+		s.Items[i].Sessions = append(s.Items[i].Sessions, key)
+		return true
+	}
+	return false
+}
+
+// RemoveSession removes a session key from a project's sessions list.
+// Returns true if the session was found and removed.
+func (s *State) RemoveSession(slug, key string) bool {
+	for i := range s.Items {
+		if s.Items[i].Slug != slug {
+			continue
+		}
+		for j, existing := range s.Items[i].Sessions {
+			if existing == key {
+				s.Items[i].Sessions = append(s.Items[i].Sessions[:j], s.Items[i].Sessions[j+1:]...)
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// RemoveSessionFromAll removes a session key from all projects.
+// Returns the slug of the project it was removed from, or "".
+func (s *State) RemoveSessionFromAll(key string) string {
+	for i := range s.Items {
+		for j, existing := range s.Items[i].Sessions {
+			if existing == key {
+				s.Items[i].Sessions = append(s.Items[i].Sessions[:j], s.Items[i].Sessions[j+1:]...)
+				return s.Items[i].Slug
+			}
+		}
+	}
+	return ""
+}
+
+// FindSessionProject returns the slug of the project containing the given
+// session key, or "" if not found.
+func (s *State) FindSessionProject(key string) string {
+	for _, item := range s.Items {
+		for _, existing := range item.Sessions {
+			if existing == key {
+				return item.Slug
+			}
+		}
+	}
+	return ""
+}
+
+// SessionKey returns the key used to identify a session in project arrays.
+// Uses ResumeKey if available (stable across restarts), falls back to
+// session ID (ephemeral, for sessions without attribution).
+func SessionKey(id, resumeKey string) string {
+	if resumeKey != "" {
+		return resumeKey
+	}
+	return id
+}
+
 // --- Discovery (offered projects) ---
 
 // SessionInfo contains the session fields needed for matching and discovery.
@@ -329,6 +406,8 @@ type SessionInfo struct {
 	Cwd           string
 	WorkspaceRoot string
 	Remotes       map[string]string
+	Alive         bool
+	ResumeKey     string
 }
 
 // DiscoveredProject is a group of unmatched sessions offered to the user.
@@ -337,6 +416,26 @@ type DiscoveredProject struct {
 	Remote        string   `json:"remote,omitempty"`
 	Paths         []string `json:"paths"`
 	SessionCount  int      `json:"session_count"`
+	ActiveCount   int      `json:"active_count"`
+}
+
+// UnmatchedActiveCount returns the number of alive sessions that don't
+// match any configured project and aren't in any project's sessions array.
+func (s *State) UnmatchedActiveCount(sessions []SessionInfo) int {
+	count := 0
+	for _, sess := range sessions {
+		if !sess.Alive {
+			continue
+		}
+		key := SessionKey(sess.ID, sess.ResumeKey)
+		if s.FindSessionProject(key) != "" {
+			continue
+		}
+		if s.Match(sess.Cwd, sess.WorkspaceRoot, sess.Remotes) == nil {
+			count++
+		}
+	}
+	return count
 }
 
 // Discovered groups sessions that don't match any configured project.
@@ -446,8 +545,15 @@ func (s *State) Discovered(sessions []SessionInfo) []DiscoveredProject {
 }
 
 func buildDiscovered(sessions []SessionInfo) DiscoveredProject {
+	active := 0
+	for _, s := range sessions {
+		if s.Alive {
+			active++
+		}
+	}
 	dp := DiscoveredProject{
 		SessionCount: len(sessions),
+		ActiveCount:  active,
 	}
 
 	// Find the most common remote URL.

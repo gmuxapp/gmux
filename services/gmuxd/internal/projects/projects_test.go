@@ -495,3 +495,226 @@ func TestDiscoveredAllMatched(t *testing.T) {
 		t.Errorf("expected nil (all matched), got %+v", d)
 	}
 }
+
+// --- Session membership ---
+
+func TestAddSession(t *testing.T) {
+	s := State{Items: []Item{
+		{Slug: "gmux", Paths: []string{"/dev/gmux"}},
+	}}
+	if !s.AddSession("gmux", "key-1") {
+		t.Fatal("expected AddSession to return true")
+	}
+	if s.Items[0].Sessions[0] != "key-1" {
+		t.Errorf("expected key-1, got %v", s.Items[0].Sessions)
+	}
+
+	// Duplicate should be a no-op.
+	if s.AddSession("gmux", "key-1") {
+		t.Error("duplicate AddSession should return false")
+	}
+	if len(s.Items[0].Sessions) != 1 {
+		t.Errorf("expected 1 session, got %d", len(s.Items[0].Sessions))
+	}
+}
+
+func TestRemoveSession(t *testing.T) {
+	s := State{Items: []Item{
+		{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"a", "b", "c"}},
+	}}
+	if !s.RemoveSession("gmux", "b") {
+		t.Fatal("expected RemoveSession to return true")
+	}
+	if len(s.Items[0].Sessions) != 2 || s.Items[0].Sessions[0] != "a" || s.Items[0].Sessions[1] != "c" {
+		t.Errorf("expected [a, c], got %v", s.Items[0].Sessions)
+	}
+
+	if s.RemoveSession("gmux", "nonexistent") {
+		t.Error("removing nonexistent key should return false")
+	}
+}
+
+func TestRemoveSessionFromAll(t *testing.T) {
+	s := State{Items: []Item{
+		{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"a"}},
+		{Slug: "yapp", Paths: []string{"/dev/yapp"}, Sessions: []string{"b", "c"}},
+	}}
+	slug := s.RemoveSessionFromAll("b")
+	if slug != "yapp" {
+		t.Errorf("expected 'yapp', got %q", slug)
+	}
+	if len(s.Items[1].Sessions) != 1 || s.Items[1].Sessions[0] != "c" {
+		t.Errorf("expected [c], got %v", s.Items[1].Sessions)
+	}
+}
+
+func TestFindSessionProject(t *testing.T) {
+	s := State{Items: []Item{
+		{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"a"}},
+		{Slug: "yapp", Paths: []string{"/dev/yapp"}, Sessions: []string{"b"}},
+	}}
+	if slug := s.FindSessionProject("b"); slug != "yapp" {
+		t.Errorf("expected 'yapp', got %q", slug)
+	}
+	if slug := s.FindSessionProject("nonexistent"); slug != "" {
+		t.Errorf("expected empty, got %q", slug)
+	}
+}
+
+func TestSessionKey(t *testing.T) {
+	if key := SessionKey("sess-123", "resume-abc"); key != "resume-abc" {
+		t.Errorf("expected resume key, got %q", key)
+	}
+	if key := SessionKey("sess-123", ""); key != "sess-123" {
+		t.Errorf("expected session ID, got %q", key)
+	}
+}
+
+func TestDiscoveredActiveCount(t *testing.T) {
+	s := State{Items: []Item{
+		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/dev/gmux"}},
+	}}
+	sessions := []SessionInfo{
+		{ID: "s1", Cwd: "/dev/yapp", Alive: true},
+		{ID: "s2", Cwd: "/dev/yapp", Alive: false},
+		{ID: "s3", Cwd: "/other", Alive: true},
+	}
+	discovered := s.Discovered(sessions)
+	// s1 and s2 share cwd, s3 is separate
+	for _, d := range discovered {
+		if d.Paths[0] == "/dev/yapp" {
+			if d.ActiveCount != 1 {
+				t.Errorf("yapp active_count = %d, want 1", d.ActiveCount)
+			}
+			if d.SessionCount != 2 {
+				t.Errorf("yapp session_count = %d, want 2", d.SessionCount)
+			}
+		}
+	}
+}
+
+// --- Manager ---
+
+func TestManagerAutoAssign(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+
+	// Create a project.
+	err := mgr.Update(func(s *State) bool {
+		s.Items = []Item{
+			{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/dev/gmux"}},
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Auto-assign a matching session.
+	slug := mgr.AutoAssignSession(SessionInfo{
+		ID: "sess-1", Cwd: "/dev/gmux/src", WorkspaceRoot: "/dev/gmux",
+		Remotes: map[string]string{"origin": "github.com/gmuxapp/gmux"},
+		Alive: true,
+	})
+	if slug != "gmux" {
+		t.Errorf("expected 'gmux', got %q", slug)
+	}
+
+	// Verify persisted.
+	state, _ := mgr.Load()
+	if len(state.Items[0].Sessions) != 1 || state.Items[0].Sessions[0] != "sess-1" {
+		t.Errorf("expected [sess-1], got %v", state.Items[0].Sessions)
+	}
+
+	// Duplicate should be a no-op.
+	slug2 := mgr.AutoAssignSession(SessionInfo{
+		ID: "sess-1", Cwd: "/dev/gmux/src",
+		Alive: true,
+	})
+	if slug2 != "" {
+		t.Errorf("duplicate auto-assign should return empty, got %q", slug2)
+	}
+}
+
+func TestManagerAutoAssignResumeKeyUpgrade(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{
+			{Slug: "gmux", Paths: []string{"/dev/gmux"}},
+		}
+		return true
+	})
+
+	// Session initially registered by ID (no resume key yet).
+	mgr.AutoAssignSession(SessionInfo{
+		ID: "sess-1", Cwd: "/dev/gmux", Alive: true,
+	})
+
+	state, _ := mgr.Load()
+	if state.Items[0].Sessions[0] != "sess-1" {
+		t.Fatalf("expected sess-1, got %v", state.Items[0].Sessions)
+	}
+
+	// Session gets a resume key (file attributed).
+	mgr.AutoAssignSession(SessionInfo{
+		ID: "sess-1", Cwd: "/dev/gmux", Alive: true,
+		ResumeKey: "2026-04-03_abc123.jsonl",
+	})
+
+	state, _ = mgr.Load()
+	if len(state.Items[0].Sessions) != 1 {
+		t.Fatalf("expected 1 session after upgrade, got %d", len(state.Items[0].Sessions))
+	}
+	if state.Items[0].Sessions[0] != "2026-04-03_abc123.jsonl" {
+		t.Errorf("expected resume key, got %q", state.Items[0].Sessions[0])
+	}
+}
+
+func TestManagerDismissSession(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{
+			{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"key-1", "key-2"}},
+		}
+		return true
+	})
+
+	slug := mgr.DismissSession("sess-x", "key-1")
+	if slug != "gmux" {
+		t.Errorf("expected 'gmux', got %q", slug)
+	}
+
+	state, _ := mgr.Load()
+	if len(state.Items[0].Sessions) != 1 || state.Items[0].Sessions[0] != "key-2" {
+		t.Errorf("expected [key-2], got %v", state.Items[0].Sessions)
+	}
+}
+
+func TestManagerUnmatchedNotAutoAssigned(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{
+			{Slug: "gmux", Paths: []string{"/dev/gmux"}},
+		}
+		return true
+	})
+
+	// Session doesn't match any project.
+	slug := mgr.AutoAssignSession(SessionInfo{
+		ID: "sess-1", Cwd: "/dev/other", Alive: true,
+	})
+	if slug != "" {
+		t.Errorf("unmatched session should not be assigned, got %q", slug)
+	}
+
+	state, _ := mgr.Load()
+	if len(state.Items[0].Sessions) != 0 {
+		t.Errorf("expected empty sessions, got %v", state.Items[0].Sessions)
+	}
+}

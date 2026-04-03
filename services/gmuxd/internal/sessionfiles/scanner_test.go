@@ -93,7 +93,7 @@ func TestScanSkipsDuplicates(t *testing.T) {
 	}
 }
 
-func TestScanSkipsDismissed(t *testing.T) {
+func TestScanRediscoversAfterRemove(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
@@ -108,16 +108,17 @@ func TestScanSkipsDismissed(t *testing.T) {
 		t.Fatal("expected 1 session from initial scan")
 	}
 
-	// Dismiss the session — simulates user clicking ×.
+	// Remove the session — simulates user clicking ×.
 	s.Remove(s.List()[0].ID)
 	if len(s.List()) != 0 {
-		t.Fatal("expected 0 sessions after dismiss")
+		t.Fatal("expected 0 sessions after remove")
 	}
 
-	// Rescan — dismissed session should NOT come back.
+	// Rescan — session should come back. Project arrays (not the store)
+	// control sidebar visibility; the scanner just discovers what exists.
 	sc.Scan()
-	if len(s.List()) != 0 {
-		t.Errorf("expected 0 sessions after rescan, got %d", len(s.List()))
+	if len(s.List()) != 1 {
+		t.Errorf("expected 1 session after rescan, got %d", len(s.List()))
 	}
 }
 

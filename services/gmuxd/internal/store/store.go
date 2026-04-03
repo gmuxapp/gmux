@@ -126,14 +126,12 @@ type Store struct {
 	sessions       map[string]Session
 	subscribers    map[*subscriber]struct{}
 	commandTitlers map[string]func([]string) string
-	dismissed      map[string]bool // dismissed ResumeKeys — prevents scanner re-adding
 }
 
 func New() *Store {
 	return &Store{
 		sessions:    make(map[string]Session),
 		subscribers: make(map[*subscriber]struct{}),
-		dismissed:   make(map[string]bool),
 	}
 }
 
@@ -142,13 +140,6 @@ func New() *Store {
 // shell title is set (e.g. "codex" instead of "codex resume <id>").
 func (s *Store) SetCommandTitlers(titlers map[string]func([]string) string) {
 	s.commandTitlers = titlers
-}
-
-// IsDismissed returns true if a resume key was previously dismissed by the user.
-func (s *Store) IsDismissed(resumeKey string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.dismissed[resumeKey]
 }
 
 func (s *Store) List() []Session {
@@ -264,11 +255,8 @@ func (s *Store) SetTerminalSize(id string, cols, rows uint16) bool {
 
 func (s *Store) Remove(id string) bool {
 	s.mu.Lock()
-	sess, ok := s.sessions[id]
+	_, ok := s.sessions[id]
 	if ok {
-		if sess.ResumeKey != "" {
-			s.dismissed[sess.ResumeKey] = true
-		}
 		delete(s.sessions, id)
 	}
 	s.mu.Unlock()

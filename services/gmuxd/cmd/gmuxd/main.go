@@ -347,6 +347,39 @@ func serve(stderr io.Writer) int {
 	// State directory for persistent files (projects.json, auth-token, etc).
 	stateDir := paths.StateDir()
 
+	// Project manager handles concurrent access to projects.json and
+	// auto-assignment of sessions to projects.
+	projectMgr := projects.NewManager(stateDir)
+	projectMgr.Broadcast = func() {
+		sessions.Broadcast(store.Event{Type: "projects-update"})
+	}
+
+	// Auto-assign sessions to projects when they appear or get a ResumeKey.
+	sessionEvents, unsubSessionEvents := sessions.Subscribe()
+	defer unsubSessionEvents()
+	go func() {
+		for ev := range sessionEvents {
+			if ev.Type != "session-upsert" || ev.Session == nil {
+				continue
+			}
+			s := ev.Session
+			// Only auto-assign alive sessions. Dead resumable sessions
+			// stay in the array if already persisted from a previous run,
+			// but we don't bulk-add hundreds of old session files on startup.
+			if !s.Alive {
+				continue
+			}
+			projectMgr.AutoAssignSession(projects.SessionInfo{
+				ID:            s.ID,
+				Cwd:           s.Cwd,
+				WorkspaceRoot: s.WorkspaceRoot,
+				Remotes:       s.Remotes,
+				Alive:         s.Alive,
+				ResumeKey:     s.ResumeKey,
+			})
+		}
+	}()
+
 	// ── Health + Capabilities ──
 
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
@@ -418,29 +451,21 @@ func serve(stderr io.Writer) int {
 	// ── Projects ──
 
 	mux.HandleFunc("GET /v1/projects", func(w http.ResponseWriter, r *http.Request) {
-		state, err := projects.Load(stateDir)
+		state, err := projectMgr.Load()
 		if err != nil {
 			log.Printf("projects: load error: %v", err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to load projects")
 			return
 		}
 
-		// Build session info for discovery.
-		var sessionInfos []projects.SessionInfo
-		for _, s := range sessions.List() {
-			sessionInfos = append(sessionInfos, projects.SessionInfo{
-				ID:            s.ID,
-				Cwd:           s.Cwd,
-				WorkspaceRoot: s.WorkspaceRoot,
-				Remotes:       s.Remotes,
-			})
-		}
+		sessionInfos := buildSessionInfos(sessions)
 
 		writeJSON(w, map[string]any{
 			"ok": true,
 			"data": map[string]any{
-				"configured": state.Items,
-				"discovered": state.Discovered(sessionInfos),
+				"configured":             state.Items,
+				"discovered":             state.Discovered(sessionInfos),
+				"unmatched_active_count": state.UnmatchedActiveCount(sessionInfos),
 			},
 		})
 	})
@@ -452,24 +477,25 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		var state projects.State
-		if err := json.Unmarshal(body, &state); err != nil {
+		var incoming projects.State
+		if err := json.Unmarshal(body, &incoming); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
 			return
 		}
-		if err := state.Validate(); err != nil {
+		if err := incoming.Validate(); err != nil {
 			writeError(w, http.StatusBadRequest, "validation_error", err.Error())
 			return
 		}
-		if err := state.Save(stateDir); err != nil {
+
+		err = projectMgr.Update(func(state *projects.State) bool {
+			*state = incoming
+			return true
+		})
+		if err != nil {
 			log.Printf("projects: save error: %v", err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
 			return
 		}
-
-		sessions.Broadcast(store.Event{
-			Type: "projects-update",
-		})
 		writeJSON(w, map[string]any{"ok": true})
 	})
 
@@ -510,35 +536,26 @@ func serve(stderr io.Writer) int {
 			slug = projects.SlugFromPath(req.Paths[0])
 		}
 
-		state, err := projects.Load(stateDir)
+		var item projects.Item
+		err = projectMgr.Update(func(state *projects.State) bool {
+			slug = projects.UniqueSlug(slug, state.Items)
+			item = projects.Item{
+				Slug:   slug,
+				Remote: req.Remote,
+				Paths:  req.Paths,
+			}
+			state.Items = append(state.Items, item)
+			if err := state.Validate(); err != nil {
+				log.Printf("projects: add validation error: %v", err)
+				return false
+			}
+			return true
+		})
 		if err != nil {
-			log.Printf("projects: load error: %v", err)
-			writeError(w, http.StatusInternalServerError, "internal", "failed to load projects")
-			return
-		}
-
-		slug = projects.UniqueSlug(slug, state.Items)
-
-		item := projects.Item{
-			Slug:   slug,
-			Remote: req.Remote,
-			Paths:  req.Paths,
-		}
-
-		state.Items = append(state.Items, item)
-		if err := state.Validate(); err != nil {
-			writeError(w, http.StatusConflict, "validation_error", err.Error())
-			return
-		}
-		if err := state.Save(stateDir); err != nil {
-			log.Printf("projects: save error: %v", err)
+			log.Printf("projects: add error: %v", err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
 			return
 		}
-
-		sessions.Broadcast(store.Event{
-			Type: "projects-update",
-		})
 		writeJSON(w, map[string]any{"ok": true, "data": item})
 	})
 
@@ -802,6 +819,8 @@ func serve(stderr io.Writer) int {
 			if sess.Kind == "shell" {
 				adapters.RemoveShellStateFile(sessionID, sess.Cwd)
 			}
+			// Remove session from its project's sessions array.
+			projectMgr.DismissSession(sessionID, sess.ResumeKey)
 			// Remove from store — broadcasts session-remove to all clients.
 			sessions.Remove(sessionID)
 			if subs != nil {
@@ -1140,6 +1159,23 @@ func runAuth(stdout, stderr io.Writer) int {
 	_, _ = fmt.Fprintf(stdout, "\nOpen this URL to authenticate:\n  %s\n", url)
 
 	return 0
+}
+
+// buildSessionInfos converts store sessions to project SessionInfo structs.
+func buildSessionInfos(sessions *store.Store) []projects.SessionInfo {
+	list := sessions.List()
+	infos := make([]projects.SessionInfo, len(list))
+	for i, s := range list {
+		infos[i] = projects.SessionInfo{
+			ID:            s.ID,
+			Cwd:           s.Cwd,
+			WorkspaceRoot: s.WorkspaceRoot,
+			Remotes:       s.Remotes,
+			Alive:         s.Alive,
+			ResumeKey:     s.ResumeKey,
+		}
+	}
+	return infos
 }
 
 func sendSSE(w http.ResponseWriter, event string, payload any) {
