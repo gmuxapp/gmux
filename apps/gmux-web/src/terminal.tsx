@@ -653,7 +653,6 @@ export function TerminalView({
       }
 
       const replay = createReplayBuffer((chunks) => {
-        const totalBytes = chunks.reduce((n, c) => n + c.length, 0)
         queueMany(chunks, () => {
           // After replay completes, scroll to bottom and clear the loading overlay.
           //
@@ -666,7 +665,7 @@ export function TerminalView({
           // to the oldest scrollback content (the top). scrollToBottom() resets both
           // ydisp = ybase and isUserScrolling = false, restoring the live view.
           termRef.current?.scrollToBottom()
-          if (totalBytes > 48) setTermLoading(false)
+          setTermLoading(false)
         })
       })
 

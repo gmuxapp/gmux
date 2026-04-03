@@ -501,6 +501,84 @@ func TestPTYServerResizeDedup(t *testing.T) {
 	}
 }
 
+func TestLastDECTCEM(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    []byte
+		wantVis bool
+		wantOK  bool
+	}{
+		{"show cursor", []byte("\x1b[?25h"), true, true},
+		{"hide cursor", []byte("\x1b[?25l"), false, true},
+		{"no sequence", []byte("hello world"), false, false},
+		{"show then hide", []byte("\x1b[?25hstuff\x1b[?25l"), false, true},
+		{"hide then show", []byte("\x1b[?25lstuff\x1b[?25h"), true, true},
+		{"embedded in TUI frame", []byte("\x1b[?25l\x1b[1;1HContent\x1b[?25h"), true, true},
+		{"too short", []byte("\x1b[?2"), false, false},
+		{"empty", []byte{}, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vis, ok := lastDECTCEM(tt.data)
+			if ok != tt.wantOK {
+				t.Errorf("found = %v, want %v", ok, tt.wantOK)
+			}
+			if ok && vis != tt.wantVis {
+				t.Errorf("visible = %v, want %v", vis, tt.wantVis)
+			}
+		})
+	}
+}
+
+// TestPTYServerCursorStateReplay verifies that the replay frame restores
+// DECTCEM cursor visibility. A child that hides the cursor should produce
+// a replay frame ending with ESC[?25l (before ESU).
+func TestPTYServerCursorStateReplay(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+
+	// Child hides the cursor and stays alive.
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", "printf '\x1b[?25l'; sleep 5"},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// Let the child produce output.
+	time.Sleep(200 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return net.Dial("unix", sockPath)
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// The frame should end with: ESC[?25l (cursor restore) + ESC[?2026l (ESU)
+	hideThenESU := "\x1b[?25l\x1b[?2026l"
+	if !contains(data, hideThenESU) {
+		t.Errorf("replay frame should contain cursor-hide before ESU, got tail: %q", data[max(0, len(data)-30):])
+	}
+}
+
 func contains(data []byte, substr string) bool {
 	return len(data) > 0 && len(substr) > 0 &&
 		stringContains(string(data), substr)

@@ -48,15 +48,16 @@ type Server struct {
 	adapter    adapter.Adapter
 	state      *session.State
 
-	mu       sync.Mutex
-	clients  map[*wsClient]struct{}
-	localOut io.Writer // optional local terminal output sink
-	ptyCols  uint16    // last applied PTY cols (guarded by mu)
-	ptyRows  uint16    // last applied PTY rows (guarded by mu)
+	mu           sync.Mutex
+	clients      map[*wsClient]struct{}
+	localOut     io.Writer // optional local terminal output sink
+	ptyCols      uint16    // last applied PTY cols (guarded by mu)
+	ptyRows      uint16    // last applied PTY rows (guarded by mu)
+	cursorHidden bool      // DECTCEM state: true when app sent ESC[?25l (guarded by mu)
 
 	done    chan struct{} // closed when child exits
 	ptyDone chan struct{} // closed when readPTY finishes draining
-	err     error        // child exit error
+	err     error         // child exit error
 }
 
 type wsClient struct {
@@ -361,16 +362,21 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Ordering guarantee: snapshot is always the first message the client
 	// receives, followed by any live data from subsequent readPTY cycles.
 	//
-	// Sequence: BSU → reset(scroll region, cursor home, erase all) → scrollback → ESU
+	// Sequence: BSU → reset(scroll region, cursor home, erase all) → scrollback → cursor state → ESU
 	s.mu.Lock()
 	snapshot := s.scrollback.Snapshot()
-	bsu := []byte("\x1b[?2026h")                       // Begin Synchronized Update
-	resetSeq := []byte("\x1b[r\x1b[H\x1b[2J\x1b[3J")   // Reset scroll region + cursor home + erase display + erase scrollback
-	esu := []byte("\x1b[?2026l")                       // End Synchronized Update
-	frame := make([]byte, 0, len(bsu)+len(resetSeq)+len(snapshot)+len(esu))
+	bsu := []byte("\x1b[?2026h")                     // Begin Synchronized Update
+	resetSeq := []byte("\x1b[r\x1b[H\x1b[2J\x1b[3J") // Reset scroll region + cursor home + erase display + erase scrollback
+	cursorSeq := []byte("\x1b[?25h")                 // Restore DECTCEM (show cursor)
+	if s.cursorHidden {
+		cursorSeq = []byte("\x1b[?25l") //   ... or hide if that's the current state
+	}
+	esu := []byte("\x1b[?2026l") // End Synchronized Update
+	frame := make([]byte, 0, len(bsu)+len(resetSeq)+len(snapshot)+len(cursorSeq)+len(esu))
 	frame = append(frame, bsu...)
 	frame = append(frame, resetSeq...)
 	frame = append(frame, snapshot...)
+	frame = append(frame, cursorSeq...)
 	frame = append(frame, esu...)
 	if err := client.write(websocket.MessageBinary, frame); err != nil {
 		s.mu.Unlock()
@@ -522,6 +528,9 @@ func (s *Server) readPTY() {
 		// Store in scrollback and snapshot client list atomically.
 		s.mu.Lock()
 		s.scrollback.Write(data)
+		if vis, found := lastDECTCEM(data); found {
+			s.cursorHidden = !vis
+		}
 		localOut := s.localOut
 		clients := make([]*wsClient, 0, len(s.clients))
 		for c := range s.clients {
@@ -598,6 +607,24 @@ func (s *Server) readPTY() {
 			return
 		}
 	}
+}
+
+// lastDECTCEM scans data backwards for the last DECTCEM sequence
+// (ESC[?25h = show cursor, ESC[?25l = hide cursor) and returns
+// (visible, found). If no sequence is found, found is false.
+func lastDECTCEM(data []byte) (visible bool, found bool) {
+	for i := len(data) - 6; i >= 0; i-- {
+		if data[i] == 0x1b && data[i+1] == '[' && data[i+2] == '?' &&
+			data[i+3] == '2' && data[i+4] == '5' {
+			if data[i+5] == 'h' {
+				return true, true
+			}
+			if data[i+5] == 'l' {
+				return false, true
+			}
+		}
+	}
+	return false, false
 }
 
 func (s *Server) waitChild() {
