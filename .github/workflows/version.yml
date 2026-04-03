@@ -1,11 +1,9 @@
 name: Version
 
-# Open/update a release PR when changesets land on main.
+# Scan for releasable PRs on every push to main.
 on:
   push:
     branches: [main]
-    paths:
-      - ".changesets/*.md"
 
 permissions:
   contents: write
@@ -19,33 +17,46 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check for changesets
-        id: check
-        run: |
-          count=$(find .changesets -name '*.md' ! -name 'README.md' | wc -l)
-          echo "count=$count" >> "$GITHUB_OUTPUT"
-
-      - name: Consume changesets
-        if: steps.check.outputs.count != '0'
+      - name: Check for releasable PRs
         id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           output=$(bash scripts/version.sh)
           version=$(echo "$output" | head -1 | awk '{print $1}')
+          if [[ -z "$version" ]]; then
+            echo "No release needed."
+            exit 0
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "$output"
 
+      - name: Prepare PR body
+        if: steps.version.outputs.version != ''
+        id: body
+        run: |
+          {
+            echo "notes<<NOTES_EOF"
+            cat RELEASE_NOTES.md
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create release PR
-        if: steps.check.outputs.count != '0'
+        if: steps.version.outputs.version != ''
         id: create-pr
         uses: peter-evans/create-pull-request@v7
         with:
           commit-message: "release: ${{ steps.version.outputs.version }}"
           title: "release: ${{ steps.version.outputs.version }}"
           body: |
-            Consuming pending changesets for **${{ steps.version.outputs.version }}**.
+            Release **${{ steps.version.outputs.version }}**.
 
-            Review the changelog entry, edit if needed, then merge.
             Merging creates the `${{ steps.version.outputs.version }}` tag and triggers the release build.
+
+            ---
+
+            ${{ steps.body.outputs.notes }}
           branch: release/next
           delete-branch: true
 
@@ -54,17 +65,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat <<EOF | gh pr edit "${{ steps.create-pr.outputs.pull-request-number }}" --body-file -
-          Consuming pending changesets for **${{ steps.version.outputs.version }}**.
+          version="${{ steps.version.outputs.version }}"
+          pr_num="${{ steps.create-pr.outputs.pull-request-number }}"
+          notes=$(cat RELEASE_NOTES.md)
 
-          Review the changelog entry, edit if needed, then merge.
-          Merging creates the \`${{ steps.version.outputs.version }}\` tag and triggers the release build.
+          cat <<EOF | gh pr edit "$pr_num" --body-file -
+          Release **${version}**.
+
+          Merging creates the \`${version}\` tag and triggers the release build.
 
           ### Try this prerelease
           \`\`\`sh
-          curl -sSfL https://gmux.app/install-pr.sh | sh -s -- ${{ steps.create-pr.outputs.pull-request-number }}
+          curl -sSfL https://gmux.app/install-pr.sh | sh -s -- ${pr_num}
           \`\`\`
-          EOF
 
-  # When the release PR itself merges (deleting changeset files), this
-  # workflow fires again. The check step finds 0 changesets and skips.
+          ---
+
+          ${notes}
+          EOF

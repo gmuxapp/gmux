@@ -1,0 +1,27 @@
+name: PR Title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check conventional commit format
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          re='^(feat|fix|docs|ci|refactor|test|chore|perf|build|style|release)(\([^)]+\))?!?: .+$'
+          if [[ "$TITLE" =~ $re ]]; then
+            echo "✓ $TITLE"
+          else
+            echo "::error::PR title must follow conventional commits format."
+            echo ""
+            echo "  Format: type(scope): description"
+            echo "  Types:  feat, fix, docs, ci, refactor, test, chore, perf, build, style"
+            echo "  Breaking: add ! before the colon, e.g. feat!: remove old API"
+            echo ""
+            echo "  Only feat: and fix: PRs trigger releases."
+            exit 1
+          fi
