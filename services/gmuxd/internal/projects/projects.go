@@ -1,9 +1,11 @@
 // Package projects manages the user-curated project list that controls
 // which sessions appear in the sidebar.
 //
-// A project matches sessions by either a remote URL or filesystem paths
-// (never both). Match precedence: path-based (longest prefix) before
-// remote-based. State is persisted to projects.json in the state directory.
+// Every project has filesystem paths (where the code lives). An optional
+// remote URL enables cross-machine matching. Match precedence: path-only
+// projects first (longest prefix), then remote-matched, then remote
+// projects falling back to their paths. State is persisted to
+// projects.json in the state directory.
 package projects
 
 import (

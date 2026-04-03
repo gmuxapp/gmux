@@ -718,3 +718,85 @@ func TestManagerUnmatchedNotAutoAssigned(t *testing.T) {
 		t.Errorf("expected empty sessions, got %v", state.Items[0].Sessions)
 	}
 }
+
+// --- UnmatchedActiveCount ---
+
+func TestUnmatchedActiveCount(t *testing.T) {
+	s := State{Items: []Item{
+		{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"s1"}},
+	}}
+	sessions := []SessionInfo{
+		{ID: "s1", Cwd: "/dev/gmux", Alive: true},       // matched + in array
+		{ID: "s2", Cwd: "/dev/gmux", Alive: true},        // matched but not in array
+		{ID: "s3", Cwd: "/somewhere/else", Alive: true},   // unmatched + alive
+		{ID: "s4", Cwd: "/somewhere/else", Alive: false},  // unmatched + dead
+		{ID: "s5", Cwd: "/another/place", Alive: true},    // unmatched + alive
+	}
+	count := s.UnmatchedActiveCount(sessions)
+	// s3 and s5 are unmatched+alive. s2 matches gmux (not counted). s4 is dead.
+	if count != 2 {
+		t.Errorf("expected 2, got %d", count)
+	}
+}
+
+func TestUnmatchedActiveCountAllMatched(t *testing.T) {
+	s := State{Items: []Item{
+		{Slug: "gmux", Paths: []string{"/dev/gmux"}},
+	}}
+	sessions := []SessionInfo{
+		{ID: "s1", Cwd: "/dev/gmux/src", Alive: true},
+	}
+	if count := s.UnmatchedActiveCount(sessions); count != 0 {
+		t.Errorf("expected 0, got %d", count)
+	}
+}
+
+// --- DismissSession with ID fallback ---
+
+func TestManagerDismissSessionByIDFallback(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+
+	// Array stores session by ID (no resume key at assignment time).
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{
+			{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"sess-1"}},
+		}
+		return true
+	})
+
+	// Dismiss provides resume key, but array has the session by ID.
+	// DismissSession should fall back to trying the ID.
+	slug := mgr.DismissSession("sess-1", "resume-key-abc")
+	if slug != "gmux" {
+		t.Errorf("expected 'gmux', got %q", slug)
+	}
+
+	state, _ := mgr.Load()
+	if len(state.Items[0].Sessions) != 0 {
+		t.Errorf("expected empty sessions, got %v", state.Items[0].Sessions)
+	}
+}
+
+// --- Manager.Broadcast is called on mutations ---
+
+func TestManagerBroadcastCalled(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	called := 0
+	mgr.Broadcast = func() { called++ }
+
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{{Slug: "test", Paths: []string{"/test"}}}
+		return true
+	})
+	if called != 1 {
+		t.Errorf("expected 1 broadcast, got %d", called)
+	}
+
+	// No-op update should not broadcast.
+	mgr.Update(func(s *State) bool { return false })
+	if called != 1 {
+		t.Errorf("expected still 1 broadcast after no-op, got %d", called)
+	}
+}

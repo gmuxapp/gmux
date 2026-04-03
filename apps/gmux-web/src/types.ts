@@ -115,6 +115,7 @@ export interface ProjectItem {
   slug: string
   remote?: string
   paths: string[]
+  sessions?: string[] // managed by server; must be preserved in PUT
 }
 
 export interface DiscoveredProject {

@@ -88,8 +88,8 @@ export function ManageProjectsModal({
   const handleManualAdd = useCallback(() => {
     const path = manualPath.trim()
     if (!path) return
-    if (!path.startsWith('/')) {
-      setManualError('Path must be absolute (start with /)')
+    if (!path.startsWith('/') && !path.startsWith('~/')) {
+      setManualError('Path must be absolute (start with / or ~/)')
       return
     }
     setManualError('')
