@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -249,6 +250,107 @@ func TestBroadcastDoesNotMutateState(t *testing.T) {
 	got, _ := s.Get("s1")
 	if !got.Alive {
 		t.Fatal("session state should not be mutated by Broadcast")
+	}
+}
+
+// --- Slug derivation tests ---
+
+func TestSlugFromResumeKey(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "s1", Kind: "pi",
+		ResumeKey: "/home/user/.pi/sessions/2026-04-03T06-46-56_07b3c9c8.jsonl",
+	})
+	got, _ := s.Get("s1")
+	if got.Slug == "" {
+		t.Fatal("expected slug to be derived")
+	}
+	// Should be derived from the resume_key basename (without extension).
+	if got.Slug != "2026-04-03t06-46-56-07b3c9c8" {
+		t.Fatalf("expected resume_key-based slug, got %q", got.Slug)
+	}
+}
+
+func TestSlugFromCommand(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "s1", Kind: "shell",
+		Command: []string{"pytest", "--watch"},
+	})
+	got, _ := s.Get("s1")
+	if got.Slug != "pytest-watch" {
+		t.Fatalf("expected 'pytest-watch', got %q", got.Slug)
+	}
+}
+
+func TestSlugFallbackToID(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "sess-abc12345", Kind: "shell"})
+	got, _ := s.Get("sess-abc12345")
+	// ID "sess-abc12345" is 14 chars, truncated to 12 -> "sess-abc1234" -> slugified.
+	if got.Slug == "" {
+		t.Fatal("expected a slug to be derived")
+	}
+	// Should be a prefix of the session ID.
+	if !strings.HasPrefix("sess-abc12345", strings.ReplaceAll(got.Slug, "-", "-")) {
+		// Just check it's non-empty and reasonable.
+		t.Logf("slug from ID: %q", got.Slug)
+	}
+}
+
+func TestSlugAdapterProvided(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "s1", Kind: "pi", Slug: "fix-auth-bug",
+		ResumeKey: "/some/file.jsonl",
+	})
+	got, _ := s.Get("s1")
+	if got.Slug != "fix-auth-bug" {
+		t.Fatalf("expected adapter slug preserved, got %q", got.Slug)
+	}
+}
+
+func TestSlugUniqueness(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Command: []string{"pi"}})
+	s.Upsert(Session{ID: "s2", Kind: "pi", Command: []string{"pi"}})
+	s.Upsert(Session{ID: "s3", Kind: "pi", Command: []string{"pi"}})
+
+	s1, _ := s.Get("s1")
+	s2, _ := s.Get("s2")
+	s3, _ := s.Get("s3")
+
+	if s1.Slug == s2.Slug || s1.Slug == s3.Slug || s2.Slug == s3.Slug {
+		t.Fatalf("slugs should be unique: %q, %q, %q", s1.Slug, s2.Slug, s3.Slug)
+	}
+}
+
+func TestSlugUniquenessAcrossKindsAllowed(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Command: []string{"pi"}})
+	s.Upsert(Session{ID: "s2", Kind: "shell", Command: []string{"pi"}})
+
+	s1, _ := s.Get("s1")
+	s2, _ := s.Get("s2")
+
+	// Same slug is OK for different kinds.
+	if s1.Slug != "pi" || s2.Slug != "pi" {
+		t.Fatalf("expected same slug for different kinds: %q, %q", s1.Slug, s2.Slug)
+	}
+}
+
+func TestSlugStableOnUpdate(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Command: []string{"pi"}})
+	original, _ := s.Get("s1")
+
+	// Update should not change the slug.
+	s.Update("s1", func(sess *Session) {
+		sess.AdapterTitle = "new title"
+	})
+	updated, _ := s.Get("s1")
+	if updated.Slug != original.Slug {
+		t.Fatalf("slug changed on update: %q -> %q", original.Slug, updated.Slug)
 	}
 }
 

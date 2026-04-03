@@ -21,6 +21,8 @@ export function sessionPath(
   projectSlug: string,
   session: { kind: string; slug?: string; id: string },
 ): string {
+  // Server always derives a slug, but defend against the brief window
+  // before the first SSE upsert arrives with the resolved slug.
   const slug = session.slug || session.id.slice(0, 8)
   return `/${projectSlug}/${session.kind}/${slug}`
 }
