@@ -97,12 +97,29 @@ function announceResize(ws: WebSocket | null, dims: TerminalSize): void {
   ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
 }
 
+/**
+ * Translate a character into its Ctrl+<key> sequence.
+ *
+ * Lowercase letters produce the traditional ASCII control code (Ctrl+a = 0x01).
+ * Uppercase letters imply Shift was held on the keyboard; since there is no
+ * traditional encoding for Ctrl+Shift+letter, we emit a CSI u (fixterms /
+ * Kitty keyboard protocol) sequence: ESC [ <codepoint> ; <modifiers> u
+ * where modifiers = 1 + Shift(1) + Ctrl(4) = 6.
+ */
 function ctrlSequenceFor(data: string): string | null {
   if (data.length !== 1) return null
 
   const ch = data
-  if (/[a-z]/i.test(ch)) {
-    return String.fromCharCode(ch.toUpperCase().charCodeAt(0) - 64)
+
+  // Uppercase letter → Ctrl+Shift via CSI u.
+  if (ch >= 'A' && ch <= 'Z') {
+    const codepoint = ch.toLowerCase().charCodeAt(0)
+    return `\x1b[${codepoint};6u`
+  }
+
+  // Lowercase letter → traditional control code.
+  if (ch >= 'a' && ch <= 'z') {
+    return String.fromCharCode(ch.charCodeAt(0) - 96)  // a=1, b=2, …, z=26
   }
 
   switch (ch) {
@@ -365,6 +382,27 @@ export function TerminalView({
     const disposePasteHandler = attachPasteHandler(term, containerRef.current!, sendRawInput)
     const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
 
+    // OSC 52 clipboard: applications (e.g. pi /copy) write
+    //   ESC ] 52 ; <selection> ; <base64-payload> BEL
+    // to set the system clipboard. The payload is UTF-8 text encoded as
+    // base64. Decode and write via the Clipboard API.
+    const osc52Disposable = term.parser.registerOscHandler(52, (data) => {
+      const semi = data.indexOf(';')
+      if (semi < 0) return false
+      const payload = data.substring(semi + 1)
+      if (payload === '?') return false // clipboard read request; not supported
+      try {
+        // atob() decodes base64 to a Latin-1 binary string. The underlying
+        // bytes are UTF-8, so we must re-decode through TextDecoder.
+        const bytes = Uint8Array.from(atob(payload), c => c.charCodeAt(0))
+        const text = new TextDecoder().decode(bytes)
+        navigator.clipboard.writeText(text).catch(() => {})
+      } catch {
+        // invalid base64; ignore
+      }
+      return true
+    })
+
     const scrollDisposable = term.onScroll(() => {
       const buf = term.buffer.active
       setScrolledUp(buf.baseY - buf.viewportY > SCROLL_THRESHOLD)
@@ -553,6 +591,7 @@ export function TerminalView({
       shell?.removeEventListener('touchcancel', clearTouchPan, true)
       disposePasteHandler()
       disposeMobileHandler()
+      osc52Disposable.dispose()
       dataDisposable.dispose()
       scrollDisposable.dispose()
       setScrolledUp(false)

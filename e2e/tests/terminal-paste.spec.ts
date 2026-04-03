@@ -92,25 +92,27 @@ test.describe('terminal paste', () => {
   })
 
   // ── Newline normalisation (non-bracketed mode) ──────────────────────────────
+  // In non-bracketed mode, newlines are kept as \n so that applications in raw
+  // mode can distinguish pasted newlines from Enter (\r).
 
-  test('\\n is converted to \\r in non-bracketed mode', async ({ page }) => {
+  test('\\n is kept as \\n in non-bracketed mode', async ({ page }) => {
     await setBracketedPasteMode(page, false)
 
     await dispatchPaste(page, 'line1\nline2\nline3')
     const captured = await drainCaptured(page)
 
-    expect(captured).toContain('line1\rline2\rline3')
-    // Confirm raw \n did NOT make it through
-    expect(captured.some(s => s.includes('\n'))).toBe(false)
+    expect(captured).toContain('line1\nline2\nline3')
+    // Confirm \r did NOT make it through
+    expect(captured.some(s => s.includes('\r'))).toBe(false)
   })
 
-  test('\\r\\n is normalised to \\r in non-bracketed mode', async ({ page }) => {
+  test('\\r\\n is normalised to \\n in non-bracketed mode', async ({ page }) => {
     await setBracketedPasteMode(page, false)
 
     await dispatchPaste(page, 'line1\r\nline2')
     const captured = await drainCaptured(page)
 
-    expect(captured).toContain('line1\rline2')
+    expect(captured).toContain('line1\nline2')
   })
 
   // ── Bracketed paste mode ────────────────────────────────────────────────────

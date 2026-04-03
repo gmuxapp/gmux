@@ -105,6 +105,33 @@ The TermWriter sits between the raw PTY output and the ring buffer. Its job is t
 
 The underlying storage is a fixed-size circular buffer (default 128KB). When full, new writes overwrite the oldest data. This provides natural eviction without explicit management, keeping memory usage bounded regardless of how much output the child produces.
 
+## Escape sequence handling in the web client
+
+xterm.js handles most escape sequences natively. The gmux web client registers additional handlers for sequences that need browser integration.
+
+### OSC 52: clipboard
+
+Applications write `ESC ] 52 ; c ; <base64> BEL` to set the system clipboard. This is the standard mechanism used by pi (`/copy`), tmux, vim, and SSH sessions to transfer text to the user's clipboard without direct OS access.
+
+xterm.js does not handle OSC 52 natively. The web client registers a parser handler via `term.parser.registerOscHandler(52, ...)` that decodes the base64 payload and calls `navigator.clipboard.writeText()`. Clipboard read requests (payload `?`) are not supported since the Clipboard API requires a user gesture.
+
+### Sequences handled by xterm.js
+
+| OSC | Purpose | Notes |
+|-----|---------|-------|
+| 0, 1, 2 | Window/icon title | Parsed but not surfaced in the gmux UI |
+| 4, 104 | Color palette set/reset | |
+| 8 | Hyperlinks | Rendered clickable via WebLinksAddon |
+| 10-12, 110-112 | Foreground/background/cursor color | Used by theme-aware applications |
+
+### Sequences that pass through unhandled
+
+| OSC | Purpose | Why ignored |
+|-----|---------|-------------|
+| 133 | Shell integration (FinalTerm/iTerm2 command zones) | Informational markers only; no terminal-side action needed. Pi emits these (`133;A`, `133;B`, `133;C`) to mark prompt boundaries. |
+| 7 | Current working directory | Would need daemon-side integration to update session metadata; not a web client concern. |
+| 9, 99, 777 | Desktop notifications (ConEmu, iTerm2, rxvt) | gmux has its own notification system via the presence WebSocket. |
+
 ## Example: what happens when pi renders a response
 
 1. Pi's Bubble Tea TUI computes a view string containing the full screen layout.
