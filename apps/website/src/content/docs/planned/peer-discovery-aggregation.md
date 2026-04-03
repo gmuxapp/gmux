@@ -11,18 +11,21 @@ Cross-instance lets any gmuxd show sessions from other gmuxd instances alongside
 
 ## The model
 
-Every gmuxd is a **peer**. Peers connect to each other over the same HTTP/SSE/WS protocol that the browser already uses. When peer A connects to peer B, it subscribes to B's `/v1/events` SSE stream and merges B's sessions into its own store. When the browser asks A for sessions, it gets a unified list. When the browser opens a terminal on one of B's sessions, A proxies the WebSocket through to B.
+The architecture is **hub-and-spoke**. You pick one gmuxd as your "home" dashboard (the hub). It connects outward to other gmuxd instances (the spokes) using the same HTTP/SSE/WS protocol that the browser already uses. The browser only ever talks to the hub. The hub merges remote sessions into its own store and proxies terminal connections through to the owning peer.
 
-There is no primary. Any peer can connect to any other peer. In practice, you'll probably pick one machine as your "home" dashboard, but nothing in the architecture requires it.
+Peers do not need to reach each other. If your laptop can connect to both a desktop and a server, that's sufficient; the desktop and server don't need any connectivity between them. This matters because Tailscale ACLs, network topology, or mixed networks (tailnet + Docker bridge) can easily prevent peer-to-peer connectivity even when the hub can reach all spokes.
+
+A peer that is also a hub for its own spokes (e.g. a host aggregating devcontainers) presents a unified session list upstream. The top-level hub doesn't need to know about the inner topology; it treats the intermediate peer as a single source.
 
 ```
-browser ──→ gmux-laptop (peer)
+browser ──→ gmux-laptop (hub)
                ├── local sessions
-               ├── ← gmux-desktop (peer, via tailscale)
+               ├── ← gmux-desktop (spoke, via tailscale)
                │      └── desktop sessions
-               └── ← gmux-server (peer, via tailscale)
+               └── ← gmux-server (spoke, via tailscale)
                       ├── server sessions
-                      └── container: project-a sessions
+                      └── ← container: project-a (spoke of server)
+                             └── container sessions
 ```
 
 ## Discovery
@@ -64,12 +67,15 @@ See the [Devcontainers](#devcontainers) section for the full picture.
 
 ### Namespaced sessions
 
-Each peer's sessions are prefixed with the peer name to avoid ID collisions:
+Session namespacing is **preserved**: each layer passes through the namespace chain from its own spokes. This gives the hub full visibility into the topology for routing and display.
 
 ```
-local session:  sess-abc123
-remote session: server/sess-def456
+local session:       sess-abc123
+remote session:      desktop/sess-def456
+multi-layer session: server/project-a/sess-ghi789
 ```
+
+When the hub receives sessions from a spoke, it prefixes them with the spoke's name. If that spoke is itself a hub aggregating its own spokes, the inner namespaces are preserved. The result is a path-like namespace: `server/project-a/sess-ghi789` means "session `sess-ghi789` on spoke `project-a`, which is a spoke of `server`."
 
 The store distinguishes local sessions (discovered via Unix sockets as today) from remote sessions (received via peer SSE). Remote sessions are read-through: the hub caches them for rendering but delegates actions (kill, resume, launch) to the owning peer.
 
@@ -116,19 +122,23 @@ The UI uses this for display (icons, labels) and compatibility checks. A peer ru
 
 ### Subscribing
 
-The hub connects to `GET /v1/events` on each peer, the same SSE endpoint the browser uses. Session upsert/remove events are prefixed with the peer name and merged into the hub's store.
+The hub connects to `GET /v1/events` on each spoke, the same SSE endpoint the browser uses. Session upsert/remove events are prefixed with the spoke name and merged into the hub's store.
 
-Authentication uses the same mechanism as browser connections: tailscale identity for tailnet peers, bearer token for network-listener peers. No new auth scheme.
+Authentication uses the same mechanism as browser connections: tailscale identity for tailnet spokes, bearer token for network-listener spokes. No new auth scheme.
 
 ### Proxying
 
-When the browser opens a terminal on a remote session (`WS /ws/server/sess-def456`), the hub:
+Routing uses the namespace prefix. When the browser opens a terminal on a remote session, the hub strips the first namespace segment to identify the spoke, then forwards the remainder:
 
-1. Strips the peer prefix to get the session ID (`sess-def456`).
-2. Opens a WebSocket to the owning peer (`WS /ws/sess-def456` on the server).
-3. Relays frames bidirectionally.
+```
+browser → hub:  WS /ws/server/project-a/sess-ghi789
+hub → server:   WS /ws/project-a/sess-ghi789
+server → container: WS /ws/sess-ghi789
+```
 
-This is similar to what gmuxd already does between the browser and local runner sockets; the proxy just has one more hop.
+Each layer only knows about its direct spokes. The hub doesn't need to know that `project-a` is a container; it just forwards to `server`. Server strips its prefix and forwards to `project-a`.
+
+This is the same pattern gmuxd already uses between the browser and local runner sockets, extended to multiple hops.
 
 ### Launching
 
@@ -148,9 +158,11 @@ When `peer` is omitted, the session launches locally (current behavior).
 
 Peer connections are resilient:
 
-- If a peer goes offline, its sessions are marked as disconnected (grey) in the UI. They remain visible so you know what was running.
-- When the peer comes back, the hub re-subscribes and sessions go live again.
-- The hub never blocks on a slow or dead peer. Each peer subscription is independent.
+- The hub tracks liveness for each spoke via the SSE connection. A dropped connection means the spoke is offline.
+- When a spoke goes offline, its sessions are marked as disconnected (grey) in the UI. They remain visible so you know what was running. The spoke itself appears as offline in the peer status display.
+- The hub attempts reconnection with exponential backoff. When the spoke comes back, sessions go live again.
+- The hub never blocks on a slow or dead spoke. Each spoke subscription is independent.
+- For multi-layer setups: if an intermediate spoke goes offline, all sessions behind it (including its own spokes' sessions) are marked as disconnected together.
 
 ## UI changes
 
@@ -164,13 +176,47 @@ The sidebar shifts from "folders on this machine" to "projects across all peers.
 
 Each session shows a subtle peer indicator (hostname or icon) so you can tell where it's running. Sessions on the local peer have no indicator.
 
+### URL routing
+
+Sessions are addressable via hierarchical URL paths:
+
+```
+/<host>/<folder>/<adapter>/<slug>
+```
+
+Examples:
+
+```
+/desktop/gmux/pi/fix-auth-bug
+/server/gmux/shell/pytest-watch
+/server/project-a/pi/refactor-api
+```
+
+For local sessions (no aggregation), the host segment is omitted:
+
+```
+/gmux/pi/fix-auth-bug
+/gmux/shell/pytest-watch
+```
+
+The structure encodes routing (which host), context (which project, which adapter), and identity (the slug). Each segment is meaningful:
+
+- **host**: maps to the spoke namespace. Absent for local sessions. When aggregation is added later, existing local URLs continue to work.
+- **folder**: derived from the folder identity (repo name from remote URL, or workspace basename).
+- **adapter**: the session's `kind` (`pi`, `claude`, `shell`, etc.). Gives each adapter its own namespace, so adapters don't need to coordinate slug uniqueness.
+- **slug**: adapter-provided stable identifier. See [Session Schema](/develop/session-schema) for the `slug` field.
+
+The slug is stable across kill and resume: it's tied to the logical session (conversation ID, session file), not the process. Bookmarking `/gmux/pi/fix-auth-bug` works across restarts.
+
+URLs are useful beyond the browser: external tools, notification actions, CI integrations, and scripts can link directly to a specific session.
+
 ### Peer status
 
-A footer or header element shows connected peers with their status (online, reconnecting, offline). Clicking a peer could filter the sidebar to only show that peer's sessions.
+A footer or header element shows connected spokes with their status (online, reconnecting, offline). Clicking a spoke could filter the sidebar to only show that spoke's sessions.
 
 ### Launch target
 
-The launch modal gains a peer selector. When you have peers configured, you choose where to launch. The default is the local machine. For projects that have an associated devcontainer, the peer selector could auto-suggest the right container.
+The launch modal gains a peer selector. When you have spokes configured, you choose where to launch. The default is the local machine. For projects that have an associated devcontainer, the peer selector could auto-suggest the right container.
 
 ## Devcontainers
 
@@ -227,24 +273,26 @@ Devcontainers have native dotfiles support. Users configure their dotfiles repo 
 
 ## Incremental delivery
 
+Folder management (server-side folder state, management UI, URL routing) ships first as a prerequisite. It fixes client sync, establishes the folder identity model, and introduces the URL structure that aggregation extends with the host prefix. See [Folder Management](/planned/folder-management).
+
 ### Step 1: Canonical project URI
 
 Add `project_uri` to the runner's session metadata. Detected from VCS remote at session startup. Included in `/meta` response, stored in `store.Session`, broadcast via SSE. The frontend uses it for grouping within a single gmuxd instance (replaces path-based grouping for repos with remotes).
 
 Small, self-contained. Useful today for workspace grouping even without cross-instance.
 
-### Step 2: Peer protocol
+### Step 2: Hub protocol
 
-gmuxd can connect to other gmuxd instances as peers. Manual `[[peers]]` config. Session namespacing, SSE subscription, WebSocket proxying, launch forwarding. No auto-discovery yet.
+gmuxd can connect to other gmuxd instances as spokes. Manual `[[peers]]` config. Preserved namespace chains, SSE subscription, multi-layer WebSocket proxying, launch forwarding, spoke liveness tracking. No auto-discovery yet.
 
-This unlocks the "one dashboard, every machine" use case for users with explicit config.
+This unlocks the "one dashboard, every machine" use case for users with explicit config. The host prefix slots into the existing URL structure: `/gmux/pi/fix-auth-bug` becomes `/desktop/gmux/pi/fix-auth-bug`.
 
 ### Step 3: Tailscale auto-discovery
 
-gmuxd queries the tailnet for other gmux instances. Zero-config for the common case. Builds on the peer protocol from step 2.
+gmuxd queries the tailnet for other gmux instances. Zero-config for the common case. Builds on the hub protocol from step 2.
 
 ### Step 4: Devcontainer integration
 
-gmuxd detects `.devcontainer/devcontainer.json` in project folders. Manages container lifecycle via the `devcontainer` CLI. Connects to container gmuxd as a peer. gmux devcontainer Feature for easy installation.
+gmuxd detects `.devcontainer/devcontainer.json` in project folders. Manages container lifecycle via the `devcontainer` CLI. Connects to container gmuxd as a spoke. Multi-layer proxying means the host's own hub sees container sessions transparently. gmux devcontainer Feature for easy installation.
 
 Each step is independently useful and shippable.

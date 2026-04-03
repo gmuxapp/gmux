@@ -7,9 +7,10 @@ description: VCS-aware workspace grouping and manual folder curation.
 
 Today, folders appear in the sidebar automatically when sessions start, and the scanner walks all adapter session directories to discover every resumable session across all projects. This works but creates noise and prevents adapters with per-project storage (like OpenCode's SQLite) from integrating cleanly.
 
-This document describes the replacement, delivered in two steps:
+This document describes the replacement, delivered in three steps:
 1. VCS-aware workspace grouping (automatic, zero-config)
 2. Manual folder management (ordering, hiding, the manage folders modal)
+3. URL routing (stable, hierarchical session URLs)
 
 ## Step 1: Workspace grouping
 
@@ -188,3 +189,70 @@ The session file scanner is scoped to configured folders:
 **After**: for each non-hidden folder in the state, check each adapter's session directory for that cwd. Only discover resumable sessions for folders the user has configured.
 
 This scoping makes adapters like OpenCode viable. Instead of requiring a central session directory, the scanner checks `<cwd>/.opencode/opencode.db` for each configured folder.
+
+## Step 3: URL routing
+
+Depends on Step 2. Adds hierarchical, stable URLs for every session.
+
+### URL structure
+
+Each session is addressable at:
+
+```
+/<folder>/<adapter>/<slug>
+```
+
+Examples:
+
+```
+/gmux/pi/fix-auth-bug
+/gmux/shell/pytest-watch
+/other-project/claude/refactor-api
+```
+
+Each segment is meaningful:
+
+- **folder**: the folder slug, derived from the folder identity. For repos with remotes, this is the repo name (e.g. `gmux` from `github.com/gmuxapp/gmux`). For local-only folders, the workspace or directory basename.
+- **adapter**: the session's `kind` (`pi`, `claude`, `shell`, `codex`, etc.). Each adapter gets its own namespace within a folder, so adapters don't need to coordinate slug uniqueness with each other.
+- **slug**: an adapter-provided stable identifier for the session. See below.
+
+### Session slugs
+
+Adapters provide a `slug` field via the existing child protocol (`/meta` response or `GMUX_SOCKET` HTTP). The slug is:
+
+- Derived from something stable in the adapter's domain: pi uses its conversation ID, Claude uses the session file basename, shell uses a sanitized command name or counter.
+- Unique within the adapter's namespace for that folder. If the adapter produces a duplicate, gmux appends a disambiguator (e.g. `-2`).
+- Falls back to a truncated session ID (e.g. `sess-abc12`) if the adapter doesn't provide one.
+
+The slug is stable across kill and resume. A resumed session keeps the same slug because the adapter's stable identifier (conversation ID, session file) doesn't change. The internal session ID and process may change, but the URL-facing slug stays the same.
+
+This makes URLs bookmarkable and shareable. A link to `/gmux/pi/fix-auth-bug` resolves to the same logical session regardless of how many times it has been resumed.
+
+See [Session Schema](/develop/session-schema) for the `slug` field definition.
+
+### Folder slugs
+
+The folder slug is derived from the same identity used for grouping:
+
+1. Repo name from the most common remote URL (e.g. `github.com/gmuxapp/gmux` becomes `gmux`)
+2. Workspace root basename
+3. Directory basename
+
+Folder slugs are stable across clones, worktrees, and machines (when derived from remote URLs). When [peer aggregation](/planned/peer-discovery-aggregation) is added, the host prefix slots in before the folder: `/gmux/pi/fix-auth-bug` becomes `/desktop/gmux/pi/fix-auth-bug`. Existing local URLs continue to work.
+
+### Frontend routing
+
+The frontend uses real URL paths (not hash fragments or query params). The existing `preact-iso` router handles this with path patterns:
+
+- `/:folder/:adapter/:slug` — select a specific session
+- `/:folder` — show folder, select first session
+- `/` — default view
+
+Navigating to a session updates the URL bar. Clicking a session in the sidebar pushes a new URL. The browser's back/forward buttons work as expected. External links (from notifications, CI, scripts) open the correct session directly.
+
+### What this enables
+
+- **Deep linking**: notification actions link to the specific session that finished.
+- **Bookmarks**: pin a long-running session in your browser.
+- **External tools**: CI can open `https://gmux.tailnet.ts.net/myproject/shell/build` to show a build session.
+- **Aggregation-ready**: the URL structure extends naturally with a host prefix for cross-machine sessions. No URL scheme changes needed.

@@ -51,6 +51,7 @@ description: The session metadata model shared between gmux, gmuxd, and the web 
 |-------|------|----------|-------------|
 | `title` | string | yes | Primary display name. Default: first element of `command`. Can be overridden by child. Examples: `"gmux bootstrap"`, `"fix auth bug"`, `"pi"` |
 | `subtitle` | string | no | Secondary context line. Examples: `"~/dev/gmux"`, `"iteration 3/10"`, `"waiting for build"` |
+| `slug` | string | no | URL-safe stable identifier for the session. Set by the adapter via `/meta` or `GMUX_SOCKET`. Used as the trailing segment in URL routing (`/<folder>/<adapter>/<slug>`). See below. |
 | `status` | Status | no | Application-reported status (see below) |
 | `unread` | boolean | no | Whether this session has unseen activity. Default: false. Set true on output when not focused; cleared on focus. |
 
@@ -134,6 +135,7 @@ As served by `GET /meta` on a runner's Unix socket:
   "exited_at": null,
   "title": "gmux bootstrap",
   "subtitle": "~/dev/gmux",
+  "slug": "fix-auth-bug",
   "status": {
     "label": "thinking",
     "state": "active",
@@ -143,6 +145,38 @@ As served by `GET /meta` on a runner's Unix socket:
   "binary_hash": "a1b2c3d4e5f6..."
 }
 ```
+
+### URL Slug (set by child, stable across resume)
+
+The `slug` field provides a stable, human-readable identifier for URL routing. It is set by the adapter and should be derived from something that persists across kill and resume.
+
+**Adapter examples:**
+
+| Adapter | Slug source | Example |
+|---------|-------------|---------|
+| pi | Conversation ID or first-message summary | `fix-auth-bug` |
+| claude | Session file basename | `abc123` |
+| codex | Session file basename | `def456` |
+| shell | Sanitized command or counter | `pytest-watch`, `shell-3` |
+
+**Rules:**
+
+- URL-safe characters only (lowercase alphanumeric, hyphens). gmux sanitizes the adapter's input.
+- Unique within the adapter's namespace for that folder. gmux appends a disambiguator (`-2`, `-3`) on collision.
+- Falls back to a truncated session ID (e.g. `sess-abc12`) if the adapter doesn't provide one.
+- Stable across resume: the slug is tied to the logical session (conversation ID, session file), not the process. A resumed session keeps the same slug.
+
+The slug is part of the hierarchical URL path: `/<folder>/<adapter>/<slug>`. Each adapter gets its own namespace within a folder, so adapters don't need to coordinate with each other. See [Folder Management](/planned/folder-management#step-3-url-routing) for the full URL routing design.
+
+**Setting the slug:**
+
+```bash
+# Via GMUX_SOCKET HTTP (preferred)
+curl --unix-socket $GMUX_SOCKET http://localhost/meta \
+  -X PATCH -d '{"slug": "fix-auth-bug"}'
+```
+
+Or include it in the `/meta` response from the runner. The slug can be set at any time; the URL updates and the old URL redirects.
 
 ## What's NOT in This Schema
 

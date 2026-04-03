@@ -5,6 +5,18 @@ description: What you see in gmux and how to work with it.
 
 Open **[localhost:8790](http://localhost:8790)** after launching your first session. This page explains what you're looking at.
 
+## URL routing
+
+Every session has a stable URL:
+
+```
+http://localhost:8790/<folder>/<adapter>/<slug>
+```
+
+For example, `/gmux/pi/fix-auth-bug` links directly to a pi session in the gmux project. These URLs are bookmarkable, shareable, and stable across session resume. External tools (notifications, CI, scripts) can link directly to a specific session.
+
+The folder segment comes from the project name (derived from the repo's remote URL, or the directory name). The adapter segment is the session kind (`pi`, `shell`, `claude`). The slug is an adapter-provided identifier for the specific session.
+
 ## The sidebar
 
 The left panel lists all sessions, grouped by working directory. Each folder shows the project path, and sessions within it are sorted by creation time.
