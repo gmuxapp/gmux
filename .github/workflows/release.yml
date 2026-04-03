@@ -77,6 +77,16 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           GOWORK: ${{ github.workspace }}/go.work
 
+      - name: Notify Discord
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ROLE_BREAKING: ${{ vars.DISCORD_ROLE_BREAKING }}
+          ROLE_FEATURE: ${{ vars.DISCORD_ROLE_FEATURE }}
+          ROLE_PATCH: ${{ vars.DISCORD_ROLE_PATCH }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/notify-discord.sh
+
   deploy-docs:
     needs: release
     uses: ./.github/workflows/pages.yml

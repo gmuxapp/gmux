@@ -82,21 +82,19 @@ case "$bump" in
 esac
 new_version="$major.$minor.$patch_v"
 
-# ── Collect changelog entries ──
+# ── Map changesets to PRs ──
 
 # Derive the GitHub repo URL for PR links.
 remote_url=$(git remote get-url origin 2>/dev/null || true)
 repo_url=$(echo "$remote_url" | sed -E 's|\.git$||; s|^git@github\.com:|https://github.com/|')
 
-# Extract body (everything after the second ---) from each changeset.
-# Each entry becomes a bullet point with a PR link appended.
-entries=""
+declare -A pr_bumps       # pr_num -> highest bump level (major > minor > patch)
+declare -A pr_changelogs  # pr_num -> concatenated changeset bodies
+
 for f in "${changesets[@]}"; do
+  file_bump=$(awk '/^---$/{n++; next} n==1 && /^bump:/{print $2}' "$f" | tr -d '[:space:]')
   body=$(awk '/^---$/{n++; next} n>=2{print}' "$f")
   body=$(echo "$body" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba}')
-  if [[ "$body" != "- "* ]]; then
-    body="- $body"
-  fi
 
   # Find the PR that introduced this changeset (from merge commit message).
   pr_num=""
@@ -104,14 +102,72 @@ for f in "${changesets[@]}"; do
   if [[ "$commit_msg" =~ \(#([0-9]+)\) ]]; then
     pr_num="${BASH_REMATCH[1]}"
   fi
-  if [[ -n "$pr_num" && -n "$repo_url" ]]; then
-    body+=" ([#${pr_num}](${repo_url}/pull/${pr_num}))"
+
+  # Track highest bump per PR.
+  if [[ -n "$pr_num" ]]; then
+    existing="${pr_bumps[$pr_num]:-}"
+    case "$file_bump" in
+      major) pr_bumps[$pr_num]="major" ;;
+      minor) [[ "$existing" != "major" ]] && pr_bumps[$pr_num]="minor" ;;
+      patch) [[ -z "$existing" ]] && pr_bumps[$pr_num]="patch" ;;
+    esac
+    pr_changelogs[$pr_num]+="$body"$'\n'
+  fi
+done
+
+# ── Fetch PR content and build list ──
+
+declare -A pr_titles
+llm_input=""
+breaking_items=()
+feature_items=()
+fix_items=()
+
+for pr_num in $(echo "${!pr_bumps[@]}" | tr ' ' '\n' | sort -n); do
+  pr_json=$(gh pr view "$pr_num" --json title,body 2>/dev/null || echo '{}')
+  pr_title=$(echo "$pr_json" | jq -r '.title // "#'"$pr_num"'"')
+  pr_body=$(echo "$pr_json" | jq -r '.body // ""')
+  pr_titles[$pr_num]="$pr_title"
+
+  llm_input+="## ${pr_title} (#${pr_num})"$'\n\n'
+  llm_input+="### Changelog note"$'\n'
+  llm_input+="${pr_changelogs[$pr_num]:-}"$'\n\n'
+  if [[ -n "$pr_body" ]]; then
+    llm_input+="### PR description"$'\n'
+    llm_input+="${pr_body}"$'\n\n'
   fi
 
-  entries+="$body"$'\n'
+  item="- ${pr_title} ([#${pr_num}](${repo_url}/pull/${pr_num}))"
+  case "${pr_bumps[$pr_num]}" in
+    major) breaking_items+=("$item") ;;
+    minor) feature_items+=("$item") ;;
+    patch) fix_items+=("$item") ;;
+  esac
 done
-# Remove trailing newlines
-entries=$(echo "$entries" | sed -e :a -e '/^\n*$/{$d;N;ba}')
+
+# ── Summarize ──
+
+summary=$(echo "$llm_input" | "$ROOT/scripts/summarize.sh" "v$new_version")
+
+# ── Build grouped PR list ──
+
+pr_list=""
+if [[ ${#breaking_items[@]} -gt 0 ]]; then
+  pr_list+="### Breaking"$'\n'
+  for item in "${breaking_items[@]}"; do pr_list+="$item"$'\n'; done
+  pr_list+=$'\n'
+fi
+if [[ ${#feature_items[@]} -gt 0 ]]; then
+  pr_list+="### Features"$'\n'
+  for item in "${feature_items[@]}"; do pr_list+="$item"$'\n'; done
+  pr_list+=$'\n'
+fi
+if [[ ${#fix_items[@]} -gt 0 ]]; then
+  pr_list+="### Fixes"$'\n'
+  for item in "${fix_items[@]}"; do pr_list+="$item"$'\n'; done
+  pr_list+=$'\n'
+fi
+pr_list=$(echo "$pr_list" | sed -e :a -e '/^\n*$/{$d;N;ba}')
 
 # ── Output ──
 
@@ -119,16 +175,26 @@ echo "v$new_version ($bump)"
 
 if $DRY_RUN; then
   echo ""
-  echo "$entries"
+  echo "$summary"
+  echo ""
+  echo "---"
+  echo ""
+  echo "$pr_list"
   exit 0
 fi
 
 # ── Write release notes file ──
 #
 # GoReleaser uses this via --release-notes to populate the GitHub Release body.
-# Kept at a fixed path so .goreleaser.yml doesn't need to change per release.
+# The --- separator lets scripts/notify-discord.sh extract just the summary.
 
-echo "$entries" > "$ROOT/RELEASE_NOTES.md"
+cat > "$ROOT/RELEASE_NOTES.md" <<EOF
+${summary}
+
+---
+
+${pr_list}
+EOF
 
 # ── Update changelog.mdx ──
 #
@@ -137,7 +203,9 @@ echo "$entries" > "$ROOT/RELEASE_NOTES.md"
 
 new_section="## v${new_version}
 
-${entries}
+${summary}
+
+${pr_list}
 
 ---"
 

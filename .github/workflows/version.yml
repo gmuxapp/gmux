@@ -28,11 +28,24 @@ jobs:
       - name: Consume changesets
         if: steps.check.outputs.count != '0'
         id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           output=$(bash scripts/version.sh)
           version=$(echo "$output" | head -1 | awk '{print $1}')
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "$output"
+
+      - name: Prepare PR body
+        if: steps.check.outputs.count != '0'
+        id: body
+        run: |
+          {
+            echo "notes<<NOTES_EOF"
+            cat RELEASE_NOTES.md
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create release PR
         if: steps.check.outputs.count != '0'
@@ -42,10 +55,13 @@ jobs:
           commit-message: "release: ${{ steps.version.outputs.version }}"
           title: "release: ${{ steps.version.outputs.version }}"
           body: |
-            Consuming pending changesets for **${{ steps.version.outputs.version }}**.
+            Release **${{ steps.version.outputs.version }}**.
 
-            Review the changelog entry, edit if needed, then merge.
             Merging creates the `${{ steps.version.outputs.version }}` tag and triggers the release build.
+
+            ---
+
+            ${{ steps.body.outputs.notes }}
           branch: release/next
           delete-branch: true
 
@@ -54,16 +70,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat <<EOF | gh pr edit "${{ steps.create-pr.outputs.pull-request-number }}" --body-file -
-          Consuming pending changesets for **${{ steps.version.outputs.version }}**.
+          version="${{ steps.version.outputs.version }}"
+          pr_num="${{ steps.create-pr.outputs.pull-request-number }}"
+          notes=$(cat RELEASE_NOTES.md)
 
-          Review the changelog entry, edit if needed, then merge.
-          Merging creates the \`${{ steps.version.outputs.version }}\` tag and triggers the release build.
+          cat <<EOF | gh pr edit "$pr_num" --body-file -
+          Release **${version}**.
+
+          Merging creates the \`${version}\` tag and triggers the release build.
 
           ### Try this prerelease
           \`\`\`sh
-          curl -sSfL https://gmux.app/install-pr.sh | sh -s -- ${{ steps.create-pr.outputs.pull-request-number }}
+          curl -sSfL https://gmux.app/install-pr.sh | sh -s -- ${pr_num}
           \`\`\`
+
+          ---
+
+          ${notes}
           EOF
 
   # When the release PR itself merges (deleting changeset files), this
