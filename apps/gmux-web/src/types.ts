@@ -122,6 +122,7 @@ export interface DiscoveredProject {
   remote?: string
   paths: string[]
   session_count: number
+  active_count: number
 }
 
 // --- Remote normalization (mirrors Go NormalizeRemote) ---

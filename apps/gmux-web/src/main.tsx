@@ -13,6 +13,7 @@ import { useArrivalPulse } from './use-arrival-pulse'
 import { useActivityTracker } from './use-activity'
 
 import type { Session, Folder } from './types'
+import { ManageProjectsModal } from './manage-projects'
 import { buildProjectFolders, parseSessionPath, sessionPath, resolveSessionFromPath, matchSession } from './types'
 import { getMockFolders } from './mock-data/index'
 import { installCopySession } from './mock-data/export-session'
@@ -815,6 +816,7 @@ function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [manageProjectsOpen, setManageProjectsOpen] = useState(false)
   const [connState, setConnState] = useState<ConnectionState>('connecting')
   const [ctrlArmed, setCtrlArmed] = useState(false)
   const [altArmed, setAltArmed] = useState(false)
@@ -1208,12 +1210,18 @@ function App() {
         isSessionActive={isSessionActive}
         onSelect={handleSelect}
         onCloseSession={handleCloseSession}
-        onManageProjects={() => { /* TODO: open modal */ }}
+        onManageProjects={() => { setSidebarOpen(false); setManageProjectsOpen(true) }}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         health={health}
         notifPermission={notifPermission}
         onRequestNotifPermission={handleRequestNotifPermission}
+      />
+
+      <ManageProjectsModal
+        open={manageProjectsOpen}
+        onClose={() => setManageProjectsOpen(false)}
+        sidebarState={sidebarState}
       />
 
       <div class="main-panel">
