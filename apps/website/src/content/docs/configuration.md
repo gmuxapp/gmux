@@ -146,6 +146,51 @@ These are ready to paste into `~/.config/gmux/keybinds.jsonc`.
 ]
 ```
 
+**Mac Cmd-as-Ctrl** -- makes Command behave like Ctrl for terminal shortcuts on Mac. On Linux this changes nothing (secondary resolves to Ctrl, which already sends control codes natively). On Mac, Cmd+A sends Ctrl+A (beginning of line) instead of Select All, Cmd+K sends Ctrl+K (kill to end of line), Cmd+R sends Ctrl+R (reverse search), and so on. Cmd+C still copies when text is selected (otherwise sends SIGINT), and Cmd+V still pastes:
+
+```jsonc
+[
+  // Clipboard: Cmd+C copies when there's a selection, sends Ctrl+C otherwise.
+  // Cmd+V pastes. These override the Mac defaults with the same behavior.
+  { "key": "secondary+c", "action": "copyOrInterrupt" },
+  { "key": "secondary+v", "action": "paste" },
+
+  // Line editing (readline / shell)
+  { "key": "secondary+a", "action": "sendKeys", "args": "ctrl+a" },
+  { "key": "secondary+e", "action": "sendKeys", "args": "ctrl+e" },
+  { "key": "secondary+f", "action": "sendKeys", "args": "ctrl+f" },
+  { "key": "secondary+b", "action": "sendKeys", "args": "ctrl+b" },
+  { "key": "secondary+d", "action": "sendKeys", "args": "ctrl+d" },
+  { "key": "secondary+h", "action": "sendKeys", "args": "ctrl+h" },
+  { "key": "secondary+t", "action": "sendKeys", "args": "ctrl+t" },
+
+  // Kill and yank
+  { "key": "secondary+k", "action": "sendKeys", "args": "ctrl+k" },
+  { "key": "secondary+u", "action": "sendKeys", "args": "ctrl+u" },
+  { "key": "secondary+w", "action": "sendKeys", "args": "ctrl+w" },
+  { "key": "secondary+y", "action": "sendKeys", "args": "ctrl+y" },
+
+  // History
+  { "key": "secondary+r", "action": "sendKeys", "args": "ctrl+r" },
+  { "key": "secondary+s", "action": "sendKeys", "args": "ctrl+s" },
+  { "key": "secondary+p", "action": "sendKeys", "args": "ctrl+p" },
+  { "key": "secondary+n", "action": "sendKeys", "args": "ctrl+n" },
+  { "key": "secondary+o", "action": "sendKeys", "args": "ctrl+o" },
+  { "key": "secondary+g", "action": "sendKeys", "args": "ctrl+g" },
+
+  // Screen and signals
+  { "key": "secondary+l", "action": "sendKeys", "args": "ctrl+l" },
+  { "key": "secondary+z", "action": "sendKeys", "args": "ctrl+z" },
+  { "key": "secondary+x", "action": "sendKeys", "args": "ctrl+x" },
+  { "key": "secondary+q", "action": "sendKeys", "args": "ctrl+q" },
+
+  // Less common (ctrl+i = tab, ctrl+j = newline, ctrl+m = enter)
+  { "key": "secondary+i", "action": "sendKeys", "args": "ctrl+i" },
+  { "key": "secondary+j", "action": "sendKeys", "args": "ctrl+j" },
+  { "key": "secondary+m", "action": "sendKeys", "args": "ctrl+m" }
+]
+```
+
 ## Environment variables
 
 ### gmuxd (daemon)
