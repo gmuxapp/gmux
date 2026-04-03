@@ -25,6 +25,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/notify"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
@@ -343,6 +344,9 @@ func serve(stderr io.Writer) int {
 	var tcpAddr string
 	var authToken string
 
+	// State directory for persistent files (projects.json, auth-token, etc).
+	stateDir := paths.StateDir()
+
 	// ── Health + Capabilities ──
 
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
@@ -409,6 +413,129 @@ func serve(stderr io.Writer) int {
 				"keybinds": keybinds,
 			},
 		})
+	})
+
+	// ── Projects ──
+
+	mux.HandleFunc("GET /v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		state, err := projects.Load(stateDir)
+		if err != nil {
+			log.Printf("projects: load error: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal", "failed to load projects")
+			return
+		}
+
+		// Build session info for discovery.
+		var sessionInfos []projects.SessionInfo
+		for _, s := range sessions.List() {
+			sessionInfos = append(sessionInfos, projects.SessionInfo{
+				ID:            s.ID,
+				Cwd:           s.Cwd,
+				WorkspaceRoot: s.WorkspaceRoot,
+				Remotes:       s.Remotes,
+			})
+		}
+
+		writeJSON(w, map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"configured": state.Items,
+				"discovered": state.Discovered(sessionInfos),
+			},
+		})
+	})
+
+	mux.HandleFunc("PUT /v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "read error")
+			return
+		}
+
+		var state projects.State
+		if err := json.Unmarshal(body, &state); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		if err := state.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+			return
+		}
+		if err := state.Save(stateDir); err != nil {
+			log.Printf("projects: save error: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
+			return
+		}
+
+		sessions.Broadcast(store.Event{
+			Type: "projects-update",
+		})
+		writeJSON(w, map[string]any{"ok": true})
+	})
+
+	mux.HandleFunc("POST /v1/projects/add", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "read error")
+			return
+		}
+
+		var req struct {
+			Remote string   `json:"remote"`
+			Paths  []string `json:"paths"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+
+		// Derive slug from the match rule.
+		var slug string
+		if req.Remote != "" {
+			slug = projects.SlugFromRemote(req.Remote)
+			req.Remote = projects.NormalizeRemote(req.Remote)
+		} else if len(req.Paths) > 0 {
+			slug = projects.SlugFromPath(req.Paths[0])
+			// Normalize all paths.
+			for i, p := range req.Paths {
+				req.Paths[i] = projects.NormalizePath(p)
+			}
+		} else {
+			writeError(w, http.StatusBadRequest, "bad_request", "remote or paths required")
+			return
+		}
+
+		state, err := projects.Load(stateDir)
+		if err != nil {
+			log.Printf("projects: load error: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal", "failed to load projects")
+			return
+		}
+
+		slug = projects.UniqueSlug(slug, state.Items)
+
+		item := projects.Item{Slug: slug}
+		if req.Remote != "" {
+			item.Remote = req.Remote
+		} else {
+			item.Paths = req.Paths
+		}
+
+		state.Items = append(state.Items, item)
+		if err := state.Validate(); err != nil {
+			writeError(w, http.StatusConflict, "validation_error", err.Error())
+			return
+		}
+		if err := state.Save(stateDir); err != nil {
+			log.Printf("projects: save error: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
+			return
+		}
+
+		sessions.Broadcast(store.Event{
+			Type: "projects-update",
+		})
+		writeJSON(w, map[string]any{"ok": true, "data": item})
 	})
 
 	// ── Sessions ──
@@ -833,7 +960,7 @@ func serve(stderr io.Writer) int {
 	}
 	tcpAddr = resolved
 
-	tok, err := authtoken.LoadOrCreate(paths.StateDir())
+	tok, err := authtoken.LoadOrCreate(stateDir)
 	if err != nil {
 		log.Fatalf("FATAL: %v", err)
 	}
@@ -907,7 +1034,7 @@ func serve(stderr io.Writer) int {
 		tsListener = tsauth.Start(tsauth.Config{
 			Hostname: cfg.Tailscale.Hostname,
 			Allow:    cfg.Tailscale.Allow,
-		}, paths.StateDir(), mux)
+		}, stateDir, mux)
 		defer tsListener.Shutdown()
 	}
 
