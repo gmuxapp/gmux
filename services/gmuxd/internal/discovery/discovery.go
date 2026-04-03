@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
@@ -184,6 +185,18 @@ func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, 
 				log.Printf("register: merged resumed session %s ← %s", existingID, newSess.ID)
 				return nil
 			}
+		}
+	}
+
+	// Write shell state file so the session scanner can rediscover
+	// shell sessions after a gmuxd restart.
+	if newSess.Kind == "shell" {
+		path, err := adapters.WriteShellStateFile(newSess.ID, newSess.Cwd, newSess.Command)
+		if err != nil {
+			log.Printf("register: failed to write shell state file for %s: %v", newSess.ID, err)
+		} else {
+			newSess.ResumeKey = newSess.ID
+			log.Printf("register: wrote shell state file %s", path)
 		}
 	}
 

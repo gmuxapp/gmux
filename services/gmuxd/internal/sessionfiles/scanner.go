@@ -50,7 +50,7 @@ func (sc *Scanner) Run(interval time.Duration, stop <-chan struct{}) {
 func (sc *Scanner) Scan() {
 	existing := sc.existingResumeKeys()
 
-	for _, a := range adapters.All {
+	for _, a := range adapters.AllAdapters() {
 		sf, ok := a.(adapter.SessionFiler)
 		if !ok {
 			continue

@@ -266,7 +266,7 @@ func serve(stderr io.Writer) int {
 
 	// Build command titlers from adapters that implement CommandTitler.
 	commandTitlers := make(map[string]func([]string) string)
-	for _, a := range adapters.All {
+	for _, a := range adapters.AllAdapters() {
 		if ct, ok := a.(adapter.CommandTitler); ok {
 			ct := ct // capture for closure
 			commandTitlers[a.Name()] = ct.CommandTitle
@@ -797,6 +797,10 @@ func serve(stderr io.Writer) int {
 				if err := discovery.KillSession(sess.SocketPath); err != nil {
 					log.Printf("dismiss: %s: runner kill failed: %v", sessionID, err)
 				}
+			}
+			// Clean up shell state file before removing from store.
+			if sess.Kind == "shell" {
+				adapters.RemoveShellStateFile(sessionID, sess.Cwd)
 			}
 			// Remove from store — broadcasts session-remove to all clients.
 			sessions.Remove(sessionID)

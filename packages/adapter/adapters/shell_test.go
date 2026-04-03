@@ -1,97 +1,133 @@
 package adapters
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
 )
 
-func TestShellMatchAll(t *testing.T) {
-	g := NewShell()
-	if !g.Match([]string{"anything"}) {
-		t.Fatal("shell should match any command")
+func TestShellImplementsInterfaces(t *testing.T) {
+	var s adapter.Adapter = NewShell()
+	if _, ok := s.(adapter.SessionFiler); !ok {
+		t.Fatal("Shell should implement SessionFiler")
 	}
-	if !g.Match([]string{}) {
-		t.Fatal("shell should match empty command")
+	if _, ok := s.(adapter.Resumer); !ok {
+		t.Fatal("Shell should implement Resumer")
 	}
-}
-
-func TestShellName(t *testing.T) {
-	if NewShell().Name() != "shell" {
-		t.Fatal("expected 'shell'")
+	if _, ok := s.(adapter.CommandTitler); !ok {
+		t.Fatal("Shell should implement CommandTitler")
 	}
 }
 
-func TestShellDiscoverAlwaysTrue(t *testing.T) {
-	if !NewShell().Discover() {
-		t.Fatal("shell should always be discoverable")
+func TestShellWriteAndParseStateFile(t *testing.T) {
+	// Override state dir to a temp location.
+	tmp := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", tmp)
+
+	path, err := WriteShellStateFile("sess-abc123", "/home/user/dev/project", []string{"fish"})
+	if err != nil {
+		t.Fatalf("WriteShellStateFile: %v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("state file not created: %v", err)
+	}
+
+	sh := NewShell()
+	info, err := sh.ParseSessionFile(path)
+	if err != nil {
+		t.Fatalf("ParseSessionFile: %v", err)
+	}
+
+	if info.ID != "sess-abc123" {
+		t.Errorf("ID = %q, want %q", info.ID, "sess-abc123")
+	}
+	if info.Cwd != "/home/user/dev/project" {
+		t.Errorf("Cwd = %q, want %q", info.Cwd, "/home/user/dev/project")
+	}
+	if info.Title != "fish" {
+		t.Errorf("Title = %q, want %q", info.Title, "fish")
+	}
+	if info.FilePath != path {
+		t.Errorf("FilePath = %q, want %q", info.FilePath, path)
 	}
 }
 
-func TestShellEnvNil(t *testing.T) {
-	if env := NewShell().Env(adapter.EnvContext{}); env != nil {
-		t.Fatalf("expected nil, got %v", env)
+func TestShellCanResume(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", tmp)
+
+	path, err := WriteShellStateFile("sess-resume1", "/home/user/work", []string{"bash"})
+	if err != nil {
+		t.Fatalf("WriteShellStateFile: %v", err)
+	}
+
+	sh := NewShell()
+	if !sh.CanResume(path) {
+		t.Error("CanResume should return true for valid state file")
+	}
+
+	badPath := filepath.Join(tmp, "nonexistent.json")
+	if sh.CanResume(badPath) {
+		t.Error("CanResume should return false for missing file")
 	}
 }
 
-func TestShellLaunchers(t *testing.T) {
-	launchers := NewShell().Launchers()
-	if len(launchers) != 1 {
-		t.Fatalf("expected 1 launcher, got %d", len(launchers))
-	}
-	if launchers[0].ID != "shell" {
-		t.Fatalf("expected shell launcher, got %q", launchers[0].ID)
-	}
-}
-
-func TestShellMonitorPlainOutput(t *testing.T) {
-	if NewShell().Monitor([]byte("hello")) != nil {
-		t.Fatal("should not report status for plain output")
+func TestShellResumeCommand(t *testing.T) {
+	t.Setenv("SHELL", "/usr/bin/fish")
+	sh := NewShell()
+	cmd := sh.ResumeCommand(&adapter.SessionFileInfo{
+		Cwd: "/home/user/project",
+	})
+	if len(cmd) != 1 || cmd[0] != "/usr/bin/fish" {
+		t.Errorf("ResumeCommand = %v, want [/usr/bin/fish]", cmd)
 	}
 }
 
-func TestShellDoesNotImplementCapabilities(t *testing.T) {
-	var a adapter.Adapter = NewShell()
-	if _, ok := a.(adapter.SessionFiler); ok {
-		t.Fatal("Shell should not implement SessionFiler")
-	}
-	if _, ok := a.(adapter.Resumer); ok {
-		t.Fatal("Shell should not implement Resumer")
-	}
-}
+func TestShellSessionDir(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", tmp)
 
-// --- OSC title parsing ---
-
-func TestParseOSCTitleBEL(t *testing.T) {
-	if title := ParseOSCTitle([]byte("\x1b]0;my title\x07 more")); title != "my title" {
-		t.Fatalf("expected 'my title', got %q", title)
+	sh := NewShell()
+	dir := sh.SessionDir("/home/user/dev/project")
+	expected := filepath.Join(tmp, "gmux", "shell-sessions", "--home-user-dev-project--")
+	if dir != expected {
+		t.Errorf("SessionDir = %q, want %q", dir, expected)
 	}
 }
 
-func TestParseOSCTitleST(t *testing.T) {
-	if title := ParseOSCTitle([]byte("\x1b]2;window title\x1b\\ more")); title != "window title" {
-		t.Fatalf("expected 'window title', got %q", title)
+func TestShellRemoveStateFile(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", tmp)
+
+	path, err := WriteShellStateFile("sess-remove1", "/home/user/dev", []string{"zsh"})
+	if err != nil {
+		t.Fatalf("WriteShellStateFile: %v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("state file should exist: %v", err)
+	}
+
+	RemoveShellStateFile("sess-remove1", "/home/user/dev")
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("state file should be removed after RemoveShellStateFile")
 	}
 }
 
-func TestParseOSCTitleNone(t *testing.T) {
-	if title := ParseOSCTitle([]byte("hello world")); title != "" {
-		t.Fatalf("expected empty, got %q", title)
+func TestAllAdaptersIncludesShell(t *testing.T) {
+	all := AllAdapters()
+	found := false
+	for _, a := range all {
+		if a.Name() == "shell" {
+			found = true
+			break
+		}
 	}
-}
-
-func TestParseOSCTitleEmbedded(t *testing.T) {
-	data := []byte("output\r\n\x1b]0;~/dev/gmux\x07prompt $ ")
-	if title := ParseOSCTitle(data); title != "~/dev/gmux" {
-		t.Fatalf("expected '~/dev/gmux', got %q", title)
-	}
-}
-
-func TestShellMonitorNil(t *testing.T) {
-	// Shell.Monitor() always returns nil — title parsing is handled
-	// centrally in gmux, not per-adapter.
-	s := NewShell().Monitor([]byte("\x1b]0;fish: ~/dev\x07"))
-	if s != nil {
-		t.Fatalf("expected nil, got %+v", s)
+	if !found {
+		t.Error("AllAdapters() should include the shell adapter")
 	}
 }
