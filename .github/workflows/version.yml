@@ -32,10 +32,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          output=$(bash scripts/version.sh)
-          version=$(echo "$output" | head -1 | awk '{print $1}')
+          # Run version.sh with stdout going to both the console and a
+          # variable so progress is visible even if the script fails.
+          bash scripts/version.sh | tee /tmp/version-output.txt
+          version=$(head -1 /tmp/version-output.txt | awk '{print $1}')
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "$output"
 
       - name: Prepare PR body
         if: steps.check.outputs.count != '0'
