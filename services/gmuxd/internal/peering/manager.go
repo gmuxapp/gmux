@@ -21,8 +21,17 @@ type Manager struct {
 // Call Start() to begin subscribing to peers.
 func NewManager(configs []config.PeerConfig, st *store.Store) *Manager {
 	peers := make(map[string]*Peer, len(configs))
+
+	// Broadcast peer status changes as SSE events.
+	onStatus := func(name string, status Status) {
+		st.Broadcast(store.Event{
+			Type: "peer-status",
+			ID:   name,
+		})
+	}
+
 	for _, cfg := range configs {
-		peers[cfg.Name] = newPeer(cfg, st)
+		peers[cfg.Name] = newPeer(cfg, st, onStatus)
 	}
 	return &Manager{
 		peers: peers,

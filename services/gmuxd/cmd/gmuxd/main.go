@@ -692,7 +692,11 @@ func serve(stderr io.Writer) int {
 		}
 
 		// Forward to peer if requested.
-		if req.Peer != "" && peerManager != nil {
+		if req.Peer != "" {
+			if peerManager == nil {
+				writeError(w, http.StatusBadRequest, "unknown_peer", "no peers configured")
+				return
+			}
 			if peer := peerManager.GetPeer(req.Peer); peer != nil {
 				// Re-supply the body since it was already read above.
 				r.Body = io.NopCloser(bytes.NewReader(body))
@@ -768,7 +772,7 @@ func serve(stderr io.Writer) int {
 		}
 
 		// Route to peer if this is a remote session.
-		if peerManager != nil {
+		if peerManager != nil && action != "" {
 			if peer, originalID := peerManager.FindPeer(sessionID); peer != nil {
 				if action == "attach" {
 					// Attach returns the hub's own WS path (the hub proxies to the spoke).
@@ -781,10 +785,8 @@ func serve(stderr io.Writer) int {
 					})
 					return
 				}
-				if action != "" {
-					peer.Forward(w, r, originalID, action)
-					return
-				}
+				peer.Forward(w, r, originalID, action)
+				return
 			}
 		}
 

@@ -25,15 +25,19 @@ type Peer struct {
 	mu     sync.RWMutex
 	status Status
 
+	// onStatus is called when connection state changes.
+	onStatus func(name string, status Status)
+
 	client *http.Client
 }
 
-func newPeer(cfg config.PeerConfig, st *store.Store) *Peer {
+func newPeer(cfg config.PeerConfig, st *store.Store, onStatus func(string, Status)) *Peer {
 	return &Peer{
-		Config: cfg,
-		store:  st,
-		status: StatusDisconnected,
-		client: &http.Client{Timeout: 0}, // SSE: no timeout on the response body
+		Config:   cfg,
+		store:    st,
+		status:   StatusDisconnected,
+		onStatus: onStatus,
+		client:   &http.Client{Timeout: 0}, // SSE: no timeout on the response body
 	}
 }
 
@@ -46,8 +50,13 @@ func (p *Peer) Status() Status {
 
 func (p *Peer) setStatus(s Status) {
 	p.mu.Lock()
+	old := p.status
 	p.status = s
 	p.mu.Unlock()
+
+	if old != s && p.onStatus != nil {
+		p.onStatus(p.Config.Name, s)
+	}
 }
 
 // Forward proxies an HTTP request to the spoke, stripping the peer

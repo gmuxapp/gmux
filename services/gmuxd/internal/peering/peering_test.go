@@ -327,6 +327,37 @@ func TestPeerStatus(t *testing.T) {
 	}
 }
 
+func TestPeerStatusEventBroadcast(t *testing.T) {
+	st := store.New()
+	sk := spokeServer(t, "", []store.Session{
+		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "test"},
+	})
+
+	// Subscribe to store events before starting the manager.
+	ch, cancel := st.Subscribe()
+	defer cancel()
+
+	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
+	mgr := NewManager([]config.PeerConfig{cfg}, st)
+	mgr.Start()
+
+	// Collect peer-status events until we see "connected" transition.
+	deadline := time.After(2 * time.Second)
+	var gotPeerStatus bool
+	for !gotPeerStatus {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for peer-status event")
+		case ev := <-ch:
+			if ev.Type == "peer-status" && ev.ID == "server" {
+				gotPeerStatus = true
+			}
+		}
+	}
+
+	mgr.Stop()
+}
+
 func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 	st := store.New()
 	initialSessions := []store.Session{
