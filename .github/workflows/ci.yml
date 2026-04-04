@@ -34,8 +34,14 @@ jobs:
       - name: Build protocol
         run: cd packages/protocol && pnpm exec tsc -p tsconfig.json
 
+      - name: Lint protocol
+        run: cd packages/protocol && pnpm exec tsc --noEmit
+
       - name: Test protocol
         run: cd packages/protocol && pnpm exec vitest run --passWithNoTests
+
+      - name: Lint web
+        run: cd apps/gmux-web && pnpm exec tsc --noEmit
 
       - name: Test web
         run: cd apps/gmux-web && pnpm exec vitest run --passWithNoTests
