@@ -119,6 +119,17 @@ export const KEYBIND_ACTIONS = [
   'sendText', 'sendKeys', 'copyOrInterrupt', 'copy', 'paste', 'selectAll', 'none',
 ] as const
 
+/** Per-action descriptions. Source of truth for runtime warnings and doc generation. */
+export const KEYBIND_ACTION_DESCRIPTIONS: Record<string, string> = {
+  sendText:         'Send `args` as literal text to the PTY.',
+  sendKeys:         'Parse `args` as a key combo and send its escape sequence (e.g. `"ctrl+t"` sends `^T`).',
+  copyOrInterrupt:  'Copy selection if text is selected, otherwise send SIGINT (`^C`).',
+  copy:             'Copy selection to clipboard. Does nothing if no text is selected.',
+  paste:            'Read system clipboard and send contents to the PTY.',
+  selectAll:        'Select all terminal content.',
+  none:             'Disable this key combo (removes a built-in default).',
+}
+
 export const KeybindSchema = v.object({
   key: v.pipe(
     v.string(),
@@ -130,9 +141,8 @@ export const KeybindSchema = v.object({
   ),
   action: v.pipe(
     v.string(),
-    v.description(
-      'Action to perform: sendText, sendKeys, copyOrInterrupt, copy, paste, selectAll, or none (disables a default).',
-    ),
+    v.description('Action to perform.'),
+    v.metadata({ values: KEYBIND_ACTION_DESCRIPTIONS }),
   ),
   args: v.optional(v.pipe(
     v.string(),

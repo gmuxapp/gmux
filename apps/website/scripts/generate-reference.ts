@@ -1,9 +1,10 @@
 /**
  * Generate reference documentation from valibot schemas.
  *
- * Reads the schema objects from apps/gmux-web/src/settings-schema.ts,
- * walks their structure, and emits markdown files into the reference/
- * docs directory.
+ * Walks the schema tree recursively: objects become sections, arrays of
+ * objects show their item fields as sub-sections, and primitives render
+ * their type/default/range/description. No hardcoded field lists needed;
+ * structure comes from the schema itself.
  *
  * Run: node --experimental-strip-types scripts/generate-reference.ts
  */
@@ -14,7 +15,6 @@ import {
   SettingsSchema,
   ThemeColorsSchema,
   DEFAULT_THEME_COLORS,
-  KEYBIND_ACTIONS,
 } from '../../gmux-web/src/settings-schema.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -29,22 +29,29 @@ const GENERATED_NOTE = [
 
 // ── Schema introspection ──
 
-interface FieldInfo {
-  name: string
-  type: string
-  default_: unknown
+/**
+ * Unwrap a valibot schema, collecting info at each layer.
+ *
+ * Valibot schemas nest like: optional(pipe(baseType, description, metadata, transform, ...))
+ * This function peels the layers and returns a flat bag of properties.
+ */
+interface SchemaInfo {
+  baseType: string
   description: string
+  default_: unknown
   min?: number
   max?: number
   options?: readonly string[]
+  /** For metadata.values: a map of valid values to their descriptions. */
+  valueDocs?: Record<string, string>
+  /** For arrays: the item schema (may be an object with .entries). */
+  itemSchema?: any
+  /** For objects: the entries map. */
+  entries?: Record<string, any>
 }
 
-/**
- * Extract documentation-relevant info from a single schema entry.
- * Handles the valibot shapes: optional(pipe(base, description, metadata, ...))
- */
-function extractField(name: string, schema: any): FieldInfo {
-  const info: FieldInfo = { name, type: 'unknown', default_: undefined, description: '' }
+function inspect(schema: any): SchemaInfo {
+  const info: SchemaInfo = { baseType: 'unknown', description: '', default_: undefined }
 
   // Unwrap optional
   if (schema.type === 'optional') {
@@ -52,42 +59,50 @@ function extractField(name: string, schema: any): FieldInfo {
     schema = schema.wrapped
   }
 
-  // Walk pipe for description, metadata, base type
-  if (schema.pipe) {
-    for (const item of schema.pipe) {
-      if (item.type === 'description') {
+  // Walk pipe (or handle bare schema)
+  const items = schema.pipe ?? [schema]
+  for (const item of items) {
+    switch (item.type) {
+      case 'description':
         info.description = item.description
-      } else if (item.type === 'metadata' && item.metadata) {
-        if (item.metadata.min !== undefined) info.min = item.metadata.min
-        if (item.metadata.max !== undefined) info.max = item.metadata.max
-      } else if (item.type === 'picklist' && item.options) {
-        info.type = 'enum'
+        break
+      case 'metadata':
+        if (item.metadata?.min !== undefined) info.min = item.metadata.min
+        if (item.metadata?.max !== undefined) info.max = item.metadata.max
+        if (item.metadata?.values) info.valueDocs = item.metadata.values
+        break
+      case 'string':
+        info.baseType = 'string'
+        break
+      case 'number':
+        info.baseType = 'number'
+        break
+      case 'boolean':
+        info.baseType = 'boolean'
+        break
+      case 'picklist':
+        info.baseType = 'enum'
         info.options = item.options
-      } else if (item.type === 'number') {
-        info.type = 'number'
-      } else if (item.type === 'string') {
-        info.type = 'string'
-      } else if (item.type === 'boolean') {
-        info.type = 'boolean'
-      } else if (item.type === 'array') {
-        info.type = 'array'
-      }
-    }
-  } else {
-    // No pipe, just a raw schema
-    info.type = schema.type ?? 'unknown'
-    if (schema.type === 'picklist') {
-      info.type = 'enum'
-      info.options = schema.options
+        break
+      case 'array':
+        info.baseType = 'array'
+        info.itemSchema = item.item
+        break
+      case 'object':
+        info.baseType = 'object'
+        info.entries = item.entries
+        break
+      // transform, metadata, etc. — already handled or irrelevant
     }
   }
 
   return info
 }
 
-function extractEntries(schema: any): Record<string, any> {
-  // Schema is v.pipe(v.object(entries), v.description(...))
-  // pipe[0] is the object schema with .entries
+/**
+ * Get the entries of a top-level schema (which is v.pipe(v.object(...), ...)).
+ */
+function topLevelEntries(schema: any): Record<string, any> {
   return schema.pipe[0].entries
 }
 
@@ -96,8 +111,6 @@ function extractEntries(schema: any): Record<string, any> {
 function formatDefault(val: unknown): string {
   if (val === undefined) return '*(none)*'
   if (typeof val === 'string') {
-    // Use a <code> tag to avoid markdown backtick escaping issues
-    // when the value itself contains backticks or special characters.
     const escaped = val
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -108,52 +121,84 @@ function formatDefault(val: unknown): string {
   return `\`${JSON.stringify(val)}\``
 }
 
-function formatType(info: FieldInfo): string {
+function formatType(info: SchemaInfo): string {
   if (info.options) {
     return info.options.map(o => `\`"${o}"\``).join(' \\| ')
   }
-  return `\`${info.type}\``
-}
-
-function formatRange(info: FieldInfo): string {
-  if (info.min !== undefined && info.max !== undefined) {
-    return `${info.min}–${info.max}`
+  if (info.baseType === 'array') {
+    return '`array` of objects'
   }
-  return ''
+  return `\`${info.baseType}\``
 }
 
-// ── Settings page generation ──
+// ── Recursive renderer ──
 
-/** Logical groupings for the settings reference page. */
-const SETTINGS_GROUPS = [
-  {
-    title: 'Font',
-    fields: ['fontSize', 'fontFamily', 'fontWeight', 'fontWeightBold'],
-  },
-  {
-    title: 'Cursor',
-    fields: ['cursorStyle', 'cursorBlink', 'cursorInactiveStyle', 'cursorWidth'],
-  },
-  {
-    title: 'Scrolling',
-    fields: ['scrollback', 'scrollSensitivity', 'fastScrollSensitivity', 'smoothScrollDuration'],
-  },
-  {
-    title: 'Text rendering',
-    fields: ['lineHeight', 'letterSpacing', 'drawBoldTextInBrightColors', 'minimumContrastRatio'],
-  },
-  {
-    title: 'Input',
-    fields: ['macOptionIsMeta', 'wordSeparator'],
-  },
-  {
-    title: 'Keybinds',
-    fields: ['keybinds', 'macCommandIsCtrl'],
-  },
-]
+/**
+ * Render a single schema field and recurse into children.
+ *
+ * depth controls the heading level: depth 0 = ###, depth 1 = ####, etc.
+ * This gives us ### for top-level fields and #### for sub-fields (e.g.
+ * keybind entry fields inside the keybinds array).
+ */
+function renderField(name: string, schema: any, depth: number, lines: string[]): void {
+  const info = inspect(schema)
+  const hashes = '#'.repeat(depth + 3) // depth 0 → ###, depth 1 → ####
+
+  lines.push(`${hashes} \`${name}\``)
+  lines.push('')
+  if (info.description) {
+    lines.push(info.description)
+    lines.push('')
+  }
+
+  // Type / default / range metadata
+  lines.push(`- **Type:** ${formatType(info)}`)
+  if (info.default_ !== undefined) {
+    lines.push(`- **Default:** ${formatDefault(info.default_)}`)
+  }
+  if (info.min !== undefined && info.max !== undefined) {
+    lines.push(`- **Range:** ${info.min}–${info.max}`)
+  }
+  lines.push('')
+
+  // If this field has documented values (e.g. keybind action), render them.
+  if (info.valueDocs) {
+    lines.push('| Value | Description |')
+    lines.push('|-------|-------------|')
+    for (const [val, desc] of Object.entries(info.valueDocs)) {
+      lines.push(`| \`${val}\` | ${desc} |`)
+    }
+    lines.push('')
+  }
+
+  // Recurse into children: object entries or array item entries.
+  const childEntries = info.entries ?? (
+    info.itemSchema?.type === 'object' ? info.itemSchema.entries : null
+  )
+  if (childEntries) {
+    if (info.baseType === 'array') {
+      lines.push('Each entry has these fields:')
+      lines.push('')
+    }
+    for (const [childName, childSchema] of Object.entries(childEntries)) {
+      renderField(childName, childSchema, depth + 1, lines)
+    }
+  }
+}
+
+/**
+ * Render all entries of a top-level schema.
+ */
+function renderEntries(schema: any, lines: string[]): void {
+  const entries = topLevelEntries(schema)
+  for (const [name, fieldSchema] of Object.entries(entries)) {
+    renderField(name, fieldSchema, 0, lines)
+  }
+}
+
+// ── Page generation ──
 
 function generateSettingsPage(): string {
-  const entries = extractEntries(SettingsSchema)
   const lines: string[] = []
 
   lines.push(`---`)
@@ -171,98 +216,12 @@ function generateSettingsPage(): string {
   lines.push('For guides and examples, see [Configuration](/configuration/#frontend-settings).')
   lines.push('')
 
-  const documented = new Set<string>()
-
-  for (const group of SETTINGS_GROUPS) {
-    lines.push(`## ${group.title}`)
-    lines.push('')
-
-    for (const fieldName of group.fields) {
-      documented.add(fieldName)
-      const schema = entries[fieldName]
-      if (!schema) {
-        console.warn(`Warning: field "${fieldName}" in group "${group.title}" not found in schema`)
-        continue
-      }
-
-      const info = extractField(fieldName, schema)
-      lines.push(`#### \`${fieldName}\``)
-      lines.push('')
-      if (info.description) {
-        lines.push(info.description)
-        lines.push('')
-      }
-
-      // Metadata list
-      lines.push(`- **Type:** ${formatType(info)}`)
-      lines.push(`- **Default:** ${formatDefault(info.default_)}`)
-      const range = formatRange(info)
-      if (range) {
-        lines.push(`- **Range:** ${range}`)
-      }
-      lines.push('')
-    }
-  }
-
-  // Safety check: warn about fields not in any group
-  for (const name of Object.keys(entries)) {
-    if (!documented.has(name)) {
-      console.warn(`Warning: settings field "${name}" is not in any documentation group`)
-    }
-  }
-
-  // Keybind actions reference table
-  lines.push('## Keybind actions')
-  lines.push('')
-  lines.push('These are the valid values for the `action` field in keybind entries.')
-  lines.push('')
-  lines.push('| Action | Description |')
-  lines.push('|--------|-------------|')
-
-  const actionDescriptions: Record<string, string> = {
-    sendKeys: 'Parse `args` as a key combo and send its escape sequence (e.g. `"ctrl+t"` sends `^T`).',
-    sendText: 'Send `args` as literal text to the PTY.',
-    copyOrInterrupt: 'Copy selection if text is selected, otherwise send SIGINT (`^C`).',
-    copy: 'Copy selection to clipboard. Does nothing if no text is selected.',
-    paste: 'Read system clipboard and send contents to the PTY.',
-    selectAll: 'Select all terminal content.',
-    none: 'Disable this key combo (removes a built-in default).',
-  }
-
-  for (const action of KEYBIND_ACTIONS) {
-    const desc = actionDescriptions[action] ?? ''
-    lines.push(`| \`${action}\` | ${desc} |`)
-  }
-  lines.push('')
+  renderEntries(SettingsSchema, lines)
 
   return lines.join('\n')
 }
 
-// ── Theme page generation ──
-
-const THEME_GROUPS = [
-  {
-    title: 'General',
-    fields: ['foreground', 'background', 'cursor', 'cursorAccent',
-             'selectionBackground', 'selectionForeground', 'selectionInactiveBackground'],
-  },
-  {
-    title: 'Normal colors (ANSI 0–7)',
-    fields: ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'],
-  },
-  {
-    title: 'Bright colors (ANSI 8–15)',
-    fields: ['brightBlack', 'brightRed', 'brightGreen', 'brightYellow',
-             'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'],
-  },
-  {
-    title: 'Windows Terminal aliases',
-    fields: ['purple', 'brightPurple', 'name'],
-  },
-]
-
 function generateThemePage(): string {
-  const entries = extractEntries(ThemeColorsSchema)
   const defaults = DEFAULT_THEME_COLORS as Record<string, string | undefined>
   const lines: string[] = []
 
@@ -284,19 +243,21 @@ function generateThemePage(): string {
   lines.push('For guides and examples, see [Configuration](/configuration/#terminal-theme).')
   lines.push('')
 
-  for (const group of THEME_GROUPS) {
-    lines.push(`### ${group.title}`)
-    lines.push('')
-    lines.push('| Field | Default | Description |')
-    lines.push('|-------|---------|-------------|')
+  // Theme is flat (all optional strings), so we render each field with
+  // its default color from DEFAULT_THEME_COLORS where available.
+  const entries = topLevelEntries(ThemeColorsSchema)
+  for (const [name, schema] of Object.entries(entries)) {
+    const info = inspect(schema)
+    const def = defaults[name]
 
-    for (const fieldName of group.fields) {
-      const schema = entries[fieldName]
-      if (!schema) continue
-      const info = extractField(fieldName, schema)
-      const def = defaults[fieldName]
-      const defCol = def ? `\`${def}\`` : '*(none)*'
-      lines.push(`| \`${fieldName}\` | ${defCol} | ${info.description} |`)
+    lines.push(`### \`${name}\``)
+    lines.push('')
+    if (info.description) {
+      lines.push(info.description)
+      lines.push('')
+    }
+    if (def) {
+      lines.push(`- **Default:** \`${def}\``)
     }
     lines.push('')
   }

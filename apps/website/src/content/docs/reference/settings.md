@@ -16,9 +16,7 @@ Numeric values are clamped to their valid range (not rejected).
 
 For guides and examples, see [Configuration](/configuration/#frontend-settings).
 
-## Font
-
-#### `fontSize`
+### `fontSize`
 
 Terminal font size in pixels.
 
@@ -26,95 +24,28 @@ Terminal font size in pixels.
 - **Default:** `13`
 - **Range:** 6–48
 
-#### `fontFamily`
+### `fontFamily`
 
 Font family (CSS font-family value).
 
 - **Type:** `string`
 - **Default:** <code>"'Fira Code', monospace"</code>
 
-#### `fontWeight`
+### `fontWeight`
 
 Font weight for normal text.
 
 - **Type:** `"normal"` \| `"bold"` \| `"100"` \| `"200"` \| `"300"` \| `"400"` \| `"500"` \| `"600"` \| `"700"` \| `"800"` \| `"900"`
 - **Default:** <code>"normal"</code>
 
-#### `fontWeightBold`
+### `fontWeightBold`
 
 Font weight for bold text.
 
 - **Type:** `"normal"` \| `"bold"` \| `"100"` \| `"200"` \| `"300"` \| `"400"` \| `"500"` \| `"600"` \| `"700"` \| `"800"` \| `"900"`
 - **Default:** <code>"bold"</code>
 
-## Cursor
-
-#### `cursorStyle`
-
-Cursor shape.
-
-- **Type:** `"block"` \| `"underline"` \| `"bar"`
-- **Default:** <code>"block"</code>
-
-#### `cursorBlink`
-
-Whether the cursor blinks.
-
-- **Type:** `boolean`
-- **Default:** `true`
-
-#### `cursorInactiveStyle`
-
-Cursor style when the terminal is not focused.
-
-- **Type:** `"outline"` \| `"block"` \| `"bar"` \| `"underline"` \| `"none"`
-- **Default:** <code>"outline"</code>
-
-#### `cursorWidth`
-
-Cursor width in pixels (only applies to bar cursor).
-
-- **Type:** `number`
-- **Default:** `1`
-- **Range:** 1–10
-
-## Scrolling
-
-#### `scrollback`
-
-Maximum number of lines kept in the scrollback buffer.
-
-- **Type:** `number`
-- **Default:** `5000`
-- **Range:** 0–100000
-
-#### `scrollSensitivity`
-
-Scroll speed multiplier for mouse wheel.
-
-- **Type:** `number`
-- **Default:** `1`
-- **Range:** 0.1–10
-
-#### `fastScrollSensitivity`
-
-Scroll speed multiplier when holding Alt.
-
-- **Type:** `number`
-- **Default:** `5`
-- **Range:** 1–50
-
-#### `smoothScrollDuration`
-
-Smooth scroll animation duration in milliseconds. 0 disables.
-
-- **Type:** `number`
-- **Default:** `0`
-- **Range:** 0–500
-
-## Text rendering
-
-#### `lineHeight`
+### `lineHeight`
 
 Line height multiplier.
 
@@ -122,7 +53,7 @@ Line height multiplier.
 - **Default:** `1`
 - **Range:** 0.5–3
 
-#### `letterSpacing`
+### `letterSpacing`
 
 Extra letter spacing in pixels.
 
@@ -130,14 +61,75 @@ Extra letter spacing in pixels.
 - **Default:** `0`
 - **Range:** -5–20
 
-#### `drawBoldTextInBrightColors`
+### `cursorStyle`
+
+Cursor shape.
+
+- **Type:** `"block"` \| `"underline"` \| `"bar"`
+- **Default:** <code>"block"</code>
+
+### `cursorBlink`
+
+Whether the cursor blinks.
+
+- **Type:** `boolean`
+- **Default:** `true`
+
+### `cursorInactiveStyle`
+
+Cursor style when the terminal is not focused.
+
+- **Type:** `"outline"` \| `"block"` \| `"bar"` \| `"underline"` \| `"none"`
+- **Default:** <code>"outline"</code>
+
+### `cursorWidth`
+
+Cursor width in pixels (only applies to bar cursor).
+
+- **Type:** `number`
+- **Default:** `1`
+- **Range:** 1–10
+
+### `scrollback`
+
+Maximum number of lines kept in the scrollback buffer.
+
+- **Type:** `number`
+- **Default:** `5000`
+- **Range:** 0–100000
+
+### `scrollSensitivity`
+
+Scroll speed multiplier for mouse wheel.
+
+- **Type:** `number`
+- **Default:** `1`
+- **Range:** 0.1–10
+
+### `fastScrollSensitivity`
+
+Scroll speed multiplier when holding Alt.
+
+- **Type:** `number`
+- **Default:** `5`
+- **Range:** 1–50
+
+### `smoothScrollDuration`
+
+Smooth scroll animation duration in milliseconds. 0 disables.
+
+- **Type:** `number`
+- **Default:** `0`
+- **Range:** 0–500
+
+### `drawBoldTextInBrightColors`
 
 Whether to render bold text in bright ANSI colors.
 
 - **Type:** `boolean`
 - **Default:** `true`
 
-#### `minimumContrastRatio`
+### `minimumContrastRatio`
 
 Minimum contrast ratio for text. 1 disables contrast adjustment.
 
@@ -145,44 +137,42 @@ Minimum contrast ratio for text. 1 disables contrast adjustment.
 - **Default:** `1`
 - **Range:** 1–21
 
-## Input
-
-#### `macOptionIsMeta`
+### `macOptionIsMeta`
 
 Treat the macOS Option key as Meta (sends ESC prefix). When false, Option produces special characters.
 
 - **Type:** `boolean`
 - **Default:** `false`
 
-#### `wordSeparator`
+### `wordSeparator`
 
 Characters treated as word boundaries for double-click selection.
 
 - **Type:** `string`
 - **Default:** <code>" ()[]{}',&quot;`:;"</code>
 
-## Keybinds
-
-#### `keybinds`
+### `keybinds`
 
 Key-to-action mappings. Layered on top of platform-specific defaults.
 
-- **Type:** `array`
-- **Default:** *(none)*
+- **Type:** `array` of objects
 
-#### `macCommandIsCtrl`
+Each entry has these fields:
 
-On macOS, remap every Cmd+character to its Ctrl equivalent. Cmd+arrow/backspace keep their navigation behavior. When enabled, define keybinds with ctrl (not cmd/meta/secondary) since Cmd events are transformed before matching.
+#### `key`
 
-- **Type:** `boolean`
-- **Default:** *(none)*
+Key combo, e.g. "ctrl+alt+t", "shift+enter". Case-insensitive. Modifiers: ctrl, shift, alt, meta (or cmd/super). The virtual modifier "secondary" resolves to Cmd on macOS and Ctrl elsewhere.
 
-## Keybind actions
+- **Type:** `string`
 
-These are the valid values for the `action` field in keybind entries.
+#### `action`
 
-| Action | Description |
-|--------|-------------|
+Action to perform.
+
+- **Type:** `string`
+
+| Value | Description |
+|-------|-------------|
 | `sendText` | Send `args` as literal text to the PTY. |
 | `sendKeys` | Parse `args` as a key combo and send its escape sequence (e.g. `"ctrl+t"` sends `^T`). |
 | `copyOrInterrupt` | Copy selection if text is selected, otherwise send SIGINT (`^C`). |
@@ -190,3 +180,15 @@ These are the valid values for the `action` field in keybind entries.
 | `paste` | Read system clipboard and send contents to the PTY. |
 | `selectAll` | Select all terminal content. |
 | `none` | Disable this key combo (removes a built-in default). |
+
+#### `args`
+
+Argument for the action (e.g. the text or key combo to send).
+
+- **Type:** `string`
+
+### `macCommandIsCtrl`
+
+On macOS, remap every Cmd+character to its Ctrl equivalent. Cmd+arrow/backspace keep their navigation behavior. When enabled, define keybinds with ctrl (not cmd/meta/secondary) since Cmd events are transformed before matching.
+
+- **Type:** `boolean`

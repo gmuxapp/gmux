@@ -19,48 +19,153 @@ This file is drop-in compatible with [Windows Terminal themes](https://github.co
 
 For guides and examples, see [Configuration](/configuration/#terminal-theme).
 
-### General
+### `foreground`
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `foreground` | `#d3d8de` | Default text color. |
-| `background` | `#0f141a` | Terminal background color. |
-| `cursor` | `#d3d8de` | Cursor color. |
-| `cursorAccent` | `#0f141a` | Cursor accent color (text under block cursor). |
-| `selectionBackground` | `#2a3a4acc` | Selection highlight color. |
-| `selectionForeground` | *(none)* | Text color inside selection. |
-| `selectionInactiveBackground` | *(none)* | Selection color when terminal is not focused. |
+Default text color.
 
-### Normal colors (ANSI 0–7)
+- **Default:** `#d3d8de`
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `black` | `#151b21` | ANSI black. |
-| `red` | `#c25d66` | ANSI red. |
-| `green` | `#a3be8c` | ANSI green. |
-| `yellow` | `#ebcb8b` | ANSI yellow. |
-| `blue` | `#81a1c1` | ANSI blue. |
-| `magenta` | `#b48ead` | ANSI magenta. |
-| `cyan` | `#49b8b8` | ANSI cyan. |
-| `white` | `#d3d8de` | ANSI white. |
+### `background`
 
-### Bright colors (ANSI 8–15)
+Terminal background color.
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `brightBlack` | `#595e63` | ANSI bright black. |
-| `brightRed` | `#d06c75` | ANSI bright red. |
-| `brightGreen` | `#b4d19a` | ANSI bright green. |
-| `brightYellow` | `#f0d9a0` | ANSI bright yellow. |
-| `brightBlue` | `#93b3d1` | ANSI bright blue. |
-| `brightMagenta` | `#c9a3c4` | ANSI bright magenta. |
-| `brightCyan` | `#5fcece` | ANSI bright cyan. |
-| `brightWhite` | `#eceff4` | ANSI bright white. |
+- **Default:** `#0f141a`
 
-### Windows Terminal aliases
+### `cursor`
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `purple` | *(none)* | Alias for `magenta` (Windows Terminal compat). |
-| `brightPurple` | *(none)* | Alias for `brightMagenta` (Windows Terminal compat). |
-| `name` | *(none)* | Theme name (ignored, present in Windows Terminal theme files). |
+Cursor color.
+
+- **Default:** `#d3d8de`
+
+### `cursorAccent`
+
+Cursor accent color (text under block cursor).
+
+- **Default:** `#0f141a`
+
+### `selectionBackground`
+
+Selection highlight color.
+
+- **Default:** `#2a3a4acc`
+
+### `selectionForeground`
+
+Text color inside selection.
+
+
+### `selectionInactiveBackground`
+
+Selection color when terminal is not focused.
+
+
+### `black`
+
+ANSI black.
+
+- **Default:** `#151b21`
+
+### `red`
+
+ANSI red.
+
+- **Default:** `#c25d66`
+
+### `green`
+
+ANSI green.
+
+- **Default:** `#a3be8c`
+
+### `yellow`
+
+ANSI yellow.
+
+- **Default:** `#ebcb8b`
+
+### `blue`
+
+ANSI blue.
+
+- **Default:** `#81a1c1`
+
+### `magenta`
+
+ANSI magenta.
+
+- **Default:** `#b48ead`
+
+### `cyan`
+
+ANSI cyan.
+
+- **Default:** `#49b8b8`
+
+### `white`
+
+ANSI white.
+
+- **Default:** `#d3d8de`
+
+### `brightBlack`
+
+ANSI bright black.
+
+- **Default:** `#595e63`
+
+### `brightRed`
+
+ANSI bright red.
+
+- **Default:** `#d06c75`
+
+### `brightGreen`
+
+ANSI bright green.
+
+- **Default:** `#b4d19a`
+
+### `brightYellow`
+
+ANSI bright yellow.
+
+- **Default:** `#f0d9a0`
+
+### `brightBlue`
+
+ANSI bright blue.
+
+- **Default:** `#93b3d1`
+
+### `brightMagenta`
+
+ANSI bright magenta.
+
+- **Default:** `#c9a3c4`
+
+### `brightCyan`
+
+ANSI bright cyan.
+
+- **Default:** `#5fcece`
+
+### `brightWhite`
+
+ANSI bright white.
+
+- **Default:** `#eceff4`
+
+### `purple`
+
+Alias for `magenta` (Windows Terminal compat).
+
+
+### `brightPurple`
+
+Alias for `brightMagenta` (Windows Terminal compat).
+
+
+### `name`
+
+Theme name (ignored, present in Windows Terminal theme files).
+
