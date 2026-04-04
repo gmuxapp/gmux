@@ -15,6 +15,7 @@ export default defineConfig({
       },
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/gmuxapp/gmux' },
+        { icon: 'discord', label: 'Discord', href: 'https://discord.gg/Mg6EJHFZxu' },
       ],
       customCss: ['./src/styles/custom.css'],
       sidebar: [
@@ -61,6 +62,8 @@ export default defineConfig({
       ],
       components: {
         Head: './src/components/Head.astro',
+        ThemeProvider: './src/components/ThemeProvider.astro',
+        ThemeSelect: './src/components/ThemeSelect.astro',
       },
     }),
     mermaid(),
