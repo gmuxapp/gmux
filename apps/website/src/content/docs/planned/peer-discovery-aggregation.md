@@ -59,7 +59,7 @@ Manual peers are tried on startup and reconnected on failure. Auto-discovered an
 
 ### Container discovery
 
-Containers are a special case of manual peers. A host gmuxd could auto-discover containers by scanning Docker for containers with a `gmux.peer=true` label and connecting to their internal IP on port 8790. This is container-specific glue on top of the general peer protocol.
+Containers are a special case of manual peers. A host gmuxd could auto-discover containers by scanning Docker for containers with the gmux devcontainer feature in their `devcontainer.metadata` label and connecting to their internal IP on port 8790. This is container-specific glue on top of the general peer protocol.
 
 See the [Devcontainers](#devcontainers) section for the full picture.
 
@@ -242,7 +242,7 @@ host gmuxd
          └── container-b sessions
 ```
 
-The container's gmuxd does not need tailscale. It uses the network listener (`network.listen = "0.0.0.0"`) with bearer-token auth on the Docker bridge. The host gmuxd is the only client.
+The container's gmuxd does not need Tailscale. It uses the network listener (`GMUXD_LISTEN=0.0.0.0`) with bearer-token auth on the Docker bridge. The host gmuxd is the only client.
 
 ### Lifecycle
 
@@ -270,9 +270,13 @@ A devcontainer Feature (`ghcr.io/gmuxapp/features/gmux`) installs gmux and gmuxd
 
 The feature:
 - Installs `gmux` and `gmuxd` binaries.
-- Configures gmuxd to listen on `0.0.0.0:8790` with a generated bearer token.
-- Sets up gmuxd as the container entrypoint (or an init process alongside the user's entrypoint).
-- Writes the bearer token to a well-known path so the host gmuxd can read it.
+- Sets `GMUXD_LISTEN=0.0.0.0` via `containerEnv` so gmuxd accepts connections on the Docker bridge.
+- Sets up gmuxd as the container entrypoint (starts in the background before the main process).
+- Auto-generates a bearer token on first start (`~/.local/state/gmux/auth-token`).
+
+For host-side peer discovery, the host gmuxd needs the container's auth token. Two approaches:
+- **Managed lifecycle**: host generates a token, passes it as `GMUXD_TOKEN` when starting the container via `devcontainer up`.
+- **Existing containers**: host reads the token via `docker exec <container> gmuxd auth`.
 
 ### Dotfiles
 
