@@ -482,12 +482,35 @@ body {
   line-height: 1.3;
 }
 
-.session-peer-badge {
-  color: var(--text-muted);
-  font-size: 11px;
-  opacity: 0.7;
+.session-peer-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  margin-left: auto;
+  flex-shrink: 0;
+  background: oklch(22% 0.02 250);
+  color: oklch(65% 0.04 250);
 }
 
+.session-peer-pill.peer-laptop {
+  background: oklch(22% 0.03 200);
+  color: oklch(72% 0.08 200);
+}
+
+.session-peer-pill.peer-server {
+  background: oklch(22% 0.03 300);
+  color: oklch(72% 0.1 300);
+}
+
+.session-peer-pill.peer-devcontainer {
+  background: oklch(22% 0.03 150);
+  color: oklch(72% 0.08 150);
+}
 .session-status-label {
   color: var(--text-secondary);
 }
@@ -527,6 +550,9 @@ body {
 .session-item:hover .session-close-btn { opacity: 1; }
 
 .session-close-btn:hover { background: oklch(28% 0.015 250); color: var(--text); }
+
+/* Mock mode (landing page screenshots): hide per-session close buttons */
+.mock-mode .session-close-btn { display: none; }
 
 /* On touch devices (no hover), show interactive buttons permanently */
 @media (hover: none) {
@@ -1521,6 +1547,9 @@ body {
     left: 0;
     top: 0;
     bottom: 0;
+    width: 80vw;
+    min-width: 0;
+    max-width: 360px;
     z-index: 100;
     transform: translateX(-100%);
     transition: transform 0.2s ease;

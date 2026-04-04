@@ -184,6 +184,7 @@ export interface SessionStatus {
 
 export interface Session {
   id: string
+  /** Display name of the peer this session runs on. Absent = local. */
   peer?: string
   created_at: string
   command: string[]

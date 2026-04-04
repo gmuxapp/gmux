@@ -94,6 +94,12 @@ export function createSidebarState() {
 
     /** Replace the full project list (for reorder, bulk edits). */
     updateProjects: putProjects,
+
+    /** Populate state directly for mock/test mode (no API calls). */
+    setMockProjects(items: ProjectItem[]) {
+      data = { configured: items, discovered: [], unmatchedActiveCount: 0 }
+      notify()
+    },
   }
 }
 

@@ -1,0 +1,554 @@
+---
+/**
+ * Topology diagram: machines → gmux hub → devices.
+ * Shows real agent sessions on the left, the gmux logo as the hub,
+ * and device silhouettes on the right. SVG connector paths with
+ * animated dots that travel along them.
+ */
+---
+
+<div class="topo">
+  <!-- SVG overlay for connectors (spans full component) -->
+  <svg class="topo-lines">
+    <path class="topo-path" id="topo-path-l1" />
+    <path class="topo-path" id="topo-path-l2" />
+    <path class="topo-path" id="topo-path-r1" />
+    <path class="topo-path" id="topo-path-r2" />
+    <path class="topo-path" id="topo-path-r3" />
+
+    <circle class="topo-pulse" r="2">
+      <animateMotion dur="3s" repeatCount="indefinite"><mpath href="#topo-path-l1" /></animateMotion>
+    </circle>
+    <circle class="topo-pulse" r="2">
+      <animateMotion dur="3.4s" repeatCount="indefinite"><mpath href="#topo-path-l2" /></animateMotion>
+    </circle>
+    <circle class="topo-pulse" r="2">
+      <animateMotion dur="2.8s" repeatCount="indefinite"><mpath href="#topo-path-r1" /></animateMotion>
+    </circle>
+    <circle class="topo-pulse" r="2">
+      <animateMotion dur="3.2s" repeatCount="indefinite"><mpath href="#topo-path-r2" /></animateMotion>
+    </circle>
+    <circle class="topo-pulse" r="2">
+      <animateMotion dur="3.6s" repeatCount="indefinite"><mpath href="#topo-path-r3" /></animateMotion>
+    </circle>
+  </svg>
+
+  <!-- Column labels (row 1) -->
+  <div class="topo-col-label topo-col-label-left">Where agents run</div>
+  <div class="topo-col-spacer"></div>
+  <div class="topo-col-label topo-col-label-right">Where you see them</div>
+
+  <!-- Left: machines -->
+  <div class="topo-machines">
+    <div class="topo-machine" data-machine="laptop">
+      <div class="topo-machine-label">laptop</div>
+      <div class="topo-session">
+        <span class="topo-dot working"></span>
+        <span class="topo-session-name">refactor adapters</span>
+        <span class="topo-session-kind">codex</span>
+      </div>
+      <div class="topo-session">
+        <span class="topo-dot unread"></span>
+        <span class="topo-session-name">design landing page</span>
+        <span class="topo-session-kind">claude</span>
+      </div>
+      <div class="topo-nested">
+        <div class="topo-nested-label">devcontainer</div>
+        <div class="topo-session">
+          <span class="topo-dot none"></span>
+          <span class="topo-session-name">fix scrollback</span>
+          <span class="topo-session-kind">pi</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="topo-machine" data-machine="server">
+      <div class="topo-machine-label">server</div>
+      <div class="topo-session">
+        <span class="topo-dot working"></span>
+        <span class="topo-session-name">autoresearch benchmark</span>
+        <span class="topo-session-kind">pi</span>
+      </div>
+      <div class="topo-session">
+        <span class="topo-dot none"></span>
+        <span class="topo-session-name">migrate to convex</span>
+        <span class="topo-session-kind">codex</span>
+      </div>
+      <div class="topo-session">
+        <span class="topo-dot none"></span>
+        <span class="topo-session-name">openclaw configure</span>
+        <span class="topo-session-kind">shell</span>
+      </div>
+      <div class="topo-nested">
+        <div class="topo-nested-label">container</div>
+        <div class="topo-session">
+          <span class="topo-dot active"></span>
+          <span class="topo-session-name">logs</span>
+          <span class="topo-session-kind">shell</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Center: hub -->
+  <div class="topo-center">
+    <div class="topo-hub">
+      <span class="topo-hub-logo">gmux</span>
+    </div>
+  </div>
+
+  <!-- Right: devices -->
+  <div class="topo-devices">
+    <div class="topo-device" data-device="phone">
+      <div class="topo-device-frame topo-frame-phone">
+        <div class="topo-phone-notch"></div>
+        <div class="topo-phone-body"></div>
+        <div class="topo-phone-home"></div>
+      </div>
+      <div class="topo-device-label">phone</div>
+    </div>
+
+    <div class="topo-device" data-device="desktop">
+      <div class="topo-device-frame topo-frame-desktop">
+        <div class="topo-browser-chrome">
+          <span class="topo-chrome-dot"></span>
+          <span class="topo-chrome-dot"></span>
+          <span class="topo-chrome-dot"></span>
+        </div>
+        <div class="topo-browser-body"></div>
+      </div>
+      <div class="topo-device-label">local device</div>
+    </div>
+
+    <div class="topo-device" data-device="tablet">
+      <div class="topo-device-frame topo-frame-tablet">
+        <div class="topo-tablet-body"></div>
+        <div class="topo-tablet-home"></div>
+      </div>
+      <div class="topo-device-label">any browser</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function layoutPaths() {
+    const root = document.querySelector('.topo')
+    if (!root) return
+    const svg = root.querySelector('.topo-lines')
+    if (!svg) return
+    const rootRect = root.getBoundingClientRect()
+
+    // Size the SVG to cover the whole component
+    const w = rootRect.width
+    const h = rootRect.height
+    svg.setAttribute('viewBox', `0 0 ${w} ${h}`)
+    svg.setAttribute('width', String(w))
+    svg.setAttribute('height', String(h))
+
+    function rel(el) {
+      const r = el.getBoundingClientRect()
+      return {
+        cx: r.left + r.width / 2 - rootRect.left,
+        cy: r.top + r.height / 2 - rootRect.top,
+        right: r.right - rootRect.left,
+        left: r.left - rootRect.left,
+        top: r.top - rootRect.top,
+        bottom: r.bottom - rootRect.top,
+      }
+    }
+
+    const hub = rel(root.querySelector('.topo-hub'))
+
+    // Left connectors: machine right edge → hub left edge
+    const machines = root.querySelectorAll('.topo-machine')
+    const leftPaths = root.querySelectorAll('#topo-path-l1, #topo-path-l2')
+    machines.forEach((m, i) => {
+      const mr = rel(m)
+      const path = leftPaths[i]
+      if (!path) return
+      const sx = mr.right
+      const sy = mr.cy
+      const ex = hub.left
+      const ey = hub.cy
+      const dx = (ex - sx) * 0.45
+      path.setAttribute('d', `M ${sx} ${sy} C ${sx + dx} ${sy}, ${ex - dx} ${ey}, ${ex} ${ey}`)
+    })
+
+    // Right connectors: hub right edge → device frame left edge
+    const deviceFrames = root.querySelectorAll('.topo-device-frame')
+    const rightPaths = root.querySelectorAll('#topo-path-r1, #topo-path-r2, #topo-path-r3')
+    deviceFrames.forEach((d, i) => {
+      const dr = rel(d)
+      const path = rightPaths[i]
+      if (!path) return
+      const sx = hub.right
+      const sy = hub.cy
+      const ex = dr.left
+      const ey = dr.cy
+      const dx = (ex - sx) * 0.45
+      path.setAttribute('d', `M ${sx} ${sy} C ${sx + dx} ${sy}, ${ex - dx} ${ey}, ${ex} ${ey}`)
+    })
+  }
+
+  if (document.fonts?.ready) {
+    document.fonts.ready.then(() => requestAnimationFrame(layoutPaths))
+  } else {
+    requestAnimationFrame(layoutPaths)
+  }
+  window.addEventListener('resize', layoutPaths)
+</script>
+
+<style>
+  .topo {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    grid-template-rows: auto 1fr;
+    column-gap: 80px;
+    align-items: center;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 2rem 0;
+  }
+
+  /* SVG overlay for connector paths */
+  .topo-lines {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    overflow: visible;
+  }
+
+  .topo-path {
+    stroke: oklch(28% 0.015 250);
+    stroke-width: 1.2;
+    fill: none;
+  }
+
+  .topo-pulse {
+    fill: oklch(60% 0.08 195);
+    opacity: 0.6;
+  }
+
+  /* Column headers — sit in grid row 1, aligned across columns */
+  .topo-col-label {
+    grid-row: 1;
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: oklch(55% 0.01 250);
+    padding-bottom: 1.25rem;
+    text-align: center;
+    align-self: end;
+  }
+
+  .topo-col-label-left  { grid-column: 1; justify-self: end; width: 280px; }
+  .topo-col-label-right { grid-column: 3; justify-self: start; }
+  .topo-col-spacer { grid-row: 1; grid-column: 2; }
+
+  /* ── Left: machines ── */
+  .topo-machines {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    justify-self: end;
+    width: 280px;
+  }
+
+  .topo-machine {
+    border: 1px solid oklch(25% 0.015 250);
+    border-radius: 10px;
+    padding: 0.75rem 0.85rem;
+    background: oklch(14% 0.01 250);
+  }
+
+  .topo-machine-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: oklch(60% 0.01 250);
+    margin-bottom: 0.5rem;
+  }
+
+  .topo-session {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 3px 0;
+  }
+
+  /* Session dots — copied from gmux-web .session-dot-indicator */
+  .topo-dot {
+    flex-shrink: 0;
+    box-sizing: border-box;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    margin-top: 5px; /* center with first line of text */
+  }
+
+  .topo-dot.working {
+    background: transparent;
+    border: 1.5px solid oklch(72% 0.1 195);
+    animation: subtle-pulse 2.5s ease-in-out infinite;
+  }
+
+  .topo-dot.active {
+    background: transparent;
+    border: 1.5px solid oklch(62% 0.025 250);
+    animation: subtle-pulse 2.5s ease-in-out infinite;
+  }
+
+  .topo-dot.unread {
+    background: oklch(72% 0.1 195);
+  }
+
+  .topo-dot.error {
+    background: oklch(65% 0.18 25);
+    animation: subtle-pulse 2.5s ease-in-out infinite;
+  }
+
+  .topo-dot.none {
+    visibility: hidden;
+  }
+
+  @keyframes subtle-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  .topo-session-name {
+    font-size: 14px;
+    line-height: 17px;
+    color: oklch(88% 0.01 250);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+
+  .topo-session-kind {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 11px;
+    line-height: 17px;
+    color: oklch(58% 0.01 250);
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  .topo-nested {
+    margin-top: 6px;
+  }
+
+  .topo-nested-label {
+    font-size: 0.62rem;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: oklch(50% 0.01 250);
+    margin-bottom: 2px;
+    padding-left: 22px;
+    position: relative;
+  }
+
+  .topo-nested-label::before {
+    content: '';
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    width: 10px;
+    height: 1px;
+    background: oklch(32% 0.015 250);
+  }
+
+  /* ── Center: hub ── */
+  .topo-center {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-top: 1.5rem;
+  }
+
+  .topo-hub {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    border: 1.5px solid oklch(32% 0.02 250);
+    background: oklch(16% 0.015 250);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .topo-hub-logo {
+    font-family: 'Instrument Sans', sans-serif;
+    font-weight: 700;
+    font-size: 1.05rem;
+    letter-spacing: -0.04em;
+    color: oklch(88% 0.01 250);
+  }
+
+  /* ── Right: devices ── */
+  .topo-devices {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    align-items: flex-start;
+  }
+
+  /* Stagger: phone + tablet fan out, local device closest to hub */
+  .topo-device[data-device="phone"]   { margin-left: 80px; }
+  .topo-device[data-device="desktop"] { margin-left: 20px; }
+  .topo-device[data-device="tablet"]  { margin-left: 80px; }
+
+  .topo-device {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .topo-device-label {
+    font-size: 0.75rem;
+    color: oklch(58% 0.01 250);
+  }
+
+  /* Device frames */
+  .topo-device-frame {
+    border: 1px solid oklch(35% 0.015 250);
+    background: oklch(18% 0.01 250);
+  }
+
+  .topo-frame-desktop {
+    width: 120px;
+    height: 78px;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .topo-browser-chrome {
+    display: flex;
+    gap: 3px;
+    padding: 5px 6px;
+    border-bottom: 1px solid oklch(30% 0.01 250);
+  }
+
+  .topo-chrome-dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: oklch(42% 0.01 250);
+  }
+
+  .topo-browser-body { flex: 1; }
+
+  .topo-frame-phone {
+    width: 48px;
+    height: 82px;
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 5px 0;
+    justify-content: space-between;
+  }
+
+  .topo-phone-notch {
+    width: 18px;
+    height: 3px;
+    border-radius: 2px;
+    background: oklch(32% 0.01 250);
+  }
+
+  .topo-phone-body { flex: 1; }
+
+  .topo-phone-home {
+    width: 20px;
+    height: 3px;
+    border-radius: 2px;
+    background: oklch(32% 0.01 250);
+  }
+
+  /* Tablet frame — landscape rectangle with rounded corners + home button */
+  .topo-frame-tablet {
+    width: 100px;
+    height: 68px;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 0 4px;
+    justify-content: flex-end;
+  }
+
+  .topo-tablet-body { flex: 1; }
+
+  .topo-tablet-home {
+    width: 16px;
+    height: 3px;
+    border-radius: 2px;
+    background: oklch(32% 0.01 250);
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 700px) {
+    .topo {
+      grid-template-columns: 1fr;
+      grid-template-rows: repeat(5, auto);
+      gap: 0;
+      row-gap: 0.75rem;
+      column-gap: 0;
+    }
+
+    .topo-col-label {
+      grid-column: 1;
+      grid-row: auto;
+      align-self: auto;
+      text-align: center;
+      padding: 0;
+      margin-top: 0.5rem;
+    }
+    .topo-col-label-left  { grid-row: 1; width: auto; justify-self: stretch; }
+    .topo-col-label-right { grid-row: 4; grid-column: 1; justify-self: stretch; }
+    .topo-machines { grid-row: 2; grid-column: 1; }
+    .topo-center   { grid-row: 3; grid-column: 1; }
+    .topo-devices  { grid-row: 5; grid-column: 1; }
+    .topo-col-spacer { display: none; }
+
+    .topo-machines {
+      max-width: none;
+      justify-self: stretch;
+      width: auto;
+    }
+    .topo-devices {
+      flex-direction: row;
+      justify-content: center;
+      align-items: flex-end;
+      gap: 1.5rem;
+    }
+    .topo-device[data-device="phone"],
+    .topo-device[data-device="desktop"],
+    .topo-device[data-device="tablet"] {
+      margin-left: 0;
+    }
+    .topo-center {
+      padding: 0;
+      justify-content: center;
+    }
+    .topo-lines { display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .topo-pulse { display: none; }
+  }
+</style>

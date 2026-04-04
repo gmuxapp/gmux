@@ -18,7 +18,7 @@ import { buildProjectFolders, matchSession, resolveViewFromPath, sessionPath, vi
 import { ProjectHub } from './project-hub'
 import type { LauncherDef } from './launcher'
 import { LaunchButton, fetchConfig, invalidateConfigCache, launchSession, consumePendingLaunch } from './launcher'
-import { getMockFolders } from './mock-data/index'
+import { MOCK_SESSIONS, MOCK_PROJECTS } from './mock-data/index'
 import { installCopySession } from './mock-data/export-session'
 import type { Session as ProtocolSession } from '@gmux/protocol'
 
@@ -28,6 +28,9 @@ const InputDiagnostics = lazy(() => import('./input-diagnostics'))
 // ── Config ──
 
 const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
+
+// Mock mode: hide close buttons and other interactive chrome via CSS.
+if (USE_MOCK) document.documentElement.classList.add('mock-mode')
 
 // Debug: __gmuxCopySession() in devtools console
 installCopySession()
@@ -184,15 +187,15 @@ function SessionItem({
       <div class="session-content">
         <div class="session-title-row">
           <span class="session-title">{session.title}</span>
-        </div>
-        <div class="session-meta">
           {session.peer && (
-            <span class="session-peer-badge">@{session.peer}</span>
-          )}
-          {session.status?.label && (
-            <span class="session-status-label">{session.status.label}</span>
+            <span class={`session-peer-pill peer-${session.peer.split('/')[0]}`}>{session.peer}</span>
           )}
         </div>
+        {session.status?.label && (
+          <div class="session-meta">
+            <span class="session-status-label">{session.status.label}</span>
+          </div>
+        )}
       </div>
       {onClose && (
         <button
@@ -720,7 +723,7 @@ function App() {
   // Notification permission - not reactive, so we keep a tick to force a re-read after
   // requestPermission() resolves.
   const [, forceNotifPermUpdate] = useState(0)
-  const notifPermission: NotifPermission = 'Notification' in window ? Notification.permission : 'unavailable'
+  const notifPermission: NotifPermission = USE_MOCK ? 'granted' : ('Notification' in window ? Notification.permission : 'unavailable')
   const activeNotifsRef   = useRef<Map<string, Notification>>(new Map())
   const presenceRef       = useRef<ReturnType<typeof connectPresence> | null>(null)
   const lastInteractionRef = useRef(Date.now() / 1000)
@@ -753,10 +756,21 @@ function App() {
   // Load data
   useEffect(() => {
     if (USE_MOCK) {
-      const mockFolders = getMockFolders()
-      const allSessions = mockFolders.flatMap(f => f.sessions)
-      setSessions(allSessions)
+      // ?host=laptop hides the peer pill for sessions on the local machine
+      const localHost = new URLSearchParams(location.search).get('host')
+      const sessions = localHost
+        ? MOCK_SESSIONS.map(s => s.peer === localHost ? { ...s, peer: undefined } : s)
+        : [...MOCK_SESSIONS]
+      sidebarState.setMockProjects(MOCK_PROJECTS)
+      setSessions(sessions)
       setConnState('connected')
+
+      // Drive the "active" dot for sessions flagged mockActive by pinging
+      // the activity tracker just under its 3s fade interval.
+      const activeIds = MOCK_SESSIONS.filter(s => s.mockActive).map(s => s.id)
+      activeIds.forEach(id => handleActivity(id))
+      const tick = setInterval(() => activeIds.forEach(id => handleActivity(id)), 2000)
+      return () => clearInterval(tick)
     } else {
       sidebarState.fetchProjects()
       fetchSessions().then(list => {
