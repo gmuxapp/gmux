@@ -29,36 +29,6 @@ func AllAdapters() []adapter.Adapter {
 	return result
 }
 
-// AllLaunchers derives the UI launch presets from registered adapters and the
-// shell fallback. Adapters are returned in registration order, with shell last.
-// gmuxd filters this compiled launcher list based on per-host availability.
-func AllLaunchers() []adapter.Launcher {
-	var launchers []adapter.Launcher
-	seen := map[string]struct{}{}
-
-	appendLaunchers := func(ls []adapter.Launcher) {
-		for _, l := range ls {
-			if _, ok := seen[l.ID]; ok {
-				continue
-			}
-			seen[l.ID] = struct{}{}
-			launchers = append(launchers, l)
-		}
-	}
-
-	for _, a := range All {
-		if launchable, ok := a.(adapter.Launchable); ok {
-			appendLaunchers(launchable.Launchers())
-		}
-	}
-
-	if launchable, ok := DefaultFallback().(adapter.Launchable); ok {
-		appendLaunchers(launchable.Launchers())
-	}
-
-	return launchers
-}
-
 // Compile-time interface checks.
 var (
 	_ adapter.SessionFiler = (*Shell)(nil)

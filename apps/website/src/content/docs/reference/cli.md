@@ -27,10 +27,6 @@ gmux pi "build the feature"
 
 When run inside an existing gmux session (detected via the `GMUX` environment variable), `gmux` automatically detaches into a headless background process instead of nesting PTY-within-PTY. The new session appears in the UI.
 
-### `gmux adapters`
-
-Internal subcommand used by gmuxd to discover available adapters. Prints launcher JSON to stdout.
-
 ## gmuxd
 
 The daemon. Manages sessions, serves the web UI, and optionally provides Tailscale remote access.

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -38,21 +37,7 @@ func main() {
 	log.SetPrefix("gmux: ")
 	log.SetFlags(0)
 
-	// Internal subcommand: gmux adapters → print launcher JSON and exit.
-	// Used by gmuxd to discover available adapters.
-	if len(os.Args) > 1 && os.Args[1] == "adapters" {
-		out, _ := json.Marshal(adapters.AllLaunchers())
-		fmt.Println(string(out))
-		return
-	}
-
-	// Internal flags used by gmuxd when launching sessions.
-	// Users don't need these — gmux uses cwd from the current directory.
-	title := flag.String("title", "", "")
-	cwd := flag.String("cwd", "", "")
-	flag.Parse()
-
-	args := flag.Args()
+	args := os.Args[1:]
 
 	// No args → open the UI in a browser.
 	if len(args) == 0 {
@@ -130,13 +115,9 @@ func main() {
 		return
 	}
 
-	workDir := *cwd
-	if workDir == "" {
-		var err error
-		workDir, err = os.Getwd()
-		if err != nil {
-			log.Fatalf("cannot determine cwd: %v", err)
-		}
+	workDir, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("cannot determine cwd: %v", err)
 	}
 
 	sessionID := naming.SessionID()
@@ -176,11 +157,6 @@ func main() {
 		SocketPath:    sockPath,
 		BinaryHash:    binhash.Self(),
 	})
-
-	// If user provided an explicit title, treat it as an adapter-level title
-	if *title != "" {
-		state.SetAdapterTitle(*title)
-	}
 
 	// Common env vars — set for every child, per ADR-0005
 	env := []string{

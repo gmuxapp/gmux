@@ -149,10 +149,7 @@ func filterEnvPrefix(env []string, prefix string) []string {
 }
 
 func launchGmux(gmuxBin string, command []string, cwd string) (int, error) {
-	args := []string{"--cwd", cwd, "--"}
-	args = append(args, command...)
-
-	cmd := exec.Command(gmuxBin, args...)
+	cmd := exec.Command(gmuxBin, command...)
 	cmd.Dir = cwd
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdout = nil
