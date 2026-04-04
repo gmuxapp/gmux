@@ -135,6 +135,30 @@ func (m *Manager) AutoAssignAllAlive(sessions []SessionInfo) {
 	}
 }
 
+// CleanupSessions removes orphaned entries from all project session arrays.
+// An entry is orphaned if its key doesn't appear in the known set. Call this
+// after the initial session scan so the store has the full picture.
+func (m *Manager) CleanupSessions(known map[string]bool) {
+	err := m.Update(func(state *State) bool {
+		changed := false
+		for i := range state.Items {
+			filtered := state.Items[i].Sessions[:0]
+			for _, key := range state.Items[i].Sessions {
+				if known[key] {
+					filtered = append(filtered, key)
+				} else {
+					changed = true
+				}
+			}
+			state.Items[i].Sessions = filtered
+		}
+		return changed
+	})
+	if err != nil {
+		log.Printf("projects: cleanup error: %v", err)
+	}
+}
+
 // DismissSession removes a session from its project's sessions list.
 // Returns the project slug if the session was found.
 func (m *Manager) DismissSession(id, resumeKey string) string {

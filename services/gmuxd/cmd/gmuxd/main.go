@@ -316,12 +316,13 @@ func serve(stderr io.Writer) int {
 	go discovery.Watch(sessions, subs, fileMon, pendingResumes, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
-	// Start session file scanner — discovers resumable sessions from
-	// adapter session files (e.g. pi's JSONL conversations). Also purges
-	// stale dead sessions that were never attributed to a file.
+	// Session file scanner — discovers resumable sessions from adapter
+	// session files (e.g. pi's JSONL conversations). Also purges stale
+	// dead sessions that were never attributed to a file. Started below
+	// after the project manager is set up so the first-scan callback
+	// can clean up orphaned project session refs.
 	scanner := sessionfiles.New(sessions)
 	stopScanner := make(chan struct{})
-	go scanner.Run(30*time.Second, stopScanner)
 	defer close(stopScanner)
 
 	// Start background update checker
@@ -367,6 +368,20 @@ func serve(stderr io.Writer) int {
 	projectMgr.Broadcast = func() {
 		sessions.Broadcast(store.Event{Type: "projects-update"})
 	}
+
+	// After the first scan, the store has all known sessions. Clean up
+	// orphaned entries in project session arrays.
+	scanner.OnFirstScan = func() {
+		known := make(map[string]bool)
+		for _, s := range sessions.List() {
+			known[s.ID] = true
+			if s.ResumeKey != "" {
+				known[s.ResumeKey] = true
+			}
+		}
+		projectMgr.CleanupSessions(known)
+	}
+	go scanner.Run(30*time.Second, stopScanner)
 
 	// Auto-assign sessions to projects when they appear or get a ResumeKey.
 	sessionEvents, unsubSessionEvents := sessions.Subscribe()

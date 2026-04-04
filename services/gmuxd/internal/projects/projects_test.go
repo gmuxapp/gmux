@@ -820,6 +820,54 @@ func TestManagerBroadcastCalled(t *testing.T) {
 	}
 }
 
+func TestManagerCleanupSessions(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{
+			{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"s1", "s2", "s3"}},
+			{Slug: "yapp", Paths: []string{"/dev/yapp"}, Sessions: []string{"s4", "s5"}},
+		}
+		return true
+	})
+
+	// Only s1, s3, and s4 are known to the store.
+	known := map[string]bool{"s1": true, "s3": true, "s4": true}
+	mgr.CleanupSessions(known)
+
+	state, _ := mgr.Load()
+	if got := state.Items[0].Sessions; len(got) != 2 || got[0] != "s1" || got[1] != "s3" {
+		t.Errorf("gmux sessions: expected [s1 s3], got %v", got)
+	}
+	if got := state.Items[1].Sessions; len(got) != 1 || got[0] != "s4" {
+		t.Errorf("yapp sessions: expected [s4], got %v", got)
+	}
+}
+
+func TestManagerCleanupSessionsNoOrphans(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	broadcastCalled := false
+	mgr.Broadcast = func() { broadcastCalled = true }
+
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{
+			{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"s1", "s2"}},
+		}
+		return true
+	})
+	broadcastCalled = false // reset from the Update
+
+	known := map[string]bool{"s1": true, "s2": true}
+	mgr.CleanupSessions(known)
+
+	// No orphans, so no save/broadcast should happen.
+	if broadcastCalled {
+		t.Error("broadcast should not be called when nothing changed")
+	}
+}
+
 func TestManagerAutoAssignAllAlive(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)

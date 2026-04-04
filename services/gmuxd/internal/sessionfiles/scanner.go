@@ -19,6 +19,12 @@ import (
 // Scanner discovers resumable sessions from adapter session files.
 type Scanner struct {
 	store *store.Store
+
+	// OnFirstScan is called once, right after the initial Scan + Purge
+	// complete. At that point the store has the full set of known sessions,
+	// making it safe to clean up stale references elsewhere (e.g. project
+	// session arrays).
+	OnFirstScan func()
 }
 
 func New(s *store.Store) *Scanner {
@@ -29,6 +35,9 @@ func New(s *store.Store) *Scanner {
 func (sc *Scanner) Run(interval time.Duration, stop <-chan struct{}) {
 	sc.Scan()
 	sc.PurgeStaleSessions(10 * time.Minute)
+	if sc.OnFirstScan != nil {
+		sc.OnFirstScan()
+	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

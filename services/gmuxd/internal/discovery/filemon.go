@@ -393,6 +393,16 @@ func (fm *FileMonitor) handleFileChange(path string) {
 	// Find who this file is attributed to.
 	sessionID, attributed := fm.attributions[path]
 
+	// Clear stale attributions: if the session ID no longer corresponds
+	// to a monitored session (e.g. gmuxd restarted, old session gone),
+	// re-attribute so the file can match the current live session.
+	if attributed {
+		if _, ok := fm.sessions[sessionID]; !ok {
+			delete(fm.attributions, path)
+			attributed = false
+		}
+	}
+
 	if !attributed {
 		sessionID = fm.attributeFileLocked(dir, path)
 		if sessionID == "" {

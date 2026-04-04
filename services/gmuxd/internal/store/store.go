@@ -390,20 +390,46 @@ func slugify(s string) string {
 //  1. resume_key basename (stable across kill/resume)
 //  2. Command basename (meaningful for shell sessions)
 //  3. Short session ID prefix (last resort, not stable across resume)
+// autoIDRe matches strings that look like auto-generated IDs (UUIDs, hex
+// sequences, sess-* prefixes) and are not useful as human-readable slugs.
+var autoIDRe = regexp.MustCompile(`^([0-9a-f]{8}(-[0-9a-f]{4}){0,3}|sess-[0-9a-f]+|file-[0-9a-f]+)`)
+
+// slugBase strips a trailing uniqueness suffix (-2, -3, ...) from a slug.
+func slugBase(slug string) string {
+	i := strings.LastIndex(slug, "-")
+	if i < 0 {
+		return slug
+	}
+	suffix := slug[i+1:]
+	for _, c := range suffix {
+		if c < '0' || c > '9' {
+			return slug
+		}
+	}
+	return slug[:i]
+}
+
 func deriveSlug(sess Session) string {
-	// 1. resume_key basename: e.g. "2026-04-03T06-46-56-743Z_07b3c9c8.jsonl" -> "2026-04-03t06-46-56"
+	// 1. resume_key basename (stable across kill/resume).
+	// Skip if it's a UUID; fall through to title-based derivation.
 	if sess.ResumeKey != "" {
 		base := filepath.Base(sess.ResumeKey)
-		// Strip extension.
 		if dot := strings.LastIndex(base, "."); dot > 0 {
 			base = base[:dot]
 		}
-		if slug := slugify(base); slug != "" {
+		if slug := slugify(base); slug != "" && !autoIDRe.MatchString(slug) {
 			return slug
 		}
 	}
 
-	// 2. Command: e.g. ["pytest", "--watch"] -> "pytest-watch"
+	// 2. Adapter title (first user message for pi/claude, meaningful for most).
+	if sess.AdapterTitle != "" && sess.AdapterTitle != "(new)" {
+		if slug := slugify(sess.AdapterTitle); slug != "" {
+			return slug
+		}
+	}
+
+	// 3. Command: e.g. ["pytest", "--watch"] -> "pytest-watch".
 	if len(sess.Command) > 0 {
 		cmd := filepath.Base(sess.Command[0])
 		if len(sess.Command) > 1 {
@@ -414,7 +440,7 @@ func deriveSlug(sess Session) string {
 		}
 	}
 
-	// 3. Short session ID.
+	// 4. Short session ID (last resort, not stable across resume).
 	id := sess.ID
 	if len(id) > 12 {
 		id = id[:12]
@@ -429,6 +455,18 @@ func deriveSlug(sess Session) string {
 func (s *Store) resolveSlug(sess *Session) {
 	if sess.Slug == "" {
 		sess.Slug = deriveSlug(*sess)
+	} else {
+		// Re-derive if the current slug looks auto-derived and better info
+		// is available. Compare against what we'd produce without the title
+		// to detect stale slugs that should be upgraded.
+		noTitle := *sess
+		noTitle.AdapterTitle = ""
+		stale := deriveSlug(noTitle)
+		if slugBase(sess.Slug) == stale {
+			if better := deriveSlug(*sess); better != stale {
+				sess.Slug = better
+			}
+		}
 	}
 	if sess.Slug == "" {
 		sess.Slug = "session"

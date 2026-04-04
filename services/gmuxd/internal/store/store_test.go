@@ -406,14 +406,14 @@ func TestSlugUniquenessAcrossKindsAllowed(t *testing.T) {
 	}
 }
 
-func TestSlugStableOnUpdate(t *testing.T) {
+func TestSlugStableWhenNoNewInfo(t *testing.T) {
 	s := New()
-	s.Upsert(Session{ID: "s1", Kind: "pi", Command: []string{"pi"}})
+	s.Upsert(Session{ID: "s1", Kind: "pi", Command: []string{"pi"}, AdapterTitle: "fix auth"})
 	original, _ := s.Get("s1")
 
-	// Update should not change the slug.
+	// Update without new title info should not change the slug.
 	s.Update("s1", func(sess *Session) {
-		sess.AdapterTitle = "new title"
+		sess.Subtitle = "something"
 	})
 	updated, _ := s.Get("s1")
 	if updated.Slug != original.Slug {
@@ -452,6 +452,91 @@ func TestSlugAdapterOverrideViaUpdate(t *testing.T) {
 	updated, _ := s.Get("s1")
 	if updated.Slug != "fix-auth-bug" {
 		t.Fatalf("expected adapter slug 'fix-auth-bug', got %q", updated.Slug)
+	}
+}
+
+func TestSlugAdapterOverrideSurvivesTitleArrival(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Command: []string{"pi"}})
+
+	// Adapter explicitly sets a meaningful slug.
+	s.Update("s1", func(sess *Session) {
+		sess.Slug = "my-conversation"
+	})
+
+	// Title arrives later. The adapter slug should be preserved.
+	s.Update("s1", func(sess *Session) {
+		sess.AdapterTitle = "fix the auth bug"
+	})
+	updated, _ := s.Get("s1")
+	if updated.Slug != "my-conversation" {
+		t.Fatalf("adapter slug overwritten by title: got %q", updated.Slug)
+	}
+}
+
+func TestSlugFromTitleWhenResumeKeyIsUUID(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "s1", Kind: "pi",
+		ResumeKey:    "c5be9351-76aa-43a4-aa96-612c82047f0c",
+		AdapterTitle: "fix the auth bug in login flow",
+	})
+	got, _ := s.Get("s1")
+	// UUID resume_key should be skipped; slug derived from title.
+	if got.Slug != "fix-the-auth-bug-in-login-flow" {
+		t.Fatalf("expected title-based slug, got %q", got.Slug)
+	}
+}
+
+func TestSlugUpgradedWhenTitleArrives(t *testing.T) {
+	s := New()
+	// Session starts with UUID resume_key, no title yet.
+	s.Upsert(Session{
+		ID: "s1", Kind: "pi",
+		ResumeKey: "c5be9351-76aa-43a4-aa96-612c82047f0c",
+		Command:   []string{"pi"},
+	})
+	before, _ := s.Get("s1")
+	// Without a title, falls through to command.
+	if before.Slug != "pi" {
+		t.Fatalf("expected command-based slug before title, got %q", before.Slug)
+	}
+
+	// Title arrives via file monitor.
+	s.Update("s1", func(sess *Session) {
+		sess.AdapterTitle = "fix auth bug"
+	})
+	after, _ := s.Get("s1")
+	if after.Slug != "fix-auth-bug" {
+		t.Fatalf("expected title-based slug after update, got %q", after.Slug)
+	}
+}
+
+func TestSlugNonUUIDResumeKeyPreferred(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "s1", Kind: "pi",
+		ResumeKey:    "/home/user/.pi/sessions/2026-04-03T06-46-56_07b3c9c8.jsonl",
+		AdapterTitle: "fix auth bug",
+	})
+	got, _ := s.Get("s1")
+	// File-based resume_key should win over title.
+	if got.Slug != "2026-04-03t06-46-56-07b3c9c8" {
+		t.Fatalf("expected resume_key-based slug, got %q", got.Slug)
+	}
+}
+
+func TestSlugShellSessionUsesCommand(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "sess-1aa490af", Kind: "shell",
+		ResumeKey: "sess-1aa490af",
+		Command:   []string{"fish"},
+	})
+	got, _ := s.Get("sess-1aa490af")
+	// sess-* resume_key should be skipped; slug derived from command.
+	if got.Slug != "fish" {
+		t.Fatalf("expected command-based slug 'fish', got %q", got.Slug)
 	}
 }
 
