@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -223,6 +224,197 @@ func TestListenAddrIPv6(t *testing.T) {
 	}
 }
 
+
+// ── [[peers]] ──
+
+func TestLoadPeers(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+[[peers]]
+name = "server"
+url = "http://10.0.0.5:8790"
+token = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+
+[[peers]]
+name = "dev-box"
+url = "http://172.17.0.2:8790"
+token = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Peers) != 2 {
+		t.Fatalf("peers = %d, want 2", len(cfg.Peers))
+	}
+	if cfg.Peers[0].Name != "server" {
+		t.Errorf("peers[0].name = %q, want %q", cfg.Peers[0].Name, "server")
+	}
+	if cfg.Peers[1].Name != "dev-box" {
+		t.Errorf("peers[1].name = %q, want %q", cfg.Peers[1].Name, "dev-box")
+	}
+}
+
+func TestLoadPeersRejectsDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+[[peers]]
+name = "server"
+url = "http://10.0.0.5:8790"
+token = "abc"
+
+[[peers]]
+name = "server"
+url = "http://10.0.0.6:8790"
+token = "def"
+`)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for duplicate peer name")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("error = %q, want mention of duplicate", err)
+	}
+}
+
+func TestLoadPeersRejectsInvalidName(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{"", "name is required"},
+		{"Server", "lowercase slug"},
+		{"my_server", "lowercase slug"},
+		{"my@server", "lowercase slug"},
+		{"-leading", "lowercase slug"},
+		{"trailing-", "lowercase slug"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			writeConfig(t, dir, fmt.Sprintf(`
+[[peers]]
+name = %q
+url = "http://10.0.0.5:8790"
+token = "abc"
+`, tt.name))
+
+			_, err := Load()
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want mention of %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadPeersRejectsMissingURL(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+[[peers]]
+name = "server"
+token = "abc"
+`)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for missing url")
+	}
+	if !strings.Contains(err.Error(), "url is required") {
+		t.Errorf("error = %q, want mention of url", err)
+	}
+}
+
+func TestLoadPeersRejectsMissingToken(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+[[peers]]
+name = "server"
+url = "http://10.0.0.5:8790"
+`)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for missing token")
+	}
+	if !strings.Contains(err.Error(), "token is required") {
+		t.Errorf("error = %q, want mention of token", err)
+	}
+}
+
+func TestLoadPeersRejectsInvalidURL(t *testing.T) {
+	tests := []struct {
+		url  string
+		want string
+	}{
+		{"not-a-url", "http or https"},
+		{"ftp://server:8790", "http or https"},
+		{"http://", "no host"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			writeConfig(t, dir, fmt.Sprintf(`
+[[peers]]
+name = "server"
+url = %q
+token = "abc"
+`, tt.url))
+
+			_, err := Load()
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want mention of %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadPeersAcceptsHTTPAndHTTPS(t *testing.T) {
+	for _, scheme := range []string{"http", "https"} {
+		t.Run(scheme, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			writeConfig(t, dir, fmt.Sprintf(`
+[[peers]]
+name = "server"
+url = "%s://10.0.0.5:8790"
+token = "abc"
+`, scheme))
+
+			_, err := Load()
+			if err != nil {
+				t.Fatalf("scheme %s should be accepted: %v", scheme, err)
+			}
+		})
+	}
+}
+
+func TestLoadNoPeersIsValid(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `port = 8790`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Peers) != 0 {
+		t.Errorf("peers = %d, want 0", len(cfg.Peers))
+	}
+}
 
 func writeConfig(t *testing.T, xdgDir, content string) {
 	t.Helper()

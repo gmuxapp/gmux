@@ -14,6 +14,10 @@ import (
 type Session struct {
 	// ── API-visible fields ──
 	ID            string            `json:"id"`
+
+	// Peer identifies which gmuxd instance owns this session.
+	// Empty = local. Non-empty = the peer name from [[peers]] config.
+	Peer string `json:"peer,omitempty"`
 	CreatedAt     string            `json:"created_at,omitempty"`
 	Command       []string          `json:"command,omitempty"`
 	Cwd           string            `json:"cwd,omitempty"`
@@ -64,6 +68,7 @@ type Session struct {
 func (s Session) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		ID            string            `json:"id"`
+		Peer          string            `json:"peer,omitempty"`
 		CreatedAt     string            `json:"created_at,omitempty"`
 		Command       []string          `json:"command,omitempty"`
 		Cwd           string            `json:"cwd,omitempty"`
@@ -88,7 +93,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		ResumeKey     string            `json:"resume_key,omitempty"`
 	}
 	return json.Marshal(wire{
-		ID: s.ID, CreatedAt: s.CreatedAt, Command: s.Command,
+		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,
 		Cwd: s.Cwd, Kind: s.Kind, WorkspaceRoot: s.WorkspaceRoot,
 		Remotes: s.Remotes, Alive: s.Alive, Pid: s.Pid,
 		ExitCode: s.ExitCode, StartedAt: s.StartedAt, ExitedAt: s.ExitedAt,
@@ -324,6 +329,38 @@ func (s *Store) Remove(id string) bool {
 	return ok
 }
 
+// RemoveByPeer removes all sessions belonging to a peer and broadcasts
+// removal events. Returns the IDs that were removed.
+func (s *Store) RemoveByPeer(peer string) []string {
+	s.mu.Lock()
+	var removed []string
+	for id, sess := range s.sessions {
+		if sess.Peer == peer {
+			delete(s.sessions, id)
+			removed = append(removed, id)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, id := range removed {
+		s.broadcast(Event{Type: "session-remove", ID: id})
+	}
+	return removed
+}
+
+// ListByPeer returns all session IDs belonging to a peer.
+func (s *Store) ListByPeer(peer string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var ids []string
+	for id, sess := range s.sessions {
+		if sess.Peer == peer {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 func (s *Store) Subscribe() (<-chan Event, func()) {
 	sub := &subscriber{ch: make(chan Event, 64)}
 
@@ -391,12 +428,14 @@ func (s *Store) resolveSlug(sess *Session) {
 		}
 	}
 
-	// Ensure uniqueness within the same kind.
+	// Ensure uniqueness within the same (kind, peer) pair.
+	// Remote sessions from different peers can share slugs since the
+	// @host URL segment disambiguates them.
 	base := sess.Slug
 	for i := 2; ; i++ {
 		conflict := false
 		for _, existing := range s.sessions {
-			if existing.ID != sess.ID && existing.Kind == sess.Kind && existing.Slug == sess.Slug {
+			if existing.ID != sess.ID && existing.Kind == sess.Kind && existing.Peer == sess.Peer && existing.Slug == sess.Slug {
 				conflict = true
 				break
 			}

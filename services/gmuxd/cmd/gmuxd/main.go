@@ -25,6 +25,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/notify"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
@@ -409,6 +410,10 @@ func serve(stderr io.Writer) int {
 		}
 	}()
 
+	// peerManager is initialized later after config is loaded.
+	// The closure captures the pointer so handlers work once it's set.
+	var peerManager *peering.Manager
+
 	// ── Health + Capabilities ──
 
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
@@ -434,6 +439,9 @@ func serve(stderr io.Writer) int {
 		if r.RemoteAddr == "@" || strings.HasPrefix(r.RemoteAddr, "/") || r.RemoteAddr == "" {
 			data["auth_token"] = authToken
 		}
+		if peerManager != nil && peerManager.HasPeers() {
+			data["peers"] = peerManager.PeerStatus()
+		}
 		writeJSON(w, map[string]any{"ok": true, "data": data})
 	})
 
@@ -448,6 +456,16 @@ func serve(stderr io.Writer) int {
 				},
 			},
 		})
+	})
+
+	// ── Peers ──
+
+	mux.HandleFunc("GET /v1/peers", func(w http.ResponseWriter, r *http.Request) {
+		if peerManager == nil || !peerManager.HasPeers() {
+			writeJSON(w, map[string]any{"ok": true, "data": []any{}})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "data": peerManager.PeerStatus()})
 	})
 
 	// ── Config ──
@@ -1100,6 +1118,14 @@ func serve(stderr io.Writer) int {
 		}
 	}()
 
+	// ── Peer connections (hub protocol) ──
+
+	if len(cfg.Peers) > 0 {
+		peerManager = peering.NewManager(cfg.Peers, sessions)
+		peerManager.Start()
+		log.Printf("peering: %d peer(s) configured", len(cfg.Peers))
+	}
+
 	// ── Optional tailscale listener ──
 
 	if cfg.Tailscale.Enabled {
@@ -1118,6 +1144,10 @@ func serve(stderr io.Writer) int {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	log.Printf("received %v — shutting down", sig)
+
+	if peerManager != nil {
+		peerManager.Stop()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

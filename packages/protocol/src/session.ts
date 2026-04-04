@@ -10,6 +10,7 @@ export const SessionStatusSchema = z.object({
 
 export const SessionSchema = z.object({
   id: z.string().min(1),
+  peer: z.string().optional(),
   created_at: z.string().optional(),
   command: z.array(z.string()).optional(),
   cwd: z.string().optional(),
