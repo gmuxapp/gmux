@@ -49,7 +49,7 @@ This means discovery can never race with Register to create duplicate sessions.
 Watches adapter session directories with inotify. When a `.jsonl` file is written:
 
 1. Attributes the file to a live session via the adapter's `FileAttributor` interface (pi uses scrollback similarity; claude and codex use cwd + timestamp proximity)
-2. Tracks the **active file** per session — when a different file is attributed (e.g. `/new` or `/resume` in the tool's TUI), the `resume_key` updates to the new file's session ID
+2. Tracks the **active file** per session — when a different file is attributed (e.g. `/new` or `/resume` in the tool's TUI), the internal `resume_key` updates to the new file's session ID
 3. On first attribution, derives the initial title from `ParseSessionFile()`. If the title is still empty on subsequent writes (common when the tool creates the file before the first user message), re-derives it.
 4. Feeds new lines to the adapter's `ParseNewLines()` for title and status updates
 
@@ -59,49 +59,38 @@ Runs every 30 seconds. Enumerates adapter session files on disk (e.g. `~/.claude
 
 ## Session lifecycle
 
-```
-                    ┌──────────────────────────┐
-                    │                          │
-  Scanner ─────►  resumable  ◄──── exit+file   │
-                    │                          │
-                    │ user clicks resume        │
-                    │ (launches runner,         │
-                    │  no store change)         │
-                    │                          │
-                    ▼                          │
-  Register ────►  alive  ──────► exit ────────┘
-                    ▲                │
-                    │                │ (no file)
-  Register ────────┘                ▼
-  (new launch)                   dead
-                                    │
-                              dismiss │
-                                    ▼
-                                 removed
+```mermaid
+%%{init: {'theme': 'dark'}}%%
+stateDiagram-v2
+    direction LR
+    [*] --> alive : Register\n(new launch)
+    [*] --> resumable : Scanner\n(from session files)
+    alive --> resumable : exit
+    resumable --> alive : user clicks resume\n(Register merges)
+    resumable --> [*] : dismiss
 ```
 
 **Key transitions:**
 
-- **alive → dead:** Subscription receives exit event from the runner, or discovery finds the socket gone.
-- **dead → resumable:** If the session has a `resume_key` (file was attributed) and the adapter implements `Resumer`, the exit handler derives the resume command. The session transitions directly — no intermediate "exited" limbo state.
-- **dead → removed:** Non-resumable dead sessions are not shown in the sidebar. Resumable sessions in the "Resume previous" drawer can be dismissed with ×.
-- **resumable → alive:** User clicks the session. The resume handler launches a runner with the resume command but does **not** modify the store. When the runner registers, `Register()` merges it back to alive.
-- **removed (with file):** Dismissed resume keys are tracked in memory so the scanner doesn't re-add them. Restarting `gmuxd` clears this set — a fresh start shows all available sessions.
+- **alive → resumable:** Subscription receives exit event from the runner, or discovery finds the socket gone. All dead sessions with a command are immediately resumable. For adapters with native resume (pi, claude, codex), the exit handler replaces the command with the tool-specific resume command. For others, the original command is kept.
+- **resumable → alive:** User clicks the session. The resume handler launches a runner with the session's command but does **not** modify the store. When the runner registers, `Register()` merges it back to alive.
+- **resumable → dismissed:** Resumable sessions in the "Resume previous" drawer can be dismissed with ×. Dismissed resume keys are tracked in memory so the scanner doesn't re-add them. Restarting `gmuxd` clears this set.
 
 ## Derived fields
 
-These are computed in `Upsert()`, never set manually:
+These are computed in `Upsert()` and `Update()`, never set manually:
 
 | Field | Derivation |
 |---|---|
-| `title` | `adapter_title` > `shell_title` > `CommandTitler` > adapter kind (see below) |
-| `resumable` | `!alive && resume-capable kind && has resume_key && has command` |
+| `title` | `adapter_title` > `shell_title` > `CommandTitler` > adapter kind |
+| `resumable` | `!alive && has command` |
+| `stale` | `binary_hash` differs from gmuxd's expected runner hash |
 
-A session is only resume-capable if its adapter implements the `Resumer` interface. The set of resume-capable kinds is built from the compiled adapter set at startup.
+All dead sessions with a command are resumable, regardless of adapter kind. Adapters with native resume (pi, claude, codex) provide tool-specific resume commands via the `Resumer` interface. Adapters without it (shell) keep the original launch command, so "resume" re-runs it in the same working directory.
 
-**Title priority:** `adapter_title` always wins over `shell_title`. An empty `adapter_title` from the runner never overwrites a non-empty one on the daemon — this preserves titles across resume, where the daemon knows the title from file attribution but the freshly-started runner doesn't yet. The next fallback is the adapter's `CommandTitler` interface (shell uses this to show `pytest -x`). The final fallback is the adapter kind name (e.g. "codex").
+**Title priority:** `adapter_title` always wins over `shell_title`. An empty `adapter_title` from the runner never overwrites a non-empty one on the daemon, preserving titles across resume where the daemon knows the title from file attribution but the freshly-started runner doesn't yet. The next fallback is the adapter's `CommandTitler` interface (shell uses this to show `pytest -x`). The final fallback is the adapter kind name (e.g. "codex").
 
-`resume_key` is set during file attribution — not at session creation. A session from a resumable adapter that exits before creating a file (e.g. opened and immediately closed) is not resumable.
+**Internal vs API-visible fields.** Several fields are internal to gmuxd and excluded from the API response via `MarshalJSON`. Their derived outputs are exposed instead. See the [field map](/develop/session-schema#field-map) for the full breakdown.
 
 ## Frontend architecture
 

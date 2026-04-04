@@ -1,42 +1,90 @@
 package store
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 )
 
-// Session matches the schema v2 model served by gmux-run's GET /meta.
+// Session is the in-memory model for a gmux session. Fields are grouped
+// into API-visible (forwarded to the frontend) and internal (used by
+// backend logic but excluded from MarshalJSON).
 type Session struct {
-	ID            string   `json:"id"`
-	CreatedAt     string   `json:"created_at,omitempty"`
-	Command       []string `json:"command,omitempty"`
-	Cwd           string   `json:"cwd,omitempty"`
-	Kind          string   `json:"kind"`
+	// ── API-visible fields ──
+	ID            string            `json:"id"`
+	CreatedAt     string            `json:"created_at,omitempty"`
+	Command       []string          `json:"command,omitempty"`
+	Cwd           string            `json:"cwd,omitempty"`
+	Kind          string            `json:"kind"`
 	WorkspaceRoot string            `json:"workspace_root,omitempty"`
 	Remotes       map[string]string `json:"remotes,omitempty"`
-	Alive        bool     `json:"alive"`
-	Pid          int      `json:"pid,omitempty"`
-	ExitCode     *int     `json:"exit_code,omitempty"`
-	StartedAt    string   `json:"started_at,omitempty"`
-	ExitedAt     string   `json:"exited_at,omitempty"`
-	Title        string   `json:"title,omitempty"`
-	ShellTitle   string   `json:"shell_title,omitempty"`
-	AdapterTitle string   `json:"adapter_title,omitempty"`
-	Subtitle     string   `json:"subtitle,omitempty"`
-	Status       *Status  `json:"status"`
-	Unread       bool     `json:"unread"`
-	Resumable    bool     `json:"resumable,omitempty"`
-	ResumeKey    string   `json:"resume_key,omitempty"`
-	SocketPath   string   `json:"socket_path,omitempty"`
-	TerminalCols uint16   `json:"terminal_cols,omitempty"`
-	TerminalRows uint16   `json:"terminal_rows,omitempty"`
+	Alive         bool              `json:"alive"`
+	Pid           int               `json:"pid,omitempty"`
+	ExitCode      *int              `json:"exit_code,omitempty"`
+	StartedAt     string            `json:"started_at,omitempty"`
+	ExitedAt      string            `json:"exited_at,omitempty"`
+	Title         string            `json:"title,omitempty"`
+	Subtitle      string            `json:"subtitle,omitempty"`
+	Status        *Status           `json:"status"`
+	Unread        bool              `json:"unread"`
+	Resumable     bool              `json:"resumable,omitempty"`
+	SocketPath    string            `json:"socket_path,omitempty"`
+	TerminalCols  uint16            `json:"terminal_cols,omitempty"`
+	TerminalRows  uint16            `json:"terminal_rows,omitempty"`
+	Stale         bool              `json:"stale,omitempty"`
 
-	// Build identity — sha256 of the gmux binary that owns this session.
-	// Populated from the runner's /meta `binary_hash` field.
+	// ── Internal fields (excluded from API via MarshalJSON) ──
+
+	// Title inputs: resolveTitle merges these by precedence into Title
+	// on every Upsert/Update.
+	ShellTitle   string `json:"shell_title,omitempty"`
+	AdapterTitle string `json:"adapter_title,omitempty"`
+
+	// ResumeKey is the session-file ID used for resume. The derived
+	// Resumable bool (API-visible) is what the frontend needs.
+	ResumeKey string `json:"resume_key,omitempty"`
+
+	// BinaryHash is the sha256 of the gmux binary that owns this session.
+	// The derived Stale bool (API-visible) is what the frontend needs.
 	BinaryHash string `json:"binary_hash,omitempty"`
-	// Stale is true when BinaryHash differs from gmuxd's expected runner hash.
-	// Indicates the session was started by a different build of gmux.
-	Stale bool `json:"stale,omitempty"`
+}
+
+// MarshalJSON serializes a Session for the frontend API, excluding internal
+// fields whose derived outputs are already exposed (e.g. Stale from BinaryHash).
+func (s Session) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		ID            string            `json:"id"`
+		CreatedAt     string            `json:"created_at,omitempty"`
+		Command       []string          `json:"command,omitempty"`
+		Cwd           string            `json:"cwd,omitempty"`
+		Kind          string            `json:"kind"`
+		WorkspaceRoot string            `json:"workspace_root,omitempty"`
+		Remotes       map[string]string `json:"remotes,omitempty"`
+		Alive         bool              `json:"alive"`
+		Pid           int               `json:"pid,omitempty"`
+		ExitCode      *int              `json:"exit_code,omitempty"`
+		StartedAt     string            `json:"started_at,omitempty"`
+		ExitedAt      string            `json:"exited_at,omitempty"`
+		Title         string            `json:"title,omitempty"`
+		Subtitle      string            `json:"subtitle,omitempty"`
+		Status        *Status           `json:"status"`
+		Unread        bool              `json:"unread"`
+		Resumable     bool              `json:"resumable,omitempty"`
+		SocketPath    string            `json:"socket_path,omitempty"`
+		TerminalCols  uint16            `json:"terminal_cols,omitempty"`
+		TerminalRows  uint16            `json:"terminal_rows,omitempty"`
+		Stale         bool              `json:"stale,omitempty"`
+	}
+	return json.Marshal(wire{
+		ID: s.ID, CreatedAt: s.CreatedAt, Command: s.Command,
+		Cwd: s.Cwd, Kind: s.Kind, WorkspaceRoot: s.WorkspaceRoot,
+		Remotes: s.Remotes, Alive: s.Alive, Pid: s.Pid,
+		ExitCode: s.ExitCode, StartedAt: s.StartedAt, ExitedAt: s.ExitedAt,
+		Title: s.Title, Subtitle: s.Subtitle, Status: s.Status,
+		Unread: s.Unread, Resumable: s.Resumable,
+		SocketPath: s.SocketPath, TerminalCols: s.TerminalCols,
+		TerminalRows: s.TerminalRows, Stale: s.Stale,
+	})
 }
 
 // Status is the application-reported status.
@@ -59,12 +107,11 @@ type subscriber struct {
 }
 
 type Store struct {
-	mu              sync.RWMutex
-	sessions        map[string]Session
-	subscribers     map[*subscriber]struct{}
-	resumableKinds  map[string]bool
-	commandTitlers  map[string]func([]string) string
-	dismissed       map[string]bool // dismissed ResumeKeys — prevents scanner re-adding
+	mu             sync.RWMutex
+	sessions       map[string]Session
+	subscribers    map[*subscriber]struct{}
+	commandTitlers map[string]func([]string) string
+	dismissed      map[string]bool // dismissed ResumeKeys — prevents scanner re-adding
 }
 
 func New() *Store {
@@ -75,15 +122,9 @@ func New() *Store {
 	}
 }
 
-// SetResumableKinds configures which adapter kinds support resume.
-// Derived from the compiled adapter set at startup.
-func (s *Store) SetResumableKinds(kinds map[string]bool) {
-	s.resumableKinds = kinds
-}
-
 // SetCommandTitlers configures per-kind functions that derive a display
-// title from a command array. Used as the fallback when no adapter_title
-// or shell_title is set (e.g. "codex" instead of "codex resume <id>").
+// title from a command array. Used as the fallback when no adapter or
+// shell title is set (e.g. "codex" instead of "codex resume <id>").
 func (s *Store) SetCommandTitlers(titlers map[string]func([]string) string) {
 	s.commandTitlers = titlers
 }
@@ -132,21 +173,9 @@ func (s *Store) resolveTitle(sess Session) string {
 	return sess.Title
 }
 
-func (s *Store) isResumableKind(kind string) bool {
-	if s.resumableKinds == nil {
-		return false
-	}
-	return s.resumableKinds[kind]
-}
-
 func (s *Store) Upsert(sess Session) {
 	sess.Title = s.resolveTitle(sess)
-	resumeKind := s.isResumableKind(sess.Kind)
-	// A session is resumable only if it has an attributed file (ResumeKey).
-	// Without a file, there's nothing to resume — the original command
-	// would just start a fresh session.
-	hasFile := sess.ResumeKey != ""
-	sess.Resumable = !sess.Alive && resumeKind && hasFile && len(sess.Command) > 0
+	sess.Resumable = !sess.Alive && len(sess.Command) > 0
 	s.mu.Lock()
 	s.sessions[sess.ID] = sess
 	s.mu.Unlock()
@@ -171,9 +200,7 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 	}
 	fn(&sess)
 	sess.Title = s.resolveTitle(sess)
-	resumeKind := s.isResumableKind(sess.Kind)
-	hasFile := sess.ResumeKey != ""
-	sess.Resumable = !sess.Alive && resumeKind && hasFile && len(sess.Command) > 0
+	sess.Resumable = !sess.Alive && len(sess.Command) > 0
 	s.sessions[id] = sess
 	s.mu.Unlock()
 

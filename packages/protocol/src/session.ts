@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-// Schema v2 — matches gmux runner's GET /meta and gmuxd's store.Session
+// Schema v2 — matches gmuxd's API response (GET /v1/sessions, session-upsert SSE)
 
 export const SessionStatusSchema = z.object({
   label: z.string(),
@@ -26,13 +26,9 @@ export const SessionSchema = z.object({
   status: SessionStatusSchema.optional().nullable(),
   unread: z.boolean().optional().default(false),
   resumable: z.boolean().optional().default(false),
-  resume_key: z.string().optional(),
   socket_path: z.string().optional(),
   terminal_cols: z.number().int().positive().optional(),
   terminal_rows: z.number().int().positive().optional(),
-  shell_title: z.string().optional(),
-  adapter_title: z.string().optional(),
-  binary_hash: z.string().optional(),
   stale: z.boolean().optional().default(false),
 })
 

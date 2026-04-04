@@ -124,7 +124,7 @@ func (sc *Scanner) Scan() {
 				Alive:         false,
 				AdapterTitle:  info.Title,
 				ResumeKey:     info.ID,
-				// Resumable is derived by Upsert from !Alive + Kind + Command.
+				// Resumable is derived by Upsert from !Alive + Command.
 			}
 
 			sc.store.Upsert(sess)
@@ -135,8 +135,8 @@ func (sc *Scanner) Scan() {
 
 // existingResumeKeys returns resume_keys that should be skipped.
 // Alive sessions and already-resumable sessions are skipped.
-// Dead non-resumable sessions (e.g., a resumed session that exited)
-// are NOT skipped — they need to be refreshed back to resumable.
+// Dead sessions without a command (Resumable=false) are NOT skipped
+// so the scanner can re-derive their resume command.
 func (sc *Scanner) existingResumeKeys() map[string]bool {
 	keys := make(map[string]bool)
 	for _, s := range sc.store.List() {

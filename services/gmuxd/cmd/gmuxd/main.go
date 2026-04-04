@@ -263,15 +263,6 @@ func serve(stderr io.Writer) int {
 
 	sessions := store.New()
 
-	// Build resumable kinds from the compiled adapter set.
-	resumableKinds := make(map[string]bool)
-	for _, a := range adapters.All {
-		if _, ok := a.(adapter.Resumer); ok {
-			resumableKinds[a.Name()] = true
-		}
-	}
-	sessions.SetResumableKinds(resumableKinds)
-
 	// Build command titlers from adapters that implement CommandTitler.
 	commandTitlers := make(map[string]func([]string) string)
 	for _, a := range adapters.All {

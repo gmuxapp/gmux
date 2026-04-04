@@ -37,9 +37,7 @@ func writePiSession(t *testing.T, homeDir, cwd, sessID, userMsg string) string {
 }
 
 func newTestStore() *store.Store {
-	s := store.New()
-	s.SetResumableKinds(map[string]bool{"pi": true, "claude": true, "codex": true})
-	return s
+	return store.New()
 }
 
 func TestScanDiscoversFromAllDirectories(t *testing.T) {

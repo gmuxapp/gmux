@@ -22,13 +22,9 @@ export interface Session {
   status: SessionStatus | null
   unread: boolean
   resumable?: boolean
-  resume_key?: string
   socket_path: string
   terminal_cols?: number
   terminal_rows?: number
-  shell_title?: string
-  adapter_title?: string
-  binary_hash?: string
   stale?: boolean
 }
 
