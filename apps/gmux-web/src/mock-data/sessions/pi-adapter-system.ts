@@ -24,6 +24,7 @@ export default {
   title: 'Implement adapter system',
   subtitle: 'iteration 3/10',
   status: { label: 'iteration 3/10', working: true },
+  adapter_title: 'claude-sonnet-4',
   unread: false,
   socket_path: '/tmp/gmux-sessions/mock.sock',
   terminal: [

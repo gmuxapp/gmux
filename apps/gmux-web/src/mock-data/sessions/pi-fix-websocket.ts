@@ -27,6 +27,7 @@ export default {
   title: 'Fix websocket proxy',
   subtitle: 'waiting for approval',
   status: { label: 'waiting for approval', working: false },
+  adapter_title: 'claude-opus-4',
   unread: true,
   socket_path: '/tmp/gmux-sessions/mock.sock',
   stale: true,

@@ -710,6 +710,19 @@ body {
 .main-header-status.working { color: var(--accent); }
 .main-header-status.error   { color: var(--status-error); }
 
+.main-header-adapter {
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  padding: 2px 8px;
+  border-radius: 3px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  letter-spacing: 0.01em;
+}
+
 .terminal-shell {
   flex: 1;
   min-height: 0;
@@ -1074,6 +1087,10 @@ body {
 
   .main-header-status {
     font-size: 11px;
+  }
+
+  .main-header-adapter {
+    font-size: 10px;
   }
 
   .terminal-container .xterm {
