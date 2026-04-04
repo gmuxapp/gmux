@@ -45,6 +45,14 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Reference',
+          items: [
+            { label: 'host.toml', slug: 'reference/host-toml' },
+            { label: 'settings.jsonc', slug: 'reference/settings' },
+            { label: 'theme.jsonc', slug: 'reference/theme' },
+          ],
+        },
+        {
           label: 'Integrations',
           autogenerate: { directory: 'integrations' },
         },

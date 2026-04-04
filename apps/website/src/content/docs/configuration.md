@@ -3,11 +3,11 @@ title: Configuration
 description: Config file, environment variables, and file paths.
 ---
 
-gmux works out of the box with no configuration. This page documents everything you can customize.
+gmux works out of the box with no configuration. This page covers guides and examples for everything you can customize. For complete field listings, see the [Reference](/reference/host-toml/) pages.
 
 ## Host config
 
-`~/.config/gmux/host.toml` (or `$XDG_CONFIG_HOME/gmux/host.toml`)
+`~/.config/gmux/host.toml` ([field reference](/reference/host-toml/))
 
 gmuxd reads this file at startup. Create it manually — gmuxd never writes to it. If the file doesn't exist, safe defaults are used.
 
@@ -38,7 +38,7 @@ This is intentional — silent fallback to defaults is dangerous for security se
 
 ## Terminal theme
 
-`~/.config/gmux/theme.jsonc`
+`~/.config/gmux/theme.jsonc` ([field reference](/reference/theme/))
 
 Terminal color palette. This file uses the same format as [Windows Terminal themes](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/windowsterminal), so you can drop one in and it works: `purple`/`brightPurple` are automatically mapped to `magenta`/`brightMagenta`, and the `name` field is ignored.
 
@@ -64,7 +64,7 @@ All fields are optional; omitted colors use the built-in default palette.
 
 ## Frontend settings
 
-`~/.config/gmux/settings.jsonc`
+`~/.config/gmux/settings.jsonc` ([field reference](/reference/settings/))
 
 Terminal options, keybinds, and other frontend preferences. All fields are optional.
 

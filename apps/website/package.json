@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
+    "generate": "node --experimental-strip-types scripts/generate-reference.ts",
+    "dev": "node --experimental-strip-types scripts/generate-reference.ts && astro dev",
+    "build": "node --experimental-strip-types scripts/generate-reference.ts && astro build",
     "preview": "astro preview"
   },
   "dependencies": {
