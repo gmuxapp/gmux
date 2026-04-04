@@ -181,16 +181,33 @@ With this enabled:
 
 Only single-character keys are remapped. Non-character keys (arrows, backspace, function keys) pass through to their normal keybinds. On Linux this option has no effect.
 
-You can combine it with keybinds:
+#### Interaction with custom keybinds
+
+When `macCommandIsCtrl` is on, the keyboard handler transforms every Cmd+character event into a virtual Ctrl+character event *before* matching keybinds. This means:
+
+- **`ctrl+a` bindings are what Cmd+A triggers.** Both the physical Ctrl+A and Cmd+A key presses resolve to your `ctrl+a` keybind.
+- **`meta+a`, `cmd+a`, and `secondary+a` bindings are unreachable for character keys.** The transformation happens before keybind matching, so the resolved keybind list never sees the original Cmd modifier.
+- **Non-character keys are unaffected.** `meta+left`, `meta+backspace`, etc. still match normally because the transform only applies to `ev.key.length === 1`.
+
+In practice: when `macCommandIsCtrl` is on, write your keybinds with `ctrl`, not `cmd`/`meta`/`secondary`:
 
 ```jsonc
 {
   "macCommandIsCtrl": true,
   "keybinds": [
-    { "key": "ctrl+alt+g", "action": "sendText", "args": "git status\r" }
+    // ✓ Cmd+G and Ctrl+G both trigger this
+    { "key": "ctrl+g", "action": "sendText", "args": "git status\r" },
+    // ✗ Unreachable — Cmd+G is transformed to Ctrl+G before matching
+    { "key": "cmd+g", "action": "sendText", "args": "will never fire" }
   ]
 }
 ```
+
+If you define both `ctrl+a` and `meta+a` with `macCommandIsCtrl` on, only the `ctrl+a` binding fires. The `meta+a` entry sits in the resolved list but no event ever matches it.
+
+:::tip
+If you want the same keybinds to work on both Mac and Linux, use `ctrl` modifiers and enable `macCommandIsCtrl` on Mac. This gives you a single set of bindings where Cmd on Mac and Ctrl on Linux both work.
+:::
 
 ## Environment variables
 

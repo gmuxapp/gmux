@@ -172,7 +172,7 @@ Key-to-action mappings. Layered on top of platform-specific defaults.
 
 #### `macCommandIsCtrl`
 
-On macOS, remap every Cmd+character to its Ctrl equivalent. Cmd+arrow/backspace keep their navigation behavior.
+On macOS, remap every Cmd+character to its Ctrl equivalent. Cmd+arrow/backspace keep their navigation behavior. When enabled, define keybinds with ctrl (not cmd/meta/secondary) since Cmd events are transformed before matching.
 
 - **Type:** `boolean`
 - **Default:** *(none)*

@@ -184,7 +184,9 @@ const settingsEntries = {
       v.boolean(),
       v.description(
         'On macOS, remap every Cmd+character to its Ctrl equivalent. ' +
-        'Cmd+arrow/backspace keep their navigation behavior.',
+        'Cmd+arrow/backspace keep their navigation behavior. ' +
+        'When enabled, define keybinds with ctrl (not cmd/meta/secondary) ' +
+        'since Cmd events are transformed before matching.',
       ),
     )),
 } as const
