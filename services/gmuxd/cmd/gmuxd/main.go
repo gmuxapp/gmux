@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -683,9 +684,22 @@ func serve(stderr io.Writer) int {
 			Cwd        string   `json:"cwd"`
 			Command    []string `json:"command"`
 			LauncherID string   `json:"launcher_id"`
+			Peer       string   `json:"peer"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+
+		// Forward to peer if requested.
+		if req.Peer != "" && peerManager != nil {
+			if peer := peerManager.GetPeer(req.Peer); peer != nil {
+				// Re-supply the body since it was already read above.
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				peer.ForwardLaunch(w, r)
+				return
+			}
+			writeError(w, http.StatusBadRequest, "unknown_peer", fmt.Sprintf("peer %q not configured", req.Peer))
 			return
 		}
 
@@ -751,6 +765,27 @@ func serve(stderr io.Writer) int {
 		action := ""
 		if len(parts) == 4 {
 			action = parts[3]
+		}
+
+		// Route to peer if this is a remote session.
+		if peerManager != nil {
+			if peer, originalID := peerManager.FindPeer(sessionID); peer != nil {
+				if action == "attach" {
+					// Attach returns the hub's own WS path (the hub proxies to the spoke).
+					writeJSON(w, map[string]any{
+						"ok": true,
+						"data": map[string]any{
+							"transport": "websocket",
+							"ws_path":   "/ws/" + sessionID,
+						},
+					})
+					return
+				}
+				if action != "" {
+					peer.Forward(w, r, originalID, action)
+					return
+				}
+			}
 		}
 
 		switch action {
@@ -906,12 +941,33 @@ func serve(stderr io.Writer) int {
 		if !ok {
 			return "", fmt.Errorf("session %s not found", sessionID)
 		}
+		if sess.Peer != "" {
+			// Remote session: return empty socket path. The WS handler
+			// checks for this and uses the peer proxy path instead.
+			return "", fmt.Errorf("session %s is remote (peer: %s)", sessionID, sess.Peer)
+		}
 		if sess.SocketPath == "" {
 			return "", fmt.Errorf("session %s has no socket", sessionID)
 		}
 		return sess.SocketPath, nil
 	}, sessions)
-	mux.HandleFunc("/ws/{sessionID}", wsProxy.Handler())
+
+	// WS handler: local sessions use the Unix proxy, remote sessions
+	// are proxied to the spoke's WS endpoint over TCP.
+	mux.HandleFunc("/ws/{sessionID}", func(w http.ResponseWriter, r *http.Request) {
+		sessionID := r.PathValue("sessionID")
+
+		// Check if this is a remote session.
+		if peerManager != nil {
+			if peer, originalID := peerManager.FindPeer(sessionID); peer != nil {
+				peer.ProxyWS(w, r, originalID)
+				return
+			}
+		}
+
+		// Local session: use the existing Unix socket proxy.
+		wsProxy.Handler()(w, r)
+	})
 
 	// ── Presence WebSocket ──
 

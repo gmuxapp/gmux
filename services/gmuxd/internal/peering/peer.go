@@ -14,6 +14,7 @@ import (
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
+	"nhooyr.io/websocket"
 )
 
 // Peer manages the connection to a single remote gmuxd instance.
@@ -59,6 +60,88 @@ func (p *Peer) Forward(w http.ResponseWriter, r *http.Request, originalID, actio
 // ForwardLaunch sends a launch request to the spoke.
 func (p *Peer) ForwardLaunch(w http.ResponseWriter, r *http.Request) {
 	p.proxyHTTP(w, r, "/v1/launch")
+}
+
+// ProxyWS proxies a browser WebSocket connection to the spoke's
+// /ws/{sessionID} endpoint. The hub accepts the browser WS, dials the
+// spoke WS with bearer auth, and pipes bidirectionally.
+func (p *Peer) ProxyWS(w http.ResponseWriter, r *http.Request, originalID string) {
+	// Accept browser WebSocket.
+	clientConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		log.Printf("peering: %s: ws accept: %v", p.Config.Name, err)
+		return
+	}
+
+	// Dial spoke's WebSocket.
+	base := strings.TrimRight(p.Config.URL, "/")
+	switch {
+	case strings.HasPrefix(base, "https://"):
+		base = "wss://" + base[len("https://"):]
+	case strings.HasPrefix(base, "http://"):
+		base = "ws://" + base[len("http://"):]
+	}
+	spokeURL := fmt.Sprintf("%s/ws/%s", base, originalID)
+	ctx := r.Context()
+	spokeConn, _, err := websocket.Dial(ctx, spokeURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Authorization": []string{"Bearer " + p.Config.Token},
+		},
+	})
+	if err != nil {
+		log.Printf("peering: %s: ws dial %s: %v", p.Config.Name, originalID, err)
+		clientConn.Close(websocket.StatusInternalError, "peer unavailable")
+		return
+	}
+
+	log.Printf("peering: %s: ws proxying %s", p.Config.Name, originalID)
+
+	// Match read limits with the main WS proxy.
+	clientConn.SetReadLimit(256 * 1024)
+	spokeConn.SetReadLimit(256 * 1024)
+
+	proxyCtx, proxyCancel := context.WithCancel(ctx)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Spoke → Client
+	go func() {
+		defer wg.Done()
+		defer proxyCancel()
+		for {
+			typ, data, err := spokeConn.Read(proxyCtx)
+			if err != nil {
+				return
+			}
+			if err := clientConn.Write(proxyCtx, typ, data); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Client → Spoke
+	go func() {
+		defer wg.Done()
+		defer proxyCancel()
+		for {
+			typ, data, err := clientConn.Read(proxyCtx)
+			if err != nil {
+				return
+			}
+			if err := spokeConn.Write(proxyCtx, typ, data); err != nil {
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+
+	clientConn.Close(websocket.StatusNormalClosure, "")
+	spokeConn.Close(websocket.StatusNormalClosure, "")
+	log.Printf("peering: %s: ws disconnected %s", p.Config.Name, originalID)
 }
 
 // proxyHTTP forwards an HTTP request to the spoke at the given path

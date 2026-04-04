@@ -86,6 +86,11 @@ func (m *Manager) PeerStatus() []PeerInfo {
 	return infos
 }
 
+// GetPeer returns a peer by name, or nil if not found.
+func (m *Manager) GetPeer(name string) *Peer {
+	return m.peers[name]
+}
+
 // HasPeers returns true if any peers are configured.
 func (m *Manager) HasPeers() bool {
 	return len(m.peers) > 0
