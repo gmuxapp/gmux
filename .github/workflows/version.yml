@@ -40,55 +40,27 @@ jobs:
 
       - name: Prepare PR body
         if: steps.check.outputs.count != '0'
-        id: body
-        run: |
-          {
-            echo "notes<<NOTES_EOF"
-            cat RELEASE_NOTES.md
-            echo "NOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Create release PR
-        if: steps.check.outputs.count != '0'
-        id: create-pr
-        uses: peter-evans/create-pull-request@v7
-        with:
-          commit-message: "release: ${{ steps.version.outputs.version }}"
-          title: "release: ${{ steps.version.outputs.version }}"
-          body: |
-            Release **${{ steps.version.outputs.version }}**.
-
-            Merging creates the `${{ steps.version.outputs.version }}` tag and triggers the release build.
-
-            ---
-
-            ${{ steps.body.outputs.notes }}
-          branch: release/next
-          delete-branch: true
-
-      - name: Add prerelease install instructions
-        if: steps.create-pr.outputs.pull-request-number
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           version="${{ steps.version.outputs.version }}"
-          pr_num="${{ steps.create-pr.outputs.pull-request-number }}"
-          notes=$(cat RELEASE_NOTES.md)
-
-          cat <<EOF | gh pr edit "$pr_num" --body-file -
+          cat > /tmp/pr-body.md <<EOF
           Release **${version}**.
 
           Merging creates the \`${version}\` tag and triggers the release build.
 
-          ### Try this prerelease
-          \`\`\`sh
-          curl -sSfL https://gmux.app/install-pr.sh | sh -s -- ${pr_num}
-          \`\`\`
-
           ---
 
-          ${notes}
+          $(cat RELEASE_NOTES.md)
           EOF
+
+      - name: Create release PR
+        if: steps.check.outputs.count != '0'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "release: ${{ steps.version.outputs.version }}"
+          title: "release: ${{ steps.version.outputs.version }}"
+          body-path: /tmp/pr-body.md
+          branch: release/next
+          delete-branch: true
 
   # When the release PR itself merges (deleting changeset files), this
   # workflow fires again. The check step finds 0 changesets and skips.

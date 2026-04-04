@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: pr-build-${{ github.ref }}
@@ -47,3 +48,25 @@ jobs:
           name: gmux-pr${{ github.event.number }}
           path: dist/gmux_*
           retention-days: 7
+
+      - name: Comment install instructions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.number }}
+        run: |
+          body="<!-- gmux-pr-build -->
+          ### Try this PR
+          \`\`\`sh
+          curl -sSfL https://gmux.app/install-pr.sh | sh -s -- ${PR}
+          \`\`\`
+          <sub>Requires [GitHub CLI](https://cli.github.com/) with auth. Artifacts expire after 7 days.</sub>"
+
+          # Update existing comment or create a new one
+          comment_id=$(gh api --paginate "repos/${{ github.repository }}/issues/${PR}/comments" \
+            --jq '.[] | select(.body | startswith("<!-- gmux-pr-build -->")) | .id' | head -1)
+
+          if [ -n "$comment_id" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/${comment_id}" -X PATCH -f body="$body"
+          else
+            gh pr comment "${PR}" --body "$body"
+          fi
