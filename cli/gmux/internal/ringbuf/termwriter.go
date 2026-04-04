@@ -34,10 +34,10 @@ const maxPendingLine = 64 * 1024
 // it exceeds maxPendingLine bytes. Snapshot includes the pending partial
 // line without flushing it.
 //
-// When the ring buffer has wrapped (Full), Snapshot trims to the last
-// frame-start marker (BSU or cursor-home) so replay starts at the
-// beginning of a complete TUI render frame. Falls back to trimming to
-// the first newline if no marker is found (plain shell output).
+// When the ring buffer has wrapped (Full), Snapshot trims to the first
+// frame-start marker (BSU or cursor-home) to skip the partial leading
+// frame at the wrap boundary. Falls back to trimming to the first
+// newline if no marker is found (plain shell output).
 //
 // TermWriter is not safe for concurrent use. Callers must provide
 // external synchronization (e.g. the ptyserver mutex).
@@ -237,12 +237,9 @@ func (tw *TermWriter) processLines(data []byte) {
 // Snapshot returns the current buffer contents in chronological order,
 // including any partial line not yet flushed to the ring buffer.
 //
-// When the ring buffer has wrapped, the snapshot is trimmed to the last
-// frame-start marker (BSU or cursor-home) so that replay starts at the
-// beginning of a complete TUI render frame. This prevents stale frames
-// from stacking on replay (old content scrolls into terminal scrollback
-// before being overwritten). Falls back to trimming to the first newline
-// if no marker is found (plain shell output).
+// When the ring buffer has wrapped, the snapshot is trimmed to the first
+// frame-start marker (BSU or cursor-home) to skip the partial leading
+// frame. Falls back to the first newline if no marker is found.
 func (tw *TermWriter) Snapshot() []byte {
 	snap := tw.rb.Snapshot()
 
@@ -268,16 +265,19 @@ func (tw *TermWriter) Snapshot() []byte {
 	return result
 }
 
-// lastFrameStart returns the byte offset of the last TUI frame-start
-// marker in data, or -1 if none is found.
+// firstFrameStart returns the byte offset of the first frame-start marker
+// in data, or -1 if none is found.
 //
-// Markers checked (in priority order):
-//   - BSU (\x1b[?2026h): DEC 2026 synchronized update, used by pi-tui
-//     for every differential render frame
-//   - Cursor home (ESC[H or ESC[1;1H): used by some TUI frameworks for
-//     full-screen redraws
-func lastFrameStart(data []byte) int {
-	best := -1
+// When the ring buffer wraps, the snapshot starts at an arbitrary byte
+// boundary, likely mid-frame (e.g., halfway through an image or escape
+// sequence). Trimming to the first frame-start marker skips the partial
+// leading frame so replay begins at a clean boundary.
+//
+// Markers matched:
+//   - BSU (\x1b[?2026h): synchronized update begin, used by pi-tui for
+//     every differential render frame
+//   - Cursor home (ESC[H or ESC[1;1H): full-screen redraw
+func firstFrameStart(data []byte) int {
 	for i := 0; i < len(data); i++ {
 		if data[i] != '\x1b' || i+1 >= len(data) {
 			continue
@@ -286,40 +286,42 @@ func lastFrameStart(data []byte) int {
 		if i+7 < len(data) && data[i+1] == '[' && data[i+2] == '?' &&
 			data[i+3] == '2' && data[i+4] == '0' && data[i+5] == '2' &&
 			data[i+6] == '6' && data[i+7] == 'h' {
-			best = i
-			continue
+			return i
 		}
 		if data[i+1] != '[' {
 			continue
 		}
 		// ESC[H (3 bytes)
 		if i+2 < len(data) && data[i+2] == 'H' {
-			best = i
-			continue
+			return i
 		}
 		// ESC[1;1H (6 bytes)
 		if i+5 < len(data) &&
 			data[i+2] == '1' && data[i+3] == ';' &&
 			data[i+4] == '1' && data[i+5] == 'H' {
-			best = i
+			return i
 		}
 	}
-	return best
+	return -1
 }
 
 // trimWrappedSnapshot trims a wrapped ring buffer snapshot to a good
 // replay starting point.
 //
+// When the buffer wraps, the raw snapshot starts at an arbitrary byte
+// boundary (likely mid-frame, mid-escape-sequence, or mid-image data).
+// We trim to the first clean boundary so replay doesn't start with
+// garbage.
+//
 // Strategy (tried in order):
-//  1. Last frame-start marker (BSU or cursor-home): start of the latest
-//     TUI render frame. This prevents duplicate "groups of lines" caused
-//     by replaying multiple overlapping render frames.
+//  1. First frame-start marker (BSU or cursor-home): skips the partial
+//     leading frame and starts at the first complete one.
 //  2. First newline: ensures replay doesn't start mid-line (for plain
 //     shell output with no cursor positioning).
 //  3. No trimming: return as-is (single long line that fills the buffer).
 func trimWrappedSnapshot(snap []byte) []byte {
-	// Strategy 1: trim to the last frame-start marker.
-	if idx := lastFrameStart(snap); idx > 0 {
+	// Strategy 1: trim to the first frame-start marker.
+	if idx := firstFrameStart(snap); idx > 0 {
 		return snap[idx:]
 	}
 

@@ -109,41 +109,36 @@ func TestSnapshot_SpinnerWithPendingCR(t *testing.T) {
 // Wrapped buffer: smart trim to last cursor-home.
 // =============================================================
 
-func TestSnapshot_WrappedBuffer_TrimsToLastCursorHome(t *testing.T) {
+func TestSnapshot_WrappedBuffer_TrimsToFirstCursorHome(t *testing.T) {
 	// Small buffer that wraps. Data contains cursor-home (ESC[H).
-	// After wrapping, trim should find the last ESC[H and start there.
-	// Each frame is ~31 bytes; buffer of 50 wraps on second frame.
+	// After wrapping, trim should find the FIRST ESC[H (skipping the
+	// partial leading frame) and preserve everything after it.
 	tw := NewTermWriter(New(50))
 
 	tw.Write([]byte("\x1b[Hframe1-line1\r\nframe1-line2\r\n"))
 	tw.Write([]byte("\x1b[Hframe2-line1\r\nframe2-line2\r\n"))
 
 	snap := tw.Snapshot()
-	// Should have trimmed to the last ESC[H (start of frame 2).
 	if !bytes.Contains(snap, []byte("frame2-line1")) {
 		t.Errorf("latest frame missing from snapshot: %q", snap)
 	}
-	// Frame 1 content should be gone (trimmed away on wrap).
-	if bytes.Contains(snap, []byte("frame1-line1")) {
-		t.Errorf("stale frame should be trimmed from wrapped snapshot: %q", snap)
-	}
-	// Snapshot should start with ESC[H
+	// Snapshot should start with ESC[H (first complete frame boundary).
 	if !bytes.HasPrefix(snap, []byte("\x1b[H")) {
 		t.Errorf("wrapped snapshot should start at cursor-home, got prefix: %q", snap[:min(10, len(snap))])
 	}
 }
 
-func TestSnapshot_WrappedBuffer_TrimsToLastBSU(t *testing.T) {
-	// pi-tui wraps every differential render frame in BSU/ESU.
-	// When the buffer wraps, we should trim to the last BSU.
+func TestSnapshot_WrappedBuffer_TrimsToFirstBSU(t *testing.T) {
+	// When the buffer wraps, trim to the FIRST BSU to skip the partial
+	// leading frame. This preserves all complete frames that fit.
 	bsuSeq := "\x1b[?2026h"
 	esuSeq := "\x1b[?2026l"
 
-	// Each frame: BSU + cursor-up + \r + content + ESU ≈ 50 bytes
+	// Two frames, buffer wraps. The trim skips the partial first frame
+	// and starts at the first complete BSU boundary.
 	frame1 := bsuSeq + "\x1b[3A" + "\r" + "\x1b[2Kframe1-line1\r\n\x1b[2Kframe1-line2\r\n" + esuSeq
 	frame2 := bsuSeq + "\x1b[3A" + "\r" + "\x1b[2Kframe2-line1\r\n\x1b[2Kframe2-line2\r\n" + esuSeq
 
-	// Buffer smaller than both frames combined
 	tw := NewTermWriter(New(len(frame1) + 10))
 	tw.Write([]byte(frame1))
 	tw.Write([]byte(frame2))
@@ -152,18 +147,14 @@ func TestSnapshot_WrappedBuffer_TrimsToLastBSU(t *testing.T) {
 	if !bytes.Contains(snap, []byte("frame2-line1")) {
 		t.Errorf("latest frame missing: %q", snap)
 	}
-	if bytes.Contains(snap, []byte("frame1-line1")) {
-		t.Errorf("stale frame should be trimmed: %q", snap)
-	}
-	// Should start with BSU
+	// Should start with BSU (the first complete frame after the wrap).
 	if !bytes.HasPrefix(snap, []byte(bsuSeq)) {
-		t.Errorf("wrapped snapshot should start at BSU, got prefix: %q", snap[:min(12, len(snap))])
+		t.Errorf("should start at first BSU, got prefix: %q", snap[:min(12, len(snap))])
 	}
 }
 
-func TestSnapshot_WrappedBuffer_TrimsToLastCursorHome11(t *testing.T) {
+func TestSnapshot_WrappedBuffer_TrimsToFirstCursorHome11(t *testing.T) {
 	// Same test but with ESC[1;1H instead of ESC[H.
-	// Each frame is ~32 bytes; buffer of 50 wraps on second frame.
 	tw := NewTermWriter(New(50))
 
 	tw.Write([]byte("\x1b[1;1Hframe1-aaaa\r\nframe1-bbbb\r\n"))
@@ -172,9 +163,6 @@ func TestSnapshot_WrappedBuffer_TrimsToLastCursorHome11(t *testing.T) {
 	snap := tw.Snapshot()
 	if !bytes.Contains(snap, []byte("frame2-aaaa")) {
 		t.Errorf("latest frame missing: %q", snap)
-	}
-	if bytes.Contains(snap, []byte("frame1-aaaa")) {
-		t.Errorf("stale frame should be trimmed: %q", snap)
 	}
 	if !bytes.HasPrefix(snap, []byte("\x1b[1;1H")) {
 		t.Errorf("should start at ESC[1;1H, got: %q", snap[:min(10, len(snap))])
@@ -201,108 +189,111 @@ func TestSnapshot_WrappedBuffer_NoCursorHome_FallsBackToNewline(t *testing.T) {
 	}
 }
 
-func TestSnapshot_WrappedBuffer_FrameStartPreventsDuplication(t *testing.T) {
-	// Core bug scenario: multiple TUI frames accumulate, and replaying
-	// them all on a smaller terminal causes old frames to scroll into
-	// xterm.js scrollback, creating visible "duplicate groups."
-	//
-	// Fix: trim to the last frame-start marker (BSU or cursor-home)
-	// so only the latest frame is replayed.
+func TestSnapshot_WrappedBuffer_FrameStartSkipsPartialLeading(t *testing.T) {
+	// When the buffer wraps, the snapshot starts mid-frame. Trimming to
+	// the FIRST frame-start marker skips just the partial leading frame,
+	// preserving all subsequent complete frames.
 
 	t.Run("cursor-home frames", func(t *testing.T) {
 		// Each frame is 24 bytes; 5 frames = 120 bytes. Buffer of 80 wraps.
+		// After wrap, the first few bytes are mid-frame garbage. Trim to
+		// the first ESC[H skips just that partial frame.
 		tw := NewTermWriter(New(80))
 		for i := 0; i < 5; i++ {
 			tw.Write([]byte("\x1b[Hline1\r\nline2\r\nline3\r\n"))
 		}
 		snap := tw.Snapshot()
+		// Should start at a cursor-home (first clean frame).
+		if !bytes.HasPrefix(snap, []byte("\x1b[H")) {
+			t.Errorf("should start at cursor-home, got prefix: %q", snap[:min(10, len(snap))])
+		}
+		// Multiple complete frames should be present (not just the last one).
 		count := bytes.Count(snap, []byte("line1"))
-		if count != 1 {
-			t.Errorf("expected 1 occurrence of 'line1', got %d in: %q", count, snap)
+		if count < 2 {
+			t.Errorf("expected multiple frames preserved, got %d in: %q", count, snap)
 		}
 	})
 
-	t.Run("BSU frames (pi-tui pattern)", func(t *testing.T) {
+	t.Run("BSU frames", func(t *testing.T) {
 		bsuSeq := "\x1b[?2026h"
-		// Simulates pi's differential render: BSU + cursor-up + CR + content + ESU
 		makeFrame := func(content string) []byte {
 			return []byte(bsuSeq + "\x1b[3A\r" + content + "\r\n\x1b[?2026l")
 		}
-		// Buffer smaller than 3 frames
+		// Buffer smaller than 3 frames.
 		tw := NewTermWriter(New(100))
 		for i := 0; i < 5; i++ {
 			tw.Write(makeFrame("unique-content"))
 		}
 		snap := tw.Snapshot()
-		// Should have at most 1 occurrence (latest frame)
-		count := bytes.Count(snap, []byte("unique-content"))
-		if count != 1 {
-			t.Errorf("expected 1 occurrence of 'unique-content', got %d in: %q", count, snap)
+		// Should start at a BSU (first clean frame).
+		if !bytes.HasPrefix(snap, []byte(bsuSeq)) {
+			t.Errorf("should start at BSU, got prefix: %q", snap[:min(12, len(snap))])
+		}
+		// Latest content must be present.
+		if !bytes.Contains(snap, []byte("unique-content")) {
+			t.Errorf("expected 'unique-content' in snapshot: %q", snap)
 		}
 	})
 }
 
 // =============================================================
-// lastFrameStart unit tests.
+// firstFrameStart unit tests.
 // =============================================================
 
-func TestLastFrameStart_EscH(t *testing.T) {
+func TestFirstFrameStart_EscH(t *testing.T) {
 	data := []byte("hello\x1b[Hworld")
-	idx := lastFrameStart(data)
+	idx := firstFrameStart(data)
 	if idx != 5 {
 		t.Errorf("expected 5, got %d", idx)
 	}
 }
 
-func TestLastFrameStart_Esc11H(t *testing.T) {
+func TestFirstFrameStart_Esc11H(t *testing.T) {
 	data := []byte("hello\x1b[1;1Hworld")
-	idx := lastFrameStart(data)
+	idx := firstFrameStart(data)
 	if idx != 5 {
 		t.Errorf("expected 5, got %d", idx)
 	}
 }
 
-func TestLastFrameStart_BSU(t *testing.T) {
+func TestFirstFrameStart_BSU(t *testing.T) {
 	data := []byte("hello\x1b[?2026hworld")
-	idx := lastFrameStart(data)
+	idx := firstFrameStart(data)
 	if idx != 5 {
 		t.Errorf("expected 5, got %d", idx)
 	}
 }
 
-func TestLastFrameStart_BSU_BeatsOlderCursorHome(t *testing.T) {
-	// BSU after cursor-home: BSU wins because it's later.
-	data := []byte("\x1b[Hfirst\x1b[?2026hsecond")
-	idx := lastFrameStart(data)
-	// BSU is at offset 8 (after ESC[H + "first")
-	want := bytes.Index(data, []byte("\x1b[?2026h"))
-	if idx != want {
-		t.Errorf("expected %d (BSU position), got %d", want, idx)
+func TestFirstFrameStart_ReturnsFirst(t *testing.T) {
+	// Multiple markers: must return the FIRST one.
+	data := []byte("\x1b[Hfirst\x1b[?2026hsecond\x1b[Hthird")
+	idx := firstFrameStart(data)
+	if idx != 0 {
+		t.Errorf("expected 0 (first marker), got %d", idx)
 	}
 }
 
-func TestLastFrameStart_Multiple(t *testing.T) {
-	data := []byte("\x1b[Hfirst\x1b[Hsecond\x1b[Hthird")
-	idx := lastFrameStart(data)
-	// Should find the LAST one (before "third")
-	expected := bytes.LastIndex(data, []byte("\x1b[H"))
-	if idx != expected {
-		t.Errorf("expected %d, got %d", expected, idx)
+func TestFirstFrameStart_BSUBeforeCursorHome(t *testing.T) {
+	data := []byte("junk\x1b[?2026hframe\x1b[Hhome")
+	idx := firstFrameStart(data)
+	// BSU at offset 4 comes first.
+	if idx != 4 {
+		t.Errorf("expected 4 (BSU), got %d", idx)
 	}
 }
 
-func TestLastFrameStart_None(t *testing.T) {
+func TestFirstFrameStart_None(t *testing.T) {
 	data := []byte("no markers here\x1b[32mcolor\x1b[0m")
-	idx := lastFrameStart(data)
+	idx := firstFrameStart(data)
 	if idx != -1 {
 		t.Errorf("expected -1, got %d", idx)
 	}
 }
 
-func TestLastFrameStart_NotAmbiguous(t *testing.T) {
+func TestFirstFrameStart_NotAmbiguous(t *testing.T) {
 	// ESC[3H is "cursor to row 3", NOT cursor home. Must not match.
 	data := []byte("text\x1b[3Hmore")
-	idx := lastFrameStart(data)
+	idx := firstFrameStart(data)
 	if idx != -1 {
 		t.Errorf("ESC[3H should not match cursor home, got idx=%d", idx)
 	}
@@ -393,8 +384,8 @@ func TestSnapshot_PiTui_DifferentialRender(t *testing.T) {
 }
 
 func TestSnapshot_PiTui_WrappedDifferentialRender(t *testing.T) {
-	// Same pi-tui pattern but with a small buffer that wraps.
-	// Only the latest frame should survive after trim.
+	// Pi-tui pattern with a small buffer that wraps. Trim to first BSU
+	// skips only the partial leading frame, preserving all complete frames.
 	makeFrame := func(line3 string) []byte {
 		return []byte(
 			"\x1b[?2026h" +
@@ -414,11 +405,12 @@ func TestSnapshot_PiTui_WrappedDifferentialRender(t *testing.T) {
 
 	snap := tw.Snapshot()
 
-	// Only the latest frame should be present
+	// The latest frame's content must be present.
 	if !bytes.Contains(snap, []byte("frame3-response")) {
 		t.Errorf("latest frame missing: %q", snap)
 	}
-	if bytes.Contains(snap, []byte("frame1-response")) {
-		t.Errorf("stale frame1 should be trimmed: %q", snap)
+	// Should start at a BSU (first complete frame).
+	if !bytes.HasPrefix(snap, []byte("\x1b[?2026h")) {
+		t.Errorf("should start at BSU, got prefix: %q", snap[:min(12, len(snap))])
 	}
 }

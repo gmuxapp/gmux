@@ -241,3 +241,78 @@ func TestScrollbackSmallerThanRaw(t *testing.T) {
 		})
 	}
 }
+
+// TestScrollbackWrappedBSU simulates what happens after a pi recording
+// ends: the TUI continues emitting BSU/ESU differential render frames at
+// ~13 Hz (spinner, status bar updates). These small frames accumulate
+// until the 128KB ring buffer wraps.
+//
+// Two properties are verified:
+//
+//  1. The snapshot retains close to the full buffer capacity (~128KB),
+//     not just one BSU frame (~159 bytes). This catches the original bug
+//     where trimWrappedSnapshot trimmed to the LAST BSU.
+//
+//  2. The snapshot starts at a BSU marker (a clean frame boundary), not
+//     at an arbitrary byte mid-frame. This verifies the trim finds the
+//     FIRST frame start, skipping only the partial leading frame.
+//
+// The spinner frame below is extracted verbatim from pi_thinking_session.bin.
+// It contains \r but no \n (real pi idle renders are CR-only). Without BSU
+// matching, the trim has no newlines to fall back to (strategy 2 fails) and
+// returns the raw wrapped buffer at an arbitrary byte (strategy 3).
+func TestScrollbackWrappedBSU(t *testing.T) {
+	const bufSize = 128 * 1024
+	bsuMarker := []byte("\x1b[?2026h")
+
+	// Real pi spinner frame extracted from pi_thinking_session.bin.
+	// BSU + CR + erase-line + content + padding + reset + OSC + ESU.
+	// 159 bytes, contains \r, no \n.
+	spinnerFrame := []byte(
+		"\x1b[?2026h" + // BSU
+			"\r\x1b[2K" + // CR + erase line
+			"W\x1b[7m \x1b[0m" + // "W" + reversed space + reset
+			strings.Repeat(" ", 118) + // padding to terminal width
+			"\x1b[0m\x1b]8;;\x07" + // reset + empty OSC hyperlink
+			"\x1b[?2026l", // ESU
+	)
+
+	for _, fix := range loadFixtures(t) {
+		t.Run(fix.name, func(t *testing.T) {
+			if !bytes.Contains(fix.data, []byte("\x1b[2J")) {
+				t.Skip("fixture has no screen clear")
+			}
+
+			// Feed the real recording.
+			tw := ringbuf.NewTermWriter(ringbuf.New(bufSize))
+			tw.Write(fix.data)
+			t.Logf("after fixture: len=%d bytes", tw.Len())
+
+			// Simulate ~10 minutes of idle rendering.
+			nFrames := (bufSize * 3) / len(spinnerFrame)
+			for range nFrames {
+				tw.Write(spinnerFrame)
+			}
+			snap := tw.Snapshot()
+			t.Logf("after %d spinner frames: snapshot=%d bytes", nFrames, len(snap))
+
+			// Property 1: snapshot retains the full buffer, not one frame.
+			minExpected := bufSize / 2
+			if len(snap) < minExpected {
+				t.Errorf("snapshot too small: %d bytes (expected >=%d); "+
+					"looks like trim-to-last-BSU bug",
+					len(snap), minExpected)
+			}
+
+			// Property 2: snapshot starts at a clean BSU frame boundary.
+			// The spinner frames are CR-only (no newlines), so if BSU
+			// matching were broken the trim would fall through to
+			// strategy 3 (no trim) and start at an arbitrary byte.
+			if !bytes.HasPrefix(snap, bsuMarker) {
+				prefix := snap[:min(20, len(snap))]
+				t.Errorf("snapshot should start at BSU frame boundary, "+
+					"got prefix: %q", prefix)
+			}
+		})
+	}
+}
