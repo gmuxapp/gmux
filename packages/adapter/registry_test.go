@@ -49,14 +49,27 @@ func TestRegistrySkipNonMatch(t *testing.T) {
 	}
 }
 
-func TestRegistryEnvOverride(t *testing.T) {
+func TestRegistryEnvOverrideMatches(t *testing.T) {
+	t.Setenv("GMUX_ADAPTER", "pi")
+	r := NewRegistry()
+	r.SetFallback(&testAdapter{name: "shell", matches: true})
+	r.Register(&testAdapter{name: "pi", matches: true})
+
+	if a := r.Resolve([]string{"pi"}); a.Name() != "pi" {
+		t.Fatalf("expected 'pi' from env override, got %q", a.Name())
+	}
+}
+
+func TestRegistryEnvOverrideNoMatch(t *testing.T) {
+	// GMUX_ADAPTER=pi but the command doesn't match pi.
+	// Should fall through to normal resolution, not force pi.
 	t.Setenv("GMUX_ADAPTER", "pi")
 	r := NewRegistry()
 	r.SetFallback(&testAdapter{name: "shell", matches: true})
 	r.Register(&testAdapter{name: "pi", matches: false})
 
-	if a := r.Resolve([]string{"anything"}); a.Name() != "pi" {
-		t.Fatalf("expected 'pi' from env override, got %q", a.Name())
+	if a := r.Resolve([]string{"fish"}); a.Name() != "shell" {
+		t.Fatalf("expected 'shell' fallback when override doesn't match, got %q", a.Name())
 	}
 }
 

@@ -39,18 +39,20 @@ func (r *Registry) Fallback() Adapter {
 // Resolve picks the adapter for the given command.
 //
 // Priority:
-//  1. GMUX_ADAPTER env var — explicit override, bypass matching
+//  1. GMUX_ADAPTER env var, validated against Match()
 //  2. Walk registered adapters, first Match() wins
 //  3. Fallback (shell)
 func (r *Registry) Resolve(command []string) Adapter {
-	// Tier 1: explicit override
+	// Tier 1: explicit override, but only if the adapter accepts the command.
+	// This prevents a leaked GMUX_ADAPTER (e.g. from a parent session)
+	// from forcing the wrong adapter on an unrelated command.
 	if name := os.Getenv("GMUX_ADAPTER"); name != "" {
 		for _, a := range r.adapters {
-			if a.Name() == name {
+			if a.Name() == name && a.Match(command) {
 				return a
 			}
 		}
-		// Unknown name — fall through gracefully
+		// Adapter doesn't match or unknown name — fall through
 	}
 
 	// Tier 2: auto-match

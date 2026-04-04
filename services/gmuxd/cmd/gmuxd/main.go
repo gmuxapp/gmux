@@ -137,6 +137,17 @@ func launcherStates(ls []adapter.Launcher) []string {
 
 // launchGmux starts a detached gmux process with the given command and cwd.
 // Returns the PID on success.
+// filterEnvPrefix returns env with any variable starting with prefix removed.
+func filterEnvPrefix(env []string, prefix string) []string {
+	result := make([]string, 0, len(env))
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
 func launchGmux(gmuxBin string, command []string, cwd string) (int, error) {
 	args := []string{"--cwd", cwd, "--"}
 	args = append(args, command...)
@@ -147,6 +158,12 @@ func launchGmux(gmuxBin string, command []string, cwd string) (int, error) {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil
+
+	// Strip all GMUX_* session vars so child processes don't inherit
+	// the parent session's identity. Without this, a gmuxd started
+	// inside a pi session would leak GMUX_ADAPTER=pi, GMUX_SOCKET,
+	// GMUX_SESSION_ID, etc. into every launched session.
+	cmd.Env = filterEnvPrefix(os.Environ(), "GMUX_")
 
 	if err := cmd.Start(); err != nil {
 		return 0, err
