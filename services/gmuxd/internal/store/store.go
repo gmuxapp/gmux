@@ -1,42 +1,90 @@
 package store
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 )
 
-// Session matches the schema v2 model served by gmux-run's GET /meta.
+// Session is the in-memory model for a gmux session. Fields are grouped
+// into API-visible (forwarded to the frontend) and internal (used by
+// backend logic but excluded from MarshalJSON).
 type Session struct {
-	ID            string   `json:"id"`
-	CreatedAt     string   `json:"created_at,omitempty"`
-	Command       []string `json:"command,omitempty"`
-	Cwd           string   `json:"cwd,omitempty"`
-	Kind          string   `json:"kind"`
+	// ── API-visible fields ──
+	ID            string            `json:"id"`
+	CreatedAt     string            `json:"created_at,omitempty"`
+	Command       []string          `json:"command,omitempty"`
+	Cwd           string            `json:"cwd,omitempty"`
+	Kind          string            `json:"kind"`
 	WorkspaceRoot string            `json:"workspace_root,omitempty"`
 	Remotes       map[string]string `json:"remotes,omitempty"`
-	Alive        bool     `json:"alive"`
-	Pid          int      `json:"pid,omitempty"`
-	ExitCode     *int     `json:"exit_code,omitempty"`
-	StartedAt    string   `json:"started_at,omitempty"`
-	ExitedAt     string   `json:"exited_at,omitempty"`
-	Title        string   `json:"title,omitempty"`
-	ShellTitle   string   `json:"shell_title,omitempty"`
-	AdapterTitle string   `json:"adapter_title,omitempty"`
-	Subtitle     string   `json:"subtitle,omitempty"`
-	Status       *Status  `json:"status"`
-	Unread       bool     `json:"unread"`
-	Resumable    bool     `json:"resumable,omitempty"`
-	ResumeKey    string   `json:"resume_key,omitempty"`
-	SocketPath   string   `json:"socket_path,omitempty"`
-	TerminalCols uint16   `json:"terminal_cols,omitempty"`
-	TerminalRows uint16   `json:"terminal_rows,omitempty"`
+	Alive         bool              `json:"alive"`
+	Pid           int               `json:"pid,omitempty"`
+	ExitCode      *int              `json:"exit_code,omitempty"`
+	StartedAt     string            `json:"started_at,omitempty"`
+	ExitedAt      string            `json:"exited_at,omitempty"`
+	Title         string            `json:"title,omitempty"`
+	Subtitle      string            `json:"subtitle,omitempty"`
+	Status        *Status           `json:"status"`
+	Unread        bool              `json:"unread"`
+	Resumable     bool              `json:"resumable,omitempty"`
+	SocketPath    string            `json:"socket_path,omitempty"`
+	TerminalCols  uint16            `json:"terminal_cols,omitempty"`
+	TerminalRows  uint16            `json:"terminal_rows,omitempty"`
+	Stale         bool              `json:"stale,omitempty"`
 
-	// Build identity — sha256 of the gmux binary that owns this session.
-	// Populated from the runner's /meta `binary_hash` field.
+	// ── Internal fields (excluded from API via MarshalJSON) ──
+
+	// Title inputs: resolveTitle merges these by precedence into Title
+	// on every Upsert/Update.
+	ShellTitle   string `json:"shell_title,omitempty"`
+	AdapterTitle string `json:"adapter_title,omitempty"`
+
+	// ResumeKey is the session-file ID used for resume. The derived
+	// Resumable bool (API-visible) is what the frontend needs.
+	ResumeKey string `json:"resume_key,omitempty"`
+
+	// BinaryHash is the sha256 of the gmux binary that owns this session.
+	// The derived Stale bool (API-visible) is what the frontend needs.
 	BinaryHash string `json:"binary_hash,omitempty"`
-	// Stale is true when BinaryHash differs from gmuxd's expected runner hash.
-	// Indicates the session was started by a different build of gmux.
-	Stale bool `json:"stale,omitempty"`
+}
+
+// MarshalJSON serializes a Session for the frontend API, excluding internal
+// fields whose derived outputs are already exposed (e.g. Stale from BinaryHash).
+func (s Session) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		ID            string            `json:"id"`
+		CreatedAt     string            `json:"created_at,omitempty"`
+		Command       []string          `json:"command,omitempty"`
+		Cwd           string            `json:"cwd,omitempty"`
+		Kind          string            `json:"kind"`
+		WorkspaceRoot string            `json:"workspace_root,omitempty"`
+		Remotes       map[string]string `json:"remotes,omitempty"`
+		Alive         bool              `json:"alive"`
+		Pid           int               `json:"pid,omitempty"`
+		ExitCode      *int              `json:"exit_code,omitempty"`
+		StartedAt     string            `json:"started_at,omitempty"`
+		ExitedAt      string            `json:"exited_at,omitempty"`
+		Title         string            `json:"title,omitempty"`
+		Subtitle      string            `json:"subtitle,omitempty"`
+		Status        *Status           `json:"status"`
+		Unread        bool              `json:"unread"`
+		Resumable     bool              `json:"resumable,omitempty"`
+		SocketPath    string            `json:"socket_path,omitempty"`
+		TerminalCols  uint16            `json:"terminal_cols,omitempty"`
+		TerminalRows  uint16            `json:"terminal_rows,omitempty"`
+		Stale         bool              `json:"stale,omitempty"`
+	}
+	return json.Marshal(wire{
+		ID: s.ID, CreatedAt: s.CreatedAt, Command: s.Command,
+		Cwd: s.Cwd, Kind: s.Kind, WorkspaceRoot: s.WorkspaceRoot,
+		Remotes: s.Remotes, Alive: s.Alive, Pid: s.Pid,
+		ExitCode: s.ExitCode, StartedAt: s.StartedAt, ExitedAt: s.ExitedAt,
+		Title: s.Title, Subtitle: s.Subtitle, Status: s.Status,
+		Unread: s.Unread, Resumable: s.Resumable,
+		SocketPath: s.SocketPath, TerminalCols: s.TerminalCols,
+		TerminalRows: s.TerminalRows, Stale: s.Stale,
+	})
 }
 
 // Status is the application-reported status.
