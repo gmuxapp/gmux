@@ -94,18 +94,13 @@ func TestSubscribe(t *testing.T) {
 }
 
 // --- Derived field tests ---
-
-func newStoreWithKinds() *Store {
-	s := New()
-	s.SetResumableKinds(map[string]bool{"claude": true, "codex": true, "pi": true})
-	return s
-}
+// All dead sessions with a command are resumable, regardless of kind.
 
 func TestDerivedResumable_AliveSessionNeverResumable(t *testing.T) {
-	s := newStoreWithKinds()
+	s := New()
 	s.Upsert(Session{
 		ID: "s1", Kind: "claude", Alive: true,
-		Command: []string{"claude", "--resume", "abc"}, ResumeKey: "abc",
+		Command: []string{"claude"},
 	})
 	got, _ := s.Get("s1")
 	if got.Resumable {
@@ -113,35 +108,22 @@ func TestDerivedResumable_AliveSessionNeverResumable(t *testing.T) {
 	}
 }
 
-func TestDerivedResumable_DeadWithFileAndCommand(t *testing.T) {
-	s := newStoreWithKinds()
-	s.Upsert(Session{
-		ID: "s1", Kind: "claude", Alive: false,
-		Command: []string{"claude", "--resume", "abc"}, ResumeKey: "abc",
-	})
-	got, _ := s.Get("s1")
-	if !got.Resumable {
-		t.Error("dead session with resume kind + file + command should be resumable")
-	}
-}
-
-func TestDerivedResumable_DeadNoFile(t *testing.T) {
-	s := newStoreWithKinds()
-	// Session from resumable adapter but no file was ever attributed.
+func TestDerivedResumable_DeadWithCommand(t *testing.T) {
+	s := New()
 	s.Upsert(Session{
 		ID: "s1", Kind: "claude", Alive: false,
 		Command: []string{"claude"},
 	})
 	got, _ := s.Get("s1")
-	if got.Resumable {
-		t.Error("dead session without ResumeKey should NOT be resumable")
+	if !got.Resumable {
+		t.Error("dead session with command should be resumable")
 	}
 }
 
 func TestDerivedResumable_DeadNoCommand(t *testing.T) {
-	s := newStoreWithKinds()
+	s := New()
 	s.Upsert(Session{
-		ID: "s1", Kind: "claude", Alive: false, ResumeKey: "abc",
+		ID: "s1", Kind: "claude", Alive: false,
 	})
 	got, _ := s.Get("s1")
 	if got.Resumable {
@@ -149,15 +131,15 @@ func TestDerivedResumable_DeadNoCommand(t *testing.T) {
 	}
 }
 
-func TestDerivedResumable_ShellNeverResumable(t *testing.T) {
-	s := newStoreWithKinds()
+func TestDerivedResumable_ShellIsResumable(t *testing.T) {
+	s := New()
 	s.Upsert(Session{
 		ID: "s1", Kind: "shell", Alive: false,
-		Command: []string{"/bin/bash"}, ResumeKey: "x",
+		Command: []string{"/bin/bash"},
 	})
 	got, _ := s.Get("s1")
-	if got.Resumable {
-		t.Error("shell sessions should never be resumable")
+	if !got.Resumable {
+		t.Error("dead shell session with command should be resumable")
 	}
 }
 

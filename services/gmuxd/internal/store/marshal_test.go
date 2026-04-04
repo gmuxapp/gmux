@@ -62,3 +62,31 @@ func TestUnmarshalPreservesInternalFields(t *testing.T) {
 		t.Errorf("expected Title='resolved', got %q", s.Title)
 	}
 }
+
+func TestEventMarshalExcludesInternalFields(t *testing.T) {
+	sess := Session{
+		ID:           "test-1",
+		Kind:         "pi",
+		Alive:        true,
+		Title:        "fix bug",
+		AdapterTitle: "fix bug",
+		ShellTitle:   "user@host",
+		ResumeKey:    "file-id",
+		BinaryHash:   "abc",
+	}
+	ev := Event{
+		Type:    "session-upsert",
+		ID:      "test-1",
+		Session: &sess,
+	}
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(data)
+	for _, field := range []string{"shell_title", "adapter_title", "resume_key", "binary_hash"} {
+		if strings.Contains(out, field) {
+			t.Errorf("Event marshal should exclude %s, got: %s", field, out)
+		}
+	}
+}

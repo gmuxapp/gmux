@@ -107,12 +107,11 @@ type subscriber struct {
 }
 
 type Store struct {
-	mu              sync.RWMutex
-	sessions        map[string]Session
-	subscribers     map[*subscriber]struct{}
-	resumableKinds  map[string]bool
-	commandTitlers  map[string]func([]string) string
-	dismissed       map[string]bool // dismissed ResumeKeys — prevents scanner re-adding
+	mu             sync.RWMutex
+	sessions       map[string]Session
+	subscribers    map[*subscriber]struct{}
+	commandTitlers map[string]func([]string) string
+	dismissed      map[string]bool // dismissed ResumeKeys — prevents scanner re-adding
 }
 
 func New() *Store {
@@ -123,15 +122,9 @@ func New() *Store {
 	}
 }
 
-// SetResumableKinds configures which adapter kinds support resume.
-// Derived from the compiled adapter set at startup.
-func (s *Store) SetResumableKinds(kinds map[string]bool) {
-	s.resumableKinds = kinds
-}
-
 // SetCommandTitlers configures per-kind functions that derive a display
-// title from a command array. Used as the fallback when no adapter_title
-// or shell_title is set (e.g. "codex" instead of "codex resume <id>").
+// title from a command array. Used as the fallback when no adapter or
+// shell title is set (e.g. "codex" instead of "codex resume <id>").
 func (s *Store) SetCommandTitlers(titlers map[string]func([]string) string) {
 	s.commandTitlers = titlers
 }
@@ -180,21 +173,9 @@ func (s *Store) resolveTitle(sess Session) string {
 	return sess.Title
 }
 
-func (s *Store) isResumableKind(kind string) bool {
-	if s.resumableKinds == nil {
-		return false
-	}
-	return s.resumableKinds[kind]
-}
-
 func (s *Store) Upsert(sess Session) {
 	sess.Title = s.resolveTitle(sess)
-	resumeKind := s.isResumableKind(sess.Kind)
-	// A session is resumable only if it has an attributed file (ResumeKey).
-	// Without a file, there's nothing to resume — the original command
-	// would just start a fresh session.
-	hasFile := sess.ResumeKey != ""
-	sess.Resumable = !sess.Alive && resumeKind && hasFile && len(sess.Command) > 0
+	sess.Resumable = !sess.Alive && len(sess.Command) > 0
 	s.mu.Lock()
 	s.sessions[sess.ID] = sess
 	s.mu.Unlock()
@@ -219,9 +200,7 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 	}
 	fn(&sess)
 	sess.Title = s.resolveTitle(sess)
-	resumeKind := s.isResumableKind(sess.Kind)
-	hasFile := sess.ResumeKey != ""
-	sess.Resumable = !sess.Alive && resumeKind && hasFile && len(sess.Command) > 0
+	sess.Resumable = !sess.Alive && len(sess.Command) > 0
 	s.sessions[id] = sess
 	s.mu.Unlock()
 

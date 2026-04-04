@@ -3,7 +3,7 @@ title: Session Schema
 description: The session metadata model shared between gmux, gmuxd, and the web UI.
 ---
 
-> Application-agnostic session metadata. Informed by research into Codex, Claude Code Desktop, T3 Code, and cmux sidebar APIs. For how this state flows between components, see [State Management](/develop/state-management).
+> Application-agnostic session metadata. For how this state flows between components, see [State Management](/develop/state-management).
 
 ## Design Principles
 
@@ -15,6 +15,77 @@ description: The session metadata model shared between gmux, gmuxd, and the web 
 
 4. **Sidebar-first.** Every field exists to answer: "what do I show in the sidebar?" If it doesn't affect the sidebar or terminal attachment, it doesn't belong here.
 
+## Communication channels
+
+Session data flows through three boundaries. Not every field crosses every boundary.
+
+### Runner → gmuxd
+
+Two paths: the runner's `GET /meta` endpoint (polled by discovery) and its SSE `/events` stream (subscribed for live updates).
+
+**GET /meta** returns the full session state including internal title inputs (`shell_title`, `adapter_title`) and build identity (`binary_hash`). gmuxd deserializes this into `store.Session`.
+
+**SSE events** carry incremental updates:
+
+| Event | Fields |
+|-------|--------|
+| `status` | `label`, `working`, `error` |
+| `meta` | `title`, `shell_title`, `adapter_title`, `subtitle`, `unread` |
+| `exit` | `exit_code` |
+| `terminal_resize` | `cols`, `rows` |
+| `activity` | (no fields, signal only) |
+
+### gmuxd → frontend
+
+gmuxd exposes the aggregated store via `GET /v1/sessions` and `session-upsert` / `session-remove` SSE events. A custom `MarshalJSON` on `store.Session` controls which fields are serialized. Internal fields are excluded; their derived outputs are included instead.
+
+### Field map
+
+| Field | Runner sends | gmuxd stores | API sends | Frontend reads |
+|-------|:---:|:---:|:---:|:---:|
+| **Core identity** |
+| `id` | ✓ | ✓ | ✓ | ✓ selection, WS URL |
+| `created_at` | ✓ | ✓ | ✓ | ✓ age display |
+| `command` | ✓ | ✓ | ✓ | title fallback only |
+| `cwd` | ✓ | ✓ | ✓ | ✓ header, grouping |
+| `kind` | ✓ | ✓ | ✓ | ✓ adapter badge |
+| `workspace_root` | ✓ | ✓ | ✓ | ✓ folder grouping |
+| `remotes` | ✓ | ✓ | ✓ | ✓ folder grouping |
+| **Process state** |
+| `alive` | ✓ | ✓ | ✓ | ✓ everywhere |
+| `pid` | ✓ | ✓ | ✓ | — |
+| `exit_code` | ✓ | ✓ | ✓ | — |
+| `started_at` | ✓ | ✓ | ✓ | — |
+| `exited_at` | ✓ | ✓ | ✓ | — |
+| **Display** |
+| `title` | ✓ computed | ✓ re-resolved | ✓ | ✓ header, sidebar |
+| `subtitle` | ✓ | ✓ | ✓ | — |
+| `status` | ✓ | ✓ | ✓ | ✓ dots, label |
+| `unread` | ✓ | ✓ | ✓ | ✓ dots, tab badge |
+| **Resume** |
+| `resumable` | — | ✓ derived | ✓ | ✓ sidebar |
+| **Terminal** |
+| `socket_path` | ✓ | ✓ | ✓ | truthiness only |
+| `terminal_cols` | ✓ | ✓ | ✓ | ✓ initial size |
+| `terminal_rows` | ✓ | ✓ | ✓ | ✓ initial size |
+| **Build identity** |
+| `stale` | — | ✓ derived | ✓ | ✓ "outdated" badge |
+| **Internal (not in API)** |
+| `shell_title` | ✓ | ✓ | — | — |
+| `adapter_title` | ✓ | ✓ | — | — |
+| `resume_key` | — | ✓ | — | — |
+| `binary_hash` | ✓ | ✓ | — | — |
+
+Fields marked "—" in the "Frontend reads" column are sent by the API but not used by any rendering or logic code. They exist for future features (exit codes, process timing, subtitle display) or as defensive redundancy.
+
+Internal fields are inputs to derived fields. The API only exposes the derived output:
+
+| Internal input | Derived output |
+|---|---|
+| `shell_title`, `adapter_title` | `title` (via `resolveTitle`) |
+| `resume_key` | `resumable` (via `Upsert`/`Update`) |
+| `binary_hash` | `stale` (via `markStale`) |
+
 ## Schema
 
 ### Core Identity (set at creation, immutable)
@@ -23,66 +94,71 @@ description: The session metadata model shared between gmux, gmuxd, and the web 
 |-------|------|-------------|
 | `id` | string | Unique session identifier (e.g. `sess-abc123`) |
 | `created_at` | ISO 8601 | When the session was created |
-| `command` | string[] | The command being run |
+| `command` | string[] | The command being run. For resumed sessions, replaced with the resume command. |
 | `cwd` | string | Working directory |
 | `kind` | string | Adapter kind: `"shell"`, `"claude"`, `"codex"`, `"pi"`, etc. |
+| `workspace_root` | string? | Root of the workspace (jj/git), if detected. Used for folder grouping. |
+| `remotes` | map? | Git/jj remote URLs. Used for cross-machine folder grouping. |
 
 ### Process State (owned by gmux, authoritative)
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `alive` | boolean | Is the process running? Derived from socket reachability. |
-| `pid` | number \| null | Process ID when alive, null when exited |
-| `exit_code` | number \| null | Exit code when dead, null when alive |
+| `pid` | number | Process ID when alive |
+| `exit_code` | number? | Exit code when dead |
 | `started_at` | ISO 8601 | When the process was started |
-| `exited_at` | ISO 8601 \| null | When the process exited |
+| `exited_at` | ISO 8601? | When the process exited |
 
 ### Resume (derived by gmuxd)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `resumable` | boolean | Derived: `!alive && resume-capable kind && has resume_key && command present`. Never set manually. |
-| `resume_key` | string \| null | Session file ID, set during file attribution. Required for a session to be resumable. |
-| `command` | string[] | For resumable dead sessions, this is the resume command (e.g. `["claude", "--resume", "abc"]`). For alive sessions, the original launch command. |
+| `resumable` | boolean | Derived: `!alive && command present`. Never set manually. |
+
+All dead sessions with a command are resumable. Adapters with native resume (pi, claude, codex) provide a tool-specific resume command derived from the session file. Adapters without native resume (shell) keep the original command, so "resume" re-runs it in the same working directory.
 
 ### Display (set by child or gmux, mutable)
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `title` | string | yes | Primary display name. Default: first element of `command`. Can be overridden by child. Examples: `"gmux bootstrap"`, `"fix auth bug"`, `"pi"` |
-| `subtitle` | string | no | Secondary context line. Examples: `"~/dev/gmux"`, `"iteration 3/10"`, `"waiting for build"` |
-| `slug` | string | no | URL-safe stable identifier for the session. Set by the adapter via `/meta` or `GMUX_SOCKET`. Used as the trailing segment in URL routing (`/<folder>/<adapter>/<slug>`). See below. |
-| `status` | Status | no | Application-reported status (see below) |
-| `unread` | boolean | no | Whether this session has unseen activity. Default: false. Set true on output when not focused; cleared on focus. |
+| Field | Type | Description |
+|-------|------|-------------|
+| `title` | string | Primary display name. Resolved by gmuxd: adapter title > shell title > CommandTitler > adapter kind. |
+| `subtitle` | string? | Secondary context line. |
+| `status` | Status? | Application-reported status (see below). |
+| `unread` | boolean | Whether this session has unseen activity. |
 
-### Build Identity (set by gmux, used by gmuxd)
+### Terminal
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `binary_hash` | string | no | SHA-256 hex digest of the gmux binary that owns this session. Computed once at startup from `os.Executable()`. |
-| `stale` | boolean | no | Set by gmuxd when `binary_hash` doesn't match the gmux binary gmuxd would launch for new sessions. Indicates the session was started by a different build. Default: false. |
+| Field | Type | Description |
+|-------|------|-------------|
+| `socket_path` | string | Runner's Unix socket. The frontend uses this as a truthiness check for attachability; the actual path is unused by the browser. |
+| `terminal_cols` | number? | Current terminal width. Used for initial sizing on attach. |
+| `terminal_rows` | number? | Current terminal height. |
 
-Stale detection allows the UI to show a visual indicator on sessions running an outdated gmux. This is important during development (frequent rebuilds) and after upgrades (old sessions survive daemon restart). The comparison is exact: any difference in binary content is a mismatch.
+### Build Identity
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `stale` | boolean | True when the session's binary hash doesn't match the current gmux binary. Derived from the internal `binary_hash` field. |
 
 ### Status Object (set by child process)
 
-Status is **null by default** and should only be set when it carries meaningful information. The absence of status is the normal state — a session exists, it's alive or dead, and the dot color already communicates that.
+Status is **null by default** and should only be set when it carries meaningful information.
 
 ```typescript
 interface Status {
-  label: string    // Short text, shown next to the dot. Only set when informative.
-  working: boolean // Pulsing dot animation. Don't also set a label — the dot is enough.
+  label: string    // Short text, shown next to the dot.
+  working: boolean // Pulsing dot animation.
+  error?: boolean  // Red dot, treated as enhanced unread.
 }
 ```
 
-#### Design principle: no status is the default
+**Design principle: no status is the default.**
 
 - **`null`** — normal. Alive sessions show a steady dot, dead sessions are dimmed.
 - **`working: true`** — pulsing dot, no label needed. The animation says "something is happening."
-- **`label` without `working`** — informational text like `"exited (1)"` or `"tests: 3 failed"`. Use sparingly — only when the label tells the user something they can't already see.
+- **`label` without `working`** — informational text like `"exited (1)"` or `"tests: 3 failed"`. Use sparingly.
 - **Don't set `"completed"`, `"idle"`, or `"working"` as labels.** These repeat what the dot and alive/dead state already show.
-
-The `label` is the human-readable text. The `state` determines the visual treatment. This decouples "what the app says" from "how gmux renders it."
 
 ### How Children Set Status
 
@@ -93,33 +169,18 @@ GMUX_SOCKET=/tmp/gmux-sessions/sess-abc123.sock
 
 # Child (or a hook) sets status via HTTP on the same socket
 curl --unix-socket $GMUX_SOCKET http://localhost/status \
-  -X PUT -d '{"label":"thinking","state":"active"}'
+  -X PUT -d '{"label":"thinking","working":true}'
 ```
 
 **Option B — OSC escape sequences** (terminal-native):
 ```bash
 # OSC 7777 ; json ST  (custom, parsed by gmux's PTY reader)
-printf '\e]7777;{"label":"waiting","state":"attention"}\e\\'
+printf '\e]7777;{"label":"waiting","working":false}\e\\'
 ```
-
-**Option C — Both.** HTTP for programmatic use (hooks, extensions), OSC for terminal-native tools.
-
-### Dot/Indicator Logic
-
-| Process alive? | status.state | Indicator |
-|---------------|-------------|-----------|
-| yes | `active` | Green pulsing dot |
-| yes | `attention` | Orange/amber dot (possibly animated) |
-| yes | `success` | Green check |
-| yes | `error` | Red dot |
-| yes | `paused` | Grey dot |
-| yes | `info` | Blue dot |
-| yes | (none) | Dim green dot (alive, no status reported) |
-| no | (any/none) | Grey hollow dot or ✕ |
 
 ### Full Example
 
-As served by `GET /meta` on a runner's Unix socket:
+As served by `GET /meta` on a runner's Unix socket (runner → gmuxd):
 
 ```json
 {
@@ -130,53 +191,38 @@ As served by `GET /meta` on a runner's Unix socket:
   "kind": "pi",
   "alive": true,
   "pid": 12345,
-  "exit_code": null,
   "started_at": "2026-03-14T10:00:01Z",
-  "exited_at": null,
-  "title": "gmux bootstrap",
-  "subtitle": "~/dev/gmux",
-  "slug": "fix-auth-bug",
-  "status": {
-    "label": "thinking",
-    "state": "active",
-    "icon": "🤔"
-  },
+  "title": "fix auth bug",
+  "shell_title": "user@host:~/dev/gmux",
+  "adapter_title": "fix auth bug",
+  "status": { "label": "thinking", "working": true },
   "unread": false,
+  "socket_path": "/tmp/gmux-sessions/sess-abc123.sock",
   "binary_hash": "a1b2c3d4e5f6..."
 }
 ```
 
-### URL Slug (set by child, stable across resume)
+As served by `GET /v1/sessions` (gmuxd → frontend):
 
-The `slug` field provides a stable, human-readable identifier for URL routing. It is set by the adapter and should be derived from something that persists across kill and resume.
-
-**Adapter examples:**
-
-| Adapter | Slug source | Example |
-|---------|-------------|---------|
-| pi | Conversation ID or first-message summary | `fix-auth-bug` |
-| claude | Session file basename | `abc123` |
-| codex | Session file basename | `def456` |
-| shell | Sanitized command or counter | `pytest-watch`, `shell-3` |
-
-**Rules:**
-
-- URL-safe characters only (lowercase alphanumeric, hyphens). gmux sanitizes the adapter's input.
-- Unique within the adapter's namespace for that folder. gmux appends a disambiguator (`-2`, `-3`) on collision.
-- Falls back to a truncated session ID (e.g. `sess-abc12`) if the adapter doesn't provide one.
-- Stable across resume: the slug is tied to the logical session (conversation ID, session file), not the process. A resumed session keeps the same slug.
-
-The slug is part of the hierarchical URL path: `/<project>/<adapter>/<slug>`. Each adapter gets its own namespace within a project, so adapters don't need to coordinate with each other. See [Project Management](/planned/folder-management#step-3-url-routing) for the full URL routing design.
-
-**Setting the slug:**
-
-```bash
-# Via GMUX_SOCKET HTTP (preferred)
-curl --unix-socket $GMUX_SOCKET http://localhost/meta \
-  -X PATCH -d '{"slug": "fix-auth-bug"}'
+```json
+{
+  "id": "sess-abc123",
+  "created_at": "2026-03-14T10:00:00Z",
+  "command": ["pi"],
+  "cwd": "/home/user/dev/gmux",
+  "kind": "pi",
+  "alive": true,
+  "pid": 12345,
+  "started_at": "2026-03-14T10:00:01Z",
+  "title": "fix auth bug",
+  "status": { "label": "thinking", "working": true },
+  "unread": false,
+  "socket_path": "/tmp/gmux-sessions/sess-abc123.sock",
+  "stale": false
+}
 ```
 
-Or include it in the `/meta` response from the runner. The slug can be set at any time; the URL updates and the old URL redirects.
+Note the differences: `shell_title`, `adapter_title`, and `binary_hash` are absent from the API response. `title` is the resolved value. `stale` is derived from `binary_hash`.
 
 ## What's NOT in This Schema
 
@@ -184,4 +230,4 @@ Or include it in the `/meta` response from the runner. The slug can be set at an
 - **Cost/tokens** — same
 - **Git branch / PR status** — could be a future Status extension, not core
 - **Conversation history** — belongs to the application, not the multiplexer
-- **Progress bar** — deferred; Status.label like `"3/10 tests"` is sufficient for v1
+- **Progress bar** — deferred; `Status.label` like `"3/10 tests"` is sufficient

@@ -208,7 +208,9 @@ Implement this if your tool supports resuming previous sessions.
 - `CanResume()` filters out invalid or empty files
 - `ResumeCommand()` tells gmux how to resume a valid session
 
-A session only becomes resumable once a file is attributed to it (setting `resume_key`). Sessions that exit before creating a file are treated as non-resumable — the original launch command would start a fresh session, not resume the old one.
+All dead sessions are resumable. When a session exits, gmuxd checks whether the adapter implements `Resumer` and has an attributed session file. If so, the session's command is replaced with the adapter's resume command (e.g. `["claude", "--resume", "abc"]`). If not, the original launch command is kept as-is, so "resume" simply re-runs the command in the same working directory.
+
+This means adapters that don't implement `Resumer` still get resume for free: the user clicks resume, a new session starts with the same command and cwd. This is the right behavior for shell sessions and simple tools. Only implement `Resumer` when your tool has native resume support that you want to use instead.
 
 ### `CommandTitler`
 
@@ -220,7 +222,7 @@ type CommandTitler interface {
 
 Implement this if your adapter needs custom fallback title display from the command array. Without it, the fallback title is the adapter name (e.g. "codex", "pi"). Shell implements this to show the full command with args (e.g. "pytest -x").
 
-This only matters when no `adapter_title` or `shell_title` is set — which is rare for adapters that implement `FileMonitor` (titles come from file parsing) but common for plain shell sessions.
+This only matters when no adapter or shell title has been set yet, which is rare for adapters that implement `FileMonitor` (titles come from file parsing) but common for plain shell sessions.
 
 ### Capability composition
 
@@ -228,10 +230,12 @@ An adapter implements only what it needs:
 
 | Adapter | Base | Launchable | SessionFiler | FileMonitor | FileAttributor | Resumer |
 |---------|------|------------|-------------|-------------|----------------|---------|
-| Shell | ✓ | ✓ | — | — | — | — |
+| Shell | ✓ | ✓ | — | — | — | —* |
 | Claude | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Pi | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+\* Shell sessions are still resumable (all sessions are). They just re-run the original command in the same cwd, which starts a fresh shell. Adapters only need to implement `Resumer` when the tool has native resume (e.g. `claude --resume`).
 
 ## Testing
 
