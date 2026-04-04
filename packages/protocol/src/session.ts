@@ -29,6 +29,8 @@ export const SessionSchema = z.object({
   socket_path: z.string().optional(),
   terminal_cols: z.number().int().positive().optional(),
   terminal_rows: z.number().int().positive().optional(),
+  slug: z.string().optional(),
+  resume_key: z.string().optional(),
   stale: z.boolean().optional().default(false),
 })
 

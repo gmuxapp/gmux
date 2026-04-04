@@ -1,43 +1,56 @@
 /**
- * Sidebar folder visibility — stored in localStorage.
+ * Sidebar project state, backed by the gmuxd /v1/projects API.
  *
- * Tracks which folder paths are visible in the sidebar. Paths are keyed
- * by the same grouping used in groupByFolder: the most common remote URL
- * when remotes are present, workspace root, or cwd as fallback.
- * New folders auto-show when they have live sessions.
+ * Replaces the old localStorage-based folder visibility tracking.
+ * Project state lives server-side and is synced to all clients via
+ * SSE `projects-update` events.
  */
 
-import type { Session } from './types'
+import type { ProjectItem, DiscoveredProject } from './types'
 
-const STORAGE_KEY = 'gmux-sidebar-state'
-
-interface PersistedState {
-  visibleFolders: string[]
-}
-
-function load(): PersistedState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      // Accept both old format (with visibleSessions) and new.
-      return { visibleFolders: parsed.visibleFolders ?? [] }
-    }
-  } catch { /* corrupt or missing — start fresh */ }
-  return { visibleFolders: [] }
-}
-
-function save(state: PersistedState) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+export interface ProjectsData {
+  configured: ProjectItem[]
+  discovered: DiscoveredProject[]
+  unmatchedActiveCount: number
 }
 
 export function createSidebarState() {
-  let state = load()
+  let data: ProjectsData = { configured: [], discovered: [], unmatchedActiveCount: 0 }
   const listeners = new Set<() => void>()
 
   function notify() {
-    save(state)
     for (const fn of listeners) fn()
+  }
+
+  async function fetchProjects() {
+    try {
+      const resp = await fetch('/v1/projects')
+      const json = await resp.json()
+      if (json.ok && json.data) {
+        data = {
+          configured: json.data.configured ?? [],
+          discovered: json.data.discovered ?? [],
+          unmatchedActiveCount: json.data.unmatched_active_count ?? 0,
+        }
+        notify()
+      }
+    } catch (err) {
+      console.warn('Failed to fetch projects:', err)
+    }
+  }
+
+  async function putProjects(items: ProjectItem[]) {
+    try {
+      const resp = await fetch('/v1/projects', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      })
+      if (!resp.ok) console.warn('PUT /v1/projects failed:', resp.status)
+      // SSE `projects-update` will trigger a re-fetch.
+    } catch (err) {
+      console.warn('PUT /v1/projects error:', err)
+    }
   }
 
   return {
@@ -46,51 +59,42 @@ export function createSidebarState() {
       return () => { listeners.delete(fn) }
     },
 
-    /** Auto-show folders that have live sessions. */
-    syncSessions(sessions: Session[]) {
-      let changed = false
-      for (const s of sessions) {
-        if (!s.alive) continue
-        const key = sessionGroupKey(s)
-        if (!state.visibleFolders.includes(key)) {
-          state.visibleFolders.push(key)
-          changed = true
-        }
+    get configured(): ProjectItem[] { return data.configured },
+    get discovered(): DiscoveredProject[] { return data.discovered },
+    get unmatchedActiveCount(): number { return data.unmatchedActiveCount },
+
+    /** Fetch project state from the server. Call on mount and SSE reconnect. */
+    fetchProjects,
+
+    /** Called when SSE receives a `projects-update` event. */
+    handleProjectsUpdate() {
+      fetchProjects()
+    },
+
+    /** Remove a project from the configured list. */
+    async removeProject(slug: string) {
+      const items = data.configured.filter(item => item.slug !== slug)
+      await putProjects(items)
+    },
+
+    /** Add a discovered project. */
+    async addProject(req: { remote?: string; paths: string[] }) {
+      try {
+        const resp = await fetch('/v1/projects/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(req),
+        })
+        if (!resp.ok) console.warn('POST /v1/projects/add failed:', resp.status)
+        // SSE `projects-update` will trigger a re-fetch.
+      } catch (err) {
+        console.warn('POST /v1/projects/add error:', err)
       }
-      if (changed) notify()
     },
 
-    showFolder(cwd: string) {
-      if (!state.visibleFolders.includes(cwd)) {
-        state.visibleFolders.push(cwd)
-        notify()
-      }
-    },
-
-    hideFolder(cwd: string) {
-      state.visibleFolders = state.visibleFolders.filter(f => f !== cwd)
-      notify()
-    },
-
-    isFolderVisible(cwd: string): boolean {
-      return state.visibleFolders.includes(cwd)
-    },
+    /** Replace the full project list (for reorder, bulk edits). */
+    updateProjects: putProjects,
   }
 }
 
 export type SidebarStateManager = ReturnType<typeof createSidebarState>
-
-/**
- * Derive the grouping key for a single session. Used to track folder
- * visibility independently of the full groupByFolder union-find.
- * Returns the first remote URL (origin preferred), workspace root, or cwd.
- */
-function sessionGroupKey(s: Session): string {
-  if (s.remotes) {
-    // Prefer origin, fall back to first available.
-    if (s.remotes.origin) return s.remotes.origin
-    const values = Object.values(s.remotes)
-    if (values.length > 0) return values[0]
-  }
-  return s.workspace_root || s.cwd || '~'
-}

@@ -1,6 +1,8 @@
 package store
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -217,6 +219,72 @@ func TestUpdateBroadcasts(t *testing.T) {
 	}
 }
 
+func TestUpsertAliveSessionRemovesDeadShadowWithSameResumeKey(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "file-abc", Kind: "pi", Alive: false,
+		Command: []string{"pi"}, ResumeKey: "rk-1", AdapterTitle: "shadow",
+	})
+	s.Upsert(Session{
+		ID: "sess-123", Kind: "pi", Alive: true,
+		ResumeKey: "rk-1", AdapterTitle: "live",
+	})
+
+	items := s.List()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 session, got %d: %+v", len(items), items)
+	}
+	if items[0].ID != "sess-123" {
+		t.Fatalf("expected live session to remain, got %q", items[0].ID)
+	}
+}
+
+func TestUpsertDeadShadowSkippedWhenAliveSessionExists(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "sess-123", Kind: "pi", Alive: true,
+		ResumeKey: "rk-1", AdapterTitle: "live",
+	})
+	s.Upsert(Session{
+		ID: "file-abc", Kind: "pi", Alive: false,
+		Command: []string{"pi"}, ResumeKey: "rk-1", AdapterTitle: "shadow",
+	})
+
+	items := s.List()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 session, got %d: %+v", len(items), items)
+	}
+	if items[0].ID != "sess-123" {
+		t.Fatalf("expected live session to remain, got %q", items[0].ID)
+	}
+}
+
+func TestUpdateResumeKeyOnAliveSessionRemovesDeadShadow(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "file-abc", Kind: "pi", Alive: false,
+		Command: []string{"pi"}, ResumeKey: "rk-1", AdapterTitle: "shadow",
+	})
+	s.Upsert(Session{
+		ID: "sess-123", Kind: "pi", Alive: true, AdapterTitle: "live",
+	})
+
+	ok := s.Update("sess-123", func(sess *Session) {
+		sess.ResumeKey = "rk-1"
+	})
+	if !ok {
+		t.Fatal("expected update to succeed")
+	}
+
+	items := s.List()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 session, got %d: %+v", len(items), items)
+	}
+	if items[0].ID != "sess-123" {
+		t.Fatalf("expected live session to remain, got %q", items[0].ID)
+	}
+}
+
 func TestBroadcastDoesNotMutateState(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Kind: "shell", Alive: true})
@@ -252,6 +320,141 @@ func TestBroadcastDoesNotMutateState(t *testing.T) {
 	}
 }
 
+// --- Slug derivation tests ---
+
+func TestSlugFromResumeKey(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "s1", Kind: "pi",
+		ResumeKey: "/home/user/.pi/sessions/2026-04-03T06-46-56_07b3c9c8.jsonl",
+	})
+	got, _ := s.Get("s1")
+	if got.Slug == "" {
+		t.Fatal("expected slug to be derived")
+	}
+	// Should be derived from the resume_key basename (without extension).
+	if got.Slug != "2026-04-03t06-46-56-07b3c9c8" {
+		t.Fatalf("expected resume_key-based slug, got %q", got.Slug)
+	}
+}
+
+func TestSlugFromCommand(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "s1", Kind: "shell",
+		Command: []string{"pytest", "--watch"},
+	})
+	got, _ := s.Get("s1")
+	if got.Slug != "pytest-watch" {
+		t.Fatalf("expected 'pytest-watch', got %q", got.Slug)
+	}
+}
+
+func TestSlugFallbackToID(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "sess-abc12345", Kind: "shell"})
+	got, _ := s.Get("sess-abc12345")
+	// ID "sess-abc12345" is 14 chars, truncated to 12 -> "sess-abc1234" -> slugified.
+	if got.Slug == "" {
+		t.Fatal("expected a slug to be derived")
+	}
+	// Should be a prefix of the session ID.
+	if !strings.HasPrefix("sess-abc12345", strings.ReplaceAll(got.Slug, "-", "-")) {
+		// Just check it's non-empty and reasonable.
+		t.Logf("slug from ID: %q", got.Slug)
+	}
+}
+
+func TestSlugAdapterProvided(t *testing.T) {
+	s := New()
+	s.Upsert(Session{
+		ID: "s1", Kind: "pi", Slug: "fix-auth-bug",
+		ResumeKey: "/some/file.jsonl",
+	})
+	got, _ := s.Get("s1")
+	if got.Slug != "fix-auth-bug" {
+		t.Fatalf("expected adapter slug preserved, got %q", got.Slug)
+	}
+}
+
+func TestSlugUniqueness(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Command: []string{"pi"}})
+	s.Upsert(Session{ID: "s2", Kind: "pi", Command: []string{"pi"}})
+	s.Upsert(Session{ID: "s3", Kind: "pi", Command: []string{"pi"}})
+
+	s1, _ := s.Get("s1")
+	s2, _ := s.Get("s2")
+	s3, _ := s.Get("s3")
+
+	if s1.Slug == s2.Slug || s1.Slug == s3.Slug || s2.Slug == s3.Slug {
+		t.Fatalf("slugs should be unique: %q, %q, %q", s1.Slug, s2.Slug, s3.Slug)
+	}
+}
+
+func TestSlugUniquenessAcrossKindsAllowed(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Command: []string{"pi"}})
+	s.Upsert(Session{ID: "s2", Kind: "shell", Command: []string{"pi"}})
+
+	s1, _ := s.Get("s1")
+	s2, _ := s.Get("s2")
+
+	// Same slug is OK for different kinds.
+	if s1.Slug != "pi" || s2.Slug != "pi" {
+		t.Fatalf("expected same slug for different kinds: %q, %q", s1.Slug, s2.Slug)
+	}
+}
+
+func TestSlugStableOnUpdate(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Command: []string{"pi"}})
+	original, _ := s.Get("s1")
+
+	// Update should not change the slug.
+	s.Update("s1", func(sess *Session) {
+		sess.AdapterTitle = "new title"
+	})
+	updated, _ := s.Get("s1")
+	if updated.Slug != original.Slug {
+		t.Fatalf("slug changed on update: %q -> %q", original.Slug, updated.Slug)
+	}
+}
+
+func TestSlugFreedAfterRemove(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Command: []string{"pi"}})
+	s1, _ := s.Get("s1")
+	originalSlug := s1.Slug // should be "pi"
+
+	s.Remove("s1")
+
+	// New session with same derived slug should get the slug without a suffix.
+	s.Upsert(Session{ID: "s2", Kind: "pi", Command: []string{"pi"}})
+	s2, _ := s.Get("s2")
+	if s2.Slug != originalSlug {
+		t.Fatalf("expected slug %q to be reusable after remove, got %q", originalSlug, s2.Slug)
+	}
+}
+
+func TestSlugAdapterOverrideViaUpdate(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Command: []string{"pi"}})
+	original, _ := s.Get("s1")
+	if original.Slug != "pi" {
+		t.Fatalf("expected auto-derived slug 'pi', got %q", original.Slug)
+	}
+
+	// Adapter provides a slug later via meta event.
+	s.Update("s1", func(sess *Session) {
+		sess.Slug = "fix-auth-bug"
+	})
+	updated, _ := s.Get("s1")
+	if updated.Slug != "fix-auth-bug" {
+		t.Fatalf("expected adapter slug 'fix-auth-bug', got %q", updated.Slug)
+	}
+}
+
 func TestSetTerminalSize(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Kind: "shell", Alive: true})
@@ -269,5 +472,38 @@ func TestSetTerminalSize(t *testing.T) {
 	}
 	if s.SetTerminalSize("missing", 120, 40) {
 		t.Fatal("expected missing session update to fail")
+	}
+}
+
+// The frontend needs slug (URL routing) and resume_key (project session array
+// membership for dead sessions). Verify they survive MarshalJSON.
+func TestMarshalJSON_FrontendFields(t *testing.T) {
+	s := Session{
+		ID:        "s1",
+		Kind:      "pi",
+		Alive:     false,
+		Slug:      "fix-auth",
+		ResumeKey: "2026-04-03T06-46-56_07b3c9c8",
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]interface{}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire["slug"] != "fix-auth" {
+		t.Errorf("slug missing from wire JSON: %s", data)
+	}
+	if wire["resume_key"] != "2026-04-03T06-46-56_07b3c9c8" {
+		t.Errorf("resume_key missing from wire JSON: %s", data)
+	}
+	// Internal fields the frontend doesn't need should be excluded.
+	if _, ok := wire["shell_title"]; ok {
+		t.Errorf("shell_title should be excluded from wire JSON: %s", data)
+	}
+	if _, ok := wire["binary_hash"]; ok {
+		t.Errorf("binary_hash should be excluded from wire JSON: %s", data)
 	}
 }

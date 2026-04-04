@@ -128,15 +128,15 @@ Authentication uses the same mechanism as browser connections: tailscale identit
 
 ### Proxying
 
-Routing uses the namespace prefix. When the browser opens a terminal on a remote session, the hub strips the first namespace segment to identify the spoke, then forwards the remainder:
+Routing uses the `@host` segment from the URL. When the browser opens a terminal on a remote session, the hub identifies the spoke from the `@host` segment and forwards with the host stripped:
 
 ```
-browser → hub:  WS /ws/server/project-a/sess-ghi789
+browser → hub:  WS /ws/@server/project-a/sess-ghi789
 hub → server:   WS /ws/project-a/sess-ghi789
 server → container: WS /ws/sess-ghi789
 ```
 
-Each layer only knows about its direct spokes. The hub doesn't need to know that `project-a` is a container; it just forwards to `server`. Server strips its prefix and forwards to `project-a`.
+Each layer only knows about its direct spokes. The hub doesn't need to know that `project-a` is a container; it just forwards to `server`. Server strips its `@`-prefixed segment and forwards to the next layer.
 
 This is the same pattern gmuxd already uses between the browser and local runner sockets, extended to multiple hops.
 
@@ -178,30 +178,38 @@ The project list, ordering, and visibility are owned by the hub gmuxd. Spokes se
 
 ### URL routing
 
-Sessions are addressable via hierarchical URL paths:
+Sessions are addressable via hierarchical URL paths. The project is the top-level segment, since aggregation groups sessions from multiple hosts under one project:
 
 ```
-/<host>/<project>/<adapter>/<slug>
+/<project>/<adapter>/<slug>              (local)
+/<project>/@<host>/<adapter>/<slug>      (remote)
 ```
 
 Examples:
 
 ```
-/desktop/gmux/pi/fix-auth-bug
-/server/gmux/shell/pytest-watch
+/gmux/pi/fix-auth-bug                   (local session)
+/gmux/shell/pytest-watch                (local session)
+/gmux/@desktop/pi/fix-auth-bug          (session on desktop spoke)
+/gmux/@server/shell/pytest-watch        (session on server spoke)
 ```
 
-For local sessions (no aggregation), the host segment is omitted:
+The `@` prefix on the host segment disambiguates it from an adapter name at any segment count. The router checks: after the project segment, if the next segment starts with `@`, it's a host; otherwise it's an adapter.
+
+Partial URLs navigate naturally:
 
 ```
-/gmux/pi/fix-auth-bug
-/gmux/shell/pytest-watch
+/gmux                        → project overview (all hosts)
+/gmux/pi                     → all local pi sessions
+/gmux/@desktop               → all desktop sessions for this project
+/gmux/@desktop/pi            → pi sessions on desktop
+/gmux/@desktop/pi/fix-auth   → specific remote session
 ```
 
-The structure encodes routing (which host), context (which project, which adapter), and identity (the slug). Each segment is meaningful:
+Each segment is meaningful:
 
-- **host**: maps to the spoke namespace. Absent for local sessions. When aggregation is added later, existing local URLs continue to work.
-- **project**: the user-configured project slug (see [Project Management](/planned/folder-management)).
+- **project**: the user-configured project slug (see [Project Management](/planned/folder-management)). Always first, matching the sidebar's primary grouping.
+- **@host**: maps to the spoke namespace. Absent for local sessions. The `@` prefix is reserved in `parseSessionPath` so existing local URLs are never ambiguous with future host names.
 - **adapter**: the session's `kind` (`pi`, `claude`, `shell`, etc.). Gives each adapter its own namespace, so adapters don't need to coordinate slug uniqueness.
 - **slug**: adapter-provided stable identifier. See [Session Schema](/develop/session-schema) for the `slug` field.
 
@@ -272,7 +280,7 @@ Devcontainers have native dotfiles support. Users configure their dotfiles repo 
 
 ## Incremental delivery
 
-Project management (server-side project state, management UI, URL routing) ships first as a prerequisite. It fixes client sync, establishes the project identity model, and introduces the URL structure that aggregation extends with the host prefix. See [Project Management](/planned/folder-management).
+Project management (server-side project state, management UI, URL routing) ships first as a prerequisite. It fixes client sync, establishes the project identity model, and introduces the URL structure that aggregation extends with the `@host` segment. See [Project Management](/planned/folder-management).
 
 ### Step 1: Canonical project URI
 
@@ -284,7 +292,7 @@ Small, self-contained. Useful today for workspace grouping even without cross-in
 
 gmuxd can connect to other gmuxd instances as spokes. Manual `[[peers]]` config. Preserved namespace chains, SSE subscription, multi-layer WebSocket proxying, launch forwarding, spoke liveness tracking. No auto-discovery yet.
 
-This unlocks the "one dashboard, every machine" use case for users with explicit config. The host prefix slots into the existing URL structure: `/gmux/pi/fix-auth-bug` becomes `/desktop/gmux/pi/fix-auth-bug`.
+This unlocks the "one dashboard, every machine" use case for users with explicit config. The `@host` segment slots into existing URLs: `/gmux/pi/fix-auth-bug` becomes `/gmux/@desktop/pi/fix-auth-bug`. The project remains the top-level segment, matching the sidebar's primary grouping.
 
 ### Step 3: Tailscale auto-discovery
 

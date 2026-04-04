@@ -41,6 +41,9 @@ type State struct {
 	Status   *adapter.Status `json:"status"`
 	Unread   bool            `json:"unread"`
 
+	// Slug is an adapter-provided stable identifier for URL routing.
+	Slug string `json:"slug,omitempty"`
+
 	// Terminal size (updated by the runner whenever PTY is resized).
 	TerminalCols uint16 `json:"terminal_cols,omitempty"`
 	TerminalRows uint16 `json:"terminal_rows,omitempty"`
@@ -196,6 +199,17 @@ func (s *State) SetShellTitle(title string) {
 	}
 	s.ShellTitle = title
 	s.emitMetaLocked()
+}
+
+// SetSlug sets the URL-safe session identifier.
+func (s *State) SetSlug(slug string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Slug == slug {
+		return
+	}
+	s.Slug = slug
+	s.emit(Event{Type: "meta", Data: map[string]string{"slug": slug}})
 }
 
 // SetSubtitle updates the display subtitle.

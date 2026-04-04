@@ -2,6 +2,10 @@ package store
 
 import (
 	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -33,16 +37,24 @@ type Session struct {
 	TerminalRows  uint16            `json:"terminal_rows,omitempty"`
 	Stale         bool              `json:"stale,omitempty"`
 
+	// Slug is a stable identifier for URL routing.
+	// Auto-derived from resume_key, command, or session ID when the
+	// adapter doesn't provide one. Unique within a kind (not per-project,
+	// since project assignment can change). Adapters can override via
+	// the runner's PUT /slug endpoint.
+	Slug string `json:"slug,omitempty"`
+
+	// ResumeKey is the session-file ID used for resume. Exposed to the
+	// frontend for project session array membership (matching dead sessions
+	// to projects). The derived Resumable bool is also API-visible.
+	ResumeKey string `json:"resume_key,omitempty"`
+
 	// ── Internal fields (excluded from API via MarshalJSON) ──
 
 	// Title inputs: resolveTitle merges these by precedence into Title
 	// on every Upsert/Update.
 	ShellTitle   string `json:"shell_title,omitempty"`
 	AdapterTitle string `json:"adapter_title,omitempty"`
-
-	// ResumeKey is the session-file ID used for resume. The derived
-	// Resumable bool (API-visible) is what the frontend needs.
-	ResumeKey string `json:"resume_key,omitempty"`
 
 	// BinaryHash is the sha256 of the gmux binary that owns this session.
 	// The derived Stale bool (API-visible) is what the frontend needs.
@@ -74,6 +86,8 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		TerminalCols  uint16            `json:"terminal_cols,omitempty"`
 		TerminalRows  uint16            `json:"terminal_rows,omitempty"`
 		Stale         bool              `json:"stale,omitempty"`
+		Slug          string            `json:"slug,omitempty"`
+		ResumeKey     string            `json:"resume_key,omitempty"`
 	}
 	return json.Marshal(wire{
 		ID: s.ID, CreatedAt: s.CreatedAt, Command: s.Command,
@@ -84,6 +98,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		Unread: s.Unread, Resumable: s.Resumable,
 		SocketPath: s.SocketPath, TerminalCols: s.TerminalCols,
 		TerminalRows: s.TerminalRows, Stale: s.Stale,
+		Slug: s.Slug, ResumeKey: s.ResumeKey,
 	})
 }
 
@@ -111,14 +126,12 @@ type Store struct {
 	sessions       map[string]Session
 	subscribers    map[*subscriber]struct{}
 	commandTitlers map[string]func([]string) string
-	dismissed      map[string]bool // dismissed ResumeKeys — prevents scanner re-adding
 }
 
 func New() *Store {
 	return &Store{
 		sessions:    make(map[string]Session),
 		subscribers: make(map[*subscriber]struct{}),
-		dismissed:   make(map[string]bool),
 	}
 }
 
@@ -127,13 +140,6 @@ func New() *Store {
 // shell title is set (e.g. "codex" instead of "codex resume <id>").
 func (s *Store) SetCommandTitlers(titlers map[string]func([]string) string) {
 	s.commandTitlers = titlers
-}
-
-// IsDismissed returns true if a resume key was previously dismissed by the user.
-func (s *Store) IsDismissed(resumeKey string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.dismissed[resumeKey]
 }
 
 func (s *Store) List() []Session {
@@ -177,9 +183,19 @@ func (s *Store) Upsert(sess Session) {
 	sess.Title = s.resolveTitle(sess)
 	sess.Resumable = !sess.Alive && len(sess.Command) > 0
 	s.mu.Lock()
-	s.sessions[sess.ID] = sess
+	removed, skip := s.resolveDuplicateResumeKeysLocked(sess)
+	if !skip {
+		s.resolveSlug(&sess)
+		s.sessions[sess.ID] = sess
+	}
 	s.mu.Unlock()
 
+	for _, id := range removed {
+		s.broadcast(Event{Type: "session-remove", ID: id})
+	}
+	if skip {
+		return
+	}
 	s.broadcast(Event{
 		Type:    "session-upsert",
 		ID:      sess.ID,
@@ -201,9 +217,19 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 	fn(&sess)
 	sess.Title = s.resolveTitle(sess)
 	sess.Resumable = !sess.Alive && len(sess.Command) > 0
-	s.sessions[id] = sess
+	removed, skip := s.resolveDuplicateResumeKeysLocked(sess)
+	if !skip {
+		s.resolveSlug(&sess)
+		s.sessions[id] = sess
+	}
 	s.mu.Unlock()
 
+	for _, rid := range removed {
+		s.broadcast(Event{Type: "session-remove", ID: rid})
+	}
+	if skip {
+		return true
+	}
 	s.broadcast(Event{
 		Type:    "session-upsert",
 		ID:      id,
@@ -245,13 +271,48 @@ func (s *Store) SetTerminalSize(id string, cols, rows uint16) bool {
 	return true
 }
 
+// resolveDuplicateResumeKeysLocked deduplicates sessions that represent the
+// same logical resumable session (same ResumeKey) under different IDs.
+//
+// Typical case: a dead file-scanned shadow (file-xxxx) and a live runner
+// session (sess-xxxx) for the same underlying conversation.
+//
+// Rules:
+//   - alive beats dead
+//   - non-file IDs beat file-* shadow IDs
+//   - when a dead shadow arrives while a live session exists, skip it
+func (s *Store) resolveDuplicateResumeKeysLocked(sess Session) (removed []string, skip bool) {
+	if sess.ResumeKey == "" {
+		return nil, false
+	}
+	for id, other := range s.sessions {
+		if id == sess.ID || other.ResumeKey != sess.ResumeKey {
+			continue
+		}
+
+		incomingFile := strings.HasPrefix(sess.ID, "file-")
+		otherFile := strings.HasPrefix(other.ID, "file-")
+
+		switch {
+		case sess.Alive && !other.Alive:
+			delete(s.sessions, id)
+			removed = append(removed, id)
+		case !sess.Alive && other.Alive:
+			return removed, true
+		case !incomingFile && otherFile:
+			delete(s.sessions, id)
+			removed = append(removed, id)
+		case incomingFile && !otherFile:
+			return removed, true
+		}
+	}
+	return removed, false
+}
+
 func (s *Store) Remove(id string) bool {
 	s.mu.Lock()
-	sess, ok := s.sessions[id]
+	_, ok := s.sessions[id]
 	if ok {
-		if sess.ResumeKey != "" {
-			s.dismissed[sess.ResumeKey] = true
-		}
 		delete(s.sessions, id)
 	}
 	s.mu.Unlock()
@@ -302,4 +363,91 @@ func (s *Store) broadcast(ev Event) {
 
 func NowUnix() float64 {
 	return float64(time.Now().UnixNano()) / float64(time.Second)
+}
+
+// --- Slug auto-derivation ---
+
+var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+// slugify converts a string to a URL-safe slug.
+func slugify(s string) string {
+	s = strings.ToLower(s)
+	s = slugRe.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if s == "" {
+		return ""
+	}
+	// Cap length to keep URLs reasonable.
+	if len(s) > 40 {
+		s = s[:40]
+		s = strings.TrimRight(s, "-")
+	}
+	return s
+}
+
+// deriveSlug produces a fallback slug from session data when the adapter
+// doesn't provide one. Derivation priority:
+//  1. resume_key basename (stable across kill/resume)
+//  2. Command basename (meaningful for shell sessions)
+//  3. Short session ID prefix (last resort, not stable across resume)
+func deriveSlug(sess Session) string {
+	// 1. resume_key basename: e.g. "2026-04-03T06-46-56-743Z_07b3c9c8.jsonl" -> "2026-04-03t06-46-56"
+	if sess.ResumeKey != "" {
+		base := filepath.Base(sess.ResumeKey)
+		// Strip extension.
+		if dot := strings.LastIndex(base, "."); dot > 0 {
+			base = base[:dot]
+		}
+		if slug := slugify(base); slug != "" {
+			return slug
+		}
+	}
+
+	// 2. Command: e.g. ["pytest", "--watch"] -> "pytest-watch"
+	if len(sess.Command) > 0 {
+		cmd := filepath.Base(sess.Command[0])
+		if len(sess.Command) > 1 {
+			cmd += " " + strings.Join(sess.Command[1:], " ")
+		}
+		if slug := slugify(cmd); slug != "" {
+			return slug
+		}
+	}
+
+	// 3. Short session ID.
+	id := sess.ID
+	if len(id) > 12 {
+		id = id[:12]
+	}
+	return slugify(id)
+}
+
+// resolveSlug ensures a session has a unique slug within its kind.
+// If the session already has an adapter-provided slug, it's checked for
+// uniqueness. Otherwise a slug is derived from session data.
+// Must be called with s.mu held.
+func (s *Store) resolveSlug(sess *Session) {
+	if sess.Slug == "" {
+		sess.Slug = deriveSlug(*sess)
+	}
+	if sess.Slug == "" {
+		sess.Slug = "session"
+	}
+
+	// Ensure uniqueness within the same kind.
+	// Two sessions of the same kind shouldn't share a slug.
+	base := sess.Slug
+	for i := 2; ; i++ {
+		conflict := false
+		for _, existing := range s.sessions {
+			if existing.ID != sess.ID && existing.Kind == sess.Kind && existing.Slug == sess.Slug {
+				conflict = true
+				break
+			}
+		}
+		if !conflict {
+			return
+		}
+		sess.Slug = fmt.Sprintf("%s-%d", base, i)
+	}
 }

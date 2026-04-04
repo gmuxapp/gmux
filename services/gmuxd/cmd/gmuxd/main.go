@@ -25,6 +25,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/notify"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
@@ -136,6 +137,17 @@ func launcherStates(ls []adapter.Launcher) []string {
 
 // launchGmux starts a detached gmux process with the given command and cwd.
 // Returns the PID on success.
+// filterEnvPrefix returns env with any variable starting with prefix removed.
+func filterEnvPrefix(env []string, prefix string) []string {
+	result := make([]string, 0, len(env))
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
 func launchGmux(gmuxBin string, command []string, cwd string) (int, error) {
 	args := []string{"--cwd", cwd, "--"}
 	args = append(args, command...)
@@ -146,6 +158,12 @@ func launchGmux(gmuxBin string, command []string, cwd string) (int, error) {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil
+
+	// Strip all GMUX_* session vars so child processes don't inherit
+	// the parent session's identity. Without this, a gmuxd started
+	// inside a pi session would leak GMUX_ADAPTER=pi, GMUX_SOCKET,
+	// GMUX_SESSION_ID, etc. into every launched session.
+	cmd.Env = filterEnvPrefix(os.Environ(), "GMUX_")
 
 	if err := cmd.Start(); err != nil {
 		return 0, err
@@ -265,7 +283,7 @@ func serve(stderr io.Writer) int {
 
 	// Build command titlers from adapters that implement CommandTitler.
 	commandTitlers := make(map[string]func([]string) string)
-	for _, a := range adapters.All {
+	for _, a := range adapters.AllAdapters() {
 		if ct, ok := a.(adapter.CommandTitler); ok {
 			ct := ct // capture for closure
 			commandTitlers[a.Name()] = ct.CommandTitle
@@ -343,6 +361,42 @@ func serve(stderr io.Writer) int {
 	var tcpAddr string
 	var authToken string
 
+	// State directory for persistent files (projects.json, auth-token, etc).
+	stateDir := paths.StateDir()
+
+	// Project manager handles concurrent access to projects.json and
+	// auto-assignment of sessions to projects.
+	projectMgr := projects.NewManager(stateDir)
+	projectMgr.Broadcast = func() {
+		sessions.Broadcast(store.Event{Type: "projects-update"})
+	}
+
+	// Auto-assign sessions to projects when they appear or get a ResumeKey.
+	sessionEvents, unsubSessionEvents := sessions.Subscribe()
+	defer unsubSessionEvents()
+	go func() {
+		for ev := range sessionEvents {
+			if ev.Type != "session-upsert" || ev.Session == nil {
+				continue
+			}
+			s := ev.Session
+			// Only auto-assign alive sessions. Dead resumable sessions
+			// stay in the array if already persisted from a previous run,
+			// but we don't bulk-add hundreds of old session files on startup.
+			if !s.Alive {
+				continue
+			}
+			projectMgr.AutoAssignSession(projects.SessionInfo{
+				ID:            s.ID,
+				Cwd:           s.Cwd,
+				WorkspaceRoot: s.WorkspaceRoot,
+				Remotes:       s.Remotes,
+				Alive:         s.Alive,
+				ResumeKey:     s.ResumeKey,
+			})
+		}
+	}()
+
 	// ── Health + Capabilities ──
 
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
@@ -409,6 +463,120 @@ func serve(stderr io.Writer) int {
 				"settings": settings,
 			},
 		})
+	})
+
+	// ── Projects ──
+
+	mux.HandleFunc("GET /v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		state, err := projectMgr.Load()
+		if err != nil {
+			log.Printf("projects: load error: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal", "failed to load projects")
+			return
+		}
+
+		sessionInfos := buildSessionInfos(sessions)
+
+		writeJSON(w, map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"configured":             state.Items,
+				"discovered":             state.Discovered(sessionInfos),
+				"unmatched_active_count": state.UnmatchedActiveCount(sessionInfos),
+			},
+		})
+	})
+
+	mux.HandleFunc("PUT /v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "read error")
+			return
+		}
+
+		var incoming projects.State
+		if err := json.Unmarshal(body, &incoming); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		if err := incoming.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+			return
+		}
+
+		err = projectMgr.Update(func(state *projects.State) bool {
+			*state = incoming
+			return true
+		})
+		if err != nil {
+			log.Printf("projects: save error: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	})
+
+	mux.HandleFunc("POST /v1/projects/add", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "read error")
+			return
+		}
+
+		var req struct {
+			Remote string   `json:"remote"`
+			Paths  []string `json:"paths"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+
+		if len(req.Paths) == 0 {
+			writeError(w, http.StatusBadRequest, "bad_request", "paths required")
+			return
+		}
+
+		// Normalize inputs.
+		for i, p := range req.Paths {
+			req.Paths[i] = projects.NormalizePath(p)
+		}
+		if req.Remote != "" {
+			req.Remote = projects.NormalizeRemote(req.Remote)
+		}
+
+		// Derive slug: prefer remote repo name, fall back to first path basename.
+		var slug string
+		if req.Remote != "" {
+			slug = projects.SlugFromRemote(req.Remote)
+		} else {
+			slug = projects.SlugFromPath(req.Paths[0])
+		}
+
+		var item projects.Item
+		err = projectMgr.Update(func(state *projects.State) bool {
+			slug = projects.UniqueSlug(slug, state.Items)
+			item = projects.Item{
+				Slug:   slug,
+				Remote: req.Remote,
+				Paths:  req.Paths,
+			}
+			state.Items = append(state.Items, item)
+			if err := state.Validate(); err != nil {
+				log.Printf("projects: add validation error: %v", err)
+				return false
+			}
+			return true
+		})
+		if err != nil {
+			log.Printf("projects: add error: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
+			return
+		}
+		// Populate the new project's sessions array with alive matches
+		// immediately, so the frontend sees them on the first fetch.
+		projectMgr.AutoAssignAllAlive(buildSessionInfos(sessions))
+		writeJSON(w, map[string]any{"ok": true, "data": item})
 	})
 
 	// ── Sessions ──
@@ -667,6 +835,12 @@ func serve(stderr io.Writer) int {
 					log.Printf("dismiss: %s: runner kill failed: %v", sessionID, err)
 				}
 			}
+			// Clean up shell state file before removing from store.
+			if sess.Kind == "shell" {
+				adapters.RemoveShellStateFile(sessionID, sess.Cwd)
+			}
+			// Remove session from its project's sessions array.
+			projectMgr.DismissSession(sessionID, sess.ResumeKey)
 			// Remove from store — broadcasts session-remove to all clients.
 			sessions.Remove(sessionID)
 			if subs != nil {
@@ -833,7 +1007,7 @@ func serve(stderr io.Writer) int {
 	}
 	tcpAddr = resolved
 
-	tok, err := authtoken.LoadOrCreate(paths.StateDir())
+	tok, err := authtoken.LoadOrCreate(stateDir)
 	if err != nil {
 		log.Fatalf("FATAL: %v", err)
 	}
@@ -907,7 +1081,7 @@ func serve(stderr io.Writer) int {
 		tsListener = tsauth.Start(tsauth.Config{
 			Hostname: cfg.Tailscale.Hostname,
 			Allow:    cfg.Tailscale.Allow,
-		}, paths.StateDir(), mux)
+		}, stateDir, mux)
 		defer tsListener.Shutdown()
 	}
 
@@ -1005,6 +1179,23 @@ func runAuth(stdout, stderr io.Writer) int {
 	_, _ = fmt.Fprintf(stdout, "\nOpen this URL to authenticate:\n  %s\n", url)
 
 	return 0
+}
+
+// buildSessionInfos converts store sessions to project SessionInfo structs.
+func buildSessionInfos(sessions *store.Store) []projects.SessionInfo {
+	list := sessions.List()
+	infos := make([]projects.SessionInfo, len(list))
+	for i, s := range list {
+		infos[i] = projects.SessionInfo{
+			ID:            s.ID,
+			Cwd:           s.Cwd,
+			WorkspaceRoot: s.WorkspaceRoot,
+			Remotes:       s.Remotes,
+			Alive:         s.Alive,
+			ResumeKey:     s.ResumeKey,
+		}
+	}
+	return infos
 }
 
 func sendSSE(w http.ResponseWriter, event string, payload any) {

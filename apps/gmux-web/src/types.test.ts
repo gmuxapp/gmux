@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest'
-import { groupByFolder, type Session } from './types'
+import {
+  groupByFolder,
+  matchSession,
+  buildProjectFolders,
+  normalizeRemote,
+  parseSessionPath,
+  sessionPath,
+  resolveSessionFromPath,
+  type Session,
+  type ProjectItem,
+} from './types'
 
 function makeSession(overrides: Partial<Session> & { id: string; cwd: string }): Session {
   return {
@@ -210,5 +220,255 @@ describe('groupByFolder', () => {
 
     const folders = groupByFolder(sessions)
     expect(folders.map(f => f.name)).toEqual(['working', 'alive', 'dead'])
+  })
+})
+
+// --- Project matching ---
+
+describe('matchSession', () => {
+  const projects: ProjectItem[] = [
+    { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/dev/gmux'] },
+    { slug: 'yapp', paths: ['/dev/yapp'] },
+  ]
+
+  it('matches by path (no remote) with longest prefix', () => {
+    const sess = makeSession({ id: 's1', cwd: '/dev/yapp/src' })
+    expect(matchSession(sess, projects)?.slug).toBe('yapp')
+  })
+
+  it('matches by remote URL', () => {
+    const sess = makeSession({
+      id: 's2', cwd: '/other',
+      remotes: { origin: 'git@github.com:gmuxapp/gmux.git' },
+    })
+    expect(matchSession(sess, projects)?.slug).toBe('gmux')
+  })
+
+  it('falls back to path matching when no remote matches', () => {
+    const sess = makeSession({ id: 's3', cwd: '/dev/yapp/deep' })
+    expect(matchSession(sess, projects)?.slug).toBe('yapp')
+  })
+
+  it('uses project paths when a session has no remotes', () => {
+    const sess = makeSession({ id: 's4', cwd: '/dev/gmux/src' })
+    expect(matchSession(sess, projects)?.slug).toBe('gmux')
+  })
+
+  it('returns null for unmatched sessions', () => {
+    const sess = makeSession({ id: 's5', cwd: '/other/place' })
+    expect(matchSession(sess, projects)).toBeNull()
+  })
+
+  it('lets remote-backed child projects beat a vague parent path', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'mg', paths: ['/home/mg'] },
+      { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/home/mg/dev/gmux'] },
+      { slug: 'dots', remote: 'github.com/mgabor3141/dots', paths: ['/home/mg/.local/share/chezmoi'] },
+    ]
+
+    const gmuxSession = makeSession({
+      id: 'g1',
+      cwd: '/home/mg/dev/gmux/src',
+      remotes: { origin: 'git@github.com:gmuxapp/gmux.git' },
+    })
+    expect(matchSession(gmuxSession, projects)?.slug).toBe('gmux')
+
+    const dotsSession = makeSession({
+      id: 'd1',
+      cwd: '/home/mg/.local/share/chezmoi',
+      remotes: { origin: 'git@github.com:mgabor3141/dots.git' },
+    })
+    expect(matchSession(dotsSession, projects)?.slug).toBe('dots')
+  })
+
+  it('keeps nested workspaces under the remote-matched project', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'teak', paths: ['/home/user/dev/gmux/.grove/teak'] },
+      { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/home/user/dev/gmux'] },
+    ]
+
+    const sess = makeSession({
+      id: 'w1',
+      cwd: '/home/user/dev/gmux/.grove/teak/src',
+      remotes: { origin: 'git@github.com:gmuxapp/gmux.git' },
+    })
+    expect(matchSession(sess, projects)?.slug).toBe('gmux')
+  })
+})
+
+describe('buildProjectFolders', () => {
+  it('builds folders in project order', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'beta', paths: ['/dev/beta'] },
+      { slug: 'alpha', paths: ['/dev/alpha'] },
+    ]
+    const sessions = [
+      makeSession({ id: 'a1', cwd: '/dev/alpha/src' }),
+      makeSession({ id: 'b1', cwd: '/dev/beta/src' }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    expect(folders.map(f => f.name)).toEqual(['beta', 'alpha'])
+  })
+
+  it('includes projects with no matching sessions', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'empty', paths: ['/dev/empty'] },
+    ]
+    const folders = buildProjectFolders(projects, [])
+    expect(folders).toHaveLength(1)
+    expect(folders[0].name).toBe('empty')
+    expect(folders[0].sessions).toHaveLength(0)
+  })
+
+  it('sets launchCwd from project paths', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'proj', paths: ['/dev/proj', '/dev/proj2'] },
+    ]
+    const folders = buildProjectFolders(projects, [])
+    expect(folders[0].launchCwd).toBe('/dev/proj')
+  })
+
+  it('excludes dead sessions not in the project sessions array', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'proj', paths: ['/dev/proj'], sessions: ['kept-id'] },
+    ]
+    const sessions = [
+      makeSession({ id: 'kept-id', cwd: '/dev/proj', alive: false, resumable: true }),
+      makeSession({ id: 'old-dead', cwd: '/dev/proj', alive: false, resumable: true }),
+      makeSession({ id: 'alive-1', cwd: '/dev/proj', alive: true }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    const ids = folders[0].sessions.map(s => s.id)
+    expect(ids).toContain('alive-1')   // alive: always shown
+    expect(ids).toContain('kept-id')   // dead but in array: shown
+    expect(ids).not.toContain('old-dead') // dead, not in array: hidden
+  })
+
+  it('matches dead sessions by resume_key in array', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'proj', paths: ['/dev/proj'], sessions: ['my-resume-key'] },
+    ]
+    const sessions = [
+      makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: false, resumable: true, resume_key: 'my-resume-key' }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    expect(folders[0].sessions).toHaveLength(1)
+  })
+
+  it('excludes dead sessions whose resume_key is not in the array', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'proj', paths: ['/dev/proj'], sessions: ['other-key'] },
+    ]
+    const sessions = [
+      makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: false, resumable: true, resume_key: 'my-resume-key' }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    expect(folders[0].sessions).toHaveLength(0)
+  })
+})
+
+// --- URL routing ---
+
+describe('parseSessionPath', () => {
+  it('parses full local path', () => {
+    expect(parseSessionPath('/gmux/pi/fix-auth')).toEqual({
+      project: 'gmux', adapter: 'pi', slug: 'fix-auth',
+    })
+  })
+
+  it('parses project-only path', () => {
+    expect(parseSessionPath('/gmux')).toEqual({ project: 'gmux' })
+  })
+
+  it('returns empty for root', () => {
+    expect(parseSessionPath('/')).toEqual({})
+  })
+
+  it('skips internal routes', () => {
+    expect(parseSessionPath('/_/input-diagnostics')).toEqual({})
+  })
+
+  it('parses @host segment as remote host', () => {
+    expect(parseSessionPath('/gmux/@desktop/pi/fix-auth')).toEqual({
+      project: 'gmux', host: 'desktop', adapter: 'pi', slug: 'fix-auth',
+    })
+  })
+
+  it('parses project + @host only', () => {
+    expect(parseSessionPath('/gmux/@server')).toEqual({
+      project: 'gmux', host: 'server',
+    })
+  })
+
+  it('parses project + @host + adapter', () => {
+    expect(parseSessionPath('/gmux/@server/pi')).toEqual({
+      project: 'gmux', host: 'server', adapter: 'pi',
+    })
+  })
+
+  it('does not treat non-@ second segment as host', () => {
+    expect(parseSessionPath('/gmux/pi')).toEqual({
+      project: 'gmux', adapter: 'pi',
+    })
+  })
+})
+
+describe('sessionPath', () => {
+  it('builds URL from project slug and session', () => {
+    expect(sessionPath('gmux', { kind: 'pi', slug: 'fix-auth', id: 'abc' }))
+      .toBe('/gmux/pi/fix-auth')
+  })
+
+  it('falls back to ID prefix when slug missing', () => {
+    expect(sessionPath('gmux', { kind: 'pi', id: 'abcdef12-3456-7890' }))
+      .toBe('/gmux/pi/abcdef12')
+  })
+})
+
+describe('resolveSessionFromPath', () => {
+  const projects: ProjectItem[] = [
+    { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/dev/gmux'] },
+  ]
+  const sessions = [
+    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
+      remotes: { origin: 'github.com/gmuxapp/gmux' } }),
+    makeSession({ id: 'sess-2', cwd: '/dev/gmux', kind: 'shell', slug: 'fish',
+      remotes: { origin: 'github.com/gmuxapp/gmux' } }),
+  ]
+
+  it('resolves full path to session ID', () => {
+    const id = resolveSessionFromPath(
+      { project: 'gmux', adapter: 'pi', slug: 'fix-auth' }, projects, sessions,
+    )
+    expect(id).toBe('sess-1')
+  })
+
+  it('resolves project-only to first alive session', () => {
+    const id = resolveSessionFromPath({ project: 'gmux' }, projects, sessions)
+    expect(id).toBe('sess-1')
+  })
+
+  it('returns null for unknown project', () => {
+    const id = resolveSessionFromPath({ project: 'nope' }, projects, sessions)
+    expect(id).toBeNull()
+  })
+})
+
+// --- Remote normalization ---
+
+describe('normalizeRemote', () => {
+  it('strips protocol and .git suffix', () => {
+    expect(normalizeRemote('https://github.com/org/repo.git'))
+      .toBe('github.com/org/repo')
+  })
+
+  it('converts SCP-style to slash', () => {
+    expect(normalizeRemote('git@github.com:org/repo.git'))
+      .toBe('github.com/org/repo')
+  })
+
+  it('handles plain URL', () => {
+    expect(normalizeRemote('github.com/org/repo'))
+      .toBe('github.com/org/repo')
   })
 })

@@ -1,3 +1,95 @@
+// --- URL routing ---
+
+/**
+ * Parse a URL path into project/host/adapter/slug segments.
+ *
+ * URL hierarchy:
+ *   /<project>/<adapter>/<slug>              (local)
+ *   /<project>/@<host>/<adapter>/<slug>       (remote, future)
+ *
+ * The @-prefix on the second segment distinguishes a remote host
+ * from an adapter name.
+ */
+export function parseSessionPath(path: string): {
+  project?: string
+  host?: string
+  adapter?: string
+  slug?: string
+} {
+  // Strip leading slash and split.
+  const parts = path.replace(/^\//, '').split('/').filter(Boolean)
+  if (parts.length === 0) return {}
+  // Skip internal routes.
+  if (parts[0] === '_') return {}
+  if (parts.length === 1) return { project: parts[0] }
+  // @-prefixed second segment is a remote host (future: aggregation).
+  if (parts[1].startsWith('@')) {
+    const host = parts[1].slice(1)
+    if (parts.length === 2) return { project: parts[0], host }
+    if (parts.length === 3) return { project: parts[0], host, adapter: parts[2] }
+    return { project: parts[0], host, adapter: parts[2], slug: parts[3] }
+  }
+  if (parts.length === 2) return { project: parts[0], adapter: parts[1] }
+  return { project: parts[0], adapter: parts[1], slug: parts[2] }
+}
+
+/** Build a URL path for a session within a project. */
+export function sessionPath(
+  projectSlug: string,
+  session: { kind: string; slug?: string; id: string },
+): string {
+  // Server always derives a slug, but defend against the brief window
+  // before the first SSE upsert arrives with the resolved slug.
+  const slug = session.slug || session.id.slice(0, 8)
+  return `/${projectSlug}/${session.kind}/${slug}`
+}
+
+/**
+ * Resolve a parsed URL path to a session ID.
+ * Returns null if no matching session is found.
+ */
+export function resolveSessionFromPath(
+  parsed: { project?: string; host?: string; adapter?: string; slug?: string },
+  projects: ProjectItem[],
+  sessions: Session[],
+): string | null {
+  if (!parsed.project) return null
+  // Remote host sessions are not yet supported (future: aggregation).
+  if (parsed.host) return null
+
+  // Find the project by slug.
+  const project = projects.find(p => p.slug === parsed.project)
+  if (!project) return null
+
+  // Match sessions to this project.
+  const projectSessions = sessions.filter(
+    s => matchSession(s, projects)?.slug === parsed.project,
+  )
+
+  if (!parsed.adapter) {
+    // /:project only - return first alive session, or first session.
+    const alive = projectSessions.find(s => s.alive)
+    return alive?.id ?? projectSessions[0]?.id ?? null
+  }
+
+  // Filter by adapter kind.
+  const adapterSessions = projectSessions.filter(s => s.kind === parsed.adapter)
+
+  if (!parsed.slug) {
+    // /:project/:adapter only - return first alive, or first.
+    const alive = adapterSessions.find(s => s.alive)
+    return alive?.id ?? adapterSessions[0]?.id ?? null
+  }
+
+  // Full match: /:project/:adapter/:slug
+  // Try exact slug match first, then prefix match on session ID.
+  const exact = adapterSessions.find(s => s.slug === parsed.slug)
+  if (exact) return exact.id
+
+  const byId = adapterSessions.find(s => s.id.startsWith(parsed.slug!))
+  return byId?.id ?? null
+}
+
 export interface SessionStatus {
   label: string
   working: boolean
@@ -25,13 +117,152 @@ export interface Session {
   socket_path: string
   terminal_cols?: number
   terminal_rows?: number
+  slug?: string
+  resume_key?: string
   stale?: boolean
 }
 
 export interface Folder {
-  name: string      // display name (basename of workspace root or cwd)
-  path: string      // workspace root path, or cwd if no workspace
+  name: string      // display name (project slug or derived name)
+  path: string      // project slug (used as key)
+  launchCwd: string // filesystem path for launching new sessions
   sessions: Session[]
+}
+
+// --- Project types (server-side state) ---
+
+export interface ProjectItem {
+  slug: string
+  remote?: string
+  paths: string[]
+  sessions?: string[] // managed by server; must be preserved in PUT
+}
+
+export interface DiscoveredProject {
+  suggested_slug: string
+  remote?: string
+  paths: string[]
+  session_count: number
+  active_count: number
+}
+
+// --- Remote normalization (mirrors Go NormalizeRemote) ---
+
+export function normalizeRemote(url: string): string {
+  for (const prefix of ['https://', 'http://', 'ssh://', 'git://']) {
+    if (url.startsWith(prefix)) { url = url.slice(prefix.length); break }
+  }
+  const at = url.indexOf('@')
+  if (at >= 0) url = url.slice(at + 1)
+  const colon = url.indexOf(':')
+  if (colon > 0 && !url.slice(0, colon).includes('/')) {
+    url = url.slice(0, colon) + '/' + url.slice(colon + 1)
+  }
+  return url.replace(/\.git$/, '').replace(/\/+$/, '')
+}
+
+// --- Project-session matching (mirrors Go State.Match) ---
+
+function pathUnder(candidate: string | undefined, base: string): boolean {
+  if (!candidate || !base) return false
+  if (candidate === base) return true
+  return candidate.startsWith(base + '/')
+}
+
+/**
+ * Returns the project that best matches a session, or null.
+ *
+ * Precedence (mirrors Go State.Match):
+ *  1. Remote-matched projects, by remote URL.
+ *  2. Path matches across all projects, longest prefix wins.
+ */
+export function matchSession(
+  session: Session,
+  projects: ProjectItem[],
+): ProjectItem | null {
+  // Phase 1: remote-matched projects.
+  if (session.remotes) {
+    for (const project of projects) {
+      if (!project.remote) continue
+      const normProjectRemote = normalizeRemote(project.remote)
+      for (const url of Object.values(session.remotes)) {
+        if (normalizeRemote(url) === normProjectRemote) {
+          return project
+        }
+      }
+    }
+  }
+
+  // Phase 2: any path match, longest prefix wins.
+  let best: ProjectItem | null = null
+  let bestLen = 0
+  for (const project of projects) {
+    for (const p of project.paths) {
+      if (pathUnder(session.cwd, p) || pathUnder(session.workspace_root, p)) {
+        if (p.length > bestLen) {
+          bestLen = p.length
+          best = project
+        }
+      }
+    }
+  }
+  return best
+}
+
+/**
+ * Build Folder[] from configured projects + live sessions.
+ * Each project becomes a folder with its matched sessions.
+ * Order follows the project list order (user-controlled).
+ */
+export function buildProjectFolders(
+  projects: ProjectItem[],
+  sessions: Session[],
+): Folder[] {
+  const buckets = new Map<string, Session[]>()
+  for (const project of projects) {
+    buckets.set(project.slug, [])
+  }
+
+  // Build a lookup of session keys per project for dead-session filtering.
+  // Alive sessions show by match rules (immediate, no auto-assign lag).
+  // Dead sessions only show if they're in the project's sessions array
+  // (i.e., they were alive while the project existed).
+  const arrayKeys = new Map<string, Set<string>>()
+  for (const project of projects) {
+    arrayKeys.set(project.slug, new Set(project.sessions ?? []))
+  }
+
+  for (const session of sessions) {
+    const matched = matchSession(session, projects)
+    if (!matched || !buckets.has(matched.slug)) continue
+
+    if (session.alive) {
+      buckets.get(matched.slug)!.push(session)
+    } else {
+      // Dead session: only include if it's in the project's sessions array.
+      const keys = arrayKeys.get(matched.slug)!
+      const key = session.resume_key || session.id
+      if (keys.has(key) || keys.has(session.id)) {
+        buckets.get(matched.slug)!.push(session)
+      }
+    }
+  }
+
+  const folders: Folder[] = []
+  for (const project of projects) {
+    const matched = buckets.get(project.slug) || []
+    folders.push({
+      name: project.slug,
+      path: project.slug,
+      launchCwd: project.paths[0],
+      sessions: matched.sort((a, b) => {
+        if (a.cwd !== b.cwd) return a.cwd < b.cwd ? -1 : 1
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      }),
+    })
+  }
+
+  return folders
 }
 
 /**
@@ -126,6 +357,7 @@ export function groupByFolder(sessions: Session[]): Folder[] {
     folders.push({
       name,
       path,
+      launchCwd: groupSessions[0]?.workspace_root || groupSessions[0]?.cwd || path,
       sessions: groupSessions.sort((a, b) => {
         if (a.cwd !== b.cwd) return a.cwd < b.cwd ? -1 : 1
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
