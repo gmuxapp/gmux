@@ -22,9 +22,69 @@ import (
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
-	"github.com/vito/midterm"
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/vt"
 	"nhooyr.io/websocket"
 )
+
+// maxScrollback is the number of lines kept in the virtual terminal's
+// scrollback buffer. Lines older than this are discarded.
+const maxScrollback = 2000
+
+func newScreen(cols, rows int, cursorCb func(visible bool)) *vt.Emulator {
+	// Default to 80x24 when launched non-interactively (no terminal).
+	// The first resize from a connecting client will set the real size.
+	if cols <= 0 {
+		cols = 80
+	}
+	if rows <= 0 {
+		rows = 24
+	}
+	e := vt.NewEmulator(cols, rows)
+	e.SetScrollbackSize(maxScrollback)
+	e.SetCallbacks(vt.Callbacks{
+		CursorVisibility: cursorCb,
+	})
+	// The emulator writes responses (e.g. DSR cursor position reports)
+	// to an internal pipe. If nothing reads them, Write blocks. We don't
+	// need the responses, so drain them in the background.
+	go io.Copy(io.Discard, e)
+	return e
+}
+
+// renderScreen produces the ANSI snapshot: scrollback lines followed by
+// the visible screen. The scrollback gives reconnecting clients context
+// (previous output they can scroll up to). The visible screen is rendered
+// row-by-row via CellAt (not Render()) because the emulator's internal
+// buffer can grow beyond the declared height. Rows are joined with \r\n
+// since bare \n wouldn't return the cursor to column 0.
+func renderScreen(e *vt.Emulator) string {
+	var sb strings.Builder
+
+	// Scrollback: lines that scrolled off the top of the screen.
+	if scrollback := e.Scrollback(); scrollback != nil {
+		for _, line := range scrollback.Lines() {
+			sb.WriteString(line.Render())
+			sb.WriteString("\r\n")
+		}
+	}
+
+	// Visible screen.
+	w, h := e.Width(), e.Height()
+	for y := 0; y < h; y++ {
+		if y > 0 {
+			sb.WriteString("\r\n")
+		}
+		line := make(uv.Line, w)
+		for x := 0; x < w; x++ {
+			if c := e.CellAt(x, y); c != nil {
+				line[x] = *c
+			}
+		}
+		sb.WriteString(line.Render())
+	}
+	return sb.String()
+}
 
 // ResizeMsg is the JSON message clients send to resize the terminal.
 type ResizeMsg struct {
@@ -43,15 +103,16 @@ type Server struct {
 	ptmx     *os.File
 	sockPath string
 	listener net.Listener
-	screen   *midterm.Terminal // virtual terminal for replay snapshots (guarded by mu)
-	adapter  adapter.Adapter
-	state    *session.State
+	screen       *vt.Emulator // virtual terminal for replay snapshots (guarded by mu)
+	adapter      adapter.Adapter
+	state        *session.State
 
-	mu       sync.Mutex
-	clients  map[*wsClient]struct{}
-	localOut io.Writer // optional local terminal output sink
-	ptyCols  uint16    // last applied PTY cols (guarded by mu)
-	ptyRows  uint16    // last applied PTY rows (guarded by mu)
+	mu           sync.Mutex
+	clients      map[*wsClient]struct{}
+	localOut     io.Writer // optional local terminal output sink
+	ptyCols      uint16    // last applied PTY cols (guarded by mu)
+	ptyRows      uint16    // last applied PTY rows (guarded by mu)
+	cursorHidden bool      // tracks DECTCEM via callback (guarded by mu)
 
 	done    chan struct{} // closed when child exits
 	ptyDone chan struct{} // closed when readPTY finishes draining
@@ -138,7 +199,7 @@ func New(cfg Config) (*Server, error) {
 		ptmx:       ptmx,
 		sockPath:   cfg.SocketPath,
 		listener:   listener,
-		screen:     midterm.NewTerminal(int(cfg.Rows), int(cfg.Cols)),
+		screen:     nil, // set below after s is constructed
 		adapter:    cfg.Adapter,
 		state:      cfg.State,
 		clients:    make(map[*wsClient]struct{}),
@@ -147,6 +208,11 @@ func New(cfg Config) (*Server, error) {
 		done:       make(chan struct{}),
 		ptyDone:    make(chan struct{}),
 	}
+
+	// The callback fires under s.mu (held during s.screen.Write).
+	s.screen = newScreen(int(cfg.Cols), int(cfg.Rows), func(visible bool) {
+		s.cursorHidden = !visible
+	})
 
 	go s.readPTY()
 	go s.waitChild()
@@ -210,6 +276,7 @@ func (s *Server) Shutdown() {
 	os.Remove(s.sockPath)
 
 	s.mu.Lock()
+	s.screen.Close() // unblocks the DSR drain goroutine
 	for c := range s.clients {
 		c.cancel()
 	}
@@ -262,33 +329,9 @@ func (s *Server) handleScrollbackText(w http.ResponseWriter, r *http.Request) {
 }
 
 // screenText returns the visible screen content as plain text.
-// Leading and trailing blank rows are omitted. Blank rows between
-// content are preserved.
 // Caller must hold s.mu.
 func (s *Server) screenText() string {
-	// Find the last non-empty row to avoid trailing blank lines.
-	lastRow := -1
-	for row := s.screen.Height - 1; row >= 0; row-- {
-		if strings.TrimRight(string(s.screen.Content[row]), " ") != "" {
-			lastRow = row
-			break
-		}
-	}
-	if lastRow < 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-	for row := 0; row <= lastRow; row++ {
-		line := strings.TrimRight(string(s.screen.Content[row]), " ")
-		if line != "" || sb.Len() > 0 {
-			if sb.Len() > 0 {
-				sb.WriteByte('\n')
-			}
-			sb.WriteString(line)
-		}
-	}
-	return sb.String()
+	return s.screen.String()
 }
 
 func (s *Server) handlePutStatus(w http.ResponseWriter, r *http.Request) {
@@ -397,26 +440,25 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Ordering guarantee: snapshot is always the first message the client
 	// receives, followed by any live data from subsequent readPTY cycles.
 	//
-	// The screen state comes from a virtual terminal (midterm) that
-	// processes every byte of PTY output. MarshalBinary serializes the
-	// full screen (content, colors, cursor position/visibility, scroll
-	// region) as standard ANSI sequences with absolute positioning.
+	// The screen state comes from a virtual terminal (charmbracelet/x/vt)
+	// that processes every byte of PTY output. renderScreen serializes
+	// the scrollback history followed by the visible screen as ANSI
+	// sequences with style diffing.
 	//
-	// Sequence: BSU → reset → screen state → ESU
+	// Sequence: BSU → reset → scrollback + screen → cursor → ESU
 	s.mu.Lock()
-	snapshot, marshalErr := s.screen.MarshalBinary()
-	if marshalErr != nil {
-		log.Printf("ptyserver: marshal screen: %v", marshalErr)
-		snapshot = nil
+	snapshot := renderScreen(s.screen)
+	cursorSeq := "\x1b[?25h" // show cursor (default)
+	if s.cursorHidden {
+		cursorSeq = "\x1b[?25l" // hide cursor
 	}
-	bsu := []byte("\x1b[?2026h")                     // Begin Synchronized Update
-	resetSeq := []byte("\x1b[r\x1b[H\x1b[2J\x1b[3J") // Reset scroll region + cursor home + erase display + erase scrollback
-	esu := []byte("\x1b[?2026l")                     // End Synchronized Update
-	frame := make([]byte, 0, len(bsu)+len(resetSeq)+len(snapshot)+len(esu))
-	frame = append(frame, bsu...)
-	frame = append(frame, resetSeq...)
-	frame = append(frame, snapshot...)
-	frame = append(frame, esu...)
+	// Position cursor at the emulator's current location.
+	pos := s.screen.CursorPosition()
+	cursorPos := fmt.Sprintf("\x1b[%d;%dH", pos.Y+1, pos.X+1)
+	bsu := "\x1b[?2026h"                     // Begin Synchronized Update
+	resetSeq := "\x1b[r\x1b[H\x1b[2J\x1b[3J" // Reset scroll region + cursor home + erase display + erase scrollback
+	esu := "\x1b[?2026l"                     // End Synchronized Update
+	frame := []byte(bsu + resetSeq + snapshot + cursorPos + cursorSeq + esu)
 	if err := client.write(websocket.MessageBinary, frame); err != nil {
 		s.mu.Unlock()
 		conn.Close(websocket.StatusNormalClosure, "")
@@ -476,7 +518,7 @@ func (s *Server) resize(msg ResizeMsg) {
 	if sizeChanged {
 		s.ptyCols = msg.Cols
 		s.ptyRows = msg.Rows
-		s.screen.Resize(int(msg.Rows), int(msg.Cols))
+		s.screen.Resize(int(msg.Cols), int(msg.Rows))
 	}
 	s.mu.Unlock()
 

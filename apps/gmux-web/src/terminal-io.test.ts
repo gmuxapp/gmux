@@ -398,19 +398,20 @@ describe('scroll preservation across BSU/ESU', () => {
     h.cleanup()
   })
 
-  it('snaps to bottom when close to bottom (within threshold)', () => {
+  it('preserves position when near but not at the bottom', () => {
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
     h.addLines(50) // baseY=50
-    h.userScrollTo(48) // within 3 lines of bottom (baseY=50)
+    h.userScrollTo(48) // 2 rows above bottom
 
     h.io.enqueue(wrapBSU('output'), 1)
     h.flushOne(5)
     h.flushRAF()
 
-    // Was within threshold of bottom, should snap to bottom
-    expect(h.scrollToBottomCalls.length).toBeGreaterThan(0)
-    expect(h.viewportY).toBe(h.baseY)
+    // Not exactly at bottom, so scroll position should be preserved.
+    // With the old <= 3 threshold this snapped to bottom; now it
+    // respects the user's explicit scroll-up.
+    expect(h.viewportY).toBe(48)
     h.cleanup()
   })
 
@@ -527,6 +528,51 @@ describe('scroll preservation across BSU/ESU', () => {
     // Resize should fire immediately (no BSU/ESU block, no pending rAF).
     expect(h.resizeCalls).toEqual([{ cols: 120, rows: 40 }])
 
+    h.cleanup()
+  })
+
+  it('forceNextScrollToBottom overrides scroll-up during replay', () => {
+    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
+    h.io.reset(1)
+    h.addLines(50) // baseY=50
+    h.userScrollTo(10) // user was scrolled way up (stale from previous session)
+
+    // Simulate what terminal.tsx does before enqueuing replay:
+    h.io.forceNextScrollToBottom()
+
+    h.io.enqueue(wrapBSU('replay-frame'), 1)
+    h.flushOne(5)
+    h.flushRAF()
+
+    // Even though the user was scrolled up, the force flag makes
+    // the BSU handler treat it as wasAtBottom=true.
+    expect(h.scrollToBottomCalls.length).toBeGreaterThan(0)
+    expect(h.viewportY).toBe(h.baseY)
+    h.cleanup()
+  })
+
+  it('forceNextScrollToBottom only applies to the next BSU, not subsequent ones', () => {
+    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
+    h.io.reset(1)
+    h.addLines(50)
+    h.userScrollTo(10)
+
+    h.io.forceNextScrollToBottom()
+
+    // First BSU: force-scrolls to bottom.
+    h.io.enqueue(wrapBSU('replay'), 1)
+    h.flushOne(5)
+    h.flushRAF()
+    expect(h.viewportY).toBe(h.baseY)
+
+    // User scrolls up again.
+    h.userScrollTo(20)
+
+    // Second BSU: force is consumed, so user's scroll is preserved.
+    h.io.enqueue(wrapBSU('live-update'), 1)
+    h.flushOne(3)
+    h.flushRAF()
+    expect(h.viewportY).toBe(20)
     h.cleanup()
   })
 

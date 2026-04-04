@@ -621,18 +621,16 @@ export function TerminalView({
         wsRef.current = null
       }
 
+      // Tell the scroll preservation layer to force-scroll-to-bottom for
+      // the replay frame. This avoids the "jump to top" bug: xterm's
+      // isUserScrolling flag can persist from the previous session, and
+      // \x1b[3J resets ybase/ydisp to 0 without clearing that flag. The
+      // force flag makes the BSU/ESU handler treat it as wasAtBottom=true
+      // regardless of the stale scroll state.
+      termIoRef.current?.forceNextScrollToBottom()
+
       const replay = createReplayBuffer((chunks) => {
         queueMany(chunks, () => {
-          // After replay completes, scroll to bottom and clear the loading overlay.
-          //
-          // Why scrollToBottom() is required:
-          // The replay frame contains \x1b[3J (erase scrollback) before replaying the
-          // ring buffer. xterm's \x1b[3J handler resets ybase/ydisp to 0 but does NOT
-          // reset the internal `isUserScrolling` flag. If the user was scrolled up before
-          // the connect/reconnect, `isUserScrolling` stays true. Then as replay content
-          // fills the buffer, ybase grows but ydisp stays at 0 — the user ends up pinned
-          // to the oldest scrollback content (the top). scrollToBottom() resets both
-          // ydisp = ybase and isUserScrolling = false, restoring the live view.
           termRef.current?.scrollToBottom()
           setTermLoading(false)
         })

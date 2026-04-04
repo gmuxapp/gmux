@@ -10,21 +10,30 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/vt"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/ringbuf"
-	"github.com/vito/midterm"
 )
 
-// renderScreen feeds data through a midterm VT100 emulator (rows x cols)
+// renderScreen feeds data through a VT100 emulator (rows x cols)
 // and returns all rows with trailing whitespace trimmed. The returned
 // slice always has exactly `rows` entries so that row positions are
 // preserved in comparisons.
 func renderScreen(data []byte, rows, cols int) []string {
-	vt := midterm.NewTerminal(rows, cols)
-	vt.Write(data)
+	e := vt.NewEmulator(cols, rows)
+	e.Write(data)
 
 	lines := make([]string, rows)
 	for row := range rows {
-		lines[row] = strings.TrimRight(string(vt.Content[row]), " ")
+		var sb strings.Builder
+		for col := range cols {
+			c := e.CellAt(col, row)
+			if c == nil || c.Content == "" {
+				sb.WriteByte(' ')
+			} else {
+				sb.WriteString(c.Content)
+			}
+		}
+		lines[row] = strings.TrimRight(sb.String(), " ")
 	}
 	return lines
 }
@@ -126,7 +135,7 @@ func assertScreensMatch(t *testing.T, raw, snap []byte, rows, cols int) {
 // new fixtures.
 //
 // Both the raw recording and the TermWriter scrollback snapshot are fed
-// through a VT100 emulator (vito/midterm). The resulting visible screens
+// through a VT100 emulator (charmbracelet/x/vt). The resulting visible screens
 // must match: what the user saw originally is what a reconnecting client
 // would see when replaying the scrollback.
 //

@@ -3,6 +3,7 @@ package ptyserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -556,7 +557,7 @@ func TestPTYServerCursorStateReplay(t *testing.T) {
 //
 // This is a regression test. The previous ring-buffer approach stored raw
 // PTY bytes; spinner frames filled the buffer and pushed out the actual
-// conversation content. The midterm-based approach processes the terminal
+// conversation content. The vterm-based approach processes the terminal
 // state, so spinners update one cell and leave everything else intact.
 func TestPTYServerSpinnerPreservesContent(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
@@ -642,4 +643,99 @@ func stringContains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// TestNewScreenDSRNonBlocking verifies that the virtual terminal does not
+// block when the child sends a Device Status Report request (ESC[6n).
+// Fish shell sends DSR on startup to detect cursor position. Without the
+// response-drain goroutine, Write blocks forever because the emulator
+// writes the response to an internal pipe that nobody reads.
+func TestNewScreenDSRNonBlocking(t *testing.T) {
+	screen := newScreen(80, 24, func(bool) {})
+	defer screen.Close()
+
+	done := make(chan struct{})
+	go func() {
+		// Simulates fish startup: prompt text, then DSR, then more text.
+		screen.Write([]byte("hello \x1b[6n world"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// OK: Write returned without blocking.
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write blocked on DSR; response-drain goroutine not working")
+	}
+}
+
+// TestRenderScreenIncludesScrollback verifies that renderScreen includes
+// lines that scrolled off the top of the screen, not just the visible rows.
+func TestRenderScreenIncludesScrollback(t *testing.T) {
+	screen := newScreen(80, 5, func(bool) {})
+	defer screen.Close()
+
+	// Write 10 lines through a 5-row terminal: lines 1-5 scroll off,
+	// lines 6-10 remain visible.
+	for i := 1; i <= 10; i++ {
+		fmt.Fprintf(screen, "Line-%02d\r\n", i)
+	}
+
+	result := renderScreen(screen)
+
+	for i := 1; i <= 10; i++ {
+		want := fmt.Sprintf("Line-%02d", i)
+		if !stringContains(result, want) {
+			t.Errorf("snapshot missing %q", want)
+		}
+	}
+}
+
+// TestRenderScreenLineCount verifies that the snapshot for a partially
+// filled screen has exactly Height-1 CRLF separators (no extra blank rows
+// from buffer growth) and that adding scrollback increases the total.
+func TestRenderScreenLineCount(t *testing.T) {
+	screen := newScreen(40, 5, func(bool) {})
+	defer screen.Close()
+
+	// Write 3 short lines, staying within the 5-row screen.
+	for i := 1; i <= 3; i++ {
+		fmt.Fprintf(screen, "\x1b[%d;1HRow-%d", i, i)
+	}
+
+	result := renderScreen(screen)
+	// 5 visible rows joined by 4 CRLFs, no scrollback.
+	crlfs := countOccurrences(result, "\r\n")
+	if crlfs != 4 {
+		t.Errorf("expected 4 CRLFs (5 visible rows), got %d", crlfs)
+	}
+
+	// Now push content into scrollback: write 10 lines through a 5-row terminal.
+	screen2 := newScreen(40, 5, func(bool) {})
+	defer screen2.Close()
+	for i := 1; i <= 10; i++ {
+		fmt.Fprintf(screen2, "Line-%02d\r\n", i)
+	}
+
+	result2 := renderScreen(screen2)
+	// 6 scrollback lines (the trailing \r\n after Line-10 scrolls one
+	// extra line off, so lines 1-6 end up in scrollback, each followed
+	// by CRLF) + 4 CRLFs between 5 visible rows = 10.
+	gotCRLFs := countOccurrences(result2, "\r\n")
+	if gotCRLFs < 5 {
+		t.Errorf("expected scrollback to increase CRLF count beyond 4, got %d", gotCRLFs)
+	}
+	if gotCRLFs > 4+10 {
+		t.Errorf("CRLF count unreasonably high: %d (buffer growth beyond terminal bounds?)", gotCRLFs)
+	}
+}
+
+func countOccurrences(s, sub string) int {
+	n := 0
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			n++
+		}
+	}
+	return n
 }

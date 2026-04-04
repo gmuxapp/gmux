@@ -28,6 +28,8 @@ interface QueueItem {
 
 export interface TerminalIO {
   reset(epoch: number): void
+  /** Mark the next BSU/ESU block as a replay: scroll to bottom unconditionally. */
+  forceNextScrollToBottom(): void
   enqueue(data: Uint8Array, epoch: number, onWritten?: () => void): void
   enqueueMany(chunks: Uint8Array[], epoch: number, onWritten?: () => void): void
   requestResize(size: TerminalSize, epoch: number): void
@@ -59,6 +61,11 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
   let savedScroll: { wasAtBottom: boolean } | null = null
   let restoreRAF: number | null = null
 
+  // When true, the next BSU/ESU block will scroll to bottom unconditionally
+  // instead of trying to preserve scroll position. Set during replay so the
+  // initial snapshot always lands at the bottom.
+  let forceScrollToBottom = false
+
   const dropStaleFront = () => {
     while (queue.length && queue[0].epoch !== currentEpoch) {
       queue.shift()
@@ -72,8 +79,16 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
   const maybeSaveScroll = (data: Uint8Array): void => {
     if (!scroll || savedScroll) return // already saved, or no accessor
     if (startsWith(data, BSU) || containsSequence(data, BSU)) {
-      const { viewportY, baseY } = scroll.getState()
-      savedScroll = { wasAtBottom: baseY - viewportY <= 3 }
+      if (forceScrollToBottom) {
+        savedScroll = { wasAtBottom: true }
+        forceScrollToBottom = false
+      } else {
+        const { viewportY, baseY } = scroll.getState()
+        // Strict equality: only consider the user "at bottom" if the
+        // viewport is exactly at the end. A loose threshold (e.g. <= 3)
+        // would fight the user's scroll intent during rapid TUI redraws.
+        savedScroll = { wasAtBottom: viewportY >= baseY }
+      }
     }
   }
 
@@ -107,8 +122,7 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
     restoreRAF = requestAnimationFrame(() => {
       restoreRAF = null
       const { viewportY, baseY } = scroll.getState()
-      const currentlyAtBottom = baseY - viewportY <= 3
-      if (snap.wasAtBottom || currentlyAtBottom) {
+      if (snap.wasAtBottom || viewportY >= baseY) {
         // Was at bottom before BSU, or user/code scrolled to bottom during
         // the BSU block — stay there.
         scroll.scrollToBottom()
@@ -165,10 +179,15 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
       writeInFlight = false
       pendingResize = null
       savedScroll = null
+      forceScrollToBottom = false
       if (restoreRAF !== null) {
         cancelAnimationFrame(restoreRAF)
         restoreRAF = null
       }
+    },
+
+    forceNextScrollToBottom() {
+      forceScrollToBottom = true
     },
 
     enqueue(data: Uint8Array, epoch: number, onWritten?: () => void) {

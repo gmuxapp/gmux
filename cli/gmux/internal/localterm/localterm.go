@@ -36,12 +36,17 @@ func IsInteractive() bool {
 }
 
 // TerminalSize returns the current terminal dimensions.
+// It tries stdin, stdout, and stderr in order, since background
+// processes may have stdin redirected to /dev/null.
 func TerminalSize() (cols, rows uint16, err error) {
-	w, h, err := term.GetSize(int(os.Stdin.Fd()))
-	if err != nil {
-		return 0, 0, err
+	for _, f := range []*os.File{os.Stdin, os.Stdout, os.Stderr} {
+		w, h, e := term.GetSize(int(f.Fd()))
+		if e == nil {
+			return uint16(w), uint16(h), nil
+		}
+		err = e
 	}
-	return uint16(w), uint16(h), nil
+	return 0, 0, err
 }
 
 // Config for creating a local terminal attachment.

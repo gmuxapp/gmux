@@ -179,11 +179,13 @@ func main() {
 		Adapter:    a,
 		State:      state,
 	}
-	if interactive {
-		if cols, rows, err := localterm.TerminalSize(); err == nil {
-			ptyCfg.Cols = cols
-			ptyCfg.Rows = rows
-		}
+	// Always try to inherit terminal dimensions from the parent.
+	// Even non-interactive launches (background, piped) benefit from
+	// a real size: the PTY and virtual terminal start correctly sized
+	// instead of falling back to 80x24.
+	if cols, rows, err := localterm.TerminalSize(); err == nil {
+		ptyCfg.Cols = cols
+		ptyCfg.Rows = rows
 	}
 
 	if !interactive {
