@@ -363,6 +363,19 @@ export function TerminalView({
       setScrolledUp(buf.baseY - buf.viewportY > SCROLL_THRESHOLD)
     })
 
+    // Take over resize when the terminal gains focus (user clicks it or
+    // tabs to it). This is the moment the user signals intent to interact
+    // through the browser, so we can safely resize the PTY to fit.
+    const handleTermFocus = () => {
+      const vp = viewportSizeRef.current
+      const pty = ptySizeRef.current
+      // Already in sync, nothing to do.
+      if (vp && pty && vp.cols === pty.cols && vp.rows === pty.rows) return
+      fitAndResize()
+    }
+    const textarea = term.textarea
+    textarea?.addEventListener('focus', handleTermFocus)
+
     const handleGlobalKeydown = (ev: KeyboardEvent) => {
       const tag = (ev.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
@@ -549,6 +562,7 @@ export function TerminalView({
       osc52Disposable.dispose()
       dataDisposable.dispose()
       scrollDisposable.dispose()
+      textarea?.removeEventListener('focus', handleTermFocus)
       setScrolledUp(false)
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       wsRef.current?.close()
@@ -633,15 +647,25 @@ export function TerminalView({
         attempt = 0
         setWsState('open')
 
-        // Take over resize on connect — this device is clearly the one
-        // the user is actively interacting with. Set both viewportSize and
-        // ptySize to the same value so we're "in sync" from the start.
+        // Measure what this viewport can display.
         const t = termRef.current
         const s = shellRef.current
         if (t && s) {
           const dims = measureTerminalFit(t, s)
           setViewportSize(dims); viewportSizeRef.current = dims
-          if (dims) {
+
+          const sess = currentSessionRef.current
+          if (sess.terminal_cols && sess.terminal_rows) {
+            // Session already has a PTY size (a local terminal or another
+            // client is driving). Start passive: render xterm at the
+            // runner's actual size. If sizes differ, the pill appears.
+            // The user takes over by clicking the pill or focusing.
+            const pty = { cols: sess.terminal_cols, rows: sess.terminal_rows }
+            setPtySize(pty); ptySizeRef.current = pty
+            queueResize(pty)
+          } else if (dims) {
+            // No existing PTY size (session launched from the UI, or
+            // no one has sized it yet). Take over immediately.
             setPtySize(dims); ptySizeRef.current = dims
             queueResize(dims)
             announceResize(ws, dims)
@@ -729,9 +753,8 @@ export function TerminalView({
   }, [queueData, queueMany, queueResize, session.id])
 
   // Pill is purely derived from size mismatch. No driving guard needed:
-  // fitAndResize and ws.onopen both set ptySize = viewportSize optimistically,
-  // so the pill self-clears the moment we start a resize — before the server
-  // echoes it back.
+  // fitAndResize sets ptySize = viewportSize optimistically, so the pill
+  // self-clears the moment we start a resize, before the server echoes it back.
   const showDisconnectedPill = wsState === 'lost'
   const showResizePill = !showDisconnectedPill
     && session.alive

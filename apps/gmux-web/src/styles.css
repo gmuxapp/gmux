@@ -424,14 +424,6 @@ body {
   min-width: 0;
 }
 
-.session-time {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-  line-height: 1.35;
-}
-
 .session-meta {
   display: flex;
   align-items: center;
@@ -473,13 +465,13 @@ body {
 }
 
 .session-item:hover .session-close-btn { opacity: 1; }
-.session-item:hover .session-time { opacity: 0; }
+
 .session-close-btn:hover { background: oklch(28% 0.015 250); color: var(--text); }
 
 /* On touch devices (no hover), show interactive buttons permanently */
 @media (hover: none) {
   .session-close-btn { opacity: 1; }
-  .session-time { opacity: 0; }
+
   .launch-container.folder-launch-btn { opacity: 1; }
   .mp-remove-btn { opacity: 1; }
   .mp-drag-handle { opacity: 1; }

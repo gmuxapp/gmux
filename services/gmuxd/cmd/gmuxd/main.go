@@ -819,6 +819,19 @@ func serve(stderr io.Writer) int {
 			}
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
 
+		case "read":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
+				return
+			}
+			sessions.Update(sessionID, func(sess *store.Session) {
+				sess.Unread = false
+				if sess.Status != nil && sess.Status.Error {
+					sess.Status.Error = false
+				}
+			})
+			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
+
 		case "dismiss":
 			if r.Method != http.MethodPost {
 				writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")

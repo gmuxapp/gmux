@@ -281,17 +281,6 @@ function LaunchButton({ cwd, className, onLaunch }: { cwd?: string; className?: 
 
 // ── Utilities ──
 
-function formatAge(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime()
-  const mins = Math.floor(ms / 60_000)
-  if (mins < 1) return 'now'
-  if (mins < 60) return `${mins}m`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h`
-  const days = Math.floor(hrs / 24)
-  return `${days}d`
-}
-
 // ── Components ──
 
 type DotState = 'working' | 'error' | 'unread' | 'active' | 'none'
@@ -335,7 +324,6 @@ function SessionItem({
       <div class="session-content">
         <div class="session-title-row">
           <span class="session-title">{session.title}</span>
-          <span class="session-time">{formatAge(session.created_at)}</span>
         </div>
         <div class="session-meta">
           {session.status?.label && (
@@ -576,11 +564,6 @@ function MainHeader({ session }: { session: Session | null }) {
       <div class="main-header-left">
         <div class="main-header-title">
           {session.title}
-          {session.stale && (
-            <span class="stale-badge" title="This session is running a different build of gmux. Restart the session to update.">
-              outdated
-            </span>
-          )}
         </div>
         <div class="main-header-meta">
           <span class="main-header-cwd">{shortCwd}</span>
@@ -596,6 +579,11 @@ function MainHeader({ session }: { session: Session | null }) {
             />
             {session.status.label}
           </div>
+        )}
+        {session.stale && (
+          <span class="stale-badge" title="This session is running a different build of gmux. Restart the session to update.">
+            outdated
+          </span>
         )}
         {session.kind && session.kind !== 'shell' && (
           <div class="main-header-kind" title="Adapter">{session.kind}</div>
@@ -1015,6 +1003,19 @@ function App() {
     const url = sessionPath(project.slug, sess)
     if (loc.path !== url) loc.route(url, true) // replace, don't create history entries
   }, [selectedId, sessions, sidebarVersion])
+
+  // Clear unread when selecting a session.
+  useEffect(() => {
+    if (!selectedId) return
+    const sess = sessions.find(s => s.id === selectedId)
+    if (!sess?.unread) return
+    // Clear locally for immediate UI feedback.
+    setSessions(prev => prev.map(s =>
+      s.id === selectedId ? { ...s, unread: false, status: s.status?.error ? { ...s.status, error: false } : s.status } : s
+    ))
+    // Persist to server.
+    fetch(`/v1/sessions/${selectedId}/read`, { method: 'POST' }).catch(() => {})
+  }, [selectedId])
 
   // --- Actions: send to backend, wait for SSE. No optimistic updates. ---
 
