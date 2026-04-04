@@ -3,8 +3,6 @@ package store
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -367,113 +365,33 @@ func NowUnix() float64 {
 
 // --- Slug auto-derivation ---
 
-var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
-
-// slugify converts a string to a URL-safe slug.
-func slugify(s string) string {
-	s = strings.ToLower(s)
-	s = slugRe.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	if s == "" {
-		return ""
-	}
-	// Cap length to keep URLs reasonable.
-	if len(s) > 40 {
-		s = s[:40]
-		s = strings.TrimRight(s, "-")
-	}
-	return s
-}
-
-// deriveSlug produces a fallback slug from session data when the adapter
-// doesn't provide one. Derivation priority:
-//  1. resume_key basename (stable across kill/resume)
-//  2. Command basename (meaningful for shell sessions)
-//  3. Short session ID prefix (last resort, not stable across resume)
-// autoIDRe matches strings that look like auto-generated IDs (UUIDs, hex
-// sequences, sess-* prefixes) and are not useful as human-readable slugs.
-var autoIDRe = regexp.MustCompile(`^([0-9a-f]{8}(-[0-9a-f]{4}){0,3}|sess-[0-9a-f]+|file-[0-9a-f]+)`)
-
-// slugBase strips a trailing uniqueness suffix (-2, -3, ...) from a slug.
-func slugBase(slug string) string {
-	i := strings.LastIndex(slug, "-")
-	if i < 0 {
-		return slug
-	}
-	suffix := slug[i+1:]
-	for _, c := range suffix {
-		if c < '0' || c > '9' {
-			return slug
-		}
-	}
-	return slug[:i]
-}
-
-func deriveSlug(sess Session) string {
-	// 1. resume_key basename (stable across kill/resume).
-	// Skip if it's a UUID; fall through to title-based derivation.
-	if sess.ResumeKey != "" {
-		base := filepath.Base(sess.ResumeKey)
-		if dot := strings.LastIndex(base, "."); dot > 0 {
-			base = base[:dot]
-		}
-		if slug := slugify(base); slug != "" && !autoIDRe.MatchString(slug) {
-			return slug
-		}
-	}
-
-	// 2. Adapter title (first user message for pi/claude, meaningful for most).
-	if sess.AdapterTitle != "" && sess.AdapterTitle != "(new)" {
-		if slug := slugify(sess.AdapterTitle); slug != "" {
-			return slug
-		}
-	}
-
-	// 3. Command: e.g. ["pytest", "--watch"] -> "pytest-watch".
-	if len(sess.Command) > 0 {
-		cmd := filepath.Base(sess.Command[0])
-		if len(sess.Command) > 1 {
-			cmd += " " + strings.Join(sess.Command[1:], " ")
-		}
-		if slug := slugify(cmd); slug != "" {
-			return slug
-		}
-	}
-
-	// 4. Short session ID (last resort, not stable across resume).
-	id := sess.ID
-	if len(id) > 12 {
-		id = id[:12]
-	}
-	return slugify(id)
-}
-
-// resolveSlug ensures a session has a unique slug within its kind.
-// If the session already has an adapter-provided slug, it's checked for
-// uniqueness. Otherwise a slug is derived from session data.
+// resolveSlug sets the session's URL slug and ensures resume_key stays
+// in sync (resume_key === slug is the invariant).
+//
+// When a resume_key is set (adapter-provided, human-readable), slug starts
+// from the resume_key. For sessions without a resume_key (fresh launches
+// before file attribution), slug falls back to the kind name.
+//
+// Uniqueness is enforced within a kind: "-2", "-3" suffixes are appended
+// when multiple sessions share the same base slug. The suffix is applied
+// to both slug and resume_key to maintain the invariant.
+//
 // Must be called with s.mu held.
 func (s *Store) resolveSlug(sess *Session) {
-	if sess.Slug == "" {
-		sess.Slug = deriveSlug(*sess)
-	} else {
-		// Re-derive if the current slug looks auto-derived and better info
-		// is available. Compare against what we'd produce without the title
-		// to detect stale slugs that should be upgraded.
-		noTitle := *sess
-		noTitle.AdapterTitle = ""
-		stale := deriveSlug(noTitle)
-		if slugBase(sess.Slug) == stale {
-			if better := deriveSlug(*sess); better != stale {
-				sess.Slug = better
-			}
+	if sess.ResumeKey != "" {
+		sess.Slug = sess.ResumeKey
+	} else if sess.Slug == "" || sess.Slug == sess.Kind || sess.Slug == "session" {
+		// No resume_key yet and no meaningful slug. Use kind as a
+		// temporary slug. When file attribution sets the resume_key,
+		// the slug will be updated on the next Upsert/Update.
+		if sess.Kind != "" {
+			sess.Slug = sess.Kind
+		} else {
+			sess.Slug = "session"
 		}
-	}
-	if sess.Slug == "" {
-		sess.Slug = "session"
 	}
 
 	// Ensure uniqueness within the same kind.
-	// Two sessions of the same kind shouldn't share a slug.
 	base := sess.Slug
 	for i := 2; ; i++ {
 		conflict := false
@@ -484,8 +402,13 @@ func (s *Store) resolveSlug(sess *Session) {
 			}
 		}
 		if !conflict {
-			return
+			break
 		}
 		sess.Slug = fmt.Sprintf("%s-%d", base, i)
+	}
+
+	// Keep resume_key === slug when resume_key is set.
+	if sess.ResumeKey != "" {
+		sess.ResumeKey = sess.Slug
 	}
 }

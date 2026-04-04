@@ -208,6 +208,14 @@ func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error)
 		info.Title = "(new)"
 	}
 
+	// Slug from the first user message (immutable), not custom-title
+	// (which the user can change). Falls back to display title.
+	if firstUserText != "" {
+		info.Slug = adapter.Slugify(truncateTitle(firstUserText, 80))
+	} else {
+		info.Slug = adapter.Slugify(info.Title)
+	}
+
 	return info, nil
 }
 

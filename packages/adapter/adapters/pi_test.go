@@ -135,6 +135,9 @@ func TestParseSessionFileFirstUserMessage(t *testing.T) {
 	if info.MessageCount != 2 {
 		t.Errorf("expected 2 messages, got %d", info.MessageCount)
 	}
+	if info.Slug != "fix-the-auth-bug-in-login-go" {
+		t.Errorf("expected slug from title, got %q", info.Slug)
+	}
 }
 
 func TestParseSessionFileNameOverrides(t *testing.T) {
@@ -146,6 +149,10 @@ func TestParseSessionFileNameOverrides(t *testing.T) {
 	info, _ := NewPi().ParseSessionFile(path)
 	if info.Title != "Auth refactor" {
 		t.Errorf("expected session_info name, got %q", info.Title)
+	}
+	// Slug derives from final title (session_info.name overrides user msg).
+	if info.Slug != "auth-refactor" {
+		t.Errorf("expected slug from session name, got %q", info.Slug)
 	}
 }
 

@@ -296,33 +296,42 @@ func (fm *FileMonitor) scanDirForSessions(dir string) {
 }
 
 // ResolveResumeCommand derives the resume command for a session that just
-// exited, using its ResumeKey (set during file attribution) and the
-// adapter's Resumer interface. Returns nil if the session isn't resumable.
+// exited, by re-parsing its attributed session file. Returns nil if the
+// session has no attribution or isn't resumable.
 func (fm *FileMonitor) ResolveResumeCommand(sess *store.Session) []string {
-	if sess.ResumeKey == "" {
-		return nil
-	}
 	a := findAdapter(sess.Kind)
 	if a == nil {
 		return nil
 	}
-	resumer, ok := a.(adapter.Resumer)
-	if !ok {
+	filer, hasFiler := a.(adapter.SessionFiler)
+	if !hasFiler {
+		return nil
+	}
+	resumer, hasResume := a.(adapter.Resumer)
+	if !hasResume {
 		return nil
 	}
 
-	// Build SessionFileInfo from what we know. Most adapters only need
-	// the ID; Pi also needs FilePath.
-	info := &adapter.SessionFileInfo{ID: sess.ResumeKey}
-
+	// Find the attributed file path for this session.
 	fm.mu.Lock()
+	var filePath string
 	for path, sid := range fm.attributions {
 		if sid == sess.ID {
-			info.FilePath = path
+			filePath = path
 			break
 		}
 	}
 	fm.mu.Unlock()
+
+	if filePath == "" {
+		return nil
+	}
+
+	// Re-parse the file to get the tool's real ID and metadata.
+	info, err := filer.ParseSessionFile(filePath)
+	if err != nil {
+		return nil
+	}
 
 	return resumer.ResumeCommand(info)
 }
@@ -520,8 +529,13 @@ func (fm *FileMonitor) updateActiveFileLocked(sessionID, filePath string) {
 		return
 	}
 
+	resumeKey := info.Slug
+	if resumeKey == "" {
+		resumeKey = adapter.Slugify(info.ID)
+	}
+
 	fm.store.Update(sessionID, func(sess *store.Session) {
-		sess.ResumeKey = info.ID
+		sess.ResumeKey = resumeKey
 	})
 }
 

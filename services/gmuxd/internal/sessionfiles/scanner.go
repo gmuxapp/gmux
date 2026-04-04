@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -55,9 +56,9 @@ func (sc *Scanner) Run(interval time.Duration, stop <-chan struct{}) {
 
 // Scan enumerates all session directories for all SessionFiler adapters,
 // parses each file, and upserts resumable entries into the store.
-// Already-known sessions (by resume_key) are skipped.
+// Sessions already in the store (alive or resumable) are skipped.
 func (sc *Scanner) Scan() {
-	existing := sc.existingResumeKeys()
+	processed := sc.knownToolIDs()
 
 	for _, a := range adapters.AllAdapters() {
 		sf, ok := a.(adapter.SessionFiler)
@@ -100,7 +101,7 @@ func (sc *Scanner) Scan() {
 				continue
 			}
 
-			if existing[info.ID] {
+			if processed[info.ID[:8]] {
 				continue
 			}
 
@@ -122,6 +123,14 @@ func (sc *Scanner) Scan() {
 			}
 
 			wsRoot := workspace.DetectRoot(cwd)
+
+			// ResumeKey uses the adapter-provided slug (title-derived,
+			// human-readable). Falls back to slugified tool ID.
+			resumeKey := info.Slug
+			if resumeKey == "" {
+				resumeKey = adapter.Slugify(info.ID)
+			}
+
 			sess := store.Session{
 				ID:            "file-" + info.ID[:8],
 				CreatedAt:     info.Created.UTC().Format(time.RFC3339),
@@ -132,28 +141,32 @@ func (sc *Scanner) Scan() {
 				Remotes:       workspace.DetectRemotes(wsRoot),
 				Alive:         false,
 				AdapterTitle:  info.Title,
-				ResumeKey:     info.ID,
+				ResumeKey:     resumeKey,
 				// Resumable is derived by Upsert from !Alive + Command.
 			}
 
 			sc.store.Upsert(sess)
-			existing[info.ID] = true
+			processed[info.ID[:8]] = true
 		}
 	}
 }
 
-// existingResumeKeys returns resume_keys that should be skipped.
-// Alive sessions and already-resumable sessions are skipped.
-// Dead sessions without a command (Resumable=false) are NOT skipped
-// so the scanner can re-derive their resume command.
-func (sc *Scanner) existingResumeKeys() map[string]bool {
-	keys := make(map[string]bool)
+// knownToolIDs returns tool-level session IDs that should not be
+// re-scanned. Built from file-scanned entries (ID prefix "file-") and
+// live/resumable sessions that have already been processed.
+func (sc *Scanner) knownToolIDs() map[string]bool {
+	ids := make(map[string]bool)
 	for _, s := range sc.store.List() {
-		if s.ResumeKey != "" && (s.Alive || s.Resumable) {
-			keys[s.ResumeKey] = true
+		if !s.Alive && !s.Resumable {
+			continue // dead without command — allow rescan
+		}
+		// file-scanned entries encode the tool ID prefix in their session ID.
+		if strings.HasPrefix(s.ID, "file-") {
+			// file-<first8> — we match info.ID[:8] against this.
+			ids[strings.TrimPrefix(s.ID, "file-")] = true
 		}
 	}
-	return keys
+	return ids
 }
 
 // PurgeStaleSessions removes dead sessions that have no resume_key and

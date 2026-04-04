@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
@@ -195,7 +196,10 @@ func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, 
 		if err != nil {
 			log.Printf("register: failed to write shell state file for %s: %v", newSess.ID, err)
 		} else {
-			newSess.ResumeKey = newSess.ID
+			newSess.ResumeKey = adapter.Slugify(filepath.Base(newSess.Cwd))
+			if newSess.ResumeKey == "" {
+				newSess.ResumeKey = "shell"
+			}
 			log.Printf("register: wrote shell state file %s", path)
 		}
 	}

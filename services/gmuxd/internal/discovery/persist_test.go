@@ -128,9 +128,9 @@ func TestPreSeededAttributionSkipsScrollback(t *testing.T) {
 	if sess.AdapterTitle != "fix the login bug" {
 		t.Errorf("expected title 'fix the login bug', got %q", sess.AdapterTitle)
 	}
-	// 2. ResumeKey was set from the file's session ID.
-	if sess.ResumeKey != "test-123" {
-		t.Errorf("expected resume_key 'test-123', got %q", sess.ResumeKey)
+	// 2. ResumeKey is the slug derived from the first user message.
+	if sess.ResumeKey != "fix-the-login-bug" {
+		t.Errorf("expected resume_key 'fix-the-login-bug', got %q", sess.ResumeKey)
 	}
 }
 

@@ -121,6 +121,7 @@ func (g *Shell) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) 
 	return &adapter.SessionFileInfo{
 		ID:       sf.ID,
 		Title:    g.CommandTitle(sf.Command),
+		Slug:     adapter.Slugify(filepath.Base(sf.Cwd)),
 		Cwd:      sf.Cwd,
 		Created:  sf.Created,
 		FilePath: path,

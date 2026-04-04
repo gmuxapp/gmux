@@ -190,6 +190,9 @@ func TestClaudeParseSessionFileFirstUserMessage(t *testing.T) {
 	if info.MessageCount != 2 {
 		t.Errorf("expected 2 messages, got %d", info.MessageCount)
 	}
+	if info.Slug != "fix-the-auth-bug-in-login-go" {
+		t.Errorf("expected slug from first user message, got %q", info.Slug)
+	}
 }
 
 func TestClaudeParseSessionFileCustomTitle(t *testing.T) {
@@ -201,6 +204,10 @@ func TestClaudeParseSessionFileCustomTitle(t *testing.T) {
 	info, _ := NewClaude().ParseSessionFile(path)
 	if info.Title != "Auth refactor" {
 		t.Errorf("expected custom title, got %q", info.Title)
+	}
+	// Slug uses first user message (immutable), not custom-title.
+	if info.Slug != "fix-the-bug" {
+		t.Errorf("expected slug from first user message, got %q", info.Slug)
 	}
 }
 

@@ -195,6 +195,8 @@ func (c *Codex) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) 
 		info.Title = "(new)"
 	}
 
+	info.Slug = adapter.Slugify(info.Title)
+
 	return info, nil
 }
 

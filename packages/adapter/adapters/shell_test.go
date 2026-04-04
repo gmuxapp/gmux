@@ -53,6 +53,10 @@ func TestShellWriteAndParseStateFile(t *testing.T) {
 	if info.FilePath != path {
 		t.Errorf("FilePath = %q, want %q", info.FilePath, path)
 	}
+	// Slug derived from cwd basename.
+	if info.Slug != "project" {
+		t.Errorf("Slug = %q, want %q", info.Slug, "project")
+	}
 }
 
 func TestShellCanResume(t *testing.T) {

@@ -106,8 +106,9 @@ func TestActiveFileTracking(t *testing.T) {
 	fm.updateActiveFileLocked("sess-1", file1)
 
 	sess, _ := s.Get("sess-1")
-	if sess.ResumeKey != "session-aaa" {
-		t.Fatalf("expected resume_key 'session-aaa', got %q", sess.ResumeKey)
+	// resume_key is now a slug derived from the first user message ("hello").
+	if sess.ResumeKey != "hello" {
+		t.Fatalf("expected resume_key 'hello', got %q", sess.ResumeKey)
 	}
 
 	// Create second file (simulating /new command).
@@ -122,15 +123,15 @@ func TestActiveFileTracking(t *testing.T) {
 	fm.updateActiveFileLocked("sess-1", file2)
 
 	sess, _ = s.Get("sess-1")
-	if sess.ResumeKey != "session-bbb" {
-		t.Fatalf("expected resume_key updated to 'session-bbb', got %q", sess.ResumeKey)
+	if sess.ResumeKey != "new-topic" {
+		t.Fatalf("expected resume_key updated to 'new-topic', got %q", sess.ResumeKey)
 	}
 
 	// Same file again — should be a no-op.
 	fm.updateActiveFileLocked("sess-1", file2)
 	sess, _ = s.Get("sess-1")
-	if sess.ResumeKey != "session-bbb" {
-		t.Fatalf("resume_key should still be 'session-bbb', got %q", sess.ResumeKey)
+	if sess.ResumeKey != "new-topic" {
+		t.Fatalf("resume_key should still be 'new-topic', got %q", sess.ResumeKey)
 	}
 }
 

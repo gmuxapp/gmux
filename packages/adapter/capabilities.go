@@ -6,6 +6,7 @@ import "time"
 type SessionFileInfo struct {
 	ID           string
 	Title        string
+	Slug         string // Human-readable, URL-safe session identity. Set by the adapter.
 	Cwd          string
 	Created      time.Time
 	MessageCount int

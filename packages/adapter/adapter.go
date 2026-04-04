@@ -3,7 +3,11 @@
 // Status events for the sidebar. Both gmux and gmuxd import this package.
 package adapter
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"regexp"
+	"strings"
+)
 
 // Status represents an application-reported status for the sidebar.
 type Status struct {
@@ -59,4 +63,22 @@ type Launcher struct {
 // BaseName extracts the base name of a command argument, stripping path.
 func BaseName(arg string) string {
 	return filepath.Base(arg)
+}
+
+var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+// Slugify converts a string to a URL-safe slug: lowercase, non-alphanum
+// runs replaced by hyphens, trimmed, capped at 40 characters.
+func Slugify(s string) string {
+	s = strings.ToLower(s)
+	s = slugRe.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if s == "" {
+		return ""
+	}
+	if len(s) > 40 {
+		s = s[:40]
+		s = strings.TrimRight(s, "-")
+	}
+	return s
 }
