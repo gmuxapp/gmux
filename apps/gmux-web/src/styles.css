@@ -366,6 +366,13 @@ body {
 .session-dot-indicator.active {
   background: transparent;
   border: 1.5px solid var(--active);
+  animation: subtle-pulse 3s ease-in-out infinite;
+}
+
+.session-dot-indicator.fading {
+  background: transparent;
+  border: 1.5px solid var(--active);
+  animation: dot-fade-out 800ms ease-out forwards;
 }
 
 .session-dot-indicator.unread {
@@ -395,6 +402,16 @@ body {
 /* Invisible placeholder to keep alignment when no dot */
 .session-dot-indicator.none {
   visibility: hidden;
+}
+
+.session-sleep-icon {
+  flex-shrink: 0;
+  width: 7px;  /* match dot indicator for title alignment */
+  height: 11px;
+  overflow: visible; /* SVG renders at natural aspect ratio beyond 7px */
+  margin-top: 3px;
+  color: var(--text-muted);
+  opacity: 0.4;
 }
 
 .session-content {
@@ -440,6 +457,11 @@ body {
 @keyframes subtle-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
+}
+
+@keyframes dot-fade-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
 }
 
 /* ── Close button on session items ── */
@@ -1519,6 +1541,8 @@ body {
      Pseudo-elements don't expand the hit-box, so taps outside the button
      border still pass through correctly. */
   .mobile-bottom-action.menu-btn.bg-working::after,
+  .mobile-bottom-action.menu-btn.bg-active::after,
+  .mobile-bottom-action.menu-btn.bg-fading::after,
   .mobile-bottom-action.menu-btn.bg-error::after,
   .mobile-bottom-action.menu-btn.bg-unread::after {
     content: '';
@@ -1541,6 +1565,12 @@ body {
     background: transparent;
     border: 1.5px solid var(--active);
     box-sizing: border-box;
+  }
+  .mobile-bottom-action.menu-btn.bg-fading::after {
+    background: transparent;
+    border: 1.5px solid var(--active);
+    box-sizing: border-box;
+    animation: dot-fade-out 800ms ease-out forwards;
   }
   .mobile-bottom-action.menu-btn.bg-error::after   { background: var(--status-error); }
   .mobile-bottom-action.menu-btn.bg-unread::after   { background: var(--unread); }
@@ -1625,6 +1655,8 @@ body {
     animation: none;
   }
   .session-dot-indicator.working,
+  .session-dot-indicator.active,
+  .session-dot-indicator.fading,
   .session-dot-indicator.error {
     animation: none;
   }

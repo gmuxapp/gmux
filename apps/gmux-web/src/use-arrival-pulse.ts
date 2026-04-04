@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
  * draws attention even though the aggregate state stays 'unread'.
  */
 export function useArrivalPulse(
-  currentState: 'working' | 'error' | 'unread' | 'active' | 'none',
+  currentState: 'working' | 'error' | 'unread' | 'active' | 'fading' | 'none',
   generation?: number,
 ): 'arriving' | null {
   const prevStateRef = useRef(currentState)

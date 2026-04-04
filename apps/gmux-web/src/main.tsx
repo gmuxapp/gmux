@@ -283,14 +283,15 @@ function LaunchButton({ cwd, className, onLaunch }: { cwd?: string; className?: 
 
 // ── Components ──
 
-type DotState = 'working' | 'error' | 'unread' | 'active' | 'none'
+type DotState = 'working' | 'error' | 'unread' | 'active' | 'fading' | 'none'
 
 /** Determine the dot indicator state for a session. */
-function sessionDotState(session: Session, isActive?: boolean): DotState {
+function sessionDotState(session: Session, isActive?: boolean, isFading?: boolean): DotState {
   if (session.alive && session.status?.error)   return 'error'
   if (session.alive && session.status?.working) return 'working'
   if (session.unread) return 'unread'
   if (isActive) return 'active'
+  if (isFading) return 'fading'
   return 'none'
 }
 
@@ -299,6 +300,7 @@ function SessionItem({
   selected,
   resuming,
   isActive,
+  isFading,
   onClick,
   onClose,
 }: {
@@ -306,13 +308,15 @@ function SessionItem({
   selected: boolean
   resuming?: boolean
   isActive?: boolean
+  isFading?: boolean
   onClick: () => void
   onClose?: () => void
 }) {
-  const rawDotState = resuming ? 'working' : sessionDotState(session, isActive)
-  // Error is an enhanced unread: viewing the session acknowledges it.
-  const dotState = (selected && rawDotState === 'error') ? 'none' : rawDotState
+  const rawDotState = resuming ? 'working' : sessionDotState(session, isActive, isFading)
+  // Nothing is "unread" if you're already looking at it.
+  const dotState = (selected && (rawDotState === 'error' || rawDotState === 'unread')) ? 'none' : rawDotState
   const arrival = useArrivalPulse(dotState)
+  const sleeping = !session.alive && session.resumable
 
   return (
     <div
@@ -320,7 +324,10 @@ function SessionItem({
       onClick={onClick}
       onAuxClick={(e) => { if (e.button === 1 && onClose) { e.preventDefault(); onClose() } }}
     >
-      <span class={`session-dot-indicator ${dotState}${arrival ? ` ${arrival}` : ''}`} />
+      {sleeping
+        ? <svg class="session-sleep-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
+        : <span class={`session-dot-indicator ${dotState}${arrival ? ` ${arrival}` : ''}`} />
+      }
       <div class="session-content">
         <div class="session-title-row">
           <span class="session-title">{session.title}</span>
@@ -349,6 +356,7 @@ function FolderGroup({
   selectedId,
   resumingId,
   isSessionActive,
+  isSessionFading,
   onSelect,
   onCloseSession,
 }: {
@@ -356,6 +364,7 @@ function FolderGroup({
   selectedId: string | null
   resumingId: string | null
   isSessionActive: (id: string) => boolean
+  isSessionFading: (id: string) => boolean
   onSelect: (id: string) => void
   onCloseSession: (session: Session) => void
 }) {
@@ -377,6 +386,7 @@ function FolderGroup({
             selected={selectedId === s.id}
             resuming={resumingId === s.id}
             isActive={isSessionActive(s.id)}
+            isFading={isSessionFading(s.id)}
             onClick={() => onSelect(s.id)}
             onClose={() => onCloseSession(s)}
           />
@@ -392,6 +402,7 @@ function Sidebar({
   selectedId,
   resumingId,
   isSessionActive,
+  isSessionFading,
   onSelect,
   onCloseSession,
   onManageProjects,
@@ -406,6 +417,7 @@ function Sidebar({
   selectedId: string | null
   resumingId: string | null
   isSessionActive: (id: string) => boolean
+  isSessionFading: (id: string) => boolean
   onSelect: (id: string) => void
   onCloseSession: (session: Session) => void
   onManageProjects: () => void
@@ -447,6 +459,7 @@ function Sidebar({
               selectedId={selectedId}
               resumingId={resumingId}
               isSessionActive={isSessionActive}
+              isSessionFading={isSessionFading}
               onSelect={(id) => {
                 onSelect(id)
                 onClose()
@@ -813,7 +826,7 @@ function App() {
   const [launchers, setLaunchers] = useState<LauncherDef[]>([])
   const [health, setHealth] = useState<HealthData | null>(null)
   const [sidebarVersion, forceUpdate] = useState(0) // re-render on sidebar state change
-  const { isActive: isSessionActive, handleActivity, activityVersion } = useActivityTracker()
+  const { isActive: isSessionActive, isFading: isSessionFading, handleActivity, activityVersion } = useActivityTracker()
 
   // Ref for selectedId so effects can read the latest value without
   // adding it to their dependency arrays (avoids circular triggers).
@@ -959,8 +972,9 @@ function App() {
     if (others.some(s => s.status?.working)) return 'working'
     if (others.some(s => s.unread))          return 'unread'
     if (others.some(s => isSessionActive(s.id))) return 'active'
+    if (others.some(s => isSessionFading(s.id))) return 'fading'
     return 'none'
-  }, [sessions, selectedId, isSessionActive, activityVersion])
+  }, [sessions, selectedId, isSessionActive, isSessionFading, activityVersion])
 
   // Count of unread sessions (excluding selected). Used as a generation counter
   // so the hamburger badge re-animates when a new session becomes unread.
@@ -1044,6 +1058,9 @@ function App() {
     setSelectedId(id)
     setCtrlArmed(false)
     setAltArmed(false)
+    // Focus the terminal so the user can type immediately.
+    // requestAnimationFrame lets React flush the state update first.
+    requestAnimationFrame(() => terminalFocusRef.current?.())
   }, [sessions])
 
   // When a resumed session comes alive, select it.
@@ -1080,6 +1097,8 @@ function App() {
 
   const handleTerminalFocusReady = useCallback((focus: (() => void) | null) => {
     terminalFocusRef.current = focus
+    // Auto-focus the terminal as soon as it becomes ready.
+    focus?.()
   }, [])
 
   const handleFocusTerminal = useCallback(() => {
@@ -1212,6 +1231,7 @@ function App() {
         selectedId={selectedId}
         resumingId={resumingId}
         isSessionActive={isSessionActive}
+        isSessionFading={isSessionFading}
         onSelect={handleSelect}
         onCloseSession={handleCloseSession}
         onManageProjects={() => { setSidebarOpen(false); setManageProjectsOpen(true) }}
