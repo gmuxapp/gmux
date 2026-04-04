@@ -15,7 +15,7 @@ cat /tmp/gmuxd.log
 
 Common causes:
 
-- **Port already in use** — something else is on port 8790. Change it in `~/.config/gmux/config.toml` (`port = 9999`).
+- **Port already in use** — something else is on port 8790. Change it in `~/.config/gmux/host.toml` (`port = 9999`).
 - **Config file error** — gmuxd refuses to start with unknown keys or invalid values. The log will say which key. See [Configuration](/configuration).
 - **`gmuxd` not in PATH** — `gmux` looks for `gmuxd` as a sibling binary first, then in `PATH`. Make sure both are installed together (e.g. via `brew install gmuxapp/tap/gmux`).
 

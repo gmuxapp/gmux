@@ -79,7 +79,7 @@ func StartGmuxd(t *testing.T) *Gmuxd {
 	// Write config with the chosen port.
 	cfgDir := filepath.Join(configDir, "gmux")
 	os.MkdirAll(cfgDir, 0o755)
-	os.WriteFile(filepath.Join(cfgDir, "config.toml"),
+	os.WriteFile(filepath.Join(cfgDir, "host.toml"),
 		[]byte(fmt.Sprintf("port = %d\n", port)), 0o644)
 
 	ctx, cancel := context.WithCancel(context.Background())

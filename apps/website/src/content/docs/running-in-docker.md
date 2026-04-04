@@ -101,7 +101,7 @@ mkdir -p data/{workspace,gmux-config,gmux-state}
 ### 2. Configure gmux
 
 ```bash
-cat > data/gmux-config/config.toml << 'EOF'
+cat > data/gmux-config/host.toml << 'EOF'
 [tailscale]
 enabled = true
 hostname = "dev"
@@ -171,12 +171,12 @@ The overlay mounts for gmux config and state ensure the container has its own Ta
 Run separate containers for different projects. Each gets its own Tailscale hostname:
 
 ```bash
-# data/project-a/gmux-config/config.toml
+# data/project-a/gmux-config/host.toml
 [tailscale]
 enabled = true
 hostname = "project-a"
 
-# data/project-b/gmux-config/config.toml
+# data/project-b/gmux-config/host.toml
 [tailscale]
 enabled = true
 hostname = "project-b"

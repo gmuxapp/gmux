@@ -65,7 +65,7 @@ func TestEndToEnd(t *testing.T) {
 	configDir := t.TempDir()
 	cfgDir := filepath.Join(configDir, "gmux")
 	os.MkdirAll(cfgDir, 0o755)
-	os.WriteFile(filepath.Join(cfgDir, "config.toml"),
+	os.WriteFile(filepath.Join(cfgDir, "host.toml"),
 		[]byte(fmt.Sprintf("port = %d\n", port)), 0o644)
 
 	// ── Start gmuxd ──

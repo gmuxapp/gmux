@@ -87,7 +87,7 @@ There is no unauthenticated TCP listener. All TCP connections require a bearer t
 
 ## Config validation
 
-The config file (`~/.config/gmux/config.toml`) is strictly validated at startup. gmuxd refuses to start if:
+The config file (`~/.config/gmux/host.toml`) is strictly validated at startup. gmuxd refuses to start if:
 
 - **Unknown keys** are present — a typo like `alow` instead of `allow` would silently result in a default (empty) allow list. Unknown keys are a hard error.
 - **Allow entries don't look like login names** — entries without `@` are rejected (e.g. `"not-a-login"` instead of `"user@github"`).

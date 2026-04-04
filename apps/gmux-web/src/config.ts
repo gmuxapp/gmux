@@ -2,11 +2,11 @@
  * User-configurable terminal settings.
  *
  * Three config files live in ~/.config/gmux/:
- *   - config.toml     — gmuxd behavior (port, network, tailscale)
- *   - theme.jsonc      — terminal appearance (colors, font, cursor, scrollback)
- *   - keybinds.jsonc   — key → action mappings
+ *   - host.toml       — gmuxd behavior (port, network, tailscale)
+ *   - settings.jsonc   — frontend preferences (terminal options, keybinds, UI prefs)
+ *   - theme.jsonc      — terminal color palette (drop-in Windows Terminal theme compat)
  *
- * gmuxd reads the JSONC files from disk and serves them via GET /v1/terminal-config.
+ * gmuxd reads the JSONC files from disk and serves them via GET /v1/frontend-config.
  * This module fetches, validates, merges with defaults, and produces resolved
  * objects ready for xterm.js and the keyboard handler.
  */
@@ -23,40 +23,15 @@ export const IS_MAC = typeof navigator !== 'undefined' &&
   /mac|iphone|ipad|ipod/i.test(navigator.platform ?? '')
 export const SECONDARY_MOD: 'meta' | 'ctrl' = IS_MAC ? 'meta' : 'ctrl'
 
-// ── Theme config ──
-
-/** User-facing schema for theme.jsonc. All fields optional; merged over defaults. */
-export interface ThemeConfig {
-  fontSize?: number
-  fontFamily?: string
-  fontWeight?: FontWeight
-  fontWeightBold?: FontWeight
-  lineHeight?: number
-  letterSpacing?: number
-  cursorStyle?: 'block' | 'underline' | 'bar'
-  cursorBlink?: boolean
-  cursorInactiveStyle?: 'outline' | 'block' | 'bar' | 'underline' | 'none'
-  cursorWidth?: number
-  scrollback?: number
-  scrollSensitivity?: number
-  fastScrollSensitivity?: number
-  smoothScrollDuration?: number
-  drawBoldTextInBrightColors?: boolean
-  minimumContrastRatio?: number
-  macOptionIsMeta?: boolean
-  wordSeparator?: string
-  theme?: ThemeColors
-}
-
-type FontWeight = 'normal' | 'bold' | '100' | '200' | '300' | '400' | '500' | '600' | '700' | '800' | '900'
+// ── Theme config (colors only, WT theme compat) ──
 
 /**
- * Color keys accepted in the "theme" object.
+ * Color keys accepted in theme.jsonc.
  * Accepts both xterm.js names (magenta/brightMagenta) and Windows Terminal
  * names (purple/brightPurple) for drop-in compatibility with theme collections
  * like iTerm2-Color-Schemes' windowsterminal/ directory.
  */
-interface ThemeColors extends Partial<ITheme> {
+export interface ThemeColors extends Partial<ITheme> {
   /** Windows Terminal compat alias for magenta. */
   purple?: string
   /** Windows Terminal compat alias for brightMagenta. */
@@ -89,7 +64,46 @@ export const DEFAULT_THEME_COLORS: ITheme = {
   brightWhite: '#eceff4',
 }
 
-const DEFAULT_THEME_CONFIG: Required<Omit<ThemeConfig, 'theme'>> = {
+/**
+ * Normalize a theme colors object: map Windows Terminal names to xterm.js
+ * names and strip non-ITheme keys.
+ */
+export function normalizeThemeColors(raw: ThemeColors): Partial<ITheme> {
+  const { name: _name, purple, brightPurple, ...rest } = raw
+  if (purple && !rest.magenta) rest.magenta = purple
+  if (brightPurple && !rest.brightMagenta) rest.brightMagenta = brightPurple
+  return rest
+}
+
+// ── Settings config (terminal options + keybinds + UI prefs) ──
+
+/** User-facing schema for settings.jsonc. All fields optional; merged over defaults. */
+export interface SettingsConfig {
+  fontSize?: number
+  fontFamily?: string
+  fontWeight?: FontWeight
+  fontWeightBold?: FontWeight
+  lineHeight?: number
+  letterSpacing?: number
+  cursorStyle?: 'block' | 'underline' | 'bar'
+  cursorBlink?: boolean
+  cursorInactiveStyle?: 'outline' | 'block' | 'bar' | 'underline' | 'none'
+  cursorWidth?: number
+  scrollback?: number
+  scrollSensitivity?: number
+  fastScrollSensitivity?: number
+  smoothScrollDuration?: number
+  drawBoldTextInBrightColors?: boolean
+  minimumContrastRatio?: number
+  macOptionIsMeta?: boolean
+  macCommandIsCtrl?: boolean
+  wordSeparator?: string
+  keybinds?: Keybind[]
+}
+
+type FontWeight = 'normal' | 'bold' | '100' | '200' | '300' | '400' | '500' | '600' | '700' | '800' | '900'
+
+const DEFAULT_TERMINAL_OPTIONS: Required<Omit<SettingsConfig, 'keybinds' | 'macCommandIsCtrl'>> = {
   fontSize: 13,
   fontFamily: "'Fira Code', monospace",
   fontWeight: 'normal' as FontWeight,
@@ -110,22 +124,12 @@ const DEFAULT_THEME_CONFIG: Required<Omit<ThemeConfig, 'theme'>> = {
   wordSeparator: ' ()[]{}\',"`:;',
 }
 
-/** Known top-level keys in theme.jsonc. */
-const KNOWN_THEME_KEYS = new Set([
-  ...Object.keys(DEFAULT_THEME_CONFIG),
-  'theme',
+/** Known top-level keys in settings.jsonc. */
+const KNOWN_SETTINGS_KEYS = new Set([
+  ...Object.keys(DEFAULT_TERMINAL_OPTIONS),
+  'keybinds',
+  'macCommandIsCtrl',
 ])
-
-/**
- * Normalize a theme colors object: map Windows Terminal names to xterm.js
- * names and strip non-ITheme keys.
- */
-export function normalizeThemeColors(raw: ThemeColors): Partial<ITheme> {
-  const { name: _name, purple, brightPurple, ...rest } = raw
-  if (purple && !rest.magenta) rest.magenta = purple
-  if (brightPurple && !rest.brightMagenta) rest.brightMagenta = brightPurple
-  return rest
-}
 
 /** Clamp a number to [min, max]. */
 function clamp(value: number, min: number, max: number): number {
@@ -133,29 +137,29 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /**
- * Merge user theme config over defaults, producing a complete ITerminalOptions
- * object ready to pass to `new Terminal(...)`.
+ * Build a complete ITerminalOptions object from user settings and theme.
  *
- * Does not include linkHandler or other non-serializable options; the caller
- * adds those separately.
+ * Merges user-provided terminal options over defaults, normalizes theme
+ * colors, and clamps numeric values to safe ranges. Does not include
+ * linkHandler or other non-serializable options; the caller adds those.
  */
-export function mergeThemeConfig(user: ThemeConfig | null | undefined): ITerminalOptions {
-  if (!user) {
-    return { ...DEFAULT_THEME_CONFIG, theme: { ...DEFAULT_THEME_COLORS } }
-  }
-
-  // Warn about unknown keys.
-  for (const key of Object.keys(user)) {
-    if (!KNOWN_THEME_KEYS.has(key)) {
-      console.warn(`theme.jsonc: unknown key "${key}" (ignored)`)
+export function buildTerminalOptions(
+  settings: SettingsConfig | null | undefined,
+  themeColors: ThemeColors | null | undefined,
+): ITerminalOptions {
+  // Merge scalar options from settings.
+  const merged = { ...DEFAULT_TERMINAL_OPTIONS }
+  if (settings) {
+    // Warn about unknown keys.
+    for (const key of Object.keys(settings)) {
+      if (!KNOWN_SETTINGS_KEYS.has(key)) {
+        console.warn(`settings.jsonc: unknown key "${key}" (ignored)`)
+      }
     }
-  }
-
-  // Merge scalar options.
-  const merged = { ...DEFAULT_THEME_CONFIG }
-  for (const key of Object.keys(DEFAULT_THEME_CONFIG) as (keyof typeof DEFAULT_THEME_CONFIG)[]) {
-    if (key in user && user[key] !== undefined) {
-      ;(merged as any)[key] = user[key]
+    for (const key of Object.keys(DEFAULT_TERMINAL_OPTIONS) as (keyof typeof DEFAULT_TERMINAL_OPTIONS)[]) {
+      if (key in settings && settings[key] !== undefined) {
+        ;(merged as any)[key] = settings[key]
+      }
     }
   }
 
@@ -167,8 +171,8 @@ export function mergeThemeConfig(user: ThemeConfig | null | undefined): ITermina
   merged.letterSpacing = clamp(merged.letterSpacing, -5, 20)
   merged.minimumContrastRatio = clamp(merged.minimumContrastRatio, 1, 21)
 
-  // Deep-merge theme colors.
-  const userColors = user.theme ? normalizeThemeColors(user.theme) : {}
+  // Merge theme colors.
+  const userColors = themeColors ? normalizeThemeColors(themeColors) : {}
   const theme: ITheme = { ...DEFAULT_THEME_COLORS, ...userColors }
 
   return { ...merged, theme }
@@ -218,7 +222,7 @@ const KNOWN_ACTIONS = new Set(['sendText', 'sendKeys', 'copyOrInterrupt', 'copy'
  * xterm.js only handles terminal input (characters, control codes, escape
  * sequences); all UI and clipboard actions go through this keymap.
  *
- * User keybinds from ~/.config/gmux/keybinds.jsonc are layered on top:
+ * User keybinds from settings.jsonc are layered on top:
  * same-key entries override, action "none" disables a default.
  */
 
@@ -229,16 +233,9 @@ const UNIVERSAL_KEYBINDS: Keybind[] = [
 
 /** Linux / Windows defaults. */
 const LINUX_KEYBINDS: Keybind[] = [
-  // Clipboard: standard Linux terminal shortcuts (GNOME Terminal, Konsole,
-  // Alacritty, Windows Terminal). Ctrl+V is intercepted here rather than
-  // left to the browser passthrough so that xterm.js does not send \x16
-  // (quoted-insert) to the PTY before the paste content arrives.
   { key: 'ctrl+shift+c', action: 'copy' },
   { key: 'ctrl+v',       action: 'paste' },
   { key: 'ctrl+shift+v', action: 'paste' },
-
-  // Chrome/Firefox reserve Ctrl+T/N/W for tab management; they cannot be
-  // intercepted by JavaScript.  Ctrl+Alt+<key> is the conventional workaround.
   { key: 'ctrl+alt+t', action: 'sendKeys', args: 'ctrl+t' },
   { key: 'ctrl+alt+n', action: 'sendKeys', args: 'ctrl+n' },
   { key: 'ctrl+alt+w', action: 'sendKeys', args: 'ctrl+w' },
@@ -246,15 +243,9 @@ const LINUX_KEYBINDS: Keybind[] = [
 
 /** macOS defaults. Replicate iTerm2 / macOS Terminal conventions. */
 const MAC_KEYBINDS: Keybind[] = [
-  // Clipboard and selection: explicit bindings replace the implicit xterm.js
-  // passthrough chain (keydown → browser clipboard DOM event → xterm handler)
-  // so that every shortcut is visible, overridable, and consistently handled.
   { key: 'meta+c', action: 'copy' },
   { key: 'meta+v', action: 'paste' },
   { key: 'meta+a', action: 'selectAll' },
-
-  // Navigation: Cmd+arrow produces Home/End (iTerm2 convention).
-  // Without these, Cmd+Left navigates the browser back.
   { key: 'meta+left',      action: 'sendKeys', args: 'home' },
   { key: 'meta+right',     action: 'sendKeys', args: 'end' },
   { key: 'meta+backspace', action: 'sendKeys', args: 'ctrl+u' },
@@ -277,7 +268,7 @@ const MAC_NAVIGATION_KEYBINDS: Keybind[] = [
  *
  * When macCommandIsCtrl is true on Mac, the defaults use the Linux clipboard
  * bindings (ctrl+c, ctrl+v, ctrl+shift+c, ctrl+shift+v) so that the
- * meta→ctrl transformation in the keyboard handler matches them. Mac
+ * meta->ctrl transformation in the keyboard handler matches them. Mac
  * navigation shortcuts (Cmd+Left/Right/Backspace) are preserved.
  */
 function buildDefaults(macCommandIsCtrl: boolean): Keybind[] {
@@ -291,7 +282,7 @@ export const DEFAULT_KEYBINDS: Keybind[] = buildDefaults(false)
 
 /**
  * Parse a key combo string into modifier flags and a base key.
- * e.g. "ctrl+alt+t" → { ctrl: true, alt: true, shift: false, meta: false, baseKey: "t" }
+ * e.g. "ctrl+alt+t" -> { ctrl: true, alt: true, shift: false, meta: false, baseKey: "t" }
  */
 export function parseKeyCombo(combo: string): { ctrl: boolean; shift: boolean; alt: boolean; meta: boolean; baseKey: string } {
   const parts = combo.toLowerCase().split('+')
@@ -310,7 +301,7 @@ export function parseKeyCombo(combo: string): { ctrl: boolean; shift: boolean; a
 
 /**
  * Convert a key combo string to the terminal escape sequence it represents.
- * e.g. "ctrl+t" → "\x14", "ctrl+c" → "\x03"
+ * e.g. "ctrl+t" -> "\x14", "ctrl+c" -> "\x03"
  */
 export function keyComboToSequence(combo: string): string {
   const { ctrl, alt, baseKey } = parseKeyCombo(combo)
@@ -387,11 +378,11 @@ export function resolveKeybinds(
   if (user) {
     for (const kb of user) {
       if (!kb.key || !kb.action) {
-        console.warn('keybinds.jsonc: entry missing "key" or "action", skipping', kb)
+        console.warn('settings.jsonc keybinds: entry missing "key" or "action", skipping', kb)
         continue
       }
       if (!KNOWN_ACTIONS.has(kb.action)) {
-        console.warn(`keybinds.jsonc: unknown action "${kb.action}" for key "${kb.key}"`)
+        console.warn(`settings.jsonc keybinds: unknown action "${kb.action}" for key "${kb.key}"`)
       }
       map.set(normalizeKeyString(kb.key), kb)
     }
@@ -411,11 +402,10 @@ const MODIFIER_NAMES = new Set(['ctrl', 'control', 'shift', 'alt', 'meta', 'cmd'
 
 /**
  * Normalize a key string for deduplication.
- * Canonicalizes modifier aliases (control→ctrl, cmd/super→meta), sorts
+ * Canonicalizes modifier aliases (control->ctrl, cmd/super->meta), sorts
  * modifiers alphabetically, and lowercases everything.
  * e.g. "Ctrl+Alt+T" and "alt+ctrl+t" both become "alt+ctrl+t"
- * e.g. "control+c" and "ctrl+c" both become "ctrl+c"
- * Handles non-standard ordering like "enter+shift" → "shift+enter".
+ * Handles non-standard ordering like "enter+shift" -> "shift+enter".
  */
 function normalizeKeyString(key: string): string {
   const parts = key.toLowerCase().split('+')
@@ -433,7 +423,7 @@ function normalizeKeyString(key: string): string {
 
 /**
  * Short key names used in keybind configs mapped to their KeyboardEvent.key
- * values (lowercased).  Lets users write "meta+left" instead of "meta+arrowleft".
+ * values (lowercased). Lets users write "meta+left" instead of "meta+arrowleft".
  *
  * Every alias accepted by keyComboToSequence (for sendKeys) must also be
  * listed here so that eventMatchesKeybind can match the corresponding
@@ -467,55 +457,26 @@ export function eventMatchesKeybind(ev: KeyboardEvent, kb: ResolvedKeybind): boo
 
 // ── Fetching ──
 
-export interface TerminalConfig {
-  themeConfig: ThemeConfig | null
-  keybindsConfig: Keybind[] | null
-  macCommandIsCtrl: boolean
+export interface FrontendConfig {
+  settings: SettingsConfig | null
+  themeColors: ThemeColors | null
 }
 
 /**
- * Parse keybinds.jsonc content. Accepts either:
- *   - An array of keybinds (original format, backward compatible)
- *   - An object with optional macCommandIsCtrl and bindings fields
- *
- * ```jsonc
- * // Array format:
- * [ { "key": "ctrl+alt+t", "action": "sendKeys", "args": "ctrl+t" } ]
- *
- * // Object format:
- * { "macCommandIsCtrl": true, "bindings": [ ... ] }
- * ```
- */
-export function parseKeybindsFile(raw: unknown): { macCommandIsCtrl: boolean; bindings: Keybind[] | null } {
-  if (!raw) return { macCommandIsCtrl: false, bindings: null }
-  if (Array.isArray(raw)) return { macCommandIsCtrl: false, bindings: raw }
-  if (typeof raw === 'object') {
-    const obj = raw as Record<string, unknown>
-    return {
-      macCommandIsCtrl: obj.macCommandIsCtrl === true,
-      bindings: Array.isArray(obj.bindings) ? obj.bindings as Keybind[] : null,
-    }
-  }
-  return { macCommandIsCtrl: false, bindings: null }
-}
-
-/**
- * Fetch terminal config from the backend.
+ * Fetch frontend config from the backend.
  * Returns nulls for missing files (the caller merges with defaults).
  */
-export async function fetchTerminalConfig(): Promise<TerminalConfig> {
+export async function fetchFrontendConfig(): Promise<FrontendConfig> {
   try {
-    const resp = await fetch('/v1/terminal-config')
-    if (!resp.ok) return { themeConfig: null, keybindsConfig: null, macCommandIsCtrl: false }
+    const resp = await fetch('/v1/frontend-config')
+    if (!resp.ok) return { settings: null, themeColors: null }
     const json = await resp.json()
     const data = json.data ?? {}
-    const kb = parseKeybindsFile(data.keybinds)
     return {
-      themeConfig: data.theme ?? null,
-      keybindsConfig: kb.bindings,
-      macCommandIsCtrl: kb.macCommandIsCtrl,
+      settings: data.settings ?? null,
+      themeColors: data.theme ?? null,
     }
   } catch {
-    return { themeConfig: null, keybindsConfig: null, macCommandIsCtrl: false }
+    return { settings: null, themeColors: null }
   }
 }

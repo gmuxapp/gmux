@@ -8,7 +8,7 @@ import { connectPresence } from './presence'
 import type { NotifyMessage, CancelMessage } from './presence'
 import { TerminalView } from './terminal'
 import type { ITerminalOptions } from '@xterm/xterm'
-import { fetchTerminalConfig, mergeThemeConfig, resolveKeybinds, type ResolvedKeybind } from './config'
+import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { useArrivalPulse } from './use-arrival-pulse'
 import { useActivityTracker } from './use-activity'
 
@@ -890,10 +890,11 @@ function App() {
   useEffect(() => { fetchConfig().then(cfg => setLaunchers(cfg.launchers)) }, [])
   useEffect(() => { fetchHealth().then(setHealth) }, [])
   useEffect(() => {
-    fetchTerminalConfig().then(tc => {
-      setTerminalOptions(mergeThemeConfig(tc.themeConfig))
-      setMacCommandIsCtrl(tc.macCommandIsCtrl)
-      setKeybinds(resolveKeybinds(tc.keybindsConfig, tc.macCommandIsCtrl))
+    fetchFrontendConfig().then(fc => {
+      const macCtrl = fc.settings?.macCommandIsCtrl === true
+      setTerminalOptions(buildTerminalOptions(fc.settings, fc.themeColors))
+      setMacCommandIsCtrl(macCtrl)
+      setKeybinds(resolveKeybinds(fc.settings?.keybinds ?? null, macCtrl))
     })
   }, [])
 

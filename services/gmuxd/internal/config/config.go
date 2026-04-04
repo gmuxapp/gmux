@@ -1,4 +1,4 @@
-// Package config loads gmuxd configuration from ~/.config/gmux/config.toml.
+// Package config loads gmuxd configuration from ~/.config/gmux/host.toml.
 //
 // Missing file or missing keys are fine — everything has a safe default.
 // The file is never written by gmuxd; users create and edit it manually.
@@ -184,12 +184,17 @@ func (cfg Config) ListenAddr() (string, error) {
 	return net.JoinHostPort(listen, fmt.Sprintf("%d", cfg.Port)), nil
 }
 
-// Path returns the path to the config file.
-func Path() string {
+// Dir returns the gmux config directory (~/.config/gmux/).
+func Dir() string {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "gmux", "config.toml")
+		return filepath.Join(dir, "gmux")
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "gmux", "config.toml")
+	return filepath.Join(home, ".config", "gmux")
+}
+
+// Path returns the path to the host config file.
+func Path() string {
+	return filepath.Join(Dir(), "host.toml")
 }
 

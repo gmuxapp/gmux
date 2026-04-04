@@ -5,9 +5,9 @@ description: Config file, environment variables, and file paths.
 
 gmux works out of the box with no configuration. This page documents everything you can customize.
 
-## Config file
+## Host config
 
-`~/.config/gmux/config.toml` (or `$XDG_CONFIG_HOME/gmux/config.toml`)
+`~/.config/gmux/host.toml` (or `$XDG_CONFIG_HOME/gmux/host.toml`)
 
 gmuxd reads this file at startup. Create it manually — gmuxd never writes to it. If the file doesn't exist, safe defaults are used.
 
@@ -40,47 +40,59 @@ This is intentional — silent fallback to defaults is dangerous for security se
 
 `~/.config/gmux/theme.jsonc`
 
-Customize terminal appearance: colors, font, cursor, scrollback, and more. All fields are optional; anything you omit uses the built-in default.
+Terminal color palette. This file uses the same format as [Windows Terminal themes](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/windowsterminal), so you can drop one in and it works: `purple`/`brightPurple` are automatically mapped to `magenta`/`brightMagenta`, and the `name` field is ignored.
 
 ```jsonc
 {
+  "background": "#282a36",
+  "foreground": "#f8f8f2",
+  "cursor": "#f8f8f2",
+  "selectionBackground": "#44475a",
+  "black": "#21222c",
+  "red": "#ff5555",
+  "green": "#50fa7b",
+  "yellow": "#f1fa8c",
+  "blue": "#bd93f9",
+  "purple": "#ff79c6",   // mapped to magenta
+  "cyan": "#8be9fd",
+  "white": "#f8f8f2"
+  // ... any xterm.js ITheme color keys
+}
+```
+
+All fields are optional; omitted colors use the built-in default palette.
+
+## Frontend settings
+
+`~/.config/gmux/settings.jsonc`
+
+Terminal options, keybinds, and other frontend preferences. All fields are optional.
+
+```jsonc
+{
+  // Terminal appearance (non-color options; colors go in theme.jsonc)
   "fontSize": 14,
   "fontFamily": "'JetBrains Mono', monospace",
   "cursorStyle": "bar",
   "cursorBlink": true,
   "scrollback": 10000,
-  "theme": {
-    "background": "#282a36",
-    "foreground": "#f8f8f2"
-    // ... any xterm.js ITheme color keys
-  }
+
+  // Keybind overrides
+  "keybinds": [
+    { "key": "ctrl+alt+t", "action": "sendKeys", "args": "ctrl+t" },
+    { "key": "ctrl+alt+g", "action": "sendText", "args": "git status\r" },
+    { "key": "ctrl+alt+w", "action": "none" }
+  ]
 }
 ```
 
-You can drop in a [Windows Terminal theme](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/windowsterminal) and it works out of the box: `purple`/`brightPurple` are automatically mapped to `magenta`/`brightMagenta`, and the `name` field is ignored.
-
 Numeric values are clamped to safe ranges (e.g. fontSize 6-48, scrollback 0-100,000). Unknown keys produce a console warning.
 
-## Terminal keybinds
-
-`~/.config/gmux/keybinds.jsonc`
+### Keybinds
 
 gmux ships a complete default keymap that is the source of truth for every keyboard shortcut. Every key combo that does something other than "send bytes to the terminal" is listed explicitly; nothing relies on implicit browser or xterm.js passthrough.
 
-Your `keybinds.jsonc` file layers on top: same-key entries override the defaults, and the `none` action disables a default. The file can be a JSON array or an object (see [macCommandIsCtrl](#maccommandisctrl) for the object format):
-
-```jsonc
-[
-  // Remap Ctrl+Alt+T to send Ctrl+T (browser steals Ctrl+T for new tab)
-  { "key": "ctrl+alt+t", "action": "sendKeys", "args": "ctrl+t" },
-
-  // Send raw text to the terminal
-  { "key": "ctrl+alt+g", "action": "sendText", "args": "git status\r" },
-
-  // Disable a built-in binding
-  { "key": "ctrl+alt+w", "action": "none" }
-]
-```
+Your `keybinds` array layers on top: same-key entries override the defaults, and the `none` action disables a default.
 
 ### Actions
 
@@ -116,39 +128,39 @@ User keybinds override built-in defaults that share the same key combo. See [Key
 
 ### Starter templates
 
-These are ready to paste into `~/.config/gmux/keybinds.jsonc`.
+These are ready to paste into the `keybinds` array in `~/.config/gmux/settings.jsonc`.
 
 **Quick commands** -- bind key combos to common shell commands:
 
 ```jsonc
-[
+{ "keybinds": [
   { "key": "ctrl+alt+g", "action": "sendText", "args": "git status\r" },
   { "key": "ctrl+alt+d", "action": "sendText", "args": "git diff\r" },
   { "key": "ctrl+alt+l", "action": "sendText", "args": "git log --oneline -20\r" }
-]
+]}
 ```
 
 **Vim-friendly** -- disable the Ctrl+C copy behavior so Ctrl+C always sends SIGINT (useful if you use visual mode for copying):
 
 ```jsonc
-[
+{ "keybinds": [
   { "key": "ctrl+c", "action": "none" }
-]
+]}
 ```
 
 **Disable all browser workarounds** -- if you run gmux as a PWA or `--app` window, the browser doesn't steal Ctrl+T/N/W, so the Ctrl+Alt workarounds are unnecessary:
 
 ```jsonc
-[
+{ "keybinds": [
   { "key": "ctrl+alt+t", "action": "none" },
   { "key": "ctrl+alt+n", "action": "none" },
   { "key": "ctrl+alt+w", "action": "none" }
-]
+]}
 ```
 
 ### macCommandIsCtrl
 
-On Mac, Command is the primary modifier, but terminals expect Ctrl. By default gmux maps a handful of Cmd shortcuts (copy, paste, select all, navigation). If you want *every* Cmd+character to send its Ctrl equivalent instead, use the object format with `macCommandIsCtrl`:
+On Mac, Command is the primary modifier, but terminals expect Ctrl. By default gmux maps a handful of Cmd shortcuts (copy, paste, select all, navigation). If you want *every* Cmd+character to send its Ctrl equivalent instead, set `macCommandIsCtrl` in `settings.jsonc`:
 
 ```jsonc
 {
@@ -169,12 +181,12 @@ With this enabled:
 
 Only single-character keys are remapped. Non-character keys (arrows, backspace, function keys) pass through to their normal keybinds. On Linux this option has no effect.
 
-You can combine it with additional bindings:
+You can combine it with keybinds:
 
 ```jsonc
 {
   "macCommandIsCtrl": true,
-  "bindings": [
+  "keybinds": [
     { "key": "ctrl+alt+g", "action": "sendText", "args": "git status\r" }
   ]
 }
@@ -215,9 +227,9 @@ See [Adapter Architecture](/develop/adapter-architecture) for how to use the chi
 
 | Path | Purpose | Created by |
 |------|---------|------------|
-| `~/.config/gmux/config.toml` | Daemon config (port, tailscale) | User |
-| `~/.config/gmux/theme.jsonc` | Terminal appearance (colors, font, cursor) | User |
-| `~/.config/gmux/keybinds.jsonc` | Key-to-action mappings | User |
+| `~/.config/gmux/host.toml` | Daemon config (port, tailscale) | User |
+| `~/.config/gmux/settings.jsonc` | Frontend preferences (terminal options, keybinds) | User |
+| `~/.config/gmux/theme.jsonc` | Terminal color palette (Windows Terminal compat) | User |
 | `~/.local/state/gmux/gmuxd.sock` | Daemon Unix socket (local IPC) | gmuxd |
 | `~/.local/state/gmux/auth-token` | Bearer token for TCP authentication | gmuxd |
 | `~/.local/state/gmux/tsnet/` | Tailscale state (when enabled) | gmuxd |

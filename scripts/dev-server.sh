@@ -46,7 +46,7 @@ fi
 
 mkdir -p "$DEV_SOCKET_DIR" "$DEV_STATE_DIR/config/gmux" "$DEV_STATE_DIR/state" "$DEV_STATE_DIR/pi-agent"
 
-cat > "$DEV_STATE_DIR/config/gmux/config.toml" << EOF
+cat > "$DEV_STATE_DIR/config/gmux/host.toml" << EOF
 port = $DEV_PORT
 
 [tailscale]

@@ -59,7 +59,7 @@ Run `gmuxd remote` on the machine where gmux is installed:
 gmuxd remote
 ```
 
-If remote access isn't configured yet, this creates `~/.config/gmux/config.toml` with tailscale enabled. You can also create or edit the file manually:
+If remote access isn't configured yet, this creates `~/.config/gmux/host.toml` with tailscale enabled. You can also create or edit the file manually:
 
 ```toml
 [tailscale]

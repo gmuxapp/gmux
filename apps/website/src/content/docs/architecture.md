@@ -32,7 +32,7 @@ One per machine. It:
 
 `gmux` auto-starts `gmuxd` if it isn't already running. If a daemon from an older version is detected, `gmux` automatically replaces it so the child process always talks to a compatible daemon.
 
-Configuration lives in `~/.config/gmux/config.toml`. See [Security](/security) and [Remote Access](/remote-access) for details.
+Configuration lives in `~/.config/gmux/host.toml`. See [Security](/security) and [Remote Access](/remote-access) for details.
 
 ### Web UI
 

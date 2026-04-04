@@ -9,16 +9,18 @@ import (
 	"github.com/tidwall/jsonc"
 )
 
-// LoadTerminalTheme reads ~/.config/gmux/theme.jsonc, strips JSONC comments,
+// LoadTheme reads ~/.config/gmux/theme.jsonc, strips JSONC comments,
 // and returns the raw JSON. Returns nil (not an error) if the file is missing.
-func LoadTerminalTheme() (json.RawMessage, error) {
-	return loadJSONC(filepath.Join(filepath.Dir(Path()), "theme.jsonc"))
+// The file contains terminal colors in Windows Terminal theme format.
+func LoadTheme() (json.RawMessage, error) {
+	return loadJSONC(filepath.Join(Dir(), "theme.jsonc"))
 }
 
-// LoadKeybinds reads ~/.config/gmux/keybinds.jsonc, strips JSONC comments,
+// LoadSettings reads ~/.config/gmux/settings.jsonc, strips JSONC comments,
 // and returns the raw JSON. Returns nil (not an error) if the file is missing.
-func LoadKeybinds() (json.RawMessage, error) {
-	return loadJSONC(filepath.Join(filepath.Dir(Path()), "keybinds.jsonc"))
+// The file contains frontend preferences: keybinds, terminal options, UI prefs.
+func LoadSettings() (json.RawMessage, error) {
+	return loadJSONC(filepath.Join(Dir(), "settings.jsonc"))
 }
 
 // loadJSONC reads a file, strips // and /* */ comments and trailing commas,

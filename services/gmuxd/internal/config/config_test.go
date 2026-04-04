@@ -228,5 +228,5 @@ func writeConfig(t *testing.T, xdgDir, content string) {
 	t.Helper()
 	cfgDir := filepath.Join(xdgDir, "gmux")
 	os.MkdirAll(cfgDir, 0o755)
-	os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(content), 0o644)
+	os.WriteFile(filepath.Join(cfgDir, "host.toml"), []byte(content), 0o644)
 }

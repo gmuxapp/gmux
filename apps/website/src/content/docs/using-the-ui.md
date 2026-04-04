@@ -135,7 +135,7 @@ This is why gmux owns the full keymap rather than relying on passthrough.
 
 ### Customizing keybinds
 
-All defaults can be overridden or disabled via `~/.config/gmux/keybinds.jsonc`. See [Configuration](/configuration#terminal-keybinds) for the full reference, actions list, and starter templates.
+All defaults can be overridden or disabled via the `keybinds` array in `~/.config/gmux/settings.jsonc`. See [Configuration](/configuration#keybinds) for the full reference, actions list, and starter templates.
 
 :::tip[App mode]
 Browsers reserve many shortcuts (Ctrl+T, Ctrl+N, Ctrl+W, etc.) that don't reach the terminal. Run gmux as a standalone app to get full keyboard pass-through:

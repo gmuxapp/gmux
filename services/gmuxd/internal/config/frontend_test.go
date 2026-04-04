@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-func TestLoadTerminalTheme_MissingFile(t *testing.T) {
+func TestLoadTheme_MissingFile(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	data, err := LoadTerminalTheme()
+	data, err := LoadTheme()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -18,31 +18,31 @@ func TestLoadTerminalTheme_MissingFile(t *testing.T) {
 	}
 }
 
-func TestLoadTerminalTheme_ValidJSON(t *testing.T) {
+func TestLoadTheme_ValidJSON(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	writeFile(t, dir, "theme.jsonc", `{"fontSize": 16}`)
+	writeFile(t, dir, "theme.jsonc", `{"background": "#282a36"}`)
 
-	data, err := LoadTerminalTheme()
+	data, err := LoadTheme()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != `{"fontSize": 16}` {
+	if string(data) != `{"background": "#282a36"}` {
 		t.Errorf("got %s", data)
 	}
 }
 
-func TestLoadTerminalTheme_StripsComments(t *testing.T) {
+func TestLoadTheme_StripsComments(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	writeFile(t, dir, "theme.jsonc", `{
-  // This is the font size
-  "fontSize": 16,
-  /* block comment */
-  "cursorBlink": true
+  // Dark background
+  "background": "#282a36",
+  /* Dracula foreground */
+  "foreground": "#f8f8f2"
 }`)
 
-	data, err := LoadTerminalTheme()
+	data, err := LoadTheme()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,15 +51,15 @@ func TestLoadTerminalTheme_StripsComments(t *testing.T) {
 	}
 }
 
-func TestLoadTerminalTheme_StripsTrailingCommas(t *testing.T) {
+func TestLoadTheme_StripsTrailingCommas(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	writeFile(t, dir, "theme.jsonc", `{
-  "fontSize": 16,
-  "cursorBlink": true,
+  "background": "#282a36",
+  "foreground": "#f8f8f2",
 }`)
 
-	data, err := LoadTerminalTheme()
+	data, err := LoadTheme()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,21 +68,21 @@ func TestLoadTerminalTheme_StripsTrailingCommas(t *testing.T) {
 	}
 }
 
-func TestLoadTerminalTheme_InvalidJSON(t *testing.T) {
+func TestLoadTheme_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	writeFile(t, dir, "theme.jsonc", `{invalid json}`)
 
-	_, err := LoadTerminalTheme()
+	_, err := LoadTheme()
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
 }
 
-func TestLoadKeybinds_MissingFile(t *testing.T) {
+func TestLoadSettings_MissingFile(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	data, err := LoadKeybinds()
+	data, err := LoadSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,15 +91,19 @@ func TestLoadKeybinds_MissingFile(t *testing.T) {
 	}
 }
 
-func TestLoadKeybinds_ValidArray(t *testing.T) {
+func TestLoadSettings_ValidObject(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	writeFile(t, dir, "keybinds.jsonc", `[
+	writeFile(t, dir, "settings.jsonc", `{
+  // Terminal font
+  "fontSize": 16,
   // Remap ctrl+t
-  { "key": "ctrl+alt+t", "action": "sendKeys", "args": "ctrl+t" },
-]`)
+  "keybinds": [
+    { "key": "ctrl+alt+t", "action": "sendKeys", "args": "ctrl+t" },
+  ],
+}`)
 
-	data, err := LoadKeybinds()
+	data, err := LoadSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
