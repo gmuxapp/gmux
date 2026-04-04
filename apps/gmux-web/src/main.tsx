@@ -52,7 +52,10 @@ function toUISession(s: ProtocolSession): Session {
     socket_path: s.socket_path ?? '',
     terminal_cols: s.terminal_cols ?? undefined,
     terminal_rows: s.terminal_rows ?? undefined,
+    shell_title: s.shell_title ?? undefined,
     adapter_title: s.adapter_title ?? undefined,
+    binary_hash: s.binary_hash ?? undefined,
+    stale: s.stale ?? false,
   }
 }
 
