@@ -52,6 +52,8 @@ function toUISession(s: ProtocolSession): Session {
     socket_path: s.socket_path ?? '',
     terminal_cols: s.terminal_cols ?? undefined,
     terminal_rows: s.terminal_rows ?? undefined,
+    slug: s.slug ?? undefined,
+    resume_key: s.resume_key ?? undefined,
     stale: s.stale ?? false,
   }
 }

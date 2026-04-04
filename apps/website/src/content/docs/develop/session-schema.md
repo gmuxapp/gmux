@@ -64,6 +64,9 @@ gmuxd exposes the aggregated store via `GET /v1/sessions` and `session-upsert` /
 | `unread` | ✓ | ✓ | ✓ | ✓ dots, tab badge |
 | **Resume** |
 | `resumable` | — | ✓ derived | ✓ | ✓ sidebar |
+| `resume_key` | — | ✓ | ✓ | ✓ project membership |
+| **Routing** |
+| `slug` | ✓ opt | ✓ auto-derived | ✓ | ✓ URL routing |
 | **Terminal** |
 | `socket_path` | ✓ | ✓ | ✓ | truthiness only |
 | `terminal_cols` | ✓ | ✓ | ✓ | ✓ initial size |
@@ -73,7 +76,7 @@ gmuxd exposes the aggregated store via `GET /v1/sessions` and `session-upsert` /
 | **Internal (not in API)** |
 | `shell_title` | ✓ | ✓ | — | — |
 | `adapter_title` | ✓ | ✓ | — | — |
-| `resume_key` | — | ✓ | — | — |
+| `resume_key` | — | ✓ | ✓ | ✓ project membership |
 | `binary_hash` | ✓ | ✓ | — | — |
 
 Fields marked "—" in the "Frontend reads" column are sent by the API but not used by any rendering or logic code. They exist for future features (exit codes, process timing, subtitle display) or as defensive redundancy.
@@ -83,8 +86,9 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 | Internal input | Derived output |
 |---|---|
 | `shell_title`, `adapter_title` | `title` (via `resolveTitle`) |
-| `resume_key` | `resumable` (via `Upsert`/`Update`) |
 | `binary_hash` | `stale` (via `markStale`) |
+
+`resume_key` is both an input to `resumable` and directly API-visible (the frontend needs it for project session array membership to identify dead sessions).
 
 ## Schema
 
@@ -115,8 +119,15 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 | Field | Type | Description |
 |-------|------|-------------|
 | `resumable` | boolean | Derived: `!alive && command present`. Never set manually. |
+| `resume_key` | string? | Session-file ID used for resume. Also used by the frontend to match dead sessions against project membership arrays. |
 
-All dead sessions with a command are resumable. Adapters with native resume (pi, claude, codex) provide a tool-specific resume command derived from the session file. Adapters without native resume (shell) keep the original command, so "resume" re-runs it in the same working directory.
+All dead sessions with a command are resumable.
+
+### Routing
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `slug` | string? | Stable URL-friendly identifier. Auto-derived from resume_key basename, command basename, or session ID prefix. Unique within a kind. Adapters can override via the runner's `PUT /slug` endpoint. | Adapters with native resume (pi, claude, codex) provide a tool-specific resume command derived from the session file. Adapters without native resume (shell) keep the original command, so "resume" re-runs it in the same working directory.
 
 ### Display (set by child or gmux, mutable)
 
@@ -218,11 +229,13 @@ As served by `GET /v1/sessions` (gmuxd → frontend):
   "status": { "label": "thinking", "working": true },
   "unread": false,
   "socket_path": "/tmp/gmux-sessions/sess-abc123.sock",
+  "slug": "fix-auth-bug",
+  "resume_key": "2026-03-14T10-00-00_abc123",
   "stale": false
 }
 ```
 
-Note the differences: `shell_title`, `adapter_title`, and `binary_hash` are absent from the API response. `title` is the resolved value. `stale` is derived from `binary_hash`.
+Note the differences: `shell_title`, `adapter_title`, and `binary_hash` are absent from the API response. `title` is the resolved value. `stale` is derived from `binary_hash`. `slug` is auto-derived. `resume_key` is passed through for project membership matching.
 
 ## What's NOT in This Schema
 

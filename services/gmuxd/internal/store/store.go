@@ -44,17 +44,17 @@ type Session struct {
 	// the runner's PUT /slug endpoint.
 	Slug string `json:"slug,omitempty"`
 
+	// ResumeKey is the session-file ID used for resume. Exposed to the
+	// frontend for project session array membership (matching dead sessions
+	// to projects). The derived Resumable bool is also API-visible.
+	ResumeKey string `json:"resume_key,omitempty"`
+
 	// ── Internal fields (excluded from API via MarshalJSON) ──
 
 	// Title inputs: resolveTitle merges these by precedence into Title
 	// on every Upsert/Update.
 	ShellTitle   string `json:"shell_title,omitempty"`
 	AdapterTitle string `json:"adapter_title,omitempty"`
-
-	// ResumeKey is the session-file ID used for resume. The derived
-	// Resumable bool (API-visible) is what the frontend needs.
-	// Also used by project session arrays for stable membership.
-	ResumeKey string `json:"resume_key,omitempty"`
 
 	// BinaryHash is the sha256 of the gmux binary that owns this session.
 	// The derived Stale bool (API-visible) is what the frontend needs.

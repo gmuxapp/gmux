@@ -13,6 +13,7 @@ import (
 func TestNotifyNewSessionDoesNotStealTitleFromOldPiFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("GMUX_SOCKET_DIR", filepath.Join(home, "gmux-sessions"))
 
 	cwd := "/home/user/dev/project"
 	pi := adapters.NewPi()

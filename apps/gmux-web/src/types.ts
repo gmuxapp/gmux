@@ -1,8 +1,18 @@
 // --- URL routing ---
 
-/** Parse a URL path into project/adapter/slug segments. */
+/**
+ * Parse a URL path into project/host/adapter/slug segments.
+ *
+ * URL hierarchy:
+ *   /<project>/<adapter>/<slug>              (local)
+ *   /<project>/@<host>/<adapter>/<slug>       (remote, future)
+ *
+ * The @-prefix on the second segment distinguishes a remote host
+ * from an adapter name.
+ */
 export function parseSessionPath(path: string): {
   project?: string
+  host?: string
   adapter?: string
   slug?: string
 } {
@@ -12,6 +22,13 @@ export function parseSessionPath(path: string): {
   // Skip internal routes.
   if (parts[0] === '_') return {}
   if (parts.length === 1) return { project: parts[0] }
+  // @-prefixed second segment is a remote host (future: aggregation).
+  if (parts[1].startsWith('@')) {
+    const host = parts[1].slice(1)
+    if (parts.length === 2) return { project: parts[0], host }
+    if (parts.length === 3) return { project: parts[0], host, adapter: parts[2] }
+    return { project: parts[0], host, adapter: parts[2], slug: parts[3] }
+  }
   if (parts.length === 2) return { project: parts[0], adapter: parts[1] }
   return { project: parts[0], adapter: parts[1], slug: parts[2] }
 }
@@ -32,11 +49,13 @@ export function sessionPath(
  * Returns null if no matching session is found.
  */
 export function resolveSessionFromPath(
-  parsed: { project?: string; adapter?: string; slug?: string },
+  parsed: { project?: string; host?: string; adapter?: string; slug?: string },
   projects: ProjectItem[],
   sessions: Session[],
 ): string | null {
   if (!parsed.project) return null
+  // Remote host sessions are not yet supported (future: aggregation).
+  if (parsed.host) return null
 
   // Find the project by slug.
   const project = projects.find(p => p.slug === parsed.project)
@@ -99,6 +118,7 @@ export interface Session {
   terminal_cols?: number
   terminal_rows?: number
   slug?: string
+  resume_key?: string
   stale?: boolean
 }
 
@@ -337,6 +357,7 @@ export function groupByFolder(sessions: Session[]): Folder[] {
     folders.push({
       name,
       path,
+      launchCwd: groupSessions[0]?.workspace_root || groupSessions[0]?.cwd || path,
       sessions: groupSessions.sort((a, b) => {
         if (a.cwd !== b.cwd) return a.cwd < b.cwd ? -1 : 1
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()

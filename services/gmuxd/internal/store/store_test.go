@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -471,5 +472,38 @@ func TestSetTerminalSize(t *testing.T) {
 	}
 	if s.SetTerminalSize("missing", 120, 40) {
 		t.Fatal("expected missing session update to fail")
+	}
+}
+
+// The frontend needs slug (URL routing) and resume_key (project session array
+// membership for dead sessions). Verify they survive MarshalJSON.
+func TestMarshalJSON_FrontendFields(t *testing.T) {
+	s := Session{
+		ID:        "s1",
+		Kind:      "pi",
+		Alive:     false,
+		Slug:      "fix-auth",
+		ResumeKey: "2026-04-03T06-46-56_07b3c9c8",
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]interface{}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire["slug"] != "fix-auth" {
+		t.Errorf("slug missing from wire JSON: %s", data)
+	}
+	if wire["resume_key"] != "2026-04-03T06-46-56_07b3c9c8" {
+		t.Errorf("resume_key missing from wire JSON: %s", data)
+	}
+	// Internal fields the frontend doesn't need should be excluded.
+	if _, ok := wire["shell_title"]; ok {
+		t.Errorf("shell_title should be excluded from wire JSON: %s", data)
+	}
+	if _, ok := wire["binary_hash"]; ok {
+		t.Errorf("binary_hash should be excluded from wire JSON: %s", data)
 	}
 }

@@ -314,10 +314,16 @@ func TestParseNewLinesAssistantErrorSingle(t *testing.T) {
 }
 
 func TestParseNewLinesAssistantErrorExhausted(t *testing.T) {
+	// Use a temp cwd with explicit maxRetries=3 (exhaustion at 4 errors)
+	// so the test doesn't depend on the developer's ~/.pi config.
+	cwd := t.TempDir()
+	piDir := filepath.Join(cwd, ".pi")
+	os.MkdirAll(piDir, 0o755)
+	os.WriteFile(filepath.Join(piDir, "settings.json"), []byte(`{"retry":{"maxRetries":3}}`), 0o644)
 	// 4 consecutive errors = retries exhausted. The agent gave up;
 	// emit error (not working, error=true for red dot).
 	path := writeTempJSONL(t,
-		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp"}`,
+		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"`+cwd+`"}`,
 		`{"type":"message","id":"u1","message":{"role":"user","content":"fix bug"}}`,
 		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"error","content":[]}}`,
 		`{"type":"message","id":"a2","message":{"role":"assistant","stopReason":"error","content":[]}}`,
@@ -339,9 +345,14 @@ func TestParseNewLinesAssistantErrorExhausted(t *testing.T) {
 }
 
 func TestParseNewLinesErrorExhaustedIgnoresCustomEvents(t *testing.T) {
+	// Use a temp cwd with explicit maxRetries=3 so we don't read ~/.pi config.
+	cwd := t.TempDir()
+	piDir := filepath.Join(cwd, ".pi")
+	os.MkdirAll(piDir, 0o755)
+	os.WriteFile(filepath.Join(piDir, "settings.json"), []byte(`{"retry":{"maxRetries":3}}`), 0o644)
 	// Custom/extension events between errors should not break the count.
 	path := writeTempJSONL(t,
-		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp"}`,
+		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"`+cwd+`"}`,
 		`{"type":"message","id":"u1","message":{"role":"user","content":"fix bug"}}`,
 		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"error","content":[]}}`,
 		`{"type":"custom","customType":"jj-checkpoint","data":{}}`,

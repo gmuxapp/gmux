@@ -354,12 +354,23 @@ describe('buildProjectFolders', () => {
     const folders = buildProjectFolders(projects, sessions)
     expect(folders[0].sessions).toHaveLength(1)
   })
+
+  it('excludes dead sessions whose resume_key is not in the array', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'proj', paths: ['/dev/proj'], sessions: ['other-key'] },
+    ]
+    const sessions = [
+      makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: false, resumable: true, resume_key: 'my-resume-key' }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    expect(folders[0].sessions).toHaveLength(0)
+  })
 })
 
 // --- URL routing ---
 
 describe('parseSessionPath', () => {
-  it('parses full path', () => {
+  it('parses full local path', () => {
     expect(parseSessionPath('/gmux/pi/fix-auth')).toEqual({
       project: 'gmux', adapter: 'pi', slug: 'fix-auth',
     })
@@ -375,6 +386,30 @@ describe('parseSessionPath', () => {
 
   it('skips internal routes', () => {
     expect(parseSessionPath('/_/input-diagnostics')).toEqual({})
+  })
+
+  it('parses @host segment as remote host', () => {
+    expect(parseSessionPath('/gmux/@desktop/pi/fix-auth')).toEqual({
+      project: 'gmux', host: 'desktop', adapter: 'pi', slug: 'fix-auth',
+    })
+  })
+
+  it('parses project + @host only', () => {
+    expect(parseSessionPath('/gmux/@server')).toEqual({
+      project: 'gmux', host: 'server',
+    })
+  })
+
+  it('parses project + @host + adapter', () => {
+    expect(parseSessionPath('/gmux/@server/pi')).toEqual({
+      project: 'gmux', host: 'server', adapter: 'pi',
+    })
+  })
+
+  it('does not treat non-@ second segment as host', () => {
+    expect(parseSessionPath('/gmux/pi')).toEqual({
+      project: 'gmux', adapter: 'pi',
+    })
   })
 })
 
