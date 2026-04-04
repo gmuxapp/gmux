@@ -4,6 +4,7 @@
 package localterm
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"os/signal"
@@ -72,6 +73,11 @@ func New(cfg Config) (*Attach, error) {
 		done:      make(chan struct{}),
 	}
 
+	// Enable focus reporting so we can resize the PTY when the host
+	// terminal gains focus (the terminal's size is authoritative at
+	// that point, even if a browser client resized the PTY earlier).
+	stdout.WriteString("\x1b[?1004h")
+
 	go a.readStdin()
 	go a.handleWinch()
 
@@ -101,7 +107,11 @@ func (a *Attach) Detach() {
 	a.detached = true
 	a.mu.Unlock()
 
-	term.Restore(int(a.stdin.Fd()), a.oldState)
+	// Disable focus reporting before restoring terminal state.
+	a.stdout.WriteString("\x1b[?1004l")
+	if a.oldState != nil {
+		term.Restore(int(a.stdin.Fd()), a.oldState)
+	}
 	close(a.done)
 }
 
@@ -118,6 +128,19 @@ func (a *Attach) Done() <-chan struct{} {
 	return a.done
 }
 
+// focusIn is the escape sequence terminals send when they gain focus
+// (CSI ? 1004 h enables reporting; the terminal sends ESC [I on focus).
+var focusIn = []byte("\x1b[I")
+
+// termSize returns the current dimensions of the attached terminal.
+func (a *Attach) termSize() (cols, rows uint16, err error) {
+	w, h, err := term.GetSize(int(a.stdin.Fd()))
+	if err != nil {
+		return 0, 0, err
+	}
+	return uint16(w), uint16(h), nil
+}
+
 // readStdin reads from the calling terminal and writes to the PTY.
 func (a *Attach) readStdin() {
 	buf := make([]byte, 4096)
@@ -130,7 +153,16 @@ func (a *Attach) readStdin() {
 			if detached {
 				return
 			}
-			a.ptyWriter.Write(buf[:n])
+			data := buf[:n]
+			// When the host terminal gains focus, re-assert its size.
+			// A browser client may have resized the PTY to its viewport;
+			// focus means the user is back in the native terminal.
+			if bytes.Contains(data, focusIn) {
+				if cols, rows, err := a.termSize(); err == nil {
+					a.resizeFn(cols, rows)
+				}
+			}
+			a.ptyWriter.Write(data)
 		}
 		if err != nil {
 			// stdin closed (terminal gone) — detach gracefully
@@ -151,7 +183,7 @@ func (a *Attach) handleWinch() {
 		case <-a.done:
 			return
 		case <-ch:
-			if cols, rows, err := TerminalSize(); err == nil {
+			if cols, rows, err := a.termSize(); err == nil {
 				a.resizeFn(cols, rows)
 			}
 		}
