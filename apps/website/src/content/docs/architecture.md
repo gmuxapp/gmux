@@ -40,29 +40,34 @@ The frontend is built with Preact and xterm.js, compiled into a static bundle, a
 
 ## Data flow
 
-```
-gmux ──Unix socket──→ gmuxd ──HTTP/SSE/WS──→ browser
+```mermaid
+%%{init: {'theme': 'dark'}}%%
+graph LR
+    subgraph runners ["gmux (one per session)"]
+        r1["gmux pi"]
+        r2["gmux pytest"]
+        r3["gmux make build"]
+    end
+
+    d["gmuxd"]
+
+    subgraph clients ["browsers"]
+        b1["desktop"]
+        b2["phone"]
+    end
+
+    r1 -- "Unix socket" --> d
+    r2 -- "Unix socket" --> d
+    r3 -- "Unix socket" --> d
+    d -- "HTTP / SSE / WS" --> b1
+    d -- "HTTP / SSE / WS" --> b2
 ```
 
-1. `gmux` launches a session and exposes it on a Unix socket
-2. `gmuxd` discovers the socket and reads session metadata
-3. `gmuxd` subscribes to the runner's SSE event stream for live updates
-4. The browser fetches sessions from `GET /v1/sessions` and subscribes to `GET /v1/events`
-5. When you click a session, the browser opens a WebSocket to `/ws/{id}` — gmuxd proxies this to the runner's socket
-6. Terminal I/O flows directly between browser and runner through the proxy
+Each `gmux` runner exposes its session on a Unix socket. `gmuxd` discovers these sockets, subscribes to each runner's event stream for live updates, and proxies everything to the browser. When you click a session, the browser opens a WebSocket that gmuxd proxies to the runner's socket, so terminal I/O flows end-to-end.
 
 ## Scrollback replay
 
-Each `gmux` runner maintains a 128KB ring buffer (`TermWriter`) that captures PTY output for session replay. When a browser connects (or switches sessions), the runner sends the buffered content so the terminal shows the session's current state immediately.
-
-The ring buffer applies two transformations to the raw PTY stream:
-
-- **Screen clear detection.** `ESC[2J` and `ESC[3J` reset the buffer, discarding all prior content. This prevents stale pre-clear output from appearing on reconnect.
-- **Bare CR flushing.** A carriage return followed by non-newline content (common in TUI renderers for cursor positioning) flushes the pending line to the buffer with the CR preserved. On replay, the terminal's native CR handling returns the cursor to column 1, producing correct overwrites for both spinner-style animations and TUI frame transitions.
-
-When the ring buffer wraps (content exceeds 128KB since the last clear), the snapshot trims to the last frame-start marker: either a BSU sequence (`ESC[?2026h`, used by pi-tui for synchronized output) or a cursor-home (`ESC[H`). This ensures replay starts at a complete TUI render frame rather than mid-stream, preventing stale frames from producing duplicate content. Plain shell output (no frame markers) falls back to trimming at the first newline.
-
-The replay frame is wrapped in DEC 2026 synchronized output markers (BSU/ESU) so the browser terminal can buffer the entire replay and render it atomically.
+Each runner maintains a 128KB ring buffer that captures PTY output. When a browser connects or switches sessions, the runner sends the buffered content so the terminal shows the session's current state immediately. Screen clears reset the buffer, and TUI frame boundaries are detected so replay starts at a clean frame.
 
 ## API surface
 
@@ -85,12 +90,4 @@ Served by `gmuxd` on a Unix socket (local IPC) and a TCP listener (default `127.
 | `WS /ws/{id}` | Terminal WebSocket proxy |
 | `GET /` | Embedded web UI (SPA) |
 
-## Repo layout
 
-| Path | Language | Purpose |
-|---|---|---|
-| `cli/gmux` | Go | Session launcher — PTY, WebSocket, adapters |
-| `services/gmuxd` | Go | Daemon — discovery, proxy, embedded web UI |
-| `apps/gmux-web` | TypeScript/Preact | Browser UI — sidebar, terminal, header |
-| `packages/protocol` | TypeScript | Shared schemas (zod-validated) |
-| `packages/adapter` | Go | Adapter interfaces and built-in adapters |

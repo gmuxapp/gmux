@@ -1,140 +1,85 @@
 ---
 title: Running in Docker
-description: Run gmux in a container with your dev tools and Tailscale access.
+description: Run gmux in a container with remote access or LAN port mapping.
 ---
 
 > For the planned native devcontainer integration, see [Peer Discovery & Aggregation](/planned/peer-discovery-aggregation#devcontainers).
 
-## What you get
+There are several ways to access a containerized gmux, depending on your network setup. Each is available as a ready-to-run example in the [`examples/`](https://github.com/gmuxapp/gmux/tree/main/examples) directory.
 
-A Docker container with:
-- gmux and gmuxd (auto-updated on each start)
-- Your choice of dev tools (language runtimes, CLIs, etc.)
-- Tailscale remote access (its own device on your tailnet)
-- A persistent workspace for repos
-- Standard devcontainer base image
+## Tailscale (recommended)
 
-## Template
+The container registers as its own device on your tailnet. You get HTTPS, cryptographic identity, and access from any device on your tailnet.
 
-### Dockerfile
-
-```dockerfile
-FROM mcr.microsoft.com/devcontainers/base:debian
-
-# Project-specific tools (add your own here)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    fish \
-    && rm -rf /var/lib/apt/lists/*
-
-# gmux (auto-updated on each container start)
-ARG GMUX_VERSION=0.8.0
-ADD https://github.com/gmuxapp/gmux/releases/download/v${GMUX_VERSION}/gmux_${GMUX_VERSION}_linux_amd64.tar.gz /tmp/gmux.tar.gz
-RUN tar xzf /tmp/gmux.tar.gz -C /usr/local/bin/ gmux gmuxd && rm /tmp/gmux.tar.gz
-
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-ENTRYPOINT ["entrypoint.sh"]
-```
-
-### entrypoint.sh
+**Example:** [`examples/docker-tailscale/`](https://github.com/gmuxapp/gmux/tree/main/examples/docker-tailscale)
 
 ```bash
-#!/bin/bash
-set -e
+git clone https://github.com/gmuxapp/gmux
+cd gmux/examples/docker-tailscale
 
-# Auto-update gmux binaries on start
-if latest=$(curl -fsSL --connect-timeout 5 \
-    https://api.github.com/repos/gmuxapp/gmux/releases/latest 2>/dev/null); then
-  tag=$(echo "$latest" | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
-  version=${tag#v}
-  current=$(gmuxd version 2>/dev/null || echo "unknown")
-
-  if [ -n "$version" ] && ! echo "$current" | grep -qF "$version"; then
-    echo "Updating gmux: $current -> $version"
-    url="https://github.com/gmuxapp/gmux/releases/download/${tag}/gmux_${version}_linux_amd64.tar.gz"
-    curl -fsSL "$url" | tar xz -C /usr/local/bin/ gmux gmuxd
-    echo "Done"
-  else
-    echo "gmux $version is current"
-  fi
-else
-  echo "Skipping gmux update check (GitHub unreachable)"
-fi
-
-exec gmuxd start --replace
-```
-
-### compose.yaml
-
-```yaml
-services:
-  dev:
-    build: .
-    container_name: dev
-    restart: unless-stopped
-    environment:
-      - TERM=xterm-256color
-      - SHELL=/usr/bin/fish  # or /bin/bash, /bin/zsh
-    volumes:
-      # Persistent workspace for repos
-      - ./data/workspace:/workspace
-      # gmux config and Tailscale state (container-specific)
-      - ./data/gmux-config:/root/.config/gmux
-      - ./data/gmux-state:/root/.local/state/gmux
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8790/ >/dev/null"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-```
-
-## Setup
-
-### 1. Create the directory structure
-
-```bash
 mkdir -p data/{workspace,gmux-config,gmux-state}
-```
-
-### 2. Configure gmux
-
-```bash
 cat > data/gmux-config/host.toml << 'EOF'
 [tailscale]
 enabled = true
 hostname = "dev"
 EOF
-```
 
-Pick a hostname that's unique on your tailnet.
-
-### 3. Build and start
-
-```bash
 docker compose up -d --build
+docker logs dev 2>&1 | grep "login.tailscale.com"
+# Visit the URL to register, then open https://dev.your-tailnet.ts.net
 ```
 
-### 4. Authenticate Tailscale
+See [Remote Access](/remote-access/) for Tailscale setup details.
 
-Check the logs for the login URL:
+## WireGuard
+
+If you already have a WireGuard tunnel on the host, bind gmux to the tunnel interface IP so it's only reachable through the VPN. The tunnel provides encryption; gmux provides token authentication.
+
+**Example:** [`examples/docker-wireguard/`](https://github.com/gmuxapp/gmux/tree/main/examples/docker-wireguard)
+
+The compose file binds to your WireGuard IP (e.g. `10.0.0.2:8790:8790`) so gmux is only reachable through the tunnel.
+
+## Reverse proxy with OIDC (Traefik + PocketID)
+
+For a full HTTPS setup with OIDC authentication, put Traefik in front of gmux with PocketID handling login. Traefik injects the gmux bearer token into forwarded requests via a headers middleware, so you only authenticate through your OIDC provider.
+
+**Example:** [`examples/docker-traefik-pocketid/`](https://github.com/gmuxapp/gmux/tree/main/examples/docker-traefik-pocketid)
+
+```
+browser → Traefik (HTTPS) → PocketID (OIDC) → gmux (HTTP + token)
+```
+
+This gives you a valid Let's Encrypt certificate on your own domain, with the gmux token as a second layer you never interact with directly. The example uses PocketID but works with any OIDC provider (Authelia, Authentik, Keycloak).
+
+## Pre-generated auth token
+
+By default, gmuxd generates a random auth token on first start. If you need a known value for scripting, health checks, reverse proxy injection, or API access from outside the container:
 
 ```bash
-docker logs dev 2>&1 | grep "login.tailscale.com"
+mkdir -p data/gmux-state
+openssl rand -hex 32 > data/gmux-state/auth-token
+chmod 600 data/gmux-state/auth-token
 ```
 
-Visit the URL to register the container as a device on your tailnet.
+gmuxd uses the existing file instead of generating a new one. Any client that needs access can read from the same file or set the `Authorization: Bearer <token>` header directly.
 
-### 5. Access
+## How it works
 
-Open `https://dev.your-tailnet.ts.net` in your browser.
+The container runs `gmuxd` as its entrypoint. Inside the container, `GMUXD_LISTEN=0.0.0.0` binds to all interfaces so the host (or Tailscale) can reach the port. The entrypoint script auto-updates gmux binaries on each start.
+
+### Bind address
+
+`GMUXD_LISTEN` controls which address gmuxd binds to inside the container. It's an environment variable, not a config file option, because it's a deployment concern. The default (`127.0.0.1`) only accepts local connections, which is correct for bare-metal installs but unreachable from outside a container. See [Environment variables](/reference/environment/#bind-address) for details.
+
+### What's blocked over TCP
+
+The `/v1/shutdown` endpoint is blocked on the TCP listener regardless of authentication. Stopping the daemon is a local-only operation available through the Unix socket. This prevents an authenticated network user from killing gmuxd.
 
 ## Customization
 
 ### Adding tools
 
-Add packages to the `apt-get install` line in the Dockerfile, or install language-specific tools via their own mechanisms (rustup, fnm, etc.). Rebuild with:
+Edit the `Dockerfile` to add packages, language runtimes, or other tools. Rebuild with:
 
 ```bash
 docker compose up -d --build
@@ -142,44 +87,26 @@ docker compose up -d --build
 
 ### Persistent home
 
-To persist installed tools and shell history across container rebuilds, mount a volume at the container's home directory:
+To keep installed tools and shell history across container rebuilds, mount a volume at the home directory:
 
 ```yaml
 volumes:
   - ./data/home:/root
-  # Override gmux config/state so they don't conflict with host
   - ./data/gmux-config:/root/.config/gmux
   - ./data/gmux-state:/root/.local/state/gmux
 ```
 
-### Shared home with host
-
-If you manage dotfiles with chezmoi or a similar tool and want the container to share your host's config:
-
-```yaml
-volumes:
-  - /path/to/your/home:/root
-  # Container-specific overrides
-  - ./data/gmux-config:/root/.config/gmux
-  - ./data/gmux-state:/root/.local/state/gmux
-```
-
-The overlay mounts for gmux config and state ensure the container has its own Tailscale identity and hostname, separate from the host.
+The overlay mounts for gmux config and state give the container its own Tailscale identity and hostname, separate from the host.
 
 ### Multiple projects
 
 Run separate containers for different projects. Each gets its own Tailscale hostname:
 
-```bash
+```toml
 # data/project-a/gmux-config/host.toml
 [tailscale]
 enabled = true
 hostname = "project-a"
-
-# data/project-b/gmux-config/host.toml
-[tailscale]
-enabled = true
-hostname = "project-b"
 ```
 
-This works but means switching between browser tabs per project. See [Peer Discovery & Aggregation](/planned/peer-discovery-aggregation) for the planned single-dashboard solution.
+This means switching between browser tabs per project. See [Peer Discovery & Aggregation](/planned/peer-discovery-aggregation) for the planned single-dashboard solution.

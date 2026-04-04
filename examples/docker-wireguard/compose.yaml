@@ -1,0 +1,21 @@
+services:
+  dev:
+    build: .
+    container_name: dev
+    restart: unless-stopped
+    ports:
+      # Bind to your WireGuard interface IP only.
+      # Replace 10.0.0.2 with your actual WireGuard address.
+      - "10.0.0.2:8790:8790"
+    environment:
+      - TERM=xterm-256color
+      - SHELL=/usr/bin/fish
+    volumes:
+      - ./data/workspace:/workspace
+      - ./data/gmux-state:/root/.local/state/gmux
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8790/ >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

@@ -1,0 +1,58 @@
+---
+title: Getting Started
+description: Install gmux and launch your first session in under a minute.
+---
+
+import { Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+gmux is a browser-based session manager for AI agents, test runners, and long-running processes. Long-running command-line work is easy to start and annoying to supervise: agents, watchers, builds, and shells end up buried in tabs or tmux panes. gmux gives you a live sidebar of everything running across a machine, visible from any browser.
+
+## Install
+
+<Tabs>
+  <TabItem label="macOS (Homebrew)">
+    ```bash
+    brew install gmuxapp/tap/gmux
+    ```
+  </TabItem>
+  <TabItem label="Linux">
+    ```bash
+    curl -sSfL https://gmux.app/install.sh | sh
+    ```
+    [What does this script do?](/install.sh)
+  </TabItem>
+</Tabs>
+
+Or download both binaries (`gmuxd` + `gmux`) from [GitHub Releases](https://github.com/gmuxapp/gmux/releases). On Windows, the Linux instructions work inside WSL.
+
+## Run
+
+```bash
+gmux pi              # launch a coding agent
+gmux pytest --watch  # or any command
+
+gmux                 # open the dashboard
+```
+
+`gmux` auto-starts the daemon (`gmuxd`) on first run. Running `gmux` with no arguments opens the dashboard in a dedicated browser window (Chrome/Chromium `--app` mode when available, otherwise your default browser).
+
+The first time, the sidebar will be empty. Click **Add project** to pick which project directories appear. Once added, sessions in those directories show up automatically. Click a session to attach a live terminal.
+
+See [Using the UI](/using-the-ui) for a full walkthrough.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Using the UI" description="What you see and how to work with it." href="/using-the-ui" />
+  <LinkCard title="Remote Access" description="Access gmux from your phone or another machine." href="/remote-access" />
+  <LinkCard title="Configuration" description="Config files, CLI commands, environment variables." href="/configuration" />
+  <LinkCard title="Troubleshooting" description="Dashboard not opening, sessions not appearing, updating." href="/troubleshooting" />
+</CardGrid>
+
+## Community
+
+<LinkCard
+  title="Join the Discord"
+  description="Stay up to date on development, releases, and ask questions."
+  href="https://discord.gg/Mg6EJHFZxu"
+/>

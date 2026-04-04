@@ -1,0 +1,93 @@
+services:
+  traefik:
+    image: traefik:v3
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "80:80"
+    environment:
+      # Set your DNS provider credentials for Let's Encrypt.
+      # This example uses Cloudflare; see https://doc.traefik.io/traefik/https/acme/
+      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./data/traefik/acme.json:/acme.json
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.dnschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.dnschallenge.provider=cloudflare
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/acme.json
+    networks:
+      - proxy
+
+  pocket-id:
+    image: stonith404/pocket-id
+    container_name: pocket-id
+    restart: unless-stopped
+    environment:
+      - PUBLIC_APP_URL=https://auth.${DOMAIN}
+    volumes:
+      - ./data/pocket-id:/data
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.pocket-id.rule=Host(`auth.${DOMAIN}`)
+      - traefik.http.routers.pocket-id.entrypoints=websecure
+      - traefik.http.routers.pocket-id.tls.certresolver=letsencrypt
+      - traefik.http.services.pocket-id.loadbalancer.server.port=80
+    networks:
+      - proxy
+
+  forward-auth:
+    image: italypaleale/traefik-forward-auth:v4
+    container_name: forward-auth
+    restart: unless-stopped
+    environment:
+      - OIDC_ISSUER=https://auth.${DOMAIN}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
+      - AUTH_SECRET=${AUTH_SECRET}
+      - CALLBACK_URL=https://gmux.${DOMAIN}/_auth/callback
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.forward-auth.loadbalancer.server.port=4181
+      # ForwardAuth middleware: Traefik calls this on every request to gmux.
+      - traefik.http.middlewares.pocket-id-auth.forwardauth.address=http://forward-auth:4181
+      - traefik.http.middlewares.pocket-id-auth.forwardauth.authResponseHeaders=X-Forwarded-User
+      # Route for the OIDC callback
+      - traefik.http.routers.forward-auth.rule=Host(`gmux.${DOMAIN}`) && PathPrefix(`/_auth`)
+      - traefik.http.routers.forward-auth.entrypoints=websecure
+      - traefik.http.routers.forward-auth.tls.certresolver=letsencrypt
+    networks:
+      - proxy
+
+  gmux:
+    build: .
+    container_name: gmux
+    restart: unless-stopped
+    environment:
+      - TERM=xterm-256color
+      - SHELL=/bin/bash
+    volumes:
+      - ./data/workspace:/workspace
+      - ./data/gmux-state:/root/.local/state/gmux
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.gmux.rule=Host(`gmux.${DOMAIN}`)
+      - traefik.http.routers.gmux.entrypoints=websecure
+      - traefik.http.routers.gmux.tls.certresolver=letsencrypt
+      # Apply PocketID auth, then inject the gmux bearer token.
+      - traefik.http.routers.gmux.middlewares=pocket-id-auth,gmux-token
+      - traefik.http.middlewares.gmux-token.headers.customrequestheaders.Authorization=Bearer ${GMUX_TOKEN}
+      - traefik.http.services.gmux.loadbalancer.server.port=8790
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    name: proxy

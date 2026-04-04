@@ -54,7 +54,7 @@ Active when `codex` is installed. Provides:
 
 See [Codex integration](/integrations/codex) for details.
 
-### Pi
+### pi
 
 Active when `pi` is installed. Provides:
 

@@ -19,21 +19,15 @@ export default defineConfig({
       ],
       customCss: ['./src/styles/custom.css'],
       sidebar: [
+        { label: 'Getting Started', slug: 'getting-started' },
         { label: 'Changelog', slug: 'changelog' },
-        {
-          label: 'Getting Started',
-          items: [
-            { label: 'Introduction', slug: 'introduction' },
-            { label: 'Quick Start', slug: 'quick-start' },
-          ],
-        },
         {
           label: 'Guides',
           items: [
             { label: 'Using the UI', slug: 'using-the-ui' },
+            { label: 'Configuration', slug: 'configuration' },
             { label: 'Remote Access', slug: 'remote-access' },
             { label: 'Running in Docker', slug: 'running-in-docker' },
-            { label: 'Configuration', slug: 'configuration' },
             { label: 'Troubleshooting', slug: 'troubleshooting' },
           ],
         },
