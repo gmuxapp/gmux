@@ -1,6 +1,6 @@
 ---
 title: theme.jsonc
-description: Complete field reference for ~/.config/gmux/theme.jsonc
+description: Reference for ~/.config/gmux/theme.jsonc — terminal color palette.
 tableOfContents:
   maxHeadingLevel: 3
 ---
@@ -11,13 +11,34 @@ tableOfContents:
 This page is generated from the [validation schema](https://github.com/gmuxapp/gmux/blob/main/apps/gmux-web/src/settings-schema.ts).
 :::
 
+`~/.config/gmux/theme.jsonc` (or `$XDG_CONFIG_HOME/gmux/theme.jsonc`)
+
 Terminal color palette. All fields are optional CSS color strings.
 Omitted colors use the built-in defaults shown below.
 
 This file is drop-in compatible with [Windows Terminal themes](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/windowsterminal):
 `purple`/`brightPurple` are mapped to `magenta`/`brightMagenta`, and the `name` field is ignored.
 
-For guides and examples, see [Configuration](/configuration/#terminal-theme).
+## Example
+
+```jsonc
+{
+  "background": "#282a36",
+  "foreground": "#f8f8f2",
+  "cursor": "#f8f8f2",
+  "selectionBackground": "#44475a",
+  "black": "#21222c",
+  "red": "#ff5555",
+  "green": "#50fa7b",
+  "yellow": "#f1fa8c",
+  "blue": "#bd93f9",
+  "purple": "#ff79c6",   // mapped to magenta
+  "cyan": "#8be9fd",
+  "white": "#f8f8f2"
+}
+```
+
+## Fields
 
 ### `foreground`
 

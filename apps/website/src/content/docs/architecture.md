@@ -32,7 +32,7 @@ One per machine. It:
 
 `gmux` auto-starts `gmuxd` if it isn't already running. If a daemon from an older version is detected, `gmux` automatically replaces it so the child process always talks to a compatible daemon.
 
-Configuration lives in `~/.config/gmux/host.toml`. See [Security](/security) and [Remote Access](/remote-access) for details.
+Configuration lives in `~/.config/gmux/host.toml`. See [Configuration](/configuration) for the full file layout, or [Security](/security) and [Remote Access](/remote-access) for details on those topics.
 
 ### Web UI
 
@@ -71,12 +71,17 @@ Served by `gmuxd` on a Unix socket (local IPC) and a TCP listener (default `127.
 | Endpoint | Purpose |
 |---|---|
 | `GET /v1/sessions` | List all sessions |
+| `GET /v1/projects` | Get project configuration |
+| `PUT /v1/projects` | Replace project list |
+| `POST /v1/projects/add` | Add a discovered project |
 | `GET /v1/config` | Launcher configuration |
+| `GET /v1/frontend-config` | User settings + theme (from JSONC files) |
 | `POST /v1/launch` | Launch a new session |
 | `POST /v1/sessions/{id}/kill` | Kill a session |
 | `POST /v1/sessions/{id}/dismiss` | Kill + remove |
 | `POST /v1/sessions/{id}/resume` | Resume a resumable session |
-| `GET /v1/events` | SSE stream of session changes |
+| `GET /v1/events` | SSE stream of session and project changes |
+| `GET /v1/health` | Daemon health check |
 | `WS /ws/{id}` | Terminal WebSocket proxy |
 | `GET /` | Embedded web UI (SPA) |
 

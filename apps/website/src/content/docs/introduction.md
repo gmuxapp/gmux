@@ -12,10 +12,10 @@ Long-running command-line work is easy to start and annoying to supervise. AI ag
 ## What it does
 
 - Launches commands as managed sessions through `gmux`
-- Groups sessions by project directory in a sidebar
-- Shows live status: working (cyan dot) or needs attention (amber dot)
+- Groups sessions into projects in a sidebar
+- Shows live status: working (pulsing ring) or unread output (blue dot)
 - Provides a full interactive terminal in the browser via xterm.js
-- Uses adapters to extract tool-specific status (e.g. pi's thinking/waiting states)
+- Uses adapters to extract tool-specific status (e.g. Pi's thinking/waiting states)
 - Supports resumable sessions for tools with file-backed state
 
 ## Core concepts
@@ -32,12 +32,18 @@ gmux pytest --watch
 
 Each session gets a PTY, a WebSocket server, and an adapter for status extraction.
 
+### Projects
+
+Sessions are grouped into projects by repository. Two clones of the same repo on different machines (or with different directory names) appear under one project heading. You choose which projects appear in the sidebar.
+
 ### Adapters
 
 Adapters teach gmux how to interpret specific tools:
 
 - **shell** — terminal title tracking (default fallback)
 - **pi** — live status detection, file-backed titles, and session resume
+- **claude** — live status, conversation titles, and resume via `claude --resume`
+- **codex** — live status, prompt-based titles, and resume via `codex resume`
 
 See [Adapters](/adapters) for details.
 

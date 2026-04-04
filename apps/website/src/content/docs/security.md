@@ -87,15 +87,9 @@ There is no unauthenticated TCP listener. All TCP connections require a bearer t
 
 ## Config validation
 
-The config file (`~/.config/gmux/host.toml`) is strictly validated at startup. gmuxd refuses to start if:
+The config file (`~/.config/gmux/host.toml`) is strictly validated at startup. gmuxd refuses to start on unknown keys, invalid values, or bad TOML syntax. Silent fallback to defaults is dangerous for security settings: a typo like `alow` instead of `allow` would silently result in an empty allow list.
 
-- **Unknown keys** are present — a typo like `alow` instead of `allow` would silently result in a default (empty) allow list. Unknown keys are a hard error.
-- **Allow entries don't look like login names** — entries without `@` are rejected (e.g. `"not-a-login"` instead of `"user@github"`).
-- **Hostname is empty** when tailscale is enabled.
-- **Port is out of range** (must be 1–65535).
-- **Invalid TOML syntax**.
-
-No config file is fine — safe defaults are used (localhost only, tailscale disabled).
+No config file is fine; safe defaults are used (localhost only, tailscale disabled). See [host.toml reference](/reference/host-toml/#strict-validation) for the full list of validation rules.
 
 ## Runner security
 

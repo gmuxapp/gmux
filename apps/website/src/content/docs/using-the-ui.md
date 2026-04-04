@@ -13,25 +13,32 @@ Every session has a stable URL:
 http://localhost:8790/<project>/<adapter>/<slug>
 ```
 
-For example, `/gmux/pi/fix-auth-bug` links directly to a pi session in the gmux project. These URLs are bookmarkable, shareable, and stable across session resume. External tools (notifications, CI, scripts) can link directly to a specific session.
+For example, `/gmux/pi/fix-auth-bug` links directly to a Pi session in the gmux project. These URLs are bookmarkable, shareable, and stable across session resume. External tools (notifications, CI, scripts) can link directly to a specific session.
 
-The project segment is the project slug from your project configuration. The adapter segment is the session kind (`pi`, `shell`, `claude`). The slug is an adapter-provided identifier for the specific session.
+The project segment is the project slug (shown in the sidebar header). The adapter segment is the session kind (`pi`, `shell`, `claude`). The slug is an adapter-provided identifier for the specific session.
 
 ## The sidebar
 
-The left panel lists all sessions, grouped by working directory. Each folder shows the project path, and sessions within it are sorted by creation time.
+The left panel lists your sessions grouped into projects.
+
+### Projects
+
+Projects group sessions by repository. When you first launch a session, gmuxd discovers it and offers to add it as a project. Click **Add project** in the empty state, or use the **Manage projects** button at the bottom of the sidebar.
+
+Two clones of the same repo (different paths, different machines) are grouped under one project as long as they share a git remote URL. Projects without remotes match by filesystem path, with the longest prefix winning.
 
 ### Session indicators
 
-Each session has a colored dot on the left:
+Each session has a dot on the left edge:
 
-| Dot | Meaning |
-|-----|---------|
-| **Pulsing cyan** | The tool is actively working (building, thinking, running tests) |
-| **Amber** | Something happened that you haven't seen yet (new output while viewing another session) |
+| Indicator | Meaning |
+|-----------|---------|
+| **Pulsing ring** | The tool is actively working (building, thinking, running tests) |
+| **Blue dot** | New output you haven't seen yet (viewing the session clears it) |
+| **Muted ring** (brief) | Transient terminal activity in a shell session, fades after a few seconds |
 | **No dot** | Idle or waiting for input |
 
-The working/idle detection comes from [adapters](/adapters). Without a specific adapter, gmux only knows whether the process is alive.
+Agent sessions (Pi, Claude, Codex) only trigger the blue unread dot when the assistant completes a turn, not on every line of output.
 
 ### Session states
 
@@ -45,24 +52,24 @@ The working/idle detection comes from [adapters](/adapters). Without a specific 
 
 Hover over a session to reveal the **×** button:
 
-- **Live sessions** — kills the process. If the adapter supports resume and a session file was attributed, the session moves to the "Resume previous" drawer.
+- **Live sessions** — kills the process. If the adapter supports resume, the session moves to the "Resume previous" drawer.
 - **Resumable sessions** — dismisses the entry (it can still be found in the drawer until gmuxd restarts).
 
 ### Resuming sessions
 
-Below the live sessions, a **"Resume previous"** button expands to show resumable sessions from previous runs. Click one to resume — the drawer collapses and the session appears as a live entry.
+Below the live sessions, a **"Resume previous"** button expands to show resumable sessions from previous runs. Click one to resume; the drawer collapses and the session appears as a live entry.
 
 ## The terminal
 
-Click a session to attach. You get a full interactive terminal powered by [xterm.js](https://xtermjs.org/) — colors, cursor positioning, mouse support, and images all work.
+Click a session to attach. You get a full interactive terminal powered by [xterm.js](https://xtermjs.org/). Colors, cursor positioning, mouse support, and images all work.
 
 ### Header bar
 
 Above the terminal, the header shows:
 
-- **Session title** — extracted from the tool (pi's first message, shell's window title)
+- **Session title** — extracted from the tool (Pi's first message, shell's window title)
 - **Status label** — adapter-reported state like "working" or "completed"
-- **Working indicator** — pulsing cyan dot when the tool is busy
+- **Working indicator** — pulsing ring when the tool is busy
 
 ## Launching sessions
 
@@ -80,7 +87,7 @@ The session appears in the sidebar immediately.
 
 ### From the UI
 
-Click the **+** button on a folder header to launch a new session in that directory. A dropdown shows the available launchers (e.g. "Pi", "Shell"). The default launcher runs on click; others appear in the dropdown.
+Click the **+** button on a project header to launch a new session in that directory. A dropdown shows the available launchers (e.g. "Pi", "Shell"). The default launcher runs on click; others appear in the dropdown.
 
 The empty state (when no session is selected) also shows launch buttons.
 
@@ -119,7 +126,7 @@ gmux ships a complete default keymap. Every shortcut is explicit; nothing relies
 | **Cmd+K** | Clear screen (sends Ctrl+L) |
 
 :::note[macCommandIsCtrl]
-If you prefer every Cmd+character to send its Ctrl equivalent (Cmd+A = beginning of line, Cmd+K = kill to end, Cmd+R = reverse search, etc.), set `macCommandIsCtrl` in your keybinds config. See [Configuration](/configuration#maccommandisctrl).
+If you prefer every Cmd+character to send its Ctrl equivalent (Cmd+A = beginning of line, Cmd+K = kill to end, Cmd+R = reverse search, etc.), set `macCommandIsCtrl` in your keybinds config. See [settings.jsonc reference](/reference/settings/#maccommandisctrl).
 :::
 
 ### Why explicit bindings?
@@ -135,7 +142,7 @@ This is why gmux owns the full keymap rather than relying on passthrough.
 
 ### Customizing keybinds
 
-All defaults can be overridden or disabled via the `keybinds` array in `~/.config/gmux/settings.jsonc`. See [Configuration](/configuration#keybinds) for the full reference, actions list, and starter templates.
+All defaults can be overridden or disabled via the `keybinds` array in `~/.config/gmux/settings.jsonc`. See [settings.jsonc reference](/reference/settings/#keybinds-guide) for the full reference, actions list, and starter templates.
 
 :::tip[App mode]
 Browsers reserve many shortcuts (Ctrl+T, Ctrl+N, Ctrl+W, etc.) that don't reach the terminal. Run gmux as a standalone app to get full keyboard pass-through:
@@ -149,9 +156,9 @@ Or install it as a PWA from the browser menu (⋮ → Install gmux).
 
 ## Mobile
 
-Open the same URL on your phone (or via [remote access](/remote-access) on another device). The UI adapts to small screens:
+Open the same URL on your phone (or via [remote access](/remote-access) on another device). The UI adapts to touch devices:
 
-- The sidebar slides in from the left — tap the menu button (☰) to show it
+- The sidebar slides in from the left; tap the menu button (☰) to show it
 - A bottom bar provides essential keys that phones don't have:
 
 | Button | Sends |
@@ -160,16 +167,16 @@ Open the same URL on your phone (or via [remote access](/remote-access) on anoth
 | **tab** | Tab |
 | **ctrl** | Arms Ctrl for the next key you type (tap ctrl, then tap c = Ctrl+C) |
 | **↑ ↓** | Arrow keys |
-| **↵** | Enter |
+| **↵** | Enter (separate from the keyboard's Return, which inserts a newline) |
 
-The ctrl button highlights when armed and disarms after the next keypress or after a timeout.
+The ctrl button highlights when armed and disarms after the next keypress or after a timeout. The mobile toolbar appears based on touch capability, not screen width, so tablets in landscape get touch controls while desktop users with narrow windows keep the sidebar.
 
 ## Self-reporting status
 
 Any process can update its own sidebar entry without a custom adapter. gmux sets `$GMUX_SOCKET` in the child's environment:
 
 ```bash
-# Show "building" with a working dot
+# Show "building" with a working indicator
 curl -X PUT --unix-socket "$GMUX_SOCKET" \
   http://localhost/status \
   -H 'Content-Type: application/json' \
