@@ -12,6 +12,7 @@ Variables that affect the daemon.
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `GMUXD_LISTEN` | TCP bind address (IPv4 or IPv6). | `127.0.0.1` |
+| `GMUXD_TOKEN` | Seed the auth token file on first start. | *(none)* |
 | `XDG_CONFIG_HOME` | Base directory for config files. | `~/.config` |
 | `XDG_STATE_HOME` | Base directory for runtime state (socket, auth token). | `~/.local/state` |
 | `GMUXD_DEV_PROXY` | Proxy frontend requests to a Vite dev server (development only). | *(none)* |
@@ -27,6 +28,39 @@ GMUXD_LISTEN=0.0.0.0 gmuxd start
 ```
 
 The bind address is controlled exclusively by the `GMUXD_LISTEN` environment variable. It is not a config file option because it is a deployment concern, not a user preference.
+
+### Auth token
+
+`GMUXD_TOKEN` seeds the auth token file (`~/.local/state/gmux/auth-token`) on first start. This is a provisioning convenience for container deployments where mounting a pre-generated file is impractical.
+
+The value must be at least 64 hex characters (`openssl rand -hex 32` produces exactly this).
+
+**Behavior:**
+
+| Token file | `GMUXD_TOKEN` | Result |
+|------------|---------------|--------|
+| missing | not set | Generate a random token, write to file |
+| missing | set | Validate, write to file |
+| present | not set | Use file |
+| present | matches env | Use file |
+| present | differs | **Refuse to start** |
+| corrupted | any | **Refuse to start** |
+
+After reading, gmuxd **unsets** `GMUXD_TOKEN` from the process environment so child shells (your terminal sessions) don't inherit it. This reduces but does not eliminate exposure: the original value may still be visible via `/proc/*/environ` or `docker inspect`. The file at `~/.local/state/gmux/auth-token` (permissions `0600`) is the primary storage and the safer long-term secret location.
+
+For a known token in Docker Compose:
+
+```bash
+openssl rand -hex 32   # copy the output
+```
+
+```yaml
+environment:
+  GMUXD_TOKEN: "paste-hex-here"
+  GMUXD_LISTEN: "0.0.0.0"
+```
+
+On first start, gmuxd writes the token to disk. On subsequent starts, the file already exists and the env var is verified against it.
 
 ## gmux (CLI)
 

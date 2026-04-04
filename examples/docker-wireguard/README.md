@@ -38,7 +38,17 @@ Inside the container, `GMUXD_LISTEN=0.0.0.0` lets the container accept
 connections from the mapped port. The bearer token is still required on
 every request.
 
-## Pre-generated auth token
+## Setting a known auth token
+
+You can seed the token via environment variable instead of pre-generating
+a file:
+
+```yaml
+environment:
+  GMUXD_TOKEN: "output-of-openssl-rand-hex-32"
+```
+
+Or write the file directly:
 
 ```bash
 mkdir -p data/gmux-state
@@ -46,5 +56,5 @@ openssl rand -hex 32 > data/gmux-state/auth-token
 chmod 600 data/gmux-state/auth-token
 ```
 
-See the [Running in Docker](https://gmux.app/running-in-docker/#pre-generated-auth-token)
+See the [Running in Docker](https://gmux.app/running-in-docker/#setting-the-auth-token)
 guide for more details.

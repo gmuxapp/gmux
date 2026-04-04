@@ -20,6 +20,6 @@ else
   echo "Skipping gmux update check (GitHub unreachable)"
 fi
 
-# Bind to all interfaces so the host can reach the container.
-# All connections still require the bearer token.
-exec env GMUXD_LISTEN=0.0.0.0 gmuxd start --replace
+# Start the daemon. GMUXD_LISTEN and GMUXD_TOKEN are set via
+# compose environment; see compose.yaml.
+exec gmuxd start --replace

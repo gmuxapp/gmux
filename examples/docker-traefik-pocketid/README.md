@@ -23,15 +23,11 @@ Users never see or manage it.
 
 ## Setup
 
-### 1. Create directories and generate secrets
+### 1. Create directories
 
 ```bash
 mkdir -p data/{workspace,gmux-state,pocket-id,traefik}
 touch data/traefik/acme.json && chmod 600 data/traefik/acme.json
-
-# Generate the gmux auth token
-openssl rand -hex 32 > data/gmux-state/auth-token
-chmod 600 data/gmux-state/auth-token
 ```
 
 ### 2. Configure environment
@@ -42,8 +38,12 @@ cp .env.example .env
 
 Edit `.env`:
 - Set your `DOMAIN`, `ACME_EMAIL`, and DNS provider credentials
-- Set `GMUX_TOKEN` to the contents of `data/gmux-state/auth-token`
+- Generate a token with `openssl rand -hex 32` and paste it as `GMUX_TOKEN`
 - Leave `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` empty for now
+
+The `GMUX_TOKEN` value is used in two places: Traefik injects it into
+forwarded requests (via a headers middleware), and gmuxd reads it via
+`GMUXD_TOKEN` to seed the auth token file on first start.
 
 ### 3. Start Traefik and PocketID
 

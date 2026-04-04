@@ -51,9 +51,23 @@ browser → Traefik (HTTPS) → PocketID (OIDC) → gmux (HTTP + token)
 
 This gives you a valid Let's Encrypt certificate on your own domain, with the gmux token as a second layer you never interact with directly. The example uses PocketID but works with any OIDC provider (Authelia, Authentik, Keycloak).
 
-## Pre-generated auth token
+## Setting the auth token
 
-By default, gmuxd generates a random auth token on first start. If you need a known value for scripting, health checks, reverse proxy injection, or API access from outside the container:
+By default, gmuxd generates a random auth token on first start. For container deployments where you need a known value (reverse proxy injection, health checks, scripting), there are two options.
+
+**Option 1: Environment variable (recommended for containers).** Set `GMUXD_TOKEN` in your compose file. On first start, gmuxd writes it to disk. On subsequent starts, the file already exists and the env var is verified against it.
+
+```bash
+openssl rand -hex 32   # copy the output into your compose.yaml or .env
+```
+
+```yaml
+environment:
+  GMUXD_TOKEN: "paste-hex-here"
+  GMUXD_LISTEN: "0.0.0.0"
+```
+
+**Option 2: Pre-generated file.** Write the token to the state directory before starting the container.
 
 ```bash
 mkdir -p data/gmux-state
@@ -61,7 +75,7 @@ openssl rand -hex 32 > data/gmux-state/auth-token
 chmod 600 data/gmux-state/auth-token
 ```
 
-gmuxd uses the existing file instead of generating a new one. Any client that needs access can read from the same file or set the `Authorization: Bearer <token>` header directly.
+Either way, any client that needs access can set the `Authorization: Bearer <token>` header. See [Environment variables](/reference/environment/#auth-token) for the full behavior table.
 
 ## How it works
 

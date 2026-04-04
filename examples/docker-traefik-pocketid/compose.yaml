@@ -73,6 +73,8 @@ services:
     environment:
       - TERM=xterm-256color
       - SHELL=/bin/bash
+      - GMUXD_TOKEN=${GMUX_TOKEN}
+      - GMUXD_LISTEN=0.0.0.0
     volumes:
       - ./data/workspace:/workspace
       - ./data/gmux-state:/root/.local/state/gmux

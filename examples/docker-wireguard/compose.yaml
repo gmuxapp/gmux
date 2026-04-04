@@ -10,6 +10,7 @@ services:
     environment:
       - TERM=xterm-256color
       - SHELL=/usr/bin/fish
+      - GMUXD_LISTEN=0.0.0.0
     volumes:
       - ./data/workspace:/workspace
       - ./data/gmux-state:/root/.local/state/gmux
