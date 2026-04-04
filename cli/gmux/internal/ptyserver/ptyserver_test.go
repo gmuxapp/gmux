@@ -501,38 +501,9 @@ func TestPTYServerResizeDedup(t *testing.T) {
 	}
 }
 
-func TestLastDECTCEM(t *testing.T) {
-	tests := []struct {
-		name    string
-		data    []byte
-		wantVis bool
-		wantOK  bool
-	}{
-		{"show cursor", []byte("\x1b[?25h"), true, true},
-		{"hide cursor", []byte("\x1b[?25l"), false, true},
-		{"no sequence", []byte("hello world"), false, false},
-		{"show then hide", []byte("\x1b[?25hstuff\x1b[?25l"), false, true},
-		{"hide then show", []byte("\x1b[?25lstuff\x1b[?25h"), true, true},
-		{"embedded in TUI frame", []byte("\x1b[?25l\x1b[1;1HContent\x1b[?25h"), true, true},
-		{"too short", []byte("\x1b[?2"), false, false},
-		{"empty", []byte{}, false, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			vis, ok := lastDECTCEM(tt.data)
-			if ok != tt.wantOK {
-				t.Errorf("found = %v, want %v", ok, tt.wantOK)
-			}
-			if ok && vis != tt.wantVis {
-				t.Errorf("visible = %v, want %v", vis, tt.wantVis)
-			}
-		})
-	}
-}
-
 // TestPTYServerCursorStateReplay verifies that the replay frame restores
 // DECTCEM cursor visibility. A child that hides the cursor should produce
-// a replay frame ending with ESC[?25l (before ESU).
+// a replay frame containing ESC[?25l.
 func TestPTYServerCursorStateReplay(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
 
@@ -572,10 +543,90 @@ func TestPTYServerCursorStateReplay(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 
-	// The frame should end with: ESC[?25l (cursor restore) + ESC[?2026l (ESU)
-	hideThenESU := "\x1b[?25l\x1b[?2026l"
-	if !contains(data, hideThenESU) {
-		t.Errorf("replay frame should contain cursor-hide before ESU, got tail: %q", data[max(0, len(data)-30):])
+	// The replay frame should contain cursor-hide (ESC[?25l).
+	// MarshalBinary includes cursor visibility in the serialized screen state.
+	if !contains(data, "\x1b[?25l") {
+		t.Errorf("replay frame should contain cursor-hide, got tail: %q", data[max(0, len(data)-30):])
+	}
+}
+
+// TestPTYServerSpinnerPreservesContent verifies that cursor-positioning
+// spinner updates (which overwrite a single row repeatedly) do not evict
+// content from other rows in the replay snapshot.
+//
+// This is a regression test. The previous ring-buffer approach stored raw
+// PTY bytes; spinner frames filled the buffer and pushed out the actual
+// conversation content. The midterm-based approach processes the terminal
+// state, so spinners update one cell and leave everything else intact.
+func TestPTYServerSpinnerPreservesContent(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+
+	// The child writes content at rows 1-3, then overwrites row 4
+	// hundreds of times (simulating a TUI spinner), then writes
+	// a completion marker at row 5.
+	srv, err := New(Config{
+		Command: []string{"bash", "-c", `
+			printf '\x1b[1;1HConversation-line-1'
+			printf '\x1b[2;1HConversation-line-2'
+			printf '\x1b[3;1HConversation-line-3'
+			for i in $(seq 1 500); do
+				printf '\x1b[4;1H\x1b[2KSpinner frame %d' $i
+			done
+			printf '\x1b[5;1Hspinner-done'
+			sleep 3
+		`},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// Wait for the spinner loop and completion marker.
+	time.Sleep(500 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return net.Dial("unix", sockPath)
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	var got []byte
+	for i := 0; i < 10; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		_, data, err := conn.Read(readCtx)
+		readCancel()
+		if err != nil {
+			break
+		}
+		got = append(got, data...)
+		if contains(got, "spinner-done") {
+			break
+		}
+	}
+
+	// The completion marker must be present.
+	if !contains(got, "spinner-done") {
+		t.Fatalf("never saw spinner-done marker in replay")
+	}
+
+	// The conversation content must survive through 500 spinner updates.
+	for _, want := range []string{"Conversation-line-1", "Conversation-line-2", "Conversation-line-3"} {
+		if !contains(got, want) {
+			t.Errorf("content %q lost after spinner updates", want)
+		}
 	}
 }
 

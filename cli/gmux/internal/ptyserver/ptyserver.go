@@ -13,19 +13,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/creack/pty"
-	"github.com/gmuxapp/gmux/cli/gmux/internal/ringbuf"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
+	"github.com/vito/midterm"
 	"nhooyr.io/websocket"
 )
-
-const defaultScrollbackSize = 128 * 1024 // 128KB
 
 // ResizeMsg is the JSON message clients send to resize the terminal.
 type ResizeMsg struct {
@@ -40,20 +39,19 @@ type ResizeMsg struct {
 
 // Server holds a PTY and serves WebSocket connections.
 type Server struct {
-	cmd        *exec.Cmd
-	ptmx       *os.File
-	sockPath   string
-	listener   net.Listener
-	scrollback *ringbuf.TermWriter
-	adapter    adapter.Adapter
-	state      *session.State
+	cmd      *exec.Cmd
+	ptmx     *os.File
+	sockPath string
+	listener net.Listener
+	screen   *midterm.Terminal // virtual terminal for replay snapshots (guarded by mu)
+	adapter  adapter.Adapter
+	state    *session.State
 
-	mu           sync.Mutex
-	clients      map[*wsClient]struct{}
-	localOut     io.Writer // optional local terminal output sink
-	ptyCols      uint16    // last applied PTY cols (guarded by mu)
-	ptyRows      uint16    // last applied PTY rows (guarded by mu)
-	cursorHidden bool      // DECTCEM state: true when app sent ESC[?25l (guarded by mu)
+	mu       sync.Mutex
+	clients  map[*wsClient]struct{}
+	localOut io.Writer // optional local terminal output sink
+	ptyCols  uint16    // last applied PTY cols (guarded by mu)
+	ptyRows  uint16    // last applied PTY rows (guarded by mu)
 
 	done    chan struct{} // closed when child exits
 	ptyDone chan struct{} // closed when readPTY finishes draining
@@ -76,15 +74,14 @@ func (c *wsClient) write(typ websocket.MessageType, data []byte) error {
 
 // Config for creating a new PTY server.
 type Config struct {
-	Command        []string
-	Cwd            string
-	Env            []string
-	SocketPath     string
-	Cols           uint16
-	Rows           uint16
-	ScrollbackSize int // bytes, 0 = default (128KB)
-	Adapter        adapter.Adapter
-	State          *session.State
+	Command    []string
+	Cwd        string
+	Env        []string
+	SocketPath string
+	Cols       uint16
+	Rows       uint16
+	Adapter    adapter.Adapter
+	State      *session.State
 }
 
 // New creates and starts a PTY server.
@@ -97,10 +94,6 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.Rows == 0 {
 		cfg.Rows = 25
-	}
-	scrollbackSize := cfg.ScrollbackSize
-	if scrollbackSize <= 0 {
-		scrollbackSize = defaultScrollbackSize
 	}
 
 	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
@@ -145,7 +138,7 @@ func New(cfg Config) (*Server, error) {
 		ptmx:       ptmx,
 		sockPath:   cfg.SocketPath,
 		listener:   listener,
-		scrollback: ringbuf.NewTermWriter(ringbuf.New(scrollbackSize)),
+		screen:     midterm.NewTerminal(int(cfg.Rows), int(cfg.Cols)),
 		adapter:    cfg.Adapter,
 		state:      cfg.State,
 		clients:    make(map[*wsClient]struct{}),
@@ -251,16 +244,14 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// handleScrollbackText returns the tail of the scrollback as ANSI-stripped
-// plain text, suitable for content-similarity matching (ADR-0009).
+// handleScrollbackText returns the visible screen content as plain text,
+// suitable for content-similarity matching (ADR-0009).
 func (s *Server) handleScrollbackText(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	raw := s.scrollback.Snapshot()
+	text := s.screenText()
 	s.mu.Unlock()
 
-	text := adapter.NormalizeScrollback(raw)
-
-	// Return only the tail — 2000 chars is plenty for similarity matching.
+	// Return only the tail, 2000 chars is plenty for similarity matching.
 	const maxChars = 2000
 	if len(text) > maxChars {
 		text = text[len(text)-maxChars:]
@@ -268,6 +259,36 @@ func (s *Server) handleScrollbackText(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Write([]byte(text))
+}
+
+// screenText returns the visible screen content as plain text.
+// Leading and trailing blank rows are omitted. Blank rows between
+// content are preserved.
+// Caller must hold s.mu.
+func (s *Server) screenText() string {
+	// Find the last non-empty row to avoid trailing blank lines.
+	lastRow := -1
+	for row := s.screen.Height - 1; row >= 0; row-- {
+		if strings.TrimRight(string(s.screen.Content[row]), " ") != "" {
+			lastRow = row
+			break
+		}
+	}
+	if lastRow < 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	for row := 0; row <= lastRow; row++ {
+		line := strings.TrimRight(string(s.screen.Content[row]), " ")
+		if line != "" || sb.Len() > 0 {
+			if sb.Len() > 0 {
+				sb.WriteByte('\n')
+			}
+			sb.WriteString(line)
+		}
+	}
+	return sb.String()
 }
 
 func (s *Server) handlePutStatus(w http.ResponseWriter, r *http.Request) {
@@ -369,30 +390,32 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		cancel: cancel,
 	}
 
-	// Replay scrollback, send the reset frame, then register for live data.
-	// All three steps happen under s.mu so that readPTY cannot send live
-	// data to this client before the snapshot frame. The write goes to a
-	// Unix socket (kernel buffer ≥ 208KB on Linux), so the lock is held
-	// for at most a single sendmsg syscall (~128KB snapshot).
+	// Replay screen state, then register for live data.
+	// All steps happen under s.mu so readPTY cannot send live data to
+	// this client before the snapshot frame.
 	//
 	// Ordering guarantee: snapshot is always the first message the client
 	// receives, followed by any live data from subsequent readPTY cycles.
 	//
-	// Sequence: BSU → reset(scroll region, cursor home, erase all) → scrollback → cursor state → ESU
+	// The screen state comes from a virtual terminal (midterm) that
+	// processes every byte of PTY output. MarshalBinary serializes the
+	// full screen (content, colors, cursor position/visibility, scroll
+	// region) as standard ANSI sequences with absolute positioning.
+	//
+	// Sequence: BSU → reset → screen state → ESU
 	s.mu.Lock()
-	snapshot := s.scrollback.Snapshot()
+	snapshot, marshalErr := s.screen.MarshalBinary()
+	if marshalErr != nil {
+		log.Printf("ptyserver: marshal screen: %v", marshalErr)
+		snapshot = nil
+	}
 	bsu := []byte("\x1b[?2026h")                     // Begin Synchronized Update
 	resetSeq := []byte("\x1b[r\x1b[H\x1b[2J\x1b[3J") // Reset scroll region + cursor home + erase display + erase scrollback
-	cursorSeq := []byte("\x1b[?25h")                 // Restore DECTCEM (show cursor)
-	if s.cursorHidden {
-		cursorSeq = []byte("\x1b[?25l") //   ... or hide if that's the current state
-	}
-	esu := []byte("\x1b[?2026l") // End Synchronized Update
-	frame := make([]byte, 0, len(bsu)+len(resetSeq)+len(snapshot)+len(cursorSeq)+len(esu))
+	esu := []byte("\x1b[?2026l")                     // End Synchronized Update
+	frame := make([]byte, 0, len(bsu)+len(resetSeq)+len(snapshot)+len(esu))
 	frame = append(frame, bsu...)
 	frame = append(frame, resetSeq...)
 	frame = append(frame, snapshot...)
-	frame = append(frame, cursorSeq...)
 	frame = append(frame, esu...)
 	if err := client.write(websocket.MessageBinary, frame); err != nil {
 		s.mu.Unlock()
@@ -453,6 +476,7 @@ func (s *Server) resize(msg ResizeMsg) {
 	if sizeChanged {
 		s.ptyCols = msg.Cols
 		s.ptyRows = msg.Rows
+		s.screen.Resize(int(msg.Rows), int(msg.Cols))
 	}
 	s.mu.Unlock()
 
@@ -541,12 +565,9 @@ func (s *Server) readPTY() {
 			}
 		}
 
-		// Store in scrollback and snapshot client list atomically.
+		// Feed the virtual terminal and snapshot client list atomically.
 		s.mu.Lock()
-		s.scrollback.Write(data)
-		if vis, found := lastDECTCEM(data); found {
-			s.cursorHidden = !vis
-		}
+		s.screen.Write(data)
 		localOut := s.localOut
 		clients := make([]*wsClient, 0, len(s.clients))
 		for c := range s.clients {
@@ -625,23 +646,6 @@ func (s *Server) readPTY() {
 	}
 }
 
-// lastDECTCEM scans data backwards for the last DECTCEM sequence
-// (ESC[?25h = show cursor, ESC[?25l = hide cursor) and returns
-// (visible, found). If no sequence is found, found is false.
-func lastDECTCEM(data []byte) (visible bool, found bool) {
-	for i := len(data) - 6; i >= 0; i-- {
-		if data[i] == 0x1b && data[i+1] == '[' && data[i+2] == '?' &&
-			data[i+3] == '2' && data[i+4] == '5' {
-			if data[i+5] == 'h' {
-				return true, true
-			}
-			if data[i+5] == 'l' {
-				return false, true
-			}
-		}
-	}
-	return false, false
-}
 
 func (s *Server) waitChild() {
 	s.err = s.cmd.Wait()
