@@ -12,9 +12,9 @@ import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type Resolv
 import { useArrivalPulse } from './use-arrival-pulse'
 import { useActivityTracker } from './use-activity'
 
-import type { Session, Folder } from './types'
+import type { Session, Folder, View } from './types'
 import { ManageProjectsModal } from './manage-projects'
-import { buildProjectFolders, parseSessionPath, sessionPath, resolveSessionFromPath, matchSession } from './types'
+import { buildProjectFolders, matchSession, resolveViewFromPath, sessionPath, viewToPath } from './types'
 import { getMockFolders } from './mock-data/index'
 import { installCopySession } from './mock-data/export-session'
 import type { Session as ProtocolSession } from '@gmux/protocol'
@@ -868,7 +868,6 @@ function App() {
 
   const loc = useLocation()
   const [sessions, setSessions] = useState<Session[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [manageProjectsOpen, setManageProjectsOpen] = useState(false)
   const [connState, setConnState] = useState<ConnectionState>('connecting')
@@ -880,10 +879,6 @@ function App() {
   const [sidebarVersion, forceUpdate] = useState(0) // re-render on sidebar state change
   const { isActive: isSessionActive, isFading: isSessionFading, handleActivity, activityVersion } = useActivityTracker()
 
-  // Ref for selectedId so effects can read the latest value without
-  // adding it to their dependency arrays (avoids circular triggers).
-  const selectedIdRef = useRef(selectedId)
-  selectedIdRef.current = selectedId
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   const terminalFocusRef = useRef<(() => void) | null>(null)
   const terminalPasteRef = useRef<((text: string) => void) | null>(null)
@@ -968,7 +963,8 @@ function App() {
           // Auto-select newly launched sessions
           if (isNew && _pendingLaunchAt && Date.now() - _pendingLaunchAt < 10_000) {
             _pendingLaunchAt = 0
-            setSelectedId(updated.id)
+            const project = matchSession(updated, sidebarState.configured)
+            if (project) loc.route(sessionPath(project.slug, updated), true)
           }
         } catch (err) {
           console.warn('session-upsert: bad event', err)
@@ -1014,6 +1010,16 @@ function App() {
     })
   }, [sessions])
 
+  // `view` is derived from the URL. The URL is the single source of truth:
+  // actions that change what's shown navigate (loc.route), never setView.
+  // Null until we've loaded projects/sessions at least once so we don't
+  // render a bogus home/project view before data arrives.
+  const view = useMemo<View | null>(() => {
+    if (filteredSessions.length === 0 && sidebarState.configured.length === 0) return null
+    return resolveViewFromPath(loc.path, sidebarState.configured, filteredSessions)
+  }, [loc.path, filteredSessions, sidebarVersion])
+  const selectedId = view?.kind === 'session' ? view.sessionId : null
+
   const folders = useMemo(
     () => buildProjectFolders(sidebarState.configured, filteredSessions),
     [filteredSessions, sidebarVersion],
@@ -1042,40 +1048,33 @@ function App() {
     [sessions, selectedId],
   )
 
-  // --- URL <-> selection sync ---
-  // Two effects form a bidirectional binding between the URL bar and selectedId.
-  // Effect A: URL changes (initial load, browser back/forward) resolve to a session.
-  // Effect B: selection or session data changes update the URL bar.
-  // Loop prevention: effects check whether the value actually changed before writing.
+  // --- URL normalization ---
+  // The URL is the single source of truth; `view` is derived above. The
+  // two effects below only *normalize* the URL when it drifts from the
+  // view we're rendering:
+  //
+  //   - canonicalize: rewrite `/:project` → `/:project/:kind/:slug` when
+  //     we resolved the URL to a specific session, or fall back to `/`
+  //     when the session we were viewing disappeared.
+  //   - bootstrap: at `/` with sessions available, pick the best alive
+  //     session and navigate. Preserves the "land on /, drop into a
+  //     terminal" UX.
 
-  // Effect A: URL -> selection.
   useEffect(() => {
+    if (view === null) return
+    const url = viewToPath(view, sidebarState.configured, sessions)
+    if (url && url !== loc.path) loc.route(url, true)
+  }, [view, sessions, sidebarVersion, loc.path])
+
+  useEffect(() => {
+    if (loc.path !== '/') return
     if (filteredSessions.length === 0) return
-    const parsed = parseSessionPath(loc.path)
-    if (parsed.project) {
-      const resolved = resolveSessionFromPath(parsed, sidebarState.configured, filteredSessions)
-      if (resolved && resolved !== selectedIdRef.current) {
-        setSelectedId(resolved)
-        return
-      }
-    }
-    // No URL match: auto-select if nothing is selected yet.
-    if (!selectedIdRef.current) {
-      const best = filteredSessions.find(s => s.alive && (s.socket_path || s.peer))
-      if (best) setSelectedId(best.id)
-    }
-  }, [loc.path, filteredSessions, sidebarVersion])
-
-  // Effect B: selection -> URL.
-  useEffect(() => {
-    if (!selectedId) return
-    const sess = sessions.find(s => s.id === selectedId)
-    if (!sess) return
-    const project = matchSession(sess, sidebarState.configured)
+    const best = filteredSessions.find(s => s.alive && (s.socket_path || s.peer))
+    if (!best) return
+    const project = matchSession(best, sidebarState.configured)
     if (!project) return
-    const url = sessionPath(project.slug, sess)
-    if (loc.path !== url) loc.route(url, true) // replace, don't create history entries
-  }, [selectedId, sessions, sidebarVersion])
+    loc.route(sessionPath(project.slug, best), true)
+  }, [loc.path, filteredSessions, sidebarVersion])
 
   // Mark as read when selecting a session, or when attention flags (unread,
   // error) appear while we're already looking at it (e.g. a turn completes,
@@ -1105,7 +1104,8 @@ function App() {
 
   const handleSelect = useCallback((id: string) => {
     const sess = sessions.find(s => s.id === id)
-    if (sess?.resumable) {
+    if (!sess) return
+    if (sess.resumable) {
       // Resume: show spinner, send request, wait for SSE to make it alive.
       setResumingId(id)
       resumeSession(id).catch(err => {
@@ -1115,24 +1115,26 @@ function App() {
       return
     }
     setResumingId(null) // cancel any pending resume auto-select
-    setSelectedId(id)
+    const project = matchSession(sess, sidebarState.configured)
+    if (project) loc.route(sessionPath(project.slug, sess))
     setCtrlArmed(false)
     setAltArmed(false)
     // Focus the terminal so the user can type immediately.
     // requestAnimationFrame lets React flush the state update first.
     requestAnimationFrame(() => terminalFocusRef.current?.())
-  }, [sessions])
+  }, [sessions, loc, sidebarVersion])
 
   // When a resumed session comes alive, select it.
   useEffect(() => {
     if (resumingId) {
       const sess = sessions.find(s => s.id === resumingId)
       if (sess?.alive && sess?.socket_path) {
-        setSelectedId(resumingId)
+        const project = matchSession(sess, sidebarState.configured)
+        if (project) loc.route(sessionPath(project.slug, sess), true)
         setResumingId(null)
       }
     }
-  }, [sessions, resumingId])
+  }, [sessions, resumingId, sidebarVersion])
 
   // Resume timeout - clear after 10s if the session never came alive.
   useEffect(() => {
@@ -1143,15 +1145,14 @@ function App() {
 
   const canAttach = !!selected?.alive && (!!selected?.socket_path || !!selected?.peer) && !USE_MOCK
 
-  // Deselect only when the session is gone from the store (dismissed/purged).
-  // Dead-but-present sessions stay selected so the header persists through
-  // restart cycles and briefly-stalled new sessions don't flash.
+  // Clear modifier state when the terminal isn't attachable. Dead-but-present
+  // sessions stay in view so the header persists through restart cycles.
+  // Gone-from-store sessions are handled by Effect A, which re-resolves the
+  // URL and falls back to the project (or home) view when the session
+  // disappears.
   useEffect(() => {
     if (!canAttach) { setCtrlArmed(false); setAltArmed(false) }
-    if (selectedId && !selected) {
-      setSelectedId(null)
-    }
-  }, [canAttach, selectedId, selected])
+  }, [canAttach])
 
   const handleTerminalInputReady = useCallback((send: ((data: string) => void) | null) => {
     terminalInputRef.current = send
@@ -1222,10 +1223,16 @@ function App() {
     n.onclose = () => activeNotifsRef.current.delete(msg.id)
     n.onclick = () => {
       window.focus()
-      if (msg.session_id) setSelectedId(msg.session_id)
+      if (msg.session_id) {
+        const sess = sessions.find(s => s.id === msg.session_id)
+        if (sess) {
+          const project = matchSession(sess, sidebarState.configured)
+          if (project) loc.route(sessionPath(project.slug, sess))
+        }
+      }
       n.close()
     }
-  }, [])
+  }, [sessions, loc, sidebarVersion])
 
   // Dismiss a notification when the daemon tells us to (e.g. user opened
   // the session on another device).

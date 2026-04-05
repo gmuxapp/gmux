@@ -7,6 +7,9 @@ import {
   parseSessionPath,
   sessionPath,
   resolveSessionFromPath,
+  resolveViewFromPath,
+  viewToPath,
+  viewsEqual,
   type Session,
   type ProjectItem,
 } from './types'
@@ -533,5 +536,175 @@ describe('normalizeRemote', () => {
   it('handles plain URL', () => {
     expect(normalizeRemote('github.com/org/repo'))
       .toBe('github.com/org/repo')
+  })
+})
+
+// --- View routing ---
+
+describe('resolveViewFromPath', () => {
+  const projects: ProjectItem[] = [
+    { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/dev/gmux'] },
+  ]
+  const sessions = [
+    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
+      remotes: { origin: 'github.com/gmuxapp/gmux' } }),
+  ]
+
+  it('root path resolves to home', () => {
+    expect(resolveViewFromPath('/', projects, sessions)).toEqual({ kind: 'home' })
+  })
+
+  it('empty path resolves to home', () => {
+    expect(resolveViewFromPath('', projects, sessions)).toEqual({ kind: 'home' })
+  })
+
+  it('internal routes resolve to home', () => {
+    expect(resolveViewFromPath('/_/input-diagnostics', projects, sessions)).toEqual({ kind: 'home' })
+  })
+
+  it('project-only path resolves to first alive session (auto-pick)', () => {
+    // Pre-hub-page behavior: /:project auto-drops the user into a terminal.
+    // TODO: should return { kind: 'project', projectSlug: 'gmux' } once the
+    // hub page is implemented.
+    expect(resolveViewFromPath('/gmux', projects, sessions)).toEqual({
+      kind: 'session', sessionId: 'sess-1',
+    })
+  })
+
+  it('project-only path with no sessions resolves to project view', () => {
+    expect(resolveViewFromPath('/gmux', projects, [])).toEqual({
+      kind: 'project', projectSlug: 'gmux',
+    })
+  })
+
+  it('unknown project resolves to home', () => {
+    expect(resolveViewFromPath('/unknown', projects, sessions)).toEqual({ kind: 'home' })
+  })
+
+  it('full session path resolves to session view', () => {
+    expect(resolveViewFromPath('/gmux/pi/fix-auth', projects, sessions)).toEqual({
+      kind: 'session', sessionId: 'sess-1',
+    })
+  })
+
+  it('session path with missing session falls back to project view', () => {
+    expect(resolveViewFromPath('/gmux/pi/no-such-session', projects, sessions)).toEqual({
+      kind: 'project', projectSlug: 'gmux',
+    })
+  })
+})
+
+describe('viewToPath', () => {
+  const projects: ProjectItem[] = [
+    { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/dev/gmux'] },
+  ]
+  const sessions = [
+    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
+      remotes: { origin: 'github.com/gmuxapp/gmux' } }),
+    makeSession({ id: 'sess-2@server', cwd: '/dev/gmux', kind: 'shell', resume_key: 'bash',
+      peer: 'server', remotes: { origin: 'github.com/gmuxapp/gmux' } }),
+  ]
+
+  it('home view → /', () => {
+    expect(viewToPath({ kind: 'home' }, projects, sessions)).toBe('/')
+  })
+
+  it('project view → /:project', () => {
+    expect(viewToPath({ kind: 'project', projectSlug: 'gmux' }, projects, sessions)).toBe('/gmux')
+  })
+
+  it('session view → full session path', () => {
+    expect(viewToPath({ kind: 'session', sessionId: 'sess-1' }, projects, sessions))
+      .toBe('/gmux/pi/fix-auth')
+  })
+
+  it('session view with peer → path includes @host', () => {
+    expect(viewToPath({ kind: 'session', sessionId: 'sess-2@server' }, projects, sessions))
+      .toBe('/gmux/@server/shell/bash')
+  })
+
+  it('session view for missing session → null', () => {
+    expect(viewToPath({ kind: 'session', sessionId: 'gone' }, projects, sessions)).toBeNull()
+  })
+
+  it('session view for unmatched session → null', () => {
+    const orphan = makeSession({ id: 'orphan', cwd: '/nowhere', kind: 'pi' })
+    expect(viewToPath({ kind: 'session', sessionId: 'orphan' }, projects, [orphan])).toBeNull()
+  })
+})
+
+describe('viewsEqual', () => {
+  it('same home views are equal', () => {
+    expect(viewsEqual({ kind: 'home' }, { kind: 'home' })).toBe(true)
+  })
+
+  it('same project views are equal', () => {
+    expect(viewsEqual(
+      { kind: 'project', projectSlug: 'a' },
+      { kind: 'project', projectSlug: 'a' },
+    )).toBe(true)
+  })
+
+  it('different project slugs are not equal', () => {
+    expect(viewsEqual(
+      { kind: 'project', projectSlug: 'a' },
+      { kind: 'project', projectSlug: 'b' },
+    )).toBe(false)
+  })
+
+  it('same session views are equal', () => {
+    expect(viewsEqual(
+      { kind: 'session', sessionId: 'x' },
+      { kind: 'session', sessionId: 'x' },
+    )).toBe(true)
+  })
+
+  it('different kinds are not equal', () => {
+    expect(viewsEqual(
+      { kind: 'home' },
+      { kind: 'project', projectSlug: 'a' },
+    )).toBe(false)
+  })
+})
+
+describe('View round-trip', () => {
+  const projects: ProjectItem[] = [
+    { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/dev/gmux'] },
+  ]
+  const sessions = [
+    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
+      remotes: { origin: 'github.com/gmuxapp/gmux' } }),
+  ]
+
+  it('home view round-trips', () => {
+    const path = viewToPath({ kind: 'home' }, projects, sessions)
+    expect(path).toBe('/')
+    expect(resolveViewFromPath(path!, projects, sessions)).toEqual({ kind: 'home' })
+  })
+
+  it('session view round-trips', () => {
+    const path = viewToPath({ kind: 'session', sessionId: 'sess-1' }, projects, sessions)
+    expect(path).toBe('/gmux/pi/fix-auth')
+    expect(resolveViewFromPath(path!, projects, sessions)).toEqual({
+      kind: 'session', sessionId: 'sess-1',
+    })
+  })
+
+  it('project view round-trips only when the project has no sessions', () => {
+    // With sessions in the project, /:project auto-picks a session
+    // (interim behavior until the hub page lands), so the round-trip
+    // lands on session view.
+    const path = viewToPath({ kind: 'project', projectSlug: 'gmux' }, projects, sessions)
+    expect(path).toBe('/gmux')
+    expect(viewsEqual(
+      resolveViewFromPath(path!, projects, sessions),
+      { kind: 'session', sessionId: 'sess-1' },
+    )).toBe(true)
+
+    // Without sessions, the round-trip lands back on project view.
+    expect(viewsEqual(
+      resolveViewFromPath(path!, projects, []),
+      { kind: 'project', projectSlug: 'gmux' },
+    )).toBe(true)
   })
 })

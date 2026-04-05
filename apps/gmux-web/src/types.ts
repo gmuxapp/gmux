@@ -92,6 +92,92 @@ export function resolveSessionFromPath(
   return byId?.id ?? null
 }
 
+// --- View state model ---
+
+/**
+ * The top-level thing the app is currently showing. Derived from the URL
+ * and drives what the main panel renders.
+ *
+ *  - `home`: overview / landing (currently empty-state; placeholder for a
+ *    future cross-project home page).
+ *  - `project`: the project hub page for a single project.
+ *  - `session`: a specific terminal session, by id.
+ */
+export type View =
+  | { kind: 'home' }
+  | { kind: 'project'; projectSlug: string }
+  | { kind: 'session'; sessionId: string }
+
+/** Structural equality for views. */
+export function viewsEqual(a: View, b: View): boolean {
+  if (a.kind !== b.kind) return false
+  switch (a.kind) {
+    case 'home': return true
+    case 'project': return a.projectSlug === (b as { projectSlug: string }).projectSlug
+    case 'session': return a.sessionId === (b as { sessionId: string }).sessionId
+  }
+}
+
+/**
+ * Resolve a URL path to a View given the current projects and sessions.
+ *
+ * Rules:
+ *  - `/` (or unparseable / internal) → home
+ *  - `/:project` where project is unknown → home
+ *  - `/:project[/...]` where a concrete session resolves → session view.
+ *    This currently includes `/:project` alone (auto-picks first alive
+ *    session) to preserve pre-hub-page behavior.
+ *  - `/:project[/...]` where no session resolves but the project exists
+ *    → project view (fall back to the project hub so the user can relaunch)
+ */
+export function resolveViewFromPath(
+  path: string,
+  projects: ProjectItem[],
+  sessions: Session[],
+): View {
+  const parsed = parseSessionPath(path)
+  if (!parsed.project) return { kind: 'home' }
+
+  const project = projects.find(p => p.slug === parsed.project)
+  if (!project) return { kind: 'home' }
+
+  // Try to resolve a concrete session from the URL first. For /:project
+  // alone this picks the first alive session in the project, which
+  // preserves pre-hub-page behavior (auto-drop into a terminal). Once
+  // the project hub page lands, /:project should go straight to project
+  // view; update this branch then.
+  const sessionId = resolveSessionFromPath(parsed, projects, sessions)
+  if (sessionId) return { kind: 'session', sessionId }
+
+  // No session matched. Fall back to the project hub view.
+  return { kind: 'project', projectSlug: project.slug }
+}
+
+/**
+ * Serialize a View to a URL path. Returns null when the view can't be
+ * serialized (e.g., session view pointing at a session we no longer have
+ * in the store). Callers should leave the URL alone in that case.
+ */
+export function viewToPath(
+  view: View,
+  projects: ProjectItem[],
+  sessions: Session[],
+): string | null {
+  switch (view.kind) {
+    case 'home':
+      return '/'
+    case 'project':
+      return `/${view.projectSlug}`
+    case 'session': {
+      const sess = sessions.find(s => s.id === view.sessionId)
+      if (!sess) return null
+      const project = matchSession(sess, projects)
+      if (!project) return null
+      return sessionPath(project.slug, sess)
+    }
+  }
+}
+
 export interface SessionStatus {
   label: string
   working: boolean
