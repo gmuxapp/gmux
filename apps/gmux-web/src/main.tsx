@@ -1047,7 +1047,7 @@ function App() {
     }
     // No URL match: auto-select if nothing is selected yet.
     if (!selectedIdRef.current) {
-      const best = filteredSessions.find(s => s.alive && s.socket_path)
+      const best = filteredSessions.find(s => s.alive && (s.socket_path || s.peer))
       if (best) setSelectedId(best.id)
     }
   }, [loc.path, filteredSessions, sidebarVersion])
@@ -1126,7 +1126,7 @@ function App() {
     return () => clearTimeout(t)
   }, [resumingId])
 
-  const canAttach = !!selected?.alive && !!selected?.socket_path && !USE_MOCK
+  const canAttach = !!selected?.alive && (!!selected?.socket_path || !!selected?.peer) && !USE_MOCK
 
   // Deselect only when the session is gone from the store (dismissed/purged).
   // Dead-but-present sessions stay selected so the header persists through

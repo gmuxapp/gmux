@@ -126,7 +126,7 @@ func (c *cliDocker) events(ctx context.Context) (<-chan struct{}, error) {
 
 func (c *cliDocker) readToken(ctx context.Context, id string) (string, error) {
 	cmd := exec.CommandContext(ctx, "docker", "exec", id,
-		"sh", "-c", `cat "${XDG_DATA_HOME:-$HOME/.local/share}/gmuxd/auth-token"`)
+		"sh", "-c", `cat "${XDG_STATE_HOME:-$HOME/.local/state}/gmux/auth-token"`)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("reading token from container %s: %w", short(id), err)
