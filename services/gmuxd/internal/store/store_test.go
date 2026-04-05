@@ -475,6 +475,104 @@ func TestSetTerminalSize(t *testing.T) {
 
 // The frontend needs slug (URL routing) and resume_key (project session array
 // membership for dead sessions). Verify they survive MarshalJSON.
+// ── Peer-scoped slug uniqueness ──
+
+func TestSlugUniqueness_ScopedToPeer(t *testing.T) {
+	s := New()
+
+	// Local session with resume_key "fix-auth".
+	s.Upsert(Session{ID: "s1", Kind: "pi", Alive: true, ResumeKey: "fix-auth"})
+
+	// Remote session from "server" with the same resume_key. Should NOT be
+	// renamed because it's in a different (kind, peer) scope.
+	s.Upsert(Session{ID: "s2@server", Kind: "pi", Alive: true, ResumeKey: "fix-auth", Peer: "server"})
+
+	got, _ := s.Get("s2@server")
+	if got.Slug != "fix-auth" {
+		t.Errorf("remote slug = %q, want %q (should not conflict with local)", got.Slug, "fix-auth")
+	}
+}
+
+func TestSlugUniqueness_WithinSamePeer(t *testing.T) {
+	s := New()
+
+	s.Upsert(Session{ID: "s1@server", Kind: "pi", Alive: true, ResumeKey: "fix-auth", Peer: "server"})
+	s.Upsert(Session{ID: "s2@server", Kind: "pi", Alive: true, ResumeKey: "fix-auth", Peer: "server"})
+
+	got, _ := s.Get("s2@server")
+	if got.Slug != "fix-auth-2" {
+		t.Errorf("slug = %q, want %q", got.Slug, "fix-auth-2")
+	}
+}
+
+// ── RemoveByPeer / ListByPeer ──
+
+func TestRemoveByPeer(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "local-1", Kind: "pi", Alive: true})
+	s.Upsert(Session{ID: "s1@server", Kind: "pi", Alive: true, Peer: "server"})
+	s.Upsert(Session{ID: "s2@server", Kind: "shell", Alive: true, Peer: "server"})
+	s.Upsert(Session{ID: "s3@dev", Kind: "pi", Alive: true, Peer: "dev"})
+
+	removed := s.RemoveByPeer("server")
+	if len(removed) != 2 {
+		t.Fatalf("removed %d, want 2", len(removed))
+	}
+
+	// Local and other peer sessions should remain.
+	if _, ok := s.Get("local-1"); !ok {
+		t.Error("local session should not be removed")
+	}
+	if _, ok := s.Get("s3@dev"); !ok {
+		t.Error("dev session should not be removed")
+	}
+
+	// Server sessions should be gone.
+	if _, ok := s.Get("s1@server"); ok {
+		t.Error("server session should be removed")
+	}
+}
+
+func TestListByPeer(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "local-1", Kind: "pi", Alive: true})
+	s.Upsert(Session{ID: "s1@server", Kind: "pi", Alive: true, Peer: "server"})
+	s.Upsert(Session{ID: "s2@server", Kind: "shell", Alive: true, Peer: "server"})
+
+	ids := s.ListByPeer("server")
+	if len(ids) != 2 {
+		t.Fatalf("ListByPeer = %d, want 2", len(ids))
+	}
+
+	// Empty peer matches local sessions.
+	ids = s.ListByPeer("")
+	if len(ids) != 1 {
+		t.Errorf("ListByPeer('') = %d, want 1 (local session)", len(ids))
+	}
+}
+
+// ── Peer field in MarshalJSON ──
+
+func TestMarshalJSON_PeerField(t *testing.T) {
+	// Peer field present.
+	s := Session{ID: "s1@server", Kind: "pi", Alive: true, Peer: "server"}
+	data, _ := json.Marshal(s)
+	var wire map[string]interface{}
+	json.Unmarshal(data, &wire)
+	if wire["peer"] != "server" {
+		t.Errorf("peer = %v, want %q", wire["peer"], "server")
+	}
+
+	// Local session: peer should be omitted.
+	s2 := Session{ID: "s2", Kind: "pi", Alive: true}
+	data2, _ := json.Marshal(s2)
+	var wire2 map[string]interface{}
+	json.Unmarshal(data2, &wire2)
+	if _, ok := wire2["peer"]; ok {
+		t.Errorf("local session should not have peer field in JSON")
+	}
+}
+
 func TestMarshalJSON_FrontendFields(t *testing.T) {
 	s := Session{
 		ID:        "s1",

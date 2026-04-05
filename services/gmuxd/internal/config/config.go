@@ -8,11 +8,16 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -23,6 +28,39 @@ type Config struct {
 	Port int `toml:"port"`
 
 	Tailscale TailscaleConfig `toml:"tailscale"`
+	Discovery DiscoveryConfig `toml:"discovery"`
+
+	// Peers is the list of remote gmuxd instances to aggregate sessions from.
+	Peers []PeerConfig `toml:"peers"`
+}
+
+// PeerConfig describes a remote gmuxd spoke to subscribe to.
+type PeerConfig struct {
+	// Name is a URL-safe slug used as the namespace prefix for session IDs
+	// (e.g. sessions become "sess-abc@name") and in URL routing (/@name/).
+	Name string `toml:"name"`
+
+	// URL is the base HTTP URL of the remote gmuxd (e.g. "http://172.17.0.2:8790").
+	URL string `toml:"url"`
+
+	// Token is the bearer token for authenticating with the remote gmuxd.
+	// Exactly one of Token, TokenFile, or TokenCommand must be set for
+	// manually configured peers. Auto-discovered peers set Token directly.
+	Token string `toml:"token"`
+
+	// TokenFile is a path to a file containing the bearer token.
+	TokenFile string `toml:"token_file"`
+
+	// TokenCommand is a shell command whose stdout is the bearer token.
+	// Executed via "sh -c" with a 10-second timeout.
+	TokenCommand string `toml:"token_command"`
+}
+
+// DiscoveryConfig controls automatic peer discovery.
+type DiscoveryConfig struct {
+	// Devcontainers enables auto-discovery of gmuxd instances running
+	// inside dev containers on the local Docker daemon. Default true.
+	Devcontainers bool `toml:"devcontainers"`
 }
 
 // TailscaleConfig controls the optional tailscale (tsnet) listener.
@@ -87,6 +125,10 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+// peerNameRe matches valid peer names: lowercase alphanumeric + hyphens,
+// no leading/trailing hyphens, no consecutive hyphens.
+var peerNameRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
 func validate(cfg Config) error {
 	// Port range.
 	if cfg.Port < 1 || cfg.Port > 65535 {
@@ -104,6 +146,54 @@ func validate(cfg Config) error {
 	// Tailscale: hostname must be non-empty when enabled.
 	if cfg.Tailscale.Enabled && cfg.Tailscale.Hostname == "" {
 		return fmt.Errorf("tailscale.enabled is true but tailscale.hostname is empty")
+	}
+
+	// Peers: validate each entry.
+	seen := make(map[string]bool, len(cfg.Peers))
+	for i, p := range cfg.Peers {
+		prefix := fmt.Sprintf("peers[%d]", i)
+
+		if p.Name == "" {
+			return fmt.Errorf("%s: name is required", prefix)
+		}
+		if !peerNameRe.MatchString(p.Name) {
+			return fmt.Errorf("%s: name %q must be a lowercase slug (a-z, 0-9, hyphens)", prefix, p.Name)
+		}
+		if seen[p.Name] {
+			return fmt.Errorf("%s: duplicate peer name %q", prefix, p.Name)
+		}
+		seen[p.Name] = true
+
+		if p.URL == "" {
+			return fmt.Errorf("%s (%s): url is required", prefix, p.Name)
+		}
+		u, err := url.Parse(p.URL)
+		if err != nil {
+			return fmt.Errorf("%s (%s): invalid url %q: %w", prefix, p.Name, p.URL, err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("%s (%s): url %q must use http or https scheme", prefix, p.Name, p.URL)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("%s (%s): url %q has no host", prefix, p.Name, p.URL)
+		}
+
+		sources := 0
+		if p.Token != "" {
+			sources++
+		}
+		if p.TokenFile != "" {
+			sources++
+		}
+		if p.TokenCommand != "" {
+			sources++
+		}
+		if sources == 0 {
+			return fmt.Errorf("%s (%s): one of token, token_file, or token_command is required", prefix, p.Name)
+		}
+		if sources > 1 {
+			return fmt.Errorf("%s (%s): only one of token, token_file, or token_command may be set", prefix, p.Name)
+		}
 	}
 
 	return nil
@@ -166,7 +256,55 @@ func defaults() Config {
 		Tailscale: TailscaleConfig{
 			Hostname: "gmux",
 		},
+		Discovery: DiscoveryConfig{
+			Devcontainers: true,
+		},
 	}
+}
+
+// ResolveTokens resolves token_file and token_command references in peer
+// configs, filling the Token field with the actual secret. Called after
+// Load() and before passing configs to the peering manager.
+func (cfg *Config) ResolveTokens() error {
+	for i := range cfg.Peers {
+		if err := cfg.Peers[i].resolveToken(); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+	}
+	return nil
+}
+
+func (p *PeerConfig) resolveToken() error {
+	if p.Token != "" {
+		return nil
+	}
+	if p.TokenFile != "" {
+		data, err := os.ReadFile(p.TokenFile)
+		if err != nil {
+			return fmt.Errorf("peer %s: reading token_file: %w", p.Name, err)
+		}
+		token := strings.TrimSpace(string(data))
+		if token == "" {
+			return fmt.Errorf("peer %s: token_file %q is empty", p.Name, p.TokenFile)
+		}
+		p.Token = token
+		return nil
+	}
+	if p.TokenCommand != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "sh", "-c", p.TokenCommand).Output()
+		if err != nil {
+			return fmt.Errorf("peer %s: token_command: %w", p.Name, err)
+		}
+		token := strings.TrimSpace(string(out))
+		if token == "" {
+			return fmt.Errorf("peer %s: token_command produced empty output", p.Name)
+		}
+		p.Token = token
+		return nil
+	}
+	return nil
 }
 
 // ListenAddr returns the effective TCP listen address (host:port).

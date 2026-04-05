@@ -33,3 +33,4 @@ cli/gmux/gmux
 test-results/
 tests/pi-adapter/pi-adapter
 gmux gmuxd
+plan.local.md

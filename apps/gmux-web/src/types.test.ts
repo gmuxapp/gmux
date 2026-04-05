@@ -423,13 +423,23 @@ describe('sessionPath', () => {
     expect(sessionPath('gmux', { kind: 'pi', id: 'abcdef12-3456-7890' }))
       .toBe('/gmux/pi/abcdef12')
   })
+
+  it('includes @peer for remote sessions', () => {
+    expect(sessionPath('gmux', { kind: 'pi', slug: 'fix-auth', id: 'abc', peer: 'server' }))
+      .toBe('/gmux/@server/pi/fix-auth')
+  })
+
+  it('omits @peer for local sessions', () => {
+    expect(sessionPath('gmux', { kind: 'pi', slug: 'fix-auth', id: 'abc', peer: undefined }))
+      .toBe('/gmux/pi/fix-auth')
+  })
 })
 
 describe('resolveSessionFromPath', () => {
   const projects: ProjectItem[] = [
     { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/dev/gmux'] },
   ]
-  const sessions = [
+  const localSessions = [
     makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
       remotes: { origin: 'github.com/gmuxapp/gmux' } }),
     makeSession({ id: 'sess-2', cwd: '/dev/gmux', kind: 'shell', slug: 'fish',
@@ -438,19 +448,60 @@ describe('resolveSessionFromPath', () => {
 
   it('resolves full path to session ID', () => {
     const id = resolveSessionFromPath(
-      { project: 'gmux', adapter: 'pi', slug: 'fix-auth' }, projects, sessions,
+      { project: 'gmux', adapter: 'pi', slug: 'fix-auth' }, projects, localSessions,
     )
     expect(id).toBe('sess-1')
   })
 
   it('resolves project-only to first alive session', () => {
-    const id = resolveSessionFromPath({ project: 'gmux' }, projects, sessions)
+    const id = resolveSessionFromPath({ project: 'gmux' }, projects, localSessions)
     expect(id).toBe('sess-1')
   })
 
   it('returns null for unknown project', () => {
-    const id = resolveSessionFromPath({ project: 'nope' }, projects, sessions)
+    const id = resolveSessionFromPath({ project: 'nope' }, projects, localSessions)
     expect(id).toBeNull()
+  })
+
+  // Peer-aware resolution
+  const mixedSessions = [
+    ...localSessions,
+    makeSession({ id: 'sess-r1@server', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
+      peer: 'server', remotes: { origin: 'github.com/gmuxapp/gmux' } }),
+    makeSession({ id: 'sess-r2@server', cwd: '/dev/gmux', kind: 'shell', slug: 'bash',
+      peer: 'server', remotes: { origin: 'github.com/gmuxapp/gmux' } }),
+  ]
+
+  it('resolves remote session with @host in URL', () => {
+    const id = resolveSessionFromPath(
+      { project: 'gmux', host: 'server', adapter: 'pi', slug: 'fix-auth' },
+      projects, mixedSessions,
+    )
+    expect(id).toBe('sess-r1@server')
+  })
+
+  it('local path resolves to local session, not remote', () => {
+    const id = resolveSessionFromPath(
+      { project: 'gmux', adapter: 'pi', slug: 'fix-auth' },
+      projects, mixedSessions,
+    )
+    expect(id).toBe('sess-1')
+  })
+
+  it('returns null for unknown peer', () => {
+    const id = resolveSessionFromPath(
+      { project: 'gmux', host: 'unknown', adapter: 'pi', slug: 'fix-auth' },
+      projects, mixedSessions,
+    )
+    expect(id).toBeNull()
+  })
+
+  it('project-only with @host resolves to first alive remote session', () => {
+    const id = resolveSessionFromPath(
+      { project: 'gmux', host: 'server' },
+      projects, mixedSessions,
+    )
+    expect(id).toBe('sess-r1@server')
   })
 })
 
