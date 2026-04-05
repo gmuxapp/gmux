@@ -2,6 +2,7 @@ package peering
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -66,9 +67,38 @@ func (p *Peer) Forward(w http.ResponseWriter, r *http.Request, originalID, actio
 	p.proxyHTTP(w, r, path)
 }
 
-// ForwardLaunch sends a launch request to the spoke.
+// ForwardLaunch sends a launch request to the spoke. The request body is
+// expected to be JSON matching the /v1/launch schema. Any top-level "peer"
+// field is stripped before forwarding so the spoke treats the request as
+// a local launch; leaving it in place would make the spoke try to forward
+// the request again to a peer of its own with that name (which typically
+// doesn't exist on that side).
 func (p *Peer) ForwardLaunch(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	stripped, err := stripPeerField(body)
+	if err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(stripped))
+	r.ContentLength = int64(len(stripped))
 	p.proxyHTTP(w, r, "/v1/launch")
+}
+
+// stripPeerField removes the top-level "peer" key from a JSON object body.
+// Exported as a function (not a method) so it can be unit-tested in
+// isolation; callers generally go through ForwardLaunch.
+func stripPeerField(body []byte) ([]byte, error) {
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, err
+	}
+	delete(req, "peer")
+	return json.Marshal(req)
 }
 
 // FetchConfig fetches the spoke's /v1/config and returns the raw

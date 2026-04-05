@@ -700,14 +700,14 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		// Forward to peer if requested.
+		// Forward to peer if requested. ForwardLaunch strips the peer
+		// field from the body so the spoke treats it as a local launch.
 		if req.Peer != "" {
 			if peerManager == nil {
 				writeError(w, http.StatusBadRequest, "unknown_peer", "no peers configured")
 				return
 			}
 			if peer := peerManager.GetPeer(req.Peer); peer != nil {
-				// Re-supply the body since it was already read above.
 				r.Body = io.NopCloser(bytes.NewReader(body))
 				peer.ForwardLaunch(w, r)
 				return

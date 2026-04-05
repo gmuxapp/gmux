@@ -3,8 +3,10 @@ package peering
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -730,5 +732,92 @@ func TestManager_FindPeerDynamic(t *testing.T) {
 	}
 	if origID != "sess-abc" {
 		t.Errorf("origID = %q, want %q", origID, "sess-abc")
+	}
+}
+
+// ── ForwardLaunch ──
+
+func TestStripPeerField(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "strips peer",
+			in:   `{"launcher_id":"shell","cwd":"/root","peer":"dev"}`,
+			want: `{"cwd":"/root","launcher_id":"shell"}`,
+		},
+		{
+			name: "no peer is noop",
+			in:   `{"launcher_id":"shell","cwd":"/root"}`,
+			want: `{"cwd":"/root","launcher_id":"shell"}`,
+		},
+		{
+			name: "empty peer is removed too",
+			in:   `{"launcher_id":"shell","peer":""}`,
+			want: `{"launcher_id":"shell"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := stripPeerField([]byte(tt.in))
+			if err != nil {
+				t.Fatalf("stripPeerField: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("stripPeerField = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStripPeerField_InvalidJSON(t *testing.T) {
+	_, err := stripPeerField([]byte("not json"))
+	if err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
+// TestForwardLaunch_StripsPeerField verifies the hub → spoke forward path
+// sends a body without the "peer" field. Without this, the spoke would
+// try to forward the request again to a peer of its own with that name.
+func TestForwardLaunch_StripsPeerField(t *testing.T) {
+	var received []byte
+	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/launch" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		received, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true,"data":{"pid":1}}`))
+	}))
+	defer spoke.Close()
+
+	cfg := config.PeerConfig{Name: "dev", URL: spoke.URL, Token: "tok"}
+	peer := newPeer(cfg, store.New(), nil)
+
+	body := `{"launcher_id":"shell","cwd":"/root","peer":"dev"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/launch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	peer.ForwardLaunch(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("ForwardLaunch status = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	// Parse what the spoke received and make sure "peer" is absent.
+	var got map[string]any
+	if err := json.Unmarshal(received, &got); err != nil {
+		t.Fatalf("spoke received invalid JSON %q: %v", received, err)
+	}
+	if _, present := got["peer"]; present {
+		t.Errorf("spoke received body %q still contains 'peer' field", received)
+	}
+	if got["launcher_id"] != "shell" || got["cwd"] != "/root" {
+		t.Errorf("other fields lost: got %v", got)
 	}
 }
