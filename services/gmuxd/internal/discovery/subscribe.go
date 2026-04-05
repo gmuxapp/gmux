@@ -202,7 +202,7 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 				}
 			}
 			if meta.Slug != nil && *meta.Slug != "" {
-				sess.Slug = *meta.Slug
+				sess.ResumeKey = *meta.Slug
 			}
 		})
 

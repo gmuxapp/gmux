@@ -414,23 +414,23 @@ describe('parseSessionPath', () => {
 })
 
 describe('sessionPath', () => {
-  it('builds URL from project slug and session', () => {
-    expect(sessionPath('gmux', { kind: 'pi', slug: 'fix-auth', id: 'abc' }))
+  it('builds URL from resume_key', () => {
+    expect(sessionPath('gmux', { kind: 'pi', resume_key: 'fix-auth', id: 'abc' }))
       .toBe('/gmux/pi/fix-auth')
   })
 
-  it('falls back to ID prefix when slug missing', () => {
+  it('falls back to ID prefix when resume_key missing', () => {
     expect(sessionPath('gmux', { kind: 'pi', id: 'abcdef12-3456-7890' }))
       .toBe('/gmux/pi/abcdef12')
   })
 
   it('includes @peer for remote sessions', () => {
-    expect(sessionPath('gmux', { kind: 'pi', slug: 'fix-auth', id: 'abc', peer: 'server' }))
+    expect(sessionPath('gmux', { kind: 'pi', resume_key: 'fix-auth', id: 'abc', peer: 'server' }))
       .toBe('/gmux/@server/pi/fix-auth')
   })
 
   it('omits @peer for local sessions', () => {
-    expect(sessionPath('gmux', { kind: 'pi', slug: 'fix-auth', id: 'abc', peer: undefined }))
+    expect(sessionPath('gmux', { kind: 'pi', resume_key: 'fix-auth', id: 'abc', peer: undefined }))
       .toBe('/gmux/pi/fix-auth')
   })
 })
@@ -440,9 +440,9 @@ describe('resolveSessionFromPath', () => {
     { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/dev/gmux'] },
   ]
   const localSessions = [
-    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
+    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
       remotes: { origin: 'github.com/gmuxapp/gmux' } }),
-    makeSession({ id: 'sess-2', cwd: '/dev/gmux', kind: 'shell', slug: 'fish',
+    makeSession({ id: 'sess-2', cwd: '/dev/gmux', kind: 'shell', resume_key: 'fish',
       remotes: { origin: 'github.com/gmuxapp/gmux' } }),
   ]
 
@@ -466,9 +466,9 @@ describe('resolveSessionFromPath', () => {
   // Peer-aware resolution
   const mixedSessions = [
     ...localSessions,
-    makeSession({ id: 'sess-r1@server', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
+    makeSession({ id: 'sess-r1@server', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
       peer: 'server', remotes: { origin: 'github.com/gmuxapp/gmux' } }),
-    makeSession({ id: 'sess-r2@server', cwd: '/dev/gmux', kind: 'shell', slug: 'bash',
+    makeSession({ id: 'sess-r2@server', cwd: '/dev/gmux', kind: 'shell', resume_key: 'bash',
       peer: 'server', remotes: { origin: 'github.com/gmuxapp/gmux' } }),
   ]
 
@@ -502,6 +502,18 @@ describe('resolveSessionFromPath', () => {
       projects, mixedSessions,
     )
     expect(id).toBe('sess-r1@server')
+  })
+
+  it('resolves by ID prefix when session has no resume_key', () => {
+    const unattributed = [
+      makeSession({ id: 'sess-abc12345', cwd: '/dev/gmux', kind: 'pi',
+        remotes: { origin: 'github.com/gmuxapp/gmux' } }),
+    ]
+    const id = resolveSessionFromPath(
+      { project: 'gmux', adapter: 'pi', slug: 'sess-abc' },
+      projects, unattributed,
+    )
+    expect(id).toBe('sess-abc12345')
   })
 })
 
