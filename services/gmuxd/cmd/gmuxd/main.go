@@ -24,6 +24,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/devcontainers"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
@@ -1099,6 +1100,9 @@ func serve(stderr io.Writer) int {
 	if err != nil {
 		log.Fatalf("FATAL: %v", err)
 	}
+	if err := cfg.ResolveTokens(); err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
 
 	// ── Resolve TCP listen address and auth token ──
 
@@ -1178,10 +1182,25 @@ func serve(stderr io.Writer) int {
 
 	// ── Peer connections (hub protocol) ──
 
-	if len(cfg.Peers) > 0 {
+	if len(cfg.Peers) > 0 || cfg.Discovery.Devcontainers {
 		peerManager = peering.NewManager(cfg.Peers, sessions)
 		peerManager.Start()
-		log.Printf("peering: %d peer(s) configured", len(cfg.Peers))
+		if len(cfg.Peers) > 0 {
+			log.Printf("peering: %d peer(s) configured", len(cfg.Peers))
+		}
+	}
+
+	// ── Devcontainer discovery ──
+
+	var dcWatcher *devcontainers.Watcher
+	if cfg.Discovery.Devcontainers {
+		dcWatcher = devcontainers.NewWatcher(peerManager)
+		if dcWatcher != nil {
+			dcWatcher.Start()
+			log.Printf("devcontainers: discovery enabled")
+		} else {
+			log.Printf("devcontainers: docker CLI not found, skipping discovery")
+		}
 	}
 
 	// ── Optional tailscale listener ──
@@ -1203,6 +1222,9 @@ func serve(stderr io.Writer) int {
 	sig := <-sigCh
 	log.Printf("received %v — shutting down", sig)
 
+	if dcWatcher != nil {
+		dcWatcher.Stop()
+	}
 	if peerManager != nil {
 		peerManager.Stop()
 	}

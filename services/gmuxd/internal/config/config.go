@@ -8,13 +8,16 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -25,6 +28,7 @@ type Config struct {
 	Port int `toml:"port"`
 
 	Tailscale TailscaleConfig `toml:"tailscale"`
+	Discovery DiscoveryConfig `toml:"discovery"`
 
 	// Peers is the list of remote gmuxd instances to aggregate sessions from.
 	Peers []PeerConfig `toml:"peers"`
@@ -40,7 +44,23 @@ type PeerConfig struct {
 	URL string `toml:"url"`
 
 	// Token is the bearer token for authenticating with the remote gmuxd.
+	// Exactly one of Token, TokenFile, or TokenCommand must be set for
+	// manually configured peers. Auto-discovered peers set Token directly.
 	Token string `toml:"token"`
+
+	// TokenFile is a path to a file containing the bearer token.
+	TokenFile string `toml:"token_file"`
+
+	// TokenCommand is a shell command whose stdout is the bearer token.
+	// Executed via "sh -c" with a 10-second timeout.
+	TokenCommand string `toml:"token_command"`
+}
+
+// DiscoveryConfig controls automatic peer discovery.
+type DiscoveryConfig struct {
+	// Devcontainers enables auto-discovery of gmuxd instances running
+	// inside dev containers on the local Docker daemon. Default true.
+	Devcontainers bool `toml:"devcontainers"`
 }
 
 // TailscaleConfig controls the optional tailscale (tsnet) listener.
@@ -158,8 +178,21 @@ func validate(cfg Config) error {
 			return fmt.Errorf("%s (%s): url %q has no host", prefix, p.Name, p.URL)
 		}
 
-		if p.Token == "" {
-			return fmt.Errorf("%s (%s): token is required", prefix, p.Name)
+		sources := 0
+		if p.Token != "" {
+			sources++
+		}
+		if p.TokenFile != "" {
+			sources++
+		}
+		if p.TokenCommand != "" {
+			sources++
+		}
+		if sources == 0 {
+			return fmt.Errorf("%s (%s): one of token, token_file, or token_command is required", prefix, p.Name)
+		}
+		if sources > 1 {
+			return fmt.Errorf("%s (%s): only one of token, token_file, or token_command may be set", prefix, p.Name)
 		}
 	}
 
@@ -223,7 +256,68 @@ func defaults() Config {
 		Tailscale: TailscaleConfig{
 			Hostname: "gmux",
 		},
+		Discovery: DiscoveryConfig{
+			Devcontainers: true,
+		},
 	}
+}
+
+// ResolveTokens resolves token_file and token_command references in peer
+// configs, filling the Token field with the actual secret. Called after
+// Load() and before passing configs to the peering manager.
+func (cfg *Config) ResolveTokens() error {
+	for i := range cfg.Peers {
+		if err := cfg.Peers[i].resolveToken(); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+	}
+	return nil
+}
+
+func (p *PeerConfig) resolveToken() error {
+	if p.Token != "" {
+		return nil
+	}
+	if p.TokenFile != "" {
+		path := expandHome(p.TokenFile)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("peer %s: reading token_file: %w", p.Name, err)
+		}
+		token := strings.TrimSpace(string(data))
+		if token == "" {
+			return fmt.Errorf("peer %s: token_file %q is empty", p.Name, p.TokenFile)
+		}
+		p.Token = token
+		return nil
+	}
+	if p.TokenCommand != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "sh", "-c", p.TokenCommand).Output()
+		if err != nil {
+			return fmt.Errorf("peer %s: token_command: %w", p.Name, err)
+		}
+		token := strings.TrimSpace(string(out))
+		if token == "" {
+			return fmt.Errorf("peer %s: token_command produced empty output", p.Name)
+		}
+		p.Token = token
+		return nil
+	}
+	return nil
+}
+
+// expandHome expands a leading ~/ to the user's home directory.
+func expandHome(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[2:])
 }
 
 // ListenAddr returns the effective TCP listen address (host:port).

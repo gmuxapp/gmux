@@ -22,6 +22,16 @@ port = 8790
 enabled = false
 hostname = "gmux"       # → gmux.your-tailnet.ts.net
 allow = []               # additional login names (owner is auto-whitelisted)
+
+# Auto-discover peers. All flags default to true.
+[discovery]
+devcontainers = true     # subscribe to Docker events, register gmux containers
+
+# Manual peers (remote gmuxd instances to aggregate sessions from).
+[[peers]]
+name = "server"
+url = "http://10.0.0.5:8790"
+token_file = "~/.config/gmux/tokens/server"
 ```
 
 ## Fields
@@ -40,6 +50,24 @@ allow = []               # additional login names (owner is auto-whitelisted)
 | `hostname` | `string` | `"gmux"` | Tailscale machine name (becomes `<hostname>.your-tailnet.ts.net`). Must be non-empty when enabled. |
 | `allow` | `string[]` | `[]` | Additional Tailscale login names to allow (owner is auto-whitelisted). Each must contain `@`. |
 
+### `[discovery]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `devcontainers` | `boolean` | `true` | Subscribe to Docker events and register any container with the gmux devcontainer feature as a peer. Skipped if the Docker CLI is not installed. |
+
+### `[[peers]]` (array of tables)
+
+One table per manual peer. Each peer requires `name`, `url`, and exactly one of `token`, `token_file`, `token_command`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `string` | Unique peer identifier. Appears in URLs (`/@name/`) and session IDs. |
+| `url` | `string` | Base URL of the remote gmuxd, e.g. `http://host:8790`. |
+| `token` | `string` | Inline bearer token. Quick but leaks into your dotfiles. |
+| `token_file` | `string` | Path to a file containing the token. Tilde expansion is supported. |
+| `token_command` | `string` | Shell command (via `sh -c`) whose stdout is the token. Use for 1Password / pass / op integrations. 10 second timeout. |
+
 ## Strict validation
 
 The config file is strictly validated at startup. gmuxd refuses to start if:
@@ -48,6 +76,8 @@ The config file is strictly validated at startup. gmuxd refuses to start if:
 - **`allow` entries don't contain `@`**, likely not a valid Tailscale login name
 - **`hostname` is empty** when Tailscale is enabled
 - **`port` is out of range** (must be 1–65535)
+- **A `[[peers]]` entry is missing required fields** (`name`, `url`) or specifies more than one token source
+- **Two `[[peers]]` entries share the same `name`**
 - **TOML syntax is invalid**
 
 This is intentional. Silent fallback to defaults is dangerous for security settings. See [Security](/security) for the reasoning.
