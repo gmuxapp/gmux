@@ -24,11 +24,12 @@ async function freePort(): Promise<number> {
   })
 }
 
-async function waitForHealth(port: number, timeoutMs = 15_000): Promise<void> {
+async function waitForHealth(port: number, token: string, timeoutMs = 15_000): Promise<void> {
   const start = Date.now()
+  const headers = { Authorization: `Bearer ${token}` }
   while (Date.now() - start < timeoutMs) {
     try {
-      const resp = await fetch(`http://127.0.0.1:${port}/v1/health`)
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/health`, { headers })
       if (resp.ok) return
     } catch { /* retry */ }
     await new Promise(r => setTimeout(r, 200))
@@ -36,11 +37,12 @@ async function waitForHealth(port: number, timeoutMs = 15_000): Promise<void> {
   throw new Error(`gmuxd did not become healthy on port ${port} within ${timeoutMs}ms`)
 }
 
-async function waitForSession(port: number, timeoutMs = 15_000): Promise<string> {
+async function waitForSession(port: number, token: string, timeoutMs = 15_000): Promise<string> {
   const start = Date.now()
+  const headers = { Authorization: `Bearer ${token}` }
   while (Date.now() - start < timeoutMs) {
     try {
-      const resp = await fetch(`http://127.0.0.1:${port}/v1/sessions`)
+      const resp = await fetch(`http://127.0.0.1:${port}/v1/sessions`, { headers })
       const body = await resp.json() as { data: Array<{ id: string; alive: boolean }> }
       const alive = body.data.filter(s => s.alive)
       if (alive.length > 0) return alive[0].id
@@ -70,13 +72,25 @@ export default async function globalSetup(config: FullConfig) {
   fs.mkdirSync(configDir)
   fs.mkdirSync(stateDir)
 
+  // Write host.toml with the allocated port so gmuxd binds there instead of
+  // its default 8790 (which may be in use by a dev instance on the host).
+  fs.mkdirSync(path.join(configDir, 'gmux'))
+  fs.writeFileSync(
+    path.join(configDir, 'gmux', 'host.toml'),
+    `port = ${port}\n`,
+  )
+
+  // Seed a known auth token so tests can authenticate without scraping the
+  // generated token file. Must be >= 64 hex chars (authtoken.validateFormat).
+  const testToken = 'e2e'.padEnd(64, '0')
+
   const env: Record<string, string> = {
     PATH: process.env.PATH || '',
     HOME: process.env.HOME || '',
     TERM: 'xterm-256color',
     GMUX_SOCKET_DIR: socketDir,
-    GMUXD_PORT: String(port),
-    XDG_CONFIG_HOME: configDir,   // no config file → Tailscale disabled
+    GMUXD_TOKEN: testToken,
+    XDG_CONFIG_HOME: configDir,
     XDG_STATE_HOME: stateDir,
   }
 
@@ -97,10 +111,10 @@ export default async function globalSetup(config: FullConfig) {
     if (process.env.DEBUG) console.error(`[gmuxd] exited with code ${code}`)
   })
 
-  await waitForHealth(port)
+  await waitForHealth(port, testToken)
 
   // Start a test shell session (non-interactive — no local terminal attach)
-  const gmux = spawn(GMUX, ['--', 'bash', '-c', 'echo READY; while true; do sleep 60; done'], {
+  const gmux = spawn(GMUX, ['bash', '-c', 'echo READY; while true; do sleep 60; done'], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
@@ -112,7 +126,7 @@ export default async function globalSetup(config: FullConfig) {
   })
 
   // Wait for the session to appear in gmuxd
-  const sessionId = await waitForSession(port)
+  const sessionId = await waitForSession(port, testToken)
 
   // Save state for teardown and for test config
   fs.writeFileSync(STATE_FILE, JSON.stringify({
@@ -120,12 +134,13 @@ export default async function globalSetup(config: FullConfig) {
     pids,
     sessionId,
     port,
+    token: testToken,
   }))
 
   // Playwright reads baseURL from config, but config is evaluated before
-  // globalSetup. So we write the port to an env file that the config reads.
-  // Actually, we'll update the config to read from the state file.
-  // For now, set env vars for the test processes.
+  // globalSetup. So env vars from here propagate to the worker process that
+  // runs the tests.
   process.env.GMUXD_TEST_PORT = String(port)
   process.env.GMUX_TEST_SESSION_ID = sessionId
+  process.env.GMUX_TEST_TOKEN = testToken
 }

@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test'
-import { getTermState, selectFirstSession } from '../helpers'
+import { getTermState, openApp, selectFirstSession } from '../helpers'
 
 test.describe('terminal connection', () => {
   test('connects to session and renders terminal', async ({ page }) => {
-    await page.goto('/')
+    await openApp(page)
     await selectFirstSession(page)
 
     // Terminal should exist and have dimensions
@@ -16,7 +16,7 @@ test.describe('terminal connection', () => {
   })
 
   test('terminal displays session output', async ({ page }) => {
-    await page.goto('/')
+    await openApp(page)
     await selectFirstSession(page)
 
     // The test session runs `echo READY` — check that the terminal has content.

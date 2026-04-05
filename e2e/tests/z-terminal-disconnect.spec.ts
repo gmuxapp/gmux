@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test'
-import { selectFirstSession } from '../helpers'
+import { openApp, selectFirstSession } from '../helpers'
 
 test.describe('connection lost', () => {
   test('shows disconnected pill when backend stops', async ({ page }) => {
-    await page.goto('/')
+    await openApp(page)
     await selectFirstSession(page)
 
     // Verify we're connected — no disconnected pill

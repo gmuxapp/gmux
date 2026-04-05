@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { openApp } from '../helpers'
 
 test.describe('no external network dependencies', () => {
   test('page loads without any external network requests', async ({ page }) => {
@@ -16,7 +17,7 @@ test.describe('no external network dependencies', () => {
       },
     )
 
-    await page.goto('/')
+    await openApp(page)
     // Give the page time to load resources (fonts, scripts, etc.)
     await page.waitForLoadState('domcontentloaded')
     await page.waitForTimeout(3000)
