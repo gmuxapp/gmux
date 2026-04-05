@@ -52,9 +52,9 @@ function toUISession(s: ProtocolSession): Session {
     socket_path: s.socket_path ?? '',
     terminal_cols: s.terminal_cols ?? undefined,
     terminal_rows: s.terminal_rows ?? undefined,
-    slug: s.slug ?? undefined,
     resume_key: s.resume_key ?? undefined,
     stale: s.stale ?? false,
+    peer: s.peer ?? undefined,
   }
 }
 
@@ -63,6 +63,23 @@ async function fetchSessions(): Promise<Session[]> {
   const json = await resp.json()
   const data: ProtocolSession[] = json?.data ?? []
   return data.map(toUISession)
+}
+
+interface PeerInfo {
+  name: string
+  url: string
+  status: string
+  session_count: number
+}
+
+async function fetchPeers(): Promise<PeerInfo[]> {
+  try {
+    const resp = await fetch('/v1/peers')
+    const json = await resp.json()
+    return json?.data ?? []
+  } catch {
+    return []
+  }
 }
 
 async function postAction(endpoint: string, body?: Record<string, unknown>): Promise<void> {
@@ -333,6 +350,9 @@ function SessionItem({
           <span class="session-title">{session.title}</span>
         </div>
         <div class="session-meta">
+          {session.peer && (
+            <span class="session-peer-badge">@{session.peer}</span>
+          )}
           {session.status?.label && (
             <span class="session-status-label">{session.status.label}</span>
           )}
@@ -409,6 +429,7 @@ function Sidebar({
   open,
   onClose,
   health,
+  peers,
   notifPermission,
   onRequestNotifPermission,
 }: {
@@ -424,6 +445,7 @@ function Sidebar({
   open: boolean
   onClose: () => void
   health: HealthData | null
+  peers: PeerInfo[]
   notifPermission: NotifPermission
   onRequestNotifPermission: () => void
 }) {
@@ -479,6 +501,16 @@ function Sidebar({
           )}
         </div>
         <div class="sidebar-footer">
+          {peers.length > 0 && (
+            <div class="peers-status">
+              {peers.map(p => (
+                <div key={p.name} class="peer-status-item">
+                  <span class={`peer-dot ${p.status}`} />
+                  <span class="peer-name">{p.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <button class="manage-projects-btn" onClick={onManageProjects}>
             Manage projects
             {unmatchedActiveCount > 0 && (
@@ -821,6 +853,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [manageProjectsOpen, setManageProjectsOpen] = useState(false)
   const [connState, setConnState] = useState<ConnectionState>('connecting')
+  const [peers, setPeers] = useState<PeerInfo[]>([])
   const [ctrlArmed, setCtrlArmed] = useState(false)
   const [altArmed, setAltArmed] = useState(false)
   const [launchers, setLaunchers] = useState<LauncherDef[]>([])
@@ -850,6 +883,7 @@ function App() {
 
   useEffect(() => { fetchConfig().then(cfg => setLaunchers(cfg.launchers)) }, [])
   useEffect(() => { fetchHealth().then(setHealth) }, [])
+  useEffect(() => { fetchPeers().then(setPeers) }, [])
   useEffect(() => {
     fetchFrontendConfig().then(fc => {
       const macCtrl = fc.settings?.macCommandIsCtrl === true
@@ -937,6 +971,10 @@ function App() {
       })
       source.addEventListener('projects-update', () => {
         sidebarState.handleProjectsUpdate()
+      })
+      source.addEventListener('peer-status', () => {
+        // Peer connection state changed. Re-fetch to get updated status.
+        fetchPeers().then(setPeers).catch(() => {})
       })
       return () => source.close()
     }
@@ -1238,6 +1276,7 @@ function App() {
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         health={health}
+        peers={peers}
         notifPermission={notifPermission}
         onRequestNotifPermission={handleRequestNotifPermission}
       />

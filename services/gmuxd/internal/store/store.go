@@ -14,6 +14,10 @@ import (
 type Session struct {
 	// ── API-visible fields ──
 	ID            string            `json:"id"`
+
+	// Peer identifies which gmuxd instance owns this session.
+	// Empty = local. Non-empty = the peer name from [[peers]] config.
+	Peer string `json:"peer,omitempty"`
 	CreatedAt     string            `json:"created_at,omitempty"`
 	Command       []string          `json:"command,omitempty"`
 	Cwd           string            `json:"cwd,omitempty"`
@@ -35,16 +39,10 @@ type Session struct {
 	TerminalRows  uint16            `json:"terminal_rows,omitempty"`
 	Stale         bool              `json:"stale,omitempty"`
 
-	// Slug is a stable identifier for URL routing.
-	// Auto-derived from resume_key, command, or session ID when the
-	// adapter doesn't provide one. Unique within a kind (not per-project,
-	// since project assignment can change). Adapters can override via
-	// the runner's PUT /slug endpoint.
-	Slug string `json:"slug,omitempty"`
-
-	// ResumeKey is the session-file ID used for resume. Exposed to the
-	// frontend for project session array membership (matching dead sessions
-	// to projects). The derived Resumable bool is also API-visible.
+	// ResumeKey is a human-readable stable identifier derived from the
+	// adapter's session file slug. Used for URL routing (the frontend
+	// falls back to id[:8] when empty) and for matching dead sessions
+	// to project membership arrays. Unique within (kind, peer).
 	ResumeKey string `json:"resume_key,omitempty"`
 
 	// ── Internal fields (excluded from API via MarshalJSON) ──
@@ -64,6 +62,7 @@ type Session struct {
 func (s Session) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		ID            string            `json:"id"`
+		Peer          string            `json:"peer,omitempty"`
 		CreatedAt     string            `json:"created_at,omitempty"`
 		Command       []string          `json:"command,omitempty"`
 		Cwd           string            `json:"cwd,omitempty"`
@@ -84,11 +83,10 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		TerminalCols  uint16            `json:"terminal_cols,omitempty"`
 		TerminalRows  uint16            `json:"terminal_rows,omitempty"`
 		Stale         bool              `json:"stale,omitempty"`
-		Slug          string            `json:"slug,omitempty"`
 		ResumeKey     string            `json:"resume_key,omitempty"`
 	}
 	return json.Marshal(wire{
-		ID: s.ID, CreatedAt: s.CreatedAt, Command: s.Command,
+		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,
 		Cwd: s.Cwd, Kind: s.Kind, WorkspaceRoot: s.WorkspaceRoot,
 		Remotes: s.Remotes, Alive: s.Alive, Pid: s.Pid,
 		ExitCode: s.ExitCode, StartedAt: s.StartedAt, ExitedAt: s.ExitedAt,
@@ -96,7 +94,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		Unread: s.Unread, Resumable: s.Resumable,
 		SocketPath: s.SocketPath, TerminalCols: s.TerminalCols,
 		TerminalRows: s.TerminalRows, Stale: s.Stale,
-		Slug: s.Slug, ResumeKey: s.ResumeKey,
+		ResumeKey: s.ResumeKey,
 	})
 }
 
@@ -183,7 +181,7 @@ func (s *Store) Upsert(sess Session) {
 	s.mu.Lock()
 	removed, skip := s.resolveDuplicateResumeKeysLocked(sess)
 	if !skip {
-		s.resolveSlug(&sess)
+		s.ensureUniqueResumeKey(&sess)
 		s.sessions[sess.ID] = sess
 	}
 	s.mu.Unlock()
@@ -217,7 +215,7 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 	sess.Resumable = !sess.Alive && len(sess.Command) > 0
 	removed, skip := s.resolveDuplicateResumeKeysLocked(sess)
 	if !skip {
-		s.resolveSlug(&sess)
+		s.ensureUniqueResumeKey(&sess)
 		s.sessions[id] = sess
 	}
 	s.mu.Unlock()
@@ -324,6 +322,38 @@ func (s *Store) Remove(id string) bool {
 	return ok
 }
 
+// RemoveByPeer removes all sessions belonging to a peer and broadcasts
+// removal events. Returns the IDs that were removed.
+func (s *Store) RemoveByPeer(peer string) []string {
+	s.mu.Lock()
+	var removed []string
+	for id, sess := range s.sessions {
+		if sess.Peer == peer {
+			delete(s.sessions, id)
+			removed = append(removed, id)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, id := range removed {
+		s.broadcast(Event{Type: "session-remove", ID: id})
+	}
+	return removed
+}
+
+// ListByPeer returns all session IDs belonging to a peer.
+func (s *Store) ListByPeer(peer string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var ids []string
+	for id, sess := range s.sessions {
+		if sess.Peer == peer {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 func (s *Store) Subscribe() (<-chan Event, func()) {
 	sub := &subscriber{ch: make(chan Event, 64)}
 
@@ -363,52 +393,29 @@ func NowUnix() float64 {
 	return float64(time.Now().UnixNano()) / float64(time.Second)
 }
 
-// --- Slug auto-derivation ---
-
-// resolveSlug sets the session's URL slug and ensures resume_key stays
-// in sync (resume_key === slug is the invariant).
-//
-// When a resume_key is set (adapter-provided, human-readable), slug starts
-// from the resume_key. For sessions without a resume_key (fresh launches
-// before file attribution), slug falls back to the kind name.
-//
-// Uniqueness is enforced within a kind: "-2", "-3" suffixes are appended
-// when multiple sessions share the same base slug. The suffix is applied
-// to both slug and resume_key to maintain the invariant.
+// ensureUniqueResumeKey appends "-2", "-3" suffixes to the session's
+// ResumeKey when another session in the same (kind, peer) scope already
+// uses that key. Sessions without a ResumeKey (fresh launches before
+// file attribution) are left alone; the frontend falls back to the
+// session ID prefix for URL routing.
 //
 // Must be called with s.mu held.
-func (s *Store) resolveSlug(sess *Session) {
-	if sess.ResumeKey != "" {
-		sess.Slug = sess.ResumeKey
-	} else if sess.Slug == "" || sess.Slug == sess.Kind || sess.Slug == "session" {
-		// No resume_key yet and no meaningful slug. Use kind as a
-		// temporary slug. When file attribution sets the resume_key,
-		// the slug will be updated on the next Upsert/Update.
-		if sess.Kind != "" {
-			sess.Slug = sess.Kind
-		} else {
-			sess.Slug = "session"
-		}
+func (s *Store) ensureUniqueResumeKey(sess *Session) {
+	if sess.ResumeKey == "" {
+		return
 	}
-
-	// Ensure uniqueness within the same kind.
-	base := sess.Slug
+	base := sess.ResumeKey
 	for i := 2; ; i++ {
 		conflict := false
 		for _, existing := range s.sessions {
-			if existing.ID != sess.ID && existing.Kind == sess.Kind && existing.Slug == sess.Slug {
+			if existing.ID != sess.ID && existing.Kind == sess.Kind && existing.Peer == sess.Peer && existing.ResumeKey == sess.ResumeKey {
 				conflict = true
 				break
 			}
 		}
 		if !conflict {
-			break
+			return
 		}
-		sess.Slug = fmt.Sprintf("%s-%d", base, i)
-	}
-
-	// Keep resume_key === slug when resume_key is set.
-	if sess.ResumeKey != "" {
-		sess.ResumeKey = sess.Slug
+		sess.ResumeKey = fmt.Sprintf("%s-%d", base, i)
 	}
 }

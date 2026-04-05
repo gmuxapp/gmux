@@ -36,11 +36,12 @@ export function parseSessionPath(path: string): {
 /** Build a URL path for a session within a project. */
 export function sessionPath(
   projectSlug: string,
-  session: { kind: string; slug?: string; id: string },
+  session: { kind: string; resume_key?: string; id: string; peer?: string },
 ): string {
-  // Server always derives a slug, but defend against the brief window
-  // before the first SSE upsert arrives with the resolved slug.
-  const slug = session.slug || session.id.slice(0, 8)
+  const slug = session.resume_key || session.id.slice(0, 8)
+  if (session.peer) {
+    return `/${projectSlug}/@${session.peer}/${session.kind}/${slug}`
+  }
   return `/${projectSlug}/${session.kind}/${slug}`
 }
 
@@ -54,16 +55,17 @@ export function resolveSessionFromPath(
   sessions: Session[],
 ): string | null {
   if (!parsed.project) return null
-  // Remote host sessions are not yet supported (future: aggregation).
-  if (parsed.host) return null
+  // Filter by remote host when the URL has an @host segment.
+  const filterPeer = parsed.host ?? undefined
 
   // Find the project by slug.
   const project = projects.find(p => p.slug === parsed.project)
   if (!project) return null
 
-  // Match sessions to this project.
+  // Match sessions to this project, filtering by peer when URL has @host.
   const projectSessions = sessions.filter(
-    s => matchSession(s, projects)?.slug === parsed.project,
+    s => matchSession(s, projects)?.slug === parsed.project
+      && (filterPeer === undefined ? !s.peer : s.peer === filterPeer),
   )
 
   if (!parsed.adapter) {
@@ -83,7 +85,7 @@ export function resolveSessionFromPath(
 
   // Full match: /:project/:adapter/:slug
   // Try exact slug match first, then prefix match on session ID.
-  const exact = adapterSessions.find(s => s.slug === parsed.slug)
+  const exact = adapterSessions.find(s => s.resume_key === parsed.slug)
   if (exact) return exact.id
 
   const byId = adapterSessions.find(s => s.id.startsWith(parsed.slug!))
@@ -98,6 +100,7 @@ export interface SessionStatus {
 
 export interface Session {
   id: string
+  peer?: string
   created_at: string
   command: string[]
   cwd: string
@@ -117,7 +120,6 @@ export interface Session {
   socket_path: string
   terminal_cols?: number
   terminal_rows?: number
-  slug?: string
   resume_key?: string
   stale?: boolean
 }

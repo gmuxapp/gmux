@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -23,8 +24,10 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/devcontainers"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/notify"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
@@ -409,6 +412,10 @@ func serve(stderr io.Writer) int {
 		}
 	}()
 
+	// peerManager is initialized later after config is loaded.
+	// The closure captures the pointer so handlers work once it's set.
+	var peerManager *peering.Manager
+
 	// ── Health + Capabilities ──
 
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
@@ -434,6 +441,9 @@ func serve(stderr io.Writer) int {
 		if r.RemoteAddr == "@" || strings.HasPrefix(r.RemoteAddr, "/") || r.RemoteAddr == "" {
 			data["auth_token"] = authToken
 		}
+		if peerManager != nil && peerManager.HasPeers() {
+			data["peers"] = peerManager.PeerStatus()
+		}
 		writeJSON(w, map[string]any{"ok": true, "data": data})
 	})
 
@@ -448,6 +458,16 @@ func serve(stderr io.Writer) int {
 				},
 			},
 		})
+	})
+
+	// ── Peers ──
+
+	mux.HandleFunc("GET /v1/peers", func(w http.ResponseWriter, r *http.Request) {
+		if peerManager == nil || !peerManager.HasPeers() {
+			writeJSON(w, map[string]any{"ok": true, "data": []any{}})
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "data": peerManager.PeerStatus()})
 	})
 
 	// ── Config ──
@@ -665,9 +685,26 @@ func serve(stderr io.Writer) int {
 			Cwd        string   `json:"cwd"`
 			Command    []string `json:"command"`
 			LauncherID string   `json:"launcher_id"`
+			Peer       string   `json:"peer"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+
+		// Forward to peer if requested.
+		if req.Peer != "" {
+			if peerManager == nil {
+				writeError(w, http.StatusBadRequest, "unknown_peer", "no peers configured")
+				return
+			}
+			if peer := peerManager.GetPeer(req.Peer); peer != nil {
+				// Re-supply the body since it was already read above.
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				peer.ForwardLaunch(w, r)
+				return
+			}
+			writeError(w, http.StatusBadRequest, "unknown_peer", fmt.Sprintf("peer %q not configured", req.Peer))
 			return
 		}
 
@@ -733,6 +770,25 @@ func serve(stderr io.Writer) int {
 		action := ""
 		if len(parts) == 4 {
 			action = parts[3]
+		}
+
+		// Route to peer if this is a remote session.
+		if peerManager != nil && action != "" {
+			if peer, originalID := peerManager.FindPeer(sessionID); peer != nil {
+				if action == "attach" {
+					// Attach returns the hub's own WS path (the hub proxies to the spoke).
+					writeJSON(w, map[string]any{
+						"ok": true,
+						"data": map[string]any{
+							"transport": "websocket",
+							"ws_path":   "/ws/" + sessionID,
+						},
+					})
+					return
+				}
+				peer.Forward(w, r, originalID, action)
+				return
+			}
 		}
 
 		switch action {
@@ -888,12 +944,33 @@ func serve(stderr io.Writer) int {
 		if !ok {
 			return "", fmt.Errorf("session %s not found", sessionID)
 		}
+		if sess.Peer != "" {
+			// Remote session: return empty socket path. The WS handler
+			// checks for this and uses the peer proxy path instead.
+			return "", fmt.Errorf("session %s is remote (peer: %s)", sessionID, sess.Peer)
+		}
 		if sess.SocketPath == "" {
 			return "", fmt.Errorf("session %s has no socket", sessionID)
 		}
 		return sess.SocketPath, nil
 	}, sessions)
-	mux.HandleFunc("/ws/{sessionID}", wsProxy.Handler())
+
+	// WS handler: local sessions use the Unix proxy, remote sessions
+	// are proxied to the spoke's WS endpoint over TCP.
+	mux.HandleFunc("/ws/{sessionID}", func(w http.ResponseWriter, r *http.Request) {
+		sessionID := r.PathValue("sessionID")
+
+		// Check if this is a remote session.
+		if peerManager != nil {
+			if peer, originalID := peerManager.FindPeer(sessionID); peer != nil {
+				peer.ProxyWS(w, r, originalID)
+				return
+			}
+		}
+
+		// Local session: use the existing Unix socket proxy.
+		wsProxy.Handler()(w, r)
+	})
 
 	// ── Presence WebSocket ──
 
@@ -1023,6 +1100,9 @@ func serve(stderr io.Writer) int {
 	if err != nil {
 		log.Fatalf("FATAL: %v", err)
 	}
+	if err := cfg.ResolveTokens(); err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
 
 	// ── Resolve TCP listen address and auth token ──
 
@@ -1100,6 +1180,29 @@ func serve(stderr io.Writer) int {
 		}
 	}()
 
+	// ── Peer connections (hub protocol) ──
+
+	if len(cfg.Peers) > 0 || cfg.Discovery.Devcontainers {
+		peerManager = peering.NewManager(cfg.Peers, sessions)
+		peerManager.Start()
+		if len(cfg.Peers) > 0 {
+			log.Printf("peering: %d peer(s) configured", len(cfg.Peers))
+		}
+	}
+
+	// ── Devcontainer discovery ──
+
+	var dcWatcher *devcontainers.Watcher
+	if cfg.Discovery.Devcontainers {
+		dcWatcher = devcontainers.NewWatcher(peerManager)
+		if dcWatcher != nil {
+			dcWatcher.Start()
+			log.Printf("devcontainers: discovery enabled")
+		} else {
+			log.Printf("devcontainers: docker CLI not found, skipping discovery")
+		}
+	}
+
 	// ── Optional tailscale listener ──
 
 	if cfg.Tailscale.Enabled {
@@ -1118,6 +1221,13 @@ func serve(stderr io.Writer) int {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	log.Printf("received %v — shutting down", sig)
+
+	if dcWatcher != nil {
+		dcWatcher.Stop()
+	}
+	if peerManager != nil {
+		peerManager.Stop()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
