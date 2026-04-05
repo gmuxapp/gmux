@@ -506,3 +506,106 @@ func TestManagerStop_CleansUpSessions(t *testing.T) {
 		t.Error("peer session should be removed on stop")
 	}
 }
+
+// ── Dynamic peer management ──
+
+func TestManager_AddPeer(t *testing.T) {
+	st := store.New()
+	mgr := NewManager(nil, st)
+	mgr.Start()
+	defer mgr.Stop()
+
+	if mgr.HasPeers() {
+		t.Fatal("should have no peers initially")
+	}
+
+	mgr.AddPeer(config.PeerConfig{Name: "dev", URL: "http://172.17.0.2:8790", Token: "tok"})
+
+	if !mgr.HasPeers() {
+		t.Fatal("should have peers after AddPeer")
+	}
+	if mgr.GetPeer("dev") == nil {
+		t.Fatal("GetPeer should return the added peer")
+	}
+	infos := mgr.PeerStatus()
+	if len(infos) != 1 || infos[0].Name != "dev" {
+		t.Errorf("PeerStatus = %+v, want 1 entry named 'dev'", infos)
+	}
+}
+
+func TestManager_AddPeerIdempotent(t *testing.T) {
+	st := store.New()
+	mgr := NewManager(nil, st)
+	mgr.Start()
+	defer mgr.Stop()
+
+	cfg := config.PeerConfig{Name: "dev", URL: "http://172.17.0.2:8790", Token: "tok"}
+	mgr.AddPeer(cfg)
+	mgr.AddPeer(cfg) // duplicate, should be no-op
+
+	if len(mgr.PeerStatus()) != 1 {
+		t.Fatalf("expected 1 peer, got %d", len(mgr.PeerStatus()))
+	}
+}
+
+func TestManager_RemovePeer(t *testing.T) {
+	st := store.New()
+	sk := spokeServer(t, "", []store.Session{
+		{ID: "s1", Kind: "pi", Alive: true},
+	})
+
+	mgr := NewManager(nil, st)
+	mgr.Start()
+	defer mgr.Stop()
+
+	mgr.AddPeer(config.PeerConfig{Name: "dev", URL: sk.URL, Token: ""})
+
+	// Wait for session to appear.
+	deadline := time.After(2 * time.Second)
+	for {
+		if _, ok := st.Get("s1@dev"); ok {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for session")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	mgr.RemovePeer("dev")
+
+	if mgr.GetPeer("dev") != nil {
+		t.Fatal("peer should be removed")
+	}
+	if _, ok := st.Get("s1@dev"); ok {
+		t.Fatal("peer sessions should be cleaned up")
+	}
+}
+
+func TestManager_RemoveNonexistentIsNoop(t *testing.T) {
+	st := store.New()
+	mgr := NewManager(nil, st)
+	mgr.Start()
+	defer mgr.Stop()
+
+	// Should not panic.
+	mgr.RemovePeer("nonexistent")
+}
+
+func TestManager_FindPeerDynamic(t *testing.T) {
+	st := store.New()
+	mgr := NewManager(nil, st)
+	mgr.Start()
+	defer mgr.Stop()
+
+	mgr.AddPeer(config.PeerConfig{Name: "dev", URL: "http://172.17.0.2:8790", Token: "tok"})
+
+	peer, origID := mgr.FindPeer("sess-abc@dev")
+	if peer == nil {
+		t.Fatal("FindPeer should resolve dynamically added peer")
+	}
+	if origID != "sess-abc" {
+		t.Errorf("origID = %q, want %q", origID, "sess-abc")
+	}
+}

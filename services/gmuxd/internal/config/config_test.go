@@ -24,6 +24,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Tailscale.Hostname != "gmux" {
 		t.Errorf("hostname = %q, want %q", cfg.Tailscale.Hostname, "gmux")
 	}
+	if !cfg.Discovery.Devcontainers {
+		t.Error("discovery.devcontainers should default to true")
+	}
 }
 
 func TestLoadFromFile(t *testing.T) {
@@ -346,8 +349,175 @@ url = "http://10.0.0.5:8790"
 	if err == nil {
 		t.Fatal("expected error for missing token")
 	}
-	if !strings.Contains(err.Error(), "token is required") {
+	if !strings.Contains(err.Error(), "token") {
 		t.Errorf("error = %q, want mention of token", err)
+	}
+}
+
+func TestLoadPeersRejectsMultipleTokenSources(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+[[peers]]
+name = "server"
+url = "http://10.0.0.5:8790"
+token = "inline"
+token_file = "/path/to/token"
+`)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for multiple token sources")
+	}
+	if !strings.Contains(err.Error(), "only one") {
+		t.Errorf("error = %q, want mention of 'only one'", err)
+	}
+}
+
+func TestLoadPeersTokenFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	os.WriteFile(tokenFile, []byte("my-secret-token\n"), 0o600)
+
+	writeConfig(t, dir, fmt.Sprintf(`
+[[peers]]
+name = "server"
+url = "http://10.0.0.5:8790"
+token_file = %q
+`, tokenFile))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Peers[0].TokenFile != tokenFile {
+		t.Errorf("token_file = %q, want %q", cfg.Peers[0].TokenFile, tokenFile)
+	}
+}
+
+func TestLoadPeersTokenCommand(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+[[peers]]
+name = "server"
+url = "http://10.0.0.5:8790"
+token_command = "echo my-secret"
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Peers[0].TokenCommand != "echo my-secret" {
+		t.Errorf("token_command = %q, want %q", cfg.Peers[0].TokenCommand, "echo my-secret")
+	}
+}
+
+func TestResolveTokens_Inline(t *testing.T) {
+	cfg := Config{
+		Peers: []PeerConfig{{Name: "s", URL: "http://x:8790", Token: "abc"}},
+	}
+	if err := cfg.ResolveTokens(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Peers[0].Token != "abc" {
+		t.Errorf("token = %q, want %q", cfg.Peers[0].Token, "abc")
+	}
+}
+
+func TestResolveTokens_File(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	os.WriteFile(tokenFile, []byte("  file-secret  \n"), 0o600)
+
+	cfg := Config{
+		Peers: []PeerConfig{{Name: "s", URL: "http://x:8790", TokenFile: tokenFile}},
+	}
+	if err := cfg.ResolveTokens(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Peers[0].Token != "file-secret" {
+		t.Errorf("token = %q, want %q", cfg.Peers[0].Token, "file-secret")
+	}
+}
+
+func TestResolveTokens_Command(t *testing.T) {
+	cfg := Config{
+		Peers: []PeerConfig{{Name: "s", URL: "http://x:8790", TokenCommand: "echo cmd-secret"}},
+	}
+	if err := cfg.ResolveTokens(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Peers[0].Token != "cmd-secret" {
+		t.Errorf("token = %q, want %q", cfg.Peers[0].Token, "cmd-secret")
+	}
+}
+
+func TestResolveTokens_EmptyFileErrors(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	os.WriteFile(tokenFile, []byte("  \n"), 0o600)
+
+	cfg := Config{
+		Peers: []PeerConfig{{Name: "s", URL: "http://x:8790", TokenFile: tokenFile}},
+	}
+	err := cfg.ResolveTokens()
+	if err == nil {
+		t.Fatal("expected error for empty token file")
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error = %q, want mention of empty", err)
+	}
+}
+
+func TestResolveTokens_MissingFileErrors(t *testing.T) {
+	cfg := Config{
+		Peers: []PeerConfig{{Name: "s", URL: "http://x:8790", TokenFile: "/nonexistent/path"}},
+	}
+	err := cfg.ResolveTokens()
+	if err == nil {
+		t.Fatal("expected error for missing token file")
+	}
+}
+
+func TestResolveTokens_FailedCommandErrors(t *testing.T) {
+	cfg := Config{
+		Peers: []PeerConfig{{Name: "s", URL: "http://x:8790", TokenCommand: "false"}},
+	}
+	err := cfg.ResolveTokens()
+	if err == nil {
+		t.Fatal("expected error for failed command")
+	}
+}
+
+func TestLoadDiscoveryDefaults(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, ``)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Discovery.Devcontainers {
+		t.Error("discovery.devcontainers should default to true")
+	}
+}
+
+func TestLoadDiscoveryExplicitDisable(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+[discovery]
+devcontainers = false
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Discovery.Devcontainers {
+		t.Error("discovery.devcontainers should be false when explicitly disabled")
 	}
 }
 
