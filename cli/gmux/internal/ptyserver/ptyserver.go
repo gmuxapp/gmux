@@ -375,9 +375,13 @@ func (s *Server) handlePutSlug(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
 	if s.cmd.Process != nil {
-		// Send SIGTERM to the child process group for clean shutdown
-		syscall.Kill(-s.cmd.Process.Pid, syscall.SIGTERM)
-		log.Printf("ptyserver: sent SIGTERM to child pid %d", s.cmd.Process.Pid)
+		// SIGHUP matches the "terminal closed" semantics of this endpoint:
+		// interactive shells (bash, zsh) ignore SIGTERM but exit cleanly on
+		// SIGHUP; TUI adapters treat SIGHUP the same as a graceful shutdown.
+		// Sent to the process group so children (e.g. a subshell's commands)
+		// receive it too.
+		syscall.Kill(-s.cmd.Process.Pid, syscall.SIGHUP)
+		log.Printf("ptyserver: sent SIGHUP to child pid %d", s.cmd.Process.Pid)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
