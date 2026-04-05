@@ -473,8 +473,16 @@ func serve(stderr io.Writer) int {
 	// ── Config ──
 
 	mux.HandleFunc("GET /v1/config", func(w http.ResponseWriter, r *http.Request) {
-		cfg := launchConfig
-		writeJSON(w, map[string]any{"ok": true, "data": cfg})
+		data := map[string]any{
+			"default_launcher": launchConfig.DefaultLauncher,
+			"launchers":        launchConfig.Launchers,
+		}
+		if peerManager != nil {
+			if peerConfigs := peerManager.PeerConfigs(r.Context()); len(peerConfigs) > 0 {
+				data["peers"] = peerConfigs
+			}
+		}
+		writeJSON(w, map[string]any{"ok": true, "data": data})
 	})
 
 	// Frontend config (read from disk on each request so users can edit

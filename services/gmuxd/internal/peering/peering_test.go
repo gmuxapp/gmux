@@ -593,6 +593,129 @@ func TestManager_RemoveNonexistentIsNoop(t *testing.T) {
 	mgr.RemovePeer("nonexistent")
 }
 
+func TestPeerFetchConfig(t *testing.T) {
+	// Spoke returns a launch config.
+	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/config" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer tok123" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"data":{"default_launcher":"shell","launchers":[{"id":"shell","label":"Shell"}]}}`))
+	}))
+	defer spoke.Close()
+
+	st := store.New()
+	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL, Token: "tok123"}, st, nil)
+
+	data := p.FetchConfig(t.Context())
+	if data == nil {
+		t.Fatal("FetchConfig returned nil")
+	}
+
+	var cfg struct {
+		DefaultLauncher string `json:"default_launcher"`
+		Launchers       []struct {
+			ID string `json:"id"`
+		} `json:"launchers"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if cfg.DefaultLauncher != "shell" {
+		t.Errorf("default_launcher = %q, want %q", cfg.DefaultLauncher, "shell")
+	}
+	if len(cfg.Launchers) != 1 || cfg.Launchers[0].ID != "shell" {
+		t.Errorf("launchers = %+v, want [{ID:shell}]", cfg.Launchers)
+	}
+}
+
+func TestPeerFetchConfig_BadToken(t *testing.T) {
+	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer spoke.Close()
+
+	st := store.New()
+	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL, Token: "wrong"}, st, nil)
+
+	data := p.FetchConfig(t.Context())
+	if data != nil {
+		t.Errorf("FetchConfig should return nil for 401, got %s", data)
+	}
+}
+
+func TestManagerPeerConfigs(t *testing.T) {
+	// Two spokes with different launchers.
+	spoke1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"data":{"default_launcher":"shell","launchers":[{"id":"shell"}]}}`))
+	}))
+	defer spoke1.Close()
+
+	spoke2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"data":{"default_launcher":"pi","launchers":[{"id":"shell"},{"id":"pi"}]}}`))
+	}))
+	defer spoke2.Close()
+
+	// Build a manager with two peers that are "connected".
+	st := store.New()
+	cfgs := []config.PeerConfig{
+		{Name: "laptop", URL: spoke1.URL, Token: "t1"},
+		{Name: "workstation", URL: spoke2.URL, Token: "t2"},
+	}
+	mgr := NewManager(cfgs, st)
+
+	// Simulate connected status so PeerConfigs includes them.
+	for _, mp := range mgr.peers {
+		mp.peer.setStatus(StatusConnected)
+	}
+
+	results := mgr.PeerConfigs(t.Context())
+	if len(results) != 2 {
+		t.Fatalf("expected 2 peer configs, got %d", len(results))
+	}
+
+	if results["laptop"] == nil {
+		t.Error("missing laptop config")
+	}
+	if results["workstation"] == nil {
+		t.Error("missing workstation config")
+	}
+
+	// Verify workstation has pi launcher.
+	var wsCfg struct {
+		DefaultLauncher string `json:"default_launcher"`
+	}
+	json.Unmarshal(results["workstation"], &wsCfg)
+	if wsCfg.DefaultLauncher != "pi" {
+		t.Errorf("workstation default_launcher = %q, want %q", wsCfg.DefaultLauncher, "pi")
+	}
+}
+
+func TestManagerPeerConfigs_SkipsDisconnected(t *testing.T) {
+	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("disconnected peer should not be queried")
+	}))
+	defer spoke.Close()
+
+	st := store.New()
+	mgr := NewManager([]config.PeerConfig{
+		{Name: "offline", URL: spoke.URL, Token: "tok"},
+	}, st)
+	// Leave status as disconnected (default).
+
+	results := mgr.PeerConfigs(t.Context())
+	if len(results) != 0 {
+		t.Errorf("expected empty results for disconnected peer, got %d", len(results))
+	}
+}
+
 func TestManager_FindPeerDynamic(t *testing.T) {
 	st := store.New()
 	mgr := NewManager(nil, st)
