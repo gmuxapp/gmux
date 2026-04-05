@@ -295,8 +295,14 @@ func (s *Server) ExitCode() int {
 // Used for transparent local terminal attach. Pass nil to detach.
 func (s *Server) SetLocalOutput(w io.Writer) {
 	s.mu.Lock()
+	detaching := s.localOut != nil && w == nil
 	s.localOut = w
+	noViewers := detaching && len(s.clients) == 0
 	s.mu.Unlock()
+
+	if noViewers {
+		s.shrinkForReconnect()
+	}
 }
 
 // WritePTY writes raw bytes to the PTY input (as if typed by the user).
@@ -519,7 +525,18 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		s.mu.Lock()
 		delete(s.clients, client)
+		noClients := len(s.clients) == 0 && s.localOut == nil
 		s.mu.Unlock()
+
+		// When the last viewer disconnects, shrink the PTY by 1 column.
+		// The next connecting client will send a resize with its real
+		// viewport, which will differ from the shrunk size, naturally
+		// triggering a SIGWINCH that forces the child TUI to do a full
+		// redraw (including re-emitting kitty images). This avoids the
+		// need for a visible wiggle on connect.
+		if noClients {
+			s.shrinkForReconnect()
+		}
 		conn.Close(websocket.StatusNormalClosure, "")
 		cancel()
 	}()
@@ -544,6 +561,49 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.ptmx.Write(data); err != nil {
 			return
 		}
+	}
+}
+
+// shrinkForReconnect reduces the PTY width by 1 column so that the next
+// connecting client's resize (which will carry the real viewport size)
+// triggers a genuine dimension change. Most TUI frameworks only do a full
+// re-render when width or height actually changes; without this, a client
+// whose viewport matches the current PTY size would get a stale snapshot
+// (missing kitty images, possible drift from the emulator's reconstruction).
+//
+// Called when the last viewer (WS client or local terminal) disconnects.
+// The shrink happens while no one is watching, so there's no visible
+// flicker. The child TUI redraws at cols-1, but nobody sees it.
+//
+// Safety: re-checks that no viewer has connected between the call-site
+// check and the lock acquisition. Also skips if the child has exited
+// (pointless to resize a dead process).
+//
+// State and resize broadcasts are intentionally skipped: the shrunk size
+// is an internal detail, not a real terminal size change.
+func (s *Server) shrinkForReconnect() {
+	// Don't bother if the child has exited.
+	select {
+	case <-s.done:
+		return
+	default:
+	}
+
+	s.mu.Lock()
+	if s.ptyCols <= 1 || s.ptyRows == 0 || len(s.clients) > 0 || s.localOut != nil {
+		s.mu.Unlock()
+		return
+	}
+	s.ptyCols--
+	cols := s.ptyCols
+	rows := s.ptyRows
+	s.drainScreenLocked()
+	s.screen.Resize(int(cols), int(rows))
+	s.mu.Unlock()
+
+	pty.Setsize(s.ptmx, &pty.Winsize{Cols: cols, Rows: rows})
+	if s.cmd.Process != nil {
+		syscall.Kill(-s.cmd.Process.Pid, syscall.SIGWINCH)
 	}
 }
 
