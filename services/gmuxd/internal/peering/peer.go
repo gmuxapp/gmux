@@ -71,6 +71,40 @@ func (p *Peer) ForwardLaunch(w http.ResponseWriter, r *http.Request) {
 	p.proxyHTTP(w, r, "/v1/launch")
 }
 
+// FetchConfig fetches the spoke's /v1/config and returns the raw
+// JSON data payload. Returns nil on any error (peer unavailable,
+// malformed response, etc.).
+func (p *Peer) FetchConfig(ctx context.Context) json.RawMessage {
+	url := strings.TrimRight(p.Config.URL, "/") + "/v1/config"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Authorization", "Bearer "+p.Config.Token)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("peering: %s: fetch config: %v", p.Config.Name, err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	var envelope struct {
+		OK   bool            `json:"ok"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil || !envelope.OK {
+		return nil
+	}
+	return envelope.Data
+}
+
 // ProxyWS proxies a browser WebSocket connection to the spoke's
 // /ws/{sessionID} endpoint. The hub accepts the browser WS, dials the
 // spoke WS with bearer auth, and pipes bidirectionally.

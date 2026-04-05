@@ -126,6 +126,7 @@ interface LauncherDef {
 interface LaunchConfig {
   default_launcher: string
   launchers: LauncherDef[]
+  peers?: Record<string, { default_launcher: string; launchers: LauncherDef[] }>
 }
 
 interface HealthData {
@@ -167,8 +168,18 @@ async function fetchConfig(): Promise<LaunchConfig> {
   }
 }
 
-async function launchSession(launcherId: string, cwd?: string): Promise<void> {
-  await postAction('/v1/launch', { launcher_id: launcherId, cwd })
+function invalidateConfigCache() {
+  _configCache = null
+}
+
+/** Return launchers for a specific peer, falling back to local config. */
+function launchersForPeer(config: LaunchConfig, peer: string | undefined): { default_launcher: string; launchers: LauncherDef[] } {
+  if (peer && config.peers?.[peer]) return config.peers[peer]
+  return config
+}
+
+async function launchSession(launcherId: string, opts?: { cwd?: string; peer?: string }): Promise<void> {
+  await postAction('/v1/launch', { launcher_id: launcherId, cwd: opts?.cwd, peer: opts?.peer })
 }
 
 
@@ -184,7 +195,7 @@ async function launchSession(launcherId: string, cwd?: string): Promise<void> {
 // Track pending launches globally so App can auto-select new sessions
 let _pendingLaunchAt = 0
 
-function LaunchButton({ cwd, className, onLaunch }: { cwd?: string; className?: string; onLaunch?: () => void }) {
+function LaunchButton({ cwd, peer, className, onLaunch }: { cwd?: string; peer?: string; className?: string; onLaunch?: () => void }) {
   const [state, setState] = useState<'idle' | 'loading' | 'open' | 'launching'>('idle')
   const [config, setConfig] = useState<LaunchConfig | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -215,7 +226,7 @@ function LaunchButton({ cwd, className, onLaunch }: { cwd?: string; className?: 
     setState('launching')
     _pendingLaunchAt = Date.now()
     onLaunch?.()
-    launchSession(id, cwd).finally(() => {
+    launchSession(id, { cwd, peer }).finally(() => {
       // Reset after a short delay to show spinner
       setTimeout(() => setState('idle'), 600)
     })
@@ -250,8 +261,9 @@ function LaunchButton({ cwd, className, onLaunch }: { cwd?: string; className?: 
   let defaultLauncher: LauncherDef | undefined
   let others: LauncherDef[] = []
   if (isOpen && config) {
-    defaultLauncher = config.launchers.find(l => l.id === config.default_launcher)
-    others = config.launchers.filter(l => l.id !== config.default_launcher)
+    const resolved = launchersForPeer(config, peer)
+    defaultLauncher = resolved.launchers.find(l => l.id === resolved.default_launcher)
+    others = resolved.launchers.filter(l => l.id !== resolved.default_launcher)
   }
 
   // Always render the + button for stable layout. Menu overlays on top.
@@ -982,6 +994,8 @@ function App() {
       source.addEventListener('peer-status', () => {
         // Peer connection state changed. Re-fetch to get updated status.
         fetchPeers().then(setPeers).catch(() => {})
+        // Invalidate launcher config cache so next open picks up new peer launchers.
+        invalidateConfigCache()
       })
       return () => source.close()
     }
