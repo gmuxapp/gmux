@@ -10,6 +10,7 @@ import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { createReplayBuffer } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
+import { decideViewportResize, sameSize } from './terminal-resize'
 import { MOCK_BY_ID } from './mock-data/index'
 import type { Session } from './types'
 
@@ -92,6 +93,13 @@ export function getProposedTerminalSize(fit: FitAddon | null): TerminalSize | nu
   return { cols: dims.cols, rows: dims.rows }
 }
 
+function getViewportPixels(vv: VisualViewport | null): { width: number; height: number } {
+  return {
+    width: vv?.width ?? window.innerWidth,
+    height: vv?.height ?? window.innerHeight,
+  }
+}
+
 function announceResize(ws: WebSocket | null, dims: TerminalSize): void {
   if (!ws || ws.readyState !== WebSocket.OPEN) return
   ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
@@ -153,7 +161,9 @@ function focusTerminalInput(term: Terminal | null): void {
  * without keeping per-session xterm instances alive.
  *
  * Resize model: selecting a session claims ownership — the first WS connect
- * resizes the PTY to fit this browser's viewport. If another source (local
+ * resizes the PTY to fit this browser's viewport. While driving, viewport
+ * resize sends are gated by the matching terminal_resize echo from the server,
+ * so drag-resize stays responsive without flooding. If another source (local
  * terminal, other browser) later changes the PTY size, the "Sized for another
  * device" pill appears (derived from viewport ≠ PTY). Clicking it reclaims.
  * Auto-reconnects after a network blip re-sync from session metadata without
@@ -214,6 +224,16 @@ export function TerminalView({
   // must not trigger effect re-runs but need current values.
   const viewportSizeRef = useRef<TerminalSize | null>(null)
   const ptySizeRef = useRef<TerminalSize | null>(null)
+  const resizeEchoGateRef = useRef<{
+    awaitingEcho: TerminalSize | null
+    dirty: boolean
+    timer: ReturnType<typeof setTimeout> | null
+  }>({
+    awaitingEcho: null,
+    dirty: false,
+    timer: null,
+  })
+  const processViewportResizeRef = useRef<((forceDrive?: boolean) => void) | null>(null)
 
   currentSessionId.current = session.id
   sessionRef.current = session
@@ -232,24 +252,106 @@ export function TerminalView({
     termIoRef.current?.enqueueMany(chunks, termEpochRef.current, onWritten)
   }, [])
 
+  const resetResizeEchoGate = useCallback(() => {
+    const gate = resizeEchoGateRef.current
+    if (gate.timer !== null) clearTimeout(gate.timer)
+    gate.awaitingEcho = null
+    gate.dirty = false
+    gate.timer = null
+  }, [])
+
+  const releaseResizeEchoGate = useCallback((applied: TerminalSize) => {
+    const gate = resizeEchoGateRef.current
+    if (!gate.awaitingEcho || !sameSize(gate.awaitingEcho, applied)) return
+
+    if (gate.timer !== null) clearTimeout(gate.timer)
+    gate.awaitingEcho = null
+    gate.timer = null
+
+    if (!gate.dirty) return
+    gate.dirty = false
+    processViewportResizeRef.current?.(true)
+  }, [])
+
+  const applyOwnedResize = useCallback((size: TerminalSize) => {
+    const prevPty = ptySizeRef.current
+
+    // Optimistically sync ptySize so the pill hides immediately, before the
+    // server echoes the resize back. Without this, ptySize would lag behind
+    // viewportSize for one round-trip, causing a spurious pill flash.
+    setPtySize(size); ptySizeRef.current = size
+    queueResize(size)
+
+    if (sameSize(prevPty, size)) return
+
+    // A new outbound resize supersedes any older echo wait or pending dirty
+    // viewport event. The server echo for this exact size re-opens the gate.
+    resetResizeEchoGate()
+
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+
+    announceResize(ws, size)
+    const gate = resizeEchoGateRef.current
+    gate.awaitingEcho = size
+    gate.timer = setTimeout(() => {
+      releaseResizeEchoGate(size)
+    }, 2000)
+  }, [queueResize, releaseResizeEchoGate, resetResizeEchoGate])
+
+  const processViewportResize = useCallback((forceDrive = false) => {
+    const term = termRef.current
+    const shell = shellRef.current
+    if (!term || !shell) return
+
+    const newVp = measureTerminalFit(term, shell)
+    const gate = resizeEchoGateRef.current
+    const decision = decideViewportResize({
+      prevViewport: viewportSizeRef.current,
+      ptySize: ptySizeRef.current,
+      newViewport: newVp,
+      awaitingEcho: gate.awaitingEcho != null,
+      forceDrive,
+    })
+
+    if (decision.kind === 'wait') {
+      // Keep the ref fresh for the next decision, but skip the React state
+      // update so the pill doesn't flash while we wait for the echo.
+      viewportSizeRef.current = newVp
+      gate.dirty = true
+      return
+    }
+
+    setViewportSize(newVp); viewportSizeRef.current = newVp
+
+    if (decision.kind === 'drive') {
+      // Viewport matched PTY, or we were already driving and just finished
+      // waiting for the previous echo. Resize xterm now, then wait for the
+      // server echo before sending the next viewport change.
+      applyOwnedResize(decision.size)
+      return
+    }
+
+    if (decision.kind === 'follow') {
+      // Out of sync (pill visible), keep xterm at the PTY size.
+      queueResize(decision.size)
+    }
+  }, [applyOwnedResize, queueResize])
+
+  processViewportResizeRef.current = processViewportResize
+
   // Resize xterm to fit the viewport and announce the new size to the backend.
   const fitAndResize = useCallback(() => {
     const term = termRef.current
     const shell = shellRef.current
-    const ws = wsRef.current
     if (!term || !shell) return
 
     const dims = measureTerminalFit(term, shell)
     setViewportSize(dims); viewportSizeRef.current = dims
     if (!dims) return
 
-    // Optimistically sync ptySize so the pill hides immediately, before the
-    // server echoes the resize back. Without this, ptySize would lag behind
-    // viewportSize for one round-trip, causing a spurious pill flash.
-    setPtySize(dims); ptySizeRef.current = dims
-    queueResize(dims)
-    announceResize(ws, dims)
-  }, [queueResize])
+    applyOwnedResize(dims)
+  }, [applyOwnedResize])
 
   const focusTerminal = useCallback(() => {
     focusTerminalInput(termRef.current)
@@ -474,61 +576,58 @@ export function TerminalView({
     shell?.addEventListener('touchend', handleTouchEndCapture, true)
     shell?.addEventListener('touchcancel', clearTouchPan, true)
 
-    // On iOS, both window.resize and visualViewport.resize fire when the
-    // keyboard opens/closes, causing double-handling per event. Additionally,
-    // iOS fires visualViewport.resize on every frame of the keyboard animation
-    // — not just once when it settles.
-    //
-    // Strategy:
-    // - Use visualViewport exclusively when available (skip window.resize).
-    // - Debounce: coalesce rapid fires during keyboard animation into one call.
-    // - Re-focus after the viewport settles: keyboard animation blurs the
-    //   xterm textarea mid-transition, causing keystrokes (e.g. spacebar) to
-    //   be lost until the user taps again.
+    // Resize strategy:
+    // - Follow the viewport immediately when this client is driving.
+    // - After each outbound resize, wait for the matching terminal_resize echo
+    //   before sending the next one. This keeps drag-resize responsive without
+    //   flooding the server with intermediate sizes.
+    // - Height-only viewport changes (soft keyboard slide) get a short debounce
+    //   so we measure near the settled height instead of every animation frame.
     const vv = window.visualViewport
+    const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
+      || navigator.maxTouchPoints > 0
+    const KEYBOARD_RESIZE_DEBOUNCE_MS = 20
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null
-    let lastVvHeight = vv?.height ?? window.innerHeight
+    let refocusTimer: ReturnType<typeof setTimeout> | null = null
+    let lastViewportPixels = getViewportPixels(vv)
+    let pendingHeightChange = false
+
+    const flushViewportResize = () => {
+      resizeTimer = null
+      processViewportResize()
+
+      const shouldRefocus = pendingHeightChange && isTouchDevice
+      pendingHeightChange = false
+      if (!shouldRefocus) return
+
+      // Let iOS finish the keyboard transition before grabbing focus,
+      // otherwise the OS immediately re-blurs the textarea.
+      if (refocusTimer !== null) clearTimeout(refocusTimer)
+      refocusTimer = setTimeout(() => focusTerminalInput(termRef.current), 120)
+    }
 
     const onViewportResize = () => {
-      if (resizeTimer !== null) clearTimeout(resizeTimer)
-      resizeTimer = setTimeout(() => {
+      const nextViewportPixels = getViewportPixels(vv)
+      const widthChanged = nextViewportPixels.width !== lastViewportPixels.width
+      const heightChanged = nextViewportPixels.height !== lastViewportPixels.height
+      lastViewportPixels = nextViewportPixels
+      pendingHeightChange = pendingHeightChange || heightChanged
+
+      if (resizeTimer !== null) {
+        clearTimeout(resizeTimer)
         resizeTimer = null
+      }
 
-        const t = termRef.current
-        const s = shellRef.current
-        if (!t || !s) return
+      // Soft keyboard animations are mostly height-only, so debounce just that
+      // case on touch devices. Desktop resizes go through immediately, even if
+      // only the height changed.
+      if (isTouchDevice && heightChanged && !widthChanged) {
+        resizeTimer = setTimeout(flushViewportResize, KEYBOARD_RESIZE_DEBOUNCE_MS)
+        return
+      }
 
-        const newVp = measureTerminalFit(t, s)
-
-        // Were we in sync before this viewport change?
-        const vp = viewportSizeRef.current
-        const pty = ptySizeRef.current
-        const wasInSync = vp != null && pty != null
-          && vp.cols === pty.cols && vp.rows === pty.rows
-
-        setViewportSize(newVp); viewportSizeRef.current = newVp
-
-        if (wasInSync && newVp) {
-          // Viewport matched PTY — this client is actively using the terminal.
-          // Auto-resize to follow the viewport change.
-          fitAndResize()
-        } else if (pty) {
-          // Out of sync (pill visible) — keep xterm at PTY size.
-          queueResize(pty)
-        }
-
-        // Re-focus after the viewport settles. iOS blurs the xterm textarea
-        // during the keyboard slide animation; refocusing restores typing.
-        const newHeight = vv?.height ?? window.innerHeight
-        const heightChanged = Math.abs(newHeight - lastVvHeight) > 50
-        lastVvHeight = newHeight
-        if (heightChanged) {
-          // Extra delay: let iOS fully finish the keyboard transition before
-          // grabbing focus, otherwise iOS immediately re-blurs.
-          setTimeout(() => focusTerminalInput(termRef.current), 120)
-        }
-      }, 80) // 80 ms debounce — keyboard animation typically takes ~250 ms
+      flushViewportResize()
     }
 
     // Listen on both: visualViewport fires for soft keyboard / pinch-zoom,
@@ -538,6 +637,7 @@ export function TerminalView({
 
     return () => {
       if (resizeTimer !== null) clearTimeout(resizeTimer)
+      if (refocusTimer !== null) clearTimeout(refocusTimer)
       disposed.current = true
       window.removeEventListener('keydown', handleGlobalKeydown, true)
       window.removeEventListener('resize', onViewportResize)
@@ -583,6 +683,7 @@ export function TerminalView({
 
     // Reset sizes so stale values from a previous session can't trigger a
     // spurious pill while the loading overlay is visible (before ws.onopen).
+    resetResizeEchoGate()
     setPtySize(null); ptySizeRef.current = null
     setViewportSize(null); viewportSizeRef.current = null
     setWsState('connecting')
@@ -626,6 +727,7 @@ export function TerminalView({
           // terminal_resize WS event was missed during the drop. Session
           // metadata is updated via SSE independently, so it may be
           // fresher than our cached ptySize after a network blip.
+          resetResizeEchoGate()
           const sess = sessionRef.current
           if (sess.terminal_cols && sess.terminal_rows) {
             const cached = ptySizeRef.current
@@ -670,6 +772,7 @@ export function TerminalView({
                 const size = { cols, rows }
                 setPtySize(size); ptySizeRef.current = size
                 queueResize(size)
+                releaseResizeEchoGate(size)
               }
               return
             }
@@ -699,6 +802,7 @@ export function TerminalView({
       }
 
       ws.onclose = () => {
+        resetResizeEchoGate()
         setWsState(prev => prev === 'open' ? 'lost' : prev)
         if (disposed.current || intentionalClose) return
         if (currentSessionId.current !== session.id) return
@@ -720,10 +824,11 @@ export function TerminalView({
       termIoRef.current?.reset(termEpochRef.current)
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       reconnectTimer.current = null
+      resetResizeEchoGate()
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [queueData, queueMany, queueResize, session.id])
+  }, [fitAndResize, queueData, queueMany, queueResize, releaseResizeEchoGate, resetResizeEchoGate, session.id])
 
   // Pill is purely derived from size mismatch. No "driving" flag: we claim
   // on every fresh session select (first ws.onopen), and fitAndResize sets
