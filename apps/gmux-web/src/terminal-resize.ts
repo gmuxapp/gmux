@@ -32,8 +32,12 @@ export function decideViewportResize({
   forceDrive?: boolean
 }): ResizeDecision {
   const wasInSync = sameSize(prevViewport, ptySize)
+  // While waiting for a previous resize echo, viewport and PTY will often be
+  // out of sync temporarily. That mismatch does not mean we became passive;
+  // it means we are still driving and should queue the latest viewport change.
+  const isDriving = forceDrive || wasInSync || awaitingEcho
 
-  if ((forceDrive || wasInSync) && newViewport) {
+  if (isDriving && newViewport) {
     return awaitingEcho
       ? { kind: 'wait' }
       : { kind: 'drive', size: newViewport }

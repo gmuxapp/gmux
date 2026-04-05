@@ -32,6 +32,15 @@ describe('decideViewportResize', () => {
     })).toEqual({ kind: 'wait' })
   })
 
+  test('keeps waiting for the echo across repeated viewport changes', () => {
+    expect(decideViewportResize({
+      prevViewport: { cols: 100, rows: 30 },
+      ptySize: { cols: 80, rows: 24 },
+      newViewport: { cols: 120, rows: 40 },
+      awaitingEcho: true,
+    })).toEqual({ kind: 'wait' })
+  })
+
   test('keeps driving after the awaited echo lands', () => {
     expect(decideViewportResize({
       prevViewport: { cols: 100, rows: 30 },

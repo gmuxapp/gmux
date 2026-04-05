@@ -93,7 +93,14 @@ export function getProposedTerminalSize(fit: FitAddon | null): TerminalSize | nu
   return { cols: dims.cols, rows: dims.rows }
 }
 
-function getViewportPixels(vv: VisualViewport | null): { width: number; height: number } {
+function getResizeSignalPixels(host: HTMLElement | null, vv: VisualViewport | null): { width: number; height: number } {
+  if (host) {
+    return {
+      width: host.clientWidth,
+      height: host.clientHeight,
+    }
+  }
+
   return {
     width: vv?.width ?? window.innerWidth,
     height: vv?.height ?? window.innerHeight,
@@ -201,7 +208,6 @@ export function TerminalView({
   const shellRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
-  const fitRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const disposed = useRef(false)
@@ -392,7 +398,6 @@ export function TerminalView({
     const initialVp = shellRef.current ? measureTerminalFit(term, shellRef.current) : getProposedTerminalSize(fitAddon)
     setViewportSize(initialVp); viewportSizeRef.current = initialVp
     termRef.current = term
-    fitRef.current = fitAddon
     termIoRef.current = createTerminalIO(term, {
       getState() {
         const buf = term.buffer.active
@@ -577,24 +582,28 @@ export function TerminalView({
     shell?.addEventListener('touchcancel', clearTouchPan, true)
 
     // Resize strategy:
-    // - Follow the viewport immediately when this client is driving.
+    // - Measure on the next animation frame, after browser layout settles.
+    //   In practice width can update before flex heights finish recalculating,
+    //   so measuring synchronously in the resize event can read a stale height.
     // - After each outbound resize, wait for the matching terminal_resize echo
     //   before sending the next one. This keeps drag-resize responsive without
     //   flooding the server with intermediate sizes.
     // - Height-only viewport changes (soft keyboard slide) get a short debounce
-    //   so we measure near the settled height instead of every animation frame.
+    //   before that frame measurement, so we skip unstable intermediate heights.
     const vv = window.visualViewport
     const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
       || navigator.maxTouchPoints > 0
     const KEYBOARD_RESIZE_DEBOUNCE_MS = 20
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null
+    let resizeFrame: number | null = null
     let refocusTimer: ReturnType<typeof setTimeout> | null = null
-    let lastViewportPixels = getViewportPixels(vv)
+    let lastViewportPixels = getResizeSignalPixels(shell, vv)
     let pendingHeightChange = false
 
     const flushViewportResize = () => {
       resizeTimer = null
+      resizeFrame = null
       processViewportResize()
 
       const shouldRefocus = pendingHeightChange && isTouchDevice
@@ -607,10 +616,21 @@ export function TerminalView({
       refocusTimer = setTimeout(() => focusTerminalInput(termRef.current), 120)
     }
 
+    const scheduleViewportResize = () => {
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
+      resizeFrame = requestAnimationFrame(flushViewportResize)
+    }
+
     const onViewportResize = () => {
-      const nextViewportPixels = getViewportPixels(vv)
+      const nextViewportPixels = getResizeSignalPixels(shell, vv)
       const widthChanged = nextViewportPixels.width !== lastViewportPixels.width
       const heightChanged = nextViewportPixels.height !== lastViewportPixels.height
+      // Ignore duplicate window.resize / visualViewport.resize notifications
+      // that report the same laid-out shell size. We key off the shell rather
+      // than visualViewport because window.resize can fire before
+      // visualViewport catches up on some browsers.
+      if (!widthChanged && !heightChanged) return
+
       lastViewportPixels = nextViewportPixels
       pendingHeightChange = pendingHeightChange || heightChanged
 
@@ -623,11 +643,11 @@ export function TerminalView({
       // case on touch devices. Desktop resizes go through immediately, even if
       // only the height changed.
       if (isTouchDevice && heightChanged && !widthChanged) {
-        resizeTimer = setTimeout(flushViewportResize, KEYBOARD_RESIZE_DEBOUNCE_MS)
+        resizeTimer = setTimeout(scheduleViewportResize, KEYBOARD_RESIZE_DEBOUNCE_MS)
         return
       }
 
-      flushViewportResize()
+      scheduleViewportResize()
     }
 
     // Listen on both: visualViewport fires for soft keyboard / pinch-zoom,
@@ -637,6 +657,7 @@ export function TerminalView({
 
     return () => {
       if (resizeTimer !== null) clearTimeout(resizeTimer)
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       if (refocusTimer !== null) clearTimeout(refocusTimer)
       disposed.current = true
       window.removeEventListener('keydown', handleGlobalKeydown, true)
@@ -661,7 +682,6 @@ export function TerminalView({
       if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
       term.dispose()
       termRef.current = null
-      fitRef.current = null
       termIoRef.current = null
     }
   }, [onCtrlConsumed, onInputReady])
