@@ -1082,6 +1082,15 @@ body {
   letter-spacing: 0.02em;
   white-space: nowrap;
   flex-shrink: 0;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.stale-badge:hover {
+  background: oklch(75% 0.15 65 / 0.22);
+  border-color: oklch(75% 0.15 65 / 0.4);
+}
+.stale-badge:active {
+  background: oklch(75% 0.15 65 / 0.3);
 }
 
 .main-header-meta {

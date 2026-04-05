@@ -191,23 +191,26 @@ func (g *Gmuxd) WaitForSession(id string, pred func(Session) bool, timeout time.
 	return Session{}
 }
 
-func (g *Gmuxd) Kill(id string) {
+// postSession sends an authenticated POST to a session action via the Unix
+// socket (bypassing the TCP listener's token auth).
+func (g *Gmuxd) postSession(action, id string) {
 	g.t.Helper()
-	resp, _ := http.Post(g.Addr+"/v1/sessions/"+id+"/kill", "", nil)
-	if resp != nil { resp.Body.Close() }
+	resp, err := g.client.Post("http://localhost/v1/sessions/"+id+"/"+action, "", nil)
+	if err != nil {
+		g.t.Logf("%s POST error: %v", action, err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		g.t.Logf("%s POST status=%d body=%s", action, resp.StatusCode, body)
+	}
 }
 
-func (g *Gmuxd) Dismiss(id string) {
-	g.t.Helper()
-	resp, _ := http.Post(g.Addr+"/v1/sessions/"+id+"/dismiss", "", nil)
-	if resp != nil { resp.Body.Close() }
-}
-
-func (g *Gmuxd) Resume(id string) {
-	g.t.Helper()
-	resp, _ := http.Post(g.Addr+"/v1/sessions/"+id+"/resume", "", nil)
-	if resp != nil { resp.Body.Close() }
-}
+func (g *Gmuxd) Kill(id string)    { g.postSession("kill", id) }
+func (g *Gmuxd) Dismiss(id string) { g.postSession("dismiss", id) }
+func (g *Gmuxd) Resume(id string)  { g.postSession("resume", id) }
+func (g *Gmuxd) Restart(id string) { g.postSession("restart", id) }
 
 // ConnectSession opens a persistent WebSocket directly to the session's runner
 // (via its Unix socket), bypassing gmuxd's WS proxy. This is more reliable for

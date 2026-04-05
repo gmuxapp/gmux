@@ -854,6 +854,80 @@ func serve(stderr io.Writer) int {
 				"data": map[string]any{"pid": pid, "session_id": sessionID},
 			})
 
+		case "restart":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
+				return
+			}
+			// Serialize with /resume to prevent double-click races.
+			resumeMu.Lock()
+			defer resumeMu.Unlock()
+
+			sess, ok := sessions.Get(sessionID)
+			if !ok {
+				writeError(w, http.StatusNotFound, "not_found", "session not found")
+				return
+			}
+			if gmuxBin == "" {
+				writeError(w, http.StatusInternalServerError, "gmux_not_found", "gmux not found")
+				return
+			}
+
+			// If the runner is alive, kill it and wait for the exit lifecycle
+			// to transition the session to resumable (Alive=false + resume Command).
+			if sess.Alive {
+				if sess.SocketPath == "" {
+					writeError(w, http.StatusBadRequest, "no_socket", "alive session missing socket")
+					return
+				}
+				// Subscribe BEFORE killing so we don't miss the exit upsert.
+				evCh, unsub := sessions.Subscribe()
+				defer unsub()
+				if err := discovery.KillSession(sess.SocketPath); err != nil {
+					log.Printf("restart: %s: kill failed: %v", sessionID, err)
+					writeError(w, http.StatusInternalServerError, "kill_failed", err.Error())
+					return
+				}
+				deadline := time.After(5 * time.Second)
+				ready := false
+				for !ready {
+					select {
+					case <-deadline:
+						writeError(w, http.StatusGatewayTimeout, "kill_timeout", "session did not exit in time")
+						return
+					case ev := <-evCh:
+						if ev.ID != sessionID || ev.Session == nil {
+							continue
+						}
+						if !ev.Session.Alive && len(ev.Session.Command) > 0 {
+							sess = *ev.Session
+							ready = true
+						}
+					}
+				}
+			}
+
+			if sess.Alive || len(sess.Command) == 0 {
+				writeError(w, http.StatusBadRequest, "not_resumable", "session is not resumable")
+				return
+			}
+
+			// Same as /resume: register pending match, launch new runner with
+			// the resume Command. Register() will merge it with this session ID.
+			pendingResumes.Add(sess.Command, sessionID)
+			pid, err := launchGmux(gmuxBin, sess.Command, sess.Cwd)
+			if err != nil {
+				pendingResumes.Take(sess.Command)
+				log.Printf("restart: failed to start gmux: %v", err)
+				writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
+				return
+			}
+			log.Printf("restart: started gmux pid=%d for %s cwd=%s", pid, sessionID, sess.Cwd)
+			writeJSON(w, map[string]any{
+				"ok":   true,
+				"data": map[string]any{"pid": pid, "session_id": sessionID},
+			})
+
 		case "kill":
 			if r.Method != http.MethodPost {
 				writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")

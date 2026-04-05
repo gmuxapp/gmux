@@ -109,6 +109,10 @@ async function resumeSession(sessionId: string): Promise<void> {
   await postAction(`/v1/sessions/${sessionId}/resume`)
 }
 
+async function restartSession(sessionId: string): Promise<void> {
+  await postAction(`/v1/sessions/${sessionId}/restart`)
+}
+
 // ── Launcher types & config ──
 
 interface LauncherDef {
@@ -591,7 +595,10 @@ function EmptyState({ launchers, health }: { launchers: LauncherDef[]; health: H
   )
 }
 
-function MainHeader({ session }: { session: Session | null }) {
+function MainHeader({ session, onRestart }: {
+  session: Session | null
+  onRestart?: () => void
+}) {
   if (!session) {
     return (
       <div class="main-header">
@@ -626,9 +633,9 @@ function MainHeader({ session }: { session: Session | null }) {
           </div>
         )}
         {session.stale && (
-          <span class="stale-badge" title="This session is running a different build of gmux. Restart the session to update.">
+          <button class="stale-badge" title="Click to restart with the latest build" onClick={onRestart}>
             outdated
-          </span>
+          </button>
         )}
         {session.kind && session.kind !== 'shell' && (
           <div class="main-header-kind" title="Adapter">{session.kind}</div>
@@ -1121,10 +1128,12 @@ function App() {
 
   const canAttach = !!selected?.alive && !!selected?.socket_path && !USE_MOCK
 
-  // Selected = what the terminal shows. No terminal → deselect.
+  // Deselect only when the session is gone from the store (dismissed/purged).
+  // Dead-but-present sessions stay selected so the header persists through
+  // restart cycles and briefly-stalled new sessions don't flash.
   useEffect(() => {
     if (!canAttach) { setCtrlArmed(false); setAltArmed(false) }
-    if (selectedId && (!selected || !selected.alive)) {
+    if (selectedId && !selected) {
       setSelectedId(null)
     }
   }, [canAttach, selectedId, selected])
@@ -1288,7 +1297,10 @@ function App() {
       />
 
       <div class="main-panel">
-        <MainHeader session={selected} />
+        <MainHeader
+          session={selected}
+          onRestart={selected ? () => { restartSession(selected.id).catch(err => console.error('restart failed:', err)) } : undefined}
+        />
 
         {connState === 'connecting' ? (
           <div class="state-message">
@@ -1319,6 +1331,13 @@ function App() {
             onPasteReady={handleTerminalPasteReady}
             onFocusReady={handleTerminalFocusReady}
           />
+        ) : selected ? (
+          // Selected session is not yet connectable: starting up, briefly dead
+          // during restart, or exited. Keep the header visible and show a
+          // minimal placeholder; the terminal attaches when ready.
+          <div class="state-message">
+            <div class="state-subtitle">{selected.alive ? 'Connecting…' : 'Session ended'}</div>
+          </div>
         ) : (
           <EmptyState launchers={launchers} health={health} />
         )}
