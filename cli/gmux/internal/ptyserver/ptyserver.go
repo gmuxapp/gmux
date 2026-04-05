@@ -422,14 +422,30 @@ func (s *Server) handlePutSlug(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
-	if s.cmd.Process != nil {
-		// SIGHUP matches the "terminal closed" semantics of this endpoint:
-		// interactive shells (bash, zsh) ignore SIGTERM but exit cleanly on
-		// SIGHUP; TUI adapters treat SIGHUP the same as a graceful shutdown.
-		// Sent to the process group so children (e.g. a subshell's commands)
-		// receive it too.
-		syscall.Kill(-s.cmd.Process.Pid, syscall.SIGHUP)
-		log.Printf("ptyserver: sent SIGHUP to child pid %d", s.cmd.Process.Pid)
+	if s.cmd.Process == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	// SIGHUP matches the "terminal closed" semantics of this endpoint:
+	// interactive shells (bash, zsh) ignore SIGTERM but exit cleanly on
+	// SIGHUP; TUI adapters treat SIGHUP the same as a graceful shutdown.
+	// Sent to the process group so children (e.g. a subshell's commands)
+	// receive it too.
+	pid := s.cmd.Process.Pid
+	syscall.Kill(-pid, syscall.SIGHUP)
+	log.Printf("ptyserver: sent SIGHUP to child pid %d", pid)
+
+	// Block until the child actually exits (or escalate). Dismiss/restart
+	// callers rely on this: once /kill returns, gmuxd immediately removes
+	// the session and expects the runner's socket to disappear shortly
+	// after. Returning early while a shell (e.g. fish) ignores SIGHUP
+	// causes the next discovery scan to re-register the dead session.
+	select {
+	case <-s.done:
+	case <-time.After(2 * time.Second):
+		syscall.Kill(-pid, syscall.SIGKILL)
+		log.Printf("ptyserver: escalated to SIGKILL for child pid %d", pid)
+		<-s.done
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

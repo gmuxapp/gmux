@@ -7,6 +7,7 @@
 package adapters
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -40,8 +41,8 @@ func TestShellWSInput(t *testing.T) {
 }
 
 // TestShellKill verifies /kill terminates an interactive shell session.
-// This is a regression test for the SIGTERM→SIGHUP change: interactive bash
-// ignores SIGTERM but exits on SIGHUP.
+// Regression test for the SIGTERM→SIGHUP change: interactive bash ignores
+// SIGTERM but exits on SIGHUP.
 func TestShellKill(t *testing.T) {
 	g := testutil.StartGmuxd(t)
 	cwd := t.TempDir()
@@ -61,6 +62,26 @@ func TestShellKill(t *testing.T) {
 	if len(dead.Command) == 0 {
 		t.Fatal("dead session should have a resume command")
 	}
+}
+
+// TestShellKillFish verifies /kill terminates a fish session. Fish ignores
+// SIGHUP on interactive shells, so the runner must escalate to SIGKILL.
+// Regression test for "dismiss didn't work on /bin/fish sessions".
+func TestShellKillFish(t *testing.T) {
+	if _, err := exec.LookPath("fish"); err != nil {
+		t.Skip("fish not installed")
+	}
+	g := testutil.StartGmuxd(t)
+	cwd := t.TempDir()
+
+	sess := g.Launch([]string{"fish"}, cwd)
+	g.WaitForOutput(sess.ID, 10*time.Second)
+
+	g.Kill(sess.ID)
+
+	g.WaitForSession(sess.ID, func(s testutil.Session) bool {
+		return !s.Alive
+	}, 10*time.Second, "dead after kill (fish ignores SIGHUP)")
 }
 
 // TestShellRestart verifies /v1/sessions/:id/restart on an alive session:
