@@ -730,6 +730,127 @@ func TestRenderScreenLineCount(t *testing.T) {
 	}
 }
 
+// TestPTYServerDeferredScreenSync verifies that the deferred screen
+// processing (screenPending) produces correct snapshots. The child writes
+// output, then a late-connecting client should see it in the replay even
+// though the emulator processes it asynchronously.
+func TestPTYServerDeferredScreenSync(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+
+	// Child writes a known marker and stays alive.
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", "echo deferred-sync-marker; sleep 5"},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// Wait long enough for the output to be produced AND for processScreen
+	// to drain it into the emulator (screenSyncInterval = 100ms).
+	time.Sleep(400 * time.Millisecond)
+
+	// Connect a late client and verify the snapshot contains the marker.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return net.Dial("unix", sockPath)
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	var got []byte
+	for i := 0; i < 5; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		_, data, err := conn.Read(readCtx)
+		readCancel()
+		if err != nil {
+			break
+		}
+		got = append(got, data...)
+		if contains(got, "deferred-sync-marker") {
+			break
+		}
+	}
+
+	if !contains(got, "deferred-sync-marker") {
+		t.Errorf("snapshot should contain marker after deferred sync, got: %q", string(got))
+	}
+}
+
+// TestPTYServerLiveDataNotDelayed verifies that live data reaches a
+// connected client promptly, without waiting for the screen emulator
+// to process it. This is the core property of the deferred-screen design:
+// the emulator is off the hot path.
+func TestPTYServerLiveDataNotDelayed(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", "sleep 0.3; echo live-data-marker; sleep 5"},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return net.Dial("unix", sockPath)
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	// Read until we see the live marker. It should arrive within 2s
+	// (the child sleeps 0.3s then echoes). If the screen emulator were
+	// in the hot path and slow, this would take longer.
+	var got []byte
+	start := time.Now()
+	for i := 0; i < 20; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		_, data, err := conn.Read(readCtx)
+		readCancel()
+		if err != nil {
+			break
+		}
+		got = append(got, data...)
+		if contains(got, "live-data-marker") {
+			break
+		}
+	}
+	elapsed := time.Since(start)
+
+	if !contains(got, "live-data-marker") {
+		t.Fatalf("never received live-data-marker")
+	}
+	// Should arrive well within 2s (generous bound).
+	if elapsed > 2*time.Second {
+		t.Errorf("live data took %v to arrive; expected < 2s", elapsed)
+	}
+}
+
 func countOccurrences(s, sub string) int {
 	n := 0
 	for i := 0; i <= len(s)-len(sub); i++ {

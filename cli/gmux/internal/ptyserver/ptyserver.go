@@ -107,12 +107,13 @@ type Server struct {
 	adapter      adapter.Adapter
 	state        *session.State
 
-	mu           sync.Mutex
-	clients      map[*wsClient]struct{}
-	localOut     io.Writer // optional local terminal output sink
-	ptyCols      uint16    // last applied PTY cols (guarded by mu)
-	ptyRows      uint16    // last applied PTY rows (guarded by mu)
-	cursorHidden bool      // tracks DECTCEM via callback (guarded by mu)
+	mu             sync.Mutex
+	clients        map[*wsClient]struct{}
+	localOut       io.Writer // optional local terminal output sink
+	ptyCols        uint16    // last applied PTY cols (guarded by mu)
+	ptyRows        uint16    // last applied PTY rows (guarded by mu)
+	cursorHidden   bool      // tracks DECTCEM via callback (guarded by mu)
+	screenPending  []byte    // raw PTY data not yet fed to screen (guarded by mu)
 
 	done    chan struct{} // closed when child exits
 	ptyDone chan struct{} // closed when readPTY finishes draining
@@ -209,16 +210,56 @@ func New(cfg Config) (*Server, error) {
 		ptyDone:    make(chan struct{}),
 	}
 
-	// The callback fires under s.mu (held during s.screen.Write).
+	// The callback fires under s.mu (held during drainScreenLocked → screen.Write).
 	s.screen = newScreen(int(cfg.Cols), int(cfg.Rows), func(visible bool) {
 		s.cursorHidden = !visible
 	})
 
 	go s.readPTY()
 	go s.waitChild()
+	go s.processScreen()
 	go s.serve()
 
 	return s, nil
+}
+
+// drainScreenLocked feeds all pending raw PTY data to the virtual terminal
+// emulator. This is the only place where screen.Write is called, ensuring the
+// emulator stays off the hot path (readPTY flush). Caller must hold s.mu.
+func (s *Server) drainScreenLocked() {
+	if len(s.screenPending) == 0 {
+		return
+	}
+	s.screen.Write(s.screenPending)
+	s.screenPending = s.screenPending[:0]
+}
+
+// screenSyncInterval controls how often the background goroutine feeds
+// pending PTY data to the virtual terminal emulator. Keeping this short
+// bounds the amount of data that must be drained synchronously when a
+// client connects (snapshot) or the scrollback text is requested.
+const screenSyncInterval = 100 * time.Millisecond
+
+// processScreen runs in a background goroutine, periodically draining
+// screenPending into the vt.Emulator. This keeps the emulator roughly
+// up-to-date without blocking the readPTY hot path.
+func (s *Server) processScreen() {
+	ticker := time.NewTicker(screenSyncInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.mu.Lock()
+			s.drainScreenLocked()
+			s.mu.Unlock()
+		case <-s.ptyDone:
+			// Final drain after PTY output is fully read.
+			s.mu.Lock()
+			s.drainScreenLocked()
+			s.mu.Unlock()
+			return
+		}
+	}
 }
 
 // Pid returns the child process PID.
@@ -315,6 +356,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 // suitable for content-similarity matching (ADR-0009).
 func (s *Server) handleScrollbackText(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
+	s.drainScreenLocked()
 	text := s.screenText()
 	s.mu.Unlock()
 
@@ -447,6 +489,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	//
 	// Sequence: BSU → reset → scrollback + screen → cursor → ESU
 	s.mu.Lock()
+	s.drainScreenLocked()
 	snapshot := renderScreen(s.screen)
 	cursorSeq := "\x1b[?25h" // show cursor (default)
 	if s.cursorHidden {
@@ -518,6 +561,9 @@ func (s *Server) resize(msg ResizeMsg) {
 	if sizeChanged {
 		s.ptyCols = msg.Cols
 		s.ptyRows = msg.Rows
+		// Drain pending data first so the emulator processes it at the
+		// old size before switching to the new dimensions.
+		s.drainScreenLocked()
 		s.screen.Resize(int(msg.Cols), int(msg.Rows))
 	}
 	s.mu.Unlock()
@@ -607,9 +653,11 @@ func (s *Server) readPTY() {
 			}
 		}
 
-		// Feed the virtual terminal and snapshot client list atomically.
+		// Queue data for the virtual terminal emulator (processed by
+		// processScreen in the background). Snapshot the client list
+		// atomically so new clients always see their replay frame first.
 		s.mu.Lock()
-		s.screen.Write(data)
+		s.screenPending = append(s.screenPending, data...)
 		localOut := s.localOut
 		clients := make([]*wsClient, 0, len(s.clients))
 		for c := range s.clients {
