@@ -319,50 +319,32 @@ func TestBroadcastDoesNotMutateState(t *testing.T) {
 	}
 }
 
-// --- Slug derivation tests ---
-
-// --- Slug tests ---
+// --- ResumeKey uniqueness tests ---
 //
-// The slug model: resume_key === slug. Adapters produce human-readable
-// resume_keys (via ParseSessionFile). The store ensures uniqueness
-// within a kind. Sessions without a resume_key get a temporary slug
-// from their kind name.
+// ResumeKey is the single human-readable identifier used for both URL
+// routing and session resumption. The store enforces uniqueness within
+// (kind, peer). Sessions without a ResumeKey (fresh launches before
+// file attribution) are left alone; the frontend falls back to id[:8].
 
-func TestSlugEqualsResumeKey(t *testing.T) {
+func TestResumeKeyPreserved(t *testing.T) {
 	s := New()
-	s.Upsert(Session{
-		ID: "s1", Kind: "pi",
-		ResumeKey: "fix-the-auth-bug",
-	})
+	s.Upsert(Session{ID: "s1", Kind: "pi", ResumeKey: "fix-the-auth-bug"})
 	got, _ := s.Get("s1")
-	if got.Slug != "fix-the-auth-bug" {
-		t.Fatalf("slug should equal resume_key, got %q", got.Slug)
-	}
-	if got.ResumeKey != got.Slug {
-		t.Fatalf("resume_key and slug diverged: %q vs %q", got.ResumeKey, got.Slug)
+	if got.ResumeKey != "fix-the-auth-bug" {
+		t.Fatalf("resume_key = %q, want %q", got.ResumeKey, "fix-the-auth-bug")
 	}
 }
 
-func TestSlugFallbackToKind(t *testing.T) {
+func TestResumeKeyEmptyForFreshLaunch(t *testing.T) {
 	s := New()
-	// No resume_key yet (fresh launch, before file attribution).
 	s.Upsert(Session{ID: "s1", Kind: "pi"})
 	got, _ := s.Get("s1")
-	if got.Slug != "pi" {
-		t.Fatalf("expected kind-based fallback slug, got %q", got.Slug)
+	if got.ResumeKey != "" {
+		t.Fatalf("fresh launch should have empty resume_key, got %q", got.ResumeKey)
 	}
 }
 
-func TestSlugFallbackToSession(t *testing.T) {
-	s := New()
-	s.Upsert(Session{ID: "s1"})
-	got, _ := s.Get("s1")
-	if got.Slug != "session" {
-		t.Fatalf("expected 'session' fallback, got %q", got.Slug)
-	}
-}
-
-func TestSlugUniqueness(t *testing.T) {
+func TestResumeKeyUniqueness(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Kind: "pi", ResumeKey: "fix-auth"})
 	s.Upsert(Session{ID: "s2", Kind: "pi", ResumeKey: "fix-auth"})
@@ -372,16 +354,12 @@ func TestSlugUniqueness(t *testing.T) {
 	s2, _ := s.Get("s2")
 	s3, _ := s.Get("s3")
 
-	if s1.Slug != "fix-auth" || s2.Slug != "fix-auth-2" || s3.Slug != "fix-auth-3" {
-		t.Fatalf("expected suffixed slugs: %q, %q, %q", s1.Slug, s2.Slug, s3.Slug)
-	}
-	// resume_key must stay in sync.
-	if s2.ResumeKey != "fix-auth-2" || s3.ResumeKey != "fix-auth-3" {
-		t.Fatalf("resume_key must match slug: %q, %q", s2.ResumeKey, s3.ResumeKey)
+	if s1.ResumeKey != "fix-auth" || s2.ResumeKey != "fix-auth-2" || s3.ResumeKey != "fix-auth-3" {
+		t.Fatalf("expected suffixed resume_keys: %q, %q, %q", s1.ResumeKey, s2.ResumeKey, s3.ResumeKey)
 	}
 }
 
-func TestSlugUniquenessAcrossKindsAllowed(t *testing.T) {
+func TestResumeKeyUniquenessAcrossKindsAllowed(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Kind: "pi", ResumeKey: "fix-auth"})
 	s.Upsert(Session{ID: "s2", Kind: "claude", ResumeKey: "fix-auth"})
@@ -389,12 +367,12 @@ func TestSlugUniquenessAcrossKindsAllowed(t *testing.T) {
 	s1, _ := s.Get("s1")
 	s2, _ := s.Get("s2")
 
-	if s1.Slug != "fix-auth" || s2.Slug != "fix-auth" {
-		t.Fatalf("same slug across kinds should be allowed: %q, %q", s1.Slug, s2.Slug)
+	if s1.ResumeKey != "fix-auth" || s2.ResumeKey != "fix-auth" {
+		t.Fatalf("same key across kinds should be allowed: %q, %q", s1.ResumeKey, s2.ResumeKey)
 	}
 }
 
-func TestSlugStableOnUpdate(t *testing.T) {
+func TestResumeKeyStableOnUpdate(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Kind: "pi", ResumeKey: "fix-auth"})
 
@@ -402,31 +380,29 @@ func TestSlugStableOnUpdate(t *testing.T) {
 		sess.Subtitle = "something"
 	})
 	updated, _ := s.Get("s1")
-	if updated.Slug != "fix-auth" {
-		t.Fatalf("slug changed on unrelated update: got %q", updated.Slug)
+	if updated.ResumeKey != "fix-auth" {
+		t.Fatalf("resume_key changed on unrelated update: got %q", updated.ResumeKey)
 	}
 }
 
-func TestSlugFreedAfterRemove(t *testing.T) {
+func TestResumeKeyFreedAfterRemove(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Kind: "pi", ResumeKey: "fix-auth"})
 	s.Remove("s1")
 
-	// Same resume_key should get the unsuffixed slug.
 	s.Upsert(Session{ID: "s2", Kind: "pi", ResumeKey: "fix-auth"})
 	s2, _ := s.Get("s2")
-	if s2.Slug != "fix-auth" {
-		t.Fatalf("expected slug reusable after remove, got %q", s2.Slug)
+	if s2.ResumeKey != "fix-auth" {
+		t.Fatalf("expected resume_key reusable after remove, got %q", s2.ResumeKey)
 	}
 }
 
-func TestSlugUpdatedWhenResumeKeyArrives(t *testing.T) {
+func TestResumeKeySetByAttribution(t *testing.T) {
 	s := New()
-	// Fresh session, no resume_key.
 	s.Upsert(Session{ID: "s1", Kind: "pi"})
 	before, _ := s.Get("s1")
-	if before.Slug != "pi" {
-		t.Fatalf("expected kind fallback, got %q", before.Slug)
+	if before.ResumeKey != "" {
+		t.Fatalf("expected empty resume_key before attribution, got %q", before.ResumeKey)
 	}
 
 	// File attribution sets resume_key.
@@ -434,22 +410,34 @@ func TestSlugUpdatedWhenResumeKeyArrives(t *testing.T) {
 		sess.ResumeKey = "fix-the-sidebar"
 	})
 	after, _ := s.Get("s1")
-	if after.Slug != "fix-the-sidebar" {
-		t.Fatalf("expected slug from resume_key, got %q", after.Slug)
+	if after.ResumeKey != "fix-the-sidebar" {
+		t.Fatalf("resume_key = %q, want %q", after.ResumeKey, "fix-the-sidebar")
 	}
 }
 
-func TestSlugNotOverriddenByTitleChange(t *testing.T) {
+func TestEmptyResumeKeysCoexist(t *testing.T) {
+	s := New()
+	// Two fresh launches, neither attributed yet.
+	s.Upsert(Session{ID: "s1", Kind: "pi", Alive: true})
+	s.Upsert(Session{ID: "s2", Kind: "pi", Alive: true})
+
+	s1, _ := s.Get("s1")
+	s2, _ := s.Get("s2")
+	if s1.ResumeKey != "" || s2.ResumeKey != "" {
+		t.Fatalf("fresh sessions should have empty resume_key, got %q and %q", s1.ResumeKey, s2.ResumeKey)
+	}
+}
+
+func TestResumeKeyStableOnTitleChange(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Kind: "pi", ResumeKey: "fix-auth"})
 
-	// Title changes don't affect slug (resume_key is the source of truth).
 	s.Update("s1", func(sess *Session) {
 		sess.AdapterTitle = "completely different title"
 	})
 	updated, _ := s.Get("s1")
-	if updated.Slug != "fix-auth" {
-		t.Fatalf("slug should not change when title changes: got %q", updated.Slug)
+	if updated.ResumeKey != "fix-auth" {
+		t.Fatalf("resume_key should not change when title changes: got %q", updated.ResumeKey)
 	}
 }
 
@@ -473,11 +461,9 @@ func TestSetTerminalSize(t *testing.T) {
 	}
 }
 
-// The frontend needs slug (URL routing) and resume_key (project session array
-// membership for dead sessions). Verify they survive MarshalJSON.
-// ── Peer-scoped slug uniqueness ──
+// ── Peer-scoped ResumeKey uniqueness ──
 
-func TestSlugUniqueness_ScopedToPeer(t *testing.T) {
+func TestResumeKeyUniqueness_ScopedToPeer(t *testing.T) {
 	s := New()
 
 	// Local session with resume_key "fix-auth".
@@ -488,20 +474,20 @@ func TestSlugUniqueness_ScopedToPeer(t *testing.T) {
 	s.Upsert(Session{ID: "s2@server", Kind: "pi", Alive: true, ResumeKey: "fix-auth", Peer: "server"})
 
 	got, _ := s.Get("s2@server")
-	if got.Slug != "fix-auth" {
-		t.Errorf("remote slug = %q, want %q (should not conflict with local)", got.Slug, "fix-auth")
+	if got.ResumeKey != "fix-auth" {
+		t.Errorf("remote resume_key = %q, want %q (should not conflict with local)", got.ResumeKey, "fix-auth")
 	}
 }
 
-func TestSlugUniqueness_WithinSamePeer(t *testing.T) {
+func TestResumeKeyUniqueness_WithinSamePeer(t *testing.T) {
 	s := New()
 
 	s.Upsert(Session{ID: "s1@server", Kind: "pi", Alive: true, ResumeKey: "fix-auth", Peer: "server"})
 	s.Upsert(Session{ID: "s2@server", Kind: "pi", Alive: true, ResumeKey: "fix-auth", Peer: "server"})
 
 	got, _ := s.Get("s2@server")
-	if got.Slug != "fix-auth-2" {
-		t.Errorf("slug = %q, want %q", got.Slug, "fix-auth-2")
+	if got.ResumeKey != "fix-auth-2" {
+		t.Errorf("resume_key = %q, want %q", got.ResumeKey, "fix-auth-2")
 	}
 }
 
@@ -578,8 +564,7 @@ func TestMarshalJSON_FrontendFields(t *testing.T) {
 		ID:        "s1",
 		Kind:      "pi",
 		Alive:     false,
-		Slug:      "fix-auth",
-		ResumeKey: "2026-04-03T06-46-56_07b3c9c8",
+		ResumeKey: "fix-auth",
 	}
 	data, err := json.Marshal(s)
 	if err != nil {
@@ -589,11 +574,11 @@ func TestMarshalJSON_FrontendFields(t *testing.T) {
 	if err := json.Unmarshal(data, &wire); err != nil {
 		t.Fatal(err)
 	}
-	if wire["slug"] != "fix-auth" {
-		t.Errorf("slug missing from wire JSON: %s", data)
-	}
-	if wire["resume_key"] != "2026-04-03T06-46-56_07b3c9c8" {
+	if wire["resume_key"] != "fix-auth" {
 		t.Errorf("resume_key missing from wire JSON: %s", data)
+	}
+	if _, ok := wire["slug"]; ok {
+		t.Errorf("slug should no longer be in wire JSON: %s", data)
 	}
 	// Internal fields the frontend doesn't need should be excluded.
 	if _, ok := wire["shell_title"]; ok {
