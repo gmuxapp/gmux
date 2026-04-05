@@ -730,6 +730,255 @@ func TestRenderScreenLineCount(t *testing.T) {
 	}
 }
 
+// TestPTYServerDeferredScreenSync verifies that the deferred screen
+// processing (screenPending) produces correct snapshots. The child writes
+// output, then a late-connecting client should see it in the replay even
+// though the emulator processes it asynchronously.
+func TestPTYServerDeferredScreenSync(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+
+	// Child writes a known marker and stays alive.
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", "echo deferred-sync-marker; sleep 5"},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// Wait long enough for the output to be produced AND for processScreen
+	// to drain it into the emulator (screenSyncInterval = 100ms).
+	time.Sleep(400 * time.Millisecond)
+
+	// Connect a late client and verify the snapshot contains the marker.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return net.Dial("unix", sockPath)
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	var got []byte
+	for i := 0; i < 5; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		_, data, err := conn.Read(readCtx)
+		readCancel()
+		if err != nil {
+			break
+		}
+		got = append(got, data...)
+		if contains(got, "deferred-sync-marker") {
+			break
+		}
+	}
+
+	if !contains(got, "deferred-sync-marker") {
+		t.Errorf("snapshot should contain marker after deferred sync, got: %q", string(got))
+	}
+}
+
+// TestPTYServerLiveDataNotDelayed verifies that live data reaches a
+// connected client promptly, without waiting for the screen emulator
+// to process it. This is the core property of the deferred-screen design:
+// the emulator is off the hot path.
+func TestPTYServerLiveDataNotDelayed(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", "sleep 0.3; echo live-data-marker; sleep 5"},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return net.Dial("unix", sockPath)
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	// Read until we see the live marker. It should arrive within 2s
+	// (the child sleeps 0.3s then echoes). If the screen emulator were
+	// in the hot path and slow, this would take longer.
+	var got []byte
+	start := time.Now()
+	for i := 0; i < 20; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		_, data, err := conn.Read(readCtx)
+		readCancel()
+		if err != nil {
+			break
+		}
+		got = append(got, data...)
+		if contains(got, "live-data-marker") {
+			break
+		}
+	}
+	elapsed := time.Since(start)
+
+	if !contains(got, "live-data-marker") {
+		t.Fatalf("never received live-data-marker")
+	}
+	// Should arrive well within 2s (generous bound).
+	if elapsed > 2*time.Second {
+		t.Errorf("live data took %v to arrive; expected < 2s", elapsed)
+	}
+}
+
+// TestPTYServerShrinkForReconnect verifies that when a client disconnects
+// and then a new client connects with a resize, the child TUI receives a
+// SIGWINCH that forces a full redraw. The mechanism: the PTY is shrunk by
+// 1 column on last-client disconnect, so the next resize is a genuine
+// dimension change.
+func TestPTYServerShrinkForReconnect(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+
+	srv, err := New(Config{
+		Command: []string{"bash", "-c", `
+			trap 'echo WINCH_FIRED' SIGWINCH
+			echo ready
+			while true; do sleep 0.1; done
+		`},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+		Cols:       80,
+		Rows:       25,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Helper to connect a WS client.
+	dial := func() *websocket.Conn {
+		conn, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{
+			HTTPClient: &http.Client{
+				Transport: &http.Transport{
+					DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+						return net.Dial("unix", sockPath)
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		return conn
+	}
+
+	// Phase 1: connect, wait for ready, then disconnect to trigger shrink.
+	conn1 := dial()
+	var mu sync.Mutex
+	var allOutput []byte
+	readerCtx, readerCancel := context.WithCancel(ctx)
+	go func() {
+		for {
+			_, data, err := conn1.Read(readerCtx)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			allOutput = append(allOutput, data...)
+			mu.Unlock()
+		}
+	}()
+
+	deadline := time.After(5 * time.Second)
+	for {
+		time.Sleep(50 * time.Millisecond)
+		mu.Lock()
+		ready := contains(allOutput, "ready")
+		mu.Unlock()
+		if ready {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("child never became ready")
+		default:
+		}
+	}
+
+	// Disconnect first client. This triggers shrinkForReconnect (80→79 cols).
+	readerCancel()
+	conn1.Close(websocket.StatusNormalClosure, "")
+	// Wait for the shrink SIGWINCH to be delivered and processed.
+	time.Sleep(300 * time.Millisecond)
+
+	// Clear output buffer: the shrink's SIGWINCH will have fired WINCH_FIRED.
+	mu.Lock()
+	allOutput = nil
+	mu.Unlock()
+
+	// Phase 2: reconnect and send resize with the original (pre-shrink) size.
+	// This should trigger a genuine SIGWINCH because the PTY is at 79 cols.
+	conn2 := dial()
+	defer conn2.Close(websocket.StatusNormalClosure, "")
+
+	go func() {
+		for {
+			_, data, err := conn2.Read(ctx)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			allOutput = append(allOutput, data...)
+			mu.Unlock()
+		}
+	}()
+
+	// Send resize with original dimensions (80x25).
+	msg, _ := json.Marshal(ResizeMsg{Type: "resize", Cols: 80, Rows: 25})
+	if err := conn2.Write(ctx, websocket.MessageText, msg); err != nil {
+		t.Fatalf("write resize: %v", err)
+	}
+
+	deadline = time.After(2 * time.Second)
+	for {
+		time.Sleep(50 * time.Millisecond)
+		mu.Lock()
+		fired := contains(allOutput, "WINCH_FIRED")
+		mu.Unlock()
+		if fired {
+			return // success: reconnect resize triggered SIGWINCH
+		}
+		select {
+		case <-deadline:
+			t.Fatal("expected reconnect resize to trigger SIGWINCH, but WINCH_FIRED never appeared")
+		default:
+		}
+	}
+}
+
 func countOccurrences(s, sub string) int {
 	n := 0
 	for i := 0; i <= len(s)-len(sub); i++ {

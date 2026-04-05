@@ -107,12 +107,13 @@ type Server struct {
 	adapter      adapter.Adapter
 	state        *session.State
 
-	mu           sync.Mutex
-	clients      map[*wsClient]struct{}
-	localOut     io.Writer // optional local terminal output sink
-	ptyCols      uint16    // last applied PTY cols (guarded by mu)
-	ptyRows      uint16    // last applied PTY rows (guarded by mu)
-	cursorHidden bool      // tracks DECTCEM via callback (guarded by mu)
+	mu             sync.Mutex
+	clients        map[*wsClient]struct{}
+	localOut       io.Writer // optional local terminal output sink
+	ptyCols        uint16    // last applied PTY cols (guarded by mu)
+	ptyRows        uint16    // last applied PTY rows (guarded by mu)
+	cursorHidden   bool      // tracks DECTCEM via callback (guarded by mu)
+	screenPending  []byte    // raw PTY data not yet fed to screen (guarded by mu)
 
 	done    chan struct{} // closed when child exits
 	ptyDone chan struct{} // closed when readPTY finishes draining
@@ -209,16 +210,56 @@ func New(cfg Config) (*Server, error) {
 		ptyDone:    make(chan struct{}),
 	}
 
-	// The callback fires under s.mu (held during s.screen.Write).
+	// The callback fires under s.mu (held during drainScreenLocked → screen.Write).
 	s.screen = newScreen(int(cfg.Cols), int(cfg.Rows), func(visible bool) {
 		s.cursorHidden = !visible
 	})
 
 	go s.readPTY()
 	go s.waitChild()
+	go s.processScreen()
 	go s.serve()
 
 	return s, nil
+}
+
+// drainScreenLocked feeds all pending raw PTY data to the virtual terminal
+// emulator. This is the only place where screen.Write is called, ensuring the
+// emulator stays off the hot path (readPTY flush). Caller must hold s.mu.
+func (s *Server) drainScreenLocked() {
+	if len(s.screenPending) == 0 {
+		return
+	}
+	s.screen.Write(s.screenPending)
+	s.screenPending = s.screenPending[:0]
+}
+
+// screenSyncInterval controls how often the background goroutine feeds
+// pending PTY data to the virtual terminal emulator. Keeping this short
+// bounds the amount of data that must be drained synchronously when a
+// client connects (snapshot) or the scrollback text is requested.
+const screenSyncInterval = 100 * time.Millisecond
+
+// processScreen runs in a background goroutine, periodically draining
+// screenPending into the vt.Emulator. This keeps the emulator roughly
+// up-to-date without blocking the readPTY hot path.
+func (s *Server) processScreen() {
+	ticker := time.NewTicker(screenSyncInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.mu.Lock()
+			s.drainScreenLocked()
+			s.mu.Unlock()
+		case <-s.ptyDone:
+			// Final drain after PTY output is fully read.
+			s.mu.Lock()
+			s.drainScreenLocked()
+			s.mu.Unlock()
+			return
+		}
+	}
 }
 
 // Pid returns the child process PID.
@@ -254,8 +295,14 @@ func (s *Server) ExitCode() int {
 // Used for transparent local terminal attach. Pass nil to detach.
 func (s *Server) SetLocalOutput(w io.Writer) {
 	s.mu.Lock()
+	detaching := s.localOut != nil && w == nil
 	s.localOut = w
+	noViewers := detaching && len(s.clients) == 0
 	s.mu.Unlock()
+
+	if noViewers {
+		s.shrinkForReconnect()
+	}
 }
 
 // WritePTY writes raw bytes to the PTY input (as if typed by the user).
@@ -315,6 +362,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 // suitable for content-similarity matching (ADR-0009).
 func (s *Server) handleScrollbackText(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
+	s.drainScreenLocked()
 	text := s.screenText()
 	s.mu.Unlock()
 
@@ -451,6 +499,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	//
 	// Sequence: BSU → reset → scrollback + screen → cursor → ESU
 	s.mu.Lock()
+	s.drainScreenLocked()
 	snapshot := renderScreen(s.screen)
 	cursorSeq := "\x1b[?25h" // show cursor (default)
 	if s.cursorHidden {
@@ -480,7 +529,18 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		s.mu.Lock()
 		delete(s.clients, client)
+		noClients := len(s.clients) == 0 && s.localOut == nil
 		s.mu.Unlock()
+
+		// When the last viewer disconnects, shrink the PTY by 1 column.
+		// The next connecting client will send a resize with its real
+		// viewport, which will differ from the shrunk size, naturally
+		// triggering a SIGWINCH that forces the child TUI to do a full
+		// redraw (including re-emitting kitty images). This avoids the
+		// need for a visible wiggle on connect.
+		if noClients {
+			s.shrinkForReconnect()
+		}
 		conn.Close(websocket.StatusNormalClosure, "")
 		cancel()
 	}()
@@ -508,6 +568,49 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// shrinkForReconnect reduces the PTY width by 1 column so that the next
+// connecting client's resize (which will carry the real viewport size)
+// triggers a genuine dimension change. Most TUI frameworks only do a full
+// re-render when width or height actually changes; without this, a client
+// whose viewport matches the current PTY size would get a stale snapshot
+// (missing kitty images, possible drift from the emulator's reconstruction).
+//
+// Called when the last viewer (WS client or local terminal) disconnects.
+// The shrink happens while no one is watching, so there's no visible
+// flicker. The child TUI redraws at cols-1, but nobody sees it.
+//
+// Safety: re-checks that no viewer has connected between the call-site
+// check and the lock acquisition. Also skips if the child has exited
+// (pointless to resize a dead process).
+//
+// State and resize broadcasts are intentionally skipped: the shrunk size
+// is an internal detail, not a real terminal size change.
+func (s *Server) shrinkForReconnect() {
+	// Don't bother if the child has exited.
+	select {
+	case <-s.done:
+		return
+	default:
+	}
+
+	s.mu.Lock()
+	if s.ptyCols <= 1 || s.ptyRows == 0 || len(s.clients) > 0 || s.localOut != nil {
+		s.mu.Unlock()
+		return
+	}
+	s.ptyCols--
+	cols := s.ptyCols
+	rows := s.ptyRows
+	s.drainScreenLocked()
+	s.screen.Resize(int(cols), int(rows))
+	s.mu.Unlock()
+
+	pty.Setsize(s.ptmx, &pty.Winsize{Cols: cols, Rows: rows})
+	if s.cmd.Process != nil {
+		syscall.Kill(-s.cmd.Process.Pid, syscall.SIGWINCH)
+	}
+}
+
 func (s *Server) resize(msg ResizeMsg) {
 	if msg.Cols == 0 || msg.Rows == 0 {
 		return
@@ -522,6 +625,9 @@ func (s *Server) resize(msg ResizeMsg) {
 	if sizeChanged {
 		s.ptyCols = msg.Cols
 		s.ptyRows = msg.Rows
+		// Drain pending data first so the emulator processes it at the
+		// old size before switching to the new dimensions.
+		s.drainScreenLocked()
 		s.screen.Resize(int(msg.Cols), int(msg.Rows))
 	}
 	s.mu.Unlock()
@@ -611,9 +717,11 @@ func (s *Server) readPTY() {
 			}
 		}
 
-		// Feed the virtual terminal and snapshot client list atomically.
+		// Queue data for the virtual terminal emulator (processed by
+		// processScreen in the background). Snapshot the client list
+		// atomically so new clients always see their replay frame first.
 		s.mu.Lock()
-		s.screen.Write(data)
+		s.screenPending = append(s.screenPending, data...)
 		localOut := s.localOut
 		clients := make([]*wsClient, 0, len(s.clients))
 		for c := range s.clients {
