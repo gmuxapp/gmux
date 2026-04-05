@@ -633,7 +633,7 @@ function MainHeader({ session, onRestart }: {
           </div>
         )}
         {session.stale && (
-          <button class="stale-badge" title="Click to restart with the latest build" onClick={onRestart}>
+          <button class="stale-badge" title="Click to restart this session with the latest build" onClick={onRestart}>
             outdated
           </button>
         )}
@@ -1063,18 +1063,19 @@ function App() {
     if (loc.path !== url) loc.route(url, true) // replace, don't create history entries
   }, [selectedId, sessions, sidebarVersion])
 
-  // Clear unread when selecting a session.
+  // Mark as read when selecting a session, or when attention flags (unread,
+  // error) appear while we're already looking at it (e.g. a turn completes,
+  // filemon re-reads on resume, or an adapter sets error while in view).
+  const selectedNeedsRead = !!(selected?.unread || selected?.status?.error)
   useEffect(() => {
-    if (!selectedId) return
-    const sess = sessions.find(s => s.id === selectedId)
-    if (!sess?.unread) return
+    if (!selectedId || !selectedNeedsRead) return
     // Clear locally for immediate UI feedback.
     setSessions(prev => prev.map(s =>
       s.id === selectedId ? { ...s, unread: false, status: s.status?.error ? { ...s.status, error: false } : s.status } : s
     ))
     // Persist to server.
     fetch(`/v1/sessions/${selectedId}/read`, { method: 'POST' }).catch(() => {})
-  }, [selectedId])
+  }, [selectedId, selectedNeedsRead])
 
   // --- Actions: send to backend, wait for SSE. No optimistic updates. ---
 
