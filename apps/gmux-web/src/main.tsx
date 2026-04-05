@@ -15,6 +15,8 @@ import { useActivityTracker } from './use-activity'
 import type { Session, Folder, View } from './types'
 import { ManageProjectsModal } from './manage-projects'
 import { buildProjectFolders, matchSession, resolveViewFromPath, sessionPath, viewToPath } from './types'
+import type { LauncherDef } from './launcher'
+import { LaunchButton, fetchConfig, invalidateConfigCache, launchSession, consumePendingLaunch } from './launcher'
 import { getMockFolders } from './mock-data/index'
 import { installCopySession } from './mock-data/export-session'
 import type { Session as ProtocolSession } from '@gmux/protocol'
@@ -113,22 +115,6 @@ async function restartSession(sessionId: string): Promise<void> {
   await postAction(`/v1/sessions/${sessionId}/restart`)
 }
 
-// ── Launcher types & config ──
-
-interface LauncherDef {
-  id: string
-  label: string
-  command: string[]
-  description?: string
-  available: boolean
-}
-
-interface LaunchConfig {
-  default_launcher: string
-  launchers: LauncherDef[]
-  peers?: Record<string, { default_launcher: string; launchers: LauncherDef[] }>
-}
-
 interface HealthData {
   version: string
   tailscale_url?: string
@@ -153,166 +139,6 @@ async function fetchHealth(): Promise<HealthData | null> {
 function maskTailnet(url: string): string {
   return url.replace(/(\.\w{2})[^.]*(?=\.ts\.net)/, '$1****')
 }
-
-let _configCache: LaunchConfig | null = null
-
-async function fetchConfig(): Promise<LaunchConfig> {
-  if (_configCache) return _configCache
-  try {
-    const resp = await fetch('/v1/config')
-    const json = await resp.json()
-    _configCache = json.data ?? json
-    return _configCache!
-  } catch {
-    return { default_launcher: 'shell', launchers: [{ id: 'shell', label: 'Shell', command: [], available: true }] }
-  }
-}
-
-function invalidateConfigCache() {
-  _configCache = null
-}
-
-/** Return launchers for a specific peer, falling back to local config. */
-function launchersForPeer(config: LaunchConfig, peer: string | undefined): { default_launcher: string; launchers: LauncherDef[] } {
-  if (peer && config.peers?.[peer]) return config.peers[peer]
-  return config
-}
-
-async function launchSession(launcherId: string, opts?: { cwd?: string; peer?: string }): Promise<void> {
-  await postAction('/v1/launch', { launcher_id: launcherId, cwd: opts?.cwd, peer: opts?.peer })
-}
-
-
-// ── LaunchButton - transforms into inline menu on click ──
-//
-// Idle:      [+]
-// Open:      [+ button becomes default item] → other items appear below
-// Launching: [spinner]
-//
-// Double-click works because the default item occupies the exact same
-// position as the + button. First click opens, second click hits default.
-
-// Track pending launches globally so App can auto-select new sessions
-let _pendingLaunchAt = 0
-
-function LaunchButton({ cwd, peer, className, onLaunch }: { cwd?: string; peer?: string; className?: string; onLaunch?: () => void }) {
-  const [state, setState] = useState<'idle' | 'loading' | 'open' | 'launching'>('idle')
-  const [config, setConfig] = useState<LaunchConfig | null>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  // Pre-fetch config on first hover so open is instant
-  const handleMouseEnter = () => {
-    if (!config) fetchConfig().then(setConfig)
-  }
-
-  const handleClick = (e: MouseEvent) => {
-    e.stopPropagation()
-    if (state === 'idle') {
-      if (config) {
-        setState('open')
-      } else {
-        setState('loading')
-        fetchConfig().then(cfg => {
-          setConfig(cfg)
-          setState('open')
-        })
-      }
-    } else if (state === 'open') {
-      setState('idle')
-    }
-  }
-
-  const handleLaunch = (id: string) => {
-    setState('launching')
-    _pendingLaunchAt = Date.now()
-    onLaunch?.()
-    launchSession(id, { cwd, peer }).finally(() => {
-      // Reset after a short delay to show spinner
-      setTimeout(() => setState('idle'), 600)
-    })
-  }
-
-  // Close on outside click
-  useEffect(() => {
-    if (state !== 'open') return
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setState('idle')
-      }
-    }
-    const timer = setTimeout(() => document.addEventListener('mousedown', handler), 0)
-    return () => {
-      clearTimeout(timer)
-      document.removeEventListener('mousedown', handler)
-    }
-  }, [state])
-
-  // Close on Escape
-  useEffect(() => {
-    if (state !== 'open') return
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') setState('idle') }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [state])
-
-  const isOpen = state === 'open' && config
-  const isLoading = state === 'launching' || state === 'loading'
-
-  let defaultLauncher: LauncherDef | undefined
-  let others: LauncherDef[] = []
-  if (isOpen && config) {
-    const resolved = launchersForPeer(config, peer)
-    defaultLauncher = resolved.launchers.find(l => l.id === resolved.default_launcher)
-    others = resolved.launchers.filter(l => l.id !== resolved.default_launcher)
-  }
-
-  // Always render the + button for stable layout. Menu overlays on top.
-  return (
-    <div class={`launch-container ${className ?? ''}`} ref={containerRef} onMouseEnter={handleMouseEnter}>
-      <button
-        class={`launch-btn ${isLoading ? 'loading' : ''}`}
-        title={cwd ? `New session in ${cwd}` : 'New session in ~'}
-        onClick={handleClick}
-      >
-        {isLoading ? (
-          <svg viewBox="0 0 16 16" width="14" height="14" class="spin">
-            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor"
-              stroke-width="2" stroke-dasharray="28" stroke-dashoffset="8" stroke-linecap="round" />
-          </svg>
-        ) : '+'}
-      </button>
-      {isOpen && (
-        <div class="launch-inline-menu">
-          {defaultLauncher && (
-            <button
-              class="launch-inline-item launch-inline-default"
-              onClick={(e) => { e.stopPropagation(); handleLaunch(defaultLauncher!.id) }}
-            >
-              <span class="launch-inline-label">{defaultLauncher.label}</span>
-              <span class="launch-inline-desc">{defaultLauncher.description ?? ''}</span>
-            </button>
-          )}
-          {others.length > 0 && (
-            <div class="launch-inline-divider" />
-          )}
-          {others.map((l, i) => (
-            <button
-              key={l.id}
-              class="launch-inline-item"
-              style={{ animationDelay: `${(i + 1) * 50}ms` }}
-              onClick={(e) => { e.stopPropagation(); handleLaunch(l.id) }}
-            >
-              <span class="launch-inline-label">{l.label}</span>
-              <span class="launch-inline-desc">{l.description ?? ''}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Utilities ──
 
 // ── Components ──
 
@@ -554,7 +380,6 @@ function EmptyState({ launchers, health }: { launchers: LauncherDef[]; health: H
 
   const handleLaunch = (id: string) => {
     setLaunching(id)
-    _pendingLaunchAt = Date.now()
     launchSession(id).finally(() => setLaunching(null))
   }
 
@@ -961,8 +786,7 @@ function App() {
             return [...prev, updated]
           })
           // Auto-select newly launched sessions
-          if (isNew && _pendingLaunchAt && Date.now() - _pendingLaunchAt < 10_000) {
-            _pendingLaunchAt = 0
+          if (isNew && consumePendingLaunch()) {
             const project = matchSession(updated, sidebarState.configured)
             if (project) loc.route(sessionPath(project.slug, updated), true)
           }
