@@ -3,7 +3,7 @@ title: Running in Docker
 description: Run gmux in a container with remote access or LAN port mapping.
 ---
 
-> For the planned native devcontainer integration, see [Peer Discovery & Aggregation](/planned/peer-discovery-aggregation#devcontainers).
+> For native devcontainer integration (auto-discovery, session aggregation), see [Multi-Machine Sessions](/multi-machine#devcontainer-auto-discovery).
 
 There are several ways to access a containerized gmux, depending on your network setup. Each is available as a ready-to-run example in the [`examples/`](https://github.com/gmuxapp/gmux/tree/main/examples) directory.
 

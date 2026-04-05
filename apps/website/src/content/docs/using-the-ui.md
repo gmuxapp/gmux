@@ -9,9 +9,15 @@ Running `gmux` with no arguments opens the dashboard in a dedicated browser wind
 
 The left panel lists your sessions grouped into projects.
 
+### Logo
+
+Click the **gmux** logo at the top of the sidebar to return to the home screen, where you can launch a new session.
+
 ### Projects
 
 Sessions don't appear in the sidebar until you add a project. The first time you open the dashboard, click **Add project** to choose which directories to track. gmuxd discovers directories that have running sessions and offers them as suggestions. Once a project is added, any session launched in that directory appears automatically.
+
+Click a **project name** to open the [project hub](#project-hub), an overview of all sessions in that project grouped by host and working directory. The active project is highlighted in the sidebar.
 
 You can manage projects at any time via the **Manage projects** button at the bottom of the sidebar. A badge shows when there are running sessions in directories that aren't part of any project yet.
 
@@ -32,6 +38,33 @@ Agent sessions (pi, Claude, Codex) only trigger the blue unread dot when the ass
 
 Hover over a session to reveal the **×** button. For live sessions this kills the process; if the adapter supports resume, the session moves to the **Resume previous** drawer at the bottom of the sidebar. Exited sessions that aren't resumable can be dismissed with ×.
 
+## Project hub
+
+Click a project name in the sidebar (or navigate to `/:project`) to see the project hub. This is an overview of every session in the project, grouped first by host, then by working directory.
+
+### Host sections
+
+Each host gets a section with a status indicator and a breadcrumb path showing the topology chain. For example, a devcontainer running on a remote peer might show `workstation › alpine-dev`. Status indicators:
+
+| Indicator | Meaning |
+|-----------|---------|
+| **Accent dot** | Local host |
+| **Green dot** | Connected remote peer |
+| **Pulsing yellow dot** | Reconnecting to peer |
+| **Red dot** | Peer disconnected |
+
+### Folder rows
+
+Within each host, sessions are grouped by their working directory. Each folder row shows a path label and the session cards underneath. A **+** button on each row lets you launch a new session in that directory on that host.
+
+### Session cards
+
+Each card shows a status dot and the session title. Click a card to attach to that session's terminal. The **×** button kills alive sessions or dismisses dead ones.
+
+### Empty projects
+
+If a project has no sessions yet, the hub shows the project's configured path with a **+** launcher to get started.
+
 ## The terminal
 
 Click a session to attach. You get a full interactive terminal powered by [xterm.js](https://xtermjs.org/). Colors, cursor positioning, mouse support, and images all work. The header bar shows the session title, status label, and a working indicator.
@@ -47,19 +80,25 @@ gmux pytest --watch  # any command
 
 ### From the UI
 
-Click the **+** button on a project header. A dropdown shows the available launchers (adapters that can start new sessions in that directory).
+There are several places to launch:
 
-When no session is selected, the main area shows launch buttons for the current project.
+- **Sidebar**: click the **+** button at the top of the sidebar to launch in the default directory.
+- **Project hub**: click the **+** on any folder row to launch in that directory on that host. For projects with [peers](/multi-machine), the per-host launcher routes the session to the correct machine.
+- **Home screen**: when no session is selected, the main area shows launcher buttons for a quick start.
+
+A dropdown shows the available launchers (shell, pi, Claude Code, Codex) when multiple adapters are installed.
 
 ## URL routing
 
-Every session has a stable URL:
+Every view has a stable URL:
 
-```
-http://localhost:8790/<project>/<adapter>/<slug>
-```
+| URL pattern | What it shows |
+|-------------|---------------|
+| `/` | Home screen with launcher buttons |
+| `/:project` | Project hub overview |
+| `/:project/:adapter/:slug` | A specific session's terminal |
 
-For example, `/gmux/pi/fix-auth-bug` links directly to a pi session in the gmux project. URLs update as you navigate, work with browser back/forward, and are bookmarkable. They remain stable across session kill and resume.
+For example, `/gmux/pi/fix-auth-bug` links directly to a pi session in the gmux project. URLs update as you navigate, work with browser back/forward, and are bookmarkable. Session slugs remain stable across kill and resume.
 
 ## Keyboard shortcuts
 
@@ -119,4 +158,3 @@ Open the same URL on your phone (or via [remote access](/remote-access)). The si
 | **▶** | Send (Enter) |
 
 When **ctrl** is armed, the toolbar transforms: **esc** and **tab** become **↑** and **↓** arrow keys, **▶** (send) becomes **paste**, and **← →** switch to word-jump navigation. The toolbar returns to normal after the next keypress or when you tap ctrl again.
-

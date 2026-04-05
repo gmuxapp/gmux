@@ -12,9 +12,10 @@ import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type Resolv
 import { useArrivalPulse } from './use-arrival-pulse'
 import { useActivityTracker } from './use-activity'
 
-import type { Session, Folder, View } from './types'
+import type { Session, Folder, View, PeerInfo } from './types'
 import { ManageProjectsModal } from './manage-projects'
 import { buildProjectFolders, matchSession, resolveViewFromPath, sessionPath, viewToPath } from './types'
+import { ProjectHub } from './project-hub'
 import type { LauncherDef } from './launcher'
 import { LaunchButton, fetchConfig, invalidateConfigCache, launchSession, consumePendingLaunch } from './launcher'
 import { getMockFolders } from './mock-data/index'
@@ -65,13 +66,6 @@ async function fetchSessions(): Promise<Session[]> {
   const json = await resp.json()
   const data: ProtocolSession[] = json?.data ?? []
   return data.map(toUISession)
-}
-
-interface PeerInfo {
-  name: string
-  url: string
-  status: string
-  session_count: number
 }
 
 async function fetchPeers(): Promise<PeerInfo[]> {
@@ -216,28 +210,39 @@ function SessionItem({
 function FolderGroup({
   folder,
   selectedId,
+  currentProjectSlug,
   resumingId,
   isSessionActive,
   isSessionFading,
   onSelect,
+  onSelectProject,
   onCloseSession,
 }: {
   folder: Folder
   selectedId: string | null
+  currentProjectSlug: string | null
   resumingId: string | null
   isSessionActive: (id: string) => boolean
   isSessionFading: (id: string) => boolean
   onSelect: (id: string) => void
+  onSelectProject: (slug: string) => void
   onCloseSession: (session: Session) => void
 }) {
   // Show alive sessions + resumable sessions that died on their own.
   // Non-resumable dead sessions are filtered out.
   const visible = folder.sessions.filter(s => s.alive || s.resumable)
 
+  const isCurrent = currentProjectSlug === folder.path
   return (
     <div class="folder">
       <div class="folder-header">
-        <div class="folder-name">{folder.name}</div>
+        <button
+          class={`folder-name${isCurrent ? ' current' : ''}`}
+          onClick={() => onSelectProject(folder.path)}
+          title={`Open ${folder.name} hub`}
+        >
+          {folder.name}
+        </button>
         <LaunchButton cwd={folder.sessions[0]?.cwd ?? folder.launchCwd} className="folder-launch-btn" />
       </div>
       <div class="folder-sessions">
@@ -262,32 +267,36 @@ function Sidebar({
   folders,
   unmatchedActiveCount,
   selectedId,
+  currentProjectSlug,
   resumingId,
   isSessionActive,
   isSessionFading,
   onSelect,
+  onSelectProject,
+  onGoHome,
   onCloseSession,
   onManageProjects,
   open,
   onClose,
   health,
-  peers,
   notifPermission,
   onRequestNotifPermission,
 }: {
   folders: Folder[]
   unmatchedActiveCount: number
   selectedId: string | null
+  currentProjectSlug: string | null
   resumingId: string | null
   isSessionActive: (id: string) => boolean
   isSessionFading: (id: string) => boolean
   onSelect: (id: string) => void
+  onSelectProject: (slug: string) => void
+  onGoHome: () => void
   onCloseSession: (session: Session) => void
   onManageProjects: () => void
   open: boolean
   onClose: () => void
   health: HealthData | null
-  peers: PeerInfo[]
   notifPermission: NotifPermission
   onRequestNotifPermission: () => void
 }) {
@@ -298,7 +307,12 @@ function Sidebar({
       <div class={`sidebar-overlay ${open ? 'visible' : ''}`} onClick={onClose} />
       <aside class={`sidebar ${open ? 'open' : ''}`}>
         <div class="sidebar-header">
-          <div class="sidebar-logo">gmux</div>
+          <button
+            type="button"
+            class="sidebar-logo"
+            title="Home"
+            onClick={() => { onGoHome(); onClose() }}
+          >gmux</button>
           {health?.version ? (
             <a
               class={`sidebar-badge${health.update_available ? ' sidebar-badge-update' : ''}`}
@@ -321,11 +335,16 @@ function Sidebar({
               key={f.path}
               folder={f}
               selectedId={selectedId}
+              currentProjectSlug={currentProjectSlug}
               resumingId={resumingId}
               isSessionActive={isSessionActive}
               isSessionFading={isSessionFading}
               onSelect={(id) => {
                 onSelect(id)
+                onClose()
+              }}
+              onSelectProject={(slug) => {
+                onSelectProject(slug)
                 onClose()
               }}
               onCloseSession={onCloseSession}
@@ -343,16 +362,6 @@ function Sidebar({
           )}
         </div>
         <div class="sidebar-footer">
-          {peers.length > 0 && (
-            <div class="peers-status">
-              {peers.map(p => (
-                <div key={p.name} class="peer-status-item">
-                  <span class={`peer-dot ${p.status}`} />
-                  <span class="peer-name">{p.name}</span>
-                </div>
-              ))}
-            </div>
-          )}
           <button class="manage-projects-btn" onClick={onManageProjects}>
             Manage projects
             {unmatchedActiveCount > 0 && (
@@ -873,32 +882,16 @@ function App() {
   )
 
   // --- URL normalization ---
-  // The URL is the single source of truth; `view` is derived above. The
-  // two effects below only *normalize* the URL when it drifts from the
-  // view we're rendering:
-  //
-  //   - canonicalize: rewrite `/:project` → `/:project/:kind/:slug` when
-  //     we resolved the URL to a specific session, or fall back to `/`
-  //     when the session we were viewing disappeared.
-  //   - bootstrap: at `/` with sessions available, pick the best alive
-  //     session and navigate. Preserves the "land on /, drop into a
-  //     terminal" UX.
-
+  // The URL is the single source of truth; `view` is derived above. This
+  // effect only *normalizes* the URL when it drifts from the view: it
+  // rewrites `/:project` → `/:project/:kind/:slug` when the URL resolved
+  // to a specific session, and falls back to the project hub (or home)
+  // when the session we were viewing disappeared.
   useEffect(() => {
     if (view === null) return
     const url = viewToPath(view, sidebarState.configured, sessions)
     if (url && url !== loc.path) loc.route(url, true)
   }, [view, sessions, sidebarVersion, loc.path])
-
-  useEffect(() => {
-    if (loc.path !== '/') return
-    if (filteredSessions.length === 0) return
-    const best = filteredSessions.find(s => s.alive && (s.socket_path || s.peer))
-    if (!best) return
-    const project = matchSession(best, sidebarState.configured)
-    if (!project) return
-    loc.route(sessionPath(project.slug, best), true)
-  }, [loc.path, filteredSessions, sidebarVersion])
 
   // Mark as read when selecting a session, or when attention flags (unread,
   // error) appear while we're already looking at it (e.g. a turn completes,
@@ -1122,16 +1115,18 @@ function App() {
         folders={folders}
         unmatchedActiveCount={sidebarState.unmatchedActiveCount}
         selectedId={selectedId}
+        currentProjectSlug={view?.kind === 'project' ? view.projectSlug : null}
         resumingId={resumingId}
         isSessionActive={isSessionActive}
         isSessionFading={isSessionFading}
         onSelect={handleSelect}
+        onSelectProject={(slug) => loc.route(`/${slug}`)}
+        onGoHome={() => loc.route('/')}
         onCloseSession={handleCloseSession}
         onManageProjects={() => { setSidebarOpen(false); setManageProjectsOpen(true) }}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         health={health}
-        peers={peers}
         notifPermission={notifPermission}
         onRequestNotifPermission={handleRequestNotifPermission}
       />
@@ -1143,10 +1138,12 @@ function App() {
       />
 
       <div class="main-panel">
-        <MainHeader
-          session={selected}
-          onRestart={selected ? () => { restartSession(selected.id).catch(err => console.error('restart failed:', err)) } : undefined}
-        />
+        {view?.kind !== 'project' && (
+          <MainHeader
+            session={selected}
+            onRestart={selected ? () => { restartSession(selected.id).catch(err => console.error('restart failed:', err)) } : undefined}
+          />
+        )}
 
         {connState === 'connecting' ? (
           <div class="state-message">
@@ -1163,6 +1160,15 @@ function App() {
               Retry
             </button>
           </div>
+        ) : view?.kind === 'project' ? (
+          <ProjectHub
+            projectSlug={view.projectSlug}
+            sessions={sessions}
+            projects={sidebarState.configured}
+            peers={peers}
+            onSelectSession={handleSelect}
+            onCloseSession={handleCloseSession}
+          />
         ) : selected && (canAttach || USE_MOCK) && terminalOptions && keybinds ? (
           <TerminalView
             session={selected}

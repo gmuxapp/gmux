@@ -38,6 +38,12 @@ code {
 
   /* Status */
   --status-error: oklch(65% 0.18 25);
+  --status-connected: oklch(72% 0.14 145);
+  --status-connecting: oklch(80% 0.14 85);
+  --status-disconnected: oklch(65% 0.18 25);
+
+  /* Radii */
+  --radius-lg: 10px;
 
   /* Sizing */
   --sidebar-width: 272px;
@@ -106,6 +112,18 @@ body {
   letter-spacing: -0.04em;
   color: var(--text);
   line-height: 1;
+  /* Rendered as a <button> so it's keyboard-accessible, but visually a plain label. */
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s, text-shadow 0.15s;
+}
+.sidebar-logo:hover {
+  color: #fff;
+  text-shadow: 0 0 6px rgba(255, 255, 255, 0.25);
 }
 
 .sidebar-badge {
@@ -308,6 +326,20 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Make it a clickable affordance without looking like a <button>. */
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  font-family: inherit;
+}
+.folder-name:hover { background: var(--bg-hover); }
+.folder-name.current {
+  background: var(--bg-selected);
+  color: var(--text);
 }
 
 
@@ -454,47 +486,6 @@ body {
   color: var(--text-muted);
   font-size: 11px;
   opacity: 0.7;
-}
-
-/* ── Peer status in sidebar footer ── */
-.peers-status {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  padding: 6px 0;
-  margin-bottom: 4px;
-}
-
-.peer-status-item {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.peer-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.peer-dot.connected {
-  background: var(--green, #50fa7b);
-}
-
-.peer-dot.connecting {
-  background: var(--yellow, #f1fa8c);
-  animation: subtle-pulse 2s ease-in-out infinite;
-}
-
-.peer-dot.disconnected {
-  background: var(--red, #ff5555);
-}
-
-.peer-name {
-  opacity: 0.8;
 }
 
 .session-status-label {
@@ -1904,3 +1895,208 @@ body {
   .diag-entry-time { display: none; }
   .diag-entry-cat { min-width: 60px; font-size: 10px; }
 }
+
+/* ─── Project hub page (design A1) ─── */
+
+.project-hub {
+  padding: 24px 32px;
+  overflow-y: auto;
+  max-width: 900px;
+  min-width: 420px;
+  margin: 0 auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+
+.project-hub-header {
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.project-hub-title {
+  font-size: 24px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  color: var(--text);
+}
+.project-hub-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.project-hub-remote {
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-size: 12px;
+}
+.project-hub-dot::before { content: "·"; }
+
+.project-hub-empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklch, var(--bg-sidebar) 50%, transparent);
+  color: var(--text-muted);
+}
+.project-hub-empty-title {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.project-hub-empty-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+.project-hub-empty-actions .path-mono {
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Host section (one per unique host path) */
+.host-section {
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklch, var(--bg-sidebar) 50%, transparent);
+  /* No overflow:hidden here — the launcher dropdown needs to escape
+     the section bounds. The header rounds its own top corners to
+     match the section's border-radius. */
+}
+.host-section-header {
+  padding: 11px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sidebar);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+.host-path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.host-segment { font-size: 14px; font-weight: 500; }
+.host-segment.leaf { font-weight: 600; color: var(--text); }
+.host-segment.ancestor { color: var(--text-muted); font-weight: 400; }
+.host-arrow { color: var(--text-muted); font-size: 11px; opacity: 0.6; }
+.host-meta {
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.host-session-count { font-size: 12px; color: var(--text-muted); }
+
+.host-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.host-status.local {
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in oklch, var(--accent) 40%, transparent);
+}
+.host-status.connected {
+  background: var(--status-connected);
+  box-shadow: 0 0 6px color-mix(in oklch, var(--status-connected) 40%, transparent);
+}
+.host-status.connecting {
+  background: var(--status-connecting);
+  animation: pulse-connecting 1.5s ease-in-out infinite;
+}
+.host-status.disconnected { background: var(--status-disconnected); }
+
+@keyframes pulse-connecting {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Folder row: path + sessions on the left, launchers on the right */
+.folder-row {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 16px;
+  align-items: start;
+}
+.folder-row:last-child { border-bottom: none; }
+.folder-row-info { min-width: 0; }
+.folder-row-path {
+  margin-bottom: 10px;
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.host-folder-cards { display: flex; flex-wrap: wrap; gap: 6px; }
+.folder-launchers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* Session card in folder row */
+.session-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+  text-decoration: none;
+  color: inherit;
+  max-width: 280px;
+  min-width: 0;
+  position: relative;
+}
+.session-card:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.session-card-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-connected);
+  flex-shrink: 0;
+}
+.session-card-dot.dead { background: var(--text-muted); }
+.session-card-name {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-card-close {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, color 0.1s;
+}
+.session-card-close:hover { background: oklch(28% 0.015 250); color: var(--text); }
