@@ -164,9 +164,9 @@ const settingsEntries = {
     letterSpacing:    clampedNumber(0, -5, 20, 'Extra letter spacing in pixels.'),
     cursorStyle:      v.optional(
                         v.pipe(v.picklist(['block', 'underline', 'bar']), v.description('Cursor shape.')),
-                        'block' as const,
+                        'bar' as const,
                       ),
-    cursorBlink:      optBool(true, 'Whether the cursor blinks.'),
+    cursorBlink:      optBool(false, 'Whether the cursor blinks.'),
     cursorInactiveStyle: v.optional(
                            v.pipe(
                              v.picklist(['outline', 'block', 'bar', 'underline', 'none']),
@@ -179,9 +179,9 @@ const settingsEntries = {
     scrollSensitivity: clampedNumber(1, 0.1, 10, 'Scroll speed multiplier for mouse wheel.'),
     fastScrollSensitivity: clampedNumber(5, 1, 50, 'Scroll speed multiplier when holding Alt.'),
     smoothScrollDuration: clampedNumber(0, 0, 500, 'Smooth scroll animation duration in milliseconds. 0 disables.'),
-    drawBoldTextInBrightColors: optBool(true, 'Whether to render bold text in bright ANSI colors.'),
+    drawBoldTextInBrightColors: optBool(false, 'Whether to render bold text in bright ANSI colors.'),
     minimumContrastRatio: clampedNumber(1, 1, 21, 'Minimum contrast ratio for text. 1 disables contrast adjustment.'),
-    macOptionIsMeta:  optBool(false, 'Treat the macOS Option key as Meta (sends ESC prefix). When false, Option produces special characters.'),
+    macOptionIsMeta:  optBool(true, 'Treat the macOS Option key as Meta (sends ESC prefix). When false, Option produces special characters like ñ and ß.'),
     wordSeparator:    optStr(' ()[]{}\',"`:;', 'Characters treated as word boundaries for double-click selection.'),
 
     // Keybinds (validated structurally; semantic validation in keybinds.ts).
@@ -216,7 +216,7 @@ export const DEFAULT_THEME_COLORS: ITheme = {
   foreground: '#d3d8de',
   cursor: '#d3d8de',
   cursorAccent: '#0f141a',
-  selectionBackground: '#2a3a4acc',
+  selectionBackground: '#3a506acc',
   black: '#151b21',
   red: '#c25d66',
   green: '#a3be8c',
