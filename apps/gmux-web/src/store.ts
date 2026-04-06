@@ -415,6 +415,8 @@ export function initStore(): () => void {
       sessions.value = mockSessions
       sessionsLoaded.value = true
       connState.value = 'connected'
+      terminalOptions.value = buildTerminalOptions(null, null)
+      keybinds.value = resolveKeybinds(null, false)
     })
     const activeIds = MOCK_SESSIONS.filter(s => s.mockActive).map(s => s.id)
     activeIds.forEach(id => handleActivity(id))
