@@ -175,11 +175,13 @@ func launchGmux(gmuxBin string, command []string, cwd string) (int, error) {
 func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintf(w, `gmuxd %s
 
-Usage: gmuxd [command]
+Usage: gmuxd <command>
 
 Commands:
-  start              Start the gmux daemon (default if no command given)
+  start              Start the daemon in the background
+  run                Run the daemon in the foreground (for systemd/Docker)
   stop               Stop the running daemon
+  restart            Restart the daemon (alias for start)
   status             Show daemon health, listeners, and sessions
   auth               Show the auth URL and token
   remote             Set up or check remote access via Tailscale
@@ -195,23 +197,35 @@ Tip:
 
 
 func run(args []string, stdout, stderr io.Writer) int {
-	// No args = start daemon (the "put me in a service file" invocation).
 	if len(args) == 0 {
-		return serve(stderr)
+		printUsage(stdout)
+		return 0
 	}
 
 	cmd := args[0]
 	args = args[1:]
 
 	switch cmd {
-	case "start":
+	case "start", "restart":
 		for _, arg := range args {
 			switch arg {
 			case "-h", "--help":
-				_, _ = fmt.Fprintf(stdout, "Usage: gmuxd start\n\nStarts the daemon, replacing any existing instance.\n")
+				_, _ = fmt.Fprintf(stdout, "Usage: gmuxd %s\n\nStarts the daemon in the background, replacing any existing instance.\n", cmd)
 				return 0
 			default:
-				_, _ = fmt.Fprintf(stderr, "gmuxd start: unknown option %q\n", arg)
+				_, _ = fmt.Fprintf(stderr, "gmuxd %s: unknown option %q\n", cmd, arg)
+				return 2
+			}
+		}
+		return startBackground(stdout, stderr)
+	case "run":
+		for _, arg := range args {
+			switch arg {
+			case "-h", "--help":
+				_, _ = fmt.Fprintf(stdout, "Usage: gmuxd run\n\nRuns the daemon in the foreground (for systemd, Docker, or debugging).\n")
+				return 0
+			default:
+				_, _ = fmt.Fprintf(stderr, "gmuxd run: unknown option %q\n", arg)
 				return 2
 			}
 		}
@@ -265,6 +279,67 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// startBackground re-execs gmuxd with "run" in a detached process,
+// replacing any existing daemon. Output goes to a log file in the
+// state directory. Waits briefly to confirm startup succeeded.
+func startBackground(stdout, stderr io.Writer) int {
+	exe, err := os.Executable()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: cannot determine own path: %v\n", err)
+		return 1
+	}
+
+	stateDir := paths.StateDir()
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: cannot create state dir %s: %v\n", stateDir, err)
+		return 1
+	}
+
+	logPath := filepath.Join(stateDir, "gmuxd.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: cannot open log %s: %v\n", logPath, err)
+		return 1
+	}
+
+	cmd := exec.Command(exe, "run")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Stdout = nil
+	cmd.Stderr = logFile
+	cmd.Stdin = nil
+	// Strip GMUX_* env vars so the daemon doesn't inherit session identity.
+	cmd.Env = filterEnvPrefix(os.Environ(), "GMUX_")
+
+	if err := cmd.Start(); err != nil {
+		logFile.Close()
+		_, _ = fmt.Fprintf(stderr, "gmuxd: failed to start: %v\n", err)
+		return 1
+	}
+	go func() {
+		cmd.Wait()
+		logFile.Close()
+	}()
+
+	// Wait for the daemon to become healthy.
+	sock := paths.SocketPath()
+	healthy := false
+	for range 30 {
+		time.Sleep(100 * time.Millisecond)
+		if unixipc.Healthy(sock) {
+			healthy = true
+			break
+		}
+	}
+
+	if !healthy {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: started (pid %d) but not yet healthy\n  Logs: %s\n", cmd.Process.Pid, logPath)
+		return 1
+	}
+
+	_, _ = fmt.Fprintf(stdout, "gmuxd: running (pid %d)\n  Logs: %s\n", cmd.Process.Pid, logPath)
+	return 0
 }
 
 func serve(stderr io.Writer) int {

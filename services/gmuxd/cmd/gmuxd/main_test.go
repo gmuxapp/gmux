@@ -102,11 +102,15 @@ func TestDiscoverLaunchersUsesCompiledAdapters(t *testing.T) {
 	}
 }
 
-func TestRunNoArgsStartsDaemon(t *testing.T) {
-	// Can't actually test serve() without a real setup, but we can verify
-	// that no-args doesn't print help (it used to).
-	// This is a compile-time check that the code path exists.
-	t.Log("gmuxd with no args calls serve() — tested via e2e")
+func TestRunNoArgsPrintsHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d", code)
+	}
+	if !strings.Contains(stdout.String(), "Usage: gmuxd") {
+		t.Fatalf("expected usage output, got %q", stdout.String())
+	}
 }
 
 func TestRunHelpCommand(t *testing.T) {
@@ -152,6 +156,18 @@ func TestRunStartRejectsUnknownOption(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := run([]string{"start", "--wat"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit code 2, got %d", code)
+	}
+	if got := stderr.String(); !strings.Contains(got, "unknown option") {
+		t.Fatalf("expected unknown option error, got %q", got)
+	}
+}
+
+func TestRunRunRejectsUnknownOption(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"run", "--wat"}, &stdout, &stderr)
 	if code != 2 {
 		t.Fatalf("expected exit code 2, got %d", code)
 	}
@@ -300,5 +316,26 @@ func TestUnixIPCReplace(t *testing.T) {
 	// Replace on nonexistent socket should succeed.
 	if err := unixipc.Replace(sockPath); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunSubcommandHelp(t *testing.T) {
+	tests := []struct {
+		cmd      string
+		contains string
+	}{
+		{"start", "background"},
+		{"run", "foreground"},
+		{"restart", "background"},
+	}
+	for _, tt := range tests {
+		var stdout, stderr bytes.Buffer
+		code := run([]string{tt.cmd, "--help"}, &stdout, &stderr)
+		if code != 0 {
+			t.Errorf("%s --help: exit code %d, want 0", tt.cmd, code)
+		}
+		if !strings.Contains(stdout.String(), tt.contains) {
+			t.Errorf("%s --help: expected %q in output, got %q", tt.cmd, tt.contains, stdout.String())
+		}
 	}
 }
