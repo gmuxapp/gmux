@@ -78,6 +78,7 @@ jobs:
           GOWORK: ${{ github.workspace }}/go.work
 
       - name: Notify Discord
+        if: always() && !cancelled()
         env:
           WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -89,6 +90,7 @@ jobs:
 
   deploy-docs:
     needs: release
+    if: always() && !cancelled()
     uses: ./.github/workflows/pages.yml
     permissions:
       contents: read

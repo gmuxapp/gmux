@@ -77,7 +77,8 @@ async function applyNoWrap(page) {
 async function preparePage(page, url) {
   await page.goto(url, { timeout: 5000, waitUntil: 'load' })
   await page.waitForSelector('.session-item', { timeout: 5000 })
-  // Wait for terminal mock content to finish writing
+  // Wait for mock terminal canvas to render content
+  await page.waitForSelector('.xterm-screen canvas', { timeout: 5000 }).catch(() => {})
   await page.waitForTimeout(800)
   await page.addStyleTag({ content: FREEZE_CSS })
 }
