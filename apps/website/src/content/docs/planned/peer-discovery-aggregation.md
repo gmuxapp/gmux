@@ -1,22 +1,7 @@
 ---
-title: Peer Auto-Discovery
-description: Planned automatic discovery of gmux peers on a Tailscale network.
+title: Planned Features
+description: Features under consideration for future releases.
 ---
-
-> The hub protocol and devcontainer auto-discovery are shipped. See [Multi-Machine Sessions](/multi-machine) for what's available today. This page covers the remaining planned work.
-
-## Tailscale auto-discovery
-
-Today, peers outside of devcontainers must be configured manually in `host.toml`. Tailscale auto-discovery would make this zero-config for machines on the same tailnet.
-
-gmuxd instances already register as Tailscale devices. Tailscale's local API (`/api/v0/status`) lists all nodes on the tailnet. gmuxd could query this periodically and look for peers:
-
-1. List all online nodes on the tailnet.
-2. Filter to nodes tagged with `tag:gmux` (via Tailscale ACL tags) or matching a configurable hostname pattern.
-3. For each candidate, probe `https://<hostname>/v1/health` to confirm it's a gmuxd.
-4. Subscribe to its `/v1/events` stream.
-
-This gives zero-config discovery: install gmux on two machines on the same tailnet and they find each other.
 
 ## Canonical project URI
 

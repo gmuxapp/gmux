@@ -161,7 +161,7 @@ func TestPeerSubscribe_InitialSessions(t *testing.T) {
 		Token: token,
 	}
 
-	mgr := NewManager([]config.PeerConfig{cfg}, st)
+	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
 	mgr.Start()
 	waitForSessions(t, st, "server", 2)
 
@@ -206,7 +206,7 @@ func TestPeerSubscribe_AuthFailure(t *testing.T) {
 		Token: "wrong-token",
 	}
 
-	mgr := NewManager([]config.PeerConfig{cfg}, st)
+	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
 	mgr.Start()
 
 	// Give it time to attempt and fail.
@@ -246,7 +246,7 @@ func TestPeerSubscribe_SocketPathCleared(t *testing.T) {
 
 	// The spoke server doesn't check auth when token is empty, but our
 	// Peer always sends the header. Use a server that accepts any auth.
-	mgr := NewManager([]config.PeerConfig{cfg}, st)
+	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
 	mgr.Start()
 	waitForSessions(t, st, "dev", 1)
 
@@ -259,7 +259,7 @@ func TestPeerSubscribe_SocketPathCleared(t *testing.T) {
 }
 
 func TestFindPeer_Local(t *testing.T) {
-	mgr := NewManager(nil, store.New())
+	mgr := NewManager(nil, store.New(), "test-host")
 	peer, origID := mgr.FindPeer("sess-abc123")
 	if peer != nil {
 		t.Error("FindPeer should return nil for local session")
@@ -271,7 +271,7 @@ func TestFindPeer_Local(t *testing.T) {
 
 func TestFindPeer_Remote(t *testing.T) {
 	cfg := []config.PeerConfig{{Name: "server", URL: "http://example.com", Token: "t"}}
-	mgr := NewManager(cfg, store.New())
+	mgr := NewManager(cfg, store.New(), "test-host")
 
 	peer, origID := mgr.FindPeer("sess-abc@server")
 	if peer == nil {
@@ -287,7 +287,7 @@ func TestFindPeer_Remote(t *testing.T) {
 
 func TestFindPeer_UnknownPeer(t *testing.T) {
 	cfg := []config.PeerConfig{{Name: "server", URL: "http://example.com", Token: "t"}}
-	mgr := NewManager(cfg, store.New())
+	mgr := NewManager(cfg, store.New(), "test-host")
 
 	peer, _ := mgr.FindPeer("sess-abc@unknown")
 	if peer != nil {
@@ -304,7 +304,7 @@ func TestPeerStatus(t *testing.T) {
 		{Name: "server", URL: "http://10.0.0.5:8790", Token: "t"},
 		{Name: "dev", URL: "http://10.0.0.6:8790", Token: "t"},
 	}
-	mgr := NewManager(cfg, st)
+	mgr := NewManager(cfg, st, "test-host")
 
 	infos := mgr.PeerStatus()
 	if len(infos) != 2 {
@@ -340,7 +340,7 @@ func TestPeerStatusEventBroadcast(t *testing.T) {
 	defer cancel()
 
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
-	mgr := NewManager([]config.PeerConfig{cfg}, st)
+	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
 	mgr.Start()
 
 	// Collect peer-status events until we see "connected" transition.
@@ -370,7 +370,7 @@ func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 	sk := spokeServer(t, "", initialSessions)
 
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
-	mgr := NewManager([]config.PeerConfig{cfg}, st)
+	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
 	mgr.Start()
 
 	// Wait for initial sessions.
@@ -409,7 +409,7 @@ func TestPeerSubscribe_ActivityForwarded(t *testing.T) {
 	sk := spokeServer(t, "", initialSessions)
 
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
-	mgr := NewManager([]config.PeerConfig{cfg}, st)
+	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
 	mgr.Start()
 
 	// Wait for initial session.
@@ -447,7 +447,7 @@ func TestPeerSubscribe_NewSessionViaPush(t *testing.T) {
 	})
 
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
-	mgr := NewManager([]config.PeerConfig{cfg}, st)
+	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
 	mgr.Start()
 
 	waitForSessions(t, st, "server", 1)
@@ -497,7 +497,7 @@ func TestManagerStop_CleansUpSessions(t *testing.T) {
 	st.Upsert(store.Session{ID: "s1@server", Kind: "pi", Alive: true, Peer: "server"})
 
 	cfg := []config.PeerConfig{{Name: "server", URL: "http://10.0.0.5:8790", Token: "t"}}
-	mgr := NewManager(cfg, st)
+	mgr := NewManager(cfg, st, "test-host")
 	// Don't start — just test Stop cleanup.
 	mgr.Stop()
 
@@ -513,7 +513,7 @@ func TestManagerStop_CleansUpSessions(t *testing.T) {
 
 func TestManager_AddPeer(t *testing.T) {
 	st := store.New()
-	mgr := NewManager(nil, st)
+	mgr := NewManager(nil, st, "test-host")
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -537,7 +537,7 @@ func TestManager_AddPeer(t *testing.T) {
 
 func TestManager_AddPeerIdempotent(t *testing.T) {
 	st := store.New()
-	mgr := NewManager(nil, st)
+	mgr := NewManager(nil, st, "test-host")
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -556,7 +556,7 @@ func TestManager_RemovePeer(t *testing.T) {
 		{ID: "s1", Kind: "pi", Alive: true},
 	})
 
-	mgr := NewManager(nil, st)
+	mgr := NewManager(nil, st, "test-host")
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -587,7 +587,7 @@ func TestManager_RemovePeer(t *testing.T) {
 
 func TestManager_RemoveNonexistentIsNoop(t *testing.T) {
 	st := store.New()
-	mgr := NewManager(nil, st)
+	mgr := NewManager(nil, st, "test-host")
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -671,7 +671,7 @@ func TestManagerPeerConfigs(t *testing.T) {
 		{Name: "laptop", URL: spoke1.URL, Token: "t1"},
 		{Name: "workstation", URL: spoke2.URL, Token: "t2"},
 	}
-	mgr := NewManager(cfgs, st)
+	mgr := NewManager(cfgs, st, "test-host")
 
 	// Simulate connected status so PeerConfigs includes them.
 	for _, mp := range mgr.peers {
@@ -709,7 +709,7 @@ func TestManagerPeerConfigs_SkipsDisconnected(t *testing.T) {
 	st := store.New()
 	mgr := NewManager([]config.PeerConfig{
 		{Name: "offline", URL: spoke.URL, Token: "tok"},
-	}, st)
+	}, st, "test-host")
 	// Leave status as disconnected (default).
 
 	results := mgr.PeerConfigs(t.Context())
@@ -720,7 +720,7 @@ func TestManagerPeerConfigs_SkipsDisconnected(t *testing.T) {
 
 func TestManager_FindPeerDynamic(t *testing.T) {
 	st := store.New()
-	mgr := NewManager(nil, st)
+	mgr := NewManager(nil, st, "test-host")
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -830,7 +830,7 @@ func TestPeerStatusCountsOnlyAlive(t *testing.T) {
 	cfg := []config.PeerConfig{
 		{Name: "server", URL: "http://10.0.0.5:8790", Token: "t"},
 	}
-	mgr := NewManager(cfg, st)
+	mgr := NewManager(cfg, st, "test-host")
 
 	infos := mgr.PeerStatus()
 	if len(infos) != 1 {
@@ -839,4 +839,107 @@ func TestPeerStatusCountsOnlyAlive(t *testing.T) {
 	if infos[0].SessionCount != 1 {
 		t.Errorf("session_count = %d, want 1 (only alive sessions)", infos[0].SessionCount)
 	}
+}
+
+// ── Forwarding filter ──
+
+func TestForwardingFilter_SelfEchoPrevented(t *testing.T) {
+	// Simulates the mutual-subscription loop:
+	// Peer "remote" sends us a session "sess-1@test-host" — that's our
+	// own session echoed back. It should be dropped.
+	st := store.New()
+	st.Upsert(store.Session{ID: "sess-1", Kind: "shell", Alive: true}) // our local session
+
+	sk := spokeServer(t, "", []store.Session{
+		// The spoke has our session in its store as "sess-1@test-host".
+		{ID: "sess-1@test-host", Kind: "shell", Alive: true, Peer: "test-host"},
+	})
+
+	mgr := NewManager([]config.PeerConfig{
+		{Name: "remote", URL: sk.URL},
+	}, st, "test-host")
+	mgr.Start()
+
+	// Wait a moment for the SSE to be processed.
+	time.Sleep(200 * time.Millisecond)
+
+	// sess-1@test-host@remote should NOT exist (self-echo dropped).
+	if _, ok := st.Get("sess-1@test-host@remote"); ok {
+		t.Error("self-echo should be dropped, but sess-1@test-host@remote exists in store")
+	}
+
+	// Our original local session should still be there.
+	if _, ok := st.Get("sess-1"); !ok {
+		t.Error("local session sess-1 should still exist")
+	}
+
+	mgr.Stop()
+}
+
+func TestForwardingFilter_KnownPeerSessionDropped(t *testing.T) {
+	// Two peers: "alpha" and "beta". Beta has alpha's session forwarded
+	// as "sess-a@alpha". Since we subscribe to alpha directly, we should
+	// drop the forwarded copy from beta.
+	st := store.New()
+
+	skAlpha := spokeServer(t, "", []store.Session{
+		{ID: "sess-a", Kind: "shell", Alive: true},
+	})
+	skBeta := spokeServer(t, "", []store.Session{
+		{ID: "sess-b", Kind: "shell", Alive: true},
+		{ID: "sess-a@alpha", Kind: "shell", Alive: true, Peer: "alpha"}, // forwarded
+	})
+
+	mgr := NewManager([]config.PeerConfig{
+		{Name: "alpha", URL: skAlpha.URL},
+		{Name: "beta", URL: skBeta.URL},
+	}, st, "test-host")
+	mgr.Start()
+
+	waitForSessions(t, st, "alpha", 1)
+	waitForSessions(t, st, "beta", 1) // only sess-b, not sess-a@alpha
+
+	// Direct session from alpha: present.
+	if _, ok := st.Get("sess-a@alpha"); !ok {
+		t.Error("expected direct session sess-a@alpha")
+	}
+
+	// Beta's own session: present.
+	if _, ok := st.Get("sess-b@beta"); !ok {
+		t.Error("expected sess-b@beta")
+	}
+
+	// Forwarded session from beta: absent.
+	if _, ok := st.Get("sess-a@alpha@beta"); ok {
+		t.Error("forwarded sess-a@alpha@beta should be dropped")
+	}
+
+	mgr.Stop()
+}
+
+func TestForwardingFilter_UnknownPeerSessionKept(t *testing.T) {
+	// Peer "remote" has a devcontainer session "sess-d@devcontainer".
+	// We don't know "devcontainer" as a direct peer, so it should be kept.
+	st := store.New()
+
+	sk := spokeServer(t, "", []store.Session{
+		{ID: "sess-1", Kind: "shell", Alive: true},
+		{ID: "sess-d@devcontainer", Kind: "pi", Alive: true, Peer: "devcontainer"},
+	})
+
+	mgr := NewManager([]config.PeerConfig{
+		{Name: "remote", URL: sk.URL},
+	}, st, "test-host")
+	mgr.Start()
+
+	waitForSessions(t, st, "remote", 2) // both should arrive
+
+	if _, ok := st.Get("sess-1@remote"); !ok {
+		t.Error("expected sess-1@remote")
+	}
+	if _, ok := st.Get("sess-d@devcontainer@remote"); !ok {
+		t.Error("expected sess-d@devcontainer@remote (devcontainer session should be kept)")
+	}
+
+	mgr.Stop()
 }

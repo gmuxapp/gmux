@@ -34,6 +34,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsauth"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsdiscovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/update"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/wsproxy"
@@ -487,9 +488,10 @@ func serve(stderr io.Writer) int {
 		}
 	}()
 
-	// peerManager is initialized later after config is loaded.
-	// The closure captures the pointer so handlers work once it's set.
+	// peerManager and tsDiscovery are initialized later after config is
+	// loaded. The closures capture the pointers so handlers work once set.
 	var peerManager *peering.Manager
+	var tsDiscovery *tsdiscovery.Watcher
 
 	// ── Health + Capabilities ──
 
@@ -519,9 +521,29 @@ func serve(stderr io.Writer) int {
 		if r.RemoteAddr == "@" || strings.HasPrefix(r.RemoteAddr, "/") || r.RemoteAddr == "" {
 			data["auth_token"] = authToken
 		}
-		if peerManager != nil && peerManager.HasPeers() {
-			data["peers"] = peerManager.PeerStatus()
+		if peers := appendOfflinePeers(peerManager, tsDiscovery); len(peers) > 0 {
+			data["peers"] = peers
 		}
+
+		// Session summary.
+		all := sessions.List()
+		var localAlive, remoteAlive, dead int
+		for _, s := range all {
+			switch {
+			case !s.Alive:
+				dead++
+			case s.Peer == "":
+				localAlive++
+			default:
+				remoteAlive++
+			}
+		}
+		data["sessions"] = map[string]int{
+			"local_alive":  localAlive,
+			"remote_alive": remoteAlive,
+			"dead":         dead,
+		}
+
 		writeJSON(w, map[string]any{"ok": true, "data": data})
 	})
 
@@ -541,11 +563,8 @@ func serve(stderr io.Writer) int {
 	// ── Peers ──
 
 	mux.HandleFunc("GET /v1/peers", func(w http.ResponseWriter, r *http.Request) {
-		if peerManager == nil || !peerManager.HasPeers() {
-			writeJSON(w, map[string]any{"ok": true, "data": []any{}})
-			return
-		}
-		writeJSON(w, map[string]any{"ok": true, "data": peerManager.PeerStatus()})
+		peers := appendOfflinePeers(peerManager, tsDiscovery)
+		writeJSON(w, map[string]any{"ok": true, "data": peers})
 	})
 
 	// ── Config ──
@@ -1342,8 +1361,9 @@ func serve(stderr io.Writer) int {
 
 	// ── Peer connections (hub protocol) ──
 
-	if len(cfg.Peers) > 0 || cfg.Discovery.Devcontainers {
-		peerManager = peering.NewManager(cfg.Peers, sessions)
+	hostname, _ := os.Hostname()
+	if len(cfg.Peers) > 0 || cfg.Discovery.Devcontainers || (cfg.Tailscale.Enabled && cfg.Discovery.Tailscale) {
+		peerManager = peering.NewManager(cfg.Peers, sessions, hostname)
 		peerManager.Start()
 		if len(cfg.Peers) > 0 {
 			log.Printf("peering: %d peer(s) configured", len(cfg.Peers))
@@ -1363,6 +1383,11 @@ func serve(stderr io.Writer) int {
 		}
 	}
 
+	// Signal channel: declared here so the tailscale discovery goroutine
+	// can select on it to avoid blocking shutdown.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
 	// ── Optional tailscale listener ──
 
 	if cfg.Tailscale.Enabled {
@@ -1371,17 +1396,43 @@ func serve(stderr io.Writer) int {
 			Allow:    cfg.Tailscale.Allow,
 		}, stateDir, mux)
 		defer tsListener.Shutdown()
+
+		// Start tailscale peer discovery once the listener is ready.
+		if cfg.Discovery.Tailscale && peerManager != nil {
+			tsDiscovery = tsdiscovery.New(tsdiscovery.Config{
+				Manager:        peerManager,
+				StateDir:       stateDir,
+				ManualPeerURLs: tsdiscovery.ManualPeerURLs(cfg.Peers),
+				HostnamePrefix: cfg.Tailscale.Hostname,
+			})
+			tsDiscoveryCtx, tsDiscoveryCancel := context.WithCancel(context.Background())
+			defer tsDiscoveryCancel()
+			go func() {
+				select {
+				case <-tsListener.Ready():
+				case <-tsDiscoveryCtx.Done():
+					return
+				}
+				tsDiscovery.SetTailscale(
+					tsListener.LocalClient(),
+					tsListener.Transport(),
+					tsListener.FQDN(),
+				)
+				tsDiscovery.Start()
+			}()
+		}
 	}
 
 	// ── Signal handling for graceful shutdown ──
 
 	log.Printf("gmuxd %s ready", version)
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	log.Printf("received %v — shutting down", sig)
 
+	if tsDiscovery != nil {
+		tsDiscovery.Stop()
+	}
 	if dcWatcher != nil {
 		dcWatcher.Stop()
 	}
@@ -1419,6 +1470,18 @@ func runStatus(stdout, stderr io.Writer) int {
 			Listen          string `json:"listen"`
 			TailscaleURL    string `json:"tailscale_url,omitempty"`
 			UpdateAvailable string `json:"update_available,omitempty"`
+			Sessions        *struct {
+				LocalAlive  int `json:"local_alive"`
+				RemoteAlive int `json:"remote_alive"`
+				Dead        int `json:"dead"`
+			} `json:"sessions,omitempty"`
+			Peers []struct {
+				Name         string `json:"name"`
+				URL          string `json:"url"`
+				Status       string `json:"status"`
+				SessionCount int    `json:"session_count"`
+				LastError    string `json:"last_error,omitempty"`
+			} `json:"peers,omitempty"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil || !health.OK {
@@ -1426,16 +1489,91 @@ func runStatus(stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	_, _ = fmt.Fprintf(stdout, "gmuxd %s (%s)\n", health.Data.Version, health.Data.Status)
-	_, _ = fmt.Fprintf(stdout, "  tcp:    %s\n", health.Data.Listen)
+	d := health.Data
+	_, _ = fmt.Fprintf(stdout, "gmuxd %s (%s)\n", d.Version, d.Status)
+	_, _ = fmt.Fprintf(stdout, "  tcp:    %s\n", d.Listen)
 	_, _ = fmt.Fprintf(stdout, "  socket: %s\n", sock)
-	if health.Data.TailscaleURL != "" {
-		_, _ = fmt.Fprintf(stdout, "  remote: %s\n", health.Data.TailscaleURL)
+	if d.TailscaleURL != "" {
+		_, _ = fmt.Fprintf(stdout, "  remote: %s\n", d.TailscaleURL)
 	}
-	if health.Data.UpdateAvailable != "" {
-		_, _ = fmt.Fprintf(stdout, "  update: %s available\n", health.Data.UpdateAvailable)
+	if d.UpdateAvailable != "" {
+		_, _ = fmt.Fprintf(stdout, "  update: %s available\n", d.UpdateAvailable)
 	}
+
+	// Sessions.
+	if s := d.Sessions; s != nil {
+		total := s.LocalAlive + s.RemoteAlive + s.Dead
+		_, _ = fmt.Fprintf(stdout, "\nSessions: %d alive", s.LocalAlive+s.RemoteAlive)
+		if s.RemoteAlive > 0 {
+			_, _ = fmt.Fprintf(stdout, " (%d local, %d remote)", s.LocalAlive, s.RemoteAlive)
+		}
+		_, _ = fmt.Fprintf(stdout, ", %d dead (%d total)\n", s.Dead, total)
+	}
+
+	// Peers.
+	if len(d.Peers) > 0 {
+		_, _ = fmt.Fprintf(stdout, "\nPeers:\n")
+		for _, p := range d.Peers {
+			var detail string
+			switch p.Status {
+			case "connected":
+				detail = fmt.Sprintf("%d session%s", p.SessionCount, plural(p.SessionCount))
+			case "connecting":
+				detail = "connecting..."
+			case "offline":
+				detail = "offline"
+			default:
+				if p.LastError != "" {
+					detail = p.LastError
+				} else {
+					detail = "disconnected"
+				}
+			}
+			_, _ = fmt.Fprintf(stdout, "  %s %s (%s)\n", statusDot(p.Status), p.Name, detail)
+			_, _ = fmt.Fprintf(stdout, "    %s\n", p.URL)
+		}
+	}
+
 	return 0
+}
+
+// appendOfflinePeers merges active peers from the manager with offline
+// discovered peers from tailscale discovery. Returns nil if no peers.
+func appendOfflinePeers(mgr *peering.Manager, disc *tsdiscovery.Watcher) []peering.PeerInfo {
+	var peers []peering.PeerInfo
+	if mgr != nil && mgr.HasPeers() {
+		peers = mgr.PeerStatus()
+	}
+	if disc != nil {
+		for _, op := range disc.OfflinePeers() {
+			peers = append(peers, peering.PeerInfo{
+				Name:   op.Name,
+				URL:    "https://" + op.FQDN,
+				Status: "offline",
+			})
+		}
+	}
+	return peers
+}
+
+func statusDot(status string) string {
+	switch status {
+	case "connected":
+		return "\u2022" // bullet
+	case "connecting":
+		return "\u25cb" // open circle
+	case "offline":
+		return "\u25cb" // open circle
+	default:
+		return "\u2717" // X mark
+	}
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // runAuth queries the running daemon for the TCP address and auth token.

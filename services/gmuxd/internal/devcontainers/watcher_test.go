@@ -79,7 +79,7 @@ func (c *callbackDocker) events(_ context.Context) (<-chan struct{}, error) {
 
 func setupManager(t *testing.T) *peering.Manager {
 	t.Helper()
-	mgr := peering.NewManager(nil, store.New())
+	mgr := peering.NewManager(nil, store.New(), "test-host")
 	mgr.Start()
 	t.Cleanup(mgr.Stop)
 	return mgr
@@ -386,7 +386,7 @@ func TestScan_DoesNotConflictWithManualPeer(t *testing.T) {
 	st := store.New()
 	mgr := peering.NewManager([]config.PeerConfig{
 		{Name: "server", URL: "http://10.0.0.5:8790", Token: "manual-tok"},
-	}, st)
+	}, st, "test-host")
 	mgr.Start()
 	t.Cleanup(mgr.Stop)
 

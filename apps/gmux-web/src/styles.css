@@ -1456,6 +1456,13 @@ body {
 .home-host-status.disconnected {
   background: var(--status-disconnected);
 }
+.home-host-status.offline {
+  background: var(--text-muted);
+}
+
+.home-host-card:has(.home-host-status.offline) {
+  opacity: 0.5;
+}
 
 .home-host-details {
   display: flex;

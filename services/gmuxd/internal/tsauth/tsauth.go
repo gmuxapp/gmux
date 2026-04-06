@@ -51,10 +51,11 @@ type DiagStatus struct {
 
 // Listener manages a tsnet server and its HTTPS listener.
 type Listener struct {
-	srv  *tsnet.Server
-	lc   *tailscale.LocalClient
-	cfg  Config
-	fqdn string // resolved tailnet FQDN, set once ready
+	srv   *tsnet.Server
+	lc    *tailscale.LocalClient
+	cfg   Config
+	fqdn  string         // resolved tailnet FQDN, set once ready
+	ready chan struct{}   // closed when the listener is fully connected
 }
 
 // FQDN returns the full tailnet DNS name (e.g. "gmuxd.angler-map.ts.net")
@@ -98,12 +99,29 @@ func Start(cfg Config, stateDir string, handler http.Handler) *Listener {
 	}
 
 	l := &Listener{
-		srv: srv,
-		cfg: cfg,
+		srv:   srv,
+		cfg:   cfg,
+		ready: make(chan struct{}),
 	}
 
 	go l.run(handler)
 	return l
+}
+
+// Ready returns a channel that is closed once the tailscale listener is
+// fully connected and serving. Callers that depend on LocalClient or
+// FQDN should select on this before proceeding.
+func (l *Listener) Ready() <-chan struct{} { return l.ready }
+
+// LocalClient returns the tailscale LocalClient for API calls such as
+// Status(). Only valid after Ready() is closed.
+func (l *Listener) LocalClient() *tailscale.LocalClient { return l.lc }
+
+// Transport returns an http.RoundTripper that routes through the tsnet
+// server's WireGuard tunnel. Use this for HTTP clients that need to
+// reach other tailnet devices.
+func (l *Listener) Transport() http.RoundTripper {
+	return &http.Transport{DialContext: l.srv.Dial}
 }
 
 // run does the blocking tailscale startup in a background goroutine.
@@ -145,6 +163,7 @@ func (l *Listener) run(handler http.Handler) {
 		}
 	}
 	l.fqdn = fqdn
+	close(l.ready)
 	log.Printf("tsauth: connected")
 
 	authed := l.authMiddleware(handler)

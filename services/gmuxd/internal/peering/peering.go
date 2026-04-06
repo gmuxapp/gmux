@@ -9,7 +9,22 @@
 // to the owning spoke.
 package peering
 
-import "strings"
+import (
+	"net/http"
+	"strings"
+)
+
+// PeerOption configures a Peer at creation time.
+type PeerOption func(*Peer)
+
+// WithTransport sets a custom HTTP transport for all peer connections.
+// Used for tailscale-discovered peers that route through tsnet.
+func WithTransport(rt http.RoundTripper) PeerOption {
+	return func(p *Peer) {
+		p.transport = rt
+		p.client = &http.Client{Transport: rt}
+	}
+}
 
 // Status describes the connection state of a peer.
 type Status int
