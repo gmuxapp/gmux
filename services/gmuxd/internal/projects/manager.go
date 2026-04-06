@@ -135,6 +135,78 @@ func (m *Manager) AutoAssignAllAlive(sessions []SessionInfo) {
 	}
 }
 
+// EnsureProjectForSession creates a project for a session that doesn't match
+// any existing project. Used when a session is explicitly launched (via /v1/launch)
+// and would otherwise be orphaned. Returns the new project slug, or "" if a
+// matching project already exists.
+func (m *Manager) EnsureProjectForSession(info SessionInfo) string {
+	var created string
+	err := m.Update(func(state *State) bool {
+		key := SessionKey(info.ID, info.ResumeKey)
+
+		// Already assigned?
+		if state.FindSessionProject(key) != "" {
+			return false
+		}
+
+		// Already matches a project?
+		if state.Match(info.Cwd, info.WorkspaceRoot, info.Remotes) != nil {
+			return false
+		}
+
+		// Derive project metadata from the session.
+		// Prefer the "origin" remote; fall back to any other.
+		var remote string
+		if url, ok := info.Remotes["origin"]; ok {
+			remote = NormalizeRemote(url)
+		} else {
+			for _, url := range info.Remotes {
+				remote = NormalizeRemote(url)
+				break
+			}
+		}
+
+		path := info.WorkspaceRoot
+		if path == "" {
+			path = info.Cwd
+		}
+		if path == "" {
+			return false
+		}
+
+		var slug string
+		if remote != "" {
+			slug = SlugFromRemote(remote)
+		} else {
+			slug = SlugFromPath(path)
+		}
+		slug = UniqueSlug(slug, state.Items)
+
+		item := Item{
+			Slug:     slug,
+			Remote:   remote,
+			Paths:    []string{NormalizePath(path)},
+			Sessions: []string{key},
+		}
+		state.Items = append(state.Items, item)
+
+		if err := state.Validate(); err != nil {
+			log.Printf("projects: auto-create validation error: %v", err)
+			// Roll back the append.
+			state.Items = state.Items[:len(state.Items)-1]
+			return false
+		}
+
+		created = slug
+		log.Printf("projects: auto-created project %q for session %s (path=%s)", slug, info.ID, path)
+		return true
+	})
+	if err != nil {
+		log.Printf("projects: auto-create error: %v", err)
+	}
+	return created
+}
+
 // CleanupSessions removes orphaned entries from all project session arrays.
 // An entry is orphaned if its key doesn't appear in the known set. Call this
 // after the initial session scan so the store has the full picture.

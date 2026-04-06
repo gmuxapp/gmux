@@ -897,3 +897,92 @@ func TestManagerAutoAssignAllAlive(t *testing.T) {
 		t.Errorf("yapp sessions: expected [s2], got %v", state.Items[1].Sessions)
 	}
 }
+
+func TestEnsureProjectForSession(t *testing.T) {
+	t.Run("skips sessions that match existing project", func(t *testing.T) {
+		dir := t.TempDir()
+		mgr := NewManager(dir)
+		mgr.Update(func(s *State) bool {
+			s.Items = []Item{{Slug: "gmux", Paths: []string{"/dev/gmux"}}}
+			return true
+		})
+
+		slug := mgr.EnsureProjectForSession(SessionInfo{
+			ID: "s1", Cwd: "/dev/gmux/src", Alive: true,
+		})
+		if slug != "" {
+			t.Errorf("expected no creation for matching session, got %q", slug)
+		}
+	})
+
+	t.Run("creates project from remote and workspace_root", func(t *testing.T) {
+		dir := t.TempDir()
+		mgr := NewManager(dir)
+
+		slug := mgr.EnsureProjectForSession(SessionInfo{
+			ID: "s1", Cwd: "/home/mg", WorkspaceRoot: "/home/mg/dev/myapp",
+			Remotes: map[string]string{"origin": "github.com/me/myapp.git"}, Alive: true,
+		})
+		if slug != "myapp" {
+			t.Fatalf("expected slug 'myapp', got %q", slug)
+		}
+
+		state, _ := mgr.Load()
+		item := state.Items[0]
+		if item.Remote != "github.com/me/myapp" {
+			t.Errorf("remote: got %q", item.Remote)
+		}
+		if item.Paths[0] != "/home/mg/dev/myapp" {
+			t.Errorf("path: got %q", item.Paths[0])
+		}
+		if len(item.Sessions) != 1 || item.Sessions[0] != "s1" {
+			t.Errorf("sessions: got %v", item.Sessions)
+		}
+	})
+
+	t.Run("prefers origin remote for slug", func(t *testing.T) {
+		dir := t.TempDir()
+		mgr := NewManager(dir)
+
+		slug := mgr.EnsureProjectForSession(SessionInfo{
+			ID: "s1", Cwd: "/dev/x",
+			Remotes: map[string]string{
+				"upstream": "github.com/other/upstream-name.git",
+				"origin":   "github.com/me/my-fork.git",
+			}, Alive: true,
+		})
+		if slug != "my-fork" {
+			t.Errorf("expected 'my-fork', got %q", slug)
+		}
+	})
+
+	t.Run("second session in same dir reuses project", func(t *testing.T) {
+		dir := t.TempDir()
+		mgr := NewManager(dir)
+
+		mgr.EnsureProjectForSession(SessionInfo{
+			ID: "s1", Cwd: "/home/mg", Alive: true,
+		})
+		slug := mgr.EnsureProjectForSession(SessionInfo{
+			ID: "s2", Cwd: "/home/mg", Alive: true,
+		})
+		if slug != "" {
+			t.Errorf("expected no creation (Match hits existing), got %q", slug)
+		}
+	})
+
+	t.Run("duplicate slug gets suffixed", func(t *testing.T) {
+		dir := t.TempDir()
+		mgr := NewManager(dir)
+
+		mgr.EnsureProjectForSession(SessionInfo{
+			ID: "s1", Cwd: "/a/myapp", Alive: true,
+		})
+		slug := mgr.EnsureProjectForSession(SessionInfo{
+			ID: "s2", Cwd: "/b/myapp", Alive: true,
+		})
+		if slug != "myapp-2" {
+			t.Errorf("expected 'myapp-2', got %q", slug)
+		}
+	})
+}

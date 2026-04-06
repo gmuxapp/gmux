@@ -45,6 +45,51 @@ import (
 // version is set at build time via -ldflags "-X main.version=..."
 var version = "dev"
 
+// recentLaunches tracks sessions started via /v1/launch so we can
+// auto-create projects for them if they don't match an existing one.
+// Entries expire after 30 seconds.
+type launchTracker struct {
+	mu    sync.Mutex
+	peers map[string]time.Time // peer name → launch time
+	local []time.Time          // local launch timestamps
+}
+
+func (lt *launchTracker) recordLocal()          { lt.mu.Lock(); lt.local = append(lt.local, time.Now()); lt.mu.Unlock() }
+func (lt *launchTracker) recordPeer(peer string) { lt.mu.Lock(); lt.peers[peer] = time.Now(); lt.mu.Unlock() }
+
+// claimLocal returns true if a local launch was recorded within the last 30s.
+func (lt *launchTracker) claimLocal() bool {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+	now := time.Now()
+	// Prune expired, claim newest valid.
+	valid := lt.local[:0]
+	claimed := false
+	for _, t := range lt.local {
+		if now.Sub(t) >= 30*time.Second {
+			continue // expired
+		}
+		if !claimed {
+			claimed = true // consume one
+			continue
+		}
+		valid = append(valid, t)
+	}
+	lt.local = valid
+	return claimed
+}
+
+// claimPeer returns true if a launch on the given peer was recorded within the last 30s.
+func (lt *launchTracker) claimPeer(peer string) bool {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+	if t, ok := lt.peers[peer]; ok && time.Since(t) < 30*time.Second {
+		delete(lt.peers, peer)
+		return true
+	}
+	return false
+}
+
 type LaunchConfig struct {
 	DefaultLauncher string             `json:"default_launcher"`
 	Launchers       []adapter.Launcher `json:"launchers"`
@@ -463,6 +508,9 @@ func serve(stderr io.Writer) int {
 	}
 	go scanner.Run(30*time.Second, stopScanner)
 
+	// Track recently launched sessions for project auto-creation.
+	launches := &launchTracker{peers: make(map[string]time.Time)}
+
 	// Auto-assign sessions to projects when they appear or get a ResumeKey.
 	sessionEvents, unsubSessionEvents := sessions.Subscribe()
 	defer unsubSessionEvents()
@@ -478,14 +526,27 @@ func serve(stderr io.Writer) int {
 			if !s.Alive {
 				continue
 			}
-			projectMgr.AutoAssignSession(projects.SessionInfo{
+			info := projects.SessionInfo{
 				ID:            s.ID,
 				Cwd:           s.Cwd,
 				WorkspaceRoot: s.WorkspaceRoot,
 				Remotes:       s.Remotes,
 				Alive:         s.Alive,
 				ResumeKey:     s.ResumeKey,
-			})
+			}
+			if slug := projectMgr.AutoAssignSession(info); slug != "" {
+				continue
+			}
+			// No project matched. If this was an explicit launch, auto-create.
+			if s.Peer == "" {
+				if launches.claimLocal() {
+					projectMgr.EnsureProjectForSession(info)
+				}
+			} else {
+				if launches.claimPeer(s.Peer) {
+					projectMgr.EnsureProjectForSession(info)
+				}
+			}
 		}
 	}()
 
@@ -806,6 +867,10 @@ func serve(stderr io.Writer) int {
 				return
 			}
 			if peer := peerManager.GetPeer(req.Peer); peer != nil {
+				// Record before forwarding: the peer's SSE event may arrive
+				// before ForwardLaunch returns. 30s TTL limits false matches
+				// if the forward fails.
+				launches.recordPeer(req.Peer)
 				r.Body = io.NopCloser(bytes.NewReader(body))
 				peer.ForwardLaunch(w, r)
 				return
@@ -857,6 +922,7 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
+		launches.recordLocal()
 		log.Printf("launch: started gmux pid=%d cwd=%s cmd=%v", pid, cwd, req.Command)
 		writeJSON(w, map[string]any{
 			"ok":   true,
