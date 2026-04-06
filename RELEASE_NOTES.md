@@ -1,18 +1,41 @@
-- **Fixed dev instances unable to connect to their backend.** The `gmux` CLI
-  now reads `GMUXD_PORT` directly (same env var as `gmuxd`), so a single
-  export is sufficient for both binaries. The redundant `GMUXD_ADDR` env var
-  has been removed.
+Prefix any command with `gmux` and it shows up in a live browser dashboard. Watch what every agent is doing, steer them from your phone, and aggregate sessions from every machine, container, and VM into one place.
 
-- **Dev instances now isolate pi session storage.** The pi adapter respects
-  `PI_CODING_AGENT_DIR`, and the dev scripts export it to an instance-specific
-  directory. Sessions launched from a dev instance no longer appear in (or
-  pollute) your real pi session history. ([#39](https://github.com/gmuxapp/gmux/pull/39))
-- **Nested gmux detection.** Running `gmux <command>` inside an existing gmux
-  session no longer creates a PTY-within-PTY nest. Instead, the session is
-  launched in the background and appears in the gmux UI automatically. ([#37](https://github.com/gmuxapp/gmux/pull/37))
-- **User-configurable terminal settings.** Two new config files in `~/.config/gmux/` let you customize the terminal without rebuilding:
-  - `theme.jsonc`: terminal color palette. Drop in a [Windows Terminal theme](https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/windowsterminal) and it works out of the box.
-  - `settings.jsonc`: terminal options (font, cursor, scrollback), keybinds, and other frontend preferences. Remap keys the browser steals (Ctrl+T, Ctrl+N, Ctrl+W) to PTY sequences via `sendKeys`, send raw text with `sendText`, or disable built-in bindings with `"none"`.
-- **Config file renamed.** `config.toml` is now `host.toml` to better reflect its purpose (daemon/host behavior).
-- **Platform-aware default keybinds.** On Linux, Ctrl+Alt+T/N/W send Ctrl+T/N/W (workaround for browser-stolen shortcuts). On Mac, Cmd+Left/Right send Home/End, Cmd+Backspace deletes to start of line, and Cmd+K clears the screen, matching iTerm2 conventions.
-- **No restart required.** Config files are read from disk on each page load, so edit and refresh. ([#35](https://github.com/gmuxapp/gmux/pull/35))
+This release stabilizes the core and adds multi-machine support.
+
+## Multi-machine sessions
+
+gmux now aggregates sessions across machines. Pick one gmuxd as your dashboard (the hub), and it connects outward to other instances (spokes) to merge their sessions into a single UI.
+
+- **Tailscale auto-discovery.** Enable Tailscale on two machines and they find each other automatically. No manual peer configuration, no token exchange.
+- **Devcontainer auto-discovery.** Add the [gmux devcontainer Feature](https://github.com/gmuxapp/features) to any container and gmuxd discovers it via Docker events.
+- **Manual peers.** For machines not on the same tailnet, configure `[[peers]]` in `host.toml` with a URL and token.
+- **Transparent proxying.** Terminal I/O, kill, resume, dismiss, and launch all forward through the hub.
+
+## CLI lifecycle
+
+- `gmuxd start` backgrounds, logs to `~/.local/state/gmux/gmuxd.log`, waits for health, prints PID.
+- `gmuxd run` runs in the foreground for systemd, Docker, or debugging.
+- `gmuxd status` shows session counts, per-peer connection state with error reasons, and the Tailscale URL.
+
+## Terminal and configuration
+
+- **Three config files.** `host.toml` (daemon), `settings.jsonc` (terminal/keybinds), `theme.jsonc` (colors, Windows Terminal compatible). All optional.
+- **Platform-aware keybinds.** Linux: Ctrl+Alt+T/N/W. Mac: Cmd+Left/Right, Cmd+Backspace, Cmd+K.
+- **Session replay** with a virtual terminal emulator. TUI state preserved exactly on reconnect.
+- **OSC 52 clipboard.** Terminal apps that write to the clipboard now work in the browser.
+
+## Security
+
+- Unix socket for local IPC. Token auth always required on TCP.
+- Tailscale identity verification via WhoIs. Strict config validation.
+
+## Breaking changes from v0.x
+
+- `config.toml` → `host.toml`. The `[network]` section is removed; use `GMUXD_LISTEN`.
+- `keybinds.jsonc` → `"keybinds"` array inside `settings.jsonc`.
+- `gmuxd` (bare) prints help. Use `gmuxd start` or `gmuxd run`.
+- All TCP connections require a bearer token.
+
+---
+
+Full changelog: https://gmux.app/changelog/
