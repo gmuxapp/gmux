@@ -1230,8 +1230,6 @@ render(
   <LocationProvider>
     <Router>
       <Route path="/_/input-diagnostics" component={InputDiagnostics} />
-      <Route path="/" component={App} />
-      {/* Catch-all: render App for any unmatched path (e.g. /session/:id in the future) */}
       <Route default component={App} />
     </Router>
   </LocationProvider>,
