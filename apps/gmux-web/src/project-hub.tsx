@@ -13,11 +13,11 @@ interface ProjectHubProps {
   sessions: Session[]
   projects: ProjectItem[]
   peers: PeerInfo[]
-  onSelectSession: (id: string) => void
+  onResume: (id: string) => void
   onCloseSession: (session: Session) => void
 }
 
-export function ProjectHub({ projectSlug, sessions, projects, peers, onSelectSession, onCloseSession }: ProjectHubProps) {
+export function ProjectHub({ projectSlug, sessions, projects, peers, onResume, onCloseSession }: ProjectHubProps) {
   const project = projects.find(p => p.slug === projectSlug)
   const hosts = buildProjectTopology(projectSlug, sessions, projects, peers)
 
@@ -48,7 +48,7 @@ export function ProjectHub({ projectSlug, sessions, projects, peers, onSelectSes
               key={host.path.join('\0') || '(local)'}
               host={host}
               projectSlug={projectSlug}
-              onSelectSession={onSelectSession}
+              onResume={onResume}
               onCloseSession={onCloseSession}
             />
           ))}
@@ -72,8 +72,8 @@ function EmptyProject({ projectSlug, project }: { projectSlug: string; project: 
 }
 
 function HostSection({
-  host, projectSlug, onSelectSession, onCloseSession,
-}: { host: HostNode; projectSlug: string; onSelectSession: (id: string) => void; onCloseSession: (session: Session) => void }) {
+  host, projectSlug, onResume, onCloseSession,
+}: { host: HostNode; projectSlug: string; onResume: (id: string) => void; onCloseSession: (session: Session) => void }) {
   const sessionCount = host.folders.reduce((n, f) => n + f.sessions.length, 0)
   const folderCount = host.folders.length
   const countText = folderCount > 1
@@ -107,7 +107,7 @@ function HostSection({
                   key={s.id}
                   session={s}
                   projectSlug={projectSlug}
-                  onSelect={onSelectSession}
+                  onResume={onResume}
                   onClose={() => onCloseSession(s)}
                 />
               ))}
@@ -152,9 +152,10 @@ function HostPath({ path }: { path: string[] }) {
 }
 
 function SessionCard({
-  session, projectSlug, onSelect, onClose,
-}: { session: Session; projectSlug: string; onSelect: (id: string) => void; onClose: () => void }) {
+  session, projectSlug, onResume, onClose,
+}: { session: Session; projectSlug: string; onResume: (id: string) => void; onClose: () => void }) {
   const dotClass = session.alive ? '' : 'dead'
+  const sleeping = !session.alive && session.resumable
   // Mirror the sidebar: title is the primary label. Fall back to kind for
   // sessions that haven't reported a title yet.
   const name = session.title || session.kind
@@ -164,9 +165,11 @@ function SessionCard({
       class="session-card"
       href={href}
       onClick={(e) => {
-        // Intercept so we use the in-app select path instead of full nav.
-        e.preventDefault()
-        onSelect(session.id)
+        if (sleeping) {
+          e.preventDefault()
+          onResume(session.id)
+        }
+        // Alive sessions: let click propagate to preact-iso for client-side nav.
       }}
     >
       <span class={`session-card-dot ${dotClass}`} />

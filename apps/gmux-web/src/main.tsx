@@ -153,20 +153,25 @@ function sessionDotState(session: Session, isActive?: boolean, isFading?: boolea
 
 function SessionItem({
   session,
+  href,
   selected,
   resuming,
   isActive,
   isFading,
-  onClick,
+  onResume,
   onClose,
+  onClick,
 }: {
   session: Session
+  href: string
   selected: boolean
   resuming?: boolean
   isActive?: boolean
   isFading?: boolean
-  onClick: () => void
+  onResume?: (id: string) => void
   onClose?: () => void
+  /** Extra side-effects on click (e.g. close mobile sidebar). */
+  onClick?: () => void
 }) {
   const rawDotState = resuming ? 'working' : sessionDotState(session, isActive, isFading)
   // Nothing is "unread" if you're already looking at it.
@@ -175,9 +180,20 @@ function SessionItem({
   const sleeping = !session.alive && session.resumable
 
   return (
-    <div
+    <a
       class={`session-item ${selected ? 'selected' : ''}`}
-      onClick={onClick}
+      href={href}
+      onClick={(e) => {
+        onClick?.()
+        if (sleeping) {
+          // Resumable: don't navigate yet; trigger resume and let the
+          // auto-select effect navigate once the session comes alive.
+          e.preventDefault()
+          onResume?.(session.id)
+        }
+        // Alive sessions: let the click propagate to preact-iso's
+        // document click handler, which does client-side navigation.
+      }}
       onAuxClick={(e) => { if (e.button === 1 && onClose) { e.preventDefault(); onClose() } }}
     >
       {sleeping
@@ -200,13 +216,13 @@ function SessionItem({
       {onClose && (
         <button
           class="session-close-btn"
-          onClick={(e) => { e.stopPropagation(); onClose() }}
+          onClick={(e) => { e.stopPropagation(); e.preventDefault(); onClose() }}
           title={session.alive ? 'Kill session' : 'Dismiss'}
         >
           ×
         </button>
       )}
-    </div>
+    </a>
   )
 }
 
@@ -217,9 +233,9 @@ function FolderGroup({
   resumingId,
   isSessionActive,
   isSessionFading,
-  onSelect,
-  onSelectProject,
+  onResume,
   onCloseSession,
+  onClick,
 }: {
   folder: Folder
   selectedId: string | null
@@ -227,9 +243,10 @@ function FolderGroup({
   resumingId: string | null
   isSessionActive: (id: string) => boolean
   isSessionFading: (id: string) => boolean
-  onSelect: (id: string) => void
-  onSelectProject: (slug: string) => void
+  onResume: (id: string) => void
   onCloseSession: (session: Session) => void
+  /** Extra side-effects on click (e.g. close mobile sidebar). */
+  onClick?: () => void
 }) {
   // Show alive sessions + resumable sessions that died on their own.
   // Non-resumable dead sessions are filtered out.
@@ -239,13 +256,14 @@ function FolderGroup({
   return (
     <div class="folder">
       <div class="folder-header">
-        <button
+        <a
           class={`folder-name${isCurrent ? ' current' : ''}`}
-          onClick={() => onSelectProject(folder.path)}
+          href={`/${folder.path}`}
           title={`Open ${folder.name} hub`}
+          onClick={onClick}
         >
           {folder.name}
-        </button>
+        </a>
         <LaunchButton cwd={folder.sessions[0]?.cwd ?? folder.launchCwd} className="folder-launch-btn" />
       </div>
       <div class="folder-sessions">
@@ -253,12 +271,14 @@ function FolderGroup({
           <SessionItem
             key={s.id}
             session={s}
+            href={sessionPath(folder.path, s)}
             selected={selectedId === s.id}
             resuming={resumingId === s.id}
             isActive={isSessionActive(s.id)}
             isFading={isSessionFading(s.id)}
-            onClick={() => onSelect(s.id)}
+            onResume={onResume}
             onClose={() => onCloseSession(s)}
+            onClick={onClick}
           />
         ))}
       </div>
@@ -274,9 +294,7 @@ function Sidebar({
   resumingId,
   isSessionActive,
   isSessionFading,
-  onSelect,
-  onSelectProject,
-  onGoHome,
+  onResume,
   onCloseSession,
   onManageProjects,
   open,
@@ -292,9 +310,7 @@ function Sidebar({
   resumingId: string | null
   isSessionActive: (id: string) => boolean
   isSessionFading: (id: string) => boolean
-  onSelect: (id: string) => void
-  onSelectProject: (slug: string) => void
-  onGoHome: () => void
+  onResume: (id: string) => void
   onCloseSession: (session: Session) => void
   onManageProjects: () => void
   open: boolean
@@ -310,12 +326,11 @@ function Sidebar({
       <div class={`sidebar-overlay ${open ? 'visible' : ''}`} onClick={onClose} />
       <aside class={`sidebar ${open ? 'open' : ''}`}>
         <div class="sidebar-header">
-          <button
-            type="button"
+          <a
             class="sidebar-logo"
-            title="Home"
-            onClick={() => { onGoHome(); onClose() }}
-          >gmux</button>
+            href="/"
+            onClick={onClose}
+          >gmux</a>
           {health?.version ? (
             <a
               class={`sidebar-badge${health.update_available ? ' sidebar-badge-update' : ''}`}
@@ -342,15 +357,9 @@ function Sidebar({
               resumingId={resumingId}
               isSessionActive={isSessionActive}
               isSessionFading={isSessionFading}
-              onSelect={(id) => {
-                onSelect(id)
-                onClose()
-              }}
-              onSelectProject={(slug) => {
-                onSelectProject(slug)
-                onClose()
-              }}
+              onResume={onResume}
               onCloseSession={onCloseSession}
+              onClick={onClose}
             />
           )) : (
             <div class="sidebar-empty">
@@ -933,27 +942,24 @@ function App() {
     dismissSession(session.id)
   }, [])
 
-  const handleSelect = useCallback((id: string) => {
-    const sess = sessions.find(s => s.id === id)
-    if (!sess) return
-    if (sess.resumable) {
-      // Resume: show spinner, send request, wait for SSE to make it alive.
-      setResumingId(id)
-      resumeSession(id).catch(err => {
-        console.error('resume failed:', err)
-        setResumingId(prev => prev === id ? null : prev)
-      })
-      return
-    }
-    setResumingId(null) // cancel any pending resume auto-select
-    const project = matchSession(sess, sidebarState.configured)
-    if (project) loc.route(sessionPath(project.slug, sess))
+  // Resume a sleeping session. Navigation happens automatically via the
+  // auto-select effect once the session comes alive.
+  const handleResume = useCallback((id: string) => {
+    setResumingId(id)
+    resumeSession(id).catch(err => {
+      console.error('resume failed:', err)
+      setResumingId(prev => prev === id ? null : prev)
+    })
+  }, [])
+
+  // Clear modifier state and focus the terminal when the selected session changes.
+  useEffect(() => {
+    if (!selectedId) return
+    setResumingId(null)
     setCtrlArmed(false)
     setAltArmed(false)
-    // Focus the terminal so the user can type immediately.
-    // requestAnimationFrame lets React flush the state update first.
     requestAnimationFrame(() => terminalFocusRef.current?.())
-  }, [sessions, loc, sidebarVersion])
+  }, [selectedId])
 
   // When a resumed session comes alive, select it.
   useEffect(() => {
@@ -1133,9 +1139,7 @@ function App() {
         resumingId={resumingId}
         isSessionActive={isSessionActive}
         isSessionFading={isSessionFading}
-        onSelect={handleSelect}
-        onSelectProject={(slug) => loc.route(`/${slug}`)}
-        onGoHome={() => loc.route('/')}
+        onResume={handleResume}
         onCloseSession={handleCloseSession}
         onManageProjects={() => { setSidebarOpen(false); setManageProjectsOpen(true) }}
         open={sidebarOpen}
@@ -1180,7 +1184,7 @@ function App() {
             sessions={sessions}
             projects={sidebarState.configured}
             peers={peers}
-            onSelectSession={handleSelect}
+            onResume={handleResume}
             onCloseSession={handleCloseSession}
           />
         ) : selected && (canAttach || USE_MOCK) && terminalOptions && keybinds ? (
