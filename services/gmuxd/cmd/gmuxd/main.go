@@ -425,6 +425,9 @@ func serve(stderr io.Writer) int {
 			"node_id": "node-local",
 			"status":  "ready",
 		}
+		if h, err := os.Hostname(); err == nil {
+			data["hostname"] = h
+		}
 		if tsListener != nil {
 			diag := tsListener.Diag()
 			if diag.FQDN != "" {

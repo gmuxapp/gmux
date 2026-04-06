@@ -67,6 +67,7 @@ async function fetchPeers(): Promise<PeerInfo[]> {
 
 export interface HealthData {
   version: string
+  hostname?: string
   tailscale_url?: string
   update_available?: string
 }

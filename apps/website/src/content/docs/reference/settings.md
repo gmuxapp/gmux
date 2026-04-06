@@ -89,14 +89,14 @@ Extra letter spacing in pixels.
 Cursor shape.
 
 - **Type:** `"block"` \| `"underline"` \| `"bar"`
-- **Default:** <code>"block"</code>
+- **Default:** <code>"bar"</code>
 
 ### `cursorBlink`
 
 Whether the cursor blinks.
 
 - **Type:** `boolean`
-- **Default:** `true`
+- **Default:** `false`
 
 ### `cursorInactiveStyle`
 
@@ -150,7 +150,7 @@ Smooth scroll animation duration in milliseconds. 0 disables.
 Whether to render bold text in bright ANSI colors.
 
 - **Type:** `boolean`
-- **Default:** `true`
+- **Default:** `false`
 
 ### `minimumContrastRatio`
 
@@ -162,10 +162,10 @@ Minimum contrast ratio for text. 1 disables contrast adjustment.
 
 ### `macOptionIsMeta`
 
-Treat the macOS Option key as Meta (sends ESC prefix). When false, Option produces special characters.
+Treat the macOS Option key as Meta (sends ESC prefix). When false, Option produces special characters like ñ and ß.
 
 - **Type:** `boolean`
-- **Default:** `false`
+- **Default:** `true`
 
 ### `wordSeparator`
 

@@ -98,7 +98,7 @@ export function resolveSessionFromPath(
  * The top-level thing the app is currently showing. Derived from the URL
  * and drives what the main panel renders.
  *
- *  - `home`: overview / landing (currently empty-state; placeholder for a
+ *  - `home`: overview / landing (host status, projects, quick-launch)
  *    future cross-project home page).
  *  - `project`: the project hub page for a single project.
  *  - `session`: a specific terminal session, by id.

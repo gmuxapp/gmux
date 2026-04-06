@@ -68,7 +68,7 @@ Cursor accent color (text under block cursor).
 
 Selection highlight color.
 
-- **Default:** `#2a3a4acc`
+- **Default:** `#3a506acc`
 
 ### `selectionForeground`
 

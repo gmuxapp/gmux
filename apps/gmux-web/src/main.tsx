@@ -15,8 +15,8 @@ import type { Session, Folder, View } from './types'
 import { ManageProjectsModal } from './manage-projects'
 import { buildProjectFolders, matchSession, resolveViewFromPath, sessionPath, viewToPath } from './types'
 import { ProjectHub } from './project-hub'
-import type { LauncherDef } from './launcher'
-import { LaunchButton, launchSession, consumePendingLaunch } from './launcher'
+import { Home } from './home'
+import { LaunchButton, consumePendingLaunch } from './launcher'
 import { installCopySession } from './mock-data/export-session'
 
 // Lazy-loaded routes (code-split, not bundled with the main app)
@@ -63,69 +63,7 @@ async function restartSession(sessionId: string): Promise<void> {
   await postAction(`/v1/sessions/${sessionId}/restart`)
 }
 
-/** Mask tailnet name for privacy: "https://gmux.angler-map.ts.net" → "https://gmux.an****.ts.net" */
-function maskTailnet(url: string): string {
-  return url.replace(/(\.\w{2})[^.]*(?=\.ts\.net)/, '$1****')
-}
-
 // ── Components ──
-
-function EmptyState({ launchers, health }: { launchers: LauncherDef[]; health: HealthData | null }) {
-  const [launching, setLaunching] = useState<string | null>(null)
-
-  const handleLaunch = (id: string) => {
-    setLaunching(id)
-    launchSession(id).finally(() => setLaunching(null))
-  }
-
-  const tailscaleURL = health?.tailscale_url
-
-  const defaultLauncher = launchers.find(l => l.id === 'shell') ?? launchers[0]
-  const others = launchers.filter(l => l !== defaultLauncher)
-
-  return (
-    <div class="empty-state">
-      <div class="empty-state-center">
-        <div class="empty-state-title">Launch a new session</div>
-        <div class="empty-state-others">
-          <button
-            class={`empty-state-launcher ${launching === defaultLauncher.id ? 'launching' : ''}`}
-            onClick={() => handleLaunch(defaultLauncher.id)}
-            disabled={launching !== null}
-          >
-            {defaultLauncher.id}
-          </button>
-          {others.map(l => (
-            <button
-              key={l.id}
-              class={`empty-state-launcher ${launching === l.id ? 'launching' : ''} ${!l.available ? 'unavailable' : ''}`}
-              onClick={() => handleLaunch(l.id)}
-              disabled={launching !== null || !l.available}
-            >
-              {l.id.toLowerCase()}
-            </button>
-          ))}
-        </div>
-        <div class="empty-state-hint">
-          or <code>gmux {'<command>'}</code> from any terminal
-        </div>
-      </div>
-      <div class="empty-state-bottom">
-        {!tailscaleURL?.includes(location.host) &&<>
-          <span>http://{location.host}</span>
-          {tailscaleURL && <span class="empty-state-dot" />}
-        </>}
-        {tailscaleURL
-          ? <span>{maskTailnet(tailscaleURL)}</span>
-          : <>
-              <span class="empty-state-dot" />
-              <span>run <code>gmuxd remote</code> to enable remote access</span>
-            </>
-        }
-      </div>
-    </div>
-  )
-}
 
 function MainHeader({ session, onRestart }: {
   session: Session | null
@@ -636,7 +574,7 @@ function App() {
       />
 
       <div class="main-panel">
-        {view?.kind !== 'project' && (
+        {view?.kind !== 'project' && view?.kind !== 'home' && (
           <MainHeader
             session={selected}
             onRestart={selected ? () => { restartSession(selected.id).catch(err => console.error('restart failed:', err)) } : undefined}
@@ -689,7 +627,7 @@ function App() {
             <div class="state-subtitle">{selected.alive ? 'Connecting…' : 'Session ended'}</div>
           </div>
         ) : (
-          <EmptyState launchers={launchers} health={health} />
+          <Home health={health} peers={peers} folders={folders} sessions={sessions} launchers={launchers} />
         )}
 
         <MobileTerminalBar

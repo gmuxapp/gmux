@@ -178,7 +178,7 @@ export function LaunchButton({ className, onLaunch, cwd, peer, sessions, selecte
 
   const [state, setState] = useState<'idle' | 'loading' | 'open' | 'launching'>('idle')
   const [config, setConfig] = useState<LaunchConfig | null>(null)
-  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
 
@@ -197,8 +197,8 @@ export function LaunchButton({ className, onLaunch, cwd, peer, sessions, selecte
     // (target line + divider) that we offset so the first adapter stays aligned.
     const targetOffset = showTarget ? 32 : 0
     setMenuPos({
-      top: r.top - 4 - targetOffset,  // 4px = menu padding-top
-      left: r.right - 180,            // 180px = min-width, right-aligned
+      top: r.top - 4 - targetOffset,       // 4px = menu padding-top
+      right: window.innerWidth - r.right,  // align menu's right edge with button's right edge
     })
   }
 
@@ -283,7 +283,7 @@ export function LaunchButton({ className, onLaunch, cwd, peer, sessions, selecte
       {isOpen && menuPos && (
         <div
           class="launch-inline-menu"
-          style={{ top: menuPos.top, left: menuPos.left }}
+          style={{ top: menuPos.top, right: menuPos.right }}
         >
           {showTarget && (
             <>
