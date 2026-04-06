@@ -81,6 +81,43 @@ describe('keyComboToSequence', () => {
     expect(keyComboToSequence('alt+ctrl+a')).toBe('\x1b\x01')
   })
 
+  it('applies ctrl modifier to special keys via CSI parameters', () => {
+    expect(keyComboToSequence('ctrl+up')).toBe('\x1b[1;5A')
+    expect(keyComboToSequence('ctrl+down')).toBe('\x1b[1;5B')
+    expect(keyComboToSequence('ctrl+right')).toBe('\x1b[1;5C')
+    expect(keyComboToSequence('ctrl+left')).toBe('\x1b[1;5D')
+    expect(keyComboToSequence('ctrl+home')).toBe('\x1b[1;5H')
+    expect(keyComboToSequence('ctrl+end')).toBe('\x1b[1;5F')
+    expect(keyComboToSequence('ctrl+delete')).toBe('\x1b[3;5~')
+    expect(keyComboToSequence('ctrl+insert')).toBe('\x1b[2;5~')
+    expect(keyComboToSequence('ctrl+pageup')).toBe('\x1b[5;5~')
+    expect(keyComboToSequence('ctrl+pagedown')).toBe('\x1b[6;5~')
+  })
+
+  it('applies shift modifier to special keys', () => {
+    expect(keyComboToSequence('shift+up')).toBe('\x1b[1;2A')
+    expect(keyComboToSequence('shift+home')).toBe('\x1b[1;2H')
+  })
+
+  it('applies ctrl+shift modifier to special keys', () => {
+    expect(keyComboToSequence('ctrl+shift+right')).toBe('\x1b[1;6C')
+  })
+
+  it('converts ctrl+backspace to BS (\x08)', () => {
+    expect(keyComboToSequence('ctrl+backspace')).toBe('\x08')
+  })
+
+  it('encodes alt in CSI parameter, not as ESC prefix', () => {
+    // alt+up should be \x1b[1;3A, not \x1b\x1b[1;3A (double ESC)
+    expect(keyComboToSequence('alt+up')).toBe('\x1b[1;3A')
+    expect(keyComboToSequence('alt+delete')).toBe('\x1b[3;3~')
+    expect(keyComboToSequence('ctrl+alt+right')).toBe('\x1b[1;7C')
+  })
+
+  it('encodes alt+backspace as ESC prefix + DEL', () => {
+    expect(keyComboToSequence('alt+backspace')).toBe('\x1b\x7f')
+  })
+
   it('returns empty string for unrecognized named keys', () => {
     expect(keyComboToSequence('f1')).toBe('')
   })

@@ -140,11 +140,65 @@ export function parseKeyCombo(combo: string): { ctrl: boolean; shift: boolean; a
 // ── Key combo to escape sequence ──
 
 /**
+ * Compute the xterm modifier parameter for a key combo.
+ * Returns 0 when no modifiers are active (meaning: omit the parameter).
+ * The encoding follows the xterm CSI convention: param = 1 + modifier bits,
+ * where Shift=1, Alt=2, Ctrl=4. (Meta is not used in terminal CSI sequences.)
+ */
+function modifierParam(ctrl: boolean, shift: boolean, alt: boolean): number {
+  const bits = (shift ? 1 : 0) | (alt ? 2 : 0) | (ctrl ? 4 : 0)
+  return bits === 0 ? 0 : 1 + bits
+}
+
+/**
+ * Apply a modifier parameter to a CSI letter sequence (e.g. \x1b[A).
+ * Unmodified: \x1b[A. Modified: \x1b[1;5A (ctrl+up).
+ */
+function modifyCSILetter(letter: string, mod: number): string {
+  if (mod === 0) return `\x1b[${letter}`
+  return `\x1b[1;${mod}${letter}`
+}
+
+/**
+ * Apply a modifier parameter to a CSI tilde sequence (e.g. \x1b[3~).
+ * Unmodified: \x1b[N~. Modified: \x1b[N;5~ (ctrl+delete).
+ */
+function modifyCSITilde(n: number, mod: number): string {
+  if (mod === 0) return `\x1b[${n}~`
+  return `\x1b[${n};${mod}~`
+}
+
+/**
  * Convert a key combo string to the terminal escape sequence it represents.
- * e.g. "ctrl+t" -> "\x14", "ctrl+c" -> "\x03"
+ *
+ * Single letters with ctrl produce traditional ASCII control codes (ctrl+c -> \x03).
+ * Special keys (arrows, home, end, delete, etc.) use standard CSI encoding with
+ * modifier parameters when ctrl, shift, or alt are present:
+ *   ctrl+up    -> \x1b[1;5A
+ *   ctrl+delete -> \x1b[3;5~
+ *   shift+home  -> \x1b[1;2H
  */
 export function keyComboToSequence(combo: string): string {
-  const { ctrl, alt, baseKey } = parseKeyCombo(combo)
+  const { ctrl, shift, alt, baseKey } = parseKeyCombo(combo)
+  const mod = modifierParam(ctrl, shift, alt)
+
+  // CSI-encoded keys: modifiers (including alt) are carried in the CSI
+  // parameter, so no ESC prefix is needed. Return early for these.
+  switch (baseKey) {
+    case 'home':      return modifyCSILetter('H', mod)
+    case 'end':       return modifyCSILetter('F', mod)
+    case 'up':        case 'arrowup':    return modifyCSILetter('A', mod)
+    case 'down':      case 'arrowdown':  return modifyCSILetter('B', mod)
+    case 'right':     case 'arrowright': return modifyCSILetter('C', mod)
+    case 'left':      case 'arrowleft':  return modifyCSILetter('D', mod)
+    case 'delete':    case 'del':        return modifyCSITilde(3, mod)
+    case 'pageup':    case 'page_up':    return modifyCSITilde(5, mod)
+    case 'pagedown':  case 'page_down':  return modifyCSITilde(6, mod)
+    case 'insert':    case 'ins':        return modifyCSITilde(2, mod)
+  }
+
+  // Simple sequences: alt is encoded as an ESC prefix (the traditional
+  // approach for characters, backspace, tab, etc.).
   let seq = ''
 
   if (baseKey.length === 1 && ctrl) {
@@ -159,27 +213,9 @@ export function keyComboToSequence(combo: string): string {
   } else if (baseKey === 'tab') {
     seq = '\t'
   } else if (baseKey === 'backspace') {
-    seq = '\x7f'
-  } else if (baseKey === 'home') {
-    seq = '\x1b[H'
-  } else if (baseKey === 'end') {
-    seq = '\x1b[F'
-  } else if (baseKey === 'delete' || baseKey === 'del') {
-    seq = '\x1b[3~'
-  } else if (baseKey === 'up' || baseKey === 'arrowup') {
-    seq = '\x1b[A'
-  } else if (baseKey === 'down' || baseKey === 'arrowdown') {
-    seq = '\x1b[B'
-  } else if (baseKey === 'right' || baseKey === 'arrowright') {
-    seq = '\x1b[C'
-  } else if (baseKey === 'left' || baseKey === 'arrowleft') {
-    seq = '\x1b[D'
-  } else if (baseKey === 'pageup' || baseKey === 'page_up') {
-    seq = '\x1b[5~'
-  } else if (baseKey === 'pagedown' || baseKey === 'page_down') {
-    seq = '\x1b[6~'
-  } else if (baseKey === 'insert' || baseKey === 'ins') {
-    seq = '\x1b[2~'
+    // Ctrl+Backspace: \x08 (BS), matching gnome-terminal/xterm/alacritty.
+    // Plain backspace: \x7f (DEL).
+    seq = ctrl ? '\x08' : '\x7f'
   } else if (baseKey.length === 1) {
     seq = baseKey
   }
