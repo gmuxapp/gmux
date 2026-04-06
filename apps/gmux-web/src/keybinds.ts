@@ -55,6 +55,11 @@ const LINUX_KEYBINDS: Keybind[] = [
   { key: 'ctrl+alt+t', action: 'sendKeys', args: 'ctrl+t' },
   { key: 'ctrl+alt+n', action: 'sendKeys', args: 'ctrl+n' },
   { key: 'ctrl+alt+w', action: 'sendKeys', args: 'ctrl+w' },
+  // Ctrl+Backspace/Delete: explicitly intercepted so the browser does not
+  // swallow the event on xterm's hidden textarea. Sequences match what
+  // gnome-terminal, xterm, and alacritty send.
+  { key: 'ctrl+backspace', action: 'sendText', args: '\x08' },
+  { key: 'ctrl+delete',    action: 'sendText', args: '\x1b[3;5~' },
 ]
 
 /** macOS defaults. Replicate iTerm2 / macOS Terminal conventions. */
