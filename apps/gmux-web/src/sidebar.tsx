@@ -10,8 +10,8 @@ import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
 import {
   folders, selectedId, currentProjectSlug, health,
-  activityMap, sessions,
-  type HealthData, type DotState,
+  activityMap, unmatchedActiveCount,
+  type DotState,
 } from './store'
 import type { Session, Folder } from './types'
 
@@ -195,9 +195,7 @@ export function Sidebar({
   const selId = selectedId.value
   const curProjectSlug = currentProjectSlug.value
   const healthVal = health.value
-  const unmatchedCount = sessions.value.filter(s => s.alive && !s.peer).length > 0
-    ? 0 // placeholder: actual unmatched count from store
-    : 0
+  const unmatchedCount = unmatchedActiveCount.value
   const am = activityMap.value
 
   const hasProjects = foldersVal.length > 0
@@ -256,6 +254,9 @@ export function Sidebar({
         <div class="sidebar-footer">
           <button class="manage-projects-btn" onClick={onManageProjects}>
             Manage projects
+            {unmatchedCount > 0 && (
+              <span class="manage-projects-badge">{unmatchedCount}</span>
+            )}
           </button>
           {notifPermission === 'default' && (
             <button class="notif-btn" onClick={onRequestNotifPermission}>

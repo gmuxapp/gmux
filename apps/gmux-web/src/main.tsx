@@ -1,5 +1,5 @@
 import { render } from 'preact'
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { LocationProvider, Router, Route, lazy, useLocation } from 'preact-iso'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
@@ -12,18 +12,17 @@ import { usePresence } from './use-presence'
 
 import type { Session } from './types'
 import { ManageProjectsModal } from './manage-projects'
-import { matchSession, sessionPath } from './types'
 import { ProjectHub } from './project-hub'
 import { Home } from './home'
-import { LaunchButton, consumePendingLaunch } from './launcher'
+import { LaunchButton } from './launcher'
 import { installCopySession } from './mock-data/export-session'
 
 import {
   sessions, connState, selected, selectedId, view,
   terminalOptions, keybinds, macCommandIsCtrl,
   backgroundActivity, unreadCount,
-  projects, urlPath,
-  initStore, setNavigate, navigate, navigateToSession,
+  urlPath,
+  initStore, setNavigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
 } from './store'
 
@@ -252,7 +251,9 @@ function App() {
   }, [loc])
 
   // Sync preact-iso's URL to the store signal on every navigation.
-  useEffect(() => {
+  // useLayoutEffect ensures urlPath updates before paint, so the view
+  // computed reacts before the browser renders a stale frame.
+  useLayoutEffect(() => {
     urlPath.value = loc.path
   }, [loc.path])
 

@@ -49,7 +49,9 @@ export const keybinds = signal<ResolvedKeybind[] | null>(null)
 export const macCommandIsCtrl = signal(false)
 
 /** Current URL path, kept in sync with preact-iso's location. */
-export const urlPath = signal(location.pathname.replace(/\/+$/, '') || '/')
+export const urlPath = signal(
+  typeof location !== 'undefined' ? (location.pathname.replace(/\/+$/, '') || '/') : '/',
+)
 
 /**
  * Activity tracking: which sessions recently produced output.
@@ -105,17 +107,14 @@ export function isSessionFading(id: string): boolean {
   return activityMap.value.get(id) === 'fading'
 }
 
-/**
- * Timestamp signal ticked every 60s so relative timestamps ("5m ago")
- * stay fresh. Components that render timestamps should read this.
- */
-export const now = signal(Date.now())
+
 
 // ── Derived state (computed, auto-cached) ───────────────────────────────────
 
 /** Sessions filtered by URL params (?project=, ?cwd=). */
 export const filteredSessions = computed(() => {
-  const params = new URLSearchParams(location.search)
+  const search = typeof location !== 'undefined' ? location.search : ''
+  const params = new URLSearchParams(search)
   const project = params.get('project')
   const cwdFilter = params.get('cwd')
   if (!project && !cwdFilter) return sessions.value
@@ -373,7 +372,8 @@ export function restartSession(sessionId: string): Promise<void> {
 
 // ── Initialization ──────────────────────────────────────────────────────────
 
-const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
+const USE_MOCK = import.meta.env.VITE_MOCK === '1' ||
+  (typeof location !== 'undefined' && location.search.includes('mock'))
 
 /** Navigation callback: set by App on mount so the store can navigate. */
 let _navigate: ((url: string, replace?: boolean) => void) | null = null
@@ -403,10 +403,6 @@ export function navigateToSession(sessionId: string, replace?: boolean) {
  */
 export function initStore(): () => void {
   const cleanups: (() => void)[] = []
-
-  // Tick `now` every 60s for relative timestamp freshness.
-  const nowTimer = setInterval(() => { now.value = Date.now() }, 60_000)
-  cleanups.push(() => clearInterval(nowTimer))
 
   if (USE_MOCK) {
     const localHost = new URLSearchParams(location.search).get('host')
