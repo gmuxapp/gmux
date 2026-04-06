@@ -181,7 +181,7 @@ const settingsEntries = {
     smoothScrollDuration: clampedNumber(0, 0, 500, 'Smooth scroll animation duration in milliseconds. 0 disables.'),
     drawBoldTextInBrightColors: optBool(false, 'Whether to render bold text in bright ANSI colors.'),
     minimumContrastRatio: clampedNumber(1, 1, 21, 'Minimum contrast ratio for text. 1 disables contrast adjustment.'),
-    macOptionIsMeta:  optBool(false, 'Treat the macOS Option key as Meta (sends ESC prefix). When false, Option produces special characters.'),
+    macOptionIsMeta:  optBool(true, 'Treat the macOS Option key as Meta (sends ESC prefix). When false, Option produces special characters like ñ and ß.'),
     wordSeparator:    optStr(' ()[]{}\',"`:;', 'Characters treated as word boundaries for double-click selection.'),
 
     // Keybinds (validated structurally; semantic validation in keybinds.ts).
