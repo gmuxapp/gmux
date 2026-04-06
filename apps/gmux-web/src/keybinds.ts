@@ -10,8 +10,23 @@ import { KEYBIND_ACTIONS } from './settings-schema'
 
 // ── Platform detection ──
 
-export const IS_MAC = typeof navigator !== 'undefined' &&
-  /mac|iphone|ipad|ipod/i.test(navigator.platform ?? '')
+/**
+ * Detect Apple platforms.
+ *
+ * Prefers the modern `navigator.userAgentData.platform` (available in
+ * Chromium 93+) and falls back to the deprecated `navigator.platform`
+ * for Safari and older browsers.
+ */
+function detectMac(): boolean {
+  if (typeof navigator === 'undefined') return false
+  const platform =
+    (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform
+    ?? navigator.platform
+    ?? ''
+  return /mac|iphone|ipad|ipod/i.test(platform)
+}
+
+export const IS_MAC = detectMac()
 export const SECONDARY_MOD: 'meta' | 'ctrl' = IS_MAC ? 'meta' : 'ctrl'
 
 // ── Resolved keybind ──
