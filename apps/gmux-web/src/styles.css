@@ -96,13 +96,10 @@ body {
 }
 
 .sidebar-header {
-  height: var(--header-height);
   display: flex;
   align-items: center;
-  padding: 0 12px 0 14px;
+  padding: 8px 2px 0;
   gap: 10px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
 }
 
 .sidebar-logo {
@@ -161,6 +158,14 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Pushes folder content to the bottom of the scroll area.
+   Collapses to zero when content overflows, so scrolling works normally. */
+.sidebar-spacer {
+  flex: 1;
 }
 
 .sidebar-scroll::-webkit-scrollbar {
