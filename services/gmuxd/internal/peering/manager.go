@@ -12,12 +12,13 @@ import (
 
 // Manager orchestrates connections to all configured spoke peers.
 type Manager struct {
-	mu      sync.RWMutex
-	peers   map[string]*managedPeer
-	store   *store.Store
-	baseCtx context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	mu       sync.RWMutex
+	peers    map[string]*managedPeer
+	store    *store.Store
+	selfName string // this machine's hostname, for self-echo detection
+	baseCtx  context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
 }
 
 type managedPeer struct {
@@ -28,26 +29,44 @@ type managedPeer struct {
 
 // NewManager creates a manager but does not start connections.
 // Call Start() to begin subscribing to peers.
-func NewManager(configs []config.PeerConfig, st *store.Store) *Manager {
-	peers := make(map[string]*managedPeer, len(configs))
-
-	// Broadcast peer status changes as SSE events.
-	onStatus := func(name string, status Status) {
-		st.Broadcast(store.Event{
-			Type: "peer-status",
-			ID:   name,
-		})
+//
+// selfName is the local machine's hostname, used to detect (and drop)
+// sessions that are our own data echoed back through a mutual peer
+// subscription.
+func NewManager(configs []config.PeerConfig, st *store.Store, selfName string) *Manager {
+	m := &Manager{
+		peers:    make(map[string]*managedPeer, len(configs)),
+		store:    st,
+		selfName: selfName,
 	}
 
 	for _, cfg := range configs {
-		peers[cfg.Name] = &managedPeer{
-			peer: newPeer(cfg, st, onStatus),
-		}
+		p := newPeer(cfg, st, m.onStatus)
+		p.isKnownOrigin = m.isKnownOrigin
+		m.peers[cfg.Name] = &managedPeer{peer: p}
 	}
-	return &Manager{
-		peers: peers,
-		store: st,
+	return m
+}
+
+// onStatus broadcasts a peer status change as an SSE event.
+func (m *Manager) onStatus(name string, status Status) {
+	m.store.Broadcast(store.Event{
+		Type: "peer-status",
+		ID:   name,
+	})
+}
+
+// isKnownOrigin reports whether name refers to this node or a peer we
+// are directly subscribed to. Called from Peer.handleEvent to drop
+// forwarded sessions reachable via a shorter path.
+func (m *Manager) isKnownOrigin(name string) bool {
+	if name == m.selfName {
+		return true
 	}
+	m.mu.RLock()
+	_, ok := m.peers[name]
+	m.mu.RUnlock()
+	return ok
 }
 
 // Start begins background goroutines that connect to each peer.
@@ -92,7 +111,7 @@ func (m *Manager) Stop() {
 
 // AddPeer registers a new peer and starts its connection. If a peer
 // with the same name already exists, AddPeer is a no-op.
-func (m *Manager) AddPeer(cfg config.PeerConfig) {
+func (m *Manager) AddPeer(cfg config.PeerConfig, opts ...PeerOption) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -103,16 +122,9 @@ func (m *Manager) AddPeer(cfg config.PeerConfig) {
 		return
 	}
 
-	onStatus := func(name string, status Status) {
-		m.store.Broadcast(store.Event{
-			Type: "peer-status",
-			ID:   name,
-		})
-	}
-
-	mp := &managedPeer{
-		peer: newPeer(cfg, m.store, onStatus),
-	}
+	p := newPeer(cfg, m.store, m.onStatus, opts...)
+	p.isKnownOrigin = m.isKnownOrigin
+	mp := &managedPeer{peer: p}
 	m.peers[cfg.Name] = mp
 	m.startPeer(cfg.Name, mp)
 }

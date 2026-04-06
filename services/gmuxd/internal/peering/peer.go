@@ -30,17 +30,32 @@ type Peer struct {
 	// onStatus is called when connection state changes.
 	onStatus func(name string, status Status)
 
+	// isKnownOrigin reports whether a peer name refers to this node or
+	// another peer we're directly connected to. Used to drop forwarded
+	// sessions that we can reach via a shorter path (or that are our
+	// own sessions echoed back through a mutual subscription).
+	isKnownOrigin func(name string) bool
+
+	// transport is the HTTP round-tripper for all spoke connections.
+	// nil means use the default transport. Set via WithTransport for
+	// tailscale-discovered peers that route through tsnet.
+	transport http.RoundTripper
+
 	client *http.Client
 }
 
-func newPeer(cfg config.PeerConfig, st *store.Store, onStatus func(string, Status)) *Peer {
-	return &Peer{
+func newPeer(cfg config.PeerConfig, st *store.Store, onStatus func(string, Status), opts ...PeerOption) *Peer {
+	p := &Peer{
 		Config:   cfg,
 		store:    st,
 		status:   StatusDisconnected,
 		onStatus: onStatus,
-		client:   &http.Client{Timeout: 0}, // SSE: no timeout on the response body
+		client:   &http.Client{Timeout: 0},
 	}
+	for _, o := range opts {
+		o(p)
+	}
+	return p
 }
 
 // Status returns the current connection state.
@@ -122,9 +137,9 @@ func (p *Peer) FetchConfig(ctx context.Context) json.RawMessage {
 	if err != nil {
 		return nil
 	}
-	req.Header.Set("Authorization", "Bearer "+p.Config.Token)
+	p.setAuth(req)
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 5 * time.Second, Transport: p.transport}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("peering: %s: fetch config: %v", p.Config.Name, err)
@@ -169,11 +184,16 @@ func (p *Peer) ProxyWS(w http.ResponseWriter, r *http.Request, originalID string
 	}
 	spokeURL := fmt.Sprintf("%s/ws/%s", base, originalID)
 	ctx := r.Context()
-	spokeConn, _, err := websocket.Dial(ctx, spokeURL, &websocket.DialOptions{
-		HTTPHeader: http.Header{
+	dialOpts := &websocket.DialOptions{}
+	if p.Config.Token != "" {
+		dialOpts.HTTPHeader = http.Header{
 			"Authorization": []string{"Bearer " + p.Config.Token},
-		},
-	})
+		}
+	}
+	if p.transport != nil {
+		dialOpts.HTTPClient = &http.Client{Transport: p.transport}
+	}
+	spokeConn, _, err := websocket.Dial(ctx, spokeURL, dialOpts)
 	if err != nil {
 		log.Printf("peering: %s: ws dial %s: %v", p.Config.Name, originalID, err)
 		clientConn.Close(websocket.StatusInternalError, "peer unavailable")
@@ -238,7 +258,7 @@ func (p *Peer) proxyHTTP(w http.ResponseWriter, r *http.Request, path string) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	req.Header.Set("Authorization", "Bearer "+p.Config.Token)
+	p.setAuth(req)
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		req.Header.Set("Content-Type", ct)
 	}
@@ -328,7 +348,7 @@ func (p *Peer) subscribe(ctx context.Context, onConnected func()) error {
 		return fmt.Errorf("request: %w", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+p.Config.Token)
+	p.setAuth(req)
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -390,6 +410,17 @@ type sseEvent struct {
 	Session *json.RawMessage `json:"session,omitempty"`
 }
 
+// isForwardedFromKnownOrigin checks whether a session ID (before
+// namespacing) was forwarded from a peer we can reach directly.
+// Returns true if the session should be dropped.
+func (p *Peer) isForwardedFromKnownOrigin(id string) bool {
+	if p.isKnownOrigin == nil {
+		return false
+	}
+	_, innerPeer := ParseID(id)
+	return innerPeer != "" && p.isKnownOrigin(innerPeer)
+}
+
 func (p *Peer) handleEvent(eventType string, data []byte) {
 	switch eventType {
 	case "session-upsert":
@@ -399,6 +430,9 @@ func (p *Peer) handleEvent(eventType string, data []byte) {
 			return
 		}
 		if ev.Session == nil {
+			return
+		}
+		if p.isForwardedFromKnownOrigin(ev.ID) {
 			return
 		}
 		var sess store.Session
@@ -420,12 +454,18 @@ func (p *Peer) handleEvent(eventType string, data []byte) {
 			log.Printf("peering: %s: bad remove event: %v", p.Config.Name, err)
 			return
 		}
+		if p.isForwardedFromKnownOrigin(ev.ID) {
+			return
+		}
 		namespacedID := NamespaceID(ev.ID, p.Config.Name)
 		p.store.Remove(namespacedID)
 
 	case "session-activity":
 		var ev sseEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
+			return
+		}
+		if p.isForwardedFromKnownOrigin(ev.ID) {
 			return
 		}
 		namespacedID := NamespaceID(ev.ID, p.Config.Name)
@@ -439,6 +479,15 @@ func (p *Peer) handleEvent(eventType string, data []byte) {
 
 	default:
 		// Unknown event types are silently ignored for forward compatibility.
+	}
+}
+
+// setAuth adds the bearer token to a request if one is configured.
+// Tailscale-discovered peers authenticate via WhoIs identity and have
+// no token; manual and devcontainer peers use bearer tokens.
+func (p *Peer) setAuth(req *http.Request) {
+	if p.Config.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+p.Config.Token)
 	}
 }
 

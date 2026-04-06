@@ -61,6 +61,11 @@ type DiscoveryConfig struct {
 	// Devcontainers enables auto-discovery of gmuxd instances running
 	// inside dev containers on the local Docker daemon. Default true.
 	Devcontainers bool `toml:"devcontainers"`
+
+	// Tailscale enables auto-discovery of gmuxd instances on the same
+	// tailnet. Only active when tailscale.enabled is also true.
+	// Default true.
+	Tailscale bool `toml:"tailscale"`
 }
 
 // TailscaleConfig controls the optional tailscale (tsnet) listener.
@@ -258,6 +263,7 @@ func defaults() Config {
 		},
 		Discovery: DiscoveryConfig{
 			Devcontainers: true,
+			Tailscale:     true,
 		},
 	}
 }

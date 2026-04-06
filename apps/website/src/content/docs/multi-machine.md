@@ -16,6 +16,21 @@ browser --> gmux-laptop (hub)
 
 Spokes need zero configuration changes. The hub authenticates with each spoke's bearer token and subscribes to its event stream. Actions like kill, resume, and launch are forwarded transparently.
 
+## Tailscale auto-discovery
+
+When [Tailscale](/remote-access) is enabled, gmuxd automatically discovers other gmux instances on the same tailnet. No manual peer configuration is needed: install gmux on two machines, enable Tailscale on both, and they find each other.
+
+gmuxd periodically queries the tailnet for online devices, probes each with a `/v1/health` request to identify gmux instances, and subscribes to their event streams. Results are cached so known devices are never re-probed.
+
+Authentication is handled by Tailscale identity. The tailscale listener uses `WhoIs` to verify the connecting peer belongs to the same user. No bearer tokens are exchanged.
+
+To disable auto-discovery while keeping remote access:
+
+```toml
+[discovery]
+tailscale = false
+```
+
 ## Devcontainer auto-discovery
 
 If a project directory contains `.devcontainer/devcontainer.json`, gmuxd discovers the running container automatically using Docker labels. No manual peer configuration is needed.
@@ -37,7 +52,7 @@ Once connected, the container's sessions appear in the sidebar and on the [proje
 
 ## Manual peers
 
-For machines that aren't devcontainers (remote servers, VMs, other workstations), configure peers explicitly in `~/.config/gmux/host.toml`:
+For machines that aren't on the same tailnet, configure peers explicitly in `~/.config/gmux/host.toml`:
 
 ```toml
 [[peers]]

@@ -221,6 +221,37 @@ func TestRunStatusWithRunningDaemon(t *testing.T) {
 	}
 }
 
+func TestRunStatusShowsSessionsAndPeers(t *testing.T) {
+	stateDir, cleanup := startTestSocketDaemonFull(t)
+	defer cleanup()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"status"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr=%q", code, stderr.String())
+	}
+	out := stdout.String()
+
+	// Session summary with local/remote breakdown.
+	if !strings.Contains(out, "3 alive (2 local, 1 remote)") {
+		t.Errorf("expected session summary, got %q", out)
+	}
+	if !strings.Contains(out, "5 dead") {
+		t.Errorf("expected dead count, got %q", out)
+	}
+
+	// Connected peer with session count.
+	if !strings.Contains(out, "desktop (1 session)") {
+		t.Errorf("expected connected peer, got %q", out)
+	}
+
+	// Disconnected peer with error.
+	if !strings.Contains(out, "connection refused") {
+		t.Errorf("expected disconnected peer error, got %q", out)
+	}
+}
+
 func TestRunAuthNoRunningDaemon(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
@@ -297,6 +328,50 @@ func startTestSocketDaemon(t *testing.T, ver string) (stateDir string, cleanup f
 			"status":     "ready",
 			"listen":     "127.0.0.1:8790",
 			"auth_token": "test-token-abc",
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": data})
+	})
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(ln)
+	time.Sleep(50 * time.Millisecond)
+
+	return stateDir, func() {
+		srv.Close()
+		os.Remove(sockPath)
+	}
+}
+
+// startTestSocketDaemonFull starts a mock daemon that returns sessions and peers.
+func startTestSocketDaemonFull(t *testing.T) (stateDir string, cleanup func()) {
+	t.Helper()
+	stateDir = t.TempDir()
+	sockDir := filepath.Join(stateDir, "gmux")
+	os.MkdirAll(sockDir, 0o700)
+	sockPath := filepath.Join(sockDir, "gmuxd.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		data := map[string]any{
+			"service":    "gmuxd",
+			"version":    "1.0.0",
+			"status":     "ready",
+			"listen":     "127.0.0.1:8790",
+			"auth_token": "test-token-abc",
+			"sessions": map[string]int{
+				"local_alive":  2,
+				"remote_alive": 1,
+				"dead":         5,
+			},
+			"peers": []map[string]any{
+				{"name": "desktop", "url": "https://desktop.ts.net", "status": "connected", "session_count": 1},
+				{"name": "server", "url": "https://server.ts.net", "status": "disconnected", "session_count": 0, "last_error": "connection refused"},
+			},
 		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": data})
 	})

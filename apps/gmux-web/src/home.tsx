@@ -54,7 +54,9 @@ export function Home() {
                   ? `${p.session_count} active session${p.session_count === 1 ? '' : 's'}`
                   : p.status === 'connecting'
                     ? 'connecting\u2026'
-                    : p.last_error ?? 'disconnected',
+                    : p.status === 'offline'
+                      ? 'offline'
+                      : p.last_error ?? 'disconnected',
               ]}
               launchers={p.status === 'connected' ? peerLaunchers(p.name) : []}
               peer={p.name}
