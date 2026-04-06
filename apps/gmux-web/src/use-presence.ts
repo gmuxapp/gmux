@@ -1,49 +1,33 @@
 /**
  * Presence hook: WebSocket connection to the daemon for notifications,
  * tab title badge, idle detection, and visibility/focus reporting.
+ *
+ * Reads selectedId and sessions from the store (signals). The only
+ * prop-driven input is the notification click callback (needs routing).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { connectPresence } from './presence'
 import type { NotifyMessage, CancelMessage } from './presence'
-import type { Session } from './types'
+import { selectedId, sessions, navigateToSession } from './store'
 import type { NotifPermission } from './sidebar'
 
 const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
-
-interface UsePresenceOptions {
-  selectedId: string | null
-  sessions: Session[]
-  /** Called when the user clicks a notification that has a session_id. */
-  onNotificationClick: (sessionId: string) => void
-}
 
 interface UsePresenceResult {
   notifPermission: NotifPermission
   requestNotifPermission: () => void
 }
 
-export function usePresence({
-  selectedId,
-  sessions,
-  onNotificationClick,
-}: UsePresenceOptions): UsePresenceResult {
+export function usePresence(): UsePresenceResult {
   const activeNotifsRef = useRef<Map<string, Notification>>(new Map())
   const presenceRef = useRef<ReturnType<typeof connectPresence> | null>(null)
   const lastInteractionRef = useRef(Date.now() / 1000)
 
-  // Notification permission. Not reactive, so we keep a tick to force
-  // a re-read after requestPermission() resolves.
   const [, forceNotifPermUpdate] = useState(0)
   const notifPermission: NotifPermission = USE_MOCK
     ? 'granted'
     : ('Notification' in window ? Notification.permission : 'unavailable')
-
-  // Stable refs for callbacks so the presence effect doesn't re-subscribe.
-  const onNotifClickRef = useRef(onNotificationClick)
-  onNotifClickRef.current = onNotificationClick
-  const sessionsRef = useRef(sessions)
-  sessionsRef.current = sessions
 
   // Show a notification when the daemon tells us to.
   const handleNotify = useCallback((msg: NotifyMessage) => {
@@ -57,7 +41,7 @@ export function usePresence({
     n.onclose = () => activeNotifsRef.current.delete(msg.id)
     n.onclick = () => {
       window.focus()
-      if (msg.session_id) onNotifClickRef.current(msg.session_id)
+      if (msg.session_id) navigateToSession(msg.session_id)
       n.close()
     }
   }, [])
@@ -84,17 +68,23 @@ export function usePresence({
   }, [])
 
   // Report state changes to the daemon.
+  // Read signals inside the callback; useCallback has no deps since
+  // signal reads are always current.
   const reportPresence = useCallback(() => {
     presenceRef.current?.sendState({
       visibility: document.visibilityState,
       focused: document.hasFocus(),
-      selected_session_id: selectedId,
+      selected_session_id: selectedId.value,
       last_interaction: lastInteractionRef.current,
     })
-  }, [selectedId])
+  }, [])
 
-  // Report whenever visibility, focus, or selected session changes.
-  useEffect(() => { reportPresence() }, [reportPresence])
+  // Report on visibility/focus changes + heartbeat.
+  // Also re-report whenever selectedId changes.
+  useEffect(() => {
+    reportPresence()
+  }, [selectedId.value, reportPresence])
+
   useEffect(() => {
     const report = () => reportPresence()
     document.addEventListener('visibilitychange', report)
@@ -111,11 +101,12 @@ export function usePresence({
 
   // Tab title badge.
   useEffect(() => {
-    const count = sessions.filter(s =>
-      s.id !== selectedId && s.alive && s.unread
+    const sel = selectedId.value
+    const count = sessions.value.filter(s =>
+      s.id !== sel && s.alive && s.unread
     ).length
     document.title = count > 0 ? `(${count}) gmux` : 'gmux'
-  }, [sessions, selectedId])
+  }, [sessions.value, selectedId.value])
 
   const requestNotifPermission = useCallback(async () => {
     await Notification.requestPermission()

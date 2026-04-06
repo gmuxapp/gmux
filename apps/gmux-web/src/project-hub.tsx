@@ -1,25 +1,24 @@
 // Project hub page: sessions for one project grouped by host and cwd.
 //
 // Data shape comes from `buildProjectTopology` (pure function in types.ts).
-// This module is render-only: no data fetching, no business logic. Callers
-// pass the full sessions/projects/peers lists and a select callback.
+// This module is render-only: no data fetching, no business logic.
+// Reads sessions/projects/peers from the store.
 
-import type { HostNode, PeerInfo, ProjectItem, Session } from './types'
+import type { HostNode, Session } from './types'
 import { buildProjectTopology, sessionPath } from './types'
 import { LaunchButton } from './launcher'
+import { sessions, projects, peers } from './store'
 
 interface ProjectHubProps {
   projectSlug: string
-  sessions: Session[]
-  projects: ProjectItem[]
-  peers: PeerInfo[]
   onResume: (id: string) => void
   onCloseSession: (session: Session) => void
 }
 
-export function ProjectHub({ projectSlug, sessions, projects, peers, onResume, onCloseSession }: ProjectHubProps) {
-  const project = projects.find(p => p.slug === projectSlug)
-  const hosts = buildProjectTopology(projectSlug, sessions, projects, peers)
+export function ProjectHub({ projectSlug, onResume, onCloseSession }: ProjectHubProps) {
+  const projectsVal = projects.value
+  const project = projectsVal.find(p => p.slug === projectSlug)
+  const hosts = buildProjectTopology(projectSlug, sessions.value, projectsVal, peers.value)
 
   const totalSessions = hosts.reduce(
     (n, h) => n + h.folders.reduce((m, f) => m + f.sessions.length, 0),
@@ -42,7 +41,7 @@ export function ProjectHub({ projectSlug, sessions, projects, peers, onResume, o
       </header>
 
       {hosts.length === 0
-        ? <EmptyProject projectSlug={projectSlug} project={project} />
+        ? <EmptyProject projectSlug={projectSlug} launchCwd={project?.paths[0]} />
         : hosts.map(host => (
             <HostSection
               key={host.path.join('\0') || '(local)'}
@@ -56,8 +55,7 @@ export function ProjectHub({ projectSlug, sessions, projects, peers, onResume, o
   )
 }
 
-function EmptyProject({ projectSlug, project }: { projectSlug: string; project: ProjectItem | undefined }) {
-  const launchCwd = project?.paths[0]
+function EmptyProject({ projectSlug, launchCwd }: { projectSlug: string; launchCwd?: string }) {
   return (
     <div class="project-hub-empty">
       <div class="project-hub-empty-title">No sessions yet in {projectSlug}</div>
@@ -80,13 +78,7 @@ function HostSection({
     ? `${sessionCount} session${sessionCount === 1 ? '' : 's'} · ${folderCount} folders`
     : `${sessionCount} session${sessionCount === 1 ? '' : 's'}`
 
-  // Only direct peers (or local) can launch today. Nested peers (devcontainers
-  // on a spoke) would need hub → spoke → spoke chain-routing which isn't
-  // implemented; disable launch buttons there rather than risk creating
-  // sessions at the wrong host.
   const canLaunch = host.path.length <= 1
-  // For launch, the peer prop is the root peer name (hub's direct peer) or
-  // undefined for local.
   const launchPeer = host.path.length === 1 ? host.path[0] : undefined
 
   return (
@@ -156,8 +148,6 @@ function SessionCard({
 }: { session: Session; projectSlug: string; onResume: (id: string) => void; onClose: () => void }) {
   const dotClass = session.alive ? '' : 'dead'
   const sleeping = !session.alive && session.resumable
-  // Mirror the sidebar: title is the primary label. Fall back to kind for
-  // sessions that haven't reported a title yet.
   const name = session.title || session.kind
   const href = sessionPath(projectSlug, session)
   return (
@@ -169,7 +159,6 @@ function SessionCard({
           e.preventDefault()
           onResume(session.id)
         }
-        // Alive sessions: let click propagate to preact-iso for client-side nav.
       }}
     >
       <span class={`session-card-dot ${dotClass}`} />
