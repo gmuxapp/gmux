@@ -164,9 +164,9 @@ const settingsEntries = {
     letterSpacing:    clampedNumber(0, -5, 20, 'Extra letter spacing in pixels.'),
     cursorStyle:      v.optional(
                         v.pipe(v.picklist(['block', 'underline', 'bar']), v.description('Cursor shape.')),
-                        'block' as const,
+                        'bar' as const,
                       ),
-    cursorBlink:      optBool(true, 'Whether the cursor blinks.'),
+    cursorBlink:      optBool(false, 'Whether the cursor blinks.'),
     cursorInactiveStyle: v.optional(
                            v.pipe(
                              v.picklist(['outline', 'block', 'bar', 'underline', 'none']),
@@ -216,7 +216,7 @@ export const DEFAULT_THEME_COLORS: ITheme = {
   foreground: '#d3d8de',
   cursor: '#d3d8de',
   cursorAccent: '#0f141a',
-  selectionBackground: '#2a3a4acc',
+  selectionBackground: '#3a506acc',
   black: '#151b21',
   red: '#c25d66',
   green: '#a3be8c',

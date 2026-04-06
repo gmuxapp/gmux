@@ -10,7 +10,7 @@ describe('buildTerminalOptions', () => {
     const opts = buildTerminalOptions(null, null)
     expect(opts.fontSize).toBe(13)
     expect(opts.fontFamily).toBe("'Fira Code', monospace")
-    expect(opts.cursorBlink).toBe(true)
+    expect(opts.cursorBlink).toBe(false)
     expect(opts.scrollback).toBe(5000)
     expect(opts.theme).toEqual(DEFAULT_THEME_COLORS)
   })
@@ -27,9 +27,9 @@ describe('buildTerminalOptions', () => {
   })
 
   it('overrides only specified settings fields', () => {
-    const opts = buildTerminalOptions({ fontSize: 16, cursorBlink: false }, null)
+    const opts = buildTerminalOptions({ fontSize: 16, cursorBlink: true }, null)
     expect(opts.fontSize).toBe(16)
-    expect(opts.cursorBlink).toBe(false)
+    expect(opts.cursorBlink).toBe(true)
     expect(opts.fontFamily).toBe("'Fira Code', monospace")
     expect(opts.scrollback).toBe(5000)
   })
