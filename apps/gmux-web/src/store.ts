@@ -447,6 +447,15 @@ export function initStore(): () => void {
   })
 
   // SSE subscription.
+  //
+  // The server replays all sessions as upserts on connect. Since we
+  // already fetch via GET /v1/sessions, the initial SSE dump is
+  // redundant. We skip session-upsert events until the bulk fetch
+  // has completed (sessionsLoaded is true). After that, the SSE
+  // stream carries incremental updates.
+  //
+  // On reconnect, the SSE dump IS useful because events may have been
+  // missed. We pair it with a fresh fetchSessions to be safe.
   const source = new EventSource('/v1/events')
   let sseConnected = false
 
@@ -460,6 +469,11 @@ export function initStore(): () => void {
   })
 
   source.addEventListener('session-upsert', (e) => {
+    // Skip the initial SSE dump: the bulk GET /v1/sessions fetch is
+    // authoritative for the first load. Processing the dump would
+    // trigger O(n²) array mutations for no benefit.
+    if (!sessionsLoaded.value) return
+
     try {
       const envelope = JSON.parse(e.data)
       const session = envelope.session ?? envelope
