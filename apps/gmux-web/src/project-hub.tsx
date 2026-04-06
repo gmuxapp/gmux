@@ -64,7 +64,7 @@ function EmptyProject({ projectSlug, project }: { projectSlug: string; project: 
       {launchCwd && (
         <div class="project-hub-empty-actions">
           <span class="path-mono">{launchCwd}</span>
-          <LaunchButton cwd={launchCwd} className="project-hub-empty-launcher" />
+          <LaunchButton cwd={launchCwd} storageKey={projectSlug} className="project-hub-empty-launcher" />
         </div>
       )}
     </div>
@@ -118,6 +118,7 @@ function HostSection({
               <LaunchButton
                 cwd={folder.cwd || undefined}
                 peer={launchPeer}
+                storageKey={projectSlug}
                 className="folder-row-launch"
               />
             </div>

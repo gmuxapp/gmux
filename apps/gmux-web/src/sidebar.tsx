@@ -153,7 +153,7 @@ function FolderGroup({
         >
           {folder.name}
         </a>
-        <LaunchButton cwd={folder.sessions[0]?.cwd ?? folder.launchCwd} className="folder-launch-btn" />
+        <LaunchButton cwd={folder.sessions[0]?.cwd ?? folder.launchCwd} storageKey={folder.path} className="folder-launch-btn" />
       </div>
       <div class="folder-sessions">
         {visible.map(s => (

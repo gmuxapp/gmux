@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'vitest'
-import { launchersForPeer, type LaunchConfig } from './launcher'
+import { describe, expect, test, beforeEach } from 'vitest'
+import { launchersForPeer, getLastLauncher, setLastLauncher, type LaunchConfig } from './launcher'
 
 const localConfig: LaunchConfig = {
   default_launcher: 'shell',
@@ -41,5 +41,52 @@ describe('launchersForPeer', () => {
     const noPeers: LaunchConfig = { default_launcher: 'shell', launchers: localConfig.launchers }
     const resolved = launchersForPeer(noPeers, 'work-laptop')
     expect(resolved.default_launcher).toBe('shell')
+  })
+})
+
+describe('quick-launch memory', () => {
+  const store = new Map<string, string>()
+  beforeEach(() => {
+    store.clear()
+    globalThis.localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v) },
+      removeItem: (k: string) => { store.delete(k) },
+      clear: () => store.clear(),
+      get length() { return store.size },
+      key: () => null,
+    }
+  })
+
+  test('returns null when no key is stored', () => {
+    expect(getLastLauncher('gmux')).toBeNull()
+  })
+
+  test('returns null when storageKey is undefined', () => {
+    expect(getLastLauncher(undefined)).toBeNull()
+  })
+
+  test('round-trips a launcher choice', () => {
+    setLastLauncher('gmux', 'claude')
+    expect(getLastLauncher('gmux')).toBe('claude')
+  })
+
+  test('setLastLauncher is a no-op when storageKey is undefined', () => {
+    setLastLauncher(undefined, 'claude')
+    // Nothing stored
+    expect(getLastLauncher('gmux')).toBeNull()
+  })
+
+  test('different projects have independent memory', () => {
+    setLastLauncher('gmux', 'claude')
+    setLastLauncher('chezmoi', 'shell')
+    expect(getLastLauncher('gmux')).toBe('claude')
+    expect(getLastLauncher('chezmoi')).toBe('shell')
+  })
+
+  test('last launch overwrites previous', () => {
+    setLastLauncher('gmux', 'shell')
+    setLastLauncher('gmux', 'pi')
+    expect(getLastLauncher('gmux')).toBe('pi')
   })
 })

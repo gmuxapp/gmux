@@ -90,6 +90,20 @@ export function consumePendingLaunch(maxAgeMs = 10_000): boolean {
   return fresh
 }
 
+// ── Quick-launch memory ──
+
+const STORAGE_PREFIX = 'gmux.launch.lastTarget.'
+
+export function getLastLauncher(storageKey: string | undefined): string | null {
+  if (!storageKey) return null
+  try { return localStorage.getItem(STORAGE_PREFIX + storageKey) } catch { return null }
+}
+
+export function setLastLauncher(storageKey: string | undefined, launcherId: string): void {
+  if (!storageKey) return
+  try { localStorage.setItem(STORAGE_PREFIX + storageKey, launcherId) } catch {}
+}
+
 // ── LaunchButton ──
 //
 // Transforms into an inline menu on click:
@@ -100,8 +114,11 @@ export function consumePendingLaunch(maxAgeMs = 10_000): boolean {
 //
 // Double-click works because the default item occupies the exact same
 // position as the + button. First click opens, second click hits default.
+//
+// When `storageKey` is set, the last-launched adapter is remembered in
+// localStorage and used as the default on the next open.
 
-export function LaunchButton({ cwd, peer, className, onLaunch }: { cwd?: string; peer?: string; className?: string; onLaunch?: () => void }) {
+export function LaunchButton({ cwd, peer, className, onLaunch, storageKey }: { cwd?: string; peer?: string; className?: string; onLaunch?: () => void; storageKey?: string }) {
   const [state, setState] = useState<'idle' | 'loading' | 'open' | 'launching'>('idle')
   const [config, setConfig] = useState<LaunchConfig | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -130,6 +147,7 @@ export function LaunchButton({ cwd, peer, className, onLaunch }: { cwd?: string;
 
   const handleLaunch = (id: string) => {
     setState('launching')
+    setLastLauncher(storageKey, id)
     onLaunch?.()
     launchSession(id, { cwd, peer }).finally(() => {
       // Reset after a short delay to show spinner
@@ -167,8 +185,13 @@ export function LaunchButton({ cwd, peer, className, onLaunch }: { cwd?: string;
   let others: LauncherDef[] = []
   if (isOpen && config) {
     const resolved = launchersForPeer(config, peer)
-    defaultLauncher = resolved.launchers.find(l => l.id === resolved.default_launcher)
-    others = resolved.launchers.filter(l => l.id !== resolved.default_launcher)
+    // Use the last-used launcher if remembered, falling back to the server default.
+    const remembered = getLastLauncher(storageKey)
+    const defaultId = (remembered && resolved.launchers.some(l => l.id === remembered))
+      ? remembered
+      : resolved.default_launcher
+    defaultLauncher = resolved.launchers.find(l => l.id === defaultId)
+    others = resolved.launchers.filter(l => l.id !== defaultId)
   }
 
   // Always render the + button for stable layout. Menu overlays on top.
