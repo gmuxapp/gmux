@@ -37,6 +37,7 @@ type PeerInfo struct {
 	URL          string `json:"url"`
 	Status       string `json:"status"`
 	SessionCount int    `json:"session_count"`
+	LastError    string `json:"last_error,omitempty"`
 }
 
 // NamespaceID returns a store-key for a remote session: "originalID@peerName".

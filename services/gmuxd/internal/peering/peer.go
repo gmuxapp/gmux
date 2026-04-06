@@ -23,8 +23,9 @@ type Peer struct {
 	Config config.PeerConfig
 	store  *store.Store
 
-	mu     sync.RWMutex
-	status Status
+	mu        sync.RWMutex
+	status    Status
+	lastError string // human-readable reason for last disconnect
 
 	// onStatus is called when connection state changes.
 	onStatus func(name string, status Status)
@@ -49,10 +50,20 @@ func (p *Peer) Status() Status {
 	return p.status
 }
 
+// LastError returns a human-readable reason for the last disconnect.
+func (p *Peer) LastError() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.lastError
+}
+
 func (p *Peer) setStatus(s Status) {
 	p.mu.Lock()
 	old := p.status
 	p.status = s
+	if s == StatusConnected {
+		p.lastError = ""
+	}
 	p.mu.Unlock()
 
 	if old != s && p.onStatus != nil {
@@ -273,6 +284,11 @@ func (p *Peer) run(ctx context.Context) {
 			log.Printf("peering: %s: removed %d sessions on disconnect", p.Config.Name, len(removed))
 		}
 
+		if err != nil && ctx.Err() == nil {
+			p.mu.Lock()
+			p.lastError = categorizeError(err)
+			p.mu.Unlock()
+		}
 		p.setStatus(StatusDisconnected)
 
 		if ctx.Err() != nil {
@@ -423,5 +439,29 @@ func (p *Peer) handleEvent(eventType string, data []byte) {
 
 	default:
 		// Unknown event types are silently ignored for forward compatibility.
+	}
+}
+
+// categorizeError returns a short, user-friendly description of a peer
+// connection failure. Intended for display in the UI, not for logs.
+func categorizeError(err error) string {
+	s := err.Error()
+	switch {
+	case strings.Contains(s, "auth failed"):
+		return "authentication failed"
+	case strings.Contains(s, "connection refused"):
+		return "connection refused"
+	case strings.Contains(s, "no such host"):
+		return "host not found"
+	case strings.Contains(s, "i/o timeout"),
+		strings.Contains(s, "context deadline exceeded"):
+		return "connection timed out"
+	case strings.Contains(s, "certificate"),
+		strings.Contains(s, "x509"):
+		return "TLS certificate error"
+	case strings.Contains(s, "stream ended"):
+		return "connection lost"
+	default:
+		return "connection failed"
 	}
 }

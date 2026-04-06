@@ -160,11 +160,19 @@ func (m *Manager) PeerStatus() []PeerInfo {
 	defer m.mu.RUnlock()
 	infos := make([]PeerInfo, 0, len(m.peers))
 	for _, mp := range m.peers {
+		name := mp.peer.Config.Name
+		alive := 0
+		for _, id := range m.store.ListByPeer(name) {
+			if s, ok := m.store.Get(id); ok && s.Alive {
+				alive++
+			}
+		}
 		infos = append(infos, PeerInfo{
-			Name:         mp.peer.Config.Name,
+			Name:         name,
 			URL:          mp.peer.Config.URL,
 			Status:       mp.peer.Status().String(),
-			SessionCount: len(m.store.ListByPeer(mp.peer.Config.Name)),
+			SessionCount: alive,
+			LastError:    mp.peer.LastError(),
 		})
 	}
 	return infos

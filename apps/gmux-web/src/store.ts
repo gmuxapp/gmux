@@ -34,7 +34,8 @@ export const discovered = signal<DiscoveredProject[]>([])
 export const unmatchedActiveCount = signal(0)
 
 export const peers = signal<PeerInfo[]>([])
-export const launchers = signal<LauncherDef[]>([])
+export const launchConfig = signal<LaunchConfig | null>(null)
+export const launchers = computed(() => launchConfig.value?.launchers ?? [])
 
 export interface HealthData {
   version: string
@@ -434,7 +435,7 @@ export function initStore(): () => void {
     console.error('Failed to fetch sessions:', err)
     connState.value = 'error'
   })
-  fetchConfig().then(cfg => { launchers.value = cfg.launchers })
+  fetchConfig().then(cfg => { launchConfig.value = cfg })
   fetchHealth().then(h => { health.value = h })
   fetchPeersAPI().then(p => { peers.value = p })
   fetchFrontendConfig().then(fc => {

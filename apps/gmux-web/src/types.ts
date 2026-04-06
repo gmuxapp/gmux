@@ -239,6 +239,7 @@ export interface PeerInfo {
   url: string
   status: string // 'connected' | 'connecting' | 'disconnected'
   session_count: number
+  last_error?: string
 }
 
 // --- Remote normalization (mirrors Go NormalizeRemote) ---

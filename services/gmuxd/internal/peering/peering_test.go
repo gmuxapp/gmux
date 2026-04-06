@@ -821,3 +821,22 @@ func TestForwardLaunch_StripsPeerField(t *testing.T) {
 		t.Errorf("other fields lost: got %v", got)
 	}
 }
+
+func TestPeerStatusCountsOnlyAlive(t *testing.T) {
+	st := store.New()
+	st.Upsert(store.Session{ID: "alive@server", Kind: "shell", Alive: true, Peer: "server"})
+	st.Upsert(store.Session{ID: "dead@server", Kind: "pi", Alive: false, Peer: "server", Command: []string{"pi"}})
+
+	cfg := []config.PeerConfig{
+		{Name: "server", URL: "http://10.0.0.5:8790", Token: "t"},
+	}
+	mgr := NewManager(cfg, st)
+
+	infos := mgr.PeerStatus()
+	if len(infos) != 1 {
+		t.Fatalf("PeerStatus = %d entries, want 1", len(infos))
+	}
+	if infos[0].SessionCount != 1 {
+		t.Errorf("session_count = %d, want 1 (only alive sessions)", infos[0].SessionCount)
+	}
+}
