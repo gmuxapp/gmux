@@ -3,14 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { LocationProvider, Router, Route, lazy, useLocation } from 'preact-iso'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
-import { connectPresence } from './presence'
-import type { NotifyMessage, CancelMessage } from './presence'
 import { TerminalView } from './terminal'
 import { useArrivalPulse } from './use-arrival-pulse'
 import { useSessionData, sidebarState } from './use-session-data'
 import type { HealthData } from './use-session-data'
 import { Sidebar } from './sidebar'
-import type { NotifPermission, DotState } from './sidebar'
+import type { DotState } from './sidebar'
+import { usePresence } from './use-presence'
 
 import type { Session, Folder, View } from './types'
 import { ManageProjectsModal } from './manage-projects'
@@ -399,13 +398,7 @@ function App() {
   const terminalFocusRef = useRef<(() => void) | null>(null)
   const terminalPasteRef = useRef<((text: string) => void) | null>(null)
 
-  // Notification permission - not reactive, so we keep a tick to force a re-read after
-  // requestPermission() resolves.
-  const [, forceNotifPermUpdate] = useState(0)
-  const notifPermission: NotifPermission = USE_MOCK ? 'granted' : ('Notification' in window ? Notification.permission : 'unavailable')
-  const activeNotifsRef   = useRef<Map<string, Notification>>(new Map())
-  const presenceRef       = useRef<ReturnType<typeof connectPresence> | null>(null)
-  const lastInteractionRef = useRef(Date.now() / 1000)
+
 
   // URL param filtering: ?project=name or ?cwd=/path
   const filteredSessions = useMemo(() => {
@@ -439,6 +432,21 @@ function App() {
     ;(window as any).__gmuxSession = s
     return s
   }, [sessions, selectedId])
+
+  // Notification click: navigate to the session.
+  const handleNotificationClick = useCallback((sessionId: string) => {
+    const sess = sessions.find(s => s.id === sessionId)
+    if (sess) {
+      const project = matchSession(sess, sidebarState.configured)
+      if (project) loc.route(sessionPath(project.slug, sess))
+    }
+  }, [sessions, loc, sidebarVersion])
+
+  const { notifPermission, requestNotifPermission } = usePresence({
+    selectedId,
+    sessions,
+    onNotificationClick: handleNotificationClick,
+  })
 
   // Dot indicator for the hamburger: any *other* alive session that is busy, errored, or unread.
   const backgroundActivity = useMemo((): DotState => {
@@ -601,95 +609,6 @@ function App() {
     setAltArmed(false)
   }, [])
 
-  const handleRequestNotifPermission = useCallback(async () => {
-    await Notification.requestPermission()
-    forceNotifPermUpdate(n => n + 1)
-    presenceRef.current?.sendPermission(Notification.permission)
-  }, [])
-
-  // ── Presence connection (daemon-driven notifications) ──
-
-  // Show a notification when the daemon tells us to.
-  const handleNotify = useCallback((msg: NotifyMessage) => {
-    if (!('Notification' in window) || Notification.permission !== 'granted') return
-    const n = new Notification(msg.title, {
-      body: msg.body,
-      tag: msg.tag,
-      icon: '/favicon.svg',
-    })
-    activeNotifsRef.current.set(msg.id, n)
-    n.onclose = () => activeNotifsRef.current.delete(msg.id)
-    n.onclick = () => {
-      window.focus()
-      if (msg.session_id) {
-        const sess = sessions.find(s => s.id === msg.session_id)
-        if (sess) {
-          const project = matchSession(sess, sidebarState.configured)
-          if (project) loc.route(sessionPath(project.slug, sess))
-        }
-      }
-      n.close()
-    }
-  }, [sessions, loc, sidebarVersion])
-
-  // Dismiss a notification when the daemon tells us to (e.g. user opened
-  // the session on another device).
-  const handleCancel = useCallback((msg: CancelMessage) => {
-    const n = activeNotifsRef.current.get(msg.id)
-    if (n) { n.close(); activeNotifsRef.current.delete(msg.id) }
-  }, [])
-
-  // Connect presence WebSocket on mount.
-  useEffect(() => {
-    const p = connectPresence({ onNotify: handleNotify, onCancel: handleCancel })
-    presenceRef.current = p
-    return () => { p.close(); presenceRef.current = null }
-  }, [handleNotify, handleCancel])
-
-  // Track last user interaction for idle detection.
-  useEffect(() => {
-    const update = () => { lastInteractionRef.current = Date.now() / 1000 }
-    const events = ['mousemove', 'keydown', 'touchstart', 'scroll'] as const
-    events.forEach(e => document.addEventListener(e, update, { passive: true }))
-    return () => events.forEach(e => document.removeEventListener(e, update))
-  }, [])
-
-  // Report state changes to the daemon.
-  const reportPresence = useCallback(() => {
-    presenceRef.current?.sendState({
-      visibility: document.visibilityState,
-      focused: document.hasFocus(),
-      selected_session_id: selectedId,
-      last_interaction: lastInteractionRef.current,
-    })
-  }, [selectedId])
-
-  // Report whenever visibility, focus, or selected session changes.
-  useEffect(() => { reportPresence() }, [reportPresence])
-  useEffect(() => {
-    const report = () => reportPresence()
-    document.addEventListener('visibilitychange', report)
-    window.addEventListener('focus', report)
-    window.addEventListener('blur', report)
-    // Periodic heartbeat so lastInteraction stays fresh on the daemon side
-    // even when the user is actively typing but not changing sessions/tabs.
-    const heartbeat = setInterval(report, 30_000)
-    return () => {
-      document.removeEventListener('visibilitychange', report)
-      window.removeEventListener('focus', report)
-      window.removeEventListener('blur', report)
-      clearInterval(heartbeat)
-    }
-  }, [reportPresence])
-
-  // Tab title badge: show count of sessions with activity.
-  useEffect(() => {
-    const count = sessions.filter(s =>
-      s.id !== selectedId && s.alive && s.unread
-    ).length
-    document.title = count > 0 ? `(${count}) gmux` : 'gmux'
-  }, [sessions, selectedId])
-
   return (
     <div class="app-layout">
       <Sidebar
@@ -707,7 +626,7 @@ function App() {
         onClose={() => setSidebarOpen(false)}
         health={health}
         notifPermission={notifPermission}
-        onRequestNotifPermission={handleRequestNotifPermission}
+        onRequestNotifPermission={requestNotifPermission}
       />
 
       <ManageProjectsModal
