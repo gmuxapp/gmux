@@ -179,7 +179,7 @@ const settingsEntries = {
     scrollSensitivity: clampedNumber(1, 0.1, 10, 'Scroll speed multiplier for mouse wheel.'),
     fastScrollSensitivity: clampedNumber(5, 1, 50, 'Scroll speed multiplier when holding Alt.'),
     smoothScrollDuration: clampedNumber(0, 0, 500, 'Smooth scroll animation duration in milliseconds. 0 disables.'),
-    drawBoldTextInBrightColors: optBool(true, 'Whether to render bold text in bright ANSI colors.'),
+    drawBoldTextInBrightColors: optBool(false, 'Whether to render bold text in bright ANSI colors.'),
     minimumContrastRatio: clampedNumber(1, 1, 21, 'Minimum contrast ratio for text. 1 disables contrast adjustment.'),
     macOptionIsMeta:  optBool(false, 'Treat the macOS Option key as Meta (sends ESC prefix). When false, Option produces special characters.'),
     wordSeparator:    optStr(' ()[]{}\',"`:;', 'Characters treated as word boundaries for double-click selection.'),
