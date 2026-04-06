@@ -24,7 +24,7 @@ By default gmuxd binds to `127.0.0.1` (localhost only). All TCP connections requ
 To bind to all interfaces (containers, VPN setups):
 
 ```bash
-GMUXD_LISTEN=0.0.0.0 gmuxd start
+GMUXD_LISTEN=0.0.0.0 gmuxd run
 ```
 
 The bind address is controlled exclusively by the `GMUXD_LISTEN` environment variable. It is not a config file option because it is a deployment concern, not a user preference.

@@ -22,8 +22,10 @@ Common causes:
 **Start manually to see errors immediately:**
 
 ```bash
-gmuxd start
+gmuxd run
 ```
+
+This runs the daemon in the foreground so you can see errors directly. Use `gmuxd start` for normal background operation.
 
 ## Sessions don't appear in the sidebar
 
@@ -67,4 +69,4 @@ After updating, the old daemon is replaced automatically:
 - **`curl | sh` installer**: restarts the daemon if it was running
 - **Manual installs**: the next `gmux` invocation detects the version mismatch and replaces the daemon
 
-To force a restart manually: `gmuxd stop && gmuxd start`, or just `gmuxd start` (it replaces any running instance).
+To force a restart manually: `gmuxd restart` (or just `gmuxd start`, which replaces any running instance).

@@ -64,7 +64,7 @@ This gives you `https://gmux-desktop.your-tailnet.ts.net`.
 ### 4. Restart and register
 
 ```bash
-gmuxd start
+gmuxd restart
 ```
 
 gmux registers as its own device in your tailnet, separate from the machine it runs on. On first start, gmuxd prints a login URL:
@@ -112,7 +112,7 @@ enabled = true
 allow = ["your-work-account@github"]
 ```
 
-Then restart: `gmuxd start`.
+Then restart: `gmuxd restart`.
 
 If the other account is on a **different tailnet**, you also need to share the gmux device via the [Machines](https://login.tailscale.com/admin/machines) page (⋯ → Share). The device is then accessible at `gmux.owner-tailnet.ts.net` (using the owner's tailnet name).
 
@@ -122,7 +122,7 @@ Run `gmuxd remote` to diagnose most issues. It checks whether the daemon is runn
 
 **`ERR_NAME_NOT_RESOLVED` in the browser**: the device isn't registered, or MagicDNS is disabled. Run `gmuxd remote` to check.
 
-**gmux doesn't appear in the Tailscale dashboard**: gmux registers as its own device, not through the machine's Tailscale. Visit the login URL printed by `gmuxd start`.
+**gmux doesn't appear in the Tailscale dashboard**: gmux registers as its own device, not through the machine's Tailscale. Visit the login URL printed by `gmuxd run` (foreground mode shows the URL directly).
 
 **Certificate warning**: HTTPS certificates aren't enabled in your tailnet. Enable them in your [Tailscale DNS settings](https://login.tailscale.com/admin/dns), then restart gmuxd.
 

@@ -22,4 +22,4 @@ fi
 
 # Start the daemon. GMUXD_LISTEN and GMUXD_TOKEN are set via
 # compose environment; see compose.yaml.
-exec gmuxd start --replace
+exec gmuxd run

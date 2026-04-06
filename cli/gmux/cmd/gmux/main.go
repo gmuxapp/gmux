@@ -296,8 +296,8 @@ func ensureGmuxd() bool {
 		return false
 	}
 
-	// gmuxd start always replaces any existing daemon.
-	return startGmuxd(gmuxdBin, []string{"start"})
+	// gmuxd run starts in the foreground; we background it ourselves.
+	return startGmuxd(gmuxdBin, []string{"run"})
 }
 
 // gmuxdNeedsStart checks the running daemon.

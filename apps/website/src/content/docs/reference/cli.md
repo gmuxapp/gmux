@@ -33,9 +33,17 @@ The daemon. Manages sessions, serves the web UI, and optionally provides Tailsca
 
 ### `gmuxd start`
 
-Start the daemon, replacing any existing instance. This is the default when no command is given (`gmuxd` and `gmuxd start` are equivalent).
+Start the daemon in the background, replacing any existing instance. Logs to `~/.local/state/gmux/gmuxd.log`. Prints the PID on success.
 
 Reads [`host.toml`](/reference/host-toml/) for configuration. Binds to `127.0.0.1` on the configured port (default 8790) and creates a Unix socket for local IPC.
+
+### `gmuxd run`
+
+Run the daemon in the foreground. Same as `start`, but blocks until interrupted. Use this for systemd services, Docker containers, or debugging.
+
+### `gmuxd restart`
+
+Alias for `start`. Replaces any running instance with a fresh one.
 
 ### `gmuxd stop`
 

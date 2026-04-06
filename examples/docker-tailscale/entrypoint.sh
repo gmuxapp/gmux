@@ -20,4 +20,4 @@ else
   echo "Skipping gmux update check (GitHub unreachable)"
 fi
 
-exec gmuxd start --replace
+exec gmuxd run

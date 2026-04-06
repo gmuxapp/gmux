@@ -13,7 +13,9 @@ bump: minor
 
 ### CLI changes
 
-- `gmuxd` (no args) or `gmuxd start` starts the daemon, always replacing any existing instance.
+- `gmuxd start` starts the daemon in the background, replacing any existing instance. `gmuxd restart` is an alias.
+- `gmuxd run` runs the daemon in the foreground (for systemd, Docker, or debugging).
+- `gmuxd` (no args) prints help.
 - `gmuxd stop` replaces `gmuxd shutdown`.
 - `gmuxd status` shows daemon health, listen address, and socket path.
 - `gmuxd auth` replaces `gmuxd auth-link`, prints the token and a ready-to-use URL.

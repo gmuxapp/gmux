@@ -49,19 +49,12 @@ ls -lh "$INSTALL_DIR/gmux" "$INSTALL_DIR/gmuxd"
 
 # ── Restart gmuxd ──
 
-LOGFILE="/tmp/gmuxd-install-$$.log"
 echo "→ Starting gmuxd..."
-nohup "$INSTALL_DIR/gmuxd" start >"$LOGFILE" 2>&1 &
-GMUXD_PID=$!
-sleep 3
-
-# Verify it's running.
-if kill -0 "$GMUXD_PID" 2>/dev/null; then
+if "$INSTALL_DIR/gmuxd" start; then
   VERSION=$("$INSTALL_DIR/gmuxd" version 2>&1 || echo "unknown")
-  echo "✓ gmuxd $VERSION running (pid $GMUXD_PID)"
-  echo "  Logs: $LOGFILE"
+  echo "✓ gmuxd $VERSION"
 else
-  echo "⚠ gmuxd failed to start. Logs:"
-  tail -20 "$LOGFILE"
+  echo "⚠ gmuxd failed to start."
+  echo "  Check logs: ~/.local/state/gmux/gmuxd.log"
   exit 1
 fi
