@@ -552,7 +552,8 @@ body {
 .session-close-btn:hover { background: oklch(28% 0.015 250); color: var(--text); }
 
 /* Mock mode (landing page screenshots): hide per-session close buttons */
-.mock-mode .session-close-btn { display: none; }
+.mock-mode .session-close-btn,
+.mock-mode .session-card-close { display: none; }
 
 /* On touch devices (no hover), show interactive buttons permanently */
 @media (hover: none) {
