@@ -1,28 +1,27 @@
 // Home page: host status, project overview, quick-launch.
+// Reads shared data from the store (signals).
 
-import type { Session, PeerInfo, Folder } from './types'
-import type { HealthData } from './use-session-data'
+import { useState } from 'preact/hooks'
+import { health, peers, folders, sessions, launchers } from './store'
+import type { Folder } from './types'
 import type { LauncherDef } from './launcher'
 import { launchSession } from './launcher'
-import { useState } from 'preact/hooks'
-
-interface HomeProps {
-  health: HealthData | null
-  peers: PeerInfo[]
-  folders: Folder[]
-  sessions: Session[]
-  launchers: LauncherDef[]
-}
 
 /** Mask tailnet name for privacy: "gmux.angler-map.ts.net" → "gmux.an****.ts.net" */
 function maskTailnet(fqdn: string): string {
   return fqdn.replace(/(\.\w{2})[^.]*(?=\.ts\.net)/, '$1****')
 }
 
-export function Home({ health, peers, folders, sessions, launchers }: HomeProps) {
-  const localSessions = sessions.filter(s => !s.peer && s.alive).length
-  const hostname = health?.hostname ?? 'local'
-  const tsFqdn = health?.tailscale_url?.replace('https://', '')
+export function Home() {
+  const healthVal = health.value
+  const peersVal = peers.value
+  const foldersVal = folders.value
+  const sessionsVal = sessions.value
+  const launchersVal = launchers.value
+
+  const localSessions = sessionsVal.filter(s => !s.peer && s.alive).length
+  const hostname = healthVal?.hostname ?? 'local'
+  const tsFqdn = healthVal?.tailscale_url?.replace('https://', '')
 
   return (
     <div class="home">
@@ -33,27 +32,27 @@ export function Home({ health, peers, folders, sessions, launchers }: HomeProps)
           <LocalHostCard
             hostname={hostname}
             tsFqdn={tsFqdn}
-            version={health?.version}
+            version={healthVal?.version}
             sessionCount={localSessions}
           />
-          {peers.map(p => (
+          {peersVal.map(p => (
             <PeerCard key={p.name} peer={p} />
           ))}
         </div>
       </section>
 
       {/* ── Projects ── */}
-      {folders.length > 0 && (
+      {foldersVal.length > 0 && (
         <section class="home-projects">
           <h2 class="home-section-title">Projects</h2>
           <div class="home-project-grid">
-            {folders.map(f => <ProjectCard key={f.path} folder={f} />)}
+            {foldersVal.map(f => <ProjectCard key={f.path} folder={f} />)}
           </div>
         </section>
       )}
 
       {/* ── Quick launch (no project context) ── */}
-      <QuickLaunch launchers={launchers} />
+      <QuickLaunch launchers={launchersVal} />
     </div>
   )
 }
@@ -98,7 +97,7 @@ function LocalHostCard({
   )
 }
 
-function PeerCard({ peer }: { peer: PeerInfo }) {
+function PeerCard({ peer }: { peer: import('./types').PeerInfo }) {
   const aliveSessions = peer.session_count
   return (
     <div class="home-host-card">

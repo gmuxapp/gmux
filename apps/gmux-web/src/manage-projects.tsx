@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
-import type { SidebarStateManager } from './sidebar-state'
+import { projects, discovered, removeProject, addProject, updateProjects } from './store'
 import type { ProjectItem, DiscoveredProject } from './types'
 
 // ── Drag-to-reorder ──
@@ -17,11 +17,9 @@ interface DragState {
 export function ManageProjectsModal({
   open,
   onClose,
-  sidebarState,
 }: {
   open: boolean
   onClose: () => void
-  sidebarState: SidebarStateManager
 }) {
   const [showAllDiscovered, setShowAllDiscovered] = useState(false)
   const [manualPath, setManualPath] = useState('')
@@ -42,12 +40,12 @@ export function ManageProjectsModal({
     if (e.target === backdropRef.current) onClose()
   }, [onClose])
 
-  const configured = sidebarState.configured
-  const discovered = sidebarState.discovered
+  const configured = projects.value
+  const discoveredVal = discovered.value
 
   // Split discovered: active first, then the rest.
-  const activeDiscovered = discovered.filter(d => d.active_count > 0)
-  const inactiveDiscovered = discovered.filter(d => d.active_count === 0)
+  const activeDiscovered = discoveredVal.filter(d => d.active_count > 0)
+  const inactiveDiscovered = discoveredVal.filter(d => d.active_count === 0)
 
   // ── Reorder handlers ──
 
@@ -67,21 +65,21 @@ export function ManageProjectsModal({
     const items = [...configured]
     const [moved] = items.splice(drag.from, 1)
     items.splice(drag.over, 0, moved)
-    sidebarState.updateProjects(items)
+    updateProjects(items)
     setDrag(null)
-  }, [drag, configured, sidebarState])
+  }, [drag, configured])
 
   // ── Remove handler ──
 
   const handleRemove = useCallback((slug: string) => {
-    sidebarState.removeProject(slug)
-  }, [sidebarState])
+    removeProject(slug)
+  }, [])
 
   // ── Add from discovered ──
 
   const handleAdd = useCallback((d: DiscoveredProject) => {
-    sidebarState.addProject({ remote: d.remote, paths: d.paths })
-  }, [sidebarState])
+    addProject({ remote: d.remote, paths: d.paths })
+  }, [])
 
   // ── Manual add ──
 
@@ -93,9 +91,9 @@ export function ManageProjectsModal({
       return
     }
     setManualError('')
-    sidebarState.addProject({ paths: [path] })
+    addProject({ paths: [path] })
     setManualPath('')
-  }, [manualPath, sidebarState])
+  }, [manualPath])
 
   const handleManualKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Enter') handleManualAdd()
@@ -138,7 +136,7 @@ export function ManageProjectsModal({
           )}
 
           {/* ── Discovered groups ── */}
-          {discovered.length > 0 && (
+          {discoveredVal.length > 0 && (
             <section class="mp-section">
               <div class="mp-section-label">
                 Discovered

@@ -805,8 +805,8 @@ describe('buildProjectTopology', () => {
 
   it('groups local sessions by cwd', () => {
     const sessions = [
-      makeSession({ id: 'sess-1', cwd: '/home/mg/dev/fluxer' }),
-      makeSession({ id: 'sess-2', cwd: '/home/mg/dev/fluxer' }),
+      makeSession({ id: 'sess-1', cwd: '/home/mg/dev/fluxer', created_at: '2026-01-01T00:00:02Z' }),
+      makeSession({ id: 'sess-2', cwd: '/home/mg/dev/fluxer', created_at: '2026-01-01T00:00:01Z' }),
       makeSession({ id: 'sess-3', cwd: '/home/mg/dev/fluxer/api' }),
     ]
     const hosts = buildProjectTopology('fluxer', sessions, projects, peers)

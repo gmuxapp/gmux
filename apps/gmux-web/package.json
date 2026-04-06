@@ -16,6 +16,7 @@
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@fontsource/source-sans-3": "^5.2.9",
     "@gmux/protocol": "workspace:*",
+    "@preact/signals": "^2.9.0",
     "@trpc/client": "^11.6.0",
     "@xterm/addon-fit": "0.12.0-beta.195",
     "@xterm/addon-image": "github:mgabor3141/xterm.js#fix/image-addon-hidpi&path:addons/addon-image",

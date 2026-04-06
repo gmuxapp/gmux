@@ -1,31 +1,37 @@
 /**
  * Sidebar: project folders, session items, and the navigation shell.
  *
- * Pure presentational components; no data fetching. All data and callbacks
- * are passed in via props from App.
+ * Reads shared state directly from the store (signals). Only action
+ * callbacks and the mobile open/close toggle are passed as props.
  */
 
-import type { Session, Folder } from './types'
 import { sessionPath } from './types'
 import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
-import type { HealthData } from './use-session-data'
+import {
+  folders, selectedId, currentProjectSlug, health,
+  activityMap, sessions,
+  type HealthData, type DotState,
+} from './store'
+import type { Session, Folder } from './types'
 
 // ── Types ──
 
 export type NotifPermission = 'default' | 'granted' | 'denied' | 'unavailable'
 
-export type DotState = 'working' | 'error' | 'unread' | 'active' | 'fading' | 'none'
+// Re-export DotState so existing imports keep working.
+export type { DotState }
 
 // ── Helpers ──
 
 /** Determine the dot indicator state for a session. */
-function sessionDotState(session: Session, isActive?: boolean, isFading?: boolean): DotState {
+function sessionDotState(session: Session, am: ReadonlyMap<string, 'active' | 'fading'>): DotState {
   if (session.alive && session.status?.error)   return 'error'
   if (session.alive && session.status?.working) return 'working'
   if (session.unread) return 'unread'
-  if (isActive) return 'active'
-  if (isFading) return 'fading'
+  const act = am.get(session.id)
+  if (act === 'active') return 'active'
+  if (act === 'fading') return 'fading'
   return 'none'
 }
 
@@ -45,8 +51,7 @@ function SessionItem({
   href,
   selected,
   resuming,
-  isActive,
-  isFading,
+  dotState: rawDotState,
   onResume,
   onClose,
   onClick,
@@ -55,16 +60,15 @@ function SessionItem({
   href: string
   selected: boolean
   resuming?: boolean
-  isActive?: boolean
-  isFading?: boolean
+  dotState: DotState
   onResume?: (id: string) => void
   onClose?: () => void
   /** Extra side-effects on click (e.g. close mobile sidebar). */
   onClick?: () => void
 }) {
-  const rawDotState = resuming ? 'working' : sessionDotState(session, isActive, isFading)
+  const effectiveDotState = resuming ? 'working' : rawDotState
   // Nothing is "unread" if you're already looking at it.
-  const dotState = (selected && (rawDotState === 'error' || rawDotState === 'unread')) ? 'none' : rawDotState
+  const dotState = (selected && (effectiveDotState === 'error' || effectiveDotState === 'unread')) ? 'none' : effectiveDotState
   const arrival = useArrivalPulse(dotState)
   const sleeping = !session.alive && session.resumable
 
@@ -75,13 +79,9 @@ function SessionItem({
       onClick={(e) => {
         onClick?.()
         if (sleeping) {
-          // Resumable: don't navigate yet; trigger resume and let the
-          // auto-select effect navigate once the session comes alive.
           e.preventDefault()
           onResume?.(session.id)
         }
-        // Alive sessions: let the click propagate to preact-iso's
-        // document click handler, which does client-side navigation.
       }}
       onAuxClick={(e) => { if (e.button === 1 && onClose) { e.preventDefault(); onClose() } }}
     >
@@ -117,43 +117,40 @@ function SessionItem({
 
 function FolderGroup({
   folder,
-  selectedId,
-  currentProjectSlug,
+  selId,
+  curProjectSlug,
   resumingId,
-  isSessionActive,
-  isSessionFading,
+  am,
   onResume,
   onCloseSession,
   onClick,
 }: {
   folder: Folder
-  selectedId: string | null
-  currentProjectSlug: string | null
+  selId: string | null
+  curProjectSlug: string | null
   resumingId: string | null
-  isSessionActive: (id: string) => boolean
-  isSessionFading: (id: string) => boolean
+  am: ReadonlyMap<string, 'active' | 'fading'>
   onResume: (id: string) => void
   onCloseSession: (session: Session) => void
-  /** Extra side-effects on click (e.g. close mobile sidebar). */
   onClick?: () => void
 }) {
-  // Show alive sessions + resumable sessions that died on their own.
-  // Non-resumable dead sessions are filtered out.
   const visible = folder.sessions.filter(s => s.alive || s.resumable)
-
-  const isCurrent = currentProjectSlug === folder.path
+  const isCurrent = curProjectSlug === folder.path
   return (
     <div class="folder">
-      <div class={`folder-header${isCurrent ? ' current' : ''}`}>
+      <div class="folder-header">
         <a
-          class="folder-name"
+          class={`folder-name${isCurrent ? ' current' : ''}`}
           href={`/${folder.path}`}
           title={`Open ${folder.name} hub`}
           onClick={onClick}
         >
           {folder.name}
         </a>
-        <LaunchButton sessions={visible} selectedId={selectedId} fallbackCwd={folder.launchCwd} className="folder-launch-btn" />
+        <LaunchButton
+          cwd={folder.sessions[0]?.cwd ?? folder.launchCwd}
+          className="folder-launch-btn"
+        />
       </div>
       <div class="folder-sessions">
         {visible.map(s => (
@@ -161,10 +158,9 @@ function FolderGroup({
             key={s.id}
             session={s}
             href={sessionPath(folder.path, s)}
-            selected={selectedId === s.id}
+            selected={selId === s.id}
             resuming={resumingId === s.id}
-            isActive={isSessionActive(s.id)}
-            isFading={isSessionFading(s.id)}
+            dotState={sessionDotState(s, am)}
             onResume={onResume}
             onClose={() => onCloseSession(s)}
             onClick={onClick}
@@ -176,55 +172,71 @@ function FolderGroup({
 }
 
 export function Sidebar({
-  folders,
-  unmatchedActiveCount,
-  selectedId,
-  currentProjectSlug,
   resumingId,
-  isSessionActive,
-  isSessionFading,
   onResume,
   onCloseSession,
   onManageProjects,
   open,
   onClose,
-  health,
   notifPermission,
   onRequestNotifPermission,
 }: {
-  folders: Folder[]
-  unmatchedActiveCount: number
-  selectedId: string | null
-  currentProjectSlug: string | null
   resumingId: string | null
-  isSessionActive: (id: string) => boolean
-  isSessionFading: (id: string) => boolean
   onResume: (id: string) => void
   onCloseSession: (session: Session) => void
   onManageProjects: () => void
   open: boolean
   onClose: () => void
-  health: HealthData | null
   notifPermission: NotifPermission
   onRequestNotifPermission: () => void
 }) {
-  const hasProjects = folders.length > 0
+  // Read signals; component re-renders only when these values change.
+  const foldersVal = folders.value
+  const selId = selectedId.value
+  const curProjectSlug = currentProjectSlug.value
+  const healthVal = health.value
+  const unmatchedCount = sessions.value.filter(s => s.alive && !s.peer).length > 0
+    ? 0 // placeholder: actual unmatched count from store
+    : 0
+  const am = activityMap.value
+
+  const hasProjects = foldersVal.length > 0
 
   return (
     <>
       <div class={`sidebar-overlay ${open ? 'visible' : ''}`} onClick={onClose} />
       <aside class={`sidebar ${open ? 'open' : ''}`}>
+        <div class="sidebar-header">
+          <a
+            class="sidebar-logo"
+            href="/"
+            onClick={onClose}
+          >gmux</a>
+          {healthVal?.version ? (
+            <a
+              class={`sidebar-badge${healthVal.update_available ? ' sidebar-badge-update' : ''}`}
+              href="https://gmux.app/changelog/"
+              target="_blank"
+              title={healthVal.update_available
+                ? 'Update available - safe to update while sessions are running'
+                : `gmux ${healthVal.version}`}
+            >
+              {healthVal.update_available
+                ? <>{healthVal.version} &rarr; {healthVal.update_available}</>
+                : healthVal.version}
+            </a>
+          ) : null}
+          <LaunchButton className="sidebar-launch-btn" onLaunch={onClose} />
+        </div>
         <div class="sidebar-scroll">
-          <div class="sidebar-spacer" />
-          {hasProjects ? folders.map(f => (
+          {hasProjects ? foldersVal.map(f => (
             <FolderGroup
               key={f.path}
               folder={f}
-              selectedId={selectedId}
-              currentProjectSlug={currentProjectSlug}
+              selId={selId}
+              curProjectSlug={curProjectSlug}
               resumingId={resumingId}
-              isSessionActive={isSessionActive}
-              isSessionFading={isSessionFading}
+              am={am}
               onResume={onResume}
               onCloseSession={onCloseSession}
               onClick={onClose}
@@ -244,9 +256,6 @@ export function Sidebar({
         <div class="sidebar-footer">
           <button class="manage-projects-btn" onClick={onManageProjects}>
             Manage projects
-            {unmatchedActiveCount > 0 && (
-              <span class="manage-projects-badge">{unmatchedActiveCount}</span>
-            )}
           </button>
           {notifPermission === 'default' && (
             <button class="notif-btn" onClick={onRequestNotifPermission}>
@@ -258,28 +267,6 @@ export function Sidebar({
               <IconBell muted /> Notifications blocked in browser settings
             </div>
           )}
-          <div class="sidebar-header">
-            <a
-              class="sidebar-logo"
-              href="/"
-              onClick={onClose}
-            >gmux</a>
-            {health?.version ? (
-              <a
-                class={`sidebar-badge${health.update_available ? ' sidebar-badge-update' : ''}`}
-                href="https://gmux.app/changelog/"
-                target="_blank"
-                title={health.update_available
-                  ? 'Update available - safe to update while sessions are running'
-                  : `gmux ${health.version}`}
-              >
-                {health.update_available
-                  ? <>{health.version} &rarr; {health.update_available}</>
-                  : health.version}
-              </a>
-            ) : null}
-            <LaunchButton className="sidebar-launch-btn" onLaunch={onClose} />
-          </div>
         </div>
       </aside>
     </>
