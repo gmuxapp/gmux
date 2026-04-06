@@ -714,6 +714,7 @@ function App() {
 
   const loc = useLocation()
   const [sessions, setSessions] = useState<Session[]>([])
+  const sessionsLoaded = useRef(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [manageProjectsOpen, setManageProjectsOpen] = useState(false)
   const [connState, setConnState] = useState<ConnectionState>('connecting')
@@ -772,6 +773,7 @@ function App() {
         : [...MOCK_SESSIONS]
       sidebarState.setMockProjects(MOCK_PROJECTS)
       setSessions(sessions)
+      sessionsLoaded.current = true
       setConnState('connected')
 
       // Drive the "active" dot for sessions flagged mockActive by pinging
@@ -784,6 +786,7 @@ function App() {
       sidebarState.fetchProjects()
       fetchSessions().then(list => {
         setSessions(list)
+        sessionsLoaded.current = true
         setConnState('connected')
       }).catch(err => {
         console.error('Failed to fetch sessions:', err)
@@ -910,8 +913,15 @@ function App() {
   // rewrites `/:project` → `/:project/:kind/:slug` when the URL resolved
   // to a specific session, and falls back to the project hub (or home)
   // when the session we were viewing disappeared.
+  //
+  // Guard: don't normalize until sessions have loaded at least once.
+  // Without this, projects may load first (setting configured.length > 0),
+  // causing the view memo to resolve a session URL to a project fallback
+  // (no matching sessions yet), which overwrites the URL before the real
+  // session data arrives.
   useEffect(() => {
     if (view === null) return
+    if (!sessionsLoaded.current) return
     const url = viewToPath(view, sidebarState.configured, sessions)
     if (url && url !== loc.path) loc.route(url, true)
   }, [view, sessions, sidebarVersion, loc.path])
