@@ -144,16 +144,16 @@ function FolderGroup({
   const isCurrent = currentProjectSlug === folder.path
   return (
     <div class="folder">
-      <div class="folder-header">
+      <div class={`folder-header${isCurrent ? ' current' : ''}`}>
         <a
-          class={`folder-name${isCurrent ? ' current' : ''}`}
+          class="folder-name"
           href={`/${folder.path}`}
           title={`Open ${folder.name} hub`}
           onClick={onClick}
         >
           {folder.name}
         </a>
-        <LaunchButton cwd={folder.sessions[0]?.cwd ?? folder.launchCwd} storageKey={folder.path} className="folder-launch-btn" />
+        <LaunchButton sessions={visible} selectedId={selectedId} fallbackCwd={folder.launchCwd} className="folder-launch-btn" />
       </div>
       <div class="folder-sessions">
         {visible.map(s => (

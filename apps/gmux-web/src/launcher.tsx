@@ -7,7 +7,8 @@
 //  - the "recent launch" flag that lets the app auto-select the session
 //    the server creates in response
 
-import { useState, useRef, useEffect } from 'preact/hooks'
+import { useState, useRef, useEffect, useMemo } from 'preact/hooks'
+import type { Session } from './types'
 
 // ── Types ──
 
@@ -23,6 +24,12 @@ export interface LaunchConfig {
   default_launcher: string
   launchers: LauncherDef[]
   peers?: Record<string, { default_launcher: string; launchers: LauncherDef[] }>
+}
+
+/** Resolved launch target: where the session will be created. */
+export interface LaunchTarget {
+  peer?: string
+  cwd: string
 }
 
 // ── Config fetching (module-level cache) ──
@@ -54,13 +61,45 @@ export function launchersForPeer(
   return config
 }
 
+// ── Target resolution ──
+
+/**
+ * Derive the launch target from the user's current context.
+ *
+ * Priority:
+ *  1. The currently selected session (if it belongs to this project)
+ *  2. The most recently created alive session in the project
+ *  3. The project's configured fallback path (local)
+ */
+export function resolveTarget(
+  sessions: Session[],
+  selectedId: string | null,
+  fallbackCwd: string,
+): LaunchTarget {
+  // 1. Selected session in this project?
+  if (selectedId) {
+    const selected = sessions.find(s => s.id === selectedId)
+    if (selected) return { peer: selected.peer, cwd: selected.cwd }
+  }
+
+  // 2. Most recently created alive session?
+  const alive = sessions
+    .filter(s => s.alive)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  if (alive.length > 0) return { peer: alive[0].peer, cwd: alive[0].cwd }
+
+  // 3. Fallback to the project's configured path, local.
+  return { cwd: fallbackCwd }
+}
+
+/** Format a target for display: "~/dev/gmux" or "laptop: ~/dev/gmux". */
+export function formatTarget(target: LaunchTarget): string {
+  const shortCwd = target.cwd.replace(/^\/home\/[^/]+/, '~')
+  if (target.peer) return `${target.peer}: ${shortCwd}`
+  return shortCwd
+}
+
 // ── Launch action + auto-select tracking ──
-//
-// When the user triggers a launch we stash a timestamp here, then the SSE
-// handler in main.tsx consumes it when the server broadcasts the new
-// session. Keeping this bookkeeping inside the launcher module (rather
-// than a shared global) keeps the coupling local: whoever kicks off a
-// launch marks the timestamp implicitly through `launchSession`.
 
 let _pendingLaunchAt = 0
 
@@ -90,53 +129,90 @@ export function consumePendingLaunch(maxAgeMs = 10_000): boolean {
   return fresh
 }
 
-// ── Quick-launch memory ──
-
-const STORAGE_PREFIX = 'gmux.launch.lastTarget.'
-
-export function getLastLauncher(storageKey: string | undefined): string | null {
-  if (!storageKey) return null
-  try { return localStorage.getItem(STORAGE_PREFIX + storageKey) } catch { return null }
-}
-
-export function setLastLauncher(storageKey: string | undefined, launcherId: string): void {
-  if (!storageKey) return
-  try { localStorage.setItem(STORAGE_PREFIX + storageKey, launcherId) } catch {}
-}
-
 // ── LaunchButton ──
 //
 // Transforms into an inline menu on click:
 //
 //   Idle:      [+]
-//   Open:      [+ button becomes default item] → other items appear below
+//   Open:      target context line + adapter list
 //   Launching: [spinner]
 //
-// Double-click works because the default item occupies the exact same
+// Double-click works because the default adapter occupies the exact same
 // position as the + button. First click opens, second click hits default.
 //
-// When `storageKey` is set, the last-launched adapter is remembered in
-// localStorage and used as the default on the next open.
+// Two modes:
+//  - Explicit target: `cwd` and optional `peer` passed directly (used by
+//    project hub folder rows where the target is known from topology).
+//  - Context-aware: `sessions`, `selectedId`, and `fallbackCwd` passed;
+//    the target is derived from the user's current context (used by
+//    sidebar folder headers).
 
-export function LaunchButton({ cwd, peer, className, onLaunch, storageKey }: { cwd?: string; peer?: string; className?: string; onLaunch?: () => void; storageKey?: string }) {
+interface LaunchButtonProps {
+  className?: string
+  onLaunch?: () => void
+  /** Explicit target: working directory for the new session. */
+  cwd?: string
+  /** Explicit target: peer name for remote launch. */
+  peer?: string
+  /**
+   * Context-aware target: when `sessions` is provided, the launch target
+   * is derived from the user's current context (selected session or most
+   * recent alive session) instead of `cwd`/`peer`.
+   */
+  sessions?: Session[]
+  selectedId?: string | null
+  fallbackCwd?: string
+}
+
+export function LaunchButton({ className, onLaunch, cwd, peer, sessions, selectedId, fallbackCwd }: LaunchButtonProps) {
+  // Resolve the target: context-aware mode (sessions provided) takes
+  // priority over explicit cwd/peer.
+  const target = useMemo((): LaunchTarget => {
+    if (sessions && fallbackCwd !== undefined) {
+      return resolveTarget(sessions, selectedId ?? null, fallbackCwd)
+    }
+    return { peer, cwd: cwd || '' }
+  }, [sessions, selectedId, fallbackCwd, cwd, peer])
+
+  const showTarget = target.cwd !== ''
+
   const [state, setState] = useState<'idle' | 'loading' | 'open' | 'launching'>('idle')
   const [config, setConfig] = useState<LaunchConfig | null>(null)
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
 
   // Pre-fetch config on first hover so open is instant
   const handleMouseEnter = () => {
     if (!config) fetchConfig().then(setConfig)
   }
 
+  /** Compute fixed position for the menu so it escapes overflow:hidden parents. */
+  const computeMenuPos = () => {
+    const btn = btnRef.current
+    if (!btn) return
+    const r = btn.getBoundingClientRect()
+    // Align the menu's default item (first adapter) with the button.
+    // The menu has 4px padding; if a target line is shown it adds ~32px
+    // (target line + divider) that we offset so the first adapter stays aligned.
+    const targetOffset = showTarget ? 32 : 0
+    setMenuPos({
+      top: r.top - 4 - targetOffset,  // 4px = menu padding-top
+      left: r.right - 180,            // 180px = min-width, right-aligned
+    })
+  }
+
   const handleClick = (e: MouseEvent) => {
     e.stopPropagation()
     if (state === 'idle') {
       if (config) {
+        computeMenuPos()
         setState('open')
       } else {
         setState('loading')
         fetchConfig().then(cfg => {
           setConfig(cfg)
+          computeMenuPos()
           setState('open')
         })
       }
@@ -147,10 +223,8 @@ export function LaunchButton({ cwd, peer, className, onLaunch, storageKey }: { c
 
   const handleLaunch = (id: string) => {
     setState('launching')
-    setLastLauncher(storageKey, id)
     onLaunch?.()
-    launchSession(id, { cwd, peer }).finally(() => {
-      // Reset after a short delay to show spinner
+    launchSession(id, { cwd: target.cwd || undefined, peer: target.peer }).finally(() => {
       setTimeout(() => setState('idle'), 600)
     })
   }
@@ -184,22 +258,19 @@ export function LaunchButton({ cwd, peer, className, onLaunch, storageKey }: { c
   let defaultLauncher: LauncherDef | undefined
   let others: LauncherDef[] = []
   if (isOpen && config) {
-    const resolved = launchersForPeer(config, peer)
-    // Use the last-used launcher if remembered, falling back to the server default.
-    const remembered = getLastLauncher(storageKey)
-    const defaultId = (remembered && resolved.launchers.some(l => l.id === remembered))
-      ? remembered
-      : resolved.default_launcher
-    defaultLauncher = resolved.launchers.find(l => l.id === defaultId)
-    others = resolved.launchers.filter(l => l.id !== defaultId)
+    const resolved = launchersForPeer(config, target.peer)
+    defaultLauncher = resolved.launchers.find(l => l.id === resolved.default_launcher)
+    others = resolved.launchers.filter(l => l.id !== resolved.default_launcher)
   }
 
-  // Always render the + button for stable layout. Menu overlays on top.
   return (
     <div class={`launch-container ${className ?? ''}`} ref={containerRef} onMouseEnter={handleMouseEnter}>
       <button
+        ref={btnRef}
         class={`launch-btn ${isLoading ? 'loading' : ''}`}
-        title={cwd ? `New session in ${cwd}` : 'New session in ~'}
+        title={target.cwd
+          ? target.peer ? `New session on ${target.peer} in ${target.cwd}` : `New session in ${target.cwd}`
+          : 'New session'}
         onClick={handleClick}
       >
         {isLoading ? (
@@ -209,19 +280,24 @@ export function LaunchButton({ cwd, peer, className, onLaunch, storageKey }: { c
           </svg>
         ) : '+'}
       </button>
-      {isOpen && (
-        <div class="launch-inline-menu">
+      {isOpen && menuPos && (
+        <div
+          class="launch-inline-menu"
+          style={{ top: menuPos.top, left: menuPos.left }}
+        >
+          {showTarget && (
+            <>
+              <div class="launch-target-line">{formatTarget(target)}</div>
+              <div class="launch-inline-divider" />
+            </>
+          )}
           {defaultLauncher && (
             <button
               class="launch-inline-item launch-inline-default"
               onClick={(e) => { e.stopPropagation(); handleLaunch(defaultLauncher!.id) }}
             >
-              <span class="launch-inline-label">{defaultLauncher.label}</span>
-              <span class="launch-inline-desc">{defaultLauncher.description ?? ''}</span>
+              {defaultLauncher.label}
             </button>
-          )}
-          {others.length > 0 && (
-            <div class="launch-inline-divider" />
           )}
           {others.map((l, i) => (
             <button
@@ -230,8 +306,7 @@ export function LaunchButton({ cwd, peer, className, onLaunch, storageKey }: { c
               style={{ animationDelay: `${(i + 1) * 50}ms` }}
               onClick={(e) => { e.stopPropagation(); handleLaunch(l.id) }}
             >
-              <span class="launch-inline-label">{l.label}</span>
-              <span class="launch-inline-desc">{l.description ?? ''}</span>
+              {l.label}
             </button>
           ))}
         </div>

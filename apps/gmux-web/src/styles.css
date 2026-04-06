@@ -187,9 +187,17 @@ body {
 .folder-header {
   display: flex;
   align-items: center;
-  padding: 8px 12px 4px 14px;
+  padding: 5px 12px 5px 14px;
   user-select: none;
   gap: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.folder-header:hover {
+  background: var(--bg-hover);
+}
+.folder-header.current {
+  background: var(--bg-selected);
 }
 
 /* ── Launch button + inline menu ── */
@@ -209,7 +217,7 @@ body {
   transition: opacity 0.1s;
 }
 
-.folder:hover .launch-container.folder-launch-btn {
+.folder-header:hover .launch-container.folder-launch-btn {
   opacity: 1;
 }
 
@@ -250,23 +258,29 @@ body {
 
 /* Inline menu — positioned so the first item fully covers the + button */
 .launch-inline-menu {
-  position: absolute;
-  top: -5px;
-  right: -5px;
+  position: fixed;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
   min-width: 180px;
-  z-index: 100;
+  z-index: 1000;
   padding: 4px;
   overflow: hidden;
 }
 
+.launch-target-line {
+  padding: 5px 10px 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: 'Fira Code', monospace;
+}
+
 .launch-inline-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: block;
   width: 100%;
   padding: 6px 10px;
   background: none;
@@ -287,16 +301,6 @@ body {
 /* Default item renders instantly — no animation */
 .launch-inline-default {
   font-weight: 500;
-}
-
-.launch-inline-label {
-  flex-shrink: 0;
-}
-
-.launch-inline-desc {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-left: auto;
 }
 
 .launch-inline-divider {
@@ -325,15 +329,6 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-decoration: none;
-  padding: 2px 4px;
-  margin: -2px -4px;
-  cursor: pointer;
-  border-radius: 4px;
-}
-.folder-name:hover { background: var(--bg-hover); }
-.folder-name.current {
-  background: var(--bg-selected);
-  color: var(--text);
 }
 
 
