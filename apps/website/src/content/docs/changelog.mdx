@@ -35,6 +35,14 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ---
 
+## v1.1.1
+
+Mutual peers no longer trigger exponential config request storms. The daemon now caches remote configurations on initial connection, replacing per-request HTTP calls that previously caused runaway CPU and load spikes. And other small fixes.
+
+### Fixes
+- prevent recursive config fetch storm, zombie daemons, and required peer tokens ([#119](https://github.com/gmuxapp/gmux/pull/119))
+
+---
 ## v1.1.0
 
 ### Sleep recovery
