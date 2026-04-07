@@ -29,3 +29,14 @@
 :is(h1, h2, h3, h4, h5, h6) {
   font-family: 'Instrument Sans', sans-serif;
 }
+
+/* Discord-blurple LinkCard variant */
+.discord-card .sl-link-card {
+  border-color: oklch(55% 0.15 270 / 0.4);
+  background: oklch(55% 0.15 270 / 0.08);
+}
+
+.discord-card .sl-link-card:hover {
+  border-color: oklch(60% 0.18 270 / 0.6);
+  background: oklch(55% 0.15 270 / 0.15);
+}
