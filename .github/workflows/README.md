@@ -47,7 +47,7 @@ PR titles determine release behavior:
 5. Opens (or updates) a `release/next` PR via `peter-evans/create-pull-request`.
 6. Dispatches `pr-build.yml` via `workflow_dispatch` to build artifacts for the release PR (needed because commits from `GITHUB_TOKEN` don't trigger `pull_request` events).
 
-Since `version.sh` is idempotent, you can re-run the workflow manually (Actions → Version → Run workflow) to regenerate the release PR, for example if the LLM summary failed.
+Since `version.sh` is idempotent, you can re-run the workflow manually (Actions → Version → Run workflow) to regenerate the release PR, for example if the LLM summary failed. A nightly schedule (3:37 AM UTC) also retries automatically if the release PR body contains `_No summary available._`.
 
 ### 3. Release phase (release PR merged)
 

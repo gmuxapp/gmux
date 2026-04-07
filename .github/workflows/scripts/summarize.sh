@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate or condense a release summary using OpenRouter's free model router.
+# Generate or condense a release summary using Qwen 3.6 Plus via OpenRouter.
 #
 # Usage:
 #   .github/workflows/scripts/summarize.sh <version>              < notes.txt   # summarize
@@ -32,13 +32,8 @@ fi
 
 # ── Pick model ──
 
-# Preferred free models in priority order. We try each until one is
-# available; the first successful API call wins.
-preferred_models=(
-  "openai/gpt-oss-120b:free"
-  "qwen/qwen3.6-plus:free"
-  "google/gemma-3-27b-it:free"
-)
+# Qwen 3.6 Plus produces the best summaries among free models.
+model="qwen/qwen3.6-plus:free"
 script_dir=$(cd "$(dirname "$0")" && pwd)
 
 # ── Build prompt ──
@@ -64,14 +59,10 @@ fi
 
 # ── Call API with exponential backoff ──
 
-# Cycles through preferred models, retrying each with backoff.
-# Total budget: ~10 min across all models.
-attempt=0
-max_attempts=8
-for model in "${preferred_models[@]}" "${preferred_models[@]}" "${preferred_models[@]}"; do
-  attempt=$((attempt + 1))
-  (( attempt > max_attempts )) && break
-
+# Retry with backoff: ramp up to 30s, then poll every 30s for ~10 min.
+# A scheduled workflow retries overnight if this still fails.
+max_attempts=20
+for (( attempt=1; attempt<=max_attempts; attempt++ )); do
   echo "Trying $model (attempt $attempt/$max_attempts)..." >&2
   response=$(curl -s https://openrouter.ai/api/v1/chat/completions \
     -H "Authorization: Bearer $OPENROUTER_API_KEY" \
@@ -115,8 +106,8 @@ for model in "${preferred_models[@]}" "${preferred_models[@]}" "${preferred_mode
   fi
 
   if (( attempt < max_attempts )); then
-    delay=$(( 10 * (2 ** (attempt - 1)) ))  # 10, 20, 40, 80, 160
-    (( delay > 160 )) && delay=160
+    delay=$(( 10 * (2 ** (attempt - 1)) ))  # 10, 20, 30, 30, 30, ...
+    (( delay > 30 )) && delay=30
     echo "  Retrying in ${delay}s..." >&2
     sleep "$delay"
   fi
