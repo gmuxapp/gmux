@@ -40,7 +40,7 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 ### Sleep recovery
 Peers automatically reconnect and resync after system suspend, clearing stale connections without daemon restarts.
 ### Project matching
-**Breaking:** `projects.json` replaces separate `remote` and `paths` fields with a unified `match` array. Supports exact matching, per-host scoping, and automatic `~` canonicalization. Existing configs migrate on load.
+`projects.json` replaces separate `remote` and `paths` fields with a unified `match` array. Supports exact matching, per-host scoping, and automatic `~` canonicalization. Existing configs migrate on load.
 ### Remote setup and CLI
 The `gmuxd remote` command now uses an interactive flow that correctly handles Tailscale hostname changes and config writes. Added `gmuxd log-path` for log streaming and improved daemon restart messaging.
 
