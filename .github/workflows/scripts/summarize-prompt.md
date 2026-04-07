@@ -1,5 +1,3 @@
-The attached screenshot shows the gmux web UI.
-
 ## About gmux
 
 gmux is a session manager for AI coding agents (and any terminal command).
@@ -15,24 +13,24 @@ and build processes across their machines.
 ## Task
 
 Below are the merged PRs for a release. Each entry has a PR title
-(conventional commit format) and its description for context. Summarize
-them into a Discord message for the project's community server.
+(conventional commit format) and its description for context. Write a
+short summary for the project's Discord community server.
 
 ## Format
 
-Output only the summary text, nothing else. No preamble, no title, no
-heading, no links, no sign-off, no "here's the summary" intro.
+Output only the summary text, nothing else. No preamble, no links,
+no sign-off, no "here's the summary" intro.
 
-Use Discord markdown. Write in short paragraphs, not bullet points.
-Group by change type using inline bold labels, skipping sections that
-have no entries: **Breaking**, **Features**, **Fixes**, **Docs**.
+Organize by topic, not by change type. Group related work together
+regardless of whether individual PRs were features, fixes, or docs
+changes. Use a **bold heading** to introduce each topic, then a few
+sentences of prose. Skip minor fixes unless they affect daily usage.
 
-Example structure (do not copy the content):
+A detailed PR list follows this summary in the release notes, so don't
+try to be exhaustive. Highlight what matters: what's new, what works
+differently, what users should know. Call out breaking changes clearly.
 
-**Features** Short paragraph describing the notable new capabilities.
-Related changes covered together in flowing prose.
-
-**Fixes** Another paragraph covering the important bug fixes.
+Use Discord markdown. 2-4 short paragraphs for a typical release.
 
 ## Guidelines
 
@@ -41,5 +39,5 @@ Related changes covered together in flowing prose.
   change, not content to surface verbatim.
 - Be direct, technical, and accurate. Assume readers are developers who use
   the tool daily. No hype, no filler, no calls to action.
-- Multiple entries may be part of the same effort; cover them together.
-- Focus on the highlights rather than being exhaustive.
+- Related PRs are often part of the same effort; cover them once.
+
