@@ -297,11 +297,19 @@ func resetStateIfHostnameChanged(tsnetDir, hostname string) {
 		return // hostname unchanged
 	}
 
-	// If the directory exists and has state, nuke it.
-	if _, err := os.Stat(tsnetDir); err == nil {
-		if prev != nil {
-			log.Printf("tsauth: hostname changed from %q to %q, clearing tsnet state", strings.TrimSpace(string(prev)), hostname)
-		}
+	dirExists := false
+	if _, serr := os.Stat(tsnetDir); serr == nil {
+		dirExists = true
+	}
+
+	if err != nil && dirExists {
+		// Sentinel missing but directory exists: upgrade from an older
+		// version that didn't write the sentinel. Adopt the current
+		// hostname without nuking state to avoid forcing re-auth.
+		log.Printf("tsauth: writing hostname sentinel for existing state (hostname %q)", hostname)
+	} else if prev != nil {
+		// Sentinel exists with a different hostname: clear everything.
+		log.Printf("tsauth: hostname changed from %q to %q, clearing tsnet state", strings.TrimSpace(string(prev)), hostname)
 		if err := os.RemoveAll(tsnetDir); err != nil {
 			log.Printf("tsauth: WARNING: failed to clear tsnet state dir: %v", err)
 		}

@@ -82,6 +82,43 @@ func TestResetStateIfHostnameChanged(t *testing.T) {
 	}
 }
 
+// Upgrade scenario: existing tsnet state from a version that didn't write
+// the sentinel file. The state must be preserved (not nuked), and the
+// sentinel must be written for future runs.
+func TestResetStateIfHostnameChanged_UpgradePreservesState(t *testing.T) {
+	dir := t.TempDir()
+	tsnetDir := filepath.Join(dir, "tsnet")
+
+	// Simulate pre-existing tsnet state with no sentinel.
+	if err := os.MkdirAll(tsnetDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(tsnetDir, "tailscaled.state")
+	if err := os.WriteFile(statePath, []byte("existing-keys"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resetStateIfHostnameChanged(tsnetDir, "gmux")
+
+	// State file must survive.
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("state file was deleted during upgrade: %v", err)
+	}
+	if string(data) != "existing-keys" {
+		t.Errorf("state file content changed: %q", data)
+	}
+
+	// Sentinel must now exist.
+	got, err := os.ReadFile(filepath.Join(tsnetDir, hostnameFile))
+	if err != nil {
+		t.Fatalf("sentinel not written: %v", err)
+	}
+	if string(got) != "gmux\n" {
+		t.Errorf("sentinel = %q, want %q", got, "gmux\n")
+	}
+}
+
 func TestAddIfMissing(t *testing.T) {
 	// Adds when not present.
 	list := addIfMissing(nil, "alice@github")

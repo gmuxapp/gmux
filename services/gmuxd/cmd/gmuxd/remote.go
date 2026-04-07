@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
@@ -72,6 +75,10 @@ func remoteSetup(cfg config.Config, stdin io.Reader, stdout, stderr io.Writer) i
 
 // enableTailscaleConfig ensures tailscale.enabled = true in the config file.
 // Creates the file if it doesn't exist, or appends the section if missing.
+//
+// Uses the TOML library to parse the file and understand the current state,
+// then makes the minimal edit needed. This preserves comments, formatting,
+// and all other user content.
 func enableTailscaleConfig(cfgPath string) error {
 	dir := filepath.Dir(cfgPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -83,49 +90,92 @@ func enableTailscaleConfig(cfgPath string) error {
 		return fmt.Errorf("cannot read %s: %w", cfgPath, err)
 	}
 
+	// Parse with the TOML library to understand the current state.
+	var parsed struct {
+		Tailscale struct {
+			Enabled bool `toml:"enabled"`
+		} `toml:"tailscale"`
+	}
+	md, parseErr := toml.Decode(string(data), &parsed)
+	if parseErr != nil {
+		return fmt.Errorf("cannot parse %s: %w", cfgPath, parseErr)
+	}
+
+	if parsed.Tailscale.Enabled {
+		return nil // already enabled
+	}
+
 	content := string(data)
-	if strings.Contains(content, "[tailscale]") {
-		// The section exists but enabled is presumably false or missing.
-		// Replace or add the enabled line.
-		lines := strings.Split(content, "\n")
-		inSection := false
-		replaced := false
-		for i, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if trimmed == "[tailscale]" {
-				inSection = true
-				continue
-			}
-			if inSection && strings.HasPrefix(trimmed, "[") {
-				// Hit the next section without finding enabled.
-				// Insert before this line.
-				lines = append(lines[:i], append([]string{"enabled = true"}, lines[i:]...)...)
-				replaced = true
-				break
-			}
-			if inSection && strings.HasPrefix(trimmed, "enabled") {
-				lines[i] = "enabled = true"
-				replaced = true
-				break
-			}
-		}
-		if !replaced && inSection {
-			// enabled not found and no next section; append at end.
-			lines = append(lines, "enabled = true")
-		}
-		content = strings.Join(lines, "\n")
-	} else {
-		// No tailscale section at all.
-		if content != "" && !strings.HasSuffix(content, "\n") {
-			content += "\n"
-		}
-		if content != "" {
+	// Normalize: ensure trailing newline so regex patterns reliably
+	// match line endings (e.g. section header at end of file).
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+
+	switch {
+	case !md.IsDefined("tailscale"):
+		// No [tailscale] section: append it.
+		if content == "" {
+			// New file: add a reference comment.
+			content = "# gmux daemon configuration\n# Reference: https://gmux.app/reference/host-toml/\n\n"
+		} else {
+			// content already ends with \n from normalization above.
 			content += "\n"
 		}
 		content += "[tailscale]\nenabled = true\n"
+
+	case !md.IsDefined("tailscale", "enabled"):
+		// Section exists but no enabled key: insert after the header.
+		content = insertAfterSection(content, "tailscale", "enabled = true")
+
+	default:
+		// enabled = false: replace the value in place.
+		content = replaceKeyInSection(content, "tailscale", "enabled", "enabled = true")
 	}
 
 	return os.WriteFile(cfgPath, []byte(content), 0o644)
+}
+
+// insertAfterSection inserts a line immediately after the [section] header.
+func insertAfterSection(content, section, line string) string {
+	re := regexp.MustCompile(`(?m)^\[` + regexp.QuoteMeta(section) + `\][ \t]*\r?\n`)
+	loc := re.FindStringIndex(content)
+	if loc == nil {
+		return content // shouldn't happen, caller checked IsDefined
+	}
+	return content[:loc[1]] + line + "\n" + content[loc[1]:]
+}
+
+// replaceKeyInSection replaces a key = value line within a TOML section.
+// Matches the first line starting with the key name (ignoring leading
+// whitespace) between the section header and the next section header.
+func replaceKeyInSection(content, section, key, replacement string) string {
+	headerRe := regexp.MustCompile(`(?m)^\[` + regexp.QuoteMeta(section) + `\][ \t]*\r?\n`)
+	headerLoc := headerRe.FindStringIndex(content)
+	if headerLoc == nil {
+		return content
+	}
+
+	// Search for the key line between the header and the next section.
+	rest := content[headerLoc[1]:]
+	keyRe := regexp.MustCompile(`(?m)^[ \t]*` + regexp.QuoteMeta(key) + `[ \t]*=.*$`)
+	nextSection := regexp.MustCompile(`(?m)^\[`)
+
+	// Limit search to before the next section header.
+	searchEnd := len(rest)
+	if loc := nextSection.FindStringIndex(rest); loc != nil {
+		searchEnd = loc[0]
+	}
+
+	keyLoc := keyRe.FindStringIndex(rest[:searchEnd])
+	if keyLoc == nil {
+		return content
+	}
+
+	// Replace the matched line with the new value.
+	absStart := headerLoc[1] + keyLoc[0]
+	absEnd := headerLoc[1] + keyLoc[1]
+	return content[:absStart] + replacement + content[absEnd:]
 }
 
 // remoteStatus checks on a running daemon with tailscale enabled.

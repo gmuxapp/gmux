@@ -29,6 +29,9 @@ func TestEnableTailscaleConfig_NewFile(t *testing.T) {
 	if !strings.Contains(content, "enabled = true") {
 		t.Errorf("missing enabled = true in:\n%s", content)
 	}
+	if !strings.Contains(content, "host-toml") {
+		t.Errorf("new file should contain reference link:\n%s", content)
+	}
 }
 
 func TestEnableTailscaleConfig_ExistingFileNoSection(t *testing.T) {
@@ -50,6 +53,10 @@ func TestEnableTailscaleConfig_ExistingFileNoSection(t *testing.T) {
 	}
 	if !strings.Contains(content, "enabled = true") {
 		t.Errorf("missing enabled = true:\n%s", content)
+	}
+	// Should not prepend the header comment to an existing user file.
+	if strings.HasPrefix(content, "# gmux") {
+		t.Errorf("should not add header comment to existing file:\n%s", content)
 	}
 }
 
@@ -94,6 +101,116 @@ func TestEnableTailscaleConfig_ExistingSectionNoEnabled(t *testing.T) {
 	}
 	if !strings.Contains(content, "[discovery]") {
 		t.Errorf("discovery section lost:\n%s", content)
+	}
+}
+
+func TestEnableTailscaleConfig_PreservesComments(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "host.toml")
+	initial := `# My gmux config
+port = 9999
+
+[tailscale]
+# Keep this hostname!
+hostname = "mybox"
+enabled = false  # was disabled
+
+[discovery]
+# auto-discover containers
+devcontainers = true
+`
+	os.WriteFile(cfgPath, []byte(initial), 0o644)
+
+	if err := enableTailscaleConfig(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(cfgPath)
+	content := string(data)
+
+	// Comments must survive.
+	for _, want := range []string{
+		"# My gmux config",
+		"# Keep this hostname!",
+		"# auto-discover containers",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("comment lost %q in:\n%s", want, content)
+		}
+	}
+
+	// Values must survive.
+	if !strings.Contains(content, "port = 9999") {
+		t.Errorf("port lost:\n%s", content)
+	}
+	if !strings.Contains(content, `hostname = "mybox"`) {
+		t.Errorf("hostname lost:\n%s", content)
+	}
+
+	// The enabled line must be replaced.
+	if !strings.Contains(content, "enabled = true") {
+		t.Errorf("enabled not set:\n%s", content)
+	}
+	if strings.Contains(content, "enabled = false") {
+		t.Errorf("old enabled still present:\n%s", content)
+	}
+}
+
+func TestEnableTailscaleConfig_AlreadyEnabled(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "host.toml")
+	initial := "[tailscale]\nenabled = true\nhostname = \"mybox\"\n"
+	os.WriteFile(cfgPath, []byte(initial), 0o644)
+
+	if err := enableTailscaleConfig(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(cfgPath)
+	if string(data) != initial {
+		t.Errorf("file was modified when already enabled:\n%s", data)
+	}
+}
+
+// Verify that enableTailscaleConfig produces valid TOML that config.Load
+// accepts with tailscale actually enabled. Tests the full round-trip.
+func TestEnableTailscaleConfig_ProducesValidConfig(t *testing.T) {
+	cases := []struct {
+		name    string
+		initial string
+	}{
+		{"empty file", ""},
+		{"port only", "port = 9999\n"},
+		{"section disabled", "[tailscale]\nenabled = false\nhostname = \"mybox\"\n"},
+		{"section no enabled", "[tailscale]\nhostname = \"mybox\"\n"},
+		{"no trailing newline", "[tailscale]\nhostname = \"mybox\""},
+		{"section header only no newline", "[tailscale]"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfgDir := filepath.Join(dir, "gmux")
+			os.MkdirAll(cfgDir, 0o755)
+			cfgPath := filepath.Join(cfgDir, "host.toml")
+			if tt.initial != "" {
+				os.WriteFile(cfgPath, []byte(tt.initial), 0o644)
+			}
+
+			if err := enableTailscaleConfig(cfgPath); err != nil {
+				t.Fatal(err)
+			}
+
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			cfg, err := config.Load()
+			if err != nil {
+				data, _ := os.ReadFile(cfgPath)
+				t.Fatalf("config.Load failed: %v\nfile contents:\n%s", err, data)
+			}
+			if !cfg.Tailscale.Enabled {
+				data, _ := os.ReadFile(cfgPath)
+				t.Errorf("tailscale.enabled = false after enableTailscaleConfig\nfile contents:\n%s", data)
+			}
+		})
 	}
 }
 
