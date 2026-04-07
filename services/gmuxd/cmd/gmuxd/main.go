@@ -1344,20 +1344,20 @@ func serve(stderr io.Writer) int {
 	var sockSrv *http.Server
 	var tcpSrv *http.Server
 
+	// shutdownCh is closed by the /v1/shutdown handler to trigger the
+	// same graceful exit path as SIGINT/SIGTERM. Without this, the
+	// handler only shut down HTTP listeners, leaving background
+	// goroutines (peering, discovery, file monitors) running
+	// indefinitely as a zombie process.
+	shutdownCh := make(chan struct{})
+	var shutdownOnce sync.Once
+
 	mux.HandleFunc("POST /v1/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ok": true})
-		log.Printf("shutdown requested — exiting")
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			if tcpSrv != nil {
-				tcpSrv.Shutdown(ctx)
-			}
-			if sockSrv != nil {
-				sockSrv.Shutdown(ctx)
-			}
-			unixipc.Cleanup(sock)
-		}()
+		shutdownOnce.Do(func() {
+			log.Printf("shutdown requested — exiting")
+			close(shutdownCh)
+		})
 	})
 
 	// ── Unix socket listener (local IPC, no auth) ──
@@ -1471,8 +1471,12 @@ func serve(stderr io.Writer) int {
 
 	log.Printf("gmuxd %s ready", version)
 
-	sig := <-sigCh
-	log.Printf("received %v — shutting down", sig)
+	select {
+	case sig := <-sigCh:
+		log.Printf("received %v — shutting down", sig)
+	case <-shutdownCh:
+		log.Printf("shutdown requested — shutting down")
+	}
 
 	if tsDiscovery != nil {
 		tsDiscovery.Stop()
