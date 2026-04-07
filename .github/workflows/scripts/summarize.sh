@@ -40,8 +40,8 @@ script_dir=$(cd "$(dirname "$0")" && pwd)
 
 if $condense; then
   prompt="Condense the following release summary to ${max_chars} characters \
-or fewer. Preserve the section structure (**Breaking changes**, **Features**, \
-**Fixes**). Keep the high-level picture and key migration actions; cut \
+or fewer. Preserve the section structure (**Breaking**, **Features**, **Fixes**, \
+**Docs**). Keep the high-level picture and key migration actions; cut \
 implementation details and specific flag/env var names. Do not add anything \
 new. Output only the condensed summary.
 

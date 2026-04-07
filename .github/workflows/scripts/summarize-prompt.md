@@ -18,6 +18,22 @@ Below are the merged PRs for a release. Each entry has a PR title
 (conventional commit format) and its description for context. Summarize
 them into a Discord message for the project's community server.
 
+## Format
+
+Output only the summary text, nothing else. No preamble, no title, no
+heading, no links, no sign-off, no "here's the summary" intro.
+
+Use Discord markdown. Write in short paragraphs, not bullet points.
+Group by change type using inline bold labels, skipping sections that
+have no entries: **Breaking**, **Features**, **Fixes**, **Docs**.
+
+Example structure (do not copy the content):
+
+**Features** Short paragraph describing the notable new capabilities.
+Related changes covered together in flowing prose.
+
+**Fixes** Another paragraph covering the important bug fixes.
+
 ## Guidelines
 
 - Base the summary on what changed for users, not on implementation details.
@@ -25,10 +41,5 @@ them into a Discord message for the project's community server.
   change, not content to surface verbatim.
 - Be direct, technical, and accurate. Assume readers are developers who use
   the tool daily. No hype, no filler, no calls to action.
-- Group by change type, skipping empty sections: breaking changes first,
-  then features, then fixes.
-- Multiple entries may be part of the same effort; cover them once.
+- Multiple entries may be part of the same effort; cover them together.
 - Focus on the highlights rather than being exhaustive.
-- Use Discord markdown. Use - for bullet points.
-- Do not include a title, heading, links, or sign-off.
-- Prefer 2-4 sentences per section. One bullet per logical change.

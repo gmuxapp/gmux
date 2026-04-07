@@ -68,11 +68,18 @@ bump="none"
 declare -A pr_bumps
 declare -A pr_titles
 declare -A pr_bodies
+summary_prs=()      # PRs to include in LLM summary
 breaking_items=()
 feature_items=()
 fix_items=()
+docs_items=()
 
-cc_re='^(feat|fix)(\([^)]+\))?(!)?: .+$'
+# Matches any conventional commit title: type(scope)!: description
+cc_re='^([a-z]+)(\([^)]+\))?(!)?: .+$'
+# Types that trigger a version bump
+bump_re='^(feat|fix)$'
+# Types to include in summary and changelog (superset of bump types)
+summary_re='^(feat|fix|docs|perf)$'
 
 for pr_num in "${pr_nums[@]}"; do
   pr_json=$(gh pr view "$pr_num" --json title,body 2>/dev/null || echo '{}')
@@ -80,26 +87,23 @@ for pr_num in "${pr_nums[@]}"; do
   body=$(echo "$pr_json" | jq -r '.body // ""')
 
   # Parse conventional commit prefix: type(scope)!: description
-  if [[ "$title" =~ $cc_re ]]; then
-    type="${BASH_REMATCH[1]}"
-    breaking="${BASH_REMATCH[3]}"
-  else
-    # Not a releasable PR (ci:, docs:, refactor:, etc.)
+  if [[ ! "$title" =~ $cc_re ]]; then
     continue
   fi
+  type="${BASH_REMATCH[1]}"
+  breaking="${BASH_REMATCH[3]}"
 
-  # Determine bump level.
+  # Breaking changes always get a bump regardless of type.
   if [[ -n "$breaking" ]]; then
     bump_level="major"
-  elif [[ "$type" == "feat" ]]; then
-    bump_level="minor"
+  elif [[ "$type" =~ $bump_re ]]; then
+    case "$type" in
+      feat) bump_level="minor" ;;
+      fix)  bump_level="patch" ;;
+    esac
   else
-    bump_level="patch"
+    bump_level="none"
   fi
-
-  pr_bumps[$pr_num]="$bump_level"
-  pr_titles[$pr_num]="$title"
-  pr_bodies[$pr_num]="$body"
 
   # Track overall bump (highest wins).
   case "$bump_level" in
@@ -108,14 +112,29 @@ for pr_num in "${pr_nums[@]}"; do
     patch) [[ "$bump" == "none" ]] && bump="patch" ;;
   esac
 
+  # Skip types we don't surface (ci, chore, refactor, test, build, style).
+  if [[ -z "$breaking" ]] && [[ ! "$type" =~ $summary_re ]]; then
+    continue
+  fi
+
+  pr_bumps[$pr_num]="$bump_level"
+  pr_titles[$pr_num]="$title"
+  pr_bodies[$pr_num]="$body"
+  summary_prs+=("$pr_num")
+
   # Build PR list item (strip conventional commit prefix for readability).
   description="${title#*: }"
   item="- ${description} ([#${pr_num}](${repo_url}/pull/${pr_num}))"
-  case "$bump_level" in
-    major) breaking_items+=("$item") ;;
-    minor) feature_items+=("$item") ;;
-    patch) fix_items+=("$item") ;;
-  esac
+  if [[ -n "$breaking" ]]; then
+    breaking_items+=("$item")
+  else
+    case "$type" in
+      feat) feature_items+=("$item") ;;
+      fix)  fix_items+=("$item") ;;
+      docs) docs_items+=("$item") ;;
+      perf) feature_items+=("$item") ;;
+    esac
+  fi
 done
 
 if [[ "$bump" == "none" ]]; then
@@ -137,7 +156,7 @@ new_version="$major.$minor.$patch_v"
 # ── Build LLM input ──
 
 llm_input=""
-for pr_num in $(echo "${!pr_bumps[@]}" | tr ' ' '\n' | sort -n); do
+for pr_num in $(echo "${summary_prs[@]}" | tr ' ' '\n' | sort -n); do
   llm_input+="## ${pr_titles[$pr_num]} (#${pr_num})"$'\n\n'
   if [[ -n "${pr_bodies[$pr_num]}" ]]; then
     llm_input+="${pr_bodies[$pr_num]}"$'\n\n'
@@ -164,6 +183,11 @@ fi
 if [[ ${#fix_items[@]} -gt 0 ]]; then
   pr_list+="### Fixes"$'\n'
   for item in "${fix_items[@]}"; do pr_list+="$item"$'\n'; done
+  pr_list+=$'\n'
+fi
+if [[ ${#docs_items[@]} -gt 0 ]]; then
+  pr_list+="### Docs"$'\n'
+  for item in "${docs_items[@]}"; do pr_list+="$item"$'\n'; done
   pr_list+=$'\n'
 fi
 pr_list=$(echo "$pr_list" | sed -e :a -e '/^\n*$/{$d;N;ba}')

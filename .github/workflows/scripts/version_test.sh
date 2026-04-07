@@ -23,44 +23,66 @@ assert_eq() {
 
 # ── Parse a PR title and echo "type bump" or "skip" ──
 
-parse_title() {
+# classify_title outputs: "<bump> <summary>" where bump is major/minor/patch/none
+# and summary is "include" or "skip".
+classify_title() {
   local title="$1"
-  local cc_re='^(feat|fix)(\([^)]+\))?(!)?: .+$'
-  if [[ "$title" =~ $cc_re ]]; then
-    local type="${BASH_REMATCH[1]}"
-    local breaking="${BASH_REMATCH[3]}"
-    if [[ -n "$breaking" ]]; then
-      echo "$type major"
-    elif [[ "$type" == "feat" ]]; then
-      echo "$type minor"
-    else
-      echo "$type patch"
-    fi
-  else
-    echo "skip"
+  local cc_re='^([a-z]+)(\([^)]+\))?(!)?: .+$'
+  local bump_re='^(feat|fix)$'
+  local summary_re='^(feat|fix|docs|perf)$'
+  if [[ ! "$title" =~ $cc_re ]]; then
+    echo "none skip"
+    return
   fi
+  local type="${BASH_REMATCH[1]}"
+  local breaking="${BASH_REMATCH[3]}"
+  local bump="none" summary="skip"
+
+  if [[ -n "$breaking" ]]; then
+    bump="major"
+    summary="include"
+  elif [[ "$type" =~ $bump_re ]]; then
+    case "$type" in
+      feat) bump="minor" ;;
+      fix)  bump="patch" ;;
+    esac
+    summary="include"
+  elif [[ "$type" =~ $summary_re ]]; then
+    summary="include"
+  fi
+  echo "$bump $summary"
 }
 
 # ── PR title classification ──
 
-echo "PR title parsing:"
+echo "Version bumps:"
 
-assert_eq "feat: minor"            "feat minor"  "$(parse_title 'feat: add new feature')"
-assert_eq "fix: patch"             "fix patch"   "$(parse_title 'fix: resolve crash')"
-assert_eq "feat!: major"           "feat major"  "$(parse_title 'feat!: remove old API')"
-assert_eq "fix!: major"            "fix major"   "$(parse_title 'fix!: change error format')"
-assert_eq "feat(web): minor"       "feat minor"  "$(parse_title 'feat(web): add dark mode')"
-assert_eq "fix(core): patch"       "fix patch"   "$(parse_title 'fix(core): memory leak')"
-assert_eq "feat(web)!: major"      "feat major"  "$(parse_title 'feat(web)!: redesign settings')"
-assert_eq "fix(core)!: major"      "fix major"   "$(parse_title 'fix(core)!: change error format')"
-assert_eq "docs: skip"             "skip"        "$(parse_title 'docs: update readme')"
-assert_eq "ci: skip"               "skip"        "$(parse_title 'ci: fix workflow')"
-assert_eq "refactor: skip"         "skip"        "$(parse_title 'refactor: extract module')"
-assert_eq "chore: skip"            "skip"        "$(parse_title 'chore: update deps')"
-assert_eq "no prefix: skip"        "skip"        "$(parse_title 'update the thing')"
-assert_eq "release: skip"          "skip"        "$(parse_title 'release: v1.0.0')"
-assert_eq "empty after colon"      "skip"        "$(parse_title 'feat:')"
-assert_eq "only space after colon" "skip"        "$(parse_title 'feat: ')"
+assert_eq "feat: minor"            "minor include"  "$(classify_title 'feat: add new feature')"
+assert_eq "fix: patch"             "patch include"  "$(classify_title 'fix: resolve crash')"
+assert_eq "feat!: major"           "major include"  "$(classify_title 'feat!: remove old API')"
+assert_eq "fix!: major"            "major include"  "$(classify_title 'fix!: change error format')"
+assert_eq "feat(web): minor"       "minor include"  "$(classify_title 'feat(web): add dark mode')"
+assert_eq "fix(core): patch"       "patch include"  "$(classify_title 'fix(core): memory leak')"
+assert_eq "feat(web)!: major"      "major include"  "$(classify_title 'feat(web)!: redesign settings')"
+assert_eq "fix(core)!: major"      "major include"  "$(classify_title 'fix(core)!: change error format')"
+assert_eq "empty after colon"      "none skip"      "$(classify_title 'feat:')"
+assert_eq "only space after colon" "none skip"      "$(classify_title 'feat: ')"
+assert_eq "no prefix"              "none skip"      "$(classify_title 'update the thing')"
+assert_eq "release: no bump"       "none skip"      "$(classify_title 'release: v1.0.0')"
+
+echo ""
+echo "Summary inclusion:"
+
+assert_eq "docs: include"          "none include"   "$(classify_title 'docs: update readme')"
+assert_eq "perf: include"          "none include"   "$(classify_title 'perf: optimize query')"
+assert_eq "ci: skip"               "none skip"      "$(classify_title 'ci: fix workflow')"
+assert_eq "chore: skip"            "none skip"      "$(classify_title 'chore: update deps')"
+assert_eq "refactor: skip"         "none skip"      "$(classify_title 'refactor: extract module')"
+assert_eq "test: skip"             "none skip"      "$(classify_title 'test: add unit tests')"
+assert_eq "build: skip"            "none skip"      "$(classify_title 'build: update makefile')"
+assert_eq "style: skip"            "none skip"      "$(classify_title 'style: format code')"
+assert_eq "docs!: major + include" "major include"  "$(classify_title 'docs!: remove API docs')"
+assert_eq "ci!: major + include"   "major include"  "$(classify_title 'ci!: drop node 18 support')"
 
 # ── Strip prefix for changelog ──
 
