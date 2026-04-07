@@ -14,36 +14,34 @@ and build processes across their machines.
 
 Below are the merged PRs for a release. Each entry has a PR title
 (conventional commit format) and its description for context. Write a
-short summary for the project's Discord community server.
+brief summary for the project's Discord community server.
 
 ## Format
 
-Output only the summary text, nothing else. No preamble, no links,
-no sign-off, no "here's the summary" intro.
+Output only the summary, nothing else. No preamble, no links, no
+sign-off.
 
-Organize by topic, not by change type. Group related work together
-regardless of whether individual PRs were features, fixes, or docs
-changes. Use a ### subheading for each topic, then a short paragraph.
-Skip minor fixes unless they affect daily usage.
+Use ### subheadings to separate topics, with 1-2 sentences each.
+Organize by topic, not by change type. Group related work together.
+Skip minor fixes unless they affect daily usage. The full PR list is
+right below this summary, so keep it high-level.
 
-A detailed PR list follows this summary in the release notes, so don't
-try to be exhaustive. Highlight what matters: what's new, what works
-differently, what users should know. Call out breaking changes clearly.
+Aim for the whole summary to be around 100 words. Treat that as a
+soft target, not a hard limit.
 
-Use Discord markdown. 2-5 sections for a typical release. Example:
+Example tone and length:
 
-### Project configuration
-Short paragraph about what changed.
+### Project matching
+`projects.json` uses a new `match` rule array instead of separate
+`remote`/`paths` fields. Supports exact matching and per-host scoping.
+Existing configs migrate automatically.
 
 ### Sleep recovery
-Another paragraph about a different topic.
+Peers now automatically reconnect after system suspend, no restart needed.
 
 ## Guidelines
 
-- Base the summary on what changed for users, not on implementation details.
-  The PR descriptions are background context to help you understand the
-  change, not content to surface verbatim.
-- Be direct, technical, and accurate. Assume readers are developers who use
-  the tool daily. No hype, no filler, no calls to action.
+- Write for users, not implementers. Skip internal details.
+- Be direct and technical. No hype, no filler.
 - Related PRs are often part of the same effort; cover them once.
-
+- Flag breaking changes with **Breaking:** at the start of the sentence.
