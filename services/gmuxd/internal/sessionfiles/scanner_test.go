@@ -131,6 +131,67 @@ func TestScanRediscoversAfterRemove(t *testing.T) {
 	}
 }
 
+func TestScanSkipsDismissedSessions(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	sessID := "aaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	writePiSession(t, tmpHome, "/tmp/project", sessID, "hello")
+
+	s := newTestStore()
+	sc := New(s)
+	sc.Scan()
+
+	if len(s.List()) != 1 {
+		t.Fatal("expected 1 session from initial scan")
+	}
+	fileID := s.List()[0].ID // "file-aaaa-bbb"
+
+	// Dismiss + remove (as the dismiss handler does).
+	s.Dismiss(fileID)
+	s.Remove(fileID)
+	if len(s.List()) != 0 {
+		t.Fatal("expected 0 sessions after dismiss")
+	}
+
+	// Rescan: dismissed session should NOT come back.
+	sc.Scan()
+	if len(s.List()) != 0 {
+		t.Errorf("expected 0 sessions after rescan (dismissed), got %d", len(s.List()))
+	}
+}
+
+func TestDismissedSessionReappearsAfterResume(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	sessID := "aaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	writePiSession(t, tmpHome, "/tmp/project", sessID, "hello")
+
+	s := newTestStore()
+	sc := New(s)
+	sc.Scan()
+
+	fileID := s.List()[0].ID
+
+	// Dismiss + remove.
+	s.Dismiss(fileID)
+	s.Remove(fileID)
+
+	// Simulate a resume: the tool re-launches and discovery registers
+	// a live session with the same ID.
+	s.Upsert(store.Session{ID: fileID, Alive: true, Kind: "pi", Cwd: "/tmp/project"})
+
+	// The live session clears the dismissed flag. After it exits and
+	// is removed, the scanner should rediscover it.
+	s.Remove(fileID)
+	sc.Scan()
+
+	if len(s.List()) != 1 {
+		t.Errorf("expected 1 session after resume+exit+rescan, got %d", len(s.List()))
+	}
+}
+
 func TestScanUsesFileHeaderCwd(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)

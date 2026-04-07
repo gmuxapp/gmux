@@ -124,12 +124,18 @@ type Store struct {
 	sessions       map[string]Session
 	subscribers    map[*subscriber]struct{}
 	commandTitlers map[string]func([]string) string
+
+	// dismissed tracks session IDs that were explicitly dismissed by the
+	// user. The file scanner checks this to avoid re-creating sessions
+	// from files that are still on disk. In-memory only; resets on restart.
+	dismissed map[string]bool
 }
 
 func New() *Store {
 	return &Store{
 		sessions:    make(map[string]Session),
 		subscribers: make(map[*subscriber]struct{}),
+		dismissed:   make(map[string]bool),
 	}
 }
 
@@ -187,6 +193,11 @@ func (s *Store) Upsert(sess Session) {
 	if !skip {
 		s.ensureUniqueResumeKey(&sess)
 		s.sessions[sess.ID] = sess
+		// A live session clears any dismissed flag so that if it later
+		// exits the file scanner can rediscover it as resumable.
+		if sess.Alive {
+			delete(s.dismissed, sess.ID)
+		}
 	}
 	s.mu.Unlock()
 
@@ -326,6 +337,24 @@ func (s *Store) Remove(id string) bool {
 		})
 	}
 	return ok
+}
+
+// Dismiss marks a session ID as explicitly dismissed by the user.
+// Dismissed IDs are checked by the file scanner to prevent re-creation
+// from session files still on disk. Clearing the dismissed flag happens
+// automatically when the same ID is re-inserted via Upsert (e.g. the
+// user resumes the session from the tool's own TUI).
+func (s *Store) Dismiss(id string) {
+	s.mu.Lock()
+	s.dismissed[id] = true
+	s.mu.Unlock()
+}
+
+// IsDismissed reports whether a session ID was explicitly dismissed.
+func (s *Store) IsDismissed(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.dismissed[id]
 }
 
 // RemoveByPeer removes all sessions belonging to a peer and broadcasts

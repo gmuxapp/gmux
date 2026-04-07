@@ -359,6 +359,7 @@ export function killSession(sessionId: string): Promise<void> {
 }
 
 export function dismissSession(sessionId: string): Promise<void> {
+  removeSession(sessionId)
   return postAction(`/v1/sessions/${sessionId}/dismiss`)
 }
 

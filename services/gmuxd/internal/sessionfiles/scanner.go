@@ -105,6 +105,11 @@ func (sc *Scanner) Scan() {
 				continue
 			}
 
+			// Skip sessions the user explicitly dismissed.
+			if sc.store.IsDismissed("file-" + info.ID[:8]) {
+				continue
+			}
+
 			if hasResume && !resumer.CanResume(path) {
 				continue
 			}

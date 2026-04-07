@@ -1138,6 +1138,8 @@ func serve(stderr io.Writer) int {
 			}
 			// Remove session from its project's sessions array.
 			projectMgr.DismissSession(sessionID, sess.ResumeKey)
+			// Mark as dismissed so the file scanner doesn't re-create it.
+			sessions.Dismiss(sessionID)
 			// Remove from store — broadcasts session-remove to all clients.
 			sessions.Remove(sessionID)
 			if subs != nil {
