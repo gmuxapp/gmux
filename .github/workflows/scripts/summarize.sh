@@ -113,11 +113,23 @@ for (( attempt=1; attempt<=max_attempts; attempt++ )); do
   fi
 
   # Log the error details so failures are diagnosable.
-  error=$(echo "$response" | jq -r '.error.message // .error // empty' 2>/dev/null || true)
+  # OpenRouter nests provider errors in .error.metadata.raw
+  error=$(
+    echo "$response" | jq -r '
+      if .error.metadata.raw then
+        "\(.error.message): \(.error.metadata.raw)"
+      elif .error.message then
+        .error.message
+      elif .error then
+        (.error | tostring)
+      else
+        empty
+      end' 2>/dev/null || true
+  )
   if [[ -n "$error" ]]; then
     echo "Attempt $attempt/$max_attempts failed: $error" >&2
   else
-    echo "Attempt $attempt/$max_attempts failed: $(echo "$response" | head -c 200)" >&2
+    echo "Attempt $attempt/$max_attempts failed (raw): $(echo "$response" | head -c 500)" >&2
   fi
 
   if (( attempt < max_attempts )); then
