@@ -187,6 +187,7 @@ Commands:
   status             Show daemon health, listeners, and sessions
   auth               Show the auth URL and token
   remote             Set up or check remote access via Tailscale
+  log-path           Print the daemon log file path
   version            Show gmuxd version
   help               Show this help
 
@@ -269,6 +270,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		_, _ = fmt.Fprintf(stdout, "%s\n", version)
 		return 0
+	case "log-path":
+		if len(args) > 0 {
+			_, _ = fmt.Fprintf(stderr, "gmuxd log-path: unexpected arguments: %s\n", strings.Join(args, " "))
+			return 2
+		}
+		_, _ = fmt.Fprintf(stdout, "%s\n", filepath.Join(paths.StateDir(), "gmuxd.log"))
+		return 0
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0
@@ -291,6 +299,20 @@ func startBackground(stdout, stderr io.Writer) int {
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: cannot determine own path: %v\n", err)
 		return 1
+	}
+
+	// Check for an existing daemon and stop it first.
+	sock := paths.SocketPath()
+	if oldVer, ok := unixipc.HealthVersion(sock); ok {
+		if oldVer != "" {
+			_, _ = fmt.Fprintf(stdout, "gmuxd: stopping existing daemon (%s)...\n", oldVer)
+		} else {
+			_, _ = fmt.Fprintf(stdout, "gmuxd: stopping existing daemon...\n")
+		}
+		if !unixipc.Shutdown(sock) {
+			_, _ = fmt.Fprintf(stderr, "gmuxd: existing daemon did not shut down\n")
+			return 1
+		}
 	}
 
 	stateDir := paths.StateDir()
@@ -325,7 +347,6 @@ func startBackground(stdout, stderr io.Writer) int {
 	}()
 
 	// Wait for the daemon to become healthy.
-	sock := paths.SocketPath()
 	healthy := false
 	for range 30 {
 		time.Sleep(100 * time.Millisecond)

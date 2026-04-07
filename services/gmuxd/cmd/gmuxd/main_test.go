@@ -287,11 +287,30 @@ func TestRunAuthWithRunningDaemon(t *testing.T) {
 	}
 }
 
+func TestRunLogPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"log-path"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	got := strings.TrimSpace(stdout.String())
+	want := filepath.Join(dir, "gmux", "gmuxd.log")
+	if got != want {
+		t.Errorf("log-path = %q, want %q", got, want)
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("unexpected stderr: %q", stderr.String())
+	}
+}
+
 func TestUsageIncludesNewCommands(t *testing.T) {
 	var stdout bytes.Buffer
 	printUsage(&stdout)
 	out := stdout.String()
-	for _, cmd := range []string{"start", "stop", "status", "auth", "remote"} {
+	for _, cmd := range []string{"start", "stop", "status", "auth", "remote", "log-path"} {
 		if !strings.Contains(out, cmd) {
 			t.Errorf("usage missing command %q", cmd)
 		}
