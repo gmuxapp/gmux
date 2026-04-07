@@ -2,8 +2,8 @@
 # Generate or condense a release summary using OpenRouter's best free model.
 #
 # Usage:
-#   scripts/summarize.sh <version>              < notes.txt   # summarize
-#   scripts/summarize.sh --condense <max_chars> < summary.txt # condense
+#   .github/workflows/scripts/summarize.sh <version>              < notes.txt   # summarize
+#   .github/workflows/scripts/summarize.sh --condense <max_chars> < summary.txt # condense
 #
 # Falls back to a placeholder (or truncation for --condense) if the API is
 # unavailable or OPENROUTER_API_KEY is not set.
@@ -64,13 +64,13 @@ ${input}"
   max_tokens=500
 else
   prompt="gmux is an open-source terminal multiplexer with a web UI. Below \
-is the content for a release. Each entry has a user-facing changelog note \
-followed by the PR description for context. Summarize them into a Discord \
-message for the project's community server.
+are the merged PRs for a release. Each entry has a PR title (conventional \
+commit format) and its description for context. Summarize them into a \
+Discord message for the project's community server.
 
-Base the summary on the changelog notes, not the PR implementation details. \
+Base the summary on what changed for users, not on implementation details. \
 The PR descriptions are background context to help you understand the change, \
-not content to surface to users.
+not content to surface verbatim.
 
 Be direct, technical, and accurate. Assume readers are developers who use \
 the tool daily. No hype, no filler, no calls to action.
