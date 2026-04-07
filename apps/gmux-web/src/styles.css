@@ -901,6 +901,7 @@ body {
   gap: 8px;
   padding: 7px 8px;
   border-radius: 6px;
+  cursor: pointer;
   transition: background 0.1s;
 }
 
@@ -923,23 +924,17 @@ body {
   line-height: 1;
 }
 
-.mp-add-btn {
+.mp-add-label {
   flex-shrink: 0;
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-size: 12px;
   font-family: 'Source Sans 3', sans-serif;
   font-weight: 500;
-  padding: 3px 10px;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
   white-space: nowrap;
+  transition: color 0.15s;
 }
 
-.mp-add-btn:hover {
-  border-color: var(--accent);
+.mp-discovered-row:hover .mp-add-label {
   color: var(--accent);
 }
 

@@ -42,6 +42,8 @@ You can manage projects at any time via the **Manage projects** button at the bo
 
 Two clones of the same repo (different paths, different machines) are grouped under one project as long as they share a git remote URL. Projects without remotes match by filesystem path.
 
+Project state is stored in `~/.local/state/gmux/projects.json`. You can edit this file directly; changes are picked up on the next daemon restart.
+
 ### Sessions
 
 Each session has a dot on the left edge:

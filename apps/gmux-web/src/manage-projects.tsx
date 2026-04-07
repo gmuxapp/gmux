@@ -272,7 +272,7 @@ function DiscoveredRow({
   const shortDetail = shortenPath(detail)
 
   return (
-    <div class="mp-discovered-row">
+    <div class="mp-discovered-row" onClick={() => onAdd(project)}>
       <div class="mp-project-info">
         <span class="mp-project-name">
           {project.suggested_slug}
@@ -282,12 +282,7 @@ function DiscoveredRow({
         </span>
         <span class="mp-project-detail" title={detail}>{shortDetail}</span>
       </div>
-      <button
-        class="mp-add-btn"
-        onClick={() => onAdd(project)}
-      >
-        + Add
-      </button>
+      <span class="mp-add-label">+ Add</span>
     </div>
   )
 }
