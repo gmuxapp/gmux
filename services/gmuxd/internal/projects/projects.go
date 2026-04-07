@@ -491,98 +491,63 @@ func (s *State) UnmatchedActiveCount(sessions []SessionInfo) int {
 // merge by shared remotes, then shared workspace_root, then shared cwd
 // (for sessions with neither remotes nor workspace_root).
 func (s *State) Discovered(sessions []SessionInfo) []DiscoveredProject {
-	// Filter to unmatched sessions.
-	var unmatched []SessionInfo
+	// Group unmatched sessions by directory (workspace_root if set,
+	// otherwise cwd). Each unique directory becomes one suggestion.
+	byDir := make(map[string][]SessionInfo)
 	for _, sess := range sessions {
-		if s.Match(matchParamsFromInfo(sess)) == nil {
-			unmatched = append(unmatched, sess)
+		if s.Match(matchParamsFromInfo(sess)) != nil {
+			continue
 		}
+		dir := sess.WorkspaceRoot
+		if dir == "" {
+			dir = sess.Cwd
+		}
+		if dir == "" {
+			continue
+		}
+		byDir[dir] = append(byDir[dir], sess)
 	}
-	if len(unmatched) == 0 {
+	if len(byDir) == 0 {
 		return nil
 	}
 
-	// Union-find.
-	parent := make(map[string]string, len(unmatched))
-	for _, sess := range unmatched {
-		parent[sess.ID] = sess.ID
-	}
-
-	var find func(string) string
-	find = func(id string) string {
-		root := id
-		for parent[root] != root {
-			root = parent[root]
-		}
-		cur := id
-		for cur != root {
-			next := parent[cur]
-			parent[cur] = root
-			cur = next
-		}
-		return root
-	}
-	union := func(a, b string) {
-		ra, rb := find(a), find(b)
-		if ra != rb {
-			parent[ra] = rb
-		}
-	}
-
-	// Merge by shared remote URLs.
-	remoteToGroup := make(map[string]string)
-	for _, sess := range unmatched {
-		for _, url := range sess.Remotes {
-			norm := NormalizeRemote(url)
-			if existing, ok := remoteToGroup[norm]; ok {
-				union(sess.ID, existing)
-			} else {
-				remoteToGroup[norm] = sess.ID
+	result := make([]DiscoveredProject, 0, len(byDir))
+	for dir, group := range byDir {
+		active := 0
+		for _, s := range group {
+			if s.Alive {
+				active++
 			}
 		}
-	}
 
-	// Merge by shared workspace_root.
-	wsToGroup := make(map[string]string)
-	for _, sess := range unmatched {
-		if sess.WorkspaceRoot == "" {
-			continue
+		dp := DiscoveredProject{
+			Paths:        []string{dir},
+			SessionCount: len(group),
+			ActiveCount:  active,
 		}
-		if existing, ok := wsToGroup[sess.WorkspaceRoot]; ok {
-			union(sess.ID, existing)
-		} else {
-			wsToGroup[sess.WorkspaceRoot] = sess.ID
+
+		// Extract the most common remote for display and the add request.
+		dp.Remote = mostCommonRemote(group)
+
+		// Slug: prefer remote repo name, fall back to directory basename.
+		if dp.Remote != "" {
+			dp.SuggestedSlug = SlugFromRemote(dp.Remote)
 		}
-	}
-
-	// Merge by shared cwd (only for sessions with no remotes and no workspace_root).
-	cwdToGroup := make(map[string]string)
-	for _, sess := range unmatched {
-		if len(sess.Remotes) > 0 || sess.WorkspaceRoot != "" {
-			continue
+		if dp.SuggestedSlug == "" {
+			dp.SuggestedSlug = SlugFromPath(dir)
 		}
-		if existing, ok := cwdToGroup[sess.Cwd]; ok {
-			union(sess.ID, existing)
-		} else {
-			cwdToGroup[sess.Cwd] = sess.ID
+		if dp.SuggestedSlug == "" {
+			dp.SuggestedSlug = "project"
 		}
+
+		result = append(result, dp)
 	}
 
-	// Collect groups.
-	groups := make(map[string][]SessionInfo)
-	for _, sess := range unmatched {
-		root := find(sess.ID)
-		groups[root] = append(groups[root], sess)
-	}
-
-	// Build discovered projects from groups.
-	result := make([]DiscoveredProject, 0, len(groups))
-	for _, group := range groups {
-		result = append(result, buildDiscovered(group))
-	}
-
-	// Sort: most sessions first, then alphabetically by slug for stability.
+	// Active sessions first, then most sessions, then alphabetically.
 	sort.Slice(result, func(i, j int) bool {
+		if result[i].ActiveCount != result[j].ActiveCount {
+			return result[i].ActiveCount > result[j].ActiveCount
+		}
 		if result[i].SessionCount != result[j].SessionCount {
 			return result[i].SessionCount > result[j].SessionCount
 		}
@@ -592,60 +557,22 @@ func (s *State) Discovered(sessions []SessionInfo) []DiscoveredProject {
 	return result
 }
 
-func buildDiscovered(sessions []SessionInfo) DiscoveredProject {
-	active := 0
-	for _, s := range sessions {
-		if s.Alive {
-			active++
-		}
-	}
-	dp := DiscoveredProject{
-		SessionCount: len(sessions),
-		ActiveCount:  active,
-	}
-
-	// Find the most common remote URL.
-	urlCounts := make(map[string]int)
+// mostCommonRemote returns the normalized remote URL that appears most
+// frequently across the sessions, or "" if none have remotes.
+func mostCommonRemote(sessions []SessionInfo) string {
+	counts := make(map[string]int)
 	for _, s := range sessions {
 		for _, url := range s.Remotes {
-			urlCounts[NormalizeRemote(url)]++
+			counts[NormalizeRemote(url)]++
 		}
 	}
-	if len(urlCounts) > 0 {
-		var bestURL string
-		var bestCount int
-		for url, count := range urlCounts {
-			if count > bestCount || (count == bestCount && url < bestURL) {
-				bestURL = url
-				bestCount = count
-			}
-		}
-		dp.Remote = bestURL
-		dp.SuggestedSlug = SlugFromRemote(bestURL)
-	}
-
-	// Collect unique paths (prefer workspace_root, fall back to cwd).
-	pathSet := make(map[string]bool)
-	for _, s := range sessions {
-		if s.WorkspaceRoot != "" {
-			pathSet[s.WorkspaceRoot] = true
-		} else if s.Cwd != "" {
-			pathSet[s.Cwd] = true
+	var best string
+	var bestN int
+	for url, n := range counts {
+		if n > bestN || (n == bestN && url < best) {
+			best = url
+			bestN = n
 		}
 	}
-	dp.Paths = make([]string, 0, len(pathSet))
-	for p := range pathSet {
-		dp.Paths = append(dp.Paths, p)
-	}
-	sort.Strings(dp.Paths)
-
-	// Slug fallback to path basename if no remote.
-	if dp.SuggestedSlug == "" && len(dp.Paths) > 0 {
-		dp.SuggestedSlug = SlugFromPath(dp.Paths[0])
-	}
-	if dp.SuggestedSlug == "" {
-		dp.SuggestedSlug = "project"
-	}
-
-	return dp
+	return best
 }

@@ -163,7 +163,7 @@ export function ManageProjectsModal({
           <div class="modal-header-actions">
             <a
               class="mp-docs-link"
-              href="https://gmux.app/using-the-ui/#match-rules"
+              href="https://gmux.app/reference/projects-json/#match-rules"
               target="_blank"
               rel="noopener"
               title="How match rules work"

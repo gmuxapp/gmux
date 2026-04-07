@@ -491,7 +491,7 @@ func TestDiscoveredBasic(t *testing.T) {
 	sessions := []SessionInfo{
 		// Matches gmux (should be excluded from discovered).
 		{ID: "s1", Cwd: "/dev/gmux", Remotes: map[string]string{"origin": "git@github.com:gmuxapp/gmux.git"}},
-		// Two sessions in the same project (shared remote).
+		// Two sessions with the same remote but different cwds: separate entries.
 		{ID: "s2", Cwd: "/dev/other", Remotes: map[string]string{"origin": "https://github.com/org/other.git"}},
 		{ID: "s3", Cwd: "/dev/other-wt", Remotes: map[string]string{"origin": "https://github.com/org/other.git"}},
 		// Standalone session (no remote, no workspace_root).
@@ -499,27 +499,33 @@ func TestDiscoveredBasic(t *testing.T) {
 	}
 
 	discovered := s.Discovered(sessions)
-	if len(discovered) != 2 {
-		t.Fatalf("expected 2 discovered groups, got %d: %+v", len(discovered), discovered)
+	if len(discovered) != 3 {
+		t.Fatalf("expected 3 discovered entries (one per cwd), got %d: %+v", len(discovered), discovered)
 	}
 
-	// First group should be the one with 2 sessions (sorted by count).
-	if discovered[0].SessionCount != 2 {
-		t.Errorf("first group session_count = %d, want 2", discovered[0].SessionCount)
-	}
-	if discovered[0].Remote != "github.com/org/other" {
-		t.Errorf("first group remote = %q, want %q", discovered[0].Remote, "github.com/org/other")
-	}
-	if discovered[0].SuggestedSlug != "other" {
-		t.Errorf("first group slug = %q, want %q", discovered[0].SuggestedSlug, "other")
+	// Each entry has exactly one path and one session.
+	for _, d := range discovered {
+		if len(d.Paths) != 1 {
+			t.Errorf("%s: expected 1 path, got %v", d.SuggestedSlug, d.Paths)
+		}
+		if d.SessionCount != 1 {
+			t.Errorf("%s: expected 1 session, got %d", d.SuggestedSlug, d.SessionCount)
+		}
 	}
 
-	// Second group: standalone session.
-	if discovered[1].SessionCount != 1 {
-		t.Errorf("second group session_count = %d, want 1", discovered[1].SessionCount)
+	// Both remote-bearing entries get the remote for display/slug.
+	byPath := map[string]DiscoveredProject{}
+	for _, d := range discovered {
+		byPath[d.Paths[0]] = d
 	}
-	if discovered[1].SuggestedSlug != "scratch" {
-		t.Errorf("second group slug = %q, want %q", discovered[1].SuggestedSlug, "scratch")
+	if d, ok := byPath["/dev/other"]; !ok || d.Remote != "github.com/org/other" {
+		t.Errorf("/dev/other: expected remote 'github.com/org/other', got %+v", byPath["/dev/other"])
+	}
+	if d, ok := byPath["/dev/other-wt"]; !ok || d.Remote != "github.com/org/other" {
+		t.Errorf("/dev/other-wt: expected remote 'github.com/org/other', got %+v", byPath["/dev/other-wt"])
+	}
+	if d, ok := byPath["/tmp/scratch"]; !ok || d.Remote != "" {
+		t.Errorf("/tmp/scratch: expected no remote, got %+v", byPath["/tmp/scratch"])
 	}
 }
 
@@ -536,6 +542,56 @@ func TestDiscoveredMergesWorkspaceRoot(t *testing.T) {
 	}
 	if discovered[0].SessionCount != 2 {
 		t.Errorf("session_count = %d, want 2", discovered[0].SessionCount)
+	}
+}
+
+func TestDiscoveredSuperrepoSubdirsSeparate(t *testing.T) {
+	// A superrepo ~/ft contains a subdirectory with its own remote.
+	// Sessions in both share a workspace_root of ~/ft, but sessions
+	// in the subdirectory also report a remote. Discovery should
+	// offer ~/ft as one entry (grouped by workspace_root), not merge
+	// it with other paths that happen to share the remote.
+	s := &State{}
+	sessions := []SessionInfo{
+		// Sessions in the superrepo root.
+		{ID: "s1", Cwd: "/home/user/ft", WorkspaceRoot: "/home/user/ft",
+			Remotes: map[string]string{"origin": "github.com/org/functions"}},
+		{ID: "s2", Cwd: "/home/user/ft/mission-control", WorkspaceRoot: "/home/user/ft",
+			Remotes: map[string]string{"origin": "github.com/org/functions"}},
+		// Session in a completely different clone of the same remote.
+		{ID: "s3", Cwd: "/home/user/dev/functions",
+			Remotes: map[string]string{"origin": "github.com/org/functions"}},
+	}
+
+	discovered := s.Discovered(sessions)
+	if len(discovered) != 2 {
+		t.Fatalf("expected 2 entries (superrepo + separate clone), got %d: %+v", len(discovered), discovered)
+	}
+
+	byPath := map[string]DiscoveredProject{}
+	for _, d := range discovered {
+		byPath[d.Paths[0]] = d
+	}
+
+	// Superrepo groups by workspace_root, gets both sessions.
+	ft := byPath["/home/user/ft"]
+	if ft.SessionCount != 2 {
+		t.Errorf("ft: expected 2 sessions, got %d", ft.SessionCount)
+	}
+	// Slug comes from the remote when available.
+	if ft.SuggestedSlug != "functions" {
+		t.Errorf("ft: expected slug 'functions' (from remote), got %q", ft.SuggestedSlug)
+	}
+
+	// Separate clone is its own entry.
+	clone := byPath["/home/user/dev/functions"]
+	if clone.SessionCount != 1 {
+		t.Errorf("functions clone: expected 1 session, got %d", clone.SessionCount)
+	}
+
+	// Both have the same remote (for display), but are separate suggestions.
+	if ft.Remote != clone.Remote {
+		t.Errorf("expected same remote on both, got %q vs %q", ft.Remote, clone.Remote)
 	}
 }
 
