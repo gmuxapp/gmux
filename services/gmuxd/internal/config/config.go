@@ -44,8 +44,9 @@ type PeerConfig struct {
 	URL string `toml:"url"`
 
 	// Token is the bearer token for authenticating with the remote gmuxd.
-	// Exactly one of Token, TokenFile, or TokenCommand must be set for
-	// manually configured peers. Auto-discovered peers set Token directly.
+	// At most one of Token, TokenFile, or TokenCommand may be set.
+	// Peers on the same tailnet can omit all three (they authenticate
+	// via WhoIs identity instead).
 	Token string `toml:"token"`
 
 	// TokenFile is a path to a file containing the bearer token.
@@ -192,9 +193,6 @@ func validate(cfg Config) error {
 		}
 		if p.TokenCommand != "" {
 			sources++
-		}
-		if sources == 0 {
-			return fmt.Errorf("%s (%s): one of token, token_file, or token_command is required", prefix, p.Name)
 		}
 		if sources > 1 {
 			return fmt.Errorf("%s (%s): only one of token, token_file, or token_command may be set", prefix, p.Name)

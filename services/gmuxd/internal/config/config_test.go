@@ -336,21 +336,21 @@ token = "abc"
 	}
 }
 
-func TestLoadPeersRejectsMissingToken(t *testing.T) {
+func TestLoadPeersAcceptsNoToken(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	writeConfig(t, dir, `
 [[peers]]
 name = "server"
-url = "http://10.0.0.5:8790"
+url = "https://mybox.tailnet.ts.net"
 `)
 
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error for missing token")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("tokenless peer should be accepted (tailscale auth): %v", err)
 	}
-	if !strings.Contains(err.Error(), "token") {
-		t.Errorf("error = %q, want mention of token", err)
+	if cfg.Peers[0].Token != "" {
+		t.Errorf("token = %q, want empty", cfg.Peers[0].Token)
 	}
 }
 
