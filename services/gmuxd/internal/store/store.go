@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gmuxapp/gmux/packages/paths"
 )
 
 // Session is the in-memory model for a gmux session. Fields are grouped
@@ -176,6 +178,8 @@ func (s *Store) resolveTitle(sess Session) string {
 }
 
 func (s *Store) Upsert(sess Session) {
+	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
+	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
 	sess.Title = s.resolveTitle(sess)
 	sess.Resumable = !sess.Alive && len(sess.Command) > 0
 	s.mu.Lock()
@@ -211,6 +215,8 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 		return false
 	}
 	fn(&sess)
+	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
+	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
 	sess.Title = s.resolveTitle(sess)
 	sess.Resumable = !sess.Alive && len(sess.Command) > 0
 	removed, skip := s.resolveDuplicateResumeKeysLocked(sess)
@@ -419,3 +425,4 @@ func (s *Store) ensureUniqueResumeKey(sess *Session) {
 		sess.ResumeKey = fmt.Sprintf("%s-%d", base, i)
 	}
 }
+

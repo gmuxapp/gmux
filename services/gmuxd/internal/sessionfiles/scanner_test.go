@@ -209,8 +209,10 @@ func TestScanSetsWorkspaceRoot(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
-	if sessions[0].WorkspaceRoot != repoDir {
-		t.Errorf("workspace_root = %q, want %q", sessions[0].WorkspaceRoot, repoDir)
+	// The store canonicalizes paths: $HOME prefix becomes ~.
+	wantRoot := "~/projects/myrepo"
+	if sessions[0].WorkspaceRoot != wantRoot {
+		t.Errorf("workspace_root = %q, want %q", sessions[0].WorkspaceRoot, wantRoot)
 	}
 }
 

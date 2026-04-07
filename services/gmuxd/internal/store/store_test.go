@@ -588,3 +588,45 @@ func TestMarshalJSON_FrontendFields(t *testing.T) {
 		t.Errorf("binary_hash should be excluded from wire JSON: %s", data)
 	}
 }
+
+func TestUpsertCanonicalizesPaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	s := New()
+	s.Upsert(Session{
+		ID:            "s1",
+		Kind:          "pi",
+		Alive:         true,
+		Cwd:           home + "/dev/gmux/src",
+		WorkspaceRoot: home + "/dev/gmux",
+	})
+
+	got, ok := s.Get("s1")
+	if !ok {
+		t.Fatal("expected session to exist")
+	}
+	if got.Cwd != "~/dev/gmux/src" {
+		t.Errorf("Cwd = %q, want %q", got.Cwd, "~/dev/gmux/src")
+	}
+	if got.WorkspaceRoot != "~/dev/gmux" {
+		t.Errorf("WorkspaceRoot = %q, want %q", got.WorkspaceRoot, "~/dev/gmux")
+	}
+}
+
+func TestUpdateCanonicalizesPaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Alive: true, Cwd: "/tmp"})
+
+	s.Update("s1", func(sess *Session) {
+		sess.Cwd = home + "/projects/app"
+	})
+
+	got, _ := s.Get("s1")
+	if got.Cwd != "~/projects/app" {
+		t.Errorf("Cwd after Update = %q, want %q", got.Cwd, "~/projects/app")
+	}
+}

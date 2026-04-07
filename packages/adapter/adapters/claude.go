@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/paths"
 )
 
 // Compile-time interface checks.
@@ -85,7 +86,7 @@ func (c *Claude) SessionRootDir() string {
 // /home/mg/dev/gmux → -home-mg-dev-gmux
 // /home/mg/.local/share/chezmoi → -home-mg--local-share-chezmoi
 func encodeClaudeCwd(cwd string) string {
-	return claudeCwdReplacer.Replace(cwd)
+	return claudeCwdReplacer.Replace(paths.NormalizePath(cwd))
 }
 
 var claudeCwdReplacer = strings.NewReplacer("/", "-", ".", "-")

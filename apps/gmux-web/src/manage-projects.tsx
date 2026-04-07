@@ -221,7 +221,9 @@ function ProjectRow({
   onDragEnd: () => void
   onRemove: (slug: string) => void
 }) {
-  const detail = project.remote || project.paths[0] || ''
+  const firstRemote = project.match.find(r => r.remote)?.remote
+  const firstPath = project.match.find(r => r.path)?.path
+  const detail = firstRemote || firstPath || ''
   const shortDetail = shortenPath(detail)
 
   return (
@@ -268,7 +270,7 @@ function DiscoveredRow({
   project: DiscoveredProject
   onAdd: (d: DiscoveredProject) => void
 }) {
-  const detail = project.remote || project.paths[0] || ''
+  const detail = project.remote || project.paths[0] || ''  // DiscoveredProject still uses old shape
   const shortDetail = shortenPath(detail)
 
   return (

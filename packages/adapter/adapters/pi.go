@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/paths"
 )
 
 // Compile-time interface checks.
@@ -101,7 +102,8 @@ func (p *Pi) SessionDir(cwd string) string {
 	if root == "" {
 		return ""
 	}
-	path := strings.TrimPrefix(cwd, "/")
+	abs := paths.NormalizePath(cwd)
+	path := strings.TrimPrefix(abs, "/")
 	encoded := "--" + strings.ReplaceAll(path, "/", "-") + "--"
 	return filepath.Join(root, encoded)
 }

@@ -4,10 +4,18 @@
 // This module is render-only: no data fetching, no business logic.
 // Reads sessions/projects/peers from the store.
 
-import type { HostNode, Session } from './types'
+import type { HostNode, Session, ProjectItem } from './types'
 import { buildProjectTopology, sessionPath } from './types'
 import { LaunchButton } from './launcher'
 import { sessions, projects, peers } from './store'
+
+function projectRemote(p: ProjectItem | undefined): string | undefined {
+  return p?.match.find(r => r.remote)?.remote
+}
+
+function projectFirstPath(p: ProjectItem | undefined): string | undefined {
+  return p?.match.find(r => r.path)?.path
+}
 
 interface ProjectHubProps {
   projectSlug: string
@@ -19,6 +27,7 @@ export function ProjectHub({ projectSlug, onResume, onCloseSession }: ProjectHub
   const projectsVal = projects.value
   const project = projectsVal.find(p => p.slug === projectSlug)
   const hosts = buildProjectTopology(projectSlug, sessions.value, projectsVal, peers.value)
+  const remote = projectRemote(project)
 
   const totalSessions = hosts.reduce(
     (n, h) => n + h.folders.reduce((m, f) => m + f.sessions.length, 0),
@@ -30,8 +39,8 @@ export function ProjectHub({ projectSlug, onResume, onCloseSession }: ProjectHub
       <header class="project-hub-header">
         <h1 class="project-hub-title">{projectSlug}</h1>
         <div class="project-hub-subtitle">
-          {project?.remote && <span class="project-hub-remote">{project.remote}</span>}
-          {project?.remote && hosts.length > 0 && <span class="project-hub-dot">·</span>}
+          {remote && <span class="project-hub-remote">{remote}</span>}
+          {remote && hosts.length > 0 && <span class="project-hub-dot">·</span>}
           {hosts.length > 0 && (
             <span>
               {totalSessions} session{totalSessions === 1 ? '' : 's'} across {hosts.length} host{hosts.length === 1 ? '' : 's'}
@@ -41,7 +50,7 @@ export function ProjectHub({ projectSlug, onResume, onCloseSession }: ProjectHub
       </header>
 
       {hosts.length === 0
-        ? <EmptyProject projectSlug={projectSlug} launchCwd={project?.paths[0]} />
+        ? <EmptyProject projectSlug={projectSlug} launchCwd={projectFirstPath(project)} />
         : hosts.map(host => (
             <HostSection
               key={host.path.join('\0') || '(local)'}

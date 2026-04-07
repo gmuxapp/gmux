@@ -448,6 +448,7 @@ func serve(stderr io.Writer) int {
 	projectMgr.Broadcast = func() {
 		sessions.Broadcast(store.Event{Type: "projects-update"})
 	}
+	projectMgr.SeedIfEmpty()
 
 	// After the first scan, the store has all known sessions. Clean up
 	// orphaned entries in project session arrays.
@@ -483,6 +484,7 @@ func serve(stderr io.Writer) int {
 				Cwd:           s.Cwd,
 				WorkspaceRoot: s.WorkspaceRoot,
 				Remotes:       s.Remotes,
+				Host:          s.Peer,
 				Alive:         s.Alive,
 				ResumeKey:     s.ResumeKey,
 			})
@@ -675,12 +677,17 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		// Normalize inputs.
-		for i, p := range req.Paths {
-			req.Paths[i] = projects.NormalizePath(p)
-		}
+		// Build match rules from the request.
+		var rules []projects.MatchRule
 		if req.Remote != "" {
-			req.Remote = projects.NormalizeRemote(req.Remote)
+			rules = append(rules, projects.MatchRule{
+				Remote: projects.NormalizeRemote(req.Remote),
+			})
+		}
+		for _, p := range req.Paths {
+			rules = append(rules, projects.MatchRule{
+				Path: paths.CanonicalizePath(p),
+			})
 		}
 
 		// Derive slug: prefer remote repo name, fall back to first path basename.
@@ -695,9 +702,8 @@ func serve(stderr io.Writer) int {
 		err = projectMgr.Update(func(state *projects.State) bool {
 			slug = projects.UniqueSlug(slug, state.Items)
 			item = projects.Item{
-				Slug:   slug,
-				Remote: req.Remote,
-				Paths:  req.Paths,
+				Slug:  slug,
+				Match: rules,
 			}
 			state.Items = append(state.Items, item)
 			if err := state.Validate(); err != nil {
@@ -844,6 +850,8 @@ func serve(stderr io.Writer) int {
 		if cwd == "" {
 			cwd = os.Getenv("HOME")
 		}
+		// Expand ~ to absolute path for exec.Command.Dir.
+		cwd = projects.NormalizePath(cwd)
 
 		if gmuxBin == "" {
 			writeError(w, http.StatusInternalServerError, "gmux_not_found", "gmux not found (install gmux alongside gmuxd)")
@@ -943,7 +951,8 @@ func serve(stderr io.Writer) int {
 			// Record pending resume BEFORE launching so Register() can match.
 			pendingResumes.Add(sess.Command, sessionID)
 
-			pid, err := launchGmux(gmuxBin, sess.Command, sess.Cwd)
+			resumeCwd := projects.NormalizePath(sess.Cwd)
+			pid, err := launchGmux(gmuxBin, sess.Command, resumeCwd)
 			if err != nil {
 				pendingResumes.Take(sess.Command) // clean up on failure
 				log.Printf("resume: failed to start gmux: %v", err)
@@ -954,7 +963,7 @@ func serve(stderr io.Writer) int {
 			// Don't modify the session here. It stays dead/resumable until
 			// the runner calls POST /register and Register() merges it.
 			// The frontend shows a local "resuming" indicator.
-			log.Printf("resume: started gmux pid=%d for %s cwd=%s", pid, sessionID, sess.Cwd)
+			log.Printf("resume: started gmux pid=%d for %s cwd=%s", pid, sessionID, resumeCwd)
 			writeJSON(w, map[string]any{
 				"ok":   true,
 				"data": map[string]any{"pid": pid, "session_id": sessionID},
@@ -1021,14 +1030,15 @@ func serve(stderr io.Writer) int {
 			// Same as /resume: register pending match, launch new runner with
 			// the resume Command. Register() will merge it with this session ID.
 			pendingResumes.Add(sess.Command, sessionID)
-			pid, err := launchGmux(gmuxBin, sess.Command, sess.Cwd)
+			restartCwd := projects.NormalizePath(sess.Cwd)
+			pid, err := launchGmux(gmuxBin, sess.Command, restartCwd)
 			if err != nil {
 				pendingResumes.Take(sess.Command)
 				log.Printf("restart: failed to start gmux: %v", err)
 				writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
 				return
 			}
-			log.Printf("restart: started gmux pid=%d for %s cwd=%s", pid, sessionID, sess.Cwd)
+			log.Printf("restart: started gmux pid=%d for %s cwd=%s", pid, sessionID, restartCwd)
 			writeJSON(w, map[string]any{
 				"ok":   true,
 				"data": map[string]any{"pid": pid, "session_id": sessionID},
@@ -1098,7 +1108,7 @@ func serve(stderr io.Writer) int {
 			}
 			// Clean up shell state file before removing from store.
 			if sess.Kind == "shell" {
-				adapters.RemoveShellStateFile(sessionID, sess.Cwd)
+				adapters.RemoveShellStateFile(sessionID, projects.NormalizePath(sess.Cwd))
 			}
 			// Remove session from its project's sessions array.
 			projectMgr.DismissSession(sessionID, sess.ResumeKey)
@@ -1637,6 +1647,7 @@ func buildSessionInfos(sessions *store.Store) []projects.SessionInfo {
 			Cwd:           s.Cwd,
 			WorkspaceRoot: s.WorkspaceRoot,
 			Remotes:       s.Remotes,
+			Host:          s.Peer,
 			Alive:         s.Alive,
 			ResumeKey:     s.ResumeKey,
 		}

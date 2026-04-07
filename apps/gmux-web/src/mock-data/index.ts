@@ -38,12 +38,16 @@ export const MOCK_BY_ID: Record<string, MockSession> = Object.fromEntries(
 export const MOCK_PROJECTS: ProjectItem[] = [
   {
     slug: 'my-project',
-    remote: 'github.com/acme/my-project',
-    paths: ['/home/user/dev/my-project'],
+    match: [
+      { remote: 'github.com/acme/my-project' },
+      { path: '~/dev/my-project' },
+    ],
   },
   {
     slug: 'openclaw',
-    remote: 'github.com/acme/openclaw',
-    paths: ['/home/user/dev/openclaw'],
+    match: [
+      { remote: 'github.com/acme/openclaw' },
+      { path: '~/dev/openclaw' },
+    ],
   },
 ]

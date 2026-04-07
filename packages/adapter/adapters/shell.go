@@ -92,8 +92,10 @@ func (g *Shell) SessionDir(cwd string) string {
 	if root == "" {
 		return ""
 	}
-	// Encode cwd the same way as pi: strip leading /, replace / with -, wrap in --.
-	path := strings.TrimPrefix(cwd, "/")
+	// Expand ~ to absolute before encoding so canonical and absolute
+	// paths resolve to the same directory.
+	abs := paths.NormalizePath(cwd)
+	path := strings.TrimPrefix(abs, "/")
 	encoded := "--" + strings.ReplaceAll(path, "/", "-") + "--"
 	return filepath.Join(root, encoded)
 }
