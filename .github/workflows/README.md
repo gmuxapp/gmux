@@ -38,7 +38,7 @@ PR titles determine release behavior:
 
 ### 2. Version phase (push to main)
 
-`version.yml` runs on every push to `main`:
+`version.yml` runs on every push to `main`, or manually via `workflow_dispatch`:
 
 1. Exits early if HEAD is a release commit (loop prevention).
 2. Runs `version.sh` which scans `git log` for merged PRs since the last `v*` tag.
@@ -46,6 +46,8 @@ PR titles determine release behavior:
 4. If there are releasable PRs (`feat:` or `fix:`), computes the next version, generates an LLM summary via `summarize.sh`, updates `changelog.mdx` and `RELEASE_NOTES.md`.
 5. Opens (or updates) a `release/next` PR via `peter-evans/create-pull-request`.
 6. Dispatches `pr-build.yml` via `workflow_dispatch` to build artifacts for the release PR (needed because commits from `GITHUB_TOKEN` don't trigger `pull_request` events).
+
+Since `version.sh` is idempotent, you can re-run the workflow manually (Actions → Version → Run workflow) to regenerate the release PR, for example if the LLM summary failed.
 
 ### 3. Release phase (release PR merged)
 

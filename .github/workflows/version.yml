@@ -1,9 +1,10 @@
 name: Version
 
-# Scan for releasable PRs on every push to main.
+# Scan for releasable PRs on every push to main, or manually.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions: {}
 
@@ -62,28 +63,30 @@ jobs:
           branch: release/next
           delete-branch: true
 
-      - name: Update PR body (on existing PR)
+      # peter-evans/create-pull-request restores the working directory to
+      # the base branch after committing, so RELEASE_NOTES.md on disk is
+      # stale. Use the output captured before the action ran.
+      - name: Update PR body (add install instructions)
         if: steps.version.outputs.version != '' && steps.create-pr.outputs.pull-request-number != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PR_NUM: ${{ steps.create-pr.outputs.pull-request-number }}
+          NOTES: ${{ steps.body.outputs.notes }}
         run: |
-          version="${{ steps.version.outputs.version }}"
-          pr_num="${{ steps.create-pr.outputs.pull-request-number }}"
-          notes=$(cat RELEASE_NOTES.md)
+          cat <<EOF | gh pr edit "$PR_NUM" --body-file -
+          Release **${VERSION}**.
 
-          cat <<EOF | gh pr edit "$pr_num" --body-file -
-          Release **${version}**.
-
-          Merging creates the \`${version}\` tag and triggers the release build.
+          Merging creates the \`${VERSION}\` tag and triggers the release build.
 
           ### Try this prerelease
           \`\`\`sh
-          curl -sSfL https://gmux.app/install-pr.sh | sh -s -- ${pr_num}
+          curl -sSfL https://gmux.app/install-pr.sh | sh -s -- ${PR_NUM}
           \`\`\`
 
           ---
 
-          ${notes}
+          ${NOTES}
           EOF
 
       - name: Trigger PR build

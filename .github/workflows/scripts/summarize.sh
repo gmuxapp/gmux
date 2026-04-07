@@ -21,6 +21,7 @@ fi
 input=$(cat)
 
 if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
+  echo "OPENROUTER_API_KEY not set, skipping summary." >&2
   if $condense; then
     echo "${input:0:$max_chars}"
   else
@@ -40,7 +41,7 @@ model=$(curl -sf 'https://openrouter.ai/api/v1/models' 2>/dev/null | jq -r '
   ] | .[0].id' 2>/dev/null || true)
 
 if [[ -z "$model" || "$model" == "null" ]]; then
-  echo "Could not select a model." >&2
+  echo "Could not select a model from OpenRouter." >&2
   if $condense; then
     echo "${input:0:$max_chars}"
   else
@@ -88,9 +89,10 @@ ${input}"
   max_tokens=800
 fi
 
-# ── Call API with retries ──
+# ── Call API with exponential backoff ──
 
-for attempt in 1 2 3; do
+max_attempts=6
+for (( attempt=1; attempt<=max_attempts; attempt++ )); do
   response=$(curl -s https://openrouter.ai/api/v1/chat/completions \
     -H "Authorization: Bearer $OPENROUTER_API_KEY" \
     -H "Content-Type: application/json" \
@@ -110,11 +112,22 @@ for attempt in 1 2 3; do
     exit 0
   fi
 
-  echo "Attempt $attempt failed, retrying in $((attempt * 2))s..." >&2
-  sleep $((attempt * 2))
+  # Log the error details so failures are diagnosable.
+  error=$(echo "$response" | jq -r '.error.message // .error // empty' 2>/dev/null || true)
+  if [[ -n "$error" ]]; then
+    echo "Attempt $attempt/$max_attempts failed: $error" >&2
+  else
+    echo "Attempt $attempt/$max_attempts failed: $(echo "$response" | head -c 200)" >&2
+  fi
+
+  if (( attempt < max_attempts )); then
+    delay=$(( 2 ** attempt ))
+    echo "Retrying in ${delay}s..." >&2
+    sleep "$delay"
+  fi
 done
 
-echo "Summary generation failed after 3 attempts." >&2
+echo "Summary generation failed after $max_attempts attempts." >&2
 if $condense; then
   echo "${input:0:$max_chars}"
 else
