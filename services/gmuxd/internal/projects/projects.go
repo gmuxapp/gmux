@@ -1,10 +1,11 @@
 // Package projects manages the user-curated project list that controls
 // which sessions appear in the sidebar.
 //
-// Every project has filesystem paths (where the code lives). An optional
-// remote URL enables cross-machine matching. Match precedence: remote
-// matches first, then path matches with longest prefix. State is
-// persisted to projects.json in the state directory.
+// Each project has a list of match rules (remote URLs, filesystem paths,
+// optionally scoped to specific hosts). A session matches a project if
+// any rule matches. First matching project in list order wins; among
+// path rules, longest prefix wins. State is persisted to
+// projects.json in the state directory.
 package projects
 
 import (
@@ -15,38 +16,61 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/gmuxapp/gmux/packages/paths"
 )
 
 const fileName = "projects.json"
 
+// currentVersion is the latest projects.json schema version.
+// See migrateState for the evolution history.
+const currentVersion = 2
+
+// MatchRule is a single criterion for matching sessions to a project.
+// Exactly one of Path or Remote should be set.
+type MatchRule struct {
+	Path   string   `json:"path,omitempty"`
+	Remote string   `json:"remote,omitempty"`
+	Hosts  []string `json:"hosts,omitempty"` // empty = any host
+	Exact  bool     `json:"exact,omitempty"` // path must match exactly, not as prefix
+}
+
 // Item is a user-configured project entry.
-// Every project has Paths (where the code lives on disk).
-// Remote is optional: when set, matching uses the remote URL
-// instead of paths, enabling cross-machine and cross-clone grouping.
+// Match contains the rules that determine which sessions belong here.
 // Sessions is an ordered list of session keys (resume_key or session ID)
-// that belong to this project. Controls sidebar order and visibility.
+// that controls sidebar order.
 type Item struct {
-	Slug     string   `json:"slug"`
-	Remote   string   `json:"remote,omitempty"`
-	Paths    []string `json:"paths"`
-	Sessions []string `json:"sessions,omitempty"`
+	Slug     string      `json:"slug"`
+	Match    []MatchRule `json:"match"`
+	Sessions []string    `json:"sessions,omitempty"`
 }
 
 // State holds the ordered list of configured projects.
 type State struct {
-	Items []Item `json:"items"`
+	Version int    `json:"version"`
+	Items   []Item `json:"items"`
 }
 
 // Load reads the project state from stateDir/projects.json.
 // Returns an empty state if the file doesn't exist.
+// Older schema versions are migrated in memory; the migrated form is
+// written back on the next Save.
 func Load(stateDir string) (*State, error) {
 	path := filepath.Join(stateDir, fileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &State{}, nil
+			return &State{Version: currentVersion}, nil
 		}
 		return nil, fmt.Errorf("projects: reading %s: %w", path, err)
+	}
+
+	// Run migrations on the raw JSON before unmarshaling into the
+	// current struct layout. This keeps each migration self-contained
+	// and independent of the Go types.
+	data, err = migrateState(data)
+	if err != nil {
+		return nil, fmt.Errorf("projects: migrating %s: %w", path, err)
 	}
 
 	var s State
@@ -58,6 +82,8 @@ func Load(stateDir string) (*State, error) {
 
 // Save writes the project state atomically to stateDir/projects.json.
 func (s *State) Save(stateDir string) error {
+	s.Version = currentVersion
+
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("projects: creating state dir: %w", err)
 	}
@@ -82,7 +108,8 @@ func (s *State) Save(stateDir string) error {
 
 // Validate checks the state for consistency:
 //   - Each item has a valid, non-empty slug.
-//   - Each item has at least one path.
+//   - Each item has at least one match rule.
+//   - Each match rule has exactly one of Path or Remote.
 //   - No duplicate slugs.
 //   - No exact duplicate normalized paths across items.
 //   - Nesting (one path under another) is allowed.
@@ -102,68 +129,119 @@ func (s *State) Validate() error {
 		}
 		slugs[item.Slug] = true
 
-		if len(item.Paths) == 0 {
-			return fmt.Errorf("item %q: paths is empty", item.Slug)
+		if len(item.Match) == 0 {
+			return fmt.Errorf("item %q: match rules are empty", item.Slug)
 		}
 
-		for _, p := range item.Paths {
-			norm := NormalizePath(p)
-			if norm == "" {
-				return fmt.Errorf("item %q: contains empty path", item.Slug)
+		for j, rule := range item.Match {
+			hasPath := rule.Path != ""
+			hasRemote := rule.Remote != ""
+			if !hasPath && !hasRemote {
+				return fmt.Errorf("item %q, rule %d: must have path or remote", item.Slug, j)
 			}
-			if owner, ok := allPaths[norm]; ok {
-				return fmt.Errorf("path %q appears in both %q and %q", norm, owner, item.Slug)
+			if hasPath && hasRemote {
+				return fmt.Errorf("item %q, rule %d: cannot have both path and remote", item.Slug, j)
 			}
-			allPaths[norm] = item.Slug
+			if rule.Exact && !hasPath {
+				return fmt.Errorf("item %q, rule %d: exact requires a path", item.Slug, j)
+			}
+			if hasPath {
+				norm := NormalizePath(rule.Path)
+				if norm == "" {
+					return fmt.Errorf("item %q, rule %d: empty path", item.Slug, j)
+				}
+				if owner, ok := allPaths[norm]; ok {
+					return fmt.Errorf("path %q appears in both %q and %q", norm, owner, item.Slug)
+				}
+				allPaths[norm] = item.Slug
+			}
 		}
 	}
 	return nil
 }
 
+// MatchParams holds the session metadata needed for project matching.
+type MatchParams struct {
+	Cwd           string
+	WorkspaceRoot string
+	Remotes       map[string]string
+	Host          string // peer name for remote sessions; empty for local
+}
+
 // Match returns the project that best matches the given session.
 //
-// Precedence:
-//  1. Remote-matched projects, by remote URL.
-//  2. Path matches across all projects, longest prefix wins.
+// Each project's match rules are checked in order. Remote rules match
+// against the session's git remotes. Path rules use longest-prefix
+// matching against cwd and workspace_root. If a rule has Hosts set,
+// it only matches sessions from those hosts.
 //
-// Returns nil if no project matches.
-func (s *State) Match(cwd, workspaceRoot string, remotes map[string]string) *Item {
-	normCwd := NormalizePath(cwd)
-	normWS := NormalizePath(workspaceRoot)
+// Among all matching projects, the one with the longest matching path
+// wins. If no path rule matches, the first remote-matched project wins.
+func (s *State) Match(p MatchParams) *Item {
+	normCwd := NormalizePath(p.Cwd)
+	normWS := NormalizePath(p.WorkspaceRoot)
 
-	// Phase 1: remote-matched projects, by remote URL.
+	var bestPath *Item
+	bestPathLen := 0
+	var firstRemote *Item
+
 	for i := range s.Items {
 		item := &s.Items[i]
-		if item.Remote == "" {
-			continue
-		}
-		normRemote := NormalizeRemote(item.Remote)
-		for _, url := range remotes {
-			if NormalizeRemote(url) == normRemote {
-				return item
-			}
-		}
-	}
-
-	// Phase 2: any path match, longest prefix wins.
-	var best *Item
-	bestLen := 0
-	for i := range s.Items {
-		item := &s.Items[i]
-		for _, p := range item.Paths {
-			norm := NormalizePath(p)
-			if norm == "" {
+		for _, rule := range item.Match {
+			if !ruleMatchesHost(rule, p.Host) {
 				continue
 			}
-			if pathUnder(normCwd, norm) || pathUnder(normWS, norm) {
-				if len(norm) > bestLen {
-					bestLen = len(norm)
-					best = item
+
+			if rule.Remote != "" {
+				normRemote := NormalizeRemote(rule.Remote)
+				for _, url := range p.Remotes {
+					if NormalizeRemote(url) == normRemote {
+						if firstRemote == nil {
+							firstRemote = item
+						}
+						break
+					}
+				}
+			}
+
+			if rule.Path != "" {
+				norm := NormalizePath(rule.Path)
+				if norm == "" {
+					continue
+				}
+				var matched bool
+				if rule.Exact {
+					matched = normCwd == norm || normWS == norm
+				} else {
+					matched = pathUnder(normCwd, norm) || pathUnder(normWS, norm)
+				}
+				if matched && len(norm) > bestPathLen {
+					bestPathLen = len(norm)
+					bestPath = item
 				}
 			}
 		}
 	}
-	return best
+
+	// Path match is more specific; prefer it when available.
+	if bestPath != nil {
+		return bestPath
+	}
+	return firstRemote
+}
+
+// ruleMatchesHost returns true if the rule applies to the given host.
+// Rules without Hosts match any host.
+func ruleMatchesHost(rule MatchRule, host string) bool {
+	if len(rule.Hosts) == 0 {
+		return true
+	}
+	for _, h := range rule.Hosts {
+		if h == host {
+			return true
+		}
+	}
+	return false
 }
 
 // pathUnder returns true if candidate is equal to or a subdirectory of base.
@@ -180,19 +258,12 @@ func pathUnder(candidate, base string) bool {
 
 // --- Path normalization ---
 
-// NormalizePath cleans a filesystem path for comparison.
-// Expands ~ prefix and calls filepath.Clean.
+// NormalizePath expands a stored path to an absolute form for comparison.
+// Expands ~ prefix to $HOME and calls filepath.Clean.
 func NormalizePath(p string) string {
-	if p == "" {
-		return ""
-	}
-	if strings.HasPrefix(p, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			p = filepath.Join(home, p[2:])
-		}
-	}
-	return filepath.Clean(p)
+	return paths.NormalizePath(p)
 }
+
 
 // --- Remote normalization ---
 
@@ -372,8 +443,19 @@ type SessionInfo struct {
 	Cwd           string
 	WorkspaceRoot string
 	Remotes       map[string]string
+	Host          string // peer name; empty for local sessions
 	Alive         bool
 	ResumeKey     string
+}
+
+// matchParamsFromInfo builds MatchParams from a SessionInfo.
+func matchParamsFromInfo(info SessionInfo) MatchParams {
+	return MatchParams{
+		Cwd:           info.Cwd,
+		WorkspaceRoot: info.WorkspaceRoot,
+		Remotes:       info.Remotes,
+		Host:          info.Host,
+	}
 }
 
 // DiscoveredProject is a group of unmatched sessions offered to the user.
@@ -397,7 +479,7 @@ func (s *State) UnmatchedActiveCount(sessions []SessionInfo) int {
 		if s.FindSessionProject(key) != "" {
 			continue
 		}
-		if s.Match(sess.Cwd, sess.WorkspaceRoot, sess.Remotes) == nil {
+		if s.Match(matchParamsFromInfo(sess)) == nil {
 			count++
 		}
 	}
@@ -412,7 +494,7 @@ func (s *State) Discovered(sessions []SessionInfo) []DiscoveredProject {
 	// Filter to unmatched sessions.
 	var unmatched []SessionInfo
 	for _, sess := range sessions {
-		if s.Match(sess.Cwd, sess.WorkspaceRoot, sess.Remotes) == nil {
+		if s.Match(matchParamsFromInfo(sess)) == nil {
 			unmatched = append(unmatched, sess)
 		}
 	}

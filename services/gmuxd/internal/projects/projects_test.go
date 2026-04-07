@@ -21,9 +21,10 @@ func TestLoadMissingFile(t *testing.T) {
 func TestSaveAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	original := &State{
+		Version: currentVersion,
 		Items: []Item{
-			{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
-			{Slug: "scripts", Paths: []string{"/home/user/scripts"}},
+			{Slug: "gmux", Match: []MatchRule{{Remote: "github.com/gmuxapp/gmux"}, {Path: "/home/user/dev/gmux"}}},
+			{Slug: "scripts", Match: []MatchRule{{Path: "/home/user/scripts"}}},
 		},
 	}
 	if err := original.Save(dir); err != nil {
@@ -46,7 +47,7 @@ func TestSaveAndLoad(t *testing.T) {
 	if len(loaded.Items) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(loaded.Items))
 	}
-	if loaded.Items[0].Slug != "gmux" || loaded.Items[0].Remote != "github.com/gmuxapp/gmux" {
+	if loaded.Items[0].Slug != "gmux" || loaded.Items[0].Match[0].Remote != "github.com/gmuxapp/gmux" {
 		t.Errorf("item 0 = %+v", loaded.Items[0])
 	}
 	if loaded.Items[1].Slug != "scripts" {
@@ -56,7 +57,7 @@ func TestSaveAndLoad(t *testing.T) {
 
 func TestSaveCreatesNestedDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "state", "gmux")
-	s := &State{Items: []Item{{Slug: "a", Paths: []string{"/tmp/a"}}}}
+	s := &State{Items: []Item{{Slug: "a", Match: []MatchRule{{Path: "/tmp/a"}}}}}
 	if err := s.Save(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -78,8 +79,8 @@ func TestLoadCorruptedFile(t *testing.T) {
 
 func TestValidateValid(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
-		{Slug: "scripts", Paths: []string{"/home/user/scripts"}},
+		{Slug: "gmux", Match: []MatchRule{{Remote: "github.com/gmuxapp/gmux"}, {Path: "/home/user/dev/gmux"}}},
+		{Slug: "scripts", Match: []MatchRule{{Path: "/home/user/scripts"}}},
 	}}
 	if err := s.Validate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -94,7 +95,7 @@ func TestValidateEmptyState(t *testing.T) {
 }
 
 func TestValidateEmptySlug(t *testing.T) {
-	s := &State{Items: []Item{{Slug: "", Paths: []string{"/tmp"}}}}
+	s := &State{Items: []Item{{Slug: "", Match: []MatchRule{{Path: "/tmp"}}}}}
 	if err := s.Validate(); err == nil {
 		t.Fatal("expected error for empty slug")
 	}
@@ -102,7 +103,7 @@ func TestValidateEmptySlug(t *testing.T) {
 
 func TestValidateInvalidSlug(t *testing.T) {
 	for _, slug := range []string{"Has-Caps", "-leading", "trailing-", "has spaces", "a/b"} {
-		s := &State{Items: []Item{{Slug: slug, Paths: []string{"/tmp"}}}}
+		s := &State{Items: []Item{{Slug: slug, Match: []MatchRule{{Path: "/tmp"}}}}}
 		if err := s.Validate(); err == nil {
 			t.Errorf("expected error for slug %q", slug)
 		}
@@ -111,7 +112,7 @@ func TestValidateInvalidSlug(t *testing.T) {
 
 func TestValidateValidSlugs(t *testing.T) {
 	for _, slug := range []string{"a", "ab", "a-b", "a1", "123", "my-project-2"} {
-		s := &State{Items: []Item{{Slug: slug, Paths: []string{"/tmp"}}}}
+		s := &State{Items: []Item{{Slug: slug, Match: []MatchRule{{Path: "/tmp"}}}}}
 		if err := s.Validate(); err != nil {
 			t.Errorf("slug %q should be valid: %v", slug, err)
 		}
@@ -120,8 +121,8 @@ func TestValidateValidSlugs(t *testing.T) {
 
 func TestValidateDuplicateSlug(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "foo", Paths: []string{"/a"}},
-		{Slug: "foo", Paths: []string{"/b"}},
+		{Slug: "foo", Match: []MatchRule{{Path: "/a"}}},
+		{Slug: "foo", Match: []MatchRule{{Path: "/b"}}},
 	}}
 	if err := s.Validate(); err == nil {
 		t.Fatal("expected error for duplicate slug")
@@ -131,7 +132,7 @@ func TestValidateDuplicateSlug(t *testing.T) {
 func TestValidateRemoteWithPaths(t *testing.T) {
 	// Remote-based projects should also have paths (for launch directory).
 	s := &State{Items: []Item{
-		{Slug: "foo", Remote: "github.com/org/repo", Paths: []string{"/tmp"}},
+		{Slug: "foo", Match: []MatchRule{{Remote: "github.com/org/repo"}, {Path: "/tmp"}}},
 	}}
 	if err := s.Validate(); err != nil {
 		t.Fatalf("remote + paths should be valid: %v", err)
@@ -147,19 +148,38 @@ func TestValidateNoPaths(t *testing.T) {
 	}
 }
 
-func TestValidateRemoteWithoutPaths(t *testing.T) {
+func TestValidateRemoteOnly(t *testing.T) {
+	// A project with only a remote rule (no path) is valid in v2.
 	s := &State{Items: []Item{
-		{Slug: "foo", Remote: "github.com/org/repo"},
+		{Slug: "foo", Match: []MatchRule{{Remote: "github.com/org/repo"}}},
+	}}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("remote-only project should be valid: %v", err)
+	}
+}
+
+func TestValidateEmptyMatchRules(t *testing.T) {
+	s := &State{Items: []Item{
+		{Slug: "foo", Match: []MatchRule{}},
 	}}
 	if err := s.Validate(); err == nil {
-		t.Fatal("expected error for remote without paths")
+		t.Fatal("expected error for empty match rules")
+	}
+}
+
+func TestValidateRuleMustHavePathOrRemote(t *testing.T) {
+	s := &State{Items: []Item{
+		{Slug: "foo", Match: []MatchRule{{}}},
+	}}
+	if err := s.Validate(); err == nil {
+		t.Fatal("expected error for rule with neither path nor remote")
 	}
 }
 
 func TestValidateDuplicatePaths(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "a", Paths: []string{"/home/user/dev"}},
-		{Slug: "b", Paths: []string{"/home/user/dev"}},
+		{Slug: "a", Match: []MatchRule{{Path: "/home/user/dev"}}},
+		{Slug: "b", Match: []MatchRule{{Path: "/home/user/dev"}}},
 	}}
 	if err := s.Validate(); err == nil {
 		t.Fatal("expected error for duplicate paths")
@@ -168,11 +188,29 @@ func TestValidateDuplicatePaths(t *testing.T) {
 
 func TestValidateNestedPathsAllowed(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "parent", Paths: []string{"/home/user/dev/gmux"}},
-		{Slug: "child", Paths: []string{"/home/user/dev/gmux/.grove/teak"}},
+		{Slug: "parent", Match: []MatchRule{{Path: "/home/user/dev/gmux"}}},
+		{Slug: "child", Match: []MatchRule{{Path: "/home/user/dev/gmux/.grove/teak"}}},
 	}}
 	if err := s.Validate(); err != nil {
 		t.Fatalf("nested paths should be valid: %v", err)
+	}
+}
+
+func TestValidateExactOnPathOK(t *testing.T) {
+	s := &State{Items: []Item{
+		{Slug: "home", Match: []MatchRule{{Path: "~", Exact: true}}},
+	}}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("exact on path should be valid: %v", err)
+	}
+}
+
+func TestValidateExactOnRemoteRejected(t *testing.T) {
+	s := &State{Items: []Item{
+		{Slug: "bad", Match: []MatchRule{{Remote: "github.com/org/repo", Exact: true}}},
+	}}
+	if err := s.Validate(); err == nil {
+		t.Fatal("exact on remote-only rule should be rejected")
 	}
 }
 
@@ -180,44 +218,44 @@ func TestValidateNestedPathsAllowed(t *testing.T) {
 
 func TestMatchPathBased(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "gmux", Paths: []string{"/home/user/dev/gmux"}},
+		{Slug: "gmux", Match: []MatchRule{{Path: "/home/user/dev/gmux"}}},
 	}}
 
 	// Exact match on cwd.
-	if m := s.Match("/home/user/dev/gmux", "", nil); m == nil || m.Slug != "gmux" {
+	if m := s.Match(MatchParams{Cwd: "/home/user/dev/gmux", WorkspaceRoot: ""}); m == nil || m.Slug != "gmux" {
 		t.Error("expected match on exact cwd")
 	}
 	// Subdirectory match.
-	if m := s.Match("/home/user/dev/gmux/src", "", nil); m == nil || m.Slug != "gmux" {
+	if m := s.Match(MatchParams{Cwd: "/home/user/dev/gmux/src", WorkspaceRoot: ""}); m == nil || m.Slug != "gmux" {
 		t.Error("expected match on subdirectory")
 	}
 	// Match via workspace_root.
-	if m := s.Match("/somewhere/else", "/home/user/dev/gmux", nil); m == nil || m.Slug != "gmux" {
+	if m := s.Match(MatchParams{Cwd: "/somewhere/else", WorkspaceRoot: "/home/user/dev/gmux"}); m == nil || m.Slug != "gmux" {
 		t.Error("expected match via workspace_root")
 	}
 	// No match.
-	if m := s.Match("/home/user/dev/other", "", nil); m != nil {
+	if m := s.Match(MatchParams{Cwd: "/home/user/dev/other", WorkspaceRoot: ""}); m != nil {
 		t.Errorf("expected no match, got %q", m.Slug)
 	}
 	// No false positive on prefix overlap.
-	if m := s.Match("/home/user/dev/gmux-other", "", nil); m != nil {
+	if m := s.Match(MatchParams{Cwd: "/home/user/dev/gmux-other", WorkspaceRoot: ""}); m != nil {
 		t.Errorf("expected no match for prefix overlap, got %q", m.Slug)
 	}
 }
 
 func TestMatchRemoteBased(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
+		{Slug: "gmux", Match: []MatchRule{{Remote: "github.com/gmuxapp/gmux"}, {Path: "/home/user/dev/gmux"}}},
 	}}
 
 	// Match via HTTPS-style remote.
 	remotes := map[string]string{"origin": "https://github.com/gmuxapp/gmux.git"}
-	if m := s.Match("/any/dir", "", remotes); m == nil || m.Slug != "gmux" {
+	if m := s.Match(MatchParams{Cwd: "/any/dir", WorkspaceRoot: "", Remotes: remotes}); m == nil || m.Slug != "gmux" {
 		t.Error("expected match on HTTPS remote")
 	}
 	// Match via SSH-style remote.
 	remotes = map[string]string{"origin": "git@github.com:gmuxapp/gmux.git"}
-	if m := s.Match("/any/dir", "", remotes); m == nil || m.Slug != "gmux" {
+	if m := s.Match(MatchParams{Cwd: "/any/dir", WorkspaceRoot: "", Remotes: remotes}); m == nil || m.Slug != "gmux" {
 		t.Error("expected match on SSH remote")
 	}
 	// Match on upstream, not just origin.
@@ -225,50 +263,55 @@ func TestMatchRemoteBased(t *testing.T) {
 		"origin":   "git@github.com:fork/gmux.git",
 		"upstream": "https://github.com/gmuxapp/gmux",
 	}
-	if m := s.Match("/any/dir", "", remotes); m == nil || m.Slug != "gmux" {
+	if m := s.Match(MatchParams{Cwd: "/any/dir", WorkspaceRoot: "", Remotes: remotes}); m == nil || m.Slug != "gmux" {
 		t.Error("expected match on upstream remote")
 	}
 	// No match.
 	remotes = map[string]string{"origin": "https://github.com/other/repo"}
-	if m := s.Match("/any/dir", "", remotes); m != nil {
+	if m := s.Match(MatchParams{Cwd: "/any/dir", WorkspaceRoot: "", Remotes: remotes}); m != nil {
 		t.Errorf("expected no match, got %q", m.Slug)
 	}
 }
 
-func TestMatchRemotePrecedenceOverPath(t *testing.T) {
+func TestMatchPathSpecificityOverRemote(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "teak", Paths: []string{"/home/user/dev/gmux/.grove/teak"}},
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
+		{Slug: "teak", Match: []MatchRule{{Path: "/home/user/dev/gmux/.grove/teak"}}},
+		{Slug: "gmux", Match: []MatchRule{{Remote: "github.com/gmuxapp/gmux"}, {Path: "/home/user/dev/gmux"}}},
 	}}
 
 	remotes := map[string]string{"origin": "git@github.com:gmuxapp/gmux.git"}
 
-	// Session in teak directory with the gmux remote: remote wins so workspaces
-	// group under the same project.
-	m := s.Match("/home/user/dev/gmux/.grove/teak/src", "", remotes)
-	if m == nil || m.Slug != "gmux" {
-		t.Errorf("expected gmux (remote precedence), got %v", m)
+	// Session in teak directory with the gmux remote: the more specific
+	// path match (teak) wins over the remote match (gmux).
+	m := s.Match(MatchParams{Cwd: "/home/user/dev/gmux/.grove/teak/src", WorkspaceRoot: "", Remotes: remotes})
+	if m == nil || m.Slug != "teak" {
+		t.Errorf("expected teak (most specific path), got %v", m)
 	}
-	// Session in main gmux directory: remote also matches.
-	m = s.Match("/home/user/dev/gmux/src", "", remotes)
+	// Session in main gmux directory: gmux path matches and remote also matches.
+	m = s.Match(MatchParams{Cwd: "/home/user/dev/gmux/src", WorkspaceRoot: "", Remotes: remotes})
 	if m == nil || m.Slug != "gmux" {
-		t.Errorf("expected gmux (remote), got %v", m)
+		t.Errorf("expected gmux, got %v", m)
+	}
+	// Session with remote but no path match: remote fallback.
+	m = s.Match(MatchParams{Cwd: "/other/dir", WorkspaceRoot: "", Remotes: remotes})
+	if m == nil || m.Slug != "gmux" {
+		t.Errorf("expected gmux (remote fallback), got %v", m)
 	}
 }
 
 func TestMatchLongestPrefixWins(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "parent", Paths: []string{"/home/user/dev/gmux"}},
-		{Slug: "child", Paths: []string{"/home/user/dev/gmux/.grove/teak"}},
+		{Slug: "parent", Match: []MatchRule{{Path: "/home/user/dev/gmux"}}},
+		{Slug: "child", Match: []MatchRule{{Path: "/home/user/dev/gmux/.grove/teak"}}},
 	}}
 
 	// Session in teak: child (longer prefix) wins.
-	m := s.Match("/home/user/dev/gmux/.grove/teak/file.go", "", nil)
+	m := s.Match(MatchParams{Cwd: "/home/user/dev/gmux/.grove/teak/file.go", WorkspaceRoot: ""})
 	if m == nil || m.Slug != "child" {
 		t.Errorf("expected child (longest prefix), got %v", m)
 	}
 	// Session in gmux root: parent wins.
-	m = s.Match("/home/user/dev/gmux/src/main.go", "", nil)
+	m = s.Match(MatchParams{Cwd: "/home/user/dev/gmux/src/main.go", WorkspaceRoot: ""})
 	if m == nil || m.Slug != "parent" {
 		t.Errorf("expected parent, got %v", m)
 	}
@@ -276,17 +319,17 @@ func TestMatchLongestPrefixWins(t *testing.T) {
 
 func TestMatchSpecificChildPathBeatsVagueParentEvenForRemoteProject(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "home", Paths: []string{"/home/mg"}},
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/mg/dev/gmux"}},
-		{Slug: "dots", Remote: "github.com/mgabor3141/dots", Paths: []string{"/home/mg/.local/share/chezmoi"}},
+		{Slug: "home", Match: []MatchRule{{Path: "/home/mg"}}},
+		{Slug: "gmux", Match: []MatchRule{{Remote: "github.com/gmuxapp/gmux"}, {Path: "/home/mg/dev/gmux"}}},
+		{Slug: "dots", Match: []MatchRule{{Remote: "github.com/mgabor3141/dots"}, {Path: "/home/mg/.local/share/chezmoi"}}},
 	}}
 
-	m := s.Match("/home/mg/dev/gmux/src", "", map[string]string{"origin": "git@github.com:gmuxapp/gmux.git"})
+	m := s.Match(MatchParams{Cwd: "/home/mg/dev/gmux/src", WorkspaceRoot: "", Remotes: map[string]string{"origin": "git@github.com:gmuxapp/gmux.git"}})
 	if m == nil || m.Slug != "gmux" {
 		t.Errorf("expected gmux, got %v", m)
 	}
 
-	m = s.Match("/home/mg/.local/share/chezmoi", "", map[string]string{"origin": "git@github.com:mgabor3141/dots.git"})
+	m = s.Match(MatchParams{Cwd: "/home/mg/.local/share/chezmoi", WorkspaceRoot: "", Remotes: map[string]string{"origin": "git@github.com:mgabor3141/dots.git"}})
 	if m == nil || m.Slug != "dots" {
 		t.Errorf("expected dots, got %v", m)
 	}
@@ -294,29 +337,29 @@ func TestMatchSpecificChildPathBeatsVagueParentEvenForRemoteProject(t *testing.T
 
 func TestMatchRemoteProjectFallsBackToPath(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
+		{Slug: "gmux", Match: []MatchRule{{Remote: "github.com/gmuxapp/gmux"}, {Path: "/home/user/dev/gmux"}}},
 	}}
 
 	// Session has no remotes (e.g. new git init that hasn't pushed).
 	// Should still match via the project's paths as a fallback.
-	if m := s.Match("/home/user/dev/gmux/src", "", nil); m == nil || m.Slug != "gmux" {
+	if m := s.Match(MatchParams{Cwd: "/home/user/dev/gmux/src", WorkspaceRoot: ""}); m == nil || m.Slug != "gmux" {
 		t.Error("expected remote project to fall back to path match")
 	}
 	// Session outside the project directory with no remotes: no match.
-	if m := s.Match("/home/user/dev/other", "", nil); m != nil {
+	if m := s.Match(MatchParams{Cwd: "/home/user/dev/other", WorkspaceRoot: ""}); m != nil {
 		t.Errorf("expected no match, got %q", m.Slug)
 	}
 }
 
 func TestMatchPathProjectStillTakesPrecedenceOverRemoteFallback(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "teak", Paths: []string{"/home/user/dev/gmux/.grove/teak"}},
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
+		{Slug: "teak", Match: []MatchRule{{Path: "/home/user/dev/gmux/.grove/teak"}}},
+		{Slug: "gmux", Match: []MatchRule{{Remote: "github.com/gmuxapp/gmux"}, {Path: "/home/user/dev/gmux"}}},
 	}}
 
 	// Session in teak directory with no remotes.
 	// Path-matched project (teak) should win over remote project's path fallback (gmux).
-	m := s.Match("/home/user/dev/gmux/.grove/teak/src", "", nil)
+	m := s.Match(MatchParams{Cwd: "/home/user/dev/gmux/.grove/teak/src", WorkspaceRoot: ""})
 	if m == nil || m.Slug != "teak" {
 		t.Errorf("expected teak (path precedence), got %v", m)
 	}
@@ -324,10 +367,10 @@ func TestMatchPathProjectStillTakesPrecedenceOverRemoteFallback(t *testing.T) {
 
 func TestMatchNoMatch(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/home/user/dev/gmux"}},
-		{Slug: "scripts", Paths: []string{"/home/user/scripts"}},
+		{Slug: "gmux", Match: []MatchRule{{Remote: "github.com/gmuxapp/gmux"}, {Path: "/home/user/dev/gmux"}}},
+		{Slug: "scripts", Match: []MatchRule{{Path: "/home/user/scripts"}}},
 	}}
-	m := s.Match("/home/user/dev/other", "", map[string]string{"origin": "github.com/other/repo"})
+	m := s.Match(MatchParams{Cwd: "/home/user/dev/other", WorkspaceRoot: "", Remotes: map[string]string{"origin": "github.com/other/repo"}})
 	if m != nil {
 		t.Errorf("expected no match, got %q", m.Slug)
 	}
@@ -335,7 +378,7 @@ func TestMatchNoMatch(t *testing.T) {
 
 func TestMatchEmptyState(t *testing.T) {
 	s := &State{}
-	if m := s.Match("/any/dir", "/any/ws", map[string]string{"o": "url"}); m != nil {
+	if m := s.Match(MatchParams{Cwd: "/any/dir", WorkspaceRoot: "/any/ws", Remotes: map[string]string{"o": "url"}}); m != nil {
 		t.Errorf("expected no match on empty state, got %v", m)
 	}
 }
@@ -442,7 +485,7 @@ func TestUniqueSlugWithConflict(t *testing.T) {
 
 func TestDiscoveredBasic(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/dev/gmux"}},
+		{Slug: "gmux", Match: []MatchRule{{Remote: "github.com/gmuxapp/gmux"}, {Path: "/dev/gmux"}}},
 	}}
 
 	sessions := []SessionInfo{
@@ -505,7 +548,7 @@ func TestDiscoveredEmpty(t *testing.T) {
 
 func TestDiscoveredAllMatched(t *testing.T) {
 	s := &State{Items: []Item{
-		{Slug: "gmux", Paths: []string{"/dev/gmux"}},
+		{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}},
 	}}
 	sessions := []SessionInfo{
 		{ID: "s1", Cwd: "/dev/gmux/src"},
@@ -519,7 +562,7 @@ func TestDiscoveredAllMatched(t *testing.T) {
 
 func TestAddSession(t *testing.T) {
 	s := State{Items: []Item{
-		{Slug: "gmux", Paths: []string{"/dev/gmux"}},
+		{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}},
 	}}
 	if !s.AddSession("gmux", "key-1") {
 		t.Fatal("expected AddSession to return true")
@@ -539,7 +582,7 @@ func TestAddSession(t *testing.T) {
 
 func TestRemoveSession(t *testing.T) {
 	s := State{Items: []Item{
-		{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"a", "b", "c"}},
+		{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"a", "b", "c"}},
 	}}
 	if !s.RemoveSession("gmux", "b") {
 		t.Fatal("expected RemoveSession to return true")
@@ -555,8 +598,8 @@ func TestRemoveSession(t *testing.T) {
 
 func TestRemoveSessionFromAll(t *testing.T) {
 	s := State{Items: []Item{
-		{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"a"}},
-		{Slug: "yapp", Paths: []string{"/dev/yapp"}, Sessions: []string{"b", "c"}},
+		{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"a"}},
+		{Slug: "yapp", Match: []MatchRule{{Path: "/dev/yapp"}}, Sessions: []string{"b", "c"}},
 	}}
 	slug := s.RemoveSessionFromAll("b")
 	if slug != "yapp" {
@@ -569,8 +612,8 @@ func TestRemoveSessionFromAll(t *testing.T) {
 
 func TestFindSessionProject(t *testing.T) {
 	s := State{Items: []Item{
-		{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"a"}},
-		{Slug: "yapp", Paths: []string{"/dev/yapp"}, Sessions: []string{"b"}},
+		{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"a"}},
+		{Slug: "yapp", Match: []MatchRule{{Path: "/dev/yapp"}}, Sessions: []string{"b"}},
 	}}
 	if slug := s.FindSessionProject("b"); slug != "yapp" {
 		t.Errorf("expected 'yapp', got %q", slug)
@@ -591,7 +634,7 @@ func TestSessionKey(t *testing.T) {
 
 func TestDiscoveredActiveCount(t *testing.T) {
 	s := State{Items: []Item{
-		{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/dev/gmux"}},
+		{Slug: "gmux", Match: []MatchRule{{Remote: "github.com/gmuxapp/gmux"}, {Path: "/dev/gmux"}}},
 	}}
 	sessions := []SessionInfo{
 		{ID: "s1", Cwd: "/dev/yapp", Alive: true},
@@ -621,7 +664,7 @@ func TestManagerAutoAssign(t *testing.T) {
 	// Create a project.
 	err := mgr.Update(func(s *State) bool {
 		s.Items = []Item{
-			{Slug: "gmux", Remote: "github.com/gmuxapp/gmux", Paths: []string{"/dev/gmux"}},
+			{Slug: "gmux", Match: []MatchRule{{Remote: "github.com/gmuxapp/gmux"}, {Path: "/dev/gmux"}}},
 		}
 		return true
 	})
@@ -661,7 +704,7 @@ func TestManagerAutoAssignResumeKeyUpgrade(t *testing.T) {
 
 	mgr.Update(func(s *State) bool {
 		s.Items = []Item{
-			{Slug: "gmux", Paths: []string{"/dev/gmux"}},
+			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}},
 		}
 		return true
 	})
@@ -697,7 +740,7 @@ func TestManagerDismissSession(t *testing.T) {
 
 	mgr.Update(func(s *State) bool {
 		s.Items = []Item{
-			{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"key-1", "key-2"}},
+			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"key-1", "key-2"}},
 		}
 		return true
 	})
@@ -719,7 +762,7 @@ func TestManagerUnmatchedNotAutoAssigned(t *testing.T) {
 
 	mgr.Update(func(s *State) bool {
 		s.Items = []Item{
-			{Slug: "gmux", Paths: []string{"/dev/gmux"}},
+			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}},
 		}
 		return true
 	})
@@ -742,7 +785,7 @@ func TestManagerUnmatchedNotAutoAssigned(t *testing.T) {
 
 func TestUnmatchedActiveCount(t *testing.T) {
 	s := State{Items: []Item{
-		{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"s1"}},
+		{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"s1"}},
 	}}
 	sessions := []SessionInfo{
 		{ID: "s1", Cwd: "/dev/gmux", Alive: true},       // matched + in array
@@ -760,7 +803,7 @@ func TestUnmatchedActiveCount(t *testing.T) {
 
 func TestUnmatchedActiveCountAllMatched(t *testing.T) {
 	s := State{Items: []Item{
-		{Slug: "gmux", Paths: []string{"/dev/gmux"}},
+		{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}},
 	}}
 	sessions := []SessionInfo{
 		{ID: "s1", Cwd: "/dev/gmux/src", Alive: true},
@@ -779,7 +822,7 @@ func TestManagerDismissSessionByIDFallback(t *testing.T) {
 	// Array stores session by ID (no resume key at assignment time).
 	mgr.Update(func(s *State) bool {
 		s.Items = []Item{
-			{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"sess-1"}},
+			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"sess-1"}},
 		}
 		return true
 	})
@@ -806,7 +849,7 @@ func TestManagerBroadcastCalled(t *testing.T) {
 	mgr.Broadcast = func() { called++ }
 
 	mgr.Update(func(s *State) bool {
-		s.Items = []Item{{Slug: "test", Paths: []string{"/test"}}}
+		s.Items = []Item{{Slug: "test", Match: []MatchRule{{Path: "/test"}}}}
 		return true
 	})
 	if called != 1 {
@@ -826,8 +869,8 @@ func TestManagerCleanupSessions(t *testing.T) {
 
 	mgr.Update(func(s *State) bool {
 		s.Items = []Item{
-			{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"s1", "s2", "s3"}},
-			{Slug: "yapp", Paths: []string{"/dev/yapp"}, Sessions: []string{"s4", "s5"}},
+			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"s1", "s2", "s3"}},
+			{Slug: "yapp", Match: []MatchRule{{Path: "/dev/yapp"}}, Sessions: []string{"s4", "s5"}},
 		}
 		return true
 	})
@@ -853,7 +896,7 @@ func TestManagerCleanupSessionsNoOrphans(t *testing.T) {
 
 	mgr.Update(func(s *State) bool {
 		s.Items = []Item{
-			{Slug: "gmux", Paths: []string{"/dev/gmux"}, Sessions: []string{"s1", "s2"}},
+			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"s1", "s2"}},
 		}
 		return true
 	})
@@ -874,8 +917,8 @@ func TestManagerAutoAssignAllAlive(t *testing.T) {
 
 	mgr.Update(func(s *State) bool {
 		s.Items = []Item{
-			{Slug: "gmux", Paths: []string{"/dev/gmux"}},
-			{Slug: "yapp", Paths: []string{"/dev/yapp"}},
+			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}},
+			{Slug: "yapp", Match: []MatchRule{{Path: "/dev/yapp"}}},
 		}
 		return true
 	})
@@ -895,5 +938,161 @@ func TestManagerAutoAssignAllAlive(t *testing.T) {
 	}
 	if len(state.Items[1].Sessions) != 1 || state.Items[1].Sessions[0] != "s2" {
 		t.Errorf("yapp sessions: expected [s2], got %v", state.Items[1].Sessions)
+	}
+}
+
+func TestMatchHostScoping(t *testing.T) {
+	s := &State{Items: []Item{
+		{Slug: "laptop-data", Match: []MatchRule{{Path: "/data/ml", Hosts: []string{"laptop"}}}},
+		{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}},
+	}}
+
+	// Local session: host-scoped rule doesn't match (host is "").
+	m := s.Match(MatchParams{Cwd: "/data/ml/experiment"})
+	if m != nil {
+		t.Errorf("local session in /data/ml: expected nil (no unscoped match), got %q", m.Slug)
+	}
+
+	// Session from the scoped host: matches.
+	m = s.Match(MatchParams{Cwd: "/data/ml/experiment", Host: "laptop"})
+	if m == nil || m.Slug != "laptop-data" {
+		t.Errorf("laptop session: expected 'laptop-data', got %v", m)
+	}
+
+	// Session from a different peer: host-scoped rule doesn't apply.
+	m = s.Match(MatchParams{Cwd: "/data/ml/experiment", Host: "server"})
+	if m != nil {
+		t.Errorf("server session in /data/ml: expected nil, got %q", m.Slug)
+	}
+
+	// Unscoped rule matches any host.
+	m = s.Match(MatchParams{Cwd: "/dev/gmux/src", Host: "server"})
+	if m == nil || m.Slug != "gmux" {
+		t.Errorf("server session in /dev/gmux: expected 'gmux', got %v", m)
+	}
+}
+
+
+func TestNormalizePathExpandsTilde(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	// Verify the wrapper delegates correctly to paths.NormalizePath.
+	if got := NormalizePath("~/dev/gmux"); got != home+"/dev/gmux" {
+		t.Errorf("NormalizePath(~/dev/gmux) = %q, want %q", got, home+"/dev/gmux")
+	}
+}
+
+func TestMatchHomeProjectExact(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+
+	s := &State{Items: []Item{
+		{Slug: "home", Match: []MatchRule{{Path: "~", Exact: true}}},
+	}}
+
+	// Session at $HOME itself matches.
+	m := s.Match(MatchParams{Cwd: home})
+	if m == nil || m.Slug != "home" {
+		t.Errorf("session at $HOME: expected 'home', got %v", m)
+	}
+
+	// Session under $HOME does NOT match (exact).
+	m = s.Match(MatchParams{Cwd: home + "/dev/gmux/src"})
+	if m != nil {
+		t.Errorf("session under $HOME with exact: expected nil, got %q", m.Slug)
+	}
+
+	// Session outside $HOME does not match.
+	m = s.Match(MatchParams{Cwd: "/tmp/scratch"})
+	if m != nil {
+		t.Errorf("session outside $HOME: expected nil, got %q", m.Slug)
+	}
+}
+
+func TestMatchExactPath(t *testing.T) {
+	s := &State{Items: []Item{
+		{Slug: "scripts", Match: []MatchRule{{Path: "/home/user/scripts", Exact: true}}},
+	}}
+
+	// Exact cwd match.
+	if m := s.Match(MatchParams{Cwd: "/home/user/scripts"}); m == nil || m.Slug != "scripts" {
+		t.Error("expected match on exact cwd")
+	}
+	// Exact workspace_root match.
+	if m := s.Match(MatchParams{Cwd: "/other", WorkspaceRoot: "/home/user/scripts"}); m == nil || m.Slug != "scripts" {
+		t.Error("expected match on exact workspace_root")
+	}
+	// Subdirectory does NOT match.
+	if m := s.Match(MatchParams{Cwd: "/home/user/scripts/bin"}); m != nil {
+		t.Errorf("subdirectory should not match exact rule, got %q", m.Slug)
+	}
+}
+
+func TestMatchExactWithRemoteFallback(t *testing.T) {
+	// A project with an exact path and a remote. The remote should still
+	// match sessions anywhere; exact only constrains the path rule.
+	s := &State{Items: []Item{
+		{Slug: "scripts", Match: []MatchRule{
+			{Remote: "github.com/org/scripts"},
+			{Path: "/home/user/scripts", Exact: true},
+		}},
+	}}
+
+	remotes := map[string]string{"origin": "git@github.com:org/scripts.git"}
+
+	// Exact path match (no remote needed).
+	if m := s.Match(MatchParams{Cwd: "/home/user/scripts"}); m == nil || m.Slug != "scripts" {
+		t.Error("expected exact path match")
+	}
+	// Subdirectory: path doesn't match (exact), but remote does.
+	if m := s.Match(MatchParams{Cwd: "/home/user/scripts/bin", Remotes: remotes}); m == nil || m.Slug != "scripts" {
+		t.Error("expected remote fallback when exact path rejects subdir")
+	}
+	// Subdirectory without remote: no match at all.
+	if m := s.Match(MatchParams{Cwd: "/home/user/scripts/bin"}); m != nil {
+		t.Errorf("expected no match without remote, got %q", m.Slug)
+	}
+}
+
+func TestManagerSeedIfEmpty(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+
+	mgr.SeedIfEmpty()
+
+	state, err := mgr.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(state.Items))
+	}
+	if state.Items[0].Slug != "home" {
+		t.Errorf("slug = %q, want 'home'", state.Items[0].Slug)
+	}
+	if len(state.Items[0].Match) != 1 || state.Items[0].Match[0].Path != "~" || !state.Items[0].Match[0].Exact {
+		t.Errorf("match = %+v, want [{path: ~, exact: true}]", state.Items[0].Match)
+	}
+}
+
+func TestManagerSeedIfEmptySkipsWhenProjectsExist(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+
+	// Add a project first.
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{{Slug: "existing", Match: []MatchRule{{Path: "/dev/existing"}}}}
+		return true
+	})
+
+	mgr.SeedIfEmpty()
+
+	state, _ := mgr.Load()
+	if len(state.Items) != 1 || state.Items[0].Slug != "existing" {
+		t.Errorf("expected existing project unchanged, got %+v", state.Items)
 	}
 }

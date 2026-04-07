@@ -234,8 +234,8 @@ describe('groupByFolder', () => {
 
 describe('matchSession', () => {
   const projects: ProjectItem[] = [
-    { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/dev/gmux'] },
-    { slug: 'yapp', paths: ['/dev/yapp'] },
+    { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },
+    { slug: 'yapp', match: [{ path: '/dev/yapp' }] },
   ]
 
   it('matches by path (no remote) with longest prefix', () => {
@@ -268,9 +268,9 @@ describe('matchSession', () => {
 
   it('lets remote-backed child projects beat a vague parent path', () => {
     const projects: ProjectItem[] = [
-      { slug: 'mg', paths: ['/home/mg'] },
-      { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/home/mg/dev/gmux'] },
-      { slug: 'dots', remote: 'github.com/mgabor3141/dots', paths: ['/home/mg/.local/share/chezmoi'] },
+      { slug: 'mg', match: [{ path: '/home/mg' }] },
+      { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/home/mg/dev/gmux' }] },
+      { slug: 'dots', match: [{ remote: 'github.com/mgabor3141/dots' }, { path: '/home/mg/.local/share/chezmoi' }] },
     ]
 
     const gmuxSession = makeSession({
@@ -288,26 +288,67 @@ describe('matchSession', () => {
     expect(matchSession(dotsSession, projects)?.slug).toBe('dots')
   })
 
-  it('keeps nested workspaces under the remote-matched project', () => {
+  it('prefers most specific path over remote match', () => {
     const projects: ProjectItem[] = [
-      { slug: 'teak', paths: ['/home/user/dev/gmux/.grove/teak'] },
-      { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/home/user/dev/gmux'] },
+      { slug: 'teak', match: [{ path: '/home/user/dev/gmux/.grove/teak' }] },
+      { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/home/user/dev/gmux' }] },
     ]
 
+    // Session in teak's directory: teak path is more specific than gmux path.
     const sess = makeSession({
       id: 'w1',
       cwd: '/home/user/dev/gmux/.grove/teak/src',
       remotes: { origin: 'git@github.com:gmuxapp/gmux.git' },
     })
-    expect(matchSession(sess, projects)?.slug).toBe('gmux')
+    expect(matchSession(sess, projects)?.slug).toBe('teak')
+
+    // Session with remote but no path match: falls back to remote.
+    const sess2 = makeSession({
+      id: 'w2',
+      cwd: '/other/dir',
+      remotes: { origin: 'git@github.com:gmuxapp/gmux.git' },
+    })
+    expect(matchSession(sess2, projects)?.slug).toBe('gmux')
+  })
+
+  it('exact path matches only the exact directory, not subdirs', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'home', match: [{ path: '~', exact: true }] },
+      { slug: 'gmux', match: [{ path: '~/dev/gmux' }] },
+    ]
+
+    // Session at ~ itself: matches home.
+    expect(matchSession(makeSession({ id: 'h1', cwd: '~' }), projects)?.slug).toBe('home')
+
+    // Session under ~/dev/gmux: matches gmux, NOT home.
+    expect(matchSession(makeSession({ id: 'g1', cwd: '~/dev/gmux/src' }), projects)?.slug).toBe('gmux')
+
+    // Session under ~ but not in any other project: does NOT match home (exact).
+    expect(matchSession(makeSession({ id: 'x1', cwd: '~/documents' }), projects)).toBeNull()
+  })
+
+  it('exact path matches via workspace_root', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'scripts', match: [{ path: '/home/user/scripts', exact: true }] },
+    ]
+    const sess = makeSession({ id: 's1', cwd: '/other', workspace_root: '/home/user/scripts' })
+    expect(matchSession(sess, projects)?.slug).toBe('scripts')
+  })
+
+  it('exact path does not match subdirectories', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'scripts', match: [{ path: '/home/user/scripts', exact: true }] },
+    ]
+    const sess = makeSession({ id: 's1', cwd: '/home/user/scripts/bin' })
+    expect(matchSession(sess, projects)).toBeNull()
   })
 })
 
 describe('buildProjectFolders', () => {
   it('builds folders in project order', () => {
     const projects: ProjectItem[] = [
-      { slug: 'beta', paths: ['/dev/beta'] },
-      { slug: 'alpha', paths: ['/dev/alpha'] },
+      { slug: 'beta', match: [{ path: '/dev/beta' }] },
+      { slug: 'alpha', match: [{ path: '/dev/alpha' }] },
     ]
     const sessions = [
       makeSession({ id: 'a1', cwd: '/dev/alpha/src' }),
@@ -319,7 +360,7 @@ describe('buildProjectFolders', () => {
 
   it('includes projects with no matching sessions', () => {
     const projects: ProjectItem[] = [
-      { slug: 'empty', paths: ['/dev/empty'] },
+      { slug: 'empty', match: [{ path: '/dev/empty' }] },
     ]
     const folders = buildProjectFolders(projects, [])
     expect(folders).toHaveLength(1)
@@ -329,7 +370,7 @@ describe('buildProjectFolders', () => {
 
   it('sets launchCwd from project paths', () => {
     const projects: ProjectItem[] = [
-      { slug: 'proj', paths: ['/dev/proj', '/dev/proj2'] },
+      { slug: 'proj', match: [{ path: '/dev/proj' }, { path: '/dev/proj2' }] },
     ]
     const folders = buildProjectFolders(projects, [])
     expect(folders[0].launchCwd).toBe('/dev/proj')
@@ -337,7 +378,7 @@ describe('buildProjectFolders', () => {
 
   it('excludes dead sessions not in the project sessions array', () => {
     const projects: ProjectItem[] = [
-      { slug: 'proj', paths: ['/dev/proj'], sessions: ['kept-id'] },
+      { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['kept-id'] },
     ]
     const sessions = [
       makeSession({ id: 'kept-id', cwd: '/dev/proj', alive: false, resumable: true }),
@@ -353,7 +394,7 @@ describe('buildProjectFolders', () => {
 
   it('matches dead sessions by resume_key in array', () => {
     const projects: ProjectItem[] = [
-      { slug: 'proj', paths: ['/dev/proj'], sessions: ['my-resume-key'] },
+      { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['my-resume-key'] },
     ]
     const sessions = [
       makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: false, resumable: true, resume_key: 'my-resume-key' }),
@@ -364,7 +405,7 @@ describe('buildProjectFolders', () => {
 
   it('excludes dead sessions whose resume_key is not in the array', () => {
     const projects: ProjectItem[] = [
-      { slug: 'proj', paths: ['/dev/proj'], sessions: ['other-key'] },
+      { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['other-key'] },
     ]
     const sessions = [
       makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: false, resumable: true, resume_key: 'my-resume-key' }),
@@ -444,7 +485,7 @@ describe('sessionPath', () => {
 
 describe('resolveSessionFromPath', () => {
   const projects: ProjectItem[] = [
-    { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/dev/gmux'] },
+    { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },
   ]
   const localSessions = [
     makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
@@ -547,7 +588,7 @@ describe('normalizeRemote', () => {
 
 describe('resolveViewFromPath', () => {
   const projects: ProjectItem[] = [
-    { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/dev/gmux'] },
+    { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },
   ]
   const sessions = [
     makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
@@ -613,7 +654,7 @@ describe('resolveViewFromPath', () => {
 
 describe('viewToPath', () => {
   const projects: ProjectItem[] = [
-    { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/dev/gmux'] },
+    { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },
   ]
   const sessions = [
     makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
@@ -686,7 +727,7 @@ describe('viewsEqual', () => {
 
 describe('View round-trip', () => {
   const projects: ProjectItem[] = [
-    { slug: 'gmux', remote: 'github.com/gmuxapp/gmux', paths: ['/dev/gmux'] },
+    { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },
   ]
   const sessions = [
     makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
@@ -722,9 +763,7 @@ describe('View round-trip', () => {
 })
 
 describe('isSessionVisibleInProject', () => {
-  const project: ProjectItem = {
-    slug: 'test', paths: ['/dev/test'], sessions: ['my-session', 'sess-tracked'],
-  }
+  const project: ProjectItem = { slug: 'test', match: [{ path: '/dev/test' }], sessions: ['my-session', 'sess-tracked'] }
 
   it('alive sessions are always visible', () => {
     const s = makeSession({ id: 'sess-new', cwd: '/dev/test', alive: true })
@@ -752,7 +791,7 @@ describe('isSessionVisibleInProject', () => {
   })
 
   it('handles projects with no sessions array', () => {
-    const bare: ProjectItem = { slug: 'bare', paths: ['/dev/bare'] }
+    const bare: ProjectItem = { slug: 'bare', match: [{ path: '/dev/bare' }] }
     const s = makeSession({ id: 'sess-x', cwd: '/dev/bare', alive: false, resumable: true })
     expect(isSessionVisibleInProject(s, bare)).toBe(false)
   })
@@ -787,7 +826,7 @@ describe('parseSessionHostPath', () => {
 
 describe('buildProjectTopology', () => {
   const projects: ProjectItem[] = [
-    { slug: 'fluxer', paths: ['/home/mg/dev/fluxer'], sessions: [] },
+    { slug: 'fluxer', match: [{ path: '/home/mg/dev/fluxer' }], sessions: [] },
   ]
 
   const peers: PeerInfo[] = [
@@ -839,7 +878,7 @@ describe('buildProjectTopology', () => {
     // Nested devcontainer sessions live at paths that don't overlap the
     // project's local paths, so matchSession relies on git remotes here.
     const projectsWithRemote: ProjectItem[] = [
-      { slug: 'fluxer', remote: 'github.com/mg/fluxer', paths: ['/home/mg/dev/fluxer'], sessions: [] },
+      { slug: 'fluxer', match: [{ remote: 'github.com/mg/fluxer' }, { path: '/home/mg/dev/fluxer' }], sessions: [] },
     ]
     const sessions = [
       makeSession({
@@ -890,7 +929,7 @@ describe('buildProjectTopology', () => {
     // Dead session must be resumable AND in project.sessions[] to pass
     // the visibility filter (mirrors sidebar behavior).
     const projectsWithDead: ProjectItem[] = [
-      { slug: 'fluxer', paths: ['/home/mg/dev/fluxer'], sessions: ['dead-old'] },
+      { slug: 'fluxer', match: [{ path: '/home/mg/dev/fluxer' }], sessions: ['dead-old'] },
     ]
     const sessions = [
       makeSession({
@@ -936,8 +975,8 @@ describe('buildProjectTopology', () => {
 
   it('filters sessions by project match (ignores unrelated sessions)', () => {
     const projects2: ProjectItem[] = [
-      { slug: 'fluxer', paths: ['/home/mg/dev/fluxer'], sessions: [] },
-      { slug: 'other', paths: ['/home/mg/dev/other'], sessions: [] },
+      { slug: 'fluxer', match: [{ path: '/home/mg/dev/fluxer' }], sessions: [] },
+      { slug: 'other', match: [{ path: '/home/mg/dev/other' }], sessions: [] },
     ]
     const sessions = [
       makeSession({ id: 'f1', cwd: '/home/mg/dev/fluxer' }),

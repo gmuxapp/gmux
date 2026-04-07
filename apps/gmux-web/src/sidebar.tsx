@@ -10,7 +10,8 @@ import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
 import {
   folders, selectedId, currentProjectSlug, health,
-  activityMap, unmatchedActiveCount,
+  activityMap, unmatchedActiveCount, projects, connState,
+  updateProjects,
   type DotState,
 } from './store'
 import type { Session, Folder } from './types'
@@ -198,7 +199,21 @@ export function Sidebar({
   const unmatchedCount = unmatchedActiveCount.value
   const am = activityMap.value
 
-  const hasProjects = foldersVal.length > 0
+  const totalVisible = foldersVal.reduce(
+    (n, f) => n + f.sessions.filter(s => s.alive || s.resumable).length, 0,
+  )
+  const projectsVal = projects.value
+  const connected = connState.value === 'connected'
+  const hasProjects = projectsVal.length > 0
+  const isOnlyHomeProject = projectsVal.length === 1
+    && projectsVal[0].slug === 'home'
+    && projectsVal[0].match.some(r => r.path === '~' && r.exact)
+
+  const seedHomeProject = async () => {
+    if (projects.value.length === 0) {
+      await updateProjects([{ slug: 'home', match: [{ path: '~', exact: true }] }])
+    }
+  }
 
   return (
     <>
@@ -224,10 +239,16 @@ export function Sidebar({
                 : healthVal.version}
             </a>
           ) : null}
-          <LaunchButton className="sidebar-launch-btn" onLaunch={onClose} />
+          {connected && !hasProjects && (
+            <LaunchButton
+              className="sidebar-launch-btn"
+              beforeLaunch={seedHomeProject}
+              onLaunch={onClose}
+            />
+          )}
         </div>
         <div class="sidebar-scroll">
-          {hasProjects ? foldersVal.map(f => (
+          {foldersVal.map(f => (
             <FolderGroup
               key={f.path}
               folder={f}
@@ -239,15 +260,17 @@ export function Sidebar({
               onCloseSession={onCloseSession}
               onClick={onClose}
             />
-          )) : (
-            <div class="sidebar-empty">
-              <div class="sidebar-empty-title">No projects yet</div>
-              <div class="sidebar-empty-body">
-                Projects group your sessions by repository.
-              </div>
-              <button class="sidebar-empty-action" onClick={onManageProjects}>
-                Add a project
-              </button>
+          ))}
+          {connected && totalVisible === 0 && !hasProjects && (
+            <div class="sidebar-hint">
+              Click <strong>+</strong> to start your first session.
+            </div>
+          )}
+          {connected && isOnlyHomeProject && totalVisible > 0 && (
+            <div class="sidebar-hint">
+              <button class="sidebar-hint-link" onClick={onManageProjects}>
+                Manage projects
+              </button> to organize sessions by repo.
             </div>
           )}
         </div>

@@ -28,6 +28,26 @@ func (m *Manager) Load() (*State, error) {
 	return Load(m.stateDir)
 }
 
+// SeedIfEmpty creates a default "home" project when no projects exist.
+// Called once at startup so new users see their sessions immediately
+// instead of an empty sidebar. The user can remove or reorder it.
+func (m *Manager) SeedIfEmpty() {
+	err := m.Update(func(s *State) bool {
+		if len(s.Items) > 0 {
+			return false
+		}
+		s.Items = []Item{{
+			Slug:  "home",
+			Match: []MatchRule{{Path: "~", Exact: true}},
+		}}
+		log.Printf("projects: seeded default home project")
+		return true
+	})
+	if err != nil {
+		log.Printf("projects: seed error: %v", err)
+	}
+}
+
 // Update atomically loads state, calls fn to modify it, validates, and saves.
 // If fn returns false, the update is aborted (no save, no broadcast).
 func (m *Manager) Update(fn func(s *State) bool) error {
@@ -91,7 +111,7 @@ func (m *Manager) AutoAssignSession(info SessionInfo) string {
 		}
 
 		// Match against project rules.
-		match := state.Match(info.Cwd, info.WorkspaceRoot, info.Remotes)
+		match := state.Match(matchParamsFromInfo(info))
 		if match == nil {
 			return false
 		}
@@ -121,7 +141,7 @@ func (m *Manager) AutoAssignAllAlive(sessions []SessionInfo) {
 			if state.FindSessionProject(key) != "" {
 				continue
 			}
-			match := state.Match(info.Cwd, info.WorkspaceRoot, info.Remotes)
+			match := state.Match(matchParamsFromInfo(info))
 			if match == nil {
 				continue
 			}

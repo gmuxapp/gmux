@@ -212,16 +212,22 @@ export interface Session {
 export interface Folder {
   name: string      // display name (project slug or derived name)
   path: string      // project slug (used as key)
-  launchCwd: string // filesystem path for launching new sessions
+  launchCwd?: string // filesystem path for launching new sessions
   sessions: Session[]
 }
 
 // --- Project types (server-side state) ---
 
+export interface MatchRule {
+  path?: string
+  remote?: string
+  hosts?: string[]
+  exact?: boolean // path must match exactly, not as prefix
+}
+
 export interface ProjectItem {
   slug: string
-  remote?: string
-  paths: string[]
+  match: MatchRule[]
   sessions?: string[] // managed by server; must be preserved in PUT
 }
 
@@ -286,41 +292,47 @@ export function isSessionVisibleInProject(session: Session, project: ProjectItem
 /**
  * Returns the project that best matches a session, or null.
  *
- * Precedence (mirrors Go State.Match):
- *  1. Remote-matched projects, by remote URL.
- *  2. Path matches across all projects, longest prefix wins.
+ * Mirrors Go State.Match: checks each project's match rules.
+ * Path rules use longest-prefix matching. If no path rule matches,
+ * falls back to the first remote-matched project.
+ *
+ * Both project paths and session cwds are canonicalized server-side
+ * (~/... form), so string comparison works without $HOME expansion.
+ * Does not check rule.hosts (host scoping is server-side only).
  */
 export function matchSession(
   session: Session,
   projects: ProjectItem[],
 ): ProjectItem | null {
-  // Phase 1: remote-matched projects.
-  if (session.remotes) {
-    for (const project of projects) {
-      if (!project.remote) continue
-      const normProjectRemote = normalizeRemote(project.remote)
-      for (const url of Object.values(session.remotes)) {
-        if (normalizeRemote(url) === normProjectRemote) {
-          return project
+  let bestPath: ProjectItem | null = null
+  let bestPathLen = 0
+  let firstRemote: ProjectItem | null = null
+
+  for (const project of projects) {
+    for (const rule of project.match) {
+      if (rule.remote && session.remotes) {
+        const normRule = normalizeRemote(rule.remote)
+        for (const url of Object.values(session.remotes)) {
+          if (normalizeRemote(url) === normRule) {
+            if (!firstRemote) firstRemote = project
+            break
+          }
+        }
+      }
+
+      if (rule.path) {
+        const matched = rule.exact
+          ? (session.cwd === rule.path || session.workspace_root === rule.path)
+          : (pathUnder(session.cwd, rule.path) || pathUnder(session.workspace_root, rule.path))
+        if (matched && rule.path.length > bestPathLen) {
+          bestPathLen = rule.path.length
+          bestPath = project
         }
       }
     }
   }
 
-  // Phase 2: any path match, longest prefix wins.
-  let best: ProjectItem | null = null
-  let bestLen = 0
-  for (const project of projects) {
-    for (const p of project.paths) {
-      if (pathUnder(session.cwd, p) || pathUnder(session.workspace_root, p)) {
-        if (p.length > bestLen) {
-          bestLen = p.length
-          best = project
-        }
-      }
-    }
-  }
-  return best
+  return bestPath ?? firstRemote
 }
 
 /**
@@ -368,7 +380,7 @@ export function buildProjectFolders(
     folders.push({
       name: project.slug,
       path: project.slug,
-      launchCwd: project.paths[0],
+      launchCwd: project.match.find(r => r.path)?.path,
       sessions: matched.sort((a, b) => {
         if (a.cwd !== b.cwd) return a.cwd < b.cwd ? -1 : 1
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()

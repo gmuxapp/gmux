@@ -150,6 +150,8 @@ export function consumePendingLaunch(maxAgeMs = 10_000): boolean {
 interface LaunchButtonProps {
   className?: string
   onLaunch?: () => void
+  /** Async action to run before the launch request (e.g. seed a project). */
+  beforeLaunch?: () => Promise<void>
   /** Explicit target: working directory for the new session. */
   cwd?: string
   /** Explicit target: peer name for remote launch. */
@@ -164,7 +166,7 @@ interface LaunchButtonProps {
   fallbackCwd?: string
 }
 
-export function LaunchButton({ className, onLaunch, cwd, peer, sessions, selectedId, fallbackCwd }: LaunchButtonProps) {
+export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, sessions, selectedId, fallbackCwd }: LaunchButtonProps) {
   // Resolve the target: context-aware mode (sessions provided) takes
   // priority over explicit cwd/peer.
   const target = useMemo((): LaunchTarget => {
@@ -221,8 +223,9 @@ export function LaunchButton({ className, onLaunch, cwd, peer, sessions, selecte
     }
   }
 
-  const handleLaunch = (id: string) => {
+  const handleLaunch = async (id: string) => {
     setState('launching')
+    if (beforeLaunch) await beforeLaunch()
     onLaunch?.()
     launchSession(id, { cwd: target.cwd || undefined, peer: target.peer }).finally(() => {
       setTimeout(() => setState('idle'), 600)
