@@ -34,4 +34,4 @@ Breaking API or schema changes require a new version prefix. Non-breaking additi
 
 - `apps/gmux-web` is not a standalone npm package — it's embedded into gmuxd
 - `packages/protocol` is internal to the monorepo
-- If public SDK packages emerge later, they'll get their own versioning via changesets
+- If public SDK packages emerge later, they'll get their own versioning

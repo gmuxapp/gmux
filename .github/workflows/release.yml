@@ -11,10 +11,7 @@ on:
     types: [closed]
     branches: [main]
 
-permissions:
-  contents: write
-  pages: write
-  id-token: write
+permissions: {}
 
 jobs:
   release:
@@ -23,10 +20,13 @@ jobs:
       github.event_name == 'push' ||
       (github.event.pull_request.merged && github.event.pull_request.head.ref == 'release/next')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    environment: release
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: main
           fetch-depth: 0
@@ -53,21 +53,21 @@ jobs:
             git push origin "$version"
           fi
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.26"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
       - name: Install JS dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           version: "~> v2"
           args: release --clean --release-notes=RELEASE_NOTES.md
@@ -86,7 +86,7 @@ jobs:
           ROLE_FEATURE: ${{ vars.DISCORD_ROLE_FEATURE }}
           ROLE_PATCH: ${{ vars.DISCORD_ROLE_PATCH }}
           VERSION: ${{ steps.version.outputs.version }}
-        run: bash scripts/notify-discord.sh
+        run: bash .github/workflows/scripts/notify-discord.sh
 
   deploy-docs:
     needs: release

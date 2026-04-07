@@ -1,66 +1,96 @@
 name: Version
 
-# Open/update a release PR when changesets land on main.
+# Scan for releasable PRs on every push to main.
 on:
   push:
     branches: [main]
-    paths:
-      - ".changesets/*.md"
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write # needed for gh workflow run (dispatch pr-build)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
-      - name: Check for changesets
-        id: check
-        run: |
-          count=$(find .changesets -name '*.md' ! -name 'README.md' | wc -l)
-          echo "count=$count" >> "$GITHUB_OUTPUT"
-
-      - name: Consume changesets
-        if: steps.check.outputs.count != '0'
+      - name: Check for releasable PRs
         id: version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          # Run version.sh with stdout going to both the console and a
-          # variable so progress is visible even if the script fails.
-          bash scripts/version.sh | tee /tmp/version-output.txt
-          version=$(head -1 /tmp/version-output.txt | awk '{print $1}')
+          output=$(bash .github/workflows/scripts/version.sh)
+          version=$(echo "$output" | head -1 | awk '{print $1}')
+          if [[ -z "$version" ]]; then
+            echo "No release needed."
+            exit 0
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "$output"
 
       - name: Prepare PR body
-        if: steps.check.outputs.count != '0'
+        if: steps.version.outputs.version != ''
+        id: body
+        run: |
+          {
+            echo "notes<<NOTES_EOF"
+            cat RELEASE_NOTES.md
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create release PR
+        if: steps.version.outputs.version != ''
+        id: create-pr
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          commit-message: "release: ${{ steps.version.outputs.version }}"
+          title: "release: ${{ steps.version.outputs.version }}"
+          body: |
+            Release **${{ steps.version.outputs.version }}**.
+
+            Merging creates the `${{ steps.version.outputs.version }}` tag and triggers the release build.
+
+            ---
+
+            ${{ steps.body.outputs.notes }}
+          branch: release/next
+          delete-branch: true
+
+      - name: Update PR body (on existing PR)
+        if: steps.version.outputs.version != '' && steps.create-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="${{ steps.version.outputs.version }}"
-          cat > /tmp/pr-body.md <<EOF
+          pr_num="${{ steps.create-pr.outputs.pull-request-number }}"
+          notes=$(cat RELEASE_NOTES.md)
+
+          cat <<EOF | gh pr edit "$pr_num" --body-file -
           Release **${version}**.
 
           Merging creates the \`${version}\` tag and triggers the release build.
 
+          ### Try this prerelease
+          \`\`\`sh
+          curl -sSfL https://gmux.app/install-pr.sh | sh -s -- ${pr_num}
+          \`\`\`
+
           ---
 
-          $(cat RELEASE_NOTES.md)
+          ${notes}
           EOF
 
-      - name: Create release PR
-        if: steps.check.outputs.count != '0'
-        uses: peter-evans/create-pull-request@v7
-        with:
-          commit-message: "release: ${{ steps.version.outputs.version }}"
-          title: "release: ${{ steps.version.outputs.version }}"
-          body-path: /tmp/pr-body.md
-          branch: release/next
-          delete-branch: true
-
-  # When the release PR itself merges (deleting changeset files), this
-  # workflow fires again. The check step finds 0 changesets and skips.
+      - name: Trigger PR build
+        if: steps.version.outputs.version != '' && steps.create-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run pr-build.yml \
+            --ref release/next \
+            -f pr_number=${{ steps.create-pr.outputs.pull-request-number }}

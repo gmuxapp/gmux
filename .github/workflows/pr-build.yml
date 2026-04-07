@@ -3,39 +3,47 @@ name: PR Build
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number (for release PR builds)
+        type: string
+        required: true
 
-permissions:
-  contents: read
-  pull-requests: write
+permissions: {}
 
 concurrency:
-  group: pr-build-${{ github.ref }}
+  group: pr-build-${{ inputs.pr_number || github.event.number }}
   cancel-in-progress: true
 
 jobs:
   build:
     name: Build test binaries
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      PR: ${{ inputs.pr_number || github.event.number }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.26"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
       - name: Install JS dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Build with GoReleaser (snapshot)
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           version: "~> v2"
           args: release --snapshot --clean
@@ -43,16 +51,16 @@ jobs:
           GOWORK: ${{ github.workspace }}/go.work
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: gmux-pr${{ github.event.number }}
+          name: gmux-pr${{ env.PR }}
           path: dist/gmux_*
           retention-days: 7
 
       - name: Comment install instructions
+        continue-on-error: true # read-only token on fork PRs
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.number }}
         run: |
           body="<!-- gmux-pr-build -->
           ### Try this PR
