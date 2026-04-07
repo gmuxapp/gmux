@@ -229,44 +229,22 @@ func (m *Manager) HasPeers() bool {
 	return len(m.peers) > 0
 }
 
-// PeerConfigs fetches /v1/config from all connected peers in parallel.
-// Returns a map from peer name to the raw JSON config data.
-// Peers that are not connected or fail to respond are omitted.
-func (m *Manager) PeerConfigs(ctx context.Context) map[string]json.RawMessage {
+// PeerConfigs returns the cached /v1/config data from all connected peers.
+// Config is fetched once per SSE connection and served from memory.
+// Peers that are not connected or whose config has not been fetched are omitted.
+func (m *Manager) PeerConfigs() map[string]json.RawMessage {
 	m.mu.RLock()
-	type entry struct {
-		name string
-		peer *Peer
-	}
-	var connected []entry
+	defer m.mu.RUnlock()
+
+	var results map[string]json.RawMessage
 	for name, mp := range m.peers {
-		if mp.peer.Status() == StatusConnected {
-			connected = append(connected, entry{name, mp.peer})
+		data := mp.peer.CachedConfig()
+		if data != nil {
+			if results == nil {
+				results = make(map[string]json.RawMessage)
+			}
+			results[name] = data
 		}
 	}
-	m.mu.RUnlock()
-
-	if len(connected) == 0 {
-		return nil
-	}
-
-	results := make(map[string]json.RawMessage, len(connected))
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	for _, e := range connected {
-		wg.Add(1)
-		go func(name string, peer *Peer) {
-			defer wg.Done()
-			data := peer.FetchConfig(ctx)
-			if data != nil {
-				mu.Lock()
-				results[name] = data
-				mu.Unlock()
-			}
-		}(e.name, e.peer)
-	}
-
-	wg.Wait()
 	return results
 }

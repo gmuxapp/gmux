@@ -615,9 +615,10 @@ func TestPeerFetchConfig(t *testing.T) {
 	st := store.New()
 	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL, Token: "tok123"}, st, nil)
 
-	data := p.FetchConfig(t.Context())
+	p.fetchConfig(t.Context())
+	data := p.CachedConfig()
 	if data == nil {
-		t.Fatal("FetchConfig returned nil")
+		t.Fatal("CachedConfig returned nil after fetchConfig")
 	}
 
 	var cfg struct {
@@ -646,9 +647,10 @@ func TestPeerFetchConfig_BadToken(t *testing.T) {
 	st := store.New()
 	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL, Token: "wrong"}, st, nil)
 
-	data := p.FetchConfig(t.Context())
+	p.fetchConfig(t.Context())
+	data := p.CachedConfig()
 	if data != nil {
-		t.Errorf("FetchConfig should return nil for 401, got %s", data)
+		t.Errorf("CachedConfig should be nil for 401, got %s", data)
 	}
 }
 
@@ -679,7 +681,12 @@ func TestManagerPeerConfigs(t *testing.T) {
 		mp.peer.setStatus(StatusConnected)
 	}
 
-	results := mgr.PeerConfigs(t.Context())
+	// fetchConfig to populate the cache (simulating what subscribe does).
+	for _, mp := range mgr.peers {
+		mp.peer.fetchConfig(t.Context())
+	}
+
+	results := mgr.PeerConfigs()
 	if len(results) != 2 {
 		t.Fatalf("expected 2 peer configs, got %d", len(results))
 	}
@@ -713,10 +720,102 @@ func TestManagerPeerConfigs_SkipsDisconnected(t *testing.T) {
 	}, st, "test-host")
 	// Leave status as disconnected (default).
 
-	results := mgr.PeerConfigs(t.Context())
+	results := mgr.PeerConfigs()
 	if len(results) != 0 {
 		t.Errorf("expected empty results for disconnected peer, got %d", len(results))
 	}
+}
+
+func TestCachedConfig_ClearedOnDisconnect(t *testing.T) {
+	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"data":{"launchers":[]}}`))
+	}))
+	defer spoke.Close()
+
+	st := store.New()
+	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL}, st, nil)
+
+	// Initially nil.
+	if p.CachedConfig() != nil {
+		t.Fatal("expected nil cache before fetch")
+	}
+
+	// Populated after fetch.
+	p.fetchConfig(t.Context())
+	if p.CachedConfig() == nil {
+		t.Fatal("expected non-nil cache after fetch")
+	}
+
+	// Cleared when we simulate disconnect (same as the run loop does).
+	p.mu.Lock()
+	p.cachedConfig = nil
+	p.mu.Unlock()
+	if p.CachedConfig() != nil {
+		t.Fatal("expected nil cache after disconnect")
+	}
+}
+
+// TestMutualPeers_NoRecursion verifies that two peers referencing each
+// other's /v1/config do not create a request storm. Before the fix,
+// PeerConfigs() made outgoing HTTP calls that could recurse infinitely.
+// Now PeerConfigs() reads from cache, so each side makes exactly one
+// request to the other (during fetchConfig).
+func TestMutualPeers_NoRecursion(t *testing.T) {
+	var muA, muB sync.Mutex
+	hitsA, hitsB := 0, 0
+
+	// Each "spoke" is a /v1/config endpoint that counts requests.
+	// In the old code, calling PeerConfigs on both sides would trigger
+	// recursive HTTP calls. With caching, each side gets exactly one
+	// fetch call.
+	spokeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		muA.Lock()
+		hitsA++
+		muA.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"data":{"default_launcher":"shell"}}`))
+	}))
+	defer spokeA.Close()
+
+	spokeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		muB.Lock()
+		hitsB++
+		muB.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"data":{"default_launcher":"pi"}}`))
+	}))
+	defer spokeB.Close()
+
+	// Simulate: node A peers with B, node B peers with A.
+	stA := store.New()
+	peerAtoB := newPeer(config.PeerConfig{Name: "B", URL: spokeB.URL}, stA, nil)
+
+	stB := store.New()
+	peerBtoA := newPeer(config.PeerConfig{Name: "A", URL: spokeA.URL}, stB, nil)
+
+	// Fetch config on both sides (as subscribe would do).
+	peerAtoB.fetchConfig(t.Context())
+	peerBtoA.fetchConfig(t.Context())
+
+	// Read cached configs multiple times (as /v1/config handler would).
+	for range 10 {
+		peerAtoB.CachedConfig()
+		peerBtoA.CachedConfig()
+	}
+
+	// Each spoke should have been hit exactly once (by fetchConfig).
+	// No additional requests from CachedConfig reads.
+	muA.Lock()
+	muB.Lock()
+	if hitsA != 1 {
+		t.Errorf("spokeA hit %d times, want 1", hitsA)
+	}
+	if hitsB != 1 {
+		t.Errorf("spokeB hit %d times, want 1", hitsB)
+	}
+	muB.Unlock()
+	muA.Unlock()
 }
 
 func TestManager_FindPeerDynamic(t *testing.T) {

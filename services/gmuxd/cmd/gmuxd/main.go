@@ -599,7 +599,7 @@ func serve(stderr io.Writer) int {
 			"launchers":        launchConfig.Launchers,
 		}
 		if peerManager != nil {
-			if peerConfigs := peerManager.PeerConfigs(r.Context()); len(peerConfigs) > 0 {
+			if peerConfigs := peerManager.PeerConfigs(); len(peerConfigs) > 0 {
 				data["peers"] = peerConfigs
 			}
 		}

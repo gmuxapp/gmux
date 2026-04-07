@@ -23,9 +23,10 @@ type Peer struct {
 	Config config.PeerConfig
 	store  *store.Store
 
-	mu        sync.RWMutex
-	status    Status
-	lastError string // human-readable reason for last disconnect
+	mu           sync.RWMutex
+	status       Status
+	lastError    string          // human-readable reason for last disconnect
+	cachedConfig json.RawMessage // peer's /v1/config data, fetched on connect
 
 	// onStatus is called when connection state changes.
 	onStatus func(name string, status Status)
@@ -127,15 +128,23 @@ func stripPeerField(body []byte) ([]byte, error) {
 	return json.Marshal(req)
 }
 
-// FetchConfig fetches the spoke's /v1/config and returns the raw
-// JSON data payload. Returns nil on any error (peer unavailable,
-// malformed response, etc.).
-func (p *Peer) FetchConfig(ctx context.Context) json.RawMessage {
+// CachedConfig returns the peer's config data, fetched once on each
+// successful SSE connection. Returns nil if the peer is not connected
+// or the config has not been fetched yet.
+func (p *Peer) CachedConfig() json.RawMessage {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.cachedConfig
+}
+
+// fetchConfig fetches the spoke's /v1/config and caches the result.
+// Called once after each successful SSE connection.
+func (p *Peer) fetchConfig(ctx context.Context) {
 	url := strings.TrimRight(p.Config.URL, "/") + "/v1/config"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil
+		return
 	}
 	p.setAuth(req)
 
@@ -143,12 +152,12 @@ func (p *Peer) FetchConfig(ctx context.Context) json.RawMessage {
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("peering: %s: fetch config: %v", p.Config.Name, err)
-		return nil
+		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil
+		return
 	}
 
 	var envelope struct {
@@ -156,9 +165,12 @@ func (p *Peer) FetchConfig(ctx context.Context) json.RawMessage {
 		Data json.RawMessage `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil || !envelope.OK {
-		return nil
+		return
 	}
-	return envelope.Data
+
+	p.mu.Lock()
+	p.cachedConfig = envelope.Data
+	p.mu.Unlock()
 }
 
 // ProxyWS proxies a browser WebSocket connection to the spoke's
@@ -309,6 +321,9 @@ func (p *Peer) run(ctx context.Context) {
 			p.lastError = categorizeError(err)
 			p.mu.Unlock()
 		}
+		p.mu.Lock()
+		p.cachedConfig = nil
+		p.mu.Unlock()
 		p.setStatus(StatusDisconnected)
 
 		if ctx.Err() != nil {
@@ -368,6 +383,10 @@ func (p *Peer) subscribe(ctx context.Context, onConnected func()) error {
 		onConnected()
 	}
 	log.Printf("peering: %s: connected to %s", p.Config.Name, url)
+
+	// Fetch the peer's config once per connection so /v1/config can
+	// serve it from cache without making outgoing HTTP calls.
+	p.fetchConfig(ctx)
 
 	scanner := bufio.NewScanner(resp.Body)
 	// Allow large SSE payloads (sessions can have long command arrays).
