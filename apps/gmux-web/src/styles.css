@@ -773,6 +773,32 @@ body {
   color: var(--accent);
 }
 
+/* Header actions (help link + close) */
+.modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mp-docs-link {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.1s, color 0.1s;
+}
+
+.mp-docs-link:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 /* Configured project rows */
 .mp-project-list {
   display: flex;
@@ -807,10 +833,10 @@ body {
   width: 16px;
   text-align: center;
   color: var(--text-muted);
-  font-size: 14px;
-  line-height: 1;
+  font-size: 11px;
+  letter-spacing: 0.05em;
   cursor: grab;
-  opacity: 0.5;
+  opacity: 0.35;
   transition: opacity 0.1s;
 }
 
@@ -823,7 +849,7 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 
 .mp-project-name {
@@ -836,6 +862,32 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* Rule descriptions under project name */
+.mp-project-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.mp-rule {
+  font-size: 11.5px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mp-rule-label {
+  color: var(--text-muted);
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+}
+
+.mp-rule-qualifier {
+  color: var(--text-muted);
+  opacity: 0.6;
 }
 
 .mp-project-detail {
@@ -873,13 +925,60 @@ body {
   color: var(--status-error);
 }
 
-/* Discovered rows */
-.mp-discovered-list {
+/* Empty hint (used in both sections) */
+.mp-empty-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 6px 8px;
+  line-height: 1.5;
+}
+
+/* Filter/add input at top of discovered section */
+.mp-filter-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.mp-filter-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.mp-filter-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.6;
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 12px;
+}
+
+.mp-filter-input:focus {
+  border-color: var(--accent);
+}
+
+/* Scrollable discovered list */
+.mp-discovered-scroll {
+  max-height: 320px;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
+.mp-discovered-scroll::-webkit-scrollbar { width: 3px; }
+.mp-discovered-scroll::-webkit-scrollbar-track { background: transparent; }
+.mp-discovered-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* Discovered rows */
 .mp-discovered-row {
   display: flex;
   align-items: center;
@@ -888,6 +987,7 @@ body {
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.1s;
+  flex-shrink: 0;
 }
 
 .mp-discovered-row:hover {
@@ -923,51 +1023,7 @@ body {
   color: var(--accent);
 }
 
-.mp-show-more {
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-family: 'Source Sans 3', sans-serif;
-  padding: 5px 8px;
-  cursor: pointer;
-  text-align: left;
-  transition: color 0.1s;
-}
-
-.mp-show-more:hover {
-  color: var(--text-secondary);
-}
-
-/* Manual add */
-.mp-manual-row {
-  display: flex;
-  gap: 8px;
-}
-
-.mp-manual-input {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--text);
-  font-family: 'Fira Code', monospace;
-  font-size: 12px;
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.mp-manual-input::placeholder {
-  color: var(--text-muted);
-  opacity: 0.6;
-}
-
-.mp-manual-input:focus {
-  border-color: var(--accent);
-}
-
+/* Manual add button (shown when filter looks like a path) */
 .mp-manual-btn {
   flex-shrink: 0;
   border: 1px solid var(--border-strong);
@@ -982,20 +1038,17 @@ body {
   transition: border-color 0.15s, color 0.15s;
 }
 
-.mp-manual-btn:hover:not(:disabled) {
+.mp-manual-btn:hover {
   border-color: var(--accent);
   color: var(--accent);
-}
-
-.mp-manual-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
 }
 
 .mp-manual-error {
   font-size: 12px;
   color: var(--status-error);
-  margin-top: 4px;
+  margin-top: -4px;
+  margin-bottom: 4px;
+  padding-left: 2px;
 }
 
 /* Status dot — used in header */

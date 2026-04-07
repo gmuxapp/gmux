@@ -34,15 +34,72 @@ Connected peers show launch buttons for each configured adapter, just like the l
 
 ### Projects
 
-Sessions don't appear in the sidebar until you add a project. The first time you open the dashboard, click **Add project** to choose which directories to track. gmuxd discovers directories that have running sessions and offers them as suggestions. Once a project is added, any session launched in that directory appears automatically.
+Sessions don't appear in the sidebar until you add a project. The first time you open the dashboard, click the **+** button to launch a session. gmux creates a default "home" project that catches sessions started from your home directory. As you work in more repositories, use **Manage projects** to organize sessions by repo.
 
 Click a **project name** to open the [project hub](#project-hub), an overview of all sessions in that project grouped by host and working directory. The active project is highlighted in the sidebar.
 
 You can manage projects at any time via the **Manage projects** button at the bottom of the sidebar. A badge shows when there are running sessions in directories that aren't part of any project yet.
 
-Two clones of the same repo (different paths, different machines) are grouped under one project as long as they share a git remote URL. Projects without remotes match by filesystem path.
-
 Project state is stored in `~/.local/state/gmux/projects.json`. You can edit this file directly; changes are picked up on the next daemon restart.
+
+### Match rules
+
+Each project has one or more **match rules** that determine which sessions belong to it. When a session starts, gmux checks its working directory and git remotes against every project's rules, and assigns it to the best match.
+
+There are two kinds of rules:
+
+**Path rules** match sessions by filesystem path. A rule with path `~/dev/gmux` matches any session whose working directory is `~/dev/gmux` or a subdirectory of it. Paths are stored in canonical `~/...` form so they work regardless of your actual home directory path.
+
+**Remote rules** match sessions by git remote URL. A rule with remote `github.com/gmuxapp/gmux` matches any session whose repository has that remote, regardless of where the clone lives on disk. This is how two clones of the same repo (different paths, different machines) are grouped under one project.
+
+A project can have multiple rules. For example, a project might have both a remote rule and a path rule:
+
+```json
+{
+  "slug": "gmux",
+  "match": [
+    { "remote": "github.com/gmuxapp/gmux" },
+    { "path": "~/dev/gmux" }
+  ]
+}
+```
+
+The remote rule catches sessions in any clone of the repo (including on other machines), while the path rule catches sessions that haven't pushed yet or have a different remote configured.
+
+#### Match precedence
+
+When multiple projects could match a session, gmux uses these tiebreakers:
+
+1. **Path specificity**: the project with the longest matching path wins. A session in `~/dev/gmux/.grove/teak/src` matches a project for `~/dev/gmux/.grove/teak` over one for `~/dev/gmux`.
+2. **Path over remote**: a specific path match always wins over a remote match.
+3. **First remote wins**: if only remote rules match, the first matching project in list order wins.
+
+#### Exact matching
+
+By default, path rules match subdirectories. If you want a rule to match only sessions started in the exact directory (not subdirectories), set `exact: true`:
+
+```json
+{ "path": "~", "exact": true }
+```
+
+This is how the default "home" project works: it only catches sessions started from `$HOME` itself, not every session under your home directory.
+
+#### Host scoping
+
+Rules can be restricted to sessions from specific peer hosts:
+
+```json
+{ "path": "/data/ml", "hosts": ["gpu-server"] }
+```
+
+This rule only matches sessions running on the peer named `gpu-server`. Rules without `hosts` match sessions from any host, including local sessions.
+
+#### The manage projects modal
+
+The modal (opened from **Manage projects** in the sidebar) has two sections:
+
+- **Your projects** lists configured projects with their match rules. Drag to reorder (order determines tiebreaking for remote matches). Click **×** to remove a project.
+- **Discovered** lists directories with running sessions that don't match any project yet. Type in the filter box to search, or enter a path to add it directly. Click a discovered project to add it.
 
 ### Sessions
 

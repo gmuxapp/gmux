@@ -149,7 +149,9 @@ function FolderGroup({
           {folder.name}
         </a>
         <LaunchButton
-          cwd={folder.sessions[0]?.cwd ?? folder.launchCwd}
+          sessions={folder.sessions}
+          selectedId={selId}
+          fallbackCwd={folder.launchCwd ?? ''}
           className="folder-launch-btn"
         />
       </div>

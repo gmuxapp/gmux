@@ -1,6 +1,39 @@
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { projects, discovered, removeProject, addProject, updateProjects } from './store'
-import type { ProjectItem, DiscoveredProject } from './types'
+import type { ProjectItem, DiscoveredProject, MatchRule } from './types'
+
+// ── Rule description ──
+
+/** Human-readable parts of a single match rule. */
+interface RuleDescription {
+  prefix?: string   // e.g. "Remote"
+  label: string     // monospace part: path or URL
+  qualifier: string // dimmed suffix: "on any host"
+}
+
+function describeRule(rule: MatchRule): RuleDescription {
+  const hosts = rule.hosts?.length
+    ? rule.hosts.join(', ')
+    : 'any host'
+
+  if (rule.path) {
+    const suffix = rule.exact ? ' only' : ''
+    return {
+      label: `${rule.path}${suffix}`,
+      qualifier: `on ${hosts}`,
+    }
+  }
+
+  if (rule.remote) {
+    return {
+      prefix: 'Remote',
+      label: rule.remote,
+      qualifier: `in any directory on ${hosts}`,
+    }
+  }
+
+  return { label: '(empty rule)', qualifier: '' }
+}
 
 // ── Drag-to-reorder ──
 
@@ -21,8 +54,7 @@ export function ManageProjectsModal({
   open: boolean
   onClose: () => void
 }) {
-  const [showAllDiscovered, setShowAllDiscovered] = useState(false)
-  const [manualPath, setManualPath] = useState('')
+  const [filter, setFilter] = useState('')
   const [manualError, setManualError] = useState('')
   const [drag, setDrag] = useState<DragState | null>(null)
   const backdropRef = useRef<HTMLDivElement>(null)
@@ -35,6 +67,11 @@ export function ManageProjectsModal({
     return () => document.removeEventListener('keydown', handler)
   }, [open, onClose])
 
+  // Reset filter when opening
+  useEffect(() => {
+    if (open) { setFilter(''); setManualError('') }
+  }, [open])
+
   // Close on backdrop click
   const handleBackdropClick = useCallback((e: MouseEvent) => {
     if (e.target === backdropRef.current) onClose()
@@ -43,9 +80,23 @@ export function ManageProjectsModal({
   const configured = projects.value
   const discoveredVal = discovered.value
 
-  // Split discovered: active first, then the rest.
-  const activeDiscovered = discoveredVal.filter(d => d.active_count > 0)
-  const inactiveDiscovered = discoveredVal.filter(d => d.active_count === 0)
+  // Filter discovered by the search term.
+  const lowerFilter = filter.toLowerCase().trim()
+  const filteredDiscovered = useMemo(() => {
+    if (!lowerFilter) return discoveredVal
+    return discoveredVal.filter(d =>
+      d.suggested_slug.toLowerCase().includes(lowerFilter)
+      || d.paths.some(p => p.toLowerCase().includes(lowerFilter))
+      || (d.remote && d.remote.toLowerCase().includes(lowerFilter)),
+    )
+  }, [discoveredVal, lowerFilter])
+
+  // Split filtered discovered: active first, then inactive.
+  const activeDiscovered = filteredDiscovered.filter(d => d.active_count > 0)
+  const inactiveDiscovered = filteredDiscovered.filter(d => d.active_count === 0)
+
+  // Detect if filter looks like a path (for the add-by-path affordance).
+  const filterIsPath = filter.trim().startsWith('/') || filter.trim().startsWith('~/')
 
   // ── Reorder handlers ──
 
@@ -81,10 +132,10 @@ export function ManageProjectsModal({
     addProject({ remote: d.remote, paths: d.paths })
   }, [])
 
-  // ── Manual add ──
+  // ── Manual add by path ──
 
   const handleManualAdd = useCallback(() => {
-    const path = manualPath.trim()
+    const path = filter.trim()
     if (!path) return
     if (!path.startsWith('/') && !path.startsWith('~/')) {
       setManualError('Path must be absolute (start with / or ~/)')
@@ -92,12 +143,12 @@ export function ManageProjectsModal({
     }
     setManualError('')
     addProject({ paths: [path] })
-    setManualPath('')
-  }, [manualPath])
+    setFilter('')
+  }, [filter])
 
-  const handleManualKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === 'Enter') handleManualAdd()
-  }, [handleManualAdd])
+  const handleFilterKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === 'Enter' && filterIsPath) handleManualAdd()
+  }, [filterIsPath, handleManualAdd])
 
   if (!open) return null
 
@@ -109,14 +160,23 @@ export function ManageProjectsModal({
       <div class="modal-panel manage-projects-modal">
         <div class="modal-header">
           <div class="modal-title">Manage projects</div>
-          <button class="modal-close" onClick={onClose}>&times;</button>
+          <div class="modal-header-actions">
+            <a
+              class="mp-docs-link"
+              href="https://gmux.app/using-the-ui/#match-rules"
+              target="_blank"
+              rel="noopener"
+              title="How match rules work"
+            >?</a>
+            <button class="modal-close" onClick={onClose}>&times;</button>
+          </div>
         </div>
 
         <div class="modal-body">
           {/* ── Configured projects ── */}
-          {configured.length > 0 && (
-            <section class="mp-section">
-              <div class="mp-section-label">Your projects</div>
+          <section class="mp-section">
+            <div class="mp-section-label">Your projects</div>
+            {configured.length > 0 ? (
               <div class="mp-project-list">
                 {dragItems.map((project, i) => (
                   <ProjectRow
@@ -132,67 +192,60 @@ export function ManageProjectsModal({
                   />
                 ))}
               </div>
-            </section>
-          )}
-
-          {/* ── Discovered groups ── */}
-          {discoveredVal.length > 0 && (
-            <section class="mp-section">
-              <div class="mp-section-label">
-                Discovered
-                {activeDiscovered.length > 0 && (
-                  <span class="mp-section-count">{activeDiscovered.length} active</span>
-                )}
+            ) : (
+              <div class="mp-empty-hint">
+                No projects yet. Add one from the list below, or type a path.
               </div>
-              <div class="mp-discovered-list">
-                {activeDiscovered.map(d => (
-                  <DiscoveredRow key={d.suggested_slug} project={d} onAdd={handleAdd} />
-                ))}
-                {inactiveDiscovered.length > 0 && (
-                  <>
-                    {!showAllDiscovered ? (
-                      <button
-                        class="mp-show-more"
-                        onClick={() => setShowAllDiscovered(true)}
-                      >
-                        Show {inactiveDiscovered.length} more
-                      </button>
-                    ) : (
-                      <>
-                        {inactiveDiscovered.map(d => (
-                          <DiscoveredRow key={d.suggested_slug} project={d} onAdd={handleAdd} />
-                        ))}
-                        <button
-                          class="mp-show-more"
-                          onClick={() => setShowAllDiscovered(false)}
-                        >
-                          Show fewer
-                        </button>
-                      </>
-                    )}
-                  </>
-                )}
-              </div>
-            </section>
-          )}
+            )}
+          </section>
 
-          {/* ── Manual add ── */}
+          {/* ── Discovered projects ── */}
           <section class="mp-section">
-            <div class="mp-section-label">Add by path</div>
-            <div class="mp-manual-row">
+            <div class="mp-section-label">
+              Discovered
+              {discoveredVal.length > 0 && (
+                <span class="mp-section-count">
+                  {discoveredVal.filter(d => d.active_count > 0).length} active
+                </span>
+              )}
+            </div>
+
+            <div class="mp-filter-row">
               <input
-                class="mp-manual-input"
+                class="mp-filter-input"
                 type="text"
-                placeholder="/home/user/dev/my-project"
-                value={manualPath}
-                onInput={(e) => { setManualPath((e.target as HTMLInputElement).value); setManualError('') }}
-                onKeyDown={handleManualKeyDown}
+                placeholder="Filter or enter a path to add..."
+                value={filter}
+                onInput={(e) => { setFilter((e.target as HTMLInputElement).value); setManualError('') }}
+                onKeyDown={handleFilterKeyDown}
               />
-              <button class="mp-manual-btn" onClick={handleManualAdd} disabled={!manualPath.trim()}>
-                Add
-              </button>
+              {filterIsPath && (
+                <button class="mp-manual-btn" onClick={handleManualAdd}>
+                  Add
+                </button>
+              )}
             </div>
             {manualError && <div class="mp-manual-error">{manualError}</div>}
+
+            <div class="mp-discovered-scroll">
+              {activeDiscovered.length > 0 && activeDiscovered.map(d => (
+                <DiscoveredRow key={d.suggested_slug} project={d} onAdd={handleAdd} />
+              ))}
+              {inactiveDiscovered.length > 0 && inactiveDiscovered.map(d => (
+                <DiscoveredRow key={d.suggested_slug} project={d} onAdd={handleAdd} />
+              ))}
+              {filteredDiscovered.length === 0 && lowerFilter && !filterIsPath && (
+                <div class="mp-empty-hint">
+                  No matches. Try a different search, or enter a path to add manually.
+                </div>
+              )}
+              {filteredDiscovered.length === 0 && !lowerFilter && (
+                <div class="mp-empty-hint">
+                  No unmatched sessions. Launch some sessions and they'll appear here
+                  if they don't match a project.
+                </div>
+              )}
+            </div>
           </section>
         </div>
       </div>
@@ -221,10 +274,7 @@ function ProjectRow({
   onDragEnd: () => void
   onRemove: (slug: string) => void
 }) {
-  const firstRemote = project.match.find(r => r.remote)?.remote
-  const firstPath = project.match.find(r => r.path)?.path
-  const detail = firstRemote || firstPath || ''
-  const shortDetail = shortenPath(detail)
+  const rules = project.match
 
   return (
     <div
@@ -232,7 +282,6 @@ function ProjectRow({
       draggable
       onDragStart={(e) => {
         e.dataTransfer!.effectAllowed = 'move'
-        // Needed for Firefox to allow drag
         e.dataTransfer!.setData('text/plain', '')
         onDragStart(index)
       }}
@@ -247,10 +296,22 @@ function ProjectRow({
       }}
       onDragEnd={onDragEnd}
     >
-      <span class="mp-drag-handle" title="Drag to reorder">&#x2807;</span>
+      <span class="mp-drag-handle" title="Drag to reorder">&#x283F;</span>
       <div class="mp-project-info">
         <span class="mp-project-name">{project.slug}</span>
-        <span class="mp-project-detail" title={detail}>{shortDetail}</span>
+        <div class="mp-project-rules">
+          {rules.map((rule, i) => {
+            const { prefix, label, qualifier } = describeRule(rule)
+            const title = [prefix, label, qualifier].filter(Boolean).join(' ')
+            return (
+              <span key={i} class="mp-rule" title={title}>
+                {prefix && <span class="mp-rule-qualifier">{prefix} </span>}
+                <span class="mp-rule-label">{label}</span>
+                {qualifier && <span class="mp-rule-qualifier"> {qualifier}</span>}
+              </span>
+            )
+          })}
+        </div>
       </div>
       <button
         class="mp-remove-btn"
@@ -270,7 +331,7 @@ function DiscoveredRow({
   project: DiscoveredProject
   onAdd: (d: DiscoveredProject) => void
 }) {
-  const detail = project.remote || project.paths[0] || ''  // DiscoveredProject still uses old shape
+  const detail = project.remote || project.paths[0] || ''
   const shortDetail = shortenPath(detail)
 
   return (

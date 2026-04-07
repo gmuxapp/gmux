@@ -82,6 +82,9 @@ function MainHeader({ session, onRestart }: {
             outdated
           </button>
         )}
+        {session.peer && (
+          <div class="main-header-kind" title="Host">{session.peer}</div>
+        )}
         {session.kind && session.kind !== 'shell' && (
           <div class="main-header-kind" title="Adapter">{session.kind}</div>
         )}
