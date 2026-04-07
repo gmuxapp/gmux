@@ -32,6 +32,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/notify"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sleep"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsauth"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsdiscovery"
@@ -1359,6 +1360,11 @@ func serve(stderr io.Writer) int {
 		}
 	}()
 
+	// ── Sleep detection ──
+
+	sleepWatcher := sleep.NewWatcher()
+	defer sleepWatcher.Stop()
+
 	// ── Peer connections (hub protocol) ──
 
 	hostname, _ := os.Hostname()
@@ -1368,6 +1374,13 @@ func serve(stderr io.Writer) int {
 		if len(cfg.Peers) > 0 {
 			log.Printf("peering: %d peer(s) configured", len(cfg.Peers))
 		}
+
+		// Reconnect all peers after system sleep.
+		go func() {
+			for range sleepWatcher.C() {
+				peerManager.OnSleep()
+			}
+		}()
 	}
 
 	// ── Devcontainer discovery ──

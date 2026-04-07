@@ -62,6 +62,7 @@ func TestParseID_Roundtrip(t *testing.T) {
 type spoke struct {
 	*httptest.Server
 	mu         sync.Mutex
+	sessions   []store.Session
 	sseClients []chan string
 }
 
@@ -84,7 +85,7 @@ func (s *spoke) push(eventType string, payload any) {
 func spokeServer(t *testing.T, token string, sessions []store.Session) *spoke {
 	t.Helper()
 
-	sk := &spoke{}
+	sk := &spoke{sessions: sessions}
 
 	sk.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Auth check.
@@ -104,7 +105,7 @@ func spokeServer(t *testing.T, token string, sessions []store.Session) *spoke {
 
 			// Send current sessions as initial upserts.
 			sk.mu.Lock()
-			for _, s := range sessions {
+			for _, s := range sk.sessions {
 				s := s
 				ev := store.Event{Type: "session-upsert", ID: s.ID, Session: &s}
 				data, _ := json.Marshal(ev)
@@ -131,8 +132,8 @@ func spokeServer(t *testing.T, token string, sessions []store.Session) *spoke {
 
 		case "/v1/sessions":
 			sk.mu.Lock()
-			list := make([]store.Session, len(sessions))
-			copy(list, sessions)
+			list := make([]store.Session, len(sk.sessions))
+			copy(list, sk.sessions)
 			sk.mu.Unlock()
 			json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": list})
 
@@ -939,6 +940,56 @@ func TestForwardingFilter_UnknownPeerSessionKept(t *testing.T) {
 	}
 	if _, ok := st.Get("sess-d@devcontainer@remote"); !ok {
 		t.Error("expected sess-d@devcontainer@remote (devcontainer session should be kept)")
+	}
+
+	mgr.Stop()
+}
+
+
+func TestOnSleep_ReconnectsAndResyncs(t *testing.T) {
+	st := store.New()
+
+	sessions := []store.Session{
+		{ID: "sess-1", Kind: "pi", Alive: true},
+		{ID: "sess-2", Kind: "shell", Alive: true},
+	}
+	sk := spokeServer(t, "", sessions)
+
+	mgr := NewManager([]config.PeerConfig{
+		{Name: "remote", URL: sk.URL},
+	}, st, "test-host")
+	mgr.Start()
+	waitForSessions(t, st, "remote", 2)
+
+	// Simulate a session dying on the spoke while hub was "asleep"
+	// (no SSE event delivered).
+	sk.mu.Lock()
+	sk.sessions = []store.Session{
+		{ID: "sess-1", Kind: "pi", Alive: true},
+		// sess-2 is gone
+	}
+	sk.mu.Unlock()
+
+	// Hub still thinks sess-2 is alive (stale).
+	if s, ok := st.Get("sess-2@remote"); !ok || !s.Alive {
+		t.Fatal("precondition: sess-2@remote should be alive on hub")
+	}
+
+	// Trigger sleep recovery.
+	mgr.OnSleep()
+
+	// Wait for reconnection and resync.
+	waitForSessions(t, st, "remote", 1)
+
+	// sess-2 should be gone (RemoveByPeer cleared it, initial dump
+	// only re-added sess-1).
+	if s, ok := st.Get("sess-2@remote"); ok && s.Alive {
+		t.Error("sess-2@remote should not be alive after OnSleep resync")
+	}
+
+	// sess-1 should still be alive.
+	if s, ok := st.Get("sess-1@remote"); !ok || !s.Alive {
+		t.Error("sess-1@remote should be alive after OnSleep resync")
 	}
 
 	mgr.Stop()

@@ -94,6 +94,27 @@ func (m *Manager) startPeer(name string, mp *managedPeer) {
 	}()
 }
 
+// OnSleep restarts all peer connections to force a full resync.
+// Call this when the system wakes from sleep.
+func (m *Manager) OnSleep() {
+	m.mu.RLock()
+	peers := make(map[string]*managedPeer, len(m.peers))
+	for name, mp := range m.peers {
+		peers[name] = mp
+	}
+	m.mu.RUnlock()
+
+	for name, mp := range peers {
+		if mp.cancel != nil {
+			mp.cancel()
+		}
+		if mp.done != nil {
+			<-mp.done
+		}
+		m.startPeer(name, mp)
+	}
+}
+
 // Stop cancels all peer connections and waits for goroutines to finish.
 func (m *Manager) Stop() {
 	if m.cancel != nil {
