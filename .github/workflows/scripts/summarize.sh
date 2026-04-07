@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate or condense a release summary using OpenRouter's best free model.
+# Generate or condense a release summary using OpenRouter's free model router.
 #
 # Usage:
 #   .github/workflows/scripts/summarize.sh <version>              < notes.txt   # summarize
@@ -30,29 +30,13 @@ if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
   exit 0
 fi
 
-# ── Pick model ──
-
-# First free model in OpenRouter's default ordering (correlates with
-# popularity) with a reasonable context window.
-model=$(curl -sf 'https://openrouter.ai/api/v1/models' 2>/dev/null | jq -r '
-  [.data[]
-    | select(.id | endswith(":free"))
-    | select(.context_length >= 32000)
-  ] | .[0].id' 2>/dev/null || true)
-
-if [[ -z "$model" || "$model" == "null" ]]; then
-  echo "Could not select a model from OpenRouter." >&2
-  if $condense; then
-    echo "${input:0:$max_chars}"
-  else
-    echo "_No summary available._"
-  fi
-  exit 0
-fi
-
-echo "Using model: $model" >&2
-
 # ── Build prompt ──
+
+# OpenRouter's free router picks a random available free model. Including
+# a vision input filters the pool to larger, more capable models.
+model="openrouter/free"
+context_image="https://gmux.app/og.png"
+script_dir=$(cd "$(dirname "$0")" && pwd)
 
 if $condense; then
   prompt="Condense the following release summary to ${max_chars} characters \
@@ -64,34 +48,18 @@ new. Output only the condensed summary.
 ${input}"
   max_tokens=500
 else
-  prompt="gmux is an open-source terminal multiplexer with a web UI. Below \
-are the merged PRs for a release. Each entry has a PR title (conventional \
-commit format) and its description for context. Summarize them into a \
-Discord message for the project's community server.
+  guidelines=$(cat "$script_dir/summarize-prompt.md")
+  prompt="${guidelines}
 
-Base the summary on what changed for users, not on implementation details. \
-The PR descriptions are background context to help you understand the change, \
-not content to surface verbatim.
+## Changelog for ${version}
 
-Be direct, technical, and accurate. Assume readers are developers who use \
-the tool daily. No hype, no filler, no calls to action.
-
-Group by change type, skipping empty sections: breaking changes first, then \
-features, then fixes. Multiple entries may be part of the same effort; cover \
-them once. A link to the full changelog follows the summary, so focus on the \
-highlights rather than being exhaustive.
-
-Use Discord markdown. Use - for bullet points. Do not include a title, \
-heading, or links.
-
-Changelog for ${version}:
 ${input}"
   max_tokens=800
 fi
 
 # ── Call API with exponential backoff ──
 
-max_attempts=6
+max_attempts=8
 for (( attempt=1; attempt<=max_attempts; attempt++ )); do
   response=$(curl -s https://openrouter.ai/api/v1/chat/completions \
     -H "Authorization: Bearer $OPENROUTER_API_KEY" \
@@ -99,29 +67,49 @@ for (( attempt=1; attempt<=max_attempts; attempt++ )); do
     -d "$(jq -n \
       --arg model "$model" \
       --arg prompt "$prompt" \
+      --arg image "$context_image" \
       --argjson max_tokens "$max_tokens" \
       '{
         model: $model,
-        messages: [{role: "user", content: $prompt}],
+        messages: [{role: "user", content: [
+          {type: "image_url", image_url: {url: $image}},
+          {type: "text", text: $prompt}
+        ]}],
         max_tokens: $max_tokens
       }')")
 
   result=$(echo "$response" | jq -r '.choices[0].message.content // empty' 2>/dev/null || true)
+  result=$(echo "$result" | sed '/^[[:space:]]*$/d')  # strip blank lines
   if [[ -n "$result" ]]; then
+    used=$(echo "$response" | jq -r '.model // "unknown"' 2>/dev/null)
+    echo "Generated summary using $used" >&2
     echo "$result"
     exit 0
   fi
 
   # Log the error details so failures are diagnosable.
-  error=$(echo "$response" | jq -r '.error.message // .error // empty' 2>/dev/null || true)
+  # OpenRouter nests provider errors in .error.metadata.raw
+  error=$(
+    echo "$response" | jq -r '
+      if .error.metadata.raw then
+        "\(.error.message): \(.error.metadata.raw)"
+      elif .error.message then
+        .error.message
+      elif .error then
+        (.error | tostring)
+      else
+        empty
+      end' 2>/dev/null || true
+  )
   if [[ -n "$error" ]]; then
     echo "Attempt $attempt/$max_attempts failed: $error" >&2
   else
-    echo "Attempt $attempt/$max_attempts failed: $(echo "$response" | head -c 200)" >&2
+    echo "Attempt $attempt/$max_attempts failed (raw): $(echo "$response" | head -c 500)" >&2
   fi
 
   if (( attempt < max_attempts )); then
-    delay=$(( 2 ** attempt ))
+    delay=$(( 10 * (2 ** (attempt - 1)) ))  # 10, 20, 40, 80, 160
+    (( delay > 160 )) && delay=160
     echo "Retrying in ${delay}s..." >&2
     sleep "$delay"
   fi
