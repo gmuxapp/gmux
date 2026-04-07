@@ -62,6 +62,19 @@ assert_eq "release: skip"          "skip"        "$(parse_title 'release: v1.0.0
 assert_eq "empty after colon"      "skip"        "$(parse_title 'feat:')"
 assert_eq "only space after colon" "skip"        "$(parse_title 'feat: ')"
 
+# ── Strip prefix for changelog ──
+
+echo ""
+echo "Prefix stripping:"
+
+strip_prefix() { echo "${1#*: }"; }
+
+assert_eq "feat: simple"           "add dark mode"          "$(strip_prefix 'feat: add dark mode')"
+assert_eq "fix(scope): scoped"     "handle nil pointer"     "$(strip_prefix 'fix(core): handle nil pointer')"
+assert_eq "feat!: breaking"        "redesign API"           "$(strip_prefix 'feat!: redesign API')"
+assert_eq "fix(web)!: scoped bang" "drop legacy endpoint"   "$(strip_prefix 'fix(web)!: drop legacy endpoint')"
+assert_eq "colon in description"   "handle key: value pairs" "$(strip_prefix 'fix: handle key: value pairs')"
+
 # ── Bump level precedence ──
 
 echo ""

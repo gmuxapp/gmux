@@ -81,7 +81,7 @@ Workflows set `permissions: {}` at the top level (deny-all), then grant minimum 
 All third-party actions are pinned to full commit SHAs to prevent supply-chain attacks. The version tag is kept as a comment for readability:
 
 ```yaml
-- uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+- uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 ```
 
 ### Fork PR safety

@@ -108,8 +108,9 @@ for pr_num in "${pr_nums[@]}"; do
     patch) [[ "$bump" == "none" ]] && bump="patch" ;;
   esac
 
-  # Build PR list item.
-  item="- ${title} ([#${pr_num}](${repo_url}/pull/${pr_num}))"
+  # Build PR list item (strip conventional commit prefix for readability).
+  description="${title#*: }"
+  item="- ${description} ([#${pr_num}](${repo_url}/pull/${pr_num}))"
   case "$bump_level" in
     major) breaking_items+=("$item") ;;
     minor) feature_items+=("$item") ;;
