@@ -1,41 +1,20 @@
-Prefix any command with `gmux` and it shows up in a live browser dashboard. Watch what every agent is doing, steer them from your phone, and aggregate sessions from every machine, container, and VM into one place.
-
-This release stabilizes the core and adds multi-machine support.
-
-## Multi-machine sessions
-
-gmux now aggregates sessions across machines. Pick one gmuxd as your dashboard (the hub), and it connects outward to other instances (spokes) to merge their sessions into a single UI.
-
-- **Tailscale auto-discovery.** Enable Tailscale on two machines and they find each other automatically. No manual peer configuration, no token exchange.
-- **Devcontainer auto-discovery.** Add the [gmux devcontainer Feature](https://github.com/gmuxapp/features) to any container and gmuxd discovers it via Docker events.
-- **Manual peers.** For machines not on the same tailnet, configure `[[peers]]` in `host.toml` with a URL and token.
-- **Transparent proxying.** Terminal I/O, kill, resume, dismiss, and launch all forward through the hub.
-
-## CLI lifecycle
-
-- `gmuxd start` backgrounds, logs to `~/.local/state/gmux/gmuxd.log`, waits for health, prints PID.
-- `gmuxd run` runs in the foreground for systemd, Docker, or debugging.
-- `gmuxd status` shows session counts, per-peer connection state with error reasons, and the Tailscale URL.
-
-## Terminal and configuration
-
-- **Three config files.** `host.toml` (daemon), `settings.jsonc` (terminal/keybinds), `theme.jsonc` (colors, Windows Terminal compatible). All optional.
-- **Platform-aware keybinds.** Linux: Ctrl+Alt+T/N/W. Mac: Cmd+Left/Right, Cmd+Backspace, Cmd+K.
-- **Session replay** with a virtual terminal emulator. TUI state preserved exactly on reconnect.
-- **OSC 52 clipboard.** Terminal apps that write to the clipboard now work in the browser.
-
-## Security
-
-- Unix socket for local IPC. Token auth always required on TCP.
-- Tailscale identity verification via WhoIs. Strict config validation.
-
-## Breaking changes from v0.x
-
-- `config.toml` → `host.toml`. The `[network]` section is removed; use `GMUXD_LISTEN`.
-- `keybinds.jsonc` → `"keybinds"` array inside `settings.jsonc`.
-- `gmuxd` (bare) prints help. Use `gmuxd start` or `gmuxd run`.
-- All TCP connections require a bearer token.
+### Sleep recovery
+Peers automatically reconnect and resync after system suspend, clearing stale connections without daemon restarts.
+### Project matching
+**Breaking:** `projects.json` replaces separate `remote` and `paths` fields with a unified `match` array. Supports exact matching, per-host scoping, and automatic `~` canonicalization. Existing configs migrate on load.
+### Remote setup and CLI
+The `gmuxd remote` command now uses an interactive flow that correctly handles Tailscale hostname changes and config writes. Added `gmuxd log-path` for log streaming and improved daemon restart messaging.
 
 ---
 
-Full changelog: https://gmux.app/changelog/
+### Features
+- unified match rules with project onboarding and modal redesign ([#110](https://github.com/gmuxapp/gmux/pull/110))
+
+### Fixes
+- OG meta tags, mock terminal rendering, remove stale hero.png ([#101](https://github.com/gmuxapp/gmux/pull/101))
+- clickable discovered project rows, document projects.json ([#103](https://github.com/gmuxapp/gmux/pull/103))
+- reconnect peers after system sleep ([#104](https://github.com/gmuxapp/gmux/pull/104))
+- improve Tailscale remote access setup and CLI output ([#111](https://github.com/gmuxapp/gmux/pull/111))
+
+### Docs
+- simplify landing page CTA, add Discord to getting started ([#112](https://github.com/gmuxapp/gmux/pull/112))
