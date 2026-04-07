@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -93,9 +94,13 @@ func (l *Listener) Diag() DiagStatus {
 // the caller (main) can proceed to start the localhost listener immediately.
 // Call Shutdown to stop.
 func Start(cfg Config, stateDir string, handler http.Handler) *Listener {
+	tsnetDir := filepath.Join(stateDir, "tsnet")
+	resetStateIfHostnameChanged(tsnetDir, cfg.Hostname)
+
+	log.Printf("tsauth: starting with hostname %q", cfg.Hostname)
 	srv := &tsnet.Server{
 		Hostname: cfg.Hostname,
-		Dir:      filepath.Join(stateDir, "tsnet"),
+		Dir:      tsnetDir,
 	}
 
 	l := &Listener{
@@ -273,6 +278,42 @@ func resolveOwnerLogin(lc *tailscale.LocalClient) (string, error) {
 		}
 
 		return profile.LoginName, nil
+	}
+}
+
+// hostnameFile is a sentinel that records the hostname last used by tsnet.
+// When the configured hostname changes, we must clear the tsnet state so
+// the node re-registers under the new name. Without this, the Tailscale
+// control plane keeps the old device name from the persisted node keys.
+const hostnameFile = "hostname"
+
+// resetStateIfHostnameChanged removes the tsnet state directory when the
+// configured hostname differs from the last-used hostname. This forces a
+// clean re-registration with the Tailscale control plane.
+func resetStateIfHostnameChanged(tsnetDir, hostname string) {
+	path := filepath.Join(tsnetDir, hostnameFile)
+	prev, err := os.ReadFile(path)
+	if err == nil && strings.TrimSpace(string(prev)) == hostname {
+		return // hostname unchanged
+	}
+
+	// If the directory exists and has state, nuke it.
+	if _, err := os.Stat(tsnetDir); err == nil {
+		if prev != nil {
+			log.Printf("tsauth: hostname changed from %q to %q, clearing tsnet state", strings.TrimSpace(string(prev)), hostname)
+		}
+		if err := os.RemoveAll(tsnetDir); err != nil {
+			log.Printf("tsauth: WARNING: failed to clear tsnet state dir: %v", err)
+		}
+	}
+
+	// (Re-)create the directory and write the sentinel.
+	if err := os.MkdirAll(tsnetDir, 0o700); err != nil {
+		log.Printf("tsauth: WARNING: failed to create tsnet state dir: %v", err)
+		return
+	}
+	if err := os.WriteFile(path, []byte(hostname+"\n"), 0o600); err != nil {
+		log.Printf("tsauth: WARNING: failed to write hostname sentinel: %v", err)
 	}
 }
 

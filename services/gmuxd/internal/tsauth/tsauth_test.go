@@ -1,6 +1,10 @@
 package tsauth
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestIsAllowed(t *testing.T) {
 	l := &Listener{
@@ -35,6 +39,46 @@ func TestIsAllowedEmptyList(t *testing.T) {
 
 	if l.isAllowed("anyone@github") {
 		t.Error("empty allow list should deny everyone")
+	}
+}
+
+func TestResetStateIfHostnameChanged(t *testing.T) {
+	dir := t.TempDir()
+	tsnetDir := filepath.Join(dir, "tsnet")
+
+	// First call: no existing state, creates sentinel.
+	resetStateIfHostnameChanged(tsnetDir, "gmux")
+	got, err := os.ReadFile(filepath.Join(tsnetDir, hostnameFile))
+	if err != nil {
+		t.Fatalf("sentinel not created: %v", err)
+	}
+	if string(got) != "gmux\n" {
+		t.Errorf("sentinel = %q, want %q", got, "gmux\n")
+	}
+
+	// Simulate tsnet creating a state file.
+	statePath := filepath.Join(tsnetDir, "tailscaled.state")
+	if err := os.WriteFile(statePath, []byte("fake-state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same hostname: state preserved.
+	resetStateIfHostnameChanged(tsnetDir, "gmux")
+	if _, err := os.Stat(statePath); err != nil {
+		t.Errorf("state file should still exist after same-hostname call: %v", err)
+	}
+
+	// Different hostname: state directory wiped and re-created.
+	resetStateIfHostnameChanged(tsnetDir, "gmux-hs")
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Errorf("state file should be gone after hostname change, got err=%v", err)
+	}
+	got, err = os.ReadFile(filepath.Join(tsnetDir, hostnameFile))
+	if err != nil {
+		t.Fatalf("sentinel not re-created: %v", err)
+	}
+	if string(got) != "gmux-hs\n" {
+		t.Errorf("sentinel = %q, want %q", got, "gmux-hs\n")
 	}
 }
 
