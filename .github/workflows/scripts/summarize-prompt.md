@@ -23,14 +23,20 @@ no sign-off, no "here's the summary" intro.
 
 Organize by topic, not by change type. Group related work together
 regardless of whether individual PRs were features, fixes, or docs
-changes. Use a **bold heading** to introduce each topic, then a few
-sentences of prose. Skip minor fixes unless they affect daily usage.
+changes. Use a ### subheading for each topic, then a short paragraph.
+Skip minor fixes unless they affect daily usage.
 
 A detailed PR list follows this summary in the release notes, so don't
 try to be exhaustive. Highlight what matters: what's new, what works
 differently, what users should know. Call out breaking changes clearly.
 
-Use Discord markdown. 2-4 short paragraphs for a typical release.
+Use Discord markdown. 2-5 sections for a typical release. Example:
+
+### Project configuration
+Short paragraph about what changed.
+
+### Sleep recovery
+Another paragraph about a different topic.
 
 ## Guidelines
 
