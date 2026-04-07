@@ -11,7 +11,7 @@ gmux works out of the box with no configuration. Everything is customizable thro
 | `settings.jsonc` | Terminal options, keybinds, UI preferences | [settings.jsonc →](/reference/settings/) |
 | `theme.jsonc` | Terminal color palette (Windows Terminal theme compatible) | [theme.jsonc →](/reference/theme/) |
 
-All files are optional. Create them manually; gmux never writes to them.
+All files are optional. Create or edit them manually. The only exception is `gmuxd remote`, which can add `[tailscale]` to `host.toml` with your confirmation.
 
 Settings and theme changes take effect on browser refresh (no daemon restart needed). Host config changes require restarting gmuxd.
 

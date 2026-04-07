@@ -7,7 +7,7 @@ sidebar:
 
 ## Config files
 
-Created by the user. gmux never writes to these.
+Created by the user. gmux does not write to these, except that `gmuxd remote` can add `[tailscale]` to `host.toml` with your confirmation.
 
 | Path | Purpose | Reference |
 |------|---------|-----------|

@@ -7,7 +7,7 @@ tableOfContents:
 
 `~/.config/gmux/host.toml` (or `$XDG_CONFIG_HOME/gmux/host.toml`)
 
-Daemon behavior. gmuxd reads this file once at startup. Create it manually; gmuxd never writes to it. If the file does not exist, safe defaults are used. Changes require restarting gmuxd.
+Daemon behavior. gmuxd reads this file once at startup. Create or edit it manually. The only command that modifies this file is `gmuxd remote`, which can add the `[tailscale]` section with your confirmation. If the file does not exist, safe defaults are used. Changes require restarting gmuxd.
 
 ## Example
 
@@ -48,7 +48,7 @@ token_file = "~/.config/gmux/tokens/server"
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | `boolean` | `false` | Enable Tailscale remote access. |
-| `hostname` | `string` | `"gmux"` | Tailscale machine name (becomes `<hostname>.your-tailnet.ts.net`). Must be non-empty when enabled. |
+| `hostname` | `string` | `"gmux"` | Tailscale machine name (becomes `<hostname>.your-tailnet.ts.net`). Must be non-empty when enabled. Changing this value automatically clears the Tailscale state and re-registers the device under the new name on the next restart. |
 | `allow` | `string[]` | `[]` | Additional Tailscale login names to allow (owner is auto-whitelisted). Each must contain `@`. |
 
 ### `[discovery]`

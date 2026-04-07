@@ -34,13 +34,44 @@ In the [Tailscale admin console](https://login.tailscale.com/admin/dns):
 
 Both are required. You can verify they're enabled by running `gmuxd remote` after setup.
 
-### 3. Enable remote access
+### 3. Enable and register
 
 ```bash
 gmuxd remote
 ```
 
-If remote access isn't configured yet, this creates `~/.config/gmux/host.toml` with Tailscale enabled. You can also edit the file manually:
+This walks you through the process interactively: it explains what remote access does, asks for confirmation, enables Tailscale in `~/.config/gmux/host.toml`, restarts the daemon, and waits for Tailscale to connect.
+
+On first setup, Tailscale needs you to log in:
+
+```
+Enable remote access? [y/N] y
+
+Enabled tailscale in /home/user/.config/gmux/host.toml
+Restarting daemon...
+gmuxd: running (pid 12345)
+  Logs: /home/user/.local/state/gmux/gmuxd.log
+
+Connecting to Tailscale...
+
+To complete setup, log in to Tailscale:
+  https://login.tailscale.com/a/...
+
+After logging in, run `gmuxd remote` again to check the connection.
+```
+
+Visit the URL to approve the device. gmux registers as its own device in your tailnet, separate from the machine's Tailscale. After login, run `gmuxd remote` again:
+
+```
+$ gmuxd remote
+Connecting to Tailscale...
+  local:  http://127.0.0.1:8790
+  remote: https://gmux.your-tailnet.ts.net
+
+Remote access is active.
+```
+
+You can also edit `host.toml` manually instead:
 
 ```toml
 [tailscale]
@@ -61,36 +92,7 @@ hostname = "gmux-desktop"
 This gives you `https://gmux-desktop.your-tailnet.ts.net`.
 :::
 
-### 4. Restart and register
-
-```bash
-gmuxd restart
-```
-
-gmux registers as its own device in your tailnet, separate from the machine it runs on. On first start, gmuxd prints a login URL:
-
-```
-tsauth: tailscale needs login — visit: https://login.tailscale.com/a/...
-```
-
-Visit this URL to approve the device. After registration:
-
-```
-tsauth: node owner you@github auto-whitelisted
-tsauth: connected
-```
-
-Verify with `gmuxd remote`:
-
-```
-$ gmuxd remote
-  local:  http://127.0.0.1:8790
-  remote: https://gmux.your-tailnet.ts.net
-
-Remote access is active.
-```
-
-### 5. Connect
+### 4. Connect
 
 On your other device, open `https://gmux.your-tailnet.ts.net`. The connection is HTTPS with a valid certificate.
 
@@ -122,7 +124,7 @@ Run `gmuxd remote` to diagnose most issues. It checks whether the daemon is runn
 
 **`ERR_NAME_NOT_RESOLVED` in the browser**: the device isn't registered, or MagicDNS is disabled. Run `gmuxd remote` to check.
 
-**gmux doesn't appear in the Tailscale dashboard**: gmux registers as its own device, not through the machine's Tailscale. Visit the login URL printed by `gmuxd run` (foreground mode shows the URL directly).
+**gmux doesn't appear in the Tailscale dashboard**: gmux registers as its own device, not through the machine's Tailscale. Check the daemon log for the login URL: `cat $(gmuxd log-path) | grep tsauth`. You can also run `gmuxd run` in foreground mode to see the URL directly.
 
 **Certificate warning**: HTTPS certificates aren't enabled in your tailnet. Enable them in your [Tailscale DNS settings](https://login.tailscale.com/admin/dns), then restart gmuxd.
 

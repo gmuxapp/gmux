@@ -33,7 +33,14 @@ The daemon. Manages sessions, serves the web UI, and optionally provides Tailsca
 
 ### `gmuxd start`
 
-Start the daemon in the background, replacing any existing instance. Logs to `~/.local/state/gmux/gmuxd.log`. Prints the PID on success.
+Start the daemon in the background. If an existing instance is running, it is stopped first (the old version is printed for confirmation). Logs to `~/.local/state/gmux/gmuxd.log`. Prints the PID on success.
+
+```
+$ gmuxd start
+gmuxd: stopping existing daemon (1.0.0)...
+gmuxd: running (pid 12345)
+  Logs: /home/user/.local/state/gmux/gmuxd.log
+```
 
 Reads [`host.toml`](/reference/host-toml/) for configuration. Binds to `127.0.0.1` on the configured port (default 8790) and creates a Unix socket for local IPC.
 
@@ -43,7 +50,7 @@ Run the daemon in the foreground. Same as `start`, but blocks until interrupted.
 
 ### `gmuxd restart`
 
-Alias for `start`. Replaces any running instance with a fresh one.
+Alias for `start`. Stops any running instance and starts a fresh one.
 
 ### `gmuxd stop`
 
@@ -84,9 +91,22 @@ Open this URL to authenticate:
 
 ### `gmuxd remote`
 
-Set up or check Tailscale remote access. If Tailscale is not yet configured, walks you through enabling it. If already enabled, shows the connection status and diagnostics.
+Set up or check Tailscale remote access.
+
+If Tailscale is not yet configured, explains what remote access is, asks for confirmation, enables it in `host.toml`, restarts the daemon, and waits for Tailscale to connect. The command guides you through the entire process interactively.
+
+If already enabled, polls the daemon until Tailscale reaches a known state, then shows the connection status. It only reports HTTPS/MagicDNS problems after confirming the connection is established, so you never see false warnings from a daemon that is still starting.
 
 See [Remote Access](/remote-access/) for the full guide.
+
+### `gmuxd log-path`
+
+Print the daemon log file path with no extra output, suitable for scripting.
+
+```bash
+tail -f $(gmuxd log-path)
+cat $(gmuxd log-path) | grep tsauth
+```
 
 ### `gmuxd version`
 
