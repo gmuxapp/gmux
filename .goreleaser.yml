@@ -74,13 +74,12 @@ homebrew_casks:
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gmux"]
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gmuxd"]
           end
-          # Seamless daemon upgrade: if a daemon was running, shut it down and
-          # immediately start the new version. If it wasn't running, do nothing —
-          # the next `gmux` invocation will start it on demand.
+          # Seamless daemon upgrade: if a daemon was running, restart it with
+          # the new version. If it wasn't running, do nothing — the next
+          # `gmux` invocation will start it on demand.
           system_command "/bin/sh", args: ["-c", <<~EOS
-            if curl -sf -o /dev/null http://localhost:8790/v1/health 2>/dev/null; then
-              "#{staged_path}/gmuxd" shutdown
-              nohup "#{staged_path}/gmuxd" start </dev/null >/dev/null 2>&1 &
+            if "#{staged_path}/gmuxd" status >/dev/null 2>&1; then
+              "#{staged_path}/gmuxd" start
             fi
           EOS
           ]

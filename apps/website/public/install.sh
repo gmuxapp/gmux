@@ -45,7 +45,7 @@ sha256() {
 
 resolve_version() {
   if [ -n "${GMUX_VERSION:-}" ]; then echo "$GMUX_VERSION"; return; fi
-  v="$(curl -sSfL "https://api.github.com/repos/${REPO}/releases/latest" \
+  v="$(curl -sSfL "https://api.github.com/repos/${REPO}/releases/latest" </dev/null \
     | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')"
   [ -n "$v" ] || err "could not determine latest version"
   echo "$v"
@@ -110,10 +110,10 @@ main() {
   trap 'rm -rf "$tmpdir"' EXIT
 
   echo "Installing gmux ${version} (${os}/${arch})..."
-  curl -sSfL -o "${tmpdir}/${archive}" "${base}/${archive}"
+  curl -sSfL -o "${tmpdir}/${archive}" "${base}/${archive}" </dev/null
 
   # Verify checksum
-  curl -sSfL -o "${tmpdir}/checksums.txt" "${base}/checksums.txt"
+  curl -sSfL -o "${tmpdir}/checksums.txt" "${base}/checksums.txt" </dev/null
   expected="$(grep -F "${archive}" "${tmpdir}/checksums.txt" | head -1 | awk '{print $1}')"
   [ -n "$expected" ] || err "archive not found in checksums.txt"
   actual="$(sha256 "${tmpdir}/${archive}")"
@@ -137,11 +137,10 @@ main() {
     install_desktop_entry
   fi
 
-  # If gmuxd was already running, restart it
-  # Running sessions are not affected, they reconnect automatically.
-  if curl -sSf http://localhost:8790/v1/health > /dev/null 2>&1; then
-    "${INSTALL_DIR}/gmuxd" start 2>/dev/null || true
-    echo "Restarted gmuxd (running sessions are safe)"
+  # If gmuxd was already running, restart it so the new version takes over.
+  # Running sessions keep using the previous binary until restarted.
+  if "${INSTALL_DIR}/gmuxd" status > /dev/null 2>&1; then
+    "${INSTALL_DIR}/gmuxd" start || true
   fi
 
   case ":${PATH}:" in

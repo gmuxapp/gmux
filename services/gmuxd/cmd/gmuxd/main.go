@@ -303,7 +303,9 @@ func startBackground(stdout, stderr io.Writer) int {
 
 	// Check for an existing daemon and stop it first.
 	sock := paths.SocketPath()
+	replaced := false
 	if oldVer, ok := unixipc.HealthVersion(sock); ok {
+		replaced = true
 		if oldVer != "" {
 			_, _ = fmt.Fprintf(stdout, "gmuxd: stopping existing daemon (%s)...\n", oldVer)
 		} else {
@@ -361,7 +363,10 @@ func startBackground(stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	_, _ = fmt.Fprintf(stdout, "gmuxd: running (pid %d)\n  Logs: %s\n", cmd.Process.Pid, logPath)
+	_, _ = fmt.Fprintf(stdout, "gmuxd: running %s (pid %d)\n  Logs: %s\n", version, cmd.Process.Pid, logPath)
+	if replaced {
+		_, _ = fmt.Fprintf(stdout, "  Note: active sessions will use the new version when restarted.\n")
+	}
 	return 0
 }
 

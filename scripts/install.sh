@@ -49,10 +49,9 @@ ls -lh "$INSTALL_DIR/gmux" "$INSTALL_DIR/gmuxd"
 
 # ── Restart gmuxd ──
 
-echo "→ Starting gmuxd..."
+echo "→ Restarting gmuxd..."
 if "$INSTALL_DIR/gmuxd" start; then
-  VERSION=$("$INSTALL_DIR/gmuxd" version 2>&1 || echo "unknown")
-  echo "✓ gmuxd $VERSION"
+  echo "✓ gmuxd is running"
 else
   echo "⚠ gmuxd failed to start."
   echo "  Check logs: ~/.local/state/gmux/gmuxd.log"
