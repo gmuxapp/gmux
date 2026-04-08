@@ -69,6 +69,15 @@ func (m *Manager) isKnownOrigin(name string) bool {
 	return ok
 }
 
+// IsLocalPeer reports whether name is a local peer (e.g. a devcontainer)
+// whose sessions this node owns and should include in its SSE stream.
+func (m *Manager) IsLocalPeer(name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	mp, ok := m.peers[name]
+	return ok && mp.peer.Config.Local
+}
+
 // Start begins background goroutines that connect to each peer.
 func (m *Manager) Start() {
 	ctx, cancel := context.WithCancel(context.Background())

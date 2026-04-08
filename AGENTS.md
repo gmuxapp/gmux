@@ -8,6 +8,10 @@ Prioritize verifiable, correct behavior above all else. If something has lots of
 
 Never add new state without justification. Before adding a field, ask: who owns it, who updates it, and can it be derived from existing state instead? Prefer derivation over storage. New state creates maintenance burden, sync bugs, and lifecycle complexity.
 
+## Peering model
+
+Hub-and-spoke: each node's SSE stream only includes sessions it **owns** (local + devcontainer). Network peer sessions are excluded. `PeerConfig.Local` distinguishes the two: only the Docker watcher sets it. Tailscale-discovered and manual peers are not Local.
+
 ## Other rules
 
 - Push changes and create pull requests

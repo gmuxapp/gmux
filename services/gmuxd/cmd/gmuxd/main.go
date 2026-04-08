@@ -1271,9 +1271,44 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		// Send current state as upserts
+		// isOwned reports whether a session belongs to this node.
+		// Local sessions (Peer=="") and devcontainer sessions (Local
+		// peer) are owned; network peer sessions are not forwarded.
+		isOwned := func(s *store.Session) bool {
+			if s.Peer == "" {
+				return true
+			}
+			return peerManager != nil && peerManager.IsLocalPeer(s.Peer)
+		}
+
+		// isOwnedEvent checks a store event. Session-upsert carries
+		// the full session; remove/activity only have the ID, so we
+		// extract the peer from the namespaced ID. Non-session events
+		// (projects-update, peer-status) are always forwarded.
+		isOwnedEvent := func(ev store.Event) bool {
+			switch ev.Type {
+			case "session-upsert":
+				if ev.Session == nil {
+					return true
+				}
+				return isOwned(ev.Session)
+			case "session-remove", "session-activity":
+				_, peerName := peering.ParseID(ev.ID)
+				if peerName == "" {
+					return true // local
+				}
+				return peerManager != nil && peerManager.IsLocalPeer(peerName)
+			default:
+				return true
+			}
+		}
+
+		// Send current state as upserts (owned sessions only).
 		for _, sess := range sessions.List() {
 			s := sess
+			if !isOwned(&s) {
+				continue
+			}
 			sendSSE(w, "session-upsert", store.Event{
 				Type:    "session-upsert",
 				ID:      s.ID,
@@ -1282,7 +1317,7 @@ func serve(stderr io.Writer) int {
 		}
 		flusher.Flush()
 
-		// Stream updates
+		// Stream updates (owned events only).
 		ch, cancel := sessions.Subscribe()
 		defer cancel()
 
@@ -1294,6 +1329,9 @@ func serve(stderr io.Writer) int {
 			case ev, open := <-ch:
 				if !open {
 					return
+				}
+				if !isOwnedEvent(ev) {
+					continue
 				}
 				sendSSE(w, ev.Type, ev)
 				flusher.Flush()

@@ -596,6 +596,28 @@ func TestManager_RemoveNonexistentIsNoop(t *testing.T) {
 	mgr.RemovePeer("nonexistent")
 }
 
+func TestManager_IsLocalPeer(t *testing.T) {
+	st := store.New()
+	mgr := NewManager(nil, st, "test-host")
+	mgr.Start()
+	defer mgr.Stop()
+
+	// Network peer.
+	mgr.AddPeer(config.PeerConfig{Name: "server", URL: "http://10.0.0.5:8790", Token: "t"})
+	// Local peer (devcontainer).
+	mgr.AddPeer(config.PeerConfig{Name: "container-abc", URL: "http://172.17.0.2:8790", Token: "t", Local: true})
+
+	if mgr.IsLocalPeer("server") {
+		t.Error("network peer should not be local")
+	}
+	if !mgr.IsLocalPeer("container-abc") {
+		t.Error("devcontainer peer should be local")
+	}
+	if mgr.IsLocalPeer("unknown") {
+		t.Error("unknown peer should not be local")
+	}
+}
+
 func TestPeerFetchConfig(t *testing.T) {
 	// Spoke returns a launch config.
 	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1043,7 +1065,6 @@ func TestForwardingFilter_UnknownPeerSessionKept(t *testing.T) {
 
 	mgr.Stop()
 }
-
 
 func TestOnSleep_ReconnectsAndResyncs(t *testing.T) {
 	st := store.New()

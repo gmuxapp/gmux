@@ -234,6 +234,7 @@ func (w *Watcher) scan(ctx context.Context) {
 			Name:  name,
 			URL:   url,
 			Token: r.token,
+			Local: true,
 		}
 		log.Printf("devcontainers: discovered %s (container %s, %s)", name, short(r.c.ID), url)
 		w.mgr.AddPeer(cfg)

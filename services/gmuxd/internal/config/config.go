@@ -55,6 +55,12 @@ type PeerConfig struct {
 	// TokenCommand is a shell command whose stdout is the bearer token.
 	// Executed via "sh -c" with a 10-second timeout.
 	TokenCommand string `toml:"token_command"`
+
+	// Local marks peers whose sessions this node owns (e.g. devcontainers
+	// on the local Docker daemon). Their sessions are included in the
+	// outgoing SSE stream; network peer sessions are not. Set
+	// programmatically by the devcontainer watcher.
+	Local bool
 }
 
 // DiscoveryConfig controls automatic peer discovery.

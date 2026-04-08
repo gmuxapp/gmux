@@ -1,12 +1,23 @@
 // Package peering manages connections to remote gmuxd instances (spokes).
 //
-// A hub gmuxd subscribes to each spoke's GET /v1/events SSE stream,
+// Each gmuxd subscribes to its peers' GET /v1/events SSE streams and
 // transforms remote sessions into the local store with namespaced IDs
-// (originalID@peerName), and tracks connection state per peer.
+// (originalID@peerName). Actions and WebSocket connections are routed
+// back to the owning spoke by splitting on the last "@".
 //
-// Remote session IDs use the convention "originalID@peerName". The hub
-// splits on the last "@" to route actions and WebSocket connections back
-// to the owning spoke.
+// # Hub-and-spoke session ownership
+//
+// Each node's SSE stream only includes sessions it owns: local sessions
+// and sessions from Local peers (devcontainers connected via the Docker
+// daemon). Network peer sessions are excluded from the outgoing stream.
+// This prevents duplication when multiple peers aggregate each other.
+// A Tailscale-connected container is independently reachable by every
+// node on the tailnet, so it is not Local and its sessions are not
+// forwarded. A Docker-only devcontainer is only reachable through its
+// host, so it is Local and its sessions are forwarded.
+//
+// As a secondary defense, the receiver drops forwarded sessions whose
+// origin peer is already a direct subscription (matched by name).
 package peering
 
 import (
@@ -70,4 +81,3 @@ func ParseID(namespacedID string) (originalID, peerName string) {
 	}
 	return namespacedID[:i], namespacedID[i+1:]
 }
-
