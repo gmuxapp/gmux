@@ -383,7 +383,7 @@ function App() {
       />
 
       <div class="main-panel">
-        {viewVal?.kind !== 'project' && viewVal?.kind !== 'home' && (
+        {viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && (
           <MainHeader
             session={selectedVal}
             onRestart={selectedVal ? () => { restartSession(selectedVal.id).catch(err => console.error('restart failed:', err)) } : undefined}
