@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
-# Scan merged PRs since the last tag, generate release notes, open a PR.
+# Scan unreleased commits via git-cliff, generate release notes,
+# and open a release PR.
 #
-# PR titles must follow conventional commits:
-#   feat: ...     → minor bump
-#   fix: ...      → patch bump
-#   feat!: ...    → major bump (breaking)
-#   fix!: ...     → major bump (breaking)
+# Commits must follow conventional commits:
+#   feat: ...              → minor bump
+#   fix: ...               → patch bump
+#   feat!: / fix!: / ...   → major bump (breaking)
+#   BREAKING CHANGE: footer → major bump
 #
-# Other prefixes (ci:, docs:, refactor:, etc.) are not releasable.
+# Other types appear in the changelog where applicable (docs, perf)
+# or are skipped entirely (refactor, chore, ci, test, style, build).
+#
+# Optional prose for the release goes in RELEASE_HIGHLIGHTS.md at the
+# repo root. Its contents are injected into the changelog section
+# between the version heading and the grouped bullet lists. The file
+# is cleared automatically after each release.
 #
 # Usage:
 #   .github/workflows/scripts/version.sh           # apply changes
@@ -17,6 +24,7 @@ trap 'echo "error: ${BASH_SOURCE}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 CHANGELOG="$ROOT/apps/website/src/content/docs/changelog.mdx"
+HIGHLIGHTS="$ROOT/RELEASE_HIGHLIGHTS.md"
 
 DRY_RUN=false
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -24,226 +32,198 @@ if [[ "${1:-}" == "--dry-run" ]]; then
 fi
 
 # ── Skip release commits ──
+#
+# Prevents the workflow from re-triggering after merging a release PR.
 
-# Skip if HEAD is a release commit (squash merge: "release: vX.Y.Z",
-# merge commit: "Merge pull request #N from .../release/next").
 head_msg=$(git log -1 --format='%s')
 if [[ "$head_msg" =~ ^release:\ v[0-9] ]] || [[ "$head_msg" =~ release/next ]]; then
   echo "Release commit, skipping." >&2
   exit 0
 fi
 
-# ── Find PRs since last tag ──
+# ── Require git-cliff ──
+
+if ! command -v git-cliff >/dev/null 2>&1; then
+  echo "error: git-cliff is not installed. Install it with: cargo install git-cliff" >&2
+  exit 1
+fi
+
+# ── Check for releasable commits ──
+#
+# git-cliff's --bump defaults to a patch bump whenever any tracked
+# commit exists (including docs-only releases). We only release when
+# there's at least one commit in a Features, Fixes, Breaking, or
+# Security group.
+
+context=$(git-cliff --unreleased --bump --context 2>/dev/null || echo '[]')
+releasable_count=$(echo "$context" | jq '
+  if length == 0 then 0
+  else [.[0].commits[] | select(.group | test("Features|Fixes|Breaking|Security"))] | length
+  end
+')
 
 last_tag=$(git tag -l 'v*' | sort -V | tail -1)
+last_tag="${last_tag:-v0.0.0}"
 
-if [[ -z "$last_tag" ]]; then
-  # No tags yet; scan entire history.
-  git_range="HEAD"
-  last_tag="v0.0.0"
-else
-  git_range="${last_tag}..HEAD"
-fi
-
-pr_nums=()
-while IFS= read -r line; do
-  if [[ "$line" =~ \(#([0-9]+)\) ]]; then
-    pr_nums+=("${BASH_REMATCH[1]}")
-  elif [[ "$line" =~ ^Merge\ pull\ request\ #([0-9]+) ]]; then
-    pr_nums+=("${BASH_REMATCH[1]}")
-  fi
-done < <(git log "${git_range}" --format='%s' --first-parent)
-
-# Deduplicate and sort.
-if [[ ${#pr_nums[@]} -gt 0 ]]; then
-  mapfile -t pr_nums < <(printf '%s\n' "${pr_nums[@]}" | sort -un)
-fi
-
-# ── Classify PRs by conventional commit prefix ──
-
-remote_url=$(git remote get-url origin 2>/dev/null || true)
-repo_url=$(echo "$remote_url" | sed -E 's|\.git$||; s|^git@github\.com:|https://github.com/|')
-
-bump="none"
-declare -A pr_bumps
-declare -A pr_titles
-declare -A pr_bodies
-summary_prs=()      # PRs to include in LLM summary
-breaking_items=()
-feature_items=()
-fix_items=()
-docs_items=()
-
-# Matches any conventional commit title: type(scope)!: description
-cc_re='^([a-z]+)(\([^)]+\))?(!)?: .+$'
-# Types that trigger a version bump
-bump_re='^(feat|fix)$'
-# Types to include in summary and changelog (superset of bump types)
-summary_re='^(feat|fix|docs|perf)$'
-
-for pr_num in "${pr_nums[@]}"; do
-  pr_json=$(gh pr view "$pr_num" --json title,body 2>/dev/null || echo '{}')
-  title=$(echo "$pr_json" | jq -r '.title // ""')
-  body=$(echo "$pr_json" | jq -r '.body // ""')
-
-  # Parse conventional commit prefix: type(scope)!: description
-  if [[ ! "$title" =~ $cc_re ]]; then
-    continue
-  fi
-  type="${BASH_REMATCH[1]}"
-  breaking="${BASH_REMATCH[3]}"
-
-  # Breaking changes always get a bump regardless of type.
-  if [[ -n "$breaking" ]]; then
-    bump_level="major"
-  elif [[ "$type" =~ $bump_re ]]; then
-    case "$type" in
-      feat) bump_level="minor" ;;
-      fix)  bump_level="patch" ;;
-    esac
-  else
-    bump_level="none"
-  fi
-
-  # Track overall bump (highest wins).
-  case "$bump_level" in
-    major) bump="major" ;;
-    minor) [[ "$bump" != "major" ]] && bump="minor" ;;
-    patch) [[ "$bump" == "none" ]] && bump="patch" ;;
-  esac
-
-  # Skip types we don't surface (ci, chore, refactor, test, build, style).
-  if [[ -z "$breaking" ]] && [[ ! "$type" =~ $summary_re ]]; then
-    continue
-  fi
-
-  pr_bumps[$pr_num]="$bump_level"
-  pr_titles[$pr_num]="$title"
-  pr_bodies[$pr_num]="$body"
-  summary_prs+=("$pr_num")
-
-  # Build PR list item (strip conventional commit prefix for readability).
-  description="${title#*: }"
-  item="- ${description} ([#${pr_num}](${repo_url}/pull/${pr_num}))"
-  if [[ -n "$breaking" ]]; then
-    breaking_items+=("$item")
-  else
-    case "$type" in
-      feat) feature_items+=("$item") ;;
-      fix)  fix_items+=("$item") ;;
-      docs) docs_items+=("$item") ;;
-      perf) feature_items+=("$item") ;;
-    esac
-  fi
-done
-
-if [[ "$bump" == "none" ]]; then
-  echo "No releasable PRs since ${last_tag}." >&2
+if [[ "${releasable_count:-0}" -eq 0 ]]; then
+  echo "No releasable commits since ${last_tag}." >&2
   exit 0
 fi
 
-# ── Compute new version ──
+new_version=$(echo "$context" | jq -r '.[0].version')
 
-current="${last_tag#v}"
-IFS='.' read -r major minor patch_v <<< "$current"
-case "$bump" in
-  major) major=$((major + 1)); minor=0; patch_v=0 ;;
-  minor) minor=$((minor + 1)); patch_v=0 ;;
-  patch) patch_v=$((patch_v + 1)) ;;
-esac
-new_version="$major.$minor.$patch_v"
+# ── Generate changelog section ──
+#
+# Produces:
+#   ## vX.Y.Z
+#
+#   ### Features
+#   - foo ([#N](https://github.com/gmuxapp/gmux/pull/N))
+#
+#   ### Fixes
+#   - bar ([#N](https://github.com/gmuxapp/gmux/pull/N))
+#
+#   ---
 
-# ── Build LLM input ──
+section=$(git-cliff --unreleased --bump)
 
-llm_input=""
-for pr_num in $(echo "${summary_prs[@]}" | tr ' ' '\n' | sort -n); do
-  llm_input+="## ${pr_titles[$pr_num]} (#${pr_num})"$'\n\n'
-  if [[ -n "${pr_bodies[$pr_num]}" ]]; then
-    llm_input+="${pr_bodies[$pr_num]}"$'\n\n'
-  fi
-done
+# ── Helper: strip leading and trailing blank lines ──
 
-# ── Summarize ──
+trim_blanks() {
+  awk '
+    { lines[NR] = $0 }
+    END {
+      first = 1
+      while (first <= NR && lines[first] ~ /^[[:space:]]*$/) first++
+      last = NR
+      while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+      for (i = first; i <= last; i++) print lines[i]
+    }
+  '
+}
 
-summary=$(echo "$llm_input" | "$(dirname "$0")/summarize.sh" "v$new_version")
+# ── Read highlights (optional prose for the release) ──
 
-# ── Build grouped PR list ──
-
-pr_list=""
-if [[ ${#breaking_items[@]} -gt 0 ]]; then
-  pr_list+="### Breaking"$'\n'
-  for item in "${breaking_items[@]}"; do pr_list+="$item"$'\n'; done
-  pr_list+=$'\n'
+highlights=""
+if [[ -s "$HIGHLIGHTS" ]]; then
+  # Drop HTML comment blocks, then strip surrounding whitespace.
+  highlights=$(sed -e '/<!--/,/-->/d' "$HIGHLIGHTS" | trim_blanks)
 fi
-if [[ ${#feature_items[@]} -gt 0 ]]; then
-  pr_list+="### Features"$'\n'
-  for item in "${feature_items[@]}"; do pr_list+="$item"$'\n'; done
-  pr_list+=$'\n'
+
+# ── Compose RELEASE_NOTES.md ──
+#
+# Format (backward compatible with notify-discord.sh):
+#
+#   <highlights prose>
+#
+#   ---
+#
+#   ### Features
+#   - ...
+#
+#   ### Fixes
+#   - ...
+#
+# notify-discord.sh extracts everything before the first `---` as the
+# Discord summary, so highlights (if any) become the notification body.
+
+# Reuse git-cliff's heading line verbatim so we pick up the date suffix.
+heading=$(echo "$section" | sed -n '/^## v/{p;q;}')
+bullets=$(echo "$section" | awk '
+  /^## v/ { in_section = 1; next }
+  /^---$/ { in_section = 0 }
+  in_section { print }
+' | trim_blanks)
+
+release_notes=""
+if [[ -n "$highlights" ]]; then
+  release_notes+="${highlights}"$'\n\n'
 fi
-if [[ ${#fix_items[@]} -gt 0 ]]; then
-  pr_list+="### Fixes"$'\n'
-  for item in "${fix_items[@]}"; do pr_list+="$item"$'\n'; done
-  pr_list+=$'\n'
+release_notes+="---"$'\n\n'"${bullets}"
+
+# ── Compose changelog.mdx entry ──
+#
+# Format (matches the historical layout):
+#
+#   ## vX.Y.Z - 2026-04-10
+#
+#   <highlights prose>
+#
+#   ### Features
+#   - ...
+#
+#   ---
+
+changelog_entry="${heading}"$'\n'
+if [[ -n "$highlights" ]]; then
+  changelog_entry+=$'\n'"${highlights}"$'\n'
 fi
-if [[ ${#docs_items[@]} -gt 0 ]]; then
-  pr_list+="### Docs"$'\n'
-  for item in "${docs_items[@]}"; do pr_list+="$item"$'\n'; done
-  pr_list+=$'\n'
-fi
-pr_list=$(echo "$pr_list" | sed -e :a -e '/^\n*$/{$d;N;ba}')
+changelog_entry+=$'\n'"${bullets}"$'\n\n'"---"
 
 # ── Output ──
 
-echo "v$new_version ($bump)"
+echo "$new_version"
 
 if $DRY_RUN; then
   echo ""
-  echo "$summary"
+  echo "── changelog.mdx entry ──"
+  echo "$changelog_entry"
   echo ""
-  echo "---"
-  echo ""
-  echo "$pr_list"
+  echo "── RELEASE_NOTES.md ──"
+  echo "$release_notes"
   exit 0
 fi
 
-# ── Write release notes file ──
-#
-# GoReleaser uses this via --release-notes to populate the GitHub Release body.
-# The --- separator lets notify-discord.sh extract just the summary.
+# ── Write RELEASE_NOTES.md ──
 
-cat > "$ROOT/RELEASE_NOTES.md" <<EOF
-${summary}
-
----
-
-${pr_list}
-EOF
+printf '%s\n' "$release_notes" > "$ROOT/RELEASE_NOTES.md"
 
 # ── Update changelog.mdx ──
 #
 # Insert new version section before the first "## v" heading.
 # If no such heading exists, append to the end.
 
-new_section="## v${new_version}
-
-${summary}
-
-${pr_list}
-
----"
-
 if grep -q '^## v[0-9]' "$CHANGELOG"; then
-  awk -v section="$new_section" '
+  awk -v entry="$changelog_entry" '
     !inserted && /^## v[0-9]/ {
-      printf "%s\n", section
+      printf "%s\n", entry
       inserted = 1
     }
     { print }
   ' "$CHANGELOG" > "$CHANGELOG.tmp"
 else
   cp "$CHANGELOG" "$CHANGELOG.tmp"
-  printf '\n%s\n' "$new_section" >> "$CHANGELOG.tmp"
+  printf '\n%s\n' "$changelog_entry" >> "$CHANGELOG.tmp"
 fi
 mv "$CHANGELOG.tmp" "$CHANGELOG"
 
-echo "Updated $CHANGELOG"
+# ── Clear RELEASE_HIGHLIGHTS.md ──
+#
+# The release PR includes the cleared state so the next cycle starts
+# fresh. The stub content explains the workflow to future editors.
+
+cat > "$HIGHLIGHTS" <<'STUB'
+<!--
+Optional prose for the next release. Edit this file to add a high-level
+summary, topic paragraphs, or migration notes. When version.sh runs, the
+content is injected into the changelog section between the version
+heading and the grouped bullet lists.
+
+The file is cleared automatically after each release. Leave empty for
+releases that don't need prose (the auto-generated bullet list is
+enough for patch-only releases).
+
+Format: plain markdown. Supports headings, paragraphs, and lists.
+Example:
+
+    Peers now automatically reconnect after system suspend, no restart
+    needed.
+
+    ### Project matching
+    `projects.json` replaces separate `remote` and `paths` fields with a
+    unified `match` array.
+-->
+STUB
+
+echo "Updated $CHANGELOG" >&2
+echo "Updated $HIGHLIGHTS (cleared)" >&2

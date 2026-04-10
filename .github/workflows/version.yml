@@ -1,14 +1,10 @@
 name: Version
 
-# Scan for releasable PRs on every push to main, or manually.
-# Also retries overnight in case the LLM summary failed.
+# Scan for releasable commits on every push to main, or manually.
 on:
   push:
     branches: [main]
   workflow_dispatch:
-  schedule:
-    # Random minute in the 3-5 AM UTC window (low API traffic).
-    - cron: '37 3 * * *'
 
 permissions: {}
 
@@ -24,31 +20,17 @@ jobs:
       pull-requests: write
       actions: write # needed for gh workflow run (dispatch pr-build)
     steps:
-      - name: Skip scheduled run if no pending release
-        if: github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          body=$(gh pr view release/next --repo ${{ github.repository }} --json body --jq .body 2>/dev/null || true)
-          if [[ -z "$body" ]]; then
-            echo "No open release PR, skipping."
-            exit 1
-          fi
-          if [[ "$body" != *"_No summary available._"* ]]; then
-            echo "Release PR already has a summary, skipping."
-            exit 1
-          fi
-          echo "Release PR has missing summary, retrying."
-
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
 
-      - name: Check for releasable PRs
+      - name: Install git-cliff
+        uses: taiki-e/install-action@97a5807a604e12de3a13b52d868ebecaeeea757c # v2.75.4
+        with:
+          tool: git-cliff
+
+      - name: Check for releasable commits
         id: version
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           output=$(bash .github/workflows/scripts/version.sh)
           version=$(echo "$output" | head -1 | awk '{print $1}')

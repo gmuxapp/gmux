@@ -103,7 +103,6 @@ jobs:
         if: always() && !cancelled()
         env:
           WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ROLE_BREAKING: ${{ vars.DISCORD_ROLE_BREAKING }}
           ROLE_FEATURE: ${{ vars.DISCORD_ROLE_FEATURE }}
           ROLE_PATCH: ${{ vars.DISCORD_ROLE_PATCH }}

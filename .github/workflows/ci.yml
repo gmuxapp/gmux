@@ -79,3 +79,17 @@ jobs:
           go test ./services/gmuxd/...
         env:
           GOWORK: ${{ github.workspace }}/go.work
+
+  release-scripts:
+    name: Release scripts (version.sh tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@97a5807a604e12de3a13b52d868ebecaeeea757c # v2.75.4
+        with:
+          tool: git-cliff
+
+      - name: Run version.sh tests
+        run: bash .github/workflows/scripts/version_test.sh

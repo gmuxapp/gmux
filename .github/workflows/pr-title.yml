@@ -1,4 +1,4 @@
-name: PR Title
+name: PR conventional commits
 
 on:
   pull_request_target:
@@ -12,7 +12,7 @@ permissions:
   pull-requests: read
 
 jobs:
-  lint:
+  title:
     name: Validate PR title
     runs-on: ubuntu-latest
     steps:
@@ -31,4 +31,44 @@ jobs:
             perf
             build
             style
+            security
             release
+
+  commits:
+    name: Validate PR commits
+    runs-on: ubuntu-latest
+    steps:
+      # We fetch commit subjects via the GitHub API instead of checking
+      # out fork code. This keeps the `pull_request_target` permissions
+      # model intact: no fork code runs with secrets.
+      - name: Check every commit uses a conventional prefix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Valid conventional commit types. Kept in sync with cliff.toml
+          # commit_parsers and the release script's bump semantics.
+          cc_re='^(feat|fix|docs|perf|refactor|chore|ci|test|style|build|revert|security)(\([^)]+\))?!?: .+'
+          bad=0
+          while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            # Allow merge commits and the automated release commit.
+            [[ "$line" =~ ^Merge\ (pull\ request|branch|remote-tracking) ]] && continue
+            [[ "$line" =~ ^release:\ v[0-9] ]] && continue
+            if [[ ! "$line" =~ $cc_re ]]; then
+              echo "::error::Non-conventional commit: $line"
+              bad=1
+            fi
+          done < <(
+            gh api "repos/$REPO/pulls/$PR/commits" --paginate \
+              --jq '.[].commit.message | split("\n")[0]'
+          )
+          if [[ "$bad" -eq 1 ]]; then
+            echo ""
+            echo "Every commit on a PR must be a conventional commit"
+            echo "(feat:, fix:, docs:, chore:, etc.). Use jj describe to"
+            echo "fix commit messages, or jj squash to combine fixup commits."
+            exit 1
+          fi

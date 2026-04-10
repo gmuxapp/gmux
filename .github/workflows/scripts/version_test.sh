@@ -1,197 +1,398 @@
 #!/usr/bin/env bash
-# Tests for conventional commit parsing logic in version.sh.
+# End-to-end tests for version.sh using a scratch git repository.
 #
-# These test the title-matching regex and bump classification without
-# requiring GitHub API access or a specific git history.
+# Most of the versioning logic now lives in git-cliff, so these tests
+# exercise the behaviors that version.sh still owns:
+#
+#   1. Release commit detection (loop prevention)
+#   2. No-op when there are no releasable commits
+#   3. Correct bump level (patch / minor / major)
+#   4. Changelog insertion placement
+#   5. Highlights prepended into changelog.mdx and RELEASE_NOTES.md
+#   6. Highlights file cleared after release
+#   7. RELEASE_NOTES.md format compatible with notify-discord.sh
 set -uo pipefail
 
-pass=0
-fail=0
+# Locate the real version.sh so we can run it against scratch repos.
+REAL_SCRIPT="$(cd "$(dirname "$0")" && pwd)/version.sh"
+REAL_CLIFF_TOML="$(cd "$(dirname "$0")/../../.." && pwd)/cliff.toml"
+
+if ! command -v git-cliff >/dev/null 2>&1; then
+  echo "SKIP: git-cliff is not installed" >&2
+  exit 0
+fi
+
+# Use a scoreboard file so counts survive subshells used for test isolation.
+SCOREBOARD=$(mktemp)
+trap 'rm -f "$SCOREBOARD"' EXIT
+echo "0 0" > "$SCOREBOARD"
+
+bump_score() {
+  local which="$1"
+  read -r pass fail < "$SCOREBOARD"
+  case "$which" in
+    pass) pass=$((pass + 1)) ;;
+    fail) fail=$((fail + 1)) ;;
+  esac
+  echo "$pass $fail" > "$SCOREBOARD"
+}
 
 assert_eq() {
   local label="$1" expected="$2" actual="$3"
   if [[ "$expected" == "$actual" ]]; then
     echo "  ✓ $label"
-    ((pass++))
+    bump_score pass
   else
     echo "  ✗ $label"
-    echo "    expected: $expected"
-    echo "    actual:   $actual"
-    ((fail++))
+    echo "    expected: $(printf %q "$expected")"
+    echo "    actual:   $(printf %q "$actual")"
+    bump_score fail
   fi
 }
 
-# ── Parse a PR title and echo "type bump" or "skip" ──
-
-# classify_title outputs: "<bump> <summary>" where bump is major/minor/patch/none
-# and summary is "include" or "skip".
-classify_title() {
-  local title="$1"
-  local cc_re='^([a-z]+)(\([^)]+\))?(!)?: .+$'
-  local bump_re='^(feat|fix)$'
-  local summary_re='^(feat|fix|docs|perf)$'
-  if [[ ! "$title" =~ $cc_re ]]; then
-    echo "none skip"
-    return
+assert_contains() {
+  local label="$1" needle="$2" haystack="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then
+    echo "  ✓ $label"
+    bump_score pass
+  else
+    echo "  ✗ $label"
+    echo "    expected to contain: $needle"
+    echo "    actual: $haystack"
+    bump_score fail
   fi
-  local type="${BASH_REMATCH[1]}"
-  local breaking="${BASH_REMATCH[3]}"
-  local bump="none" summary="skip"
+}
 
-  if [[ -n "$breaking" ]]; then
-    bump="major"
-    summary="include"
-  elif [[ "$type" =~ $bump_re ]]; then
-    case "$type" in
-      feat) bump="minor" ;;
-      fix)  bump="patch" ;;
-    esac
-    summary="include"
-  elif [[ "$type" =~ $summary_re ]]; then
-    summary="include"
+assert_not_contains() {
+  local label="$1" needle="$2" haystack="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    echo "  ✓ $label"
+    bump_score pass
+  else
+    echo "  ✗ $label"
+    echo "    expected NOT to contain: $needle"
+    echo "    actual: $haystack"
+    bump_score fail
   fi
-  echo "$bump $summary"
 }
 
-# ── PR title classification ──
+# ── Create a throwaway repo mirroring gmux's layout ──
+#
+# The script uses the repo root (three levels up from the script path)
+# to find cliff.toml, apps/website/src/content/docs/changelog.mdx, and
+# RELEASE_HIGHLIGHTS.md. We replicate that layout in a temp directory.
 
-echo "Version bumps:"
+make_repo() {
+  local tmp="$1"
+  mkdir -p "$tmp/.github/workflows/scripts"
+  mkdir -p "$tmp/apps/website/src/content/docs"
+  cp "$REAL_SCRIPT" "$tmp/.github/workflows/scripts/version.sh"
+  cp "$REAL_CLIFF_TOML" "$tmp/cliff.toml"
 
-assert_eq "feat: minor"            "minor include"  "$(classify_title 'feat: add new feature')"
-assert_eq "fix: patch"             "patch include"  "$(classify_title 'fix: resolve crash')"
-assert_eq "feat!: major"           "major include"  "$(classify_title 'feat!: remove old API')"
-assert_eq "fix!: major"            "major include"  "$(classify_title 'fix!: change error format')"
-assert_eq "feat(web): minor"       "minor include"  "$(classify_title 'feat(web): add dark mode')"
-assert_eq "fix(core): patch"       "patch include"  "$(classify_title 'fix(core): memory leak')"
-assert_eq "feat(web)!: major"      "major include"  "$(classify_title 'feat(web)!: redesign settings')"
-assert_eq "fix(core)!: major"      "major include"  "$(classify_title 'fix(core)!: change error format')"
-assert_eq "empty after colon"      "none skip"      "$(classify_title 'feat:')"
-assert_eq "only space after colon" "none skip"      "$(classify_title 'feat: ')"
-assert_eq "no prefix"              "none skip"      "$(classify_title 'update the thing')"
-assert_eq "release: no bump"       "none skip"      "$(classify_title 'release: v1.0.0')"
+  # Seed changelog with one past release so the insertion path is exercised.
+  cat > "$tmp/apps/website/src/content/docs/changelog.mdx" <<'EOF'
+---
+title: Changelog
+---
 
-echo ""
-echo "Summary inclusion:"
+## v1.0.0
 
-assert_eq "docs: include"          "none include"   "$(classify_title 'docs: update readme')"
-assert_eq "perf: include"          "none include"   "$(classify_title 'perf: optimize query')"
-assert_eq "ci: skip"               "none skip"      "$(classify_title 'ci: fix workflow')"
-assert_eq "chore: skip"            "none skip"      "$(classify_title 'chore: update deps')"
-assert_eq "refactor: skip"         "none skip"      "$(classify_title 'refactor: extract module')"
-assert_eq "test: skip"             "none skip"      "$(classify_title 'test: add unit tests')"
-assert_eq "build: skip"            "none skip"      "$(classify_title 'build: update makefile')"
-assert_eq "style: skip"            "none skip"      "$(classify_title 'style: format code')"
-assert_eq "docs!: major + include" "major include"  "$(classify_title 'docs!: remove API docs')"
-assert_eq "ci!: major + include"   "major include"  "$(classify_title 'ci!: drop node 18 support')"
+Initial release.
 
-# ── Strip prefix for changelog ──
+### Features
+- everything ([#1](https://github.com/gmuxapp/gmux/pull/1))
 
-echo ""
-echo "Prefix stripping:"
+---
+EOF
 
-strip_prefix() { echo "${1#*: }"; }
+  cat > "$tmp/RELEASE_HIGHLIGHTS.md" <<'EOF'
+<!-- stub -->
+EOF
 
-assert_eq "feat: simple"           "add dark mode"          "$(strip_prefix 'feat: add dark mode')"
-assert_eq "fix(scope): scoped"     "handle nil pointer"     "$(strip_prefix 'fix(core): handle nil pointer')"
-assert_eq "feat!: breaking"        "redesign API"           "$(strip_prefix 'feat!: redesign API')"
-assert_eq "fix(web)!: scoped bang" "drop legacy endpoint"   "$(strip_prefix 'fix(web)!: drop legacy endpoint')"
-assert_eq "colon in description"   "handle key: value pairs" "$(strip_prefix 'fix: handle key: value pairs')"
-
-# ── Bump level precedence ──
-
-echo ""
-echo "Bump precedence:"
-
-compute_bump() {
-  local bump="none"
-  for level in "$@"; do
-    case "$level" in
-      major) bump="major" ;;
-      minor) [[ "$bump" != "major" ]] && bump="minor" ;;
-      patch) [[ "$bump" == "none" ]] && bump="patch" ;;
-    esac
-  done
-  echo "$bump"
+  (
+    cd "$tmp"
+    git init --quiet --initial-branch=main
+    git config user.email "test@example.com"
+    git config user.name "Test"
+    git add -A
+    git -c commit.gpgsign=false commit --quiet -m "init"
+    git tag v1.0.0
+  )
 }
 
-assert_eq "patch only"             "patch" "$(compute_bump patch)"
-assert_eq "minor only"             "minor" "$(compute_bump minor)"
-assert_eq "major only"             "major" "$(compute_bump major)"
-assert_eq "patch + minor = minor"  "minor" "$(compute_bump patch minor)"
-assert_eq "minor + major = major"  "major" "$(compute_bump minor major)"
-assert_eq "patch + major = major"  "major" "$(compute_bump patch major)"
-assert_eq "major first still major" "major" "$(compute_bump major patch minor)"
-assert_eq "none"                   "none"  "$(compute_bump)"
-
-# ── Version computation ──
-
-echo ""
-echo "Version computation:"
-
-compute_version() {
-  local current="$1" bump="$2"
-  local major minor patch_v
-  IFS='.' read -r major minor patch_v <<< "$current"
-  case "$bump" in
-    major) major=$((major + 1)); minor=0; patch_v=0 ;;
-    minor) minor=$((minor + 1)); patch_v=0 ;;
-    patch) patch_v=$((patch_v + 1)) ;;
-  esac
-  echo "$major.$minor.$patch_v"
+run_script() {
+  local tmp="$1" arg="${2:-}"
+  (
+    cd "$tmp"
+    bash .github/workflows/scripts/version.sh ${arg:+"$arg"} 2>&1
+  )
 }
 
-assert_eq "patch bump"            "1.0.1" "$(compute_version '1.0.0' patch)"
-assert_eq "minor bump"            "1.1.0" "$(compute_version '1.0.0' minor)"
-assert_eq "major bump"            "2.0.0" "$(compute_version '1.0.0' major)"
-assert_eq "minor resets patch"    "1.3.0" "$(compute_version '1.2.5' minor)"
-assert_eq "major resets all"      "2.0.0" "$(compute_version '1.2.5' major)"
-assert_eq "from zero"             "0.0.1" "$(compute_version '0.0.0' patch)"
-assert_eq "first minor"           "0.1.0" "$(compute_version '0.0.0' minor)"
-assert_eq "first major"           "1.0.0" "$(compute_version '0.0.0' major)"
+# ── Test: no releasable commits (only docs/chore/refactor) ──
 
-# ── Release commit detection ──
+echo "No releasable commits:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "docs: update readme"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "chore: bump deps"
+
+  output=$(run_script "$tmp")
+  assert_contains "docs+chore only exits with no release" "No releasable commits" "$output"
+
+  # changelog.mdx should be unchanged
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  assert_not_contains "changelog.mdx unchanged" "## v1.0.1" "$changelog"
+)
+
+# ── Test: release commit detection ──
 
 echo ""
 echo "Release commit detection:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "release: v1.0.1"
 
-is_release_commit() {
-  local msg="$1"
-  if [[ "$msg" =~ ^release:\ v[0-9] ]] || [[ "$msg" =~ release/next ]]; then
-    echo "yes"
-  else
-    echo "no"
-  fi
-}
+  output=$(run_script "$tmp")
+  assert_contains "release: vX.Y.Z triggers skip" "Release commit, skipping" "$output"
+)
 
-assert_eq "squash merge"     "yes" "$(is_release_commit 'release: v1.0.0')"
-assert_eq "merge commit"     "yes" "$(is_release_commit 'Merge pull request #42 from gmuxapp/release/next')"
-assert_eq "normal feat"      "no"  "$(is_release_commit 'feat: add feature')"
-assert_eq "normal fix"       "no"  "$(is_release_commit 'fix: resolve bug')"
-assert_eq "contains release" "no"  "$(is_release_commit 'docs: update release guide')"
-
-# ── PR number extraction ──
+# ── Test: fix commit triggers patch bump ──
 
 echo ""
-echo "PR number extraction:"
+echo "Patch bump (fix commit):"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "fix: handle nil pointer (#42)"
 
-extract_pr() {
-  local line="$1"
-  if [[ "$line" =~ \(#([0-9]+)\) ]]; then
-    echo "${BASH_REMATCH[1]}"
-  elif [[ "$line" =~ ^Merge\ pull\ request\ #([0-9]+) ]]; then
-    echo "${BASH_REMATCH[1]}"
-  else
-    echo "none"
-  fi
-}
+  version=$(run_script "$tmp" --dry-run | head -1)
+  assert_eq "fix bumps patch" "v1.0.1" "$version"
 
-assert_eq "squash merge"    "42"   "$(extract_pr 'feat: add feature (#42)')"
-assert_eq "merge commit"    "42"   "$(extract_pr 'Merge pull request #42 from user/branch')"
-assert_eq "no PR number"    "none" "$(extract_pr 'direct commit to main')"
-assert_eq "number in parens" "123" "$(extract_pr 'fix: thing (#123)')"
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  assert_contains "new section heading"      "## v1.0.1" "$changelog"
+  assert_contains "fix bullet text"          "handle nil pointer" "$changelog"
+  assert_contains "PR link"                  "[#42](https://github.com/gmuxapp/gmux/pull/42)" "$changelog"
+  assert_contains "Fixes group heading"      "### Fixes" "$changelog"
+  assert_contains "previous version retained" "## v1.0.0" "$changelog"
+)
+
+# ── Test: feat commit triggers minor bump ──
+
+echo ""
+echo "Minor bump (feat commit):"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "feat: add dark mode (#50)"
+
+  version=$(run_script "$tmp" --dry-run | head -1)
+  assert_eq "feat bumps minor" "v1.1.0" "$version"
+)
+
+# ── Test: feat! commit triggers major bump ──
+
+echo ""
+echo "Major bump (breaking change):"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "feat!: redesign API (#99)"
+
+  version=$(run_script "$tmp" --dry-run | head -1)
+  assert_eq "feat! bumps major" "v2.0.0" "$version"
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  assert_contains "Breaking section present" "### Breaking" "$changelog"
+)
+
+# ── Test: mixed commits, highest bump wins ──
+
+echo ""
+echo "Mixed commits (highest bump wins):"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "fix: small bug (#1)"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "feat: big feature (#2)"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "fix: another bug (#3)"
+
+  version=$(run_script "$tmp" --dry-run | head -1)
+  assert_eq "fix+feat+fix bumps minor" "v1.1.0" "$version"
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  assert_contains "feature appears" "big feature" "$changelog"
+  assert_contains "fix appears"     "small bug"   "$changelog"
+  assert_contains "other fix"       "another bug" "$changelog"
+)
+
+# ── Test: highlights injected into both files ──
+
+echo ""
+echo "Highlights integration:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "feat: add dark mode (#50)"
+
+  cat > RELEASE_HIGHLIGHTS.md <<'EOF'
+Major theme overhaul: every panel now supports a dark variant.
+
+### Migration
+Run `gmux migrate-theme` after updating.
+EOF
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  assert_contains "highlights prose in changelog"     "Major theme overhaul" "$changelog"
+  assert_contains "highlights subheading in changelog" "### Migration"        "$changelog"
+
+  release_notes=$(cat RELEASE_NOTES.md)
+  assert_contains "highlights in release notes" "Major theme overhaul" "$release_notes"
+  assert_contains "separator in release notes"  "---"                  "$release_notes"
+  assert_contains "bullets in release notes"    "add dark mode"        "$release_notes"
+
+  # notify-discord.sh extraction: everything before the first ---
+  discord_summary=$(sed '/^---$/,$d' RELEASE_NOTES.md)
+  assert_contains "Discord gets highlights" "Major theme overhaul" "$discord_summary"
+  assert_not_contains "Discord does not get bullets" "add dark mode" "$discord_summary"
+
+  # Highlights file should be cleared (contain only the stub comment)
+  highlights_after=$(cat RELEASE_HIGHLIGHTS.md)
+  assert_not_contains "highlights cleared after release" "Major theme overhaul" "$highlights_after"
+  assert_contains "highlights stub retained" "<!--" "$highlights_after"
+)
+
+# ── Test: scope appears as bold tag in bullets ──
+
+echo ""
+echo "Scope rendering:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "feat(peering): reconnect after system sleep (#30)"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "fix(web): overlap on narrow viewports (#31)"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "feat: unscoped feature (#32)"
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  assert_contains "scoped feat bullet has bold scope"   "**(peering)** reconnect after system sleep" "$changelog"
+  assert_contains "scoped fix bullet has bold scope"    "**(web)** overlap on narrow viewports"      "$changelog"
+  assert_contains "unscoped bullet has no scope prefix" "- unscoped feature"                         "$changelog"
+  assert_not_contains "unscoped bullet has no empty bold" "- ****"                                   "$changelog"
+)
+
+# ── Test: date appears in version heading ──
+
+echo ""
+echo "Date in heading:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "fix: today bug (#1)"
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  today=$(date -u +%Y-%m-%d)
+  assert_contains "heading includes ISO date" "## v1.0.1 - $today" "$changelog"
+)
+
+# ── Test: security commits get their own section ──
+
+echo ""
+echo "Security section:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "security: redact tokens from logs (#40)"
+
+  version=$(run_script "$tmp" --dry-run | head -1)
+  assert_eq "security bumps patch" "v1.0.1" "$version"
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  assert_contains "Security section heading" "### Security" "$changelog"
+  assert_contains "Security bullet text"     "redact tokens from logs" "$changelog"
+)
+
+# ── Test: security appears before Features in the ordering ──
+
+echo ""
+echo "Security ordering:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "feat: new feature (#1)"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "security: patch vulnerability (#2)"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "fix: small bug (#3)"
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+
+  # Extract group heading order within the new release section.
+  order=$(echo "$changelog" | awk '/^## v1\.1\.0/{found=1; next} found && /^## v/{exit} found && /^### /{print}')
+  expected_order=$(printf '### Security\n### Features\n### Fixes')
+  assert_eq "Security appears before Features and Fixes" "$expected_order" "$order"
+)
+
+# ── Test: empty highlights file produces clean release notes ──
+
+echo ""
+echo "Empty highlights produces clean output:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "fix: tiny bug (#7)"
+
+  # Leave RELEASE_HIGHLIGHTS.md as the default stub (comment only)
+  run_script "$tmp" >/dev/null
+
+  release_notes=$(cat RELEASE_NOTES.md)
+  discord_summary=$(sed '/^---$/,$d' RELEASE_NOTES.md | awk '
+    { lines[NR] = $0 }
+    END {
+      first = 1
+      while (first <= NR && lines[first] ~ /^[[:space:]]*$/) first++
+      last = NR
+      while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+      for (i = first; i <= last; i++) print lines[i]
+    }
+  ')
+  assert_eq "Discord summary empty when no highlights" "" "$discord_summary"
+  assert_contains "release notes has bullets"         "tiny bug" "$release_notes"
+)
 
 # ── Summary ──
 
+read -r pass fail < "$SCOREBOARD"
 echo ""
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]

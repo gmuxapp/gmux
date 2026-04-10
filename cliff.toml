@@ -1,0 +1,104 @@
+# git-cliff configuration for gmux.
+#
+# Generates the changelog from conventional commit messages between tags.
+# Output matches the format used in apps/website/src/content/docs/changelog.mdx
+# so that new releases look identical to historical ones.
+#
+# Usage:
+#   git-cliff --bumped-version                 # print the next version
+#   git-cliff --unreleased --bump              # print the next release section
+#   git-cliff --unreleased --bump --prepend <changelog.mdx>
+
+[changelog]
+# We inject the section manually into changelog.mdx, so no outer header.
+header = ""
+
+# One release section. Matches the historical format, with a date after
+# the version heading and optional bold scope tags:
+#
+#   ## v1.2.0 - 2026-04-10
+#
+#   ### Features
+#   - **(peering)** prevent duplicate sessions ([#123](https://github.com/gmuxapp/gmux/pull/123))
+#   - foo ([#124](https://github.com/gmuxapp/gmux/pull/124))
+#
+#   ### Fixes
+#   - **(web)** overlap on narrow viewports ([#125](https://github.com/gmuxapp/gmux/pull/125))
+#
+#   ---
+body = """
+{% if version -%}
+## {{ version }} - {{ timestamp | date(format="%Y-%m-%d") }}
+{%- else -%}
+## Unreleased
+{%- endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits -%}
+- {% if commit.scope %}**({{ commit.scope }})** {% endif %}{{ commit.message }}
+{% endfor -%}
+{% endfor %}
+---
+"""
+trim = true
+render_always = false
+
+postprocessors = []
+
+[git]
+conventional_commits = true
+# Skip commits that don't follow conventional format (merge commits, etc.).
+filter_unconventional = true
+# Keep breaking changes (fix!, feat!) even if their type would otherwise be filtered.
+protect_breaking_commits = true
+split_commits = false
+
+commit_preprocessors = [
+  # Turn trailing "(#125)" into a markdown link to the PR.
+  # Multiline mode (?m) so $ matches end of the subject line, not end of
+  # the whole commit message (which would include body lines).
+  { pattern = "(?m)\\s*\\(#([0-9]+)\\)$", replace = " ([#${1}](https://github.com/gmuxapp/gmux/pull/${1}))" },
+]
+
+# Assign commits to changelog groups. The `<!-- N -->` HTML comments
+# control sort order; striptags removes them before display.
+commit_parsers = [
+  # Breaking changes first, regardless of type.
+  { message = '^[a-z]+(\([^)]+\))?!: ', group = "<!-- 0 -->Breaking" },
+  { body = "BREAKING CHANGE:",           group = "<!-- 0 -->Breaking" },
+
+  # Security fixes get their own section so they stand out.
+  { message = "^security",                group = "<!-- 1 -->Security" },
+
+  { message = "^feat",                    group = "<!-- 2 -->Features" },
+  { message = "^perf",                    group = "<!-- 2 -->Features" },
+  { message = "^fix",                     group = "<!-- 3 -->Fixes" },
+  { message = "^docs?",                   group = "<!-- 4 -->Docs" },
+
+  # Not surfaced in the user-facing changelog.
+  { message = "^refactor",                skip = true },
+  { message = "^chore",                   skip = true },
+  { message = "^ci",                      skip = true },
+  { message = "^test",                    skip = true },
+  { message = "^style",                   skip = true },
+  { message = "^build",                   skip = true },
+  { message = "^revert",                  skip = true },
+
+  # Unknown types are skipped.
+  { message = ".*",                       skip = true },
+]
+
+filter_commits = true
+fail_on_unmatched_commit = false
+topo_order = false
+topo_order_commits = true
+sort_commits = "oldest"
+
+[bump]
+# Follow standard conventional commits bump semantics:
+#   feat!, fix!, BREAKING CHANGE: → major
+#   feat                          → minor
+#   fix                           → patch
+# Other types (docs, chore, etc.) do not trigger a bump.
+features_always_bump_minor = true
+breaking_always_bump_major = true

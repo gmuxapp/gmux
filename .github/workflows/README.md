@@ -10,7 +10,7 @@ flowchart LR
 
   subgraph PR merged to main
     B1[version.yml]
-    B1 --> B2[scans merged PRs\nsince last tag]
+    B1 --> B2[git-cliff scans\nunreleased commits]
     B2 --> B3[opens release PR\n+ dispatches pr-build]
   end
 
@@ -26,28 +26,36 @@ Three workflows run when a PR targets `main`:
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `ci.yml` | `pull_request` | Lint, build, test (JS + Go) |
+| `ci.yml` | `pull_request` | Lint, build, test (JS + Go + release scripts) |
 | `pr-build.yml` | `pull_request` | Snapshot build via GoReleaser, upload artifacts, post install comment |
 | `pr-title.yml` | `pull_request_target` | Validate PR title matches [conventional commits](https://www.conventionalcommits.org/) |
 
-PR titles determine release behavior:
-- `feat: ...` → minor version bump
-- `fix: ...` → patch version bump
-- `feat!: ...` / `fix!: ...` → major version bump (breaking)
-- Everything else (`docs:`, `ci:`, `refactor:`, `chore:`, etc.) → no release
+Commit prefixes determine release behavior:
+- `feat: ...` → minor version bump, **Features** section
+- `fix: ...` → patch version bump, **Fixes** section
+- `security: ...` → patch version bump, **Security** section (shown at the top, right after Breaking)
+- `feat!: ...` / `fix!: ...` / `security!: ...` / `BREAKING CHANGE:` footer → major version bump, **Breaking** section
+- `docs: ...` → **Docs** section, no bump
+- `perf: ...` → **Features** section, no bump
+- Everything else (`ci:`, `refactor:`, `chore:`, `test:`, `style:`, `build:`, `revert:`) → skipped entirely
+
+Scopes are optional but encouraged for monorepo areas. Use `feat(peering): ...`, `fix(web): ...`, `docs(cli): ...`, etc. The scope appears as a bold tag in the changelog bullet: `- **(peering)** reconnect after system sleep`. Unscoped commits render without the tag.
+
+Because we use **rebase merge** (not squash merge), every atomic commit on a feature branch lands on `main` as-is. Each commit must follow conventional commits because they all become changelog material.
 
 ### 2. Version phase (push to main)
 
 `version.yml` runs on every push to `main`, or manually via `workflow_dispatch`:
 
-1. Exits early if HEAD is a release commit (loop prevention).
-2. Runs `version.sh` which scans `git log` for merged PRs since the last `v*` tag.
-3. For each PR, fetches the title via `gh pr view` and classifies by conventional commit prefix.
-4. If there are releasable PRs (`feat:` or `fix:`), computes the next version, generates an LLM summary via `summarize.sh`, updates `changelog.mdx` and `RELEASE_NOTES.md`.
-5. Opens (or updates) a `release/next` PR via `peter-evans/create-pull-request`.
-6. Dispatches `pr-build.yml` via `workflow_dispatch` to build artifacts for the release PR (needed because commits from `GITHUB_TOKEN` don't trigger `pull_request` events).
+1. `version.sh` exits early if HEAD is a release commit (loop prevention).
+2. [git-cliff](https://git-cliff.org/) scans commits between the last `v*` tag and `HEAD`, grouping them by conventional commit type via `cliff.toml`.
+3. If any commit is a `feat`, `fix`, `security`, or breaking change, the script computes the next version (semver bump from the highest-impact commit). Version headings include an ISO date: `## v1.2.0 - 2026-04-10`.
+4. Optional prose from `RELEASE_HIGHLIGHTS.md` is prepended to the changelog section. Leave the file empty for releases that don't need a prose summary.
+5. `changelog.mdx` and `RELEASE_NOTES.md` are updated, and `RELEASE_HIGHLIGHTS.md` is reset to its stub content for the next cycle.
+6. A `release/next` PR is opened (or updated) via `peter-evans/create-pull-request`.
+7. `pr-build.yml` is dispatched via `workflow_dispatch` to build artifacts for the release PR (commits from `GITHUB_TOKEN` don't fire `pull_request` events, so this has to be manual).
 
-Since `version.sh` is idempotent, you can re-run the workflow manually (Actions → Version → Run workflow) to regenerate the release PR, for example if the LLM summary failed. A nightly schedule (3:37 AM UTC) also retries automatically if the release PR body contains `_No summary available._`.
+To edit highlights for an upcoming release: push a new commit to `main` that modifies `RELEASE_HIGHLIGHTS.md`. The next `version.yml` run picks it up. You can also edit the release PR's branch directly if a release is already queued; the content just needs to make it to `main` before the release PR merges.
 
 ### 3. Release phase (release PR merged)
 
@@ -56,7 +64,7 @@ Since `version.sh` is idempotent, you can re-run the workflow manually (Actions 
 1. Extracts version from PR title (`release: v1.2.0`).
 2. Creates and pushes the git tag.
 3. Runs GoReleaser (binaries + GitHub Release + Homebrew tap).
-4. Sends a Discord notification with an LLM-condensed summary.
+4. Sends a Discord notification using the highlights prose from `RELEASE_NOTES.md`.
 5. Deploys the docs site (via `pages.yml`).
 
 ## Security model
@@ -94,14 +102,18 @@ All third-party actions are pinned to full commit SHAs to prevent supply-chain a
 
 The `release` job uses the `release` environment. Sensitive secrets (`HOMEBREW_TAP_TOKEN`, `DISCORD_WEBHOOK_URL`) should be configured as environment secrets there, not as repo-level secrets. This scopes them to only the release job and allows deployment branch restrictions.
 
-`OPENROUTER_API_KEY` is needed by both `version.yml` (repo-level, runs on main push) and `release.yml` (in the `release` environment), so it lives in both places.
-
 ### Loop prevention
 
 Two mechanisms prevent infinite workflow loops:
 
 1. `version.sh` checks if HEAD is a release commit (`release: vX.Y.Z` or `Merge ... release/next`) and exits early.
 2. GitHub's built-in rule: events from `GITHUB_TOKEN` don't trigger other workflows (so the release PR creation doesn't fire `pull_request`, and the tag push doesn't re-fire `push: tags`).
+
+### Merge strategy
+
+The repo uses **rebase merge** for feature PRs (Settings → General → Pull Requests). This preserves atomic commit history on `main` so git-cliff can read each commit individually. Squash merge would collapse a PR into a single commit and lose the structured history.
+
+The release PR (`release/next`) is an exception: it's merged as a single commit (`release: vX.Y.Z`) so the release is identifiable in `git log --first-parent`.
 
 ## Repo settings
 
@@ -116,7 +128,6 @@ Workflow scripts live in `.github/workflows/scripts/`, colocated with the workfl
 
 | Script | Used by | Purpose |
 |--------|---------|---------|
-| `version.sh` | `version.yml` | Scan merged PRs, classify by conventional commit, compute version, update changelog |
-| `version_test.sh` | (manual / CI) | Unit tests for title parsing, bump logic, release commit detection |
-| `summarize.sh` | `version.sh`, `notify-discord.sh` | LLM-powered release summarization via OpenRouter |
-| `notify-discord.sh` | `release.yml` | Send release notification to Discord webhook |
+| `version.sh` | `version.yml` | Compute next version via git-cliff, update changelog, inject highlights, prepare release PR |
+| `version_test.sh` | `ci.yml`, manual | End-to-end tests for `version.sh` using scratch git repos |
+| `notify-discord.sh` | `release.yml` | Send release notification to Discord webhook (reads highlights from `RELEASE_NOTES.md`) |
