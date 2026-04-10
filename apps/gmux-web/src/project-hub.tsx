@@ -35,24 +35,27 @@ export function ProjectHub({ projectSlug, onResume, onCloseSession }: ProjectHub
   )
 
   return (
-    <div class="project-hub">
-      <header class="project-hub-header">
-        <h1 class="project-hub-title">{projectSlug}</h1>
-        <div class="project-hub-subtitle">
-          {remote && <span class="project-hub-remote">{remote}</span>}
-          {remote && hosts.length > 0 && <span class="project-hub-dot">·</span>}
-          {hosts.length > 0 && (
-            <span>
-              {totalSessions} session{totalSessions === 1 ? '' : 's'} across {hosts.length} host{hosts.length === 1 ? '' : 's'}
-            </span>
-          )}
-        </div>
-      </header>
+    <div class="home">
+      <section>
+        <h2 class="home-section-title">{projectSlug}</h2>
+        {(remote || totalSessions > 0) && (
+          <div class="hub-meta">
+            {remote && <span class="hub-remote">{remote}</span>}
+            {remote && totalSessions > 0 && ' · '}
+            {totalSessions > 0 && (
+              <span>
+                {totalSessions} session{totalSessions === 1 ? '' : 's'}
+                {hosts.length > 1 && <> across {hosts.length} hosts</>}
+              </span>
+            )}
+          </div>
+        )}
+      </section>
 
       {hosts.length === 0
         ? <EmptyProject projectSlug={projectSlug} launchCwd={projectFirstPath(project)} />
         : hosts.map(host => (
-            <HostSection
+            <HostGroup
               key={host.path.join('\0') || '(local)'}
               host={host}
               projectSlug={projectSlug}
@@ -66,63 +69,55 @@ export function ProjectHub({ projectSlug, onResume, onCloseSession }: ProjectHub
 
 function EmptyProject({ projectSlug, launchCwd }: { projectSlug: string; launchCwd?: string }) {
   return (
-    <div class="project-hub-empty">
-      <div class="project-hub-empty-title">No sessions yet in {projectSlug}</div>
+    <div class="hub-empty">
+      <span>No sessions yet in {projectSlug}</span>
       {launchCwd && (
-        <div class="project-hub-empty-actions">
-          <span class="path-mono">{launchCwd}</span>
-          <LaunchButton cwd={launchCwd} className="project-hub-empty-launcher" />
-        </div>
+        <>
+          <span class="hub-empty-path">{launchCwd}</span>
+          <LaunchButton cwd={launchCwd} className="hub-empty-launch" />
+        </>
       )}
     </div>
   )
 }
 
-function HostSection({
+function HostGroup({
   host, projectSlug, onResume, onCloseSession,
 }: { host: HostNode; projectSlug: string; onResume: (id: string) => void; onCloseSession: (session: Session) => void }) {
   const sessionCount = host.folders.reduce((n, f) => n + f.sessions.length, 0)
-  const folderCount = host.folders.length
-  const countText = folderCount > 1
-    ? `${sessionCount} session${sessionCount === 1 ? '' : 's'} · ${folderCount} folders`
-    : `${sessionCount} session${sessionCount === 1 ? '' : 's'}`
-
   const canLaunch = host.path.length <= 1
   const launchPeer = host.path.length === 1 ? host.path[0] : undefined
 
   return (
-    <section class="host-section">
-      <div class="host-section-header">
-        <span class={`host-status ${host.status}`} />
-        <HostPath path={host.path} />
-        {host.meta && <span class="host-meta">{host.meta}</span>}
-        <span class="host-session-count">{countText}</span>
+    <section class="hub-host">
+      <div class="hub-host-header">
+        <span class={`hub-host-dot ${host.status}`} />
+        <span class="hub-host-name"><HostPath path={host.path} /></span>
+        <span class="hub-host-count">
+          {sessionCount} session{sessionCount === 1 ? '' : 's'}
+        </span>
       </div>
       {host.folders.map(folder => (
-        <div class="folder-row" key={folder.cwd}>
-          <div class="folder-row-info">
-            <div class="path-mono folder-row-path">{folder.cwd || '~'}</div>
-            <div class="host-folder-cards">
-              {folder.sessions.map(s => (
-                <SessionCard
-                  key={s.id}
-                  session={s}
-                  projectSlug={projectSlug}
-                  onResume={onResume}
-                  onClose={() => onCloseSession(s)}
-                />
-              ))}
-            </div>
-          </div>
-          {canLaunch && (
-            <div class="folder-launchers">
+        <div class="hub-folder" key={folder.cwd}>
+          <div class="hub-folder-path">{folder.cwd || '~'}</div>
+          <div class="hub-folder-sessions">
+            {folder.sessions.map(s => (
+              <SessionCard
+                key={s.id}
+                session={s}
+                projectSlug={projectSlug}
+                onResume={onResume}
+                onClose={() => onCloseSession(s)}
+              />
+            ))}
+            {canLaunch && (
               <LaunchButton
                 cwd={folder.cwd || undefined}
                 peer={launchPeer}
-                className="folder-row-launch"
+                className="hub-folder-launch"
               />
-            </div>
-          )}
+            )}
+          </div>
         </div>
       ))}
     </section>
@@ -130,25 +125,13 @@ function HostSection({
 }
 
 function HostPath({ path }: { path: string[] }) {
-  if (path.length === 0) {
-    return (
-      <div class="host-path">
-        <span class="host-segment leaf">local</span>
-      </div>
-    )
-  }
+  if (path.length === 0) return <>local</>
   return (
-    <div class="host-path">
-      {path.map((seg, i) => {
-        const isLeaf = i === path.length - 1
-        return (
-          <>
-            {i > 0 && <span class="host-arrow">›</span>}
-            <span class={`host-segment ${isLeaf ? 'leaf' : 'ancestor'}`}>{seg}</span>
-          </>
-        )
-      })}
-    </div>
+    <>
+      {path.map((seg, i) => (
+        <>{i > 0 && <span class="hub-host-arrow">›</span>}{seg}</>
+      ))}
+    </>
   )
 }
 

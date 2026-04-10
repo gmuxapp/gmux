@@ -98,8 +98,11 @@ body {
 .sidebar-header {
   display: flex;
   align-items: center;
-  padding: 8px 12px 0 14px;
+  height: var(--header-height);
+  padding: 0 12px 0 14px;
   gap: 10px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
 }
 
 .sidebar-logo {
@@ -110,14 +113,15 @@ body {
   color: var(--text);
   line-height: 1;
   text-decoration: none;
-  padding: 2px 4px;
-  margin: -2px -4px;
+  padding: 6px 10px;
+  margin: -6px -10px;
   cursor: pointer;
-  border-radius: 4px;
-  transition: color 0.15s, text-shadow 0.15s;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s, text-shadow 0.15s;
 }
 .sidebar-logo:hover {
   color: #fff;
+  background: var(--bg-hover);
   text-shadow: 0 0 6px rgba(255, 255, 255, 0.25);
 }
 
@@ -523,12 +527,9 @@ body {
 
 /* ── Close button on session items ── */
 .session-close-btn {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
   border: none;
   border-radius: 4px;
   background: transparent;
@@ -539,13 +540,13 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0;
-  transition: opacity 0.1s, background 0.1s, color 0.1s;
+  transition: background 0.1s, color 0.1s;
+  margin-top: 1px;
 }
-
-.session-item:hover .session-close-btn { opacity: 1; }
-
-.session-close-btn:hover { background: oklch(28% 0.015 250); color: var(--text); }
+.session-close-btn:hover {
+  background: oklch(28% 0.015 250);
+  color: var(--text);
+}
 
 /* Mock mode (landing page screenshots): hide per-session close buttons */
 .mock-mode .session-close-btn,
@@ -553,8 +554,6 @@ body {
 
 /* On touch devices (no hover), show interactive buttons permanently */
 @media (hover: none) {
-  .session-close-btn { opacity: 1; }
-
   .launch-container.folder-launch-btn { opacity: 1; }
   .mp-remove-btn { opacity: 1; }
   .mp-drag-handle { opacity: 1; }
@@ -1423,6 +1422,7 @@ body {
   overflow-y: auto;
   padding: 32px 32px 48px;
   max-width: 640px;
+  min-width: 0;
 }
 
 .home-section-title {
@@ -1478,7 +1478,7 @@ body {
   border-radius: 50%;
   flex-shrink: 0;
 }
-.home-host-status.connected {
+.home-host-status.connected, .home-host-status.local {
   background: var(--status-connected);
   box-shadow: 0 0 6px color-mix(in oklch, var(--status-connected) 40%, transparent);
 }
@@ -1782,6 +1782,32 @@ a.home-host-link:hover {
   .mobile-bottom-action.send-btn {
     color: var(--accent);
   }
+
+  /* Home / project hub: tighter padding on touch devices */
+  .home {
+    padding: 20px 16px 48px;
+  }
+
+  .session-card {
+    max-width: 100%;
+  }
+
+  .hub-empty {
+    flex-wrap: wrap;
+  }
+
+  /* Move sidebar header to bottom for thumb reach */
+  .sidebar-header {
+    order: 3;
+    height: auto;
+    min-height: var(--header-height);
+    padding: 0 14px;
+    padding-bottom: env(safe-area-inset-bottom);
+    border-top: 1px solid var(--border);
+    border-bottom: none;
+  }
+  .sidebar-scroll { order: 1; }
+  .sidebar-footer { order: 2; }
 }
 
 /* ── Session Detail (non-terminal) ── */
@@ -2029,158 +2055,98 @@ a.home-host-link:hover {
   .diag-entry-cat { min-width: 60px; font-size: 10px; }
 }
 
-/* ─── Project hub page (design A1) ─── */
+/* ─── Project hub (flat host dividers, session-focused) ─── */
 
-.project-hub {
-  padding: 24px 32px;
-  overflow-y: auto;
-  max-width: 900px;
-  min-width: 420px;
-  margin: 0 auto;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-
-.project-hub-header {
-  margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border);
-}
-.project-hub-title {
-  font-size: 24px;
-  font-weight: 600;
-  margin: 0 0 6px;
-  color: var(--text);
-}
-.project-hub-subtitle {
-  font-size: 13px;
+.hub-meta {
+  font-size: 12px;
   color: var(--text-muted);
+  margin-top: 2px;
+}
+.hub-remote {
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-size: 11px;
+}
+
+/* Host divider row */
+.hub-host {
+  margin-top: 20px;
+}
+.hub-host-header {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
 }
-.project-hub-remote {
+.hub-host-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.hub-host-dot.connected, .hub-host-dot.local {
+  background: var(--status-connected);
+}
+.hub-host-dot.connecting {
+  background: var(--status-connecting);
+  animation: pulse-connecting 1.5s ease-in-out infinite;
+}
+.hub-host-dot.disconnected { background: var(--status-disconnected); }
+.hub-host-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.hub-host-arrow {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin: 0 2px;
+  opacity: 0.6;
+}
+.hub-host-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+/* Folder rows under a host divider */
+.hub-folder {
+  padding: 0 0 14px 15px;
+}
+.hub-folder-path {
   font-family: "JetBrains Mono", "SF Mono", monospace;
   font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.project-hub-dot::before { content: "·"; }
+.hub-folder-sessions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 
-.project-hub-empty {
+/* Empty project state */
+.hub-empty {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in oklch, var(--bg-sidebar) 50%, transparent);
+  border-radius: 8px;
   color: var(--text-muted);
-}
-.project-hub-empty-title {
   font-size: 13px;
-  color: var(--text-secondary);
+  margin-top: 16px;
 }
-.project-hub-empty-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-}
-.project-hub-empty-actions .path-mono {
+.hub-empty-path {
   font-family: "JetBrains Mono", "SF Mono", monospace;
   font-size: 12px;
   color: var(--text-muted);
 }
 
-/* Host section (one per unique host path) */
-.host-section {
-  margin-bottom: 20px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in oklch, var(--bg-sidebar) 50%, transparent);
-  /* No overflow:hidden here — the launcher dropdown needs to escape
-     the section bounds. The header rounds its own top corners to
-     match the section's border-radius. */
-}
-.host-section-header {
-  padding: 11px 16px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-sidebar);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-}
-.host-path {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
-.host-segment { font-size: 14px; font-weight: 500; }
-.host-segment.leaf { font-weight: 600; color: var(--text); }
-.host-segment.ancestor { color: var(--text-muted); font-weight: 400; }
-.host-arrow { color: var(--text-muted); font-size: 11px; opacity: 0.6; }
-.host-meta {
-  font-family: "JetBrains Mono", "SF Mono", monospace;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-.host-session-count { font-size: 12px; color: var(--text-muted); }
-
-.host-status {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-  flex-shrink: 0;
-}
-.host-status.local {
-  background: var(--accent);
-  box-shadow: 0 0 6px color-mix(in oklch, var(--accent) 40%, transparent);
-}
-.host-status.connected {
-  background: var(--status-connected);
-  box-shadow: 0 0 6px color-mix(in oklch, var(--status-connected) 40%, transparent);
-}
-.host-status.connecting {
-  background: var(--status-connecting);
-  animation: pulse-connecting 1.5s ease-in-out infinite;
-}
-.host-status.disconnected { background: var(--status-disconnected); }
-
-@keyframes pulse-connecting {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-/* Folder row: path + sessions on the left, launchers on the right */
-.folder-row {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 16px;
-  align-items: start;
-}
-.folder-row:last-child { border-bottom: none; }
-.folder-row-info { min-width: 0; }
-.folder-row-path {
-  margin-bottom: 10px;
-  font-family: "JetBrains Mono", "SF Mono", monospace;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-.host-folder-cards { display: flex; flex-wrap: wrap; gap: 6px; }
-.folder-launchers {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
-}
-
-/* Session card in folder row */
+/* Session card (used in project hub folder rows) */
 .session-card {
   display: flex;
   align-items: center;

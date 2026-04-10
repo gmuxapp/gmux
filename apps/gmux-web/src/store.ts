@@ -134,15 +134,14 @@ export const folders = computed(() =>
 /**
  * Current view, derived from the URL + data.
  *
- * Returns null until both projects and sessions have loaded at least once.
- * This prevents the URL normalization effect from overwriting a deep session
- * URL with a project fallback before data arrives.
+ * Returns null until sessions have loaded at least once. This prevents
+ * the URL normalization effect from overwriting a deep session URL with
+ * a fallback before data arrives. After loading, always returns a
+ * concrete View (home/project/session).
  */
 export const view = computed((): View | null => {
-  const fs = filteredSessions.value
-  const ps = projects.value
-  if (fs.length === 0 && ps.length === 0) return null
-  return resolveViewFromPath(urlPath.value, ps, fs)
+  if (!sessionsLoaded.value) return null
+  return resolveViewFromPath(urlPath.value, projects.value, filteredSessions.value)
 })
 
 /** Currently selected session ID, if the view is a session view. */
