@@ -15,6 +15,12 @@ Session state flows one way: runners and file monitors produce it, `gmuxd` aggre
 
 `store.Remove(id)` broadcasts `session-remove`. There are no other write paths.
 
+### `Upsert` vs `UpsertRemote`
+
+Sessions owned by a peer go through `store.UpsertRemote` instead of `store.Upsert`. The difference is that `UpsertRemote` does **not** re-run `resolveTitle` or re-derive `resumable`: those fields were already authoritatively resolved on the spoke and arrive in the SSE payload. Canonicalization, duplicate-resume-key handling, unique-resume-key numbering, and the broadcast all still run.
+
+This split exists because the spoke keeps `shell_title` and `adapter_title` as internal fields and drops them in `MarshalJSON`. If the hub called `Upsert` on a remote session it would see those fields empty, fall through to the `CommandTitler` or the bare `kind` string, and overwrite the correct spoke-resolved `title`. `UpsertRemote` trusts the spoke. The alternative, putting the internal title fields on the wire, was rejected: it widens the public API surface for a purely internal concern.
+
 ## Who writes what
 
 Each field on a session has a single owner. No two subsystems write the same field.

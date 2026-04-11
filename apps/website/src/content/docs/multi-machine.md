@@ -77,11 +77,13 @@ Each spoke connection is independent. When a spoke goes offline:
 - The hub reconnects with exponential backoff.
 - When the spoke comes back, sessions go live again.
 
-A slow or dead spoke never blocks the hub or other spokes.
+A slow or dead spoke never blocks the hub or other spokes. Planned reliability work (connection keepalives, silent-drop detection, and a unified session-identity model) is tracked in [Planned: peer reliability](/planned/peer-reliability).
 
 ## Protocol details
 
-The hub connects to standard gmuxd endpoints on each spoke:
+A peer gmuxd is a regular client of the spoke's public API. There are no peer-only endpoints and no peer-only auth scheme; the hub uses the spoke's bearer token exactly the same way a browser uses it on the TCP listener. If the browser path works, the peer path works.
+
+The hub connects to these public gmuxd endpoints on each spoke:
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -94,4 +96,4 @@ The hub connects to standard gmuxd endpoints on each spoke:
 | `POST /v1/sessions/:id/dismiss` | Forward dismiss |
 | `POST /v1/sessions/:id/resume` | Forward resume |
 
-No new protocol or auth scheme: the hub authenticates with the spoke's bearer token, the same mechanism browsers use for the TCP listener.
+All spoke traffic flows through the same small Go packages (`sseclient` and `apiclient`) that also back internal uses of the public API. See [Architecture: Shared client packages](/architecture#shared-client-packages). That means read limits, auth, and error handling have a single implementation: terminal snapshots up to 4 MiB flow through the WebSocket proxy without tripping size limits, and spoke-resolved session titles are never re-derived on the hub (the hub trusts the spoke's `title` instead of computing one from empty internal fields).
