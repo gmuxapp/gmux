@@ -23,6 +23,7 @@ package peering
 import (
 	"net/http"
 	"strings"
+	"time"
 )
 
 // PeerOption configures a Peer at creation time.
@@ -35,6 +36,15 @@ type PeerOption func(*Peer)
 func WithTransport(rt http.RoundTripper) PeerOption {
 	return func(p *Peer) {
 		p.transport = rt
+	}
+}
+
+// WithStreamIdleTimeout overrides the default SSE idle timeout for
+// this peer. Intended for tests that need fast idle detection without
+// waiting 60 seconds.
+func WithStreamIdleTimeout(d time.Duration) PeerOption {
+	return func(p *Peer) {
+		p.streamIdleTimeout = d
 	}
 }
 

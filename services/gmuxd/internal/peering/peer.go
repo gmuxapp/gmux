@@ -17,6 +17,13 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
+// defaultStreamIdleTimeout is the maximum time the SSE stream can be
+// silent before we assume the connection is dead and reconnect. 60s
+// is conservative: real events flow every few seconds on an active
+// spoke, and on an idle spoke the reconnect is invisible (sessions
+// stay in the store, the initial dump produces no-op upserts).
+const defaultStreamIdleTimeout = 60 * time.Second
+
 // Peer manages the connection to a single remote gmuxd instance.
 //
 // Protocol primitives (SSE decode, HTTP forwarding, WS proxying) live
@@ -46,6 +53,10 @@ type Peer struct {
 	// nil means use the default transport. Set via WithTransport for
 	// tailscale-discovered peers that route through tsnet.
 	transport http.RoundTripper
+
+	// streamIdleTimeout overrides the default SSE idle timeout.
+	// Zero means use defaultStreamIdleTimeout.
+	streamIdleTimeout time.Duration
 }
 
 func newPeer(cfg config.PeerConfig, st *store.Store, onStatus func(string, Status), opts ...PeerOption) *Peer {
@@ -64,6 +75,12 @@ func newPeer(cfg config.PeerConfig, st *store.Store, onStatus func(string, Statu
 	if p.transport != nil {
 		apiOpts = append(apiOpts, apiclient.WithTransport(p.transport))
 	}
+	// Idle timeout: detect silent network drops on the SSE stream.
+	idleTimeout := defaultStreamIdleTimeout
+	if p.streamIdleTimeout > 0 {
+		idleTimeout = p.streamIdleTimeout
+	}
+	apiOpts = append(apiOpts, apiclient.WithStreamIdleTimeout(idleTimeout))
 	p.api = apiclient.New(cfg.URL, apiOpts...)
 	return p
 }
@@ -164,20 +181,22 @@ func (p *Peer) run(ctx context.Context) {
 		wasConnected := false
 		err := p.subscribe(ctx, func() { wasConnected = true })
 
-		// Clean up spoke sessions from store on disconnect.
-		removed := p.store.RemoveByPeer(p.Config.Name)
-		if len(removed) > 0 {
-			log.Printf("peering: %s: removed %d sessions on disconnect", p.Config.Name, len(removed))
-		}
+		// Sessions stay in the store across reconnects. The spoke's
+		// initial dump on the next successful connect will upsert
+		// current state; anything the spoke no longer reports stays
+		// as stale-but-visible until the user dismisses it.
+		// RemoveByPeer only runs on intentional peer removal (see
+		// Manager.removePeer).
 
 		if err != nil && ctx.Err() == nil {
 			p.mu.Lock()
 			p.lastError = categorizeError(err)
 			p.mu.Unlock()
 		}
-		p.mu.Lock()
-		p.cachedConfig = nil
-		p.mu.Unlock()
+		// Keep cachedConfig across reconnects: the spoke's config
+		// doesn't change because our connection dropped, and clearing
+		// it would make /v1/config return empty for this peer during
+		// the brief reconnect window.
 		p.setStatus(StatusDisconnected)
 
 		if ctx.Err() != nil {
@@ -236,6 +255,8 @@ func (p *Peer) subscribe(ctx context.Context, onConnected func()) error {
 		return fmt.Errorf("stream ended")
 	case errors.Is(err, sseclient.ErrStreamEnded):
 		return fmt.Errorf("stream ended")
+	case errors.Is(err, sseclient.ErrStreamIdle):
+		return fmt.Errorf("no data received")
 	case errors.Is(err, sseclient.ErrUnauthorized):
 		return fmt.Errorf("auth failed: %w", err)
 	default:
@@ -344,6 +365,8 @@ func categorizeError(err error) string {
 	case strings.Contains(s, "certificate"),
 		strings.Contains(s, "x509"):
 		return "TLS certificate error"
+	case strings.Contains(s, "no data received"):
+		return "no data received"
 	case strings.Contains(s, "stream ended"):
 		return "connection lost"
 	default:

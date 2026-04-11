@@ -786,7 +786,7 @@ func TestManagerPeerConfigs_SkipsDisconnected(t *testing.T) {
 	}
 }
 
-func TestCachedConfig_ClearedOnDisconnect(t *testing.T) {
+func TestCachedConfig_PersistsAcrossDisconnect(t *testing.T) {
 	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"ok":true,"data":{"launchers":[]}}`))
@@ -807,12 +807,12 @@ func TestCachedConfig_ClearedOnDisconnect(t *testing.T) {
 		t.Fatal("expected non-nil cache after fetch")
 	}
 
-	// Cleared when we simulate disconnect (same as the run loop does).
-	p.mu.Lock()
-	p.cachedConfig = nil
-	p.mu.Unlock()
-	if p.CachedConfig() != nil {
-		t.Fatal("expected nil cache after disconnect")
+	// Cache survives a status transition to disconnected. The spoke's
+	// config doesn't change because our connection dropped, so keeping
+	// the cache avoids a gap in /v1/config responses during reconnect.
+	p.setStatus(StatusDisconnected)
+	if p.CachedConfig() == nil {
+		t.Fatal("expected cache to persist across disconnect")
 	}
 }
 
@@ -1094,19 +1094,62 @@ func TestOnSleep_ReconnectsAndResyncs(t *testing.T) {
 	// Trigger sleep recovery.
 	mgr.OnSleep()
 
-	// Wait for reconnection and resync.
+	// Wait for reconnection: sess-1 arrives in the fresh dump.
 	waitForSessions(t, st, "remote", 1)
 
-	// sess-2 should be gone (RemoveByPeer cleared it, initial dump
-	// only re-added sess-1).
-	if s, ok := st.Get("sess-2@remote"); ok && s.Alive {
-		t.Error("sess-2@remote should not be alive after OnSleep resync")
-	}
-
-	// sess-1 should still be alive.
+	// sess-1 should be alive (refreshed by the new dump).
 	if s, ok := st.Get("sess-1@remote"); !ok || !s.Alive {
 		t.Error("sess-1@remote should be alive after OnSleep resync")
 	}
 
+	// sess-2 stays in the store (stale but visible). Sessions persist
+	// across reconnects; only intentional peer removal or user dismiss
+	// deletes them. The spoke's dump didn't include sess-2, so it
+	// retains its last-known state.
+	if _, ok := st.Get("sess-2@remote"); !ok {
+		t.Error("sess-2@remote should still exist (sessions persist across reconnects)")
+	}
+
 	mgr.Stop()
+}
+
+// TestDisconnect_SessionsPersist verifies that a network disconnect does
+// not remove remote sessions from the store. Sessions stay visible so the
+// user's sidebar is stable across transient connection drops.
+func TestDisconnect_SessionsPersist(t *testing.T) {
+	st := store.New()
+	sessions := []store.Session{
+		{ID: "sess-1", Kind: "pi", Alive: true, Title: "important work"},
+		{ID: "sess-2", Kind: "codex", Alive: true, Title: "background task"},
+	}
+
+	// spokeServer sends sessions then closes, simulating a disconnect.
+	sk := spokeServer(t, "", sessions)
+	cfg := config.PeerConfig{Name: "server", URL: sk.URL}
+
+	// Short idle timeout so the test doesn't wait 60s for the default.
+	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host",
+		WithStreamIdleTimeout(200*time.Millisecond))
+	mgr.Start()
+	waitForSessions(t, st, "server", 2)
+
+	// Spoke closes the SSE stream (simulates disconnect).
+	// Wait for the idle timeout to fire + reconnect attempt to start.
+	sk.Close()
+	time.Sleep(500 * time.Millisecond)
+
+	// Both sessions must still be in the store.
+	if _, ok := st.Get("sess-1@server"); !ok {
+		t.Error("sess-1@server should persist after disconnect")
+	}
+	if _, ok := st.Get("sess-2@server"); !ok {
+		t.Error("sess-2@server should persist after disconnect")
+	}
+
+	mgr.Stop()
+
+	// After intentional Stop, sessions ARE removed (Manager.removePeer).
+	if _, ok := st.Get("sess-1@server"); ok {
+		t.Error("sess-1@server should be removed after Stop")
+	}
 }

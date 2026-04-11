@@ -17,6 +17,7 @@ func TestCategorizeError(t *testing.T) {
 		{"connect: dial tcp 10.0.0.1:443: i/o timeout", "connection timed out"},
 		{"connect: tls: failed to verify certificate", "TLS certificate error"},
 		{"connect: x509: certificate signed by unknown authority", "TLS certificate error"},
+		{"no data received", "no data received"},
 		{"stream ended", "connection lost"},
 		{"read: unexpected EOF", "connection failed"},
 	}

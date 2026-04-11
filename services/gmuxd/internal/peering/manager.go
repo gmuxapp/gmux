@@ -12,13 +12,14 @@ import (
 
 // Manager orchestrates connections to all configured spoke peers.
 type Manager struct {
-	mu       sync.RWMutex
-	peers    map[string]*managedPeer
-	store    *store.Store
-	selfName string // this machine's hostname, for self-echo detection
-	baseCtx  context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
+	mu          sync.RWMutex
+	peers       map[string]*managedPeer
+	store       *store.Store
+	selfName    string // this machine's hostname, for self-echo detection
+	defaultOpts []PeerOption
+	baseCtx     context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
 }
 
 type managedPeer struct {
@@ -33,15 +34,16 @@ type managedPeer struct {
 // selfName is the local machine's hostname, used to detect (and drop)
 // sessions that are our own data echoed back through a mutual peer
 // subscription.
-func NewManager(configs []config.PeerConfig, st *store.Store, selfName string) *Manager {
+func NewManager(configs []config.PeerConfig, st *store.Store, selfName string, opts ...PeerOption) *Manager {
 	m := &Manager{
-		peers:    make(map[string]*managedPeer, len(configs)),
-		store:    st,
-		selfName: selfName,
+		peers:       make(map[string]*managedPeer, len(configs)),
+		store:       st,
+		selfName:    selfName,
+		defaultOpts: opts,
 	}
 
 	for _, cfg := range configs {
-		p := newPeer(cfg, st, m.onStatus)
+		p := newPeer(cfg, st, m.onStatus, opts...)
 		p.isKnownOrigin = m.isKnownOrigin
 		m.peers[cfg.Name] = &managedPeer{peer: p}
 	}
@@ -152,7 +154,8 @@ func (m *Manager) AddPeer(cfg config.PeerConfig, opts ...PeerOption) {
 		return
 	}
 
-	p := newPeer(cfg, m.store, m.onStatus, opts...)
+	allOpts := append(m.defaultOpts, opts...)
+	p := newPeer(cfg, m.store, m.onStatus, allOpts...)
 	p.isKnownOrigin = m.isKnownOrigin
 	mp := &managedPeer{peer: p}
 	m.peers[cfg.Name] = mp
