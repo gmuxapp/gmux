@@ -41,11 +41,11 @@ type Session struct {
 	TerminalRows  uint16            `json:"terminal_rows,omitempty"`
 	Stale         bool              `json:"stale,omitempty"`
 
-	// ResumeKey is a human-readable stable identifier derived from the
+	// Slug is a human-readable stable identifier derived from the
 	// adapter's session file slug. Used for URL routing (the frontend
 	// falls back to id[:8] when empty) and for matching dead sessions
 	// to project membership arrays. Unique within (kind, peer).
-	ResumeKey string `json:"resume_key,omitempty"`
+	Slug string `json:"slug,omitempty"`
 
 	// ── Internal fields (excluded from API via MarshalJSON) ──
 
@@ -85,7 +85,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		TerminalCols  uint16            `json:"terminal_cols,omitempty"`
 		TerminalRows  uint16            `json:"terminal_rows,omitempty"`
 		Stale         bool              `json:"stale,omitempty"`
-		ResumeKey     string            `json:"resume_key,omitempty"`
+		Slug     string            `json:"slug,omitempty"`
 	}
 	return json.Marshal(wire{
 		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,
@@ -96,7 +96,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		Unread: s.Unread, Resumable: s.Resumable,
 		SocketPath: s.SocketPath, TerminalCols: s.TerminalCols,
 		TerminalRows: s.TerminalRows, Stale: s.Stale,
-		ResumeKey: s.ResumeKey,
+		Slug: s.Slug,
 	})
 }
 
@@ -197,7 +197,7 @@ func (s *Store) Upsert(sess Session) {
 // hub never has enough information to re-resolve correctly and would
 // otherwise overwrite a correct Title with the adapter Kind fallback.
 //
-// Canonicalization, duplicate-resume-key handling, unique-resume-key
+// Canonicalization, duplicate-slug handling, unique-slug
 // numbering, and event broadcast all still run; only the title and
 // resumable derivation are skipped. The dismissed side-map is NOT
 // cleared for remote sessions: dismissal is spoke-side state and the
@@ -214,9 +214,9 @@ func (s *Store) upsertCommon(sess Session, clearDismissedOnAlive bool) {
 	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
 	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
 	s.mu.Lock()
-	removed, skip := s.resolveDuplicateResumeKeysLocked(sess)
+	removed, skip := s.resolveDuplicateSlugsLocked(sess)
 	if !skip {
-		s.ensureUniqueResumeKey(&sess)
+		s.ensureUniqueSlug(&sess)
 		s.sessions[sess.ID] = sess
 		if clearDismissedOnAlive && sess.Alive {
 			// A live local session clears any dismissed flag so that
@@ -256,9 +256,9 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
 	sess.Title = s.resolveTitle(sess)
 	sess.Resumable = !sess.Alive && len(sess.Command) > 0
-	removed, skip := s.resolveDuplicateResumeKeysLocked(sess)
+	removed, skip := s.resolveDuplicateSlugsLocked(sess)
 	if !skip {
-		s.ensureUniqueResumeKey(&sess)
+		s.ensureUniqueSlug(&sess)
 		s.sessions[id] = sess
 	}
 	s.mu.Unlock()
@@ -310,8 +310,8 @@ func (s *Store) SetTerminalSize(id string, cols, rows uint16) bool {
 	return true
 }
 
-// resolveDuplicateResumeKeysLocked deduplicates sessions that represent the
-// same logical resumable session (same ResumeKey) under different IDs.
+// resolveDuplicateSlugsLocked deduplicates sessions that represent the
+// same logical resumable session (same Slug) under different IDs.
 //
 // Typical case: a dead file-scanned shadow (file-xxxx) and a live runner
 // session (sess-xxxx) for the same underlying conversation.
@@ -320,12 +320,12 @@ func (s *Store) SetTerminalSize(id string, cols, rows uint16) bool {
 //   - alive beats dead
 //   - non-file IDs beat file-* shadow IDs
 //   - when a dead shadow arrives while a live session exists, skip it
-func (s *Store) resolveDuplicateResumeKeysLocked(sess Session) (removed []string, skip bool) {
-	if sess.ResumeKey == "" {
+func (s *Store) resolveDuplicateSlugsLocked(sess Session) (removed []string, skip bool) {
+	if sess.Slug == "" {
 		return nil, false
 	}
 	for id, other := range s.sessions {
-		if id == sess.ID || other.ResumeKey != sess.ResumeKey {
+		if id == sess.ID || other.Slug != sess.Slug {
 			continue
 		}
 
@@ -454,22 +454,22 @@ func NowUnix() float64 {
 	return float64(time.Now().UnixNano()) / float64(time.Second)
 }
 
-// ensureUniqueResumeKey appends "-2", "-3" suffixes to the session's
-// ResumeKey when another session in the same (kind, peer) scope already
-// uses that key. Sessions without a ResumeKey (fresh launches before
+// ensureUniqueSlug appends "-2", "-3" suffixes to the session's
+// Slug when another session in the same (kind, peer) scope already
+// uses that key. Sessions without a Slug (fresh launches before
 // file attribution) are left alone; the frontend falls back to the
 // session ID prefix for URL routing.
 //
 // Must be called with s.mu held.
-func (s *Store) ensureUniqueResumeKey(sess *Session) {
-	if sess.ResumeKey == "" {
+func (s *Store) ensureUniqueSlug(sess *Session) {
+	if sess.Slug == "" {
 		return
 	}
-	base := sess.ResumeKey
+	base := sess.Slug
 	for i := 2; ; i++ {
 		conflict := false
 		for _, existing := range s.sessions {
-			if existing.ID != sess.ID && existing.Kind == sess.Kind && existing.Peer == sess.Peer && existing.ResumeKey == sess.ResumeKey {
+			if existing.ID != sess.ID && existing.Kind == sess.Kind && existing.Peer == sess.Peer && existing.Slug == sess.Slug {
 				conflict = true
 				break
 			}
@@ -477,7 +477,7 @@ func (s *Store) ensureUniqueResumeKey(sess *Session) {
 		if !conflict {
 			return
 		}
-		sess.ResumeKey = fmt.Sprintf("%s-%d", base, i)
+		sess.Slug = fmt.Sprintf("%s-%d", base, i)
 	}
 }
 

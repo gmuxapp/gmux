@@ -37,7 +37,7 @@ type MatchRule struct {
 
 // Item is a user-configured project entry.
 // Match contains the rules that determine which sessions belong here.
-// Sessions is an ordered list of session keys (resume_key or session ID)
+// Sessions is an ordered list of session keys (slug or session ID)
 // that controls sidebar order.
 type Item struct {
 	Slug     string      `json:"slug"`
@@ -426,11 +426,11 @@ func (s *State) FindSessionProject(key string) string {
 }
 
 // SessionKey returns the key used to identify a session in project arrays.
-// Uses ResumeKey if available (stable across restarts), falls back to
+// Uses Slug if available (stable across restarts), falls back to
 // session ID (ephemeral, for sessions without attribution).
-func SessionKey(id, resumeKey string) string {
-	if resumeKey != "" {
-		return resumeKey
+func SessionKey(id, slug string) string {
+	if slug != "" {
+		return slug
 	}
 	return id
 }
@@ -445,7 +445,7 @@ type SessionInfo struct {
 	Remotes       map[string]string
 	Host          string // peer name; empty for local sessions
 	Alive         bool
-	ResumeKey     string
+	Slug     string
 }
 
 // matchParamsFromInfo builds MatchParams from a SessionInfo.
@@ -475,7 +475,7 @@ func (s *State) UnmatchedActiveCount(sessions []SessionInfo) int {
 		if !sess.Alive {
 			continue
 		}
-		key := SessionKey(sess.ID, sess.ResumeKey)
+		key := SessionKey(sess.ID, sess.Slug)
 		if s.FindSessionProject(key) != "" {
 			continue
 		}

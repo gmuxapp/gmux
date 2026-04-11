@@ -392,23 +392,23 @@ describe('buildProjectFolders', () => {
     expect(ids).not.toContain('old-dead') // dead, not in array: hidden
   })
 
-  it('matches dead sessions by resume_key in array', () => {
+  it('matches dead sessions by slug in array', () => {
     const projects: ProjectItem[] = [
       { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['my-resume-key'] },
     ]
     const sessions = [
-      makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: false, resumable: true, resume_key: 'my-resume-key' }),
+      makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: false, resumable: true, slug: 'my-resume-key' }),
     ]
     const folders = buildProjectFolders(projects, sessions)
     expect(folders[0].sessions).toHaveLength(1)
   })
 
-  it('excludes dead sessions whose resume_key is not in the array', () => {
+  it('excludes dead sessions whose slug is not in the array', () => {
     const projects: ProjectItem[] = [
       { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['other-key'] },
     ]
     const sessions = [
-      makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: false, resumable: true, resume_key: 'my-resume-key' }),
+      makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: false, resumable: true, slug: 'my-resume-key' }),
     ]
     const folders = buildProjectFolders(projects, sessions)
     expect(folders[0].sessions).toHaveLength(0)
@@ -462,23 +462,23 @@ describe('parseSessionPath', () => {
 })
 
 describe('sessionPath', () => {
-  it('builds URL from resume_key', () => {
-    expect(sessionPath('gmux', { kind: 'pi', resume_key: 'fix-auth', id: 'abc' }))
+  it('builds URL from slug', () => {
+    expect(sessionPath('gmux', { kind: 'pi', slug: 'fix-auth', id: 'abc' }))
       .toBe('/gmux/pi/fix-auth')
   })
 
-  it('falls back to ID prefix when resume_key missing', () => {
+  it('falls back to ID prefix when slug missing', () => {
     expect(sessionPath('gmux', { kind: 'pi', id: 'abcdef12-3456-7890' }))
       .toBe('/gmux/pi/abcdef12')
   })
 
   it('includes @peer for remote sessions', () => {
-    expect(sessionPath('gmux', { kind: 'pi', resume_key: 'fix-auth', id: 'abc', peer: 'server' }))
+    expect(sessionPath('gmux', { kind: 'pi', slug: 'fix-auth', id: 'abc', peer: 'server' }))
       .toBe('/gmux/@server/pi/fix-auth')
   })
 
   it('omits @peer for local sessions', () => {
-    expect(sessionPath('gmux', { kind: 'pi', resume_key: 'fix-auth', id: 'abc', peer: undefined }))
+    expect(sessionPath('gmux', { kind: 'pi', slug: 'fix-auth', id: 'abc', peer: undefined }))
       .toBe('/gmux/pi/fix-auth')
   })
 })
@@ -488,9 +488,9 @@ describe('resolveSessionFromPath', () => {
     { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },
   ]
   const localSessions = [
-    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
+    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
       remotes: { origin: 'github.com/gmuxapp/gmux' } }),
-    makeSession({ id: 'sess-2', cwd: '/dev/gmux', kind: 'shell', resume_key: 'fish',
+    makeSession({ id: 'sess-2', cwd: '/dev/gmux', kind: 'shell', slug: 'fish',
       remotes: { origin: 'github.com/gmuxapp/gmux' } }),
   ]
 
@@ -514,9 +514,9 @@ describe('resolveSessionFromPath', () => {
   // Peer-aware resolution
   const mixedSessions = [
     ...localSessions,
-    makeSession({ id: 'sess-r1@server', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
+    makeSession({ id: 'sess-r1@server', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
       peer: 'server', remotes: { origin: 'github.com/gmuxapp/gmux' } }),
-    makeSession({ id: 'sess-r2@server', cwd: '/dev/gmux', kind: 'shell', resume_key: 'bash',
+    makeSession({ id: 'sess-r2@server', cwd: '/dev/gmux', kind: 'shell', slug: 'bash',
       peer: 'server', remotes: { origin: 'github.com/gmuxapp/gmux' } }),
   ]
 
@@ -552,7 +552,7 @@ describe('resolveSessionFromPath', () => {
     expect(id).toBe('sess-r1@server')
   })
 
-  it('resolves by ID prefix when session has no resume_key', () => {
+  it('resolves by ID prefix when session has no slug', () => {
     const unattributed = [
       makeSession({ id: 'sess-abc12345', cwd: '/dev/gmux', kind: 'pi',
         remotes: { origin: 'github.com/gmuxapp/gmux' } }),
@@ -591,7 +591,7 @@ describe('resolveViewFromPath', () => {
     { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },
   ]
   const sessions = [
-    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
+    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
       remotes: { origin: 'github.com/gmuxapp/gmux' } }),
   ]
 
@@ -637,7 +637,7 @@ describe('resolveViewFromPath', () => {
 
   it('remote session URL resolves to session view', () => {
     const remoteSess = makeSession({
-      id: 'sess-3@server', cwd: '/dev/gmux', kind: 'shell', resume_key: 'bash',
+      id: 'sess-3@server', cwd: '/dev/gmux', kind: 'shell', slug: 'bash',
       peer: 'server', remotes: { origin: 'github.com/gmuxapp/gmux' },
     })
     expect(resolveViewFromPath('/gmux/@server/shell/bash', projects, [...sessions, remoteSess])).toEqual({
@@ -657,9 +657,9 @@ describe('viewToPath', () => {
     { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },
   ]
   const sessions = [
-    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
+    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
       remotes: { origin: 'github.com/gmuxapp/gmux' } }),
-    makeSession({ id: 'sess-2@server', cwd: '/dev/gmux', kind: 'shell', resume_key: 'bash',
+    makeSession({ id: 'sess-2@server', cwd: '/dev/gmux', kind: 'shell', slug: 'bash',
       peer: 'server', remotes: { origin: 'github.com/gmuxapp/gmux' } }),
   ]
 
@@ -730,7 +730,7 @@ describe('View round-trip', () => {
     { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },
   ]
   const sessions = [
-    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', resume_key: 'fix-auth',
+    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
       remotes: { origin: 'github.com/gmuxapp/gmux' } }),
   ]
 
@@ -775,8 +775,8 @@ describe('isSessionVisibleInProject', () => {
     expect(isSessionVisibleInProject(s, project)).toBe(false)
   })
 
-  it('dead resumable sessions show when resume_key is tracked', () => {
-    const s = makeSession({ id: 'sess-x', cwd: '/dev/test', alive: false, resumable: true, resume_key: 'my-session' })
+  it('dead resumable sessions show when slug is tracked', () => {
+    const s = makeSession({ id: 'sess-x', cwd: '/dev/test', alive: false, resumable: true, slug: 'my-session' })
     expect(isSessionVisibleInProject(s, project)).toBe(true)
   })
 
@@ -786,7 +786,7 @@ describe('isSessionVisibleInProject', () => {
   })
 
   it('dead resumable sessions are hidden when not tracked', () => {
-    const s = makeSession({ id: 'sess-orphan', cwd: '/dev/test', alive: false, resumable: true, resume_key: 'orphan' })
+    const s = makeSession({ id: 'sess-orphan', cwd: '/dev/test', alive: false, resumable: true, slug: 'orphan' })
     expect(isSessionVisibleInProject(s, project)).toBe(false)
   })
 

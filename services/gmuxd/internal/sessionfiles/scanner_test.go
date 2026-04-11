@@ -82,10 +82,10 @@ func TestScanSkipsDuplicates(t *testing.T) {
 	writePiSession(t, tmpHome, "/tmp/project", sessID, "hello")
 
 	s := newTestStore()
-	// Pre-existing alive session with slug-based resume_key.
+	// Pre-existing alive session with slug-based slug.
 	// The scanner would derive the same slug ("hello") from the file,
 	// so the store's dedup should skip the dead shadow.
-	s.Upsert(store.Session{ID: "existing", Kind: "pi", Cwd: "/tmp/project", ResumeKey: "hello", Alive: true})
+	s.Upsert(store.Session{ID: "existing", Kind: "pi", Cwd: "/tmp/project", Slug: "hello", Alive: true})
 
 	sc := New(s)
 	sc.Scan()
@@ -220,12 +220,12 @@ func TestScanRefreshesDead(t *testing.T) {
 	writePiSession(t, tmpHome, "/tmp/project", sessID, "fix auth")
 
 	s := newTestStore()
-	// Simulate a session that was resumed then exited: has resume_key,
+	// Simulate a session that was resumed then exited: has slug,
 	// dead, no command (so not resumable yet). Scanner should refresh it.
 	s.Upsert(store.Session{
 		ID:        "file-aaaa-bbb",
 		Cwd:       "/tmp/project",
-		ResumeKey: sessID,
+		Slug: sessID,
 		Alive:     false,
 	})
 
@@ -315,7 +315,7 @@ func TestPurgeStaleSessions(t *testing.T) {
 	s.Upsert(store.Session{
 		ID:        "resumable",
 		Alive:     false,
-		ResumeKey: "some-key",
+		Slug: "some-key",
 		ExitedAt:  time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339),
 	})
 

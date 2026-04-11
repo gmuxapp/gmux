@@ -36,7 +36,7 @@ type Session struct {
 	SocketPath   string   `json:"socket_path"`
 	Status       *Status  `json:"status"`
 	Resumable    bool     `json:"resumable"`
-	ResumeKey    string   `json:"resume_key"`
+	Slug    string   `json:"slug"`
 	Command      []string `json:"command"`
 }
 

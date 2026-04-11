@@ -36,9 +36,9 @@ export function parseSessionPath(path: string): {
 /** Build a URL path for a session within a project. */
 export function sessionPath(
   projectSlug: string,
-  session: { kind: string; resume_key?: string; id: string; peer?: string },
+  session: { kind: string; slug?: string; id: string; peer?: string },
 ): string {
-  const slug = session.resume_key || session.id.slice(0, 8)
+  const slug = session.slug || session.id.slice(0, 8)
   if (session.peer) {
     return `/${projectSlug}/@${session.peer}/${session.kind}/${slug}`
   }
@@ -85,7 +85,7 @@ export function resolveSessionFromPath(
 
   // Full match: /:project/:adapter/:slug
   // Try exact slug match first, then prefix match on session ID.
-  const exact = adapterSessions.find(s => s.resume_key === parsed.slug)
+  const exact = adapterSessions.find(s => s.slug === parsed.slug)
   if (exact) return exact.id
 
   const byId = adapterSessions.find(s => s.id.startsWith(parsed.slug!))
@@ -205,7 +205,7 @@ export interface Session {
   socket_path: string
   terminal_cols?: number
   terminal_rows?: number
-  resume_key?: string
+  slug?: string
   stale?: boolean
 }
 
@@ -285,7 +285,7 @@ export function isSessionVisibleInProject(session: Session, project: ProjectItem
   if (session.alive) return true
   if (!session.resumable) return false
   const keys = new Set(project.sessions ?? [])
-  const key = session.resume_key || session.id
+  const key = session.slug || session.id
   return keys.has(key) || keys.has(session.id)
 }
 
@@ -367,7 +367,7 @@ export function buildProjectFolders(
     } else {
       // Dead session: only include if it's in the project's sessions array.
       const keys = arrayKeys.get(matched.slug)!
-      const key = session.resume_key || session.id
+      const key = session.slug || session.id
       if (keys.has(key) || keys.has(session.id)) {
         buckets.get(matched.slug)!.push(session)
       }

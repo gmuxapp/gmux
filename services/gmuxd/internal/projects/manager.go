@@ -77,31 +77,31 @@ func (m *Manager) Update(fn func(s *State) bool) error {
 // to that project's sessions list. Returns the project slug if assigned.
 // This is called when:
 //   - A new session is discovered (Register)
-//   - A session gets a ResumeKey (file attribution)
+//   - A session gets a Slug (file attribution)
 func (m *Manager) AutoAssignSession(info SessionInfo) string {
 	var assigned string
 	err := m.Update(func(state *State) bool {
-		key := SessionKey(info.ID, info.ResumeKey)
+		key := SessionKey(info.ID, info.Slug)
 
 		// Already in a project?
 		if state.FindSessionProject(key) != "" {
 			return false
 		}
 
-		// If the session has a ResumeKey different from its ID, check if
+		// If the session has a Slug different from its ID, check if
 		// the old key (session ID) is already assigned. This handles the
 		// transition when a session gets attributed: replace the ID-based
-		// entry with the ResumeKey-based entry to preserve ordering.
-		if info.ResumeKey != "" && info.ResumeKey != info.ID {
+		// entry with the Slug-based entry to preserve ordering.
+		if info.Slug != "" && info.Slug != info.ID {
 			if slug := state.FindSessionProject(info.ID); slug != "" {
-				// Replace ID with ResumeKey in the same position.
+				// Replace ID with Slug in the same position.
 				for i := range state.Items {
 					if state.Items[i].Slug != slug {
 						continue
 					}
 					for j, existing := range state.Items[i].Sessions {
 						if existing == info.ID {
-							state.Items[i].Sessions[j] = info.ResumeKey
+							state.Items[i].Sessions[j] = info.Slug
 							assigned = slug
 							return true
 						}
@@ -137,7 +137,7 @@ func (m *Manager) AutoAssignAllAlive(sessions []SessionInfo) {
 			if !info.Alive {
 				continue
 			}
-			key := SessionKey(info.ID, info.ResumeKey)
+			key := SessionKey(info.ID, info.Slug)
 			if state.FindSessionProject(key) != "" {
 				continue
 			}
@@ -181,19 +181,19 @@ func (m *Manager) CleanupSessions(known map[string]bool) {
 
 // DismissSession removes a session from its project's sessions list.
 // Returns the project slug if the session was found.
-func (m *Manager) DismissSession(id, resumeKey string) string {
+func (m *Manager) DismissSession(id, slug string) string {
 	var removed string
 	err := m.Update(func(state *State) bool {
-		key := SessionKey(id, resumeKey)
-		slug := state.RemoveSessionFromAll(key)
-		if slug == "" {
-			// Also try the ID if we used resumeKey.
-			if resumeKey != "" && resumeKey != id {
-				slug = state.RemoveSessionFromAll(id)
+		key := SessionKey(id, slug)
+		projectSlug := state.RemoveSessionFromAll(key)
+		if projectSlug == "" {
+			// Also try the ID if we used slug.
+			if slug != "" && slug != id {
+				projectSlug = state.RemoveSessionFromAll(id)
 			}
 		}
-		if slug != "" {
-			removed = slug
+		if projectSlug != "" {
+			removed = projectSlug
 			return true
 		}
 		return false

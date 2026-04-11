@@ -43,8 +43,8 @@ func codexSendAndWait(t *testing.T, g *testutil.Gmuxd, send func(string), sessID
 
 	// Wait for file attribution.
 	g.WaitForSession(sessID, func(s testutil.Session) bool {
-		return s.ResumeKey != ""
-	}, 90*time.Second, "file attribution (resume key)")
+		return s.Slug != ""
+	}, 90*time.Second, "file attribution (slug)")
 }
 
 // TestCodexTurnAndTitle sends a message and verifies title + attribution.
@@ -71,7 +71,7 @@ func TestCodexTurnAndTitle(t *testing.T) {
 	t.Logf("title: %q", updated.Title)
 
 	attributed, _ := g.GetSession(sess.ID)
-	t.Logf("resume_key: %s", attributed.ResumeKey)
+	t.Logf("slug: %s", attributed.Slug)
 }
 
 // TestCodexSecondTurnKeepsTitle verifies title doesn't change on second message.

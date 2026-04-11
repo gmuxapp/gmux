@@ -187,8 +187,8 @@ func TestPeerSubscribe_PreservesTitles(t *testing.T) {
 func TestPeerSubscribe_InitialSessions(t *testing.T) {
 	st := store.New()
 	sessions := []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, ResumeKey: "fix-auth"},
-		{ID: "sess-2", Kind: "shell", Alive: true, ResumeKey: "bash"},
+		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "fix-auth"},
+		{ID: "sess-2", Kind: "shell", Alive: true, Slug: "bash"},
 	}
 
 	token := "test-token-abc"
@@ -371,7 +371,7 @@ func TestPeerStatus(t *testing.T) {
 func TestPeerStatusEventBroadcast(t *testing.T) {
 	st := store.New()
 	sk := spokeServer(t, "", []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, ResumeKey: "test"},
+		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "test"},
 	})
 
 	// Subscribe to store events before starting the manager.
@@ -402,8 +402,8 @@ func TestPeerStatusEventBroadcast(t *testing.T) {
 func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 	st := store.New()
 	initialSessions := []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, ResumeKey: "fix-auth"},
-		{ID: "sess-2", Kind: "shell", Alive: true, ResumeKey: "bash"},
+		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "fix-auth"},
+		{ID: "sess-2", Kind: "shell", Alive: true, Slug: "bash"},
 	}
 
 	sk := spokeServer(t, "", initialSessions)
@@ -442,7 +442,7 @@ func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 func TestPeerSubscribe_ActivityForwarded(t *testing.T) {
 	st := store.New()
 	initialSessions := []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, ResumeKey: "fix-auth"},
+		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "fix-auth"},
 	}
 
 	sk := spokeServer(t, "", initialSessions)
@@ -482,7 +482,7 @@ func TestPeerSubscribe_NewSessionViaPush(t *testing.T) {
 
 	// Start with one session.
 	sk := spokeServer(t, "", []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, ResumeKey: "initial"},
+		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "initial"},
 	})
 
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
@@ -492,7 +492,7 @@ func TestPeerSubscribe_NewSessionViaPush(t *testing.T) {
 	waitForSessions(t, st, "server", 1)
 
 	// Push a new session that wasn't in the initial set.
-	newSess := store.Session{ID: "sess-new", Kind: "shell", Alive: true, ResumeKey: "new-one"}
+	newSess := store.Session{ID: "sess-new", Kind: "shell", Alive: true, Slug: "new-one"}
 	sk.push("session-upsert", store.Event{
 		Type: "session-upsert", ID: "sess-new", Session: &newSess,
 	})
