@@ -4,10 +4,13 @@
 # Output matches the format used in apps/website/src/content/docs/changelog.mdx
 # so that new releases look identical to historical ones.
 #
-# Usage:
-#   git-cliff --bumped-version                 # print the next version
+# Used by .github/workflows/scripts/version.sh, which parses the JSON
+# context for release-gating logic and reuses the rendered section for
+# the changelog insertion. Manual previews:
+#
 #   git-cliff --unreleased --bump              # print the next release section
-#   git-cliff --unreleased --bump --prepend <changelog.mdx>
+#   git-cliff --unreleased --bump --context    # same, as JSON
+#   git-cliff --unreleased --bumped-version    # just the next version tag
 
 [changelog]
 # We inject the section manually into changelog.mdx, so no outer header.
@@ -40,6 +43,7 @@ body = """
 {% endfor %}
 ---
 """
+# Trim trailing whitespace from the rendered output.
 trim = true
 render_always = false
 
@@ -63,9 +67,12 @@ commit_preprocessors = [
 # Assign commits to changelog groups. The `<!-- N -->` HTML comments
 # control sort order; striptags removes them before display.
 commit_parsers = [
-  # Breaking changes first, regardless of type.
+  # Breaking changes first, regardless of type. The `!:` variant is
+  # caught by the subject-line regex, the footer form is caught by the
+  # `footer =` rule (git-cliff strips the footer from the body and
+  # exposes it separately, so matching on `body =` would miss it).
   { message = '^[a-z]+(\([^)]+\))?!: ', group = "<!-- 0 -->Breaking" },
-  { body = "BREAKING CHANGE:",           group = "<!-- 0 -->Breaking" },
+  { footer = "^BREAKING[ -]CHANGE",      group = "<!-- 0 -->Breaking" },
 
   # Security fixes get their own section so they stand out.
   { message = "^security",                group = "<!-- 1 -->Security" },
@@ -90,8 +97,8 @@ commit_parsers = [
 
 filter_commits = true
 fail_on_unmatched_commit = false
-topo_order = false
-topo_order_commits = true
+# Within each section, list commits oldest-first to match the
+# historical changelog style (PR numbers ascend down the bullets).
 sort_commits = "oldest"
 
 [bump]

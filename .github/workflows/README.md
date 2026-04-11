@@ -33,10 +33,10 @@ Three workflows run when a PR targets `main`:
 Commit prefixes determine release behavior:
 - `feat: ...` → minor version bump, **Features** section
 - `fix: ...` → patch version bump, **Fixes** section
+- `perf: ...` → patch version bump, **Features** section
 - `security: ...` → patch version bump, **Security** section (shown at the top, right after Breaking)
 - `feat!: ...` / `fix!: ...` / `security!: ...` / `BREAKING CHANGE:` footer → major version bump, **Breaking** section
-- `docs: ...` → **Docs** section, no bump
-- `perf: ...` → **Features** section, no bump
+- `docs: ...` → **Docs** section, no bump on its own (appears in the next release if one is triggered)
 - Everything else (`ci:`, `refactor:`, `chore:`, `test:`, `style:`, `build:`, `revert:`) → skipped entirely
 
 Scopes are optional but encouraged for monorepo areas. Use `feat(peering): ...`, `fix(web): ...`, `docs(cli): ...`, etc. The scope appears as a bold tag in the changelog bullet: `- **(peering)** reconnect after system sleep`. Unscoped commits render without the tag.

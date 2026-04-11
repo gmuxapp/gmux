@@ -20,6 +20,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # Keep in sync with cliff.toml commit_parsers and the commits
+          # validator below. `release` is allowed as a title prefix for
+          # the auto-generated release PR.
           types: |
             feat
             fix
@@ -31,6 +34,7 @@ jobs:
             perf
             build
             style
+            revert
             security
             release
 

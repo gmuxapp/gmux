@@ -22,8 +22,10 @@ fi
 
 # ── Extract summary ──
 
-# RELEASE_NOTES.md has the summary above a --- separator, then the PR list.
-summary=$(sed '/^---$/,$d' RELEASE_NOTES.md)
+# RELEASE_NOTES.md has the highlights prose above a `<!-- highlights-end -->`
+# marker, then the generated bullet list. The marker is invisible in
+# rendered markdown; we stop reading at it.
+summary=$(sed '/<!-- highlights-end -->/,$d' RELEASE_NOTES.md)
 # Trim trailing blank lines.
 summary=$(echo "$summary" | sed -e :a -e '/^\n*$/{$d;N;ba}')
 

@@ -162,6 +162,23 @@ echo "Release commit detection:"
   assert_contains "release: vX.Y.Z triggers skip" "Release commit, skipping" "$output"
 )
 
+# ── Test: commits that mention "release/next" in their subject are NOT
+# ── mistaken for release commits. Regression test: a prior loose
+# ── regex `=~ release/next` matched anywhere in the subject line.
+
+echo ""
+echo "Release commit detection does not match substring matches:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "fix: use fixed release/next branch for release PR (#13)"
+
+  version=$(run_script "$tmp" --dry-run | head -1)
+  assert_eq "fix that mentions release/next still triggers patch bump" "v1.0.1" "$version"
+)
+
 # ── Test: fix commit triggers patch bump ──
 
 echo ""
@@ -266,19 +283,98 @@ EOF
   assert_contains "highlights subheading in changelog" "### Migration"        "$changelog"
 
   release_notes=$(cat RELEASE_NOTES.md)
-  assert_contains "highlights in release notes" "Major theme overhaul" "$release_notes"
-  assert_contains "separator in release notes"  "---"                  "$release_notes"
-  assert_contains "bullets in release notes"    "add dark mode"        "$release_notes"
+  assert_contains "highlights in release notes"   "Major theme overhaul"     "$release_notes"
+  assert_contains "marker in release notes"       "<!-- highlights-end -->" "$release_notes"
+  assert_contains "bullets in release notes"      "add dark mode"            "$release_notes"
 
-  # notify-discord.sh extraction: everything before the first ---
-  discord_summary=$(sed '/^---$/,$d' RELEASE_NOTES.md)
-  assert_contains "Discord gets highlights" "Major theme overhaul" "$discord_summary"
-  assert_not_contains "Discord does not get bullets" "add dark mode" "$discord_summary"
+  # notify-discord.sh extraction: everything before the highlights-end marker.
+  discord_summary=$(sed '/<!-- highlights-end -->/,$d' RELEASE_NOTES.md)
+  assert_contains "Discord gets highlights"         "Major theme overhaul" "$discord_summary"
+  assert_not_contains "Discord does not get bullets" "add dark mode"       "$discord_summary"
 
   # Highlights file should be cleared (contain only the stub comment)
   highlights_after=$(cat RELEASE_HIGHLIGHTS.md)
   assert_not_contains "highlights cleared after release" "Major theme overhaul" "$highlights_after"
   assert_contains "highlights stub retained" "<!--" "$highlights_after"
+)
+
+# ── Test: BREAKING CHANGE: footer triggers major bump and lands in Breaking ──
+#
+# git-cliff moves the footer out of the body and exposes it separately,
+# so the commit parser must match on `footer =`, not `body =`. This test
+# pins that behavior.
+
+echo ""
+echo "BREAKING CHANGE footer:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "$(printf 'feat: new config format (#60)\n\nBREAKING CHANGE: old config format no longer supported.')"
+
+  version=$(run_script "$tmp" --dry-run | head -1)
+  assert_eq "BREAKING CHANGE footer bumps major" "v2.0.0" "$version"
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  assert_contains "Breaking section present"      "### Breaking"      "$changelog"
+  assert_contains "breaking commit under Breaking" "new config format" "$changelog"
+  # The commit must NOT also appear under Features.
+  features_section=$(echo "$changelog" | awk '/^## v2\.0\.0/{found=1; next} found && /^## v/{exit} found && /^### /{section=$0; next} found{print section" | "$0}' | grep -c '### Features | - new config format' || true)
+  assert_eq "breaking commit is NOT duplicated under Features" "0" "$features_section"
+)
+
+# ── Test: perf triggers patch bump and lands in Features ──
+
+echo ""
+echo "Perf commits trigger patch release:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "perf: faster session resume (#70)"
+
+  version=$(run_script "$tmp" --dry-run | head -1)
+  assert_eq "perf bumps patch" "v1.0.1" "$version"
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  assert_contains "perf bullet under Features" "faster session resume" "$changelog"
+  assert_contains "Features section exists"    "### Features"          "$changelog"
+)
+
+# ── Test: changelog insertion preserves prior release sections ──
+#
+# The awk insertion path should place the new section above the first
+# existing `## v` heading without disturbing anything below it.
+
+echo ""
+echo "Changelog insertion preserves prior sections:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "feat: new thing (#80)"
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  assert_contains "prior v1.0.0 heading still present" "## v1.0.0"         "$changelog"
+  assert_contains "prior v1.0.0 bullet still present"  "everything"        "$changelog"
+  assert_contains "new v1.1.0 heading present"         "## v1.1.0 - "      "$changelog"
+
+  # New heading must come before old heading in the file.
+  new_line=$(grep -n '^## v1.1.0' apps/website/src/content/docs/changelog.mdx | head -1 | cut -d: -f1)
+  old_line=$(grep -n '^## v1.0.0' apps/website/src/content/docs/changelog.mdx | head -1 | cut -d: -f1)
+  if [[ -n "$new_line" && -n "$old_line" && "$new_line" -lt "$old_line" ]]; then
+    echo "  ✓ new section inserted above prior section"
+    bump_score pass
+  else
+    echo "  ✗ new section not inserted above prior section (new line: $new_line, old line: $old_line)"
+    bump_score fail
+  fi
 )
 
 # ── Test: scope appears as bold tag in bullets ──
@@ -361,6 +457,45 @@ echo "Security ordering:"
   assert_eq "Security appears before Features and Fixes" "$expected_order" "$order"
 )
 
+# ── Test: inline HTML comments in highlights do not swallow content ──
+#
+# Regression test for a sed-range bug: `sed '/<!--/,/-->/d'` swallows
+# everything after an inline `<!-- note -->` because sed won't match
+# start and end on the same line. The script uses a stateful awk
+# helper instead.
+
+echo ""
+echo "Inline HTML comments in highlights:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "feat: something (#90)"
+
+  cat > RELEASE_HIGHLIGHTS.md <<'EOF'
+First paragraph.
+
+<!-- inline note from the author -->
+
+Second paragraph survives the inline comment.
+
+<!--
+This whole block should be dropped.
+-->
+
+Third paragraph also survives.
+EOF
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  assert_contains "first paragraph present"                      "First paragraph"                        "$changelog"
+  assert_contains "second paragraph survives inline comment"     "Second paragraph survives"             "$changelog"
+  assert_contains "third paragraph survives multi-line comment"  "Third paragraph also survives"         "$changelog"
+  assert_not_contains "inline comment text is stripped"          "inline note from the author"           "$changelog"
+  assert_not_contains "multi-line comment text is stripped"      "This whole block should be dropped"    "$changelog"
+)
+
 # ── Test: empty highlights file produces clean release notes ──
 
 echo ""
@@ -376,7 +511,7 @@ echo "Empty highlights produces clean output:"
   run_script "$tmp" >/dev/null
 
   release_notes=$(cat RELEASE_NOTES.md)
-  discord_summary=$(sed '/^---$/,$d' RELEASE_NOTES.md | awk '
+  discord_summary=$(sed '/<!-- highlights-end -->/,$d' RELEASE_NOTES.md | awk '
     { lines[NR] = $0 }
     END {
       first = 1
@@ -388,6 +523,40 @@ echo "Empty highlights produces clean output:"
   ')
   assert_eq "Discord summary empty when no highlights" "" "$discord_summary"
   assert_contains "release notes has bullets"         "tiny bug" "$release_notes"
+)
+
+# ── Test: highlights with literal `---` (horizontal rule) survive ──
+#
+# Regression test for the old `---` separator: if a user used a
+# markdown horizontal rule inside their highlights, the old
+# `sed '/^---$/,$d'` would truncate the summary at the first `---`,
+# losing the rest of the prose. With `<!-- highlights-end -->` as the
+# sentinel, user-written `---` lines pass through unchanged.
+
+echo ""
+echo "Horizontal rules in highlights pass through:"
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cd "$tmp"
+  git -c commit.gpgsign=false commit --allow-empty --quiet -m "feat: add thing (#55)"
+
+  cat > RELEASE_HIGHLIGHTS.md <<'EOF'
+First major theme.
+
+---
+
+Second major theme, after a horizontal rule.
+EOF
+
+  run_script "$tmp" >/dev/null
+
+  discord_summary=$(sed '/<!-- highlights-end -->/,$d' RELEASE_NOTES.md)
+  assert_contains "first theme present"           "First major theme"         "$discord_summary"
+  assert_contains "horizontal rule preserved"     "---"                        "$discord_summary"
+  assert_contains "second theme after rule present" "Second major theme"       "$discord_summary"
+  assert_not_contains "bullets not in Discord"    "add thing"                 "$discord_summary"
 )
 
 # ── Summary ──

@@ -31,10 +31,10 @@ messages directly. Rules that follow from this:
   after `type: ` becomes the bullet verbatim. Lowercase, no trailing
   period, imperative mood. Good: `fix: prevent recursive config fetch
   storm`. Bad: `fix: Fixed the config storm issue.`.
-- **Release behavior by type**: `feat` bumps minor, `fix` / `security`
-  bumps patch, `feat!` / `fix!` / `BREAKING CHANGE:` bumps major.
-  `docs` and `perf` appear in the changelog but don't trigger a
-  release. Everything else is hidden.
+- **Release behavior by type**: `feat` bumps minor, `fix` / `perf` /
+  `security` bumps patch, `feat!` / `fix!` / `BREAKING CHANGE:` bumps
+  major. `docs` appears in the changelog but doesn't trigger a
+  release on its own. Everything else is hidden.
 - **Security fixes** use `security:` (or `security!:` for breaking
   security changes) and appear in their own `### Security` section at
   the top of the release, right after Breaking.
