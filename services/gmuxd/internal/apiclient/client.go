@@ -57,9 +57,10 @@ const httpActionTimeout = 10 * time.Second
 // Client is an authenticated HTTP + WebSocket client pointed at one
 // gmuxd instance (the "spoke" from the hub's perspective).
 type Client struct {
-	baseURL   string
-	token     string
-	transport http.RoundTripper
+	baseURL          string
+	token            string
+	transport        http.RoundTripper
+	streamIdleTimeout time.Duration
 
 	// httpClient is a long-lived client with no Timeout so SSE
 	// subscriptions can run indefinitely. Short-lived REST calls use
@@ -81,6 +82,13 @@ func WithBearerToken(token string) Option {
 // calls. Used by tailscale-discovered peers to route through tsnet.
 func WithTransport(t http.RoundTripper) Option {
 	return func(c *Client) { c.transport = t }
+}
+
+// WithStreamIdleTimeout configures the SSE idle timeout passed to
+// sseclient.WithIdleTimeout on Events(). A zero value (the default)
+// means no idle detection.
+func WithStreamIdleTimeout(d time.Duration) Option {
+	return func(c *Client) { c.streamIdleTimeout = d }
 }
 
 // New creates a Client pointed at baseURL (e.g. "http://host:8790").
@@ -113,6 +121,9 @@ func (c *Client) Events() *sseclient.Client {
 	opts := []sseclient.Option{sseclient.WithBearerToken(c.token)}
 	if c.transport != nil {
 		opts = append(opts, sseclient.WithTransport(c.transport))
+	}
+	if c.streamIdleTimeout > 0 {
+		opts = append(opts, sseclient.WithIdleTimeout(c.streamIdleTimeout))
 	}
 	return sseclient.New(c.baseURL+"/v1/events", opts...)
 }
