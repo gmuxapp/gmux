@@ -286,7 +286,12 @@ func (p *Peer) handleEvent(eventType string, data []byte) {
 		sess.Peer = p.Config.Name
 		sess.SocketPath = "" // meaningless on hub side
 
-		p.store.Upsert(sess)
+		// UpsertRemote (not Upsert) because the spoke already resolved
+		// Title and Resumable. Upsert would re-run resolveTitle against
+		// the wire session where ShellTitle/AdapterTitle are absent
+		// (they're internal fields, intentionally off the wire) and
+		// overwrite the correct title with the Kind fallback.
+		p.store.UpsertRemote(sess)
 
 	case "session-remove":
 		var ev sseEvent

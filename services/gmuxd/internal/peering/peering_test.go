@@ -146,6 +146,44 @@ func spokeServer(t *testing.T, token string, sessions []store.Session) *spoke {
 	return sk
 }
 
+// TestPeerSubscribe_PreservesTitles is the regression guard for the
+// title-overwrite bug: a remote session arrives with Title already
+// resolved by the spoke but with empty ShellTitle/AdapterTitle
+// (those are internal, intentionally off-wire). The hub must not
+// re-resolve the title or it would replace the spoke's value with
+// the Kind fallback (e.g. "codex" instead of "fix remote bug").
+func TestPeerSubscribe_PreservesTitles(t *testing.T) {
+	st := store.New()
+	sessions := []store.Session{
+		{
+			ID:    "sess-1",
+			Kind:  "codex",
+			Alive: true,
+			Title: "fix remote bug",
+			// ShellTitle/AdapterTitle intentionally empty: that's
+			// how they arrive on the wire because store.MarshalJSON
+			// drops them.
+		},
+	}
+
+	sk := spokeServer(t, "", sessions)
+	cfg := config.PeerConfig{Name: "server", URL: sk.URL}
+
+	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
+	mgr.Start()
+	waitForSessions(t, st, "server", 1)
+
+	got, ok := st.Get("sess-1@server")
+	if !ok {
+		t.Fatal("expected sess-1@server")
+	}
+	if got.Title != "fix remote bug" {
+		t.Errorf("Title = %q, want %q (spoke-resolved title must survive hub upsert)", got.Title, "fix remote bug")
+	}
+
+	mgr.Stop()
+}
+
 func TestPeerSubscribe_InitialSessions(t *testing.T) {
 	st := store.New()
 	sessions := []store.Session{
