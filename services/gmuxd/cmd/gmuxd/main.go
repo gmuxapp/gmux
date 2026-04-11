@@ -27,6 +27,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/devcontainers"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/conversations"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/notify"
@@ -431,6 +432,12 @@ func serve(stderr io.Writer) int {
 	stopScanner := make(chan struct{})
 	defer close(stopScanner)
 
+	// Conversations index — maps (kind, slug) to file metadata for URL
+	// resolution of dead conversations and future fulltext search.
+	convIndex := conversations.New()
+	convIndex.Scan()
+	log.Printf("conversations: indexed %d files", convIndex.Count())
+
 	// Start background update checker
 	updateChecker := update.New(version)
 
@@ -489,6 +496,20 @@ func serve(stderr io.Writer) int {
 		projectMgr.CleanupSessions(known)
 	}
 	go scanner.Run(30*time.Second, stopScanner)
+
+	// Periodic rescan of conversations index so new files are picked up.
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopScanner:
+				return
+			case <-ticker.C:
+				convIndex.Scan()
+			}
+		}
+	}()
 
 	// Auto-assign sessions to projects when they appear or get a Slug.
 	sessionEvents, unsubSessionEvents := sessions.Subscribe()
@@ -753,6 +774,29 @@ func serve(stderr io.Writer) int {
 
 	mux.HandleFunc("GET /v1/sessions", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ok": true, "data": sessions.List()})
+	})
+
+	// Conversation lookup — resolve dead conversations by (kind, slug)
+	// for URL resolution. Returns file metadata + resume command.
+	mux.HandleFunc("GET /v1/conversations/{kind}/{slug}", func(w http.ResponseWriter, r *http.Request) {
+		kind := r.PathValue("kind")
+		slug := r.PathValue("slug")
+		info, ok := convIndex.Lookup(kind, slug)
+		if !ok {
+			writeError(w, http.StatusNotFound, "not_found", "conversation not found")
+			return
+		}
+		writeJSON(w, map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"slug":           info.Slug,
+				"kind":           info.Kind,
+				"title":          info.Title,
+				"cwd":            info.Cwd,
+				"resume_command": info.ResumeCommand,
+				"created":        info.Created,
+			},
+		})
 	})
 
 	// ── Registration (fast path for gmux-run) ──
