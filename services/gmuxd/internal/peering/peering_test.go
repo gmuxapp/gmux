@@ -859,48 +859,6 @@ func TestManager_FindPeerDynamic(t *testing.T) {
 
 // ── ForwardLaunch ──
 
-func TestStripPeerField(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{
-			name: "strips peer",
-			in:   `{"launcher_id":"shell","cwd":"/root","peer":"dev"}`,
-			want: `{"cwd":"/root","launcher_id":"shell"}`,
-		},
-		{
-			name: "no peer is noop",
-			in:   `{"launcher_id":"shell","cwd":"/root"}`,
-			want: `{"cwd":"/root","launcher_id":"shell"}`,
-		},
-		{
-			name: "empty peer is removed too",
-			in:   `{"launcher_id":"shell","peer":""}`,
-			want: `{"launcher_id":"shell"}`,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := stripPeerField([]byte(tt.in))
-			if err != nil {
-				t.Fatalf("stripPeerField: %v", err)
-			}
-			if string(got) != tt.want {
-				t.Errorf("stripPeerField = %s, want %s", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestStripPeerField_InvalidJSON(t *testing.T) {
-	_, err := stripPeerField([]byte("not json"))
-	if err == nil {
-		t.Error("expected error for invalid JSON")
-	}
-}
-
 // TestForwardLaunch_StripsPeerField verifies the hub → spoke forward path
 // sends a body without the "peer" field. Without this, the spoke would
 // try to forward the request again to a peer of its own with that name.

@@ -1,27 +1,32 @@
 package peering
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/apiclient"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sseclient"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
-	"nhooyr.io/websocket"
 )
 
 // Peer manages the connection to a single remote gmuxd instance.
+//
+// Protocol primitives (SSE decode, HTTP forwarding, WS proxying) live
+// in the apiclient package so peering can focus on the peering-specific
+// concerns: namespacing session IDs, ownership filtering, reconnect
+// policy, and status reporting.
 type Peer struct {
 	Config config.PeerConfig
 	store  *store.Store
+	api    *apiclient.Client
 
 	mu           sync.RWMutex
 	status       Status
@@ -41,8 +46,6 @@ type Peer struct {
 	// nil means use the default transport. Set via WithTransport for
 	// tailscale-discovered peers that route through tsnet.
 	transport http.RoundTripper
-
-	client *http.Client
 }
 
 func newPeer(cfg config.PeerConfig, st *store.Store, onStatus func(string, Status), opts ...PeerOption) *Peer {
@@ -51,11 +54,17 @@ func newPeer(cfg config.PeerConfig, st *store.Store, onStatus func(string, Statu
 		store:    st,
 		status:   StatusDisconnected,
 		onStatus: onStatus,
-		client:   &http.Client{Timeout: 0},
 	}
 	for _, o := range opts {
 		o(p)
 	}
+	// Construct the API client after options have been applied so a
+	// WithTransport option propagates into it.
+	apiOpts := []apiclient.Option{apiclient.WithBearerToken(cfg.Token)}
+	if p.transport != nil {
+		apiOpts = append(apiOpts, apiclient.WithTransport(p.transport))
+	}
+	p.api = apiclient.New(cfg.URL, apiOpts...)
 	return p
 }
 
@@ -87,45 +96,18 @@ func (p *Peer) setStatus(s Status) {
 	}
 }
 
-// Forward proxies an HTTP request to the spoke, stripping the peer
-// namespace from the session ID. The spoke sees the original session ID.
+// Forward proxies an HTTP request to the spoke's session action
+// endpoint, stripping the peer namespace from the session ID. The
+// spoke sees the original (non-namespaced) session ID.
 func (p *Peer) Forward(w http.ResponseWriter, r *http.Request, originalID, action string) {
-	path := fmt.Sprintf("/v1/sessions/%s/%s", originalID, action)
-	p.proxyHTTP(w, r, path)
+	p.api.ForwardAction(w, r, originalID, action)
 }
 
-// ForwardLaunch sends a launch request to the spoke. The request body is
-// expected to be JSON matching the /v1/launch schema. Any top-level "peer"
-// field is stripped before forwarding so the spoke treats the request as
-// a local launch; leaving it in place would make the spoke try to forward
-// the request again to a peer of its own with that name (which typically
-// doesn't exist on that side).
+// ForwardLaunch sends a launch request to the spoke. The top-level
+// "peer" field is stripped before forwarding so the spoke treats the
+// request as a local launch.
 func (p *Peer) ForwardLaunch(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	stripped, err := stripPeerField(body)
-	if err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
-		return
-	}
-	r.Body = io.NopCloser(bytes.NewReader(stripped))
-	r.ContentLength = int64(len(stripped))
-	p.proxyHTTP(w, r, "/v1/launch")
-}
-
-// stripPeerField removes the top-level "peer" key from a JSON object body.
-// Exported as a function (not a method) so it can be unit-tested in
-// isolation; callers generally go through ForwardLaunch.
-func stripPeerField(body []byte) ([]byte, error) {
-	var req map[string]any
-	if err := json.Unmarshal(body, &req); err != nil {
-		return nil, err
-	}
-	delete(req, "peer")
-	return json.Marshal(req)
+	p.api.ForwardLaunch(w, r)
 }
 
 // CachedConfig returns the peer's config data, fetched once on each
@@ -137,163 +119,35 @@ func (p *Peer) CachedConfig() json.RawMessage {
 	return p.cachedConfig
 }
 
-// fetchConfig fetches the spoke's /v1/config and caches the result.
-// Called once after each successful SSE connection.
+// fetchConfig fetches the spoke's /v1/config via apiclient and caches
+// the result. Called once after each successful SSE connection. Tests
+// call it directly to exercise the caching path without standing up a
+// full SSE pipeline.
 func (p *Peer) fetchConfig(ctx context.Context) {
-	url := strings.TrimRight(p.Config.URL, "/") + "/v1/config"
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return
-	}
-	p.setAuth(req)
-
-	client := &http.Client{Timeout: 5 * time.Second, Transport: p.transport}
-	resp, err := client.Do(req)
+	data, err := p.api.GetConfig(ctx)
 	if err != nil {
 		log.Printf("peering: %s: fetch config: %v", p.Config.Name, err)
 		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return
-	}
-
-	var envelope struct {
-		OK   bool            `json:"ok"`
-		Data json.RawMessage `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil || !envelope.OK {
-		return
-	}
-
 	p.mu.Lock()
-	p.cachedConfig = envelope.Data
+	p.cachedConfig = data
 	p.mu.Unlock()
 }
 
 // ProxyWS proxies a browser WebSocket connection to the spoke's
-// /ws/{sessionID} endpoint. The hub accepts the browser WS, dials the
-// spoke WS with bearer auth, and pipes bidirectionally.
+// /ws/{sessionID} endpoint. The hub accepts the browser WS, the
+// apiclient dials the spoke WS with bearer auth and pipes the two
+// connections bidirectionally with direction-specific read limits
+// (256 KiB client, 4 MiB spoke) that accommodate large terminal
+// snapshots.
 func (p *Peer) ProxyWS(w http.ResponseWriter, r *http.Request, originalID string) {
-	// Accept browser WebSocket.
-	clientConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-	})
-	if err != nil {
-		log.Printf("peering: %s: ws accept: %v", p.Config.Name, err)
-		return
-	}
-
-	// Dial spoke's WebSocket.
-	base := strings.TrimRight(p.Config.URL, "/")
-	switch {
-	case strings.HasPrefix(base, "https://"):
-		base = "wss://" + base[len("https://"):]
-	case strings.HasPrefix(base, "http://"):
-		base = "ws://" + base[len("http://"):]
-	}
-	spokeURL := fmt.Sprintf("%s/ws/%s", base, originalID)
-	ctx := r.Context()
-	dialOpts := &websocket.DialOptions{}
-	if p.Config.Token != "" {
-		dialOpts.HTTPHeader = http.Header{
-			"Authorization": []string{"Bearer " + p.Config.Token},
-		}
-	}
-	if p.transport != nil {
-		dialOpts.HTTPClient = &http.Client{Transport: p.transport}
-	}
-	spokeConn, _, err := websocket.Dial(ctx, spokeURL, dialOpts)
-	if err != nil {
-		log.Printf("peering: %s: ws dial %s: %v", p.Config.Name, originalID, err)
-		clientConn.Close(websocket.StatusInternalError, "peer unavailable")
-		return
-	}
-
 	log.Printf("peering: %s: ws proxying %s", p.Config.Name, originalID)
-
-	// Match read limits with the main WS proxy.
-	clientConn.SetReadLimit(256 * 1024)
-	spokeConn.SetReadLimit(256 * 1024)
-
-	proxyCtx, proxyCancel := context.WithCancel(ctx)
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	// Spoke → Client
-	go func() {
-		defer wg.Done()
-		defer proxyCancel()
-		for {
-			typ, data, err := spokeConn.Read(proxyCtx)
-			if err != nil {
-				return
-			}
-			if err := clientConn.Write(proxyCtx, typ, data); err != nil {
-				return
-			}
-		}
-	}()
-
-	// Client → Spoke
-	go func() {
-		defer wg.Done()
-		defer proxyCancel()
-		for {
-			typ, data, err := clientConn.Read(proxyCtx)
-			if err != nil {
-				return
-			}
-			if err := spokeConn.Write(proxyCtx, typ, data); err != nil {
-				return
-			}
-		}
-	}()
-
-	wg.Wait()
-
-	clientConn.Close(websocket.StatusNormalClosure, "")
-	spokeConn.Close(websocket.StatusNormalClosure, "")
-	log.Printf("peering: %s: ws disconnected %s", p.Config.Name, originalID)
+	p.api.ProxyWS(w, r, originalID)
 }
 
-// proxyHTTP forwards an HTTP request to the spoke at the given path
-// and copies the response back to the caller.
-func (p *Peer) proxyHTTP(w http.ResponseWriter, r *http.Request, path string) {
-	targetURL := strings.TrimRight(p.Config.URL, "/") + path
-
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	p.setAuth(req)
-	if ct := r.Header.Get("Content-Type"); ct != "" {
-		req.Header.Set("Content-Type", ct)
-	}
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		log.Printf("peering: %s: forward %s: %v", p.Config.Name, path, err)
-		http.Error(w, "peer unavailable", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
-}
-
-// run connects to the spoke's SSE stream and processes events until the
-// context is cancelled. Handles reconnection with exponential backoff.
+// run connects to the spoke's SSE stream and processes events until
+// the context is cancelled. Handles reconnection with exponential
+// backoff.
 func (p *Peer) run(ctx context.Context) {
 	const (
 		initialBackoff = 1 * time.Second
@@ -351,75 +205,42 @@ func (p *Peer) run(ctx context.Context) {
 	}
 }
 
-// subscribe connects to the spoke and processes its SSE stream.
-// The onConnected callback fires once after a successful connection,
-// allowing the caller to track whether the connection was established
-// (used to decide whether to reset backoff).
+// subscribe connects to the spoke and processes its SSE stream via
+// apiclient. The onConnected callback fires once after a successful
+// connection, allowing the caller to track whether the connection was
+// established (used to decide whether to reset backoff).
 func (p *Peer) subscribe(ctx context.Context, onConnected func()) error {
-	url := fmt.Sprintf("%s/v1/events", strings.TrimRight(p.Config.URL, "/"))
+	sse := p.api.Events()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return fmt.Errorf("request: %w", err)
-	}
-	req.Header.Set("Accept", "text/event-stream")
-	p.setAuth(req)
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("auth failed (HTTP %d)", resp.StatusCode)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status %d", resp.StatusCode)
-	}
-
-	p.setStatus(StatusConnected)
-	if onConnected != nil {
-		onConnected()
-	}
-	log.Printf("peering: %s: connected to %s", p.Config.Name, url)
-
-	// Fetch the peer's config once per connection so /v1/config can
-	// serve it from cache without making outgoing HTTP calls.
-	p.fetchConfig(ctx)
-
-	scanner := bufio.NewScanner(resp.Body)
-	// Allow large SSE payloads (sessions can have long command arrays).
-	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
-
-	var currentEvent string
-
-	for scanner.Scan() {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		line := scanner.Text()
-
-		if strings.HasPrefix(line, "event: ") {
-			currentEvent = strings.TrimPrefix(line, "event: ")
-			continue
-		}
-
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
-			if currentEvent != "" {
-				p.handleEvent(currentEvent, []byte(data))
-				currentEvent = ""
+	err := sse.Subscribe(ctx,
+		func() {
+			p.setStatus(StatusConnected)
+			log.Printf("peering: %s: connected to %s/v1/events", p.Config.Name, p.Config.URL)
+			if onConnected != nil {
+				onConnected()
 			}
-			continue
-		}
-	}
+			// Fetch the peer's config once per connection so /v1/config
+			// can serve it from cache without making outgoing HTTP
+			// calls.
+			p.fetchConfig(ctx)
+		},
+		func(ev sseclient.Event) {
+			p.handleEvent(ev.Type, ev.Data)
+		},
+	)
 
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read: %w", err)
+	// Normalize errors so run() + categorizeError see the same shapes
+	// they did before the apiclient migration.
+	switch {
+	case err == nil:
+		return fmt.Errorf("stream ended")
+	case errors.Is(err, sseclient.ErrStreamEnded):
+		return fmt.Errorf("stream ended")
+	case errors.Is(err, sseclient.ErrUnauthorized):
+		return fmt.Errorf("auth failed: %w", err)
+	default:
+		return err
 	}
-	return fmt.Errorf("stream ended")
 }
 
 // sseEvent is the wire format for gmuxd SSE events.
@@ -498,15 +319,6 @@ func (p *Peer) handleEvent(eventType string, data []byte) {
 
 	default:
 		// Unknown event types are silently ignored for forward compatibility.
-	}
-}
-
-// setAuth adds the bearer token to a request if one is configured.
-// Tailscale-discovered peers authenticate via WhoIs identity and have
-// no token; manual and devcontainer peers use bearer tokens.
-func (p *Peer) setAuth(req *http.Request) {
-	if p.Config.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+p.Config.Token)
 	}
 }
 
