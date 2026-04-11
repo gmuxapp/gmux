@@ -221,7 +221,7 @@ func TestUpdateBroadcasts(t *testing.T) {
 func TestUpsertAliveSessionRemovesDeadShadowWithSameSlug(t *testing.T) {
 	s := New()
 	s.Upsert(Session{
-		ID: "file-abc", Kind: "pi", Alive: false,
+		ID: "dead-abc", Kind: "pi", Alive: false,
 		Command: []string{"pi"}, Slug: "rk-1", AdapterTitle: "shadow",
 	})
 	s.Upsert(Session{
@@ -245,7 +245,7 @@ func TestUpsertDeadShadowSkippedWhenAliveSessionExists(t *testing.T) {
 		Slug: "rk-1", AdapterTitle: "live",
 	})
 	s.Upsert(Session{
-		ID: "file-abc", Kind: "pi", Alive: false,
+		ID: "dead-abc", Kind: "pi", Alive: false,
 		Command: []string{"pi"}, Slug: "rk-1", AdapterTitle: "shadow",
 	})
 
@@ -261,7 +261,7 @@ func TestUpsertDeadShadowSkippedWhenAliveSessionExists(t *testing.T) {
 func TestUpdateSlugOnAliveSessionRemovesDeadShadow(t *testing.T) {
 	s := New()
 	s.Upsert(Session{
-		ID: "file-abc", Kind: "pi", Alive: false,
+		ID: "dead-abc", Kind: "pi", Alive: false,
 		Command: []string{"pi"}, Slug: "rk-1", AdapterTitle: "shadow",
 	})
 	s.Upsert(Session{
@@ -281,6 +281,31 @@ func TestUpdateSlugOnAliveSessionRemovesDeadShadow(t *testing.T) {
 	}
 	if items[0].ID != "sess-123" {
 		t.Fatalf("expected live session to remain, got %q", items[0].ID)
+	}
+}
+
+func TestSlugDedup_ScopedToKindAndPeer(t *testing.T) {
+	s := New()
+	// Dead pi session with slug "fix-auth".
+	s.Upsert(Session{ID: "dead-1", Kind: "pi", Alive: false, Command: []string{"pi"}, Slug: "fix-auth"})
+	// Live claude session with the same slug — different kind, should NOT remove the dead pi session.
+	s.Upsert(Session{ID: "live-1", Kind: "claude", Alive: true, Slug: "fix-auth"})
+
+	if len(s.List()) != 2 {
+		t.Fatalf("expected 2 sessions (different kinds coexist), got %d", len(s.List()))
+	}
+
+	// Now a live pi session arrives — should remove the dead pi session.
+	s.Upsert(Session{ID: "live-2", Kind: "pi", Alive: true, Slug: "fix-auth"})
+
+	items := s.List()
+	if len(items) != 2 {
+		t.Fatalf("expected 2 sessions (claude + live pi), got %d", len(items))
+	}
+	for _, item := range items {
+		if item.ID == "dead-1" {
+			t.Error("dead pi session should have been replaced by live pi session")
+		}
 	}
 }
 
@@ -750,31 +775,6 @@ func TestUpsertRemote_BroadcastsEvent(t *testing.T) {
 	}
 }
 
-func TestUpsertRemote_DoesNotClearDismissed(t *testing.T) {
-	s := New()
-	s.Dismiss("sess-1@server")
-	s.UpsertRemote(Session{
-		ID:    "sess-1@server",
-		Kind:  "codex",
-		Alive: true, // live remote session
-		Peer:  "server",
-		Title: "title",
-	})
-	if !s.IsDismissed("sess-1@server") {
-		t.Errorf("remote Upsert must not clear dismissed (dismissal is spoke-side state)")
-	}
-}
 
-func TestUpsert_StillClearsDismissed(t *testing.T) {
-	// Regression guard: local Upsert must still clear the dismissed
-	// flag when the session comes back alive. UpsertRemote's split
-	// from Upsert mustn't break this path.
-	s := New()
-	s.Dismiss("sess-1")
-	s.Upsert(Session{ID: "sess-1", Kind: "pi", Alive: true})
-	if s.IsDismissed("sess-1") {
-		t.Errorf("local Upsert should clear dismissed")
-	}
-}
 
 

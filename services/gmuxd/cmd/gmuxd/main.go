@@ -483,8 +483,38 @@ func serve(stderr io.Writer) int {
 	}
 	projectMgr.SeedIfEmpty()
 
-	// After the first scan, the store has all known sessions. Clean up
-	// orphaned entries in project session arrays.
+	// Populate the store with dead/resumable sessions from projects.
+	// For each session slug in each project, look up the conversations
+	// index to get file metadata and create a store entry. This replaces
+	// the old file scanner's role of creating file-* store entries:
+	// only sessions tracked by a project appear, not every file on disk.
+	if state, err := projectMgr.Load(); err == nil {
+		for _, item := range state.Items {
+			for _, key := range item.Sessions {
+				info, ok := convIndex.LookupBySlug(key)
+				if !ok {
+					// Slug not in conversations index (file may have
+					// been deleted, or key is an ephemeral session ID).
+					// Leave it; cleanup below removes orphaned entries.
+					continue
+				}
+				sess := store.Session{
+					ID:           info.ToolID,
+					CreatedAt:    info.Created.UTC().Format(time.RFC3339),
+					Command:      info.ResumeCommand,
+					Cwd:          info.Cwd,
+					Kind:         info.Kind,
+					Alive:        false,
+					AdapterTitle: info.Title,
+					Slug:         info.Slug,
+				}
+				sessions.Upsert(sess)
+			}
+		}
+	}
+
+	// After store is populated, clean up orphaned project entries
+	// (slugs that no longer resolve to a store session).
 	scanner.OnFirstScan = func() {
 		known := make(map[string]bool)
 		for _, s := range sessions.List() {
@@ -1182,8 +1212,6 @@ func serve(stderr io.Writer) int {
 			}
 			// Remove session from its project's sessions array.
 			projectMgr.DismissSession(sessionID, sess.Slug)
-			// Mark as dismissed so the file scanner doesn't re-create it.
-			sessions.Dismiss(sessionID)
 			// Remove from store — broadcasts session-remove to all clients.
 			sessions.Remove(sessionID)
 			if subs != nil {

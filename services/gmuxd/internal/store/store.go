@@ -3,7 +3,6 @@ package store
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -85,7 +84,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		TerminalCols  uint16            `json:"terminal_cols,omitempty"`
 		TerminalRows  uint16            `json:"terminal_rows,omitempty"`
 		Stale         bool              `json:"stale,omitempty"`
-		Slug     string            `json:"slug,omitempty"`
+		Slug          string            `json:"slug,omitempty"`
 	}
 	return json.Marshal(wire{
 		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,
@@ -124,18 +123,12 @@ type Store struct {
 	sessions       map[string]Session
 	subscribers    map[*subscriber]struct{}
 	commandTitlers map[string]func([]string) string
-
-	// dismissed tracks session IDs that were explicitly dismissed by the
-	// user. The file scanner checks this to avoid re-creating sessions
-	// from files that are still on disk. In-memory only; resets on restart.
-	dismissed map[string]bool
 }
 
 func New() *Store {
 	return &Store{
 		sessions:    make(map[string]Session),
 		subscribers: make(map[*subscriber]struct{}),
-		dismissed:   make(map[string]bool),
 	}
 }
 
@@ -186,7 +179,7 @@ func (s *Store) resolveTitle(sess Session) string {
 func (s *Store) Upsert(sess Session) {
 	sess.Title = s.resolveTitle(sess)
 	sess.Resumable = !sess.Alive && len(sess.Command) > 0
-	s.upsertCommon(sess, true)
+	s.upsertCommon(sess)
 }
 
 // UpsertRemote writes a session that was already fully resolved by a
@@ -199,18 +192,13 @@ func (s *Store) Upsert(sess Session) {
 //
 // Canonicalization, duplicate-slug handling, unique-slug
 // numbering, and event broadcast all still run; only the title and
-// resumable derivation are skipped. The dismissed side-map is NOT
-// cleared for remote sessions: dismissal is spoke-side state and the
-// hub's dismissed map only tracks its own file-scanner output.
+// resumable derivation are skipped.
 func (s *Store) UpsertRemote(sess Session) {
-	s.upsertCommon(sess, false)
+	s.upsertCommon(sess)
 }
 
 // upsertCommon is the shared body of Upsert and UpsertRemote.
-// clearDismissedOnAlive is true for local sessions (where the
-// dismissed map is the hub's own state) and false for remote
-// sessions (where dismissal lives on the spoke).
-func (s *Store) upsertCommon(sess Session, clearDismissedOnAlive bool) {
+func (s *Store) upsertCommon(sess Session) {
 	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
 	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
 	s.mu.Lock()
@@ -218,12 +206,6 @@ func (s *Store) upsertCommon(sess Session, clearDismissedOnAlive bool) {
 	if !skip {
 		s.ensureUniqueSlug(&sess)
 		s.sessions[sess.ID] = sess
-		if clearDismissedOnAlive && sess.Alive {
-			// A live local session clears any dismissed flag so that
-			// if it later exits the file scanner can rediscover it
-			// as resumable.
-			delete(s.dismissed, sess.ID)
-		}
 	}
 	s.mu.Unlock()
 
@@ -310,16 +292,11 @@ func (s *Store) SetTerminalSize(id string, cols, rows uint16) bool {
 	return true
 }
 
-// resolveDuplicateSlugsLocked deduplicates sessions that represent the
-// same logical resumable session (same Slug) under different IDs.
-//
-// Typical case: a dead file-scanned shadow (file-xxxx) and a live runner
-// session (sess-xxxx) for the same underlying conversation.
-//
-// Rules:
-//   - alive beats dead
-//   - non-file IDs beat file-* shadow IDs
-//   - when a dead shadow arrives while a live session exists, skip it
+// resolveDuplicateSlugsLocked deduplicates sessions that share a Slug
+// within the same (kind, peer) scope. When a live session arrives and
+// a dead session with the same slug exists, the dead one is removed.
+// When a dead session arrives and a live one exists, the dead one is
+// skipped.
 func (s *Store) resolveDuplicateSlugsLocked(sess Session) (removed []string, skip bool) {
 	if sess.Slug == "" {
 		return nil, false
@@ -328,20 +305,15 @@ func (s *Store) resolveDuplicateSlugsLocked(sess Session) (removed []string, ski
 		if id == sess.ID || other.Slug != sess.Slug {
 			continue
 		}
-
-		incomingFile := strings.HasPrefix(sess.ID, "file-")
-		otherFile := strings.HasPrefix(other.ID, "file-")
-
+		// Same (kind, peer) scope check.
+		if other.Kind != sess.Kind || other.Peer != sess.Peer {
+			continue
+		}
 		switch {
 		case sess.Alive && !other.Alive:
 			delete(s.sessions, id)
 			removed = append(removed, id)
 		case !sess.Alive && other.Alive:
-			return removed, true
-		case !incomingFile && otherFile:
-			delete(s.sessions, id)
-			removed = append(removed, id)
-		case incomingFile && !otherFile:
 			return removed, true
 		}
 	}
@@ -363,24 +335,6 @@ func (s *Store) Remove(id string) bool {
 		})
 	}
 	return ok
-}
-
-// Dismiss marks a session ID as explicitly dismissed by the user.
-// Dismissed IDs are checked by the file scanner to prevent re-creation
-// from session files still on disk. Clearing the dismissed flag happens
-// automatically when the same ID is re-inserted via Upsert (e.g. the
-// user resumes the session from the tool's own TUI).
-func (s *Store) Dismiss(id string) {
-	s.mu.Lock()
-	s.dismissed[id] = true
-	s.mu.Unlock()
-}
-
-// IsDismissed reports whether a session ID was explicitly dismissed.
-func (s *Store) IsDismissed(id string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.dismissed[id]
 }
 
 // RemoveByPeer removes all sessions belonging to a peer and broadcasts
