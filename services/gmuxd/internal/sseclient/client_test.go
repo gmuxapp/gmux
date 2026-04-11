@@ -423,6 +423,143 @@ func TestSubscribe_RequestURLInvalid(t *testing.T) {
 	}
 }
 
+// ── Idle timeout ──────────────────────────────────────────────────
+
+func TestSubscribe_IdleTimeout_SilentServer(t *testing.T) {
+	// Server accepts the connection, sends headers, then goes silent.
+	// Subscribe should return ErrStreamIdle after the idle timeout.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		w.(http.Flusher).Flush()
+		// Block until client disconnects.
+		<-r.Context().Done()
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL, WithIdleTimeout(100*time.Millisecond))
+	var connected bool
+	err := c.Subscribe(context.Background(),
+		func() { connected = true },
+		func(Event) { t.Error("unexpected event") },
+	)
+	if !connected {
+		t.Error("connected callback should have fired")
+	}
+	if !errors.Is(err, ErrStreamIdle) {
+		t.Errorf("err = %v, want ErrStreamIdle", err)
+	}
+}
+
+func TestSubscribe_IdleTimeout_ActiveServerResets(t *testing.T) {
+	// Server sends events faster than the idle timeout. The timeout
+	// should never fire.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		f := w.(http.Flusher)
+		for i := 0; i < 5; i++ {
+			fmt.Fprintf(w, "event: ping\ndata: %d\n\n", i)
+			f.Flush()
+			time.Sleep(50 * time.Millisecond)
+		}
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL, WithIdleTimeout(200*time.Millisecond))
+	var count int
+	err := c.Subscribe(context.Background(), nil, func(ev Event) {
+		count++
+	})
+	// Server closes stream cleanly after 5 events.
+	if !errors.Is(err, ErrStreamEnded) {
+		t.Errorf("err = %v, want ErrStreamEnded", err)
+	}
+	if count != 5 {
+		t.Errorf("got %d events, want 5", count)
+	}
+}
+
+func TestSubscribe_IdleTimeout_CallerCancelTakesPriority(t *testing.T) {
+	// If the caller cancels before the idle timeout, the error should
+	// be context.Canceled, not ErrStreamIdle.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel quickly, well before the 5s idle timeout.
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	c := New(ts.URL, WithIdleTimeout(5*time.Second))
+	err := c.Subscribe(ctx, nil, func(Event) {})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestSubscribe_IdleTimeout_CommentResetsDeadline(t *testing.T) {
+	// Server sends comment lines (keepalives). Even though they don't
+	// produce events, they should reset the idle timer because they
+	// prove the connection is alive.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		f := w.(http.Flusher)
+		// Send comments every 50ms for 300ms, then one real event, then close.
+		for i := 0; i < 6; i++ {
+			fmt.Fprintln(w, ": keepalive")
+			f.Flush()
+			time.Sleep(50 * time.Millisecond)
+		}
+		fmt.Fprintln(w, "event: done")
+		fmt.Fprintln(w, "data: ok")
+		fmt.Fprintln(w)
+		f.Flush()
+	}))
+	defer ts.Close()
+
+	// Idle timeout is 150ms; the 50ms comment interval keeps it alive
+	// for 300ms total, then the real event arrives.
+	c := New(ts.URL, WithIdleTimeout(150*time.Millisecond))
+	var got []string
+	err := c.Subscribe(context.Background(), nil, func(ev Event) {
+		got = append(got, ev.Type)
+	})
+	if !errors.Is(err, ErrStreamEnded) {
+		t.Errorf("err = %v, want ErrStreamEnded", err)
+	}
+	if len(got) != 1 || got[0] != "done" {
+		t.Errorf("events = %v, want [done]", got)
+	}
+}
+
+func TestSubscribe_NoIdleTimeout_InfiniteByDefault(t *testing.T) {
+	// Without WithIdleTimeout, the client should block until the
+	// server closes or the caller cancels. Here we cancel after 50ms
+	// to prove no spurious ErrStreamIdle.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	c := New(ts.URL) // no idle timeout
+	err := c.Subscribe(ctx, nil, func(Event) {})
+	if errors.Is(err, ErrStreamIdle) {
+		t.Error("got ErrStreamIdle without idle timeout configured")
+	}
+}
+
 func TestSubscribe_ServerReturns500(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)

@@ -22,8 +22,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Default buffer size for SSE event decoding. Matches the size used
@@ -40,6 +42,13 @@ var ErrStreamEnded = errors.New("sse stream ended")
 // with HTTP 401 or 403. Callers typically do not retry this.
 var ErrUnauthorized = errors.New("sse unauthorized")
 
+// ErrStreamIdle is returned by Subscribe when the server sent no data
+// within the configured idle timeout. This covers silent network
+// drops (NAT rebind, Tailscale tunnel hiccup, mobile suspend) where
+// the TCP socket stays open but no bytes flow. Callers treat this
+// like any other disconnect and reconnect.
+var ErrStreamIdle = errors.New("sse stream idle")
+
 // Event is a decoded SSE event. Data is the raw bytes from one or
 // more "data:" lines, concatenated with newlines (per the spec).
 // Callers parse Data according to their own schema.
@@ -54,10 +63,11 @@ type Event struct {
 // URL (e.g. after a reconnect) but not safe for concurrent Subscribe
 // calls from multiple goroutines.
 type Client struct {
-	url       string
-	headers   http.Header
-	transport http.RoundTripper
-	bufSize   int
+	url         string
+	headers     http.Header
+	transport   http.RoundTripper
+	bufSize     int
+	idleTimeout time.Duration
 }
 
 // Option configures a Client.
@@ -99,6 +109,65 @@ func WithBufferSize(n int) Option {
 			c.bufSize = n
 		}
 	}
+}
+
+// WithIdleTimeout configures how long Subscribe waits for any data
+// before returning ErrStreamIdle. The deadline resets on every line
+// received (events, comments, partial frames). A zero or negative
+// value disables idle detection (the default).
+//
+// This is a detection mechanism, not a prevention mechanism: it does
+// not send anything to the server. It simply surfaces silent network
+// drops faster than TCP's default retransmit timeout (which can be
+// minutes or hours on idle connections).
+func WithIdleTimeout(d time.Duration) Option {
+	return func(c *Client) {
+		c.idleTimeout = d
+	}
+}
+
+// idleAwareBody wraps an io.ReadCloser so that reads fail when the
+// idle context is cancelled. Without this, bufio.Scanner.Scan would
+// block forever on a TCP socket that never sends data, because
+// context cancellation alone doesn't interrupt a blocking read on
+// an http.Response.Body.
+type idleAwareBody struct {
+	body io.ReadCloser
+	ctx  context.Context
+}
+
+func (b *idleAwareBody) Read(p []byte) (int, error) {
+	// Fast path: check context before blocking.
+	if err := b.ctx.Err(); err != nil {
+		return 0, err
+	}
+	// Read with a background poll on context. We use a goroutine + select
+	// so the idle timer can unblock a stuck Read. The goroutine exits
+	// when the Read completes OR when the context fires (in which case
+	// closing the body unblocks the Read).
+	type result struct {
+		n   int
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		n, err := b.body.Read(p)
+		ch <- result{n, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.n, r.err
+	case <-b.ctx.Done():
+		// Close the body to unblock the goroutine's Read.
+		b.body.Close()
+		// Wait for it to finish so we don't leak.
+		<-ch
+		return 0, b.ctx.Err()
+	}
+}
+
+func (b *idleAwareBody) Close() error {
+	return b.body.Close()
 }
 
 // New creates a Client pointed at url.
@@ -172,7 +241,33 @@ func (c *Client) Subscribe(ctx context.Context, connected func(), handler func(E
 		connected()
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
+	// Idle timeout: wrap the caller's context with a resettable timer.
+	// When the timer fires it cancels only the inner context, causing
+	// scanner.Scan to fail on the next read. We distinguish this from
+	// a caller-initiated cancel by checking ctx.Err() == nil.
+	idleCtx := ctx
+	idleCancel := func() {} // noop when no idle timeout
+	var idleTimer *time.Timer
+	if c.idleTimeout > 0 {
+		var cancel context.CancelFunc
+		idleCtx, cancel = context.WithCancel(ctx)
+		idleCancel = cancel
+		idleTimer = time.AfterFunc(c.idleTimeout, cancel)
+	}
+	defer idleCancel()
+	if idleTimer != nil {
+		defer idleTimer.Stop()
+	}
+
+	// The HTTP request was made with the caller's ctx, but we need the
+	// idle-aware context to cancel the body read. Attach it by piping
+	// through a context-aware reader.
+	body := resp.Body
+	if idleTimer != nil {
+		body = &idleAwareBody{body: resp.Body, ctx: idleCtx}
+	}
+
+	scanner := bufio.NewScanner(body)
 	// bufio.Scanner uses max(initial cap, configured max) as the real
 	// limit, so the initial cap must not exceed bufSize or the max is
 	// a no-op for small bufSize values.
@@ -184,6 +279,9 @@ func (c *Client) Subscribe(ctx context.Context, connected func(), handler func(E
 
 	var currentEvent string
 	for scanner.Scan() {
+		if idleTimer != nil {
+			idleTimer.Reset(c.idleTimeout)
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -218,13 +316,22 @@ func (c *Client) Subscribe(ctx context.Context, connected func(), handler func(E
 	}
 
 	if err := scanner.Err(); err != nil {
-		// ctx.Err() takes priority: if the caller cancelled, surface
-		// that directly rather than the ambient "context canceled"
-		// wrapped in a read error.
+		// Caller cancel takes priority over any ambient errors.
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
+		// Idle timeout: the inner context was cancelled but the
+		// caller's context is still live.
+		if idleCtx.Err() != nil && ctx.Err() == nil {
+			return ErrStreamIdle
+		}
 		return fmt.Errorf("sse read: %w", err)
+	}
+
+	// Clean EOF: check idle timeout even if scanner didn't error
+	// (the body might have been closed by the idle timer).
+	if idleCtx.Err() != nil && ctx.Err() == nil {
+		return ErrStreamIdle
 	}
 
 	return ErrStreamEnded
