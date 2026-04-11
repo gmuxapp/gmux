@@ -46,7 +46,7 @@ type FileMonitor struct {
 	rootDirs     map[string]bool              // session root dirs being watched
 	sessions     map[string]*monitoredSession // sessionID → info
 	attributions map[string]string            // filePath → sessionID (sticky)
-	activeFiles  map[string]string            // sessionID → filePath (tracks current file for ResumeKey)
+	activeFiles  map[string]string            // sessionID → filePath (tracks current file for Slug)
 	fileOffsets  map[string]int64             // filePath → read offset
 	// pendingDirs maps a session directory path to session IDs that need it.
 	// Used when a session dir doesn't exist yet — we watch the root and
@@ -428,7 +428,7 @@ func (fm *FileMonitor) handleFileChange(path string) {
 	}
 
 	// Track active file per session. When the active file changes
-	// (e.g. /new or /resume in the tool's TUI), update ResumeKey.
+	// (e.g. /new or /resume in the tool's TUI), update Slug.
 	fm.updateActiveFileLocked(sessionID, path)
 
 	ms, ok := fm.sessions[sessionID]
@@ -511,7 +511,7 @@ func (fm *FileMonitor) deriveTitleFromFile(sessionID, filePath string) string {
 // --- Active file tracking ---
 
 // updateActiveFileLocked sets the active file for a session and updates
-// ResumeKey when the file changes. This handles /new and /resume commands
+// Slug when the file changes. This handles /new and /resume commands
 // in the tool's TUI, which start writing to a different session file.
 func (fm *FileMonitor) updateActiveFileLocked(sessionID, filePath string) {
 	prev := fm.activeFiles[sessionID]
@@ -529,13 +529,13 @@ func (fm *FileMonitor) updateActiveFileLocked(sessionID, filePath string) {
 		return
 	}
 
-	resumeKey := info.Slug
-	if resumeKey == "" {
-		resumeKey = adapter.Slugify(info.ID)
+	slug := info.Slug
+	if slug == "" {
+		slug = adapter.Slugify(info.ID)
 	}
 
 	fm.store.Update(sessionID, func(sess *store.Session) {
-		sess.ResumeKey = resumeKey
+		sess.Slug = slug
 	})
 }
 

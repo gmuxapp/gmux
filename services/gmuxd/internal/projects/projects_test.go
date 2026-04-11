@@ -681,7 +681,7 @@ func TestFindSessionProject(t *testing.T) {
 
 func TestSessionKey(t *testing.T) {
 	if key := SessionKey("sess-123", "resume-abc"); key != "resume-abc" {
-		t.Errorf("expected resume key, got %q", key)
+		t.Errorf("expected slug, got %q", key)
 	}
 	if key := SessionKey("sess-123", ""); key != "sess-123" {
 		t.Errorf("expected session ID, got %q", key)
@@ -754,7 +754,7 @@ func TestManagerAutoAssign(t *testing.T) {
 	}
 }
 
-func TestManagerAutoAssignResumeKeyUpgrade(t *testing.T) {
+func TestManagerAutoAssignSlugUpgrade(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)
 
@@ -765,7 +765,7 @@ func TestManagerAutoAssignResumeKeyUpgrade(t *testing.T) {
 		return true
 	})
 
-	// Session initially registered by ID (no resume key yet).
+	// Session initially registered by ID (no slug yet).
 	mgr.AutoAssignSession(SessionInfo{
 		ID: "sess-1", Cwd: "/dev/gmux", Alive: true,
 	})
@@ -775,10 +775,10 @@ func TestManagerAutoAssignResumeKeyUpgrade(t *testing.T) {
 		t.Fatalf("expected sess-1, got %v", state.Items[0].Sessions)
 	}
 
-	// Session gets a resume key (file attributed).
+	// Session gets a slug (file attributed).
 	mgr.AutoAssignSession(SessionInfo{
 		ID: "sess-1", Cwd: "/dev/gmux", Alive: true,
-		ResumeKey: "2026-04-03_abc123.jsonl",
+		Slug: "2026-04-03_abc123.jsonl",
 	})
 
 	state, _ = mgr.Load()
@@ -786,7 +786,7 @@ func TestManagerAutoAssignResumeKeyUpgrade(t *testing.T) {
 		t.Fatalf("expected 1 session after upgrade, got %d", len(state.Items[0].Sessions))
 	}
 	if state.Items[0].Sessions[0] != "2026-04-03_abc123.jsonl" {
-		t.Errorf("expected resume key, got %q", state.Items[0].Sessions[0])
+		t.Errorf("expected slug, got %q", state.Items[0].Sessions[0])
 	}
 }
 
@@ -875,7 +875,7 @@ func TestManagerDismissSessionByIDFallback(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)
 
-	// Array stores session by ID (no resume key at assignment time).
+	// Array stores session by ID (no slug at assignment time).
 	mgr.Update(func(s *State) bool {
 		s.Items = []Item{
 			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"sess-1"}},
@@ -883,7 +883,7 @@ func TestManagerDismissSessionByIDFallback(t *testing.T) {
 		return true
 	})
 
-	// Dismiss provides resume key, but array has the session by ID.
+	// Dismiss provides slug, but array has the session by ID.
 	// DismissSession should fall back to trying the ID.
 	slug := mgr.DismissSession("sess-1", "resume-key-abc")
 	if slug != "gmux" {

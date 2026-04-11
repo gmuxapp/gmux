@@ -40,8 +40,8 @@ func claudeSendAndWait(t *testing.T, g *testutil.Gmuxd, send func(string), sessI
 
 	// Wait for file attribution.
 	g.WaitForSession(sessID, func(s testutil.Session) bool {
-		return s.ResumeKey != ""
-	}, 60*time.Second, "file attribution (resume key)")
+		return s.Slug != ""
+	}, 60*time.Second, "file attribution (slug)")
 }
 
 // TestClaudeTurnAndTitle sends a message and verifies title + attribution.
@@ -68,7 +68,7 @@ func TestClaudeTurnAndTitle(t *testing.T) {
 	t.Logf("title: %q", updated.Title)
 
 	attributed, _ := g.GetSession(sess.ID)
-	t.Logf("resume_key: %s", attributed.ResumeKey)
+	t.Logf("slug: %s", attributed.Slug)
 }
 
 // TestClaudeSecondTurnKeepsTitle verifies title doesn't change on second message.

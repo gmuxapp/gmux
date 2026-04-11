@@ -159,7 +159,7 @@ func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, 
 	if resumes != nil {
 		if existingID, ok := resumes.Take(newSess.Command); ok {
 			if existing, ok := sessions.Get(existingID); ok {
-				// Merge: keep the existing entry's ID and resume_key,
+				// Merge: keep the existing entry's ID and slug,
 				// update with live session data.
 				existing.Alive = true
 				existing.SocketPath = socketPath
@@ -196,9 +196,9 @@ func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, 
 		if err != nil {
 			log.Printf("register: failed to write shell state file for %s: %v", newSess.ID, err)
 		} else {
-			newSess.ResumeKey = adapter.Slugify(filepath.Base(newSess.Cwd))
-			if newSess.ResumeKey == "" {
-				newSess.ResumeKey = "shell"
+			newSess.Slug = adapter.Slugify(filepath.Base(newSess.Cwd))
+			if newSess.Slug == "" {
+				newSess.Slug = "shell"
 			}
 			log.Printf("register: wrote shell state file %s", path)
 		}

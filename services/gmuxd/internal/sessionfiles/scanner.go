@@ -129,11 +129,11 @@ func (sc *Scanner) Scan() {
 
 			wsRoot := workspace.DetectRoot(cwd)
 
-			// ResumeKey uses the adapter-provided slug (title-derived,
+			// Slug uses the adapter-provided slug (title-derived,
 			// human-readable). Falls back to slugified tool ID.
-			resumeKey := info.Slug
-			if resumeKey == "" {
-				resumeKey = adapter.Slugify(info.ID)
+			slug := info.Slug
+			if slug == "" {
+				slug = adapter.Slugify(info.ID)
 			}
 
 			sess := store.Session{
@@ -146,7 +146,7 @@ func (sc *Scanner) Scan() {
 				Remotes:       workspace.DetectRemotes(wsRoot),
 				Alive:         false,
 				AdapterTitle:  info.Title,
-				ResumeKey:     resumeKey,
+				Slug:     slug,
 				// Resumable is derived by Upsert from !Alive + Command.
 			}
 
@@ -174,13 +174,13 @@ func (sc *Scanner) knownToolIDs() map[string]bool {
 	return ids
 }
 
-// PurgeStaleSessions removes dead sessions that have no resume_key and
+// PurgeStaleSessions removes dead sessions that have no slug and
 // are older than maxAge. These are short-lived gmux sessions that exited
 // without ever being attributed to a session file.
 func (sc *Scanner) PurgeStaleSessions(maxAge time.Duration) {
 	now := time.Now().UTC()
 	for _, s := range sc.store.List() {
-		if s.Alive || s.Resumable || s.ResumeKey != "" {
+		if s.Alive || s.Resumable || s.Slug != "" {
 			continue
 		}
 		exited, err := time.Parse(time.RFC3339, s.ExitedAt)

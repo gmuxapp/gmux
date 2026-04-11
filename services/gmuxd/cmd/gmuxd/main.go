@@ -482,15 +482,15 @@ func serve(stderr io.Writer) int {
 		known := make(map[string]bool)
 		for _, s := range sessions.List() {
 			known[s.ID] = true
-			if s.ResumeKey != "" {
-				known[s.ResumeKey] = true
+			if s.Slug != "" {
+				known[s.Slug] = true
 			}
 		}
 		projectMgr.CleanupSessions(known)
 	}
 	go scanner.Run(30*time.Second, stopScanner)
 
-	// Auto-assign sessions to projects when they appear or get a ResumeKey.
+	// Auto-assign sessions to projects when they appear or get a Slug.
 	sessionEvents, unsubSessionEvents := sessions.Subscribe()
 	defer unsubSessionEvents()
 	go func() {
@@ -512,7 +512,7 @@ func serve(stderr io.Writer) int {
 				Remotes:       s.Remotes,
 				Host:          s.Peer,
 				Alive:         s.Alive,
-				ResumeKey:     s.ResumeKey,
+				Slug:     s.Slug,
 			})
 		}
 	}()
@@ -1137,7 +1137,7 @@ func serve(stderr io.Writer) int {
 				adapters.RemoveShellStateFile(sessionID, projects.NormalizePath(sess.Cwd))
 			}
 			// Remove session from its project's sessions array.
-			projectMgr.DismissSession(sessionID, sess.ResumeKey)
+			projectMgr.DismissSession(sessionID, sess.Slug)
 			// Mark as dismissed so the file scanner doesn't re-create it.
 			sessions.Dismiss(sessionID)
 			// Remove from store — broadcasts session-remove to all clients.
@@ -1719,7 +1719,7 @@ func buildSessionInfos(sessions *store.Store) []projects.SessionInfo {
 			Remotes:       s.Remotes,
 			Host:          s.Peer,
 			Alive:         s.Alive,
-			ResumeKey:     s.ResumeKey,
+			Slug:     s.Slug,
 		}
 	}
 	return infos

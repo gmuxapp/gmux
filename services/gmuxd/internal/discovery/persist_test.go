@@ -64,7 +64,7 @@ func TestLoadAttributionsReturnsNilForBadJSON(t *testing.T) {
 // TestPreSeededAttributionSkipsScrollback is the key behavioral test:
 // when a FileMonitor is created with pre-seeded attributions (simulating
 // gmuxd restart), handleFileChange should use the persisted attribution
-// directly. This means the file's title and ResumeKey are restored
+// directly. This means the file's title and Slug are restored
 // without needing scrollback-based matching.
 func TestPreSeededAttributionSkipsScrollback(t *testing.T) {
 	home := t.TempDir()
@@ -128,9 +128,9 @@ func TestPreSeededAttributionSkipsScrollback(t *testing.T) {
 	if sess.AdapterTitle != "fix the login bug" {
 		t.Errorf("expected title 'fix the login bug', got %q", sess.AdapterTitle)
 	}
-	// 2. ResumeKey is the slug derived from the first user message.
-	if sess.ResumeKey != "fix-the-login-bug" {
-		t.Errorf("expected resume_key 'fix-the-login-bug', got %q", sess.ResumeKey)
+	// 2. Slug is the slug derived from the first user message.
+	if sess.Slug != "fix-the-login-bug" {
+		t.Errorf("expected slug 'fix-the-login-bug', got %q", sess.Slug)
 	}
 }
 

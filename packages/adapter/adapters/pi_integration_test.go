@@ -44,8 +44,8 @@ func sendAndWaitForTurn(t *testing.T, g *testutil.Gmuxd, send func(string), sess
 
 	// Wait for file attribution (pi writes the full turn to JSONL after completion).
 	g.WaitForSession(sessID, func(s testutil.Session) bool {
-		return s.ResumeKey != ""
-	}, 30*time.Second, "file attribution (resume key)")
+		return s.Slug != ""
+	}, 30*time.Second, "file attribution (slug)")
 }
 
 // TestPiTurnAndTitle sends a message and verifies title + attribution.
@@ -69,7 +69,7 @@ func TestPiTurnAndTitle(t *testing.T) {
 	updated := g.WaitForSession(sess.ID, func(s testutil.Session) bool {
 		return s.Title != "" && s.Title != "pi" && s.Title != "(new)"
 	}, 15*time.Second, "title from first user message")
-	t.Logf("title=%q resume_key=%s", updated.Title, updated.ResumeKey)
+	t.Logf("title=%q slug=%s", updated.Title, updated.Slug)
 }
 
 // TestPiNameOverridesTitle sends a message, then uses /name to override.
