@@ -1,21 +1,21 @@
 import { describe, it, expect } from 'vitest'
+import type { Session, ProjectItem, PeerInfo } from './types'
+import { normalizeRemote } from './types'
 import {
-  matchSession,
-  buildProjectFolders,
-  normalizeRemote,
   parseSessionPath,
   sessionPath,
   resolveSessionFromPath,
   resolveViewFromPath,
   viewToPath,
   viewsEqual,
+} from './routing'
+import {
+  matchSession,
+  buildProjectFolders,
   parseSessionHostPath,
   buildProjectTopology,
   isSessionVisibleInProject,
-  type Session,
-  type ProjectItem,
-  type PeerInfo,
-} from './types'
+} from './projects'
 
 function makeSession(overrides: Partial<Session> & { id: string; cwd: string }): Session {
   return {

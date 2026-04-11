@@ -5,7 +5,7 @@
  * callbacks and the mobile open/close toggle are passed as props.
  */
 
-import { sessionPath } from './types'
+import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
 import {
