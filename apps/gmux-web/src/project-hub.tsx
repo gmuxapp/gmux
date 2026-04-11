@@ -4,8 +4,10 @@
 // This module is render-only: no data fetching, no business logic.
 // Reads sessions/projects/peers from the store.
 
-import type { HostNode, Session, ProjectItem } from './types'
-import { buildProjectTopology, sessionPath } from './types'
+import type { Session, ProjectItem } from './types'
+import type { HostNode } from './projects'
+import { buildProjectTopology } from './projects'
+import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
 import { sessions, projects, peers } from './store'
 

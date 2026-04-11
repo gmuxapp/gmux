@@ -14,8 +14,10 @@
  */
 
 import { signal, computed, batch, effect } from '@preact/signals'
-import type { Session, ProjectItem, DiscoveredProject, PeerInfo, Folder, View } from './types'
-import { buildProjectFolders, matchSession, resolveViewFromPath, viewToPath, sessionPath } from './types'
+import type { Session, ProjectItem, DiscoveredProject, PeerInfo, Folder } from './types'
+import type { View } from './routing'
+import { resolveViewFromPath, viewToPath, sessionPath } from './routing'
+import { buildProjectFolders, matchSession } from './projects'
 import type { LauncherDef, LaunchConfig } from './launcher'
 import { fetchConfig, invalidateConfigCache, consumePendingLaunch } from './launcher'
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
