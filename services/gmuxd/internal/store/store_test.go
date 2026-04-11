@@ -630,3 +630,151 @@ func TestUpdateCanonicalizesPaths(t *testing.T) {
 		t.Errorf("Cwd after Update = %q, want %q", got.Cwd, "~/projects/app")
 	}
 }
+
+// ── UpsertRemote ───────────────────────────────────────────────
+//
+// UpsertRemote writes a session that was already fully resolved on a
+// peer. Title and Resumable must be preserved verbatim; canonicalization,
+// dedup, and broadcast must still run.
+
+func TestUpsertRemote_PreservesTitle(t *testing.T) {
+	s := New()
+	// A remote session arrives with Title already set (spoke
+	// resolved it) but internal ShellTitle/AdapterTitle empty (those
+	// are off-wire). Upsert would overwrite Title with Kind; UpsertRemote
+	// must not.
+	s.UpsertRemote(Session{
+		ID:    "sess-123@server",
+		Kind:  "codex",
+		Alive: true,
+		Peer:  "server",
+		Title: "fix remote bug",
+	})
+
+	got, ok := s.Get("sess-123@server")
+	if !ok {
+		t.Fatal("expected session to exist")
+	}
+	if got.Title != "fix remote bug" {
+		t.Errorf("Title = %q, want %q (UpsertRemote must not re-resolve)", got.Title, "fix remote bug")
+	}
+}
+
+func TestUpsertRemote_PreservesResumableFromSpoke(t *testing.T) {
+	s := New()
+	// A dead remote session with Resumable explicitly set to false
+	// by the spoke (e.g. a shell session with no command recorded).
+	// Upsert would derive Resumable from !Alive && len(Command) > 0;
+	// UpsertRemote must preserve the spoke's value.
+	s.UpsertRemote(Session{
+		ID:        "sess-1@server",
+		Kind:      "pi",
+		Alive:     false,
+		Command:   []string{"pi"},
+		Peer:      "server",
+		Resumable: false, // spoke says not resumable despite command
+		Title:     "archived",
+	})
+	got, _ := s.Get("sess-1@server")
+	if got.Resumable {
+		t.Errorf("Resumable = true, want false (UpsertRemote must not re-derive)")
+	}
+}
+
+func TestUpsertRemote_CanonicalizesPaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	s := New()
+	s.UpsertRemote(Session{
+		ID:    "sess-path@server",
+		Kind:  "shell",
+		Alive: true,
+		Peer:  "server",
+		Title: "ok",
+		Cwd:   home + "/projects/app",
+	})
+	got, _ := s.Get("sess-path@server")
+	if got.Cwd != "~/projects/app" {
+		t.Errorf("Cwd = %q, want %q (canonicalization must still run)", got.Cwd, "~/projects/app")
+	}
+}
+
+func TestUpsertRemote_DedupsResumeKey(t *testing.T) {
+	s := New()
+	s.UpsertRemote(Session{
+		ID:        "sess-1@server",
+		Kind:      "codex",
+		Alive:     true,
+		Peer:      "server",
+		Title:     "a",
+		ResumeKey: "fix-bug",
+	})
+	s.UpsertRemote(Session{
+		ID:        "sess-2@server",
+		Kind:      "codex",
+		Alive:     true,
+		Peer:      "server",
+		Title:     "b",
+		ResumeKey: "fix-bug",
+	})
+
+	got, _ := s.Get("sess-2@server")
+	if got.ResumeKey == "fix-bug" {
+		t.Errorf("ResumeKey = %q, want a de-duplicated value (e.g. fix-bug-2)", got.ResumeKey)
+	}
+}
+
+func TestUpsertRemote_BroadcastsEvent(t *testing.T) {
+	s := New()
+	ch, cancel := s.Subscribe()
+	defer cancel()
+
+	s.UpsertRemote(Session{
+		ID:    "sess-1@server",
+		Kind:  "codex",
+		Alive: true,
+		Peer:  "server",
+		Title: "hello from spoke",
+	})
+
+	select {
+	case ev := <-ch:
+		if ev.Type != "session-upsert" {
+			t.Errorf("event type = %q, want session-upsert", ev.Type)
+		}
+		if ev.Session == nil || ev.Session.Title != "hello from spoke" {
+			t.Errorf("broadcast session title wrong; got %+v", ev.Session)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("no broadcast")
+	}
+}
+
+func TestUpsertRemote_DoesNotClearDismissed(t *testing.T) {
+	s := New()
+	s.Dismiss("sess-1@server")
+	s.UpsertRemote(Session{
+		ID:    "sess-1@server",
+		Kind:  "codex",
+		Alive: true, // live remote session
+		Peer:  "server",
+		Title: "title",
+	})
+	if !s.IsDismissed("sess-1@server") {
+		t.Errorf("remote Upsert must not clear dismissed (dismissal is spoke-side state)")
+	}
+}
+
+func TestUpsert_StillClearsDismissed(t *testing.T) {
+	// Regression guard: local Upsert must still clear the dismissed
+	// flag when the session comes back alive. UpsertRemote's split
+	// from Upsert mustn't break this path.
+	s := New()
+	s.Dismiss("sess-1")
+	s.Upsert(Session{ID: "sess-1", Kind: "pi", Alive: true})
+	if s.IsDismissed("sess-1") {
+		t.Errorf("local Upsert should clear dismissed")
+	}
+}
+
+

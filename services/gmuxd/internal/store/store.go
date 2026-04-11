@@ -184,18 +184,44 @@ func (s *Store) resolveTitle(sess Session) string {
 }
 
 func (s *Store) Upsert(sess Session) {
-	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
-	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
 	sess.Title = s.resolveTitle(sess)
 	sess.Resumable = !sess.Alive && len(sess.Command) > 0
+	s.upsertCommon(sess, true)
+}
+
+// UpsertRemote writes a session that was already fully resolved by a
+// peer (spoke). Unlike Upsert it does NOT recompute Title or
+// Resumable: those fields are authoritatively set on the spoke and
+// arriving in the SSE payload already. The spoke intentionally keeps
+// its internal ShellTitle/AdapterTitle fields off the wire, so the
+// hub never has enough information to re-resolve correctly and would
+// otherwise overwrite a correct Title with the adapter Kind fallback.
+//
+// Canonicalization, duplicate-resume-key handling, unique-resume-key
+// numbering, and event broadcast all still run; only the title and
+// resumable derivation are skipped. The dismissed side-map is NOT
+// cleared for remote sessions: dismissal is spoke-side state and the
+// hub's dismissed map only tracks its own file-scanner output.
+func (s *Store) UpsertRemote(sess Session) {
+	s.upsertCommon(sess, false)
+}
+
+// upsertCommon is the shared body of Upsert and UpsertRemote.
+// clearDismissedOnAlive is true for local sessions (where the
+// dismissed map is the hub's own state) and false for remote
+// sessions (where dismissal lives on the spoke).
+func (s *Store) upsertCommon(sess Session, clearDismissedOnAlive bool) {
+	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
+	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
 	s.mu.Lock()
 	removed, skip := s.resolveDuplicateResumeKeysLocked(sess)
 	if !skip {
 		s.ensureUniqueResumeKey(&sess)
 		s.sessions[sess.ID] = sess
-		// A live session clears any dismissed flag so that if it later
-		// exits the file scanner can rediscover it as resumable.
-		if sess.Alive {
+		if clearDismissedOnAlive && sess.Alive {
+			// A live local session clears any dismissed flag so that
+			// if it later exits the file scanner can rediscover it
+			// as resumable.
 			delete(s.dismissed, sess.ID)
 		}
 	}
