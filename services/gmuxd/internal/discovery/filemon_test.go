@@ -479,6 +479,134 @@ func TestAttributionStickiness(t *testing.T) {
 	}
 }
 
+// --- Child session dir tests (grove worktree support) ---
+
+func TestPiChildSessionDirAttribution(t *testing.T) {
+	// Simulate a pi session started from ~/dev/gmux that operates in
+	// ~/dev/gmux/.grove/ws-1 (grove worktree). The session file is
+	// created in the worktree's encoded dir, not the terminal cwd's dir.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := "/home/user/dev/gmux"
+	worktreeCwd := "/home/user/dev/gmux/.grove/ws-1"
+	pi := adapters.NewPi()
+
+	// Create both the primary and child session dirs.
+	primaryDir := pi.SessionDir(cwd)
+	childDir := pi.SessionDir(worktreeCwd)
+	if err := os.MkdirAll(primaryDir, 0o755); err != nil {
+		t.Fatalf("mkdir primary: %v", err)
+	}
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatalf("mkdir child: %v", err)
+	}
+
+	s := store.New()
+	s.Upsert(store.Session{
+		ID:         "sess-grove",
+		Cwd:        cwd,
+		Kind:       "pi",
+		Alive:      true,
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
+		SocketPath: "/tmp/fake.sock",
+	})
+
+	fm := NewFileMonitor(s)
+	if fm.watcher != nil {
+		fm.watcher.Close()
+		fm.watcher = nil
+	}
+
+	fm.sessions["sess-grove"] = &monitoredSession{
+		id:         "sess-grove",
+		cwd:        cwd,
+		kind:       "pi",
+		adapter:    pi,
+		fileMon:    pi,
+		filer:      pi,
+		dirMatcher: pi,
+	}
+
+	// Write a session file in the CHILD dir (the grove worktree dir).
+	path := filepath.Join(childDir, "test.jsonl")
+	simulateFileWrite(t, fm, "sess-grove", path,
+		`{"type":"session","id":"grove-123","cwd":"`+worktreeCwd+`","timestamp":"2026-04-12T10:00:00Z"}`,
+		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"fix the build"}]}}`,
+	)
+
+	sess, ok := s.Get("sess-grove")
+	if !ok {
+		t.Fatal("session disappeared")
+	}
+	if sess.AdapterTitle != "fix the build" {
+		t.Errorf("expected title 'fix the build', got %q", sess.AdapterTitle)
+	}
+	if sess.Status == nil || !sess.Status.Working {
+		t.Fatal("expected working=true after user message in child dir")
+	}
+}
+
+func TestPiChildSessionDirAttributionMatchesViaDir(t *testing.T) {
+	// Test that attributeFileLocked builds candidates via child dir matching
+	// when the file is in a child dir, not the primary dir. With a single
+	// candidate and no scrollback, we verify by pre-setting attribution
+	// and confirming the file is processed (title/status updated).
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := "/home/user/dev/gmux"
+	worktreeCwd := "/home/user/dev/gmux/.grove/hazel"
+	pi := adapters.NewPi()
+
+	childDir := pi.SessionDir(worktreeCwd)
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	s := store.New()
+	s.Upsert(store.Session{
+		ID:         "sess-hazel",
+		Cwd:        cwd,
+		Kind:       "pi",
+		Alive:      true,
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
+		SocketPath: "/tmp/fake.sock",
+	})
+
+	fm := NewFileMonitor(s)
+	if fm.watcher != nil {
+		fm.watcher.Close()
+		fm.watcher = nil
+	}
+
+	fm.sessions["sess-hazel"] = &monitoredSession{
+		id:         "sess-hazel",
+		cwd:        cwd,
+		kind:       "pi",
+		adapter:    pi,
+		fileMon:    pi,
+		filer:      pi,
+		dirMatcher: pi,
+	}
+
+	// Use simulateFileWrite which pre-sets attribution (simulating the
+	// cwd-in-scrollback match that would happen in production).
+	path := filepath.Join(childDir, "test.jsonl")
+	simulateFileWrite(t, fm, "sess-hazel", path,
+		`{"type":"session","id":"hazel-123","cwd":"`+worktreeCwd+`","timestamp":"2026-04-12T10:00:00Z"}`,
+		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"refactor auth"}]}}`,
+	)
+
+	sess, ok := s.Get("sess-hazel")
+	if !ok {
+		t.Fatal("session disappeared")
+	}
+	if sess.AdapterTitle != "refactor auth" {
+		t.Errorf("expected title 'refactor auth', got %q", sess.AdapterTitle)
+	}
+}
+
 // --- Claude status lifecycle tests ---
 
 func setupClaudeFileMonitor(t *testing.T) (*FileMonitor, *store.Store, string) {

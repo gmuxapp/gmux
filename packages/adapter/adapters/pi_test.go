@@ -99,6 +99,9 @@ func TestPiImplementsCapabilities(t *testing.T) {
 	if _, ok := a.(adapter.Resumer); !ok {
 		t.Fatal("should implement Resumer")
 	}
+	if _, ok := a.(adapter.ChildSessionDirMatcher); !ok {
+		t.Fatal("should implement ChildSessionDirMatcher")
+	}
 }
 
 // --- SessionFiler ---
@@ -561,6 +564,33 @@ func TestSessionDirEncoding(t *testing.T) {
 	dir := NewPi().SessionDir("/home/mg/dev/gmux")
 	if base := filepath.Base(dir); base != "--home-mg-dev-gmux--" {
 		t.Errorf("expected --home-mg-dev-gmux--, got %s", base)
+	}
+}
+
+func TestMatchSessionDirExact(t *testing.T) {
+	p := NewPi()
+	if !p.MatchSessionDir("/home/mg/dev/gmux", "--home-mg-dev-gmux--") {
+		t.Fatal("should match exact session dir")
+	}
+}
+
+func TestMatchSessionDirChild(t *testing.T) {
+	p := NewPi()
+	if !p.MatchSessionDir("/home/mg/dev/gmux", "--home-mg-dev-gmux-.grove-ws-1--") {
+		t.Fatal("should match child session dir (grove worktree)")
+	}
+	if !p.MatchSessionDir("/home/mg/dev/gmux", "--home-mg-dev-gmux-.grove-hazel--") {
+		t.Fatal("should match child session dir (grove worktree hazel)")
+	}
+}
+
+func TestMatchSessionDirUnrelated(t *testing.T) {
+	p := NewPi()
+	if p.MatchSessionDir("/home/mg/dev/gmux", "--home-mg-dev-yapp--") {
+		t.Fatal("should not match unrelated dir")
+	}
+	if p.MatchSessionDir("/home/mg/dev/gmux", "--home-mg-dev--") {
+		t.Fatal("should not match parent dir")
 	}
 }
 

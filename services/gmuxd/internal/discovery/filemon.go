@@ -63,7 +63,8 @@ type monitoredSession struct {
 	adapter    adapter.Adapter
 	fileMon    adapter.FileMonitor
 	filer      adapter.SessionFiler
-	readAll    bool // true if we should read from beginning on first attribution
+	dirMatcher adapter.ChildSessionDirMatcher // nil if adapter doesn't implement it
+	readAll    bool                           // true if we should read from beginning on first attribution
 }
 
 func NewFileMonitor(s *store.Store) *FileMonitor {
@@ -152,29 +153,33 @@ func (fm *FileMonitor) handleFSEvent(event fsnotify.Event) {
 }
 
 // handleNewSubdirLocked is called when a Create event fires inside a root dir.
-// If the created path matches a pending session directory, we add a watch and
-// try attribution for the waiting sessions.
+// If the created path matches a pending session directory or is a child
+// session dir for any live session, we add a watch.
 func (fm *FileMonitor) handleNewSubdirLocked(path string) {
-	_, pending := fm.pendingDirs[path]
-	if !pending {
-		return
-	}
-
 	// Verify it's actually a directory.
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
 		return
 	}
 
-	// Add watch on the new session directory.
-	fm.addWatchLocked(path)
-	delete(fm.pendingDirs, path)
+	// Check pending dirs first.
+	if _, pending := fm.pendingDirs[path]; pending {
+		fm.addWatchLocked(path)
+		delete(fm.pendingDirs, path)
+		return
+	}
 
-	// Do not eagerly attribute an existing JSONL file here.
-	// A new session may start in a cwd that already has old session files,
-	// and attributing the "most recent" file would leak a stale title into
-	// the new live session. We wait for an actual file write/create event,
-	// then attribute based on the writing file.
+	// Check if any live session's child dir matcher claims this directory.
+	// This handles the case where pi creates a new grove worktree session
+	// dir after the session has already been registered.
+	dirName := filepath.Base(path)
+	for _, ms := range fm.sessions {
+		if ms.dirMatcher != nil && ms.dirMatcher.MatchSessionDir(ms.cwd, dirName) {
+			fm.addWatchLocked(path)
+			log.Printf("filemon: watching new child dir %s for session %s", dirName, ms.id)
+			return
+		}
+	}
 }
 
 // NotifyNewSession registers a session for file monitoring.
@@ -202,6 +207,7 @@ func (fm *FileMonitor) NotifyNewSession(sessionID string) {
 		return
 	}
 
+	dirMatcher, _ := a.(adapter.ChildSessionDirMatcher)
 	fm.sessions[sessionID] = &monitoredSession{
 		id:         sessionID,
 		cwd:        sess.Cwd,
@@ -210,6 +216,7 @@ func (fm *FileMonitor) NotifyNewSession(sessionID string) {
 		adapter:    a,
 		fileMon:    fileMon,
 		filer:      filer,
+		dirMatcher: dirMatcher,
 		readAll:    true,
 	}
 
@@ -239,6 +246,14 @@ func (fm *FileMonitor) NotifyNewSession(sessionID string) {
 	fm.addWatchLocked(dir)
 	log.Printf("filemon: watching %s for session %s (kind=%s)", dir, sessionID, sess.Kind)
 
+	// Watch child session directories. Some tools (pi) may operate in
+	// subdirectories of the terminal cwd (e.g., grove worktrees) and
+	// store session files under a different encoded directory.
+	var childDirs []string
+	if dirMatcher != nil && root != "" {
+		childDirs = fm.watchChildDirsLocked(root, sess.Cwd, dir, dirMatcher)
+	}
+
 	// Eagerly scan for session files. This catches files written before
 	// the watch was set up (e.g. gmuxd restart, or file written between
 	// launch and watch registration). All files are tried so that each
@@ -247,6 +262,9 @@ func (fm *FileMonitor) NotifyNewSession(sessionID string) {
 	// adapter only reads the header line for timestamp comparison).
 	fm.mu.Unlock()
 	fm.scanDirForSessions(dir)
+	for _, cd := range childDirs {
+		fm.scanDirForSessions(cd)
+	}
 	fm.mu.Lock()
 }
 
@@ -384,8 +402,12 @@ func (fm *FileMonitor) NotifySessionDied(sessionID string) {
 
 // dirNeededLocked returns true if any live session needs a watch on dir.
 func (fm *FileMonitor) dirNeededLocked(dir string) bool {
+	dirName := filepath.Base(dir)
 	for _, ms := range fm.sessions {
 		if ms.filer.SessionDir(ms.cwd) == dir {
+			return true
+		}
+		if ms.dirMatcher != nil && ms.dirMatcher.MatchSessionDir(ms.cwd, dirName) {
 			return true
 		}
 	}
@@ -456,6 +478,12 @@ func (fm *FileMonitor) handleFileChange(path string) {
 		fm.store.Update(sessionID, func(s *store.Session) {
 			if s.AdapterTitle == "" || s.AdapterTitle == "(new)" {
 				s.AdapterTitle = title
+				// Also refresh slug when the title transitions from
+				// placeholder to real content (first user message).
+				newSlug := adapter.Slugify(title)
+				if newSlug != "" && (s.Slug == "" || s.Slug == "new") {
+					s.Slug = newSlug
+				}
 			}
 		})
 	}
@@ -545,13 +573,44 @@ func (fm *FileMonitor) persistAttributionsLocked() {
 	saveAttributions(fm.attributions, fm.sessions)
 }
 
+// watchChildDirsLocked scans the session root for directories that match
+// the adapter's child session dir pattern for the given cwd. Returns the
+// list of child directories that were found and watched.
+func (fm *FileMonitor) watchChildDirsLocked(root, cwd, primaryDir string, matcher adapter.ChildSessionDirMatcher) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var childDirs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		fullPath := filepath.Join(root, e.Name())
+		if fullPath == primaryDir {
+			continue // already watched
+		}
+		if matcher.MatchSessionDir(cwd, e.Name()) {
+			fm.addWatchLocked(fullPath)
+			childDirs = append(childDirs, fullPath)
+			log.Printf("filemon: watching child dir %s for cwd %s", e.Name(), cwd)
+		}
+	}
+	return childDirs
+}
+
 // --- Attribution ---
 
 // attributeFileLocked determines which session a file belongs to.
 func (fm *FileMonitor) attributeFileLocked(dir, filePath string) string {
+	dirName := filepath.Base(dir)
 	var candidates []*monitoredSession
 	for _, ms := range fm.sessions {
 		if ms.filer.SessionDir(ms.cwd) == dir {
+			candidates = append(candidates, ms)
+		} else if ms.dirMatcher != nil && ms.dirMatcher.MatchSessionDir(ms.cwd, dirName) {
+			// Child session dir: the tool operates in a subdirectory of
+			// the terminal's cwd (e.g., grove worktree).
 			candidates = append(candidates, ms)
 		}
 	}
@@ -588,7 +647,13 @@ func (fm *FileMonitor) attributeFileLocked(dir, filePath string) string {
 		// This handles /new files during live operation without racing with
 		// sequential session registration during startup scans (where old
 		// files would have stale mtimes).
-		if len(candidates) == 1 {
+		//
+		// Skip this fallback for child dir matches: multiple sessions may
+		// share the same parent cwd and be registered sequentially. Using
+		// the single-candidate fallback here would race with later session
+		// registrations. Wait for a real file write event with scrollback.
+		exactMatch := len(candidates) == 1 && candidates[0].filer.SessionDir(candidates[0].cwd) == dir
+		if exactMatch {
 			if info, err := os.Stat(filePath); err == nil {
 				if time.Since(info.ModTime()) < 30*time.Second {
 					fm.attributions[filePath] = candidates[0].id

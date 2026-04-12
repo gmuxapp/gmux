@@ -16,11 +16,12 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ adapter.Launchable      = (*Pi)(nil)
-	_ adapter.SessionFiler    = (*Pi)(nil)
-	_ adapter.FileMonitor     = (*Pi)(nil)
-	_ adapter.FileAttributor  = (*Pi)(nil)
-	_ adapter.Resumer         = (*Pi)(nil)
+	_ adapter.Launchable             = (*Pi)(nil)
+	_ adapter.SessionFiler           = (*Pi)(nil)
+	_ adapter.FileMonitor            = (*Pi)(nil)
+	_ adapter.FileAttributor         = (*Pi)(nil)
+	_ adapter.Resumer                = (*Pi)(nil)
+	_ adapter.ChildSessionDirMatcher = (*Pi)(nil)
 )
 
 func init() {
@@ -102,10 +103,35 @@ func (p *Pi) SessionDir(cwd string) string {
 	if root == "" {
 		return ""
 	}
+	return filepath.Join(root, piEncodeCwd(cwd))
+}
+
+// MatchSessionDir reports whether dirName could contain session files for
+// a session with the given cwd. Pi sessions may operate in subdirectories
+// of the terminal's cwd (e.g., grove worktrees: the terminal starts in
+// ~/dev/gmux but pi uses ~/dev/gmux/.grove/ws-1 as its cwd). Both the
+// exact match and child-path matches are accepted.
+//
+// The encoding maps /a/b/c to --a-b-c--. A child /a/b/c/d maps to
+// --a-b-c-d--. Both share the prefix --a-b-c- (parent dir name without
+// trailing dash). This prefix match has a theoretical false-positive for
+// paths differing only by - vs / (e.g., /a/b-c vs /a/b/c), but this is
+// harmless: final attribution uses scrollback similarity matching.
+func (p *Pi) MatchSessionDir(cwd string, dirName string) bool {
+	exact := piEncodeCwd(cwd)
+	if dirName == exact {
+		return true
+	}
+	// Prefix for child paths: --a-b-c-- -> --a-b-c-
+	prefix := strings.TrimSuffix(exact, "-")
+	return strings.HasPrefix(dirName, prefix)
+}
+
+// piEncodeCwd encodes a cwd path into pi's session directory name.
+func piEncodeCwd(cwd string) string {
 	abs := paths.NormalizePath(cwd)
 	path := strings.TrimPrefix(abs, "/")
-	encoded := "--" + strings.ReplaceAll(path, "/", "-") + "--"
-	return filepath.Join(root, encoded)
+	return "--" + strings.ReplaceAll(path, "/", "-") + "--"
 }
 
 // ParseSessionFile reads a pi JSONL session file and returns display metadata.
@@ -424,11 +450,67 @@ func ListSessionFiles(dir string) []string {
 // a terminal rendering of the same content the file stores as structured
 // JSONL.
 func (p *Pi) AttributeFile(filePath string, candidates []adapter.FileCandidate) string {
+	// Try content-similarity matching first (conversation text vs scrollback).
 	fileText, err := extractPiText(filePath)
-	if err != nil {
+	if err == nil {
+		if id := attributeByScrollbackNormalized(fileText, candidates); id != "" {
+			return id
+		}
+	}
+
+	// Fallback: match by session file cwd appearing in the scrollback.
+	// Pi's TUI status bar shows the working directory. For grove worktree
+	// sessions, this distinguishes between sessions that share the same
+	// terminal cwd but operate in different worktrees.
+	return p.attributeByCwdInScrollback(filePath, candidates)
+}
+
+// attributeByCwdInScrollback reads the file's session header cwd and
+// checks which candidate's scrollback contains that path. This is only
+// used when the file's cwd differs from the candidate's cwd, which
+// happens with grove worktrees: the terminal starts in ~/dev/gmux but
+// pi uses ~/dev/gmux/.grove/ws-1. The status bar shows the worktree
+// path, so we can match by checking for the file cwd in the scrollback.
+//
+// Returns the best match or "" if no candidate matches.
+func (p *Pi) attributeByCwdInScrollback(filePath string, candidates []adapter.FileCandidate) string {
+	info, err := p.ParseSessionFile(filePath)
+	if err != nil || info.Cwd == "" {
 		return ""
 	}
-	return attributeByScrollbackNormalized(fileText, candidates)
+	fileCwd := info.Cwd
+
+	// Only use this method when the file's cwd differs from the
+	// candidate's cwd. Same-cwd files should use scrollback content
+	// matching instead (handled by the primary attribution path).
+	allSameCwd := true
+	for _, c := range candidates {
+		normCandCwd := paths.NormalizePath(c.Cwd)
+		if normCandCwd != fileCwd {
+			allSameCwd = false
+			break
+		}
+	}
+	if allSameCwd {
+		return ""
+	}
+
+	// Also try the home-relative form (~/dev/gmux/.grove/ws-1)
+	home, _ := os.UserHomeDir()
+	homeCwd := fileCwd
+	if home != "" && strings.HasPrefix(fileCwd, home+"/") {
+		homeCwd = "~" + fileCwd[len(home):]
+	}
+
+	for _, c := range candidates {
+		if c.Scrollback == "" {
+			continue
+		}
+		if strings.Contains(c.Scrollback, fileCwd) || strings.Contains(c.Scrollback, homeCwd) {
+			return c.SessionID
+		}
+	}
+	return ""
 }
 
 // extractPiText reads the tail of a pi JSONL session file and extracts

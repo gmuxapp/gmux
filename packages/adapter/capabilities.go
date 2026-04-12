@@ -104,6 +104,22 @@ type CommandTitler interface {
 	CommandTitle(command []string) string
 }
 
+// ChildSessionDirMatcher is optionally implemented by adapters where the
+// tool's actual working directory may differ from the terminal's cwd.
+// For example, pi detects grove/jj worktrees and uses the worktree path
+// as its session cwd, creating session files in a subdirectory-based
+// session dir rather than the terminal cwd's session dir.
+//
+// When implemented, the file monitor uses this to watch additional session
+// directories and include them as attribution candidates.
+type ChildSessionDirMatcher interface {
+	// MatchSessionDir reports whether dirName (a directory name under
+	// SessionRootDir) could contain session files for a session started
+	// with the given cwd. This includes the exact match (SessionDir)
+	// and any child directories for subdirectories of cwd.
+	MatchSessionDir(cwd string, dirName string) bool
+}
+
 // Resumer is implemented by adapters whose sessions can be resumed
 // after the process exits.
 type Resumer interface {
