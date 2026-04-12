@@ -778,6 +778,118 @@ func TestHandleFileChangeProcessesAttributedImmediately(t *testing.T) {
 	}
 }
 
+// TestOrphanedCandidatesPrunedAfterSessionDeath verifies that candidate
+// files are removed when no live session can claim them (the session died
+// or was never relevant). Without this, tryAttributeUnmatched would
+// retry forever.
+func TestOrphanedCandidatesPrunedAfterSessionDeath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := "/home/user/dev/project"
+	pi := adapters.NewPi()
+	sessionDir := pi.SessionDir(cwd)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s := store.New()
+	s.Upsert(store.Session{
+		ID:         "sess-1",
+		Cwd:        cwd,
+		Kind:       "pi",
+		Alive:      true,
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
+		SocketPath: "/tmp/fake.sock",
+	})
+
+	fm := NewFileMonitorWithAttributions(s, nil)
+	if fm.watcher != nil {
+		fm.watcher.Close()
+		fm.watcher = nil
+	}
+
+	fm.sessions["sess-1"] = &monitoredSession{
+		id:      "sess-1",
+		cwd:     cwd,
+		kind:    "pi",
+		adapter: pi,
+		fileMon: pi,
+		filer:   pi,
+	}
+
+	// Add a candidate file.
+	path := filepath.Join(sessionDir, "test.jsonl")
+	os.WriteFile(path, []byte(`{"type":"session"}\n`), 0o644)
+	fm.candidateFiles[path] = true
+
+	// Session dies.
+	fm.NotifySessionDied("sess-1")
+
+	// tryAttributeUnmatched should prune the orphaned candidate
+	// and return false (nothing left to retry).
+	if fm.tryAttributeUnmatched() {
+		t.Fatal("expected tryAttributeUnmatched to return false after session death")
+	}
+	if len(fm.candidateFiles) != 0 {
+		t.Fatalf("expected empty candidateFiles, got %v", fm.candidateFiles)
+	}
+}
+
+// TestStaleAttributionRequeuesAsCandidate verifies that when a file
+// event arrives for a file attributed to a dead session, the stale
+// attribution is cleared and the file is re-queued as a candidate.
+func TestStaleAttributionRequeuesAsCandidate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := "/home/user/dev/project"
+	pi := adapters.NewPi()
+	sessionDir := pi.SessionDir(cwd)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s := store.New()
+	s.Upsert(store.Session{
+		ID:         "sess-2",
+		Cwd:        cwd,
+		Kind:       "pi",
+		Alive:      true,
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
+		SocketPath: "/tmp/fake.sock",
+	})
+
+	// Pre-seed a stale attribution to sess-dead (not in sessions map).
+	path := filepath.Join(sessionDir, "test.jsonl")
+	fm := NewFileMonitorWithAttributions(s, map[string]string{path: "sess-dead"})
+	if fm.watcher != nil {
+		fm.watcher.Close()
+		fm.watcher = nil
+	}
+
+	// Only sess-2 is live.
+	fm.sessions["sess-2"] = &monitoredSession{
+		id:      "sess-2",
+		cwd:     cwd,
+		kind:    "pi",
+		adapter: pi,
+		fileMon: pi,
+		filer:   pi,
+	}
+
+	os.WriteFile(path, []byte(`{"type":"session"}\n`), 0o644)
+	fm.handleFileChange(path)
+
+	// Stale attribution should be cleared, file re-queued.
+	if _, ok := fm.attributions[path]; ok {
+		t.Fatal("stale attribution should have been cleared")
+	}
+	if !fm.candidateFiles[path] {
+		t.Fatal("file should be in candidate set after stale attribution cleared")
+	}
+}
+
 // --- Claude status lifecycle tests ---
 
 func setupClaudeFileMonitor(t *testing.T) (*FileMonitor, *store.Store, string) {
