@@ -9,7 +9,7 @@ import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
 import {
-  folders, selectedId, currentProjectSlug, health,
+  folders, selectedId, currentProjectSlug,
   activityMap, unmatchedActiveCount, projects, connState,
   updateProjects,
   type DotState,
@@ -197,7 +197,6 @@ export function Sidebar({
   const foldersVal = folders.value
   const selId = selectedId.value
   const curProjectSlug = currentProjectSlug.value
-  const healthVal = health.value
   const unmatchedCount = unmatchedActiveCount.value
   const am = activityMap.value
 

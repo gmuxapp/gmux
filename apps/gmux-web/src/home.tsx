@@ -36,7 +36,11 @@ export function Home() {
             status="connected"
             url={tsUrl}
             details={[
-              healthVal?.version ? `v${healthVal.version}` : undefined,
+              healthVal?.version
+                ? healthVal.update_available
+                  ? `v${healthVal.version} \u2192 v${healthVal.update_available}`
+                  : `v${healthVal.version}`
+                : undefined,
               `${localAlive} active session${localAlive === 1 ? '' : 's'}`,
             ]}
             launchers={localLaunchers}
@@ -78,6 +82,15 @@ export function Home() {
           <button class="home-footer-reload" onClick={() => location.reload()}>
             reload to update
           </button>
+        )}
+        {healthVal?.update_available && (
+          <a
+            class="home-footer-update"
+            href="https://gmux.app/changelog/"
+            target="_blank"
+          >
+            v{healthVal.update_available} available
+          </a>
         )}
       </footer>
     </div>
