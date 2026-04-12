@@ -1461,6 +1461,8 @@ body {
   padding: 32px 32px 48px;
   max-width: 640px;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .home-section-title {
@@ -1631,7 +1633,7 @@ a.home-host-link:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 32px;
+  margin-top: auto;
   padding-top: 16px;
   border-top: 1px solid var(--border);
 }
