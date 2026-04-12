@@ -48,6 +48,7 @@ export function Home() {
               status={p.status}
               url={p.url}
               details={[
+                p.version ? `v${p.version}` : undefined,
                 p.status === 'connected'
                   ? `${p.session_count} active session${p.session_count === 1 ? '' : 's'}`
                   : p.status === 'connecting'
@@ -72,6 +73,15 @@ export function Home() {
           </div>
         </section>
       )}
+
+      <footer class="home-footer">
+        <span class="home-footer-version">Frontend v{__GMUX_VERSION__}</span>
+        {healthVal?.version && healthVal.version !== __GMUX_VERSION__ && (
+          <button class="home-footer-reload" onClick={() => location.reload()}>
+            reload to update
+          </button>
+        )}
+      </footer>
     </div>
   )
 }

@@ -5,6 +5,9 @@ const gmuxdPort = process.env.VITE_DEV_PROXY_PORT || '8790'
 
 export default defineConfig({
   plugins: [preact()],
+  define: {
+    __GMUX_VERSION__: JSON.stringify(process.env.VERSION || 'dev'),
+  },
   server: {
     allowedHosts: true,
     proxy: {

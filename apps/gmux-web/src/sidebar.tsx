@@ -227,20 +227,6 @@ export function Sidebar({
             href="/"
             onClick={onClose}
           >gmux</a>
-          {healthVal?.version ? (
-            <a
-              class={`sidebar-badge${healthVal.update_available ? ' sidebar-badge-update' : ''}`}
-              href="https://gmux.app/changelog/"
-              target="_blank"
-              title={healthVal.update_available
-                ? 'Update available - safe to update while sessions are running'
-                : `gmux ${healthVal.version}`}
-            >
-              {healthVal.update_available
-                ? <>{healthVal.version} &rarr; {healthVal.update_available}</>
-                : healthVal.version}
-            </a>
-          ) : null}
           {connected && !hasProjects && (
             <LaunchButton
               className="sidebar-launch-btn"

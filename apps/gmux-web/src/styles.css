@@ -1600,6 +1600,35 @@ a.home-host-link:hover {
   opacity: 0.4;
 }
 
+.home-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.home-footer-version {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.home-footer-reload {
+  font-size: 11px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.home-footer-reload:hover {
+  color: var(--text);
+}
+
 
 /* ── Mobile ── */
 
