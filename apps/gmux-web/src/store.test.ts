@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { sessions, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap, sessionStaleness, peers, peerAppearance } from './store'
+import { sessions, sessionsLoaded, projects, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap, sessionStaleness, peers, peerAppearance, urlPath, selectedId } from './store'
 import type { Session } from './types'
+import type { ProjectItem } from './types'
 
 function makeSession(overrides: Partial<Session> & { id: string }): Session {
   return {
@@ -27,6 +28,9 @@ function makeSession(overrides: Partial<Session> & { id: string }): Session {
 // Reset signal state between tests.
 beforeEach(() => {
   sessions.value = []
+  projects.value = []
+  sessionsLoaded.value = false
+  urlPath.value = '/'
 })
 
 describe('upsertSession', () => {
@@ -63,6 +67,54 @@ describe('upsertSession', () => {
     expect(sessions.value).toHaveLength(2)
     expect(sessions.value[0].title).toBe('updated')
     expect(sessions.value[1].title).toBe('second')
+  })
+
+  it('rewrites URL when selected session slug changes', () => {
+    const testProjects: ProjectItem[] = [
+      { slug: 'myproject', match: [{ path: '/dev/project' }] },
+    ]
+    projects.value = testProjects
+    sessionsLoaded.value = true
+    sessions.value = [
+      makeSession({ id: 'sess-1', cwd: '/dev/project', kind: 'pi', slug: 'fix-auth' }),
+    ]
+    // Simulate the session being selected via URL.
+    urlPath.value = '/myproject/pi/fix-auth'
+    expect(selectedId.value).toBe('sess-1')
+
+    // SSE upserts with a new slug (e.g., /new changed the active file).
+    upsertSession({
+      id: 'sess-1', alive: true, cwd: '/dev/project', kind: 'pi',
+      slug: 'refactor-login', command: ['pi'], title: 'pi',
+    } as any)
+
+    // URL should be atomically rewritten; session stays selected.
+    expect(urlPath.value).toBe('/myproject/pi/refactor-login')
+    expect(selectedId.value).toBe('sess-1')
+  })
+
+  it('does not rewrite URL when a non-selected session slug changes', () => {
+    const testProjects: ProjectItem[] = [
+      { slug: 'myproject', match: [{ path: '/dev/project' }] },
+    ]
+    projects.value = testProjects
+    sessionsLoaded.value = true
+    sessions.value = [
+      makeSession({ id: 'sess-1', cwd: '/dev/project', kind: 'pi', slug: 'fix-auth' }),
+      makeSession({ id: 'sess-2', cwd: '/dev/project', kind: 'pi', slug: 'old-slug' }),
+    ]
+    urlPath.value = '/myproject/pi/fix-auth'
+    expect(selectedId.value).toBe('sess-1')
+
+    // sess-2's slug changes, but it's not the selected session.
+    upsertSession({
+      id: 'sess-2', alive: true, cwd: '/dev/project', kind: 'pi',
+      slug: 'new-slug', command: ['pi'], title: 'pi',
+    } as any)
+
+    // URL should be unchanged.
+    expect(urlPath.value).toBe('/myproject/pi/fix-auth')
+    expect(selectedId.value).toBe('sess-1')
   })
 })
 

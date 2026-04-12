@@ -300,8 +300,32 @@ export function upsertSession(raw: ProtocolSession): boolean {
   const prev = sessions.value
   const idx = prev.findIndex(s => s.id === updated.id)
   if (idx >= 0) {
+    const old = prev[idx]
     const next = [...prev]
     next[idx] = updated
+
+    // When the currently-selected session changes slug, update the URL
+    // atomically with the session data. Without batch(), the view
+    // computed would see the new sessions (slug changed) but the old
+    // URL (still has the old slug), fail to resolve, and briefly
+    // deselect the session.
+    if (old.slug !== updated.slug && selectedId.value === updated.id) {
+      const project = matchSession(updated, projects.value)
+      if (project) {
+        const newUrl = sessionPath(project.slug, updated)
+        batch(() => {
+          sessions.value = next
+          urlPath.value = newUrl
+        })
+        // Sync the browser URL bar. navigate() calls preact-iso's
+        // loc.route which would also set urlPath via the
+        // useLayoutEffect in App, but we already set it above
+        // inside the batch for atomicity.
+        navigate(newUrl, true)
+        return isNew
+      }
+    }
+
     sessions.value = next
   } else {
     isNew = true
