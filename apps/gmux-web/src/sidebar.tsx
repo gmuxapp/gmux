@@ -5,17 +5,18 @@
  * callbacks and the mobile open/close toggle are passed as props.
  */
 
+import { useState, useCallback } from 'preact/hooks'
 import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
 import {
   folders, selectedId, currentProjectSlug,
   activityMap, unmatchedActiveCount, projects, connState,
-  updateProjects,
+  updateProjects, reorderSessions,
   type DotState,
 } from './store'
 import { PeerLabel } from './peer-label'
-import type { Session, Folder } from './types'
+import type { Session, Folder, ProjectItem } from './types'
 
 // ── Types ──
 
@@ -46,7 +47,28 @@ export const IconBell = ({ muted }: { muted?: boolean }) => (
   </svg>
 )
 
+// ── Drag helpers ──
+
+/** True on devices with a pointer (mouse/trackpad). Touch-only devices
+ *  don't support the HTML5 drag API and setting draggable on them
+ *  interferes with scroll. */
+const canDrag = typeof matchMedia !== 'undefined' && matchMedia('(hover: hover)').matches
+
+interface DragState {
+  /** Index of the item being dragged (in the original array). */
+  from: number
+  /** Current visual insertion target. */
+  over: number
+}
+
 // ── Components ──
+
+function reorder<T>(arr: T[], from: number, to: number): T[] {
+  const next = [...arr]
+  const [item] = next.splice(from, 1)
+  next.splice(to, 0, item)
+  return next
+}
 
 function SessionItem({
   session,
@@ -54,19 +76,29 @@ function SessionItem({
   selected,
   resuming,
   dotState: rawDotState,
+  dragging,
+  dropTarget,
   onResume,
   onClose,
   onClick,
+  onDragStart,
+  onDragOver,
+  onDragEnd,
 }: {
   session: Session
   href: string
   selected: boolean
   resuming?: boolean
   dotState: DotState
+  dragging?: boolean
+  dropTarget?: boolean
   onResume?: (id: string) => void
   onClose?: () => void
   /** Extra side-effects on click (e.g. close mobile sidebar). */
   onClick?: () => void
+  onDragStart?: () => void
+  onDragOver?: () => void
+  onDragEnd?: () => void
 }) {
   const effectiveDotState = resuming ? 'working' : rawDotState
   // Nothing is "unread" if you're already looking at it.
@@ -74,10 +106,18 @@ function SessionItem({
   const arrival = useArrivalPulse(dotState)
   const sleeping = !session.alive && session.resumable
 
+  const cls = [
+    'session-item',
+    selected ? 'selected' : '',
+    dragging ? 'session-dragging' : '',
+    dropTarget ? 'session-drop-target' : '',
+  ].filter(Boolean).join(' ')
+
   return (
     <a
-      class={`session-item ${selected ? 'selected' : ''}`}
+      class={cls}
       href={href}
+      draggable={canDrag && !!onDragStart}
       onClick={(e) => {
         onClick?.()
         if (sleeping) {
@@ -86,6 +126,14 @@ function SessionItem({
         }
       }}
       onAuxClick={(e) => { if (e.button === 1 && onClose) { e.preventDefault(); onClose() } }}
+      onDragStart={(e) => {
+        e.dataTransfer!.effectAllowed = 'move'
+        e.dataTransfer!.setData('text/plain', '')
+        onDragStart?.()
+      }}
+      onDragOver={(e) => { e.preventDefault(); e.dataTransfer!.dropEffect = 'move'; onDragOver?.() }}
+      onDrop={(e) => { e.preventDefault(); onDragEnd?.() }}
+      onDragEnd={onDragEnd}
     >
       {sleeping
         ? <svg class="session-sleep-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
@@ -117,6 +165,7 @@ function SessionItem({
 
 function FolderGroup({
   folder,
+  project,
   selId,
   curProjectSlug,
   resumingId,
@@ -126,6 +175,7 @@ function FolderGroup({
   onClick,
 }: {
   folder: Folder
+  project: ProjectItem
   selId: string | null
   curProjectSlug: string | null
   resumingId: string | null
@@ -134,7 +184,32 @@ function FolderGroup({
   onCloseSession: (session: Session) => void
   onClick?: () => void
 }) {
+  const [drag, setDrag] = useState<DragState | null>(null)
+
+  const handleDragStart = useCallback((idx: number) => {
+    setDrag({ from: idx, over: idx })
+  }, [])
+
+  const handleDragOver = useCallback((idx: number) => {
+    setDrag(prev => prev ? { ...prev, over: idx } : null)
+  }, [])
+
+  const handleDragEnd = useCallback((visible: Session[]) => {
+    if (!drag || drag.from === drag.over) {
+      setDrag(null)
+      return
+    }
+    const reordered = reorder(visible, drag.from, drag.over)
+    const visibleKeys = reordered.map(s => s.slug || s.id)
+    // Preserve keys of non-visible sessions (dead, non-resumable) at the end.
+    const visibleSet = new Set(visibleKeys)
+    const hidden = (project.sessions ?? []).filter(k => !visibleSet.has(k))
+    reorderSessions(project.slug, [...visibleKeys, ...hidden])
+    setDrag(null)
+  }, [drag, project])
+
   const visible = folder.sessions.filter(s => s.alive || s.resumable)
+  const displayItems = drag ? reorder(visible, drag.from, drag.over) : visible
   const isCurrent = curProjectSlug === folder.path
   return (
     <div class="folder">
@@ -155,7 +230,7 @@ function FolderGroup({
         />
       </div>
       <div class="folder-sessions">
-        {visible.map(s => (
+        {displayItems.map((s, i) => (
           <SessionItem
             key={s.id}
             session={s}
@@ -163,9 +238,14 @@ function FolderGroup({
             selected={selId === s.id}
             resuming={resumingId === s.id}
             dotState={sessionDotState(s, am)}
+            dragging={drag !== null && s.id === visible[drag.from]?.id}
+            dropTarget={drag !== null && drag.over === i && drag.from !== i}
             onResume={onResume}
             onClose={() => onCloseSession(s)}
             onClick={onClick}
+            onDragStart={() => handleDragStart(i)}
+            onDragOver={() => handleDragOver(i)}
+            onDragEnd={() => handleDragEnd(visible)}
           />
         ))}
       </div>
@@ -194,15 +274,16 @@ export function Sidebar({
 }) {
   // Read signals; component re-renders only when these values change.
   const foldersVal = folders.value
+  const projectsVal = projects.value
   const selId = selectedId.value
   const curProjectSlug = currentProjectSlug.value
   const unmatchedCount = unmatchedActiveCount.value
   const am = activityMap.value
+  const projectBySlug = new Map(projectsVal.map(p => [p.slug, p]))
 
   const totalVisible = foldersVal.reduce(
     (n, f) => n + f.sessions.filter(s => s.alive || s.resumable).length, 0,
   )
-  const projectsVal = projects.value
   const connected = connState.value === 'connected'
   const hasProjects = projectsVal.length > 0
   const isOnlyHomeProject = projectsVal.length === 1
@@ -234,19 +315,24 @@ export function Sidebar({
           )}
         </div>
         <div class="sidebar-scroll">
-          {foldersVal.map(f => (
-            <FolderGroup
-              key={f.path}
-              folder={f}
-              selId={selId}
-              curProjectSlug={curProjectSlug}
-              resumingId={resumingId}
-              am={am}
-              onResume={onResume}
-              onCloseSession={onCloseSession}
-              onClick={onClose}
-            />
-          ))}
+          {foldersVal.map(f => {
+            const proj = projectBySlug.get(f.path)
+            if (!proj) return null
+            return (
+              <FolderGroup
+                key={f.path}
+                folder={f}
+                project={proj}
+                selId={selId}
+                curProjectSlug={curProjectSlug}
+                resumingId={resumingId}
+                am={am}
+                onResume={onResume}
+                onCloseSession={onCloseSession}
+                onClick={onClose}
+              />
+            )
+          })}
           {connected && totalVisible === 0 && !hasProjects && (
             <div class="sidebar-hint">
               Click <strong>+</strong> to start your first session.
