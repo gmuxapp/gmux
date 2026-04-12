@@ -514,6 +514,133 @@ func TestAttributionStickiness(t *testing.T) {
 	}
 }
 
+// --- Cross-directory attribution tests ---
+
+// TestAttributionAcrossDirectories verifies that a session file in a
+// directory other than SessionDir(cwd) is still attributed to the
+// correct session. This simulates grove worktrees, /resume across
+// cwds, or any scenario where the tool writes to a different dir.
+func TestAttributionAcrossDirectories(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := "/home/user/dev/gmux"
+	otherCwd := "/home/user/dev/gmux/.grove/ws-1"
+	pi := adapters.NewPi()
+
+	// Create session dirs for both cwds.
+	primaryDir := pi.SessionDir(cwd)
+	otherDir := pi.SessionDir(otherCwd)
+	if err := os.MkdirAll(primaryDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s := store.New()
+	s.Upsert(store.Session{
+		ID:         "sess-ws1",
+		Cwd:        cwd,
+		Kind:       "pi",
+		Alive:      true,
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
+		SocketPath: "/tmp/fake.sock",
+	})
+
+	fm := NewFileMonitor(s)
+	if fm.watcher != nil {
+		fm.watcher.Close()
+		fm.watcher = nil
+	}
+
+	fm.sessions["sess-ws1"] = &monitoredSession{
+		id:      "sess-ws1",
+		cwd:     cwd,
+		kind:    "pi",
+		adapter: pi,
+		fileMon: pi,
+		filer:   pi,
+	}
+
+	// Write a session file in the OTHER dir (not the session's cwd dir).
+	// Pre-set attribution to simulate what scrollback matching would do.
+	path := filepath.Join(otherDir, "test.jsonl")
+	simulateFileWrite(t, fm, "sess-ws1", path,
+		`{"type":"session","id":"ws1-123","cwd":"`+otherCwd+`","timestamp":"2026-04-12T10:00:00Z"}`,
+		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"fix the build"}]}}`,
+	)
+
+	sess, ok := s.Get("sess-ws1")
+	if !ok {
+		t.Fatal("session disappeared")
+	}
+	if sess.AdapterTitle != "fix the build" {
+		t.Errorf("expected title 'fix the build', got %q", sess.AdapterTitle)
+	}
+	if sess.Status == nil || !sess.Status.Working {
+		t.Fatal("expected working=true after user message from cross-dir file")
+	}
+}
+
+// TestRecentFileScanSkipsOldFiles verifies that the initial dir scan
+// on session registration only processes files modified after the
+// session started, preventing stale title attribution.
+func TestRecentFileScanSkipsOldFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GMUX_SOCKET_DIR", filepath.Join(home, "gmux-sessions"))
+
+	cwd := "/home/user/dev/project"
+	otherCwd := "/home/user/other/project"
+	pi := adapters.NewPi()
+
+	// Create dirs.
+	for _, c := range []string{cwd, otherCwd} {
+		if err := os.MkdirAll(pi.SessionDir(c), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Write an old file in a DIFFERENT session dir. Without the mtime
+	// filter, the broader directory scanning would find this file and
+	// attribute it to the new session.
+	oldFile := filepath.Join(pi.SessionDir(otherCwd), "old.jsonl")
+	os.WriteFile(oldFile, []byte(
+		`{"type":"session","id":"old","cwd":"`+otherCwd+`","timestamp":"2026-03-01T10:00:00Z"}`+"\n"+
+			`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"old task"}]}}`+"\n",
+	), 0o644)
+	yesterday := time.Now().Add(-24 * time.Hour)
+	os.Chtimes(oldFile, yesterday, yesterday)
+
+	s := store.New()
+	s.Upsert(store.Session{
+		ID:         "sess-new",
+		Cwd:        cwd,
+		Kind:       "pi",
+		Alive:      true,
+		Title:      "pi",
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
+		SocketPath: "/tmp/fake.sock",
+	})
+
+	fm := NewFileMonitor(s)
+	if fm.watcher != nil {
+		defer fm.watcher.Close()
+	}
+
+	fm.NotifyNewSession("sess-new")
+	time.Sleep(500 * time.Millisecond)
+
+	sess, _ := s.Get("sess-new")
+	if sess.Title != "pi" {
+		t.Fatalf("title = %q, want %q (old file in different dir should not be attributed)", sess.Title, "pi")
+	}
+	if len(fm.attributions) != 0 {
+		t.Fatalf("attributions = %v, want none", fm.attributions)
+	}
+}
+
 // --- Claude status lifecycle tests ---
 
 func setupClaudeFileMonitor(t *testing.T) (*FileMonitor, *store.Store, string) {
