@@ -78,13 +78,13 @@ function MainHeader({ session, onRestart }: {
             {session.status.label}
           </div>
         )}
-        <SessionInfoMenu session={session} onRestart={onRestart} />
+        <SessionMenu session={session} onRestart={onRestart} />
       </div>
     </div>
   )
 }
 
-function SessionInfoMenu({ session, onRestart }: {
+function SessionMenu({ session, onRestart }: {
   session: Session
   onRestart?: () => void
 }) {
@@ -114,41 +114,40 @@ function SessionInfoMenu({ session, onRestart }: {
       ? session.binary_hash.slice(0, 8)
       : 'unknown'
 
-  const label = session.kind !== 'shell' ? session.kind : 'shell'
-
   return (
-    <div class="session-info" ref={menuRef}>
+    <div class="session-menu" ref={menuRef}>
       <button
-        class={`session-info-trigger${staleKind ? ' stale' : ''}`}
+        class={`session-menu-trigger${staleKind ? ' stale' : ''}`}
         onClick={() => setOpen(!open)}
-        title={staleKind ? 'Runner outdated' : label}
+        title={staleKind ? 'Runner outdated; click to restart' : 'Session'}
       >
-        {label}
-        {staleKind && <span class="session-info-dot" />}
+        {session.kind}
+        {staleKind && <span class="session-menu-dot" />}
       </button>
       {open && (
-        <div class="session-info-menu">
-          <div class="session-info-row">
-            <span class="session-info-label">runner</span>
-            <span class="session-info-value">{label}</span>
+        <div class="session-menu-dropdown">
+          <div class="session-menu-section-title">Session info</div>
+          <div class="session-menu-row">
+            <span class="session-menu-label">adapter</span>
+            <span class="session-menu-value">{session.kind}</span>
           </div>
-          <div class="session-info-row">
-            <span class="session-info-label">version</span>
-            <span class={`session-info-value${staleKind ? ' stale' : ''}`}>
+          <div class="session-menu-row">
+            <span class="session-menu-label">version</span>
+            <span class={`session-menu-value${staleKind ? ' stale' : ''}`}>
               {versionDisplay}
             </span>
           </div>
           {session.peer && (
-            <div class="session-info-row">
-              <span class="session-info-label">host</span>
-              <span class="session-info-value">{session.peer}</span>
+            <div class="session-menu-row">
+              <span class="session-menu-label">host</span>
+              <span class="session-menu-value">{session.peer}</span>
             </div>
           )}
           {session.alive && onRestart && (
             <>
-              <div class="session-info-divider" />
+              <div class="session-menu-divider" />
               <button
-                class={`session-info-action${staleKind ? ' stale' : ''}`}
+                class={`session-menu-action${staleKind ? ' stale' : ''}`}
                 onClick={() => { setOpen(false); onRestart() }}
               >
                 restart session
