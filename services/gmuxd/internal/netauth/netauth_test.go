@@ -303,6 +303,17 @@ func TestLoginGetWithInvalidURLToken(t *testing.T) {
 	}
 }
 
+func TestManifestAccessibleWithoutAuth(t *testing.T) {
+	h := Middleware(testToken, okHandler())
+	req := httptest.NewRequest("GET", "/manifest.json", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (manifest must be publicly accessible)", rr.Code)
+	}
+}
+
 func TestShutdownBlockedOnNetworkListener(t *testing.T) {
 	h := Middleware(testToken, okHandler())
 
