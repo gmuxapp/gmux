@@ -364,6 +364,15 @@ func TestPiNameDuringWorkPreservesStatus(t *testing.T) {
 	if sess.Status == nil || !sess.Status.Working {
 		t.Fatal("expected working=true preserved after /name")
 	}
+
+	// Subsequent assistant turn should not overwrite the /name title.
+	simulateFileWrite(t, fm, "sess-pi", path,
+		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Done."}]}}`,
+	)
+	sess, _ = s.Get("sess-pi")
+	if sess.AdapterTitle != "Bug fix session" {
+		t.Errorf("/name title should persist after assistant turn, got %q", sess.AdapterTitle)
+	}
 }
 
 func TestPiFullLifecycle(t *testing.T) {
@@ -520,35 +529,6 @@ func TestReadAllSuppressesUnread(t *testing.T) {
 		t.Fatal("incremental writes should still set unread")
 	}
 }
-
-func TestAttributionStickiness(t *testing.T) {
-	s := store.New()
-	fm := NewFileMonitor(s)
-	if fm.watcher != nil {
-		defer fm.watcher.Close()
-	}
-
-	fm.sessions["sess-1"] = &monitoredSession{
-		id:      "sess-1",
-		cwd:     "/tmp",
-		kind:    "codex",
-		adapter: adapters.NewCodex(),
-		filer:   adapters.NewCodex(),
-		fileMon: adapters.NewCodex(),
-	}
-
-	// Pre-set an attribution.
-	fm.attributions["/some/file.jsonl"] = "sess-1"
-
-	// Calling attributeFileLocked should return the cached value for a known file.
-	// (We can't easily test this without the full dir setup, but we verify
-	// the map check in handleFileChange by checking the attributions map.)
-	if fm.attributions["/some/file.jsonl"] != "sess-1" {
-		t.Fatal("attribution should be sticky")
-	}
-}
-
-// --- Cross-directory attribution tests ---
 
 // TestAttributionAcrossDirectories verifies that a session file in a
 // directory other than SessionDir(cwd) is still attributed to the
