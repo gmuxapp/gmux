@@ -452,6 +452,41 @@ func TestPiExhaustedErrorRecovery(t *testing.T) {
 	}
 }
 
+func TestReadAllSuppressesUnread(t *testing.T) {
+	fm, s, dir := setupPiFileMonitor(t)
+	path := filepath.Join(dir, "test.jsonl")
+
+	// Write a complete conversation to the file (simulating pre-existing content).
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(`{"type":"session","id":"test-123","cwd":"/home/user/dev/project","timestamp":"2026-03-19T10:00:00Z"}` + "\n")
+	f.WriteString(`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"fix bug"}]}}` + "\n")
+	f.WriteString(`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Done."}]}}` + "\n")
+	f.Close()
+
+	// Mark readAll to simulate session restart (full file re-read).
+	fm.sessions["sess-pi"].readAll = true
+	fm.attributions[path] = "sess-pi"
+	fm.handleFileChange(path)
+
+	sess, _ := s.Get("sess-pi")
+	if sess.Unread {
+		t.Fatal("readAll parse should not set unread from historical assistant turns")
+	}
+
+	// Subsequent incremental writes should still set unread normally.
+	simulateFileWrite(t, fm, "sess-pi", path,
+		`{"type":"message","id":"u2","message":{"role":"user","content":[{"type":"text","text":"more work"}]}}`,
+		`{"type":"message","id":"a2","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Also done."}]}}`,
+	)
+	sess, _ = s.Get("sess-pi")
+	if !sess.Unread {
+		t.Fatal("incremental writes should still set unread")
+	}
+}
+
 func TestAttributionStickiness(t *testing.T) {
 	s := store.New()
 	fm := NewFileMonitor(s)
