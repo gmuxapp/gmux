@@ -582,6 +582,8 @@ export function TerminalView({
     shell?.addEventListener('touchcancel', clearTouchPan, true)
 
     // Resize strategy:
+    // - A ResizeObserver on the shell element detects all layout changes:
+    //   initial flex settle, sidebar toggle, window resize, etc.
     // - Measure on the next animation frame, after browser layout settles.
     //   In practice width can update before flex heights finish recalculating,
     //   so measuring synchronously in the resize event can read a stale height.
@@ -650,12 +652,18 @@ export function TerminalView({
       scheduleViewportResize()
     }
 
-    // Listen on both: visualViewport fires for soft keyboard / pinch-zoom,
-    // window fires for browser window resize / Playwright setViewportSize.
+    // ResizeObserver on the shell catches layout changes that don't fire
+    // window.resize: initial flex settle, sidebar toggle, CSS transitions.
+    // It fires after layout, so measurements are always up-to-date.
+    const shellObserver = new ResizeObserver(() => onViewportResize())
+    if (shell) shellObserver.observe(shell)
+
+    // Also listen on window/visualViewport for zoom and soft keyboard.
     window.addEventListener('resize', onViewportResize)
     if (vv) vv.addEventListener('resize', onViewportResize)
 
     return () => {
+      shellObserver.disconnect()
       if (resizeTimer !== null) clearTimeout(resizeTimer)
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       if (refocusTimer !== null) clearTimeout(refocusTimer)
