@@ -440,8 +440,6 @@ func (fm *FileMonitor) handleFileChange(path string) {
 // and applies title/status/unread updates to the session. Must be
 // called with fm.mu held.
 func (fm *FileMonitor) processAttributedFileLocked(sessionID, path string) {
-	fm.updateActiveFileLocked(sessionID, path)
-
 	ms, ok := fm.sessions[sessionID]
 	if !ok {
 		return
@@ -452,28 +450,17 @@ func (fm *FileMonitor) processAttributedFileLocked(sessionID, path string) {
 	if readAll {
 		ms.readAll = false
 	}
+
+	// Sync title + slug from the file. On a file change this always
+	// re-derives; on subsequent writes it only re-derives when the
+	// title is still a placeholder (first user message just arrived).
+	fm.syncFileMetadataLocked(sessionID, path)
+
 	if len(lines) == 0 {
 		return
 	}
 
 	events := ms.fileMon.ParseNewLines(lines, path)
-
-	// Re-derive title from the full file when it's still a placeholder.
-	// Skip the (expensive) file parse when the title is already set.
-	if sess, ok := fm.store.Get(sessionID); ok && (sess.AdapterTitle == "" || sess.AdapterTitle == "(new)") {
-		if title := fm.deriveTitleFromFile(sessionID, path); title != "" {
-			fm.store.Update(sessionID, func(s *store.Session) {
-				if s.AdapterTitle == "" || s.AdapterTitle == "(new)" {
-					s.AdapterTitle = title
-					newSlug := adapter.Slugify(title)
-					if newSlug != "" && (s.Slug == "" || s.Slug == "new") {
-						s.Slug = newSlug
-					}
-				}
-			})
-		}
-	}
-
 	if len(events) == 0 {
 		return
 	}
@@ -501,39 +488,32 @@ func (fm *FileMonitor) processAttributedFileLocked(sessionID, path string) {
 	})
 }
 
-// deriveTitleFromFile parses the full session file and returns the best
-// title (name > first user message > "").
-func (fm *FileMonitor) deriveTitleFromFile(sessionID, filePath string) string {
-	ms, ok := fm.sessions[sessionID]
-	if !ok {
-		return ""
-	}
-	filer, ok := ms.adapter.(adapter.SessionFiler)
-	if !ok {
-		return ""
-	}
-	info, err := filer.ParseSessionFile(filePath)
-	if err != nil || info.Title == "" {
-		return ""
-	}
-	return info.Title
-}
-
 // --- Active file tracking ---
 
-// updateActiveFileLocked sets the active file for a session and updates
-// Slug when the file changes.
-func (fm *FileMonitor) updateActiveFileLocked(sessionID, filePath string) {
-	prev := fm.activeFiles[sessionID]
-	if prev == filePath {
-		return
-	}
+// syncFileMetadataLocked derives slug and title from the session file.
+// Called when the active file changes (always re-derives) and on each
+// write (re-derives only when the title is still a placeholder, since
+// the first user message may arrive after attribution).
+func (fm *FileMonitor) syncFileMetadataLocked(sessionID, filePath string) {
+	fileChanged := fm.activeFiles[sessionID] != filePath
 	fm.activeFiles[sessionID] = filePath
 
 	ms, ok := fm.sessions[sessionID]
 	if !ok {
 		return
 	}
+
+	// Skip the file parse when nothing interesting could have changed.
+	if !fileChanged {
+		sess, ok := fm.store.Get(sessionID)
+		if !ok {
+			return
+		}
+		if sess.AdapterTitle != "" && sess.AdapterTitle != "(new)" {
+			return // title already set, same file
+		}
+	}
+
 	info, err := ms.filer.ParseSessionFile(filePath)
 	if err != nil || info.ID == "" {
 		return
@@ -546,6 +526,9 @@ func (fm *FileMonitor) updateActiveFileLocked(sessionID, filePath string) {
 
 	fm.store.Update(sessionID, func(sess *store.Session) {
 		sess.Slug = slug
+		if fileChanged || sess.AdapterTitle == "" || sess.AdapterTitle == "(new)" {
+			sess.AdapterTitle = info.Title
+		}
 	})
 }
 

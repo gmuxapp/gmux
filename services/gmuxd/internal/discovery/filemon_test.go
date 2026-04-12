@@ -103,12 +103,14 @@ func TestActiveFileTracking(t *testing.T) {
 
 	// Attribute file1 to the session.
 	fm.attributions[file1] = "sess-1"
-	fm.updateActiveFileLocked("sess-1", file1)
+	fm.syncFileMetadataLocked("sess-1", file1)
 
 	sess, _ := s.Get("sess-1")
-	// slug is now a slug derived from the first user message ("hello").
 	if sess.Slug != "hello" {
 		t.Fatalf("expected slug 'hello', got %q", sess.Slug)
+	}
+	if sess.AdapterTitle != "hello" {
+		t.Fatalf("expected title 'hello', got %q", sess.AdapterTitle)
 	}
 
 	// Create second file (simulating /new command).
@@ -120,18 +122,50 @@ func TestActiveFileTracking(t *testing.T) {
 
 	// Attribute file2 to the same session.
 	fm.attributions[file2] = "sess-1"
-	fm.updateActiveFileLocked("sess-1", file2)
+	fm.syncFileMetadataLocked("sess-1", file2)
 
 	sess, _ = s.Get("sess-1")
 	if sess.Slug != "new-topic" {
 		t.Fatalf("expected slug updated to 'new-topic', got %q", sess.Slug)
 	}
+	if sess.AdapterTitle != "new topic" {
+		t.Fatalf("expected title updated to 'new topic', got %q", sess.AdapterTitle)
+	}
 
 	// Same file again — should be a no-op.
-	fm.updateActiveFileLocked("sess-1", file2)
+	fm.syncFileMetadataLocked("sess-1", file2)
 	sess, _ = s.Get("sess-1")
 	if sess.Slug != "new-topic" {
 		t.Fatalf("slug should still be 'new-topic', got %q", sess.Slug)
+	}
+	if sess.AdapterTitle != "new topic" {
+		t.Fatalf("title should still be 'new topic', got %q", sess.AdapterTitle)
+	}
+}
+
+func TestActiveFileChangeResetsTitleForPi(t *testing.T) {
+	fm, s, dir := setupPiFileMonitor(t)
+
+	// First session file with a user message.
+	file1 := filepath.Join(dir, "session-aaa.jsonl")
+	simulateFileWrite(t, fm, "sess-pi", file1,
+		`{"type":"session","id":"aaa","cwd":"/home/user/dev/project","timestamp":"2026-04-12T10:00:00Z"}`,
+		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"fix the auth bug"}]}}`,
+	)
+	sess, _ := s.Get("sess-pi")
+	if sess.AdapterTitle != "fix the auth bug" {
+		t.Fatalf("expected title 'fix the auth bug', got %q", sess.AdapterTitle)
+	}
+
+	// /new creates a second file. Simulate attribution via the throttled path.
+	file2 := filepath.Join(dir, "session-bbb.jsonl")
+	simulateFileWrite(t, fm, "sess-pi", file2,
+		`{"type":"session","id":"bbb","cwd":"/home/user/dev/project","timestamp":"2026-04-12T11:00:00Z"}`,
+		`{"type":"message","id":"u2","message":{"role":"user","content":[{"type":"text","text":"refactor the login flow"}]}}`,
+	)
+	sess, _ = s.Get("sess-pi")
+	if sess.AdapterTitle != "refactor the login flow" {
+		t.Fatalf("expected title 'refactor the login flow' after /new, got %q", sess.AdapterTitle)
 	}
 }
 
