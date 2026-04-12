@@ -436,8 +436,9 @@ func (fm *FileMonitor) handleFileChange(path string) {
 		return
 	}
 
-	lines := fm.readNewLines(path, ms.readAll)
-	if ms.readAll {
+	readAll := ms.readAll
+	lines := fm.readNewLines(path, readAll)
+	if readAll {
 		ms.readAll = false
 	}
 	if len(lines) == 0 {
@@ -481,7 +482,9 @@ func (fm *FileMonitor) handleFileChange(path string) {
 					}
 				}
 			}
-			if evt.Unread != nil {
+			// Skip unread events from full-file re-reads (e.g. session
+			// restart). Historical assistant turns are not new output.
+			if evt.Unread != nil && !readAll {
 				sess.Unread = *evt.Unread
 			}
 		}
