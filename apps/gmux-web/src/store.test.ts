@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { sessions, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap } from './store'
+import { sessions, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap, sessionStaleness } from './store'
 import type { Session } from './types'
 
 function makeSession(overrides: Partial<Session> & { id: string }): Session {
@@ -157,5 +157,60 @@ describe('activity tracking', () => {
     handleActivity('sess-1')     // reset
     vi.advanceTimersByTime(2000) // 2s since reset, still active
     expect(isSessionActive('sess-1')).toBe(true)
+  })
+})
+
+describe('sessionStaleness', () => {
+  const h = { version: '1.2.0', runner_hash: 'aabbccdd1122' }
+
+  it('returns null when health is null (not yet loaded)', () => {
+    expect(sessionStaleness({ runner_version: '1.1.0' }, null)).toBeNull()
+  })
+
+  it('returns null when runner_version is absent (pre-version runner)', () => {
+    expect(sessionStaleness({}, h)).toBeNull()
+    expect(sessionStaleness({ binary_hash: 'aabbccdd1122' }, h)).toBeNull()
+  })
+
+  it("returns 'version' when runner version differs from daemon version", () => {
+    expect(sessionStaleness({ runner_version: '1.1.0' }, h)).toBe('version')
+    expect(sessionStaleness({ runner_version: '0.9.0' }, h)).toBe('version')
+  })
+
+  it('returns null when runner and daemon versions match and no hash info', () => {
+    expect(sessionStaleness({ runner_version: '1.2.0' }, { version: '1.2.0' })).toBeNull()
+  })
+
+  it('returns null when versions and hashes both match', () => {
+    expect(sessionStaleness(
+      { runner_version: '1.2.0', binary_hash: 'aabbccdd1122' }, h,
+    )).toBeNull()
+  })
+
+  it("returns 'hash' when versions match but hashes differ (dev-mode drift)", () => {
+    expect(sessionStaleness(
+      { runner_version: '1.2.0', binary_hash: 'deadbeef9999' }, h,
+    )).toBe('hash')
+  })
+
+  it("returns 'version' not 'hash' when both differ (version takes priority)", () => {
+    expect(sessionStaleness(
+      { runner_version: '1.1.0', binary_hash: 'deadbeef9999' }, h,
+    )).toBe('version')
+  })
+
+  it("returns null for 'dev'/'dev' version match with no hash available", () => {
+    // Common in dev: both report "dev", hash unknown on health side
+    expect(sessionStaleness(
+      { runner_version: 'dev', binary_hash: 'aabbcc' },
+      { version: 'dev' },
+    )).toBeNull()
+  })
+
+  it("returns 'hash' for 'dev'/'dev' version match with differing hashes", () => {
+    expect(sessionStaleness(
+      { runner_version: 'dev', binary_hash: 'deadbeef' },
+      { version: 'dev', runner_hash: 'aabbccdd' },
+    )).toBe('hash')
   })
 })

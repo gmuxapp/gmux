@@ -24,6 +24,7 @@ import {
   urlPath,
   initStore, setNavigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
+  sessionStaleness,
 } from './store'
 
 // Lazy-loaded routes (code-split, not bundled with the main app)
@@ -40,26 +41,6 @@ if (USE_MOCK) document.documentElement.classList.add('mock-mode')
 installCopySession()
 
 // ── Components ──
-
-/**
- * Derive staleness from version and hash fields.
- *
- * A session is stale when:
- *   - runner_version differs from the daemon version (normal production case), OR
- *   - versions match (both "dev") but binary_hash differs from runner_hash
- *     (dev-mode: same version string, different builds)
- *
- * Returns null when the runner predates version tracking (graceful degradation).
- */
-function sessionStaleness(
-  session: Session,
-  h: { version: string; runner_hash?: string } | null,
-): 'version' | 'hash' | null {
-  if (!h || !session.runner_version) return null
-  if (session.runner_version !== h.version) return 'version'
-  if (session.binary_hash && h.runner_hash && session.binary_hash !== h.runner_hash) return 'hash'
-  return null
-}
 
 function MainHeader({ session, onRestart }: {
   session: Session | null
@@ -104,8 +85,8 @@ function MainHeader({ session, onRestart }: {
           <button
             class="stale-badge"
             title={staleKind === 'hash'
-              ? `Dev build mismatch (${session.binary_hash?.slice(0, 8)} vs ${healthVal?.runner_hash?.slice(0, 8)}) — click to restart`
-              : `Runner v${session.runner_version} outdated (daemon v${healthVal?.version}) — click to restart`
+              ? `Dev build mismatch: ${session.binary_hash?.slice(0, 8)} vs ${healthVal?.runner_hash?.slice(0, 8)}. Click to restart.`
+              : `Runner v${session.runner_version} outdated (daemon v${healthVal?.version}). Click to restart.`
             }
             onClick={onRestart}
           >
