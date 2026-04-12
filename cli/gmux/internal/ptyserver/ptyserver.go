@@ -114,6 +114,7 @@ type Server struct {
 	ptyRows        uint16    // last applied PTY rows (guarded by mu)
 	cursorHidden   bool      // tracks DECTCEM via callback (guarded by mu)
 	screenPending  []byte    // raw PTY data not yet fed to screen (guarded by mu)
+	lastClientLeft time.Time // when the last WS client disconnected (guarded by mu)
 
 	done    chan struct{} // closed when child exits
 	ptyDone chan struct{} // closed when readPTY finishes draining
@@ -535,6 +536,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.clients[client] = struct{}{}
+	s.lastClientLeft = time.Time{} // reset: we have an active viewer
 	s.mu.Unlock()
 
 	// Client connected — they'll see the scrollback, so clear unread
@@ -546,6 +548,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		delete(s.clients, client)
 		noClients := len(s.clients) == 0 && s.localOut == nil
+		if len(s.clients) == 0 {
+			s.lastClientLeft = time.Now()
+		}
 		s.mu.Unlock()
 
 		// When the last viewer disconnects, shrink the PTY by 1 column.
@@ -694,6 +699,11 @@ func (s *Server) resize(msg ResizeMsg) {
 	}
 }
 
+// activityGrace is the time after the last WS client disconnects before
+// activity events are emitted. Suppresses false positives during session
+// switching when the old session briefly has zero clients.
+const activityGrace = 500 * time.Millisecond
+
 // coalesceMaxBytes is the maximum accumulated data before forcing a flush,
 // even if the coalesce timer hasn't fired yet. Keeps latency bounded.
 const coalesceMaxBytes = 32 * 1024
@@ -744,10 +754,16 @@ func (s *Server) readPTY() {
 			clients = append(clients, c)
 		}
 		hasRemoteClients := len(clients) > 0
+		lastLeft := s.lastClientLeft
 		s.mu.Unlock()
 
+		// Emit activity only when no client is viewing and the grace
+		// period has elapsed. The grace period suppresses false positives
+		// during session switching (brief disconnect window).
 		if !hasRemoteClients && s.state != nil {
-			s.state.EmitActivity()
+			if lastLeft.IsZero() || time.Since(lastLeft) > activityGrace {
+				s.state.EmitActivity()
+			}
 		}
 
 		if localOut != nil {
