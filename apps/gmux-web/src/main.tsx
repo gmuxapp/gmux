@@ -95,8 +95,11 @@ function SessionMenu({ session, onRestart }: {
   // For remote sessions, compare against the peer's version (not the local
   // daemon's). Peers don't expose runner_hash, so only version comparison
   // is possible for remote sessions.
+  const peerVersion = session.peer
+    ? peers.value.find(p => p.name === session.peer)?.version
+    : undefined
   const compareTarget = session.peer
-    ? { version: peers.value.find(p => p.name === session.peer)?.version ?? '' }
+    ? (peerVersion ? { version: peerVersion } : null)
     : healthVal
   const staleKind = sessionStaleness(session, compareTarget)
 
