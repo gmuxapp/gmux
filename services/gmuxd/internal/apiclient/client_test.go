@@ -32,11 +32,11 @@ func TestNew_WithBearerToken(t *testing.T) {
 	}
 }
 
-// ── GetConfig ─────────────────────────────────────────────────────
+// ── GetHealth ─────────────────────────────────────────────────────
 
-func TestGetConfig_Success(t *testing.T) {
+func TestGetHealth_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/config" {
+		if r.URL.Path != "/v1/health" {
 			http.NotFound(w, r)
 			return
 		}
@@ -44,14 +44,14 @@ func TestGetConfig_Success(t *testing.T) {
 			http.Error(w, "unauth", http.StatusUnauthorized)
 			return
 		}
-		_, _ = w.Write([]byte(`{"ok":true,"data":{"port":8790,"hostname":"test"}}`))
+		_, _ = w.Write([]byte(`{"ok":true,"data":{"version":"0.8.0","hostname":"test"}}`))
 	}))
 	defer ts.Close()
 
 	c := New(ts.URL, WithBearerToken("the-token"))
-	data, err := c.GetConfig(context.Background())
+	data, err := c.GetHealth(context.Background())
 	if err != nil {
-		t.Fatalf("GetConfig: %v", err)
+		t.Fatalf("GetHealth: %v", err)
 	}
 	var parsed map[string]any
 	if err := json.Unmarshal(data, &parsed); err != nil {
@@ -62,14 +62,14 @@ func TestGetConfig_Success(t *testing.T) {
 	}
 }
 
-func TestGetConfig_Unauthorized(t *testing.T) {
+func TestGetHealth_Unauthorized(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nope", http.StatusUnauthorized)
 	}))
 	defer ts.Close()
 
 	c := New(ts.URL, WithBearerToken("wrong"))
-	_, err := c.GetConfig(context.Background())
+	_, err := c.GetHealth(context.Background())
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -78,27 +78,27 @@ func TestGetConfig_Unauthorized(t *testing.T) {
 	}
 }
 
-func TestGetConfig_EnvelopeOkFalse(t *testing.T) {
+func TestGetHealth_EnvelopeOkFalse(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":false}`))
 	}))
 	defer ts.Close()
 
 	c := New(ts.URL)
-	_, err := c.GetConfig(context.Background())
+	_, err := c.GetHealth(context.Background())
 	if err == nil {
 		t.Fatal("expected error for ok=false")
 	}
 }
 
-func TestGetConfig_BadJSON(t *testing.T) {
+func TestGetHealth_BadJSON(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`not json`))
 	}))
 	defer ts.Close()
 
 	c := New(ts.URL)
-	_, err := c.GetConfig(context.Background())
+	_, err := c.GetHealth(context.Background())
 	if err == nil {
 		t.Fatal("expected error for bad JSON")
 	}

@@ -2,7 +2,6 @@ package peering
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"sync"
 
@@ -212,13 +211,19 @@ func (m *Manager) PeerStatus() []PeerInfo {
 				alive++
 			}
 		}
-		infos = append(infos, PeerInfo{
+		info := PeerInfo{
 			Name:         name,
 			URL:          mp.peer.Config.URL,
 			Status:       mp.peer.Status().String(),
 			SessionCount: alive,
 			LastError:    mp.peer.LastError(),
-		})
+		}
+		if h, ok := mp.peer.CachedHealth(); ok {
+			info.Version = h.Version
+			info.DefaultLauncher = h.DefaultLauncher
+			info.Launchers = h.Launchers
+		}
+		infos = append(infos, info)
 	}
 	return infos
 }
@@ -241,22 +246,4 @@ func (m *Manager) HasPeers() bool {
 	return len(m.peers) > 0
 }
 
-// PeerConfigs returns the cached /v1/config data from all connected peers.
-// Config is fetched once per SSE connection and served from memory.
-// Peers that are not connected or whose config has not been fetched are omitted.
-func (m *Manager) PeerConfigs() map[string]json.RawMessage {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 
-	var results map[string]json.RawMessage
-	for name, mp := range m.peers {
-		data := mp.peer.CachedConfig()
-		if data != nil {
-			if results == nil {
-				results = make(map[string]json.RawMessage)
-			}
-			results[name] = data
-		}
-	}
-	return results
-}

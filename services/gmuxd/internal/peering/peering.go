@@ -68,13 +68,34 @@ func (s Status) String() string {
 	}
 }
 
+// LauncherDef describes a single launchable adapter on a gmuxd instance.
+type LauncherDef struct {
+	ID          string   `json:"id"`
+	Label       string   `json:"label"`
+	Command     []string `json:"command"`
+	Description string   `json:"description,omitempty"`
+	Available   bool     `json:"available"`
+}
+
+// SpokeHealth is the subset of a spoke's /v1/health response that the
+// hub caches and serves to the frontend. Parsed from the raw JSON on
+// each connection.
+type SpokeHealth struct {
+	Version         string        `json:"version"`
+	DefaultLauncher string        `json:"default_launcher"`
+	Launchers       []LauncherDef `json:"launchers"`
+}
+
 // PeerInfo is the public status of a single peer connection.
 type PeerInfo struct {
-	Name         string `json:"name"`
-	URL          string `json:"url"`
-	Status       string `json:"status"`
-	SessionCount int    `json:"session_count"`
-	LastError    string `json:"last_error,omitempty"`
+	Name            string        `json:"name"`
+	URL             string        `json:"url"`
+	Status          string        `json:"status"`
+	SessionCount    int           `json:"session_count"`
+	LastError       string        `json:"last_error,omitempty"`
+	Version         string        `json:"version,omitempty"`
+	DefaultLauncher string        `json:"default_launcher,omitempty"`
+	Launchers       []LauncherDef `json:"launchers,omitempty"`
 }
 
 // NamespaceID returns a store-key for a remote session: "originalID@peerName".

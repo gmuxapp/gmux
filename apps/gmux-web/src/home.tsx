@@ -2,10 +2,9 @@
 // Reads shared data from the store (signals).
 
 import { useState } from 'preact/hooks'
-import { health, peers, folders, sessions, launchConfig } from './store'
-import type { Folder } from './types'
-import type { LauncherDef } from './launcher'
-import { launchSession, launchersForPeer } from './launcher'
+import { health, peers, folders, sessions, launchers as launchersSignal, defaultLauncher as defaultLauncherSignal, launchSession } from './store'
+import type { Folder, LauncherDef } from './types'
+import { launchersForPeer } from './launcher'
 
 /** Strip protocol and trailing slash for display: "https://foo.bar/" → "foo.bar" */
 function displayHost(url: string): string {
@@ -17,15 +16,14 @@ export function Home() {
   const peersVal = peers.value
   const foldersVal = folders.value
   const sessionsVal = sessions.value
-  const config = launchConfig.value
-
   const localAlive = sessionsVal.filter(s => !s.peer && s.alive).length
   const hostname = healthVal?.hostname ?? 'local'
   const tsUrl = healthVal?.tailscale_url
 
-  const localLaunchers = config?.launchers ?? []
+  const localLaunchers = launchersSignal.value
+  const localDefault = defaultLauncherSignal.value
   const peerLaunchers = (peer: string) =>
-    config ? launchersForPeer(config, peer).launchers : []
+    launchersForPeer(localLaunchers, localDefault, peersVal, peer).launchers
 
   return (
     <div class="home">

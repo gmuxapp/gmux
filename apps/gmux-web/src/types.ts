@@ -65,11 +65,22 @@ export interface DiscoveredProject {
   active_count: number
 }
 
-/** Mirrors /v1/peers entries. */
+/** Mirrors /v1/health peers entries. */
 export interface PeerInfo {
   name: string
   url: string
   status: string // 'connected' | 'connecting' | 'disconnected' | 'offline'
   session_count: number
   last_error?: string
+  version?: string
+  default_launcher?: string
+  launchers?: LauncherDef[]
+}
+
+export interface LauncherDef {
+  id: string
+  label: string
+  command: string[]
+  description?: string
+  available: boolean
 }

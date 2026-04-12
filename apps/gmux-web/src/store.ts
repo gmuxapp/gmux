@@ -14,12 +14,11 @@
  */
 
 import { signal, computed, batch, effect } from '@preact/signals'
-import type { Session, ProjectItem, DiscoveredProject, PeerInfo, Folder } from './types'
+import type { Session, ProjectItem, DiscoveredProject, PeerInfo, LauncherDef, Folder } from './types'
 import type { View } from './routing'
 import { resolveViewFromPath, viewToPath, sessionPath } from './routing'
 import { buildProjectFolders, matchSession } from './projects'
-import type { LauncherDef, LaunchConfig } from './launcher'
-import { fetchConfig, invalidateConfigCache, consumePendingLaunch } from './launcher'
+
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS } from './mock-data/index'
 import type { ITerminalOptions } from '@xterm/xterm'
@@ -36,14 +35,17 @@ export const discovered = signal<DiscoveredProject[]>([])
 export const unmatchedActiveCount = signal(0)
 
 export const peers = signal<PeerInfo[]>([])
-export const launchConfig = signal<LaunchConfig | null>(null)
-export const launchers = computed(() => launchConfig.value?.launchers ?? [])
+export const launchers = signal<LauncherDef[]>([])
+export const defaultLauncher = signal<string>('shell')
 
 export interface HealthData {
   version: string
   hostname?: string
   tailscale_url?: string
   update_available?: string
+  default_launcher?: string
+  launchers?: LauncherDef[]
+  peers?: PeerInfo[]
 }
 export const health = signal<HealthData | null>(null)
 
@@ -263,15 +265,7 @@ async function fetchSessions(): Promise<Session[]> {
   return data.map(toUISession)
 }
 
-async function fetchPeersAPI(): Promise<PeerInfo[]> {
-  try {
-    const resp = await fetch('/v1/peers')
-    const json = await resp.json()
-    return json?.data ?? []
-  } catch {
-    return []
-  }
-}
+
 
 export async function fetchProjects(): Promise<void> {
   try {
@@ -289,17 +283,23 @@ export async function fetchProjects(): Promise<void> {
   }
 }
 
-let _healthCache: HealthData | null = null
+function applyHealth(h: HealthData) {
+  batch(() => {
+    health.value = h
+    peers.value = h.peers ?? []
+    launchers.value = h.launchers ?? []
+    defaultLauncher.value = h.default_launcher ?? 'shell'
+  })
+}
 
-async function fetchHealth(): Promise<HealthData | null> {
-  if (_healthCache) return _healthCache
+async function fetchHealth(): Promise<void> {
   try {
     const resp = await fetch('/v1/health')
     const json = await resp.json()
-    _healthCache = json.data ?? null
-    return _healthCache
+    const h: HealthData | null = json.data ?? null
+    if (h) applyHealth(h)
   } catch {
-    return null
+    // Health fetch is best-effort; UI works without it.
   }
 }
 
@@ -373,6 +373,36 @@ export function restartSession(sessionId: string): Promise<void> {
   return postAction(`/v1/sessions/${sessionId}/restart`)
 }
 
+// ── Launch ───────────────────────────────────────────────────────────────────
+
+let _pendingLaunchAt = 0
+
+export async function launchSession(launcherId: string, opts?: { cwd?: string; peer?: string }): Promise<void> {
+  _pendingLaunchAt = Date.now()
+  try {
+    const resp = await fetch('/v1/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ launcher_id: launcherId, cwd: opts?.cwd, peer: opts?.peer }),
+    })
+    if (!resp.ok) console.warn('/v1/launch failed:', resp.status, await resp.text().catch(() => ''))
+  } catch (err) {
+    console.warn('/v1/launch error:', err)
+  }
+}
+
+/**
+ * Check + clear the pending-launch flag. Returns true if a launch was
+ * kicked off within `maxAgeMs` and the caller should auto-select the
+ * newly-arrived session.
+ */
+function consumePendingLaunch(maxAgeMs = 10_000): boolean {
+  if (!_pendingLaunchAt) return false
+  const fresh = Date.now() - _pendingLaunchAt < maxAgeMs
+  _pendingLaunchAt = 0
+  return fresh
+}
+
 // ── Initialization ──────────────────────────────────────────────────────────
 
 const USE_MOCK = import.meta.env.VITE_MOCK === '1' ||
@@ -439,9 +469,7 @@ export function initStore(): () => void {
     console.error('Failed to fetch sessions:', err)
     connState.value = 'error'
   })
-  fetchConfig().then(cfg => { launchConfig.value = cfg })
-  fetchHealth().then(h => { health.value = h })
-  fetchPeersAPI().then(p => { peers.value = p })
+  fetchHealth()
   fetchFrontendConfig().then(fc => {
     const macCtrl = fc.settings?.macCommandIsCtrl === true
     batch(() => {
@@ -512,8 +540,7 @@ export function initStore(): () => void {
   })
 
   source.addEventListener('peer-status', () => {
-    fetchPeersAPI().then(p => { peers.value = p }).catch(() => {})
-    invalidateConfigCache()
+    fetchHealth()
   })
 
   cleanups.push(() => source.close())

@@ -624,6 +624,10 @@ func serve(stderr io.Writer) int {
 			"dead":         dead,
 		}
 
+		// Launchers: what adapters can be launched on this host.
+		data["default_launcher"] = launchConfig.DefaultLauncher
+		data["launchers"] = launchConfig.Launchers
+
 		writeJSON(w, map[string]any{"ok": true, "data": data})
 	})
 
@@ -640,27 +644,6 @@ func serve(stderr io.Writer) int {
 		})
 	})
 
-	// ── Peers ──
-
-	mux.HandleFunc("GET /v1/peers", func(w http.ResponseWriter, r *http.Request) {
-		peers := appendOfflinePeers(peerManager, tsDiscovery)
-		writeJSON(w, map[string]any{"ok": true, "data": peers})
-	})
-
-	// ── Config ──
-
-	mux.HandleFunc("GET /v1/config", func(w http.ResponseWriter, r *http.Request) {
-		data := map[string]any{
-			"default_launcher": launchConfig.DefaultLauncher,
-			"launchers":        launchConfig.Launchers,
-		}
-		if peerManager != nil {
-			if peerConfigs := peerManager.PeerConfigs(); len(peerConfigs) > 0 {
-				data["peers"] = peerConfigs
-			}
-		}
-		writeJSON(w, map[string]any{"ok": true, "data": data})
-	})
 
 	// Frontend config (read from disk on each request so users can edit
 	// and refresh without restarting gmuxd).
@@ -1400,11 +1383,24 @@ func serve(stderr io.Writer) int {
 		ch, cancel := sessions.Subscribe()
 		defer cancel()
 
+		// Heartbeat: send an SSE comment every 30s to keep the connection
+		// alive through idle periods. Without this, the hub's sseclient
+		// idle timeout (60s) would fire on legitimately idle spokes, and
+		// the browser's EventSource would have no way to detect a dead
+		// hub connection.
+		heartbeat := time.NewTicker(30 * time.Second)
+		defer heartbeat.Stop()
+
 		notify := r.Context().Done()
 		for {
 			select {
 			case <-notify:
 				return
+			case <-heartbeat.C:
+				// SSE comment line: resets the client's idle timer
+				// without producing a client-side event.
+				fmt.Fprint(w, ":\n\n")
+				flusher.Flush()
 			case ev, open := <-ch:
 				if !open {
 					return
