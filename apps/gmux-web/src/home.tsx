@@ -2,7 +2,8 @@
 // Reads shared data from the store (signals).
 
 import { useState } from 'preact/hooks'
-import { health, peers, folders, sessions, launchers as launchersSignal, defaultLauncher as defaultLauncherSignal, launchSession, peerAppearance } from './store'
+import { health, peers, folders, sessions, launchers as launchersSignal, defaultLauncher as defaultLauncherSignal, launchSession } from './store'
+import { PeerLabel } from './peer-label'
 import type { Folder, LauncherDef } from './types'
 import { launchersForPeer } from './launcher'
 
@@ -135,10 +136,7 @@ function HostCard({
     <div class="home-host-card">
       <div class="home-host-top">
         <span class={`home-host-status ${status}`} />
-        {peer && (() => {
-          const a = peerAppearance.value.get(name)
-          return <span class="session-peer-label" style={a && { color: a.color, background: a.bg }}>{a?.label ?? name[0].toUpperCase()}</span>
-        })()}
+        {peer && <PeerLabel name={name} />}
         <span class="home-host-name">{name}</span>
       </div>
       <div class="home-host-details">

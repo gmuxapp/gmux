@@ -255,6 +255,17 @@ describe('peerAppearance', () => {
     expect(map.get('desktop')!.label).toBe('DES')
   })
 
+  it('uses full name when one name is a prefix of another', () => {
+    peers.value = [
+      { name: 'dev', url: '', status: 'connected', session_count: 0 },
+      { name: 'development', url: '', status: 'connected', session_count: 0 },
+    ]
+    const map = peerAppearance.value
+    // 'dev' is fully consumed before it diverges from 'development'
+    expect(map.get('dev')!.label).toBe('DEV')
+    expect(map.get('development')!.label).toBe('DEVE')
+  })
+
   it('assigns colors sequentially by list order', () => {
     peers.value = [
       { name: 'alpha', url: '', status: 'connected', session_count: 0 },
