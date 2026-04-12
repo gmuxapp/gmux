@@ -104,6 +104,40 @@ function simulateInput(
   return { stoppedBeforeXterm: immediateStopped }
 }
 
+/**
+ * Simulate Android autocorrect: deleteContentBackward with non-collapsed
+ * selection, immediately followed by insertText with collapsed selection.
+ *
+ * Returns whether the insertText's input event was stopped before xterm.
+ */
+function simulateAndroidAutocorrect(
+  textarea: ReturnType<typeof createFakeTextarea>,
+  container: ReturnType<typeof createFakeContainer>,
+  data: string,
+): { stoppedBeforeXterm: boolean } {
+  // Phase 1a: beforeinput deleteContentBackward
+  textarea.dispatch('beforeinput', {
+    inputType: 'deleteContentBackward',
+    data: null,
+    dataTransfer: null,
+  })
+
+  // Browser applies the deletion
+  const delStart = textarea.selectionStart
+  const delEnd = textarea.selectionEnd
+  textarea.value = textarea.value.substring(0, delStart) + textarea.value.substring(delEnd)
+  textarea.selectionStart = textarea.selectionEnd = delStart
+
+  // Phase 1b: input deleteContentBackward (container capture → textarea)
+  const delResult = container.dispatch('input', { inputType: 'deleteContentBackward', data: null })
+  if (!delResult.immediateStopped) {
+    textarea.dispatch('input', { inputType: 'deleteContentBackward', data: null })
+  }
+
+  // Phase 2: the insertText half
+  return simulateInput(textarea, container, 'insertText', data)
+}
+
 // ── Tests ──
 
 describe('attachMobileInputHandler', () => {
@@ -247,6 +281,129 @@ describe('attachMobileInputHandler', () => {
     expect(sent).toBe('\x7f'.repeat(4) + 'test')
   })
 
+  // ── Android autocorrect (deleteContentBackward + insertText) ──
+
+  it('handles Android autocorrect at end of line', () => {
+    // Trace from real Android device (Chrome 146, GBoard):
+    // User typed "lets", keyboard corrects to "let's "
+    //   deleteContentBackward selStart=36 selEnd=37 (deletes "s")
+    //   insertText data="'s " selStart=36 selEnd=36
+    textarea.value = 'hello , let\'s autocorrect thists lets'
+    textarea.selectionStart = 36
+    textarea.selectionEnd = 37
+
+    const { stoppedBeforeXterm } = simulateAndroidAutocorrect(textarea, container, "'s ")
+
+    expect(stoppedBeforeXterm).toBe(true)
+    // 1 backspace (erase from deleteStart=36 to end=37) + replacement + no suffix
+    expect(sent).toBe('\x7f' + "'s ")
+    // Textarea reset to pre-autocorrect value to neutralize _handleAnyTextareaChanges
+    expect(textarea.value).toBe('hello , let\'s autocorrect thists lets')
+  })
+
+  it('handles Android autocorrect in the middle of text', () => {
+    // "helo world" → correct "helo" to "hello"
+    // delete "lo" (positions 2-4), insert "llo"
+    textarea.value = 'helo world'
+    textarea.selectionStart = 2
+    textarea.selectionEnd = 4
+
+    const { stoppedBeforeXterm } = simulateAndroidAutocorrect(textarea, container, 'llo')
+
+    expect(stoppedBeforeXterm).toBe(true)
+    // 8 backspaces (erase from deleteStart=2 to end=10: "lo world")
+    // then replacement "llo" + suffix " world"
+    expect(sent).toBe('\x7f'.repeat(8) + 'llo world')
+    // Textarea reset to pre-autocorrect value
+    expect(textarea.value).toBe('helo world')
+  })
+
+  it('does not treat collapsed backspace + typing as autocorrect', () => {
+    // Non-collapsed delete sets tracking
+    textarea.value = 'hello world'
+    textarea.selectionStart = 5
+    textarea.selectionEnd = 8
+    textarea.dispatch('beforeinput', {
+      inputType: 'deleteContentBackward',
+      data: null,
+      dataTransfer: null,
+    })
+
+    // Collapsed delete (normal backspace) should clear the stale tracking
+    textarea.value = 'helloorld'
+    textarea.selectionStart = 5
+    textarea.selectionEnd = 5
+    textarea.dispatch('beforeinput', {
+      inputType: 'deleteContentBackward',
+      data: null,
+      dataTransfer: null,
+    })
+
+    // This insertText should pass through as a normal append, not autocorrect
+    textarea.value = 'hellorld'
+    textarea.selectionStart = 4
+    textarea.selectionEnd = 4
+
+    const { stoppedBeforeXterm } = simulateInput(textarea, container, 'insertText', 'o')
+
+    expect(sent).toBe('')
+    expect(stoppedBeforeXterm).toBe(false)
+  })
+
+  it('clears tracked deletion when a non-text event intervenes', () => {
+    textarea.value = 'hello'
+    textarea.selectionStart = 3
+    textarea.selectionEnd = 5
+
+    // deleteContentBackward with non-collapsed selection
+    textarea.dispatch('beforeinput', {
+      inputType: 'deleteContentBackward',
+      data: null,
+      dataTransfer: null,
+    })
+
+    // An unrelated event type intervenes, clearing the tracked deletion
+    textarea.dispatch('beforeinput', {
+      inputType: 'insertCompositionText',
+      data: null,
+      dataTransfer: null,
+    })
+
+    // The following insertText should be treated as a normal append
+    textarea.value = 'hel'
+    textarea.selectionStart = 3
+    textarea.selectionEnd = 3
+
+    const { stoppedBeforeXterm } = simulateInput(textarea, container, 'insertText', 'p')
+
+    expect(sent).toBe('')
+    expect(stoppedBeforeXterm).toBe(false)
+  })
+
+  it('handles successive Android autocorrects independently', () => {
+    // First autocorrect: "teh" → "the"
+    textarea.value = 'teh wrld'
+    textarea.selectionStart = 0
+    textarea.selectionEnd = 3
+
+    let r = simulateAndroidAutocorrect(textarea, container, 'the')
+    expect(r.stoppedBeforeXterm).toBe(true)
+    expect(sent).toBe('\x7f'.repeat(8) + 'the wrld')
+    expect(textarea.value).toBe('teh wrld') // reset
+
+    sent = ''
+
+    // Second autocorrect: "wrld" → "world" (on the reset textarea)
+    textarea.value = 'the wrld'
+    textarea.selectionStart = 4
+    textarea.selectionEnd = 8
+
+    r = simulateAndroidAutocorrect(textarea, container, 'world')
+    expect(r.stoppedBeforeXterm).toBe(true)
+    expect(sent).toBe('\x7f'.repeat(4) + 'world')
+    expect(textarea.value).toBe('the wrld') // reset
+  })
+
   // ── Edge cases ──
 
   it('ignores replacement with empty text', () => {
@@ -260,12 +417,12 @@ describe('attachMobileInputHandler', () => {
     expect(stoppedBeforeXterm).toBe(false)
   })
 
-  it('ignores non-text input types', () => {
+  it('ignores unhandled input types', () => {
     textarea.value = 'hello'
     textarea.selectionStart = 0
     textarea.selectionEnd = 5
 
-    const { stoppedBeforeXterm } = simulateInput(textarea, container, 'deleteContentBackward', '')
+    const { stoppedBeforeXterm } = simulateInput(textarea, container, 'insertLineBreak', '')
 
     expect(sent).toBe('')
     expect(stoppedBeforeXterm).toBe(false)
