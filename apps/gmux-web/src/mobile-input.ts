@@ -88,6 +88,16 @@ export function attachMobileInputHandler(
   const textarea = term.textarea
   if (!textarea) return () => {}
 
+  // Autocorrect / word-replacement is a mobile-keyboard concern (iOS,
+  // Android). On desktop, xterm.js manages the textarea selection
+  // internally and may leave non-collapsed ranges that our handler would
+  // misinterpret as autocorrect replacements, sending spurious backspaces.
+  // Track the pointer type dynamically so tablet-mode switches are handled.
+  const pointerQuery = window.matchMedia('(pointer: coarse)')
+  let isTouchPrimary = pointerQuery.matches
+  const onPointerChange = () => { isTouchPrimary = pointerQuery.matches }
+  pointerQuery.addEventListener('change', onPointerChange)
+
   let pending: PendingReplacement | null = null
   let trackedDeletion: TrackedDeletion | null = null
 
@@ -109,6 +119,8 @@ export function attachMobileInputHandler(
 
   // Phase 1: detect replacement and send backspaces.
   const onBeforeInput = (ev: InputEvent) => {
+    if (!isTouchPrimary) return
+
     // Snapshot and clear tracked deletion at the top; only the
     // deleteContentBackward branch may re-set it below.
     const deletion = trackedDeletion
@@ -180,6 +192,7 @@ export function attachMobileInputHandler(
   container.addEventListener('input', onInput, { capture: true })
 
   return () => {
+    pointerQuery.removeEventListener('change', onPointerChange)
     textarea.removeEventListener('beforeinput', onBeforeInput, { capture: true })
     container.removeEventListener('input', onInput, { capture: true })
   }

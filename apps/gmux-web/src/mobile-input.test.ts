@@ -1,5 +1,24 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { attachMobileInputHandler } from './mobile-input'
+
+// Mock window.matchMedia to simulate a touch-primary device.
+// The handler guards on (pointer: coarse) and is a no-op on desktop.
+const matchMediaMock = vi.fn().mockImplementation((query: string) => ({
+  matches: query === '(pointer: coarse)',
+  media: query,
+  addEventListener: vi.fn(),
+  removeEventListener: vi.fn(),
+  addListener: vi.fn(),
+  removeListener: vi.fn(),
+  onchange: null,
+  dispatchEvent: vi.fn(),
+}))
+
+// Vitest runs in Node (no DOM); provide minimal window stub.
+if (typeof globalThis.window === 'undefined') {
+  (globalThis as any).window = globalThis
+}
+Object.defineProperty(window, 'matchMedia', { value: matchMediaMock, writable: true, configurable: true })
 
 // ── Test helpers ──
 
@@ -446,5 +465,53 @@ describe('attachMobileInputHandler', () => {
   it('returns noop when terminal has no textarea', () => {
     const d = attachMobileInputHandler({ textarea: null } as any, container as any, send)
     d() // should not throw
+  })
+
+  it('is a no-op on desktop (pointer: fine)', () => {
+    dispose()
+
+    // Temporarily override matchMedia to report a fine pointer (desktop).
+    matchMediaMock.mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      onchange: null,
+      dispatchEvent: vi.fn(),
+    }))
+
+    const desktopSent: string[] = []
+    const desktopDispose = attachMobileInputHandler(
+      { textarea } as any,
+      container as any,
+      (data) => { desktopSent.push(data) },
+    )
+
+    // Set up a non-collapsed selection (xterm internal state on desktop)
+    textarea.value = 'old content from previous input'
+    textarea.selectionStart = 0
+    textarea.selectionEnd = 30
+
+    // Insert text with non-collapsed selection: on mobile this would
+    // trigger the iOS replacement path, on desktop it must be ignored.
+    simulateInput(textarea, container, 'insertText', ' ')
+
+    expect(desktopSent).toEqual([])
+
+    desktopDispose()
+
+    // Restore touch mock for other tests.
+    matchMediaMock.mockImplementation((query: string) => ({
+      matches: query === '(pointer: coarse)',
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      onchange: null,
+      dispatchEvent: vi.fn(),
+    }))
   })
 })
