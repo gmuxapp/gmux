@@ -52,6 +52,50 @@ export interface HealthData {
 }
 export const health = signal<HealthData | null>(null)
 
+// ── Peer appearance: unique prefix + deterministic color ─────────────────────
+
+/** 6-color palette: [foreground, background] pairs for dark backgrounds.
+ *  Hues chosen for visual distinction and to avoid muddy tones. */
+const PEER_PALETTE: [string, string][] = [
+  ['oklch(72% 0.11 195)', 'oklch(25% 0.04 195)'], // teal
+  ['oklch(72% 0.12 55)',  'oklch(25% 0.04 55)'],   // amber
+  ['oklch(72% 0.10 285)', 'oklch(25% 0.04 285)'], // violet
+  ['oklch(72% 0.12 25)',  'oklch(25% 0.04 25)'],   // coral
+  ['oklch(72% 0.10 230)', 'oklch(25% 0.04 230)'], // blue
+  ['oklch(72% 0.10 340)', 'oklch(25% 0.04 340)'], // rose
+]
+
+/** Shortest unique prefix for each name among a set of names. */
+function uniquePrefixes(names: string[]): Map<string, string> {
+  const result = new Map<string, string>()
+  for (const name of names) {
+    let len = 1
+    while (len < name.length && names.some(n => n !== name && n.slice(0, len) === name.slice(0, len))) {
+      len++
+    }
+    result.set(name, name.slice(0, len).toUpperCase())
+  }
+  return result
+}
+
+export interface PeerAppearance {
+  label: string
+  color: string
+  bg: string
+}
+
+/** Derived map from peer name to { label, color, bg }. Colors assigned by list order. */
+export const peerAppearance = computed<ReadonlyMap<string, PeerAppearance>>(() => {
+  const names = peers.value.map(p => p.name)
+  const prefixes = uniquePrefixes(names)
+  const map = new Map<string, PeerAppearance>()
+  for (let i = 0; i < names.length; i++) {
+    const [color, bg] = PEER_PALETTE[i % PEER_PALETTE.length]
+    map.set(names[i], { label: prefixes.get(names[i])!, color, bg })
+  }
+  return map
+})
+
 export const terminalOptions = signal<ITerminalOptions | null>(null)
 export const keybinds = signal<ResolvedKeybind[] | null>(null)
 export const macCommandIsCtrl = signal(false)

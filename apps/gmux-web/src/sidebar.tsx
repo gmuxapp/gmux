@@ -11,7 +11,7 @@ import { useArrivalPulse } from './use-arrival-pulse'
 import {
   folders, selectedId, currentProjectSlug,
   activityMap, unmatchedActiveCount, projects, connState,
-  updateProjects,
+  updateProjects, peerAppearance,
   type DotState,
 } from './store'
 import type { Session, Folder } from './types'
@@ -90,12 +90,13 @@ function SessionItem({
         ? <svg class="session-sleep-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
         : <span class={`session-dot-indicator ${dotState}${arrival ? ` ${arrival}` : ''}`} />
       }
+      {session.peer && (() => {
+        const a = peerAppearance.value.get(session.peer)
+        return <span class="session-peer-label" title={session.peer} style={a && { color: a.color, background: a.bg }}>{a?.label ?? session.peer[0].toUpperCase()}</span>
+      })()}
       <div class="session-content">
         <div class="session-title-row">
           <span class="session-title">{session.title}</span>
-          {session.peer && (
-            <span class={`session-peer-pill peer-${session.peer.split('/')[0]}`}>{session.peer}</span>
-          )}
         </div>
         {session.status?.label && (
           <div class="session-meta">

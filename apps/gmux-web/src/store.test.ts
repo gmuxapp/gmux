@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { sessions, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap, sessionStaleness } from './store'
+import { sessions, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap, sessionStaleness, peers, peerAppearance } from './store'
 import type { Session } from './types'
 
 function makeSession(overrides: Partial<Session> & { id: string }): Session {
@@ -228,5 +228,40 @@ describe('sessionStaleness', () => {
       { runner_version: '1.1.0' },
       { version: '1.2.0' },
     )).toBe('version')
+  })
+})
+
+describe('peerAppearance', () => {
+  afterEach(() => { peers.value = [] })
+
+  it('computes unique single-char prefixes when first chars differ', () => {
+    peers.value = [
+      { name: 'dev', url: '', status: 'connected', session_count: 0 },
+      { name: 'staging', url: '', status: 'connected', session_count: 0 },
+    ]
+    const map = peerAppearance.value
+    expect(map.get('dev')!.label).toBe('D')
+    expect(map.get('staging')!.label).toBe('S')
+  })
+
+  it('extends prefix to disambiguate shared first characters', () => {
+    peers.value = [
+      { name: 'dev', url: '', status: 'connected', session_count: 0 },
+      { name: 'desktop', url: '', status: 'connected', session_count: 0 },
+    ]
+    const map = peerAppearance.value
+    // 'dev' vs 'desktop': 'de' is shared, need 3 chars
+    expect(map.get('dev')!.label).toBe('DEV')
+    expect(map.get('desktop')!.label).toBe('DES')
+  })
+
+  it('assigns colors sequentially by list order', () => {
+    peers.value = [
+      { name: 'alpha', url: '', status: 'connected', session_count: 0 },
+      { name: 'beta', url: '', status: 'connected', session_count: 0 },
+    ]
+    const map = peerAppearance.value
+    // First and second peer get different colors (first two palette entries)
+    expect(map.get('alpha')!.color).not.toBe(map.get('beta')!.color)
   })
 })
