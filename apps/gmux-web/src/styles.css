@@ -1052,7 +1052,10 @@ body {
   gap: 12px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  overflow: hidden;
+  /* overflow must NOT be hidden here — the session menu drops below the header */
+  overflow: visible;
+  position: relative;
+  z-index: 30;
 }
 
 .main-header-left {
@@ -1060,6 +1063,7 @@ body {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .main-header-right {
@@ -1115,40 +1119,47 @@ body {
 .main-header-status.working { color: var(--accent); }
 .main-header-status.error   { color: var(--status-error); }
 
-/* Session info menu (replaces standalone adapter + outdated badges) */
+/* Session actions menu */
 
-.session-info {
+.session-menu {
   position: relative;
 }
 
-.session-info-trigger {
+.session-menu-trigger {
   font-family: 'Fira Code', monospace;
   font-size: 11px;
   font-weight: 500;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   background: var(--bg-surface);
-  border: 1px solid transparent;
-  padding: 2px 8px;
-  border-radius: 3px;
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  border-radius: 4px;
   white-space: nowrap;
   cursor: pointer;
   letter-spacing: 0.01em;
   display: flex;
   align-items: center;
   gap: 5px;
-  transition: color 0.15s, border-color 0.15s;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
 }
 
-.session-info-trigger:hover {
-  color: var(--text-secondary);
-  border-color: var(--border);
+.session-menu-trigger:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--text);
 }
 
-.session-info-trigger.stale {
+.session-menu-trigger.stale {
+  border-color: oklch(75% 0.15 65 / 0.5);
   color: oklch(75% 0.15 65);
 }
 
-.session-info-dot {
+.session-menu-trigger.stale:hover {
+  border-color: oklch(75% 0.15 65 / 0.8);
+  background: oklch(75% 0.15 65 / 0.08);
+}
+
+.session-menu-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
@@ -1156,52 +1167,61 @@ body {
   flex-shrink: 0;
 }
 
-.session-info-menu {
+.session-menu-dropdown {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  min-width: 180px;
+  min-width: 200px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 8px 0;
-  box-shadow: 0 4px 16px oklch(0% 0 0 / 0.3);
-  z-index: 50;
+  padding: 6px 0;
+  box-shadow: 0 8px 24px oklch(0% 0 0 / 0.4);
+  z-index: 100;
 }
 
-.session-info-row {
+.session-menu-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  padding: 6px 12px 2px;
+}
+
+.session-menu-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 4px 12px;
+  padding: 3px 12px;
   font-size: 12px;
 }
 
-.session-info-label {
+.session-menu-label {
   color: var(--text-muted);
 }
 
-.session-info-value {
+.session-menu-value {
   font-family: 'Fira Code', monospace;
   font-size: 11px;
   color: var(--text-secondary);
 }
 
-.session-info-value.stale {
+.session-menu-value.stale {
   color: oklch(75% 0.15 65);
 }
 
-.session-info-divider {
+.session-menu-divider {
   height: 1px;
   background: var(--border);
-  margin: 6px 0;
+  margin: 4px 0;
 }
 
-.session-info-action {
+.session-menu-action {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 5px 12px;
+  padding: 6px 12px;
   font-size: 12px;
   color: var(--text-secondary);
   background: none;
@@ -1210,17 +1230,17 @@ body {
   transition: background 0.1s, color 0.1s;
 }
 
-.session-info-action:hover {
+.session-menu-action:hover {
   background: var(--bg-hover);
   color: var(--text);
 }
 
-.session-info-action.stale {
+.session-menu-action.stale {
   color: oklch(75% 0.15 65);
 }
 
-.session-info-action.stale:hover {
-  background: oklch(75% 0.15 65 / 0.12);
+.session-menu-action.stale:hover {
+  background: oklch(75% 0.15 65 / 0.1);
   color: oklch(85% 0.15 65);
 }
 
