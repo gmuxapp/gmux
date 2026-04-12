@@ -458,18 +458,20 @@ func (fm *FileMonitor) processAttributedFileLocked(sessionID, path string) {
 
 	events := ms.fileMon.ParseNewLines(lines, path)
 
-	// Re-derive title from the full file when it's still unset.
-	title := fm.deriveTitleFromFile(sessionID, path)
-	if title != "" {
-		fm.store.Update(sessionID, func(s *store.Session) {
-			if s.AdapterTitle == "" || s.AdapterTitle == "(new)" {
-				s.AdapterTitle = title
-				newSlug := adapter.Slugify(title)
-				if newSlug != "" && (s.Slug == "" || s.Slug == "new") {
-					s.Slug = newSlug
+	// Re-derive title from the full file when it's still a placeholder.
+	// Skip the (expensive) file parse when the title is already set.
+	if sess, ok := fm.store.Get(sessionID); ok && (sess.AdapterTitle == "" || sess.AdapterTitle == "(new)") {
+		if title := fm.deriveTitleFromFile(sessionID, path); title != "" {
+			fm.store.Update(sessionID, func(s *store.Session) {
+				if s.AdapterTitle == "" || s.AdapterTitle == "(new)" {
+					s.AdapterTitle = title
+					newSlug := adapter.Slugify(title)
+					if newSlug != "" && (s.Slug == "" || s.Slug == "new") {
+						s.Slug = newSlug
+					}
 				}
-			}
-		})
+			})
+		}
 	}
 
 	if len(events) == 0 {
@@ -565,14 +567,28 @@ func (fm *FileMonitor) persistAttributionsLocked() {
 func (fm *FileMonitor) tryAttributeUnmatched() bool {
 	fm.mu.Lock()
 
-	// Prune candidates that were attributed since they were queued.
+	// Prune candidates that were attributed since they were queued,
+	// or whose directory no longer maps to any live session's root
+	// (the session died or was never relevant).
 	var files []string
 	for path := range fm.candidateFiles {
 		if _, ok := fm.attributions[path]; ok {
 			delete(fm.candidateFiles, path)
-		} else {
-			files = append(files, path)
+			continue
 		}
+		dir := filepath.Dir(path)
+		hasKind := false
+		for _, ms := range fm.sessions {
+			if root := ms.filer.SessionRootDir(); root != "" && isUnderRoot(dir, root) {
+				hasKind = true
+				break
+			}
+		}
+		if !hasKind {
+			delete(fm.candidateFiles, path)
+			continue
+		}
+		files = append(files, path)
 	}
 	if len(files) == 0 {
 		fm.mu.Unlock()
