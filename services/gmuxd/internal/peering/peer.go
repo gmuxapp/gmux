@@ -37,8 +37,9 @@ type Peer struct {
 
 	mu           sync.RWMutex
 	status       Status
-	lastError    string          // human-readable reason for last disconnect
-	cachedConfig json.RawMessage // peer's /v1/config data, fetched on connect
+	lastError    string       // human-readable reason for last disconnect
+	cachedHealth SpokeHealth  // peer's /v1/health data, fetched on connect
+	healthLoaded bool         // true after first successful health fetch
 
 	// onStatus is called when connection state changes.
 	onStatus func(name string, status Status)
@@ -127,27 +128,31 @@ func (p *Peer) ForwardLaunch(w http.ResponseWriter, r *http.Request) {
 	p.api.ForwardLaunch(w, r)
 }
 
-// CachedConfig returns the peer's config data, fetched once on each
-// successful SSE connection. Returns nil if the peer is not connected
-// or the config has not been fetched yet.
-func (p *Peer) CachedConfig() json.RawMessage {
+// CachedHealth returns the spoke's cached health data. The second
+// return value is false if health has not been fetched yet.
+func (p *Peer) CachedHealth() (SpokeHealth, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.cachedConfig
+	return p.cachedHealth, p.healthLoaded
 }
 
-// fetchConfig fetches the spoke's /v1/config via apiclient and caches
-// the result. Called once after each successful SSE connection. Tests
-// call it directly to exercise the caching path without standing up a
-// full SSE pipeline.
-func (p *Peer) fetchConfig(ctx context.Context) {
-	data, err := p.api.GetConfig(ctx)
+// fetchHealth fetches the spoke's /v1/health via apiclient, extracts
+// version and launcher info, and caches the result. Called once after
+// each successful SSE connection.
+func (p *Peer) fetchHealth(ctx context.Context) {
+	data, err := p.api.GetHealth(ctx)
 	if err != nil {
-		log.Printf("peering: %s: fetch config: %v", p.Config.Name, err)
+		log.Printf("peering: %s: fetch health: %v", p.Config.Name, err)
+		return
+	}
+	var h SpokeHealth
+	if err := json.Unmarshal(data, &h); err != nil {
+		log.Printf("peering: %s: parse health: %v", p.Config.Name, err)
 		return
 	}
 	p.mu.Lock()
-	p.cachedConfig = data
+	p.cachedHealth = h
+	p.healthLoaded = true
 	p.mu.Unlock()
 }
 
@@ -193,9 +198,9 @@ func (p *Peer) run(ctx context.Context) {
 			p.lastError = categorizeError(err)
 			p.mu.Unlock()
 		}
-		// Keep cachedConfig across reconnects: the spoke's config
-		// doesn't change because our connection dropped, and clearing
-		// it would make /v1/config return empty for this peer during
+		// Keep cachedHealth across reconnects: the spoke's version
+		// and launchers don't change because our connection dropped,
+		// and clearing it would make the UI show empty data during
 		// the brief reconnect window.
 		p.setStatus(StatusDisconnected)
 
@@ -238,10 +243,9 @@ func (p *Peer) subscribe(ctx context.Context, onConnected func()) error {
 			if onConnected != nil {
 				onConnected()
 			}
-			// Fetch the peer's config once per connection so /v1/config
-			// can serve it from cache without making outgoing HTTP
-			// calls.
-			p.fetchConfig(ctx)
+			// Fetch the peer's health once per connection so the hub
+			// can serve version and launcher data from cache.
+			p.fetchHealth(ctx)
 		},
 		func(ev sseclient.Event) {
 			p.handleEvent(ev.Type, ev.Data)

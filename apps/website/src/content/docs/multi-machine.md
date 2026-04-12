@@ -70,14 +70,24 @@ The UI parses these to build the topology breadcrumbs on the project hub. Routin
 
 ## Fault tolerance
 
-Each spoke connection is independent. When a spoke goes offline:
+Each spoke connection is independent. A slow or dead spoke never blocks the hub or other spokes.
+
+When a spoke goes offline:
 
 - Its sessions remain visible but marked as disconnected.
 - The host status indicator turns red on the project hub.
-- The hub reconnects with exponential backoff.
-- When the spoke comes back, sessions go live again.
+- The hub reconnects with exponential backoff (1s initial, 30s max, reset on success).
+- When the spoke comes back, sessions go live again. No user action needed.
 
-A slow or dead spoke never blocks the hub or other spokes. Planned reliability work (connection keepalives, silent-drop detection, and a unified session-identity model) is tracked in [Planned: peer reliability](/planned/peer-reliability).
+### Connection health detection
+
+The SSE event stream uses two mechanisms to detect dead connections:
+
+**Heartbeat.** The spoke emits a `:\n\n` SSE comment every 30 seconds when no real events are flowing. Comment lines are part of the SSE spec and produce no client-side events. They keep the connection alive through idle periods and give the hub something to read.
+
+**Idle timeout.** The hub's SSE client sets a sliding 60-second read deadline that resets on every line received (events, comments, anything). If no data arrives within the window, the connection is declared dead and the peer reconnects. Since the heartbeat interval (30s) is well within the timeout (60s), the timeout only fires on actual connection failures, not legitimately idle spokes.
+
+This pair covers the common failure modes: NAT rebinds, tunnel hiccups, and network changes that leave the TCP socket open but no bytes flowing. The same heartbeat also keeps the browser's native `EventSource` connection to the hub alive during quiet periods.
 
 ## Protocol details
 
@@ -89,7 +99,7 @@ The hub connects to these public gmuxd endpoints on each spoke:
 |----------|---------|
 | `GET /v1/events` | SSE subscription for session updates |
 | `GET /v1/sessions` | Initial session list on connect |
-| `GET /v1/config` | Launcher configuration (available adapters) |
+| `GET /v1/health` | Version, hostname, available launchers |
 | `POST /v1/launch` | Forward launch requests |
 | `WS /ws/:id` | Proxy terminal WebSocket connections |
 | `POST /v1/sessions/:id/kill` | Forward kill |

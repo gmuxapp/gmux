@@ -1,30 +1,12 @@
-// Launcher UI + config fetching.
+// Launcher UI.
 //
-// This module owns everything related to kicking off new sessions:
-//  - launcher definitions from the server (`/v1/config`)
-//  - per-peer launcher resolution (remote hosts surface their own launchers)
-//  - the `+` button used throughout the UI (sidebar, folder rows, etc.)
-//  - the "recent launch" flag that lets the app auto-select the session
-//    the server creates in response
+// Pure functions for launcher resolution + the LaunchButton component.
+// Launcher definitions come from the store's health signal (populated
+// from /v1/health). The component reads them reactively.
 
 import { useState, useRef, useEffect, useMemo } from 'preact/hooks'
-import type { Session } from './types'
-
-// ── Types ──
-
-export interface LauncherDef {
-  id: string
-  label: string
-  command: string[]
-  description?: string
-  available: boolean
-}
-
-export interface LaunchConfig {
-  default_launcher: string
-  launchers: LauncherDef[]
-  peers?: Record<string, { default_launcher: string; launchers: LauncherDef[] }>
-}
+import type { Session, LauncherDef, PeerInfo } from './types'
+import { launchers as launchersSignal, defaultLauncher as defaultLauncherSignal, peers as peersSignal, launchSession } from './store'
 
 /** Resolved launch target: where the session will be created. */
 export interface LaunchTarget {
@@ -32,33 +14,20 @@ export interface LaunchTarget {
   cwd: string
 }
 
-// ── Config fetching (module-level cache) ──
-
-let _configCache: LaunchConfig | null = null
-
-export async function fetchConfig(): Promise<LaunchConfig> {
-  if (_configCache) return _configCache
-  try {
-    const resp = await fetch('/v1/config')
-    const json = await resp.json()
-    _configCache = json.data ?? json
-    return _configCache!
-  } catch {
-    return { default_launcher: 'shell', launchers: [{ id: 'shell', label: 'Shell', command: [], available: true }] }
-  }
-}
-
-export function invalidateConfigCache() {
-  _configCache = null
-}
-
 /** Return launchers for a specific peer, falling back to local config. */
 export function launchersForPeer(
-  config: LaunchConfig,
+  localLaunchers: LauncherDef[],
+  localDefault: string,
+  peers: PeerInfo[],
   peer: string | undefined,
 ): { default_launcher: string; launchers: LauncherDef[] } {
-  if (peer && config.peers?.[peer]) return config.peers[peer]
-  return config
+  if (peer) {
+    const p = peers.find(pp => pp.name === peer)
+    if (p?.launchers?.length) {
+      return { default_launcher: p.default_launcher ?? localDefault, launchers: p.launchers }
+    }
+  }
+  return { default_launcher: localDefault, launchers: localLaunchers }
 }
 
 // ── Target resolution ──
@@ -97,36 +66,6 @@ export function formatTarget(target: LaunchTarget): string {
   const shortCwd = target.cwd.replace(/^\/home\/[^/]+/, '~')
   if (target.peer) return `${target.peer}: ${shortCwd}`
   return shortCwd
-}
-
-// ── Launch action + auto-select tracking ──
-
-let _pendingLaunchAt = 0
-
-export async function launchSession(launcherId: string, opts?: { cwd?: string; peer?: string }): Promise<void> {
-  _pendingLaunchAt = Date.now()
-  try {
-    const resp = await fetch('/v1/launch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ launcher_id: launcherId, cwd: opts?.cwd, peer: opts?.peer }),
-    })
-    if (!resp.ok) console.warn('/v1/launch failed:', resp.status, await resp.text().catch(() => ''))
-  } catch (err) {
-    console.warn('/v1/launch error:', err)
-  }
-}
-
-/**
- * Check + clear the pending-launch flag. Returns true if a launch was
- * kicked off within `maxAgeMs` and the caller should auto-select the
- * newly-arrived session.
- */
-export function consumePendingLaunch(maxAgeMs = 10_000): boolean {
-  if (!_pendingLaunchAt) return false
-  const fresh = Date.now() - _pendingLaunchAt < maxAgeMs
-  _pendingLaunchAt = 0
-  return fresh
 }
 
 // ── LaunchButton ──
@@ -178,16 +117,13 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, ses
 
   const showTarget = target.cwd !== ''
 
-  const [state, setState] = useState<'idle' | 'loading' | 'open' | 'launching'>('idle')
-  const [config, setConfig] = useState<LaunchConfig | null>(null)
+  const [state, setState] = useState<'idle' | 'open' | 'launching'>('idle')
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
 
-  // Pre-fetch config on first hover so open is instant
-  const handleMouseEnter = () => {
-    if (!config) fetchConfig().then(setConfig)
-  }
+  // Read launcher config from the store (populated by /v1/health).
+  const hasLaunchers = launchersSignal.value.length > 0
 
   /** Compute fixed position for the menu so it escapes overflow:hidden parents. */
   const computeMenuPos = () => {
@@ -207,17 +143,8 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, ses
   const handleClick = (e: MouseEvent) => {
     e.stopPropagation()
     if (state === 'idle') {
-      if (config) {
-        computeMenuPos()
-        setState('open')
-      } else {
-        setState('loading')
-        fetchConfig().then(cfg => {
-          setConfig(cfg)
-          computeMenuPos()
-          setState('open')
-        })
-      }
+      computeMenuPos()
+      setState('open')
     } else if (state === 'open') {
       setState('idle')
     }
@@ -255,19 +182,22 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, ses
     return () => document.removeEventListener('keydown', handler)
   }, [state])
 
-  const isOpen = state === 'open' && config
-  const isLoading = state === 'launching' || state === 'loading'
+  const isOpen = state === 'open' && hasLaunchers
+  const isLoading = state === 'launching'
 
-  let defaultLauncher: LauncherDef | undefined
+  let defLauncher: LauncherDef | undefined
   let others: LauncherDef[] = []
-  if (isOpen && config) {
-    const resolved = launchersForPeer(config, target.peer)
-    defaultLauncher = resolved.launchers.find(l => l.id === resolved.default_launcher)
+  if (isOpen) {
+    const resolved = launchersForPeer(
+      launchersSignal.value, defaultLauncherSignal.value,
+      peersSignal.value, target.peer,
+    )
+    defLauncher = resolved.launchers.find(l => l.id === resolved.default_launcher)
     others = resolved.launchers.filter(l => l.id !== resolved.default_launcher)
   }
 
   return (
-    <div class={`launch-container ${className ?? ''}`} ref={containerRef} onMouseEnter={handleMouseEnter}>
+    <div class={`launch-container ${className ?? ''}`} ref={containerRef}>
       <button
         ref={btnRef}
         class={`launch-btn ${isLoading ? 'loading' : ''}`}
@@ -294,12 +224,12 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, ses
               <div class="launch-inline-divider" />
             </>
           )}
-          {defaultLauncher && (
+          {defLauncher && (
             <button
               class="launch-inline-item launch-inline-default"
-              onClick={(e) => { e.stopPropagation(); handleLaunch(defaultLauncher!.id) }}
+              onClick={(e) => { e.stopPropagation(); handleLaunch(defLauncher!.id) }}
             >
-              {defaultLauncher.label}
+              {defLauncher.label}
             </button>
           )}
           {others.map((l, i) => (

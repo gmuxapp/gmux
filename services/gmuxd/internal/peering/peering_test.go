@@ -656,10 +656,10 @@ func TestManager_IsLocalPeer(t *testing.T) {
 	}
 }
 
-func TestPeerFetchConfig(t *testing.T) {
-	// Spoke returns a launch config.
+func TestPeerFetchHealth(t *testing.T) {
+	// Spoke returns health with version and launchers.
 	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/config" {
+		if r.URL.Path != "/v1/health" {
 			http.NotFound(w, r)
 			return
 		}
@@ -668,37 +668,30 @@ func TestPeerFetchConfig(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true,"data":{"default_launcher":"shell","launchers":[{"id":"shell","label":"Shell"}]}}`))
+		w.Write([]byte(`{"ok":true,"data":{"version":"0.8.0","default_launcher":"shell","launchers":[{"id":"shell","label":"Shell"}]}}`))
 	}))
 	defer spoke.Close()
 
 	st := store.New()
 	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL, Token: "tok123"}, st, nil)
 
-	p.fetchConfig(t.Context())
-	data := p.CachedConfig()
-	if data == nil {
-		t.Fatal("CachedConfig returned nil after fetchConfig")
+	p.fetchHealth(t.Context())
+	h, ok := p.CachedHealth()
+	if !ok {
+		t.Fatal("CachedHealth returned false after fetchHealth")
 	}
-
-	var cfg struct {
-		DefaultLauncher string `json:"default_launcher"`
-		Launchers       []struct {
-			ID string `json:"id"`
-		} `json:"launchers"`
+	if h.Version != "0.8.0" {
+		t.Errorf("version = %q, want %q", h.Version, "0.8.0")
 	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	if h.DefaultLauncher != "shell" {
+		t.Errorf("default_launcher = %q, want %q", h.DefaultLauncher, "shell")
 	}
-	if cfg.DefaultLauncher != "shell" {
-		t.Errorf("default_launcher = %q, want %q", cfg.DefaultLauncher, "shell")
-	}
-	if len(cfg.Launchers) != 1 || cfg.Launchers[0].ID != "shell" {
-		t.Errorf("launchers = %+v, want [{ID:shell}]", cfg.Launchers)
+	if len(h.Launchers) != 1 || h.Launchers[0].ID != "shell" {
+		t.Errorf("launchers = %+v, want [{ID:shell}]", h.Launchers)
 	}
 }
 
-func TestPeerFetchConfig_BadToken(t *testing.T) {
+func TestPeerFetchHealth_BadToken(t *testing.T) {
 	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	}))
@@ -707,28 +700,27 @@ func TestPeerFetchConfig_BadToken(t *testing.T) {
 	st := store.New()
 	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL, Token: "wrong"}, st, nil)
 
-	p.fetchConfig(t.Context())
-	data := p.CachedConfig()
-	if data != nil {
-		t.Errorf("CachedConfig should be nil for 401, got %s", data)
+	p.fetchHealth(t.Context())
+	_, ok := p.CachedHealth()
+	if ok {
+		t.Error("CachedHealth should return false for 401")
 	}
 }
 
-func TestManagerPeerConfigs(t *testing.T) {
+func TestPeerStatus_IncludesHealthData(t *testing.T) {
 	// Two spokes with different launchers.
 	spoke1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true,"data":{"default_launcher":"shell","launchers":[{"id":"shell"}]}}`))
+		w.Write([]byte(`{"ok":true,"data":{"version":"0.8.0","default_launcher":"shell","launchers":[{"id":"shell"}]}}`))
 	}))
 	defer spoke1.Close()
 
 	spoke2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true,"data":{"default_launcher":"pi","launchers":[{"id":"shell"},{"id":"pi"}]}}`))
+		w.Write([]byte(`{"ok":true,"data":{"version":"0.7.9","default_launcher":"pi","launchers":[{"id":"shell"},{"id":"pi"}]}}`))
 	}))
 	defer spoke2.Close()
 
-	// Build a manager with two peers that are "connected".
 	st := store.New()
 	cfgs := []config.PeerConfig{
 		{Name: "laptop", URL: spoke1.URL, Token: "t1"},
@@ -736,39 +728,37 @@ func TestManagerPeerConfigs(t *testing.T) {
 	}
 	mgr := NewManager(cfgs, st, "test-host")
 
-	// Simulate connected status so PeerConfigs includes them.
 	for _, mp := range mgr.peers {
 		mp.peer.setStatus(StatusConnected)
+		mp.peer.fetchHealth(t.Context())
 	}
 
-	// fetchConfig to populate the cache (simulating what subscribe does).
-	for _, mp := range mgr.peers {
-		mp.peer.fetchConfig(t.Context())
+	infos := mgr.PeerStatus()
+	if len(infos) != 2 {
+		t.Fatalf("expected 2 peers, got %d", len(infos))
 	}
 
-	results := mgr.PeerConfigs()
-	if len(results) != 2 {
-		t.Fatalf("expected 2 peer configs, got %d", len(results))
+	var ws *PeerInfo
+	for i := range infos {
+		if infos[i].Name == "workstation" {
+			ws = &infos[i]
+		}
 	}
-
-	if results["laptop"] == nil {
-		t.Error("missing laptop config")
+	if ws == nil {
+		t.Fatal("missing workstation")
 	}
-	if results["workstation"] == nil {
-		t.Error("missing workstation config")
+	if ws.Version != "0.7.9" {
+		t.Errorf("version = %q, want %q", ws.Version, "0.7.9")
 	}
-
-	// Verify workstation has pi launcher.
-	var wsCfg struct {
-		DefaultLauncher string `json:"default_launcher"`
+	if ws.DefaultLauncher != "pi" {
+		t.Errorf("default_launcher = %q, want %q", ws.DefaultLauncher, "pi")
 	}
-	json.Unmarshal(results["workstation"], &wsCfg)
-	if wsCfg.DefaultLauncher != "pi" {
-		t.Errorf("workstation default_launcher = %q, want %q", wsCfg.DefaultLauncher, "pi")
+	if len(ws.Launchers) != 2 {
+		t.Errorf("launchers count = %d, want 2", len(ws.Launchers))
 	}
 }
 
-func TestManagerPeerConfigs_SkipsDisconnected(t *testing.T) {
+func TestPeerStatus_NoHealthBeforeFetch(t *testing.T) {
 	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("disconnected peer should not be queried")
 	}))
@@ -778,63 +768,59 @@ func TestManagerPeerConfigs_SkipsDisconnected(t *testing.T) {
 	mgr := NewManager([]config.PeerConfig{
 		{Name: "offline", URL: spoke.URL, Token: "tok"},
 	}, st, "test-host")
-	// Leave status as disconnected (default).
 
-	results := mgr.PeerConfigs()
-	if len(results) != 0 {
-		t.Errorf("expected empty results for disconnected peer, got %d", len(results))
+	infos := mgr.PeerStatus()
+	if len(infos) != 1 {
+		t.Fatalf("expected 1 peer, got %d", len(infos))
+	}
+	if infos[0].Version != "" {
+		t.Errorf("version should be empty before fetch, got %q", infos[0].Version)
+	}
+	if infos[0].Launchers != nil {
+		t.Errorf("launchers should be nil before fetch")
 	}
 }
 
-func TestCachedConfig_PersistsAcrossDisconnect(t *testing.T) {
+func TestCachedHealth_PersistsAcrossDisconnect(t *testing.T) {
 	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true,"data":{"launchers":[]}}`))
+		w.Write([]byte(`{"ok":true,"data":{"version":"0.8.0","launchers":[]}}`))
 	}))
 	defer spoke.Close()
 
 	st := store.New()
 	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL}, st, nil)
 
-	// Initially nil.
-	if p.CachedConfig() != nil {
-		t.Fatal("expected nil cache before fetch")
+	if _, ok := p.CachedHealth(); ok {
+		t.Fatal("expected no cached health before fetch")
 	}
 
-	// Populated after fetch.
-	p.fetchConfig(t.Context())
-	if p.CachedConfig() == nil {
-		t.Fatal("expected non-nil cache after fetch")
+	p.fetchHealth(t.Context())
+	if _, ok := p.CachedHealth(); !ok {
+		t.Fatal("expected cached health after fetch")
 	}
 
-	// Cache survives a status transition to disconnected. The spoke's
-	// config doesn't change because our connection dropped, so keeping
-	// the cache avoids a gap in /v1/config responses during reconnect.
+	// Cache survives disconnect. The spoke's version and launchers
+	// don't change because our connection dropped.
 	p.setStatus(StatusDisconnected)
-	if p.CachedConfig() == nil {
+	if h, ok := p.CachedHealth(); !ok || h.Version != "0.8.0" {
 		t.Fatal("expected cache to persist across disconnect")
 	}
 }
 
 // TestMutualPeers_NoRecursion verifies that two peers referencing each
-// other's /v1/config do not create a request storm. Before the fix,
-// PeerConfigs() made outgoing HTTP calls that could recurse infinitely.
-// Now PeerConfigs() reads from cache, so each side makes exactly one
-// request to the other (during fetchConfig).
+// other's /v1/health do not create a request storm. Each side fetches
+// health once per connection; CachedHealth reads from memory.
 func TestMutualPeers_NoRecursion(t *testing.T) {
 	var muA, muB sync.Mutex
 	hitsA, hitsB := 0, 0
 
-	// Each "spoke" is a /v1/config endpoint that counts requests.
-	// In the old code, calling PeerConfigs on both sides would trigger
-	// recursive HTTP calls. With caching, each side gets exactly one
-	// fetch call.
 	spokeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		muA.Lock()
 		hitsA++
 		muA.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true,"data":{"default_launcher":"shell"}}`))
+		w.Write([]byte(`{"ok":true,"data":{"version":"0.8.0","default_launcher":"shell"}}`))
 	}))
 	defer spokeA.Close()
 
@@ -843,29 +829,26 @@ func TestMutualPeers_NoRecursion(t *testing.T) {
 		hitsB++
 		muB.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true,"data":{"default_launcher":"pi"}}`))
+		w.Write([]byte(`{"ok":true,"data":{"version":"0.8.0","default_launcher":"pi"}}`))
 	}))
 	defer spokeB.Close()
 
-	// Simulate: node A peers with B, node B peers with A.
 	stA := store.New()
 	peerAtoB := newPeer(config.PeerConfig{Name: "B", URL: spokeB.URL}, stA, nil)
 
 	stB := store.New()
 	peerBtoA := newPeer(config.PeerConfig{Name: "A", URL: spokeA.URL}, stB, nil)
 
-	// Fetch config on both sides (as subscribe would do).
-	peerAtoB.fetchConfig(t.Context())
-	peerBtoA.fetchConfig(t.Context())
+	peerAtoB.fetchHealth(t.Context())
+	peerBtoA.fetchHealth(t.Context())
 
-	// Read cached configs multiple times (as /v1/config handler would).
+	// Read cached health multiple times.
 	for range 10 {
-		peerAtoB.CachedConfig()
-		peerBtoA.CachedConfig()
+		peerAtoB.CachedHealth()
+		peerBtoA.CachedHealth()
 	}
 
-	// Each spoke should have been hit exactly once (by fetchConfig).
-	// No additional requests from CachedConfig reads.
+	// Each spoke should have been hit exactly once (by fetchHealth).
 	muA.Lock()
 	muB.Lock()
 	if hitsA != 1 {

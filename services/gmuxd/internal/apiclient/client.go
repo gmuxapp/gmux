@@ -1,9 +1,9 @@
 // Package apiclient is a typed Go client for the gmuxd public HTTP API.
 //
 // It wraps the small number of endpoints a peer daemon (or any other
-// programmatic client) needs: SSE event subscription, config and
-// health fetch, session action forwarding, launch forwarding, and
-// WebSocket proxying for terminal attachment.
+// programmatic client) needs: SSE event subscription, health fetch,
+// session action forwarding, launch forwarding, and WebSocket proxying
+// for terminal attachment.
 //
 // The goal is that any Go code talking to gmuxd goes through this
 // client rather than hand-rolling http.Client calls. That keeps auth,
@@ -49,7 +49,7 @@ const (
 	wsSpokeReadLimit = 4 * 1024 * 1024
 )
 
-// httpActionTimeout bounds one-shot REST calls (GetConfig,
+// httpActionTimeout bounds one-shot REST calls (GetHealth,
 // ForwardAction, ForwardLaunch). Long enough for a slow spoke behind
 // a VPN; short enough that a stuck peer doesn't hang a browser click.
 const httpActionTimeout = 10 * time.Second
@@ -128,29 +128,29 @@ func (c *Client) Events() *sseclient.Client {
 	return sseclient.New(c.baseURL+"/v1/events", opts...)
 }
 
-// GetConfig fetches GET /v1/config and returns the Data field of the
-// response envelope (the raw config JSON, unwrapped).
+// GetHealth fetches GET /v1/health and returns the Data field of the
+// response envelope (the raw health JSON, unwrapped).
 //
 // Returns an error if the request fails, the status is not 200, the
 // envelope cannot be decoded, or the response has ok=false.
-func (c *Client) GetConfig(ctx context.Context) (json.RawMessage, error) {
+func (c *Client) GetHealth(ctx context.Context) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, httpActionTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/config", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/health", nil)
 	if err != nil {
-		return nil, fmt.Errorf("apiclient GetConfig: %w", err)
+		return nil, fmt.Errorf("apiclient GetHealth: %w", err)
 	}
 	c.setAuth(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("apiclient GetConfig: %w", err)
+		return nil, fmt.Errorf("apiclient GetHealth: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("apiclient GetConfig: unexpected status %d", resp.StatusCode)
+		return nil, fmt.Errorf("apiclient GetHealth: unexpected status %d", resp.StatusCode)
 	}
 
 	var envelope struct {
@@ -158,10 +158,10 @@ func (c *Client) GetConfig(ctx context.Context) (json.RawMessage, error) {
 		Data json.RawMessage `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
-		return nil, fmt.Errorf("apiclient GetConfig: decode: %w", err)
+		return nil, fmt.Errorf("apiclient GetHealth: decode: %w", err)
 	}
 	if !envelope.OK {
-		return nil, fmt.Errorf("apiclient GetConfig: ok=false")
+		return nil, fmt.Errorf("apiclient GetHealth: ok=false")
 	}
 	return envelope.Data, nil
 }

@@ -43,8 +43,8 @@ The frontend is built with Preact and xterm.js, compiled into a static bundle, a
 
 `gmuxd` consumes its own public API for peer connections. Two small internal packages hold the protocol primitives:
 
-- **`sseclient`** decodes Server-Sent Events from `/v1/events`. It handles `event:` / `data:` / `:` comment framing, enforces payload size limits, and calls a user-supplied handler per event. Reconnect is the caller's job, matching how the browser's `EventSource` works.
-- **`apiclient`** is a typed wrapper around the public gmuxd API: `GetConfig`, `ForwardAction`, `ForwardLaunch`, `DialWS`, `ProxyWS`, plus `Events` which returns a configured `sseclient`. It sets bearer auth once and accepts an `http.RoundTripper` so Tailscale-discovered peers can route through `tsnet`.
+- **`sseclient`** decodes Server-Sent Events from `/v1/events`. It handles `event:` / `data:` / `:` comment framing, enforces payload size limits, supports a configurable idle timeout (sliding read deadline), and calls a user-supplied handler per event. Reconnect is the caller's job, matching how the browser's `EventSource` works.
+- **`apiclient`** is a typed wrapper around the public gmuxd API: `GetHealth`, `ForwardAction`, `ForwardLaunch`, `DialWS`, `ProxyWS`, plus `Events` which returns a configured `sseclient`. It sets bearer auth once and accepts an `http.RoundTripper` so Tailscale-discovered peers can route through `tsnet`.
 
 Peer daemons use these packages to talk to other gmuxd instances. There are no peer-only endpoints: if the browser path works, the peer path works, because they both flow through the same code. Read limits, auth, error handling, and keepalive live in one place instead of being duplicated per consumer.
 
@@ -89,15 +89,13 @@ Served by `gmuxd` on a Unix socket (local IPC) and a TCP listener (default `127.
 | `GET /v1/projects` | Get project configuration |
 | `PUT /v1/projects` | Replace project list |
 | `POST /v1/projects/add` | Add a discovered project |
-| `GET /v1/config` | Launcher configuration |
 | `GET /v1/frontend-config` | User settings + theme (from JSONC files) |
 | `POST /v1/launch` | Launch a new session |
 | `POST /v1/sessions/{id}/kill` | Kill a session |
 | `POST /v1/sessions/{id}/dismiss` | Kill + remove |
 | `POST /v1/sessions/{id}/resume` | Resume a resumable session |
 | `GET /v1/events` | SSE stream of session and project changes |
-| `GET /v1/health` | Daemon health check |
-| `GET /v1/peers` | Connected and offline peer status |
+| `GET /v1/health` | Daemon health, version, launchers, peer status |
 | `WS /ws/{id}` | Terminal WebSocket proxy |
 | `GET /` | Embedded web UI (SPA) |
 
