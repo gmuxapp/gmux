@@ -641,6 +641,143 @@ func TestRecentFileScanSkipsOldFiles(t *testing.T) {
 	}
 }
 
+// TestTryAttributeUnmatchedPicksUpCandidates verifies that files added
+// to the candidate set (via handleFileChange on unattributed files) are
+// picked up by tryAttributeUnmatched and attributed to the correct session.
+func TestTryAttributeUnmatchedPicksUpCandidates(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := "/home/user/dev/project"
+	claude := adapters.NewClaude()
+	sessionDir := claude.SessionDir(cwd)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s := store.New()
+	s.Upsert(store.Session{
+		ID:         "sess-1",
+		Cwd:        cwd,
+		Kind:       "claude",
+		Alive:      true,
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
+		SocketPath: "/tmp/fake.sock",
+	})
+
+	fm := NewFileMonitorWithAttributions(s, nil)
+	if fm.watcher != nil {
+		fm.watcher.Close()
+		fm.watcher = nil
+	}
+
+	fm.sessions["sess-1"] = &monitoredSession{
+		id:      "sess-1",
+		cwd:     cwd,
+		kind:    "claude",
+		adapter: claude,
+		fileMon: claude,
+		filer:   claude,
+		readAll: true,
+	}
+
+	// Write a file and trigger handleFileChange. Since the file is not
+	// attributed, it should be added to candidates (not processed yet).
+	path := filepath.Join(sessionDir, "test-session.jsonl")
+	os.WriteFile(path, []byte(
+		`{"type":"user","sessionId":"abc","timestamp":"2026-03-19T10:00:00Z","cwd":"/home/user/dev/project","message":{"role":"user","content":"fix bug"},"uuid":"u1"}`+"\n",
+	), 0o644)
+
+	fm.handleFileChange(path)
+
+	// File should be in candidates, not in attributions.
+	if _, ok := fm.attributions[path]; ok {
+		t.Fatal("file should not be attributed yet")
+	}
+	if !fm.candidateFiles[path] {
+		t.Fatal("file should be in candidate set")
+	}
+
+	// Now run tryAttributeUnmatched. Claude has no FileAttributor, so
+	// trivial attribution to the single candidate session.
+	fm.tryAttributeUnmatched()
+
+	if fm.attributions[path] != "sess-1" {
+		t.Fatalf("expected attribution to sess-1, got %q", fm.attributions[path])
+	}
+	if fm.candidateFiles[path] {
+		t.Fatal("file should be removed from candidate set after attribution")
+	}
+
+	// Verify the file was processed (title/status extracted).
+	sess, _ := s.Get("sess-1")
+	if sess.Status == nil || !sess.Status.Working {
+		t.Fatal("expected working=true after attribution + file processing")
+	}
+}
+
+// TestHandleFileChangeProcessesAttributedImmediately verifies that
+// already-attributed files are processed on the event loop without
+// going through the throttled attribution path.
+func TestHandleFileChangeProcessesAttributedImmediately(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := "/home/user/dev/project"
+	claude := adapters.NewClaude()
+	sessionDir := claude.SessionDir(cwd)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s := store.New()
+	s.Upsert(store.Session{
+		ID:         "sess-1",
+		Cwd:        cwd,
+		Kind:       "claude",
+		Alive:      true,
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
+		SocketPath: "/tmp/fake.sock",
+	})
+
+	path := filepath.Join(sessionDir, "test-session.jsonl")
+	// Pre-seed attribution.
+	fm := NewFileMonitorWithAttributions(s, map[string]string{path: "sess-1"})
+	if fm.watcher != nil {
+		fm.watcher.Close()
+		fm.watcher = nil
+	}
+
+	fm.sessions["sess-1"] = &monitoredSession{
+		id:      "sess-1",
+		cwd:     cwd,
+		kind:    "claude",
+		adapter: claude,
+		fileMon: claude,
+		filer:   claude,
+		readAll: true,
+	}
+
+	// Write and handle. Since it's attributed, it should be processed
+	// immediately without going through candidates.
+	os.WriteFile(path, []byte(
+		`{"type":"user","sessionId":"abc","timestamp":"2026-03-19T10:00:00Z","cwd":"/home/user/dev/project","message":{"role":"user","content":"fix bug"},"uuid":"u1"}`+"\n",
+	), 0o644)
+
+	fm.handleFileChange(path)
+
+	// Should NOT be in candidates.
+	if fm.candidateFiles[path] {
+		t.Fatal("attributed file should not be added to candidates")
+	}
+
+	// Should be processed immediately.
+	sess, _ := s.Get("sess-1")
+	if sess.Status == nil || !sess.Status.Working {
+		t.Fatal("expected working=true after immediate processing")
+	}
+}
+
 // --- Claude status lifecycle tests ---
 
 func setupClaudeFileMonitor(t *testing.T) (*FileMonitor, *store.Store, string) {

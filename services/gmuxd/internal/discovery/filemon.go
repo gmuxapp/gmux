@@ -11,12 +11,15 @@
 //   - All subdirectories under the root are watched, not just the one
 //     matching the terminal's cwd. Tools may write session files in other
 //     directories (grove worktrees, /resume from a different cwd).
-//   - .jsonl file Write/Create events trigger attribution + parsing.
+//   - .jsonl file Write/Create events trigger line processing for
+//     already-attributed files. Unattributed files are queued and
+//     matched on the next throttled attribution scan.
 //
-// Attribution follows ADR-0009:
+// Attribution:
 //   - Candidates are all live sessions of the same adapter kind
 //   - Content-similarity matching between file tail and session scrollback
 //     (fetched via GET /scrollback/text on the runner) picks the right one
+//   - Scrollback fetches happen off the event loop on a throttled timer
 //   - Sticky: once attributed, re-match only when a DIFFERENT file writes
 package discovery
 
@@ -42,15 +45,16 @@ import (
 type FileMonitor struct {
 	store   *store.Store
 	watcher *fsnotify.Watcher
+	poke    chan struct{} // non-blocking signal to retry attribution
 
-	mu           sync.Mutex
-	watchedDirs  map[string]bool              // all dirs currently watched (roots + session dirs)
-	rootDirs     map[string]bool              // session root dirs being watched
-	sessions     map[string]*monitoredSession // sessionID → info
-	attributions map[string]string            // filePath → sessionID (sticky)
-	activeFiles  map[string]string            // sessionID → filePath (tracks current file for Slug)
-	fileOffsets  map[string]int64             // filePath → read offset
-
+	mu             sync.Mutex
+	watchedDirs    map[string]bool              // all dirs currently watched (roots + session dirs)
+	rootDirs       map[string]bool              // session root dirs being watched
+	sessions       map[string]*monitoredSession // sessionID -> info
+	attributions   map[string]string            // filePath -> sessionID (sticky)
+	activeFiles    map[string]string            // sessionID -> filePath (tracks current file for Slug)
+	fileOffsets    map[string]int64             // filePath -> read offset
+	candidateFiles map[string]bool              // files seen but not yet attributed
 }
 
 // monitoredSession tracks a live session for file monitoring.
@@ -81,25 +85,39 @@ func NewFileMonitorWithAttributions(s *store.Store, attrs map[string]string) *Fi
 		attrs = make(map[string]string)
 	}
 	return &FileMonitor{
-		store:        s,
-		watcher:      w,
-		watchedDirs:  make(map[string]bool),
-		rootDirs:     make(map[string]bool),
-		sessions:     make(map[string]*monitoredSession),
-		attributions: attrs,
-		activeFiles:  make(map[string]string),
-		fileOffsets:  make(map[string]int64),
+		store:          s,
+		watcher:        w,
+		poke:           make(chan struct{}, 1),
+		watchedDirs:    make(map[string]bool),
+		rootDirs:       make(map[string]bool),
+		sessions:       make(map[string]*monitoredSession),
+		attributions:   attrs,
+		activeFiles:    make(map[string]string),
+		fileOffsets:    make(map[string]int64),
+		candidateFiles: make(map[string]bool),
 	}
 }
 
-// Run processes inotify events until stop is closed. Fully event-driven —
-// no polling. Root dirs are watched to detect new session subdirectories.
+// attributionThrottle is the minimum interval between proactive
+// attribution scans. Keeps scrollback fetches bounded during bursts
+// of session registrations or file writes.
+const attributionThrottle = 3 * time.Second
+
+// Run processes inotify events and proactive attribution scans until
+// stop is closed. File events for already-attributed files are processed
+// immediately (cheap, no network). Unattributed files are queued and
+// matched on a throttled timer via tryAttributeUnmatched, which does the
+// expensive scrollback fetches off the event loop.
 func (fm *FileMonitor) Run(stop <-chan struct{}) {
 	if fm.watcher == nil {
 		<-stop
 		return
 	}
 	defer fm.watcher.Close()
+
+	// Throttle timer for proactive attribution. Nil when idle (no
+	// unattributed files). Set to attributionThrottle after a poke.
+	var throttle <-chan time.Time
 
 	for {
 		select {
@@ -117,6 +135,20 @@ func (fm *FileMonitor) Run(stop <-chan struct{}) {
 				return
 			}
 			log.Printf("filemon: watcher error: %v", err)
+
+		case <-fm.poke:
+			// New session or unattributed file. Start the throttle
+			// timer if not already running.
+			if throttle == nil {
+				throttle = time.After(attributionThrottle)
+			}
+
+		case <-throttle:
+			throttle = nil
+			if fm.tryAttributeUnmatched() {
+				// Still have unattributed files; keep retrying.
+				throttle = time.After(attributionThrottle)
+			}
 		}
 	}
 }
@@ -127,12 +159,11 @@ func (fm *FileMonitor) handleFSEvent(event fsnotify.Event) {
 
 	if event.Has(fsnotify.Create) {
 		// A new entry was created. Could be:
-		// 1. A new session subdirectory in a root dir → add watch
-		// 2. A new .jsonl file in a session dir → handle as file change
+		// 1. A new session subdirectory in a root dir -> add watch
+		// 2. A new .jsonl file in a session dir -> handle as file change
 		fm.mu.Lock()
 		dir := filepath.Dir(name)
 		if fm.rootDirs[dir] {
-			// Created inside a root dir — check if it's a directory we're waiting for.
 			fm.handleNewSubdirLocked(name)
 		}
 		fm.mu.Unlock()
@@ -154,20 +185,17 @@ func (fm *FileMonitor) handleFSEvent(event fsnotify.Event) {
 // in directories other than SessionDir(cwd) (e.g., grove worktrees, /resume
 // from a different folder).
 func (fm *FileMonitor) handleNewSubdirLocked(path string) {
-	// Verify it's actually a directory.
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
 		return
 	}
-
 	fm.addWatchLocked(path)
-
 }
 
 // NotifyNewSession registers a session for file monitoring.
-// Watches all subdirectories under the session root (not just the one
-// matching the terminal's cwd) so that files in other directories are
-// detected. The next file change triggers a full read.
+// Sets up watches on the session root and all its subdirectories, seeds
+// candidate files from recent .jsonl files, and signals the Run loop to
+// attempt attribution on the next throttle tick.
 func (fm *FileMonitor) NotifyNewSession(sessionID string) {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
@@ -207,9 +235,9 @@ func (fm *FileMonitor) NotifyNewSession(sessionID string) {
 		fm.ensureRootWatchLocked(root)
 	}
 
-	// Watch the session directory for the terminal's cwd. This is the
-	// most likely location for new session files. Create it if needed
-	// (e.g. Codex date-nested layouts where today's dir doesn't exist).
+	// Watch the session directory for the terminal's cwd. Create it if
+	// needed (e.g. Codex date-nested layouts where today's dir doesn't
+	// exist yet).
 	dir := filer.SessionDir(sess.Cwd)
 	if dir != "" {
 		if _, err := os.Stat(dir); err != nil {
@@ -220,43 +248,35 @@ func (fm *FileMonitor) NotifyNewSession(sessionID string) {
 		fm.addWatchLocked(dir)
 	}
 
-	// Also watch all other subdirectories under the session root.
-	// Tools may write session files in directories other than
-	// SessionDir(cwd). For example, pi with grove worktrees uses the
-	// worktree path as its cwd, and /resume can open a session from
-	// any previous cwd.
+	// Watch all other subdirectories under the session root. Tools may
+	// write session files in directories other than SessionDir(cwd).
 	// New directories created later are caught by handleNewSubdirLocked.
 	if root != "" {
 		fm.watchAllSubdirsLocked(root)
 	}
 
-	// Eagerly scan for recently-modified session files. Only files
-	// modified after the session started are scanned, to avoid pulling
-	// in stale titles from old sessions. We scan all watched dirs under
-	// this adapter's root, not just SessionDir(cwd), so files in
-	// other directories (grove worktrees, /resume targets) are found.
+	// Seed candidate files: collect recent .jsonl files so
+	// tryAttributeUnmatched can match them. This handles gmuxd restart
+	// (files already exist) and sessions that write before the inotify
+	// watch is established.
 	var startedAt time.Time
 	if s, ok := fm.store.Get(sessionID); ok {
 		startedAt, _ = time.Parse(time.RFC3339, s.StartedAt)
 	}
-	var dirsToScan []string
+	var nDirs int
 	for d := range fm.watchedDirs {
-		if !fm.rootDirs[d] && root != "" && isUnderRoot(d, root) {
-			dirsToScan = append(dirsToScan, d)
+		if fm.rootDirs[d] || root == "" || !isUnderRoot(d, root) {
+			continue
 		}
+		nDirs++
+		fm.collectCandidateFilesLocked(d, startedAt)
 	}
-	log.Printf("filemon: watching %d session dirs for %s (kind=%s)", len(dirsToScan), sessionID, sess.Kind)
+	log.Printf("filemon: watching %d session dirs for %s (kind=%s)", nDirs, sessionID, sess.Kind)
 
-	fm.mu.Unlock()
-	for _, d := range dirsToScan {
-		fm.scanDirForRecentSessions(d, startedAt)
-	}
-	fm.mu.Lock()
+	fm.pokeLocked()
 }
 
 // watchAllSubdirsLocked watches every immediate subdirectory under root.
-// This covers session directories for any cwd, not just the one matching
-// the terminal's cwd.
 func (fm *FileMonitor) watchAllSubdirsLocked(root string) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -270,10 +290,9 @@ func (fm *FileMonitor) watchAllSubdirsLocked(root string) {
 	}
 }
 
-// scanDirForRecentSessions processes .jsonl files in a directory that
-// were modified after the given threshold. Files modified before are
-// skipped to avoid attributing stale sessions.
-func (fm *FileMonitor) scanDirForRecentSessions(dir string, modifiedAfter time.Time) {
+// collectCandidateFilesLocked adds unattributed .jsonl files in dir
+// modified after the threshold to the candidate set.
+func (fm *FileMonitor) collectCandidateFilesLocked(dir string, modifiedAfter time.Time) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -289,7 +308,19 @@ func (fm *FileMonitor) scanDirForRecentSessions(dir string, modifiedAfter time.T
 		if !modifiedAfter.IsZero() && info.ModTime().Before(modifiedAfter) {
 			continue
 		}
-		fm.handleFileChange(filepath.Join(dir, e.Name()))
+		path := filepath.Join(dir, e.Name())
+		if _, attributed := fm.attributions[path]; !attributed {
+			fm.candidateFiles[path] = true
+		}
+	}
+}
+
+// pokeLocked sends a non-blocking signal to the Run loop to attempt
+// attribution on the next throttle tick.
+func (fm *FileMonitor) pokeLocked() {
+	select {
+	case fm.poke <- struct{}{}:
+	default:
 	}
 }
 
@@ -310,7 +341,6 @@ func (fm *FileMonitor) ResolveResumeCommand(sess *store.Session) []string {
 		return nil
 	}
 
-	// Find the attributed file path for this session.
 	fm.mu.Lock()
 	var filePath string
 	for path, sid := range fm.attributions {
@@ -325,7 +355,6 @@ func (fm *FileMonitor) ResolveResumeCommand(sess *store.Session) []string {
 		return nil
 	}
 
-	// Re-parse the file to get the tool's real ID and metadata.
 	info, err := filer.ParseSessionFile(filePath)
 	if err != nil {
 		return nil
@@ -375,19 +404,21 @@ func (fm *FileMonitor) dirNeededLocked(dir string) bool {
 	return false
 }
 
+// --- File event handling ---
+
 // handleFileChange processes a .jsonl file write/create event.
+// Already-attributed files are processed immediately (cheap, no network).
+// Unattributed files are added to the candidate set for the next
+// throttled attribution scan.
 func (fm *FileMonitor) handleFileChange(path string) {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
 
-	dir := filepath.Dir(path)
-
-	// Find who this file is attributed to.
 	sessionID, attributed := fm.attributions[path]
 
 	// Clear stale attributions: if the session ID no longer corresponds
 	// to a monitored session (e.g. gmuxd restarted, old session gone),
-	// re-attribute so the file can match the current live session.
+	// treat the file as unattributed.
 	if attributed {
 		if _, ok := fm.sessions[sessionID]; !ok {
 			delete(fm.attributions, path)
@@ -396,22 +427,19 @@ func (fm *FileMonitor) handleFileChange(path string) {
 	}
 
 	if !attributed {
-		sessionID = fm.attributeFileLocked(dir, path)
-		if sessionID == "" {
-			return
-		}
-		// New attribution — parse the full file for initial title.
-		// This handles "name > first user message > (new)" correctly
-		// without requiring ParseNewLines to track message order.
-		if title := fm.deriveTitleFromFile(sessionID, path); title != "" {
-			fm.store.Update(sessionID, func(s *store.Session) {
-				s.AdapterTitle = title
-			})
-		}
+		fm.candidateFiles[path] = true
+		fm.pokeLocked()
+		return
 	}
 
-	// Track active file per session. When the active file changes
-	// (e.g. /new or /resume in the tool's TUI), update Slug.
+	// Attributed file: process new lines immediately.
+	fm.processAttributedFileLocked(sessionID, path)
+}
+
+// processAttributedFileLocked reads new lines from an attributed file
+// and applies title/status/unread updates to the session. Must be
+// called with fm.mu held.
+func (fm *FileMonitor) processAttributedFileLocked(sessionID, path string) {
 	fm.updateActiveFileLocked(sessionID, path)
 
 	ms, ok := fm.sessions[sessionID]
@@ -430,18 +458,12 @@ func (fm *FileMonitor) handleFileChange(path string) {
 
 	events := ms.fileMon.ParseNewLines(lines, path)
 
-	// If adapter title is still unset (file was attributed before any user
-	// messages), re-derive it from the full file. This catches the common
-	// case where the tool creates the file on launch but only writes user
-	// messages later. Derive the title outside the lock (file I/O), then
-	// apply atomically with a condition check inside Update.
+	// Re-derive title from the full file when it's still unset.
 	title := fm.deriveTitleFromFile(sessionID, path)
 	if title != "" {
 		fm.store.Update(sessionID, func(s *store.Session) {
 			if s.AdapterTitle == "" || s.AdapterTitle == "(new)" {
 				s.AdapterTitle = title
-				// Also refresh slug when the title transitions from
-				// placeholder to real content (first user message).
 				newSlug := adapter.Slugify(title)
 				if newSlug != "" && (s.Slug == "" || s.Slug == "new") {
 					s.Slug = newSlug
@@ -454,7 +476,6 @@ func (fm *FileMonitor) handleFileChange(path string) {
 		return
 	}
 
-	// Apply all events atomically to avoid races with the SSE subscriber.
 	fm.store.Update(sessionID, func(sess *store.Session) {
 		for _, evt := range events {
 			if evt.Title != "" {
@@ -462,7 +483,7 @@ func (fm *FileMonitor) handleFileChange(path string) {
 			}
 			if evt.Status != nil {
 				if evt.Status.Label == "" && !evt.Status.Working && !evt.Status.Error {
-					sess.Status = nil // clear — no meaningful info to show
+					sess.Status = nil
 				} else {
 					sess.Status = &store.Status{
 						Label:   evt.Status.Label,
@@ -471,8 +492,6 @@ func (fm *FileMonitor) handleFileChange(path string) {
 					}
 				}
 			}
-			// Skip unread events from full-file re-reads (e.g. session
-			// restart). Historical assistant turns are not new output.
 			if evt.Unread != nil && !readAll {
 				sess.Unread = *evt.Unread
 			}
@@ -480,10 +499,8 @@ func (fm *FileMonitor) handleFileChange(path string) {
 	})
 }
 
-// deriveTitleFromFile parses the full session file and returns the best title
-// (name > first user message > ""). Called on first attribution and when
-// the adapter title is still unset, to derive the initial title without
-// relying on ParseNewLines. Returns "" if no title can be derived.
+// deriveTitleFromFile parses the full session file and returns the best
+// title (name > first user message > "").
 func (fm *FileMonitor) deriveTitleFromFile(sessionID, filePath string) string {
 	ms, ok := fm.sessions[sessionID]
 	if !ok {
@@ -503,12 +520,11 @@ func (fm *FileMonitor) deriveTitleFromFile(sessionID, filePath string) string {
 // --- Active file tracking ---
 
 // updateActiveFileLocked sets the active file for a session and updates
-// Slug when the file changes. This handles /new and /resume commands
-// in the tool's TUI, which start writing to a different session file.
+// Slug when the file changes.
 func (fm *FileMonitor) updateActiveFileLocked(sessionID, filePath string) {
 	prev := fm.activeFiles[sessionID]
 	if prev == filePath {
-		return // same file, nothing to do
+		return
 	}
 	fm.activeFiles[sessionID] = filePath
 
@@ -532,93 +548,161 @@ func (fm *FileMonitor) updateActiveFileLocked(sessionID, filePath string) {
 }
 
 // persistAttributionsLocked writes the current attributions to disk.
-// Must be called with fm.mu held.
 func (fm *FileMonitor) persistAttributionsLocked() {
 	saveAttributions(fm.attributions, fm.sessions)
 }
 
 // --- Attribution ---
 
-// attributeFileLocked determines which session a file belongs to.
-// Candidates are all live sessions of the same adapter kind, regardless
-// of which session directory the file is in. This handles tools that
-// may write session files outside SessionDir(cwd), e.g. grove worktrees
-// or /resume from a different folder.
-func (fm *FileMonitor) attributeFileLocked(dir, filePath string) string {
-	// Determine the adapter kind from the directory's root.
-	// All session dirs live under a single root per adapter kind.
-	var kind string
+// tryAttributeUnmatched attempts to match candidate files to sessions
+// using scrollback similarity. Called from the Run loop on a throttled
+// timer. Returns true if unattributed files remain (caller should keep
+// retrying).
+//
+// The expensive work (scrollback fetches, file I/O) happens with the
+// lock released. The lock is only held briefly to snapshot state and
+// record results.
+func (fm *FileMonitor) tryAttributeUnmatched() bool {
+	fm.mu.Lock()
+
+	// Prune candidates that were attributed since they were queued.
+	var files []string
+	for path := range fm.candidateFiles {
+		if _, ok := fm.attributions[path]; ok {
+			delete(fm.candidateFiles, path)
+		} else {
+			files = append(files, path)
+		}
+	}
+	if len(files) == 0 {
+		fm.mu.Unlock()
+		return false
+	}
+
+	// Snapshot session state needed for attribution.
+	type sessionSnap struct {
+		id         string
+		cwd        string
+		kind       string
+		socketPath string
+		startedAt  time.Time
+	}
+	snaps := make(map[string]*sessionSnap)
 	for _, ms := range fm.sessions {
-		if root := ms.filer.SessionRootDir(); root != "" && isUnderRoot(dir, root) {
-			kind = ms.kind
-			break
+		snap := &sessionSnap{
+			id: ms.id, cwd: ms.cwd, kind: ms.kind,
+			socketPath: ms.socketPath,
 		}
-	}
-	if kind == "" {
-		return ""
+		if sess, ok := fm.store.Get(ms.id); ok {
+			snap.startedAt, _ = time.Parse(time.RFC3339, sess.StartedAt)
+		}
+		snaps[ms.id] = snap
 	}
 
-	var candidates []*monitoredSession
+	// Determine which adapter kind each file belongs to.
+	fileKinds := make(map[string]string)
+	for _, path := range files {
+		dir := filepath.Dir(path)
+		for _, ms := range fm.sessions {
+			if root := ms.filer.SessionRootDir(); root != "" && isUnderRoot(dir, root) {
+				fileKinds[path] = ms.kind
+				break
+			}
+		}
+	}
+
+	// Snapshot adapter references for each kind.
+	adapterByKind := make(map[string]adapter.Adapter)
 	for _, ms := range fm.sessions {
-		if ms.kind == kind {
-			candidates = append(candidates, ms)
+		if _, ok := adapterByKind[ms.kind]; !ok {
+			adapterByKind[ms.kind] = ms.adapter
 		}
 	}
 
-	if len(candidates) == 0 {
-		return ""
+	fm.mu.Unlock()
+
+	// --- Expensive work outside the lock ---
+
+	// Fetch scrollback for each session (one HTTP call each).
+	scrollbacks := make(map[string]string)
+	for id, snap := range snaps {
+		scrollbacks[id] = fetchScrollbackText(snap.socketPath)
 	}
 
-	// Delegate to the adapter's FileAttributor if available.
-	attr, hasAttr := candidates[0].adapter.(adapter.FileAttributor)
-	if hasAttr {
-		fileCandidates := make([]adapter.FileCandidate, len(candidates))
-		for i, ms := range candidates {
-			fc := adapter.FileCandidate{
-				SessionID: ms.id,
-				Cwd:       ms.cwd,
-			}
-			if sess, ok := fm.store.Get(ms.id); ok {
-				fc.StartedAt, _ = time.Parse(time.RFC3339, sess.StartedAt)
-			}
-			// Fetch scrollback for content-similarity matching (pi).
-			fc.Scrollback = fetchScrollbackText(ms.socketPath)
-			fileCandidates[i] = fc
-		}
-		if id := attr.AttributeFile(filePath, fileCandidates); id != "" {
-			fm.attributions[filePath] = id
-			fm.persistAttributionsLocked()
-			log.Printf("filemon: attributed %s → %s", filepath.Base(filePath), id)
-			return id
+	// Try to attribute each file.
+	newAttrs := make(map[string]string)
+	for _, path := range files {
+		kind := fileKinds[path]
+		if kind == "" {
+			continue
 		}
 
-		// Adapter couldn't match by content/timestamp. For single-candidate
-		// dirs, fall back if the file was just written (mtime within 30s).
-		// This handles /new files during live operation without racing with
-		// sequential session registration during startup scans (where old
-		// files would have stale mtimes).
-		if len(candidates) == 1 {
-			if info, err := os.Stat(filePath); err == nil {
-				if time.Since(info.ModTime()) < 30*time.Second {
-					fm.attributions[filePath] = candidates[0].id
-					fm.persistAttributionsLocked()
-					log.Printf("filemon: attributed %s → %s (fresh single-candidate)", filepath.Base(filePath), candidates[0].id)
-					return candidates[0].id
+		var candidates []adapter.FileCandidate
+		for _, snap := range snaps {
+			if snap.kind != kind {
+				continue
+			}
+			candidates = append(candidates, adapter.FileCandidate{
+				SessionID:  snap.id,
+				Cwd:        snap.cwd,
+				StartedAt:  snap.startedAt,
+				Scrollback: scrollbacks[snap.id],
+			})
+		}
+		if len(candidates) == 0 {
+			continue
+		}
+
+		a := adapterByKind[kind]
+		attr, hasAttr := a.(adapter.FileAttributor)
+		if hasAttr {
+			if id := attr.AttributeFile(path, candidates); id != "" {
+				newAttrs[path] = id
+				continue
+			}
+			// Adapter couldn't match. Single candidate with a
+			// freshly-written file: fall back to mtime heuristic.
+			if len(candidates) == 1 {
+				if info, err := os.Stat(path); err == nil && time.Since(info.ModTime()) < 30*time.Second {
+					newAttrs[path] = candidates[0].SessionID
 				}
 			}
+		} else {
+			// No FileAttributor; trivial attribution.
+			newAttrs[path] = candidates[0].SessionID
 		}
-		return ""
 	}
 
-	// No FileAttributor — trivial attribution to first candidate.
-	fm.attributions[filePath] = candidates[0].id
-	fm.persistAttributionsLocked()
-	return candidates[0].id
-}
+	if len(newAttrs) == 0 {
+		return true // candidates remain, keep retrying
+	}
 
-// New sessions are not eagerly attributed to an existing file.
-// Attribution only happens on an actual write/create event for a JSONL file.
-// This avoids reusing the title from the most recent old session in the same cwd.
+	// --- Apply results under the lock ---
+
+	fm.mu.Lock()
+	for path, sessionID := range newAttrs {
+		if _, already := fm.attributions[path]; already {
+			delete(fm.candidateFiles, path)
+			continue
+		}
+		if _, ok := fm.sessions[sessionID]; !ok {
+			continue // session died while we were fetching
+		}
+		fm.attributions[path] = sessionID
+		delete(fm.candidateFiles, path)
+		log.Printf("filemon: attributed %s -> %s", filepath.Base(path), sessionID)
+
+		// Process the file: sets active file, reads all lines, derives
+		// title, and applies status/title/unread updates.
+		fm.processAttributedFileLocked(sessionID, path)
+	}
+	fm.persistAttributionsLocked()
+
+	hasUnattributed := len(fm.candidateFiles) > 0
+	fm.mu.Unlock()
+
+	return hasUnattributed
+}
 
 // --- Watch management ---
 
@@ -647,7 +731,6 @@ func (fm *FileMonitor) removeWatchLocked(dir string) {
 	if fm.watcher == nil || !fm.watchedDirs[dir] {
 		return
 	}
-	// Don't remove root dir watches.
 	if fm.rootDirs[dir] {
 		return
 	}
