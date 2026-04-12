@@ -31,8 +31,8 @@ export const SessionSchema = z.object({
   terminal_cols: z.number().int().positive().optional(),
   terminal_rows: z.number().int().positive().optional(),
   slug: z.string().optional(),
-
-  stale: z.boolean().optional().default(false),
+  runner_version: z.string().optional(),
+  binary_hash: z.string().optional(),
 })
 
 export const AttachResponseSchema = z.object({

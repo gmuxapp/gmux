@@ -19,7 +19,7 @@ function makeSession(overrides: Partial<Session> & { id: string }): Session {
     unread: false,
     resumable: false,
     socket_path: '/tmp/s.sock',
-    stale: false,
+    runner_version: undefined,
     ...overrides,
   }
 }

@@ -156,6 +156,7 @@ func main() {
 		Remotes:       remotes,
 		SocketPath:    sockPath,
 		BinaryHash:    binhash.Self(),
+		RunnerVersion: version,
 	})
 
 	// Common env vars — set for every child, per ADR-0005

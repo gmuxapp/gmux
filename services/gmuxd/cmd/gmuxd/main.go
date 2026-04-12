@@ -624,6 +624,14 @@ func serve(stderr io.Writer) int {
 			"dead":         dead,
 		}
 
+		// runner_hash is the sha256 of the gmux runner binary on disk.
+		// The frontend uses this (alongside runner_version on sessions)
+		// to detect dev-mode builds where both sides report "dev" but
+		// were compiled from different commits.
+		if discovery.ExpectedRunnerHash != "" {
+			data["runner_hash"] = discovery.ExpectedRunnerHash
+		}
+
 		// Launchers: what adapters can be launched on this host.
 		data["default_launcher"] = launchConfig.DefaultLauncher
 		data["launchers"] = launchConfig.Launchers

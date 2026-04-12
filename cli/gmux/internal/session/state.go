@@ -52,7 +52,8 @@ type State struct {
 	SocketPath string `json:"socket_path"`
 
 	// Build identity
-	BinaryHash string `json:"binary_hash,omitempty"`
+	BinaryHash    string `json:"binary_hash,omitempty"`
+	RunnerVersion string `json:"runner_version,omitempty"`
 
 	// SSE subscribers (not serialized)
 	subs []chan Event
@@ -75,6 +76,7 @@ type Config struct {
 	Kind          string
 	SocketPath    string
 	BinaryHash    string
+	RunnerVersion string
 	WorkspaceRoot string
 	Remotes       map[string]string
 }
@@ -91,6 +93,7 @@ func New(cfg Config) *State {
 		Remotes:       cfg.Remotes,
 		SocketPath:    cfg.SocketPath,
 		BinaryHash:    cfg.BinaryHash,
+		RunnerVersion: cfg.RunnerVersion,
 		Alive:         false,
 	}
 }

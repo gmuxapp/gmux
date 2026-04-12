@@ -32,7 +32,10 @@ export interface Session {
   terminal_cols?: number
   terminal_rows?: number
   slug?: string
-  stale?: boolean
+  /** Version string of the gmux runner binary that owns this session. */
+  runner_version?: string
+  /** SHA-256 of the gmux runner binary (first 8 chars useful for display). */
+  binary_hash?: string
 }
 
 export interface Folder {

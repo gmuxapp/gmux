@@ -21,8 +21,8 @@ import (
 )
 
 // ExpectedRunnerHash is the sha256 hash of the gmux binary that gmuxd
-// would launch for new sessions. Set by main at startup. Sessions whose
-// binary_hash differs are marked stale.
+// would launch for new sessions. Set by main at startup. Exposed via
+// /v1/health as runner_hash so the frontend can detect dev-mode hash drift.
 var ExpectedRunnerHash string
 
 func socketDir() string {
@@ -30,15 +30,6 @@ func socketDir() string {
 		return d
 	}
 	return "/tmp/gmux-sessions"
-}
-
-// markStale sets sess.Stale based on whether its BinaryHash matches the expected runner hash.
-func markStale(sess *store.Session) {
-	if ExpectedRunnerHash == "" || sess.BinaryHash == "" {
-		// Can't determine — don't mark stale (graceful degradation for old runners)
-		return
-	}
-	sess.Stale = sess.BinaryHash != ExpectedRunnerHash
 }
 
 // Watch periodically scans for Unix sockets and queries their /meta.
@@ -153,7 +144,6 @@ func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, 
 	if err != nil {
 		return err
 	}
-	markStale(newSess)
 
 	// Check if this is a resumed session.
 	if resumes != nil {
@@ -167,7 +157,7 @@ func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, 
 				existing.StartedAt = newSess.StartedAt
 				existing.Status = newSess.Status
 				existing.BinaryHash = newSess.BinaryHash
-				existing.Stale = newSess.Stale
+				existing.RunnerVersion = newSess.RunnerVersion
 				sessions.Upsert(existing)
 				if subs != nil {
 					subs.Subscribe(existingID, socketPath)

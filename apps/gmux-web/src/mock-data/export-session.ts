@@ -238,7 +238,8 @@ function generateFile(session: Session, terminal: string, cursorX: number, curso
   }
   lines.push(`  unread: ${session.unread},`)
   lines.push(`  socket_path: '/tmp/gmux-sessions/${session.id}.sock',`)
-  if (session.stale) lines.push(`  stale: true,`)
+  if (session.runner_version) lines.push(`  runner_version: ${JSON.stringify(session.runner_version)},`)
+  if (session.binary_hash) lines.push(`  binary_hash: ${JSON.stringify(session.binary_hash)},`)
   lines.push(`  cursorX: ${cursorX},`)
   lines.push(`  cursorY: ${cursorY},`)
   lines.push(`  terminal: ${body},`)

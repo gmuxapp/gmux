@@ -38,13 +38,22 @@ type Session struct {
 	SocketPath    string            `json:"socket_path,omitempty"`
 	TerminalCols  uint16            `json:"terminal_cols,omitempty"`
 	TerminalRows  uint16            `json:"terminal_rows,omitempty"`
-	Stale         bool              `json:"stale,omitempty"`
-
 	// Slug is a human-readable stable identifier derived from the
 	// adapter's session file slug. Used for URL routing (the frontend
 	// falls back to id[:8] when empty) and for matching dead sessions
 	// to project membership arrays. Unique within (kind, peer).
 	Slug string `json:"slug,omitempty"`
+
+	// RunnerVersion is the version string of the gmux runner binary that
+	// launched this session. Set by the runner at startup. The frontend
+	// derives staleness by comparing this to the daemon's own version
+	// (and BinaryHash when both sides report the same version string).
+	RunnerVersion string `json:"runner_version,omitempty"`
+
+	// BinaryHash is the sha256 of the gmux runner binary that launched
+	// this session. The frontend compares it against the daemon's
+	// runner_hash (from /v1/health) to detect dev-mode hash drift.
+	BinaryHash string `json:"binary_hash,omitempty"`
 
 	// ── Internal fields (excluded from API via MarshalJSON) ──
 
@@ -52,14 +61,10 @@ type Session struct {
 	// on every Upsert/Update.
 	ShellTitle   string `json:"shell_title,omitempty"`
 	AdapterTitle string `json:"adapter_title,omitempty"`
-
-	// BinaryHash is the sha256 of the gmux binary that owns this session.
-	// The derived Stale bool (API-visible) is what the frontend needs.
-	BinaryHash string `json:"binary_hash,omitempty"`
 }
 
 // MarshalJSON serializes a Session for the frontend API, excluding internal
-// fields whose derived outputs are already exposed (e.g. Stale from BinaryHash).
+// fields (ShellTitle, AdapterTitle) that are resolved into Title before sending.
 func (s Session) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		ID            string            `json:"id"`
@@ -83,8 +88,9 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		SocketPath    string            `json:"socket_path,omitempty"`
 		TerminalCols  uint16            `json:"terminal_cols,omitempty"`
 		TerminalRows  uint16            `json:"terminal_rows,omitempty"`
-		Stale         bool              `json:"stale,omitempty"`
 		Slug          string            `json:"slug,omitempty"`
+		RunnerVersion string            `json:"runner_version,omitempty"`
+		BinaryHash    string            `json:"binary_hash,omitempty"`
 	}
 	return json.Marshal(wire{
 		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,
@@ -94,8 +100,8 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		Title: s.Title, Subtitle: s.Subtitle, Status: s.Status,
 		Unread: s.Unread, Resumable: s.Resumable,
 		SocketPath: s.SocketPath, TerminalCols: s.TerminalCols,
-		TerminalRows: s.TerminalRows, Stale: s.Stale,
-		Slug: s.Slug,
+		TerminalRows: s.TerminalRows, Slug: s.Slug,
+		RunnerVersion: s.RunnerVersion, BinaryHash: s.BinaryHash,
 	})
 }
 

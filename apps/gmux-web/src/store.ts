@@ -43,6 +43,9 @@ export interface HealthData {
   hostname?: string
   tailscale_url?: string
   update_available?: string
+  /** SHA-256 of the gmux runner binary on disk. Compared against
+   * session.binary_hash to detect dev-mode hash drift. */
+  runner_hash?: string
   default_launcher?: string
   launchers?: LauncherDef[]
   peers?: PeerInfo[]
@@ -213,7 +216,8 @@ export function toUISession(s: ProtocolSession): Session {
     terminal_cols: s.terminal_cols ?? undefined,
     terminal_rows: s.terminal_rows ?? undefined,
     slug: s.slug ?? undefined,
-    stale: s.stale ?? false,
+    runner_version: s.runner_version ?? undefined,
+    binary_hash: s.binary_hash ?? undefined,
     peer: s.peer ?? undefined,
   }
 }
