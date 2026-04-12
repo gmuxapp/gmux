@@ -18,7 +18,7 @@ import { LaunchButton } from './launcher'
 import { installCopySession } from './mock-data/export-session'
 
 import {
-  sessions, connState, selected, selectedId, view, health,
+  sessions, connState, selected, selectedId, view, health, peers,
   terminalOptions, keybinds, macCommandIsCtrl,
   backgroundActivity, unreadCount,
   urlPath,
@@ -91,7 +91,14 @@ function SessionMenu({ session, onRestart }: {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const healthVal = health.value
-  const staleKind = sessionStaleness(session, healthVal)
+
+  // For remote sessions, compare against the peer's version (not the local
+  // daemon's). Peers don't expose runner_hash, so only version comparison
+  // is possible for remote sessions.
+  const compareTarget = session.peer
+    ? { version: peers.value.find(p => p.name === session.peer)?.version ?? '' }
+    : healthVal
+  const staleKind = sessionStaleness(session, compareTarget)
 
   // Close on outside click or Escape.
   useEffect(() => {
@@ -114,45 +121,49 @@ function SessionMenu({ session, onRestart }: {
       ? session.binary_hash.slice(0, 8)
       : 'unknown'
 
+  const hasActions = session.alive && onRestart
+
   return (
     <div class="session-menu" ref={menuRef}>
       <button
         class={`session-menu-trigger${staleKind ? ' stale' : ''}`}
         onClick={() => setOpen(!open)}
-        title={staleKind ? 'Runner outdated; click to restart' : 'Session'}
+        title="Session actions"
+        aria-expanded={open}
       >
-        {session.kind}
-        {staleKind && <span class="session-menu-dot" />}
+        <span class="session-menu-icon">⋮</span>
+        {staleKind && <span class="session-menu-badge" />}
       </button>
       {open && (
         <div class="session-menu-dropdown">
+          {hasActions && (
+            <>
+              <button
+                class={`session-menu-action${staleKind ? ' stale' : ''}`}
+                onClick={() => { setOpen(false); onRestart!() }}
+              >
+                Restart session
+                {staleKind && <span class="session-menu-action-tag">outdated</span>}
+              </button>
+              <div class="session-menu-divider" />
+            </>
+          )}
           <div class="session-menu-section-title">Session info</div>
           <div class="session-menu-row">
-            <span class="session-menu-label">adapter</span>
+            <span class="session-menu-label">Adapter</span>
             <span class="session-menu-value">{session.kind}</span>
           </div>
           <div class="session-menu-row">
-            <span class="session-menu-label">version</span>
+            <span class="session-menu-label">Version</span>
             <span class={`session-menu-value${staleKind ? ' stale' : ''}`}>
               {versionDisplay}
             </span>
           </div>
           {session.peer && (
             <div class="session-menu-row">
-              <span class="session-menu-label">host</span>
+              <span class="session-menu-label">Host</span>
               <span class="session-menu-value">{session.peer}</span>
             </div>
-          )}
-          {session.alive && onRestart && (
-            <>
-              <div class="session-menu-divider" />
-              <button
-                class={`session-menu-action${staleKind ? ' stale' : ''}`}
-                onClick={() => { setOpen(false); onRestart() }}
-              >
-                restart session
-              </button>
-            </>
           )}
         </div>
       )}

@@ -213,4 +213,20 @@ describe('sessionStaleness', () => {
       { version: 'dev', runner_hash: 'aabbccdd' },
     )).toBe('hash')
   })
+
+  it('returns null when compared against peer with matching version (no hash)', () => {
+    // Remote sessions are compared against their peer version, which has
+    // no runner_hash. Hash drift should not trigger a false positive.
+    expect(sessionStaleness(
+      { runner_version: '1.2.0', binary_hash: 'deadbeef9999' },
+      { version: '1.2.0' },
+    )).toBeNull()
+  })
+
+  it("returns 'version' when compared against peer with different version", () => {
+    expect(sessionStaleness(
+      { runner_version: '1.1.0' },
+      { version: '1.2.0' },
+    )).toBe('version')
+  })
 })
