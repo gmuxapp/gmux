@@ -9,7 +9,8 @@ import type { HostNode } from './projects'
 import { buildProjectTopology } from './projects'
 import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
-import { sessions, projects, peers, peerAppearance } from './store'
+import { sessions, projects, peers } from './store'
+import { PeerLabel } from './peer-label'
 
 function projectRemote(p: ProjectItem | undefined): string | undefined {
   return p?.match.find(r => r.remote)?.remote
@@ -94,11 +95,7 @@ function HostGroup({
     <section class="hub-host">
       <div class="hub-host-header">
         <span class={`hub-host-dot ${host.status}`} />
-        {host.path.length > 0 && (() => {
-          const name = host.path[0]
-          const a = peerAppearance.value.get(name)
-          return <span class="session-peer-label" style={a && { color: a.color, background: a.bg }}>{a?.label ?? name[0].toUpperCase()}</span>
-        })()}
+        {host.path.length > 0 && <PeerLabel name={host.path[0]} />}
         <span class="hub-host-name"><HostPath path={host.path} /></span>
         <span class="hub-host-count">
           {sessionCount} session{sessionCount === 1 ? '' : 's'}
