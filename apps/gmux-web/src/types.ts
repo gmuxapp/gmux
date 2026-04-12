@@ -72,7 +72,7 @@ export interface DiscoveredProject {
 export interface PeerInfo {
   name: string
   url: string
-  status: string // 'connected' | 'connecting' | 'disconnected' | 'offline'
+  status: string // 'connected' | 'connecting' | 'disconnected' | 'offline' (connecting treated as disconnected in UI)
   session_count: number
   last_error?: string
   version?: string

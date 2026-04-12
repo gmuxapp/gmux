@@ -39,7 +39,6 @@ code {
   /* Status */
   --status-error: oklch(65% 0.18 25);
   --status-connected: oklch(72% 0.14 145);
-  --status-connecting: oklch(80% 0.14 85);
   --status-disconnected: oklch(65% 0.18 25);
 
   /* Radii */
@@ -121,7 +120,6 @@ body {
 }
 .sidebar-logo:hover {
   color: #fff;
-  background: var(--bg-hover);
   text-shadow: 0 0 6px rgba(255, 255, 255, 0.25);
 }
 
@@ -194,7 +192,8 @@ body {
   transition: opacity 0.1s;
 }
 
-.folder-header:hover .launch-container.folder-launch-btn {
+.folder-header:hover .launch-container.folder-launch-btn,
+.launch-container.folder-launch-btn:has(.loading) {
   opacity: 1;
 }
 
@@ -1520,8 +1519,7 @@ body {
   box-shadow: 0 0 6px color-mix(in oklch, var(--status-connected) 40%, transparent);
 }
 .home-host-status.connecting {
-  background: var(--status-connecting);
-  animation: pulse-connecting 1.5s ease-in-out infinite;
+  background: var(--status-disconnected);
 }
 .home-host-status.disconnected {
   background: var(--status-disconnected);
@@ -2151,8 +2149,7 @@ a.home-host-link:hover {
   background: var(--status-connected);
 }
 .hub-host-dot.connecting {
-  background: var(--status-connecting);
-  animation: pulse-connecting 1.5s ease-in-out infinite;
+  background: var(--status-disconnected);
 }
 .hub-host-dot.disconnected { background: var(--status-disconnected); }
 .hub-host-name {
