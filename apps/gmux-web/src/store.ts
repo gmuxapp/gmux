@@ -65,6 +65,13 @@ const PEER_PALETTE: [string, string][] = [
   ['oklch(72% 0.10 340)', 'oklch(25% 0.04 340)'], // rose
 ]
 
+/** Simple string hash (djb2) mapped to palette index. */
+function hashPaletteIndex(s: string): number {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  return (h >>> 0) % PEER_PALETTE.length
+}
+
 /** Shortest unique prefix for each name among a set of names. */
 function uniquePrefixes(names: string[]): Map<string, string> {
   const result = new Map<string, string>()
@@ -89,9 +96,9 @@ export const peerAppearance = computed<ReadonlyMap<string, PeerAppearance>>(() =
   const names = peers.value.map(p => p.name)
   const prefixes = uniquePrefixes(names)
   const map = new Map<string, PeerAppearance>()
-  for (let i = 0; i < names.length; i++) {
-    const [color, bg] = PEER_PALETTE[i % PEER_PALETTE.length]
-    map.set(names[i], { label: prefixes.get(names[i])!, color, bg })
+  for (const name of names) {
+    const [color, bg] = PEER_PALETTE[hashPaletteIndex(name)]
+    map.set(name, { label: prefixes.get(name)!, color, bg })
   }
   return map
 })

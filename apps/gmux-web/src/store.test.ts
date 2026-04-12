@@ -266,13 +266,17 @@ describe('peerAppearance', () => {
     expect(map.get('development')!.label).toBe('DEVE')
   })
 
-  it('assigns colors sequentially by list order', () => {
+  it('assigns stable colors by name hash, independent of list order', () => {
     peers.value = [
       { name: 'alpha', url: '', status: 'connected', session_count: 0 },
       { name: 'beta', url: '', status: 'connected', session_count: 0 },
     ]
-    const map = peerAppearance.value
-    // First and second peer get different colors (first two palette entries)
-    expect(map.get('alpha')!.color).not.toBe(map.get('beta')!.color)
+    const color1 = peerAppearance.value.get('alpha')!.color
+    // Reverse order: alpha's color should not change
+    peers.value = [
+      { name: 'beta', url: '', status: 'connected', session_count: 0 },
+      { name: 'alpha', url: '', status: 'connected', session_count: 0 },
+    ]
+    expect(peerAppearance.value.get('alpha')!.color).toBe(color1)
   })
 })
