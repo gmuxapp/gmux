@@ -1,14 +1,20 @@
-Peering internals were refactored into shared `sseclient` and `apiclient`
-packages, fixing reconnect failures on large terminal snapshots and
-sessions disappearing across reconnects.
+<!--
+Optional prose for the next release. Edit this file to add a high-level
+summary, topic paragraphs, or migration notes. When version.sh runs, the
+content is injected into the changelog section between the version
+heading and the grouped bullet lists.
 
-### Session file attribution
-The daemon now attributes session files by adapter kind with scrollback
-matching, fixing cases where sessions lost their title or showed stale
-adapter badges.
+The file is cleared automatically after each release. Leave empty for
+releases that don't need prose (the auto-generated bullet list is
+enough for patch-only releases).
 
-### Sidebar and UI
-Sessions can be reordered via drag-and-drop. Peer labels use
-hash-based color assignment for stability, and the adapter/outdated
-badges are replaced by a session info menu. The home and project pages
-have distinct layouts with better mobile ergonomics.
+Format: plain markdown. Supports headings, paragraphs, and lists.
+Example:
+
+    Peers now automatically reconnect after system suspend, no restart
+    needed.
+
+    ### Project matching
+    `projects.json` replaces separate `remote` and `paths` fields with a
+    unified `match` array.
+-->
