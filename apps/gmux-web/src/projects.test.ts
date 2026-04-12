@@ -208,6 +208,46 @@ describe('buildProjectFolders', () => {
     const folders = buildProjectFolders(projects, sessions)
     expect(folders[0].sessions).toHaveLength(0)
   })
+
+  it('sorts sessions by their position in the sessions array', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['c', 'a', 'b'] },
+    ]
+    const sessions = [
+      makeSession({ id: 'a', cwd: '/dev/proj', alive: true }),
+      makeSession({ id: 'b', cwd: '/dev/proj', alive: true }),
+      makeSession({ id: 'c', cwd: '/dev/proj', alive: true }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    expect(folders[0].sessions.map(s => s.id)).toEqual(['c', 'a', 'b'])
+  })
+
+  it('sorts sessions by slug when the array uses slugs', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['gamma', 'alpha'] },
+    ]
+    const sessions = [
+      makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: true, slug: 'alpha' }),
+      makeSession({ id: 'sess-2', cwd: '/dev/proj', alive: true, slug: 'gamma' }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    expect(folders[0].sessions.map(s => s.slug)).toEqual(['gamma', 'alpha'])
+  })
+
+  it('puts sessions not in the array at the end', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['b'] },
+    ]
+    const sessions = [
+      makeSession({ id: 'a', cwd: '/dev/proj', alive: true, created_at: '2025-01-01T00:00:00Z' }),
+      makeSession({ id: 'b', cwd: '/dev/proj', alive: true, created_at: '2025-01-02T00:00:00Z' }),
+      makeSession({ id: 'c', cwd: '/dev/proj', alive: true, created_at: '2025-01-03T00:00:00Z' }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    const ids = folders[0].sessions.map(s => s.id)
+    // 'b' is in the array so it comes first; 'a' and 'c' are not, sorted by creation time
+    expect(ids).toEqual(['b', 'a', 'c'])
+  })
 })
 
 describe('isSessionVisibleInProject', () => {

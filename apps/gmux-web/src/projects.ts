@@ -142,8 +142,17 @@ export function buildProjectFolders(
       path: project.slug,
       launchCwd: project.match.find(r => r.path)?.path,
       sessions: matched.sort((a, b) => {
-        if (a.cwd !== b.cwd) return a.cwd < b.cwd ? -1 : 1
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        // The sessions array is the canonical order. Sessions not yet
+        // in the array (just spawned, auto-assign pending) go at the
+        // end sorted by creation time.
+        const keys = project.sessions ?? []
+        const keyOf = (s: Session) => s.slug || s.id
+        const ai = keys.indexOf(keyOf(a))
+        const bi = keys.indexOf(keyOf(b))
+        if (ai !== -1 && bi !== -1) return ai - bi
+        if (ai !== -1) return -1
+        if (bi !== -1) return 1
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
       }),
     })
   }

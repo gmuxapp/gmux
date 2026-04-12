@@ -791,6 +791,43 @@ func serve(stderr io.Writer) int {
 		writeJSON(w, map[string]any{"ok": true, "data": item})
 	})
 
+	mux.HandleFunc("PATCH /v1/projects/{slug}/sessions", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "read error")
+			return
+		}
+		var req struct {
+			Sessions []string `json:"sessions"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		found := false
+		err = projectMgr.Update(func(state *projects.State) bool {
+			for i := range state.Items {
+				if state.Items[i].Slug == slug {
+					state.Items[i].Sessions = req.Sessions
+					found = true
+					return true
+				}
+			}
+			return false
+		})
+		if err != nil {
+			log.Printf("projects: reorder sessions error: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
+			return
+		}
+		if !found {
+			writeError(w, http.StatusNotFound, "not_found", "project not found")
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	})
+
 	// ── Sessions ──
 
 	mux.HandleFunc("GET /v1/sessions", func(w http.ResponseWriter, r *http.Request) {

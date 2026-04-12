@@ -407,6 +407,29 @@ export async function updateProjects(items: ProjectItem[]): Promise<void> {
   await putProjects(items)
 }
 
+/**
+ * Persist a new session order for a project. The `sessionKeys` array
+ * contains session keys (slug or id) in the desired display order.
+ * Optimistically updates the local signal so the sidebar re-renders
+ * immediately, without waiting for the SSE projects-update round-trip.
+ */
+export async function reorderSessions(projectSlug: string, sessionKeys: string[]): Promise<void> {
+  // Optimistic update.
+  projects.value = projects.value.map(p =>
+    p.slug === projectSlug ? { ...p, sessions: sessionKeys } : p,
+  )
+  try {
+    const resp = await fetch(`/v1/projects/${projectSlug}/sessions`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessions: sessionKeys }),
+    })
+    if (!resp.ok) console.warn('PATCH sessions failed:', resp.status)
+  } catch (err) {
+    console.warn('PATCH sessions error:', err)
+  }
+}
+
 // ── Session actions ─────────────────────────────────────────────────────────
 
 async function postAction(endpoint: string, body?: Record<string, unknown>): Promise<void> {
