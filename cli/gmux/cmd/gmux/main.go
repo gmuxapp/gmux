@@ -165,7 +165,7 @@ func main() {
 		"GMUX_SOCKET=" + sockPath,
 		"GMUX_SESSION_ID=" + sessionID,
 		"GMUX_ADAPTER=" + a.Name(),
-		"GMUX_VERSION=" + version,
+		"GMUX_RUNNER_VERSION=" + version,
 	}
 	env = append(env, adapterEnv...)
 

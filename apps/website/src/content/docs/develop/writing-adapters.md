@@ -97,7 +97,7 @@ type Adapter interface {
 
 **`Match(cmd)`** receives the full command array and decides whether this adapter should handle it. Match on `filepath.Base(arg)` so full paths and wrappers work. Stop scanning at `"--"`.
 
-**`Env(ctx)`** returns extra environment variables for the child. The runner already sets `GMUX`, `GMUX_SOCKET`, `GMUX_SESSION_ID`, `GMUX_ADAPTER`, and `GMUX_VERSION`. Most adapters return `nil`.
+**`Env(ctx)`** returns extra environment variables for the child. The runner already sets `GMUX`, `GMUX_SOCKET`, `GMUX_SESSION_ID`, `GMUX_ADAPTER`, and `GMUX_RUNNER_VERSION`. Most adapters return `nil`.
 
 **`Monitor(output)`** receives raw PTY bytes on every read. Return a `*Status` when something meaningful happens, `nil` otherwise. This runs frequently, so keep it cheap.
 

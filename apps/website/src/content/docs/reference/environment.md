@@ -81,6 +81,6 @@ These are available inside every session launched by `gmux`. Use them to detect 
 | `GMUX_SOCKET` | Unix socket path for callbacks to the session runner. | `/tmp/gmux-sessions/sess-abc123.sock` |
 | `GMUX_SESSION_ID` | Unique session identifier. | `sess-abc123` |
 | `GMUX_ADAPTER` | Name of the matched adapter. | `pi`, `shell` |
-| `GMUX_VERSION` | gmux protocol version. | `0.4.0` |
+| `GMUX_RUNNER_VERSION` | Version of the gmux runner hosting the session. | `0.4.0` |
 
 See [Adapter Architecture](/develop/adapter-architecture) for how to use the child-to-runner API.
