@@ -42,6 +42,14 @@ func Middleware(token string, next http.Handler) http.Handler {
 			return
 		}
 
+		// The web app manifest must be publicly accessible. Browsers fetch
+		// it without cookies, so auth-gating it returns the login HTML
+		// page which Chrome then fails to parse as JSON.
+		if r.URL.Path == "/manifest.json" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Shutdown is a local-only operation (available via Unix socket).
 		// Block it entirely on the TCP listener regardless of auth.
 		if r.URL.Path == "/v1/shutdown" {
