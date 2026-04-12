@@ -1664,6 +1664,17 @@ a.home-host-link:hover {
   color: var(--text);
 }
 
+.home-footer-update {
+  font-size: 11px;
+  color: oklch(85% 0.1 145);
+  text-decoration: none;
+}
+
+.home-footer-update:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 
 /* ── Mobile ── */
 
