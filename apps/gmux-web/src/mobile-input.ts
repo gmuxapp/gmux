@@ -91,8 +91,29 @@ export function attachMobileInputHandler(
   let pending: PendingReplacement | null = null
   let trackedDeletion: TrackedDeletion | null = null
 
+  /** Queue a replacement for phase 2 and send the necessary backspaces now. */
+  const queueReplacement = (
+    value: string,
+    selStart: number,
+    selEnd: number,
+    newText: string,
+    resetValue?: string,
+  ) => {
+    send('\x7f'.repeat(value.length - selStart))
+    pending = { newText, suffix: value.substring(selEnd), resetValue }
+  }
+
+  /** Extract inserted text from a beforeinput event. */
+  const resolveText = (ev: InputEvent) =>
+    ev.data ?? ev.dataTransfer?.getData('text/plain') ?? ''
+
   // Phase 1: detect replacement and send backspaces.
   const onBeforeInput = (ev: InputEvent) => {
+    // Snapshot and clear tracked deletion at the top; only the
+    // deleteContentBackward branch may re-set it below.
+    const deletion = trackedDeletion
+    trackedDeletion = null
+
     // Android autocorrect: the keyboard splits word corrections into
     // deleteContentBackward (non-collapsed) + insertText (collapsed).
     // Track the deletion so we can combine it with the following insert.
@@ -100,58 +121,36 @@ export function attachMobileInputHandler(
       const start = textarea.selectionStart ?? 0
       const end = textarea.selectionEnd ?? start
       // Non-collapsed: potential Android autocorrect start. Track it.
-      // Collapsed: normal backspace. Clear any stale tracking.
-      trackedDeletion = start < end
-        ? { preDeleteValue: textarea.value, deleteStart: start, deleteEnd: end }
-        : null
+      // Collapsed: normal backspace. Leave trackedDeletion null (already cleared).
+      if (start < end) {
+        trackedDeletion = { preDeleteValue: textarea.value, deleteStart: start, deleteEnd: end }
+      }
       return
     }
 
-    if (ev.inputType !== 'insertText' && ev.inputType !== 'insertReplacementText') {
-      trackedDeletion = null
-      return
-    }
+    if (ev.inputType !== 'insertText' && ev.inputType !== 'insertReplacementText') return
 
     const start = textarea.selectionStart ?? 0
     const end = textarea.selectionEnd ?? start
 
     // Android autocorrect phase 2: insertText immediately after a tracked
     // deletion completes the replacement pair.
-    if (trackedDeletion && start === end) {
-      const newText = ev.data ?? ev.dataTransfer?.getData('text/plain') ?? ''
-      if (!newText) { trackedDeletion = null; return }
-
-      const { preDeleteValue, deleteStart, deleteEnd } = trackedDeletion
-      trackedDeletion = null
-
-      const suffix = preDeleteValue.substring(deleteEnd)
-      const charsToErase = preDeleteValue.length - deleteStart
-
-      send('\x7f'.repeat(charsToErase))
-      pending = { newText, suffix, resetValue: preDeleteValue }
+    if (deletion && start === end) {
+      const newText = resolveText(ev)
+      if (newText) queueReplacement(
+        deletion.preDeleteValue, deletion.deleteStart, deletion.deleteEnd,
+        newText, deletion.preDeleteValue,
+      )
       return
     }
-
-    trackedDeletion = null
 
     // Collapsed selection = normal append, let xterm handle it.
     if (start === end) return
 
-    // iOS replacement: a single insertText/insertReplacementText with
-    // non-collapsed selection.
-    const newText = ev.data ?? ev.dataTransfer?.getData('text/plain') ?? ''
-    if (!newText) return
-
-    const suffix = textarea.value.substring(end)
-    const charsToErase = textarea.value.length - start
-
-    // Erase from the replacement start to the end of the textarea.
-    // All of this text was already sent to the PTY.
-    send('\x7f'.repeat(charsToErase))
-
-    // Phase 2 will send the replacement text + suffix after we prevent
-    // xterm from double-sending ev.data.
-    pending = { newText, suffix }
+    // iOS / single-event replacement: insertText or insertReplacementText
+    // with non-collapsed selection.
+    const newText = resolveText(ev)
+    if (newText) queueReplacement(textarea.value, start, end, newText)
   }
 
   // Phase 2: intercept the input event before xterm, send replacement + suffix.
