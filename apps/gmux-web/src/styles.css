@@ -125,38 +125,6 @@ body {
   text-shadow: 0 0 6px rgba(255, 255, 255, 0.25);
 }
 
-.sidebar-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 18px;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: oklch(22% 0.015 250);
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  letter-spacing: 0.01em;
-  text-decoration: none;
-  transform: translateY(2px);
-}
-
-.sidebar-badge:hover {
-  color: var(--text-primary);
-}
-
-.sidebar-badge-update {
-  background: oklch(30% 0.08 145);
-  color: oklch(85% 0.1 145);
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.sidebar-badge-update:hover {
-  background: oklch(35% 0.1 145);
-}
-
 .sidebar-scroll {
   flex: 1;
   overflow-y: auto;
@@ -1116,29 +1084,6 @@ body {
   gap: 8px;
 }
 
-.stale-badge {
-  font-family: 'Fira Code', monospace;
-  font-size: 10px;
-  font-weight: 500;
-  color: oklch(75% 0.15 65);
-  background: oklch(75% 0.15 65 / 0.12);
-  border: 1px solid oklch(75% 0.15 65 / 0.25);
-  padding: 1px 6px;
-  border-radius: 3px;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  flex-shrink: 0;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.stale-badge:hover {
-  background: oklch(75% 0.15 65 / 0.22);
-  border-color: oklch(75% 0.15 65 / 0.4);
-}
-.stale-badge:active {
-  background: oklch(75% 0.15 65 / 0.3);
-}
-
 .main-header-meta {
   display: flex;
   align-items: center;
@@ -1157,10 +1102,6 @@ body {
   opacity: 0.4;
 }
 
-.main-header-kind {
-  opacity: 0.7;
-}
-
 .main-header-status {
   display: flex;
   align-items: center;
@@ -1175,17 +1116,113 @@ body {
 .main-header-status.working { color: var(--accent); }
 .main-header-status.error   { color: var(--status-error); }
 
-.main-header-kind {
+/* Session info menu (replaces standalone adapter + outdated badges) */
+
+.session-info {
+  position: relative;
+}
+
+.session-info-trigger {
   font-family: 'Fira Code', monospace;
   font-size: 11px;
   font-weight: 500;
   color: var(--text-muted);
   background: var(--bg-surface);
+  border: 1px solid transparent;
   padding: 2px 8px;
   border-radius: 3px;
   white-space: nowrap;
-  flex-shrink: 0;
+  cursor: pointer;
   letter-spacing: 0.01em;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.session-info-trigger:hover {
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+
+.session-info-trigger.stale {
+  color: oklch(75% 0.15 65);
+}
+
+.session-info-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: oklch(75% 0.15 65);
+  flex-shrink: 0;
+}
+
+.session-info-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 180px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 0;
+  box-shadow: 0 4px 16px oklch(0% 0 0 / 0.3);
+  z-index: 50;
+}
+
+.session-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.session-info-label {
+  color: var(--text-muted);
+}
+
+.session-info-value {
+  font-family: 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.session-info-value.stale {
+  color: oklch(75% 0.15 65);
+}
+
+.session-info-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 0;
+}
+
+.session-info-action {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.session-info-action:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.session-info-action.stale {
+  color: oklch(75% 0.15 65);
+}
+
+.session-info-action.stale:hover {
+  background: oklch(75% 0.15 65 / 0.12);
+  color: oklch(85% 0.15 65);
 }
 
 .terminal-shell {
@@ -1656,10 +1693,6 @@ a.home-host-link:hover {
 
   .main-header-status {
     font-size: 11px;
-  }
-
-  .main-header-kind {
-    font-size: 10px;
   }
 
   .terminal-container .xterm {

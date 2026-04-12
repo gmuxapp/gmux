@@ -46,8 +46,6 @@ function MainHeader({ session, onRestart }: {
   session: Session | null
   onRestart?: () => void
 }) {
-  const healthVal = health.value
-
   if (!session) {
     return (
       <div class="main-header">
@@ -59,7 +57,6 @@ function MainHeader({ session, onRestart }: {
   }
 
   const shortCwd = session.cwd.replace(/^\/home\/[^/]+/, '~')
-  const staleKind = sessionStaleness(session, healthVal)
 
   return (
     <div class="main-header">
@@ -81,28 +78,85 @@ function MainHeader({ session, onRestart }: {
             {session.status.label}
           </div>
         )}
-        {staleKind && (
-          <button
-            class="stale-badge"
-            title={staleKind === 'hash'
-              ? `Dev build mismatch: ${session.binary_hash?.slice(0, 8)} vs ${healthVal?.runner_hash?.slice(0, 8)}. Click to restart.`
-              : `Runner v${session.runner_version} outdated (daemon v${healthVal?.version}). Click to restart.`
-            }
-            onClick={onRestart}
-          >
-            {staleKind === 'hash'
-              ? session.binary_hash?.slice(0, 8)
-              : 'outdated'
-            }
-          </button>
-        )}
-        {session.peer && (
-          <div class="main-header-kind" title="Host">{session.peer}</div>
-        )}
-        {session.kind && session.kind !== 'shell' && (
-          <div class="main-header-kind" title="Adapter">{session.kind}</div>
-        )}
+        <SessionInfoMenu session={session} onRestart={onRestart} />
       </div>
+    </div>
+  )
+}
+
+function SessionInfoMenu({ session, onRestart }: {
+  session: Session
+  onRestart?: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const healthVal = health.value
+  const staleKind = sessionStaleness(session, healthVal)
+
+  // Close on outside click or Escape.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    const onClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onClick)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onClick)
+    }
+  }, [open])
+
+  const versionDisplay = session.runner_version
+    ? `v${session.runner_version}`
+    : session.binary_hash
+      ? session.binary_hash.slice(0, 8)
+      : 'unknown'
+
+  const label = session.kind !== 'shell' ? session.kind : 'shell'
+
+  return (
+    <div class="session-info" ref={menuRef}>
+      <button
+        class={`session-info-trigger${staleKind ? ' stale' : ''}`}
+        onClick={() => setOpen(!open)}
+        title={staleKind ? 'Runner outdated' : label}
+      >
+        {label}
+        {staleKind && <span class="session-info-dot" />}
+      </button>
+      {open && (
+        <div class="session-info-menu">
+          <div class="session-info-row">
+            <span class="session-info-label">runner</span>
+            <span class="session-info-value">{label}</span>
+          </div>
+          <div class="session-info-row">
+            <span class="session-info-label">version</span>
+            <span class={`session-info-value${staleKind ? ' stale' : ''}`}>
+              {versionDisplay}
+            </span>
+          </div>
+          {session.peer && (
+            <div class="session-info-row">
+              <span class="session-info-label">host</span>
+              <span class="session-info-value">{session.peer}</span>
+            </div>
+          )}
+          {session.alive && onRestart && (
+            <>
+              <div class="session-info-divider" />
+              <button
+                class={`session-info-action${staleKind ? ' stale' : ''}`}
+                onClick={() => { setOpen(false); onRestart() }}
+              >
+                restart session
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }
