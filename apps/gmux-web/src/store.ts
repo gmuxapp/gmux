@@ -222,6 +222,26 @@ export function toUISession(s: ProtocolSession): Session {
   }
 }
 
+/**
+ * Derive staleness from a session's build-identity fields.
+ *
+ * Returns:
+ *   'version' - runner_version differs from the daemon version (production mismatch)
+ *   'hash'    - versions match but binary_hash differs from health.runner_hash
+ *               (dev-mode: both sides report "dev" but from different builds)
+ *   null      - current, or insufficient data to determine (graceful degradation
+ *               for runners that predate version tracking)
+ */
+export function sessionStaleness(
+  session: Pick<Session, 'runner_version' | 'binary_hash'>,
+  h: Pick<HealthData, 'version' | 'runner_hash'> | null,
+): 'version' | 'hash' | null {
+  if (!h || !session.runner_version) return null
+  if (session.runner_version !== h.version) return 'version'
+  if (session.binary_hash && h.runner_hash && session.binary_hash !== h.runner_hash) return 'hash'
+  return null
+}
+
 /** Upsert a session from SSE. Returns true if the session was new. */
 export function upsertSession(raw: ProtocolSession): boolean {
   const updated = toUISession(raw)

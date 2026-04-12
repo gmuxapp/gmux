@@ -778,3 +778,45 @@ func TestUpsertRemote_BroadcastsEvent(t *testing.T) {
 
 
 
+func TestSessionMarshalJSON_WireFormat(t *testing.T) {
+	s := Session{
+		ID:            "sess-abc",
+		Kind:          "pi",
+		Alive:         true,
+		RunnerVersion: "1.2.0",
+		BinaryHash:    "aabbccdd",
+		ShellTitle:    "internal-only",
+		AdapterTitle:  "internal-only",
+		Slug:          "my-slug",
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Fields that must appear on the wire.
+	if got := m["runner_version"]; got != "1.2.0" {
+		t.Errorf("runner_version = %v, want 1.2.0", got)
+	}
+	if got := m["binary_hash"]; got != "aabbccdd" {
+		t.Errorf("binary_hash = %v, want aabbccdd", got)
+	}
+	if got := m["slug"]; got != "my-slug" {
+		t.Errorf("slug = %v, want my-slug", got)
+	}
+
+	// Internal fields must not appear on the wire.
+	if _, ok := m["shell_title"]; ok {
+		t.Error("shell_title must not appear in wire JSON")
+	}
+	if _, ok := m["adapter_title"]; ok {
+		t.Error("adapter_title must not appear in wire JSON")
+	}
+	if _, ok := m["stale"]; ok {
+		t.Error("stale was removed; must not appear in wire JSON")
+	}
+}
