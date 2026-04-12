@@ -94,20 +94,64 @@ fi
 
 new_version=$(echo "$context" | jq -r '.[0].version')
 
-# ── Generate changelog section ──
+# ── Enrich commits with PR links ──
 #
-# Produces:
-#   ## vX.Y.Z
+# GitHub does not append "(#N)" to commit subjects for rebase merges
+# (only squash merges get that). We use the GitHub API to resolve each
+# commit's PR number and inject markdown links into the raw_message
+# before rendering.
 #
-#   ### Features
-#   - foo ([#N](https://github.com/gmuxapp/gmux/pull/N))
+# Steps:
+#   1. For each commit SHA in the context, query /commits/{sha}/pulls
+#   2. Append ([#N](url)) to the subject line of raw_message
+#   3. Render from the enriched context via --from-context
 #
-#   ### Fixes
-#   - bar ([#N](https://github.com/gmuxapp/gmux/pull/N))
-#
-#   ---
+# Commits that already carry a PR reference (squash merges) are skipped.
 
-section=$(git-cliff --unreleased --bump)
+enrich_context() {
+  local ctx_file="$1"
+  local out_file="$2"
+
+  if [[ -z "${GITHUB_TOKEN:-}" ]] || ! command -v gh >/dev/null 2>&1; then
+    cp "$ctx_file" "$out_file"
+    return
+  fi
+
+  local map_file
+  map_file=$(mktemp)
+  echo "{}" > "$map_file"
+
+  while IFS= read -r sha; do
+    local pr
+    pr=$(gh api "repos/gmuxapp/gmux/commits/$sha/pulls" --jq '.[0].number // empty' 2>/dev/null || true)
+    if [[ -n "$pr" ]]; then
+      jq --arg sha "$sha" --arg pr "$pr" '. + {($sha): ($pr | tonumber)}' "$map_file" > "${map_file}.tmp"
+      mv "${map_file}.tmp" "$map_file"
+    fi
+  done < <(jq -r '.[0].commits[].id' "$ctx_file")
+
+  jq --slurpfile prmap "$map_file" '
+    .[0].commits = [.[0].commits[] |
+      . as $c |
+      ($prmap[0][$c.id] // null) as $pr |
+      ($c.raw_message | split("\n")[0]) as $subject |
+      if $pr != null and ($subject | test("\\(#[0-9]+\\)|\\(\\[#[0-9]+\\]") | not) then
+        (.raw_message | split("\n")) as $lines |
+        .raw_message = ([$lines[0] + " ([#\($pr)](https://github.com/gmuxapp/gmux/pull/\($pr)))"] + $lines[1:] | join("\n"))
+      else .
+      end
+    ]
+  ' "$ctx_file" > "$out_file"
+
+  rm -f "$map_file"
+}
+
+ctx_input=$(mktemp)
+ctx_enriched=$(mktemp)
+echo "$context" > "$ctx_input"
+enrich_context "$ctx_input" "$ctx_enriched"
+section=$(git-cliff --from-context "$ctx_enriched")
+rm -f "$ctx_input" "$ctx_enriched"
 
 # ── Helper: strip leading and trailing blank lines ──
 

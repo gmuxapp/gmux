@@ -5,8 +5,9 @@
 # so that new releases look identical to historical ones.
 #
 # Used by .github/workflows/scripts/version.sh, which parses the JSON
-# context for release-gating logic and reuses the rendered section for
-# the changelog insertion. Manual previews:
+# context for release-gating logic, enriches commits with PR links via
+# the GitHub API, and renders the final section via --from-context.
+# Manual previews (without PR enrichment):
 #
 #   git-cliff --unreleased --bump              # print the next release section
 #   git-cliff --unreleased --bump --context    # same, as JSON
@@ -58,9 +59,11 @@ protect_breaking_commits = true
 split_commits = false
 
 commit_preprocessors = [
-  # Turn trailing "(#125)" into a markdown link to the PR.
-  # Multiline mode (?m) so $ matches end of the subject line, not end of
-  # the whole commit message (which would include body lines).
+  # Turn trailing "(#125)" into a markdown link to the PR. This handles
+  # commits that already carry the suffix (squash merges) during the
+  # --context pass. For rebase merges (which lack the suffix), version.sh
+  # resolves PR numbers via the GitHub API and injects full markdown
+  # links into the context before rendering with --from-context.
   { pattern = "(?m)\\s*\\(#([0-9]+)\\)$", replace = " ([#${1}](https://github.com/gmuxapp/gmux/pull/${1}))" },
 ]
 

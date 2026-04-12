@@ -31,6 +31,8 @@ jobs:
 
       - name: Check for releasable commits
         id: version
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           output=$(bash .github/workflows/scripts/version.sh)
           version=$(echo "$output" | head -1 | awk '{print $1}')
