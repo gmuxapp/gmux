@@ -77,6 +77,20 @@ Terminate a running session. Sends the same signal chain the UI's kill button do
 gmux --kill a3f20187
 ```
 
+### `gmux --send <id> [text]`
+
+Inject input into a running session, as if the bytes had been typed at the terminal. When `text` is given inline it is sent verbatim — no trailing newline is added, so you use shell `$'...\n'` (or pipe stdin) to submit:
+
+```bash
+gmux --send a3f20187 $'describe yourself\n'
+echo 'describe yourself' | gmux --send a3f20187   # equivalent
+printf '\x03' | gmux --send a3f20187              # send Ctrl-C
+```
+
+When `text` is omitted, gmux reads from stdin until EOF and sends whatever it sees (capped at 1 MiB). Stdin mode is the natural shape for piping, and avoids shell-escaping headaches for multi-line input.
+
+**Access control.** `--send` is powerful — anything you send lands in the session's PTY, and the child has no way to distinguish it from keyboard input. Access is gated by filesystem permissions on the session's Unix socket (owner-only, `0700`), which means only the user that started the session can send to it. Other users on the same machine cannot connect to the socket at all. For the same reason, `--send` is local-only: cross-machine sending would need an explicit authorization model that doesn't exist yet.
+
 ## gmuxd
 
 The daemon. Manages sessions, serves the web UI, and optionally provides Tailscale remote access.
