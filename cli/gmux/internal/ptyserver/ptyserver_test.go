@@ -1,9 +1,11 @@
 package ptyserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -299,6 +301,74 @@ func TestPTYServerScrollbackReplay(t *testing.T) {
 
 	if !contains(got, "replay-test-output") {
 		t.Errorf("expected scrollback replay to contain 'replay-test-output', got: %q", string(got))
+	}
+}
+
+// TestScrollbackTailEndpoint covers the /scrollback/tail HTTP endpoint
+// used by `gmux --tail N <id>`. It asserts the two properties that
+// users actually rely on: the last N lines are returned in order, and
+// the output is plain text (no ANSI control sequences).
+func TestScrollbackTailEndpoint(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+
+	// Print 20 distinct, colored lines. The colors matter: if the
+	// endpoint leaks ANSI, our plain-text assertion catches it.
+	script := `for i in $(seq 1 20); do printf '\033[31mline-%02d\033[0m\n' $i; done; sleep 2`
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", script},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+		Cols:       80,
+		Rows:       10, // small viewport forces most lines into scrollback
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// Give the child time to emit its 20 lines and the emulator to
+	// process them into scrollback.
+	time.Sleep(500 * time.Millisecond)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", sockPath)
+			},
+		},
+		Timeout: 2 * time.Second,
+	}
+
+	// Request the last 5 lines. We expect line-16 .. line-20 in order.
+	resp, err := client.Get("http://session/scrollback/tail?n=5")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Plain text: no escape bytes.
+	if bytes.Contains(body, []byte{0x1b}) {
+		t.Errorf("expected plain text, got ANSI: %q", string(body))
+	}
+
+	// Must contain the tail lines and not the earliest ones.
+	got := string(body)
+	for _, want := range []string{"line-16", "line-17", "line-18", "line-19", "line-20"} {
+		if !contains([]byte(got), want) {
+			t.Errorf("missing %q in tail output:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"line-01", "line-10"} {
+		if contains([]byte(got), unwanted) {
+			t.Errorf("did not expect %q in 5-line tail:\n%s", unwanted, got)
+		}
 	}
 }
 

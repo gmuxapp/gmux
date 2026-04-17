@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -337,6 +338,7 @@ func (s *Server) serve() {
 	// HTTP endpoints (checked first via explicit paths)
 	mux.HandleFunc("GET /meta", s.handleMeta)
 	mux.HandleFunc("GET /scrollback/text", s.handleScrollbackText)
+	mux.HandleFunc("GET /scrollback/tail", s.handleScrollbackTail)
 	mux.HandleFunc("PUT /status", s.handlePutStatus)
 	mux.HandleFunc("PUT /slug", s.handlePutSlug)
 	mux.HandleFunc("GET /events", s.handleEvents)
@@ -381,6 +383,85 @@ func (s *Server) handleScrollbackText(w http.ResponseWriter, r *http.Request) {
 // Caller must hold s.mu.
 func (s *Server) screenText() string {
 	return s.screen.String()
+}
+
+// handleScrollbackTail returns the last N lines of the session's
+// scrollback plus the currently visible screen, as plain text.
+// Intended for `gmux --tail N <id>`: a log-style peek at what's been
+// happening inside a session.
+//
+// N is read from the ?n= query parameter; defaults to 50, capped at
+// maxScrollback + the visible screen height. Trailing blank lines on
+// the visible screen are trimmed so an idle TUI doesn't pad the output
+// with empty rows.
+func (s *Server) handleScrollbackTail(w http.ResponseWriter, r *http.Request) {
+	n := 50
+	if v := r.URL.Query().Get("n"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			n = parsed
+		}
+	}
+
+	s.mu.Lock()
+	s.drainScreenLocked()
+	lines := s.scrollbackLinesLocked()
+	s.mu.Unlock()
+
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	for _, line := range lines {
+		w.Write([]byte(line))
+		w.Write([]byte("\n"))
+	}
+}
+
+// scrollbackLinesLocked returns the scrollback history followed by the
+// visible screen as plain-text lines (no ANSI). Trailing blank rows of
+// the visible screen are trimmed. Caller must hold s.mu.
+func (s *Server) scrollbackLinesLocked() []string {
+	var lines []string
+
+	if sb := s.screen.Scrollback(); sb != nil {
+		for _, line := range sb.Lines() {
+			lines = append(lines, plainLine(line))
+		}
+	}
+
+	w, h := s.screen.Width(), s.screen.Height()
+	screenLines := make([]string, h)
+	for y := 0; y < h; y++ {
+		row := make(uv.Line, w)
+		for x := 0; x < w; x++ {
+			if c := s.screen.CellAt(x, y); c != nil {
+				row[x] = *c
+			}
+		}
+		screenLines[y] = plainLine(row)
+	}
+	// Trim trailing empty rows — an idle TUI pads the screen with blanks.
+	end := len(screenLines)
+	for end > 0 && strings.TrimSpace(screenLines[end-1]) == "" {
+		end--
+	}
+	lines = append(lines, screenLines[:end]...)
+	return lines
+}
+
+// plainLine renders a terminal line as plain text (no ANSI styling),
+// right-trimming trailing spaces so short lines don't emit padding.
+func plainLine(line uv.Line) string {
+	var sb strings.Builder
+	for _, c := range line {
+		if c.Content == "" {
+			sb.WriteString(" ")
+		} else {
+			sb.WriteString(c.Content)
+		}
+	}
+	return strings.TrimRight(sb.String(), " ")
 }
 
 func (s *Server) handlePutStatus(w http.ResponseWriter, r *http.Request) {
