@@ -230,6 +230,117 @@ done:
 	<-srv.Done()
 }
 
+// TestInputEndpoint covers `POST /input` — the HTTP shortcut used by
+// `gmux --send`. The contract is simple: bytes in the body reach the
+// child's stdin as if typed. We exercise that by having the child
+// read a line and echo it back; if the POST path works, the echo
+// appears in the WS stream.
+//
+// This doubles as a regression test for the access-control model: the
+// endpoint is on the session's owner-only Unix socket, and the fact
+// that the test can hit it at all means we correctly didn't add any
+// auth wrapper that would break local callers.
+func TestInputEndpoint(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", "read line; echo got:$line"},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// Give the child a moment to issue its read() syscall before we
+	// deliver bytes. Without this the bytes arrive before the read
+	// is posted and get dropped by the tty canonical mode buffer on
+	// some kernels.
+	time.Sleep(100 * time.Millisecond)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", sockPath)
+			},
+		},
+		Timeout: 2 * time.Second,
+	}
+
+	resp, err := client.Post("http://session/input", "application/octet-stream",
+		bytes.NewReader([]byte("hello\n")))
+	if err != nil {
+		t.Fatalf("post /input: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+
+	// Observe the child's echo via a WS attach. We intentionally don't
+	// mix channels — posting via HTTP and observing via WS — because
+	// that's also what `gmux --send` does (POST) while another client
+	// (the web UI or `gmux --attach`) reads (WS).
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	var got []byte
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			break
+		}
+		got = append(got, data...)
+		if contains(got, "got:hello") {
+			return
+		}
+	}
+	t.Errorf("expected 'got:hello' in output, got: %q", string(got))
+}
+
+// TestInputEndpointEmpty covers the degenerate case: POSTing nothing
+// must succeed without writing anything to the PTY. Matters because a
+// user piping an empty file into `gmux --send` should be a no-op,
+// not a 500.
+func TestInputEndpointEmpty(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", "sleep 1"},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", sockPath)
+			},
+		},
+		Timeout: time.Second,
+	}
+	resp, err := client.Post("http://session/input", "application/octet-stream", bytes.NewReader(nil))
+	if err != nil {
+		t.Fatalf("post /input: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", resp.StatusCode)
+	}
+}
+
 func TestPTYServerCleanup(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
 

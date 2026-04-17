@@ -280,6 +280,87 @@ func cmdTail(ref string, n int) int {
 	return 0
 }
 
+// cmdSend implements `gmux --send <id> [text]`.
+//
+// Sends bytes to the session's PTY as if they had been typed at the
+// terminal. When text is provided inline it is sent verbatim (callers
+// who want a trailing newline must include it explicitly, e.g. via
+// `$'hello\n'`). When text is omitted, stdin is read until EOF; this
+// is the natural shape for piping: `echo hello | gmux --send abc`.
+//
+// Access control is delegated to the session socket's file permissions
+// (owner-only, 0o700): if you can connect to the socket you already
+// own the process and could do worse things without going through us.
+// For the same reason we don't support sending to remote peer sessions
+// — doing that safely would require a per-peer authorization model
+// that doesn't exist yet.
+func cmdSend(ref string, text *string) int {
+	sess, err := resolveSession(ref)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return 1
+	}
+	if sess.SocketPath == "" {
+		switch {
+		case sess.Peer != "":
+			fmt.Fprintf(os.Stderr, "gmux: --send is only supported for local sessions (%s is on peer %q)\n",
+				shortID(sess.ID), sess.Peer)
+		case !sess.Alive:
+			fmt.Fprintf(os.Stderr, "gmux: session %s is not running\n", shortID(sess.ID))
+		default:
+			fmt.Fprintf(os.Stderr, "gmux: session %s has no socket path\n", shortID(sess.ID))
+		}
+		return 1
+	}
+	if !sess.Alive {
+		fmt.Fprintf(os.Stderr, "gmux: session %s is not running\n", shortID(sess.ID))
+		return 1
+	}
+
+	var body io.Reader
+	if text != nil {
+		body = strings.NewReader(*text)
+	} else {
+		body = io.LimitReader(os.Stdin, maxSendBytes)
+	}
+
+	client := sessionSocketClient(sess.SocketPath)
+	// When reading from stdin, the request body may be paced by the
+	// user or another process; the default 5s client timeout would cut
+	// off legitimately slow inputs. Since the socket is local and the
+	// handler just writes to the PTY, it's fine to let the call run
+	// for as long as stdin keeps producing bytes.
+	client.Timeout = 0
+	req, err := http.NewRequest(http.MethodPost, "http://session/input", body)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return 1
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusNotFound {
+			fmt.Fprintln(os.Stderr, "gmux: this session's runner is too old for --send (restart it to upgrade)")
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "gmux: send failed: %s: %s\n", resp.Status, strings.TrimSpace(string(msg)))
+		return 1
+	}
+	return 0
+}
+
+// maxSendBytes caps the number of bytes read from stdin for a single
+// --send invocation. Matches the runner's maxInputBytes so we fail
+// fast on the client side rather than letting the server truncate us.
+const maxSendBytes = 1 << 20 // 1 MiB
+
 // sessionSocketClient builds an HTTP client that dials a session's
 // Unix socket directly. The host portion of URLs passed through this
 // client is ignored — we use "session" by convention.

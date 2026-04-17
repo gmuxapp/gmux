@@ -339,6 +339,7 @@ func (s *Server) serve() {
 	mux.HandleFunc("GET /meta", s.handleMeta)
 	mux.HandleFunc("GET /scrollback/text", s.handleScrollbackText)
 	mux.HandleFunc("GET /scrollback/tail", s.handleScrollbackTail)
+	mux.HandleFunc("POST /input", s.handleInput)
 	mux.HandleFunc("PUT /status", s.handlePutStatus)
 	mux.HandleFunc("PUT /slug", s.handlePutSlug)
 	mux.HandleFunc("GET /events", s.handleEvents)
@@ -462,6 +463,35 @@ func plainLine(line uv.Line) string {
 		}
 	}
 	return strings.TrimRight(sb.String(), " ")
+}
+
+// maxInputBytes caps the size of a single POST /input request body.
+// The socket is owner-only, so this isn't a trust boundary — it just
+// keeps a well-meaning `gmux --send` invocation from accidentally
+// exhausting memory if someone pipes a huge file into it.
+const maxInputBytes = 1 << 20 // 1 MiB
+
+// handleInput writes the request body straight to the child PTY, as if
+// the bytes had been typed at the terminal. Backs `gmux --send`.
+//
+// Access control is delegated to the Unix socket's file permissions
+// (owner-only, 0o700): anyone who can connect() to this socket already
+// owns the session and could do arbitrary worse things to it.
+func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxInputBytes))
+	if err != nil {
+		http.Error(w, "read error", http.StatusBadRequest)
+		return
+	}
+	if len(body) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if _, err := s.ptmx.Write(body); err != nil {
+		http.Error(w, "write pty: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handlePutStatus(w http.ResponseWriter, r *http.Request) {

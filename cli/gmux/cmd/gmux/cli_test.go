@@ -87,6 +87,18 @@ func TestParseCLI(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:     "--send with inline text",
+			args:     []string{"--send", "sess-abcd", "hello"},
+			wantMode: modeSend,
+			wantRest: []string{"sess-abcd", "hello"},
+		},
+		{
+			name:     "--send without text reads stdin",
+			args:     []string{"--send", "sess-abcd"},
+			wantMode: modeSend,
+			wantRest: []string{"sess-abcd"},
+		},
 	}
 
 	for _, tc := range tests {
@@ -116,17 +128,21 @@ func TestParseCLI(t *testing.T) {
 // free to improve), only that an error is returned in each case.
 func TestParseCLIErrors(t *testing.T) {
 	invalid := [][]string{
-		{"--list", "extra"},              // --list takes no args
-		{"--attach"},                     // --attach needs an id
-		{"--attach", "a", "b"},           // --attach takes exactly one id
-		{"--kill"},                       // --kill needs an id
-		{"--tail", "100"},                // --tail needs an id
-		{"--tail", "0", "sess-a"},        // --tail needs a positive count
-		{"--list", "--attach", "sess-a"}, // mutually exclusive actions
-		{"--kill", "--attach", "sess-a"}, // mutually exclusive actions
-		{"--no-attach"},                  // --no-attach needs a command
-		{"--no-attach", "--list"},        // --no-attach doesn't make sense with --list
+		{"--list", "extra"},                      // --list takes no args
+		{"--attach"},                             // --attach needs an id
+		{"--attach", "a", "b"},                   // --attach takes exactly one id
+		{"--kill"},                               // --kill needs an id
+		{"--tail", "100"},                        // --tail needs an id
+		{"--tail", "0", "sess-a"},                // --tail needs a positive count
+		{"--send"},                               // --send needs an id
+		{"--send", "a", "b", "c"},                // --send takes at most two args
+		{"--list", "--attach", "sess-a"},         // mutually exclusive actions
+		{"--kill", "--attach", "sess-a"},         // mutually exclusive actions
+		{"--send", "--kill", "sess-a"},           // mutually exclusive actions
+		{"--no-attach"},                          // --no-attach needs a command
+		{"--no-attach", "--list"},                // --no-attach doesn't make sense with --list
 		{"--no-attach", "--attach", "sess-a"},
+		{"--no-attach", "--send", "sess-a", "x"}, // --no-attach doesn't make sense with --send
 	}
 
 	for _, args := range invalid {

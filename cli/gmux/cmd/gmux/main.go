@@ -45,6 +45,12 @@ func main() {
 		os.Exit(cmdTail(rest[0], f.tail))
 	case modeAttach:
 		os.Exit(cmdAttach(rest[0]))
+	case modeSend:
+		var text *string
+		if len(rest) == 2 {
+			text = &rest[1]
+		}
+		os.Exit(cmdSend(rest[0], text))
 	}
 }
 
