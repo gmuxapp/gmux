@@ -17,6 +17,7 @@ const (
 	modeAttach             // reattach to an existing session
 	modeTail               // dump recent output from a session
 	modeKill               // terminate a session
+	modeSend               // inject input into a running session
 	modeHelp               // print usage and exit
 )
 
@@ -29,6 +30,7 @@ type flags struct {
 	list     bool
 	attach   bool
 	kill     bool
+	send     bool
 	tail     int // >=0 when set (flag default is -1)
 	help     bool
 }
@@ -53,6 +55,7 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 	fs.BoolVar(&f.attach, "a", false, "reattach to an existing session (short)")
 	fs.BoolVar(&f.kill, "kill", false, "kill a running session")
 	fs.BoolVar(&f.kill, "k", false, "kill a running session (short)")
+	fs.BoolVar(&f.send, "send", false, "send input to a running session")
 	fs.IntVar(&f.tail, "tail", -1, "dump the last N lines of a session")
 	fs.IntVar(&f.tail, "t", -1, "dump the last N lines of a session (short)")
 	fs.BoolVar(&f.help, "help", false, "show help")
@@ -78,14 +81,17 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 	if f.kill {
 		actions++
 	}
+	if f.send {
+		actions++
+	}
 	if f.tail >= 0 {
 		actions++
 	}
 	if actions > 1 {
-		return modeHelp, nil, nil, errors.New("--list, --attach, --tail, --kill are mutually exclusive")
+		return modeHelp, nil, nil, errors.New("--list, --attach, --tail, --kill, --send are mutually exclusive")
 	}
 
-	// Management actions take a single session id (except --list).
+	// Management actions take a single session id (except --list and --send).
 	switch {
 	case f.list:
 		if len(rest) > 0 {
@@ -111,6 +117,16 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 			return modeHelp, nil, nil, errors.New("--no-attach has no effect with --kill")
 		}
 		return modeKill, f, rest, nil
+	case f.send:
+		// --send takes a session id and either an inline text arg or
+		// stdin (when no text is given).
+		if len(rest) < 1 || len(rest) > 2 {
+			return modeHelp, nil, nil, errors.New("--send takes a session id and optional text (stdin is used if no text is given)")
+		}
+		if f.noAttach {
+			return modeHelp, nil, nil, errors.New("--no-attach has no effect with --send")
+		}
+		return modeSend, f, rest, nil
 	case f.tail >= 0:
 		if len(rest) != 1 {
 			return modeHelp, nil, nil, errors.New("--tail requires a session id")
@@ -149,6 +165,7 @@ Session management:
   gmux --attach <id>                reattach to an existing session
   gmux --tail <N> <id>              print the last N lines of a session
   gmux --kill <id>                  terminate a session
+  gmux --send <id> [text]           send text (or stdin) to a session
 
 Flags before the command apply to gmux itself. Once the first positional
 argument is seen, everything after is the command to run, verbatim.
