@@ -41,6 +41,7 @@ export const defaultLauncher = signal<string>('shell')
 export interface HealthData {
   version: string
   hostname?: string
+  os?: string
   tailscale_url?: string
   update_available?: string
   /** SHA-256 of the gmux runner binary on disk. Compared against

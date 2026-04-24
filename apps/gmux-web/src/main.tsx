@@ -193,30 +193,35 @@ function MobileTerminalBar({
   ctrlArmed,
   altArmed,
   shiftArmed,
+  metaArmed,
   onMenu,
   onSend,
   onPaste,
   onToggleCtrl,
   onToggleAlt,
   onToggleShift,
+  onToggleMeta,
   onFocusTerminal,
 }: {
   canSend: boolean
   ctrlArmed: boolean
   altArmed: boolean
   shiftArmed: boolean
+  metaArmed: boolean
   onMenu: () => void
   onSend: (data: string) => void
   onPaste: () => void
   onToggleCtrl: () => void
   onToggleAlt: () => void
   onToggleShift: () => void
+  onToggleMeta: () => void
   onFocusTerminal: () => void
 }) {
   // Read signals directly; no props needed for these.
   const bgActivity: DotState = backgroundActivity.value
   const unread = unreadCount.value
   const arrival = useArrivalPulse(bgActivity, unread)
+  const hostOs = health.value?.os
 
   const keepFocus = (ev: Event) => ev.preventDefault()
   const tap = (seq: string) => { onSend(seq); onFocusTerminal() }
@@ -277,15 +282,17 @@ function MobileTerminalBar({
         >
           ctrl
         </button>
-        <button
-          class={`mobile-bottom-action ${showCtrl ? 'armed' : ''}`}
-          disabled={!canSend}
-          onClick={() => { if (holdWordMode) { clearHold(); } else { onToggleCtrl(); } onFocusTerminal() }}
-          title={showCtrl ? '⌘ armed for next typed key' : 'Arm ⌘ for next typed key'}
-          aria-pressed={showCtrl}
-        >
-          ⌘
-        </button>
+        {hostOs && hostOs !== 'windows' && !macCommandIsCtrl.value && (
+          <button
+            class={`mobile-bottom-action ${metaArmed ? 'armed' : ''}`}
+            disabled={!canSend}
+            onClick={() => { onToggleMeta(); onFocusTerminal() }}
+            title={metaArmed ? (hostOs === 'darwin' ? '⌘' : 'Meta') + ' armed for next typed key' : 'Arm ' + (hostOs === 'darwin' ? '⌘' : 'Meta') + ' for next typed key'}
+            aria-pressed={metaArmed}
+          >
+            {hostOs === 'darwin' ? '⌘' : 'meta'}
+          </button>
+        )}
         <button
           class={`mobile-bottom-action ${altArmed ? 'armed' : ''}`}
           disabled={!canSend}
@@ -369,6 +376,7 @@ function App() {
   const [ctrlArmed, setCtrlArmed] = useState(false)
   const [altArmed, setAltArmed] = useState(false)
   const [shiftArmed, setShiftArmed] = useState(false)
+  const [metaArmed, setMetaArmed] = useState(false)
 
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   const terminalFocusRef = useRef<(() => void) | null>(null)
@@ -408,6 +416,7 @@ function App() {
     setCtrlArmed(false)
     setAltArmed(false)
     setShiftArmed(false)
+    setMetaArmed(false)
     requestAnimationFrame(() => terminalFocusRef.current?.())
   }, [selId])
 
@@ -433,7 +442,7 @@ function App() {
 
   // Clear modifiers when terminal isn't attachable.
   useEffect(() => {
-    if (!canAttach) { setCtrlArmed(false); setAltArmed(false); setShiftArmed(false) }
+    if (!canAttach) { setCtrlArmed(false); setAltArmed(false); setShiftArmed(false); setMetaArmed(false) }
   }, [canAttach])
 
   // ── Terminal callbacks ──
@@ -470,6 +479,11 @@ function App() {
     setShiftArmed(armed => !armed)
   }, [canAttach])
   const handleShiftConsumed = useCallback(() => { setShiftArmed(false) }, [])
+  const handleToggleMeta = useCallback(() => {
+    if (!canAttach) return
+    setMetaArmed(armed => !armed)
+  }, [canAttach])
+  const handleMetaConsumed = useCallback(() => { setMetaArmed(false) }, [])
 
   return (
     <div class="app-layout">
@@ -530,6 +544,8 @@ function App() {
             onAltConsumed={handleAltConsumed}
             shiftArmed={shiftArmed}
             onShiftConsumed={handleShiftConsumed}
+            metaArmed={metaArmed}
+            onMetaConsumed={handleMetaConsumed}
             onInputReady={handleTerminalInputReady}
             onPasteReady={handleTerminalPasteReady}
             onFocusReady={handleTerminalFocusReady}
@@ -547,12 +563,14 @@ function App() {
           ctrlArmed={ctrlArmed}
           altArmed={altArmed}
           shiftArmed={shiftArmed}
+          metaArmed={metaArmed}
           onMenu={() => setSidebarOpen(true)}
           onSend={handleMobileInput}
           onPaste={handleMobilePaste}
           onToggleCtrl={handleToggleCtrl}
           onToggleAlt={handleToggleAlt}
           onToggleShift={handleToggleShift}
+          onToggleMeta={handleToggleMeta}
           onFocusTerminal={handleFocusTerminal}
         />
       </div>

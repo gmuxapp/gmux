@@ -191,6 +191,8 @@ export function TerminalView({
   onAltConsumed,
   shiftArmed,
   onShiftConsumed,
+  metaArmed,
+  onMetaConsumed,
   onInputReady,
   onPasteReady,
   onFocusReady,
@@ -205,6 +207,8 @@ export function TerminalView({
   onAltConsumed: () => void
   shiftArmed: boolean
   onShiftConsumed: () => void
+  metaArmed: boolean
+  onMetaConsumed: () => void
   onInputReady?: (send: ((data: string) => void) | null) => void
   onPasteReady?: (paste: ((text: string) => void) | null) => void
   onFocusReady?: (focus: (() => void) | null) => void
@@ -220,6 +224,7 @@ export function TerminalView({
   const ctrlArmedRef = useRef(ctrlArmed)
   const altArmedRef = useRef(altArmed)
   const shiftArmedRef = useRef(shiftArmed)
+  const metaArmedRef = useRef(metaArmed)
   const termIoRef = useRef<ReturnType<typeof createTerminalIO> | null>(null)
   const termEpochRef = useRef(0)
 
@@ -251,6 +256,7 @@ export function TerminalView({
   ctrlArmedRef.current = ctrlArmed
   altArmedRef.current = altArmed
   shiftArmedRef.current = shiftArmed
+  metaArmedRef.current = metaArmed
 
   const queueResize = useCallback((size: TerminalSize) => {
     termIoRef.current?.requestResize(size, termEpochRef.current)
@@ -423,6 +429,22 @@ export function TerminalView({
     }
 
     const sendInput = (data: string) => {
+      if (metaArmedRef.current && data.length === 1) {
+        metaArmedRef.current = false
+        onMetaConsumed()
+        // Synthesize a keyboard event with metaKey so the existing
+        // keyboard handler (keybinds, macCommandIsCtrl) processes it.
+        const ta = term.textarea
+        if (ta) {
+          for (const type of ['keydown', 'keypress', 'keyup'] as const) {
+            ta.dispatchEvent(new KeyboardEvent(type, {
+              key: data, code: `Key${data.toUpperCase()}`,
+              metaKey: true, bubbles: true, cancelable: true,
+            }))
+          }
+        }
+        return
+      }
       if (ctrlArmedRef.current) {
         const ctrlData = ctrlSequenceFor(data)
         if (ctrlData) {

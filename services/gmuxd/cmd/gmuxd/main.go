@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -581,6 +582,7 @@ func serve(stderr io.Writer) int {
 			"version": version,
 			"node_id": "node-local",
 			"status":  "ready",
+			"os":      runtime.GOOS,
 		}
 		if h, err := os.Hostname(); err == nil {
 			data["hostname"] = h
