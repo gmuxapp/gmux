@@ -246,38 +246,109 @@ func cmdTail(ref string, n int) int {
 		case sess.Peer != "":
 			fmt.Fprintf(os.Stderr, "gmux: --tail is only supported for local sessions (%s is on peer %q)\n",
 				shortID(sess.ID), sess.Peer)
-		case !sess.Alive:
-			fmt.Fprintf(os.Stderr, "gmux: session %s is not running\n", shortID(sess.ID))
 		default:
 			fmt.Fprintf(os.Stderr, "gmux: session %s has no socket path\n", shortID(sess.ID))
 		}
 		return 1
 	}
 
-	client := sessionSocketClient(sess.SocketPath)
+	// Live path: try the session's socket first. For alive sessions
+	// this is the authoritative source, and for just-exited sessions
+	// the socket may still be serving briefly.
+	if body, ok := fetchLiveTail(sess.SocketPath, n); ok {
+		os.Stdout.Write(body)
+		return 0
+	}
+
+	// Disk fallback: ptyserver flushes the scrollback to
+	// <socket>.tail on exit, so we can still show it for dead sessions.
+	// This is what makes `gmux --tail` useful for post-hoc peeking at a
+	// build or test run that has already finished.
+	body, err := readPersistedTail(sess.SocketPath, n)
+	if err == nil {
+		os.Stdout.Write(body)
+		return 0
+	}
+	if os.IsNotExist(err) {
+		if sess.Alive {
+			fmt.Fprintf(os.Stderr, "gmux: session %s is unreachable (socket refused, no persisted tail on disk)\n", shortID(sess.ID))
+		} else {
+			fmt.Fprintf(os.Stderr, "gmux: session %s has no persisted tail (started by an older runner, or tail file was removed)\n", shortID(sess.ID))
+		}
+		return 1
+	}
+	fmt.Fprintln(os.Stderr, "gmux:", err)
+	return 1
+}
+
+// fetchLiveTail pulls the last n lines from the session's live socket.
+// Returns (body, true) on success, (nil, false) on any error that
+// looks like "session is gone" (dial refused, connection reset) so the
+// caller can fall back to disk. Non-gone errors (e.g. a 5xx from a
+// live runner) are also reported as ok=false but logged; callers that
+// want the detail should run with GMUX_DEBUG.
+func fetchLiveTail(socketPath string, n int) ([]byte, bool) {
+	client := sessionSocketClient(socketPath)
 	url := fmt.Sprintf("http://session/scrollback/tail?n=%d", n)
 	resp, err := client.Get(url)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return 1
+		return nil, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		// Older runners may not have the tail endpoint yet; give a
-		// specific hint instead of a bare 404.
-		if resp.StatusCode == http.StatusNotFound {
-			fmt.Fprintln(os.Stderr, "gmux: this session's runner is too old for --tail (restart it to upgrade)")
-			return 1
+		// 404 from an old runner: prefer the disk fallback silently,
+		// let it decide whether to print the "too old" hint.
+		return nil, false
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+	return body, true
+}
+
+// readPersistedTail returns the last n plain-text lines of the
+// scrollback file written by ptyserver when the session exited.
+// The file path is derived from the session's socket path; see
+// ptyserver.persistTail for the writer side.
+func readPersistedTail(socketPath string, n int) ([]byte, error) {
+	data, err := os.ReadFile(socketPath + ".tail")
+	if err != nil {
+		return nil, err
+	}
+	return lastNLines(data, n), nil
+}
+
+// lastNLines returns the last n newline-separated lines of buf,
+// preserving any trailing newline. When buf has fewer than n lines the
+// whole buffer is returned. A buf without a trailing newline is still
+// treated as ending with a line, so content from a truncated write
+// isn't silently dropped.
+//
+// Implementation: walk backwards counting newline boundaries. With a
+// trailing newline, seeing n+1 newlines from the end means buf[i+1:]
+// starts at the n-th line from the end. Without one, the final
+// unterminated line itself is the first line-from-end, so n newlines
+// is enough.
+func lastNLines(buf []byte, n int) []byte {
+	if n <= 0 || len(buf) == 0 {
+		return nil
+	}
+	end := len(buf)
+	target := n + 1
+	if buf[end-1] != '\n' {
+		target = n
+	}
+	count := 0
+	for i := end - 1; i >= 0; i-- {
+		if buf[i] == '\n' {
+			count++
+			if count == target {
+				return buf[i+1:]
+			}
 		}
-		fmt.Fprintf(os.Stderr, "gmux: tail failed: %s: %s\n", resp.Status, strings.TrimSpace(string(body)))
-		return 1
 	}
-	if _, err := io.Copy(os.Stdout, resp.Body); err != nil && !errors.Is(err, io.EOF) {
-		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return 1
-	}
-	return 0
+	return buf
 }
 
 // cmdSend implements `gmux --send <id> [text]`.

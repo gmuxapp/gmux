@@ -117,9 +117,10 @@ type Server struct {
 	screenPending  []byte    // raw PTY data not yet fed to screen (guarded by mu)
 	lastClientLeft time.Time // when the last WS client disconnected (guarded by mu)
 
-	done    chan struct{} // closed when child exits
-	ptyDone chan struct{} // closed when readPTY finishes draining
-	err     error         // child exit error
+	done          chan struct{} // closed when child exits
+	ptyDone       chan struct{} // closed when readPTY finishes draining
+	tailPersisted chan struct{} // closed after the scrollback tail file has been written to disk
+	err           error         // child exit error
 }
 
 type wsClient struct {
@@ -215,8 +216,9 @@ func New(cfg Config) (*Server, error) {
 		localOut:   cfg.LocalOut, // wired before readPTY starts so early output is never lost
 		ptyCols:    cfg.Cols,
 		ptyRows:    cfg.Rows,
-		done:       make(chan struct{}),
-		ptyDone:    make(chan struct{}),
+		done:          make(chan struct{}),
+		ptyDone:       make(chan struct{}),
+		tailPersisted: make(chan struct{}),
 	}
 
 	// The callback fires under s.mu (held during drainScreenLocked → screen.Write).
@@ -299,6 +301,16 @@ func (s *Server) Done() <-chan struct{} {
 // the child's trailing output should wait on this before detaching.
 func (s *Server) PTYDone() <-chan struct{} {
 	return s.ptyDone
+}
+
+// TailPersisted returns a channel that is closed once the scrollback
+// tail file (<SocketPath>.tail) has been written to disk on session
+// exit. Always closes strictly after PTYDone(). `gmux --tail` reads
+// this file as a fallback when the session's socket is gone, so the
+// signal is mainly useful to tests that need to observe the file
+// atomically.
+func (s *Server) TailPersisted() <-chan struct{} {
+	return s.tailPersisted
 }
 
 // ExitCode returns the child process exit code (only valid after Done).
@@ -979,9 +991,62 @@ func (s *Server) waitChild() {
 	// causing data loss.
 	<-s.ptyDone
 
+	// Persist the final scrollback to disk so `gmux --tail` can still
+	// read it after the socket disappears. Close tailPersisted regardless
+	// of write success: the channel is a "we tried" signal, not a
+	// "file is guaranteed present" promise.
+	s.persistTail()
+	close(s.tailPersisted)
+
 	s.mu.Lock()
 	for c := range s.clients {
 		c.conn.Close(websocket.StatusNormalClosure, "process exited")
 	}
 	s.mu.Unlock()
+}
+
+// tailFileSuffix is the extension appended to the socket path to form
+// the persisted scrollback file name. Kept as a constant so the CLI
+// (cmdTail fallback) can derive the same path from a dead session's
+// stored socket_path.
+const tailFileSuffix = ".tail"
+
+// persistTail writes the current scrollback (history + visible screen,
+// plain text, same shape as /scrollback/tail) to <SocketPath>+.tail.
+// Called once from waitChild after the PTY has been fully drained, so
+// the emulator reflects everything the child ever produced.
+//
+// Failures are logged but not propagated: persistence is a nice-to-have
+// for post-exit peeking, not a correctness requirement.
+func (s *Server) persistTail() {
+	tailPath := s.sockPath + tailFileSuffix
+
+	s.mu.Lock()
+	s.drainScreenLocked()
+	lines := s.scrollbackLinesLocked()
+	s.mu.Unlock()
+
+	// Build payload before touching the filesystem so we hold the mutex
+	// for as little time as possible and never while blocking on I/O.
+	var buf []byte
+	for _, line := range lines {
+		buf = append(buf, line...)
+		buf = append(buf, '\n')
+	}
+
+	// O_EXCL isn't appropriate — we intentionally overwrite on restart —
+	// and umask would normally relax the mode. Use a tight umask around
+	// the create so the tail file inherits owner-only permissions to
+	// match the socket's 0o700 directory.
+	oldUmask := syscall.Umask(0o077)
+	f, err := os.OpenFile(tailPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	syscall.Umask(oldUmask)
+	if err != nil {
+		log.Printf("ptyserver: persist tail %s: %v", tailPath, err)
+		return
+	}
+	defer f.Close()
+	if _, err := f.Write(buf); err != nil {
+		log.Printf("ptyserver: write tail %s: %v", tailPath, err)
+	}
 }

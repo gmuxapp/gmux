@@ -74,7 +74,9 @@ gmux --tail 100 a3f20187
 gmux -t 20 fix-auth-bug
 ```
 
-`--tail` currently only works for sessions owned by the local node; remote peer sessions are rejected with a clear error.
+`--tail` works on both live and exited sessions. Live sessions are read from the runner's in-memory scrollback; exited sessions fall back to a plain-text file the runner flushed next to the session socket on exit (`<socket>.tail`, owner-only). The fallback exists so a build or test run that has already finished is still inspectable without re-executing it.
+
+`--tail` only works for sessions owned by the local node; remote peer sessions are rejected with a clear error.
 
 ### `gmux --kill <id>` (`-k`)
 

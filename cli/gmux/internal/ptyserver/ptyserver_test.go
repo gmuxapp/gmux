@@ -1269,3 +1269,95 @@ func TestPTYDoneClosesAfterFinalFlush(t *testing.T) {
 		t.Errorf("expected LocalOut to contain 'END-OF-OUTPUT' by the time PTYDone closes, got %q", out.String())
 	}
 }
+
+// TestPersistTailOnExit covers the on-disk scrollback file written when
+// a session finishes. Without it, `gmux --tail <id>` on a dead session
+// dials a vanished socket and errors out — users can't peek at what
+// that make-build-that-just-finished actually printed.
+//
+// The contract: once TailPersisted() closes, a plain-text file exists
+// at <socket>.tail containing the session's final scrollback. No ANSI,
+// no partial writes.
+func TestPersistTailOnExit(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	tailPath := sockPath + ".tail"
+
+	// Produce colored output so we can assert ANSI-stripping, and force
+	// most lines into scrollback with a small viewport.
+	script := `for i in $(seq 1 15); do printf '\033[32mpersist-%02d\033[0m\n' $i; done`
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", script},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+		Cols:       80,
+		Rows:       5,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	select {
+	case <-srv.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("child did not exit")
+	}
+	select {
+	case <-srv.TailPersisted():
+	case <-time.After(3 * time.Second):
+		t.Fatal("TailPersisted never closed after child exit")
+	}
+
+	body, err := os.ReadFile(tailPath)
+	if err != nil {
+		t.Fatalf("read tail file: %v", err)
+	}
+
+	if bytes.Contains(body, []byte{0x1b}) {
+		t.Errorf("expected plain text, got ANSI in %q", string(body))
+	}
+
+	text := string(body)
+	// Must include the later lines (they're always in scrollback or
+	// still on the visible screen when the child exits).
+	for _, want := range []string{"persist-13", "persist-14", "persist-15"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in persisted tail:\n%s", want, text)
+		}
+	}
+}
+
+// TestPersistTailFilePermissions asserts the tail file is owner-only.
+// The scrollback can contain secrets echoed into a dev shell, so its
+// mode must match the session socket's 0o600-equivalent contract.
+func TestPersistTailFilePermissions(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	tailPath := sockPath + ".tail"
+
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", "echo perm-test"},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	select {
+	case <-srv.TailPersisted():
+	case <-time.After(3 * time.Second):
+		t.Fatal("TailPersisted never closed")
+	}
+
+	info, err := os.Stat(tailPath)
+	if err != nil {
+		t.Fatalf("stat tail file: %v", err)
+	}
+	// Allow 0o600 or 0o644 at worst; what we absolutely don't want is
+	// world or group readability.
+	mode := info.Mode().Perm()
+	if mode&0o077 != 0 {
+		t.Errorf("tail file mode = %o, expected no group/world bits", mode)
+	}
+}

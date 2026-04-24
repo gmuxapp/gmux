@@ -1,9 +1,114 @@
 package main
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestReadPersistedTail covers the on-disk fallback `gmux --tail` uses
+// when the session's socket has gone away. ptyserver writes the full
+// scrollback as plain text to <socketPath>.tail on exit; the CLI picks
+// up the last N lines from that file so users can still peek at a
+// finished make-build or pytest run without re-executing it.
+func TestReadPersistedTail(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "sess-deadbeef.sock")
+	tailPath := sockPath + ".tail"
+
+	// 12 lines of known content, one per row.
+	var content bytes.Buffer
+	for i := 1; i <= 12; i++ {
+		content.WriteString("line-" + twoDigit(i) + "\n")
+	}
+	if err := os.WriteFile(tailPath, content.Bytes(), 0o600); err != nil {
+		t.Fatalf("write tail file: %v", err)
+	}
+
+	got, err := readPersistedTail(sockPath, 3)
+	if err != nil {
+		t.Fatalf("readPersistedTail: %v", err)
+	}
+	want := "line-10\nline-11\nline-12\n"
+	if string(got) != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestReadPersistedTail_RequestMoreThanAvailable returns everything
+// when the caller asks for more lines than the file has. Matches how
+// the live /scrollback/tail endpoint behaves, so a caller script gets
+// consistent output regardless of whether the session is still alive.
+func TestReadPersistedTail_RequestMoreThanAvailable(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "sess-cafef00d.sock")
+	tailPath := sockPath + ".tail"
+
+	if err := os.WriteFile(tailPath, []byte("only\ntwo\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, err := readPersistedTail(sockPath, 100)
+	if err != nil {
+		t.Fatalf("readPersistedTail: %v", err)
+	}
+	if string(got) != "only\ntwo\n" {
+		t.Errorf("got %q, want %q", got, "only\ntwo\n")
+	}
+}
+
+// TestReadPersistedTail_MissingFile returns a distinguishable error
+// (os.IsNotExist true) so the caller can tell "nothing persisted"
+// apart from "disk corruption".
+func TestReadPersistedTail_MissingFile(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "sess-nope.sock")
+
+	_, err := readPersistedTail(sockPath, 10)
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+	if !os.IsNotExist(err) {
+		t.Errorf("err = %v, want an os.IsNotExist error", err)
+	}
+}
+
+// TestLastNLines covers the byte-walk tail extractor. The one case
+// most likely to be wrong in a hand-rolled implementation is input
+// without a trailing newline: the "last line" still exists and must
+// be counted, otherwise a truncated write silently drops content from
+// the tail.
+func TestLastNLines(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		n    int
+		want string
+	}{
+		{"empty", "", 5, ""},
+		{"n=0", "a\nb\n", 0, ""},
+		{"fewer lines than requested", "only\ntwo\n", 10, "only\ntwo\n"},
+		{"exact tail with trailing newline", "a\nb\nc\n", 2, "b\nc\n"},
+		{"tail without trailing newline", "a\nb\nc", 2, "b\nc"},
+		{"single unterminated line", "solo", 1, "solo"},
+		{"single unterminated line, ask for more", "solo", 5, "solo"},
+		{"two lines no trailing, n=1", "a\nb", 1, "b"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := string(lastNLines([]byte(tc.in), tc.n))
+			if got != tc.want {
+				t.Errorf("lastNLines(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.want)
+			}
+		})
+	}
+}
+
+func twoDigit(n int) string {
+	if n < 10 {
+		return "0" + string(rune('0'+n))
+	}
+	return string(rune('0'+n/10)) + string(rune('0'+n%10))
+}
 
 // TestMatchSession covers the reference-resolution rules the CLI
 // documents: short form (as shown by --list), full ID, slug, and
