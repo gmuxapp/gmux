@@ -5,7 +5,75 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestWaitForRegistration_SessionAlreadyPresent returns promptly when
+// the session is already in gmuxd's list. Verifies the fast path: we
+// don't sleep registrationPollInterval before the first check.
+func TestWaitForRegistration_SessionAlreadyPresent(t *testing.T) {
+	stateDir, _, cleanup := startTestSocketDaemonWithSessions(t, "dev",
+		[]cliSession{{ID: "sess-abcd1234"}})
+	defer cleanup()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+
+	start := time.Now()
+	ok := waitForRegistration("sess-abcd1234", time.Second)
+	elapsed := time.Since(start)
+
+	if !ok {
+		t.Fatal("expected registration to be seen")
+	}
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("fast path took %v, want prompt return", elapsed)
+	}
+}
+
+// TestWaitForRegistration_SessionAppearsLater exercises the real
+// workflow: the daemon doesn't know about the session when we start
+// polling, but it does by the time the child has finished registering.
+// This is the race spawnDetached closes.
+func TestWaitForRegistration_SessionAppearsLater(t *testing.T) {
+	stateDir, addSession, cleanup := startTestSocketDaemonWithSessions(t, "dev", nil)
+	defer cleanup()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+
+	// Simulate the child finishing registration ~150 ms after spawnDetached
+	// started waiting — the upper end of what we see in practice.
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		addSession(cliSession{ID: "sess-cafef00d"})
+	}()
+
+	if !waitForRegistration("sess-cafef00d", 2*time.Second) {
+		t.Fatal("expected registration to be seen before timeout")
+	}
+}
+
+// TestWaitForRegistration_Timeout is the failure-mode contract: when
+// the session never appears, we bail out within roughly the timeout and
+// return false. spawnDetached treats false as "announce anyway" so the
+// caller still gets the id; this test just locks in that we don't hang
+// indefinitely if gmuxd is stuck.
+func TestWaitForRegistration_Timeout(t *testing.T) {
+	stateDir, _, cleanup := startTestSocketDaemonWithSessions(t, "dev", nil)
+	defer cleanup()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+
+	start := time.Now()
+	ok := waitForRegistration("sess-nope", 150*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if ok {
+		t.Error("expected false on timeout")
+	}
+	if elapsed < 150*time.Millisecond {
+		t.Errorf("returned early at %v, want to wait at least the timeout", elapsed)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("returned late at %v, poll loop is too lax", elapsed)
+	}
+}
 
 // TestAnnounceDetached locks in the stream contract spawnDetached
 // relies on: the short session id on stdout, the human message on

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -15,6 +16,16 @@ import (
 // Returns the state dir (for t.Setenv) and a cleanup func.
 func startTestSocketDaemon(t *testing.T, ver string) (stateDir string, cleanup func()) {
 	t.Helper()
+	stateDir, _, cleanup = startTestSocketDaemonWithSessions(t, ver, nil)
+	return stateDir, cleanup
+}
+
+// startTestSocketDaemonWithSessions behaves like startTestSocketDaemon
+// but also serves /v1/sessions from a slice the caller can mutate
+// concurrently. Returns a pointer to the slice (guarded by its own
+// mutex — use the returned addSession helper to append).
+func startTestSocketDaemonWithSessions(t *testing.T, ver string, initial []cliSession) (stateDir string, addSession func(cliSession), cleanup func()) {
+	t.Helper()
 	stateDir = t.TempDir()
 	sockDir := filepath.Join(stateDir, "gmux")
 	os.MkdirAll(sockDir, 0o700)
@@ -22,6 +33,16 @@ func startTestSocketDaemon(t *testing.T, ver string) (stateDir string, cleanup f
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	var (
+		mu       sync.Mutex
+		sessions = append([]cliSession(nil), initial...)
+	)
+	addSession = func(s cliSession) {
+		mu.Lock()
+		defer mu.Unlock()
+		sessions = append(sessions, s)
 	}
 
 	mux := http.NewServeMux()
@@ -36,11 +57,18 @@ func startTestSocketDaemon(t *testing.T, ver string) (stateDir string, cleanup f
 			},
 		})
 	})
+	mux.HandleFunc("/v1/sessions", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		snapshot := append([]cliSession(nil), sessions...)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": snapshot})
+	})
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(ln)
 	time.Sleep(50 * time.Millisecond)
 
-	return stateDir, func() {
+	return stateDir, addSession, func() {
 		srv.Close()
 		os.Remove(sockPath)
 	}

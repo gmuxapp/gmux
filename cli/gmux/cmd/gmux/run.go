@@ -237,7 +237,11 @@ func runSession(args []string, attach bool) {
 
 	// Auto-start gmuxd if not running (one-shot, never retried), then register.
 	ensureGmuxd()
-	go registerWithGmuxd(sessionID, sockPath)
+	regDone := make(chan struct{})
+	go func() {
+		registerWithGmuxd(sessionID, sockPath)
+		close(regDone)
+	}()
 
 	if interactive {
 		// Transparent mode: the local tty was built above and wired as
@@ -305,8 +309,43 @@ func runSession(args []string, attach bool) {
 	if !interactive {
 		fmt.Printf("exited:   %d\n", exitCode)
 	}
+
+	// Wait for the scrollback tail file to finish writing before we exit.
+	// waitChild runs persistTail *after* Done() fires (so Done() keeps its
+	// "child exited" meaning for the interactive attach path), which means
+	// os.Exit could otherwise cut the write off mid-flight and leave the
+	// disk fallback for `gmux --tail` silently empty. The timeout bounds
+	// any pathological I/O stall; the common-case wait is under a
+	// millisecond.
+	select {
+	case <-srv.TailPersisted():
+	case <-time.After(tailPersistTimeout):
+	}
+
+	// Wait for gmuxd registration to complete before we exit. For
+	// ultra-fast commands (think `gmux echo hi`) the child can finish
+	// before the register goroutine above has even posted to
+	// /v1/register, leaving the session invisible to --list / --tail /
+	// --send. Blocking on regDone here ensures the session record
+	// survives the runner's lifetime.
+	select {
+	case <-regDone:
+	case <-time.After(registerExitTimeout):
+	}
 	os.Exit(exitCode)
 }
+
+// registerExitTimeout bounds how long the runner waits for its own
+// registration goroutine to finish before exiting. Sized to exceed
+// registerWithGmuxd's full retry budget (5 attempts x 500 ms backoff),
+// so we never abandon a registration that's still making progress.
+const registerExitTimeout = 3 * time.Second
+
+// tailPersistTimeout bounds how long runSession waits for the scrollback
+// tail file to be written after the child exits. The write is a few KB
+// to a local tmpfs in practice, so anything approaching this ceiling
+// means disk I/O is pathologically slow and we'd rather exit than hang.
+const tailPersistTimeout = 500 * time.Millisecond
 
 // spawnDetached re-execs gmux with the given args as a setsid'd
 // background process, disconnected from the current terminal. Used for
@@ -351,8 +390,55 @@ func spawnDetached(args []string, msg string) {
 		log.Fatalf("failed to start background session: %v", err)
 	}
 	cmd.Process.Release()
+
+	// Wait briefly for the child to register with gmuxd so a caller can
+	// use the printed id immediately:
+	//
+	//	id=$(gmux --no-attach cmd); gmux --tail "$id"
+	//
+	// Without this, the caller races the child's async registration
+	// flow (socket bind → /v1/register → gmuxd /meta query → store)
+	// and gets "no session matches <id>" for fast-exiting commands.
+	// On timeout we still announce: the id is valid, just not
+	// ready-yet; the caller's next call will succeed once gmuxd
+	// catches up.
+	waitForRegistration(sessionID, registrationTimeout)
 	announceDetached(os.Stdout, os.Stderr, sessionID, msg)
 }
+
+// registrationTimeout bounds the wait for a detached session to appear
+// in gmuxd's session list. Sized for the common case (fork + bind +
+// register ≈ tens of milliseconds) plus headroom for a cold-start
+// gmuxd (≤ 1s on a warm disk).
+const registrationTimeout = 2 * time.Second
+
+// waitForRegistration polls gmuxd for sessionID until it appears or
+// the timeout elapses. Returns true on success, false on timeout. The
+// timeout path isn't fatal: the caller still announces the id, just
+// without the ordering guarantee that an immediate follow-up command
+// will find the session.
+func waitForRegistration(sessionID string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if sessions, err := fetchSessions(); err == nil {
+			for _, s := range sessions {
+				if s.ID == sessionID {
+					return true
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(registrationPollInterval)
+	}
+}
+
+// registrationPollInterval is the gap between /v1/sessions polls while
+// waiting for a just-spawned child to register. Small enough that
+// typical registrations (tens of ms) aren't amplified by poll slack,
+// large enough that we don't spin on gmuxd.
+const registrationPollInterval = 25 * time.Millisecond
 
 // announceDetached writes the new session's short id to stdout and the
 // free-form human message (if any) to stderr. Split onto two streams so
