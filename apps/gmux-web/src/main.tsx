@@ -192,21 +192,25 @@ function MobileTerminalBar({
   canSend,
   ctrlArmed,
   altArmed,
+  shiftArmed,
   onMenu,
   onSend,
   onPaste,
   onToggleCtrl,
   onToggleAlt,
+  onToggleShift,
   onFocusTerminal,
 }: {
   canSend: boolean
   ctrlArmed: boolean
   altArmed: boolean
+  shiftArmed: boolean
   onMenu: () => void
   onSend: (data: string) => void
   onPaste: () => void
   onToggleCtrl: () => void
   onToggleAlt: () => void
+  onToggleShift: () => void
   onFocusTerminal: () => void
 }) {
   // Read signals directly; no props needed for these.
@@ -262,14 +266,8 @@ function MobileTerminalBar({
       </button>
       <div class="mobile-bottom-sep" />
       <div class="mobile-terminal-actions" role="toolbar" aria-label="Terminal keys" onMouseDown={keepFocus}>
-        {(ctrlArmed || altArmed)
-          ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b[A')} title="Up arrow"><IconUp /></button>
-          : <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b')} title="Escape">esc</button>
-        }
-        {(ctrlArmed || altArmed)
-          ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b[B')} title="Down arrow"><IconDown /></button>
-          : <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\t')} title="Tab">tab</button>
-        }
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b')} title="Escape">esc</button>
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\t')} title="Tab">tab</button>
         <button
           class={`mobile-bottom-action ${showCtrl ? 'armed' : ''}`}
           disabled={!canSend}
@@ -288,6 +286,17 @@ function MobileTerminalBar({
         >
           alt
         </button>
+        <button
+          class={`mobile-bottom-action ${shiftArmed ? 'armed' : ''}`}
+          disabled={!canSend}
+          onClick={() => { onToggleShift(); onFocusTerminal() }}
+          title={shiftArmed ? 'Shift armed for next typed key' : 'Arm Shift for next typed key'}
+          aria-pressed={shiftArmed}
+        >
+          shift
+        </button>
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b[A')} title="Up arrow"><IconUp /></button>
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b[B')} title="Down arrow"><IconDown /></button>
         {([
           { seq: '\x1b[D', wordSeq: '\x1b[1;5D', title: 'Left arrow',  wordTitle: 'Word left',  Icon: IconLeft,  WordIcon: IconWordLeft  },
           { seq: '\x1b[C', wordSeq: '\x1b[1;5C', title: 'Right arrow', wordTitle: 'Word right', Icon: IconRight, WordIcon: IconWordRight },
@@ -304,11 +313,12 @@ function MobileTerminalBar({
             {showCtrl ? <WordIcon /> : <Icon />}
           </button>
         ))}
-        {ctrlArmed
-          ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => { onPaste(); onFocusTerminal() }} title="Paste from clipboard"><IconPaste /></button>
-          : <button class="mobile-bottom-action send-btn" disabled={!canSend} onClick={() => tap('\r')} title="Send"><IconSend /></button>
-        }
       </div>
+      <div class="mobile-bottom-sep" />
+      {ctrlArmed
+        ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => { onPaste(); onFocusTerminal() }} title="Paste from clipboard" onMouseDown={keepFocus}><IconPaste /></button>
+        : <button class="mobile-bottom-action send-btn" disabled={!canSend} onClick={() => tap('\r')} title="Send" onMouseDown={keepFocus}><IconSend /></button>
+      }
     </div>
   )
 }
@@ -349,6 +359,7 @@ function App() {
   const [manageProjectsOpen, setManageProjectsOpen] = useState(false)
   const [ctrlArmed, setCtrlArmed] = useState(false)
   const [altArmed, setAltArmed] = useState(false)
+  const [shiftArmed, setShiftArmed] = useState(false)
 
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   const terminalFocusRef = useRef<(() => void) | null>(null)
@@ -387,6 +398,7 @@ function App() {
     setResumingId(null)
     setCtrlArmed(false)
     setAltArmed(false)
+    setShiftArmed(false)
     requestAnimationFrame(() => terminalFocusRef.current?.())
   }, [selId])
 
@@ -412,7 +424,7 @@ function App() {
 
   // Clear modifiers when terminal isn't attachable.
   useEffect(() => {
-    if (!canAttach) { setCtrlArmed(false); setAltArmed(false) }
+    if (!canAttach) { setCtrlArmed(false); setAltArmed(false); setShiftArmed(false) }
   }, [canAttach])
 
   // ── Terminal callbacks ──
@@ -444,6 +456,11 @@ function App() {
     setAltArmed(armed => !armed)
   }, [canAttach])
   const handleAltConsumed = useCallback(() => { setAltArmed(false) }, [])
+  const handleToggleShift = useCallback(() => {
+    if (!canAttach) return
+    setShiftArmed(armed => !armed)
+  }, [canAttach])
+  const handleShiftConsumed = useCallback(() => { setShiftArmed(false) }, [])
 
   return (
     <div class="app-layout">
@@ -502,6 +519,8 @@ function App() {
             onCtrlConsumed={handleCtrlConsumed}
             altArmed={altArmed}
             onAltConsumed={handleAltConsumed}
+            shiftArmed={shiftArmed}
+            onShiftConsumed={handleShiftConsumed}
             onInputReady={handleTerminalInputReady}
             onPasteReady={handleTerminalPasteReady}
             onFocusReady={handleTerminalFocusReady}
@@ -518,11 +537,13 @@ function App() {
           canSend={canAttach}
           ctrlArmed={ctrlArmed}
           altArmed={altArmed}
+          shiftArmed={shiftArmed}
           onMenu={() => setSidebarOpen(true)}
           onSend={handleMobileInput}
           onPaste={handleMobilePaste}
           onToggleCtrl={handleToggleCtrl}
           onToggleAlt={handleToggleAlt}
+          onToggleShift={handleToggleShift}
           onFocusTerminal={handleFocusTerminal}
         />
       </div>

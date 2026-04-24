@@ -1770,6 +1770,13 @@ a.home-host-link:hover {
     gap: 6px;
     min-width: 0;
     flex: 1;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .mobile-terminal-actions::-webkit-scrollbar {
+    display: none;
   }
 
   .mobile-bottom-action {
@@ -1837,8 +1844,7 @@ a.home-host-link:hover {
   }
 
   .mobile-terminal-actions .mobile-bottom-action {
-    flex: 1 1 0;
-    min-width: 0;
+    flex: 0 0 auto;
   }
 
   .mobile-bottom-action:active {

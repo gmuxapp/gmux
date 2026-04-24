@@ -189,6 +189,8 @@ export function TerminalView({
   onCtrlConsumed,
   altArmed,
   onAltConsumed,
+  shiftArmed,
+  onShiftConsumed,
   onInputReady,
   onPasteReady,
   onFocusReady,
@@ -201,6 +203,8 @@ export function TerminalView({
   onCtrlConsumed: () => void
   altArmed: boolean
   onAltConsumed: () => void
+  shiftArmed: boolean
+  onShiftConsumed: () => void
   onInputReady?: (send: ((data: string) => void) | null) => void
   onPasteReady?: (paste: ((text: string) => void) | null) => void
   onFocusReady?: (focus: (() => void) | null) => void
@@ -215,6 +219,7 @@ export function TerminalView({
   const sessionRef = useRef(session)
   const ctrlArmedRef = useRef(ctrlArmed)
   const altArmedRef = useRef(altArmed)
+  const shiftArmedRef = useRef(shiftArmed)
   const termIoRef = useRef<ReturnType<typeof createTerminalIO> | null>(null)
   const termEpochRef = useRef(0)
 
@@ -245,6 +250,7 @@ export function TerminalView({
   sessionRef.current = session
   ctrlArmedRef.current = ctrlArmed
   altArmedRef.current = altArmed
+  shiftArmedRef.current = shiftArmed
 
   const queueResize = useCallback((size: TerminalSize) => {
     termIoRef.current?.requestResize(size, termEpochRef.current)
@@ -430,6 +436,17 @@ export function TerminalView({
         altArmedRef.current = false
         onAltConsumed()
         sendRawInput('\x1b' + data)
+        return
+      }
+      if (shiftArmedRef.current) {
+        shiftArmedRef.current = false
+        onShiftConsumed()
+        // Uppercase single printable chars; leave control sequences alone.
+        if (data.length === 1 && data >= 'a' && data <= 'z') {
+          sendRawInput(data.toUpperCase())
+        } else {
+          sendRawInput(data)
+        }
         return
       }
       sendRawInput(data)
@@ -692,7 +709,7 @@ export function TerminalView({
       termRef.current = null
       termIoRef.current = null
     }
-  }, [onCtrlConsumed, onInputReady])
+  }, [onCtrlConsumed, onShiftConsumed, onInputReady])
 
   // WebSocket connection (reconnects when session.id changes).
   useEffect(() => {
