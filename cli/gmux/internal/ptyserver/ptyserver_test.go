@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1168,4 +1169,103 @@ func countOccurrences(s, sub string) int {
 		}
 	}
 	return n
+}
+
+// syncBuffer is a bytes.Buffer safe for concurrent Write and reads.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// TestConfigLocalOutReceivesFastExitOutput verifies that a writer
+// supplied via Config.LocalOut is wired before the PTY server starts
+// reading, so a command that exits before any caller could have
+// plausibly called SetLocalOutput still has its output delivered.
+//
+// Regression test for the race where `gmux echo hi` in a real terminal
+// dropped "hi" because SetLocalOutput was called after readPTY had
+// already flushed the (then nil) local output.
+func TestConfigLocalOutReceivesFastExitOutput(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	var out syncBuffer
+
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", "echo fast-exit-marker"},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+		LocalOut:   &out,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	select {
+	case <-srv.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("child did not exit")
+	}
+	select {
+	case <-srv.PTYDone():
+	case <-time.After(2 * time.Second):
+		t.Fatal("PTYDone never closed")
+	}
+
+	if !strings.Contains(out.String(), "fast-exit-marker") {
+		t.Errorf("expected LocalOut to contain 'fast-exit-marker', got %q", out.String())
+	}
+}
+
+// TestPTYDoneClosesAfterFinalFlush verifies that PTYDone closes strictly
+// after every byte the child produced has been delivered to LocalOut.
+// If PTYDone closed before the final flush, callers that wait on it
+// before detaching a local terminal would still lose the trailing bytes.
+//
+// Regression test for the race where output produced immediately before
+// the child exited was swallowed because Done() fired, the caller
+// detached, and the final readPTY flush arrived at a detached sink.
+func TestPTYDoneClosesAfterFinalFlush(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	var out syncBuffer
+
+	// The sleep before the final echo defeats the coalesce timer: the
+	// "END-OF-OUTPUT" bytes arrive right before the child exits, so they
+	// must survive the Done()-to-ptyDone drain to reach LocalOut.
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", "sleep 0.3; echo END-OF-OUTPUT"},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+		LocalOut:   &out,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	select {
+	case <-srv.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("child did not exit")
+	}
+	select {
+	case <-srv.PTYDone():
+	case <-time.After(2 * time.Second):
+		t.Fatal("PTYDone never closed after child exit")
+	}
+
+	if !strings.Contains(out.String(), "END-OF-OUTPUT") {
+		t.Errorf("expected LocalOut to contain 'END-OF-OUTPUT' by the time PTYDone closes, got %q", out.String())
+	}
 }

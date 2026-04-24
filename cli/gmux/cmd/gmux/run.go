@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/gmuxapp/gmux/cli/gmux/internal/binhash"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/localterm"
@@ -19,6 +20,15 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/packages/workspace"
 )
+
+// ptyDrainTimeout bounds the wait for the PTY to fully flush after the
+// child exits. A well-behaved child has its PTY slave closed by the
+// kernel as soon as it exits, so EOF on ptmx arrives almost immediately
+// and this timeout is never approached in practice. The ceiling only
+// matters when a grandchild is still holding the slave open: we'd
+// rather restore the user's terminal promptly than wait forever on a
+// background writer.
+const ptyDrainTimeout = 250 * time.Millisecond
 
 // runSession launches a new managed session for the given command.
 //
@@ -120,15 +130,48 @@ func runSession(args []string, attach bool) {
 		ptyCfg.Rows = rows
 	}
 
+	// In interactive mode, build the local terminal attach before
+	// starting the PTY server so LocalOut is wired from the very first
+	// read. Otherwise a fast-exiting command could have its entire
+	// output flushed before SetLocalOutput is called and be silently
+	// dropped on the floor.
+	//
+	// The PTYWriter and ResizeFn closures read `srv` by reference; the
+	// variable is assigned by the ptyserver.New call below, and
+	// attach.Start() — which is what actually starts the goroutines
+	// that invoke these closures — is deferred until after that point.
+	var (
+		srv      *ptyserver.Server
+		localTty *localterm.Attach
+	)
+	if interactive {
+		lt, err := localterm.New(localterm.Config{
+			PTYWriter: ptyWriterFunc(func(p []byte) (int, error) {
+				return srv.WritePTY(p)
+			}),
+			ResizeFn: func(cols, rows uint16) { srv.Resize(cols, rows) },
+		})
+		if err != nil {
+			log.Fatalf("failed to attach terminal: %v", err)
+		}
+		localTty = lt
+		ptyCfg.LocalOut = localTty
+	}
+
 	if !interactive {
 		fmt.Printf("session:  %s\n", sessionID)
 		fmt.Printf("adapter:  %s\n", a.Name())
 		fmt.Printf("command:  %s\n", strings.Join(args, " "))
 	}
 
-	// Start PTY server
-	srv, err := ptyserver.New(ptyCfg)
+	// Start PTY server. Reuses the outer `err` declared by os.Getwd above.
+	srv, err = ptyserver.New(ptyCfg)
 	if err != nil {
+		if localTty != nil {
+			// Restore cooked mode before fataling out; otherwise the
+			// user's terminal is left in raw mode on the shell prompt.
+			localTty.Detach()
+		}
 		log.Fatalf("failed to start: %v", err)
 	}
 
@@ -145,17 +188,10 @@ func runSession(args []string, attach bool) {
 	go registerWithGmuxd(sessionID, sockPath)
 
 	if interactive {
-		// Transparent mode: attach local terminal to the PTY
-		attach, err := localterm.New(localterm.Config{
-			PTYWriter: ptyWriterFunc(func(p []byte) (int, error) {
-				return srv.WritePTY(p)
-			}),
-			ResizeFn: srv.Resize,
-		})
-		if err != nil {
-			log.Fatalf("failed to attach terminal: %v", err)
-		}
-		srv.SetLocalOutput(attach)
+		// Transparent mode: the local tty was built above and wired as
+		// ptyCfg.LocalOut; now that srv exists, kick off the stdin/winch
+		// relay goroutines that call back into srv.
+		localTty.Start()
 
 		// In interactive mode:
 		// - SIGHUP → detach local terminal, keep session running
@@ -166,9 +202,17 @@ func runSession(args []string, attach bool) {
 
 		select {
 		case <-srv.Done():
-			// Child exited — detach and exit
-			attach.Detach()
-		case <-attach.Done():
+			// Child exited. Wait (briefly, bounded) for the final PTY
+			// flush so trailing output reaches the user's terminal
+			// before we detach and restore cooked mode — otherwise the
+			// coalesce buffer's last chunk can land on an already-
+			// detached Attach and be silently dropped.
+			select {
+			case <-srv.PTYDone():
+			case <-time.After(ptyDrainTimeout):
+			}
+			localTty.Detach()
+		case <-localTty.Done():
 			// Local terminal gone (stdin closed) — session continues headless
 			srv.SetLocalOutput(nil)
 			// Wait for child to exit (session persists, accessible via web UI)
@@ -176,13 +220,13 @@ func runSession(args []string, attach bool) {
 		case sig := <-sigCh:
 			if sig == syscall.SIGHUP {
 				// Terminal closed — detach, keep session alive
-				attach.Detach()
+				localTty.Detach()
 				srv.SetLocalOutput(nil)
 				// Continue running headless until child exits
 				<-srv.Done()
 			} else {
 				// SIGINT/SIGTERM — clean shutdown
-				attach.Detach()
+				localTty.Detach()
 				srv.Shutdown()
 			}
 		}

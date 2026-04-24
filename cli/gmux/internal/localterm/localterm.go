@@ -58,7 +58,14 @@ type Config struct {
 }
 
 // New creates a local terminal attachment. It puts the terminal in raw
-// mode and starts relaying I/O. Call Detach() to restore the terminal.
+// mode and enables focus reporting, but does NOT begin relaying I/O yet.
+// Call Start() after the PTY writer and resize function are safe to
+// invoke, and Detach() to restore the terminal.
+//
+// Splitting construction from I/O startup lets callers set up a PTY
+// server that already knows about this Attach (as its LocalOut) before
+// any PTY bytes are read, so fast-exiting commands don't race the
+// attach wiring and lose their output.
 func New(cfg Config) (*Attach, error) {
 	stdin := os.Stdin
 	stdout := os.Stdout
@@ -83,10 +90,15 @@ func New(cfg Config) (*Attach, error) {
 	// that point, even if a browser client resized the PTY earlier).
 	stdout.WriteString("\x1b[?1004h")
 
+	return a, nil
+}
+
+// Start begins relaying stdin→PTY and handling SIGWINCH. Call once,
+// after New, when the configured PTYWriter and ResizeFn are ready to
+// be invoked.
+func (a *Attach) Start() {
 	go a.readStdin()
 	go a.handleWinch()
-
-	return a, nil
 }
 
 // Write sends PTY output to the local terminal's stdout.

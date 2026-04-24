@@ -81,6 +81,7 @@ func cmdAttach(ref string) int {
 		return 1
 	}
 	defer attach.Detach()
+	attach.Start()
 
 	// Send an initial resize so the PTY adopts our viewport. Without
 	// this the child TUI might keep the previous attach's dimensions.

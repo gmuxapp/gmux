@@ -146,6 +146,12 @@ type Config struct {
 	Rows       uint16
 	Adapter    adapter.Adapter
 	State      *session.State
+	// LocalOut, if non-nil, receives a copy of every PTY output chunk
+	// from the moment the server starts reading. Set this at construction
+	// time (rather than calling SetLocalOutput after New) when you need
+	// to guarantee that fast-exiting commands can't race the wiring and
+	// have their output dropped on the floor.
+	LocalOut io.Writer
 }
 
 // New creates and starts a PTY server.
@@ -206,6 +212,7 @@ func New(cfg Config) (*Server, error) {
 		adapter:    cfg.Adapter,
 		state:      cfg.State,
 		clients:    make(map[*wsClient]struct{}),
+		localOut:   cfg.LocalOut, // wired before readPTY starts so early output is never lost
 		ptyCols:    cfg.Cols,
 		ptyRows:    cfg.Rows,
 		done:       make(chan struct{}),
@@ -278,8 +285,20 @@ func (s *Server) SocketPath() string {
 }
 
 // Done returns a channel that is closed when the child process exits.
+// Note: when Done closes, the PTY readout may still have buffered
+// output that hasn't been flushed to LocalOut / WS clients yet. Wait
+// on PTYDone() as well if you need to see the child's final bytes.
 func (s *Server) Done() <-chan struct{} {
 	return s.done
+}
+
+// PTYDone returns a channel that is closed after the PTY has been fully
+// drained, meaning all output the child ever produced has been flushed
+// through LocalOut and to every WS client. Always closes strictly after
+// Done(). Callers that want to detach a local terminal without dropping
+// the child's trailing output should wait on this before detaching.
+func (s *Server) PTYDone() <-chan struct{} {
+	return s.ptyDone
 }
 
 // ExitCode returns the child process exit code (only valid after Done).
@@ -295,6 +314,12 @@ func (s *Server) ExitCode() int {
 
 // SetLocalOutput sets a writer that receives a copy of all PTY output.
 // Used for transparent local terminal attach. Pass nil to detach.
+//
+// For the initial wiring, prefer Config.LocalOut: calling this after
+// New leaves a race window in which a fast-exiting child's output can
+// be flushed before the writer is attached and be silently dropped.
+// SetLocalOutput is the right tool for *changing* the sink mid-session
+// (e.g. detaching when stdin closes), not for the first attach.
 func (s *Server) SetLocalOutput(w io.Writer) {
 	s.mu.Lock()
 	detaching := s.localOut != nil && w == nil
