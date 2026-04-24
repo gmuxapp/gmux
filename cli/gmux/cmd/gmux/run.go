@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -20,6 +21,57 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/packages/workspace"
 )
+
+// envForceSessionID carries a pre-generated session ID from a
+// detaching parent (spawnDetached) to its re-execed child. This lets
+// the parent announce the ID on stdout before the child exists yet, so
+// `id=$(gmux --no-attach cmd)` works. It is intentionally undocumented
+// for end users: the only legitimate setter is gmux itself.
+//
+// The child reads and immediately clears it (see nextSessionID) so a
+// grandchild session launched later doesn't silently adopt the parent's
+// id and collide in gmuxd's session store.
+const envForceSessionID = "GMUX_RUNNER_FORCE_SESSION_ID"
+
+// nextSessionID returns the session ID to use for this runner. When
+// envForceSessionID holds a well-formed id (sess-<hex>), it is adopted
+// and the env var is cleared. Otherwise a fresh id is generated. The
+// env var is cleared even on a malformed value so a bad entry doesn't
+// survive into child processes.
+func nextSessionID() string {
+	forced, ok := os.LookupEnv(envForceSessionID)
+	if ok {
+		os.Unsetenv(envForceSessionID)
+	}
+	if ok && isValidSessionID(forced) {
+		return forced
+	}
+	return naming.SessionID()
+}
+
+// isValidSessionID checks the shape naming.SessionID produces:
+// "sess-" followed by lowercase hex. Kept deliberately permissive on
+// length (the generator currently uses 8 chars but this file shouldn't
+// lock that in).
+func isValidSessionID(id string) bool {
+	const prefix = "sess-"
+	if !strings.HasPrefix(id, prefix) {
+		return false
+	}
+	rest := id[len(prefix):]
+	if rest == "" {
+		return false
+	}
+	for _, r := range rest {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // ptyDrainTimeout bounds the wait for the PTY to fully flush after the
 // child exits. A well-behaved child has its PTY slave closed by the
@@ -61,7 +113,7 @@ func runSession(args []string, attach bool) {
 		log.Fatalf("cannot determine cwd: %v", err)
 	}
 
-	sessionID := naming.SessionID()
+	sessionID := nextSessionID()
 	socketDir := os.Getenv("GMUX_SOCKET_DIR")
 	if socketDir == "" {
 		socketDir = "/tmp/gmux-sessions"
@@ -260,6 +312,16 @@ func runSession(args []string, attach bool) {
 // background process, disconnected from the current terminal. Used for
 // both --no-attach and nested-gmux scenarios: the child registers with
 // gmuxd and appears in the UI; the parent returns immediately.
+//
+// The session ID is generated here, in the parent, and passed to the
+// child via envForceSessionID. This lets the parent print the short id
+// to stdout before the child even execs, so callers can capture it:
+//
+//	id=$(gmux --no-attach pytest --watch)
+//	gmux --tail 100 "$id"
+//
+// The human-readable message (e.g. "started ... in background") goes
+// to stderr so stdout stays machine-parseable as "just the id".
 func spawnDetached(args []string, msg string) {
 	self, err := os.Executable()
 	if err != nil {
@@ -271,6 +333,8 @@ func spawnDetached(args []string, msg string) {
 	}
 	defer devNull.Close()
 
+	sessionID := naming.SessionID()
+
 	// args is the command-remainder after gmux flag parsing, so it does
 	// not contain any gmux flags. The detached child sees no gmux flags,
 	// takes the default run path, and — because its stdin is /dev/null —
@@ -280,12 +344,25 @@ func spawnDetached(args []string, msg string) {
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull
 	cmd.Stderr = devNull
+	// Pass the pre-generated id to the child. The child's nextSessionID
+	// picks it up, clears it, and uses it instead of generating fresh.
+	cmd.Env = append(os.Environ(), envForceSessionID+"="+sessionID)
 	if err := cmd.Start(); err != nil {
 		log.Fatalf("failed to start background session: %v", err)
 	}
 	cmd.Process.Release()
+	announceDetached(os.Stdout, os.Stderr, sessionID, msg)
+}
+
+// announceDetached writes the new session's short id to stdout and the
+// free-form human message (if any) to stderr. Split onto two streams so
+// that `id=$(gmux --no-attach cmd)` captures exactly the id with no
+// surrounding prose, while an interactive user still sees the
+// "started ... in background" line in their terminal.
+func announceDetached(stdout, stderr io.Writer, sessionID, msg string) {
+	fmt.Fprintln(stdout, shortID(sessionID))
 	if msg != "" {
-		fmt.Fprintln(os.Stderr, msg)
+		fmt.Fprintln(stderr, msg)
 	}
 }
 

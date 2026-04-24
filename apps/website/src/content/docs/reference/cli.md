@@ -33,6 +33,13 @@ With `--no-attach` the session is spawned in the background and appears in the U
 
 When run inside an existing gmux session (detected via the `GMUX` environment variable), `gmux` automatically detaches into a headless background process instead of nesting PTY-within-PTY. The new session appears in the UI.
 
+Both detaching paths (explicit `--no-attach` and the nested-gmux auto-background) print the new session's short ID to **stdout** and the "started ... in background" confirmation to stderr. Scripts can capture just the ID:
+
+```bash
+id=$(gmux --no-attach pytest --watch)
+gmux --tail 100 "$id"
+```
+
 ### `gmux --list` (`-l`)
 
 List known sessions, alive first, newest first.
