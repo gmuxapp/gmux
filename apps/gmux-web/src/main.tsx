@@ -278,6 +278,15 @@ function MobileTerminalBar({
           ctrl
         </button>
         <button
+          class={`mobile-bottom-action ${showCtrl ? 'armed' : ''}`}
+          disabled={!canSend}
+          onClick={() => { if (holdWordMode) { clearHold(); } else { onToggleCtrl(); } onFocusTerminal() }}
+          title={showCtrl ? '⌘ armed for next typed key' : 'Arm ⌘ for next typed key'}
+          aria-pressed={showCtrl}
+        >
+          ⌘
+        </button>
+        <button
           class={`mobile-bottom-action ${altArmed ? 'armed' : ''}`}
           disabled={!canSend}
           onClick={() => { onToggleAlt(); onFocusTerminal() }}
