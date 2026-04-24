@@ -492,7 +492,19 @@ export function TerminalView({
       startScrollTop: 0,
     }
 
+    // Long-press paste support for iOS.
+    // xterm hides its textarea offscreen, so iOS can't show a paste callout.
+    // When a touch is held without moving for 500ms, we temporarily position
+    // the textarea under the finger so iOS presents its native paste menu.
+    let longPressTimer: ReturnType<typeof setTimeout> | null = null
+
+    const clearLongPress = () => {
+      if (longPressTimer !== null) { clearTimeout(longPressTimer); longPressTimer = null }
+    }
+
     const handleTouchStartCapture = (ev: TouchEvent) => {
+      clearLongPress()
+
       if (ev.touches.length !== 1 || isInteractiveTarget(ev.target)) {
         touchPanState.active = false
         touchPanState.moved = false
@@ -514,9 +526,28 @@ export function TerminalView({
       touchPanState.startY = ev.touches[0].clientY
       touchPanState.startScrollLeft = host.scrollLeft
       touchPanState.startScrollTop = host.scrollTop
+
+      // Schedule long-press: reposition textarea under finger for iOS paste menu.
+      const touch = ev.touches[0]
+      const tx = touch.clientX
+      const ty = touch.clientY
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null
+        const textarea = term.textarea
+        if (!textarea || touchPanState.moved) return
+        textarea.style.position = 'fixed'
+        textarea.style.left = `${tx - 12}px`
+        textarea.style.top = `${ty - 12}px`
+        textarea.style.width = '24px'
+        textarea.style.height = '24px'
+        textarea.style.opacity = '0.01'
+        textarea.style.zIndex = '9999'
+        textarea.focus({ preventScroll: true })
+      }, 500)
     }
 
     const handleTouchMoveCapture = (ev: TouchEvent) => {
+      clearLongPress()
       if (!touchPanState.active || ev.touches.length !== 1) return
 
       const host = shellRef.current
@@ -545,7 +576,25 @@ export function TerminalView({
       ev.stopPropagation()
     }
 
+    const resetTextareaPosition = () => {
+      const textarea = term.textarea
+      if (textarea) {
+        textarea.style.position = ''
+        textarea.style.left = ''
+        textarea.style.top = ''
+        textarea.style.width = ''
+        textarea.style.height = ''
+        textarea.style.opacity = ''
+        textarea.style.zIndex = ''
+      }
+    }
+
     const handleTouchEndCapture = () => {
+      clearLongPress()
+      // Delay textarea reset so iOS paste callout can still fire its event.
+      // The callout lingers after the finger lifts; tapping "Paste" triggers
+      // a paste event on the textarea, which must still be positioned nearby.
+      setTimeout(resetTextareaPosition, 2000)
       if (touchPanState.active && !touchPanState.moved) {
         focusTerminalInput(term)
         // Defer scroll so synthesized mouse events (which the browser fires
@@ -572,6 +621,7 @@ export function TerminalView({
     }
 
     const clearTouchPan = () => {
+      clearLongPress()
       touchPanState.active = false
       touchPanState.moved = false
     }
