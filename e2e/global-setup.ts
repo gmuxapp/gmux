@@ -4,6 +4,7 @@ import * as net from 'net'
 import * as os from 'os'
 import * as path from 'path'
 import type { FullConfig } from '@playwright/test'
+import { SMOKE_FIXTURES, writeFakeSession } from './fixtures'
 
 const ROOT = path.resolve(__dirname, '..')
 const GMUXD = path.join(ROOT, 'bin', 'gmuxd')
@@ -141,6 +142,16 @@ export default async function globalSetup(_config: FullConfig) {
   const fakeHome = path.join(tmpDir, 'home')
   fs.mkdirSync(fakeHome)
 
+  // Pre-seed smoke fixtures (one valid JSONL per adapter) before
+  // gmuxd starts. The bootstrap scan picks them up and the smoke spec
+  // asserts they're reachable at /v1/conversations/{kind}/{slug}. If a
+  // fixture is invalid for its parser, the smoke spec fails first with
+  // a clear "fixture didn't reach the index" signal, before the
+  // discovery spec's tests run.
+  for (const fixture of SMOKE_FIXTURES) {
+    writeFakeSession(fakeHome, fixture)
+  }
+
   const env: Record<string, string> = {
     PATH: process.env.PATH || '',
     HOME: fakeHome,
@@ -215,4 +226,9 @@ export default async function globalSetup(_config: FullConfig) {
   process.env.GMUXD_TEST_PORT = String(port)
   process.env.GMUX_TEST_SESSION_ID = sessionId
   process.env.GMUX_TEST_TOKEN = testToken
+  // Tests that write into adapter session roots (conversation
+  // discovery, etc.) need to know where the daemon is looking for
+  // session files. fakeHome is the daemon's HOME, so adapters resolve
+  // their roots under it.
+  process.env.GMUX_TEST_HOME = fakeHome
 }
