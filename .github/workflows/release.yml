@@ -109,6 +109,31 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: bash .github/workflows/scripts/notify-discord.sh
 
+      # The release/next PR carries RELEASE_HIGHLIGHTS.md untouched so
+      # editors can tweak prose right up until merge. Now that the
+      # release has shipped, reset it to the stub on main so the next
+      # cycle starts clean.
+      - name: Clear release highlights on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          bash .github/workflows/scripts/version.sh --clear-highlights
+          if git diff --quiet RELEASE_HIGHLIGHTS.md; then
+            echo "RELEASE_HIGHLIGHTS.md already clean, nothing to do"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add RELEASE_HIGHLIGHTS.md
+          git commit -m "chore: clear release highlights for ${VERSION}"
+          # The checkout at the start of this job is stale by now
+          # (goreleaser, Discord notify, etc. take minutes). Rebase
+          # onto current main so the push fast-forwards even if other
+          # commits landed in the meantime.
+          git pull --rebase origin main
+          git push origin main
+
   deploy-docs:
     needs: release
     if: needs.release.result == 'success'

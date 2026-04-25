@@ -97,6 +97,45 @@ jobs:
           ${NOTES}
           EOF
 
+      # Sticky comment showing exactly what will go to Discord and the
+      # GitHub Release. Reviewers can verify wording before merging
+      # without having to expand the PR body or run version.sh locally.
+      - name: Post release preview comment
+        if: steps.version.outputs.version != '' && steps.create-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUM: ${{ steps.create-pr.outputs.pull-request-number }}
+          VERSION: ${{ steps.version.outputs.version }}
+          NOTES: ${{ steps.body.outputs.notes }}
+        run: |
+          summary=$(printf '%s\n' "$NOTES" | sed '/<!-- highlights-end -->/,$d' | awk 'NF{p=1} p' | awk '{a[NR]=$0} END{n=NR; while(n>0 && a[n]~/^[[:space:]]*$/) n--; for(i=1;i<=n;i++) print a[i]}')
+          if [[ -z "$summary" ]]; then
+            summary="_(no highlights; only the changelog link will be posted)_"
+          fi
+          quoted=$(printf '%s\n' "$summary" | sed 's/^/> /')
+          marker='<!-- gmux-release-preview -->'
+          {
+            printf '%s\n' "$marker"
+            printf '### Discord announcement preview\n\n'
+            printf 'What `notify-discord.sh` will post when this release ships:\n\n'
+            printf '> ## gmux %s\n>\n' "$VERSION"
+            printf '%s\n' "$quoted"
+            printf '>\n> [See the changelog for details.](https://gmux.app/changelog)\n\n'
+            printf 'To tweak this, edit `RELEASE_HIGHLIGHTS.md` on the `release/next` branch and run `scripts/regen-release-notes.sh` to refresh the generated files.\n'
+          } > /tmp/preview.md
+          existing=$(gh api "repos/$REPO/issues/$PR_NUM/comments" \
+            --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+          if [[ -n "$existing" ]]; then
+            # Build a proper JSON body via jq --rawfile so markdown
+            # content (with quotes, backticks, control chars) is
+            # always escaped correctly.
+            jq -n --rawfile body /tmp/preview.md '{body: $body}' \
+              | gh api -X PATCH "repos/$REPO/issues/comments/$existing" --input -
+          else
+            gh pr comment "$PR_NUM" --body-file /tmp/preview.md
+          fi
+
       - name: Trigger PR build
         if: steps.version.outputs.version != '' && steps.create-pr.outputs.pull-request-number != ''
         env:
