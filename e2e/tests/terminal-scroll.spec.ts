@@ -305,7 +305,7 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
    * the original boundaries so BSU/ESU detection in terminal-io sees
    * what production WS framing actually produces.
    */
-  async function replayPiFixture(page: Page): Promise<void> {
+  async function replayPiFixture(page: Page, range?: { from?: number; to?: number }): Promise<void> {
     const fixtureDir = join(__dirname, '..', 'fixtures')
     const bytes = readFileSync(join(fixtureDir, 'pi-turn.bin'))
     const chunks = JSON.parse(
@@ -313,7 +313,9 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     ) as Array<{ offset: number; len: number }>
     expect(bytes.indexOf(Buffer.from('\x1b[3J'))).toBeGreaterThan(0)
 
-    for (const c of chunks) {
+    const from = range?.from ?? 0
+    const to = range?.to ?? chunks.length
+    for (const c of chunks.slice(from, to)) {
       const encoded = bytes.subarray(c.offset, c.offset + c.len).toString('base64')
       await page.evaluate((data) => {
         const inj = (window as any).__gmuxInject as ((b: string) => void) | null
@@ -328,6 +330,9 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
       new Promise(r => requestAnimationFrame(() =>
         requestAnimationFrame(() => r(null)))))
   }
+
+  /** Index of the first chunk that contains pi's `\x1b[3J` wipe. */
+  const PI_WIPE_CHUNK = 98
 
   /**
    * Real pi end-of-turn replay.
@@ -487,5 +492,220 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     expect(after.baseY).toBeGreaterThanOrEqual(distance)
     // Contract: the user's distance from the bottom is preserved.
     expect(after.baseY - after.viewportY).toBe(distance)
+  })
+
+  /**
+   * The user is reading a recognizable line in scrollback when the
+   * agent emits a wipe + redraw whose new buffer still contains that
+   * exact line at a different position. We jump to the new position
+   * of the same content rather than restoring the user's pre-wipe
+   * distance from the bottom: the line they were reading is the most
+   * meaningful anchor we have.
+   *
+   * This shape covers TUIs that refresh their display with much of
+   * the same content (log viewers, file browsers, code editors with
+   * gutter redraws). Pi specifically benefits when the user is
+   * reading content that pi's end-of-turn redraw places back into
+   * scrollback (eg the version banner); see the pi-fixture variant
+   * of this test below for that case.
+   */
+  test('user scrolled up to a recognizable line: BSU + clear-scrollback + redraw containing that line jumps to it', async ({ page }) => {
+    // Pin the terminal size so the post-redraw layout is
+    // deterministic: 80 redraw lines with rows=40 means baseY=40
+    // (lines 0..39 in scrollback, 40..79 visible).
+    await page.evaluate(() => (window as any).__gmuxTerm.resize(120, 40))
+    await settle(page)
+
+    await seedScrollback(page, 200)
+    await scrollToBottom(page)
+    const baseline = await getScroll(page)
+    expect(baseline.baseY).toBeGreaterThan(20)
+
+    // Scroll up by a known distance, then read the actual line text
+    // there. Reading rather than predicting keeps the test robust to
+    // banner rows / trailing newlines from seedScrollback; the
+    // contract under test is content matching, not seed numbering.
+    const distance = 10
+    const targetY = baseline.baseY - distance
+    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), targetY)
+    const beforeBurst = await getScroll(page)
+    expect(beforeBurst.viewportY).toBe(targetY)
+    const targetText = await page.evaluate((y) => {
+      const term = (window as any).__gmuxTerm
+      const line = term.buffer.active.getLine(y)
+      return line ? line.translateToString(true) : null
+    }, targetY)
+    expect(targetText).toMatch(/^seed-line-\d{4}$/)
+
+    // 80 lines of redraw with `targetText` placed at index 20: lands
+    // in scrollback at y=20 once the visible rows fill (lines 40..79
+    // become visible, 0..39 scrollback). Distance restoration would
+    // land at baseY-distance = 40-10 = 30; anchor match should land
+    // at 20. The two must differ for this test to be meaningful, so
+    // the resize above is load-bearing.
+    const redrawLines = Array.from({ length: 80 }, (_, i) =>
+      i === 20 ? targetText : `redraw-line-${i}`)
+    const redraw = redrawLines.join('\r\n') + '\r\n'
+    await inject(page, BSU + '\x1b[2J\x1b[H\x1b[3J' + redraw + ESU)
+    await settle(page)
+
+    const after = await getScroll(page)
+    const landedText = await page.evaluate((y) => {
+      const term = (window as any).__gmuxTerm
+      const line = term.buffer.active.getLine(y)
+      return line ? line.translateToString(true) : null
+    }, after.viewportY)
+    console.log('[anchor-match]',
+      'viewportY=', after.viewportY,
+      'baseY=', after.baseY,
+      'landedOn=', landedText)
+
+    // The viewport top is sitting on the line whose content matches
+    // the user's pre-wipe anchor (y=20), not the distance fallback
+    // position (y=30).
+    expect(landedText).toBe(targetText)
+    expect(after.viewportY).toBe(20)
+  })
+
+  /**
+   * The anchor lives in the visible region of the post-wipe buffer
+   * rather than scrollback. `scrollToLine` clamps to `baseY`, so we
+   * can't put the anchor at the viewport's top, but `scrollToBottom`
+   * keeps it in the viewport at offset `matchY - baseY`. This is the
+   * mid-distance case for general TUIs that refresh by repainting a
+   * fixed-position UI: the line you were reading reappears in roughly
+   * the same on-screen location.
+   *
+   * The visible-region match must be measurably better than the
+   * distance-restoration fallback for the test to be meaningful, so
+   * we deliberately position the anchor where distance restoration
+   * would scroll past it.
+   */
+  test('user scrolled up: anchor in post-wipe visible region keeps it in view', async ({ page }) => {
+    await page.evaluate(() => (window as any).__gmuxTerm.resize(120, 40))
+    await settle(page)
+
+    await seedScrollback(page, 200)
+    await scrollToBottom(page)
+    const baseline = await getScroll(page)
+    expect(baseline.baseY).toBeGreaterThan(20)
+
+    const distance = 5
+    const targetY = baseline.baseY - distance
+    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), targetY)
+    const targetText = await page.evaluate((y) => {
+      const term = (window as any).__gmuxTerm
+      const line = term.buffer.active.getLine(y)
+      return line ? line.translateToString(true) : null
+    }, targetY)
+    expect(targetText).toMatch(/^seed-line-\d{4}$/)
+
+    // 45-line redraw: rows=40, so baseY=5 and visible region is
+    // [5, 44]. Anchor placed at row 40 (deep in visible). Distance
+    // restoration would scrollToLine(baseY - distance) = scrollToLine(0),
+    // visible region [0, 39], anchor at 40 falls off the bottom of
+    // the viewport. Anchor matching with full-buffer search finds
+    // the line at y=40 and snaps to baseY=5, putting anchor at
+    // visible offset 35 (still readable, near the bottom).
+    const redrawLines = Array.from({ length: 45 }, (_, i) =>
+      i === 40 ? targetText : `redraw-line-${i}`)
+    const redraw = redrawLines.join('\r\n') + '\r\n'
+    await inject(page, BSU + '\x1b[2J\x1b[H\x1b[3J' + redraw + ESU)
+    await settle(page)
+
+    const after = await getScroll(page)
+    console.log('[anchor-visible]',
+      'viewportY=', after.viewportY,
+      'baseY=', after.baseY,
+      'distance=', distance)
+
+    // Visible-region match → viewportY = baseY (at-bottom). With
+    // search bounded to [0, baseY] this would be viewportY = 0.
+    expect(after.viewportY).toBe(after.baseY)
+
+    // Sanity: the anchor really is somewhere in the viewport. Walk
+    // visible rows looking for the target text.
+    const anchorVisible = await page.evaluate(({ vy, rows, target }) => {
+      const term = (window as any).__gmuxTerm
+      for (let y = vy; y < vy + rows; y++) {
+        const line = term.buffer.active.getLine(y)
+        if (line && line.translateToString(true) === target) return { y, offset: y - vy }
+      }
+      return null
+    }, { vy: after.viewportY, rows: 40, target: targetText })
+    expect(anchorVisible, 'anchor must be visible in the post-wipe viewport').not.toBeNull()
+  })
+
+  /**
+   * Pi-fixture variant of the anchor-match contract. Pi's end-of-turn
+   * redraw is a full-screen rewrite (~53 lines: version/model banner,
+   * keybind hints, the user prompt, all 30 fruit names, the status
+   * bar). When the user is scrolled up reading content that pi's
+   * redraw places back into scrollback, anchor matching restores them
+   * to that same line.
+   *
+   * Concretely: pre-wipe, the version-banner line sits at y=2 in the
+   * buffer (distance ~22 from the bottom). With baseline #176
+   * (distance restoration), distance > new baseY and we'd snap to the
+   * bottom. With anchor matching, we find the same line in the
+   * rebuilt scrollback and jump directly there.
+   */
+  test('pi-fixture: user reading the version banner stays on it across the wipe', async ({ page }) => {
+    await page.evaluate(() => (window as any).__gmuxTerm.resize(120, 40))
+    await settle(page)
+
+    // Replay everything before pi's wipe so the buffer is in its
+    // realistic pre-wipe shape (banner near the top, fruits in the
+    // middle, a streaming "Working..." indicator near the bottom).
+    await replayPiFixture(page, { to: PI_WIPE_CHUNK })
+
+    // Find the version-banner line by content rather than fixed y:
+    // chunks may emit slightly different layouts as pi evolves, but
+    // the banner string is stable.
+    const found = await page.evaluate(() => {
+      const term = (window as any).__gmuxTerm
+      const buf = term.buffer.active
+      const total = buf.baseY + term.rows
+      for (let y = 0; y < buf.baseY; y++) {
+        const line = buf.getLine(y)
+        const text = line ? line.translateToString(true) : ''
+        if (text.includes('v0.70.2  anthropic')) return { y, text, baseY: buf.baseY, total }
+      }
+      return null
+    })
+    expect(found, 'pre-wipe version banner not found in scrollback').not.toBeNull()
+    const { y: targetY, text: anchorText, baseY: preWipeBaseY } = found!
+
+    // Confirm this is a case the distance fallback could NOT have
+    // rescued: pre-wipe distance is bigger than what fits in the
+    // post-wipe scrollback, so without anchor matching we'd snap to
+    // the bottom.
+    const preWipeDistance = preWipeBaseY - targetY
+    expect(preWipeDistance).toBeGreaterThan(15)
+
+    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), targetY)
+    const beforeBurst = await getScroll(page)
+    expect(beforeBurst.viewportY).toBe(targetY)
+
+    // Replay the wipe + redraw + ESU.
+    await replayPiFixture(page, { from: PI_WIPE_CHUNK })
+
+    const after = await getScroll(page)
+    const landedText = await page.evaluate((y) => {
+      const term = (window as any).__gmuxTerm
+      const line = term.buffer.active.getLine(y)
+      return line ? line.translateToString(true) : null
+    }, after.viewportY)
+    console.log('[pi-anchor-match]',
+      'preWipeY=', targetY,
+      'preWipeDistance=', preWipeDistance,
+      'postWipeViewportY=', after.viewportY,
+      'postWipeBaseY=', after.baseY,
+      'landedText=', landedText?.slice(0, 60))
+
+    // Contract: viewport sits on a line whose content matches the
+    // pre-wipe anchor. The exact y depends on pi's redraw layout (we
+    // don't pin it), but the line text is stable.
+    expect(landedText).toBe(anchorText)
   })
 })

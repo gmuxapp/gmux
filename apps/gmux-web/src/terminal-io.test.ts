@@ -47,9 +47,13 @@ function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
 
   const scrollToLineCalls: number[] = []
   const scrollToBottomCalls: number[] = [] // tracks call count
+  // Per-line content for anchor-matching tests. y → visible text. Lines
+  // not in the map return null from getLine() (the production accessor
+  // also returns null for empty / trivial lines).
+  const lineContent = new Map<number, string>()
 
   const scroll: ScrollAccessor = {
-    getState: () => ({ viewportY, baseY }),
+    getState: () => ({ viewportY, baseY, rows }),
     scrollToLine(line: number) {
       scrollToLineCalls.push(line)
       viewportY = Math.max(0, Math.min(line, baseY))
@@ -57,6 +61,9 @@ function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
     scrollToBottom() {
       scrollToBottomCalls.push(baseY)
       viewportY = baseY
+    },
+    getLine(y: number): string | null {
+      return lineContent.get(y) ?? null
     },
   }
 
@@ -135,6 +142,12 @@ function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
       totalLines = rows
       baseY = 0
       viewportY = 0
+      lineContent.clear()
+    },
+
+    /** Set the visible text of the buffer line at `y`. */
+    setLine(y: number, text: string) {
+      lineContent.set(y, text)
     },
 
     /**
@@ -457,6 +470,183 @@ describe('scroll preservation across BSU/ESU', () => {
     // No wipe happened, just growth. The user was implicitly at bottom
     // (viewportY=0=baseY=0 pre-BSU), so the wasAtBottom branch fires.
     expect(h.viewportY).toBe(h.baseY)
+    h.cleanup()
+  })
+
+  it('after scrollback wipe, jumps to the line whose content matches the user\'s anchor', () => {
+    // The user is reading a recognizable line ("ERROR: cannot find
+    // foo"). The agent emits a wipe + redraw, the same line reappears
+    // in the new buffer at a different position. Anchor-match wins
+    // over distance restoration.
+    const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
+    h.io.reset(1)
+    h.addLines(200)
+    h.userScrollTo(150)
+    h.setLine(150, 'ERROR: cannot find foo')
+    expect(h.baseY - h.viewportY).toBe(50)
+
+    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.clearScrollback()
+    h.addLines(80)
+    // Same line lands at a different y after the redraw.
+    h.setLine(60, 'ERROR: cannot find foo')
+    h.flushOne(0)
+    h.flushRAF()
+
+    // Anchor matched at y=60: scroll there, no bottom snap.
+    expect(h.scrollToLineCalls).toContain(60)
+    expect(h.scrollToBottomCalls.length).toBe(0)
+    expect(h.viewportY).toBe(60)
+    h.cleanup()
+  })
+
+  it('after scrollback wipe with multiple anchor matches, picks the one closest to prevDistanceFromBottom', () => {
+    // The anchor line appears three times in the redraw. The match
+    // closest to the user's pre-wipe distance from the bottom (5)
+    // wins. The winning y is deliberately chosen so it differs from
+    // the distance-fallback position (baseY - prevDistance = 15),
+    // so a regression that disables anchor matching is caught here.
+    const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
+    h.io.reset(1)
+    h.addLines(50)
+    h.userScrollTo(45)         // distance = 5
+    h.setLine(45, 'session ready')
+    expect(h.baseY - h.viewportY).toBe(5)
+
+    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.clearScrollback()
+    h.addLines(20)             // new baseY=20
+    h.setLine(12, 'session ready')  // distance: 8, |8-5|=3
+    h.setLine(16, 'session ready')  // distance: 4, |4-5|=1 ← winner
+    h.setLine(18, 'session ready')  // distance: 2, |2-5|=3
+    h.flushOne(0)
+    h.flushRAF()
+
+    // y=16 is the closest match. Distance fallback would have given
+    // y=15, so this assertion is sensitive to anchor matching being
+    // active rather than coincidentally matching the fallback.
+    expect(h.scrollToLineCalls).toContain(16)
+    expect(h.viewportY).toBe(16)
+    h.cleanup()
+  })
+
+  it('after scrollback wipe, falls back to distance restoration when anchor is null', () => {
+    // The user was on a trivial line so getLine returned null and
+    // savedScroll.prevAnchorLine is null. We fall through to the
+    // distance restoration path.
+    const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
+    h.io.reset(1)
+    h.addLines(50)
+    h.userScrollTo(47)         // distance = 3
+    // Deliberately NOT calling setLine: getLine returns null (the
+    // production accessor's filter for trivial lines).
+
+    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.clearScrollback()
+    h.addLines(20)             // new baseY=20
+    h.setLine(17, 'unrelated content')  // present but won't match anything
+    h.flushOne(0)
+    h.flushRAF()
+
+    // No anchor captured → distance fallback: 20 - 3 = 17.
+    expect(h.scrollToLineCalls).toContain(17)
+    expect(h.viewportY).toBe(17)
+    h.cleanup()
+  })
+
+  it('after scrollback wipe, anchor in visible region snaps to bottom with the anchor still in view', () => {
+    // Mid-distance scenario: the user was scrolled up just a few
+    // lines, reading streaming output. After the wipe their anchor
+    // line ends up in the visible region of the new buffer, not
+    // scrollback. `scrollToLine` clamps to baseY, so the best we
+    // can do is `scrollToBottom` and let the anchor sit somewhere
+    // in the visible region rather than disappearing entirely or
+    // landing the user at distance restoration's chosen y where
+    // the anchor may be off-screen.
+    //
+    // Concretely: pre-wipe distance = 5. Post-wipe baseY = 5 with
+    // the anchor placed at y = 20 (visible region [5, 44]). With
+    // the search bounded to [0, baseY] (the previous behavior),
+    // anchor matching would miss and distance restoration would
+    // land the user at viewportY = 0. With the search extended to
+    // the full buffer, we land at viewportY = baseY = 5, with the
+    // anchor visible at offset 15 of the viewport. The two
+    // viewportY values differ, so this test catches a regression
+    // that re-narrows the search range.
+    const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
+    h.io.reset(1)
+    h.addLines(50)
+    h.userScrollTo(45)         // distance = 5
+    h.setLine(45, 'streaming-target')
+    expect(h.baseY - h.viewportY).toBe(5)
+
+    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.clearScrollback()
+    h.addLines(5)              // new baseY=5; total = baseY+rows = 45
+    h.setLine(20, 'streaming-target')  // y=20 in visible region [5, 44]
+    h.flushOne(0)
+    h.flushRAF()
+
+    // Visible-region match → restoreY = min(20, 5) = 5 (= at-bottom).
+    expect(h.scrollToLineCalls).toContain(5)
+    expect(h.viewportY).toBe(5)
+    h.cleanup()
+  })
+
+  it('after scrollback wipe with both scrollback and visible matches, picks by closeness to prevDistanceFromBottom', () => {
+    // Anchor appears in both regions. The user's pre-wipe distance
+    // (1) is close to the visible match's restore-distance (0,
+    // since visible matches force scrollToBottom) and far from the
+    // scrollback match's restore-distance (13). Tiebreaker picks
+    // the visible match.
+    //
+    // Without the full-buffer search, the visible match would never
+    // be considered, the scrollback match would win by default,
+    // and viewportY would land at 2 instead of baseY (= 15). The
+    // two outcomes differ, so this catches a regression that
+    // re-narrows the search range.
+    const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
+    h.io.reset(1)
+    h.addLines(50)
+    h.userScrollTo(49)         // distance = 1 (just barely scrolled up)
+    h.setLine(49, 'shared-line')
+    expect(h.baseY - h.viewportY).toBe(1)
+
+    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.clearScrollback()
+    h.addLines(15)             // new baseY=15; visible region [15, 54]
+    h.setLine(2, 'shared-line')   // scrollback: restoreY=2,  restoreDistance=13, diff=12
+    h.setLine(30, 'shared-line')  // visible:    restoreY=15, restoreDistance=0,  diff=1
+    h.flushOne(0)
+    h.flushRAF()
+
+    // Visible match wins because its restore-distance is closer to
+    // the pre-wipe distance.
+    expect(h.scrollToLineCalls).toContain(15)
+    expect(h.viewportY).toBe(15)
+    h.cleanup()
+  })
+
+  it('after scrollback wipe, falls back to distance when anchor does not match anywhere', () => {
+    // The agent's redraw doesn't include the user's pre-wipe content
+    // (eg pi's status-bar-only redraw vs the user reading prior
+    // conversation output). Distance restoration takes over.
+    const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
+    h.io.reset(1)
+    h.addLines(50)
+    h.userScrollTo(47)         // distance = 3
+    h.setLine(47, 'previous turn output line')
+
+    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.clearScrollback()
+    h.addLines(20)             // new baseY=20
+    h.setLine(10, 'pi status bar version 0.70.2')  // wholly different
+    h.flushOne(0)
+    h.flushRAF()
+
+    // No match → distance fallback: 20 - 3 = 17.
+    expect(h.scrollToLineCalls).toContain(17)
+    expect(h.viewportY).toBe(17)
     h.cleanup()
   })
 
