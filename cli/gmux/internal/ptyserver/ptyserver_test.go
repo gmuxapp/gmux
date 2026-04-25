@@ -1269,3 +1269,130 @@ func TestPTYDoneClosesAfterFinalFlush(t *testing.T) {
 		t.Errorf("expected LocalOut to contain 'END-OF-OUTPUT' by the time PTYDone closes, got %q", out.String())
 	}
 }
+
+// envValue returns the last value for name in env, or "" if not set.
+// Mirrors POSIX semantics where later entries shadow earlier ones.
+func envValue(env []string, name string) string {
+	prefix := name + "="
+	val := ""
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			val = e[len(prefix):]
+		}
+	}
+	return val
+}
+
+// When the parent has no TERM (e.g. gmuxd launched by systemd, then
+// forking a shell into a session) curses programs like lazygit abort
+// with "terminal entry not found: term not set". buildChildEnv must
+// default TERM=xterm-256color so children always have a usable
+// terminfo entry.
+func TestBuildChildEnv_DefaultsTermWhenAbsent(t *testing.T) {
+	parent := []string{"PATH=/usr/bin", "HOME=/home/test"}
+	env := buildChildEnv(parent, nil, "1.2.3")
+
+	if got := envValue(env, "TERM"); got != "xterm-256color" {
+		t.Errorf("TERM = %q, want xterm-256color", got)
+	}
+}
+
+// An existing TERM in the parent must win: we never clobber a real
+// terminal's terminfo entry.
+func TestBuildChildEnv_PreservesParentTerm(t *testing.T) {
+	parent := []string{"TERM=screen-256color"}
+	env := buildChildEnv(parent, nil, "1.2.3")
+
+	if got := envValue(env, "TERM"); got != "screen-256color" {
+		t.Errorf("TERM = %q, want parent value screen-256color", got)
+	}
+}
+
+// Caller-supplied env (e.g. an adapter) can override a parent TERM
+// without ptyserver layering one on top.
+func TestBuildChildEnv_ExtraOverridesParentTerm(t *testing.T) {
+	parent := []string{"TERM=screen-256color"}
+	extra := []string{"TERM=tmux-256color"}
+	env := buildChildEnv(parent, extra, "1.2.3")
+
+	if got := envValue(env, "TERM"); got != "tmux-256color" {
+		t.Errorf("TERM = %q, want extra value tmux-256color", got)
+	}
+}
+
+// Terminal capability advertisements always win over the parent: the
+// frontend's actual capabilities don't depend on what the parent
+// thinks. fastfetch reads TERM_PROGRAM/TERM_PROGRAM_VERSION, so the
+// version must reflect the real build, not whatever the parent had.
+func TestBuildChildEnv_AdvertisesTerminalCapabilities(t *testing.T) {
+	parent := []string{
+		"TERM_PROGRAM=iTerm.app",
+		"TERM_PROGRAM_VERSION=3.4.0",
+		"COLORTERM=",
+	}
+	env := buildChildEnv(parent, nil, "1.2.3")
+
+	if got := envValue(env, "TERM_PROGRAM"); got != "gmux" {
+		t.Errorf("TERM_PROGRAM = %q, want gmux", got)
+	}
+	if got := envValue(env, "TERM_PROGRAM_VERSION"); got != "1.2.3" {
+		t.Errorf("TERM_PROGRAM_VERSION = %q, want 1.2.3", got)
+	}
+	if got := envValue(env, "COLORTERM"); got != "truecolor" {
+		t.Errorf("COLORTERM = %q, want truecolor", got)
+	}
+	if got := envValue(env, "KITTY_WINDOW_ID"); got != "1" {
+		t.Errorf("KITTY_WINDOW_ID = %q, want 1", got)
+	}
+}
+
+// An empty version (e.g. someone forgot to wire the ldflag) must not
+// produce a bare "TERM_PROGRAM_VERSION=" — fall back to "dev" so
+// downstream parsers always see a non-empty value.
+func TestBuildChildEnv_EmptyVersionFallsBackToDev(t *testing.T) {
+	env := buildChildEnv(nil, nil, "")
+
+	if got := envValue(env, "TERM_PROGRAM_VERSION"); got != "dev" {
+		t.Errorf("TERM_PROGRAM_VERSION = %q, want dev", got)
+	}
+}
+
+// End-to-end check that buildChildEnv's output actually reaches a
+// spawned child through cmd.Env. The unit tests above cover composition
+// rules; this guards against regressions in how New wires the env into
+// exec.Command.
+func TestNewSpawnsChildWithComposedEnv(t *testing.T) {
+	// t.Setenv registers cleanup to restore the original TERM after the
+	// test; we then Unsetenv so os.Environ() truly lacks a TERM entry
+	// (TERM="" would still prefix-match buildChildEnv's hasEnv check).
+	t.Setenv("TERM", "")
+	if err := os.Unsetenv("TERM"); err != nil {
+		t.Fatalf("unset TERM: %v", err)
+	}
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	var out syncBuffer
+
+	srv, err := New(Config{
+		Command:    []string{"sh", "-c", `printf "TERM=%s|TPV=%s|TP=%s\n" "$TERM" "$TERM_PROGRAM_VERSION" "$TERM_PROGRAM"`},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+		LocalOut:   &out,
+		Version:    "9.9.9-test",
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	select {
+	case <-srv.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("child did not exit")
+	}
+	<-srv.PTYDone()
+
+	want := "TERM=xterm-256color|TPV=9.9.9-test|TP=gmux"
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("child env: want substring %q, got: %q", want, out.String())
+	}
+}

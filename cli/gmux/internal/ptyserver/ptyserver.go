@@ -146,6 +146,9 @@ type Config struct {
 	Rows       uint16
 	Adapter    adapter.Adapter
 	State      *session.State
+	// Version is reported to children via TERM_PROGRAM_VERSION.
+	// Defaults to "dev" when empty.
+	Version    string
 	// LocalOut, if non-nil, receives a copy of every PTY output chunk
 	// from the moment the server starts reading. Set this at construction
 	// time (rather than calling SetLocalOutput after New) when you need
@@ -168,17 +171,7 @@ func New(cfg Config) (*Server, error) {
 
 	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
 	cmd.Dir = cfg.Cwd
-	cmd.Env = append(os.Environ(), cfg.Env...)
-	// Advertise terminal capabilities to child processes.
-	// Our frontend (xterm.js + image addon) supports kitty graphics, sixel, and iTerm2 images.
-	// Set KITTY_WINDOW_ID so programs that check for kitty graphics support (e.g. pi, viu)
-	// will use it. This is legitimate — our terminal genuinely handles the kitty protocol.
-	cmd.Env = append(cmd.Env,
-		"TERM_PROGRAM=gmux",
-		"TERM_PROGRAM_VERSION=0.1.0",
-		"COLORTERM=truecolor",
-		"KITTY_WINDOW_ID=1",
-	)
+	cmd.Env = buildChildEnv(os.Environ(), cfg.Env, cfg.Version)
 
 	// Start command in a new PTY
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
@@ -984,4 +977,53 @@ func (s *Server) waitChild() {
 		c.conn.Close(websocket.StatusNormalClosure, "process exited")
 	}
 	s.mu.Unlock()
+}
+
+// buildChildEnv composes the environment passed to PTY children.
+//
+// Layering, in order:
+//  1. parent (typically os.Environ()) — inherits the daemon/user env;
+//  2. caller-supplied extras (cfg.Env from the adapter / runner);
+//  3. terminal capability advertisements that always win, because the
+//     frontend's actual capabilities don't depend on what the parent
+//     thinks: TERM_PROGRAM=gmux, TERM_PROGRAM_VERSION=<version>,
+//     COLORTERM=truecolor, KITTY_WINDOW_ID=1 (xterm.js + image addon
+//     handles kitty graphics, sixel, and iTerm2 images);
+//  4. TERM=xterm-256color, but only if no earlier layer provided one.
+//     When gmuxd is launched from a non-interactive context (systemd
+//     unit, browser-launched shell inheriting the daemon's env) TERM
+//     may be missing, which makes curses programs like lazygit abort
+//     with "terminal entry not found: term not set". Defaulting matches
+//     what the xterm.js frontend actually renders.
+//
+// version falls back to "dev" when empty so TERM_PROGRAM_VERSION is
+// never a bare "=".
+func buildChildEnv(parent, extra []string, version string) []string {
+	if version == "" {
+		version = "dev"
+	}
+	env := make([]string, 0, len(parent)+len(extra)+5)
+	env = append(env, parent...)
+	env = append(env, extra...)
+	env = append(env,
+		"TERM_PROGRAM=gmux",
+		"TERM_PROGRAM_VERSION="+version,
+		"COLORTERM=truecolor",
+		"KITTY_WINDOW_ID=1",
+	)
+	if !hasEnv(env, "TERM") {
+		env = append(env, "TERM=xterm-256color")
+	}
+	return env
+}
+
+// hasEnv reports whether env contains a NAME=... entry for the given name.
+func hasEnv(env []string, name string) bool {
+	prefix := name + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
 }

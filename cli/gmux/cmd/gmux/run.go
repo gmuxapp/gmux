@@ -120,6 +120,7 @@ func runSession(args []string, attach bool) {
 		SocketPath: sockPath,
 		Adapter:    a,
 		State:      state,
+		Version:    version,
 	}
 	// Always try to inherit terminal dimensions from the parent.
 	// Even non-interactive launches (background, piped) benefit from
