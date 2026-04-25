@@ -73,12 +73,17 @@ function claudeFile(home: string, spec: FixtureSpec): string {
 
 function codexFile(home: string, spec: FixtureSpec): string {
   const root = path.join(home, '.codex', 'sessions')
-  // Codex is date-nested by file creation time; use today's date so
-  // ListSessionFiles finds it. Date format mirrors Go's time.Format.
+  // Codex is date-nested by file creation time. Path layout is
+  // YYYY/MM/DD/. Bootstrap uses ListSessionFiles which walks the
+  // entire tree (date-agnostic), so any reasonable date works for
+  // the smoke spec. Use *local* time to match Go's codex.SessionDir,
+  // which calls time.Now() (local) — keeps the fixture path
+  // identical to whatever a real codex session would create today
+  // on the same machine.
   const now = new Date()
-  const yyyy = String(now.getUTCFullYear())
-  const mm = String(now.getUTCMonth() + 1).padStart(2, '0')
-  const dd = String(now.getUTCDate()).padStart(2, '0')
+  const yyyy = String(now.getFullYear())
+  const mm = String(now.getMonth() + 1).padStart(2, '0')
+  const dd = String(now.getDate()).padStart(2, '0')
   return path.join(root, yyyy, mm, dd, `${spec.toolID}.jsonl`)
 }
 
