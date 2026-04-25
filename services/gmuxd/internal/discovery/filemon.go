@@ -283,11 +283,20 @@ func (fm *FileMonitor) handleFSEvent(event fsnotify.Event) {
 		//    watched year dir gets its own watch.
 		// 2. A new .jsonl file in a watched dir -> handle as file change.
 		fm.mu.Lock()
+		var catchUp []indexWork
 		dir := filepath.Dir(name)
 		if fm.watchedDirs[dir] {
-			fm.handleNewSubdirLocked(name)
+			catchUp = fm.handleNewSubdirLocked(name)
 		}
 		fm.mu.Unlock()
+
+		// Run catch-up ScanFile calls outside fm.mu. The walk itself
+		// stays locked (it modifies watchedDirs), but the expensive
+		// part (per-file JSONL parse) shouldn't hold up other fm.mu
+		// users like NotifyNewSession during a large catch-up.
+		for _, w := range catchUp {
+			fm.index.ScanFile(w.adapter, w.path)
+		}
 
 		if strings.HasSuffix(name, ".jsonl") {
 			fm.handleFileChange(name)
@@ -306,25 +315,35 @@ func (fm *FileMonitor) handleFSEvent(event fsnotify.Event) {
 	fm.notifyConvIndex(event)
 }
 
+// indexWork is a deferred ScanFile call that handleNewSubdirLocked
+// returns to its caller. Decoupling collection (under fm.mu) from
+// parsing (after release) keeps a large catch-up from blocking other
+// fm.mu users like NotifyNewSession.
+type indexWork struct {
+	adapter adapter.Adapter
+	path    string
+}
+
 // handleNewSubdirLocked is called when a Create event fires inside a
-// watched dir. Any new subdirectory is watched, and we catch up on
-// any .jsonl files that already landed in it before the watch took
-// effect (the `mkdir x && touch x/y.jsonl` race).
-func (fm *FileMonitor) handleNewSubdirLocked(path string) {
+// watched dir. Any new subdirectory is watched, and any pre-existing
+// .jsonl files in it are returned as deferred ScanFile work for the
+// caller to run after releasing fm.mu.
+//
+// Catch-up exists to close the `mkdir x && touch x/y.jsonl` race
+// where a file lands in a fresh subdir between the dir's creation
+// and our watch taking effect. We recurse so a deep subtree created
+// by `mkdir -p YYYY/MM/DD` is fully covered.
+func (fm *FileMonitor) handleNewSubdirLocked(path string) []indexWork {
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
-		return
+		return nil
 	}
 	fm.addWatchLocked(path)
 
-	// Catch-up scan: feed any pre-existing .jsonl files through the
-	// conversations index so we don't miss files that landed between
-	// the parent's Create event and our watch being established.
-	// Recursively, since a Create could deliver a deep subtree (e.g.
-	// codex's YYYY/MM/DD created in one mkdir -p call).
 	if fm.index == nil {
-		return
+		return nil
 	}
+	var work []indexWork
 	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -339,10 +358,11 @@ func (fm *FileMonitor) handleNewSubdirLocked(path string) {
 			return nil
 		}
 		if a := fm.adapterForPath(p); a != nil {
-			fm.index.ScanFile(a, p)
+			work = append(work, indexWork{adapter: a, path: p})
 		}
 		return nil
 	})
+	return work
 }
 
 // NotifyNewSession registers a session for file monitoring.
