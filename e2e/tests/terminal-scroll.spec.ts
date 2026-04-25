@@ -440,4 +440,52 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
       expect(after.viewportY).toBeGreaterThan(0)
     }
   })
+
+  /**
+   * Real pi replay while the user is scrolled up *just a few lines*,
+   * reading the most recent output of pi's previous turn. A single
+   * end-of-turn-shaped frame fires with no streaming in between, so
+   * the new buffer is large enough to anchor the user's pre-wipe
+   * distance against. Contract: viewport lands at the same distance
+   * from the new bottom rather than being yanked all the way down.
+   *
+   * Synthetic rather than fixture-driven on purpose: pi's real turn
+   * grows scrollback while the user holds their scroll, so by the
+   * time the wipe fires the user's distance from bottom has drifted.
+   * That's a property of long-streaming agents and is correctly
+   * handled by the same code path (distance-too-large → bottom snap)
+   * already covered by the fixture test above. The contract this
+   * test pins down — "preserve distance when there is room" — needs
+   * a controlled scenario.
+   */
+  test('user scrolled up by a few lines: BSU + clear-scrollback + redraw preserves distance from bottom', async ({ page }) => {
+    await seedScrollback(page, 200)
+    await scrollToBottom(page)
+    const baseline = await getScroll(page)
+    expect(baseline.baseY).toBeGreaterThan(20)
+
+    const distance = 3
+    const target = baseline.baseY - distance
+    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), target)
+    const beforeBurst = await getScroll(page)
+    expect(beforeBurst.baseY - beforeBurst.viewportY).toBe(distance)
+
+    // Single frame: BSU, clear-scrollback, then a redraw big enough
+    // that the new baseY > distance.
+    const redraw = Array.from({ length: 80 }, (_, i) => `redraw-${i}`).join('\r\n') + '\r\n'
+    await inject(page, BSU + '\x1b[2J\x1b[H\x1b[3J' + redraw + ESU)
+    await settle(page)
+
+    const after = await getScroll(page)
+    console.log('[wipe-small-scroll]',
+      'viewportY=', after.viewportY,
+      'baseY=', after.baseY,
+      'distance=', after.baseY - after.viewportY)
+
+    // The new buffer must have room for the captured distance, else
+    // this test is silently exercising the bottom-snap fallback.
+    expect(after.baseY).toBeGreaterThanOrEqual(distance)
+    // Contract: the user's distance from the bottom is preserved.
+    expect(after.baseY - after.viewportY).toBe(distance)
+  })
 })

@@ -392,27 +392,50 @@ describe('scroll preservation across BSU/ESU', () => {
     h.cleanup()
   })
 
-  it('snaps to bottom when scrollback is wiped (\\x1b[3J) inside BSU/ESU and user was scrolled up', () => {
-    // The pi end-of-turn shape that the e2e fixture exercises: user is
-    // reading earlier output, agent emits a BSU + clear-scrollback +
-    // redraw + ESU. Scrollback shrinks underneath the user; their
-    // pre-BSU line is gone, so the only meaningful restore is bottom.
+  it('after scrollback wipe, restores user\'s distance from bottom when new buffer is large enough', () => {
+    // The user was reading 3 lines above the latest content (eg the
+    // last line of pi's previous turn). Pi ends a turn with
+    // \x1b[3J + redraw, scrollback gets rebuilt to ~15 lines. The
+    // user's pre-BSU absolute line is gone, but their *intent* ("keep
+    // me 3 lines above the newest content") is preserved.
     const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
     h.io.reset(1)
-    h.addLines(200)            // baseY=200, plenty of scrollback
-    h.userScrollTo(100)        // user reading the middle
-    expect(h.viewportY).toBe(100)
-    expect(h.baseY).toBe(200)
+    h.addLines(200)            // baseY=200
+    h.userScrollTo(197)        // 3 lines above the bottom
+    expect(h.baseY - h.viewportY).toBe(3)
 
     h.io.enqueue(wrapBSU('redraw'), 1)
-    // Inside the BSU/ESU: agent emits \x1b[3J then redraws ~15 lines.
     h.clearScrollback()
-    h.addLines(15)
-    h.flushOne(0)              // ESU write callback
-    h.flushRAF()               // restore rAF
+    h.addLines(15)             // new baseY=15, plenty of room for distance=3
+    h.flushOne(0)
+    h.flushRAF()
+
+    // Distance preserved: viewportY == baseY - 3.
+    expect(h.scrollToLineCalls).toContain(h.baseY - 3)
+    expect(h.scrollToBottomCalls.length).toBe(0)
+    expect(h.baseY - h.viewportY).toBe(3)
+    h.cleanup()
+  })
+
+  it('after scrollback wipe, snaps to bottom when distance exceeds new buffer', () => {
+    // The pi end-of-turn shape from the e2e fixture: user was reading
+    // far back in scrollback (100 lines above the bottom), the new
+    // buffer is only ~15 lines, so the user's intent has nowhere to
+    // anchor. Snap to bottom: nothing else is meaningful.
+    const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
+    h.io.reset(1)
+    h.addLines(200)
+    h.userScrollTo(100)        // 100 lines above the bottom
+    expect(h.baseY - h.viewportY).toBe(100)
+
+    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.clearScrollback()
+    h.addLines(15)             // new baseY=15, distance(100) > baseY
+    h.flushOne(0)
+    h.flushRAF()
 
     // Pre-fix bug: scrollToLine(min(adjustedY=0, baseY=15)) = 0 (top).
-    // Post-fix: prevBaseY=200 > baseY=15 → scrollToBottom.
+    // Post-fix: prevDistanceFromBottom (100) > new baseY (15) → bottom.
     expect(h.scrollToBottomCalls.length).toBeGreaterThan(0)
     expect(h.viewportY).toBe(h.baseY)
     h.cleanup()

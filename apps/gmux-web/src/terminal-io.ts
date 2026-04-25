@@ -55,13 +55,21 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
   let pendingResize: (TerminalSize & { epoch: number }) | null = null
 
   // Scroll preservation across BSU/ESU blocks.
-  // wasAtBottom and prevBaseY are saved at BSU time; the actual viewportY
-  // is captured later, at ESU write-callback time, after xterm has
-  // processed the data and adjusted viewportY for any scrollback evictions.
-  // prevBaseY exists to detect scrollback wipes (eg \x1b[3J): if baseY
-  // shrinks across a BSU/ESU block, the user's pre-BSU line is gone and
-  // we must snap to bottom rather than restoring to a stale position.
-  let savedScroll: { wasAtBottom: boolean; prevBaseY: number } | null = null
+  // wasAtBottom, prevBaseY, prevDistanceFromBottom are saved at BSU time;
+  // the post-parse viewportY is captured later at ESU write-callback time,
+  // after xterm has adjusted viewportY for any scrollback evictions.
+  //
+  // prevBaseY detects scrollback wipes (eg `\x1b[3J`): when baseY shrinks
+  // across the BSU/ESU block, the user's pre-BSU line is gone, so the
+  // post-parse viewportY (typically 0 after a wipe) is a meaningless
+  // anchor. prevDistanceFromBottom lets us re-anchor relative to the new
+  // bottom instead, preserving the user's intent ("I was reading N lines
+  // above the latest content").
+  let savedScroll: {
+    wasAtBottom: boolean
+    prevBaseY: number
+    prevDistanceFromBottom: number
+  } | null = null
   let restoreRAF: number | null = null
 
   // When true, the next BSU/ESU block will scroll to bottom unconditionally
@@ -83,14 +91,19 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
     if (!scroll || savedScroll) return // already saved, or no accessor
     if (startsWith(data, BSU) || containsSequence(data, BSU)) {
       const { viewportY, baseY } = scroll.getState()
+      const distance = Math.max(0, baseY - viewportY)
       if (forceScrollToBottom) {
-        savedScroll = { wasAtBottom: true, prevBaseY: baseY }
+        savedScroll = { wasAtBottom: true, prevBaseY: baseY, prevDistanceFromBottom: 0 }
         forceScrollToBottom = false
       } else {
         // Strict equality: only consider the user "at bottom" if the
         // viewport is exactly at the end. A loose threshold (e.g. <= 3)
         // would fight the user's scroll intent during rapid TUI redraws.
-        savedScroll = { wasAtBottom: viewportY >= baseY, prevBaseY: baseY }
+        savedScroll = {
+          wasAtBottom: viewportY >= baseY,
+          prevBaseY: baseY,
+          prevDistanceFromBottom: distance,
+        }
       }
     }
   }
@@ -133,13 +146,23 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
         // Scrollback shrank during the BSU/ESU block. The dominant cause
         // is `\x1b[3J` (clear scrollback), which agents like pi emit at
         // end-of-turn redraws and which resets ybase/ydisp to 0. The
-        // user's pre-BSU line no longer exists, so adjustedY would point
-        // at (or near) the top of a freshly-rebuilt buffer; restoring
-        // there is the long-standing "jump to top" bug. Eviction within a
-        // full scrollback never reaches this branch because it leaves
-        // baseY at the cap. Snap to bottom: it's the only position that's
-        // meaningful after the buffer is reset.
-        scroll.scrollToBottom()
+        // user's pre-BSU line no longer exists; adjustedY points at the
+        // top of a freshly-rebuilt buffer, which is the "jump to top" bug.
+        // Eviction within a full scrollback never reaches this branch
+        // because it leaves baseY at the cap.
+        //
+        // We don't know the user's pre-BSU position relative to the top
+        // of the buffer in any meaningful sense, but we do know it
+        // relative to the bottom: prevDistanceFromBottom. If the new
+        // buffer is large enough to anchor against, restore that
+        // distance, preserving the user's intent ("keep me N lines above
+        // the latest content"). If it's not, snap to bottom; nothing
+        // else is meaningful.
+        if (snap.prevDistanceFromBottom <= baseY) {
+          scroll.scrollToLine(baseY - snap.prevDistanceFromBottom)
+        } else {
+          scroll.scrollToBottom()
+        }
       } else {
         // User was scrolled up — restore the post-parse position, clamped
         // to the current buffer range. We use adjustedY (captured after xterm
