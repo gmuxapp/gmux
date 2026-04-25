@@ -48,7 +48,10 @@ messages directly. Rules that follow from this:
   the open `release/next` branch up until merge. The content is
   injected into the changelog section between the version heading and
   the grouped bullet lists. The release workflow clears it
-  automatically after a successful release.
+  automatically after a successful release. Leave it empty for
+  patch-only releases that don't need curated prose; the Discord
+  announcement falls back to the auto-generated bullet list so
+  subscribers can still see what changed without clicking through.
 
   To tweak prose on an already-open release PR: check out
   `release/next`, edit `RELEASE_HIGHLIGHTS.md`, run

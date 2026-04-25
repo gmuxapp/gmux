@@ -173,8 +173,12 @@ echo "Empty highlights falls back to bullets:"
 EOF
 
   content=$(run_notify "$tmp" v1.5.4 | jq -r '.content')
-  assert_contains "bullet text reaches Discord"  "stop leaking goroutines" "$content"
-  assert_contains "changelog link still present" "gmux.app/changelog"      "$content"
+  assert_contains     "bullet text reaches Discord"  "stop leaking goroutines" "$content"
+  assert_contains     "changelog link still present" "gmux.app/changelog"      "$content"
+  # The blank line that sits right after `<!-- highlights-end -->` in
+  # RELEASE_NOTES.md must not propagate to Discord, where it would render
+  # as a double-spaced gap between the version heading and the bullets.
+  assert_not_contains "no triple-newline gap"        $'\n\n\n'             "$content"
 )
 
 # When highlights ARE present, the bullet list must NOT also be

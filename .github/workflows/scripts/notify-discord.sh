@@ -37,13 +37,13 @@ fi
 # Strip leading and trailing blank lines so the rendered message
 # doesn't get extra vertical whitespace from sloppy input or from
 # the blank line that sits right after the highlights-end marker.
-trim_blank() { sed -e :a -e '/^\n*$/{$d;N;ba}'; }
+trim_blanks() { sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba}'; }
 
-summary=$(sed '/<!-- highlights-end -->/,$d' RELEASE_NOTES.md | trim_blank)
+summary=$(sed '/<!-- highlights-end -->/,$d' RELEASE_NOTES.md | trim_blanks)
 if [[ -z "${summary//[[:space:]]/}" ]]; then
   # Skip the marker line itself; everything after it is the auto-generated
   # bullet list (### Features, ### Fixes, etc.).
-  summary=$(sed -n '/<!-- highlights-end -->/,$p' RELEASE_NOTES.md | tail -n +2 | trim_blank)
+  summary=$(sed -n '/<!-- highlights-end -->/,$p' RELEASE_NOTES.md | tail -n +2 | trim_blanks)
 fi
 
 # ── Determine bump type ──
