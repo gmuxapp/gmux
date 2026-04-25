@@ -1,17 +1,17 @@
 import { test, expect } from '@playwright/test'
-import { getTermState, isPillVisible, openApp, selectFirstSession } from '../helpers'
+import { getTermState, isPillVisible, openApp, gotoTestSession } from '../helpers'
 
 test.describe('terminal resize', () => {
   test.beforeEach(async ({ page }) => {
     await openApp(page)
-    await selectFirstSession(page)
+    await gotoTestSession(page)
   })
 
   // NOTE: tests that need addInitScript before page load go outside this
   // describe block (below) so they can control navigation order.
 
   test('selecting a session claims: terminal fits viewport, no pill', async ({ page }) => {
-    // After selectFirstSession the browser has claimed ownership. Terminal
+    // After gotoTestSession the browser has claimed ownership. Terminal
     // should have a sensible size and the pill should be hidden.
     const state = await getTermState(page)
     expect(state.termCols).toBeGreaterThan(0)
@@ -48,7 +48,7 @@ test.describe('terminal resize', () => {
     await page.goto('about:blank')
     await page.setViewportSize({ width: 1400, height: 900 })
     await openApp(page)
-    await selectFirstSession(page)
+    await gotoTestSession(page)
 
     const large = await getTermState(page)
     expect(large.termCols!).toBeGreaterThan(small.termCols!)
@@ -84,7 +84,7 @@ test.describe('terminal resize — reconnect', () => {
     })
 
     await openApp(page)
-    await selectFirstSession(page)
+    await gotoTestSession(page)
 
     // Initial claim should have sent at least one resize.
     const initialCount = await page.evaluate(

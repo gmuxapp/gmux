@@ -1,4 +1,4 @@
-import { spawn, execSync, type ChildProcess } from 'child_process'
+import { spawn, execSync } from 'child_process'
 import * as fs from 'fs'
 import * as net from 'net'
 import * as os from 'os'
@@ -37,22 +37,31 @@ async function waitForHealth(port: number, token: string, timeoutMs = 15_000): P
   throw new Error(`gmuxd did not become healthy on port ${port} within ${timeoutMs}ms`)
 }
 
-async function waitForSession(port: number, token: string, timeoutMs = 15_000): Promise<string> {
+/**
+ * Wait for *our* test session to appear, matching by cwd.
+ *
+ * The daemon-isolation work in this same setup means there should
+ * only ever be one alive session here. Matching by cwd is still the
+ * right contract though: it asserts we got the session we spawned,
+ * not whatever else might surface, so an isolation regression fails
+ * loudly here instead of one of the spec files.
+ */
+async function waitForSession(port: number, token: string, expectCwd: string, timeoutMs = 15_000): Promise<string> {
   const start = Date.now()
   const headers = { Authorization: `Bearer ${token}` }
   while (Date.now() - start < timeoutMs) {
     try {
       const resp = await fetch(`http://127.0.0.1:${port}/v1/sessions`, { headers })
-      const body = await resp.json() as { data: Array<{ id: string; alive: boolean }> }
-      const alive = body.data.filter(s => s.alive)
-      if (alive.length > 0) return alive[0].id
+      const body = await resp.json() as { data: Array<{ id: string; alive: boolean; cwd?: string }> }
+      const match = body.data.find(s => s.alive && s.cwd === expectCwd)
+      if (match) return match.id
     } catch { /* retry */ }
     await new Promise(r => setTimeout(r, 200))
   }
-  throw new Error(`No alive session found on port ${port} within ${timeoutMs}ms`)
+  throw new Error(`No alive session with cwd=${expectCwd} found on port ${port} within ${timeoutMs}ms`)
 }
 
-export default async function globalSetup(config: FullConfig) {
+export default async function globalSetup(_config: FullConfig) {
   // Build frontend + Go binaries so the embedded assets are always in sync
   // with the current source.  Runs unconditionally — both Vite and `go build`
   // are incremental, so a no-op rebuild finishes in seconds.
@@ -68,25 +77,73 @@ export default async function globalSetup(config: FullConfig) {
   const socketDir = path.join(tmpDir, 'sockets')
   const configDir = path.join(tmpDir, 'config')
   const stateDir = path.join(tmpDir, 'state')
+  // Workspace dir for the test session's cwd, so it matches the seeded
+  // project rule below. Without a matching project, the test session
+  // can't be reached via URL.
+  const workspaceDir = path.join(tmpDir, 'workspace')
   fs.mkdirSync(socketDir)
   fs.mkdirSync(configDir)
   fs.mkdirSync(stateDir)
+  fs.mkdirSync(workspaceDir)
 
-  // Write host.toml with the allocated port so gmuxd binds there instead of
-  // its default 8790 (which may be in use by a dev instance on the host).
+  // Seed projects.json with a single project rule matching workspaceDir.
+  // The test session is spawned with cwd=workspaceDir below, so it'll
+  // be matched into this project and reachable at /test-project/shell/...
+  // navigateToSession (called from the test helper) needs the session
+  // to belong to *some* project to compute a URL.
+  //
+  // Path layout matches paths.StateDir(): $XDG_STATE_HOME/gmux/.
+  const gmuxStateDir = path.join(stateDir, 'gmux')
+  fs.mkdirSync(gmuxStateDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(gmuxStateDir, 'projects.json'),
+    JSON.stringify({
+      version: 2,
+      items: [
+        { slug: 'test-project', match: [{ path: workspaceDir }] },
+      ],
+    }),
+  )
+
+  // Write host.toml with:
+  //  - the allocated port (so gmuxd doesn't fight a dev instance on 8790)
+  //  - devcontainer discovery disabled (so the test daemon doesn't
+  //    enumerate the operator's running docker containers via the
+  //    host's docker socket; that's the last non-HOME, non-socketdir
+  //    path that can leak the operator's environment into the test).
+  //  - tailscale stays off by default; mention it explicitly so a
+  //    future default change doesn't silently re-enable it for tests.
   fs.mkdirSync(path.join(configDir, 'gmux'))
   fs.writeFileSync(
     path.join(configDir, 'gmux', 'host.toml'),
-    `port = ${port}\n`,
+    [
+      `port = ${port}`,
+      ``,
+      `[discovery]`,
+      `devcontainers = false`,
+      `tailscale = false`,
+      ``,
+      `[tailscale]`,
+      `enabled = false`,
+      ``,
+    ].join('\n'),
   )
 
   // Seed a known auth token so tests can authenticate without scraping the
   // generated token file. Must be >= 64 hex chars (authtoken.validateFormat).
   const testToken = 'e2e'.padEnd(64, '0')
 
+  // Isolation: a fake HOME under tmpDir prevents gmuxd's adapters
+  // (pi, claude, codex, shell) from discovering the operator's real
+  // session files via os.UserHomeDir(). Without this, the test
+  // gmuxd's session list contains every pi/claude/codex conversation
+  // the operator has on their machine. With it, gmuxd starts blank.
+  const fakeHome = path.join(tmpDir, 'home')
+  fs.mkdirSync(fakeHome)
+
   const env: Record<string, string> = {
     PATH: process.env.PATH || '',
-    HOME: process.env.HOME || '',
+    HOME: fakeHome,
     TERM: 'xterm-256color',
     GMUX_SOCKET_DIR: socketDir,
     GMUXD_TOKEN: testToken,
@@ -96,8 +153,19 @@ export default async function globalSetup(config: FullConfig) {
 
   const pids: number[] = []
 
-  // Start gmuxd
-  const gmuxd = spawn(GMUXD, ['start'], {
+  // Start gmuxd in foreground mode (`run`, not `start`).
+  //
+  // `gmuxd start` daemonizes by re-execing itself, and on the way
+  // strips every GMUX_* env var ("so the daemon doesn't inherit
+  // session identity"). That's correct for production, but it means
+  // GMUX_SOCKET_DIR and GMUXD_TOKEN never reach the actual daemon
+  // process; the test gmuxd would then read /tmp/gmux-sessions and
+  // surface the operator's real sessions as its own.
+  //
+  // `gmuxd run` doesn't strip the env, and we already detach the
+  // process ourselves, so we get the foreground process tree we need
+  // for both isolation and clean teardown by PID.
+  const gmuxd = spawn(GMUXD, ['run'], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
@@ -113,9 +181,11 @@ export default async function globalSetup(config: FullConfig) {
 
   await waitForHealth(port, testToken)
 
-  // Start a test shell session (non-interactive — no local terminal attach)
+  // Start a test shell session (non-interactive — no local terminal attach).
+  // cwd=workspaceDir so the session is matched into the seeded project.
   const gmux = spawn(GMUX, ['bash', '-c', 'echo READY; while true; do sleep 60; done'], {
     env,
+    cwd: workspaceDir,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   })
@@ -125,8 +195,10 @@ export default async function globalSetup(config: FullConfig) {
     if (process.env.DEBUG) process.stderr.write(`[gmux] ${d}`)
   })
 
-  // Wait for the session to appear in gmuxd
-  const sessionId = await waitForSession(port, testToken)
+  // Wait for the session to appear in gmuxd. Matched by cwd so we get
+  // exactly the session we just spawned (see comment on waitForSession
+  // for why this assertion still earns its keep after isolation).
+  const sessionId = await waitForSession(port, testToken, workspaceDir)
 
   // Save state for teardown and for test config
   fs.writeFileSync(STATE_FILE, JSON.stringify({
