@@ -405,6 +405,17 @@ export function TerminalView({
       },
       scrollToLine(line: number) { term.scrollToLine(line) },
       scrollToBottom() { term.scrollToBottom() },
+      getLine(y: number): string | null {
+        const line = term.buffer.active.getLine(y)
+        if (!line) return null
+        const text = line.translateToString(true)
+        // Filter trivial anchors so a wipe-and-redraw doesn't snap the
+        // user to the first stretch of separators or whitespace it
+        // finds. Four visible chars is enough to be distinctive without
+        // excluding short but meaningful lines ("DONE", "PASS", etc.).
+        if (text.trim().length < 4) return null
+        return text
+      },
     })
     ;(window as any).__gmuxTerm = term
     // Test-only inject hook: pumps bytes through the same path as ws.onmessage

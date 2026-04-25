@@ -488,4 +488,77 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     // Contract: the user's distance from the bottom is preserved.
     expect(after.baseY - after.viewportY).toBe(distance)
   })
+
+  /**
+   * The user is reading a recognizable line in scrollback when the
+   * agent emits a wipe + redraw whose new buffer still contains that
+   * exact line at a different position. We jump to the new position
+   * of the same content rather than restoring the user's pre-wipe
+   * distance from the bottom: the line they were reading is the most
+   * meaningful anchor we have.
+   *
+   * This is the case general TUIs (log viewers, code editors, file
+   * browsers) hit when they refresh their display: the visible
+   * content is largely the same, just rebuilt. (Pi specifically
+   * doesn't benefit because its end-of-turn redraw is a status bar,
+   * not the conversation content; that case still falls through to
+   * distance restoration, covered by the previous test.)
+   */
+  test('user scrolled up to a recognizable line: BSU + clear-scrollback + redraw containing that line jumps to it', async ({ page }) => {
+    // Pin the terminal size so the post-redraw layout is
+    // deterministic: 80 redraw lines with rows=40 means baseY=40
+    // (lines 0..39 in scrollback, 40..79 visible).
+    await page.evaluate(() => (window as any).__gmuxTerm.resize(120, 40))
+    await settle(page)
+
+    await seedScrollback(page, 200)
+    await scrollToBottom(page)
+    const baseline = await getScroll(page)
+    expect(baseline.baseY).toBeGreaterThan(20)
+
+    // Scroll up by a known distance, then read the actual line text
+    // there. Reading rather than predicting keeps the test robust to
+    // banner rows / trailing newlines from seedScrollback; the
+    // contract under test is content matching, not seed numbering.
+    const distance = 10
+    const targetY = baseline.baseY - distance
+    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), targetY)
+    const beforeBurst = await getScroll(page)
+    expect(beforeBurst.viewportY).toBe(targetY)
+    const targetText = await page.evaluate((y) => {
+      const term = (window as any).__gmuxTerm
+      const line = term.buffer.active.getLine(y)
+      return line ? line.translateToString(true) : null
+    }, targetY)
+    expect(targetText).toMatch(/^seed-line-\d{4}$/)
+
+    // 80 lines of redraw with `targetText` placed at index 20: lands
+    // in scrollback at y=20 once the visible rows fill (lines 40..79
+    // become visible, 0..39 scrollback). Distance restoration would
+    // land at baseY-distance = 40-10 = 30; anchor match should land
+    // at 20. The two must differ for this test to be meaningful, so
+    // the resize above is load-bearing.
+    const redrawLines = Array.from({ length: 80 }, (_, i) =>
+      i === 20 ? targetText : `redraw-line-${i}`)
+    const redraw = redrawLines.join('\r\n') + '\r\n'
+    await inject(page, BSU + '\x1b[2J\x1b[H\x1b[3J' + redraw + ESU)
+    await settle(page)
+
+    const after = await getScroll(page)
+    const landedText = await page.evaluate((y) => {
+      const term = (window as any).__gmuxTerm
+      const line = term.buffer.active.getLine(y)
+      return line ? line.translateToString(true) : null
+    }, after.viewportY)
+    console.log('[anchor-match]',
+      'viewportY=', after.viewportY,
+      'baseY=', after.baseY,
+      'landedOn=', landedText)
+
+    // The viewport top is sitting on the line whose content matches
+    // the user's pre-wipe anchor (y=20), not the distance fallback
+    // position (y=30).
+    expect(landedText).toBe(targetText)
+    expect(after.viewportY).toBe(20)
+  })
 })

@@ -18,6 +18,14 @@ export interface ScrollAccessor {
   getState(): { viewportY: number; baseY: number }
   scrollToLine(line: number): void
   scrollToBottom(): void
+  /**
+   * Read the visible text of the buffer line at `y` (post-trim, no ANSI
+   * codes). Returns null if the line doesn't exist or is too trivial to
+   * use as a scroll-restore anchor. "Too trivial" deliberately filters
+   * out empty / whitespace-only / very short lines so a wipe-and-redraw
+   * doesn't snap the user to the first stretch of separators it finds.
+   */
+  getLine(y: number): string | null
 }
 
 interface QueueItem {
@@ -55,20 +63,29 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
   let pendingResize: (TerminalSize & { epoch: number }) | null = null
 
   // Scroll preservation across BSU/ESU blocks.
-  // wasAtBottom, prevBaseY, prevDistanceFromBottom are saved at BSU time;
-  // the post-parse viewportY is captured later at ESU write-callback time,
-  // after xterm has adjusted viewportY for any scrollback evictions.
+  // wasAtBottom, prevBaseY, prevDistanceFromBottom, prevAnchorLine are
+  // saved at BSU time; the post-parse viewportY is captured later at ESU
+  // write-callback time, after xterm has adjusted viewportY for any
+  // scrollback evictions.
   //
-  // prevBaseY detects scrollback wipes (eg `\x1b[3J`): when baseY shrinks
-  // across the BSU/ESU block, the user's pre-BSU line is gone, so the
-  // post-parse viewportY (typically 0 after a wipe) is a meaningless
-  // anchor. prevDistanceFromBottom lets us re-anchor relative to the new
-  // bottom instead, preserving the user's intent ("I was reading N lines
-  // above the latest content").
+  // The wipe branch (baseY shrinks across BSU/ESU, eg via `\x1b[3J`)
+  // tries three anchors in order, falling through on each miss:
+  //
+  //   1. prevAnchorLine — the visible text the user was reading. If the
+  //      redraw still contains that line we know exactly where the user
+  //      wants to be. Multiple matches are tiebroken by closeness to
+  //      prevDistanceFromBottom, so common lines (eg "✓ done") still
+  //      land somewhere reasonable.
+  //   2. prevDistanceFromBottom — if the new buffer has room, restore
+  //      the user's pre-wipe distance from the bottom. Loses the
+  //      identity of the line they were reading but keeps their intent
+  //      ("N lines above the latest content").
+  //   3. scrollToBottom — nothing else is meaningful.
   let savedScroll: {
     wasAtBottom: boolean
     prevBaseY: number
     prevDistanceFromBottom: number
+    prevAnchorLine: string | null
   } | null = null
   let restoreRAF: number | null = null
 
@@ -93,16 +110,25 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
       const { viewportY, baseY } = scroll.getState()
       const distance = Math.max(0, baseY - viewportY)
       if (forceScrollToBottom) {
-        savedScroll = { wasAtBottom: true, prevBaseY: baseY, prevDistanceFromBottom: 0 }
+        savedScroll = {
+          wasAtBottom: true,
+          prevBaseY: baseY,
+          prevDistanceFromBottom: 0,
+          prevAnchorLine: null,
+        }
         forceScrollToBottom = false
       } else {
         // Strict equality: only consider the user "at bottom" if the
         // viewport is exactly at the end. A loose threshold (e.g. <= 3)
         // would fight the user's scroll intent during rapid TUI redraws.
+        const wasAtBottom = viewportY >= baseY
         savedScroll = {
-          wasAtBottom: viewportY >= baseY,
+          wasAtBottom,
           prevBaseY: baseY,
           prevDistanceFromBottom: distance,
+          // Only capture the anchor when scrolled up: at-bottom always
+          // wants scrollToBottom and never reaches the search.
+          prevAnchorLine: wasAtBottom ? null : scroll.getLine(viewportY),
         }
       }
     }
@@ -146,19 +172,19 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
         // Scrollback shrank during the BSU/ESU block. The dominant cause
         // is `\x1b[3J` (clear scrollback), which agents like pi emit at
         // end-of-turn redraws and which resets ybase/ydisp to 0. The
-        // user's pre-BSU line no longer exists; adjustedY points at the
-        // top of a freshly-rebuilt buffer, which is the "jump to top" bug.
-        // Eviction within a full scrollback never reaches this branch
-        // because it leaves baseY at the cap.
+        // user's pre-BSU line is gone from xterm's perspective; adjustedY
+        // points at the top of a freshly-rebuilt buffer, which is the
+        // "jump to top" bug. Eviction within a full scrollback never
+        // reaches this branch because it leaves baseY at the cap.
         //
-        // We don't know the user's pre-BSU position relative to the top
-        // of the buffer in any meaningful sense, but we do know it
-        // relative to the bottom: prevDistanceFromBottom. If the new
-        // buffer is large enough to anchor against, restore that
-        // distance, preserving the user's intent ("keep me N lines above
-        // the latest content"). If it's not, snap to bottom; nothing
-        // else is meaningful.
-        if (snap.prevDistanceFromBottom <= baseY) {
+        // We try three anchors in order, falling through on each miss
+        // (rationale on the savedScroll declaration above).
+        const anchorY = snap.prevAnchorLine !== null
+          ? findAnchorMatch(scroll, snap.prevAnchorLine, baseY, snap.prevDistanceFromBottom)
+          : null
+        if (anchorY !== null) {
+          scroll.scrollToLine(anchorY)
+        } else if (snap.prevDistanceFromBottom <= baseY) {
           scroll.scrollToLine(baseY - snap.prevDistanceFromBottom)
         } else {
           scroll.scrollToBottom()
@@ -252,4 +278,34 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
       return writeInFlight || queue.length > 0 || (!!pendingResize && pendingResize.epoch === currentEpoch)
     },
   }
+}
+
+/**
+ * Search the buffer for a line whose visible text equals `anchor`. If
+ * one or more matches exist, return the y position whose distance from
+ * the bottom (`baseY - y`) is closest to `prevDistanceFromBottom`. Ties
+ * resolve to the first match in scrollback order. Returns null if no
+ * line matches.
+ *
+ * Search range is `[0, baseY]` — the scrollback area `scrollToLine`
+ * can target. Visible-only lines (y > baseY) are skipped: they aren't
+ * a valid scroll target.
+ */
+function findAnchorMatch(
+  scroll: ScrollAccessor,
+  anchor: string,
+  baseY: number,
+  prevDistanceFromBottom: number,
+): number | null {
+  let best: number | null = null
+  let bestDiff = Number.POSITIVE_INFINITY
+  for (let y = 0; y <= baseY; y++) {
+    if (scroll.getLine(y) !== anchor) continue
+    const diff = Math.abs((baseY - y) - prevDistanceFromBottom)
+    if (diff < bestDiff) {
+      best = y
+      bestDiff = diff
+    }
+  }
+  return best
 }
