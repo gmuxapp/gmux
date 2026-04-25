@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -20,6 +22,13 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/packages/workspace"
 )
+
+// handshakeTimeout bounds how long the parent end of spawnDetached
+// waits for the child to finish registering with gmuxd. The child's
+// registerWithGmuxd loops up to 5 times with 500ms backoff, so the
+// realistic worst case is ~2.5s plus child startup. 5s is a
+// comfortable ceiling: any longer and something is genuinely wrong.
+const handshakeTimeout = 5 * time.Second
 
 // ptyDrainTimeout bounds the wait for the PTY to fully flush after the
 // child exits. A well-behaved child has its PTY slave closed by the
@@ -44,15 +53,16 @@ func runSession(args []string, attach bool) {
 	// detached process registers with gmuxd and the session appears in the
 	// gmux UI. The original process returns immediately to the parent shell.
 	if os.Getenv("GMUX") == "1" && localterm.IsInteractive() {
-		spawnDetached(args, "started "+strings.Join(args, " ")+" in background (visible in gmux)")
+		spawnDetached(args, "started "+strings.Join(args, " ")+" in background (visible in gmux)", false)
 		return
 	}
 
-	// Explicit --no-attach: spawn detached and return immediately, whether
-	// or not we're inside another gmux session. The session registers with
-	// gmuxd on its own.
+	// Explicit --no-attach: spawn detached, wait for the child to finish
+	// registering with gmuxd, then print the session id on stdout so the
+	// caller (typically a script) can capture it for --tail / --dismiss
+	// without polling.
 	if !attach {
-		spawnDetached(args, "started "+strings.Join(args, " ")+" in background (visible in gmux)")
+		spawnDetached(args, "", true)
 		return
 	}
 
@@ -184,9 +194,19 @@ func runSession(args []string, attach bool) {
 		fmt.Println("serving...")
 	}
 
-	// Auto-start gmuxd if not running (one-shot, never retried), then register.
+	// Auto-start gmuxd if not running (one-shot, never retried), then
+	// register. The goroutine signals regDone when the registration
+	// HTTP call has completed (succeeded or exhausted retries) and the
+	// handshake — if any — has been delivered to the parent. We block
+	// on regDone before exit so a fast-exiting command (echo, true,
+	// false) can't lose the registration race.
 	ensureGmuxd()
-	go registerWithGmuxd(sessionID, sockPath)
+	regDone := make(chan struct{})
+	go func() {
+		defer close(regDone)
+		ok := registerWithGmuxd(sessionID, sockPath)
+		handshakeAck(sessionID, ok)
+	}()
 
 	if interactive {
 		// Transparent mode: the local tty was built above and wired as
@@ -248,6 +268,15 @@ func runSession(args []string, attach bool) {
 	exitCode := srv.ExitCode()
 	state.SetExited(exitCode)
 
+	// Wait for the register/handshake goroutine to finish before we
+	// touch deregister or exit. Otherwise a fast-exiting command
+	// races with its own registration: the child can deregister
+	// (no-op, not registered yet), then the register arrives, then
+	// the child exits, leaving a stale registered session.
+	//
+	// Bounded by registerWithGmuxd's retry budget (≤2.5s).
+	<-regDone
+
 	// Deregister from gmuxd (best-effort)
 	deregisterFromGmuxd(sessionID)
 
@@ -258,10 +287,23 @@ func runSession(args []string, attach bool) {
 }
 
 // spawnDetached re-execs gmux with the given args as a setsid'd
-// background process, disconnected from the current terminal. Used for
-// both --no-attach and nested-gmux scenarios: the child registers with
-// gmuxd and appears in the UI; the parent returns immediately.
-func spawnDetached(args []string, msg string) {
+// background process, disconnected from the current terminal. Used
+// for both --no-attach and nested-gmux scenarios: the child registers
+// with gmuxd and appears in the UI.
+//
+// When waitForRegistration is true, the parent blocks until the child
+// either acknowledges registration via the handshake pipe or fails;
+// on success it prints the session id on stdout, on failure it exits
+// non-zero with a stderr error. This is the --no-attach path: scripts
+// capture the id with id=$(gmux --no-attach foo) and use it
+// immediately, without polling.
+//
+// When waitForRegistration is false, the parent prints msg on stderr
+// and returns immediately. This is the nested-gmux path: an
+// interactive user runs `gmux foo` from a shell already inside a
+// gmux session and sees the message at their prompt; the session
+// shows up in the UI when it registers.
+func spawnDetached(args []string, msg string, waitForRegistration bool) {
 	self, err := os.Executable()
 	if err != nil {
 		log.Fatalf("cannot find own binary: %v", err)
@@ -281,12 +323,58 @@ func spawnDetached(args []string, msg string) {
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull
 	cmd.Stderr = devNull
+
+	var handshakeRead, handshakeWrite *os.File
+	if waitForRegistration {
+		var err error
+		handshakeRead, handshakeWrite, err = os.Pipe()
+		if err != nil {
+			log.Fatalf("failed to create handshake pipe: %v", err)
+		}
+		// Parent reads, child writes. cmd.ExtraFiles[0] becomes fd 3
+		// in the child; GMUX_HANDSHAKE_FD tells the child which fd to
+		// write to.
+		cmd.ExtraFiles = []*os.File{handshakeWrite}
+		cmd.Env = append(os.Environ(), handshakeFDEnv+"=3")
+	}
+
 	if err := cmd.Start(); err != nil {
 		log.Fatalf("failed to start background session: %v", err)
 	}
 	cmd.Process.Release()
-	if msg != "" {
-		fmt.Fprintln(os.Stderr, msg)
+
+	if !waitForRegistration {
+		if msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+		return
+	}
+
+	// Close the parent's copy of the write end. The only writer is
+	// now the child; if it dies without writing, our read returns
+	// EOF with zero bytes — the unambiguous "child failed" signal.
+	_ = handshakeWrite.Close()
+	defer handshakeRead.Close()
+
+	id, err := readHandshake(handshakeRead, handshakeTimeout)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to start background session: %s\n", explainHandshakeFailure(err))
+		os.Exit(1)
+	}
+	fmt.Println(id)
+}
+
+// explainHandshakeFailure converts a readHandshake error into a
+// short human-readable reason for the stderr message a script
+// developer sees when --no-attach can't return a session id.
+func explainHandshakeFailure(err error) string {
+	switch {
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return fmt.Sprintf("registration timed out after %s", handshakeTimeout)
+	case errors.Is(err, io.EOF):
+		return "child process exited before registering"
+	default:
+		return err.Error()
 	}
 }
 

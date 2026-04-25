@@ -143,7 +143,12 @@ func gmuxdHealthy(timeout time.Duration) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-func registerWithGmuxd(sessionID, socketPath string) {
+// registerWithGmuxd posts the session's registration to gmuxd and
+// returns true once gmuxd accepts it. Retries a handful of times to
+// cover the case where gmuxd is still starting up. Returns false if
+// every attempt fails: callers that care about registration outcome
+// (e.g. the --no-attach handshake) treat false as "give up".
+func registerWithGmuxd(sessionID, socketPath string) bool {
 	baseURL := gmuxdBaseURL()
 
 	payload, _ := json.Marshal(map[string]string{
@@ -163,9 +168,10 @@ func registerWithGmuxd(sessionID, socketPath string) {
 		}
 		resp.Body.Close()
 		if resp.StatusCode == 200 {
-			return
+			return true
 		}
 	}
+	return false
 }
 
 func deregisterFromGmuxd(sessionID string) {
