@@ -2,7 +2,13 @@ version: 2
 
 before:
   hooks:
-    - bash -c 'cd apps/gmux-web && npx vite build'
+    # VERSION must be passed explicitly: vite reads it from process.env
+    # at build time and bakes it into the bundle as __GMUX_VERSION__.
+    # Without this the frontend always reports 'dev' even on tagged
+    # releases, while gmuxd reports the real version, which makes the
+    # home page footer permanently show "Frontend vdev / reload to
+    # update" because the two never match.
+    - bash -c 'cd apps/gmux-web && VERSION={{ .Version }} npx vite build'
     - bash -c 'rm -rf services/gmuxd/cmd/gmuxd/web/assets services/gmuxd/cmd/gmuxd/web/favicon.svg services/gmuxd/cmd/gmuxd/web/manifest.json && cp -r apps/gmux-web/dist/* services/gmuxd/cmd/gmuxd/web/'
 
 builds:
