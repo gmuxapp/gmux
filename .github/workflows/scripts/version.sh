@@ -28,11 +28,16 @@
 #                    `## v…` heading (unless --dry-run)
 #   RELEASE_NOTES.md → highlights + separator + bullets for the
 #                      release PR body (unless --dry-run)
-#   RELEASE_HIGHLIGHTS.md → reset to stub (unless --dry-run)
+#
+# RELEASE_HIGHLIGHTS.md is the single source of truth for prose. It is
+# *not* cleared by this script. The release workflow clears it via
+# `--clear-highlights` after a successful release ships, so it stays
+# editable on the open release PR until the moment of release.
 #
 # Usage:
-#   .github/workflows/scripts/version.sh           # apply changes
-#   .github/workflows/scripts/version.sh --dry-run # preview only, no writes
+#   .github/workflows/scripts/version.sh                    # apply changes
+#   .github/workflows/scripts/version.sh --dry-run          # preview only
+#   .github/workflows/scripts/version.sh --clear-highlights # reset stub only
 set -euo pipefail
 trap 'echo "error: ${BASH_SOURCE}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
@@ -41,8 +46,48 @@ CHANGELOG="$ROOT/apps/website/src/content/docs/changelog.mdx"
 HIGHLIGHTS="$ROOT/RELEASE_HIGHLIGHTS.md"
 
 DRY_RUN=false
-if [[ "${1:-}" == "--dry-run" ]]; then
-  DRY_RUN=true
+CLEAR_ONLY=false
+case "${1:-}" in
+  --dry-run) DRY_RUN=true ;;
+  --clear-highlights) CLEAR_ONLY=true ;;
+  "") ;;
+  *) echo "unknown flag: $1" >&2; exit 2 ;;
+esac
+
+clear_highlights() {
+  cat > "$HIGHLIGHTS" <<'STUB'
+<!--
+Optional prose for the next release. Edit this file to add a high-level
+summary, topic paragraphs, or migration notes. Its content is injected
+into the changelog section between the version heading and the grouped
+bullet lists.
+
+This file is the single source of truth for release prose: edit it on
+`main` before merging the PR that ships the noteworthy change, or on
+the `release/next` branch up until the release ships (then run
+`scripts/regen-release-notes.sh` to refresh the generated files).
+
+The release workflow clears this file automatically after a successful
+release. Leave empty for releases that don't need prose; the
+auto-generated bullet list is enough for patch-only releases.
+
+Format: plain markdown. Supports headings, paragraphs, and lists.
+Example:
+
+    Peers now automatically reconnect after system suspend, no restart
+    needed.
+
+    ### Project matching
+    `projects.json` replaces separate `remote` and `paths` fields with a
+    unified `match` array.
+-->
+STUB
+}
+
+if $CLEAR_ONLY; then
+  clear_highlights
+  echo "Cleared $HIGHLIGHTS" >&2
+  exit 0
 fi
 
 # ── Skip release commits ──
@@ -112,23 +157,57 @@ enrich_context() {
   local ctx_file="$1"
   local out_file="$2"
 
+  local have_gh=true
   if [[ -z "${GITHUB_TOKEN:-}" ]] || ! command -v gh >/dev/null 2>&1; then
+    have_gh=false
+  fi
+
+  if ! $have_gh; then
+    # In CI we expect enrichment to work; bail loudly so a bad token
+    # never silently ships a changelog with bare commit subjects.
+    # Locally (and in test runs) we silently fall back so iteration
+    # without `gh` keeps working.
+    if [[ "${CI:-}" == "true" ]]; then
+      echo "error: GITHUB_TOKEN missing or gh not installed in CI; cannot enrich PR links" >&2
+      exit 1
+    fi
     cp "$ctx_file" "$out_file"
     return
   fi
 
+  # Single GraphQL request resolves every commit's associated PR in one
+  # round trip, so a release with N commits costs 1 API call instead of
+  # N. GraphQL aliases must start with a letter, so we prefix each SHA
+  # with `c_`.
+  local shas
+  shas=$(jq -r '.[0].commits[].id' "$ctx_file")
+  if [[ -z "$shas" ]]; then
+    cp "$ctx_file" "$out_file"
+    return
+  fi
+
+  local query='query { repository(owner: "gmuxapp", name: "gmux") {'
+  while IFS= read -r sha; do
+    [[ -z "$sha" ]] && continue
+    query+=" c_${sha}: object(oid: \"${sha}\") { ... on Commit { associatedPullRequests(first: 1) { nodes { number url } } } }"
+  done <<< "$shas"
+  query+=' } }'
+
   local map_file
   map_file=$(mktemp)
-  echo "{}" > "$map_file"
-
-  while IFS= read -r sha; do
-    local pr
-    pr=$(gh api "repos/gmuxapp/gmux/commits/$sha/pulls" --jq '.[0].number // empty' 2>/dev/null || true)
-    if [[ -n "$pr" ]]; then
-      jq --arg sha "$sha" --arg pr "$pr" '. + {($sha): ($pr | tonumber)}' "$map_file" > "${map_file}.tmp"
-      mv "${map_file}.tmp" "$map_file"
-    fi
-  done < <(jq -r '.[0].commits[].id' "$ctx_file")
+  if ! gh api graphql -f query="$query" --jq '
+    .data.repository | to_entries
+    | map(select(.value != null and (.value.associatedPullRequests.nodes | length > 0)))
+    | map({
+        key: (.key | sub("^c_"; "")),
+        value: .value.associatedPullRequests.nodes[0]
+      })
+    | from_entries
+  ' > "$map_file"; then
+    echo "error: GraphQL PR lookup failed" >&2
+    rm -f "$map_file"
+    exit 1
+  fi
 
   jq --slurpfile prmap "$map_file" '
     .[0].commits = [.[0].commits[] |
@@ -137,7 +216,7 @@ enrich_context() {
       ($c.raw_message | split("\n")[0]) as $subject |
       if $pr != null and ($subject | test("\\(#[0-9]+\\)|\\(\\[#[0-9]+\\]") | not) then
         (.raw_message | split("\n")) as $lines |
-        .raw_message = ([$lines[0] + " ([#\($pr)](https://github.com/gmuxapp/gmux/pull/\($pr)))"] + $lines[1:] | join("\n"))
+        .raw_message = ([$lines[0] + " ([#\($pr.number)](\($pr.url)))"] + $lines[1:] | join("\n"))
       else .
       end
     ]
@@ -293,33 +372,8 @@ else
 fi
 mv "$CHANGELOG.tmp" "$CHANGELOG"
 
-# ── Clear RELEASE_HIGHLIGHTS.md ──
-#
-# The release PR includes the cleared state so the next cycle starts
-# fresh. The stub content explains the workflow to future editors.
-
-cat > "$HIGHLIGHTS" <<'STUB'
-<!--
-Optional prose for the next release. Edit this file to add a high-level
-summary, topic paragraphs, or migration notes. When version.sh runs, the
-content is injected into the changelog section between the version
-heading and the grouped bullet lists.
-
-The file is cleared automatically after each release. Leave empty for
-releases that don't need prose (the auto-generated bullet list is
-enough for patch-only releases).
-
-Format: plain markdown. Supports headings, paragraphs, and lists.
-Example:
-
-    Peers now automatically reconnect after system suspend, no restart
-    needed.
-
-    ### Project matching
-    `projects.json` replaces separate `remote` and `paths` fields with a
-    unified `match` array.
--->
-STUB
+# RELEASE_HIGHLIGHTS.md is intentionally NOT cleared here. It stays
+# editable on the release/next branch until the release actually
+# ships; release.yml runs `version.sh --clear-highlights` afterward.
 
 echo "Updated $CHANGELOG" >&2
-echo "Updated $HIGHLIGHTS (cleared)" >&2

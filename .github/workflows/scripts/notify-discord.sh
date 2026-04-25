@@ -7,6 +7,9 @@
 #   ROLE_BREAKING  - Discord role ID for breaking changes
 #   ROLE_FEATURE   - Discord role ID for feature releases
 #   ROLE_PATCH     - Discord role ID for patch releases
+#   DRY_RUN        - If "1", print the JSON payload to stdout and skip
+#                    the actual webhook call. Used for local debugging
+#                    and tests.
 set -euo pipefail
 trap 'echo "error: ${BASH_SOURCE}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
@@ -31,7 +34,12 @@ summary=$(echo "$summary" | sed -e :a -e '/^\n*$/{$d;N;ba}')
 
 # ── Determine bump type ──
 
-prev_tag=$(git tag -l 'v*' | sort -V | grep -B1 "^${VERSION}$" | head -1)
+# Use git's own "nearest tag reachable from VERSION's parent" rather
+# than scanning all tags. The old approach (`git tag -l 'v*' | sort -V
+# | grep -B1 ...`) breaks when tags are pushed out of order or VERSION
+# isn't yet in the local tag list; `git describe` always picks the
+# actual predecessor on the release history.
+prev_tag=$(git describe --tags --abbrev=0 "${VERSION}^" 2>/dev/null || true)
 cur_major=$(echo "$VERSION" | sed 's/^v//' | cut -d. -f1)
 cur_minor=$(echo "$VERSION" | sed 's/^v//' | cut -d. -f2)
 prev_major=$(echo "$prev_tag" | sed 's/^v//' | cut -d. -f1)
@@ -44,7 +52,9 @@ prev_minor=$(echo "$prev_tag" | sed 's/^v//' | cut -d. -f2)
 # This way each role's subscribers see every release that affects them.
 
 role_ids=("$ROLE_PATCH")
-if [[ "$cur_major" != "$prev_major" ]]; then
+if [[ -z "$prev_tag" ]]; then
+  : # No predecessor (first-ever release): patch-only ping, same as the old behavior.
+elif [[ "$cur_major" != "$prev_major" ]]; then
   role_ids+=("$ROLE_FEATURE" "$ROLE_BREAKING")
 elif [[ "$cur_minor" != "$prev_minor" ]]; then
   role_ids+=("$ROLE_FEATURE")
@@ -62,35 +72,47 @@ header="${mentions}
 ## gmux ${VERSION}"
 footer="[See the changelog for details.](https://gmux.app/changelog)"
 
-if [[ -n "$summary" ]]; then
-  message="${header}
-
-${summary}
-
-${footer}"
-else
-  message="${header}
-
-${footer}"
-fi
-
-# Discord's message limit is 2000 chars. Truncate the summary (not the
-# header or footer) so the link always survives.
-if [[ ${#message} -gt 2000 ]]; then
-  overhead=$(( ${#header} + ${#footer} + 6 ))
-  max_summary=$(( 2000 - overhead - 4 ))  # 4 for trailing "...\n"
-  if (( max_summary > 0 )); then
-    summary="${summary:0:max_summary}..."
-    message="${header}
-
-${summary}
-
-${footer}"
+compose_message() {
+  local body=$1
+  if [[ -n "$body" ]]; then
+    printf '%s\n\n%s\n\n%s' "$header" "$body" "$footer"
   else
-    message="${header}
-
-${footer}"
+    printf '%s\n\n%s' "$header" "$footer"
   fi
+}
+
+# Trim a summary so the full message fits in Discord's 2000-char limit.
+# Cuts at the last paragraph break under the limit when possible, then
+# falls back to a sentence break, then a newline, then a hard cut.
+# Returns the trimmed summary (still without ellipsis suffix).
+trim_summary() {
+  local body=$1 max=$2
+  local candidate="${body:0:max}"
+  local marker pos
+  for marker in $'\n\n' '. ' $'\n'; do
+    pos="${candidate%"$marker"*}"
+    # Require at least half the budget so we don't cut at an early
+    # break and throw away most of the prose.
+    if [[ "$pos" != "$candidate" && ${#pos} -gt $(( max / 2 )) ]]; then
+      printf '%s' "${candidate:0:${#pos}}"
+      return
+    fi
+  done
+  printf '%s' "$candidate"
+}
+
+message=$(compose_message "$summary")
+if [[ ${#message} -gt 2000 ]]; then
+  # 6 chars for the two "\n\n" separators between sections,
+  # 4 more for the trailing ellipsis we'll add to the summary.
+  overhead=$(( ${#header} + ${#footer} + 6 ))
+  max_summary=$(( 2000 - overhead - 4 ))
+  if (( max_summary > 0 )); then
+    summary="$(trim_summary "$summary" "$max_summary")…"
+  else
+    summary=""
+  fi
+  message=$(compose_message "$summary")
 fi
 
 # flags: 4 = SUPPRESS_EMBEDS. Stops Discord from generating a link
@@ -103,6 +125,11 @@ payload=$(jq -n \
     flags: 4,
     allowed_mentions: { roles: $role_ids }
   }')
+
+if [[ "${DRY_RUN:-}" == "1" ]]; then
+  printf '%s\n' "$payload"
+  exit 0
+fi
 
 curl -sf -H "Content-Type: application/json" -d "$payload" "$WEBHOOK_URL"
 echo "Discord notification sent for ${VERSION}"

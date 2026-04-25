@@ -43,10 +43,19 @@ messages directly. Rules that follow from this:
   `jj squash` / `jj split` / `jj describe` to fix up WIP commits
   locally.
 - **Prose highlights for a release** go in `RELEASE_HIGHLIGHTS.md` at
-  the repo root. Edit it as part of the PR that ships the noteworthy
-  change. The content is injected into the changelog section between
-  the version heading and the grouped bullet lists, and cleared after
-  release.
+  the repo root. It's the single source of truth for release prose:
+  edit it as part of the PR that ships the noteworthy change, or on
+  the open `release/next` branch up until merge. The content is
+  injected into the changelog section between the version heading and
+  the grouped bullet lists. The release workflow clears it
+  automatically after a successful release.
+
+  To tweak prose on an already-open release PR: check out
+  `release/next`, edit `RELEASE_HIGHLIGHTS.md`, run
+  `scripts/regen-release-notes.sh`, then
+  `git push --force-with-lease origin release/next`. The version
+  workflow also posts a sticky preview comment on the PR showing
+  exactly what will go to Discord.
 
 ## Other rules
 
