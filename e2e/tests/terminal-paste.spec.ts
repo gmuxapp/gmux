@@ -11,7 +11,7 @@
  * are inside the container and are never reached when stopPropagation() fires.
  */
 import { test, expect, type Page } from '@playwright/test'
-import { openApp, selectFirstSession } from '../helpers'
+import { openApp, gotoTestSession } from '../helpers'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -73,7 +73,7 @@ test.describe('terminal paste', () => {
     })
 
     await openApp(page)
-    await selectFirstSession(page)
+    await gotoTestSession(page)
 
     // Discard any data sent during session setup (resize etc. are strings and
     // filtered out, but binary data like initial input isn't expected here).

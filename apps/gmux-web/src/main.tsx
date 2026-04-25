@@ -332,6 +332,19 @@ function App() {
   const loc = useLocation()
   useEffect(() => {
     setNavigate((url, replace) => loc.route(url, replace))
+    // Test-only navigation hook: routes to a session by ID. Used by
+    // e2e/helpers.ts to drive the app from a known session ID, since
+    // the post-refactor home page no longer auto-selects.
+    //
+    // Returns true if the session was found in the store (and so
+    // navigation was attempted), false if sessions/projects haven't
+    // loaded yet (caller should retry).
+    ;(window as any).__gmuxNavigateToSession = (sessionId: string): boolean => {
+      const sess = sessions.value.find(s => s.id === sessionId)
+      if (!sess) return false
+      navigateToSession(sessionId, true)
+      return true
+    }
   }, [loc])
 
   // Sync preact-iso's URL to the store signal on every navigation.

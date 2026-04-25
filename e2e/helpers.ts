@@ -36,14 +36,33 @@ export async function isPillVisible(page: Page): Promise<boolean> {
 }
 
 /**
- * Wait for a session's terminal to be visible. The app auto-selects the
- * first alive session on load, so we don't need to click anything. If
- * auto-select hasn't kicked in (e.g. no sessions yet), the wait will time
- * out and the caller will see a clear failure.
+ * Navigate to the test session and wait for the terminal to be visible.
+ *
+ * The home page no longer auto-selects a session, so we drive
+ * navigation via the test-only `__gmuxNavigateToSession(id)` hook
+ * installed by main.tsx. The session ID is set by global-setup and
+ * exposed via GMUX_TEST_SESSION_ID.
  */
-export async function selectFirstSession(page: Page): Promise<void> {
+export async function gotoTestSession(page: Page): Promise<void> {
+  const sessionId = process.env.GMUX_TEST_SESSION_ID
+  if (!sessionId) throw new Error('GMUX_TEST_SESSION_ID not set; global-setup did not run')
+
+  // Wait for the store to load sessions/projects, then drive
+  // navigation. The hook returns false until the session appears in
+  // the store.
+  await page.waitForFunction((id) => {
+    const navigate = (window as any).__gmuxNavigateToSession
+    if (typeof navigate !== 'function') return false
+    return navigate(id) === true
+  }, sessionId, { timeout: 10_000 })
+
+  // Confirm navigation actually changed the URL before waiting for
+  // the terminal. If something redirects us back to /, fail loudly
+  // here. The slug `test-project` is seeded by global-setup.
+  await page.waitForURL(/\/test-project\/shell\//, { timeout: 5_000 })
+
   await page.locator('.xterm').waitFor({ state: 'visible', timeout: 5_000 })
-  // Give the WS connection time to establish and replay scrollback
+  // Give the WS connection time to establish and replay scrollback.
   await page.waitForTimeout(1500)
 }
 

@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test'
-import { getTermState, openApp, selectFirstSession } from '../helpers'
+import { getTermState, openApp, gotoTestSession } from '../helpers'
 
 test.describe('terminal connection', () => {
   test('connects to session and renders terminal', async ({ page }) => {
     await openApp(page)
-    await selectFirstSession(page)
+    await gotoTestSession(page)
 
     // Terminal should exist and have dimensions
     const state = await getTermState(page)
@@ -17,7 +17,7 @@ test.describe('terminal connection', () => {
 
   test('terminal displays session output', async ({ page }) => {
     await openApp(page)
-    await selectFirstSession(page)
+    await gotoTestSession(page)
 
     // The test session runs `echo READY` — check that the terminal has content.
     // We can't easily read xterm's rendered content, but we can check that
