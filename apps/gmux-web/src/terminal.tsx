@@ -407,6 +407,16 @@ export function TerminalView({
       scrollToBottom() { term.scrollToBottom() },
     })
     ;(window as any).__gmuxTerm = term
+    // Test-only inject hook: pumps bytes through the same path as ws.onmessage
+    // (createTerminalIO.enqueue) bypassing the WebSocket and replay buffer.
+    // Used by e2e/tests/terminal-scroll.spec.ts to exercise scroll preservation
+    // against real xterm with deterministic byte sequences and frame boundaries.
+    ;(window as any).__gmuxInject = (b64: string) => {
+      const bin = atob(b64)
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+      termIoRef.current?.enqueue(bytes, termEpochRef.current)
+    }
 
     const sendRawInput = (data: string) => {
       const ws = wsRef.current
@@ -688,6 +698,7 @@ export function TerminalView({
       onPasteReady?.(null)
       onFocusReady?.(null)
       if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
+      ;(window as any).__gmuxInject = null
       term.dispose()
       termRef.current = null
       termIoRef.current = null
