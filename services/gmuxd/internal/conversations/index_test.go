@@ -1,6 +1,8 @@
 package conversations
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -214,4 +216,87 @@ func TestAll(t *testing.T) {
 	}
 }
 
+// TestScan_SkipsUnchangedFiles verifies that Scan() does not re-parse
+// session files whose (mtime, size) match the last indexed snapshot.
+// Without this cache, Scan re-reads every JSONL session file every
+// interval, which on real systems with hundreds of MB of pi/claude/
+// codex history pegs a CPU core.
+//
+// Strategy: index a real pi session file, then mutate the in-memory
+// Info via Upsert (a sentinel marker). A re-Scan of the unchanged
+// file must keep the sentinel (cache hit, no re-parse). Bumping the
+// file's mtime must invalidate the cache and overwrite the sentinel.
+func TestScan_SkipsUnchangedFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home) // claude/codex roots resolve under HOME
+	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(home, ".pi", "agent"))
+
+	cwd := t.TempDir()
+	piDir := filepath.Join(home, ".pi", "agent", "sessions", "--"+cwdEncode(cwd)+"--")
+	if err := os.MkdirAll(piDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionFile := filepath.Join(piDir, "sess.jsonl")
+	content := `{"type":"session","version":3,"id":"abc-123","timestamp":"2026-03-15T10:00:00Z","cwd":"` + cwd + `"}` + "\n" +
+		`{"type":"message","id":"u1","timestamp":"2026-03-15T10:01:00Z","message":{"role":"user","content":[{"type":"text","text":"original title"}]}}` + "\n"
+	if err := os.WriteFile(sessionFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := New()
+	idx.Scan()
+
+	info, ok := idx.Lookup("pi", "original-title")
+	if !ok {
+		t.Fatalf("expected initial scan to index session file; got entries: %v", idx.All())
+	}
+
+	// Stamp a sentinel via Upsert. If the next Scan re-parses the file,
+	// the sentinel is overwritten with the on-disk title.
+	info.Title = "SENTINEL"
+	idx.Upsert(info)
+
+	idx.Scan()
+
+	after, _ := idx.Lookup("pi", "original-title")
+	if after.Title != "SENTINEL" {
+		t.Errorf("expected unchanged file to be skipped (title still SENTINEL), got %q", after.Title)
+	}
+
+	// Bump mtime; cache must invalidate and re-parse, overwriting the
+	// sentinel with the on-disk title.
+	future := time.Now().Add(time.Minute)
+	if err := os.Chtimes(sessionFile, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	idx.Scan()
+
+	after, _ = idx.Lookup("pi", "original-title")
+	if after.Title == "SENTINEL" {
+		t.Errorf("expected mtime change to invalidate cache and re-parse; sentinel still present")
+	}
+	if after.Title != "original title" {
+		t.Errorf("expected re-parsed title %q, got %q", "original title", after.Title)
+	}
+}
+
+// cwdEncode mirrors pi's filesystem encoding (strip leading /, replace
+// remaining / with -). Duplicating it here avoids a test dependency on
+// the adapters package's unexported helpers.
+func cwdEncode(cwd string) string {
+	s := cwd
+	if len(s) > 0 && s[0] == '/' {
+		s = s[1:]
+	}
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '/' {
+			out = append(out, '-')
+		} else {
+			out = append(out, s[i])
+		}
+	}
+	return string(out)
+}
 

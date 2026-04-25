@@ -43,6 +43,21 @@ type Index struct {
 	// byToolID maps "kind/toolID" → slug for reverse lookup
 	// (e.g., finding a conversation's slug from its tool UUID).
 	byToolID map[string]string
+	// fileStat caches (mtime, size) per file path so Scan() can skip
+	// re-parsing session files that haven't changed since the last
+	// scan. Pi/Claude/Codex session JSONL files can grow to tens of
+	// MB; without this cache, periodic rescans read and re-parse the
+	// entire session corpus every interval.
+	fileStat map[string]fileStat
+}
+
+// fileStat snapshots a file's mtime and size at index time. Two
+// snapshots compare equal iff the file is byte-identical to the last
+// indexed version (modulo mtime/size collisions, which are negligible
+// for append-only JSONL files).
+type fileStat struct {
+	modTimeUnixNano int64
+	size            int64
 }
 
 // New creates an empty index.
@@ -50,6 +65,7 @@ func New() *Index {
 	return &Index{
 		byKey:    make(map[string]Info),
 		byToolID: make(map[string]string),
+		fileStat: make(map[string]fileStat),
 	}
 }
 
@@ -173,6 +189,23 @@ func (idx *Index) Scan() {
 		}
 
 		for _, path := range allFiles {
+			stat, err := os.Stat(path)
+			if err != nil {
+				continue
+			}
+			snap := fileStat{
+				modTimeUnixNano: stat.ModTime().UnixNano(),
+				size:            stat.Size(),
+			}
+			if idx.unchanged(path, snap) {
+				continue
+			}
+			// Record the snapshot before the parse-and-filter chain so
+			// that even files we skip (parse errors, missing cwd, not
+			// resumable) don't get re-read on every scan. Any future
+			// change bumps mtime or size, which invalidates the cache.
+			idx.recordStat(path, snap)
+
 			fileInfo, err := sf.ParseSessionFile(path)
 			if err != nil {
 				continue
@@ -209,6 +242,26 @@ func (idx *Index) Scan() {
 			idx.Upsert(info)
 		}
 	}
+}
+
+// unchanged reports whether path was indexed previously with the same
+// mtime/size. Callers use this to skip re-parsing session files that
+// haven't been touched since the last scan.
+func (idx *Index) unchanged(path string, snap fileStat) bool {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	cached, ok := idx.fileStat[path]
+	return ok && cached == snap
+}
+
+// recordStat memoizes the file's mtime/size so subsequent scans can
+// short-circuit. Stored regardless of whether parsing or filtering
+// succeeded: any future change to the file bumps mtime or size and
+// invalidates the cache.
+func (idx *Index) recordStat(path string, snap fileStat) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	idx.fileStat[path] = snap
 }
 
 // ScanFile indexes a single conversation file. Called by filemon when
@@ -251,7 +304,14 @@ func (idx *Index) ScanFile(a adapter.Adapter, path string) string {
 		ResumeCommand: cmd,
 		Created:       fileInfo.Created,
 	}
-	return idx.Upsert(info)
+	slug = idx.Upsert(info)
+	if stat, err := os.Stat(path); err == nil {
+		idx.recordStat(path, fileStat{
+			modTimeUnixNano: stat.ModTime().UnixNano(),
+			size:            stat.Size(),
+		})
+	}
+	return slug
 }
 
 // Remove deletes a conversation from the index by tool ID.
@@ -264,8 +324,14 @@ func (idx *Index) Remove(kind, toolID string) bool {
 	if !ok {
 		return false
 	}
+	ik := indexKey(kind, slug)
+	if info, ok := idx.byKey[ik]; ok && info.FilePath != "" {
+		// Drop the cached stat so a recreated file at the same path
+		// is re-parsed on the next scan.
+		delete(idx.fileStat, info.FilePath)
+	}
 	delete(idx.byToolID, tk)
-	delete(idx.byKey, indexKey(kind, slug))
+	delete(idx.byKey, ik)
 	return true
 }
 
