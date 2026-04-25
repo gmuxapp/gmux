@@ -132,6 +132,13 @@ func (fm *FileMonitor) SetConvIndex(ix *conversations.Index) {
 // fully covered. Idempotent and safe to call once at gmuxd startup
 // before Run begins.
 //
+// We mkdir any missing root because fsnotify can only watch existing
+// directories, and we want to detect when a user starts using an
+// adapter mid-session without forcing a daemon restart. Side effect:
+// gmuxd creates an empty `~/.pi/agent/sessions/` (etc.) for every
+// configured adapter, even ones the user has never used. Acceptable
+// in exchange for not requiring a restart on first use.
+//
 // New subdirectories created later are picked up by handleFSEvent's
 // Create handler, which adds a watch on any subdir created under an
 // already-watched dir.
@@ -139,10 +146,6 @@ func (fm *FileMonitor) WatchRoots() {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
 	for root := range fm.rootToAdapter {
-		// Create the root if it doesn't exist; otherwise we can't
-		// watch it, and a session of this kind starting later would
-		// also need to mkdir it. fsnotify can only watch existing
-		// dirs.
 		if _, err := os.Stat(root); os.IsNotExist(err) {
 			if err := os.MkdirAll(root, 0o755); err != nil {
 				log.Printf("filemon: mkdir %s: %v", root, err)

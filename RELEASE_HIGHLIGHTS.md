@@ -18,3 +18,9 @@ Example:
     `projects.json` replaces separate `remote` and `paths` fields with a
     unified `match` array.
 -->
+
+The daemon no longer rescans every adapter session file every 30
+seconds. Conversation discovery is now driven directly by filesystem
+events, so an idle gmuxd does no periodic work. Heavy users with
+many large pi/claude/codex sessions will see CPU drop from steady
+background burn to effectively zero when nothing is happening.

@@ -39,6 +39,33 @@ defense-in-depth for future tests that spawn agents like `pi` or
 `claude` (which would otherwise read the operator's real
 `~/.pi/agent/` etc.); audit it manually when touching this setup.
 
+## Adapter-session fixtures
+
+`fixtures.ts` knows how to write minimally valid JSONL session files
+for pi/claude/codex into `$GMUX_TEST_HOME` (set by global-setup). Two
+specs use it:
+
+- `tests/conversation-fixtures.spec.ts` is a drift-detector. It
+  pre-seeds one fixture per adapter via global-setup *before* gmuxd
+  starts, then asserts each is reachable through `/v1/conversations/`
+  once bootstrap completes. If a Go parser grows a new required
+  field and the TS fixture lags, this spec fails first with a clear
+  signal pointing at fixture validity, before anything else.
+- `tests/conversation-discovery.spec.ts` exercises the watcher path:
+  writes JSONL files at test time and asserts the index reflects
+  them within 2s. Tight timeout intentionally: watcher-driven
+  discovery is sub-second; longer would mask regression to a
+  periodic scan. The harness's only alive session is `shell`, so
+  these tests implicitly verify always-on root watches — if root
+  watches were ever re-gated on a live session of the same kind,
+  the discovery tests would time out.
+
+When adding a test that needs a session file on disk, prefer
+`writeFakeSession` over hand-crafted JSONL. Each call needs a unique
+synthetic `cwd` so encoded paths and slugs don't collide between
+tests; `uniqueFixture(kind, label)` in the discovery spec is a good
+pattern.
+
 ## Test hooks on `window`
 
 Two hooks are exposed by the app for the harness; both are
@@ -57,6 +84,20 @@ needs to do more than read state or call an existing public API,
 that's a sign the production API is missing something; fix the API
 instead of growing the hook.
 
+## API helpers
+
+`helpers.ts` exposes two helpers for tests that talk to the daemon
+directly (without a browser context):
+
+- `apiGet<T>(urlPath)` — bearer-auth wrapper around `fetch` against
+  `127.0.0.1:${GMUXD_TEST_PORT}`. Returns `{ status, body }`. Body is
+  parsed JSON or undefined for non-JSON responses (404 etc.).
+- `pollUntil(fn, opts)` — polls until `fn` returns truthy or the
+  default 2s ceiling elapses. Use for assertions that wait on async
+  work ("file written, index updated, API reflects it"). Tight
+  default timeout is intentional: a longer wait masks regressions
+  that re-introduce polling somewhere in the stack.
+
 ## Adding tests
 
 - Reach for `gotoTestSession(page)` to navigate. It handles auth,
@@ -66,3 +107,6 @@ instead of growing the hook.
 - The test session is `bash -c 'echo READY; while true; do sleep 60; done'`
   with `cwd=$tmpDir/workspace`. Don't depend on anything more
   specific than that without changing the harness.
+- For tests that exercise daemon behavior without a browser (HTTP
+  endpoints, watcher paths), drop into `apiGet` + `pollUntil`. No
+  need to touch a `Page` if nothing in the UI changes.
