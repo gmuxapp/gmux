@@ -434,9 +434,18 @@ func serve(stderr io.Writer) int {
 
 	// Conversations index — maps (kind, slug) to file metadata for URL
 	// resolution of dead conversations and future fulltext search.
+	// One bootstrap scan at startup; from then on the index is kept
+	// fresh by filemon's fsnotify event handler (SetConvIndex below).
 	convIndex := conversations.New()
 	convIndex.Scan()
 	log.Printf("conversations: indexed %d files", convIndex.Count())
+
+	// Wire filemon to the conversations index and install always-on
+	// watches on every adapter session root. After this, every .jsonl
+	// Create/Write/Remove under any adapter root updates the index
+	// automatically, with no periodic scan involved.
+	fileMon.SetConvIndex(convIndex)
+	fileMon.WatchRoots()
 
 	// Start background update checker
 	updateChecker := update.New(version)
@@ -527,19 +536,12 @@ func serve(stderr io.Writer) int {
 	}
 	go scanner.Run(30*time.Second, stopScanner)
 
-	// Periodic rescan of conversations index so new files are picked up.
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stopScanner:
-				return
-			case <-ticker.C:
-				convIndex.Scan()
-			}
-		}
-	}()
+	// Conversations index updates are watcher-driven via filemon
+	// (see SetConvIndex + WatchRoots above). No periodic rescan: a
+	// healthy fsnotify watch tree plus the startup bootstrap scan
+	// covers steady state. If reports of staleness emerge after
+	// suspend or inotify queue overflow, add an explicit reconcile
+	// hook — don't reintroduce the periodic ticker.
 
 	// Auto-assign sessions to projects when they appear or get a Slug.
 	sessionEvents, unsubSessionEvents := sessions.Subscribe()

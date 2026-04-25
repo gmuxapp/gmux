@@ -136,6 +136,41 @@ func TestRemove(t *testing.T) {
 	}
 }
 
+func TestRemoveByPath(t *testing.T) {
+	idx := New()
+	idx.Upsert(Info{ToolID: "a", Slug: "one", Kind: "pi", FilePath: "/x/a.jsonl"})
+	idx.Upsert(Info{ToolID: "b", Slug: "two", Kind: "pi", FilePath: "/x/b.jsonl"})
+	idx.Upsert(Info{ToolID: "c", Slug: "three", Kind: "claude", FilePath: "/y/c.jsonl"})
+
+	if !idx.RemoveByPath("/x/b.jsonl") {
+		t.Fatal("expected RemoveByPath to return true for indexed path")
+	}
+	if idx.Count() != 2 {
+		t.Errorf("expected count 2 after remove, got %d", idx.Count())
+	}
+	if _, ok := idx.Lookup("pi", "two"); ok {
+		t.Error("expected miss for removed slug")
+	}
+	// Sibling entries with same kind unaffected.
+	if _, ok := idx.Lookup("pi", "one"); !ok {
+		t.Error("sibling pi entry was incorrectly removed")
+	}
+	// Cross-kind unaffected.
+	if _, ok := idx.Lookup("claude", "three"); !ok {
+		t.Error("cross-kind entry was incorrectly removed")
+	}
+	// Reverse-lookup (byToolID) cleared too: Upserting the same toolID
+	// at a new slug should yield the new slug, not update-in-place at
+	// the old one.
+	slug := idx.Upsert(Info{ToolID: "b", Slug: "different", Kind: "pi", FilePath: "/x/b2.jsonl"})
+	if slug != "different" {
+		t.Errorf("expected fresh slug 'different' (byToolID was cleared), got %q", slug)
+	}
+	if idx.RemoveByPath("/x/nope.jsonl") {
+		t.Error("expected RemoveByPath to return false for unknown path")
+	}
+}
+
 func TestSlugExists(t *testing.T) {
 	idx := New()
 	idx.Upsert(Info{ToolID: "abc", Slug: "fix-auth", Kind: "pi"})

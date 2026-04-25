@@ -269,6 +269,26 @@ func (idx *Index) Remove(kind, toolID string) bool {
 	return true
 }
 
+// RemoveByPath deletes any conversation whose FilePath matches path.
+// Used when filemon observes a deletion event and we don't have the
+// (kind, toolID) handy. Linear walk over the index; that's fine
+// because Remove events are rare (manual `rm`, file rotation) and
+// the index size stays in the hundreds-to-low-thousands range.
+// Returns true if an entry was removed.
+func (idx *Index) RemoveByPath(path string) bool {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	for key, info := range idx.byKey {
+		if info.FilePath != path {
+			continue
+		}
+		delete(idx.byKey, key)
+		delete(idx.byToolID, toolKey(info.Kind, info.ToolID))
+		return true
+	}
+	return false
+}
+
 // SlugExists reports whether a slug is taken within a kind.
 func (idx *Index) SlugExists(kind, slug string) bool {
 	idx.mu.RLock()

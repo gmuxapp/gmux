@@ -26,6 +26,7 @@ package discovery
 import (
 	"context"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -38,6 +39,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/conversations"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
@@ -46,6 +48,13 @@ type FileMonitor struct {
 	store   *store.Store
 	watcher *fsnotify.Watcher
 	poke    chan struct{} // non-blocking signal to retry attribution
+	index   *conversations.Index // optional; nil in unit tests
+
+	// rootToAdapter maps each adapter's SessionRootDir() to its adapter.
+	// Built once at construction from adapters.AllAdapters() so the
+	// always-on path → adapter resolver works without a live session of
+	// that kind. Read-only after NewFileMonitor returns.
+	rootToAdapter map[string]adapter.Adapter
 
 	mu             sync.Mutex
 	watchedDirs    map[string]bool              // all dirs currently watched (roots + session dirs)
@@ -84,10 +93,21 @@ func NewFileMonitorWithAttributions(s *store.Store, attrs map[string]string) *Fi
 	if attrs == nil {
 		attrs = make(map[string]string)
 	}
+	rootToAdapter := make(map[string]adapter.Adapter)
+	for _, a := range adapters.AllAdapters() {
+		sf, ok := a.(adapter.SessionFiler)
+		if !ok {
+			continue
+		}
+		if root := sf.SessionRootDir(); root != "" {
+			rootToAdapter[root] = a
+		}
+	}
 	return &FileMonitor{
 		store:          s,
 		watcher:        w,
 		poke:           make(chan struct{}, 1),
+		rootToAdapter:  rootToAdapter,
 		watchedDirs:    make(map[string]bool),
 		rootDirs:       make(map[string]bool),
 		sessions:       make(map[string]*monitoredSession),
@@ -95,6 +115,95 @@ func NewFileMonitorWithAttributions(s *store.Store, attrs map[string]string) *Fi
 		activeFiles:    make(map[string]string),
 		fileOffsets:    make(map[string]int64),
 		candidateFiles: make(map[string]bool),
+	}
+}
+
+// SetConvIndex wires the conversations index to receive ScanFile and
+// RemoveByPath calls on .jsonl events. Must be called before Run
+// starts; not safe to swap concurrently. Tests that don't exercise
+// the index can leave it unset (calls become no-ops).
+func (fm *FileMonitor) SetConvIndex(ix *conversations.Index) {
+	fm.index = ix
+}
+
+// WatchRoots installs always-on fsnotify watches for every adapter
+// SessionRootDir() and every existing subdirectory under it. Walks
+// the tree depth-first so codex's date-nested layout (YYYY/MM/DD) is
+// fully covered. Idempotent and safe to call once at gmuxd startup
+// before Run begins.
+//
+// New subdirectories created later are picked up by handleFSEvent's
+// Create handler, which adds a watch on any subdir created under an
+// already-watched dir.
+func (fm *FileMonitor) WatchRoots() {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	for root := range fm.rootToAdapter {
+		// Create the root if it doesn't exist; otherwise we can't
+		// watch it, and a session of this kind starting later would
+		// also need to mkdir it. fsnotify can only watch existing
+		// dirs.
+		if _, err := os.Stat(root); os.IsNotExist(err) {
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				log.Printf("filemon: mkdir %s: %v", root, err)
+				continue
+			}
+		}
+		fm.ensureRootWatchLocked(root)
+		fm.watchTreeLocked(root)
+	}
+}
+
+// watchTreeLocked walks the directory tree under root and adds a
+// watch on every subdirectory. Errors on individual entries are
+// logged but don't abort the walk.
+func (fm *FileMonitor) watchTreeLocked(root string) {
+	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		if path == root {
+			return nil // already watched as root
+		}
+		fm.addWatchLocked(path)
+		return nil
+	})
+}
+
+// adapterForPath returns the adapter responsible for path by matching
+// its directory against known SessionRootDir prefixes. Returns nil if
+// no adapter claims the path.
+func (fm *FileMonitor) adapterForPath(path string) adapter.Adapter {
+	dir := filepath.Dir(path)
+	for root, a := range fm.rootToAdapter {
+		if isUnderRoot(dir, root) {
+			return a
+		}
+	}
+	return nil
+}
+
+// notifyConvIndex dispatches a .jsonl filesystem event to the
+// conversations index. No-op if the index isn't wired (test mode).
+func (fm *FileMonitor) notifyConvIndex(event fsnotify.Event) {
+	if fm.index == nil {
+		return
+	}
+	if !strings.HasSuffix(event.Name, ".jsonl") {
+		return
+	}
+	switch {
+	case event.Has(fsnotify.Remove), event.Has(fsnotify.Rename):
+		fm.index.RemoveByPath(event.Name)
+	case event.Has(fsnotify.Create), event.Has(fsnotify.Write):
+		a := fm.adapterForPath(event.Name)
+		if a == nil {
+			return
+		}
+		fm.index.ScanFile(a, event.Name)
 	}
 }
 
@@ -134,6 +243,11 @@ func (fm *FileMonitor) Run(stop <-chan struct{}) {
 			if !ok {
 				return
 			}
+			// Errors here are typically inotify queue overflow or
+			// transient EINTR. We log and continue; the index gets
+			// reconciled on the next gmuxd restart via the bootstrap
+			// scan. Add an explicit reconcile hook here if reports
+			// of staleness after overflow start coming in.
 			log.Printf("filemon: watcher error: %v", err)
 
 		case <-fm.poke:
@@ -159,11 +273,15 @@ func (fm *FileMonitor) handleFSEvent(event fsnotify.Event) {
 
 	if event.Has(fsnotify.Create) {
 		// A new entry was created. Could be:
-		// 1. A new session subdirectory in a root dir -> add watch
-		// 2. A new .jsonl file in a session dir -> handle as file change
+		// 1. A new subdirectory under any watched dir -> add watch +
+		//    catch up on .jsonl files that may already exist there.
+		//    We check watchedDirs (not just rootDirs) so codex's
+		//    YYYY/MM/DD nesting is supported: a new month dir under a
+		//    watched year dir gets its own watch.
+		// 2. A new .jsonl file in a watched dir -> handle as file change.
 		fm.mu.Lock()
 		dir := filepath.Dir(name)
-		if fm.rootDirs[dir] {
+		if fm.watchedDirs[dir] {
 			fm.handleNewSubdirLocked(name)
 		}
 		fm.mu.Unlock()
@@ -178,18 +296,50 @@ func (fm *FileMonitor) handleFSEvent(event fsnotify.Event) {
 			fm.handleFileChange(name)
 		}
 	}
+
+	// Conversations index stays in sync with disk for every .jsonl
+	// event, regardless of whether any session is alive. This is the
+	// path that replaces the old 30s periodic Scan.
+	fm.notifyConvIndex(event)
 }
 
-// handleNewSubdirLocked is called when a Create event fires inside a root dir.
-// Any new subdirectory is watched, because the tool may write session files
-// in directories other than SessionDir(cwd) (e.g., grove worktrees, /resume
-// from a different folder).
+// handleNewSubdirLocked is called when a Create event fires inside a
+// watched dir. Any new subdirectory is watched, and we catch up on
+// any .jsonl files that already landed in it before the watch took
+// effect (the `mkdir x && touch x/y.jsonl` race).
 func (fm *FileMonitor) handleNewSubdirLocked(path string) {
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
 		return
 	}
 	fm.addWatchLocked(path)
+
+	// Catch-up scan: feed any pre-existing .jsonl files through the
+	// conversations index so we don't miss files that landed between
+	// the parent's Create event and our watch being established.
+	// Recursively, since a Create could deliver a deep subtree (e.g.
+	// codex's YYYY/MM/DD created in one mkdir -p call).
+	if fm.index == nil {
+		return
+	}
+	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if p != path {
+				fm.addWatchLocked(p)
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".jsonl") {
+			return nil
+		}
+		if a := fm.adapterForPath(p); a != nil {
+			fm.index.ScanFile(a, p)
+		}
+		return nil
+	})
 }
 
 // NotifyNewSession registers a session for file monitoring.
