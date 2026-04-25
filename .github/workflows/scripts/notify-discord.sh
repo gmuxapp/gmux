@@ -37,17 +37,28 @@ cur_minor=$(echo "$VERSION" | sed 's/^v//' | cut -d. -f2)
 prev_major=$(echo "$prev_tag" | sed 's/^v//' | cut -d. -f1)
 prev_minor=$(echo "$prev_tag" | sed 's/^v//' | cut -d. -f2)
 
+# Always ping every role at or below the bump severity:
+#   patch    → patch
+#   feature  → patch + feature
+#   breaking → patch + feature + breaking
+# This way each role's subscribers see every release that affects them.
+
+role_ids=("$ROLE_PATCH")
 if [[ "$cur_major" != "$prev_major" ]]; then
-  role_id="$ROLE_BREAKING"
+  role_ids+=("$ROLE_FEATURE" "$ROLE_BREAKING")
 elif [[ "$cur_minor" != "$prev_minor" ]]; then
-  role_id="$ROLE_FEATURE"
-else
-  role_id="$ROLE_PATCH"
+  role_ids+=("$ROLE_FEATURE")
 fi
+
+mentions=""
+for id in "${role_ids[@]}"; do
+  mentions+="<@&${id}> "
+done
+mentions="${mentions% }"
 
 # ── Send ──
 
-header="<@&${role_id}>
+header="${mentions}
 ## gmux ${VERSION}"
 footer="[See the changelog for details.](https://gmux.app/changelog)"
 
@@ -82,12 +93,15 @@ ${footer}"
   fi
 fi
 
+# flags: 4 = SUPPRESS_EMBEDS. Stops Discord from generating a link
+# preview card for the changelog URL.
 payload=$(jq -n \
   --arg content "$message" \
-  --arg role_id "$role_id" \
+  --argjson role_ids "$(printf '%s\n' "${role_ids[@]}" | jq -R . | jq -s .)" \
   '{
     content: $content,
-    allowed_mentions: { roles: [$role_id] }
+    flags: 4,
+    allowed_mentions: { roles: $role_ids }
   }')
 
 curl -sf -H "Content-Type: application/json" -d "$payload" "$WEBHOOK_URL"
