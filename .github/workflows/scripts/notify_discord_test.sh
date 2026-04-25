@@ -53,6 +53,12 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  if [[ "$3" != *"$2"* ]]; then echo "  ✓ $1"; bump_score pass
+  else echo "  ✗ $1"; echo "    expected NOT to contain: $2"; bump_score fail
+  fi
+}
+
 # Lay out a scratch repo with two tags so notify-discord.sh's
 # `git describe --tags --abbrev=0 "${VERSION}^"` finds the predecessor.
 make_repo() {
@@ -143,6 +149,54 @@ echo "Embed suppression:"
 
   flags=$(run_notify "$tmp" v1.5.4 | jq -r '.flags')
   assert_eq "flags=4" "4" "$flags"
+)
+
+# ── Test: empty highlights fall back to the bullet list ──
+#
+# A patch release with no curated prose should still tell Discord
+# subscribers what changed. Sending only the changelog link forces
+# every subscriber to click through to find out if the release is
+# relevant; echoing the auto-generated bullets answers that inline.
+
+echo ""
+echo "Empty highlights falls back to bullets:"
+(
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp" v1.5.3 v1.5.4
+
+  # No prose above the marker; bullet list below.
+  cat > "$tmp/RELEASE_NOTES.md" <<'EOF'
+<!-- highlights-end -->
+
+### Fixes
+- **(daemon)** stop leaking goroutines on shutdown ([#42](https://example/42))
+EOF
+
+  content=$(run_notify "$tmp" v1.5.4 | jq -r '.content')
+  assert_contains "bullet text reaches Discord"  "stop leaking goroutines" "$content"
+  assert_contains "changelog link still present" "gmux.app/changelog"      "$content"
+)
+
+# When highlights ARE present, the bullet list must NOT also be
+# included; otherwise we'd double up (curated prose + raw bullets).
+echo ""
+echo "Highlights present suppresses bullet fallback:"
+(
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp" v1.5.3 v1.5.4
+
+  cat > "$tmp/RELEASE_NOTES.md" <<'EOF'
+Hand-written highlight paragraph.
+
+<!-- highlights-end -->
+
+### Fixes
+- **(daemon)** stop leaking goroutines on shutdown ([#42](https://example/42))
+EOF
+
+  content=$(run_notify "$tmp" v1.5.4 | jq -r '.content')
+  assert_contains     "highlights reach Discord"       "Hand-written highlight"  "$content"
+  assert_not_contains "bullets do not duplicate prose" "stop leaking goroutines" "$content"
 )
 
 # ── Test: long summaries truncate at a paragraph break, not in the middle ──
