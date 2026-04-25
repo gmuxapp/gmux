@@ -126,6 +126,18 @@ function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
     },
 
     /**
+     * Simulate xterm processing `\x1b[3J` (clear scrollback): both ybase
+     * and ydisp reset to 0, scrollback content is gone, only the visible
+     * rows remain. Call between enqueue and flushOne to model an agent
+     * (eg pi) wiping scrollback inside a BSU/ESU block.
+     */
+    clearScrollback() {
+      totalLines = rows
+      baseY = 0
+      viewportY = 0
+    },
+
+    /**
      * Simulate xterm processing new output lines, including scrollback
      * eviction. Call this between enqueue and flushOne to model what xterm
      * does during write().
@@ -377,6 +389,51 @@ describe('scroll preservation across BSU/ESU', () => {
     h.flushRAF()
 
     expect(h.viewportY).toBe(44)
+    h.cleanup()
+  })
+
+  it('snaps to bottom when scrollback is wiped (\\x1b[3J) inside BSU/ESU and user was scrolled up', () => {
+    // The pi end-of-turn shape that the e2e fixture exercises: user is
+    // reading earlier output, agent emits a BSU + clear-scrollback +
+    // redraw + ESU. Scrollback shrinks underneath the user; their
+    // pre-BSU line is gone, so the only meaningful restore is bottom.
+    const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
+    h.io.reset(1)
+    h.addLines(200)            // baseY=200, plenty of scrollback
+    h.userScrollTo(100)        // user reading the middle
+    expect(h.viewportY).toBe(100)
+    expect(h.baseY).toBe(200)
+
+    h.io.enqueue(wrapBSU('redraw'), 1)
+    // Inside the BSU/ESU: agent emits \x1b[3J then redraws ~15 lines.
+    h.clearScrollback()
+    h.addLines(15)
+    h.flushOne(0)              // ESU write callback
+    h.flushRAF()               // restore rAF
+
+    // Pre-fix bug: scrollToLine(min(adjustedY=0, baseY=15)) = 0 (top).
+    // Post-fix: prevBaseY=200 > baseY=15 → scrollToBottom.
+    expect(h.scrollToBottomCalls.length).toBeGreaterThan(0)
+    expect(h.viewportY).toBe(h.baseY)
+    h.cleanup()
+  })
+
+  it('does not snap to bottom when baseY simply grows from 0', () => {
+    // First-ever output to a fresh terminal: baseY transitions from 0
+    // upward. snap.prevBaseY=0 must NOT trigger the wipe branch
+    // (baseY=N > prevBaseY=0, so the existing scrolled-up restore path
+    // applies as normal).
+    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
+    h.io.reset(1)
+    expect(h.baseY).toBe(0)
+
+    h.io.enqueue(wrapBSU('first output'), 1)
+    h.flushOne(40)             // baseY now 15 (40 lines, 25 rows visible)
+    h.flushRAF()
+
+    // No wipe happened, just growth. The user was implicitly at bottom
+    // (viewportY=0=baseY=0 pre-BSU), so the wasAtBottom branch fires.
+    expect(h.viewportY).toBe(h.baseY)
     h.cleanup()
   })
 
