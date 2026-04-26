@@ -26,7 +26,12 @@ messages directly. Rules that follow from this:
   `daemon`, `cli`, `adapter`, `peering`, `devcontainer`, `docs`.
   Example: `feat(peering): reconnect after system sleep`. Scopes show
   up as bold tags in the changelog: `- **(peering)** reconnect after
-  system sleep`.
+  system sleep`. The `release` scope is reserved for release-flow
+  plumbing (workflows, notify-discord, cliff.toml itself) and is
+  hidden from the changelog and bump computation: those changes
+  affect maintainers, not users. Breaking release-scope changes
+  (`feat(release)!:`) still surface so consumers of the release
+  pipeline know to act.
 - **Write commit messages as user-facing changelog bullets.** The text
   after `type: ` becomes the bullet verbatim. Lowercase, no trailing
   period, imperative mood. Good: `fix: prevent recursive config fetch
@@ -48,7 +53,10 @@ messages directly. Rules that follow from this:
   the open `release/next` branch up until merge. The content is
   injected into the changelog section between the version heading and
   the grouped bullet lists. The release workflow clears it
-  automatically after a successful release.
+  automatically after a successful release. Leave it empty for
+  patch-only releases that don't need curated prose; the Discord
+  announcement falls back to the auto-generated bullet list so
+  subscribers can still see what changed without clicking through.
 
   To tweak prose on an already-open release PR: check out
   `release/next`, edit `RELEASE_HIGHLIGHTS.md`, run

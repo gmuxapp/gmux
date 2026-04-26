@@ -202,6 +202,63 @@ done
   assert_eq "feat among fixes wins minor bump" "v1.1.0" "$actual"
 )
 
+# ── Test: `(release)`-scoped commits are hidden from the changelog ──
+#
+# Anything in the `(release)` scope is internal release-flow plumbing
+# (workflow tweaks, notify-discord polish, cliff.toml itself) and
+# doesn't belong in user-facing release notes. cliff.toml's parser
+# skips them; this test pins both halves of that contract:
+#
+#   - skipped from the changelog when mixed with user-visible commits
+#   - don't count as releasable on their own (no-op release)
+#   - but breaking variants (`!:`) still surface, since users do need
+#     to know about breaking changes to the maintainer-facing flow
+
+echo ""
+echo "(release)-scoped commits skipped from changelog:"
+(
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"; cd "$tmp"
+  commit "feat: real user feature (#1)"
+  commit "feat(release): internal plumbing (#2)"
+  commit "fix(release): more plumbing (#3)"
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+
+  assert_contains     "user-visible feat present" "real user feature" "$changelog"
+  assert_not_contains "feat(release) hidden"      "internal plumbing" "$changelog"
+  assert_not_contains "fix(release) hidden"       "more plumbing"     "$changelog"
+)
+
+echo ""
+echo "(release)-only history is a no-op release:"
+(
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"; cd "$tmp"
+  commit "feat(release): plumbing only (#1)"
+  commit "fix(release): more plumbing (#2)"
+
+  output=$(run_script "$tmp")
+  assert_contains "exits with 'no releasable commits'" "No releasable commits" "$output"
+)
+
+echo ""
+echo "breaking (release) commit still surfaces:"
+(
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"; cd "$tmp"
+  commit "feat(release)!: rename WEBHOOK_URL env var (#1)"
+
+  version=$(run_script "$tmp" --dry-run | head -1)
+  assert_eq "breaking release commit bumps major" "v2.0.0" "$version"
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  assert_contains "breaking release commit in Breaking section" "### Breaking"      "$changelog"
+  assert_contains "breaking release commit body present"        "rename WEBHOOK_URL" "$changelog"
+)
+
 # ── Test: cliff.toml smoke test (every expected group heading appears) ──
 #
 # Pin that cliff.toml still routes the four commit types we care about

@@ -70,12 +70,25 @@ commit_preprocessors = [
 # Assign commits to changelog groups. The `<!-- N -->` HTML comments
 # control sort order; striptags removes them before display.
 commit_parsers = [
-  # Breaking changes first, regardless of type. The `!:` variant is
-  # caught by the subject-line regex, the footer form is caught by the
-  # `footer =` rule (git-cliff strips the footer from the body and
-  # exposes it separately, so matching on `body =` would miss it).
+  # Breaking changes first, regardless of type or scope. The `!:`
+  # variant is caught by the subject-line regex, the footer form is
+  # caught by the `footer =` rule (git-cliff strips the footer from
+  # the body and exposes it separately, so matching on `body =`
+  # would miss it). This rule runs before the release-scope skip
+  # below so a hypothetical breaking change to the release flow
+  # still surfaces under the Breaking heading rather than being
+  # silently hidden, even though `protect_breaking_commits` would
+  # also force it through.
   { message = '^[a-z]+(\([^)]+\))?!: ', group = "<!-- 0 -->Breaking" },
   { footer = "^BREAKING[ -]CHANGE",      group = "<!-- 0 -->Breaking" },
+
+  # `(release)`-scoped commits are internal release-flow plumbing
+  # (workflow tweaks, notify-discord polish, cliff.toml itself).
+  # They don't change anything users of gmux see, so they're hidden
+  # from the changelog and don't count toward the bump. Note: in
+  # git-cliff, `scope = "x"` in a parser SETS the scope; matching on
+  # the parsed scope requires the explicit `field`/`pattern` form.
+  { field = "scope", pattern = "^release$", skip = true },
 
   # Security fixes get their own section so they stand out.
   { message = "^security",                group = "<!-- 1 -->Security" },

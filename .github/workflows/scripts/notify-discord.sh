@@ -28,9 +28,23 @@ fi
 # RELEASE_NOTES.md has the highlights prose above a `<!-- highlights-end -->`
 # marker, then the generated bullet list. The marker is invisible in
 # rendered markdown; we stop reading at it.
-summary=$(sed '/<!-- highlights-end -->/,$d' RELEASE_NOTES.md)
-# Trim trailing blank lines.
-summary=$(echo "$summary" | sed -e :a -e '/^\n*$/{$d;N;ba}')
+#
+# When the prose is empty (a release without curated highlights), fall
+# back to the bullet list below the marker so Discord still sees what
+# changed. An empty announcement with only a changelog link is worse
+# than a slightly verbose one: most subscribers just want to know if
+# there's anything they care about without having to click through.
+# Strip leading and trailing blank lines so the rendered message
+# doesn't get extra vertical whitespace from sloppy input or from
+# the blank line that sits right after the highlights-end marker.
+trim_blanks() { sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba}'; }
+
+summary=$(sed '/<!-- highlights-end -->/,$d' RELEASE_NOTES.md | trim_blanks)
+if [[ -z "${summary//[[:space:]]/}" ]]; then
+  # Skip the marker line itself; everything after it is the auto-generated
+  # bullet list (### Features, ### Fixes, etc.).
+  summary=$(sed -n '/<!-- highlights-end -->/,$p' RELEASE_NOTES.md | tail -n +2 | trim_blanks)
+fi
 
 # ── Determine bump type ──
 
