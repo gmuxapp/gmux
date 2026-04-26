@@ -32,12 +32,25 @@ func socketDir() string {
 	return "/tmp/gmux-sessions"
 }
 
+// OnDeadFunc is invoked after a session has just landed as Alive=false
+// in the store, with the post-Upsert snapshot. nil is allowed.
+//
+// Three call sites fire it:
+//
+//   - Scan's socket-gone phase, when a previously-alive session's
+//     runner is no longer reachable.
+//   - Register's fresh-upsert path, when the runner's /meta already
+//     reports alive=false (fast-exit commands like `echo` whose
+//     runner finishes before queryMeta arrives).
+//   - Subscriptions.OnDead, after the SSE exit handler upserts.
+type OnDeadFunc func(sess store.Session)
+
 // Watch periodically scans for Unix sockets and queries their /meta.
 // When a new session is found, it subscribes to the runner's /events SSE
 // for real-time status/meta/exit updates.
-func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, resumes *PendingResumes, interval time.Duration, stop <-chan struct{}) {
+func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, resumes *PendingResumes, onDead OnDeadFunc, interval time.Duration, stop <-chan struct{}) {
 	// Initial scan immediately
-	Scan(sessions, subs, fileMon, resumes)
+	Scan(sessions, subs, fileMon, resumes, onDead)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -48,7 +61,7 @@ func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, res
 			subs.UnsubscribeAll()
 			return
 		case <-ticker.C:
-			Scan(sessions, subs, fileMon, resumes)
+			Scan(sessions, subs, fileMon, resumes, onDead)
 		}
 	}
 }
@@ -56,7 +69,7 @@ func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, res
 // Scan finds all .sock files and queries each runner's /meta endpoint.
 // Reachable sockets → upsert session + subscribe to /events.
 // Unreachable → remove + cleanup + unsubscribe.
-func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, resumes *PendingResumes) {
+func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, resumes *PendingResumes, onDead OnDeadFunc) {
 	dir := socketDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -84,7 +97,7 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, resu
 		if trackedSockets[sockPath] {
 			continue // already tracked
 		}
-		if err := Register(sessions, subs, fileMon, sockPath, resumes); err != nil {
+		if err := Register(sessions, subs, fileMon, sockPath, resumes, onDead, nil); err != nil {
 			// Only remove sockets old enough to be genuinely stale.
 			// A brand-new socket may not be listening yet (runner still starting).
 			if info, serr := entry.Info(); serr == nil && time.Since(info.ModTime()) > 10*time.Second {
@@ -114,6 +127,9 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, resu
 			}
 		}
 		sessions.Upsert(s)
+		if onDead != nil {
+			onDead(s)
+		}
 		if subs != nil {
 			subs.Unsubscribe(s.ID)
 		}
@@ -135,11 +151,23 @@ func probeSocket(socketPath string) bool {
 	return true
 }
 
+// OnResumeMergedFunc fires when Register absorbs a fresh registration
+// into an existing dead session record (the pendingResume path).
+// gmuxd uses it to drop the persisted meta.json now that the session
+// is alive again. nil is allowed.
+type OnResumeMergedFunc func(existingID string)
+
 // Register handles a registration request from gmux-run.
 // Immediately queries the runner's /meta, adds to store, and subscribes to /events.
 // If there's a pending resume matching this session's cwd+kind, the existing
-// store entry is updated in-place rather than creating a new one.
-func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, socketPath string, resumes *PendingResumes) error {
+// store entry is updated in-place rather than creating a new one;
+// onResumeMerged then fires with the existing session's id.
+//
+// Fast-exiting commands (echo, true) often die before queryMeta arrives,
+// so the /meta payload reports alive=false. In that case Register is the
+// session's only landing point in the store, and onDead fires after the
+// Upsert so the record is persisted to disk.
+func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, socketPath string, resumes *PendingResumes, onDead OnDeadFunc, onResumeMerged OnResumeMergedFunc) error {
 	newSess, err := queryMeta(socketPath)
 	if err != nil {
 		return err
@@ -173,6 +201,9 @@ func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, 
 						subs.Unsubscribe(newSess.ID)
 					}
 				}
+				if onResumeMerged != nil {
+					onResumeMerged(existingID)
+				}
 				log.Printf("register: merged resumed session %s ← %s", existingID, newSess.ID)
 				return nil
 			}
@@ -195,6 +226,11 @@ func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, 
 	}
 
 	sessions.Upsert(*newSess)
+	if !newSess.Alive && newSess.Peer == "" && onDead != nil {
+		// /meta arrived after the runner already exited; the session
+		// will never appear in any /events stream we subscribe to.
+		onDead(*newSess)
+	}
 	if subs != nil {
 		subs.Subscribe(newSess.ID, socketPath)
 	}

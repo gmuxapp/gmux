@@ -34,6 +34,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sleep"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionmeta"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsauth"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsdiscovery"
@@ -385,6 +386,44 @@ func serve(stderr io.Writer) int {
 
 	sessions := store.New()
 
+	// sessionmeta persists per-session records so dead sessions
+	// survive a gmuxd restart. Sweep on startup repopulates the
+	// store with everything we knew about previously; the OnDead
+	// hook below persists every Alive=false landing; Dismiss /
+	// Resume merge / slug takeover drop the corresponding directory.
+	// See sessionmeta package doc for the full lifecycle.
+	metaStore := sessionmeta.New(sessionmeta.DefaultDir())
+	if loaded, err := metaStore.Sweep(); err != nil {
+		log.Printf("sessionmeta: sweep failed: %v", err)
+	} else {
+		for _, sess := range loaded {
+			sessions.Upsert(sess)
+		}
+		if n := len(loaded); n > 0 {
+			log.Printf("sessionmeta: restored %d session(s) from %s", n, metaStore.Dir())
+		}
+	}
+	persistDead := func(sess store.Session) {
+		if err := metaStore.Write(sess); err != nil {
+			log.Printf("sessionmeta: write %s: %v", sess.ID, err)
+		}
+	}
+	forgetMeta := func(id string) {
+		if err := metaStore.Remove(id); err != nil {
+			log.Printf("sessionmeta: remove %s: %v", id, err)
+		}
+	}
+
+	// Drive the persister's removal loop off store events so every
+	// session-remove (dismiss, slug takeover, peer disconnect, etc.)
+	// drops the matching meta dir. The explicit forgetMeta call in
+	// the dismiss handler is redundant but cheap; resume merge does
+	// NOT broadcast session-remove (it's an Alive=false→true Upsert)
+	// so its forgetMeta call is the only thing that cleans up there.
+	metaEvents, cancelMetaEvents := sessions.Subscribe()
+	defer cancelMetaEvents()
+	go metaStore.WatchRemovals(metaEvents)
+
 	// Build command titlers from adapters that implement CommandTitler.
 	commandTitlers := make(map[string]func([]string) string)
 	for _, a := range adapters.AllAdapters() {
@@ -396,6 +435,7 @@ func serve(stderr io.Writer) int {
 	sessions.SetCommandTitlers(commandTitlers)
 
 	subs := discovery.NewSubscriptions(sessions)
+	subs.OnDead = persistDead
 	pendingResumes := discovery.NewPendingResumes()
 	var resumeMu sync.Mutex
 
@@ -420,7 +460,7 @@ func serve(stderr io.Writer) int {
 	// Start socket-based discovery (scans /tmp/gmux-sessions/*.sock)
 	// Discovery also subscribes to each runner's /events SSE for live updates.
 	stopDiscovery := make(chan struct{})
-	go discovery.Watch(sessions, subs, fileMon, pendingResumes, 3*time.Second, stopDiscovery)
+	go discovery.Watch(sessions, subs, fileMon, pendingResumes, persistDead, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
 	// Session file scanner — discovers resumable sessions from adapter
@@ -883,7 +923,7 @@ func serve(stderr io.Writer) int {
 		}
 
 		log.Printf("register: %s at %s", req.SessionID, req.SocketPath)
-		if err := discovery.Register(sessions, subs, fileMon, req.SocketPath, pendingResumes); err != nil {
+		if err := discovery.Register(sessions, subs, fileMon, req.SocketPath, pendingResumes, persistDead, forgetMeta); err != nil {
 			log.Printf("register: failed to query meta for %s: %v", req.SessionID, err)
 			writeError(w, http.StatusBadGateway, "runner_unreachable", err.Error())
 			return
@@ -1198,6 +1238,7 @@ func serve(stderr io.Writer) int {
 						}
 					}
 					sessions.Upsert(sess)
+					persistDead(sess)
 					subs.Unsubscribe(sessionID)
 					if fileMon != nil {
 						fileMon.NotifySessionDied(sessionID)
@@ -1242,8 +1283,11 @@ func serve(stderr io.Writer) int {
 			}
 			// Remove session from its project's sessions array.
 			projectMgr.DismissSession(sessionID, sess.Slug)
-			// Remove from store — broadcasts session-remove to all clients.
+			// Remove from store — broadcasts session-remove to all clients
+			// (which the cleanup goroutine catches to drop meta), then
+			// also drop meta synchronously to defeat any subscriber lag.
 			sessions.Remove(sessionID)
+			forgetMeta(sessionID)
 			if subs != nil {
 				subs.Unsubscribe(sessionID)
 			}

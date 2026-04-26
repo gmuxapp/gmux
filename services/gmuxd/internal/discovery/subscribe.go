@@ -25,6 +25,15 @@ type Subscriptions struct {
 	// Returns true if the session was transitioned to resumable
 	// (caller should not set exit status).
 	OnExit func(sess *store.Session) bool
+	// OnDead fires after the store Upsert that records an exit
+	// event. The session passed is the post-Upsert snapshot,
+	// including any Title / Resumable derivation the store applied
+	// and any mutations the OnExit hook made before it.
+	//
+	// Used by gmuxd to persist the session record so it survives a
+	// restart. See discovery.OnDeadFunc for the parallel hook on
+	// the Scan and Register paths.
+	OnDead func(sess store.Session)
 }
 
 func NewSubscriptions(s *store.Store) *Subscriptions {
@@ -237,6 +246,9 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			}
 		}
 		sub.store.Upsert(sess)
+		if sub.OnDead != nil {
+			sub.OnDead(sess)
+		}
 
 	case "activity":
 		// Transient signal: terminal produced output with no attached clients.
