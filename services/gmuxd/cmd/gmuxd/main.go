@@ -23,6 +23,7 @@ import (
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/clipfile"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/devcontainers"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
@@ -1260,6 +1261,19 @@ func serve(stderr io.Writer) int {
 				}
 			})
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
+
+		case "clipboard":
+			// Materialize a clipboard binary payload as a file in this
+			// gmuxd's os.TempDir() and return the absolute path. For
+			// devcontainer/peer sessions, the request was already
+			// forwarded above to the gmuxd that owns the session, so
+			// reaching this branch always means "write locally". The
+			// session must exist; we don't otherwise need fields from it.
+			if _, ok := sessions.Get(sessionID); !ok {
+				writeError(w, http.StatusNotFound, "not_found", "session not found")
+				return
+			}
+			clipboardHandler(clipfile.NewLocalWriter(os.TempDir())).ServeHTTP(w, r)
 
 		case "dismiss":
 			if r.Method != http.MethodPost {
