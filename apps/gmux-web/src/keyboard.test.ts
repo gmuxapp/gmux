@@ -1,5 +1,60 @@
 import { describe, it, expect } from 'vitest'
-import { ctrlSequenceFor, formatPasteText } from './keyboard'
+import { ctrlSequenceFor, formatPasteText, pickBinaryDataTransferItem } from './keyboard'
+
+// Build an array-like stand-in for DataTransferItemList. Vitest runs in
+// node by default, where the real DOM type isn't available; a plain
+// indexed object with .length matches what the function actually reads.
+function makeItems(
+  entries: ReadonlyArray<{ kind: 'string' | 'file'; type: string }>,
+): DataTransferItemList {
+  const list: Record<string | number, unknown> = { length: entries.length }
+  entries.forEach((e, i) => {
+    list[i] = { ...e, getAsFile: () => null, getAsString: () => undefined }
+  })
+  return list as unknown as DataTransferItemList
+}
+
+describe('pickBinaryDataTransferItem', () => {
+  it('returns the first file with a non-text MIME', () => {
+    const items = makeItems([
+      { kind: 'string', type: 'text/plain' },
+      { kind: 'file', type: 'image/png' },
+      { kind: 'file', type: 'image/jpeg' },
+    ])
+    expect(pickBinaryDataTransferItem(items)?.type).toBe('image/png')
+  })
+
+  it('skips kind=string even when the MIME is non-text', () => {
+    // A 'string' item's getAsFile() returns null; uploading it would
+    // produce a confusing failure-toast race. The kind check is what
+    // prevents that.
+    const items = makeItems([{ kind: 'string', type: 'application/json' }])
+    expect(pickBinaryDataTransferItem(items)).toBe(null)
+  })
+
+  it('skips kind=file when the MIME is text/*', () => {
+    // Some browsers expose dragged .txt files as kind='file' with type
+    // 'text/plain'. We treat those as text and let the existing text
+    // paste path handle them, not the binary upload path.
+    const items = makeItems([{ kind: 'file', type: 'text/plain' }])
+    expect(pickBinaryDataTransferItem(items)).toBe(null)
+  })
+
+  it('returns null on empty list', () => {
+    expect(pickBinaryDataTransferItem(makeItems([]))).toBe(null)
+  })
+
+  it('returns the first qualifying file even when later items are also binary', () => {
+    // Order matters: the function must not pick "the most preferred"
+    // image type, just the first qualifying one. Browsers are responsible
+    // for ordering the representations sensibly.
+    const items = makeItems([
+      { kind: 'file', type: 'image/jpeg' },
+      { kind: 'file', type: 'image/png' },
+    ])
+    expect(pickBinaryDataTransferItem(items)?.type).toBe('image/jpeg')
+  })
+})
 
 describe('formatPasteText', () => {
   // ── Bracketed paste mode ──────────────────────────────────────────────────
