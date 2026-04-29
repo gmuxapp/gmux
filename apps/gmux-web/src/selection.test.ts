@@ -5,11 +5,17 @@ import {
   type SelectionTerminal,
 } from './selection'
 
-/** Build a fake terminal where each row is a fixed-width string padded with
- * spaces to `cols`. `wrapped` lists the y-indices that are continuations
- * of the row above (i.e. soft-wrapped rows). Selection range is in the same
- * coordinate space the test passes; the algorithm doesn't care whether it's
- * 0- or 1-based as long as inputs are consistent. */
+/**
+ * Build a fake terminal where each row has explicitly-written content
+ * followed by never-written cells (the row's "pad"). The fake's
+ * `translateToString` honors `trimRight` the same way xterm.js does: it
+ * drops trailing never-written cells from the slice, but leaves
+ * explicitly-typed spaces alone. This keeps the tests faithful to the
+ * real cell-codepoint distinction the algorithm relies on.
+ *
+ * Selection coordinates use the same 0-based, half-open-on-x convention
+ * as `Terminal.getSelectionPosition()`.
+ */
 function makeTerm(opts: {
   cols: number
   rows: string[]
@@ -17,12 +23,18 @@ function makeTerm(opts: {
   selection?: { start: { x: number, y: number }, end: { x: number, y: number } }
 }): SelectionTerminal {
   const wrapped = new Set(opts.wrapped ?? [])
-  const lines: SelectionBufferLine[] = opts.rows.map((raw, i) => {
-    const padded = raw.padEnd(opts.cols, ' ').slice(0, opts.cols)
+  const lines: SelectionBufferLine[] = opts.rows.map((written, i) => {
+    const writtenLen = Math.min(written.length, opts.cols)
+    const padded = written.padEnd(opts.cols, ' ').slice(0, opts.cols)
     return {
       isWrapped: wrapped.has(i),
-      translateToString(_trim, start = 0, end = opts.cols) {
-        return padded.slice(start, end)
+      translateToString(trim, start = 0, end = opts.cols) {
+        if (!trim) return padded.slice(start, end)
+        // Mirror xterm.js: trimRight drops never-written cells (those past
+        // `writtenLen`) from the slice's right edge. Written content,
+        // including any trailing typed spaces, is preserved.
+        const cap = Math.min(end, writtenLen)
+        return cap <= start ? '' : padded.slice(start, cap)
       },
     }
   })
@@ -40,7 +52,6 @@ describe('selectionToText', () => {
   })
 
   it('drops trailing pad when selection crosses a line break', () => {
-    // User triple-clicks line 0, drag extends to start of line 1.
     const term = makeTerm({
       cols: 20,
       rows: ['echo 1', 'echo 2'],
@@ -49,9 +60,10 @@ describe('selectionToText', () => {
     expect(selectionToText(term)).toBe('echo 1\n')
   })
 
-  it('preserves trailing spaces when selection ends mid-row inside the pad', () => {
+  it('preserves trailing pad when selection ends inside a row past content', () => {
     // User explicitly drags past EOL but stops before end of row. Those
-    // spaces are part of the selection, not part of the line break.
+    // cells render as spaces and are part of the user's selection, not
+    // part of the line break.
     const term = makeTerm({
       cols: 20,
       rows: ['echo 1'],
@@ -60,8 +72,35 @@ describe('selectionToText', () => {
     expect(selectionToText(term)).toBe('echo 1   ')
   })
 
+  it('trims pad on triple-click / line select (end.x === cols, single row)', () => {
+    // xterm's selectLineAt sets end.x = cols. We must treat that as
+    // "selection reached the row boundary" and drop the pad — otherwise
+    // every triple-click copies a wall of spaces. Regression test for the
+    // bug introduced when first trying the naive "preserve pad on last
+    // row" rule.
+    const term = makeTerm({
+      cols: 20,
+      rows: ['echo 1'],
+      selection: { start: { x: 0, y: 0 }, end: { x: 20, y: 0 } },
+    })
+    expect(selectionToText(term)).toBe('echo 1')
+  })
+
+  it('preserves explicitly-typed trailing spaces across a line break', () => {
+    // Distinguishing written-spaces from never-written pad is the whole
+    // point of using trimRight=true (which keys off cell codepoint, not
+    // the rendered character). If the user typed `echo 1   ` followed
+    // by Enter, those three spaces are content and must survive a copy
+    // that crosses the resulting line break.
+    const term = makeTerm({
+      cols: 20,
+      rows: ['echo 1   ', 'echo 2'],
+      selection: { start: { x: 0, y: 0 }, end: { x: 6, y: 1 } },
+    })
+    expect(selectionToText(term)).toBe('echo 1   \necho 2')
+  })
+
   it('joins soft-wrapped rows without inserting a newline', () => {
-    // Long shell command terminal-wrapped across two rows.
     const term = makeTerm({
       cols: 10,
       rows: ['sudo npm i', 'nstall expr'],
@@ -72,7 +111,7 @@ describe('selectionToText', () => {
     expect(selectionToText(term)).toBe('sudo npm install exp')
   })
 
-  it('keeps blank lines when they are part of the selection', () => {
+  it('keeps blank lines that are part of the selection', () => {
     const term = makeTerm({
       cols: 10,
       rows: ['line a', '', 'line b'],
@@ -88,17 +127,6 @@ describe('selectionToText', () => {
       selection: { start: { x: 6, y: 0 }, end: { x: 7, y: 1 } },
     })
     expect(selectionToText(term)).toBe('world\nfoo bar')
-  })
-
-  it('emits no padding for fully blank intermediate rows', () => {
-    // Three-row selection where the middle row is empty — the trailing
-    // pad of an empty row is the entire row, which must collapse to "".
-    const term = makeTerm({
-      cols: 30,
-      rows: ['top', '', 'bottom'],
-      selection: { start: { x: 0, y: 0 }, end: { x: 6, y: 2 } },
-    })
-    expect(selectionToText(term)).toBe('top\n\nbottom')
   })
 
   it('does not insert a newline after the last selected row', () => {
