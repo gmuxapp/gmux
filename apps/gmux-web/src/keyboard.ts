@@ -22,6 +22,7 @@ import {
   uploadClipboardBlob,
   type UploadResult,
 } from './clipboard-upload'
+import { selectionToText } from './selection'
 
 type SendFn = (data: string) => void
 
@@ -217,7 +218,7 @@ function executeAction(
     }
 
     case 'copyOrInterrupt': {
-      const sel = term.getSelection()
+      const sel = selectionToText(term)
       if (sel) {
         navigator.clipboard.writeText(sel)
         term.clearSelection()
@@ -228,7 +229,7 @@ function executeAction(
     }
 
     case 'copy': {
-      const sel = term.getSelection()
+      const sel = selectionToText(term)
       if (sel) {
         navigator.clipboard.writeText(sel)
         term.clearSelection()
