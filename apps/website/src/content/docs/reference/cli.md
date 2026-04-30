@@ -35,7 +35,7 @@ How `gmux` behaves on the calling side depends on stdin and on whether you're al
 |------|----------|
 | Stdin is a terminal, and `GMUX` is not already set in the environment | **Transparent attach.** Your terminal is put in raw mode and wired to the child's PTY: Ctrl-C goes to the child, SIGWINCH follows your window, and closing the terminal detaches without killing the session. This is the default shape when you type `gmux <cmd>` at a shell. |
 | Stdin is not a terminal (pipelines, redirected stdin, scripts, agent harnesses) | **Metadata-only blocking run.** `gmux` prints a short header (`session:`, `adapter:`, `command:`, `pid:`, `socket:`, `serving...`), blocks until the child exits, then prints `exited: N` and exits with the child's exit code. The PTY output does **not** come out on stdout; watch the session in the UI, or use [`gmux --tail`](#gmux---tail-n-id--t). |
-| `--no-attach`, or a hand-typed invocation from inside an existing gmux session (`GMUX=1` in env *and* stdin is a terminal) | **Detached launch.** `gmux` spawns the session disconnected from the terminal (`setsid`, `/dev/null` I/O), prints `started <cmd> in background (visible in gmux)` on stderr, and returns immediately with exit 0. The nested auto-detach is what keeps a typed `gmux <cmd>` inside the UI's terminal from nesting PTY-within-PTY; scripts and agents running inside a gmux session are unaffected because their stdin is a pipe, not a tty, so they fall into the blocking non-tty row above. |
+| `--no-attach`, or a hand-typed invocation from inside an existing gmux session (`GMUX=1` in env *and* stdin is a terminal) | **Detached launch.** `gmux` spawns the session disconnected from the terminal (`setsid`, `/dev/null` I/O). With `--no-attach`, `gmux` blocks just long enough for the child to register with gmuxd, prints the new session id on stdout, and exits 0 (or non-zero with a stderr reason if registration fails); scripts can capture it with `id=$(gmux --no-attach <cmd>)`. The nested auto-detach path instead prints `started <cmd> in background (visible in gmux)` on stderr and returns immediately, without waiting for registration; it's what keeps a typed `gmux <cmd>` inside the UI's terminal from nesting PTY-within-PTY. Scripts and agents running inside a gmux session are unaffected because their stdin is a pipe, not a tty, so they fall into the blocking non-tty row above. |
 
 `gmux` always exits with the wrapped child's exit code (or 0 for the detached launch, since at that point there is no child to wait on). Scripts and CI pipelines can treat `gmux <cmd>` as a transparent wrapper around `<cmd>` for exit-status purposes.
 
@@ -79,7 +79,7 @@ gmux -t 20 fix-auth-bug
 
 ### `gmux --kill <id>` (`-k`)
 
-Terminate a running session. Sends the same signal chain the UI's kill button does: `SIGTERM` to the child, normal exit lifecycle, session marked dead.
+Terminate a running session. Sends the same signal chain the UI's kill button does: `SIGHUP` to the child's process group, waits up to 2 s for a clean exit, then escalates to `SIGKILL` if the child is still alive. SIGHUP is the right default because interactive shells (bash, zsh) and TUI adapters honor it for clean shutdown, while many of them ignore SIGTERM.
 
 ```bash
 gmux --kill a3f20187

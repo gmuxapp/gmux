@@ -18,7 +18,7 @@ gmux make build | tail -n 20
 What happens, step by step:
 
 1. Because gmux's stdin is a pipe (not a tty), it takes the [non-tty flow](/reference/cli/#gmux---no-attach-command-args): no raw mode, no PTY passthrough to stdout.
-2. gmux prints a short metadata header (`session:`, `pid:`, `socket:`, `serving...`), then **blocks** until the child exits.
+2. gmux prints a short metadata header (`session:`, `adapter:`, `command:`, `pid:`, `socket:`, `serving...`), then **blocks** until the child exits.
 3. The child's actual output goes to the gmux session: visible live in the web UI, persisted in scrollback, and available to `gmux --tail`.
 4. When the child exits, gmux prints `exited: N` and exits with the same code.
 
@@ -70,10 +70,20 @@ Access is scoped by the session socket's filesystem permissions (owner-only, 070
 Piped gmux blocks. If you want to start a session and return immediately, without waiting:
 
 ```bash
-gmux --no-attach pytest --watch
+id=$(gmux --no-attach pytest --watch)
 ```
 
-Detaches the child from the caller entirely. The caller exits with 0 as soon as the session is registered. Use this for watchers, dev servers, or anything the script should kick off and then move on from. Discover it later with `--list`, peek with `--tail`, send to it with `--send`, kill it with `--kill`.
+Detaches the child from the caller entirely. `gmux` blocks just long enough for the child to register with gmuxd, prints the new session id on stdout, and exits 0. Capture it directly into a shell variable as above and you can drive the session immediately, no `--list` polling required:
+
+```bash
+gmux --tail 50 "$id"
+gmux --send "$id" $'q\n'
+gmux --kill "$id"
+```
+
+If registration fails (handshake timeout or the child dies before registering), `gmux` prints a short reason on stderr and exits non-zero, so `set -e` scripts fail loudly instead of capturing an empty id.
+
+Use `--no-attach` for watchers, dev servers, or anything the script should kick off and then move on from.
 
 ## Cleaning up: `gmux --kill`
 
