@@ -21,7 +21,7 @@ import { buildProjectFolders, matchSession } from './projects'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS } from './mock-data/index'
-import type { ITerminalOptions } from '@xterm/xterm'
+import type { ResolvedTerminalOptions } from './settings-schema'
 import type { Session as ProtocolSession } from '@gmux/protocol'
 
 // ── Raw state (sources of truth) ────────────────────────────────────────────
@@ -103,7 +103,7 @@ export const peerAppearance = computed<ReadonlyMap<string, PeerAppearance>>(() =
   return map
 })
 
-export const terminalOptions = signal<ITerminalOptions | null>(null)
+export const terminalOptions = signal<ResolvedTerminalOptions | null>(null)
 export const keybinds = signal<ResolvedKeybind[] | null>(null)
 export const macCommandIsCtrl = signal(false)
 
