@@ -21,6 +21,23 @@ func StateDir() string {
 	return filepath.Join(home, ".local", "state", "gmux")
 }
 
+// SessionsDir returns the directory under StateDir that holds
+// per-session subdirectories (meta.json, scrollback). Both the
+// runner (writing scrollback) and gmuxd (writing meta.json,
+// reading scrollback) derive their target paths from this so the
+// on-disk contract has a single source of truth.
+func SessionsDir() string {
+	return filepath.Join(StateDir(), "sessions")
+}
+
+// SessionDir returns the per-session subdirectory for id under
+// SessionsDir. The directory holds meta.json (written by gmuxd's
+// sessionmeta package) and scrollback / scrollback.0 (written by
+// the runner's scrollback package).
+func SessionDir(id string) string {
+	return filepath.Join(SessionsDir(), id)
+}
+
 // NormalizePath expands a stored path to its absolute form for use in
 // filesystem operations. Expands ~ prefix to $HOME and calls filepath.Clean.
 func NormalizePath(p string) string {

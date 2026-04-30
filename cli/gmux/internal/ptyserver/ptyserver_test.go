@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gmuxapp/gmux/packages/scrollback"
 	"nhooyr.io/websocket"
 )
 
@@ -339,6 +340,85 @@ func TestInputEndpointEmpty(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("status = %d, want 204", resp.StatusCode)
+	}
+}
+
+// TestPTYServerScrollbackPersistence verifies the runner-side
+// half of the dead-session replay contract: PTY output is teed to
+// the configured Scrollback sink, and the sink is closed AFTER the
+// final PTY drain so fast-exiting commands' last bytes land on
+// disk. A regression in either flush() or waitChild's close
+// ordering surfaces here as missing bytes in the file.
+func TestPTYServerScrollbackPersistence(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	scrollbackPath := filepath.Join(t.TempDir(), "persist", scrollback.ActiveName)
+
+	sink, err := scrollback.Open(scrollbackPath)
+	if err != nil {
+		t.Fatalf("scrollback.Open: %v", err)
+	}
+
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", "echo SCROLLBACK-MARKER-XYZ"},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+		Scrollback: sink,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// Wait for child exit and the post-drain close to run.
+	select {
+	case <-srv.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("child did not exit in time")
+	}
+	select {
+	case <-srv.PTYDone():
+	case <-time.After(time.Second):
+		t.Fatal("PTY did not drain in time")
+	}
+	// PTYDone closing implies waitChild has progressed past
+	// <-s.ptyDone, which is where the scrollback Close runs. Give
+	// it a moment to land before reading.
+	time.Sleep(50 * time.Millisecond)
+
+	data, err := os.ReadFile(scrollbackPath)
+	if err != nil {
+		t.Fatalf("read scrollback: %v", err)
+	}
+	if !bytes.Contains(data, []byte("SCROLLBACK-MARKER-XYZ")) {
+		t.Errorf("scrollback missing child output.\ngot: %q", data)
+	}
+}
+
+// TestPTYServerScrollbackNotConfigured verifies the runner serves
+// live data normally when no scrollback sink is configured. This
+// is the fallback path when scrollback.Open fails (disk full,
+// permission denied) and run.go leaves Config.Scrollback unset.
+func TestPTYServerScrollbackNotConfigured(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", "echo no-scrollback-here"},
+		Cwd:        "/tmp",
+		SocketPath: sockPath,
+		// Scrollback intentionally nil.
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	select {
+	case <-srv.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("child did not exit in time")
+	}
+	if srv.ExitCode() != 0 {
+		t.Errorf("unexpected exit code %d", srv.ExitCode())
 	}
 }
 

@@ -20,6 +20,8 @@ import (
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
+	"github.com/gmuxapp/gmux/packages/paths"
+	"github.com/gmuxapp/gmux/packages/scrollback"
 	"github.com/gmuxapp/gmux/packages/workspace"
 )
 
@@ -122,6 +124,16 @@ func runSession(args []string, attach bool) {
 
 	interactive := localterm.IsInteractive()
 
+	// Open the persistent scrollback sink for this runner. Best-
+	// effort: a failure to open (disk full, permission denied)
+	// just leaves the sink off, the runner serves live data
+	// normally, and dead-session replay won't have anything to
+	// show. The active file lives at
+	// $XDG_STATE_HOME/gmux/sessions/<id>/scrollback, in the same
+	// per-session directory gmuxd's sessionmeta package writes
+	// meta.json into.
+	scrollbackPath := filepath.Join(paths.SessionDir(sessionID), scrollback.ActiveName)
+
 	// Determine initial PTY size — use terminal size if interactive
 	ptyCfg := ptyserver.Config{
 		Command:    args,
@@ -131,6 +143,15 @@ func runSession(args []string, attach bool) {
 		Adapter:    a,
 		State:      state,
 		Version:    version,
+	}
+	// Conditional assignment: a typed nil *scrollback.Writer
+	// stored in ptyCfg.Scrollback (an io.WriteCloser) would
+	// satisfy != nil checks downstream and panic on the first
+	// Write. Only assign on successful Open.
+	if sw, err := scrollback.Open(scrollbackPath); err != nil {
+		log.Printf("scrollback: %v (continuing without persistence)", err)
+	} else {
+		ptyCfg.Scrollback = sw
 	}
 	// Always try to inherit terminal dimensions from the parent.
 	// Even non-interactive launches (background, piped) benefit from

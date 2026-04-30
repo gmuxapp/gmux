@@ -224,12 +224,14 @@ func TestSweepLoadsAllSessionsAsAliveFalse(t *testing.T) {
 
 func TestSweepRemovesOrphanDirs(t *testing.T) {
 	s := newStore(t)
-	// Orphan: dir exists with a scrollback-like file but no meta.json.
+	// Orphan: dir exists with non-meta content (a scrollback file
+	// the runner wrote) but no meta.json. Sweep should treat the
+	// whole dir as orphan and clean it up.
 	orphan := s.SessionDir("sess-orphan")
 	if err := os.MkdirAll(orphan, dirMode); err != nil {
 		t.Fatalf("mkdir orphan: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(orphan, scrollbackFile), []byte("xyz"), fileMode); err != nil {
+	if err := os.WriteFile(filepath.Join(orphan, "scrollback"), []byte("xyz"), fileMode); err != nil {
 		t.Fatalf("write orphan scrollback: %v", err)
 	}
 
