@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { ImageAddon } from '@xterm/addon-image'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
-import type { ITerminalOptions } from '@xterm/xterm'
+import type { ResolvedTerminalOptions } from './settings-schema'
 import { attachKeyboardHandler, attachPasteHandler, ctrlSequenceFor, defaultPasteFeedback, handlePasteAction } from './keyboard'
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
@@ -194,7 +194,7 @@ export function TerminalView({
   onFocusReady,
 }: {
   session: Session
-  terminalOptions: ITerminalOptions
+  terminalOptions: ResolvedTerminalOptions
   keybinds: ResolvedKeybind[]
   macCommandIsCtrl: boolean
   ctrlArmed: boolean
@@ -217,6 +217,10 @@ export function TerminalView({
   const altArmedRef = useRef(altArmed)
   const termIoRef = useRef<ReturnType<typeof createTerminalIO> | null>(null)
   const termEpochRef = useRef(0)
+
+  // True once the terminal's font is downloaded; gates xterm mount.
+  // See the preload effect below for why this matters.
+  const [fontReady, setFontReady] = useState(false)
 
   const [termLoading, setTermLoading] = useState(true)
   const [wsState, setWsState] = useState<'connecting' | 'open' | 'lost'>('connecting')
@@ -371,9 +375,38 @@ export function TerminalView({
     focusTerminal()
   }, [focusTerminal])
 
+  // Force-fetch the terminal font before mounting xterm.
+  //
+  // xterm picks its cell metrics from the first measurement it takes
+  // inside term.open(). If the woff2 hasn't downloaded yet, that
+  // measurement uses fallback monospace metrics (cell ≈ 18 px). xterm
+  // re-measures internally when the real font arrives a few ms later
+  // (cell ≈ 17 px) and the rendered grid shrinks, but the row count we
+  // derived from the original measurement doesn't get recomputed,
+  // leaving an extra row's worth of unused space at the bottom of the
+  // viewport.
+  //
+  // document.fonts.ready isn't enough: @fontsource only registers the
+  // @font-face declarations, so nothing is in flight at mount and ready
+  // resolves immediately. document.fonts.load(spec) actually triggers
+  // the fetch and resolves once the bytes are in.
+  //
+  // .finally rather than .then so a fetch failure (offline, flaky network,
+  // CSP) still unblocks the gate. xterm falls back to monospace metrics in
+  // that case, which is much better UX than a terminal stuck on the
+  // loading overlay forever.
+  useEffect(() => {
+    let cancelled = false
+    const spec = `${terminalOptions.fontSize}px ${terminalOptions.fontFamily}`
+    document.fonts.load(spec).finally(() => {
+      if (!cancelled) setFontReady(true)
+    })
+    return () => { cancelled = true }
+  }, [terminalOptions.fontFamily, terminalOptions.fontSize])
+
   // Terminal + keyboard setup (stable across session changes).
   useEffect(() => {
-    if (!containerRef.current || USE_MOCK) return
+    if (!containerRef.current || USE_MOCK || !fontReady) return
     disposed.current = false
 
     // Add non-serializable options that can't live in JSON config.
@@ -724,7 +757,7 @@ export function TerminalView({
       termRef.current = null
       termIoRef.current = null
     }
-  }, [onCtrlConsumed, onInputReady])
+  }, [onCtrlConsumed, onInputReady, fontReady])
 
   // WebSocket connection (reconnects when session.id changes).
   useEffect(() => {
@@ -888,7 +921,7 @@ export function TerminalView({
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [fitAndResize, queueData, queueMany, queueResize, releaseResizeEchoGate, resetResizeEchoGate, session.id])
+  }, [fitAndResize, queueData, queueMany, queueResize, releaseResizeEchoGate, resetResizeEchoGate, session.id, fontReady])
 
   // Pill is purely derived from size mismatch. No "driving" flag: we claim
   // on every fresh session select (first ws.onopen), and fitAndResize sets

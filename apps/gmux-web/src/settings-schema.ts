@@ -10,7 +10,7 @@
  * validation happens here in the frontend.
  */
 import * as v from 'valibot'
-import type { ITerminalOptions, ITheme } from '@xterm/xterm'
+import type { ITheme } from '@xterm/xterm'
 
 // ── Helpers ──
 
@@ -209,6 +209,14 @@ export const SettingsSchema = v.pipe(
 export type SettingsConfig = v.InferInput<typeof SettingsSchema>
 export type ResolvedSettings = v.InferOutput<typeof SettingsSchema>
 
+/** xterm options after our schema has filled in defaults. Strictly
+ *  narrower than xterm's `ITerminalOptions` (which marks every field
+ *  optional), so consumers can rely on `fontFamily`, `fontSize`, etc.
+ *  being defined. */
+export type ResolvedTerminalOptions =
+  & Omit<ResolvedSettings, 'keybinds' | 'macCommandIsCtrl'>
+  & { theme: ITheme }
+
 // ── Default theme colors ──
 
 export const DEFAULT_THEME_COLORS: ITheme = {
@@ -274,7 +282,7 @@ function warnUnknownKeys(raw: Record<string, unknown>): void {
 export function buildTerminalOptions(
   rawSettings: SettingsConfig | null | undefined,
   rawTheme: ThemeColors | null | undefined,
-): ITerminalOptions {
+): ResolvedTerminalOptions {
   // Warn about unknown keys before parsing (parse strips them).
   if (rawSettings && typeof rawSettings === 'object') {
     warnUnknownKeys(rawSettings as Record<string, unknown>)
