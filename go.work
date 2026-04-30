@@ -4,6 +4,7 @@ use (
 	./cli/gmux
 	./packages/adapter
 	./packages/paths
+	./packages/scrollback
 	./packages/workspace
 	./services/gmuxd
 	./tests/e2e

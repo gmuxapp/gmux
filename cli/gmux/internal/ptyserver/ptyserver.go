@@ -110,12 +110,13 @@ type Server struct {
 
 	mu             sync.Mutex
 	clients        map[*wsClient]struct{}
-	localOut       io.Writer // optional local terminal output sink
-	ptyCols        uint16    // last applied PTY cols (guarded by mu)
-	ptyRows        uint16    // last applied PTY rows (guarded by mu)
-	cursorHidden   bool      // tracks DECTCEM via callback (guarded by mu)
-	screenPending  []byte    // raw PTY data not yet fed to screen (guarded by mu)
-	lastClientLeft time.Time // when the last WS client disconnected (guarded by mu)
+	localOut       io.Writer       // optional local terminal output sink
+	scrollback     io.WriteCloser  // optional persistent scrollback sink (closed in waitChild)
+	ptyCols        uint16          // last applied PTY cols (guarded by mu)
+	ptyRows        uint16          // last applied PTY rows (guarded by mu)
+	cursorHidden   bool            // tracks DECTCEM via callback (guarded by mu)
+	screenPending  []byte          // raw PTY data not yet fed to screen (guarded by mu)
+	lastClientLeft time.Time       // when the last WS client disconnected (guarded by mu)
 
 	done    chan struct{} // closed when child exits
 	ptyDone chan struct{} // closed when readPTY finishes draining
@@ -155,6 +156,13 @@ type Config struct {
 	// to guarantee that fast-exiting commands can't race the wiring and
 	// have their output dropped on the floor.
 	LocalOut io.Writer
+	// Scrollback, if non-nil, receives a copy of every PTY output
+	// chunk for persistence to disk. Wired the same way as LocalOut
+	// so fast-exiting commands can't lose output. The server takes
+	// ownership: Close is called once after the final PTY drain in
+	// waitChild, so callers must not Close it themselves and must
+	// not pass a writer they need to keep using.
+	Scrollback io.WriteCloser
 }
 
 // New creates and starts a PTY server.
@@ -205,7 +213,8 @@ func New(cfg Config) (*Server, error) {
 		adapter:    cfg.Adapter,
 		state:      cfg.State,
 		clients:    make(map[*wsClient]struct{}),
-		localOut:   cfg.LocalOut, // wired before readPTY starts so early output is never lost
+		localOut:   cfg.LocalOut,   // wired before readPTY starts so early output is never lost
+		scrollback: cfg.Scrollback, // same: wired pre-readPTY so fast-exit output is never lost
 		ptyCols:    cfg.Cols,
 		ptyRows:    cfg.Rows,
 		done:       make(chan struct{}),
@@ -899,6 +908,11 @@ func (s *Server) readPTY() {
 		if localOut != nil {
 			localOut.Write(data)
 		}
+		if s.scrollback != nil {
+			// Best-effort: scrollback Write contract is no-error,
+			// IO failures are sticky and surfaced via Close.
+			s.scrollback.Write(data)
+		}
 
 		for _, c := range clients {
 			if err := c.write(websocket.MessageBinary, data); err != nil {
@@ -972,6 +986,17 @@ func (s *Server) waitChild() {
 	// still hold the child's final output when we close the WebSocket,
 	// causing data loss.
 	<-s.ptyDone
+
+	// Now that the final flush has run, close the persistent
+	// scrollback sink. Any IO error from the lifetime of the
+	// writer surfaces here — we log but don't fail, since the
+	// child has already exited and the scrollback is best-effort.
+	if s.scrollback != nil {
+		if err := s.scrollback.Close(); err != nil {
+			log.Printf("ptyserver: scrollback close: %v", err)
+		}
+		s.scrollback = nil
+	}
 
 	s.mu.Lock()
 	for c := range s.clients {

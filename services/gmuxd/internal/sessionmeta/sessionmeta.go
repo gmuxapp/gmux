@@ -39,16 +39,20 @@ import (
 )
 
 const (
-	metaFile       = "meta.json"
-	scrollbackFile = "scrollback" // owned by the runner; sweep recognizes it as non-orphan
-	dirMode        = 0o700
-	fileMode       = 0o600
+	metaFile = "meta.json"
+	dirMode  = 0o700
+	fileMode = 0o600
 )
 
+// Per-session directories may also contain scrollback files written
+// by the runner (see packages/scrollback). sessionmeta does not
+// inspect or own those files — it only manages meta.json — but it
+// removes them as a side effect of Remove (entire dir tree).
+
 // DefaultDir is the production state-dir for session metadata.
-// $XDG_STATE_HOME/gmux/sessions, derived from paths.StateDir().
+// $XDG_STATE_HOME/gmux/sessions, derived from paths.SessionsDir.
 func DefaultDir() string {
-	return filepath.Join(paths.StateDir(), "sessions")
+	return paths.SessionsDir()
 }
 
 // Store binds a base directory to the file-IO operations. One Store
