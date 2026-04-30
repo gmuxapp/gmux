@@ -5,7 +5,7 @@ import { ImageAddon } from '@xterm/addon-image'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import type { ITerminalOptions } from '@xterm/xterm'
-import { attachKeyboardHandler, attachPasteHandler, ctrlSequenceFor, formatPasteText } from './keyboard'
+import { attachKeyboardHandler, attachPasteHandler, ctrlSequenceFor, defaultPasteFeedback, handlePasteAction } from './keyboard'
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { createReplayBuffer } from './replay'
@@ -202,7 +202,7 @@ export function TerminalView({
   altArmed: boolean
   onAltConsumed: () => void
   onInputReady?: (send: ((data: string) => void) | null) => void
-  onPasteReady?: (paste: ((text: string) => void) | null) => void
+  onPasteReady?: (paste: (() => void) | null) => void
   onFocusReady?: (focus: (() => void) | null) => void
 }) {
   const shellRef = useRef<HTMLDivElement>(null)
@@ -457,14 +457,24 @@ export function TerminalView({
     }
 
     onInputReady?.(sendRawInput)
-    onPasteReady?.((text: string) => {
-      sendRawInput(formatPasteText(text, term.modes.bracketedPasteMode))
+    // The paste trigger reads bracketedPasteMode and the clipboard fresh
+    // on every invocation: bracketed mode flips at runtime as TUIs come
+    // and go, and the clipboard contents are obviously volatile. Sharing
+    // handlePasteAction with the keybind path means the mobile toolbar
+    // button gets binary-paste support without divergent code.
+    onPasteReady?.(() => {
+      void handlePasteAction({
+        sessionId: session.id,
+        bracketedPasteMode: term.modes.bracketedPasteMode,
+        feedback: defaultPasteFeedback,
+        emit: sendRawInput,
+      })
     })
     onFocusReady?.(() => focusTerminalInput(term))
 
     const dataDisposable = term.onData((data) => sendInput(data))
-    attachKeyboardHandler(term, sendInput, sendRawInput, keybinds, macCommandIsCtrl)
-    const disposePasteHandler = attachPasteHandler(term, containerRef.current!, sendRawInput)
+    attachKeyboardHandler(term, sendInput, sendRawInput, keybinds, macCommandIsCtrl, session.id)
+    const disposePasteHandler = attachPasteHandler(term, containerRef.current!, sendRawInput, session.id)
     const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
 
     // OSC 52 clipboard: applications (e.g. pi /copy) write

@@ -365,7 +365,7 @@ function App() {
 
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   const terminalFocusRef = useRef<(() => void) | null>(null)
-  const terminalPasteRef = useRef<((text: string) => void) | null>(null)
+  const terminalPasteRef = useRef<(() => void) | null>(null)
 
   // Read signals.
   const viewVal = view.value
@@ -438,14 +438,14 @@ function App() {
   }, [])
   const handleFocusTerminal = useCallback(() => { terminalFocusRef.current?.() }, [])
   const handleMobileInput = useCallback((data: string) => { terminalInputRef.current?.(data) }, [])
-  const handleTerminalPasteReady = useCallback((paste: ((text: string) => void) | null) => {
+  const handleTerminalPasteReady = useCallback((paste: (() => void) | null) => {
     terminalPasteRef.current = paste
   }, [])
-  const handleMobilePaste = useCallback(async () => {
-    try {
-      const text = await navigator.clipboard.readText()
-      if (text) terminalPasteRef.current?.(text)
-    } catch { /* clipboard denied */ }
+  // The trigger encapsulates clipboard read, binary detection, upload,
+  // and PTY emission. Mobile and desktop now share one paste code path,
+  // so binary clipboard items work from the toolbar button too.
+  const handleMobilePaste = useCallback(() => {
+    terminalPasteRef.current?.()
   }, [])
   const handleToggleCtrl = useCallback(() => {
     if (!canAttach) return
