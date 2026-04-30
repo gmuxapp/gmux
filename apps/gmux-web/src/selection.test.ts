@@ -74,7 +74,7 @@ describe('selectionToText', () => {
 
   it('trims pad on triple-click / line select (end.x === cols, single row)', () => {
     // xterm's selectLineAt sets end.x = cols. We must treat that as
-    // "selection reached the row boundary" and drop the pad — otherwise
+    // "selection reached the row boundary" and drop the pad, otherwise
     // every triple-click copies a wall of spaces. Regression test for the
     // bug introduced when first trying the naive "preserve pad on last
     // row" rule.

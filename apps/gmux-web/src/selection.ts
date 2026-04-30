@@ -3,17 +3,17 @@
  *
  * Terminal-buffer-to-text models, summarised:
  *
- * 1. "Trim everything" — strip trailing whitespace from every copied line.
+ * 1. "Trim everything": strip trailing whitespace from every copied line.
  *    Loses information when the user genuinely wants to copy spaces typed
  *    into a row. Ghostty's `clipboard-trim-trailing-spaces` option works
  *    this way and its own community considers it a smell
  *    (ghostty-org/ghostty#2709).
  *
- * 2. "Trim never" — emit cells verbatim. Wall of trailing spaces after
+ * 2. "Trim never": emit cells verbatim. Wall of trailing spaces after
  *    every short line, because the cells past the content render as
  *    spaces. xterm.js' default `getSelection()` lands here in many cases.
  *
- * 3. **"Trailing pad belongs to the line break"** — Terminal.app, Alacritty,
+ * 3. **"Trailing pad belongs to the line break"**: Terminal.app, Alacritty,
  *    WezTerm, GNOME Terminal, xterm. Selections that *cross* a row boundary
  *    drop the trailing pad of the row before emitting `\n`. Selections that
  *    *end inside* a row preserve the cells the user actually dragged
