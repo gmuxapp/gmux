@@ -47,23 +47,16 @@ messages directly. Rules that follow from this:
   branches land on `main` as-is, so keep them clean before pushing. Use
   `jj squash` / `jj split` / `jj describe` to fix up WIP commits
   locally.
-- **Prose highlights for a release** go in `RELEASE_HIGHLIGHTS.md` at
-  the repo root. It's the single source of truth for release prose:
-  edit it as part of the PR that ships the noteworthy change, or on
-  the open `release/next` branch up until merge. The content is
-  injected into the changelog section between the version heading and
-  the grouped bullet lists. The release workflow clears it
-  automatically after a successful release. Leave it empty for
-  patch-only releases that don't need curated prose; the Discord
-  announcement falls back to the auto-generated bullet list so
-  subscribers can still see what changed without clicking through.
-
-  To tweak prose on an already-open release PR: check out
-  `release/next`, edit `RELEASE_HIGHLIGHTS.md`, run
-  `scripts/regen-release-notes.sh`, then
-  `git push --force-with-lease origin release/next`. The version
-  workflow also posts a sticky preview comment on the PR showing
-  exactly what will go to Discord.
+- **Prose highlights for a release** live in the open `release/next`
+  PR body, between the `<!-- prose-start -->` and `<!-- prose-end -->`
+  markers. The PR body is the single source of truth: edit it
+  directly in the GitHub UI, and the regen workflow re-syncs
+  `changelog.mdx` and the bullets section of the body on every edit
+  (and on every push to `main`). There is no `RELEASE_HIGHLIGHTS.md`
+  file and no script to run after editing. Leave the prose section
+  empty for patch-only releases that don't need curated prose; the
+  Discord announcement falls back to the auto-generated bullet list
+  so subscribers can still see what changed without clicking through.
 
 ## Other rules
 
