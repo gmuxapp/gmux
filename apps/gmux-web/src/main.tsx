@@ -336,14 +336,12 @@ function App() {
     // e2e/helpers.ts to drive the app from a known session ID, since
     // the post-refactor home page no longer auto-selects.
     //
-    // Returns true if the session was found in the store (and so
-    // navigation was attempted), false if sessions/projects haven't
-    // loaded yet (caller should retry).
+    // Returns true only when navigation was actually dispatched.
+    // Returns false until both the session and its project have
+    // loaded, so callers (and waitForURL) can rely on the URL having
+    // changed once this returns true.
     ;(window as any).__gmuxNavigateToSession = (sessionId: string): boolean => {
-      const sess = sessions.value.find(s => s.id === sessionId)
-      if (!sess) return false
-      navigateToSession(sessionId, true)
-      return true
+      return navigateToSession(sessionId, true)
     }
   }, [loc])
 
