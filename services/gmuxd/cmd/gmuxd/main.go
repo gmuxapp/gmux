@@ -533,34 +533,12 @@ func serve(stderr io.Writer) int {
 	}
 	projectMgr.SeedIfEmpty()
 
-	// Populate the store with dead/resumable sessions from projects.
-	// For each session slug in each project, look up the conversations
-	// index to get file metadata and create a store entry. This replaces
-	// the old file scanner's role of creating file-* store entries:
-	// only sessions tracked by a project appear, not every file on disk.
+	// Populate the store with project-tracked sessions that don't have
+	// a sessionmeta record. The sessionmeta sweep above is the SOT for
+	// runtime fields; this only fills in the pre-S2 fallback path. See
+	// rehydrateProjects for the identity-model rationale.
 	if state, err := projectMgr.Load(); err == nil {
-		for _, item := range state.Items {
-			for _, key := range item.Sessions {
-				info, ok := convIndex.LookupBySlug(key)
-				if !ok {
-					// Slug not in conversations index (file may have
-					// been deleted, or key is an ephemeral session ID).
-					// Leave it; cleanup below removes orphaned entries.
-					continue
-				}
-				sess := store.Session{
-					ID:           info.ToolID,
-					CreatedAt:    info.Created.UTC().Format(time.RFC3339),
-					Command:      info.ResumeCommand,
-					Cwd:          info.Cwd,
-					Kind:         info.Kind,
-					Alive:        false,
-					AdapterTitle: info.Title,
-					Slug:         info.Slug,
-				}
-				sessions.Upsert(sess)
-			}
-		}
+		rehydrateProjects(sessions, convIndex, state)
 	}
 
 	// After store is populated, clean up orphaned project entries

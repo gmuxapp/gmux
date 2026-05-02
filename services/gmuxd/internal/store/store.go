@@ -163,6 +163,25 @@ func (s *Store) Get(id string) (Session, bool) {
 	return sess, ok
 }
 
+// HasLocalSlug reports whether the store already contains a local
+// (non-peer) session with the given (kind, slug). Slug is identity
+// for sidebar purposes (see UBIQUITOUS_LANGUAGE.md), so this is the
+// right check when deciding whether a project-tracked session is
+// already represented, regardless of which instance ID it carries.
+func (s *Store) HasLocalSlug(kind, slug string) bool {
+	if slug == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, sess := range s.sessions {
+		if sess.Peer == "" && sess.Kind == kind && sess.Slug == slug {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveTitle picks the best title: adapter > shell > command fallback.
 func (s *Store) resolveTitle(sess Session) string {
 	if sess.AdapterTitle != "" {
