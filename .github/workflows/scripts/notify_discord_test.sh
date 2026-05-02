@@ -8,6 +8,8 @@
 #   3. Stays under Discord's 2000-char limit, preferring a paragraph
 #      break to a hard byte cut.
 #   4. Always carries the changelog link, even when truncated.
+#   5. Reads release prose from the latest entry of changelog.mdx,
+#      falling back to the bullet list when prose is empty.
 #
 # Tests use DRY_RUN=1 to capture the payload as JSON and assert on its
 # structure (roles list, flags) rather than on the rendered string
@@ -61,16 +63,36 @@ assert_not_contains() {
 
 # Lay out a scratch repo with two tags so notify-discord.sh's
 # `git describe --tags --abbrev=0 "${VERSION}^"` finds the predecessor.
+# Also writes a stub changelog.mdx so the script has somewhere to read
+# prose/bullets from.
 make_repo() {
   local tmp=$1 prev=$2 version=$3
   cd "$tmp"
+  mkdir -p apps/website/src/content/docs
+  cat > apps/website/src/content/docs/changelog.mdx <<EOF
+## ${version} - 2026-04-30
+
+### Fixes
+- placeholder ([#1](https://example/1))
+
+---
+EOF
   git init --quiet --initial-branch=main
   git config user.email "test@example.com"
   git config user.name "Test"
-  git -c commit.gpgsign=false commit --allow-empty --quiet -m "first"
+  git add -A
+  git -c commit.gpgsign=false commit --quiet -m "first"
   git tag "$prev"
   git -c commit.gpgsign=false commit --allow-empty --quiet -m "second"
   git tag "$version"
+}
+
+# Replace the changelog.mdx in a scratch repo with custom content so
+# we can pin the prose/bullet split logic. Keeps the predecessor tags
+# intact.
+write_changelog() {
+  local tmp=$1
+  cat > "$tmp/apps/website/src/content/docs/changelog.mdx"
 }
 
 run_notify() {
@@ -88,11 +110,6 @@ run_notify() {
 }
 
 # ── Test: each bump level pings exactly the roles at or below severity ──
-#
-# Patch must NOT wake up feature/breaking subscribers; major must
-# reach everyone. Asserting on .allowed_mentions.roles (the structured
-# field Discord uses to decide who to ping) instead of the rendered
-# content string avoids breaking on cosmetic text changes.
 
 echo "Bump-level role ping:"
 for case in \
@@ -104,7 +121,6 @@ do
   (
     tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
     make_repo "$tmp" "$prev" "$version"
-    echo "x" > "$tmp/RELEASE_NOTES.md"
 
     payload=$(run_notify "$tmp" "$version")
     actual=$(echo "$payload" | jq -r '.allowed_mentions.roles | join(",")')
@@ -113,45 +129,44 @@ do
 done
 
 # ── Test: first-ever release (no predecessor tag) pings patch only ──
-#
-# `git describe ... "${VERSION}^"` fails when there's no prior tag.
-# Without a guard, the empty `prev_major` makes `"X" != ""` true and
-# we'd ping every role on the very first release. Patch-only is the
-# right default and matches the old `grep -B1` behavior.
 
 echo ""
 echo "First-ever release:"
 (
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   cd "$tmp"
+  mkdir -p apps/website/src/content/docs
+  cat > apps/website/src/content/docs/changelog.mdx <<'EOF'
+## v0.1.0 - 2026-04-30
+
+### Features
+- initial ([#1](https://example/1))
+
+---
+EOF
   git init --quiet --initial-branch=main
   git config user.email "test@example.com"; git config user.name "Test"
-  git -c commit.gpgsign=false commit --allow-empty --quiet -m "first"
+  git add -A
+  git -c commit.gpgsign=false commit --quiet -m "first"
   git tag v0.1.0
-  echo "x" > RELEASE_NOTES.md
 
   roles=$(run_notify "$tmp" v0.1.0 | jq -r '.allowed_mentions.roles | join(",")')
   assert_eq "no prior tag → patch only" "PA" "$roles"
 )
 
 # ── Test: payload sets flags=4 (SUPPRESS_EMBEDS) ──
-#
-# Without this Discord generates a preview card for the changelog URL.
-# Asserting on the structured field, not on whether the rendered post
-# happened to suppress it.
 
 echo ""
 echo "Embed suppression:"
 (
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   make_repo "$tmp" v1.5.3 v1.5.4
-  echo "x" > "$tmp/RELEASE_NOTES.md"
 
   flags=$(run_notify "$tmp" v1.5.4 | jq -r '.flags')
   assert_eq "flags=4" "4" "$flags"
 )
 
-# ── Test: empty highlights fall back to the bullet list ──
+# ── Test: empty prose falls back to the bullet list ──
 #
 # A patch release with no curated prose should still tell Discord
 # subscribers what changed. Sending only the changelog link forces
@@ -159,56 +174,136 @@ echo "Embed suppression:"
 # relevant; echoing the auto-generated bullets answers that inline.
 
 echo ""
-echo "Empty highlights falls back to bullets:"
+echo "Empty prose falls back to bullets:"
 (
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   make_repo "$tmp" v1.5.3 v1.5.4
 
-  # No prose above the marker; bullet list below.
-  cat > "$tmp/RELEASE_NOTES.md" <<'EOF'
-<!-- highlights-end -->
+  # Latest entry has no prose paragraph; only bullets.
+  write_changelog "$tmp" <<'EOF'
+## v1.5.4 - 2026-04-30
 
 ### Fixes
 - **(daemon)** stop leaking goroutines on shutdown ([#42](https://example/42))
+
+---
+## v1.5.3 - 2026-04-29
+
+---
 EOF
 
   content=$(run_notify "$tmp" v1.5.4 | jq -r '.content')
-  assert_contains     "bullet text reaches Discord"  "stop leaking goroutines" "$content"
-  assert_contains     "changelog link still present" "gmux.app/changelog"      "$content"
-  # The blank line that sits right after `<!-- highlights-end -->` in
-  # RELEASE_NOTES.md must not propagate to Discord, where it would render
-  # as a double-spaced gap between the version heading and the bullets.
-  assert_not_contains "no triple-newline gap"        $'\n\n\n'             "$content"
+  assert_contains "bullet text reaches Discord"  "stop leaking goroutines" "$content"
+  assert_contains "changelog link still present" "gmux.app/changelog"      "$content"
+  assert_not_contains "no triple-newline gap"    $'\n\n\n'                 "$content"
 )
 
-# When highlights ARE present, the bullet list must NOT also be
-# included; otherwise we'd double up (curated prose + raw bullets).
+# ── Test: prose present suppresses the bullet fallback ──
+#
+# Otherwise we'd double up: curated prose + raw bullets. The Discord
+# message becomes verbose and the link footer feels redundant.
+
 echo ""
-echo "Highlights present suppresses bullet fallback:"
+echo "Prose present suppresses bullet fallback:"
 (
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   make_repo "$tmp" v1.5.3 v1.5.4
 
-  cat > "$tmp/RELEASE_NOTES.md" <<'EOF'
-Hand-written highlight paragraph.
+  write_changelog "$tmp" <<'EOF'
+## v1.5.4 - 2026-04-30
 
-<!-- highlights-end -->
+Hand-written highlight paragraph.
 
 ### Fixes
 - **(daemon)** stop leaking goroutines on shutdown ([#42](https://example/42))
+
+---
+## v1.5.3 - 2026-04-29
+
+---
 EOF
 
   content=$(run_notify "$tmp" v1.5.4 | jq -r '.content')
-  assert_contains     "highlights reach Discord"       "Hand-written highlight"  "$content"
+  assert_contains     "prose reaches Discord"          "Hand-written highlight"  "$content"
   assert_not_contains "bullets do not duplicate prose" "stop leaking goroutines" "$content"
 )
 
-# ── Test: long summaries truncate at a paragraph break, not in the middle ──
+# ── Test: a literal `---` inside prose survives the prose/bullet split ──
 #
-# Constructs a summary with a clear paragraph break under the 2000-char
-# limit and a long second paragraph that pushes the total over the
-# limit. The cut must land in (or after) paragraph B, leaving paragraph
-# A intact, and the changelog link must survive.
+# The split keys off `### ` (the first group heading), not on `---`.
+# So horizontal rules in user prose don't truncate the Discord summary.
+
+echo ""
+echo "Horizontal rule in prose survives:"
+(
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp" v1.5.3 v1.5.4
+
+  write_changelog "$tmp" <<'EOF'
+## v1.5.4 - 2026-04-30
+
+Theme A summary.
+
+---
+
+Theme B summary.
+
+### Fixes
+- something ([#1](https://example/1))
+
+---
+## v1.5.3 - 2026-04-29
+
+---
+EOF
+
+  content=$(run_notify "$tmp" v1.5.4 | jq -r '.content')
+  assert_contains     "first half of prose survives"  "Theme A summary" "$content"
+  assert_contains     "second half of prose survives" "Theme B summary" "$content"
+  assert_not_contains "bullets did not leak"          "something"       "$content"
+)
+
+# ── Test: trailing `---` separator does not leak into the summary ──
+#
+# Regression: an earlier release.yml awk extracted everything up to the
+# next `## v` heading without stripping the entry's trailing `---`,
+# which surfaced as a horizontal rule in the rendered output.
+# `extract-release-notes.sh` (used by both this script and release.yml)
+# now strips it; this pins that contract from the Discord side too.
+
+echo ""
+echo "Trailing entry separator stripped:"
+(
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp" v1.5.3 v1.5.4
+
+  write_changelog "$tmp" <<'EOF'
+## v1.5.4 - 2026-04-30
+
+### Fixes
+- placeholder ([#1](https://example/1))
+
+---
+## v1.5.3 - 2026-04-29
+
+---
+EOF
+
+  content=$(run_notify "$tmp" v1.5.4 | jq -r '.content')
+  # The line right above the changelog footer must not be a bare `---`
+  # (which Discord renders as an `<hr>` between the bullets and the
+  # changelog link). Use a regex on the raw content to guard against
+  # both LF and CRLF line endings.
+  if [[ "$content" =~ $'\n---\n' ]] || [[ "$content" =~ $'\n---\r\n' ]]; then
+    echo "  ✗ trailing --- leaked into Discord summary"
+    bump_score fail
+  else
+    echo "  ✓ trailing --- not in Discord summary"
+    bump_score pass
+  fi
+)
+
+# ── Test: long summaries truncate at a paragraph break, not in the middle ──
 
 echo ""
 echo "Truncation:"
@@ -217,12 +312,18 @@ echo "Truncation:"
   make_repo "$tmp" v1.5.3 v1.5.4
 
   {
+    echo "## v1.5.4 - 2026-04-30"
+    echo ""
     for _ in {1..30}; do echo -n "Lorem ipsum dolor sit amet consectetur adipiscing elit. "; done
     echo; echo
     for _ in {1..30}; do echo -n "Second paragraph filler text appears here. "; done
     echo
-    echo "<!-- highlights-end -->"
-  } > "$tmp/RELEASE_NOTES.md"
+    echo ""
+    echo "### Fixes"
+    echo "- placeholder ([#1](https://example/1))"
+    echo ""
+    echo "---"
+  } > "$tmp/apps/website/src/content/docs/changelog.mdx"
 
   content=$(run_notify "$tmp" v1.5.4 | jq -r '.content')
   assert_le "under Discord's 2000-char limit" 2000 "${#content}"

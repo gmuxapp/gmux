@@ -1,0 +1,154 @@
+name: Regen release PR
+
+# Single source of truth for release notes is the release/next PR body.
+# This workflow keeps `release/next` in sync with that body and with
+# `main` by regenerating the changelog entry, the next-version
+# marker, and the bullets section of the PR body on every relevant
+# event.
+#
+# Triggers:
+#
+#   - push to main: bullets need refreshing because new commits
+#     landed; existing prose (if any) is preserved from the open
+#     release/next PR body.
+#
+#   - pull_request opened/edited/synchronize for any PR to main: when
+#     the PR is `release/next`, regen so the changelog reflects the
+#     latest prose; for other PRs, the workflow is a no-op but still
+#     reports the required `regen` status check so branch protection
+#     stays green.
+#
+#   - manual: `workflow_dispatch`.
+#
+# Loop avoidance: the workflow's own peter-evans force-push fires
+# `pull_request.synchronize`, and its own PR body edit fires
+# `pull_request.edited`. We skip the regen work for events sent by
+# the github-actions bot, but still let the job complete successfully
+# so the status check goes green on the new SHA.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+# Single concurrency group across every trigger. Push-to-main and a
+# concurrent PR-body edit would otherwise run in different groups and
+# both call peter-evans, racing on the force-push to release/next.
+# Serialising all regen runs is cheap (the skip path completes in
+# seconds) and removes that whole class of bug.
+concurrency:
+  group: regen
+  cancel-in-progress: false
+
+jobs:
+  regen:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write # for `gh workflow run` to dispatch pr-build
+    steps:
+      - name: Identify event
+        id: event
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EVENT: ${{ github.event_name }}
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          # Three operating modes:
+          #   skip   - non-applicable PR, no work, status check passes.
+          #   noop   - applicable but bot-triggered, no work, status check passes.
+          #   regen  - do the actual work.
+          if [[ "$EVENT" == "pull_request" && "$HEAD_REF" != "release/next" ]]; then
+            mode=skip
+          elif [[ "$SENDER" == "github-actions[bot]" ]]; then
+            mode=noop
+          else
+            mode=regen
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode"
+
+      - if: steps.event.outputs.mode != 'regen'
+        run: echo "Nothing to do; reporting status check as green."
+
+      - if: steps.event.outputs.mode == 'regen'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          # Always check out main: version.sh's bullets must reflect
+          # commits on main, not whatever pull_request ref the event
+          # gave us, and peter-evans should base release/next on main.
+          ref: main
+          fetch-depth: 0
+
+      - if: steps.event.outputs.mode == 'regen'
+        name: Install git-cliff
+        uses: taiki-e/install-action@97a5807a604e12de3a13b52d868ebecaeeea757c # v2.75.4
+        with:
+          tool: git-cliff
+
+      - if: steps.event.outputs.mode == 'regen'
+        name: Read prose from existing release/next PR
+        id: prose
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # If the release PR already exists, extract human-edited
+          # prose from its body. If it doesn't, prose is empty.
+          body=$(gh pr view release/next --json body --jq '.body' 2>/dev/null || true)
+          if [[ -z "$body" ]]; then
+            prose=""
+          else
+            prose=$(printf '%s' "$body" | bash .github/workflows/scripts/version.sh --extract-prose)
+          fi
+          {
+            echo "value<<PROSE_EOF"
+            printf '%s\n' "$prose"
+            echo "PROSE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - if: steps.event.outputs.mode == 'regen'
+        name: Regenerate changelog and PR body
+        id: regen
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PROSE: ${{ steps.prose.outputs.value }}
+        run: |
+          output=$(bash .github/workflows/scripts/version.sh)
+          version=$(echo "$output" | head -1 | awk '{print $1}')
+          if [[ -z "$version" ]]; then
+            echo "No release needed."
+            exit 0
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - if: steps.event.outputs.mode == 'regen' && steps.regen.outputs.version != ''
+        name: Create or update release PR
+        id: create-pr
+        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8
+        with:
+          commit-message: "release: ${{ steps.regen.outputs.version }}"
+          title: "release: ${{ steps.regen.outputs.version }}"
+          body-path: pr-body.md
+          branch: release/next
+          delete-branch: true
+          # `pr-body.md` is the PR body for this run, regenerated each
+          # time. Don't commit it; only the changelog and the
+          # next-version marker belong in the release commit.
+          add-paths: |
+            apps/website/src/content/docs/changelog.mdx
+            .github/release-target
+
+      - if: steps.event.outputs.mode == 'regen' && steps.create-pr.outputs.pull-request-number != ''
+        name: Trigger PR build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run pr-build.yml \
+            --ref release/next \
+            -f pr_number=${{ steps.create-pr.outputs.pull-request-number }}
