@@ -38,6 +38,21 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ---
 
+## v1.5.0 - 2026-05-04
+
+Sessions now keep their titles and exit state across daemon restarts. It's groundwork for the full scrollback persistence landing next release. The web terminal also got cleaner copy-paste: copying no longer drags trailing whitespace along, and pasting now handles images and other binary data.
+
+### Features
+- **(daemon)** persist session metadata across gmuxd restarts ([#185](https://github.com/gmuxapp/gmux/pull/185))
+- image and binary clipboard paste into sessions ([#190](https://github.com/gmuxapp/gmux/pull/190))
+
+### Fixes
+- **(web)** trim trailing whitespace and pad on terminal copy ([#189](https://github.com/gmuxapp/gmux/pull/189))
+- **(web)** only report navigation success once project loaded ([#196](https://github.com/gmuxapp/gmux/pull/196))
+- **(web)** preload terminal font before mounting xterm ([#192](https://github.com/gmuxapp/gmux/pull/192))
+- **(daemon)** stop leaking unix-socket FDs in discovery loop ([#198](https://github.com/gmuxapp/gmux/pull/198))
+
+---
 ## v1.4.0 - 2026-04-26
 
 The daemon no longer rescans every adapter session file every 30
