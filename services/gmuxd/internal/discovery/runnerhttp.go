@@ -1,6 +1,8 @@
-// Package discovery — runner HTTP-over-unix-socket helper.
+package discovery
+
+// runnerhttp.go — HTTP-over-AF_UNIX helper for talking to runners.
 //
-// gmuxd talks to each runner over a per-session AF_UNIX socket using
+// gmuxd talks to each runner over a per-session Unix socket using
 // HTTP. Every call site here is short: a single request and
 // response, then done. AF_UNIX dials cost ~10 µs of kernel work
 // (no network round-trip to amortize), so connection pooling earns
@@ -13,13 +15,12 @@
 // idle pool, so a per-call transport has nothing to leak when it
 // goes out of scope.
 //
-// This package exists because three call sites previously
-// open-coded the same &http.Transport{DialContext: unix-dial}
-// closure and discarded the transport after each request. Closing
-// the response body returned the connection to the abandoned
-// transport's idle pool instead of closing the FD; on a busy
-// daemon this exhausted RLIMIT_NOFILE within hours. See #197.
-package discovery
+// This file exists because three call sites previously open-coded
+// the same &http.Transport{DialContext: unix-dial} closure and
+// discarded the transport after each request. Closing the response
+// body returned the connection to the abandoned transport's idle
+// pool instead of closing the FD; on a busy daemon this exhausted
+// RLIMIT_NOFILE within hours. See #197.
 
 import (
 	"context"
