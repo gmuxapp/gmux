@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# Compute the next release version from unreleased commits, update
-# the changelog, and emit release notes for the release PR.
+# Compute the next release version and render release-PR materials.
+#
+# The release PR body is the single source of truth for release prose.
+# Humans edit the prose between the `<!-- prose-start -->` /
+# `<!-- prose-end -->` markers in the PR body. The release workflow
+# extracts that prose and passes it to this script via $PROSE; this
+# script then bakes the prose + auto-generated bullets into
+# `changelog.mdx` and emits a fresh PR body for the workflow to apply
+# back to the PR.
 #
 # Commit type → section → version bump:
 #
@@ -16,86 +23,114 @@
 # Refactor, chore, ci, test, style, build, and revert are skipped
 # entirely. See cliff.toml for the full parser rules.
 #
-# Optional prose for the release goes in RELEASE_HIGHLIGHTS.md at the
-# repo root. Its contents are injected into the changelog section
-# between the version heading and the grouped bullet lists. The file
-# is cleared automatically after each release.
+# Inputs (env):
+#   PROSE         optional release prose (markdown). When empty, the
+#                 PR body's prose section gets a hint comment and the
+#                 changelog entry has no prose paragraph.
+#   PR_BODY_OUT   path to write the composed PR body to. Defaults to
+#                 `pr-body.md` at the repo root. Not committed; the
+#                 caller passes it to `gh pr edit --body-file` or
+#                 peter-evans `add-paths` it out of the commit.
+#   GITHUB_TOKEN  used to enrich commits with PR links via the GitHub
+#                 GraphQL API. Required in CI.
 #
 # Outputs:
-#   stdout         → the next version tag (e.g. v1.2.0), followed by
-#                    dry-run previews if --dry-run is set
-#   changelog.mdx  → new section inserted above the latest existing
-#                    `## v…` heading (unless --dry-run)
-#   RELEASE_NOTES.md → highlights + separator + bullets for the
-#                      release PR body (unless --dry-run)
-#
-# RELEASE_HIGHLIGHTS.md is the single source of truth for prose. It is
-# *not* cleared by this script. The release workflow clears it via
-# `--clear-highlights` after a successful release ships, so it stays
-# editable on the open release PR until the moment of release.
+#   stdout                 the next version tag (e.g. v1.2.0), or
+#                          nothing if there are no releasable commits.
+#                          On --dry-run, the version is followed by a
+#                          preview of every artifact.
+#   $CHANGELOG             new section inserted above the latest
+#                          existing `## v…` heading.
+#   .github/release-target one line: the next version tag. Gives the
+#                          release commit a real diff to anchor on.
+#   $PR_BODY_OUT           full PR body ready to paste into
+#                          `release/next`.
 #
 # Usage:
-#   .github/workflows/scripts/version.sh                    # apply changes
-#   .github/workflows/scripts/version.sh --dry-run          # preview only
-#   .github/workflows/scripts/version.sh --clear-highlights # reset stub only
+#   .github/workflows/scripts/version.sh             # apply changes
+#   .github/workflows/scripts/version.sh --dry-run   # preview only
+
 set -euo pipefail
 trap 'echo "error: ${BASH_SOURCE}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 CHANGELOG="$ROOT/apps/website/src/content/docs/changelog.mdx"
-HIGHLIGHTS="$ROOT/RELEASE_HIGHLIGHTS.md"
+RELEASE_TARGET="$ROOT/.github/release-target"
+PR_BODY_OUT="${PR_BODY_OUT:-$ROOT/pr-body.md}"
+PROSE="${PROSE:-}"
 
 DRY_RUN=false
-CLEAR_ONLY=false
+EXTRACT_PROSE=false
 case "${1:-}" in
   --dry-run) DRY_RUN=true ;;
-  --clear-highlights) CLEAR_ONLY=true ;;
+  --extract-prose) EXTRACT_PROSE=true ;;
   "") ;;
   *) echo "unknown flag: $1" >&2; exit 2 ;;
 esac
 
-clear_highlights() {
-  cat > "$HIGHLIGHTS" <<'STUB'
-<!--
-Optional prose for the next release. Edit this file to add a high-level
-summary, topic paragraphs, or migration notes. Its content is injected
-into the changelog section between the version heading and the grouped
-bullet lists.
+# ── --extract-prose: parse a PR body from stdin, print the prose ──
+#
+# Reads a PR body on stdin, prints the content between the
+# `<!-- prose-start -->` and `<!-- prose-end -->` markers, with HTML
+# comments stripped and surrounding blank lines trimmed. Used by the
+# release workflow to feed $PROSE back into a regen run.
+#
+# A naive `sed '/<!--/,/-->/d'` swallows everything after an inline
+# `<!-- ... -->` because sed can't match start and end on the same
+# line. The awk helper below tracks comment state correctly.
 
-This file is the single source of truth for release prose: edit it on
-`main` before merging the PR that ships the noteworthy change, or on
-the `release/next` branch up until the release ships (then run
-`scripts/regen-release-notes.sh` to refresh the generated files).
-
-The release workflow clears this file automatically after a successful
-release. Leave empty for releases that don't need prose; the
-auto-generated bullet list is enough for patch-only releases.
-
-Format: plain markdown. Supports headings, paragraphs, and lists.
-Example:
-
-    Peers now automatically reconnect after system suspend, no restart
-    needed.
-
-    ### Project matching
-    `projects.json` replaces separate `remote` and `paths` fields with a
-    unified `match` array.
--->
-STUB
+strip_html_comments() {
+  awk '
+    {
+      line = $0
+      out = ""
+      while (length(line) > 0) {
+        if (in_comment) {
+          end = index(line, "-->")
+          if (end == 0) { line = ""; break }
+          line = substr(line, end + 3)
+          in_comment = 0
+        } else {
+          start = index(line, "<!--")
+          if (start == 0) { out = out line; line = ""; break }
+          out = out substr(line, 1, start - 1)
+          line = substr(line, start + 4)
+          in_comment = 1
+        }
+      }
+      if (!in_comment || length(out) > 0) print out
+    }
+  '
 }
 
-if $CLEAR_ONLY; then
-  clear_highlights
-  echo "Cleared $HIGHLIGHTS" >&2
+trim_blanks() {
+  awk '
+    { lines[NR] = $0 }
+    END {
+      first = 1
+      while (first <= NR && lines[first] ~ /^[[:space:]]*$/) first++
+      last = NR
+      while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+      for (i = first; i <= last; i++) print lines[i]
+    }
+  '
+}
+
+if $EXTRACT_PROSE; then
+  awk '
+    /<!-- prose-start -->/ { flag = 1; next }
+    /<!-- prose-end -->/   { flag = 0 }
+    flag
+  ' | strip_html_comments | trim_blanks
   exit 0
 fi
 
-# ── Skip release commits ──
+# ── Skip release-flow commits ──
 #
-# Prevents the workflow from re-triggering after merging a release PR.
-# Release commits are generated by peter-evans/create-pull-request with
-# the exact `release: vX.Y.Z` subject line (and a `(#N)` suffix once
-# rebase-merged).
+# Prevents the workflow from re-triggering after merging a release PR
+# or after a `chore(release):` follow-up. Release commits are produced
+# by peter-evans/create-pull-request with the exact `release: vX.Y.Z`
+# subject line (and a `(#N)` suffix once rebase-merged).
 
 head_msg=$(git log -1 --format='%s')
 if [[ "$head_msg" =~ ^release:\ v[0-9] ]]; then
@@ -116,11 +151,6 @@ fi
 # commit exists (including docs-only releases). We only release when
 # there's at least one commit in a Features, Fixes, Breaking, or
 # Security group.
-#
-# git-cliff exits 0 with `[]` on stdout when there are no unreleased
-# commits (logging a warning to stderr). Real failures (missing
-# binary, broken cliff.toml) surface via `set -e` because the command
-# substitution inherits the exit status.
 
 context=$(git-cliff --unreleased --bump --context)
 releasable_count=$(echo "$context" | jq '
@@ -145,13 +175,6 @@ new_version=$(echo "$context" | jq -r '.[0].version')
 # (only squash merges get that). We use the GitHub API to resolve each
 # commit's PR number and inject markdown links into the raw_message
 # before rendering.
-#
-# Steps:
-#   1. For each commit SHA in the context, query /commits/{sha}/pulls
-#   2. Append ([#N](url)) to the subject line of raw_message
-#   3. Render from the enriched context via --from-context
-#
-# Commits that already carry a PR reference (squash merges) are skipped.
 
 enrich_context() {
   local ctx_file="$1"
@@ -163,10 +186,6 @@ enrich_context() {
   fi
 
   if ! $have_gh; then
-    # In CI we expect enrichment to work; bail loudly so a bad token
-    # never silently ships a changelog with bare commit subjects.
-    # Locally (and in test runs) we silently fall back so iteration
-    # without `gh` keeps working.
     if [[ "${CI:-}" == "true" ]]; then
       echo "error: GITHUB_TOKEN missing or gh not installed in CI; cannot enrich PR links" >&2
       exit 1
@@ -175,10 +194,6 @@ enrich_context() {
     return
   fi
 
-  # Single GraphQL request resolves every commit's associated PR in one
-  # round trip, so a release with N commits costs 1 API call instead of
-  # N. GraphQL aliases must start with a letter, so we prefix each SHA
-  # with `c_`.
   local shas
   shas=$(jq -r '.[0].commits[].id' "$ctx_file")
   if [[ -z "$shas" ]]; then
@@ -232,77 +247,21 @@ enrich_context "$ctx_input" "$ctx_enriched"
 section=$(git-cliff --from-context "$ctx_enriched")
 rm -f "$ctx_input" "$ctx_enriched"
 
-# ── Helper: strip leading and trailing blank lines ──
-
-trim_blanks() {
-  awk '
-    { lines[NR] = $0 }
-    END {
-      first = 1
-      while (first <= NR && lines[first] ~ /^[[:space:]]*$/) first++
-      last = NR
-      while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
-      for (i = first; i <= last; i++) print lines[i]
-    }
-  '
-}
-
-# ── Read highlights (optional prose for the release) ──
-
-# Strip HTML comment blocks (single- or multi-line) from the highlights
-# file. A naive `sed '/<!--/,/-->/d'` swallows everything after an
-# inline `<!-- ... -->` because sed won't match start and end on the
-# same line. This awk version tracks comment state correctly.
-strip_html_comments() {
-  awk '
-    {
-      line = $0
-      out = ""
-      while (length(line) > 0) {
-        if (in_comment) {
-          end = index(line, "-->")
-          if (end == 0) { line = ""; break }
-          line = substr(line, end + 3)
-          in_comment = 0
-        } else {
-          start = index(line, "<!--")
-          if (start == 0) { out = out line; line = ""; break }
-          out = out substr(line, 1, start - 1)
-          line = substr(line, start + 4)
-          in_comment = 1
-        }
-      }
-      if (!in_comment || length(out) > 0) print out
-    }
-  '
-}
-
-highlights=""
-if [[ -s "$HIGHLIGHTS" ]]; then
-  highlights=$(strip_html_comments < "$HIGHLIGHTS" | trim_blanks)
-fi
-
-# ── Compose RELEASE_NOTES.md ──
+# ── Split git-cliff output into heading and bullets ──
 #
-# Format:
+# git-cliff's body template emits:
 #
-#   <highlights prose>
-#
-#   <!-- highlights-end -->
+#   ## vX.Y.Z - 2026-04-10
 #
 #   ### Features
 #   - ...
 #
-#   ### Fixes
-#   - ...
+#   ---
 #
-# The `<!-- highlights-end -->` marker is invisible in rendered
-# markdown (so GoReleaser's GitHub Release body and the release PR
-# body look clean), and `notify-discord.sh` extracts everything before
-# it as the Discord summary. Unlike a literal `---`, an HTML comment
-# never collides with user prose (horizontal rules, YAML frontmatter).
+# Heading (line 1) goes verbatim into changelog.mdx. The bullets
+# (everything between the heading and the `---`) are reused in both
+# the changelog entry and the PR body.
 
-# Reuse git-cliff's heading line verbatim so we pick up the date suffix.
 heading=$(echo "$section" | sed -n '/^## v/{p;q;}')
 bullets=$(echo "$section" | awk '
   /^## v/ { in_section = 1; next }
@@ -310,19 +269,13 @@ bullets=$(echo "$section" | awk '
   in_section { print }
 ' | trim_blanks)
 
-release_notes=""
-if [[ -n "$highlights" ]]; then
-  release_notes+="${highlights}"$'\n\n'
-fi
-release_notes+="<!-- highlights-end -->"$'\n\n'"${bullets}"
+prose_trimmed=$(printf '%s' "$PROSE" | trim_blanks)
 
 # ── Compose changelog.mdx entry ──
 #
-# Format (matches the historical layout):
-#
 #   ## vX.Y.Z - 2026-04-10
 #
-#   <highlights prose>
+#   <prose>
 #
 #   ### Features
 #   - ...
@@ -330,10 +283,42 @@ release_notes+="<!-- highlights-end -->"$'\n\n'"${bullets}"
 #   ---
 
 changelog_entry="${heading}"$'\n'
-if [[ -n "$highlights" ]]; then
-  changelog_entry+=$'\n'"${highlights}"$'\n'
+if [[ -n "$prose_trimmed" ]]; then
+  changelog_entry+=$'\n'"${prose_trimmed}"$'\n'
 fi
 changelog_entry+=$'\n'"${bullets}"$'\n\n'"---"
+
+# ── Compose release PR body ──
+#
+# The body is the human-editable surface. Reviewers edit prose between
+# the `<!-- prose-start -->` markers; everything else is regenerated by
+# the workflow on every push to main and every PR-body edit.
+#
+# When prose is empty, the marker block holds only a hint comment, so
+# editors discover the right place to type without seeing placeholder
+# prose leak into the changelog.
+
+prose_block=""
+if [[ -n "$prose_trimmed" ]]; then
+  prose_block="${prose_trimmed}"
+else
+  prose_block="<!-- Optional: add release prose here. Headings, paragraphs, lists. Leave empty for patch-only releases. -->"
+fi
+
+pr_body=$(cat <<EOF
+Release **${new_version}**.
+
+Merging creates the \`${new_version}\` tag and triggers the release build.
+
+<!-- prose-start -->
+${prose_block}
+<!-- prose-end -->
+
+<!-- bullets-start: do not edit, regenerated from commits -->
+${bullets}
+<!-- bullets-end -->
+EOF
+)
 
 # ── Output ──
 
@@ -344,20 +329,19 @@ if $DRY_RUN; then
   echo "── changelog.mdx entry ──"
   echo "$changelog_entry"
   echo ""
-  echo "── RELEASE_NOTES.md ──"
-  echo "$release_notes"
+  echo "── PR body ──"
+  echo "$pr_body"
   exit 0
 fi
 
-# ── Write RELEASE_NOTES.md ──
+# Write the next-version marker. Touching this file gives the release
+# commit a non-empty diff so peter-evans can attach it to a PR.
+echo "$new_version" > "$RELEASE_TARGET"
 
-printf '%s\n' "$release_notes" > "$ROOT/RELEASE_NOTES.md"
+# Write PR body for the caller to apply. Not tracked in git.
+printf '%s\n' "$pr_body" > "$PR_BODY_OUT"
 
-# ── Update changelog.mdx ──
-#
-# Insert new version section before the first "## v" heading.
-# If no such heading exists, append to the end.
-
+# Insert the new section above the most recent existing entry.
 if grep -q '^## v[0-9]' "$CHANGELOG"; then
   awk -v entry="$changelog_entry" '
     !inserted && /^## v[0-9]/ {
@@ -372,8 +356,6 @@ else
 fi
 mv "$CHANGELOG.tmp" "$CHANGELOG"
 
-# RELEASE_HIGHLIGHTS.md is intentionally NOT cleared here. It stays
-# editable on the release/next branch until the release actually
-# ships; release.yml runs `version.sh --clear-highlights` afterward.
-
 echo "Updated $CHANGELOG" >&2
+echo "Updated $RELEASE_TARGET" >&2
+echo "Wrote $PR_BODY_OUT" >&2

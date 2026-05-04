@@ -8,10 +8,11 @@
 #     releasable commits)
 #   - The bump version that ends up on stdout (single source of truth
 #     for the rest of the release pipeline)
-#   - Orchestration: reading RELEASE_HIGHLIGHTS.md, writing
-#     RELEASE_NOTES.md and changelog.mdx, optional --clear-highlights
-#   - Highlights parsing edge cases (HTML comments, the
-#     <!-- highlights-end --> sentinel, horizontal-rule survival)
+#   - Orchestration: reading $PROSE, writing changelog.mdx, the
+#     next-version marker, and the PR body
+#   - Prose extraction (--extract-prose) from a PR body on stdin
+#   - PR body composition (prose markers, bullets markers,
+#     placeholder hint when prose is empty)
 #
 # Tests are organised around those behaviours. A small smoke test
 # pins that cliff.toml still produces every group heading we expect,
@@ -68,9 +69,9 @@ assert_not_contains() {
 }
 
 # Lay out a temp repo that mirrors the bits of the gmux tree version.sh
-# touches: cliff.toml at the root, the changelog under apps/website/...,
-# and a stub RELEASE_HIGHLIGHTS.md. Tag v1.0.0 on the initial commit so
-# git-cliff's --bump always has a baseline.
+# touches: cliff.toml at the root, the changelog under apps/website/...
+# Tag v1.0.0 on the initial commit so git-cliff's --bump always has a
+# baseline.
 make_repo() {
   local tmp="$1"
   mkdir -p "$tmp/.github/workflows/scripts"
@@ -93,10 +94,6 @@ Initial release.
 ---
 EOF
 
-  cat > "$tmp/RELEASE_HIGHLIGHTS.md" <<'EOF'
-<!-- stub -->
-EOF
-
   (
     cd "$tmp"
     git init --quiet --initial-branch=main
@@ -109,8 +106,7 @@ EOF
 }
 
 # Unset CI so version.sh's "fail loudly in CI when GITHUB_TOKEN missing"
-# branch doesn't trip the test runner. Real release runs go through the
-# CI=true path.
+# branch doesn't trip the test runner.
 run_script() {
   local tmp="$1" arg="${2:-}"
   (
@@ -119,15 +115,27 @@ run_script() {
   )
 }
 
-# Add an empty commit and return without noise.
+# Extract just the version tag from a run, ignoring noise like
+# git-cliff's "a new version is available" notice on stderr.
+run_version() {
+  run_script "$@" | grep -m1 -E '^v[0-9]' || true
+}
+
+# Run with a custom $PROSE. Useful for asserting that prose flows into
+# the right artifacts.
+run_with_prose() {
+  local tmp="$1" prose="$2"
+  (
+    cd "$tmp"
+    CI= PROSE="$prose" bash .github/workflows/scripts/version.sh 2>&1
+  )
+}
+
 commit() {
   git -c commit.gpgsign=false commit --allow-empty --quiet -m "$1"
 }
 
 # ── Test: docs / chore alone do not trigger a release ──
-#
-# `releasable_count` filters to Features / Fixes / Breaking / Security.
-# A docs-only push must be a no-op so the workflow doesn't open a PR.
 
 echo "No releasable commits:"
 (
@@ -141,13 +149,14 @@ echo "No releasable commits:"
 
   assert_contains "exits with 'no releasable commits'" "No releasable commits" "$output"
   assert_not_contains "changelog.mdx untouched"        "## v1.0.1"             "$changelog"
+  if [[ -e .github/release-target ]]; then
+    echo "  ✗ release-target should not be created on a no-op run"; bump_score fail
+  else
+    echo "  ✓ release-target absent on a no-op run"; bump_score pass
+  fi
 )
 
 # ── Test: HEAD = "release: vX.Y.Z" triggers loop-prevention skip ──
-#
-# Plus the regression that subjects merely *containing* "release/next"
-# (e.g. a fix mentioning the branch name) are NOT treated as release
-# commits.
 
 echo ""
 echo "Release commit detection:"
@@ -164,15 +173,11 @@ echo "Release commit detection:"
   make_repo "$tmp"; cd "$tmp"
   commit "fix: use fixed release/next branch (#13)"
 
-  version=$(run_script "$tmp" --dry-run | head -1)
+  version=$(run_version "$tmp" --dry-run)
   assert_eq "subject containing 'release/next' still bumps" "v1.0.1" "$version"
 )
 
 # ── Test: bump level matches the highest commit type ──
-#
-# version.sh's job is to take git-cliff's bump output and surface it
-# verbatim on stdout. Cover one commit per type, plus the "highest
-# wins" interaction.
 
 echo ""
 echo "Bump level:"
@@ -188,7 +193,7 @@ do
     tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
     make_repo "$tmp"; cd "$tmp"
     commit "$msg"
-    actual=$(run_script "$tmp" --dry-run | head -1)
+    actual=$(run_version "$tmp" --dry-run)
     assert_eq "${msg%%:*} → $expected" "$expected" "$actual"
   )
 done
@@ -198,21 +203,11 @@ done
   commit "fix: small (#1)"
   commit "feat: bigger (#2)"
   commit "fix: another (#3)"
-  actual=$(run_script "$tmp" --dry-run | head -1)
+  actual=$(run_version "$tmp" --dry-run)
   assert_eq "feat among fixes wins minor bump" "v1.1.0" "$actual"
 )
 
 # ── Test: `(release)`-scoped commits are hidden from the changelog ──
-#
-# Anything in the `(release)` scope is internal release-flow plumbing
-# (workflow tweaks, notify-discord polish, cliff.toml itself) and
-# doesn't belong in user-facing release notes. cliff.toml's parser
-# skips them; this test pins both halves of that contract:
-#
-#   - skipped from the changelog when mixed with user-visible commits
-#   - don't count as releasable on their own (no-op release)
-#   - but breaking variants (`!:`) still surface, since users do need
-#     to know about breaking changes to the maintainer-facing flow
 
 echo ""
 echo "(release)-scoped commits skipped from changelog:"
@@ -250,7 +245,7 @@ echo "breaking (release) commit still surfaces:"
   make_repo "$tmp"; cd "$tmp"
   commit "feat(release)!: rename WEBHOOK_URL env var (#1)"
 
-  version=$(run_script "$tmp" --dry-run | head -1)
+  version=$(run_version "$tmp" --dry-run)
   assert_eq "breaking release commit bumps major" "v2.0.0" "$version"
 
   run_script "$tmp" >/dev/null
@@ -259,11 +254,7 @@ echo "breaking (release) commit still surfaces:"
   assert_contains "breaking release commit body present"        "rename WEBHOOK_URL" "$changelog"
 )
 
-# ── Test: cliff.toml smoke test (every expected group heading appears) ──
-#
-# Pin that cliff.toml still routes the four commit types we care about
-# into the four group headings notify-discord.sh and the changelog
-# rely on. We don't assert ordering or per-bullet wording.
+# ── Test: cliff.toml smoke test ──
 
 echo ""
 echo "cliff.toml renders all expected group headings:"
@@ -285,129 +276,158 @@ echo "cliff.toml renders all expected group headings:"
   assert_contains "Fixes heading"    "### Fixes"    "$changelog"
 )
 
-# ── Test: highlights flow into RELEASE_NOTES.md and changelog.mdx ──
-#
-# This is version.sh's main orchestration responsibility. The
-# <!-- highlights-end --> marker in RELEASE_NOTES.md is what
-# notify-discord.sh keys off to extract the Discord summary; if the
-# marker drifts or the highlights aren't injected, Discord stops
-# announcing prose. The highlights file itself must survive (single
-# source of truth; release.yml clears it post-release).
+# ── Test: $PROSE flows into changelog.mdx and PR body ──
 
 echo ""
-echo "Highlights integration:"
+echo "Prose integration:"
 (
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   make_repo "$tmp"; cd "$tmp"
   commit "feat: dark mode (#50)"
-  cat > RELEASE_HIGHLIGHTS.md <<'EOF'
-Major theme overhaul.
-EOF
 
-  run_script "$tmp" >/dev/null
+  run_with_prose "$tmp" "Major theme overhaul." >/dev/null
   changelog=$(cat apps/website/src/content/docs/changelog.mdx)
-  release_notes=$(cat RELEASE_NOTES.md)
-  highlights_after=$(cat RELEASE_HIGHLIGHTS.md)
+  pr_body=$(cat pr-body.md)
 
-  assert_contains "highlights reach changelog"      "Major theme overhaul"    "$changelog"
-  assert_contains "highlights reach release notes"  "Major theme overhaul"    "$release_notes"
-  assert_contains "Discord-extraction marker"       "<!-- highlights-end -->" "$release_notes"
-  assert_contains "highlights file preserved"       "Major theme overhaul"    "$highlights_after"
-
-  # The Discord summary is everything BEFORE the marker. Bullets must
-  # not bleed into it (they belong below the marker, and the link
-  # already says "see the changelog").
-  discord=$(sed '/<!-- highlights-end -->/,$d' RELEASE_NOTES.md)
-  assert_not_contains "Discord summary excludes bullets" "dark mode" "$discord"
+  assert_contains "prose reaches changelog"     "Major theme overhaul" "$changelog"
+  assert_contains "prose reaches PR body"       "Major theme overhaul" "$pr_body"
+  assert_contains "PR body has prose-start marker" "<!-- prose-start -->" "$pr_body"
+  assert_contains "PR body has prose-end marker"   "<!-- prose-end -->"   "$pr_body"
+  assert_contains "PR body has bullets markers"    "<!-- bullets-start"   "$pr_body"
+  assert_contains "PR body shows next version"     "Release **v1.1.0**"   "$pr_body"
 )
 
-# ── Test: --clear-highlights resets the file to a stub ──
+# ── Test: empty prose puts the hint comment in the PR body, not the changelog ──
 #
-# Invoked by release.yml after a successful release. Without this
-# mode, RELEASE_HIGHLIGHTS.md would carry the previous release's
-# prose into the next cycle.
+# A first-time editor needs a visible cue ("type prose here"); the
+# changelog page should not show that cue.
 
 echo ""
-echo "--clear-highlights:"
-(
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-  make_repo "$tmp"
-  echo "Stale prose from a shipped release." > "$tmp/RELEASE_HIGHLIGHTS.md"
-
-  run_script "$tmp" --clear-highlights >/dev/null
-  highlights_after=$(cat "$tmp/RELEASE_HIGHLIGHTS.md")
-  assert_not_contains "stale prose removed" "Stale prose" "$highlights_after"
-)
-
-# ── Test: highlights HTML-comment stripping ──
-#
-# Regression test for a sed-range bug: `sed '/<!--/,/-->/d'` swallows
-# everything after an inline `<!-- note -->` because sed can't match
-# start and end on the same line. version.sh uses a stateful awk
-# helper; pin that it handles both inline and multi-line comments.
-
-echo ""
-echo "Highlights HTML comments:"
+echo "Empty prose:"
 (
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   make_repo "$tmp"; cd "$tmp"
-  commit "feat: thing (#90)"
-  cat > RELEASE_HIGHLIGHTS.md <<'EOF'
+  commit "fix: minor (#10)"
+
+  run_script "$tmp" >/dev/null
+  changelog=$(cat apps/website/src/content/docs/changelog.mdx)
+  pr_body=$(cat pr-body.md)
+
+  assert_contains     "PR body shows the hint" "add release prose here" "$pr_body"
+  assert_not_contains "changelog has no hint"  "add release prose here" "$changelog"
+)
+
+# ── Test: --extract-prose round-trips PROSE through a PR body ──
+#
+# The workflow reads the open PR body, extracts prose, and feeds it
+# back as PROSE. This pins that round-trip is lossless for plain
+# markdown and that the empty-prose hint is treated as empty (not as
+# literal prose).
+
+echo ""
+echo "--extract-prose:"
+(
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"; cd "$tmp"
+  commit "feat: thing (#42)"
+
+  # Round-trip 1: real prose survives.
+  run_with_prose "$tmp" "Real prose paragraph. Multi-sentence. With detail." >/dev/null
+  pr_body=$(cat pr-body.md)
+  extracted=$(printf '%s' "$pr_body" | bash .github/workflows/scripts/version.sh --extract-prose)
+  assert_eq "extracted prose round-trips" "Real prose paragraph. Multi-sentence. With detail." "$extracted"
+
+  # Round-trip 2: empty prose extracts as empty (hint comment is stripped).
+  rm -f pr-body.md
+  run_script "$tmp" >/dev/null
+  pr_body=$(cat pr-body.md)
+  extracted=$(printf '%s' "$pr_body" | bash .github/workflows/scripts/version.sh --extract-prose)
+  assert_eq "empty-prose hint extracts as empty" "" "$extracted"
+)
+
+# ── Test: --extract-prose handles multi-line and inline HTML comments ──
+#
+# Editors may leave HTML comments inside prose. The Discord/Changelog
+# pipeline shouldn't see them.
+
+echo ""
+echo "--extract-prose strips HTML comments:"
+(
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"
+  cp "$REAL_SCRIPT" "$tmp/version.sh"
+
+  body=$(cat <<'EOF'
+Release **v1.0.0**.
+
+<!-- prose-start -->
 First paragraph.
 
-<!-- inline note -->
+<!-- inline comment -->
 
 Second paragraph.
 
 <!--
 multi-line
-comment
+note
 -->
 
 Third paragraph.
+<!-- prose-end -->
+
+bullets...
 EOF
-
-  run_script "$tmp" >/dev/null
-  release_notes=$(cat RELEASE_NOTES.md)
-
-  assert_contains "content before inline comment kept"     "First paragraph"  "$release_notes"
-  assert_contains "content after inline comment kept"      "Second paragraph" "$release_notes"
-  assert_contains "content after multi-line comment kept"  "Third paragraph"  "$release_notes"
-  assert_not_contains "inline comment stripped"            "inline note"      "$release_notes"
-  assert_not_contains "multi-line comment stripped"        "multi-line"       "$release_notes"
+)
+  extracted=$(printf '%s' "$body" | bash "$tmp/version.sh" --extract-prose)
+  assert_contains     "first paragraph kept"      "First paragraph"  "$extracted"
+  assert_contains     "second paragraph kept"     "Second paragraph" "$extracted"
+  assert_contains     "third paragraph kept"      "Third paragraph"  "$extracted"
+  assert_not_contains "inline comment stripped"   "inline comment"   "$extracted"
+  assert_not_contains "multi-line comment stripped" "multi-line"     "$extracted"
 )
 
-# ── Test: a literal `---` inside highlights survives ──
+# ── Test: a literal `---` inside prose survives ──
 #
-# Regression: the old format used `---` as the highlights-end marker,
-# which collided with user-written horizontal rules. The
-# `<!-- highlights-end -->` sentinel fixed it; this pins the fix.
+# Regression: an earlier format used `---` as the highlights-end
+# marker, which collided with horizontal rules in user prose. The
+# explicit `<!-- prose-end -->` sentinel sidesteps that.
 
 echo ""
-echo "Horizontal rule in highlights survives:"
+echo "Horizontal rule in prose survives:"
 (
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   make_repo "$tmp"; cd "$tmp"
   commit "feat: thing (#55)"
-  cat > RELEASE_HIGHLIGHTS.md <<'EOF'
-Theme A.
 
----
+  prose=$(printf 'Theme A.\n\n---\n\nTheme B.')
+  run_with_prose "$tmp" "$prose" >/dev/null
+  pr_body=$(cat pr-body.md)
 
-Theme B.
-EOF
-
-  run_script "$tmp" >/dev/null
-  discord=$(sed '/<!-- highlights-end -->/,$d' RELEASE_NOTES.md)
-
-  assert_contains "content before horizontal rule" "Theme A" "$discord"
-  assert_contains "content after horizontal rule"  "Theme B" "$discord"
+  # Re-extract through the round-trip and confirm both halves survive.
+  extracted=$(printf '%s' "$pr_body" | bash .github/workflows/scripts/version.sh --extract-prose)
+  assert_contains "content before horizontal rule survives round-trip" "Theme A" "$extracted"
+  assert_contains "content after horizontal rule survives round-trip"  "Theme B" "$extracted"
 )
 
-# ── Test: new changelog section is inserted ABOVE prior versions ──
+# ── Test: .github/release-target gets the next version ──
 #
-# version.sh owns the awk insertion; if it ever appended at the end
-# instead, the latest release would render at the bottom of the page.
+# This file gives the release commit a non-empty diff (peter-evans
+# needs file changes to commit). It must contain exactly the next
+# version tag; no extra whitespace, no prefix.
+
+echo ""
+echo "release-target marker:"
+(
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  make_repo "$tmp"; cd "$tmp"
+  commit "feat: thing (#60)"
+
+  run_script "$tmp" >/dev/null
+  target=$(cat .github/release-target)
+  assert_eq "release-target contains next version" "v1.1.0" "$target"
+)
+
+# ── Test: new changelog section inserted ABOVE prior versions ──
 
 echo ""
 echo "Changelog insertion order:"

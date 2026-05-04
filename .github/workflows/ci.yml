@@ -124,7 +124,7 @@ jobs:
           retention-days: 7
 
   release-scripts:
-    name: Release scripts (version.sh tests)
+    name: Release scripts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -136,3 +136,9 @@ jobs:
 
       - name: Run version.sh tests
         run: bash .github/workflows/scripts/version_test.sh
+
+      - name: Run notify-discord.sh tests
+        run: bash .github/workflows/scripts/notify_discord_test.sh
+
+      - name: Run extract-release-notes.sh tests
+        run: bash .github/workflows/scripts/extract_release_notes_test.sh
