@@ -124,10 +124,11 @@ func TestRunnerRequest_ClosesConnectionAfterResponse(t *testing.T) {
 
 // TestRunnerRequest_HonorsCallerContext verifies that a caller's
 // context cancellation propagates into the in-flight request and
-// short-circuits the runner-side timeout. This matters because the
-// helper nests its own 3-second timeout under the caller's ctx; if
-// the nesting were inverted (or the wrong ctx used), a cancelled
-// caller would still wait the full 3 s.
+// short-circuits the runner-side timeout. The helper composes the
+// caller's ctx with http.Client.Timeout, so the earlier deadline
+// must win; if ctx weren't threaded through (e.g., a future
+// regression that drops NewRequestWithContext), a cancelled caller
+// would still wait the full 3 s for Client.Timeout.
 func TestRunnerRequest_HonorsCallerContext(t *testing.T) {
 	// Server hangs forever so the only way out is ctx cancellation.
 	hang := make(chan struct{})
