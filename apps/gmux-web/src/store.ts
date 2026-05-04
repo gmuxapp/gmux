@@ -544,12 +544,16 @@ export function navigate(url: string, replace?: boolean) {
 /**
  * Navigate to a session by ID. Finds the matching project and builds
  * the URL. Used by auto-select, resume, and notification handlers.
+ * Returns true when a URL change was actually dispatched, false when
+ * the session or its project hasn't loaded yet.
  */
-export function navigateToSession(sessionId: string, replace?: boolean) {
+export function navigateToSession(sessionId: string, replace?: boolean): boolean {
   const sess = sessions.value.find(s => s.id === sessionId)
-  if (!sess) return
+  if (!sess) return false
   const project = matchSession(sess, projects.value)
-  if (project) navigate(sessionPath(project.slug, sess), replace)
+  if (!project) return false
+  navigate(sessionPath(project.slug, sess), replace)
+  return true
 }
 
 /**

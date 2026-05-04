@@ -97,19 +97,15 @@ export async function gotoTestSession(page: Page): Promise<void> {
   const sessionId = process.env.GMUX_TEST_SESSION_ID
   if (!sessionId) throw new Error('GMUX_TEST_SESSION_ID not set; global-setup did not run')
 
-  // Wait for the store to load sessions/projects, then drive
-  // navigation. The hook returns false until the session appears in
-  // the store.
+  // Drive navigation via the test hook. It returns true only once
+  // the session and its project are both in the store and the URL
+  // change has been dispatched, so by the time this resolves the
+  // app is on the session route.
   await page.waitForFunction((id) => {
     const navigate = (window as any).__gmuxNavigateToSession
     if (typeof navigate !== 'function') return false
     return navigate(id) === true
   }, sessionId, { timeout: 10_000 })
-
-  // Confirm navigation actually changed the URL before waiting for
-  // the terminal. If something redirects us back to /, fail loudly
-  // here. The slug `test-project` is seeded by global-setup.
-  await page.waitForURL(/\/test-project\/shell\//, { timeout: 5_000 })
 
   await page.locator('.xterm').waitFor({ state: 'visible', timeout: 5_000 })
   // Give the WS connection time to establish and replay scrollback.

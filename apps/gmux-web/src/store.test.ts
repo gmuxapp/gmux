@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { sessions, sessionsLoaded, projects, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap, sessionStaleness, peers, peerAppearance, urlPath, selectedId } from './store'
+import { sessions, sessionsLoaded, projects, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap, sessionStaleness, peers, peerAppearance, urlPath, selectedId, navigateToSession, setNavigate } from './store'
 import type { Session } from './types'
 import type { ProjectItem } from './types'
 
@@ -280,6 +280,48 @@ describe('sessionStaleness', () => {
       { runner_version: '1.1.0' },
       { version: '1.2.0' },
     )).toBe('version')
+  })
+})
+
+describe('navigateToSession', () => {
+  // The e2e helper (e2e/helpers.ts) polls a test hook that wraps
+  // navigateToSession and treats its return value as "the URL has
+  // changed". If the contract regresses (e.g. someone makes the
+  // function return void again, or fires navigate() without a project
+  // match), the e2e suite goes flaky in CI under SSE-vs-REST races
+  // between sessions and projects. These tests pin that contract.
+  let navigateMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    navigateMock = vi.fn()
+    setNavigate(navigateMock)
+  })
+  afterEach(() => {
+    setNavigate(() => {})
+  })
+
+  it('returns false and does not navigate when the session is unknown', () => {
+    projects.value = [{ slug: 'p', match: [{ path: '/dev/p' }] }]
+    expect(navigateToSession('ghost')).toBe(false)
+    expect(navigateMock).not.toHaveBeenCalled()
+  })
+
+  it('returns false and does not navigate when projects have not loaded', () => {
+    sessions.value = [makeSession({ id: 'sess-1', cwd: '/dev/p' })]
+    // projects.value left empty: simulates the SSE-vs-REST race where
+    // sessions arrive before projects.
+    expect(navigateToSession('sess-1')).toBe(false)
+    expect(navigateMock).not.toHaveBeenCalled()
+  })
+
+  it('returns true and dispatches the project-prefixed URL once both are loaded', () => {
+    projects.value = [{ slug: 'myproject', match: [{ path: '/dev/p' }] }]
+    sessions.value = [makeSession({ id: 'sess-1', cwd: '/dev/p', kind: 'shell' })]
+    expect(navigateToSession('sess-1', true)).toBe(true)
+    expect(navigateMock).toHaveBeenCalledTimes(1)
+    const [url, replace] = navigateMock.mock.calls[0]
+    expect(url).toMatch(/^\/myproject\/shell\//)
+    expect(replace).toBe(true)
   })
 })
 
