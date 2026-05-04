@@ -242,16 +242,7 @@ func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, 
 
 // queryMeta connects to a runner's Unix socket and fetches GET /meta.
 func queryMeta(socketPath string) (*store.Session, error) {
-	client := &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return net.DialTimeout("unix", socketPath, 2*time.Second)
-			},
-		},
-		Timeout: 3 * time.Second,
-	}
-
-	resp, err := client.Get("http://localhost/meta")
+	resp, err := runnerRequest(context.Background(), socketPath, http.MethodGet, "/meta", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -275,19 +266,11 @@ func queryMeta(socketPath string) (*store.Session, error) {
 	return &sess, nil
 }
 
-// KillSession sends POST /kill to a runner's Unix socket, asking it to
-// SIGTERM its child process. The runner's normal exit lifecycle handles the rest.
+// KillSession sends POST /kill to a runner's Unix socket, asking it
+// to SIGTERM its child process. The runner's normal exit lifecycle
+// handles the rest.
 func KillSession(socketPath string) error {
-	client := &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return net.DialTimeout("unix", socketPath, 2*time.Second)
-			},
-		},
-		Timeout: 3 * time.Second,
-	}
-
-	resp, err := client.Post("http://localhost/kill", "", nil)
+	resp, err := runnerRequest(context.Background(), socketPath, http.MethodPost, "/kill", nil)
 	if err != nil {
 		return err
 	}

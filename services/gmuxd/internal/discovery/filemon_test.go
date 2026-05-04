@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1182,5 +1183,40 @@ func TestCodexFullLifecycle(t *testing.T) {
 	sess, _ = s.Get("sess-codex")
 	if sess.Status != nil {
 		t.Fatalf("expected idle after turn_cancelled, got %+v", sess.Status)
+	}
+}
+
+// TestFileMonitor_ScrollbackFetchDoesNotPool is the integration
+// regression for #197 against the production fetchScrollbackText
+// path. It asserts the property that prevents the leak under load:
+// each attribution-tick fetch closes its server-side connection
+// when the response body is closed, instead of leaving the conn
+// idle in a pool that gets orphaned when the session is torn down.
+//
+// If a future change re-introduced connection pooling (e.g., by
+// reverting to a per-session client without proper Close on
+// teardown), the server would observe a non-zero open-conn count
+// after each fetch — the failure mode that exhausted RLIMIT_NOFILE
+// on the production daemon.
+func TestFileMonitor_ScrollbackFetchDoesNotPool(t *testing.T) {
+	srv := startUnixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("scrollback content"))
+	}))
+	defer srv.cleanup()
+
+	const N = 5
+	for i := 0; i < N; i++ {
+		got := fetchScrollbackText(srv.socketPath)
+		if got != "scrollback content" {
+			t.Fatalf("fetch[%d] = %q, want %q", i, got, "scrollback content")
+		}
+		// Every fetch must close cleanly: req.Close=true means the
+		// server sees the conn drop before the next iteration.
+		// A pooling regression would leave open at 1 (or growing).
+		srv.waitOpen(t, 0)
+	}
+	if got := srv.accepts.Load(); got != N {
+		t.Fatalf("server saw %d accepts, want %d (each fetch must dial a fresh conn)", got, N)
 	}
 }
