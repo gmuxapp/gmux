@@ -26,13 +26,26 @@ The caller (your script, your agent's shell tool) sees at most ~7 lines of bound
 
 This is deliberately *not* how most CLI wrappers behave. `time`, `nohup`, `env`, etc. forward the child's stdout to the caller. gmux doesn't, on the theory that you already have a much better surface for watching a long-running process (a real terminal in a browser) and what the caller actually wants is a blocking wait with a predictable exit code.
 
+### Mind the pipe
+
+`gmux <cmd> | tail -n 20` works, but bash's default pipeline exit status is the *last* command's, so `$?` is `tail`'s (always 0), not gmux's. If your script or agent branches on the result, either drop the pipe (gmux's stdout is already bounded; `tail` mostly just hides the metadata header) or enable `pipefail`:
+
+```bash
+set -o pipefail
+if gmux <cmd> | tail -n 20; then
+  # only runs if the child exited 0
+fi
+```
+
+The simpler shape is just `if gmux <cmd>; then ...` with no pipe at all.
+
 ### Why this shape is useful to agents
 
 A coding agent that shells out to `gmux pytest` or `gmux cargo build` gets:
 
 - **Blocking**, so the agent waits for completion before reasoning about the result.
 - **Bounded output**, so a 10-minute test run that prints thousands of lines doesn't blow up the agent's context window.
-- **Reliable exit code**, so `if gmux <cmd>; then ...` works.
+- **Reliable exit code**, so `if gmux <cmd>; then ...` works (without a pipe; see above).
 - **Live visibility for the human**, who can open the gmux UI and see exactly what the agent is doing, intervene via `--send`, or kill it with `--kill`.
 
 ## Peeking without attaching: `gmux --tail`
