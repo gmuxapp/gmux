@@ -1,4 +1,4 @@
-import { BSU, ESU, containsSequence, startsWith } from './replay'
+import { BSU, CSI_3J, ESU, containsSequence, startsWith } from './replay'
 
 export interface TerminalWriter {
   write(data: string | Uint8Array, callback?: () => void): void
@@ -71,13 +71,14 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
   let pendingResize: (TerminalSize & { epoch: number }) | null = null
 
   // Scroll preservation across BSU/ESU blocks.
-  // wasAtBottom, prevBaseY, prevDistanceFromBottom, prevAnchorLine are
-  // saved at BSU time; the post-parse viewportY is captured later at ESU
+  // wasAtBottom, prevDistanceFromBottom, prevAnchorLine are saved at BSU
+  // time; the post-parse viewportY is captured later at ESU
   // write-callback time, after xterm has adjusted viewportY for any
   // scrollback evictions.
   //
-  // The wipe branch (baseY shrinks across BSU/ESU, eg via `\x1b[3J`)
-  // tries three anchors in order, falling through on each miss:
+  // The buffer-reset branch (block contains `\x1b[3J`, ie pi-style end-
+  // of-turn redraw) tries three anchors in order, falling through on
+  // each miss:
   //
   //   1. prevAnchorLine — the visible text the user was reading. If the
   //      redraw still contains that line we know exactly where the user
@@ -85,16 +86,28 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
   //      prevDistanceFromBottom, so common lines (eg "✓ done") still
   //      land somewhere reasonable.
   //   2. prevDistanceFromBottom — if the new buffer has room, restore
-  //      the user's pre-wipe distance from the bottom. Loses the
+  //      the user's pre-redraw distance from the bottom. Loses the
   //      identity of the line they were reading but keeps their intent
   //      ("N lines above the latest content").
   //   3. scrollToBottom — nothing else is meaningful.
+  //
+  // Why byte-presence of \x1b[3J rather than a baseY-shrink heuristic:
+  // \x1b[3J resets ydisp/ybase to 0 mid-frame, breaking the line-
+  // tracking invariant that the else branch's adjustedY relies on. A
+  // shrinking baseY is one symptom but not the only one: pi can also
+  // emit \x1b[3J followed by a long redraw that grows baseY past its
+  // pre-frame value, in which case adjustedY is still corrupt (pinned at
+  // 0 because isUserScrolling stays true through the synchronized
+  // block). Detecting the cause directly catches both shapes.
   let savedScroll: {
     wasAtBottom: boolean
-    prevBaseY: number
     prevDistanceFromBottom: number
     prevAnchorLine: string | null
   } | null = null
+  // OR-accumulated across every chunk while savedScroll is set: BSU
+  // chunk, intermediate chunks, and the ESU chunk. Cleared alongside
+  // savedScroll. Only meaningful when savedScroll is non-null.
+  let bufferReset = false
   let restoreRAF: number | null = null
 
   // When true, the next BSU/ESU block will scroll to bottom unconditionally
@@ -120,7 +133,6 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
       if (forceScrollToBottom) {
         savedScroll = {
           wasAtBottom: true,
-          prevBaseY: baseY,
           prevDistanceFromBottom: 0,
           prevAnchorLine: null,
         }
@@ -132,7 +144,6 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
         const wasAtBottom = viewportY >= baseY
         savedScroll = {
           wasAtBottom,
-          prevBaseY: baseY,
           prevDistanceFromBottom: distance,
           // Only capture the anchor when scrolled up: at-bottom always
           // wants scrollToBottom and never reaches the search.
@@ -140,6 +151,18 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
         }
       }
     }
+  }
+
+  /**
+   * OR-accumulate `\x1b[3J` presence across every chunk while a BSU/ESU
+   * block is open. Called for every pumped chunk; covers the BSU chunk
+   * itself (common: pi sends BSU + 3J + redraw + ESU all in one frame),
+   * intermediate chunks, and the ESU chunk. Cleared alongside
+   * `savedScroll` in `maybeRestoreScroll` and `reset`.
+   */
+  const maybeMarkBufferReset = (data: Uint8Array): void => {
+    if (!savedScroll || bufferReset) return
+    if (containsSequence(data, CSI_3J)) bufferReset = true
   }
 
   /**
@@ -159,7 +182,9 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
     if (!containsSequence(data, ESU)) return
 
     const snap = savedScroll
+    const wasBufferReset = bufferReset
     savedScroll = null
+    bufferReset = false
 
     // Capture the adjusted viewportY now, after xterm has processed the
     // data (including any scrollback evictions) but before the deferred
@@ -176,14 +201,10 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
         // Was at bottom before BSU, or user/code scrolled to bottom during
         // the BSU block — stay there.
         scroll.scrollToBottom()
-      } else if (baseY < snap.prevBaseY) {
-        // Scrollback shrank during the BSU/ESU block. The dominant cause
-        // is `\x1b[3J` (clear scrollback), which agents like pi emit at
-        // end-of-turn redraws and which resets ybase/ydisp to 0. The
-        // user's pre-BSU line is gone from xterm's perspective; adjustedY
-        // points at the top of a freshly-rebuilt buffer, which is the
-        // "jump to top" bug. Eviction within a full scrollback never
-        // reaches this branch because it leaves baseY at the cap.
+      } else if (wasBufferReset) {
+        // The block contained `\x1b[3J`. xterm reset ybase/ydisp to 0
+        // mid-parse, so adjustedY is unreliable: it can point at the top
+        // of a rebuilt buffer regardless of where the user actually was.
         //
         // We try three anchors in order, falling through on each miss
         // (rationale on the savedScroll declaration above).
@@ -198,10 +219,12 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
           scroll.scrollToBottom()
         }
       } else {
-        // User was scrolled up — restore the post-parse position, clamped
-        // to the current buffer range. We use adjustedY (captured after xterm
-        // processed the data) rather than a pre-BSU snapshot, so scrollback
-        // evictions are already accounted for.
+        // User was scrolled up and the block was a plain streaming
+        // update (no \x1b[3J). Restore the post-parse position, clamped
+        // to the current buffer range. adjustedY (captured after xterm
+        // processed the data) already accounts for scrollback evictions,
+        // so the user's specific line stays visible — what `tail -f`
+        // and other append-only streams need.
         scroll.scrollToLine(Math.min(adjustedY, baseY))
       }
       // Flush any resize that was deferred while the BSU/ESU block or
@@ -218,6 +241,7 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
     if (next) {
       writeInFlight = true
       maybeSaveScroll(next.data)
+      maybeMarkBufferReset(next.data)
       term.write(next.data, () => {
         maybeRestoreScroll(next.data)
         writeInFlight = false
@@ -250,6 +274,7 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
       writeInFlight = false
       pendingResize = null
       savedScroll = null
+      bufferReset = false
       forceScrollToBottom = false
       if (restoreRAF !== null) {
         cancelAnimationFrame(restoreRAF)

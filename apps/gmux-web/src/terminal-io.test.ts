@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createTerminalIO, type ScrollAccessor } from './terminal-io'
-import { BSU, ESU } from './replay'
+import { BSU, CSI_3J, ESU } from './replay'
 
 function makeHarness() {
   const writes: Array<string> = []
@@ -214,6 +214,18 @@ function wrapBSU(payload: string): Uint8Array {
   return result
 }
 
+/** Wrap payload in BSU + \x1b[3J + ESU markers (pi-style redraw). */
+function wrapBSUWithClear(payload: string): Uint8Array {
+  const payloadBytes = enc(payload)
+  const result = new Uint8Array(BSU.length + CSI_3J.length + payloadBytes.length + ESU.length)
+  let offset = 0
+  result.set(BSU, offset); offset += BSU.length
+  result.set(CSI_3J, offset); offset += CSI_3J.length
+  result.set(payloadBytes, offset); offset += payloadBytes.length
+  result.set(ESU, offset)
+  return result
+}
+
 describe('createTerminalIO', () => {
   it('serializes writes one at a time', () => {
     const h = makeHarness()
@@ -417,7 +429,7 @@ describe('scroll preservation across BSU/ESU', () => {
     h.userScrollTo(197)        // 3 lines above the bottom
     expect(h.baseY - h.viewportY).toBe(3)
 
-    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.io.enqueue(wrapBSUWithClear('redraw'), 1)
     h.clearScrollback()
     h.addLines(15)             // new baseY=15, plenty of room for distance=3
     h.flushOne(0)
@@ -441,7 +453,7 @@ describe('scroll preservation across BSU/ESU', () => {
     h.userScrollTo(100)        // 100 lines above the bottom
     expect(h.baseY - h.viewportY).toBe(100)
 
-    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.io.enqueue(wrapBSUWithClear('redraw'), 1)
     h.clearScrollback()
     h.addLines(15)             // new baseY=15, distance(100) > baseY
     h.flushOne(0)
@@ -485,7 +497,7 @@ describe('scroll preservation across BSU/ESU', () => {
     h.setLine(150, 'ERROR: cannot find foo')
     expect(h.baseY - h.viewportY).toBe(50)
 
-    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.io.enqueue(wrapBSUWithClear('redraw'), 1)
     h.clearScrollback()
     h.addLines(80)
     // Same line lands at a different y after the redraw.
@@ -513,7 +525,7 @@ describe('scroll preservation across BSU/ESU', () => {
     h.setLine(45, 'session ready')
     expect(h.baseY - h.viewportY).toBe(5)
 
-    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.io.enqueue(wrapBSUWithClear('redraw'), 1)
     h.clearScrollback()
     h.addLines(20)             // new baseY=20
     h.setLine(12, 'session ready')  // distance: 8, |8-5|=3
@@ -541,7 +553,7 @@ describe('scroll preservation across BSU/ESU', () => {
     // Deliberately NOT calling setLine: getLine returns null (the
     // production accessor's filter for trivial lines).
 
-    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.io.enqueue(wrapBSUWithClear('redraw'), 1)
     h.clearScrollback()
     h.addLines(20)             // new baseY=20
     h.setLine(17, 'unrelated content')  // present but won't match anything
@@ -580,7 +592,7 @@ describe('scroll preservation across BSU/ESU', () => {
     h.setLine(45, 'streaming-target')
     expect(h.baseY - h.viewportY).toBe(5)
 
-    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.io.enqueue(wrapBSUWithClear('redraw'), 1)
     h.clearScrollback()
     h.addLines(5)              // new baseY=5; total = baseY+rows = 45
     h.setLine(20, 'streaming-target')  // y=20 in visible region [5, 44]
@@ -612,7 +624,7 @@ describe('scroll preservation across BSU/ESU', () => {
     h.setLine(49, 'shared-line')
     expect(h.baseY - h.viewportY).toBe(1)
 
-    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.io.enqueue(wrapBSUWithClear('redraw'), 1)
     h.clearScrollback()
     h.addLines(15)             // new baseY=15; visible region [15, 54]
     h.setLine(2, 'shared-line')   // scrollback: restoreY=2,  restoreDistance=13, diff=12
@@ -637,7 +649,7 @@ describe('scroll preservation across BSU/ESU', () => {
     h.userScrollTo(47)         // distance = 3
     h.setLine(47, 'previous turn output line')
 
-    h.io.enqueue(wrapBSU('redraw'), 1)
+    h.io.enqueue(wrapBSUWithClear('redraw'), 1)
     h.clearScrollback()
     h.addLines(20)             // new baseY=20
     h.setLine(10, 'pi status bar version 0.70.2')  // wholly different
@@ -647,6 +659,105 @@ describe('scroll preservation across BSU/ESU', () => {
     // No match → distance fallback: 20 - 3 = 17.
     expect(h.scrollToLineCalls).toContain(17)
     expect(h.viewportY).toBe(17)
+    h.cleanup()
+  })
+
+  it('after \\x1b[3J + redraw growing baseY past prevBaseY, restores distance from bottom (not adjustedY)', () => {
+    // Discriminator regression test. The pre-fix code used a
+    // `baseY < prevBaseY` heuristic to detect buffer-reset frames; it
+    // missed redraws that grow baseY past its pre-frame value, falling
+    // through to the else branch (line-based restore via adjustedY).
+    //
+    // The crucial assumption modeled here — verified end-to-end by
+    // the matching e2e test in `e2e/tests/terminal-scroll.spec.ts`
+    // ("BSU + clear-scrollback + redraw growing baseY") — is that
+    // real xterm's `viewportY` post-parse is 0 when `\x1b[3J` resets
+    // `ydisp` mid-frame and `isUserScrolling` is true. The harness
+    // simulates that here with `userScrollTo(0)` after `addLines`.
+    //
+    // What this test pins: given a frame whose bytes contain \x1b[3J
+    // and a post-parse adjustedY of 0, the restore lands
+    // `prevDistanceFromBottom` rows above the new bottom, NOT at
+    // `min(adjustedY, baseY) = 0`.
+    const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
+    h.io.reset(1)
+    h.addLines(100)            // prevBaseY = 100
+    h.userScrollTo(97)         // distance = 3
+
+    h.io.enqueue(wrapBSUWithClear('redraw'), 1)
+    h.clearScrollback()        // \x1b[3J: ydisp=0, ybase=0
+    h.addLines(200)            // long redraw: new baseY = 160 (> prevBaseY)
+    h.userScrollTo(0)          // model adjustedY = 0 (broken line tracking)
+    expect(h.baseY).toBeGreaterThan(100)
+    h.flushOne(0)
+    h.flushRAF()
+
+    // Distance preserved: 3 rows above the new bottom.
+    expect(h.viewportY).toBe(h.baseY - 3)
+    h.cleanup()
+  })
+
+  it('after non-redraw streaming (no \\x1b[3J), honors xterm\'s eviction-tracked viewportY', () => {
+    // Plain shell / `tail -f` semantics: the user is reading a specific
+    // line. New lines stream in below; eviction kicks in; xterm decrements
+    // ydisp to keep the same line visible. The BSU/ESU restore path must
+    // honor xterm's adjustedY here, NOT pull the user toward the bottom.
+    //
+    // This pins the requirement that distance-from-bottom is *only* used
+    // when \x1b[3J is present in the chunk; without it, line-based restore
+    // wins.
+    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
+    h.io.reset(1)
+    h.addLines(100)            // at capacity, baseY=100
+    h.userScrollTo(97)         // distance = 3, reading a specific line
+
+    h.io.enqueue(wrapBSU('streaming output'), 1)
+    // 10 lines stream in: full overflow, baseY stays 100, xterm decrements
+    // viewportY by 10 to 87 to keep the same content visible.
+    h.flushOne(10)
+    h.flushRAF()
+
+    // Line-based restore: viewportY = adjustedY = 87. Distance from bottom
+    // grew from 3 to 13, which is what xterm-style eviction tracking gives.
+    // A distance-based restore would have put viewportY at 97 (still 3
+    // from bottom), losing the user's line. We don't want that here.
+    expect(h.viewportY).toBe(87)
+    h.cleanup()
+  })
+
+  it('detects \\x1b[3J across split BSU / 3J / ESU chunks', () => {
+    // Pi can split a redraw across multiple WS frames: BSU in one
+    // chunk, \x1b[3J + payload in another, ESU in a third. The
+    // discriminator must OR-accumulate \x1b[3J presence across every
+    // chunk while savedScroll is set, otherwise the restore falls
+    // back to line-based and we get the same "jump to middle" bug.
+    const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
+    h.io.reset(1)
+    h.addLines(100)
+    h.userScrollTo(97)         // distance = 3
+
+    // Chunk A: just BSU.
+    h.io.enqueue(new Uint8Array([...BSU]), 1)
+    h.flushOne(0)
+
+    // Chunk B: \x1b[3J + redraw payload (no ESU yet). The clear
+    // happens here, simulated by mutating harness state.
+    const clearChunk = new Uint8Array([...CSI_3J, ...enc('redraw')])
+    h.io.enqueue(clearChunk, 1)
+    h.clearScrollback()
+    h.addLines(200)            // grow baseY past prevBaseY
+    h.userScrollTo(0)          // xterm pinned ydisp at 0
+    h.flushOne(0)
+
+    // Chunk C: just ESU.
+    h.io.enqueue(new Uint8Array([...ESU]), 1)
+    h.flushOne(0)
+    h.flushRAF()
+
+    // Distance-based restore: 3 rows above the new bottom. Without
+    // the OR-accumulation, this would land at 0 (line-based on the
+    // pinned adjustedY).
+    expect(h.viewportY).toBe(h.baseY - 3)
     h.cleanup()
   })
 

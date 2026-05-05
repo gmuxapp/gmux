@@ -19,6 +19,17 @@ export const BSU = new Uint8Array([0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x6
 /** End Synchronized Update: CSI ? 2026 l */
 export const ESU = new Uint8Array([0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x6c])
 
+/**
+ * Erase Saved Lines (clear scrollback): CSI 3 J.
+ *
+ * Resets xterm's `ybase` and `ydisp` to 0 mid-frame, breaking the
+ * line-tracking invariant that the BSU/ESU restore path relies on. Its
+ * presence inside a synchronized-output block is the signal to fall back
+ * to distance-from-bottom restoration instead of trusting the post-parse
+ * `viewportY`. Pi emits this as part of its end-of-turn redraw shape.
+ */
+export const CSI_3J = new Uint8Array([0x1b, 0x5b, 0x33, 0x4a])
+
 export type FlushCallback = (chunks: Uint8Array[]) => void
 
 export type ReplayState = 'waiting' | 'buffering' | 'done'
