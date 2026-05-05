@@ -708,4 +708,78 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     // don't pin it), but the line text is stable.
     expect(landedText).toBe(anchorText)
   })
+
+  /**
+   * Synthetic redraw whose post-wipe `baseY` ends up LARGER than the
+   * pre-wipe value. The earlier baseY-shrink heuristic missed this
+   * shape — it only fired the buffer-reset branch when scrollback
+   * shrank during the frame. Anything that grew baseY past prevBaseY
+   * fell through to the line-based else branch, which trusted xterm's
+   * post-parse `viewportY`.
+   *
+   * The bug: when the user is scrolled up, xterm keeps `isUserScrolling`
+   * true through the synchronized block. `\x1b[3J` resets `ydisp` to
+   * 0 mid-parse; the long redraw appends lines but `ydisp` does not
+   * follow. Post-parse `viewportY = 0`. The else branch ran
+   * `scrollToLine(min(0, baseY)) = 0` and the user landed at the top
+   * of the rerendered conversation. Verified end-to-end: this test
+   * fails on the pre-fix code with `viewportY=0, distance=baseY`
+   * (see PR #203 for the on-`main` CI run that produced exactly
+   * that diagnostic).
+   *
+   * Trigger condition is just "user not at bottom when the frame
+   * arrives"; no preceding wheel-scroll is required. Live
+   * observations confirmed the bug fires on a passive viewer too.
+   *
+   * Contract pinned here: byte-presence of `\x1b[3J` in the BSU/ESU
+   * block triggers distance-from-bottom restoration regardless of
+   * which side of `prevBaseY` the rebuilt buffer ends up on.
+   */
+  test('user scrolled up: BSU + clear-scrollback + redraw growing baseY past prevBaseY preserves distance', async ({ page }) => {
+    await page.evaluate(() => (window as any).__gmuxTerm.resize(120, 40))
+    await settle(page)
+
+    // Modest seed so the redraw can grow baseY past it. With rows=40
+    // and 100 seed lines, prevBaseY ≈ 60.
+    await seedScrollback(page, 100)
+    await scrollToBottom(page)
+    const baseline = await getScroll(page)
+    expect(baseline.baseY).toBeGreaterThan(40)
+
+    // Small distance: the bug fires whenever the user is not at
+    // bottom; the magnitude doesn't matter, but a small distance
+    // makes the failure mode (viewportY=0, distance=baseY) visually
+    // dramatic in the assertion message.
+    const distance = 3
+    const target = baseline.baseY - distance
+    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), target)
+    const beforeBurst = await getScroll(page)
+    expect(beforeBurst.baseY - beforeBurst.viewportY).toBe(distance)
+    const prevBaseY = beforeBurst.baseY
+
+    // 250-line redraw: post-wipe baseY ≈ 210, comfortably larger
+    // than prevBaseY ≈ 60. The two values must differ for the test
+    // to exercise the regressed code path: with baseY' < prevBaseY
+    // the old heuristic would have caught it.
+    const redraw = Array.from({ length: 250 }, (_, i) =>
+      `redraw-line-${String(i).padStart(4, '0')}`).join('\r\n') + '\r\n'
+    await inject(page, BSU + '\x1b[2J\x1b[H\x1b[3J' + redraw + ESU)
+    await settle(page)
+
+    const after = await getScroll(page)
+    console.log('[grown-baseY]',
+      'prevBaseY=', prevBaseY,
+      'postBaseY=', after.baseY,
+      'viewportY=', after.viewportY,
+      'distance=', after.baseY - after.viewportY)
+
+    // The shape we're testing: post-wipe baseY grew past pre-wipe.
+    // If the redraw didn't actually grow baseY (eg pi changed its
+    // layout), the test is silently exercising the shrink branch.
+    expect(after.baseY).toBeGreaterThan(prevBaseY)
+    // The bug shape: viewportY === 0 with baseY > 0. The fix:
+    // distance from bottom is preserved.
+    expect(after.viewportY).toBeGreaterThan(0)
+    expect(after.baseY - after.viewportY).toBe(distance)
+  })
 })
