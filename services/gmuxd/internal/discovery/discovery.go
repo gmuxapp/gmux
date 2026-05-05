@@ -48,9 +48,17 @@ type OnDeadFunc func(sess store.Session)
 // Watch periodically scans for Unix sockets and queries their /meta.
 // When a new session is found, it subscribes to the runner's /events SSE
 // for real-time status/meta/exit updates.
-func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, resumes *PendingResumes, onDead OnDeadFunc, interval time.Duration, stop <-chan struct{}) {
+//
+// onFirstScan, if non-nil, runs once after the initial Scan completes.
+// This is the right point to invoke work that depends on live sessions
+// being registered with the FileMonitor (e.g. applying persisted
+// attributions to freshly-rehydrated runners).
+func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, resumes *PendingResumes, onDead OnDeadFunc, onFirstScan func(), interval time.Duration, stop <-chan struct{}) {
 	// Initial scan immediately
 	Scan(sessions, subs, fileMon, resumes, onDead)
+	if onFirstScan != nil {
+		onFirstScan()
+	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

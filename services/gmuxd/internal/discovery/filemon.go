@@ -709,6 +709,43 @@ func (fm *FileMonitor) persistAttributionsLocked() {
 	saveAttributions(fm.attributions, fm.sessions)
 }
 
+// ApplyPersistedAttributions walks the loaded attributions map and,
+// for each (filePath, sessionID) entry whose target is currently a
+// monitored live session, propagates the slug and title from the
+// session file into the store.
+//
+// This bridges the daemon-restart gap: attribution decisions persist
+// in attributions.json, but slug/title are runtime fields that live
+// only in the in-memory store. Without this pass, a freshly
+// re-registered runner stays slug-less until the next file event
+// re-triggers syncFileMetadataLocked, which can be a long time for
+// idle sessions.
+//
+// Entries pointing at unknown session IDs are skipped silently;
+// they're either dismissed sessions whose entries haven't been
+// pruned yet, or sessions that haven't re-registered yet (in which
+// case a later NotifyNewSession will trigger sync via the normal
+// file-event path).
+//
+// Must be called after live sessions have been registered with
+// NotifyNewSession (i.e. after the first discovery.Scan pass).
+func (fm *FileMonitor) ApplyPersistedAttributions() {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+
+	var applied int
+	for path, sessionID := range fm.attributions {
+		if _, ok := fm.sessions[sessionID]; !ok {
+			continue
+		}
+		fm.syncFileMetadataLocked(sessionID, path)
+		applied++
+	}
+	if applied > 0 {
+		log.Printf("filemon: applied %d persisted attribution(s) at startup", applied)
+	}
+}
+
 // --- Attribution ---
 
 // tryAttributeUnmatched attempts to match candidate files to sessions

@@ -1220,3 +1220,93 @@ func TestFileMonitor_ScrollbackFetchDoesNotPool(t *testing.T) {
 		t.Fatalf("server saw %d accepts, want %d (each fetch must dial a fresh conn)", got, N)
 	}
 }
+
+// TestApplyPersistedAttributionsPopulatesSlugAfterRestart is the
+// regression guard for the daemon-restart UX gap: a live runner
+// re-registers with empty slug, the persisted attributions map says
+// which JSONL belongs to it, but without an active file event nothing
+// propagates the slug from disk into the store. ApplyPersistedAttributions
+// closes that gap synchronously at startup.
+func TestApplyPersistedAttributionsPopulatesSlugAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+
+	// Codex JSONL with a known first user message — slug derives from it.
+	filePath := filepath.Join(dir, "rollout.jsonl")
+	content := `{"timestamp":"` + now.Format(time.RFC3339Nano) + `","type":"session_meta","payload":{"id":"sess-codex-uuid","timestamp":"` + now.Format(time.RFC3339Nano) + `","cwd":"/tmp"}}
+{"timestamp":"` + now.Format(time.RFC3339Nano) + `","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"fix auth bug"}]}}
+`
+	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Live runner: re-registered after daemon restart, slug empty
+	// because the runner's /meta does not know its own slug.
+	s := store.New()
+	s.Upsert(store.Session{
+		ID:        "sess-runner",
+		Cwd:       "/tmp",
+		Kind:      "codex",
+		Alive:     true,
+		StartedAt: now.UTC().Format(time.RFC3339),
+	})
+
+	// FileMonitor pre-seeded with the persisted attribution from the
+	// previous gmuxd run.
+	fm := NewFileMonitorWithAttributions(s, map[string]string{filePath: "sess-runner"})
+	if fm.watcher != nil {
+		fm.watcher.Close()
+		fm.watcher = nil
+	}
+	codex := adapters.NewCodex()
+	fm.sessions["sess-runner"] = &monitoredSession{
+		id:      "sess-runner",
+		cwd:     "/tmp",
+		kind:    "codex",
+		adapter: codex,
+		fileMon: codex,
+		filer:   codex,
+	}
+
+	// Pre-condition: slug not yet populated.
+	pre, _ := s.Get("sess-runner")
+	if pre.Slug != "" {
+		t.Fatalf("test setup: expected empty slug, got %q", pre.Slug)
+	}
+
+	fm.ApplyPersistedAttributions()
+
+	post, _ := s.Get("sess-runner")
+	if post.Slug != "fix-auth-bug" {
+		t.Errorf("Slug after apply: want %q, got %q", "fix-auth-bug", post.Slug)
+	}
+	if post.AdapterTitle != "fix auth bug" {
+		t.Errorf("AdapterTitle after apply: want %q, got %q", "fix auth bug", post.AdapterTitle)
+	}
+}
+
+// TestApplyPersistedAttributionsSkipsUnknownSession ensures stale
+// attribution entries (pointing at sessions that didn't re-register
+// after restart, e.g. dismissed or runner died) don't cause panics
+// or spurious Upserts.
+func TestApplyPersistedAttributionsSkipsUnknownSession(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "orphan.jsonl")
+	if err := os.WriteFile(filePath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := store.New()
+	fm := NewFileMonitorWithAttributions(s, map[string]string{filePath: "sess-gone"})
+	if fm.watcher != nil {
+		fm.watcher.Close()
+		fm.watcher = nil
+	}
+	// Note: no entry in fm.sessions for "sess-gone".
+
+	fm.ApplyPersistedAttributions()
+
+	if got := len(s.List()); got != 0 {
+		t.Errorf("expected empty store, got %d sessions", got)
+	}
+}

@@ -461,7 +461,7 @@ func serve(stderr io.Writer) int {
 	// Start socket-based discovery (scans /tmp/gmux-sessions/*.sock)
 	// Discovery also subscribes to each runner's /events SSE for live updates.
 	stopDiscovery := make(chan struct{})
-	go discovery.Watch(sessions, subs, fileMon, pendingResumes, persistDead, 3*time.Second, stopDiscovery)
+	go discovery.Watch(sessions, subs, fileMon, pendingResumes, persistDead, fileMon.ApplyPersistedAttributions, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
 	// Session file scanner — discovers resumable sessions from adapter
