@@ -637,6 +637,19 @@ func (fm *FileMonitor) processAttributedFileLocked(sessionID, path string) {
 		return
 	}
 
+	// Extract the canonical cwd from the first event that carries one.
+	// Only applied on the initial full read (first attribution): session
+	// file cwds are immutable, so re-applying on every write is redundant.
+	var newCwd string
+	if readAll {
+		for _, evt := range events {
+			if evt.Cwd != "" {
+				newCwd = evt.Cwd
+				break
+			}
+		}
+	}
+
 	fm.store.Update(sessionID, func(sess *store.Session) {
 		for _, evt := range events {
 			if evt.Title != "" {
@@ -657,7 +670,16 @@ func (fm *FileMonitor) processAttributedFileLocked(sessionID, path string) {
 				sess.Unread = *evt.Unread
 			}
 		}
+		if newCwd != "" {
+			sess.Cwd = newCwd
+		}
 	})
+
+	// Keep ms.cwd in sync so watch cleanup and future attribution matching
+	// use the correct directory (e.g. after a resume from a different cwd).
+	if newCwd != "" {
+		ms.cwd = newCwd
+	}
 }
 
 // --- Active file tracking ---

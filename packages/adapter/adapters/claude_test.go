@@ -279,6 +279,39 @@ func TestClaudeParseSessionFileNoSessionID(t *testing.T) {
 
 // --- FileMonitor ---
 
+func TestClaudeParseNewLinesCwd(t *testing.T) {
+	// First user message carries the cwd — should emit a cwd event plus a working event.
+	events := NewClaude().ParseNewLines([]string{
+		`{"type":"user","cwd":"/home/user/dev/gmux","message":{"role":"user","content":"fix bug"},"uuid":"u1"}`,
+	}, "")
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events (cwd + working), got %d: %v", len(events), events)
+	}
+	if events[0].Cwd != "/home/user/dev/gmux" {
+		t.Errorf("expected first event to be cwd, got %+v", events[0])
+	}
+	if events[1].Status == nil || !events[1].Status.Working {
+		t.Errorf("expected second event to be working status, got %+v", events[1])
+	}
+}
+
+func TestClaudeParseNewLinesCwdOnlyEmittedOnce(t *testing.T) {
+	// cwd should only be emitted for the first user message, not subsequent ones.
+	events := NewClaude().ParseNewLines([]string{
+		`{"type":"user","cwd":"/home/user/dev/gmux","message":{"role":"user","content":"first"},"uuid":"u1"}`,
+		`{"type":"user","cwd":"/home/user/dev/gmux","message":{"role":"user","content":"second"},"uuid":"u2"}`,
+	}, "")
+	cwdCount := 0
+	for _, ev := range events {
+		if ev.Cwd != "" {
+			cwdCount++
+		}
+	}
+	if cwdCount != 1 {
+		t.Errorf("expected exactly 1 cwd event across 2 user messages, got %d", cwdCount)
+	}
+}
+
 func TestClaudeParseNewLinesCustomTitle(t *testing.T) {
 	events := NewClaude().ParseNewLines([]string{
 		`{"type":"custom-title","customTitle":"My session title","sessionId":"abc"}`,

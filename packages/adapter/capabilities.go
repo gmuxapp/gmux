@@ -13,14 +13,18 @@ type SessionFileInfo struct {
 	FilePath     string
 }
 
-// FileEvent represents a meaningful change extracted from new file content.
-type FileEvent struct {
-	Title  string
-	Status *Status
-	Unread *bool // if non-nil, sets the session's unread flag
+// Event is a partial session state update emitted by an adapter in response
+// to observed output — either PTY bytes (via Monitor) or session file lines
+// (via ParseNewLines). Zero/nil fields are no-ops; the system only applies
+// fields that are explicitly set.
+type Event struct {
+	Title  string  // non-empty: update the adapter title
+	Status *Status // non-nil: update status; &Status{} clears it
+	Unread *bool   // non-nil: set or clear the unread flag
+	Cwd    string  // non-empty: update the session's canonical directory
 }
 
-// BoolPtr returns a pointer to v. Convenience for setting FileEvent.Unread.
+// BoolPtr returns a pointer to v. Convenience for setting Event.Unread.
 func BoolPtr(v bool) *bool { return &v }
 
 // Launchable is implemented by adapters that want to expose one or more
@@ -53,12 +57,18 @@ type SessionFiler interface {
 // in their attributed session file. gmuxd calls ParseNewLines when
 // inotify fires on an attributed file.
 type FileMonitor interface {
-	// ParseNewLines receives lines appended since the last read.
-	// filePath is the attributed session file being monitored; adapters
-	// may read it to inspect preceding context (e.g. counting consecutive
-	// errors to detect exhausted retries).
+	// ParseNewLines receives newly visible lines from an attributed session
+	// file. On first attribution all historical lines are passed (readAll
+	// mode); on subsequent writes only the lines added since the last read
+	// are passed. filePath is the attributed file; adapters may read it to
+	// inspect preceding context (e.g. counting consecutive errors).
+	//
+	// Cwd events are only applied by the daemon in readAll mode, so adapters
+	// should emit Event{Cwd: ...} from the session header/first record where
+	// the canonical project directory lives.
+	//
 	// Returns events that should update the session's state.
-	ParseNewLines(lines []string, filePath string) []FileEvent
+	ParseNewLines(lines []string, filePath string) []Event
 }
 
 // SessionFileLister is an optional extension of SessionFiler for adapters

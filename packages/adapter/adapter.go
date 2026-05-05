@@ -11,10 +11,9 @@ import (
 
 // Status represents an application-reported status for the sidebar.
 type Status struct {
-	Label   string `json:"label"`             // display text ("working", "3/5 passed")
-	Working bool   `json:"working"`           // true while adapter is busy (spinner, building)
-	Error   bool   `json:"error,omitempty"`   // true when the adapter hit a retryable error (red dot)
-	Title   string `json:"title,omitempty"`   // if set, updates the session title (transient)
+	Label   string `json:"label"`           // display text ("working", "3/5 passed")
+	Working bool   `json:"working"`         // true while adapter is busy (spinner, building)
+	Error   bool   `json:"error,omitempty"` // true when the adapter hit a retryable error (red dot)
 }
 
 // Adapter teaches gmux how to work with a specific child process.
@@ -36,11 +35,11 @@ type Adapter interface {
 	// Return nil if no extra env is needed.
 	Env(ctx EnvContext) []string
 
-	// Monitor receives PTY output and optionally produces a Status.
-	// Called on every PTY read with raw bytes. Must be cheap — no
-	// allocations or regex compilation per call.
+	// Monitor receives PTY output and optionally returns an Event describing
+	// what changed (title, status, cwd). Called on every PTY read with raw
+	// bytes. Must be cheap — no allocations or regex compilation per call.
 	// Return nil for no change.
-	Monitor(output []byte) *Status
+	Monitor(output []byte) *Event
 }
 
 // EnvContext provides launch context to Env().

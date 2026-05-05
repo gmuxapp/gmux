@@ -211,6 +211,7 @@ func setupPiFileMonitor(t *testing.T) (*FileMonitor, *store.Store, string) {
 		adapter: pi,
 		fileMon: pi,
 		filer:   pi,
+		readAll: true, // mirrors NotifyNewSession which always sets readAll on registration
 	}
 
 	return fm, s, sessionDir
@@ -531,6 +532,70 @@ func TestReadAllSuppressesUnread(t *testing.T) {
 	}
 }
 
+// TestCwdCorrectedFromSessionFile verifies that when a session file's
+// header cwd differs from the process cwd stored at launch (e.g. an
+// agent session resumed from a worktree directory), the session cwd in
+// the store is updated to match the file's canonical project cwd on
+// first attribution.
+func TestCwdCorrectedFromSessionFile(t *testing.T) {
+	fm, s, dir := setupPiFileMonitor(t)
+	path := filepath.Join(dir, "test.jsonl")
+
+	// The store session has the process launch cwd (a worktree).
+	// Verify it starts wrong.
+	launchCwd := "/home/user/dev/project" // set by setupPiFileMonitor
+	sess, _ := s.Get("sess-pi")
+	if sess.Cwd != launchCwd {
+		t.Fatalf("precondition: expected launch cwd %q, got %q", launchCwd, sess.Cwd)
+	}
+
+	// The session file was originally created in the real project root.
+	projectCwd := "/home/user/dev/project-root"
+	simulateFileWrite(t, fm, "sess-pi", path,
+		`{"type":"session","id":"abc","cwd":"`+projectCwd+`","timestamp":"2026-03-19T10:00:00Z"}`,
+		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"fix bug"}]}}`,
+	)
+
+	sess, _ = s.Get("sess-pi")
+	if sess.Cwd != projectCwd {
+		t.Errorf("expected cwd corrected to %q, got %q", projectCwd, sess.Cwd)
+	}
+	// Other state should be updated normally alongside the cwd correction.
+	if sess.Status == nil || !sess.Status.Working {
+		t.Error("expected working=true after user message")
+	}
+}
+
+// TestCwdNotUpdatedOnSubsequentWrite verifies that the cwd correction
+// only fires on the initial full read (first attribution), not on
+// every incremental write that follows.
+func TestCwdNotUpdatedOnSubsequentWrite(t *testing.T) {
+	fm, s, dir := setupPiFileMonitor(t)
+	path := filepath.Join(dir, "test.jsonl")
+
+	// First attribution: file cwd differs from launch cwd.
+	projectCwd := "/home/user/dev/real-project"
+	simulateFileWrite(t, fm, "sess-pi", path,
+		`{"type":"session","id":"abc","cwd":"`+projectCwd+`","timestamp":"2026-03-19T10:00:00Z"}`,
+		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"fix bug"}]}}`,
+	)
+	sess, _ := s.Get("sess-pi")
+	if sess.Cwd != projectCwd {
+		t.Fatalf("precondition: cwd should be corrected on first attribution, got %q", sess.Cwd)
+	}
+
+	// Subsequent write: no header line, just a new message.
+	// If cwd were re-applied here it would be an empty string (no event) — but
+	// verifying the store cwd remains stable is the point of this test.
+	simulateFileWrite(t, fm, "sess-pi", path,
+		`{"type":"message","id":"a1","message":{"role":"assistant","stopReason":"stop","content":[]}}`,
+	)
+	sess, _ = s.Get("sess-pi")
+	if sess.Cwd != projectCwd {
+		t.Errorf("cwd should remain %q after incremental write, got %q", projectCwd, sess.Cwd)
+	}
+}
+
 // TestAttributionAcrossDirectories verifies that a session file in a
 // directory other than SessionDir(cwd) is still attributed to the
 // correct session. This simulates grove worktrees, /resume across
@@ -576,6 +641,7 @@ func TestAttributionAcrossDirectories(t *testing.T) {
 		adapter: pi,
 		fileMon: pi,
 		filer:   pi,
+		readAll: true,
 	}
 
 	// Write a session file in the OTHER dir (not the session's cwd dir).
@@ -595,6 +661,11 @@ func TestAttributionAcrossDirectories(t *testing.T) {
 	}
 	if sess.Status == nil || !sess.Status.Working {
 		t.Fatal("expected working=true after user message from cross-dir file")
+	}
+	// The session cwd should be corrected to the file's canonical cwd,
+	// so project matching resolves to the right project.
+	if sess.Cwd != otherCwd {
+		t.Errorf("expected cwd to be corrected to %q, got %q", otherCwd, sess.Cwd)
 	}
 }
 
@@ -942,6 +1013,7 @@ func setupClaudeFileMonitor(t *testing.T) (*FileMonitor, *store.Store, string) {
 		adapter: claude,
 		fileMon: claude,
 		filer:   claude,
+		readAll: true,
 	}
 
 	return fm, s, sessionDir
@@ -1106,6 +1178,7 @@ func setupCodexFileMonitor(t *testing.T) (*FileMonitor, *store.Store, string) {
 		adapter: codex,
 		fileMon: codex,
 		filer:   codex,
+		readAll: true,
 	}
 
 	return fm, s, sessionDir

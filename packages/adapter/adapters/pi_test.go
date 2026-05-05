@@ -191,6 +191,30 @@ func TestParseSessionFileStringContent(t *testing.T) {
 
 // --- FileMonitor ---
 
+func TestParseNewLinesCwd(t *testing.T) {
+	events := NewPi().ParseNewLines([]string{
+		`{"type":"session","id":"abc","cwd":"/home/user/dev/gmux","timestamp":"2026-03-19T10:00:00Z"}`,
+	}, "")
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d: %v", len(events), events)
+	}
+	if events[0].Cwd != "/home/user/dev/gmux" {
+		t.Errorf("expected cwd '/home/user/dev/gmux', got %q", events[0].Cwd)
+	}
+}
+
+func TestParseNewLinesCwdEmptySkipped(t *testing.T) {
+	// A session header without a cwd field should produce no event.
+	events := NewPi().ParseNewLines([]string{
+		`{"type":"session","id":"abc","timestamp":"2026-03-19T10:00:00Z"}`,
+	}, "")
+	for _, ev := range events {
+		if ev.Cwd != "" {
+			t.Errorf("expected no cwd event for header without cwd, got %q", ev.Cwd)
+		}
+	}
+}
+
 func TestParseNewLinesNameChange(t *testing.T) {
 	events := NewPi().ParseNewLines([]string{
 		`{"type":"session_info","name":"My new name"}`,
