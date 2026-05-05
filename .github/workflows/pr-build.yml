@@ -26,7 +26,43 @@ jobs:
     env:
       PR: ${{ inputs.pr_number || github.event.number }}
     steps:
+      # Resolve the PR head SHA explicitly so checkout pins to a commit
+      # a user can browse, not the synthetic refs/pull/N/merge ref that
+      # github computes for pull_request events. With rebase-merge as the
+      # project's merge policy, the head SHA is what lands on main, so
+      # the artifact's embedded version matches what'll be released.
+      - name: Resolve PR head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          sha=$(gh api "repos/${{ github.repository }}/pulls/${PR}" --jq .head.sha)
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+          # Full history so goreleaser's snapshot version_template can
+          # call git-describe and produce e.g. 1.5.1-snapshot-<short>
+          # instead of falling back to 0.0.0-snapshot-<short>.
+          fetch-depth: 0
+
+      - name: Capture build commit info
+        id: commit
+        run: |
+          set -eu
+          short=$(git rev-parse --short=7 HEAD)
+          # Subject only (no body) so the install comment stays one line.
+          # Truncate with an ellipsis at 100 chars to avoid runaway titles.
+          subject=$(git log -1 --format='%s' HEAD)
+          if [ ${#subject} -gt 100 ]; then
+            subject="${subject:0:97}…"
+          fi
+          {
+            echo "short=${short}"
+            echo "subject=${subject}"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
@@ -60,12 +96,16 @@ jobs:
         continue-on-error: true # read-only token on fork PRs
         env:
           GH_TOKEN: ${{ github.token }}
+          HEAD_SHORT: ${{ steps.commit.outputs.short }}
+          HEAD_SUBJECT: ${{ steps.commit.outputs.subject }}
         run: |
+          set -eu
           body="<!-- gmux-pr-build -->
           ### Try this PR
           \`\`\`sh
           curl -sSfL https://gmux.app/install-pr.sh | sh -s -- ${PR}
           \`\`\`
+          Built from [\`${HEAD_SHORT}\`](https://github.com/${{ github.repository }}/pull/${PR}/commits/${HEAD_SHORT}) — ${HEAD_SUBJECT}
           <sub>Requires [GitHub CLI](https://cli.github.com/) with auth. Artifacts expire after 7 days.</sub>"
 
           # Update existing comment or create a new one

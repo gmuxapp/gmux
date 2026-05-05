@@ -1,5 +1,15 @@
 version: 2
 
+# Snapshot builds (PRs, local dev) get a version that is traceable to a
+# real commit on the source branch. Format: <next-patch>-snapshot-<short>.
+# With fetch-depth: 0 in CI, .Version is git-describe-derived (e.g. 1.5.0)
+# so incpatch yields 1.5.1; without tags it falls back to 0.0.0.
+# .ShortCommit reflects whatever ref was checked out — pr-build.yml pins
+# this to the PR head SHA so the version maps directly to a commit a user
+# can browse.
+snapshot:
+  version_template: '{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}'
+
 before:
   hooks:
     # VERSION must be passed explicitly: vite reads it from process.env
