@@ -13,7 +13,7 @@ func (a *testAdapter) Name() string              { return a.name }
 func (a *testAdapter) Discover() bool            { return true }
 func (a *testAdapter) Match(_ []string) bool     { return a.matches }
 func (a *testAdapter) Env(_ EnvContext) []string { return nil }
-func (a *testAdapter) Monitor(_ []byte) *Status  { return nil }
+func (a *testAdapter) Monitor(_ []byte) *Event { return nil }
 
 func TestRegistryFallback(t *testing.T) {
 	t.Setenv("GMUX_ADAPTER", "") // isolate from ambient env (e.g. running inside gmux)

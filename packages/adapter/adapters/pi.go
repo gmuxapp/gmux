@@ -73,7 +73,7 @@ func (p *Pi) Launchers() []adapter.Launcher {
 // Monitor is a no-op for the pi adapter — status is driven by the
 // JSONL session file via FileMonitor.ParseNewLines instead of PTY output.
 // This avoids flicker from spinner redraws.
-func (p *Pi) Monitor(_ []byte) *adapter.Status {
+func (p *Pi) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
 
@@ -204,8 +204,8 @@ func (p *Pi) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 //
 // Unknown event types and unknown stopReasons produce no state change.
 // Extensions can emit custom events; these must not disrupt existing state.
-func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.FileEvent {
-	var events []adapter.FileEvent
+func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.Event {
+	var events []adapter.Event
 	for _, line := range lines {
 		if line == "" {
 			continue
@@ -218,12 +218,23 @@ func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.FileEvent 
 		}
 
 		switch peek.Type {
+		case "session":
+			// Session header — emit the canonical project cwd so the daemon
+			// can correct the session's directory if it was resumed from a
+			// different location.
+			var header struct {
+				Cwd string `json:"cwd"`
+			}
+			if err := json.Unmarshal([]byte(line), &header); err == nil && header.Cwd != "" {
+				events = append(events, adapter.Event{Cwd: header.Cwd})
+			}
+
 		case "session_info":
 			var si struct {
 				Name string `json:"name"`
 			}
 			if err := json.Unmarshal([]byte(line), &si); err == nil && si.Name != "" {
-				events = append(events, adapter.FileEvent{
+				events = append(events, adapter.Event{
 					Title: strings.TrimSpace(si.Name),
 				})
 			}
@@ -242,7 +253,7 @@ func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.FileEvent 
 			switch msg.Message.Role {
 			case "user":
 				// User submitted a message — assistant will start working.
-				events = append(events, adapter.FileEvent{
+				events = append(events, adapter.Event{
 					Status: &adapter.Status{Working: true},
 				})
 
@@ -250,18 +261,18 @@ func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.FileEvent 
 				switch msg.Message.StopReason {
 				case "toolUse":
 					// Assistant wants to call tools — agent loop continues.
-					events = append(events, adapter.FileEvent{
+					events = append(events, adapter.Event{
 						Status: &adapter.Status{Working: true},
 					})
 				case "stop":
 					// Assistant finished its turn — clear status, mark unread.
-					events = append(events, adapter.FileEvent{
+					events = append(events, adapter.Event{
 						Status: &adapter.Status{},
 						Unread: adapter.BoolPtr(true),
 					})
 				case "aborted":
 					// User pressed Esc to cancel — agent is idle.
-					events = append(events, adapter.FileEvent{
+					events = append(events, adapter.Event{
 						Status: &adapter.Status{},
 					})
 				case "error":
@@ -274,7 +285,7 @@ func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.FileEvent 
 						count, cwd := countTrailingErrors(filePath)
 						if count >= piMaxRetries(cwd) {
 							// Retries exhausted — agent gave up.
-							events = append(events, adapter.FileEvent{
+							events = append(events, adapter.Event{
 								Status: &adapter.Status{Error: true},
 							})
 						}

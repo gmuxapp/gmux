@@ -66,7 +66,7 @@ func (c *Claude) Launchers() []adapter.Launcher {
 }
 
 // Monitor is a no-op — status is driven by FileMonitor.ParseNewLines.
-func (c *Claude) Monitor(_ []byte) *adapter.Status {
+func (c *Claude) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
 
@@ -234,8 +234,9 @@ func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error)
 //       stop_reason="end_turn"       → idle (normal completion)
 //       stop_reason="stop_sequence"  → idle (user pressed Esc)
 //       thinking-only                → intermediate, ignored
-func (c *Claude) ParseNewLines(lines []string, _ string) []adapter.FileEvent {
-	var events []adapter.FileEvent
+func (c *Claude) ParseNewLines(lines []string, _ string) []adapter.Event {
+	var events []adapter.Event
+	cwdEmitted := false
 	for _, line := range lines {
 		if line == "" {
 			continue
@@ -253,7 +254,7 @@ func (c *Claude) ParseNewLines(lines []string, _ string) []adapter.FileEvent {
 				CustomTitle string `json:"customTitle"`
 			}
 			if err := json.Unmarshal([]byte(line), &ct); err == nil && ct.CustomTitle != "" {
-				events = append(events, adapter.FileEvent{
+				events = append(events, adapter.Event{
 					Title: strings.TrimSpace(ct.CustomTitle),
 				})
 			}
@@ -261,7 +262,17 @@ func (c *Claude) ParseNewLines(lines []string, _ string) []adapter.FileEvent {
 		case "user":
 			// User submitted a message — assistant will start working.
 			// Title comes from ParseSessionFile on attribution, not here.
-			events = append(events, adapter.FileEvent{
+			// The cwd on the first user line is the canonical project directory.
+			var userLine struct {
+				Cwd string `json:"cwd"`
+			}
+			if !cwdEmitted {
+				if err := json.Unmarshal([]byte(line), &userLine); err == nil && userLine.Cwd != "" {
+					events = append(events, adapter.Event{Cwd: userLine.Cwd})
+					cwdEmitted = true
+				}
+			}
+			events = append(events, adapter.Event{
 				Status: &adapter.Status{Working: true},
 			})
 
@@ -293,13 +304,13 @@ func (c *Claude) ParseNewLines(lines []string, _ string) []adapter.FileEvent {
 			case hasToolUse:
 				// Tool use = still working (will get tool result, then continue).
 				// Re-assert working so recovery from transient states works.
-				events = append(events, adapter.FileEvent{
+				events = append(events, adapter.Event{
 					Status: &adapter.Status{Working: true},
 				})
 			case hasText:
 				// Text with no tool_use = turn complete (end_turn, stop_sequence,
 				// or streaming null stop_reason). All mean idle.
-				events = append(events, adapter.FileEvent{
+				events = append(events, adapter.Event{
 					Status: &adapter.Status{},
 					Unread: adapter.BoolPtr(true),
 				})

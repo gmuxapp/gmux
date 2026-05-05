@@ -205,6 +205,18 @@ func TestCodexParseSessionFileNotSessionMeta(t *testing.T) {
 
 // --- FileMonitor ---
 
+func TestCodexParseNewLinesCwd(t *testing.T) {
+	events := NewCodex().ParseNewLines([]string{
+		`{"type":"session_meta","payload":{"id":"abc","timestamp":"2026-03-19T10:00:00Z","cwd":"/home/user/dev/gmux"}}`,
+	}, "")
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d: %v", len(events), events)
+	}
+	if events[0].Cwd != "/home/user/dev/gmux" {
+		t.Errorf("expected cwd '/home/user/dev/gmux', got %q", events[0].Cwd)
+	}
+}
+
 func TestCodexParseNewLinesUserMessage(t *testing.T) {
 	events := NewCodex().ParseNewLines([]string{
 		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the bug"}]}}`,

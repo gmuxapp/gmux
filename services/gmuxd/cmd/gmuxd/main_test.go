@@ -24,7 +24,7 @@ func (a discoverTestAdapter) Name() string                      { return a.name 
 func (a discoverTestAdapter) Discover() bool                    { return a.available }
 func (a discoverTestAdapter) Match(_ []string) bool             { return false }
 func (a discoverTestAdapter) Env(_ adapter.EnvContext) []string { return nil }
-func (a discoverTestAdapter) Monitor(_ []byte) *adapter.Status  { return nil }
+func (a discoverTestAdapter) Monitor(_ []byte) *adapter.Event { return nil }
 func (a discoverTestAdapter) Launchers() []adapter.Launcher {
 	return []adapter.Launcher{{ID: a.name, Label: a.name}}
 }

@@ -83,7 +83,7 @@ func (g *Shell) Launchers() []adapter.Launcher {
 	}}
 }
 
-func (g *Shell) Monitor(_ []byte) *adapter.Status {
+func (g *Shell) Monitor(_ []byte) *adapter.Event {
 	// Shell title parsing is handled centrally in gmux so all sessions
 	// can use terminal titles as a fallback, not just shell sessions.
 	return nil
