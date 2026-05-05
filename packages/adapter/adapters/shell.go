@@ -29,11 +29,24 @@ func AllAdapters() []adapter.Adapter {
 	return result
 }
 
+// FindByKind returns the adapter with the given name, or nil if not found.
+// Includes the shell fallback adapter.
+func FindByKind(kind string) adapter.Adapter {
+	for _, a := range AllAdapters() {
+		if a.Name() == kind {
+			return a
+		}
+	}
+	return nil
+}
+
 // Compile-time interface checks.
 var (
-	_ adapter.SessionFiler = (*Shell)(nil)
-	_ adapter.Resumer      = (*Shell)(nil)
-	_ adapter.CommandTitler = (*Shell)(nil)
+	_ adapter.SessionFiler    = (*Shell)(nil)
+	_ adapter.Resumer         = (*Shell)(nil)
+	_ adapter.CommandTitler   = (*Shell)(nil)
+	_ adapter.SessionRegistrar = (*Shell)(nil)
+	_ adapter.SessionFinalizer = (*Shell)(nil)
 )
 
 // Shell is the fallback adapter. It matches all commands and parses
@@ -148,9 +161,32 @@ func (g *Shell) CanResume(path string) bool {
 	return err == nil
 }
 
-// WriteStateFile creates a shell state file for a session. Called by gmuxd
-// when a shell session is first discovered (on register). The file allows
-// the session scanner to rediscover the session after a gmuxd restart.
+// --- SessionRegistrar ---
+
+// OnRegister writes a shell state file so gmuxd can rediscover the session
+// after a restart, and returns the initial slug derived from the cwd.
+func (g *Shell) OnRegister(id, cwd string, command []string) (adapter.RegistrationInfo, error) {
+	_, err := WriteShellStateFile(id, cwd, command)
+	if err != nil {
+		return adapter.RegistrationInfo{}, err
+	}
+	slug := adapter.Slugify(filepath.Base(paths.NormalizePath(cwd)))
+	if slug == "" {
+		slug = "shell"
+	}
+	return adapter.RegistrationInfo{Slug: slug}, nil
+}
+
+// --- SessionFinalizer ---
+
+// OnDismiss removes the shell state file when a session is dismissed.
+func (g *Shell) OnDismiss(id, cwd string) {
+	RemoveShellStateFile(id, cwd)
+}
+
+// WriteShellStateFile creates a shell state file for a session. Called by
+// OnRegister. The file allows the session scanner to rediscover the session
+// after a gmuxd restart.
 func WriteShellStateFile(sessionID, cwd string, command []string) (string, error) {
 	sh := NewShell()
 	dir := sh.SessionDir(cwd)

@@ -986,6 +986,10 @@ func isUnderRoot(dir, root string) bool {
 
 // --- Adapter/file helpers ---
 
+// findAdapter looks up an adapter by kind among the non-fallback adapters
+// (i.e. all adapters except shell). This is intentional: shell sessions do
+// not use the file-monitoring pipeline (shell has no FileMonitor). Use
+// adapters.FindByKind when the shell fallback must be included.
 func findAdapter(kind string) adapter.Adapter {
 	for _, a := range adapters.All {
 		if a.Name() == kind {

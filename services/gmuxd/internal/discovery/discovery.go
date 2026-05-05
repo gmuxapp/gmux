@@ -210,18 +210,17 @@ func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, 
 		}
 	}
 
-	// Write shell state file so the session scanner can rediscover
-	// shell sessions after a gmuxd restart.
-	if newSess.Kind == "shell" {
-		path, err := adapters.WriteShellStateFile(newSess.ID, newSess.Cwd, newSess.Command)
-		if err != nil {
-			log.Printf("register: failed to write shell state file for %s: %v", newSess.ID, err)
-		} else {
-			newSess.Slug = adapter.Slugify(filepath.Base(newSess.Cwd))
-			if newSess.Slug == "" {
-				newSess.Slug = "shell"
+	// Let the adapter perform any registration work (e.g. writing a
+	// state file for restart recovery) and provide initial metadata.
+	if a := adapters.FindByKind(newSess.Kind); a != nil {
+		if reg, ok := a.(adapter.SessionRegistrar); ok {
+			info, err := reg.OnRegister(newSess.ID, newSess.Cwd, newSess.Command)
+			if err != nil {
+				log.Printf("register: %s adapter OnRegister failed for %s: %v", newSess.Kind, newSess.ID, err)
+			} else if info.Slug != "" {
+				newSess.Slug = info.Slug
+				log.Printf("register: %s registered session %s (slug=%s)", newSess.Kind, newSess.ID, info.Slug)
 			}
-			log.Printf("register: wrote shell state file %s", path)
 		}
 	}
 

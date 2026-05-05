@@ -1291,9 +1291,11 @@ func serve(stderr io.Writer) int {
 					log.Printf("dismiss: %s: runner kill failed: %v", sessionID, err)
 				}
 			}
-			// Clean up shell state file before removing from store.
-			if sess.Kind == "shell" {
-				adapters.RemoveShellStateFile(sessionID, projects.NormalizePath(sess.Cwd))
+			// Let the adapter perform any cleanup (e.g. removing a state file).
+			if a := adapters.FindByKind(sess.Kind); a != nil {
+				if fin, ok := a.(adapter.SessionFinalizer); ok {
+					fin.OnDismiss(sessionID, projects.NormalizePath(sess.Cwd))
+				}
 			}
 			// Remove session from its project's sessions array.
 			projectMgr.DismissSession(sessionID, sess.Slug)

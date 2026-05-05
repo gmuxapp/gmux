@@ -104,6 +104,27 @@ type CommandTitler interface {
 	CommandTitle(command []string) string
 }
 
+// RegistrationInfo holds initial session metadata returned by SessionRegistrar.
+type RegistrationInfo struct {
+	// Slug is the human-readable session identifier to assign at registration.
+	// Empty means the daemon should derive one itself.
+	Slug string
+}
+
+// SessionRegistrar is optionally implemented by adapters that need to perform
+// work when gmuxd registers a new session (e.g. writing a state file for
+// restart recovery). Returns initial metadata like the session slug.
+// A non-nil error is logged by gmuxd but does not abort registration.
+type SessionRegistrar interface {
+	OnRegister(id, cwd string, command []string) (RegistrationInfo, error)
+}
+
+// SessionFinalizer is optionally implemented by adapters that need cleanup
+// when a session is dismissed from gmuxd (e.g. removing a state file).
+type SessionFinalizer interface {
+	OnDismiss(id, cwd string)
+}
+
 // Resumer is implemented by adapters whose sessions can be resumed
 // after the process exits.
 type Resumer interface {
