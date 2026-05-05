@@ -1919,6 +1919,47 @@ a.home-host-link:hover {
   border-color: oklch(78% 0.1 195);
 }
 
+.btn:disabled,
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* Replay (read-only dead session) layout: terminal area fills remaining
+   vertical space, action bar pinned beneath. The action bar carries the
+   resume/dismiss buttons that the sidebar used to auto-trigger on click. */
+.replay-root {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.replay-root > .terminal-shell {
+  flex: 1;
+  min-height: 0;
+}
+
+.replay-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+}
+
+.replay-status {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.replay-buttons {
+  display: flex;
+  gap: 8px;
+}
+
 /* ── Reduced motion ── */
 @media (prefers-reduced-motion: reduce) {
   .session-dot-indicator.arriving,

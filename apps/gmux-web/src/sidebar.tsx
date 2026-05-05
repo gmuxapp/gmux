@@ -118,12 +118,8 @@ function SessionItem({
       class={cls}
       href={href}
       draggable={canDrag && !!onDragStart}
-      onClick={(e) => {
+      onClick={() => {
         onClick?.()
-        if (sleeping) {
-          e.preventDefault()
-          onResume?.(session.id)
-        }
       }}
       onAuxClick={(e) => { if (e.button === 1 && onClose) { e.preventDefault(); onClose() } }}
       onDragStart={(e) => {

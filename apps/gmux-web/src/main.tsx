@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
 import { TerminalView } from './terminal'
+import { ReplayView } from './replay-view'
 import { useArrivalPulse } from './use-arrival-pulse'
 import { Sidebar } from './sidebar'
 import type { DotState } from './store'
@@ -517,9 +518,17 @@ function App() {
             onPasteReady={handleTerminalPasteReady}
             onFocusReady={handleTerminalFocusReady}
           />
+        ) : selectedVal && !selectedVal.alive && termOpts && !USE_MOCK ? (
+          <ReplayView
+            session={selectedVal}
+            terminalOptions={termOpts}
+            onResume={handleResume}
+            onDismiss={handleCloseSession}
+            resuming={resumingId === selectedVal.id}
+          />
         ) : selectedVal ? (
           <div class="state-message">
-            <div class="state-subtitle">{selectedVal.alive ? 'Connecting…' : 'Session ended'}</div>
+            <div class="state-subtitle">Connecting…</div>
           </div>
         ) : (
           <Home />
