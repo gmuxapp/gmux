@@ -65,7 +65,7 @@ func (c *Codex) Launchers() []adapter.Launcher {
 }
 
 // Monitor is a no-op — status is driven by FileMonitor.ParseNewLines.
-func (c *Codex) Monitor(_ []byte) *adapter.Status {
+func (c *Codex) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
 
@@ -211,8 +211,8 @@ func (c *Codex) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) 
 //
 // Signals (from response_item lines):
 //   - role:"user" type:"message" → extract text for title hint
-func (c *Codex) ParseNewLines(lines []string, _ string) []adapter.FileEvent {
-	var events []adapter.FileEvent
+func (c *Codex) ParseNewLines(lines []string, _ string) []adapter.Event {
+	var events []adapter.Event
 
 	for _, line := range lines {
 		if line == "" {
@@ -231,25 +231,35 @@ func (c *Codex) ParseNewLines(lines []string, _ string) []adapter.FileEvent {
 		}
 
 		switch entry.Type {
+		case "session_meta":
+			// Session metadata record — emit the canonical project cwd.
+			var meta struct {
+				Payload struct {
+					Cwd string `json:"cwd"`
+				} `json:"payload"`
+			}
+			if err := json.Unmarshal([]byte(line), &meta); err == nil && meta.Payload.Cwd != "" {
+				events = append(events, adapter.Event{Cwd: meta.Payload.Cwd})
+			}
 		case "event_msg":
 			switch entry.Payload.Type {
 			case "user_message":
 				// User submitted a prompt — assistant will start working.
 				// Title comes from ParseSessionFile on attribution, not here.
-				events = append(events, adapter.FileEvent{
+				events = append(events, adapter.Event{
 					Status: &adapter.Status{Working: true},
 				})
 
 			case "task_complete":
 				// Agent finished work — clear status, mark unread.
-				events = append(events, adapter.FileEvent{
+				events = append(events, adapter.Event{
 					Status: &adapter.Status{},
 					Unread: adapter.BoolPtr(true),
 				})
 
 			case "turn_cancelled", "turn_aborted":
 				// User-initiated cancel — clear status but no unread.
-				events = append(events, adapter.FileEvent{
+				events = append(events, adapter.Event{
 					Status: &adapter.Status{},
 				})
 			}

@@ -656,6 +656,13 @@ func (fm *FileMonitor) processAttributedFileLocked(sessionID, path string) {
 			if evt.Unread != nil && !readAll {
 				sess.Unread = *evt.Unread
 			}
+			if evt.Cwd != "" && readAll {
+				// Only apply cwd on the initial full read (first attribution).
+				// Session file cwds are immutable; re-applying on every write
+				// is redundant and session cwds don't change mid-session.
+				sess.Cwd = evt.Cwd
+				ms.cwd = evt.Cwd
+			}
 		}
 	})
 }

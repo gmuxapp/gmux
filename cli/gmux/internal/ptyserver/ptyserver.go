@@ -863,12 +863,13 @@ func (s *Server) readPTY() {
 			s.state.SetShellTitle(title)
 		}
 		if s.adapter != nil {
-			if status := s.adapter.Monitor(data); status != nil {
-				if status.Title != "" {
-					s.state.SetAdapterTitle(status.Title)
-					status.Title = ""
+			if ev := s.adapter.Monitor(data); ev != nil {
+				if ev.Title != "" {
+					s.state.SetAdapterTitle(ev.Title)
 				}
-				s.state.SetStatus(status)
+				if ev.Status != nil {
+					s.state.SetStatus(ev.Status)
+				}
 			}
 		}
 
