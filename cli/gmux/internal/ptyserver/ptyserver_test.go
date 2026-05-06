@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,12 +20,26 @@ import (
 	"nhooyr.io/websocket"
 )
 
+// mustBindSocket binds a Unix socket at sockPath for tests, failing
+// the test on any error. Mirrors run.go's bind-before-setup pattern
+// so tests exercise the same Listener-handoff contract real callers
+// use.
+func mustBindSocket(t *testing.T, sockPath string) net.Listener {
+	t.Helper()
+	ln, err := BindSocket(sockPath)
+	if err != nil {
+		t.Fatalf("BindSocket %s: %v", sockPath, err)
+	}
+	return ln
+}
+
 func TestPTYServerBasicOutput(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
 
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "echo hello-from-pty; sleep 0.2"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 	})
 	if err != nil {
@@ -93,6 +108,7 @@ func TestPTYServerResize(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "sleep 1"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 		Cols:       80,
 		Rows:       25,
@@ -159,6 +175,7 @@ func TestPTYServerInput(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "read line; echo got:$line"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 	})
 	if err != nil {
@@ -248,6 +265,7 @@ func TestInputEndpoint(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "read line; echo got:$line"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 	})
 	if err != nil {
@@ -318,6 +336,7 @@ func TestInputEndpointEmpty(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "sleep 1"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 	})
 	if err != nil {
@@ -361,6 +380,7 @@ func TestPTYServerScrollbackPersistence(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "echo SCROLLBACK-MARKER-XYZ"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 		Scrollback: sink,
 	})
@@ -404,6 +424,7 @@ func TestPTYServerScrollbackNotConfigured(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "echo no-scrollback-here"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 		// Scrollback intentionally nil.
 	})
@@ -428,6 +449,7 @@ func TestPTYServerCleanup(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "sleep 0.1"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 	})
 	if err != nil {
@@ -448,6 +470,7 @@ func TestPTYServerScrollbackReplay(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "echo replay-test-output; sleep 2"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 	})
 	if err != nil {
@@ -509,6 +532,7 @@ func TestScrollbackTailEndpoint(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", script},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 		Cols:       80,
 		Rows:       10, // small viewport forces most lines into scrollback
@@ -577,6 +601,7 @@ func TestPTYServerSnapshotBeforeLiveData(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "while true; do echo active-output-line; done"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 	})
 	if err != nil {
@@ -665,6 +690,7 @@ func TestPTYServerResizeDedup(t *testing.T) {
 			while true; do sleep 0.1; done
 		`},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 		Cols:       80,
 		Rows:       25,
@@ -774,6 +800,7 @@ func TestPTYServerCursorStateReplay(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "printf '\x1b[?25l'; sleep 5"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 	})
 	if err != nil {
@@ -839,6 +866,7 @@ func TestPTYServerSpinnerPreservesContent(t *testing.T) {
 			sleep 3
 		`},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 	})
 	if err != nil {
@@ -1003,6 +1031,7 @@ func TestPTYServerDeferredScreenSync(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "echo deferred-sync-marker; sleep 5"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 	})
 	if err != nil {
@@ -1061,6 +1090,7 @@ func TestPTYServerLiveDataNotDelayed(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "sleep 0.3; echo live-data-marker; sleep 5"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 	})
 	if err != nil {
@@ -1128,6 +1158,7 @@ func TestPTYServerShrinkForReconnect(t *testing.T) {
 			while true; do sleep 0.1; done
 		`},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 		Cols:       80,
 		Rows:       25,
@@ -1284,6 +1315,7 @@ func TestConfigLocalOutReceivesFastExitOutput(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "echo fast-exit-marker"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 		LocalOut:   &out,
 	})
@@ -1326,6 +1358,7 @@ func TestPTYDoneClosesAfterFinalFlush(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", "sleep 0.3; echo END-OF-OUTPUT"},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 		LocalOut:   &out,
 	})
@@ -1455,6 +1488,7 @@ func TestNewSpawnsChildWithComposedEnv(t *testing.T) {
 	srv, err := New(Config{
 		Command:    []string{"sh", "-c", `printf "TERM=%s|TPV=%s|TP=%s\n" "$TERM" "$TERM_PROGRAM_VERSION" "$TERM_PROGRAM"`},
 		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
 		LocalOut:   &out,
 		Version:    "9.9.9-test",
@@ -1475,4 +1509,59 @@ func TestNewSpawnsChildWithComposedEnv(t *testing.T) {
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("child env: want substring %q, got: %q", want, out.String())
 	}
+}
+
+func TestBindSocketStaleFile(t *testing.T) {
+	// A leftover socket file with no listener is not a real owner;
+	// BindSocket should remove it and listen successfully.
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "stale.sock")
+	if err := os.WriteFile(sockPath, []byte("not a socket"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ln, err := BindSocket(sockPath)
+	if err != nil {
+		t.Fatalf("BindSocket on stale file: %v", err)
+	}
+	defer ln.Close()
+
+	// A second bind on the same path should now see a live owner
+	// (the first listener) and refuse with ErrSocketInUse.
+	if _, err := BindSocket(sockPath); !errors.Is(err, ErrSocketInUse) {
+		t.Fatalf("second BindSocket: want ErrSocketInUse, got %v", err)
+	}
+}
+
+func TestBindSocketLiveOwnerLeftIntact(t *testing.T) {
+	// On collision, BindSocket must NOT remove or replace the
+	// existing socket file; the live owner has to keep working.
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "live.sock")
+
+	first, err := BindSocket(sockPath)
+	if err != nil {
+		t.Fatalf("first BindSocket: %v", err)
+	}
+	defer first.Close()
+
+	if _, err := BindSocket(sockPath); !errors.Is(err, ErrSocketInUse) {
+		t.Fatalf("second BindSocket: want ErrSocketInUse, got %v", err)
+	}
+
+	// The live owner can still accept a connection.
+	doneCh := make(chan struct{})
+	go func() {
+		conn, _ := first.Accept()
+		if conn != nil {
+			conn.Close()
+		}
+		close(doneCh)
+	}()
+	c, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatalf("dial after collision: %v", err)
+	}
+	c.Close()
+	<-doneCh
 }

@@ -97,6 +97,24 @@ func runSession(args []string, attach bool) {
 	}
 	sockPath := filepath.Join(socketDir, sessionID+".sock")
 
+	// Bind the socket BEFORE any sessionID-dependent setup
+	// (scrollback path, env, state). On collision with a live
+	// runner — which typically only happens when a daemon-supplied
+	// GMUX_RESUME_ID lands in a window where the targeted session
+	// is actually still alive — fall back to a fresh id and bind
+	// that instead. See ADR 0003 "Collision handling".
+	os.MkdirAll(filepath.Dir(sockPath), 0o700)
+	listener, err := ptyserver.BindSocket(sockPath)
+	if errors.Is(err, ptyserver.ErrSocketInUse) {
+		log.Printf("gmux: requested session id %s is in use; falling back to a fresh id", sessionID)
+		sessionID = naming.SessionID()
+		sockPath = filepath.Join(socketDir, sessionID+".sock")
+		listener, err = ptyserver.BindSocket(sockPath)
+	}
+	if err != nil {
+		log.Fatalf("failed to bind session socket: %v", err)
+	}
+
 	// Resolve adapter — registered adapters first, shell fallback
 	registry := adapter.NewRegistry()
 	for _, a := range adapters.All {
@@ -156,6 +174,7 @@ func runSession(args []string, attach bool) {
 		Command:    args,
 		Cwd:        workDir,
 		Env:        env,
+		Listener:   listener,
 		SocketPath: sockPath,
 		Adapter:    a,
 		State:      state,
@@ -213,7 +232,8 @@ func runSession(args []string, attach bool) {
 		fmt.Printf("command:  %s\n", strings.Join(args, " "))
 	}
 
-	// Start PTY server. Reuses the outer `err` declared by os.Getwd above.
+	// Start PTY server. The socket is already bound to `listener`
+	// (above); ptyserver.New takes ownership and serves on it.
 	srv, err = ptyserver.New(ptyCfg)
 	if err != nil {
 		if localTty != nil {
