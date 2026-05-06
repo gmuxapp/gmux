@@ -75,6 +75,83 @@ func TestRegisterReRegistrationPreservesPersistedSlug(t *testing.T) {
 	}
 }
 
+// TestRegisterReRegistrationPreservesAttributionAndHistory pins
+// the broader field-preservation contract of re-registration: a
+// resumed runner reports fresh runtime state but cannot know the
+// session's history (CreatedAt) or the FileMonitor-derived
+// attribution (AdapterTitle / Subtitle / WorkspaceRoot / Remotes).
+// Anything the runner doesn't own must carry across the seam,
+// otherwise users see a re-titled session card and lose their
+// project's birth time on every resume.
+func TestRegisterReRegistrationPreservesAttributionAndHistory(t *testing.T) {
+	// The runner reports fresh runtime state with empty values
+	// for everything attribution / FileMonitor would have set.
+	srv := startUnixServer(t, metaHandler(store.Session{
+		ID:        "sess-resume",
+		Kind:      "pi",
+		Cwd:       "/work/repo",
+		Alive:     true,
+		Pid:       9001,
+		StartedAt: "2026-05-06T16:00:00Z",
+	}))
+	defer srv.cleanup()
+
+	sessions := store.New()
+	sessions.Upsert(store.Session{
+		ID:            "sess-resume",
+		Kind:          "pi",
+		Cwd:           "/work/repo",
+		Alive:         false,
+		Resumable:     true,
+		CreatedAt:     "2026-04-01T10:00:00Z", // the original birth, not the resume's
+		Slug:          "fix-the-login-bug",
+		AdapterTitle:  "Fix the login bug",
+		Subtitle:      "investigating session expiry",
+		WorkspaceRoot: "/work/repo",
+		Remotes:       map[string]string{"origin": "git@github.com:acme/web.git"},
+	})
+
+	if err := Register(sessions, nil, nil, srv.socketPath, nil); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	got, ok := sessions.Get("sess-resume")
+	if !ok {
+		t.Fatal("session missing after Register")
+	}
+
+	// Historical / attribution fields: must survive.
+	if got.CreatedAt != "2026-04-01T10:00:00Z" {
+		t.Errorf("CreatedAt = %q, want preserved (runner reports its own birth, not the session's)", got.CreatedAt)
+	}
+	if got.AdapterTitle != "Fix the login bug" {
+		t.Errorf("AdapterTitle = %q, want preserved", got.AdapterTitle)
+	}
+	if got.Subtitle != "investigating session expiry" {
+		t.Errorf("Subtitle = %q, want preserved", got.Subtitle)
+	}
+	if got.WorkspaceRoot != "/work/repo" {
+		t.Errorf("WorkspaceRoot = %q, want preserved", got.WorkspaceRoot)
+	}
+	if got.Remotes["origin"] != "git@github.com:acme/web.git" {
+		t.Errorf("Remotes[origin] = %q, want preserved", got.Remotes["origin"])
+	}
+
+	// Runtime fields: must update from the fresh /meta.
+	if !got.Alive {
+		t.Errorf("Alive = false, want true after re-registration")
+	}
+	if got.Pid != 9001 {
+		t.Errorf("Pid = %d, want 9001", got.Pid)
+	}
+	if got.StartedAt != "2026-05-06T16:00:00Z" {
+		t.Errorf("StartedAt = %q, want fresh from /meta", got.StartedAt)
+	}
+	if got.Resumable {
+		t.Errorf("Resumable = true, want false (re-registered alive sessions are not resumable)")
+	}
+}
+
 // TestRegisterFreshSessionRunsOnRegisterForShell captures the
 // counterpart guarantee: a brand-new id (not present in the store)
 // goes through the adapter's OnRegister hook so the initial slug

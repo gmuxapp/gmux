@@ -183,14 +183,17 @@ func probeSocket(socketPath string) bool {
 // already known to the store:
 //
 //   - **Re-registration** (id already in store). Resume — where the
-//     daemon passed GMUX_SESSION_ID to the runner per ADR 0003 — and
+//     daemon passed GMUX_RESUME_ID to the runner per ADR 0003 — and
 //     daemon-restart-with-surviving-runner both land here. The
-//     persisted slug is preserved; runtime fields (alive, pid,
-//     socket, status, hash) take their values from the fresh /meta
-//     payload. The adapter's OnRegister hook is intentionally
-//     skipped: its primary job is slug derivation, and the
-//     authoritative slug for this session was decided at original
-//     registration.
+//     existing record is mutated in place: runtime fields (alive,
+//     pid, socket, status, started/exit times, binary hash, runner
+//     version, command, terminal size) take their values from the
+//     fresh /meta payload, while everything else — slug,
+//     created_at, attribution-derived adapter title and subtitle,
+//     workspace root, remotes — carries across the seam. The
+//     adapter's OnRegister hook is intentionally skipped: its
+//     primary job is slug derivation, and the authoritative slug
+//     for this session was decided at original registration.
 //
 //   - **Fresh** (id not in store). Normal new-session launch. The
 //     adapter's OnRegister runs to write any per-session state file
@@ -207,11 +210,29 @@ func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, 
 	}
 
 	if existing, ok := sessions.Get(newSess.ID); ok {
-		// Re-registration. Preserve the slug already resolved at
-		// original registration; everything else is fresh runtime
-		// state from /meta.
-		newSess.Slug = existing.Slug
-		log.Printf("register: re-registered session %s (slug=%s)", newSess.ID, newSess.Slug)
+		// Re-registration. The runner reports fresh runtime state;
+		// the store has the historical and attribution-derived
+		// state from before the seam. Merge by overwriting only the
+		// runtime-owned fields so anything the runner doesn't know
+		// about (slug, created_at, FileMonitor-attributed title /
+		// subtitle, workspace metadata) survives.
+		existing.Alive = newSess.Alive
+		existing.Pid = newSess.Pid
+		existing.SocketPath = socketPath
+		existing.StartedAt = newSess.StartedAt
+		existing.ExitedAt = newSess.ExitedAt
+		existing.ExitCode = newSess.ExitCode
+		existing.Status = newSess.Status
+		existing.BinaryHash = newSess.BinaryHash
+		existing.RunnerVersion = newSess.RunnerVersion
+		existing.Command = newSess.Command
+		existing.TerminalCols = newSess.TerminalCols
+		existing.TerminalRows = newSess.TerminalRows
+		// Resumable is a derived attribute of dead sessions; a
+		// re-registration means alive, so always clear.
+		existing.Resumable = false
+		*newSess = existing
+		log.Printf("register: re-registered %s session %s (slug=%s)", newSess.Kind, newSess.ID, newSess.Slug)
 	} else if a := adapters.FindByKind(newSess.Kind); a != nil {
 		if reg, ok := a.(adapter.SessionRegistrar); ok {
 			info, err := reg.OnRegister(newSess.ID, newSess.Cwd, newSess.Command)
