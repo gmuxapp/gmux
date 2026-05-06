@@ -85,12 +85,18 @@ The two have orthogonal meanings: `GMUX_SESSION_ID` is the
 runner-published "this is my id" (consumed by adapters and hooks);
 `GMUX_RESUME_ID` is the daemon-supplied "adopt this id at
 startup" (consumed only by the runner's own initialisation).
-Using distinct names prevents nested-gmux invocations from
-accidentally re-binding the parent session's id: a `gmux foo`
-inside an interactive gmux session inherits `GMUX_SESSION_ID` from
-the parent runner but does not inherit `GMUX_RESUME_ID` (the
-daemon never set it for the parent), so the nested invocation
-generates a fresh id as expected.
+Distinct names let us prevent nested-gmux invocations from
+accidentally re-binding the parent session's id. The runner does
+not propagate `GMUX_RESUME_ID` into PTY children
+(`buildChildEnv` strips it; `GMUX_SESSION_ID` is intentionally
+kept because adapters and hooks consume it), so a `gmux foo`
+inside an interactive gmux session does not see
+`GMUX_RESUME_ID` at all and falls through to a fresh id. Without
+the strip, the daemon→runner directive would silently propagate
+to every descendant of the runner's PTY child and the
+collision-fallback would catch the inevitable bind clash; the
+dedicated env var name plus the explicit strip means we don't
+rely on that fallback for the nested case.
 
 ### Register simplifies
 
@@ -102,11 +108,26 @@ func Register(...) error {
     if err != nil { return err }
 
     // Re-registration of a known id (resume, daemon restart with
-    // surviving runner, transient socket-file race): preserve the
-    // slug already resolved by the adapter; only the runtime fields
-    // change.
+    // surviving runner, transient socket-file race): mutate the
+    // existing record in place, overwriting only the runtime
+    // fields the runner is authoritative for. Slug, created_at,
+    // FileMonitor-attributed adapter title and subtitle, workspace
+    // metadata, unread — all carry across the seam.
     if existing, ok := sessions.Get(newSess.ID); ok {
-        newSess.Slug = existing.Slug
+        existing.Alive = newSess.Alive
+        existing.Pid = newSess.Pid
+        existing.SocketPath = socketPath
+        existing.StartedAt = newSess.StartedAt
+        existing.ExitedAt = newSess.ExitedAt
+        existing.ExitCode = newSess.ExitCode
+        existing.Status = newSess.Status
+        existing.Command = newSess.Command
+        existing.BinaryHash = newSess.BinaryHash
+        existing.RunnerVersion = newSess.RunnerVersion
+        existing.TerminalCols = newSess.TerminalCols
+        existing.TerminalRows = newSess.TerminalRows
+        existing.Resumable = false
+        *newSess = existing
     } else if a := adapters.FindByKind(newSess.Kind); a != nil {
         if reg, ok := a.(adapter.SessionRegistrar); ok {
             info, _ := reg.OnRegister(newSess.ID, newSess.Cwd, newSess.Command)
@@ -145,11 +166,17 @@ ADR 0004). No `RunnerID` field, no broker-side resolution
 indirection, no migration of files at merge time, no orphaned
 runner-id directories to reap.
 
-### Slug preservation on re-registration
+### Field preservation on re-registration
 
 When an existing id re-registers, `discovery.Register` skips the
-adapter's `OnRegister` hook and reuses the already-resolved slug.
-Two reasons:
+adapter's `OnRegister` hook and copies only the
+runtime-authoritative fields from the runner's `/meta` payload
+onto the existing record. Anything the runner cannot speak to
+(slug, the session's original `created_at`, FileMonitor-derived
+`adapter_title` / `subtitle`, `workspace_root`, `remotes`,
+`unread`) survives untouched.
+
+For slug specifically, two reasons matter:
 
 1. **Slug stability across resume.** The dead session's persisted
    record (loaded by `sessionmeta.Sweep` at daemon startup) carries
@@ -363,9 +390,10 @@ already knows the id at fork time.
 ### G. Reuse `GMUX_SESSION_ID` (which the runner already exports
 for its child process) as the daemon→runner channel
 
-Rejected. `GMUX_SESSION_ID` is set by the runner for its child;
-a nested `gmux foo` invocation inside an interactive gmux session
-inherits it from the parent shell. If the runner read
+Rejected. `GMUX_SESSION_ID` is set by the runner for its child
+and intentionally propagates: adapters and hooks consume it.
+A nested `gmux foo` invocation inside an interactive gmux session
+implicitly inherits it from the parent shell. If the runner read
 `GMUX_SESSION_ID` on startup as a directive, a nested invocation
 would attempt to re-bind the parent session's id, depending on
 the collision fallback to recover. That works (the user ends up
