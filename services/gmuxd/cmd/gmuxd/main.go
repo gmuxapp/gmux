@@ -436,9 +436,12 @@ func serve(stderr io.Writer) int {
 	// Drive the persister's removal loop off store events so every
 	// session-remove (dismiss, slug takeover, peer disconnect, etc.)
 	// drops the matching meta dir. The explicit forgetMeta call in
-	// the dismiss handler is redundant but cheap; resume merge does
-	// NOT broadcast session-remove (it's an Alive=false→true Upsert)
-	// so its forgetMeta call is the only thing that cleans up there.
+	// the dismiss handler is redundant but cheap. Resume is an
+	// alive=false→true Upsert under the same id (ADR 0003) and
+	// leaves meta.json in place; it gets overwritten by persistDead
+	// the next time the session dies, or harmlessly rediscovered as
+	// alive=true on the next daemon restart. No explicit cleanup
+	// needed.
 	metaEvents, cancelMetaEvents := sessions.Subscribe()
 	defer cancelMetaEvents()
 	go metaStore.WatchRemovals(metaEvents)
@@ -455,7 +458,6 @@ func serve(stderr io.Writer) int {
 
 	subs := discovery.NewSubscriptions(sessions)
 	subs.OnDead = persistDead
-	pendingResumes := discovery.NewPendingResumes()
 	var resumeMu sync.Mutex
 
 	// Start file monitor — watches adapter session directories with inotify
@@ -479,7 +481,7 @@ func serve(stderr io.Writer) int {
 	// Start socket-based discovery (scans /tmp/gmux-sessions/*.sock)
 	// Discovery also subscribes to each runner's /events SSE for live updates.
 	stopDiscovery := make(chan struct{})
-	go discovery.Watch(sessions, subs, fileMon, pendingResumes, persistDead, fileMon.ApplyPersistedAttributions, 3*time.Second, stopDiscovery)
+	go discovery.Watch(sessions, subs, fileMon, persistDead, fileMon.ApplyPersistedAttributions, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
 	// Session file scanner — discovers resumable sessions from adapter
@@ -920,7 +922,7 @@ func serve(stderr io.Writer) int {
 		}
 
 		log.Printf("register: %s at %s", req.SessionID, req.SocketPath)
-		if err := discovery.Register(sessions, subs, fileMon, req.SocketPath, pendingResumes, persistDead, forgetMeta); err != nil {
+		if err := discovery.Register(sessions, subs, fileMon, req.SocketPath, persistDead); err != nil {
 			log.Printf("register: failed to query meta for %s: %v", req.SessionID, err)
 			writeError(w, http.StatusBadGateway, "runner_unreachable", err.Error())
 			return
@@ -1115,20 +1117,21 @@ func serve(stderr io.Writer) int {
 				return
 			}
 
-			// Record pending resume BEFORE launching so Register() can match.
-			pendingResumes.Add(sess.Command, sessionID)
-
+			// The runner reads GMUX_SESSION_ID and registers under the
+			// same id, so Register() lands in its re-registration
+			// branch and the session keeps its identity (and its
+			// scrollback directory). See ADR 0003.
 			resumeCwd := projects.NormalizePath(sess.Cwd)
 			pid, err := launchGmux(gmuxBin, sess.Command, resumeCwd, sessionID)
 			if err != nil {
-				pendingResumes.Take(sess.Command) // clean up on failure
 				log.Printf("resume: failed to start gmux: %v", err)
 				writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
 				return
 			}
 
-			// Don't modify the session here. It stays dead/resumable until
-			// the runner calls POST /register and Register() merges it.
+			// Don't modify the session here. It stays dead/resumable
+			// until the runner calls POST /register and the
+			// re-registration upsert flips alive=true.
 			// The frontend shows a local "resuming" indicator.
 			log.Printf("resume: started gmux pid=%d for %s cwd=%s", pid, sessionID, resumeCwd)
 			writeJSON(w, map[string]any{
@@ -1194,13 +1197,12 @@ func serve(stderr io.Writer) int {
 				return
 			}
 
-			// Same as /resume: register pending match, launch new runner with
-			// the resume Command. Register() will merge it with this session ID.
-			pendingResumes.Add(sess.Command, sessionID)
+			// Same as /resume: launch a new runner under the existing
+			// session id; Register's re-registration branch handles
+			// the rest.
 			restartCwd := projects.NormalizePath(sess.Cwd)
 			pid, err := launchGmux(gmuxBin, sess.Command, restartCwd, sessionID)
 			if err != nil {
-				pendingResumes.Take(sess.Command)
 				log.Printf("restart: failed to start gmux: %v", err)
 				writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
 				return

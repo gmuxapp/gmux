@@ -53,9 +53,9 @@ type OnDeadFunc func(sess store.Session)
 // This is the right point to invoke work that depends on live sessions
 // being registered with the FileMonitor (e.g. applying persisted
 // attributions to freshly-rehydrated runners).
-func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, resumes *PendingResumes, onDead OnDeadFunc, onFirstScan func(), interval time.Duration, stop <-chan struct{}) {
+func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDead OnDeadFunc, onFirstScan func(), interval time.Duration, stop <-chan struct{}) {
 	// Initial scan immediately
-	Scan(sessions, subs, fileMon, resumes, onDead)
+	Scan(sessions, subs, fileMon, onDead)
 	if onFirstScan != nil {
 		onFirstScan()
 	}
@@ -69,7 +69,7 @@ func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, res
 			subs.UnsubscribeAll()
 			return
 		case <-ticker.C:
-			Scan(sessions, subs, fileMon, resumes, onDead)
+			Scan(sessions, subs, fileMon, onDead)
 		}
 	}
 }
@@ -77,7 +77,7 @@ func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, res
 // Scan finds all .sock files and queries each runner's /meta endpoint.
 // Reachable sockets → upsert session + subscribe to /events.
 // Unreachable → remove + cleanup + unsubscribe.
-func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, resumes *PendingResumes, onDead OnDeadFunc) {
+func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDead OnDeadFunc) {
 	dir := socketDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -105,7 +105,7 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, resu
 		if trackedSockets[sockPath] {
 			continue // already tracked
 		}
-		if err := Register(sessions, subs, fileMon, sockPath, resumes, onDead, nil); err != nil {
+		if err := Register(sessions, subs, fileMon, sockPath, onDead); err != nil {
 			// Only remove sockets old enough to be genuinely stale.
 			// A brand-new socket may not be listening yet (runner still starting).
 			if info, serr := entry.Info(); serr == nil && time.Since(info.ModTime()) > 10*time.Second {
@@ -159,68 +159,44 @@ func probeSocket(socketPath string) bool {
 	return true
 }
 
-// OnResumeMergedFunc fires when Register absorbs a fresh registration
-// into an existing dead session record (the pendingResume path).
-// gmuxd uses it to drop the persisted meta.json now that the session
-// is alive again. nil is allowed.
-type OnResumeMergedFunc func(existingID string)
-
 // Register handles a registration request from gmux-run.
-// Immediately queries the runner's /meta, adds to store, and subscribes to /events.
-// If there's a pending resume matching this session's cwd+kind, the existing
-// store entry is updated in-place rather than creating a new one;
-// onResumeMerged then fires with the existing session's id.
+// Immediately queries the runner's /meta, adds to store, and
+// subscribes to /events.
 //
-// Fast-exiting commands (echo, true) often die before queryMeta arrives,
-// so the /meta payload reports alive=false. In that case Register is the
-// session's only landing point in the store, and onDead fires after the
-// Upsert so the record is persisted to disk.
-func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, socketPath string, resumes *PendingResumes, onDead OnDeadFunc, onResumeMerged OnResumeMergedFunc) error {
+// Two paths, distinguished by whether the runner-reported id is
+// already known to the store:
+//
+//   - **Re-registration** (id already in store). Resume — where the
+//     daemon passed GMUX_SESSION_ID to the runner per ADR 0003 — and
+//     daemon-restart-with-surviving-runner both land here. The
+//     persisted slug is preserved; runtime fields (alive, pid,
+//     socket, status, hash) take their values from the fresh /meta
+//     payload. The adapter's OnRegister hook is intentionally
+//     skipped: its primary job is slug derivation, and the
+//     authoritative slug for this session was decided at original
+//     registration.
+//
+//   - **Fresh** (id not in store). Normal new-session launch. The
+//     adapter's OnRegister runs to write any per-session state file
+//     and to derive the initial slug.
+//
+// Fast-exiting commands (echo, true) often die before queryMeta
+// arrives, so the /meta payload reports alive=false. In that case
+// Register is the session's only landing point in the store, and
+// onDead fires after the Upsert so the record is persisted to disk.
+func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, socketPath string, onDead OnDeadFunc) error {
 	newSess, err := queryMeta(socketPath)
 	if err != nil {
 		return err
 	}
 
-	// Check if this is a resumed session.
-	if resumes != nil {
-		if existingID, ok := resumes.Take(newSess.Command); ok {
-			if existing, ok := sessions.Get(existingID); ok {
-				// Merge: keep the existing entry's ID and slug,
-				// update with live session data.
-				existing.Alive = true
-				existing.SocketPath = socketPath
-				existing.Pid = newSess.Pid
-				existing.StartedAt = newSess.StartedAt
-				existing.Status = newSess.Status
-				existing.BinaryHash = newSess.BinaryHash
-				existing.RunnerVersion = newSess.RunnerVersion
-				sessions.Upsert(existing)
-				if subs != nil {
-					subs.Subscribe(existingID, socketPath)
-				}
-				if fileMon != nil {
-					fileMon.NotifyNewSession(existingID)
-				}
-				// Clean up any duplicate the discovery Watch loop may have
-				// created between socket creation and this Register() call.
-				if newSess.ID != existingID {
-					sessions.Remove(newSess.ID)
-					if subs != nil {
-						subs.Unsubscribe(newSess.ID)
-					}
-				}
-				if onResumeMerged != nil {
-					onResumeMerged(existingID)
-				}
-				log.Printf("register: merged resumed session %s ← %s", existingID, newSess.ID)
-				return nil
-			}
-		}
-	}
-
-	// Let the adapter perform any registration work (e.g. writing a
-	// state file for restart recovery) and provide initial metadata.
-	if a := adapters.FindByKind(newSess.Kind); a != nil {
+	if existing, ok := sessions.Get(newSess.ID); ok {
+		// Re-registration. Preserve the slug already resolved at
+		// original registration; everything else is fresh runtime
+		// state from /meta.
+		newSess.Slug = existing.Slug
+		log.Printf("register: re-registered session %s (slug=%s)", newSess.ID, newSess.Slug)
+	} else if a := adapters.FindByKind(newSess.Kind); a != nil {
 		if reg, ok := a.(adapter.SessionRegistrar); ok {
 			info, err := reg.OnRegister(newSess.ID, newSess.Cwd, newSess.Command)
 			if err != nil {
