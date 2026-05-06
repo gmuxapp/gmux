@@ -73,7 +73,24 @@ func runSession(args []string, attach bool) {
 		log.Fatalf("cannot determine cwd: %v", err)
 	}
 
-	sessionID := naming.SessionID()
+	// Honour GMUX_RESUME_ID when the daemon passed one in (resume,
+	// restart). The runner uses the daemon-supplied id so the
+	// session keeps its identity across the seam, including its
+	// scrollback directory on disk. See ADR 0003.
+	//
+	// GMUX_RESUME_ID is intentionally distinct from GMUX_SESSION_ID:
+	// the runner sets the latter for its child process (consumed by
+	// adapters / hooks), so a nested `gmux foo` inside an
+	// interactive gmux session inherits GMUX_SESSION_ID from the
+	// parent and would otherwise try to re-bind the parent's id.
+	// The dedicated GMUX_RESUME_ID is only ever set by the daemon
+	// and not propagated to descendants, so the nested case falls
+	// through to a fresh id without depending on the bind-collision
+	// fallback as a safety net.
+	sessionID := os.Getenv("GMUX_RESUME_ID")
+	if sessionID == "" {
+		sessionID = naming.SessionID()
+	}
 	socketDir := os.Getenv("GMUX_SOCKET_DIR")
 	if socketDir == "" {
 		socketDir = "/tmp/gmux-sessions"
