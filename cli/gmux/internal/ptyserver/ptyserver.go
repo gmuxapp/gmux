@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,8 +40,11 @@ const maxScrollback = 2000
 // handling".
 var ErrSocketInUse = errors.New("socket path already in use by a live runner")
 
-// BindSocket creates and listens on a Unix socket at sockPath. It
-// distinguishes a stale leftover socket file from a live owner:
+// BindSocket creates and listens on a Unix socket at sockPath. The
+// parent directory is created with mode 0o700 if missing, and the
+// socket file itself is owner-only via umask 0o077.
+//
+// It distinguishes a stale leftover socket file from a live owner:
 //
 //   - If a live owner answers a probe connection, returns
 //     ErrSocketInUse without touching the file. The caller should
@@ -54,6 +58,9 @@ var ErrSocketInUse = errors.New("socket path already in use by a live runner")
 func BindSocket(sockPath string) (net.Listener, error) {
 	if probeSocket(sockPath) {
 		return nil, ErrSocketInUse
+	}
+	if err := os.MkdirAll(filepath.Dir(sockPath), 0o700); err != nil {
+		return nil, fmt.Errorf("BindSocket: mkdir %s: %w", filepath.Dir(sockPath), err)
 	}
 	_ = os.Remove(sockPath)
 	oldUmask := syscall.Umask(0o077)

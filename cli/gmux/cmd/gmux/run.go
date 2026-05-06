@@ -103,7 +103,6 @@ func runSession(args []string, attach bool) {
 	// GMUX_RESUME_ID lands in a window where the targeted session
 	// is actually still alive — fall back to a fresh id and bind
 	// that instead. See ADR 0003 "Collision handling".
-	os.MkdirAll(filepath.Dir(sockPath), 0o700)
 	listener, err := ptyserver.BindSocket(sockPath)
 	if errors.Is(err, ptyserver.ErrSocketInUse) {
 		log.Printf("gmux: requested session id %s is in use; falling back to a fresh id", sessionID)

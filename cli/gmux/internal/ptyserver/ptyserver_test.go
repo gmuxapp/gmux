@@ -1651,3 +1651,24 @@ func TestBuildChildEnv_StripsResumeID(t *testing.T) {
 		t.Errorf("child env dropped unrelated parent vars")
 	}
 }
+
+// TestBindSocketCreatesParentDir guards the contract that callers
+// don't have to mkdir the socket's parent directory: BindSocket
+// owns the entire socket-path setup. Run.go relies on this so the
+// collision-fallback branch can rebind under a fresh id without
+// having to re-mkdir for the (identical) parent.
+func TestBindSocketCreatesParentDir(t *testing.T) {
+	root := t.TempDir()
+	// Path with a non-existent intermediate directory.
+	sockPath := filepath.Join(root, "subdir", "missing", "test.sock")
+
+	ln, err := BindSocket(sockPath)
+	if err != nil {
+		t.Fatalf("BindSocket: %v", err)
+	}
+	defer ln.Close()
+
+	if _, err := os.Stat(sockPath); err != nil {
+		t.Errorf("sockfile not created: %v", err)
+	}
+}
