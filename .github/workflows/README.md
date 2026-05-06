@@ -70,7 +70,7 @@ To edit prose for an upcoming release: open the `release/next` PR and edit the b
 
 1. The `tag` job extracts the version from the PR title (`release: v1.2.0`), creates and pushes the git tag, and dispatches the release build. Because `changelog.mdx` is already on `main` (it's part of the merged release commit), there's no separate changelog write here.
 2. The `release` job extracts the latest entry from `changelog.mdx` and passes it to GoReleaser via `--release-notes` (binaries + GitHub Release + Homebrew tap).
-3. `notify-discord.sh` reads the same latest entry from `changelog.mdx`, splits prose from bullets at the first `### ` heading, and posts to Discord. Empty prose falls back to the bullet list so subscribers always see what changed.
+3. `notify-discord.sh` reads the same latest entry from `changelog.mdx` and posts the whole entry (curated prose plus auto-generated bullets) to Discord, so subscribers always see what changed without clicking through.
 4. `pages.yml` deploys the docs site.
 
 ## Branch protection
@@ -144,7 +144,7 @@ Workflow scripts live in `.github/workflows/scripts/`, colocated with the workfl
 |--------|---------|---------|
 | `version.sh` | `regen.yml` | Compute next version via git-cliff, write changelog.mdx, write `.github/release-target`, render PR body. Also handles `--extract-prose` (parses prose out of a PR body on stdin) for the workflow's read-existing-prose step. |
 | `extract-release-notes.sh` | `release.yml`, `notify-discord.sh` | Extract the body of the latest `changelog.mdx` entry (no heading, no trailing `---`). Single source of truth for what GoReleaser and the Discord post see. |
-| `notify-discord.sh` | `release.yml` | Send release notification to Discord webhook (reads prose from the latest `changelog.mdx` entry via `extract-release-notes.sh`) |
+| `notify-discord.sh` | `release.yml` | Send release notification to Discord webhook (posts the latest `changelog.mdx` entry, fetched via `extract-release-notes.sh`) |
 | `version_test.sh` | `ci.yml`, manual | End-to-end tests for `version.sh` using scratch git repos |
 | `notify_discord_test.sh` | `ci.yml`, manual | Tests for `notify-discord.sh` |
 | `extract_release_notes_test.sh` | `ci.yml`, manual | Tests for `extract-release-notes.sh` |
