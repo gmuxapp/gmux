@@ -2263,3 +2263,44 @@ a.home-host-link:hover {
   transition: background 0.1s, color 0.1s;
 }
 .session-card-close:hover { background: oklch(28% 0.015 250); color: var(--text); }
+.btn:disabled,
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* Replay (read-only dead session) layout: terminal area fills remaining
+   vertical space, action bar pinned beneath. The action bar carries the
+   resume/dismiss buttons that the sidebar used to auto-trigger on click. */
+.replay-root {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.replay-root > .terminal-shell {
+  flex: 1;
+  min-height: 0;
+}
+
+.replay-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+}
+
+.replay-status {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.replay-buttons {
+  display: flex;
+  gap: 8px;
+}
+

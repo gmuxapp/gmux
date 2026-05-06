@@ -4,6 +4,7 @@ import { LocationProvider, Router, Route, lazy, useLocation } from 'preact-iso'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
+import { ReplayView } from './replay-view'
 import { TerminalView } from './terminal'
 import { useArrivalPulse } from './use-arrival-pulse'
 import { Sidebar } from './sidebar'
@@ -517,9 +518,17 @@ function App() {
             onPasteReady={handleTerminalPasteReady}
             onFocusReady={handleTerminalFocusReady}
           />
+        ) : selectedVal && !selectedVal.alive && termOpts && !USE_MOCK ? (
+          <ReplayView
+            session={selectedVal}
+            terminalOptions={termOpts}
+            onResume={handleResume}
+            onDismiss={handleCloseSession}
+            resuming={resumingId === selectedVal.id}
+          />
         ) : selectedVal ? (
           <div class="state-message">
-            <div class="state-subtitle">{selectedVal.alive ? 'Connecting…' : 'Session ended'}</div>
+            <div class="state-subtitle">Connecting…</div>
           </div>
         ) : (
           <Home />
