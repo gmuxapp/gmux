@@ -150,12 +150,6 @@ function SessionCard({
     <a
       class="session-card"
       href={href}
-      onClick={(e) => {
-        if (sleeping) {
-          e.preventDefault()
-          onResume(session.id)
-        }
-      }}
     >
       <span class={`session-card-dot ${dotClass}`} />
       <span class="session-card-name">{name}</span>
