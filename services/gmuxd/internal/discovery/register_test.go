@@ -3,6 +3,7 @@ package discovery
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -105,5 +106,74 @@ func TestRegisterFreshSessionRunsOnRegisterForShell(t *testing.T) {
 	}
 	if got.Slug == "" {
 		t.Error("Slug = \"\", want non-empty (Shell.OnRegister derives a slug from cwd)")
+	}
+}
+
+
+// TestScanIgnoresMissingPathWhileSubscriptionAlive guards a race
+// introduced by ptyserver.handleKill's early sockfile unlink:
+// between the kill and the runner's exit event arriving over SSE,
+// the path is gone but the subscription is still streaming. Phase 2
+// of Scan must trust the subscription as the liveness signal in
+// that window and NOT mark the session dead — doing so would call
+// fileMon.NotifySessionDied which clears the file→session
+// attribution that resume / restart needs to preserve under
+// id-passthrough (ADR 0003).
+func TestScanIgnoresMissingPathWhileSubscriptionAlive(t *testing.T) {
+	// Set up a fake runner that holds /events open indefinitely so
+	// the subscription stays IsActive throughout the test.
+	holdOpen := make(chan struct{})
+	t.Cleanup(func() { close(holdOpen) })
+	srv := startUnixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.(http.Flusher).Flush()
+			select {
+			case <-r.Context().Done():
+			case <-holdOpen:
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.cleanup)
+
+	sessions := store.New()
+	sessions.Upsert(store.Session{
+		ID:         "sess-graceful-kill",
+		Kind:       "shell",
+		Alive:      true,
+		SocketPath: srv.socketPath,
+	})
+
+	subs := NewSubscriptions(sessions)
+	subs.Subscribe("sess-graceful-kill", srv.socketPath)
+	t.Cleanup(func() { subs.UnsubscribeAll() })
+
+	// Wait for the subscription's HTTP request to actually land at
+	// the fake runner: IsActive flips true synchronously on
+	// Subscribe (before the goroutine dials), but the race we're
+	// reproducing only matters once the SSE stream is established
+	// and the daemon is committed to that runner as its source of
+	// truth.
+	srv.waitOpen(t, 1)
+	if !subs.IsActive("sess-graceful-kill") {
+		t.Fatal("subscription dropped before test could exercise the race")
+	}
+
+	// Simulate ptyserver.handleKill's early unlink: path goes away
+	// while subscription is still up.
+	if err := os.Remove(srv.socketPath); err != nil {
+		t.Fatalf("unlink sockfile: %v", err)
+	}
+
+	// Run a Scan in this race window. Without the fix, phase 2
+	// classifies the session as dead and clears its attribution.
+	Scan(sessions, subs, nil, nil)
+
+	got, _ := sessions.Get("sess-graceful-kill")
+	if !got.Alive {
+		t.Errorf("session marked dead by Scan while subscription was still active; the SSE flow is the authoritative liveness signal during graceful kill")
 	}
 }

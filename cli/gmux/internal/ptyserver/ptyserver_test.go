@@ -1565,3 +1565,61 @@ func TestBindSocketLiveOwnerLeftIntact(t *testing.T) {
 	c.Close()
 	<-doneCh
 }
+
+// TestKillReleasesSocketPathBeforeResponding pins the contract that
+// the /restart handler in gmuxd relies on: once POST /kill returns
+// 204, the canonical socket path is free for a replacement runner
+// to bind. Without this, the daemon's launchGmux can race the
+// old runner's lingering listener and the user sees a sibling
+// session in the sidebar.
+//
+// The runner's listener is still alive on the same inode at this
+// point (existing SSE / WS connections need to drain so the daemon
+// receives the exit event); only the path is unlinked. That's
+// exactly what BindSocket needs to succeed: a new file at the same
+// path, with the old listener orphaned but functional on its own
+// inode.
+func TestKillReleasesSocketPathBeforeResponding(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "kill.sock")
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", "sleep 30"}, // long-running so /kill has work to do
+		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
+		SocketPath: sockPath,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// POST /kill over the runner's own socket. If the handler
+	// honours the contract, the response arrives only after the
+	// path is gone.
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", sockPath)
+			},
+		},
+	}
+	resp, err := httpClient.Post("http://x/kill", "", nil)
+	if err != nil {
+		t.Fatalf("POST /kill: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+
+	if _, err := os.Stat(sockPath); !os.IsNotExist(err) {
+		t.Errorf("socket path still exists after /kill returned 204: %v", err)
+	}
+
+	// And a fresh BindSocket on the same path must succeed:
+	// path is gone, no live owner.
+	ln, err := BindSocket(sockPath)
+	if err != nil {
+		t.Fatalf("BindSocket after /kill: %v", err)
+	}
+	ln.Close()
+}

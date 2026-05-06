@@ -621,15 +621,32 @@ func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
 
 	// Block until the child actually exits (or escalate). Dismiss/restart
 	// callers rely on this: once /kill returns, gmuxd immediately removes
-	// the session and expects the runner's socket to disappear shortly
-	// after. Returning early while a shell (e.g. fish) ignores SIGHUP
-	// causes the next discovery scan to re-register the dead session.
+	// the session and expects the runner's socket path to be free.
+	// Returning early while a shell (e.g. fish) ignores SIGHUP causes
+	// the next discovery scan to re-register the dead session.
 	select {
 	case <-s.done:
 	case <-time.After(2 * time.Second):
 		syscall.Kill(-pid, syscall.SIGKILL)
 		log.Printf("ptyserver: escalated to SIGKILL for child pid %d", pid)
 		<-s.done
+	}
+
+	// Release the canonical socket path before responding. The runner
+	// process will linger briefly for state.SetExited / deregister /
+	// scrollback close, and its listener stays up on the inode for the
+	// existing SSE/WS connections that need to drain (notably the
+	// daemon's exit-event subscription). But the path is unreachable
+	// to new dialers, so a daemon launching a replacement runner under
+	// the same id (resume / restart, see ADR 0003) can BindSocket
+	// without racing against this runner's shutdown sequence.
+	//
+	// Idempotent: a later os.Remove on the missing path is harmless;
+	// any normal-exit code path that also tries to clean up the path
+	// (Server.Shutdown's signal-handler call, or the kernel on
+	// process exit) finds it already gone.
+	if err := os.Remove(s.sockPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("ptyserver: kill: remove sockfile %s: %v", s.sockPath, err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

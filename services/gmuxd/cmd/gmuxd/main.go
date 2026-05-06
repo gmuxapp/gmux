@@ -1190,6 +1190,11 @@ func serve(stderr io.Writer) int {
 						}
 					}
 				}
+				// /kill releases the canonical socket path before
+				// responding 204, so by the time KillSession returned
+				// (above) the path was already free. The replacement
+				// runner's BindSocket below cannot race against the old
+				// runner's lingering listener for path ownership.
 			}
 
 			if sess.Alive || len(sess.Command) == 0 {

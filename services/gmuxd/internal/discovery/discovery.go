@@ -114,17 +114,33 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDe
 		}
 	}
 
-	// Phase 2: detect dead sessions (socket file gone or unresponsive).
+	// Phase 2: detect dead sessions whose runner is no longer reachable.
+	//
+	// The active /events subscription is the primary liveness signal:
+	// while we hold an SSE stream from the runner, the runner is by
+	// definition still talking to us, regardless of what the socket
+	// path looks like in the filesystem. Notably, ptyserver.handleKill
+	// unlinks the socket path before the runner has finished its
+	// shutdown (so a replacement runner can BindSocket without racing
+	// the dying listener; see ADR 0003); during that window the path
+	// is gone but the SSE subscription is still streaming the runner's
+	// final exit event. Treating the missing path as a death signal
+	// would race ahead of the exit event and call NotifySessionDied,
+	// dropping the file→session attribution that resume / restart
+	// expects to keep across the seam.
+	//
+	// Only when the subscription itself has dropped do we fall back to
+	// stat / probe to distinguish a stale path from a live runner whose
+	// SSE blip we'll reconnect to.
 	for _, s := range sessions.List() {
 		if !s.Alive || s.SocketPath == "" {
 			continue
 		}
-		if _, err := os.Stat(s.SocketPath); err != nil {
-			// Socket file is gone — definitely dead.
-		} else if subs.IsActive(s.ID) {
-			continue // socket exists and subscription is live — healthy
-		} else if probeSocket(s.SocketPath) {
-			continue // socket exists and responds — subscription will reconnect
+		if subs.IsActive(s.ID) {
+			continue // subscription live — trust the SSE for the eventual exit
+		}
+		if _, err := os.Stat(s.SocketPath); err == nil && probeSocket(s.SocketPath) {
+			continue // path exists and responds — subscription will reconnect
 		}
 		// Socket gone or unresponsive — mark dead.
 		s.Alive = false
