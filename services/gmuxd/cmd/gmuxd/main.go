@@ -156,7 +156,22 @@ func filterEnvPrefix(env []string, prefix string) []string {
 	return result
 }
 
-func launchGmux(gmuxBin string, command []string, cwd string) (int, error) {
+// launchGmux forks a gmux runner with the given command and cwd.
+//
+// resumeID, when non-empty, is passed to the runner via
+// GMUX_RESUME_ID so the runner uses the daemon-supplied id
+// instead of generating a fresh one. /v1/launch leaves it empty
+// (fresh sessions get a runner-generated id); /v1/resume and
+// /v1/restart pass the existing session's id so identity (and the
+// scrollback directory on disk) carry across the seam. See
+// ADR 0003.
+//
+// GMUX_RESUME_ID is dedicated to this directive and distinct from
+// the GMUX_SESSION_ID the runner exports to its child process; a
+// nested `gmux foo` inherits GMUX_SESSION_ID from the parent
+// runner but never GMUX_RESUME_ID, so nested invocations always
+// generate a fresh id.
+func launchGmux(gmuxBin string, command []string, cwd, resumeID string) (int, error) {
 	cmd := exec.Command(gmuxBin, command...)
 	cmd.Dir = cwd
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -169,6 +184,9 @@ func launchGmux(gmuxBin string, command []string, cwd string) (int, error) {
 	// inside a pi session would leak GMUX_ADAPTER=pi, GMUX_SOCKET,
 	// GMUX_SESSION_ID, etc. into every launched session.
 	cmd.Env = filterEnvPrefix(os.Environ(), "GMUX_")
+	if resumeID != "" {
+		cmd.Env = append(cmd.Env, "GMUX_RESUME_ID="+resumeID)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return 0, err
@@ -1007,7 +1025,7 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		pid, err := launchGmux(gmuxBin, req.Command, cwd)
+		pid, err := launchGmux(gmuxBin, req.Command, cwd, "")
 		if err != nil {
 			log.Printf("launch: failed to start gmux: %v", err)
 			writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
@@ -1101,7 +1119,7 @@ func serve(stderr io.Writer) int {
 			pendingResumes.Add(sess.Command, sessionID)
 
 			resumeCwd := projects.NormalizePath(sess.Cwd)
-			pid, err := launchGmux(gmuxBin, sess.Command, resumeCwd)
+			pid, err := launchGmux(gmuxBin, sess.Command, resumeCwd, sessionID)
 			if err != nil {
 				pendingResumes.Take(sess.Command) // clean up on failure
 				log.Printf("resume: failed to start gmux: %v", err)
@@ -1180,7 +1198,7 @@ func serve(stderr io.Writer) int {
 			// the resume Command. Register() will merge it with this session ID.
 			pendingResumes.Add(sess.Command, sessionID)
 			restartCwd := projects.NormalizePath(sess.Cwd)
-			pid, err := launchGmux(gmuxBin, sess.Command, restartCwd)
+			pid, err := launchGmux(gmuxBin, sess.Command, restartCwd, sessionID)
 			if err != nil {
 				pendingResumes.Take(sess.Command)
 				log.Printf("restart: failed to start gmux: %v", err)
