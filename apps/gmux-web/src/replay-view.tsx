@@ -93,6 +93,12 @@ export function ReplayView({
       setState(result)
       if (result.kind === 'bytes') {
         term.write(result.bytes, () => {
+          // The write callback is async: between term.write and the
+          // callback firing, the effect's cleanup may have run
+          // (component unmount / session.id switch) and disposed
+          // the terminal. Calling scrollToBottom on a disposed
+          // terminal throws.
+          if (cancelled) return
           // Wait for the write callback so xterm has actually parsed the
           // bytes before we ask it to scroll; otherwise scrollToBottom
           // pins us at row 0 because the buffer is still empty.

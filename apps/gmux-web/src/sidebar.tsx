@@ -78,7 +78,6 @@ function SessionItem({
   dotState: rawDotState,
   dragging,
   dropTarget,
-  onResume,
   onClose,
   onClick,
   onDragStart,
@@ -92,7 +91,6 @@ function SessionItem({
   dotState: DotState
   dragging?: boolean
   dropTarget?: boolean
-  onResume?: (id: string) => void
   onClose?: () => void
   /** Extra side-effects on click (e.g. close mobile sidebar). */
   onClick?: () => void
@@ -166,7 +164,6 @@ function FolderGroup({
   curProjectSlug,
   resumingId,
   am,
-  onResume,
   onCloseSession,
   onClick,
 }: {
@@ -176,7 +173,6 @@ function FolderGroup({
   curProjectSlug: string | null
   resumingId: string | null
   am: ReadonlyMap<string, 'active' | 'fading'>
-  onResume: (id: string) => void
   onCloseSession: (session: Session) => void
   onClick?: () => void
 }) {
@@ -236,7 +232,6 @@ function FolderGroup({
             dotState={sessionDotState(s, am)}
             dragging={drag !== null && s.id === visible[drag.from]?.id}
             dropTarget={drag !== null && drag.over === i && drag.from !== i}
-            onResume={onResume}
             onClose={() => onCloseSession(s)}
             onClick={onClick}
             onDragStart={() => handleDragStart(i)}
@@ -251,7 +246,6 @@ function FolderGroup({
 
 export function Sidebar({
   resumingId,
-  onResume,
   onCloseSession,
   onManageProjects,
   open,
@@ -260,7 +254,6 @@ export function Sidebar({
   onRequestNotifPermission,
 }: {
   resumingId: string | null
-  onResume: (id: string) => void
   onCloseSession: (session: Session) => void
   onManageProjects: () => void
   open: boolean
@@ -323,7 +316,6 @@ export function Sidebar({
                 curProjectSlug={curProjectSlug}
                 resumingId={resumingId}
                 am={am}
-                onResume={onResume}
                 onCloseSession={onCloseSession}
                 onClick={onClose}
               />

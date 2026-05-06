@@ -22,11 +22,10 @@ function projectFirstPath(p: ProjectItem | undefined): string | undefined {
 
 interface ProjectHubProps {
   projectSlug: string
-  onResume: (id: string) => void
   onCloseSession: (session: Session) => void
 }
 
-export function ProjectHub({ projectSlug, onResume, onCloseSession }: ProjectHubProps) {
+export function ProjectHub({ projectSlug, onCloseSession }: ProjectHubProps) {
   const projectsVal = projects.value
   const project = projectsVal.find(p => p.slug === projectSlug)
   const hosts = buildProjectTopology(projectSlug, sessions.value, projectsVal, peers.value)
@@ -62,7 +61,6 @@ export function ProjectHub({ projectSlug, onResume, onCloseSession }: ProjectHub
               key={host.path.join('\0') || '(local)'}
               host={host}
               projectSlug={projectSlug}
-              onResume={onResume}
               onCloseSession={onCloseSession}
             />
           ))}
@@ -85,8 +83,8 @@ function EmptyProject({ projectSlug, launchCwd }: { projectSlug: string; launchC
 }
 
 function HostGroup({
-  host, projectSlug, onResume, onCloseSession,
-}: { host: HostNode; projectSlug: string; onResume: (id: string) => void; onCloseSession: (session: Session) => void }) {
+  host, projectSlug, onCloseSession,
+}: { host: HostNode; projectSlug: string; onCloseSession: (session: Session) => void }) {
   const sessionCount = host.folders.reduce((n, f) => n + f.sessions.length, 0)
   const canLaunch = host.path.length <= 1
   const launchPeer = host.path.length === 1 ? host.path[0] : undefined
@@ -110,7 +108,6 @@ function HostGroup({
                 key={s.id}
                 session={s}
                 projectSlug={projectSlug}
-                onResume={onResume}
                 onClose={() => onCloseSession(s)}
               />
             ))}
@@ -140,10 +137,9 @@ function HostPath({ path }: { path: string[] }) {
 }
 
 function SessionCard({
-  session, projectSlug, onResume, onClose,
-}: { session: Session; projectSlug: string; onResume: (id: string) => void; onClose: () => void }) {
+  session, projectSlug, onClose,
+}: { session: Session; projectSlug: string; onClose: () => void }) {
   const dotClass = session.alive ? '' : 'dead'
-  const sleeping = !session.alive && session.resumable
   const name = session.title || session.kind
   const href = sessionPath(projectSlug, session)
   return (

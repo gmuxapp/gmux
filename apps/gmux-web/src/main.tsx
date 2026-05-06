@@ -461,7 +461,6 @@ function App() {
     <div class="app-layout">
       <Sidebar
         resumingId={resumingId}
-        onResume={handleResume}
         onCloseSession={handleCloseSession}
         onManageProjects={() => { setSidebarOpen(false); setManageProjectsOpen(true) }}
         open={sidebarOpen}
@@ -501,7 +500,6 @@ function App() {
         ) : viewVal?.kind === 'project' ? (
           <ProjectHub
             projectSlug={viewVal.projectSlug}
-            onResume={handleResume}
             onCloseSession={handleCloseSession}
           />
         ) : selectedVal && (canAttach || USE_MOCK) && termOpts && keybindsVal ? (
