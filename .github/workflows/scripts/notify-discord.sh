@@ -25,32 +25,19 @@ fi
 
 # ── Extract summary ──
 #
-# `extract-release-notes.sh` returns the body of the latest entry
-# (no heading, no trailing `---`). We split it at the first `### `
-# group heading to get prose vs bullets. Horizontal rules inside
-# prose survive: the trailing `---` we already stripped is the
-# per-entry separator, not a user-written rule.
-#
-# When prose is empty (a release without curated highlights), fall
-# back to the bullet list so Discord still sees what changed. An
-# empty announcement with only a changelog link is worse than a
-# slightly verbose one: most subscribers just want to know if there's
-# anything they care about without having to click through.
+# `extract-release-notes.sh` returns the body of the latest entry:
+# curated prose (if any) followed by the auto-generated `### ` group
+# headings and their bullets, no per-entry trailing `---`. We send it
+# as-is so Discord subscribers always see both the framing and the
+# detail without clicking through. When prose is empty the message
+# degrades naturally to bullets only.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHANGELOG="${CHANGELOG:-apps/website/src/content/docs/changelog.mdx}"
 
 trim_blanks() { sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba}'; }
 
-body=$(bash "$SCRIPT_DIR/extract-release-notes.sh" "$CHANGELOG")
-
-prose=$(echo "$body" | awk '/^### / { exit } { print }' | trim_blanks)
-bullets=$(echo "$body" | awk '/^### / { f = 1 } f { print }' | trim_blanks)
-
-summary="$prose"
-if [[ -z "${summary//[[:space:]]/}" ]]; then
-  summary="$bullets"
-fi
+summary=$(bash "$SCRIPT_DIR/extract-release-notes.sh" "$CHANGELOG" | trim_blanks)
 
 # ── Determine bump type ──
 

@@ -8,8 +8,9 @@
 #   3. Stays under Discord's 2000-char limit, preferring a paragraph
 #      break to a hard byte cut.
 #   4. Always carries the changelog link, even when truncated.
-#   5. Reads release prose from the latest entry of changelog.mdx,
-#      falling back to the bullet list when prose is empty.
+#   5. Always includes the latest changelog entry (curated prose plus
+#      the auto-generated bullet groups) in the message body, so
+#      subscribers don't need to click through.
 #
 # Tests use DRY_RUN=1 to capture the payload as JSON and assert on its
 # structure (roles list, flags) rather than on the rendered string
@@ -166,15 +167,15 @@ echo "Embed suppression:"
   assert_eq "flags=4" "4" "$flags"
 )
 
-# ── Test: empty prose falls back to the bullet list ──
+# ── Test: bullets always reach Discord, with or without curated prose ──
 #
-# A patch release with no curated prose should still tell Discord
-# subscribers what changed. Sending only the changelog link forces
-# every subscriber to click through to find out if the release is
-# relevant; echoing the auto-generated bullets answers that inline.
+# Subscribers should never have to click through just to find out if a
+# release is relevant; echoing the auto-generated bullets answers that
+# inline. With curated prose, the prose sits above the bullets so
+# readers get framing plus detail.
 
 echo ""
-echo "Empty prose falls back to bullets:"
+echo "Bullets always included (no prose):"
 (
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   make_repo "$tmp" v1.5.3 v1.5.4
@@ -198,13 +199,13 @@ EOF
   assert_not_contains "no triple-newline gap"    $'\n\n\n'                 "$content"
 )
 
-# ── Test: prose present suppresses the bullet fallback ──
+# ── Test: prose and bullets both reach Discord when prose is present ──
 #
-# Otherwise we'd double up: curated prose + raw bullets. The Discord
-# message becomes verbose and the link footer feels redundant.
+# Curated prose sets the framing; bullets fill in the detail. We send
+# both so the message stands on its own.
 
 echo ""
-echo "Prose present suppresses bullet fallback:"
+echo "Bullets always included (with prose):"
 (
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
   make_repo "$tmp" v1.5.3 v1.5.4
@@ -224,8 +225,8 @@ Hand-written highlight paragraph.
 EOF
 
   content=$(run_notify "$tmp" v1.5.4 | jq -r '.content')
-  assert_contains     "prose reaches Discord"          "Hand-written highlight"  "$content"
-  assert_not_contains "bullets do not duplicate prose" "stop leaking goroutines" "$content"
+  assert_contains "prose reaches Discord" "Hand-written highlight"  "$content"
+  assert_contains "bullets reach Discord" "stop leaking goroutines" "$content"
 )
 
 # ── Test: a literal `---` inside prose survives the prose/bullet split ──
@@ -258,9 +259,9 @@ Theme B summary.
 EOF
 
   content=$(run_notify "$tmp" v1.5.4 | jq -r '.content')
-  assert_contains     "first half of prose survives"  "Theme A summary" "$content"
-  assert_contains     "second half of prose survives" "Theme B summary" "$content"
-  assert_not_contains "bullets did not leak"          "something"       "$content"
+  assert_contains "first half of prose survives"  "Theme A summary" "$content"
+  assert_contains "second half of prose survives" "Theme B summary" "$content"
+  assert_contains "bullets reach Discord"         "something"       "$content"
 )
 
 # ── Test: trailing `---` separator does not leak into the summary ──
