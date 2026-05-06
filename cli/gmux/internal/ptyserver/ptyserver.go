@@ -19,7 +19,6 @@ import (
 	"syscall"
 	"time"
 
-
 	"github.com/creack/pty"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -1091,7 +1090,19 @@ func buildChildEnv(parent, extra []string, version string) []string {
 		version = "dev"
 	}
 	env := make([]string, 0, len(parent)+len(extra)+5)
-	env = append(env, parent...)
+	for _, e := range parent {
+		// GMUX_RESUME_ID is a private daemon→runner directive (see
+		// ADR 0003). Inheriting it into PTY children would let a
+		// nested `gmux foo` invocation inside a session try to
+		// re-bind the parent runner's id; it'd survive on the
+		// collision fallback, but that's exactly the safety-net
+		// dependency the dedicated env var name was supposed to
+		// avoid. Strip on the way out.
+		if strings.HasPrefix(e, "GMUX_RESUME_ID=") {
+			continue
+		}
+		env = append(env, e)
+	}
 	env = append(env, extra...)
 	env = append(env,
 		"TERM_PROGRAM=gmux",

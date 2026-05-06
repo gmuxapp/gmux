@@ -1117,7 +1117,7 @@ func serve(stderr io.Writer) int {
 				return
 			}
 
-			// The runner reads GMUX_SESSION_ID and registers under the
+			// The runner reads GMUX_RESUME_ID and registers under the
 			// same id, so Register() lands in its re-registration
 			// branch and the session keeps its identity (and its
 			// scrollback directory). See ADR 0003.
