@@ -41,9 +41,18 @@ export async function fetchScrollback(
     return { kind: 'error', status: resp.status, message: resp.statusText || 'request failed' }
   }
 
-  const buf = await resp.arrayBuffer()
+  // Body read can still reject after headers arrive (connection
+  // aborted mid-stream). Without this catch the caller would see
+  // an unhandled rejection and the UI would stall on 'Loading…'
+  // forever.
+  let buf: ArrayBuffer
+  try {
+    buf = await resp.arrayBuffer()
+  } catch (e) {
+    return { kind: 'error', status: resp.status, message: e instanceof Error ? e.message : String(e) }
+  }
   if (buf.byteLength === 0) {
-    return { kind: "empty" }
+    return { kind: 'empty' }
   }
   return { kind: 'bytes', bytes: new Uint8Array(buf) }
 }

@@ -48,6 +48,25 @@ describe('fetchScrollback', () => {
     expect(result).toEqual({ kind: 'error', status: 0, message: 'connection refused' })
   })
 
+  test('arrayBuffer rejection mid-body returns kind=error instead of throwing', async () => {
+    // Simulate the wire dropping after headers arrive: the
+    // response is a 200 but reading the body rejects.
+    const body = new ReadableStream({
+      start(controller) {
+        controller.error(new Error('aborted'))
+      },
+    })
+    const fakeFetch = vi.fn().mockResolvedValue(new Response(body, { status: 200 }))
+
+    const result = await fetchScrollback('sess-abc', fakeFetch)
+
+    expect(result.kind).toBe('error')
+    if (result.kind === 'error') {
+      expect(result.status).toBe(200)
+      expect(result.message).toContain('aborted')
+    }
+  })
+
   test('peer-owned session id is URL-encoded', async () => {
     const fakeFetch = vi.fn().mockResolvedValue(ok(new Uint8Array(0)))
 
