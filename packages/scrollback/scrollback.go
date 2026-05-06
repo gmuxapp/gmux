@@ -75,15 +75,31 @@ type Writer struct {
 // Open creates or opens the active scrollback file at path. The
 // parent directory is created with mode 0o700 if missing.
 //
-// An existing active file is truncated: scrollback's unit is the
-// runner, not the session. A resumed session is a fresh runner
-// with empty in-memory vt state, so its persisted scrollback
-// starts fresh too. The persisted history of the previous
-// (dead) runner is therefore overwritten on resume; users who
-// want to keep that history should peek before resuming.
+// Both the active file and any rotated previous file are cleared:
+// scrollback's unit is the runner, not the session. A resumed
+// session is a fresh runner with empty in-memory vt state, so its
+// persisted scrollback starts fresh too. Leaving the rotated
+// previous file in place would let it splice into the new run's
+// readback through OpenReader (which concatenates previous +
+// active), producing a confusing mix of old and new bytes after a
+// resume that crossed the rotation boundary. The persisted history
+// of the previous (dead) runner is therefore overwritten on
+// resume; users who want to keep that history should peek before
+// resuming.
 func Open(path string) (*Writer, error) {
 	if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
 		return nil, fmt.Errorf("scrollback: mkdir %s: %w", filepath.Dir(path), err)
+	}
+	// Drop any rotated previous file from a prior runner; see doc
+	// comment. Best-effort: if the unlink fails for any reason
+	// other than not-exist, the active-file truncate below still
+	// produces a working writer, just with stale rotated bytes
+	// lingering on disk — not a correctness regression vs. before
+	// this fix.
+	prev := filepath.Join(filepath.Dir(path), PreviousName)
+	if err := os.Remove(prev); err != nil && !os.IsNotExist(err) {
+		// Logged at debug-level by callers if needed; not fatal.
+		_ = err
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileMode)
 	if err != nil {

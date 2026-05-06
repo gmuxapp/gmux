@@ -405,3 +405,36 @@ func TestReaderCloseClosesAllUnderlying(t *testing.T) {
 		t.Errorf("second Close: want either nil or 'already closed' err, got %v", err)
 	}
 }
+
+// TestOpenClearsPreviousRotatedFile guarantees that opening a fresh
+// writer in a directory left behind by a prior runner does not
+// inherit that runner's rotated history. Without this, a resumed
+// session that crossed the rotation boundary would read back as
+// (old-pre-rotation-bytes ++ new-bytes), interleaving two runs
+// with no visible separator. The contract is "Open = fresh slate
+// for a new runner."
+func TestOpenClearsPreviousRotatedFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, PreviousName), []byte("from-old-run"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ActiveName), []byte("from-old-run-active"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	w, err := Open(filepath.Join(dir, ActiveName))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := w.Write([]byte("from-new-run")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	got := readBack(t, dir)
+	if string(got) != "from-new-run" {
+		t.Errorf("readback = %q, want %q (previous rotated file must not survive Open)", got, "from-new-run")
+	}
+}
