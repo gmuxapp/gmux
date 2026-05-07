@@ -137,6 +137,45 @@ func TestParseCLI(t *testing.T) {
 				}
 			},
 		},
+		// Management modes accept flags in any order: there's no
+		// wrapped child command at the end, so the POSIX runner
+		// stop-at-first-positional rule that run mode needs would only
+		// turn `gmux --wait <id> --timeout 60` into a silent foot-trap.
+		// These cases pin the lenient parsing for each management
+		// action that takes a flag besides its mode flag.
+		{
+			name:     "--wait accepts --timeout after the id",
+			args:     []string{"--wait", "sess-abcd", "--timeout", "30"},
+			wantMode: modeWait,
+			wantRest: []string{"sess-abcd"},
+			check: func(t *testing.T, f *flags) {
+				if f.waitTimeout != 30 {
+					t.Errorf("waitTimeout = %d, want 30", f.waitTimeout)
+				}
+			},
+		},
+		{
+			name:     "--send accepts --no-submit after the id",
+			args:     []string{"--send", "sess-abcd", "--no-submit", "text"},
+			wantMode: modeSend,
+			wantRest: []string{"sess-abcd", "text"},
+			check: func(t *testing.T, f *flags) {
+				if !f.noSubmit {
+					t.Errorf("noSubmit = false, want true")
+				}
+			},
+		},
+		{
+			name:     "--send accepts --no-submit after both positionals",
+			args:     []string{"--send", "sess-abcd", "text", "--no-submit"},
+			wantMode: modeSend,
+			wantRest: []string{"sess-abcd", "text"},
+			check: func(t *testing.T, f *flags) {
+				if !f.noSubmit {
+					t.Errorf("noSubmit = false, want true")
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -158,6 +197,24 @@ func TestParseCLI(t *testing.T) {
 				tc.check(t, f)
 			}
 		})
+	}
+}
+
+// TestRunModeKeepsPOSIXRunnerSemantics pins the contract that flags
+// after the wrapped command go to the child, not to gmux. This is
+// the load-bearing case for run mode and the reason management modes
+// (which lack a wrapped command) get lenient parsing while run mode
+// keeps the strict stop-at-first-positional behavior.
+func TestRunModeKeepsPOSIXRunnerSemantics(t *testing.T) {
+	// `gmux pi --some-pi-flag` — --some-pi-flag must reach pi as part
+	// of the command, not be parsed as an unknown gmux flag.
+	_, _, rest, err := parseCLI([]string{"pi", "--some-pi-flag", "prompt"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"pi", "--some-pi-flag", "prompt"}
+	if !reflect.DeepEqual(rest, want) {
+		t.Errorf("rest = %v, want %v", rest, want)
 	}
 }
 

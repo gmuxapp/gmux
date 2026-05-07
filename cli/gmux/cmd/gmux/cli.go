@@ -77,6 +77,18 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 		return modeHelp, f, rest, nil
 	}
 
+	// In management modes there is no wrapped command, only a bounded
+	// number of positionals (id, optional text for --send). The POSIX
+	// runner stop-at-first-positional rule that protects `gmux <cmd>
+	// --cmd-flag` from having gmux eat --cmd-flag does nothing useful
+	// here — it just turns `gmux --wait <id> --timeout 60` into a
+	// silent foot-trap where --timeout becomes a positional. Re-parse
+	// any flags interleaved with positionals so flag order doesn't
+	// matter for management actions.
+	if isManagementMode(f) {
+		rest = parseInterspersedFlags(fs, rest)
+	}
+
 	// At most one management action at a time.
 	actions := 0
 	if f.list {
@@ -180,6 +192,47 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 		return modeUI, f, nil, nil
 	}
 	return modeRun, f, rest, nil
+}
+
+// isManagementMode reports whether the parsed flags request a
+// management action (no wrapped command). Run mode is everything
+// else — a command with optional --no-attach.
+func isManagementMode(f *flags) bool {
+	return f.list || f.attach || f.kill || f.send || f.wait || f.tail >= 0
+}
+
+// parseInterspersedFlags walks `rest` consuming any further flags via
+// fs.Parse and collecting non-flag tokens as positionals. The default
+// flag.FlagSet behavior stops at the first positional; iterating lets
+// us pick up flags that appear after positionals too. Used only in
+// management modes, where positionals are bounded and there is no
+// risk of swallowing flags meant for a wrapped child command.
+func parseInterspersedFlags(fs *flag.FlagSet, rest []string) []string {
+	var positionals []string
+	remaining := rest
+	for len(remaining) > 0 {
+		if err := fs.Parse(remaining); err != nil {
+			// fs.Parse already wrote into the same flags struct on the
+			// first call; any error here is from re-parsing an unknown
+			// flag after a positional. Surface the leftover args as-is
+			// so the caller's validation produces a sensible message.
+			return append(positionals, remaining...)
+		}
+		newRest := fs.Args()
+		if len(newRest) == 0 {
+			break
+		}
+		if len(newRest) == len(remaining) {
+			// fs.Parse stopped without consuming anything: first token
+			// is a positional. Take it and resume on the suffix.
+			positionals = append(positionals, newRest[0])
+			remaining = newRest[1:]
+			continue
+		}
+		// fs.Parse consumed at least one flag; loop on the new tail.
+		remaining = newRest
+	}
+	return positionals
 }
 
 // printUsage writes the gmux usage synopsis. Shown on --help, on parse
