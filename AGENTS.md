@@ -4,6 +4,15 @@
 
 Prioritize verifiable, correct behavior above all else. If something has lots of race conditions or other edgecases that are difficult to test and reason about, it is likely the wrong approach. If a library does something more reliably than what we can achieve, it is worth considering.
 
+## CLI conventions
+
+Run mode (`gmux <cmd> [args...]`) uses POSIX runner flag parsing (same as `env`, `nohup`, `time`, `screen`): flag parsing stops at the first positional argument so flags after the command go to the child, not gmux. Management modes (`--list`, `--attach`, `--kill`, `--send`, `--wait`, `--tail`) accept flags in any order since they have no wrapped command.
+
+Practical consequences for docs and examples:
+
+- `gmux --no-attach pi "prompt"`, never `gmux pi "prompt" --no-attach`. In run mode the latter passes `--no-attach` to pi, which doesn't recognize it.
+- Agents started via `gmux <agent> "prompt"` stay running by default; `gmux <cmd> < /dev/null` blocks until the child exits, so it hangs forever for interactive agents. Use `--no-attach` to spawn detached, or the agent's print-and-exit mode (`pi -p`, `claude -p`, `codex exec`).
+
 ## State discipline
 
 Never add new state without justification. Before adding a field, ask: who owns it, who updates it, and can it be derived from existing state instead? Prefer derivation over storage. New state creates maintenance burden, sync bugs, and lifecycle complexity.
