@@ -18,6 +18,7 @@ const (
 	modeTail               // dump recent output from a session
 	modeKill               // terminate a session
 	modeSend               // inject input into a running session
+	modeWait               // block until session reaches idle / dies
 	modeHelp               // print usage and exit
 )
 
@@ -26,14 +27,16 @@ const (
 // action ("flags that replace the runner") lives here. The trailing
 // positional command or session id is returned separately as rest.
 type flags struct {
-	noAttach bool
-	list     bool
-	attach   bool
-	kill     bool
-	send     bool
-	noSubmit bool // suppresses the trailing carriage return on --send
-	tail     int  // >=0 when set (flag default is -1)
-	help     bool
+	noAttach    bool
+	list        bool
+	attach      bool
+	kill        bool
+	send        bool
+	noSubmit    bool // suppresses the trailing carriage return on --send
+	wait        bool
+	waitTimeout int // 0 means no timeout
+	tail        int // >=0 when set (flag default is -1)
+	help        bool
 }
 
 // parseCLI parses argv (without program name) and decides which mode to
@@ -58,6 +61,8 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 	fs.BoolVar(&f.kill, "k", false, "kill a running session (short)")
 	fs.BoolVar(&f.send, "send", false, "send input to a running session")
 	fs.BoolVar(&f.noSubmit, "no-submit", false, "with --send, do not append the carriage return that submits the input")
+	fs.BoolVar(&f.wait, "wait", false, "block until a session is idle (agent finished its turn)")
+	fs.IntVar(&f.waitTimeout, "timeout", 0, "with --wait, fail after N seconds (default: no timeout)")
 	fs.IntVar(&f.tail, "tail", -1, "dump the last N lines of a session")
 	fs.IntVar(&f.tail, "t", -1, "dump the last N lines of a session (short)")
 	fs.BoolVar(&f.help, "help", false, "show help")
@@ -86,17 +91,25 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 	if f.send {
 		actions++
 	}
+	if f.wait {
+		actions++
+	}
 	if f.tail >= 0 {
 		actions++
 	}
 	if actions > 1 {
-		return modeHelp, nil, nil, errors.New("--list, --attach, --tail, --kill, --send are mutually exclusive")
+		return modeHelp, nil, nil, errors.New("--list, --attach, --tail, --kill, --send, --wait are mutually exclusive")
 	}
 
 	// --no-submit only changes the bytes --send writes; with anything
 	// else it would silently do nothing, so reject it loudly.
 	if f.noSubmit && !f.send {
 		return modeHelp, nil, nil, errors.New("--no-submit only applies with --send")
+	}
+	// --timeout is meaningless without --wait. (Once we add other
+	// time-bounded actions it can grow into a shared option.)
+	if f.waitTimeout != 0 && !f.wait {
+		return modeHelp, nil, nil, errors.New("--timeout only applies with --wait")
 	}
 
 	// Management actions take a single session id (except --list and --send).
@@ -135,6 +148,17 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 			return modeHelp, nil, nil, errors.New("--no-attach has no effect with --send")
 		}
 		return modeSend, f, rest, nil
+	case f.wait:
+		if len(rest) != 1 {
+			return modeHelp, nil, nil, errors.New("--wait requires a session id")
+		}
+		if f.noAttach {
+			return modeHelp, nil, nil, errors.New("--no-attach has no effect with --wait")
+		}
+		if f.waitTimeout < 0 {
+			return modeHelp, nil, nil, errors.New("--timeout must be a non-negative number of seconds")
+		}
+		return modeWait, f, rest, nil
 	case f.tail >= 0:
 		if len(rest) != 1 {
 			return modeHelp, nil, nil, errors.New("--tail requires a session id")
@@ -175,6 +199,8 @@ Session management:
   gmux --kill <id>                  terminate a session
   gmux --send <id> [text]           send text (or stdin) to a session and submit it
   gmux --send --no-submit <id> ...  send without the trailing carriage return
+  gmux --wait <id>                  block until session is idle (agent finished its turn)
+  gmux --wait --timeout N <id>      ... or fail after N seconds
 
 Flags before the command apply to gmux itself. Once the first positional
 argument is seen, everything after is the command to run, verbatim.

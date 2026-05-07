@@ -51,6 +51,8 @@ func main() {
 			text = &rest[1]
 		}
 		os.Exit(cmdSend(rest[0], text, f.noSubmit))
+	case modeWait:
+		os.Exit(cmdWait(rest[0], f.waitTimeout))
 	}
 }
 

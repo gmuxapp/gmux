@@ -115,6 +115,28 @@ func TestParseCLI(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:     "--wait takes a session id",
+			args:     []string{"--wait", "sess-abcd"},
+			wantMode: modeWait,
+			wantRest: []string{"sess-abcd"},
+			check: func(t *testing.T, f *flags) {
+				if f.waitTimeout != 0 {
+					t.Errorf("waitTimeout = %d, want 0", f.waitTimeout)
+				}
+			},
+		},
+		{
+			name:     "--wait with --timeout",
+			args:     []string{"--wait", "--timeout", "30", "sess-abcd"},
+			wantMode: modeWait,
+			wantRest: []string{"sess-abcd"},
+			check: func(t *testing.T, f *flags) {
+				if f.waitTimeout != 30 {
+					t.Errorf("waitTimeout = %d, want 30", f.waitTimeout)
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -161,6 +183,12 @@ func TestParseCLIErrors(t *testing.T) {
 		{"--no-attach", "--send", "sess-a", "x"}, // --no-attach doesn't make sense with --send
 		{"--no-submit", "sess-a"},                // --no-submit only applies with --send
 		{"--no-submit", "--list"},                // --no-submit only applies with --send
+		{"--wait"},                               // --wait needs an id
+		{"--wait", "a", "b"},                     // --wait takes exactly one id
+		{"--wait", "--send", "sess-a"},           // mutually exclusive
+		{"--no-attach", "--wait", "sess-a"},      // --no-attach has no effect with --wait
+		{"--timeout", "30", "sess-a"},            // --timeout only applies with --wait
+		{"--wait", "--timeout", "-1", "sess-a"},  // --timeout must be non-negative
 	}
 
 	for _, args := range invalid {
