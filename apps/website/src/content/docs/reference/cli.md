@@ -29,9 +29,17 @@ gmux --no-attach pytest --watch       # detach from the terminal
 gmux -- --my-dash-cmd                 # `--` preserves a dashy command
 ```
 
-With `--no-attach` the session is spawned in the background and appears in the UI, but `gmux` returns immediately instead of wiring your local terminal to it. Without it, `gmux` attaches transparently — Ctrl-C goes to the child, resize events follow your terminal, and closing the terminal detaches without killing the session.
+Which behavior `gmux <cmd>` exhibits depends on whether stdin is a terminal and whether you're already inside a gmux session:
 
-When run inside an existing gmux session (detected via the `GMUX` environment variable), `gmux` automatically detaches into a headless background process instead of nesting PTY-within-PTY. The new session appears in the UI.
+| Stdin              | Inside `GMUX=1`? | Behavior                                                                                                |
+| ------------------ | ---------------- | ------------------------------------------------------------------------------------------------------- |
+| TTY                | no               | Attach: wire your terminal to the child PTY, forward Ctrl-C and resize, detach when the terminal closes. |
+| TTY                | yes              | Auto-detach: spawn the session in the background and return immediately, so PTYs don't nest.            |
+| Pipe / file / null | either           | Block, stream bounded metadata to stdout, exit with the child's exit code. The session keeps running for the UI to attach to. |
+
+The pipe / file / null row is the canonical shape for scripts and agent harnesses: you get a blocking call, bounded stdout (no full PTY noise leaks into your script's logs), and reliable exit-code propagation. `--no-attach` forces the auto-detach behavior even from a terminal.
+
+See [Scripts and agents](/integrations/scripts-and-agents/) for the narrative version, including a worked build-and-report example.
 
 ### `gmux --list` (`-l`)
 
@@ -77,19 +85,37 @@ Terminate a running session. Sends the same signal chain the UI's kill button do
 gmux --kill a3f20187
 ```
 
-### `gmux --send <id> [text]`
+### `gmux --send [--no-submit] <id> [text]`
 
-Inject input into a running session, as if the bytes had been typed at the terminal. When `text` is given inline it is sent verbatim — no trailing newline is added, so you use shell `$'...\n'` (or pipe stdin) to submit:
+Inject input into a running session, as if the bytes had been typed at the terminal, and submit it. By default `--send` appends a carriage return after the payload so the agent or shell processes it as a complete line; `--no-submit` suppresses that for the rare flow where you want to pre-fill the input box without dispatching it.
 
 ```bash
-gmux --send a3f20187 $'describe yourself\n'
-echo 'describe yourself' | gmux --send a3f20187   # equivalent
-printf '\x03' | gmux --send a3f20187              # send Ctrl-C
+gmux --send a3f20187 'describe yourself'           # submits
+gmux --send a3f20187 < prompt.txt                  # submits stdin
+echo 'describe yourself' | gmux --send a3f20187    # equivalent
+printf '\x03' | gmux --send --no-submit a3f20187   # send Ctrl-C without an extra Enter
+gmux --send --no-submit a3f20187 'draft '          # leave "draft " in the input box
 ```
 
-When `text` is omitted, gmux reads from stdin until EOF and sends whatever it sees (capped at 1 MiB). Stdin mode is the natural shape for piping, and avoids shell-escaping headaches for multi-line input.
+When `text` is omitted, gmux reads from stdin until EOF and sends whatever it sees (capped at 1 MiB). Stdin mode is the natural shape for piping multi-line input from files or heredocs.
 
 **Access control.** `--send` is powerful — anything you send lands in the session's PTY, and the child has no way to distinguish it from keyboard input. Access is gated by filesystem permissions on the session's Unix socket (owner-only, `0700`), which means only the user that started the session can send to it. Other users on the same machine cannot connect to the socket at all. For the same reason, `--send` is local-only: cross-machine sending would need an explicit authorization model that doesn't exist yet.
+
+### `gmux --wait [--timeout N] <id>`
+
+Block until the agent in the session has finished its turn. Returns 0 when the agent reaches an idle state (the spinner stops), 2 if the session dies before becoming idle, and 3 if the optional `--timeout` elapses first.
+
+```bash
+gmux --send a3f20187 < prompt.txt
+gmux --wait a3f20187
+gmux --tail 50 a3f20187 > result.log
+```
+
+The idle signal is the same `Status.Working` flag the UI's spinner consumes: each agent adapter (claude, codex, pi) flips it false once its agent has emitted its final message for the turn. Wait returns immediately if the agent is already idle when called (so composition with `--send` is reliable when the agent races ahead between the two CLI hops).
+
+Shell sessions don't emit an idle signal and are rejected with a clear error rather than returning a misleading idle. To wait for a shell command to finish, run it directly via the piped flow above or compose with `timeout`.
+
+Local sessions only; remote peer sessions are rejected until peer subscriptions stream `Status` events back to the hub.
 
 ## gmuxd
 
