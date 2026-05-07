@@ -86,18 +86,53 @@ describe('selectionToText', () => {
     expect(selectionToText(term)).toBe('echo 1')
   })
 
-  it('preserves explicitly-typed trailing spaces across a line break', () => {
-    // Distinguishing written-spaces from never-written pad is the whole
-    // point of using trimRight=true (which keys off cell codepoint, not
-    // the rendered character). If the user typed `echo 1   ` followed
-    // by Enter, those three spaces are content and must survive a copy
-    // that crosses the resulting line break.
+  it('strips explicitly-written trailing whitespace at row boundaries', () => {
+    // The shipped rule: when a row's selection reaches the row boundary,
+    // trim trailing whitespace including explicitly-written spaces
+    // (codepoint 32). Without this, TUIs that paint a full-width row of
+    // content + space-fill + newline (pi, Claude Code, btop, …) copy as a
+    // wall of spaces.
+    //
+    // The trade-off (rare): a row ending with typed trailing spaces, then
+    // a hard newline, copies without those spaces. Pinning that
+    // explicitly here so any future relaxation is a deliberate decision,
+    // not a quiet revert.
     const term = makeTerm({
       cols: 20,
       rows: ['echo 1   ', 'echo 2'],
       selection: { start: { x: 0, y: 0 }, end: { x: 6, y: 1 } },
     })
-    expect(selectionToText(term)).toBe('echo 1   \necho 2')
+    expect(selectionToText(term)).toBe('echo 1\necho 2')
+  })
+
+  it('strips trailing pad on a TUI-style row (full-width explicit space fill)', () => {
+    // Mirrors what pi and similar TUIs render: content followed by an
+    // explicit-space fill all the way to the right edge, then a hard
+    // newline. Verified against pi's actual output (raw stream, replayed
+    // through pyte). The boundary-reaching trim must drop those spaces
+    // even though they have codepoint 32.
+    const term = makeTerm({
+      cols: 80,
+      rows: [
+        ' Hello! How can I help you today?                                               ',
+      ],
+      // Triple-click / line-select on the row: end.x === cols.
+      selection: { start: { x: 0, y: 0 }, end: { x: 80, y: 0 } },
+    })
+    expect(selectionToText(term)).toBe(' Hello! How can I help you today?')
+  })
+
+  it('preserves typed trailing spaces when selection ends mid-row', () => {
+    // Companion to the boundary-trim test above: when the user stops
+    // *inside* the row, the spaces they explicitly dragged across are
+    // content (semantically a mid-row selection of pad), not part of a
+    // line break. The mid-row case must keep them.
+    const term = makeTerm({
+      cols: 20,
+      rows: ['echo 1   '],
+      selection: { start: { x: 0, y: 0 }, end: { x: 9, y: 0 } },
+    })
+    expect(selectionToText(term)).toBe('echo 1   ')
   })
 
   it('joins soft-wrapped rows without inserting a newline', () => {

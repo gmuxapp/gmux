@@ -3,27 +3,38 @@
  *
  * Terminal-buffer-to-text models, summarised:
  *
- * 1. "Trim everything": strip trailing whitespace from every copied line.
- *    Loses information when the user genuinely wants to copy spaces typed
- *    into a row. Ghostty's `clipboard-trim-trailing-spaces` option works
- *    this way and its own community considers it a smell
- *    (ghostty-org/ghostty#2709).
+ * 1. "Trim everything": strip trailing whitespace from every copied line
+ *    unconditionally. Ghostty's `clipboard-trim-trailing-spaces` option.
+ *    Loses information when the user explicitly drag-selects through pad
+ *    inside a row.
  *
  * 2. "Trim never": emit cells verbatim. Wall of trailing spaces after
  *    every short line, because the cells past the content render as
  *    spaces. xterm.js' default `getSelection()` lands here in many cases.
  *
- * 3. **"Trailing pad belongs to the line break"**: Terminal.app, Alacritty,
- *    WezTerm, GNOME Terminal, xterm. Selections that *cross* a row boundary
- *    drop the trailing pad of the row before emitting `\n`. Selections that
- *    *end inside* a row preserve the cells the user actually dragged
- *    across, spaces included. This is what people mean when they say "no
- *    trailing whitespace on copy", and it's the model gmux implements.
+ * 3. **"Trailing whitespace belongs to the line break"**: trim trailing
+ *    whitespace only when the selection reaches the row boundary;
+ *    preserve mid-row pad the user explicitly dragged across. This is the
+ *    model gmux implements. It handles two different cases that look the
+ *    same to the buffer:
  *
- * Why xterm.js' `trimRight` parameter is the right primitive: it trims by
- * cell *codepoint* (0 = never written) rather than by rendered character,
- * so it cleanly distinguishes never-written pad cells from explicitly-typed
- * spaces, and is automatically wide-character-aware.
+ *      a. Shell output (`echo hello`) leaves the rest of the row as
+ *         never-written cells (codepoint 0). xterm.js's
+ *         `translateToString(trimRight=true)` drops these by walking the
+ *         line until it finds a cell with `HAS_CONTENT_MASK`.
+ *
+ *      b. TUI output (pi, Claude Code, btop, fzf, lazygit, k9s, …) fills
+ *         each row with *explicit* space cells (codepoint 32) before the
+ *         newline. Those cells survive xterm's codepoint-0 trim because
+ *         they have content. Without an extra step, copying any TUI
+ *         response yields a wall of spaces.
+ *
+ *    For (b) we post-strip ASCII whitespace from the right edge of every
+ *    boundary-reaching slice. Trade-off: a row that ends with
+ *    explicitly-typed trailing whitespace, then a hard newline, copies
+ *    without those spaces. In practice that's vanishingly rare. The
+ *    `trim = ex >= cols` guard still preserves spaces a user explicitly
+ *    drags through without crossing the line break.
  *
  * Soft wraps (terminal-driven, signalled by `IBufferLine.isWrapped` on the
  * following row) are joined without an inserted `\n`, matching every modern
@@ -80,15 +91,25 @@ export function selectionToText(term: SelectionTerminal): string {
     const sx = y === start.y ? start.x : 0
     const ex = isLast ? end.x : cols
 
-    // Trim trailing pad when the row's selection reaches the row boundary
-    // (`ex >= cols`). That covers every non-last row, plus the last row
-    // when the user selected past EOL (triple-click, line-select, drag
-    // through the line break). When the user stopped *inside* the row we
-    // preserve the cells they dragged across, including any pad spaces:
-    // that's an explicit selection of padding, semantically distinct from
-    // crossing a line break.
+    // Trim trailing whitespace when the row's selection reaches the row
+    // boundary (`ex >= cols`). That covers every non-last row, plus the
+    // last row when the user selected past EOL (triple-click,
+    // line-select, drag through the line break). When the user stopped
+    // *inside* the row we preserve the cells they dragged across,
+    // including any pad spaces.
+    //
+    // Two layers of trimming, both gated on `trim`:
+    //   1. xterm's translateToString(trimRight=true) drops never-written
+    //      cells (codepoint 0). Handles shell output cleanly.
+    //   2. We post-strip ASCII whitespace from the right edge. Handles
+    //      TUIs that fill rows with explicit space cells before the
+    //      newline (pi, CC, btop, …). See file-level docstring for the
+    //      full rationale and the rare case it loses fidelity in.
     const trim = ex >= cols
-    if (ex > sx) out += line.translateToString(trim, sx, ex)
+    if (ex > sx) {
+      const slice = line.translateToString(trim, sx, ex)
+      out += trim ? slice.replace(/[ \t]+$/, '') : slice
+    }
 
     if (!isLast) {
       // Soft wrap: next row continues this one, suppress the newline.
