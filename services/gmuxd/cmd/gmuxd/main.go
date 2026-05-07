@@ -1318,6 +1318,9 @@ func serve(stderr io.Writer) int {
 			}
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
 
+		case "wait":
+			handleWait(w, r, sessions, sessionID)
+
 		default:
 			http.NotFound(w, r)
 		}
