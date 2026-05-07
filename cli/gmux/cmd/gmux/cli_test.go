@@ -98,6 +98,22 @@ func TestParseCLI(t *testing.T) {
 			args:     []string{"--send", "sess-abcd"},
 			wantMode: modeSend,
 			wantRest: []string{"sess-abcd"},
+			check: func(t *testing.T, f *flags) {
+				if f.noSubmit {
+					t.Errorf("noSubmit = true, want false (submit-by-default)")
+				}
+			},
+		},
+		{
+			name:     "--send --no-submit suppresses the submit",
+			args:     []string{"--send", "--no-submit", "sess-abcd", "draft"},
+			wantMode: modeSend,
+			wantRest: []string{"sess-abcd", "draft"},
+			check: func(t *testing.T, f *flags) {
+				if !f.noSubmit {
+					t.Errorf("noSubmit = false, want true")
+				}
+			},
 		},
 	}
 
@@ -143,6 +159,8 @@ func TestParseCLIErrors(t *testing.T) {
 		{"--no-attach", "--list"},                // --no-attach doesn't make sense with --list
 		{"--no-attach", "--attach", "sess-a"},
 		{"--no-attach", "--send", "sess-a", "x"}, // --no-attach doesn't make sense with --send
+		{"--no-submit", "sess-a"},                // --no-submit only applies with --send
+		{"--no-submit", "--list"},                // --no-submit only applies with --send
 	}
 
 	for _, args := range invalid {

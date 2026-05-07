@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"strings"
 	"testing"
 )
@@ -115,3 +116,62 @@ func TestShortID(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildSendBody pins the wire-level contract of --send: by default
+// the bytes written to the PTY end with the carriage return that
+// submits the input, and --no-submit suppresses exactly that byte and
+// nothing else. Both inline-text and stdin paths are covered because
+// they construct the body differently and the carriage-return logic
+// has to wrap both.
+func TestBuildSendBody(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     *string
+		stdin    string
+		noSubmit bool
+		want     string
+	}{
+		{
+			name: "inline text submits with trailing \\r",
+			text: stringPtr("hello"),
+			want: "hello\r",
+		},
+		{
+			name:     "inline text with --no-submit sends verbatim",
+			text:     stringPtr("hello"),
+			noSubmit: true,
+			want:     "hello",
+		},
+		{
+			name:  "stdin submits with trailing \\r",
+			stdin: "prompt body\nwith newline\n",
+			want:  "prompt body\nwith newline\n\r",
+		},
+		{
+			name:     "stdin with --no-submit preserves trailing newline only",
+			stdin:    "prompt body\nwith newline\n",
+			noSubmit: true,
+			want:     "prompt body\nwith newline\n",
+		},
+		{
+			name: "empty inline text still submits an empty line",
+			text: stringPtr(""),
+			want: "\r",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := buildSendBody(tc.text, strings.NewReader(tc.stdin), tc.noSubmit)
+			got, err := io.ReadAll(body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("body = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func stringPtr(s string) *string { return &s }

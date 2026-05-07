@@ -31,7 +31,8 @@ type flags struct {
 	attach   bool
 	kill     bool
 	send     bool
-	tail     int // >=0 when set (flag default is -1)
+	noSubmit bool // suppresses the trailing carriage return on --send
+	tail     int  // >=0 when set (flag default is -1)
 	help     bool
 }
 
@@ -56,6 +57,7 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 	fs.BoolVar(&f.kill, "kill", false, "kill a running session")
 	fs.BoolVar(&f.kill, "k", false, "kill a running session (short)")
 	fs.BoolVar(&f.send, "send", false, "send input to a running session")
+	fs.BoolVar(&f.noSubmit, "no-submit", false, "with --send, do not append the carriage return that submits the input")
 	fs.IntVar(&f.tail, "tail", -1, "dump the last N lines of a session")
 	fs.IntVar(&f.tail, "t", -1, "dump the last N lines of a session (short)")
 	fs.BoolVar(&f.help, "help", false, "show help")
@@ -89,6 +91,12 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 	}
 	if actions > 1 {
 		return modeHelp, nil, nil, errors.New("--list, --attach, --tail, --kill, --send are mutually exclusive")
+	}
+
+	// --no-submit only changes the bytes --send writes; with anything
+	// else it would silently do nothing, so reject it loudly.
+	if f.noSubmit && !f.send {
+		return modeHelp, nil, nil, errors.New("--no-submit only applies with --send")
 	}
 
 	// Management actions take a single session id (except --list and --send).
@@ -165,7 +173,8 @@ Session management:
   gmux --attach <id>                reattach to an existing session
   gmux --tail <N> <id>              print the last N lines of a session
   gmux --kill <id>                  terminate a session
-  gmux --send <id> [text]           send text (or stdin) to a session
+  gmux --send <id> [text]           send text (or stdin) to a session and submit it
+  gmux --send --no-submit <id> ...  send without the trailing carriage return
 
 Flags before the command apply to gmux itself. Once the first positional
 argument is seen, everything after is the command to run, verbatim.

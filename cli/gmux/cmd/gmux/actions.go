@@ -280,13 +280,19 @@ func cmdTail(ref string, n int) int {
 	return 0
 }
 
-// cmdSend implements `gmux --send <id> [text]`.
+// cmdSend implements `gmux --send [--no-submit] <id> [text]`.
 //
 // Sends bytes to the session's PTY as if they had been typed at the
-// terminal. When text is provided inline it is sent verbatim (callers
-// who want a trailing newline must include it explicitly, e.g. via
-// `$'hello\n'`). When text is omitted, stdin is read until EOF; this
-// is the natural shape for piping: `echo hello | gmux --send abc`.
+// terminal, then appends a carriage return so the input is submitted.
+// The submit-by-default shape matches what every other "send a message"
+// CLI does (gh issue comment, slack send, jira issue comment add) and
+// avoids the silent-failure trap of bytes-without-\r sitting in the
+// agent's input box forever. `--no-submit` opts out for the rare
+// flow where you want to pre-fill input without dispatching it.
+//
+// When text is provided inline it is sent verbatim before the submit;
+// when text is omitted, stdin is read until EOF — the natural shape
+// for piping: `echo hello | gmux --send abc`.
 //
 // Access control is delegated to the session socket's file permissions
 // (owner-only, 0o700): if you can connect to the socket you already
@@ -294,7 +300,7 @@ func cmdTail(ref string, n int) int {
 // For the same reason we don't support sending to remote peer sessions
 // — doing that safely would require a per-peer authorization model
 // that doesn't exist yet.
-func cmdSend(ref string, text *string) int {
+func cmdSend(ref string, text *string, noSubmit bool) int {
 	sess, err := resolveSession(ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
@@ -317,12 +323,7 @@ func cmdSend(ref string, text *string) int {
 		return 1
 	}
 
-	var body io.Reader
-	if text != nil {
-		body = strings.NewReader(*text)
-	} else {
-		body = io.LimitReader(os.Stdin, maxSendBytes)
-	}
+	body := buildSendBody(text, os.Stdin, noSubmit)
 
 	client := sessionSocketClient(sess.SocketPath)
 	// When reading from stdin, the request body may be paced by the
@@ -360,6 +361,29 @@ func cmdSend(ref string, text *string) int {
 // --send invocation. Matches the runner's maxInputBytes so we fail
 // fast on the client side rather than letting the server truncate us.
 const maxSendBytes = 1 << 20 // 1 MiB
+
+// buildSendBody assembles the bytes that --send writes to the session's
+// PTY input. When text is non-nil it is sent verbatim; otherwise stdin
+// is read up to maxSendBytes. Unless noSubmit is set, a trailing \r is
+// appended — that's what xterm sends for Enter and what every PTY
+// (agent or shell) treats as "submit this line." \n alone is not
+// enough: most agents see it as a literal newline and keep buffering,
+// which is how `gmux --send <id> < prompt.txt` ended up silently
+// failing for users who expected `cat`-style behavior. A redundant \r
+// in the input is harmless (submits an empty line at most), so we don't
+// try to detect and dedupe.
+func buildSendBody(text *string, stdin io.Reader, noSubmit bool) io.Reader {
+	var body io.Reader
+	if text != nil {
+		body = strings.NewReader(*text)
+	} else {
+		body = io.LimitReader(stdin, maxSendBytes)
+	}
+	if !noSubmit {
+		body = io.MultiReader(body, strings.NewReader("\r"))
+	}
+	return body
+}
 
 // sessionSocketClient builds an HTTP client that dials a session's
 // Unix socket directly. The host portion of URLs passed through this

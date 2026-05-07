@@ -50,7 +50,7 @@ func main() {
 		if len(rest) == 2 {
 			text = &rest[1]
 		}
-		os.Exit(cmdSend(rest[0], text))
+		os.Exit(cmdSend(rest[0], text, f.noSubmit))
 	}
 }
 
