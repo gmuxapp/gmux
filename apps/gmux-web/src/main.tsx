@@ -521,7 +521,6 @@ function App() {
             session={selectedVal}
             terminalOptions={termOpts}
             onResume={handleResume}
-            onDismiss={handleCloseSession}
             resuming={resumingId === selectedVal.id}
           />
         ) : selectedVal ? (

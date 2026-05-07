@@ -2304,3 +2304,29 @@ a.home-host-link:hover {
   gap: 8px;
 }
 
+
+/* Floating "jump to bottom" overlay for any xterm-hosting view (replay,
+   live terminal). Anchors to the nearest positioned ancestor, which
+   .terminal-shell already establishes (position: relative). */
+.jump-to-bottom {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 5;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+  box-shadow: 0 2px 8px oklch(0% 0 0 / 0.35);
+  transition: background 0.1s, transform 0.1s;
+}
+.jump-to-bottom:hover { background: oklch(28% 0.015 250); }
+.jump-to-bottom:active { transform: translateY(1px); }

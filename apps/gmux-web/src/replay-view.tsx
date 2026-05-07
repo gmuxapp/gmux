@@ -7,6 +7,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import type { ITerminalOptions } from '@xterm/xterm'
 import type { Session } from './types'
 import { fetchScrollback, type ScrollbackResult } from './replay-fetch'
+import { JumpToBottom } from './jump-to-bottom'
 
 // gmuxd caps scrollback at 1 MiB × 2 files (~2 MiB max). xterm's default
 // scrollback line cap (1000) would silently truncate most of that for
@@ -22,6 +23,20 @@ type ReplayState =
   | { kind: 'loading' }
   | ScrollbackResult
 
+// Adapter kinds whose runners have an explicit resume protocol
+// (--resume <id> or equivalent). Anything not in this set falls back
+// to "Rerun" because there's no captured agent state to pick up from;
+// re-launching just runs the original command again. Listed
+// explicitly so adding a new agent adapter is a deliberate one-line
+// change here, and unknown kinds default to the safe "Rerun" label.
+const RESUMABLE_AGENT_KINDS = new Set(['claude', 'codex', 'pi'])
+
+function resumeButtonLabel(kind: string, busy: boolean): string {
+  const isAgent = RESUMABLE_AGENT_KINDS.has(kind)
+  if (busy) return isAgent ? 'Resuming…' : 'Rerunning…'
+  return isAgent ? 'Resume' : 'Rerun'
+}
+
 /**
  * Read-only xterm view that replays a dead session's persisted scrollback
  * from the gmuxd broker. No WebSocket, no input, no resize messages: this
@@ -32,26 +47,32 @@ type ReplayState =
  * see main.tsx for the routing.
  *
  * The action bar at the bottom carries the lifecycle controls that
- * previously lived as auto-trigger-on-click in the sidebar: Resume
- * (if the adapter is resumable) and Dismiss. Promoting them out of an
- * implicit click means clicking a dead session navigates to its
- * scrollback first, and any state-changing action is a deliberate
- * second click.
+ * previously lived as auto-trigger-on-click in the sidebar: Resume /
+ * Rerun (if the adapter is resumable). Promoting it out of an implicit
+ * click means clicking a dead session navigates to its scrollback
+ * first, and any state-changing action is a deliberate second click.
+ *
+ * The button label depends on the adapter kind: agent adapters
+ * (claude/codex/pi) say "Resume" because they have explicit resume
+ * semantics (`--resume <id>`), shells and one-off commands say "Rerun"
+ * because there's no state to resume — re-launching just runs the
+ * command again. Dismissal is intentionally not exposed here; the
+ * sidebar's per-session close affordance is the single way to remove
+ * a dead session.
  */
 export function ReplayView({
   session,
   terminalOptions,
   onResume,
-  onDismiss,
   resuming,
 }: {
   session: Session
   terminalOptions: ITerminalOptions
   onResume?: (id: string) => void
-  onDismiss?: (session: Session) => void
   resuming?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const [term, setTerm] = useState<Terminal | null>(null)
   const [state, setState] = useState<ReplayState>({ kind: 'loading' })
 
   useEffect(() => {
@@ -76,6 +97,7 @@ export function ReplayView({
     term.open(containerRef.current)
     loadPreferredRenderer(term)
     fit.fit()
+    setTerm(term)
 
     // OSC 52 (set clipboard) suppression: the captured bytes may contain
     // OSC 52 sequences emitted by the *original* live session; replaying
@@ -114,6 +136,7 @@ export function ReplayView({
       cancelled = true
       window.removeEventListener('resize', onResize)
       if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
+      setTerm(null)
       term.dispose()
     }
   }, [session.id])
@@ -126,6 +149,7 @@ export function ReplayView({
     <div class="replay-root">
       <div class="terminal-shell">
         <div ref={containerRef} class="terminal-container" />
+        <JumpToBottom term={term} />
         {state.kind === 'loading' && (
           <div class="terminal-loading">
             Loading scrollback…
@@ -157,16 +181,7 @@ export function ReplayView({
               disabled={!!resuming}
               onClick={() => onResume(session.id)}
             >
-              {resuming ? 'Resuming…' : 'Resume'}
-            </button>
-          )}
-          {onDismiss && (
-            <button
-              type="button"
-              class="btn"
-              onClick={() => onDismiss(session)}
-            >
-              Dismiss
+              {resumeButtonLabel(session.kind, !!resuming)}
             </button>
           )}
         </div>
