@@ -38,6 +38,25 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ---
 
+## v1.6.0 - 2026-05-08
+
+Gmux now persists the scrollback and metadata for finished processes. This allows gmux to be more ergonomic to use for agents and automations from the CLI. See the new documentation for details, including the new **gmux skill!**
+https://gmux.app/scripts-and-agents
+
+### Features
+- persist session scrollback for dead-session replay ([#193](https://github.com/gmuxapp/gmux/pull/193))
+- **(web)** replay scrollback for dead sessions ([#208](https://github.com/gmuxapp/gmux/pull/208))
+- add gmux skill, improve gmux CLI for agents ([#212](https://github.com/gmuxapp/gmux/pull/212))
+
+### Fixes
+- **(web)** preserve scroll distance from bottom across pi end-of-turn redraws ([#201](https://github.com/gmuxapp/gmux/pull/201))
+- **(daemon)** apply persisted attributions on startup so live runners regain slugs ([#205](https://github.com/gmuxapp/gmux/pull/205))
+- **(daemon)** preserve session state and prevent duplicates across restart ([#194](https://github.com/gmuxapp/gmux/pull/194))
+- **(web)** trim explicit trailing whitespace on copy so pi and other TUIs are copyable ([#210](https://github.com/gmuxapp/gmux/pull/210))
+- **(web)** consume xterm fork with android gboard composition fix ([#213](https://github.com/gmuxapp/gmux/pull/213))
+- **(web)** pin xterm fork to immutable tag and fix peer-dep version ([#214](https://github.com/gmuxapp/gmux/pull/214))
+
+---
 ## v1.5.0 - 2026-05-04
 
 Sessions now keep their titles and exit state across daemon restarts. It's groundwork for the full scrollback persistence landing next release. The web terminal also got cleaner copy-paste: copying no longer drags trailing whitespace along, and pasting now handles images and other binary data.
