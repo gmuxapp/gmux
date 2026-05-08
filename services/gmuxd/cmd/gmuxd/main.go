@@ -28,10 +28,12 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/devcontainers"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/coalesce"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/conversations"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/notify"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sleep"
@@ -548,7 +550,23 @@ func serve(stderr io.Writer) int {
 	// Project manager handles concurrent access to projects.json and
 	// auto-assignment of sessions to projects.
 	projectMgr := projects.NewManager(stateDir)
-	projectMgr.Broadcast = func() {
+
+	// reconcileProjectStamps is the single point that updates each
+	// owned session's ProjectSlug / ProjectIndex from the current
+	// projects.json state. Called after every projectMgr.Update (via
+	// the Broadcast hook below) and once explicitly after the startup
+	// session-seeding loop. See ADR 0002.
+	reconcileProjectStamps := func(state *projects.State) {
+		assignments := state.AssignmentsByKey()
+		sessions.Reconcile(func(s store.Session) (string, int) {
+			key := projects.SessionKey(s.ID, s.Slug)
+			a := assignments[key]
+			return a.Slug, a.Index
+		})
+	}
+
+	projectMgr.Broadcast = func(state *projects.State) {
+		reconcileProjectStamps(state)
 		sessions.Broadcast(store.Event{Type: "projects-update"})
 	}
 	projectMgr.SeedIfEmpty()
@@ -559,6 +577,10 @@ func serve(stderr io.Writer) int {
 	// rehydrateProjects for the identity-model rationale.
 	if state, err := projectMgr.Load(); err == nil {
 		rehydrateProjects(sessions, convIndex, state)
+		// Stamp ProjectSlug / ProjectIndex on the just-rehydrated sessions
+		// (and on any sessions previously loaded via sessionmeta.Sweep)
+		// before SSE subscribers can observe.
+		reconcileProjectStamps(state)
 	}
 
 	// After store is populated, clean up orphaned project entries
@@ -616,7 +638,17 @@ func serve(stderr io.Writer) int {
 
 	// ── Health + Capabilities ──
 
-	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
+	// composeHealth assembles the diagnostic blob shared between
+	// GET /v1/health and the snapshot.world SSE event. It contains
+	// everything the frontend needs to render headers, peer status,
+	// session counts and update banners.
+	//
+	// The auth_token field is intentionally excluded here; the
+	// /v1/health handler injects it only on local Unix-socket
+	// connections. SSE always streams over the authenticated HTTP
+	// path, so leaking the token through snapshot.world would be
+	// a regression.
+	composeHealth := func() map[string]any {
 		data := map[string]any{
 			"service": "gmuxd",
 			"version": version,
@@ -636,11 +668,6 @@ func serve(stderr io.Writer) int {
 		data["listen"] = tcpAddr
 		if v := updateChecker.Available(); v != "" {
 			data["update_available"] = v
-		}
-		// Include auth token only on Unix socket connections (local IPC).
-		// On TCP, the requester already proved they have the token.
-		if r.RemoteAddr == "@" || strings.HasPrefix(r.RemoteAddr, "/") || r.RemoteAddr == "" {
-			data["auth_token"] = authToken
 		}
 		if peers := appendOfflinePeers(peerManager, tsDiscovery); len(peers) > 0 {
 			data["peers"] = peers
@@ -677,6 +704,16 @@ func serve(stderr io.Writer) int {
 		data["default_launcher"] = launchConfig.DefaultLauncher
 		data["launchers"] = launchConfig.Launchers
 
+		return data
+	}
+
+	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
+		data := composeHealth()
+		// Include auth token only on Unix socket connections (local IPC).
+		// On TCP, the requester already proved they have the token.
+		if r.RemoteAddr == "@" || strings.HasPrefix(r.RemoteAddr, "/") || r.RemoteAddr == "" {
+			data["auth_token"] = authToken
+		}
 		writeJSON(w, map[string]any{"ok": true, "data": data})
 	})
 
@@ -715,6 +752,11 @@ func serve(stderr io.Writer) int {
 	})
 
 	// ── Projects ──
+	//
+	// In protocol 2 every reader is also an SSE subscriber and gets the
+	// authoritative project view pushed via snapshot.world (ADR 0001).
+	// GET /v1/projects is retained for v1 clients (old web build, scripts)
+	// and reflects the same state via a one-shot fetch. Deprecated in v2.
 
 	mux.HandleFunc("GET /v1/projects", func(w http.ResponseWriter, r *http.Request) {
 		state, err := projectMgr.Load()
@@ -723,9 +765,7 @@ func serve(stderr io.Writer) int {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to load projects")
 			return
 		}
-
 		sessionInfos := buildSessionInfos(sessions)
-
 		writeJSON(w, map[string]any{
 			"ok": true,
 			"data": map[string]any{
@@ -848,14 +888,8 @@ func serve(stderr io.Writer) int {
 		}
 		found := false
 		err = projectMgr.Update(func(state *projects.State) bool {
-			for i := range state.Items {
-				if state.Items[i].Slug == slug {
-					state.Items[i].Sessions = req.Sessions
-					found = true
-					return true
-				}
-			}
-			return false
+			found = state.ReorderSessions(slug, req.Sessions)
+			return found
 		})
 		if err != nil {
 			log.Printf("projects: reorder sessions error: %v", err)
@@ -867,6 +901,41 @@ func serve(stderr io.Writer) int {
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true})
+	})
+
+	// ── Peer-write proxy ──
+	//
+	// Generic forwarder for state that lives on a peer. The frontend
+	// reaches it via `/v1/peers/{peer}/<rest>`; we forward to the peer
+	// at `/<rest>` (which must already include the leading `/v1/...`).
+	// Per ADR 0002, project membership and ordering are owned by the
+	// session's origin host; the only correct way for the viewer to
+	// reorder a peer's project is to ask the peer to do it.
+	//
+	// The proxy is intentionally narrow: it allowlists writes the
+	// frontend actually issues today (project reorder), so a buggy or
+	// hostile client can't drive arbitrary peer endpoints through us.
+	mux.HandleFunc("/v1/peers/", func(w http.ResponseWriter, r *http.Request) {
+		rest := strings.TrimPrefix(r.URL.Path, "/v1/peers/")
+		name, sub, ok := strings.Cut(rest, "/")
+		if !ok || name == "" || sub == "" {
+			writeError(w, http.StatusNotFound, "not_found", "peer path required")
+			return
+		}
+		if !isAllowedPeerProxyPath(r.Method, sub) {
+			writeError(w, http.StatusForbidden, "forbidden", "peer proxy: method+path not allowed")
+			return
+		}
+		if peerManager == nil {
+			writeError(w, http.StatusBadGateway, "unknown_peer", "no peers configured")
+			return
+		}
+		peer := peerManager.GetPeer(name)
+		if peer == nil {
+			writeError(w, http.StatusBadGateway, "unknown_peer", fmt.Sprintf("peer %q not configured", name))
+			return
+		}
+		peer.ForwardPath(w, r, "/"+sub)
 	})
 
 	// ── Sessions ──
@@ -1436,6 +1505,45 @@ func serve(stderr io.Writer) int {
 		}
 	})
 
+	// ── Snapshot push protocol (ADR 0001) ──
+	//
+	// Two coalesced kinds plus one bare event:
+	//
+	//   snapshot.sessions  trigger: any session state change
+	//   snapshot.world     trigger: projects-update | peer-status
+	//   session-activity   bare: forwarded as-is, lossy, not coalesced
+	//
+	// The coalescers emit `struct{}` triggers; the SSE handler
+	// composes the actual payload at emit time by reading current
+	// state. This avoids snapshotting on every Push (most of which
+	// are coalesced away) and keeps memory bounded under bursts.
+	const snapshotWindow = 50 * time.Millisecond
+	sessionsCoalescer := coalesce.New[struct{}](snapshotWindow)
+	worldCoalescer := coalesce.New[struct{}](snapshotWindow)
+
+	// Pump: a single goroutine watches the broadcast bus and routes
+	// each event type to the right coalescer. session-activity is
+	// not coalesced; it stays on the broadcast bus and SSE handlers
+	// subscribe directly.
+	//
+	// Per-event broadcast types are kept (session-upsert,
+	// session-remove, projects-update, peer-status) because they
+	// remain the canonical signal that *something* changed; protocol
+	// 2 just stops shipping them on the wire.
+	pumpCh, cancelPump := sessions.Subscribe()
+	defer cancelPump()
+	go func() {
+		for ev := range pumpCh {
+			pushSessions, pushWorld := snapshotPumpRoute(ev.Type)
+			if pushSessions {
+				sessionsCoalescer.Push(struct{}{})
+			}
+			if pushWorld {
+				worldCoalescer.Push(struct{}{})
+			}
+		}
+	}()
+
 	// ── SSE Events ──
 
 	mux.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) {
@@ -1449,55 +1557,101 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		// isOwned reports whether a session belongs to this node.
-		// Local sessions (Peer=="") and devcontainer sessions (Local
-		// peer) are owned; network peer sessions are not forwarded.
+		// asPeer consumers (?as=peer) get owned sessions only and no
+		// world snapshots. Browser consumers get everything.
+		asPeer := r.URL.Query().Get("as") == "peer"
+
+		// isLocalPeer wraps the manager's check so it tolerates a
+		// nil manager (test harnesses, single-node mode).
+		isLocalPeer := func(name string) bool {
+			return peerManager != nil && peerManager.IsLocalPeer(name)
+		}
+		// isOwned: own sessions (Peer=="") + Local-peer (devcontainer)
+		// sessions belong to this node and ride peer feeds; network
+		// peer sessions don't forward through this node to others.
 		isOwned := func(s *store.Session) bool {
 			if s.Peer == "" {
 				return true
 			}
-			return peerManager != nil && peerManager.IsLocalPeer(s.Peer)
+			return isLocalPeer(s.Peer)
 		}
 
-		// isOwnedEvent checks a store event. Session-upsert carries
-		// the full session; remove/activity only have the ID, so we
-		// extract the peer from the namespaced ID. Non-session events
-		// (projects-update, peer-status) are always forwarded.
-		isOwnedEvent := func(ev store.Event) bool {
-			switch ev.Type {
-			case "session-upsert":
-				if ev.Session == nil {
-					return true
-				}
-				return isOwned(ev.Session)
-			case "session-remove", "session-activity":
-				_, peerName := peering.ParseID(ev.ID)
-				if peerName == "" {
-					return true // local
-				}
-				return peerManager != nil && peerManager.IsLocalPeer(peerName)
-			default:
-				return true
+		// snapshot.sessions filter differs by subscriber kind:
+		//
+		//  - asPeer (?as=peer, another hub): owned only. The peer
+		//    reconciles its view of network-peer sessions directly
+		//    from the originating peers; forwarding them via this
+		//    node would create double delivery and false-origin
+		//    attribution (ADR 0002).
+		//  - browser: every session in the local store, including
+		//    namespaced mirrors of network-peer sessions. ADR 0002
+		//    needs these so peer-owned folders render in the sidebar
+		//    with the origin's chosen order.
+		composeSessions := func() snapshot.SessionsPayload {
+			if asPeer {
+				return snapshot.ComposeSessions(sessions.List(), isOwned)
+			}
+			return snapshot.ComposeSessions(sessions.List(), nil)
+		}
+
+		composeWorld := func() snapshot.WorldPayload {
+			state, err := projectMgr.Load()
+			var items []projects.Item
+			if err == nil {
+				items = state.Items
+			} else {
+				log.Printf("snapshot.world: projects load: %v", err)
+			}
+			health := composeHealth()
+			return snapshot.WorldPayload{
+				Projects:        items,
+				Peers:           appendOfflinePeers(peerManager, tsDiscovery),
+				Health:          health,
+				Launchers:       launchConfig.Launchers,
+				DefaultLauncher: launchConfig.DefaultLauncher,
 			}
 		}
 
-		// Send current state as upserts (owned sessions only).
-		for _, sess := range sessions.List() {
-			s := sess
-			if !isOwned(&s) {
-				continue
+		sessionsSub, cancelSessions := sessionsCoalescer.Subscribe()
+		defer cancelSessions()
+		var worldSub <-chan struct{}
+		var cancelWorld func()
+		if !asPeer {
+			worldSub, cancelWorld = worldCoalescer.Subscribe()
+			defer cancelWorld()
+		}
+
+		// Activity events stay on the bare broadcast bus: lossy,
+		// per-session, no batching. Filter for owned sessions so
+		// peer consumers don't see network-peer activity.
+		activityCh, cancelActivity := sessions.Subscribe()
+		defer cancelActivity()
+
+		// Initial snapshots (leading edge: subscriber is idle).
+		sendSSE(w, "snapshot.sessions", composeSessions())
+		if !asPeer {
+			sendSSE(w, "snapshot.world", composeWorld())
+		}
+
+		// Protocol-1 initial state: emit each owned session as a
+		// session-upsert so v1.x consumers (old browsers, old hubs
+		// without `?as=peer` support) can hydrate without
+		// GET /v1/sessions. Suppressed for new peer subscribers since
+		// they consume snapshot.sessions.
+		if !asPeer {
+			for _, sess := range sessions.List() {
+				s := sess
+				if !isOwned(&s) {
+					continue
+				}
+				sendSSE(w, "session-upsert", store.Event{
+					Type:    "session-upsert",
+					ID:      s.ID,
+					Session: &s,
+				})
 			}
-			sendSSE(w, "session-upsert", store.Event{
-				Type:    "session-upsert",
-				ID:      s.ID,
-				Session: &s,
-			})
 		}
 		flusher.Flush()
-
-		// Stream updates (owned events only).
-		ch, cancel := sessions.Subscribe()
-		defer cancel()
 
 		// Heartbeat: send an SSE comment every 30s to keep the connection
 		// alive through idle periods. Without this, the hub's sseclient
@@ -1513,19 +1667,55 @@ func serve(stderr io.Writer) int {
 			case <-notify:
 				return
 			case <-heartbeat.C:
-				// SSE comment line: resets the client's idle timer
-				// without producing a client-side event.
 				fmt.Fprint(w, ":\n\n")
 				flusher.Flush()
-			case ev, open := <-ch:
+			case _, open := <-sessionsSub:
 				if !open {
 					return
 				}
-				if !isOwnedEvent(ev) {
-					continue
-				}
-				sendSSE(w, ev.Type, ev)
+				sendSSE(w, "snapshot.sessions", composeSessions())
 				flusher.Flush()
+			case _, open := <-worldSub:
+				if !open {
+					return
+				}
+				sendSSE(w, "snapshot.world", composeWorld())
+				flusher.Flush()
+			case ev, open := <-activityCh:
+				if !open {
+					return
+				}
+				switch ev.Type {
+				case "session-activity":
+					// Peer subscribers (?as=peer) get activity for owned
+					// sessions only; browser subscribers see everything so
+					// peer-owned session indicators update.
+					if !shouldForwardActivity(asPeer, ev.ID, isLocalPeer) {
+						continue
+					}
+					sendSSE(w, "session-activity", ev)
+					flusher.Flush()
+				case "session-upsert", "session-remove":
+					// Protocol-1 compat: emit owned-only per-event SSE to
+					// non-asPeer subscribers (browsers and v1 hubs that
+					// don't know about `?as=peer`). v2 hubs subscribe with
+					// `?as=peer` and consume snapshot.sessions exclusively,
+					// so we suppress per-event for them to avoid double
+					// processing.
+					if asPeer || !isOwnedEvent(ev, isLocalPeer) {
+						continue
+					}
+					sendSSE(w, ev.Type, ev)
+					flusher.Flush()
+				case "projects-update", "peer-status":
+					// Protocol-1 compat: browser-only. Hubs derive these
+					// from cached /v1/health and their own projects.json.
+					if asPeer {
+						continue
+					}
+					sendSSE(w, ev.Type, ev)
+					flusher.Flush()
+				}
 			}
 		}
 	})
@@ -1889,6 +2079,114 @@ func runAuth(stdout, stderr io.Writer) int {
 	_, _ = fmt.Fprintf(stdout, "\nOpen this URL to authenticate:\n  %s\n", url)
 
 	return 0
+}
+
+// snapshotPumpRoute decides which protocol-2 coalescers a given
+// internal broadcast event triggers. Returned in (pushSessions,
+// pushWorld) order. Unknown event types fire neither.
+//
+//   - session-upsert / session-remove fire snapshot.sessions only.
+//   - peer-status fires snapshot.world only (peer state lives in
+//     the world bundle, not in the per-session payload).
+//   - projects-update fires both: projects.Manager.Broadcast runs
+//     Reconcile beforehand, which silently re-stamps every owned
+//     session's ProjectSlug / ProjectIndex. Without re-emitting
+//     snapshot.sessions, the UI would keep rendering each session
+//     under its previous project until the next unrelated session
+//     change.
+func snapshotPumpRoute(eventType string) (pushSessions, pushWorld bool) {
+	switch eventType {
+	case "session-upsert", "session-remove":
+		return true, false
+	case "peer-status":
+		return false, true
+	case "projects-update":
+		return true, true
+	}
+	return false, false
+}
+
+// isOwnedEvent reports whether a protocol-1 per-event SSE frame
+// (session-upsert / session-remove) refers to a session this node
+// owns, and therefore should be forwarded to non-asPeer subscribers.
+// Sessions on the local node (Peer == "") and on Local peers
+// (devcontainers reachable via isLocalPeer) are owned; network-peer
+// sessions are not, because non-asPeer hubs sourcing this stream
+// would receive the same upserts directly from those peers.
+//
+// Used only by the SSE handler for v1-compat dispatch; v2 hubs
+// (asPeer=true) consume snapshot.sessions instead and never see
+// these frames.
+//
+// Unknown event types pass through (return true); the caller switches
+// on Type first so this is only a defensive default.
+func isOwnedEvent(ev store.Event, isLocalPeer func(string) bool) bool {
+	ownedPeer := func(peerName string) bool {
+		if peerName == "" {
+			return true
+		}
+		return isLocalPeer != nil && isLocalPeer(peerName)
+	}
+	switch ev.Type {
+	case "session-upsert":
+		if ev.Session == nil {
+			return true
+		}
+		return ownedPeer(ev.Session.Peer)
+	case "session-remove":
+		_, peerName := peering.ParseID(ev.ID)
+		return ownedPeer(peerName)
+	}
+	return true
+}
+
+// shouldForwardActivity decides whether a session-activity event
+// should be sent to a given SSE subscriber.
+//
+//   - asPeer subscribers (?as=peer, i.e. another node's hub) only
+//     receive activity for sessions this node owns (own sessions or
+//     sessions on a Local peer such as a devcontainer). Activity for
+//     network-peer sessions reaches the requesting hub directly from
+//     the origin; forwarding it via this node would create double-
+//     delivery and false-origin attribution.
+//   - Browser subscribers receive every activity event the local
+//     daemon sees, including namespaced activity that hubs have
+//     re-broadcast from network peers — the UI renders all of those
+//     sessions and needs the indicator updates.
+func shouldForwardActivity(asPeer bool, sessionID string, isLocalPeer func(string) bool) bool {
+	if !asPeer {
+		return true
+	}
+	_, peerName := peering.ParseID(sessionID)
+	if peerName == "" {
+		return true
+	}
+	return isLocalPeer != nil && isLocalPeer(peerName)
+}
+
+// isAllowedPeerProxyPath gates the generic /v1/peers/{peer}/...
+// proxy. We deliberately allowlist a small surface, scoped to writes
+// the frontend actually issues for peer-owned state today, rather
+// than blanket-forwarding every method+path. New peer-write features
+// extend this function explicitly.
+//
+// `sub` is the path relative to the peer's API root, with no leading
+// slash (e.g. "v1/projects/gmux/sessions").
+func isAllowedPeerProxyPath(method, sub string) bool {
+	parts := strings.Split(sub, "/")
+	// Project session reorder: PATCH v1/projects/<slug>/sessions.
+	// The frontend uses this to push a new session order into a
+	// peer's projects.json. The peer applies the change atomically
+	// and re-broadcasts the resulting stamps, which we observe over
+	// SSE; no local optimistic mirror is needed because the viewer
+	// doesn't own the projects.json being reordered.
+	if method == http.MethodPatch &&
+		len(parts) == 4 &&
+		parts[0] == "v1" && parts[1] == "projects" &&
+		parts[2] != "" && parts[3] == "sessions" {
+		return true
+	}
+	return false
 }
 
 // buildSessionInfos converts store sessions to project SessionInfo structs.

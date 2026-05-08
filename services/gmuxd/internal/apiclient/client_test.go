@@ -295,6 +295,59 @@ func TestForwardLaunch_InvalidJSON(t *testing.T) {
 	}
 }
 
+// ── ForwardPath ───────────────────────────────────────────────────
+
+func TestForwardPath_PreservesMethodPathAndBody(t *testing.T) {
+	var gotPath, gotMethod string
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL, WithBearerToken("tok"))
+	req := httptest.NewRequest(http.MethodPatch,
+		"/v1/peers/tower/v1/projects/gmux/sessions",
+		strings.NewReader(`{"sessions":["a","b"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	c.ForwardPath(w, req, "/v1/projects/gmux/sessions")
+
+	if gotPath != "/v1/projects/gmux/sessions" {
+		t.Errorf("path = %q, want /v1/projects/gmux/sessions", gotPath)
+	}
+	if gotMethod != http.MethodPatch {
+		t.Errorf("method = %q, want PATCH", gotMethod)
+	}
+	if string(gotBody) != `{"sessions":["a","b"]}` {
+		t.Errorf("body = %q, want session list", string(gotBody))
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+}
+
+func TestForwardPath_PropagatesUpstreamStatus(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no such project", http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL)
+	req := httptest.NewRequest(http.MethodPatch, "/anything", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	c.ForwardPath(w, req, "/v1/projects/missing/sessions")
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
 // ── Events ────────────────────────────────────────────────────────
 
 // TestEvents_CallsAuthorizedSubscribe is the smoke test for apiclient

@@ -85,16 +85,17 @@ Served by `gmuxd` on a Unix socket (local IPC) and a TCP listener (default `127.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /v1/sessions` | List all sessions |
-| `GET /v1/projects` | Get project configuration |
+| `GET /v1/sessions` | List all sessions (tooling/scripts; the web UI uses SSE snapshots instead) |
 | `PUT /v1/projects` | Replace project list |
 | `POST /v1/projects/add` | Add a discovered project |
+| `PATCH /v1/projects/{slug}/sessions` | Reorder sessions within a project (partial-reorder merge) |
 | `GET /v1/frontend-config` | User settings + theme (from JSONC files) |
 | `POST /v1/launch` | Launch a new session |
 | `POST /v1/sessions/{id}/kill` | Kill a session |
 | `POST /v1/sessions/{id}/dismiss` | Kill + remove |
 | `POST /v1/sessions/{id}/resume` | Resume a resumable session |
-| `GET /v1/events` | SSE stream of session and project changes |
+| `GET /v1/events` | SSE: `snapshot.sessions`, `snapshot.world`, `session-activity` (ADR 0001) |
+| `/v1/peers/{peer}/...` | Forward an allowlisted write to a peer (ADR 0002) |
 | `GET /v1/health` | Daemon health, version, launchers, peer status |
 | `WS /ws/{id}` | Terminal WebSocket proxy |
 | `GET /` | Embedded web UI (SPA) |

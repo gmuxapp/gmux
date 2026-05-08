@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 )
 
@@ -432,4 +433,190 @@ func TestRunSubcommandHelp(t *testing.T) {
 			t.Errorf("%s --help: expected %q in output, got %q", tt.cmd, tt.contains, stdout.String())
 		}
 	}
+}
+
+func TestSnapshotPumpRoute(t *testing.T) {
+	cases := []struct {
+		eventType    string
+		wantSessions bool
+		wantWorld    bool
+	}{
+		// Session changes only fire the sessions snapshot.
+		{"session-upsert", true, false},
+		{"session-remove", true, false},
+
+		// Peer status only changes the world bundle.
+		{"peer-status", false, true},
+
+		// projects-update fires both kinds. Regression guard: prior
+		// versions of the pump routed projects-update only to the
+		// world coalescer, leaving session ProjectSlug / ProjectIndex
+		// stamps unflushed after a projects.json edit.
+		{"projects-update", true, true},
+
+		// Activity is delivered separately (bare bus); the pump must
+		// not coalesce it.
+		{"session-activity", false, false},
+
+		// Unknown / future event types are silently ignored.
+		{"", false, false},
+		{"unknown-type", false, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.eventType, func(t *testing.T) {
+			gotSessions, gotWorld := snapshotPumpRoute(tc.eventType)
+			if gotSessions != tc.wantSessions || gotWorld != tc.wantWorld {
+				t.Errorf("snapshotPumpRoute(%q) = (sessions=%v, world=%v), want (sessions=%v, world=%v)",
+					tc.eventType, gotSessions, gotWorld, tc.wantSessions, tc.wantWorld)
+			}
+		})
+	}
+}
+
+func TestShouldForwardActivity(t *testing.T) {
+	// Local peer "dc" is a devcontainer; "hub-b" is a network peer.
+	isLocalPeer := func(name string) bool { return name == "dc" }
+
+	cases := []struct {
+		name      string
+		asPeer    bool
+		sessionID string
+		want      bool
+	}{
+		// Browser sees everything, regardless of namespace.
+		{"browser local session", false, "sess-1", true},
+		{"browser devcontainer session", false, "sess-1@dc", true},
+		{"browser network-peer session", false, "sess-1@hub-b", true},
+
+		// Hub (asPeer) only sees activity for sessions this node owns.
+		{"asPeer local session", true, "sess-1", true},
+		{"asPeer devcontainer session", true, "sess-1@dc", true},
+		{"asPeer network-peer session dropped", true, "sess-1@hub-b", false},
+
+		// Defense: nil isLocalPeer means “no locals”, so any namespaced
+		// id is dropped for asPeer (e.g. peerManager not yet wired).
+		{"asPeer nil isLocalPeer drops namespaced", true, "sess-1@dc", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lookup := isLocalPeer
+			if tc.name == "asPeer nil isLocalPeer drops namespaced" {
+				lookup = nil
+			}
+			got := shouldForwardActivity(tc.asPeer, tc.sessionID, lookup)
+			if got != tc.want {
+				t.Errorf("shouldForwardActivity(asPeer=%v, %q) = %v, want %v",
+					tc.asPeer, tc.sessionID, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsAllowedPeerProxyPath(t *testing.T) {
+	cases := []struct {
+		name   string
+		method string
+		sub    string
+		want   bool
+	}{
+		// Allowed: project session reorder.
+		{"reorder allowed", http.MethodPatch, "v1/projects/gmux/sessions", true},
+		{"reorder allowed weird slug", http.MethodPatch, "v1/projects/with-dash/sessions", true},
+
+		// Method must be PATCH.
+		{"GET denied", http.MethodGet, "v1/projects/gmux/sessions", false},
+		{"POST denied", http.MethodPost, "v1/projects/gmux/sessions", false},
+		{"DELETE denied", http.MethodDelete, "v1/projects/gmux/sessions", false},
+
+		// Path shape: must be projects/<slug>/sessions.
+		{"reorder root denied", http.MethodPatch, "v1/projects", false},
+		{"reorder add denied", http.MethodPatch, "v1/projects/add", false},
+		{"projects bare denied", http.MethodPatch, "v1/projects/gmux", false},
+		{"sessions endpoint denied", http.MethodPatch, "v1/sessions/sess-1/kill", false},
+		{"unrelated path denied", http.MethodPatch, "v1/health", false},
+
+		// Defense: never allow without the v1/ prefix even if shape matches.
+		{"missing v1 prefix denied", http.MethodPatch, "projects/gmux/sessions", false},
+
+		// Defense: don't accept random suffixes after /sessions.
+		{"trailing path denied", http.MethodPatch, "v1/projects/gmux/sessions/extra", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isAllowedPeerProxyPath(tc.method, tc.sub)
+			if got != tc.want {
+				t.Errorf("isAllowedPeerProxyPath(%q, %q) = %v, want %v",
+					tc.method, tc.sub, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsOwnedEvent(t *testing.T) {
+	// Devcontainers are surfaced as Local peers; "tower" is a network
+	// peer that should NOT be treated as owned by this node.
+	isLocalPeer := func(name string) bool { return name == "dc" }
+
+	cases := []struct {
+		name string
+		ev   store.Event
+		want bool
+	}{
+		// session-upsert ownership comes from the embedded Session's Peer.
+		{
+			name: "upsert local session",
+			ev:   store.Event{Type: "session-upsert", ID: "sess-1", Session: &store.Session{ID: "sess-1"}},
+			want: true,
+		},
+		{
+			name: "upsert devcontainer session",
+			ev:   store.Event{Type: "session-upsert", ID: "sess-1@dc", Session: &store.Session{ID: "sess-1@dc", Peer: "dc"}},
+			want: true,
+		},
+		{
+			name: "upsert network-peer session dropped",
+			ev:   store.Event{Type: "session-upsert", ID: "sess-1@tower", Session: &store.Session{ID: "sess-1@tower", Peer: "tower"}},
+			want: false,
+		},
+		// Defense: a nil Session pointer (shouldn't happen on the wire
+		// today, but cheap to handle): treat as owned rather than drop
+		// silently and lose a removal-pair upsert.
+		{
+			name: "upsert nil session passes through",
+			ev:   store.Event{Type: "session-upsert", ID: "sess-1"},
+			want: true,
+		},
+
+		// session-remove only carries an ID; ownership is inferred from
+		// the namespace suffix on the ID.
+		{name: "remove local id", ev: store.Event{Type: "session-remove", ID: "sess-1"}, want: true},
+		{name: "remove devcontainer id", ev: store.Event{Type: "session-remove", ID: "sess-1@dc"}, want: true},
+		{name: "remove network-peer id dropped", ev: store.Event{Type: "session-remove", ID: "sess-1@tower"}, want: false},
+
+		// Unknown event types pass through (the SSE handler switches on
+		// Type before calling, so this is just a defensive default).
+		{name: "unknown type passes through", ev: store.Event{Type: "something-else", ID: "sess-1@tower"}, want: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isOwnedEvent(tc.ev, isLocalPeer)
+			if got != tc.want {
+				t.Errorf("isOwnedEvent(%+v) = %v, want %v", tc.ev, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("nil isLocalPeer drops any namespaced id", func(t *testing.T) {
+		// Defense: if peerManager isn't wired (early startup, test
+		// harnesses), we can't confirm a peer is Local, so the safe
+		// default for asPeer dispatch is "not owned".
+		ev := store.Event{Type: "session-remove", ID: "sess-1@dc"}
+		if got := isOwnedEvent(ev, nil); got != false {
+			t.Errorf("isOwnedEvent with nil isLocalPeer = %v, want false", got)
+		}
+	})
 }

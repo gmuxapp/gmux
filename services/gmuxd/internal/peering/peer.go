@@ -128,6 +128,15 @@ func (p *Peer) ForwardLaunch(w http.ResponseWriter, r *http.Request) {
 	p.api.ForwardLaunch(w, r)
 }
 
+// ForwardPath proxies an arbitrary HTTP request to the spoke at the
+// given absolute path. Used by the generic peer proxy at
+// /v1/peers/{peer}/... so a hub can mutate state that lives on a
+// spoke (e.g., reorder a peer's projects.json) without the hub
+// having to mirror or re-implement that state locally (ADR 0002).
+func (p *Peer) ForwardPath(w http.ResponseWriter, r *http.Request, path string) {
+	p.api.ForwardPath(w, r, path)
+}
+
 // CachedHealth returns the spoke's cached health data. The second
 // return value is false if health has not been fetched yet.
 func (p *Peer) CachedHealth() (SpokeHealth, bool) {
@@ -268,7 +277,23 @@ func (p *Peer) subscribe(ctx context.Context, onConnected func()) error {
 	}
 }
 
-// sseEvent is the wire format for gmuxd SSE events.
+// sseActivity is the wire format for the bare session-activity event.
+type sseActivity struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+// sseSnapshotSessions is the wire format for snapshot.sessions.
+type sseSnapshotSessions struct {
+	Sessions []store.Session `json:"sessions"`
+}
+
+// sseEvent is the wire format for protocol-1 per-event SSE
+// (session-upsert / session-remove). Retained so a v2 hub can
+// consume sessions from a v1.x spoke that doesn't emit
+// snapshot.sessions. v2 spokes suppress these for `?as=peer`
+// subscribers, so this path only fires against v1 spokes in
+// steady state.
 type sseEvent struct {
 	Type    string           `json:"type"`
 	ID      string           `json:"id"`
@@ -288,7 +313,39 @@ func (p *Peer) isForwardedFromKnownOrigin(id string) bool {
 
 func (p *Peer) handleEvent(eventType string, data []byte) {
 	switch eventType {
+	case "snapshot.sessions":
+		// Authoritative replacement: the spoke's view of its owned
+		// sessions. We mirror it into the local store namespaced by
+		// peer name and remove any local entries for this peer that
+		// no longer appear (handles dismiss, kill, slug takeover that
+		// happened on the spoke).
+		var payload sseSnapshotSessions
+		if err := json.Unmarshal(data, &payload); err != nil {
+			log.Printf("peering: %s: bad snapshot.sessions: %v", p.Config.Name, err)
+			return
+		}
+		p.applySessionsSnapshot(payload.Sessions)
+
+	case "session-activity":
+		var ev sseActivity
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return
+		}
+		if p.isForwardedFromKnownOrigin(ev.ID) {
+			return
+		}
+		namespacedID := NamespaceID(ev.ID, p.Config.Name)
+		p.store.Broadcast(store.Event{
+			Type: "session-activity",
+			ID:   namespacedID,
+		})
+
 	case "session-upsert":
+		// v1 compat: a v1.x spoke ships sessions one at a time via
+		// session-upsert. A v2 spoke that knows about `?as=peer`
+		// suppresses these in favour of snapshot.sessions. Applying
+		// both from a misconfigured v2 spoke is idempotent: the
+		// upsert produces the same store state the snapshot would.
 		var ev sseEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
 			log.Printf("peering: %s: bad upsert event: %v", p.Config.Name, err)
@@ -305,20 +362,16 @@ func (p *Peer) handleEvent(eventType string, data []byte) {
 			log.Printf("peering: %s: bad session payload: %v", p.Config.Name, err)
 			return
 		}
-
-		// Transform for local store.
 		sess.ID = NamespaceID(ev.ID, p.Config.Name)
 		sess.Peer = p.Config.Name
 		sess.SocketPath = "" // meaningless on hub side
-
 		// UpsertRemote (not Upsert) because the spoke already resolved
-		// Title and Resumable. Upsert would re-run resolveTitle against
-		// the wire session where ShellTitle/AdapterTitle are absent
-		// (they're internal fields, intentionally off the wire) and
-		// overwrite the correct title with the Kind fallback.
+		// Title and Resumable; rerunning resolveTitle here would
+		// clobber the correct title with the Kind fallback.
 		p.store.UpsertRemote(sess)
 
 	case "session-remove":
+		// v1 compat: paired with session-upsert above.
 		var ev sseEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
 			log.Printf("peering: %s: bad remove event: %v", p.Config.Name, err)
@@ -327,28 +380,56 @@ func (p *Peer) handleEvent(eventType string, data []byte) {
 		if p.isForwardedFromKnownOrigin(ev.ID) {
 			return
 		}
-		namespacedID := NamespaceID(ev.ID, p.Config.Name)
-		p.store.Remove(namespacedID)
+		p.store.Remove(NamespaceID(ev.ID, p.Config.Name))
 
-	case "session-activity":
-		var ev sseEvent
-		if err := json.Unmarshal(data, &ev); err != nil {
-			return
-		}
-		if p.isForwardedFromKnownOrigin(ev.ID) {
-			return
-		}
-		namespacedID := NamespaceID(ev.ID, p.Config.Name)
-		p.store.Broadcast(store.Event{
-			Type: "session-activity",
-			ID:   namespacedID,
-		})
-
-	case "projects-update":
-		// Ignore: hub has its own projects.
+	case "snapshot.world", "projects-update", "peer-status":
+		// Hub composes its own world view. v2 spokes don't emit
+		// snapshot.world to asPeer subscribers anyway; v1 spokes
+		// emit projects-update / peer-status which we don't care
+		// about (hub state is authoritative for those).
 
 	default:
 		// Unknown event types are silently ignored for forward compatibility.
+	}
+}
+
+// applySessionsSnapshot reconciles the local store's view of this
+// peer's sessions against the snapshot. Any session in the snapshot
+// is upserted (namespaced) into the store; any session whose Peer
+// matches this peer but whose ID is not present in the snapshot is
+// removed.
+func (p *Peer) applySessionsSnapshot(remote []store.Session) {
+	seen := make(map[string]bool, len(remote))
+	for i := range remote {
+		sess := remote[i]
+		if p.isForwardedFromKnownOrigin(sess.ID) {
+			// A→B→A loop: B is shipping us back a session whose
+			// origin we already reach directly. Skip.
+			continue
+		}
+		namespacedID := NamespaceID(sess.ID, p.Config.Name)
+		seen[namespacedID] = true
+		sess.ID = namespacedID
+		sess.Peer = p.Config.Name
+		sess.SocketPath = "" // meaningless on hub side
+		// UpsertRemote (not Upsert) because the spoke already resolved
+		// Title and Resumable. Upsert would re-run resolveTitle against
+		// the wire session where ShellTitle/AdapterTitle are absent
+		// (they're internal fields, intentionally off the wire) and
+		// overwrite the correct title with the Kind fallback.
+		p.store.UpsertRemote(sess)
+	}
+
+	// Removal pass: anything we still have for this peer that the
+	// snapshot omitted has either been dismissed, killed, or slug-
+	// renamed on the origin side.
+	for _, s := range p.store.List() {
+		if s.Peer != p.Config.Name {
+			continue
+		}
+		if !seen[s.ID] {
+			p.store.Remove(s.ID)
+		}
 	}
 }
 

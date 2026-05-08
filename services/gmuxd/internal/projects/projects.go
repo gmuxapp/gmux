@@ -380,6 +380,39 @@ func (s *State) AddSession(slug, key string) bool {
 	return false
 }
 
+// ReorderSessions applies a partial-reorder to a project's sessions
+// list: the keys in `req` take their positions (relative to each
+// other) at the start; any existing keys not in `req` keep their
+// relative order at the tail.
+//
+// This lets a viewer reorder what it can see without enumerating
+// dead / hidden entries it doesn't track. Critical for peer reorders
+// via the /v1/peers/{peer}/... proxy: the viewer never sees the full
+// projects.json on the peer, so it can't reconstruct the hidden tail.
+//
+// Returns true if the project was found.
+func (s *State) ReorderSessions(slug string, req []string) bool {
+	for i := range s.Items {
+		if s.Items[i].Slug != slug {
+			continue
+		}
+		inReq := make(map[string]bool, len(req))
+		for _, k := range req {
+			inReq[k] = true
+		}
+		merged := make([]string, 0, len(req)+len(s.Items[i].Sessions))
+		merged = append(merged, req...)
+		for _, k := range s.Items[i].Sessions {
+			if !inReq[k] {
+				merged = append(merged, k)
+			}
+		}
+		s.Items[i].Sessions = merged
+		return true
+	}
+	return false
+}
+
 // RemoveSession removes a session key from a project's sessions list.
 // Returns true if the session was found and removed.
 func (s *State) RemoveSession(slug, key string) bool {
@@ -410,6 +443,38 @@ func (s *State) RemoveSessionFromAll(key string) string {
 		}
 	}
 	return ""
+}
+
+// Assignment is one project's claim on a session: the slug of the
+// owning project and the 0-based index in its Sessions[] array.
+// The zero value (Slug == "", Index == 0) means "no project claims
+// this session" and is what AssignmentsByKey returns by default for
+// keys not found in any project.
+type Assignment struct {
+	Slug  string
+	Index int
+}
+
+// AssignmentsByKey returns a flat map from session key to the
+// project Assignment claiming it. Pure derivation from State; the
+// caller is expected to use the result to stamp sessions (see
+// store.Store.Reconcile).
+//
+// First occurrence wins on duplicate keys: a key appearing in two
+// items would point at the first item's Assignment. This shouldn't
+// happen because dismiss/auto-assign keep entries unique, but the
+// behaviour is at least defined.
+func (s *State) AssignmentsByKey() map[string]Assignment {
+	out := make(map[string]Assignment)
+	for _, item := range s.Items {
+		for i, key := range item.Sessions {
+			if _, exists := out[key]; exists {
+				continue
+			}
+			out[key] = Assignment{Slug: item.Slug, Index: i}
+		}
+	}
+	return out
 }
 
 // FindSessionProject returns the slug of the project containing the given

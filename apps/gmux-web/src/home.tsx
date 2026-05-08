@@ -72,7 +72,7 @@ export function Home() {
         <section class="home-projects">
           <h2 class="home-section-title">Projects</h2>
           <div class="home-project-grid">
-            {foldersVal.map(f => <ProjectCard key={f.path} folder={f} />)}
+            {foldersVal.map(f => <ProjectCard key={f.key} folder={f} />)}
           </div>
         </section>
       )}
@@ -101,9 +101,13 @@ export function Home() {
 function ProjectCard({ folder: f }: { folder: Folder }) {
   const alive = f.sessions.filter(s => s.alive).length
   const resumable = f.sessions.filter(s => !s.alive && s.resumable).length
+  const href = f.peer ? `/@${f.peer}/${f.slug}` : `/${f.slug}`
   return (
-    <a class="home-project-card" href={`/${f.path}`}>
-      <div class="home-project-name">{f.name}</div>
+    <a class="home-project-card" href={href}>
+      <div class="home-project-name">
+        {f.peer && <PeerLabel name={f.peer} />}
+        {f.name}
+      </div>
       <div class="home-project-count">
         {alive > 0 && <span class="home-project-alive">{alive} alive</span>}
         {alive > 0 && resumable > 0 && <span class="home-project-rest"> · </span>}

@@ -47,6 +47,21 @@ describe('parseSessionPath', () => {
     })
   })
 
+  it('parses /@<owner>/<project> as a peer-owned project hub', () => {
+    expect(parseSessionPath('/@tower/gmux'))
+      .toEqual({ projectPeer: 'tower', project: 'gmux' })
+  })
+
+  it('parses /@<owner> alone as the peer with no project', () => {
+    expect(parseSessionPath('/@tower'))
+      .toEqual({ projectPeer: 'tower' })
+  })
+
+  it('parses /@<owner>/<project>/<adapter>/<slug> as a peer-project session', () => {
+    expect(parseSessionPath('/@tower/gmux/pi/fix-auth'))
+      .toEqual({ projectPeer: 'tower', project: 'gmux', adapter: 'pi', slug: 'fix-auth' })
+  })
+
   it('does not treat non-@ second segment as host', () => {
     expect(parseSessionPath('/gmux/pi')).toEqual({
       project: 'gmux', adapter: 'pi',
@@ -68,6 +83,26 @@ describe('sessionPath', () => {
   it('includes @peer for remote sessions', () => {
     expect(sessionPath('gmux', { kind: 'pi', slug: 'fix-auth', id: 'abc', peer: 'server' }))
       .toBe('/gmux/@server/pi/fix-auth')
+  })
+
+  it('peer-owned project: leading @owner, no redundant mid-path host', () => {
+    // The session lives on the project's owner, so the mid-path host
+    // segment is redundant and is omitted.
+    expect(sessionPath(
+      'gmux',
+      { id: 'sess-1@tower', kind: 'pi', slug: 'fix-auth', peer: 'tower' },
+      'tower',
+    )).toBe('/@tower/gmux/pi/fix-auth')
+  })
+
+  it('local project + adopted peer session: keeps mid-path @host', () => {
+    // Disclaimed peer session adopted into a local folder. The project
+    // owner is local (no leading @), but the session lives on a peer
+    // (mid-path @<host> needed to disambiguate).
+    expect(sessionPath(
+      'gmux',
+      { id: 'sess-1@dev', kind: 'pi', slug: 'fix-auth', peer: 'dev' },
+    )).toBe('/gmux/@dev/pi/fix-auth')
   })
 
   it('omits @peer for local sessions', () => {
@@ -156,6 +191,37 @@ describe('resolveSessionFromPath', () => {
     )
     expect(id).toBe('sess-abc12345')
   })
+
+  it('resolves a peer-owned project URL via stamps, not viewer rules', () => {
+    // Peer 'tower' has its own 'gmux' project. The viewer also has
+    // a 'gmux' project, but the URL `/@tower/gmux/...` addresses the
+    // peer-owned one; we must trust the stamp, not re-run match.
+    const claimed = makeSession({
+      id: 'sess-t1@tower', cwd: '/elsewhere', kind: 'pi', slug: 'fix-auth',
+      peer: 'tower', project_slug: 'gmux', project_index: 0,
+    })
+    const id = resolveSessionFromPath(
+      { projectPeer: 'tower', project: 'gmux', adapter: 'pi', slug: 'fix-auth' },
+      projects, [claimed],
+    )
+    expect(id).toBe('sess-t1@tower')
+  })
+
+  it('peer-owned project URL ignores local-stamped same-slug sessions', () => {
+    const localGmux = makeSession({
+      id: 'sess-local', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
+      project_slug: 'gmux', project_index: 0,
+    })
+    const towerGmux = makeSession({
+      id: 'sess-t@tower', cwd: '/elsewhere', kind: 'pi', slug: 'fix-auth',
+      peer: 'tower', project_slug: 'gmux', project_index: 0,
+    })
+    const id = resolveSessionFromPath(
+      { projectPeer: 'tower', project: 'gmux', adapter: 'pi', slug: 'fix-auth' },
+      projects, [localGmux, towerGmux],
+    )
+    expect(id).toBe('sess-t@tower')
+  })
 })
 
 describe('resolveViewFromPath', () => {
@@ -189,6 +255,20 @@ describe('resolveViewFromPath', () => {
     expect(resolveViewFromPath('/gmux', projects, [])).toEqual({
       kind: 'project', projectSlug: 'gmux',
     })
+  })
+
+  it('peer-owned project URL resolves to project view when sessions exist', () => {
+    const peerSession = makeSession({
+      id: 'sess-t@tower', cwd: '/elsewhere', kind: 'pi', slug: 'fix-auth',
+      peer: 'tower', project_slug: 'gmux', project_index: 0,
+    })
+    expect(resolveViewFromPath('/@tower/gmux', projects, [peerSession])).toEqual({
+      kind: 'project', projectSlug: 'gmux', projectPeer: 'tower',
+    })
+  })
+
+  it('peer-owned project URL with no matching sessions resolves to home', () => {
+    expect(resolveViewFromPath('/@tower/gmux', projects, sessions)).toEqual({ kind: 'home' })
   })
 
   it('unknown project resolves to home', () => {
@@ -260,6 +340,35 @@ describe('viewToPath', () => {
   it('session view for unmatched session -> null', () => {
     const orphan = makeSession({ id: 'orphan', cwd: '/nowhere', kind: 'pi' })
     expect(viewToPath({ kind: 'session', sessionId: 'orphan' }, projects, [orphan])).toBeNull()
+  })
+
+  it('peer-owned project hub view -> /@<owner>/<slug>', () => {
+    expect(viewToPath(
+      { kind: 'project', projectSlug: 'gmux', projectPeer: 'tower' },
+      projects, sessions,
+    )).toBe('/@tower/gmux')
+  })
+
+  it('peer-claimed session -> /@<owner>/<slug>/...', () => {
+    const claimed = makeSession({
+      id: 'sess-c@tower', cwd: '/dev/gmux', kind: 'pi', slug: 'on-tower',
+      peer: 'tower', project_slug: 'gmux', project_index: 0,
+    })
+    expect(viewToPath(
+      { kind: 'session', sessionId: 'sess-c@tower' },
+      projects, [claimed],
+    )).toBe('/@tower/gmux/pi/on-tower')
+  })
+
+  it('local-claimed session uses local URL form', () => {
+    const claimed = makeSession({
+      id: 'sess-l', cwd: '/dev/gmux', kind: 'pi', slug: 'local',
+      project_slug: 'gmux', project_index: 0,
+    })
+    expect(viewToPath(
+      { kind: 'session', sessionId: 'sess-l' },
+      projects, [claimed],
+    )).toBe('/gmux/pi/local')
   })
 })
 

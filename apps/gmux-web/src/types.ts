@@ -36,12 +36,41 @@ export interface Session {
   runner_version?: string
   /** SHA-256 of the gmux runner binary (first 8 chars useful for display). */
   binary_hash?: string
+
+  /**
+   * Project assignment stamps from the session's origin host (ADR 0002).
+   * Set as a pair, only by the origin's `Reconcile`:
+   *  - non-empty `project_slug`: the session is *claimed* by the named
+   *    project on its origin; folder = `(peer, project_slug)`,
+   *    sort key = `project_index`.
+   *  - empty / absent: the session is *disclaimed*; viewers fall back
+   *    to their own match rules (free-game adoption).
+   * Index defaults to 0 on decode, which is also a valid first-position
+   * stamp; meaningful only when `project_slug` is non-empty.
+   */
+  project_slug?: string
+  project_index?: number
 }
 
 export interface Folder {
-  name: string       // display name (project slug or derived name)
-  path: string       // project slug (used as key)
-  launchCwd?: string // filesystem path for launching new sessions
+  /**
+   * Stable identity for React keys and selection. Local folders use the
+   * project slug; peer folders use `${peer}::${slug}` to disambiguate
+   * same-named projects on different hosts (ADR 0002).
+   */
+  key: string
+  /** Display name (project slug, possibly colliding across hosts). */
+  name: string
+  /** Project slug (used for URL routing and local projects.json keying). */
+  slug: string
+  /**
+   * Origin host name when this folder is owned by a peer; absent when
+   * owned by the viewer. Drives peer-label rendering and the launch
+   * button's `peer=` argument.
+   */
+  peer?: string
+  /** Filesystem path hint for launching new sessions in this folder. */
+  launchCwd?: string
   sessions: Session[]
 }
 

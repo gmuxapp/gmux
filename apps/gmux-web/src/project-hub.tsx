@@ -9,7 +9,7 @@ import type { HostNode } from './projects'
 import { buildProjectTopology } from './projects'
 import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
-import { sessions, projects, peers } from './store'
+import { sessions, projects, peers, peerStatusByName, isSessionUnavailable } from './store'
 import { PeerLabel } from './peer-label'
 
 function projectRemote(p: ProjectItem | undefined): string | undefined {
@@ -108,6 +108,7 @@ function HostGroup({
                 key={s.id}
                 session={s}
                 projectSlug={projectSlug}
+                unavailable={isSessionUnavailable(s, peerStatusByName.value)}
                 onClose={() => onCloseSession(s)}
               />
             ))}
@@ -137,14 +138,19 @@ function HostPath({ path }: { path: string[] }) {
 }
 
 function SessionCard({
-  session, projectSlug, onClose,
-}: { session: Session; projectSlug: string; onClose: () => void }) {
+  session, projectSlug, unavailable, onClose,
+}: {
+  session: Session
+  projectSlug: string
+  unavailable?: boolean
+  onClose: () => void
+}) {
   const dotClass = session.alive ? '' : 'dead'
   const name = session.title || session.kind
   const href = sessionPath(projectSlug, session)
   return (
     <a
-      class="session-card"
+      class={`session-card${unavailable ? ' unavailable' : ''}`}
       href={href}
     >
       <span class={`session-card-dot ${dotClass}`} />

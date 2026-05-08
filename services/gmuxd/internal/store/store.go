@@ -61,6 +61,27 @@ type Session struct {
 	// on every Upsert/Update.
 	ShellTitle   string `json:"shell_title,omitempty"`
 	AdapterTitle string `json:"adapter_title,omitempty"`
+
+	// Project assignment stamps populated by the project Reconcile
+	// step on the origin host. ProjectSlug is the slug of the project
+	// whose Sessions[] array currently contains this session's key;
+	// ProjectIndex is the 0-based position. Empty slug means the
+	// origin disclaims the session, leaving viewers free to fall
+	// through to their own match rules. See ADR 0002.
+	//
+	// These ride the wire so peers (and the browser) can render
+	// (peer, slug) folders without re-running match rules locally.
+	// Both use omitempty: ProjectSlug is meaningful only when set;
+	// ProjectIndex defaults to 0 on decode, which is also a valid
+	// first-position stamp, so the omit is safe round-trip.
+	//
+	// They are also persisted by sessionmeta (which uses default
+	// reflection marshaling). That's a benign redundancy: the
+	// startup flow always runs Reconcile after loading projects.json
+	// and before any SSE subscriber attaches, so persisted stamps
+	// can never be observed stale.
+	ProjectSlug  string `json:"project_slug,omitempty"`
+	ProjectIndex int    `json:"project_index,omitempty"`
 }
 
 // MarshalJSON serializes a Session for the frontend API, excluding internal
@@ -91,6 +112,8 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		Slug          string            `json:"slug,omitempty"`
 		RunnerVersion string            `json:"runner_version,omitempty"`
 		BinaryHash    string            `json:"binary_hash,omitempty"`
+		ProjectSlug   string            `json:"project_slug,omitempty"`
+		ProjectIndex  int               `json:"project_index,omitempty"`
 	}
 	return json.Marshal(wire{
 		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,
@@ -102,6 +125,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		SocketPath: s.SocketPath, TerminalCols: s.TerminalCols,
 		TerminalRows: s.TerminalRows, Slug: s.Slug,
 		RunnerVersion: s.RunnerVersion, BinaryHash: s.BinaryHash,
+		ProjectSlug: s.ProjectSlug, ProjectIndex: s.ProjectIndex,
 	})
 }
 
@@ -360,6 +384,36 @@ func (s *Store) Remove(id string) bool {
 		})
 	}
 	return ok
+}
+
+// Reconcile re-derives ProjectSlug and ProjectIndex for every
+// origin-owned session (Peer == "") by calling assignFn for each.
+// assignFn is expected to return ("", 0) for sessions that no
+// project currently claims.
+//
+// In-memory mutation only: no events are broadcast. Subscribers
+// observe the new stamps the next time the session is re-emitted
+// (e.g. via Upsert). Once the snapshot protocol composer lands
+// (commit 10), Reconcile folds into snapshot composition rather
+// than mutating sessions in place.
+//
+// Peer-owned sessions are skipped; their stamps are authoritative
+// from the origin and arrive over the wire.
+func (s *Store) Reconcile(assignFn func(Session) (slug string, index int)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, sess := range s.sessions {
+		if sess.Peer != "" {
+			continue
+		}
+		slug, index := assignFn(sess)
+		if sess.ProjectSlug == slug && sess.ProjectIndex == index {
+			continue
+		}
+		sess.ProjectSlug = slug
+		sess.ProjectIndex = index
+		s.sessions[id] = sess
+	}
 }
 
 // RemoveByPeer removes all sessions belonging to a peer and broadcasts

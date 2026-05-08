@@ -125,7 +125,10 @@ func (c *Client) Events() *sseclient.Client {
 	if c.streamIdleTimeout > 0 {
 		opts = append(opts, sseclient.WithIdleTimeout(c.streamIdleTimeout))
 	}
-	return sseclient.New(c.baseURL+"/v1/events", opts...)
+	// `?as=peer` instructs the spoke to filter to owned sessions and
+	// suppress snapshot.world (ADR 0001). The hub composes its own
+	// world view from local state and union of peer feeds.
+	return sseclient.New(c.baseURL+"/v1/events?as=peer", opts...)
 }
 
 // GetHealth fetches GET /v1/health and returns the Data field of the
@@ -176,6 +179,17 @@ func (c *Client) GetHealth(ctx context.Context) (json.RawMessage, error) {
 // for stripping the "@peer" suffix before calling.
 func (c *Client) ForwardAction(w http.ResponseWriter, r *http.Request, sessionID, action string) {
 	path := fmt.Sprintf("/v1/sessions/%s/%s", sessionID, action)
+	c.proxyHTTP(w, r, path)
+}
+
+// ForwardPath proxies an HTTP request to the spoke at the given
+// absolute path. The path must include the leading slash ("/v1/...").
+// Method, body, status, headers and Content-Type are preserved.
+//
+// Used by the generic peer proxy at /v1/peers/{peer}/... to forward
+// project-management writes (and other host-scoped state) to the
+// session's owning host (ADR 0002).
+func (c *Client) ForwardPath(w http.ResponseWriter, r *http.Request, path string) {
 	c.proxyHTTP(w, r, path)
 }
 

@@ -652,6 +652,74 @@ func TestRemoveSession(t *testing.T) {
 	}
 }
 
+func TestReorderSessions(t *testing.T) {
+	t.Run("reorder visible keys preserves hidden tail", func(t *testing.T) {
+		// `dead-1` and `dead-2` are dead/resumable entries that the
+		// viewer doesn't show in the sidebar. The viewer reorders
+		// what it sees (req = [c, a, b]) and trusts the daemon to
+		// keep the hidden tail.
+		s := State{Items: []Item{
+			{Slug: "gmux", Sessions: []string{"a", "b", "c", "dead-1", "dead-2"}},
+		}}
+		if !s.ReorderSessions("gmux", []string{"c", "a", "b"}) {
+			t.Fatal("expected ReorderSessions to return true")
+		}
+		want := []string{"c", "a", "b", "dead-1", "dead-2"}
+		if !equalStrings(s.Items[0].Sessions, want) {
+			t.Errorf("got %v, want %v", s.Items[0].Sessions, want)
+		}
+	})
+
+	t.Run("keys not in existing list are appended at request positions", func(t *testing.T) {
+		// New session `z` arrives in the request before the daemon
+		// has stamped it. ReorderSessions accepts it and inserts it
+		// at the requested position.
+		s := State{Items: []Item{
+			{Slug: "gmux", Sessions: []string{"a", "b"}},
+		}}
+		s.ReorderSessions("gmux", []string{"z", "a", "b"})
+		want := []string{"z", "a", "b"}
+		if !equalStrings(s.Items[0].Sessions, want) {
+			t.Errorf("got %v, want %v", s.Items[0].Sessions, want)
+		}
+	})
+
+	t.Run("empty request is a no-op order-wise", func(t *testing.T) {
+		s := State{Items: []Item{
+			{Slug: "gmux", Sessions: []string{"a", "b", "c"}},
+		}}
+		s.ReorderSessions("gmux", []string{})
+		want := []string{"a", "b", "c"}
+		if !equalStrings(s.Items[0].Sessions, want) {
+			t.Errorf("got %v, want %v", s.Items[0].Sessions, want)
+		}
+	})
+
+	t.Run("unknown slug returns false and changes nothing", func(t *testing.T) {
+		s := State{Items: []Item{
+			{Slug: "gmux", Sessions: []string{"a"}},
+		}}
+		if s.ReorderSessions("unknown", []string{"a"}) {
+			t.Error("expected false for unknown slug")
+		}
+		if !equalStrings(s.Items[0].Sessions, []string{"a"}) {
+			t.Errorf("existing project mutated: %v", s.Items[0].Sessions)
+		}
+	})
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestRemoveSessionFromAll(t *testing.T) {
 	s := State{Items: []Item{
 		{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"a"}},
@@ -902,7 +970,7 @@ func TestManagerBroadcastCalled(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)
 	called := 0
-	mgr.Broadcast = func() { called++ }
+	mgr.Broadcast = func(*State) { called++ }
 
 	mgr.Update(func(s *State) bool {
 		s.Items = []Item{{Slug: "test", Match: []MatchRule{{Path: "/test"}}}}
@@ -948,7 +1016,7 @@ func TestManagerCleanupSessionsNoOrphans(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)
 	broadcastCalled := false
-	mgr.Broadcast = func() { broadcastCalled = true }
+	mgr.Broadcast = func(*State) { broadcastCalled = true }
 
 	mgr.Update(func(s *State) bool {
 		s.Items = []Item{
@@ -994,6 +1062,59 @@ func TestManagerAutoAssignAllAlive(t *testing.T) {
 	}
 	if len(state.Items[1].Sessions) != 1 || state.Items[1].Sessions[0] != "s2" {
 		t.Errorf("yapp sessions: expected [s2], got %v", state.Items[1].Sessions)
+	}
+}
+
+// Peer-owned sessions must never enter the local projects.json:
+// project membership is owned by the session's origin host (ADR 0002).
+func TestManagerAutoAssignSkipsPeerOwnedSession(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{
+			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}},
+		}
+		return true
+	})
+
+	// A session from a peer that *would* match the local rule by cwd:
+	// must be ignored. The peer owns the membership; we trust the
+	// stamp arriving over the wire instead.
+	assigned := mgr.AutoAssignSession(SessionInfo{
+		ID: "sess-tower-1", Cwd: "/dev/gmux", Host: "tower", Alive: true,
+	})
+	if assigned != "" {
+		t.Errorf("expected no assignment for peer session, got %q", assigned)
+	}
+
+	state, _ := mgr.Load()
+	if len(state.Items[0].Sessions) != 0 {
+		t.Errorf("local projects.json should remain empty, got %v", state.Items[0].Sessions)
+	}
+}
+
+func TestManagerAutoAssignAllAliveSkipsPeerOwnedSessions(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{
+			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}},
+		}
+		return true
+	})
+
+	sessions := []SessionInfo{
+		{ID: "local-1", Cwd: "/dev/gmux", Alive: true},
+		{ID: "peer-1", Cwd: "/dev/gmux", Host: "tower", Alive: true},
+		{ID: "peer-2", Cwd: "/dev/gmux", Host: "laptop", Alive: true},
+	}
+	mgr.AutoAssignAllAlive(sessions)
+
+	state, _ := mgr.Load()
+	if len(state.Items[0].Sessions) != 1 || state.Items[0].Sessions[0] != "local-1" {
+		t.Errorf("expected only local-1 assigned, got %v", state.Items[0].Sessions)
 	}
 }
 
@@ -1150,5 +1271,50 @@ func TestManagerSeedIfEmptySkipsWhenProjectsExist(t *testing.T) {
 	state, _ := mgr.Load()
 	if len(state.Items) != 1 || state.Items[0].Slug != "existing" {
 		t.Errorf("expected existing project unchanged, got %+v", state.Items)
+	}
+}
+
+// --- AssignmentsByKey (per ADR 0002) ---
+
+func TestAssignmentsByKey_FlattensProjectArrays(t *testing.T) {
+	state := &State{Items: []Item{
+		{Slug: "gmux", Sessions: []string{"a", "b", "c"}},
+		{Slug: "yapp", Sessions: []string{"d"}},
+	}}
+
+	got := state.AssignmentsByKey()
+	want := map[string]Assignment{
+		"a": {Slug: "gmux", Index: 0},
+		"b": {Slug: "gmux", Index: 1},
+		"c": {Slug: "gmux", Index: 2},
+		"d": {Slug: "yapp", Index: 0},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d entries, want %d (got=%v)", len(got), len(want), got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("key %q: got %+v, want %+v", k, got[k], v)
+		}
+	}
+}
+
+func TestAssignmentsByKey_EmptyForNoProjects(t *testing.T) {
+	state := &State{}
+	if got := state.AssignmentsByKey(); len(got) != 0 {
+		t.Errorf("expected empty map, got %v", got)
+	}
+}
+
+func TestAssignmentsByKey_FirstOccurrenceWinsOnDuplicate(t *testing.T) {
+	// Defensive contract: duplicate keys shouldn't happen but the
+	// behaviour is defined.
+	state := &State{Items: []Item{
+		{Slug: "first", Sessions: []string{"shared"}},
+		{Slug: "second", Sessions: []string{"shared"}},
+	}}
+	got := state.AssignmentsByKey()
+	if got["shared"].Slug != "first" {
+		t.Errorf("expected first occurrence to win, got %+v", got["shared"])
 	}
 }

@@ -4,7 +4,7 @@
 // Builds sidebar folders and project hub topology. Pure functions with
 // no side effects or signal dependencies.
 
-import type { Session, Folder, ProjectItem, PeerInfo } from './types'
+import type { Session, Folder, ProjectItem, PeerInfo, DiscoveredProject } from './types'
 
 // --- Remote normalization (mirrors Go NormalizeRemote) ---
 
@@ -93,71 +93,272 @@ export function matchSession(
   return bestPath ?? firstRemote
 }
 
+// --- Slug helpers (mirror Go projects.Slugify, SlugFromRemote, SlugFromPath) ---
+
+/**
+ * Convert a string to a URL-safe slug. Mirrors Go projects.Slugify:
+ * lowercases, maps non-alnum to '-', collapses runs of '-', trims '-'
+ * from both ends. Returns 'project' for empty results.
+ */
+export function slugify(s: string): string {
+  s = s.toLowerCase()
+  let out = ''
+  for (const ch of s) {
+    if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) out += ch
+    else out += '-'
+  }
+  while (out.includes('--')) out = out.replaceAll('--', '-')
+  out = out.replace(/^-+|-+$/g, '')
+  return out || 'project'
+}
+
+/** Derive a slug from a git remote URL by slugifying the repo name
+ * (last segment of the normalized URL). */
+export function slugFromRemote(remote: string): string {
+  const norm = normalizeRemote(remote)
+  const parts = norm.split('/')
+  return slugify(parts[parts.length - 1] ?? '')
+}
+
+/** Derive a slug from a filesystem path by slugifying the basename.
+ * Cwd values reaching the frontend are already canonicalized server-side,
+ * so a simple last-segment extraction matches the Go SlugFromPath behaviour. */
+export function slugFromPath(p: string): string {
+  const trimmed = p.replace(/\/+$/, '')
+  const idx = trimmed.lastIndexOf('/')
+  const base = idx >= 0 ? trimmed.slice(idx + 1) : trimmed
+  return slugify(base)
+}
+
+// --- Discovered projects + unmatched active count ---
+//
+// These were previously computed server-side (projects.State.Discovered
+// and UnmatchedActiveCount). Per ADR 0001 they're per-viewer concerns:
+// each frontend computes them from its merged sessions + projects view
+// rather than the server pushing them in the snapshot. Pure functions
+// here; the store wires them up as `computed()` projections.
+
+/** Most frequently appearing normalized remote URL across the given
+ * sessions, or '' if none have remotes. Tie-break: lexicographically
+ * earliest URL wins (matches Go mostCommonRemote). */
+export function mostCommonRemote(sessions: Session[]): string {
+  const counts = new Map<string, number>()
+  for (const s of sessions) {
+    if (!s.remotes) continue
+    for (const url of Object.values(s.remotes)) {
+      const norm = normalizeRemote(url)
+      counts.set(norm, (counts.get(norm) ?? 0) + 1)
+    }
+  }
+  let best = ''
+  let bestN = 0
+  for (const [url, n] of counts.entries()) {
+    if (n > bestN || (n === bestN && url < best)) {
+      best = url
+      bestN = n
+    }
+  }
+  return best
+}
+
+/** Group sessions that aren't claimed by any project, bucketed by
+ * directory (workspace_root if set, else cwd). Each bucket becomes one
+ * suggested project.
+ *
+ * Per ADR 0002, claimed sessions (`project_slug != ""`) have a definite
+ * home on their origin host; only disclaimed sessions are eligible for
+ * discovery, and only those the viewer's own rules don't already adopt.
+ * That makes "discovered" exactly the set of sessions the user might
+ * reasonably want to file into a new local project. */
+export function discoverProjects(
+  sessions: Session[],
+  projects: ProjectItem[],
+): DiscoveredProject[] {
+  const byDir = new Map<string, Session[]>()
+  for (const s of sessions) {
+    if (s.project_slug) continue            // claimed by origin: not free game
+    if (matchSession(s, projects)) continue  // already adopted by viewer's rules
+    const dir = s.workspace_root || s.cwd
+    if (!dir) continue
+    let bucket = byDir.get(dir)
+    if (!bucket) { bucket = []; byDir.set(dir, bucket) }
+    bucket.push(s)
+  }
+  if (byDir.size === 0) return []
+
+  const result: DiscoveredProject[] = []
+  for (const [dir, group] of byDir.entries()) {
+    const active = group.filter(s => s.alive).length
+    const remote = mostCommonRemote(group)
+    let suggested = remote ? slugFromRemote(remote) : ''
+    if (!suggested) suggested = slugFromPath(dir)
+    if (!suggested) suggested = 'project'
+    const dp: DiscoveredProject = {
+      suggested_slug: suggested,
+      paths: [dir],
+      session_count: group.length,
+      active_count: active,
+    }
+    if (remote) dp.remote = remote
+    result.push(dp)
+  }
+
+  // Active first, then most sessions, then alphabetically.
+  result.sort((a, b) => {
+    if (a.active_count !== b.active_count) return b.active_count - a.active_count
+    if (a.session_count !== b.session_count) return b.session_count - a.session_count
+    return a.suggested_slug < b.suggested_slug ? -1 : a.suggested_slug > b.suggested_slug ? 1 : 0
+  })
+  return result
+}
+
+/** Number of alive sessions outside any project, in the viewer's view.
+ * Drives the "N active sessions outside any project" badge.
+ *
+ * Per ADR 0002, a session is "outside any project" iff its origin
+ * disclaims it (`project_slug == ""`) AND the viewer's own match rules
+ * don't adopt it. Claimed peer sessions live in the peer's folder;
+ * claimed local sessions live in the viewer's folder; neither counts. */
+export function countUnmatchedActive(
+  sessions: Session[],
+  projects: ProjectItem[],
+): number {
+  let count = 0
+  for (const s of sessions) {
+    if (!s.alive) continue
+    if (s.project_slug) continue           // claimed by origin
+    if (matchSession(s, projects)) continue // adopted by viewer
+    count++
+  }
+  return count
+}
+
 // --- Sidebar folders ---
 
 /**
- * Build Folder[] from configured projects + live sessions.
- * Each project becomes a folder with its matched sessions.
- * Order follows the project list order (user-controlled).
+ * Build the sidebar folder list per ADR 0002.
+ *
+ * Two kinds of folder come out of this:
+ *
+ *   1. **Local folders**: one per entry in the viewer's `projects` list,
+ *      in `Items[]` order (user-controlled). Even an empty local folder
+ *      renders, so the user always sees their own configuration.
+ *   2. **Peer folders**: derived implicitly from `(peer, project_slug)`
+ *      pairs that appear on stamped sessions. A peer folder exists iff
+ *      at least one visible session carries that pair. Sorted
+ *      deterministically by peer name then slug. Two hosts that share
+ *      a slug get two distinct folders.
+ *
+ * Each session is routed to one folder (or none) by the rule:
+ *
+ *   - If `s.project_slug != ""` (claimed by origin):
+ *       bucket into folder `(s.peer, s.project_slug)`.
+ *       Sort key is `s.project_index` (origin's authoritative position).
+ *   - Else (disclaimed): run the viewer's `matchSession` against its
+ *     own projects. If matched, the session is *adopted* into that
+ *     local folder; sort key is `created_at`. If unmatched, the
+ *     session is visible only via `discoverProjects` /
+ *     `countUnmatchedActive`.
+ *
+ * Visibility filter: alive sessions always render; dead sessions render
+ * only when claimed by the folder they'd be in. Disclaimed-adopted dead
+ * sessions are hidden (the viewer's intent didn't put them in any array;
+ * the rule is the only thread holding them, and a dead session can't
+ * acquire new context to validate the match).
  */
 export function buildProjectFolders(
   projects: ProjectItem[],
   sessions: Session[],
 ): Folder[] {
+  // Bucket every session by `${peer ?? ''}::${slug}`. An empty peer
+  // segment marks a viewer-owned (local) bucket.
   const buckets = new Map<string, Session[]>()
-  for (const project of projects) {
-    buckets.set(project.slug, [])
+  const bucket = (peer: string, slug: string, s: Session): void => {
+    const key = `${peer}::${slug}`
+    let arr = buckets.get(key)
+    if (!arr) { arr = []; buckets.set(key, arr) }
+    arr.push(s)
   }
 
-  // Build a lookup of session keys per project for dead-session filtering.
-  // Alive sessions show by match rules (immediate, no auto-assign lag).
-  // Dead sessions only show if they're in the project's sessions array
-  // (i.e., they were alive while the project existed).
-  const arrayKeys = new Map<string, Set<string>>()
-  for (const project of projects) {
-    arrayKeys.set(project.slug, new Set(project.sessions ?? []))
-  }
-
-  for (const session of sessions) {
-    const matched = matchSession(session, projects)
-    if (!matched || !buckets.has(matched.slug)) continue
-
-    if (session.alive) {
-      buckets.get(matched.slug)!.push(session)
+  for (const s of sessions) {
+    if (s.project_slug) {
+      // Claimed by origin. Bucket under (peer, slug); peer may be
+      // empty (local-claimed: viewer is the origin).
+      bucket(s.peer ?? '', s.project_slug, s)
     } else {
-      // Dead session: only include if it's in the project's sessions array.
-      const keys = arrayKeys.get(matched.slug)!
-      const key = session.slug || session.id
-      if (keys.has(key) || keys.has(session.id)) {
-        buckets.get(matched.slug)!.push(session)
-      }
+      // Disclaimed: free-game adoption by the viewer's rules.
+      const matched = matchSession(s, projects)
+      if (matched) bucket('', matched.slug, s)
+      // else: not in any folder; surfaces via discoverProjects.
     }
   }
 
   const folders: Folder[] = []
+
+  // 1. Local folders, in viewer's Items[] order. Always emitted, even
+  //    when empty: the user's own configuration is always visible.
   for (const project of projects) {
-    const matched = buckets.get(project.slug) || []
+    const ss = buckets.get(`::${project.slug}`) ?? []
+    const visible = ss.filter(
+      s => s.alive || (s.resumable === true && s.project_slug === project.slug),
+    )
+    visible.sort(compareLocalFolderSessions)
     folders.push({
+      key: project.slug,
+      slug: project.slug,
       name: project.slug,
-      path: project.slug,
       launchCwd: project.match.find(r => r.path)?.path,
-      sessions: matched.sort((a, b) => {
-        // The sessions array is the canonical order. Sessions not yet
-        // in the array (just spawned, auto-assign pending) go at the
-        // end sorted by creation time.
-        const keys = project.sessions ?? []
-        const keyOf = (s: Session) => s.slug || s.id
-        const ai = keys.indexOf(keyOf(a))
-        const bi = keys.indexOf(keyOf(b))
-        if (ai !== -1 && bi !== -1) return ai - bi
-        if (ai !== -1) return -1
-        if (bi !== -1) return 1
-        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-      }),
+      sessions: visible,
     })
   }
 
+  // 2. Peer folders, by (peer, slug). Empty peer folders are skipped
+  //    — nothing on the wire enumerates peer projects, so an empty
+  //    folder would be a viewer fiction.
+  const peerFolders: Folder[] = []
+  for (const [key, ss] of buckets) {
+    if (key.startsWith('::')) continue // local: handled above
+    const sep = key.indexOf('::')
+    const peer = key.slice(0, sep)
+    const slug = key.slice(sep + 2)
+    const visible = ss.filter(s => s.alive || s.resumable === true)
+    if (visible.length === 0) continue
+    visible.sort((a, b) => (a.project_index ?? 0) - (b.project_index ?? 0))
+    peerFolders.push({
+      key,
+      slug,
+      name: slug,
+      peer,
+      sessions: visible,
+    })
+  }
+  peerFolders.sort((a, b) => {
+    const peerCmp = (a.peer ?? '').localeCompare(b.peer ?? '')
+    return peerCmp !== 0 ? peerCmp : a.slug.localeCompare(b.slug)
+  })
+  folders.push(...peerFolders)
+
   return folders
+}
+
+/**
+ * Sort key for a session inside a *local* folder.
+ *
+ * Stamped (claimed-local) sessions sort first by `project_index` — the
+ * origin's authoritative position, equivalent to the index in
+ * `project.sessions[]`. Unstamped sessions (disclaimed-adopted via
+ * the viewer's match rules) come after, ordered by creation time so
+ * newly-spawned sessions don't reshuffle existing ones.
+ */
+function compareLocalFolderSessions(a: Session, b: Session): number {
+  const aStamped = !!a.project_slug
+  const bStamped = !!b.project_slug
+  if (aStamped && bStamped) {
+    return (a.project_index ?? 0) - (b.project_index ?? 0)
+  }
+  if (aStamped) return -1
+  if (bStamped) return 1
+  return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
 }
 
 // --- Project hub topology ---
