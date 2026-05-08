@@ -16,8 +16,8 @@
 import { signal, computed, batch, effect } from '@preact/signals'
 import type { Session, ProjectItem, DiscoveredProject, PeerInfo, LauncherDef, Folder } from './types'
 import type { View } from './routing'
-import { resolveViewFromPath, viewToPath, sessionPath } from './routing'
-import { buildProjectFolders, matchSession, discoverProjects, countUnmatchedActive } from './projects'
+import { resolveViewFromPath, viewToPath } from './routing'
+import { buildProjectFolders, discoverProjects, countUnmatchedActive } from './projects'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS } from './mock-data/index'
@@ -495,9 +495,15 @@ export function upsertSession(raw: ProtocolSession): boolean {
     // URL (still has the old slug), fail to resolve, and briefly
     // deselect the session.
     if (old.slug !== updated.slug && selectedId.value === updated.id) {
-      const project = matchSession(updated, projects.value)
-      if (project) {
-        const newUrl = sessionPath(project.slug, updated)
+      // viewToPath gets the post-update sessions array so it sees the
+      // new slug. Routes peer-owned sessions through `/@<peer>/...`
+      // (ADR 0002) just like every other URL serializer.
+      const newUrl = viewToPath(
+        { kind: 'session', sessionId: updated.id },
+        projects.value,
+        next,
+      )
+      if (newUrl) {
         batch(() => {
           _rawSessions.value = next
           urlPath.value = newUrl
@@ -692,17 +698,20 @@ export function navigate(url: string, replace?: boolean) {
 }
 
 /**
- * Navigate to a session by ID. Finds the matching project and builds
- * the URL. Used by auto-select, resume, and notification handlers.
+ * Navigate to a session by ID. Builds the URL via viewToPath so peer
+ * ownership and disclaimed-but-adopted cases both serialize correctly
+ * (ADR 0002). Used by auto-select, resume, and notification handlers.
  * Returns true when a URL change was actually dispatched, false when
- * the session or its project hasn't loaded yet.
+ * the session or its containing project hasn't loaded yet.
  */
 export function navigateToSession(sessionId: string, replace?: boolean): boolean {
-  const sess = sessions.value.find(s => s.id === sessionId)
-  if (!sess) return false
-  const project = matchSession(sess, projects.value)
-  if (!project) return false
-  navigate(sessionPath(project.slug, sess), replace)
+  const path = viewToPath(
+    { kind: 'session', sessionId },
+    projects.value,
+    sessions.value,
+  )
+  if (!path) return false
+  navigate(path, replace)
   return true
 }
 

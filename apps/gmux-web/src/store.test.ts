@@ -333,6 +333,25 @@ describe('navigateToSession', () => {
     expect(url).toMatch(/^\/myproject\/shell\//)
     expect(replace).toBe(true)
   })
+
+  it('routes peer-owned sessions through /@<peer>/<slug>/...', () => {
+    // Peer-stamped session: project_slug + peer set, viewer has no
+    // local match rule. Without ADR-0002 awareness this would either
+    // return false (matchSession finds no project) or build a URL
+    // missing the @<peer> prefix, which the e2e helper then can't
+    // round-trip back to a session view.
+    _setRawWorld({ projects: [] })
+    _rawSessions.value = [makeSession({
+      id: 'remote-1',
+      kind: 'shell',
+      slug: 'remote-1-slug',
+      peer: 'workstation',
+      project_slug: 'gmux',
+    })]
+    expect(navigateToSession('remote-1')).toBe(true)
+    const [url] = navigateMock.mock.calls[0]
+    expect(url).toBe('/@workstation/gmux/shell/remote-1-slug')
+  })
 })
 
 describe('peerAppearance', () => {
