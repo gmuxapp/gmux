@@ -4,10 +4,10 @@ import { FitAddon } from '@xterm/addon-fit'
 import { ImageAddon } from '@xterm/addon-image'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
+import { EditContextAddon } from 'xterm-addon-edit-context'
 import type { ResolvedTerminalOptions } from './settings-schema'
 import { attachKeyboardHandler, attachPasteHandler, ctrlSequenceFor, defaultPasteFeedback, handlePasteAction } from './keyboard'
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
-import { attachMobileInputHandler } from './mobile-input'
 import { createReplayBuffer } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 import { decideViewportResize, sameSize } from './terminal-resize'
@@ -424,6 +424,13 @@ export function TerminalView({
     // Detect plain-text URLs in terminal output and make them clickable.
     term.loadAddon(new WebLinksAddon())
     term.open(containerRef.current)
+    // EditContext-based input replaces xterm's hidden-textarea model so
+    // mobile keyboards (autocorrect, dictation, swipe typing, IME) deliver
+    // explicit replacement ranges instead of ambiguous insertion events.
+    // Must be loaded AFTER term.open() because the addon needs
+    // terminal.element (the container) which is set by open(). xterm's
+    // loadAddon calls activate() synchronously; pre-open it would throw.
+    term.loadAddon(new EditContextAddon())
     loadPreferredRenderer(term)
     // Initial fit: use FitAddon for the first resize (before shellRef is
     // guaranteed stable), then switch to measureTerminalFit for everything after.
@@ -466,7 +473,6 @@ export function TerminalView({
       const ws = wsRef.current
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(new TextEncoder().encode(data))
-        term.focus()
       }
     }
 
@@ -508,7 +514,6 @@ export function TerminalView({
     const dataDisposable = term.onData((data) => sendInput(data))
     attachKeyboardHandler(term, sendInput, sendRawInput, keybinds, macCommandIsCtrl, session.id)
     const disposePasteHandler = attachPasteHandler(term, containerRef.current!, sendRawInput, session.id)
-    const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
 
     // OSC 52 clipboard: applications (e.g. pi /copy) write
     //   ESC ] 52 ; <selection> ; <base64-payload> BEL
@@ -740,7 +745,6 @@ export function TerminalView({
       shell?.removeEventListener('touchend', handleTouchEndCapture, true)
       shell?.removeEventListener('touchcancel', clearTouchPan, true)
       disposePasteHandler()
-      disposeMobileHandler()
       osc52Disposable.dispose()
       dataDisposable.dispose()
       scrollDisposable.dispose()
