@@ -19,10 +19,10 @@
     "@preact/signals": "^2.9.0",
     "@trpc/client": "^11.6.0",
     "@xterm/addon-fit": "0.12.0-beta.195",
-    "@xterm/addon-image": "github:mgabor3141/xterm.js#fix/image-addon-hidpi&path:addons/addon-image",
+    "@xterm/addon-image": "github:gmuxapp/xterm.js#fix/image-addon-hidpi&path:addons/addon-image",
     "@xterm/addon-web-links": "0.13.0-beta.195",
     "@xterm/addon-webgl": "0.20.0-beta.194",
-    "@xterm/xterm": "6.1.0-beta.195",
+    "@xterm/xterm": "github:gmuxapp/xterm.js#v6.1.0-beta.195-gmux.1",
     "preact": "^10.26.4",
     "preact-iso": "^2.11.1",
     "valibot": "^1.3.1"
