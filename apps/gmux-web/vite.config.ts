@@ -21,6 +21,9 @@ export default defineConfig({
       '/v1': {
         target: `http://127.0.0.1:${gmuxdPort}`,
       },
+      '/auth': {
+        target: `http://127.0.0.1:${gmuxdPort}`,
+      },
       '/ws': {
         target: `http://127.0.0.1:${gmuxdPort}`,
         ws: true,
