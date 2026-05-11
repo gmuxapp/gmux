@@ -8,6 +8,7 @@ import type { ResolvedTerminalOptions } from './settings-schema'
 import { attachKeyboardHandler, attachPasteHandler, ctrlSequenceFor, defaultPasteFeedback, handlePasteAction } from './keyboard'
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
+import { shouldUseWebgl, shouldFocusOnTouchEnd } from './terminal-touch'
 import { createReplayBuffer } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 import { decideViewportResize, sameSize } from './terminal-resize'
@@ -19,6 +20,7 @@ import type { Session } from './types'
 const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
 
 function loadPreferredRenderer(term: Terminal) {
+  if (!shouldUseWebgl(window.matchMedia.bind(window))) return
   try {
     term.loadAddon(new WebglAddon())
   } catch {
@@ -554,6 +556,8 @@ export function TerminalView({
       startY: 0,
       startScrollLeft: 0,
       startScrollTop: 0,
+      longPressTimer: null as ReturnType<typeof setTimeout> | null,
+      wasLongPress: false,
     }
 
     const handleTouchStartCapture = (ev: TouchEvent) => {
@@ -571,13 +575,24 @@ export function TerminalView({
       }
 
       // Track touch start for both modes — focus happens on touchend
-      // only if the user didn't drag (tap vs scroll distinction).
+      // only if the user didn't drag (tap vs scroll distinction) and the
+      // OS long-press text-selection gesture didn't fire.
       touchPanState.active = true
       touchPanState.moved = false
+      touchPanState.wasLongPress = false
       touchPanState.startX = ev.touches[0].clientX
       touchPanState.startY = ev.touches[0].clientY
       touchPanState.startScrollLeft = host.scrollLeft
       touchPanState.startScrollTop = host.scrollTop
+
+      // Start the long-press timer.  If it fires before touchmove clears
+      // it, we know the OS text-selection gesture is underway and we must
+      // NOT steal focus on touchend (that would collapse the selection).
+      if (touchPanState.longPressTimer !== null) clearTimeout(touchPanState.longPressTimer)
+      touchPanState.longPressTimer = setTimeout(() => {
+        touchPanState.longPressTimer = null
+        touchPanState.wasLongPress = true
+      }, 400)
     }
 
     const handleTouchMoveCapture = (ev: TouchEvent) => {
@@ -591,6 +606,11 @@ export function TerminalView({
       const deltaY = touch.clientY - touchPanState.startY
       if (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6) {
         touchPanState.moved = true
+        // Movement cancels the long-press timer — a drag is not a long-press.
+        if (touchPanState.longPressTimer !== null) {
+          clearTimeout(touchPanState.longPressTimer)
+          touchPanState.longPressTimer = null
+        }
       }
 
       // If viewport matches PTY (in sync), no overflow to pan — let xterm
@@ -610,7 +630,11 @@ export function TerminalView({
     }
 
     const handleTouchEndCapture = () => {
-      if (touchPanState.active && !touchPanState.moved) {
+      if (touchPanState.longPressTimer !== null) {
+        clearTimeout(touchPanState.longPressTimer)
+        touchPanState.longPressTimer = null
+      }
+      if (touchPanState.active && shouldFocusOnTouchEnd({ moved: touchPanState.moved, wasLongPress: touchPanState.wasLongPress })) {
         focusTerminalInput(term)
         // Defer scroll so synthesized mouse events (which the browser fires
         // after touchend returns) reach xterm's Linkifier at the current
@@ -636,8 +660,13 @@ export function TerminalView({
     }
 
     const clearTouchPan = () => {
+      if (touchPanState.longPressTimer !== null) {
+        clearTimeout(touchPanState.longPressTimer)
+        touchPanState.longPressTimer = null
+      }
       touchPanState.active = false
       touchPanState.moved = false
+      touchPanState.wasLongPress = false
     }
 
     shell?.addEventListener('touchstart', handleTouchStartCapture, { capture: true, passive: false })

@@ -1884,6 +1884,19 @@ a.home-host-link:hover {
   }
   .sidebar-scroll { order: 1; }
   .sidebar-footer { order: 2; }
+
+  /* Enable native OS text selection on touch devices.
+     xterm.js injects `user-select: none` globally on `.xterm` and uses a
+     WebGL/canvas renderer by default, which makes the OS long-press gesture
+     unable to select any text.  On coarse-pointer devices we switch to the
+     DOM renderer (so text lives in real <span> nodes) and override the
+     user-select rule so Android/iOS can reach those nodes. */
+  .terminal-container .xterm,
+  .terminal-container .xterm-rows,
+  .terminal-container .xterm-screen {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+  }
 }
 
 /* ── Session Detail (non-terminal) ── */
