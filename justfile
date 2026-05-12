@@ -41,5 +41,5 @@ install:
     cp {{bin}}/gmux "$prefix/bin/gmux"
     cp {{bin}}/gmuxd "$prefix/bin/gmuxd"
     echo "Restarting gmuxd..."
-    gmuxd restart
+    nohup gmuxd restart >/dev/null 2>&1 &
     echo "Done. gmux and gmuxd installed to $prefix/bin/"
