@@ -40,6 +40,8 @@ install:
     prefix=$(brew --prefix)
     cp {{bin}}/gmux "$prefix/bin/gmux"
     cp {{bin}}/gmuxd "$prefix/bin/gmuxd"
+    codesign --sign - --force "$prefix/bin/gmux"
+    codesign --sign - --force "$prefix/bin/gmuxd"
     echo "Restarting gmuxd..."
     nohup gmuxd restart >/dev/null 2>&1 &
     echo "Done. gmux and gmuxd installed to $prefix/bin/"
