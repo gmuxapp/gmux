@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -47,7 +48,41 @@ import (
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
+// For dev builds (no ldflags), init() enriches it with vcs date+hash.
 var version = "dev"
+
+func init() {
+	if version != "dev" {
+		return
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	var rev, vcsTime string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.time":
+			vcsTime = s.Value
+		}
+	}
+	if rev == "" {
+		return
+	}
+	hash := rev
+	if len(hash) > 6 {
+		hash = hash[:6]
+	}
+	if vcsTime != "" {
+		if t, err := time.Parse(time.RFC3339, vcsTime); err == nil {
+			version = fmt.Sprintf("dev.%s.%s", t.UTC().Format("0102"), hash)
+			return
+		}
+	}
+	version = "dev." + hash
+}
 
 type LaunchConfig struct {
 	DefaultLauncher string             `json:"default_launcher"`
@@ -1887,45 +1922,31 @@ func printSessionList(w io.Writer, body io.Reader) {
 		return a.Title < b.Title
 	})
 
-	_, _ = fmt.Fprintln(w)
+	type tableRow struct {
+		dot, kind, id, pid, size, title, status string
+		cwd, socket                             string // sub-rows
+	}
+
+	rows := make([]tableRow, 0, len(resp.Data))
 	for _, s := range resp.Data {
-		dot := "\u25cb" // ○ dead
-		if s.Alive {
-			dot = "\u25cf" // ● alive
-		}
-
-		// Line 1: dot  kind  id  [pid=N]  [cols×rows]
-		line1 := fmt.Sprintf("  %s %-8s  %s", dot, s.Kind, s.ID)
-		if s.Alive && s.Pid > 0 {
-			line1 += fmt.Sprintf("  pid=%d", s.Pid)
-		}
-		if s.TerminalCols > 0 && s.TerminalRows > 0 {
-			line1 += fmt.Sprintf("  %d\u00d7%d", s.TerminalCols, s.TerminalRows)
-		}
-		_, _ = fmt.Fprintln(w, line1)
-
-		// Title (skip if same as kind — default fallback title).
+		r := tableRow{kind: s.Kind, id: s.ID, cwd: shortCwd(s.Cwd)}
 		if s.Title != "" && s.Title != s.Kind {
-			_, _ = fmt.Fprintf(w, "      %s\n", s.Title)
+			r.title = s.Title
 		}
-
-		// Working directory.
-		if s.Cwd != "" {
-			_, _ = fmt.Fprintf(w, "      %s\n", shortCwd(s.Cwd))
-		}
-
-		// Agent status label.
-		if s.Status != nil && s.Status.Label != "" {
-			_, _ = fmt.Fprintf(w, "      %s\n", s.Status.Label)
-		}
-
-		// Socket path (alive sessions only — useful for debugging hangs).
-		if s.Alive && s.SocketPath != "" {
-			_, _ = fmt.Fprintf(w, "      socket: %s\n", s.SocketPath)
-		}
-
-		// Exited / resumable info for dead sessions.
-		if !s.Alive {
+		if s.Alive {
+			r.dot = "\u25cf" // ●
+			if s.Pid > 0 {
+				r.pid = fmt.Sprintf("%d", s.Pid)
+			}
+			if s.TerminalCols > 0 && s.TerminalRows > 0 {
+				r.size = fmt.Sprintf("%d\u00d7%d", s.TerminalCols, s.TerminalRows)
+			}
+			if s.Status != nil && s.Status.Label != "" {
+				r.status = s.Status.Label
+			}
+			r.socket = s.SocketPath
+		} else {
+			r.dot = "\u25cb" // ○
 			var parts []string
 			if s.ExitedAt != "" {
 				if t, err := time.Parse(time.RFC3339, s.ExitedAt); err == nil {
@@ -1938,12 +1959,62 @@ func printSessionList(w io.Writer, body io.Reader) {
 			if s.Resumable {
 				parts = append(parts, "resumable")
 			}
-			if len(parts) > 0 {
-				_, _ = fmt.Fprintf(w, "      %s\n", strings.Join(parts, "  "))
-			}
+			r.status = strings.Join(parts, "  ")
 		}
+		rows = append(rows, r)
+	}
 
-		_, _ = fmt.Fprintln(w)
+	// Calculate column widths (minimum = header label width).
+	wKind, wID, wPID, wSize, wTitle := len("KIND"), len("ID"), len("PID"), len("SIZE"), len("TITLE")
+	for _, r := range rows {
+		if n := len(r.kind); n > wKind {
+			wKind = n
+		}
+		if n := len(r.id); n > wID {
+			wID = n
+		}
+		if n := len(r.pid); n > wPID {
+			wPID = n
+		}
+		if n := len(r.size); n > wSize {
+			wSize = n
+		}
+		if n := len(r.title); n > wTitle {
+			wTitle = n
+		}
+	}
+
+	const indent = "  "
+	const gap = "  "
+
+	printRow := func(dot, kind, id, pid, size, title, status string) {
+		_, _ = fmt.Fprintf(w, "%s%-1s%s%-*s%s%-*s%s%-*s%s%-*s%s%-*s%s%s\n",
+			indent,
+			dot, gap,
+			wKind, kind, gap,
+			wID, id, gap,
+			wPID, pid, gap,
+			wSize, size, gap,
+			wTitle, title, gap,
+			status)
+	}
+
+	// Header and separator.
+	_, _ = fmt.Fprintln(w)
+	printRow("", "KIND", "ID", "PID", "SIZE", "TITLE", "STATUS")
+	sepLen := 1 + len(gap) + wKind + len(gap) + wID + len(gap) + wPID + len(gap) + wSize + len(gap) + wTitle + len(gap) + len("STATUS")
+	_, _ = fmt.Fprintf(w, "%s%s\n", indent, strings.Repeat("\u2500", sepLen))
+
+	// Data rows + sub-rows.
+	subIndent := indent + strings.Repeat(" ", 1+len(gap)) // align under KIND
+	for _, r := range rows {
+		printRow(r.dot, r.kind, r.id, r.pid, r.size, r.title, r.status)
+		if r.cwd != "" {
+			_, _ = fmt.Fprintf(w, "%s%s\n", subIndent, r.cwd)
+		}
+		if r.socket != "" {
+			_, _ = fmt.Fprintf(w, "%ssocket: %s\n", subIndent, r.socket)
+		}
 	}
 }
 

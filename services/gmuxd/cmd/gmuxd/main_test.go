@@ -268,8 +268,11 @@ func TestRunStatusShowsSessionList(t *testing.T) {
 	if !strings.Contains(out, "sess-aabbccdd") {
 		t.Errorf("expected alive session ID in output, got:\n%s", out)
 	}
-	if !strings.Contains(out, "pid=99001") {
-		t.Errorf("expected pid in output, got:\n%s", out)
+	if !strings.Contains(out, "99001") {
+		t.Errorf("expected pid 99001 in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "PID") {
+		t.Errorf("expected PID column header in output, got:\n%s", out)
 	}
 	if !strings.Contains(out, "/tmp/gmux-sessions/sess-aabbccdd.sock") {
 		t.Errorf("expected socket path in output, got:\n%s", out)
