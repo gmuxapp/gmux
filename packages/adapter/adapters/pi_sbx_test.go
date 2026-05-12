@@ -120,6 +120,74 @@ func TestPiSbxImplementsCapabilities(t *testing.T) {
 	}
 }
 
+// --- Cwd translation ---
+
+func TestPiSbxParseNewLinesTranslatesCwd(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "/Users/james/workspace/.pi-user")
+	events := NewPiSbx().ParseNewLines([]string{
+		`{"type":"session","id":"abc","cwd":"/home/agent/workspace","timestamp":"2026-03-19T10:00:00Z"}`,
+	}, "")
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Cwd != "/Users/james/workspace" {
+		t.Errorf("expected translated host cwd, got %q", events[0].Cwd)
+	}
+}
+
+func TestPiSbxParseNewLinesTranslatesSubpathCwd(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "/Users/james/workspace/.pi-user")
+	events := NewPiSbx().ParseNewLines([]string{
+		`{"type":"session","id":"abc","cwd":"/home/agent/workspace/subdir/project","timestamp":"2026-03-19T10:00:00Z"}`,
+	}, "")
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Cwd != "/Users/james/workspace/subdir/project" {
+		t.Errorf("expected translated subpath, got %q", events[0].Cwd)
+	}
+}
+
+func TestPiSbxParseNewLinesPassthroughNonSandboxCwd(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "/Users/james/workspace/.pi-user")
+	events := NewPiSbx().ParseNewLines([]string{
+		`{"type":"session","id":"abc","cwd":"/some/other/path","timestamp":"2026-03-19T10:00:00Z"}`,
+	}, "")
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Cwd != "/some/other/path" {
+		t.Errorf("non-sandbox cwd should pass through unchanged, got %q", events[0].Cwd)
+	}
+}
+
+func TestPiSbxParseNewLinesNoTranslationWithoutEnv(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	events := NewPiSbx().ParseNewLines([]string{
+		`{"type":"session","id":"abc","cwd":"/home/agent/workspace","timestamp":"2026-03-19T10:00:00Z"}`,
+	}, "")
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Cwd != "/home/agent/workspace" {
+		t.Errorf("without PI_CODING_AGENT_DIR cwd should pass through, got %q", events[0].Cwd)
+	}
+}
+
+func TestPiSbxParseSessionFileTranslatesCwd(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "/Users/james/workspace/.pi-user")
+	path := writeTempJSONL(t,
+		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/home/agent/workspace"}`,
+	)
+	info, err := NewPiSbx().ParseSessionFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Cwd != "/Users/james/workspace" {
+		t.Errorf("expected translated cwd, got %q", info.Cwd)
+	}
+}
+
 // --- Delegation smoke tests ---
 // These verify that session file handling delegates to Pi correctly.
 // Full parsing behaviour is tested in pi_test.go.
