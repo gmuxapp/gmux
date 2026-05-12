@@ -1,7 +1,7 @@
 // Home page: host status, project overview, quick-launch per host.
 // Reads shared data from the store (signals).
 
-import { useState } from 'preact/hooks'
+import { useState, useEffect } from 'preact/hooks'
 import { health, peers, folders, sessions, launchers as launchersSignal, defaultLauncher as defaultLauncherSignal, launchSession } from './store'
 import { PeerLabel } from './peer-label'
 import type { Folder, LauncherDef } from './types'
@@ -12,6 +12,24 @@ function displayHost(url: string): string {
   return url.replace(/^https?:\/\//, '').replace(/\/+$/, '')
 }
 
+function useInstallPrompt() {
+  const [prompt, setPrompt] = useState<BeforeInstallPromptEvent | null>(null)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      e.preventDefault()
+      setPrompt(e as BeforeInstallPromptEvent)
+    }
+    window.addEventListener('beforeinstallprompt', handler)
+    return () => window.removeEventListener('beforeinstallprompt', handler)
+  }, [])
+  const trigger = () => {
+    if (!prompt) return
+    prompt.prompt()
+    prompt.userChoice.then(() => setPrompt(null))
+  }
+  return { canInstall: !!prompt, trigger }
+}
+
 export function Home() {
   const healthVal = health.value
   const peersVal = peers.value
@@ -20,6 +38,7 @@ export function Home() {
   const localAlive = sessionsVal.filter(s => !s.peer && s.alive).length
   const hostname = healthVal?.hostname ?? 'local'
   const tsUrl = healthVal?.tailscale_url
+  const { canInstall, trigger } = useInstallPrompt()
 
   const localLaunchers = launchersSignal.value
   const localDefault = defaultLauncherSignal.value
@@ -79,6 +98,9 @@ export function Home() {
 
       <footer class="home-footer">
         <span class="home-footer-version">Frontend v{__GMUX_VERSION__}</span>
+        {canInstall && (
+          <button class="home-footer-reload" onClick={trigger}>install app</button>
+        )}
         {healthVal?.version && healthVal.version !== __GMUX_VERSION__ && (
           <button class="home-footer-reload" onClick={() => location.reload()}>
             reload to update
