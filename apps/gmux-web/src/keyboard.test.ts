@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
-import { ctrlSequenceFor, formatPasteText, pickBinaryDataTransferItem } from './keyboard'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { attachKeyboardHandler, ctrlSequenceFor, formatPasteText, pickBinaryDataTransferItem } from './keyboard'
+import { resolveKeybinds } from './keybinds'
 
 // Build an array-like stand-in for DataTransferItemList. Vitest runs in
 // node by default, where the real DOM type isn't available; a plain
@@ -127,5 +128,175 @@ describe('ctrlSequenceFor', () => {
     expect(ctrlSequenceFor('ab')).toBeNull()
     expect(ctrlSequenceFor('1')).toBeNull()
     expect(ctrlSequenceFor('')).toBeNull()
+  })
+})
+
+// ── attachKeyboardHandler — ghostty-web return-value contract ─────────────
+//
+// ghostty-web's customKeyEventHandler semantics are the INVERSE of xterm.js:
+//   return true  → consumed (ghostty calls preventDefault + returns, key NOT sent to PTY)
+//   return false → pass-through (ghostty encodes and sends key to PTY via WASM)
+//
+// This test suite pins the correct return values so a regression is caught
+// immediately rather than at e2e time.
+
+type Handler = (ev: KeyboardEvent) => boolean
+
+/** Build a minimal Terminal mock that captures the registered handler. */
+function makeTermMock(opts: { hasSelection?: boolean } = {}): {
+  term: any
+  getHandler: () => Handler
+  sent: string[]
+} {
+  let handler: Handler = () => false
+  const sent: string[] = []
+
+  const term: any = {
+    element: null,  // no container — keypress suppression listener is a no-op
+    attachCustomKeyEventHandler: (fn: Handler) => { handler = fn },
+    hasBracketedPaste: () => false,
+    getSelectionPosition: () => opts.hasSelection
+      ? { start: { x: 0, y: 0 }, end: { x: 5, y: 0 } }
+      : undefined,
+    hasSelection: () => !!opts.hasSelection,
+    clearSelection: vi.fn(),
+    selectAll: vi.fn(),
+    buffer: {
+      active: {
+        getLine: () => ({
+          isWrapped: false,
+          translateToString: () => 'hello',
+        }),
+      },
+    },
+    cols: 80,
+  }
+
+  return { term, getHandler: () => handler, sent }
+}
+
+/** Build a synthetic KeyboardEvent. */
+function makeKey(opts: {
+  key: string
+  code?: string
+  type?: string
+  ctrlKey?: boolean
+  shiftKey?: boolean
+  altKey?: boolean
+  metaKey?: boolean
+}): KeyboardEvent {
+  return {
+    key: opts.key,
+    code: opts.code ?? `Key${opts.key.toUpperCase()}`,
+    type: opts.type ?? 'keydown',
+    ctrlKey: opts.ctrlKey ?? false,
+    shiftKey: opts.shiftKey ?? false,
+    altKey: opts.altKey ?? false,
+    metaKey: opts.metaKey ?? false,
+    preventDefault: vi.fn(),
+  } as unknown as KeyboardEvent
+}
+
+const DEFAULT_KEYBINDS = resolveKeybinds(null)
+
+describe('attachKeyboardHandler — ghostty-web return-value contract', () => {
+  // clipboard API doesn't exist in Node; mock it for tests that call copy actions
+  const clipboardWriteText = vi.fn().mockResolvedValue(undefined)
+  beforeEach(() => {
+    clipboardWriteText.mockClear()
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { clipboard: { writeText: clipboardWriteText } },
+      configurable: true,
+    })
+  })
+  it('returns false for normal typing (no keybind match) — ghostty pass-through', () => {
+    const { term, getHandler, sent } = makeTermMock()
+    const send = (d: string) => sent.push(d)
+    attachKeyboardHandler(term, send, send, DEFAULT_KEYBINDS)
+    const h = getHandler()
+
+    // Plain letter: not a keybind
+    expect(h(makeKey({ key: 'a' }))).toBe(false)
+    // Arrow key: not a keybind
+    expect(h(makeKey({ key: 'ArrowLeft', code: 'ArrowLeft' }))).toBe(false)
+    // Digit
+    expect(h(makeKey({ key: '1' }))).toBe(false)
+  })
+
+  it('returns true for ctrl+shift+c (copy) — ghostty consumed', () => {
+    const { term, getHandler } = makeTermMock({ hasSelection: true })
+    const send = vi.fn()
+    attachKeyboardHandler(term, send, send, DEFAULT_KEYBINDS)
+    const h = getHandler()
+
+    const ev = makeKey({ key: 'c', ctrlKey: true, shiftKey: true })
+    expect(h(ev)).toBe(true)
+  })
+
+  it('returns true for ctrl+c with selection (copyOrInterrupt copies) — ghostty consumed', () => {
+    const { term, getHandler } = makeTermMock({ hasSelection: true })
+    const send = vi.fn()
+    attachKeyboardHandler(term, send, send, DEFAULT_KEYBINDS)
+    const h = getHandler()
+
+    expect(h(makeKey({ key: 'c', ctrlKey: true }))).toBe(true)
+  })
+
+  it('returns false for ctrl+c with no selection (copyOrInterrupt → SIGINT) — ghostty pass-through', () => {
+    const { term, getHandler } = makeTermMock({ hasSelection: false })
+    const send = vi.fn()
+    attachKeyboardHandler(term, send, send, DEFAULT_KEYBINDS)
+    const h = getHandler()
+
+    // No selection: should fall through so ghostty sends ^C to PTY
+    expect(h(makeKey({ key: 'c', ctrlKey: true }))).toBe(false)
+  })
+
+  it('returns true for ctrl+v (paste) — ghostty consumed', () => {
+    const { term, getHandler } = makeTermMock()
+    const send = vi.fn()
+    attachKeyboardHandler(term, send, send, DEFAULT_KEYBINDS)
+    const h = getHandler()
+
+    expect(h(makeKey({ key: 'v', ctrlKey: true }))).toBe(true)
+  })
+
+  it('returns true for ctrl+shift+v (paste) — ghostty consumed', () => {
+    const { term, getHandler } = makeTermMock()
+    const send = vi.fn()
+    attachKeyboardHandler(term, send, send, DEFAULT_KEYBINDS)
+    const h = getHandler()
+
+    expect(h(makeKey({ key: 'v', ctrlKey: true, shiftKey: true }))).toBe(true)
+  })
+
+  it('returns true for shift+enter (sendText) — ghostty consumed', () => {
+    const { term, getHandler } = makeTermMock()
+    const send = vi.fn()
+    attachKeyboardHandler(term, send, send, DEFAULT_KEYBINDS)
+    const h = getHandler()
+
+    expect(h(makeKey({ key: 'Enter', shiftKey: true }))).toBe(true)
+  })
+
+  it('shift+enter on keydown sends \\n via send, not via ghostty PTY path', () => {
+    const { term, getHandler } = makeTermMock()
+    const sent: string[] = []
+    const send = (d: string) => sent.push(d)
+    attachKeyboardHandler(term, send, send, DEFAULT_KEYBINDS)
+    const h = getHandler()
+
+    h(makeKey({ key: 'Enter', shiftKey: true, type: 'keydown' }))
+    expect(sent).toContain('\n')
+  })
+
+  it('returns false for keypress events on unmatched keys — ghostty pass-through', () => {
+    const { term, getHandler } = makeTermMock()
+    const send = vi.fn()
+    attachKeyboardHandler(term, send, send, DEFAULT_KEYBINDS)
+    const h = getHandler()
+
+    // keypress type, no keybind
+    expect(h(makeKey({ key: 'a', type: 'keypress' }))).toBe(false)
   })
 })
