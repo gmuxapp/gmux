@@ -32,3 +32,14 @@ dev:
 # Start gmuxd against built binaries
 start:
     {{bin}}/gmuxd start
+
+# Install binaries to $(brew --prefix)/bin and restart gmuxd
+install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    prefix=$(brew --prefix)
+    cp {{bin}}/gmux "$prefix/bin/gmux"
+    cp {{bin}}/gmuxd "$prefix/bin/gmuxd"
+    echo "Restarting gmuxd..."
+    gmuxd restart
+    echo "Done. gmux and gmuxd installed to $prefix/bin/"
