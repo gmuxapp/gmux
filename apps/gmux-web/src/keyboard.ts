@@ -118,7 +118,27 @@ export function attachKeyboardHandler(
   macCommandIsCtrl = false,
   sessionId = '',
   onPasteFeedback: PasteFeedback = defaultPasteFeedback,
-): void {
+): () => void {
+  // ghostty-web fires both keydown (via customKeyEventHandler) and keypress
+  // (via its own keypressListener) for the same key event.  Our
+  // customKeyEventHandler returns false to prevent ghostty from encoding the
+  // key via the WASM path, but ghostty's separate keypressListener fires
+  // independently and sends the character anyway — double-delivering input.
+  //
+  // Fix: track whether a keydown was consumed by our handler, then
+  // stopImmediatePropagation() on the subsequent keypress so ghostty's
+  // keypressListener never sees it.
+  let suppressNextKeypress = false
+  const container = term.element
+  const onKeypress = (ev: KeyboardEvent) => {
+    if (suppressNextKeypress) {
+      ev.stopImmediatePropagation()
+      ev.preventDefault()
+      suppressNextKeypress = false
+    }
+  }
+  container?.addEventListener('keypress', onKeypress, { capture: true })
+
   term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
     // Mobile Enter → newline (not submit).
     // Bare Enter with no modifiers on a touch device sends \n so the user
@@ -128,6 +148,7 @@ export function attachKeyboardHandler(
         && isTouchDevice()) {
       if (ev.type === 'keydown') send('\n')
       ev.preventDefault()
+      suppressNextKeypress = true
       return false
     }
 
@@ -151,13 +172,14 @@ export function attachKeyboardHandler(
       for (const kb of keybinds) {
         if (!eventMatchesKeybind(virtualMods, kb)) continue
         const handled = executeAction(kb, term, send, sendRaw, sessionId, onPasteFeedback)
-        if (handled) { ev.preventDefault(); return false }
+        if (handled) { ev.preventDefault(); suppressNextKeypress = true; return false }
       }
 
       // No keybind matched. Synthesize the ctrl code directly.
       const seq = ctrlSequenceFor(ev.key)
       if (seq) send(seq)
       ev.preventDefault()
+      suppressNextKeypress = true
       return false
     }
 
@@ -170,6 +192,7 @@ export function attachKeyboardHandler(
       if (kb.baseKey === 'enter' && kb.shift) {
         if (ev.type === 'keydown') executeAction(kb, term, send, sendRaw, sessionId, onPasteFeedback)
         ev.preventDefault()
+        suppressNextKeypress = true
         return false
       }
 
@@ -179,15 +202,18 @@ export function attachKeyboardHandler(
       const handled = executeAction(kb, term, send, sendRaw, sessionId, onPasteFeedback)
       if (handled) {
         // Prevent browser default (e.g. Cmd+Left navigating back on Mac).
-        // xterm.js does not call preventDefault when the custom handler
-        // returns false, so we must do it ourselves.
         ev.preventDefault()
+        suppressNextKeypress = true
         return false
       }
     }
 
     return true
   })
+
+  return () => {
+    container?.removeEventListener('keypress', onKeypress, { capture: true })
+  }
 }
 
 /**

@@ -154,6 +154,7 @@ test.describe('copy from TUI output', () => {
     async ({ page }) => {
       const range = await injectLines(page, piTranscript)
       await selectRows(page, range.endRow, range.endRow)
+      await focusTerm(page)
       await page.keyboard.press('Control+Shift+KeyC')
 
       const clipboard = await lastClipboardWrite(page)
