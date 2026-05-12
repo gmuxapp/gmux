@@ -11,6 +11,7 @@ default: build
 
 # Full build: frontend → embed → go binaries
 build:
+    cd {{root}} && pnpm install
     bash {{root}}/scripts/build.sh
 
 # Build Go binaries only (skip frontend)
