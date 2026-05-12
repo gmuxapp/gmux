@@ -26,7 +26,7 @@ func TestPiSbxMatchExecCommand(t *testing.T) {
 func TestPiSbxMatchRunCommand(t *testing.T) {
 	p := NewPiSbx()
 	if !p.Match([]string{"sbx", "run", "pi-workspace"}) {
-		t.Fatal("should match sbx run pi-workspace (covers existing pi-session alias)")
+		t.Fatal("should match sbx run pi-workspace")
 	}
 }
 
@@ -76,7 +76,8 @@ func TestPiSbxMonitorNoOp(t *testing.T) {
 
 // --- Launchers ---
 
-func TestPiSbxLaunchers(t *testing.T) {
+func TestPiSbxLaunchersNoEnv(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 	launchers := NewPiSbx().Launchers()
 	if len(launchers) != 1 {
 		t.Fatalf("expected 1 launcher, got %d", len(launchers))
@@ -89,6 +90,20 @@ func TestPiSbxLaunchers(t *testing.T) {
 		t.Error("launcher label must not be empty")
 	}
 	want := []string{"sbx", "exec", "-it", "pi-workspace", "--", "pi"}
+	if len(l.Command) != len(want) {
+		t.Fatalf("expected command %v, got %v", want, l.Command)
+	}
+	for i, arg := range want {
+		if l.Command[i] != arg {
+			t.Errorf("command[%d]: want %q, got %q", i, arg, l.Command[i])
+		}
+	}
+}
+
+func TestPiSbxLaunchersWithWorkdir(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "/Users/james/workspace/.pi-user")
+	l := NewPiSbx().Launchers()[0]
+	want := []string{"sbx", "exec", "-it", "-w", "/Users/james/workspace", "pi-workspace", "--", "pi"}
 	if len(l.Command) != len(want) {
 		t.Fatalf("expected command %v, got %v", want, l.Command)
 	}
