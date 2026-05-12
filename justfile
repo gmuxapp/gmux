@@ -12,28 +12,22 @@ export VERSION     := env_var_or_default("VERSION", "dev")
 default: build
 
 # Full build: frontend → embed → go binaries
-build: build-frontend embed build-go
+build: build-frontend build-go
 
-# Build the Vite frontend only
+# Build the Vite frontend and copy into the go:embed directory
 build-frontend:
     cd {{web}} && npx vite build
-
-# Copy dist/ into the go:embed directory
-embed: build-frontend
     rm -rf {{embed}}/assets {{embed}}/favicon.svg {{embed}}/manifest.json \
            {{embed}}/icon-192.png {{embed}}/icon-512.png
     cp -r {{web}}/dist/* {{embed}}/
     @echo "Embedded $(du -sh {{embed}} | cut -f1) of frontend assets"
 
-# Compile gmuxd and gmux (no frontend rebuild)
+# Compile gmuxd and gmux
 build-go:
     mkdir -p {{bin}}
     cd {{root}}/services/gmuxd && go build -ldflags "-s -w -X main.version=${VERSION}" -o {{bin}}/gmuxd ./cmd/gmuxd
     cd {{root}}/cli/gmux      && go build -ldflags "-s -w -X main.version=${VERSION}" -o {{bin}}/gmux  ./cmd/gmux
     @ls -lh {{bin}}/gmuxd {{bin}}/gmux
-
-# Rebuild only the Go binaries (skip frontend — fastest)
-build-fast: build-go
 
 # Run tests (Go + JS)
 test:
