@@ -11,8 +11,8 @@ test.describe('terminal connection', () => {
     expect(state.termCols).toBeGreaterThan(0)
     expect(state.termRows).toBeGreaterThan(0)
 
-    // xterm element should be visible
-    await expect(page.locator('.xterm')).toBeVisible()
+    // Terminal canvas should be visible
+    await expect(page.locator('.terminal-container canvas')).toBeVisible()
   })
 
   test('terminal displays session output', async ({ page }) => {
