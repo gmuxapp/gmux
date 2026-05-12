@@ -1,7 +1,12 @@
 import { defineConfig } from 'vite'
 import preact from '@preact/preset-vite'
+import { execSync } from 'child_process'
 
 const gmuxdPort = process.env.VITE_DEV_PROXY_PORT || '8790'
+
+const gitHash = (() => {
+  try { return execSync('git rev-parse --short HEAD').toString().trim() } catch { return 'unknown' }
+})()
 
 export default defineConfig({
   plugins: [preact()],
@@ -13,7 +18,7 @@ export default defineConfig({
     // before-hook); without it both backend and frontend default to
     // 'dev', which is fine for local dev but would silently break the
     // version-mismatch UX on releases.
-    __GMUX_VERSION__: JSON.stringify(process.env.VERSION || 'dev'),
+    __GMUX_VERSION__: JSON.stringify(process.env.VERSION || `dev-${gitHash}`),
   },
   server: {
     allowedHosts: true,
