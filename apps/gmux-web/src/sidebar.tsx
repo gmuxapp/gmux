@@ -356,6 +356,7 @@ export function Sidebar({
               <IconBell muted /> Notifications blocked in browser settings
             </div>
           )}
+          <span class="sidebar-version">v{__GMUX_VERSION__}</span>
         </div>
       </aside>
     </>

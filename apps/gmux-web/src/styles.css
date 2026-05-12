@@ -564,6 +564,16 @@ body {
   border-top: 1px solid var(--border);
 }
 
+.sidebar-version {
+  display: block;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  padding: 4px 0 2px;
+  user-select: text;
+}
+
 .manage-projects-btn {
   display: flex;
   align-items: center;
