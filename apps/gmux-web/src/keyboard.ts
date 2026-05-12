@@ -10,7 +10,7 @@
  * Keybindings are data-driven: the resolved keybind list is iterated on
  * each keydown. Each entry maps a key combo to an action.
  */
-import type { Terminal } from '@xterm/xterm'
+import type { Terminal } from 'ghostty-web'
 import {
   eventMatchesKeybind,
   IS_MAC,
@@ -250,7 +250,7 @@ function executeAction(
       // via onPasteFeedback so users see why nothing happened.
       void handlePasteAction({
         sessionId,
-        bracketedPasteMode: term.modes.bracketedPasteMode,
+        bracketedPasteMode: term.hasBracketedPaste(),
         feedback: onPasteFeedback,
         emit: sendRaw,
       })
@@ -381,7 +381,7 @@ export function attachPasteHandler(
         onPasteFeedback('error', 'Paste failed: no session bound')
         return
       }
-      void uploadAndFormatPath(blob, sessionId, term.modes.bracketedPasteMode, onPasteFeedback)
+      void uploadAndFormatPath(blob, sessionId, term.hasBracketedPaste(), onPasteFeedback)
         .then(out => { if (out !== null) sendRaw(out) })
       return
     }
@@ -393,7 +393,7 @@ export function attachPasteHandler(
     ev.stopPropagation()
     ev.preventDefault()
 
-    sendRaw(formatPasteText(text, term.modes.bracketedPasteMode))
+    sendRaw(formatPasteText(text, term.hasBracketedPaste()))
   }
 
   container.addEventListener('paste', handler, { capture: true })

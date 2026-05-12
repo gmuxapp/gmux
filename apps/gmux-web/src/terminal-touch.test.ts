@@ -1,31 +1,8 @@
 /**
- * Tests for mobile text-selection improvements:
- * 1. shouldUseWebgl — returns false on coarse-pointer devices (DOM renderer)
- * 2. shouldFocusOnTouchEnd — skips focus when a long-press was detected
+ * Tests for shouldFocusOnTouchEnd.
  */
 import { describe, it, expect } from 'vitest'
-import { shouldUseWebgl, shouldFocusOnTouchEnd } from './terminal-touch'
-
-// ── shouldUseWebgl ──────────────────────────────────────────────────────────
-
-describe('shouldUseWebgl', () => {
-  function makeMatchMedia(coarse: boolean) {
-    return (query: string) => ({
-      matches: coarse ? query === '(pointer: coarse)' : false,
-      media: query,
-    })
-  }
-
-  it('returns false on a coarse-pointer (touch) device', () => {
-    expect(shouldUseWebgl(makeMatchMedia(true))).toBe(false)
-  })
-
-  it('returns true on a fine-pointer (mouse) device', () => {
-    expect(shouldUseWebgl(makeMatchMedia(false))).toBe(true)
-  })
-})
-
-// ── shouldFocusOnTouchEnd ───────────────────────────────────────────────────
+import { shouldFocusOnTouchEnd } from './terminal-touch'
 
 describe('shouldFocusOnTouchEnd', () => {
   it('returns true when the user tapped (no move, no long-press)', () => {

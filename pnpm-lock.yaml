@@ -47,21 +47,9 @@ importers:
       '@trpc/client':
         specifier: ^11.6.0
         version: 11.12.0(@trpc/server@11.12.0(typescript@5.9.3))(typescript@5.9.3)
-      '@xterm/addon-fit':
-        specifier: 0.12.0-beta.195
-        version: 0.12.0-beta.195(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)
-      '@xterm/addon-image':
-        specifier: github:gmuxapp/xterm.js#v6.1.0-beta.195-gmux.2&path:addons/addon-image
-        version: https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed#path:addons/addon-image
-      '@xterm/addon-web-links':
-        specifier: 0.13.0-beta.195
-        version: 0.13.0-beta.195(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)
-      '@xterm/addon-webgl':
-        specifier: 0.20.0-beta.194
-        version: 0.20.0-beta.194(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)
-      '@xterm/xterm':
-        specifier: github:gmuxapp/xterm.js#v6.1.0-beta.195-gmux.2
-        version: https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed
+      ghostty-web:
+        specifier: ^0.4.0
+        version: 0.4.0
       preact:
         specifier: ^10.26.4
         version: 10.29.0
@@ -1361,32 +1349,6 @@ packages:
   '@vitest/utils@3.2.4':
     resolution: {integrity: sha512-fB2V0JFrQSMsCo9HiSq3Ezpdv4iYaXRG1Sx8edX3MwxfyNn83mKiGzOcH+Fkxt4MHxr3y42fQi1oeAInqgX2QA==}
 
-  '@xterm/addon-fit@0.12.0-beta.195':
-    resolution: {integrity: sha512-Ihc+azRK3HFB2NVBEoWRkEUGYVxoojK2X4Jx6YxiRKdAu6bYzDTzTImE/0EDOjjz2AUUqddRwCUdSbz2/WvYfA==}
-    version: 0.12.0-beta.195
-    peerDependencies:
-      '@xterm/xterm': ^6.1.0-beta.195
-
-  '@xterm/addon-image@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed#path:addons/addon-image':
-    resolution: {path: addons/addon-image, tarball: https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed}
-    version: 0.9.0
-
-  '@xterm/addon-web-links@0.13.0-beta.195':
-    resolution: {integrity: sha512-3x1jjud/TAVCSd3Jn7E9ielvPUwHAqvtqL1AKeH9sD5RKUuNr+Z4B+vhkvR0XF2BAk9af6ErgyygdAMnOL2Rwg==}
-    version: 0.13.0-beta.195
-    peerDependencies:
-      '@xterm/xterm': ^6.1.0-beta.195
-
-  '@xterm/addon-webgl@0.20.0-beta.194':
-    resolution: {integrity: sha512-aX4yGkHyoJVmxh3ZVMha7CYdTFu7tuzTJ0ljyXKAVFrdO+Wve4luK8w3wLmxuvqa9LWA9muMx/bGeEWtwD/Nlg==}
-    version: 0.20.0-beta.194
-    peerDependencies:
-      '@xterm/xterm': ^6.1.0-beta.195
-
-  '@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed':
-    resolution: {tarball: https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed}
-    version: 6.1.0-beta.195
-
   acorn-jsx@5.3.2:
     resolution: {integrity: sha512-rq9s+JNhf0IChjtDXxllJ7g41oZk5SlXtp0LHwyA5cejwn7vKmKp4pPri6YEePv2PU65sAsegbXtIinmDFDXgQ==}
     peerDependencies:
@@ -1937,6 +1899,9 @@ packages:
 
   get-tsconfig@4.13.6:
     resolution: {integrity: sha512-shZT/QMiSHc/YBLxxOkMtgSid5HFoauqCE3/exfsEcwg1WkeqjG+V40yBbBrsD+jW2HDXcs28xOfcbm2jI8Ddw==}
+
+  ghostty-web@0.4.0:
+    resolution: {integrity: sha512-0puDBik2qapbD/QQBW9o5ZHfXnZBqZWx/ctBiVtKZ6ZLds4NYb+wZuw1cRLXZk9zYovIQ908z3rvFhexAvc5Hg==}
 
   github-slugger@2.0.0:
     resolution: {integrity: sha512-IaOQ9puYtjrkq7Y0Ygl9KDZnrf/aiUJYUpVf89y8kyaxbRG7Y1SrX/jaumrv81vc61+kiMempujsM3Yw7w5qcw==}
@@ -4214,22 +4179,6 @@ snapshots:
       loupe: 3.2.1
       tinyrainbow: 2.0.0
 
-  '@xterm/addon-fit@0.12.0-beta.195(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)':
-    dependencies:
-      '@xterm/xterm': https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed
-
-  '@xterm/addon-image@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed#path:addons/addon-image': {}
-
-  '@xterm/addon-web-links@0.13.0-beta.195(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)':
-    dependencies:
-      '@xterm/xterm': https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed
-
-  '@xterm/addon-webgl@0.20.0-beta.194(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)':
-    dependencies:
-      '@xterm/xterm': https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed
-
-  '@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed': {}
-
   acorn-jsx@5.3.2(acorn@8.16.0):
     dependencies:
       acorn: 8.16.0
@@ -4898,6 +4847,8 @@ snapshots:
     dependencies:
       resolve-pkg-maps: 1.0.0
     optional: true
+
+  ghostty-web@0.4.0: {}
 
   github-slugger@2.0.0: {}
 

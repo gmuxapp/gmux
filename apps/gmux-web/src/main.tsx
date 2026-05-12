@@ -1,7 +1,6 @@
 import { render } from 'preact'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { LocationProvider, Router, Route, lazy, useLocation } from 'preact-iso'
-import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
 import { ReplayView } from './replay-view'

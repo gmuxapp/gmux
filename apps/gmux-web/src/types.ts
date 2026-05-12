@@ -2,6 +2,37 @@
 //
 // Pure interfaces for the frontend data model. No logic, no imports.
 
+/**
+ * Terminal color theme. Superset of ghostty-web's ITheme; includes all fields
+ * used by the settings schema and renderer. Unknown fields are silently ignored
+ * by the terminal library.
+ */
+export interface ITheme {
+  foreground?: string
+  background?: string
+  cursor?: string
+  cursorAccent?: string
+  selectionBackground?: string
+  selectionForeground?: string
+  selectionInactiveBackground?: string
+  black?: string
+  red?: string
+  green?: string
+  yellow?: string
+  blue?: string
+  magenta?: string
+  cyan?: string
+  white?: string
+  brightBlack?: string
+  brightRed?: string
+  brightGreen?: string
+  brightYellow?: string
+  brightBlue?: string
+  brightMagenta?: string
+  brightCyan?: string
+  brightWhite?: string
+}
+
 export interface SessionStatus {
   label: string
   working: boolean

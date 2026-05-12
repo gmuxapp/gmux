@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks'
-import type { Terminal } from '@xterm/xterm'
+import type { Terminal } from 'ghostty-web'
 
 /**
  * Floating "jump to bottom" button that overlays the bottom-right of an

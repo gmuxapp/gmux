@@ -12,7 +12,7 @@
  */
 
 import type { Session } from '../types'
-import type { Terminal } from '@xterm/xterm'
+import type { Terminal } from 'ghostty-web'
 
 // ── SGR serializer ──
 

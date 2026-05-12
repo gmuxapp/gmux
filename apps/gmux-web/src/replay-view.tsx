@@ -1,22 +1,28 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-import { ImageAddon } from '@xterm/addon-image'
-import { WebLinksAddon } from '@xterm/addon-web-links'
-import { WebglAddon } from '@xterm/addon-webgl'
-import type { ITerminalOptions } from '@xterm/xterm'
+import { Terminal, FitAddon, UrlRegexProvider, OSC8LinkProvider, init as initGhostty } from 'ghostty-web'
+import type { ITerminalOptions } from 'ghostty-web'
 import type { Session } from './types'
+import type { ResolvedTerminalOptions } from './settings-schema'
 import { fetchScrollback, type ScrollbackResult } from './replay-fetch'
 import { JumpToBottom } from './jump-to-bottom'
 
-// gmuxd caps scrollback at 1 MiB × 2 files (~2 MiB max). xterm's default
+// gmuxd caps scrollback at 1 MiB × 2 files (~2 MiB max). The default
 // scrollback line cap (1000) would silently truncate most of that for
 // text-heavy sessions; bump it for replay so the user can scroll the full
 // captured history.
 const REPLAY_SCROLLBACK_LINES = 10000
 
-function loadPreferredRenderer(term: Terminal) {
-  try { term.loadAddon(new WebglAddon()) } catch { /* DOM fallback */ }
+function buildReplayOptions(opts: ResolvedTerminalOptions): ITerminalOptions {
+  return {
+    fontSize: opts.fontSize,
+    fontFamily: opts.fontFamily,
+    cursorBlink: false,
+    cursorStyle: opts.cursorStyle,
+    theme: opts.theme,
+    scrollback: REPLAY_SCROLLBACK_LINES,
+    disableStdin: true,
+    smoothScrollDuration: opts.smoothScrollDuration,
+  }
 }
 
 type ReplayState =
@@ -67,7 +73,7 @@ export function ReplayView({
   resuming,
 }: {
   session: Session
-  terminalOptions: ITerminalOptions
+  terminalOptions: ResolvedTerminalOptions
   onResume?: (id: string) => void
   resuming?: boolean
 }) {
@@ -77,67 +83,55 @@ export function ReplayView({
 
   useEffect(() => {
     if (!containerRef.current) return
-
-    const term = new Terminal({
-      ...terminalOptions,
-      scrollback: REPLAY_SCROLLBACK_LINES,
-      disableStdin: true,
-      cursorBlink: false,
-      cursorInactiveStyle: 'none',
-      linkHandler: {
-        activate(_event, text) {
-          window.open(text, '_blank', 'noopener')
-        },
-      },
-    })
-    const fit = new FitAddon()
-    term.loadAddon(fit)
-    term.loadAddon(new ImageAddon())
-    term.loadAddon(new WebLinksAddon())
-    term.open(containerRef.current)
-    loadPreferredRenderer(term)
-    fit.fit()
-    setTerm(term)
-
-    // OSC 52 (set clipboard) suppression: the captured bytes may contain
-    // OSC 52 sequences emitted by the *original* live session; replaying
-    // them would silently overwrite the operator's clipboard. Swallow.
-    term.parser.registerOscHandler(52, () => true)
-
-    // Expose for e2e tests (matches TerminalView's window.__gmuxTerm).
-    ;(window as any).__gmuxTerm = term
-
-    setState({ kind: 'loading' })
-
     let cancelled = false
-    fetchScrollback(session.id).then((result) => {
-      if (cancelled) return
-      setState(result)
-      if (result.kind === 'bytes') {
-        term.write(result.bytes, () => {
-          // The write callback is async: between term.write and the
-          // callback firing, the effect's cleanup may have run
-          // (component unmount / session.id switch) and disposed
-          // the terminal. Calling scrollToBottom on a disposed
-          // terminal throws.
-          if (cancelled) return
-          // Wait for the write callback so xterm has actually parsed the
-          // bytes before we ask it to scroll; otherwise scrollToBottom
-          // pins us at row 0 because the buffer is still empty.
-          term.scrollToBottom()
-        })
-      }
-    })
+    let cleanup: (() => void) | null = null
 
-    const onResize = () => fit.fit()
-    window.addEventListener('resize', onResize)
+    initGhostty().then(() => {
+      if (cancelled || !containerRef.current) return
+
+      const t = new Terminal(buildReplayOptions(terminalOptions))
+      const fit = new FitAddon()
+      t.loadAddon(fit)
+      t.open(containerRef.current)
+      fit.fit()
+
+      // Link detection
+      t.registerLinkProvider(new UrlRegexProvider(t))
+      t.registerLinkProvider(new OSC8LinkProvider(t))
+
+      // Expose for e2e tests (matches TerminalView's window.__gmuxTerm).
+      ;(window as any).__gmuxTerm = t
+
+      setTerm(t)
+      setState({ kind: 'loading' })
+
+      fetchScrollback(session.id).then((result) => {
+        if (cancelled) return
+        setState(result)
+        if (result.kind === 'bytes') {
+          t.write(result.bytes, () => {
+            if (cancelled) return
+            t.scrollToBottom()
+          })
+        }
+      })
+
+      const onResize = () => fit.fit()
+      window.addEventListener('resize', onResize)
+
+      cleanup = () => {
+        window.removeEventListener('resize', onResize)
+        if ((window as any).__gmuxTerm === t) (window as any).__gmuxTerm = null
+        setTerm(null)
+        t.dispose()
+      }
+
+      if (cancelled) cleanup()
+    })
 
     return () => {
       cancelled = true
-      window.removeEventListener('resize', onResize)
-      if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
-      setTerm(null)
-      term.dispose()
+      cleanup?.()
     }
   }, [session.id])
 

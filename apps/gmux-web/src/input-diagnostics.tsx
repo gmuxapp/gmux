@@ -15,8 +15,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
+import { Terminal, FitAddon, init as initGhostty } from 'ghostty-web'
 import { TERM_THEME } from './terminal'
 
 // ── Types ──
@@ -181,61 +180,75 @@ export default function InputDiagnostics() {
   // Terminal setup
   useEffect(() => {
     if (!containerRef.current) return
+    let cancelled = false
+    let cleanup: (() => void) | null = null
 
-    const term = new Terminal({
-      theme: TERM_THEME,
-      fontFamily: "'Fira Code', monospace",
-      fontSize: 14,
-      cursorBlink: true,
-      scrollback: 100,
-    })
-    const fit = new FitAddon()
-    term.loadAddon(fit)
-    term.open(containerRef.current)
-    fit.fit()
-    termRef.current = term
+    initGhostty().then(() => {
+      if (cancelled || !containerRef.current) return
 
-    // Welcome message
-    term.writeln('\x1b[1;36m── Input Diagnostics ──\x1b[0m')
-    term.writeln('\x1b[2mType here to test keyboard input. Events are logged below.')
-    term.writeln('Try: autocorrect, predictive text, voice dictation, swipe typing.\x1b[0m')
-
-    // Attach local echo
-    const disposeEcho = attachLocalEcho(term)
-
-    // Log onData events (what xterm sends to the application)
-    const dataDispose = term.onData((data) => {
-      addEntry('data', `onData: ${printable(data)}`, {
-        raw: toHex(data),
-        length: data.length,
+      const term = new Terminal({
+        theme: TERM_THEME,
+        fontFamily: "'Fira Code', monospace",
+        fontSize: 14,
+        cursorBlink: true,
+        scrollback: 100,
       })
+      const fit = new FitAddon()
+      term.loadAddon(fit)
+      term.open(containerRef.current)
+      fit.fit()
+      termRef.current = term
+
+      // Welcome message
+      term.writeln('\x1b[1;36m── Input Diagnostics ──\x1b[0m')
+      term.writeln('\x1b[2mType here to test keyboard input. Events are logged below.')
+      term.writeln('Try: autocorrect, predictive text, voice dictation, swipe typing.\x1b[0m')
+
+      // Attach local echo
+      const disposeEcho = attachLocalEcho(term)
+
+      // Log onData events (what xterm sends to the application)
+      const dataDispose = term.onData((data) => {
+        addEntry('data', `onData: ${printable(data)}`, {
+          raw: toHex(data),
+          length: data.length,
+        })
+      })
+
+      // Instrument the hidden textarea
+      const textarea = term.textarea
+      if (textarea) {
+        instrumentTextarea(textarea, addEntry)
+      }
+
+      addEntry('info', 'Ready. Type to see events.', {
+        userAgent: navigator.userAgent,
+        platform: navigator.platform,
+        touchPoints: navigator.maxTouchPoints,
+      })
+
+      const onResize = () => fit.fit()
+      window.addEventListener('resize', onResize)
+      window.visualViewport?.addEventListener('resize', onResize)
+
+      term.focus()
+
+      cleanup = () => {
+        window.removeEventListener('resize', onResize)
+        window.visualViewport?.removeEventListener('resize', onResize)
+        disposeEcho()
+        dataDispose.dispose()
+        term.dispose()
+        termRef.current = null
+      }
+
+      // If effect was already cancelled while init was loading, clean up immediately
+      if (cancelled) cleanup()
     })
-
-    // Instrument the hidden textarea
-    const textarea = term.textarea
-    if (textarea) {
-      instrumentTextarea(textarea, addEntry)
-    }
-
-    addEntry('info', 'Ready. Type to see events.', {
-      userAgent: navigator.userAgent,
-      platform: navigator.platform,
-      touchPoints: navigator.maxTouchPoints,
-    })
-
-    const onResize = () => fit.fit()
-    window.addEventListener('resize', onResize)
-    window.visualViewport?.addEventListener('resize', onResize)
-
-    term.focus()
 
     return () => {
-      window.removeEventListener('resize', onResize)
-      window.visualViewport?.removeEventListener('resize', onResize)
-      disposeEcho()
-      dataDispose.dispose()
-      term.dispose()
-      termRef.current = null
+      cancelled = true
+      cleanup?.()
     }
   }, [addEntry])
 

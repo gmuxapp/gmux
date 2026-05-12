@@ -48,7 +48,7 @@
  *
  * See also: /_/input-diagnostics for collecting real event traces.
  */
-import type { Terminal } from '@xterm/xterm'
+import type { Terminal } from 'ghostty-web'
 
 type SendFn = (data: string) => void
 
