@@ -434,6 +434,13 @@ body {
   min-width: 0;
 }
 
+.session-env-icon {
+  font-size: 11px;
+  line-height: 1;
+  flex-shrink: 0;
+  user-select: none;
+}
+
 .session-meta {
   display: flex;
   align-items: center;

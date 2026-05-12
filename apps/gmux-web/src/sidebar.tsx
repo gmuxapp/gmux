@@ -28,6 +28,15 @@ export type { DotState }
 
 // ── Helpers ──
 
+/**
+ * Returns the environment icon for a session:
+ *   🏖️  for sandbox sessions (pi-sbx adapter)
+ *   🏡  for all host sessions
+ */
+export function sessionEnvironmentIcon(kind: string): string {
+  return kind === 'pi-sbx' ? '🏖️' : '🏡'
+}
+
 /** Determine the dot indicator state for a session. */
 function sessionDotState(session: Session, am: ReadonlyMap<string, 'active' | 'fading'>): DotState {
   if (session.alive && session.status?.error)   return 'error'
@@ -137,6 +146,7 @@ function SessionItem({
       {session.peer && <PeerLabel name={session.peer} />}
       <div class="session-content">
         <div class="session-title-row">
+          <span class="session-env-icon" aria-label={session.kind === 'pi-sbx' ? 'sandbox' : 'host'}>{sessionEnvironmentIcon(session.kind)}</span>
           <span class="session-title">{session.title}</span>
         </div>
         {session.status?.label && (
