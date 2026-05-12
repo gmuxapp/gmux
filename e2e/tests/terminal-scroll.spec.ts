@@ -58,12 +58,20 @@ interface ScrollState {
 async function getScroll(page: Page): Promise<ScrollState> {
   return page.evaluate(() => {
     const term = (window as any).__gmuxTerm
-    const buf = term.buffer.active
+    // ghostty-web scroll coordinates:
+    //   getScrollbackLength() = number of scrollback lines (= xterm baseY)
+    //   getViewportY()        = 0 when at live output (= xterm "at bottom")
+    //                         = N after scrollToLine(N) (= xterm viewportY)
+    // xterm-compat translation:
+    //   baseY     = scrollbackLen
+    //   viewportY = scrollbackLen when at bottom (gvY=0), else gvY
+    const scrollbackLen: number = term.getScrollbackLength()
+    const gvY: number = term.getViewportY()
     return {
-      viewportY: buf.viewportY as number,
-      baseY: buf.baseY as number,
-      rows: term.rows as number,
-      cols: term.cols as number,
+      viewportY: gvY === 0 ? scrollbackLen : gvY,
+      baseY:     scrollbackLen,
+      rows:      term.rows as number,
+      cols:      term.cols as number,
     }
   })
 }
@@ -664,12 +672,12 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     // the banner string is stable.
     const found = await page.evaluate(() => {
       const term = (window as any).__gmuxTerm
-      const buf = term.buffer.active
-      const total = buf.baseY + term.rows
-      for (let y = 0; y < buf.baseY; y++) {
-        const line = buf.getLine(y)
+      const scrollbackLen: number = term.getScrollbackLength()
+      const total = scrollbackLen + term.rows
+      for (let y = 0; y < scrollbackLen; y++) {
+        const line = term.buffer.active.getLine(y)
         const text = line ? line.translateToString(true) : ''
-        if (text.includes('v0.70.2  anthropic')) return { y, text, baseY: buf.baseY, total }
+        if (text.includes('v0.70.2  anthropic')) return { y, text, baseY: scrollbackLen, total }
       }
       return null
     })

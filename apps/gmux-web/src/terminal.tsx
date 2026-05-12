@@ -423,8 +423,20 @@ export function TerminalView({
     fitAddonRef.current = fitAddon
     termIoRef.current = createTerminalIO(term, {
       getState() {
-        const buf = term.buffer.active
-        return { viewportY: buf.viewportY, baseY: buf.baseY, rows: term.rows }
+        // ghostty-web scroll API:
+        //   getViewportY() = 0 when viewing live output (at bottom)
+        //                  = N after scrollToLine(N), where N is 0-indexed from top of scrollback
+        //   getScrollbackLength() = number of scrollback lines (= xterm's baseY)
+        //   buf.viewportY and buf.baseY are always 0 — not useful
+        //
+        // xterm-compatible translation:
+        //   baseY      = scrollbackLen
+        //   viewportY  = scrollbackLen when at bottom (gvY=0)
+        //              = gvY           when scrolled into history (gvY>0)
+        const scrollbackLen = term.getScrollbackLength()
+        const gvY = term.getViewportY()
+        const viewportY = gvY === 0 ? scrollbackLen : gvY
+        return { viewportY, baseY: scrollbackLen, rows: term.rows }
       },
       scrollToLine(line: number) { term.scrollToLine(line) },
       scrollToBottom() { term.scrollToBottom() },
@@ -488,8 +500,11 @@ export function TerminalView({
     const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
 
     const scrollDisposable = term.onScroll(() => {
-      const buf = term.buffer.active
-      setScrolledUp(buf.baseY - buf.viewportY > SCROLL_THRESHOLD)
+      // ghostty-web: getViewportY()=0 at bottom, =N (>0) when scrolled into history.
+      // "scrolled up" = not at bottom AND distance from bottom exceeds threshold.
+      const scrollbackLen = term.getScrollbackLength()
+      const gvY = term.getViewportY()
+      setScrolledUp(gvY > 0 && scrollbackLen - gvY > SCROLL_THRESHOLD)
     })
 
     const handleGlobalKeydown = (ev: KeyboardEvent) => {

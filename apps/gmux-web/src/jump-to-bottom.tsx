@@ -21,11 +21,8 @@ export function JumpToBottom({ term }: { term: Terminal | null }) {
   useEffect(() => {
     if (!term) return
     const update = () => {
-      const buf = term.buffer.active
-      // viewportY === baseY means the viewport's top row is the same as
-      // the buffer's bottom-of-scrollback baseline, i.e. nothing is
-      // scrolled off the bottom.
-      setAtBottom(buf.viewportY >= buf.baseY)
+      // ghostty-web: getViewportY()=0 means viewing live output (at bottom).
+      setAtBottom(term.getViewportY() === 0)
     }
     update()
     const sub = term.onScroll(update)
