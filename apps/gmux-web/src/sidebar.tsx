@@ -15,6 +15,7 @@ import {
   updateProjects, reorderSessions,
   type DotState,
 } from './store'
+import { useInstallPrompt } from './use-install-prompt'
 import { PeerLabel } from './peer-label'
 import type { Session, Folder, ProjectItem } from './types'
 
@@ -274,6 +275,7 @@ export function Sidebar({
     (n, f) => n + f.sessions.filter(s => s.alive || s.resumable).length, 0,
   )
   const connected = connState.value === 'connected'
+  const { trigger: triggerInstall } = useInstallPrompt()
   const hasProjects = projectsVal.length > 0
   const isOnlyHomeProject = projectsVal.length === 1
     && projectsVal[0].slug === 'home'
@@ -340,6 +342,9 @@ export function Sidebar({
             {unmatchedCount > 0 && (
               <span class="manage-projects-badge">{unmatchedCount}</span>
             )}
+          </button>
+          <button class="manage-projects-btn" onClick={triggerInstall}>
+            Install app
           </button>
           {notifPermission === 'default' && (
             <button class="notif-btn" onClick={onRequestNotifPermission}>
