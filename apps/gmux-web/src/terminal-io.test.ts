@@ -1014,3 +1014,64 @@ describe('scroll preservation across BSU/ESU', () => {
     h.cleanup()
   })
 })
+
+describe('scroll preservation — rapid BSU/ESU frames (working-state snap)', () => {
+  it('ghostty-web: rapid frames do not snap to bottom while user is scrolled up', () => {
+    // Reproduces the "working state" snap: pi streams many BSU/ESU frames
+    // faster than rAFs fire.  Between frame N’s ESU callback (which clears
+    // savedScroll and schedules restoreRAF) and the rAF firing, frame N+1’s
+    // BSU arrives.  maybeSaveScroll re-runs, but at this point ghostty has
+    // already auto-scrolled to bottom, so it records wasAtBottom=true.
+    // The fix: don’t clear savedScroll synchronously in maybeRestoreScroll;
+    // clear it inside the rAF callback instead.  Then maybeSaveScroll sees
+    // savedScroll≠null for frame N+1 and returns early, preserving the
+    // correct frame-N state.
+    const h = makeScrollHarness({ scrollbackLimit: 200, rows: 25 })
+    h.io.reset(1)
+    h.addLines(100)     // baseY=100
+    h.userScrollTo(80)  // user reading line 80, distance=20
+
+    // Frame 1: BSU + content + ESU
+    h.io.enqueue(wrapBSU('frame-1-output'), 1)
+    h.flushOne(2)         // 2 lines added, no eviction; baseY=102
+    // Simulate ghostty auto-scroll after frame 1 write (before restoreRAF fires)
+    h.userScrollToBottom()
+
+    // Frame 2 arrives before restoreRAF fires (rapid frames).
+    // With the bug: maybeSaveScroll reads viewportY=baseY → wasAtBottom=true.
+    // With the fix: savedScroll is still set → maybeSaveScroll returns early.
+    h.io.enqueue(wrapBSU('frame-2-output'), 1)
+    h.flushOne(2)         // baseY=104
+    h.userScrollToBottom()  // ghostty auto-scroll for frame 2
+
+    // Fire ALL pending rAFs (frame 2’s restoreRAF should restore, not snap).
+    h.flushRAF()
+
+    // User should be restored to line 80, not bottom (104).
+    expect(h.viewportY).toBe(80)
+    h.cleanup()
+  })
+
+  it('ghostty-web: user at bottom stays at bottom across rapid frames', () => {
+    const h = makeScrollHarness({ scrollbackLimit: 200, rows: 25 })
+    h.io.reset(1)
+    h.addLines(100)
+    h.userScrollToBottom()  // user at bottom
+
+    // Frame 1
+    h.io.enqueue(wrapBSU('frame-1'), 1)
+    h.flushOne(2)
+    h.userScrollToBottom()  // ghostty auto-scroll (same as already-at-bottom)
+
+    // Frame 2
+    h.io.enqueue(wrapBSU('frame-2'), 1)
+    h.flushOne(2)
+    h.userScrollToBottom()
+
+    h.flushRAF()
+
+    // Must stay at bottom.
+    expect(h.viewportY).toBe(h.baseY)
+    h.cleanup()
+  })
+})

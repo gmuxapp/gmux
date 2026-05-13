@@ -181,7 +181,10 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
 
     const snap = savedScroll
     const wasBufferReset = bufferReset
-    savedScroll = null
+    // Keep savedScroll set until the rAF fires.  If a new BSU frame arrives
+    // before the rAF (rapid pi output), maybeSaveScroll will see savedScroll
+    // as non-null, return early, and inherit the correct wasAtBottom=false
+    // state rather than reading ghostty’s already-auto-scrolled position.
     bufferReset = false
 
     // Cancel any previous pending restore (e.g. nested BSU/ESU).
@@ -189,6 +192,7 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
 
     restoreRAF = requestAnimationFrame(() => {
       restoreRAF = null
+      savedScroll = null  // clear now that we’re actually restoring
       const { viewportY: rawViewportY, baseY, rows } = scroll.getState()
 
       if (snap.wasAtBottom) {
