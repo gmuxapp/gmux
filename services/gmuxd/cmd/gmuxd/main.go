@@ -1985,28 +1985,34 @@ func printSessionList(w io.Writer, body io.Reader) {
 	}
 
 	const indent = "  "
-	const gap = "  "
+	const sep = " \u2502 " // " │ "
 
 	printRow := func(dot, kind, id, pid, size, title, status string) {
 		_, _ = fmt.Fprintf(w, "%s%-1s%s%-*s%s%-*s%s%-*s%s%-*s%s%-*s%s%s\n",
 			indent,
-			dot, gap,
-			wKind, kind, gap,
-			wID, id, gap,
-			wPID, pid, gap,
-			wSize, size, gap,
-			wTitle, title, gap,
+			dot, sep,
+			wKind, kind, sep,
+			wID, id, sep,
+			wPID, pid, sep,
+			wSize, size, sep,
+			wTitle, title, sep,
 			status)
 	}
 
 	// Header and separator.
 	_, _ = fmt.Fprintln(w)
 	printRow("", "KIND", "ID", "PID", "SIZE", "TITLE", "STATUS")
-	sepLen := 1 + len(gap) + wKind + len(gap) + wID + len(gap) + wPID + len(gap) + wSize + len(gap) + wTitle + len(gap) + len("STATUS")
-	_, _ = fmt.Fprintf(w, "%s%s\n", indent, strings.Repeat("\u2500", sepLen))
+	var sepLine strings.Builder
+	for i, colW := range []int{1, wKind, wID, wPID, wSize, wTitle, len("STATUS")} {
+		if i > 0 {
+			sepLine.WriteString("\u2500\u253c\u2500") // "─┼─"
+		}
+		sepLine.WriteString(strings.Repeat("\u2500", colW))
+	}
+	_, _ = fmt.Fprintf(w, "%s%s\n", indent, sepLine.String())
 
 	// Data rows + sub-rows.
-	subIndent := indent + strings.Repeat(" ", 1+len(gap)) // align under KIND
+	subIndent := indent + strings.Repeat(" ", 1+len(sep)) // align under KIND
 	for _, r := range rows {
 		printRow(r.dot, r.kind, r.id, r.pid, r.size, r.title, r.status)
 		if r.cwd != "" {
