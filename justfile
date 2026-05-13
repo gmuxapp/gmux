@@ -31,15 +31,18 @@ dev:
 
 # Start gmuxd against built binaries
 start:
-    {{bin}}/gmuxd start
+    #!/usr/bin/env bash
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    exec {{bin}}/gmuxd-${os}-arm64 start
 
 # Install binaries to $(brew --prefix)/bin and restart gmuxd
 install:
     #!/usr/bin/env bash
     set -euo pipefail
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
     prefix=$(brew --prefix)
-    cp {{bin}}/gmux "$prefix/bin/gmux"
-    cp {{bin}}/gmuxd "$prefix/bin/gmuxd"
+    cp {{bin}}/gmux-${os}-arm64 "$prefix/bin/gmux"
+    cp {{bin}}/gmuxd-${os}-arm64 "$prefix/bin/gmuxd"
     codesign --sign - --force "$prefix/bin/gmux"
     codesign --sign - --force "$prefix/bin/gmuxd"
     echo "Restarting gmuxd..."

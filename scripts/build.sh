@@ -34,12 +34,14 @@ VERSION="${VERSION:-dev}"
 LDFLAGS_COMMON="-s -w -X main.version=$VERSION"
 export CGO_ENABLED=0
 
-echo "→ Building gmuxd…"
-(cd "$ROOT/services/gmuxd" && GOOS=linux GOARCH=arm64 go build -ldflags "$LDFLAGS_COMMON" -o "$BIN/gmuxd" ./cmd/gmuxd)
+for os in linux darwin; do
+  echo "→ Building gmuxd ($os/arm64)…"
+  (cd "$ROOT/services/gmuxd" && GOOS=$os GOARCH=arm64 go build -ldflags "$LDFLAGS_COMMON" -o "$BIN/gmuxd-$os-arm64" ./cmd/gmuxd)
 
-echo "→ Building gmux…"
-(cd "$ROOT/cli/gmux" && GOOS=linux GOARCH=arm64 go build -ldflags "$LDFLAGS_COMMON" -o "$BIN/gmux" ./cmd/gmux)
+  echo "→ Building gmux ($os/arm64)…"
+  (cd "$ROOT/cli/gmux" && GOOS=$os GOARCH=arm64 go build -ldflags "$LDFLAGS_COMMON" -o "$BIN/gmux-$os-arm64" ./cmd/gmux)
+done
 
 echo ""
-ls -lh "$BIN/gmuxd" "$BIN/gmux"
+ls -lh "$BIN"/gmuxd-* "$BIN"/gmux-*
 echo "✓ Build complete"

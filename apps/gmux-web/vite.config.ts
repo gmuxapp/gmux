@@ -56,6 +56,7 @@ function ghosttyWasm(): Plugin {
 }
 
 const gmuxdPort = process.env.VITE_DEV_PROXY_PORT || '8790'
+const gmuxdHost = process.env.VITE_DEV_PROXY_HOST || '127.0.0.1'
 
 const gitHash = (() => {
   try { return execSync('git rev-parse --short HEAD').toString().trim() } catch { return 'unknown' }
@@ -77,13 +78,13 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       '/v1': {
-        target: `http://127.0.0.1:${gmuxdPort}`,
+        target: `http://${gmuxdHost}:${gmuxdPort}`,
       },
       '/auth': {
-        target: `http://127.0.0.1:${gmuxdPort}`,
+        target: `http://${gmuxdHost}:${gmuxdPort}`,
       },
       '/ws': {
-        target: `http://127.0.0.1:${gmuxdPort}`,
+        target: `http://${gmuxdHost}:${gmuxdPort}`,
         ws: true,
       },
     },
