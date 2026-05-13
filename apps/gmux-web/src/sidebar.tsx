@@ -299,8 +299,13 @@ export function Sidebar({
   }
 
   // Find the current project's filesystem root for the file tree.
-  const currentFolder = curProjectSlug
-    ? foldersVal.find(f => f.path === curProjectSlug)
+  // Primary: the explicit project hub slug. Fallback: whichever folder owns
+  // the currently selected session (so the tree stays visible in terminal view).
+  const activeProjectSlug = curProjectSlug
+    ?? foldersVal.find(f => f.sessions.some(s => s.id === selId || s.slug === selId))?.path
+    ?? null
+  const currentFolder = activeProjectSlug
+    ? foldersVal.find(f => f.path === activeProjectSlug)
     : null
   const fileTreeCwd = currentFolder?.launchCwd ?? null
 
@@ -356,11 +361,11 @@ export function Sidebar({
             )}
           </div>
 
-          {/* ── File tree pane (only when a project with a filesystem path is open) ── */}
-          {curProjectSlug && fileTreeCwd && (
+          {/* ── File tree pane (when any project with a filesystem path is active) ── */}
+          {activeProjectSlug && fileTreeCwd && (
             <div class="sidebar-files-pane">
               <FileTree
-                projectSlug={curProjectSlug}
+                projectSlug={activeProjectSlug}
                 cwd={fileTreeCwd}
                 onMobileClose={onClose}
               />
