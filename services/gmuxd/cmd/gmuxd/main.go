@@ -663,6 +663,11 @@ func serve(stderr io.Writer) int {
 		if h, err := os.Hostname(); err == nil {
 			data["hostname"] = h
 		}
+		// Expose the home directory so the frontend can expand ~ in project
+		// path rules for client-side session matching.
+		if home, err := os.UserHomeDir(); err == nil {
+			data["home_dir"] = home
+		}
 		if tsListener != nil {
 			diag := tsListener.Diag()
 			if diag.FQDN != "" {
