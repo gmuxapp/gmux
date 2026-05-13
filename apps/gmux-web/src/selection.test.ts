@@ -8,13 +8,14 @@ import {
 /**
  * Build a fake terminal where each row has explicitly-written content
  * followed by never-written cells (the row's "pad"). The fake's
- * `translateToString` honors `trimRight` the same way xterm.js does: it
+ * `translateToString` honors `trimRight` the same way ghostty-web does: it
  * drops trailing never-written cells from the slice, but leaves
  * explicitly-typed spaces alone. This keeps the tests faithful to the
  * real cell-codepoint distinction the algorithm relies on.
  *
- * Selection coordinates use the same 0-based, half-open-on-x convention
- * as `Terminal.getSelectionPosition()`.
+ * Selection coordinates use ghostty-web's convention:
+ *   end.x is INCLUSIVE (the last selected column, 0-indexed).
+ * This matches `getSelectionPosition()` from ghostty-web's SelectionManager.
  */
 function makeTerm(opts: {
   cols: number
@@ -52,12 +53,14 @@ describe('selectionToText', () => {
   })
 
   it('drops trailing pad when selection crosses a line break', () => {
+    // ghostty-web end.x is inclusive. end=(3,1) selects 'echo' (cols 0-3) from
+    // line 1. The non-last row (line 0) must have its trailing pad stripped.
     const term = makeTerm({
       cols: 20,
       rows: ['echo 1', 'echo 2'],
-      selection: { start: { x: 0, y: 0 }, end: { x: 0, y: 1 } },
+      selection: { start: { x: 0, y: 0 }, end: { x: 3, y: 1 } },
     })
-    expect(selectionToText(term)).toBe('echo 1\n')
+    expect(selectionToText(term)).toBe('echo 1\necho')
   })
 
   it('preserves trailing pad when selection ends inside a row past content', () => {
@@ -67,21 +70,20 @@ describe('selectionToText', () => {
     const term = makeTerm({
       cols: 20,
       rows: ['echo 1'],
-      selection: { start: { x: 0, y: 0 }, end: { x: 9, y: 0 } },
+      selection: { start: { x: 0, y: 0 }, end: { x: 8, y: 0 } },
     })
     expect(selectionToText(term)).toBe('echo 1   ')
   })
 
-  it('trims pad on triple-click / line select (end.x === cols, single row)', () => {
-    // xterm's selectLineAt sets end.x = cols. We must treat that as
-    // "selection reached the row boundary" and drop the pad, otherwise
-    // every triple-click copies a wall of spaces. Regression test for the
-    // bug introduced when first trying the naive "preserve pad on last
-    // row" rule.
+  it('trims pad on triple-click / line select (end.x === cols-1, single row)', () => {
+    // ghostty-web full-row selection gives end.x === cols-1 (inclusive last
+    // column). After the +1 conversion ex === cols, triggering the boundary
+    // trim that drops trailing pad. Without this a TUI row copies as a wall
+    // of spaces.
     const term = makeTerm({
       cols: 20,
       rows: ['echo 1'],
-      selection: { start: { x: 0, y: 0 }, end: { x: 20, y: 0 } },
+      selection: { start: { x: 0, y: 0 }, end: { x: 19, y: 0 } },
     })
     expect(selectionToText(term)).toBe('echo 1')
   })
@@ -100,7 +102,7 @@ describe('selectionToText', () => {
     const term = makeTerm({
       cols: 20,
       rows: ['echo 1   ', 'echo 2'],
-      selection: { start: { x: 0, y: 0 }, end: { x: 6, y: 1 } },
+      selection: { start: { x: 0, y: 0 }, end: { x: 5, y: 1 } },
     })
     expect(selectionToText(term)).toBe('echo 1\necho 2')
   })
@@ -116,8 +118,8 @@ describe('selectionToText', () => {
       rows: [
         ' Hello! How can I help you today?                                               ',
       ],
-      // Triple-click / line-select on the row: end.x === cols.
-      selection: { start: { x: 0, y: 0 }, end: { x: 80, y: 0 } },
+      // ghostty-web inclusive: last col of 80-col row = 79.
+      selection: { start: { x: 0, y: 0 }, end: { x: 79, y: 0 } },
     })
     expect(selectionToText(term)).toBe(' Hello! How can I help you today?')
   })
@@ -130,7 +132,7 @@ describe('selectionToText', () => {
     const term = makeTerm({
       cols: 20,
       rows: ['echo 1   '],
-      selection: { start: { x: 0, y: 0 }, end: { x: 9, y: 0 } },
+      selection: { start: { x: 0, y: 0 }, end: { x: 8, y: 0 } },
     })
     expect(selectionToText(term)).toBe('echo 1   ')
   })
@@ -140,7 +142,8 @@ describe('selectionToText', () => {
       cols: 10,
       rows: ['sudo npm i', 'nstall expr'],
       wrapped: [1],
-      selection: { start: { x: 0, y: 0 }, end: { x: 10, y: 1 } },
+      // ghostty-web inclusive: last col of 10-col row = 9.
+      selection: { start: { x: 0, y: 0 }, end: { x: 9, y: 1 } },
     })
     // Row 1 is "nstall expr" truncated to cols=10 → "nstall exp"
     expect(selectionToText(term)).toBe('sudo npm install exp')
@@ -150,7 +153,8 @@ describe('selectionToText', () => {
     const term = makeTerm({
       cols: 10,
       rows: ['line a', '', 'line b'],
-      selection: { start: { x: 0, y: 0 }, end: { x: 6, y: 2 } },
+      // ghostty-web inclusive: 'line b' = 6 chars, last col = 5.
+      selection: { start: { x: 0, y: 0 }, end: { x: 5, y: 2 } },
     })
     expect(selectionToText(term)).toBe('line a\n\nline b')
   })
@@ -159,7 +163,8 @@ describe('selectionToText', () => {
     const term = makeTerm({
       cols: 20,
       rows: ['hello world', 'foo bar baz'],
-      selection: { start: { x: 6, y: 0 }, end: { x: 7, y: 1 } },
+      // ghostty-web inclusive: 'foo bar' = 7 chars, last col = 6.
+      selection: { start: { x: 6, y: 0 }, end: { x: 6, y: 1 } },
     })
     expect(selectionToText(term)).toBe('world\nfoo bar')
   })
@@ -168,7 +173,8 @@ describe('selectionToText', () => {
     const term = makeTerm({
       cols: 10,
       rows: ['only line'],
-      selection: { start: { x: 0, y: 0 }, end: { x: 9, y: 0 } },
+      // ghostty-web inclusive: 'only line' = 9 chars, last col = 8.
+      selection: { start: { x: 0, y: 0 }, end: { x: 8, y: 0 } },
     })
     expect(selectionToText(term)).toBe('only line')
   })
@@ -177,7 +183,8 @@ describe('selectionToText', () => {
     const term = makeTerm({
       cols: 20,
       rows: ['a', 'bb', 'ccc'],
-      selection: { start: { x: 0, y: 0 }, end: { x: 3, y: 2 } },
+      // ghostty-web inclusive: 'ccc' = 3 chars, last col = 2.
+      selection: { start: { x: 0, y: 0 }, end: { x: 2, y: 2 } },
     })
     expect(selectionToText(term)).toBe('a\nbb\nccc')
   })

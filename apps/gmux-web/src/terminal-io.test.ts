@@ -170,24 +170,32 @@ function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
     },
 
     /**
-     * Flush one pending write callback. Optionally simulate xterm adding
-     * lines (scrollback eviction) as part of the write processing.
+     * Flush one pending write callback.
+     *
+     * `linesAdded` simulates the terminal processing new output (scrollback
+     * eviction etc.) during the write.
+     *
+     * `ghosttyAutoScroll` simulates ghostty-web auto-scrolling to the bottom
+     * BEFORE the callback fires (ghostty does this inside write() itself).
+     * Set this for tests that model ghostty-web's scroll behaviour; the
+     * restore then runs synchronously inside the callback.
      */
-    flushOne(linesAdded = 0) {
+    flushOne(linesAdded = 0, ghosttyAutoScroll = false) {
       const cb = pending.shift()
       if (!cb) throw new Error('no pending write callback')
-      // Simulate xterm processing the write: adjust buffer state
+      // Simulate terminal processing the write: adjust buffer state
       if (linesAdded > 0) this.addLines(linesAdded)
+      // Simulate ghostty-web auto-scrolling to bottom before callback fires
+      if (ghosttyAutoScroll) this.userScrollToBottom()
       cb()
     },
 
     /**
-     * Run all queued rAF callbacks (our scroll restore runs here).
+     * Run all queued rAF callbacks.
      *
-     * Note: xterm's viewport catch-up after ESU does NOT change ydisp; it
-     * only updates the DOM scrollTop to reflect the existing ydisp (with
-     * _suppressOnScrollHandler to prevent feedback). So we don't simulate
-     * any ydisp snap here; the buffer state from flushOne is already final.
+     * With synchronous scroll restore there are no rAF callbacks to flush;
+     * this is kept so existing call sites compile and serve as documentation
+     * that the restore no longer needs a rAF.
      */
     flushRAF() {
       const queue = [...rafQueue]
@@ -668,9 +676,9 @@ describe('scroll preservation across BSU/ESU', () => {
     // missed redraws that grow baseY past its pre-frame value, falling
     // through to the else branch (line-based restore via adjustedY).
     //
-    // The crucial assumption modeled here — verified end-to-end by
+    // The crucial assumption modeled here - verified end-to-end by
     // the matching e2e test in `e2e/tests/terminal-scroll.spec.ts`
-    // ("BSU + clear-scrollback + redraw growing baseY") — is that
+    // ("BSU + clear-scrollback + redraw growing baseY") - is that
     // real xterm's `viewportY` post-parse is 0 when `\x1b[3J` resets
     // `ydisp` mid-frame and `isUserScrolling` is true. The harness
     // simulates that here with `userScrollTo(0)` after `addLines`.
@@ -796,30 +804,28 @@ describe('scroll preservation across BSU/ESU', () => {
     h.cleanup()
   })
 
-  it('respects user scrolling to bottom between write callback and rAF', () => {
+  it('user scrolling after BSU/ESU restore is honoured', () => {
+    // With synchronous restore there is no rAF window; the restore happens
+    // inside flushOne. Any scroll the user does after that is preserved.
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
     h.addLines(100)
     h.userScrollTo(50) // scrolled up
 
     h.io.enqueue(wrapBSU('output'), 1)
-    h.flushOne(5) // viewportY adjusted to 45
-
-    // User scrolls to bottom AFTER the write callback captured adjustedY=45
-    // but BEFORE the rAF fires.
-    h.userScrollToBottom()
-    expect(h.viewportY).toBe(h.baseY) // confirm at bottom
-
-    h.flushRAF()
-
-    // With the hybrid restore: rawViewportY=100=baseY triggers the formula
-    // path. prevBaseY=100, prevDistance=50, evictions cannot be detected when
-    // scrollback is at capacity (prevBaseY=baseY), so evictions=0 and
-    // adjustedY=(100-50)-0=50. The user lands at 50 (their pre-BSU line)
-    // rather than 45 (the xterm-eviction-adjusted line). Acceptable
-    // trade-off: this scenario (manual scroll to bottom in the microsecond
-    // write-callback→rAF window) is not reachable by a human.
+    h.flushOne(5, true) // ghosttyAutoScroll=true: auto-scroll before callback
+    // Restore fires synchronously: prevBaseY=100, prevDistance=50,
+    // evictions=0 → adjustedY=50 → viewportY=50
     expect(h.viewportY).toBe(50)
+
+    // User scrolls to bottom AFTER the restore.
+    h.userScrollToBottom()
+    expect(h.viewportY).toBe(h.baseY)
+
+    // flushRAF is a no-op.
+    h.flushRAF()
+    // User's scroll is preserved.
+    expect(h.viewportY).toBe(h.baseY)
     h.cleanup()
   })
 
@@ -829,7 +835,7 @@ describe('scroll preservation across BSU/ESU', () => {
     h.addLines(100) // at capacity, baseY=100
     h.userScrollTo(50)
 
-    // Simulate xterm's resize resetting viewportY to 0 (reflow side-effect).
+    // Simulate resize resetting viewportY to 0 (reflow side-effect).
     h.onResize = () => { h.userScrollTo(0) }
 
     // BSU in first chunk (no ESU yet)
@@ -838,63 +844,52 @@ describe('scroll preservation across BSU/ESU', () => {
     h.flushOne(3) // viewportY adjusted to 47
 
     // A resize arrives while queue is empty (between BSU and ESU).
-    // Without the fix, pump() would process it now, resetting viewportY
-    // to 0 before the ESU capture, corrupting adjustedY.
+    // pump() must defer it because savedScroll is set.
     h.io.requestResize({ cols: 80, rows: 20 }, 1)
 
     // The resize should NOT have been applied yet (savedScroll is set).
     expect(h.resizeCalls).toEqual([])
     expect(h.viewportY).toBe(47)
 
-    // ESU in second chunk
+    // ESU in second chunk: scroll restore happens synchronously in
+    // flushOne, then pump() applies the deferred resize immediately.
     const esuChunk = new Uint8Array([...enc('rest'), ...ESU])
     h.io.enqueue(esuChunk, 1)
-    h.flushOne(3) // viewportY adjusted to 44
-
-    // Still no resize (restoreRAF is now pending).
-    expect(h.resizeCalls).toEqual([])
-
-    // rAF: restores scroll to the correct position (44), then flushes
-    // the deferred resize. The resize side-effect changes viewportY after.
-    h.flushRAF()
+    h.flushOne(3) // viewportY adjusted to 44, restore fires, resize fires
 
     // Scroll restore targeted the correct line (44), not 0.
     expect(h.scrollToLineCalls).toContain(44)
-    // The resize was applied after scroll restore, not before.
+    // The resize was applied immediately after scroll restore (no rAF needed).
+    expect(h.resizeCalls).toEqual([{ cols: 80, rows: 20 }])
+
+    // flushRAF is a no-op - nothing queued.
+    h.flushRAF()
     expect(h.resizeCalls).toEqual([{ cols: 80, rows: 20 }])
 
     h.cleanup()
   })
 
-  it('defers resize between ESU write-callback and restore rAF', () => {
+  it('defers resize between ESU write-callback and restore (no rAF needed)', () => {
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
     h.addLines(100)
     h.userScrollTo(50)
 
-    // Simulate xterm's resize resetting viewportY to 0 (reflow side-effect).
+    // Simulate resize resetting viewportY to 0 (reflow side-effect).
     h.onResize = () => { h.userScrollTo(0) }
 
-    // Single chunk with BSU + content + ESU
+    // Single chunk with BSU + content + ESU: restore fires synchronously
+    // in the write callback, then pump() is called.
     h.io.enqueue(wrapBSU('output'), 1)
-    h.flushOne(5) // viewportY adjusted to 45
+    h.flushOne(5) // viewportY adjusted to 45, restore fires in callback
 
-    // Resize arrives after ESU write-callback but before rAF fires.
-    // Without the fix, pump() would process it now since the queue is
-    // empty and savedScroll was just cleared.
+    // At this point: savedScroll is null (cleared synchronously), scroll
+    // was already restored to 45. A resize now applies immediately.
     h.io.requestResize({ cols: 80, rows: 20 }, 1)
+    expect(h.resizeCalls).toEqual([{ cols: 80, rows: 20 }])
 
-    // The resize should NOT have been applied yet (restoreRAF pending).
-    expect(h.resizeCalls).toEqual([])
-    expect(h.viewportY).toBe(45)
-
-    // rAF restores scroll, then flushes the deferred resize.
+    // flushRAF is a no-op.
     h.flushRAF()
-
-    // Scroll was restored to 45 BEFORE resize ran. Resize then ran and
-    // reset viewportY to 0, but that's expected: the resize legitimately
-    // changes layout. The important thing is the scroll restore wasn't
-    // corrupted by a resize that snuck in before it could run.
     expect(h.resizeCalls).toEqual([{ cols: 80, rows: 20 }])
 
     h.cleanup()
@@ -987,29 +982,18 @@ describe('scroll preservation across BSU/ESU', () => {
   })
 
   it('ghostty-web: restores position when renderer auto-scrolls to bottom on write', () => {
-    // ghostty-web auto-scrolls viewportY to baseY on every write().
-    // The scroll accessor simulates this by setting viewportY = baseY
-    // inside the write callback (before our restore rAF runs).
+    // ghostty-web auto-scrolls viewportY to bottom on every write().
+    // ghosttyAutoScroll=true simulates this BEFORE the callback fires so
+    // rawViewportY >= baseY, triggering the arithmetic branch.  Restore
+    // fires synchronously - no rAF needed.
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
     h.addLines(50)          // baseY=50
     h.userScrollTo(20)      // scrolled up, distance=30
 
-    // Simulate ghostty-web: every write auto-scrolls to bottom.
-    // We do this by overriding scrollToBottom to also track the auto-scroll,
-    // and by manually scrolling to bottom in flushOne (before the rAF).
     h.io.enqueue(wrapBSU('streaming output'), 1)
-    h.flushOne(5)           // 5 lines added, no eviction; baseY=55
-
-    // Simulate ghostty-web auto-scroll: viewportY snapped to baseY after write
-    h.userScrollToBottom()
-
-    h.flushRAF()
-
-    // Unlike xterm where viewportY is reliably post-parse, ghostty auto-scroll
-    // means we must use prevBaseY - prevDistance to restore.
-    // prevBaseY=50, prevDistance=30, evictions=0 → adjustedY=20.
-    // Since baseY grew (55>50) and rawViewportY=55=baseY, fall back to formula.
+    h.flushOne(5, true)     // addLines(5), auto-scroll to bottom, callback fires
+    // prevBaseY=50, prevDistance=30, evictions=0 → adjustedY = (50-30)-0 = 20.
     expect(h.viewportY).toBe(20)
     h.cleanup()
   })
@@ -1017,37 +1001,29 @@ describe('scroll preservation across BSU/ESU', () => {
 
 describe('scroll preservation — rapid BSU/ESU frames (working-state snap)', () => {
   it('ghostty-web: rapid frames do not snap to bottom while user is scrolled up', () => {
-    // Reproduces the "working state" snap: pi streams many BSU/ESU frames
-    // faster than rAFs fire.  Between frame N’s ESU callback (which clears
-    // savedScroll and schedules restoreRAF) and the rAF firing, frame N+1’s
-    // BSU arrives.  maybeSaveScroll re-runs, but at this point ghostty has
-    // already auto-scrolled to bottom, so it records wasAtBottom=true.
-    // The fix: don’t clear savedScroll synchronously in maybeRestoreScroll;
-    // clear it inside the rAF callback instead.  Then maybeSaveScroll sees
-    // savedScroll≠null for frame N+1 and returns early, preserving the
-    // correct frame-N state.
+    // ghostty-web auto-scrolls before the callback on every write.
+    // With synchronous restore: frame 1's ESU fires, restores viewportY=80,
+    // clears savedScroll.  Frame 2's BSU then reads viewportY=80 (correct —
+    // not the auto-scrolled bottom), saves wasAtBottom=false, and its own
+    // ESU restore lands at the correct position too.
     const h = makeScrollHarness({ scrollbackLimit: 200, rows: 25 })
     h.io.reset(1)
     h.addLines(100)     // baseY=100
     h.userScrollTo(80)  // user reading line 80, distance=20
 
-    // Frame 1: BSU + content + ESU
+    // Frame 1: ghosttyAutoScroll simulates auto-scroll before callback
     h.io.enqueue(wrapBSU('frame-1-output'), 1)
-    h.flushOne(2)         // 2 lines added, no eviction; baseY=102
-    // Simulate ghostty auto-scroll after frame 1 write (before restoreRAF fires)
-    h.userScrollToBottom()
+    h.flushOne(2, true)   // addLines(2), auto-scroll, callback: restore → 80
+    expect(h.viewportY).toBe(80)  // restored synchronously
 
-    // Frame 2 arrives before restoreRAF fires (rapid frames).
-    // With the bug: maybeSaveScroll reads viewportY=baseY → wasAtBottom=true.
-    // With the fix: savedScroll is still set → maybeSaveScroll returns early.
+    // Frame 2: maybeSaveScroll reads viewportY=80 (correct, savedScroll was
+    // already cleared and viewportY is at the restored position).
     h.io.enqueue(wrapBSU('frame-2-output'), 1)
-    h.flushOne(2)         // baseY=104
-    h.userScrollToBottom()  // ghostty auto-scroll for frame 2
+    h.flushOne(2, true)   // addLines(2), auto-scroll, callback: restore → 80
 
-    // Fire ALL pending rAFs (frame 2’s restoreRAF should restore, not snap).
+    // No rAF needed; restore already happened.
     h.flushRAF()
 
-    // User should be restored to line 80, not bottom (104).
     expect(h.viewportY).toBe(80)
     h.cleanup()
   })
@@ -1058,15 +1034,13 @@ describe('scroll preservation — rapid BSU/ESU frames (working-state snap)', ()
     h.addLines(100)
     h.userScrollToBottom()  // user at bottom
 
-    // Frame 1
+    // Frame 1: auto-scroll is a no-op when already at bottom
     h.io.enqueue(wrapBSU('frame-1'), 1)
-    h.flushOne(2)
-    h.userScrollToBottom()  // ghostty auto-scroll (same as already-at-bottom)
+    h.flushOne(2, true)
 
     // Frame 2
     h.io.enqueue(wrapBSU('frame-2'), 1)
-    h.flushOne(2)
-    h.userScrollToBottom()
+    h.flushOne(2, true)
 
     h.flushRAF()
 

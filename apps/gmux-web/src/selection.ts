@@ -89,15 +89,17 @@ export function selectionToText(term: SelectionTerminal): string {
 
     const isLast = y === end.y
     const sx = y === start.y ? start.x : 0
-    const ex = isLast ? end.x : cols
 
-    // Trim trailing whitespace when the row's selection reaches the row
-    // boundary. Two end-coordinate conventions exist:
-    //   xterm.js:    end.x is exclusive — full-row select gives end.x === cols
-    //   ghostty-web: end.x is inclusive — full-row select gives end.x === cols-1
-    // Using `ex >= cols - 1` covers both (for non-last rows ex is always cols,
-    // which satisfies both conditions).
-    const trim = ex >= cols - 1
+    // ghostty-web's getSelectionPosition() returns end.x as an INCLUSIVE column
+    // index (the last selected column).  translateToString() uses an EXCLUSIVE
+    // endColumn (iterates `col < end`), so add 1 to convert.  Non-last rows
+    // always use `cols` which is already the correct exclusive bound.
+    const ex = isLast ? end.x + 1 : cols
+
+    // Trim trailing whitespace when the selection reaches the row boundary
+    // (i.e. the full row was selected).  With the +1 above, a full-row select
+    // gives ex === cols in both xterm and ghostty-web.
+    const trim = ex >= cols
     if (ex > sx) {
       const slice = line.translateToString(trim, sx, ex)
       out += trim ? slice.replace(/[ \t]+$/, '') : slice

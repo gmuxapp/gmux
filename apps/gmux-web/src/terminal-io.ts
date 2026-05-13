@@ -19,7 +19,7 @@ export interface ScrollAccessor {
    * `viewportY` is the buffer row at the top of the visible region;
    * `baseY` is the largest valid `viewportY` (ie at-bottom). The total
    * buffer occupies `[0, baseY + rows)` so that `getLine(y)` is
-   * meaningful across that whole range — anchor matching needs to
+   * meaningful across that whole range - anchor matching needs to
    * search the visible region too, not just scrollback, since a line
    * we saw pre-wipe can land in either area post-wipe.
    */
@@ -80,16 +80,16 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
   // of-turn redraw) tries three anchors in order, falling through on
   // each miss:
   //
-  //   1. prevAnchorLine — the visible text the user was reading. If the
+  //   1. prevAnchorLine - the visible text the user was reading. If the
   //      redraw still contains that line we know exactly where the user
   //      wants to be. Multiple matches are tiebroken by closeness to
   //      prevDistanceFromBottom, so common lines (eg "✓ done") still
   //      land somewhere reasonable.
-  //   2. prevDistanceFromBottom — if the new buffer has room, restore
+  //   2. prevDistanceFromBottom - if the new buffer has room, restore
   //      the user's pre-redraw distance from the bottom. Loses the
   //      identity of the line they were reading but keeps their intent
   //      ("N lines above the latest content").
-  //   3. scrollToBottom — nothing else is meaningful.
+  //   3. scrollToBottom - nothing else is meaningful.
   //
   // Why byte-presence of \x1b[3J rather than a baseY-shrink heuristic:
   // \x1b[3J resets ydisp/ybase to 0 mid-frame, breaking the line-
@@ -109,7 +109,6 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
   // chunk, intermediate chunks, and the ESU chunk. Cleared alongside
   // savedScroll. Only meaningful when savedScroll is non-null.
   let bufferReset = false
-  let restoreRAF: number | null = null
 
   // When true, the next BSU/ESU block will scroll to bottom unconditionally
   // instead of trying to preserve scroll position. Set during replay so the
@@ -164,16 +163,19 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
   }
 
   /**
-   * If this chunk contains ESU, schedule a scroll restore on the next
-   * animation frame. xterm defers its viewport sync during synchronized
-   * output, so we must restore AFTER that deferred sync runs.
+   * If this chunk contains ESU, restore the scroll position synchronously
+   * in the write callback.
    *
-   * We capture viewportY HERE (in the write callback, after xterm has parsed
-   * the data) rather than at BSU time. This is critical: xterm adjusts
-   * viewportY during parsing when scrollback lines are evicted, so the
-   * post-parse value correctly accounts for content that shifted out of the
-   * buffer. Using the pre-BSU value would restore a stale position, causing
-   * the viewport to drift as old lines are evicted.
+   * ghostty-web auto-scrolls to the bottom inside write() before the
+   * callback fires.  Deferring to requestAnimationFrame means one rendered
+   * frame at the wrong (bottom) position before we can correct it — the
+   * source of the visible flicker.  ghostty-web has no deferred viewport
+   * sync (unlike xterm), so restoring here (before the next render frame)
+   * eliminates the flicker entirely.
+   *
+   * We read viewportY here, after ghostty has auto-scrolled to the bottom
+   * (rawViewportY >= baseY).  The arithmetic branch computes the correct
+   * target from the saved pre-BSU distance, accounting for evictions.
    */
   const maybeRestoreScroll = (data: Uint8Array): void => {
     if (!scroll || !savedScroll) return
@@ -181,64 +183,47 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
 
     const snap = savedScroll
     const wasBufferReset = bufferReset
-    // Keep savedScroll set until the rAF fires.  If a new BSU frame arrives
-    // before the rAF (rapid pi output), maybeSaveScroll will see savedScroll
-    // as non-null, return early, and inherit the correct wasAtBottom=false
-    // state rather than reading ghostty’s already-auto-scrolled position.
+    savedScroll = null
     bufferReset = false
 
-    // Cancel any previous pending restore (e.g. nested BSU/ESU).
-    if (restoreRAF !== null) cancelAnimationFrame(restoreRAF)
+    const { viewportY: rawViewportY, baseY, rows } = scroll.getState()
 
-    restoreRAF = requestAnimationFrame(() => {
-      restoreRAF = null
-      savedScroll = null  // clear now that we’re actually restoring
-      const { viewportY: rawViewportY, baseY, rows } = scroll.getState()
-
-      if (snap.wasAtBottom) {
-        // User was at the bottom before the BSU block — stay there.
-        scroll.scrollToBottom()
-      } else if (wasBufferReset) {
-        // The block contained `\x1b[3J`. xterm reset ybase/ydisp to 0
-        // mid-parse, so adjustedY is unreliable: it can point at the top
-        // of a rebuilt buffer regardless of where the user actually was.
-        //
-        // We try three anchors in order, falling through on each miss
-        // (rationale on the savedScroll declaration above).
-        const anchorY = snap.prevAnchorLine !== null
-          ? findAnchorMatch(scroll, snap.prevAnchorLine, baseY, rows, snap.prevDistanceFromBottom)
-          : null
-        if (anchorY !== null) {
-          scroll.scrollToLine(anchorY)
-        } else if (snap.prevDistanceFromBottom <= baseY) {
-          scroll.scrollToLine(baseY - snap.prevDistanceFromBottom)
-        } else {
-          scroll.scrollToBottom()
-        }
+    if (snap.wasAtBottom) {
+      // User was at the bottom before the BSU block — stay there.
+      scroll.scrollToBottom()
+    } else if (wasBufferReset) {
+      // The block contained `\x1b[3J`. The scrollback was reset mid-parse;
+      // rawViewportY is unreliable (ghostty-web pinned it at bottom = 0).
+      // Try three anchors in order, falling through on each miss.
+      const anchorY = snap.prevAnchorLine !== null
+        ? findAnchorMatch(scroll, snap.prevAnchorLine, baseY, rows, snap.prevDistanceFromBottom)
+        : null
+      if (anchorY !== null) {
+        scroll.scrollToLine(anchorY)
+      } else if (snap.prevDistanceFromBottom <= baseY) {
+        scroll.scrollToLine(baseY - snap.prevDistanceFromBottom)
       } else {
-        // User was scrolled up; plain streaming (no \x1b[3J]).
-        //
-        // Two strategies for the restore target:
-        //  rawViewportY < baseY  → renderer preserved the post-parse position
-        //    (xterm); use it directly, already accounts for evictions.
-        //  rawViewportY >= baseY → renderer auto-scrolled to bottom on write
-        //    (ghostty-web); use arithmetic instead:
-        //      prevAbsY  = prevBaseY - prevDistance
-        //      evictions = max(0, prevBaseY - baseY)
-        //      adjustedY = max(0, prevAbsY - evictions)
-        let adjustedY: number
-        if (rawViewportY < baseY) {
-          adjustedY = rawViewportY
-        } else {
-          const evictions = Math.max(0, snap.prevBaseY - baseY)
-          adjustedY = Math.max(0, (snap.prevBaseY - snap.prevDistanceFromBottom) - evictions)
-        }
-        scroll.scrollToLine(Math.min(adjustedY, baseY))
+        scroll.scrollToBottom()
       }
-      // Flush any resize that was deferred while the BSU/ESU block or
-      // restore rAF was in progress.
-      pump()
-    })
+    } else {
+      // User was scrolled up; plain streaming (no \x1b[3J]).
+      //
+      // rawViewportY < baseY  → renderer preserved the post-parse position;
+      //                         use it directly (eviction-adjusted).
+      // rawViewportY >= baseY → ghostty-web auto-scrolled to bottom;
+      //                         use arithmetic to recover the target:
+      //   adjustedY = (prevBaseY - prevDistance) - evictions
+      let adjustedY: number
+      if (rawViewportY < baseY) {
+        adjustedY = rawViewportY
+      } else {
+        const evictions = Math.max(0, snap.prevBaseY - baseY)
+        adjustedY = Math.max(0, (snap.prevBaseY - snap.prevDistanceFromBottom) - evictions)
+      }
+      scroll.scrollToLine(Math.min(adjustedY, baseY))
+    }
+    // Flush any resize that was deferred while the BSU/ESU block was open.
+    pump()
   }
 
   const pump = () => {
@@ -259,16 +244,12 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
       return
     }
 
-    // Defer resize while a BSU/ESU block is in progress (savedScroll set)
-    // or a scroll-restore rAF is pending. A resize between BSU and ESU
-    // (when they arrive in separate WebSocket messages) would change
-    // viewportY, causing the ESU restore to capture a post-resize position
-    // instead of the user's actual scroll position. Similarly, a resize
-    // between the ESU write-callback and the restore rAF would invalidate
-    // the captured adjustedY. The deferred resize is flushed from the rAF
-    // callback after scroll is restored.
+    // Defer resize while a BSU/ESU block is in progress (savedScroll set).
+    // A resize between BSU and ESU would change viewportY, corrupting the
+    // ESU restore's target. After ESU the restore runs synchronously and
+    // clears savedScroll, so any resize enqueued after that fires here.
     if (pendingResize && pendingResize.epoch === currentEpoch
-        && !savedScroll && restoreRAF === null) {
+        && !savedScroll) {
       const { cols, rows } = pendingResize
       pendingResize = null
       term.resize(cols, rows)
@@ -284,10 +265,6 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
       savedScroll = null
       bufferReset = false
       forceScrollToBottom = false
-      if (restoreRAF !== null) {
-        cancelAnimationFrame(restoreRAF)
-        restoreRAF = null
-      }
     },
 
     forceNextScrollToBottom() {
