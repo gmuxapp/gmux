@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run --passWithNoTests",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "dev:sandbox": "VITE_MOCK=${VITE_MOCK:-0} bash ../../scripts/sandbox-dev.sh"
   },
   "dependencies": {
     "@fontsource/fira-code": "^5.2.7",
