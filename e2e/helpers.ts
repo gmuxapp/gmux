@@ -16,11 +16,40 @@ export async function apiGet<T = unknown>(urlPath: string): Promise<{ status: nu
   const resp = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
-  // 404 bodies aren't JSON; tolerate that.
   let body: T = undefined as unknown as T
   try {
     body = await resp.json() as T
   } catch { /* non-JSON, leave body undefined */ }
+  return { status: resp.status, body }
+}
+
+export async function apiPost<T = unknown>(urlPath: string, payload?: unknown): Promise<{ status: number; body: T }> {
+  const port = process.env.GMUXD_TEST_PORT
+  const token = process.env.GMUX_TEST_TOKEN
+  if (!port) throw new Error('GMUXD_TEST_PORT not set; global-setup did not run')
+  if (!token) throw new Error('GMUX_TEST_TOKEN not set; global-setup did not run')
+  const resp = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: payload !== undefined ? JSON.stringify(payload) : undefined,
+  })
+  let body: T = undefined as unknown as T
+  try { body = await resp.json() as T } catch { /* non-JSON */ }
+  return { status: resp.status, body }
+}
+
+export async function apiDelete<T = unknown>(urlPath: string, payload?: unknown): Promise<{ status: number; body: T }> {
+  const port = process.env.GMUXD_TEST_PORT
+  const token = process.env.GMUX_TEST_TOKEN
+  if (!port) throw new Error('GMUXD_TEST_PORT not set; global-setup did not run')
+  if (!token) throw new Error('GMUX_TEST_TOKEN not set; global-setup did not run')
+  const resp = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: payload !== undefined ? JSON.stringify(payload) : undefined,
+  })
+  let body: T = undefined as unknown as T
+  try { body = await resp.json() as T } catch { /* non-JSON */ }
   return { status: resp.status, body }
 }
 

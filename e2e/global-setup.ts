@@ -231,4 +231,5 @@ export default async function globalSetup(_config: FullConfig) {
   // session files. fakeHome is the daemon's HOME, so adapters resolve
   // their roots under it.
   process.env.GMUX_TEST_HOME = fakeHome
+  process.env.GMUX_TEST_WORKSPACE = workspaceDir
 }
