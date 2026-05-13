@@ -34,12 +34,32 @@ VERSION="${VERSION:-dev}"
 LDFLAGS_COMMON="-s -w -X main.version=$VERSION"
 export CGO_ENABLED=0
 
-echo "→ Building gmuxd…"
-(cd "$ROOT/services/gmuxd" && go build -ldflags "$LDFLAGS_COMMON" -o "$BIN/gmuxd" ./cmd/gmuxd)
+HOST_GOOS=$(go env GOOS)
+HOST_GOARCH=$(go env GOARCH)
 
-echo "→ Building gmux…"
-(cd "$ROOT/cli/gmux" && go build -ldflags "$LDFLAGS_COMMON" -o "$BIN/gmux" ./cmd/gmux)
+build_pair() {
+  local goos=$1 goarch=$2
+  local suffix="${goos}-${goarch}"
+  echo "→ Building gmuxd (${suffix})…"
+  (cd "$ROOT/services/gmuxd" && GOOS=$goos GOARCH=$goarch go build -ldflags "$LDFLAGS_COMMON" -o "$BIN/gmuxd-${suffix}" ./cmd/gmuxd)
+  echo "→ Building gmux (${suffix})…"
+  (cd "$ROOT/cli/gmux" && GOOS=$goos GOARCH=$goarch go build -ldflags "$LDFLAGS_COMMON" -o "$BIN/gmux-${suffix}" ./cmd/gmux)
+}
+
+# Always build host arch
+build_pair "$HOST_GOOS" "$HOST_GOARCH"
+
+# Cross-compile for the other common target (linux↔darwin, arm64 only)
+if [ "$HOST_GOOS" = "linux" ] && [ "$HOST_GOARCH" = "arm64" ]; then
+  build_pair darwin arm64
+elif [ "$HOST_GOOS" = "darwin" ] && [ "$HOST_GOARCH" = "arm64" ]; then
+  build_pair linux arm64
+fi
+
+# Symlink host binaries to the bare names for local use
+ln -sf "gmuxd-${HOST_GOOS}-${HOST_GOARCH}" "$BIN/gmuxd"
+ln -sf "gmux-${HOST_GOOS}-${HOST_GOARCH}"  "$BIN/gmux"
 
 echo ""
-ls -lh "$BIN/gmuxd" "$BIN/gmux"
+ls -lh "$BIN/gmuxd-"* "$BIN/gmux-"*
 echo "✓ Build complete"
