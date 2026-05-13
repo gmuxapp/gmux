@@ -429,6 +429,15 @@ func startBackground(stdout, stderr io.Writer) int {
 }
 
 func serve(stderr io.Writer) int {
+	// ── Load config (needed before handler registration) ──
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
+	if err := cfg.ResolveTokens(); err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
+
 	gmuxBin := resolveGmux() // resolve once, use everywhere
 	if gmuxBin != "" {
 		log.Printf("gmux: %s", gmuxBin)
@@ -1850,7 +1859,7 @@ func serve(stderr io.Writer) int {
 			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
 			return
 		}
-		opener := fileOpenerFor(req.Path)
+		opener := fileOpenerFor(req.Path, cfg.FileOpeners)
 		if gmuxBin == "" {
 			writeError(w, http.StatusInternalServerError, "gmux_not_found", "gmux not found")
 			return
@@ -1866,16 +1875,6 @@ func serve(stderr io.Writer) int {
 	// ── Embedded frontend (SPA fallback) ──
 
 	mux.Handle("/", spaHandler())
-
-	// ── Load config ──
-
-	cfg, err := config.Load()
-	if err != nil {
-		log.Fatalf("FATAL: %v", err)
-	}
-	if err := cfg.ResolveTokens(); err != nil {
-		log.Fatalf("FATAL: %v", err)
-	}
 
 	// ── Resolve TCP listen address and auth token ──
 
@@ -2465,20 +2464,17 @@ func fsGuardPath(root, rel string) (string, error) {
 
 // fsListDir reads a directory and returns sorted entries (dirs first).
 // fileOpenerFor returns the program to use for opening a file by extension.
-//   - .md / .MD  → glow (markdown renderer)
-//   - image types → chafa (terminal image viewer)
-//   - everything else → hx (helix editor)
-func fileOpenerFor(path string) string {
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".md":
-		return "glow"
-	case ".png", ".jpg", ".jpeg", ".gif", ".webp",
-		".bmp", ".svg", ".tiff", ".tif", ".ico", ".avif":
-		return "chafa"
-	default:
-		return "hx"
+// Extension lookup is case-insensitive and strips the leading dot.
+// Falls back to cfg.Default ("hx" unless overridden) for unknown extensions.
+func fileOpenerFor(path string, cfg config.FileOpenersConfig) string {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+	if prog, ok := cfg.Extensions[ext]; ok {
+		return prog
 	}
+	if cfg.Default != "" {
+		return cfg.Default
+	}
+	return "hx"
 }
 
 func fsListDir(dir string) ([]fsEntry, error) {

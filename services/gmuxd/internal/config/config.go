@@ -22,6 +22,52 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// FileOpenersConfig controls which program is used to open files from
+// the sidebar file tree. Extensions are matched case-insensitively without
+// the leading dot (e.g. "md", "png"). Unknown extensions fall back to Default.
+//
+// Example host.toml:
+//
+//	[file_openers]
+//	default = "hx"
+//
+//	[file_openers.extensions]
+//	md  = "glow"
+//	png = "chafa"
+//	rs  = "nano"
+type FileOpenersConfig struct {
+	// Default is the fallback program for extensions not in Extensions.
+	// Defaults to "hx" (helix).
+	Default string `toml:"default"`
+
+	// Extensions maps lowercase extension (without dot) to program name.
+	// Decoded as a map so any extension key is accepted without triggering
+	// the unknown-key validation.
+	Extensions map[string]string `toml:"extensions"`
+}
+
+// DefaultFileOpeners returns the built-in extension→program map.
+// user config is merged on top of these defaults at load time.
+func DefaultFileOpeners() FileOpenersConfig {
+	return FileOpenersConfig{
+		Default: "hx",
+		Extensions: map[string]string{
+			"md":   "glow",
+			"png":  "chafa",
+			"jpg":  "chafa",
+			"jpeg": "chafa",
+			"gif":  "chafa",
+			"webp": "chafa",
+			"bmp":  "chafa",
+			"svg":  "chafa",
+			"tiff": "chafa",
+			"tif":  "chafa",
+			"ico":  "chafa",
+			"avif": "chafa",
+		},
+	}
+}
+
 // Config is the top-level gmuxd configuration.
 type Config struct {
 	// Port is the TCP port for the HTTP listener (default 8790).
@@ -29,6 +75,9 @@ type Config struct {
 
 	Tailscale TailscaleConfig `toml:"tailscale"`
 	Discovery DiscoveryConfig `toml:"discovery"`
+
+	// FileOpeners controls which program opens each file type from the sidebar.
+	FileOpeners FileOpenersConfig `toml:"file_openers"`
 
 	// Peers is the list of remote gmuxd instances to aggregate sessions from.
 	Peers []PeerConfig `toml:"peers"`
@@ -269,6 +318,7 @@ func defaults() Config {
 			Devcontainers: true,
 			Tailscale:     true,
 		},
+		FileOpeners: DefaultFileOpeners(),
 	}
 }
 

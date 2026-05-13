@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 )
 
@@ -594,6 +595,7 @@ func TestFsListDir(t *testing.T) {
 }
 
 func TestFileOpenerFor(t *testing.T) {
+	cfg := config.DefaultFileOpeners()
 	cases := []struct {
 		path string
 		want string
@@ -622,9 +624,45 @@ func TestFileOpenerFor(t *testing.T) {
 		{"no_extension", "hx"},
 	}
 	for _, tc := range cases {
-		got := fileOpenerFor(tc.path)
+		got := fileOpenerFor(tc.path, cfg)
 		if got != tc.want {
 			t.Errorf("fileOpenerFor(%q) = %q, want %q", tc.path, got, tc.want)
 		}
+	}
+}
+
+func TestFileOpenerForWithConfig(t *testing.T) {
+	defaultCfg := config.DefaultFileOpeners()
+
+	// Default behaviour preserved.
+	if got := fileOpenerFor("README.md", defaultCfg); got != "glow" {
+		t.Errorf("md default: got %q, want glow", got)
+	}
+	if got := fileOpenerFor("photo.png", defaultCfg); got != "chafa" {
+		t.Errorf("png default: got %q, want chafa", got)
+	}
+	if got := fileOpenerFor("main.go", defaultCfg); got != "hx" {
+		t.Errorf("go default: got %q, want hx", got)
+	}
+
+	// User overrides a single extension.
+	custom := defaultCfg
+	custom.Extensions = make(map[string]string)
+	for k, v := range defaultCfg.Extensions {
+		custom.Extensions[k] = v
+	}
+	custom.Extensions["go"] = "nano"
+	if got := fileOpenerFor("main.go", custom); got != "nano" {
+		t.Errorf("go override: got %q, want nano", got)
+	}
+	// Other defaults still intact.
+	if got := fileOpenerFor("README.md", custom); got != "glow" {
+		t.Errorf("md after override: got %q, want glow", got)
+	}
+
+	// User changes the default fallback.
+	custom.Default = "vim"
+	if got := fileOpenerFor("unknown.xyz", custom); got != "vim" {
+		t.Errorf("custom default: got %q, want vim", got)
 	}
 }
