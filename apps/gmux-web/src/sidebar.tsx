@@ -17,6 +17,7 @@ import {
 } from './store'
 import { useInstallPrompt } from './use-install-prompt'
 import { PeerLabel } from './peer-label'
+import { FileTree } from './file-tree'
 import type { Session, Folder, ProjectItem } from './types'
 
 // ── Types ──
@@ -297,6 +298,12 @@ export function Sidebar({
     }
   }
 
+  // Find the current project's filesystem root for the file tree.
+  const currentFolder = curProjectSlug
+    ? foldersVal.find(f => f.path === curProjectSlug)
+    : null
+  const fileTreeCwd = currentFolder?.launchCwd ?? null
+
   return (
     <>
       <div class={`sidebar-overlay ${open ? 'visible' : ''}`} onClick={onClose} />
@@ -315,34 +322,48 @@ export function Sidebar({
             />
           )}
         </div>
-        <div class="sidebar-scroll">
-          {foldersVal.map(f => {
-            const proj = projectBySlug.get(f.path)
-            if (!proj) return null
-            return (
-              <FolderGroup
-                key={f.path}
-                folder={f}
-                project={proj}
-                selId={selId}
-                curProjectSlug={curProjectSlug}
-                resumingId={resumingId}
-                am={am}
-                onCloseSession={onCloseSession}
-                onClick={onClose}
+        <div class="sidebar-panes">
+          {/* ── Sessions pane ── */}
+          <div class="sidebar-sessions-pane">
+            {foldersVal.map(f => {
+              const proj = projectBySlug.get(f.path)
+              if (!proj) return null
+              return (
+                <FolderGroup
+                  key={f.path}
+                  folder={f}
+                  project={proj}
+                  selId={selId}
+                  curProjectSlug={curProjectSlug}
+                  resumingId={resumingId}
+                  am={am}
+                  onCloseSession={onCloseSession}
+                  onClick={onClose}
+                />
+              )
+            })}
+            {connected && totalVisible === 0 && !hasProjects && (
+              <div class="sidebar-hint">
+                Click <strong>+</strong> to start your first session.
+              </div>
+            )}
+            {connected && isOnlyHomeProject && totalVisible > 0 && (
+              <div class="sidebar-hint">
+                <button class="sidebar-hint-link" onClick={onManageProjects}>
+                  Manage projects
+                </button> to organize sessions by repo.
+              </div>
+            )}
+          </div>
+
+          {/* ── File tree pane (only when a project with a filesystem path is open) ── */}
+          {curProjectSlug && fileTreeCwd && (
+            <div class="sidebar-files-pane">
+              <FileTree
+                projectSlug={curProjectSlug}
+                cwd={fileTreeCwd}
+                onMobileClose={onClose}
               />
-            )
-          })}
-          {connected && totalVisible === 0 && !hasProjects && (
-            <div class="sidebar-hint">
-              Click <strong>+</strong> to start your first session.
-            </div>
-          )}
-          {connected && isOnlyHomeProject && totalVisible > 0 && (
-            <div class="sidebar-hint">
-              <button class="sidebar-hint-link" onClick={onManageProjects}>
-                Manage projects
-              </button> to organize sessions by repo.
             </div>
           )}
         </div>

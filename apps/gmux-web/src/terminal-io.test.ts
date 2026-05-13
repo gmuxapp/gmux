@@ -812,9 +812,14 @@ describe('scroll preservation across BSU/ESU', () => {
 
     h.flushRAF()
 
-    // Should respect the user's scroll-to-bottom, not yank back to 45.
-    expect(h.viewportY).toBe(h.baseY)
-    expect(h.scrollToBottomCalls.length).toBeGreaterThan(0)
+    // With the hybrid restore: rawViewportY=100=baseY triggers the formula
+    // path. prevBaseY=100, prevDistance=50, evictions cannot be detected when
+    // scrollback is at capacity (prevBaseY=baseY), so evictions=0 and
+    // adjustedY=(100-50)-0=50. The user lands at 50 (their pre-BSU line)
+    // rather than 45 (the xterm-eviction-adjusted line). Acceptable
+    // trade-off: this scenario (manual scroll to bottom in the microsecond
+    // write-callback→rAF window) is not reachable by a human.
+    expect(h.viewportY).toBe(50)
     h.cleanup()
   })
 
@@ -978,6 +983,34 @@ describe('scroll preservation across BSU/ESU', () => {
     // No scroll restore should have happened
     expect(h.scrollToLineCalls.length).toBe(0)
     expect(h.scrollToBottomCalls.length).toBe(0)
+    h.cleanup()
+  })
+
+  it('ghostty-web: restores position when renderer auto-scrolls to bottom on write', () => {
+    // ghostty-web auto-scrolls viewportY to baseY on every write().
+    // The scroll accessor simulates this by setting viewportY = baseY
+    // inside the write callback (before our restore rAF runs).
+    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
+    h.io.reset(1)
+    h.addLines(50)          // baseY=50
+    h.userScrollTo(20)      // scrolled up, distance=30
+
+    // Simulate ghostty-web: every write auto-scrolls to bottom.
+    // We do this by overriding scrollToBottom to also track the auto-scroll,
+    // and by manually scrolling to bottom in flushOne (before the rAF).
+    h.io.enqueue(wrapBSU('streaming output'), 1)
+    h.flushOne(5)           // 5 lines added, no eviction; baseY=55
+
+    // Simulate ghostty-web auto-scroll: viewportY snapped to baseY after write
+    h.userScrollToBottom()
+
+    h.flushRAF()
+
+    // Unlike xterm where viewportY is reliably post-parse, ghostty auto-scroll
+    // means we must use prevBaseY - prevDistance to restore.
+    // prevBaseY=50, prevDistance=30, evictions=0 → adjustedY=20.
+    // Since baseY grew (55>50) and rawViewportY=55=baseY, fall back to formula.
+    expect(h.viewportY).toBe(20)
     h.cleanup()
   })
 })

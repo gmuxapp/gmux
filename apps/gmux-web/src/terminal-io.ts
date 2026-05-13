@@ -101,6 +101,7 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
   // block). Detecting the cause directly catches both shapes.
   let savedScroll: {
     wasAtBottom: boolean
+    prevBaseY: number
     prevDistanceFromBottom: number
     prevAnchorLine: string | null
   } | null = null
@@ -133,20 +134,17 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
       if (forceScrollToBottom) {
         savedScroll = {
           wasAtBottom: true,
+          prevBaseY: baseY,
           prevDistanceFromBottom: 0,
           prevAnchorLine: null,
         }
         forceScrollToBottom = false
       } else {
-        // Strict equality: only consider the user "at bottom" if the
-        // viewport is exactly at the end. A loose threshold (e.g. <= 3)
-        // would fight the user's scroll intent during rapid TUI redraws.
         const wasAtBottom = viewportY >= baseY
         savedScroll = {
           wasAtBottom,
+          prevBaseY: baseY,
           prevDistanceFromBottom: distance,
-          // Only capture the anchor when scrolled up: at-bottom always
-          // wants scrollToBottom and never reaches the search.
           prevAnchorLine: wasAtBottom ? null : scroll.getLine(viewportY),
         }
       }
@@ -186,20 +184,15 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
     savedScroll = null
     bufferReset = false
 
-    // Capture the adjusted viewportY now, after xterm has processed the
-    // data (including any scrollback evictions) but before the deferred
-    // viewport DOM sync runs.
-    const { viewportY: adjustedY } = scroll.getState()
-
     // Cancel any previous pending restore (e.g. nested BSU/ESU).
     if (restoreRAF !== null) cancelAnimationFrame(restoreRAF)
 
     restoreRAF = requestAnimationFrame(() => {
       restoreRAF = null
-      const { viewportY, baseY, rows } = scroll.getState()
-      if (snap.wasAtBottom || viewportY >= baseY) {
-        // Was at bottom before BSU, or user/code scrolled to bottom during
-        // the BSU block — stay there.
+      const { viewportY: rawViewportY, baseY, rows } = scroll.getState()
+
+      if (snap.wasAtBottom) {
+        // User was at the bottom before the BSU block — stay there.
         scroll.scrollToBottom()
       } else if (wasBufferReset) {
         // The block contained `\x1b[3J`. xterm reset ybase/ydisp to 0
@@ -219,12 +212,23 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
           scroll.scrollToBottom()
         }
       } else {
-        // User was scrolled up and the block was a plain streaming
-        // update (no \x1b[3J). Restore the post-parse position, clamped
-        // to the current buffer range. adjustedY (captured after xterm
-        // processed the data) already accounts for scrollback evictions,
-        // so the user's specific line stays visible — what `tail -f`
-        // and other append-only streams need.
+        // User was scrolled up; plain streaming (no \x1b[3J]).
+        //
+        // Two strategies for the restore target:
+        //  rawViewportY < baseY  → renderer preserved the post-parse position
+        //    (xterm); use it directly, already accounts for evictions.
+        //  rawViewportY >= baseY → renderer auto-scrolled to bottom on write
+        //    (ghostty-web); use arithmetic instead:
+        //      prevAbsY  = prevBaseY - prevDistance
+        //      evictions = max(0, prevBaseY - baseY)
+        //      adjustedY = max(0, prevAbsY - evictions)
+        let adjustedY: number
+        if (rawViewportY < baseY) {
+          adjustedY = rawViewportY
+        } else {
+          const evictions = Math.max(0, snap.prevBaseY - baseY)
+          adjustedY = Math.max(0, (snap.prevBaseY - snap.prevDistanceFromBottom) - evictions)
+        }
         scroll.scrollToLine(Math.min(adjustedY, baseY))
       }
       // Flush any resize that was deferred while the BSU/ESU block or
