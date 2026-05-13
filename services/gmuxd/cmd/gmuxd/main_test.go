@@ -592,3 +592,39 @@ func TestFsListDir(t *testing.T) {
 		t.Errorf("entries[2] = %+v, want file b_file.txt", entries[2])
 	}
 }
+
+func TestFileOpenerFor(t *testing.T) {
+	cases := []struct {
+		path string
+		want string
+	}{
+		// markdown
+		{"README.md", "glow"},
+		{"docs/NOTES.MD", "glow"},
+		// images
+		{"photo.png", "chafa"},
+		{"photo.PNG", "chafa"},
+		{"banner.jpg", "chafa"},
+		{"banner.jpeg", "chafa"},
+		{"anim.gif", "chafa"},
+		{"preview.webp", "chafa"},
+		{"icon.bmp", "chafa"},
+		{"logo.svg", "chafa"},
+		{"scan.tiff", "chafa"},
+		{"scan.tif", "chafa"},
+		{"favicon.ico", "chafa"},
+		{"pic.avif", "chafa"},
+		// everything else → helix
+		{"main.go", "hx"},
+		{"config.toml", "hx"},
+		{"script.sh", "hx"},
+		{"data.json", "hx"},
+		{"no_extension", "hx"},
+	}
+	for _, tc := range cases {
+		got := fileOpenerFor(tc.path)
+		if got != tc.want {
+			t.Errorf("fileOpenerFor(%q) = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}

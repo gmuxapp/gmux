@@ -1830,7 +1830,7 @@ func serve(stderr io.Writer) int {
 		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"written": written}})
 	})
 
-	// POST /v1/fs/{slug}/open — open a file in $VISUAL / $EDITOR / vi.
+	// POST /v1/fs/{slug}/open — open a file using a program chosen by extension.
 	mux.HandleFunc("POST /v1/fs/{slug}/open", func(w http.ResponseWriter, r *http.Request) {
 		slug := r.PathValue("slug")
 		root, err := resolveFSProjectRoot(slug)
@@ -1850,18 +1850,12 @@ func serve(stderr io.Writer) int {
 			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
 			return
 		}
-		editor := os.Getenv("VISUAL")
-		if editor == "" {
-			editor = os.Getenv("EDITOR")
-		}
-		if editor == "" {
-			editor = "vi"
-		}
+		opener := fileOpenerFor(req.Path)
 		if gmuxBin == "" {
 			writeError(w, http.StatusInternalServerError, "gmux_not_found", "gmux not found")
 			return
 		}
-		pid, err := launchGmux(gmuxBin, []string{editor, filePath}, root, "")
+		pid, err := launchGmux(gmuxBin, []string{opener, filePath}, root, "")
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
 			return
@@ -2470,6 +2464,23 @@ func fsGuardPath(root, rel string) (string, error) {
 }
 
 // fsListDir reads a directory and returns sorted entries (dirs first).
+// fileOpenerFor returns the program to use for opening a file by extension.
+//   - .md / .MD  → glow (markdown renderer)
+//   - image types → chafa (terminal image viewer)
+//   - everything else → hx (helix editor)
+func fileOpenerFor(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".md":
+		return "glow"
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp",
+		".bmp", ".svg", ".tiff", ".tif", ".ico", ".avif":
+		return "chafa"
+	default:
+		return "hx"
+	}
+}
+
 func fsListDir(dir string) ([]fsEntry, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

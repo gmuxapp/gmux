@@ -15,6 +15,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
+import { markPendingLaunch } from './store'
 
 // ── Types ──
 
@@ -109,6 +110,7 @@ async function apiDelete(slug: string, path: string, recursive: boolean): Promis
 }
 
 async function apiOpen(slug: string, path: string): Promise<void> {
+  markPendingLaunch()
   const resp = await apiFetch('POST', `/v1/fs/${encodeURIComponent(slug)}/open`, { path })
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'open failed')
 }

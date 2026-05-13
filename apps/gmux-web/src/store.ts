@@ -502,6 +502,13 @@ export function restartSession(sessionId: string): Promise<void> {
 
 let _pendingLaunchAt = 0
 
+/** Mark that a session launch is in flight so the next session-upsert SSE
+ *  event auto-navigates to the new session. Call this before any action that
+ *  will cause a new session to appear (e.g. opening a file from the tree). */
+export function markPendingLaunch(): void {
+  _pendingLaunchAt = Date.now()
+}
+
 export async function launchSession(launcherId: string, opts?: { cwd?: string; peer?: string }): Promise<void> {
   _pendingLaunchAt = Date.now()
   try {
