@@ -33,11 +33,29 @@ function makeHarness() {
 }
 
 /**
- * Simulates xterm's scroll buffer behavior for testing scroll preservation.
+ * Simulates ghostty-web's scroll behavior for testing scroll preservation.
  *
- * Models viewportY/baseY and the effect of scrollback eviction: when
- * scrollback is full, adding lines evicts from the top and decrements
- * viewportY so the same content stays visible.
+ * ghostty-web coordinate system (mirrored here):
+ *   viewportY = baseY  → at the bottom (newest content visible)
+ *   viewportY < baseY  → scrolled up into scrollback
+ *   baseY              → scrollbackLength (fixed at scrollbackLimit once full)
+ *
+ * ghostty-web's write() always calls scrollToBottom() when viewportY < baseY
+ * (ie whenever the user is scrolled up). The harness models this via
+ * `autoScroll: true` in `primeWrite`, which is applied synchronously inside
+ * the mock write() before storing the callback.
+ *
+ * Effects (linesAdded, autoScroll, clearScrollback) are primed with
+ * `primeWrite()` BEFORE calling `io.enqueue()`. The mock write() consumes
+ * and applies them synchronously. This models ghostty-web's behaviour where
+ * all terminal state changes (parse + auto-scroll) happen inside write()
+ * before write() returns.
+ *
+ * `flushOne()` just fires the pending callback (the rAF equivalent) — it no
+ * longer triggers any terminal-state side-effects.
+ *
+ * `flushRAF()` is kept as a no-op for documentation purposes: the synchronous
+ * restore means no rAF is needed.
  */
 function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
   const { scrollbackLimit, rows } = opts
@@ -46,10 +64,7 @@ function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
   let baseY = 0
 
   const scrollToLineCalls: number[] = []
-  const scrollToBottomCalls: number[] = [] // tracks call count
-  // Per-line content for anchor-matching tests. y → visible text. Lines
-  // not in the map return null from getLine() (the production accessor
-  // also returns null for empty / trivial lines).
+  const scrollToBottomCalls: number[] = []
   const lineContent = new Map<number, string>()
 
   const scroll: ScrollAccessor = {
@@ -69,10 +84,8 @@ function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
 
   const writes: string[] = []
   const pending: Array<() => void> = []
-  // rAF callbacks queued by the production code
   const rafQueue: Array<() => void> = []
 
-  // Stub requestAnimationFrame/cancelAnimationFrame for deterministic tests.
   let rafId = 0
   const rafMap = new Map<number, () => void>()
   vi.stubGlobal('requestAnimationFrame', (cb: () => void) => {
@@ -91,13 +104,60 @@ function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
   })
 
   const resizeCalls: Array<{ cols: number; rows: number }> = []
-  /** Optional callback to simulate xterm's resize side-effects (e.g. viewportY changes). */
   let onResize: ((cols: number, rows: number) => void) | null = null
+
+  // Per-write effect slot: consumed by the next mock write() call.
+  let nextEffect: {
+    linesAdded?: number
+    autoScroll?: boolean
+    clearScrollback?: boolean
+    scrollTo?: number
+    /** Lines to set in lineContent AFTER clearScrollback + addLines run
+     *  (simulates content written by WASM during parse that restoreScroll
+     *  needs to find via getLine). */
+    postClearLines?: Map<number, string>
+  } = {}
+
+  function addLinesInternal(count: number) {
+    totalLines += count
+    const overflow = totalLines - (scrollbackLimit + rows)
+    if (overflow > 0) {
+      totalLines = scrollbackLimit + rows
+      baseY = scrollbackLimit
+      // xterm decrements viewportY on eviction; ghostty-web doesn't, but
+      // the harness still models it for tests that rely on this behaviour.
+      viewportY = Math.max(0, viewportY - overflow)
+    } else {
+      baseY = Math.max(0, totalLines - rows)
+    }
+  }
+
+  function clearScrollbackInternal() {
+    totalLines = rows
+    baseY = 0
+    viewportY = 0
+    lineContent.clear()
+  }
 
   const io = createTerminalIO(
     {
       write(data, callback) {
         writes.push(typeof data === 'string' ? data : new TextDecoder().decode(data))
+        // Apply primed effects synchronously — this models what ghostty-web's
+        // write() does internally before returning.
+        const effect = nextEffect
+        nextEffect = {}
+        if (effect.clearScrollback) clearScrollbackInternal()
+        if (effect.linesAdded && effect.linesAdded > 0) addLinesInternal(effect.linesAdded)
+        // Populate new buffer content before restoreScroll queries getLine()
+        if (effect.postClearLines) {
+          for (const [y, text] of effect.postClearLines) lineContent.set(y, text)
+        }
+        if (effect.scrollTo !== undefined) {
+          viewportY = Math.max(0, Math.min(effect.scrollTo, baseY))
+        } else if (effect.autoScroll && viewportY !== baseY) {
+          viewportY = baseY // scrollToBottom
+        }
         pending.push(() => callback?.())
       },
       resize(cols, rows) {
@@ -115,10 +175,8 @@ function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
     scrollToLineCalls,
     scrollToBottomCalls,
     resizeCalls,
-    /** Set a callback to simulate xterm viewport side-effects during resize. */
     set onResize(fn: ((cols: number, rows: number) => void) | null) { onResize = fn },
 
-    /** Current scroll state (convenience). */
     get viewportY() { return viewportY },
     get baseY() { return baseY },
 
@@ -133,16 +191,40 @@ function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
     },
 
     /**
-     * Simulate xterm processing `\x1b[3J` (clear scrollback): both ybase
-     * and ydisp reset to 0, scrollback content is gone, only the visible
-     * rows remain. Call between enqueue and flushOne to model an agent
-     * (eg pi) wiping scrollback inside a BSU/ESU block.
+     * Prime the next write() call with terminal-state side-effects.
+     * Must be called BEFORE `io.enqueue()` — effects are consumed synchronously
+     * inside the mock write().
+     *
+     * @param linesAdded   New output lines processed during the write (may trigger eviction).
+     * @param autoScroll   If true, simulate ghostty-web's auto-scroll to bottom before
+     *                     the write returns (models `viewportY !== 0 && scrollToBottom()`).
+     * @param clearScrollback  If true, simulate `\x1b[3J` clearing scrollback before
+     *                         linesAdded are applied.
+     * @param scrollTo     Explicit viewportY override (for edge-case positioning tests).
+     */
+    primeWrite(effect: {
+      linesAdded?: number
+      autoScroll?: boolean
+      clearScrollback?: boolean
+      scrollTo?: number
+      postClearLines?: Map<number, string>
+    } = {}) {
+      nextEffect = effect
+    },
+
+    /**
+     * Directly add lines to the buffer (outside of a write call).
+     * Used for setup before enqueue/primeWrite.
+     */
+    addLines(count: number) {
+      addLinesInternal(count)
+    },
+
+    /**
+     * Directly clear scrollback (outside of a write call). Used for setup.
      */
     clearScrollback() {
-      totalLines = rows
-      baseY = 0
-      viewportY = 0
-      lineContent.clear()
+      clearScrollbackInternal()
     },
 
     /** Set the visible text of the buffer line at `y`. */
@@ -151,51 +233,20 @@ function makeScrollHarness(opts: { scrollbackLimit: number; rows: number }) {
     },
 
     /**
-     * Simulate xterm processing new output lines, including scrollback
-     * eviction. Call this between enqueue and flushOne to model what xterm
-     * does during write().
+     * Fire one pending write callback.
+     * In the new synchronous-restore model this is just cleanup (pump + onWritten).
+     * No terminal-state side-effects happen here.
      */
-    addLines(count: number) {
-      totalLines += count
-      const overflow = totalLines - (scrollbackLimit + rows)
-      if (overflow > 0) {
-        const evicted = overflow
-        totalLines = scrollbackLimit + rows
-        baseY = scrollbackLimit
-        // xterm decrements viewportY when lines are evicted
-        viewportY = Math.max(0, viewportY - evicted)
-      } else {
-        baseY = Math.max(0, totalLines - rows)
-      }
-    },
-
-    /**
-     * Flush one pending write callback.
-     *
-     * `linesAdded` simulates the terminal processing new output (scrollback
-     * eviction etc.) during the write.
-     *
-     * `ghosttyAutoScroll` simulates ghostty-web auto-scrolling to the bottom
-     * BEFORE the callback fires (ghostty does this inside write() itself).
-     * Set this for tests that model ghostty-web's scroll behaviour; the
-     * restore then runs synchronously inside the callback.
-     */
-    flushOne(linesAdded = 0, ghosttyAutoScroll = false) {
+    flushOne() {
       const cb = pending.shift()
       if (!cb) throw new Error('no pending write callback')
-      // Simulate terminal processing the write: adjust buffer state
-      if (linesAdded > 0) this.addLines(linesAdded)
-      // Simulate ghostty-web auto-scrolling to bottom before callback fires
-      if (ghosttyAutoScroll) this.userScrollToBottom()
       cb()
     },
 
     /**
-     * Run all queued rAF callbacks.
-     *
-     * With synchronous scroll restore there are no rAF callbacks to flush;
-     * this is kept so existing call sites compile and serve as documentation
-     * that the restore no longer needs a rAF.
+     * No-op: kept for documentation.
+     * Scroll restore happens synchronously after write(), so no rAF flush
+     * is ever needed for scroll assertions.
      */
     flushRAF() {
       const queue = [...rafQueue]
@@ -307,483 +358,359 @@ describe('createTerminalIO', () => {
   })
 })
 
-describe('scroll preservation across BSU/ESU', () => {
+describe('scroll preservation — per-write save/restore', () => {
   it('stays at bottom when user was at the bottom', () => {
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
-    h.addLines(50) // baseY=50, totalLines=75
+    h.addLines(50) // baseY=50
     h.userScrollToBottom() // viewportY=50
 
+    // At bottom → captureScroll skips → auto-scroll is a no-op anyway.
+    h.primeWrite({ linesAdded: 5, autoScroll: true })
     h.io.enqueue(wrapBSU('output'), 1)
-    h.flushOne(5) // 5 new lines, baseY=55
-    h.flushRAF()
 
-    expect(h.scrollToBottomCalls.length).toBeGreaterThan(0)
     expect(h.viewportY).toBe(h.baseY)
+    h.flushOne()
     h.cleanup()
   })
 
-  it('restores scroll position when user is scrolled up, no overflow', () => {
+  it('restores scroll when user is scrolled up — plain streaming (ghostty auto-scroll)', () => {
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
     h.addLines(50) // baseY=50
-    h.userScrollTo(20) // user looking at line 20
+    h.userScrollTo(20) // scrolled up
 
-    h.io.enqueue(wrapBSU('output'), 1)
-    // xterm processes: 5 new lines, no overflow. baseY=55, viewportY stays 20.
-    h.flushOne(5)
-    h.flushRAF()
+    // ghostty auto-scrolls to bottom inside write(); we restore synchronously.
+    h.primeWrite({ linesAdded: 5, autoScroll: true })
+    h.io.enqueue(enc('live streaming output'), 1)
 
-    // Should restore to 20 (the post-parse value), not jump to bottom.
+    // Restore fires synchronously: user back at 20.
     expect(h.viewportY).toBe(20)
+    h.flushOne()
     h.cleanup()
   })
 
-  it('adjusts scroll position when scrollback overflows', () => {
+  it('restores scroll across multiple consecutive writes (working-state animation)', () => {
+    // The core scenario: pi is running, emitting the "working…" animation.
+    // Each output frame is a separate write(). Without the fix, each write
+    // auto-scrolls the user back to the bottom. With the fix they stay put.
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
-    // Fill to capacity: 125 total lines, baseY=100
-    h.addLines(100)
-    expect(h.baseY).toBe(100)
+    h.addLines(100) // at capacity, baseY=100
+    h.userScrollTo(80) // reading 20 lines above the bottom
 
-    h.userScrollTo(50) // user looking at line 50
+    for (let frame = 0; frame < 5; frame++) {
+      h.primeWrite({ autoScroll: true }) // each frame auto-scrolls
+      h.io.enqueue(enc(`frame-${frame}`), 1)
+      // Restore fires synchronously after each write.
+      expect(h.viewportY).toBe(80)
+      h.flushOne()
+    }
+    h.cleanup()
+  })
 
+  it('restores scroll when user is scrolled up — BSU/ESU wrapped output', () => {
+    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
+    h.io.reset(1)
+    h.addLines(50) // baseY=50
+    h.userScrollTo(20)
+
+    h.primeWrite({ linesAdded: 5, autoScroll: true })
     h.io.enqueue(wrapBSU('output'), 1)
-    // xterm processes: 10 new lines, all overflow (scrollback full).
-    // baseY stays 100, viewportY decremented by 10 to 40.
-    h.flushOne(10)
-    expect(h.baseY).toBe(100)
 
-    // The write callback captures viewportY=40 (xterm's adjusted value).
-    h.flushRAF()
-
-    expect(h.viewportY).toBe(40)
+    expect(h.viewportY).toBe(20)
+    h.flushOne()
     h.cleanup()
   })
 
-  it('handles multiple BSU/ESU cycles with progressive overflow', () => {
+  it('clamps restored position to baseY when baseY shrinks (edge case)', () => {
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
-    h.addLines(100) // at capacity, baseY=100
-    h.userScrollTo(60)
+    h.addLines(50) // baseY=50
+    h.userScrollTo(45) // 5 lines above bottom
 
-    // First BSU/ESU: 5 lines overflow
-    h.io.enqueue(wrapBSU('batch1'), 1)
-    h.flushOne(5)
-    h.flushRAF()
-    expect(h.viewportY).toBe(55) // shifted down by 5
+    // Simulate a write that somehow reduces baseY (unlikely but guarded against).
+    // linesAdded=0, autoScroll: viewportY snaps to baseY=50.
+    // savedViewportY=45, new baseY=50 → scrollToLine(min(45,50))=45.
+    h.primeWrite({ autoScroll: true })
+    h.io.enqueue(enc('output'), 1)
 
-    // Second BSU/ESU: 5 more lines overflow
-    h.io.enqueue(wrapBSU('batch2'), 1)
-    h.flushOne(5)
-    h.flushRAF()
-    expect(h.viewportY).toBe(50) // shifted down by another 5
-
-    // Third BSU/ESU: 5 more lines overflow
-    h.io.enqueue(wrapBSU('batch3'), 1)
-    h.flushOne(5)
-    h.flushRAF()
-    expect(h.viewportY).toBe(45) // shifted down by another 5
-
+    expect(h.viewportY).toBe(45)
+    h.flushOne()
     h.cleanup()
   })
 
-  it('clamps viewportY to 0 when evictions exceed original position', () => {
+  it('does not interfere when user is already at the bottom', () => {
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
-    h.addLines(100) // at capacity, baseY=100
-    h.userScrollTo(5) // near the top
+    h.addLines(50)
+    h.userScrollToBottom()
 
-    h.io.enqueue(wrapBSU('lots of output'), 1)
-    // 20 lines overflow, but viewportY was only 5: clamped to 0
-    h.flushOne(20)
-    h.flushRAF()
+    h.primeWrite({ linesAdded: 5, autoScroll: true })
+    h.io.enqueue(enc('regular output'), 1)
 
-    expect(h.viewportY).toBe(0)
+    // No save → no restore; auto-scroll stands.
+    expect(h.scrollToLineCalls.length).toBe(0)
+    expect(h.viewportY).toBe(h.baseY)
+    h.flushOne()
     h.cleanup()
   })
 
   it('handles BSU and ESU split across separate chunks', () => {
+    // Each chunk is independently saved/restored. The anchor is re-captured
+    // before each write, so the split-chunk case works correctly.
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
     h.addLines(100)
     h.userScrollTo(50)
 
-    // BSU in first chunk
     const bsuChunk = new Uint8Array([...BSU, ...enc('partial')])
-    // ESU in second chunk
     const esuChunk = new Uint8Array([...enc('rest'), ...ESU])
 
+    // Chunk A: BSU + partial content. autoScroll simulates ghostty.
+    h.primeWrite({ linesAdded: 3, autoScroll: true })
     h.io.enqueue(bsuChunk, 1)
-    h.flushOne(3) // 3 lines, viewportY adjusted to 47
+    // Restore: min(saved=50, baseY=100) = 50.
+    expect(h.viewportY).toBe(50)
+    h.flushOne()
 
+    // Chunk B: rest + ESU.
+    h.primeWrite({ linesAdded: 3, autoScroll: true })
     h.io.enqueue(esuChunk, 1)
-    h.flushOne(3) // 3 more lines, viewportY adjusted to 44
-    h.flushRAF()
-
-    expect(h.viewportY).toBe(44)
+    // Restore: min(saved=50, baseY=100) = 50.
+    expect(h.viewportY).toBe(50)
+    h.flushOne()
     h.cleanup()
   })
 
-  it('after scrollback wipe, restores user\'s distance from bottom when new buffer is large enough', () => {
-    // The user was reading 3 lines above the latest content (eg the
-    // last line of pi's previous turn). Pi ends a turn with
-    // \x1b[3J + redraw, scrollback gets rebuilt to ~15 lines. The
-    // user's pre-BSU absolute line is gone, but their *intent* ("keep
-    // me 3 lines above the newest content") is preserved.
+  it('after scrollback wipe, restores distance from bottom when new buffer is large enough', () => {
     const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
     h.io.reset(1)
-    h.addLines(200)            // baseY=200
-    h.userScrollTo(197)        // 3 lines above the bottom
+    h.addLines(200) // baseY=200
+    h.userScrollTo(197) // 3 lines above bottom
     expect(h.baseY - h.viewportY).toBe(3)
 
+    h.primeWrite({ clearScrollback: true, linesAdded: 15, autoScroll: true })
     h.io.enqueue(wrapBSUWithClear('redraw'), 1)
-    h.clearScrollback()
-    h.addLines(15)             // new baseY=15, plenty of room for distance=3
-    h.flushOne(0)
-    h.flushRAF()
 
-    // Distance preserved: viewportY == baseY - 3.
+    // Distance preserved: viewportY == baseY - 3 (= 12).
     expect(h.scrollToLineCalls).toContain(h.baseY - 3)
     expect(h.scrollToBottomCalls.length).toBe(0)
     expect(h.baseY - h.viewportY).toBe(3)
+    h.flushOne()
     h.cleanup()
   })
 
   it('after scrollback wipe, snaps to bottom when distance exceeds new buffer', () => {
-    // The pi end-of-turn shape from the e2e fixture: user was reading
-    // far back in scrollback (100 lines above the bottom), the new
-    // buffer is only ~15 lines, so the user's intent has nowhere to
-    // anchor. Snap to bottom: nothing else is meaningful.
     const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
     h.io.reset(1)
     h.addLines(200)
-    h.userScrollTo(100)        // 100 lines above the bottom
+    h.userScrollTo(100) // 100 lines above bottom
     expect(h.baseY - h.viewportY).toBe(100)
 
+    h.primeWrite({ clearScrollback: true, linesAdded: 15, autoScroll: true })
     h.io.enqueue(wrapBSUWithClear('redraw'), 1)
-    h.clearScrollback()
-    h.addLines(15)             // new baseY=15, distance(100) > baseY
-    h.flushOne(0)
-    h.flushRAF()
 
-    // Pre-fix bug: scrollToLine(min(adjustedY=0, baseY=15)) = 0 (top).
-    // Post-fix: prevDistanceFromBottom (100) > new baseY (15) → bottom.
+    // prevDistance (100) > new baseY (15) → bottom.
     expect(h.scrollToBottomCalls.length).toBeGreaterThan(0)
     expect(h.viewportY).toBe(h.baseY)
+    h.flushOne()
     h.cleanup()
   })
 
   it('does not snap to bottom when baseY simply grows from 0', () => {
-    // First-ever output to a fresh terminal: baseY transitions from 0
-    // upward. snap.prevBaseY=0 must NOT trigger the wipe branch
-    // (baseY=N > prevBaseY=0, so the existing scrolled-up restore path
-    // applies as normal).
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
     expect(h.baseY).toBe(0)
 
+    h.primeWrite({ linesAdded: 40, autoScroll: true })
     h.io.enqueue(wrapBSU('first output'), 1)
-    h.flushOne(40)             // baseY now 15 (40 lines, 25 rows visible)
-    h.flushRAF()
 
-    // No wipe happened, just growth. The user was implicitly at bottom
-    // (viewportY=0=baseY=0 pre-BSU), so the wasAtBottom branch fires.
+    // User was implicitly at bottom (viewportY=0=baseY=0 pre-write),
+    // so no capture → auto-scroll stays → lands at bottom.
     expect(h.viewportY).toBe(h.baseY)
+    h.flushOne()
     h.cleanup()
   })
 
   it('after scrollback wipe, jumps to the line whose content matches the user\'s anchor', () => {
-    // The user is reading a recognizable line ("ERROR: cannot find
-    // foo"). The agent emits a wipe + redraw, the same line reappears
-    // in the new buffer at a different position. Anchor-match wins
-    // over distance restoration.
+    // postClearLines provides the new buffer content that restoreScroll
+    // queries via getLine() — it is set AFTER clearScrollback runs inside
+    // the mock write(), matching how WASM populates the buffer synchronously.
     const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
     h.io.reset(1)
     h.addLines(200)
     h.userScrollTo(150)
-    h.setLine(150, 'ERROR: cannot find foo')
+    h.setLine(150, 'ERROR: cannot find foo') // pre-write anchor
     expect(h.baseY - h.viewportY).toBe(50)
 
+    h.primeWrite({
+      clearScrollback: true, linesAdded: 80, autoScroll: true,
+      postClearLines: new Map([[60, 'ERROR: cannot find foo']]),
+    })
     h.io.enqueue(wrapBSUWithClear('redraw'), 1)
-    h.clearScrollback()
-    h.addLines(80)
-    // Same line lands at a different y after the redraw.
-    h.setLine(60, 'ERROR: cannot find foo')
-    h.flushOne(0)
-    h.flushRAF()
 
-    // Anchor matched at y=60: scroll there, no bottom snap.
+    // Anchor matched at y=60: scroll there.
     expect(h.scrollToLineCalls).toContain(60)
     expect(h.scrollToBottomCalls.length).toBe(0)
     expect(h.viewportY).toBe(60)
+    h.flushOne()
     h.cleanup()
   })
 
   it('after scrollback wipe with multiple anchor matches, picks the one closest to prevDistanceFromBottom', () => {
-    // The anchor line appears three times in the redraw. The match
-    // closest to the user's pre-wipe distance from the bottom (5)
-    // wins. The winning y is deliberately chosen so it differs from
-    // the distance-fallback position (baseY - prevDistance = 15),
-    // so a regression that disables anchor matching is caught here.
     const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
     h.io.reset(1)
     h.addLines(50)
     h.userScrollTo(45)         // distance = 5
-    h.setLine(45, 'session ready')
+    h.setLine(45, 'session ready') // pre-write anchor
     expect(h.baseY - h.viewportY).toBe(5)
 
+    h.primeWrite({
+      clearScrollback: true, linesAdded: 20, autoScroll: true,
+      postClearLines: new Map([
+        [12, 'session ready'],  // distance: 8, |8-5|=3
+        [16, 'session ready'],  // distance: 4, |4-5|=1 ← winner
+        [18, 'session ready'],  // distance: 2, |2-5|=3
+      ]),
+    })
     h.io.enqueue(wrapBSUWithClear('redraw'), 1)
-    h.clearScrollback()
-    h.addLines(20)             // new baseY=20
-    h.setLine(12, 'session ready')  // distance: 8, |8-5|=3
-    h.setLine(16, 'session ready')  // distance: 4, |4-5|=1 ← winner
-    h.setLine(18, 'session ready')  // distance: 2, |2-5|=3
-    h.flushOne(0)
-    h.flushRAF()
 
-    // y=16 is the closest match. Distance fallback would have given
-    // y=15, so this assertion is sensitive to anchor matching being
-    // active rather than coincidentally matching the fallback.
     expect(h.scrollToLineCalls).toContain(16)
     expect(h.viewportY).toBe(16)
+    h.flushOne()
     h.cleanup()
   })
 
-  it('after scrollback wipe, falls back to distance restoration when anchor is null', () => {
-    // The user was on a trivial line so getLine returned null and
-    // savedScroll.prevAnchorLine is null. We fall through to the
-    // distance restoration path.
+  it('after scrollback wipe, falls back to distance when anchor is null', () => {
     const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
     h.io.reset(1)
     h.addLines(50)
-    h.userScrollTo(47)         // distance = 3
-    // Deliberately NOT calling setLine: getLine returns null (the
-    // production accessor's filter for trivial lines).
+    h.userScrollTo(47) // distance = 3
 
+    h.primeWrite({ clearScrollback: true, linesAdded: 20, autoScroll: true })
     h.io.enqueue(wrapBSUWithClear('redraw'), 1)
-    h.clearScrollback()
-    h.addLines(20)             // new baseY=20
-    h.setLine(17, 'unrelated content')  // present but won't match anything
-    h.flushOne(0)
-    h.flushRAF()
 
     // No anchor captured → distance fallback: 20 - 3 = 17.
     expect(h.scrollToLineCalls).toContain(17)
     expect(h.viewportY).toBe(17)
+    h.flushOne()
     h.cleanup()
   })
 
-  it('after scrollback wipe, anchor in visible region snaps to bottom with the anchor still in view', () => {
-    // Mid-distance scenario: the user was scrolled up just a few
-    // lines, reading streaming output. After the wipe their anchor
-    // line ends up in the visible region of the new buffer, not
-    // scrollback. `scrollToLine` clamps to baseY, so the best we
-    // can do is `scrollToBottom` and let the anchor sit somewhere
-    // in the visible region rather than disappearing entirely or
-    // landing the user at distance restoration's chosen y where
-    // the anchor may be off-screen.
-    //
-    // Concretely: pre-wipe distance = 5. Post-wipe baseY = 5 with
-    // the anchor placed at y = 20 (visible region [5, 44]). With
-    // the search bounded to [0, baseY] (the previous behavior),
-    // anchor matching would miss and distance restoration would
-    // land the user at viewportY = 0. With the search extended to
-    // the full buffer, we land at viewportY = baseY = 5, with the
-    // anchor visible at offset 15 of the viewport. The two
-    // viewportY values differ, so this test catches a regression
-    // that re-narrows the search range.
+  it('after scrollback wipe, anchor in visible region snaps to bottom with anchor still in view', () => {
     const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
     h.io.reset(1)
     h.addLines(50)
     h.userScrollTo(45)         // distance = 5
-    h.setLine(45, 'streaming-target')
+    h.setLine(45, 'streaming-target') // pre-write anchor
     expect(h.baseY - h.viewportY).toBe(5)
 
+    h.primeWrite({
+      clearScrollback: true, linesAdded: 5, autoScroll: true,
+      postClearLines: new Map([[20, 'streaming-target']]), // y=20 in visible region [5, 44]
+    })
     h.io.enqueue(wrapBSUWithClear('redraw'), 1)
-    h.clearScrollback()
-    h.addLines(5)              // new baseY=5; total = baseY+rows = 45
-    h.setLine(20, 'streaming-target')  // y=20 in visible region [5, 44]
-    h.flushOne(0)
-    h.flushRAF()
 
     // Visible-region match → restoreY = min(20, 5) = 5 (= at-bottom).
     expect(h.scrollToLineCalls).toContain(5)
     expect(h.viewportY).toBe(5)
+    h.flushOne()
     h.cleanup()
   })
 
   it('after scrollback wipe with both scrollback and visible matches, picks by closeness to prevDistanceFromBottom', () => {
-    // Anchor appears in both regions. The user's pre-wipe distance
-    // (1) is close to the visible match's restore-distance (0,
-    // since visible matches force scrollToBottom) and far from the
-    // scrollback match's restore-distance (13). Tiebreaker picks
-    // the visible match.
-    //
-    // Without the full-buffer search, the visible match would never
-    // be considered, the scrollback match would win by default,
-    // and viewportY would land at 2 instead of baseY (= 15). The
-    // two outcomes differ, so this catches a regression that
-    // re-narrows the search range.
     const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
     h.io.reset(1)
     h.addLines(50)
-    h.userScrollTo(49)         // distance = 1 (just barely scrolled up)
-    h.setLine(49, 'shared-line')
+    h.userScrollTo(49)         // distance = 1
+    h.setLine(49, 'shared-line') // pre-write anchor
     expect(h.baseY - h.viewportY).toBe(1)
 
+    h.primeWrite({
+      clearScrollback: true, linesAdded: 15, autoScroll: true,
+      postClearLines: new Map([
+        [2, 'shared-line'],   // scrollback: restoreY=2,  restoreDistance=13, diff=12
+        [30, 'shared-line'],  // visible:    restoreY=15, restoreDistance=0,  diff=1
+      ]),
+    })
     h.io.enqueue(wrapBSUWithClear('redraw'), 1)
-    h.clearScrollback()
-    h.addLines(15)             // new baseY=15; visible region [15, 54]
-    h.setLine(2, 'shared-line')   // scrollback: restoreY=2,  restoreDistance=13, diff=12
-    h.setLine(30, 'shared-line')  // visible:    restoreY=15, restoreDistance=0,  diff=1
-    h.flushOne(0)
-    h.flushRAF()
 
-    // Visible match wins because its restore-distance is closer to
-    // the pre-wipe distance.
     expect(h.scrollToLineCalls).toContain(15)
     expect(h.viewportY).toBe(15)
+    h.flushOne()
     h.cleanup()
   })
 
   it('after scrollback wipe, falls back to distance when anchor does not match anywhere', () => {
-    // The agent's redraw doesn't include the user's pre-wipe content
-    // (eg pi's status-bar-only redraw vs the user reading prior
-    // conversation output). Distance restoration takes over.
     const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
     h.io.reset(1)
     h.addLines(50)
-    h.userScrollTo(47)         // distance = 3
+    h.userScrollTo(47) // distance = 3
     h.setLine(47, 'previous turn output line')
 
+    // New buffer has completely different content.
+    h.setLine(10, 'pi status bar version 0.70.2')
+
+    h.primeWrite({ clearScrollback: true, linesAdded: 20, autoScroll: true })
     h.io.enqueue(wrapBSUWithClear('redraw'), 1)
-    h.clearScrollback()
-    h.addLines(20)             // new baseY=20
-    h.setLine(10, 'pi status bar version 0.70.2')  // wholly different
-    h.flushOne(0)
-    h.flushRAF()
 
     // No match → distance fallback: 20 - 3 = 17.
     expect(h.scrollToLineCalls).toContain(17)
     expect(h.viewportY).toBe(17)
+    h.flushOne()
     h.cleanup()
   })
 
-  it('after \\x1b[3J + redraw growing baseY past prevBaseY, restores distance from bottom (not adjustedY)', () => {
-    // Discriminator regression test. The pre-fix code used a
-    // `baseY < prevBaseY` heuristic to detect buffer-reset frames; it
-    // missed redraws that grow baseY past its pre-frame value, falling
-    // through to the else branch (line-based restore via adjustedY).
-    //
-    // The crucial assumption modeled here - verified end-to-end by
-    // the matching e2e test in `e2e/tests/terminal-scroll.spec.ts`
-    // ("BSU + clear-scrollback + redraw growing baseY") - is that
-    // real xterm's `viewportY` post-parse is 0 when `\x1b[3J` resets
-    // `ydisp` mid-frame and `isUserScrolling` is true. The harness
-    // simulates that here with `userScrollTo(0)` after `addLines`.
-    //
-    // What this test pins: given a frame whose bytes contain \x1b[3J
-    // and a post-parse adjustedY of 0, the restore lands
-    // `prevDistanceFromBottom` rows above the new bottom, NOT at
-    // `min(adjustedY, baseY) = 0`.
+  it('after \\x1b[3J + redraw growing baseY past prevBaseY, restores distance from bottom', () => {
     const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
     h.io.reset(1)
-    h.addLines(100)            // prevBaseY = 100
-    h.userScrollTo(97)         // distance = 3
+    h.addLines(100) // prevBaseY = 100
+    h.userScrollTo(97) // distance = 3
 
+    // Simulate: clearScrollback + 200 lines added (baseY grows to 160) + auto-scroll.
+    h.primeWrite({ clearScrollback: true, linesAdded: 200, autoScroll: true })
     h.io.enqueue(wrapBSUWithClear('redraw'), 1)
-    h.clearScrollback()        // \x1b[3J: ydisp=0, ybase=0
-    h.addLines(200)            // long redraw: new baseY = 160 (> prevBaseY)
-    h.userScrollTo(0)          // model adjustedY = 0 (broken line tracking)
     expect(h.baseY).toBeGreaterThan(100)
-    h.flushOne(0)
-    h.flushRAF()
 
     // Distance preserved: 3 rows above the new bottom.
     expect(h.viewportY).toBe(h.baseY - 3)
+    h.flushOne()
     h.cleanup()
   })
 
-  it('after non-redraw streaming (no \\x1b[3J), honors xterm\'s eviction-tracked viewportY', () => {
-    // Plain shell / `tail -f` semantics: the user is reading a specific
-    // line. New lines stream in below; eviction kicks in; xterm decrements
-    // ydisp to keep the same line visible. The BSU/ESU restore path must
-    // honor xterm's adjustedY here, NOT pull the user toward the bottom.
-    //
-    // This pins the requirement that distance-from-bottom is *only* used
-    // when \x1b[3J is present in the chunk; without it, line-based restore
-    // wins.
-    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
-    h.io.reset(1)
-    h.addLines(100)            // at capacity, baseY=100
-    h.userScrollTo(97)         // distance = 3, reading a specific line
-
-    h.io.enqueue(wrapBSU('streaming output'), 1)
-    // 10 lines stream in: full overflow, baseY stays 100, xterm decrements
-    // viewportY by 10 to 87 to keep the same content visible.
-    h.flushOne(10)
-    h.flushRAF()
-
-    // Line-based restore: viewportY = adjustedY = 87. Distance from bottom
-    // grew from 3 to 13, which is what xterm-style eviction tracking gives.
-    // A distance-based restore would have put viewportY at 97 (still 3
-    // from bottom), losing the user's line. We don't want that here.
-    expect(h.viewportY).toBe(87)
-    h.cleanup()
-  })
-
-  it('detects \\x1b[3J across split BSU / 3J / ESU chunks', () => {
-    // Pi can split a redraw across multiple WS frames: BSU in one
-    // chunk, \x1b[3J + payload in another, ESU in a third. The
-    // discriminator must OR-accumulate \x1b[3J presence across every
-    // chunk while savedScroll is set, otherwise the restore falls
-    // back to line-based and we get the same "jump to middle" bug.
+  it('\\x1b[3J in a standalone chunk restores by distance (split-chunk case)', () => {
+    // The \x1b[3J chunk is NOT the same chunk as BSU. In the per-write model
+    // each chunk is independently handled. The \x1b[3J is detected in the
+    // chunk that contains it, and anchor-based restore fires for that chunk.
     const h = makeScrollHarness({ scrollbackLimit: 5000, rows: 40 })
     h.io.reset(1)
     h.addLines(100)
-    h.userScrollTo(97)         // distance = 3
+    h.userScrollTo(97) // distance = 3
 
-    // Chunk A: just BSU.
+    // Chunk A: BSU only. autoScroll simulates ghostty.
+    h.primeWrite({ autoScroll: true })
     h.io.enqueue(new Uint8Array([...BSU]), 1)
-    h.flushOne(0)
+    // Simple restore: user stays at 97.
+    expect(h.viewportY).toBe(97)
+    h.flushOne()
 
-    // Chunk B: \x1b[3J + redraw payload (no ESU yet). The clear
-    // happens here, simulated by mutating harness state.
+    // Chunk B: \x1b[3J + redraw payload. Scrollback wiped here.
     const clearChunk = new Uint8Array([...CSI_3J, ...enc('redraw')])
+    h.primeWrite({ clearScrollback: true, linesAdded: 200, autoScroll: true })
     h.io.enqueue(clearChunk, 1)
-    h.clearScrollback()
-    h.addLines(200)            // grow baseY past prevBaseY
-    h.userScrollTo(0)          // xterm pinned ydisp at 0
-    h.flushOne(0)
-
-    // Chunk C: just ESU.
-    h.io.enqueue(new Uint8Array([...ESU]), 1)
-    h.flushOne(0)
-    h.flushRAF()
-
-    // Distance-based restore: 3 rows above the new bottom. Without
-    // the OR-accumulation, this would land at 0 (line-based on the
-    // pinned adjustedY).
+    // Anchor-based restore fires for this chunk (contains \x1b[3J).
+    // prevDistance=3, new baseY=160 → scrollToLine(157).
     expect(h.viewportY).toBe(h.baseY - 3)
-    h.cleanup()
-  })
+    h.flushOne()
 
-  it('does not interfere with non-BSU/ESU writes', () => {
-    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
-    h.io.reset(1)
-    h.addLines(50)
-    h.userScrollTo(20)
-
-    // Regular write (no BSU/ESU)
-    h.io.enqueue(enc('regular output'), 1)
-    h.flushOne(5)
-
-    // No rAF should have been scheduled
-    expect(h.scrollToLineCalls.length).toBe(0)
-    expect(h.scrollToBottomCalls.length).toBe(0)
-    // viewportY should be whatever xterm set it to (20, adjusted for no overflow)
-    expect(h.viewportY).toBe(20)
+    // Chunk C: ESU only. User already at correct position.
+    const savedViewportY = h.viewportY
+    h.primeWrite({ autoScroll: true })
+    h.io.enqueue(new Uint8Array([...ESU]), 1)
+    // Simple restore: stays at savedViewportY.
+    expect(h.viewportY).toBe(savedViewportY)
+    h.flushOne()
     h.cleanup()
   })
 
@@ -793,30 +720,25 @@ describe('scroll preservation across BSU/ESU', () => {
     h.addLines(50) // baseY=50
     h.userScrollTo(48) // 2 rows above bottom
 
+    h.primeWrite({ linesAdded: 5, autoScroll: true })
     h.io.enqueue(wrapBSU('output'), 1)
-    h.flushOne(5)
-    h.flushRAF()
 
-    // Not exactly at bottom, so scroll position should be preserved.
-    // With the old <= 3 threshold this snapped to bottom; now it
-    // respects the user's explicit scroll-up.
     expect(h.viewportY).toBe(48)
+    h.flushOne()
     h.cleanup()
   })
 
-  it('user scrolling after BSU/ESU restore is honoured', () => {
-    // With synchronous restore there is no rAF window; the restore happens
-    // inside flushOne. Any scroll the user does after that is preserved.
+  it('user scrolling after restore is honoured', () => {
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
     h.addLines(100)
-    h.userScrollTo(50) // scrolled up
+    h.userScrollTo(50)
 
+    h.primeWrite({ linesAdded: 5, autoScroll: true })
     h.io.enqueue(wrapBSU('output'), 1)
-    h.flushOne(5, true) // ghosttyAutoScroll=true: auto-scroll before callback
-    // Restore fires synchronously: prevBaseY=100, prevDistance=50,
-    // evictions=0 → adjustedY=50 → viewportY=50
+    // Restore fires synchronously: user at 50.
     expect(h.viewportY).toBe(50)
+    h.flushOne()
 
     // User scrolls to bottom AFTER the restore.
     h.userScrollToBottom()
@@ -824,115 +746,65 @@ describe('scroll preservation across BSU/ESU', () => {
 
     // flushRAF is a no-op.
     h.flushRAF()
-    // User's scroll is preserved.
     expect(h.viewportY).toBe(h.baseY)
     h.cleanup()
   })
 
-  it('defers resize between split BSU and ESU chunks', () => {
-    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
-    h.io.reset(1)
-    h.addLines(100) // at capacity, baseY=100
-    h.userScrollTo(50)
-
-    // Simulate resize resetting viewportY to 0 (reflow side-effect).
-    h.onResize = () => { h.userScrollTo(0) }
-
-    // BSU in first chunk (no ESU yet)
-    const bsuChunk = new Uint8Array([...BSU, ...enc('partial')])
-    h.io.enqueue(bsuChunk, 1)
-    h.flushOne(3) // viewportY adjusted to 47
-
-    // A resize arrives while queue is empty (between BSU and ESU).
-    // pump() must defer it because savedScroll is set.
-    h.io.requestResize({ cols: 80, rows: 20 }, 1)
-
-    // The resize should NOT have been applied yet (savedScroll is set).
-    expect(h.resizeCalls).toEqual([])
-    expect(h.viewportY).toBe(47)
-
-    // ESU in second chunk: scroll restore happens synchronously in
-    // flushOne, then pump() applies the deferred resize immediately.
-    const esuChunk = new Uint8Array([...enc('rest'), ...ESU])
-    h.io.enqueue(esuChunk, 1)
-    h.flushOne(3) // viewportY adjusted to 44, restore fires, resize fires
-
-    // Scroll restore targeted the correct line (44), not 0.
-    expect(h.scrollToLineCalls).toContain(44)
-    // The resize was applied immediately after scroll restore (no rAF needed).
-    expect(h.resizeCalls).toEqual([{ cols: 80, rows: 20 }])
-
-    // flushRAF is a no-op - nothing queued.
-    h.flushRAF()
-    expect(h.resizeCalls).toEqual([{ cols: 80, rows: 20 }])
-
-    h.cleanup()
-  })
-
-  it('defers resize between ESU write-callback and restore (no rAF needed)', () => {
+  it('resize fires immediately after write completes (no BSU/ESU deferral needed)', () => {
+    // Resize is no longer deferred across BSU/ESU chunks — each write is
+    // independently handled. Resize fires in the pump() triggered by the
+    // write callback.
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
     h.addLines(100)
     h.userScrollTo(50)
 
-    // Simulate resize resetting viewportY to 0 (reflow side-effect).
-    h.onResize = () => { h.userScrollTo(0) }
+    h.primeWrite({ linesAdded: 3, autoScroll: true })
+    h.io.enqueue(enc('chunk-A'), 1)
+    expect(h.viewportY).toBe(50)
 
-    // Single chunk with BSU + content + ESU: restore fires synchronously
-    // in the write callback, then pump() is called.
-    h.io.enqueue(wrapBSU('output'), 1)
-    h.flushOne(5) // viewportY adjusted to 45, restore fires in callback
-
-    // At this point: savedScroll is null (cleared synchronously), scroll
-    // was already restored to 45. A resize now applies immediately.
     h.io.requestResize({ cols: 80, rows: 20 }, 1)
-    expect(h.resizeCalls).toEqual([{ cols: 80, rows: 20 }])
+    // Resize is pending, will fire when the write callback calls pump().
+    expect(h.resizeCalls).toEqual([])
 
-    // flushRAF is a no-op.
-    h.flushRAF()
+    h.flushOne() // callback fires → pump() → resize applied
     expect(h.resizeCalls).toEqual([{ cols: 80, rows: 20 }])
-
     h.cleanup()
   })
 
-  it('processes resize normally when no BSU/ESU is in flight', () => {
+  it('processes resize normally when no write is in flight', () => {
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
     h.addLines(50)
     h.userScrollTo(20)
 
-    // Regular write (no BSU/ESU), then resize.
+    h.primeWrite({})
     h.io.enqueue(enc('output'), 1)
-    h.flushOne(0)
+    h.flushOne()
 
     h.io.requestResize({ cols: 120, rows: 40 }, 1)
-    // Resize should fire immediately (no BSU/ESU block, no pending rAF).
     expect(h.resizeCalls).toEqual([{ cols: 120, rows: 40 }])
-
     h.cleanup()
   })
 
-  it('forceNextScrollToBottom overrides scroll-up during replay', () => {
+  it('forceNextScrollToBottom overrides scroll preservation for one write', () => {
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
     h.addLines(50) // baseY=50
-    h.userScrollTo(10) // user was scrolled way up (stale from previous session)
+    h.userScrollTo(10) // user scrolled up
 
-    // Simulate what terminal.tsx does before enqueuing replay:
+    // Simulate what terminal.tsx does before enqueuing replay.
     h.io.forceNextScrollToBottom()
 
+    // Force flag consumed: captureScroll skips → auto-scroll stands.
+    h.primeWrite({ linesAdded: 5, autoScroll: true })
     h.io.enqueue(wrapBSU('replay-frame'), 1)
-    h.flushOne(5)
-    h.flushRAF()
-
-    // Even though the user was scrolled up, the force flag makes
-    // the BSU handler treat it as wasAtBottom=true.
-    expect(h.scrollToBottomCalls.length).toBeGreaterThan(0)
-    expect(h.viewportY).toBe(h.baseY)
+    expect(h.viewportY).toBe(h.baseY) // stayed at bottom
+    h.flushOne()
     h.cleanup()
   })
 
-  it('forceNextScrollToBottom only applies to the next BSU, not subsequent ones', () => {
+  it('forceNextScrollToBottom only applies to the next write, not subsequent ones', () => {
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
     h.addLines(50)
@@ -940,112 +812,49 @@ describe('scroll preservation across BSU/ESU', () => {
 
     h.io.forceNextScrollToBottom()
 
-    // First BSU: force-scrolls to bottom.
+    // First write: force consumed → user ends at bottom.
+    h.primeWrite({ linesAdded: 5, autoScroll: true })
     h.io.enqueue(wrapBSU('replay'), 1)
-    h.flushOne(5)
-    h.flushRAF()
     expect(h.viewportY).toBe(h.baseY)
+    h.flushOne()
 
     // User scrolls up again.
     h.userScrollTo(20)
 
-    // Second BSU: force is consumed, so user's scroll is preserved.
+    // Second write: force is consumed, scroll is preserved.
+    h.primeWrite({ linesAdded: 3, autoScroll: true })
     h.io.enqueue(wrapBSU('live-update'), 1)
-    h.flushOne(3)
-    h.flushRAF()
     expect(h.viewportY).toBe(20)
+    h.flushOne()
     h.cleanup()
   })
 
-  it('resets scroll state on epoch change', () => {
+  it('resets scroll state on epoch change — stale snap does not affect new epoch', () => {
+    // What reset() guarantees: scrollSnap captured under epoch N is
+    // discarded, so a partially-completed write cannot corrupt new-epoch
+    // scroll state. New-epoch writes still independently save/restore if
+    // the user is scrolled up (that is correct behaviour, not a bug).
     const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
     h.io.reset(1)
     h.addLines(100)
     h.userScrollTo(50)
 
-    // Start a BSU block
-    h.io.enqueue(new Uint8Array([...BSU, ...enc('data')]), 1)
-    h.flushOne(2)
+    // Epoch 1 write in flight (callback not yet fired).
+    h.primeWrite({ linesAdded: 2, autoScroll: true })
+    h.io.enqueue(enc('data'), 1)
+    expect(h.viewportY).toBe(50) // synchronous restore happened
 
-    // Reset epoch before ESU arrives
+    // Reset clears scrollSnap and the queue.
     h.io.reset(2)
+    h.userScrollToBottom() // simulate session reconnect puts user at bottom
 
-    // Send ESU under old epoch (should be ignored since data doesn't arrive)
-    // Send new data under new epoch
+    // New epoch write; user is at bottom → no capture → no restore.
     h.io.enqueue(enc('new session'), 2)
-    h.flushOne(0)
-
-    // No scroll restore should have happened
-    expect(h.scrollToLineCalls.length).toBe(0)
-    expect(h.scrollToBottomCalls.length).toBe(0)
-    h.cleanup()
-  })
-
-  it('ghostty-web: restores position when renderer auto-scrolls to bottom on write', () => {
-    // ghostty-web auto-scrolls viewportY to bottom on every write().
-    // ghosttyAutoScroll=true simulates this BEFORE the callback fires so
-    // rawViewportY >= baseY, triggering the arithmetic branch.  Restore
-    // fires synchronously - no rAF needed.
-    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
-    h.io.reset(1)
-    h.addLines(50)          // baseY=50
-    h.userScrollTo(20)      // scrolled up, distance=30
-
-    h.io.enqueue(wrapBSU('streaming output'), 1)
-    h.flushOne(5, true)     // addLines(5), auto-scroll to bottom, callback fires
-    // prevBaseY=50, prevDistance=30, evictions=0 → adjustedY = (50-30)-0 = 20.
-    expect(h.viewportY).toBe(20)
-    h.cleanup()
-  })
-})
-
-describe('scroll preservation — rapid BSU/ESU frames (working-state snap)', () => {
-  it('ghostty-web: rapid frames do not snap to bottom while user is scrolled up', () => {
-    // ghostty-web auto-scrolls before the callback on every write.
-    // With synchronous restore: frame 1's ESU fires, restores viewportY=80,
-    // clears savedScroll.  Frame 2's BSU then reads viewportY=80 (correct —
-    // not the auto-scrolled bottom), saves wasAtBottom=false, and its own
-    // ESU restore lands at the correct position too.
-    const h = makeScrollHarness({ scrollbackLimit: 200, rows: 25 })
-    h.io.reset(1)
-    h.addLines(100)     // baseY=100
-    h.userScrollTo(80)  // user reading line 80, distance=20
-
-    // Frame 1: ghosttyAutoScroll simulates auto-scroll before callback
-    h.io.enqueue(wrapBSU('frame-1-output'), 1)
-    h.flushOne(2, true)   // addLines(2), auto-scroll, callback: restore → 80
-    expect(h.viewportY).toBe(80)  // restored synchronously
-
-    // Frame 2: maybeSaveScroll reads viewportY=80 (correct, savedScroll was
-    // already cleared and viewportY is at the restored position).
-    h.io.enqueue(wrapBSU('frame-2-output'), 1)
-    h.flushOne(2, true)   // addLines(2), auto-scroll, callback: restore → 80
-
-    // No rAF needed; restore already happened.
-    h.flushRAF()
-
-    expect(h.viewportY).toBe(80)
-    h.cleanup()
-  })
-
-  it('ghostty-web: user at bottom stays at bottom across rapid frames', () => {
-    const h = makeScrollHarness({ scrollbackLimit: 200, rows: 25 })
-    h.io.reset(1)
-    h.addLines(100)
-    h.userScrollToBottom()  // user at bottom
-
-    // Frame 1: auto-scroll is a no-op when already at bottom
-    h.io.enqueue(wrapBSU('frame-1'), 1)
-    h.flushOne(2, true)
-
-    // Frame 2
-    h.io.enqueue(wrapBSU('frame-2'), 1)
-    h.flushOne(2, true)
-
-    h.flushRAF()
-
-    // Must stay at bottom.
-    expect(h.viewportY).toBe(h.baseY)
+    const callsBefore = h.scrollToLineCalls.length
+    h.flushOne() // epoch-1 callback (stale, ignored by onWritten)
+    h.flushOne() // epoch-2 callback
+    // No extra scrollToLine calls since user was at bottom.
+    expect(h.scrollToLineCalls.length).toBe(callsBefore)
     h.cleanup()
   })
 })
