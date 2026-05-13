@@ -61,6 +61,7 @@ export function resolveSessionFromPath(
   parsed: { project?: string; host?: string; adapter?: string; slug?: string },
   projects: ProjectItem[],
   sessions: Session[],
+  homeDir?: string,
 ): string | null {
   if (!parsed.project) return null
   // Filter by remote host when the URL has an @host segment.
@@ -72,7 +73,7 @@ export function resolveSessionFromPath(
 
   // Match sessions to this project, filtering by peer when URL has @host.
   const projectSessions = sessions.filter(
-    s => matchSession(s, projects)?.slug === parsed.project
+    s => matchSession(s, projects, homeDir)?.slug === parsed.project
       && (filterPeer === undefined ? !s.peer : s.peer === filterPeer),
   )
 
@@ -140,6 +141,7 @@ export function resolveViewFromPath(
   path: string,
   projects: ProjectItem[],
   sessions: Session[],
+  homeDir?: string,
 ): View {
   const parsed = parseSessionPath(path)
   if (!parsed.project) return { kind: 'home' }
@@ -151,7 +153,7 @@ export function resolveViewFromPath(
   if (!parsed.adapter) return { kind: 'project', projectSlug: project.slug }
 
   // /:project/:adapter[/:slug] resolves to a concrete session when possible.
-  const sessionId = resolveSessionFromPath(parsed, projects, sessions)
+  const sessionId = resolveSessionFromPath(parsed, projects, sessions, homeDir)
   if (sessionId) return { kind: 'session', sessionId }
 
   // URL pointed at a session that no longer exists -> fall back to hub.
@@ -167,6 +169,7 @@ export function viewToPath(
   view: View,
   projects: ProjectItem[],
   sessions: Session[],
+  homeDir?: string,
 ): string | null {
   switch (view.kind) {
     case 'home':
@@ -176,7 +179,7 @@ export function viewToPath(
     case 'session': {
       const sess = sessions.find(s => s.id === view.sessionId)
       if (!sess) return null
-      const project = matchSession(sess, projects)
+      const project = matchSession(sess, projects, homeDir)
       if (!project) return null
       return sessionPath(project.slug, sess)
     }

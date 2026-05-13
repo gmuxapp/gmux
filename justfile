@@ -36,15 +36,26 @@ start:
     exec {{bin}}/gmuxd-${os}-arm64 start
 
 # Install binaries to $(brew --prefix)/bin and restart gmuxd
+# Works on macOS (installs darwin-arm64 build); can also be run on Linux.
 install:
     #!/usr/bin/env bash
     set -euo pipefail
-    os=$(uname -s | tr '[:upper:]' '[:lower:]')
-    prefix=$(brew --prefix)
-    cp {{bin}}/gmux-${os}-arm64 "$prefix/bin/gmux"
-    cp {{bin}}/gmuxd-${os}-arm64 "$prefix/bin/gmuxd"
-    codesign --sign - --force "$prefix/bin/gmux"
-    codesign --sign - --force "$prefix/bin/gmuxd"
+    goos=$(go env GOOS)
+    goarch=$(go env GOARCH)
+    prefix=$(brew --prefix 2>/dev/null || echo /usr/local)
+    src_gmux="{{bin}}/gmux-${goos}-${goarch}"
+    src_gmuxd="{{bin}}/gmuxd-${goos}-${goarch}"
+    if [ ! -f "$src_gmux" ] || [ ! -f "$src_gmuxd" ]; then
+      echo "Arch-specific binaries not found: $src_gmux / $src_gmuxd"
+      echo "Run 'just build' first."
+      exit 1
+    fi
+    cp "$src_gmux"  "$prefix/bin/gmux"
+    cp "$src_gmuxd" "$prefix/bin/gmuxd"
+    if command -v codesign >/dev/null 2>&1; then
+      codesign --sign - --force "$prefix/bin/gmux"
+      codesign --sign - --force "$prefix/bin/gmuxd"
+    fi
     echo "Restarting gmuxd..."
     nohup gmuxd restart >/dev/null 2>&1 &
     echo "Done. gmux and gmuxd installed to $prefix/bin/"

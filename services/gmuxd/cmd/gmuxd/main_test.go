@@ -513,3 +513,82 @@ func TestRunSubcommandHelp(t *testing.T) {
 		}
 	}
 }
+
+// ── fsGuardPath tests ──
+
+func TestFsGuardPath(t *testing.T) {
+	root := "/home/user/myproject"
+
+	tests := []struct {
+		name    string
+		rel     string
+		wantAbs string
+		wantErr bool
+	}{
+		{"empty rel resolves to root", "", root, false},
+		{"dot rel resolves to root", ".", root, false},
+		{"simple file", "README.md", root + "/README.md", false},
+		{"nested path", "src/main.go", root + "/src/main.go", false},
+		{"deep nested", "a/b/c/d.txt", root + "/a/b/c/d.txt", false},
+		{"dot-dot escape", "../etc/passwd", "", true},
+		{"double dot-dot", "../../root", "", true},
+		{"absolute path injection", "/etc/passwd", "", true},
+		{"embedded dot-dot", "src/../../etc/passwd", "", true},
+		{"trailing slash cleaned", "src/", root + "/src", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := fsGuardPath(root, tt.rel)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("fsGuardPath(%q, %q) = %q, want error", root, tt.rel, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("fsGuardPath(%q, %q) unexpected error: %v", root, tt.rel, err)
+				return
+			}
+			if got != tt.wantAbs {
+				t.Errorf("fsGuardPath(%q, %q) = %q, want %q", root, tt.rel, got, tt.wantAbs)
+			}
+		})
+	}
+}
+
+func TestFsListDir(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create: a hidden file, two regular files, a subdirectory.
+	writeFile := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(".hidden", "secret")
+	writeFile("b_file.txt", "b")
+	writeFile("a_file.txt", "a")
+	if err := os.Mkdir(filepath.Join(dir, "mydir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := fsListDir(dir)
+	if err != nil {
+		t.Fatalf("fsListDir: %v", err)
+	}
+
+	// Expect: hidden file excluded, dirs first, then files alpha.
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d: %+v", len(entries), entries)
+	}
+	if entries[0].Name != "mydir" || entries[0].Type != "dir" {
+		t.Errorf("entries[0] = %+v, want dir mydir", entries[0])
+	}
+	if entries[1].Name != "a_file.txt" || entries[1].Type != "file" {
+		t.Errorf("entries[1] = %+v, want file a_file.txt", entries[1])
+	}
+	if entries[2].Name != "b_file.txt" || entries[2].Type != "file" {
+		t.Errorf("entries[2] = %+v, want file b_file.txt", entries[2])
+	}
+}

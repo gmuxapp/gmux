@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { ProjectItem, PeerInfo } from './types'
 import {
   normalizeRemote,
+  expandTilde,
   matchSession,
   buildProjectFolders,
   parseSessionHostPath,
@@ -468,5 +469,62 @@ describe('buildProjectTopology', () => {
     const hosts = buildProjectTopology('fluxer', sessions, projects2, peers)
     expect(hosts).toHaveLength(1)
     expect(hosts[0].folders[0].sessions.map(s => s.id)).toEqual(['f1'])
+  })
+})
+
+describe('expandTilde', () => {
+  it('expands ~ to homeDir', () => {
+    expect(expandTilde('~', '/Users/james')).toBe('/Users/james')
+  })
+
+  it('expands ~/subpath', () => {
+    expect(expandTilde('~/dev/gmux', '/Users/james')).toBe('/Users/james/dev/gmux')
+  })
+
+  it('leaves absolute paths unchanged', () => {
+    expect(expandTilde('/usr/local/bin', '/Users/james')).toBe('/usr/local/bin')
+  })
+
+  it('leaves paths unchanged when homeDir is undefined', () => {
+    expect(expandTilde('~/dev/gmux', undefined)).toBe('~/dev/gmux')
+  })
+})
+
+describe('matchSession with homeDir (~ expansion)', () => {
+  const HOME = '/Users/james'
+  const projects: ProjectItem[] = [
+    { slug: 'gmux', match: [{ path: '~/dev/gmux' }] },
+    { slug: 'work',  match: [{ path: '~/work' }] },
+  ]
+
+  it('matches an absolute cwd against a ~ project path when homeDir provided', () => {
+    const sess = makeSession({ id: 's1', cwd: '/Users/james/dev/gmux/src' })
+    expect(matchSession(sess, projects, HOME)?.slug).toBe('gmux')
+  })
+
+  it('matches the most specific path (longest prefix) with ~ expansion', () => {
+    const deepProjects: ProjectItem[] = [
+      { slug: 'work',      match: [{ path: '~/work' }] },
+      { slug: 'work-gmux', match: [{ path: '~/work/gmux' }] },
+    ]
+    const sess = makeSession({ id: 's2', cwd: '/Users/james/work/gmux/cli' })
+    expect(matchSession(sess, deepProjects, HOME)?.slug).toBe('work-gmux')
+  })
+
+  it('returns null for an absolute cwd that falls outside all ~ paths', () => {
+    const sess = makeSession({ id: 's3', cwd: '/usr/local/bin' })
+    expect(matchSession(sess, projects, HOME)).toBeNull()
+  })
+
+  it('falls back to no match when homeDir is absent and cwd is absolute', () => {
+    const sess = makeSession({ id: 's4', cwd: '/Users/james/dev/gmux' })
+    // Without homeDir, ~ is not expanded → no path match.
+    // (remote fallback also absent, so null.)
+    expect(matchSession(sess, projects, undefined)).toBeNull()
+  })
+
+  it('matches workspace_root against ~ project path with homeDir', () => {
+    const sess = makeSession({ id: 's5', cwd: '/tmp', workspace_root: '/Users/james/dev/gmux' })
+    expect(matchSession(sess, projects, HOME)?.slug).toBe('gmux')
   })
 })

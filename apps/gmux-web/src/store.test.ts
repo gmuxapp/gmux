@@ -294,7 +294,7 @@ describe('navigateToSession', () => {
 
   beforeEach(() => {
     navigateMock = vi.fn()
-    setNavigate(navigateMock)
+    setNavigate(navigateMock as (url: string, replace?: boolean) => void)
   })
   afterEach(() => {
     setNavigate(() => {})

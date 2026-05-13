@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
@@ -661,6 +662,11 @@ func serve(stderr io.Writer) int {
 		}
 		if h, err := os.Hostname(); err == nil {
 			data["hostname"] = h
+		}
+		// Expose the home directory so the frontend can expand ~ in project
+		// path rules for client-side session matching.
+		if home, err := os.UserHomeDir(); err == nil {
+			data["home_dir"] = home
 		}
 		if tsListener != nil {
 			diag := tsListener.Diag()
@@ -1566,6 +1572,303 @@ func serve(stderr io.Writer) int {
 		}
 	})
 
+	// ── Filesystem API ──
+	//
+	// All routes are under /v1/fs/{slug}. The slug maps to the project's
+	// first filesystem path match rule (the "project root"). All rel-path
+	// arguments in request bodies are validated to stay within that root.
+
+	// resolveProjectRoot looks up the first path-based match rule for
+	// the project identified by slug and returns its absolute path.
+	resolveFSProjectRoot := func(slug string) (string, error) {
+		state, err := projectMgr.Load()
+		if err != nil {
+			return "", fmt.Errorf("failed to load projects: %w", err)
+		}
+		for _, item := range state.Items {
+			if item.Slug != slug {
+				continue
+			}
+			for _, rule := range item.Match {
+				if rule.Path != "" {
+					return paths.NormalizePath(rule.Path), nil
+				}
+			}
+		}
+		return "", fmt.Errorf("project %q has no filesystem path rule", slug)
+	}
+
+	// GET /v1/fs/{slug}?path=<rel> — list a directory.
+	mux.HandleFunc("GET /v1/fs/{slug}", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		rel := r.URL.Query().Get("path")
+		dir, err := fsGuardPath(root, rel)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		entries, err := fsListDir(dir)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list_failed", err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "data": entries})
+	})
+
+	// POST /v1/fs/{slug}/mkdir — create a directory.
+	mux.HandleFunc("POST /v1/fs/{slug}/mkdir", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		var req struct {
+			Path string `json:"path"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		dir, err := fsGuardPath(root, req.Path)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			writeError(w, http.StatusInternalServerError, "mkdir_failed", err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	})
+
+	// POST /v1/fs/{slug}/create — create an empty file.
+	mux.HandleFunc("POST /v1/fs/{slug}/create", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		var req struct {
+			Path string `json:"path"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		filePath, err := fsGuardPath(root, req.Path)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+			writeError(w, http.StatusInternalServerError, "mkdir_failed", err.Error())
+			return
+		}
+		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err != nil {
+			if os.IsExist(err) {
+				writeError(w, http.StatusConflict, "already_exists", "file already exists")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "create_failed", err.Error())
+			return
+		}
+		f.Close()
+		writeJSON(w, map[string]any{"ok": true})
+	})
+
+	// POST /v1/fs/{slug}/rename — rename a file or directory (same parent).
+	mux.HandleFunc("POST /v1/fs/{slug}/rename", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		var req struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		src, err := fsGuardPath(root, req.From)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		dst, err := fsGuardPath(root, req.To)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		if err := os.Rename(src, dst); err != nil {
+			writeError(w, http.StatusInternalServerError, "rename_failed", err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	})
+
+	// POST /v1/fs/{slug}/move — move a file or directory to a new path.
+	mux.HandleFunc("POST /v1/fs/{slug}/move", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		var req struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		src, err := fsGuardPath(root, req.From)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		dst, err := fsGuardPath(root, req.To)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		// If dst is a directory, move src inside it.
+		if info, err2 := os.Stat(dst); err2 == nil && info.IsDir() {
+			dst = filepath.Join(dst, filepath.Base(src))
+		}
+		if err := os.Rename(src, dst); err != nil {
+			writeError(w, http.StatusInternalServerError, "move_failed", err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	})
+
+	// DELETE /v1/fs/{slug}/item — delete a file or directory.
+	mux.HandleFunc("DELETE /v1/fs/{slug}/item", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		var req struct {
+			Path      string `json:"path"`
+			Recursive bool   `json:"recursive"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		target, err := fsGuardPath(root, req.Path)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		// Refuse to delete the project root itself.
+		if filepath.Clean(target) == filepath.Clean(root) {
+			writeError(w, http.StatusBadRequest, "bad_path", "cannot delete project root")
+			return
+		}
+		var deleteErr error
+		if req.Recursive {
+			deleteErr = os.RemoveAll(target)
+		} else {
+			deleteErr = os.Remove(target)
+		}
+		if deleteErr != nil {
+			if os.IsNotExist(deleteErr) {
+				writeError(w, http.StatusNotFound, "not_found", "path not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "delete_failed", deleteErr.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	})
+
+	// POST /v1/fs/{slug}/upload — write uploaded file(s) into a directory.
+	// Accepts multipart/form-data; each file field is written to dir/<filename>.
+	// Query param: ?dir=<rel-path-to-dir> (defaults to root).
+	mux.HandleFunc("POST /v1/fs/{slug}/upload", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		rel := r.URL.Query().Get("dir")
+		dirPath, err := fsGuardPath(root, rel)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		if err := r.ParseMultipartForm(64 << 20); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "multipart parse error")
+			return
+		}
+		var written []string
+		for _, headers := range r.MultipartForm.File {
+			for _, fh := range headers {
+				if err := fsSaveUpload(dirPath, fh); err != nil {
+					writeError(w, http.StatusInternalServerError, "upload_failed", err.Error())
+					return
+				}
+				written = append(written, fh.Filename)
+			}
+		}
+		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"written": written}})
+	})
+
+	// POST /v1/fs/{slug}/open — open a file in $VISUAL / $EDITOR / vi.
+	mux.HandleFunc("POST /v1/fs/{slug}/open", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		var req struct {
+			Path string `json:"path"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		filePath, err := fsGuardPath(root, req.Path)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		editor := os.Getenv("VISUAL")
+		if editor == "" {
+			editor = os.Getenv("EDITOR")
+		}
+		if editor == "" {
+			editor = "vi"
+		}
+		if gmuxBin == "" {
+			writeError(w, http.StatusInternalServerError, "gmux_not_found", "gmux not found")
+			return
+		}
+		pid, err := launchGmux(gmuxBin, []string{editor, filePath}, root, "")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"pid": pid}})
+	})
+
 	// ── Embedded frontend (SPA fallback) ──
 
 	mux.Handle("/", spaHandler())
@@ -2132,6 +2435,97 @@ func sendSSE(w http.ResponseWriter, event string, payload any) {
 		return
 	}
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, bytes)
+}
+
+// ── Filesystem helpers ──
+
+// fsEntry is a single directory entry returned by the list API.
+type fsEntry struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"` // "file" | "dir"
+	Size  int64  `json:"size,omitempty"`
+	Mtime string `json:"mtime,omitempty"`
+}
+
+// fsGuardPath joins root and rel, cleans the result, and verifies it
+// remains within root. Returns the absolute path on success.
+// An empty rel resolves to root itself.
+func fsGuardPath(root, rel string) (string, error) {
+	root = filepath.Clean(root)
+	var abs string
+	if rel == "" || rel == "." {
+		abs = root
+	} else {
+		// Reject absolute paths supplied as rel.
+		if filepath.IsAbs(rel) {
+			return "", fmt.Errorf("path must be relative")
+		}
+		abs = filepath.Clean(filepath.Join(root, rel))
+	}
+	// Ensure the resolved path is under root (prevents .. traversal).
+	if abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes project root")
+	}
+	return abs, nil
+}
+
+// fsListDir reads a directory and returns sorted entries (dirs first).
+func fsListDir(dir string) ([]fsEntry, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	// Dirs first, then files, both alpha within group.
+	sort.Slice(entries, func(i, j int) bool {
+		di, dj := entries[i].IsDir(), entries[j].IsDir()
+		if di != dj {
+			return di
+		}
+		return entries[i].Name() < entries[j].Name()
+	})
+	result := make([]fsEntry, 0, len(entries))
+	for _, e := range entries {
+		// Skip hidden files.
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		ent := fsEntry{Name: e.Name()}
+		if e.IsDir() {
+			ent.Type = "dir"
+		} else {
+			ent.Type = "file"
+			if info, err := e.Info(); err == nil {
+				ent.Size = info.Size()
+				ent.Mtime = info.ModTime().UTC().Format(time.RFC3339)
+			}
+		}
+		result = append(result, ent)
+	}
+	return result, nil
+}
+
+// fsSaveUpload writes a single multipart file header into dir.
+func fsSaveUpload(dir string, fh *multipart.FileHeader) error {
+	src, err := fh.Open()
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	// Strip any path component from the filename for safety.
+	name := filepath.Base(fh.Filename)
+	dst := filepath.Join(dir, name)
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, src)
+	return err
 }
 
 func writeJSON(w http.ResponseWriter, payload any) {

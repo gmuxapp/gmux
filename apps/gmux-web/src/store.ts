@@ -41,6 +41,9 @@ export const defaultLauncher = signal<string>('shell')
 export interface HealthData {
   version: string
   hostname?: string
+  /** Absolute home directory path on the server (e.g. /Users/james).
+   * Used by the client to expand ~ in project path rules for matching. */
+  home_dir?: string
   tailscale_url?: string
   update_available?: string
   /** SHA-256 of the gmux runner binary on disk. Compared against
@@ -186,7 +189,7 @@ export const filteredSessions = computed(() => {
 
 /** Project folders for the sidebar, built from projects + sessions. */
 export const folders = computed(() =>
-  buildProjectFolders(projects.value, filteredSessions.value),
+  buildProjectFolders(projects.value, filteredSessions.value, health.value?.home_dir),
 )
 
 /**
@@ -199,7 +202,7 @@ export const folders = computed(() =>
  */
 export const view = computed((): View | null => {
   if (!sessionsLoaded.value) return null
-  return resolveViewFromPath(urlPath.value, projects.value, filteredSessions.value)
+  return resolveViewFromPath(urlPath.value, projects.value, filteredSessions.value, health.value?.home_dir)
 })
 
 /** Currently selected session ID, if the view is a session view. */
@@ -679,7 +682,7 @@ export function initStore(): () => void {
     const v = view.value
     if (v === null) return
     if (!sessionsLoaded.value) return
-    const url = viewToPath(v, projects.value, sessions.value)
+    const url = viewToPath(v, projects.value, sessions.value, health.value?.home_dir)
     if (url && url !== urlPath.value) {
       navigate(url, true)
     }

@@ -23,10 +23,22 @@ export function normalizeRemote(url: string): string {
 
 // --- Matching ---
 
-function pathUnder(candidate: string | undefined, base: string): boolean {
+/**
+ * Expand a leading ~ to the given homeDir (if known).
+ * Mirrors the server-side paths.NormalizePath behaviour for ~ expansion.
+ */
+export function expandTilde(path: string, homeDir: string | undefined): string {
+  if (!homeDir || !path.startsWith('~')) return path
+  if (path === '~') return homeDir
+  if (path.startsWith('~/')) return homeDir + path.slice(1)
+  return path
+}
+
+function pathUnder(candidate: string | undefined, base: string, homeDir?: string): boolean {
   if (!candidate || !base) return false
-  if (candidate === base) return true
-  return candidate.startsWith(base + '/')
+  const normBase = expandTilde(base, homeDir)
+  if (candidate === normBase) return true
+  return candidate.startsWith(normBase + '/')
 }
 
 /**
@@ -54,13 +66,14 @@ export function isSessionVisibleInProject(session: Session, project: ProjectItem
  * Path rules use longest-prefix matching. If no path rule matches,
  * falls back to the first remote-matched project.
  *
- * Both project paths and session cwds are canonicalized server-side
- * (~/... form), so string comparison works without $HOME expansion.
+ * homeDir (e.g. /Users/james) is used to expand ~ in project path
+ * rules, mirroring the server-side paths.NormalizePath behaviour.
  * Does not check rule.hosts (host scoping is server-side only).
  */
 export function matchSession(
   session: Session,
   projects: ProjectItem[],
+  homeDir?: string,
 ): ProjectItem | null {
   let bestPath: ProjectItem | null = null
   let bestPathLen = 0
@@ -79,11 +92,12 @@ export function matchSession(
       }
 
       if (rule.path) {
+        const normPath = expandTilde(rule.path, homeDir)
         const matched = rule.exact
-          ? (session.cwd === rule.path || session.workspace_root === rule.path)
-          : (pathUnder(session.cwd, rule.path) || pathUnder(session.workspace_root, rule.path))
-        if (matched && rule.path.length > bestPathLen) {
-          bestPathLen = rule.path.length
+          ? (session.cwd === normPath || session.workspace_root === normPath)
+          : (pathUnder(session.cwd, normPath) || pathUnder(session.workspace_root, normPath))
+        if (matched && normPath.length > bestPathLen) {
+          bestPathLen = normPath.length
           bestPath = project
         }
       }
@@ -103,6 +117,7 @@ export function matchSession(
 export function buildProjectFolders(
   projects: ProjectItem[],
   sessions: Session[],
+  homeDir?: string,
 ): Folder[] {
   const buckets = new Map<string, Session[]>()
   for (const project of projects) {
@@ -119,7 +134,7 @@ export function buildProjectFolders(
   }
 
   for (const session of sessions) {
-    const matched = matchSession(session, projects)
+    const matched = matchSession(session, projects, homeDir)
     if (!matched || !buckets.has(matched.slug)) continue
 
     if (session.alive) {
