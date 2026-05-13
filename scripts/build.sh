@@ -35,10 +35,10 @@ LDFLAGS_COMMON="-s -w -X main.version=$VERSION"
 export CGO_ENABLED=0
 
 echo "→ Building gmuxd…"
-(cd "$ROOT/services/gmuxd" && go build -ldflags "$LDFLAGS_COMMON" -o "$BIN/gmuxd" ./cmd/gmuxd)
+(cd "$ROOT/services/gmuxd" && GOOS=linux GOARCH=arm64 go build -ldflags "$LDFLAGS_COMMON" -o "$BIN/gmuxd" ./cmd/gmuxd)
 
 echo "→ Building gmux…"
-(cd "$ROOT/cli/gmux" && go build -ldflags "$LDFLAGS_COMMON" -o "$BIN/gmux" ./cmd/gmux)
+(cd "$ROOT/cli/gmux" && GOOS=linux GOARCH=arm64 go build -ldflags "$LDFLAGS_COMMON" -o "$BIN/gmux" ./cmd/gmux)
 
 echo ""
 ls -lh "$BIN/gmuxd" "$BIN/gmux"

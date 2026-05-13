@@ -10,7 +10,7 @@
  * validation happens here in the frontend.
  */
 import * as v from 'valibot'
-import type { ITheme } from '@xterm/xterm'
+import type { ITheme } from './types'
 
 // ── Helpers ──
 

@@ -7,8 +7,8 @@
  * what arrived in the capture log.
  *
  * The paste handler intercepts in the capture phase, so dispatching on the
- * container element is sufficient — xterm's listeners on .xterm and textarea
- * are inside the container and are never reached when stopPropagation() fires.
+ * container element is sufficient — ghostty-web's listeners are inside the
+ * container and are never reached when stopPropagation() fires.
  */
 import { test, expect, type Page } from '@playwright/test'
 import { openApp, gotoTestSession } from '../helpers'
@@ -37,21 +37,19 @@ async function drainCaptured(page: Page): Promise<string[]> {
   })
 }
 
-/** Override term.modes on the xterm instance to force a specific bracketedPasteMode value. */
+/** Override term.hasBracketedPaste on the ghostty-web instance to force a specific value. */
 async function setBracketedPasteMode(page: Page, enabled: boolean): Promise<void> {
   await page.evaluate((val) => {
     const term = (window as any).__gmuxTerm
-    Object.defineProperty(term, 'modes', {
-      get: () => ({ bracketedPasteMode: val }),
-      configurable: true,
-    })
+    term.hasBracketedPaste = () => val
   }, enabled)
 }
 
-/** Remove any instance-level override of term.modes (restores prototype getter). */
+/** Remove any instance-level override of hasBracketedPaste. */
 async function resetBracketedPasteMode(page: Page): Promise<void> {
   await page.evaluate(() => {
-    try { delete (window as any).__gmuxTerm.modes } catch { /* noop */ }
+    const term = (window as any).__gmuxTerm
+    try { delete term.hasBracketedPaste } catch { /* noop */ }
   })
 }
 

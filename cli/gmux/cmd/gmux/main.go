@@ -6,12 +6,46 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime/debug"
 	"time"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
 // Falls back to "dev" for local builds.
 var version = "dev"
+
+func init() {
+	if version != "dev" {
+		return
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	var rev, vcsTime string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.time":
+			vcsTime = s.Value
+		}
+	}
+	if rev == "" {
+		return
+	}
+	hash := rev
+	if len(hash) > 6 {
+		hash = hash[:6]
+	}
+	if vcsTime != "" {
+		if t, err := time.Parse(time.RFC3339, vcsTime); err == nil {
+			version = fmt.Sprintf("dev.%s.%s", t.UTC().Format("0102"), hash)
+			return
+		}
+	}
+	version = "dev." + hash
+}
 
 func main() {
 	log.SetPrefix("gmux: ")

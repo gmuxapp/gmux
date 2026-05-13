@@ -107,7 +107,7 @@ export async function gotoTestSession(page: Page): Promise<void> {
     return navigate(id) === true
   }, sessionId, { timeout: 10_000 })
 
-  await page.locator('.xterm').waitFor({ state: 'visible', timeout: 5_000 })
+  await page.locator('.terminal-container canvas').waitFor({ state: 'visible', timeout: 5_000 })
   // Give the WS connection time to establish and replay scrollback.
   await page.waitForTimeout(1500)
 }

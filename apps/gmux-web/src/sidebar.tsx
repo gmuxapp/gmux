@@ -15,7 +15,9 @@ import {
   updateProjects, reorderSessions,
   type DotState,
 } from './store'
+import { useInstallPrompt } from './use-install-prompt'
 import { PeerLabel } from './peer-label'
+import { FileTree } from './file-tree'
 import type { Session, Folder, ProjectItem } from './types'
 
 // ── Types ──
@@ -26,6 +28,15 @@ export type NotifPermission = 'default' | 'granted' | 'denied' | 'unavailable'
 export type { DotState }
 
 // ── Helpers ──
+
+/**
+ * Returns the environment icon for a session:
+ *   🏖️  for sandbox sessions (pi-sbx adapter)
+ *   🏡  for all host sessions
+ */
+export function sessionEnvironmentIcon(kind: string): string {
+  return kind === 'pi-sbx' ? '🏖️' : '🏡'
+}
 
 /** Determine the dot indicator state for a session. */
 function sessionDotState(session: Session, am: ReadonlyMap<string, 'active' | 'fading'>): DotState {
@@ -136,6 +147,7 @@ function SessionItem({
       {session.peer && <PeerLabel name={session.peer} />}
       <div class="session-content">
         <div class="session-title-row">
+          <span class="session-env-icon" aria-label={session.kind === 'pi-sbx' ? 'sandbox' : 'host'}>{sessionEnvironmentIcon(session.kind)}</span>
           <span class="session-title">{session.title}</span>
         </div>
         {session.status?.label && (
@@ -274,6 +286,7 @@ export function Sidebar({
     (n, f) => n + f.sessions.filter(s => s.alive || s.resumable).length, 0,
   )
   const connected = connState.value === 'connected'
+  const { trigger: triggerInstall } = useInstallPrompt()
   const hasProjects = projectsVal.length > 0
   const isOnlyHomeProject = projectsVal.length === 1
     && projectsVal[0].slug === 'home'
@@ -284,6 +297,12 @@ export function Sidebar({
       await updateProjects([{ slug: 'home', match: [{ path: '~', exact: true }] }])
     }
   }
+
+  // Find the current project's filesystem root for the file tree.
+  const currentFolder = curProjectSlug
+    ? foldersVal.find(f => f.path === curProjectSlug)
+    : null
+  const fileTreeCwd = currentFolder?.launchCwd ?? null
 
   return (
     <>
@@ -303,34 +322,48 @@ export function Sidebar({
             />
           )}
         </div>
-        <div class="sidebar-scroll">
-          {foldersVal.map(f => {
-            const proj = projectBySlug.get(f.path)
-            if (!proj) return null
-            return (
-              <FolderGroup
-                key={f.path}
-                folder={f}
-                project={proj}
-                selId={selId}
-                curProjectSlug={curProjectSlug}
-                resumingId={resumingId}
-                am={am}
-                onCloseSession={onCloseSession}
-                onClick={onClose}
+        <div class="sidebar-panes">
+          {/* ── Sessions pane ── */}
+          <div class="sidebar-sessions-pane">
+            {foldersVal.map(f => {
+              const proj = projectBySlug.get(f.path)
+              if (!proj) return null
+              return (
+                <FolderGroup
+                  key={f.path}
+                  folder={f}
+                  project={proj}
+                  selId={selId}
+                  curProjectSlug={curProjectSlug}
+                  resumingId={resumingId}
+                  am={am}
+                  onCloseSession={onCloseSession}
+                  onClick={onClose}
+                />
+              )
+            })}
+            {connected && totalVisible === 0 && !hasProjects && (
+              <div class="sidebar-hint">
+                Click <strong>+</strong> to start your first session.
+              </div>
+            )}
+            {connected && isOnlyHomeProject && totalVisible > 0 && (
+              <div class="sidebar-hint">
+                <button class="sidebar-hint-link" onClick={onManageProjects}>
+                  Manage projects
+                </button> to organize sessions by repo.
+              </div>
+            )}
+          </div>
+
+          {/* ── File tree pane (only when a project with a filesystem path is open) ── */}
+          {curProjectSlug && fileTreeCwd && (
+            <div class="sidebar-files-pane">
+              <FileTree
+                projectSlug={curProjectSlug}
+                cwd={fileTreeCwd}
+                onMobileClose={onClose}
               />
-            )
-          })}
-          {connected && totalVisible === 0 && !hasProjects && (
-            <div class="sidebar-hint">
-              Click <strong>+</strong> to start your first session.
-            </div>
-          )}
-          {connected && isOnlyHomeProject && totalVisible > 0 && (
-            <div class="sidebar-hint">
-              <button class="sidebar-hint-link" onClick={onManageProjects}>
-                Manage projects
-              </button> to organize sessions by repo.
             </div>
           )}
         </div>
@@ -340,6 +373,9 @@ export function Sidebar({
             {unmatchedCount > 0 && (
               <span class="manage-projects-badge">{unmatchedCount}</span>
             )}
+          </button>
+          <button class="manage-projects-btn" onClick={triggerInstall}>
+            Install app
           </button>
           {notifPermission === 'default' && (
             <button class="notif-btn" onClick={onRequestNotifPermission}>
@@ -351,6 +387,7 @@ export function Sidebar({
               <IconBell muted /> Notifications blocked in browser settings
             </div>
           )}
+          <span class="sidebar-version">v{__GMUX_VERSION__}</span>
         </div>
       </aside>
     </>

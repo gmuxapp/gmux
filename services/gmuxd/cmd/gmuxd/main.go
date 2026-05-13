@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -46,7 +48,41 @@ import (
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
+// For dev builds (no ldflags), init() enriches it with vcs date+hash.
 var version = "dev"
+
+func init() {
+	if version != "dev" {
+		return
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	var rev, vcsTime string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.time":
+			vcsTime = s.Value
+		}
+	}
+	if rev == "" {
+		return
+	}
+	hash := rev
+	if len(hash) > 6 {
+		hash = hash[:6]
+	}
+	if vcsTime != "" {
+		if t, err := time.Parse(time.RFC3339, vcsTime); err == nil {
+			version = fmt.Sprintf("dev.%s.%s", t.UTC().Format("0102"), hash)
+			return
+		}
+	}
+	version = "dev." + hash
+}
 
 type LaunchConfig struct {
 	DefaultLauncher string             `json:"default_launcher"`
@@ -1811,6 +1847,12 @@ func runStatus(stdout, stderr io.Writer) int {
 		}
 	}
 
+	// Session list.
+	if sessResp, err := client.Get("http://localhost/v1/sessions"); err == nil {
+		defer sessResp.Body.Close()
+		printSessionList(stdout, sessResp.Body)
+	}
+
 	return 0
 }
 
@@ -1833,8 +1875,183 @@ func appendOfflinePeers(mgr *peering.Manager, disc *tsdiscovery.Watcher) []peeri
 	return peers
 }
 
-func statusDot(status string) string {
-	switch status {
+// statusSession is the minimal session shape decoded from /v1/sessions.
+type statusSession struct {
+	ID           string         `json:"id"`
+	Kind         string         `json:"kind"`
+	Title        string         `json:"title"`
+	Alive        bool           `json:"alive"`
+	Pid          int            `json:"pid"`
+	Cwd          string         `json:"cwd"`
+	Status       *sessionStatus `json:"status"`
+	SocketPath   string         `json:"socket_path"`
+	TerminalCols uint16         `json:"terminal_cols"`
+	TerminalRows uint16         `json:"terminal_rows"`
+	ExitCode     *int           `json:"exit_code"`
+	ExitedAt     string         `json:"exited_at"`
+	StartedAt    string         `json:"started_at"`
+	Resumable    bool           `json:"resumable"`
+	Peer         string         `json:"peer"`
+}
+
+type sessionStatus struct {
+	Label   string `json:"label"`
+	Working bool   `json:"working"`
+	Error   bool   `json:"error"`
+}
+
+// printSessionList decodes /v1/sessions JSON from body and prints each session.
+func printSessionList(w io.Writer, body io.Reader) {
+	var resp struct {
+		OK   bool            `json:"ok"`
+		Data []statusSession `json:"data"`
+	}
+	if err := json.NewDecoder(body).Decode(&resp); err != nil || !resp.OK || len(resp.Data) == 0 {
+		return
+	}
+
+	// Sort: alive first; within group by kind then title.
+	sort.Slice(resp.Data, func(i, j int) bool {
+		a, b := resp.Data[i], resp.Data[j]
+		if a.Alive != b.Alive {
+			return a.Alive
+		}
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		return a.Title < b.Title
+	})
+
+	type tableRow struct {
+		dot, kind, id, pid, size, title, status string
+		cwd, socket                             string // sub-rows
+	}
+
+	rows := make([]tableRow, 0, len(resp.Data))
+	for _, s := range resp.Data {
+		r := tableRow{kind: s.Kind, id: s.ID, cwd: shortCwd(s.Cwd)}
+		if s.Title != "" && s.Title != s.Kind {
+			r.title = s.Title
+		}
+		if s.Alive {
+			r.dot = "\u25cf" // ●
+			if s.Pid > 0 {
+				r.pid = fmt.Sprintf("%d", s.Pid)
+			}
+			if s.TerminalCols > 0 && s.TerminalRows > 0 {
+				r.size = fmt.Sprintf("%d\u00d7%d", s.TerminalCols, s.TerminalRows)
+			}
+			if s.Status != nil && s.Status.Label != "" {
+				r.status = s.Status.Label
+			}
+			r.socket = s.SocketPath
+		} else {
+			r.dot = "\u25cb" // ○
+			var parts []string
+			if s.ExitedAt != "" {
+				if t, err := time.Parse(time.RFC3339, s.ExitedAt); err == nil {
+					parts = append(parts, "exited "+sessionRelativeTime(t))
+				}
+			}
+			if s.ExitCode != nil {
+				parts = append(parts, fmt.Sprintf("code=%d", *s.ExitCode))
+			}
+			if s.Resumable {
+				parts = append(parts, "resumable")
+			}
+			r.status = strings.Join(parts, "  ")
+		}
+		rows = append(rows, r)
+	}
+
+	// Calculate column widths (minimum = header label width).
+	wKind, wID, wPID, wSize, wTitle := len("KIND"), len("ID"), len("PID"), len("SIZE"), len("TITLE")
+	for _, r := range rows {
+		if n := len(r.kind); n > wKind {
+			wKind = n
+		}
+		if n := len(r.id); n > wID {
+			wID = n
+		}
+		if n := len(r.pid); n > wPID {
+			wPID = n
+		}
+		if n := len(r.size); n > wSize {
+			wSize = n
+		}
+		if n := len(r.title); n > wTitle {
+			wTitle = n
+		}
+	}
+
+	const indent = "  "
+	const sep = " \u2502 " // " │ "
+
+	printRow := func(dot, kind, id, pid, size, title, status string) {
+		_, _ = fmt.Fprintf(w, "%s%-1s%s%-*s%s%-*s%s%-*s%s%-*s%s%-*s%s%s\n",
+			indent,
+			dot, sep,
+			wKind, kind, sep,
+			wID, id, sep,
+			wPID, pid, sep,
+			wSize, size, sep,
+			wTitle, title, sep,
+			status)
+	}
+
+	// Header and separator.
+	_, _ = fmt.Fprintln(w)
+	printRow("", "KIND", "ID", "PID", "SIZE", "TITLE", "STATUS")
+	var sepLine strings.Builder
+	for i, colW := range []int{1, wKind, wID, wPID, wSize, wTitle, len("STATUS")} {
+		if i > 0 {
+			sepLine.WriteString("\u2500\u253c\u2500") // "─┼─"
+		}
+		sepLine.WriteString(strings.Repeat("\u2500", colW))
+	}
+	_, _ = fmt.Fprintf(w, "%s%s\n", indent, sepLine.String())
+
+	// Data rows + sub-rows.
+	subIndent := indent + strings.Repeat(" ", 1+len(sep)) // align under KIND
+	for _, r := range rows {
+		printRow(r.dot, r.kind, r.id, r.pid, r.size, r.title, r.status)
+		if r.cwd != "" {
+			_, _ = fmt.Fprintf(w, "%s%s\n", subIndent, r.cwd)
+		}
+		if r.socket != "" {
+			_, _ = fmt.Fprintf(w, "%ssocket: %s\n", subIndent, r.socket)
+		}
+	}
+}
+
+// shortCwd replaces the home directory prefix with ~.
+func shortCwd(cwd string) string {
+	home, _ := os.UserHomeDir()
+	if home != "" && strings.HasPrefix(cwd, home) {
+		return "~" + cwd[len(home):]
+	}
+	return cwd
+}
+
+// sessionRelativeTime formats a past time as a human-readable relative string.
+func sessionRelativeTime(t time.Time) string {
+	d := time.Since(t)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}
+
+func statusDot(status string) string {	switch status {
 	case "connected":
 		return "\u2022" // bullet
 	case "connecting":

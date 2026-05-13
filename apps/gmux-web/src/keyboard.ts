@@ -10,7 +10,7 @@
  * Keybindings are data-driven: the resolved keybind list is iterated on
  * each keydown. Each entry maps a key combo to an action.
  */
-import type { Terminal } from '@xterm/xterm'
+import type { Terminal } from 'ghostty-web'
 import {
   eventMatchesKeybind,
   IS_MAC,
@@ -118,7 +118,18 @@ export function attachKeyboardHandler(
   macCommandIsCtrl = false,
   sessionId = '',
   onPasteFeedback: PasteFeedback = defaultPasteFeedback,
-): void {
+): () => void {
+  // ghostty-web customKeyEventHandler return-value semantics are the INVERSE
+  // of xterm.js:
+  //
+  //   return true  → consumed: ghostty calls preventDefault() + returns without
+  //                 encoding the key — key is NOT sent to the PTY.
+  //   return false → pass-through: ghostty falls through to its WASM encoder
+  //                 and fires onData, which our sendInput listener forwards
+  //                 to the PTY.
+  //
+  // Every return site below is labelled with the intended semantics.
+
   term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
     // Mobile Enter → newline (not submit).
     // Bare Enter with no modifiers on a touch device sends \n so the user
@@ -128,7 +139,7 @@ export function attachKeyboardHandler(
         && isTouchDevice()) {
       if (ev.type === 'keydown') send('\n')
       ev.preventDefault()
-      return false
+      return true // consumed — we already sent \n; ghostty must not also encode Enter
     }
 
     // macCommandIsCtrl: on Mac, Cmd+<character> is treated as Ctrl+<character>.
@@ -138,7 +149,7 @@ export function attachKeyboardHandler(
     if (macCommandIsCtrl && IS_MAC && ev.metaKey && !ev.ctrlKey && ev.key.length === 1) {
       if (ev.type !== 'keydown') {
         ev.preventDefault()
-        return false
+        return true // consumed — suppress non-keydown phases of a Cmd key we own
       }
 
       // Match keybinds as if Ctrl were pressed instead of Cmd.
@@ -151,14 +162,14 @@ export function attachKeyboardHandler(
       for (const kb of keybinds) {
         if (!eventMatchesKeybind(virtualMods, kb)) continue
         const handled = executeAction(kb, term, send, sendRaw, sessionId, onPasteFeedback)
-        if (handled) { ev.preventDefault(); return false }
+        if (handled) { ev.preventDefault(); return true } // consumed
       }
 
       // No keybind matched. Synthesize the ctrl code directly.
       const seq = ctrlSequenceFor(ev.key)
       if (seq) send(seq)
       ev.preventDefault()
-      return false
+      return true // consumed — we sent the ctrl sequence; don't let ghostty also encode
     }
 
     // Check each resolved keybind against the event.
@@ -170,24 +181,26 @@ export function attachKeyboardHandler(
       if (kb.baseKey === 'enter' && kb.shift) {
         if (ev.type === 'keydown') executeAction(kb, term, send, sendRaw, sessionId, onPasteFeedback)
         ev.preventDefault()
-        return false
+        return true // consumed — all phases of shift+enter are ours
       }
 
       // For other bindings, only act on keydown.
-      if (ev.type !== 'keydown') return true
+      if (ev.type !== 'keydown') return false // pass-through — non-keydown, ghostty handles
 
       const handled = executeAction(kb, term, send, sendRaw, sessionId, onPasteFeedback)
       if (handled) {
         // Prevent browser default (e.g. Cmd+Left navigating back on Mac).
-        // xterm.js does not call preventDefault when the custom handler
-        // returns false, so we must do it ourselves.
+        // ghostty also calls preventDefault when we return true, but calling
+        // it ourselves first is harmless and makes intent explicit.
         ev.preventDefault()
-        return false
+        return true // consumed — action handled; ghostty must not also encode the key
       }
     }
 
-    return true
+    return false // pass-through — no keybind matched; ghostty encodes and sends to PTY
   })
+
+  return () => {} // no DOM listeners to remove
 }
 
 /**
@@ -250,7 +263,7 @@ function executeAction(
       // via onPasteFeedback so users see why nothing happened.
       void handlePasteAction({
         sessionId,
-        bracketedPasteMode: term.modes.bracketedPasteMode,
+        bracketedPasteMode: term.hasBracketedPaste(),
         feedback: onPasteFeedback,
         emit: sendRaw,
       })
@@ -381,7 +394,7 @@ export function attachPasteHandler(
         onPasteFeedback('error', 'Paste failed: no session bound')
         return
       }
-      void uploadAndFormatPath(blob, sessionId, term.modes.bracketedPasteMode, onPasteFeedback)
+      void uploadAndFormatPath(blob, sessionId, term.hasBracketedPaste(), onPasteFeedback)
         .then(out => { if (out !== null) sendRaw(out) })
       return
     }
@@ -393,7 +406,7 @@ export function attachPasteHandler(
     ev.stopPropagation()
     ev.preventDefault()
 
-    sendRaw(formatPasteText(text, term.modes.bracketedPasteMode))
+    sendRaw(formatPasteText(text, term.hasBracketedPaste()))
   }
 
   container.addEventListener('paste', handler, { capture: true })

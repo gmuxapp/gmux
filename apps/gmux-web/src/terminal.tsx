@@ -1,96 +1,123 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-import { ImageAddon } from '@xterm/addon-image'
-import { WebLinksAddon } from '@xterm/addon-web-links'
-import { WebglAddon } from '@xterm/addon-webgl'
+import { Terminal, FitAddon, UrlRegexProvider, OSC8LinkProvider, init as initGhostty } from 'ghostty-web'
 import type { ResolvedTerminalOptions } from './settings-schema'
 import { attachKeyboardHandler, attachPasteHandler, ctrlSequenceFor, defaultPasteFeedback, handlePasteAction } from './keyboard'
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
+import { shouldFocusOnTouchEnd } from './terminal-touch'
 import { createReplayBuffer } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 import { decideViewportResize, sameSize } from './terminal-resize'
 import { MOCK_BY_ID } from './mock-data/index'
 import type { Session } from './types'
+import type { ITheme } from './types'
 
 // ── Config ──
 
 const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
 
-function loadPreferredRenderer(term: Terminal) {
-  try {
-    term.loadAddon(new WebglAddon())
-  } catch {
-    /* falls back to DOM renderer */
-  }
-}
+// Shared init promise — ghostty-web must be initialised once before any
+// Terminal is constructed.  We kick it off at module load time so the WASM
+// is ready by the time the first component mounts.
+const ghosttyInitPromise: Promise<void> = initGhostty()
 
 /**
  * Re-export for backward compat (used by input-diagnostics.tsx).
  * The actual colors now live in config.ts as DEFAULT_THEME_COLORS.
  */
-export const TERM_THEME = DEFAULT_THEME_COLORS
+export const TERM_THEME: ITheme = DEFAULT_THEME_COLORS
+
+// ── OSC 52 pre-processor ──
+
+/**
+ * Scan a Uint8Array for complete OSC 52 sequences, write their payload
+ * to the clipboard, and return the data with those sequences stripped.
+ *
+ * ghostty-web has no parser-hook API, so we handle OSC 52 (terminal
+ * clipboard writes) before passing data to the terminal.
+ *
+ * Handles both BEL-terminated (0x07) and ST-terminated (ESC \) sequences.
+ * Cross-chunk sequences are NOT preserved — practically, pi always emits
+ * them in a single chunk.
+ */
+function interceptOsc52(data: Uint8Array): Uint8Array {
+  const ESC = 0x1b
+  const BRACKET = 0x5d // ]
+  const BEL = 0x07
+  const BACKSLASH = 0x5c
+
+  // Fast path: no ESC in data
+  let hasEsc = false
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] === ESC) { hasEsc = true; break }
+  }
+  if (!hasEsc) return data
+
+  const output: number[] = []
+  let i = 0
+  while (i < data.length) {
+    if (data[i] === ESC && i + 1 < data.length && data[i + 1] === BRACKET) {
+      const oscStart = i
+      i += 2
+      let body = ''
+      while (i < data.length) {
+        if (data[i] === BEL) { i++; break }
+        if (data[i] === ESC && i + 1 < data.length && data[i + 1] === BACKSLASH) { i += 2; break }
+        body += String.fromCharCode(data[i])
+        i++
+      }
+      if (body.startsWith('52;')) {
+        const rest = body.slice(3) // strip "52;"
+        const semiIdx = rest.indexOf(';')
+        if (semiIdx >= 0) {
+          const payload = rest.slice(semiIdx + 1)
+          if (payload !== '?') {
+            try {
+              const bytes = Uint8Array.from(atob(payload), c => c.charCodeAt(0))
+              const text = new TextDecoder().decode(bytes)
+              navigator.clipboard.writeText(text).catch(() => {})
+            } catch { /* invalid base64; ignore */ }
+          }
+          // Consumed — do NOT push to output
+          continue
+        }
+      }
+      // Not OSC 52: push original bytes
+      for (let j = oscStart; j < i; j++) output.push(data[j])
+      continue
+    }
+    output.push(data[i])
+    i++
+  }
+  // If nothing was stripped, return the original buffer
+  if (output.length === data.length) return data
+  return new Uint8Array(output)
+}
 
 // ── Utilities ──
 
 /**
- * Calculate terminal cols/rows that fit within a given element.
+ * Measure terminal cols/rows that fit within a given element using the
+ * FitAddon.  This replaces the old xterm-specific measureTerminalFit that
+ * read term.dimensions.css.cell.{width,height} directly.
  *
- * We intentionally do NOT use FitAddon.proposeDimensions() because it
- * measures `term.element.parentElement` — which may have grown with the
- * terminal content (passive mode) or be affected by overflow scrollbars.
- *
- * Instead we measure `shellEl` (the flex-allocated viewport) directly,
- * subtract the xterm element padding, and divide by cell size. This gives
- * a stable measurement that's immune to terminal content or scrollbar state.
+ * ghostty-web's FitAddon measures term.element (the container we passed to
+ * term.open), which is containerRef.current.  containerRef sits inside
+ * shellRef; since the canvas fills its container without overflow there is
+ * no difference between measuring one vs the other.
  */
 function measureTerminalFit(
-  term: Terminal,
-  shellEl: HTMLElement,
-  /** Extra horizontal pixels to reserve (e.g. for xterm's internal scrollbar). */
-  reserveWidth = 0,
+  fitAddon: FitAddon,
 ): TerminalSize | null {
-  const dims = term.dimensions
-  if (!dims || dims.css.cell.width === 0 || dims.css.cell.height === 0) return null
-
-  const xtermEl = term.element
-  if (!xtermEl) return null
-
-  // Read the xterm element's padding (our CSS sets padding on .xterm).
-  // Use parseFloat (not parseInt) to preserve sub-pixel precision under zoom.
-  const style = getComputedStyle(xtermEl)
-  const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
-  const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
-
-  // Measure the shell, the stable flex-allocated viewport.
-  const availW = shellEl.clientWidth - padX - reserveWidth
-  const availH = shellEl.clientHeight - padY
-
-  let cols = Math.max(2, Math.floor(availW / dims.css.cell.width))
-  const rows = Math.max(1, Math.floor(availH / dims.css.cell.height))
-
-  // Guard against 1px overflow: xterm computes screen width as
-  // Math.round(device.cell.width * cols / dpr). Because css.cell.width is
-  // derived from rounded values (round(device_canvas / dpr) / cols), it can
-  // be slightly smaller than the true character width. This makes floor()
-  // occasionally produce one extra column whose screen pixel width rounds up
-  // past availW, causing 1px horizontal scroll.
-  const dpr = window.devicePixelRatio || 1
-  if (dims.device.cell.width > 0) {
-    const predictedWidth = Math.round(dims.device.cell.width * cols / dpr)
-    if (predictedWidth > availW && cols > 2) cols--
-  }
-
-  return { cols, rows }
-}
-
-/** Legacy wrapper — used in a few places that still go through FitAddon. */
-export function getProposedTerminalSize(fit: FitAddon | null): TerminalSize | null {
-  if (!fit) return null
-  const dims = fit.proposeDimensions()
+  const dims = fitAddon.proposeDimensions()
   if (!dims) return null
   return { cols: dims.cols, rows: dims.rows }
+}
+
+/** Legacy wrapper — kept for call sites that need it. */
+export function getProposedTerminalSize(fit: FitAddon | null): TerminalSize | null {
+  if (!fit) return null
+  return measureTerminalFit(fit)
 }
 
 function getResizeSignalPixels(host: HTMLElement | null, vv: VisualViewport | null): { width: number; height: number } {
@@ -100,7 +127,6 @@ function getResizeSignalPixels(host: HTMLElement | null, vv: VisualViewport | nu
       height: host.clientHeight,
     }
   }
-
   return {
     width: vv?.width ?? window.innerWidth,
     height: vv?.height ?? window.innerHeight,
@@ -157,29 +183,40 @@ function focusTerminalInput(term: Terminal | null): void {
   })
 }
 
+/**
+ * Build the ghostty-web ITerminalOptions subset from our resolved settings.
+ * Unsupported options (fontWeight, lineHeight, etc.) are silently dropped.
+ */
+function buildGhosttyOptions(terminalOptions: ResolvedTerminalOptions) {
+  return {
+    fontSize: terminalOptions.fontSize,
+    fontFamily: terminalOptions.fontFamily,
+    cursorBlink: terminalOptions.cursorBlink,
+    cursorStyle: terminalOptions.cursorStyle,
+    theme: terminalOptions.theme,
+    scrollback: terminalOptions.scrollback,
+    smoothScrollDuration: terminalOptions.smoothScrollDuration,
+  }
+}
+
 // ── TerminalView ──
 
 /**
- * Single xterm.js instance with reconnecting WebSocket.
+ * Single ghostty-web Terminal instance with reconnecting WebSocket.
  *
- * Architecture: one Terminal lives for the app lifetime. Switching sessions
- * closes the old WS, clears the terminal, and opens a new WS. The runner's
- * 128KB scrollback ring buffer replays on connect, so history is preserved
- * without keeping per-session xterm instances alive.
+ * Architecture unchanged from the xterm version: one Terminal lives for the
+ * app lifetime. ghostty-web is API-compatible with xterm.js, so the overall
+ * structure is the same. Key differences from the xterm build:
  *
- * Resize model: selecting a session claims ownership — the first WS connect
- * resizes the PTY to fit this browser's viewport. While driving, viewport
- * resize sends are gated by the matching terminal_resize echo from the server,
- * so drag-resize stays responsive without flooding. If another source (local
- * terminal, other browser) later changes the PTY size, the "Sized for another
- * device" pill appears (derived from viewport ≠ PTY). Clicking it reclaims.
- * Auto-reconnects after a network blip re-sync from session metadata without
- * reclaiming, so they don't steal from another driver.
- *
- * Auto-reconnect on WS drop with exponential backoff.
- * No AttachAddon — we wire onmessage/onData manually so we can reconnect.
+ * - Renderer: canvas (native to ghostty-web; no WebGL/DOM addon needed)
+ * - FitAddon: from ghostty-web (same API, different internals)
+ * - Links: registerLinkProvider instead of WebLinksAddon
+ * - OSC 52: pre-processed in the write path (no parser hook API)
+ * - Init: async init() required before first Terminal construction
+ * - Mobile selection: ghostty-web's canvas SelectionManager handles
+ *   mouse-drag selection natively; long-press → copy works on Android
+ *   via the OS context menu over the selected canvas region
  */
-
 export function TerminalView({
   session,
   terminalOptions,
@@ -208,6 +245,7 @@ export function TerminalView({
   const shellRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
+  const fitAddonRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const disposed = useRef(false)
@@ -218,20 +256,16 @@ export function TerminalView({
   const termIoRef = useRef<ReturnType<typeof createTerminalIO> | null>(null)
   const termEpochRef = useRef(0)
 
-  // True once the terminal's font is downloaded; gates xterm mount.
-  // See the preload effect below for why this matters.
-  const [fontReady, setFontReady] = useState(false)
+  // Gates terminal mount until ghostty-web WASM is loaded.
+  const [ghosttyReady, setGhosttyReady] = useState(false)
 
   const [termLoading, setTermLoading] = useState(true)
   const [wsState, setWsState] = useState<'connecting' | 'open' | 'lost'>('connecting')
   const [viewportSize, setViewportSize] = useState<TerminalSize | null>(null)
   const [scrolledUp, setScrolledUp] = useState(false)
-  const SCROLL_THRESHOLD = 3 // rows above bottom before showing the button
-  // Track the last PTY size we know about so we can derive the pill.
+  const SCROLL_THRESHOLD = 3
   const [ptySize, setPtySize] = useState<TerminalSize | null>(null)
 
-  // Refs shadow viewportSize/ptySize for use inside event handlers that
-  // must not trigger effect re-runs but need current values.
   const viewportSizeRef = useRef<TerminalSize | null>(null)
   const ptySizeRef = useRef<TerminalSize | null>(null)
   const resizeEchoGateRef = useRef<{
@@ -249,6 +283,11 @@ export function TerminalView({
   sessionRef.current = session
   ctrlArmedRef.current = ctrlArmed
   altArmedRef.current = altArmed
+
+  // Kick off ghostty-web init (shared promise — safe to await multiple times)
+  useEffect(() => {
+    ghosttyInitPromise.then(() => setGhosttyReady(true))
+  }, [])
 
   const queueResize = useCallback((size: TerminalSize) => {
     termIoRef.current?.requestResize(size, termEpochRef.current)
@@ -286,16 +325,11 @@ export function TerminalView({
   const applyOwnedResize = useCallback((size: TerminalSize) => {
     const prevPty = ptySizeRef.current
 
-    // Optimistically sync ptySize so the pill hides immediately, before the
-    // server echoes the resize back. Without this, ptySize would lag behind
-    // viewportSize for one round-trip, causing a spurious pill flash.
     setPtySize(size); ptySizeRef.current = size
     queueResize(size)
 
     if (sameSize(prevPty, size)) return
 
-    // A new outbound resize supersedes any older echo wait or pending dirty
-    // viewport event. The server echo for this exact size re-opens the gate.
     resetResizeEchoGate()
 
     const ws = wsRef.current
@@ -310,11 +344,10 @@ export function TerminalView({
   }, [queueResize, releaseResizeEchoGate, resetResizeEchoGate])
 
   const processViewportResize = useCallback((forceDrive = false) => {
-    const term = termRef.current
-    const shell = shellRef.current
-    if (!term || !shell) return
+    const fit = fitAddonRef.current
+    if (!fit) return
 
-    const newVp = measureTerminalFit(term, shell)
+    const newVp = measureTerminalFit(fit)
     const gate = resizeEchoGateRef.current
     const decision = decideViewportResize({
       prevViewport: viewportSizeRef.current,
@@ -325,8 +358,6 @@ export function TerminalView({
     })
 
     if (decision.kind === 'wait') {
-      // Keep the ref fresh for the next decision, but skip the React state
-      // update so the pill doesn't flash while we wait for the echo.
       viewportSizeRef.current = newVp
       gate.dirty = true
       return
@@ -335,28 +366,22 @@ export function TerminalView({
     setViewportSize(newVp); viewportSizeRef.current = newVp
 
     if (decision.kind === 'drive') {
-      // Viewport matched PTY, or we were already driving and just finished
-      // waiting for the previous echo. Resize xterm now, then wait for the
-      // server echo before sending the next viewport change.
       applyOwnedResize(decision.size)
       return
     }
 
     if (decision.kind === 'follow') {
-      // Out of sync (pill visible), keep xterm at the PTY size.
       queueResize(decision.size)
     }
   }, [applyOwnedResize, queueResize])
 
   processViewportResizeRef.current = processViewportResize
 
-  // Resize xterm to fit the viewport and announce the new size to the backend.
   const fitAndResize = useCallback(() => {
-    const term = termRef.current
-    const shell = shellRef.current
-    if (!term || !shell) return
+    const fit = fitAddonRef.current
+    if (!fit) return
 
-    const dims = measureTerminalFit(term, shell)
+    const dims = measureTerminalFit(fit)
     setViewportSize(dims); viewportSizeRef.current = dims
     if (!dims) return
 
@@ -375,66 +400,43 @@ export function TerminalView({
     focusTerminal()
   }, [focusTerminal])
 
-  // Force-fetch the terminal font before mounting xterm.
-  //
-  // xterm picks its cell metrics from the first measurement it takes
-  // inside term.open(). If the woff2 hasn't downloaded yet, that
-  // measurement uses fallback monospace metrics (cell ≈ 18 px). xterm
-  // re-measures internally when the real font arrives a few ms later
-  // (cell ≈ 17 px) and the rendered grid shrinks, but the row count we
-  // derived from the original measurement doesn't get recomputed,
-  // leaving an extra row's worth of unused space at the bottom of the
-  // viewport.
-  //
-  // document.fonts.ready isn't enough: @fontsource only registers the
-  // @font-face declarations, so nothing is in flight at mount and ready
-  // resolves immediately. document.fonts.load(spec) actually triggers
-  // the fetch and resolves once the bytes are in.
-  //
-  // .finally rather than .then so a fetch failure (offline, flaky network,
-  // CSP) still unblocks the gate. xterm falls back to monospace metrics in
-  // that case, which is much better UX than a terminal stuck on the
-  // loading overlay forever.
-  useEffect(() => {
-    let cancelled = false
-    const spec = `${terminalOptions.fontSize}px ${terminalOptions.fontFamily}`
-    document.fonts.load(spec).finally(() => {
-      if (!cancelled) setFontReady(true)
-    })
-    return () => { cancelled = true }
-  }, [terminalOptions.fontFamily, terminalOptions.fontSize])
-
   // Terminal + keyboard setup (stable across session changes).
   useEffect(() => {
-    if (!containerRef.current || USE_MOCK || !fontReady) return
+    if (!containerRef.current || USE_MOCK || !ghosttyReady) return
     disposed.current = false
 
-    // Add non-serializable options that can't live in JSON config.
-    const term = new Terminal({
-      ...terminalOptions,
-      linkHandler: {
-        activate(_event, text) {
-          window.open(text, '_blank', 'noopener')
-        },
-      },
-    })
+    const term = new Terminal(buildGhosttyOptions(terminalOptions))
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
-    term.loadAddon(new ImageAddon())
-    // Detect plain-text URLs in terminal output and make them clickable.
-    term.loadAddon(new WebLinksAddon())
     term.open(containerRef.current)
-    loadPreferredRenderer(term)
-    // Initial fit: use FitAddon for the first resize (before shellRef is
-    // guaranteed stable), then switch to measureTerminalFit for everything after.
+
+    // Link detection (replaces WebLinksAddon)
+    term.registerLinkProvider(new UrlRegexProvider(term))
+    term.registerLinkProvider(new OSC8LinkProvider(term))
+
+    // Initial fit
     fitAddon.fit()
-    const initialVp = shellRef.current ? measureTerminalFit(term, shellRef.current) : getProposedTerminalSize(fitAddon)
+    const initialVp = measureTerminalFit(fitAddon)
     setViewportSize(initialVp); viewportSizeRef.current = initialVp
+
     termRef.current = term
+    fitAddonRef.current = fitAddon
     termIoRef.current = createTerminalIO(term, {
       getState() {
-        const buf = term.buffer.active
-        return { viewportY: buf.viewportY, baseY: buf.baseY, rows: term.rows }
+        // ghostty-web scroll API:
+        //   getViewportY() = 0 when viewing live output (at bottom)
+        //                  = N after scrollToLine(N), where N is 0-indexed from top of scrollback
+        //   getScrollbackLength() = number of scrollback lines (= xterm's baseY)
+        //   buf.viewportY and buf.baseY are always 0 — not useful
+        //
+        // xterm-compatible translation:
+        //   baseY      = scrollbackLen
+        //   viewportY  = scrollbackLen when at bottom (gvY=0)
+        //              = gvY           when scrolled into history (gvY>0)
+        const scrollbackLen = term.getScrollbackLength()
+        const gvY = term.getViewportY()
+        const viewportY = gvY === 0 ? scrollbackLen : gvY
+        return { viewportY, baseY: scrollbackLen, rows: term.rows }
       },
       scrollToLine(line: number) { term.scrollToLine(line) },
       scrollToBottom() { term.scrollToBottom() },
@@ -442,19 +444,11 @@ export function TerminalView({
         const line = term.buffer.active.getLine(y)
         if (!line) return null
         const text = line.translateToString(true)
-        // Filter trivial anchors so a wipe-and-redraw doesn't snap the
-        // user to the first stretch of separators or whitespace it
-        // finds. Four visible chars is enough to be distinctive without
-        // excluding short but meaningful lines ("DONE", "PASS", etc.).
         if (text.trim().length < 4) return null
         return text
       },
     })
     ;(window as any).__gmuxTerm = term
-    // Test-only inject hook: pumps bytes through the same path as ws.onmessage
-    // (createTerminalIO.enqueue) bypassing the WebSocket and replay buffer.
-    // Used by e2e/tests/terminal-scroll.spec.ts to exercise scroll preservation
-    // against real xterm with deterministic byte sequences and frame boundaries.
     ;(window as any).__gmuxInject = (b64: string) => {
       const bin = atob(b64)
       const bytes = new Uint8Array(bin.length)
@@ -490,15 +484,10 @@ export function TerminalView({
     }
 
     onInputReady?.(sendRawInput)
-    // The paste trigger reads bracketedPasteMode and the clipboard fresh
-    // on every invocation: bracketed mode flips at runtime as TUIs come
-    // and go, and the clipboard contents are obviously volatile. Sharing
-    // handlePasteAction with the keybind path means the mobile toolbar
-    // button gets binary-paste support without divergent code.
     onPasteReady?.(() => {
       void handlePasteAction({
         sessionId: session.id,
-        bracketedPasteMode: term.modes.bracketedPasteMode,
+        bracketedPasteMode: term.hasBracketedPaste(),
         feedback: defaultPasteFeedback,
         emit: sendRawInput,
       })
@@ -506,34 +495,16 @@ export function TerminalView({
     onFocusReady?.(() => focusTerminalInput(term))
 
     const dataDisposable = term.onData((data) => sendInput(data))
-    attachKeyboardHandler(term, sendInput, sendRawInput, keybinds, macCommandIsCtrl, session.id)
+    const disposeKeyboardHandler = attachKeyboardHandler(term, sendInput, sendRawInput, keybinds, macCommandIsCtrl, session.id)
     const disposePasteHandler = attachPasteHandler(term, containerRef.current!, sendRawInput, session.id)
     const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
 
-    // OSC 52 clipboard: applications (e.g. pi /copy) write
-    //   ESC ] 52 ; <selection> ; <base64-payload> BEL
-    // to set the system clipboard. The payload is UTF-8 text encoded as
-    // base64. Decode and write via the Clipboard API.
-    const osc52Disposable = term.parser.registerOscHandler(52, (data) => {
-      const semi = data.indexOf(';')
-      if (semi < 0) return false
-      const payload = data.substring(semi + 1)
-      if (payload === '?') return false // clipboard read request; not supported
-      try {
-        // atob() decodes base64 to a Latin-1 binary string. The underlying
-        // bytes are UTF-8, so we must re-decode through TextDecoder.
-        const bytes = Uint8Array.from(atob(payload), c => c.charCodeAt(0))
-        const text = new TextDecoder().decode(bytes)
-        navigator.clipboard.writeText(text).catch(() => {})
-      } catch {
-        // invalid base64; ignore
-      }
-      return true
-    })
-
     const scrollDisposable = term.onScroll(() => {
-      const buf = term.buffer.active
-      setScrolledUp(buf.baseY - buf.viewportY > SCROLL_THRESHOLD)
+      // ghostty-web: getViewportY()=0 at bottom, =N (>0) when scrolled into history.
+      // "scrolled up" = not at bottom AND distance from bottom exceeds threshold.
+      const scrollbackLen = term.getScrollbackLength()
+      const gvY = term.getViewportY()
+      setScrolledUp(gvY > 0 && scrollbackLen - gvY > SCROLL_THRESHOLD)
     })
 
     const handleGlobalKeydown = (ev: KeyboardEvent) => {
@@ -554,6 +525,8 @@ export function TerminalView({
       startY: 0,
       startScrollLeft: 0,
       startScrollTop: 0,
+      longPressTimer: null as ReturnType<typeof setTimeout> | null,
+      wasLongPress: false,
     }
 
     const handleTouchStartCapture = (ev: TouchEvent) => {
@@ -570,14 +543,19 @@ export function TerminalView({
         return
       }
 
-      // Track touch start for both modes — focus happens on touchend
-      // only if the user didn't drag (tap vs scroll distinction).
       touchPanState.active = true
       touchPanState.moved = false
+      touchPanState.wasLongPress = false
       touchPanState.startX = ev.touches[0].clientX
       touchPanState.startY = ev.touches[0].clientY
       touchPanState.startScrollLeft = host.scrollLeft
       touchPanState.startScrollTop = host.scrollTop
+
+      if (touchPanState.longPressTimer !== null) clearTimeout(touchPanState.longPressTimer)
+      touchPanState.longPressTimer = setTimeout(() => {
+        touchPanState.longPressTimer = null
+        touchPanState.wasLongPress = true
+      }, 400)
     }
 
     const handleTouchMoveCapture = (ev: TouchEvent) => {
@@ -591,10 +569,12 @@ export function TerminalView({
       const deltaY = touch.clientY - touchPanState.startY
       if (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6) {
         touchPanState.moved = true
+        if (touchPanState.longPressTimer !== null) {
+          clearTimeout(touchPanState.longPressTimer)
+          touchPanState.longPressTimer = null
+        }
       }
 
-      // If viewport matches PTY (in sync), no overflow to pan — let xterm
-      // handle the gesture for selection/scrollback.
       const vp = viewportSizeRef.current
       const pty = ptySizeRef.current
       if (vp && pty && vp.cols === pty.cols && vp.rows === pty.rows) return
@@ -610,18 +590,12 @@ export function TerminalView({
     }
 
     const handleTouchEndCapture = () => {
-      if (touchPanState.active && !touchPanState.moved) {
+      if (touchPanState.longPressTimer !== null) {
+        clearTimeout(touchPanState.longPressTimer)
+        touchPanState.longPressTimer = null
+      }
+      if (touchPanState.active && shouldFocusOnTouchEnd({ moved: touchPanState.moved, wasLongPress: touchPanState.wasLongPress })) {
         focusTerminalInput(term)
-        // Defer scroll so synthesized mouse events (which the browser fires
-        // after touchend returns) reach xterm's Linkifier at the current
-        // scroll position. Without this, scrollToBottom() changes the
-        // viewport before the Linkifier can resolve the link under the tap
-        // coordinates, making link taps a no-op on mobile.
-        //
-        // setTimeout(0) and not rAF: synthesized mouse events fire as part
-        // of the current user interaction, before queued tasks. rAF timing
-        // relative to synthesized events is unspecified and varies by
-        // browser; on some it fires before them, reproducing the bug.
         setTimeout(() => {
           term.scrollToBottom()
           const host = shellRef.current
@@ -636,8 +610,13 @@ export function TerminalView({
     }
 
     const clearTouchPan = () => {
+      if (touchPanState.longPressTimer !== null) {
+        clearTimeout(touchPanState.longPressTimer)
+        touchPanState.longPressTimer = null
+      }
       touchPanState.active = false
       touchPanState.moved = false
+      touchPanState.wasLongPress = false
     }
 
     shell?.addEventListener('touchstart', handleTouchStartCapture, { capture: true, passive: false })
@@ -645,17 +624,6 @@ export function TerminalView({
     shell?.addEventListener('touchend', handleTouchEndCapture, true)
     shell?.addEventListener('touchcancel', clearTouchPan, true)
 
-    // Resize strategy:
-    // - A ResizeObserver on the shell element detects all layout changes:
-    //   initial flex settle, sidebar toggle, window resize, etc.
-    // - Measure on the next animation frame, after browser layout settles.
-    //   In practice width can update before flex heights finish recalculating,
-    //   so measuring synchronously in the resize event can read a stale height.
-    // - After each outbound resize, wait for the matching terminal_resize echo
-    //   before sending the next one. This keeps drag-resize responsive without
-    //   flooding the server with intermediate sizes.
-    // - Height-only viewport changes (soft keyboard slide) get a short debounce
-    //   before that frame measurement, so we skip unstable intermediate heights.
     const vv = window.visualViewport
     const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
       || navigator.maxTouchPoints > 0
@@ -676,8 +644,6 @@ export function TerminalView({
       pendingHeightChange = false
       if (!shouldRefocus) return
 
-      // Let iOS finish the keyboard transition before grabbing focus,
-      // otherwise the OS immediately re-blurs the textarea.
       if (refocusTimer !== null) clearTimeout(refocusTimer)
       refocusTimer = setTimeout(() => focusTerminalInput(termRef.current), 120)
     }
@@ -691,10 +657,6 @@ export function TerminalView({
       const nextViewportPixels = getResizeSignalPixels(shell, vv)
       const widthChanged = nextViewportPixels.width !== lastViewportPixels.width
       const heightChanged = nextViewportPixels.height !== lastViewportPixels.height
-      // Ignore duplicate window.resize / visualViewport.resize notifications
-      // that report the same laid-out shell size. We key off the shell rather
-      // than visualViewport because window.resize can fire before
-      // visualViewport catches up on some browsers.
       if (!widthChanged && !heightChanged) return
 
       lastViewportPixels = nextViewportPixels
@@ -705,9 +667,6 @@ export function TerminalView({
         resizeTimer = null
       }
 
-      // Soft keyboard animations are mostly height-only, so debounce just that
-      // case on touch devices. Desktop resizes go through immediately, even if
-      // only the height changed.
       if (isTouchDevice && heightChanged && !widthChanged) {
         resizeTimer = setTimeout(scheduleViewportResize, KEYBOARD_RESIZE_DEBOUNCE_MS)
         return
@@ -716,13 +675,9 @@ export function TerminalView({
       scheduleViewportResize()
     }
 
-    // ResizeObserver on the shell catches layout changes that don't fire
-    // window.resize: initial flex settle, sidebar toggle, CSS transitions.
-    // It fires after layout, so measurements are always up-to-date.
     const shellObserver = new ResizeObserver(() => onViewportResize())
     if (shell) shellObserver.observe(shell)
 
-    // Also listen on window/visualViewport for zoom and soft keyboard.
     window.addEventListener('resize', onViewportResize)
     if (vv) vv.addEventListener('resize', onViewportResize)
 
@@ -741,7 +696,7 @@ export function TerminalView({
       shell?.removeEventListener('touchcancel', clearTouchPan, true)
       disposePasteHandler()
       disposeMobileHandler()
-      osc52Disposable.dispose()
+      disposeKeyboardHandler()
       dataDisposable.dispose()
       scrollDisposable.dispose()
       setScrolledUp(false)
@@ -755,18 +710,15 @@ export function TerminalView({
       ;(window as any).__gmuxInject = null
       term.dispose()
       termRef.current = null
+      fitAddonRef.current = null
       termIoRef.current = null
     }
-  }, [onCtrlConsumed, onInputReady, fontReady])
+  }, [onCtrlConsumed, onInputReady, ghosttyReady])
 
   // WebSocket connection (reconnects when session.id changes).
   useEffect(() => {
     if (!termRef.current || USE_MOCK || !termIoRef.current) return
 
-    // Claim ownership on the first WS open for this session: resize the PTY
-    // to fit this browser's viewport. Auto-reconnects (same session.id) skip
-    // the claim, so we don't steal ownership from another driver after a
-    // network blip. User can reclaim by clicking the pill if needed.
     let isFirstConnect = true
     let attempt = 0
     let intentionalClose = false
@@ -774,8 +726,6 @@ export function TerminalView({
     termEpochRef.current = epoch
     termIoRef.current.reset(epoch)
 
-    // Reset sizes so stale values from a previous session can't trigger a
-    // spurious pill while the loading overlay is visible (before ws.onopen).
     resetResizeEchoGate()
     setPtySize(null); ptySizeRef.current = null
     setViewportSize(null); viewportSizeRef.current = null
@@ -791,16 +741,14 @@ export function TerminalView({
         wsRef.current = null
       }
 
-      // Tell the scroll preservation layer to force-scroll-to-bottom for
-      // the replay frame. This avoids the "jump to top" bug: xterm's
-      // isUserScrolling flag can persist from the previous session, and
-      // \x1b[3J resets ybase/ydisp to 0 without clearing that flag. The
-      // force flag makes the BSU/ESU handler treat it as wasAtBottom=true
-      // regardless of the stale scroll state.
       termIoRef.current?.forceNextScrollToBottom()
 
       const replay = createReplayBuffer((chunks) => {
-        queueMany(chunks, () => {
+        // Strip OSC 52 from replayed bytes (suppress clipboard writes from
+        // original session replay — same rationale as the old
+        // term.parser.registerOscHandler(52, () => true) in replay-view.tsx)
+        const filtered = chunks.map(interceptOsc52)
+        queueMany(filtered, () => {
           termRef.current?.scrollToBottom()
           setTermLoading(false)
         })
@@ -816,10 +764,6 @@ export function TerminalView({
         setWsState('open')
 
         if (!isFirstConnect) {
-          // Reconnect: re-sync ptySize from session metadata in case a
-          // terminal_resize WS event was missed during the drop. Session
-          // metadata is updated via SSE independently, so it may be
-          // fresher than our cached ptySize after a network blip.
           resetResizeEchoGate()
           const sess = sessionRef.current
           if (sess.terminal_cols && sess.terminal_rows) {
@@ -833,11 +777,6 @@ export function TerminalView({
           return
         }
         isFirstConnect = false
-
-        // First connect for this session: claim ownership by fitting the PTY
-        // to our viewport. fitAndResize measures, sets viewport+pty
-        // optimistically, and sends the resize over this ws (wsRef was set
-        // above).
         fitAndResize()
       }
 
@@ -845,8 +784,6 @@ export function TerminalView({
         if (typeof ev.data === 'string') {
           try {
             const msg = JSON.parse(ev.data)
-            // Legacy: old proxy sends resize_state on connect with cols/rows.
-            // Use it to initialize ptySize if we don't have one yet.
             if (msg.type === 'resize_state') {
               const cols = msg.cols as number | undefined
               const rows = msg.rows as number | undefined
@@ -873,7 +810,7 @@ export function TerminalView({
             // fall through to terminal write
           }
 
-          const data = new TextEncoder().encode(ev.data)
+          const data = interceptOsc52(new TextEncoder().encode(ev.data))
           if (replay.state !== 'done') {
             replay.push(data)
             return
@@ -882,9 +819,10 @@ export function TerminalView({
           return
         }
 
-        const data = ev.data instanceof ArrayBuffer
+        const rawData = ev.data instanceof ArrayBuffer
           ? new Uint8Array(ev.data)
           : new TextEncoder().encode(ev.data)
+        const data = interceptOsc52(rawData)
 
         if (replay.state !== 'done') {
           replay.push(data)
@@ -905,8 +843,7 @@ export function TerminalView({
         reconnectTimer.current = setTimeout(connect, delay)
       }
 
-      ws.onerror = () => {
-      }
+      ws.onerror = () => {}
     }
 
     connect()
@@ -921,14 +858,8 @@ export function TerminalView({
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [fitAndResize, queueData, queueMany, queueResize, releaseResizeEchoGate, resetResizeEchoGate, session.id, fontReady])
+  }, [fitAndResize, queueData, queueMany, queueResize, releaseResizeEchoGate, resetResizeEchoGate, session.id, ghosttyReady])
 
-  // Pill is purely derived from size mismatch. No "driving" flag: we claim
-  // on every fresh session select (first ws.onopen), and fitAndResize sets
-  // ptySize = viewportSize optimistically so the pill self-clears the moment
-  // we start a resize, before the server echoes it back. The pill only
-  // reappears when a server-sourced terminal_resize (another client, local
-  // terminal) changes ptySize away from our viewport.
   const showDisconnectedPill = wsState === 'lost'
   const showResizePill = !showDisconnectedPill
     && session.alive
@@ -985,47 +916,56 @@ export function TerminalView({
 
 // ── MockTerminal ──
 
-/** Read-only xterm instance showing pre-baked ANSI content for mock/demo mode. */
+/** Read-only ghostty-web Terminal showing pre-baked ANSI content for mock/demo mode. */
 export function MockTerminal({ sessionId }: { sessionId: string }) {
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!containerRef.current) return
+    let cancelled = false
+    let cleanup: (() => void) | null = null
 
-    const term = new Terminal({
-      theme: TERM_THEME,
-      fontFamily: "'Fira Code', monospace",
-      fontSize: 13,
-      disableStdin: true,
-      cursorBlink: false,
-      cursorInactiveStyle: 'none',
-    })
-    const fit = new FitAddon()
-    term.loadAddon(fit)
-    term.open(containerRef.current)
-    loadPreferredRenderer(term)
-    fit.fit()
+    ghosttyInitPromise.then(() => {
+      if (cancelled || !containerRef.current) return
 
-    const mock = MOCK_BY_ID[sessionId]
-    if (mock?.terminal) {
-      // Normalize \n to \r\n so xterm carriage-returns to column 0 on each line.
-      term.write(mock.terminal.replace(/\r?\n/g, '\r\n'), () => {
-        if (mock.cursorX != null && mock.cursorY != null) {
-          term.write(`\x1b[${mock.cursorY + 1};${mock.cursorX + 1}H`)
-        }
+      const term = new Terminal({
+        theme: TERM_THEME,
+        fontFamily: "'Fira Code', monospace",
+        fontSize: 13,
+        disableStdin: true,
+        cursorBlink: false,
       })
-    }
+      const fit = new FitAddon()
+      term.loadAddon(fit)
+      term.open(containerRef.current)
+      fit.fit()
 
-    // Expose for debug: window.__gmuxTerm
-    ;(window as any).__gmuxTerm = term
+      const mock = MOCK_BY_ID[sessionId]
+      if (mock?.terminal) {
+        term.write(mock.terminal.replace(/\r?\n/g, '\r\n'), () => {
+          if (mock.cursorX != null && mock.cursorY != null) {
+            term.write(`\x1b[${mock.cursorY + 1};${mock.cursorX + 1}H`)
+          }
+        })
+      }
 
-    const onResize = () => fit.fit()
-    window.addEventListener('resize', onResize)
+      ;(window as any).__gmuxTerm = term
+
+      const onResize = () => fit.fit()
+      window.addEventListener('resize', onResize)
+
+      cleanup = () => {
+        window.removeEventListener('resize', onResize)
+        if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
+        term.dispose()
+      }
+
+      if (cancelled) cleanup()
+    })
 
     return () => {
-      window.removeEventListener('resize', onResize)
-      if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
-      term.dispose()
+      cancelled = true
+      cleanup?.()
     }
   }, [sessionId])
 

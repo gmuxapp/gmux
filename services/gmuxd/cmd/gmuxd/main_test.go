@@ -252,6 +252,54 @@ func TestRunStatusShowsSessionsAndPeers(t *testing.T) {
 	}
 }
 
+func TestRunStatusShowsSessionList(t *testing.T) {
+	stateDir, cleanup := startTestSocketDaemonFull(t)
+	defer cleanup()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"status"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr=%q", code, stderr.String())
+	}
+	out := stdout.String()
+
+	// Alive session: ID, pid, socket, title, terminal size, status label.
+	if !strings.Contains(out, "sess-aabbccdd") {
+		t.Errorf("expected alive session ID in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "99001") {
+		t.Errorf("expected pid 99001 in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "PID") {
+		t.Errorf("expected PID column header in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "/tmp/gmux-sessions/sess-aabbccdd.sock") {
+		t.Errorf("expected socket path in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Fix scrollback bug") {
+		t.Errorf("expected session title in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "thinking...") {
+		t.Errorf("expected status label in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "80\u00d724") {
+		t.Errorf("expected terminal size (80\u00d724) in output, got:\n%s", out)
+	}
+
+	// Dead session: ID and resumable marker.
+	if !strings.Contains(out, "sess-11223344") {
+		t.Errorf("expected dead session ID in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "resumable") {
+		t.Errorf("expected resumable in output, got:\n%s", out)
+	}
+	// Exit code for dead session.
+	if !strings.Contains(out, "code=0") {
+		t.Errorf("expected exit code in output, got:\n%s", out)
+	}
+}
+
 func TestRunAuthNoRunningDaemon(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
@@ -393,6 +441,38 @@ func startTestSocketDaemonFull(t *testing.T) (stateDir string, cleanup func()) {
 			},
 		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": data})
+	})
+	mux.HandleFunc("/v1/sessions", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		exitCode := 0
+		exitedAt := time.Now().Add(-37 * time.Minute).Format(time.RFC3339)
+		sessions := []map[string]any{
+			{
+				"id":           "sess-aabbccdd",
+				"kind":         "pi",
+				"title":        "Fix scrollback bug",
+				"alive":        true,
+				"pid":          99001,
+				"cwd":          "/home/user/project",
+				"socket_path":  "/tmp/gmux-sessions/sess-aabbccdd.sock",
+				"terminal_cols": 80,
+				"terminal_rows": 24,
+				"status":       map[string]any{"label": "thinking...", "working": true},
+				"started_at":   time.Now().Add(-5 * time.Minute).Format(time.RFC3339),
+			},
+			{
+				"id":        "sess-11223344",
+				"kind":      "shell",
+				"title":     "bash",
+				"alive":     false,
+				"cwd":       "/home/user/other",
+				"exit_code": &exitCode,
+				"exited_at": exitedAt,
+				"command":   []string{"bash"},
+				"resumable": true,
+			},
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": sessions})
 	})
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(ln)

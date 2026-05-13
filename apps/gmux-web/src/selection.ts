@@ -92,20 +92,12 @@ export function selectionToText(term: SelectionTerminal): string {
     const ex = isLast ? end.x : cols
 
     // Trim trailing whitespace when the row's selection reaches the row
-    // boundary (`ex >= cols`). That covers every non-last row, plus the
-    // last row when the user selected past EOL (triple-click,
-    // line-select, drag through the line break). When the user stopped
-    // *inside* the row we preserve the cells they dragged across,
-    // including any pad spaces.
-    //
-    // Two layers of trimming, both gated on `trim`:
-    //   1. xterm's translateToString(trimRight=true) drops never-written
-    //      cells (codepoint 0). Handles shell output cleanly.
-    //   2. We post-strip ASCII whitespace from the right edge. Handles
-    //      TUIs that fill rows with explicit space cells before the
-    //      newline (pi, CC, btop, …). See file-level docstring for the
-    //      full rationale and the rare case it loses fidelity in.
-    const trim = ex >= cols
+    // boundary. Two end-coordinate conventions exist:
+    //   xterm.js:    end.x is exclusive — full-row select gives end.x === cols
+    //   ghostty-web: end.x is inclusive — full-row select gives end.x === cols-1
+    // Using `ex >= cols - 1` covers both (for non-last rows ex is always cols,
+    // which satisfies both conditions).
+    const trim = ex >= cols - 1
     if (ex > sx) {
       const slice = line.translateToString(trim, sx, ex)
       out += trim ? slice.replace(/[ \t]+$/, '') : slice

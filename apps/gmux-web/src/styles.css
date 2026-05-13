@@ -123,8 +123,18 @@ body {
   text-shadow: 0 0 6px rgba(255, 255, 255, 0.25);
 }
 
-.sidebar-scroll {
+.sidebar-panes {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Sessions pane: 30% of remaining space, min 120px so it doesn't collapse */
+.sidebar-sessions-pane {
+  flex: 3;
+  min-height: 120px;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 6px 0;
@@ -132,15 +142,28 @@ body {
   flex-direction: column;
 }
 
-.sidebar-scroll::-webkit-scrollbar {
+/* File tree pane: 70% of remaining space */
+.sidebar-files-pane {
+  flex: 7;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Shared thin scrollbar for both panes */
+.sidebar-sessions-pane::-webkit-scrollbar,
+.sidebar-files-pane::-webkit-scrollbar {
   width: 3px;
 }
-
-.sidebar-scroll::-webkit-scrollbar-track {
+.sidebar-sessions-pane::-webkit-scrollbar-track,
+.sidebar-files-pane::-webkit-scrollbar-track {
   background: transparent;
 }
-
-.sidebar-scroll::-webkit-scrollbar-thumb {
+.sidebar-sessions-pane::-webkit-scrollbar-thumb,
+.sidebar-files-pane::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 2px;
 }
@@ -434,6 +457,13 @@ body {
   min-width: 0;
 }
 
+.session-env-icon {
+  font-size: 11px;
+  line-height: 1;
+  flex-shrink: 0;
+  user-select: none;
+}
+
 .session-meta {
   display: flex;
   align-items: center;
@@ -560,8 +590,18 @@ body {
 /* ── Sidebar footer ── */
 .sidebar-footer {
   flex-shrink: 0;
-  padding: 8px 12px;
+  padding: 4px 12px 6px;
   border-top: 1px solid var(--border);
+}
+
+.sidebar-version {
+  display: block;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  padding: 2px 0 1px;
+  user-select: text;
 }
 
 .manage-projects-btn {
@@ -1882,8 +1922,22 @@ a.home-host-link:hover {
     border-top: 1px solid var(--border);
     border-bottom: none;
   }
-  .sidebar-scroll { order: 1; }
-  .sidebar-footer { order: 2; }
+  .sidebar-sessions-pane { order: 1; }
+  .sidebar-files-pane { order: 2; }
+  .sidebar-footer { order: 3; }
+
+  /* Enable native OS text selection on touch devices.
+     xterm.js injects `user-select: none` globally on `.xterm` and uses a
+     WebGL/canvas renderer by default, which makes the OS long-press gesture
+     unable to select any text.  On coarse-pointer devices we switch to the
+     DOM renderer (so text lives in real <span> nodes) and override the
+     user-select rule so Android/iOS can reach those nodes. */
+  .terminal-container .xterm,
+  .terminal-container .xterm-rows,
+  .terminal-container .xterm-screen {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+  }
 }
 
 /* ── Session Detail (non-terminal) ── */
@@ -2330,3 +2384,304 @@ a.home-host-link:hover {
 }
 .jump-to-bottom:hover { background: oklch(28% 0.015 250); }
 .jump-to-bottom:active { transform: translateY(1px); }
+
+/* ── File Tree ── */
+
+.ft-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.ft-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px 5px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.ft-header-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.ft-header-cwd {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  padding-left: 4px;
+}
+
+.ft-header-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.1s, background 0.1s, color 0.1s;
+  flex-shrink: 0;
+}
+.ft-header:hover .ft-header-btn {
+  opacity: 1;
+}
+.ft-header-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.ft-tree {
+  flex: 1;
+  padding: 4px 0;
+  position: relative;
+}
+
+.ft-tree.ft-external-dragover {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+/* Tree nodes */
+
+.ft-node-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.ft-node {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 3px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin: 0 4px;
+  min-height: 24px;
+  transition: background 0.1s;
+  user-select: none;
+  position: relative;
+}
+.ft-node:hover {
+  background: var(--bg-hover);
+}
+.ft-node.ft-drop-target {
+  background: oklch(25% 0.05 195);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.ft-node.ft-dragging {
+  opacity: 0.4;
+}
+
+.ft-node-adding {
+  background: var(--bg-surface);
+}
+
+.ft-chevron-wrap {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 12px;
+}
+.ft-chevron-spacer {
+  display: inline-block;
+  width: 12px;
+}
+.ft-chevron {
+  color: var(--text-muted);
+}
+
+.ft-icon {
+  flex-shrink: 0;
+}
+.ft-icon-file {
+  color: var(--text-secondary);
+}
+.ft-icon-folder {
+  color: oklch(72% 0.12 55); /* amber */
+}
+
+.ft-node-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Action buttons (rename, delete) — shown on hover */
+
+.ft-node-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.ft-node:hover .ft-node-actions {
+  display: flex;
+}
+
+.ft-action-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  transition: background 0.1s, color 0.1s;
+}
+.ft-action-btn:hover {
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+.ft-action-btn.ft-action-delete:hover {
+  color: var(--status-error);
+}
+
+.ft-action-icon {
+  color: inherit;
+}
+
+/* Children indent container */
+.ft-children {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Inline input (rename / add) */
+
+.ft-inline-input {
+  flex: 1;
+  background: var(--bg-surface);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: 'Source Sans 3', sans-serif;
+  padding: 1px 5px;
+  outline: none;
+  min-width: 0;
+}
+.ft-inline-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px oklch(72% 0.1 195 / 0.2);
+}
+
+/* Error banner */
+
+.ft-error {
+  font-size: 12px;
+  color: var(--status-error);
+  padding: 4px 14px;
+  background: oklch(20% 0.04 25);
+  border-bottom: 1px solid oklch(30% 0.08 25);
+}
+
+/* Empty state */
+
+.ft-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  opacity: 0.6;
+  padding: 12px 14px;
+  text-align: center;
+}
+
+/* Delete confirmation modal */
+
+.ft-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: oklch(0% 0 0 / 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.ft-modal {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  max-width: 320px;
+  width: calc(100% - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 8px 32px oklch(0% 0 0 / 0.4);
+}
+
+.ft-modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ft-modal-body {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.ft-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.ft-modal-cancel {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-family: 'Source Sans 3', sans-serif;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.ft-modal-cancel:hover {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+.ft-modal-confirm {
+  background: oklch(40% 0.14 25);
+  border: 1px solid oklch(50% 0.14 25);
+  border-radius: var(--radius);
+  color: oklch(92% 0.04 25);
+  font-size: 13px;
+  font-family: 'Source Sans 3', sans-serif;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.ft-modal-confirm:hover {
+  background: oklch(48% 0.16 25);
+}
+
+/* manage-projects-btn tighter in trimmed footer */
+.sidebar-footer .manage-projects-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}

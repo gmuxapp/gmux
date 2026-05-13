@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,8 +40,9 @@ func ensureGmuxd() bool {
 
 // gmuxdNeedsStart checks the running daemon.
 func gmuxdNeedsStart() bool {
-	// "dev" builds never replace — avoids churn during development.
-	if version == "dev" {
+	// dev builds (any "dev" or "dev.MMDD.hash" version) never force-restart
+	// the daemon — avoids churn during development.
+	if version == "dev" || strings.HasPrefix(version, "dev.") {
 		return !gmuxdHealthy(500 * time.Millisecond)
 	}
 
