@@ -27,4 +27,11 @@ export default defineConfig({
       },
     },
   },
+  optimizeDeps: {
+    // preact-iso is source-only (no dist build). esbuild cannot resolve its
+    // dynamic import('./prerender.js') during dep pre-bundling, crashing the
+    // dev server on first cold start. Excluding it lets vite serve the src
+    // files directly without bundling them.
+    exclude: ['preact-iso'],
+  },
 })
