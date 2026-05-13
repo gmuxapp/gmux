@@ -16,6 +16,35 @@
 
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
 
+// ── Mock support ──
+// In mock/dev mode (no real gmuxd), serve a static file tree so the UI
+// is visible without a backend. Never makes real API calls when mocked.
+const IS_MOCK = import.meta.env.VITE_MOCK === '1' ||
+  (typeof location !== 'undefined' && location.search.includes('mock'))
+
+const MOCK_TREE: Record<string, FileEntry[]> = {
+  '': [
+    { name: 'src', type: 'dir' },
+    { name: 'tests', type: 'dir' },
+    { name: 'README.md', type: 'file', size: 1240 },
+    { name: 'package.json', type: 'file', size: 820 },
+    { name: 'tsconfig.json', type: 'file', size: 310 },
+  ],
+  'src': [
+    { name: 'components', type: 'dir' },
+    { name: 'index.ts', type: 'file', size: 480 },
+    { name: 'types.ts', type: 'file', size: 920 },
+    { name: 'utils.ts', type: 'file', size: 640 },
+  ],
+  'src/components': [
+    { name: 'App.tsx', type: 'file', size: 1100 },
+    { name: 'Sidebar.tsx', type: 'file', size: 2300 },
+  ],
+  'tests': [
+    { name: 'utils.test.ts', type: 'file', size: 560 },
+  ],
+}
+
 // ── Types ──
 
 export interface FileEntry {
@@ -77,6 +106,7 @@ async function apiFetch(method: string, url: string, body?: unknown): Promise<{ 
 }
 
 async function listDir(slug: string, rel: string): Promise<FileEntry[]> {
+  if (IS_MOCK) return MOCK_TREE[rel] ?? []
   const url = `/v1/fs/${encodeURIComponent(slug)}?path=${encodeURIComponent(rel)}`
   const resp = await apiFetch('GET', url)
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'list failed')
@@ -84,36 +114,43 @@ async function listDir(slug: string, rel: string): Promise<FileEntry[]> {
 }
 
 async function apiMkdir(slug: string, path: string): Promise<void> {
+  if (IS_MOCK) return
   const resp = await apiFetch('POST', `/v1/fs/${encodeURIComponent(slug)}/mkdir`, { path })
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'mkdir failed')
 }
 
 async function apiCreateFile(slug: string, path: string): Promise<void> {
+  if (IS_MOCK) return
   const resp = await apiFetch('POST', `/v1/fs/${encodeURIComponent(slug)}/create`, { path })
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'create failed')
 }
 
 async function apiRename(slug: string, from: string, to: string): Promise<void> {
+  if (IS_MOCK) return
   const resp = await apiFetch('POST', `/v1/fs/${encodeURIComponent(slug)}/rename`, { from, to })
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'rename failed')
 }
 
 async function apiMove(slug: string, from: string, to: string): Promise<void> {
+  if (IS_MOCK) return
   const resp = await apiFetch('POST', `/v1/fs/${encodeURIComponent(slug)}/move`, { from, to })
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'move failed')
 }
 
 async function apiDelete(slug: string, path: string, recursive: boolean): Promise<void> {
+  if (IS_MOCK) return
   const resp = await apiFetch('DELETE', `/v1/fs/${encodeURIComponent(slug)}/item`, { path, recursive })
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'delete failed')
 }
 
 async function apiOpen(slug: string, path: string): Promise<void> {
+  if (IS_MOCK) return
   const resp = await apiFetch('POST', `/v1/fs/${encodeURIComponent(slug)}/open`, { path })
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'open failed')
 }
 
 async function apiUpload(slug: string, dir: string, files: FileList): Promise<void> {
+  if (IS_MOCK) return
   const form = new FormData()
   for (let i = 0; i < files.length; i++) {
     form.append('file', files[i])
