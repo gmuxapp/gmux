@@ -1,9 +1,0 @@
----
-// Override Starlight's Head to inject PostHog on all docs pages.
-// Landing page (src/pages/index.astro) includes PostHog separately.
-import type { Props } from '@astrojs/starlight/props'
-import Default from '@astrojs/starlight/components/Head.astro'
-import PostHog from './posthog.astro'
----
-<Default {...Astro.props}><slot /></Default>
-<PostHog />
