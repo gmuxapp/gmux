@@ -57,6 +57,10 @@ func remoteSetup(cfg config.Config, stdin io.Reader, stdout, stderr io.Writer) i
 
 	// Enable tailscale in the config file.
 	cfgPath := config.Path()
+	if cfgPath == "" {
+		fmt.Fprintln(stderr, "gmuxd remote: GMUX_CONFIG_DIR is not set; cannot write config")
+		return 1
+	}
 	if err := enableTailscaleConfig(cfgPath); err != nil {
 		fmt.Fprintf(stderr, "gmuxd remote: %v\n", err)
 		return 1

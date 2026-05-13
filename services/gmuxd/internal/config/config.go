@@ -139,13 +139,19 @@ type TailscaleConfig struct {
 	Allow []string `toml:"allow"`
 }
 
-// Load reads the config file. Returns defaults if the file doesn't exist.
+// Load reads the config file from GMUX_CONFIG_DIR. Returns defaults if the
+// variable is unset or if the file doesn't exist.
 // Returns an error for malformed config, unknown fields, or invalid
 // security settings — gmuxd should refuse to start in these cases.
 func Load() (Config, error) {
 	cfg := defaults()
 
-	path := Path()
+	dir := Dir()
+	if dir == "" {
+		return cfg, nil
+	}
+
+	path := filepath.Join(dir, "host.toml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -395,17 +401,21 @@ func (cfg Config) ListenAddr() (string, error) {
 	return net.JoinHostPort(listen, fmt.Sprintf("%d", cfg.Port)), nil
 }
 
-// Dir returns the gmux config directory (~/.config/gmux/).
+// Dir returns the gmux config directory.
+// Controlled entirely by the GMUX_CONFIG_DIR environment variable.
+// Returns an empty string when the variable is not set, which causes
+// all Load* functions to return defaults/nil without reading any file.
 func Dir() string {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "gmux")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "gmux")
+	return os.Getenv("GMUX_CONFIG_DIR")
 }
 
-// Path returns the path to the host config file.
+// Path returns the path to the host config file, or an empty string when
+// GMUX_CONFIG_DIR is not set.
 func Path() string {
-	return filepath.Join(Dir(), "host.toml")
+	dir := Dir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "host.toml")
 }
 

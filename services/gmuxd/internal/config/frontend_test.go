@@ -7,7 +7,7 @@ import (
 )
 
 func TestLoadTheme_MissingFile(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GMUX_CONFIG_DIR", t.TempDir())
 
 	data, err := LoadTheme()
 	if err != nil {
@@ -20,7 +20,7 @@ func TestLoadTheme_MissingFile(t *testing.T) {
 
 func TestLoadTheme_ValidJSON(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeFile(t, dir, "theme.jsonc", `{"background": "#282a36"}`)
 
 	data, err := LoadTheme()
@@ -34,7 +34,7 @@ func TestLoadTheme_ValidJSON(t *testing.T) {
 
 func TestLoadTheme_StripsComments(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeFile(t, dir, "theme.jsonc", `{
   // Dark background
   "background": "#282a36",
@@ -53,7 +53,7 @@ func TestLoadTheme_StripsComments(t *testing.T) {
 
 func TestLoadTheme_StripsTrailingCommas(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeFile(t, dir, "theme.jsonc", `{
   "background": "#282a36",
   "foreground": "#f8f8f2",
@@ -70,7 +70,7 @@ func TestLoadTheme_StripsTrailingCommas(t *testing.T) {
 
 func TestLoadTheme_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeFile(t, dir, "theme.jsonc", `{invalid json}`)
 
 	_, err := LoadTheme()
@@ -80,7 +80,7 @@ func TestLoadTheme_InvalidJSON(t *testing.T) {
 }
 
 func TestLoadSettings_MissingFile(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GMUX_CONFIG_DIR", t.TempDir())
 
 	data, err := LoadSettings()
 	if err != nil {
@@ -93,7 +93,7 @@ func TestLoadSettings_MissingFile(t *testing.T) {
 
 func TestLoadSettings_ValidObject(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeFile(t, dir, "settings.jsonc", `{
   // Terminal font
   "fontSize": 16,
@@ -112,9 +112,8 @@ func TestLoadSettings_ValidObject(t *testing.T) {
 	}
 }
 
-func writeFile(t *testing.T, xdgDir, name, content string) {
+func writeFile(t *testing.T, cfgDir, name, content string) {
 	t.Helper()
-	dir := filepath.Join(xdgDir, "gmux")
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644)
+	os.MkdirAll(cfgDir, 0o755)
+	os.WriteFile(filepath.Join(cfgDir, name), []byte(content), 0o644)
 }

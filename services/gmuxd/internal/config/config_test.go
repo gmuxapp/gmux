@@ -9,7 +9,7 @@ import (
 )
 
 func TestLoadDefaults(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GMUX_CONFIG_DIR", t.TempDir())
 
 	cfg, err := Load()
 	if err != nil {
@@ -31,7 +31,7 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadFromFile(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `
 port = 9999
 
@@ -61,7 +61,7 @@ allow = ["alice@github", "bob@github"]
 
 func TestLoadFiltersEmptyAllowEntries(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `
 [tailscale]
 enabled = true
@@ -79,7 +79,7 @@ allow = ["alice@github", "", "  ", "bob@github"]
 
 func TestLoadRejectsUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `
 port = 8790
 [tailscale]
@@ -98,7 +98,7 @@ alow = ["user@github"]
 
 func TestLoadRejectsInvalidPort(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `port = 99999`)
 
 	_, err := Load()
@@ -112,7 +112,7 @@ func TestLoadRejectsInvalidPort(t *testing.T) {
 
 func TestLoadRejectsBadLoginFormat(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `
 [tailscale]
 enabled = true
@@ -130,7 +130,7 @@ allow = ["not-a-login-name"]
 
 func TestLoadRejectsBadTOML(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `{{invalid`)
 
 	_, err := Load()
@@ -232,7 +232,7 @@ func TestListenAddrIPv6(t *testing.T) {
 
 func TestLoadPeers(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `
 [[peers]]
 name = "server"
@@ -262,7 +262,7 @@ token = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
 
 func TestLoadPeersRejectsDuplicate(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `
 [[peers]]
 name = "server"
@@ -299,7 +299,7 @@ func TestLoadPeersRejectsInvalidName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			t.Setenv("XDG_CONFIG_HOME", dir)
+			t.Setenv("GMUX_CONFIG_DIR", dir)
 			writeConfig(t, dir, fmt.Sprintf(`
 [[peers]]
 name = %q
@@ -320,7 +320,7 @@ token = "abc"
 
 func TestLoadPeersRejectsMissingURL(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `
 [[peers]]
 name = "server"
@@ -338,7 +338,7 @@ token = "abc"
 
 func TestLoadPeersAcceptsNoToken(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `
 [[peers]]
 name = "server"
@@ -356,7 +356,7 @@ url = "https://mybox.tailnet.ts.net"
 
 func TestLoadPeersRejectsMultipleTokenSources(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `
 [[peers]]
 name = "server"
@@ -376,7 +376,7 @@ token_file = "/path/to/token"
 
 func TestLoadPeersTokenFile(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	tokenFile := filepath.Join(t.TempDir(), "token")
 	os.WriteFile(tokenFile, []byte("my-secret-token\n"), 0o600)
 
@@ -398,7 +398,7 @@ token_file = %q
 
 func TestLoadPeersTokenCommand(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `
 [[peers]]
 name = "server"
@@ -517,7 +517,7 @@ func TestResolveTokens_FailedCommandErrors(t *testing.T) {
 
 func TestLoadDiscoveryDefaults(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, ``)
 
 	cfg, err := Load()
@@ -531,7 +531,7 @@ func TestLoadDiscoveryDefaults(t *testing.T) {
 
 func TestLoadDiscoveryExplicitDisable(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `
 [discovery]
 devcontainers = false
@@ -558,7 +558,7 @@ func TestLoadPeersRejectsInvalidURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.url, func(t *testing.T) {
 			dir := t.TempDir()
-			t.Setenv("XDG_CONFIG_HOME", dir)
+			t.Setenv("GMUX_CONFIG_DIR", dir)
 			writeConfig(t, dir, fmt.Sprintf(`
 [[peers]]
 name = "server"
@@ -581,7 +581,7 @@ func TestLoadPeersAcceptsHTTPAndHTTPS(t *testing.T) {
 	for _, scheme := range []string{"http", "https"} {
 		t.Run(scheme, func(t *testing.T) {
 			dir := t.TempDir()
-			t.Setenv("XDG_CONFIG_HOME", dir)
+			t.Setenv("GMUX_CONFIG_DIR", dir)
 			writeConfig(t, dir, fmt.Sprintf(`
 [[peers]]
 name = "server"
@@ -599,7 +599,7 @@ token = "abc"
 
 func TestLoadNoPeersIsValid(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 	writeConfig(t, dir, `port = 8790`)
 
 	cfg, err := Load()
@@ -611,9 +611,8 @@ func TestLoadNoPeersIsValid(t *testing.T) {
 	}
 }
 
-func writeConfig(t *testing.T, xdgDir, content string) {
+func writeConfig(t *testing.T, cfgDir, content string) {
 	t.Helper()
-	cfgDir := filepath.Join(xdgDir, "gmux")
 	os.MkdirAll(cfgDir, 0o755)
 	os.WriteFile(filepath.Join(cfgDir, "host.toml"), []byte(content), 0o644)
 }

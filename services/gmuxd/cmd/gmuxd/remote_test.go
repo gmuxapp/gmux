@@ -189,9 +189,7 @@ func TestEnableTailscaleConfig_ProducesValidConfig(t *testing.T) {
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			cfgDir := filepath.Join(dir, "gmux")
-			os.MkdirAll(cfgDir, 0o755)
-			cfgPath := filepath.Join(cfgDir, "host.toml")
+			cfgPath := filepath.Join(dir, "host.toml")
 			if tt.initial != "" {
 				os.WriteFile(cfgPath, []byte(tt.initial), 0o644)
 			}
@@ -200,7 +198,7 @@ func TestEnableTailscaleConfig_ProducesValidConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			t.Setenv("XDG_CONFIG_HOME", dir)
+			t.Setenv("GMUX_CONFIG_DIR", dir)
 			cfg, err := config.Load()
 			if err != nil {
 				data, _ := os.ReadFile(cfgPath)
@@ -311,7 +309,7 @@ func TestDisplayStatus_NotConnected(t *testing.T) {
 
 func TestRemoteSetup_UserDeclinesNoConfigChange(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 
 	stdin := strings.NewReader("n\n")
 	var stdout, stderr bytes.Buffer
@@ -321,7 +319,7 @@ func TestRemoteSetup_UserDeclinesNoConfigChange(t *testing.T) {
 	}
 
 	// Config file should not have been created.
-	cfgPath := filepath.Join(dir, "gmux", "host.toml")
+	cfgPath := filepath.Join(dir, "host.toml")
 	if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
 		t.Errorf("config file should not exist after declining, err=%v", err)
 	}
@@ -329,7 +327,7 @@ func TestRemoteSetup_UserDeclinesNoConfigChange(t *testing.T) {
 
 func TestRemoteSetup_ShowsExplanation(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GMUX_CONFIG_DIR", dir)
 
 	stdin := strings.NewReader("n\n")
 	var stdout, stderr bytes.Buffer
