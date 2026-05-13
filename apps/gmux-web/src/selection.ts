@@ -68,6 +68,19 @@ export interface SelectionTerminal {
   readonly cols: number
   readonly buffer: { readonly active: SelectionBuffer }
   getSelectionPosition(): { start: { x: number, y: number }, end: { x: number, y: number } } | undefined
+  /** Total number of scrollback lines (absolute index of first viewport row when at bottom). */
+  getScrollbackLength(): number
+  /**
+   * Lines scrolled back from the bottom of the scrollback buffer.
+   * 0 = viewing live output (at bottom); N = scrolled back N lines.
+   *
+   * Used to convert the viewport-relative row coords returned by
+   * `getSelectionPosition()` into the absolute buffer row indices that
+   * `buffer.active.getLine()` expects:
+   *
+   *   absoluteRow = getScrollbackLength() + viewportRelativeRow - getViewportY()
+   */
+  getViewportY(): number
 }
 
 /**
@@ -82,9 +95,22 @@ export function selectionToText(term: SelectionTerminal): string {
   const buffer = term.buffer.active
   const cols = term.cols
 
+  // getSelectionPosition() returns viewport-RELATIVE row coords (y=0 = first
+  // visible line).  buffer.active.getLine() expects ABSOLUTE buffer rows
+  // (y=0 = oldest scrollback line).  Convert using:
+  //
+  //   absoluteRow = scrollbackLen + viewportRelativeRow - getViewportY()
+  //
+  // where getViewportY() is the number of lines scrolled back from the bottom
+  // (0 = at bottom/live output).  This is SelectionManager.viewportRowToAbsolute
+  // from ghostty-web's source.
+  const scrollbackLen = term.getScrollbackLength()
+  const gvY = term.getViewportY()
+  const toAbsolute = (viewportRow: number): number => scrollbackLen + viewportRow - gvY
+
   let out = ''
   for (let y = start.y; y <= end.y; y++) {
-    const line = buffer.getLine(y)
+    const line = buffer.getLine(toAbsolute(y))
     if (!line) continue
 
     const isLast = y === end.y
@@ -107,7 +133,7 @@ export function selectionToText(term: SelectionTerminal): string {
 
     if (!isLast) {
       // Soft wrap: next row continues this one, suppress the newline.
-      const next = buffer.getLine(y + 1)
+      const next = buffer.getLine(toAbsolute(y + 1))
       if (!next?.isWrapped) out += '\n'
     }
   }

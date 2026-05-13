@@ -158,6 +158,8 @@ function makeTermMock(opts: { hasSelection?: boolean } = {}): {
     getSelectionPosition: () => opts.hasSelection
       ? { start: { x: 0, y: 0 }, end: { x: 5, y: 0 } }
       : undefined,
+    getScrollbackLength: () => 0,
+    getViewportY: () => 0,
     hasSelection: () => !!opts.hasSelection,
     clearSelection: vi.fn(),
     selectAll: vi.fn(),

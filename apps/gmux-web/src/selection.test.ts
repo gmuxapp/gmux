@@ -22,6 +22,10 @@ function makeTerm(opts: {
   rows: string[]
   wrapped?: number[]
   selection?: { start: { x: number, y: number }, end: { x: number, y: number } }
+  /** Number of leading rows that are scrollback (default 0). */
+  scrollbackLen?: number
+  /** Lines scrolled back from bottom (default 0 = at bottom). */
+  viewportY?: number
 }): SelectionTerminal {
   const wrapped = new Set(opts.wrapped ?? [])
   const lines: SelectionBufferLine[] = opts.rows.map((written, i) => {
@@ -43,6 +47,8 @@ function makeTerm(opts: {
     cols: opts.cols,
     buffer: { active: { getLine: y => lines[y] } },
     getSelectionPosition: () => opts.selection,
+    getScrollbackLength: () => opts.scrollbackLen ?? 0,
+    getViewportY: () => opts.viewportY ?? 0,
   }
 }
 
@@ -167,6 +173,54 @@ describe('selectionToText', () => {
       selection: { start: { x: 6, y: 0 }, end: { x: 6, y: 1 } },
     })
     expect(selectionToText(term)).toBe('world\nfoo bar')
+  })
+
+  // ── Coordinate-offset regression tests ────────────────────────────────────
+  //
+  // ghostty-web's getSelectionPosition() returns viewport-RELATIVE row coords
+  // (y=0 = first visible line).  buffer.active.getLine() expects ABSOLUTE rows
+  // (y=0 = oldest scrollback line).  selectionToText() must offset by
+  // scrollbackLen - getViewportY() so it reads the right lines.
+
+  it('reads from viewport rows not scrollback rows when scrollback is present', () => {
+    // Buffer: [sb0, sb1, sb2, vp0, vp1].  scrollbackLen=3, gvY=0 (at bottom).
+    // Selection viewport-relative y ∈ {0, 1} should resolve to absolute rows 3, 4.
+    // Without the offset fix, getLine(0) and getLine(1) would return sb0/sb1.
+    const term = makeTerm({
+      cols: 10,
+      rows: [
+        'sb0',       // absolute 0 (scrollback)
+        'sb1',       // absolute 1 (scrollback)
+        'sb2',       // absolute 2 (scrollback)
+        'viewport0', // absolute 3 (viewport row 0 at bottom)
+        'viewport1', // absolute 4 (viewport row 1 at bottom)
+      ],
+      scrollbackLen: 3,
+      viewportY: 0,
+      selection: { start: { x: 0, y: 0 }, end: { x: 8, y: 1 } },
+    })
+    expect(selectionToText(term)).toBe('viewport0\nviewport1')
+  })
+
+  it('reads from the correct absolute rows when scrolled back', () => {
+    // Buffer: [sb0, sb1, sb2, vp0, vp1].  scrollbackLen=3, gvY=2 (scrolled back 2).
+    // Viewport shows absolute rows 1, 2, 3 (sb1, sb2, vp0).
+    // Selection viewport-relative y=0 → absolute 1 (sb1), y=1 → absolute 2 (sb2).
+    // absoluteRow = 3 + viewportRow - 2.
+    const term = makeTerm({
+      cols: 10,
+      rows: [
+        'sb0',  // absolute 0
+        'sb1',  // absolute 1 (viewport row 0 when gvY=2)
+        'sb2',  // absolute 2 (viewport row 1 when gvY=2)
+        'vp0',  // absolute 3 (viewport row 2 when gvY=2)
+        'vp1',  // absolute 4
+      ],
+      scrollbackLen: 3,
+      viewportY: 2,
+      selection: { start: { x: 0, y: 0 }, end: { x: 2, y: 1 } },
+    })
+    expect(selectionToText(term)).toBe('sb1\nsb2')
   })
 
   it('does not insert a newline after the last selected row', () => {
