@@ -749,7 +749,13 @@ export function TerminalView({
         // term.parser.registerOscHandler(52, () => true) in replay-view.tsx)
         const filtered = chunks.map(interceptOsc52)
         queueMany(filtered, () => {
-          termRef.current?.scrollToBottom()
+          // Do NOT call scrollToBottom() here: forceNextScrollToBottom() already
+          // suppresses scroll-position restoration, so ghostty's internal
+          // auto-scroll runs during the write and leaves the viewport at the
+          // live end. An explicit scrollToBottom() after the write is redundant
+          // AND triggers ghostty's smooth-scroll animation (when
+          // smoothScrollDuration > 0), causing the visible "scroll from top to
+          // bottom" artifact after the loading overlay is removed.
           setTermLoading(false)
         })
       })

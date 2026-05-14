@@ -1414,6 +1414,15 @@ body {
   color: var(--text-muted);
   font-size: 14px;
   z-index: 10;
+  /* Delay visibility so fast session switches never flash the overlay.
+     The element is invisible for the first 150 ms; if React removes it
+     before then the user never sees it at all. */
+  animation: termLoadingReveal 0s 150ms both;
+}
+
+@keyframes termLoadingReveal {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 .terminal-scroll-end {
