@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   normalizeFsPath,
   joinFsPath,
   buildTreeNodes,
   isExternalFileDrop,
   isHiddenName,
+  copyRelativePath,
   type FileEntry,
 } from './file-tree'
 
@@ -143,5 +144,31 @@ describe('buildTreeNodes hidden-file filtering', () => {
   it('manual filter with isHiddenName keeps dotfiles when showHidden=true', () => {
     const nodes = buildTreeNodes(entries, '').filter(() => true)
     expect(nodes).toHaveLength(4)
+  })
+})
+
+describe('copyRelativePath', () => {
+  let writeText: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { clipboard: { writeText } },
+      configurable: true,
+    })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('writes the path as-is to the clipboard', async () => {
+    await copyRelativePath('src/components/button.tsx')
+    expect(writeText).toHaveBeenCalledWith('src/components/button.tsx')
+  })
+
+  it('handles a root-level file (no directory prefix)', async () => {
+    await copyRelativePath('README.md')
+    expect(writeText).toHaveBeenCalledWith('README.md')
   })
 })

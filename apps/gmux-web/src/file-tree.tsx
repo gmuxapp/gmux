@@ -83,8 +83,8 @@ async function apiFetch(method: string, url: string, body?: unknown): Promise<{ 
   return resp.json()
 }
 
-async function listDir(slug: string, rel: string): Promise<FileEntry[]> {
-  const url = `/v1/fs/${encodeURIComponent(slug)}?path=${encodeURIComponent(rel)}`
+async function listDir(slug: string, rel: string, showHidden = false): Promise<FileEntry[]> {
+  const url = `/v1/fs/${encodeURIComponent(slug)}?path=${encodeURIComponent(rel)}&show_hidden=${showHidden}`
   const resp = await apiFetch('GET', url)
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'list failed')
   return resp.data as FileEntry[]
@@ -186,6 +186,12 @@ const IconEyeOff = () => (
     <path d="M2 2l8 8"/>
   </svg>
 )
+const IconCopy = () => (
+  <svg {...svgProps} class="ft-action-icon"><rect x="4" y="4" width="6" height="7" rx="1"/><path d="M2 8V2h6"/></svg>
+)
+const IconCheck = () => (
+  <svg {...svgProps} class="ft-action-icon"><path d="M2 6l3 3 5-5"/></svg>
+)
 const IconFolderPlus = () => (
   <svg {...svgProps} class="ft-action-icon"><path d="M1 4h10v7H1z"/><path d="M1 4l1.5-2H5l1 1.5H1"/><path d="M6 8V6M5 7h2"/></svg>
 )
@@ -268,6 +274,13 @@ interface AddingState {
   type: 'file' | 'dir'
 }
 
+// ── Copy helper ──
+
+/** Returns the path relative to the project root (node.path is already relative). */
+export function copyRelativePath(path: string): Promise<void> {
+  return navigator.clipboard.writeText(path)
+}
+
 // ── FileTreeNode ──
 
 interface FileTreeNodeProps {
@@ -292,7 +305,6 @@ interface FileTreeNodeProps {
   onDragEnd: () => void
   onAddCommit: (name: string) => Promise<void>
   onAddCancel: () => void
-  showHidden: boolean
 }
 
 function FileTreeNode({
@@ -317,13 +329,13 @@ function FileTreeNode({
   onDragEnd,
   onAddCommit,
   onAddCancel,
-  showHidden,
 }: FileTreeNodeProps) {
   const isExpanded = node.type === 'dir' && expanded.has(node.path)
   const children = childCache.get(node.path) ?? []
   const isDropTarget = dropTarget === node.path
   const isDragging = dragSource === node.path
   const isRenaming = renamingPath === node.path
+  const [justCopied, setJustCopied] = useState(false)
 
   const indent = depth * 12
 
@@ -338,7 +350,7 @@ function FileTreeNode({
     }
   }, [node, slug, expanded, childCache, onToggle, onLoad])
 
-  const visibleChildren = children.filter(c => showHidden || !isHiddenName(c.name))
+  const visibleChildren = children
   const addingInThisDir = adding?.parentPath === node.path
 
   return (
@@ -401,6 +413,19 @@ function FileTreeNode({
               <IconPencil />
             </button>
             <button
+              class="ft-action-btn"
+              title="Copy path"
+              onClick={e => {
+                e.stopPropagation()
+                void copyRelativePath(node.path).then(() => {
+                  setJustCopied(true)
+                  setTimeout(() => setJustCopied(false), 1500)
+                })
+              }}
+            >
+              {justCopied ? <IconCheck /> : <IconCopy />}
+            </button>
+            <button
               class="ft-action-btn ft-action-delete"
               title="Delete"
               onClick={e => { e.stopPropagation(); onDeleteRequest(node) }}
@@ -438,7 +463,6 @@ function FileTreeNode({
               onDragEnd={onDragEnd}
               onAddCommit={onAddCommit}
               onAddCancel={onAddCancel}
-              showHidden={showHidden}
             />
           ))}
           {/* Inline add input appears at bottom of expanded dir */}
@@ -496,14 +520,24 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
   // Load root on mount and after mutations
   const loadRoot = useCallback(async () => {
     try {
-      const entries = await listDir(projectSlug, '')
+      const entries = await listDir(projectSlug, '', showHidden)
       setRootNodes(buildTreeNodes(entries, ''))
     } catch (e) {
       showError(String(e))
     }
-  }, [projectSlug, showError])
+  }, [projectSlug, showError, showHidden])
 
   useEffect(() => { void loadRoot() }, [loadRoot])
+
+  // When showHidden toggles, flush the child cache and reload all expanded dirs.
+  useEffect(() => {
+    childCacheRef.current.clear()
+    bumpCache()
+    for (const path of expandedRef.current) {
+      void loadChildren(path)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showHidden])
 
   // Refs that mirror mutable state so the polling interval doesn't need to
   // re-register every time expanded/renamingPath/adding change.
@@ -517,13 +551,13 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
   // Load children for a directory node
   const loadChildren = useCallback(async (dirPath: string) => {
     try {
-      const entries = await listDir(projectSlug, dirPath)
+      const entries = await listDir(projectSlug, dirPath, showHidden)
       childCacheRef.current.set(dirPath, buildTreeNodes(entries, dirPath))
       bumpCache()
     } catch (e) {
       showError(String(e))
     }
-  }, [projectSlug, showError, bumpCache])
+  }, [projectSlug, showError, bumpCache, showHidden])
 
   // Refresh a directory (re-load its children and the root if needed)
   const refreshDir = useCallback(async (dirPath: string) => {
@@ -750,7 +784,7 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
         onDragLeave={() => setExternalDragOver(false)}
         onDrop={handleRootDrop}
       >
-        {rootNodes.filter(n => showHidden || !isHiddenName(n.name)).map(node => (
+        {rootNodes.map(node => (
           <FileTreeNode
             key={node.path}
             node={node}
@@ -774,7 +808,6 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
             onDragEnd={() => { setDragSource(null); setDropTarget(null) }}
             onAddCommit={handleAddCommit}
             onAddCancel={() => setAdding(null)}
-            showHidden={showHidden}
           />
         ))}
 
