@@ -504,6 +504,15 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
 
   useEffect(() => { void loadRoot() }, [loadRoot])
 
+  // Refs that mirror mutable state so the polling interval doesn't need to
+  // re-register every time expanded/renamingPath/adding change.
+  const expandedRef = useRef(expanded)
+  useEffect(() => { expandedRef.current = expanded }, [expanded])
+  const renamingRef = useRef(renamingPath)
+  useEffect(() => { renamingRef.current = renamingPath }, [renamingPath])
+  const addingRef = useRef(adding)
+  useEffect(() => { addingRef.current = adding }, [adding])
+
   // Load children for a directory node
   const loadChildren = useCallback(async (dirPath: string) => {
     try {
@@ -522,6 +531,19 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
     } else {
       await loadChildren(dirPath)
     }
+  }, [loadRoot, loadChildren])
+
+  // Poll for external filesystem changes every 2.5 s.
+  // Skip during active edits (rename / add-inline) to avoid stomping the UI.
+  useEffect(() => {
+    const id = setInterval(async () => {
+      if (renamingRef.current || addingRef.current) return
+      await loadRoot()
+      for (const path of expandedRef.current) {
+        await loadChildren(path)
+      }
+    }, 2500)
+    return () => clearInterval(id)
   }, [loadRoot, loadChildren])
 
   // Toggle expand/collapse
