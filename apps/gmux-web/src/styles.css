@@ -2457,6 +2457,38 @@ a.home-host-link:hover {
   color: var(--text);
 }
 
+/* ── Git status badge (inline in file tree header) ── */
+
+.git-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: background 0.1s;
+}
+.git-status-badge:hover {
+  background: var(--bg-hover);
+}
+.git-status-badge span {
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1;
+}
+.git-status-files {
+  color: var(--text-secondary);
+}
+.git-status-ins {
+  color: var(--status-connected);
+}
+.git-status-del {
+  color: var(--status-error);
+}
+
 .ft-tree {
   flex: 1;
   padding: 4px 0;

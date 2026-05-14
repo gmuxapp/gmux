@@ -666,3 +666,34 @@ func TestFileOpenerForWithConfig(t *testing.T) {
 		t.Errorf("custom default: got %q, want vim", got)
 	}
 }
+
+func TestParseGitShortstat(t *testing.T) {
+	cases := []struct {
+		input string
+		files int
+		ins   int
+		del   int
+	}{
+		// typical full line
+		{" 5 files changed, 120 insertions(+), 34 deletions(-)", 5, 120, 34},
+		// single file, insertions only
+		{" 1 file changed, 1 insertion(+)", 1, 1, 0},
+		// single file, deletions only
+		{" 1 file changed, 1 deletion(-)", 1, 0, 1},
+		// no insertions
+		{" 2 files changed, 5 deletions(-)", 2, 0, 5},
+		// no deletions
+		{" 3 files changed, 10 insertions(+)", 3, 10, 0},
+		// empty / not a git repo
+		{"", 0, 0, 0},
+		// trailing newline
+		{" 2 files changed, 3 insertions(+), 1 deletion(-)\n", 2, 3, 1},
+	}
+	for _, tc := range cases {
+		files, ins, del := parseGitShortstat(tc.input)
+		if files != tc.files || ins != tc.ins || del != tc.del {
+			t.Errorf("parseGitShortstat(%q) = (%d, %d, %d), want (%d, %d, %d)",
+				tc.input, files, ins, del, tc.files, tc.ins, tc.del)
+		}
+	}
+}

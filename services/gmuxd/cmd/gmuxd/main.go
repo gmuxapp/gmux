@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -1872,6 +1873,32 @@ func serve(stderr io.Writer) int {
 		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"pid": pid}})
 	})
 
+	// ── Git status ──
+
+	// GET /v1/git/{slug}/status — summarise git changes for a project workspace.
+	// Returns { ok, data: { files, insertions, deletions } }.
+	// Requires the project to have a filesystem path rule (same as /v1/fs/{slug}).
+	// Returns zeros when the directory is not a git repo or has no changes.
+	mux.HandleFunc("GET /v1/git/{slug}/status", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		cmd := exec.Command("git", "-C", root, "diff", "HEAD", "--shortstat")
+		out, _ := cmd.Output() // non-zero exit (no repo, no commits) → empty output
+		files, ins, del := parseGitShortstat(string(out))
+		writeJSON(w, map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"files":      files,
+				"insertions": ins,
+				"deletions":  del,
+			},
+		})
+	})
+
 	// ── Embedded frontend (SPA fallback) ──
 
 	mux.Handle("/", spaHandler())
@@ -2547,6 +2574,27 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 		"ok":    false,
 		"error": map[string]any{"code": code, "message": message},
 	})
+}
+
+// parseGitShortstat parses the output of `git diff --shortstat`.
+// Example input: " 5 files changed, 120 insertions(+), 34 deletions(-)"
+// Returns (files, insertions, deletions); all zero on empty/unrecognised input.
+func parseGitShortstat(s string) (files, insertions, deletions int) {
+	// Match patterns like "5 files", "1 file", "120 insertions", "34 deletions"
+	re := regexp.MustCompile(`(\d+)\s+(file|insertion|deletion)`)
+	for _, m := range re.FindAllStringSubmatch(s, -1) {
+		n := 0
+		fmt.Sscan(m[1], &n)
+		switch m[2] {
+		case "file":
+			files = n
+		case "insertion":
+			insertions = n
+		case "deletion":
+			deletions = n
+		}
+	}
+	return
 }
 
 

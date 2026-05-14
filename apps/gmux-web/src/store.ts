@@ -523,6 +523,21 @@ export async function launchSession(launcherId: string, opts?: { cwd?: string; p
   }
 }
 
+/** Launch a session with an explicit command array and optional cwd/peer. */
+export async function launchCommand(command: string[], opts?: { cwd?: string; peer?: string }): Promise<void> {
+  _pendingLaunchAt = Date.now()
+  try {
+    const resp = await fetch('/v1/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command, cwd: opts?.cwd, peer: opts?.peer }),
+    })
+    if (!resp.ok) console.warn('/v1/launch failed:', resp.status, await resp.text().catch(() => ''))
+  } catch (err) {
+    console.warn('/v1/launch error:', err)
+  }
+}
+
 /**
  * Check + clear the pending-launch flag. Returns true if a launch was
  * kicked off within `maxAgeMs` and the caller should auto-select the

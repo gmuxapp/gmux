@@ -16,6 +16,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
 import { markPendingLaunch } from './store'
+import { GitStatus } from './git-status'
 
 // ── Types ──
 
@@ -715,6 +716,7 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
       <div class="ft-header">
         <span class="ft-header-label" title={cwd}>Files</span>
         <span class="ft-header-cwd" title={cwd}>{displayCwd}</span>
+        <GitStatus projectSlug={projectSlug} cwd={cwd} />
         <button
           class={`ft-header-btn${showHidden ? ' ft-header-btn--active' : ''}`}
           title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
