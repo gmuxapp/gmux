@@ -46,6 +46,11 @@ export function joinFsPath(parent: string, name: string): string {
   return `${parent}/${name}`
 }
 
+/** Returns true if a filename is hidden (starts with '.'). */
+export function isHiddenName(name: string): boolean {
+  return name.startsWith('.')
+}
+
 /** Build a sorted TreeNode[] from raw FileEntry list plus a parent path. */
 export function buildTreeNodes(entries: FileEntry[], parentPath: string): TreeNode[] {
   const dirs = entries.filter(e => e.type === 'dir').sort((a, b) => a.name.localeCompare(b.name))
@@ -167,6 +172,19 @@ const IconTrash = () => (
 const IconPlus = () => (
   <svg {...svgProps} class="ft-action-icon"><path d="M6 2v8M2 6h8"/></svg>
 )
+const IconEye = () => (
+  <svg {...svgProps} class="ft-action-icon">
+    <path d="M1 6c0 0 2-4 5-4s5 4 5 4-2 4-5 4-5-4-5-4z"/>
+    <circle cx="6" cy="6" r="1.5"/>
+  </svg>
+)
+const IconEyeOff = () => (
+  <svg {...svgProps} class="ft-action-icon">
+    <path d="M1 6c0 0 2-4 5-4s5 4 5 4-2 4-5 4-5-4-5-4z"/>
+    <circle cx="6" cy="6" r="1.5"/>
+    <path d="M2 2l8 8"/>
+  </svg>
+)
 const IconFolderPlus = () => (
   <svg {...svgProps} class="ft-action-icon"><path d="M1 4h10v7H1z"/><path d="M1 4l1.5-2H5l1 1.5H1"/><path d="M6 8V6M5 7h2"/></svg>
 )
@@ -273,6 +291,7 @@ interface FileTreeNodeProps {
   onDragEnd: () => void
   onAddCommit: (name: string) => Promise<void>
   onAddCancel: () => void
+  showHidden: boolean
 }
 
 function FileTreeNode({
@@ -297,6 +316,7 @@ function FileTreeNode({
   onDragEnd,
   onAddCommit,
   onAddCancel,
+  showHidden,
 }: FileTreeNodeProps) {
   const isExpanded = node.type === 'dir' && expanded.has(node.path)
   const children = childCache.get(node.path) ?? []
@@ -317,6 +337,7 @@ function FileTreeNode({
     }
   }, [node, slug, expanded, childCache, onToggle, onLoad])
 
+  const visibleChildren = children.filter(c => showHidden || !isHiddenName(c.name))
   const addingInThisDir = adding?.parentPath === node.path
 
   return (
@@ -392,7 +413,7 @@ function FileTreeNode({
       {/* Children (when expanded) */}
       {node.type === 'dir' && isExpanded && (
         <div class="ft-children">
-          {children.map(child => (
+          {visibleChildren.map(child => (
             <FileTreeNode
               key={child.path}
               node={child}
@@ -416,6 +437,7 @@ function FileTreeNode({
               onDragEnd={onDragEnd}
               onAddCommit={onAddCommit}
               onAddCancel={onAddCancel}
+              showHidden={showHidden}
             />
           ))}
           {/* Inline add input appears at bottom of expanded dir */}
@@ -459,6 +481,7 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<TreeNode | null>(null)
   const [adding, setAdding] = useState<AddingState | null>(null)
+  const [showHidden, setShowHidden] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // External file drop on the root zone
@@ -671,6 +694,13 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
         <span class="ft-header-label" title={cwd}>Files</span>
         <span class="ft-header-cwd" title={cwd}>{displayCwd}</span>
         <button
+          class={`ft-header-btn${showHidden ? ' ft-header-btn--active' : ''}`}
+          title={showHidden ? 'Hide hidden files' : 'Show hidden files'}
+          onClick={() => setShowHidden(v => !v)}
+        >
+          {showHidden ? <IconEye /> : <IconEyeOff />}
+        </button>
+        <button
           class="ft-header-btn"
           title="New file"
           onClick={() => handleAddStart('file')}
@@ -696,7 +726,7 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
         onDragLeave={() => setExternalDragOver(false)}
         onDrop={handleRootDrop}
       >
-        {rootNodes.map(node => (
+        {rootNodes.filter(n => showHidden || !isHiddenName(n.name)).map(node => (
           <FileTreeNode
             key={node.path}
             node={node}
@@ -720,6 +750,7 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
             onDragEnd={() => { setDragSource(null); setDropTarget(null) }}
             onAddCommit={handleAddCommit}
             onAddCancel={() => setAdding(null)}
+            showHidden={showHidden}
           />
         ))}
 

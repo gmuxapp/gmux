@@ -4,6 +4,7 @@ import {
   joinFsPath,
   buildTreeNodes,
   isExternalFileDrop,
+  isHiddenName,
   type FileEntry,
 } from './file-tree'
 
@@ -99,5 +100,48 @@ describe('isExternalFileDrop', () => {
 
   it('returns false when no files', () => {
     expect(isExternalFileDrop(makeDataTransfer(0))).toBe(false)
+  })
+})
+
+describe('isHiddenName', () => {
+  it('returns true for names starting with a dot', () => {
+    expect(isHiddenName('.gitignore')).toBe(true)
+    expect(isHiddenName('.env')).toBe(true)
+    expect(isHiddenName('.git')).toBe(true)
+  })
+
+  it('returns false for normal names', () => {
+    expect(isHiddenName('src')).toBe(false)
+    expect(isHiddenName('README.md')).toBe(false)
+    expect(isHiddenName('main.go')).toBe(false)
+  })
+
+  it('returns false for empty string', () => {
+    expect(isHiddenName('')).toBe(false)
+  })
+})
+
+describe('buildTreeNodes hidden-file filtering', () => {
+  const entries: FileEntry[] = [
+    { name: '.gitignore', type: 'file' },
+    { name: '.git', type: 'dir' },
+    { name: 'src', type: 'dir' },
+    { name: 'README.md', type: 'file' },
+  ]
+
+  it('buildTreeNodes still returns all entries (filtering is display-side)', () => {
+    const nodes = buildTreeNodes(entries, '')
+    expect(nodes).toHaveLength(4)
+  })
+
+  it('manual filter with isHiddenName excludes dotfiles', () => {
+    const nodes = buildTreeNodes(entries, '').filter(n => !isHiddenName(n.name))
+    expect(nodes).toHaveLength(2)
+    expect(nodes.map(n => n.name)).toEqual(['src', 'README.md'])
+  })
+
+  it('manual filter with isHiddenName keeps dotfiles when showHidden=true', () => {
+    const nodes = buildTreeNodes(entries, '').filter(() => true)
+    expect(nodes).toHaveLength(4)
   })
 })

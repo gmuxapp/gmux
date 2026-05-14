@@ -2439,6 +2439,10 @@ a.home-host-link:hover {
 .ft-header:hover .ft-header-btn {
   opacity: 1;
 }
+.ft-header-btn.ft-header-btn--active {
+  opacity: 1;
+  color: var(--accent);
+}
 .ft-header-btn:hover {
   background: var(--bg-hover);
   color: var(--text);
