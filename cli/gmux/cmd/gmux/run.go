@@ -68,6 +68,9 @@ func runSession(args []string, attach bool) {
 		return
 	}
 
+	t0 := time.Now()
+	log.Printf("[gmux] startup: runSession begin command=%v", args)
+
 	workDir, err := os.Getwd()
 	if err != nil {
 		log.Fatalf("cannot determine cwd: %v", err)
@@ -113,6 +116,7 @@ func runSession(args []string, attach bool) {
 	if err != nil {
 		log.Fatalf("failed to bind session socket: %v", err)
 	}
+	log.Printf("[gmux] startup: socket bound elapsed=%s", time.Since(t0).Round(time.Millisecond))
 
 	// Resolve adapter — registered adapters first, shell fallback
 	registry := adapter.NewRegistry()
@@ -132,6 +136,7 @@ func runSession(args []string, attach bool) {
 	// Detect VCS workspace root and remotes for grouping related sessions.
 	wsRoot := workspace.DetectRoot(workDir)
 	remotes := workspace.DetectRemotes(wsRoot)
+	log.Printf("[gmux] startup: workspace detected elapsed=%s", time.Since(t0).Round(time.Millisecond))
 
 	// Create in-memory session state
 	state := session.New(session.Config{
@@ -145,6 +150,7 @@ func runSession(args []string, attach bool) {
 		BinaryHash:    binhash.Self(),
 		RunnerVersion: version,
 	})
+	log.Printf("[gmux] startup: state created (binhash done) elapsed=%s", time.Since(t0).Round(time.Millisecond))
 
 	// Common env vars — set for every child, per ADR-0005
 	env := []string{
@@ -233,6 +239,7 @@ func runSession(args []string, attach bool) {
 
 	// Start PTY server. The socket is already bound to `listener`
 	// (above); ptyserver.New takes ownership and serves on it.
+	log.Printf("[gmux] startup: starting PTY server elapsed=%s", time.Since(t0).Round(time.Millisecond))
 	srv, err = ptyserver.New(ptyCfg)
 	if err != nil {
 		if localTty != nil {
@@ -242,6 +249,7 @@ func runSession(args []string, attach bool) {
 		}
 		log.Fatalf("failed to start: %v", err)
 	}
+	log.Printf("[gmux] startup: PTY server ready elapsed=%s", time.Since(t0).Round(time.Millisecond))
 
 	state.SetRunning(srv.Pid())
 
@@ -263,7 +271,6 @@ func runSession(args []string, attach bool) {
 	// definition already running. Calling ensureGmuxd() would only add
 	// a redundant health-check RTT (and risk triggering an unwanted
 	// daemon restart on version mismatch during development).
-	t0 := time.Now()
 	if os.Getenv("GMUX_DAEMON_SOCKET") == "" {
 		log.Printf("[gmux] startup: GMUX_DAEMON_SOCKET not set, running ensureGmuxd")
 		ensureGmuxd()
