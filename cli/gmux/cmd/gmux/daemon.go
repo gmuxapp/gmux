@@ -211,6 +211,20 @@ func deregisterFromGmuxd(sessionID string) {
 	resp.Body.Close()
 }
 
+// dismissWithGmuxd asks the daemon to dismiss the session — removing it from
+// the store and broadcasting session-remove to all UI clients. Used by
+// file-open sessions (GMUX_DISMISS_ON_EXIT=1) after a clean exit so the dead
+// session doesn't linger in the sidebar.
+func dismissWithGmuxd(sessionID string) {
+	client := gmuxdClient()
+	resp, err := client.Post(gmuxdBaseURL()+"/v1/sessions/"+sessionID+"/dismiss", "application/json", nil)
+	if err != nil {
+		log.Printf("[gmux] dismiss: %v", err)
+		return
+	}
+	resp.Body.Close()
+}
+
 // parseHealthField extracts a string field from the data object
 // of a /v1/health JSON response.
 func parseHealthField(body []byte, field string) string {

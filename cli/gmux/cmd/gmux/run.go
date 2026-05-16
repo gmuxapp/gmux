@@ -359,6 +359,15 @@ func runSession(args []string, attach bool) {
 	// Deregister from gmuxd (best-effort)
 	deregisterFromGmuxd(sessionID)
 
+	// For file-open sessions (GMUX_DISMISS_ON_EXIT=1), auto-dismiss on
+	// clean exit so the dead session doesn't linger in the sidebar.
+	// A non-zero exit code (e.g. helix crashed) is left visible so the
+	// user can see what went wrong.
+	if exitCode == 0 && os.Getenv("GMUX_DISMISS_ON_EXIT") == "1" {
+		log.Printf("[gmux] startup: auto-dismissing session on clean exit")
+		dismissWithGmuxd(sessionID)
+	}
+
 	if !interactive {
 		fmt.Printf("exited:   %d\n", exitCode)
 	}
