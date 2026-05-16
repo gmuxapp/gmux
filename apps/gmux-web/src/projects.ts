@@ -349,6 +349,14 @@ export function buildProjectFolders(
  * `project.sessions[]`. Unstamped sessions (disclaimed-adopted via
  * the viewer's match rules) come after, ordered by creation time so
  * newly-spawned sessions don't reshuffle existing ones.
+ *
+ * Tiebreak on `id` for unstamped pairs because `created_at` is
+ * RFC3339 with second precision on the wire, so sessions launched in
+ * the same second tie. Without a stable tiebreaker, the sidebar
+ * order would shuffle every time `snapshot.sessions` re-emits with a
+ * different Go map-iteration order (most visible when adopting
+ * sessions from a v1 spoke whose rehydrated entries all share a
+ * second).
  */
 function compareLocalFolderSessions(a: Session, b: Session): number {
   const aStamped = !!a.project_slug
@@ -358,7 +366,9 @@ function compareLocalFolderSessions(a: Session, b: Session): number {
   }
   if (aStamped) return -1
   if (bStamped) return 1
-  return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  const dt = new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  if (dt !== 0) return dt
+  return a.id.localeCompare(b.id)
 }
 
 // --- Project hub topology ---
@@ -522,11 +532,15 @@ function resolveHostStatusAndMeta(
 }
 
 function sortHubSessions(sessions: Session[]): Session[] {
-  // Alive first, then newest-first.
+  // Alive first, then newest-first. Tiebreak on id so sessions that
+  // share a second-precision created_at (e.g. v1-spoke entries
+  // rehydrated together on startup) keep a stable order across
+  // snapshot.sessions re-emits.
   return [...sessions].sort((a, b) => {
     if (a.alive !== b.alive) return a.alive ? -1 : 1
     const ta = new Date(a.created_at || 0).getTime()
     const tb = new Date(b.created_at || 0).getTime()
-    return tb - ta
+    if (ta !== tb) return tb - ta
+    return a.id.localeCompare(b.id)
   })
 }

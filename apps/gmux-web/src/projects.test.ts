@@ -373,6 +373,36 @@ describe('buildProjectFolders', () => {
     const folders = buildProjectFolders(projects, sessions)
     expect(folders.flatMap(f => f.sessions.map(s => s.id))).toEqual([])
   })
+
+  it('adopted unstamped sessions sharing a created_at sort stably by id', () => {
+    // Regression: bespin (v1 spoke) rehydrates sessions at startup and
+    // stamps them all with the same second-precision RFC3339
+    // created_at. The hub adopts them into a local folder via match
+    // rules; without a deterministic tiebreaker in
+    // compareLocalFolderSessions the sidebar order shuffled on every
+    // snapshot.sessions emit (Go map iteration is randomized).
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', match: [{ path: '/dev/gmux' }] },
+    ]
+    const ts = '2026-05-16T12:00:00Z'
+    const a = makeSession({ id: 'a@bespin', cwd: '/dev/gmux', alive: true, peer: 'bespin', created_at: ts })
+    const b = makeSession({ id: 'b@bespin', cwd: '/dev/gmux', alive: true, peer: 'bespin', created_at: ts })
+    const c = makeSession({ id: 'c@bespin', cwd: '/dev/gmux', alive: true, peer: 'bespin', created_at: ts })
+
+    // Iterate the three possible reorderings the wire might present.
+    // All must produce the same on-screen order.
+    const ordersIn = [
+      [a, b, c],
+      [c, a, b],
+      [b, c, a],
+    ]
+    for (const input of ordersIn) {
+      const folder = buildProjectFolders(projects, input)[0]
+      expect(folder.sessions.map(s => s.id)).toEqual([
+        'a@bespin', 'b@bespin', 'c@bespin',
+      ])
+    }
+  })
 })
 
 describe('isSessionVisibleInProject', () => {
@@ -645,6 +675,34 @@ describe('buildProjectTopology', () => {
     const hosts = buildProjectTopology('fluxer', sessions, projects2, peers)
     expect(hosts).toHaveLength(1)
     expect(hosts[0].folders[0].sessions.map(s => s.id)).toEqual(['f1'])
+  })
+
+  it('sessions sharing a created_at sort stably by id within a cwd group', () => {
+    // Same regression as the sidebar (v1-spoke rehydrate: many
+    // sessions with identical second-precision created_at). The hub
+    // page groups by cwd; within a group, sortHubSessions ties
+    // without an id fallback and the rows flip whenever
+    // snapshot.sessions re-emits with a different Go map order.
+    const ts = '2026-05-16T12:00:00Z'
+    const peerSessions = [
+      makeSession({ id: 'a@bespin', cwd: '/home/mg/dev/fluxer', alive: true, peer: 'bespin', created_at: ts }),
+      makeSession({ id: 'b@bespin', cwd: '/home/mg/dev/fluxer', alive: true, peer: 'bespin', created_at: ts }),
+      makeSession({ id: 'c@bespin', cwd: '/home/mg/dev/fluxer', alive: true, peer: 'bespin', created_at: ts }),
+    ]
+    const bespinPeers: PeerInfo[] = [
+      { name: 'bespin', url: 'http://10.0.0.5:8790', status: 'connected', session_count: 3 },
+    ]
+    for (const input of [
+      [peerSessions[0], peerSessions[1], peerSessions[2]],
+      [peerSessions[2], peerSessions[0], peerSessions[1]],
+      [peerSessions[1], peerSessions[2], peerSessions[0]],
+    ]) {
+      const hosts = buildProjectTopology('fluxer', input, projects, bespinPeers)
+      const bespinHost = hosts.find(h => h.path[0] === 'bespin')!
+      expect(bespinHost.folders[0].sessions.map(s => s.id)).toEqual([
+        'a@bespin', 'b@bespin', 'c@bespin',
+      ])
+    }
   })
 })
 
