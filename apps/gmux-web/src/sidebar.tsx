@@ -7,6 +7,7 @@
 
 import { useState, useCallback } from 'preact/hooks'
 import { sessionPath } from './routing'
+import { reorderKeysForFolder } from './projects'
 import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
 import {
@@ -199,13 +200,15 @@ function FolderGroup({
       return
     }
     const reordered = reorder(visible, drag.from, drag.over)
-    const visibleKeys = reordered.map(s => s.slug || s.id)
-    // We send only the visible keys; the daemon's PATCH handler does
-    // a partial-reorder merge that preserves any keys not in the
-    // request at their existing relative position at the tail. This
-    // lets us reorder peer folders without enumerating the peer's
-    // hidden / dead-resumable entries (which we don't track).
-    reorderSessions(folder.slug, visibleKeys, folder.peer)
+    // reorderKeysForFolder filters non-owner sessions and strips the
+    // `@<peer>` namespace from slugless ids; see its docstring for
+    // the ADR-0002 corruption modes this prevents. The daemon's
+    // PATCH handler then does a partial-reorder merge that keeps
+    // hidden / dead-resumable entries at the tail.
+    const visibleKeys = reorderKeysForFolder(reordered, folder.peer)
+    if (visibleKeys.length > 0) {
+      reorderSessions(folder.slug, visibleKeys, folder.peer)
+    }
     setDrag(null)
   }, [drag, folder.slug, folder.peer])
 

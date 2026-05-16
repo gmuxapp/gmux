@@ -411,6 +411,36 @@ export function parseSessionHostPath(sessionId: string): { originalId: string; p
 }
 
 /**
+ * Build the keys to send to `PATCH /v1/projects/{slug}/sessions` (or
+ * its peer-proxy equivalent) given the order the viewer just dragged
+ * a folder into. Two responsibilities:
+ *
+ *  1. Filter out sessions not owned by the folder's owner. A local
+ *     folder may visually contain peer-owned sessions adopted via
+ *     match rules; those don't live in the local projects.json, and
+ *     sending them would add phantom entries on the daemon's next
+ *     ReorderSessions merge.
+ *
+ *  2. Strip the `@<peer>` namespace from slugless ids. A peer-owned
+ *     session has `s.id === "orig@peer"` on the wire, but the peer's
+ *     projects.json keys by `"orig"`. Slugged sessions key by
+ *     `s.slug`, which is never namespaced.
+ *
+ * Returns an empty array when no session in the request belongs to
+ * the folder owner: caller should skip the PATCH entirely so the
+ * daemon doesn't see an empty reorder.
+ */
+export function reorderKeysForFolder(
+  reorderedSessions: Session[],
+  folderPeer: string | undefined,
+): string[] {
+  const ownerPeer = folderPeer ?? ''
+  return reorderedSessions
+    .filter(s => (s.peer ?? '') === ownerPeer)
+    .map(s => s.slug || parseSessionHostPath(s.id).originalId)
+}
+
+/**
  * Build the host topology for a single project. Sessions that match the
  * project are bucketed by their host path (derived from the session id
  * chain), then by cwd within each host. Used by the project hub page.

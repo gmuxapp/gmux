@@ -5,6 +5,7 @@ import {
   matchSession,
   buildProjectFolders,
   parseSessionHostPath,
+  reorderKeysForFolder,
   buildProjectTopology,
   isSessionVisibleInProject,
   slugify,
@@ -433,6 +434,58 @@ describe('parseSessionHostPath', () => {
     expect(parseSessionHostPath('file-abc-123@peer')).toEqual({
       originalId: 'file-abc-123', path: ['peer'],
     })
+  })
+})
+
+describe('reorderKeysForFolder', () => {
+  // Greptile flagged that the sidebar's drag-end was sending
+  // `s.slug || s.id` to the peer reorder endpoint. For slugless
+  // peer-owned sessions that evaluates to the hub-namespaced id
+  // (`"orig@peer"`), which the peer's ReorderSessions treats as a
+  // new entry and prepends to projects.json. Each drag would
+  // append a phantom key. These cases pin the corruption-prevention
+  // contract.
+
+  it('peer folder: strips @<peer> namespace from slugless ids', () => {
+    const sessions = [
+      makeSession({ id: 'a@tower', cwd: '/x', slug: '', peer: 'tower' }),
+      makeSession({ id: 'b@tower', cwd: '/x', slug: '', peer: 'tower' }),
+    ]
+    // Without stripping, the peer's projects.json would gain phantom
+    // "a@tower" / "b@tower" entries while its real "a" / "b" keys
+    // are pushed to the tail.
+    expect(reorderKeysForFolder(sessions, 'tower')).toEqual(['a', 'b'])
+  })
+
+  it('peer folder: keeps slug as-is for slugged sessions', () => {
+    const sessions = [
+      makeSession({ id: 'a@tower', cwd: '/x', slug: 'fix-auth', peer: 'tower' }),
+      makeSession({ id: 'b@tower', cwd: '/x', slug: 'login-page', peer: 'tower' }),
+    ]
+    expect(reorderKeysForFolder(sessions, 'tower')).toEqual(['fix-auth', 'login-page'])
+  })
+
+  it('local folder: drops adopted peer-owned sessions', () => {
+    // A local folder showing a peer session adopted via match rules:
+    // sending it to the local /v1/projects PATCH would write the
+    // namespaced id into the viewer's own projects.json, polluting
+    // future Reconcile passes.
+    const sessions = [
+      makeSession({ id: 'local-1', cwd: '/x', slug: 'fix-auth' }),
+      makeSession({ id: 'adopted@spoke', cwd: '/x', slug: '', peer: 'spoke' }),
+      makeSession({ id: 'local-2', cwd: '/x', slug: '' }),
+    ]
+    expect(reorderKeysForFolder(sessions, undefined))
+      .toEqual(['fix-auth', 'local-2'])
+  })
+
+  it('returns empty when no session matches the folder owner', () => {
+    // Caller short-circuits on empty: the daemon shouldn't see a
+    // request that boils down to "reorder nothing".
+    const sessions = [
+      makeSession({ id: 'a@spoke', cwd: '/x', slug: '', peer: 'spoke' }),
+    ]
+    expect(reorderKeysForFolder(sessions, 'tower')).toEqual([])
   })
 })
 
