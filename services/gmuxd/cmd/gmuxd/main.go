@@ -209,6 +209,10 @@ func filterEnvPrefix(env []string, prefix string) []string {
 // nested `gmux foo` inherits GMUX_SESSION_ID from the parent
 // runner but never GMUX_RESUME_ID, so nested invocations always
 // generate a fresh id.
+//
+// GMUX_DAEMON_SOCKET is always injected so the runner can skip the
+// ensureGmuxd() health check — it was launched by the daemon, so
+// the daemon is by definition already running.
 func launchGmux(gmuxBin string, command []string, cwd, resumeID string) (int, error) {
 	cmd := exec.Command(gmuxBin, command...)
 	cmd.Dir = cwd
@@ -225,6 +229,11 @@ func launchGmux(gmuxBin string, command []string, cwd, resumeID string) (int, er
 	if resumeID != "" {
 		cmd.Env = append(cmd.Env, "GMUX_RESUME_ID="+resumeID)
 	}
+	// Tell the runner which socket to reach the daemon on. This lets
+	// the runner skip ensureGmuxd() (the daemon is already running —
+	// it just launched this process) and use the correct socket path
+	// directly without re-deriving it from XDG_STATE_HOME.
+	cmd.Env = append(cmd.Env, "GMUX_DAEMON_SOCKET="+paths.SocketPath())
 
 	if err := cmd.Start(); err != nil {
 		return 0, err
@@ -1617,12 +1626,13 @@ func serve(stderr io.Writer) int {
 			return
 		}
 		rel := r.URL.Query().Get("path")
+		showHidden := r.URL.Query().Get("show_hidden") == "true"
 		dir, err := fsGuardPath(root, rel)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
 			return
 		}
-		entries, err := fsListDir(dir)
+		entries, err := fsListDir(dir, showHidden)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "list_failed", err.Error())
 			return
@@ -2504,7 +2514,7 @@ func fileOpenerFor(path string, cfg config.FileOpenersConfig) string {
 	return "hx"
 }
 
-func fsListDir(dir string) ([]fsEntry, error) {
+func fsListDir(dir string, showHidden bool) ([]fsEntry, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -2519,8 +2529,8 @@ func fsListDir(dir string) ([]fsEntry, error) {
 	})
 	result := make([]fsEntry, 0, len(entries))
 	for _, e := range entries {
-		// Skip hidden files.
-		if strings.HasPrefix(e.Name(), ".") {
+		// Skip hidden files unless showHidden is set.
+		if !showHidden && strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		ent := fsEntry{Name: e.Name()}

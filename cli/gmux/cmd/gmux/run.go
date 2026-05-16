@@ -257,11 +257,26 @@ func runSession(args []string, attach bool) {
 	// handshake — if any — has been delivered to the parent. We block
 	// on regDone before exit so a fast-exiting command (echo, true,
 	// false) can't lose the registration race.
-	ensureGmuxd()
+	//
+	// Skip ensureGmuxd() when GMUX_DAEMON_SOCKET is set: the runner was
+	// launched by the daemon itself (via launchGmux), so gmuxd is by
+	// definition already running. Calling ensureGmuxd() would only add
+	// a redundant health-check RTT (and risk triggering an unwanted
+	// daemon restart on version mismatch during development).
+	t0 := time.Now()
+	if os.Getenv("GMUX_DAEMON_SOCKET") == "" {
+		log.Printf("[gmux] startup: GMUX_DAEMON_SOCKET not set, running ensureGmuxd")
+		ensureGmuxd()
+		log.Printf("[gmux] startup: ensureGmuxd done elapsed=%s", time.Since(t0).Round(time.Millisecond))
+	} else {
+		log.Printf("[gmux] startup: skipping ensureGmuxd (daemon socket=%s)", os.Getenv("GMUX_DAEMON_SOCKET"))
+	}
 	regDone := make(chan struct{})
 	go func() {
 		defer close(regDone)
+		log.Printf("[gmux] startup: registering with daemon elapsed=%s", time.Since(t0).Round(time.Millisecond))
 		ok := registerWithGmuxd(sessionID, sockPath)
+		log.Printf("[gmux] startup: registration complete ok=%v elapsed=%s", ok, time.Since(t0).Round(time.Millisecond))
 		handshakeAck(sessionID, ok)
 	}()
 

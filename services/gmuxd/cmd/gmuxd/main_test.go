@@ -574,7 +574,7 @@ func TestFsListDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entries, err := fsListDir(dir)
+	entries, err := fsListDir(dir, false)
 	if err != nil {
 		t.Fatalf("fsListDir: %v", err)
 	}
@@ -591,6 +591,24 @@ func TestFsListDir(t *testing.T) {
 	}
 	if entries[2].Name != "b_file.txt" || entries[2].Type != "file" {
 		t.Errorf("entries[2] = %+v, want file b_file.txt", entries[2])
+	}
+
+	// With showHidden=true the hidden file should appear (sorted before others).
+	allEntries, err := fsListDir(dir, true)
+	if err != nil {
+		t.Fatalf("fsListDir(showHidden): %v", err)
+	}
+	if len(allEntries) != 4 {
+		t.Fatalf("expected 4 entries with showHidden, got %d: %+v", len(allEntries), allEntries)
+	}
+	hiddenSeen := false
+	for _, e := range allEntries {
+		if e.Name == ".hidden" {
+			hiddenSeen = true
+		}
+	}
+	if !hiddenSeen {
+		t.Error("expected .hidden to appear when showHidden=true")
 	}
 }
 

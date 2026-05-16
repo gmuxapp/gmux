@@ -115,9 +115,20 @@ func startGmuxd(gmuxdBin string, args []string) bool {
 	return true
 }
 
+// daemonSocketPath returns the gmuxd Unix socket path.
+// Prefers GMUX_DAEMON_SOCKET (injected by launchGmux when the runner
+// is spawned by the daemon) so the runner uses the exact same path
+// the daemon is listening on without re-deriving it.
+func daemonSocketPath() string {
+	if s := os.Getenv("GMUX_DAEMON_SOCKET"); s != "" {
+		return s
+	}
+	return paths.SocketPath()
+}
+
 // gmuxdClient returns an HTTP client connected to gmuxd via Unix socket.
 func gmuxdClient() *http.Client {
-	sockPath := paths.SocketPath()
+	sockPath := daemonSocketPath()
 	return &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -158,21 +169,33 @@ func registerWithGmuxd(sessionID, socketPath string) bool {
 		"socket_path": socketPath,
 	})
 
-	// Retry a few times — gmux may start before the HTTP server is ready
-	for i := 0; i < 5; i++ {
+	// Retry a few times — gmux may start before the HTTP server is ready.
+	// When launched by the daemon (GMUX_DAEMON_SOCKET is set), the daemon
+	// is already running so the first attempt should always succeed;
+	// retries exist only as a safety net for the rare case where the
+	// daemon's accept loop is momentarily busy.
+	const maxAttempts = 5
+	const retryInterval = 100 * time.Millisecond // reduced from 500ms
+	for i := 0; i < maxAttempts; i++ {
 		if i > 0 {
-			time.Sleep(500 * time.Millisecond)
+			log.Printf("[gmux] register: attempt %d/%d (retrying in %v)", i+1, maxAttempts, retryInterval)
+			time.Sleep(retryInterval)
 		}
+		t := time.Now()
 		client := gmuxdClient()
 		resp, err := client.Post(baseURL+"/v1/register", "application/json", bytes.NewReader(payload))
 		if err != nil {
+			log.Printf("[gmux] register: attempt %d failed (%v) elapsed=%s", i+1, err, time.Since(t).Round(time.Millisecond))
 			continue
 		}
 		resp.Body.Close()
 		if resp.StatusCode == 200 {
+			log.Printf("[gmux] register: ok on attempt %d elapsed=%s", i+1, time.Since(t).Round(time.Millisecond))
 			return true
 		}
+		log.Printf("[gmux] register: attempt %d got status %d elapsed=%s", i+1, resp.StatusCode, time.Since(t).Round(time.Millisecond))
 	}
+	log.Printf("[gmux] register: all %d attempts failed", maxAttempts)
 	return false
 }
 

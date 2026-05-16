@@ -62,6 +62,9 @@ const gitHash = (() => {
   try { return execSync('git rev-parse --short HEAD').toString().trim() } catch { return 'unknown' }
 })()
 
+const gmuxdToken = process.env.VITE_DEV_TOKEN || ''
+const proxyHeaders = gmuxdToken ? { Authorization: `Bearer ${gmuxdToken}` } : {}
+
 export default defineConfig({
   plugins: [preact(), ghosttyWasm()],
   define: {
@@ -79,9 +82,11 @@ export default defineConfig({
     proxy: {
       '/v1': {
         target: `http://${gmuxdHost}:${gmuxdPort}`,
+        headers: proxyHeaders,
       },
       '/auth': {
         target: `http://${gmuxdHost}:${gmuxdPort}`,
+        headers: proxyHeaders,
       },
       '/ws': {
         target: `http://${gmuxdHost}:${gmuxdPort}`,
