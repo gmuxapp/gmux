@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/gmuxapp/gmux/cli/gmux/internal/localterm"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/ptyserver"
+	"github.com/gmuxapp/gmux/packages/paths"
+	"github.com/gmuxapp/gmux/packages/scrollback"
 	"nhooyr.io/websocket"
 )
 
@@ -52,10 +55,24 @@ func cmdAttach(ref string) int {
 	// accepts any HTTPClient, so we reuse the unix-socket transport
 	// that gmuxdClient uses for plain HTTP calls.
 	dialHTTP := gmuxdClient()
+	// Replay raw on-disk scrollback before connecting via WS so Ghostty's
+	// native scrollback buffer is populated with the full session history.
+	// The WS snapshot will then show the current screen on top of it.
+	// This is best-effort: silently skip if the files aren't present (e.g.
+	// peer sessions, scrollback disabled, or session too new).
+	scrollbackDir := paths.SessionDir(sess.ID)
+	if rc, err := scrollback.OpenReader(scrollbackDir); err == nil {
+		_, _ = io.Copy(os.Stdout, rc)
+		_ = rc.Close()
+	}
+
 	// A long-lived WS can exceed the default 5s timeout; clear it here.
 	dialHTTP.Timeout = 0
 
-	wsURL := "ws://gmuxd/ws/" + sess.ID
+	// no_erase=1 tells the ptyserver NOT to send \x1b[3J (erase scrollback)
+	// in its snapshot reset. Without this flag the snapshot would immediately
+	// wipe the history we just wrote above.
+	wsURL := "ws://gmuxd/ws/" + sess.ID + "?no_erase=1"
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPClient: dialHTTP,
 	})

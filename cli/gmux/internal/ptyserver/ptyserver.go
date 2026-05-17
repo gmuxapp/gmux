@@ -121,7 +121,15 @@ func renderScreen(e *vt.Emulator) string {
 		}
 	}
 
-	// Visible screen.
+	sb.WriteString(renderVisibleScreen(e))
+	return sb.String()
+}
+
+// renderVisibleScreen renders only the current visible rows (no scrollback).
+// Used when the host terminal already has its own scrollback populated via
+// a raw replay (no_erase=1 WS clients).
+func renderVisibleScreen(e *vt.Emulator) string {
+	var sb strings.Builder
 	w, h := e.Width(), e.Height()
 	for y := 0; y < h; y++ {
 		if y > 0 {
@@ -719,11 +727,19 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// that processes every byte of PTY output. renderScreen serializes
 	// the scrollback history followed by the visible screen as ANSI
 	// sequences with style diffing.
-	//
-	// Sequence: BSU → reset → scrollback + screen → cursor → ESU
+	// Sequence: BSU → reset → [scrollback +] screen → cursor → ESU
+	// For no_erase clients the scrollback was pre-populated via raw replay;
+	// only the visible screen is included to avoid duplicating content.
 	s.mu.Lock()
 	s.drainScreenLocked()
-	snapshot := renderScreen(s.screen)
+	// For no_erase clients we already replayed the raw scrollback; send only
+	// the visible screen so we don't re-add the VT emulator's duplicate copy.
+	var snapshot string
+	if r.URL.Query().Get("no_erase") == "1" {
+		snapshot = renderVisibleScreen(s.screen)
+	} else {
+		snapshot = renderScreen(s.screen)
+	}
 	cursorSeq := "\x1b[?25h" // show cursor (default)
 	if s.cursorHidden {
 		cursorSeq = "\x1b[?25l" // hide cursor
@@ -731,9 +747,19 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Position cursor at the emulator's current location.
 	pos := s.screen.CursorPosition()
 	cursorPos := fmt.Sprintf("\x1b[%d;%dH", pos.Y+1, pos.X+1)
-	bsu := "\x1b[?2026h"                     // Begin Synchronized Update
-	resetSeq := "\x1b[r\x1b[H\x1b[2J\x1b[3J" // Reset scroll region + cursor home + erase display + erase scrollback
-	esu := "\x1b[?2026l"                     // End Synchronized Update
+	bsu := "\x1b[?2026h"  // Begin Synchronized Update
+	// When no_erase=1 the client pre-populated the host terminal's native
+	// scrollback with raw session bytes. Omit \x1b[3J so that history is
+	// preserved. Also prepend SGR reset + alt-screen exit to clean up any
+	// terminal state left by the raw replay.
+	var resetSeq string
+	if r.URL.Query().Get("no_erase") == "1" {
+		// No \x1b[3J — keep the host scrollback intact.
+		resetSeq = "\x1b[0m\x1b[?1049l\x1b[r\x1b[H\x1b[2J"
+	} else {
+		resetSeq = "\x1b[r\x1b[H\x1b[2J\x1b[3J" // Reset scroll region + cursor home + erase display + erase scrollback
+	}
+	esu := "\x1b[?2026l"  // End Synchronized Update
 	frame := []byte(bsu + resetSeq + snapshot + cursorPos + cursorSeq + esu)
 	if err := client.write(websocket.MessageBinary, frame); err != nil {
 		s.mu.Unlock()
