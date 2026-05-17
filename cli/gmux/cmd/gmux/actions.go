@@ -203,6 +203,18 @@ func shortID(id string) string {
 	return trimmed
 }
 
+// displayID returns the user-visible address for a session: shortID for
+// local sessions, shortID@peer for peer sessions. Use it in error
+// messages so the printed id matches what the user typed (and what
+// --list shows), instead of dropping the @peer suffix and leaving them
+// wondering which session the message refers to.
+func displayID(s cliSession) string {
+	if s.Peer == "" {
+		return shortID(s.ID)
+	}
+	return shortID(s.ID) + "@" + s.Peer
+}
+
 // cmdList implements `gmux --list`.
 //
 // Defaults to local sessions only; pass --all to include every peer, or
@@ -301,7 +313,7 @@ func cmdKill(ref, host string) int {
 		return 1
 	}
 	if !sess.Alive {
-		fmt.Fprintf(os.Stderr, "gmux: session %s is already not running\n", shortID(sess.ID))
+		fmt.Fprintf(os.Stderr, "gmux: session %s is already not running\n", displayID(sess))
 		return 1
 	}
 
@@ -318,7 +330,7 @@ func cmdKill(ref, host string) int {
 		fmt.Fprintf(os.Stderr, "gmux: kill failed: %s: %s\n", resp.Status, strings.TrimSpace(string(body)))
 		return 1
 	}
-	fmt.Printf("killed %s\n", shortID(sess.ID))
+	fmt.Printf("killed %s\n", displayID(sess))
 	return 0
 }
 
@@ -349,7 +361,7 @@ func cmdTail(ref string, n int, host string) int {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode == http.StatusNotFound {
-			fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", shortID(sess.ID))
+			fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", displayID(sess))
 			return 1
 		}
 		fmt.Fprintf(os.Stderr, "gmux: tail failed: %s: %s\n", resp.Status, strings.TrimSpace(string(body)))
@@ -414,9 +426,9 @@ func cmdSend(ref string, text *string, noSubmit bool, host string) int {
 		msg, _ := io.ReadAll(resp.Body)
 		switch resp.StatusCode {
 		case http.StatusNotFound:
-			fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", shortID(sess.ID))
+			fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", displayID(sess))
 		case http.StatusConflict:
-			fmt.Fprintf(os.Stderr, "gmux: session %s is not running\n", shortID(sess.ID))
+			fmt.Fprintf(os.Stderr, "gmux: session %s is not running\n", displayID(sess))
 		default:
 			fmt.Fprintf(os.Stderr, "gmux: send failed: %s: %s\n", resp.Status, strings.TrimSpace(string(msg)))
 		}

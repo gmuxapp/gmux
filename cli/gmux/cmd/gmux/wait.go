@@ -45,6 +45,8 @@ func cmdWait(ref string, timeoutSecs int) int {
 		return 1
 	}
 	if sess.Peer != "" {
+		// Use the bare shortID here: the message already names the peer
+		// separately, so displayID's "shortID@peer" would just repeat it.
 		fmt.Fprintf(os.Stderr, "gmux: --wait is only supported for local sessions (%s is on peer %q)\n",
 			shortID(sess.ID), sess.Peer)
 		return 1
@@ -86,7 +88,7 @@ func cmdWait(ref string, timeoutSecs int) int {
 		case "idle":
 			return waitExitIdle
 		case "died":
-			fmt.Fprintf(os.Stderr, "gmux: session %s died before becoming idle\n", shortID(sess.ID))
+			fmt.Fprintf(os.Stderr, "gmux: session %s died before becoming idle\n", displayID(sess))
 			return waitExitDied
 		default:
 			fmt.Fprintf(os.Stderr, "gmux: unexpected wait reason %q\n", env.Data.Reason)
@@ -105,7 +107,7 @@ func cmdWait(ref string, timeoutSecs int) int {
 	case http.StatusNotFound:
 		// Distinct from "no idle signal": means the session id is
 		// unknown to gmuxd entirely.
-		fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", shortID(sess.ID))
+		fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", displayID(sess))
 		return 1
 	default:
 		body, _ := io.ReadAll(resp.Body)
