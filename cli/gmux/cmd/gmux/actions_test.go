@@ -278,3 +278,50 @@ func TestMatchSessionHostAndSuffixAgreeing(t *testing.T) {
 		t.Errorf("expected konyvtar session, got peer=%q", got.Peer)
 	}
 }
+
+// TestMatchSessionEmptyHostSuffixRejected covers the typo case where a
+// user types `id@` with no host after. Silently scoping that to local
+// (the old behavior) gave the user no signal that the @host they
+// intended to type was missing, and they would address the wrong
+// session if a local one happened to match.
+func TestMatchSessionEmptyHostSuffixRejected(t *testing.T) {
+	sessions := []cliSession{
+		{ID: "sess-abcd1234"},                   // local
+		{ID: "sess-abcd1234", Peer: "konyvtar"}, // peer
+	}
+	_, err := matchSession(sessions, "abcd1234@", "")
+	if err == nil {
+		t.Fatal("expected error for trailing @ with empty host suffix")
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error should mention empty host, got: %s", err.Error())
+	}
+}
+
+// TestMatchSessionMultiplePeerMatchesGetCandidateList exercises the
+// other half of the friendly-miss UX: when a prefix matches sessions
+// on more than one peer, listing the qualified candidates is the
+// only actionable answer. Picking one to suggest would silently
+// favor an arbitrary peer; saying "not found" would hide that peer
+// sessions exist; saying "ambiguous" without candidates leaves the
+// user typing more characters and hoping.
+//
+// Realistic shape: full session IDs are globally unique, but a short
+// prefix the user typed (or copy-pasted before fully selecting the
+// id) can match multiple sessions across peers.
+func TestMatchSessionMultiplePeerMatchesGetCandidateList(t *testing.T) {
+	sessions := []cliSession{
+		{ID: "sess-abcd1234", Peer: "konyvtar"},
+		{ID: "sess-ab98ef76", Peer: "bespin"},
+	}
+	_, err := matchSession(sessions, "ab", "")
+	if err == nil {
+		t.Fatal("expected error for prefix matching multiple peer sessions")
+	}
+	msg := err.Error()
+	// Both qualified forms must appear; the user uses the message to
+	// pick the right one and retypes.
+	if !strings.Contains(msg, "abcd1234@konyvtar") || !strings.Contains(msg, "ab98ef76@bespin") {
+		t.Errorf("error should list both qualified candidates, got: %s", msg)
+	}
+}

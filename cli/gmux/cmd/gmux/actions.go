@@ -93,6 +93,12 @@ func matchSession(sessions []cliSession, ref, host string) (cliSession, error) {
 	// Split off any @host suffix. Reconcile with the --host flag.
 	if idx := strings.LastIndex(ref, "@"); idx > 0 {
 		suffixHost := ref[idx+1:]
+		if suffixHost == "" {
+			// `id@` with no host is almost certainly a typo. Treating it
+			// as local would silently scope wrong; demand the user make
+			// the intent explicit.
+			return cliSession{}, fmt.Errorf("session ref %q has empty @host suffix", ref)
+		}
 		if host != "" && host != suffixHost {
 			return cliSession{}, fmt.Errorf("--host=%q conflicts with %q in session ref", host, suffixHost)
 		}
@@ -116,8 +122,8 @@ func matchSession(sessions []cliSession, ref, host string) (cliSession, error) {
 	}
 
 	// Friendly miss: if the user gave no host and the ref matches
-	// exactly one peer session, suggest the qualified form rather than
-	// just saying "not found". This is the most common confused-paste
+	// peer sessions, suggest the qualified form rather than just
+	// saying "not found". This is the most common confused-paste
 	// case (`gmux --list --all` shows c0b3c1a1@konyvtar, user copies
 	// just the c0b3c1a1).
 	if host == "" {
@@ -127,9 +133,21 @@ func matchSession(sessions []cliSession, ref, host string) (cliSession, error) {
 				peerPool = append(peerPool, s)
 			}
 		}
-		if hint, _ := lookupInPool(peerPool, ref); hint != nil {
+		hint, peerCandidates := lookupInPool(peerPool, ref)
+		switch {
+		case hint != nil:
 			return cliSession{}, fmt.Errorf("session %q not found locally. Did you mean %s@%s?",
 				ref, shortID(hint.ID), hint.Peer)
+		case len(peerCandidates) > 1:
+			// More than one peer session matches: don't pick a
+			// favorite, list them so the user knows exactly which
+			// qualified forms work.
+			qualified := make([]string, 0, len(peerCandidates))
+			for _, c := range peerCandidates {
+				qualified = append(qualified, shortID(c.ID)+"@"+c.Peer)
+			}
+			return cliSession{}, fmt.Errorf("session %q not found locally; matches peer sessions: %s",
+				ref, strings.Join(qualified, ", "))
 		}
 	}
 
