@@ -48,6 +48,12 @@ import (
 // version is set at build time via -ldflags "-X main.version=..."
 var version = "dev"
 
+// maxInputBytes mirrors the cap the runner's POST /input handler
+// enforces. We re-check it here so the error surfaces at gmuxd's
+// edge (with a 413) instead of silently truncating inside the
+// runner.
+const maxInputBytes = 1 << 20 // 1 MiB
+
 type LaunchConfig struct {
 	DefaultLauncher string             `json:"default_launcher"`
 	Launchers       []adapter.Launcher `json:"launchers"`
@@ -1264,6 +1270,46 @@ func serve(stderr io.Writer) int {
 				}
 			})
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
+
+		case "input":
+			// Cross-peer `gmux --send`. The peer-routing branch above
+			// already forwarded any non-local session, so by here the
+			// session is owned by this gmuxd. Reading the body up to
+			// the runner's cap before forwarding means we don't tie up
+			// a runner connection on a slow CLI stdin: gmuxd absorbs
+			// the backpressure.
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
+				return
+			}
+			sess, ok := sessions.Get(sessionID)
+			if !ok {
+				writeError(w, http.StatusNotFound, "not_found", "session not found")
+				return
+			}
+			if !sess.Alive || sess.SocketPath == "" {
+				writeError(w, http.StatusConflict, "not_running", "session is not running")
+				return
+			}
+			// Mirror the runner's 1 MiB cap so the error appears at the
+			// edge (here) rather than as silent truncation inside the
+			// runner.
+			body, err := io.ReadAll(io.LimitReader(r.Body, maxInputBytes+1))
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "bad_request", "read body: "+err.Error())
+				return
+			}
+			if int64(len(body)) > maxInputBytes {
+				writeError(w, http.StatusRequestEntityTooLarge, "too_large",
+					fmt.Sprintf("input exceeds %d bytes", maxInputBytes))
+				return
+			}
+			if err := discovery.SendInput(r.Context(), sess.SocketPath, bytes.NewReader(body)); err != nil {
+				log.Printf("input: %s: %v", sessionID, err)
+				writeError(w, http.StatusBadGateway, "runner_unreachable", err.Error())
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 
 		case "scrollback":
 			scrollbackBrokerHandler(w, r, sessionID, sessions, metaStore.SessionDir)

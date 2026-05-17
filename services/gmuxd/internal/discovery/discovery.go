@@ -6,6 +6,7 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -295,5 +296,27 @@ func KillSession(socketPath string) error {
 		return err
 	}
 	resp.Body.Close()
+	return nil
+}
+
+// SendInput POSTs body bytes to a runner's /input endpoint, delivering
+// them to the child PTY as if typed at the terminal. Backs the
+// gmuxd-mediated path for `gmux --send`, which lets the same CLI
+// codepath drive local and peer sessions uniformly.
+//
+// Returns nil on the runner's 204 No Content; non-2xx responses
+// surface as errors carrying the runner's status line so the
+// caller can map them to an HTTP response. The runner caps input
+// at 1 MiB; the caller is responsible for not exceeding that.
+func SendInput(ctx context.Context, socketPath string, body io.Reader) error {
+	resp, err := runnerRequest(ctx, socketPath, http.MethodPost, "/input", body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("runner /input: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
+	}
 	return nil
 }
