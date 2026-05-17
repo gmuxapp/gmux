@@ -24,8 +24,8 @@ import (
 // helper that `gmux <cmd>` uses, so attach feels the same as an
 // original launch: transparent I/O, SIGWINCH → resize, SIGHUP →
 // detach (session keeps running), Ctrl-C goes to the child.
-func cmdAttach(ref string) int {
-	sess, err := resolveSession(ref)
+func cmdAttach(ref, host string) int {
+	sess, err := resolveSession(ref, host)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1

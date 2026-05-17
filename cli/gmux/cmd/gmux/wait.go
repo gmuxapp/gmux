@@ -39,7 +39,7 @@ const (
 // peer sessions are out of scope until peer subscriptions stream
 // Status events back to the hub.
 func cmdWait(ref string, timeoutSecs int) int {
-	sess, err := resolveSession(ref)
+	sess, err := resolveSession(ref, "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
