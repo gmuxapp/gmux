@@ -586,3 +586,32 @@ func TestProxyWS_ClientDisconnectClosesSpoke(t *testing.T) {
 	}
 }
 
+
+// TestForwardAction_PreservesQueryString locks in the contract that
+// action endpoints with query parameters (e.g. /scrollback?tail=N)
+// work the same against peer sessions as against local ones.
+// Dropping the query would silently change behavior on cross-peer
+// requests — `gmux --tail 5` against a peer would download the full
+// scrollback instead of the last 5 lines, with no error to suggest
+// anything was wrong.
+func TestForwardAction_PreservesQueryString(t *testing.T) {
+	var gotRawQuery, gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotRawQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL)
+	req := httptest.NewRequest(http.MethodGet, "/v1/sessions/sess-1@peer/scrollback?tail=5", nil)
+	w := httptest.NewRecorder()
+	c.ForwardAction(w, req, "sess-1", "scrollback")
+
+	if gotPath != "/v1/sessions/sess-1/scrollback" {
+		t.Errorf("path = %q, want /v1/sessions/sess-1/scrollback (peer suffix must be stripped)", gotPath)
+	}
+	if gotRawQuery != "tail=5" {
+		t.Errorf("raw query = %q, want tail=5", gotRawQuery)
+	}
+}

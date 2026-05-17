@@ -176,6 +176,14 @@ func (c *Client) GetHealth(ctx context.Context) (json.RawMessage, error) {
 // for stripping the "@peer" suffix before calling.
 func (c *Client) ForwardAction(w http.ResponseWriter, r *http.Request, sessionID, action string) {
 	path := fmt.Sprintf("/v1/sessions/%s/%s", sessionID, action)
+	// Preserve the original request's query string. Some action
+	// endpoints take parameters there (e.g. /scrollback?tail=N,
+	// /wait?timeout=N); dropping them here would silently change
+	// behavior on cross-peer requests, e.g. `gmux --tail 5` against a
+	// peer session would download the full scrollback.
+	if raw := r.URL.RawQuery; raw != "" {
+		path += "?" + raw
+	}
 	c.proxyHTTP(w, r, path)
 }
 
