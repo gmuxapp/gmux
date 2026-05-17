@@ -64,6 +64,19 @@ export function buildTreeNodes(entries: FileEntry[], parentPath: string): TreeNo
 }
 
 /**
+ * Remove a deleted path and all of its children from an expanded set.
+ * Returns a new Set; the original is not mutated.
+ */
+export function pruneExpanded(expanded: Set<string>, deletedPath: string): Set<string> {
+  const next = new Set(expanded)
+  const prefix = deletedPath + '/'
+  for (const p of next) {
+    if (p === deletedPath || p.startsWith(prefix)) next.delete(p)
+  }
+  return next
+}
+
+/**
  * Returns true if a DragEvent carries external files (e.g. from Finder/Explorer).
  * This distinguishes OS-file drops from internal tree drags.
  */
@@ -512,9 +525,11 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
   // External file drop on the root zone
   const [externalDragOver, setExternalDragOver] = useState(false)
 
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const showError = useCallback((msg: string) => {
+    if (errorTimerRef.current !== null) clearTimeout(errorTimerRef.current)
     setError(msg)
-    setTimeout(() => setError(null), 4000)
+    errorTimerRef.current = setTimeout(() => setError(null), 4000)
   }, [])
 
   // Load root on mount and after mutations
@@ -681,8 +696,16 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
       const parentPath = node.path.includes('/')
         ? node.path.slice(0, node.path.lastIndexOf('/'))
         : ''
+      // Remove the deleted item and any expanded sub-paths from the expanded
+      // set so the polling loop doesn't try to list non-existent directories.
+      setExpanded(prev => pruneExpanded(prev, node.path))
       childCacheRef.current.delete(parentPath)
-      childCacheRef.current.delete(node.path)
+      // Clear the deleted node and all cached sub-paths.
+      for (const key of [...childCacheRef.current.keys()]) {
+        if (key === node.path || key.startsWith(node.path + '/')) {
+          childCacheRef.current.delete(key)
+        }
+      }
       await refreshDir(parentPath)
     } catch (e) {
       showError(String(e))

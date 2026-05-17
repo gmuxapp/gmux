@@ -6,6 +6,7 @@ import {
   isExternalFileDrop,
   isHiddenName,
   copyRelativePath,
+  pruneExpanded,
   type FileEntry,
 } from './file-tree'
 
@@ -144,6 +145,44 @@ describe('buildTreeNodes hidden-file filtering', () => {
   it('manual filter with isHiddenName keeps dotfiles when showHidden=true', () => {
     const nodes = buildTreeNodes(entries, '').filter(() => true)
     expect(nodes).toHaveLength(4)
+  })
+})
+
+describe('pruneExpanded', () => {
+  it('removes the exact deleted path', () => {
+    const expanded = new Set(['src', 'src/components', 'docs'])
+    const result = pruneExpanded(expanded, 'src')
+    expect(result.has('src')).toBe(false)
+  })
+
+  it('removes all children of the deleted path', () => {
+    const expanded = new Set(['src', 'src/components', 'src/components/ui', 'docs'])
+    const result = pruneExpanded(expanded, 'src')
+    expect(result.has('src')).toBe(false)
+    expect(result.has('src/components')).toBe(false)
+    expect(result.has('src/components/ui')).toBe(false)
+    expect(result.has('docs')).toBe(true)
+  })
+
+  it('does not remove sibling paths that share a prefix', () => {
+    const expanded = new Set(['src', 'src-backup', 'docs'])
+    const result = pruneExpanded(expanded, 'src')
+    expect(result.has('src')).toBe(false)
+    expect(result.has('src-backup')).toBe(true)
+    expect(result.has('docs')).toBe(true)
+  })
+
+  it('is a no-op when the path is not in the set', () => {
+    const expanded = new Set(['docs', 'lib'])
+    const result = pruneExpanded(expanded, 'src')
+    expect([...result]).toEqual(['docs', 'lib'])
+  })
+
+  it('does not mutate the original set', () => {
+    const expanded = new Set(['src', 'src/components'])
+    pruneExpanded(expanded, 'src')
+    expect(expanded.has('src')).toBe(true)
+    expect(expanded.has('src/components')).toBe(true)
   })
 })
 
