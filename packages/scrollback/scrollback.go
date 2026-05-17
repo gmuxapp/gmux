@@ -22,6 +22,7 @@
 package scrollback
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -218,6 +219,45 @@ func OpenReader(dir string) (io.ReadCloser, error) {
 		closers[i] = f
 	}
 	return &multiReadCloser{r: io.MultiReader(readers...), closers: closers}, nil
+}
+
+// TailBytes reads all bytes from r and returns the trailing portion
+// containing at most n lines (newline-terminated, or the file's
+// trailing chunk if the last line is unterminated).
+//
+// Semantics:
+//
+//   - n <= 0 returns nil with no read; callers asking for zero lines
+//     get an empty answer cheaply.
+//   - A line is delimited by '\n'. A trailing chunk after the final
+//     '\n' counts as a (partial) line; this matches what users
+//     intuitively call "the last line" when a session's output
+//     stops mid-write.
+//   - '\r' is preserved inline; the on-disk scrollback uses CRLF and
+//     we don't second-guess what the PTY emitted.
+//
+// Memory: bounded by the size of r. Scrollback files are capped at
+// 2 * MaxBytes, so this is safe for use by the gmuxd broker. Don't
+// hand it an unbounded stream.
+func TailBytes(r io.Reader, n int) ([]byte, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	buf, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	// SplitAfter keeps the '\n' attached to each line. A file ending
+	// in '\n' produces a trailing empty element; drop it so a request
+	// for the last N lines doesn't burn one of N on emptiness.
+	lines := bytes.SplitAfter(buf, []byte{'\n'})
+	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return bytes.Join(lines, nil), nil
 }
 
 type multiReadCloser struct {

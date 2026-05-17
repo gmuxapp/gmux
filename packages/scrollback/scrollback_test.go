@@ -438,3 +438,111 @@ func TestOpenClearsPreviousRotatedFile(t *testing.T) {
 		t.Errorf("readback = %q, want %q (previous rotated file must not survive Open)", got, "from-new-run")
 	}
 }
+
+// TestTailBytes is the algorithmic surface of `gmux --tail`:
+// given a chunk of raw scrollback, return the trailing N lines.
+// Each case covers a shape the broker can plausibly hand us. If any
+// of these regress, --tail starts lying about a session's recent
+// output, which is exactly when a user trusts it most.
+func TestTailBytes(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		n    int
+		want string
+	}{
+		{
+			name: "fewer lines than requested returns all",
+			in:   "alpha\nbeta\n",
+			n:    5,
+			want: "alpha\nbeta\n",
+		},
+		{
+			name: "exact match returns all without dropping leading line",
+			in:   "alpha\nbeta\ngamma\n",
+			n:    3,
+			want: "alpha\nbeta\ngamma\n",
+		},
+		{
+			name: "trims to the trailing N when input has more",
+			in:   "alpha\nbeta\ngamma\ndelta\n",
+			n:    2,
+			want: "gamma\ndelta\n",
+		},
+		{
+			name: "unterminated tail still counts as a line",
+			// "a\nb\nc" is three lines; tail=2 must include c even
+			// though it has no trailing newline. Matches what a user
+			// expects when a session crashes mid-write.
+			in:   "alpha\nbeta\ngamma",
+			n:    2,
+			want: "beta\ngamma",
+		},
+		{
+			name: "CRLF is preserved inline",
+			// Disk scrollback uses CRLF because that's what the PTY
+			// emits. Stripping \r would change what xterm-style
+			// consumers see; leave it alone.
+			in:   "first\r\nsecond\r\nthird\r\n",
+			n:    2,
+			want: "second\r\nthird\r\n",
+		},
+		{
+			name: "n=0 yields nothing",
+			in:   "alpha\nbeta\n",
+			n:    0,
+			want: "",
+		},
+		{
+			name: "negative n yields nothing",
+			in:   "alpha\nbeta\n",
+			n:    -3,
+			want: "",
+		},
+		{
+			name: "empty input yields nothing",
+			in:   "",
+			n:    5,
+			want: "",
+		},
+		{
+			name: "single trailing newline returns that one line",
+			in:   "alpha\n",
+			n:    5,
+			want: "alpha\n",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := TailBytes(strings.NewReader(tc.in), tc.n)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTailBytesPropagatesReadErrors makes sure a broken reader
+// doesn't silently produce a partial result. The broker uses this
+// helper over real files; an EIO in the middle should bubble up so
+// the HTTP layer can 500 cleanly instead of returning truncated
+// output that looks like correct truncated tail output.
+func TestTailBytesPropagatesReadErrors(t *testing.T) {
+	want := errors.New("disk on fire")
+	r := &errReader{err: want}
+	got, err := TailBytes(r, 5)
+	if !errors.Is(err, want) {
+		t.Errorf("err = %v, want %v", err, want)
+	}
+	if got != nil {
+		t.Errorf("bytes = %q on error, want nil", got)
+	}
+}
+
+type errReader struct{ err error }
+
+func (e *errReader) Read(p []byte) (int, error) { return 0, e.err }
