@@ -106,11 +106,15 @@ interface LaunchButtonProps {
 }
 
 export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, sessions, selectedId, fallbackCwd }: LaunchButtonProps) {
-  // Resolve the target: context-aware mode (sessions provided) takes
-  // priority over explicit cwd/peer.
+  // Resolve the target: context-aware mode (sessions provided) derives
+  // a smart cwd, while an explicit `peer` prop is always authoritative
+  // (the caller knows the folder's owner; ADR 0002). This matters for
+  // peer folders whose sessions are all dead-resumable, where context
+  // mode would otherwise lose the peer in resolveTarget's fallback.
   const target = useMemo((): LaunchTarget => {
     if (sessions && fallbackCwd !== undefined) {
-      return resolveTarget(sessions, selectedId ?? null, fallbackCwd)
+      const ctx = resolveTarget(sessions, selectedId ?? null, fallbackCwd)
+      return peer ? { ...ctx, peer } : ctx
     }
     return { peer, cwd: cwd || '' }
   }, [sessions, selectedId, fallbackCwd, cwd, peer])

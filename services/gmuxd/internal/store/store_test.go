@@ -820,3 +820,180 @@ func TestSessionMarshalJSON_WireFormat(t *testing.T) {
 		t.Error("stale was removed; must not appear in wire JSON")
 	}
 }
+
+// --- Reconcile (project ownership stamping per ADR 0002) ---
+
+func TestReconcile_StampsOwnedSessions(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "a", Slug: "alpha", Kind: "k", Alive: true})
+	s.Upsert(Session{ID: "b", Slug: "beta", Kind: "k", Alive: true})
+
+	s.Reconcile(func(sess Session) (string, int) {
+		switch sess.Slug {
+		case "alpha":
+			return "gmux", 0
+		case "beta":
+			return "gmux", 1
+		}
+		return "", 0
+	})
+
+	got, _ := s.Get("a")
+	if got.ProjectSlug != "gmux" || got.ProjectIndex != 0 {
+		t.Errorf("a: got slug=%q index=%d, want gmux/0", got.ProjectSlug, got.ProjectIndex)
+	}
+	got, _ = s.Get("b")
+	if got.ProjectSlug != "gmux" || got.ProjectIndex != 1 {
+		t.Errorf("b: got slug=%q index=%d, want gmux/1", got.ProjectSlug, got.ProjectIndex)
+	}
+}
+
+func TestReconcile_SkipsPeerOwnedSessions(t *testing.T) {
+	s := New()
+	s.UpsertRemote(Session{ID: "p1", Slug: "peer-sess", Kind: "k", Peer: "tower", Alive: true, ProjectSlug: "from-origin", ProjectIndex: 3})
+
+	s.Reconcile(func(sess Session) (string, int) {
+		// Would erroneously overwrite if Reconcile didn't skip peer sessions.
+		return "wrong", 99
+	})
+
+	got, _ := s.Get("p1")
+	if got.ProjectSlug != "from-origin" || got.ProjectIndex != 3 {
+		t.Errorf("peer session stamps overwritten: got slug=%q index=%d, want from-origin/3", got.ProjectSlug, got.ProjectIndex)
+	}
+}
+
+func TestReconcile_DoesNotBroadcast(t *testing.T) {
+	// Reconcile is intentionally silent until the snapshot protocol
+	// commit makes the stamps wire-visible. Verify the contract.
+	s := New()
+	ch, cancel := s.Subscribe()
+	defer cancel()
+	s.Upsert(Session{ID: "a", Slug: "alpha", Kind: "k", Alive: true})
+	// Drain the upsert event from setup.
+	<-ch
+
+	done := make(chan struct{})
+	go func() {
+		s.Reconcile(func(sess Session) (string, int) {
+			return "gmux", 0
+		})
+		close(done)
+	}()
+	<-done
+
+	select {
+	case ev := <-ch:
+		t.Fatalf("Reconcile broadcast unexpectedly: %+v", ev)
+	default:
+	}
+}
+
+func TestReconcile_NoOpWhenStampsUnchanged(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "a", Slug: "alpha", Kind: "k", Alive: true})
+
+	calls := 0
+	assignFn := func(sess Session) (string, int) {
+		calls++
+		return "", 0
+	}
+	s.Reconcile(assignFn)
+	first := calls
+	s.Reconcile(assignFn)
+	if calls-first != 1 {
+		t.Errorf("expected one assignFn call on second Reconcile, got %d", calls-first)
+	}
+
+	got, _ := s.Get("a")
+	if got.ProjectSlug != "" || got.ProjectIndex != 0 {
+		t.Errorf("disclaimed stamps drifted: slug=%q index=%d", got.ProjectSlug, got.ProjectIndex)
+	}
+}
+
+func TestSession_MarshalEmitsProjectStamps(t *testing.T) {
+	sess := Session{
+		ID:           "a",
+		Kind:         "k",
+		Alive:        true,
+		ProjectSlug:  "gmux",
+		ProjectIndex: 4,
+	}
+	b, err := json.Marshal(sess)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, _ := m["project_slug"].(string); got != "gmux" {
+		t.Errorf("project_slug on wire: got %v, want %q", m["project_slug"], "gmux")
+	}
+	// Numbers decode as float64 in untyped maps.
+	if got, _ := m["project_index"].(float64); got != 4 {
+		t.Errorf("project_index on wire: got %v, want 4", m["project_index"])
+	}
+}
+
+func TestSession_MarshalOmitsDisclaimedStamps(t *testing.T) {
+	// A disclaimed session (no project match) leaves slug="" and
+	// index=0. Both fields use omitempty so neither appears on the
+	// wire; viewers fall through to their own match rules.
+	sess := Session{ID: "a", Kind: "k", Alive: true}
+	b, err := json.Marshal(sess)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := m["project_slug"]; ok {
+		t.Error("project_slug should be omitted when empty")
+	}
+	if _, ok := m["project_index"]; ok {
+		t.Error("project_index should be omitted when zero alongside empty slug")
+	}
+}
+
+func TestSession_WireRoundTripPreservesStamps(t *testing.T) {
+	// What an origin emits, a peer mirror unmarshals back into a
+	// store.Session. The stamps must round-trip so the receiver can
+	// render (peer, slug) folders without re-deriving project
+	// membership.
+	cases := []struct {
+		name  string
+		slug  string
+		index int
+	}{
+		{"first-in-array", "gmux", 0},
+		{"middle", "gmux", 2},
+		{"disclaimed", "", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := Session{
+				ID:           "a",
+				Kind:         "k",
+				Alive:        true,
+				ProjectSlug:  tc.slug,
+				ProjectIndex: tc.index,
+			}
+			b, err := json.Marshal(orig)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var got Session
+			if err := json.Unmarshal(b, &got); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if got.ProjectSlug != tc.slug {
+				t.Errorf("slug round-trip: got %q want %q", got.ProjectSlug, tc.slug)
+			}
+			if got.ProjectIndex != tc.index {
+				t.Errorf("index round-trip: got %d want %d", got.ProjectIndex, tc.index)
+			}
+		})
+	}
+}

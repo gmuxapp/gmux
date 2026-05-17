@@ -5,8 +5,15 @@ import {
   matchSession,
   buildProjectFolders,
   parseSessionHostPath,
+  reorderKeysForFolder,
   buildProjectTopology,
   isSessionVisibleInProject,
+  slugify,
+  slugFromRemote,
+  slugFromPath,
+  mostCommonRemote,
+  discoverProjects,
+  countUnmatchedActive,
 } from './projects'
 import { makeSession } from './test-helpers'
 
@@ -161,6 +168,7 @@ describe('buildProjectFolders', () => {
     expect(folders).toHaveLength(1)
     expect(folders[0].name).toBe('empty')
     expect(folders[0].sessions).toHaveLength(0)
+    expect(folders[0].peer).toBeUndefined()
   })
 
   it('sets launchCwd from project paths', () => {
@@ -171,82 +179,229 @@ describe('buildProjectFolders', () => {
     expect(folders[0].launchCwd).toBe('/dev/proj')
   })
 
-  it('excludes dead sessions not in the project sessions array', () => {
+  it('hides dead sessions that the origin disclaims (not stamped to this folder)', () => {
+    // "old-dead" is dead and disclaimed: nothing claims it. The viewer's
+    // rule matches its cwd, but adopted-disclaimed dead sessions are
+    // not visible — only the viewer's intent put a rule there, and a
+    // dead session can't validate the match.
     const projects: ProjectItem[] = [
-      { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['kept-id'] },
+      { slug: 'proj', match: [{ path: '/dev/proj' }] },
     ]
     const sessions = [
-      makeSession({ id: 'kept-id', cwd: '/dev/proj', alive: false, resumable: true }),
+      makeSession({ id: 'kept', cwd: '/dev/proj', alive: false, resumable: true,
+                    project_slug: 'proj', project_index: 0 }),
       makeSession({ id: 'old-dead', cwd: '/dev/proj', alive: false, resumable: true }),
       makeSession({ id: 'alive-1', cwd: '/dev/proj', alive: true }),
     ]
     const folders = buildProjectFolders(projects, sessions)
     const ids = folders[0].sessions.map(s => s.id)
-    expect(ids).toContain('alive-1')   // alive: always shown
-    expect(ids).toContain('kept-id')   // dead but in array: shown
-    expect(ids).not.toContain('old-dead') // dead, not in array: hidden
+    expect(ids).toContain('alive-1')   // alive always renders
+    expect(ids).toContain('kept')      // dead but stamped: claimed, renders
+    expect(ids).not.toContain('old-dead') // dead, disclaimed: hidden
   })
 
-  it('matches dead sessions by slug in array', () => {
+  it('hides dead sessions stamped to a different project than the folder', () => {
     const projects: ProjectItem[] = [
-      { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['my-resume-key'] },
+      { slug: 'proj', match: [{ path: '/dev/proj' }] },
+      { slug: 'other', match: [{ path: '/elsewhere' }] },
     ]
     const sessions = [
-      makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: false, resumable: true, slug: 'my-resume-key' }),
+      // Dead, stamped to 'other', but its cwd would also rule-match 'proj'.
+      // Stamp wins; it lives in 'other', not 'proj', and being dead-and-
+      // stamped-elsewhere it doesn't render in 'proj' either.
+      makeSession({ id: 'wanderer', cwd: '/dev/proj', alive: false, resumable: true,
+                    project_slug: 'other', project_index: 0 }),
     ]
     const folders = buildProjectFolders(projects, sessions)
-    expect(folders[0].sessions).toHaveLength(1)
+    const proj = folders.find(f => f.slug === 'proj')!
+    const other = folders.find(f => f.slug === 'other')!
+    expect(proj.sessions).toHaveLength(0)
+    expect(other.sessions.map(s => s.id)).toEqual(['wanderer'])
   })
 
-  it('excludes dead sessions whose slug is not in the array', () => {
+  it('sorts stamped local sessions by project_index', () => {
     const projects: ProjectItem[] = [
-      { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['other-key'] },
+      { slug: 'proj', match: [{ path: '/dev/proj' }] },
     ]
     const sessions = [
-      makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: false, resumable: true, slug: 'my-resume-key' }),
-    ]
-    const folders = buildProjectFolders(projects, sessions)
-    expect(folders[0].sessions).toHaveLength(0)
-  })
-
-  it('sorts sessions by their position in the sessions array', () => {
-    const projects: ProjectItem[] = [
-      { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['c', 'a', 'b'] },
-    ]
-    const sessions = [
-      makeSession({ id: 'a', cwd: '/dev/proj', alive: true }),
-      makeSession({ id: 'b', cwd: '/dev/proj', alive: true }),
-      makeSession({ id: 'c', cwd: '/dev/proj', alive: true }),
+      makeSession({ id: 'a', cwd: '/dev/proj', alive: true, project_slug: 'proj', project_index: 1 }),
+      makeSession({ id: 'b', cwd: '/dev/proj', alive: true, project_slug: 'proj', project_index: 2 }),
+      makeSession({ id: 'c', cwd: '/dev/proj', alive: true, project_slug: 'proj', project_index: 0 }),
     ]
     const folders = buildProjectFolders(projects, sessions)
     expect(folders[0].sessions.map(s => s.id)).toEqual(['c', 'a', 'b'])
   })
 
-  it('sorts sessions by slug when the array uses slugs', () => {
+  it('puts adopted-disclaimed sessions after stamped ones, ordered by created_at', () => {
+    // Adopted-disclaimed: viewer's rule matched, but origin hasn't
+    // stamped them yet (just-spawned, Reconcile-pending). They should
+    // sit at the end so they don't reshuffle the existing order.
     const projects: ProjectItem[] = [
-      { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['gamma', 'alpha'] },
+      { slug: 'proj', match: [{ path: '/dev/proj' }] },
     ]
     const sessions = [
-      makeSession({ id: 'sess-1', cwd: '/dev/proj', alive: true, slug: 'alpha' }),
-      makeSession({ id: 'sess-2', cwd: '/dev/proj', alive: true, slug: 'gamma' }),
+      makeSession({ id: 'unstamped-old', cwd: '/dev/proj', alive: true,
+                    created_at: '2025-01-01T00:00:00Z' }),
+      makeSession({ id: 'unstamped-new', cwd: '/dev/proj', alive: true,
+                    created_at: '2025-01-03T00:00:00Z' }),
+      makeSession({ id: 'stamped', cwd: '/dev/proj', alive: true,
+                    project_slug: 'proj', project_index: 0,
+                    created_at: '2025-01-02T00:00:00Z' }),
     ]
     const folders = buildProjectFolders(projects, sessions)
-    expect(folders[0].sessions.map(s => s.slug)).toEqual(['gamma', 'alpha'])
+    expect(folders[0].sessions.map(s => s.id)).toEqual([
+      'stamped', 'unstamped-old', 'unstamped-new',
+    ])
   })
 
-  it('puts sessions not in the array at the end', () => {
+  // ── Peer-owned folders (ADR 0002) ──────────────────────────────
+
+  it('renders a stamped peer session under its origin (peer, slug) folder', () => {
     const projects: ProjectItem[] = [
-      { slug: 'proj', match: [{ path: '/dev/proj' }], sessions: ['b'] },
+      { slug: 'gmux', match: [{ path: '/dev/gmux' }] },
     ]
     const sessions = [
-      makeSession({ id: 'a', cwd: '/dev/proj', alive: true, created_at: '2025-01-01T00:00:00Z' }),
-      makeSession({ id: 'b', cwd: '/dev/proj', alive: true, created_at: '2025-01-02T00:00:00Z' }),
-      makeSession({ id: 'c', cwd: '/dev/proj', alive: true, created_at: '2025-01-03T00:00:00Z' }),
+      makeSession({ id: 's1@tower', cwd: '/elsewhere', alive: true,
+                    peer: 'tower', project_slug: 'gmux', project_index: 0 }),
     ]
     const folders = buildProjectFolders(projects, sessions)
-    const ids = folders[0].sessions.map(s => s.id)
-    // 'b' is in the array so it comes first; 'a' and 'c' are not, sorted by creation time
-    expect(ids).toEqual(['b', 'a', 'c'])
+    // Local 'gmux' folder still emits (empty); peer folder follows.
+    const tower = folders.find(f => f.peer === 'tower')!
+    expect(tower).toBeDefined()
+    expect(tower.slug).toBe('gmux')
+    expect(tower.name).toBe('gmux')
+    expect(tower.sessions.map(s => s.id)).toEqual(['s1@tower'])
+    expect(tower.key).toBe('tower::gmux')
+  })
+
+  it('keeps two same-slug projects on different hosts as separate folders', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', match: [{ path: '/home/me/dev/gmux' }] },
+    ]
+    const sessions = [
+      makeSession({ id: 'local-1', cwd: '/home/me/dev/gmux', alive: true,
+                    project_slug: 'gmux', project_index: 0 }),
+      makeSession({ id: 'tower-1@tower', cwd: '/home/me/dev/gmux', alive: true,
+                    peer: 'tower', project_slug: 'gmux', project_index: 0 }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    const local = folders.find(f => f.peer === undefined && f.slug === 'gmux')!
+    const tower = folders.find(f => f.peer === 'tower')!
+    expect(local.sessions.map(s => s.id)).toEqual(['local-1'])
+    expect(tower.sessions.map(s => s.id)).toEqual(['tower-1@tower'])
+  })
+
+  it('skips empty peer folders (no enumeration on the wire)', () => {
+    // No peer sessions visible → no peer folder, even if a peer is
+    // connected. Empty peer folders would be a viewer fiction.
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', match: [{ path: '/dev/gmux' }] },
+    ]
+    const folders = buildProjectFolders(projects, [])
+    expect(folders.filter(f => f.peer !== undefined)).toEqual([])
+  })
+
+  it('hides a peer folder once its last visible session goes away', () => {
+    const projects: ProjectItem[] = []
+    const sessions = [
+      // Dead and not resumable: never visible.
+      makeSession({ id: 's1@tower', cwd: '/x', alive: false, resumable: false,
+                    peer: 'tower', project_slug: 'gmux', project_index: 0 }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    expect(folders.filter(f => f.peer === 'tower')).toEqual([])
+  })
+
+  it('sorts peer folders by peer name then slug', () => {
+    const projects: ProjectItem[] = []
+    const sessions = [
+      makeSession({ id: 'a@zulu', cwd: '/x', alive: true,
+                    peer: 'zulu', project_slug: 'beta', project_index: 0 }),
+      makeSession({ id: 'b@alpha', cwd: '/x', alive: true,
+                    peer: 'alpha', project_slug: 'gamma', project_index: 0 }),
+      makeSession({ id: 'c@alpha', cwd: '/x', alive: true,
+                    peer: 'alpha', project_slug: 'beta', project_index: 0 }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    expect(folders.map(f => `${f.peer}/${f.slug}`)).toEqual([
+      'alpha/beta', 'alpha/gamma', 'zulu/beta',
+    ])
+  })
+
+  it('orders sessions inside a peer folder by project_index', () => {
+    const projects: ProjectItem[] = []
+    const sessions = [
+      makeSession({ id: 'b@tower', cwd: '/x', alive: true,
+                    peer: 'tower', project_slug: 'gmux', project_index: 1 }),
+      makeSession({ id: 'a@tower', cwd: '/x', alive: true,
+                    peer: 'tower', project_slug: 'gmux', project_index: 0 }),
+      makeSession({ id: 'c@tower', cwd: '/x', alive: true,
+                    peer: 'tower', project_slug: 'gmux', project_index: 2 }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    const tower = folders.find(f => f.peer === 'tower')!
+    expect(tower.sessions.map(s => s.id)).toEqual(['a@tower', 'b@tower', 'c@tower'])
+  })
+
+  it('adopts a disclaimed peer session into a local folder via match rules', () => {
+    // Devcontainer-style: peer's projects.json is empty, so all its
+    // sessions disclaim. The viewer's rule for /workspaces/gmux
+    // matches the session's cwd; viewer adopts it into local 'gmux'.
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', match: [{ path: '/workspaces/gmux' }] },
+    ]
+    const sessions = [
+      makeSession({ id: 's1@dev', cwd: '/workspaces/gmux', alive: true,
+                    peer: 'dev' }), // no project_slug = disclaimed
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    const local = folders.find(f => f.slug === 'gmux' && f.peer === undefined)!
+    expect(local.sessions.map(s => s.id)).toEqual(['s1@dev'])
+    // No separate peer folder for an adopted disclaim.
+    expect(folders.filter(f => f.peer === 'dev')).toEqual([])
+  })
+
+  it('drops a disclaimed peer session that no viewer rule adopts', () => {
+    // ADR 0002: unmatched disclaimed sessions appear via
+    // discoverProjects, not in any folder.
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', match: [{ path: '/dev/gmux' }] },
+    ]
+    const sessions = [
+      makeSession({ id: 's1@dev', cwd: '/elsewhere', alive: true, peer: 'dev' }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    expect(folders.flatMap(f => f.sessions.map(s => s.id))).toEqual([])
+  })
+
+  it('adopted unstamped sessions sharing a created_at sort stably by id', () => {
+    // Regression: bespin (v1 spoke) rehydrates sessions at startup and
+    // stamps them all with the same second-precision RFC3339
+    // created_at. The hub adopts them into a local folder via match
+    // rules; without a deterministic tiebreaker in
+    // compareLocalFolderSessions the sidebar order shuffled on every
+    // snapshot.sessions emit (Go map iteration is randomized).
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', match: [{ path: '/dev/gmux' }] },
+    ]
+    const ts = '2026-05-16T12:00:00Z'
+    const a = makeSession({ id: 'a@bespin', cwd: '/dev/gmux', alive: true, peer: 'bespin', created_at: ts })
+    const b = makeSession({ id: 'b@bespin', cwd: '/dev/gmux', alive: true, peer: 'bespin', created_at: ts })
+    const c = makeSession({ id: 'c@bespin', cwd: '/dev/gmux', alive: true, peer: 'bespin', created_at: ts })
+
+    // Iterate the three possible reorderings the wire might present.
+    // All must produce the same on-screen order.
+    const ordersIn = [
+      [a, b, c],
+      [c, a, b],
+      [b, c, a],
+    ]
+    for (const input of ordersIn) {
+      const folder = buildProjectFolders(projects, input)[0]
+      expect(folder.sessions.map(s => s.id)).toEqual([
+        'a@bespin', 'b@bespin', 'c@bespin',
+      ])
+    }
   })
 })
 
@@ -309,6 +464,58 @@ describe('parseSessionHostPath', () => {
     expect(parseSessionHostPath('file-abc-123@peer')).toEqual({
       originalId: 'file-abc-123', path: ['peer'],
     })
+  })
+})
+
+describe('reorderKeysForFolder', () => {
+  // Greptile flagged that the sidebar's drag-end was sending
+  // `s.slug || s.id` to the peer reorder endpoint. For slugless
+  // peer-owned sessions that evaluates to the hub-namespaced id
+  // (`"orig@peer"`), which the peer's ReorderSessions treats as a
+  // new entry and prepends to projects.json. Each drag would
+  // append a phantom key. These cases pin the corruption-prevention
+  // contract.
+
+  it('peer folder: strips @<peer> namespace from slugless ids', () => {
+    const sessions = [
+      makeSession({ id: 'a@tower', cwd: '/x', slug: '', peer: 'tower' }),
+      makeSession({ id: 'b@tower', cwd: '/x', slug: '', peer: 'tower' }),
+    ]
+    // Without stripping, the peer's projects.json would gain phantom
+    // "a@tower" / "b@tower" entries while its real "a" / "b" keys
+    // are pushed to the tail.
+    expect(reorderKeysForFolder(sessions, 'tower')).toEqual(['a', 'b'])
+  })
+
+  it('peer folder: keeps slug as-is for slugged sessions', () => {
+    const sessions = [
+      makeSession({ id: 'a@tower', cwd: '/x', slug: 'fix-auth', peer: 'tower' }),
+      makeSession({ id: 'b@tower', cwd: '/x', slug: 'login-page', peer: 'tower' }),
+    ]
+    expect(reorderKeysForFolder(sessions, 'tower')).toEqual(['fix-auth', 'login-page'])
+  })
+
+  it('local folder: drops adopted peer-owned sessions', () => {
+    // A local folder showing a peer session adopted via match rules:
+    // sending it to the local /v1/projects PATCH would write the
+    // namespaced id into the viewer's own projects.json, polluting
+    // future Reconcile passes.
+    const sessions = [
+      makeSession({ id: 'local-1', cwd: '/x', slug: 'fix-auth' }),
+      makeSession({ id: 'adopted@spoke', cwd: '/x', slug: '', peer: 'spoke' }),
+      makeSession({ id: 'local-2', cwd: '/x', slug: '' }),
+    ]
+    expect(reorderKeysForFolder(sessions, undefined))
+      .toEqual(['fix-auth', 'local-2'])
+  })
+
+  it('returns empty when no session matches the folder owner', () => {
+    // Caller short-circuits on empty: the daemon shouldn't see a
+    // request that boils down to "reorder nothing".
+    const sessions = [
+      makeSession({ id: 'a@spoke', cwd: '/x', slug: '', peer: 'spoke' }),
+    ]
+    expect(reorderKeysForFolder(sessions, 'tower')).toEqual([])
   })
 })
 
@@ -468,5 +675,232 @@ describe('buildProjectTopology', () => {
     const hosts = buildProjectTopology('fluxer', sessions, projects2, peers)
     expect(hosts).toHaveLength(1)
     expect(hosts[0].folders[0].sessions.map(s => s.id)).toEqual(['f1'])
+  })
+
+  it('sessions sharing a created_at sort stably by id within a cwd group', () => {
+    // Same regression as the sidebar (v1-spoke rehydrate: many
+    // sessions with identical second-precision created_at). The hub
+    // page groups by cwd; within a group, sortHubSessions ties
+    // without an id fallback and the rows flip whenever
+    // snapshot.sessions re-emits with a different Go map order.
+    const ts = '2026-05-16T12:00:00Z'
+    const peerSessions = [
+      makeSession({ id: 'a@bespin', cwd: '/home/mg/dev/fluxer', alive: true, peer: 'bespin', created_at: ts }),
+      makeSession({ id: 'b@bespin', cwd: '/home/mg/dev/fluxer', alive: true, peer: 'bespin', created_at: ts }),
+      makeSession({ id: 'c@bespin', cwd: '/home/mg/dev/fluxer', alive: true, peer: 'bespin', created_at: ts }),
+    ]
+    const bespinPeers: PeerInfo[] = [
+      { name: 'bespin', url: 'http://10.0.0.5:8790', status: 'connected', session_count: 3 },
+    ]
+    for (const input of [
+      [peerSessions[0], peerSessions[1], peerSessions[2]],
+      [peerSessions[2], peerSessions[0], peerSessions[1]],
+      [peerSessions[1], peerSessions[2], peerSessions[0]],
+    ]) {
+      const hosts = buildProjectTopology('fluxer', input, projects, bespinPeers)
+      const bespinHost = hosts.find(h => h.path[0] === 'bespin')!
+      expect(bespinHost.folders[0].sessions.map(s => s.id)).toEqual([
+        'a@bespin', 'b@bespin', 'c@bespin',
+      ])
+    }
+  })
+})
+
+describe('slugify', () => {
+  it('lowercases and replaces non-alnum with hyphens', () => {
+    expect(slugify('Hello World')).toBe('hello-world')
+  })
+
+  it('collapses repeated hyphens', () => {
+    expect(slugify('a---b__c')).toBe('a-b-c')
+  })
+
+  it('trims leading and trailing hyphens', () => {
+    expect(slugify('--my-thing--')).toBe('my-thing')
+  })
+
+  it('returns "project" for empty results', () => {
+    expect(slugify('!!!')).toBe('project')
+    expect(slugify('')).toBe('project')
+  })
+})
+
+describe('slugFromRemote', () => {
+  it('uses repo basename of normalized URL', () => {
+    expect(slugFromRemote('git@github.com:gmuxapp/gmux.git')).toBe('gmux')
+    expect(slugFromRemote('https://github.com/Org/My-Repo.git')).toBe('my-repo')
+  })
+})
+
+describe('slugFromPath', () => {
+  it('uses basename', () => {
+    expect(slugFromPath('/dev/gmux')).toBe('gmux')
+    expect(slugFromPath('~/code/My-Project/')).toBe('my-project')
+  })
+})
+
+describe('mostCommonRemote', () => {
+  it('returns the most frequent normalized remote', () => {
+    const sessions = [
+      makeSession({ id: 's1', cwd: '/x', remotes: { origin: 'git@github.com:foo/bar.git' } }),
+      makeSession({ id: 's2', cwd: '/x', remotes: { origin: 'https://github.com/foo/bar' } }),
+      makeSession({ id: 's3', cwd: '/x', remotes: { origin: 'git@github.com:other/repo.git' } }),
+    ]
+    expect(mostCommonRemote(sessions)).toBe('github.com/foo/bar')
+  })
+
+  it('returns empty string when no remotes', () => {
+    expect(mostCommonRemote([makeSession({ id: 's1', cwd: '/x' })])).toBe('')
+  })
+
+  it('breaks ties lexicographically', () => {
+    const sessions = [
+      makeSession({ id: 's1', cwd: '/x', remotes: { origin: 'github.com/zzz/repo' } }),
+      makeSession({ id: 's2', cwd: '/x', remotes: { origin: 'github.com/aaa/repo' } }),
+    ]
+    expect(mostCommonRemote(sessions)).toBe('github.com/aaa/repo')
+  })
+})
+
+describe('discoverProjects', () => {
+  it('groups unmatched sessions by directory', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', match: [{ path: '/dev/gmux' }] },
+    ]
+    const sessions = [
+      makeSession({ id: 'a', cwd: '/dev/gmux/sub', alive: true }),  // matches gmux
+      makeSession({ id: 'b', cwd: '/work/foo', alive: true }),
+      makeSession({ id: 'c', cwd: '/work/foo', alive: false }),
+      makeSession({ id: 'd', workspace_root: '/work/bar', cwd: '/work/bar/src', alive: true }),
+    ]
+    const out = discoverProjects(sessions, projects)
+    expect(out).toHaveLength(2)
+    const fooBucket = out.find(d => d.paths[0] === '/work/foo')
+    expect(fooBucket).toMatchObject({ session_count: 2, active_count: 1 })
+    const barBucket = out.find(d => d.paths[0] === '/work/bar')
+    expect(barBucket).toMatchObject({ session_count: 1, active_count: 1 })
+  })
+
+  it('skips sessions with no directory at all', () => {
+    expect(discoverProjects([makeSession({ id: 'a', cwd: '' })], [])).toEqual([])
+  })
+
+  it('prefers workspace_root over cwd as bucket key', () => {
+    const sessions = [
+      makeSession({ id: 'a', workspace_root: '/work/repo', cwd: '/work/repo/sub' }),
+      makeSession({ id: 'b', workspace_root: '/work/repo', cwd: '/work/repo/other' }),
+    ]
+    const out = discoverProjects(sessions, [])
+    expect(out).toHaveLength(1)
+    expect(out[0].paths).toEqual(['/work/repo'])
+    expect(out[0].session_count).toBe(2)
+  })
+
+  it('uses remote-derived slug when available', () => {
+    const sessions = [
+      makeSession({ id: 'a', cwd: '/work/foo', remotes: { origin: 'git@github.com:org/cool-repo.git' } }),
+    ]
+    const out = discoverProjects(sessions, [])
+    expect(out[0].suggested_slug).toBe('cool-repo')
+    expect(out[0].remote).toBe('github.com/org/cool-repo')
+  })
+
+  it('falls back to path-derived slug when no remote', () => {
+    const sessions = [makeSession({ id: 'a', cwd: '/work/cool-app' })]
+    const out = discoverProjects(sessions, [])
+    expect(out[0].suggested_slug).toBe('cool-app')
+    expect(out[0].remote).toBeUndefined()
+  })
+
+  it('sorts by active count, then session count, then alphabetically', () => {
+    const sessions = [
+      makeSession({ id: '1', cwd: '/a', alive: false }),
+      makeSession({ id: '2', cwd: '/b', alive: true }),
+      makeSession({ id: '3', cwd: '/c', alive: true }),
+      makeSession({ id: '4', cwd: '/c', alive: false }),
+    ]
+    const out = discoverProjects(sessions, [])
+    expect(out.map(d => d.paths[0])).toEqual(['/c', '/b', '/a'])
+  })
+
+  it('excludes claimed sessions (stamped by their origin)', () => {
+    // A session claimed on its origin has a definite home; only
+    // disclaimed sessions are eligible for discovery.
+    const sessions = [
+      makeSession({ id: 'claimed', cwd: '/work/foo', alive: true,
+                    project_slug: 'foo', project_index: 0 }),
+      makeSession({ id: 'free', cwd: '/work/bar', alive: true }),
+    ]
+    const out = discoverProjects(sessions, [])
+    expect(out).toHaveLength(1)
+    expect(out[0].paths).toEqual(['/work/bar'])
+  })
+
+  it('excludes claimed peer sessions (peer-stamped)', () => {
+    const sessions = [
+      makeSession({ id: 's1@tower', cwd: '/work/foo', alive: true,
+                    peer: 'tower', project_slug: 'gmux', project_index: 0 }),
+    ]
+    expect(discoverProjects(sessions, [])).toEqual([])
+  })
+})
+
+describe('countUnmatchedActive', () => {
+  it('counts alive sessions outside any project', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', match: [{ path: '/dev/gmux' }] },
+    ]
+    const sessions = [
+      makeSession({ id: 'a', cwd: '/dev/gmux/x', alive: true }),  // adopted by viewer rules
+      makeSession({ id: 'b', cwd: '/elsewhere', alive: true }),   // free
+      makeSession({ id: 'c', cwd: '/elsewhere', alive: false }),  // dead, not counted
+      makeSession({ id: 'd', cwd: '/other', alive: true }),       // free
+    ]
+    expect(countUnmatchedActive(sessions, projects)).toBe(2)
+  })
+
+  it('excludes claimed sessions (stamped by their origin)', () => {
+    // Stamped sessions have a folder; the badge counts only sessions
+    // genuinely outside any project from any host's perspective.
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', match: [{ path: '/dev/gmux' }] },
+    ]
+    const sessions = [
+      makeSession({ id: 'a', cwd: '/elsewhere', alive: true,
+                    project_slug: 'gmux', project_index: 0 }),
+    ]
+    expect(countUnmatchedActive(sessions, projects)).toBe(0)
+  })
+
+  it('excludes claimed peer sessions', () => {
+    // A peer's claimed session lives in the peer's folder; not
+    // "outside any project" from the viewer's perspective.
+    const sessions = [
+      makeSession({ id: 's@tower', cwd: '/elsewhere', alive: true,
+                    peer: 'tower', project_slug: 'gmux', project_index: 0 }),
+    ]
+    expect(countUnmatchedActive(sessions, [])).toBe(0)
+  })
+
+  it('counts a disclaimed peer session that no viewer rule adopts', () => {
+    // Devcontainer disclaim + no viewer rule = genuinely homeless.
+    const sessions = [
+      makeSession({ id: 's@dev', cwd: '/elsewhere', alive: true, peer: 'dev' }),
+    ]
+    expect(countUnmatchedActive(sessions, [])).toBe(1)
+  })
+
+  it('does not count a disclaimed peer session adopted by a viewer rule', () => {
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', match: [{ path: '/workspaces/gmux' }] },
+    ]
+    const sessions = [
+      makeSession({ id: 's@dev', cwd: '/workspaces/gmux', alive: true, peer: 'dev' }),
+    ]
+    expect(countUnmatchedActive(sessions, projects)).toBe(0)
+  })
+
+  it('returns 0 when there are no sessions', () => {
+    expect(countUnmatchedActive([], [])).toBe(0)
   })
 })

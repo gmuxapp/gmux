@@ -80,6 +80,27 @@ func (s *spoke) push(eventType string, payload any) {
 	s.mu.Unlock()
 }
 
+// pushSnapshot emits the current sk.sessions slice as a
+// snapshot.sessions SSE event. This is how the protocol-2 spoke
+// announces both initial state and any subsequent change — there
+// are no per-event session-upsert / session-remove frames.
+func (s *spoke) pushSnapshot() {
+	s.mu.Lock()
+	list := make([]store.Session, len(s.sessions))
+	copy(list, s.sessions)
+	s.mu.Unlock()
+	s.push("snapshot.sessions", map[string]any{"sessions": list})
+}
+
+// setSessions atomically replaces the spoke's sessions and emits
+// the resulting snapshot.
+func (s *spoke) setSessions(list []store.Session) {
+	s.mu.Lock()
+	s.sessions = list
+	s.mu.Unlock()
+	s.pushSnapshot()
+}
+
 // spokeServer creates a test HTTP server that behaves like a gmuxd spoke.
 // It serves GET /v1/events as an SSE stream and GET /v1/sessions.
 func spokeServer(t *testing.T, token string, sessions []store.Session) *spoke {
@@ -103,15 +124,13 @@ func spokeServer(t *testing.T, token string, sessions []store.Session) *spoke {
 			w.Header().Set("Cache-Control", "no-cache")
 			flusher := w.(http.Flusher)
 
-			// Send current sessions as initial upserts.
+			// Initial snapshot.sessions as the protocol-2 spoke does.
 			sk.mu.Lock()
-			for _, s := range sk.sessions {
-				s := s
-				ev := store.Event{Type: "session-upsert", ID: s.ID, Session: &s}
-				data, _ := json.Marshal(ev)
-				fmt.Fprintf(w, "event: session-upsert\ndata: %s\n\n", data)
-			}
+			initial := make([]store.Session, len(sk.sessions))
+			copy(initial, sk.sessions)
 			sk.mu.Unlock()
+			data, _ := json.Marshal(map[string]any{"sessions": initial})
+			fmt.Fprintf(w, "event: snapshot.sessions\ndata: %s\n\n", data)
 			flusher.Flush()
 
 			// Hold connection open and forward pushed events.
@@ -399,6 +418,76 @@ func TestPeerStatusEventBroadcast(t *testing.T) {
 	mgr.Stop()
 }
 
+// TestHandleEvent_V1CompatPerEvent exercises the protocol-1 fallback
+// path in handleEvent: a v1.x spoke (or any spoke not emitting
+// snapshot.sessions, e.g. an upgrade lag) pushes per-session
+// upsert/remove frames. The hub must mirror those into its local
+// store under namespaced ids, even with no snapshot.sessions ever
+// arriving. This is what keeps v2 hubs working against v1 spokes
+// during a staggered upgrade.
+func TestHandleEvent_V1CompatPerEvent(t *testing.T) {
+	st := store.New()
+	p := newPeer(config.PeerConfig{Name: "server"}, st, nil)
+
+	// session-upsert with a Session payload: hub mirrors it as
+	// "sess-1@server" with Peer set.
+	rawSession := json.RawMessage(`{"id":"sess-1","kind":"shell","alive":true,"slug":"fix-auth"}`)
+	upsert, _ := json.Marshal(map[string]any{
+		"type":    "session-upsert",
+		"id":      "sess-1",
+		"session": rawSession,
+	})
+	p.handleEvent("session-upsert", upsert)
+
+	sess, ok := st.Get("sess-1@server")
+	if !ok {
+		t.Fatal("v1 session-upsert did not produce a namespaced store entry")
+	}
+	if sess.Peer != "server" {
+		t.Errorf("sess.Peer = %q, want %q", sess.Peer, "server")
+	}
+	if sess.Slug != "fix-auth" {
+		t.Errorf("sess.Slug = %q, want %q", sess.Slug, "fix-auth")
+	}
+
+	// session-remove against the same namespaced id.
+	remove, _ := json.Marshal(map[string]any{
+		"type": "session-remove",
+		"id":   "sess-1",
+	})
+	p.handleEvent("session-remove", remove)
+
+	if _, ok := st.Get("sess-1@server"); ok {
+		t.Error("v1 session-remove did not clear the namespaced store entry")
+	}
+}
+
+// TestHandleEvent_V1CompatDropsForwardedFromKnownOrigin ensures the
+// per-event path applies the same loop-prevention filter the
+// snapshot path does: if peer A forwards us a session that
+// originated on B (and we already talk to B directly), we drop it
+// rather than mirror it under A's namespace.
+func TestHandleEvent_V1CompatDropsForwardedFromKnownOrigin(t *testing.T) {
+	st := store.New()
+	p := newPeer(config.PeerConfig{Name: "hub-a"}, st, nil)
+	p.isKnownOrigin = func(name string) bool { return name == "hub-b" }
+
+	// session arriving from hub-a but originally owned by hub-b
+	// (id is already namespaced "sess-1@hub-b"). We have a direct
+	// path to hub-b, so this would be a longer-path duplicate.
+	rawSession := json.RawMessage(`{"id":"sess-1@hub-b","kind":"shell","alive":true}`)
+	upsert, _ := json.Marshal(map[string]any{
+		"type":    "session-upsert",
+		"id":      "sess-1@hub-b",
+		"session": rawSession,
+	})
+	p.handleEvent("session-upsert", upsert)
+
+	if _, ok := st.Get("sess-1@hub-b@hub-a"); ok {
+		t.Error("forwarded-from-known-origin session should be dropped, not mirrored")
+	}
+}
+
 func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 	st := store.New()
 	initialSessions := []store.Session{
@@ -415,8 +504,10 @@ func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 	// Wait for initial sessions.
 	waitForSessions(t, st, "server", 2)
 
-	// Push a remove event for sess-1.
-	sk.push("session-remove", store.Event{Type: "session-remove", ID: "sess-1"})
+	// Drop sess-1 from the spoke's snapshot. The hub diffs and removes.
+	sk.setSessions([]store.Session{
+		{ID: "sess-2", Kind: "shell", Alive: true, Slug: "bash"},
+	})
 
 	// Wait for removal.
 	deadline := time.After(2 * time.Second)
@@ -491,10 +582,10 @@ func TestPeerSubscribe_NewSessionViaPush(t *testing.T) {
 
 	waitForSessions(t, st, "server", 1)
 
-	// Push a new session that wasn't in the initial set.
-	newSess := store.Session{ID: "sess-new", Kind: "shell", Alive: true, Slug: "new-one"}
-	sk.push("session-upsert", store.Event{
-		Type: "session-upsert", ID: "sess-new", Session: &newSess,
+	// Add a new session to the spoke and re-emit the snapshot.
+	sk.setSessions([]store.Session{
+		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "initial"},
+		{ID: "sess-new", Kind: "shell", Alive: true, Slug: "new-one"},
 	})
 
 	waitForSessions(t, st, "server", 2)
@@ -511,6 +602,77 @@ func TestPeerSubscribe_NewSessionViaPush(t *testing.T) {
 	}
 
 	mgr.Stop()
+}
+
+func TestPeerSubscribe_ProjectStampsPropagateFromOrigin(t *testing.T) {
+	// The origin stamps ProjectSlug / ProjectIndex on owned sessions
+	// (ADR 0002). Those stamps must round-trip across the SSE wire so
+	// the receiving hub can render (peer, slug) folders without
+	// re-running match rules locally.
+	st := store.New()
+
+	originSess := store.Session{
+		ID:           "sess-1",
+		Kind:         "pi",
+		Alive:        true,
+		Slug:         "fix-auth",
+		ProjectSlug:  "gmux",
+		ProjectIndex: 3,
+	}
+	sk := spokeServer(t, "", []store.Session{originSess})
+
+	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
+	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
+	mgr.Start()
+	defer mgr.Stop()
+
+	waitForSessions(t, st, "server", 1)
+
+	got, ok := st.Get("sess-1@server")
+	if !ok {
+		t.Fatal("expected sess-1@server in store")
+	}
+	if got.ProjectSlug != "gmux" {
+		t.Errorf("ProjectSlug = %q, want %q", got.ProjectSlug, "gmux")
+	}
+	if got.ProjectIndex != 3 {
+		t.Errorf("ProjectIndex = %d, want 3", got.ProjectIndex)
+	}
+}
+
+func TestPeerSubscribe_DisclaimedSessionRoundTripsAsZero(t *testing.T) {
+	// A disclaimed session (origin has no project for it) emits with
+	// no project_slug / project_index on the wire. The receiver
+	// decodes both as zero values, which the receiver-side projection
+	// treats as "fall through to local match rules".
+	st := store.New()
+
+	origin := store.Session{
+		ID:    "sess-1",
+		Kind:  "pi",
+		Alive: true,
+		Slug:  "loose",
+		// ProjectSlug == "", ProjectIndex == 0.
+	}
+	sk := spokeServer(t, "", []store.Session{origin})
+
+	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
+	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
+	mgr.Start()
+	defer mgr.Stop()
+
+	waitForSessions(t, st, "server", 1)
+
+	got, ok := st.Get("sess-1@server")
+	if !ok {
+		t.Fatal("expected sess-1@server in store")
+	}
+	if got.ProjectSlug != "" {
+		t.Errorf("ProjectSlug = %q, want empty", got.ProjectSlug)
+	}
+	if got.ProjectIndex != 0 {
+		t.Errorf("ProjectIndex = %d, want 0", got.ProjectIndex)
+	}
 }
 
 // waitForSessions polls until the store has the expected number of sessions

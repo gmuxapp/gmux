@@ -13,8 +13,12 @@ type Manager struct {
 	stateDir string
 
 	// Broadcast is called after every state mutation that should be
-	// synced to connected clients (via SSE). Set by the caller.
-	Broadcast func()
+	// synced to connected clients (via SSE). The caller receives the
+	// just-saved State so it can derive related state (e.g.,
+	// per-session project stamps via Reconcile) without re-Loading
+	// (which would deadlock against the lock Update is holding).
+	// Set by the caller; nil disables broadcast.
+	Broadcast func(state *State)
 }
 
 func NewManager(stateDir string) *Manager {
@@ -68,7 +72,7 @@ func (m *Manager) Update(fn func(s *State) bool) error {
 	}
 
 	if m.Broadcast != nil {
-		m.Broadcast()
+		m.Broadcast(state)
 	}
 	return nil
 }
@@ -78,7 +82,16 @@ func (m *Manager) Update(fn func(s *State) bool) error {
 // This is called when:
 //   - A new session is discovered (Register)
 //   - A session gets a Slug (file attribution)
+//
+// Peer-owned sessions (info.Host != "") are never written to the local
+// projects.json: project membership is owned by the session's origin
+// host (ADR 0002). The viewer learns peer-side project assignment via
+// the session's stamps (ProjectSlug / ProjectIndex), not by mirroring
+// peer state into local config.
 func (m *Manager) AutoAssignSession(info SessionInfo) string {
+	if info.Host != "" {
+		return ""
+	}
 	var assigned string
 	err := m.Update(func(state *State) bool {
 		key := SessionKey(info.ID, info.Slug)
@@ -130,11 +143,13 @@ func (m *Manager) AutoAssignSession(info SessionInfo) string {
 // matching projects in a single atomic update. Called after adding a
 // project so that existing alive sessions populate the array immediately
 // rather than waiting for the next session-upsert event.
+//
+// Peer-owned sessions are skipped; see AutoAssignSession.
 func (m *Manager) AutoAssignAllAlive(sessions []SessionInfo) {
 	err := m.Update(func(state *State) bool {
 		changed := false
 		for _, info := range sessions {
-			if !info.Alive {
+			if !info.Alive || info.Host != "" {
 				continue
 			}
 			key := SessionKey(info.ID, info.Slug)

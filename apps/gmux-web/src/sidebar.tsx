@@ -7,16 +7,18 @@
 
 import { useState, useCallback } from 'preact/hooks'
 import { sessionPath } from './routing'
+import { reorderKeysForFolder } from './projects'
 import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
 import {
-  folders, selectedId, currentProjectSlug,
+  folders, selectedId, currentProjectKey,
   activityMap, unmatchedActiveCount, projects, connState,
   updateProjects, reorderSessions,
+  peerStatusByName, isSessionUnavailable,
   type DotState,
 } from './store'
 import { PeerLabel } from './peer-label'
-import type { Session, Folder, ProjectItem } from './types'
+import type { Session, Folder } from './types'
 
 // ── Types ──
 
@@ -78,6 +80,7 @@ function SessionItem({
   dotState: rawDotState,
   dragging,
   dropTarget,
+  unavailable,
   onClose,
   onClick,
   onDragStart,
@@ -91,6 +94,8 @@ function SessionItem({
   dotState: DotState
   dragging?: boolean
   dropTarget?: boolean
+  /** Session lives on a peer we can't reach right now. */
+  unavailable?: boolean
   onClose?: () => void
   /** Extra side-effects on click (e.g. close mobile sidebar). */
   onClick?: () => void
@@ -109,6 +114,7 @@ function SessionItem({
     selected ? 'selected' : '',
     dragging ? 'session-dragging' : '',
     dropTarget ? 'session-drop-target' : '',
+    unavailable ? 'unavailable' : '',
   ].filter(Boolean).join(' ')
 
   return (
@@ -129,7 +135,9 @@ function SessionItem({
       onDrop={(e) => { e.preventDefault(); onDragEnd?.() }}
       onDragEnd={onDragEnd}
     >
-      {sleeping
+      {unavailable
+        ? <svg class="session-unavailable-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><title>Peer unavailable</title><path d="M2 2 L10 10 M10 2 L2 10" /></svg>
+        : sleeping
         ? <svg class="session-sleep-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
         : <span class={`session-dot-indicator ${dotState}${arrival ? ` ${arrival}` : ''}`} />
       }
@@ -159,20 +167,20 @@ function SessionItem({
 
 function FolderGroup({
   folder,
-  project,
   selId,
-  curProjectSlug,
+  currentKey,
   resumingId,
   am,
+  peerStatus,
   onCloseSession,
   onClick,
 }: {
   folder: Folder
-  project: ProjectItem
   selId: string | null
-  curProjectSlug: string | null
+  currentKey: string | null
   resumingId: string | null
   am: ReadonlyMap<string, 'active' | 'fading'>
+  peerStatus: ReadonlyMap<string, string>
   onCloseSession: (session: Session) => void
   onClick?: () => void
 }) {
@@ -192,32 +200,39 @@ function FolderGroup({
       return
     }
     const reordered = reorder(visible, drag.from, drag.over)
-    const visibleKeys = reordered.map(s => s.slug || s.id)
-    // Preserve keys of non-visible sessions (dead, non-resumable) at the end.
-    const visibleSet = new Set(visibleKeys)
-    const hidden = (project.sessions ?? []).filter(k => !visibleSet.has(k))
-    reorderSessions(project.slug, [...visibleKeys, ...hidden])
+    // reorderKeysForFolder filters non-owner sessions and strips the
+    // `@<peer>` namespace from slugless ids; see its docstring for
+    // the ADR-0002 corruption modes this prevents. The daemon's
+    // PATCH handler then does a partial-reorder merge that keeps
+    // hidden / dead-resumable entries at the tail.
+    const visibleKeys = reorderKeysForFolder(reordered, folder.peer)
+    if (visibleKeys.length > 0) {
+      reorderSessions(folder.slug, visibleKeys, folder.peer)
+    }
     setDrag(null)
-  }, [drag, project])
+  }, [drag, folder.slug, folder.peer])
 
   const visible = folder.sessions.filter(s => s.alive || s.resumable)
   const displayItems = drag ? reorder(visible, drag.from, drag.over) : visible
-  const isCurrent = curProjectSlug === folder.path
+  const isCurrent = currentKey === folder.key
+  const href = folder.peer ? `/@${folder.peer}/${folder.slug}` : `/${folder.slug}`
   return (
     <div class="folder">
       <div class="folder-header">
         <a
           class={`folder-name${isCurrent ? ' current' : ''}`}
-          href={`/${folder.path}`}
+          href={href}
           title={`Open ${folder.name} hub`}
           onClick={onClick}
         >
+          {folder.peer && <PeerLabel name={folder.peer} />}
           {folder.name}
         </a>
         <LaunchButton
           sessions={folder.sessions}
           selectedId={selId}
           fallbackCwd={folder.launchCwd ?? ''}
+          peer={folder.peer}
           className="folder-launch-btn"
         />
       </div>
@@ -226,10 +241,11 @@ function FolderGroup({
           <SessionItem
             key={s.id}
             session={s}
-            href={sessionPath(folder.path, s)}
+            href={sessionPath(folder.slug, s, folder.peer)}
             selected={selId === s.id}
             resuming={resumingId === s.id}
             dotState={sessionDotState(s, am)}
+            unavailable={isSessionUnavailable(s, peerStatus)}
             dragging={drag !== null && s.id === visible[drag.from]?.id}
             dropTarget={drag !== null && drag.over === i && drag.from !== i}
             onClose={() => onCloseSession(s)}
@@ -265,10 +281,10 @@ export function Sidebar({
   const foldersVal = folders.value
   const projectsVal = projects.value
   const selId = selectedId.value
-  const curProjectSlug = currentProjectSlug.value
+  const curKey = currentProjectKey.value
   const unmatchedCount = unmatchedActiveCount.value
   const am = activityMap.value
-  const projectBySlug = new Map(projectsVal.map(p => [p.slug, p]))
+  const peerStatus = peerStatusByName.value
 
   const totalVisible = foldersVal.reduce(
     (n, f) => n + f.sessions.filter(s => s.alive || s.resumable).length, 0,
@@ -304,23 +320,19 @@ export function Sidebar({
           )}
         </div>
         <div class="sidebar-scroll">
-          {foldersVal.map(f => {
-            const proj = projectBySlug.get(f.path)
-            if (!proj) return null
-            return (
-              <FolderGroup
-                key={f.path}
-                folder={f}
-                project={proj}
-                selId={selId}
-                curProjectSlug={curProjectSlug}
-                resumingId={resumingId}
-                am={am}
-                onCloseSession={onCloseSession}
-                onClick={onClose}
-              />
-            )
-          })}
+          {foldersVal.map(f => (
+            <FolderGroup
+              key={f.key}
+              folder={f}
+              selId={selId}
+              currentKey={curKey}
+              resumingId={resumingId}
+              am={am}
+              peerStatus={peerStatus}
+              onCloseSession={onCloseSession}
+              onClick={onClose}
+            />
+          ))}
           {connected && totalVisible === 0 && !hasProjects && (
             <div class="sidebar-hint">
               Click <strong>+</strong> to start your first session.

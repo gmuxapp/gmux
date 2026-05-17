@@ -407,6 +407,24 @@ body {
   opacity: 0.4;
 }
 
+/* Session lives on a peer we can't reach right now (the peer is
+   disconnected or unknown). Dim the row and replace the activity dot
+   with a muted X so the user knows clicking won't reach the session. */
+.session-item.unavailable {
+  opacity: 0.55;
+}
+.session-item.unavailable.selected {
+  opacity: 0.85;
+}
+.session-unavailable-icon {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  margin-top: 4px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
 .session-content {
   flex: 1;
   min-width: 0;
@@ -2239,6 +2257,7 @@ a.home-host-link:hover {
   flex-shrink: 0;
 }
 .session-card-dot.dead { background: var(--text-muted); }
+.session-card.unavailable { opacity: 0.55; }
 .session-card-name {
   font-size: 13px;
   white-space: nowrap;

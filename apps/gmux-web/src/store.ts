@@ -16,27 +16,15 @@
 import { signal, computed, batch, effect } from '@preact/signals'
 import type { Session, ProjectItem, DiscoveredProject, PeerInfo, LauncherDef, Folder } from './types'
 import type { View } from './routing'
-import { resolveViewFromPath, viewToPath, sessionPath } from './routing'
-import { buildProjectFolders, matchSession } from './projects'
+import { resolveViewFromPath, viewToPath } from './routing'
+import { buildProjectFolders, discoverProjects, countUnmatchedActive } from './projects'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS } from './mock-data/index'
 import type { ResolvedTerminalOptions } from './settings-schema'
 import type { Session as ProtocolSession } from '@gmux/protocol'
 
-// ── Raw state (sources of truth) ────────────────────────────────────────────
-
-export const sessions = signal<Session[]>([])
-export const sessionsLoaded = signal(false)
-export const connState = signal<'connecting' | 'connected' | 'error'>('connecting')
-
-export const projects = signal<ProjectItem[]>([])
-export const discovered = signal<DiscoveredProject[]>([])
-export const unmatchedActiveCount = signal(0)
-
-export const peers = signal<PeerInfo[]>([])
-export const launchers = signal<LauncherDef[]>([])
-export const defaultLauncher = signal<string>('shell')
+// ── HealthData type (used by both raw signal and consumers) ─────────────────
 
 export interface HealthData {
   version: string
@@ -50,7 +38,173 @@ export interface HealthData {
   launchers?: LauncherDef[]
   peers?: PeerInfo[]
 }
-export const health = signal<HealthData | null>(null)
+
+// ── Raw state (private; ADR 0001) ───────────────────────────────────────────
+//
+// Per ADR 0001 the wire delivers two snapshots: `snapshot.sessions`
+// (just the sessions array) and `snapshot.world` (the bundle of
+// projects + peers + health + launchers). The frontend stores those
+// two payloads verbatim in `_rawSessions` and `_rawWorld`; everything
+// else is a pure projection (computed) on top.
+//
+// The signals are exported with a leading underscore as a soft
+// "private" marker. SSE handlers, bulk-fetch helpers, and the test
+// suite write to them; the rest of the app reads only the public
+// computed projections below.
+
+export interface RawWorld {
+  projects: ProjectItem[]
+  peers: PeerInfo[]
+  health: HealthData | null
+  launchers: LauncherDef[]
+  defaultLauncher: string
+}
+
+export const _rawSessions = signal<Session[]>([])
+export const _rawWorld = signal<RawWorld>({
+  projects: [],
+  peers: [],
+  health: null,
+  launchers: [],
+  defaultLauncher: 'shell',
+})
+
+/** Merge a partial world update into `_rawWorld`. Used by SSE handlers,
+ * bulk-fetch responses, and tests; callers don't have to spread the
+ * whole bundle every time. */
+export function _setRawWorld(patch: Partial<RawWorld>) {
+  _rawWorld.value = { ..._rawWorld.value, ...patch }
+}
+
+// ── Pending mutations (optimistic overlay; ADR 0001) ───────────────────────
+//
+// The wire delivers atomic snapshots that overwrite `_rawSessions` /
+// `_rawWorld` wholesale. Optimistic UI mutations (mark-as-read,
+// dismiss, reorder) need to survive that overwrite until the server
+// echoes them back. We do that by stacking mutations in
+// `_pendingMutations` and replaying them on top of raw in the public
+// projections.
+//
+// Each mutation is auto-cleared two ways:
+//   1. when raw state already reflects the mutation
+//      (`isResolved` returns true), the next raw update sweeps it out;
+//   2. otherwise it expires after `PENDING_TTL_MS`, so a server that
+//      silently drops the request can't pin a stale optimistic value.
+
+export type PendingMutation =
+  | { kind: 'mark-read'; id: string; at: number }
+  | { kind: 'dismiss'; id: string; at: number }
+  | { kind: 'reorder'; slug: string; sessions: string[]; at: number }
+
+export const _pendingMutations = signal<PendingMutation[]>([])
+
+const PENDING_TTL_MS = 5_000
+
+/** Replay pending mutations on top of a raw sessions/projects pair.
+ * Pure; safe to call from `computed`. */
+export function applyPending(
+  rawSessions: Session[],
+  rawProjects: ProjectItem[],
+  pending: PendingMutation[],
+): { sessions: Session[]; projects: ProjectItem[] } {
+  if (pending.length === 0) return { sessions: rawSessions, projects: rawProjects }
+  let sess = rawSessions
+  let projs = rawProjects
+  for (const m of pending) {
+    switch (m.kind) {
+      case 'mark-read':
+        sess = sess.map(s => s.id !== m.id ? s : ({
+          ...s,
+          unread: false,
+          status: s.status?.error ? { ...s.status, error: false } : s.status,
+        }))
+        break
+      case 'dismiss':
+        sess = sess.filter(s => s.id !== m.id)
+        break
+      case 'reorder':
+        projs = projs.map(p => p.slug !== m.slug ? p : ({ ...p, sessions: m.sessions }))
+        break
+    }
+  }
+  return { sessions: sess, projects: projs }
+}
+
+/** True when the raw state already reflects the mutation, so replaying
+ * it would be a no-op. The auto-clear effect uses this to drop
+ * mutations the server has acknowledged. */
+function isResolved(
+  m: PendingMutation,
+  rawSessions: Session[],
+  rawProjects: ProjectItem[],
+): boolean {
+  switch (m.kind) {
+    case 'mark-read': {
+      const s = rawSessions.find(x => x.id === m.id)
+      if (!s) return true
+      return !s.unread && !s.status?.error
+    }
+    case 'dismiss':
+      return !rawSessions.some(s => s.id === m.id)
+    case 'reorder': {
+      const p = rawProjects.find(x => x.slug === m.slug)
+      if (!p) return true
+      const cur = p.sessions ?? []
+      return cur.length === m.sessions.length && cur.every((v, i) => v === m.sessions[i])
+    }
+  }
+}
+
+/** Push a mutation onto the pending stack and schedule its TTL drop. */
+function addPending(m: PendingMutation) {
+  _pendingMutations.value = [..._pendingMutations.value, m]
+  setTimeout(() => {
+    _pendingMutations.value = _pendingMutations.value.filter(x => x !== m)
+  }, PENDING_TTL_MS)
+}
+
+// ── Public projections of raw state ─────────────────────────────────────────
+//
+// Components import these by name; they don't know about `_rawWorld`.
+// Everything is `computed`, so writes go through the raw signals only.
+
+export const sessions = computed<Session[]>(() =>
+  applyPending(_rawSessions.value, _rawWorld.value.projects, _pendingMutations.value).sessions,
+)
+export const projects = computed<ProjectItem[]>(() =>
+  applyPending(_rawSessions.value, _rawWorld.value.projects, _pendingMutations.value).projects,
+)
+export const peers = computed<PeerInfo[]>(() => _rawWorld.value.peers)
+export const health = computed<HealthData | null>(() => _rawWorld.value.health)
+export const launchers = computed<LauncherDef[]>(() => _rawWorld.value.launchers)
+export const defaultLauncher = computed<string>(() => _rawWorld.value.defaultLauncher)
+
+// Auto-clear pending mutations that the wire has acknowledged. Runs on
+// every raw update; uses .peek() to avoid re-triggering itself.
+effect(() => {
+  const rs = _rawSessions.value
+  const rw = _rawWorld.value
+  const pending = _pendingMutations.peek()
+  if (pending.length === 0) return
+  const filtered = pending.filter(m => !isResolved(m, rs, rw.projects))
+  if (filtered.length !== pending.length) {
+    _pendingMutations.value = filtered
+  }
+})
+
+// Local-only UI state (never sourced from the wire).
+export const sessionsLoaded = signal(false)
+export const connState = signal<'connecting' | 'connected' | 'error'>('connecting')
+
+// Per ADR 0001: Discovered and UnmatchedActiveCount are per-viewer
+// projections, not server-pushed state. They derive from the same
+// public sessions/projects projections everyone else uses.
+export const discovered = computed<DiscoveredProject[]>(
+  () => discoverProjects(sessions.value, projects.value),
+)
+export const unmatchedActiveCount = computed<number>(
+  () => countUnmatchedActive(sessions.value, projects.value),
+)
 
 // ── Peer appearance: unique prefix + deterministic color ─────────────────────
 
@@ -89,6 +243,31 @@ export interface PeerAppearance {
   label: string
   color: string
   bg: string
+}
+
+/** Derived map from peer name to status string. Sessions whose peer
+ *  is not 'connected' are unreachable from this viewer right now (the
+ *  peer may still be running them); the sidebar dims them and replaces
+ *  the activity dot with an unavailable indicator. */
+export const peerStatusByName = computed<ReadonlyMap<string, string>>(() => {
+  const map = new Map<string, string>()
+  for (const p of peers.value) map.set(p.name, p.status)
+  return map
+})
+
+/** True when a session lives on a peer we can't reach right now.
+ *  Local sessions (peer === undefined) are never unavailable. */
+export function isSessionUnavailable(
+  session: { peer?: string },
+  statusByName: ReadonlyMap<string, string>,
+): boolean {
+  if (!session.peer) return false
+  // Treat unknown peers as unavailable too: if the session claims a
+  // peer name no longer present in the world snapshot (e.g. peer was
+  // removed from config but still appears in lingering session data),
+  // the safe default is to flag it rather than pretend it's reachable.
+  const status = statusByName.get(session.peer)
+  return status !== 'connected'
 }
 
 /** Derived map from peer name to { label, color, bg }. Colors assigned by list order. */
@@ -217,10 +396,16 @@ export const selected = computed(() => {
   return s
 })
 
-/** Project slug when the view is a project hub. */
-export const currentProjectSlug = computed(() =>
-  view.value?.kind === 'project' ? view.value.projectSlug : null,
-)
+/**
+ * Folder key when the view is a project hub. Matches `Folder.key`
+ * (`${peer ?? ''}::${slug}`) so the sidebar can highlight the active
+ * folder uniformly across local and peer-owned projects (ADR 0002).
+ */
+export const currentProjectKey = computed(() => {
+  const v = view.value
+  if (v?.kind !== 'project') return null
+  return `${v.projectPeer ?? ''}::${v.projectSlug}`
+})
 
 /** Dot state for the mobile hamburger: summarizes background session activity. */
 export type DotState = 'working' | 'error' | 'unread' | 'active' | 'fading' | 'none'
@@ -297,7 +482,7 @@ export function sessionStaleness(
 export function upsertSession(raw: ProtocolSession): boolean {
   const updated = toUISession(raw)
   let isNew = false
-  const prev = sessions.value
+  const prev = _rawSessions.value
   const idx = prev.findIndex(s => s.id === updated.id)
   if (idx >= 0) {
     const old = prev[idx]
@@ -310,11 +495,17 @@ export function upsertSession(raw: ProtocolSession): boolean {
     // URL (still has the old slug), fail to resolve, and briefly
     // deselect the session.
     if (old.slug !== updated.slug && selectedId.value === updated.id) {
-      const project = matchSession(updated, projects.value)
-      if (project) {
-        const newUrl = sessionPath(project.slug, updated)
+      // viewToPath gets the post-update sessions array so it sees the
+      // new slug. Routes peer-owned sessions through `/@<peer>/...`
+      // (ADR 0002) just like every other URL serializer.
+      const newUrl = viewToPath(
+        { kind: 'session', sessionId: updated.id },
+        projects.value,
+        next,
+      )
+      if (newUrl) {
         batch(() => {
-          sessions.value = next
+          _rawSessions.value = next
           urlPath.value = newUrl
         })
         // Sync the browser URL bar. navigate() calls preact-iso's
@@ -326,80 +517,24 @@ export function upsertSession(raw: ProtocolSession): boolean {
       }
     }
 
-    sessions.value = next
+    _rawSessions.value = next
   } else {
     isNew = true
-    sessions.value = [...prev, updated]
+    _rawSessions.value = [...prev, updated]
   }
   return isNew
 }
 
 export function removeSession(id: string) {
-  sessions.value = sessions.value.filter(s => s.id !== id)
+  _rawSessions.value = _rawSessions.value.filter(s => s.id !== id)
 }
 
 export function markSessionRead(id: string) {
-  sessions.value = sessions.value.map(s =>
-    s.id === id
-      ? { ...s, unread: false, status: s.status?.error ? { ...s.status, error: false } : s.status }
-      : s,
-  )
+  // Optimistic mark-as-read. The server's next session update overwrites
+  // raw with the authoritative state and `isResolved` clears the
+  // mutation; if the server stays silent the TTL drops it eventually.
+  addPending({ kind: 'mark-read', id, at: Date.now() })
   fetch(`/v1/sessions/${id}/read`, { method: 'POST' }).catch(() => {})
-}
-
-export function setProjects(data: { configured: ProjectItem[]; discovered: DiscoveredProject[]; unmatchedActiveCount: number }) {
-  batch(() => {
-    projects.value = data.configured
-    discovered.value = data.discovered
-    unmatchedActiveCount.value = data.unmatchedActiveCount
-  })
-}
-
-// ── API helpers ─────────────────────────────────────────────────────────────
-
-async function fetchSessions(): Promise<Session[]> {
-  const resp = await fetch('/v1/sessions')
-  const json = await resp.json()
-  const data: ProtocolSession[] = json?.data ?? []
-  return data.map(toUISession)
-}
-
-
-
-export async function fetchProjects(): Promise<void> {
-  try {
-    const resp = await fetch('/v1/projects')
-    const json = await resp.json()
-    if (json.ok && json.data) {
-      setProjects({
-        configured: json.data.configured ?? [],
-        discovered: json.data.discovered ?? [],
-        unmatchedActiveCount: json.data.unmatched_active_count ?? 0,
-      })
-    }
-  } catch (err) {
-    console.warn('Failed to fetch projects:', err)
-  }
-}
-
-function applyHealth(h: HealthData) {
-  batch(() => {
-    health.value = h
-    peers.value = h.peers ?? []
-    launchers.value = h.launchers ?? []
-    defaultLauncher.value = h.default_launcher ?? 'shell'
-  })
-}
-
-async function fetchHealth(): Promise<void> {
-  try {
-    const resp = await fetch('/v1/health')
-    const json = await resp.json()
-    const h: HealthData | null = json.data ?? null
-    if (h) applyHealth(h)
-  } catch {
-    // Health fetch is best-effort; UI works without it.
-  }
 }
 
 // ── Project mutations (used by manage-projects) ─────────────────────────────
@@ -441,16 +576,33 @@ export async function updateProjects(items: ProjectItem[]): Promise<void> {
 /**
  * Persist a new session order for a project. The `sessionKeys` array
  * contains session keys (slug or id) in the desired display order.
- * Optimistically updates the local signal so the sidebar re-renders
- * immediately, without waiting for the SSE projects-update round-trip.
+ *
+ * Local projects (peer === undefined) get an optimistic overlay via
+ * `_pendingMutations` so the sidebar re-renders immediately, before
+ * the snapshot.world round-trip echoes the new order back.
+ *
+ * Peer-owned projects route through the generic peer-write proxy at
+ * `/v1/peers/{peer}/v1/projects/{slug}/sessions` (ADR 0002): the peer
+ * owns its own projects.json and re-stamps each session's
+ * project_index, which arrives over the snapshot stream. We don't
+ * apply a local optimistic overlay for peer reorders because the
+ * sidebar derives peer-folder order from those stamps, not from any
+ * local projects array; the round-trip latency is the cost of
+ * honesty about who owns the data.
  */
-export async function reorderSessions(projectSlug: string, sessionKeys: string[]): Promise<void> {
-  // Optimistic update.
-  projects.value = projects.value.map(p =>
-    p.slug === projectSlug ? { ...p, sessions: sessionKeys } : p,
-  )
+export async function reorderSessions(
+  projectSlug: string,
+  sessionKeys: string[],
+  peer?: string,
+): Promise<void> {
+  if (peer === undefined) {
+    addPending({ kind: 'reorder', slug: projectSlug, sessions: sessionKeys, at: Date.now() })
+  }
+  const url = peer
+    ? `/v1/peers/${encodeURIComponent(peer)}/v1/projects/${encodeURIComponent(projectSlug)}/sessions`
+    : `/v1/projects/${encodeURIComponent(projectSlug)}/sessions`
   try {
-    const resp = await fetch(`/v1/projects/${projectSlug}/sessions`, {
+    const resp = await fetch(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessions: sessionKeys }),
@@ -483,7 +635,11 @@ export function killSession(sessionId: string): Promise<void> {
 }
 
 export function dismissSession(sessionId: string): Promise<void> {
-  removeSession(sessionId)
+  // Optimistic dismissal: hide the session locally until the next
+  // snapshot.sessions confirms it's gone. If the server rejects the
+  // dismiss, the mutation TTL-expires and the session reappears on the
+  // following snapshot.
+  addPending({ kind: 'dismiss', id: sessionId, at: Date.now() })
   return postAction(`/v1/sessions/${sessionId}/dismiss`)
 }
 
@@ -542,17 +698,20 @@ export function navigate(url: string, replace?: boolean) {
 }
 
 /**
- * Navigate to a session by ID. Finds the matching project and builds
- * the URL. Used by auto-select, resume, and notification handlers.
+ * Navigate to a session by ID. Builds the URL via viewToPath so peer
+ * ownership and disclaimed-but-adopted cases both serialize correctly
+ * (ADR 0002). Used by auto-select, resume, and notification handlers.
  * Returns true when a URL change was actually dispatched, false when
- * the session or its project hasn't loaded yet.
+ * the session or its containing project hasn't loaded yet.
  */
 export function navigateToSession(sessionId: string, replace?: boolean): boolean {
-  const sess = sessions.value.find(s => s.id === sessionId)
-  if (!sess) return false
-  const project = matchSession(sess, projects.value)
-  if (!project) return false
-  navigate(sessionPath(project.slug, sess), replace)
+  const path = viewToPath(
+    { kind: 'session', sessionId },
+    projects.value,
+    sessions.value,
+  )
+  if (!path) return false
+  navigate(path, replace)
   return true
 }
 
@@ -569,8 +728,8 @@ export function initStore(): () => void {
       ? MOCK_SESSIONS.map(s => s.peer === localHost ? { ...s, peer: undefined } : s)
       : [...MOCK_SESSIONS]
     batch(() => {
-      projects.value = MOCK_PROJECTS
-      sessions.value = mockSessions
+      _setRawWorld({ projects: MOCK_PROJECTS })
+      _rawSessions.value = mockSessions
       sessionsLoaded.value = true
       connState.value = 'connected'
       terminalOptions.value = buildTerminalOptions(null, null)
@@ -583,19 +742,11 @@ export function initStore(): () => void {
     return () => cleanups.forEach(fn => fn())
   }
 
-  // Fetch initial data in parallel.
-  fetchProjects()
-  fetchSessions().then(list => {
-    batch(() => {
-      sessions.value = list
-      sessionsLoaded.value = true
-      connState.value = 'connected'
-    })
-  }).catch(err => {
-    console.error('Failed to fetch sessions:', err)
-    connState.value = 'error'
-  })
-  fetchHealth()
+  // Fetch one-shot per-user config (theme, settings, keybinds) that
+  // doesn't ride the snapshot stream. Everything else — sessions,
+  // projects, peers, health, launchers — arrives as the leading-edge
+  // snapshot.sessions / snapshot.world emitted on SSE subscribe
+  // (ADR 0001).
   fetchFrontendConfig().then(fc => {
     const macCtrl = fc.settings?.macCommandIsCtrl === true
     batch(() => {
@@ -605,52 +756,69 @@ export function initStore(): () => void {
     })
   })
 
-  // SSE subscription.
-  //
-  // The server replays all sessions as upserts on connect. Since we
-  // already fetch via GET /v1/sessions, the initial SSE dump is
-  // redundant. We skip session-upsert events until the bulk fetch
-  // has completed (sessionsLoaded is true). After that, the SSE
-  // stream carries incremental updates.
-  //
-  // On reconnect, the SSE dump IS useful because events may have been
-  // missed. We pair it with a fresh fetchSessions to be safe.
+  // SSE subscription. The server emits a leading-edge snapshot for
+  // both kinds (sessions, world) immediately on subscribe, so we
+  // don't need a bulk-GET prefetch on first load or on reconnect.
+  // Missed deltas don't matter: each snapshot is a full replacement.
   const source = new EventSource('/v1/events')
-  let sseConnected = false
-
-  source.addEventListener('open', () => {
-    if (sseConnected) {
-      // Reconnect: refresh everything to catch missed events.
-      fetchProjects()
-      fetchSessions().then(list => { sessions.value = list }).catch(() => {})
-    }
-    sseConnected = true
+  source.addEventListener('error', () => {
+    // Browser EventSource auto-reconnects; flag the UI as degraded
+    // until the next snapshot arrives. `sessionsLoaded` stays true
+    // once it has flipped, so reconnect doesn't blank the sidebar.
+    if (connState.value === 'connecting') connState.value = 'error'
   })
 
-  source.addEventListener('session-upsert', (e) => {
-    // Skip the initial SSE dump: the bulk GET /v1/sessions fetch is
-    // authoritative for the first load. Processing the dump would
-    // trigger O(n²) array mutations for no benefit.
-    if (!sessionsLoaded.value) return
-
+  // Protocol 2 (ADR 0001). The server pushes two snapshot kinds plus
+  // bare activity. We replace `_rawSessions` and `_rawWorld`
+  // wholesale on each snapshot; the projection layer derives
+  // everything else.
+  source.addEventListener('snapshot.sessions', (e) => {
     try {
-      const envelope = JSON.parse(e.data)
-      const session = envelope.session ?? envelope
-      const isNew = upsertSession(session)
-      if (isNew && consumePendingLaunch()) {
-        navigateToSession(session.id, true)
+      const envelope = JSON.parse(e.data) as { sessions?: ProtocolSession[] }
+      const list = (envelope.sessions ?? []).map(toUISession)
+
+      // Detect newly-arrived IDs vs the previous snapshot so a
+      // pending launch (just-POSTed /v1/launch awaiting an id) can
+      // navigate to its session as soon as the daemon publishes it.
+      // Done before we commit the new array so consumers see the
+      // navigation against the new state.
+      const prevIds = new Set(_rawSessions.value.map(s => s.id))
+      const newIds = list.filter(s => !prevIds.has(s.id)).map(s => s.id)
+
+      batch(() => {
+        _rawSessions.value = list
+        sessionsLoaded.value = true
+        connState.value = 'connected'
+      })
+
+      if (newIds.length > 0 && consumePendingLaunch()) {
+        // Most recent new id wins; with one launch in flight at a
+        // time this is unambiguous.
+        navigateToSession(newIds[newIds.length - 1], true)
       }
     } catch (err) {
-      console.warn('session-upsert: bad event', err)
+      console.warn('snapshot.sessions: bad event', err)
     }
   })
 
-  source.addEventListener('session-remove', (e) => {
+  source.addEventListener('snapshot.world', (e) => {
     try {
-      const { id } = JSON.parse(e.data)
-      removeSession(id)
+      const env = JSON.parse(e.data) as {
+        projects?: ProjectItem[]
+        peers?: PeerInfo[]
+        health?: HealthData
+        launchers?: LauncherDef[]
+        default_launcher?: string
+      }
+      _setRawWorld({
+        projects: env.projects ?? [],
+        peers: env.peers ?? env.health?.peers ?? [],
+        health: env.health ?? null,
+        launchers: env.launchers ?? [],
+        defaultLauncher: env.default_launcher ?? 'shell',
+      })
     } catch (err) {
-      console.warn('session-remove: bad event', err)
+      console.warn('snapshot.world: bad event', err)
     }
   })
 
@@ -659,14 +827,6 @@ export function initStore(): () => void {
       const { id } = JSON.parse(e.data)
       if (id) handleActivity(id)
     } catch { /* ignore */ }
-  })
-
-  source.addEventListener('projects-update', () => {
-    fetchProjects()
-  })
-
-  source.addEventListener('peer-status', () => {
-    fetchHealth()
   })
 
   cleanups.push(() => source.close())
