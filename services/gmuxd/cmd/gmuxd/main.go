@@ -29,17 +29,17 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/clipfile"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/conversations"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/devcontainers"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/conversations"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/notify"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/sleep"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionmeta"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sleep"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsauth"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsdiscovery"
@@ -272,8 +272,6 @@ Tip:
   More help: https://gmux.app
 `, version)
 }
-
-
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -668,7 +666,7 @@ func serve(stderr io.Writer) int {
 				Remotes:       s.Remotes,
 				Host:          s.Peer,
 				Alive:         s.Alive,
-				Slug:     s.Slug,
+				Slug:          s.Slug,
 			})
 		}
 	}()
@@ -761,7 +759,6 @@ func serve(stderr io.Writer) int {
 			},
 		})
 	})
-
 
 	// Frontend config (read from disk on each request so users can edit
 	// and refresh without restarting gmuxd).
@@ -2396,7 +2393,8 @@ func sessionRelativeTime(t time.Time) string {
 	}
 }
 
-func statusDot(status string) string {	switch status {
+func statusDot(status string) string {
+	switch status {
 	case "connected":
 		return "\u2022" // bullet
 	case "connecting":
@@ -2465,7 +2463,7 @@ func buildSessionInfos(sessions *store.Store) []projects.SessionInfo {
 			Remotes:       s.Remotes,
 			Host:          s.Peer,
 			Alive:         s.Alive,
-			Slug:     s.Slug,
+			Slug:          s.Slug,
 		}
 	}
 	return infos
@@ -2618,5 +2616,3 @@ func parseGitShortstat(s string) (files, insertions, deletions int) {
 	}
 	return
 }
-
-
