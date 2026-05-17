@@ -34,7 +34,7 @@ func TestMatchSession(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := matchSession(sessions, tc.ref)
+			got, err := matchSession(sessions, tc.ref, "")
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -54,7 +54,7 @@ func TestMatchSessionAmbiguous(t *testing.T) {
 		{ID: "sess-abcd1234", Slug: "fix-auth"},
 		{ID: "sess-abcd5678", Slug: "fix-bug"},
 	}
-	_, err := matchSession(sessions, "abcd")
+	_, err := matchSession(sessions, "abcd", "")
 	if err == nil {
 		t.Fatal("expected ambiguous error")
 	}
@@ -75,7 +75,7 @@ func TestMatchSessionExactBeatsPrefix(t *testing.T) {
 		{ID: "sess-abcd"},     // exact match for short form "abcd"
 		{ID: "sess-abcdef01"}, // also starts with "abcd"
 	}
-	got, err := matchSession(sessions, "abcd")
+	got, err := matchSession(sessions, "abcd", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -89,13 +89,13 @@ func TestMatchSessionExactBeatsPrefix(t *testing.T) {
 // random one.
 func TestMatchSessionNoMatch(t *testing.T) {
 	sessions := []cliSession{{ID: "sess-abcd1234"}}
-	if _, err := matchSession(sessions, "zzzz"); err == nil {
+	if _, err := matchSession(sessions, "zzzz", ""); err == nil {
 		t.Error("expected error for non-matching ref")
 	}
-	if _, err := matchSession(nil, "anything"); err == nil {
+	if _, err := matchSession(nil, "anything", ""); err == nil {
 		t.Error("expected error when session list is empty")
 	}
-	if _, err := matchSession(sessions, ""); err == nil {
+	if _, err := matchSession(sessions, "", ""); err == nil {
 		t.Error("expected error for empty ref")
 	}
 }
@@ -175,3 +175,106 @@ func TestBuildSendBody(t *testing.T) {
 }
 
 func stringPtr(s string) *string { return &s }
+
+// TestMatchSessionStrictLocalDefault locks in the rule that drove
+// the new addressing design: with no --host and no @suffix, peer
+// sessions are invisible to the lookup. A user who has only a peer
+// session with id "abcd1234" must not have `gmux --kill abcd1234`
+// silently kill it; they have to opt in via @peer or --host.
+func TestMatchSessionStrictLocalDefault(t *testing.T) {
+	sessions := []cliSession{
+		{ID: "sess-abcd1234", Peer: "konyvtar"},
+	}
+	_, err := matchSession(sessions, "abcd1234", "")
+	if err == nil {
+		t.Fatal("strict-local lookup should not see a peer-only session")
+	}
+}
+
+// TestMatchSessionFriendlyHintForPeerOnlyMatch is the UX safety net
+// for the strict-local rule: when the ref only matches a peer
+// session, the error must point the user at the qualified form
+// rather than reading like "this session doesn't exist." Otherwise
+// the strict default feels like a regression.
+func TestMatchSessionFriendlyHintForPeerOnlyMatch(t *testing.T) {
+	sessions := []cliSession{
+		{ID: "sess-abcd1234", Peer: "konyvtar"},
+	}
+	_, err := matchSession(sessions, "abcd1234", "")
+	if err == nil {
+		t.Fatal("expected error for peer-only short id without --host")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "abcd1234@konyvtar") {
+		t.Errorf("error should suggest qualified form, got: %s", msg)
+	}
+}
+
+// TestMatchSessionAtSuffixRoutes is the canonical address form: an
+// `id@host` ref resolves to the session on that host without needing
+// the --host flag. Any divergence here would break the design's
+// claim that copy-paste from `--list --all` works directly with
+// action subcommands.
+func TestMatchSessionAtSuffixRoutes(t *testing.T) {
+	sessions := []cliSession{
+		{ID: "sess-abcd1234"},                       // local
+		{ID: "sess-abcd1234", Peer: "konyvtar"},     // namespaced collision
+		{ID: "sess-ef019283", Peer: "bespin"},
+	}
+	got, err := matchSession(sessions, "abcd1234@konyvtar", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Peer != "konyvtar" {
+		t.Errorf("expected konyvtar session, got peer=%q", got.Peer)
+	}
+}
+
+// TestMatchSessionHostFlag exercises the equivalence between
+// --host=peer and @peer. Both should resolve to the same session;
+// otherwise the design's "two forms, same meaning" claim is wrong.
+func TestMatchSessionHostFlag(t *testing.T) {
+	sessions := []cliSession{
+		{ID: "sess-abcd1234", Peer: "konyvtar"},
+	}
+	got, err := matchSession(sessions, "abcd1234", "konyvtar")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Peer != "konyvtar" {
+		t.Errorf("expected konyvtar session, got peer=%q", got.Peer)
+	}
+}
+
+// TestMatchSessionHostAndSuffixConflict guards the contract that a
+// user can't address two different hosts in one invocation. Silent
+// preference for either side would be a footgun.
+func TestMatchSessionHostAndSuffixConflict(t *testing.T) {
+	sessions := []cliSession{
+		{ID: "sess-abcd1234", Peer: "konyvtar"},
+	}
+	_, err := matchSession(sessions, "abcd1234@bespin", "konyvtar")
+	if err == nil {
+		t.Fatal("expected error when @suffix and --host disagree")
+	}
+	if !strings.Contains(err.Error(), "konyvtar") || !strings.Contains(err.Error(), "bespin") {
+		t.Errorf("error should mention both hosts, got: %s", err.Error())
+	}
+}
+
+// TestMatchSessionHostAndSuffixAgreeing covers the redundancy case:
+// `--host=konyvtar abcd@konyvtar` should resolve cleanly rather than
+// be rejected as conflicting. People copy-paste IDs that already
+// carry the @suffix.
+func TestMatchSessionHostAndSuffixAgreeing(t *testing.T) {
+	sessions := []cliSession{
+		{ID: "sess-abcd1234", Peer: "konyvtar"},
+	}
+	got, err := matchSession(sessions, "abcd1234@konyvtar", "konyvtar")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Peer != "konyvtar" {
+		t.Errorf("expected konyvtar session, got peer=%q", got.Peer)
+	}
+}

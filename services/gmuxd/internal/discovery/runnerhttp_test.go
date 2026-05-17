@@ -1,10 +1,13 @@
 package discovery
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -155,5 +158,59 @@ func TestRunnerRequest_HonorsCallerContext(t *testing.T) {
 	// elapsed time well under that proves the caller's ctx won.
 	if elapsed > time.Second {
 		t.Fatalf("request took %v; expected <1s (caller ctx must short-circuit runner timeout)", elapsed)
+	}
+}
+
+// TestSendInput_DeliversBodyToRunner is the contract `gmux --send`
+// relies on: the bytes the CLI hands gmuxd must arrive at the
+// runner's /input verbatim. Anything that mangles them (extra
+// framing, trailing newline normalization) would silently corrupt
+// keystrokes sent to a session.
+func TestSendInput_DeliversBodyToRunner(t *testing.T) {
+	var got []byte
+	s := startUnixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/input" {
+			t.Errorf("runner saw method=%s path=%s, want POST /input", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		got = b
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer s.cleanup()
+
+	// A payload with bytes that would be tempting to "normalize"
+	// (raw CR, embedded NUL, high-bit). None of these may change.
+	want := []byte("hello\rworld\x00\xff!")
+	if err := SendInput(context.Background(), s.socketPath, bytes.NewReader(want)); err != nil {
+		t.Fatalf("SendInput: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("runner received %q, want %q", got, want)
+	}
+}
+
+// TestSendInput_SurfacesRunnerErrors makes sure a non-2xx runner
+// response becomes a meaningful error rather than a silent
+// success. Otherwise `gmux --send` would print nothing and exit 0
+// when the runner rejected the input.
+func TestSendInput_SurfacesRunnerErrors(t *testing.T) {
+	s := startUnixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "write pty: broken pipe", http.StatusInternalServerError)
+	}))
+	defer s.cleanup()
+
+	err := SendInput(context.Background(), s.socketPath, bytes.NewReader([]byte("x")))
+	if err == nil {
+		t.Fatal("expected error on 500 from runner, got nil")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error should mention status, got %v", err)
 	}
 }

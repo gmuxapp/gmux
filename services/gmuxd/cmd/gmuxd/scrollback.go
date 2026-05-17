@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/gmuxapp/gmux/packages/scrollback"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
@@ -32,6 +33,13 @@ import (
 //   - 500 on any other IO error reading the scrollback dir; the
 //     log line carries the underlying cause.
 //
+// Optional ?tail=<N> query param trims the response to the last N
+// newline-delimited lines (raw bytes; CRLF and ANSI preserved).
+// Negative or non-numeric N is rejected with 400 so a typo doesn't
+// silently fall through to "stream everything" and surprise the
+// caller with a multi-MiB body. Absent param keeps current
+// stream-everything behavior for the web UI.
+//
 // dirFor maps a session ID to its per-session directory. In
 // production this is sessionmeta.Store.SessionDir; tests inject a
 // closure pointing at a temp dir.
@@ -51,6 +59,19 @@ func scrollbackBrokerHandler(
 		return
 	}
 
+	// tailN > 0 switches to line-tail mode (used by `gmux --tail`).
+	// tailN == 0 means "no tail param given"; stream everything
+	// (the contract the web UI consumes).
+	tailN := 0
+	if v := r.URL.Query().Get("tail"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "bad_request", "tail must be a positive integer")
+			return
+		}
+		tailN = n
+	}
+
 	rc, err := scrollback.OpenReader(dirFor(sessionID))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("scrollback: %s: %v", sessionID, err)
@@ -68,6 +89,23 @@ func scrollbackBrokerHandler(
 		return
 	}
 	defer rc.Close()
+
+	if tailN > 0 {
+		// Buffer-and-trim: scrollback is bounded at 2 * MaxBytes per
+		// session, so reading it all into memory for a tail is fine
+		// and lets us produce the response in a single Write.
+		tail, err := scrollback.TailBytes(rc, tailN)
+		if err != nil {
+			log.Printf("scrollback tail: %s: %v", sessionID, err)
+			// Headers were already sent (200 + Content-Type). The best
+			// we can do is end the response; the client sees a short
+			// read and surfaces it. Logging here is what makes the
+			// failure debuggable.
+			return
+		}
+		_, _ = w.Write(tail)
+		return
+	}
 
 	// A mid-stream client disconnect (e.g. user closed the tab)
 	// surfaces as a Copy error and is not actionable; nothing to log.

@@ -24,8 +24,8 @@ import (
 // helper that `gmux <cmd>` uses, so attach feels the same as an
 // original launch: transparent I/O, SIGWINCH → resize, SIGHUP →
 // detach (session keeps running), Ctrl-C goes to the child.
-func cmdAttach(ref string) int {
-	sess, err := resolveSession(ref)
+func cmdAttach(ref, host string) int {
+	sess, err := resolveSession(ref, host)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
@@ -36,7 +36,7 @@ func cmdAttach(ref string) int {
 	// real reason up front and point the user at the UI where they can
 	// resume the session if the adapter supports it.
 	if !sess.Alive {
-		fmt.Fprintf(os.Stderr, "gmux: session %s is not running (open the UI to resume)\n", shortID(sess.ID))
+		fmt.Fprintf(os.Stderr, "gmux: session %s is not running (open the UI to resume)\n", displayID(sess))
 		return 1
 	}
 
@@ -60,7 +60,7 @@ func cmdAttach(ref string) int {
 		HTTPClient: dialHTTP,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "gmux: connect %s: %v\n", shortID(sess.ID), err)
+		fmt.Fprintf(os.Stderr, "gmux: connect %s: %v\n", displayID(sess), err)
 		return 1
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
