@@ -223,7 +223,7 @@ func launchGmux(gmuxBin string, command []string, cwd, resumeID string, dismissO
 	cmd.Dir = cwd
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdout = nil
-	cmd.Stderr = nil
+	cmd.Stderr = os.Stderr // inherit gmuxd's stderr so [gmux] startup: timing logs appear in gmuxd.log
 	cmd.Stdin = nil
 
 	// Strip all GMUX_* session vars so child processes don't inherit
