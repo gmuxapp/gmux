@@ -48,7 +48,18 @@ func (f *brokerFixture) writeScrollback(t *testing.T, id, body string) {
 }
 
 func (f *brokerFixture) do(method, sessionID string) *http.Response {
-	req := httptest.NewRequest(method, "/v1/sessions/"+sessionID+"/scrollback", nil)
+	return f.doQuery(method, sessionID, "")
+}
+
+// doQuery is the same as do but lets a test attach a raw query
+// string (e.g. "tail=2") to exercise the optional knobs of the
+// endpoint.
+func (f *brokerFixture) doQuery(method, sessionID, rawQuery string) *http.Response {
+	url := "/v1/sessions/" + sessionID + "/scrollback"
+	if rawQuery != "" {
+		url += "?" + rawQuery
+	}
+	req := httptest.NewRequest(method, url, nil)
 	rec := httptest.NewRecorder()
 	scrollbackBrokerHandler(rec, req, sessionID, f.sessions, f.dirFor)
 	return rec.Result()
@@ -172,5 +183,85 @@ func TestBrokerConcatenatesPreviousAndActive(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "EARLIER\nLATER\n" {
 		t.Errorf("ordering: want %q, got %q", "EARLIER\nLATER\n", body)
+	}
+}
+
+// TestBrokerTailParamTrimsToLastNLines is the contract `gmux --tail`
+// relies on: passing tail=N must drop everything before the trailing
+// N lines, byte-for-byte. The previous file + active file
+// concatenation must be tailed as a single logical stream so the
+// rotation boundary doesn't leak into the response.
+func TestBrokerTailParamTrimsToLastNLines(t *testing.T) {
+	f := newBrokerFixture(t)
+	f.addSession(t, "sess-1")
+
+	dir := f.dirFor("sess-1")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Put 3 lines in previous and 3 in active; tail=4 must cross
+	// the rotation boundary correctly.
+	if err := os.WriteFile(filepath.Join(dir, scrollback.PreviousName), []byte("p1\np2\np3\n"), 0o600); err != nil {
+		t.Fatalf("write previous: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, scrollback.ActiveName), []byte("a1\na2\na3\n"), 0o600); err != nil {
+		t.Fatalf("write active: %v", err)
+	}
+
+	resp := f.doQuery(http.MethodGet, "sess-1", "tail=4")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	want := "p3\na1\na2\na3\n"
+	if string(body) != want {
+		t.Errorf("body: want %q, got %q", want, body)
+	}
+}
+
+// TestBrokerTailParamEmptySession returns 200 with empty body when a
+// session is known but has no scrollback. tail=N must not change
+// that: a fresh session is still a known session, just one with
+// nothing to show.
+func TestBrokerTailParamEmptySession(t *testing.T) {
+	f := newBrokerFixture(t)
+	f.addSession(t, "sess-empty")
+
+	resp := f.doQuery(http.MethodGet, "sess-empty", "tail=10")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if len(body) != 0 {
+		t.Errorf("body: want empty, got %q", body)
+	}
+}
+
+// TestBrokerTailParamRejectsBadValue locks down the input contract.
+// A non-numeric or non-positive tail must 400, not fall through to
+// "stream everything" — a typo like `?tail=abc` returning a multi-MiB
+// body would be a footgun, and `?tail=0` is meaningless.
+func TestBrokerTailParamRejectsBadValue(t *testing.T) {
+	f := newBrokerFixture(t)
+	f.addSession(t, "sess-1")
+	f.writeScrollback(t, "sess-1", "data\n")
+
+	for _, raw := range []string{"tail=abc", "tail=0", "tail=-3", "tail="} {
+		resp := f.doQuery(http.MethodGet, "sess-1", raw)
+		// tail= with empty value is the one ambiguous case. The
+		// handler treats it as "param not given" (current behavior:
+		// stream everything) because url.Values returns the same
+		// empty string whether the param was absent or present-empty.
+		// Document that explicitly here so a future change doesn't
+		// silently make it stricter without thought.
+		if raw == "tail=" {
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("%s: want 200 (treated as absent), got %d", raw, resp.StatusCode)
+			}
+			continue
+		}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: want 400, got %d", raw, resp.StatusCode)
+		}
 	}
 }
