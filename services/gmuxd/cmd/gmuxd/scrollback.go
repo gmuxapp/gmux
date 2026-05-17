@@ -97,10 +97,13 @@ func scrollbackBrokerHandler(
 		tail, err := scrollback.TailBytes(rc, tailN)
 		if err != nil {
 			log.Printf("scrollback tail: %s: %v", sessionID, err)
-			// Headers were already sent (200 + Content-Type). The best
-			// we can do is end the response; the client sees a short
-			// read and surfaces it. Logging here is what makes the
-			// failure debuggable.
+			// Header().Set above didn't commit the response (Go only
+			// flushes headers on first Write/WriteHeader), so we can
+			// still return a proper 5xx instead of letting the server
+			// flush a default 200 with our headers and an empty body.
+			// Without this, cmdTail would see 200 OK and report success
+			// even though the read failed.
+			writeError(w, http.StatusInternalServerError, "internal", "scrollback read failed")
 			return
 		}
 		_, _ = w.Write(tail)

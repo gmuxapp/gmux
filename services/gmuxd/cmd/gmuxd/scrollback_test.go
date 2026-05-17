@@ -265,3 +265,32 @@ func TestBrokerTailParamRejectsBadValue(t *testing.T) {
 		}
 	}
 }
+
+// TestBrokerTailParamIOErrorReturns500 guards against the silent-200
+// bug where a TailBytes read failure would fall through with no Write
+// having occurred, and the HTTP server would flush a default 200 OK
+// with empty body — leaving the client to interpret a read failure as
+// "no scrollback yet." The handler must commit a 5xx explicitly so the
+// failure surfaces.
+//
+// To exercise specifically the TailBytes error path (not the
+// OpenReader error path), seed the scrollback location with a
+// directory: os.Open on a directory succeeds, but a subsequent Read
+// on it fails with EISDIR. That's what TailBytes -> io.ReadAll sees.
+func TestBrokerTailParamIOErrorReturns500(t *testing.T) {
+	f := newBrokerFixture(t)
+	f.addSession(t, "sess-1")
+
+	dir := f.dirFor("sess-1")
+	// Put a directory where the active scrollback file should be.
+	// OpenReader will Open it (success), TailBytes will ReadAll it
+	// (fails with EISDIR).
+	if err := os.MkdirAll(filepath.Join(dir, scrollback.ActiveName), 0o700); err != nil {
+		t.Fatalf("mkdir trap: %v", err)
+	}
+
+	resp := f.doQuery(http.MethodGet, "sess-1", "tail=5")
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status: want 500, got %d (a silent 200 here would let the CLI report success on an IO error)", resp.StatusCode)
+	}
+}
