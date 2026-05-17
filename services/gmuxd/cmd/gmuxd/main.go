@@ -1883,7 +1883,11 @@ func serve(stderr io.Writer) int {
 			writeError(w, http.StatusInternalServerError, "gmux_not_found", "gmux not found")
 			return
 		}
-		pid, err := launchGmux(gmuxBin, []string{opener, filePath}, root, "", true)
+		// Split opener string into command + args so the config can carry
+		// flags (e.g. "glow -p" for pager mode, "chafa --format=symbols").
+		openerParts := strings.Fields(opener)
+		command := append(openerParts, filePath)
+		pid, err := launchGmux(gmuxBin, command, root, "", true)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
 			return

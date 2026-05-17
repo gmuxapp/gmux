@@ -619,8 +619,8 @@ func TestFileOpenerFor(t *testing.T) {
 		want string
 	}{
 		// markdown
-		{"README.md", "glow"},
-		{"docs/NOTES.MD", "glow"},
+		{"README.md", "glow -p"},
+		{"docs/NOTES.MD", "glow -p"},
 		// images
 		{"photo.png", "chafa"},
 		{"photo.PNG", "chafa"},
@@ -653,8 +653,8 @@ func TestFileOpenerForWithConfig(t *testing.T) {
 	defaultCfg := config.DefaultFileOpeners()
 
 	// Default behaviour preserved.
-	if got := fileOpenerFor("README.md", defaultCfg); got != "glow" {
-		t.Errorf("md default: got %q, want glow", got)
+	if got := fileOpenerFor("README.md", defaultCfg); got != "glow -p" {
+		t.Errorf("md default: got %q, want glow -p", got)
 	}
 	if got := fileOpenerFor("photo.png", defaultCfg); got != "chafa" {
 		t.Errorf("png default: got %q, want chafa", got)
@@ -674,8 +674,8 @@ func TestFileOpenerForWithConfig(t *testing.T) {
 		t.Errorf("go override: got %q, want nano", got)
 	}
 	// Other defaults still intact.
-	if got := fileOpenerFor("README.md", custom); got != "glow" {
-		t.Errorf("md after override: got %q, want glow", got)
+	if got := fileOpenerFor("README.md", custom); got != "glow -p" {
+		t.Errorf("md after override: got %q, want glow -p", got)
 	}
 
 	// User changes the default fallback.

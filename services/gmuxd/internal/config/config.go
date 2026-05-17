@@ -26,13 +26,17 @@ import (
 // the sidebar file tree. Extensions are matched case-insensitively without
 // the leading dot (e.g. "md", "png"). Unknown extensions fall back to Default.
 //
+// Opener values support arguments (space-separated), e.g. "glow -p" or
+// "chafa --format=symbols". The daemon splits them before passing to the
+// runner so flags work without requiring a shell wrapper.
+//
 // Example host.toml:
 //
 //	[file_openers]
 //	default = "hx"
 //
 //	[file_openers.extensions]
-//	md  = "glow"
+//	md  = "glow -p"
 //	png = "chafa"
 //	rs  = "nano"
 type FileOpenersConfig struct {
@@ -40,19 +44,25 @@ type FileOpenersConfig struct {
 	// Defaults to "hx" (helix).
 	Default string `toml:"default"`
 
-	// Extensions maps lowercase extension (without dot) to program name.
-	// Decoded as a map so any extension key is accepted without triggering
-	// the unknown-key validation.
+	// Extensions maps lowercase extension (without dot) to program name
+	// (optionally with args). Decoded as a map so any extension key is
+	// accepted without triggering the unknown-key validation.
 	Extensions map[string]string `toml:"extensions"`
 }
 
 // DefaultFileOpeners returns the built-in extension→program map.
 // user config is merged on top of these defaults at load time.
+//
+// Opener strings may include arguments (e.g. "glow -p"). The daemon
+// splits them with strings.Fields before building the launch command.
 func DefaultFileOpeners() FileOpenersConfig {
 	return FileOpenersConfig{
 		Default: "hx",
 		Extensions: map[string]string{
-			"md":   "glow",
+			// Markdown: -p = pager mode (interactive, user quits with q).
+			// Required so the session stays open for reading and auto-dismiss
+			// fires only when the user explicitly exits.
+			"md":   "glow -p",
 			"png":  "chafa",
 			"jpg":  "chafa",
 			"jpeg": "chafa",
