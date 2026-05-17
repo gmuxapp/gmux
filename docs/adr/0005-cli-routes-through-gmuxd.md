@@ -86,11 +86,15 @@ The CLI never participates in this routing. It speaks one HTTP API.
   addition to `--kill` / `--attach` already). The CLI's
   `ensureGmuxd()` already runs at the start of every action
   subcommand, so this changes nothing observable.
-- `--tail` now returns raw PTY bytes (CRLF, ANSI escapes) instead of
-  the rendered plain text the runner used to emit. The dead-session
-  case had no choice (no live screen state to render from), so
-  unifying on raw bytes was the consistent option. Users who want
-  plain text pipe through `sed`. Pre-1.0; called out as breaking.
+- `--tail` is re-implemented on gmuxd (the runner's `/scrollback/tail`
+  endpoint is removed). The output format is preserved: plain text
+  with ANSI stripped and cursor overwrites collapsed. gmuxd does the
+  rendering by replaying the on-disk raw scrollback through a fresh
+  `vt.Emulator` (the same library the runner uses for the live
+  screen), so dead sessions and live sessions produce the same
+  shape of output. The rendering helpers live in
+  `packages/scrollback` and are shared between the runner (live
+  cell grid) and gmuxd (disk replay).
 
 **Neutral, worth flagging.**
 
@@ -116,10 +120,20 @@ with a friendly "session is not running" message. Rejected: the
 user wants the data, not the error. This option fixes the error
 message but not the underlying capability.
 
-**Always render scrollback to plain text inside gmuxd.** Symmetric
-output between live and dead sessions. Rejected for now: dead
-sessions would need a terminal-emulator replay inside gmuxd, which
-pulls a new dependency into the daemon for a feature that didn't
-warrant it. The raw-bytes format is what `cat ~/.local/state/.../scrollback`
-gave users as the workaround; we're standardizing on what they were
-already doing.
+**Have `--tail` return raw PTY bytes instead of rendered plain text.**
+Initially proposed because the dead-session case has no live screen
+state to render from. Rejected on review: the terminal emulator
+(`charmbracelet/x/vt`) was already in the workspace as a runner
+dependency, and replaying disk bytes through a fresh emulator
+produces the same rendered output the runner's live grid did, for
+both dead and live sessions. The cost was a small dependency add to
+`packages/scrollback`; the benefit was preserving the pre-PR `--tail`
+format exactly, which kept the change a pure architectural one
+instead of a UX change.
+
+**Proxy `--tail` to the runner socket for live sessions and render
+from disk for dead.** Two code paths producing the same output
+shape. Rejected: defeats the central architectural simplification
+of this ADR (one place handles where session data lives) for no
+actual benefit, since the disk replay matches the live cell grid
+for any session whose total output fits the scrollback cap.

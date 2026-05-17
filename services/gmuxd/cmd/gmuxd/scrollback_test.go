@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gmuxapp/gmux/packages/scrollback"
@@ -199,12 +201,17 @@ func TestBrokerTailParamTrimsToLastNLines(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	// Put 3 lines in previous and 3 in active; tail=4 must cross
-	// the rotation boundary correctly.
-	if err := os.WriteFile(filepath.Join(dir, scrollback.PreviousName), []byte("p1\np2\np3\n"), 0o600); err != nil {
+	// CRLF mirrors what the PTY actually emits; bare LF without CR
+	// would leave the cursor at column N when the emulator processes
+	// the next line, producing staircased output. Real on-disk
+	// scrollback is always CRLF.
+	//
+	// 3 lines in previous + 3 in active; tail=4 must cross the
+	// rotation boundary correctly.
+	if err := os.WriteFile(filepath.Join(dir, scrollback.PreviousName), []byte("p1\r\np2\r\np3\r\n"), 0o600); err != nil {
 		t.Fatalf("write previous: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, scrollback.ActiveName), []byte("a1\na2\na3\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, scrollback.ActiveName), []byte("a1\r\na2\r\na3\r\n"), 0o600); err != nil {
 		t.Fatalf("write active: %v", err)
 	}
 
@@ -212,10 +219,63 @@ func TestBrokerTailParamTrimsToLastNLines(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status: want 200, got %d", resp.StatusCode)
 	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
+		t.Errorf("Content-Type: want text/plain, got %q", got)
+	}
 	body, _ := io.ReadAll(resp.Body)
 	want := "p3\na1\na2\na3\n"
 	if string(body) != want {
 		t.Errorf("body: want %q, got %q", want, body)
+	}
+}
+
+// TestBrokerTailParamStripsANSI is the end-to-end version of the
+// rendering claim: bytes the child wrote with ANSI styling come out
+// of the broker as plain text. If the broker ever stopped routing
+// through the emulator and reverted to raw byte tailing, `gmux --tail`
+// output would suddenly include escape sequences and break log-style
+// consumption.
+func TestBrokerTailParamStripsANSI(t *testing.T) {
+	f := newBrokerFixture(t)
+	f.addSession(t, "sess-1")
+	f.writeScrollback(t, "sess-1", "\x1b[31mred line\x1b[0m\r\n\x1b[32mgreen line\x1b[0m\r\n")
+
+	resp := f.doQuery(http.MethodGet, "sess-1", "tail=2")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if bytes.ContainsRune(body, 0x1b) {
+		t.Errorf("body still contains an ANSI escape byte: %q", body)
+	}
+	want := "red line\ngreen line\n"
+	if string(body) != want {
+		t.Errorf("body: want %q, got %q", want, body)
+	}
+}
+
+// TestBrokerTailParamCollapsesCursorOverwrites is the case that
+// justifies replaying through a real emulator instead of byte-tailing.
+// A child that prints "loading...\r" and then "done      \r\n"
+// overwrites the same row; the user expects --tail to surface the
+// final visible content ("done"), not the byte history of the
+// overwrite. Byte-tailing would return both fragments concatenated.
+func TestBrokerTailParamCollapsesCursorOverwrites(t *testing.T) {
+	f := newBrokerFixture(t)
+	f.addSession(t, "sess-1")
+	f.writeScrollback(t, "sess-1", "loading...\rdone      \r\n")
+
+	resp := f.doQuery(http.MethodGet, "sess-1", "tail=5")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+	if !strings.Contains(text, "done") {
+		t.Errorf("want %q in output, got %q", "done", text)
+	}
+	if strings.Contains(text, "loading") {
+		t.Errorf("overwritten %q should not appear, got %q", "loading", text)
 	}
 }
 

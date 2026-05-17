@@ -22,13 +22,16 @@
 package scrollback
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/vt"
 )
 
 const (
@@ -221,43 +224,111 @@ func OpenReader(dir string) (io.ReadCloser, error) {
 	return &multiReadCloser{r: io.MultiReader(readers...), closers: closers}, nil
 }
 
-// TailBytes reads all bytes from r and returns the trailing portion
-// containing at most n lines (newline-terminated, or the file's
-// trailing chunk if the last line is unterminated).
+// RenderScrollbackSize is the scrollback ring kept by the virtual
+// terminal when replaying raw PTY bytes. Matches the runner's live
+// scrollback so a freshly-replayed emulator reaches the same end
+// state for any session whose total output stays under the on-disk
+// cap (2 * MaxBytes). Past that point both the live grid and a
+// replay diverge from "all output ever produced", in the same way.
+const RenderScrollbackSize = 2000
+
+// RenderTail replays raw PTY bytes through a fresh terminal emulator
+// at (cols, rows) and returns the last n lines of the resulting
+// scrollback + visible screen as plain text (no ANSI), one line per
+// element. Trailing blank rows of the visible screen are trimmed so an
+// idle TUI doesn't pad the output with empty rows.
 //
-// Semantics:
+// This is the format `gmux --tail` returns. The runner used to render
+// directly from its live cell grid; rendering from disk here produces
+// the same shape of output, with the added benefit that dead sessions
+// (whose runner is gone) work the same way.
 //
-//   - n <= 0 returns nil with no read; callers asking for zero lines
-//     get an empty answer cheaply.
-//   - A line is delimited by '\n'. A trailing chunk after the final
-//     '\n' counts as a (partial) line; this matches what users
-//     intuitively call "the last line" when a session's output
-//     stops mid-write.
-//   - '\r' is preserved inline; the on-disk scrollback uses CRLF and
-//     we don't second-guess what the PTY emitted.
+// (cols, rows) control line wrapping in the emulator. The emulator
+// requires positive dimensions; non-positive values fall back to 80x24,
+// which matches the runner's own default for non-interactive launches.
 //
-// Memory: bounded by the size of r. Scrollback files are capped at
-// 2 * MaxBytes, so this is safe for use by the gmuxd broker. Don't
-// hand it an unbounded stream.
-func TailBytes(r io.Reader, n int) ([]byte, error) {
+// n <= 0 returns nil with no read; callers asking for zero lines get an
+// empty answer cheaply. Memory is bounded by the size of r plus the
+// emulator's working state; scrollback files are capped at 2 * MaxBytes,
+// so this is safe to call against the broker's on-disk reader.
+func RenderTail(r io.Reader, cols, rows, n int) ([]string, error) {
 	if n <= 0 {
 		return nil, nil
 	}
-	buf, err := io.ReadAll(r)
+	if cols <= 0 {
+		cols = 80
+	}
+	if rows <= 0 {
+		rows = 24
+	}
+	raw, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
-	// SplitAfter keeps the '\n' attached to each line. A file ending
-	// in '\n' produces a trailing empty element; drop it so a request
-	// for the last N lines doesn't burn one of N on emptiness.
-	lines := bytes.SplitAfter(buf, []byte{'\n'})
-	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
-		lines = lines[:len(lines)-1]
+
+	e := vt.NewEmulator(cols, rows)
+	e.SetScrollbackSize(RenderScrollbackSize)
+	// The emulator writes back responses (e.g. DSR cursor position
+	// reports) into a pipe. Nothing reads them here, and a blocked
+	// write would deadlock our Write below. Drain in the background.
+	drainDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, e)
+		close(drainDone)
+	}()
+	if _, err := e.Write(raw); err != nil {
+		return nil, fmt.Errorf("replay through emulator: %w", err)
 	}
+
+	lines := extractLines(e)
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
-	return bytes.Join(lines, nil), nil
+	return lines, nil
+}
+
+// extractLines reads the scrollback ring followed by the visible
+// screen out of e as plain text. Trailing blank rows of the visible
+// screen are dropped because an idle TUI pads the bottom of its
+// viewport with blanks that aren't useful in a log-style tail.
+func extractLines(e *vt.Emulator) []string {
+	var lines []string
+	if sb := e.Scrollback(); sb != nil {
+		for _, line := range sb.Lines() {
+			lines = append(lines, plainLine(line))
+		}
+	}
+
+	w, h := e.Width(), e.Height()
+	screenLines := make([]string, h)
+	for y := 0; y < h; y++ {
+		row := make(uv.Line, w)
+		for x := 0; x < w; x++ {
+			if c := e.CellAt(x, y); c != nil {
+				row[x] = *c
+			}
+		}
+		screenLines[y] = plainLine(row)
+	}
+	end := len(screenLines)
+	for end > 0 && strings.TrimSpace(screenLines[end-1]) == "" {
+		end--
+	}
+	return append(lines, screenLines[:end]...)
+}
+
+// plainLine renders a terminal line as plain text (no ANSI styling),
+// right-trimming trailing spaces so short lines don't emit padding.
+func plainLine(line uv.Line) string {
+	var b strings.Builder
+	for _, c := range line {
+		if c.Content == "" {
+			b.WriteString(" ")
+		} else {
+			b.WriteString(c.Content)
+		}
+	}
+	return strings.TrimRight(b.String(), " ")
 }
 
 type multiReadCloser struct {
