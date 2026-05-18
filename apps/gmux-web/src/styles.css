@@ -2730,3 +2730,129 @@ a.home-host-link:hover {
   padding: 4px 10px;
   font-size: 12px;
 }
+
+/* ── Markdown Editor ──────────────────────────────────────────────────────── */
+
+.md-editor-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.md-editor-header {
+  flex-shrink: 0;
+}
+
+.md-editor-save-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: var(--radius);
+  transition: opacity 0.2s;
+}
+.md-editor-save-status.saving { color: var(--text-muted); }
+.md-editor-save-status.saved  { color: oklch(65% 0.14 145); }
+.md-editor-save-status.error  { color: var(--status-error); }
+
+.md-editor-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 0 48px 0;
+}
+
+/* Milkdown container */
+.md-editor-container {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+/* Override Milkdown defaults to match app theme */
+.md-editor-panel .milkdown {
+  background: transparent;
+  color: var(--text);
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 15px;
+  line-height: 1.7;
+  outline: none;
+}
+
+.md-editor-panel .milkdown .editor {
+  outline: none;
+  caret-color: var(--text);
+}
+
+/* Prose typography */
+.md-editor-panel .milkdown h1,
+.md-editor-panel .milkdown h2,
+.md-editor-panel .milkdown h3,
+.md-editor-panel .milkdown h4 {
+  color: var(--text);
+  margin: 1.4em 0 0.5em;
+  font-family: 'Instrument Sans', sans-serif;
+  line-height: 1.3;
+}
+.md-editor-panel .milkdown h1 { font-size: 1.8em; }
+.md-editor-panel .milkdown h2 { font-size: 1.4em; }
+.md-editor-panel .milkdown h3 { font-size: 1.15em; }
+
+.md-editor-panel .milkdown p {
+  margin: 0.6em 0;
+}
+
+.md-editor-panel .milkdown a {
+  color: var(--accent, oklch(65% 0.18 250));
+  text-decoration: underline;
+}
+
+.md-editor-panel .milkdown code {
+  background: var(--bg-selected);
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.88em;
+  padding: 1px 5px;
+}
+
+.md-editor-panel .milkdown pre {
+  background: var(--bg-selected);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  overflow-x: auto;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.88em;
+  line-height: 1.55;
+}
+
+.md-editor-panel .milkdown pre code {
+  background: none;
+  padding: 0;
+}
+
+.md-editor-panel .milkdown blockquote {
+  border-left: 3px solid var(--border, oklch(35% 0 0));
+  color: var(--text-muted);
+  margin: 0.8em 0;
+  padding-left: 16px;
+}
+
+.md-editor-panel .milkdown ul,
+.md-editor-panel .milkdown ol {
+  padding-left: 1.6em;
+  margin: 0.4em 0;
+}
+
+.md-editor-panel .milkdown li {
+  margin: 0.2em 0;
+}
+
+.md-editor-panel .milkdown hr {
+  border: none;
+  border-top: 1px solid var(--border, oklch(35% 0 0));
+  margin: 1.5em 0;
+}
+
+/* Selection highlight */
+.md-editor-panel .milkdown .ProseMirror-selectednode {
+  outline: 2px solid var(--accent, oklch(65% 0.18 250));
+  border-radius: 2px;
+}

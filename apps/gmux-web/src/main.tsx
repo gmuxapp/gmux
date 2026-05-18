@@ -15,6 +15,7 @@ import { ManageProjectsModal } from './manage-projects'
 import { ProjectHub } from './project-hub'
 import { Home } from './home'
 import { LaunchButton } from './launcher'
+import { MarkdownEditor } from './markdown-editor'
 import { installCopySession } from './mock-data/export-session'
 
 import {
@@ -474,7 +475,7 @@ function App() {
       />
 
       <div class="main-panel">
-        {viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && (
+        {viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && viewVal.kind !== 'markdown-editor' && (
           <MainHeader
             session={selectedVal}
             onRestart={selectedVal ? () => { restartSession(selectedVal.id).catch(err => console.error('restart failed:', err)) } : undefined}
@@ -500,6 +501,11 @@ function App() {
           <ProjectHub
             projectSlug={viewVal.projectSlug}
             onCloseSession={handleCloseSession}
+          />
+        ) : viewVal?.kind === 'markdown-editor' ? (
+          <MarkdownEditor
+            projectSlug={viewVal.projectSlug}
+            filePath={viewVal.filePath}
           />
         ) : selectedVal && (canAttach || USE_MOCK) && termOpts && keybindsVal ? (
           <TerminalView
