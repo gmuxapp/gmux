@@ -12,7 +12,7 @@ import { useArrivalPulse } from './use-arrival-pulse'
 import {
   folders, selectedId, currentProjectSlug,
   activityMap, unmatchedActiveCount, projects, connState,
-  updateProjects, reorderSessions,
+  updateProjects, reorderSessions, view,
   type DotState,
 } from './store'
 import { useInstallPrompt } from './use-install-prompt'
@@ -169,6 +169,38 @@ function SessionItem({
   )
 }
 
+// ── Markdown tab item ──
+
+function MarkdownTabItem({
+  href,
+  fileName,
+  selected,
+  onClick,
+}: {
+  href: string
+  fileName: string
+  selected: boolean
+  onClick?: () => void
+}) {
+  return (
+    <a
+      class={`session-item${selected ? ' selected' : ''}`}
+      href={href}
+      onClick={() => onClick?.()}
+    >
+      <span class="session-dot-indicator none" />
+      <div class="session-content">
+        <div class="session-title-row">
+          <span class="session-env-icon" aria-label="markdown">📝</span>
+          <span class="session-title">{fileName}</span>
+        </div>
+      </div>
+    </a>
+  )
+}
+
+// ──
+
 function FolderGroup({
   folder,
   project,
@@ -176,6 +208,7 @@ function FolderGroup({
   curProjectSlug,
   resumingId,
   am,
+  markdownView,
   onCloseSession,
   onClick,
 }: {
@@ -185,6 +218,7 @@ function FolderGroup({
   curProjectSlug: string | null
   resumingId: string | null
   am: ReadonlyMap<string, 'active' | 'fading'>
+  markdownView: { projectSlug: string; filePath: string } | null
   onCloseSession: (session: Session) => void
   onClick?: () => void
 }) {
@@ -234,6 +268,14 @@ function FolderGroup({
         />
       </div>
       <div class="folder-sessions">
+        {markdownView?.projectSlug === folder.path && (
+          <MarkdownTabItem
+            href={`/${folder.path}/_md/${encodeURIComponent(markdownView.filePath)}`}
+            fileName={markdownView.filePath.split('/').pop() ?? markdownView.filePath}
+            selected={true}
+            onClick={onClick}
+          />
+        )}
         {displayItems.map((s, i) => (
           <SessionItem
             key={s.id}
@@ -281,6 +323,10 @@ export function Sidebar({
   const unmatchedCount = unmatchedActiveCount.value
   const am = activityMap.value
   const projectBySlug = new Map(projectsVal.map(p => [p.slug, p]))
+  const viewVal = view.value
+  const markdownView = viewVal?.kind === 'markdown-editor'
+    ? { projectSlug: viewVal.projectSlug, filePath: viewVal.filePath }
+    : null
 
   const totalVisible = foldersVal.reduce(
     (n, f) => n + f.sessions.filter(s => s.alive || s.resumable).length, 0,
@@ -299,9 +345,9 @@ export function Sidebar({
   }
 
   // Find the current project's filesystem root for the file tree.
-  // Primary: the explicit project hub slug. Fallback: whichever folder owns
-  // the currently selected session (so the tree stays visible in terminal view).
+  // Priority: project hub > markdown editor > session's folder.
   const activeProjectSlug = curProjectSlug
+    ?? markdownView?.projectSlug
     ?? foldersVal.find(f => f.sessions.some(s => s.id === selId || s.slug === selId))?.path
     ?? null
   const currentFolder = activeProjectSlug
@@ -342,6 +388,7 @@ export function Sidebar({
                   curProjectSlug={curProjectSlug}
                   resumingId={resumingId}
                   am={am}
+                  markdownView={markdownView}
                   onCloseSession={onCloseSession}
                   onClick={onClose}
                 />

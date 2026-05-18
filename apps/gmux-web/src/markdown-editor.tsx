@@ -132,22 +132,32 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
 
       latestContentRef.current = initialContent
 
-      const ed = await Editor.make()
-        .config((ctx: any) => {
-          ctx.set(rootCtx, containerRef.current!)
-          ctx.set(defaultValueCtx, initialContent)
-        })
-        .use(commonmark)
-        .use(history)
-        .use(clipboard)
-        .use(listener)
-        .config((ctx: any) => {
-          ctx.get(listenerCtx).markdownUpdated((_ctx: any, markdown: string) => {
-            latestContentRef.current = markdown
-            scheduleSave()
+      let ed: Editor
+      try {
+        ed = await Editor.make()
+          .config((ctx: any) => {
+            ctx.set(rootCtx, containerRef.current!)
+            ctx.set(defaultValueCtx, initialContent)
           })
-        })
-        .create()
+          .use(commonmark)
+          .use(history)
+          .use(clipboard)
+          .use(listener)
+          .config((ctx: any) => {
+            ctx.get(listenerCtx).markdownUpdated((_ctx: any, markdown: string) => {
+              latestContentRef.current = markdown
+              scheduleSave()
+            })
+          })
+          .create()
+      } catch (err) {
+        console.error('[MarkdownEditor] Milkdown init error', err)
+        if (!destroyed) {
+          setLoadError(`Editor failed to initialise: ${err}`)
+          setLoading(false)
+        }
+        return
+      }
 
       if (destroyed) {
         ed.destroy()
