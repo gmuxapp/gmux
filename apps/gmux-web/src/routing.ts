@@ -110,11 +110,13 @@ export function resolveSessionFromPath(
  *  - `home`: overview / landing (host status, projects, quick-launch)
  *  - `project`: the project hub page for a single project.
  *  - `session`: a specific terminal session, by id.
+ *  - `markdown-editor`: in-browser Milkdown editor for .md files.
  */
 export type View =
   | { kind: 'home' }
   | { kind: 'project'; projectSlug: string }
   | { kind: 'session'; sessionId: string }
+  | { kind: 'markdown-editor'; projectSlug: string; filePath: string }
 
 /** Structural equality for views. */
 export function viewsEqual(a: View, b: View): boolean {
@@ -123,6 +125,10 @@ export function viewsEqual(a: View, b: View): boolean {
     case 'home': return true
     case 'project': return a.projectSlug === (b as { projectSlug: string }).projectSlug
     case 'session': return a.sessionId === (b as { sessionId: string }).sessionId
+    case 'markdown-editor': {
+      const bb = b as { projectSlug: string; filePath: string }
+      return a.projectSlug === bb.projectSlug && a.filePath === bb.filePath
+    }
   }
 }
 
@@ -133,6 +139,7 @@ export function viewsEqual(a: View, b: View): boolean {
  *  - `/` (or unparseable / internal) -> home
  *  - `/:project` where project is unknown -> home
  *  - `/:project` where project exists -> project (hub page)
+ *  - `/:project/_md/:encoded-path` -> markdown-editor view
  *  - `/:project/:adapter[/:slug]` where a session resolves -> session view
  *  - `/:project/:adapter[/:slug]` with no matching session but project
  *    exists -> project view (hub)
@@ -151,6 +158,15 @@ export function resolveViewFromPath(
 
   // /:project alone goes straight to the project hub.
   if (!parsed.adapter) return { kind: 'project', projectSlug: project.slug }
+
+  // /:project/_md/:encoded-path -> in-browser markdown editor.
+  if (parsed.adapter === '_md' && parsed.slug) {
+    return {
+      kind: 'markdown-editor',
+      projectSlug: project.slug,
+      filePath: decodeURIComponent(parsed.slug),
+    }
+  }
 
   // /:project/:adapter[/:slug] resolves to a concrete session when possible.
   const sessionId = resolveSessionFromPath(parsed, projects, sessions, homeDir)
@@ -176,6 +192,8 @@ export function viewToPath(
       return '/'
     case 'project':
       return `/${view.projectSlug}`
+    case 'markdown-editor':
+      return `/${view.projectSlug}/_md/${encodeURIComponent(view.filePath)}`
     case 'session': {
       const sess = sessions.find(s => s.id === view.sessionId)
       if (!sess) return null
