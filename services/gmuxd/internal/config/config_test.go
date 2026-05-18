@@ -611,6 +611,52 @@ func TestLoadNoPeersIsValid(t *testing.T) {
 	}
 }
 
+func TestDirFallbackToCwd(t *testing.T) {
+	t.Setenv("GMUX_CONFIG_DIR", "") // ensure unset
+
+	tmp := t.TempDir()
+	gmuxDir := filepath.Join(tmp, ".gmux")
+	if err := os.Mkdir(gmuxDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(origDir) })
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := Dir(); got != gmuxDir {
+		t.Errorf("Dir() = %q, want %q", got, gmuxDir)
+	}
+}
+
+func TestDirEnvVarTakesPrecedence(t *testing.T) {
+	envDir := t.TempDir()
+	t.Setenv("GMUX_CONFIG_DIR", envDir)
+
+	tmp := t.TempDir()
+	if err := os.Mkdir(filepath.Join(tmp, ".gmux"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(origDir) })
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := Dir(); got != envDir {
+		t.Errorf("Dir() = %q, want %q (env var should win)", got, envDir)
+	}
+}
+
 func writeConfig(t *testing.T, cfgDir, content string) {
 	t.Helper()
 	os.MkdirAll(cfgDir, 0o755)

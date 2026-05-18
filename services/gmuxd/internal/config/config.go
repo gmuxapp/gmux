@@ -412,11 +412,21 @@ func (cfg Config) ListenAddr() (string, error) {
 }
 
 // Dir returns the gmux config directory.
-// Controlled entirely by the GMUX_CONFIG_DIR environment variable.
-// Returns an empty string when the variable is not set, which causes
-// all Load* functions to return defaults/nil without reading any file.
+// Uses GMUX_CONFIG_DIR if set. Otherwise falls back to a .gmux directory
+// in the current working directory if one exists. Returns an empty string
+// when neither is available, which causes all Load* functions to return
+// defaults/nil without reading any file.
 func Dir() string {
-	return os.Getenv("GMUX_CONFIG_DIR")
+	if dir := os.Getenv("GMUX_CONFIG_DIR"); dir != "" {
+		return dir
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		candidate := filepath.Join(cwd, ".gmux")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // Path returns the path to the host config file, or an empty string when
