@@ -1855,6 +1855,94 @@ func serve(stderr io.Writer) int {
 		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"written": written}})
 	})
 
+	// GET /v1/fs/{slug}/read?path=<rel> — read the raw content of a file.
+	// Returns { ok, data: { content: string } }. Capped at 5 MB.
+	mux.HandleFunc("GET /v1/fs/{slug}/read", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		rel := r.URL.Query().Get("path")
+		filePath, err := fsGuardPath(root, rel)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		const maxBytes = 5 * 1024 * 1024
+		f, err := os.Open(filePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				writeError(w, http.StatusNotFound, "not_found", "file not found")
+			} else {
+				writeError(w, http.StatusInternalServerError, "read_failed", err.Error())
+			}
+			return
+		}
+		defer f.Close()
+		data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "read_failed", err.Error())
+			return
+		}
+		if len(data) > maxBytes {
+			writeError(w, http.StatusRequestEntityTooLarge, "too_large", "file exceeds 5 MB limit")
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"content": string(data)}})
+	})
+
+	// POST /v1/fs/{slug}/write — atomically write content to a file.
+	// Body: { path: string, content: string }. Uses a temp file + rename.
+	mux.HandleFunc("POST /v1/fs/{slug}/write", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		var req struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		const maxBody = 6 * 1024 * 1024
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		filePath, err := fsGuardPath(root, req.Path)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		// Atomic write: write to a temp file in the same directory, then rename.
+		dir := filepath.Dir(filePath)
+		tmp, err := os.CreateTemp(dir, ".gmux-write-*.tmp")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "write_failed", err.Error())
+			return
+		}
+		tmpName := tmp.Name()
+		_, werr := tmp.WriteString(req.Content)
+		cerr := tmp.Close()
+		if werr != nil || cerr != nil {
+			_ = os.Remove(tmpName)
+			if werr != nil {
+				writeError(w, http.StatusInternalServerError, "write_failed", werr.Error())
+			} else {
+				writeError(w, http.StatusInternalServerError, "write_failed", cerr.Error())
+			}
+			return
+		}
+		if err := os.Rename(tmpName, filePath); err != nil {
+			_ = os.Remove(tmpName)
+			writeError(w, http.StatusInternalServerError, "write_failed", err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	})
+
 	// POST /v1/fs/{slug}/open — open a file using a program chosen by extension.
 	mux.HandleFunc("POST /v1/fs/{slug}/open", func(w http.ResponseWriter, r *http.Request) {
 		slug := r.PathValue("slug")
