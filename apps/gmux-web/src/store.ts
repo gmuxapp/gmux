@@ -582,6 +582,15 @@ export function navigateToSession(sessionId: string, replace?: boolean): boolean
 }
 
 /**
+ * Navigate to the in-browser markdown editor for a file.
+ * projectSlug: the project this file belongs to.
+ * filePath: relative path within the project root (e.g. "docs/README.md").
+ */
+export function navigateToMarkdownEditor(projectSlug: string, filePath: string): void {
+  navigate(`/${projectSlug}/_md/${encodeURIComponent(filePath)}`)
+}
+
+/**
  * Start the store: connect SSE, fetch initial data, start timers.
  * Call once from the app root.
  */

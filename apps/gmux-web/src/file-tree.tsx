@@ -15,7 +15,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
-import { markPendingLaunch } from './store'
+import { markPendingLaunch, navigateToMarkdownEditor } from './store'
 import { GitStatus } from './git-status'
 
 // ── Types ──
@@ -358,6 +358,9 @@ function FileTreeNode({
       if (!expanded.has(node.path) && !childCache.has(node.path)) {
         await onLoad(node.path)
       }
+    } else if (node.path.toLowerCase().endsWith('.md')) {
+      // Open markdown files in the in-browser Milkdown editor.
+      navigateToMarkdownEditor(slug, node.path)
     } else {
       await apiOpen(slug, node.path)
     }
