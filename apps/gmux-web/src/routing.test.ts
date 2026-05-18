@@ -333,3 +333,74 @@ describe('View round-trip', () => {
     )).toBe(true)
   })
 })
+
+describe('markdown-editor view', () => {
+  const projects: ProjectItem[] = [
+    { slug: 'gmux', match: [{ path: '/home/user/gmux' }] },
+  ]
+
+  it('parseSessionPath detects _md pseudo-adapter', () => {
+    expect(parseSessionPath('/gmux/_md/README.md')).toEqual({
+      project: 'gmux', adapter: '_md', slug: 'README.md',
+    })
+  })
+
+  it('parseSessionPath URL-decodes encoded path in slug position', () => {
+    const result = parseSessionPath('/gmux/_md/docs%2Fnotes%2Ffoo.md')
+    expect(result).toEqual({
+      project: 'gmux', adapter: '_md', slug: 'docs%2Fnotes%2Ffoo.md',
+    })
+  })
+
+  it('resolveViewFromPath returns markdown-editor for _md URL', () => {
+    expect(resolveViewFromPath('/gmux/_md/README.md', projects, [])).toEqual({
+      kind: 'markdown-editor', projectSlug: 'gmux', filePath: 'README.md',
+    })
+  })
+
+  it('resolveViewFromPath decodes URL-encoded slashes in file path', () => {
+    expect(resolveViewFromPath('/gmux/_md/docs%2Fnotes%2Ffoo.md', projects, [])).toEqual({
+      kind: 'markdown-editor', projectSlug: 'gmux', filePath: 'docs/notes/foo.md',
+    })
+  })
+
+  it('viewToPath serialises markdown-editor view', () => {
+    expect(viewToPath({ kind: 'markdown-editor', projectSlug: 'gmux', filePath: 'README.md' }, projects, []))
+      .toBe('/gmux/_md/README.md')
+  })
+
+  it('viewToPath encodes slashes in nested file paths', () => {
+    expect(viewToPath({ kind: 'markdown-editor', projectSlug: 'gmux', filePath: 'docs/notes/foo.md' }, projects, []))
+      .toBe('/gmux/_md/docs%2Fnotes%2Ffoo.md')
+  })
+
+  it('markdown-editor view round-trips for simple path', () => {
+    const view = { kind: 'markdown-editor' as const, projectSlug: 'gmux', filePath: 'README.md' }
+    const url = viewToPath(view, projects, [])
+    expect(resolveViewFromPath(url!, projects, [])).toEqual(view)
+  })
+
+  it('markdown-editor view round-trips for nested path', () => {
+    const view = { kind: 'markdown-editor' as const, projectSlug: 'gmux', filePath: 'src/docs/API.md' }
+    const url = viewToPath(view, projects, [])
+    expect(resolveViewFromPath(url!, projects, [])).toEqual(view)
+  })
+
+  it('viewsEqual returns true for identical markdown-editor views', () => {
+    expect(viewsEqual(
+      { kind: 'markdown-editor', projectSlug: 'gmux', filePath: 'README.md' },
+      { kind: 'markdown-editor', projectSlug: 'gmux', filePath: 'README.md' },
+    )).toBe(true)
+  })
+
+  it('viewsEqual returns false for different file paths', () => {
+    expect(viewsEqual(
+      { kind: 'markdown-editor', projectSlug: 'gmux', filePath: 'README.md' },
+      { kind: 'markdown-editor', projectSlug: 'gmux', filePath: 'CHANGELOG.md' },
+    )).toBe(false)
+  })
+
+  it('resolveViewFromPath falls back to project hub when project unknown', () => {
+    expect(resolveViewFromPath('/unknown/_md/README.md', projects, [])).toEqual({ kind: 'home' })
+  })
+})
