@@ -13,6 +13,13 @@
     "check": "moon check :build :test",
     "graph": "moon project-graph"
   },
+  "pnpm": {
+    "supportedArchitectures": {
+      "os": ["darwin", "linux", "current"],
+      "cpu": ["arm64", "x64", "current"],
+      "libc": ["glibc", "current"]
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.4.7",
     "@moonrepo/cli": "^2.0.4",
