@@ -76,8 +76,7 @@ func TestPiSbxMonitorNoOp(t *testing.T) {
 
 // --- Launchers ---
 
-func TestPiSbxLaunchersNoEnv(t *testing.T) {
-	t.Setenv("PI_CODING_AGENT_DIR", "")
+func TestPiSbxLaunchers(t *testing.T) {
 	launchers := NewPiSbx().Launchers()
 	if len(launchers) != 1 {
 		t.Fatalf("expected 1 launcher, got %d", len(launchers))
@@ -90,20 +89,6 @@ func TestPiSbxLaunchersNoEnv(t *testing.T) {
 		t.Error("launcher label must not be empty")
 	}
 	want := []string{"sbx", "exec", "-it", "pi-workspace", "--", "pi"}
-	if len(l.Command) != len(want) {
-		t.Fatalf("expected command %v, got %v", want, l.Command)
-	}
-	for i, arg := range want {
-		if l.Command[i] != arg {
-			t.Errorf("command[%d]: want %q, got %q", i, arg, l.Command[i])
-		}
-	}
-}
-
-func TestPiSbxLaunchersWithWorkdir(t *testing.T) {
-	t.Setenv("PI_CODING_AGENT_DIR", "/Users/james/workspace/.pi-user")
-	l := NewPiSbx().Launchers()[0]
-	want := []string{"sbx", "exec", "-it", "-w", "/Users/james/workspace", "pi-workspace", "--", "pi"}
 	if len(l.Command) != len(want) {
 		t.Fatalf("expected command %v, got %v", want, l.Command)
 	}
@@ -132,74 +117,6 @@ func TestPiSbxImplementsCapabilities(t *testing.T) {
 	}
 	if _, ok := a.(adapter.Resumer); !ok {
 		t.Fatal("should implement Resumer")
-	}
-}
-
-// --- Cwd translation ---
-
-func TestPiSbxParseNewLinesTranslatesCwd(t *testing.T) {
-	t.Setenv("PI_CODING_AGENT_DIR", "/Users/james/workspace/.pi-user")
-	events := NewPiSbx().ParseNewLines([]string{
-		`{"type":"session","id":"abc","cwd":"/home/agent/workspace","timestamp":"2026-03-19T10:00:00Z"}`,
-	}, "")
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Cwd != "/Users/james/workspace" {
-		t.Errorf("expected translated host cwd, got %q", events[0].Cwd)
-	}
-}
-
-func TestPiSbxParseNewLinesTranslatesSubpathCwd(t *testing.T) {
-	t.Setenv("PI_CODING_AGENT_DIR", "/Users/james/workspace/.pi-user")
-	events := NewPiSbx().ParseNewLines([]string{
-		`{"type":"session","id":"abc","cwd":"/home/agent/workspace/subdir/project","timestamp":"2026-03-19T10:00:00Z"}`,
-	}, "")
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Cwd != "/Users/james/workspace/subdir/project" {
-		t.Errorf("expected translated subpath, got %q", events[0].Cwd)
-	}
-}
-
-func TestPiSbxParseNewLinesPassthroughNonSandboxCwd(t *testing.T) {
-	t.Setenv("PI_CODING_AGENT_DIR", "/Users/james/workspace/.pi-user")
-	events := NewPiSbx().ParseNewLines([]string{
-		`{"type":"session","id":"abc","cwd":"/some/other/path","timestamp":"2026-03-19T10:00:00Z"}`,
-	}, "")
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Cwd != "/some/other/path" {
-		t.Errorf("non-sandbox cwd should pass through unchanged, got %q", events[0].Cwd)
-	}
-}
-
-func TestPiSbxParseNewLinesNoTranslationWithoutEnv(t *testing.T) {
-	t.Setenv("PI_CODING_AGENT_DIR", "")
-	events := NewPiSbx().ParseNewLines([]string{
-		`{"type":"session","id":"abc","cwd":"/home/agent/workspace","timestamp":"2026-03-19T10:00:00Z"}`,
-	}, "")
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Cwd != "/home/agent/workspace" {
-		t.Errorf("without PI_CODING_AGENT_DIR cwd should pass through, got %q", events[0].Cwd)
-	}
-}
-
-func TestPiSbxParseSessionFileTranslatesCwd(t *testing.T) {
-	t.Setenv("PI_CODING_AGENT_DIR", "/Users/james/workspace/.pi-user")
-	path := writeTempJSONL(t,
-		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/home/agent/workspace"}`,
-	)
-	info, err := NewPiSbx().ParseSessionFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Cwd != "/Users/james/workspace" {
-		t.Errorf("expected translated cwd, got %q", info.Cwd)
 	}
 }
 

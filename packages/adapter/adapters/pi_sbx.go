@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 
@@ -62,29 +61,11 @@ func (p *PiSbx) Env(_ adapter.EnvContext) []string { return nil }
 // Monitor is a no-op — status is driven by the JSONL session file via FileMonitor.
 func (p *PiSbx) Monitor(_ []byte) *adapter.Event { return nil }
 
-// workspaceDir derives the host workspace path from PI_CODING_AGENT_DIR.
-// PI_CODING_AGENT_DIR points to the .pi-user directory inside the workspace
-// (e.g. /Users/james/workspace/.pi-user), so the workspace is its parent.
-func (p *PiSbx) workspaceDir() string {
-	dir := os.Getenv("PI_CODING_AGENT_DIR")
-	if dir == "" {
-		return ""
-	}
-	return filepath.Dir(dir)
-}
-
 func (p *PiSbx) Launchers() []adapter.Launcher {
-	// Default: run pi without a specific working directory.
-	cmd := []string{"sbx", "exec", "-it", "pi-workspace", "--", "pi"}
-	// If we know the workspace path, pass it via -w so pi starts in the right
-	// project directory and picks up the correct session context.
-	if ws := p.workspaceDir(); ws != "" {
-		cmd = []string{"sbx", "exec", "-it", "-w", ws, "pi-workspace", "--", "pi"}
-	}
 	return []adapter.Launcher{{
 		ID:          "pi-sbx",
 		Label:       "Pi (sandbox)",
-		Command:     cmd,
+		Command:     []string{"sbx", "exec", "-it", "pi-workspace", "--", "pi"},
 		Description: "Launch pi in the workspace sandbox",
 	}}
 }
