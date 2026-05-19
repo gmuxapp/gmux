@@ -59,9 +59,12 @@ install:
     if [[ "$goos" == "darwin" ]]; then
       plist="$HOME/Library/LaunchAgents/com.gmuxapp.gmuxd.plist"
       mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.local/state/gmux"
-      GMUXD_BIN="$prefix/bin/gmuxd" \
-        envsubst '${GMUXD_BIN} ${HOME} ${SHELL} ${PATH}' \
-        < "{{justfile_directory()}}/scripts/com.gmuxapp.gmuxd.plist.template" \
+      sed \
+        -e "s|\${GMUXD_BIN}|$prefix/bin/gmuxd|g" \
+        -e "s|\${HOME}|$HOME|g" \
+        -e "s|\${SHELL}|$SHELL|g" \
+        -e "s|\${PATH}|$PATH|g" \
+        "{{justfile_directory()}}/scripts/com.gmuxapp.gmuxd.plist.template" \
         > "$plist"
       echo "Installing launchd agent..."
       launchctl bootout "gui/$(id -u)/com.gmuxapp.gmuxd" 2>/dev/null || true
