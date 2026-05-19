@@ -423,22 +423,36 @@ export function TerminalView({
     fitAddonRef.current = fitAddon
     termIoRef.current = createTerminalIO(term, {
       getState() {
-        // ghostty-web scroll API:
-        //   getViewportY() = 0 when viewing live output (at bottom)
-        //                  = N after scrollToLine(N), where N is 0-indexed from top of scrollback
-        //   getScrollbackLength() = number of scrollback lines (= xterm's baseY)
-        //   buf.viewportY and buf.baseY are always 0 — not useful
+        // ghostty-web coordinate system:
+        //   getViewportY() = 0     → at the bottom (no scrollback visible)
+        //                  = N > 0 → N scrollback lines visible at the top of the
+        //                            viewport (i.e. distance-from-bottom in lines)
+        //   getScrollbackLength()  → total scrollback lines (= xterm's baseY)
         //
-        // xterm-compatible translation:
-        //   baseY      = scrollbackLen
-        //   viewportY  = scrollbackLen when at bottom (gvY=0)
-        //              = gvY           when scrolled into history (gvY>0)
+        // terminal-io expects xterm-STABLE absolute coords:
+        //   viewportY = absolute buffer-line index at the top of the viewport
+        //             = 0 at top of scrollback, scrollbackLen at bottom
+        //   baseY     = scrollbackLen
+        //
+        // Converting: viewportY = scrollbackLen - gvY
+        //
+        // Stability guarantee: when G new lines are pushed into scrollback the same
+        // absolute index still refers to the same buffer line. terminal-io's plain
+        // restore (scrollToLine(snap.viewportY)) therefore keeps the right content
+        // visible without any explicit growth-compensation arithmetic.
         const scrollbackLen = term.getScrollbackLength()
         const gvY = term.getViewportY()
-        const viewportY = gvY === 0 ? scrollbackLen : gvY
+        const viewportY = scrollbackLen - gvY
         return { viewportY, baseY: scrollbackLen, rows: term.rows }
       },
-      scrollToLine(line: number) { term.scrollToLine(line) },
+      scrollToLine(line: number) {
+        // Invert the xterm-stable → ghostty translation:
+        //   ghostty gvY = scrollbackLen - xterm-stable line
+        // Re-fetch scrollbackLen here (after the write) so the conversion uses the
+        // current buffer size — not the size captured before the write.
+        const s = term.getScrollbackLength()
+        term.scrollToLine(s - line)
+      },
       scrollToBottom() { term.scrollToBottom() },
       getLine(y: number): string | null {
         const line = term.buffer.active.getLine(y)
@@ -500,11 +514,11 @@ export function TerminalView({
     const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
 
     const scrollDisposable = term.onScroll(() => {
-      // ghostty-web: getViewportY()=0 at bottom, =N (>0) when scrolled into history.
-      // "scrolled up" = not at bottom AND distance from bottom exceeds threshold.
-      const scrollbackLen = term.getScrollbackLength()
+      // ghostty-web: getViewportY()=0 at bottom, =N when N scrollback lines are visible.
+      // gvY IS the distance scrolled from the bottom; show the jump-to-bottom button
+      // only when that distance exceeds the threshold.
       const gvY = term.getViewportY()
-      setScrolledUp(gvY > 0 && scrollbackLen - gvY > SCROLL_THRESHOLD)
+      setScrolledUp(gvY > SCROLL_THRESHOLD)
     })
 
     const handleGlobalKeydown = (ev: KeyboardEvent) => {
