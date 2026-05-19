@@ -1971,7 +1971,7 @@ func serve(stderr io.Writer) int {
 		// Split opener string into command + args so the config can carry
 		// flags (e.g. "glow -p" for pager mode, "chafa --format=symbols").
 		openerParts := strings.Fields(opener)
-		command := append(openerParts, filePath)
+		command := append(openerParts, filepath.Base(req.Path))
 		pid, err := launchGmux(gmuxBin, command, root, "", true)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())

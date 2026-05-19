@@ -15,7 +15,8 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
-import { markPendingLaunch, navigateToMarkdownEditor } from './store'
+import { markPendingLaunch, navigateToMarkdownEditor, sessions, navigateToSession } from './store'
+import type { Session } from './types'
 import { GitStatus } from './git-status'
 
 // ── Types ──
@@ -290,6 +291,26 @@ interface AddingState {
 // ── Copy helper ──
 
 /** Returns the path relative to the project root (node.path is already relative). */
+/**
+ * Returns the first alive session in `cwd` whose last command argument
+ * matches the leaf filename of `relPath`. Used to focus an existing file
+ * session instead of spawning a duplicate.
+ */
+export function findOpenFileSession(
+  sessionList: Session[],
+  cwd: string,
+  relPath: string,
+): Session | undefined {
+  const base = relPath.split('/').pop() ?? relPath
+  return sessionList.find(
+    s =>
+      s.alive &&
+      s.cwd === cwd &&
+      s.command.length > 0 &&
+      s.command[s.command.length - 1] === base,
+  )
+}
+
 export function copyRelativePath(path: string): Promise<void> {
   return navigator.clipboard.writeText(path)
 }
@@ -299,6 +320,7 @@ export function copyRelativePath(path: string): Promise<void> {
 interface FileTreeNodeProps {
   node: TreeNode
   slug: string
+  cwd: string
   depth: number
   expanded: Set<string>
   childCache: Map<string, TreeNode[]>
@@ -323,6 +345,7 @@ interface FileTreeNodeProps {
 function FileTreeNode({
   node,
   slug,
+  cwd,
   depth,
   expanded,
   childCache,
@@ -362,6 +385,11 @@ function FileTreeNode({
       // Open markdown files in the in-browser Milkdown editor.
       navigateToMarkdownEditor(slug, node.path)
     } else {
+      const existing = findOpenFileSession(sessions.value, cwd, node.path)
+      if (existing) {
+        navigateToSession(existing.id)
+        return
+      }
       await apiOpen(slug, node.path)
     }
   }, [node, slug, expanded, childCache, onToggle, onLoad])
@@ -460,8 +488,8 @@ function FileTreeNode({
               key={child.path}
               node={child}
               slug={slug}
+              cwd={cwd}
               depth={depth + 1}
-              expanded={expanded}
               childCache={childCache}
               adding={adding}
               renamingPath={renamingPath}
@@ -815,6 +843,7 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
             key={node.path}
             node={node}
             slug={projectSlug}
+            cwd={cwd}
             depth={0}
             expanded={expanded}
             childCache={childCacheRef.current}

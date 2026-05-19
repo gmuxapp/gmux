@@ -7,8 +7,10 @@ import {
   isHiddenName,
   copyRelativePath,
   pruneExpanded,
+  findOpenFileSession,
   type FileEntry,
 } from './file-tree'
+import type { Session } from './types'
 
 describe('normalizeFsPath', () => {
   it('strips leading slashes', () => {
@@ -209,5 +211,66 @@ describe('copyRelativePath', () => {
   it('handles a root-level file (no directory prefix)', async () => {
     await copyRelativePath('README.md')
     expect(writeText).toHaveBeenCalledWith('README.md')
+  })
+})
+
+// ── findOpenFileSession ──
+
+function makeSession(overrides: Partial<Session> = {}): Session {
+  return {
+    id: 'sess-1',
+    created_at: '',
+    command: ['hx', 'file.tsx'],
+    cwd: '/home/james/projects/jmux',
+    kind: 'terminal',
+    alive: true,
+    pid: 123,
+    exit_code: null,
+    started_at: '',
+    exited_at: null,
+    title: 'file.tsx',
+    subtitle: '',
+    status: null,
+    unread: false,
+    ...overrides,
+  }
+}
+
+describe('findOpenFileSession', () => {
+  const cwd = '/home/james/projects/jmux'
+
+  it('returns undefined when sessions list is empty', () => {
+    expect(findOpenFileSession([], cwd, 'apps/src/file.tsx')).toBeUndefined()
+  })
+
+  it('returns undefined when no session is alive', () => {
+    const s = makeSession({ alive: false, command: ['hx', 'file.tsx'], cwd })
+    expect(findOpenFileSession([s], cwd, 'apps/src/file.tsx')).toBeUndefined()
+  })
+
+  it('returns undefined when cwd does not match', () => {
+    const s = makeSession({ cwd: '/other/path', command: ['hx', 'file.tsx'] })
+    expect(findOpenFileSession([s], cwd, 'apps/src/file.tsx')).toBeUndefined()
+  })
+
+  it('returns undefined when filename does not match', () => {
+    const s = makeSession({ cwd, command: ['hx', 'other.tsx'] })
+    expect(findOpenFileSession([s], cwd, 'apps/src/file.tsx')).toBeUndefined()
+  })
+
+  it('returns session when alive, cwd matches, leaf filename matches nested relPath', () => {
+    const s = makeSession({ cwd, command: ['hx', 'file.tsx'] })
+    expect(findOpenFileSession([s], cwd, 'apps/src/file.tsx')).toBe(s)
+  })
+
+  it('returns session for root-level file (no slash in relPath)', () => {
+    const s = makeSession({ cwd, command: ['hx', 'README.md'] })
+    expect(findOpenFileSession([s], cwd, 'README.md')).toBe(s)
+  })
+
+  it('returns the first matching session when multiple exist', () => {
+    const s1 = makeSession({ id: 'sess-1', cwd, command: ['hx', 'file.tsx'] })
+    const s2 = makeSession({ id: 'sess-2', cwd, command: ['hx', 'file.tsx'] })
+    expect(findOpenFileSession([s1, s2], cwd, 'apps/src/file.tsx')).toBe(s1)
   })
 })

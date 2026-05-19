@@ -84,22 +84,33 @@ Sessions are grouped into **folders** by working directory. Each folder heading 
 ## Features
 
 ### Sessions
-- **Launch anything** — `gmux <command>` wraps any process in a managed session
-- **Full terminal** — xterm.js with WebSocket transport, the same terminal emulator as VS Code
-- **128KB scrollback** — replays instantly on reconnect, no lost context
-- **Flicker-free switching** — DEC 2026 synchronized output renders session swaps in a single frame
-- **Session lifecycle** — live status, exit codes, kill from the UI
-- **Reconnecting** — tab away, come back, the terminal is right where you left it
+
+* **Launch anything** — `gmux <command>` wraps any process in a managed session
+
+* **Full terminal** — xterm.js with WebSocket transport, the same terminal emulator as VS Code
+
+* **128KB scrollback** — replays instantly on reconnect, no lost context
+
+* **Flicker-free switching** — DEC 2026 synchronized output renders session swaps in a single frame
+
+* **Session lifecycle** — live status, exit codes, kill from the UI
+
+* **Reconnecting** — tab away, come back, the terminal is right where you left it
 
 ### Adapters — session-level intelligence
+
 Adapters teach gmux how to work with specific tools. They're compiled into the binary and selected automatically by command name.
 
-- **Auto-detection** — `gmux pi` recognizes pi and activates the pi adapter. No flags needed.
-- **Rich status** — adapters report what the child is doing: thinking, waiting for input, tests passing, build failing
-- **Child awareness** — any tool can self-report status via `PUT /status` on `$GMUX_SOCKET`, no adapter required
-- **Graceful fallback** — unknown commands get the shell adapter
+* **Auto-detection** — `gmux pi` recognizes pi and activates the pi adapter. No flags needed.
+
+* **Rich status** — adapters report what the child is doing: thinking, waiting for input, tests passing, build failing
+
+* **Child awareness** — any tool can self-report status via `PUT /status` on `$GMUX_SOCKET`, no adapter required
+
+* **Graceful fallback** — unknown commands get the shell adapter
 
 ### Probes — directory-level intelligence
+
 Probes observe the working directory and enrich folder headings with project context.
 
 ```mermaid
@@ -117,23 +128,35 @@ graph TD
     s2 --> dot
 ```
 
-- **Git** — branch name, dirty file count
-- **GitHub PR** — PR number, status, clickable link
-- **Script probes** — drop a bash script in `~/.config/gmux/probes/`, it runs against each matching directory and returns JSON. Five lines gets you custom folder intelligence.
+* **Git** — branch name, dirty file count
+
+* **GitHub PR** — PR number, status, clickable link
+
+* **Script probes** — drop a bash script in `~/.config/gmux/probes/`, it runs against each matching directory and returns JSON. Five lines gets you custom folder intelligence.
 
 ### UI
-- **Triage-first** — sessions sorted by what needs attention, not alphabetically
-- **Automatic grouping** — sessions sharing a working directory group into folders, no manual organization
-- **Header bar** — contextual metadata and actions for the selected session
-- **Mobile responsive** — same URL on your phone, tap a session, type a steering message, done
-- **URL scoping** — `?project=myapp` filters to one project. Bookmark it for a per-project browser tab.
-- **Nord dark theme** — designed for long sessions, Inter + JetBrains Mono typography
+
+* **Triage-first** — sessions sorted by what needs attention, not alphabetically
+
+* **Automatic grouping** — sessions sharing a working directory group into folders, no manual organization
+
+* **Header bar** — contextual metadata and actions for the selected session
+
+* **Mobile responsive** — same URL on your phone, tap a session, type a steering message, done
+
+* **URL scoping** — `?project=myapp` filters to one project. Bookmark it for a per-project browser tab.
+
+* **Nord dark theme** — designed for long sessions, Inter + JetBrains Mono typography
 
 ### Architecture
-- **Runner-authoritative** — gmux is the source of truth, gmuxd is a rebuildable cache
-- **No external dependencies** — no tmux, no screen, no abduco. Two Go binaries and a web app.
-- **Web-first** — works on desktop, tablet, phone. Same URL everywhere.
-- **Zero config** — run `gmux <command>`, open a browser
+
+* **Runner-authoritative** — gmux is the source of truth, gmuxd is a rebuildable cache
+
+* **No external dependencies** — no tmux, no screen, no abduco. Two Go binaries and a web app.
+
+* **Web-first** — works on desktop, tablet, phone. Same URL everywhere.
+
+* **Zero config** — run `gmux <command>`, open a browser
 
 ## Extensibility
 
@@ -187,11 +210,15 @@ graph TB
 
 Documentation lives in the [website](apps/website/src/content/docs/):
 
-- [Architecture](apps/website/src/content/docs/architecture.md) — runtime structure (gmux, gmuxd, web UI)
-- [Session Schema](apps/website/src/content/docs/develop/session-schema.md) — metadata model
-- [Adapter Architecture](apps/website/src/content/docs/develop/adapter-architecture.md) — how adapters work
-- [Security](apps/website/src/content/docs/security.md) — threat model and safeguards
-- [Remote Access](apps/website/src/content/docs/remote-access.md) — tailscale setup
+* [Architecture](apps/website/src/content/docs/architecture.md) — runtime structure (gmux, gmuxd, web UI)
+
+* [Session Schema](apps/website/src/content/docs/develop/session-schema.md) — metadata model
+
+* [Adapter Architecture](apps/website/src/content/docs/develop/adapter-architecture.md) — how adapters work
+
+* [Security](apps/website/src/content/docs/security.md) — threat model and safeguards
+
+* [Remote Access](apps/website/src/content/docs/remote-access.md) — tailscale setup
 
 ## License
 
