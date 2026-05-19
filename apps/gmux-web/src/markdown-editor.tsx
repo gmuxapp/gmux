@@ -217,21 +217,22 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
       </div>
 
       {/* Body */}
-      {loadError ? (
+      {loadError && (
         <div class="state-message">
           <div class="state-icon" style={{ color: 'var(--status-error)' }}>⚠</div>
           <div class="state-title">Failed to load file</div>
           <div class="state-subtitle">{loadError}</div>
         </div>
-      ) : loading ? (
+      )}
+      {loading && !loadError && (
         <div class="state-message">
           <div class="state-subtitle">Loading…</div>
         </div>
-      ) : (
-        <div class="md-editor-scroll">
-          <div class="md-editor-container" ref={containerRef} />
-        </div>
       )}
+      {/* Always rendered so containerRef is mounted before useEffect runs */}
+      <div class="md-editor-scroll" style={{ display: loading || loadError ? 'none' : undefined }}>
+        <div class="md-editor-container" ref={containerRef} />
+      </div>
     </div>
   )
 }
