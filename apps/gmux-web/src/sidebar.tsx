@@ -13,6 +13,8 @@ import {
   folders, selectedId, currentProjectSlug,
   activityMap, unmatchedActiveCount, projects, connState,
   updateProjects, reorderSessions, view,
+  openMarkdownTabs, closeMarkdownTab,
+  type MarkdownTab,
   type DotState,
 } from './store'
 import { useInstallPrompt } from './use-install-prompt'
@@ -175,11 +177,13 @@ function MarkdownTabItem({
   href,
   fileName,
   selected,
+  onClose,
   onClick,
 }: {
   href: string
   fileName: string
   selected: boolean
+  onClose: () => void
   onClick?: () => void
 }) {
   return (
@@ -187,6 +191,7 @@ function MarkdownTabItem({
       class={`session-item${selected ? ' selected' : ''}`}
       href={href}
       onClick={() => onClick?.()}
+      onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onClose() } }}
     >
       <span class="session-dot-indicator none" />
       <div class="session-content">
@@ -195,6 +200,13 @@ function MarkdownTabItem({
           <span class="session-title">{fileName}</span>
         </div>
       </div>
+      <button
+        class="session-close-btn"
+        onClick={(e) => { e.stopPropagation(); e.preventDefault(); onClose() }}
+        title="Close"
+      >
+        ×
+      </button>
     </a>
   )
 }
@@ -208,7 +220,9 @@ function FolderGroup({
   curProjectSlug,
   resumingId,
   am,
-  markdownView,
+  markdownTabs,
+  currentMdView,
+  onCloseMdTab,
   onCloseSession,
   onClick,
 }: {
@@ -218,7 +232,9 @@ function FolderGroup({
   curProjectSlug: string | null
   resumingId: string | null
   am: ReadonlyMap<string, 'active' | 'fading'>
-  markdownView: { projectSlug: string; filePath: string } | null
+  markdownTabs: MarkdownTab[]
+  currentMdView: { projectSlug: string; filePath: string } | null
+  onCloseMdTab: (projectSlug: string, filePath: string) => void
   onCloseSession: (session: Session) => void
   onClick?: () => void
 }) {
@@ -268,14 +284,16 @@ function FolderGroup({
         />
       </div>
       <div class="folder-sessions">
-        {markdownView?.projectSlug === folder.path && (
+        {markdownTabs.filter(t => t.projectSlug === folder.path).map(tab => (
           <MarkdownTabItem
-            href={`/${folder.path}/_md/${encodeURIComponent(markdownView.filePath)}`}
-            fileName={markdownView.filePath.split('/').pop() ?? markdownView.filePath}
-            selected={true}
+            key={tab.filePath}
+            href={`/${folder.path}/_md/${encodeURIComponent(tab.filePath)}`}
+            fileName={tab.filePath.split('/').pop() ?? tab.filePath}
+            selected={currentMdView?.projectSlug === folder.path && currentMdView?.filePath === tab.filePath}
+            onClose={() => onCloseMdTab(tab.projectSlug, tab.filePath)}
             onClick={onClick}
           />
-        )}
+        ))}
         {displayItems.map((s, i) => (
           <SessionItem
             key={s.id}
@@ -324,7 +342,8 @@ export function Sidebar({
   const am = activityMap.value
   const projectBySlug = new Map(projectsVal.map(p => [p.slug, p]))
   const viewVal = view.value
-  const markdownView = viewVal?.kind === 'markdown-editor'
+  const mdTabs = openMarkdownTabs.value
+  const currentMdView = viewVal?.kind === 'markdown-editor'
     ? { projectSlug: viewVal.projectSlug, filePath: viewVal.filePath }
     : null
 
@@ -347,7 +366,7 @@ export function Sidebar({
   // Find the current project's filesystem root for the file tree.
   // Priority: project hub > markdown editor > session's folder.
   const activeProjectSlug = curProjectSlug
-    ?? markdownView?.projectSlug
+    ?? currentMdView?.projectSlug
     ?? foldersVal.find(f => f.sessions.some(s => s.id === selId || s.slug === selId))?.path
     ?? null
   const currentFolder = activeProjectSlug
@@ -388,7 +407,9 @@ export function Sidebar({
                   curProjectSlug={curProjectSlug}
                   resumingId={resumingId}
                   am={am}
-                  markdownView={markdownView}
+                  markdownTabs={mdTabs}
+                  currentMdView={currentMdView}
+                  onCloseMdTab={closeMarkdownTab}
                   onCloseSession={onCloseSession}
                   onClick={onClose}
                 />

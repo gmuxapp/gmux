@@ -35,6 +35,48 @@ export const discovered = signal<DiscoveredProject[]>([])
 export const unmatchedActiveCount = signal(0)
 
 export const peers = signal<PeerInfo[]>([])
+
+// ── Open markdown editor tabs ────────────────────────────────────────────────
+
+export interface MarkdownTab {
+  projectSlug: string
+  filePath: string
+}
+
+/** Persistent list of open markdown editor tabs, keyed by projectSlug+filePath. */
+export const openMarkdownTabs = signal<MarkdownTab[]>(
+  (() => {
+    try {
+      const stored = localStorage.getItem('gmux:openMarkdownTabs')
+      return stored ? (JSON.parse(stored) as MarkdownTab[]) : []
+    } catch { return [] }
+  })()
+)
+
+// Persist to localStorage whenever tabs change.
+effect(() => {
+  try { localStorage.setItem('gmux:openMarkdownTabs', JSON.stringify(openMarkdownTabs.value)) } catch { /* ignore */ }
+})
+
+/** Add a tab if not already open (used by navigateToMarkdownEditor and the
+ *  view-sync effect so direct URL loads also register a tab). */
+function ensureMarkdownTab(projectSlug: string, filePath: string): void {
+  const tabs = openMarkdownTabs.value
+  if (!tabs.some(t => t.projectSlug === projectSlug && t.filePath === filePath)) {
+    openMarkdownTabs.value = [...tabs, { projectSlug, filePath }]
+  }
+}
+
+/** Remove a markdown tab and navigate away if it was currently open. */
+export function closeMarkdownTab(projectSlug: string, filePath: string): void {
+  openMarkdownTabs.value = openMarkdownTabs.value.filter(
+    t => !(t.projectSlug === projectSlug && t.filePath === filePath),
+  )
+  const v = view.value
+  if (v?.kind === 'markdown-editor' && v.projectSlug === projectSlug && v.filePath === filePath) {
+    navigate(`/${projectSlug}`)
+  }
+}
 export const launchers = signal<LauncherDef[]>([])
 export const defaultLauncher = signal<string>('shell')
 
@@ -587,6 +629,7 @@ export function navigateToSession(sessionId: string, replace?: boolean): boolean
  * filePath: relative path within the project root (e.g. "docs/README.md").
  */
 export function navigateToMarkdownEditor(projectSlug: string, filePath: string): void {
+  ensureMarkdownTab(projectSlug, filePath)
   navigate(`/${projectSlug}/_md/${encodeURIComponent(filePath)}`)
 }
 
@@ -614,6 +657,12 @@ export function initStore(): () => void {
     activeIds.forEach(id => handleActivity(id))
     const tick = setInterval(() => activeIds.forEach(id => handleActivity(id)), 2000)
     cleanups.push(() => clearInterval(tick))
+    // Sync direct URL navigation to markdown tabs (mock mode).
+    const disposeMdSync = effect(() => {
+      const v = view.value
+      if (v?.kind === 'markdown-editor') ensureMarkdownTab(v.projectSlug, v.filePath)
+    })
+    cleanups.push(disposeMdSync)
     return () => cleanups.forEach(fn => fn())
   }
 
@@ -730,6 +779,13 @@ export function initStore(): () => void {
     }
   })
   cleanups.push(disposeMarkRead)
+
+  // Sync direct URL navigation → open markdown tab.
+  const disposeMdSync = effect(() => {
+    const v = view.value
+    if (v?.kind === 'markdown-editor') ensureMarkdownTab(v.projectSlug, v.filePath)
+  })
+  cleanups.push(disposeMdSync)
 
   return () => cleanups.forEach(fn => fn())
 }
