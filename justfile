@@ -35,7 +35,7 @@ start:
     os=$(uname -s | tr '[:upper:]' '[:lower:]')
     exec {{bin}}/gmuxd-${os}-arm64 start
 
-# Install binaries to $(brew --prefix)/bin and restart gmuxd
+# Install binaries to $(brew --prefix)/bin and register gmuxd as a launchd agent.
 # Works on macOS (installs darwin-arm64 build); can also be run on Linux.
 install:
     #!/usr/bin/env bash
@@ -56,6 +56,51 @@ install:
       codesign --sign - --force "$prefix/bin/gmux"
       codesign --sign - --force "$prefix/bin/gmuxd"
     fi
-    echo "Restarting gmuxd..."
-    nohup gmuxd restart >/dev/null 2>&1 &
-    echo "Done. gmux and gmuxd installed to $prefix/bin/"
+    if [[ "$goos" == "darwin" ]]; then
+      plist="$HOME/Library/LaunchAgents/com.gmuxapp.gmuxd.plist"
+      mkdir -p "$HOME/Library/LaunchAgents"
+      cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.gmuxapp.gmuxd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$prefix/bin/gmuxd</string>
+    <string>run</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>$HOME</string>
+    <key>SHELL</key>
+    <string>${SHELL:-/bin/zsh}</string>
+    <key>PATH</key>
+    <string>$PATH</string>
+  </dict>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$HOME/.local/state/gmux/gmuxd.log</string>
+  <key>StandardErrorPath</key>
+  <string>$HOME/.local/state/gmux/gmuxd.log</string>
+</dict>
+</plist>
+PLIST
+      mkdir -p "$HOME/.local/state/gmux"
+      echo "Installing launchd agent..."
+      launchctl bootout "gui/$(id -u)/com.gmuxapp.gmuxd" 2>/dev/null || true
+      launchctl bootstrap "gui/$(id -u)" "$plist"
+      echo "Done. gmux and gmuxd installed to $prefix/bin/ (gmuxd running as launchd agent)"
+    else
+      echo "Restarting gmuxd..."
+      nohup gmuxd restart >/dev/null 2>&1 &
+      echo "Done. gmux and gmuxd installed to $prefix/bin/"
+    fi
