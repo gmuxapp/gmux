@@ -58,43 +58,11 @@ install:
     fi
     if [[ "$goos" == "darwin" ]]; then
       plist="$HOME/Library/LaunchAgents/com.gmuxapp.gmuxd.plist"
-      mkdir -p "$HOME/Library/LaunchAgents"
-      cat > "$plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.gmuxapp.gmuxd</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$prefix/bin/gmuxd</string>
-    <string>run</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>HOME</key>
-    <string>$HOME</string>
-    <key>SHELL</key>
-    <string>${SHELL:-/bin/zsh}</string>
-    <key>PATH</key>
-    <string>$PATH</string>
-  </dict>
-  <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>$HOME/.local/state/gmux/gmuxd.log</string>
-  <key>StandardErrorPath</key>
-  <string>$HOME/.local/state/gmux/gmuxd.log</string>
-</dict>
-</plist>
-PLIST
-      mkdir -p "$HOME/.local/state/gmux"
+      mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.local/state/gmux"
+      GMUXD_BIN="$prefix/bin/gmuxd" \
+        envsubst '${GMUXD_BIN} ${HOME} ${SHELL} ${PATH}' \
+        < "{{justfile_directory()}}/scripts/com.gmuxapp.gmuxd.plist.template" \
+        > "$plist"
       echo "Installing launchd agent..."
       launchctl bootout "gui/$(id -u)/com.gmuxapp.gmuxd" 2>/dev/null || true
       launchctl bootstrap "gui/$(id -u)" "$plist"

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.gmuxapp.gmuxd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${GMUXD_BIN}</string>
+    <string>run</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>${HOME}</string>
+    <key>SHELL</key>
+    <string>${SHELL}</string>
+    <key>PATH</key>
+    <string>${PATH}</string>
+  </dict>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${HOME}/.local/state/gmux/gmuxd.log</string>
+  <key>StandardErrorPath</key>
+  <string>${HOME}/.local/state/gmux/gmuxd.log</string>
+</dict>
+</plist>
