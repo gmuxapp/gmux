@@ -228,6 +228,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     exit_code: null,
     started_at: '',
     exited_at: null,
+    socket_path: '',
     title: 'file.tsx',
     subtitle: '',
     status: null,

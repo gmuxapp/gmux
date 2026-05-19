@@ -490,6 +490,7 @@ function FileTreeNode({
               slug={slug}
               cwd={cwd}
               depth={depth + 1}
+              expanded={expanded}
               childCache={childCache}
               adding={adding}
               renamingPath={renamingPath}

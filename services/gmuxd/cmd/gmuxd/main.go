@@ -1958,8 +1958,7 @@ func serve(stderr io.Writer) int {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
 			return
 		}
-		filePath, err := fsGuardPath(root, req.Path)
-		if err != nil {
+		if _, err := fsGuardPath(root, req.Path); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
 			return
 		}
