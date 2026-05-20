@@ -20,6 +20,7 @@ import { installCopySession } from './mock-data/export-session'
 
 import {
   sessions, connState, selected, selectedId, view, health, peers,
+  folders,
   terminalOptions, keybinds, macCommandIsCtrl,
   backgroundActivity, unreadCount,
   urlPath,
@@ -382,7 +383,21 @@ function App() {
   const [resumingId, setResumingId] = useState<string | null>(null)
 
   const handleCloseSession = useCallback((session: Session) => {
-    dismissSession(session.id)
+    // If closing the currently-viewed session, navigate to the one above it
+    // (or below if it was the first), rather than landing on the project hub.
+    const isSelected = selectedId.value === session.id
+    if (isSelected) {
+      const folder = folders.value.find(f => f.sessions.some(s => s.id === session.id))
+      const allVisible = folder?.sessions.filter(s => s.alive || s.resumable) ?? []
+      const idx = allVisible.findIndex(s => s.id === session.id)
+      const remaining = allVisible.filter(s => s.id !== session.id)
+      // Prefer the item above; fall back to the new first item.
+      const sibling = idx > 0 ? remaining[idx - 1] : remaining[0]
+      dismissSession(session.id)
+      if (sibling) navigateToSession(sibling.id, true)
+    } else {
+      dismissSession(session.id)
+    }
   }, [])
 
   const handleResume = useCallback((id: string) => {
