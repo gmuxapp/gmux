@@ -218,7 +218,7 @@ func filterEnvPrefix(env []string, prefix string) []string {
 // the runner calls POST /v1/sessions/{id}/dismiss after a clean
 // (exit 0) exit, removing the dead session from the UI automatically.
 // Used for file-open sessions where a clean exit means "done viewing".
-func launchGmux(gmuxBin string, command []string, cwd, resumeID string, dismissOnExit bool) (int, error) {
+func launchGmux(gmuxBin string, command []string, cwd, resumeID, sessionTitle string, dismissOnExit bool) (int, error) {
 	cmd := exec.Command(gmuxBin, command...)
 	cmd.Dir = cwd
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -239,6 +239,9 @@ func launchGmux(gmuxBin string, command []string, cwd, resumeID string, dismissO
 	// it just launched this process) and use the correct socket path
 	// directly without re-deriving it from XDG_STATE_HOME.
 	cmd.Env = append(cmd.Env, "GMUX_DAEMON_SOCKET="+paths.SocketPath())
+	if sessionTitle != "" {
+		cmd.Env = append(cmd.Env, "GMUX_SESSION_TITLE="+sessionTitle)
+	}
 	if dismissOnExit {
 		cmd.Env = append(cmd.Env, "GMUX_DISMISS_ON_EXIT=1")
 	}
@@ -1093,7 +1096,7 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		pid, err := launchGmux(gmuxBin, req.Command, cwd, "", false)
+		pid, err := launchGmux(gmuxBin, req.Command, cwd, "", "", false)
 		if err != nil {
 			log.Printf("launch: failed to start gmux: %v", err)
 			writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
@@ -1188,7 +1191,7 @@ func serve(stderr io.Writer) int {
 			// branch and the session keeps its identity (and its
 			// scrollback directory). See ADR 0003.
 			resumeCwd := projects.NormalizePath(sess.Cwd)
-			pid, err := launchGmux(gmuxBin, sess.Command, resumeCwd, sessionID, false)
+			pid, err := launchGmux(gmuxBin, sess.Command, resumeCwd, sessionID, "", false)
 			if err != nil {
 				log.Printf("resume: failed to start gmux: %v", err)
 				writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
@@ -1272,7 +1275,7 @@ func serve(stderr io.Writer) int {
 			// session id; Register's re-registration branch handles
 			// the rest.
 			restartCwd := projects.NormalizePath(sess.Cwd)
-			pid, err := launchGmux(gmuxBin, sess.Command, restartCwd, sessionID, false)
+			pid, err := launchGmux(gmuxBin, sess.Command, restartCwd, sessionID, "", false)
 			if err != nil {
 				log.Printf("restart: failed to start gmux: %v", err)
 				writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
@@ -1972,7 +1975,7 @@ func serve(stderr io.Writer) int {
 		// flags (e.g. "glow -p" for pager mode, "chafa --format=symbols").
 		openerParts := strings.Fields(opener)
 		command := append(openerParts, filePath)
-		pid, err := launchGmux(gmuxBin, command, root, "", true)
+		pid, err := launchGmux(gmuxBin, command, root, "", filepath.Base(req.Path), true)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
 			return

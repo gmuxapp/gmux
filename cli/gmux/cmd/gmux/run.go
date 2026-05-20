@@ -149,6 +149,7 @@ func runSession(args []string, attach bool) {
 		SocketPath:    sockPath,
 		BinaryHash:    binhash.Self(),
 		RunnerVersion: version,
+		Title:         os.Getenv("GMUX_SESSION_TITLE"),
 	})
 	log.Printf("[gmux] startup: state created (binhash done) elapsed=%s", time.Since(t0).Round(time.Millisecond))
 

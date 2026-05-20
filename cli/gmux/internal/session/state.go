@@ -79,6 +79,10 @@ type Config struct {
 	RunnerVersion string
 	WorkspaceRoot string
 	Remotes       map[string]string
+	// Title overrides the command-derived title as the initial AdapterTitle.
+	// Set this when the caller wants a specific display name (e.g. the leaf
+	// filename for file-open sessions).
+	Title string
 }
 
 // New creates a new session state.
@@ -94,6 +98,7 @@ func New(cfg Config) *State {
 		SocketPath:    cfg.SocketPath,
 		BinaryHash:    cfg.BinaryHash,
 		RunnerVersion: cfg.RunnerVersion,
+		AdapterTitle:  cfg.Title,
 		Alive:         false,
 	}
 }
