@@ -53,6 +53,8 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latestContentRef = useRef<string>('')
 
+  const isDirtyRef = useRef(false)
+
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saveState, setSaveState] = useState<SaveState>('idle')
@@ -114,6 +116,7 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
       setLoading(true)
       setLoadError(null)
       setSaveState('idle')
+      isDirtyRef.current = false
 
       let initialContent = ''
       try {
@@ -133,6 +136,10 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
 
       latestContentRef.current = initialContent
 
+      // False until after .create() resolves; guards against the spurious
+      // markdownUpdated event Milkdown fires on initialisation.
+      let initialized = false
+
       let ed: Editor
       try {
         ed = await Editor.make()
@@ -147,11 +154,16 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
           .use(listener)
           .config((ctx: any) => {
             ctx.get(listenerCtx).markdownUpdated((_ctx: any, markdown: string) => {
+              if (!initialized) return // skip the initial fire on editor creation
               latestContentRef.current = markdown
+              isDirtyRef.current = true
               scheduleSave()
             })
           })
           .create()
+
+        // Any markdownUpdated calls during .create() have already returned early.
+        initialized = true
       } catch (err) {
         console.error('[MarkdownEditor] Milkdown init error', err)
         if (!destroyed) {
@@ -179,10 +191,12 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
         clearTimeout(saveTimerRef.current)
         saveTimerRef.current = null
       }
-      // Flush final content if editor was alive
+      // Flush final content only if the user actually made changes
       if (editorRef.current) {
-        const md = editorRef.current.action(getMarkdown())
-        void apiWriteFile(projectSlug, filePath, md).catch(() => {/* best-effort */})
+        if (isDirtyRef.current) {
+          const md = editorRef.current.action(getMarkdown())
+          void apiWriteFile(projectSlug, filePath, md).catch(() => {/* best-effort */})
+        }
         editorRef.current.destroy()
         editorRef.current = null
       }
