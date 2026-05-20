@@ -255,6 +255,9 @@ export function TerminalView({
   const altArmedRef = useRef(altArmed)
   const termIoRef = useRef<ReturnType<typeof createTerminalIO> | null>(null)
   const termEpochRef = useRef(0)
+  // Per-session saved scroll position (ghostty gvY = lines above bottom).
+  // Populated on session-switch away; consumed on the next connect() for that session.
+  const savedScrollRef = useRef<Map<string, number>>(new Map())
 
   // Gates terminal mount until ghostty-web WASM is loaded.
   const [ghosttyReady, setGhosttyReady] = useState(false)
@@ -740,6 +743,11 @@ export function TerminalView({
     termEpochRef.current = epoch
     termIoRef.current.reset(epoch)
 
+    // Consume any saved scroll position for this session (set when switching away).
+    // gvY = ghostty getViewportY() = lines above bottom (0 = at bottom).
+    const savedGvY = savedScrollRef.current.get(session.id) ?? 0
+    savedScrollRef.current.delete(session.id)
+
     resetResizeEchoGate()
     setPtySize(null); ptySizeRef.current = null
     setViewportSize(null); viewportSizeRef.current = null
@@ -763,13 +771,11 @@ export function TerminalView({
         // term.parser.registerOscHandler(52, () => true) in replay-view.tsx)
         const filtered = chunks.map(interceptOsc52)
         queueMany(filtered, () => {
-          // Do NOT call scrollToBottom() here: forceNextScrollToBottom() already
-          // suppresses scroll-position restoration, so ghostty's internal
-          // auto-scroll runs during the write and leaves the viewport at the
-          // live end. An explicit scrollToBottom() after the write is redundant
-          // AND triggers ghostty's smooth-scroll animation (when
-          // smoothScrollDuration > 0), causing the visible "scroll from top to
-          // bottom" artifact after the loading overlay is removed.
+          // Restore saved scroll position (from a previous visit to this session)
+          // before removing the loading overlay — the overlay hides the jump.
+          if (savedGvY > 0 && termRef.current) {
+            termRef.current.scrollToLine(savedGvY)
+          }
           setTermLoading(false)
         })
       })
@@ -870,6 +876,16 @@ export function TerminalView({
 
     return () => {
       intentionalClose = true
+      // Save scroll position so returning to this session restores it.
+      const t = termRef.current
+      if (t) {
+        const gvY = t.getViewportY()
+        if (gvY > 0) {
+          savedScrollRef.current.set(session.id, gvY)
+        } else {
+          savedScrollRef.current.delete(session.id)
+        }
+      }
       termEpochRef.current = epoch + 1
       termIoRef.current?.reset(termEpochRef.current)
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
