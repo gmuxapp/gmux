@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"runtime/debug"
 	"sort"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -1983,6 +1984,36 @@ func serve(stderr io.Writer) int {
 		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"pid": pid}})
 	})
 
+	// POST /v1/fs/{slug}/open-browser — open a file with the OS default browser.
+	// Body: { path: string }. Runs open(1)/xdg-open(1) directly; no terminal session.
+	mux.HandleFunc("POST /v1/fs/{slug}/open-browser", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		var req struct {
+			Path string `json:"path"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		filePath, err := fsGuardPath(root, req.Path)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		cmd := exec.Command(osBrowserOpener(), filePath)
+		if err := cmd.Start(); err != nil {
+			writeError(w, http.StatusInternalServerError, "open_failed", err.Error())
+			return
+		}
+		go cmd.Wait()
+		writeJSON(w, map[string]any{"ok": true})
+	})
+
 	// ── Git status ──
 
 	// GET /v1/git/{slug}/status — summarise git changes for a project workspace.
@@ -2601,6 +2632,15 @@ func fsGuardPath(root, rel string) (string, error) {
 }
 
 // fsListDir reads a directory and returns sorted entries (dirs first).
+// osBrowserOpener returns the command used to open a URL/file in the default
+// system browser: "open" on macOS, "xdg-open" everywhere else.
+func osBrowserOpener() string {
+	if runtime.GOOS == "darwin" {
+		return "open"
+	}
+	return "xdg-open"
+}
+
 // fileOpenerFor returns the program to use for opening a file by extension.
 // Extension lookup is case-insensitive and strips the leading dot.
 // Falls back to cfg.Default ("hx" unless overridden) for unknown extensions.

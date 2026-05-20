@@ -135,6 +135,11 @@ async function apiOpen(slug: string, path: string): Promise<void> {
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'open failed')
 }
 
+async function apiOpenBrowser(slug: string, path: string): Promise<void> {
+  const resp = await apiFetch('POST', `/v1/fs/${encodeURIComponent(slug)}/open-browser`, { path })
+  if (!resp.ok) throw new Error((resp.error?.message) ?? 'open-browser failed')
+}
+
 async function apiUpload(slug: string, dir: string, files: FileList): Promise<void> {
   const form = new FormData()
   for (let i = 0; i < files.length; i++) {
@@ -384,6 +389,9 @@ function FileTreeNode({
     } else if (node.path.toLowerCase().endsWith('.md')) {
       // Open markdown files in the in-browser Milkdown editor.
       navigateToMarkdownEditor(slug, node.path)
+    } else if (node.path.toLowerCase().endsWith('.html') || node.path.toLowerCase().endsWith('.htm')) {
+      // Open HTML files in the system browser via the daemon.
+      await apiOpenBrowser(slug, node.path)
     } else {
       const existing = findOpenFileSession(sessions.value, cwd, node.path)
       if (existing) {
