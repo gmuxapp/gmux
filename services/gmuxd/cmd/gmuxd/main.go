@@ -1958,7 +1958,8 @@ func serve(stderr io.Writer) int {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
 			return
 		}
-		if _, err := fsGuardPath(root, req.Path); err != nil {
+		filePath, err := fsGuardPath(root, req.Path)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
 			return
 		}
@@ -1970,7 +1971,7 @@ func serve(stderr io.Writer) int {
 		// Split opener string into command + args so the config can carry
 		// flags (e.g. "glow -p" for pager mode, "chafa --format=symbols").
 		openerParts := strings.Fields(opener)
-		command := append(openerParts, filepath.Base(req.Path))
+		command := append(openerParts, filePath)
 		pid, err := launchGmux(gmuxBin, command, root, "", true)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
