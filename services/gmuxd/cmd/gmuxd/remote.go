@@ -251,6 +251,7 @@ func remotePoll(stdout, stderr io.Writer) int {
 	// The daemon needs time to start tsnet, contact the control server,
 	// and either get an auth URL or establish the connection.
 	var result *tailscaleHealth
+	var daemonReachable bool // true if we got at least one successful HTTP response
 	deadline := time.Now().Add(30 * time.Second)
 	tick := time.NewTicker(1 * time.Second)
 	defer tick.Stop()
@@ -262,6 +263,7 @@ func remotePoll(stdout, stderr io.Writer) int {
 			<-tick.C
 			continue
 		}
+		daemonReachable = true
 		if h.TS == nil {
 			// Tailscale object not yet present in response.
 			<-tick.C
@@ -278,16 +280,28 @@ func remotePoll(stdout, stderr io.Writer) int {
 	if result == nil {
 		// Last-ditch fetch for whatever state we have.
 		if h, err := fetchTailscaleHealth(client); err == nil {
+			daemonReachable = true
 			result = h
 		}
 	}
 
 	fmt.Fprintln(stdout) // end the "Connecting..." line
 
-	if result == nil || result.TS == nil {
+	if !daemonReachable {
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stderr, "Could not reach the daemon. Check that it's running:")
 		fmt.Fprintln(stderr, "  gmuxd start")
+		return 1
+	}
+
+	if result == nil || result.TS == nil {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stderr, "Tailscale is not running in the daemon. This usually means GMUX_CONFIG_DIR")
+		fmt.Fprintln(stderr, "is not set in the daemon's environment (common with launchd).")
+		fmt.Fprintln(stderr)
+		fmt.Fprintln(stderr, "Check your config file has tailscale.enabled = true, and that the")
+		fmt.Fprintln(stderr, "daemon was started with GMUX_CONFIG_DIR set. If using launchd, add")
+		fmt.Fprintln(stderr, "GMUX_CONFIG_DIR to your plist's EnvironmentVariables and reload it.")
 		return 1
 	}
 

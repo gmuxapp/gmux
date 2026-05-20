@@ -17,6 +17,8 @@
     <string>${SHELL}</string>
     <key>PATH</key>
     <string>${PATH}</string>
+    <key>GMUX_CONFIG_DIR</key>
+    <string>${GMUX_CONFIG_DIR}</string>
   </dict>
   <key>KeepAlive</key>
   <dict>
