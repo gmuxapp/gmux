@@ -203,11 +203,25 @@ export function discoverProjects(
     result.push(dp)
   }
 
-  // Active first, then most sessions, then alphabetically.
+  // Active first, then most sessions, then alphabetically by
+  // suggested_slug, then by the directory path that originated this
+  // discovered project.
+  //
+  // The final paths[0] tiebreak matters: two sessions whose cwds have
+  // the same basename (e.g. `/home/me/api` and `/srv/api`) bucket
+  // into distinct discovered projects but produce identical
+  // suggested_slug values via slugFromPath. Without it, the sort falls
+  // through to the input order, which is the byDir Map's insertion
+  // order, which mirrors the (Go-map-randomized) snapshot.sessions
+  // order — so the two rows flip on every snapshot re-emit. paths[0]
+  // is unique per discovered project because it is the very key used
+  // to build the bucket.
   result.sort((a, b) => {
     if (a.active_count !== b.active_count) return b.active_count - a.active_count
     if (a.session_count !== b.session_count) return b.session_count - a.session_count
-    return a.suggested_slug < b.suggested_slug ? -1 : a.suggested_slug > b.suggested_slug ? 1 : 0
+    const slugCmp = a.suggested_slug.localeCompare(b.suggested_slug)
+    if (slugCmp !== 0) return slugCmp
+    return a.paths[0].localeCompare(b.paths[0])
   })
   return result
 }
