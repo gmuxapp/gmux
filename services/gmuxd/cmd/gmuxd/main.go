@@ -2014,6 +2014,37 @@ func serve(stderr io.Writer) int {
 		writeJSON(w, map[string]any{"ok": true})
 	})
 
+	// POST /v1/open-path — open an absolute path with the configured file opener.
+	// Body: { "path": "/absolute/path" }. Launches a new gmux session.
+	// Does not require a project slug — accepts any absolute path.
+	mux.HandleFunc("POST /v1/open-path", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Path string `json:"path"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		if !filepath.IsAbs(req.Path) {
+			writeError(w, http.StatusBadRequest, "bad_path", "path must be absolute")
+			return
+		}
+		opener := fileOpenerFor(req.Path, cfg.FileOpeners)
+		if gmuxBin == "" {
+			writeError(w, http.StatusInternalServerError, "gmux_not_found", "gmux not found")
+			return
+		}
+		openerParts := strings.Fields(opener)
+		command := append(openerParts, req.Path)
+		cwd := filepath.Dir(req.Path)
+		pid, err := launchGmux(gmuxBin, command, cwd, "", filepath.Base(req.Path), true)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"pid": pid}})
+	})
+
 	// ── Git status ──
 
 	// GET /v1/git/{slug}/status — summarise git changes for a project workspace.

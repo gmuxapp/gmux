@@ -27,7 +27,30 @@ const ghosttyInitPromise: Promise<void> = initGhostty()
  */
 export const TERM_THEME: ITheme = DEFAULT_THEME_COLORS
 
-// ── OSC 52 pre-processor ──
+// ── File-link interceptor ──
+//
+// Browsers block window.open("file://...", "_blank") for security reasons, so
+// OSC 8 hyperlinks with file:// URIs silently fail.  We intercept those calls
+// here and POST to /v1/open-path instead, which asks the gmux daemon to open
+// the file on the server (same machine) with the configured file opener.
+;
+;(function interceptFileLinks() {
+  const _orig = window.open.bind(window)
+  window.open = function (url?: string | URL, target?: string, features?: string) {
+    const href = typeof url === 'string' ? url : url instanceof URL ? url.href : ''
+    if (href.startsWith('file://')) {
+      // Strip the file:// prefix and decode percent-encoding to get a plain path.
+      const path = decodeURIComponent(href.slice('file://'.length))
+      fetch('/v1/open-path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      }).catch(console.error)
+      return null
+    }
+    return _orig(url as string, target, features)
+  } as typeof window.open
+})()
 
 /**
  * Scan a Uint8Array for complete OSC 52 sequences, write their payload
