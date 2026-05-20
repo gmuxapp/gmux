@@ -843,6 +843,26 @@ describe('discoverProjects', () => {
     ]
     expect(discoverProjects(sessions, [])).toEqual([])
   })
+
+  it('breaks suggested_slug ties on path for stable order across snapshots', () => {
+    // Two unrelated sessions whose cwd basenames collide on
+    // slugFromPath both produce suggested_slug = "api". With only
+    // active_count, session_count, suggested_slug as sort keys the
+    // pair would tie; the sort then falls through to the byDir Map's
+    // insertion order, which mirrors the input sessions array.
+    //
+    // In the manage-projects modal that input order is set by
+    // snapshot.sessions, whose Go-map iteration is randomized, so
+    // every snapshot re-emit would visually flip the rows. The
+    // paths[0] tiebreak pins them.
+    const a = makeSession({ id: 'sa', cwd: '/home/me/api', alive: true })
+    const b = makeSession({ id: 'sb', cwd: '/srv/api', alive: true })
+
+    for (const input of [[a, b], [b, a]]) {
+      const out = discoverProjects(input, [])
+      expect(out.map(d => d.paths[0])).toEqual(['/home/me/api', '/srv/api'])
+    }
+  })
 })
 
 describe('countUnmatchedActive', () => {
