@@ -31,7 +31,9 @@ import (
 
 // maxScrollback is the number of lines kept in the virtual terminal's
 // scrollback buffer. Lines older than this are discarded.
-const maxScrollback = 2000
+// Must be >= the ghostty-web scrollback setting (settings.jsonc default 5000,
+// workspace override 50000) so the web client can actually reach session start.
+const maxScrollback = 50000
 
 // ErrSocketInUse is returned by BindSocket when the requested socket
 // path is already owned by a live listener (a probe at that path got
