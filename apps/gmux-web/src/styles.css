@@ -131,9 +131,9 @@ body {
   min-height: 0;
 }
 
-/* Sessions pane: 30% of remaining space, min 120px so it doesn't collapse */
+/* Sessions pane: flex:1 when file tree is absent; explicit flex-basis set inline when file tree is present */
 .sidebar-sessions-pane {
-  flex: 3;
+  flex: 1;
   min-height: 120px;
   overflow-y: auto;
   overflow-x: hidden;
@@ -142,15 +142,46 @@ body {
   flex-direction: column;
 }
 
-/* File tree pane: 70% of remaining space */
+/* File tree pane: takes remaining space */
 .sidebar-files-pane {
-  flex: 7;
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
+}
+
+/* Draggable divider between the two panes */
+.sidebar-divider {
+  flex: none;
+  height: 5px;
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  position: relative;
+  z-index: 1;
+}
+.sidebar-divider::before {
+  content: '';
+  position: absolute;
+  inset: 2px 0;
+  background: var(--border);
+}
+.sidebar-divider-handle {
+  position: relative;
+  width: 28px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--text-muted);
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+.sidebar-divider:hover .sidebar-divider-handle,
+.sidebar-divider:active .sidebar-divider-handle {
+  opacity: 0.9;
 }
 
 /* Shared thin scrollbar for both panes */

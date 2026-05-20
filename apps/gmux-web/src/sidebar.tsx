@@ -5,7 +5,7 @@
  * callbacks and the mobile open/close toggle are passed as props.
  */
 
-import { useState, useCallback } from 'preact/hooks'
+import { useState, useCallback, useRef } from 'preact/hooks'
 import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
@@ -316,6 +316,33 @@ function FolderGroup({
   )
 }
 
+// ── Sidebar split (draggable divider) ──
+
+const SPLIT_KEY = 'gmux:sidebarSplit'
+const SPLIT_MIN = 0.12
+const SPLIT_MAX = 0.80
+const SPLIT_DEFAULT = 0.30
+
+function loadSplit(): number {
+  try {
+    const v = parseFloat(localStorage.getItem(SPLIT_KEY) ?? '')
+    if (v >= SPLIT_MIN && v <= SPLIT_MAX) return v
+  } catch { /* ignore */ }
+  return SPLIT_DEFAULT
+}
+
+function SidebarDivider({ onMouseDown }: { onMouseDown: (e: MouseEvent) => void }) {
+  return (
+    <div
+      class="sidebar-divider"
+      onMouseDown={onMouseDown}
+      title="Drag to resize"
+    >
+      <div class="sidebar-divider-handle" />
+    </div>
+  )
+}
+
 export function Sidebar({
   resumingId,
   onCloseSession,
@@ -374,6 +401,33 @@ export function Sidebar({
     : null
   const fileTreeCwd = currentFolder?.launchCwd ?? null
 
+  // ── Draggable split ───────────────────────────────────────────────────
+  const [splitFraction, setSplitFraction] = useState<number>(loadSplit)
+  const panesRef = useRef<HTMLDivElement>(null)
+  const [dragging, setDragging] = useState(false)
+
+  const handleDividerMouseDown = useCallback((e: MouseEvent) => {
+    e.preventDefault()
+    const panes = panesRef.current
+    if (!panes) return
+    setDragging(true)
+    let latest = splitFraction
+    const onMove = (ev: MouseEvent) => {
+      const rect = panes.getBoundingClientRect()
+      const f = Math.max(SPLIT_MIN, Math.min(SPLIT_MAX, (ev.clientY - rect.top) / rect.height))
+      latest = f
+      setSplitFraction(f)
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      setDragging(false)
+      try { localStorage.setItem(SPLIT_KEY, String(latest)) } catch { /* ignore */ }
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [])
+
   return (
     <>
       <div class={`sidebar-overlay ${open ? 'visible' : ''}`} onClick={onClose} />
@@ -392,9 +446,12 @@ export function Sidebar({
             />
           )}
         </div>
-        <div class="sidebar-panes">
+        <div class="sidebar-panes" ref={panesRef} style={{ userSelect: dragging ? 'none' : undefined }}>
           {/* ── Sessions pane ── */}
-          <div class="sidebar-sessions-pane">
+          <div
+            class="sidebar-sessions-pane"
+            style={activeProjectSlug && fileTreeCwd ? { flex: `0 0 ${(splitFraction * 100).toFixed(2)}%` } : undefined}
+          >
             {foldersVal.map(f => {
               const proj = projectBySlug.get(f.path)
               if (!proj) return null
@@ -431,13 +488,16 @@ export function Sidebar({
 
           {/* ── File tree pane (when any project with a filesystem path is active) ── */}
           {activeProjectSlug && fileTreeCwd && (
-            <div class="sidebar-files-pane">
+            <>
+              <SidebarDivider onMouseDown={handleDividerMouseDown} />
+              <div class="sidebar-files-pane">
               <FileTree
                 projectSlug={activeProjectSlug}
                 cwd={fileTreeCwd}
                 onMobileClose={onClose}
               />
             </div>
+            </>
           )}
         </div>
         <div class="sidebar-footer">
