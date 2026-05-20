@@ -65,6 +65,22 @@ func TestParseCLI(t *testing.T) {
 			wantMode: modeList,
 		},
 		{
+			// --all extends --list across peers. Without it, the new
+			// default keeps --list local-only (the one breaking
+			// change in this milestone).
+			name:     "--list --all dispatches to list with f.all set",
+			args:     []string{"--list", "--all"},
+			wantMode: modeList,
+		},
+		{
+			// --host scopes a session action to a peer. Co-existing
+			// with the positional id, the resolver reconciles them.
+			name:     "--kill --host=peer routes",
+			args:     []string{"--kill", "--host=konyvtar", "sess-abcd"},
+			wantMode: modeKill,
+			wantRest: []string{"sess-abcd"},
+		},
+		{
 			name:     "--attach takes one session id",
 			args:     []string{"--attach", "sess-abcd"},
 			wantMode: modeAttach,
@@ -264,6 +280,11 @@ func TestParseCLIErrors(t *testing.T) {
 		{"--no-attach", "--wait", "sess-a"},      // --no-attach has no effect with --wait
 		{"--timeout", "30", "sess-a"},            // --timeout only applies with --wait
 		{"--wait", "--timeout", "-1", "sess-a"},  // --timeout must be non-negative
+		{"--all", "--send", "sess-a", "x"},        // --all is discovery-only
+		{"--all", "--kill", "sess-a"},             // --all is discovery-only
+		{"--host=konyvtar", "--all", "--list"},    // --host and --all are mutually exclusive
+		{"--host=konyvtar", "--wait", "sess-a"},   // --wait + --host not yet supported
+		{"--host=konyvtar", "fish"},               // remote create deferred
 	}
 
 	for _, args := range invalid {

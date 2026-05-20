@@ -36,6 +36,8 @@ type flags struct {
 	wait        bool
 	waitTimeout int // 0 means no timeout
 	tail        int // >=0 when set (flag default is -1)
+	host        string // --host=<peer>: target this peer instead of local
+	all         bool   // --list --all: include peer sessions in output
 	help        bool
 }
 
@@ -65,6 +67,8 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 	fs.IntVar(&f.waitTimeout, "timeout", 0, "with --wait, fail after N seconds (default: no timeout)")
 	fs.IntVar(&f.tail, "tail", -1, "dump the last N lines of a session")
 	fs.IntVar(&f.tail, "t", -1, "dump the last N lines of a session (short)")
+	fs.StringVar(&f.host, "host", "", "target a peer by name (e.g. --host=konyvtar); equivalent to id@peer")
+	fs.BoolVar(&f.all, "all", false, "with --list, include sessions from all peers (default: local only)")
 	fs.BoolVar(&f.help, "help", false, "show help")
 	fs.BoolVar(&f.help, "h", false, "show help (short)")
 
@@ -122,6 +126,24 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 	// time-bounded actions it can grow into a shared option.)
 	if f.waitTimeout != 0 && !f.wait {
 		return modeHelp, nil, nil, errors.New("--timeout only applies with --wait")
+	}
+	// --all is a discovery-only flag: it widens what --list shows. On an
+	// action command (--send, --kill, etc.) "all peers at once" is a
+	// footgun, so we only accept it with --list.
+	if f.all && !f.list {
+		return modeHelp, nil, nil, errors.New("--all only applies with --list")
+	}
+	// --host is a filter/target for session-addressing actions. With
+	// --all it would be contradictory ("all peers + only this peer"),
+	// so disallow the combination.
+	if f.host != "" && f.all {
+		return modeHelp, nil, nil, errors.New("--host and --all are mutually exclusive")
+	}
+	// --wait crossing peers isn't wired up server-side yet (the peer
+	// would need to stream Status events back). Reject up front rather
+	// than letting the user hit an opaque gmuxd error.
+	if f.host != "" && f.wait {
+		return modeHelp, nil, nil, errors.New("--wait does not yet support --host (local sessions only)")
 	}
 
 	// Management actions take a single session id (except --list and --send).
@@ -189,7 +211,20 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 		if f.noAttach {
 			return modeHelp, nil, nil, errors.New("--no-attach requires a command")
 		}
+		if f.host != "" {
+			// Bare `gmux --host=peer` would naturally mean "open peer's
+			// web UI", but we don't have a peer-URL discovery path on the
+			// CLI yet; reject explicitly rather than silently open the
+			// local UI.
+			return modeHelp, nil, nil, errors.New("--host with no command not supported yet (use a session action)")
+		}
 		return modeUI, f, nil, nil
+	}
+	if f.host != "" {
+		// Remote create (`gmux --host=peer <cmd>`) is a planned follow-up
+		// to this milestone; reject for now so a half-implemented path
+		// can't silently create a session on the wrong side.
+		return modeHelp, nil, nil, errors.New("--host with a command not supported yet (remote create is planned for a follow-up)")
 	}
 	return modeRun, f, rest, nil
 }
@@ -257,7 +292,9 @@ Usage:
   gmux -- <cmd> [args]              use -- if <cmd> starts with a dash
 
 Session management:
-  gmux --list                       list known sessions
+  gmux --list                       list local sessions
+  gmux --list --all                 ... include sessions from every peer
+  gmux --list --host=<peer>         ... only this peer's sessions
   gmux --attach <id>                reattach to an existing session
   gmux --tail <N> <id>              print the last N lines of a session
   gmux --kill <id>                  terminate a session
@@ -265,6 +302,10 @@ Session management:
   gmux --send --no-submit <id> ...  send without the trailing carriage return
   gmux --wait <id>                  block until session is idle (agent finished its turn)
   gmux --wait --timeout N <id>      ... or fail after N seconds
+
+Peer addressing (for any session action):
+  gmux --send <id>@<peer> 'foo'     address a session on a peer (canonical form)
+  gmux --send --host=<peer> <id> 'foo'  ... or use the --host flag (equivalent)
 
 Flags before the command apply to gmux itself. Once the first positional
 argument is seen, everything after is the command to run, verbatim.

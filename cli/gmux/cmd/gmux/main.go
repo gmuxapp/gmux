@@ -38,19 +38,19 @@ func main() {
 		runSession(rest, !f.noAttach)
 		return
 	case modeList:
-		os.Exit(cmdList())
+		os.Exit(cmdList(f.host, f.all))
 	case modeKill:
-		os.Exit(cmdKill(rest[0]))
+		os.Exit(cmdKill(rest[0], f.host))
 	case modeTail:
-		os.Exit(cmdTail(rest[0], f.tail))
+		os.Exit(cmdTail(rest[0], f.tail, f.host))
 	case modeAttach:
-		os.Exit(cmdAttach(rest[0]))
+		os.Exit(cmdAttach(rest[0], f.host))
 	case modeSend:
 		var text *string
 		if len(rest) == 2 {
 			text = &rest[1]
 		}
-		os.Exit(cmdSend(rest[0], text, f.noSubmit))
+		os.Exit(cmdSend(rest[0], text, f.noSubmit, f.host))
 	case modeWait:
 		os.Exit(cmdWait(rest[0], f.waitTimeout))
 	}

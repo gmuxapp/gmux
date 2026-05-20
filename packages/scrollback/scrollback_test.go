@@ -3,6 +3,7 @@ package scrollback
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -438,3 +439,156 @@ func TestOpenClearsPreviousRotatedFile(t *testing.T) {
 		t.Errorf("readback = %q, want %q (previous rotated file must not survive Open)", got, "from-new-run")
 	}
 }
+
+// TestRenderTailStripsANSI is the central correctness claim for
+// `gmux --tail`: feed in raw PTY bytes with ANSI styling, get back
+// plain text. If this regresses, --tail output starts including
+// escape sequences and breaks log-style consumption.
+func TestRenderTailStripsANSI(t *testing.T) {
+	// Three colored lines. The bytes are what a child emits when it
+	// prints red "hello" then a normal-color "world"; replaying them
+	// through a real terminal emulator must produce just the letters.
+	raw := "\x1b[31mhello\x1b[0m\r\n\x1b[32mwarn\x1b[0m\r\n\x1b[31merror\x1b[0m\r\n"
+	lines, err := RenderTail(strings.NewReader(raw), 80, 24, 5)
+	if err != nil {
+		t.Fatalf("RenderTail: %v", err)
+	}
+	want := []string{"hello", "warn", "error"}
+	if !equalLines(lines, want) {
+		t.Errorf("got %q, want %q", lines, want)
+	}
+	for _, line := range lines {
+		if strings.ContainsRune(line, 0x1b) {
+			t.Errorf("line %q contains an escape byte; ANSI must be stripped", line)
+		}
+	}
+}
+
+// TestRenderTailLimitsToLastN locks in tail-as-line-window semantics:
+// 20 lines in, n=5 out gets the trailing 5 in order. Any divergence
+// here would have --tail showing arbitrary lines from the middle of
+// the scrollback.
+func TestRenderTailLimitsToLastN(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&b, "line-%02d\r\n", i)
+	}
+	lines, err := RenderTail(strings.NewReader(b.String()), 80, 24, 5)
+	if err != nil {
+		t.Fatalf("RenderTail: %v", err)
+	}
+	want := []string{"line-16", "line-17", "line-18", "line-19", "line-20"}
+	if !equalLines(lines, want) {
+		t.Errorf("got %q, want %q", lines, want)
+	}
+}
+
+// TestRenderTailHandlesCursorMotion verifies that a TUI-style child
+// that uses cursor moves to overwrite the same line gets rendered to
+// the *final* visible content, not to a transcript of every byte.
+// This is the case that justifies replaying through a real emulator
+// instead of byte-tailing: "loading..." overwritten by "done" should
+// surface as "done".
+func TestRenderTailHandlesCursorMotion(t *testing.T) {
+	// \r returns to column 0; the second write overwrites "loading..."
+	// in the same row. The visible screen ends with "done".
+	raw := "loading...\rdone      \r\n"
+	lines, err := RenderTail(strings.NewReader(raw), 80, 24, 5)
+	if err != nil {
+		t.Fatalf("RenderTail: %v", err)
+	}
+	if len(lines) == 0 {
+		t.Fatalf("expected at least one line, got none")
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "done") {
+		t.Errorf("final visible content should contain %q, got %q", "done", joined)
+	}
+	if strings.Contains(joined, "loading") {
+		t.Errorf("overwritten content should not appear, got %q", joined)
+	}
+}
+
+// TestRenderTailTrimsBlankRows guards against an idle TUI's empty
+// bottom rows padding the output. The runner's live path trims them;
+// the disk-replay path must do the same so dead-session --tail
+// matches the live shape.
+func TestRenderTailTrimsBlankRows(t *testing.T) {
+	raw := "hello\r\n" // one line of output; the rest of the 24-row screen is blank
+	lines, err := RenderTail(strings.NewReader(raw), 80, 24, 10)
+	if err != nil {
+		t.Fatalf("RenderTail: %v", err)
+	}
+	if len(lines) == 0 {
+		t.Fatalf("expected at least one line")
+	}
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			t.Errorf("line %d is blank: blank trailing rows must be trimmed", i)
+		}
+	}
+}
+
+// TestRenderTailEdgeCases pins behavior on the bounds the broker
+// reaches: n <= 0 returns nothing, empty input returns nothing,
+// non-positive dimensions fall back to a working default. Wrong
+// behavior here is what makes `gmux --tail 0` or a fresh session
+// produce confusing output instead of nothing.
+func TestRenderTailEdgeCases(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		cols    int
+		rows    int
+		n       int
+		wantNil bool
+	}{
+		{"n=0 yields nothing", "hello\r\n", 80, 24, 0, true},
+		{"negative n yields nothing", "hello\r\n", 80, 24, -3, true},
+		{"empty input yields nothing", "", 80, 24, 5, false}, // succeeds with empty lines slice
+		{"non-positive cols falls back to default", "hello\r\n", 0, 24, 5, false},
+		{"non-positive rows falls back to default", "hello\r\n", 80, 0, 5, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lines, err := RenderTail(strings.NewReader(tc.in), tc.cols, tc.rows, tc.n)
+			if err != nil {
+				t.Fatalf("RenderTail: %v", err)
+			}
+			if tc.wantNil && lines != nil {
+				t.Errorf("want nil result, got %q", lines)
+			}
+		})
+	}
+}
+
+// TestRenderTailPropagatesReadErrors makes sure a broken reader
+// doesn't silently produce a partial result. An EIO mid-file should
+// bubble up so the HTTP layer can 500 cleanly rather than returning
+// truncated output that looks like correct truncated tail output.
+func TestRenderTailPropagatesReadErrors(t *testing.T) {
+	want := errors.New("disk on fire")
+	lines, err := RenderTail(&errReader{err: want}, 80, 24, 5)
+	if !errors.Is(err, want) {
+		t.Errorf("err = %v, want %v", err, want)
+	}
+	if lines != nil {
+		t.Errorf("lines = %q on error, want nil", lines)
+	}
+}
+
+func equalLines(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+type errReader struct{ err error }
+
+func (e *errReader) Read(p []byte) (int, error) { return 0, e.err }
