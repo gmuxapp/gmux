@@ -30,6 +30,13 @@ import (
 // "chafa --format=symbols". The daemon splits them before passing to the
 // runner so flags work without requiring a shell wrapper.
 //
+// DismissOnExit controls whether the session is auto-dismissed after the
+// opener exits cleanly (exit code 0). Defaults to true for all extensions
+// except image formats: image viewers like chafa exit immediately after
+// rendering, so auto-dismiss would remove the session before the user can
+// see the output. Set dismiss_on_exit for an extension to false to keep
+// the dead session visible until the user closes it manually.
+//
 // Example host.toml:
 //
 //	[file_openers]
@@ -39,6 +46,9 @@ import (
 //	md  = "glow -p"
 //	png = "chafa"
 //	rs  = "nano"
+//
+//	[file_openers.dismiss_on_exit]
+//	png = true  # override default; dismiss immediately after chafa exits
 type FileOpenersConfig struct {
 	// Default is the fallback program for extensions not in Extensions.
 	// Defaults to "hx" (helix).
@@ -48,6 +58,13 @@ type FileOpenersConfig struct {
 	// (optionally with args). Decoded as a map so any extension key is
 	// accepted without triggering the unknown-key validation.
 	Extensions map[string]string `toml:"extensions"`
+
+	// DismissOnExit maps lowercase extension (without dot) to whether the
+	// session should be auto-dismissed after the opener exits with code 0.
+	// Extensions not present here use DefaultDismissOnExit (true).
+	// Image extensions default to false — chafa exits immediately after
+	// rendering, so we keep the dead session visible for the user to inspect.
+	DismissOnExit map[string]bool `toml:"dismiss_on_exit"`
 }
 
 // DefaultFileOpeners returns the built-in extension→program map.
@@ -55,26 +72,35 @@ type FileOpenersConfig struct {
 //
 // Opener strings may include arguments (e.g. "glow -p"). The daemon
 // splits them with strings.Fields before building the launch command.
+// imageExtensions is the set of extensions that use chafa as the default
+// opener. They share the same dismiss_on_exit=false default.
+var imageExtensions = []string{
+	"png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "tiff", "tif", "ico", "avif",
+}
+
 func DefaultFileOpeners() FileOpenersConfig {
+	imageMap := make(map[string]string, len(imageExtensions))
+	dismissMap := make(map[string]bool, len(imageExtensions))
+	for _, ext := range imageExtensions {
+		imageMap[ext] = "chafa"
+		// chafa exits immediately after rendering; keep the dead session
+		// visible so the user can actually see the output.
+		dismissMap[ext] = false
+	}
+
 	return FileOpenersConfig{
 		Default: "hx",
-		Extensions: map[string]string{
+		Extensions: func() map[string]string {
 			// Markdown: -p = pager mode (interactive, user quits with q).
 			// Required so the session stays open for reading and auto-dismiss
 			// fires only when the user explicitly exits.
-			"md":   "glow -p",
-			"png":  "chafa",
-			"jpg":  "chafa",
-			"jpeg": "chafa",
-			"gif":  "chafa",
-			"webp": "chafa",
-			"bmp":  "chafa",
-			"svg":  "chafa",
-			"tiff": "chafa",
-			"tif":  "chafa",
-			"ico":  "chafa",
-			"avif": "chafa",
-		},
+			im := map[string]string{"md": "glow -p"}
+			for k, v := range imageMap {
+				im[k] = v
+			}
+			return im
+		}(),
+		DismissOnExit: dismissMap,
 	}
 }
 

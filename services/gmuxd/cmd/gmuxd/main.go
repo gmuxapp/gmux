@@ -1968,6 +1968,7 @@ func serve(stderr io.Writer) int {
 			return
 		}
 		opener := fileOpenerFor(req.Path, cfg.FileOpeners)
+		dismiss := fileOpenerDismissOnExit(req.Path, cfg.FileOpeners)
 		if gmuxBin == "" {
 			writeError(w, http.StatusInternalServerError, "gmux_not_found", "gmux not found")
 			return
@@ -1976,7 +1977,7 @@ func serve(stderr io.Writer) int {
 		// flags (e.g. "glow -p" for pager mode, "chafa --format=symbols").
 		openerParts := strings.Fields(opener)
 		command := append(openerParts, filePath)
-		pid, err := launchGmux(gmuxBin, command, root, "", filepath.Base(req.Path), true)
+		pid, err := launchGmux(gmuxBin, command, root, "", filepath.Base(req.Path), dismiss)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
 			return
@@ -2030,6 +2031,7 @@ func serve(stderr io.Writer) int {
 			return
 		}
 		opener := fileOpenerFor(req.Path, cfg.FileOpeners)
+		dismiss := fileOpenerDismissOnExit(req.Path, cfg.FileOpeners)
 		if gmuxBin == "" {
 			writeError(w, http.StatusInternalServerError, "gmux_not_found", "gmux not found")
 			return
@@ -2037,7 +2039,7 @@ func serve(stderr io.Writer) int {
 		openerParts := strings.Fields(opener)
 		command := append(openerParts, req.Path)
 		cwd := filepath.Dir(req.Path)
-		pid, err := launchGmux(gmuxBin, command, cwd, "", filepath.Base(req.Path), true)
+		pid, err := launchGmux(gmuxBin, command, cwd, "", filepath.Base(req.Path), dismiss)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
 			return
@@ -2684,6 +2686,19 @@ func fileOpenerFor(path string, cfg config.FileOpenersConfig) string {
 		return cfg.Default
 	}
 	return "hx"
+}
+
+// fileOpenerDismissOnExit returns whether the session launched for this file
+// should be auto-dismissed after the opener exits cleanly (exit code 0).
+// Image viewers (chafa) exit immediately after rendering; we keep their
+// sessions alive so the user can see the output before closing manually.
+// Unknown extensions default to true (dismiss after clean exit).
+func fileOpenerDismissOnExit(path string, cfg config.FileOpenersConfig) bool {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+	if v, ok := cfg.DismissOnExit[ext]; ok {
+		return v
+	}
+	return true // default: dismiss after clean exit (e.g. text editors)
 }
 
 func fsListDir(dir string, showHidden bool) ([]fsEntry, error) {
