@@ -365,6 +365,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
+// clipboardDir returns the directory to materialise clipboard files into.
+// For sessions with a known workspace root, we write into {workspace}/.pastes/
+// so the file is reachable inside any sandbox that mounts the workspace at the
+// same absolute host path. Falls back to os.TempDir() when the session carries
+// no filesystem anchor (e.g. a bare shell session with no cwd).
+func clipboardDir(sess store.Session) string {
+	base := sess.WorkspaceRoot
+	if base == "" {
+		base = sess.Cwd
+	}
+	if base == "" {
+		return os.TempDir()
+	}
+	return filepath.Join(base, ".pastes")
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -1339,17 +1355,17 @@ func serve(stderr io.Writer) int {
 			scrollbackBrokerHandler(w, r, sessionID, sessions, metaStore.SessionDir)
 
 		case "clipboard":
-			// Materialize a clipboard binary payload as a file in this
-			// gmuxd's os.TempDir() and return the absolute path. For
-			// devcontainer/peer sessions, the request was already
-			// forwarded above to the gmuxd that owns the session, so
-			// reaching this branch always means "write locally". The
-			// session must exist; we don't otherwise need fields from it.
-			if _, ok := sessions.Get(sessionID); !ok {
+			// Materialize a clipboard binary payload as a file in the
+			// session's workspace directory so that sandbox sessions
+			// (which mount the workspace at its exact host path) can
+			// read the file. Falls back to os.TempDir() when no
+			// workspace root or cwd is available.
+			sess, ok := sessions.Get(sessionID)
+			if !ok {
 				writeError(w, http.StatusNotFound, "not_found", "session not found")
 				return
 			}
-			clipboardHandler(clipfile.NewLocalWriter(os.TempDir())).ServeHTTP(w, r)
+			clipboardHandler(clipfile.NewLocalWriter(clipboardDir(sess))).ServeHTTP(w, r)
 
 		case "dismiss":
 			if r.Method != http.MethodPost {
