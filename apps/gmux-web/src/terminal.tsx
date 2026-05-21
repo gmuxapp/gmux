@@ -931,10 +931,11 @@ export function TerminalView({
             const wasWaiting = replay.state === 'waiting'
             replay.push(data)
             if (wasWaiting) {
-              // After first push: 'buffering' (BSU found) or 'done' (no BSU = skipped)
+              // After first push: 'buffering' (BSU found), 'done' (BSU+ESU single
+              // frame = success), or 'done' with wasSkipped=true (no BSU = skip).
               const phase = replay.state as ReplayState
               emitSyncDiag({
-                syncPhase: phase === 'done' ? 'skipped' : phase,
+                syncPhase: replay.wasSkipped ? 'skipped' : phase,
                 syncStartedAt: Date.now(),
                 scrollbackBytes: replaySyncBytes,
                 scrollbackMsgs: replaySyncMsgs,
@@ -965,7 +966,7 @@ export function TerminalView({
           if (wasWaiting2) {
             const phase = replay.state as ReplayState
             emitSyncDiag({
-              syncPhase: phase === 'done' ? 'skipped' : phase,
+              syncPhase: replay.wasSkipped ? 'skipped' : phase,
               syncStartedAt: Date.now(),
               scrollbackBytes: replaySyncBytes,
               scrollbackMsgs: replaySyncMsgs,

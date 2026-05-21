@@ -39,6 +39,13 @@ export interface ReplayBuffer {
   push(data: Uint8Array): boolean
   /** Current state */
   state: ReplayState
+  /**
+   * True if sync was skipped because the first frame had no BSU marker.
+   * False until the first push, and false when sync completed normally.
+   * Callers should use this (not `state === 'done'`) to distinguish a
+   * successful single-frame sync from a genuine skip.
+   */
+  readonly wasSkipped: boolean
 }
 
 /**
@@ -49,10 +56,12 @@ export interface ReplayBuffer {
  */
 export function createReplayBuffer(onFlush: FlushCallback): ReplayBuffer {
   let state: ReplayState = 'waiting'
+  let skipped = false
   const chunks: Uint8Array[] = []
 
   return {
     get state() { return state },
+    get wasSkipped() { return skipped },
 
     push(data: Uint8Array): boolean {
       if (state === 'done') return false
@@ -71,7 +80,9 @@ export function createReplayBuffer(onFlush: FlushCallback): ReplayBuffer {
           }
           return false
         } else {
-          // No sync markers — flush immediately
+          // No sync markers (old runner, or data arrived before BSU)
+          // — flush immediately
+          skipped = true
           state = 'done'
           chunks.push(data)
           onFlush(chunks)

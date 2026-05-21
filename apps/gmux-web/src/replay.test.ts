@@ -79,6 +79,11 @@ describe('createReplayBuffer', () => {
     expect(buf.state).toBe('waiting')
   })
 
+  it('wasSkipped is false before any push', () => {
+    const buf = createReplayBuffer(vi.fn())
+    expect(buf.wasSkipped).toBe(false)
+  })
+
   describe('sync replay (first frame starts with BSU)', () => {
     it('single frame: BSU + data + ESU → immediate flush', () => {
       const onFlush = vi.fn()
@@ -89,6 +94,7 @@ describe('createReplayBuffer', () => {
 
       expect(flushed).toBe(true)
       expect(buf.state).toBe('done')
+      expect(buf.wasSkipped).toBe(false)
       expect(onFlush).toHaveBeenCalledTimes(1)
       expect(onFlush).toHaveBeenCalledWith([frame])
     })
@@ -106,6 +112,7 @@ describe('createReplayBuffer', () => {
 
       expect(buf.push(frame2)).toBe(true)
       expect(buf.state).toBe('done')
+      expect(buf.wasSkipped).toBe(false)
       expect(onFlush).toHaveBeenCalledTimes(1)
       expect(onFlush).toHaveBeenCalledWith([frame1, frame2])
     })
@@ -123,6 +130,7 @@ describe('createReplayBuffer', () => {
       expect(onFlush).not.toHaveBeenCalled()
 
       expect(buf.push(frame3)).toBe(true)
+      expect(buf.wasSkipped).toBe(false)
       expect(onFlush).toHaveBeenCalledWith([frame1, frame2, frame3])
     })
 
@@ -141,13 +149,14 @@ describe('createReplayBuffer', () => {
   })
 
   describe('no sync markers (old runner or empty scrollback)', () => {
-    it('plain data → immediate flush', () => {
+    it('plain data → immediate flush, wasSkipped=true', () => {
       const onFlush = vi.fn()
       const buf = createReplayBuffer(onFlush)
       const data = enc('hello from terminal')
 
       expect(buf.push(data)).toBe(true)
       expect(buf.state).toBe('done')
+      expect(buf.wasSkipped).toBe(true)
       expect(onFlush).toHaveBeenCalledWith([data])
     })
 
@@ -159,16 +168,18 @@ describe('createReplayBuffer', () => {
 
       expect(buf.push(partial)).toBe(true)
       expect(buf.state).toBe('done')
+      expect(buf.wasSkipped).toBe(true)
       expect(onFlush).toHaveBeenCalledWith([partial])
     })
 
-    it('empty frame → immediate flush', () => {
+    it('empty frame → immediate flush, wasSkipped=true', () => {
       const onFlush = vi.fn()
       const buf = createReplayBuffer(onFlush)
       const empty = new Uint8Array(0)
 
       expect(buf.push(empty)).toBe(true)
       expect(buf.state).toBe('done')
+      expect(buf.wasSkipped).toBe(true)
       expect(onFlush).toHaveBeenCalledWith([empty])
     })
   })
@@ -192,6 +203,7 @@ describe('createReplayBuffer', () => {
 
       expect(buf.push(frame)).toBe(true)
       expect(buf.state).toBe('done')
+      expect(buf.wasSkipped).toBe(false)
       expect(onFlush).toHaveBeenCalledWith([frame])
     })
 
@@ -213,6 +225,7 @@ describe('createReplayBuffer', () => {
       // Frame 10: data + ESU
       buf.push(esuFrame('chunk9'))
       expect(buf.state).toBe('done')
+      expect(buf.wasSkipped).toBe(false)
       expect(onFlush).toHaveBeenCalledTimes(1)
       // All 10 chunks present
       expect(onFlush.mock.calls[0][0]).toHaveLength(10)
