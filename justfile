@@ -68,6 +68,12 @@ install:
         > "$plist"
       echo "Installing launchd agent..."
       launchctl bootout "gui/$(id -u)/com.gmuxapp.gmuxd" 2>/dev/null || true
+      # bootout is async — wait for the service to actually disappear before bootstrapping,
+      # otherwise launchd returns error 5 (I/O error) on the bootstrap call.
+      for i in $(seq 1 20); do
+        launchctl print "gui/$(id -u)/com.gmuxapp.gmuxd" >/dev/null 2>&1 || break
+        sleep 0.25
+      done
       launchctl bootstrap "gui/$(id -u)" "$plist"
       echo "Done. gmux and gmuxd installed to $prefix/bin/ (gmuxd running as launchd agent)"
     else
