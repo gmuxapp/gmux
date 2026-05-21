@@ -105,7 +105,11 @@ export function selectionToText(term: SelectionTerminal): string {
   // (0 = at bottom/live output).  This is SelectionManager.viewportRowToAbsolute
   // from ghostty-web's source.
   const scrollbackLen = term.getScrollbackLength()
-  const gvY = term.getViewportY()
+  // Floor to match SelectionManager.getViewportY() which uses Math.floor() internally.
+  // Wheel scrolling sets viewportY = currentY - deltaY/33, which is fractional.
+  // Without flooring, toAbsolute() returns non-integer absolute rows and the WASM
+  // buffer API truncates to one line lower than the renderer shows — the off-by-one.
+  const gvY = Math.floor(term.getViewportY())
   const toAbsolute = (viewportRow: number): number => scrollbackLen + viewportRow - gvY
 
   let out = ''

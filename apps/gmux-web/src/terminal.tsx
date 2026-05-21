@@ -507,7 +507,10 @@ export function TerminalView({
         // restore (scrollToLine(snap.viewportY)) therefore keeps the right content
         // visible without any explicit growth-compensation arithmetic.
         const scrollbackLen = term.getScrollbackLength()
-        const gvY = term.getViewportY()
+        // Floor: wheel scroll sets viewportY = currentY - deltaY/33 (fractional).
+        // Using the raw fractional value here would store non-integer prevViewportY,
+        // causing restoreScroll to land at a fractional position (persistent off-by-one).
+        const gvY = Math.floor(term.getViewportY())
         const viewportY = scrollbackLen - gvY
         return { viewportY, baseY: scrollbackLen, rows: term.rows }
       },
@@ -583,7 +586,7 @@ export function TerminalView({
       // ghostty-web: getViewportY()=0 at bottom, =N when N scrollback lines are visible.
       // gvY IS the distance scrolled from the bottom; show the jump-to-bottom button
       // only when that distance exceeds the threshold.
-      const gvY = term.getViewportY()
+      const gvY = Math.floor(term.getViewportY())
       setScrolledUp(gvY > SCROLL_THRESHOLD)
     })
 
@@ -807,8 +810,8 @@ export function TerminalView({
     termIoRef.current.reset(epoch)
 
     // Consume any saved scroll position for this session (set when switching away).
-    // gvY = ghostty getViewportY() = lines above bottom (0 = at bottom).
-    const savedGvY = savedScrollRef.current.get(session.id) ?? 0
+    // gvY = ghostty getViewportY() = lines above bottom (0 = at bottom). Floor to int.
+    const savedGvY = Math.floor(savedScrollRef.current.get(session.id) ?? 0)
     savedScrollRef.current.delete(session.id)
 
     resetResizeEchoGate()
@@ -1002,7 +1005,7 @@ export function TerminalView({
       // Save scroll position so returning to this session restores it.
       const t = termRef.current
       if (t) {
-        const gvY = t.getViewportY()
+        const gvY = Math.floor(t.getViewportY())
         if (gvY > 0) {
           savedScrollRef.current.set(session.id, gvY)
         } else {

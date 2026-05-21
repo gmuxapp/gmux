@@ -223,6 +223,34 @@ describe('selectionToText', () => {
     expect(selectionToText(term)).toBe('sb1\nsb2')
   })
 
+  it('floors fractional gvY to match SelectionManager and the renderer', () => {
+    // Wheel scroll sets viewportY = currentY - deltaY/33 (fractional, e.g. 1.97).
+    // SelectionManager.getViewportY() floors it; the renderer uses Math.floor() too.
+    // selectionToText must also floor so that toAbsolute() returns the same integer
+    // absolute row the renderer shows at each viewport position.
+    //
+    // Buffer: [sb0, sb1, sb2, vp0, vp1].  scrollbackLen=3, gvY=1.97.
+    // Floor(1.97)=1, so this is the same visible layout as gvY=1:
+    //   viewport row 0 → absolute 2 (sb2)
+    //   viewport row 1 → absolute 3 (vp0)
+    const term = makeTerm({
+      cols: 10,
+      rows: [
+        'sb0',  // absolute 0
+        'sb1',  // absolute 1
+        'sb2',  // absolute 2 (viewport row 0 when gvY=1)
+        'vp0',  // absolute 3 (viewport row 1 when gvY=1)
+        'vp1',  // absolute 4
+      ],
+      scrollbackLen: 3,
+      viewportY: 1.97,  // fractional — as produced by wheel scroll
+      selection: { start: { x: 0, y: 0 }, end: { x: 2, y: 1 } },
+    })
+    // Without Math.floor, toAbsolute(0) = 3 + 0 - 1.97 = 1.03 → truncates to lines[1] = 'sb1'.
+    // With Math.floor: toAbsolute(0) = 3 + 0 - 1 = 2 → lines[2] = 'sb2' (what the renderer shows).
+    expect(selectionToText(term)).toBe('sb2\nvp0')
+  })
+
   it('does not insert a newline after the last selected row', () => {
     const term = makeTerm({
       cols: 10,
