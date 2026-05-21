@@ -1190,6 +1190,21 @@ body {
 .main-header-status.working { color: var(--accent); }
 .main-header-status.error   { color: var(--status-error); }
 
+.sync-diag {
+  font-size: 11px;
+  font-family: 'Source Code Pro', 'SF Mono', monospace;
+  white-space: nowrap;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  background: transparent;
+  flex-shrink: 0;
+}
+.sync-diag.active { color: var(--accent); border-color: var(--accent); opacity: 0.85; }
+.sync-diag.done   { color: var(--status-connected); border-color: var(--status-connected); opacity: 0.7; }
+.sync-diag.error  { color: var(--status-error); border-color: var(--status-error); }
+
 /* Session actions menu */
 
 .session-menu {

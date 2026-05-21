@@ -4,7 +4,7 @@ import { LocationProvider, Router, Route, lazy, useLocation } from 'preact-iso'
 import './styles.css'
 
 import { ReplayView } from './replay-view'
-import { TerminalView } from './terminal'
+import { TerminalView, type SyncDiag } from './terminal'
 import { useArrivalPulse } from './use-arrival-pulse'
 import { Sidebar } from './sidebar'
 import type { DotState } from './store'
@@ -44,9 +44,10 @@ installCopySession()
 
 // ── Components ──
 
-function MainHeader({ session, onRestart }: {
+function MainHeader({ session, onRestart, syncDiag }: {
   session: Session | null
   onRestart?: () => void
+  syncDiag?: SyncDiag | null
 }) {
   if (!session) {
     return (
@@ -71,6 +72,7 @@ function MainHeader({ session, onRestart }: {
         </div>
       </div>
       <div class="main-header-right">
+        {syncDiag && <SyncDiagBadge diag={syncDiag} />}
         {session.status && session.status.label && (
           <div class={`main-header-status ${session.status.error ? 'error' : session.status.working ? 'working' : ''}`}>
             <span
@@ -82,6 +84,65 @@ function MainHeader({ session, onRestart }: {
         )}
         <SessionMenu session={session} onRestart={onRestart} />
       </div>
+    </div>
+  )
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n}B`
+  if (n < 1048576) return `${(n / 1024).toFixed(1)}KB`
+  return `${(n / 1048576).toFixed(2)}MB`
+}
+
+function fmtMs(startMs: number, endMs: number | null): string {
+  const ms = (endMs ?? Date.now()) - startMs
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`
+}
+
+function SyncDiagBadge({ diag }: { diag: SyncDiag }) {
+  const { syncPhase, scrollbackBytes, scrollbackMsgs, syncStartedAt, syncEndedAt, pendingWrite, wsState, reconnects } = diag
+
+  // Only show during/after a sync, and on reconnects — hide when idle
+  const interesting = syncPhase !== 'idle' || wsState === 'lost' || reconnects > 0
+  if (!interesting) return null
+
+  const phaseLabel: Record<string, string> = {
+    idle: '', waiting: 'waiting', buffering: 'syncing…', done: 'synced', skipped: 'skipped'
+  }
+
+  const parts: string[] = []
+
+  if (wsState === 'lost') parts.push('ws\u00a0lost')
+  else if (wsState === 'connecting') parts.push('connecting…')
+
+  if (reconnects > 0) parts.push(`reconnects\u00a0${reconnects}`)
+
+  if (syncPhase !== 'idle' && syncPhase !== 'waiting') {
+    parts.push(phaseLabel[syncPhase] ?? syncPhase)
+  }
+
+  if ((syncPhase === 'buffering' || syncPhase === 'done' || syncPhase === 'skipped') && scrollbackBytes > 0) {
+    parts.push(`${fmtBytes(scrollbackBytes)}\u00a0/\u00a0${scrollbackMsgs}msg`)
+  }
+
+  if (syncPhase === 'buffering' && syncStartedAt) {
+    parts.push(fmtMs(syncStartedAt, null))
+  }
+
+  if (syncPhase === 'done' && syncStartedAt) {
+    parts.push(fmtMs(syncStartedAt, syncEndedAt))
+  }
+
+  if (pendingWrite) parts.push('writing…')
+
+  if (parts.length === 0) return null
+
+  const isError = syncPhase === 'skipped' || wsState === 'lost'
+  const isActive = syncPhase === 'buffering' || pendingWrite || wsState === 'connecting'
+
+  return (
+    <div class={`sync-diag ${isError ? 'error' : isActive ? 'active' : 'done'}`}>
+      {parts.join('\u2002·\u2002')}
     </div>
   )
 }
@@ -363,19 +424,23 @@ function App() {
   const [ctrlArmed, setCtrlArmed] = useState(false)
   const [altArmed, setAltArmed] = useState(false)
 
-  const terminalInputRef = useRef<((data: string) => void) | null>(null)
-  const terminalFocusRef = useRef<(() => void) | null>(null)
-  const terminalPasteRef = useRef<(() => void) | null>(null)
-
-  // Read signals.
-  const viewVal = view.value
   const selId = selectedId.value
+
+  const [syncDiag, setSyncDiag] = useState<SyncDiag | null>(null)
+  // Reset diag when the selected session changes
+  useEffect(() => { setSyncDiag(null) }, [selId])
+  const handleSyncDiag = useCallback((d: SyncDiag) => setSyncDiag(d), [])
   const selectedVal = selected.value
   const sessionsVal = sessions.value
   const connVal = connState.value
   const termOpts = terminalOptions.value
   const keybindsVal = keybinds.value
   const macCtrl = macCommandIsCtrl.value
+  const viewVal = view.value
+
+  const terminalInputRef = useRef<((data: string) => void) | null>(null)
+  const terminalFocusRef = useRef<(() => void) | null>(null)
+  const terminalPasteRef = useRef<(() => void) | null>(null)
 
   const { notifPermission, requestNotifPermission } = usePresence()
 
@@ -493,6 +558,7 @@ function App() {
         {viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && viewVal.kind !== 'markdown-editor' && (
           <MainHeader
             session={selectedVal}
+            syncDiag={syncDiag}
             onRestart={selectedVal ? () => { restartSession(selectedVal.id).catch(err => console.error('restart failed:', err)) } : undefined}
           />
         )}
@@ -535,6 +601,7 @@ function App() {
             onInputReady={handleTerminalInputReady}
             onPasteReady={handleTerminalPasteReady}
             onFocusReady={handleTerminalFocusReady}
+            onSyncDiag={handleSyncDiag}
           />
         ) : selectedVal && !selectedVal.alive && termOpts && !USE_MOCK ? (
           <ReplayView

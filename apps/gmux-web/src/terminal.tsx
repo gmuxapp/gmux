@@ -5,8 +5,29 @@ import { attachKeyboardHandler, attachPasteHandler, ctrlSequenceFor, defaultPast
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { shouldFocusOnTouchEnd } from './terminal-touch'
-import { createReplayBuffer } from './replay'
+import { createReplayBuffer, type ReplayState } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
+
+// ── Sync diagnostics ──────────────────────────────────────────────────────────
+
+export interface SyncDiag {
+  /** Mirror of ReplayBuffer.state — updated as data flows in */
+  syncPhase: ReplayState | 'skipped' | 'idle'
+  /** Total bytes received in the scrollback (BSU…ESU) block */
+  scrollbackBytes: number
+  /** WebSocket messages that arrived before replay was done */
+  scrollbackMsgs: number
+  /** Wall-clock time when first BSU byte arrived (ms since epoch) */
+  syncStartedAt: number | null
+  /** Wall-clock time when ESU was detected */
+  syncEndedAt: number | null
+  /** True while terminalIO still has queued write work */
+  pendingWrite: boolean
+  /** WS connection state */
+  wsState: 'connecting' | 'open' | 'lost'
+  /** How many times the WS has reconnected (0 = first connect) */
+  reconnects: number
+}
 import { decideViewportResize, sameSize } from './terminal-resize'
 import { MOCK_BY_ID } from './mock-data/index'
 import type { Session } from './types'
@@ -252,6 +273,7 @@ export function TerminalView({
   onInputReady,
   onPasteReady,
   onFocusReady,
+  onSyncDiag,
 }: {
   session: Session
   terminalOptions: ResolvedTerminalOptions
@@ -264,6 +286,7 @@ export function TerminalView({
   onInputReady?: (send: ((data: string) => void) | null) => void
   onPasteReady?: (paste: (() => void) | null) => void
   onFocusReady?: (focus: (() => void) | null) => void
+  onSyncDiag?: (diag: SyncDiag) => void
 }) {
   const shellRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -291,6 +314,23 @@ export function TerminalView({
   const [scrolledUp, setScrolledUp] = useState(false)
   const SCROLL_THRESHOLD = 3
   const [ptySize, setPtySize] = useState<TerminalSize | null>(null)
+
+  // Sync diagnostics state — read by the header via onSyncDiag callback
+  const syncDiagRef = useRef<SyncDiag>({
+    syncPhase: 'idle',
+    scrollbackBytes: 0,
+    scrollbackMsgs: 0,
+    syncStartedAt: null,
+    syncEndedAt: null,
+    pendingWrite: false,
+    wsState: 'connecting',
+    reconnects: 0,
+  })
+  const reconnectCountRef = useRef(0)
+  const emitSyncDiag = useCallback((patch: Partial<SyncDiag>) => {
+    syncDiagRef.current = { ...syncDiagRef.current, ...patch }
+    onSyncDiag?.(syncDiagRef.current)
+  }, [onSyncDiag])
 
   const viewportSizeRef = useRef<TerminalSize | null>(null)
   const ptySizeRef = useRef<TerminalSize | null>(null)
@@ -775,6 +815,17 @@ export function TerminalView({
     setPtySize(null); ptySizeRef.current = null
     setViewportSize(null); viewportSizeRef.current = null
     setWsState('connecting')
+    reconnectCountRef.current = 0
+    emitSyncDiag({
+      syncPhase: 'idle',
+      scrollbackBytes: 0,
+      scrollbackMsgs: 0,
+      syncStartedAt: null,
+      syncEndedAt: null,
+      pendingWrite: false,
+      wsState: 'connecting',
+      reconnects: 0,
+    })
 
     setTermLoading(true)
 
@@ -787,6 +838,11 @@ export function TerminalView({
       }
 
       termIoRef.current?.forceNextScrollToBottom()
+      emitSyncDiag({ syncPhase: 'waiting', wsState: 'connecting' })
+
+      // Track bytes/msgs for diagnostics as chunks arrive
+      let replaySyncBytes = 0
+      let replaySyncMsgs = 0
 
       const replay = createReplayBuffer((chunks) => {
         // Strip OSC 52 from replayed bytes (suppress clipboard writes from
@@ -800,7 +856,9 @@ export function TerminalView({
             termRef.current.scrollToLine(savedGvY)
           }
           setTermLoading(false)
+          emitSyncDiag({ pendingWrite: false })
         })
+        emitSyncDiag({ syncEndedAt: Date.now(), pendingWrite: true })
       })
 
       const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -811,8 +869,12 @@ export function TerminalView({
       ws.onopen = () => {
         attempt = 0
         setWsState('open')
+        const rc = reconnectCountRef.current
+        emitSyncDiag({ wsState: 'open', reconnects: rc })
 
         if (!isFirstConnect) {
+          reconnectCountRef.current += 1
+          emitSyncDiag({ reconnects: reconnectCountRef.current })
           resetResizeEchoGate()
           const sess = sessionRef.current
           if (sess.terminal_cols && sess.terminal_rows) {
@@ -861,7 +923,26 @@ export function TerminalView({
 
           const data = interceptOsc52(new TextEncoder().encode(ev.data))
           if (replay.state !== 'done') {
+            replaySyncBytes += data.length
+            replaySyncMsgs += 1
+            const wasWaiting = replay.state === 'waiting'
             replay.push(data)
+            if (wasWaiting) {
+              // After first push: 'buffering' (BSU found) or 'done' (no BSU = skipped)
+              const phase = replay.state as ReplayState
+              emitSyncDiag({
+                syncPhase: phase === 'done' ? 'skipped' : phase,
+                syncStartedAt: Date.now(),
+                scrollbackBytes: replaySyncBytes,
+                scrollbackMsgs: replaySyncMsgs,
+              })
+            } else {
+              emitSyncDiag({
+                syncPhase: replay.state,
+                scrollbackBytes: replaySyncBytes,
+                scrollbackMsgs: replaySyncMsgs,
+              })
+            }
             return
           }
           queueData(data, () => setTermLoading(false))
@@ -874,7 +955,25 @@ export function TerminalView({
         const data = interceptOsc52(rawData)
 
         if (replay.state !== 'done') {
+          replaySyncBytes += data.length
+          replaySyncMsgs += 1
+          const wasWaiting2 = replay.state === 'waiting'
           replay.push(data)
+          if (wasWaiting2) {
+            const phase = replay.state as ReplayState
+            emitSyncDiag({
+              syncPhase: phase === 'done' ? 'skipped' : phase,
+              syncStartedAt: Date.now(),
+              scrollbackBytes: replaySyncBytes,
+              scrollbackMsgs: replaySyncMsgs,
+            })
+          } else {
+            emitSyncDiag({
+              syncPhase: replay.state,
+              scrollbackBytes: replaySyncBytes,
+              scrollbackMsgs: replaySyncMsgs,
+            })
+          }
           return
         }
 
@@ -884,6 +983,7 @@ export function TerminalView({
       ws.onclose = () => {
         resetResizeEchoGate()
         setWsState(prev => prev === 'open' ? 'lost' : prev)
+        emitSyncDiag({ wsState: 'lost' })
         if (disposed.current || intentionalClose) return
         if (currentSessionId.current !== session.id) return
 
@@ -917,7 +1017,7 @@ export function TerminalView({
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [fitAndResize, queueData, queueMany, queueResize, releaseResizeEchoGate, resetResizeEchoGate, session.id, ghosttyReady])
+  }, [fitAndResize, queueData, queueMany, queueResize, releaseResizeEchoGate, resetResizeEchoGate, emitSyncDiag, session.id, ghosttyReady])
 
   const showDisconnectedPill = wsState === 'lost'
   const showResizePill = !showDisconnectedPill
