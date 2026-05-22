@@ -86,6 +86,17 @@ type SpokeHealth struct {
 	Launchers       []LauncherDef `json:"launchers"`
 }
 
+// SpokeProject is the minimal projection of a peer's project that
+// the hub re-broadcasts in its own snapshot.world under
+// peer_projects[<peerName>][]. Enough for the viewer to render the
+// reference (folder header, launch fallback) without proxying a
+// separate request. Session counts and last-active timestamps are
+// derived client-side from stamped sessions.
+type SpokeProject struct {
+	Slug      string `json:"slug"`
+	LaunchCwd string `json:"launch_cwd,omitempty"`
+}
+
 // PeerInfo is the public status of a single peer connection.
 type PeerInfo struct {
 	Name            string        `json:"name"`
@@ -96,6 +107,13 @@ type PeerInfo struct {
 	Version         string        `json:"version,omitempty"`
 	DefaultLauncher string        `json:"default_launcher,omitempty"`
 	Launchers       []LauncherDef `json:"launchers,omitempty"`
+	// Local is true when this peer is conceptually an extension of
+	// the host (a devcontainer discovered by the Docker watcher,
+	// not a network peer). Local peers don't own their own project
+	// assignments; the parent's match rules stamp their sessions,
+	// which then bucket into the parent's local folders. See ADR
+	// 0002 amendment.
+	Local bool `json:"local,omitempty"`
 }
 
 // NamespaceID returns a store-key for a remote session: "originalID@peerName".

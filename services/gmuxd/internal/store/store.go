@@ -386,26 +386,23 @@ func (s *Store) Remove(id string) bool {
 	return ok
 }
 
-// Reconcile re-derives ProjectSlug and ProjectIndex for every
-// origin-owned session (Peer == "") by calling assignFn for each.
-// assignFn is expected to return ("", 0) for sessions that no
-// project currently claims.
+// Reconcile re-derives ProjectSlug and ProjectIndex for every session
+// by calling assignFn. assignFn is expected to return ("", 0) for
+// sessions that no project currently claims.
+//
+// The caller decides which sessions to claim. Local sessions and
+// Local-peer (devcontainer) sessions both flow through assignFn; the
+// caller is responsible for honouring origin-side stamps for genuine
+// network peers (returning the session's existing stamp unchanged so
+// the assignment doesn't get clobbered by parent rules).
 //
 // In-memory mutation only: no events are broadcast. Subscribers
 // observe the new stamps the next time the session is re-emitted
-// (e.g. via Upsert). Once the snapshot protocol composer lands
-// (commit 10), Reconcile folds into snapshot composition rather
-// than mutating sessions in place.
-//
-// Peer-owned sessions are skipped; their stamps are authoritative
-// from the origin and arrive over the wire.
+// (e.g. via Upsert).
 func (s *Store) Reconcile(assignFn func(Session) (slug string, index int)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, sess := range s.sessions {
-		if sess.Peer != "" {
-			continue
-		}
 		slug, index := assignFn(sess)
 		if sess.ProjectSlug == slug && sess.ProjectIndex == index {
 			continue

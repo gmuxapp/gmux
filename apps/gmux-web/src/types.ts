@@ -71,6 +71,14 @@ export interface Folder {
   peer?: string
   /** Filesystem path hint for launching new sessions in this folder. */
   launchCwd?: string
+  /**
+   * True when this folder is a reference whose peer is connected but
+   * no longer reports the named slug in its peer_projects. The folder
+   * is rendered with a missing indicator so the user can remove it
+   * manually. Distinct from a peer simply being disconnected (handled
+   * by the PeerLabel offline state).
+   */
+  missing?: boolean
   sessions: Session[]
 }
 
@@ -79,14 +87,37 @@ export interface Folder {
 export interface MatchRule {
   path?: string
   remote?: string
-  hosts?: string[]
   exact?: boolean // path must match exactly, not as prefix
 }
 
+/**
+ * One entry in the viewer's projects.json items[]. Two shapes share
+ * this type, discriminated by `peer`:
+ *
+ *   - Owned: `slug` + `match[]` (+ `sessions[]` maintained by server)
+ *     A project owned by this host. Match rules drive session
+ *     attribution; `sessions[]` is the ordered list of session keys
+ *     for sidebar order.
+ *   - Reference: `slug` + `peer`
+ *     A pointer to a project owned by a peer. The peer's projects.json
+ *     is the source of truth for match rules and session order; the
+ *     viewer just declares "show this peer's project at this position
+ *     in my sidebar."
+ */
 export interface ProjectItem {
   slug: string
-  match: MatchRule[]
-  sessions?: string[] // managed by server; must be preserved in PUT
+  /** Set when this item is a reference to a peer-owned project. */
+  peer?: string
+  /** Owned-project match rules. Empty/absent for references. */
+  match?: MatchRule[]
+  /** Server-managed ordering. Absent for references. */
+  sessions?: string[]
+}
+
+/** True when an item references a peer-owned project rather than
+ *  defining one locally. */
+export function isReferenceItem(item: ProjectItem): boolean {
+  return !!item.peer
 }
 
 export interface DiscoveredProject {
@@ -95,6 +126,18 @@ export interface DiscoveredProject {
   paths: string[]
   session_count: number
   active_count: number
+  /**
+   * Owning host for this suggestion. Absent for local-host discovery;
+   * set to the peer name for sessions disclaimed by a connected peer.
+   * Drives the host chip in the modal and routes "+ Add" to the
+   * correct daemon (proxied if remote).
+   */
+  peer?: string
+  /**
+   * Most-recent created_at among the sessions in this group, as an
+   * RFC3339 string. Used to sort suggestions by recency.
+   */
+  last_active?: string
 }
 
 /** Mirrors /v1/health peers entries. */
@@ -107,6 +150,24 @@ export interface PeerInfo {
   version?: string
   default_launcher?: string
   launchers?: LauncherDef[]
+  /**
+   * True when this peer is conceptually an extension of the host (a
+   * devcontainer reachable via PeerConfig.Local = true). Local peers
+   * don't own their own project assignments; their sessions are
+   * stamped by the parent and bucket into local sidebar folders.
+   */
+  local?: boolean
+}
+
+/**
+ * One project owned by a connected peer, projected down to just what
+ * the viewer needs to render a reference (folder header, launch
+ * fallback). Counts and timestamps are derived client-side from
+ * stamped sessions.
+ */
+export interface PeerProject {
+  slug: string
+  launch_cwd?: string
 }
 
 export interface LauncherDef {

@@ -86,14 +86,20 @@ func TestMigrateV1ToV2(t *testing.T) {
 	}
 }
 
-func TestMigrateV2Noop(t *testing.T) {
-	// Already v2 data should pass through unchanged.
+func TestMigrateV2ToV3(t *testing.T) {
+	// v2 data is structurally compatible with v3: the only schema
+	// difference is the addition of reference items and the removal
+	// of MatchRule.hosts. v2 files load cleanly; the hosts field is
+	// silently dropped because the struct no longer carries it.
 	v2Data := `{
   "version": 2,
   "items": [
     {
       "slug": "gmux",
-      "match": [{"remote": "github.com/gmuxapp/gmux"}, {"path": "~/dev/gmux"}],
+      "match": [
+        {"remote": "github.com/gmuxapp/gmux"},
+        {"path": "~/dev/gmux", "hosts": ["laptop"]}
+      ],
       "sessions": ["hub-protocol"]
     }
   ]
@@ -109,8 +115,8 @@ func TestMigrateV2Noop(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if state.Version != 2 {
-		t.Errorf("version = %d", state.Version)
+	if state.Version != currentVersion {
+		t.Errorf("version = %d, want %d", state.Version, currentVersion)
 	}
 	if len(state.Items) != 1 {
 		t.Fatalf("items = %d", len(state.Items))
@@ -123,13 +129,50 @@ func TestMigrateV2Noop(t *testing.T) {
 	}
 }
 
+func TestV3References(t *testing.T) {
+	// Mixed v3 file with an owned project and a reference to a peer's
+	// project. Both shapes load as Item; IsReference distinguishes.
+	v3Data := `{
+  "version": 3,
+  "items": [
+    {"slug": "gmux", "match": [{"path": "~/dev/gmux"}], "sessions": ["s1"]},
+    {"slug": "claude", "peer": "workstation"}
+  ]
+}`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte(v3Data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(state.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(state.Items))
+	}
+	if state.Items[0].IsReference() {
+		t.Error("item 0 should be owned")
+	}
+	if !state.Items[1].IsReference() {
+		t.Error("item 1 should be a reference")
+	}
+	if state.Items[1].Peer != "workstation" {
+		t.Errorf("item 1 peer = %q, want workstation", state.Items[1].Peer)
+	}
+	// Validate accepts the mixed file.
+	if err := state.Validate(); err != nil {
+		t.Errorf("validate mixed v3: %v", err)
+	}
+}
+
 func TestMigrateRoundtrip(t *testing.T) {
-	// Save v2 state, reload, verify identical.
+	// Save state, reload, verify identical.
 	dir := t.TempDir()
 	original := &State{
 		Version: currentVersion,
 		Items: []Item{
 			{Slug: "test", Match: []MatchRule{{Path: "~/projects/test"}}, Sessions: []string{"s1"}},
+			{Slug: "remote", Peer: "workstation"},
 		},
 	}
 	if err := original.Save(dir); err != nil {

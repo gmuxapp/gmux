@@ -14,7 +14,7 @@
  */
 
 import { signal, computed, batch, effect } from '@preact/signals'
-import type { Session, ProjectItem, DiscoveredProject, PeerInfo, LauncherDef, Folder } from './types'
+import type { Session, ProjectItem, DiscoveredProject, PeerInfo, PeerProject, LauncherDef, Folder } from './types'
 import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { buildProjectFolders, discoverProjects, countUnmatchedActive } from './projects'
@@ -58,6 +58,13 @@ export interface RawWorld {
   health: HealthData | null
   launchers: LauncherDef[]
   defaultLauncher: string
+  /**
+   * Per-peer projection of each connected peer's owned projects.
+   * Keyed by peer name. Drives the "On other hosts" section of
+   * Manage Projects and lets references render their launch fallback
+   * without proxying a separate request.
+   */
+  peerProjects: Record<string, PeerProject[]>
 }
 
 export const _rawSessions = signal<Session[]>([])
@@ -67,6 +74,7 @@ export const _rawWorld = signal<RawWorld>({
   health: null,
   launchers: [],
   defaultLauncher: 'shell',
+  peerProjects: {},
 })
 
 /** Merge a partial world update into `_rawWorld`. Used by SSE handlers,
@@ -179,6 +187,13 @@ export const health = computed<HealthData | null>(() => _rawWorld.value.health)
 export const launchers = computed<LauncherDef[]>(() => _rawWorld.value.launchers)
 export const defaultLauncher = computed<string>(() => _rawWorld.value.defaultLauncher)
 
+/** Per-peer projects from the world snapshot. Map from peer name to
+ *  its owned projects (slug + launch_cwd hint). Empty object when no
+ *  peers are connected or none have fetched yet. */
+export const peerProjects = computed<Record<string, PeerProject[]>>(
+  () => _rawWorld.value.peerProjects,
+)
+
 // Auto-clear pending mutations that the wire has acknowledged. Runs on
 // every raw update; uses .peek() to avoid re-triggering itself.
 effect(() => {
@@ -200,10 +215,10 @@ export const connState = signal<'connecting' | 'connected' | 'error'>('connectin
 // projections, not server-pushed state. They derive from the same
 // public sessions/projects projections everyone else uses.
 export const discovered = computed<DiscoveredProject[]>(
-  () => discoverProjects(sessions.value, projects.value),
+  () => discoverProjects(sessions.value, projects.value, peerStatusByName.value),
 )
 export const unmatchedActiveCount = computed<number>(
-  () => countUnmatchedActive(sessions.value, projects.value),
+  () => countUnmatchedActive(sessions.value, projects.value, peerStatusByName.value),
 )
 
 // ── Peer appearance: unique prefix + deterministic color ─────────────────────
@@ -363,9 +378,25 @@ export const filteredSessions = computed(() => {
   })
 })
 
+/** Set of peer names that are Local (devcontainers, PeerConfig.Local).
+ *  Local peers don't own their own project assignments; their sessions
+ *  are stamped by the parent and bucket into local sidebar folders. */
+export const localPeerNames = computed<ReadonlySet<string>>(() => {
+  const set = new Set<string>()
+  for (const p of peers.value) {
+    if (p.local) set.add(p.name)
+  }
+  return set
+})
+
 /** Project folders for the sidebar, built from projects + sessions. */
 export const folders = computed(() =>
-  buildProjectFolders(projects.value, filteredSessions.value),
+  buildProjectFolders(
+    projects.value,
+    filteredSessions.value,
+    (name) => localPeerNames.value.has(name),
+    _rawWorld.value.peerProjects,
+  ),
 )
 
 /**
@@ -552,21 +583,72 @@ async function putProjects(items: ProjectItem[]): Promise<void> {
   }
 }
 
+/** Remove an owned project by slug. References (peer + slug) are
+ *  removed via removePeerReference, which keys on the (peer, slug)
+ *  pair to handle same-slug coexistence with owned projects. */
 export async function removeProject(slug: string): Promise<void> {
-  await putProjects(projects.value.filter(p => p.slug !== slug))
+  await putProjects(projects.value.filter(p => p.peer || p.slug !== slug))
 }
 
-export async function addProject(req: { remote?: string; paths: string[] }): Promise<void> {
+export async function addProject(
+  req: { remote?: string; paths: string[] },
+  peer?: string,
+): Promise<{ slug: string }> {
+  // For remote adds, proxy through the hub: /v1/peers/{peer}/v1/projects/add.
+  // The peer applies the change to its own projects.json; we'll receive
+  // the new items[] back via projects-update + fetchProjects.
+  //
+  // Throws on non-2xx or network failure. Callers that chain follow-up
+  // work (auto-add a reference after a remote create) rely on this to
+  // avoid the dangling-reference failure mode where the peer rejected
+  // the add but the viewer's projects.json still gains a reference
+  // pointing at a slug that doesn't exist upstream.
+  //
+  // Returns the actual slug the server assigned. The server may
+  // deduplicate (e.g. "api" → "api-2" on collision), so callers must
+  // not assume the client-suggested slug round-tripped unchanged —
+  // referencing the wrong slug would produce an immediately dangling
+  // reference.
+  const path = peer
+    ? `/v1/peers/${encodeURIComponent(peer)}/v1/projects/add`
+    : '/v1/projects/add'
+  let resp: Response
   try {
-    const resp = await fetch('/v1/projects/add', {
+    resp = await fetch(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
     })
-    if (!resp.ok) console.warn('POST /v1/projects/add failed:', resp.status)
   } catch (err) {
-    console.warn('POST /v1/projects/add error:', err)
+    console.warn(`POST ${path} error:`, err)
+    throw err
   }
+  if (!resp.ok) {
+    const msg = `POST ${path} failed: ${resp.status}`
+    console.warn(msg)
+    throw new Error(msg)
+  }
+  const body = await resp.json() as { ok?: boolean; data?: { slug?: string } }
+  const slug = body.data?.slug
+  if (!slug) {
+    throw new Error(`POST ${path}: missing slug in response`)
+  }
+  return { slug }
+}
+
+/** Append a reference item to local projects.json. The reference
+ *  points at a peer-owned project; the peer's projects.json remains
+ *  the source of truth for rules and session order. */
+export async function addPeerReference(peer: string, slug: string): Promise<void> {
+  const existing = projects.value
+  if (existing.some(p => p.peer === peer && p.slug === slug)) return
+  await putProjects([...existing, { peer, slug }])
+}
+
+/** Remove a reference item from local projects.json. */
+export async function removePeerReference(peer: string, slug: string): Promise<void> {
+  const filtered = projects.value.filter(p => !(p.peer === peer && p.slug === slug))
+  await putProjects(filtered)
 }
 
 export async function updateProjects(items: ProjectItem[]): Promise<void> {
@@ -809,6 +891,7 @@ export function initStore(): () => void {
         health?: HealthData
         launchers?: LauncherDef[]
         default_launcher?: string
+        peer_projects?: Record<string, PeerProject[]>
       }
       _setRawWorld({
         projects: env.projects ?? [],
@@ -816,6 +899,7 @@ export function initStore(): () => void {
         health: env.health ?? null,
         launchers: env.launchers ?? [],
         defaultLauncher: env.default_launcher ?? 'shell',
+        peerProjects: env.peer_projects ?? {},
       })
     } catch (err) {
       console.warn('snapshot.world: bad event', err)

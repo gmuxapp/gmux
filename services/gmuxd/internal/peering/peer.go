@@ -35,11 +35,13 @@ type Peer struct {
 	store  *store.Store
 	api    *apiclient.Client
 
-	mu           sync.RWMutex
-	status       Status
-	lastError    string       // human-readable reason for last disconnect
-	cachedHealth SpokeHealth  // peer's /v1/health data, fetched on connect
-	healthLoaded bool         // true after first successful health fetch
+	mu             sync.RWMutex
+	status         Status
+	lastError      string      // human-readable reason for last disconnect
+	cachedHealth   SpokeHealth // peer's /v1/health data, fetched on connect
+	healthLoaded   bool        // true after first successful health fetch
+	cachedProjects []SpokeProject // peer's projects, refreshed on connect and on projects-update
+	projectsLoaded bool
 
 	// onStatus is called when connection state changes.
 	onStatus func(name string, status Status)
@@ -143,6 +145,83 @@ func (p *Peer) CachedHealth() (SpokeHealth, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.cachedHealth, p.healthLoaded
+}
+
+// CachedProjects returns the peer's project list, derived as
+// SpokeProject (slug + launch_cwd hint). Returns false until the
+// first successful fetch.
+func (p *Peer) CachedProjects() ([]SpokeProject, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.cachedProjects, p.projectsLoaded
+}
+
+// fetchProjects fetches the spoke's project list via GET /v1/projects,
+// projects each Item down to a SpokeProject (slug + launch_cwd hint
+// derived from the first path rule), and caches the result. Called
+// once after each successful SSE connection and again whenever the
+// peer broadcasts projects-update.
+func (p *Peer) fetchProjects(ctx context.Context) {
+	data, err := p.api.GetProjects(ctx)
+	if err != nil {
+		log.Printf("peering: %s: fetch projects: %v", p.Config.Name, err)
+		return
+	}
+	var envelope struct {
+		Configured []struct {
+			Slug  string `json:"slug"`
+			Peer  string `json:"peer,omitempty"`
+			Match []struct {
+				Path string `json:"path,omitempty"`
+			} `json:"match"`
+		} `json:"configured"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		log.Printf("peering: %s: parse projects: %v", p.Config.Name, err)
+		return
+	}
+	projects := make([]SpokeProject, 0, len(envelope.Configured))
+	for _, it := range envelope.Configured {
+		if it.Slug == "" {
+			continue
+		}
+		// Skip reference items (peer field set): we don't surface
+		// transitive references in our own snapshot.world. The viewer
+		// sees each peer's owned projects, not what those peers in
+		// turn reference from further upstream.
+		if it.Peer != "" {
+			continue
+		}
+		sp := SpokeProject{Slug: it.Slug}
+		for _, r := range it.Match {
+			if r.Path != "" {
+				sp.LaunchCwd = r.Path
+				break
+			}
+		}
+		projects = append(projects, sp)
+	}
+	p.mu.Lock()
+	p.cachedProjects = projects
+	p.projectsLoaded = true
+	p.mu.Unlock()
+	// Signal a status change so the hub's world coalescer re-emits
+	// snapshot.world with the updated peer_projects entry. Reusing
+	// peer-status keeps the wire surface minimal; the type-name is
+	// a slight overload but the trigger semantics are correct (this
+	// peer's externally-visible state changed).
+	//
+	// Skip the broadcast if the peer's context has been cancelled
+	// (peer torn down mid-fetch). The store cleanup that follows
+	// disconnect would otherwise race against a stale cache update,
+	// and we'd fire a re-compose for a peer the world snapshot no
+	// longer enumerates.
+	if ctx.Err() != nil {
+		return
+	}
+	if p.onStatus != nil {
+		p.onStatus(p.Config.Name, p.status)
+	}
 }
 
 // fetchHealth fetches the spoke's /v1/health via apiclient, extracts
@@ -255,9 +334,12 @@ func (p *Peer) subscribe(ctx context.Context, onConnected func()) error {
 			// Fetch the peer's health once per connection so the hub
 			// can serve version and launcher data from cache.
 			p.fetchHealth(ctx)
+			// Also fetch the peer's project list so the hub can surface
+			// references to its projects in its own snapshot.world.
+			p.fetchProjects(ctx)
 		},
 		func(ev sseclient.Event) {
-			p.handleEvent(ev.Type, ev.Data)
+			p.handleEvent(ctx, ev.Type, ev.Data)
 		},
 	)
 
@@ -311,7 +393,7 @@ func (p *Peer) isForwardedFromKnownOrigin(id string) bool {
 	return innerPeer != "" && p.isKnownOrigin(innerPeer)
 }
 
-func (p *Peer) handleEvent(eventType string, data []byte) {
+func (p *Peer) handleEvent(ctx context.Context, eventType string, data []byte) {
 	switch eventType {
 	case "snapshot.sessions":
 		// Authoritative replacement: the spoke's view of its owned
@@ -382,11 +464,21 @@ func (p *Peer) handleEvent(eventType string, data []byte) {
 		}
 		p.store.Remove(NamespaceID(ev.ID, p.Config.Name))
 
-	case "snapshot.world", "projects-update", "peer-status":
+	case "projects-update":
+		// Spoke's projects.json changed. Refresh the cached
+		// projection so the hub's snapshot.world reflects the new
+		// state. Pass the streaming ctx so the fetch is cancelled
+		// if the peer disconnects mid-flight (otherwise a slow
+		// /v1/projects could race past disconnect and fire a
+		// spurious peer-status broadcast via onStatus, triggering
+		// a world re-compose on stale data).
+		go p.fetchProjects(ctx)
+
+	case "snapshot.world", "peer-status":
 		// Hub composes its own world view. v2 spokes don't emit
 		// snapshot.world to asPeer subscribers anyway; v1 spokes
-		// emit projects-update / peer-status which we don't care
-		// about (hub state is authoritative for those).
+		// emit peer-status which we don't care about (hub state is
+		// authoritative for those).
 
 	default:
 		// Unknown event types are silently ignored for forward compatibility.

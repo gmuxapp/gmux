@@ -553,6 +553,12 @@ func serve(stderr io.Writer) int {
 	// State directory for persistent files (projects.json, auth-token, etc).
 	stateDir := paths.StateDir()
 
+	// peerManager and tsDiscovery are initialized later after config is
+	// loaded. Closures (reconcileProjectStamps, buildSessionInfos call
+	// sites) capture these pointers so handlers work once they're set.
+	var peerManager *peering.Manager
+	var tsDiscovery *tsdiscovery.Watcher
+
 	// Project manager handles concurrent access to projects.json and
 	// auto-assignment of sessions to projects.
 	projectMgr := projects.NewManager(stateDir)
@@ -565,6 +571,13 @@ func serve(stderr io.Writer) int {
 	reconcileProjectStamps := func(state *projects.State) {
 		assignments := state.AssignmentsByKey()
 		sessions.Reconcile(func(s store.Session) (string, int) {
+			// Network peers own their own project assignments;
+			// preserve whatever stamp arrived on the wire.
+			if s.Peer != "" && (peerManager == nil || !peerManager.IsLocalPeer(s.Peer)) {
+				return s.ProjectSlug, s.ProjectIndex
+			}
+			// Local sessions and Local-peer (devcontainer) sessions:
+			// parent owns assignment, stamp from its projects.json.
 			key := projects.SessionKey(s.ID, s.Slug)
 			a := assignments[key]
 			return a.Slug, a.Index
@@ -583,9 +596,21 @@ func serve(stderr io.Writer) int {
 	// rehydrateProjects for the identity-model rationale.
 	if state, err := projectMgr.Load(); err == nil {
 		rehydrateProjects(sessions, convIndex, state)
+		// Sweep resumable sessions into project.sessions[] arrays.
+		// The auto-assign subscriber only fires on session-upsert events,
+		// which arrive after this point; without this pass, a dead-but-
+		// resumable session loaded from sessionmeta would never be added
+		// to its matching project and would be invisible in the sidebar
+		// (the visibility filter requires a stamp).
+		projectMgr.AutoAssignAll(buildSessionInfos(sessions, func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) }))
 		// Stamp ProjectSlug / ProjectIndex on the just-rehydrated sessions
 		// (and on any sessions previously loaded via sessionmeta.Sweep)
-		// before SSE subscribers can observe.
+		// before SSE subscribers can observe. Reload to pick up any
+		// AutoAssignAll mutations; Broadcast also runs reconcile but only
+		// fires when state actually changed.
+		if fresh, err := projectMgr.Load(); err == nil {
+			state = fresh
+		}
 		reconcileProjectStamps(state)
 	}
 
@@ -619,10 +644,12 @@ func serve(stderr io.Writer) int {
 				continue
 			}
 			s := ev.Session
-			// Only auto-assign alive sessions. Dead resumable sessions
-			// stay in the array if already persisted from a previous run,
-			// but we don't bulk-add hundreds of old session files on startup.
-			if !s.Alive {
+			// Auto-assign live and resumable sessions. A dead session
+			// with a resume command is just as worth stamping as a live
+			// one; the user can still resume it, and without this stamp
+			// the session would be invisible in the sidebar after a
+			// daemon restart.
+			if !s.Alive && !s.Resumable {
 				continue
 			}
 			projectMgr.AutoAssignSession(projects.SessionInfo{
@@ -631,16 +658,13 @@ func serve(stderr io.Writer) int {
 				WorkspaceRoot: s.WorkspaceRoot,
 				Remotes:       s.Remotes,
 				Host:          s.Peer,
+				LocalHost:     s.Peer != "" && peerManager != nil && peerManager.IsLocalPeer(s.Peer),
 				Alive:         s.Alive,
-				Slug:     s.Slug,
+				Resumable:     s.Resumable,
+				Slug:          s.Slug,
 			})
 		}
 	}()
-
-	// peerManager and tsDiscovery are initialized later after config is
-	// loaded. The closures capture the pointers so handlers work once set.
-	var peerManager *peering.Manager
-	var tsDiscovery *tsdiscovery.Watcher
 
 	// ── Health + Capabilities ──
 
@@ -771,7 +795,7 @@ func serve(stderr io.Writer) int {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to load projects")
 			return
 		}
-		sessionInfos := buildSessionInfos(sessions)
+		sessionInfos := buildSessionInfos(sessions, func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) })
 		writeJSON(w, map[string]any{
 			"ok": true,
 			"data": map[string]any{
@@ -872,9 +896,10 @@ func serve(stderr io.Writer) int {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
 			return
 		}
-		// Populate the new project's sessions array with alive matches
-		// immediately, so the frontend sees them on the first fetch.
-		projectMgr.AutoAssignAllAlive(buildSessionInfos(sessions))
+		// Populate the new project's sessions array with matching live
+		// and resumable sessions immediately, so the frontend sees them
+		// on the first fetch.
+		projectMgr.AutoAssignAll(buildSessionInfos(sessions, func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) }))
 		writeJSON(w, map[string]any{"ok": true, "data": item})
 	})
 
@@ -1655,6 +1680,7 @@ func serve(stderr io.Writer) int {
 				Health:          health,
 				Launchers:       launchConfig.Launchers,
 				DefaultLauncher: launchConfig.DefaultLauncher,
+				PeerProjects:    composePeerProjects(peerManager),
 			}
 		}
 
@@ -1753,9 +1779,17 @@ func serve(stderr io.Writer) int {
 					}
 					sendSSE(w, ev.Type, ev)
 					flusher.Flush()
-				case "projects-update", "peer-status":
-					// Protocol-1 compat: browser-only. Hubs derive these
-					// from cached /v1/health and their own projects.json.
+				case "projects-update":
+					// Forwarded to peer consumers too: a peer hub uses
+					// this signal to refresh its cached projection of
+					// our projects (surfaced in its snapshot.world as
+					// peer_projects). Without this, peer-owned projects
+					// would only refresh on reconnect.
+					sendSSE(w, ev.Type, ev)
+					flusher.Flush()
+				case "peer-status":
+					// Protocol-1 compat: browser-only. Hubs derive peer
+					// status from their own peer manager.
 					if asPeer {
 						continue
 					}
@@ -1866,6 +1900,15 @@ func serve(stderr io.Writer) int {
 	hostname, _ := os.Hostname()
 	if len(cfg.Peers) > 0 || cfg.Discovery.Devcontainers || (cfg.Tailscale.Enabled && cfg.Discovery.Tailscale) {
 		peerManager = peering.NewManager(cfg.Peers, sessions, hostname)
+		// Prune namespaced projects.json keys when a Local peer
+		// (devcontainer) is removed: its `id@<peer>` session keys can
+		// never resolve again and would accumulate dead weight in the
+		// parent's projects.json.
+		peerManager.OnPeerRemoved = func(name string, wasLocal bool) {
+			if wasLocal {
+				projectMgr.PruneNamespacedKeys(name)
+			}
+		}
 		peerManager.Start()
 		if len(cfg.Peers) > 0 {
 			log.Printf("peering: %d peer(s) configured", len(cfg.Peers))
@@ -2050,6 +2093,36 @@ func runStatus(stdout, stderr io.Writer) int {
 	return 0
 }
 
+// composePeerProjects gathers each connected peer's cached project
+// projection into a map keyed by peer name. Returned as map[string][]
+// SpokeProject; the snapshot.world JSON tag handles the rest.
+//
+// Peers that haven't been fetched yet (or whose fetch failed) appear
+// with an empty list. The viewer still gets the key so it knows the
+// peer is enumerable; the list fills in once the first fetch lands.
+func composePeerProjects(mgr *peering.Manager) map[string][]peering.SpokeProject {
+	if mgr == nil {
+		return nil
+	}
+	infos := mgr.PeerStatus()
+	if len(infos) == 0 {
+		return nil
+	}
+	out := make(map[string][]peering.SpokeProject, len(infos))
+	for _, info := range infos {
+		p := mgr.GetPeer(info.Name)
+		if p == nil {
+			continue
+		}
+		projects, _ := p.CachedProjects()
+		if projects == nil {
+			projects = []peering.SpokeProject{}
+		}
+		out[info.Name] = projects
+	}
+	return out
+}
+
 // appendOfflinePeers merges active peers from the manager with offline
 // discovered peers from tailscale discovery. Returns nil if no peers.
 func appendOfflinePeers(mgr *peering.Manager, disc *tsdiscovery.Watcher) []peering.PeerInfo {
@@ -2232,11 +2305,21 @@ func isAllowedPeerProxyPath(method, sub string) bool {
 		parts[2] != "" && parts[3] == "sessions" {
 		return true
 	}
+	// Create a project on a peer: POST v1/projects/add.
+	// The frontend uses this to add a project on the peer's own
+	// projects.json from the Manage Projects modal (Discovered
+	// section, remote items). The peer applies the add atomically;
+	// the resulting items[] flows back via projects-update.
+	if method == http.MethodPost &&
+		len(parts) == 3 &&
+		parts[0] == "v1" && parts[1] == "projects" && parts[2] == "add" {
+		return true
+	}
 	return false
 }
 
 // buildSessionInfos converts store sessions to project SessionInfo structs.
-func buildSessionInfos(sessions *store.Store) []projects.SessionInfo {
+func buildSessionInfos(sessions *store.Store, isLocalPeer func(string) bool) []projects.SessionInfo {
 	list := sessions.List()
 	infos := make([]projects.SessionInfo, len(list))
 	for i, s := range list {
@@ -2246,8 +2329,10 @@ func buildSessionInfos(sessions *store.Store) []projects.SessionInfo {
 			WorkspaceRoot: s.WorkspaceRoot,
 			Remotes:       s.Remotes,
 			Host:          s.Peer,
+			LocalHost:     s.Peer != "" && isLocalPeer != nil && isLocalPeer(s.Peer),
 			Alive:         s.Alive,
-			Slug:     s.Slug,
+			Resumable:     s.Resumable,
+			Slug:          s.Slug,
 		}
 	}
 	return infos

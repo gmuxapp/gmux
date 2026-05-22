@@ -52,6 +52,19 @@ type WorldPayload struct {
 	Health          any `json:"health"`
 	Launchers       any `json:"launchers"`
 	DefaultLauncher any `json:"default_launcher"`
+
+	// PeerProjects enumerates each connected peer's projects so the
+	// viewer can render references (projects owned by other hosts) in
+	// the sidebar and Manage Projects modal without proxying a
+	// separate request. Keyed by peer name. Empty for peer consumers
+	// (they don't render references for hops they can't see anyway).
+	//
+	// Each entry carries the slug plus a launch_cwd hint derived from
+	// the peer's first path rule, so the launch button on an empty
+	// referenced folder has somewhere to land. Session counts and
+	// last-active timestamps are derived client-side from stamped
+	// sessions; nothing else needs to ride on this field.
+	PeerProjects any `json:"peer_projects,omitempty"`
 }
 
 // ComposeSessions builds a snapshot.sessions payload from the live

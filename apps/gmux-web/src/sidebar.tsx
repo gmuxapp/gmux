@@ -14,7 +14,7 @@ import {
   folders, selectedId, currentProjectKey,
   activityMap, unmatchedActiveCount, projects, connState,
   updateProjects, reorderSessions,
-  peerStatusByName, isSessionUnavailable,
+  peerStatusByName, isSessionUnavailable, localPeerNames,
   type DotState,
 } from './store'
 import { PeerLabel } from './peer-label'
@@ -200,12 +200,16 @@ function FolderGroup({
       return
     }
     const reordered = reorder(visible, drag.from, drag.over)
-    // reorderKeysForFolder filters non-owner sessions and strips the
-    // `@<peer>` namespace from slugless ids; see its docstring for
-    // the ADR-0002 corruption modes this prevents. The daemon's
-    // PATCH handler then does a partial-reorder merge that keeps
-    // hidden / dead-resumable entries at the tail.
-    const visibleKeys = reorderKeysForFolder(reordered, folder.peer)
+    // reorderKeysForFolder partitions sessions by the folder owner's
+    // identity and keys them appropriately for the owning daemon's
+    // projects.json (namespaced ids for Local-peer sessions inside a
+    // parent's local folder, plain ids for everything else). See its
+    // docstring for the full routing matrix.
+    const visibleKeys = reorderKeysForFolder(
+      reordered,
+      folder.peer,
+      (name) => localPeerNames.value.has(name),
+    )
     if (visibleKeys.length > 0) {
       reorderSessions(folder.slug, visibleKeys, folder.peer)
     }
@@ -220,13 +224,16 @@ function FolderGroup({
     <div class="folder">
       <div class="folder-header">
         <a
-          class={`folder-name${isCurrent ? ' current' : ''}`}
+          class={`folder-name${isCurrent ? ' current' : ''}${folder.missing ? ' missing' : ''}`}
           href={href}
-          title={`Open ${folder.name} hub`}
+          title={folder.missing
+            ? `${folder.name} no longer exists on ${folder.peer}; remove via Manage projects`
+            : `Open ${folder.name} hub`}
           onClick={onClick}
         >
           {folder.peer && <PeerLabel name={folder.peer} />}
           {folder.name}
+          {folder.missing && <span class="folder-missing-icon" title="Project missing on peer">?</span>}
         </a>
         <LaunchButton
           sessions={folder.sessions}
@@ -293,7 +300,7 @@ export function Sidebar({
   const hasProjects = projectsVal.length > 0
   const isOnlyHomeProject = projectsVal.length === 1
     && projectsVal[0].slug === 'home'
-    && projectsVal[0].match.some(r => r.path === '~' && r.exact)
+    && !!projectsVal[0].match?.some(r => r.path === '~' && r.exact)
 
   const seedHomeProject = async () => {
     if (projects.value.length === 0) {

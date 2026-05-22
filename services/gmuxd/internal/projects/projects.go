@@ -24,25 +24,48 @@ const fileName = "projects.json"
 
 // currentVersion is the latest projects.json schema version.
 // See migrateState for the evolution history.
-const currentVersion = 2
+const currentVersion = 3
 
 // MatchRule is a single criterion for matching sessions to a project.
 // Exactly one of Path or Remote should be set.
+//
+// Pre-v3 schemas allowed a Hosts []string field for scoping a rule to
+// specific peers. The field is no longer honoured: in the cross-host
+// project ownership model, scoping is implicit in ownership (each
+// project is owned by exactly one host). v2 files containing the
+// field decode silently because the JSON decoder ignores unknown
+// fields; the field is dropped on next Save.
 type MatchRule struct {
-	Path   string   `json:"path,omitempty"`
-	Remote string   `json:"remote,omitempty"`
-	Hosts  []string `json:"hosts,omitempty"` // empty = any host
-	Exact  bool     `json:"exact,omitempty"` // path must match exactly, not as prefix
+	Path   string `json:"path,omitempty"`
+	Remote string `json:"remote,omitempty"`
+	Exact  bool   `json:"exact,omitempty"` // path must match exactly, not as prefix
 }
 
-// Item is a user-configured project entry.
-// Match contains the rules that determine which sessions belong here.
-// Sessions is an ordered list of session keys (slug or session ID)
-// that controls sidebar order.
+// Item is a single entry in the user's projects.json items[] list. Two
+// shapes share this struct:
+//
+//   - Owned: Slug + Match[] + Sessions[]. This is a project owned by
+//     this host. Match drives session attribution; Sessions[] holds
+//     the ordered list of session keys for sidebar order.
+//   - Reference: Slug + Peer. This is a viewer-side reference to a
+//     project owned by a peer. Match and Sessions are unused: the
+//     peer's projects.json is the source of truth for both. The viewer
+//     just declares "show this peer's project in my sidebar at this
+//     position."
+//
+// Validate enforces exactly one of {Match present, Peer present}.
 type Item struct {
 	Slug     string      `json:"slug"`
-	Match    []MatchRule `json:"match"`
+	Peer     string      `json:"peer,omitempty"`
+	Match    []MatchRule `json:"match,omitempty"`
 	Sessions []string    `json:"sessions,omitempty"`
+}
+
+// IsReference reports whether this item is a reference to a peer-owned
+// project. References have no local match rules; their content is
+// driven entirely by the peer's stamps on the wire.
+func (i *Item) IsReference() bool {
+	return i.Peer != ""
 }
 
 // State holds the ordered list of configured projects.
@@ -124,10 +147,34 @@ func (s *State) Validate() error {
 		if !IsValidSlug(item.Slug) {
 			return fmt.Errorf("item %d: slug %q is not URL-safe", i, item.Slug)
 		}
-		if slugs[item.Slug] {
+		// References use a composite identity (peer+slug); owned
+		// projects use just slug. Detect duplicates within each
+		// kind separately so a local owned "gmux" and a reference
+		// to peer "workstation/gmux" can coexist.
+		key := item.Slug
+		if item.IsReference() {
+			key = item.Peer + "::" + item.Slug
+		}
+		if slugs[key] {
+			if item.IsReference() {
+				return fmt.Errorf("duplicate reference %s/%s", item.Peer, item.Slug)
+			}
 			return fmt.Errorf("duplicate slug %q", item.Slug)
 		}
-		slugs[item.Slug] = true
+		slugs[key] = true
+
+		if item.IsReference() {
+			// References carry no rules or sessions of their own.
+			// A non-empty Match[] would be a user error; reject it
+			// to keep the data shape unambiguous.
+			if len(item.Match) > 0 {
+				return fmt.Errorf("item %q: references cannot carry match rules", item.Slug)
+			}
+			if len(item.Sessions) > 0 {
+				return fmt.Errorf("item %q: references cannot carry sessions", item.Slug)
+			}
+			continue
+		}
 
 		if len(item.Match) == 0 {
 			return fmt.Errorf("item %q: match rules are empty", item.Slug)
@@ -187,11 +234,13 @@ func (s *State) Match(p MatchParams) *Item {
 
 	for i := range s.Items {
 		item := &s.Items[i]
+		// Skip reference items: their content is driven by peer
+		// stamps, not local rules. Match() returns owned projects
+		// only.
+		if item.IsReference() {
+			continue
+		}
 		for _, rule := range item.Match {
-			if !ruleMatchesHost(rule, p.Host) {
-				continue
-			}
-
 			if rule.Remote != "" {
 				normRemote := NormalizeRemote(rule.Remote)
 				for _, url := range p.Remotes {
@@ -228,20 +277,6 @@ func (s *State) Match(p MatchParams) *Item {
 		return bestPath
 	}
 	return firstRemote
-}
-
-// ruleMatchesHost returns true if the rule applies to the given host.
-// Rules without Hosts match any host.
-func ruleMatchesHost(rule MatchRule, host string) bool {
-	if len(rule.Hosts) == 0 {
-		return true
-	}
-	for _, h := range rule.Hosts {
-		if h == host {
-			return true
-		}
-	}
-	return false
 }
 
 // pathUnder returns true if candidate is equal to or a subdirectory of base.
@@ -363,10 +398,11 @@ func UniqueSlug(slug string, items []Item) string {
 // --- Session membership ---
 
 // AddSession appends a session key to a project's sessions list if not
-// already present. Returns true if the session was added.
+// already present. Returns true if the session was added. References
+// are skipped: their session order is the peer's responsibility.
 func (s *State) AddSession(slug, key string) bool {
 	for i := range s.Items {
-		if s.Items[i].Slug != slug {
+		if s.Items[i].Slug != slug || s.Items[i].IsReference() {
 			continue
 		}
 		for _, existing := range s.Items[i].Sessions {
@@ -390,10 +426,13 @@ func (s *State) AddSession(slug, key string) bool {
 // via the /v1/peers/{peer}/... proxy: the viewer never sees the full
 // projects.json on the peer, so it can't reconstruct the hidden tail.
 //
-// Returns true if the project was found.
+// Returns true if the project was found. References (peer-owned
+// projects) are skipped: their session order lives on the peer, not
+// in the local file, so the local PATCH endpoint must not touch
+// them even when the slug collides with a local owned project.
 func (s *State) ReorderSessions(slug string, req []string) bool {
 	for i := range s.Items {
-		if s.Items[i].Slug != slug {
+		if s.Items[i].Slug != slug || s.Items[i].IsReference() {
 			continue
 		}
 		inReq := make(map[string]bool, len(req))
@@ -414,10 +453,11 @@ func (s *State) ReorderSessions(slug string, req []string) bool {
 }
 
 // RemoveSession removes a session key from a project's sessions list.
-// Returns true if the session was found and removed.
+// Returns true if the session was found and removed. References are
+// skipped: they carry no sessions[] of their own.
 func (s *State) RemoveSession(slug, key string) bool {
 	for i := range s.Items {
-		if s.Items[i].Slug != slug {
+		if s.Items[i].Slug != slug || s.Items[i].IsReference() {
 			continue
 		}
 		for j, existing := range s.Items[i].Sessions {
@@ -509,8 +549,14 @@ type SessionInfo struct {
 	WorkspaceRoot string
 	Remotes       map[string]string
 	Host          string // peer name; empty for local sessions
-	Alive         bool
-	Slug     string
+	// LocalHost is true when Host is a Local peer (devcontainer): the
+	// session lives on a peer but the parent owns its project
+	// assignment. AutoAssign treats these as local for the purposes
+	// of writing into projects.json.
+	LocalHost bool
+	Alive     bool
+	Resumable bool // dead but has a resume command persisted
+	Slug      string
 }
 
 // matchParamsFromInfo builds MatchParams from a SessionInfo.

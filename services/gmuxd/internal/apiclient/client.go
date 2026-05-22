@@ -169,6 +169,45 @@ func (c *Client) GetHealth(ctx context.Context) (json.RawMessage, error) {
 	return envelope.Data, nil
 }
 
+// GetProjects fetches GET /v1/projects and returns the Data field of
+// the response envelope (the raw projects JSON, unwrapped).
+//
+// Used by the hub to surface peer-owned projects in its own snapshot.world
+// so the viewer can render references to them without proxying a separate
+// request. Refreshed on connect and on projects-update events from the peer.
+func (c *Client) GetProjects(ctx context.Context) (json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, httpActionTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/projects", nil)
+	if err != nil {
+		return nil, fmt.Errorf("apiclient GetProjects: %w", err)
+	}
+	c.setAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("apiclient GetProjects: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("apiclient GetProjects: unexpected status %d", resp.StatusCode)
+	}
+
+	var envelope struct {
+		OK   bool            `json:"ok"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return nil, fmt.Errorf("apiclient GetProjects: decode: %w", err)
+	}
+	if !envelope.OK {
+		return nil, fmt.Errorf("apiclient GetProjects: ok=false")
+	}
+	return envelope.Data, nil
+}
+
 // ForwardAction proxies an HTTP request to the spoke's
 // /v1/sessions/{sessionID}/{action} endpoint. It's the canonical way
 // for a hub to implement kill/resume/dismiss/read/restart on a

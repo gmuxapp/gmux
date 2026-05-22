@@ -1035,7 +1035,7 @@ func TestManagerCleanupSessionsNoOrphans(t *testing.T) {
 	}
 }
 
-func TestManagerAutoAssignAllAlive(t *testing.T) {
+func TestManagerAutoAssignAll(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)
 
@@ -1050,15 +1050,16 @@ func TestManagerAutoAssignAllAlive(t *testing.T) {
 	sessions := []SessionInfo{
 		{ID: "s1", Cwd: "/dev/gmux/src", Alive: true},
 		{ID: "s2", Cwd: "/dev/yapp", Alive: true},
-		{ID: "s3", Cwd: "/dev/gmux", Alive: false}, // dead: should be skipped
-		{ID: "s4", Cwd: "/other", Alive: true},      // unmatched: should be skipped
+		{ID: "s3", Cwd: "/dev/gmux", Alive: false, Resumable: true}, // dead+resumable: included
+		{ID: "s4", Cwd: "/dev/gmux", Alive: false},                  // dead, no resume: skipped
+		{ID: "s5", Cwd: "/other", Alive: true},                       // unmatched: skipped
 	}
 
-	mgr.AutoAssignAllAlive(sessions)
+	mgr.AutoAssignAll(sessions)
 
 	state, _ := mgr.Load()
-	if len(state.Items[0].Sessions) != 1 || state.Items[0].Sessions[0] != "s1" {
-		t.Errorf("gmux sessions: expected [s1], got %v", state.Items[0].Sessions)
+	if len(state.Items[0].Sessions) != 2 || state.Items[0].Sessions[0] != "s1" || state.Items[0].Sessions[1] != "s3" {
+		t.Errorf("gmux sessions: expected [s1 s3], got %v", state.Items[0].Sessions)
 	}
 	if len(state.Items[1].Sessions) != 1 || state.Items[1].Sessions[0] != "s2" {
 		t.Errorf("yapp sessions: expected [s2], got %v", state.Items[1].Sessions)
@@ -1094,7 +1095,7 @@ func TestManagerAutoAssignSkipsPeerOwnedSession(t *testing.T) {
 	}
 }
 
-func TestManagerAutoAssignAllAliveSkipsPeerOwnedSessions(t *testing.T) {
+func TestManagerAutoAssignAllSkipsPeerOwnedSessions(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)
 
@@ -1110,42 +1111,11 @@ func TestManagerAutoAssignAllAliveSkipsPeerOwnedSessions(t *testing.T) {
 		{ID: "peer-1", Cwd: "/dev/gmux", Host: "tower", Alive: true},
 		{ID: "peer-2", Cwd: "/dev/gmux", Host: "laptop", Alive: true},
 	}
-	mgr.AutoAssignAllAlive(sessions)
+	mgr.AutoAssignAll(sessions)
 
 	state, _ := mgr.Load()
 	if len(state.Items[0].Sessions) != 1 || state.Items[0].Sessions[0] != "local-1" {
 		t.Errorf("expected only local-1 assigned, got %v", state.Items[0].Sessions)
-	}
-}
-
-func TestMatchHostScoping(t *testing.T) {
-	s := &State{Items: []Item{
-		{Slug: "laptop-data", Match: []MatchRule{{Path: "/data/ml", Hosts: []string{"laptop"}}}},
-		{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}},
-	}}
-
-	// Local session: host-scoped rule doesn't match (host is "").
-	m := s.Match(MatchParams{Cwd: "/data/ml/experiment"})
-	if m != nil {
-		t.Errorf("local session in /data/ml: expected nil (no unscoped match), got %q", m.Slug)
-	}
-
-	// Session from the scoped host: matches.
-	m = s.Match(MatchParams{Cwd: "/data/ml/experiment", Host: "laptop"})
-	if m == nil || m.Slug != "laptop-data" {
-		t.Errorf("laptop session: expected 'laptop-data', got %v", m)
-	}
-
-	// Session from a different peer: host-scoped rule doesn't apply.
-	m = s.Match(MatchParams{Cwd: "/data/ml/experiment", Host: "server"})
-	if m != nil {
-		t.Errorf("server session in /data/ml: expected nil, got %q", m.Slug)
-	}
-
-	// Unscoped rule matches any host.
-	m = s.Match(MatchParams{Cwd: "/dev/gmux/src", Host: "server"})
-	if m == nil || m.Slug != "gmux" {
-		t.Errorf("server session in /dev/gmux: expected 'gmux', got %v", m)
 	}
 }
 
@@ -1316,5 +1286,139 @@ func TestAssignmentsByKey_FirstOccurrenceWinsOnDuplicate(t *testing.T) {
 	got := state.AssignmentsByKey()
 	if got["shared"].Slug != "first" {
 		t.Errorf("expected first occurrence to win, got %+v", got["shared"])
+	}
+}
+
+// ── References (v3) ─────────────────────────────────────────────────
+
+// When a local owned project and a peer reference share a slug, the
+// session-membership operations must target the owned entry only:
+// references carry no Sessions[] of their own and writing to them
+// would corrupt the file shape and confuse the peer (whose
+// projects.json is the SOT for that slug).
+func TestSessionOpsSkipReferenceWithSameSlug(t *testing.T) {
+	// Reference appears BEFORE the owned entry in items[], so a
+	// naive `Slug == slug` loop would hit it first. The guard in
+	// AddSession/RemoveSession/ReorderSessions must skip it.
+	s := State{Items: []Item{
+		{Slug: "gmux", Peer: "tower"},                    // reference
+		{Slug: "gmux", Match: []MatchRule{{Path: "/x"}}}, // owned
+	}}
+
+	if !s.AddSession("gmux", "sess-1") {
+		t.Fatal("AddSession returned false")
+	}
+	if len(s.Items[0].Sessions) != 0 {
+		t.Errorf("reference contaminated by AddSession: %v", s.Items[0].Sessions)
+	}
+	if !equalStrings(s.Items[1].Sessions, []string{"sess-1"}) {
+		t.Errorf("owned project sessions = %v, want [sess-1]", s.Items[1].Sessions)
+	}
+
+	if !s.ReorderSessions("gmux", []string{"sess-1"}) {
+		t.Fatal("ReorderSessions returned false")
+	}
+	if len(s.Items[0].Sessions) != 0 {
+		t.Errorf("reference contaminated by ReorderSessions: %v", s.Items[0].Sessions)
+	}
+
+	if !s.RemoveSession("gmux", "sess-1") {
+		t.Fatal("RemoveSession returned false")
+	}
+	if len(s.Items[1].Sessions) != 0 {
+		t.Errorf("owned sessions not cleared: %v", s.Items[1].Sessions)
+	}
+}
+
+func TestValidateRejectsReferenceWithMatchRules(t *testing.T) {
+	s := State{Items: []Item{
+		{Slug: "gmux", Peer: "tower", Match: []MatchRule{{Path: "/x"}}},
+	}}
+	if err := s.Validate(); err == nil {
+		t.Error("expected validation error for reference with match rules")
+	}
+}
+
+func TestValidateAllowsSameSlugAsOwnedAndReference(t *testing.T) {
+	s := State{Items: []Item{
+		{Slug: "gmux", Match: []MatchRule{{Path: "/x"}}},
+		{Slug: "gmux", Peer: "tower"},
+	}}
+	if err := s.Validate(); err != nil {
+		t.Errorf("expected mixed owned+reference with same slug to validate, got: %v", err)
+	}
+}
+
+func TestValidateRejectsDuplicateReferences(t *testing.T) {
+	s := State{Items: []Item{
+		{Slug: "gmux", Peer: "tower"},
+		{Slug: "gmux", Peer: "tower"},
+	}}
+	if err := s.Validate(); err == nil {
+		t.Error("expected duplicate reference rejection")
+	}
+}
+
+// PruneNamespacedKeys is the GC hook fired when a Local peer
+// (devcontainer) is removed. It must:
+//   - drop keys whose suffix is exactly "@<peer>"
+//   - leave slug-keyed entries alone (those survive container restarts
+//     because the slug is stable)
+//   - leave references alone (their session order is the peer's, not
+//     ours)
+//   - not be fooled by peer names that are prefixes of other peer names
+//     ("dev" must not match keys ending in "@develop")
+func TestPruneNamespacedKeys(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{
+			{
+				Slug:  "proj",
+				Match: []MatchRule{{Path: "/x"}},
+				Sessions: []string{
+					"sess-a@container",  // should be pruned
+					"sess-b@container",  // should be pruned
+					"sess-c@develop",    // not @container; kept
+					"sess-d",            // local id; kept
+					"claude-attribution", // slug; kept (survives container restart)
+				},
+			},
+			{
+				Slug:     "remote",
+				Peer:     "container",
+				Sessions: nil,
+			},
+		}
+		return true
+	})
+
+	mgr.PruneNamespacedKeys("container")
+
+	state, _ := mgr.Load()
+	want := []string{"sess-c@develop", "sess-d", "claude-attribution"}
+	if !equalStrings(state.Items[0].Sessions, want) {
+		t.Errorf("after prune: got %v, want %v", state.Items[0].Sessions, want)
+	}
+	// Reference entry untouched (it had no sessions to begin with;
+	// pin the loop's continue-on-IsReference branch).
+	if len(state.Items[1].Sessions) != 0 {
+		t.Errorf("reference entry mutated: %v", state.Items[1].Sessions)
+	}
+}
+
+func TestPruneNamespacedKeysEmptyPeerNameNoop(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{
+			{Slug: "p", Match: []MatchRule{{Path: "/x"}}, Sessions: []string{"a", "b"}},
+		}
+		return true
+	})
+	mgr.PruneNamespacedKeys("")
+	state, _ := mgr.Load()
+	if !equalStrings(state.Items[0].Sessions, []string{"a", "b"}) {
+		t.Errorf("empty peer pruned sessions: %v", state.Items[0].Sessions)
 	}
 }

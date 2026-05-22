@@ -83,13 +83,14 @@ func (m *Manager) Update(fn func(s *State) bool) error {
 //   - A new session is discovered (Register)
 //   - A session gets a Slug (file attribution)
 //
-// Peer-owned sessions (info.Host != "") are never written to the local
-// projects.json: project membership is owned by the session's origin
-// host (ADR 0002). The viewer learns peer-side project assignment via
-// the session's stamps (ProjectSlug / ProjectIndex), not by mirroring
-// peer state into local config.
+// Network-peer sessions (info.Host set, info.LocalHost false) are never
+// written to the local projects.json: project membership for them is
+// owned by their origin host (ADR 0002). Local-peer sessions
+// (devcontainers, info.LocalHost = true) are an exception: the parent
+// owns their assignment per the ADR 0002 amendment, so they flow
+// through here like local sessions.
 func (m *Manager) AutoAssignSession(info SessionInfo) string {
-	if info.Host != "" {
+	if info.Host != "" && !info.LocalHost {
 		return ""
 	}
 	var assigned string
@@ -139,17 +140,25 @@ func (m *Manager) AutoAssignSession(info SessionInfo) string {
 	return assigned
 }
 
-// AutoAssignAllAlive iterates all sessions and adds alive ones to their
-// matching projects in a single atomic update. Called after adding a
-// project so that existing alive sessions populate the array immediately
-// rather than waiting for the next session-upsert event.
+// AutoAssignAll iterates all sessions and adds alive-or-resumable
+// ones to their matching projects in a single atomic update. Called
+// after adding a project so that existing sessions populate the array
+// immediately rather than waiting for the next session-upsert event,
+// and at startup so resumable sessions loaded from sessionmeta get
+// stamped before the first snapshot goes out (otherwise dead-but-
+// resumable sessions miss the auto-assign hook, which only fires on
+// session-upsert events for live sessions).
 //
-// Peer-owned sessions are skipped; see AutoAssignSession.
-func (m *Manager) AutoAssignAllAlive(sessions []SessionInfo) {
+// Network-peer sessions are skipped; Local-peer sessions flow through
+// because the parent owns their assignment. See AutoAssignSession.
+func (m *Manager) AutoAssignAll(sessions []SessionInfo) {
 	err := m.Update(func(state *State) bool {
 		changed := false
 		for _, info := range sessions {
-			if !info.Alive || info.Host != "" {
+			if !info.Alive && !info.Resumable {
+				continue
+			}
+			if info.Host != "" && !info.LocalHost {
 				continue
 			}
 			key := SessionKey(info.ID, info.Slug)
@@ -167,6 +176,40 @@ func (m *Manager) AutoAssignAllAlive(sessions []SessionInfo) {
 	})
 	if err != nil {
 		log.Printf("projects: auto-assign-all error: %v", err)
+	}
+}
+
+// PruneNamespacedKeys removes any session key ending in "@<peerName>"
+// from every project's Sessions[]. Called when a Local peer
+// (devcontainer) is destroyed: its namespaced ids will never resolve
+// again and would accumulate as dead weight in the parent's
+// projects.json. Reference items (peer-owned) are skipped: their
+// content is the peer's business.
+func (m *Manager) PruneNamespacedKeys(peerName string) {
+	if peerName == "" {
+		return
+	}
+	suffix := "@" + peerName
+	err := m.Update(func(state *State) bool {
+		changed := false
+		for i := range state.Items {
+			if state.Items[i].IsReference() {
+				continue
+			}
+			filtered := state.Items[i].Sessions[:0]
+			for _, key := range state.Items[i].Sessions {
+				if len(key) > len(suffix) && key[len(key)-len(suffix):] == suffix {
+					changed = true
+					continue
+				}
+				filtered = append(filtered, key)
+			}
+			state.Items[i].Sessions = filtered
+		}
+		return changed
+	})
+	if err != nil {
+		log.Printf("projects: prune namespaced keys (%s): %v", peerName, err)
 	}
 }
 

@@ -9,26 +9,33 @@ import type { HostNode } from './projects'
 import { buildProjectTopology } from './projects'
 import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
-import { sessions, projects, peers, peerStatusByName, isSessionUnavailable } from './store'
+import { sessions, projects, peers, peerStatusByName, isSessionUnavailable, localPeerNames } from './store'
 import { PeerLabel } from './peer-label'
 
 function projectRemote(p: ProjectItem | undefined): string | undefined {
-  return p?.match.find(r => r.remote)?.remote
+  return p?.match?.find(r => r.remote)?.remote
 }
 
 function projectFirstPath(p: ProjectItem | undefined): string | undefined {
-  return p?.match.find(r => r.path)?.path
+  return p?.match?.find(r => r.path)?.path
 }
 
 interface ProjectHubProps {
   projectSlug: string
+  projectPeer?: string
   onCloseSession: (session: Session) => void
 }
 
-export function ProjectHub({ projectSlug, onCloseSession }: ProjectHubProps) {
+export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: ProjectHubProps) {
   const projectsVal = projects.value
-  const project = projectsVal.find(p => p.slug === projectSlug)
-  const hosts = buildProjectTopology(projectSlug, sessions.value, projectsVal, peers.value)
+  const project = projectsVal.find(p =>
+    p.slug === projectSlug && (p.peer ?? '') === (projectPeer ?? ''),
+  )
+  const hosts = buildProjectTopology(
+    projectSlug, sessions.value, projectsVal, peers.value,
+    projectPeer,
+    (name) => localPeerNames.value.has(name),
+  )
   const remote = projectRemote(project)
 
   const totalSessions = hosts.reduce(
