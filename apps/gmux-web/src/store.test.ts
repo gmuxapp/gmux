@@ -7,6 +7,7 @@ import {
   isSessionUnavailable, urlPath, selectedId,
   navigateToSession, setNavigate,
   applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
+  toUISession,
 } from './store'
 import type { PendingMutation } from './store'
 import type { Session } from './types'
@@ -41,6 +42,51 @@ beforeEach(() => {
   _pendingMutations.value = []
   sessionsLoaded.value = false
   urlPath.value = '/'
+})
+
+// Pin the protocol-to-UI translation for stamp fields. Stamps are
+// the sole authority for sidebar bucketing under the references
+// model; if toUISession silently drops them (as it did between PR
+// #191 landing and this fix), every session becomes invisible
+// regardless of project configuration.
+describe('toUISession project stamp passthrough', () => {
+  it('preserves project_slug and project_index from the wire', () => {
+    const ui = toUISession({
+      id: 'sess-1', alive: true,
+      project_slug: 'gmux', project_index: 3,
+    } as any)
+    expect(ui.project_slug).toBe('gmux')
+    expect(ui.project_index).toBe(3)
+  })
+
+  it('preserves project_index: 0 (falsy but valid first position)', () => {
+    // 0 is the most common value (first session in a project) and is
+    // falsy in JS. Guards against future ||-coercion regressions on
+    // this field.
+    const ui = toUISession({
+      id: 'sess-1', alive: true,
+      project_slug: 'gmux', project_index: 0,
+    } as any)
+    expect(ui.project_index).toBe(0)
+  })
+
+  it('leaves stamps undefined when the wire omits them', () => {
+    const ui = toUISession({
+      id: 'sess-1', alive: true,
+    } as any)
+    expect(ui.project_slug).toBeUndefined()
+  })
+
+  it('treats empty-string project_slug as unstamped', () => {
+    // Go's omitempty drops empty strings, but legacy / dev paths may
+    // emit them. buildProjectFolders treats an empty stamp the same
+    // as no stamp; normalize at the boundary so consumers never
+    // see the difference.
+    const ui = toUISession({
+      id: 'sess-1', alive: true, project_slug: '',
+    } as any)
+    expect(ui.project_slug).toBeUndefined()
+  })
 })
 
 describe('upsertSession', () => {

@@ -33,6 +33,12 @@ export const SessionSchema = z.object({
   slug: z.string().optional(),
   runner_version: z.string().optional(),
   binary_hash: z.string().optional(),
+  // Project assignment stamps populated by the session's origin host.
+  // Drive sidebar bucketing (ADR 0002): a session is rendered under
+  // (peer, project_slug) iff project_slug is non-empty. project_index
+  // is the session's authoritative position inside that project.
+  project_slug: z.string().optional(),
+  project_index: z.number().int().nonnegative().optional(),
 })
 
 export const AttachResponseSchema = z.object({
