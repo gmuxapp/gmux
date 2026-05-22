@@ -13,11 +13,11 @@ import { sessions, projects, peers, peerStatusByName, isSessionUnavailable } fro
 import { PeerLabel } from './peer-label'
 
 function projectRemote(p: ProjectItem | undefined): string | undefined {
-  return p?.match.find(r => r.remote)?.remote
+  return p?.match?.find(r => r.remote)?.remote
 }
 
 function projectFirstPath(p: ProjectItem | undefined): string | undefined {
-  return p?.match.find(r => r.path)?.path
+  return p?.match?.find(r => r.path)?.path
 }
 
 interface ProjectHubProps {

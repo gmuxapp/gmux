@@ -17,6 +17,10 @@ import (
 //     and "paths" ([]string) as separate top-level fields.
 //   - 2: unified match rules. Items have "match" ([]MatchRule) instead of
 //     separate "remote" and "paths". Paths may use ~ for $HOME.
+//   - 3: items may also be peer references ({slug, peer}). MatchRule.hosts
+//     is dropped (replaced by ownership). v2 → v3 is a pass-through:
+//     existing items remain owned-style; rule.hosts evaporates because
+//     the struct field is gone and the JSON decoder silently drops it.
 func migrateState(data []byte) ([]byte, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(data, &doc); err != nil {
@@ -31,6 +35,11 @@ func migrateState(data []byte) ([]byte, error) {
 	if version < 2 {
 		migrateV1toV2(doc)
 	}
+	// v2 → v3 is structural only: rule.hosts is silently dropped on
+	// load (unknown field), peer references didn't exist before so
+	// nothing to transform. The version bump alone signals "saved by
+	// a v3-aware daemon" so any future migrations downstream see the
+	// right starting point.
 
 	doc["version"] = float64(currentVersion)
 	return json.Marshal(doc)

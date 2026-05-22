@@ -8,19 +8,15 @@ import type { ProjectItem, DiscoveredProject, MatchRule } from './types'
 interface RuleDescription {
   prefix?: string   // e.g. "Remote"
   label: string     // monospace part: path or URL
-  qualifier: string // dimmed suffix: "on any host"
+  qualifier: string // dimmed suffix
 }
 
 function describeRule(rule: MatchRule): RuleDescription {
-  const hosts = rule.hosts?.length
-    ? rule.hosts.join(', ')
-    : 'any host'
-
   if (rule.path) {
     const suffix = rule.exact ? ' only' : ''
     return {
       label: `${rule.path}${suffix}`,
-      qualifier: `on ${hosts}`,
+      qualifier: '',
     }
   }
 
@@ -28,7 +24,7 @@ function describeRule(rule: MatchRule): RuleDescription {
     return {
       prefix: 'Remote',
       label: rule.remote,
-      qualifier: `in any directory on ${hosts}`,
+      qualifier: 'in any directory',
     }
   }
 
@@ -274,7 +270,7 @@ function ProjectRow({
   onDragEnd: () => void
   onRemove: (slug: string) => void
 }) {
-  const rules = project.match
+  const rules = project.match ?? []
 
   return (
     <div

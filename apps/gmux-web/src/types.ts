@@ -79,14 +79,37 @@ export interface Folder {
 export interface MatchRule {
   path?: string
   remote?: string
-  hosts?: string[]
   exact?: boolean // path must match exactly, not as prefix
 }
 
+/**
+ * One entry in the viewer's projects.json items[]. Two shapes share
+ * this type, discriminated by `peer`:
+ *
+ *   - Owned: `slug` + `match[]` (+ `sessions[]` maintained by server)
+ *     A project owned by this host. Match rules drive session
+ *     attribution; `sessions[]` is the ordered list of session keys
+ *     for sidebar order.
+ *   - Reference: `slug` + `peer`
+ *     A pointer to a project owned by a peer. The peer's projects.json
+ *     is the source of truth for match rules and session order; the
+ *     viewer just declares "show this peer's project at this position
+ *     in my sidebar."
+ */
 export interface ProjectItem {
   slug: string
-  match: MatchRule[]
-  sessions?: string[] // managed by server; must be preserved in PUT
+  /** Set when this item is a reference to a peer-owned project. */
+  peer?: string
+  /** Owned-project match rules. Empty/absent for references. */
+  match?: MatchRule[]
+  /** Server-managed ordering. Absent for references. */
+  sessions?: string[]
+}
+
+/** True when an item references a peer-owned project rather than
+ *  defining one locally. */
+export function isReferenceItem(item: ProjectItem): boolean {
+  return !!item.peer
 }
 
 export interface DiscoveredProject {

@@ -293,7 +293,7 @@ export function Sidebar({
   const hasProjects = projectsVal.length > 0
   const isOnlyHomeProject = projectsVal.length === 1
     && projectsVal[0].slug === 'home'
-    && projectsVal[0].match.some(r => r.path === '~' && r.exact)
+    && !!projectsVal[0].match?.some(r => r.path === '~' && r.exact)
 
   const seedHomeProject = async () => {
     if (projects.value.length === 0) {

@@ -67,7 +67,10 @@ export function matchSession(
   let firstRemote: ProjectItem | null = null
 
   for (const project of projects) {
-    for (const rule of project.match) {
+    // References don't carry local match rules; their content is
+    // driven by peer stamps, not viewer-side matching.
+    if (project.peer) continue
+    for (const rule of project.match ?? []) {
       if (rule.remote && session.remotes) {
         const normRule = normalizeRemote(rule.remote)
         for (const url of Object.values(session.remotes)) {
@@ -321,7 +324,7 @@ export function buildProjectFolders(
       key: project.slug,
       slug: project.slug,
       name: project.slug,
-      launchCwd: project.match.find(r => r.path)?.path,
+      launchCwd: project.match?.find(r => r.path)?.path,
       sessions: visible,
     })
   }

@@ -1119,37 +1119,6 @@ func TestManagerAutoAssignAllSkipsPeerOwnedSessions(t *testing.T) {
 	}
 }
 
-func TestMatchHostScoping(t *testing.T) {
-	s := &State{Items: []Item{
-		{Slug: "laptop-data", Match: []MatchRule{{Path: "/data/ml", Hosts: []string{"laptop"}}}},
-		{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}},
-	}}
-
-	// Local session: host-scoped rule doesn't match (host is "").
-	m := s.Match(MatchParams{Cwd: "/data/ml/experiment"})
-	if m != nil {
-		t.Errorf("local session in /data/ml: expected nil (no unscoped match), got %q", m.Slug)
-	}
-
-	// Session from the scoped host: matches.
-	m = s.Match(MatchParams{Cwd: "/data/ml/experiment", Host: "laptop"})
-	if m == nil || m.Slug != "laptop-data" {
-		t.Errorf("laptop session: expected 'laptop-data', got %v", m)
-	}
-
-	// Session from a different peer: host-scoped rule doesn't apply.
-	m = s.Match(MatchParams{Cwd: "/data/ml/experiment", Host: "server"})
-	if m != nil {
-		t.Errorf("server session in /data/ml: expected nil, got %q", m.Slug)
-	}
-
-	// Unscoped rule matches any host.
-	m = s.Match(MatchParams{Cwd: "/dev/gmux/src", Host: "server"})
-	if m == nil || m.Slug != "gmux" {
-		t.Errorf("server session in /dev/gmux: expected 'gmux', got %v", m)
-	}
-}
-
 
 func TestNormalizePathExpandsTilde(t *testing.T) {
 	home, err := os.UserHomeDir()
