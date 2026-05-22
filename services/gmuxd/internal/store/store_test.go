@@ -848,18 +848,25 @@ func TestReconcile_StampsOwnedSessions(t *testing.T) {
 	}
 }
 
-func TestReconcile_SkipsPeerOwnedSessions(t *testing.T) {
+func TestReconcile_CallerControlsPeerStampPreservation(t *testing.T) {
+	// Reconcile no longer auto-skips peer sessions; the caller decides
+	// per session. The canonical caller (reconcileProjectStamps in
+	// main.go) preserves stamps for network peers and re-stamps Local
+	// peers. This test verifies the contract: assignFn sees every
+	// session and its return value is honoured.
 	s := New()
 	s.UpsertRemote(Session{ID: "p1", Slug: "peer-sess", Kind: "k", Peer: "tower", Alive: true, ProjectSlug: "from-origin", ProjectIndex: 3})
 
 	s.Reconcile(func(sess Session) (string, int) {
-		// Would erroneously overwrite if Reconcile didn't skip peer sessions.
-		return "wrong", 99
+		if sess.Peer != "" {
+			return sess.ProjectSlug, sess.ProjectIndex // network peer: preserve
+		}
+		return "local", 0
 	})
 
 	got, _ := s.Get("p1")
 	if got.ProjectSlug != "from-origin" || got.ProjectIndex != 3 {
-		t.Errorf("peer session stamps overwritten: got slug=%q index=%d, want from-origin/3", got.ProjectSlug, got.ProjectIndex)
+		t.Errorf("peer session stamps lost: got slug=%q index=%d, want from-origin/3", got.ProjectSlug, got.ProjectIndex)
 	}
 }
 

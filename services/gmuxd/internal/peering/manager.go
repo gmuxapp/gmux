@@ -19,6 +19,13 @@ type Manager struct {
 	baseCtx     context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
+
+	// OnPeerRemoved fires after RemovePeer has stopped the peer's
+	// goroutine and pruned its sessions from the store. wasLocal
+	// indicates whether the peer was a Local peer (PeerConfig.Local
+	// = true), so callers can prune namespaced projects.json keys
+	// matching this peer name. nil = no-op.
+	OnPeerRemoved func(name string, wasLocal bool)
 }
 
 type managedPeer struct {

@@ -544,9 +544,14 @@ type SessionInfo struct {
 	WorkspaceRoot string
 	Remotes       map[string]string
 	Host          string // peer name; empty for local sessions
-	Alive         bool
-	Resumable     bool // dead but has a resume command persisted
-	Slug          string
+	// LocalHost is true when Host is a Local peer (devcontainer): the
+	// session lives on a peer but the parent owns its project
+	// assignment. AutoAssign treats these as local for the purposes
+	// of writing into projects.json.
+	LocalHost bool
+	Alive     bool
+	Resumable bool // dead but has a resume command persisted
+	Slug      string
 }
 
 // matchParamsFromInfo builds MatchParams from a SessionInfo.
