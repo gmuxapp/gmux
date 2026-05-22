@@ -500,6 +500,7 @@ function App() {
         ) : viewVal?.kind === 'project' ? (
           <ProjectHub
             projectSlug={viewVal.projectSlug}
+            projectPeer={viewVal.projectPeer}
             onCloseSession={handleCloseSession}
           />
         ) : selectedVal && (canAttach || USE_MOCK) && termOpts && keybindsVal ? (

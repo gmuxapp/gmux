@@ -218,7 +218,7 @@ export const discovered = computed<DiscoveredProject[]>(
   () => discoverProjects(sessions.value, projects.value),
 )
 export const unmatchedActiveCount = computed<number>(
-  () => countUnmatchedActive(sessions.value, projects.value),
+  () => countUnmatchedActive(sessions.value, projects.value, peerStatusByName.value),
 )
 
 // ── Peer appearance: unique prefix + deterministic color ─────────────────────
@@ -378,9 +378,24 @@ export const filteredSessions = computed(() => {
   })
 })
 
+/** Set of peer names that are Local (devcontainers, PeerConfig.Local).
+ *  Local peers don't own their own project assignments; their sessions
+ *  are stamped by the parent and bucket into local sidebar folders. */
+export const localPeerNames = computed<ReadonlySet<string>>(() => {
+  const set = new Set<string>()
+  for (const p of peers.value) {
+    if (p.local) set.add(p.name)
+  }
+  return set
+})
+
 /** Project folders for the sidebar, built from projects + sessions. */
 export const folders = computed(() =>
-  buildProjectFolders(projects.value, filteredSessions.value),
+  buildProjectFolders(
+    projects.value,
+    filteredSessions.value,
+    (name) => localPeerNames.value.has(name),
+  ),
 )
 
 /**

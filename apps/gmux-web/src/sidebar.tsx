@@ -14,7 +14,7 @@ import {
   folders, selectedId, currentProjectKey,
   activityMap, unmatchedActiveCount, projects, connState,
   updateProjects, reorderSessions,
-  peerStatusByName, isSessionUnavailable,
+  peerStatusByName, isSessionUnavailable, localPeerNames,
   type DotState,
 } from './store'
 import { PeerLabel } from './peer-label'
@@ -200,12 +200,16 @@ function FolderGroup({
       return
     }
     const reordered = reorder(visible, drag.from, drag.over)
-    // reorderKeysForFolder filters non-owner sessions and strips the
-    // `@<peer>` namespace from slugless ids; see its docstring for
-    // the ADR-0002 corruption modes this prevents. The daemon's
-    // PATCH handler then does a partial-reorder merge that keeps
-    // hidden / dead-resumable entries at the tail.
-    const visibleKeys = reorderKeysForFolder(reordered, folder.peer)
+    // reorderKeysForFolder partitions sessions by the folder owner's
+    // identity and keys them appropriately for the owning daemon's
+    // projects.json (namespaced ids for Local-peer sessions inside a
+    // parent's local folder, plain ids for everything else). See its
+    // docstring for the full routing matrix.
+    const visibleKeys = reorderKeysForFolder(
+      reordered,
+      folder.peer,
+      (name) => localPeerNames.value.has(name),
+    )
     if (visibleKeys.length > 0) {
       reorderSessions(folder.slug, visibleKeys, folder.peer)
     }

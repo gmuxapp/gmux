@@ -118,6 +118,18 @@ export interface DiscoveredProject {
   paths: string[]
   session_count: number
   active_count: number
+  /**
+   * Owning host for this suggestion. Absent for local-host discovery;
+   * set to the peer name for sessions disclaimed by a connected peer.
+   * Drives the host chip in the modal and routes "+ Add" to the
+   * correct daemon (proxied if remote).
+   */
+  peer?: string
+  /**
+   * Most-recent created_at among the sessions in this group, as an
+   * RFC3339 string. Used to sort suggestions by recency.
+   */
+  last_active?: string
 }
 
 /** Mirrors /v1/health peers entries. */
