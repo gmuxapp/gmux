@@ -510,7 +510,8 @@ type SessionInfo struct {
 	Remotes       map[string]string
 	Host          string // peer name; empty for local sessions
 	Alive         bool
-	Slug     string
+	Resumable     bool // dead but has a resume command persisted
+	Slug          string
 }
 
 // matchParamsFromInfo builds MatchParams from a SessionInfo.

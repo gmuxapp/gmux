@@ -1035,7 +1035,7 @@ func TestManagerCleanupSessionsNoOrphans(t *testing.T) {
 	}
 }
 
-func TestManagerAutoAssignAllAlive(t *testing.T) {
+func TestManagerAutoAssignAll(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)
 
@@ -1050,15 +1050,16 @@ func TestManagerAutoAssignAllAlive(t *testing.T) {
 	sessions := []SessionInfo{
 		{ID: "s1", Cwd: "/dev/gmux/src", Alive: true},
 		{ID: "s2", Cwd: "/dev/yapp", Alive: true},
-		{ID: "s3", Cwd: "/dev/gmux", Alive: false}, // dead: should be skipped
-		{ID: "s4", Cwd: "/other", Alive: true},      // unmatched: should be skipped
+		{ID: "s3", Cwd: "/dev/gmux", Alive: false, Resumable: true}, // dead+resumable: included
+		{ID: "s4", Cwd: "/dev/gmux", Alive: false},                  // dead, no resume: skipped
+		{ID: "s5", Cwd: "/other", Alive: true},                       // unmatched: skipped
 	}
 
-	mgr.AutoAssignAllAlive(sessions)
+	mgr.AutoAssignAll(sessions)
 
 	state, _ := mgr.Load()
-	if len(state.Items[0].Sessions) != 1 || state.Items[0].Sessions[0] != "s1" {
-		t.Errorf("gmux sessions: expected [s1], got %v", state.Items[0].Sessions)
+	if len(state.Items[0].Sessions) != 2 || state.Items[0].Sessions[0] != "s1" || state.Items[0].Sessions[1] != "s3" {
+		t.Errorf("gmux sessions: expected [s1 s3], got %v", state.Items[0].Sessions)
 	}
 	if len(state.Items[1].Sessions) != 1 || state.Items[1].Sessions[0] != "s2" {
 		t.Errorf("yapp sessions: expected [s2], got %v", state.Items[1].Sessions)
@@ -1094,7 +1095,7 @@ func TestManagerAutoAssignSkipsPeerOwnedSession(t *testing.T) {
 	}
 }
 
-func TestManagerAutoAssignAllAliveSkipsPeerOwnedSessions(t *testing.T) {
+func TestManagerAutoAssignAllSkipsPeerOwnedSessions(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)
 
@@ -1110,7 +1111,7 @@ func TestManagerAutoAssignAllAliveSkipsPeerOwnedSessions(t *testing.T) {
 		{ID: "peer-1", Cwd: "/dev/gmux", Host: "tower", Alive: true},
 		{ID: "peer-2", Cwd: "/dev/gmux", Host: "laptop", Alive: true},
 	}
-	mgr.AutoAssignAllAlive(sessions)
+	mgr.AutoAssignAll(sessions)
 
 	state, _ := mgr.Load()
 	if len(state.Items[0].Sessions) != 1 || state.Items[0].Sessions[0] != "local-1" {

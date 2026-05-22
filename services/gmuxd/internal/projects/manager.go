@@ -139,17 +139,21 @@ func (m *Manager) AutoAssignSession(info SessionInfo) string {
 	return assigned
 }
 
-// AutoAssignAllAlive iterates all sessions and adds alive ones to their
-// matching projects in a single atomic update. Called after adding a
-// project so that existing alive sessions populate the array immediately
-// rather than waiting for the next session-upsert event.
+// AutoAssignAll iterates all sessions and adds alive-or-resumable
+// ones to their matching projects in a single atomic update. Called
+// after adding a project so that existing sessions populate the array
+// immediately rather than waiting for the next session-upsert event,
+// and at startup so resumable sessions loaded from sessionmeta get
+// stamped before the first snapshot goes out (otherwise dead-but-
+// resumable sessions miss the auto-assign hook, which only fires on
+// session-upsert events for live sessions).
 //
 // Peer-owned sessions are skipped; see AutoAssignSession.
-func (m *Manager) AutoAssignAllAlive(sessions []SessionInfo) {
+func (m *Manager) AutoAssignAll(sessions []SessionInfo) {
 	err := m.Update(func(state *State) bool {
 		changed := false
 		for _, info := range sessions {
-			if !info.Alive || info.Host != "" {
+			if (!info.Alive && !info.Resumable) || info.Host != "" {
 				continue
 			}
 			key := SessionKey(info.ID, info.Slug)

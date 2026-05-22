@@ -583,9 +583,21 @@ func serve(stderr io.Writer) int {
 	// rehydrateProjects for the identity-model rationale.
 	if state, err := projectMgr.Load(); err == nil {
 		rehydrateProjects(sessions, convIndex, state)
+		// Sweep resumable sessions into project.sessions[] arrays.
+		// The auto-assign subscriber only fires on session-upsert events,
+		// which arrive after this point; without this pass, a dead-but-
+		// resumable session loaded from sessionmeta would never be added
+		// to its matching project and would be invisible in the sidebar
+		// (the visibility filter requires a stamp).
+		projectMgr.AutoAssignAll(buildSessionInfos(sessions))
 		// Stamp ProjectSlug / ProjectIndex on the just-rehydrated sessions
 		// (and on any sessions previously loaded via sessionmeta.Sweep)
-		// before SSE subscribers can observe.
+		// before SSE subscribers can observe. Reload to pick up any
+		// AutoAssignAll mutations; Broadcast also runs reconcile but only
+		// fires when state actually changed.
+		if fresh, err := projectMgr.Load(); err == nil {
+			state = fresh
+		}
 		reconcileProjectStamps(state)
 	}
 
@@ -619,10 +631,12 @@ func serve(stderr io.Writer) int {
 				continue
 			}
 			s := ev.Session
-			// Only auto-assign alive sessions. Dead resumable sessions
-			// stay in the array if already persisted from a previous run,
-			// but we don't bulk-add hundreds of old session files on startup.
-			if !s.Alive {
+			// Auto-assign live and resumable sessions. A dead session
+			// with a resume command is just as worth stamping as a live
+			// one; the user can still resume it, and without this stamp
+			// the session would be invisible in the sidebar after a
+			// daemon restart.
+			if !s.Alive && !s.Resumable {
 				continue
 			}
 			projectMgr.AutoAssignSession(projects.SessionInfo{
@@ -632,7 +646,8 @@ func serve(stderr io.Writer) int {
 				Remotes:       s.Remotes,
 				Host:          s.Peer,
 				Alive:         s.Alive,
-				Slug:     s.Slug,
+				Resumable:     s.Resumable,
+				Slug:          s.Slug,
 			})
 		}
 	}()
@@ -872,9 +887,10 @@ func serve(stderr io.Writer) int {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
 			return
 		}
-		// Populate the new project's sessions array with alive matches
-		// immediately, so the frontend sees them on the first fetch.
-		projectMgr.AutoAssignAllAlive(buildSessionInfos(sessions))
+		// Populate the new project's sessions array with matching live
+		// and resumable sessions immediately, so the frontend sees them
+		// on the first fetch.
+		projectMgr.AutoAssignAll(buildSessionInfos(sessions))
 		writeJSON(w, map[string]any{"ok": true, "data": item})
 	})
 
@@ -2247,7 +2263,8 @@ func buildSessionInfos(sessions *store.Store) []projects.SessionInfo {
 			Remotes:       s.Remotes,
 			Host:          s.Peer,
 			Alive:         s.Alive,
-			Slug:     s.Slug,
+			Resumable:     s.Resumable,
+			Slug:          s.Slug,
 		}
 	}
 	return infos
