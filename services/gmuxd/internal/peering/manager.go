@@ -217,6 +217,7 @@ func (m *Manager) PeerStatus() []PeerInfo {
 			Status:       mp.peer.Status().String(),
 			SessionCount: alive,
 			LastError:    mp.peer.LastError(),
+			Local:        mp.peer.Config.Local,
 		}
 		if h, ok := mp.peer.CachedHealth(); ok {
 			info.Version = h.Version

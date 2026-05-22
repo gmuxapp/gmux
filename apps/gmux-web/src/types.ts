@@ -107,6 +107,24 @@ export interface PeerInfo {
   version?: string
   default_launcher?: string
   launchers?: LauncherDef[]
+  /**
+   * True when this peer is conceptually an extension of the host (a
+   * devcontainer reachable via PeerConfig.Local = true). Local peers
+   * don't own their own project assignments; their sessions are
+   * stamped by the parent and bucket into local sidebar folders.
+   */
+  local?: boolean
+}
+
+/**
+ * One project owned by a connected peer, projected down to just what
+ * the viewer needs to render a reference (folder header, launch
+ * fallback). Counts and timestamps are derived client-side from
+ * stamped sessions.
+ */
+export interface PeerProject {
+  slug: string
+  launch_cwd?: string
 }
 
 export interface LauncherDef {

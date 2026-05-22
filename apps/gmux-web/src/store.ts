@@ -14,7 +14,7 @@
  */
 
 import { signal, computed, batch, effect } from '@preact/signals'
-import type { Session, ProjectItem, DiscoveredProject, PeerInfo, LauncherDef, Folder } from './types'
+import type { Session, ProjectItem, DiscoveredProject, PeerInfo, PeerProject, LauncherDef, Folder } from './types'
 import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { buildProjectFolders, discoverProjects, countUnmatchedActive } from './projects'
@@ -58,6 +58,13 @@ export interface RawWorld {
   health: HealthData | null
   launchers: LauncherDef[]
   defaultLauncher: string
+  /**
+   * Per-peer projection of each connected peer's owned projects.
+   * Keyed by peer name. Drives the "On other hosts" section of
+   * Manage Projects and lets references render their launch fallback
+   * without proxying a separate request.
+   */
+  peerProjects: Record<string, PeerProject[]>
 }
 
 export const _rawSessions = signal<Session[]>([])
@@ -67,6 +74,7 @@ export const _rawWorld = signal<RawWorld>({
   health: null,
   launchers: [],
   defaultLauncher: 'shell',
+  peerProjects: {},
 })
 
 /** Merge a partial world update into `_rawWorld`. Used by SSE handlers,
@@ -178,6 +186,13 @@ export const peers = computed<PeerInfo[]>(() => _rawWorld.value.peers)
 export const health = computed<HealthData | null>(() => _rawWorld.value.health)
 export const launchers = computed<LauncherDef[]>(() => _rawWorld.value.launchers)
 export const defaultLauncher = computed<string>(() => _rawWorld.value.defaultLauncher)
+
+/** Per-peer projects from the world snapshot. Map from peer name to
+ *  its owned projects (slug + launch_cwd hint). Empty object when no
+ *  peers are connected or none have fetched yet. */
+export const peerProjects = computed<Record<string, PeerProject[]>>(
+  () => _rawWorld.value.peerProjects,
+)
 
 // Auto-clear pending mutations that the wire has acknowledged. Runs on
 // every raw update; uses .peek() to avoid re-triggering itself.
@@ -809,6 +824,7 @@ export function initStore(): () => void {
         health?: HealthData
         launchers?: LauncherDef[]
         default_launcher?: string
+        peer_projects?: Record<string, PeerProject[]>
       }
       _setRawWorld({
         projects: env.projects ?? [],
@@ -816,6 +832,7 @@ export function initStore(): () => void {
         health: env.health ?? null,
         launchers: env.launchers ?? [],
         defaultLauncher: env.default_launcher ?? 'shell',
+        peerProjects: env.peer_projects ?? {},
       })
     } catch (err) {
       console.warn('snapshot.world: bad event', err)

@@ -1671,6 +1671,7 @@ func serve(stderr io.Writer) int {
 				Health:          health,
 				Launchers:       launchConfig.Launchers,
 				DefaultLauncher: launchConfig.DefaultLauncher,
+				PeerProjects:    composePeerProjects(peerManager),
 			}
 		}
 
@@ -1769,9 +1770,17 @@ func serve(stderr io.Writer) int {
 					}
 					sendSSE(w, ev.Type, ev)
 					flusher.Flush()
-				case "projects-update", "peer-status":
-					// Protocol-1 compat: browser-only. Hubs derive these
-					// from cached /v1/health and their own projects.json.
+				case "projects-update":
+					// Forwarded to peer consumers too: a peer hub uses
+					// this signal to refresh its cached projection of
+					// our projects (surfaced in its snapshot.world as
+					// peer_projects). Without this, peer-owned projects
+					// would only refresh on reconnect.
+					sendSSE(w, ev.Type, ev)
+					flusher.Flush()
+				case "peer-status":
+					// Protocol-1 compat: browser-only. Hubs derive peer
+					// status from their own peer manager.
 					if asPeer {
 						continue
 					}
@@ -2064,6 +2073,36 @@ func runStatus(stdout, stderr io.Writer) int {
 	}
 
 	return 0
+}
+
+// composePeerProjects gathers each connected peer's cached project
+// projection into a map keyed by peer name. Returned as map[string][]
+// SpokeProject; the snapshot.world JSON tag handles the rest.
+//
+// Peers that haven't been fetched yet (or whose fetch failed) appear
+// with an empty list. The viewer still gets the key so it knows the
+// peer is enumerable; the list fills in once the first fetch lands.
+func composePeerProjects(mgr *peering.Manager) map[string][]peering.SpokeProject {
+	if mgr == nil {
+		return nil
+	}
+	infos := mgr.PeerStatus()
+	if len(infos) == 0 {
+		return nil
+	}
+	out := make(map[string][]peering.SpokeProject, len(infos))
+	for _, info := range infos {
+		p := mgr.GetPeer(info.Name)
+		if p == nil {
+			continue
+		}
+		projects, _ := p.CachedProjects()
+		if projects == nil {
+			projects = []peering.SpokeProject{}
+		}
+		out[info.Name] = projects
+	}
+	return out
 }
 
 // appendOfflinePeers merges active peers from the manager with offline
