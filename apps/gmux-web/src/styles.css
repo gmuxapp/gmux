@@ -482,6 +482,28 @@ body {
   background: oklch(25% 0.04 250);
   color: oklch(72% 0.08 250);
 }
+.session-peer-label.offline {
+  opacity: 0.4;
+  /* Cross-out: peer is unreachable, the chip stops claiming activity. */
+  text-decoration: line-through;
+}
+.folder-name.missing {
+  opacity: 0.5;
+}
+.folder-missing-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: oklch(25% 0.04 30);
+  color: oklch(72% 0.12 30);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1cap;
+}
 .session-status-label {
   color: var(--text-secondary);
 }

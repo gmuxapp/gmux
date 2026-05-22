@@ -224,13 +224,16 @@ function FolderGroup({
     <div class="folder">
       <div class="folder-header">
         <a
-          class={`folder-name${isCurrent ? ' current' : ''}`}
+          class={`folder-name${isCurrent ? ' current' : ''}${folder.missing ? ' missing' : ''}`}
           href={href}
-          title={`Open ${folder.name} hub`}
+          title={folder.missing
+            ? `${folder.name} no longer exists on ${folder.peer}; remove via Manage projects`
+            : `Open ${folder.name} hub`}
           onClick={onClick}
         >
           {folder.peer && <PeerLabel name={folder.peer} />}
           {folder.name}
+          {folder.missing && <span class="folder-missing-icon" title="Project missing on peer">?</span>}
         </a>
         <LaunchButton
           sessions={folder.sessions}

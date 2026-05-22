@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { projects, discovered, removeProject, addProject, updateProjects } from './store'
+import {
+  projects, discovered, peerProjects, peerStatusByName,
+  removeProject, addProject, updateProjects,
+  addPeerReference, removePeerReference,
+} from './store'
+import { PeerLabel } from './peer-label'
 import type { ProjectItem, DiscoveredProject, MatchRule } from './types'
 
 // ── Rule description ──
@@ -125,7 +130,14 @@ export function ManageProjectsModal({
   // ── Add from discovered ──
 
   const handleAdd = useCallback((d: DiscoveredProject) => {
-    addProject({ remote: d.remote, paths: d.paths })
+    if (d.peer) {
+      // Remote suggestion: create the project on the peer (proxied),
+      // then auto-add a local reference so it appears in the sidebar.
+      addProject({ remote: d.remote, paths: d.paths }, d.peer)
+        .then(() => addPeerReference(d.peer!, d.suggested_slug))
+    } else {
+      addProject({ remote: d.remote, paths: d.paths })
+    }
   }, [])
 
   // ── Manual add by path ──
@@ -169,22 +181,25 @@ export function ManageProjectsModal({
         </div>
 
         <div class="modal-body">
-          {/* ── Configured projects ── */}
+          {/* ── Configured projects (owned + references) ── */}
           <section class="mp-section">
-            <div class="mp-section-label">Your projects</div>
+            <div class="mp-section-label">Your sidebar</div>
             {configured.length > 0 ? (
               <div class="mp-project-list">
                 {dragItems.map((project, i) => (
                   <ProjectRow
-                    key={project.slug}
+                    key={`${project.peer ?? ''}::${project.slug}`}
                     project={project}
                     index={i}
-                    dragging={drag !== null && project.slug === configured[drag.from]?.slug}
+                    dragging={drag !== null && itemKey(project) === itemKey(configured[drag.from])}
                     dropTarget={drag !== null && drag.over === i && drag.from !== i}
                     onDragStart={handleDragStart}
                     onDragOver={handleDragOver}
                     onDragEnd={handleDragEnd}
-                    onRemove={handleRemove}
+                    onRemove={(p) => {
+                      if (p.peer) removePeerReference(p.peer, p.slug)
+                      else handleRemove(p.slug)
+                    }}
                   />
                 ))}
               </div>
@@ -194,6 +209,9 @@ export function ManageProjectsModal({
               </div>
             )}
           </section>
+
+          {/* ── References to peer-owned projects ── */}
+          <PeerReferencesSection configured={configured} />
 
           {/* ── Discovered projects ── */}
           <section class="mp-section">
@@ -268,9 +286,10 @@ function ProjectRow({
   onDragStart: (i: number) => void
   onDragOver: (i: number) => void
   onDragEnd: () => void
-  onRemove: (slug: string) => void
+  onRemove: (project: ProjectItem) => void
 }) {
   const rules = project.match ?? []
+  const isReference = !!project.peer
 
   return (
     <div
@@ -293,10 +312,13 @@ function ProjectRow({
       onDragEnd={onDragEnd}
     >
       <span class="mp-drag-handle" title="Drag to reorder">&#x283F;</span>
+      {project.peer && <PeerLabel name={project.peer} />}
       <div class="mp-project-info">
         <span class="mp-project-name">{project.slug}</span>
         <div class="mp-project-rules">
-          {rules.map((rule, i) => {
+          {isReference ? (
+            <span class="mp-rule mp-rule-qualifier">reference</span>
+          ) : rules.map((rule, i) => {
             const { prefix, label, qualifier } = describeRule(rule)
             const title = [prefix, label, qualifier].filter(Boolean).join(' ')
             return (
@@ -311,8 +333,8 @@ function ProjectRow({
       </div>
       <button
         class="mp-remove-btn"
-        onClick={() => onRemove(project.slug)}
-        title="Remove project"
+        onClick={() => onRemove(project)}
+        title={isReference ? 'Remove reference' : 'Remove project'}
       >
         &times;
       </button>
@@ -332,6 +354,7 @@ function DiscoveredRow({
 
   return (
     <div class="mp-discovered-row" onClick={() => onAdd(project)}>
+      {project.peer && <PeerLabel name={project.peer} />}
       <div class="mp-project-info">
         <span class="mp-project-name">
           {project.suggested_slug}
@@ -344,6 +367,58 @@ function DiscoveredRow({
       <span class="mp-add-label">+ Add</span>
     </div>
   )
+}
+
+/** Lists peer-owned projects that the viewer hasn't referenced yet,
+ *  one section per connected peer. Each row adds a reference via
+ *  addPeerReference; the new folder appears in the sidebar on the
+ *  next render. */
+function PeerReferencesSection({ configured }: { configured: ProjectItem[] }) {
+  const peerProjectsByPeer = peerProjects.value
+  const statuses = peerStatusByName.value
+  const referenced = useMemo(() => {
+    const set = new Set<string>()
+    for (const p of configured) {
+      if (p.peer) set.add(`${p.peer}::${p.slug}`)
+    }
+    return set
+  }, [configured])
+
+  const entries: { peer: string; slug: string }[] = []
+  for (const peer of Object.keys(peerProjectsByPeer).sort()) {
+    if (statuses.get(peer) !== 'connected') continue
+    for (const sp of peerProjectsByPeer[peer]) {
+      if (referenced.has(`${peer}::${sp.slug}`)) continue
+      entries.push({ peer, slug: sp.slug })
+    }
+  }
+
+  if (entries.length === 0) return null
+  return (
+    <section class="mp-section">
+      <div class="mp-section-label">From other hosts</div>
+      <div class="mp-project-list">
+        {entries.map(({ peer, slug }) => (
+          <div
+            key={`${peer}::${slug}`}
+            class="mp-discovered-row"
+            onClick={() => addPeerReference(peer, slug)}
+          >
+            <PeerLabel name={peer} />
+            <div class="mp-project-info">
+              <span class="mp-project-name">{slug}</span>
+            </div>
+            <span class="mp-add-label">+ Add</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function itemKey(p: ProjectItem | undefined): string {
+  if (!p) return ''
+  return `${p.peer ?? ''}::${p.slug}`
 }
 
 // ── Helpers ──

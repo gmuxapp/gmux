@@ -395,6 +395,7 @@ export const folders = computed(() =>
     projects.value,
     filteredSessions.value,
     (name) => localPeerNames.value.has(name),
+    _rawWorld.value.peerProjects,
   ),
 )
 
@@ -582,21 +583,48 @@ async function putProjects(items: ProjectItem[]): Promise<void> {
   }
 }
 
+/** Remove an owned project by slug. References (peer + slug) are
+ *  removed via removePeerReference, which keys on the (peer, slug)
+ *  pair to handle same-slug coexistence with owned projects. */
 export async function removeProject(slug: string): Promise<void> {
-  await putProjects(projects.value.filter(p => p.slug !== slug))
+  await putProjects(projects.value.filter(p => p.peer || p.slug !== slug))
 }
 
-export async function addProject(req: { remote?: string; paths: string[] }): Promise<void> {
+export async function addProject(
+  req: { remote?: string; paths: string[] },
+  peer?: string,
+): Promise<void> {
+  // For remote adds, proxy through the hub: /v1/peers/{peer}/v1/projects/add.
+  // The peer applies the change to its own projects.json; we'll receive
+  // the new items[] back via projects-update + fetchProjects.
+  const path = peer
+    ? `/v1/peers/${encodeURIComponent(peer)}/v1/projects/add`
+    : '/v1/projects/add'
   try {
-    const resp = await fetch('/v1/projects/add', {
+    const resp = await fetch(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
     })
-    if (!resp.ok) console.warn('POST /v1/projects/add failed:', resp.status)
+    if (!resp.ok) console.warn(`POST ${path} failed:`, resp.status)
   } catch (err) {
-    console.warn('POST /v1/projects/add error:', err)
+    console.warn(`POST ${path} error:`, err)
   }
+}
+
+/** Append a reference item to local projects.json. The reference
+ *  points at a peer-owned project; the peer's projects.json remains
+ *  the source of truth for rules and session order. */
+export async function addPeerReference(peer: string, slug: string): Promise<void> {
+  const existing = projects.value
+  if (existing.some(p => p.peer === peer && p.slug === slug)) return
+  await putProjects([...existing, { peer, slug }])
+}
+
+/** Remove a reference item from local projects.json. */
+export async function removePeerReference(peer: string, slug: string): Promise<void> {
+  const filtered = projects.value.filter(p => !(p.peer === peer && p.slug === slug))
+  await putProjects(filtered)
 }
 
 export async function updateProjects(items: ProjectItem[]): Promise<void> {

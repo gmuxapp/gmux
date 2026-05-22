@@ -320,6 +320,7 @@ export function buildProjectFolders(
   projects: ProjectItem[],
   sessions: Session[],
   isLocalPeer?: (peerName: string) => boolean,
+  peerProjects?: Record<string, { slug: string; launch_cwd?: string }[]>,
 ): Folder[] {
   // Bucket every stamped session by `${ownerPeer}::${slug}`.
   // ownerPeer is '' for sessions owned by the viewer (local sessions,
@@ -348,12 +349,36 @@ export function buildProjectFolders(
     const ss = buckets.get(`${ownerPeer}::${project.slug}`) ?? []
     const visible = ss.filter(s => s.alive || s.resumable === true)
     visible.sort(compareFolderSessions)
+    // Owned: derive launchCwd from the project's first path rule.
+    // Reference: pull launchCwd from peer_projects so the launch
+    // button works even when the folder is empty (no session to
+    // borrow cwd from). Also detect dangling references: peer is
+    // enumerated in peer_projects (i.e. connected) but our slug is
+    // not present, meaning the project was removed upstream.
+    let launchCwd: string | undefined
+    let missing = false
+    if (ownerPeer === '') {
+      launchCwd = project.match?.find(r => r.path)?.path
+    } else if (peerProjects) {
+      const peerEntry = peerProjects[ownerPeer]
+      if (peerEntry) {
+        const found = peerEntry.find(p => p.slug === project.slug)
+        if (found) {
+          launchCwd = found.launch_cwd
+        } else {
+          // Peer is connected (we have its enumeration) but doesn't
+          // know this slug anymore: the reference is dangling.
+          missing = true
+        }
+      }
+    }
     folders.push({
       key: `${ownerPeer}::${project.slug}`,
       slug: project.slug,
       name: project.slug,
       peer: ownerPeer || undefined,
-      launchCwd: project.match?.find(r => r.path)?.path,
+      launchCwd,
+      missing: missing || undefined,
       sessions: visible,
     })
   }

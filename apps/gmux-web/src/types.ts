@@ -71,6 +71,14 @@ export interface Folder {
   peer?: string
   /** Filesystem path hint for launching new sessions in this folder. */
   launchCwd?: string
+  /**
+   * True when this folder is a reference whose peer is connected but
+   * no longer reports the named slug in its peer_projects. The folder
+   * is rendered with a missing indicator so the user can remove it
+   * manually. Distinct from a peer simply being disconnected (handled
+   * by the PeerLabel offline state).
+   */
+  missing?: boolean
   sessions: Session[]
 }
 

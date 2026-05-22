@@ -2304,6 +2304,16 @@ func isAllowedPeerProxyPath(method, sub string) bool {
 		parts[2] != "" && parts[3] == "sessions" {
 		return true
 	}
+	// Create a project on a peer: POST v1/projects/add.
+	// The frontend uses this to add a project on the peer's own
+	// projects.json from the Manage Projects modal (Discovered
+	// section, remote items). The peer applies the add atomically;
+	// the resulting items[] flows back via projects-update.
+	if method == http.MethodPost &&
+		len(parts) == 3 &&
+		parts[0] == "v1" && parts[1] == "projects" && parts[2] == "add" {
+		return true
+	}
 	return false
 }
 
