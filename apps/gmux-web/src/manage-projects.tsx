@@ -137,9 +137,14 @@ export function ManageProjectsModal({
       // gets a dangling reference (peer refused the add but viewer's
       // projects.json gains a reference to a slug that doesn't exist
       // upstream).
+      //
+      // Use the slug the peer actually assigned, not d.suggested_slug:
+      // the peer's UniqueSlug may have deduplicated on collision
+      // ("api" → "api-2"), in which case referencing the client-side
+      // guess would produce an immediate dangling reference.
       try {
-        await addProject({ remote: d.remote, paths: d.paths }, d.peer)
-        await addPeerReference(d.peer, d.suggested_slug)
+        const created = await addProject({ remote: d.remote, paths: d.paths }, d.peer)
+        await addPeerReference(d.peer, created.slug)
       } catch {
         // addProject already logs the failure; nothing more to do here.
         // Surface in the UI eventually via a toast; out of scope for now.

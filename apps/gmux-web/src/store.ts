@@ -593,7 +593,7 @@ export async function removeProject(slug: string): Promise<void> {
 export async function addProject(
   req: { remote?: string; paths: string[] },
   peer?: string,
-): Promise<void> {
+): Promise<{ slug: string }> {
   // For remote adds, proxy through the hub: /v1/peers/{peer}/v1/projects/add.
   // The peer applies the change to its own projects.json; we'll receive
   // the new items[] back via projects-update + fetchProjects.
@@ -603,6 +603,12 @@ export async function addProject(
   // avoid the dangling-reference failure mode where the peer rejected
   // the add but the viewer's projects.json still gains a reference
   // pointing at a slug that doesn't exist upstream.
+  //
+  // Returns the actual slug the server assigned. The server may
+  // deduplicate (e.g. "api" → "api-2" on collision), so callers must
+  // not assume the client-suggested slug round-tripped unchanged —
+  // referencing the wrong slug would produce an immediately dangling
+  // reference.
   const path = peer
     ? `/v1/peers/${encodeURIComponent(peer)}/v1/projects/add`
     : '/v1/projects/add'
@@ -622,6 +628,12 @@ export async function addProject(
     console.warn(msg)
     throw new Error(msg)
   }
+  const body = await resp.json() as { ok?: boolean; data?: { slug?: string } }
+  const slug = body.data?.slug
+  if (!slug) {
+    throw new Error(`POST ${path}: missing slug in response`)
+  }
+  return { slug }
 }
 
 /** Append a reference item to local projects.json. The reference
