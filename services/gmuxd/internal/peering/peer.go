@@ -210,6 +210,15 @@ func (p *Peer) fetchProjects(ctx context.Context) {
 	// peer-status keeps the wire surface minimal; the type-name is
 	// a slight overload but the trigger semantics are correct (this
 	// peer's externally-visible state changed).
+	//
+	// Skip the broadcast if the peer's context has been cancelled
+	// (peer torn down mid-fetch). The store cleanup that follows
+	// disconnect would otherwise race against a stale cache update,
+	// and we'd fire a re-compose for a peer the world snapshot no
+	// longer enumerates.
+	if ctx.Err() != nil {
+		return
+	}
 	if p.onStatus != nil {
 		p.onStatus(p.Config.Name, p.status)
 	}
@@ -330,7 +339,7 @@ func (p *Peer) subscribe(ctx context.Context, onConnected func()) error {
 			p.fetchProjects(ctx)
 		},
 		func(ev sseclient.Event) {
-			p.handleEvent(ev.Type, ev.Data)
+			p.handleEvent(ctx, ev.Type, ev.Data)
 		},
 	)
 
@@ -384,7 +393,7 @@ func (p *Peer) isForwardedFromKnownOrigin(id string) bool {
 	return innerPeer != "" && p.isKnownOrigin(innerPeer)
 }
 
-func (p *Peer) handleEvent(eventType string, data []byte) {
+func (p *Peer) handleEvent(ctx context.Context, eventType string, data []byte) {
 	switch eventType {
 	case "snapshot.sessions":
 		// Authoritative replacement: the spoke's view of its owned
@@ -456,12 +465,14 @@ func (p *Peer) handleEvent(eventType string, data []byte) {
 		p.store.Remove(NamespaceID(ev.ID, p.Config.Name))
 
 	case "projects-update":
-		// v1 spoke signal that its projects.json changed. Refresh
-		// the cached projection so the hub's snapshot.world reflects
-		// the new state. v2 spokes emit snapshot.world which we
-		// don't subscribe to as ?as=peer; for those, we rely on the
-		// per-connect fetch and any future explicit signal.
-		go p.fetchProjects(context.Background())
+		// Spoke's projects.json changed. Refresh the cached
+		// projection so the hub's snapshot.world reflects the new
+		// state. Pass the streaming ctx so the fetch is cancelled
+		// if the peer disconnects mid-flight (otherwise a slow
+		// /v1/projects could race past disconnect and fire a
+		// spurious peer-status broadcast via onStatus, triggering
+		// a world re-compose on stale data).
+		go p.fetchProjects(ctx)
 
 	case "snapshot.world", "peer-status":
 		// Hub composes its own world view. v2 spokes don't emit

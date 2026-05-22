@@ -169,7 +169,9 @@ func (m *Manager) AddPeer(cfg config.PeerConfig, opts ...PeerOption) {
 }
 
 // RemovePeer stops a peer connection, waits for its goroutine to finish,
-// and removes all its sessions from the store.
+// and removes all its sessions from the store. If OnPeerRemoved is set,
+// it fires after store cleanup so the caller can run additional cleanup
+// (e.g. PruneNamespacedKeys for a destroyed devcontainer).
 func (m *Manager) RemovePeer(name string) {
 	m.mu.Lock()
 	mp, ok := m.peers[name]
@@ -178,6 +180,7 @@ func (m *Manager) RemovePeer(name string) {
 		return
 	}
 	delete(m.peers, name)
+	wasLocal := mp.peer.Config.Local
 	m.mu.Unlock()
 
 	if mp.cancel != nil {
@@ -187,6 +190,9 @@ func (m *Manager) RemovePeer(name string) {
 		<-mp.done
 	}
 	m.store.RemoveByPeer(name)
+	if m.OnPeerRemoved != nil {
+		m.OnPeerRemoved(name, wasLocal)
+	}
 }
 
 // FindPeer looks up the peer that owns a namespaced session ID.

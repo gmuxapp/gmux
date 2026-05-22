@@ -129,14 +129,23 @@ export function ManageProjectsModal({
 
   // ── Add from discovered ──
 
-  const handleAdd = useCallback((d: DiscoveredProject) => {
+  const handleAdd = useCallback(async (d: DiscoveredProject) => {
     if (d.peer) {
       // Remote suggestion: create the project on the peer (proxied),
       // then auto-add a local reference so it appears in the sidebar.
-      addProject({ remote: d.remote, paths: d.paths }, d.peer)
-        .then(() => addPeerReference(d.peer!, d.suggested_slug))
+      // Gate the reference on a successful create; otherwise the user
+      // gets a dangling reference (peer refused the add but viewer's
+      // projects.json gains a reference to a slug that doesn't exist
+      // upstream).
+      try {
+        await addProject({ remote: d.remote, paths: d.paths }, d.peer)
+        await addPeerReference(d.peer, d.suggested_slug)
+      } catch {
+        // addProject already logs the failure; nothing more to do here.
+        // Surface in the UI eventually via a toast; out of scope for now.
+      }
     } else {
-      addProject({ remote: d.remote, paths: d.paths })
+      await addProject({ remote: d.remote, paths: d.paths }).catch(() => {})
     }
   }, [])
 

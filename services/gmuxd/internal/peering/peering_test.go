@@ -1,6 +1,7 @@
 package peering
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -437,7 +438,7 @@ func TestHandleEvent_V1CompatPerEvent(t *testing.T) {
 		"id":      "sess-1",
 		"session": rawSession,
 	})
-	p.handleEvent("session-upsert", upsert)
+	p.handleEvent(context.Background(), "session-upsert", upsert)
 
 	sess, ok := st.Get("sess-1@server")
 	if !ok {
@@ -455,7 +456,7 @@ func TestHandleEvent_V1CompatPerEvent(t *testing.T) {
 		"type": "session-remove",
 		"id":   "sess-1",
 	})
-	p.handleEvent("session-remove", remove)
+	p.handleEvent(context.Background(), "session-remove", remove)
 
 	if _, ok := st.Get("sess-1@server"); ok {
 		t.Error("v1 session-remove did not clear the namespaced store entry")
@@ -481,7 +482,7 @@ func TestHandleEvent_V1CompatDropsForwardedFromKnownOrigin(t *testing.T) {
 		"id":      "sess-1@hub-b",
 		"session": rawSession,
 	})
-	p.handleEvent("session-upsert", upsert)
+	p.handleEvent(context.Background(), "session-upsert", upsert)
 
 	if _, ok := st.Get("sess-1@hub-b@hub-a"); ok {
 		t.Error("forwarded-from-known-origin session should be dropped, not mirrored")
@@ -784,6 +785,49 @@ func TestManager_RemovePeer(t *testing.T) {
 	if _, ok := st.Get("s1@dev"); ok {
 		t.Fatal("peer sessions should be cleaned up")
 	}
+}
+
+// The OnPeerRemoved callback is the GC hook that lets the projects
+// manager prune namespaced session keys (`id@<peer>`) when a Local
+// peer (devcontainer) is destroyed. Verify the callback fires with
+// the correct peer name and wasLocal flag for both Local and network
+// peers; the projects-side cleanup relies on the wasLocal branch.
+func TestManager_RemovePeer_FiresOnPeerRemoved(t *testing.T) {
+	type call struct {
+		name    string
+		local   bool
+	}
+
+	run := func(t *testing.T, peerLocal bool) {
+		t.Helper()
+		st := store.New()
+		sk := spokeServer(t, "", nil)
+		mgr := NewManager(nil, st, "test-host")
+		var got []call
+		var mu sync.Mutex
+		mgr.OnPeerRemoved = func(name string, wasLocal bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, call{name, wasLocal})
+		}
+		mgr.Start()
+		defer mgr.Stop()
+
+		mgr.AddPeer(config.PeerConfig{Name: "dev", URL: sk.URL, Token: "", Local: peerLocal})
+		mgr.RemovePeer("dev")
+
+		mu.Lock()
+		defer mu.Unlock()
+		if len(got) != 1 {
+			t.Fatalf("expected 1 callback, got %d", len(got))
+		}
+		if got[0].name != "dev" || got[0].local != peerLocal {
+			t.Errorf("callback got (%q, %v), want (dev, %v)", got[0].name, got[0].local, peerLocal)
+		}
+	}
+
+	t.Run("local peer", func(t *testing.T) { run(t, true) })
+	t.Run("network peer", func(t *testing.T) { run(t, false) })
 }
 
 func TestManager_RemoveNonexistentIsNoop(t *testing.T) {

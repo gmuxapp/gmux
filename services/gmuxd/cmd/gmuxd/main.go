@@ -658,6 +658,7 @@ func serve(stderr io.Writer) int {
 				WorkspaceRoot: s.WorkspaceRoot,
 				Remotes:       s.Remotes,
 				Host:          s.Peer,
+				LocalHost:     s.Peer != "" && peerManager != nil && peerManager.IsLocalPeer(s.Peer),
 				Alive:         s.Alive,
 				Resumable:     s.Resumable,
 				Slug:          s.Slug,

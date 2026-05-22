@@ -398,10 +398,11 @@ func UniqueSlug(slug string, items []Item) string {
 // --- Session membership ---
 
 // AddSession appends a session key to a project's sessions list if not
-// already present. Returns true if the session was added.
+// already present. Returns true if the session was added. References
+// are skipped: their session order is the peer's responsibility.
 func (s *State) AddSession(slug, key string) bool {
 	for i := range s.Items {
-		if s.Items[i].Slug != slug {
+		if s.Items[i].Slug != slug || s.Items[i].IsReference() {
 			continue
 		}
 		for _, existing := range s.Items[i].Sessions {
@@ -425,10 +426,13 @@ func (s *State) AddSession(slug, key string) bool {
 // via the /v1/peers/{peer}/... proxy: the viewer never sees the full
 // projects.json on the peer, so it can't reconstruct the hidden tail.
 //
-// Returns true if the project was found.
+// Returns true if the project was found. References (peer-owned
+// projects) are skipped: their session order lives on the peer, not
+// in the local file, so the local PATCH endpoint must not touch
+// them even when the slug collides with a local owned project.
 func (s *State) ReorderSessions(slug string, req []string) bool {
 	for i := range s.Items {
-		if s.Items[i].Slug != slug {
+		if s.Items[i].Slug != slug || s.Items[i].IsReference() {
 			continue
 		}
 		inReq := make(map[string]bool, len(req))
@@ -449,10 +453,11 @@ func (s *State) ReorderSessions(slug string, req []string) bool {
 }
 
 // RemoveSession removes a session key from a project's sessions list.
-// Returns true if the session was found and removed.
+// Returns true if the session was found and removed. References are
+// skipped: they carry no sessions[] of their own.
 func (s *State) RemoveSession(slug, key string) bool {
 	for i := range s.Items {
-		if s.Items[i].Slug != slug {
+		if s.Items[i].Slug != slug || s.Items[i].IsReference() {
 			continue
 		}
 		for j, existing := range s.Items[i].Sessions {

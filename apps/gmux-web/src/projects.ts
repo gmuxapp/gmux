@@ -177,12 +177,18 @@ export function mostCommonRemote(sessions: Session[]): string {
  * (absent for local) so the modal can render a host chip and route the
  * "+ Add" action to the right daemon.
  *
+ * Disconnected-peer suggestions are excluded: their disclaimed status
+ * could be stale (the peer's projects.json may have grown rules we
+ * haven't seen yet), and clicking + Add on one would hit a peer we
+ * can't actually reach, producing a confusing failure.
+ *
  * Local groups whose disclaimed sessions would still match a local
  * owned project are skipped: the user already has a place for them, and
  * the auto-assign hook will stamp them on next attribution. */
 export function discoverProjects(
   sessions: Session[],
   projects: ProjectItem[],
+  peerStatusByName?: ReadonlyMap<string, string>,
 ): DiscoveredProject[] {
   // Bucket by (peer, dir). peer '' is local; dir is workspace_root if
   // set, else cwd. Sessions with no dir are dropped.
@@ -195,6 +201,9 @@ export function discoverProjects(
       // a session matching a local rule will be stamped imminently by
       // auto-assign, so don't surface it as discovered.
       if (matchSession(s, projects)) continue
+    } else if (peerStatusByName && peerStatusByName.get(peer) !== 'connected') {
+      // Unreachable peer: skip. Same logic as countUnmatchedActive.
+      continue
     }
     const dir = s.workspace_root || s.cwd
     if (!dir) continue

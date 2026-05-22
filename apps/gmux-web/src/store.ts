@@ -215,7 +215,7 @@ export const connState = signal<'connecting' | 'connected' | 'error'>('connectin
 // projections, not server-pushed state. They derive from the same
 // public sessions/projects projections everyone else uses.
 export const discovered = computed<DiscoveredProject[]>(
-  () => discoverProjects(sessions.value, projects.value),
+  () => discoverProjects(sessions.value, projects.value, peerStatusByName.value),
 )
 export const unmatchedActiveCount = computed<number>(
   () => countUnmatchedActive(sessions.value, projects.value, peerStatusByName.value),
@@ -597,18 +597,30 @@ export async function addProject(
   // For remote adds, proxy through the hub: /v1/peers/{peer}/v1/projects/add.
   // The peer applies the change to its own projects.json; we'll receive
   // the new items[] back via projects-update + fetchProjects.
+  //
+  // Throws on non-2xx or network failure. Callers that chain follow-up
+  // work (auto-add a reference after a remote create) rely on this to
+  // avoid the dangling-reference failure mode where the peer rejected
+  // the add but the viewer's projects.json still gains a reference
+  // pointing at a slug that doesn't exist upstream.
   const path = peer
     ? `/v1/peers/${encodeURIComponent(peer)}/v1/projects/add`
     : '/v1/projects/add'
+  let resp: Response
   try {
-    const resp = await fetch(path, {
+    resp = await fetch(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
     })
-    if (!resp.ok) console.warn(`POST ${path} failed:`, resp.status)
   } catch (err) {
     console.warn(`POST ${path} error:`, err)
+    throw err
+  }
+  if (!resp.ok) {
+    const msg = `POST ${path} failed: ${resp.status}`
+    console.warn(msg)
+    throw new Error(msg)
   }
 }
 

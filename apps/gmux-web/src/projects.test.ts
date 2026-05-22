@@ -259,6 +259,48 @@ describe('buildProjectFolders', () => {
     expect(folders[0].sessions).toEqual([])
   })
 
+  it('derives launchCwd for a reference from peer_projects', () => {
+    // Empty referenced folder still needs a sensible cwd for the
+    // launch button: pull it from peer_projects so the launcher
+    // doesn't fall back to the peer's $HOME.
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', peer: 'tower' },
+    ]
+    const peerProjects = {
+      tower: [{ slug: 'gmux', launch_cwd: '/home/me/dev/gmux' }],
+    }
+    const folders = buildProjectFolders(projects, [], undefined, peerProjects)
+    expect(folders[0].launchCwd).toBe('/home/me/dev/gmux')
+  })
+
+  it('flags a reference as missing when the peer no longer enumerates the slug', () => {
+    // Peer is connected (we have a peer_projects entry for it) but
+    // doesn't list the slug we're referencing: project was removed
+    // upstream. Mark the folder so the UI renders a question-mark
+    // badge prompting the user to remove the reference.
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', peer: 'tower' },
+    ]
+    const peerProjects = {
+      tower: [{ slug: 'something-else' }], // peer reachable, slug gone
+    }
+    const folders = buildProjectFolders(projects, [], undefined, peerProjects)
+    expect(folders[0].missing).toBe(true)
+  })
+
+  it('does not flag a reference as missing when the peer is disconnected', () => {
+    // No peer_projects entry for a peer means we have no enumeration
+    // (disconnected or not yet fetched). Distinguishing missing from
+    // disconnected matters for the UI: disconnected uses the dimmed
+    // PeerLabel, missing uses the ? badge. Conflating them would
+    // nag users when their laptop goes to sleep.
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', peer: 'tower' },
+    ]
+    const folders = buildProjectFolders(projects, [], undefined, {})
+    expect(folders[0].missing).toBeUndefined()
+  })
+
   it('keeps a local owned project and a same-slug reference as separate folders', () => {
     const projects: ProjectItem[] = [
       { slug: 'gmux', match: [{ path: '/dev/gmux' }] },
@@ -457,6 +499,32 @@ describe('reorderKeysForFolder', () => {
       makeSession({ id: 'a@spoke', cwd: '/x', slug: '', peer: 'spoke' }),
     ]
     expect(reorderKeysForFolder(sessions, 'tower')).toEqual([])
+  })
+
+  it('local folder + Local peer: keeps namespaced id (parent owns assignment)', () => {
+    // Container sessions bucket into local folders. The parent's
+    // projects.json keys them by full namespaced id (their identity
+    // from the parent's POV); the reorder PATCH must preserve that
+    // shape, not strip @<peer>, or the merge logic will treat the
+    // session as new and prepend it.
+    const sessions = [
+      makeSession({ id: 'sess-1', cwd: '/x', slug: '' }),
+      makeSession({ id: 'sess-2@container', cwd: '/x', slug: '', peer: 'container' }),
+    ]
+    const isLocal = (n: string) => n === 'container'
+    expect(reorderKeysForFolder(sessions, undefined, isLocal))
+      .toEqual(['sess-1', 'sess-2@container'])
+  })
+
+  it('local folder + Local peer: slug takes precedence over namespaced id', () => {
+    // A container session that's been attribution-resolved (e.g.
+    // claude/codex) keys by slug, not id, in projects.json.
+    const sessions = [
+      makeSession({ id: 'sess-1@container', cwd: '/x', slug: 'claude-fix', peer: 'container' }),
+    ]
+    const isLocal = (n: string) => n === 'container'
+    expect(reorderKeysForFolder(sessions, undefined, isLocal))
+      .toEqual(['claude-fix'])
   })
 })
 
@@ -773,7 +841,7 @@ describe('discoverProjects', () => {
     // Two unrelated sessions whose cwd basenames collide on
     // slugFromPath both produce suggested_slug = "api". With only
     // active_count, session_count, suggested_slug as sort keys the
-    // pair would tie; the sort then falls through to the byDir Map's
+    // pair would tie; the sort then falls through to the byKey Map's
     // insertion order, which mirrors the input sessions array.
     //
     // In the manage-projects modal that input order is set by
@@ -787,6 +855,20 @@ describe('discoverProjects', () => {
       const out = discoverProjects(input, [])
       expect(out.map(d => d.paths[0])).toEqual(['/home/me/api', '/srv/api'])
     }
+  })
+
+  it('excludes sessions from disconnected peers', () => {
+    // A disconnected peer's disclaimed sessions may be stale: the
+    // peer may have grown rules we haven't seen yet. Surfacing them
+    // as discoverable would let the user click + Add against an
+    // unreachable peer and create a dangling reference.
+    const sessions = [
+      makeSession({ id: 'a@up', cwd: '/work/a', alive: true, peer: 'up' }),
+      makeSession({ id: 'b@down', cwd: '/work/b', alive: true, peer: 'down' }),
+    ]
+    const status = new Map([['up', 'connected'], ['down', 'disconnected']])
+    const out = discoverProjects(sessions, [], status)
+    expect(out.map(d => d.peer)).toEqual(['up'])
   })
 })
 
