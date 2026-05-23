@@ -2103,6 +2103,9 @@ func composePeerProjects(mgr *peering.Manager) map[string][]peering.SpokeProject
 	}
 	out := make(map[string][]peering.SpokeProject, len(infos))
 	for _, info := range infos {
+		if info.Local {
+			continue
+		}
 		p := mgr.GetPeer(info.Name)
 		if p == nil {
 			continue

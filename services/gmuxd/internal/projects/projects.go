@@ -1,8 +1,8 @@
 // Package projects manages the user-curated project list that controls
 // which sessions appear in the sidebar.
 //
-// Each project has a list of match rules (remote URLs, filesystem paths,
-// optionally scoped to specific hosts). A session matches a project if
+// Each owned project has a list of match rules (remote URLs or filesystem
+// paths). A session matches a project if
 // any rule matches. First matching project in list order wins; among
 // path rules, longest prefix wins. State is persisted to
 // projects.json in the state directory.

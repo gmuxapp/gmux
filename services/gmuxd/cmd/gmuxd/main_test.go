@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 )
@@ -25,7 +28,7 @@ func (a discoverTestAdapter) Name() string                      { return a.name 
 func (a discoverTestAdapter) Discover() bool                    { return a.available }
 func (a discoverTestAdapter) Match(_ []string) bool             { return false }
 func (a discoverTestAdapter) Env(_ adapter.EnvContext) []string { return nil }
-func (a discoverTestAdapter) Monitor(_ []byte) *adapter.Event { return nil }
+func (a discoverTestAdapter) Monitor(_ []byte) *adapter.Event   { return nil }
 func (a discoverTestAdapter) Launchers() []adapter.Launcher {
 	return []adapter.Launcher{{ID: a.name, Label: a.name}}
 }
@@ -471,6 +474,70 @@ func TestSnapshotPumpRoute(t *testing.T) {
 					tc.eventType, gotSessions, gotWorld, tc.wantSessions, tc.wantWorld)
 			}
 		})
+	}
+}
+
+func TestComposePeerProjectsSkipsLocalPeers(t *testing.T) {
+	spoke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: snapshot.sessions\ndata: {\"sessions\":[]}\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-r.Context().Done()
+		case "/v1/health":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": map[string]any{"version": "test"}})
+		case "/v1/projects":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"data": map[string]any{
+					"configured": []map[string]any{{
+						"slug":  "gmux",
+						"match": []map[string]any{{"path": "/work/gmux"}},
+					}},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer spoke.Close()
+
+	mgr := peering.NewManager([]config.PeerConfig{
+		{Name: "tower", URL: spoke.URL},
+		{Name: "devcontainer", URL: spoke.URL, Local: true},
+	}, store.New(), "test-host")
+	mgr.Start()
+	defer mgr.Stop()
+
+	waitForCachedProjects := func(name string) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if p := mgr.GetPeer(name); p != nil {
+				if _, ok := p.CachedProjects(); ok {
+					return
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %s project cache", name)
+	}
+	waitForCachedProjects("tower")
+	waitForCachedProjects("devcontainer")
+
+	got := composePeerProjects(mgr)
+	if _, ok := got["devcontainer"]; ok {
+		t.Fatalf("composePeerProjects included Local peer: %#v", got)
+	}
+	projects, ok := got["tower"]
+	if !ok {
+		t.Fatalf("composePeerProjects missing network peer: %#v", got)
+	}
+	if len(projects) != 1 || projects[0].Slug != "gmux" || projects[0].LaunchCwd != "/work/gmux" {
+		t.Fatalf("tower projects = %#v, want gmux with launch cwd", projects)
 	}
 }
 
