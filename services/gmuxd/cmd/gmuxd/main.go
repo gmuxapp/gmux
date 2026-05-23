@@ -24,20 +24,20 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/clipfile"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/coalesce"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/conversations"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/devcontainers"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/coalesce"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/conversations"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/notify"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/sleep"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionmeta"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sleep"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsauth"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsdiscovery"
@@ -225,8 +225,6 @@ Tip:
   More help: https://gmux.app
 `, version)
 }
-
-
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -596,12 +594,10 @@ func serve(stderr io.Writer) int {
 	// rehydrateProjects for the identity-model rationale.
 	if state, err := projectMgr.Load(); err == nil {
 		rehydrateProjects(sessions, convIndex, state)
-		// Sweep resumable sessions into project.sessions[] arrays.
-		// The auto-assign subscriber only fires on session-upsert events,
-		// which arrive after this point; without this pass, a dead-but-
-		// resumable session loaded from sessionmeta would never be added
-		// to its matching project and would be invisible in the sidebar
-		// (the visibility filter requires a stamp).
+		// Sweep live sessions into project.sessions[] arrays. Dead/resumable
+		// sessions loaded from sessionmeta are stamped only when projects.json
+		// already contains their key; dismiss removes that membership, and a
+		// late exit/resume-command upsert must not recreate it.
 		projectMgr.AutoAssignAll(buildSessionInfos(sessions, func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) }))
 		// Stamp ProjectSlug / ProjectIndex on the just-rehydrated sessions
 		// (and on any sessions previously loaded via sessionmeta.Sweep)
@@ -644,12 +640,10 @@ func serve(stderr io.Writer) int {
 				continue
 			}
 			s := ev.Session
-			// Auto-assign live and resumable sessions. A dead session
-			// with a resume command is just as worth stamping as a live
-			// one; the user can still resume it, and without this stamp
-			// the session would be invisible in the sidebar after a
-			// daemon restart.
-			if !s.Alive && !s.Resumable {
+			// Auto-assign live sessions only. Dead/resumable runtime state
+			// belongs to sessionmeta; sidebar membership belongs to projects.json.
+			// If dismiss removed the key, a late exit upsert must not add it back.
+			if !s.Alive {
 				continue
 			}
 			projectMgr.AutoAssignSession(projects.SessionInfo{
@@ -759,7 +753,6 @@ func serve(stderr io.Writer) int {
 			},
 		})
 	})
-
 
 	// Frontend config (read from disk on each request so users can edit
 	// and refresh without restarting gmuxd).
@@ -2359,5 +2352,3 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 		"error": map[string]any{"code": code, "message": message},
 	})
 }
-
-

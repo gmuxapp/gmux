@@ -800,7 +800,7 @@ func TestManagerAutoAssign(t *testing.T) {
 	slug := mgr.AutoAssignSession(SessionInfo{
 		ID: "sess-1", Cwd: "/dev/gmux/src", WorkspaceRoot: "/dev/gmux",
 		Remotes: map[string]string{"origin": "github.com/gmuxapp/gmux"},
-		Alive: true,
+		Alive:   true,
 	})
 	if slug != "gmux" {
 		t.Errorf("expected 'gmux', got %q", slug)
@@ -905,6 +905,30 @@ func TestManagerUnmatchedNotAutoAssigned(t *testing.T) {
 	}
 }
 
+func TestManagerDeadResumableNotAutoAssigned(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+
+	mgr.Update(func(s *State) bool {
+		s.Items = []Item{
+			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}},
+		}
+		return true
+	})
+
+	assigned := mgr.AutoAssignSession(SessionInfo{
+		ID: "sess-1", Cwd: "/dev/gmux", Alive: false, Resumable: true, Slug: "fix-sidebar",
+	})
+	if assigned != "" {
+		t.Fatalf("dead/resumable session should not be auto-assigned, got %q", assigned)
+	}
+
+	state, _ := mgr.Load()
+	if len(state.Items[0].Sessions) != 0 {
+		t.Fatalf("dead/resumable session was added back to sidebar membership: %v", state.Items[0].Sessions)
+	}
+}
+
 // --- UnmatchedActiveCount ---
 
 func TestUnmatchedActiveCount(t *testing.T) {
@@ -912,11 +936,11 @@ func TestUnmatchedActiveCount(t *testing.T) {
 		{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"s1"}},
 	}}
 	sessions := []SessionInfo{
-		{ID: "s1", Cwd: "/dev/gmux", Alive: true},       // matched + in array
+		{ID: "s1", Cwd: "/dev/gmux", Alive: true},        // matched + in array
 		{ID: "s2", Cwd: "/dev/gmux", Alive: true},        // matched but not in array
-		{ID: "s3", Cwd: "/somewhere/else", Alive: true},   // unmatched + alive
-		{ID: "s4", Cwd: "/somewhere/else", Alive: false},  // unmatched + dead
-		{ID: "s5", Cwd: "/another/place", Alive: true},    // unmatched + alive
+		{ID: "s3", Cwd: "/somewhere/else", Alive: true},  // unmatched + alive
+		{ID: "s4", Cwd: "/somewhere/else", Alive: false}, // unmatched + dead
+		{ID: "s5", Cwd: "/another/place", Alive: true},   // unmatched + alive
 	}
 	count := s.UnmatchedActiveCount(sessions)
 	// s3 and s5 are unmatched+alive. s2 matches gmux (not counted). s4 is dead.
@@ -1050,16 +1074,16 @@ func TestManagerAutoAssignAll(t *testing.T) {
 	sessions := []SessionInfo{
 		{ID: "s1", Cwd: "/dev/gmux/src", Alive: true},
 		{ID: "s2", Cwd: "/dev/yapp", Alive: true},
-		{ID: "s3", Cwd: "/dev/gmux", Alive: false, Resumable: true}, // dead+resumable: included
+		{ID: "s3", Cwd: "/dev/gmux", Alive: false, Resumable: true}, // dead+resumable: skipped
 		{ID: "s4", Cwd: "/dev/gmux", Alive: false},                  // dead, no resume: skipped
-		{ID: "s5", Cwd: "/other", Alive: true},                       // unmatched: skipped
+		{ID: "s5", Cwd: "/other", Alive: true},                      // unmatched: skipped
 	}
 
 	mgr.AutoAssignAll(sessions)
 
 	state, _ := mgr.Load()
-	if len(state.Items[0].Sessions) != 2 || state.Items[0].Sessions[0] != "s1" || state.Items[0].Sessions[1] != "s3" {
-		t.Errorf("gmux sessions: expected [s1 s3], got %v", state.Items[0].Sessions)
+	if len(state.Items[0].Sessions) != 1 || state.Items[0].Sessions[0] != "s1" {
+		t.Errorf("gmux sessions: expected [s1], got %v", state.Items[0].Sessions)
 	}
 	if len(state.Items[1].Sessions) != 1 || state.Items[1].Sessions[0] != "s2" {
 		t.Errorf("yapp sessions: expected [s2], got %v", state.Items[1].Sessions)
@@ -1118,7 +1142,6 @@ func TestManagerAutoAssignAllSkipsPeerOwnedSessions(t *testing.T) {
 		t.Errorf("expected only local-1 assigned, got %v", state.Items[0].Sessions)
 	}
 }
-
 
 func TestNormalizePathExpandsTilde(t *testing.T) {
 	home, err := os.UserHomeDir()
@@ -1377,10 +1400,10 @@ func TestPruneNamespacedKeys(t *testing.T) {
 				Slug:  "proj",
 				Match: []MatchRule{{Path: "/x"}},
 				Sessions: []string{
-					"sess-a@container",  // should be pruned
-					"sess-b@container",  // should be pruned
-					"sess-c@develop",    // not @container; kept
-					"sess-d",            // local id; kept
+					"sess-a@container",   // should be pruned
+					"sess-b@container",   // should be pruned
+					"sess-c@develop",     // not @container; kept
+					"sess-d",             // local id; kept
 					"claude-attribution", // slug; kept (survives container restart)
 				},
 			},

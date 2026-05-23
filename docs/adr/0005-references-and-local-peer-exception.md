@@ -133,15 +133,16 @@ sessions.Reconcile(func(s store.Session) (string, int) {
 })
 ```
 
-### Resumable sessions get stamped
+### Resumable sessions preserve existing membership only
 
-Auto-assign (per-event and startup-sweep) covers alive *and*
-resumable sessions, not just alive. Without this, a session that
-dies before the per-event subscriber processes it (fast-exiting
-commands, attribution-stage crashes) would never enter
-`Sessions[]`, never get a stamp, and stay invisible in the sidebar
-after a daemon restart. This was a direct consequence of stamps
-becoming the sole authority for sidebar visibility.
+Auto-assign (per-event and startup-sweep) covers live sessions only.
+Dead/resumable runtime state lives in sessionmeta, while sidebar
+membership lives in `projects.json`. If `Sessions[]` already contains
+a dead session's key, reconcile can still stamp it and keep it visible;
+if dismiss removed the key, a late exit event or startup sweep must not
+add it back as resumable. This keeps stamps as the sole authority for
+rendering without letting runtime discovery override explicit sidebar
+membership.
 
 ## Consequences
 

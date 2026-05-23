@@ -58,7 +58,7 @@ Each session has a dot on the left edge:
 
 Agent sessions (pi, Claude, Codex) only trigger the blue unread dot when the assistant completes a turn, not on every line of output.
 
-Hover over a session to reveal the **×** button. For live sessions this kills the process; if the adapter supports resume, the session moves to the **Resume previous** drawer at the bottom of the sidebar. Exited sessions that aren't resumable can be dismissed with ×.
+Hover over a session to reveal the **×** button. This dismisses the session: live runners are killed, the sidebar/project membership is removed, and persisted runtime metadata is dropped so the session does not come back as resumable. Use **Resume** from a dead session view only when you want to continue it.
 
 ## Project hub
 
@@ -81,7 +81,7 @@ Within each host, sessions are grouped by their working directory. Each folder r
 
 ### Session cards
 
-Each card shows a status dot and the session title. Click a card to attach to that session's terminal. The **×** button kills alive sessions or dismisses dead ones.
+Each card shows a status dot and the session title. Click a card to attach to that session's terminal. The **×** button dismisses the session, killing it first if it is still alive.
 
 ### Empty projects
 
