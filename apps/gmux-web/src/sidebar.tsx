@@ -18,6 +18,7 @@ import {
   type DotState,
 } from './store'
 import { PeerLabel } from './peer-label'
+import { HostSuffix } from './host-suffix'
 import type { Session, Folder } from './types'
 
 // ── Types ──
@@ -231,8 +232,8 @@ function FolderGroup({
             : `Open ${folder.name} hub`}
           onClick={onClick}
         >
-          {folder.peer && <PeerLabel name={folder.peer} />}
           {folder.name}
+          <HostSuffix peer={folder.peer} />
           {folder.missing && <span class="folder-missing-icon" title="Project missing on peer">?</span>}
         </a>
         <LaunchButton

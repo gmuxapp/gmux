@@ -11,6 +11,7 @@ import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
 import { sessions, projects, peers, peerStatusByName, isSessionUnavailable, localPeerNames } from './store'
 import { PeerLabel } from './peer-label'
+import { HostSuffix } from './host-suffix'
 
 function projectRemote(p: ProjectItem | undefined): string | undefined {
   return p?.match?.find(r => r.remote)?.remote
@@ -46,7 +47,10 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
   return (
     <div class="home">
       <section>
-        <h2 class="home-section-title">{projectSlug}</h2>
+        <h2 class="home-section-title">
+          {projectSlug}
+          <HostSuffix peer={projectPeer} />
+        </h2>
         {(remote || totalSessions > 0) && (
           <div class="hub-meta">
             {remote && <span class="hub-remote">{remote}</span>}
