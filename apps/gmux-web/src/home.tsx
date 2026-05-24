@@ -94,7 +94,7 @@ export function Home({ onManageProjects }: { onManageProjects: () => void }) {
   )
 }
 
-function Section({
+export function Section({
   title,
   children,
 }: {
