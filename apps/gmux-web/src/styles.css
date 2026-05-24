@@ -450,12 +450,7 @@ body {
   color: var(--text-muted);
   opacity: 0.8;
 }
-.session-host-text {
-  flex-shrink: 0;
-  font-size: 10px;
-  color: var(--text-muted);
-  align-self: center;
-}
+
 
 .session-content {
   flex: 1;

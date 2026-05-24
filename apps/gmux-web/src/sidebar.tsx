@@ -65,27 +65,26 @@ interface DragState {
 
 // ── Components ──
 
-/** Per-row host marker for sessions inside a folder that spans
- *  multiple hosts. Two flavors:
- *  - Local peer (devcontainer): small container icon. The letter
- *    pill never told anyone "this runs in a container"; the icon
- *    does. The peer name is in the tooltip.
- *  - Network peer in a mixed folder (rare in practice, since peer
- *    references make folders single-host): falls back to the peer
- *    name as muted text, so the information is still legible.
+/** Container icon for a devcontainer session inside a mixed-host
+ *  folder. Replaces the per-row PeerLabel pill (which didn't tell
+ *  anyone "this runs in a container" anyway).
+ *
+ *  Reachability is guaranteed by the `buildProjectFolders`
+ *  bucketing: any session with `.peer` set inside a folder where
+ *  `folder.peer === undefined` is a Local peer (parent-owned
+ *  devcontainer). Pinned by `projects.test.ts`
+ *  ("non-Local peer sessions never land in a locally-owned
+ *  folder"). Peer-owned folders are single-host by construction,
+ *  so showHostMarker never fires there.
  */
-function SessionHostMarker({ peer }: { peer: string }) {
-  const isContainer = localPeerNames.value.has(peer)
-  if (isContainer) {
-    return (
-      <svg class="session-container-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-        <title>{`devcontainer: ${peer}`}</title>
-        <rect x="1.5" y="3.5" width="9" height="6" rx="0.5" />
-        <path d="M4 3.5v6 M6 3.5v6 M8 3.5v6" />
-      </svg>
-    )
-  }
-  return <span class="session-host-text" title={peer}>{peer}</span>
+function DevcontainerMarker({ peer }: { peer: string }) {
+  return (
+    <svg class="session-container-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+      <title>{`devcontainer: ${peer}`}</title>
+      <rect x="1.5" y="3.5" width="9" height="6" rx="0.5" />
+      <path d="M4 3.5v6 M6 3.5v6 M8 3.5v6" />
+    </svg>
+  )
 }
 
 function reorder<T>(arr: T[], from: number, to: number): T[] {
@@ -167,7 +166,7 @@ function SessionItem({
         ? <svg class="session-sleep-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
         : <span class={`session-dot-indicator ${dotState}${arrival ? ` ${arrival}` : ''}`} />
       }
-      {showHostMarker && session.peer && <SessionHostMarker peer={session.peer} />}
+      {showHostMarker && session.peer && <DevcontainerMarker peer={session.peer} />}
       <div class="session-content">
         <div class="session-title-row">
           <span class="session-title">{session.title}</span>

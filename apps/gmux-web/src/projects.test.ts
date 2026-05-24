@@ -336,6 +336,34 @@ describe('buildProjectFolders', () => {
     expect(folders[0].sessions.map(s => s.id)).toEqual(['a@tower', 'b@tower', 'c@tower'])
   })
 
+  it('non-Local peer sessions never land in a locally-owned folder', () => {
+    // Pinned for the sidebar mixed-host marker (sidebar.tsx,
+    // DevcontainerMarker): inside a folder with peer===undefined,
+    // any session whose .peer is set must be a Local peer
+    // (devcontainer). The marker leans on this invariant to render
+    // a container icon unconditionally rather than re-classifying
+    // peers at render time. If bucketing ever folds non-Local peer
+    // sessions into a local folder, this test fires and the marker
+    // needs to be revisited.
+    const projects: ProjectItem[] = [
+      { slug: 'gmux', match: [{ path: '/dev/gmux' }] },
+    ]
+    const sessions = [
+      makeSession({ id: 's-local', cwd: '/dev/gmux', alive: true,
+                    project_slug: 'gmux', project_index: 0 }),
+      makeSession({ id: 's-tower@tower', cwd: '/x', alive: true,
+                    peer: 'tower', project_slug: 'gmux', project_index: 1 }),
+    ]
+    // Crucial: 'tower' is *not* a Local peer. The hint must be
+    // honest about this; an incorrect Local claim would land the
+    // session here legitimately.
+    const isLocal = (name: string) => name !== 'tower'
+    const folders = buildProjectFolders(projects, sessions, isLocal)
+    expect(folders).toHaveLength(1)
+    expect(folders[0].peer).toBeUndefined()
+    expect(folders[0].sessions.map(s => s.id)).toEqual(['s-local'])
+  })
+
   it('ignores stamped peer sessions when no reference exists for them', () => {
     // Under the references model, peer-stamped sessions only appear
     // if the viewer added a reference. No emergent peer folders.
