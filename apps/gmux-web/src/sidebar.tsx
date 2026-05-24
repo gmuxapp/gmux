@@ -250,7 +250,7 @@ function FolderGroup({
           class={`folder-name${isCurrent ? ' current' : ''}${folder.missing ? ' missing' : ''}`}
           href={href}
           title={folder.missing
-            ? `${folder.name} no longer exists on ${folder.peer}; remove via Manage projects`
+            ? `${folder.name} no longer exists on ${folder.peer}; remove via the home page`
             : `Open ${folder.name} hub`}
           onClick={onClick}
         >
@@ -372,14 +372,14 @@ export function Sidebar({
           {connected && isOnlyHomeProject && totalVisible > 0 && (
             <div class="sidebar-hint">
               <button class="sidebar-hint-link" onClick={onManageProjects}>
-                Manage projects
+                Add a project
               </button> to organize sessions by repo.
             </div>
           )}
         </div>
         <div class="sidebar-footer">
           <button class="manage-projects-btn" onClick={onManageProjects}>
-            Manage projects
+            + Add project
             {unmatchedCount > 0 && (
               <span class="manage-projects-badge">{unmatchedCount}</span>
             )}
