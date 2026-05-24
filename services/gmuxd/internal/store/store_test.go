@@ -2,6 +2,8 @@ package store
 
 import (
 	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -821,6 +823,161 @@ func TestSessionMarshalJSON_WireFormat(t *testing.T) {
 	}
 }
 
+// internalSessionFields lists struct fields that intentionally do
+// not appear on the wire. The MarshalJSON "wire" struct excludes
+// these; they are kept on Session for internal resolution (Title
+// merging) but never sent to clients. Add a field here if and only
+// if you are deliberately keeping it server-side.
+var internalSessionFields = map[string]struct{}{
+	"ShellTitle":   {},
+	"AdapterTitle": {},
+}
+
+// TestSessionMarshalJSON_AllFieldsAppearOnWire is the gotcha-catcher
+// for "someone added a field to Session with a json tag, but forgot
+// to plumb it through the explicit `wire` struct in MarshalJSON."
+// This is exactly how `last_activity_at` was almost silently dropped
+// during PR #229: the field had a tag on the struct but wasn't
+// enumerated in the wire literal, so it would never have reached
+// any API consumer.
+//
+// The test reflects over every json-tagged field on Session,
+// populates each to a non-zero value, marshals, and asserts the
+// tag's wire name appears in the output. New fields fall into one of
+// two camps: either they belong on the wire (and the wire struct
+// needs an entry, which this test forces) or they're internal (and
+// they need to be added to internalSessionFields with a comment
+// justifying the exclusion). Either way the failure mode is loud,
+// not silent.
+func TestSessionMarshalJSON_AllFieldsAppearOnWire(t *testing.T) {
+	sess := fullyPopulatedSession()
+	b, err := json.Marshal(sess)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	st := reflect.TypeOf(sess)
+	for i := 0; i < st.NumField(); i++ {
+		f := st.Field(i)
+		tag := f.Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		wireName := strings.SplitN(tag, ",", 2)[0]
+		_, isInternal := internalSessionFields[f.Name]
+		_, onWire := m[wireName]
+		switch {
+		case isInternal && onWire:
+			t.Errorf("field %s (wire: %s) is listed as internal but appears in MarshalJSON output", f.Name, wireName)
+		case !isInternal && !onWire:
+			t.Errorf("field %s (wire: %s) has a json tag but is missing from MarshalJSON's wire struct; "+
+				"either add it to the wire literal in store.Session.MarshalJSON or add %q to internalSessionFields",
+				f.Name, wireName, f.Name)
+		}
+	}
+}
+
+// fullyPopulatedSession returns a Session with every json-tagged
+// field set to a non-zero value. Used by the all-fields-on-wire
+// test; centralised so adding a new field forces a compile-time
+// touchpoint here too.
+func fullyPopulatedSession() Session {
+	exit := 0
+	return Session{
+		ID:             "sess-full",
+		Peer:           "peer-x",
+		CreatedAt:      "2026-01-01T00:00:00Z",
+		Command:        []string{"bash"},
+		Cwd:            "/tmp/work",
+		Kind:           "pi",
+		WorkspaceRoot:  "/tmp/work",
+		Remotes:        map[string]string{"origin": "github.com/x/y"},
+		Alive:          true,
+		Pid:            42,
+		ExitCode:       &exit,
+		StartedAt:      "2026-01-01T00:00:01Z",
+		ExitedAt:       "2026-01-01T00:00:02Z",
+		Title:          "t",
+		Subtitle:       "s",
+		Status:         &Status{Label: "l", Working: true, Error: true},
+		Unread:         true,
+		LastActivityAt: "2026-01-01T00:00:03Z",
+		Resumable:      true,
+		SocketPath:     "/tmp/sock",
+		TerminalCols:   80,
+		TerminalRows:   24,
+		Slug:           "slug",
+		RunnerVersion:  "v1",
+		BinaryHash:     "hash",
+		ShellTitle:     "shell-internal",
+		AdapterTitle:   "adapter-internal",
+		ProjectSlug:    "proj",
+		ProjectIndex:   3,
+	}
+}
+
+// TestSessionMarshalJSON_LastActivityAt pins that LastActivityAt
+// makes it onto the wire. The Session type has a custom MarshalJSON
+// (an explicit `wire` struct, not the default struct-tag reflection),
+// so adding a field to the struct alone is silently insufficient:
+// the field has to be enumerated in the wire struct and the
+// json.Marshal call. This test exists specifically to catch that
+// class of regression, not to test the std library's JSON encoder.
+func TestSessionMarshalJSON_LastActivityAt(t *testing.T) {
+	ts := "2026-05-23T10:30:00Z"
+	s := Session{ID: "sess-1", Kind: "pi", Alive: true, LastActivityAt: ts}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := m["last_activity_at"]; got != ts {
+		t.Fatalf("last_activity_at on wire = %v, want %q", got, ts)
+	}
+
+	// And: when unset, the field is omitted (omitempty), not sent as
+	// an empty string. Matters because the frontend treats "" and
+	// absent identically today but might diverge later, and empty
+	// strings on RFC3339 fields are a smell.
+	s2 := Session{ID: "sess-2", Kind: "pi", Alive: true}
+	b2, _ := json.Marshal(s2)
+	var m2 map[string]any
+	json.Unmarshal(b2, &m2)
+	if _, present := m2["last_activity_at"]; present {
+		t.Errorf("unset LastActivityAt should be omitted, got %v", m2["last_activity_at"])
+	}
+}
+
+// TestSessionRoundTrip_LastActivityAt pins the peer-payload path:
+// the hub receives a peer session as JSON and json.Unmarshals into
+// store.Session, then UpsertRemote stores it. The default tag-based
+// unmarshal populates LastActivityAt from the wire; this test exists
+// because the symmetry between MarshalJSON (custom) and Unmarshal
+// (default) is the kind of asymmetry that breaks silently when
+// someone adds an UnmarshalJSON later.
+func TestSessionRoundTrip_LastActivityAt(t *testing.T) {
+	ts := "2026-05-23T10:30:00Z"
+	original := Session{ID: "sess-1", Kind: "pi", Alive: true, LastActivityAt: ts}
+	b, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded Session
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.LastActivityAt != ts {
+		t.Fatalf("round-trip LastActivityAt = %q, want %q", decoded.LastActivityAt, ts)
+	}
+}
+
 // --- Reconcile (project ownership stamping per ADR 0002) ---
 
 func TestReconcile_StampsOwnedSessions(t *testing.T) {
@@ -1169,6 +1326,40 @@ func TestLastActivityAt_UpsertNoBumpPreservesStamp(t *testing.T) {
 	after, _ := s.Get("s1")
 	if after.LastActivityAt != stamp {
 		t.Fatalf("no-bump Upsert must preserve LastActivityAt (was %q, now %q)", stamp, after.LastActivityAt)
+	}
+}
+
+// TestLastActivityAt_PointerAliasingDoesNotHideTransition is a
+// regression test for a real bug in an earlier draft: Update did
+// `sess := prev` (shallow copy), so prev.Status and sess.Status
+// pointed to the same Status struct. A mutator that wrote through
+// the pointer (e.g. flipped sess.Status.Working from false to true)
+// would silently mutate prev too, hiding the false→true transition
+// from the bump check. This test pins that the bump fires correctly
+// when a mutator constructs a new Status pointer in place of a nil
+// one (the common pattern in subscribe.go), AND would have failed
+// under the previous implementation if the mutator modified the
+// pointer's pointee directly. Snapshotting the activity booleans
+// before fn runs sidesteps the alias entirely.
+func TestLastActivityAt_PointerAliasingDoesNotHideTransition(t *testing.T) {
+	s := New()
+	// Seed with a Status pointer present (label only, not working).
+	s.Upsert(Session{ID: "s1", Kind: "pi", Alive: true, Status: &Status{Label: "idle"}})
+
+	// Mutator writes Working=true through the existing Status pointer
+	// rather than allocating a new Status. This is the alias-risk
+	// shape.
+	ok := s.Update("s1", func(sess *Session) {
+		if sess.Status != nil {
+			sess.Status.Working = true
+		}
+	})
+	if !ok {
+		t.Fatal("update failed")
+	}
+	after, _ := s.Get("s1")
+	if after.LastActivityAt == "" {
+		t.Fatal("working false→true through aliased pointer must still bump LastActivityAt")
 	}
 }
 

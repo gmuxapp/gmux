@@ -101,6 +101,7 @@ func TestRoundTripFullSession(t *testing.T) {
 		BinaryHash:    "abc123",
 		ShellTitle:    "shell-title",
 		AdapterTitle:  "adapter-title",
+		LastActivityAt: "2026-04-26T10:04:30Z",
 	}
 
 	if err := s.Write(in); err != nil {

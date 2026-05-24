@@ -133,6 +133,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		BinaryHash    string            `json:"binary_hash,omitempty"`
 		ProjectSlug   string            `json:"project_slug,omitempty"`
 		ProjectIndex  int               `json:"project_index,omitempty"`
+		LastActivityAt string           `json:"last_activity_at,omitempty"`
 	}
 	return json.Marshal(wire{
 		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,
@@ -145,6 +146,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		TerminalRows: s.TerminalRows, Slug: s.Slug,
 		RunnerVersion: s.RunnerVersion, BinaryHash: s.BinaryHash,
 		ProjectSlug: s.ProjectSlug, ProjectIndex: s.ProjectIndex,
+		LastActivityAt: s.LastActivityAt,
 	})
 }
 
@@ -275,7 +277,7 @@ func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
 	s.mu.Lock()
 	if bumpLocally {
 		prev, hadPrev := s.sessions[sess.ID]
-		if shouldBumpActivity(prev, hadPrev, sess) {
+		if shouldBumpActivity(snapshotActivity(prev), hadPrev, snapshotActivity(sess)) {
 			sess.LastActivityAt = nowRFC3339()
 		} else if hadPrev && sess.LastActivityAt == "" {
 			// Preserve the previously stamped timestamp across
@@ -318,13 +320,14 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 		s.mu.Unlock()
 		return false
 	}
+	prevSnap := snapshotActivity(prev)
 	sess := prev
 	fn(&sess)
 	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
 	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
 	sess.Title = s.resolveTitle(sess)
 	sess.Resumable = !sess.Alive && len(sess.Command) > 0
-	if shouldBumpActivity(prev, true, sess) {
+	if shouldBumpActivity(prevSnap, true, snapshotActivity(sess)) {
 		sess.LastActivityAt = nowRFC3339()
 	}
 	removed, skip := s.resolveDuplicateSlugsLocked(sess)
@@ -552,32 +555,52 @@ func (s *Store) ensureUniqueSlug(sess *Session) {
 }
 
 
+// activitySnapshot captures the four scalar bits that determine
+// whether a session transition bumps LastActivityAt. Snapshotting
+// upfront (rather than dereferencing Session.Status during the
+// comparison) is load-bearing: Update callers do `sess := prev`
+// before running their mutator, which shallow-copies the Session
+// but leaves prev.Status and sess.Status pointing at the same
+// Status struct. A mutator that writes through that pointer
+// (e.g. `sess.Status.Working = true`) would silently mutate prev
+// too, hiding the transition from the bump check. Capturing the
+// booleans before fn runs sidesteps the aliasing entirely.
+type activitySnapshot struct {
+	alive, unread, working, errored bool
+}
+
+func snapshotActivity(s Session) activitySnapshot {
+	return activitySnapshot{
+		alive:   s.Alive,
+		unread:  s.Unread,
+		working: s.Status != nil && s.Status.Working,
+		errored: s.Status != nil && s.Status.Error,
+	}
+}
+
 // shouldBumpActivity reports whether the prev→next session transition
 // is noteworthy enough to refresh LastActivityAt. See the field's
 // docstring for the exact bump set. Brand-new sessions (hadPrev=false)
 // never bump: their first follow-up transition does, which avoids
 // timestamping every sessionmeta-rehydrated dead session at daemon
 // startup.
-func shouldBumpActivity(prev Session, hadPrev bool, next Session) bool {
+func shouldBumpActivity(prev activitySnapshot, hadPrev bool, next activitySnapshot) bool {
 	if !hadPrev {
 		return false
 	}
-	if prev.Alive && !next.Alive {
+	if prev.alive && !next.alive {
 		return true
 	}
-	if !prev.Unread && next.Unread {
+	if !prev.unread && next.unread {
 		return true
 	}
-	if !statusWorking(prev.Status) && statusWorking(next.Status) {
+	if !prev.working && next.working {
 		return true
 	}
-	if !statusError(prev.Status) && statusError(next.Status) {
+	if !prev.errored && next.errored {
 		return true
 	}
 	return false
 }
-
-func statusWorking(s *Status) bool { return s != nil && s.Working }
-func statusError(s *Status) bool   { return s != nil && s.Error }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
