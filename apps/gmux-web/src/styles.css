@@ -589,6 +589,101 @@ body {
   box-shadow: inset 0 -2px 0 0 var(--accent);
 }
 
+/* ── Wide session row (dashboard / project page) ────────────────────── */
+/* Two-line variant of the sidebar's SessionItem. Same dot conventions
+   and close-button behavior; line 2 carries optional project / cwd /
+   status / age metadata. The host suffix uses the existing
+   .host-suffix styling. */
+
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.1s, border-color 0.15s;
+  position: relative;
+}
+.session-row:hover {
+  background: var(--bg-hover);
+  border-color: var(--text-muted);
+}
+.session-row.selected {
+  border-color: var(--accent);
+}
+.session-row.unavailable {
+  opacity: 0.55;
+}
+
+.session-row-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-row-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+.session-row-sep {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+.session-row-project {
+  color: var(--text);
+  opacity: 0.85;
+}
+.session-row-cwd {
+  font-family: var(--font-mono, monospace);
+}
+.session-row-status {
+  font-style: italic;
+}
+.session-row-age {
+  font-variant-numeric: tabular-nums;
+}
+
+.session-row-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s, background 0.1s;
+}
+.session-row:hover .session-row-close,
+.session-row.selected .session-row-close {
+  opacity: 1;
+}
+.session-row-close:hover {
+  color: var(--text);
+  background: var(--bg-active);
+}
+@media (hover: none) {
+  .session-row-close { opacity: 1; }
+}
+
 /* On touch devices (no hover), show interactive buttons permanently */
 @media (hover: none) {
   .launch-container.folder-launch-btn { opacity: 1; }
