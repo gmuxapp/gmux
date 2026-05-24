@@ -74,7 +74,7 @@ The four stores have orthogonal concerns. Mixing them is a smell:
 | **Restart**           | Like Resume but kills the live runner first; goes through Resume after exit                                            |                                |
 | **Slug-takeover**     | A fresh live session evicting a dead one with the same `(kind, peer, slug)` from the store                              | Slug eviction                  |
 | **Dismiss**           | Explicit user removal: runner killed if alive, store entry removed, sessionmeta + scrollback dropped                    | Delete, close                  |
-| **Sweep**             | Daemon startup operation: read every `meta.json` and Upsert as `Alive=false` so dead sessions reappear in the sidebar   | Restore                        |
+| **Sweep**             | Daemon startup operation: read every `meta.json` and Upsert as `Alive=false`; sessions appear in the sidebar only if `projects.json` still contains their key | Restore                        |
 | **Attribution**       | The pre-attribution → attributed transition for tool-backed sessions when their adapter file appears                    | Naming                         |
 
 ## Relationships
@@ -102,7 +102,7 @@ The four stores have orthogonal concerns. Mixing them is a smell:
 
 > **Dev:** "So the **Conversations Index** matters here for resolving URLs to dead pi sessions, but not for the sidebar?"
 
-> **Domain expert:** "Right. **Sessionmeta** is what makes dead sessions reappear in the sidebar after a daemon restart. The **Conversations Index** exists for things like `/v1/conversations/{kind}/{slug}` URL lookup and future search. They live in different concerns; conflating them is what made the old rehydration path overwrite runtime state."
+> **Domain expert:** "Right. **Sessionmeta** makes dead session runtime state survive a daemon restart. **Projects.json** decides whether that dead session is still sidebar-visible. The **Conversations Index** exists for things like `/v1/conversations/{kind}/{slug}` URL lookup and future search. They live in different concerns; conflating them is what made the old rehydration path overwrite runtime state."
 
 ## Flagged ambiguities
 

@@ -77,11 +77,15 @@ func (m *Manager) Update(fn func(s *State) bool) error {
 	return nil
 }
 
-// AutoAssignSession checks if a session matches a project and adds it
+// AutoAssignSession checks if a live session matches a project and adds it
 // to that project's sessions list. Returns the project slug if assigned.
 // This is called when:
 //   - A new session is discovered (Register)
 //   - A session gets a Slug (file attribution)
+//
+// Dead/resumable sessions are not auto-assigned. projects.json is the
+// source of truth for sidebar membership; if dismiss removed a session key,
+// a late exit/resume-command upsert must not add it back.
 //
 // Network-peer sessions (info.Host set, info.LocalHost false) are never
 // written to the local projects.json: project membership for them is
@@ -90,7 +94,7 @@ func (m *Manager) Update(fn func(s *State) bool) error {
 // owns their assignment per the ADR 0002 amendment, so they flow
 // through here like local sessions.
 func (m *Manager) AutoAssignSession(info SessionInfo) string {
-	if info.Host != "" && !info.LocalHost {
+	if !info.Alive || (info.Host != "" && !info.LocalHost) {
 		return ""
 	}
 	var assigned string
@@ -140,14 +144,15 @@ func (m *Manager) AutoAssignSession(info SessionInfo) string {
 	return assigned
 }
 
-// AutoAssignAll iterates all sessions and adds alive-or-resumable
-// ones to their matching projects in a single atomic update. Called
-// after adding a project so that existing sessions populate the array
-// immediately rather than waiting for the next session-upsert event,
-// and at startup so resumable sessions loaded from sessionmeta get
-// stamped before the first snapshot goes out (otherwise dead-but-
-// resumable sessions miss the auto-assign hook, which only fires on
-// session-upsert events for live sessions).
+// AutoAssignAll iterates all live sessions and adds them to their matching
+// projects in a single atomic update. Called after adding a project so that
+// existing live sessions populate the array immediately rather than waiting
+// for the next session-upsert event.
+//
+// Dead/resumable sessions are skipped: sessionmeta owns their runtime state,
+// but projects.json owns sidebar membership. If a key is already present in
+// projects.json, reconciliation can still stamp the dead session; auto-assign
+// just must not create new membership for dead sessions.
 //
 // Network-peer sessions are skipped; Local-peer sessions flow through
 // because the parent owns their assignment. See AutoAssignSession.
@@ -155,7 +160,7 @@ func (m *Manager) AutoAssignAll(sessions []SessionInfo) {
 	err := m.Update(func(state *State) bool {
 		changed := false
 		for _, info := range sessions {
-			if !info.Alive && !info.Resumable {
+			if !info.Alive {
 				continue
 			}
 			if info.Host != "" && !info.LocalHost {

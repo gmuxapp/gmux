@@ -266,7 +266,9 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			log.Printf("subscribe: %s: bad exit event: %v", sessionID, err)
 			return
 		}
-		// Read the session for the OnExit hook which needs the full session.
+		// Read the session for the OnExit hook, then write it back only if
+		// it still exists. A dismissed session has already been removed, so
+		// a late runner exit event must not re-upsert it as dead/resumable.
 		sess, ok := sub.store.Get(sessionID)
 		if !ok {
 			return
@@ -275,20 +277,24 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		sess.ExitCode = &exit.ExitCode
 		sess.ExitedAt = time.Now().UTC().Format(time.RFC3339)
 		// Let the OnExit hook set the resume command before upsert.
-		// If it returns true, the session transitioned to resumable —
-		// don't overwrite with exit status.
+		// If it returns true, the session transitioned to resumable,
+		// so don't overwrite with exit status.
 		resumed := false
 		if sub.OnExit != nil {
 			resumed = sub.OnExit(&sess)
 		}
 		if !resumed {
 			if exit.ExitCode == 0 {
-				sess.Status = nil // clean exit — no label needed
+				sess.Status = nil // clean exit, no label needed
 			} else {
 				sess.Status = &store.Status{Label: fmt.Sprintf("exited (%d)", exit.ExitCode)}
 			}
 		}
-		sub.store.Upsert(sess)
+		if !sub.store.Update(sessionID, func(current *store.Session) {
+			*current = sess
+		}) {
+			return
+		}
 		if sub.OnDead != nil {
 			sub.OnDead(sess)
 		}

@@ -187,3 +187,51 @@ func TestSubscribeOldDeferDoesNotEvictNewEntry(t *testing.T) {
 		t.Error("Unsubscribe failed to clear the second subscription's entry")
 	}
 }
+
+func TestExitEventDoesNotResurrectDismissedSession(t *testing.T) {
+	const id = "sess-dismissed-exit-race"
+	sessions := store.New()
+	sessions.Upsert(store.Session{
+		ID:      id,
+		Kind:    "shell",
+		Alive:   true,
+		Command: []string{"bash"},
+	})
+
+	subs := NewSubscriptions(sessions)
+	onExitStarted := make(chan struct{})
+	allowOnExit := make(chan struct{})
+	subs.OnExit = func(sess *store.Session) bool {
+		close(onExitStarted)
+		<-allowOnExit
+		sess.Command = []string{"bash", "-l"}
+		return true
+	}
+
+	exitDone := make(chan struct{})
+	go func() {
+		subs.handleEvent(id, "", "exit", []byte(`{"exit_code":0}`))
+		close(exitDone)
+	}()
+
+	select {
+	case <-onExitStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnExit hook was not called")
+	}
+
+	// Dismiss while exit handling is deriving the resume command. The final
+	// write must notice that the session is gone instead of recreating it.
+	sessions.Remove(id)
+	close(allowOnExit)
+
+	select {
+	case <-exitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("exit handling did not complete")
+	}
+
+	if got, ok := sessions.Get(id); ok {
+		t.Fatalf("dismissed session was resurrected by late exit event: %+v", got)
+	}
+}

@@ -486,6 +486,12 @@ export function toUISession(s: ProtocolSession): Session {
     runner_version: s.runner_version ?? undefined,
     binary_hash: s.binary_hash ?? undefined,
     peer: s.peer ?? undefined,
+    // Stamps from the session's origin host. Drive sidebar bucketing
+    // under the references model: a session that arrives without
+    // these is invisible (no folder claims it), so this passthrough
+    // is load-bearing rather than incidental.
+    project_slug: s.project_slug || undefined,
+    project_index: s.project_index,
   }
 }
 

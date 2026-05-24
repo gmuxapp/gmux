@@ -95,15 +95,9 @@ By default, path rules match subdirectories. Set `exact: true` to match only the
 
 This matches sessions started from `$HOME` itself, but not `~/dev/gmux` or any other subdirectory. The default "home" project uses this to avoid catching every session.
 
-### Host scoping
+### Host ownership
 
-Rules can be restricted to sessions from specific [peer hosts](/multi-machine):
-
-```json
-{ "path": "/data/ml", "hosts": ["gpu-server"] }
-```
-
-This rule only applies to sessions running on the peer named `gpu-server`. Local sessions and sessions from other peers are not affected. Rules without `hosts` match sessions from any host.
+Match rules are local to the host that owns the project. Network peer projects are represented as reference items with `peer`; their match rules and session order live in that peer's own `projects.json`. The old `hosts` match-rule field is ignored by current gmuxd versions and is dropped the next time the file is saved.
 
 ## Match precedence
 

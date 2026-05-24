@@ -55,8 +55,9 @@ export function ManageProjectsModal({
   open: boolean
   onClose: () => void
 }) {
-  const [filter, setFilter] = useState('')
-  const [manualError, setManualError] = useState('')
+  const [discoveredQuery, setDiscoveredQuery] = useState('')
+  const [pathDraft, setPathDraft] = useState('')
+  const [pathError, setPathError] = useState('')
   const [drag, setDrag] = useState<DragState | null>(null)
   const backdropRef = useRef<HTMLDivElement>(null)
 
@@ -68,9 +69,13 @@ export function ManageProjectsModal({
     return () => document.removeEventListener('keydown', handler)
   }, [open, onClose])
 
-  // Reset filter when opening
+  // Reset form state when opening
   useEffect(() => {
-    if (open) { setFilter(''); setManualError('') }
+    if (open) {
+      setDiscoveredQuery('')
+      setPathDraft('')
+      setPathError('')
+    }
   }, [open])
 
   // Close on backdrop click
@@ -82,22 +87,19 @@ export function ManageProjectsModal({
   const discoveredVal = discovered.value
 
   // Filter discovered by the search term.
-  const lowerFilter = filter.toLowerCase().trim()
+  const lowerDiscoveredQuery = discoveredQuery.toLowerCase().trim()
   const filteredDiscovered = useMemo(() => {
-    if (!lowerFilter) return discoveredVal
+    if (!lowerDiscoveredQuery) return discoveredVal
     return discoveredVal.filter(d =>
-      d.suggested_slug.toLowerCase().includes(lowerFilter)
-      || d.paths.some(p => p.toLowerCase().includes(lowerFilter))
-      || (d.remote && d.remote.toLowerCase().includes(lowerFilter)),
+      d.suggested_slug.toLowerCase().includes(lowerDiscoveredQuery)
+      || d.paths.some(p => p.toLowerCase().includes(lowerDiscoveredQuery))
+      || (d.remote && d.remote.toLowerCase().includes(lowerDiscoveredQuery)),
     )
-  }, [discoveredVal, lowerFilter])
+  }, [discoveredVal, lowerDiscoveredQuery])
 
   // Split filtered discovered: active first, then inactive.
   const activeDiscovered = filteredDiscovered.filter(d => d.active_count > 0)
   const inactiveDiscovered = filteredDiscovered.filter(d => d.active_count === 0)
-
-  // Detect if filter looks like a path (for the add-by-path affordance).
-  const filterIsPath = filter.trim().startsWith('/') || filter.trim().startsWith('~/')
 
   // ── Reorder handlers ──
 
@@ -156,21 +158,29 @@ export function ManageProjectsModal({
 
   // ── Manual add by path ──
 
-  const handleManualAdd = useCallback(() => {
-    const path = filter.trim()
-    if (!path) return
-    if (!path.startsWith('/') && !path.startsWith('~/')) {
-      setManualError('Path must be absolute (start with / or ~/)')
+  const handleManualAdd = useCallback(async () => {
+    const path = pathDraft.trim()
+    if (!path) {
+      setPathError('Enter an absolute local path.')
       return
     }
-    setManualError('')
-    addProject({ paths: [path] })
-    setFilter('')
-  }, [filter])
+    if (!path.startsWith('/') && !path.startsWith('~/')) {
+      setPathError('Path must be absolute, starting with / or ~/.')
+      return
+    }
 
-  const handleFilterKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === 'Enter' && filterIsPath) handleManualAdd()
-  }, [filterIsPath, handleManualAdd])
+    setPathError('')
+    try {
+      await addProject({ paths: [path] })
+      setPathDraft('')
+    } catch {
+      setPathError('Could not add that local path.')
+    }
+  }, [pathDraft])
+
+  const handlePathKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === 'Enter') handleManualAdd()
+  }, [handleManualAdd])
 
   if (!open) return null
 
@@ -219,7 +229,7 @@ export function ManageProjectsModal({
               </div>
             ) : (
               <div class="mp-empty-hint">
-                No projects yet. Add one from the list below, or type a path.
+                No projects yet. Add a discovered project below, or add a local path.
               </div>
             )}
           </section>
@@ -241,19 +251,12 @@ export function ManageProjectsModal({
             <div class="mp-filter-row">
               <input
                 class="mp-filter-input"
-                type="text"
-                placeholder="Filter or enter a path to add..."
-                value={filter}
-                onInput={(e) => { setFilter((e.target as HTMLInputElement).value); setManualError('') }}
-                onKeyDown={handleFilterKeyDown}
+                type="search"
+                placeholder="Search discovered projects..."
+                value={discoveredQuery}
+                onInput={(e) => { setDiscoveredQuery((e.target as HTMLInputElement).value) }}
               />
-              {filterIsPath && (
-                <button class="mp-manual-btn" onClick={handleManualAdd}>
-                  Add
-                </button>
-              )}
             </div>
-            {manualError && <div class="mp-manual-error">{manualError}</div>}
 
             <div class="mp-discovered-scroll">
               {activeDiscovered.length > 0 && activeDiscovered.map(d => (
@@ -262,18 +265,41 @@ export function ManageProjectsModal({
               {inactiveDiscovered.length > 0 && inactiveDiscovered.map(d => (
                 <DiscoveredRow key={d.suggested_slug} project={d} onAdd={handleAdd} />
               ))}
-              {filteredDiscovered.length === 0 && lowerFilter && !filterIsPath && (
+              {filteredDiscovered.length === 0 && lowerDiscoveredQuery && (
                 <div class="mp-empty-hint">
-                  No matches. Try a different search, or enter a path to add manually.
+                  No discovered projects match that search.
                 </div>
               )}
-              {filteredDiscovered.length === 0 && !lowerFilter && (
+              {filteredDiscovered.length === 0 && !lowerDiscoveredQuery && (
                 <div class="mp-empty-hint">
-                  No unmatched sessions. Launch some sessions and they'll appear here
-                  if they don't match a project.
+                  No unmatched sessions. Launch sessions outside your configured projects
+                  and they will appear here.
                 </div>
               )}
             </div>
+          </section>
+
+          {/* ── Manual local path add ── */}
+          <section class="mp-section mp-path-add-section">
+            <div class="mp-section-label">Add local path</div>
+            <div class="mp-path-add-row">
+              <input
+                class="mp-filter-input mp-path-input"
+                type="text"
+                placeholder="/home/me/dev/project"
+                value={pathDraft}
+                onInput={(e) => { setPathDraft((e.target as HTMLInputElement).value); setPathError('') }}
+                onKeyDown={handlePathKeyDown}
+              />
+              <button class="mp-manual-btn" onClick={handleManualAdd} disabled={pathDraft.trim() === ''}>
+                Add
+              </button>
+            </div>
+            {pathError ? (
+              <div class="mp-manual-error">{pathError}</div>
+            ) : (
+              <div class="mp-path-hint">Adds a local project by absolute path. Remote hosts are not affected.</div>
+            )}
           </section>
         </div>
       </div>
