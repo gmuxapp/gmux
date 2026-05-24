@@ -17,7 +17,6 @@ import {
   peerStatusByName, isSessionUnavailable, localPeerNames,
   type DotState,
 } from './store'
-import { PeerLabel } from './peer-label'
 import { HostSuffix } from './host-suffix'
 import type { Session, Folder } from './types'
 
@@ -66,6 +65,29 @@ interface DragState {
 
 // ── Components ──
 
+/** Per-row host marker for sessions inside a folder that spans
+ *  multiple hosts. Two flavors:
+ *  - Local peer (devcontainer): small container icon. The letter
+ *    pill never told anyone "this runs in a container"; the icon
+ *    does. The peer name is in the tooltip.
+ *  - Network peer in a mixed folder (rare in practice, since peer
+ *    references make folders single-host): falls back to the peer
+ *    name as muted text, so the information is still legible.
+ */
+function SessionHostMarker({ peer }: { peer: string }) {
+  const isContainer = localPeerNames.value.has(peer)
+  if (isContainer) {
+    return (
+      <svg class="session-container-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <title>{`devcontainer: ${peer}`}</title>
+        <rect x="1.5" y="3.5" width="9" height="6" rx="0.5" />
+        <path d="M4 3.5v6 M6 3.5v6 M8 3.5v6" />
+      </svg>
+    )
+  }
+  return <span class="session-host-text" title={peer}>{peer}</span>
+}
+
 function reorder<T>(arr: T[], from: number, to: number): T[] {
   const next = [...arr]
   const [item] = next.splice(from, 1)
@@ -82,6 +104,7 @@ function SessionItem({
   dragging,
   dropTarget,
   unavailable,
+  showHostMarker,
   onClose,
   onClick,
   onDragStart,
@@ -97,6 +120,8 @@ function SessionItem({
   dropTarget?: boolean
   /** Session lives on a peer we can't reach right now. */
   unavailable?: boolean
+  /** Folder spans multiple hosts; render this session's host marker. */
+  showHostMarker?: boolean
   onClose?: () => void
   /** Extra side-effects on click (e.g. close mobile sidebar). */
   onClick?: () => void
@@ -142,7 +167,7 @@ function SessionItem({
         ? <svg class="session-sleep-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
         : <span class={`session-dot-indicator ${dotState}${arrival ? ` ${arrival}` : ''}`} />
       }
-      {session.peer && <PeerLabel name={session.peer} />}
+      {showHostMarker && session.peer && <SessionHostMarker peer={session.peer} />}
       <div class="session-content">
         <div class="session-title-row">
           <span class="session-title">{session.title}</span>
@@ -221,6 +246,13 @@ function FolderGroup({
   const displayItems = drag ? reorder(visible, drag.from, drag.over) : visible
   const isCurrent = currentKey === folder.key
   const href = folder.peer ? `/@${folder.peer}/${folder.slug}` : `/${folder.slug}`
+  // Folder spans multiple hosts iff its sessions don't all share the
+  // same .peer value. In practice this is the devcontainer case: a
+  // local project's folder containing both parent-local sessions
+  // (peer=undefined) and Local-peer container sessions. When all
+  // sessions agree, per-row markers are noise.
+  const folderPeers = new Set(visible.map(s => s.peer ?? ''))
+  const mixedHosts = folderPeers.size > 1
   return (
     <div class="folder">
       <div class="folder-header">
@@ -254,6 +286,7 @@ function FolderGroup({
             resuming={resumingId === s.id}
             dotState={sessionDotState(s, am)}
             unavailable={isSessionUnavailable(s, peerStatus)}
+            showHostMarker={mixedHosts}
             dragging={drag !== null && s.id === visible[drag.from]?.id}
             dropTarget={drag !== null && drag.over === i && drag.from !== i}
             onClose={() => onCloseSession(s)}
