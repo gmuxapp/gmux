@@ -1,17 +1,32 @@
-// Project hub page: sessions for one project grouped by host and cwd.
+// Project hub: activity-first view scoped to one project.
 //
-// Data shape comes from `buildProjectTopology` (pure function in types.ts).
-// This module is render-only: no data fetching, no business logic.
-// Reads sessions/projects/peers from the store.
+// Mirrors the home dashboard's three-section layout (Waiting /
+// Active / All sessions) but filtered to this project's sessions. The
+// shared <SessionRow> renders without a project label (it's in the
+// header) and without a host suffix unless the project spans multiple
+// hosts (devcontainer case).
+//
+// Adaptive cwd:
+//   - If every session shares a single cwd, render it as a subtitle
+//     under the project title and omit it from rows.
+//   - Otherwise show each session's cwd on its row, since worktree
+//     identity is the most useful disambiguator in multi-cwd projects.
+//
+// Worktree grouping (the legacy `~/dev/gmux/.grove/<name>` headings)
+// is intentionally dropped: activity-first sectioning is more useful
+// day-to-day, and cwd-per-row preserves the disambiguation worktree
+// grouping previously provided.
 
 import type { Session, ProjectItem } from './types'
-import type { HostNode } from './projects'
 import { buildProjectTopology } from './projects'
 import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
-import { sessions, projects, peers, peerStatusByName, isSessionUnavailable, localPeerNames } from './store'
-import { PeerLabel } from './peer-label'
+import {
+  sessions, projects, peers, localPeerNames, partitionForProject,
+} from './store'
 import { HostSuffix } from './host-suffix'
+import { SessionRow } from './session-row'
+import { Section } from './home'
 
 function projectRemote(p: ProjectItem | undefined): string | undefined {
   return p?.match?.find(r => r.remote)?.remote
@@ -32,147 +47,107 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
   const project = projectsVal.find(p =>
     p.slug === projectSlug && (p.peer ?? '') === (projectPeer ?? ''),
   )
+
+  // Topology is still the right input shape: it correctly resolves
+  // devcontainer (Local-peer) sessions onto their parent's project.
+  // We flatten its output rather than render it as a tree; the
+  // three-section pattern handles the navigation, not topology.
   const hosts = buildProjectTopology(
     projectSlug, sessions.value, projectsVal, peers.value,
     projectPeer,
     (name) => localPeerNames.value.has(name),
   )
+  const allSessions = hosts.flatMap(h => h.folders.flatMap(f => f.sessions))
   const remote = projectRemote(project)
 
-  const totalSessions = hosts.reduce(
-    (n, h) => n + h.folders.reduce((m, f) => m + f.sessions.length, 0),
-    0,
+  // Adaptive cwd disambiguator: a project whose sessions all live in
+  // one cwd shows that cwd as a subtitle (clean, no repetition); a
+  // multi-cwd project shows cwd per row (lets the user pick the
+  // right worktree). Empty cwds are filtered: they're a placeholder
+  // for sessions whose cwd hasn't resolved yet, not a meaningful
+  // shared root.
+  const uniqueCwds = new Set(allSessions.map(s => s.cwd).filter(Boolean))
+  const sharedCwd = uniqueCwds.size === 1 ? [...uniqueCwds][0] : null
+
+  // Multi-host iff sessions disagree on .peer. Local-peer
+  // (devcontainer) sessions in a local project's folder are the
+  // common case: they make the folder mixed and earn a host suffix
+  // on their row.
+  const uniqueHosts = new Set(allSessions.map(s => s.peer ?? ''))
+  const mixedHosts = uniqueHosts.size > 1
+
+  const { needsAttention, running, rest } = partitionForProject(allSessions)
+
+  const renderRow = (s: Session) => (
+    <SessionRow
+      key={s.id}
+      session={s}
+      href={sessionPath(projectSlug, s, projectPeer)}
+      showCwd={!sharedCwd}
+      cwdLabel={s.cwd}
+      showHost={mixedHosts}
+      onClose={() => onCloseSession(s)}
+    />
   )
 
   return (
-    <div class="home">
-      <section>
-        <h2 class="home-section-title">
-          {projectSlug}
-          <HostSuffix peer={projectPeer} />
-        </h2>
-        {(remote || totalSessions > 0) && (
-          <div class="hub-meta">
+    <div class="page">
+      <header class="hub-header">
+        <div class="hub-eyebrow">Project</div>
+        <div class="hub-title-row">
+          <h2 class="hub-title">
+            {projectSlug}
+            <HostSuffix peer={projectPeer} />
+          </h2>
+          <LaunchButton
+            sessions={allSessions}
+            fallbackCwd={sharedCwd ?? projectFirstPath(project) ?? ''}
+            peer={projectPeer}
+            className="hub-header-launch"
+          />
+        </div>
+        {(remote || sharedCwd) && (
+          <div class="hub-subtitle">
+            {sharedCwd && <span class="hub-cwd">{sharedCwd}</span>}
+            {remote && sharedCwd && <span class="hub-subtitle-sep"> · </span>}
             {remote && <span class="hub-remote">{remote}</span>}
-            {remote && totalSessions > 0 && ' · '}
-            {totalSessions > 0 && (
-              <span>
-                {totalSessions} session{totalSessions === 1 ? '' : 's'}
-                {hosts.length > 1 && <> across {hosts.length} hosts</>}
-              </span>
-            )}
           </div>
         )}
-      </section>
+      </header>
 
-      {hosts.length === 0
-        ? <EmptyProject projectSlug={projectSlug} launchCwd={projectFirstPath(project)} />
-        : hosts.map(host => (
-            <HostGroup
-              key={host.path.join('\0') || '(local)'}
-              host={host}
-              projectSlug={projectSlug}
-              onCloseSession={onCloseSession}
-            />
-          ))}
-    </div>
-  )
-}
-
-function EmptyProject({ projectSlug, launchCwd }: { projectSlug: string; launchCwd?: string }) {
-  return (
-    <div class="hub-empty">
-      <span>No sessions yet in {projectSlug}</span>
-      {launchCwd && (
+      {allSessions.length === 0 ? (
+        <EmptyProject projectSlug={projectSlug} />
+      ) : (
         <>
-          <span class="hub-empty-path">{launchCwd}</span>
-          <LaunchButton cwd={launchCwd} className="hub-empty-launch" />
+          {needsAttention.length > 0 && (
+            <Section title="Waiting">
+              {needsAttention.map(renderRow)}
+            </Section>
+          )}
+          {running.length > 0 && (
+            <Section title="Active">
+              {running.map(renderRow)}
+            </Section>
+          )}
+          {rest.length > 0 && (
+            <Section title="All sessions">
+              {rest.map(renderRow)}
+            </Section>
+          )}
         </>
       )}
     </div>
   )
 }
 
-function HostGroup({
-  host, projectSlug, onCloseSession,
-}: { host: HostNode; projectSlug: string; onCloseSession: (session: Session) => void }) {
-  const sessionCount = host.folders.reduce((n, f) => n + f.sessions.length, 0)
-  const canLaunch = host.path.length <= 1
-  const launchPeer = host.path.length === 1 ? host.path[0] : undefined
-
+// Empty-state placeholder for projects with no sessions. The launch
+// affordance is already in the page header, so this block only
+// carries the descriptor text: a second launch button here would
+// duplicate the one above it.
+function EmptyProject({ projectSlug }: { projectSlug: string }) {
   return (
-    <section class="hub-host">
-      <div class="hub-host-header">
-        <span class={`hub-host-dot ${host.status}`} />
-        {host.path.length > 0 && <PeerLabel name={host.path[0]} />}
-        <span class="hub-host-name"><HostPath path={host.path} /></span>
-        <span class="hub-host-count">
-          {sessionCount} session{sessionCount === 1 ? '' : 's'}
-        </span>
-      </div>
-      {host.folders.map(folder => (
-        <div class="hub-folder" key={folder.cwd}>
-          <div class="hub-folder-path">{folder.cwd || '~'}</div>
-          <div class="hub-folder-sessions">
-            {folder.sessions.map(s => (
-              <SessionCard
-                key={s.id}
-                session={s}
-                projectSlug={projectSlug}
-                unavailable={isSessionUnavailable(s, peerStatusByName.value)}
-                onClose={() => onCloseSession(s)}
-              />
-            ))}
-            {canLaunch && (
-              <LaunchButton
-                cwd={folder.cwd || undefined}
-                peer={launchPeer}
-                className="hub-folder-launch"
-              />
-            )}
-          </div>
-        </div>
-      ))}
-    </section>
-  )
-}
-
-function HostPath({ path }: { path: string[] }) {
-  if (path.length === 0) return <>local</>
-  return (
-    <>
-      {path.map((seg, i) => (
-        <>{i > 0 && <span class="hub-host-arrow">›</span>}{seg}</>
-      ))}
-    </>
-  )
-}
-
-function SessionCard({
-  session, projectSlug, unavailable, onClose,
-}: {
-  session: Session
-  projectSlug: string
-  unavailable?: boolean
-  onClose: () => void
-}) {
-  const dotClass = session.alive ? '' : 'dead'
-  const name = session.title || session.kind
-  const href = sessionPath(projectSlug, session)
-  return (
-    <a
-      class={`session-card${unavailable ? ' unavailable' : ''}`}
-      href={href}
-    >
-      <span class={`session-card-dot ${dotClass}`} />
-      <span class="session-card-name">{name}</span>
-      <button
-        class="session-card-close"
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClose() }}
-        title={session.alive ? 'Kill session' : 'Dismiss'}
-      >
-        ×
-      </button>
-    </a>
+    <div class="hub-empty">
+      <span>No sessions yet in {projectSlug}</span>
+    </div>
   )
 }

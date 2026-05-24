@@ -579,8 +579,6 @@ body {
 
 /* Mock mode (landing page screenshots): hide per-session close buttons */
 .mock-mode .session-close-btn,
-.mock-mode .session-card-close { display: none; }
-
 /* Session drag-to-reorder */
 .session-item.session-dragging {
   opacity: 0.4;
@@ -1989,10 +1987,6 @@ body {
     padding: 20px 16px 48px;
   }
 
-  .session-card {
-    max-width: 100%;
-  }
-
   .hub-empty {
     flex-wrap: wrap;
   }
@@ -2245,76 +2239,52 @@ body {
   .diag-entry-cat { min-width: 60px; font-size: 10px; }
 }
 
-/* ─── Project hub (flat host dividers, session-focused) ─── */
+/* ─── Project hub (activity-first, three-section) ─── */
 
-.hub-meta {
+.hub-header {
+  margin-bottom: 20px;
+}
+.hub-eyebrow {
+  /* Small uppercase kicker above the project slug. Mirrors the
+   * idiom used by section labels (RECENT / RUNNING / PROJECTS) so
+   * the page reads in a single visual language. */
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.hub-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.hub-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+.hub-subtitle {
   font-size: 12px;
   color: var(--text-muted);
-  margin-top: 2px;
+  margin-top: 4px;
+}
+.hub-subtitle-sep {
+  opacity: 0.6;
+}
+.hub-cwd {
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-size: 11px;
 }
 .hub-remote {
   font-family: "JetBrains Mono", "SF Mono", monospace;
   font-size: 11px;
 }
-
-/* Host divider row */
-.hub-host {
-  margin-top: 20px;
-}
-.hub-host-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 12px;
-}
-.hub-host-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
+.hub-header-launch {
   flex-shrink: 0;
-}
-.hub-host-dot.connected, .hub-host-dot.local {
-  background: var(--status-connected);
-}
-.hub-host-dot.connecting {
-  background: var(--status-disconnected);
-}
-.hub-host-dot.disconnected { background: var(--status-disconnected); }
-.hub-host-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-}
-.hub-host-arrow {
-  color: var(--text-muted);
-  font-size: 11px;
-  margin: 0 2px;
-  opacity: 0.6;
-}
-.hub-host-count {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-left: auto;
-}
-
-/* Folder rows under a host divider */
-.hub-folder {
-  padding: 0 0 14px 15px;
-}
-.hub-folder-path {
-  font-family: "JetBrains Mono", "SF Mono", monospace;
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-bottom: 8px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.hub-folder-sessions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
 }
 
 /* Empty project state */
@@ -2329,66 +2299,6 @@ body {
   font-size: 13px;
   margin-top: 16px;
 }
-.hub-empty-path {
-  font-family: "JetBrains Mono", "SF Mono", monospace;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-/* Session card (used in project hub folder rows) */
-.session-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-radius: var(--radius);
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  transition: background 0.1s, border-color 0.1s;
-  text-decoration: none;
-  color: inherit;
-  max-width: 280px;
-  min-width: 0;
-  position: relative;
-}
-.session-card:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-}
-.session-card-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--status-connected);
-  flex-shrink: 0;
-}
-.session-card-dot.dead { background: var(--text-muted); }
-.session-card.unavailable { opacity: 0.55; }
-.session-card-name {
-  font-size: 13px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.session-card-close {
-  margin-left: auto;
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.1s, color 0.1s;
-}
-.session-card-close:hover { background: oklch(28% 0.015 250); color: var(--text); }
 .btn:disabled,
 .btn-primary:disabled {
   opacity: 0.6;

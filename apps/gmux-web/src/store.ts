@@ -585,6 +585,45 @@ export const homePartition = computed(() =>
   partitionForHome(sessions.value, Date.now()),
 )
 
+/**
+ * Project-page partition: same Needs-attention / Running buckets as
+ * the home dashboard, but the third bucket holds *every* remaining
+ * session in the project, not a recency-windowed subset. Rationale:
+ * the project page is the user's exhaustive view of a project; an
+ * idle shell from yesterday or an exited session from last week
+ * must remain visible here or they're effectively unreachable (the
+ * sidebar still lists them, but losing them from the project page
+ * means losing them from the only dedicated project surface).
+ *
+ * Pure; tests drive it with fixtures.
+ */
+export function partitionForProject(
+  all: readonly Session[],
+): { needsAttention: Session[]; running: Session[]; rest: Session[] } {
+  const needsAttention: Session[] = []
+  const running: Session[] = []
+  const rest: Session[] = []
+
+  for (const s of all) {
+    // Waiting/Active are alive-only here too (mirrors
+    // partitionForHome): a dead session, even with unread output,
+    // can't be "waiting on you" or "active" anymore. It belongs in
+    // the All-sessions tail. See partitionForHome for why
+    // status.error is also intentionally not escalated.
+    if (s.alive && s.unread) {
+      needsAttention.push(s)
+    } else if (s.alive && s.status?.working) {
+      running.push(s)
+    } else {
+      rest.push(s)
+    }
+  }
+  needsAttention.sort(byActivityDesc)
+  running.sort(byActivityDesc)
+  rest.sort(byActivityDesc)
+  return { needsAttention, running, rest }
+}
+
 // ── Mutators ────────────────────────────────────────────────────────────────
 
 export function toUISession(s: ProtocolSession): Session {
