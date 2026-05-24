@@ -28,6 +28,14 @@ export interface Session {
   status: SessionStatus | null
   unread: boolean
   resumable?: boolean
+  /**
+   * RFC3339 timestamp of the session's most recent noteworthy state
+   * transition (exited / unread on / working on / error on). Set by
+   * the owning daemon. Drives the home dashboard's "Recent" section
+   * and acts as a stable sort key for activity-ordered views.
+   * Unset for brand-new sessions until their first transition.
+   */
+  last_activity_at?: string
   socket_path: string
   terminal_cols?: number
   terminal_rows?: number

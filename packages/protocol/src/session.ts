@@ -27,6 +27,13 @@ export const SessionSchema = z.object({
   status: SessionStatusSchema.optional().nullable(),
   unread: z.boolean().optional().default(false),
   resumable: z.boolean().optional().default(false),
+  // RFC3339 timestamp of the most recent noteworthy state transition
+  // (exited, unread on, working on, error on). Set by the owning
+  // daemon; the UI uses it to populate the "Recent" section on the
+  // home dashboard and as a sort key. Brand-new sessions arrive with
+  // this unset; the first follow-up transition stamps it. See the
+  // store.Session docstring on LastActivityAt for the exact bump set.
+  last_activity_at: z.string().optional(),
   socket_path: z.string().optional(),
   terminal_cols: z.number().int().positive().optional(),
   terminal_rows: z.number().int().positive().optional(),

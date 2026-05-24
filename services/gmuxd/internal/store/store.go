@@ -34,6 +34,25 @@ type Session struct {
 	Subtitle      string            `json:"subtitle,omitempty"`
 	Status        *Status           `json:"status"`
 	Unread        bool              `json:"unread"`
+
+	// LastActivityAt timestamps the most recent noteworthy state
+	// transition for this session, used by the UI to surface
+	// recently-relevant sessions (the home dashboard's "Recent"
+	// section, sort keys, etc.). RFC3339, set by the owning daemon.
+	//
+	// Bumped on (and only on):
+	//   - alive: true → false  (the session exited)
+	//   - unread: false → true  (new output the user hasn't seen)
+	//   - status.working: false → true  (adapter started a task)
+	//   - status.error: false → true  (status went into error)
+	//
+	// Not bumped on: new session creation (the first follow-up
+	// transition does it), title/cwd/slug/stamp changes, status
+	// label-only updates, sessionmeta rehydrate at startup.
+	//
+	// Peer sessions arrive over the wire with this already set by
+	// the owning daemon; UpsertRemote preserves it as-received.
+	LastActivityAt string `json:"last_activity_at,omitempty"`
 	Resumable     bool              `json:"resumable,omitempty"`
 	SocketPath    string            `json:"socket_path,omitempty"`
 	TerminalCols  uint16            `json:"terminal_cols,omitempty"`
@@ -228,7 +247,7 @@ func (s *Store) resolveTitle(sess Session) string {
 func (s *Store) Upsert(sess Session) {
 	sess.Title = s.resolveTitle(sess)
 	sess.Resumable = !sess.Alive && len(sess.Command) > 0
-	s.upsertCommon(sess)
+	s.upsertCommon(sess, true)
 }
 
 // UpsertRemote writes a session that was already fully resolved by a
@@ -243,14 +262,31 @@ func (s *Store) Upsert(sess Session) {
 // numbering, and event broadcast all still run; only the title and
 // resumable derivation are skipped.
 func (s *Store) UpsertRemote(sess Session) {
-	s.upsertCommon(sess)
+	s.upsertCommon(sess, false)
 }
 
 // upsertCommon is the shared body of Upsert and UpsertRemote.
-func (s *Store) upsertCommon(sess Session) {
+// bumpLocally controls whether LastActivityAt is recomputed from
+// the prev→next transition: true for locally-owned sessions, false
+// for peer payloads (where the owning daemon already stamped it).
+func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
 	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
 	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
 	s.mu.Lock()
+	if bumpLocally {
+		prev, hadPrev := s.sessions[sess.ID]
+		if shouldBumpActivity(prev, hadPrev, sess) {
+			sess.LastActivityAt = nowRFC3339()
+		} else if hadPrev && sess.LastActivityAt == "" {
+			// Preserve the previously stamped timestamp across
+			// no-bump Upserts. Adapters call Upsert with fresh
+			// Session structs built from runner state, which never
+			// includes LastActivityAt; without this carry-forward,
+			// a routine title/cwd refresh would silently zero out
+			// the field and drop the session from Recent.
+			sess.LastActivityAt = prev.LastActivityAt
+		}
+	}
 	removed, skip := s.resolveDuplicateSlugsLocked(sess)
 	if !skip {
 		s.ensureUniqueSlug(&sess)
@@ -277,16 +313,20 @@ func (s *Store) upsertCommon(sess Session) {
 // Returns false if the session doesn't exist.
 func (s *Store) Update(id string, fn func(*Session)) bool {
 	s.mu.Lock()
-	sess, ok := s.sessions[id]
+	prev, ok := s.sessions[id]
 	if !ok {
 		s.mu.Unlock()
 		return false
 	}
+	sess := prev
 	fn(&sess)
 	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
 	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
 	sess.Title = s.resolveTitle(sess)
 	sess.Resumable = !sess.Alive && len(sess.Command) > 0
+	if shouldBumpActivity(prev, true, sess) {
+		sess.LastActivityAt = nowRFC3339()
+	}
 	removed, skip := s.resolveDuplicateSlugsLocked(sess)
 	if !skip {
 		s.ensureUniqueSlug(&sess)
@@ -511,3 +551,33 @@ func (s *Store) ensureUniqueSlug(sess *Session) {
 	}
 }
 
+
+// shouldBumpActivity reports whether the prev→next session transition
+// is noteworthy enough to refresh LastActivityAt. See the field's
+// docstring for the exact bump set. Brand-new sessions (hadPrev=false)
+// never bump: their first follow-up transition does, which avoids
+// timestamping every sessionmeta-rehydrated dead session at daemon
+// startup.
+func shouldBumpActivity(prev Session, hadPrev bool, next Session) bool {
+	if !hadPrev {
+		return false
+	}
+	if prev.Alive && !next.Alive {
+		return true
+	}
+	if !prev.Unread && next.Unread {
+		return true
+	}
+	if !statusWorking(prev.Status) && statusWorking(next.Status) {
+		return true
+	}
+	if !statusError(prev.Status) && statusError(next.Status) {
+		return true
+	}
+	return false
+}
+
+func statusWorking(s *Status) bool { return s != nil && s.Working }
+func statusError(s *Status) bool   { return s != nil && s.Error }
+
+func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
