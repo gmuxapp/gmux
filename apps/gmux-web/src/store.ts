@@ -496,7 +496,6 @@ export const unreadCount = computed(() =>
 // capped at RECENT_CAP. Without the floor the section vanishes
 // after a quiet hour; without the cap it grows unbounded on busy
 // daemons.
-
 export const RECENT_WINDOW_MS = 60 * 60 * 1000
 export const RECENT_FLOOR = 3
 export const RECENT_CAP = 10

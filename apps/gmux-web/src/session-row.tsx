@@ -151,7 +151,7 @@ export function SessionRow({
                 {seg}
               </Fragment>
             ))}
-            {showHost && <HostSuffix peer={session.peer} />}
+            {showHost && <HostSuffix peer={session.peer} leading={metaSegments.length > 0} />}
           </div>
         )}
       </div>
