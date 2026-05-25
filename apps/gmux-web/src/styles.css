@@ -2817,9 +2817,9 @@ a.home-host-link:hover {
 .md-editor-panel .milkdown {
   background: transparent;
   color: var(--text);
-  font-family: 'Source Sans 3', sans-serif;
+  font-family: 'Lora', Georgia, serif;
   font-size: 15px;
-  line-height: 1.7;
+  line-height: 1.75;
   outline: none;
 }
 
@@ -2895,6 +2895,19 @@ a.home-host-link:hover {
   border: none;
   border-top: 1px solid var(--border, oklch(35% 0 0));
   margin: 1.5em 0;
+}
+
+.md-frontmatter-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  color: var(--text-muted);
+  background: var(--bg-selected);
+  border-radius: var(--radius);
+  padding: 2px 8px;
+  margin: 8px 0 0 24px;
+  cursor: default;
+  user-select: none;
 }
 
 /* Selection highlight */

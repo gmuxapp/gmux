@@ -7,6 +7,8 @@
  */
 
 import { useEffect, useRef, useCallback, useState } from 'preact/hooks'
+import '@fontsource/lora/400.css'
+import '@fontsource/lora/700.css'
 import { Editor, rootCtx, defaultValueCtx } from '@milkdown/kit/core'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
 import { gfm } from '@milkdown/kit/preset/gfm'
@@ -36,6 +38,22 @@ async function apiWriteFile(slug: string, path: string, content: string): Promis
   if (!json.ok) throw new Error(json.error?.message ?? 'write failed')
 }
 
+// ── Frontmatter helpers ──────────────────────────────────────────────────────
+
+function parseFrontmatter(content: string): { frontmatter: string | null; body: string } {
+  if (!content.startsWith('---\n') && !content.startsWith('---\r\n')) {
+    return { frontmatter: null, body: content }
+  }
+  const rest = content.slice(4)
+  const end = rest.match(/^(---|\.\.\.)[ \t]*$/m)
+  if (!end || end.index === undefined) return { frontmatter: null, body: content }
+  const fmEnd = end.index + end[0].length
+  return {
+    frontmatter: '---\n' + rest.slice(0, fmEnd),
+    body: rest.slice(fmEnd).replace(/^\r?\n/, ''),
+  }
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
@@ -54,6 +72,8 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
   const latestContentRef = useRef<string>('')
 
   const isDirtyRef = useRef(false)
+  const frontmatterRef = useRef<string | null>(null)
+  const [hasFrontmatter, setHasFrontmatter] = useState(false)
 
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -69,7 +89,8 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
     try {
       setSaveState('saving')
       const md = editorRef.current.action(getMarkdown())
-      await apiWriteFile(projectSlug, filePath, md)
+      const full = frontmatterRef.current ? frontmatterRef.current + '\n' + md : md
+      await apiWriteFile(projectSlug, filePath, full)
       setSaveState('saved')
       // Revert to idle after 2 s
       setTimeout(() => setSaveState(s => s === 'saved' ? 'idle' : s), 2000)
@@ -117,6 +138,8 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
       setLoadError(null)
       setSaveState('idle')
       isDirtyRef.current = false
+      frontmatterRef.current = null
+      setHasFrontmatter(false)
 
       let initialContent = ''
       try {
@@ -131,10 +154,15 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
 
       if (destroyed || !containerRef.current) return
 
+      // Strip YAML frontmatter before passing to Milkdown
+      const { frontmatter, body } = parseFrontmatter(initialContent)
+      frontmatterRef.current = frontmatter
+      setHasFrontmatter(frontmatter !== null)
+
       // Clear any previous editor DOM
       containerRef.current.innerHTML = ''
 
-      latestContentRef.current = initialContent
+      latestContentRef.current = body
 
       // False until after .create() resolves; guards against the spurious
       // markdownUpdated event Milkdown fires on initialisation.
@@ -145,7 +173,7 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
         ed = await Editor.make()
           .config((ctx: any) => {
             ctx.set(rootCtx, containerRef.current!)
-            ctx.set(defaultValueCtx, initialContent)
+            ctx.set(defaultValueCtx, body)
           })
           .use(commonmark)
           .use(gfm)
@@ -244,6 +272,10 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
         <div class="state-message">
           <div class="state-subtitle">Loading…</div>
         </div>
+      )}
+      {/* Frontmatter badge */}
+      {hasFrontmatter && (
+        <div class="md-frontmatter-badge" title={frontmatterRef.current ?? ''}>YAML front matter</div>
       )}
       {/* Always rendered so containerRef is mounted before useEffect runs */}
       <div class="md-editor-scroll" style={{ display: loading || loadError ? 'none' : undefined }}>
