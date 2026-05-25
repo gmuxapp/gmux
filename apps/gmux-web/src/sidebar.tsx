@@ -202,7 +202,7 @@ function MarkdownTabItem({
       </div>
       <button
         class="session-close-btn"
-        onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); onClose() }}
+        onClick={(e) => { e.stopPropagation(); e.preventDefault(); onClose() }}
         title="Close"
       >
         ×
