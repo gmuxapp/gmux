@@ -12,12 +12,13 @@
     "dev:sandbox": "VITE_MOCK=${VITE_MOCK:-0} bash ../../scripts/sandbox-dev.sh"
   },
   "dependencies": {
-    "@milkdown/kit": "^7.21.1",
     "@fontsource/fira-code": "^5.2.7",
     "@fontsource/instrument-sans": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/lora": "^5.2.8",
     "@fontsource/source-sans-3": "^5.2.9",
     "@gmux/protocol": "workspace:*",
+    "@milkdown/kit": "^7.21.1",
     "@preact/signals": "^2.9.0",
     "@trpc/client": "^11.6.0",
     "ghostty-web": "^0.4.0",
