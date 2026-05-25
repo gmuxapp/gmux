@@ -40,7 +40,7 @@ import (
 // Example host.toml:
 //
 //	[file_openers]
-//	default = "hx"
+//	default = "micro"
 //
 //	[file_openers.extensions]
 //	md  = "glow -p"
@@ -51,7 +51,7 @@ import (
 //	png = true  # override default; dismiss immediately after chafa exits
 type FileOpenersConfig struct {
 	// Default is the fallback program for extensions not in Extensions.
-	// Defaults to "hx" (helix).
+	// Defaults to "micro".
 	Default string `toml:"default"`
 
 	// Extensions maps lowercase extension (without dot) to program name
@@ -89,7 +89,7 @@ func DefaultFileOpeners() FileOpenersConfig {
 	}
 
 	return FileOpenersConfig{
-		Default: "hx",
+		Default: "micro",
 		Extensions: func() map[string]string {
 			// Markdown: -p = pager mode (interactive, user quits with q).
 			// Required so the session stays open for reading and auto-dismiss

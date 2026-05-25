@@ -634,12 +634,12 @@ func TestFileOpenerFor(t *testing.T) {
 		{"scan.tif", "chafa"},
 		{"favicon.ico", "chafa"},
 		{"pic.avif", "chafa"},
-		// everything else → helix
-		{"main.go", "hx"},
-		{"config.toml", "hx"},
-		{"script.sh", "hx"},
-		{"data.json", "hx"},
-		{"no_extension", "hx"},
+		// everything else → micro
+		{"main.go", "micro"},
+		{"config.toml", "micro"},
+		{"script.sh", "micro"},
+		{"data.json", "micro"},
+		{"no_extension", "micro"},
 	}
 	for _, tc := range cases {
 		got := fileOpenerFor(tc.path, cfg)
@@ -659,7 +659,7 @@ func TestFileOpenerForWithConfig(t *testing.T) {
 	if got := fileOpenerFor("photo.png", defaultCfg); got != "chafa" {
 		t.Errorf("png default: got %q, want chafa", got)
 	}
-	if got := fileOpenerFor("main.go", defaultCfg); got != "hx" {
+	if got := fileOpenerFor("main.go", defaultCfg); got != "micro" {
 		t.Errorf("go default: got %q, want hx", got)
 	}
 
