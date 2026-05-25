@@ -17,6 +17,7 @@ import { signal, computed, batch, effect } from '@preact/signals'
 import type { Session, ProjectItem, DiscoveredProject, PeerInfo, PeerProject, LauncherDef, Folder } from './types'
 import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
+import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects, countUnmatchedActive } from './projects'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
@@ -949,6 +950,13 @@ export function setNavigate(fn: (url: string, replace?: boolean) => void) {
 }
 
 export function navigate(url: string, replace?: boolean) {
+  // When the bundle has drifted from the daemon, the version watcher
+  // converts the next in-app navigation into a full document load.
+  // The user perceives it as a normal route transition that happens
+  // to also pick up the new bundle. (The store ↔ version-watch
+  // module cycle is safe: neither side touches the other at top
+  // level.)
+  if (navigateWithReload(url, replace)) return
   _navigate?.(url, replace)
 }
 
