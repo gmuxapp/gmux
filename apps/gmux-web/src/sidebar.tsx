@@ -14,7 +14,9 @@ import {
   activityMap, unmatchedActiveCount, projects, connState,
   updateProjects, reorderSessions, view,
   openMarkdownTabs, closeMarkdownTab,
+  openImageTabs, closeImageTab,
   type MarkdownTab,
+  type ImageTab,
   type DotState,
 } from './store'
 import { useInstallPrompt } from './use-install-prompt'
@@ -223,6 +225,9 @@ function FolderGroup({
   markdownTabs,
   currentMdView,
   onCloseMdTab,
+  imageTabs,
+  currentImageView,
+  onCloseImageTab,
   onCloseSession,
   onClick,
 }: {
@@ -235,6 +240,9 @@ function FolderGroup({
   markdownTabs: MarkdownTab[]
   currentMdView: { projectSlug: string; filePath: string } | null
   onCloseMdTab: (projectSlug: string, filePath: string) => void
+  imageTabs: ImageTab[]
+  currentImageView: { projectSlug: string; filePath: string } | null
+  onCloseImageTab: (projectSlug: string, filePath: string) => void
   onCloseSession: (session: Session) => void
   onClick?: () => void
 }) {
@@ -291,6 +299,16 @@ function FolderGroup({
             fileName={tab.filePath.split('/').pop() ?? tab.filePath}
             selected={currentMdView?.projectSlug === folder.path && currentMdView?.filePath === tab.filePath}
             onClose={() => onCloseMdTab(tab.projectSlug, tab.filePath)}
+            onClick={onClick}
+          />
+        ))}
+        {imageTabs.filter(t => t.projectSlug === folder.path).map(tab => (
+          <MarkdownTabItem
+            key={tab.filePath}
+            href={`/${folder.path}/_img/${encodeURIComponent(tab.filePath)}`}
+            fileName={`\uD83D\uDDBC\uFE0F ${tab.filePath.split('/').pop() ?? tab.filePath}`}
+            selected={currentImageView?.projectSlug === folder.path && currentImageView?.filePath === tab.filePath}
+            onClose={() => onCloseImageTab(tab.projectSlug, tab.filePath)}
             onClick={onClick}
           />
         ))}
@@ -371,6 +389,10 @@ export function Sidebar({
   const viewVal = view.value
   const mdTabs = openMarkdownTabs.value
   const currentMdView = viewVal?.kind === 'markdown-editor'
+    ? { projectSlug: viewVal.projectSlug, filePath: viewVal.filePath }
+    : null
+  const imgTabs = openImageTabs.value
+  const currentImageView = viewVal?.kind === 'image-viewer'
     ? { projectSlug: viewVal.projectSlug, filePath: viewVal.filePath }
     : null
 
@@ -467,6 +489,9 @@ export function Sidebar({
                   markdownTabs={mdTabs}
                   currentMdView={currentMdView}
                   onCloseMdTab={closeMarkdownTab}
+                  imageTabs={imgTabs}
+                  currentImageView={currentImageView}
+                  onCloseImageTab={closeImageTab}
                   onCloseSession={onCloseSession}
                   onClick={onClose}
                 />

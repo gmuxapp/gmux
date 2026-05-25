@@ -111,12 +111,14 @@ export function resolveSessionFromPath(
  *  - `project`: the project hub page for a single project.
  *  - `session`: a specific terminal session, by id.
  *  - `markdown-editor`: in-browser Milkdown editor for .md files.
+ *  - `image-viewer`: in-browser image viewer for image files.
  */
 export type View =
   | { kind: 'home' }
   | { kind: 'project'; projectSlug: string }
   | { kind: 'session'; sessionId: string }
   | { kind: 'markdown-editor'; projectSlug: string; filePath: string }
+  | { kind: 'image-viewer'; projectSlug: string; filePath: string }
 
 /** Structural equality for views. */
 export function viewsEqual(a: View, b: View): boolean {
@@ -126,6 +128,10 @@ export function viewsEqual(a: View, b: View): boolean {
     case 'project': return a.projectSlug === (b as { projectSlug: string }).projectSlug
     case 'session': return a.sessionId === (b as { sessionId: string }).sessionId
     case 'markdown-editor': {
+      const bb = b as { projectSlug: string; filePath: string }
+      return a.projectSlug === bb.projectSlug && a.filePath === bb.filePath
+    }
+    case 'image-viewer': {
       const bb = b as { projectSlug: string; filePath: string }
       return a.projectSlug === bb.projectSlug && a.filePath === bb.filePath
     }
@@ -168,6 +174,15 @@ export function resolveViewFromPath(
     }
   }
 
+  // /:project/_img/:encoded-path -> in-browser image viewer.
+  if (parsed.adapter === '_img' && parsed.slug) {
+    return {
+      kind: 'image-viewer',
+      projectSlug: project.slug,
+      filePath: decodeURIComponent(parsed.slug),
+    }
+  }
+
   // /:project/:adapter[/:slug] resolves to a concrete session when possible.
   const sessionId = resolveSessionFromPath(parsed, projects, sessions, homeDir)
   if (sessionId) return { kind: 'session', sessionId }
@@ -194,6 +209,8 @@ export function viewToPath(
       return `/${view.projectSlug}`
     case 'markdown-editor':
       return `/${view.projectSlug}/_md/${encodeURIComponent(view.filePath)}`
+    case 'image-viewer':
+      return `/${view.projectSlug}/_img/${encodeURIComponent(view.filePath)}`
     case 'session': {
       const sess = sessions.find(s => s.id === view.sessionId)
       if (!sess) return null

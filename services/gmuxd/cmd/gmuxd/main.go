@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -1911,6 +1912,51 @@ func serve(stderr io.Writer) int {
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"content": string(data)}})
+	})
+
+	// GET /v1/fs/{slug}/raw?path=<rel> — serve a file's raw bytes with correct Content-Type.
+	// Used by the web UI to display binary assets (images) inline.
+	mux.HandleFunc("GET /v1/fs/{slug}/raw", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		rel := r.URL.Query().Get("path")
+		filePath, err := fsGuardPath(root, rel)
+		if err != nil {
+			http.Error(w, "bad path", http.StatusBadRequest)
+			return
+		}
+		const maxBytes = 20 * 1024 * 1024
+		f, err := os.Open(filePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				http.Error(w, "not found", http.StatusNotFound)
+			} else {
+				http.Error(w, "read failed", http.StatusInternalServerError)
+			}
+			return
+		}
+		defer f.Close()
+		data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+		if err != nil {
+			http.Error(w, "read failed", http.StatusInternalServerError)
+			return
+		}
+		if len(data) > maxBytes {
+			http.Error(w, "file too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		ct := mime.TypeByExtension(filepath.Ext(filePath))
+		if ct == "" {
+			ct = http.DetectContentType(data)
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Cache-Control", "private, max-age=60")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
 	})
 
 	// POST /v1/fs/{slug}/write — atomically write content to a file.

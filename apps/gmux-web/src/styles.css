@@ -2902,3 +2902,27 @@ a.home-host-link:hover {
   outline: 2px solid var(--accent, oklch(65% 0.18 250));
   border-radius: 2px;
 }
+
+/* ── Image viewer ─────────────────────────────────────────────────────────── */
+.image-viewer-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+.image-viewer-body {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg, #1a1a1a);
+}
+.image-viewer-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+}
