@@ -15,7 +15,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
-import { markPendingLaunch, navigateToMarkdownEditor, sessions, navigateToSession } from './store'
+import { markPendingLaunch, navigateToMarkdownEditor, navigateToImageViewer, sessions, navigateToSession } from './store'
 import type { Session } from './types'
 import { GitStatus } from './git-status'
 
@@ -392,6 +392,9 @@ function FileTreeNode({
     } else if (node.path.toLowerCase().endsWith('.html') || node.path.toLowerCase().endsWith('.htm')) {
       // Open HTML files in the system browser via the daemon.
       await apiOpenBrowser(slug, node.path)
+    } else if (/\.(png|jpe?g|gif|webp|svg|bmp|ico|tiff?|avif)$/i.test(node.path)) {
+      // Open image files in the in-browser image viewer.
+      navigateToImageViewer(slug, node.path)
     } else {
       const existing = findOpenFileSession(sessions.value, cwd, node.path)
       if (existing) {

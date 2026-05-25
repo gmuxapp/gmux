@@ -77,6 +77,48 @@ export function closeMarkdownTab(projectSlug: string, filePath: string): void {
     navigate(`/${projectSlug}`)
   }
 }
+
+// ── Open image viewer tabs ────────────────────────────────────────────────────
+
+export interface ImageTab {
+  projectSlug: string
+  filePath: string
+}
+
+export const openImageTabs = signal<ImageTab[]>(
+  (() => {
+    try {
+      const stored = localStorage.getItem('gmux:openImageTabs')
+      return stored ? (JSON.parse(stored) as ImageTab[]) : []
+    } catch { return [] }
+  })()
+)
+
+effect(() => {
+  try { localStorage.setItem('gmux:openImageTabs', JSON.stringify(openImageTabs.value)) } catch { /* ignore */ }
+})
+
+function ensureImageTab(projectSlug: string, filePath: string): void {
+  const tabs = openImageTabs.value
+  if (!tabs.some(t => t.projectSlug === projectSlug && t.filePath === filePath)) {
+    openImageTabs.value = [...tabs, { projectSlug, filePath }]
+  }
+}
+
+export function closeImageTab(projectSlug: string, filePath: string): void {
+  openImageTabs.value = openImageTabs.value.filter(
+    t => !(t.projectSlug === projectSlug && t.filePath === filePath),
+  )
+  const v = view.value
+  if (v?.kind === 'image-viewer' && v.projectSlug === projectSlug && v.filePath === filePath) {
+    navigate(`/${projectSlug}`)
+  }
+}
+
+export function navigateToImageViewer(projectSlug: string, filePath: string): void {
+  ensureImageTab(projectSlug, filePath)
+  navigate(`/${projectSlug}/_img/${encodeURIComponent(filePath)}`)
+}
 export const launchers = signal<LauncherDef[]>([])
 export const defaultLauncher = signal<string>('shell')
 
@@ -661,6 +703,7 @@ export function initStore(): () => void {
     const disposeMdSync = effect(() => {
       const v = view.value
       if (v?.kind === 'markdown-editor') ensureMarkdownTab(v.projectSlug, v.filePath)
+      if (v?.kind === 'image-viewer') ensureImageTab(v.projectSlug, v.filePath)
     })
     cleanups.push(disposeMdSync)
     return () => cleanups.forEach(fn => fn())
@@ -784,6 +827,7 @@ export function initStore(): () => void {
   const disposeMdSync = effect(() => {
     const v = view.value
     if (v?.kind === 'markdown-editor') ensureMarkdownTab(v.projectSlug, v.filePath)
+    if (v?.kind === 'image-viewer') ensureImageTab(v.projectSlug, v.filePath)
   })
   cleanups.push(disposeMdSync)
 

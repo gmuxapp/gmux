@@ -16,6 +16,7 @@ import { ProjectHub } from './project-hub'
 import { Home } from './home'
 import { LaunchButton } from './launcher'
 import { MarkdownEditor } from './markdown-editor'
+import { ImageViewer } from './image-viewer'
 import { installCopySession } from './mock-data/export-session'
 
 import {
@@ -555,7 +556,7 @@ function App() {
       />
 
       <div class="main-panel">
-        {viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && viewVal.kind !== 'markdown-editor' && (
+        {viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && viewVal.kind !== 'markdown-editor' && viewVal.kind !== 'image-viewer' && (
           <MainHeader
             session={selectedVal}
             syncDiag={syncDiag}
@@ -585,6 +586,11 @@ function App() {
           />
         ) : viewVal?.kind === 'markdown-editor' ? (
           <MarkdownEditor
+            projectSlug={viewVal.projectSlug}
+            filePath={viewVal.filePath}
+          />
+        ) : viewVal?.kind === 'image-viewer' ? (
+          <ImageViewer
             projectSlug={viewVal.projectSlug}
             filePath={viewVal.filePath}
           />
