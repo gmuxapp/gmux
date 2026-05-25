@@ -17,6 +17,7 @@ import { ProjectHub } from './project-hub'
 import { Home } from './home'
 import { LaunchButton } from './launcher'
 import { installCopySession } from './mock-data/export-session'
+import { installVersionWatch } from './version-watch'
 
 import {
   sessions, connState, selected, selectedId, view, health, peers,
@@ -40,6 +41,11 @@ if (USE_MOCK) document.documentElement.classList.add('mock-mode')
 
 // Debug: __gmuxCopySession() in devtools console
 installCopySession()
+
+// Auto-reload when the bundle goes stale relative to the daemon.
+// Mock mode is offline-only and the daemon version is fixed, so the
+// watcher is pointless there and would risk masking real bugs.
+if (!USE_MOCK) installVersionWatch()
 
 // ── Components ──
 
