@@ -577,8 +577,17 @@ body {
   color: var(--text);
 }
 
-/* Mock mode (landing page screenshots): hide per-session close buttons */
+/* Mock mode (landing page screenshots): hide per-session close
+ * buttons. Previously chained to the .session-dragging rule below
+ * via a stray comma, so mock mode left them at opacity 0.4 instead
+ * of hiding them. Both the compact sidebar item (.session-close-btn)
+ * and the wide dashboard row (.session-row-close) need hiding so
+ * neither variant leaks into screenshots. */
 .mock-mode .session-close-btn,
+.mock-mode .session-row-close {
+  display: none;
+}
+
 /* Session drag-to-reorder */
 .session-item.session-dragging {
   opacity: 0.4;
