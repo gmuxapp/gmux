@@ -40,6 +40,80 @@ async function apiWriteFile(slug: string, path: string, content: string): Promis
 
 // ── Frontmatter helpers ──────────────────────────────────────────────────────
 
+interface FrontmatterField {
+  key: string
+  value: string
+}
+
+/** Parse YAML frontmatter string (including --- delimiters) into key-value pairs.
+ *  Handles simple `key: value` lines; skips blank lines and comments. */
+function parseFrontmatterFields(raw: string): FrontmatterField[] {
+  // raw = '---\n{content}\n---' (with or without trailing newline before ---)
+  const inner = raw.slice(4) // strip leading '---\n'
+  const end = inner.lastIndexOf('---')
+  const body = end >= 0 ? inner.slice(0, end) : inner
+  const fields: FrontmatterField[] = []
+  for (const line of body.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const colonIdx = trimmed.indexOf(':')
+    if (colonIdx < 0) continue
+    const key = trimmed.slice(0, colonIdx).trim()
+    const value = trimmed.slice(colonIdx + 1).trim()
+    fields.push({ key, value })
+  }
+  return fields
+}
+
+/** Reconstruct frontmatter string from key-value pairs. Returns null when empty. */
+function fieldsToFrontmatter(fields: FrontmatterField[]): string | null {
+  if (fields.length === 0) return null
+  const lines = fields.map(({ key, value }) => `${key}: ${value}`)
+  return '---\n' + lines.join('\n') + '\n---'
+}
+
+// ── Frontmatter editor component ─────────────────────────────────────────────
+
+function FrontmatterEditor({
+  fields,
+  onChange,
+}: {
+  fields: FrontmatterField[]
+  onChange: (fields: FrontmatterField[]) => void
+}) {
+  return (
+    <div class="md-frontmatter-editor">
+      {fields.map((f, i) => (
+        <div class="fm-field" key={i}>
+          <span class="fm-key">{f.key}</span>
+          <span class="fm-sep">:</span>
+          <input
+            class="fm-value"
+            value={f.value}
+            placeholder="value"
+            onInput={(e) => {
+              const next = [...fields]
+              next[i] = { ...f, value: (e.target as HTMLInputElement).value }
+              onChange(next)
+            }}
+          />
+          <button
+            class="fm-delete"
+            type="button"
+            onClick={() => onChange(fields.filter((_, j) => j !== i))}
+            title="Remove field"
+          >×</button>
+        </div>
+      ))}
+      <button
+        class="fm-add"
+        type="button"
+        onClick={() => onChange([...fields, { key: 'new_field', value: '' }])}
+      >+ field</button>
+    </div>
+  )
+}
+
 function parseFrontmatter(content: string): { frontmatter: string | null; body: string } {
   if (!content.startsWith('---\n') && !content.startsWith('---\r\n')) {
     return { frontmatter: null, body: content }
@@ -73,7 +147,7 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
 
   const isDirtyRef = useRef(false)
   const frontmatterRef = useRef<string | null>(null)
-  const [hasFrontmatter, setHasFrontmatter] = useState(false)
+  const [frontmatterFields, setFrontmatterFields] = useState<FrontmatterField[]>([])
 
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -139,7 +213,7 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
       setSaveState('idle')
       isDirtyRef.current = false
       frontmatterRef.current = null
-      setHasFrontmatter(false)
+      setFrontmatterFields([])
 
       let initialContent = ''
       try {
@@ -157,7 +231,7 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
       // Strip YAML frontmatter before passing to Milkdown
       const { frontmatter, body } = parseFrontmatter(initialContent)
       frontmatterRef.current = frontmatter
-      setHasFrontmatter(frontmatter !== null)
+      setFrontmatterFields(frontmatter !== null ? parseFrontmatterFields(frontmatter) : [])
 
       // Clear any previous editor DOM
       containerRef.current.innerHTML = ''
@@ -233,6 +307,14 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectSlug, filePath])
 
+  // ── Frontmatter change handler ────────────────────────────────────────────
+
+  const handleFrontmatterChange = useCallback((fields: FrontmatterField[]) => {
+    setFrontmatterFields(fields)
+    frontmatterRef.current = fieldsToFrontmatter(fields)
+    scheduleSave()
+  }, [scheduleSave])
+
   // ── Save status label ─────────────────────────────────────────────────────
 
   const saveLabel =
@@ -273,9 +355,9 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
           <div class="state-subtitle">Loading…</div>
         </div>
       )}
-      {/* Frontmatter badge */}
-      {hasFrontmatter && (
-        <div class="md-frontmatter-badge" title={frontmatterRef.current ?? ''}>YAML front matter</div>
+      {/* Frontmatter key-value editor */}
+      {frontmatterFields.length > 0 && (
+        <FrontmatterEditor fields={frontmatterFields} onChange={handleFrontmatterChange} />
       )}
       {/* Always rendered so containerRef is mounted before useEffect runs */}
       <div class="md-editor-scroll" style={{ display: loading || loadError ? 'none' : undefined }}>
