@@ -160,6 +160,13 @@ export default async function globalSetup(_config: FullConfig) {
     GMUXD_TOKEN: testToken,
     XDG_CONFIG_HOME: configDir,
     XDG_STATE_HOME: stateDir,
+    // gmuxd reads its host.toml from $GMUX_CONFIG_DIR (see
+    // services/gmuxd/internal/config/config.go: Dir()), which is
+    // separate from XDG_CONFIG_HOME. Without this the daemon
+    // ignores the test's host.toml (and its allocated port) and
+    // falls back to the default 8790 — breaking the test on any
+    // machine that already has a gmuxd running.
+    GMUX_CONFIG_DIR: path.join(configDir, 'gmux'),
   }
 
   const pids: number[] = []
@@ -232,4 +239,12 @@ export default async function globalSetup(_config: FullConfig) {
   // their roots under it.
   process.env.GMUX_TEST_HOME = fakeHome
   process.env.GMUX_TEST_WORKSPACE = workspaceDir
+  // Tests that spawn additional sessions (e.g. long pi-shape
+  // sessions for scrollback assertions) need the same env the
+  // global-setup gmux process used: socket dir, fake HOME, XDG
+  // overrides. Expose them so the helper doesn't have to
+  // re-derive paths from STATE_FILE.
+  process.env.GMUX_TEST_SOCKET_DIR = socketDir
+  process.env.GMUX_TEST_CONFIG_HOME = configDir
+  process.env.GMUX_TEST_STATE_HOME = stateDir
 }
