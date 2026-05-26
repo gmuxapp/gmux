@@ -39,6 +39,15 @@ type flags struct {
 	host        string // --host=<peer>: target this peer instead of local
 	all         bool   // --list --all: include peer sessions in output
 	help        bool
+
+	// daemon→runner directives. Only set when gmuxd forks a runner
+	// for /v1/launch, /v1/resume, /v1/restart. End users have no
+	// reason to pass them, but they're plain CLI flags so the
+	// daemon↔runner contract is greppable and toolable; the legacy
+	// GMUX_RESUME_ID env var is still honored as a fallback.
+	resumeID    string // --resume-id=<id>: reuse this session id
+	initialCols int    // --initial-cols=N: pre-size PTY
+	initialRows int    // --initial-rows=N: pre-size PTY
 }
 
 // parseCLI parses argv (without program name) and decides which mode to
@@ -71,6 +80,9 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 	fs.BoolVar(&f.all, "all", false, "with --list, include sessions from all peers (default: local only)")
 	fs.BoolVar(&f.help, "help", false, "show help")
 	fs.BoolVar(&f.help, "h", false, "show help (short)")
+	fs.StringVar(&f.resumeID, "resume-id", "", "(daemon-internal) reuse this session id instead of generating a fresh one")
+	fs.IntVar(&f.initialCols, "initial-cols", 0, "(daemon-internal) pre-size the PTY width")
+	fs.IntVar(&f.initialRows, "initial-rows", 0, "(daemon-internal) pre-size the PTY height")
 
 	if err := fs.Parse(args); err != nil {
 		return modeHelp, nil, nil, err
@@ -144,6 +156,15 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 	// than letting the user hit an opaque gmuxd error.
 	if f.host != "" && f.wait {
 		return modeHelp, nil, nil, errors.New("--wait does not yet support --host (local sessions only)")
+	}
+	// Daemon→runner directives only make sense in run mode (gmuxd
+	// is forking a runner to execute a command). Reject up front if
+	// they leak into a management action so a misuse fails loud.
+	if (f.resumeID != "" || f.initialCols != 0 || f.initialRows != 0) && isManagementMode(f) {
+		return modeHelp, nil, nil, errors.New("--resume-id / --initial-cols / --initial-rows only apply when launching a command")
+	}
+	if f.initialCols < 0 || f.initialRows < 0 {
+		return modeHelp, nil, nil, errors.New("--initial-cols and --initial-rows must be non-negative")
 	}
 
 	// Management actions take a single session id (except --list and --send).

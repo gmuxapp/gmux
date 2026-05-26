@@ -239,6 +239,48 @@ func TestParseCLI(t *testing.T) {
 // the load-bearing case for run mode and the reason management modes
 // (which lack a wrapped command) get lenient parsing while run mode
 // keeps the strict stop-at-first-positional behavior.
+func TestParseCLIDaemonDirectives(t *testing.T) {
+	t.Run("resume-id + size hints are exposed as flags in run mode", func(t *testing.T) {
+		m, f, rest, err := parseCLI([]string{
+			"--resume-id=sess-abc",
+			"--initial-cols=142",
+			"--initial-rows=47",
+			"claude", "--continue",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if m != modeRun {
+			t.Errorf("mode = %v, want modeRun", m)
+		}
+		if f.resumeID != "sess-abc" || f.initialCols != 142 || f.initialRows != 47 {
+			t.Errorf("directives not captured: resume=%q cols=%d rows=%d", f.resumeID, f.initialCols, f.initialRows)
+		}
+		wantRest := []string{"claude", "--continue"}
+		if len(rest) != 2 || rest[0] != wantRest[0] || rest[1] != wantRest[1] {
+			t.Errorf("rest = %v, want %v", rest, wantRest)
+		}
+	})
+
+	t.Run("directives do not leak from a child command's own argv", func(t *testing.T) {
+		// Defends the daemon↔runner contract: a child command that
+		// happens to use the same flag names (`weirdcli
+		// --resume-id=...`) must not have its flag consumed by gmux.
+		// POSIX runner semantics (stop at first positional) is what
+		// makes this safe; the test pins it.
+		_, f, rest, err := parseCLI([]string{"weirdcli", "--resume-id=evil"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if f.resumeID != "" {
+			t.Errorf("resumeID should not be set from child argv, got %q", f.resumeID)
+		}
+		if len(rest) != 2 || rest[0] != "weirdcli" || rest[1] != "--resume-id=evil" {
+			t.Errorf("rest should preserve child argv verbatim, got %v", rest)
+		}
+	})
+}
+
 func TestRunModeKeepsPOSIXRunnerSemantics(t *testing.T) {
 	// `gmux pi --some-pi-flag` — --some-pi-flag must reach pi as part
 	// of the command, not be parsed as an unknown gmux flag.
@@ -285,6 +327,11 @@ func TestParseCLIErrors(t *testing.T) {
 		{"--host=konyvtar", "--all", "--list"},    // --host and --all are mutually exclusive
 		{"--host=konyvtar", "--wait", "sess-a"},   // --wait + --host not yet supported
 		{"--host=konyvtar", "fish"},               // remote create deferred
+		{"--resume-id=sess-1", "--list"},          // directives are run-mode only
+		{"--initial-cols=80", "--kill", "sess-a"}, // directives are run-mode only
+		{"--initial-rows=24", "--attach", "sess-a"}, // directives are run-mode only
+		{"--initial-cols=-1", "claude"},           // size must be non-negative
+		{"--initial-rows=-1", "claude"},
 	}
 
 	for _, args := range invalid {
