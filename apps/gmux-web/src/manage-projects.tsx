@@ -1,8 +1,20 @@
+// "Add project" modal.
+//
+// Three addition flows:
+//   1. Peer references (subscribe to a project owned by another host)
+//   2. Discovered (claim a repo on disk that isn't a project yet)
+//   3. Manual local path
+//
+// Display, reorder, and removal of *configured* projects all live on
+// the home dashboard now: the modal is intentionally additions-only,
+// so the user has one place to discover-and-add and another to
+// arrange-and-curate. The exported component name keeps the older
+// `ManageProjectsModal` identifier for now; callers update later.
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   projects, discovered, peerProjects, peerStatusByName,
-  removeProject, addProject, updateProjects,
-  addPeerReference, removePeerReference,
+  addProject, addPeerReference,
 } from './store'
 import { PeerLabel } from './peer-label'
 import type { ProjectItem, DiscoveredProject, MatchRule } from './types'
@@ -36,16 +48,6 @@ function describeRule(rule: MatchRule): RuleDescription {
   return { label: '(empty rule)', qualifier: '' }
 }
 
-// ── Drag-to-reorder ──
-
-/** State tracked during a drag operation. */
-interface DragState {
-  /** Index of the item being dragged. */
-  from: number
-  /** Current insertion target (visual feedback). */
-  over: number
-}
-
 // ── ManageProjectsModal ──
 
 export function ManageProjectsModal({
@@ -58,7 +60,6 @@ export function ManageProjectsModal({
   const [discoveredQuery, setDiscoveredQuery] = useState('')
   const [pathDraft, setPathDraft] = useState('')
   const [pathError, setPathError] = useState('')
-  const [drag, setDrag] = useState<DragState | null>(null)
   const backdropRef = useRef<HTMLDivElement>(null)
 
   // Close on Escape
@@ -100,34 +101,6 @@ export function ManageProjectsModal({
   // Split filtered discovered: active first, then inactive.
   const activeDiscovered = filteredDiscovered.filter(d => d.active_count > 0)
   const inactiveDiscovered = filteredDiscovered.filter(d => d.active_count === 0)
-
-  // ── Reorder handlers ──
-
-  const handleDragStart = useCallback((idx: number) => {
-    setDrag({ from: idx, over: idx })
-  }, [])
-
-  const handleDragOver = useCallback((idx: number) => {
-    setDrag(prev => prev ? { ...prev, over: idx } : null)
-  }, [])
-
-  const handleDragEnd = useCallback(() => {
-    if (!drag || drag.from === drag.over) {
-      setDrag(null)
-      return
-    }
-    const items = [...configured]
-    const [moved] = items.splice(drag.from, 1)
-    items.splice(drag.over, 0, moved)
-    updateProjects(items)
-    setDrag(null)
-  }, [drag, configured])
-
-  // ── Remove handler ──
-
-  const handleRemove = useCallback((slug: string) => {
-    removeProject(slug)
-  }, [])
 
   // ── Add from discovered ──
 
@@ -184,14 +157,11 @@ export function ManageProjectsModal({
 
   if (!open) return null
 
-  // Compute the visual order during drag for CSS.
-  const dragItems = drag ? reorder(configured, drag.from, drag.over) : configured
-
   return (
     <div class="modal-backdrop" ref={backdropRef} onClick={handleBackdropClick}>
       <div class="modal-panel manage-projects-modal">
         <div class="modal-header">
-          <div class="modal-title">Manage projects</div>
+          <div class="modal-title">Add project</div>
           <div class="modal-header-actions">
             <a
               class="mp-docs-link"
@@ -205,35 +175,6 @@ export function ManageProjectsModal({
         </div>
 
         <div class="modal-body">
-          {/* ── Configured projects (owned + references) ── */}
-          <section class="mp-section">
-            <div class="mp-section-label">Your sidebar</div>
-            {configured.length > 0 ? (
-              <div class="mp-project-list">
-                {dragItems.map((project, i) => (
-                  <ProjectRow
-                    key={`${project.peer ?? ''}::${project.slug}`}
-                    project={project}
-                    index={i}
-                    dragging={drag !== null && itemKey(project) === itemKey(configured[drag.from])}
-                    dropTarget={drag !== null && drag.over === i && drag.from !== i}
-                    onDragStart={handleDragStart}
-                    onDragOver={handleDragOver}
-                    onDragEnd={handleDragEnd}
-                    onRemove={(p) => {
-                      if (p.peer) removePeerReference(p.peer, p.slug)
-                      else handleRemove(p.slug)
-                    }}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div class="mp-empty-hint">
-                No projects yet. Add a discovered project below, or add a local path.
-              </div>
-            )}
-          </section>
-
           {/* ── References to peer-owned projects ── */}
           <PeerReferencesSection configured={configured} />
 
@@ -309,79 +250,6 @@ export function ManageProjectsModal({
 
 // ── Sub-components ──
 
-function ProjectRow({
-  project,
-  index,
-  dragging,
-  dropTarget,
-  onDragStart,
-  onDragOver,
-  onDragEnd,
-  onRemove,
-}: {
-  project: ProjectItem
-  index: number
-  dragging: boolean
-  dropTarget: boolean
-  onDragStart: (i: number) => void
-  onDragOver: (i: number) => void
-  onDragEnd: () => void
-  onRemove: (project: ProjectItem) => void
-}) {
-  const rules = project.match ?? []
-  const isReference = !!project.peer
-
-  return (
-    <div
-      class={`mp-project-row${dragging ? ' mp-dragging' : ''}${dropTarget ? ' mp-drop-target' : ''}`}
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer!.effectAllowed = 'move'
-        e.dataTransfer!.setData('text/plain', '')
-        onDragStart(index)
-      }}
-      onDragOver={(e) => {
-        e.preventDefault()
-        e.dataTransfer!.dropEffect = 'move'
-        onDragOver(index)
-      }}
-      onDrop={(e) => {
-        e.preventDefault()
-        onDragEnd()
-      }}
-      onDragEnd={onDragEnd}
-    >
-      <span class="mp-drag-handle" title="Drag to reorder">&#x283F;</span>
-      {project.peer && <PeerLabel name={project.peer} />}
-      <div class="mp-project-info">
-        <span class="mp-project-name">{project.slug}</span>
-        <div class="mp-project-rules">
-          {isReference ? (
-            <span class="mp-rule mp-rule-qualifier">reference</span>
-          ) : rules.map((rule, i) => {
-            const { prefix, label, qualifier } = describeRule(rule)
-            const title = [prefix, label, qualifier].filter(Boolean).join(' ')
-            return (
-              <span key={i} class="mp-rule" title={title}>
-                {prefix && <span class="mp-rule-qualifier">{prefix} </span>}
-                <span class="mp-rule-label">{label}</span>
-                {qualifier && <span class="mp-rule-qualifier"> {qualifier}</span>}
-              </span>
-            )
-          })}
-        </div>
-      </div>
-      <button
-        class="mp-remove-btn"
-        onClick={() => onRemove(project)}
-        title={isReference ? 'Remove reference' : 'Remove project'}
-      >
-        &times;
-      </button>
-    </div>
-  )
-}
-
 function DiscoveredRow({
   project,
   onAdd,
@@ -456,21 +324,8 @@ function PeerReferencesSection({ configured }: { configured: ProjectItem[] }) {
   )
 }
 
-function itemKey(p: ProjectItem | undefined): string {
-  if (!p) return ''
-  return `${p.peer ?? ''}::${p.slug}`
-}
-
 // ── Helpers ──
 
 function shortenPath(p: string): string {
   return p.replace(/^\/home\/[^/]+/, '~')
-}
-
-/** Reorder an array by moving item at `from` to position `to`. */
-function reorder<T>(arr: T[], from: number, to: number): T[] {
-  const result = [...arr]
-  const [moved] = result.splice(from, 1)
-  result.splice(to, 0, moved)
-  return result
 }

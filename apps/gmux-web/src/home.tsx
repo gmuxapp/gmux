@@ -8,17 +8,63 @@
 // Section semantics, sort order, and the Recent floor/window/cap
 // live in store.ts:partitionForHome. This file is presentation.
 
-import { health, folders, homePartition, dismissSession } from './store'
+import { useCallback, useState } from 'preact/hooks'
+import {
+  health, folders, homePartition, dismissSession, projects,
+  updateProjects, removeProject, removePeerReference,
+} from './store'
 import { HostSuffix } from './host-suffix'
 import { SessionRow } from './session-row'
 import { LaunchButton } from './launcher'
 import { sessionPath } from './routing'
-import type { Folder, Session } from './types'
+import type { Folder, Session, ProjectItem } from './types'
+
+/** Drag-to-reorder transient state. `from` is the index lifted off,
+ *  `over` is the current insertion target. Set to null when nothing
+ *  is being dragged. Lives in the component, not the store: it's
+ *  view-only and reset on every mouse-up. */
+interface DragState { from: number; over: number }
+
+function reorder<T>(arr: readonly T[], from: number, to: number): T[] {
+  const out = [...arr]
+  const [moved] = out.splice(from, 1)
+  out.splice(to, 0, moved)
+  return out
+}
 
 export function Home({ onManageProjects }: { onManageProjects: () => void }) {
   const healthVal = health.value
   const foldersVal = folders.value
+  const projectsVal = projects.value
   const { needsAttention, running, recent } = homePartition.value
+
+  // Drag-to-reorder state for the Projects list. `configured` is the
+  // authoritative order; `dragItems` is the visual order during drag
+  // (commit on drop via updateProjects). Folder index maps 1:1 to
+  // projects.value index because buildProjectFolders preserves
+  // projects.json order.
+  const [drag, setDrag] = useState<DragState | null>(null)
+  const dragItems = drag ? reorder(projectsVal, drag.from, drag.over) : projectsVal
+
+  const handleDragStart = useCallback((i: number) => setDrag({ from: i, over: i }), [])
+  const handleDragOver = useCallback((i: number) => {
+    setDrag(prev => prev ? { ...prev, over: i } : null)
+  }, [])
+  const handleDragEnd = useCallback(() => {
+    // Commit the reorder before clearing drag state. State-setter
+    // updaters must stay pure (Preact may invoke them more than
+    // once in strict / dev modes), so the side effect lives outside
+    // the updater.
+    if (drag && drag.from !== drag.over) {
+      updateProjects(reorder(projectsVal, drag.from, drag.over))
+    }
+    setDrag(null)
+  }, [drag, projectsVal])
+
+  const handleRemove = useCallback((p: ProjectItem) => {
+    if (p.peer) removePeerReference(p.peer, p.slug)
+    else removeProject(p.slug)
+  }, [])
 
   // Cheap session→folder lookup: the SessionRow needs a project name
   // and the folder's owning peer to build a correct href. Building a
@@ -75,9 +121,30 @@ export function Home({ onManageProjects }: { onManageProjects: () => void }) {
 
       <section class="home-projects-section">
         <h2 class="home-section-title">Projects</h2>
-        {foldersVal.length > 0 ? (
+        {projectsVal.length > 0 ? (
           <div class="home-projects-list">
-            {foldersVal.map(f => <ProjectRow key={f.key} folder={f} />)}
+            {dragItems.map((p, i) => {
+              // Match each project to its rendered folder (which
+              // carries display-friendly fields like name and counts).
+              // Folder key is `${peer ?? ''}::${slug}`; we match on that.
+              const folderKey = `${p.peer ?? ''}::${p.slug}`
+              const folder = foldersVal.find(f => f.key === folderKey)
+              if (!folder) return null
+              return (
+                <ProjectRow
+                  key={folderKey}
+                  folder={folder}
+                  project={p}
+                  index={i}
+                  dragging={drag !== null && drag.from === projectsVal.indexOf(p)}
+                  dropTarget={drag !== null && drag.over === i && drag.from !== i}
+                  onDragStart={handleDragStart}
+                  onDragOver={handleDragOver}
+                  onDragEnd={handleDragEnd}
+                  onRemove={handleRemove}
+                />
+              )
+            })}
           </div>
         ) : !anyActivity ? (
           <div class="home-empty-hint">
@@ -109,15 +176,52 @@ export function Section({
   )
 }
 
-function ProjectRow({ folder: f }: { folder: Folder }) {
+function ProjectRow({
+  folder: f, project, index,
+  dragging, dropTarget,
+  onDragStart, onDragOver, onDragEnd, onRemove,
+}: {
+  folder: Folder
+  project: ProjectItem
+  index: number
+  dragging: boolean
+  dropTarget: boolean
+  onDragStart: (i: number) => void
+  onDragOver: (i: number) => void
+  onDragEnd: () => void
+  onRemove: (project: ProjectItem) => void
+}) {
   // Counts mirror the legacy ProjectCard: "N alive" is the running
   // count, "N resumable" is dead-but-resurrectable. Empty projects
   // get a muted "no sessions" hint so the row isn't visually mute.
   const alive = f.sessions.filter(s => s.alive).length
   const resumable = f.sessions.filter(s => !s.alive && s.resumable).length
   const href = f.peer ? `/@${f.peer}/${f.slug}` : `/${f.slug}`
+  const isReference = !!project.peer
   return (
-    <div class="home-project-row">
+    <div
+      class={`home-project-row${dragging ? ' dragging' : ''}${dropTarget ? ' drop-target' : ''}`}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer!.effectAllowed = 'move'
+        e.dataTransfer!.setData('text/plain', '')
+        onDragStart(index)
+      }}
+      onDragOver={(e) => {
+        e.preventDefault()
+        e.dataTransfer!.dropEffect = 'move'
+        onDragOver(index)
+      }}
+      // `onDrop` only consumes the event so the browser doesn't try
+      // to navigate or search; the actual commit happens in
+      // `onDragEnd`, which fires for both successful drops and
+      // cancellations (Esc, release outside). Wiring both to the
+      // same handler doubled the PUT /v1/projects call on every
+      // successful drag.
+      onDrop={(e) => { e.preventDefault() }}
+      onDragEnd={onDragEnd}
+    >
+      <span class="home-project-drag" title="Drag to reorder" aria-hidden="true">⠿</span>
       <a class="home-project-link" href={href}>
         <div class="home-project-name">
           {f.name}
@@ -136,6 +240,13 @@ function ProjectRow({ folder: f }: { folder: Folder }) {
         peer={f.peer}
         className="home-project-launch"
       />
+      <button
+        class="home-project-remove"
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRemove(project) }}
+        title={isReference ? 'Remove reference' : 'Remove project'}
+      >
+        ×
+      </button>
     </div>
   )
 }
