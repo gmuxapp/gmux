@@ -17,7 +17,7 @@ import {
   peerStatusByName, isSessionUnavailable, localPeerNames,
   type DotState,
 } from './store'
-import { PeerLabel } from './peer-label'
+import { HostSuffix } from './host-suffix'
 import type { Session, Folder } from './types'
 
 // ── Types ──
@@ -65,6 +65,28 @@ interface DragState {
 
 // ── Components ──
 
+/** Container icon for a devcontainer session inside a mixed-host
+ *  folder. Replaces the per-row PeerLabel pill (which didn't tell
+ *  anyone "this runs in a container" anyway).
+ *
+ *  Reachability is guaranteed by the `buildProjectFolders`
+ *  bucketing: any session with `.peer` set inside a folder where
+ *  `folder.peer === undefined` is a Local peer (parent-owned
+ *  devcontainer). Pinned by `projects.test.ts`
+ *  ("non-Local peer sessions never land in a locally-owned
+ *  folder"). Peer-owned folders are single-host by construction,
+ *  so showHostMarker never fires there.
+ */
+function DevcontainerMarker({ peer }: { peer: string }) {
+  return (
+    <svg class="session-container-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+      <title>{`devcontainer: ${peer}`}</title>
+      <rect x="1.5" y="3.5" width="9" height="6" rx="0.5" />
+      <path d="M4 3.5v6 M6 3.5v6 M8 3.5v6" />
+    </svg>
+  )
+}
+
 function reorder<T>(arr: T[], from: number, to: number): T[] {
   const next = [...arr]
   const [item] = next.splice(from, 1)
@@ -81,6 +103,7 @@ function SessionItem({
   dragging,
   dropTarget,
   unavailable,
+  showHostMarker,
   onClose,
   onClick,
   onDragStart,
@@ -96,6 +119,8 @@ function SessionItem({
   dropTarget?: boolean
   /** Session lives on a peer we can't reach right now. */
   unavailable?: boolean
+  /** Folder spans multiple hosts; render this session's host marker. */
+  showHostMarker?: boolean
   onClose?: () => void
   /** Extra side-effects on click (e.g. close mobile sidebar). */
   onClick?: () => void
@@ -141,7 +166,7 @@ function SessionItem({
         ? <svg class="session-sleep-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
         : <span class={`session-dot-indicator ${dotState}${arrival ? ` ${arrival}` : ''}`} />
       }
-      {session.peer && <PeerLabel name={session.peer} />}
+      {showHostMarker && session.peer && <DevcontainerMarker peer={session.peer} />}
       <div class="session-content">
         <div class="session-title-row">
           <span class="session-title">{session.title}</span>
@@ -220,6 +245,13 @@ function FolderGroup({
   const displayItems = drag ? reorder(visible, drag.from, drag.over) : visible
   const isCurrent = currentKey === folder.key
   const href = folder.peer ? `/@${folder.peer}/${folder.slug}` : `/${folder.slug}`
+  // Folder spans multiple hosts iff its sessions don't all share the
+  // same .peer value. In practice this is the devcontainer case: a
+  // local project's folder containing both parent-local sessions
+  // (peer=undefined) and Local-peer container sessions. When all
+  // sessions agree, per-row markers are noise.
+  const folderPeers = new Set(visible.map(s => s.peer ?? ''))
+  const mixedHosts = folderPeers.size > 1
   return (
     <div class="folder">
       <div class="folder-header">
@@ -231,8 +263,8 @@ function FolderGroup({
             : `Open ${folder.name} hub`}
           onClick={onClick}
         >
-          {folder.peer && <PeerLabel name={folder.peer} />}
           {folder.name}
+          <HostSuffix peer={folder.peer} />
           {folder.missing && <span class="folder-missing-icon" title="Project missing on peer">?</span>}
         </a>
         <LaunchButton
@@ -253,6 +285,7 @@ function FolderGroup({
             resuming={resumingId === s.id}
             dotState={sessionDotState(s, am)}
             unavailable={isSessionUnavailable(s, peerStatus)}
+            showHostMarker={mixedHosts}
             dragging={drag !== null && s.id === visible[drag.from]?.id}
             dropTarget={drag !== null && drag.over === i && drag.from !== i}
             onClose={() => onCloseSession(s)}

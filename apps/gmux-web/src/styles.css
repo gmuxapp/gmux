@@ -308,6 +308,20 @@ body {
   padding-top: 1px;
 }
 
+/* ── Host suffix (project headers) ── */
+.host-suffix {
+  font-weight: 400;
+  font-size: 0.9em;
+  color: var(--text-muted);
+}
+.host-suffix.offline {
+  color: var(--status-disconnected);
+}
+.host-suffix-sep {
+  opacity: 0.6;
+  margin: 0 0.1em;
+}
+
 /* ── Session Item ── */
 
 .session-item {
@@ -424,6 +438,19 @@ body {
   color: var(--text-muted);
   opacity: 0.7;
 }
+
+/* Per-row marker shown only in folders that span multiple hosts
+   (currently: parent-local + devcontainer). In single-host folders
+   the marker is absent entirely. */
+.session-container-icon {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  margin-top: 3px;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
 
 .session-content {
   flex: 1;
@@ -1552,88 +1579,6 @@ body {
   margin-bottom: 12px;
 }
 
-/* Host cards */
-
-.home-host-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 32px;
-}
-
-.home-host-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 14px;
-}
-
-.home-host-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.home-host-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.home-host-status {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.home-host-status.connected, .home-host-status.local {
-  background: var(--status-connected);
-  box-shadow: 0 0 6px color-mix(in oklch, var(--status-connected) 40%, transparent);
-}
-.home-host-status.connecting {
-  background: var(--status-disconnected);
-}
-.home-host-status.disconnected {
-  background: var(--status-disconnected);
-}
-.home-host-status.offline {
-  background: var(--text-muted);
-}
-
-.home-host-card:has(.home-host-status.offline) {
-  opacity: 0.5;
-}
-
-.home-host-details {
-  display: flex;
-  gap: 12px;
-  margin-top: 6px;
-  padding-left: 16px;
-}
-
-.home-host-detail {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-a.home-host-link {
-  text-decoration: none;
-  color: var(--text-secondary);
-  transition: color 0.15s;
-}
-a.home-host-link:hover {
-  color: var(--text);
-}
-
-.home-host-launchers {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
 /* Project cards */
 
 .home-project-grid {
@@ -1674,37 +1619,6 @@ a.home-host-link:hover {
 
 .home-project-rest {
   color: var(--text-muted);
-}
-
-/* Host-card launch buttons */
-
-.home-launch-btn {
-  padding: 4px 14px;
-  background: var(--bg-hover);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--text);
-  font-family: 'Source Sans 3', sans-serif;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.home-launch-btn:hover {
-  background: var(--bg-selected);
-  border-color: var(--text-muted);
-}
-.home-launch-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.home-launch-btn.launching {
-  opacity: 0.5;
-  pointer-events: none;
-}
-.home-launch-btn.unavailable {
-  color: var(--text-muted);
-  opacity: 0.4;
 }
 
 .home-footer {

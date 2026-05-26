@@ -1,72 +1,16 @@
-// Home page: host status, project overview, quick-launch per host.
+// Home page: projects overview.
 // Reads shared data from the store (signals).
 
-import { useState } from 'preact/hooks'
-import { health, peers, folders, sessions, launchers as launchersSignal, defaultLauncher as defaultLauncherSignal, launchSession } from './store'
-import { PeerLabel } from './peer-label'
-import type { Folder, LauncherDef } from './types'
-import { launchersForPeer } from './launcher'
-
-/** Strip protocol and trailing slash for display: "https://foo.bar/" → "foo.bar" */
-function displayHost(url: string): string {
-  return url.replace(/^https?:\/\//, '').replace(/\/+$/, '')
-}
+import { health, folders } from './store'
+import { HostSuffix } from './host-suffix'
+import type { Folder } from './types'
 
 export function Home() {
   const healthVal = health.value
-  const peersVal = peers.value
   const foldersVal = folders.value
-  const sessionsVal = sessions.value
-  const localAlive = sessionsVal.filter(s => !s.peer && s.alive).length
-  const hostname = healthVal?.hostname ?? 'local'
-  const tsUrl = healthVal?.tailscale_url
-
-  const localLaunchers = launchersSignal.value
-  const localDefault = defaultLauncherSignal.value
-  const peerLaunchers = (peer: string) =>
-    launchersForPeer(localLaunchers, localDefault, peersVal, peer).launchers
 
   return (
     <div class="home">
-      {/* ── Hosts ── */}
-      <section class="home-hosts">
-        <h2 class="home-section-title">Hosts</h2>
-        <div class="home-host-grid">
-          <HostCard
-            name={hostname}
-            status="connected"
-            url={tsUrl}
-            details={[
-              healthVal?.version
-                ? healthVal.update_available
-                  ? `v${healthVal.version} \u2192 v${healthVal.update_available}`
-                  : `v${healthVal.version}`
-                : undefined,
-              `${localAlive} active session${localAlive === 1 ? '' : 's'}`,
-            ]}
-            launchers={localLaunchers}
-          />
-          {peersVal.map(p => (
-            <HostCard
-              key={p.name}
-              name={p.name}
-              status={p.status}
-              url={p.url}
-              details={[
-                p.version ? `v${p.version}` : undefined,
-                p.status === 'connected'
-                  ? `${p.session_count} active session${p.session_count === 1 ? '' : 's'}`
-                  : p.status === 'offline'
-                    ? 'offline'
-                    : p.last_error ?? 'disconnected',
-              ]}
-              launchers={p.status === 'connected' ? peerLaunchers(p.name) : []}
-              peer={p.name}
-            />
-          ))}
-        </div>
-      </section>
-
       {/* ── Projects ── */}
       {foldersVal.length > 0 && (
         <section class="home-projects">
@@ -105,8 +49,8 @@ function ProjectCard({ folder: f }: { folder: Folder }) {
   return (
     <a class="home-project-card" href={href}>
       <div class="home-project-name">
-        {f.peer && <PeerLabel name={f.peer} />}
         {f.name}
+        <HostSuffix peer={f.peer} />
       </div>
       <div class="home-project-count">
         {alive > 0 && <span class="home-project-alive">{alive} alive</span>}
@@ -118,55 +62,3 @@ function ProjectCard({ folder: f }: { folder: Folder }) {
   )
 }
 
-function HostCard({
-  name, status, url, details, launchers, peer,
-}: {
-  name: string
-  status: string
-  url?: string
-  details: (string | undefined)[]
-  launchers: LauncherDef[]
-  peer?: string
-}) {
-  const [launching, setLaunching] = useState<string | null>(null)
-  const linked = status === 'connected' && url
-
-  const handleLaunch = (id: string) => {
-    setLaunching(id)
-    launchSession(id, peer ? { peer } : undefined).finally(() => setLaunching(null))
-  }
-
-  return (
-    <div class="home-host-card">
-      <div class="home-host-top">
-        <span class={`home-host-status ${status}`} />
-        {peer && <PeerLabel name={name} />}
-        <span class="home-host-name">{name}</span>
-      </div>
-      <div class="home-host-details">
-        {url && (
-          linked
-            ? <a class="home-host-detail home-host-link" href={url} target="_blank" rel="noopener">{displayHost(url)}</a>
-            : <div class="home-host-detail">{displayHost(url)}</div>
-        )}
-        {details.filter(Boolean).map((d, i) => (
-          <div key={i} class="home-host-detail">{d}</div>
-        ))}
-      </div>
-      {launchers.length > 0 && (
-        <div class="home-host-launchers">
-          {launchers.map(l => (
-            <button
-              key={l.id}
-              class={`home-launch-btn${launching === l.id ? ' launching' : ''}${!l.available ? ' unavailable' : ''}`}
-              onClick={() => handleLaunch(l.id)}
-              disabled={launching !== null || !l.available}
-            >
-              {l.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
