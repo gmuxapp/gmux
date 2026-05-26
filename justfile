@@ -64,6 +64,7 @@ install:
         -e "s|\${HOME}|$HOME|g" \
         -e "s|\${SHELL}|$SHELL|g" \
         -e "s|\${PATH}|$PATH|g" \
+        -e "s|\${GMUX_CONFIG_DIR}|${GMUX_CONFIG_DIR:-$HOME/.gmux}|g" \      				
         "{{justfile_directory()}}/scripts/com.gmuxapp.gmuxd.plist.template" \
         > "$plist"
       echo "Installing launchd agent..."
@@ -81,3 +82,4 @@ install:
       nohup gmuxd restart >/dev/null 2>&1 &
       echo "Done. gmux and gmuxd installed to $prefix/bin/"
     fi
+
