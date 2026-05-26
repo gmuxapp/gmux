@@ -2211,16 +2211,31 @@ body {
 .hub-header {
   margin-bottom: 20px;
 }
-.hub-eyebrow {
-  /* Small uppercase kicker above the project slug. Mirrors the
-   * idiom used by section labels (RECENT / RUNNING / PROJECTS) so
-   * the page reads in a single visual language. */
+.hub-back {
+  /* Back link in the eyebrow slot above the project title. Sized
+   * like the old uppercase kicker so the header rhythm is
+   * preserved; styled as a link so it reads as actionable. */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-muted);
+  text-decoration: none;
   margin-bottom: 4px;
+  transition: color 0.12s;
+}
+.hub-back:hover,
+.hub-back:focus-visible {
+  color: var(--text);
+}
+.hub-back-arrow {
+  /* Arrow glyph aligned tight to the label; slightly larger than
+   * the uppercase text so it reads as a chevron, not punctuation. */
+  font-size: 13px;
+  line-height: 1;
 }
 .hub-title-row {
   display: flex;
