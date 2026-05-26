@@ -1,7 +1,8 @@
 # ADR 0003: Daemon-initiated resume passes Session.ID to the runner
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-05-04
+**Revised:** 2026-05-26 (env var → CLI flag)
 **Related:** ADR 0004 (SessionStream and the live↔dead view abstraction)
 
 ## Context
@@ -61,42 +62,47 @@ generates an id it didn't need to.
 ## Decision
 
 The daemon's resume handler **passes the existing Session.ID to the
-forked runner** via a dedicated `GMUX_RESUME_ID` environment
-variable. The runner uses it as its session id instead of
-generating a fresh one.
+forked runner** via a dedicated `--resume-id` CLI flag. The
+runner uses it as its session id instead of generating a fresh
+one.
 
 ```go
 // services/gmuxd/cmd/gmuxd/main.go (resume handler)
-cmd := exec.Command(gmuxBinary, "--", session.Command...)
-cmd.Env = append(filteredEnv, "GMUX_RESUME_ID="+session.ID)
+args := []string{"--resume-id=" + session.ID}
+args = append(args, session.Command...)
+cmd := exec.Command(gmuxBinary, args...)
 ```
 
 ```go
 // cli/gmux/cmd/gmux/run.go
-sessionID := os.Getenv("GMUX_RESUME_ID")
+sessionID := dir.ResumeID // populated from the --resume-id flag
 if sessionID == "" {
     sessionID = naming.SessionID()
 }
 ```
 
-`GMUX_RESUME_ID` is a one-shot directive separate from the
-`GMUX_SESSION_ID` the runner already exports to its child process.
-The two have orthogonal meanings: `GMUX_SESSION_ID` is the
-runner-published "this is my id" (consumed by adapters and hooks);
-`GMUX_RESUME_ID` is the daemon-supplied "adopt this id at
-startup" (consumed only by the runner's own initialisation).
-Distinct names let us prevent nested-gmux invocations from
-accidentally re-binding the parent session's id. The runner does
-not propagate `GMUX_RESUME_ID` into PTY children
-(`buildChildEnv` strips it; `GMUX_SESSION_ID` is intentionally
-kept because adapters and hooks consume it), so a `gmux foo`
-inside an interactive gmux session does not see
-`GMUX_RESUME_ID` at all and falls through to a fresh id. Without
-the strip, the daemon→runner directive would silently propagate
-to every descendant of the runner's PTY child and the
-collision-fallback would catch the inevitable bind clash; the
-dedicated env var name plus the explicit strip means we don't
-rely on that fallback for the nested case.
+The original incarnation of this ADR used a `GMUX_RESUME_ID`
+environment variable for the same purpose. The mechanism moved to
+a CLI flag once the runner grew a real flag parser: `ps` now shows
+the directive directly, the daemon↔runner contract is
+greppable, and the runner doesn't need an env-strip step in
+`buildChildEnv` to keep the directive from leaking into
+grandchildren (POSIX runner semantics in the parser already stop
+at the first positional, so a child command's own argv can't
+collide with the daemon's `--resume-id`). The env var is still
+honoured as a fallback when the flag is absent so a brand-new
+runner paired with an older daemon (rolling upgrade) keeps
+working; it will be removed in a future release.
+
+`--resume-id` is orthogonal to the `GMUX_SESSION_ID` the runner
+exports to its child process. `GMUX_SESSION_ID` is the
+runner-published "this is my id" (consumed by adapters and
+hooks); `--resume-id` is the daemon-supplied "adopt this id at
+startup" (consumed only by the runner's own initialisation). The
+separation prevents nested-gmux invocations from re-binding the
+parent session's id: a `gmux foo` inside an interactive gmux
+session inherits `GMUX_SESSION_ID` but never sees a
+`--resume-id` flag, so it falls through to a fresh id.
 
 ### Register simplifies
 
@@ -371,14 +377,35 @@ discovery event loop with a wait condition. The collision case is
 rare and self-correcting via SSE; deferred until a real user
 report shows the optimistic response causing observable harm.
 
-### E. Pass Session.ID via a CLI flag (`gmux --session-id=R1`) instead
+### E. Pass Session.ID via a CLI flag (`gmux --resume-id=R1`) instead
 of an env var
 
-Rejected. Both work; env var is more contained (no addition to the
-public CLI surface, not user-invokable in normal use). The env var
-name (`GMUX_RESUME_ID`) is dedicated to this directive and
-distinct from the `GMUX_SESSION_ID` the runner exports to its
-child, so there is no aliasing with adapter / hook env.
+Originally rejected (env var was more contained: no addition to
+the public CLI surface, not user-invokable in normal use).
+**Reconsidered and adopted 2026-05-26** once the runner grew a
+real flag parser. The flag form is greppable in `ps`, shows up in
+`--help` (tagged as daemon-internal), validates types (rejects
+negative sizes) without ad-hoc parsing, and doesn't need an
+env-strip step in `buildChildEnv` since POSIX runner semantics
+in the parser already stop at the first positional, so a child
+command's own argv can't collide with the daemon's directives.
+The legacy `GMUX_RESUME_ID` env var is honoured as a fallback for
+the one rolling-upgrade direction that can realistically happen
+in practice: a new runner binary paired with a still-old daemon
+(e.g. the user's host-installed gmux auto-updated faster than a
+containerised gmuxd). The reverse direction (new daemon emitting
+`--resume-id` to an old runner that doesn't know the flag) is
+not guarded; it would break /resume and /restart until the
+runner catches up. This is acceptable because gmux and gmuxd
+ship as a single release and `scripts/install.sh` replaces both
+binaries atomically; an operator who upgrades only the daemon is
+off the supported path. The fallback will be removed in a future
+release.
+
+The same mechanism (`--initial-cols` / `--initial-rows`) carries
+the last-known PTY dimensions through the fork so child processes
+that read `$COLUMNS` at startup don't clamp to 80 between exec
+and the first browser resize.
 
 ### F. Have the runner ask the daemon for an id assignment at startup
 
@@ -398,9 +425,10 @@ implicitly inherits it from the parent shell. If the runner read
 would attempt to re-bind the parent session's id, depending on
 the collision fallback to recover. That works (the user ends up
 with a fresh-id sibling session) but accidentally relies on a
-safety net for the common path. A dedicated `GMUX_RESUME_ID`
-name is set only by the daemon for resume / restart launches and
-is never inherited by descendants, eliminating the false-positive.
+safety net for the common path. The dedicated `--resume-id` flag
+(see alternative E) is set only by the daemon for resume /
+restart launches and never appears in a nested invocation's
+argv, eliminating the false-positive.
 
 ### H. Use the slug as the persistent identity and let Session.ID
 churn

@@ -41,6 +41,15 @@ const handshakeTimeout = 5 * time.Second
 // background writer.
 const ptyDrainTimeout = 250 * time.Millisecond
 
+// runDirectives carries daemon→runner overrides for a /v1/launch,
+// /v1/resume, or /v1/restart. End-user invocations leave all three
+// fields zero. See the flag declarations in cli.go for semantics.
+type runDirectives struct {
+	ResumeID    string
+	InitialCols int
+	InitialRows int
+}
+
 // runSession launches a new managed session for the given command.
 //
 // When attach is true and stdin is a tty, the local terminal is wired
@@ -48,7 +57,7 @@ const ptyDrainTimeout = 250 * time.Millisecond
 // attach is false, the session is spawned detached from the tty and
 // this call returns immediately once the session is running, leaving
 // the session visible in the gmux UI.
-func runSession(args []string, attach bool) {
+func runSession(args []string, attach bool, dir runDirectives) {
 	// Nested gmux detection: if we're running interactively inside an
 	// existing gmux session, re-exec as a detached headless process instead
 	// of doing PTY passthrough (which would nest PTY-within-PTY). The
@@ -68,26 +77,28 @@ func runSession(args []string, attach bool) {
 		return
 	}
 
+	// Honour the legacy GMUX_RESUME_ID env var when --resume-id
+	// wasn't provided. Older gmuxd builds set it via env; newer
+	// gmuxd sets the flag instead. The env-var path is kept for
+	// rolling-upgrade scenarios (a daemon installed before the
+	// flag existed talking to a newer runner) and will be removed
+	// in a future release.
+	if dir.ResumeID == "" {
+		dir.ResumeID = os.Getenv("GMUX_RESUME_ID")
+	}
+
 	workDir, err := os.Getwd()
 	if err != nil {
 		log.Fatalf("cannot determine cwd: %v", err)
 	}
 
-	// Honour GMUX_RESUME_ID when the daemon passed one in (resume,
-	// restart). The runner uses the daemon-supplied id so the
-	// session keeps its identity across the seam, including its
-	// scrollback directory on disk. See ADR 0003.
-	//
-	// GMUX_RESUME_ID is intentionally distinct from GMUX_SESSION_ID:
-	// the runner sets the latter for its child process (consumed by
-	// adapters / hooks), so a nested `gmux foo` inside an
-	// interactive gmux session inherits GMUX_SESSION_ID from the
-	// parent and would otherwise try to re-bind the parent's id.
-	// The dedicated GMUX_RESUME_ID is only ever set by the daemon
-	// and not propagated to descendants, so the nested case falls
-	// through to a fresh id without depending on the bind-collision
-	// fallback as a safety net.
-	sessionID := os.Getenv("GMUX_RESUME_ID")
+	// --resume-id, when the daemon passed it on /resume or
+	// /restart, makes the runner keep the existing session id
+	// across the seam (including its scrollback directory on
+	// disk; see ADR 0003). Without it we generate a fresh id, so
+	// nested `gmux foo` invocations inside a session don't try to
+	// re-bind the parent's id.
+	sessionID := dir.ResumeID
 	if sessionID == "" {
 		sessionID = naming.SessionID()
 	}
@@ -195,6 +206,20 @@ func runSession(args []string, attach bool) {
 	if cols, rows, err := localterm.TerminalSize(); err == nil {
 		ptyCfg.Cols = cols
 		ptyCfg.Rows = rows
+	}
+	// --initial-cols / --initial-rows, when the daemon passed
+	// them on /resume or /restart, override the local TTY
+	// detection: a detached runner has no TTY to read from, and
+	// the daemon knows the last-attached browser's dimensions
+	// from its store. Without this, the PTY would start at 80x24
+	// and any child process that captures $COLUMNS at startup
+	// (claude, prompt frameworks, etc.) would render at the
+	// default width until the next manual resize.
+	if dir.InitialCols > 0 {
+		ptyCfg.Cols = uint16(dir.InitialCols)
+	}
+	if dir.InitialRows > 0 {
+		ptyCfg.Rows = uint16(dir.InitialRows)
 	}
 
 	// In interactive mode, build the local terminal attach before

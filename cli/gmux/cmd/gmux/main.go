@@ -35,7 +35,11 @@ func main() {
 		openUI()
 		return
 	case modeRun:
-		runSession(rest, !f.noAttach)
+		runSession(rest, !f.noAttach, runDirectives{
+			ResumeID:    f.resumeID,
+			InitialCols: f.initialCols,
+			InitialRows: f.initialRows,
+		})
 		return
 	case modeList:
 		os.Exit(cmdList(f.host, f.all))

@@ -166,21 +166,28 @@ func filterEnvPrefix(env []string, prefix string) []string {
 
 // launchGmux forks a gmux runner with the given command and cwd.
 //
-// resumeID, when non-empty, is passed to the runner via
-// GMUX_RESUME_ID so the runner uses the daemon-supplied id
-// instead of generating a fresh one. /v1/launch leaves it empty
-// (fresh sessions get a runner-generated id); /v1/resume and
-// /v1/restart pass the existing session's id so identity (and the
-// scrollback directory on disk) carry across the seam. See
-// ADR 0003.
+// resumeID, when non-empty, is passed via --resume-id so the
+// runner uses the daemon-supplied id instead of generating a fresh
+// one. /v1/launch leaves it empty (fresh sessions get a runner-
+// generated id); /v1/resume and /v1/restart pass the existing
+// session's id so identity (and the scrollback directory on disk)
+// carry across the seam. See ADR 0003.
 //
-// GMUX_RESUME_ID is dedicated to this directive and distinct from
-// the GMUX_SESSION_ID the runner exports to its child process; a
-// nested `gmux foo` inherits GMUX_SESSION_ID from the parent
-// runner but never GMUX_RESUME_ID, so nested invocations always
-// generate a fresh id.
-func launchGmux(gmuxBin string, command []string, cwd, resumeID string) (int, error) {
-	cmd := exec.Command(gmuxBin, command...)
+// initialCols / initialRows, when non-zero, are passed via
+// --initial-cols / --initial-rows so the PTY starts at the right
+// size instead of the 80x24 default. Without this, /resume and
+// /restart momentarily expose the child process to a
+// default-sized terminal between exec and the browser's first
+// resize WS message; programs that read $COLUMNS or query the
+// TTY once at startup (claude, vim, less, prompt frameworks)
+// stay stuck at 80 columns.
+//
+// Directives are delivered as CLI flags so the daemon↔runner
+// contract is greppable and shows up in `ps`. The runner still
+// honours the legacy GMUX_RESUME_ID env var as a fallback for
+// rolling upgrades, but this code path no longer sets it.
+func launchGmux(gmuxBin string, command []string, cwd, resumeID string, initialCols, initialRows uint16) (int, error) {
+	cmd := exec.Command(gmuxBin, buildLaunchArgs(resumeID, initialCols, initialRows, command)...)
 	cmd.Dir = cwd
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdout = nil
@@ -189,18 +196,35 @@ func launchGmux(gmuxBin string, command []string, cwd, resumeID string) (int, er
 
 	// Strip all GMUX_* session vars so child processes don't inherit
 	// the parent session's identity. Without this, a gmuxd started
-	// inside a pi session would leak GMUX_ADAPTER=pi, GMUX_SOCKET,
-	// GMUX_SESSION_ID, etc. into every launched session.
+	// inside a gmux session (e.g. dogfooding during dev) would leak
+	// GMUX_ADAPTER, GMUX_SOCKET, GMUX_SESSION_ID, etc. into every
+	// launched session.
 	cmd.Env = filterEnvPrefix(os.Environ(), "GMUX_")
-	if resumeID != "" {
-		cmd.Env = append(cmd.Env, "GMUX_RESUME_ID="+resumeID)
-	}
 
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
 	go cmd.Wait()
 	return cmd.Process.Pid, nil
+}
+
+// buildLaunchArgs assembles the gmux runner argv: any non-empty
+// daemon→runner directive flags first, then the user command
+// verbatim. The gmux flag parser stops at the first positional, so
+// the user command is delivered intact even when its own arguments
+// look like flags.
+func buildLaunchArgs(resumeID string, initialCols, initialRows uint16, command []string) []string {
+	args := make([]string, 0, len(command)+3)
+	if resumeID != "" {
+		args = append(args, "--resume-id="+resumeID)
+	}
+	if initialCols > 0 {
+		args = append(args, fmt.Sprintf("--initial-cols=%d", initialCols))
+	}
+	if initialRows > 0 {
+		args = append(args, fmt.Sprintf("--initial-rows=%d", initialRows))
+	}
+	return append(args, command...)
 }
 
 func printUsage(w io.Writer) {
@@ -1120,7 +1144,17 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		pid, err := launchGmux(gmuxBin, req.Command, cwd, "")
+		// Fresh launch: no resume id, no size hint. CLI invocations
+		// (`gmux <cmd>` in a terminal) detect their own TTY size
+		// via localterm.TerminalSize(). Browser-initiated launches
+		// have no TTY and currently no protocol slot for client
+		// dimensions, so the PTY starts at 80x24 until the
+		// browser's first resize WS message arrives. Same race as
+		// /resume and /restart had before the size hints were
+		// added; fixing /launch requires a protocol change to
+		// carry cols/rows in the launch request and is left as a
+		// follow-up.
+		pid, err := launchGmux(gmuxBin, req.Command, cwd, "", 0, 0)
 		if err != nil {
 			log.Printf("launch: failed to start gmux: %v", err)
 			writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
@@ -1210,12 +1244,15 @@ func serve(stderr io.Writer) int {
 				return
 			}
 
-			// The runner reads GMUX_RESUME_ID and registers under the
+			// The runner receives --resume-id and registers under the
 			// same id, so Register() lands in its re-registration
 			// branch and the session keeps its identity (and its
-			// scrollback directory). See ADR 0003.
+			// scrollback directory). See ADR 0003. The size hints
+			// preserve the last-known PTY dimensions through the
+			// fork; without them claude / vim / prompt frameworks
+			// reading $COLUMNS at startup would clamp to 80.
 			resumeCwd := projects.NormalizePath(sess.Cwd)
-			pid, err := launchGmux(gmuxBin, sess.Command, resumeCwd, sessionID)
+			pid, err := launchGmux(gmuxBin, sess.Command, resumeCwd, sessionID, sess.TerminalCols, sess.TerminalRows)
 			if err != nil {
 				log.Printf("resume: failed to start gmux: %v", err)
 				writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
@@ -1299,7 +1336,7 @@ func serve(stderr io.Writer) int {
 			// session id; Register's re-registration branch handles
 			// the rest.
 			restartCwd := projects.NormalizePath(sess.Cwd)
-			pid, err := launchGmux(gmuxBin, sess.Command, restartCwd, sessionID)
+			pid, err := launchGmux(gmuxBin, sess.Command, restartCwd, sessionID, sess.TerminalCols, sess.TerminalRows)
 			if err != nil {
 				log.Printf("restart: failed to start gmux: %v", err)
 				writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
