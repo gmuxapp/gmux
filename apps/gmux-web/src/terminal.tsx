@@ -774,6 +774,13 @@ export function TerminalView({
     termEpochRef.current = epoch
     termIoRef.current.reset(epoch)
 
+    // Full RIS on the xterm instance so SGR colors, modes, cursor state, and
+    // scroll regions from the previous session don't bleed into the next one.
+    // Without this, switching away from a colorful TUI (btop, htop) leaves
+    // its trailing bg/fg attributes active until the new session emits an SGR
+    // of its own, painting plain-text output in btop's last color.
+    termRef.current.reset()
+
     // Reset sizes so stale values from a previous session can't trigger a
     // spurious pill while the loading overlay is visible (before ws.onopen).
     resetResizeEchoGate()
