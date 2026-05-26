@@ -18,7 +18,7 @@ import type { Session, ProjectItem, DiscoveredProject, PeerInfo, PeerProject, La
 import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
-import { buildProjectFolders, discoverProjects, countUnmatchedActive } from './projects'
+import { buildProjectFolders, discoverProjects } from './projects'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS } from './mock-data/index'
@@ -212,14 +212,11 @@ effect(() => {
 export const sessionsLoaded = signal(false)
 export const connState = signal<'connecting' | 'connected' | 'error'>('connecting')
 
-// Per ADR 0001: Discovered and UnmatchedActiveCount are per-viewer
-// projections, not server-pushed state. They derive from the same
-// public sessions/projects projections everyone else uses.
+// Per ADR 0001: Discovered is a per-viewer projection, not
+// server-pushed state. It derives from the same public
+// sessions/projects projections everyone else uses.
 export const discovered = computed<DiscoveredProject[]>(
   () => discoverProjects(sessions.value, projects.value, peerStatusByName.value),
-)
-export const unmatchedActiveCount = computed<number>(
-  () => countUnmatchedActive(sessions.value, projects.value, peerStatusByName.value),
 )
 
 // ── Peer appearance: unique prefix + deterministic color ─────────────────────

@@ -12,7 +12,7 @@ import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
 import {
   folders, selectedId, currentProjectKey,
-  activityMap, unmatchedActiveCount, projects, connState,
+  activityMap, projects, connState,
   updateProjects, reorderSessions,
   peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState,
   type DotState,
@@ -313,7 +313,6 @@ export function Sidebar({
   const projectsVal = projects.value
   const selId = selectedId.value
   const curKey = currentProjectKey.value
-  const unmatchedCount = unmatchedActiveCount.value
   const am = activityMap.value
   const peerStatus = peerStatusByName.value
 
@@ -378,12 +377,6 @@ export function Sidebar({
           )}
         </div>
         <div class="sidebar-footer">
-          <button class="manage-projects-btn" onClick={onManageProjects}>
-            + Add project
-            {unmatchedCount > 0 && (
-              <span class="manage-projects-badge">{unmatchedCount}</span>
-            )}
-          </button>
           {notifPermission === 'default' && (
             <button class="notif-btn" onClick={onRequestNotifPermission}>
               <IconBell /> Enable notifications
