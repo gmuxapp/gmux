@@ -77,6 +77,22 @@ describe('toUISession project stamp passthrough', () => {
     expect(ui.project_slug).toBeUndefined()
   })
 
+  it('passes last_activity_at through from the wire', () => {
+    // The owning daemon stamps this; the UI uses it for the home
+    // dashboard's Recent section sort. Pure passthrough at the
+    // boundary; no client-side derivation.
+    const ui = toUISession({
+      id: 'sess-1', alive: true,
+      last_activity_at: '2026-01-15T08:00:00Z',
+    } as any)
+    expect(ui.last_activity_at).toBe('2026-01-15T08:00:00Z')
+  })
+
+  it('leaves last_activity_at undefined when the wire omits it', () => {
+    const ui = toUISession({ id: 'sess-1', alive: true } as any)
+    expect(ui.last_activity_at).toBeUndefined()
+  })
+
   it('treats empty-string project_slug as unstamped', () => {
     // Go's omitempty drops empty strings, but legacy / dev paths may
     // emit them. buildProjectFolders treats an empty stamp the same
