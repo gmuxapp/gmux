@@ -25,7 +25,7 @@ import {
   terminalOptions, keybinds, macCommandIsCtrl,
   backgroundActivity, unreadCount,
   urlPath,
-  initStore, setNavigate, navigateToSession,
+  initStore, setNavigate, navigateToSession, navigate,
   dismissSession, resumeSession, restartSession,
   sessionStaleness,
 } from './store'
@@ -460,7 +460,11 @@ function App() {
       // Prefer the item above; fall back to the new first item.
       const sibling = idx > 0 ? remaining[idx - 1] : remaining[0]
       dismissSession(session.id)
-      if (sibling) navigateToSession(sibling.id, true)
+      if (sibling) {
+        navigateToSession(sibling.id, true)
+      } else {
+        navigate('/', true)
+      }
     } else {
       dismissSession(session.id)
     }
