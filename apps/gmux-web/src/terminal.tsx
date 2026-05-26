@@ -6,6 +6,8 @@ import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { shouldFocusOnTouchEnd } from './terminal-touch'
 import { createReplayBuffer, type ReplayState } from './replay'
+import { stripSyncBlocks } from './replay-strip'
+import { fetchScrollback } from './replay-fetch'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 
 // ── Sync diagnostics ──────────────────────────────────────────────────────────
@@ -843,7 +845,89 @@ export function TerminalView({
       termIoRef.current?.forceNextScrollToBottom()
       emitSyncDiag({ syncPhase: 'waiting', wsState: 'connecting' })
 
-      // Track bytes/msgs for diagnostics as chunks arrive
+      const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+      // Prefetch the on-disk scrollback before opening the WS so the
+      // host terminal's scrollback is populated with the full session
+      // history. The WS is opened with ?no_erase=1 so gmuxd's snapshot
+      // does NOT include \x1b[3J (which would wipe what we just
+      // wrote). This mirrors cli/gmux/cmd/gmux/attach.go's pattern
+      // for the local TTY attach. See ADR 0003 + the
+      // task at tasks/james-gmux/2026-05-26-pi-scrollback-to-start.md.
+      //
+      // Bytes from the disk file are filtered through stripSyncBlocks
+      // because pi (and other agents) emit BSU/ESU-wrapped end-of-turn
+      // redraws containing \x1b[2J/\x1b[3J. Those resets, replayed
+      // verbatim, would destroy each turn's text in scrollback the
+      // same way they did before the fix - the BSU/ESU envelope is
+      // the cleanest cut-line.
+      //
+      // Reconnects after WS drop don't re-prefetch: the host
+      // terminal's scrollback already holds the history.
+      //
+      // Best-effort: skip on 404 / empty / network error. The WS
+      // snapshot still arrives and the user sees the current screen.
+      const openWs = (noErase: boolean) => {
+        if (disposed.current || currentSessionId.current !== session.id) return
+        const url = `${wsProtocol}//${location.host}/ws/${session.id}` + (noErase ? '?no_erase=1' : '')
+        const ws = new WebSocket(url)
+        wireWs(ws)
+      }
+
+      if (!isFirstConnect) {
+        // Reconnect: the host terminal already has whatever the
+        // prefetch put there on first connect. Don't re-prefetch
+        // and don't switch no_erase mode mid-session: a reconnect
+        // under no_erase=1 would leave the snapshot's reset behind
+        // without restoring scrollback. Use the simple snapshot.
+        openWs(false)
+        return
+      }
+
+      const prefetchSessionId = session.id
+      fetchScrollback(prefetchSessionId).then((result) => {
+        if (disposed.current || currentSessionId.current !== prefetchSessionId) return
+        let prefetchWrote = false
+        if (result.kind === 'bytes') {
+          const stripped = stripSyncBlocks(result.bytes)
+          if (stripped.length > 0) {
+            // Use the same queue live data uses, so writes serialize
+            // correctly with the BSU/ESU snapshot that arrives on WS open.
+            queueData(stripped)
+            // Push the prefetch content past the visible region into
+            // scrollback. The WS snapshot's reset (\x1b[2J) clears the
+            // visible rows in place; without this padding, the most
+            // recent ~rows of prefetch content would be erased before
+            // the visible-screen render lands. A run of CRLFs ensures
+            // the bottom of the prefetch sits in scrollback by the
+            // time the snapshot's clear-screen fires.
+            const rows = termRef.current?.rows ?? 24
+            const padding = '\r\n'.repeat(rows)
+            queueData(new TextEncoder().encode(padding))
+            prefetchWrote = true
+          }
+        }
+        // no_erase=1 is requested only when we actually wrote
+        // prefetch bytes; otherwise the snapshot's \x1b[3J reset is
+        // useful (clears any pre-existing buffer state on this
+        // ghostty-web instance, matching prior behavior). Sessions
+        // with no on-disk scrollback (fresh sessions, ones that
+        // pre-date persistence) keep the original semantics.
+        return prefetchWrote
+      }).catch(() => false /* network failure: fall back to WS-only */)
+      .then((prefetchWrote) => {
+        openWs(!!prefetchWrote)
+      })
+    }
+
+    // wireWs attaches the message/error/close handlers to a freshly
+    // opened WebSocket. Extracted so the prefetch path and the
+    // reconnect path share the same wiring without duplicating it.
+    function wireWs(ws: WebSocket) {
+      ws.binaryType = 'arraybuffer'
+      wsRef.current = ws
+
+      // Track bytes/msgs for diagnostics as chunks arrive. Per-WS
+      // because wireWs runs again on each reconnect.
       let replaySyncBytes = 0
       let replaySyncMsgs = 0
 
@@ -863,11 +947,6 @@ export function TerminalView({
         })
         emitSyncDiag({ syncEndedAt: Date.now(), pendingWrite: true })
       })
-
-      const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${session.id}`)
-      ws.binaryType = 'arraybuffer'
-      wsRef.current = ws
 
       ws.onopen = () => {
         attempt = 0

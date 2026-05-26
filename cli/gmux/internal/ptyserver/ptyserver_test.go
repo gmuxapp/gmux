@@ -1020,6 +1020,377 @@ func TestRenderScreenLineCount(t *testing.T) {
 	}
 }
 
+// TestVTScrollbackWipedByEraseSavedLines is a falsification test for
+// the hypothesis that pi's end-of-turn redraw clears the runner's vt
+// scrollback. Pi wraps each turn in a synchronized-output block whose
+// reset sequence includes \x1b[3J (Erase Saved Lines, ED with parameter
+// 3). If the vt emulator honors \x1b[3J by emptying e.Scrollback(),
+// then the WS attach snapshot built from renderScreen() will only
+// carry post-wipe content for any session whose last turn fired
+// \x1b[3J - which is every alive pi session. That's the load-bearing
+// claim of tasks/james-gmux/2026-05-26-pi-scrollback-to-start.md;
+// this test pins it down.
+//
+// If this test fails (scrollback survives \x1b[3J), the bug is
+// somewhere else and the fix plan in that task file needs rewriting.
+func TestVTScrollbackWipedByEraseSavedLines(t *testing.T) {
+	screen := newScreen(40, 5, func(bool) {})
+	defer screen.Close()
+
+	// Push 10 lines through a 5-row screen so 5 lines end up in
+	// scrollback and 5 are visible.
+	for i := 1; i <= 10; i++ {
+		fmt.Fprintf(screen, "Line-%02d\r\n", i)
+	}
+
+	before := renderScreen(screen)
+	if !stringContains(before, "Line-01") {
+		t.Fatalf("precondition: scrollback should contain Line-01 before wipe\ngot: %q", before)
+	}
+	sb := screen.Scrollback()
+	if sb == nil || len(sb.Lines()) == 0 {
+		t.Fatalf("precondition: e.Scrollback() should be non-empty before wipe")
+	}
+	linesBefore := len(sb.Lines())
+
+	// Send pi's end-of-turn-shaped reset. The full pi sequence wraps
+	// this in BSU/ESU (\x1b[?2026h ... \x1b[?2026l) but the wipe
+	// itself is \x1b[3J; that's the byte sequence under test.
+	fmt.Fprint(screen, "\x1b[2J\x1b[H\x1b[3J")
+
+	sbAfter := screen.Scrollback()
+	linesAfter := 0
+	if sbAfter != nil {
+		linesAfter = len(sbAfter.Lines())
+	}
+
+	t.Logf("vt scrollback lines: before=%d after=%d", linesBefore, linesAfter)
+
+	if linesAfter != 0 {
+		t.Errorf("expected e.Scrollback() to be empty after \\x1b[3J; got %d lines", linesAfter)
+	}
+
+	after := renderScreen(screen)
+	if stringContains(after, "Line-01") {
+		t.Errorf("snapshot still contains Line-01 after \\x1b[3J\nsnapshot: %q", after)
+	}
+}
+
+// TestPiLongSessionSnapshotMissesEarlyHistory pins the user-visible
+// bug behind tasks/james-gmux/2026-05-26-pi-scrollback-to-start.md.
+//
+// Shape under test: a long-running pi-shaped session emits many
+// turns, each ending with \x1b[3J. The runner's vt scrollback is
+// wiped on every turn, so the WS connect snapshot only carries the
+// most recent turn. The on-disk scrollback file, written by the
+// runner's tee, retains all the bytes (capped at 2 MiB).
+//
+// The contract this test pins:
+//
+//   - WS snapshot DOES NOT contain early-turn markers (regression
+//     marker for the live web path).
+//   - On-disk scrollback DOES contain them (proves the data
+//     exists; the bug is the read path, not the write path).
+//
+// When the fix lands (web prefetch + ?no_erase=1, mirroring
+// cli/gmux/cmd/gmux/attach.go), this test still passes - the
+// WS contract under no_erase=0 is unchanged. A follow-up test
+// will pin the no_erase=1 + on-disk-prefetch path used by the
+// fixed web client.
+func TestPiLongSessionSnapshotMissesEarlyHistory(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	scrollbackPath := filepath.Join(t.TempDir(), "persist", scrollback.ActiveName)
+
+	sink, err := scrollback.Open(scrollbackPath)
+	if err != nil {
+		t.Fatalf("scrollback.Open: %v", err)
+	}
+
+	// Synthetic pi-shaped child: 20 iterations of
+	//   START-MARKER-NN + 5 filler lines + \x1b[3J
+	// then a final marker so we know the loop completed before snapshot.
+	//
+	// Each iteration emits ~7 newlines. 20 iterations through a 24-row
+	// terminal means lines 1-140-ish would land in scrollback; the
+	// \x1b[3J after each iteration wipes that scrollback. End state:
+	// vt scrollback empty, visible screen showing only the last redraw
+	// area + END-MARKER-WAITING.
+	script := `
+for i in $(seq 1 20); do
+  printf 'START-MARKER-%02d\n' "$i"
+  for j in 1 2 3 4 5; do printf 'filler-line-%02d-%d\n' "$i" "$j"; done
+  printf '\033[3J'
+done
+printf 'END-MARKER-WAITING\n'
+sleep 5
+`
+
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", script},
+		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
+		SocketPath: sockPath,
+		Scrollback: sink,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// Wait long enough for the loop to finish AND for processScreen
+	// to drain the bytes into the emulator (screenSyncInterval ~100ms).
+	// 20 iterations of mostly-printf finish in well under 100ms; the
+	// 600ms ceiling is for the screen drain.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+		data, err := os.ReadFile(scrollbackPath)
+		if err == nil && bytes.Contains(data, []byte("END-MARKER-WAITING")) {
+			break
+		}
+	}
+
+	// Extra settle so the screen emulator has caught up to the disk tee.
+	time.Sleep(300 * time.Millisecond)
+
+	// Read the on-disk scrollback FIRST so we can assert the data
+	// exists regardless of WS behavior. If this fails the rest of
+	// the test is meaningless.
+	diskBytes, err := os.ReadFile(scrollbackPath)
+	if err != nil {
+		t.Fatalf("read on-disk scrollback: %v", err)
+	}
+	t.Logf("on-disk scrollback: %d bytes", len(diskBytes))
+	if !bytes.Contains(diskBytes, []byte("START-MARKER-01")) {
+		t.Fatalf("precondition: on-disk scrollback should contain START-MARKER-01 (early turn).\nFirst 200 bytes: %q", trim(diskBytes, 200))
+	}
+	if !bytes.Contains(diskBytes, []byte("START-MARKER-20")) {
+		t.Fatalf("precondition: on-disk scrollback should contain START-MARKER-20 (last turn).\nLast 200 bytes: %q", tail(diskBytes, 200))
+	}
+
+	// Connect a fresh WS client (the live web path) and read the
+	// BSU/ESU snapshot frame.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return net.Dial("unix", sockPath)
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	conn.SetReadLimit(10 * 1024 * 1024)
+
+	// Pull frames until we have the BSU/ESU snapshot complete (ESU
+	// terminator: \x1b[?2026l). The snapshot is always the first
+	// message gmuxd sends, so a few reads are enough.
+	var got []byte
+	for i := 0; i < 8; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 800*time.Millisecond)
+		_, data, err := conn.Read(readCtx)
+		readCancel()
+		if err != nil {
+			break
+		}
+		got = append(got, data...)
+		if bytes.Contains(got, []byte("\x1b[?2026l")) {
+			break
+		}
+	}
+	t.Logf("WS snapshot: %d bytes", len(got))
+
+	// Sanity: confirm we actually got a snapshot frame.
+	if !bytes.Contains(got, []byte("\x1b[?2026h")) || !bytes.Contains(got, []byte("\x1b[?2026l")) {
+		t.Fatalf("WS frame missing BSU/ESU - did the snapshot arrive?\ngot: %q", trim(got, 400))
+	}
+
+	// Sanity: the loop's last marker (END-MARKER-WAITING) is what
+	// pi-shape leaves visible after its final \x1b[3J. It MUST be
+	// in the snapshot - if not, the timing is wrong and the test
+	// is silently exercising a half-completed run.
+	if !bytes.Contains(got, []byte("END-MARKER-WAITING")) {
+		t.Fatalf("WS snapshot missing END-MARKER-WAITING - test timing is wrong.\nsnapshot tail: %q", tail(got, 400))
+	}
+
+	// The contract: early-turn START-MARKER-01 is on disk but NOT
+	// in the snapshot the live web path receives. This is the bug.
+	// When the fix lands the WEB CLIENT will still receive a
+	// snapshot without START-MARKER-01 (gmuxd's renderScreen() did
+	// not gain a memory of the wiped bytes); the fix makes the web
+	// client read the on-disk file before the snapshot arrives,
+	// which is asserted by a separate test.
+	if bytes.Contains(got, []byte("START-MARKER-01")) {
+		t.Errorf("WS snapshot unexpectedly contains START-MARKER-01.\n" +
+			"That would mean \\x1b[3J no longer wipes vt scrollback, or\n" +
+			"renderScreen now consults a different source. Either way,\n" +
+			"the hypothesis behind the fix plan needs revisiting.")
+	}
+
+	// Diagnostic counters for the task's Step 2 (numeric evidence):
+	earlyMarkersOnDisk := 0
+	for i := 1; i <= 5; i++ {
+		if bytes.Contains(diskBytes, []byte(fmt.Sprintf("START-MARKER-%02d", i))) {
+			earlyMarkersOnDisk++
+		}
+	}
+	earlyMarkersInSnapshot := 0
+	for i := 1; i <= 5; i++ {
+		if bytes.Contains(got, []byte(fmt.Sprintf("START-MARKER-%02d", i))) {
+			earlyMarkersInSnapshot++
+		}
+	}
+	t.Logf("early markers (turns 1-5): on-disk=%d in-snapshot=%d", earlyMarkersOnDisk, earlyMarkersInSnapshot)
+	if earlyMarkersOnDisk != 5 {
+		t.Errorf("expected all 5 early markers on disk, got %d", earlyMarkersOnDisk)
+	}
+	if earlyMarkersInSnapshot != 0 {
+		t.Errorf("expected 0 early markers in snapshot (the bug), got %d", earlyMarkersInSnapshot)
+	}
+}
+
+// trim returns the first n bytes of b for diagnostic logging.
+func trim(b []byte, n int) []byte {
+	if len(b) <= n {
+		return b
+	}
+	return b[:n]
+}
+
+// tail returns the last n bytes of b for diagnostic logging.
+func tail(b []byte, n int) []byte {
+	if len(b) <= n {
+		return b
+	}
+	return b[len(b)-n:]
+}
+
+// TestNoErasePiShapeSnapshotShape pins the WS contract the web fix
+// relies on. After the web client switches to the prefetch model,
+// it will dump the on-disk scrollback then attach with ?no_erase=1.
+// For that to be safe:
+//
+//   - The WS snapshot must NOT contain \x1b[3J (Erase Saved Lines)
+//     anywhere - if it did, the just-written disk bytes would be
+//     wiped from the host terminal's scrollback.
+//   - The snapshot must contain only the visible screen, not
+//     vt.Scrollback() (avoids duplicating bytes the client just
+//     wrote from disk).
+//   - The snapshot must still carry alt-screen exit + cursor home
+//     + erase-display so a clean visual seam separates the disk
+//     replay from the snapshot.
+//
+// If any of these change, the web fix breaks. This test fires the
+// alarm.
+func TestNoErasePiShapeSnapshotShape(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	scrollbackPath := filepath.Join(t.TempDir(), "persist", scrollback.ActiveName)
+
+	sink, err := scrollback.Open(scrollbackPath)
+	if err != nil {
+		t.Fatalf("scrollback.Open: %v", err)
+	}
+
+	// Same pi-shape child as TestPiLongSessionSnapshotMissesEarlyHistory.
+	script := `
+for i in $(seq 1 5); do
+  printf 'START-MARKER-%02d\n' "$i"
+  for j in 1 2 3 4 5; do printf 'filler-line-%02d-%d\n' "$i" "$j"; done
+  printf '\033[3J'
+done
+printf 'END-MARKER-WAITING\n'
+sleep 5
+`
+
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", script},
+		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
+		SocketPath: sockPath,
+		Scrollback: sink,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// Wait for the loop to finish (END-MARKER on disk) + emulator drain.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+		data, err := os.ReadFile(scrollbackPath)
+		if err == nil && bytes.Contains(data, []byte("END-MARKER-WAITING")) {
+			break
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, "ws://localhost/?no_erase=1", &websocket.DialOptions{
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return net.Dial("unix", sockPath)
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	conn.SetReadLimit(10 * 1024 * 1024)
+
+	var got []byte
+	for i := 0; i < 8; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 800*time.Millisecond)
+		_, data, err := conn.Read(readCtx)
+		readCancel()
+		if err != nil {
+			break
+		}
+		got = append(got, data...)
+		if bytes.Contains(got, []byte("\x1b[?2026l")) {
+			break
+		}
+	}
+	t.Logf("no_erase=1 WS snapshot: %d bytes", len(got))
+
+	// Sanity: BSU/ESU still wraps the snapshot - the framing is
+	// the same, only the inner content changes for no_erase=1.
+	if !bytes.Contains(got, []byte("\x1b[?2026h")) || !bytes.Contains(got, []byte("\x1b[?2026l")) {
+		t.Fatalf("WS frame missing BSU/ESU under ?no_erase=1\ngot: %q", trim(got, 400))
+	}
+
+	// Contract 1: NO \x1b[3J anywhere in the frame.
+	if bytes.Contains(got, []byte("\x1b[3J")) {
+		t.Errorf("no_erase=1 snapshot must NOT contain \\x1b[3J\n" +
+			"(if it did, the web fix's pre-WS disk replay would be wiped).")
+	}
+
+	// Contract 2: visible screen content is present (END-MARKER-WAITING
+	// is what was on screen after the loop finished).
+	if !bytes.Contains(got, []byte("END-MARKER-WAITING")) {
+		t.Errorf("no_erase=1 snapshot missing visible-screen content (END-MARKER-WAITING).\n"+
+			"snapshot tail: %q", tail(got, 400))
+	}
+
+	// Contract 3: alt-screen exit (\x1b[?1049l) is present so a TUI
+	// that was in the alt buffer cleanly hands control back to the
+	// main buffer where the disk replay landed.
+	if !bytes.Contains(got, []byte("\x1b[?1049l")) {
+		t.Errorf("no_erase=1 snapshot missing alt-screen exit \\x1b[?1049l")
+	}
+}
+
 // TestPTYServerDeferredScreenSync verifies that the deferred screen
 // processing (screenPending) produces correct snapshots. The child writes
 // output, then a late-connecting client should see it in the replay even
