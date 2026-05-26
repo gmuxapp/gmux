@@ -1020,6 +1020,62 @@ func TestRenderScreenLineCount(t *testing.T) {
 	}
 }
 
+// TestVTScrollbackWipedByEraseSavedLines is a falsification test for
+// the hypothesis that pi's end-of-turn redraw clears the runner's vt
+// scrollback. Pi wraps each turn in a synchronized-output block whose
+// reset sequence includes \x1b[3J (Erase Saved Lines, ED with parameter
+// 3). If the vt emulator honors \x1b[3J by emptying e.Scrollback(),
+// then the WS attach snapshot built from renderScreen() will only
+// carry post-wipe content for any session whose last turn fired
+// \x1b[3J - which is every alive pi session. That's the load-bearing
+// claim of tasks/james-gmux/2026-05-26-pi-scrollback-to-start.md;
+// this test pins it down.
+//
+// If this test fails (scrollback survives \x1b[3J), the bug is
+// somewhere else and the fix plan in that task file needs rewriting.
+func TestVTScrollbackWipedByEraseSavedLines(t *testing.T) {
+	screen := newScreen(40, 5, func(bool) {})
+	defer screen.Close()
+
+	// Push 10 lines through a 5-row screen so 5 lines end up in
+	// scrollback and 5 are visible.
+	for i := 1; i <= 10; i++ {
+		fmt.Fprintf(screen, "Line-%02d\r\n", i)
+	}
+
+	before := renderScreen(screen)
+	if !stringContains(before, "Line-01") {
+		t.Fatalf("precondition: scrollback should contain Line-01 before wipe\ngot: %q", before)
+	}
+	sb := screen.Scrollback()
+	if sb == nil || len(sb.Lines()) == 0 {
+		t.Fatalf("precondition: e.Scrollback() should be non-empty before wipe")
+	}
+	linesBefore := len(sb.Lines())
+
+	// Send pi's end-of-turn-shaped reset. The full pi sequence wraps
+	// this in BSU/ESU (\x1b[?2026h ... \x1b[?2026l) but the wipe
+	// itself is \x1b[3J; that's the byte sequence under test.
+	fmt.Fprint(screen, "\x1b[2J\x1b[H\x1b[3J")
+
+	sbAfter := screen.Scrollback()
+	linesAfter := 0
+	if sbAfter != nil {
+		linesAfter = len(sbAfter.Lines())
+	}
+
+	t.Logf("vt scrollback lines: before=%d after=%d", linesBefore, linesAfter)
+
+	if linesAfter != 0 {
+		t.Errorf("expected e.Scrollback() to be empty after \\x1b[3J; got %d lines", linesAfter)
+	}
+
+	after := renderScreen(screen)
+	if stringContains(after, "Line-01") {
+		t.Errorf("snapshot still contains Line-01 after \\x1b[3J\nsnapshot: %q", after)
+	}
+}
+
 // TestPTYServerDeferredScreenSync verifies that the deferred screen
 // processing (screenPending) produces correct snapshots. The child writes
 // output, then a late-connecting client should see it in the replay even
