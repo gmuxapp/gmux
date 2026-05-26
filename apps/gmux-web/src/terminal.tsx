@@ -886,6 +886,16 @@ export function TerminalView({
             // Use the same queue live data uses, so writes serialize
             // correctly with the BSU/ESU snapshot that arrives on WS open.
             queueData(stripped)
+            // Push the prefetch content past the visible region into
+            // scrollback. The WS snapshot's reset (\x1b[2J) clears the
+            // visible rows in place; without this padding, the most
+            // recent ~rows of prefetch content would be erased before
+            // the visible-screen render lands. A run of CRLFs ensures
+            // the bottom of the prefetch sits in scrollback by the
+            // time the snapshot's clear-screen fires.
+            const rows = termRef.current?.rows ?? 24
+            const padding = '\r\n'.repeat(rows)
+            queueData(new TextEncoder().encode(padding))
           }
         }
       }).catch(() => { /* network failure: silently fall back to WS-only */ })
