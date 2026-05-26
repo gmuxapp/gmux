@@ -22,13 +22,14 @@ const OUT_DIR  = '/Users/james-carmody/james-agent-workspace/tasks/james-gmux'
 const OUT_WEBM = path.join(OUT_DIR, '2026-05-26-scrollback-demo.webm')
 const OUT_GIF  = path.join(OUT_DIR, '2026-05-26-scrollback-demo.gif')
 
+// video: must be top-level — Playwright rejects it inside describe()
+test.use({
+  viewport: { width: 1280, height: 800 },
+  video: { mode: 'on', size: { width: 1280, height: 800 } },
+})
+
 test.describe('scrollback demo recording', () => {
   test.skip(!RUN_PI, 'set RUN_PI=1 to run')
-  test.use({
-    viewport: { width: 1280, height: 800 },
-    // Playwright writes video alongside the page; we move it after.
-    video: { mode: 'on', size: { width: 1280, height: 800 } },
-  })
 
   test('record resume + scroll-to-top demo', async ({ page }) => {
     // ── 1. Copy JSONL ──────────────────────────────────────────────────────
@@ -103,15 +104,15 @@ test.describe('scrollback demo recording', () => {
 
     // ── 10. Convert to GIF with ffmpeg ────────────────────────────────────
     const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg'
-    const filter = [
-      'fps=20',
-      'scale=1280:-1:flags=lanczos',
-      'split[s0][s1]',
-      '[s0]palettegen=max_colors=128[p]',
-      '[s1][p]paletteuse=dither=bayer',
-    ].join(',')
+    // Two-pass palette GIF via filter_complex: scale to 800px wide, 10fps.
+    // This keeps file size manageable (~7 MB) while staying readable.
+    const filterComplex = [
+      '[0:v] fps=10,scale=800:-1:flags=lanczos,split [a][b]',
+      '[a] palettegen=max_colors=64 [p]',
+      '[b][p] paletteuse=dither=bayer',
+    ].join(';')
     execSync(
-      `${ffmpeg} -y -i "${OUT_WEBM}" -vf "${filter}" "${OUT_GIF}"`,
+      `${ffmpeg} -y -i "${OUT_WEBM}" -filter_complex "${filterComplex}" "${OUT_GIF}"`,
       { stdio: 'inherit' },
     )
     console.log(`[demo] gif: ${OUT_GIF} (${(fs.statSync(OUT_GIF).size / 1024).toFixed(0)} KB)`)
