@@ -724,11 +724,12 @@ body {
   color: var(--text-primary);
 }
 
-/* ── Sidebar footer ── */
-.sidebar-footer {
-  flex-shrink: 0;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
+/* ── Notification prompt (home dashboard) ── */
+.home-notif {
+  /* Sits between the projects list and the footer as a low-priority
+   * opt-in. Width comes from the shared `.page > *` rule so the
+   * prompt aligns with the other home content blocks. */
+  margin: 16px 0 8px;
 }
 
 .notif-btn {
@@ -736,7 +737,6 @@ body {
   align-items: center;
   gap: 7px;
   width: 100%;
-  margin-top: 6px;
   padding: 6px 10px;
   border: 1px dashed var(--border);
   border-radius: 6px;
@@ -758,7 +758,6 @@ body {
   display: flex;
   align-items: center;
   gap: 7px;
-  margin-top: 6px;
   padding: 5px 10px;
   color: var(--text-muted);
   font-size: 12px;
@@ -1932,7 +1931,6 @@ body {
     border-bottom: none;
   }
   .sidebar-scroll { order: 1; }
-  .sidebar-footer { order: 2; }
 }
 
 /* ── Session Detail (non-terminal) ── */

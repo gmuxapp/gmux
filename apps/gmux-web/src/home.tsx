@@ -17,6 +17,7 @@ import { HostSuffix } from './host-suffix'
 import { SessionRow } from './session-row'
 import { LaunchButton } from './launcher'
 import { sessionPath } from './routing'
+import { IconBell, type NotifPermission } from './sidebar'
 import type { Folder, Session, ProjectItem } from './types'
 
 /** Drag-to-reorder transient state. `from` is the index lifted off,
@@ -32,7 +33,15 @@ function reorder<T>(arr: readonly T[], from: number, to: number): T[] {
   return out
 }
 
-export function Home({ onManageProjects }: { onManageProjects: () => void }) {
+export function Home({
+  onManageProjects,
+  notifPermission,
+  onRequestNotifPermission,
+}: {
+  onManageProjects: () => void
+  notifPermission: NotifPermission
+  onRequestNotifPermission: () => void
+}) {
   const healthVal = health.value
   const foldersVal = folders.value
   const projectsVal = projects.value
@@ -156,9 +165,47 @@ export function Home({ onManageProjects }: { onManageProjects: () => void }) {
         </button>
       </section>
 
+      <NotifPrompt
+        permission={notifPermission}
+        onRequest={onRequestNotifPermission}
+      />
+
       <HomeFooter />
     </div>
   )
+}
+
+/** Notification opt-in surface on the home dashboard.
+ *  - 'default' : show the prompt button.
+ *  - 'denied'  : show a muted banner pointing at browser settings.
+ *  - 'granted' / 'unavailable' : render nothing (no opt-in needed,
+ *    and a permission we cannot request is not actionable). */
+function NotifPrompt({
+  permission,
+  onRequest,
+}: {
+  permission: NotifPermission
+  onRequest: () => void
+}) {
+  if (permission === 'default') {
+    return (
+      <div class="home-notif">
+        <button class="notif-btn" onClick={onRequest}>
+          <IconBell /> Enable notifications
+        </button>
+      </div>
+    )
+  }
+  if (permission === 'denied') {
+    return (
+      <div class="home-notif">
+        <div class="notif-denied">
+          <IconBell muted /> Notifications blocked in browser settings
+        </div>
+      </div>
+    )
+  }
+  return null
 }
 
 export function Section({

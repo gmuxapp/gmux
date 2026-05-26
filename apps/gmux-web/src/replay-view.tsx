@@ -78,8 +78,21 @@ export function ReplayView({
   useEffect(() => {
     if (!containerRef.current) return
 
+    // Scrollback was recorded at a specific column width. Re-flowing it
+    // to a different width would corrupt cursor positioning, box-drawing
+    // alignment, and any output that assumed the original geometry, so
+    // we pin cols to the recorded value and rely on `.terminal-shell`'s
+    // `overflow: auto` to allow horizontal scrolling when the viewport
+    // is narrower than the recording. Rows still fit vertically so the
+    // scrollback fills the available height without leaving an empty
+    // strip below.
+    const recordedCols = session.terminal_cols ?? 80
+    const recordedRows = session.terminal_rows ?? 24
+
     const term = new Terminal({
       ...terminalOptions,
+      cols: recordedCols,
+      rows: recordedRows,
       scrollback: REPLAY_SCROLLBACK_LINES,
       disableStdin: true,
       cursorBlink: false,
@@ -96,7 +109,18 @@ export function ReplayView({
     term.loadAddon(new WebLinksAddon())
     term.open(containerRef.current)
     loadPreferredRenderer(term)
-    fit.fit()
+    // Vertical-only fit: use FitAddon's proposal for rows, but keep cols
+    // pinned to the recording. FitAddon already knows the cell metrics
+    // and shell-padding accounting; reusing it for the row dimension is
+    // simpler than duplicating that logic here.
+    const fitRows = () => {
+      const proposed = fit.proposeDimensions()
+      if (!proposed || !Number.isFinite(proposed.rows) || proposed.rows < 1) return
+      if (term.cols !== recordedCols || term.rows !== proposed.rows) {
+        term.resize(recordedCols, proposed.rows)
+      }
+    }
+    fitRows()
     setTerm(term)
 
     // OSC 52 (set clipboard) suppression: the captured bytes may contain
@@ -129,7 +153,7 @@ export function ReplayView({
       }
     })
 
-    const onResize = () => fit.fit()
+    const onResize = () => fitRows()
     window.addEventListener('resize', onResize)
 
     return () => {

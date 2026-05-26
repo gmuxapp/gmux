@@ -297,16 +297,12 @@ export function Sidebar({
   onManageProjects,
   open,
   onClose,
-  notifPermission,
-  onRequestNotifPermission,
 }: {
   resumingId: string | null
   onCloseSession: (session: Session) => void
   onManageProjects: () => void
   open: boolean
   onClose: () => void
-  notifPermission: NotifPermission
-  onRequestNotifPermission: () => void
 }) {
   // Read signals; component re-renders only when these values change.
   const foldersVal = folders.value
@@ -373,18 +369,6 @@ export function Sidebar({
               <button class="sidebar-hint-link" onClick={onManageProjects}>
                 Add a project
               </button> to organize sessions by repo.
-            </div>
-          )}
-        </div>
-        <div class="sidebar-footer">
-          {notifPermission === 'default' && (
-            <button class="notif-btn" onClick={onRequestNotifPermission}>
-              <IconBell /> Enable notifications
-            </button>
-          )}
-          {notifPermission === 'denied' && (
-            <div class="notif-denied">
-              <IconBell muted /> Notifications blocked in browser settings
             </div>
           )}
         </div>
