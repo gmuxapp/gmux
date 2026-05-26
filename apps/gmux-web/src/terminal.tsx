@@ -866,20 +866,27 @@ export function TerminalView({
       //
       // Best-effort: skip on 404 / empty / network error. The WS
       // snapshot still arrives and the user sees the current screen.
-      const openWs = () => {
+      const openWs = (noErase: boolean) => {
         if (disposed.current || currentSessionId.current !== session.id) return
-        const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${session.id}?no_erase=1`)
+        const url = `${wsProtocol}//${location.host}/ws/${session.id}` + (noErase ? '?no_erase=1' : '')
+        const ws = new WebSocket(url)
         wireWs(ws)
       }
 
       if (!isFirstConnect) {
-        openWs()
+        // Reconnect: the host terminal already has whatever the
+        // prefetch put there on first connect. Don't re-prefetch
+        // and don't switch no_erase mode mid-session: a reconnect
+        // under no_erase=1 would leave the snapshot's reset behind
+        // without restoring scrollback. Use the simple snapshot.
+        openWs(false)
         return
       }
 
       const prefetchSessionId = session.id
       fetchScrollback(prefetchSessionId).then((result) => {
         if (disposed.current || currentSessionId.current !== prefetchSessionId) return
+        let prefetchWrote = false
         if (result.kind === 'bytes') {
           const stripped = stripSyncBlocks(result.bytes)
           if (stripped.length > 0) {
@@ -896,11 +903,19 @@ export function TerminalView({
             const rows = termRef.current?.rows ?? 24
             const padding = '\r\n'.repeat(rows)
             queueData(new TextEncoder().encode(padding))
+            prefetchWrote = true
           }
         }
-      }).catch(() => { /* network failure: silently fall back to WS-only */ })
-      .finally(() => {
-        openWs()
+        // no_erase=1 is requested only when we actually wrote
+        // prefetch bytes; otherwise the snapshot's \x1b[3J reset is
+        // useful (clears any pre-existing buffer state on this
+        // ghostty-web instance, matching prior behavior). Sessions
+        // with no on-disk scrollback (fresh sessions, ones that
+        // pre-date persistence) keep the original semantics.
+        return prefetchWrote
+      }).catch(() => false /* network failure: fall back to WS-only */)
+      .then((prefetchWrote) => {
+        openWs(!!prefetchWrote)
       })
     }
 
