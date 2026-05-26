@@ -851,7 +851,7 @@ export function TerminalView({
       // history. The WS is opened with ?no_erase=1 so gmuxd's snapshot
       // does NOT include \x1b[3J (which would wipe what we just
       // wrote). This mirrors cli/gmux/cmd/gmux/attach.go's pattern
-      // for the local TTY attach. See ADR 0003 / 0004 + the
+      // for the local TTY attach. See ADR 0003 + the
       // task at tasks/james-gmux/2026-05-26-pi-scrollback-to-start.md.
       //
       // Bytes from the disk file are filtered through stripSyncBlocks

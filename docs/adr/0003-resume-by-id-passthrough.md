@@ -2,7 +2,6 @@
 
 **Status:** Proposed
 **Date:** 2026-05-04
-**Related:** ADR 0004 (SessionStream and the live↔dead view abstraction)
 
 ## Context
 
@@ -161,8 +160,8 @@ duplicate-cleanup logic all delete.
 A resumed runner opens the same directory the dead runner used.
 The truncate-on-Open semantic of `scrollback.Open` naturally
 discards the dead run's bytes from disk; in-memory scrollback that
-the user is actively viewing is preserved by the frontend (see
-ADR 0004). No `RunnerID` field, no broker-side resolution
+the user is actively viewing is preserved by the frontend.
+No `RunnerID` field, no broker-side resolution
 indirection, no migration of files at merge time, no orphaned
 runner-id directories to reap.
 
@@ -306,7 +305,7 @@ Three paths produce a live owner of a requested id:
   semantics that already exist for fresh sessions extend naturally
   to resumed sessions — no special-case "preserve the previous
   run's bytes" code on the disk side; whatever preservation the
-  frontend wants happens in the byte buffer (ADR 0004).
+  frontend wants happens at the frontend layer.
 
 ### Negative
 
