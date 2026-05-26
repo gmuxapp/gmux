@@ -1271,6 +1271,126 @@ func tail(b []byte, n int) []byte {
 	return b[len(b)-n:]
 }
 
+// TestNoErasePiShapeSnapshotShape pins the WS contract the web fix
+// relies on. After the web client switches to the prefetch model,
+// it will dump the on-disk scrollback then attach with ?no_erase=1.
+// For that to be safe:
+//
+//   - The WS snapshot must NOT contain \x1b[3J (Erase Saved Lines)
+//     anywhere - if it did, the just-written disk bytes would be
+//     wiped from the host terminal's scrollback.
+//   - The snapshot must contain only the visible screen, not
+//     vt.Scrollback() (avoids duplicating bytes the client just
+//     wrote from disk).
+//   - The snapshot must still carry alt-screen exit + cursor home
+//     + erase-display so a clean visual seam separates the disk
+//     replay from the snapshot.
+//
+// If any of these change, the web fix breaks. This test fires the
+// alarm.
+func TestNoErasePiShapeSnapshotShape(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	scrollbackPath := filepath.Join(t.TempDir(), "persist", scrollback.ActiveName)
+
+	sink, err := scrollback.Open(scrollbackPath)
+	if err != nil {
+		t.Fatalf("scrollback.Open: %v", err)
+	}
+
+	// Same pi-shape child as TestPiLongSessionSnapshotMissesEarlyHistory.
+	script := `
+for i in $(seq 1 5); do
+  printf 'START-MARKER-%02d\n' "$i"
+  for j in 1 2 3 4 5; do printf 'filler-line-%02d-%d\n' "$i" "$j"; done
+  printf '\033[3J'
+done
+printf 'END-MARKER-WAITING\n'
+sleep 5
+`
+
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", script},
+		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
+		SocketPath: sockPath,
+		Scrollback: sink,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// Wait for the loop to finish (END-MARKER on disk) + emulator drain.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+		data, err := os.ReadFile(scrollbackPath)
+		if err == nil && bytes.Contains(data, []byte("END-MARKER-WAITING")) {
+			break
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, "ws://localhost/?no_erase=1", &websocket.DialOptions{
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return net.Dial("unix", sockPath)
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	conn.SetReadLimit(10 * 1024 * 1024)
+
+	var got []byte
+	for i := 0; i < 8; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 800*time.Millisecond)
+		_, data, err := conn.Read(readCtx)
+		readCancel()
+		if err != nil {
+			break
+		}
+		got = append(got, data...)
+		if bytes.Contains(got, []byte("\x1b[?2026l")) {
+			break
+		}
+	}
+	t.Logf("no_erase=1 WS snapshot: %d bytes", len(got))
+
+	// Sanity: BSU/ESU still wraps the snapshot - the framing is
+	// the same, only the inner content changes for no_erase=1.
+	if !bytes.Contains(got, []byte("\x1b[?2026h")) || !bytes.Contains(got, []byte("\x1b[?2026l")) {
+		t.Fatalf("WS frame missing BSU/ESU under ?no_erase=1\ngot: %q", trim(got, 400))
+	}
+
+	// Contract 1: NO \x1b[3J anywhere in the frame.
+	if bytes.Contains(got, []byte("\x1b[3J")) {
+		t.Errorf("no_erase=1 snapshot must NOT contain \\x1b[3J\n" +
+			"(if it did, the web fix's pre-WS disk replay would be wiped).")
+	}
+
+	// Contract 2: visible screen content is present (END-MARKER-WAITING
+	// is what was on screen after the loop finished).
+	if !bytes.Contains(got, []byte("END-MARKER-WAITING")) {
+		t.Errorf("no_erase=1 snapshot missing visible-screen content (END-MARKER-WAITING).\n"+
+			"snapshot tail: %q", tail(got, 400))
+	}
+
+	// Contract 3: alt-screen exit (\x1b[?1049l) is present so a TUI
+	// that was in the alt buffer cleanly hands control back to the
+	// main buffer where the disk replay landed.
+	if !bytes.Contains(got, []byte("\x1b[?1049l")) {
+		t.Errorf("no_erase=1 snapshot missing alt-screen exit \\x1b[?1049l")
+	}
+}
+
 // TestPTYServerDeferredScreenSync verifies that the deferred screen
 // processing (screenPending) produces correct snapshots. The child writes
 // output, then a late-connecting client should see it in the replay even
