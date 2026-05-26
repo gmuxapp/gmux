@@ -381,7 +381,12 @@ export function sessionStaleness(
 }
 
 /** Upsert a session from SSE. Returns true if the session was new. */
+/** Sessions that have been optimistically dismissed. Prevents SSE upserts from
+ *  re-adding them before the server confirms the removal. Cleared on session-remove. */
+const _dismissedIds = new Set<string>()
+
 export function upsertSession(raw: ProtocolSession): boolean {
+  if (_dismissedIds.has(raw.id)) return false
   const updated = toUISession(raw)
   let isNew = false
   const prev = sessions.value
@@ -422,6 +427,7 @@ export function upsertSession(raw: ProtocolSession): boolean {
 }
 
 export function removeSession(id: string) {
+  _dismissedIds.delete(id)  // server confirmed removal; clear the guard
   sessions.value = sessions.value.filter(s => s.id !== id)
 }
 
@@ -570,7 +576,8 @@ export function killSession(sessionId: string): Promise<void> {
 }
 
 export function dismissSession(sessionId: string): Promise<void> {
-  removeSession(sessionId)
+  _dismissedIds.add(sessionId)
+  sessions.value = sessions.value.filter(s => s.id !== sessionId)
   return postAction(`/v1/sessions/${sessionId}/dismiss`)
 }
 
