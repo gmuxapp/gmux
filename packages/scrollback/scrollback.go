@@ -41,10 +41,18 @@ const (
 	PreviousName = "scrollback.0"
 
 	// MaxBytes is the soft cap at which the active file is rotated.
-	// 1 MiB comfortably exceeds xterm's default 5000-line buffer
-	// (~400 KiB at 80 cols) so Resume sessions get a full replay,
-	// while keeping per-session disk usage bounded at 2 MiB.
-	MaxBytes int64 = 1 << 20
+	// 100 MiB lets a long pi/agent session retain its full bytes
+	// without rotation under typical use (a multi-hour conversation
+	// with tool output rarely exceeds tens of MiB raw). Per-session
+	// disk usage is bounded at 2 * MaxBytes = 200 MiB; a heavy user
+	// with 50 sessions tops out at ~10 GiB worst-case, which is
+	// acceptable on developer machines.
+	//
+	// Historical: this was 1 MiB until the prefetch fix landed (see
+	// tasks/james-gmux/2026-05-26-pi-scrollback-to-start.md). At
+	// 1 MiB, even moderately long sessions rotated their first
+	// turns off disk before a user could scroll back to them.
+	MaxBytes int64 = 100 << 20
 
 	// dirMode and fileMode mirror sessionmeta's modes so the
 	// per-session directory stays owner-only.
