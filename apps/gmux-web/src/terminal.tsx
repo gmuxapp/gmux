@@ -6,7 +6,7 @@ import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { shouldFocusOnTouchEnd } from './terminal-touch'
 import { createReplayBuffer, type ReplayState } from './replay'
-import { stripSyncBlocks } from './replay-strip'
+import { stripSyncBlocks, extractScrollbackContent } from './replay-strip'
 import { fetchScrollback } from './replay-fetch'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 
@@ -854,12 +854,13 @@ export function TerminalView({
       // for the local TTY attach. See ADR 0003 + the
       // task at tasks/james-gmux/2026-05-26-pi-scrollback-to-start.md.
       //
-      // Bytes from the disk file are filtered through stripSyncBlocks
-      // because pi (and other agents) emit BSU/ESU-wrapped end-of-turn
-      // redraws containing \x1b[2J/\x1b[3J. Those resets, replayed
-      // verbatim, would destroy each turn's text in scrollback the
-      // same way they did before the fix - the BSU/ESU envelope is
-      // the cleanest cut-line.
+      // Bytes from the disk file are filtered through extractScrollbackContent
+      // (Option B). For pi sessions it finds the last full-render BSU/ESU block
+      // — which contains the complete formatted conversation — and uses that as
+      // the scrollback base, appending any raw bytes that streamed after it.
+      // For non-pi sessions (or sessions with no full-render block) it falls
+      // back to stripSyncBlocks, which keeps only the bytes outside BSU/ESU
+      // (tool stdout, etc.).
       //
       // Reconnects after WS drop don't re-prefetch: the host
       // terminal's scrollback already holds the history.
@@ -888,7 +889,7 @@ export function TerminalView({
         if (disposed.current || currentSessionId.current !== prefetchSessionId) return
         let prefetchWrote = false
         if (result.kind === 'bytes') {
-          const stripped = stripSyncBlocks(result.bytes)
+          const stripped = extractScrollbackContent(result.bytes)
           if (stripped.length > 0) {
             // Use the same queue live data uses, so writes serialize
             // correctly with the BSU/ESU snapshot that arrives on WS open.

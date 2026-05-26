@@ -1,4 +1,4 @@
-import { containsSequence, BSU, ESU } from './replay'
+import { containsSequence, BSU, ESU, CSI_3J } from './replay'
 
 /**
  * Strip BSU…ESU synchronized-update blocks from a byte stream.
@@ -69,6 +69,70 @@ function matchesAt(data: Uint8Array, pos: number, seq: Uint8Array): boolean {
     if (data[pos + j] !== seq[j]) return false
   }
   return true
+}
+
+/**
+ * Extract the best scrollback content from a byte stream.
+ *
+ * Rather than discarding all BSU…ESU blocks (as stripSyncBlocks does),
+ * this finds the LAST "full-render" block — one that contains CSI_3J
+ * (\x1b[3J]) inside it. Pi emits a full render on every turn: BSU +
+ * \x1b[2J\x1b[H\x1b[3J + all conversation lines + ESU. The content
+ * after the \x1b[3J is the complete conversation as rendered at that
+ * snapshot — user prompts, agent responses, tool output, all formatted.
+ *
+ * Strategy:
+ *   1. Find the LAST full-render block (last BSU/ESU containing CSI_3J).
+ *   2. Extract its content (everything from after CSI_3J to before ESU).
+ *   3. Append raw bytes that follow the block, with any later differential
+ *      BSU/ESU blocks stripped via stripSyncBlocks.
+ *   4. Fall back to stripSyncBlocks if no full-render block exists.
+ *
+ * This gives the complete conversation at the most recent snapshot, plus
+ * any tool output that streamed after it, without duplicating earlier turns
+ * or risking cursor-movement artifacts from differential-render blocks.
+ */
+export function extractScrollbackContent(input: Uint8Array): Uint8Array {
+  // Fast path: no BSU at all → nothing to extract.
+  if (!containsSequence(input, BSU)) return input
+
+  // Scan all BSU/ESU blocks and track the last one containing CSI_3J.
+  let lastContentStart = -1   // index right after CSI_3J in the last full-render block
+  let lastBlockEnd = -1        // index right after ESU of the last full-render block
+  let i = 0
+  while (i < input.length) {
+    const bsuPos = indexOf(input, BSU, i)
+    if (bsuPos < 0) break
+
+    const esuPos = indexOf(input, ESU, bsuPos + BSU.length)
+    if (esuPos < 0) break
+
+    // Is CSI_3J present between BSU and ESU?
+    const csi3jPos = indexOf(input, CSI_3J, bsuPos + BSU.length)
+    if (csi3jPos >= 0 && csi3jPos < esuPos) {
+      lastContentStart = csi3jPos + CSI_3J.length
+      lastBlockEnd = esuPos + ESU.length
+    }
+
+    i = esuPos + ESU.length
+  }
+
+  // No full-render block found — fall back to stripping everything.
+  if (lastContentStart < 0) return stripSyncBlocks(input)
+
+  // Content of the last full render: lines from after CSI_3J to before ESU.
+  const fullRenderContent = input.subarray(lastContentStart, lastBlockEnd - ESU.length)
+
+  // Bytes after the last full-render block: keep raw bytes, strip any
+  // subsequent differential BSU/ESU blocks (they use relative cursor moves
+  // that are only valid in the live terminal context).
+  const afterBlock = input.subarray(lastBlockEnd)
+  const strippedAfter = stripSyncBlocks(afterBlock)
+
+  const out = new Uint8Array(fullRenderContent.length + strippedAfter.length)
+  out.set(fullRenderContent)
+  out.set(strippedAfter, fullRenderContent.length)
+  return out
 }
 
 function indexOf(data: Uint8Array, seq: Uint8Array, from: number): number {
