@@ -272,6 +272,26 @@ export const peerStatusByName = computed<ReadonlyMap<string, string>>(() => {
 
 /** True when a session lives on a peer we can't reach right now.
  *  Local sessions (peer === undefined) are never unavailable. */
+/**
+ * Single source of truth for the visual dot state of a session, used
+ * by both the sidebar row and the wide dashboard row. Encodes the
+ * precedence: error > working > unread > recent terminal activity.
+ * Selection-aware muting ("unread is suppressed when you're already
+ * viewing the session") lives at the call site, not here.
+ */
+export function sessionDotState(
+  session: Session,
+  am: ReadonlyMap<string, 'active' | 'fading'>,
+): DotState {
+  if (session.alive && session.status?.error)   return 'error'
+  if (session.alive && session.status?.working) return 'working'
+  if (session.unread)                            return 'unread'
+  const act = am.get(session.id)
+  if (act === 'active') return 'active'
+  if (act === 'fading') return 'fading'
+  return 'none'
+}
+
 export function isSessionUnavailable(
   session: { peer?: string },
   statusByName: ReadonlyMap<string, string>,
@@ -456,6 +476,113 @@ export const backgroundActivity = computed((): DotState => {
 /** Count of unread sessions (excluding selected). */
 export const unreadCount = computed(() =>
   sessions.value.filter(s => s.id !== selectedId.value && s.alive && s.unread).length,
+)
+
+// ── Home dashboard partitioning ─────────────────────────────────────────────
+//
+// The home page surfaces sessions in three sections. Each session
+// appears in at most one section; priority is Needs attention >
+// Running > Recent. Sort within every section is newest-first by
+// last_activity_at (falling back to created_at for sessions that
+// have not transitioned yet, so a brand-new idle session shows at
+// the top of Running and an old quiet one drops to the bottom).
+//
+// Recent surfaces idle-alive sessions worth glancing back at:
+// shells at a prompt that were recently doing something, or
+// adapter sessions between turns. Dead sessions are NOT included
+// (they live on the project page). Shape: entries whose
+// last_activity_at falls within RECENT_WINDOW_MS, plus enough
+// additional entries by recency to reach a floor of RECENT_FLOOR,
+// capped at RECENT_CAP. Without the floor the section vanishes
+// after a quiet hour; without the cap it grows unbounded on busy
+// daemons.
+export const RECENT_WINDOW_MS = 60 * 60 * 1000
+export const RECENT_FLOOR = 3
+export const RECENT_CAP = 10
+
+function activityTimeMs(s: Session): number {
+  // last_activity_at is canonical when present (daemon-stamped on
+  // noteworthy transitions). For never-transitioned sessions, fall
+  // back to created_at so they sort relative to peers rather than
+  // landing at the epoch.
+  const stamp = s.last_activity_at ?? s.created_at
+  const t = Date.parse(stamp)
+  return Number.isFinite(t) ? t : 0
+}
+
+function byActivityDesc(a: Session, b: Session): number {
+  const dt = activityTimeMs(b) - activityTimeMs(a)
+  if (dt !== 0) return dt
+  // Stable tiebreaker on id. Sessions with identical timestamps
+  // (notably corpses persisted before last_activity_at existed,
+  // which all fall back to created_at) must sort identically
+  // across re-renders. Without this, every SSE event rebuilds
+  // sessions.value in a different order and the section visibly
+  // re-orders the tied entries.
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+}
+
+/**
+ * Pure partition of a session list into the three dashboard sections.
+ * Exported so tests can drive it with fixtures and `now` injected
+ * (real wall-clock time would otherwise make the Recent floor/window
+ * untestable).
+ *
+ * Alive-only: dead sessions never appear on the home dashboard.
+ * They live exclusively in the project page's "All sessions"
+ * section (see partitionForProject). The home page is a triage
+ * surface for sessions you can still interact with right now;
+ * dead corpses would dilute the signal.
+ */
+export function partitionForHome(
+  all: readonly Session[],
+  now: number,
+): { needsAttention: Session[]; running: Session[]; recent: Session[] } {
+  const needsAttention: Session[] = []
+  const running: Session[] = []
+  const leftover: Session[] = []
+
+  for (const s of all) {
+    // Dead sessions never surface on the home dashboard; they live
+    // only in the project page's "All sessions" section.
+    if (!s.alive) continue
+    // status.error is intentionally NOT escalated here: most error
+    // states come from background subcommands that exited non-zero
+    // without the agent itself halting, so flagging them as "needs
+    // attention" produces false alarms. The per-row error dot still
+    // shows individually.
+    if (s.unread) {
+      needsAttention.push(s)
+    } else if (s.status?.working) {
+      running.push(s)
+    } else {
+      // Idle-alive: not unread, not working. Falls to Recent if
+      // its last_activity_at is within the window (or via the
+      // floor when the daemon is quiet).
+      leftover.push(s)
+    }
+  }
+  needsAttention.sort(byActivityDesc)
+  running.sort(byActivityDesc)
+  leftover.sort(byActivityDesc)
+
+  // Recent: leftover (idle-alive) entries whose timestamp is
+  // within the window, or top-N by recency if fewer than the
+  // floor qualify.
+  const withinWindow = leftover.filter(s => {
+    const t = activityTimeMs(s)
+    return t > 0 && now - t < RECENT_WINDOW_MS
+  })
+  const recent = (withinWindow.length >= RECENT_FLOOR
+    ? withinWindow
+    : leftover.slice(0, RECENT_FLOOR)
+  ).slice(0, RECENT_CAP)
+
+  return { needsAttention, running, recent }
+}
+
+export const homePartition = computed(() =>
+  partitionForHome(sessions.value, Date.now()),
 )
 
 // ── Mutators ────────────────────────────────────────────────────────────────

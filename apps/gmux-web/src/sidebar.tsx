@@ -14,7 +14,7 @@ import {
   folders, selectedId, currentProjectKey,
   activityMap, unmatchedActiveCount, projects, connState,
   updateProjects, reorderSessions,
-  peerStatusByName, isSessionUnavailable, localPeerNames,
+  peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState,
   type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -30,15 +30,6 @@ export type { DotState }
 // ── Helpers ──
 
 /** Determine the dot indicator state for a session. */
-function sessionDotState(session: Session, am: ReadonlyMap<string, 'active' | 'fading'>): DotState {
-  if (session.alive && session.status?.error)   return 'error'
-  if (session.alive && session.status?.working) return 'working'
-  if (session.unread) return 'unread'
-  const act = am.get(session.id)
-  if (act === 'active') return 'active'
-  if (act === 'fading') return 'fading'
-  return 'none'
-}
 
 const bellStroke = { fill: 'none', stroke: 'currentColor', 'stroke-width': '1.4', 'stroke-linecap': 'round' as const, 'stroke-linejoin': 'round' as const }
 

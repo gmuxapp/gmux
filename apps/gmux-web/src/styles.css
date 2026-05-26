@@ -589,6 +589,101 @@ body {
   box-shadow: inset 0 -2px 0 0 var(--accent);
 }
 
+/* ── Wide session row (dashboard / project page) ────────────────────── */
+/* Two-line variant of the sidebar's SessionItem. Same dot conventions
+   and close-button behavior; line 2 carries optional project / cwd /
+   status / age metadata. The host suffix uses the existing
+   .host-suffix styling. */
+
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.1s, border-color 0.15s;
+  position: relative;
+}
+.session-row:hover {
+  background: var(--bg-hover);
+  border-color: var(--text-muted);
+}
+.session-row.selected {
+  border-color: var(--accent);
+}
+.session-row.unavailable {
+  opacity: 0.55;
+}
+
+.session-row-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-row-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+.session-row-sep {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+.session-row-project {
+  color: var(--text);
+  opacity: 0.85;
+}
+.session-row-cwd {
+  font-family: var(--font-mono, monospace);
+}
+.session-row-status {
+  font-style: italic;
+}
+.session-row-age {
+  font-variant-numeric: tabular-nums;
+}
+
+.session-row-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s, background 0.1s;
+}
+.session-row:hover .session-row-close,
+.session-row.selected .session-row-close {
+  opacity: 1;
+}
+.session-row-close:hover {
+  color: var(--text);
+  background: var(--bg-active);
+}
+@media (hover: none) {
+  .session-row-close { opacity: 1; }
+}
+
 /* On touch devices (no hover), show interactive buttons permanently */
 @media (hover: none) {
   .launch-container.folder-launch-btn { opacity: 1; }
@@ -1560,14 +1655,22 @@ body {
 
 /* ── Home page ── */
 
-.home {
+/* The scroll container fills the available width so the scrollbar
+ * tracks the viewport edge (not a mid-page column edge). Content is
+ * constrained and centered via the children rule below: keep the
+ * column readable, keep the chrome predictable. */
+.page {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
   padding: 32px 32px 48px;
-  max-width: 640px;
-  min-width: 0;
   display: flex;
   flex-direction: column;
+  align-items: center;
+}
+.page > * {
+  width: 100%;
+  max-width: 640px;
 }
 
 .home-section-title {
@@ -1579,64 +1682,117 @@ body {
   margin-bottom: 12px;
 }
 
-/* Project cards */
+/* Dashboard sections */
 
-.home-project-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 8px;
-  margin-bottom: 32px;
+.home-section {
+  margin-bottom: 24px;
 }
+.home-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Projects list */
 
-.home-project-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 14px;
+.home-projects-section {
+  margin-bottom: 16px;
+}
+.home-projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.home-project-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.home-project-link {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
   text-decoration: none;
   color: inherit;
-  transition: background 0.1s, border-color 0.15s;
+  transition: background 0.1s;
 }
-.home-project-card:hover {
+.home-project-link:hover {
   background: var(--bg-hover);
-  border-color: var(--text-muted);
 }
-
 .home-project-name {
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
 .home-project-count {
   font-size: 12px;
-  margin-top: 4px;
+  white-space: nowrap;
 }
-
 .home-project-alive {
   color: var(--status-connected);
 }
-
 .home-project-rest {
   color: var(--text-muted);
 }
+.home-project-launch {
+  flex-shrink: 0;
+}
 
+.home-add-project {
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: border-color 0.1s, color 0.1s, background 0.1s;
+}
+.home-add-project:hover {
+  border-color: var(--text-muted);
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.home-empty-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 16px 0;
+}
+.home-empty-action {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font: inherit;
+}
+
+/* A single muted sentence. Uniform font and size; the inline refresh
+ * button and update link inherit everything except the accent color
+ * and underline, so the row reads as flowing prose, not a toolbar. */
 .home-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   margin-top: auto;
   padding-top: 16px;
   border-top: 1px solid var(--border);
-}
-
-.home-footer-version {
   font-size: 11px;
   color: var(--text-muted);
+  line-height: 1.5;
 }
-
-.home-footer-reload {
-  font-size: 11px;
+.home-footer-link {
+  font: inherit;
   color: var(--accent);
   background: none;
   border: none;
@@ -1645,20 +1801,8 @@ body {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-
-.home-footer-reload:hover {
+.home-footer-link:hover {
   color: var(--text);
-}
-
-.home-footer-update {
-  font-size: 11px;
-  color: oklch(85% 0.1 145);
-  text-decoration: none;
-}
-
-.home-footer-update:hover {
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
 
@@ -1841,7 +1985,7 @@ body {
   }
 
   /* Home / project hub: tighter padding on touch devices */
-  .home {
+  .page {
     padding: 20px 16px 48px;
   }
 

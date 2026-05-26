@@ -529,7 +529,7 @@ function App() {
             <div class="state-subtitle">Connecting…</div>
           </div>
         ) : (
-          <Home />
+          <Home onManageProjects={() => setManageProjectsOpen(true)} />
         )}
 
         <MobileTerminalBar
