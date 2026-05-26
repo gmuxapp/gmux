@@ -23,12 +23,14 @@ pnpm install          # JS dependencies + moon
 Run all services with watch/HMR:
 
 ```bash
-moon run :dev
+just dev
+# or: moon run :dev
 ```
 
 This starts:
-- **gmuxd** (`:8790`) — Go, auto-restarts on `.go` changes via watchexec
+- **gmuxd** (`:8791`) — Go, auto-restarts on `.go` changes via watchexec
 - **gmux-web** (`:5173`) — Vite HMR, proxies `/v1/*` and `/ws/*` to gmuxd
+- Open **http://localhost:8791** (gmuxd proxies vite on the same port)
 
 **No manual kill needed.** When gmuxd starts, it asks any existing instance to shut down gracefully via the Unix socket before binding.
 
@@ -38,6 +40,8 @@ To run services individually:
 moon run gmuxd:dev        # just gmuxd with watchexec
 moon run gmux-web:dev     # just vite
 ```
+
+For additional scenarios (frontend-only against existing gmuxd, sandbox/container setup, mock mode), see **[docs/running-dev-frontend.md](docs/running-dev-frontend.md)**.
 
 ## Tests & linting
 
