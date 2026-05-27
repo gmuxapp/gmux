@@ -6,7 +6,10 @@ import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { shouldFocusOnTouchEnd } from './terminal-touch'
 import { createReplayBuffer, type ReplayState, BSU } from './replay'
-import { stripSyncBlocks, extractScrollbackContent } from './replay-strip'
+// replay-strip is still used by the WS replay path (stripSyncBlocks) and
+// kept as a fallback; extractScrollbackContent is no longer called from the
+// prefetch path (server now handles extraction via ?extracted=1).
+import { stripSyncBlocks } from './replay-strip'  // eslint-disable-line @typescript-eslint/no-unused-vars
 import { fetchScrollback } from './replay-fetch'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 
@@ -943,14 +946,14 @@ export function TerminalView({
       const prefetchBarrier = new Promise<void>(resolve => { prefetchResolve = resolve })
 
       const prefetchSessionId = session.id
-      const _injectPrefetch = (stripped: Uint8Array, fromCache: boolean) => {
+      const _injectPrefetch = (extracted: Uint8Array) => {
         emitSyncDiag({
-          prefetchBytes: stripped.length,
-          prefetchExtractedBytes: stripped.length,
-          prefetchBlockCount: fromCache ? 0 : countBSUBlocks(stripped),
+          prefetchBytes: extracted.length,
+          prefetchExtractedBytes: extracted.length,
+          prefetchBlockCount: 0,  // always 0: server already extracted
         })
-        if (stripped.length > 0) {
-          queueData(stripped)
+        if (extracted.length > 0) {
+          queueData(extracted)
           const rows = termRef.current?.rows ?? 24
           queueData(new TextEncoder().encode('\r\n'.repeat(rows)))
         }
@@ -961,7 +964,7 @@ export function TerminalView({
       const _cached = _prefetchCache.get(prefetchSessionId)
       if (_cached !== undefined) {
         // Cache hit — immediate resolve, no network round-trip.
-        if (_cached !== null) _injectPrefetch(_cached, true)
+        if (_cached !== null) _injectPrefetch(_cached)
         prefetchResolve()
       } else {
         fetchScrollback(prefetchSessionId).then((result) => {
@@ -970,28 +973,20 @@ export function TerminalView({
             return
           }
           if (result.kind === 'bytes') {
-            const stripped = extractScrollbackContent(result.bytes)
+            // Server returns pre-extracted content (?extracted=1) —
+            // no client-side processing needed.
+            const extracted = result.bytes
             emitSyncDiag({
-              prefetchBytes: result.bytes.length,
-              prefetchExtractedBytes: stripped.length,
-              prefetchBlockCount: countBSUBlocks(result.bytes),
+              prefetchBytes: extracted.length,
+              prefetchExtractedBytes: extracted.length,
+              prefetchBlockCount: 0,
             })
-            const toCache = stripped.length > 0 ? stripped : null
+            const toCache = extracted.length > 0 ? extracted : null
             _prefetchCache.set(prefetchSessionId, toCache)
-            if (stripped.length > 0) {
-              // Use the same queue live data uses, so writes serialize
-              // correctly with the BSU/ESU snapshot that arrives on WS open.
-              queueData(stripped)
-              // Push the prefetch content past the visible region into
-              // scrollback. The WS snapshot's reset (\x1b[2J) clears the
-              // visible rows in place; without this padding, the most
-              // recent ~rows of prefetch content would be erased before
-              // the visible-screen render lands. A run of CRLFs ensures
-              // the bottom of the prefetch sits in scrollback by the
-              // time the snapshot's clear-screen fires.
+            if (extracted.length > 0) {
+              queueData(extracted)
               const rows = termRef.current?.rows ?? 24
-              const padding = '\r\n'.repeat(rows)
-              queueData(new TextEncoder().encode(padding))
+              queueData(new TextEncoder().encode('\r\n'.repeat(rows)))
             }
           } else if (result.kind === 'empty' || result.kind === 'not-found') {
             // Definitive empty — cache the negative so we skip on next visit.

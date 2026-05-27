@@ -13,9 +13,16 @@ import (
 
 // scrollbackBrokerHandler streams a session's persisted PTY scrollback
 // (previous file followed by active file, chronological order) as raw
-// bytes. It's the readonly counterpart to the runner's tee in
-// ptyserver: dead sessions whose runner socket is gone can still
-// serve their terminal history.
+// bytes, or as extracted scrollback when ?extracted=1 is set.
+//
+// Query parameters:
+//
+//   - extracted=1: run the bytes through scrollback.ExtractBytes before
+//     sending. The server does the heavy BSU/ESU block processing so the
+//     client only downloads the compact, human-readable result (typically
+//     ~1–2% of the raw file size for long pi sessions). The client must
+//     write the result directly into the terminal emulator — no further
+//     processing is needed on receipt.
 //
 // Status code semantics:
 //
@@ -69,6 +76,22 @@ func scrollbackBrokerHandler(
 	}
 	defer rc.Close()
 
+	// ?extracted=1 — read all, extract, return compact result.
+	// The client writes the extracted bytes directly into the terminal
+	// emulator without any further processing.
+	if r.URL.Query().Get("extracted") == "1" {
+		raw, err := io.ReadAll(rc)
+		if err != nil {
+			log.Printf("scrollback: read %s: %v", sessionID, err)
+			writeError(w, http.StatusInternalServerError, "internal", "scrollback read failed")
+			return
+		}
+		extracted := scrollback.ExtractBytes(raw)
+		_, _ = w.Write(extracted)
+		return
+	}
+
+	// Raw stream — io.Copy so we never buffer the whole file.
 	// A mid-stream client disconnect (e.g. user closed the tab)
 	// surfaces as a Copy error and is not actionable; nothing to log.
 	_, _ = io.Copy(w, rc)

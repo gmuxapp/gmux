@@ -48,7 +48,11 @@ func (f *brokerFixture) writeScrollback(t *testing.T, id, body string) {
 }
 
 func (f *brokerFixture) do(method, sessionID string) *http.Response {
-	req := httptest.NewRequest(method, "/v1/sessions/"+sessionID+"/scrollback", nil)
+	return f.doURL(method, "/v1/sessions/"+sessionID+"/scrollback", sessionID)
+}
+
+func (f *brokerFixture) doURL(method, path, sessionID string) *http.Response {
+	req := httptest.NewRequest(method, path, nil)
 	rec := httptest.NewRecorder()
 	scrollbackBrokerHandler(rec, req, sessionID, f.sessions, f.dirFor)
 	return rec.Result()
@@ -173,4 +177,60 @@ func TestBrokerConcatenatesPreviousAndActive(t *testing.T) {
 	if string(body) != "EARLIER\nLATER\n" {
 		t.Errorf("ordering: want %q, got %q", "EARLIER\nLATER\n", body)
 	}
+}
+
+// TestBrokerExtractedParam verifies that ?extracted=1 runs the raw bytes
+// through ExtractBytes server-side. The test builds input that contains a
+// single BSU/ESU full-render block and confirms:
+//
+//   - The block markers are absent from the response.
+//   - The block content IS present.
+//   - The raw file is NOT returned verbatim (i.e. extraction ran).
+func TestBrokerExtractedParam(t *testing.T) {
+	f := newBrokerFixture(t)
+	f.addSession(t, "sess-1")
+
+	const bsu = "\x1b[?2026h"
+	const esu = "\x1b[?2026l"
+	const csi3j = "\x1b[3J"
+	const blockContent = "hello scrollback\r\nstatus bar\r\n"
+	input := bsu + csi3j + blockContent + esu
+	f.writeScrollback(t, "sess-1", input)
+
+	resp := f.doURL(http.MethodGet, "/v1/sessions/sess-1/scrollback?extracted=1", "sess-1")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	got := string(body)
+
+	// Block content should be present.
+	if !contains(got, "hello scrollback") {
+		t.Errorf("block content missing from extracted response; got %q", got)
+	}
+	// BSU/ESU markers must not appear in the output.
+	if contains(got, bsu) || contains(got, esu) {
+		t.Errorf("BSU/ESU markers must be stripped in extracted response; got %q", got)
+	}
+	// Raw input should NOT be returned verbatim.
+	if got == input {
+		t.Errorf("extracted response should not be identical to raw input")
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && stringContains(s, substr))
+}
+
+func stringContains(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }

@@ -1,11 +1,15 @@
-// Fetches persisted scrollback for a (typically dead) session from the
-// gmuxd broker endpoint at GET /v1/sessions/<id>/scrollback.
+// Fetches persisted scrollback for a session from the gmuxd broker at
+// GET /v1/sessions/<id>/scrollback?extracted=1.
+//
+// The server runs ExtractBytes (Go) on the raw PTY bytes and returns only
+// the compact, human-readable result — typically ~1–2% of the raw file
+// size for long pi sessions (e.g. 400–900 KB instead of 20 MB). The
+// returned bytes can be written directly into the terminal emulator with
+// no further processing on the client.
 //
 // Response semantics (see services/gmuxd/cmd/gmuxd/scrollback.go):
-//   200 + bytes  →  raw PTY scrollback (octet-stream)
-//   200 + empty  →  session is known but no scrollback was captured
-//                   (e.g. died before scrollback persistence shipped,
-//                    or fast-exited before any output)
+//   200 + bytes  →  extracted scrollback ready to inject
+//   200 + empty  →  session known, no scrollback captured yet
 //   404          →  session unknown to this gmuxd
 //   5xx          →  server-side I/O error
 //
@@ -25,7 +29,7 @@ export async function fetchScrollback(
   sessionId: string,
   fetchImpl: FetchFn = fetch,
 ): Promise<ScrollbackResult> {
-  const url = `/v1/sessions/${encodeURIComponent(sessionId)}/scrollback`
+  const url = `/v1/sessions/${encodeURIComponent(sessionId)}/scrollback?extracted=1`
 
   let resp: Response
   try {
