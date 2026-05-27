@@ -54,7 +54,7 @@ test.describe('session switch — WS connects in parallel with scrollback prefet
       let interceptResolve: (() => void) | null = null
       const interceptFired = new Promise<void>(r => { interceptResolve = r })
 
-      await page.route(`**${scrollbackUrl}`, async (route) => {
+      await page.route(`**${scrollbackUrl}*`, async (route) => {
         interceptResolve?.()
         interceptResolve = null
         // Hold the response for the full slow delay.
