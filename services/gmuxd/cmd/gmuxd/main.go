@@ -11,6 +11,8 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -2109,6 +2111,25 @@ func serve(stderr io.Writer) int {
 		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"pid": pid}})
 	})
 
+	// GET /v1/fs/{slug}/walk — return a flat list of all paths under the project root.
+	// Directories are suffixed with '/'. No server-side hidden-file filtering;
+	// the frontend decides what to show. Limited to 50 000 entries to avoid OOM.
+	// Response: { ok: true, data: string[] }.
+	mux.HandleFunc("GET /v1/fs/{slug}/walk", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		paths, err := walkProjectPaths(root, 50_000)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "walk_failed", err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "data": paths})
+	})
+
 	// ── Git status ──
 
 	// GET /v1/git/{slug}/status — summarise git changes for a project workspace.
@@ -2133,6 +2154,23 @@ func serve(stderr io.Writer) int {
 				"deletions":  del,
 			},
 		})
+	})
+
+	// GET /v1/git/{slug}/files — per-file git status for the project.
+	// Returns { ok: true, data: [{ path, status }] } where status is one of:
+	// 'added', 'deleted', 'modified', 'renamed', 'untracked', 'ignored'.
+	// Returns an empty array when not a git repo or no changes.
+	mux.HandleFunc("GET /v1/git/{slug}/files", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		cmd := exec.Command("git", "-C", root, "status", "--porcelain=v1", "-u")
+		out, _ := cmd.Output()
+		entries := parseGitPorcelain(string(out))
+		writeJSON(w, map[string]any{"ok": true, "data": entries})
 	})
 
 	// ── Embedded frontend (SPA fallback) ──
@@ -2854,4 +2892,88 @@ func parseGitShortstat(s string) (files, insertions, deletions int) {
 		}
 	}
 	return
+}
+
+// walkProjectPaths returns the flat list of paths under root, with directory
+// paths suffixed by '/'. Limited to maxEntries entries; stops early if the
+// limit is reached (caller can detect this by len(paths) == maxEntries).
+// Permission-denied entries are skipped silently. The root itself is omitted.
+func walkProjectPaths(root string, maxEntries int) ([]string, error) {
+	var paths []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsPermission(walkErr) {
+				if d != nil && d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			return walkErr
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil || rel == "." {
+			return nil
+		}
+		relSlash := filepath.ToSlash(rel)
+		if d.IsDir() {
+			relSlash += "/"
+		}
+		paths = append(paths, relSlash)
+		if len(paths) >= maxEntries {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if errors.Is(err, filepath.SkipAll) {
+		err = nil
+	}
+	if paths == nil {
+		paths = []string{}
+	}
+	return paths, err
+}
+
+// parseGitPorcelain parses `git status --porcelain=v1 -u` output into
+// per-file status entries keyed by the new path (post-rename).
+// Returned status strings match the GitStatusEntry values expected by
+// @pierre/trees: 'added', 'deleted', 'modified', 'renamed', 'untracked', 'ignored'.
+type gitFileStatus struct {
+	Path   string `json:"path"`
+	Status string `json:"status"`
+}
+
+func parseGitPorcelain(out string) []gitFileStatus {
+	var entries []gitFileStatus
+	for _, line := range strings.Split(out, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		xy := line[:2]
+		file := strings.TrimSpace(line[3:])
+		if strings.Contains(file, " -> ") {
+			parts := strings.SplitN(file, " -> ", 2)
+			file = parts[1]
+		}
+		file = strings.Trim(file, `"`)
+		if file == "" {
+			continue
+		}
+		var status string
+		switch {
+		case strings.Contains(xy, "R"):
+			status = "renamed"
+		case strings.Contains(xy, "A"):
+			status = "added"
+		case strings.Contains(xy, "D"):
+			status = "deleted"
+		case xy == "??":
+			status = "untracked"
+		case xy == "!!":
+			status = "ignored"
+		default:
+			status = "modified"
+		}
+		entries = append(entries, gitFileStatus{Path: file, Status: status})
+	}
+	return entries
 }

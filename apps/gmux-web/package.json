@@ -19,6 +19,7 @@
     "@fontsource/source-sans-3": "^5.2.9",
     "@gmux/protocol": "workspace:*",
     "@milkdown/kit": "^7.21.1",
+    "@pierre/trees": "1.0.0-beta.4",
     "@preact/signals": "^2.9.0",
     "@trpc/client": "^11.6.0",
     "ghostty-web": "^0.4.0",

@@ -2537,7 +2537,7 @@ a.home-host-link:hover {
 
 .ft-tree {
   flex: 1;
-  padding: 4px 0;
+  min-height: 0;
   position: relative;
 }
 
@@ -2546,6 +2546,68 @@ a.home-host-link:hover {
   outline-offset: -2px;
   border-radius: 4px;
 }
+
+/* @pierre/trees mount container — fills tree zone, applies theme vars */
+.ft-tree-inner {
+  height: 100%;
+  display: block;
+  /* Layout overrides */
+  --trees-bg-override: var(--bg-sidebar);
+  --trees-fg-override: var(--text);
+  --trees-fg-muted-override: var(--text-muted);
+  --trees-selected-bg-override: var(--bg-selected);
+  --trees-accent-override: var(--accent);
+  --trees-border-radius-override: var(--radius);
+  --trees-font-family-override: 'Source Sans 3', system-ui, sans-serif;
+  --trees-font-size-override: 13px;
+  --trees-input-bg-override: var(--bg-surface);
+  --trees-border-color-override: var(--border);
+  --trees-scrollbar-thumb-override: var(--border-strong);
+  --trees-indent-guide-bg-override: var(--border);
+  /* Git status colours */
+  --trees-git-added-color-override: var(--status-connected);
+  --trees-git-modified-color-override: oklch(72% 0.12 55);
+  --trees-git-deleted-color-override: var(--status-error);
+  --trees-git-untracked-color-override: var(--text-secondary);
+  --trees-git-renamed-color-override: oklch(72% 0.12 55);
+  --trees-git-ignored-color-override: var(--text-muted);
+}
+
+/* Context menu rendered by @pierre/trees composition.contextMenu.render() */
+.ft-ctx-menu {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 4px;
+  box-shadow: 0 4px 16px oklch(0% 0 0 / 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 140px;
+}
+.ft-ctx-item {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  font-family: 'Source Sans 3', system-ui, sans-serif;
+  padding: 5px 10px;
+  border-radius: 3px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+}
+.ft-ctx-item:hover {
+  background: var(--bg-hover);
+}
+.ft-ctx-item--danger {
+  color: var(--status-error);
+}
+.ft-ctx-item--danger:hover {
+  background: oklch(20% 0.04 25);
+}
+
 
 /* Tree nodes */
 
