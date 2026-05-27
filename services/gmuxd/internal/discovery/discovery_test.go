@@ -5,7 +5,9 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
@@ -130,17 +132,32 @@ func TestScanSkipsTrackedAliveSubscribedSession(t *testing.T) {
 	const id = "sess-already-current"
 	sockPath := filepath.Join(sockDir, id+".sock")
 
-	// Fake runner counts /meta calls. If Phase 1 skips correctly,
-	// the count stays at zero across a Scan tick.
-	var metaCalls int
+	// Hold /events open so the subscription goroutine stays
+	// connected for the duration of the test. Without this the
+	// goroutine races with Scan: Subscribe stamps active[id]
+	// synchronously, but a fast dial + 404 could clear the entry
+	// before Scan reads IsActive, flipping the test from
+	// "skip-thrash" to "reconcile-drop" and giving a misleading
+	// failure when CI is slow.
+	hold := make(chan struct{})
+	t.Cleanup(func() { close(hold) })
+	var metaCalls atomic.Int64
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatalf("listen %s: %v", sockPath, err)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/meta", func(w http.ResponseWriter, r *http.Request) {
-		metaCalls++
+		metaCalls.Add(1)
 		_ = json.NewEncoder(w).Encode(store.Session{ID: id, Kind: "shell", Alive: true})
+	})
+	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-hold:
+		}
 	})
 	srv := &http.Server{Handler: mux}
 	done := make(chan struct{})
@@ -155,18 +172,104 @@ func TestScanSkipsTrackedAliveSubscribedSession(t *testing.T) {
 		SocketPath: sockPath,
 	})
 
-	// Forge an active subscription entry without actually opening
-	// /events: Subscribe stamps active[id] synchronously, so
-	// IsActive will return true even though the goroutine will
-	// fail and exit shortly after (we don't care about its
-	// lifetime here, only about Scan's behavior in the moment).
 	subs := NewSubscriptions(sessions)
 	subs.Subscribe(id, sockPath)
 	t.Cleanup(func() { subs.UnsubscribeAll() })
 
+	// Settle: give the subscription goroutine time to dial and
+	// reach the held /events handler. IsActive is true the moment
+	// Subscribe returns (synchronous map insert), but pinning the
+	// SSE connection's lifecycle to the test's hold channel
+	// removes any window where the goroutine could fail-and-exit
+	// between Subscribe and Scan and silently turn this into a
+	// different test.
+	time.Sleep(50 * time.Millisecond)
+	if !subs.IsActive(id) {
+		t.Fatal("subscription dropped before Scan could read IsActive")
+	}
+	if n := metaCalls.Load(); n != 0 {
+		t.Fatalf("unexpected /meta traffic before Scan: metaCalls=%d", n)
+	}
+
 	Scan(sessions, subs, nil, nil)
 
-	if metaCalls != 0 {
-		t.Errorf("/meta called %d times during Scan; want 0 — Phase 1 must skip tracked-alive-subscribed sockets", metaCalls)
+	if n := metaCalls.Load(); n != 0 {
+		t.Errorf("/meta called %d times during Scan; want 0 — Phase 1 must skip tracked-alive-subscribed sockets", n)
 	}
 }
+
+// TestScanReregistersOnTransientSubscriptionDrop pins the
+// self-healing path for the case where a session's SSE
+// subscription dropped (network blip, runner /events handler
+// returned early, daemon-side scanner read error) but the runner
+// itself is still alive on its socket.
+//
+// runSubscription has no built-in reconnect: when the SSE stream
+// ends, the goroutine clears active[id] and the store retains
+// Alive=true with no consumer of runner /events. Phase 2's
+// "// subscription will reconnect" comment is aspirational —
+// nothing in the old code actually reconnects. The new Phase 1
+// predicate inherits the reconnection role: tracked && alive &&
+// !IsActive falls through to Register, which calls Subscribe and
+// restores the stream.
+//
+// Without this behavior, a session whose subscription dropped
+// silently loses live status/meta/exit events until the runner
+// dies or the daemon restarts.
+func TestScanReregistersOnTransientSubscriptionDrop(t *testing.T) {
+	sockDir := t.TempDir()
+	t.Setenv("GMUX_SOCKET_DIR", sockDir)
+
+	const id = "sess-blipped"
+	sockPath := filepath.Join(sockDir, id+".sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen %s: %v", sockPath, err)
+	}
+	var metaCalls atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/meta", func(w http.ResponseWriter, r *http.Request) {
+		metaCalls.Add(1)
+		_ = json.NewEncoder(w).Encode(store.Session{ID: id, Kind: "shell", Alive: true, Pid: 99})
+	})
+	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		// Close immediately so the daemon-side subscription drops.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+	})
+	srv := &http.Server{Handler: mux}
+	done := make(chan struct{})
+	go func() { _ = srv.Serve(ln); close(done) }()
+	t.Cleanup(func() { _ = srv.Close(); <-done })
+
+	sessions := store.New()
+	sessions.Upsert(store.Session{
+		ID:         id,
+		Kind:       "shell",
+		Alive:      true,
+		SocketPath: sockPath,
+	})
+
+	subs := NewSubscriptions(sessions)
+	t.Cleanup(func() { subs.UnsubscribeAll() })
+
+	// Scan must call Register exactly once during the dropped
+	// window, which dials /meta once and Subscribes once.
+	// Re-subscription is the load-bearing effect; the /meta call
+	// is the observable side effect we can count on.
+	Scan(sessions, subs, nil, nil)
+
+	if n := metaCalls.Load(); n != 1 {
+		t.Errorf("/meta called %d times; want 1 (Phase 1 must reconcile alive-but-unsubscribed sessions via Register)", n)
+	}
+	got, _ := sessions.Get(id)
+	if !got.Alive {
+		t.Errorf("Alive = false after reconcile, want true")
+	}
+	if got.Pid != 99 {
+		t.Errorf("Pid = %d, want 99 (re-registration must refresh runtime fields)", got.Pid)
+	}
+}
+
+

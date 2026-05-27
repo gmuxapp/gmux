@@ -123,12 +123,23 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDe
 			continue
 		}
 		sockPath := filepath.Join(dir, entry.Name())
-		if t, ok := tracked[sockPath]; ok && t.alive && subs != nil && subs.IsActive(t.id) {
+		if t, ok := tracked[sockPath]; ok && t.alive && subs.IsActive(t.id) {
 			continue // already current — runner is alive and we're streaming /events
 		}
 		if err := Register(sessions, subs, fileMon, sockPath, onDead); err != nil {
 			// Only remove sockets old enough to be genuinely stale.
-			// A brand-new socket may not be listening yet (runner still starting).
+			// Two ways Register can land here:
+			//
+			//   - Brand-new socket file not listening yet (runner is
+			//     still starting, has bind()'d but not yet accept()'d).
+			//   - Tracked-but-dead session whose .sock file lingered
+			//     past the runner's exit; queryMeta times out. Pre-fix
+			//     these were skipped entirely; the new predicate lets
+			//     them fall through, so cleanup actually fires.
+			//
+			// The 10s ModTime threshold is generous for the first case
+			// (a runner takes milliseconds to listen) and irrelevant
+			// for the second (the file is hours / days old).
 			if info, serr := entry.Info(); serr == nil && time.Since(info.ModTime()) > 10*time.Second {
 				os.Remove(sockPath)
 			}
