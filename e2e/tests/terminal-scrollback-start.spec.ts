@@ -6,18 +6,6 @@ import { openApp, spawnTestSession, readScrollbackFile } from '../helpers'
  * tasks/james-gmux/2026-05-26-pi-scrollback-to-start.md:
  * "I should be able to scroll back to the very start of a long-
  *  running pi session in the web UI."
- *
- * Today: the WS snapshot only contains content from after the most
- * recent \x1b[3J (Erase Saved Lines), which pi emits at the end of
- * every turn. The on-disk scrollback file holds the raw bytes from
- * the start of the session (capped at 2 MiB), but the live web
- * path never reads it.
- *
- * Expected on `main`: this test FAILS — the buffer top is from a
- * recent turn, not the session start.
- *
- * Expected after the fix (web prefetch + ?no_erase=1, mirroring
- * cli/gmux/cmd/gmux/attach.go): this test PASSES.
  */
 
 const START_MARKER_PREFIX = 'START-MARKER-'
@@ -25,28 +13,54 @@ const TURN_COUNT = 20
 const FINAL_MARKER = 'END-MARKER-WAITING'
 
 /**
- * Synthetic pi-shaped session: 20 turns of
- *   marker + 5 fillers + BSU + clear-display + cursor-home + clear-scrollback + redraw + ESU
- * then a final marker so we can detect loop completion via the
- * on-disk file.
+ * Synthetic pi-shaped session that faithfully matches pi's actual output
+ * structure: each BSU/ESU full-render block contains the ACCUMULATED
+ * conversation history up to that turn.
  *
- * The BSU/ESU wrap matches pi's real end-of-turn shape (see
- * e2e/fixtures/pi-turn.bin and the comment in apps/gmux-web/src/
- * replay.ts). The bytes inside the BSU/ESU block carry the screen
- * reset sequence (\x1b[2J\x1b[H\x1b[3J), which is what the live
- * web path needs to skip during disk replay so prior turns'
- * content survives in the host terminal's scrollback.
+ * Pi's TUI re-renders the entire visible conversation on every turn:
+ *   BSU + \x1b[2J\x1b[H\x1b[3J + <all turns so far> + ESU
+ *
+ * extractScrollbackContent (multi-block path) deduplicates the overlap
+ * between consecutive blocks and stitches together the unique new lines
+ * from each block. For this to yield early-turn markers (START-MARKER-01
+ * etc.) those markers must appear inside the block content — not as raw
+ * inter-block bytes that get discarded.
+ *
+ * Script structure: turn N's full-render block contains markers 1..N
+ * (accumulated), so early markers are present in every block from turn 1
+ * onward and survive the deduplication pass.
  */
 function piShapeScript(): string {
-  return `
-for i in $(seq 1 ${TURN_COUNT}); do
-  printf '${START_MARKER_PREFIX}%02d\\n' "$i"
-  for j in 1 2 3 4 5; do printf 'filler-line-%02d-%d\\n' "$i" "$j"; done
-  printf '\\033[?2026h\\033[2J\\033[H\\033[3Jredraw-%02d\\033[?2026l' "$i"
-done
-printf '${FINAL_MARKER}\\n'
-sleep 60
-`.trim()
+  // Build an accumulated history string.  Each iteration adds one
+  // marker + 5 fillers, then emits a full-render block that contains
+  // the entire history written so far.
+  const turns: string[] = []
+  for (let i = 1; i <= TURN_COUNT; i++) {
+    const n = String(i).padStart(2, '0')
+    turns.push(`${START_MARKER_PREFIX}${n}`)
+    for (let j = 1; j <= 5; j++) turns.push(`filler-line-${n}-${j}`)
+  }
+
+  // For each turn, the block content is the lines accumulated so far
+  // (turns 1..i) plus a 'redraw-NN' line.
+  const scriptLines: string[] = []
+  for (let i = 1; i <= TURN_COUNT; i++) {
+    const n = String(i).padStart(2, '0')
+    // Accumulated history up to turn i (marker + 5 fillers per turn).
+    const historyLines: string[] = []
+    for (let k = 1; k <= i; k++) {
+      const kn = String(k).padStart(2, '0')
+      historyLines.push(`${START_MARKER_PREFIX}${kn}`)
+      for (let j = 1; j <= 5; j++) historyLines.push(`filler-line-${kn}-${j}`)
+    }
+    historyLines.push(`redraw-${n}`)
+    // BSU + full clear + accumulated history + ESU
+    const blockContent = historyLines.join('\\n')
+    scriptLines.push(`printf '\\033[?2026h\\033[2J\\033[H\\033[3J${blockContent}\\033[?2026l'`)
+  }
+  scriptLines.push(`printf '${FINAL_MARKER}\\n'`)
+  scriptLines.push('sleep 60')
+  return scriptLines.join('\n')
 }
 
 async function navigateToSpawnedSession(page: Page, sessionId: string): Promise<void> {
