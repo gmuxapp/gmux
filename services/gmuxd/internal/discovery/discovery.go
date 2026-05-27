@@ -88,11 +88,31 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDe
 		return
 	}
 
-	// Build set of sockets already tracked by a store session.
-	trackedSockets := make(map[string]bool)
+	// Index existing store entries by SocketPath so Phase 1 can
+	// distinguish "already current" sockets from ones that need a
+	// fresh Register call.
+	//
+	// Sweep() at daemon startup populates the store with persisted
+	// sessions marked Alive=false; if their runners survived the
+	// daemon restart, the comment on Sweep promises "discovery.Register
+	// will upsert it with Alive=true shortly after". That contract
+	// only holds if Phase 1 actually calls Register for tracked-but-
+	// dead sockets, so the skip predicate below trusts a tracked entry
+	// only when it is both Alive AND has a live subscription. Anything
+	// less (Alive=false post-Sweep; Alive=true but subscription dropped
+	// during a transient blip) falls through to Register, whose
+	// documented re-registration branch merges fresh runtime state
+	// (alive, pid, socket, status, runner version, terminal size, …)
+	// onto the existing record while preserving the historical fields
+	// (slug, created_at, attribution title/subtitle, workspace).
+	type trackedState struct {
+		id    string
+		alive bool
+	}
+	tracked := make(map[string]trackedState)
 	for _, s := range sessions.List() {
 		if s.SocketPath != "" {
-			trackedSockets[s.SocketPath] = true
+			tracked[s.SocketPath] = trackedState{id: s.ID, alive: s.Alive}
 		}
 	}
 
@@ -103,12 +123,23 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDe
 			continue
 		}
 		sockPath := filepath.Join(dir, entry.Name())
-		if trackedSockets[sockPath] {
-			continue // already tracked
+		if t, ok := tracked[sockPath]; ok && t.alive && subs.IsActive(t.id) {
+			continue // already current — runner is alive and we're streaming /events
 		}
 		if err := Register(sessions, subs, fileMon, sockPath, onDead); err != nil {
 			// Only remove sockets old enough to be genuinely stale.
-			// A brand-new socket may not be listening yet (runner still starting).
+			// Two ways Register can land here:
+			//
+			//   - Brand-new socket file not listening yet (runner is
+			//     still starting, has bind()'d but not yet accept()'d).
+			//   - Tracked-but-dead session whose .sock file lingered
+			//     past the runner's exit; queryMeta times out. Pre-fix
+			//     these were skipped entirely; the new predicate lets
+			//     them fall through, so cleanup actually fires.
+			//
+			// The 10s ModTime threshold is generous for the first case
+			// (a runner takes milliseconds to listen) and irrelevant
+			// for the second (the file is hours / days old).
 			if info, serr := entry.Info(); serr == nil && time.Since(info.ModTime()) > 10*time.Second {
 				os.Remove(sockPath)
 			}
