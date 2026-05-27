@@ -12,7 +12,7 @@ import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
 import {
   folders, selectedId, currentProjectKey,
-  activityMap, unmatchedActiveCount, projects, connState,
+  activityMap, projects, connState,
   updateProjects, reorderSessions,
   peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState,
   type DotState,
@@ -297,23 +297,18 @@ export function Sidebar({
   onManageProjects,
   open,
   onClose,
-  notifPermission,
-  onRequestNotifPermission,
 }: {
   resumingId: string | null
   onCloseSession: (session: Session) => void
   onManageProjects: () => void
   open: boolean
   onClose: () => void
-  notifPermission: NotifPermission
-  onRequestNotifPermission: () => void
 }) {
   // Read signals; component re-renders only when these values change.
   const foldersVal = folders.value
   const projectsVal = projects.value
   const selId = selectedId.value
   const curKey = currentProjectKey.value
-  const unmatchedCount = unmatchedActiveCount.value
   const am = activityMap.value
   const peerStatus = peerStatusByName.value
 
@@ -374,24 +369,6 @@ export function Sidebar({
               <button class="sidebar-hint-link" onClick={onManageProjects}>
                 Add a project
               </button> to organize sessions by repo.
-            </div>
-          )}
-        </div>
-        <div class="sidebar-footer">
-          <button class="manage-projects-btn" onClick={onManageProjects}>
-            + Add project
-            {unmatchedCount > 0 && (
-              <span class="manage-projects-badge">{unmatchedCount}</span>
-            )}
-          </button>
-          {notifPermission === 'default' && (
-            <button class="notif-btn" onClick={onRequestNotifPermission}>
-              <IconBell /> Enable notifications
-            </button>
-          )}
-          {notifPermission === 'denied' && (
-            <div class="notif-denied">
-              <IconBell muted /> Notifications blocked in browser settings
             </div>
           )}
         </div>

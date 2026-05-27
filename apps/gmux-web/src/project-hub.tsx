@@ -93,7 +93,10 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
   return (
     <div class="page">
       <header class="hub-header">
-        <div class="hub-eyebrow">Project</div>
+        <a class="hub-back" href="/" aria-label="Back to home">
+          <span class="hub-back-arrow" aria-hidden="true">←</span>
+          Home
+        </a>
         <div class="hub-title-row">
           <h2 class="hub-title">
             {projectSlug}

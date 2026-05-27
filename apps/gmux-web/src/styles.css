@@ -724,48 +724,12 @@ body {
   color: var(--text-primary);
 }
 
-/* ── Sidebar footer ── */
-.sidebar-footer {
-  flex-shrink: 0;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
-}
-
-.manage-projects-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 10px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 13px;
-  font-family: 'Source Sans 3', sans-serif;
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-}
-
-.manage-projects-btn:hover {
-  color: var(--text-secondary);
-  background: var(--bg-hover);
-}
-
-.manage-projects-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: var(--accent);
-  color: var(--bg);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
+/* ── Notification prompt (home dashboard) ── */
+.home-notif {
+  /* Sits between the projects list and the footer as a low-priority
+   * opt-in. Width comes from the shared `.page > *` rule so the
+   * prompt aligns with the other home content blocks. */
+  margin: 16px 0 8px;
 }
 
 .notif-btn {
@@ -773,7 +737,6 @@ body {
   align-items: center;
   gap: 7px;
   width: 100%;
-  margin-top: 6px;
   padding: 6px 10px;
   border: 1px dashed var(--border);
   border-radius: 6px;
@@ -795,7 +758,6 @@ body {
   display: flex;
   align-items: center;
   gap: 7px;
-  margin-top: 6px;
   padding: 5px 10px;
   color: var(--text-muted);
   font-size: 12px;
@@ -1969,7 +1931,6 @@ body {
     border-bottom: none;
   }
   .sidebar-scroll { order: 1; }
-  .sidebar-footer { order: 2; }
 }
 
 /* ── Session Detail (non-terminal) ── */
@@ -2211,16 +2172,31 @@ body {
 .hub-header {
   margin-bottom: 20px;
 }
-.hub-eyebrow {
-  /* Small uppercase kicker above the project slug. Mirrors the
-   * idiom used by section labels (RECENT / RUNNING / PROJECTS) so
-   * the page reads in a single visual language. */
+.hub-back {
+  /* Back link in the eyebrow slot above the project title. Sized
+   * like the old uppercase kicker so the header rhythm is
+   * preserved; styled as a link so it reads as actionable. */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-muted);
+  text-decoration: none;
   margin-bottom: 4px;
+  transition: color 0.12s;
+}
+.hub-back:hover,
+.hub-back:focus-visible {
+  color: var(--text);
+}
+.hub-back-arrow {
+  /* Arrow glyph aligned tight to the label; slightly larger than
+   * the uppercase text so it reads as a chevron, not punctuation. */
+  font-size: 13px;
+  line-height: 1;
 }
 .hub-title-row {
   display: flex;

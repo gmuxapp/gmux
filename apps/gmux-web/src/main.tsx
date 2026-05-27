@@ -471,8 +471,6 @@ function App() {
         onManageProjects={() => { setSidebarOpen(false); setManageProjectsOpen(true) }}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        notifPermission={notifPermission}
-        onRequestNotifPermission={requestNotifPermission}
       />
 
       <ManageProjectsModal
@@ -535,7 +533,11 @@ function App() {
             <div class="state-subtitle">Connecting…</div>
           </div>
         ) : (
-          <Home onManageProjects={() => setManageProjectsOpen(true)} />
+          <Home
+            onManageProjects={() => setManageProjectsOpen(true)}
+            notifPermission={notifPermission}
+            onRequestNotifPermission={requestNotifPermission}
+          />
         )}
 
         <MobileTerminalBar
