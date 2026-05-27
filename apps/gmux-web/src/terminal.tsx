@@ -54,6 +54,12 @@ const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('
 // is ready by the time the first component mounts.
 const ghosttyInitPromise: Promise<void> = initGhostty()
 
+// Per-session prefetch cache. Avoids re-downloading (up to 20 MB) and
+// re-processing (O(n²) over thousands of blocks) on every tab switch.
+// Key: session ID.  Value: extracted bytes to inject, or null if empty.
+// Populated on first load; cleared on page reload only.
+const _prefetchCache = new Map<string, Uint8Array | null>()
+
 /**
  * Re-export for backward compat (used by input-diagnostics.tsx).
  * The actual colors now live in config.ts as DEFAULT_THEME_COLORS.
@@ -937,36 +943,64 @@ export function TerminalView({
       const prefetchBarrier = new Promise<void>(resolve => { prefetchResolve = resolve })
 
       const prefetchSessionId = session.id
-      fetchScrollback(prefetchSessionId).then((result) => {
-        if (disposed.current || currentSessionId.current !== prefetchSessionId) {
-          prefetchResolve()
-          return
+      const _injectPrefetch = (stripped: Uint8Array, fromCache: boolean) => {
+        emitSyncDiag({
+          prefetchBytes: stripped.length,
+          prefetchExtractedBytes: stripped.length,
+          prefetchBlockCount: fromCache ? 0 : countBSUBlocks(stripped),
+        })
+        if (stripped.length > 0) {
+          queueData(stripped)
+          const rows = termRef.current?.rows ?? 24
+          queueData(new TextEncoder().encode('\r\n'.repeat(rows)))
         }
-        if (result.kind === 'bytes') {
-          const stripped = extractScrollbackContent(result.bytes)
-          emitSyncDiag({
-            prefetchBytes: result.bytes.length,
-            prefetchExtractedBytes: stripped.length,
-            prefetchBlockCount: countBSUBlocks(result.bytes),
-          })
-          if (stripped.length > 0) {
-            // Use the same queue live data uses, so writes serialize
-            // correctly with the BSU/ESU snapshot that arrives on WS open.
-            queueData(stripped)
-            // Push the prefetch content past the visible region into
-            // scrollback. The WS snapshot's reset (\x1b[2J) clears the
-            // visible rows in place; without this padding, the most
-            // recent ~rows of prefetch content would be erased before
-            // the visible-screen render lands. A run of CRLFs ensures
-            // the bottom of the prefetch sits in scrollback by the
-            // time the snapshot's clear-screen fires.
-            const rows = termRef.current?.rows ?? 24
-            const padding = '\r\n'.repeat(rows)
-            queueData(new TextEncoder().encode(padding))
-          }
-        }
+      }
+
+      // Cache check: avoid re-downloading (up to 20 MB) and re-processing on
+      // every tab switch. Cache misses fall through to the full fetch path.
+      const _cached = _prefetchCache.get(prefetchSessionId)
+      if (_cached !== undefined) {
+        // Cache hit — immediate resolve, no network round-trip.
+        if (_cached !== null) _injectPrefetch(_cached, true)
         prefetchResolve()
-      }).catch(() => prefetchResolve())
+      } else {
+        fetchScrollback(prefetchSessionId).then((result) => {
+          if (disposed.current || currentSessionId.current !== prefetchSessionId) {
+            prefetchResolve()
+            return
+          }
+          if (result.kind === 'bytes') {
+            const stripped = extractScrollbackContent(result.bytes)
+            emitSyncDiag({
+              prefetchBytes: result.bytes.length,
+              prefetchExtractedBytes: stripped.length,
+              prefetchBlockCount: countBSUBlocks(result.bytes),
+            })
+            const toCache = stripped.length > 0 ? stripped : null
+            _prefetchCache.set(prefetchSessionId, toCache)
+            if (stripped.length > 0) {
+              // Use the same queue live data uses, so writes serialize
+              // correctly with the BSU/ESU snapshot that arrives on WS open.
+              queueData(stripped)
+              // Push the prefetch content past the visible region into
+              // scrollback. The WS snapshot's reset (\x1b[2J) clears the
+              // visible rows in place; without this padding, the most
+              // recent ~rows of prefetch content would be erased before
+              // the visible-screen render lands. A run of CRLFs ensures
+              // the bottom of the prefetch sits in scrollback by the
+              // time the snapshot's clear-screen fires.
+              const rows = termRef.current?.rows ?? 24
+              const padding = '\r\n'.repeat(rows)
+              queueData(new TextEncoder().encode(padding))
+            }
+          } else if (result.kind === 'empty' || result.kind === 'not-found') {
+            // Definitive empty — cache the negative so we skip on next visit.
+            _prefetchCache.set(prefetchSessionId, null)
+          }
+          // error: don't cache so next visit retries
+          prefetchResolve()
+        }).catch(() => prefetchResolve())
+      }
 
       // Open the WS immediately — don't wait for the prefetch to finish.
       openWs(true, prefetchBarrier)

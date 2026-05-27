@@ -116,6 +116,17 @@ export function extractScrollbackContent(input: Uint8Array): Uint8Array {
     i = esuPos + ESU.length
   }
 
+  // Cap the number of blocks to prevent O(n²) processing on long sessions.
+  // 21k+ blocks (one per pi turn) × O(rows²) comparison = 30s+ hang.
+  // Strategy: keep the first block (oldest visible state) + the last
+  // MAX_BLOCKS-1 blocks (most recent history). The first block gives us
+  // the oldest content that was on-screen at session start; the trailing
+  // window gives continuous coverage of the most recent turns.
+  const MAX_BLOCKS = 500
+  if (blocks.length > MAX_BLOCKS) {
+    blocks.splice(1, blocks.length - MAX_BLOCKS)
+  }
+
   // No full-render block found — fall back to stripping everything.
   if (blocks.length === 0) return stripSyncBlocks(input)
 
