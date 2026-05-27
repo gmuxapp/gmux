@@ -75,63 +75,163 @@ function matchesAt(data: Uint8Array, pos: number, seq: Uint8Array): boolean {
  * Extract the best scrollback content from a byte stream.
  *
  * Rather than discarding all BSU…ESU blocks (as stripSyncBlocks does),
- * this finds the LAST "full-render" block — one that contains CSI_3J
- * (\x1b[3J]) inside it. Pi emits a full render on every turn: BSU +
- * \x1b[2J\x1b[H\x1b[3J + all conversation lines + ESU. The content
- * after the \x1b[3J is the complete conversation as rendered at that
- * snapshot — user prompts, agent responses, tool output, all formatted.
+ * this accumulates conversation history across ALL "full-render" blocks.
  *
- * Strategy:
- *   1. Find the LAST full-render block (last BSU/ESU containing CSI_3J).
- *   2. Extract its content (everything from after CSI_3J to before ESU).
- *   3. Append raw bytes that follow the block, with any later differential
- *      BSU/ESU blocks stripped via stripSyncBlocks.
- *   4. Fall back to stripSyncBlocks if no full-render block exists.
+ * Pi's TUI re-renders on every turn: BSU + \x1b[2J\x1b[H\x1b[3J + the current
+ * terminal viewport + ESU. The viewport is fixed-height (terminal rows), so
+ * each block shows only the most recent N turns that fit on screen. Early
+ * conversation turns scroll off the top as the session grows.
  *
- * This gives the complete conversation at the most recent snapshot, plus
- * any tool output that streamed after it, without duplicating earlier turns
- * or risking cursor-movement artifacts from differential-render blocks.
+ * Strategy (multi-block):
+ *   1. Collect ALL full-render blocks (BSU/ESU containing \x1b[3J]) in order.
+ *   2. Output the first block's content in full (earliest visible conversation).
+ *   3. For each subsequent block, find where it diverges from the previous block
+ *      (the "anchor": the last few meaningful lines of the previous block that
+ *      still appear in the current block) and output only the NEW lines after
+ *      the anchor. This deduplicates the overlapping conversation content.
+ *   4. Append raw bytes after the last block (stripped of further BSU/ESU).
+ *   5. Fall back to stripSyncBlocks if no full-render block exists.
+ *   6. Single-block path: unchanged from Option B (last-block-only behaviour).
+ *
+ * Result: complete conversation history across the full session, not just the
+ * current viewport, allowing the user to scroll to the very start.
  */
 export function extractScrollbackContent(input: Uint8Array): Uint8Array {
   // Fast path: no BSU at all → nothing to extract.
   if (!containsSequence(input, BSU)) return input
 
-  // Scan all BSU/ESU blocks and track the last one containing CSI_3J.
-  let lastContentStart = -1   // index right after CSI_3J in the last full-render block
-  let lastBlockEnd = -1        // index right after ESU of the last full-render block
+  // Collect all full-render blocks (BSU/ESU blocks that contain CSI_3J).
+  type Block = { contentStart: number; blockEnd: number }
+  const blocks: Block[] = []
   let i = 0
   while (i < input.length) {
     const bsuPos = indexOf(input, BSU, i)
     if (bsuPos < 0) break
-
     const esuPos = indexOf(input, ESU, bsuPos + BSU.length)
     if (esuPos < 0) break
-
-    // Is CSI_3J present between BSU and ESU?
     const csi3jPos = indexOf(input, CSI_3J, bsuPos + BSU.length)
     if (csi3jPos >= 0 && csi3jPos < esuPos) {
-      lastContentStart = csi3jPos + CSI_3J.length
-      lastBlockEnd = esuPos + ESU.length
+      blocks.push({ contentStart: csi3jPos + CSI_3J.length, blockEnd: esuPos + ESU.length })
     }
-
     i = esuPos + ESU.length
   }
 
   // No full-render block found — fall back to stripping everything.
-  if (lastContentStart < 0) return stripSyncBlocks(input)
+  if (blocks.length === 0) return stripSyncBlocks(input)
 
-  // Content of the last full render: lines from after CSI_3J to before ESU.
-  const fullRenderContent = input.subarray(lastContentStart, lastBlockEnd - ESU.length)
+  const getContent = (b: Block): Uint8Array =>
+    input.subarray(b.contentStart, b.blockEnd - ESU.length)
 
-  // Bytes after the last full-render block: keep raw bytes, strip any
-  // subsequent differential BSU/ESU blocks (they use relative cursor moves
-  // that are only valid in the live terminal context).
-  const afterBlock = input.subarray(lastBlockEnd)
-  const strippedAfter = stripSyncBlocks(afterBlock)
+  // Single block: original Option B — use last block, append stripped tail.
+  if (blocks.length === 1) {
+    const content = getContent(blocks[0])
+    const after = stripSyncBlocks(input.subarray(blocks[0].blockEnd))
+    return concatU8(content, after)
+  }
 
-  const out = new Uint8Array(fullRenderContent.length + strippedAfter.length)
-  out.set(fullRenderContent)
-  out.set(strippedAfter, fullRenderContent.length)
+  // Multiple blocks: accumulate new lines from each block via anchor matching.
+  const dec = new TextDecoder()
+  const enc = new TextEncoder()
+
+  const blockLines = (b: Block): string[] =>
+    dec.decode(getContent(b)).split(/\r?\n/)
+
+  /** Strip CSI sequences and null bytes for line comparison. */
+  const stripCSI = (s: string): string =>
+    s.replace(/\x1b\[[\d;]*[A-Za-z]/g, '').replace(/\0/g, '').trimEnd()
+
+  /**
+   * Find the cut point in currLines: the index of the first truly-new line,
+   * i.e. the first line that does not appear as carry-over from prevLines.
+   *
+   * Searches from the BOTTOM of prevLines (ignoring the trailing TAIL_SKIP
+   * status-bar lines that change every turn) for the deepest line that still
+   * appears in currLines. That line is the carry-over boundary; everything
+   * after it is new conversation content.
+   *
+   * Two consecutive lines (VERIFY_LEN=2) must match in both blocks to guard
+   * against false positives from repeated lines.
+   */
+  const findNewStart = (prevLines: string[], currLines: string[]): number => {
+    const TAIL_SKIP = 3   // pi status-bar lines at the bottom of every block
+    const VERIFY_LEN = 2  // verify this many subsequent lines for confidence
+
+    const prevConvEnd = Math.max(0, prevLines.length - TAIL_SKIP)
+    const prevStripped = prevLines.slice(0, prevConvEnd).map(stripCSI)
+    const currStripped = currLines.map(stripCSI)
+
+    // Build a position-list index of currLines for O(1) lookup.
+    const currIndex = new Map<string, number[]>()
+    for (let c = 0; c < currStripped.length; c++) {
+      const line = currStripped[c]
+      if (!line) continue
+      if (!currIndex.has(line)) currIndex.set(line, [])
+      currIndex.get(line)!.push(c)
+    }
+
+    // Scan prevConv from the BOTTOM upward. The first non-empty line we find
+    // in currLines (verified by the lines that follow it) marks the carry-over
+    // boundary. We use the LAST (rightmost) occurrence in currLines to maximise
+    // the cut point and output the fewest re-duplicated lines.
+    for (let p = prevConvEnd - 1; p >= 0; p--) {
+      const target = prevStripped[p]
+      if (!target) continue
+
+      const positions = currIndex.get(target)
+      if (!positions) continue
+
+      // Try each occurrence from rightmost to leftmost.
+      for (let k = positions.length - 1; k >= 0; k--) {
+        const c = positions[k]
+        let verified = true
+        for (let v = 1; v <= VERIFY_LEN; v++) {
+          const pi = p + v
+          const ci = c + v
+          // Reaching the end of prevConv (before status bar) is a valid boundary.
+          if (pi >= prevConvEnd || ci >= currStripped.length) break
+          if (prevStripped[pi] !== currStripped[ci]) { verified = false; break }
+        }
+        if (verified) return c + 1  // first new line is right after this
+      }
+    }
+
+    return 0  // no carry-over found — output entire current block
+  }
+
+  const parts: Uint8Array[] = []
+
+  // First block: output its full content (earliest visible conversation).
+  parts.push(getContent(blocks[0]))
+  let prevLines = blockLines(blocks[0])
+
+  for (let b = 1; b < blocks.length; b++) {
+    const currLines = blockLines(blocks[b])
+    const newStart = findNewStart(prevLines, currLines)
+
+    if (newStart < currLines.length) {
+      const newText = currLines.slice(newStart).join('\r\n')
+      if (newText.trim()) {
+        // Join to previous content with CRLF (standard terminal line ending).
+        parts.push(enc.encode('\r\n' + newText))
+      }
+    }
+
+    prevLines = currLines
+  }
+
+  // Append stripped raw bytes after the last block.
+  const lastBlock = blocks[blocks.length - 1]
+  const after = stripSyncBlocks(input.subarray(lastBlock.blockEnd))
+  if (after.length > 0) parts.push(after)
+
+  return concatU8(...parts)
+}
+
+function concatU8(...arrays: Uint8Array[]): Uint8Array {
+  const total = arrays.reduce((n, a) => n + a.length, 0)
+  const out = new Uint8Array(total)
+  let off = 0
+  for (const a of arrays) { out.set(a, off); off += a.length }
   return out
 }
 
