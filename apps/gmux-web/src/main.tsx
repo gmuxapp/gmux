@@ -17,6 +17,7 @@ import { Home } from './home'
 import { LaunchButton } from './launcher'
 import { MarkdownEditor } from './markdown-editor'
 import { ImageViewer } from './image-viewer'
+import { DiffPanel } from './diff-panel'
 import { installCopySession } from './mock-data/export-session'
 
 import {
@@ -601,7 +602,7 @@ function App() {
       />
 
       <div class="main-panel">
-        {viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && viewVal.kind !== 'markdown-editor' && viewVal.kind !== 'image-viewer' && (
+        {viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && viewVal.kind !== 'markdown-editor' && viewVal.kind !== 'image-viewer' && viewVal.kind !== 'diff-viewer' && (
           <MainHeader
             session={selectedVal}
             syncDiag={syncDiag}
@@ -638,6 +639,11 @@ function App() {
           <ImageViewer
             projectSlug={viewVal.projectSlug}
             filePath={viewVal.filePath}
+          />
+        ) : viewVal?.kind === 'diff-viewer' ? (
+          <DiffPanel
+            projectSlug={viewVal.projectSlug}
+            cwd={viewVal.cwd}
           />
         ) : null}
 

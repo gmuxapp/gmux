@@ -3007,3 +3007,77 @@ a.home-host-link:hover {
   border-radius: var(--radius);
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
 }
+
+/* ── Diff Panel ─────────────────────────────────────────────────────────── */
+.diff-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg, #1a1a1a);
+}
+.diff-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  height: 48px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+  background: var(--bg-secondary, #141414);
+}
+.diff-panel-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+.diff-panel-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #e0e0e0);
+  white-space: nowrap;
+}
+.diff-panel-cwd {
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-panel-close {
+  background: none;
+  border: none;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.diff-panel-close:hover {
+  background: var(--hover-bg, rgba(255,255,255,0.08));
+  color: var(--text, #e0e0e0);
+}
+.diff-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.diff-panel-state {
+  padding: 32px;
+  color: var(--text-muted, #888);
+  font-size: 13px;
+  text-align: center;
+}
+.diff-panel-error {
+  color: var(--status-error, #f87171);
+}
+.diff-files {
+  padding: 8px 0;
+}
+.diff-file-container {
+  margin-bottom: 16px;
+}

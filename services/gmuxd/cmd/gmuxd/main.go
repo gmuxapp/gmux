@@ -2135,6 +2135,34 @@ func serve(stderr io.Writer) int {
 		})
 	})
 
+	// GET /v1/git/{slug}/diff?cwd=<path> — return unified diff for a project workspace.
+	// cwd defaults to the project root; must be a subdirectory of the project root.
+	// Returns 200 text/plain with the raw unified diff (empty body = no changes or not a git repo).
+	mux.HandleFunc("GET /v1/git/{slug}/diff", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		root, err := resolveFSProjectRoot(slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		cwd := r.URL.Query().Get("cwd")
+		if cwd == "" {
+			cwd = root
+		}
+		// Canonicalise and validate that cwd is within the project root.
+		cwd = filepath.Clean(cwd)
+		cleanRoot := filepath.Clean(root)
+		if cwd != cleanRoot && !strings.HasPrefix(cwd, cleanRoot+string(filepath.Separator)) {
+			writeError(w, http.StatusBadRequest, "bad_request", "cwd is outside project root")
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		cmd := exec.Command("git", "-C", cwd, "diff", "HEAD")
+		out, _ := cmd.Output() // non-zero exit (no repo, no commits) → empty body
+		_, _ = w.Write(out)
+	})
+
 	// ── Embedded frontend (SPA fallback) ──
 
 	mux.Handle("/", spaHandler())

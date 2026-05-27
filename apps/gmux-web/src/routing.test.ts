@@ -404,3 +404,50 @@ describe('markdown-editor view', () => {
     expect(resolveViewFromPath('/unknown/_md/README.md', projects, [])).toEqual({ kind: 'home' })
   })
 })
+
+describe('diff-viewer view', () => {
+  const projects: ProjectItem[] = [
+    { slug: 'gmux', match: [{ path: '/home/user/gmux' }] },
+  ]
+
+  it('resolveViewFromPath returns diff-viewer for _diff URL', () => {
+    expect(resolveViewFromPath('/gmux/_diff/%2Fhome%2Fuser%2Fgmux', projects, [])).toEqual({
+      kind: 'diff-viewer', projectSlug: 'gmux', cwd: '/home/user/gmux',
+    })
+  })
+
+  it('resolveViewFromPath decodes URL-encoded slashes in cwd', () => {
+    expect(resolveViewFromPath('/gmux/_diff/%2Fhome%2Fuser%2Fgmux%2Fsrc', projects, [])).toEqual({
+      kind: 'diff-viewer', projectSlug: 'gmux', cwd: '/home/user/gmux/src',
+    })
+  })
+
+  it('viewToPath serialises diff-viewer view', () => {
+    expect(viewToPath({ kind: 'diff-viewer', projectSlug: 'gmux', cwd: '/home/user/gmux' }, projects, []))
+      .toBe('/gmux/_diff/%2Fhome%2Fuser%2Fgmux')
+  })
+
+  it('diff-viewer view round-trips', () => {
+    const view = { kind: 'diff-viewer' as const, projectSlug: 'gmux', cwd: '/home/user/gmux' }
+    const url = viewToPath(view, projects, [])
+    expect(resolveViewFromPath(url!, projects, [])).toEqual(view)
+  })
+
+  it('viewsEqual returns true for identical diff-viewer views', () => {
+    expect(viewsEqual(
+      { kind: 'diff-viewer', projectSlug: 'gmux', cwd: '/dev/gmux' },
+      { kind: 'diff-viewer', projectSlug: 'gmux', cwd: '/dev/gmux' },
+    )).toBe(true)
+  })
+
+  it('viewsEqual returns false for different cwd values', () => {
+    expect(viewsEqual(
+      { kind: 'diff-viewer', projectSlug: 'gmux', cwd: '/dev/gmux' },
+      { kind: 'diff-viewer', projectSlug: 'gmux', cwd: '/dev/gmux/src' },
+    )).toBe(false)
+  })
+
+  it('resolveViewFromPath falls back to home when project unknown', () => {
+    expect(resolveViewFromPath('/unknown/_diff/%2Fhome%2Fuser%2Fgmux', projects, [])).toEqual({ kind: 'home' })
+  })
+})

@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'preact/hooks'
-import { launchCommand } from './store'
+import { navigateToDiffView } from './store'
 
 // ── Types ──
 
@@ -73,17 +73,14 @@ export function GitStatus({
 
   const handleClick = (e: MouseEvent) => {
     e.stopPropagation()
-    void launchCommand(
-      ['sh', '-c', 'git diff HEAD | diff-so-fancy | less --tabs=4 -RFX'],
-      { cwd },
-    )
+    navigateToDiffView(projectSlug, cwd)
   }
 
   return (
     <button
       class="git-status-badge"
       onClick={handleClick}
-      title="Open diff (requires diff-so-fancy)"
+      title="Open diff"
     >
       <span class="git-status-files">{fmt.files}</span>
       {fmt.insertions && <span class="git-status-ins">{fmt.insertions}</span>}
