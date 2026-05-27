@@ -72,6 +72,7 @@ export function DiffPanel({ projectSlug, cwd }: DiffPanelProps) {
 
       const options: FileDiffOptions<undefined> = {
         theme: 'dark-plus',
+        diffStyle: 'unified',
         hunkSeparators: 'line-info',
       }
       const inst = new FileDiff(options)
