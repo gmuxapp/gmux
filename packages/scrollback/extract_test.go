@@ -66,13 +66,14 @@ func TestExtractBytesTwoBlocks(t *testing.T) {
 	}
 }
 
-// TestExtractBytesBlockCapPreservesFirstAndLast: when blocks exceed
-// MaxExtractBlocks, block[0] (oldest) is retained and so is the last
-// block, ensuring oldest state + recent history are both present.
-func TestExtractBytesBlockCapPreservesFirstAndLast(t *testing.T) {
-	// Build MaxExtractBlocks + 5 blocks.  Block 0 has unique content
-	// "FIRST"; block N has unique content "LAST".
-	n := MaxExtractBlocks + 5
+// TestExtractBytesAllBlocksProcessed: all blocks are processed — there is
+// no cap. The first and last blocks (and everything in between) must all
+// contribute their unique content to the output.
+func TestExtractBytesAllBlocksProcessed(t *testing.T) {
+	// Build 600 blocks (previously over the old cap of 500).
+	// Block 0 has unique content "FIRST"; last block has "LAST";
+	// an inner block has "INNER_600".
+	n := 600
 	var sb strings.Builder
 	for i := 0; i < n; i++ {
 		var label string
@@ -88,13 +89,15 @@ func TestExtractBytesBlockCapPreservesFirstAndLast(t *testing.T) {
 	}
 	got := string(ExtractBytes([]byte(sb.String())))
 
+	// All three unique labels must appear: no blocks were dropped.
 	if !strings.Contains(got, "FIRST") {
-		t.Errorf("block[0] content missing from capped output: %q", got[:min(200, len(got))])
+		t.Errorf("block[0] content missing: %q", got[:min(200, len(got))])
 	}
 	if !strings.Contains(got, "LAST") {
-		t.Errorf("last block content missing from capped output: %q", got[max(0, len(got)-200):])
+		t.Errorf("last block content missing: %q", got[max(0, len(got)-200):])
 	}
 }
+
 
 // TestStripSyncBlocksNoMarkers: passthrough when no BSU present.
 func TestStripSyncBlocksNoMarkers(t *testing.T) {

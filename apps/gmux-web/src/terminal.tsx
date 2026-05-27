@@ -6,10 +6,6 @@ import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { shouldFocusOnTouchEnd } from './terminal-touch'
 import { createReplayBuffer, type ReplayState, BSU } from './replay'
-// replay-strip is still used by the WS replay path (stripSyncBlocks) and
-// kept as a fallback; extractScrollbackContent is no longer called from the
-// prefetch path (server now handles extraction via ?extracted=1).
-import { stripSyncBlocks } from './replay-strip'  // eslint-disable-line @typescript-eslint/no-unused-vars
 import { fetchScrollback } from './replay-fetch'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 
@@ -32,11 +28,11 @@ export interface SyncDiag {
   wsState: 'connecting' | 'open' | 'lost'
   /** How many times the WS has reconnected (0 = first connect) */
   reconnects: number
-  /** Raw bytes fetched from GET /v1/sessions/<id>/scrollback */
+  /** Bytes received from GET /v1/sessions/<id>/scrollback?extracted=1 */
   prefetchBytes: number
-  /** Bytes after extractScrollbackContent deduplication */
+  /** Always equal to prefetchBytes — server extracts before sending */
   prefetchExtractedBytes: number
-  /** Number of BSU/ESU full-render blocks found in the prefetch */
+  /** Always 0 — server-side extraction; block count not tracked client-side */
   prefetchBlockCount: number
   /** Current lines in the ghostty-web scrollback buffer (live) */
   ghosttyScrollbackLines: number
@@ -105,22 +101,6 @@ export const TERM_THEME: ITheme = DEFAULT_THEME_COLORS
  * Cross-chunk sequences are NOT preserved — practically, pi always emits
  * them in a single chunk.
  */
-/**
- * Count the number of BSU (Begin Synchronized Update) marker occurrences in
- * a byte buffer. Each occurrence corresponds to one full-render block that
- * extractScrollbackContent processed (pi emits one per turn redraw).
- */
-function countBSUBlocks(data: Uint8Array): number {
-  let count = 0
-  for (let i = 0; i <= data.length - BSU.length; i++) {
-    let match = true
-    for (let j = 0; j < BSU.length; j++) {
-      if (data[i + j] !== BSU[j]) { match = false; break }
-    }
-    if (match) { count++; i += BSU.length - 1 }
-  }
-  return count
-}
 
 function interceptOsc52(data: Uint8Array): Uint8Array {
   const ESC = 0x1b

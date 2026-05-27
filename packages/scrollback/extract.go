@@ -14,30 +14,21 @@ var (
 	csiRe       = regexp.MustCompile(`\x1b\[[\d;]*[A-Za-z]`)
 )
 
-// MaxExtractBlocks is the number of full-render blocks ExtractBytes
-// will process. 21k+ blocks at O(rows²) each is the 30 s JS hang;
-// 500 bounds it to well under 1 s in Go while preserving the oldest
-// visible state (block 0) and the most recent ~500 turns of history.
-const MaxExtractBlocks = 500
 
-// ExtractBytes synthesises readable scrollback content from raw PTY
-// bytes. It is the Go equivalent of the TypeScript
-// extractScrollbackContent function and runs server-side so the
-// client only downloads the compact result (~500 KB) rather than the
-// full raw file (up to tens of MB).
+// ExtractBytes synthesises readable scrollback content from raw PTY bytes.
+// Runs server-side (Go) so the client downloads only the compact result
+// rather than the full raw file.
 //
 // Algorithm:
-//  1. Scan for BSU…ESU blocks that contain CSI 3J — these are pi's
-//     end-of-turn full-screen redraws (one per conversation turn).
-//  2. Cap to block[0] (oldest visible state) plus the last
-//     MaxExtractBlocks-1 consecutive blocks (most-recent history).
-//  3. For adjacent block pairs, find the "anchor" — the deepest line
-//     of the previous block still present at the top of the current
-//     block — and output only the new lines below it. This stitches
-//     consecutive viewport snapshots into a continuous conversation
-//     history without duplicates.
-//  4. Append any bytes after the last block (stripped of BSU/ESU).
-//  5. Fall back to StripSyncBlocks when no full-render block exists.
+//  1. Scan for BSU…ESU blocks that contain CSI 3J — pi's full-screen redraws
+//     (one per conversation turn). All blocks are processed; there is no
+//     cap. In Go the O(n×rows) pass over 20k+ blocks takes single-digit ms.
+//  2. For adjacent block pairs, find the "anchor" — the deepest line of the
+//     previous block still present at the top of the current block — and
+//     output only the new lines below it. This stitches consecutive viewport
+//     snapshots into a continuous conversation history without duplicates.
+//  3. Append any bytes after the last block (stripped of BSU/ESU).
+//  4. Fall back to StripSyncBlocks when no full-render block exists.
 func ExtractBytes(data []byte) []byte {
 	if !bytes.Contains(data, bsuMarker) {
 		return StripSyncBlocks(data)
@@ -78,12 +69,6 @@ func ExtractBytes(data []byte) []byte {
 		return StripSyncBlocks(data)
 	}
 
-	// Cap: keep block[0] + last MaxExtractBlocks-1.
-	if len(blocks) > MaxExtractBlocks {
-		first := blocks[0]
-		rest := blocks[len(blocks)-(MaxExtractBlocks-1):]
-		blocks = append([]blockSpan{first}, rest...)
-	}
 
 	getContent := func(b blockSpan) []byte {
 		return data[b.contentStart : b.blockEnd-len(esuMarker)]

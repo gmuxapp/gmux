@@ -1,0 +1,28 @@
+{
+  "files": {
+    "internal/config/config.go": {
+      "modifiedRanges": [
+        {
+          "start": 1,
+          "end": 431
+        }
+      ],
+      "importsChanged": true,
+      "lastEdit": "2026-05-17T10:10:37.842Z"
+    },
+    "cmd/gmuxd/main.go": {
+      "modifiedRanges": [
+        {
+          "start": 1,
+          "end": 2619
+        }
+      ],
+      "importsChanged": true,
+      "lastEdit": "2026-05-17T10:10:36.410Z"
+    }
+  },
+  "turnCycles": 0,
+  "maxCycles": 3,
+  "lastUpdated": "2026-05-17T10:10:37.845Z",
+  "sessionId": "lens-mp9m08bu-387adba5"
+}
