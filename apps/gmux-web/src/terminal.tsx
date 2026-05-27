@@ -846,32 +846,26 @@ export function TerminalView({
       emitSyncDiag({ syncPhase: 'waiting', wsState: 'connecting' })
 
       const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-      // Prefetch the on-disk scrollback before opening the WS so the
-      // host terminal's scrollback is populated with the full session
-      // history. The WS is opened with ?no_erase=1 so gmuxd's snapshot
-      // does NOT include \x1b[3J (which would wipe what we just
-      // wrote). This mirrors cli/gmux/cmd/gmux/attach.go's pattern
-      // for the local TTY attach. See ADR 0003 + the
-      // task at tasks/james-gmux/2026-05-26-pi-scrollback-to-start.md.
+      // Prefetch the on-disk scrollback in parallel with opening the WS so the
+      // socket connects immediately instead of waiting for the full file download.
       //
-      // Bytes from the disk file are filtered through extractScrollbackContent
-      // (Option B). For pi sessions it finds the last full-render BSU/ESU block
-      // — which contains the complete formatted conversation — and uses that as
-      // the scrollback base, appending any raw bytes that streamed after it.
-      // For non-pi sessions (or sessions with no full-render block) it falls
-      // back to stripSyncBlocks, which keeps only the bytes outside BSU/ESU
-      // (tool stdout, etc.).
+      // Strategy:
+      //   1. Clear the previous session's buffer immediately (hidden by termLoading
+      //      overlay) so the fresh epoch starts clean.
+      //   2. Start the prefetch HTTP fetch.
+      //   3. Open the WS right away with ?no_erase=1 — gmuxd will send only the
+      //      visible screen without \x1b[3J, preserving whatever we write into
+      //      scrollback from the prefetch.
+      //   4. In wireWs: buffer the BSU/ESU replay block and any live messages that
+      //      arrive before the prefetch settles; when it does, write in order:
+      //      prefetch bytes → WS snapshot → live output.
       //
-      // Reconnects after WS drop don't re-prefetch: the host
-      // terminal's scrollback already holds the history.
-      //
-      // Best-effort: skip on 404 / empty / network error. The WS
-      // snapshot still arrives and the user sees the current screen.
-      const openWs = (noErase: boolean) => {
+      // Reconnects skip the prefetch — scrollback is already in the host buffer.
+      const openWs = (noErase: boolean, prefetchBarrier?: Promise<void>) => {
         if (disposed.current || currentSessionId.current !== session.id) return
         const url = `${wsProtocol}//${location.host}/ws/${session.id}` + (noErase ? '?no_erase=1' : '')
         const ws = new WebSocket(url)
-        wireWs(ws)
+        wireWs(ws, prefetchBarrier)
       }
 
       if (!isFirstConnect) {
@@ -884,10 +878,23 @@ export function TerminalView({
         return
       }
 
+      // Clear the old session's buffer immediately (termLoading overlay hides the
+      // flash). We always use no_erase=1 for first connects since we handle the
+      // erase ourselves; this lets gmuxd skip \x1b[3J so the prefetch bytes we
+      // write in parallel remain in scrollback.
+      queueData(new TextEncoder().encode('\x1b[3J\x1b[2J\x1b[H'))
+
+      // Barrier promise: resolves once the prefetch has either written its bytes
+      // or determined it has nothing to write (empty / not-found / error).
+      let prefetchResolve!: () => void
+      const prefetchBarrier = new Promise<void>(resolve => { prefetchResolve = resolve })
+
       const prefetchSessionId = session.id
       fetchScrollback(prefetchSessionId).then((result) => {
-        if (disposed.current || currentSessionId.current !== prefetchSessionId) return
-        let prefetchWrote = false
+        if (disposed.current || currentSessionId.current !== prefetchSessionId) {
+          prefetchResolve()
+          return
+        }
         if (result.kind === 'bytes') {
           const stripped = extractScrollbackContent(result.bytes)
           if (stripped.length > 0) {
@@ -904,26 +911,19 @@ export function TerminalView({
             const rows = termRef.current?.rows ?? 24
             const padding = '\r\n'.repeat(rows)
             queueData(new TextEncoder().encode(padding))
-            prefetchWrote = true
           }
         }
-        // no_erase=1 is requested only when we actually wrote
-        // prefetch bytes; otherwise the snapshot's \x1b[3J reset is
-        // useful (clears any pre-existing buffer state on this
-        // ghostty-web instance, matching prior behavior). Sessions
-        // with no on-disk scrollback (fresh sessions, ones that
-        // pre-date persistence) keep the original semantics.
-        return prefetchWrote
-      }).catch(() => false /* network failure: fall back to WS-only */)
-      .then((prefetchWrote) => {
-        openWs(!!prefetchWrote)
-      })
+        prefetchResolve()
+      }).catch(() => prefetchResolve())
+
+      // Open the WS immediately — don't wait for the prefetch to finish.
+      openWs(true, prefetchBarrier)
     }
 
     // wireWs attaches the message/error/close handlers to a freshly
     // opened WebSocket. Extracted so the prefetch path and the
     // reconnect path share the same wiring without duplicating it.
-    function wireWs(ws: WebSocket) {
+    function wireWs(ws: WebSocket, prefetchBarrier?: Promise<void>) {
       ws.binaryType = 'arraybuffer'
       wsRef.current = ws
 
@@ -932,21 +932,49 @@ export function TerminalView({
       let replaySyncBytes = 0
       let replaySyncMsgs = 0
 
+      // Gate the replay-block callback and live messages on the prefetch so
+      // write order is always: prefetch bytes → WS snapshot → live output.
+      // Messages that race the barrier are buffered and flushed in one go.
+      let prefetchSettled = !prefetchBarrier
+      let pendingReplayWrite: (() => void) | null = null
+      const pendingLive: Uint8Array[] = []
+
+      if (prefetchBarrier) {
+        prefetchBarrier.then(() => {
+          prefetchSettled = true
+          // Write the replay block first (if it already arrived), then live.
+          if (pendingReplayWrite) { pendingReplayWrite(); pendingReplayWrite = null }
+          for (const chunk of pendingLive) {
+            queueData(chunk, () => setTermLoading(false))
+          }
+          pendingLive.length = 0
+        })
+      }
+
       const replay = createReplayBuffer((chunks) => {
         // Strip OSC 52 from replayed bytes (suppress clipboard writes from
         // original session replay — same rationale as the old
         // term.parser.registerOscHandler(52, () => true) in replay-view.tsx)
-        const filtered = chunks.map(interceptOsc52)
-        queueMany(filtered, () => {
-          // Restore saved scroll position (from a previous visit to this session)
-          // before removing the loading overlay — the overlay hides the jump.
-          if (savedGvY > 0 && termRef.current) {
-            termRef.current.scrollToLine(savedGvY)
-          }
-          setTermLoading(false)
-          emitSyncDiag({ pendingWrite: false })
-        })
-        emitSyncDiag({ syncEndedAt: Date.now(), pendingWrite: true })
+        const doWrite = () => {
+          const filtered = chunks.map(interceptOsc52)
+          queueMany(filtered, () => {
+            // Restore saved scroll position (from a previous visit to this session)
+            // before removing the loading overlay — the overlay hides the jump.
+            if (savedGvY > 0 && termRef.current) {
+              termRef.current.scrollToLine(savedGvY)
+            }
+            setTermLoading(false)
+            emitSyncDiag({ pendingWrite: false })
+          })
+          emitSyncDiag({ syncEndedAt: Date.now(), pendingWrite: true })
+        }
+        if (prefetchSettled) {
+          doWrite()
+        } else {
+          // Prefetch still in flight — defer the write; the barrier's .then()
+          // handler will invoke it once prefetch bytes are queued.
+          pendingReplayWrite = doWrite
+        }
       })
 
       ws.onopen = () => {
@@ -1029,7 +1057,11 @@ export function TerminalView({
             }
             return
           }
-          queueData(data, () => setTermLoading(false))
+          if (prefetchSettled) {
+            queueData(data, () => setTermLoading(false))
+          } else {
+            pendingLive.push(data)
+          }
           return
         }
 
@@ -1061,7 +1093,11 @@ export function TerminalView({
           return
         }
 
-        queueData(data, () => setTermLoading(false))
+        if (prefetchSettled) {
+          queueData(data, () => setTermLoading(false))
+        } else {
+          pendingLive.push(data)
+        }
       }
 
       ws.onclose = () => {
