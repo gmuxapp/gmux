@@ -83,7 +83,7 @@ function MainHeader({ session, onRestart, syncDiag }: {
             {session.status.label}
           </div>
         )}
-        <SessionMenu session={session} onRestart={onRestart} />
+        <SessionMenu session={session} onRestart={onRestart} syncDiag={syncDiag} />
       </div>
     </div>
   )
@@ -147,10 +147,15 @@ function SyncDiagBadge({ diag }: { diag: SyncDiag }) {
     </div>
   )
 }
+function fmtNum(n: number): string {
+  return n.toLocaleString()
+}
 
-function SessionMenu({ session, onRestart }: {
+
+function SessionMenu({ session, onRestart, syncDiag }: {
   session: Session
   onRestart?: () => void
+  syncDiag?: SyncDiag | null
 }) {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -231,6 +236,29 @@ function SessionMenu({ session, onRestart }: {
               <span class="session-menu-label">Host</span>
               <span class="session-menu-value">{session.peer}</span>
             </div>
+          )}
+          {syncDiag && (syncDiag.prefetchBytes > 0 || syncDiag.ghosttyScrollbackLines > 0) && (
+            <>
+              <div class="session-menu-divider" />
+              <div class="session-menu-section-title">Scrollback</div>
+              {syncDiag.prefetchBytes > 0 && (
+                <div class="session-menu-row">
+                  <span class="session-menu-label">On disk</span>
+                  <span class="session-menu-value">
+                    {fmtBytes(syncDiag.prefetchBytes)}
+                    {' → '}
+                    {fmtBytes(syncDiag.prefetchExtractedBytes)}
+                    {syncDiag.prefetchBlockCount > 0 && ` (${syncDiag.prefetchBlockCount} blocks)`}
+                  </span>
+                </div>
+              )}
+              <div class="session-menu-row">
+                <span class="session-menu-label">Buffer</span>
+                <span class={`session-menu-value${syncDiag.ghosttyScrollbackLines >= syncDiag.ghosttyScrollbackLimit * 0.95 ? ' stale' : ''}`}>
+                  {fmtNum(syncDiag.ghosttyScrollbackLines)} / {fmtNum(syncDiag.ghosttyScrollbackLimit)} lines
+                </span>
+              </div>
+            </>
           )}
         </div>
       )}

@@ -5,7 +5,7 @@ import { attachKeyboardHandler, attachPasteHandler, ctrlSequenceFor, defaultPast
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { shouldFocusOnTouchEnd } from './terminal-touch'
-import { createReplayBuffer, type ReplayState } from './replay'
+import { createReplayBuffer, type ReplayState, BSU } from './replay'
 import { stripSyncBlocks, extractScrollbackContent } from './replay-strip'
 import { fetchScrollback } from './replay-fetch'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
@@ -29,6 +29,16 @@ export interface SyncDiag {
   wsState: 'connecting' | 'open' | 'lost'
   /** How many times the WS has reconnected (0 = first connect) */
   reconnects: number
+  /** Raw bytes fetched from GET /v1/sessions/<id>/scrollback */
+  prefetchBytes: number
+  /** Bytes after extractScrollbackContent deduplication */
+  prefetchExtractedBytes: number
+  /** Number of BSU/ESU full-render blocks found in the prefetch */
+  prefetchBlockCount: number
+  /** Current lines in the ghostty-web scrollback buffer (live) */
+  ghosttyScrollbackLines: number
+  /** Configured ghostty-web scrollback line limit */
+  ghosttyScrollbackLimit: number
 }
 import { decideViewportResize, sameSize } from './terminal-resize'
 import { MOCK_BY_ID } from './mock-data/index'
@@ -86,6 +96,23 @@ export const TERM_THEME: ITheme = DEFAULT_THEME_COLORS
  * Cross-chunk sequences are NOT preserved — practically, pi always emits
  * them in a single chunk.
  */
+/**
+ * Count the number of BSU (Begin Synchronized Update) marker occurrences in
+ * a byte buffer. Each occurrence corresponds to one full-render block that
+ * extractScrollbackContent processed (pi emits one per turn redraw).
+ */
+function countBSUBlocks(data: Uint8Array): number {
+  let count = 0
+  for (let i = 0; i <= data.length - BSU.length; i++) {
+    let match = true
+    for (let j = 0; j < BSU.length; j++) {
+      if (data[i + j] !== BSU[j]) { match = false; break }
+    }
+    if (match) { count++; i += BSU.length - 1 }
+  }
+  return count
+}
+
 function interceptOsc52(data: Uint8Array): Uint8Array {
   const ESC = 0x1b
   const BRACKET = 0x5d // ]
@@ -327,6 +354,11 @@ export function TerminalView({
     pendingWrite: false,
     wsState: 'connecting',
     reconnects: 0,
+    prefetchBytes: 0,
+    prefetchExtractedBytes: 0,
+    prefetchBlockCount: 0,
+    ghosttyScrollbackLines: 0,
+    ghosttyScrollbackLimit: terminalOptions.scrollback,
   })
   const reconnectCountRef = useRef(0)
   const emitSyncDiag = useCallback((patch: Partial<SyncDiag>) => {
@@ -540,6 +572,12 @@ export function TerminalView({
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
       termIoRef.current?.enqueue(bytes, termEpochRef.current)
     }
+    ;(window as any).__gmuxDiag = () => ({
+      ...syncDiagRef.current,
+      // Re-read ghosttyScrollbackLines live so the value is always current,
+      // even if no scroll event has fired recently.
+      ghosttyScrollbackLines: term.getScrollbackLength(),
+    })
 
     const sendRawInput = (data: string) => {
       const ws = wsRef.current
@@ -590,6 +628,9 @@ export function TerminalView({
       // only when that distance exceeds the threshold.
       const gvY = Math.floor(term.getViewportY())
       setScrolledUp(gvY > SCROLL_THRESHOLD)
+      // Snapshot the live scrollback length so the diag panel stays current
+      // without needing a dedicated poll loop.
+      emitSyncDiag({ ghosttyScrollbackLines: term.getScrollbackLength() })
     })
 
     const handleGlobalKeydown = (ev: KeyboardEvent) => {
@@ -793,6 +834,7 @@ export function TerminalView({
       onFocusReady?.(null)
       if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
       ;(window as any).__gmuxInject = null
+      ;(window as any).__gmuxDiag = null
       term.dispose()
       termRef.current = null
       fitAddonRef.current = null
@@ -830,6 +872,11 @@ export function TerminalView({
       pendingWrite: false,
       wsState: 'connecting',
       reconnects: 0,
+      prefetchBytes: 0,
+      prefetchExtractedBytes: 0,
+      prefetchBlockCount: 0,
+      ghosttyScrollbackLines: 0,
+      ghosttyScrollbackLimit: terminalOptions.scrollback,
     })
 
     setTermLoading(true)
@@ -897,6 +944,11 @@ export function TerminalView({
         }
         if (result.kind === 'bytes') {
           const stripped = extractScrollbackContent(result.bytes)
+          emitSyncDiag({
+            prefetchBytes: result.bytes.length,
+            prefetchExtractedBytes: stripped.length,
+            prefetchBlockCount: countBSUBlocks(result.bytes),
+          })
           if (stripped.length > 0) {
             // Use the same queue live data uses, so writes serialize
             // correctly with the BSU/ESU snapshot that arrives on WS open.
@@ -964,7 +1016,10 @@ export function TerminalView({
               termRef.current.scrollToLine(savedGvY)
             }
             setTermLoading(false)
-            emitSyncDiag({ pendingWrite: false })
+            emitSyncDiag({
+              pendingWrite: false,
+              ghosttyScrollbackLines: termRef.current?.getScrollbackLength() ?? syncDiagRef.current.ghosttyScrollbackLines,
+            })
           })
           emitSyncDiag({ syncEndedAt: Date.now(), pendingWrite: true })
         }
