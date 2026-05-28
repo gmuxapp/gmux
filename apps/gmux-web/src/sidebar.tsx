@@ -43,7 +43,7 @@ export function sessionEnvironmentIcon(kind: string): string {
 }
 
 /** Determine the dot indicator state for a session. */
-function sessionDotState(session: Session, am: ReadonlyMap<string, 'active' | 'fading'>): DotState {
+export function sessionDotState(session: Session, am: ReadonlyMap<string, 'active' | 'fading'>): DotState {
   if (session.alive && session.status?.error)   return 'error'
   if (session.alive && session.status?.working) return 'working'
   if (session.unread) return 'unread'
@@ -375,10 +375,10 @@ const SPLIT_MIN = 0.12
 const SPLIT_MAX = 0.80
 const SPLIT_DEFAULT = 0.30
 
-const LAYOUT_KEY = 'gmux:sessionListLayout'
-type SessionListLayout = 'vertical' | 'horizontal'
+export const LAYOUT_KEY = 'gmux:sessionListLayout'
+export type SessionListLayout = 'vertical' | 'horizontal'
 
-function loadLayout(): SessionListLayout {
+export function loadLayout(): SessionListLayout {
   try {
     const v = localStorage.getItem(LAYOUT_KEY)
     if (v === 'vertical' || v === 'horizontal') return v
@@ -413,6 +413,8 @@ export function Sidebar({
   onClose,
   notifPermission,
   onRequestNotifPermission,
+  layout,
+  onToggleLayout,
 }: {
   resumingId: string | null
   onCloseSession: (session: Session) => void
@@ -421,6 +423,8 @@ export function Sidebar({
   onClose: () => void
   notifPermission: NotifPermission
   onRequestNotifPermission: () => void
+  layout: SessionListLayout
+  onToggleLayout: () => void
 }) {
   // Read signals; component re-renders only when these values change.
   const foldersVal = folders.value
@@ -471,16 +475,6 @@ export function Sidebar({
   const [splitFraction, setSplitFraction] = useState<number>(loadSplit)
   const panesRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState(false)
-
-  // ── Session list layout toggle ─────────────────────────────────────────
-  const [layout, setLayout] = useState<SessionListLayout>(loadLayout)
-  const toggleLayout = useCallback(() => {
-    setLayout(prev => {
-      const next: SessionListLayout = prev === 'vertical' ? 'horizontal' : 'vertical'
-      try { localStorage.setItem(LAYOUT_KEY, next) } catch { /* ignore */ }
-      return next
-    })
-  }, [])
   const handleDividerMouseDown = useCallback((e: MouseEvent) => {
     e.preventDefault()
     const panes = panesRef.current
@@ -508,7 +502,7 @@ export function Sidebar({
       <div class={`sidebar-overlay ${open ? 'visible' : ''}`} onClick={onClose} />
       <aside class={`sidebar ${open ? 'open' : ''}`}>
         <div class="sidebar-header">
-          {connected && !hasProjects && (
+          {connected && !hasProjects && layout === 'vertical' && (
             <LaunchButton
               className="sidebar-launch-btn"
               beforeLaunch={seedHomeProject}
@@ -518,7 +512,7 @@ export function Sidebar({
           <div class="sidebar-header-spacer" />
           <button
             class={`layout-toggle-btn${layout === 'horizontal' ? ' active' : ''}`}
-            onClick={toggleLayout}
+            onClick={onToggleLayout}
             title={layout === 'vertical' ? 'Switch to tab view' : 'Switch to list view'}
             aria-label={layout === 'vertical' ? 'Switch to tab view' : 'Switch to list view'}
           >
@@ -539,60 +533,62 @@ export function Sidebar({
           </button>
         </div>
         <div class="sidebar-panes" ref={panesRef} style={{ userSelect: dragging ? 'none' : undefined }}>
-          {/* ── Sessions pane ── */}
-          <div
-            class="sidebar-sessions-pane"
-            style={activeProjectSlug && fileTreeCwd ? { flex: `0 0 ${(splitFraction * 100).toFixed(2)}%` } : undefined}
-          >
-            {foldersVal.map(f => {
-              const proj = projectBySlug.get(f.path)
-              if (!proj) return null
-              return (
-                <FolderGroup
-                  key={f.path}
-                  folder={f}
-                  project={proj}
-                  selId={selId}
-                  curProjectSlug={curProjectSlug}
-                  resumingId={resumingId}
-                  am={am}
-                  markdownTabs={mdTabs}
-                  currentMdView={currentMdView}
-                  onCloseMdTab={closeMarkdownTab}
-                  imageTabs={imgTabs}
-                  currentImageView={currentImageView}
-                  onCloseImageTab={closeImageTab}
-                  onCloseSession={onCloseSession}
-                  onClick={onClose}
-                  layout={layout}
-                />
-              )
-            })}
-            {connected && totalVisible === 0 && !hasProjects && (
-              <div class="sidebar-hint">
-                Click <strong>+</strong> to start your first session.
-              </div>
-            )}
-            {connected && isOnlyHomeProject && totalVisible > 0 && (
-              <div class="sidebar-hint">
-                <button class="sidebar-hint-link" onClick={onManageProjects}>
-                  Manage projects
-                </button> to organize sessions by repo.
-              </div>
-            )}
-          </div>
+          {/* ── Sessions pane: vertical mode only ── */}
+          {layout === 'vertical' && (
+            <div
+              class="sidebar-sessions-pane"
+              style={activeProjectSlug && fileTreeCwd ? { flex: `0 0 ${(splitFraction * 100).toFixed(2)}%` } : undefined}
+            >
+              {foldersVal.map(f => {
+                const proj = projectBySlug.get(f.path)
+                if (!proj) return null
+                return (
+                  <FolderGroup
+                    key={f.path}
+                    folder={f}
+                    project={proj}
+                    selId={selId}
+                    curProjectSlug={curProjectSlug}
+                    resumingId={resumingId}
+                    am={am}
+                    markdownTabs={mdTabs}
+                    currentMdView={currentMdView}
+                    onCloseMdTab={closeMarkdownTab}
+                    imageTabs={imgTabs}
+                    currentImageView={currentImageView}
+                    onCloseImageTab={closeImageTab}
+                    onCloseSession={onCloseSession}
+                    onClick={onClose}
+                    layout={layout}
+                  />
+                )
+              })}
+              {connected && totalVisible === 0 && !hasProjects && (
+                <div class="sidebar-hint">
+                  Click <strong>+</strong> to start your first session.
+                </div>
+              )}
+              {connected && isOnlyHomeProject && totalVisible > 0 && (
+                <div class="sidebar-hint">
+                  <button class="sidebar-hint-link" onClick={onManageProjects}>
+                    Manage projects
+                  </button> to organize sessions by repo.
+                </div>
+              )}
+            </div>
+          )}
 
-          {/* ── File tree pane (when any project with a filesystem path is active) ── */}
+          {/* ── File tree pane ── */}
           {activeProjectSlug && fileTreeCwd && (
             <>
-              <SidebarDivider onMouseDown={handleDividerMouseDown} />
-              <div class="sidebar-files-pane">
-              <FileTree
-                projectSlug={activeProjectSlug}
-                cwd={fileTreeCwd}
-                onMobileClose={onClose}
-              />
-            </div>
+              {layout === 'vertical' && <SidebarDivider onMouseDown={handleDividerMouseDown} />}
+              <div class={`sidebar-files-pane${layout === 'horizontal' ? ' sidebar-files-pane-full' : ''}`}>
+                <FileTree
+                  projectSlug={activeProjectSlug}
+                  cwd={fileTreeCwd}
+                  onMobileClose={onClose}
+                />
+              </div>
             </>
           )}
         </div>
