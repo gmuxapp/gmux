@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/wskeepalive"
 	"nhooyr.io/websocket"
 )
 
@@ -102,7 +103,7 @@ func (p *Proxy) Handler() http.HandlerFunc {
 		proxyCtx, proxyCancel := context.WithCancel(ctx)
 
 		var wg sync.WaitGroup
-		wg.Add(2)
+		wg.Add(3)
 
 		// Backend → Client (PTY output + terminal_resize events).
 		go func() {
@@ -116,6 +117,17 @@ func (p *Proxy) Handler() http.HandlerFunc {
 			defer wg.Done()
 			defer proxyCancel()
 			p.proxyClientToBackend(proxyCtx, clientConn, backendConn)
+		}()
+
+		// Keepalive on the browser-facing hop: keeps the cellular NAT
+		// flow warm and tears the proxy down promptly if the phone
+		// vanishes. Runs alongside the client read loop above, which is
+		// what delivers the pongs. See issue #241.
+		go func() {
+			defer wg.Done()
+			wskeepalive.Run(proxyCtx, clientConn,
+				wskeepalive.DefaultInterval, wskeepalive.DefaultTimeout,
+				proxyCancel)
 		}()
 
 		wg.Wait()

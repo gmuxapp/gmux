@@ -31,6 +31,7 @@ import (
 	"nhooyr.io/websocket"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sseclient"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/wskeepalive"
 )
 
 // Read limits for ProxyWS. These match the values wsproxy.go uses
@@ -385,7 +386,16 @@ func (c *Client) pipeWS(parent context.Context, clientConn, spokeConn *websocket
 	defer cancel()
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
+
+	// Keepalive on the browser-facing hop, mirroring the local-session
+	// proxy. Runs alongside the client read loop below (which delivers
+	// the pongs) and cancels the pipe if the phone drops off. See #241.
+	go func() {
+		defer wg.Done()
+		wskeepalive.Run(ctx, clientConn,
+			wskeepalive.DefaultInterval, wskeepalive.DefaultTimeout, cancel)
+	}()
 
 	// Spoke → Client (terminal output + resize events).
 	go func() {
