@@ -20,12 +20,19 @@
 // the wire shape can be exercised in isolation.
 package snapshot
 
-import "github.com/gmuxapp/gmux/services/gmuxd/internal/store"
+import (
+	"sort"
+
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
+)
 
 // SessionsPayload is the body of a snapshot.sessions SSE event.
 //
 // Sessions is a value-typed slice (not pointers) so the wire shape
 // is stable regardless of how the caller reads them out of the store.
+// ComposeSessions sorts it by ID, so two snapshots of identical state
+// serialize to identical bytes — see ComposeSessions for why that
+// determinism is load-bearing.
 type SessionsPayload struct {
 	Sessions []store.Session `json:"sessions"`
 }
@@ -81,5 +88,11 @@ func ComposeSessions(all []store.Session, owned func(*store.Session) bool) Sessi
 			out = append(out, s)
 		}
 	}
+	// Stable ordering: sort by ID. Without this the slice reflects
+	// Go map iteration order, which is randomized per-iteration, so
+	// two snapshots of identical state produce byte-different wire
+	// payloads. That defeats any downstream byte-level deduping and
+	// makes diagnostic logs ("why did this snapshot fire?") useless.
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return SessionsPayload{Sessions: out}
 }

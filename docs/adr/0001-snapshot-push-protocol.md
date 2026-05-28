@@ -115,6 +115,39 @@ worst case), no starvation, no unbounded backlog. World snapshots
 are typically much rarer than sessions snapshots, so the world
 coalescer is mostly a passthrough in practice.
 
+### Mutation hygiene (load-bearing)
+
+The ≤20 snapshots/sec/consumer bound only holds if a *mutation*
+means *state actually changed*. Two invariants make that true; both
+are easy to violate accidentally and were the cause of a production
+incident (a backgrounded mobile tab burned ~4 GB in two days):
+
+1. **No-op writes must not broadcast.** The session store suppresses
+   the `session-upsert` event when a write leaves the stored session
+   byte-identical (compared *after* normalization: path
+   canonicalization and unique-slug renumbering). Every write path
+   that can broadcast — `Upsert`, `UpsertRemote`, `Update`, and
+   `SetTerminalSize` — routes through this single guard, so the
+   property is structural rather than re-derived per call site. The
+   peer-mirroring path re-applies a spoke's entire snapshot on every
+   snapshot it receives; without this guard, N mirrored sessions ×
+   the spoke's emit rate × peer count became N×20×peers redundant
+   mutations/sec on the hub bus, each fanning out a full
+   `snapshot.sessions` to every browser — ~600 KB/sec/consumer of
+   pure churn. The same guard also absorbs the lower-frequency no-op
+   churn from the file monitor re-reading unchanged metadata and the
+   runner re-emitting identical `terminal_resize` events.
+2. **Snapshot composition is deterministically ordered.** The
+   sessions array is sorted by ID before emission. The store is
+   map-backed, so without an explicit sort two snapshots of
+   *identical* state serialize to *different* bytes (Go randomizes
+   map iteration), defeating any byte-level dedup downstream and
+   making the stream impossible to reason about in captures.
+
+Rule of thumb: a coalescer bounds *how often* you ship; it does
+nothing about *whether you should have shipped at all*. That
+decision belongs at the mutation source.
+
 ### Per-subscriber latest-only buffer
 
 Each subscriber has a bounded channel **per snapshot kind** with

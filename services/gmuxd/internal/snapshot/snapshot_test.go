@@ -60,13 +60,37 @@ func TestComposeSessions_EmptyInputProducesEmptySlice(t *testing.T) {
 	}
 }
 
-func TestComposeSessions_PreservesInputOrder(t *testing.T) {
-	// Order is part of the protocol: clients can stable-sort or
-	// rely on origin order without a tiebreaker.
+func TestComposeSessions_SortsByID(t *testing.T) {
+	// Output order is deterministic (sorted by ID) so two snapshots
+	// of identical state produce byte-identical wire payloads.
+	// Without this, the underlying store's map-backed List() returns
+	// sessions in randomized order per call, which made every
+	// snapshot.sessions emission byte-different even when nothing
+	// had actually changed — defeating any downstream dedup.
 	in := []store.Session{{ID: "z"}, {ID: "a"}, {ID: "m"}}
 	got := ComposeSessions(in, nil)
-	if got.Sessions[0].ID != "z" || got.Sessions[1].ID != "a" || got.Sessions[2].ID != "m" {
-		t.Errorf("order changed: %+v", got.Sessions)
+	if got.Sessions[0].ID != "a" || got.Sessions[1].ID != "m" || got.Sessions[2].ID != "z" {
+		t.Errorf("want sorted [a m z], got: %+v", got.Sessions)
+	}
+}
+
+func TestComposeSessions_DeterministicAcrossCalls(t *testing.T) {
+	// Two compositions of the same input produce byte-identical
+	// JSON. This is the property that lets downstream coalescers
+	// (or future dedup logic) skip emitting redundant snapshots.
+	in := []store.Session{{ID: "z", Alive: true}, {ID: "a"}, {ID: "m", Cwd: "/tmp"}}
+	a, err := json.Marshal(ComposeSessions(in, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Shuffle input to simulate map-iteration order changing.
+	in2 := []store.Session{{ID: "m", Cwd: "/tmp"}, {ID: "z", Alive: true}, {ID: "a"}}
+	b, err := json.Marshal(ComposeSessions(in2, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(a) != string(b) {
+		t.Errorf("non-deterministic output:\n  a=%s\n  b=%s", a, b)
 	}
 }
 

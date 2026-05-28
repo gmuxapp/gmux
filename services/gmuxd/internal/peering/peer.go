@@ -490,6 +490,16 @@ func (p *Peer) handleEvent(ctx context.Context, eventType string, data []byte) {
 // is upserted (namespaced) into the store; any session whose Peer
 // matches this peer but whose ID is not present in the snapshot is
 // removed.
+//
+// A spoke re-ships its full snapshot on every change (and at its
+// coalescer cadence), so the common case is that most sessions in a
+// snapshot are identical to what we already hold. We still call
+// UpsertRemote for each one; the store suppresses the redundant
+// session-upsert broadcast when nothing actually changed (see
+// upsertCommon). That dedup lives in the store rather than here
+// because only the store sees the fully-normalized session — after
+// path canonicalization and unique-slug renumbering — which is what
+// a correct equality check has to compare against.
 func (p *Peer) applySessionsSnapshot(remote []store.Session) {
 	seen := make(map[string]bool, len(remote))
 	for i := range remote {

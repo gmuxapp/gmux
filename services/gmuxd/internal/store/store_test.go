@@ -96,6 +96,159 @@ func TestSubscribe(t *testing.T) {
 	}
 }
 
+// recvEvent waits briefly for the next bus event, or returns ok=false
+// if none arrives. Used to assert both presence and absence of a
+// broadcast.
+func recvEvent(t *testing.T, ch <-chan Event) (Event, bool) {
+	t.Helper()
+	select {
+	case ev := <-ch:
+		return ev, true
+	case <-time.After(150 * time.Millisecond):
+		return Event{}, false
+	}
+}
+
+// TestUpsertIdenticalSuppressesBroadcast is the core regression guard
+// against peer-snapshot amplification: re-storing a byte-identical
+// session must not emit a second session-upsert. A spoke re-ships its
+// whole snapshot on every change, so without this the hub fans every
+// unchanged mirrored session out to every SSE subscriber at the
+// spoke's cadence.
+func TestUpsertIdenticalSuppressesBroadcast(t *testing.T) {
+	s := New()
+	ch, cancel := s.Subscribe()
+	defer cancel()
+
+	sess := Session{ID: "s1", Kind: "pi", Alive: true, Slug: "fix", Cwd: "/work"}
+	s.Upsert(sess)
+	if ev, ok := recvEvent(t, ch); !ok || ev.Type != "session-upsert" {
+		t.Fatalf("first upsert should broadcast, got ok=%v ev=%+v", ok, ev)
+	}
+
+	// Identical re-upsert: no broadcast.
+	s.Upsert(sess)
+	if ev, ok := recvEvent(t, ch); ok {
+		t.Fatalf("identical re-upsert should be silent, got %+v", ev)
+	}
+}
+
+// TestUpsertRemoteIdenticalSuppressesBroadcast covers the actual peer
+// mirroring path (UpsertRemote skips title/resumable derivation).
+func TestUpsertRemoteIdenticalSuppressesBroadcast(t *testing.T) {
+	s := New()
+	ch, cancel := s.Subscribe()
+	defer cancel()
+
+	sess := Session{ID: "s1@peer", Kind: "pi", Peer: "peer", Alive: true, Slug: "fix", Title: "Fix auth"}
+	s.UpsertRemote(sess)
+	if _, ok := recvEvent(t, ch); !ok {
+		t.Fatal("first UpsertRemote should broadcast")
+	}
+	s.UpsertRemote(sess)
+	if ev, ok := recvEvent(t, ch); ok {
+		t.Fatalf("identical UpsertRemote should be silent, got %+v", ev)
+	}
+}
+
+// TestUpsertChangedFieldStillBroadcasts guards the other direction:
+// dedup must not swallow real state changes. A single flipped field
+// must produce exactly one broadcast carrying the new value.
+func TestUpsertChangedFieldStillBroadcasts(t *testing.T) {
+	s := New()
+	ch, cancel := s.Subscribe()
+	defer cancel()
+
+	sess := Session{ID: "s1", Kind: "pi", Alive: true, Slug: "fix"}
+	s.Upsert(sess)
+	if _, ok := recvEvent(t, ch); !ok {
+		t.Fatal("first upsert should broadcast")
+	}
+
+	sess.Alive = false // a real transition
+	s.Upsert(sess)
+	ev, ok := recvEvent(t, ch)
+	if !ok {
+		t.Fatal("changed upsert should broadcast")
+	}
+	if ev.Session == nil || ev.Session.Alive {
+		t.Fatalf("broadcast should carry the new (dead) state, got %+v", ev.Session)
+	}
+	// And no spurious follow-up.
+	if ev, ok := recvEvent(t, ch); ok {
+		t.Fatalf("unexpected extra broadcast: %+v", ev)
+	}
+}
+
+// TestUpdateNoOpSuppressesBroadcast: Update routes through the same
+// dedup as Upsert. A modifier that leaves the session byte-identical
+// (the file monitor re-reading unchanged metadata, a status handler
+// re-stamping the same status) must not broadcast.
+func TestUpdateNoOpSuppressesBroadcast(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Alive: true, Slug: "fix"})
+	ch, cancel := s.Subscribe()
+	defer cancel()
+
+	// A modifier that changes nothing.
+	if !s.Update("s1", func(*Session) {}) {
+		t.Fatal("Update should return true for an existing session")
+	}
+	if ev, ok := recvEvent(t, ch); ok {
+		t.Fatalf("no-op Update should be silent, got %+v", ev)
+	}
+}
+
+// TestUpdateRealChangeBroadcasts: a modifier that actually changes a
+// field still broadcasts exactly once with the new value.
+func TestUpdateRealChangeBroadcasts(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Alive: true, Slug: "fix"})
+	ch, cancel := s.Subscribe()
+	defer cancel()
+
+	s.Update("s1", func(sess *Session) { sess.Unread = true })
+	ev, ok := recvEvent(t, ch)
+	if !ok {
+		t.Fatal("real Update should broadcast")
+	}
+	if ev.Session == nil || !ev.Session.Unread {
+		t.Fatalf("broadcast should carry the new unread state, got %+v", ev.Session)
+	}
+	if ev, ok := recvEvent(t, ch); ok {
+		t.Fatalf("unexpected extra broadcast: %+v", ev)
+	}
+}
+
+// TestSetTerminalSizeNoOpSuppressesBroadcast: the runner re-emits
+// terminal_resize even when dimensions are unchanged; a same-size
+// SetTerminalSize must not fan out a snapshot.
+func TestSetTerminalSizeNoOpSuppressesBroadcast(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Kind: "pi", Alive: true})
+	s.SetTerminalSize("s1", 80, 24)
+	ch, cancel := s.Subscribe()
+	defer cancel()
+
+	// Same dimensions again: silent.
+	if !s.SetTerminalSize("s1", 80, 24) {
+		t.Fatal("SetTerminalSize should return true for an existing session")
+	}
+	if ev, ok := recvEvent(t, ch); ok {
+		t.Fatalf("same-size SetTerminalSize should be silent, got %+v", ev)
+	}
+
+	// A genuine resize still broadcasts.
+	s.SetTerminalSize("s1", 100, 30)
+	ev, ok := recvEvent(t, ch)
+	if !ok {
+		t.Fatal("changed SetTerminalSize should broadcast")
+	}
+	if ev.Session == nil || ev.Session.TerminalCols != 100 || ev.Session.TerminalRows != 30 {
+		t.Fatalf("broadcast should carry the new size, got %+v", ev.Session)
+	}
+}
+
 // --- Derived field tests ---
 // All dead sessions with a command are resumable, regardless of kind.
 
