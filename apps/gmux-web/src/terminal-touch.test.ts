@@ -4,8 +4,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { shouldFocusOnTouchEnd, shouldSkipPositionDance, focusTerminalInput } from './terminal-touch'
 
+// Vitest runs in Node (no DOM). Provide minimal window/document stubs so
+// tests for focusTerminalInput can call into window.matchMedia / document.
+if (typeof globalThis.window === 'undefined') {
+  (globalThis as any).window = globalThis
+}
+if (typeof globalThis.document === 'undefined') {
+  (globalThis as any).document = {
+    activeElement: null,
+    body: {},
+  }
+}
+
 // ── matchMedia stub ──
-// All focusTerminalInput tests run in Node where window.matchMedia is absent.
+
 function stubMatchMedia(isTouchDevice: boolean) {
   Object.defineProperty(window, 'matchMedia', {
     value: vi.fn().mockImplementation((query: string) => ({
@@ -15,6 +27,8 @@ function stubMatchMedia(isTouchDevice: boolean) {
     writable: true, configurable: true,
   })
 }
+
+// ── shouldFocusOnTouchEnd ──
 
 describe('shouldFocusOnTouchEnd', () => {
   it('returns true when the user tapped (no move, no long-press)', () => {
@@ -46,7 +60,7 @@ describe('shouldSkipPositionDance', () => {
   })
 })
 
-// ── focusTerminalInput — already-focused guard ──
+// ── focusTerminalInput — already-focused guard (keyboard flicker fix) ──
 
 describe('focusTerminalInput — already-focused guard (keyboard flicker fix)', () => {
   beforeEach(() => {
@@ -54,60 +68,59 @@ describe('focusTerminalInput — already-focused guard (keyboard flicker fix)', 
     Object.defineProperty(navigator, 'maxTouchPoints', { value: 1, writable: true, configurable: true })
   })
 
-  it('does not call textarea.focus a second time when it is already the active element', () => {
+  it('does not run the position dance when textarea is already the active element', () => {
     const focusSpy = vi.fn()
-    const textarea = { style: {} as any, focus: focusSpy } as any
-    const term = {
-      focus: vi.fn(),
-      textarea,
-    } as any
-    // Simulate textarea already being focused
+    const textarea = { style: {} as CSSStyleDeclaration, focus: focusSpy } as any
+    const term = { focus: vi.fn(), textarea } as any
+
+    // Simulate textarea already focused
     Object.defineProperty(document, 'activeElement', { value: textarea, configurable: true })
 
     focusTerminalInput(term)
 
-    // term.focus() still called, but textarea repositioning dance is skipped
+    // term.focus() still fires (no-op since it's already focused) but the
+    // position-dance textarea.focus() must NOT be called a second time.
     expect(term.focus).toHaveBeenCalledTimes(1)
-    // textarea.focus should NOT be called again (no double-focus on touch)
     expect(focusSpy).not.toHaveBeenCalled()
   })
 
-  it('calls textarea.focus with position dance when textarea is not yet focused', () => {
+  it('runs the position dance and calls textarea.focus when not yet focused', () => {
     const focusSpy = vi.fn()
-    const textarea = { style: {} as any, focus: focusSpy } as any
-    const term = {
-      focus: vi.fn(),
-      textarea,
-    } as any
-    // Simulate some other element being active
-    Object.defineProperty(document, 'activeElement', { value: document.body, configurable: true })
+    const textarea = { style: {} as CSSStyleDeclaration, focus: focusSpy } as any
+    const term = { focus: vi.fn(), textarea } as any
 
-    // Stub requestAnimationFrame so we don't need a real browser loop
-    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => 0)
+    // Simulate a different element (body) being active
+    Object.defineProperty(document, 'activeElement', { value: (document as any).body, configurable: true })
+
+    // Stub requestAnimationFrame so style-restore callback doesn't throw.
+    ;(globalThis as any).requestAnimationFrame = (_cb: FrameRequestCallback) => 0
 
     focusTerminalInput(term)
 
-    expect(focusSpy).toHaveBeenCalledOnce()
+    // The position dance repositions the textarea to the screen bottom first …
     expect(textarea.style.position).toBe('fixed')
     expect(textarea.style.bottom).toBe('0')
+    // … then focuses it.
+    expect(focusSpy).toHaveBeenCalledOnce()
   })
 })
 
-// ── Long-press selectAll behavior ──
+// ── Long-press copies all terminal text (selection fix) ──
 
 describe('useTouchPan — long-press copies all terminal text (selection fix)', () => {
   it('selects all and writes to clipboard on long-press', async () => {
-    // Use a tiny fake that only exercises the long-press branch.
-    // The real useTouchPan fires the long-press timer, calls term.selectAll(),
-    // then selectionToText(term) and navigator.clipboard.writeText().
+    // The real useTouchPan long-press branch calls:
+    //   term.selectAll()
+    //   selectionToText(term)
+    //   navigator.clipboard.writeText(text)
+    //
+    // We test those three calls in isolation using a fake Terminal.
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText },
       writable: true, configurable: true,
     })
 
-    // selectionToText returns the selected terminal content.
-    // We verify the clipboard received the non-empty result.
     const fakeContent = 'hello from terminal'
     const term = {
       selectAll: vi.fn(),
@@ -115,7 +128,7 @@ describe('useTouchPan — long-press copies all terminal text (selection fix)', 
         start: { x: 0, y: 0 }, end: { x: fakeContent.length - 1, y: 0 },
       }),
       getScrollbackLength: vi.fn().mockReturnValue(0),
-      getViewportY: vi.fn().mockReturnValue(0),
+      getViewportY:        vi.fn().mockReturnValue(0),
       cols: fakeContent.length,
       buffer: {
         active: {
@@ -127,7 +140,7 @@ describe('useTouchPan — long-press copies all terminal text (selection fix)', 
       },
     } as any
 
-    // Call selectAll and clipboard write manually (mirrors the long-press handler)
+    // Mirror the long-press handler implementation
     term.selectAll()
     const { selectionToText } = await import('./selection')
     const text = selectionToText(term)
@@ -135,23 +148,5 @@ describe('useTouchPan — long-press copies all terminal text (selection fix)', 
 
     expect(term.selectAll).toHaveBeenCalledOnce()
     expect(writeText).toHaveBeenCalledWith(fakeContent)
-  })
-})
-
-describe('shouldSkipPositionDance', () => {
-  it('returns true when the textarea was already focused (skip to prevent flicker)', () => {
-    expect(shouldSkipPositionDance(true)).toBe(true)
-  })
-
-  it('returns false when the textarea was not focused (run the position dance)', () => {
-    expect(shouldSkipPositionDance(false)).toBe(false)
-  })
-})
-
-// Verify the exported module surface includes the new symbol
-describe('terminal-touch exports', () => {
-  it('exports shouldSkipPositionDance', async () => {
-    const mod = await import('./terminal-touch')
-    expect(typeof mod.shouldSkipPositionDance).toBe('function')
   })
 })
