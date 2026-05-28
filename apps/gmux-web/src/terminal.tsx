@@ -886,17 +886,11 @@ export function TerminalView({
       // socket connects immediately instead of waiting for the full file download.
       //
       // Strategy:
-      //   1. Clear the previous session's buffer immediately (hidden by termLoading
-      //      overlay) so the fresh epoch starts clean.
-      //   2. Start the prefetch HTTP fetch.
-      //   3. Open the WS right away with ?no_erase=1 — gmuxd will send only the
-      //      visible screen without \x1b[3J, preserving whatever we write into
-      //      scrollback from the prefetch.
-      //   4. In wireWs: buffer the BSU/ESU replay block and any live messages that
-      //      arrive before the prefetch settles; when it does, write in order:
-      //      prefetch bytes → WS snapshot → live output.
-      //
-      // Reconnects skip the prefetch — scrollback is already in the host buffer.
+      //   Live sessions:   WS snapshot (no ?no_erase) — runner sends CSI_3J +
+      //                   renderScreen(), giving full in-memory scrollback.
+      //   Dead sessions:   prefetch from on-disk file (ExtractBytes) + WS with
+      //                   ?no_erase=1 so a WS reconnect doesn't wipe that content.
+      //   Reconnects:      simple WS snapshot — scrollback already in host buffer.
       const openWs = (noErase: boolean, prefetchBarrier?: Promise<void>) => {
         if (disposed.current || currentSessionId.current !== session.id) return
         const url = `${wsProtocol}//${location.host}/ws/${session.id}` + (noErase ? '?no_erase=1' : '')
@@ -918,7 +912,20 @@ export function TerminalView({
       // flash). We always use no_erase=1 for first connects since we handle the
       // erase ourselves; this lets gmuxd skip \x1b[3J so the prefetch bytes we
       // write in parallel remain in scrollback.
+      // Clear the old session's buffer immediately (hidden by termLoading overlay).
       queueData(new TextEncoder().encode('\x1b[3J\x1b[2J\x1b[H'))
+
+      if (session.alive) {
+        // Live session: the WS snapshot includes CSI_3J + renderScreen() which
+        // has the full in-memory scrollback (up to 50k lines). No prefetch needed —
+        // it would just duplicate the same content and go stale between tab switches.
+        openWs(false)
+        return
+      }
+
+      // Dead session: no live runner, so prefetch from the on-disk scrollback file
+      // (ExtractBytes). The WS will fail/retry; content comes from the prefetch.
+      // Cache is safe here: the file doesn't change once the session has exited.
 
       // Barrier promise: resolves once the prefetch has either written its bytes
       // or determined it has nothing to write (empty / not-found / error).
@@ -939,11 +946,9 @@ export function TerminalView({
         }
       }
 
-      // Cache check: avoid re-downloading (up to 20 MB) and re-processing on
-      // every tab switch. Cache misses fall through to the full fetch path.
+      // Cache check: dead session files don't change, so a cache hit is always valid.
       const _cached = _prefetchCache.get(prefetchSessionId)
       if (_cached !== undefined) {
-        // Cache hit — immediate resolve, no network round-trip.
         if (_cached !== null) _injectPrefetch(_cached)
         prefetchResolve()
       } else {
@@ -953,8 +958,6 @@ export function TerminalView({
             return
           }
           if (result.kind === 'bytes') {
-            // Server returns pre-extracted content (?extracted=1) —
-            // no client-side processing needed.
             const extracted = result.bytes
             emitSyncDiag({
               prefetchBytes: extracted.length,
@@ -969,7 +972,6 @@ export function TerminalView({
               queueData(new TextEncoder().encode('\r\n'.repeat(rows)))
             }
           } else if (result.kind === 'empty' || result.kind === 'not-found') {
-            // Definitive empty — cache the negative so we skip on next visit.
             _prefetchCache.set(prefetchSessionId, null)
           }
           // error: don't cache so next visit retries
@@ -977,7 +979,8 @@ export function TerminalView({
         }).catch(() => prefetchResolve())
       }
 
-      // Open the WS immediately — don't wait for the prefetch to finish.
+      // Open the WS immediately with no_erase=1 so that if it somehow connects
+      // (session revived), it won't wipe the file-based scrollback.
       openWs(true, prefetchBarrier)
     }
 

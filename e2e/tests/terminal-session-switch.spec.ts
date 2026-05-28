@@ -1,26 +1,22 @@
 import { test, expect } from '@playwright/test'
-import { openApp, spawnTestSession, readScrollbackFile } from '../helpers'
+import { openApp, spawnTestSession } from '../helpers'
 
 /**
  * Regression test for: "switching gmux sessions causes WS connection to
  * take ages to re-establish."
  *
- * Root cause: `openWs()` was called only after `fetchScrollback()` resolved,
- * serialising the TCP handshake behind a potentially large HTTP download and
- * `extractScrollbackContent` processing.
+ * Original root cause (a774dc5): prefetch serialised the WS handshake behind
+ * a large HTTP download. Fix: run prefetch and WS in parallel.
  *
- * Fix (a774dc5): prefetch and WS open in parallel. The WS must be in OPEN
- * state well before a slow scrollback fetch completes.
+ * Current architecture: live sessions skip the scrollback prefetch entirely —
+ * they get full scrollback from the WS snapshot (renderScreen). The WS must
+ * open immediately, and no scrollback HTTP request should be made.
  */
 
-const SLOW_PREFETCH_DELAY_MS = 3_000
-const WS_OPEN_DEADLINE_MS    = 1_500   // WS must open faster than the slow delay
+const WS_OPEN_DEADLINE_MS = 1_500
 
-test.describe('session switch — WS connects in parallel with scrollback prefetch', () => {
-  test('WS opens before a slow scrollback fetch completes', async ({ page }) => {
-    // Spawn two sessions: "from" (the one we start on) and "to" (the one we
-    // switch to). The "to" session gets some output so an on-disk scrollback
-    // file exists (a real HTTP request will be made to /v1/sessions/<id>/scrollback).
+test.describe('session switch — WS connects immediately for live sessions', () => {
+  test('WS opens quickly and no scrollback prefetch is requested', async ({ page }) => {
     const fromSession = await spawnTestSession(
       ['bash', '-c', 'echo FROM-SESSION-READY; sleep 60'],
       { cwdName: `switch-from-${Date.now()}` },
@@ -31,39 +27,26 @@ test.describe('session switch — WS connects in parallel with scrollback prefet
     )
 
     try {
-      // Wait until the "to" session has on-disk scrollback we can intercept.
-      await expect.poll(
-        () => readScrollbackFile(toSession.id) !== null,
-        { timeout: 10_000, intervals: [200] },
-      ).toBe(true)
-
       await openApp(page)
 
-      // Navigate to the "from" session and wait for it to be fully connected.
+      // Navigate to the "from" session and let it settle.
       await page.waitForFunction((id) => {
         const navigate = (window as any).__gmuxNavigateToSession
         if (typeof navigate !== 'function') return false
         return navigate(id) === true
       }, fromSession.id, { timeout: 10_000 })
       await page.locator('.terminal-container canvas').waitFor({ state: 'visible', timeout: 5_000 })
-      await page.waitForTimeout(1_500) // let the WS settle
+      await page.waitForTimeout(1_500)
 
-      // Intercept the scrollback endpoint for the "to" session to add an
-      // artificial delay, simulating a large on-disk file.
+      // Verify that the scrollback endpoint is NOT called for live sessions.
       const scrollbackUrl = `/v1/sessions/${encodeURIComponent(toSession.id)}/scrollback`
-      let interceptResolve: (() => void) | null = null
-      const interceptFired = new Promise<void>(r => { interceptResolve = r })
-
+      let prefetchRequested = false
       await page.route(`**${scrollbackUrl}*`, async (route) => {
-        interceptResolve?.()
-        interceptResolve = null
-        // Hold the response for the full slow delay.
-        await new Promise<void>(r => setTimeout(r, SLOW_PREFETCH_DELAY_MS))
+        prefetchRequested = true
         await route.continue()
       })
 
-      // Install a WebSocket open-time trap before the navigation so we can
-      // measure how long the browser takes to get an OPEN event.
+      // Install a WS open-time trap.
       await page.evaluate(() => {
         ;(window as any).__gmuxWsOpenAt = null
         const OrigWS = window.WebSocket
@@ -80,7 +63,6 @@ test.describe('session switch — WS connects in parallel with scrollback prefet
         window.WebSocket = (window as any).__gmuxWsProxy
       })
 
-      // Record the wall-clock start then switch to the "to" session.
       const switchStart = Date.now()
 
       await page.waitForFunction((id) => {
@@ -89,29 +71,26 @@ test.describe('session switch — WS connects in parallel with scrollback prefet
         return navigate(id) === true
       }, toSession.id, { timeout: 10_000 })
 
-      // Wait for the intercept to confirm the browser requested the scrollback
-      // (this means the WS + prefetch logic has started).
-      await interceptFired
-
-      // Poll until the WS open event fires, with a deadline tighter than the
-      // slow prefetch delay. Failure here means the WS is blocked on the fetch.
-      const wsOpenAt = await page.waitForFunction(() => {
-        return (window as any).__gmuxWsOpenAt as number | null
-      }, null, { timeout: WS_OPEN_DEADLINE_MS + 500 })
-
+      // WS must open quickly — no prefetch blocking it.
+      const wsOpenAt = await page.waitForFunction(
+        () => (window as any).__gmuxWsOpenAt as number | null,
+        null,
+        { timeout: WS_OPEN_DEADLINE_MS + 500 },
+      )
       const elapsed = await wsOpenAt.evaluate(v => v as number) - switchStart
-
-      console.log(`[session-switch] WS open in ${elapsed}ms (slow prefetch delay: ${SLOW_PREFETCH_DELAY_MS}ms)`)
+      console.log(`[session-switch] WS open in ${elapsed}ms`)
 
       expect(
         elapsed,
-        `WS should open in <${WS_OPEN_DEADLINE_MS}ms even with a ${SLOW_PREFETCH_DELAY_MS}ms slow prefetch`,
+        `WS should open in <${WS_OPEN_DEADLINE_MS}ms`,
       ).toBeLessThan(WS_OPEN_DEADLINE_MS)
 
-      // After the slow prefetch completes, the terminal-loading overlay must
-      // disappear and the terminal canvas must be visible.
-      await expect(page.locator('.terminal-loading')).not.toBeVisible({ timeout: SLOW_PREFETCH_DELAY_MS + 3_000 })
+      // Terminal must finish loading.
+      await expect(page.locator('.terminal-loading')).not.toBeVisible({ timeout: 5_000 })
       await expect(page.locator('.terminal-container canvas')).toBeVisible()
+
+      // No scrollback prefetch should have been made for a live session.
+      expect(prefetchRequested, 'live sessions must not request the scrollback prefetch').toBe(false)
     } finally {
       fromSession.kill()
       toSession.kill()

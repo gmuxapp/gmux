@@ -426,7 +426,6 @@ func (s *Server) serve() {
 	// HTTP endpoints (checked first via explicit paths)
 	mux.HandleFunc("GET /meta", s.handleMeta)
 	mux.HandleFunc("GET /scrollback/text", s.handleScrollbackText)
-	mux.HandleFunc("GET /scrollback/rendered", s.handleScrollbackRendered)
 	mux.HandleFunc("GET /scrollback/tail", s.handleScrollbackTail)
 	mux.HandleFunc("POST /input", s.handleInput)
 	mux.HandleFunc("PUT /status", s.handlePutStatus)
@@ -449,22 +448,6 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
-}
-
-// handleScrollbackRendered returns the full in-memory terminal state as ANSI
-// bytes: scrollback history followed by the visible screen, with styling.
-// This is the same content the WS snapshot sends (renderScreen), but served
-// over HTTP so gmuxd can use it as the extracted prefetch for live sessions.
-// The client writes these bytes into the terminal before connecting WS with
-// ?no_erase=1 — this gives users full scrollback history on tab switch.
-func (s *Server) handleScrollbackRendered(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	s.drainScreenLocked()
-	screen := renderScreen(s.screen)
-	s.mu.Unlock()
-
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Write([]byte(screen))
 }
 
 // handleScrollbackText returns the visible screen content as plain text,
