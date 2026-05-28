@@ -12,7 +12,7 @@ describe('fetchScrollback', () => {
 
     const result = await fetchScrollback('sess-abc', fakeFetch)
 
-    expect(fakeFetch).toHaveBeenCalledWith('/v1/sessions/sess-abc/scrollback')
+    expect(fakeFetch).toHaveBeenCalledWith('/v1/sessions/sess-abc/scrollback?extracted=1')
     expect(result).toEqual({ kind: 'bytes', bytes: payload })
   })
 
@@ -74,6 +74,6 @@ describe('fetchScrollback', () => {
 
     // @ would otherwise be unsafe in some HTTP routers; verify the call site
     // round-trips through encodeURIComponent.
-    expect(fakeFetch).toHaveBeenCalledWith('/v1/sessions/sess-abc%40hs/scrollback')
+    expect(fakeFetch).toHaveBeenCalledWith('/v1/sessions/sess-abc%40hs/scrollback?extracted=1')
   })
 })
