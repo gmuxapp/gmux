@@ -1342,3 +1342,114 @@ func TestDisconnect_SessionsPersist(t *testing.T) {
 		t.Error("sess-1@server should be removed after Stop")
 	}
 }
+
+// TestApplySessionsSnapshot_DedupsIdenticalState verifies that
+// applying the same snapshot twice produces zero session-upsert
+// broadcasts on the second pass. This is the property that prevents
+// peer-mirroring amplification: a peer emitting snapshots at 20 Hz
+// must NOT cause this node to fire N session-upserts per peer-snap
+// when nothing actually changed.
+func TestApplySessionsSnapshot_DedupsIdenticalState(t *testing.T) {
+	st := store.New()
+	cfg := config.PeerConfig{Name: "server"}
+	p := newPeer(cfg, st, nil)
+
+	sessions := []store.Session{
+		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
+		{ID: "sess-2", Kind: "shell", Alive: true, Slug: "b", Cwd: "/home"},
+		{ID: "sess-3", Kind: "pi", Alive: false, Slug: "c", Cwd: "/var"},
+	}
+
+	// First application: every session is new, so each one must
+	// broadcast. Subscribe AFTER the priming pass so the channel
+	// starts empty for the second pass.
+	p.applySessionsSnapshot(sessions)
+
+	ch, cancel := st.Subscribe()
+	defer cancel()
+
+	// Drain anything left from the priming pass synchronously.
+	drained := 0
+	for {
+		select {
+		case <-ch:
+			drained++
+		default:
+			goto drained
+		}
+	}
+drained:
+
+	// Second application with byte-identical input. Expectation:
+	// zero broadcasts. Wait a short grace period in case the
+	// implementation pumps async.
+	p.applySessionsSnapshot(sessions)
+
+	deadline := time.After(200 * time.Millisecond)
+	got := 0
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == "session-upsert" || ev.Type == "session-remove" {
+				got++
+			}
+		case <-deadline:
+			if got != 0 {
+				t.Errorf("expected 0 upsert/remove broadcasts on identical re-apply, got %d", got)
+			}
+			return
+		}
+	}
+}
+
+// TestApplySessionsSnapshot_BroadcastsOnRealChange is the companion:
+// when one field actually changes, exactly one session-upsert fires
+// (the changed one), not N.
+func TestApplySessionsSnapshot_BroadcastsOnRealChange(t *testing.T) {
+	st := store.New()
+	cfg := config.PeerConfig{Name: "server"}
+	p := newPeer(cfg, st, nil)
+
+	sessions := []store.Session{
+		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
+		{ID: "sess-2", Kind: "shell", Alive: true, Slug: "b", Cwd: "/home"},
+	}
+	p.applySessionsSnapshot(sessions)
+
+	ch, cancel := st.Subscribe()
+	defer cancel()
+	// Drain priming pass.
+	for {
+		select {
+		case <-ch:
+		default:
+			goto drained2
+		}
+	}
+drained2:
+
+	// Flip alive on sess-2 only.
+	sessions2 := []store.Session{
+		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
+		{ID: "sess-2", Kind: "shell", Alive: false, Slug: "b", Cwd: "/home"},
+	}
+	p.applySessionsSnapshot(sessions2)
+
+	deadline := time.After(200 * time.Millisecond)
+	upserts := []string{}
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == "session-upsert" {
+				upserts = append(upserts, ev.ID)
+			}
+		case <-deadline:
+			if len(upserts) != 1 {
+				t.Errorf("expected exactly 1 session-upsert (for sess-2@server), got %d: %v", len(upserts), upserts)
+			} else if upserts[0] != "sess-2@server" {
+				t.Errorf("wrong session changed: %q", upserts[0])
+			}
+			return
+		}
+	}
+}

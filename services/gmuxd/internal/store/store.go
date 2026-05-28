@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -275,8 +276,8 @@ func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
 	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
 	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
 	s.mu.Lock()
+	prev, hadPrev := s.sessions[sess.ID]
 	if bumpLocally {
-		prev, hadPrev := s.sessions[sess.ID]
 		if shouldBumpActivity(snapshotActivity(prev), hadPrev, snapshotActivity(sess)) {
 			sess.LastActivityAt = nowRFC3339()
 		} else if hadPrev && sess.LastActivityAt == "" {
@@ -289,17 +290,52 @@ func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
 			sess.LastActivityAt = prev.LastActivityAt
 		}
 	}
-	removed, skip := s.resolveDuplicateSlugsLocked(sess)
-	if !skip {
-		s.ensureUniqueSlug(&sess)
-		s.sessions[sess.ID] = sess
-	}
+	removed, skip, unchanged := s.commitLocked(prev, hadPrev, &sess)
 	s.mu.Unlock()
+	s.broadcastCommit(sess, removed, skip, unchanged)
+}
 
+// commitLocked finalizes sess into the store and reports what the write
+// did. It resolves duplicate slugs (which may evict shadowed sessions),
+// assigns a unique slug, and stores the result. The caller must hold
+// s.mu.
+//
+// Returns:
+//   - removed: ids evicted by duplicate-slug resolution (a live session
+//     shadows a dead one with the same slug).
+//   - skip: the write was dropped entirely (a dead session shadowed by a
+//     live one); nothing was stored.
+//   - unchanged: the stored session is byte-identical to prev, so this
+//     was a no-op that must NOT broadcast session-upsert.
+//
+// The unchanged check is load-bearing. Every write path that broadcasts
+// session-upsert (Upsert, UpsertRemote, Update) routes through here, so
+// the dedup applies uniformly: a no-op write — a peer re-shipping its
+// full snapshot at 20 Hz, the file monitor re-reading identical
+// metadata, a status handler re-stamping the same status — never wakes
+// every SSE subscriber to re-ship a byte-identical snapshot.sessions.
+// Comparing the post-normalization value (after path canonicalization
+// and unique-slug renumbering), not the caller's raw input, is what
+// makes the comparison correct. See ADR 0001.
+func (s *Store) commitLocked(prev Session, hadPrev bool, sess *Session) (removed []string, skip, unchanged bool) {
+	removed, skip = s.resolveDuplicateSlugsLocked(*sess)
+	if skip {
+		return removed, true, false
+	}
+	s.ensureUniqueSlug(sess)
+	unchanged = hadPrev && reflect.DeepEqual(prev, *sess)
+	s.sessions[sess.ID] = *sess
+	return removed, false, unchanged
+}
+
+// broadcastCommit emits the events implied by a commitLocked result:
+// one session-remove per evicted shadow, then a single session-upsert
+// unless the write was skipped or a no-op. Caller must NOT hold s.mu.
+func (s *Store) broadcastCommit(sess Session, removed []string, skip, unchanged bool) {
 	for _, id := range removed {
 		s.broadcast(Event{Type: "session-remove", ID: id})
 	}
-	if skip {
+	if skip || unchanged {
 		return
 	}
 	s.broadcast(Event{
@@ -330,24 +366,9 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 	if shouldBumpActivity(prevSnap, true, snapshotActivity(sess)) {
 		sess.LastActivityAt = nowRFC3339()
 	}
-	removed, skip := s.resolveDuplicateSlugsLocked(sess)
-	if !skip {
-		s.ensureUniqueSlug(&sess)
-		s.sessions[id] = sess
-	}
+	removed, skip, unchanged := s.commitLocked(prev, true, &sess)
 	s.mu.Unlock()
-
-	for _, rid := range removed {
-		s.broadcast(Event{Type: "session-remove", ID: rid})
-	}
-	if skip {
-		return true
-	}
-	s.broadcast(Event{
-		Type:    "session-upsert",
-		ID:      id,
-		Session: &sess,
-	})
+	s.broadcastCommit(sess, removed, skip, unchanged)
 	return true
 }
 
@@ -370,6 +391,14 @@ func (s *Store) SetTerminalSize(id string, cols, rows uint16) bool {
 	if !ok {
 		s.mu.Unlock()
 		return false
+	}
+	if sess.TerminalCols == cols && sess.TerminalRows == rows {
+		// No-op resize: the runner re-broadcasts terminal_resize even
+		// when the dimensions are unchanged (e.g. a follower client
+		// connecting at the same size). Don't fan out a byte-identical
+		// snapshot.sessions for it. See ADR 0001.
+		s.mu.Unlock()
+		return true
 	}
 	sess.TerminalCols = cols
 	sess.TerminalRows = rows
