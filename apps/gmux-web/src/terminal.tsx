@@ -30,10 +30,6 @@ export interface SyncDiag {
   reconnects: number
   /** Bytes received from GET /v1/sessions/<id>/scrollback?extracted=1 */
   prefetchBytes: number
-  /** Always equal to prefetchBytes — server extracts before sending */
-  prefetchExtractedBytes: number
-  /** Always 0 — server-side extraction; block count not tracked client-side */
-  prefetchBlockCount: number
   /** Current lines in the ghostty-web scrollback buffer (live) */
   ghosttyScrollbackLines: number
   /** Configured ghostty-web scrollback line limit */
@@ -344,8 +340,6 @@ export function TerminalView({
     wsState: 'connecting',
     reconnects: 0,
     prefetchBytes: 0,
-    prefetchExtractedBytes: 0,
-    prefetchBlockCount: 0,
     ghosttyScrollbackLines: 0,
     ghosttyScrollbackLimit: terminalOptions.scrollback,
   })
@@ -862,8 +856,6 @@ export function TerminalView({
       wsState: 'connecting',
       reconnects: 0,
       prefetchBytes: 0,
-      prefetchExtractedBytes: 0,
-      prefetchBlockCount: 0,
       ghosttyScrollbackLines: 0,
       ghosttyScrollbackLimit: terminalOptions.scrollback,
     })
@@ -882,44 +874,30 @@ export function TerminalView({
       emitSyncDiag({ syncPhase: 'waiting', wsState: 'connecting' })
 
       const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-      // Prefetch the on-disk scrollback in parallel with opening the WS so the
-      // socket connects immediately instead of waiting for the full file download.
-      //
       // Strategy:
       //   Live sessions:   WS snapshot (no ?no_erase) — runner sends CSI_3J +
       //                   renderScreen(), giving full in-memory scrollback.
-      //   Dead sessions:   prefetch from on-disk file (ExtractBytes) + WS with
-      //                   ?no_erase=1 so a WS reconnect doesn't wipe that content.
+      //   Dead sessions:   prefetch from on-disk file (ExtractBytes); WS will fail.
       //   Reconnects:      simple WS snapshot — scrollback already in host buffer.
-      const openWs = (noErase: boolean, prefetchBarrier?: Promise<void>) => {
+      const openWs = (prefetchBarrier?: Promise<void>) => {
         if (disposed.current || currentSessionId.current !== session.id) return
-        const url = `${wsProtocol}//${location.host}/ws/${session.id}` + (noErase ? '?no_erase=1' : '')
+        const url = `${wsProtocol}//${location.host}/ws/${session.id}`
         const ws = new WebSocket(url)
         wireWs(ws, prefetchBarrier)
       }
 
       if (!isFirstConnect) {
-        // Reconnect: the host terminal already has whatever the
-        // prefetch put there on first connect. Don't re-prefetch
-        // and don't switch no_erase mode mid-session: a reconnect
-        // under no_erase=1 would leave the snapshot's reset behind
-        // without restoring scrollback. Use the simple snapshot.
-        openWs(false)
+        openWs()
         return
       }
 
-      // Clear the old session's buffer immediately (termLoading overlay hides the
-      // flash). We always use no_erase=1 for first connects since we handle the
-      // erase ourselves; this lets gmuxd skip \x1b[3J so the prefetch bytes we
-      // write in parallel remain in scrollback.
-      // Clear the old session's buffer immediately (hidden by termLoading overlay).
+      // Clear the old session's buffer immediately (termLoading overlay hides the flash).
       queueData(new TextEncoder().encode('\x1b[3J\x1b[2J\x1b[H'))
 
       if (session.alive) {
-        // Live session: the WS snapshot includes CSI_3J + renderScreen() which
-        // has the full in-memory scrollback (up to 50k lines). No prefetch needed —
-        // it would just duplicate the same content and go stale between tab switches.
-        openWs(false)
+        // Live session: the WS snapshot includes CSI_3J + renderScreen() —
+        // full in-memory scrollback (up to 50k lines). No prefetch needed.
+        openWs()
         return
       }
 
@@ -927,18 +905,19 @@ export function TerminalView({
       // (ExtractBytes). The WS will fail/retry; content comes from the prefetch.
       // Cache is safe here: the file doesn't change once the session has exited.
 
-      // Barrier promise: resolves once the prefetch has either written its bytes
-      // or determined it has nothing to write (empty / not-found / error).
+      // Dead session: no live runner, so prefetch from the on-disk scrollback file.
+      // The WS will fail; content comes entirely from the prefetch.
+      // Cache is safe: the file doesn't change once the session has exited.
+
+      // Barrier: resolves once the prefetch has written its bytes (or given up).
+      // Ensures the WS snapshot (if the session briefly revives) arrives after
+      // the file-based history is already in the scrollback buffer.
       let prefetchResolve!: () => void
       const prefetchBarrier = new Promise<void>(resolve => { prefetchResolve = resolve })
 
       const prefetchSessionId = session.id
       const _injectPrefetch = (extracted: Uint8Array) => {
-        emitSyncDiag({
-          prefetchBytes: extracted.length,
-          prefetchExtractedBytes: extracted.length,
-          prefetchBlockCount: 0,  // always 0: server already extracted
-        })
+        emitSyncDiag({ prefetchBytes: extracted.length })
         if (extracted.length > 0) {
           queueData(extracted)
           const rows = termRef.current?.rows ?? 24
@@ -959,11 +938,7 @@ export function TerminalView({
           }
           if (result.kind === 'bytes') {
             const extracted = result.bytes
-            emitSyncDiag({
-              prefetchBytes: extracted.length,
-              prefetchExtractedBytes: extracted.length,
-              prefetchBlockCount: 0,
-            })
+            emitSyncDiag({ prefetchBytes: extracted.length })
             const toCache = extracted.length > 0 ? extracted : null
             _prefetchCache.set(prefetchSessionId, toCache)
             if (extracted.length > 0) {
@@ -979,9 +954,9 @@ export function TerminalView({
         }).catch(() => prefetchResolve())
       }
 
-      // Open the WS immediately with no_erase=1 so that if it somehow connects
-      // (session revived), it won't wipe the file-based scrollback.
-      openWs(true, prefetchBarrier)
+      // Open WS with the barrier so the snapshot (if it arrives) is sequenced
+      // after the prefetch bytes.
+      openWs(prefetchBarrier)
     }
 
     // wireWs attaches the message/error/close handlers to a freshly
@@ -996,22 +971,16 @@ export function TerminalView({
       let replaySyncBytes = 0
       let replaySyncMsgs = 0
 
-      // Gate the replay-block callback and live messages on the prefetch so
-      // write order is always: prefetch bytes → WS snapshot → live output.
-      // Messages that race the barrier are buffered and flushed in one go.
+      // Gate the replay-block callback on the prefetch so the write order is
+      // always: prefetch bytes → WS snapshot → live output.
+      // Only relevant for dead sessions where the WS might briefly connect.
       let prefetchSettled = !prefetchBarrier
       let pendingReplayWrite: (() => void) | null = null
-      const pendingLive: Uint8Array[] = []
 
       if (prefetchBarrier) {
         prefetchBarrier.then(() => {
           prefetchSettled = true
-          // Write the replay block first (if it already arrived), then live.
           if (pendingReplayWrite) { pendingReplayWrite(); pendingReplayWrite = null }
-          for (const chunk of pendingLive) {
-            queueData(chunk, () => setTermLoading(false))
-          }
-          pendingLive.length = 0
         })
       }
 
@@ -1126,8 +1095,6 @@ export function TerminalView({
           }
           if (prefetchSettled) {
             queueData(data, () => setTermLoading(false))
-          } else {
-            pendingLive.push(data)
           }
           return
         }
@@ -1162,8 +1129,6 @@ export function TerminalView({
 
         if (prefetchSettled) {
           queueData(data, () => setTermLoading(false))
-        } else {
-          pendingLive.push(data)
         }
       }
 

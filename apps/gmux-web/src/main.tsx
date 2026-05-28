@@ -246,9 +246,6 @@ function SessionMenu({ session, onRestart, syncDiag }: {
                   <span class="session-menu-label">On disk</span>
                   <span class="session-menu-value">
                     {fmtBytes(syncDiag.prefetchBytes)}
-                    {' → '}
-                    {fmtBytes(syncDiag.prefetchExtractedBytes)}
-                    {syncDiag.prefetchBlockCount > 0 && ` (${syncDiag.prefetchBlockCount} blocks)`}
                   </span>
                 </div>
               )}
