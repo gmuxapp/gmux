@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gmuxapp/gmux/packages/scrollback"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
@@ -76,10 +80,20 @@ func scrollbackBrokerHandler(
 	}
 	defer rc.Close()
 
-	// ?extracted=1 — read all, extract, return compact result.
-	// The client writes the extracted bytes directly into the terminal
-	// emulator without any further processing.
+	// ?extracted=1 — for live sessions, proxy to the runner's in-memory VT
+	// (full scrollback history + visible screen as ANSI bytes). This is always
+	// better than file extraction: the VT has up to 50,000 rendered lines, while
+	// file extraction only works when the file has CSI_3J blocks (which only
+	// appear after a reconnect). For dead sessions, fall back to file-based
+	// extraction (ExtractBytes on the raw PTY file).
 	if r.URL.Query().Get("extracted") == "1" {
+		if sess, ok := sessions.Get(sessionID); ok && sess.Alive && sess.SocketPath != "" {
+			if rendered, err := fetchRenderedScrollback(sess.SocketPath); err == nil {
+				_, _ = w.Write(rendered)
+				return
+			}
+			// Runner unreachable — fall through to file extraction.
+		}
 		raw, err := io.ReadAll(rc)
 		if err != nil {
 			log.Printf("scrollback: read %s: %v", sessionID, err)
@@ -95,4 +109,28 @@ func scrollbackBrokerHandler(
 	// A mid-stream client disconnect (e.g. user closed the tab)
 	// surfaces as a Copy error and is not actionable; nothing to log.
 	_, _ = io.Copy(w, rc)
+}
+
+// fetchRenderedScrollback dials the runner's Unix socket and calls
+// GET /scrollback/rendered, which returns renderScreen() as ANSI bytes:
+// the full in-memory scrollback followed by the visible screen.
+// Used by scrollbackBrokerHandler to serve live sessions via ?extracted=1.
+func fetchRenderedScrollback(socketPath string) ([]byte, error) {
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.DialTimeout("unix", socketPath, 2*time.Second)
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+	resp, err := client.Get("http://unix/scrollback/rendered")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("runner returned %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
 }
