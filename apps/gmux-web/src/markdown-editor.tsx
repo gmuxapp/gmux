@@ -1,21 +1,31 @@
 /**
- * MarkdownEditor — in-browser Milkdown WYSIWYG editor for .md files.
+ * MarkdownEditor — CodeMirror 6 hybrid markdown editor for .md files.
  *
  * Opened when the user clicks a .md file in the file tree.
  * Reads content via GET /v1/fs/{slug}/read, writes back via POST /v1/fs/{slug}/write.
  * Auto-saves 1.5 s after the last edit, with Cmd/Ctrl+S as an explicit trigger.
+ *
+ * Hybrid UX (Obsidian-style via codemirror-live-markdown):
+ *   - Headings render at visual size, bold/italic syntax hidden on unfocused lines
+ *   - GFM tables render as HTML tables
+ *   - Images render as inline previews
+ *   - Raw markdown shown on the active line
  */
 
 import { useEffect, useRef, useCallback, useState } from 'preact/hooks'
 import '@fontsource/lora/400.css'
 import '@fontsource/lora/700.css'
-import { Editor, rootCtx, defaultValueCtx } from '@milkdown/kit/core'
-import { commonmark } from '@milkdown/kit/preset/commonmark'
-import { gfm } from '@milkdown/kit/preset/gfm'
-import { history } from '@milkdown/kit/plugin/history'
-import { clipboard } from '@milkdown/kit/plugin/clipboard'
-import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
-import { getMarkdown } from '@milkdown/kit/utils'
+import { EditorState } from '@codemirror/state'
+import { EditorView, keymap } from '@codemirror/view'
+import { defaultKeymap, historyKeymap, history, indentWithTab } from '@codemirror/commands'
+import { markdown } from '@codemirror/lang-markdown'
+import {
+  livePreviewPlugin,
+  markdownStylePlugin,
+  editorTheme,
+  tableField,
+  imageField,
+} from 'codemirror-live-markdown'
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
@@ -45,10 +55,8 @@ interface FrontmatterField {
   value: string
 }
 
-/** Parse YAML frontmatter string (including --- delimiters) into key-value pairs.
- *  Handles simple `key: value` lines; skips blank lines and comments. */
+/** Parse YAML frontmatter string (including --- delimiters) into key-value pairs. */
 function parseFrontmatterFields(raw: string): FrontmatterField[] {
-  // raw = '---\n{content}\n---' (with or without trailing newline before ---)
   const inner = raw.slice(4) // strip leading '---\n'
   const end = inner.lastIndexOf('---')
   const body = end >= 0 ? inner.slice(0, end) : inner
@@ -58,9 +66,7 @@ function parseFrontmatterFields(raw: string): FrontmatterField[] {
     if (!trimmed || trimmed.startsWith('#')) continue
     const colonIdx = trimmed.indexOf(':')
     if (colonIdx < 0) continue
-    const key = trimmed.slice(0, colonIdx).trim()
-    const value = trimmed.slice(colonIdx + 1).trim()
-    fields.push({ key, value })
+    fields.push({ key: trimmed.slice(0, colonIdx).trim(), value: trimmed.slice(colonIdx + 1).trim() })
   }
   return fields
 }
@@ -68,8 +74,7 @@ function parseFrontmatterFields(raw: string): FrontmatterField[] {
 /** Reconstruct frontmatter string from key-value pairs. Returns null when empty. */
 function fieldsToFrontmatter(fields: FrontmatterField[]): string | null {
   if (fields.length === 0) return null
-  const lines = fields.map(({ key, value }) => `${key}: ${value}`)
-  return '---\n' + lines.join('\n') + '\n---'
+  return '---\n' + fields.map(({ key, value }) => `${key}: ${value}`).join('\n') + '\n---'
 }
 
 // ── Frontmatter editor component ─────────────────────────────────────────────
@@ -128,6 +133,76 @@ function parseFrontmatter(content: string): { frontmatter: string | null; body: 
   }
 }
 
+// ── Theme (defined outside component to avoid re-creation on render) ─────────
+
+const gmuxTheme = EditorView.theme({
+  '&': {
+    fontFamily: "'Lora', Georgia, serif",
+    fontSize: '15px',
+    height: '100%',
+  },
+  '.cm-scroller': {
+    fontFamily: "'Lora', Georgia, serif",
+    lineHeight: '1.75',
+    overflowY: 'auto',
+  },
+  '.cm-content': {
+    padding: '32px 24px',
+    maxWidth: '720px',
+    margin: '0 auto',
+    caretColor: 'var(--accent, oklch(65% 0.18 250))',
+  },
+  '.cm-line': { padding: '0' },
+  '.cm-focused': { outline: 'none' },
+  '&.cm-focused': { outline: 'none' },
+  '.cm-cursor': { borderLeftColor: 'var(--accent, oklch(65% 0.18 250))' },
+  '.cm-selectionBackground': {
+    backgroundColor: 'var(--selection-bg, rgba(99,179,237,0.2))',
+  },
+  '&.cm-focused .cm-selectionBackground': {
+    backgroundColor: 'var(--selection-bg, rgba(99,179,237,0.25))',
+  },
+  '.cm-gutters': { display: 'none' },
+  // Heading sizes (markdownStylePlugin applies cm-heading-N classes)
+  '.cm-heading-1': { fontSize: '1.8em', fontWeight: '700', fontFamily: "'Instrument Sans', sans-serif", lineHeight: '1.3' },
+  '.cm-heading-2': { fontSize: '1.4em', fontWeight: '600', fontFamily: "'Instrument Sans', sans-serif", lineHeight: '1.3' },
+  '.cm-heading-3': { fontSize: '1.15em', fontWeight: '600', fontFamily: "'Instrument Sans', sans-serif", lineHeight: '1.3' },
+  // Inline code
+  '.cm-inline-code': {
+    background: 'var(--bg-selected)',
+    borderRadius: '3px',
+    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+    fontSize: '0.88em',
+    padding: '1px 5px',
+  },
+  // Block code
+  '.cm-code-block': {
+    background: 'var(--bg-selected)',
+    borderRadius: 'var(--radius)',
+    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+    fontSize: '0.88em',
+    lineHeight: '1.55',
+    padding: '14px 18px',
+    display: 'block',
+  },
+  // Blockquote
+  '.cm-blockquote': {
+    borderLeft: '3px solid var(--border, oklch(35% 0 0))',
+    color: 'var(--text-muted)',
+    paddingLeft: '16px',
+  },
+  // Links
+  '.cm-link': { color: 'var(--accent, oklch(65% 0.18 250))' },
+  // Tables (rendered by tableField)
+  '.cm-table-wrapper table': { borderCollapse: 'collapse', width: '100%', margin: '0.8em 0', fontSize: '14px' },
+  '.cm-table-wrapper th': {
+    background: 'var(--bg-selected)', fontFamily: "'Instrument Sans', sans-serif",
+    fontWeight: '600', fontSize: '0.9em', padding: '6px 10px', textAlign: 'left',
+    border: '1px solid var(--border)',
+  },
+  '.cm-table-wrapper td': { padding: '6px 10px', border: '1px solid var(--border)' },
+}, { dark: true })
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
@@ -141,9 +216,8 @@ export interface MarkdownEditorProps {
 
 export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const editorRef = useRef<Editor | null>(null)
+  const viewRef = useRef<EditorView | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const latestContentRef = useRef<string>('')
 
   const isDirtyRef = useRef(false)
   const frontmatterRef = useRef<string | null>(null)
@@ -153,20 +227,18 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saveState, setSaveState] = useState<SaveState>('idle')
 
-  // Filename for display (last segment of path)
   const fileName = filePath.split('/').pop() ?? filePath
 
   // ── Save ──────────────────────────────────────────────────────────────────
 
   const doSave = useCallback(async () => {
-    if (!editorRef.current) return
+    if (!viewRef.current) return
     try {
       setSaveState('saving')
-      const md = editorRef.current.action(getMarkdown())
+      const md = viewRef.current.state.doc.toString()
       const full = frontmatterRef.current ? frontmatterRef.current + '\n' + md : md
       await apiWriteFile(projectSlug, filePath, full)
       setSaveState('saved')
-      // Revert to idle after 2 s
       setTimeout(() => setSaveState(s => s === 'saved' ? 'idle' : s), 2000)
     } catch (err) {
       console.error('[MarkdownEditor] save error', err)
@@ -180,7 +252,6 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
     saveTimerRef.current = setTimeout(doSave, 1500)
   }, [doSave])
 
-  // Flush pending save immediately (used by Cmd/Ctrl+S and on unmount)
   const flushSave = useCallback(() => {
     if (saveTimerRef.current !== null) {
       clearTimeout(saveTimerRef.current)
@@ -202,7 +273,7 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [flushSave])
 
-  // ── Load content + init Milkdown ──────────────────────────────────────────
+  // ── Load content + init CodeMirror ────────────────────────────────────────
 
   useEffect(() => {
     let destroyed = false
@@ -228,59 +299,47 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
 
       if (destroyed || !containerRef.current) return
 
-      // Strip YAML frontmatter before passing to Milkdown
       const { frontmatter, body } = parseFrontmatter(initialContent)
       frontmatterRef.current = frontmatter
       setFrontmatterFields(frontmatter !== null ? parseFrontmatterFields(frontmatter) : [])
 
-      // Clear any previous editor DOM
       containerRef.current.innerHTML = ''
 
-      latestContentRef.current = body
-
-      // False until after .create() resolves; guards against the spurious
-      // markdownUpdated event Milkdown fires on initialisation.
-      let initialized = false
-
-      let ed: Editor
-      try {
-        ed = await Editor.make()
-          .config((ctx: any) => {
-            ctx.set(rootCtx, containerRef.current!)
-            ctx.set(defaultValueCtx, body)
-          })
-          .use(commonmark)
-          .use(gfm)
-          .use(history)
-          .use(clipboard)
-          .use(listener)
-          .config((ctx: any) => {
-            ctx.get(listenerCtx).markdownUpdated((_ctx: any, markdown: string) => {
-              if (!initialized) return // skip the initial fire on editor creation
-              latestContentRef.current = markdown
+      const state = EditorState.create({
+        doc: body,
+        extensions: [
+          history(),
+          markdown(),
+          // Hybrid WYSIWYG layer (codemirror-live-markdown)
+          editorTheme,
+          livePreviewPlugin,
+          markdownStylePlugin,
+          tableField,
+          imageField(),
+          // App theme override (sits on top of editorTheme)
+          gmuxTheme,
+          EditorView.lineWrapping,
+          keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+          EditorView.updateListener.of(update => {
+            if (update.docChanged) {
               isDirtyRef.current = true
               scheduleSave()
-            })
-          })
-          .create()
+            }
+          }),
+        ],
+      })
 
-        // Any markdownUpdated calls during .create() have already returned early.
-        initialized = true
-      } catch (err) {
-        console.error('[MarkdownEditor] Milkdown init error', err)
-        if (!destroyed) {
-          setLoadError(`Editor failed to initialise: ${err}`)
-          setLoading(false)
-        }
-        return
-      }
+      const view = new EditorView({
+        state,
+        parent: containerRef.current,
+      })
 
       if (destroyed) {
-        ed.destroy()
+        view.destroy()
         return
       }
 
-      editorRef.current = ed
+      viewRef.current = view
       setLoading(false)
     }
 
@@ -288,19 +347,18 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
 
     return () => {
       destroyed = true
-      // Cancel debounced save — flush synchronously best-effort
       if (saveTimerRef.current !== null) {
         clearTimeout(saveTimerRef.current)
         saveTimerRef.current = null
       }
-      // Flush final content only if the user actually made changes
-      if (editorRef.current) {
+      if (viewRef.current) {
         if (isDirtyRef.current) {
-          const md = editorRef.current.action(getMarkdown())
-          void apiWriteFile(projectSlug, filePath, md).catch(() => {/* best-effort */})
+          const md = viewRef.current.state.doc.toString()
+          const full = frontmatterRef.current ? frontmatterRef.current + '\n' + md : md
+          void apiWriteFile(projectSlug, filePath, full).catch(() => {/* best-effort */})
         }
-        editorRef.current.destroy()
-        editorRef.current = null
+        viewRef.current.destroy()
+        viewRef.current = null
       }
     }
   // Re-run when the file changes (user clicks a different .md)
@@ -342,7 +400,6 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
         )}
       </div>
 
-      {/* Body */}
       {loadError && (
         <div class="state-message">
           <div class="state-icon" style={{ color: 'var(--status-error)' }}>⚠</div>
@@ -355,12 +412,16 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
           <div class="state-subtitle">Loading…</div>
         </div>
       )}
-      {/* Frontmatter key-value editor */}
+
       {frontmatterFields.length > 0 && (
         <FrontmatterEditor fields={frontmatterFields} onChange={handleFrontmatterChange} />
       )}
+
       {/* Always rendered so containerRef is mounted before useEffect runs */}
-      <div class="md-editor-scroll" style={{ display: loading || loadError ? 'none' : undefined }}>
+      <div
+        class="md-editor-scroll"
+        style={{ display: loading || loadError ? 'none' : undefined }}
+      >
         <div class="md-editor-container" ref={containerRef} />
       </div>
     </div>
