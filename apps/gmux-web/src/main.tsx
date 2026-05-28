@@ -274,8 +274,9 @@ const IconRight = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><
 
 const IconWordLeft  = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="3.5" y1="3" x2="3.5" y2="11"/><path d="M13 7H6m0 0 3-3M6 7l3 3"/></svg>
 const IconWordRight = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="14.5" y1="3" x2="14.5" y2="11"/><path d="M5 7h7m0 0-3-3m3 3-3 3"/></svg>
-const IconSend = () => <svg viewBox="0 0 14 14" width="16" height="16" fill="currentColor" stroke="none"><path d="M3 2.5l8 4.5-8 4.5V8.5L7.5 7 3 5.5z"/></svg>
+const IconSend  = () => <svg viewBox="0 0 14 14" width="16" height="16" fill="currentColor" stroke="none"><path d="M3 2.5l8 4.5-8 4.5V8.5L7.5 7 3 5.5z"/></svg>
 const IconPaste = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><rect x="3" y="3" width="8" height="9" rx="1"/><path d="M5.5 3V2.5a1.5 1.5 0 0 1 3 0V3"/><path d="M7 7v3m0 0-1.5-1.5M7 10l1.5-1.5"/></svg>
+const IconCopy  = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><rect x="4" y="4" width="7" height="8" rx="1"/><path d="M3 10V3a1 1 0 0 1 1-1h6"/></svg>
 
 function MobileTerminalBar({
   canSend,
@@ -283,6 +284,7 @@ function MobileTerminalBar({
   altArmed,
   onMenu,
   onSend,
+  onCopy,
   onPaste,
   onToggleCtrl,
   onToggleAlt,
@@ -293,6 +295,8 @@ function MobileTerminalBar({
   altArmed: boolean
   onMenu: () => void
   onSend: (data: string) => void
+  /** Copy active selection to clipboard, or select-all + copy if nothing selected. */
+  onCopy: () => void
   onPaste: () => void
   onToggleCtrl: () => void
   onToggleAlt: () => void
@@ -397,6 +401,7 @@ function MobileTerminalBar({
           ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => { onPaste(); onFocusTerminal() }} title="Paste from clipboard"><IconPaste /></button>
           : <button class="mobile-bottom-action send-btn" disabled={!canSend} onClick={() => tap('\r')} title="Send"><IconSend /></button>
         }
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={onCopy} title="Copy selection (or select all)"><IconCopy /></button>
       </div>
     </div>
   )
@@ -467,6 +472,7 @@ function App() {
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   const terminalFocusRef = useRef<(() => void) | null>(null)
   const terminalPasteRef = useRef<(() => void) | null>(null)
+  const terminalCopyRef  = useRef<(() => void) | null>(null)
   // Sessions that have been opened (TerminalView mounted + WS established).
   // Add when a live session is first selected; never remove (WS persists).
   // Use a ref so we can mutate during render without triggering re-renders.
@@ -566,11 +572,17 @@ function App() {
   const handleTerminalPasteReady = useCallback((paste: (() => void) | null) => {
     terminalPasteRef.current = paste
   }, [])
+  const handleTerminalCopyReady = useCallback((copy: (() => void) | null) => {
+    terminalCopyRef.current = copy
+  }, [])
   // The trigger encapsulates clipboard read, binary detection, upload,
   // and PTY emission. Mobile and desktop now share one paste code path,
   // so binary clipboard items work from the toolbar button too.
   const handleMobilePaste = useCallback(() => {
     terminalPasteRef.current?.()
+  }, [])
+  const handleMobileCopy = useCallback(() => {
+    terminalCopyRef.current?.()
   }, [])
   const handleToggleCtrl = useCallback(() => {
     if (!canAttach) return
@@ -659,6 +671,7 @@ function App() {
             onInputReady={handleTerminalInputReady}
             onPasteReady={handleTerminalPasteReady}
             onFocusReady={handleTerminalFocusReady}
+            onCopyReady={handleTerminalCopyReady}
             onSyncDiag={s.id === selId ? handleSyncDiag : undefined}
           />
         ))}
@@ -687,6 +700,7 @@ function App() {
           altArmed={altArmed}
           onMenu={() => setSidebarOpen(true)}
           onSend={handleMobileInput}
+          onCopy={handleMobileCopy}
           onPaste={handleMobilePaste}
           onToggleCtrl={handleToggleCtrl}
           onToggleAlt={handleToggleAlt}

@@ -5,6 +5,7 @@ import { attachKeyboardHandler, attachPasteHandler, ctrlSequenceFor, defaultPast
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { focusTerminalInput, useTouchPan } from './terminal-touch'
+import { selectionToText } from './selection'
 import { createReplayBuffer } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 import { decideViewportResize, sameSize, useViewportResize } from './terminal-resize'
@@ -106,6 +107,7 @@ export function TerminalView({
   onInputReady,
   onPasteReady,
   onFocusReady,
+  onCopyReady,
   onSyncDiag,
   isActive,
 }: {
@@ -120,6 +122,9 @@ export function TerminalView({
   onInputReady?: (send: ((data: string) => void) | null) => void
   onPasteReady?: (paste: (() => void) | null) => void
   onFocusReady?: (focus: (() => void) | null) => void
+  /** Called with a function that copies the active terminal selection (or
+   *  selects-all + copies when nothing is selected). Null on cleanup. */
+  onCopyReady?: (copy: (() => void) | null) => void
   onSyncDiag?: (diag: SyncDiag) => void
   /** When false, the terminal is hidden (display:none) and its WS stays open.
    *  Callbacks (onInputReady etc.) are deregistered while inactive so the
@@ -145,6 +150,7 @@ export function TerminalView({
   const sendRawInputRef = useRef<((data: string) => void) | null>(null)
   const pasteActionRef  = useRef<(() => void) | null>(null)
   const focusActionRef  = useRef<(() => void) | null>(null)
+  const copyActionRef   = useRef<(() => void) | null>(null)
 
   const [ghosttyReady, setGhosttyReady] = useState(false)
   const [termLoading,  setTermLoading]  = useState(true)
@@ -285,7 +291,7 @@ export function TerminalView({
   }, [focusTerminal])
 
   // ── Touch pan (separate hook — stable, runs once on mount) ──
-  useTouchPan(shellRef, termRef, viewportSizeRef, ptySizeRef)
+  useTouchPan(shellRef, termRef, viewportSizeRef, ptySizeRef, containerRef)
 
   // ── Viewport resize (separate hook — stable, runs once on mount) ──
   useViewportResize(shellRef, processViewportResizeRef, () => focusTerminalInput(termRef.current))
@@ -377,12 +383,24 @@ export function TerminalView({
       })
     }
     focusActionRef.current = () => focusTerminalInput(term)
+    copyActionRef.current  = () => {
+      if (term.hasSelection()) {
+        const text = selectionToText(term)
+        if (text) navigator.clipboard.writeText(text).catch(() => {})
+        term.clearSelection()
+      } else {
+        term.selectAll()
+        const text = selectionToText(term)
+        if (text) navigator.clipboard.writeText(text).catch(() => {})
+      }
+    }
 
     // Blocker 2 fix: register immediately if already active.
     if (isActiveRef.current) {
       onInputReady?.(sendRawInput)
       onPasteReady?.(pasteActionRef.current)
       onFocusReady?.(focusActionRef.current)
+      onCopyReady?.(copyActionRef.current)
     }
 
     const dataDisposable       = term.onData(sendInput)
@@ -421,9 +439,11 @@ export function TerminalView({
       onInputReady?.(null)
       onPasteReady?.(null)
       onFocusReady?.(null)
+      onCopyReady?.(null)
       sendRawInputRef.current = null
       pasteActionRef.current  = null
       focusActionRef.current  = null
+      copyActionRef.current   = null
       ;(window as any).__gmuxTerm   = null
       ;(window as any).__gmuxInject = null
       ;(window as any).__gmuxDiag   = null
@@ -441,11 +461,13 @@ export function TerminalView({
       onInputReady?.(null)
       onFocusReady?.(null)
       onPasteReady?.(null)
+      onCopyReady?.(null)
       return
     }
     if (sendRawInputRef.current) onInputReady?.(sendRawInputRef.current)
     if (focusActionRef.current)  onFocusReady?.(focusActionRef.current)
     if (pasteActionRef.current)  onPasteReady?.(pasteActionRef.current)
+    if (copyActionRef.current)   onCopyReady?.(copyActionRef.current)
     onSyncDiag?.(syncDiagRef.current)
     requestAnimationFrame(() => {
       if (!isActiveRef.current) return
@@ -456,8 +478,9 @@ export function TerminalView({
       onInputReady?.(null)
       onFocusReady?.(null)
       onPasteReady?.(null)
+      onCopyReady?.(null)
     }
-  }, [isActive, onInputReady, onFocusReady, onPasteReady, onSyncDiag, fitAndResize])
+  }, [isActive, onInputReady, onFocusReady, onPasteReady, onCopyReady, onSyncDiag, fitAndResize])
 
   // ── WebSocket connection ──
   useWebSocket({
