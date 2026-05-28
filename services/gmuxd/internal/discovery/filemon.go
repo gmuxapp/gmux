@@ -98,8 +98,13 @@ func NewFileMonitorWithAttributions(s *store.Store, attrs map[string]string) *Fi
 		if !ok {
 			continue
 		}
-		if root := sf.SessionRootDir(); root != "" {
-			rootToAdapter[root] = a
+		root := sf.SessionRootDir()
+		if root != "" {
+			// First adapter claiming a root wins. pi and pi-sbx share the same
+			// SessionRootDir; pi appears first in AllAdapters so it keeps the slot.
+			if _, exists := rootToAdapter[root]; !exists {
+				rootToAdapter[root] = a
+			}
 		}
 	}
 	return &FileMonitor{
