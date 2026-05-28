@@ -24,6 +24,7 @@
     "@fontsource/source-sans-3": "^5.2.9",
     "@gmux/protocol": "workspace:*",
     "@lezer/markdown": "^1.6.4",
+    "@pierre/diffs": "^1.2.3",
     "@preact/signals": "^2.9.0",
     "@trpc/client": "^11.6.0",
     "codemirror-live-markdown": "0.5.1-alpha.1",

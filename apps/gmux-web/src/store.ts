@@ -119,6 +119,16 @@ export function navigateToImageViewer(projectSlug: string, filePath: string): vo
   ensureImageTab(projectSlug, filePath)
   navigate(`/${projectSlug}/_img/${encodeURIComponent(filePath)}`)
 }
+
+/** Navigate to the diff panel for a project cwd. */
+export function navigateToDiffView(projectSlug: string, cwd: string): void {
+  navigate(`/${projectSlug}/_diff/${encodeURIComponent(cwd)}`)
+}
+
+/** Close the diff view and return to the project hub. */
+export function closeDiffView(projectSlug: string): void {
+  navigate(`/${projectSlug}`)
+}
 export const launchers = signal<LauncherDef[]>([])
 export const defaultLauncher = signal<string>('shell')
 
