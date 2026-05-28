@@ -5,7 +5,27 @@ import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
 import { ReplayView } from './replay-view'
-import { TerminalView } from './terminal'
+import { TerminalView as TerminalViewXterm } from './terminal'
+import { TerminalViewGhostty } from './terminal-ghostty'
+
+// Feature flag: switch terminal renderer at runtime via
+//   ?ghostty=1                          (URL param, one-shot)
+//   localStorage.gmux_ghostty = '1'     (persistent)
+//
+// Resolved once at module load so toggling without reload is a no-op.
+const useGhostty = (() => {
+  if (typeof window === 'undefined') return false
+  const params = new URLSearchParams(window.location.search)
+  if (params.has('ghostty')) {
+    const v = params.get('ghostty')
+    if (v === '0' || v === 'false') { try { localStorage.removeItem('gmux_ghostty') } catch {} ; return false }
+    try { localStorage.setItem('gmux_ghostty', '1') } catch {}
+    return true
+  }
+  try { return localStorage.getItem('gmux_ghostty') === '1' } catch { return false }
+})()
+
+const TerminalView = useGhostty ? (TerminalViewGhostty as typeof TerminalViewXterm) : TerminalViewXterm
 import { useArrivalPulse } from './use-arrival-pulse'
 import { Sidebar } from './sidebar'
 import type { DotState } from './store'

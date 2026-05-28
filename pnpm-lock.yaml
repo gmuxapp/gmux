@@ -62,6 +62,9 @@ importers:
       '@xterm/xterm':
         specifier: github:gmuxapp/xterm.js#v6.1.0-beta.195-gmux.2
         version: https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed
+      ghostty-web:
+        specifier: ^0.4.0
+        version: 0.4.0
       preact:
         specifier: ^10.26.4
         version: 10.29.0
@@ -1937,6 +1940,9 @@ packages:
 
   get-tsconfig@4.13.6:
     resolution: {integrity: sha512-shZT/QMiSHc/YBLxxOkMtgSid5HFoauqCE3/exfsEcwg1WkeqjG+V40yBbBrsD+jW2HDXcs28xOfcbm2jI8Ddw==}
+
+  ghostty-web@0.4.0:
+    resolution: {integrity: sha512-0puDBik2qapbD/QQBW9o5ZHfXnZBqZWx/ctBiVtKZ6ZLds4NYb+wZuw1cRLXZk9zYovIQ908z3rvFhexAvc5Hg==}
 
   github-slugger@2.0.0:
     resolution: {integrity: sha512-IaOQ9puYtjrkq7Y0Ygl9KDZnrf/aiUJYUpVf89y8kyaxbRG7Y1SrX/jaumrv81vc61+kiMempujsM3Yw7w5qcw==}
@@ -4898,6 +4904,8 @@ snapshots:
     dependencies:
       resolve-pkg-maps: 1.0.0
     optional: true
+
+  ghostty-web@0.4.0: {}
 
   github-slugger@2.0.0: {}
 
