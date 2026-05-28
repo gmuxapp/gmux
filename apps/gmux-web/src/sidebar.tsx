@@ -98,6 +98,7 @@ function SessionItem({
   onDragStart,
   onDragOver,
   onDragEnd,
+  layout = 'vertical',
 }: {
   session: Session
   href: string
@@ -112,6 +113,7 @@ function SessionItem({
   onDragStart?: () => void
   onDragOver?: () => void
   onDragEnd?: () => void
+  layout?: SessionListLayout
 }) {
   const effectiveDotState = resuming ? 'working' : rawDotState
   // Nothing is "unread" if you're already looking at it.
@@ -121,10 +123,39 @@ function SessionItem({
 
   const cls = [
     'session-item',
+    layout === 'horizontal' ? 'session-item-tab' : '',
     selected ? 'selected' : '',
     dragging ? 'session-dragging' : '',
     dropTarget ? 'session-drop-target' : '',
   ].filter(Boolean).join(' ')
+
+  if (layout === 'horizontal') {
+    return (
+      <a
+        class={cls}
+        href={href}
+        onClick={() => onClick?.()}
+        onAuxClick={(e) => { if (e.button === 1 && onClose) { e.preventDefault(); onClose() } }}
+        title={session.title}
+      >
+        {sleeping
+          ? <svg class="session-sleep-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
+          : <span class={`session-dot-indicator ${dotState}${arrival ? ` ${arrival}` : ''}`} />
+        }
+        <span class="session-env-icon" aria-label={session.kind === 'pi-sbx' ? 'sandbox' : 'host'}>{sessionEnvironmentIcon(session.kind)}</span>
+        <span class="session-tab-title">{session.title}</span>
+        {onClose && (
+          <button
+            class="session-close-btn"
+            onClick={(e) => { e.stopPropagation(); e.preventDefault(); onClose() }}
+            title={session.alive ? 'Kill session' : 'Dismiss'}
+          >
+            ×
+          </button>
+        )}
+      </a>
+    )
+  }
 
   return (
     <a
@@ -230,6 +261,7 @@ function FolderGroup({
   onCloseImageTab,
   onCloseSession,
   onClick,
+  layout,
 }: {
   folder: Folder
   project: ProjectItem
@@ -245,6 +277,7 @@ function FolderGroup({
   onCloseImageTab: (projectSlug: string, filePath: string) => void
   onCloseSession: (session: Session) => void
   onClick?: () => void
+  layout: SessionListLayout
 }) {
   const [drag, setDrag] = useState<DragState | null>(null)
 
@@ -291,7 +324,7 @@ function FolderGroup({
           className="folder-launch-btn"
         />
       </div>
-      <div class="folder-sessions">
+      <div class={`folder-sessions${layout === 'horizontal' ? ' folder-sessions-tabs' : ''}`}>
         {markdownTabs.filter(t => t.projectSlug === folder.path).map(tab => (
           <MarkdownTabItem
             key={tab.filePath}
@@ -324,9 +357,10 @@ function FolderGroup({
             dropTarget={drag !== null && drag.over === i && drag.from !== i}
             onClose={() => onCloseSession(s)}
             onClick={onClick}
-            onDragStart={() => handleDragStart(i)}
-            onDragOver={() => handleDragOver(i)}
-            onDragEnd={() => handleDragEnd(visible)}
+            layout={layout}
+            onDragStart={layout === 'vertical' ? () => handleDragStart(i) : undefined}
+            onDragOver={layout === 'vertical' ? () => handleDragOver(i) : undefined}
+            onDragEnd={layout === 'vertical' ? () => handleDragEnd(visible) : undefined}
           />
         ))}
       </div>
@@ -341,6 +375,16 @@ const SPLIT_MIN = 0.12
 const SPLIT_MAX = 0.80
 const SPLIT_DEFAULT = 0.30
 
+const LAYOUT_KEY = 'gmux:sessionListLayout'
+type SessionListLayout = 'vertical' | 'horizontal'
+
+function loadLayout(): SessionListLayout {
+  try {
+    const v = localStorage.getItem(LAYOUT_KEY)
+    if (v === 'vertical' || v === 'horizontal') return v
+  } catch { /* ignore */ }
+  return 'vertical'
+}
 function loadSplit(): number {
   try {
     const v = parseFloat(localStorage.getItem(SPLIT_KEY) ?? '')
@@ -428,6 +472,15 @@ export function Sidebar({
   const panesRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState(false)
 
+  // ── Session list layout toggle ─────────────────────────────────────────
+  const [layout, setLayout] = useState<SessionListLayout>(loadLayout)
+  const toggleLayout = useCallback(() => {
+    setLayout(prev => {
+      const next: SessionListLayout = prev === 'vertical' ? 'horizontal' : 'vertical'
+      try { localStorage.setItem(LAYOUT_KEY, next) } catch { /* ignore */ }
+      return next
+    })
+  }, [])
   const handleDividerMouseDown = useCallback((e: MouseEvent) => {
     e.preventDefault()
     const panes = panesRef.current
@@ -455,11 +508,6 @@ export function Sidebar({
       <div class={`sidebar-overlay ${open ? 'visible' : ''}`} onClick={onClose} />
       <aside class={`sidebar ${open ? 'open' : ''}`}>
         <div class="sidebar-header">
-          <a
-            class="sidebar-logo"
-            href="/"
-            onClick={onClose}
-          >gmux</a>
           {connected && !hasProjects && (
             <LaunchButton
               className="sidebar-launch-btn"
@@ -467,6 +515,28 @@ export function Sidebar({
               onLaunch={onClose}
             />
           )}
+          <div class="sidebar-header-spacer" />
+          <button
+            class={`layout-toggle-btn${layout === 'horizontal' ? ' active' : ''}`}
+            onClick={toggleLayout}
+            title={layout === 'vertical' ? 'Switch to tab view' : 'Switch to list view'}
+            aria-label={layout === 'vertical' ? 'Switch to tab view' : 'Switch to list view'}
+          >
+            {layout === 'vertical' ? (
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                <rect x="2" y="2" width="5" height="5" rx="1" />
+                <rect x="9" y="2" width="5" height="5" rx="1" />
+                <rect x="2" y="9" width="5" height="5" rx="1" />
+                <rect x="9" y="9" width="5" height="5" rx="1" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                <line x1="2" y1="4" x2="14" y2="4" />
+                <line x1="2" y1="8" x2="14" y2="8" />
+                <line x1="2" y1="12" x2="14" y2="12" />
+              </svg>
+            )}
+          </button>
         </div>
         <div class="sidebar-panes" ref={panesRef} style={{ userSelect: dragging ? 'none' : undefined }}>
           {/* ── Sessions pane ── */}
@@ -494,6 +564,7 @@ export function Sidebar({
                   onCloseImageTab={closeImageTab}
                   onCloseSession={onCloseSession}
                   onClick={onClose}
+                  layout={layout}
                 />
               )
             })}
