@@ -58,17 +58,20 @@ interface ScrollState {
 async function getScroll(page: Page): Promise<ScrollState> {
   return page.evaluate(() => {
     const term = (window as any).__gmuxTerm
-    // ghostty-web scroll coordinates:
-    //   getScrollbackLength() = number of scrollback lines (= xterm baseY)
-    //   getViewportY()        = 0 when at live output (= xterm "at bottom")
-    //                         = N after scrollToLine(N) (= xterm viewportY)
-    // xterm-compat translation:
+    // ghostty-web coordinate system (post-be14c72):
+    //   getViewportY() = 0     → at the bottom (no scrollback visible)
+    //                  = N > 0 → N scrollback lines visible (distance from bottom)
+    //   getScrollbackLength()  → total scrollback lines (= xterm's baseY)
+    //
+    // terminal-io expects xterm-stable absolute coords:
+    //   viewportY = scrollbackLen - gvY
+    //             = scrollbackLen at the bottom (gvY=0)
+    //             = scrollbackLen - N when scrolled up N lines
     //   baseY     = scrollbackLen
-    //   viewportY = scrollbackLen when at bottom (gvY=0), else gvY
     const scrollbackLen: number = term.getScrollbackLength()
-    const gvY: number = term.getViewportY()
+    const gvY: number           = Math.floor(term.getViewportY())
     return {
-      viewportY: gvY === 0 ? scrollbackLen : gvY,
+      viewportY: scrollbackLen - gvY,
       baseY:     scrollbackLen,
       rows:      term.rows as number,
       cols:      term.cols as number,
@@ -287,11 +290,12 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     const baseline = await getScroll(page)
     expect(baseline.baseY).toBeGreaterThan(20)
 
-    // Scroll up by 20 lines. We pick an absolute line halfway up.
-    const target = Math.max(1, baseline.baseY - 20)
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), target)
+    // Scroll up 20 lines: pass gvY=20 directly to the ghostty API.
+    // In xterm-stable coords that puts the viewport at absolute position baseY-20.
+    await page.evaluate(() => (window as any).__gmuxTerm.scrollToLine(20))
     const beforeBurst = await getScroll(page)
-    expect(beforeBurst.viewportY).toBe(target)
+    const target = beforeBurst.viewportY  // = baseline.baseY - 20
+    expect(beforeBurst.viewportY).toBeGreaterThan(0)
     expect(beforeBurst.viewportY).toBeLessThan(beforeBurst.baseY)
 
     // A modest BSU/ESU burst that doesn't overflow scrollback.
@@ -433,11 +437,11 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     const baseline = await getScroll(page)
     expect(baseline.baseY).toBeGreaterThan(50)
 
-    // Scroll up well into the seeded backscroll.
-    const target = Math.floor(baseline.baseY / 2)
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), target)
+    // Scroll up well into the seeded backscroll (gvY = scrollUpBy lines from bottom).
+    const scrollUpBy = Math.floor(baseline.baseY / 2)
+    await page.evaluate((n) => (window as any).__gmuxTerm.scrollToLine(n), scrollUpBy)
     const beforeBurst = await getScroll(page)
-    expect(beforeBurst.viewportY).toBe(target)
+    expect(beforeBurst.viewportY).toBe(baseline.baseY - scrollUpBy)
 
     await replayPiFixture(page)
 
@@ -478,8 +482,8 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     expect(baseline.baseY).toBeGreaterThan(20)
 
     const distance = 3
-    const target = baseline.baseY - distance
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), target)
+    // Pass gvY = distance directly: scrollToLine(N) scrolls up N lines from bottom.
+    await page.evaluate((n) => (window as any).__gmuxTerm.scrollToLine(n), distance)
     const beforeBurst = await getScroll(page)
     expect(beforeBurst.baseY - beforeBurst.viewportY).toBe(distance)
 
@@ -534,8 +538,10 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     // banner rows / trailing newlines from seedScrollback; the
     // contract under test is content matching, not seed numbering.
     const distance = 10
+    // targetY is the absolute buffer position we want at the top of the viewport.
+    // gvY = distance → viewportY = baseY - distance = targetY.
     const targetY = baseline.baseY - distance
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), targetY)
+    await page.evaluate((n) => (window as any).__gmuxTerm.scrollToLine(n), distance)
     const beforeBurst = await getScroll(page)
     expect(beforeBurst.viewportY).toBe(targetY)
     const targetText = await page.evaluate((y) => {
@@ -599,8 +605,10 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     expect(baseline.baseY).toBeGreaterThan(20)
 
     const distance = 5
+    // targetY is the absolute buffer position we want visible at the viewport top.
+    // gvY = distance → viewportY = baseY - distance = targetY.
     const targetY = baseline.baseY - distance
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), targetY)
+    await page.evaluate((n) => (window as any).__gmuxTerm.scrollToLine(n), distance)
     const targetText = await page.evaluate((y) => {
       const term = (window as any).__gmuxTerm
       const line = term.buffer.active.getLine(y)
@@ -691,7 +699,9 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     const preWipeDistance = preWipeBaseY - targetY
     expect(preWipeDistance).toBeGreaterThan(15)
 
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), targetY)
+    // To scroll to absolute position targetY: gvY = preWipeBaseY - targetY.
+    const scrollGvY = preWipeBaseY - targetY
+    await page.evaluate((n) => (window as any).__gmuxTerm.scrollToLine(n), scrollGvY)
     const beforeBurst = await getScroll(page)
     expect(beforeBurst.viewportY).toBe(targetY)
 
@@ -759,8 +769,8 @@ test.describe('terminal scrollback (jump-to-top bug)', () => {
     // makes the failure mode (viewportY=0, distance=baseY) visually
     // dramatic in the assertion message.
     const distance = 3
-    const target = baseline.baseY - distance
-    await page.evaluate((line) => (window as any).__gmuxTerm.scrollToLine(line), target)
+    // Pass gvY = distance directly: scrollToLine(N) scrolls up N lines from bottom.
+    await page.evaluate((n) => (window as any).__gmuxTerm.scrollToLine(n), distance)
     const beforeBurst = await getScroll(page)
     expect(beforeBurst.baseY - beforeBurst.viewportY).toBe(distance)
     const prevBaseY = beforeBurst.baseY
