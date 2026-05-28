@@ -501,37 +501,6 @@ export function Sidebar({
     <>
       <div class={`sidebar-overlay ${open ? 'visible' : ''}`} onClick={onClose} />
       <aside class={`sidebar ${open ? 'open' : ''}`}>
-        <div class="sidebar-header">
-          {connected && !hasProjects && layout === 'vertical' && (
-            <LaunchButton
-              className="sidebar-launch-btn"
-              beforeLaunch={seedHomeProject}
-              onLaunch={onClose}
-            />
-          )}
-          <div class="sidebar-header-spacer" />
-          <button
-            class={`layout-toggle-btn${layout === 'horizontal' ? ' active' : ''}`}
-            onClick={onToggleLayout}
-            title={layout === 'vertical' ? 'Switch to tab view' : 'Switch to list view'}
-            aria-label={layout === 'vertical' ? 'Switch to tab view' : 'Switch to list view'}
-          >
-            {layout === 'vertical' ? (
-              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                <rect x="2" y="2" width="5" height="5" rx="1" />
-                <rect x="9" y="2" width="5" height="5" rx="1" />
-                <rect x="2" y="9" width="5" height="5" rx="1" />
-                <rect x="9" y="9" width="5" height="5" rx="1" />
-              </svg>
-            ) : (
-              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                <line x1="2" y1="4" x2="14" y2="4" />
-                <line x1="2" y1="8" x2="14" y2="8" />
-                <line x1="2" y1="12" x2="14" y2="12" />
-              </svg>
-            )}
-          </button>
-        </div>
         <div class="sidebar-panes" ref={panesRef} style={{ userSelect: dragging ? 'none' : undefined }}>
           {/* ── Sessions pane: vertical mode only ── */}
           {layout === 'vertical' && (
@@ -593,25 +562,61 @@ export function Sidebar({
           )}
         </div>
         <div class="sidebar-footer">
-          <button class="manage-projects-btn" onClick={onManageProjects}>
-            Manage projects
-            {unmatchedCount > 0 && (
-              <span class="manage-projects-badge">{unmatchedCount}</span>
-            )}
-          </button>
-          <button class="manage-projects-btn" onClick={triggerInstall}>
-            Install app
-          </button>
-          {notifPermission === 'default' && (
-            <button class="notif-btn" onClick={onRequestNotifPermission}>
-              <IconBell /> Enable notifications
+          <div class="sidebar-footer-actions">
+            <button
+              class="sidebar-icon-btn"
+              onClick={onManageProjects}
+              title="Manage projects"
+              aria-label="Manage projects"
+            >
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="2" width="5" height="5" rx="1" />
+                <rect x="9" y="2" width="5" height="5" rx="1" />
+                <rect x="2" y="9" width="5" height="5" rx="1" />
+                <rect x="9" y="9" width="5" height="5" rx="1" />
+              </svg>
+              {unmatchedCount > 0 && (
+                <span class="manage-projects-badge">{unmatchedCount}</span>
+              )}
             </button>
-          )}
-          {notifPermission === 'denied' && (
-            <div class="notif-denied">
-              <IconBell muted /> Notifications blocked in browser settings
-            </div>
-          )}
+            <button
+              class="sidebar-icon-btn"
+              onClick={triggerInstall}
+              title="Install app"
+              aria-label="Install app"
+            >
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 2v8M5 7l3 3 3-3" />
+                <path d="M3 12h10" />
+              </svg>
+            </button>
+            {notifPermission === 'default' && (
+              <button class="sidebar-icon-btn" onClick={onRequestNotifPermission} title="Enable notifications" aria-label="Enable notifications">
+                <IconBell />
+              </button>
+            )}
+            {notifPermission === 'denied' && (
+              <button class="sidebar-icon-btn" title="Notifications blocked" aria-label="Notifications blocked" disabled>
+                <IconBell muted />
+              </button>
+            )}
+            <button
+              class={`sidebar-icon-btn layout-toggle-btn${layout === 'horizontal' ? ' active' : ''}`}
+              onClick={onToggleLayout}
+              title={layout === 'vertical' ? 'Switch to tab view' : 'Switch to list view'}
+              aria-label={layout === 'vertical' ? 'Switch to tab view' : 'Switch to list view'}
+            >
+              {layout === 'vertical' ? (
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                  <line x1="2" y1="3" x2="14" y2="3" /><line x1="2" y1="7" x2="14" y2="7" /><line x1="2" y1="11" x2="14" y2="11" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                  <rect x="1" y="5" width="4" height="7" rx="1" /><rect x="6" y="5" width="4" height="7" rx="1" /><rect x="11" y="5" width="4" height="7" rx="1" />
+                </svg>
+              )}
+            </button>
+          </div>
           <span class="sidebar-version">v{__GMUX_VERSION__}</span>
         </div>
       </aside>

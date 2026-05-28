@@ -94,58 +94,8 @@ body {
   overflow: hidden;
 }
 
-.sidebar-header {
-  display: flex;
-  align-items: center;
-  height: var(--header-height);
-  padding: 0 12px 0 14px;
-  gap: 10px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
-}
+/* sidebar-header removed; layout toggle moved to footer */
 
-.sidebar-logo {
-  font-family: 'Instrument Sans', sans-serif;
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: -0.04em;
-  color: var(--text);
-  line-height: 1;
-  text-decoration: none;
-  padding: 6px 10px;
-  margin: -6px -10px;
-  cursor: pointer;
-  border-radius: 6px;
-  transition: color 0.15s, background 0.15s, text-shadow 0.15s;
-}
-.sidebar-logo:hover {
-  color: #fff;
-  text-shadow: 0 0 6px rgba(255, 255, 255, 0.25);
-}
-
-.sidebar-header-spacer {
-  flex: 1;
-}
-
-.layout-toggle-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  border-radius: 6px;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-  flex-shrink: 0;
-}
-.layout-toggle-btn:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-}
 .layout-toggle-btn.active {
   color: var(--accent, #7c9ef8);
 }
@@ -714,8 +664,43 @@ body {
 /* ── Sidebar footer ── */
 .sidebar-footer {
   flex-shrink: 0;
-  padding: 4px 12px 6px;
+  padding: 6px 10px;
   border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar-footer-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+  position: relative;
+}
+.sidebar-icon-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.sidebar-icon-btn:disabled {
+  cursor: default;
+  opacity: 0.4;
 }
 
 .sidebar-version {
@@ -724,45 +709,26 @@ body {
   font-size: 10px;
   color: var(--text-muted);
   opacity: 0.5;
-  padding: 2px 0 1px;
+  padding: 0;
   user-select: text;
-}
-
-.manage-projects-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 10px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 13px;
-  font-family: 'Source Sans 3', sans-serif;
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-}
-
-.manage-projects-btn:hover {
-  color: var(--text-secondary);
-  background: var(--bg-hover);
 }
 
 .manage-projects-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
   background: var(--accent);
   color: var(--bg);
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 600;
   line-height: 1;
+  position: absolute;
+  top: 3px;
+  right: 3px;
 }
 
 .notif-btn {
@@ -3026,12 +2992,6 @@ a.home-host-link:hover {
 }
 .ft-modal-confirm:hover {
   background: oklch(48% 0.16 25);
-}
-
-/* manage-projects-btn tighter in trimmed footer */
-.sidebar-footer .manage-projects-btn {
-  padding: 4px 10px;
-  font-size: 12px;
 }
 
 /* ── Markdown Editor ──────────────────────────────────────────────────────── */
