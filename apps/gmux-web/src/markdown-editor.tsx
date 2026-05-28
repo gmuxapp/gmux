@@ -19,12 +19,16 @@ import { EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { defaultKeymap, historyKeymap, history, indentWithTab } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
+import { Table } from '@lezer/markdown'
 import {
   livePreviewPlugin,
   markdownStylePlugin,
   editorTheme,
   tableField,
   imageField,
+  collapseOnSelectionFacet,
+  mouseSelectingField,
+  setMouseSelecting,
 } from 'codemirror-live-markdown'
 
 // ── API helpers ──────────────────────────────────────────────────────────────
@@ -309,14 +313,15 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
         doc: body,
         extensions: [
           history(),
-          markdown(),
-          // Hybrid WYSIWYG layer (codemirror-live-markdown)
-          editorTheme,
-          livePreviewPlugin,
-          markdownStylePlugin,
-          tableField,
-          imageField(),
-          // App theme override (sits on top of editorTheme)
+          markdown({ extensions: [Table] }),   // Table parser required for tableField
+          collapseOnSelectionFacet.of(true),   // enable live preview collapsing
+          mouseSelectingField,                 // track mouse selection state
+          livePreviewPlugin,                   // hide markers on unfocused lines
+          markdownStylePlugin,                 // heading sizes, bold/italic styles
+          tableField,                          // GFM tables → HTML
+          imageField(),                        // inline image previews
+          editorTheme,                         // package default animations
+          // App theme override
           gmuxTheme,
           EditorView.lineWrapping,
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
@@ -332,6 +337,16 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
       const view = new EditorView({
         state,
         parent: containerRef.current,
+      })
+
+      // Required for livePreviewPlugin to hide markers on unfocused lines
+      view.contentDOM.addEventListener('mousedown', () => {
+        view.dispatch({ effects: setMouseSelecting.of(true) })
+      })
+      document.addEventListener('mouseup', () => {
+        requestAnimationFrame(() => {
+          view.dispatch({ effects: setMouseSelecting.of(false) })
+        })
       })
 
       if (destroyed) {

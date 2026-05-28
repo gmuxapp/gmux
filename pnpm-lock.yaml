@@ -59,6 +59,9 @@ importers:
       '@gmux/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@lezer/markdown':
+        specifier: ^1.6.4
+        version: 1.6.4
       '@preact/signals':
         specifier: ^2.9.0
         version: 2.9.0(preact@10.29.1)
