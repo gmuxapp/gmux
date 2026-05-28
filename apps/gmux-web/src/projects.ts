@@ -93,9 +93,11 @@ export function matchSession(
 
       if (rule.path) {
         const normPath = expandTilde(rule.path, homeDir)
+        const sessCwd  = expandTilde(session.cwd ?? '', homeDir)
+        const sessRoot = expandTilde(session.workspace_root ?? '', homeDir)
         const matched = rule.exact
-          ? (session.cwd === normPath || session.workspace_root === normPath)
-          : (pathUnder(session.cwd, normPath) || pathUnder(session.workspace_root, normPath))
+          ? (sessCwd === normPath || sessRoot === normPath)
+          : (pathUnder(sessCwd, normPath) || pathUnder(sessRoot, normPath))
         if (matched && normPath.length > bestPathLen) {
           bestPathLen = normPath.length
           bestPath = project

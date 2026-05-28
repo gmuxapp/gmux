@@ -666,7 +666,7 @@ export function navigate(url: string, replace?: boolean) {
 export function navigateToSession(sessionId: string, replace?: boolean): boolean {
   const sess = sessions.value.find(s => s.id === sessionId)
   if (!sess) return false
-  const project = matchSession(sess, projects.value)
+  const project = matchSession(sess, projects.value, health.value?.home_dir)
   if (!project) return false
   navigate(sessionPath(project.slug, sess), replace)
   return true
