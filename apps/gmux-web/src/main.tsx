@@ -467,6 +467,10 @@ function App() {
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   const terminalFocusRef = useRef<(() => void) | null>(null)
   const terminalPasteRef = useRef<(() => void) | null>(null)
+  // Sessions that have been opened (TerminalView mounted + WS established).
+  // Add when a live session is first selected; never remove (WS persists).
+  // Use a ref so we can mutate during render without triggering re-renders.
+  const openedSessionIdsRef = useRef(new Set<string>())
 
   const { notifPermission, requestNotifPermission } = usePresence()
 
@@ -531,6 +535,18 @@ function App() {
   }, [resumingId])
 
   const canAttach = !!selectedVal?.alive && (!!selectedVal?.socket_path || !!selectedVal?.peer) && !USE_MOCK
+
+  // Track which sessions have live TerminalView instances.
+  // Mutating the ref during render is safe: the update is visible in the
+  // same render pass, before the terminal stack JSX is evaluated below.
+  if (selId && selectedVal?.alive && (canAttach || USE_MOCK)) {
+    openedSessionIdsRef.current.add(selId)
+  }
+  const terminalSessions = (termOpts && keybindsVal)
+    ? sessionsVal.filter(s => s.alive && openedSessionIdsRef.current.has(s.id))
+    : []
+  // The active view is a live terminal if it's in the opened set.
+  const activeIsTerminal = !!selectedVal?.alive && openedSessionIdsRef.current.has(selectedVal.id)
 
   // Clear modifiers when terminal isn't attachable.
   useEffect(() => {
@@ -623,11 +639,18 @@ function App() {
             projectSlug={viewVal.projectSlug}
             filePath={viewVal.filePath}
           />
-        ) : selectedVal && (canAttach || USE_MOCK) && termOpts && keybindsVal ? (
+        ) : null}
+
+        {/* Persistent terminal stack: one TerminalView per opened live session.
+            Hidden (display:none) when not active; WS stays open across switches.
+            Only unmounts when the session is explicitly dismissed. */}
+        {terminalSessions.map(s => (
           <TerminalView
-            session={selectedVal}
-            terminalOptions={termOpts}
-            keybinds={keybindsVal}
+            key={s.id}
+            session={s}
+            isActive={s.id === selId}
+            terminalOptions={termOpts!}
+            keybinds={keybindsVal!}
             macCommandIsCtrl={macCtrl}
             ctrlArmed={ctrlArmed}
             onCtrlConsumed={handleCtrlConsumed}
@@ -636,21 +659,26 @@ function App() {
             onInputReady={handleTerminalInputReady}
             onPasteReady={handleTerminalPasteReady}
             onFocusReady={handleTerminalFocusReady}
-            onSyncDiag={handleSyncDiag}
+            onSyncDiag={s.id === selId ? handleSyncDiag : undefined}
           />
-        ) : selectedVal && !selectedVal.alive && termOpts && !USE_MOCK ? (
-          <ReplayView
-            session={selectedVal}
-            terminalOptions={termOpts}
-            onResume={handleResume}
-            resuming={resumingId === selectedVal.id}
-          />
-        ) : selectedVal ? (
-          <div class="state-message">
-            <div class="state-subtitle">Connecting…</div>
-          </div>
-        ) : (
-          <Home />
+        ))}
+
+        {/* Non-terminal overlay: shown when the active view isn't a live terminal */}
+        {!activeIsTerminal && (
+          selectedVal && !selectedVal.alive && termOpts && !USE_MOCK ? (
+            <ReplayView
+              session={selectedVal}
+              terminalOptions={termOpts}
+              onResume={handleResume}
+              resuming={resumingId === selectedVal.id}
+            />
+          ) : selectedVal ? (
+            <div class="state-message">
+              <div class="state-subtitle">Connecting…</div>
+            </div>
+          ) : (
+            <Home />
+          )
         )}
 
         <MobileTerminalBar
