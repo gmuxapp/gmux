@@ -2813,42 +2813,45 @@ a.home-host-link:hover {
   padding: 32px 24px;
 }
 
-/* TipTap / ProseMirror editor styles */
-.md-editor-panel .md-editor-container .ProseMirror {
+/* Override Milkdown defaults to match app theme */
+.md-editor-panel .milkdown {
   background: transparent;
   color: var(--text);
   font-family: 'Lora', Georgia, serif;
   font-size: 15px;
   line-height: 1.75;
   outline: none;
+}
+
+.md-editor-panel .milkdown .editor {
+  outline: none;
   caret-color: var(--text);
-  min-height: 100%;
 }
 
 /* Prose typography */
-.md-editor-panel .md-editor-container .ProseMirror h1,
-.md-editor-panel .md-editor-container .ProseMirror h2,
-.md-editor-panel .md-editor-container .ProseMirror h3,
-.md-editor-panel .md-editor-container .ProseMirror h4 {
+.md-editor-panel .milkdown h1,
+.md-editor-panel .milkdown h2,
+.md-editor-panel .milkdown h3,
+.md-editor-panel .milkdown h4 {
   color: var(--text);
   margin: 1.4em 0 0.5em;
   font-family: 'Instrument Sans', sans-serif;
   line-height: 1.3;
 }
-.md-editor-panel .md-editor-container .ProseMirror h1 { font-size: 1.8em; }
-.md-editor-panel .md-editor-container .ProseMirror h2 { font-size: 1.4em; }
-.md-editor-panel .md-editor-container .ProseMirror h3 { font-size: 1.15em; }
+.md-editor-panel .milkdown h1 { font-size: 1.8em; }
+.md-editor-panel .milkdown h2 { font-size: 1.4em; }
+.md-editor-panel .milkdown h3 { font-size: 1.15em; }
 
-.md-editor-panel .md-editor-container .ProseMirror p {
+.md-editor-panel .milkdown p {
   margin: 0.6em 0;
 }
 
-.md-editor-panel .md-editor-container .ProseMirror a {
+.md-editor-panel .milkdown a {
   color: var(--accent, oklch(65% 0.18 250));
   text-decoration: underline;
 }
 
-.md-editor-panel .md-editor-container .ProseMirror code {
+.md-editor-panel .milkdown code {
   background: var(--bg-selected);
   border-radius: 3px;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
@@ -2856,7 +2859,7 @@ a.home-host-link:hover {
   padding: 1px 5px;
 }
 
-.md-editor-panel .md-editor-container .ProseMirror pre {
+.md-editor-panel .milkdown pre {
   background: var(--bg-selected);
   border-radius: var(--radius);
   padding: 14px 18px;
@@ -2866,115 +2869,119 @@ a.home-host-link:hover {
   line-height: 1.55;
 }
 
-.md-editor-panel .md-editor-container .ProseMirror pre code {
+.md-editor-panel .milkdown pre code {
   background: none;
   padding: 0;
 }
 
-.md-editor-panel .md-editor-container .ProseMirror blockquote {
+.md-editor-panel .milkdown blockquote {
   border-left: 3px solid var(--border, oklch(35% 0 0));
   color: var(--text-muted);
   margin: 0.8em 0;
   padding-left: 16px;
 }
 
-.md-editor-panel .md-editor-container .ProseMirror ul,
-.md-editor-panel .md-editor-container .ProseMirror ol {
+.md-editor-panel .milkdown ul,
+.md-editor-panel .milkdown ol {
   padding-left: 1.6em;
   margin: 0.4em 0;
 }
 
-.md-editor-panel .md-editor-container .ProseMirror li {
+.md-editor-panel .milkdown li {
   margin: 0.2em 0;
 }
 
-.md-editor-panel .md-editor-container .ProseMirror hr {
+.md-editor-panel .milkdown hr {
   border: none;
   border-top: 1px solid var(--border, oklch(35% 0 0));
   margin: 1.5em 0;
 }
 
-/* Task list */
-.md-editor-panel .md-editor-container .ProseMirror ul[data-type='taskList'] {
-  list-style: none;
-  padding-left: 0.4em;
-}
-.md-editor-panel .md-editor-container .ProseMirror ul[data-type='taskList'] li {
+/* Frontmatter key-value editor */
+.md-frontmatter-editor {
   display: flex;
-  align-items: baseline;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
-}
-.md-editor-panel .md-editor-container .ProseMirror ul[data-type='taskList'] li > label {
-  flex-shrink: 0;
+  padding: 8px 24px 6px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
 }
 
-/* Tables */
-.md-editor-panel .md-editor-container .ProseMirror table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 0.8em 0;
-}
-.md-editor-panel .md-editor-container .ProseMirror th,
-.md-editor-panel .md-editor-container .ProseMirror td {
-  border: 1px solid var(--border);
-  padding: 6px 10px;
-  text-align: left;
-}
-.md-editor-panel .md-editor-container .ProseMirror th {
+.fm-field {
+  display: flex;
+  align-items: center;
+  gap: 3px;
   background: var(--bg-selected);
-  font-family: 'Instrument Sans', sans-serif;
-  font-weight: 600;
-  font-size: 0.9em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px 6px 2px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
 }
 
-/* Selection highlight */
-.md-editor-panel .md-editor-container .ProseMirror-selectednode {
-  outline: 2px solid var(--accent, oklch(65% 0.18 250));
+.fm-key {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.fm-sep {
+  color: var(--text-muted);
+  margin: 0 1px;
+}
+
+.fm-value {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  min-width: 40px;
+  max-width: 220px;
+  width: auto;
+}
+
+.fm-value:focus {
+  background: var(--bg-input, var(--bg-hover));
   border-radius: 2px;
 }
 
-/* Toolbar */
-.md-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 4px 12px;
-  border-bottom: 1px solid var(--border-subtle, var(--border));
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
-
-.md-toolbar-btn {
+.fm-delete {
   background: none;
   border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0 0 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+}
+
+.fm-delete:hover {
+  color: var(--status-error);
+}
+
+.fm-add {
+  background: none;
+  border: 1px dashed var(--border);
   border-radius: var(--radius);
   color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  padding: 2px 8px;
   cursor: pointer;
-  font-size: 12px;
-  font-family: 'Instrument Sans', sans-serif;
-  font-weight: 600;
-  line-height: 1;
-  padding: 4px 7px;
-  min-width: 28px;
-  text-align: center;
 }
 
-.md-toolbar-btn:hover {
-  background: var(--bg-hover);
+.fm-add:hover {
   color: var(--text);
+  border-color: var(--text-muted);
 }
 
-.md-toolbar-btn.active {
-  background: var(--bg-selected);
-  color: var(--text);
-}
-
-.md-toolbar-sep {
-  width: 1px;
-  height: 16px;
-  background: var(--border-subtle, var(--border));
-  margin: 0 4px;
-  flex-shrink: 0;
+/* Selection highlight */
+.md-editor-panel .milkdown .ProseMirror-selectednode {
+  outline: 2px solid var(--accent, oklch(65% 0.18 250));
+  border-radius: 2px;
 }
 
 /* ── Image viewer ─────────────────────────────────────────────────────────── */

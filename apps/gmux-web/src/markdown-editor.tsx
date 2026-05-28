@@ -1,5 +1,5 @@
 /**
- * MarkdownEditor — TipTap v3 WYSIWYG editor for .md files.
+ * MarkdownEditor — in-browser Milkdown WYSIWYG editor for .md files.
  *
  * Opened when the user clicks a .md file in the file tree.
  * Reads content via GET /v1/fs/{slug}/read, writes back via POST /v1/fs/{slug}/write.
@@ -9,12 +9,13 @@
 import { useEffect, useRef, useCallback, useState } from 'preact/hooks'
 import '@fontsource/lora/400.css'
 import '@fontsource/lora/700.css'
-import { Editor } from '@tiptap/core'
-import { StarterKit } from '@tiptap/starter-kit'
-import { Markdown } from '@tiptap/markdown'
-import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table'
-import { TaskList } from '@tiptap/extension-task-list'
-import { TaskItem } from '@tiptap/extension-task-item'
+import { Editor, rootCtx, defaultValueCtx } from '@milkdown/kit/core'
+import { commonmark } from '@milkdown/kit/preset/commonmark'
+import { gfm } from '@milkdown/kit/preset/gfm'
+import { history } from '@milkdown/kit/plugin/history'
+import { clipboard } from '@milkdown/kit/plugin/clipboard'
+import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
+import { getMarkdown } from '@milkdown/kit/utils'
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
@@ -127,41 +128,6 @@ function parseFrontmatter(content: string): { frontmatter: string | null; body: 
   }
 }
 
-// ── Toolbar ───────────────────────────────────────────────────────────────────
-
-function Toolbar({ editor }: { editor: Editor | null }) {
-  if (!editor) return null
-  const btn = (label: string, action: () => void, active?: boolean, title?: string) => (
-    <button
-      class={`md-toolbar-btn${active ? ' active' : ''}`}
-      type="button"
-      title={title ?? label}
-      onMouseDown={(e: MouseEvent) => { e.preventDefault(); action() }}
-    >
-      {label}
-    </button>
-  )
-  return (
-    <div class="md-toolbar">
-      {btn('B', () => editor.chain().focus().toggleBold().run(), editor.isActive('bold'), 'Bold (⌘B)')}
-      {btn('I', () => editor.chain().focus().toggleItalic().run(), editor.isActive('italic'), 'Italic (⌘I)')}
-      {btn('S̶', () => editor.chain().focus().toggleStrike().run(), editor.isActive('strike'), 'Strikethrough')}
-      {btn('`', () => editor.chain().focus().toggleCode().run(), editor.isActive('code'), 'Inline code')}
-      <span class="md-toolbar-sep" />
-      {btn('H1', () => editor.chain().focus().toggleHeading({ level: 1 }).run(), editor.isActive('heading', { level: 1 }))}
-      {btn('H2', () => editor.chain().focus().toggleHeading({ level: 2 }).run(), editor.isActive('heading', { level: 2 }))}
-      {btn('H3', () => editor.chain().focus().toggleHeading({ level: 3 }).run(), editor.isActive('heading', { level: 3 }))}
-      <span class="md-toolbar-sep" />
-      {btn('•', () => editor.chain().focus().toggleBulletList().run(), editor.isActive('bulletList'), 'Bullet list')}
-      {btn('1.', () => editor.chain().focus().toggleOrderedList().run(), editor.isActive('orderedList'), 'Ordered list')}
-      {btn('☐', () => editor.chain().focus().toggleTaskList().run(), editor.isActive('taskList'), 'Task list')}
-      <span class="md-toolbar-sep" />
-      {btn('"', () => editor.chain().focus().toggleBlockquote().run(), editor.isActive('blockquote'), 'Blockquote')}
-      {btn('⌥⌥', () => editor.chain().focus().setHorizontalRule().run(), false, 'Horizontal rule')}
-    </div>
-  )
-}
-
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
@@ -187,9 +153,6 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saveState, setSaveState] = useState<SaveState>('idle')
 
-  // Force re-render for toolbar active-state updates
-  const [, forceUpdate] = useState(0)
-
   // Filename for display (last segment of path)
   const fileName = filePath.split('/').pop() ?? filePath
 
@@ -199,7 +162,7 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
     if (!editorRef.current) return
     try {
       setSaveState('saving')
-      const md = editorRef.current.getMarkdown()
+      const md = editorRef.current.action(getMarkdown())
       const full = frontmatterRef.current ? frontmatterRef.current + '\n' + md : md
       await apiWriteFile(projectSlug, filePath, full)
       setSaveState('saved')
@@ -239,7 +202,7 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [flushSave])
 
-  // ── Load content + init TipTap ────────────────────────────────────────────
+  // ── Load content + init Milkdown ──────────────────────────────────────────
 
   useEffect(() => {
     let destroyed = false
@@ -265,7 +228,7 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
 
       if (destroyed || !containerRef.current) return
 
-      // Strip YAML frontmatter before passing to TipTap
+      // Strip YAML frontmatter before passing to Milkdown
       const { frontmatter, body } = parseFrontmatter(initialContent)
       frontmatterRef.current = frontmatter
       setFrontmatterFields(frontmatter !== null ? parseFrontmatterFields(frontmatter) : [])
@@ -275,46 +238,42 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
 
       latestContentRef.current = body
 
+      // False until after .create() resolves; guards against the spurious
+      // markdownUpdated event Milkdown fires on initialisation.
+      let initialized = false
+
       let ed: Editor
       try {
-        ed = new Editor({
-          element: null, // deferred mount
-          extensions: [
-            StarterKit,
-            Markdown,
-            Table.configure({ resizable: false }),
-            TableRow,
-            TableCell,
-            TableHeader,
-            TaskList,
-            TaskItem.configure({ nested: true }),
-          ],
-          content: body,
-          editorProps: {
-            attributes: { class: 'tiptap-editor' },
-          },
-        })
+        ed = await Editor.make()
+          .config((ctx: any) => {
+            ctx.set(rootCtx, containerRef.current!)
+            ctx.set(defaultValueCtx, body)
+          })
+          .use(commonmark)
+          .use(gfm)
+          .use(history)
+          .use(clipboard)
+          .use(listener)
+          .config((ctx: any) => {
+            ctx.get(listenerCtx).markdownUpdated((_ctx: any, markdown: string) => {
+              if (!initialized) return // skip the initial fire on editor creation
+              latestContentRef.current = markdown
+              isDirtyRef.current = true
+              scheduleSave()
+            })
+          })
+          .create()
+
+        // Any markdownUpdated calls during .create() have already returned early.
+        initialized = true
       } catch (err) {
-        console.error('[MarkdownEditor] TipTap init error', err)
+        console.error('[MarkdownEditor] Milkdown init error', err)
         if (!destroyed) {
           setLoadError(`Editor failed to initialise: ${err}`)
           setLoading(false)
         }
         return
       }
-
-      // Wire up change listener (no spurious-event guard needed — on('update') only fires on edits)
-      ed.on('update', () => {
-        latestContentRef.current = ed.getMarkdown()
-        isDirtyRef.current = true
-        scheduleSave()
-        forceUpdate(n => n + 1)
-      })
-
-      // Refresh toolbar active-states on cursor moves
-      ed.on('selectionUpdate', () => forceUpdate(n => n + 1))
-
-      ed.mount(containerRef.current!)
 
       if (destroyed) {
         ed.destroy()
@@ -337,9 +296,8 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
       // Flush final content only if the user actually made changes
       if (editorRef.current) {
         if (isDirtyRef.current) {
-          const md = editorRef.current.getMarkdown()
-          const full = frontmatterRef.current ? frontmatterRef.current + '\n' + md : md
-          void apiWriteFile(projectSlug, filePath, full).catch(() => {/* best-effort */})
+          const md = editorRef.current.action(getMarkdown())
+          void apiWriteFile(projectSlug, filePath, md).catch(() => {/* best-effort */})
         }
         editorRef.current.destroy()
         editorRef.current = null
@@ -383,9 +341,6 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
           </div>
         )}
       </div>
-
-      {/* Toolbar — only shown when editor is ready */}
-      {!loading && !loadError && <Toolbar editor={editorRef.current} />}
 
       {/* Body */}
       {loadError && (
