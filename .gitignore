@@ -15,6 +15,9 @@ coverage
 # go
 bin/*
 !bin/.keep
+
+# gmuxd embedded web UI (built from apps/gmux-web)
+services/gmuxd/cmd/gmuxd/web/
 out/
 *.test
 services/gmuxd/gmuxd
