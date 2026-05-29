@@ -23,9 +23,12 @@ code {
   --text-secondary: oklch(65% 0.01 250);
   --text-muted: oklch(65% 0.01 250);
 
-  /* Borders */
-  --border: oklch(22% 0.015 250);
-  --border-strong: oklch(28% 0.015 250);
+  /* Borders. Two tiers; the base tier drives dividers, card/button
+   * outlines and scrollbar thumbs, so it needs enough lightness to read
+   * against the near-black surfaces. --border-strong stays ~6pts above
+   * for hover/emphasis separators. */
+  --border: oklch(32% 0.015 250);
+  --border-strong: oklch(38% 0.015 250);
 
   /* Accent — used for selection bars, buttons, links */
   --accent: oklch(72% 0.1 195);
