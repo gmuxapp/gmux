@@ -8,7 +8,6 @@ import { ReplayView } from './replay-view'
 import { TerminalView } from './terminal'
 import { useArrivalPulse } from './use-arrival-pulse'
 import { Sidebar } from './sidebar'
-import type { DotState } from './store'
 import { usePresence } from './use-presence'
 
 import type { Session } from './types'
@@ -22,7 +21,7 @@ import { installVersionWatch } from './version-watch'
 import {
   sessions, connState, selected, selectedId, view, health, peers,
   terminalOptions, keybinds, macCommandIsCtrl,
-  backgroundActivity, unreadCount,
+  unreadCount,
   urlPath,
   initStore, setNavigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
@@ -216,10 +215,14 @@ function MobileTerminalBar({
   onToggleAlt: () => void
   onFocusTerminal: () => void
 }) {
-  // Read signals directly; no props needed for these.
-  const bgActivity: DotState = backgroundActivity.value
-  const unread = unreadCount.value
-  const arrival = useArrivalPulse(bgActivity, unread)
+  // Read signals directly; no props needed for these. The hamburger
+  // badge surfaces only the waiting (unread) state — working/active are
+  // deliberately omitted. unreadCount excludes the selected session and
+  // its value re-fires the arrival pulse when another session starts
+  // waiting.
+  const waitingCount = unreadCount.value
+  const waiting = waitingCount > 0
+  const arrival = useArrivalPulse(waiting ? 'unread' : 'none', waitingCount)
 
   const keepFocus = (ev: Event) => ev.preventDefault()
   const tap = (seq: string) => { onSend(seq); onFocusTerminal() }
@@ -261,7 +264,7 @@ function MobileTerminalBar({
   return (
     <div class="mobile-bottom-bar" aria-label="Mobile terminal controls">
       <button
-        class={`mobile-bottom-action menu-btn${bgActivity !== 'none' ? ` bg-${bgActivity}` : ''}${arrival ? ` bg-${arrival}` : ''}`}
+        class={`mobile-bottom-action menu-btn${waiting ? ' bg-waiting' : ''}${arrival ? ` bg-${arrival}` : ''}`}
         onClick={onMenu}
         title="Open sessions"
       >
