@@ -15,6 +15,7 @@ import {
   activityMap, projects, connState,
   updateProjects, reorderSessions,
   peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState,
+  unreadCount,
   type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -312,6 +313,16 @@ export function Sidebar({
   const am = activityMap.value
   const peerStatus = peerStatusByName.value
 
+  // Waiting indicator on the logo: mirrors the mobile hamburger badge so
+  // the always-visible brand mark doubles as a "a session elsewhere is
+  // waiting on you" cue. Only the waiting (unread) state is surfaced —
+  // working/active are deliberately omitted. unreadCount excludes the
+  // selected session (see store.ts); its value also drives the re-blink
+  // when an additional session enters the waiting state.
+  const waitingCount = unreadCount.value
+  const waiting = waitingCount > 0
+  const bgArrival = useArrivalPulse(waiting ? 'unread' : 'none', waitingCount)
+
   const totalVisible = foldersVal.reduce(
     (n, f) => n + f.sessions.filter(s => s.alive || s.resumable).length, 0,
   )
@@ -333,7 +344,7 @@ export function Sidebar({
       <aside class={`sidebar ${open ? 'open' : ''}`}>
         <div class="sidebar-header">
           <a
-            class="sidebar-logo"
+            class={`sidebar-logo${waiting ? ' bg-waiting' : ''}${bgArrival ? ` bg-${bgArrival}` : ''}`}
             href="/"
             onClick={onClose}
           >gmux</a>

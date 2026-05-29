@@ -123,6 +123,33 @@ body {
   text-shadow: 0 0 6px rgba(255, 255, 255, 0.25);
 }
 
+/* Waiting dot on the logo. Only the waiting state is surfaced (see the
+   mobile hamburger badge, which uses the same single-state treatment),
+   rendered as an in-flow dot to the RIGHT of the wordmark.
+
+   Alignment: the wordmark is all-lowercase, so its optical midline sits
+   at baseline + ½·x-height rather than the line-box center. `vertical-
+   align: middle` is defined as exactly that point ("midpoint of the box
+   with the baseline plus half the x-height"), so the dot tracks the
+   text's visual centre in font metrics — no pixel nudging, and it scales
+   with the font. This needs an inline (not flex) context, hence the
+   inline-block dot and margin-left for the gap. */
+.sidebar-logo.bg-waiting::after {
+  content: '';
+  display: inline-block;
+  vertical-align: middle;
+  width: 8px;
+  height: 8px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--unread);
+}
+
+/* Re-blink when a new session enters the waiting state */
+.sidebar-logo.bg-arriving::after {
+  animation: dot-arrival 520ms cubic-bezier(0.25, 1, 0.5, 1) both;
+}
+
 .sidebar-scroll {
   flex: 1;
   overflow-y: auto;
