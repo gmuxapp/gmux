@@ -2171,7 +2171,7 @@ func serve(stderr io.Writer) int {
 			cwd = root
 		}
 		// Canonicalise and validate that cwd is within the project root.
-		cwd = filepath.Clean(cwd)
+		cwd = paths.NormalizePath(cwd)
 		cleanRoot := filepath.Clean(root)
 		if cwd != cleanRoot && !strings.HasPrefix(cwd, cleanRoot+string(filepath.Separator)) {
 			writeError(w, http.StatusBadRequest, "bad_request", "cwd is outside project root")

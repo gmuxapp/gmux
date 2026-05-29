@@ -196,7 +196,12 @@ function SessionTabBar({
           </a>
         )
       })}
-      <LaunchButton className="session-tab-add" />
+      <LaunchButton
+        className="session-tab-add"
+        sessions={allSessions.map(({ session }) => session)}
+        selectedId={selId}
+        fallbackCwd=""
+      />
     </div>
   )
 }

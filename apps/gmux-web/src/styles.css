@@ -2711,7 +2711,8 @@ a.home-host-link:hover {
 /* @pierre/trees mount container — fills tree zone, applies theme vars */
 .ft-tree-inner {
   height: 100%;
-  display: block;
+  display: flex;
+  flex-direction: column;
   /* Layout overrides */
   --trees-bg-override: var(--bg-sidebar);
   --trees-fg-override: var(--text);
@@ -2732,6 +2733,12 @@ a.home-host-link:hover {
   --trees-git-untracked-color-override: var(--text-secondary);
   --trees-git-renamed-color-override: oklch(72% 0.12 55);
   --trees-git-ignored-color-override: var(--text-muted);
+}
+
+/* Make the @pierre/trees host element fill the container */
+.ft-tree-inner > file-tree-container {
+  flex: 1;
+  min-height: 0;
 }
 
 /* Context menu rendered by @pierre/trees composition.contextMenu.render() */
