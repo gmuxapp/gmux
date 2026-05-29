@@ -17,10 +17,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   projects, discovered, peerProjects, peerStatusByName,
-  addProject, addPeerReference,
+  addProject, addPeerReference, folders, updateProjects,
+  removeProject, removePeerReference, localHostLabel,
 } from './store'
 import { PeerLabel } from './peer-label'
-import type { ProjectItem, DiscoveredProject, MatchRule } from './types'
+import { HostSuffix } from './host-suffix'
+import type { ProjectItem, DiscoveredProject, MatchRule, Folder } from './types'
 
 // ── Rule description ──
 
@@ -178,6 +180,9 @@ export function SettingsModal({
         </div>
 
         <div class="modal-body">
+          {/* ── Configured projects (manage: reorder + remove) ── */}
+          <ConfiguredProjectsSection configured={configured} />
+
           {/* ── References to peer-owned projects ── */}
           <PeerReferencesSection configured={configured} />
 
@@ -247,6 +252,140 @@ export function SettingsModal({
           </section>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Configured projects (manage-list) ──
+
+/** Drag-to-reorder transient state. `from` is the index lifted off,
+ *  `over` is the current insertion target. */
+interface DragState { from: number; over: number }
+
+function reorder<T>(arr: readonly T[], from: number, to: number): T[] {
+  const out = [...arr]
+  const [moved] = out.splice(from, 1)
+  out.splice(to, 0, moved)
+  return out
+}
+
+/** The unified "Your projects" list at the top of the Projects tab:
+ *  every configured project (local + peer references) in sidebar order,
+ *  management-only — drag-to-reorder and remove, no navigation, no
+ *  launch. This is the single ordering that drives the sidebar; the
+ *  list maps 1:1 to projects.json items[] (which buildProjectFolders
+ *  preserves). Reference rows are distinguished by a leading colored
+ *  PeerLabel chip. */
+function ConfiguredProjectsSection({ configured }: { configured: ProjectItem[] }) {
+  const foldersVal = folders.value
+  const [drag, setDrag] = useState<DragState | null>(null)
+  const dragItems = drag ? reorder(configured, drag.from, drag.over) : configured
+
+  const handleDragStart = useCallback((i: number) => setDrag({ from: i, over: i }), [])
+  const handleDragOver = useCallback((i: number) => {
+    setDrag(prev => prev ? { ...prev, over: i } : null)
+  }, [])
+  const handleDragEnd = useCallback(() => {
+    // Commit before clearing. State-setter updaters must stay pure
+    // (Preact may invoke them more than once), so the side effect
+    // lives outside the updater.
+    if (drag && drag.from !== drag.over) {
+      updateProjects(reorder(configured, drag.from, drag.over))
+    }
+    setDrag(null)
+  }, [drag, configured])
+
+  const handleRemove = useCallback((p: ProjectItem) => {
+    if (p.peer) removePeerReference(p.peer, p.slug)
+    else removeProject(p.slug)
+  }, [])
+
+  if (configured.length === 0) return null
+
+  return (
+    <section class="mp-section">
+      <div class="mp-section-label">Your projects</div>
+      <div class="mp-configured-list">
+        {dragItems.map((p, i) => {
+          const folderKey = `${p.peer ?? ''}::${p.slug}`
+          const folder = foldersVal.find(f => f.key === folderKey)
+          if (!folder) return null
+          return (
+            <ConfiguredProjectRow
+              key={folderKey}
+              folder={folder}
+              project={p}
+              index={i}
+              dragging={drag !== null && drag.from === configured.indexOf(p)}
+              dropTarget={drag !== null && drag.over === i && drag.from !== i}
+              onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
+              onDragEnd={handleDragEnd}
+              onRemove={handleRemove}
+            />
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function ConfiguredProjectRow({
+  folder: f, project, index,
+  dragging, dropTarget,
+  onDragStart, onDragOver, onDragEnd, onRemove,
+}: {
+  folder: Folder
+  project: ProjectItem
+  index: number
+  dragging: boolean
+  dropTarget: boolean
+  onDragStart: (i: number) => void
+  onDragOver: (i: number) => void
+  onDragEnd: () => void
+  onRemove: (project: ProjectItem) => void
+}) {
+  const alive = f.sessions.filter(s => s.alive).length
+  const resumable = f.sessions.filter(s => !s.alive && s.resumable).length
+  const isReference = !!project.peer
+  return (
+    <div
+      class={`mp-configured-row${dragging ? ' dragging' : ''}${dropTarget ? ' drop-target' : ''}`}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer!.effectAllowed = 'move'
+        e.dataTransfer!.setData('text/plain', '')
+        onDragStart(index)
+      }}
+      onDragOver={(e) => {
+        e.preventDefault()
+        e.dataTransfer!.dropEffect = 'move'
+        onDragOver(index)
+      }}
+      onDrop={(e) => { e.preventDefault() }}
+      onDragEnd={onDragEnd}
+    >
+      <span class="mp-configured-drag" title="Drag to reorder" aria-hidden="true">⠿</span>
+      {isReference && <PeerLabel name={project.peer!} />}
+      <div class="mp-configured-info">
+        <span class="mp-configured-name">
+          {f.name}
+          <HostSuffix peer={f.peer ?? localHostLabel.value} local={!f.peer} />
+        </span>
+        <span class="mp-configured-count">
+          {alive > 0 && <span class="mp-configured-alive">{alive} alive</span>}
+          {alive > 0 && resumable > 0 && <span class="mp-configured-rest"> · </span>}
+          {resumable > 0 && <span class="mp-configured-rest">{resumable} resumable</span>}
+          {alive === 0 && resumable === 0 && <span class="mp-configured-rest">no sessions</span>}
+        </span>
+      </div>
+      <button
+        class="mp-configured-remove"
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRemove(project) }}
+        title={isReference ? 'Remove reference' : 'Remove project'}
+      >
+        ×
+      </button>
     </div>
   )
 }
