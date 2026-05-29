@@ -19,10 +19,13 @@ import {
   projects, discovered, peerProjects, peerStatusByName,
   addProject, addPeerReference, folders, updateProjects,
   removeProject, removePeerReference, localHostLabel,
+  health, peers, sessions,
 } from './store'
 import { PeerLabel } from './peer-label'
 import { HostSuffix } from './host-suffix'
 import type { ProjectItem, DiscoveredProject, MatchRule, Folder } from './types'
+
+type SettingsTab = 'projects' | 'hosts'
 
 // ── Rule description ──
 
@@ -57,11 +60,18 @@ function describeRule(rule: MatchRule): RuleDescription {
 
 export function SettingsModal({
   open,
+  tab,
   onClose,
+  onSelectTab,
 }: {
   open: boolean
+  tab: string
   onClose: () => void
+  onSelectTab: (tab: SettingsTab) => void
 }) {
+  // Normalize the raw `?settings` value: anything that isn't 'hosts'
+  // falls back to the projects tab (covers bare `?settings`).
+  const activeTab: SettingsTab = tab === 'hosts' ? 'hosts' : 'projects'
   const [discoveredQuery, setDiscoveredQuery] = useState('')
   const [pathDraft, setPathDraft] = useState('')
   const [pathError, setPathError] = useState('')
@@ -166,19 +176,39 @@ export function SettingsModal({
     <div class="modal-backdrop" ref={backdropRef} onClick={handleBackdropClick}>
       <div class="modal-panel manage-projects-modal">
         <div class="modal-header">
-          <div class="modal-title">Add project</div>
+          <div class="settings-tabs" role="tablist">
+            <button
+              class={`settings-tab${activeTab === 'projects' ? ' active' : ''}`}
+              role="tab"
+              aria-selected={activeTab === 'projects'}
+              onClick={() => onSelectTab('projects')}
+            >Projects</button>
+            <button
+              class={`settings-tab${activeTab === 'hosts' ? ' active' : ''}`}
+              role="tab"
+              aria-selected={activeTab === 'hosts'}
+              onClick={() => onSelectTab('hosts')}
+            >Hosts</button>
+          </div>
           <div class="modal-header-actions">
-            <a
-              class="mp-docs-link"
-              href="https://gmux.app/reference/projects-json/#match-rules"
-              target="_blank"
-              rel="noopener"
-              title="How match rules work"
-            >?</a>
+            {activeTab === 'projects' && (
+              <a
+                class="mp-docs-link"
+                href="https://gmux.app/reference/projects-json/#match-rules"
+                target="_blank"
+                rel="noopener"
+                title="How match rules work"
+              >?</a>
+            )}
             <button class="modal-close" onClick={onClose}>&times;</button>
           </div>
         </div>
 
+        {activeTab === 'hosts' ? (
+          <div class="modal-body">
+            <HostsTab />
+          </div>
+        ) : (
         <div class="modal-body">
           {/* ── Configured projects (manage: reorder + remove) ── */}
           <ConfiguredProjectsSection configured={configured} />
@@ -251,7 +281,86 @@ export function SettingsModal({
             )}
           </section>
         </div>
+        )}
       </div>
+    </div>
+  )
+}
+
+// ── Hosts tab (read-only roster) ──
+
+/** Read-only roster of every host gmux knows about: the local host
+ *  ("this host", synthesized from health), then the tailnet-discovered
+ *  and configured peers. Reachability is already conveyed by the
+ *  sidebar pill colors; this surface is the dig — version, session
+ *  count, and the last error behind an unreachable host. */
+function HostsTab() {
+  const h = health.value
+  const peersVal = peers.value
+  // Local session count: sessions not stamped with a peer. Mirrors
+  // PeerInfo.session_count for the synthesized self row.
+  const localCount = sessions.value.filter(s => !s.peer).length
+
+  return (
+    <section class="mp-section">
+      <div class="mp-section-label">Hosts</div>
+      <div class="host-list">
+        <HostRow
+          self
+          name={h?.hostname ?? 'this host'}
+          status="connected"
+          sessionCount={localCount}
+          version={h?.version}
+        />
+        {peersVal.map(p => (
+          <HostRow
+            key={p.name}
+            name={p.name}
+            status={p.status}
+            sessionCount={p.session_count}
+            version={p.version}
+            lastError={p.last_error}
+            local={p.local}
+          />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function HostRow({
+  name, self, status, sessionCount, version, lastError, local,
+}: {
+  name: string
+  self?: boolean
+  status: string
+  sessionCount: number
+  version?: string
+  lastError?: string
+  local?: boolean
+}) {
+  const connected = status === 'connected'
+  return (
+    <div class="host-row">
+      <div class="host-row-main">
+        <span class={`host-status-dot${connected ? ' connected' : ''}`} aria-hidden="true" />
+        {self
+          ? <span class="host-self-tag">this host</span>
+          : <PeerLabel name={name} />}
+        <span class="host-name">
+          {name}
+          {local && <span class="host-local-tag">local</span>}
+        </span>
+        <div class="host-meta">
+          <span class="host-status-label">{status}</span>
+          <span class="host-sep">·</span>
+          <span>{sessionCount} session{sessionCount === 1 ? '' : 's'}</span>
+          {version && <><span class="host-sep">·</span><span>v{version}</span></>}
+        </div>
+      </div>
+      {!connected && lastError && (
+        <div class="host-error">{lastError}</div>
+      )}
     </div>
   )
 }

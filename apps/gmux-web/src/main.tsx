@@ -369,10 +369,15 @@ function App() {
   // Open pushes a history entry (back closes); close replaces so the
   // collapsed entry doesn't reopen on a subsequent back.
   const settingsOpen = loc.query.settings !== undefined
-  const openSettings = useCallback((tab = 'projects') => {
+  const settingsTab = loc.query.settings ?? 'projects'
+  const openSettings = useCallback((tab = 'projects', replace = false) => {
     const params = new URLSearchParams(location.search)
+    // Replace (don't push) when the requested tab is already active,
+    // so clicking the always-visible gear while the modal is open
+    // doesn't stack a duplicate history entry that Back has to clear.
+    const alreadyActive = params.get('settings') === tab
     params.set('settings', tab)
-    loc.route(`${loc.path}?${params.toString()}`)
+    loc.route(`${loc.path}?${params.toString()}`, replace || alreadyActive)
   }, [loc])
   const closeSettings = useCallback(() => {
     const params = new URLSearchParams(location.search)
@@ -496,7 +501,9 @@ function App() {
 
       <SettingsModal
         open={settingsOpen}
+        tab={settingsTab}
         onClose={closeSettings}
+        onSelectTab={(t) => openSettings(t, true)}
       />
 
       <div class="main-panel">
