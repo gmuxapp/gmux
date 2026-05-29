@@ -184,6 +184,18 @@ body {
 .folder + .folder {
   margin-top: 4px;
   padding-top: 4px;
+  position: relative;
+}
+/* Inset divider between project groups. Pulled in to the content's left
+ * padding (14px) rather than spanning edge-to-edge, so the list reads as
+ * grouped rows instead of a hard grid. The header keeps its full-width
+ * border as a stronger zone boundary. */
+.folder + .folder::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 14px;
   border-top: 1px solid var(--border);
 }
 
