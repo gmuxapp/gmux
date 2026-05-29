@@ -354,8 +354,12 @@ func (c *Client) DialWS(ctx context.Context, sessionID string) (*websocket.Conn,
 // sessionID is the ORIGINAL (unnamespaced) session ID on the spoke,
 // not the namespaced wire ID. Callers strip the suffix first.
 func (c *Client) ProxyWS(w http.ResponseWriter, r *http.Request, sessionID string) {
+	// CompressionContextTakeover compresses the browser-facing hop
+	// (terminal output is highly repetitive); the hub->spoke hop is
+	// left uncompressed. Safari falls back to uncompressed. See #242.
 	clientConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
+		CompressionMode:    websocket.CompressionContextTakeover,
 	})
 	if err != nil {
 		log.Printf("apiclient ProxyWS: accept: %v", err)

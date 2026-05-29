@@ -65,8 +65,17 @@ func (p *Proxy) Handler() http.HandlerFunc {
 		}
 
 		// Accept browser WebSocket.
+		//
+		// CompressionContextTakeover: terminal output is highly
+		// repetitive, so permessage-deflate cuts the on-wire size of
+		// scrollback replay and full redraws substantially. Only the
+		// browser-facing hop is compressed; the backend hop is a local
+		// Unix socket where compression would be pure CPU cost. Safari
+		// does not implement permessage-deflate and silently falls back
+		// to uncompressed. See issue #242.
 		clientConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			InsecureSkipVerify: true,
+			CompressionMode:    websocket.CompressionContextTakeover,
 		})
 		if err != nil {
 			log.Printf("wsproxy: accept: %v", err)
