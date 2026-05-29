@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/paths"
+	"github.com/gmuxapp/gmux/packages/sessionenv"
 )
 
 // ensureGmuxd checks if gmuxd is reachable and starts it if not.
@@ -96,6 +97,15 @@ func startGmuxd(gmuxdBin string, args []string) bool {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdout = nil
 	cmd.Stderr = logFile
+	// Strip gmux session-identity vars. ensureGmuxd often fires from a
+	// process already inside a session (e.g. a nested `gmux foo`), whose
+	// env carries GMUX_SESSION_ID/GMUX_SOCKET/GMUX_ADAPTER for *that*
+	// session. Without this the auto-started daemon would inherit them
+	// and stamp the stale identity onto every session it later launches.
+	// GMUX_SOCKET_DIR is preserved so the daemon scans the same socket
+	// directory as the runner that triggered the auto-start. See
+	// packages/sessionenv.
+	cmd.Env = sessionenv.Strip(os.Environ())
 	if err := cmd.Start(); err != nil {
 		log.Printf("warning: could not start gmuxd: %v", err)
 		if logFile != nil {

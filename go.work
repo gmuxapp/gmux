@@ -5,6 +5,7 @@ use (
 	./packages/adapter
 	./packages/paths
 	./packages/scrollback
+	./packages/sessionenv
 	./packages/workspace
 	./services/gmuxd
 	./tests/e2e

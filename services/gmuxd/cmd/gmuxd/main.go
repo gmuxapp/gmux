@@ -21,6 +21,7 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/packages/paths"
+	"github.com/gmuxapp/gmux/packages/sessionenv"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/clipfile"
@@ -153,17 +154,6 @@ func launcherStates(ls []adapter.Launcher) []string {
 
 // launchGmux starts a detached gmux process with the given command and cwd.
 // Returns the PID on success.
-// filterEnvPrefix returns env with any variable starting with prefix removed.
-func filterEnvPrefix(env []string, prefix string) []string {
-	result := make([]string, 0, len(env))
-	for _, e := range env {
-		if !strings.HasPrefix(e, prefix) {
-			result = append(result, e)
-		}
-	}
-	return result
-}
-
 // launchGmux forks a gmux runner with the given command and cwd.
 //
 // resumeID, when non-empty, is passed via --resume-id so the
@@ -194,12 +184,12 @@ func launchGmux(gmuxBin string, command []string, cwd, resumeID string, initialC
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 
-	// Strip all GMUX_* session vars so child processes don't inherit
+	// Strip gmux session-identity vars so child processes don't inherit
 	// the parent session's identity. Without this, a gmuxd started
 	// inside a gmux session (e.g. dogfooding during dev) would leak
 	// GMUX_ADAPTER, GMUX_SOCKET, GMUX_SESSION_ID, etc. into every
-	// launched session.
-	cmd.Env = filterEnvPrefix(os.Environ(), "GMUX_")
+	// launched session. See packages/sessionenv.
+	cmd.Env = sessionenv.Strip(os.Environ())
 
 	if err := cmd.Start(); err != nil {
 		return 0, err
@@ -386,8 +376,9 @@ func startBackground(stdout, stderr io.Writer) int {
 	cmd.Stdout = nil
 	cmd.Stderr = logFile
 	cmd.Stdin = nil
-	// Strip GMUX_* env vars so the daemon doesn't inherit session identity.
-	cmd.Env = filterEnvPrefix(os.Environ(), "GMUX_")
+	// Strip gmux session-identity vars so the daemon doesn't inherit
+	// session identity. See packages/sessionenv.
+	cmd.Env = sessionenv.Strip(os.Environ())
 
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
