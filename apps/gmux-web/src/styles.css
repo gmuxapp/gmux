@@ -756,42 +756,53 @@ body {
 }
 
 /* ── Notification prompt (home dashboard) ── */
-.home-notif {
-  /* Sits between the projects list and the footer as a low-priority
-   * opt-in. Width comes from the shared `.page > *` rule so the
-   * prompt aligns with the other home content blocks. */
-  margin: 16px 0 8px;
-}
-
-.notif-btn {
+/* Activity header row: title left, notification affordance right. Uses
+   center alignment (not the baseline alignment of the shared
+   .hub-title-row) so the bordered button's box centers against the
+   heading rather than sitting on its baseline. */
+.home-activity-header {
   display: flex;
   align-items: center;
-  gap: 7px;
-  width: 100%;
-  padding: 6px 10px;
-  border: 1px dashed var(--border);
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Enable-notifications affordance, right-aligned in the Activity header.
+   A low-priority ghost button: lighter than the 18px title so it doesn't
+   compete, but bordered enough to read as a button. Radius matches the
+   sibling "+ Add project" control (6px). Brightens to accent on hover,
+   matching the app's other opt-in controls. */
+.notif-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
   border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 12px;
   font-family: 'Source Sans 3', sans-serif;
+  white-space: nowrap;
   cursor: pointer;
-  text-align: left;
-  transition: border-color 0.15s, color 0.15s;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
 
-.notif-btn:hover {
+.notif-toggle:hover {
   border-color: var(--accent);
   color: var(--text-secondary);
+  background: color-mix(in oklch, var(--accent) 8%, transparent);
 }
 
-.notif-denied {
-  display: flex;
+/* Denied: icon-only muted bell (tooltip carries the explanation) so the
+   header row stays uncluttered. */
+.notif-blocked {
+  display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 5px 10px;
+  flex-shrink: 0;
   color: var(--text-muted);
-  font-size: 12px;
+  cursor: default;
 }
 
 /* ── Manage Projects Modal ── */

@@ -108,7 +108,13 @@ export function Home({
   return (
     <div class="page">
       <header class="hub-header">
-        <h2 class="hub-title">Activity</h2>
+        <div class="home-activity-header">
+          <h2 class="hub-title">Activity</h2>
+          <NotifPrompt
+            permission={notifPermission}
+            onRequest={onRequestNotifPermission}
+          />
+        </div>
       </header>
       {needsAttention.length > 0 && (
         <Section title="Waiting">
@@ -165,21 +171,17 @@ export function Home({
         </button>
       </section>
 
-      <NotifPrompt
-        permission={notifPermission}
-        onRequest={onRequestNotifPermission}
-      />
-
       <HomeFooter />
     </div>
   )
 }
 
-/** Notification opt-in surface on the home dashboard.
- *  - 'default' : show the prompt button.
- *  - 'denied'  : show a muted banner pointing at browser settings.
- *  - 'granted' / 'unavailable' : render nothing (no opt-in needed,
- *    and a permission we cannot request is not actionable). */
+/** Notification opt-in affordance, right-aligned in the Activity header.
+ *  - 'default' : ghost pill inviting opt-in.
+ *  - 'denied'  : icon-only muted bell with a tooltip pointing at browser
+ *    settings (kept compact so it never crowds the header row).
+ *  - 'granted' / 'unavailable' : render nothing (no opt-in needed, and a
+ *    permission we cannot request is not actionable). */
 function NotifPrompt({
   permission,
   onRequest,
@@ -189,20 +191,19 @@ function NotifPrompt({
 }) {
   if (permission === 'default') {
     return (
-      <div class="home-notif">
-        <button class="notif-btn" onClick={onRequest}>
-          <IconBell /> Enable notifications
-        </button>
-      </div>
+      <button class="notif-toggle" onClick={onRequest}>
+        <IconBell /> Enable notifications
+      </button>
     )
   }
   if (permission === 'denied') {
     return (
-      <div class="home-notif">
-        <div class="notif-denied">
-          <IconBell muted /> Notifications blocked in browser settings
-        </div>
-      </div>
+      <span
+        class="notif-blocked"
+        title="Notifications blocked in browser settings"
+      >
+        <IconBell muted />
+      </span>
     )
   }
   return null
