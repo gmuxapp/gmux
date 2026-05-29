@@ -170,7 +170,7 @@ export async function clickPill(page: Page): Promise<void> {
  */
 export async function spawnTestSession(
   command: string[],
-  opts: { cwdName?: string; timeoutMs?: number } = {},
+  opts: { cwdName?: string; timeoutMs?: number; extraEnv?: Record<string, string> } = {},
 ): Promise<{ id: string; cwd: string; child: ChildProcess; kill: () => void }> {
   const socketDir = process.env.GMUX_TEST_SOCKET_DIR
   const configHome = process.env.GMUX_TEST_CONFIG_HOME
@@ -201,6 +201,8 @@ export async function spawnTestSession(
     XDG_STATE_HOME: stateHome,
     GMUX_CONFIG_DIR: path.join(configHome, 'gmux'),
   }
+  if (opts.extraEnv) Object.assign(env, opts.extraEnv)
+
 
   const child = spawn(gmuxBin, command, {
     env,
