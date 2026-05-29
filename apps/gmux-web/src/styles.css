@@ -1875,14 +1875,11 @@ body {
     position: relative;
   }
 
-  /* Background-activity dot on the hamburger menu button.
+  /* Waiting dot on the hamburger menu button. Only the waiting (unread)
+     state is surfaced; working/active are deliberately omitted.
      Pseudo-elements don't expand the hit-box, so taps outside the button
      border still pass through correctly. */
-  .mobile-bottom-action.menu-btn.bg-working::after,
-  .mobile-bottom-action.menu-btn.bg-active::after,
-  .mobile-bottom-action.menu-btn.bg-fading::after,
-  .mobile-bottom-action.menu-btn.bg-error::after,
-  .mobile-bottom-action.menu-btn.bg-unread::after {
+  .mobile-bottom-action.menu-btn.bg-waiting::after {
     content: '';
     position: absolute;
     width: 8px;
@@ -1891,29 +1888,12 @@ body {
     top: -3px;
     right: -3px;
     pointer-events: none;
+    background: var(--unread);
     /* Ring in the page background so the dot reads cleanly against the button border */
     box-shadow: 0 0 0 1.5px var(--bg-base);
   }
-  .mobile-bottom-action.menu-btn.bg-working::after {
-    background: transparent;
-    border: 1.5px solid var(--accent);
-    box-sizing: border-box;
-  }
-  .mobile-bottom-action.menu-btn.bg-active::after {
-    background: transparent;
-    border: 1.5px solid var(--active);
-    box-sizing: border-box;
-  }
-  .mobile-bottom-action.menu-btn.bg-fading::after {
-    background: transparent;
-    border: 1.5px solid var(--active);
-    box-sizing: border-box;
-    animation: dot-fade-out 800ms ease-out forwards;
-  }
-  .mobile-bottom-action.menu-btn.bg-error::after   { background: var(--status-error); }
-  .mobile-bottom-action.menu-btn.bg-unread::after   { background: var(--unread); }
 
-  /* Arrival pulse on the hamburger badge — reuses the same keyframes timing */
+  /* Re-blink when a new session enters the waiting state */
   .mobile-bottom-action.menu-btn.bg-arriving::after {
     animation: dot-arrival 520ms cubic-bezier(0.25, 1, 0.5, 1) both;
   }
@@ -2004,7 +1984,8 @@ body {
 /* ── Reduced motion ── */
 @media (prefers-reduced-motion: reduce) {
   .session-dot-indicator.arriving,
-  .mobile-bottom-action.menu-btn.bg-arriving::after {
+  .mobile-bottom-action.menu-btn.bg-arriving::after,
+  .sidebar-logo.bg-arriving::after {
     animation: none;
   }
   .session-dot-indicator.working,
