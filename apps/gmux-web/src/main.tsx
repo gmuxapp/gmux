@@ -6,7 +6,7 @@ import './styles.css'
 import { ReplayView } from './replay-view'
 import { TerminalView, type SyncDiag } from './terminal'
 import { useArrivalPulse } from './use-arrival-pulse'
-import { Sidebar } from './sidebar'
+import { Sidebar, sessionDotState, sessionEnvironmentIcon, type SessionListLayout, LAYOUT_KEY, loadLayout } from './sidebar'
 import type { DotState } from './store'
 import { usePresence } from './use-presence'
 
@@ -22,7 +22,7 @@ import { installCopySession } from './mock-data/export-session'
 
 import {
   sessions, connState, selected, selectedId, view, health, peers,
-  folders,
+  folders, activityMap,
   terminalOptions, keybinds, macCommandIsCtrl,
   backgroundActivity, unreadCount,
   urlPath,
@@ -145,6 +145,58 @@ function SyncDiagBadge({ diag }: { diag: SyncDiag }) {
   return (
     <div class={`sync-diag ${isError ? 'error' : isActive ? 'active' : 'done'}`}>
       {parts.join('\u2002·\u2002')}
+    </div>
+  )
+}
+
+// ── Session Tab Bar (horizontal mode) ──
+
+import { sessionPath } from './routing'
+
+function SessionTabBar({
+  onCloseSession,
+  resumingId,
+}: {
+  onCloseSession: (session: Session) => void
+  resumingId: string | null
+}) {
+  const foldersVal = folders.value
+  const selId = selectedId.value
+  const am = activityMap.value
+
+  const allSessions = foldersVal.flatMap(f =>
+    f.sessions.filter(s => s.alive || s.resumable).map(s => ({ session: s, folderPath: f.path }))
+  )
+
+  return (
+    <div class="session-tab-bar">
+      {allSessions.map(({ session, folderPath }) => {
+        const dotState = sessionDotState(session, am)
+        const isSelected = selId === session.id
+        const isResuming = resumingId === session.id
+        const effectiveDot = isResuming ? 'working' : dotState
+        return (
+          <a
+            key={session.id}
+            class={`session-tab${isSelected ? ' selected' : ''}`}
+            href={sessionPath(folderPath, session)}
+            title={session.title}
+            onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onCloseSession(session) } }}
+          >
+            <span class={`session-dot-indicator ${effectiveDot}`} />
+            <span class="session-tab-env">{sessionEnvironmentIcon(session.kind)}</span>
+            <span class="session-tab-label">{session.title}</span>
+            <button
+              class="session-tab-close"
+              onClick={(e) => { e.stopPropagation(); e.preventDefault(); onCloseSession(session) }}
+              title={session.alive ? 'Kill session' : 'Dismiss'}
+            >
+              ×
+            </button>
+          </a>
+        )
+      })}
+      <LaunchButton className="session-tab-add" />
     </div>
   )
 }
@@ -455,6 +507,14 @@ function App() {
   const [manageProjectsOpen, setManageProjectsOpen] = useState(false)
   const [ctrlArmed, setCtrlArmed] = useState(false)
   const [altArmed, setAltArmed] = useState(false)
+  const [layout, setLayout] = useState<SessionListLayout>(loadLayout)
+  const toggleLayout = useCallback(() => {
+    setLayout(prev => {
+      const next: SessionListLayout = prev === 'vertical' ? 'horizontal' : 'vertical'
+      try { localStorage.setItem(LAYOUT_KEY, next) } catch { /* ignore */ }
+      return next
+    })
+  }, [])
 
   const selId = selectedId.value
 
@@ -606,6 +666,8 @@ function App() {
         onClose={() => setSidebarOpen(false)}
         notifPermission={notifPermission}
         onRequestNotifPermission={requestNotifPermission}
+        layout={layout}
+        onToggleLayout={toggleLayout}
       />
 
       <ManageProjectsModal
@@ -614,7 +676,13 @@ function App() {
       />
 
       <div class="main-panel">
-        {viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && viewVal.kind !== 'markdown-editor' && viewVal.kind !== 'image-viewer' && viewVal.kind !== 'diff-viewer' && (
+        {layout === 'horizontal' && (
+          <SessionTabBar
+            onCloseSession={handleCloseSession}
+            resumingId={resumingId}
+          />
+        )}
+        {layout === 'vertical' && viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && viewVal.kind !== 'markdown-editor' && viewVal.kind !== 'image-viewer' && viewVal.kind !== 'diff-viewer' && (
           <MainHeader
             session={selectedVal}
             syncDiag={syncDiag}

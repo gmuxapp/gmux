@@ -43,7 +43,7 @@ export function sessionEnvironmentIcon(kind: string): string {
 }
 
 /** Determine the dot indicator state for a session. */
-function sessionDotState(session: Session, am: ReadonlyMap<string, 'active' | 'fading'>): DotState {
+export function sessionDotState(session: Session, am: ReadonlyMap<string, 'active' | 'fading'>): DotState {
   if (session.alive && session.status?.error)   return 'error'
   if (session.alive && session.status?.working) return 'working'
   if (session.unread) return 'unread'
@@ -98,6 +98,7 @@ function SessionItem({
   onDragStart,
   onDragOver,
   onDragEnd,
+  layout = 'vertical',
 }: {
   session: Session
   href: string
@@ -112,6 +113,7 @@ function SessionItem({
   onDragStart?: () => void
   onDragOver?: () => void
   onDragEnd?: () => void
+  layout?: SessionListLayout
 }) {
   const effectiveDotState = resuming ? 'working' : rawDotState
   // Nothing is "unread" if you're already looking at it.
@@ -121,10 +123,39 @@ function SessionItem({
 
   const cls = [
     'session-item',
+    layout === 'horizontal' ? 'session-item-tab' : '',
     selected ? 'selected' : '',
     dragging ? 'session-dragging' : '',
     dropTarget ? 'session-drop-target' : '',
   ].filter(Boolean).join(' ')
+
+  if (layout === 'horizontal') {
+    return (
+      <a
+        class={cls}
+        href={href}
+        onClick={() => onClick?.()}
+        onAuxClick={(e) => { if (e.button === 1 && onClose) { e.preventDefault(); onClose() } }}
+        title={session.title}
+      >
+        {sleeping
+          ? <svg class="session-sleep-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
+          : <span class={`session-dot-indicator ${dotState}${arrival ? ` ${arrival}` : ''}`} />
+        }
+        <span class="session-env-icon" aria-label={session.kind === 'pi-sbx' ? 'sandbox' : 'host'}>{sessionEnvironmentIcon(session.kind)}</span>
+        <span class="session-tab-title">{session.title}</span>
+        {onClose && (
+          <button
+            class="session-close-btn"
+            onClick={(e) => { e.stopPropagation(); e.preventDefault(); onClose() }}
+            title={session.alive ? 'Kill session' : 'Dismiss'}
+          >
+            ×
+          </button>
+        )}
+      </a>
+    )
+  }
 
   return (
     <a
@@ -230,6 +261,7 @@ function FolderGroup({
   onCloseImageTab,
   onCloseSession,
   onClick,
+  layout,
 }: {
   folder: Folder
   project: ProjectItem
@@ -245,6 +277,7 @@ function FolderGroup({
   onCloseImageTab: (projectSlug: string, filePath: string) => void
   onCloseSession: (session: Session) => void
   onClick?: () => void
+  layout: SessionListLayout
 }) {
   const [drag, setDrag] = useState<DragState | null>(null)
 
@@ -291,7 +324,7 @@ function FolderGroup({
           className="folder-launch-btn"
         />
       </div>
-      <div class="folder-sessions">
+      <div class={`folder-sessions${layout === 'horizontal' ? ' folder-sessions-tabs' : ''}`}>
         {markdownTabs.filter(t => t.projectSlug === folder.path).map(tab => (
           <MarkdownTabItem
             key={tab.filePath}
@@ -324,9 +357,10 @@ function FolderGroup({
             dropTarget={drag !== null && drag.over === i && drag.from !== i}
             onClose={() => onCloseSession(s)}
             onClick={onClick}
-            onDragStart={() => handleDragStart(i)}
-            onDragOver={() => handleDragOver(i)}
-            onDragEnd={() => handleDragEnd(visible)}
+            layout={layout}
+            onDragStart={layout === 'vertical' ? () => handleDragStart(i) : undefined}
+            onDragOver={layout === 'vertical' ? () => handleDragOver(i) : undefined}
+            onDragEnd={layout === 'vertical' ? () => handleDragEnd(visible) : undefined}
           />
         ))}
       </div>
@@ -341,6 +375,16 @@ const SPLIT_MIN = 0.12
 const SPLIT_MAX = 0.80
 const SPLIT_DEFAULT = 0.30
 
+export const LAYOUT_KEY = 'gmux:sessionListLayout'
+export type SessionListLayout = 'vertical' | 'horizontal'
+
+export function loadLayout(): SessionListLayout {
+  try {
+    const v = localStorage.getItem(LAYOUT_KEY)
+    if (v === 'vertical' || v === 'horizontal') return v
+  } catch { /* ignore */ }
+  return 'vertical'
+}
 function loadSplit(): number {
   try {
     const v = parseFloat(localStorage.getItem(SPLIT_KEY) ?? '')
@@ -369,6 +413,8 @@ export function Sidebar({
   onClose,
   notifPermission,
   onRequestNotifPermission,
+  layout,
+  onToggleLayout,
 }: {
   resumingId: string | null
   onCloseSession: (session: Session) => void
@@ -377,6 +423,8 @@ export function Sidebar({
   onClose: () => void
   notifPermission: NotifPermission
   onRequestNotifPermission: () => void
+  layout: SessionListLayout
+  onToggleLayout: () => void
 }) {
   // Read signals; component re-renders only when these values change.
   const foldersVal = folders.value
@@ -427,7 +475,6 @@ export function Sidebar({
   const [splitFraction, setSplitFraction] = useState<number>(loadSplit)
   const panesRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState(false)
-
   const handleDividerMouseDown = useCallback((e: MouseEvent) => {
     e.preventDefault()
     const panes = panesRef.current
@@ -454,97 +501,122 @@ export function Sidebar({
     <>
       <div class={`sidebar-overlay ${open ? 'visible' : ''}`} onClick={onClose} />
       <aside class={`sidebar ${open ? 'open' : ''}`}>
-        <div class="sidebar-header">
-          <a
-            class="sidebar-logo"
-            href="/"
-            onClick={onClose}
-          >gmux</a>
-          {connected && !hasProjects && (
-            <LaunchButton
-              className="sidebar-launch-btn"
-              beforeLaunch={seedHomeProject}
-              onLaunch={onClose}
-            />
-          )}
-        </div>
         <div class="sidebar-panes" ref={panesRef} style={{ userSelect: dragging ? 'none' : undefined }}>
-          {/* ── Sessions pane ── */}
-          <div
-            class="sidebar-sessions-pane"
-            style={activeProjectSlug && fileTreeCwd ? { flex: `0 0 ${(splitFraction * 100).toFixed(2)}%` } : undefined}
-          >
-            {foldersVal.map(f => {
-              const proj = projectBySlug.get(f.path)
-              if (!proj) return null
-              return (
-                <FolderGroup
-                  key={f.path}
-                  folder={f}
-                  project={proj}
-                  selId={selId}
-                  curProjectSlug={curProjectSlug}
-                  resumingId={resumingId}
-                  am={am}
-                  markdownTabs={mdTabs}
-                  currentMdView={currentMdView}
-                  onCloseMdTab={closeMarkdownTab}
-                  imageTabs={imgTabs}
-                  currentImageView={currentImageView}
-                  onCloseImageTab={closeImageTab}
-                  onCloseSession={onCloseSession}
-                  onClick={onClose}
-                />
-              )
-            })}
-            {connected && totalVisible === 0 && !hasProjects && (
-              <div class="sidebar-hint">
-                Click <strong>+</strong> to start your first session.
-              </div>
-            )}
-            {connected && isOnlyHomeProject && totalVisible > 0 && (
-              <div class="sidebar-hint">
-                <button class="sidebar-hint-link" onClick={onManageProjects}>
-                  Manage projects
-                </button> to organize sessions by repo.
-              </div>
-            )}
-          </div>
+          {/* ── Sessions pane: vertical mode only ── */}
+          {layout === 'vertical' && (
+            <div
+              class="sidebar-sessions-pane"
+              style={activeProjectSlug && fileTreeCwd ? { flex: `0 0 ${(splitFraction * 100).toFixed(2)}%` } : undefined}
+            >
+              {foldersVal.map(f => {
+                const proj = projectBySlug.get(f.path)
+                if (!proj) return null
+                return (
+                  <FolderGroup
+                    key={f.path}
+                    folder={f}
+                    project={proj}
+                    selId={selId}
+                    curProjectSlug={curProjectSlug}
+                    resumingId={resumingId}
+                    am={am}
+                    markdownTabs={mdTabs}
+                    currentMdView={currentMdView}
+                    onCloseMdTab={closeMarkdownTab}
+                    imageTabs={imgTabs}
+                    currentImageView={currentImageView}
+                    onCloseImageTab={closeImageTab}
+                    onCloseSession={onCloseSession}
+                    onClick={onClose}
+                    layout={layout}
+                  />
+                )
+              })}
+              {connected && totalVisible === 0 && !hasProjects && (
+                <div class="sidebar-hint">
+                  Click <strong>+</strong> to start your first session.
+                </div>
+              )}
+              {connected && isOnlyHomeProject && totalVisible > 0 && (
+                <div class="sidebar-hint">
+                  <button class="sidebar-hint-link" onClick={onManageProjects}>
+                    Manage projects
+                  </button> to organize sessions by repo.
+                </div>
+              )}
+            </div>
+          )}
 
-          {/* ── File tree pane (when any project with a filesystem path is active) ── */}
+          {/* ── File tree pane ── */}
           {activeProjectSlug && fileTreeCwd && (
             <>
-              <SidebarDivider onMouseDown={handleDividerMouseDown} />
-              <div class="sidebar-files-pane">
-              <FileTree
-                projectSlug={activeProjectSlug}
-                cwd={fileTreeCwd}
-                onMobileClose={onClose}
-              />
-            </div>
+              {layout === 'vertical' && <SidebarDivider onMouseDown={handleDividerMouseDown} />}
+              <div class={`sidebar-files-pane${layout === 'horizontal' ? ' sidebar-files-pane-full' : ''}`}>
+                <FileTree
+                  projectSlug={activeProjectSlug}
+                  cwd={fileTreeCwd}
+                  onMobileClose={onClose}
+                />
+              </div>
             </>
           )}
         </div>
         <div class="sidebar-footer">
-          <button class="manage-projects-btn" onClick={onManageProjects}>
-            Manage projects
-            {unmatchedCount > 0 && (
-              <span class="manage-projects-badge">{unmatchedCount}</span>
-            )}
-          </button>
-          <button class="manage-projects-btn" onClick={triggerInstall}>
-            Install app
-          </button>
-          {notifPermission === 'default' && (
-            <button class="notif-btn" onClick={onRequestNotifPermission}>
-              <IconBell /> Enable notifications
+          <div class="sidebar-footer-actions">
+            <button
+              class="sidebar-icon-btn"
+              onClick={onManageProjects}
+              title="Manage projects"
+              aria-label="Manage projects"
+            >
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="2" width="5" height="5" rx="1" />
+                <rect x="9" y="2" width="5" height="5" rx="1" />
+                <rect x="2" y="9" width="5" height="5" rx="1" />
+                <rect x="9" y="9" width="5" height="5" rx="1" />
+              </svg>
+              {unmatchedCount > 0 && (
+                <span class="manage-projects-badge">{unmatchedCount}</span>
+              )}
             </button>
-          )}
-          {notifPermission === 'denied' && (
-            <div class="notif-denied">
-              <IconBell muted /> Notifications blocked in browser settings
-            </div>
-          )}
+            <button
+              class="sidebar-icon-btn"
+              onClick={triggerInstall}
+              title="Install app"
+              aria-label="Install app"
+            >
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 2v8M5 7l3 3 3-3" />
+                <path d="M3 12h10" />
+              </svg>
+            </button>
+            {notifPermission === 'default' && (
+              <button class="sidebar-icon-btn" onClick={onRequestNotifPermission} title="Enable notifications" aria-label="Enable notifications">
+                <IconBell />
+              </button>
+            )}
+            {notifPermission === 'denied' && (
+              <button class="sidebar-icon-btn" title="Notifications blocked" aria-label="Notifications blocked" disabled>
+                <IconBell muted />
+              </button>
+            )}
+            <button
+              class={`sidebar-icon-btn layout-toggle-btn${layout === 'horizontal' ? ' active' : ''}`}
+              onClick={onToggleLayout}
+              title={layout === 'vertical' ? 'Switch to tab view' : 'Switch to list view'}
+              aria-label={layout === 'vertical' ? 'Switch to tab view' : 'Switch to list view'}
+            >
+              {layout === 'vertical' ? (
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                  <line x1="2" y1="3" x2="14" y2="3" /><line x1="2" y1="7" x2="14" y2="7" /><line x1="2" y1="11" x2="14" y2="11" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                  <rect x="1" y="5" width="4" height="7" rx="1" /><rect x="6" y="5" width="4" height="7" rx="1" /><rect x="11" y="5" width="4" height="7" rx="1" />
+                </svg>
+              )}
+            </button>
+          </div>
           <span class="sidebar-version">v{__GMUX_VERSION__}</span>
         </div>
       </aside>
