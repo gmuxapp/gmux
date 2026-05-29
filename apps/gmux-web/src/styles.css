@@ -1661,34 +1661,31 @@ body {
   flex-direction: column;
   gap: 6px;
 }
-/* Projects list */
-
-.home-projects-section {
-  margin-bottom: 16px;
-}
-.home-projects-list {
+/* Configured-projects manage-list (Settings → Projects). Management
+ * only: drag-to-reorder + remove, no navigation, no launch. */
+.mp-configured-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 8px;
+  gap: 2px;
 }
-.home-project-row {
+.mp-configured-row {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 7px 8px;
   border-radius: 6px;
   position: relative;
 }
-.home-project-row.dragging {
+.mp-configured-row:hover {
+  background: var(--bg-hover);
+}
+.mp-configured-row.dragging {
   opacity: 0.4;
 }
-.home-project-row.drop-target {
+.mp-configured-row.drop-target {
   box-shadow: inset 0 -2px 0 0 var(--accent);
 }
-.home-project-drag {
-  /* Always-visible drag affordance: muted enough to disappear when
-     scanning, present enough that the rows announce themselves as
-     reorderable. Touch users would otherwise have no signal. */
+.mp-configured-drag {
   color: var(--text-muted);
   opacity: 0.4;
   cursor: grab;
@@ -1697,26 +1694,35 @@ body {
   padding: 0 2px;
   flex-shrink: 0;
 }
-.home-project-drag:active { cursor: grabbing; }
-.home-project-row:hover .home-project-drag { opacity: 0.7; }
-.home-project-link {
+.mp-configured-drag:active { cursor: grabbing; }
+.mp-configured-row:hover .mp-configured-drag { opacity: 0.7; }
+.mp-configured-info {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 12px;
-  border-radius: 6px;
-  text-decoration: none;
-  color: inherit;
-  transition: background 0.1s;
 }
-.home-project-link:hover {
-  background: var(--bg-hover);
+.mp-configured-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
-.home-project-remove {
+.mp-configured-count {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.mp-configured-alive {
+  color: var(--status-connected);
+}
+.mp-configured-rest {
+  color: var(--text-muted);
+}
+.mp-configured-remove {
   background: none;
   border: none;
   color: var(--text-muted);
@@ -1729,52 +1735,13 @@ body {
   flex-shrink: 0;
   transition: opacity 0.1s, color 0.1s, background 0.1s;
 }
-.home-project-row:hover .home-project-remove { opacity: 1; }
-.home-project-remove:hover {
+.mp-configured-row:hover .mp-configured-remove { opacity: 1; }
+.mp-configured-remove:hover {
   color: var(--text);
   background: var(--bg-active);
 }
 @media (hover: none) {
-  .home-project-remove { opacity: 1; }
-}
-.home-project-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.home-project-count {
-  font-size: 12px;
-  white-space: nowrap;
-}
-.home-project-alive {
-  color: var(--status-connected);
-}
-.home-project-rest {
-  color: var(--text-muted);
-}
-.home-project-launch {
-  flex-shrink: 0;
-}
-
-.home-add-project {
-  background: none;
-  border: 1px dashed var(--border);
-  border-radius: 6px;
-  color: var(--text-muted);
-  font-size: 12px;
-  padding: 8px 12px;
-  cursor: pointer;
-  width: 100%;
-  text-align: left;
-  transition: border-color 0.1s, color 0.1s, background 0.1s;
-}
-.home-add-project:hover {
-  border-color: var(--text-muted);
-  color: var(--text);
-  background: var(--bg-hover);
+  .mp-configured-remove { opacity: 1; }
 }
 
 .home-empty-hint {
