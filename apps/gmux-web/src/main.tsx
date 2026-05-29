@@ -11,7 +11,7 @@ import { Sidebar } from './sidebar'
 import { usePresence } from './use-presence'
 
 import type { Session } from './types'
-import { ManageProjectsModal } from './manage-projects'
+import { SettingsModal } from './settings'
 import { ProjectHub } from './project-hub'
 import { Home } from './home'
 import { LaunchButton } from './launcher'
@@ -362,12 +362,30 @@ function App() {
     urlPath.value = loc.path
   }, [loc.path])
 
+  // Settings modal is driven by the `?settings` query param rather than
+  // local state, so it's deep-linkable and shareable. It's read off the
+  // query (not the path), leaving the path-derived `view` untouched —
+  // opening settings over a live session keeps the terminal mounted.
+  // Open pushes a history entry (back closes); close replaces so the
+  // collapsed entry doesn't reopen on a subsequent back.
+  const settingsOpen = loc.query.settings !== undefined
+  const openSettings = useCallback((tab = 'projects') => {
+    const params = new URLSearchParams(location.search)
+    params.set('settings', tab)
+    loc.route(`${loc.path}?${params.toString()}`)
+  }, [loc])
+  const closeSettings = useCallback(() => {
+    const params = new URLSearchParams(location.search)
+    params.delete('settings')
+    const qs = params.toString()
+    loc.route(qs ? `${loc.path}?${qs}` : loc.path, true)
+  }, [loc])
+
   // Initialize the store (SSE, data fetching, effects).
   useEffect(() => initStore(), [])
 
   // ── Local UI state (not shared, belongs to App) ──
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [manageProjectsOpen, setManageProjectsOpen] = useState(false)
   const [ctrlArmed, setCtrlArmed] = useState(false)
   const [altArmed, setAltArmed] = useState(false)
 
@@ -471,14 +489,14 @@ function App() {
       <Sidebar
         resumingId={resumingId}
         onCloseSession={handleCloseSession}
-        onManageProjects={() => { setSidebarOpen(false); setManageProjectsOpen(true) }}
+        onOpenSettings={() => { setSidebarOpen(false); openSettings() }}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
 
-      <ManageProjectsModal
-        open={manageProjectsOpen}
-        onClose={() => setManageProjectsOpen(false)}
+      <SettingsModal
+        open={settingsOpen}
+        onClose={closeSettings}
       />
 
       <div class="main-panel">
@@ -537,7 +555,7 @@ function App() {
           </div>
         ) : (
           <Home
-            onManageProjects={() => setManageProjectsOpen(true)}
+            onManageProjects={() => openSettings()}
             notifPermission={notifPermission}
             onRequestNotifPermission={requestNotifPermission}
           />

@@ -126,6 +126,36 @@ body {
   text-shadow: 0 0 6px rgba(255, 255, 255, 0.25);
 }
 
+/* Settings gear, pinned opposite the logo in the header. */
+.sidebar-settings-btn {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.sidebar-settings-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* Empty-state launch affordance: when there are no projects yet, the
+ * launch button lives in the sidebar body (not the header, which is
+ * now logo + gear). Sits just above the first-session hint. */
+.sidebar-empty-launch {
+  display: flex;
+  justify-content: center;
+  padding: 16px 14px 4px;
+}
+
 /* Waiting dot on the logo. Only the waiting state is surfaced (see the
    mobile hamburger badge, which uses the same single-state treatment),
    rendered as an in-flow dot to the RIGHT of the wordmark.
