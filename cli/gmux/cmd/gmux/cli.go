@@ -19,6 +19,7 @@ const (
 	modeKill               // terminate a session
 	modeSend               // inject input into a running session
 	modeWait               // block until session reaches idle / dies
+	modeDumpEnv            // (daemon-internal) write os.Environ() to fd 3 and exit
 	modeHelp               // print usage and exit
 )
 
@@ -48,6 +49,7 @@ type flags struct {
 	resumeID    string // --resume-id=<id>: reuse this session id
 	initialCols int    // --initial-cols=N: pre-size PTY
 	initialRows int    // --initial-rows=N: pre-size PTY
+	dumpEnv     bool   // --dump-env: write os.Environ() NUL-delimited to fd 3, then exit
 }
 
 // parseCLI parses argv (without program name) and decides which mode to
@@ -83,6 +85,7 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 	fs.StringVar(&f.resumeID, "resume-id", "", "(daemon-internal) reuse this session id instead of generating a fresh one")
 	fs.IntVar(&f.initialCols, "initial-cols", 0, "(daemon-internal) pre-size the PTY width")
 	fs.IntVar(&f.initialRows, "initial-rows", 0, "(daemon-internal) pre-size the PTY height")
+	fs.BoolVar(&f.dumpEnv, "dump-env", false, "(daemon-internal) write the environment to fd 3 and exit")
 
 	if err := fs.Parse(args); err != nil {
 		return modeHelp, nil, nil, err
@@ -91,6 +94,15 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 
 	if f.help {
 		return modeHelp, f, rest, nil
+	}
+
+	// --dump-env is the env-capture probe gmuxd runs inside a login
+	// shell (see ADR 0006). It short-circuits every other mode: no
+	// command, no management action, just dump and exit. Checked here,
+	// before management/run dispatch, so it can never be mistaken for a
+	// command to exec.
+	if f.dumpEnv {
+		return modeDumpEnv, f, nil, nil
 	}
 
 	// In management modes there is no wrapped command, only a bounded

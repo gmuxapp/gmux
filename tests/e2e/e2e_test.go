@@ -72,7 +72,7 @@ func TestEndToEnd(t *testing.T) {
 	gmuxdCtx, gmuxdCancel := context.WithCancel(context.Background())
 	defer gmuxdCancel()
 
-	gmuxdCmd := exec.CommandContext(gmuxdCtx, gmuxdBin)
+	gmuxdCmd := exec.CommandContext(gmuxdCtx, gmuxdBin, "run")
 	gmuxdCmd.Env = append(os.Environ(),
 		fmt.Sprintf("XDG_CONFIG_HOME=%s", configDir),
 		fmt.Sprintf("XDG_STATE_HOME=%s", stateDir),

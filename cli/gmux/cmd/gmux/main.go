@@ -57,6 +57,8 @@ func main() {
 		os.Exit(cmdSend(rest[0], text, f.noSubmit, f.host))
 	case modeWait:
 		os.Exit(cmdWait(rest[0], f.waitTimeout))
+	case modeDumpEnv:
+		os.Exit(dumpEnv())
 	}
 }
 

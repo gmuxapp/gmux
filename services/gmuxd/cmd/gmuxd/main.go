@@ -152,9 +152,8 @@ func launcherStates(ls []adapter.Launcher) []string {
 	return states
 }
 
-// launchGmux starts a detached gmux process with the given command and cwd.
-// Returns the PID on success.
 // launchGmux forks a gmux runner with the given command and cwd.
+// Returns the PID on success.
 //
 // resumeID, when non-empty, is passed via --resume-id so the
 // runner uses the daemon-supplied id instead of generating a fresh
@@ -184,12 +183,15 @@ func launchGmux(gmuxBin string, command []string, cwd, resumeID string, initialC
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 
-	// Strip gmux session-identity vars so child processes don't inherit
-	// the parent session's identity. Without this, a gmuxd started
-	// inside a gmux session (e.g. dogfooding during dev) would leak
-	// GMUX_ADAPTER, GMUX_SOCKET, GMUX_SESSION_ID, etc. into every
-	// launched session. See packages/sessionenv.
-	cmd.Env = sessionenv.Strip(os.Environ())
+	// Source a fresh interactive-login environment for the session
+	// (see ADR 0006), so dotfile changes and the Restart button take
+	// effect without a daemon restart. Falls back to the daemon's own
+	// env when no login shell is available (headless daemons) or the
+	// probe fails. Strip gmux session-identity vars either way so child
+	// processes don't inherit a parent session's identity (a leaked
+	// GMUX_SESSION_ID/GMUX_SOCKET/GMUX_ADAPTER would otherwise be
+	// stamped onto every launched session). See packages/sessionenv.
+	cmd.Env = sessionenv.Strip(captureLoginEnv(gmuxBin, cwd))
 
 	if err := cmd.Start(); err != nil {
 		return 0, err
