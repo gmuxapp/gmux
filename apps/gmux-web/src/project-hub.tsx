@@ -23,6 +23,7 @@ import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
 import {
   sessions, projects, peers, localPeerNames, partitionForProject,
+  localHostLabel,
 } from './store'
 import { HostSuffix } from './host-suffix'
 import { SessionRow } from './session-row'
@@ -100,7 +101,7 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
         <div class="hub-title-row">
           <h2 class="hub-title">
             {projectSlug}
-            <HostSuffix peer={projectPeer} />
+            <HostSuffix peer={projectPeer ?? localHostLabel.value} local={!projectPeer} />
           </h2>
           <LaunchButton
             sessions={allSessions}

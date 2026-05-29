@@ -418,6 +418,34 @@ export const folders = computed(() =>
 )
 
 /**
+ * Local host's display name, but only when the shown folders span more
+ * than one host.
+ *
+ * Normally locally-owned project headers render no host suffix (the
+ * viewer is on that host, so naming it is noise). Once projects from
+ * more than one host are present, though, the local host becomes just
+ * one host among several, and labelling every header — local included —
+ * is clearer than leaving the local ones ambiguously bare. This yields
+ * the name to fall back to in that case, or `undefined` when there's a
+ * single host (or the daemon hasn't reported its hostname yet).
+ */
+export const localHostLabel = computed<string | undefined>(() => {
+  const local = health.value?.hostname
+  // Count distinct hosts among the shown folders. Local folders
+  // (peer === undefined) are tracked separately from named peers
+  // rather than via a '' sentinel, so a (misconfigured) peer named
+  // '' can't masquerade as local and skew the threshold.
+  const peerHosts = new Set<string>()
+  let hasLocal = false
+  for (const f of folders.value) {
+    if (f.peer === undefined) hasLocal = true
+    else peerHosts.add(f.peer)
+  }
+  const hostCount = peerHosts.size + (hasLocal ? 1 : 0)
+  return hostCount > 1 ? local : undefined
+})
+
+/**
  * Current view, derived from the URL + data.
  *
  * Returns null until sessions have loaded at least once. This prevents

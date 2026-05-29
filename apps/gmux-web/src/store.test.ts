@@ -7,7 +7,7 @@ import {
   isSessionUnavailable, urlPath, selectedId,
   navigateToSession, setNavigate,
   applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
-  toUISession,
+  toUISession, localHostLabel,
 } from './store'
 import type { PendingMutation } from './store'
 import type { Session } from './types'
@@ -541,6 +541,54 @@ describe('raw signal projections', () => {
     // projects survived; peers cleared.
     expect(projects.value).toHaveLength(1)
     expect(peers.value).toHaveLength(0)
+  })
+})
+
+describe('localHostLabel', () => {
+  beforeEach(() => {
+    _rawSessions.value = []
+    _setRawWorld({ projects: [], peers: [], health: null })
+  })
+
+  it('is undefined when every folder is local (single host)', () => {
+    _setRawWorld({
+      health: { version: 'dev', hostname: 'workstation' },
+      projects: [
+        { slug: 'a', match: [{ path: '/a' }] },
+        { slug: 'b', match: [{ path: '/b' }] },
+      ],
+    })
+    expect(localHostLabel.value).toBeUndefined()
+  })
+
+  it('yields the local hostname once a peer reference adds a second host', () => {
+    _setRawWorld({
+      health: { version: 'dev', hostname: 'workstation' },
+      projects: [
+        { slug: 'a', match: [{ path: '/a' }] },
+        { slug: 'b', peer: 'unraid' },
+      ],
+    })
+    expect(localHostLabel.value).toBe('workstation')
+  })
+
+  it('is undefined in multi-host mode when the daemon has not reported a hostname', () => {
+    _setRawWorld({
+      health: { version: 'dev' },
+      projects: [
+        { slug: 'a', match: [{ path: '/a' }] },
+        { slug: 'b', peer: 'unraid' },
+      ],
+    })
+    expect(localHostLabel.value).toBeUndefined()
+  })
+
+  it('is undefined when only peer references exist but all share one host', () => {
+    _setRawWorld({
+      health: { version: 'dev', hostname: 'workstation' },
+      projects: [{ slug: 'b', peer: 'unraid' }],
+    })
+    expect(localHostLabel.value).toBeUndefined()
   })
 })
 
