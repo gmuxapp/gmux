@@ -3,7 +3,8 @@
  * Active with ?mock query param or VITE_MOCK=1.
  */
 
-import type { ProjectItem } from '../types'
+import type { ProjectItem, PeerInfo } from '../types'
+import type { HealthData } from '../store'
 import type { MockSession } from './types'
 
 import codexRefactorAdapters from './sessions/codex-refactor-adapters'
@@ -24,6 +25,23 @@ export const MOCK_SESSIONS: MockSession[] = [
   shellOpenclawConfigure,
   shellOpenclawLogs,
 ]
+
+/** Mock peers (host roster). Covers connected, a Local devcontainer,
+ *  and a disconnected host carrying a last_error so the Hosts tab
+ *  exercises every row state. */
+export const MOCK_PEERS: PeerInfo[] = [
+  { name: 'laptop', url: 'https://laptop.tail-scale.ts.net', status: 'connected', session_count: 2, version: '1.2.0' },
+  { name: 'server', url: 'https://server.tail-scale.ts.net', status: 'connected', session_count: 4, version: '1.1.9' },
+  { name: 'devcontainer', url: 'https://devcontainer.tail-scale.ts.net', status: 'connected', session_count: 1, version: '1.2.0', local: true },
+  { name: 'bespin', url: 'https://bespin.tail-scale.ts.net', status: 'disconnected', session_count: 0, last_error: 'dial tcp 100.84.12.9:443: connect: connection refused' },
+]
+
+/** Mock daemon health for the local host. */
+export const MOCK_HEALTH: HealthData = {
+  version: '1.2.0',
+  hostname: 'workstation',
+  peers: MOCK_PEERS,
+}
 
 /** Session ID → mock session (for terminal content + cursor lookup). */
 export const MOCK_BY_ID: Record<string, MockSession> = Object.fromEntries(

@@ -902,6 +902,109 @@ body {
   color: var(--text);
 }
 
+/* Settings tab bar (Projects / Hosts). */
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+}
+.settings-tab {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.1s, background 0.1s;
+}
+.settings-tab:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.settings-tab.active {
+  color: var(--text);
+  background: var(--bg-active);
+}
+
+/* Hosts roster (read-only). */
+.host-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.host-row {
+  padding: 8px;
+  border-radius: 6px;
+}
+.host-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.host-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-disconnected);
+  flex-shrink: 0;
+}
+.host-status-dot.connected {
+  background: var(--status-connected);
+}
+.host-self-tag {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--bg-active);
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.host-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.host-local-tag {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 6px;
+}
+.host-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.host-status-label {
+  text-transform: capitalize;
+}
+.host-sep {
+  opacity: 0.5;
+}
+.host-error {
+  margin-top: 4px;
+  margin-left: 15px;
+  font-size: 12px;
+  color: var(--status-disconnected);
+  font-family: var(--mono, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .modal-close {
   width: 28px;
   height: 28px;
