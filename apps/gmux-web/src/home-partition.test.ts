@@ -2,19 +2,23 @@
 // only piece of dashboard logic with non-trivial behavior (the row
 // component is visual, the section layout is presentation); these
 // tests guard the behavior contracts the design conversation pinned
-// down: section priority, sort key, and the Recent floor/window/cap.
+// down: section priority, sort key, and the recency-bucket boundaries.
 
 import { describe, it, expect } from 'vitest'
 import {
   partitionForHome,
   partitionForProject,
-  RECENT_WINDOW_MS,
-  RECENT_FLOOR,
-  RECENT_CAP,
 } from './store'
 import { makeSession } from './test-helpers'
 
-const NOW = Date.parse('2026-06-01T12:00:00Z')
+// Constructed from LOCAL date parts (not a UTC string) so the
+// calendar-day bucket boundaries — which partitionForHome computes in
+// local time — line up deterministically regardless of the test
+// runner's timezone. Noon leaves a comfortable 12h gap to local
+// midnight, keeping the "earlier today" / "yesterday" splits crisp.
+const NOW = new Date(2026, 5, 1, 12, 0, 0).getTime()
+const HOUR = 60 * 60 * 1000
+const DAY = 24 * HOUR
 
 function stamp(offsetMs: number): string {
   return new Date(NOW + offsetMs).toISOString()
@@ -24,10 +28,10 @@ describe('partitionForHome', () => {
   describe('section assignment', () => {
     it('puts unread alive sessions in needsAttention', () => {
       const s = makeSession({ id: 's1', cwd: '/x', alive: true, unread: true })
-      const { needsAttention, running, recent } = partitionForHome([s], NOW)
+      const { needsAttention, running, buckets } = partitionForHome([s], NOW)
       expect(needsAttention.map(s => s.id)).toEqual(['s1'])
       expect(running).toEqual([])
-      expect(recent).toEqual([])
+      expect(buckets).toEqual([])
     })
 
     it('does NOT escalate error-only sessions to needsAttention', () => {
@@ -61,7 +65,7 @@ describe('partitionForHome', () => {
       // Home is alive-only: dead sessions live exclusively in the
       // project page's "All sessions" section. This pins the
       // contract so a regression that lets dead sessions leak into
-      // Recent (the historical behavior) fails loudly.
+      // a recency bucket (the historical behavior) fails loudly.
       const sessions = [
         makeSession({
           id: 'dead', cwd: '/x', alive: false,
@@ -72,10 +76,10 @@ describe('partitionForHome', () => {
           last_activity_at: stamp(-5 * 60 * 1000),
         }),
       ]
-      const { needsAttention, running, recent } = partitionForHome(sessions, NOW)
+      const { needsAttention, running, buckets } = partitionForHome(sessions, NOW)
       expect(needsAttention).toEqual([])
       expect(running).toEqual([])
-      expect(recent).toEqual([])
+      expect(buckets).toEqual([])
     })
   })
 
@@ -130,64 +134,67 @@ describe('partitionForHome', () => {
     })
   })
 
-  describe('recent window and floor', () => {
-    // Recent is for idle-alive sessions (live but not currently
-    // working). Dead sessions never reach this bucket since home
+  describe('recency buckets', () => {
+    // Buckets hold idle-alive sessions (live but not currently
+    // working/unread). Dead sessions never reach them since home
     // filters them out at the input.
     const idle = (id: string, ageMs: number) => makeSession({
       id, cwd: '/x', alive: true, last_activity_at: stamp(-ageMs),
     })
 
-    it('includes only entries inside the window when there are enough', () => {
+    it('groups idle-alive sessions into the four recency buckets', () => {
       const sessions = [
-        idle('a', 10 * 60 * 1000),
-        idle('b', 20 * 60 * 1000),
-        idle('c', 30 * 60 * 1000),
-        idle('d', RECENT_WINDOW_MS + 60_000),
+        idle('h', 30 * 60 * 1000), // 30m ago  → Last hour
+        idle('t', 3 * HOUR),       // 09:00     → Earlier today
+        idle('y', 15 * HOUR),      // prev 21:00 → Yesterday
+        idle('w', 3 * DAY),        // 3 days     → Earlier this week
       ]
-      const { recent } = partitionForHome(sessions, NOW)
-      expect(recent.map(s => s.id)).toEqual(['a', 'b', 'c'])
+      const { buckets } = partitionForHome(sessions, NOW)
+      expect(buckets.map(b => b.label)).toEqual([
+        'Last hour', 'Earlier today', 'Yesterday', 'Earlier this week',
+      ])
+      expect(buckets.map(b => b.sessions.map(s => s.id))).toEqual([
+        ['h'], ['t'], ['y'], ['w'],
+      ])
     })
 
-    it('falls back to top-floor by recency when fewer than floor are in-window', () => {
-      // 1 inside window, 4 older. Floor takes top RECENT_FLOOR=3 by
-      // recency overall so the user always sees a non-trivial
-      // section after they've used the daemon at all.
-      const sessions = [
-        idle('inside', 5 * 60 * 1000),
-        idle('old1', 2 * 3600_000),
-        idle('old2', 3 * 3600_000),
-        idle('old3', 4 * 3600_000),
-        idle('old4', 5 * 3600_000),
-      ]
-      const { recent } = partitionForHome(sessions, NOW)
-      expect(recent.map(s => s.id)).toEqual(['inside', 'old1', 'old2'])
-      expect(recent).toHaveLength(RECENT_FLOOR)
+    it('prioritizes the rolling Last hour window over the calendar day', () => {
+      // A session 40m ago is "Last hour" even though it is also part
+      // of "today". The rolling window wins.
+      const { buckets } = partitionForHome([idle('a', 40 * 60 * 1000)], NOW)
+      expect(buckets).toHaveLength(1)
+      expect(buckets[0].label).toBe('Last hour')
     })
 
-    it('caps the window-qualified set at RECENT_CAP', () => {
-      // Pathological case: many recent transitions in a busy hour.
-      // The cap stops the dashboard from scrolling forever.
-      const sessions = Array.from({ length: RECENT_CAP + 5 }, (_, i) =>
-        idle(`s${i}`, (i + 1) * 1000),
+    it('drops sessions older than a week', () => {
+      const { buckets } = partitionForHome([idle('ancient', 8 * DAY)], NOW)
+      expect(buckets).toEqual([])
+    })
+
+    it('omits empty buckets', () => {
+      // Only an earlier-this-week session present: the three newer
+      // buckets don't render at all.
+      const { buckets } = partitionForHome([idle('w', 3 * DAY)], NOW)
+      expect(buckets.map(b => b.label)).toEqual(['Earlier this week'])
+    })
+
+    it('sorts newest-first within a bucket', () => {
+      const { buckets } = partitionForHome(
+        [idle('older', 50 * 60 * 1000), idle('newer', 10 * 60 * 1000)],
+        NOW,
       )
-      const { recent } = partitionForHome(sessions, NOW)
-      expect(recent).toHaveLength(RECENT_CAP)
-      expect(recent[0].id).toBe('s0')
-      expect(recent[RECENT_CAP - 1].id).toBe(`s${RECENT_CAP - 1}`)
+      expect(buckets).toHaveLength(1)
+      expect(buckets[0].sessions.map(s => s.id)).toEqual(['newer', 'older'])
     })
 
-    it('returns an empty Recent when every session is working or unread', () => {
-      // No idle-alive leftovers → Recent stays empty even with the
-      // floor (the floor pulls from leftover, not from
-      // attention/running).
+    it('returns no buckets when every session is working or unread', () => {
       const working = { label: 'x', working: true, error: false }
       const sessions = [
         makeSession({ id: 'a', cwd: '/x', alive: true, status: working }),
-        makeSession({ id: 'b', cwd: '/x', alive: true, status: working }),
+        makeSession({ id: 'b', cwd: '/x', alive: true, unread: true }),
       ]
-      const { recent } = partitionForHome(sessions, NOW)
-      expect(recent).toEqual([])
+      const { buckets } = partitionForHome(sessions, NOW)
+      expect(buckets).toEqual([])
     })
   })
 })
@@ -200,10 +207,9 @@ describe('partitionForProject', () => {
   // and covered by the partitionForHome suite above.
 
   it('keeps idle-alive sessions from arbitrarily long ago in `rest`', () => {
-    // A session that was last active a week ago would be filtered
-    // out of home's Recent (1h window, 10-cap) but must remain on
-    // the project page.
-    const weekAgo = new Date(NOW - 7 * 24 * 60 * 60 * 1000).toISOString()
+    // A session last active a week ago would be dropped from home's
+    // recency buckets (>7 days) but must remain on the project page.
+    const weekAgo = new Date(NOW - 7 * DAY).toISOString()
     const s = makeSession({
       id: 'ancient',
       cwd: '/x',
@@ -216,7 +222,7 @@ describe('partitionForProject', () => {
   })
 
   it('keeps exited sessions in `rest` regardless of age', () => {
-    const longAgo = new Date(NOW - 30 * 24 * 60 * 60 * 1000).toISOString()
+    const longAgo = new Date(NOW - 30 * DAY).toISOString()
     const s = makeSession({
       id: 'old-exit',
       cwd: '/x',
@@ -227,14 +233,14 @@ describe('partitionForProject', () => {
     expect(rest.map(x => x.id)).toEqual(['old-exit'])
   })
 
-  it('does not cap `rest` at RECENT_CAP', () => {
-    // Generate more entries than the home cap so a regression that
-    // accidentally reused partitionForHome's slicing would show.
-    const sessions = Array.from({ length: RECENT_CAP + 5 }, (_, i) =>
+  it('does not cap or window `rest`', () => {
+    // Generate a large set so a regression that accidentally reused
+    // home's bucketing/dropping would show up as a shorter list.
+    const sessions = Array.from({ length: 15 }, (_, i) =>
       makeSession({ id: `s${i}`, cwd: '/x', alive: false }),
     )
     const { rest } = partitionForProject(sessions)
-    expect(rest.length).toBe(RECENT_CAP + 5)
+    expect(rest.length).toBe(15)
   })
 
   it('routes unread-alive to needsAttention and working-alive to running', () => {

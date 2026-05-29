@@ -4,7 +4,7 @@
 // remove) lives in Settings → Projects; project navigation lives in
 // the sidebar. The home page is purely an overview surface.
 //
-// Section semantics, sort order, and the Recent floor/window/cap
+// Section semantics, sort order, and the recency-bucket boundaries
 // live in store.ts:partitionForHome. This file is presentation.
 
 import {
@@ -26,7 +26,7 @@ export function Home({
 }) {
   const foldersVal = folders.value
   const hasProjects = folders.value.length > 0
-  const { needsAttention, running, recent } = homePartition.value
+  const { needsAttention, running, buckets } = homePartition.value
 
   // Cheap session→folder lookup: the SessionRow needs a project name
   // and the folder's owning peer to build a correct href. Building a
@@ -56,7 +56,7 @@ export function Home({
     )
   }
 
-  const anyActivity = needsAttention.length + running.length + recent.length > 0
+  const anyActivity = needsAttention.length > 0 || running.length > 0 || buckets.length > 0
 
   return (
     <div class="page">
@@ -81,11 +81,11 @@ export function Home({
         </Section>
       )}
 
-      {recent.length > 0 && (
-        <Section title="Recent">
-          {recent.map(renderRow)}
+      {buckets.map(b => (
+        <Section key={b.label} title={b.label}>
+          {b.sessions.map(renderRow)}
         </Section>
-      )}
+      ))}
 
       {!anyActivity && (
         hasProjects ? (

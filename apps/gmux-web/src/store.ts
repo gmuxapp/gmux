@@ -513,18 +513,21 @@ export const unreadCount = computed(() =>
 // have not transitioned yet, so a brand-new idle session shows at
 // the top of Running and an old quiet one drops to the bottom).
 //
-// Recent surfaces idle-alive sessions worth glancing back at:
-// shells at a prompt that were recently doing something, or
-// adapter sessions between turns. Dead sessions are NOT included
-// (they live on the project page). Shape: entries whose
-// last_activity_at falls within RECENT_WINDOW_MS, plus enough
-// additional entries by recency to reach a floor of RECENT_FLOOR,
-// capped at RECENT_CAP. Without the floor the section vanishes
-// after a quiet hour; without the cap it grows unbounded on busy
-// daemons.
-export const RECENT_WINDOW_MS = 60 * 60 * 1000
-export const RECENT_FLOOR = 3
-export const RECENT_CAP = 10
+// The idle-alive remainder is grouped into recency buckets (Last
+// hour / Earlier today / Yesterday / Earlier this week) rather than a
+// single capped list. Buckets give structure so the section can grow
+// without truncation; anything older than a week drops off home (find
+// it via the project page or search). Dead sessions are NOT included
+// (they live on the project page).
+export const RECENT_WINDOW_DAYS = 7
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+const MS_PER_HOUR = 60 * 60 * 1000
+
+/** One recency bucket on the home dashboard. */
+export interface RecentBucket {
+  label: string
+  sessions: Session[]
+}
 
 function activityTimeMs(s: Session): number {
   // last_activity_at is canonical when present (daemon-stamped on
@@ -549,10 +552,11 @@ function byActivityDesc(a: Session, b: Session): number {
 }
 
 /**
- * Pure partition of a session list into the three dashboard sections.
- * Exported so tests can drive it with fixtures and `now` injected
- * (real wall-clock time would otherwise make the Recent floor/window
- * untestable).
+ * Pure partition of a session list into the dashboard sections:
+ * Waiting (unread), Active (working), and recency buckets for the
+ * idle-alive remainder. Exported so tests can drive it with fixtures
+ * and `now` injected (real wall-clock time would otherwise make the
+ * day boundaries untestable).
  *
  * Alive-only: dead sessions never appear on the home dashboard.
  * They live exclusively in the project page's "All sessions"
@@ -563,7 +567,7 @@ function byActivityDesc(a: Session, b: Session): number {
 export function partitionForHome(
   all: readonly Session[],
   now: number,
-): { needsAttention: Session[]; running: Session[]; recent: Session[] } {
+): { needsAttention: Session[]; running: Session[]; buckets: RecentBucket[] } {
   const needsAttention: Session[] = []
   const running: Session[] = []
   const leftover: Session[] = []
@@ -582,9 +586,7 @@ export function partitionForHome(
     } else if (s.status?.working) {
       running.push(s)
     } else {
-      // Idle-alive: not unread, not working. Falls to Recent if
-      // its last_activity_at is within the window (or via the
-      // floor when the daemon is quiet).
+      // Idle-alive: not unread, not working. Bucketed by recency below.
       leftover.push(s)
     }
   }
@@ -592,19 +594,42 @@ export function partitionForHome(
   running.sort(byActivityDesc)
   leftover.sort(byActivityDesc)
 
-  // Recent: leftover (idle-alive) entries whose timestamp is
-  // within the window, or top-N by recency if fewer than the
-  // floor qualify.
-  const withinWindow = leftover.filter(s => {
-    const t = activityTimeMs(s)
-    return t > 0 && now - t < RECENT_WINDOW_MS
-  })
-  const recent = (withinWindow.length >= RECENT_FLOOR
-    ? withinWindow
-    : leftover.slice(0, RECENT_FLOOR)
-  ).slice(0, RECENT_CAP)
+  // Recency buckets. "Last hour" is a rolling 60-minute window and
+  // takes priority; "Earlier today" / "Yesterday" use local-midnight
+  // calendar boundaries (so an 11pm session reads as "yesterday", not
+  // "20 hours ago"); "Earlier this week" is the rolling 2–7 day tail.
+  // Sessions older than a week (or without a parseable timestamp) are
+  // omitted from home.
+  const d = new Date(now)
+  const todayMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  // Let the Date constructor normalize the day rollover so the
+  // boundary stays correct across DST transitions (a subtraction of
+  // a fixed 24h would drift by an hour on spring-forward / fall-back).
+  const yesterdayMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1).getTime()
+  const hourAgo = now - MS_PER_HOUR
+  const weekAgo = now - RECENT_WINDOW_DAYS * MS_PER_DAY
 
-  return { needsAttention, running, recent }
+  const lastHour: Session[] = []
+  const earlierToday: Session[] = []
+  const yesterday: Session[] = []
+  const earlierWeek: Session[] = []
+  for (const s of leftover) {
+    const t = activityTimeMs(s)
+    if (t <= 0) continue
+    if (t >= hourAgo) lastHour.push(s)
+    else if (t >= todayMidnight) earlierToday.push(s)
+    else if (t >= yesterdayMidnight) yesterday.push(s)
+    else if (t >= weekAgo) earlierWeek.push(s)
+  }
+
+  const buckets: RecentBucket[] = [
+    { label: 'Last hour', sessions: lastHour },
+    { label: 'Earlier today', sessions: earlierToday },
+    { label: 'Yesterday', sessions: yesterday },
+    { label: 'Earlier this week', sessions: earlierWeek },
+  ].filter(b => b.sessions.length > 0)
+
+  return { needsAttention, running, buckets }
 }
 
 export const homePartition = computed(() =>
