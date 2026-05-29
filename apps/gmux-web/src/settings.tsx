@@ -1,15 +1,18 @@
-// "Add project" modal.
+// Settings modal.
 //
-// Three addition flows:
+// Deep-linkable via the `?settings` query param (see main.tsx): it
+// layers over the current view without changing the path-derived
+// `view`, so the background — including a live session — stays mounted.
+//
+// For now the modal hosts only project configuration via three
+// addition flows:
 //   1. Peer references (subscribe to a project owned by another host)
 //   2. Discovered (claim a repo on disk that isn't a project yet)
 //   3. Manual local path
 //
-// Display, reorder, and removal of *configured* projects all live on
-// the home dashboard now: the modal is intentionally additions-only,
-// so the user has one place to discover-and-add and another to
-// arrange-and-curate. The exported component name keeps the older
-// `ManageProjectsModal` identifier for now; callers update later.
+// A tab bar (Projects / Hosts) and the configured-project manage-list
+// land in later slices; today the modal is additions-only and
+// reorder/removal still live on the home dashboard.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
@@ -48,9 +51,9 @@ function describeRule(rule: MatchRule): RuleDescription {
   return { label: '(empty rule)', qualifier: '' }
 }
 
-// ── ManageProjectsModal ──
+// ── SettingsModal ──
 
-export function ManageProjectsModal({
+export function SettingsModal({
   open,
   onClose,
 }: {

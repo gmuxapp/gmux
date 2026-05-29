@@ -41,6 +41,14 @@ export const IconBell = ({ muted }: { muted?: boolean }) => (
   </svg>
 )
 
+export const IconSettings = () => (
+  <svg viewBox="0 0 16 16" width="15" height="15" {...bellStroke}>
+    <path d="M2 4.5h7M12 4.5h2M2 11.5h2M7 11.5h7"/>
+    <circle cx="10.5" cy="4.5" r="1.7"/>
+    <circle cx="5.5" cy="11.5" r="1.7"/>
+  </svg>
+)
+
 // ── Drag helpers ──
 
 /** True on devices with a pointer (mouse/trackpad). Touch-only devices
@@ -295,13 +303,13 @@ function FolderGroup({
 export function Sidebar({
   resumingId,
   onCloseSession,
-  onManageProjects,
+  onOpenSettings,
   open,
   onClose,
 }: {
   resumingId: string | null
   onCloseSession: (session: Session) => void
-  onManageProjects: () => void
+  onOpenSettings: () => void
   open: boolean
   onClose: () => void
 }) {
@@ -348,13 +356,14 @@ export function Sidebar({
             href="/"
             onClick={onClose}
           >gmux</a>
-          {connected && !hasProjects && (
-            <LaunchButton
-              className="sidebar-launch-btn"
-              beforeLaunch={seedHomeProject}
-              onLaunch={onClose}
-            />
-          )}
+          <button
+            class="sidebar-settings-btn"
+            onClick={onOpenSettings}
+            aria-label="Settings"
+            title="Settings"
+          >
+            <IconSettings />
+          </button>
         </div>
         <div class="sidebar-scroll">
           {foldersVal.map(f => (
@@ -370,6 +379,15 @@ export function Sidebar({
               onClick={onClose}
             />
           ))}
+          {connected && !hasProjects && (
+            <div class="sidebar-empty-launch">
+              <LaunchButton
+                className="sidebar-launch-btn"
+                beforeLaunch={seedHomeProject}
+                onLaunch={onClose}
+              />
+            </div>
+          )}
           {connected && totalVisible === 0 && !hasProjects && (
             <div class="sidebar-hint">
               Click <strong>+</strong> to start your first session.
@@ -377,7 +395,7 @@ export function Sidebar({
           )}
           {connected && isOnlyHomeProject && totalVisible > 0 && (
             <div class="sidebar-hint">
-              <button class="sidebar-hint-link" onClick={onManageProjects}>
+              <button class="sidebar-hint-link" onClick={onOpenSettings}>
                 Add a project
               </button> to organize sessions by repo.
             </div>
