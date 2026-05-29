@@ -1,7 +1,6 @@
 package peering
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -417,76 +416,6 @@ func TestPeerStatusEventBroadcast(t *testing.T) {
 	}
 
 	mgr.Stop()
-}
-
-// TestHandleEvent_V1CompatPerEvent exercises the protocol-1 fallback
-// path in handleEvent: a v1.x spoke (or any spoke not emitting
-// snapshot.sessions, e.g. an upgrade lag) pushes per-session
-// upsert/remove frames. The hub must mirror those into its local
-// store under namespaced ids, even with no snapshot.sessions ever
-// arriving. This is what keeps v2 hubs working against v1 spokes
-// during a staggered upgrade.
-func TestHandleEvent_V1CompatPerEvent(t *testing.T) {
-	st := store.New()
-	p := newPeer(config.PeerConfig{Name: "server"}, st, nil)
-
-	// session-upsert with a Session payload: hub mirrors it as
-	// "sess-1@server" with Peer set.
-	rawSession := json.RawMessage(`{"id":"sess-1","kind":"shell","alive":true,"slug":"fix-auth"}`)
-	upsert, _ := json.Marshal(map[string]any{
-		"type":    "session-upsert",
-		"id":      "sess-1",
-		"session": rawSession,
-	})
-	p.handleEvent(context.Background(), "session-upsert", upsert)
-
-	sess, ok := st.Get("sess-1@server")
-	if !ok {
-		t.Fatal("v1 session-upsert did not produce a namespaced store entry")
-	}
-	if sess.Peer != "server" {
-		t.Errorf("sess.Peer = %q, want %q", sess.Peer, "server")
-	}
-	if sess.Slug != "fix-auth" {
-		t.Errorf("sess.Slug = %q, want %q", sess.Slug, "fix-auth")
-	}
-
-	// session-remove against the same namespaced id.
-	remove, _ := json.Marshal(map[string]any{
-		"type": "session-remove",
-		"id":   "sess-1",
-	})
-	p.handleEvent(context.Background(), "session-remove", remove)
-
-	if _, ok := st.Get("sess-1@server"); ok {
-		t.Error("v1 session-remove did not clear the namespaced store entry")
-	}
-}
-
-// TestHandleEvent_V1CompatDropsForwardedFromKnownOrigin ensures the
-// per-event path applies the same loop-prevention filter the
-// snapshot path does: if peer A forwards us a session that
-// originated on B (and we already talk to B directly), we drop it
-// rather than mirror it under A's namespace.
-func TestHandleEvent_V1CompatDropsForwardedFromKnownOrigin(t *testing.T) {
-	st := store.New()
-	p := newPeer(config.PeerConfig{Name: "hub-a"}, st, nil)
-	p.isKnownOrigin = func(name string) bool { return name == "hub-b" }
-
-	// session arriving from hub-a but originally owned by hub-b
-	// (id is already namespaced "sess-1@hub-b"). We have a direct
-	// path to hub-b, so this would be a longer-path duplicate.
-	rawSession := json.RawMessage(`{"id":"sess-1@hub-b","kind":"shell","alive":true}`)
-	upsert, _ := json.Marshal(map[string]any{
-		"type":    "session-upsert",
-		"id":      "sess-1@hub-b",
-		"session": rawSession,
-	})
-	p.handleEvent(context.Background(), "session-upsert", upsert)
-
-	if _, ok := st.Get("sess-1@hub-b@hub-a"); ok {
-		t.Error("forwarded-from-known-origin session should be dropped, not mirrored")
-	}
 }
 
 func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {

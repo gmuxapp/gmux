@@ -253,41 +253,40 @@ action's effect. The optimistic overlay covers the gap.
   cross-channel references (e.g., session.project_slug pointing at
   an unknown slug for one frame).
 
-### Backwards compatibility
+### Backwards compatibility (removed)
 
 Protocol 1 (per-event SSE: `session-upsert`, `session-remove`,
-`projects-update`, `peer-status`) is **kept alongside** protocol 2
-rather than removed. v1.x browsers and hubs continue to work
-against a v2 daemon, and a v2 hub continues to consume sessions
-from a v1.x spoke during a staggered upgrade.
+`peer-status` on the wire) was kept alongside protocol 2 through the
+v1.x fleet upgrade and **removed in the 2.0 release** (#224). The
+daemon no longer emits per-event session/peer frames or the
+initial `session-upsert` hydration dump, and the hub's `handleEvent`
+no longer decodes per-event `session-upsert` / `session-remove`.
+A v2 hub consumes `snapshot.sessions`; a v2 browser hydrates from the
+leading-edge `snapshot.sessions` / `snapshot.world`. An old hub can no
+longer source sessions from a new spoke, and old browsers / scripts
+hitting the removed per-event stream see nothing — hence the major bump.
 
-Dispatch on the daemon side:
+Two things that look like protocol-1 leftovers were **deliberately
+kept** because they are load-bearing in v2, not compat:
 
-  - Non-peer subscribers (browsers, v1 hubs that don't send
-    `?as=peer`) receive both `snapshot.sessions` / `snapshot.world`
-    *and* the protocol-1 per-event stream. New consumers attach
-    listeners only for the snapshot events and ignore the per-event
-    chatter; old consumers do the opposite.
-  - Peer subscribers (v2 hubs that send `?as=peer`) receive only
-    `snapshot.sessions` and `session-activity`. Per-event
-    `session-upsert` / `session-remove` are suppressed to avoid
-    double-processing alongside the snapshot.
+  - **`projects-update` SSE event**, emitted to `?as=peer` subscribers
+    only. A peer hub has no `snapshot.world`, so it relies on this
+    event as the trigger to re-fetch the spoke's project list and
+    refresh the `peer_projects` it surfaces upstream. Browser
+    subscribers no longer receive it (they get projects via
+    `snapshot.world`; `projects-update` fires the world coalescer for
+    them, see `snapshotPumpRoute`).
+  - **`GET /v1/projects`**, called by the peering layer
+    (`apiclient.GetProjects` → `Peer.fetchProjects`) on connect and on
+    every `projects-update`. The browser does not use it. The other
+    bulk GETs (`/v1/sessions`, `/v1/health`, `/v1/frontend-config`)
+    likewise remain for CLI / scripting use.
 
-Dispatch on the hub side: `handleEvent` decodes both
-`snapshot.sessions` and per-event `session-upsert` /
-`session-remove`, applying both idempotently. A v2 spoke sends
-snapshots; a v1 spoke sends per-event; the hub never has to know
-which.
-
-HTTP GET endpoints (`/v1/sessions`, `/v1/projects`, `/v1/health`,
-`/v1/frontend-config`) all remain available. They are no longer the
-v2 browser's hot path; that hydrates from the leading-edge
-`snapshot.sessions` / `snapshot.world`. The endpoints are kept for
-CLI / scripting use and as the v1 browser's bootstrap channel.
-
-The per-event SSE types and the bulk GET endpoints are documented
-as deprecated in v2: they will not gain new fields, but they will
-not be removed in a minor release.
+These internal broadcast events (`session-upsert`, `session-remove`,
+`projects-update`, `peer-status`) all still exist on the in-process
+bus as the canonical "something changed" signal that drives the
+snapshot pump; only their legacy *wire* emission and decoders were
+removed.
 
 ## Alternatives considered
 

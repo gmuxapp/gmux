@@ -370,18 +370,6 @@ type sseSnapshotSessions struct {
 	Sessions []store.Session `json:"sessions"`
 }
 
-// sseEvent is the wire format for protocol-1 per-event SSE
-// (session-upsert / session-remove). Retained so a v2 hub can
-// consume sessions from a v1.x spoke that doesn't emit
-// snapshot.sessions. v2 spokes suppress these for `?as=peer`
-// subscribers, so this path only fires against v1 spokes in
-// steady state.
-type sseEvent struct {
-	Type    string           `json:"type"`
-	ID      string           `json:"id"`
-	Session *json.RawMessage `json:"session,omitempty"`
-}
-
 // isForwardedFromKnownOrigin checks whether a session ID (before
 // namespacing) was forwarded from a peer we can reach directly.
 // Returns true if the session should be dropped.
@@ -422,48 +410,6 @@ func (p *Peer) handleEvent(ctx context.Context, eventType string, data []byte) {
 			ID:   namespacedID,
 		})
 
-	case "session-upsert":
-		// v1 compat: a v1.x spoke ships sessions one at a time via
-		// session-upsert. A v2 spoke that knows about `?as=peer`
-		// suppresses these in favour of snapshot.sessions. Applying
-		// both from a misconfigured v2 spoke is idempotent: the
-		// upsert produces the same store state the snapshot would.
-		var ev sseEvent
-		if err := json.Unmarshal(data, &ev); err != nil {
-			log.Printf("peering: %s: bad upsert event: %v", p.Config.Name, err)
-			return
-		}
-		if ev.Session == nil {
-			return
-		}
-		if p.isForwardedFromKnownOrigin(ev.ID) {
-			return
-		}
-		var sess store.Session
-		if err := json.Unmarshal(*ev.Session, &sess); err != nil {
-			log.Printf("peering: %s: bad session payload: %v", p.Config.Name, err)
-			return
-		}
-		sess.ID = NamespaceID(ev.ID, p.Config.Name)
-		sess.Peer = p.Config.Name
-		sess.SocketPath = "" // meaningless on hub side
-		// UpsertRemote (not Upsert) because the spoke already resolved
-		// Title and Resumable; rerunning resolveTitle here would
-		// clobber the correct title with the Kind fallback.
-		p.store.UpsertRemote(sess)
-
-	case "session-remove":
-		// v1 compat: paired with session-upsert above.
-		var ev sseEvent
-		if err := json.Unmarshal(data, &ev); err != nil {
-			log.Printf("peering: %s: bad remove event: %v", p.Config.Name, err)
-			return
-		}
-		if p.isForwardedFromKnownOrigin(ev.ID) {
-			return
-		}
-		p.store.Remove(NamespaceID(ev.ID, p.Config.Name))
-
 	case "projects-update":
 		// Spoke's projects.json changed. Refresh the cached
 		// projection so the hub's snapshot.world reflects the new
@@ -474,11 +420,11 @@ func (p *Peer) handleEvent(ctx context.Context, eventType string, data []byte) {
 		// a world re-compose on stale data).
 		go p.fetchProjects(ctx)
 
-	case "snapshot.world", "peer-status":
-		// Hub composes its own world view. v2 spokes don't emit
-		// snapshot.world to asPeer subscribers anyway; v1 spokes
-		// emit peer-status which we don't care about (hub state is
-		// authoritative for those).
+	case "snapshot.world":
+		// A `?as=peer` subscription never receives snapshot.world
+		// (the spoke only sends it to browser subscribers). Ignore
+		// defensively in case that ever changes: the hub composes
+		// its own world view authoritatively.
 
 	default:
 		// Unknown event types are silently ignored for forward compatibility.
