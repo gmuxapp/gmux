@@ -802,8 +802,11 @@ func serve(stderr io.Writer) int {
 	//
 	// In protocol 2 every reader is also an SSE subscriber and gets the
 	// authoritative project view pushed via snapshot.world (ADR 0001).
-	// GET /v1/projects is retained for v1 clients (old web build, scripts)
-	// and reflects the same state via a one-shot fetch. Deprecated in v2.
+	// GET /v1/projects is the one-shot project list. It is NOT legacy:
+	// the v2 peering layer calls it (apiclient.GetProjects -> peer
+	// fetchProjects) on connect and on every projects-update to refresh
+	// the peer_projects projection a hub surfaces for this node. The
+	// browser does not use it (it reads projects from snapshot.world).
 
 	mux.HandleFunc("GET /v1/projects", func(w http.ResponseWriter, r *http.Request) {
 		state, err := projectMgr.Load()
@@ -1735,24 +1738,6 @@ func serve(stderr io.Writer) int {
 			sendSSE(w, "snapshot.world", composeWorld())
 		}
 
-		// Protocol-1 initial state: emit each owned session as a
-		// session-upsert so v1.x consumers (old browsers, old hubs
-		// without `?as=peer` support) can hydrate without
-		// GET /v1/sessions. Suppressed for new peer subscribers since
-		// they consume snapshot.sessions.
-		if !asPeer {
-			for _, sess := range sessions.List() {
-				s := sess
-				if !isOwned(&s) {
-					continue
-				}
-				sendSSE(w, "session-upsert", store.Event{
-					Type:    "session-upsert",
-					ID:      s.ID,
-					Session: &s,
-				})
-			}
-		}
 		flusher.Flush()
 
 		// Heartbeat: send an SSE comment every 30s to keep the connection
@@ -1797,30 +1782,16 @@ func serve(stderr io.Writer) int {
 					}
 					sendSSE(w, "session-activity", ev)
 					flusher.Flush()
-				case "session-upsert", "session-remove":
-					// Protocol-1 compat: emit owned-only per-event SSE to
-					// non-asPeer subscribers (browsers and v1 hubs that
-					// don't know about `?as=peer`). v2 hubs subscribe with
-					// `?as=peer` and consume snapshot.sessions exclusively,
-					// so we suppress per-event for them to avoid double
-					// processing.
-					if asPeer || !isOwnedEvent(ev, isLocalPeer) {
-						continue
-					}
-					sendSSE(w, ev.Type, ev)
-					flusher.Flush()
 				case "projects-update":
-					// Forwarded to peer consumers too: a peer hub uses
-					// this signal to refresh its cached projection of
-					// our projects (surfaced in its snapshot.world as
-					// peer_projects). Without this, peer-owned projects
-					// would only refresh on reconnect.
-					sendSSE(w, ev.Type, ev)
-					flusher.Flush()
-				case "peer-status":
-					// Protocol-1 compat: browser-only. Hubs derive peer
-					// status from their own peer manager.
-					if asPeer {
+					// Peer-hub trigger only. A `?as=peer` subscriber has
+					// no snapshot.world, so it relies on this event to
+					// re-fetch our project list (GET /v1/projects) and
+					// refresh the peer_projects it surfaces upstream.
+					// Browser subscribers ignore it — they already get
+					// projects via snapshot.world (projects-update fires
+					// the world coalescer, see snapshotPumpRoute) — so we
+					// don't waste the frame on them.
+					if !asPeer {
 						continue
 					}
 					sendSSE(w, ev.Type, ev)
@@ -2256,40 +2227,6 @@ func snapshotPumpRoute(eventType string) (pushSessions, pushWorld bool) {
 		return true, true
 	}
 	return false, false
-}
-
-// isOwnedEvent reports whether a protocol-1 per-event SSE frame
-// (session-upsert / session-remove) refers to a session this node
-// owns, and therefore should be forwarded to non-asPeer subscribers.
-// Sessions on the local node (Peer == "") and on Local peers
-// (devcontainers reachable via isLocalPeer) are owned; network-peer
-// sessions are not, because non-asPeer hubs sourcing this stream
-// would receive the same upserts directly from those peers.
-//
-// Used only by the SSE handler for v1-compat dispatch; v2 hubs
-// (asPeer=true) consume snapshot.sessions instead and never see
-// these frames.
-//
-// Unknown event types pass through (return true); the caller switches
-// on Type first so this is only a defensive default.
-func isOwnedEvent(ev store.Event, isLocalPeer func(string) bool) bool {
-	ownedPeer := func(peerName string) bool {
-		if peerName == "" {
-			return true
-		}
-		return isLocalPeer != nil && isLocalPeer(peerName)
-	}
-	switch ev.Type {
-	case "session-upsert":
-		if ev.Session == nil {
-			return true
-		}
-		return ownedPeer(ev.Session.Peer)
-	case "session-remove":
-		_, peerName := peering.ParseID(ev.ID)
-		return ownedPeer(peerName)
-	}
-	return true
 }
 
 // shouldForwardActivity decides whether a session-activity event
