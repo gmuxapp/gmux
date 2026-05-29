@@ -98,7 +98,7 @@ body {
   display: flex;
   align-items: center;
   height: var(--header-height);
-  padding: 0 12px 0 14px;
+  padding: 0 14px;
   gap: 10px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
@@ -1924,13 +1924,17 @@ body {
     flex-wrap: wrap;
   }
 
-  /* Move sidebar header to bottom for thumb reach */
+  /* Move sidebar header to bottom for thumb reach. Match desktop's
+   * 14px horizontal padding and --header-height vertical rhythm so the
+   * logo's margins read the same in both layouts; the safe-area inset
+   * is added below that on notched devices so the logo never hugs the
+   * screen edge. */
   .sidebar-header {
     order: 3;
     height: auto;
     min-height: var(--header-height);
     padding: 0 14px;
-    padding-bottom: env(safe-area-inset-bottom);
+    margin-bottom: env(safe-area-inset-bottom);
     border-top: 1px solid var(--border);
     border-bottom: none;
   }
