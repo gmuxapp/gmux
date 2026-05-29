@@ -1,25 +1,31 @@
 /**
  * FileTree — filesystem browser panel for the sidebar.
  *
- * Shows the project root directory as a tree. Supports:
- *   - Lazy-load children on expand
- *   - Drag/drop to move within the tree
- *   - Drop files from external apps (dataTransfer.files)
- *   - Inline rename (pencil icon)
- *   - Add new file (inline name input → create + open in editor)
- *   - Add new folder (inline name input → mkdir)
- *   - Delete with confirmation modal
+ * Thin Preact wrapper around @pierre/trees (vanilla FileTree class).
+ * The library owns its shadow DOM; this component handles:
+ *   - GET /v1/fs/{slug}/walk   → paths fed to tree.resetPaths()
+ *   - GET /v1/git/{slug}/files  → per-file status fed to tree.setGitStatus()
+ *   - rename / move / delete / create callbacks → REST mutations + refresh
+ *   - External file drop (Finder → upload)
+ *   - Show-hidden toggle, new-file/new-folder buttons
+ *   - Delete confirmation modal (vanilla <dialog> pattern, rendered in Preact)
  *
  * All filesystem mutations go through /v1/fs/{slug}/* REST endpoints.
- * State is local to this component; no global store mutations.
  */
 
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
-import { markPendingLaunch, navigateToMarkdownEditor, navigateToImageViewer, sessions, navigateToSession } from './store'
+import { FileTree as PierreFileTree, type GitStatusEntry } from '@pierre/trees'
+import {
+  markPendingLaunch,
+  navigateToMarkdownEditor,
+  navigateToImageViewer,
+  sessions,
+  navigateToSession,
+} from './store'
 import type { Session } from './types'
 import { GitStatus } from './git-status'
 
-// ── Types ──
+// ── Types ──────────────────────────────────────────────────────────────────
 
 export interface FileEntry {
   name: string
@@ -35,7 +41,7 @@ export interface TreeNode {
   path: string
 }
 
-// ── Pure helpers (exported for tests) ──
+// ── Pure helpers (exported for tests — backward compat) ─────────────────────
 
 /** Normalize a relative path: strip leading slashes, collapse redundant separators. */
 export function normalizeFsPath(rel: string): string {
@@ -79,15 +85,41 @@ export function pruneExpanded(expanded: Set<string>, deletedPath: string): Set<s
 
 /**
  * Returns true if a DragEvent carries external files (e.g. from Finder/Explorer).
- * This distinguishes OS-file drops from internal tree drags.
  */
 export function isExternalFileDrop(dt: DataTransfer): boolean {
   return dt.files.length > 0
 }
 
-// ── API helpers ──
+/**
+ * Returns the first alive session in `cwd` whose last command argument
+ * matches the leaf filename of `relPath`.
+ */
+export function findOpenFileSession(
+  sessionList: Session[],
+  cwd: string,
+  relPath: string,
+): Session | undefined {
+  const base = relPath.split('/').pop() ?? relPath
+  return sessionList.find(
+    s =>
+      s.alive &&
+      s.cwd === cwd &&
+      s.command.length > 0 &&
+      s.command[s.command.length - 1] === base,
+  )
+}
 
-async function apiFetch(method: string, url: string, body?: unknown): Promise<{ ok: boolean; data?: unknown; error?: { code: string; message: string } }> {
+export function copyRelativePath(path: string): Promise<void> {
+  return navigator.clipboard.writeText(path)
+}
+
+// ── API helpers ─────────────────────────────────────────────────────────────
+
+async function apiFetch(
+  method: string,
+  url: string,
+  body?: unknown,
+): Promise<{ ok: boolean; data?: unknown; error?: { code: string; message: string } }> {
   const opts: RequestInit = { method }
   if (body !== undefined) {
     opts.headers = { 'Content-Type': 'application/json' }
@@ -97,11 +129,16 @@ async function apiFetch(method: string, url: string, body?: unknown): Promise<{ 
   return resp.json()
 }
 
-async function listDir(slug: string, rel: string, showHidden = false): Promise<FileEntry[]> {
-  const url = `/v1/fs/${encodeURIComponent(slug)}?path=${encodeURIComponent(rel)}&show_hidden=${showHidden}`
-  const resp = await apiFetch('GET', url)
-  if (!resp.ok) throw new Error((resp.error?.message) ?? 'list failed')
-  return resp.data as FileEntry[]
+async function apiWalkPaths(slug: string): Promise<string[]> {
+  const resp = await apiFetch('GET', `/v1/fs/${encodeURIComponent(slug)}/walk`)
+  if (!resp.ok) throw new Error((resp.error?.message) ?? 'walk failed')
+  return resp.data as string[]
+}
+
+async function apiGitFiles(slug: string): Promise<GitStatusEntry[]> {
+  const resp = await apiFetch('GET', `/v1/git/${encodeURIComponent(slug)}/files`)
+  if (!resp.ok) return []
+  return resp.data as GitStatusEntry[]
 }
 
 async function apiMkdir(slug: string, path: string): Promise<void> {
@@ -125,7 +162,10 @@ async function apiMove(slug: string, from: string, to: string): Promise<void> {
 }
 
 async function apiDelete(slug: string, path: string, recursive: boolean): Promise<void> {
-  const resp = await apiFetch('DELETE', `/v1/fs/${encodeURIComponent(slug)}/item`, { path, recursive })
+  const resp = await apiFetch('DELETE', `/v1/fs/${encodeURIComponent(slug)}/item`, {
+    path,
+    recursive,
+  })
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'delete failed')
 }
 
@@ -142,9 +182,7 @@ async function apiOpenBrowser(slug: string, path: string): Promise<void> {
 
 async function apiUpload(slug: string, dir: string, files: FileList): Promise<void> {
   const form = new FormData()
-  for (let i = 0; i < files.length; i++) {
-    form.append('file', files[i])
-  }
+  for (let i = 0; i < files.length; i++) form.append('file', files[i])
   const resp = await fetch(
     `/v1/fs/${encodeURIComponent(slug)}/upload?dir=${encodeURIComponent(dir)}`,
     { method: 'POST', body: form },
@@ -153,7 +191,7 @@ async function apiUpload(slug: string, dir: string, files: FileList): Promise<vo
   if (!json.ok) throw new Error((json.error?.message) ?? 'upload failed')
 }
 
-// ── Icons ──
+// ── Minimal icons for the header ────────────────────────────────────────────
 
 const svgProps = {
   viewBox: '0 0 12 12',
@@ -166,29 +204,6 @@ const svgProps = {
   'stroke-linejoin': 'round' as const,
 }
 
-const IconChevronRight = () => (
-  <svg {...svgProps} class="ft-chevron"><path d="M4 3l3 3-3 3"/></svg>
-)
-const IconChevronDown = () => (
-  <svg {...svgProps} class="ft-chevron"><path d="M3 4l3 3 3-3"/></svg>
-)
-const IconFile = () => (
-  <svg {...svgProps} class="ft-icon ft-icon-file"><path d="M2 1h6l2 2v8H2z"/><path d="M7 1v3h3"/></svg>
-)
-const IconFolder = ({ open }: { open?: boolean }) => (
-  <svg {...svgProps} class="ft-icon ft-icon-folder">
-    {open
-      ? <><path d="M1 4h10v7H1z"/><path d="M1 4l1.5-2H5l1 1.5H1"/></>
-      : <><path d="M1 4h10v7H1z"/><path d="M1 4l1.5-2H5l1 1.5H1"/></>
-    }
-  </svg>
-)
-const IconPencil = () => (
-  <svg {...svgProps} class="ft-action-icon"><path d="M8 2l2 2-6 6H2V8z"/><path d="M7 3l2 2"/></svg>
-)
-const IconTrash = () => (
-  <svg {...svgProps} class="ft-action-icon"><path d="M2 3h8M5 3V2h2v1M4 3v7h4V3"/><path d="M5 5v3M7 5v3"/></svg>
-)
 const IconPlus = () => (
   <svg {...svgProps} class="ft-action-icon"><path d="M6 2v8M2 6h8"/></svg>
 )
@@ -205,340 +220,28 @@ const IconEyeOff = () => (
     <path d="M2 2l8 8"/>
   </svg>
 )
-const IconCopy = () => (
-  <svg {...svgProps} class="ft-action-icon"><rect x="4" y="4" width="6" height="7" rx="1"/><path d="M2 8V2h6"/></svg>
-)
-const IconCheck = () => (
-  <svg {...svgProps} class="ft-action-icon"><path d="M2 6l3 3 5-5"/></svg>
-)
 const IconFolderPlus = () => (
-  <svg {...svgProps} class="ft-action-icon"><path d="M1 4h10v7H1z"/><path d="M1 4l1.5-2H5l1 1.5H1"/><path d="M6 8V6M5 7h2"/></svg>
+  <svg {...svgProps} class="ft-action-icon">
+    <path d="M1 4h10v7H1z"/><path d="M1 4l1.5-2H5l1 1.5H1"/><path d="M6 8V6M5 7h2"/>
+  </svg>
 )
 
-// ── Inline input for naming new files/folders or renaming ──
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
-function InlineInput({
-  initial,
-  onCommit,
-  onCancel,
-}: {
-  initial: string
-  onCommit: (value: string) => void
-  onCancel: () => void
-}) {
-  const [value, setValue] = useState(initial)
-  const inputRef = useRef<HTMLInputElement>(null)
+/** Strip trailing slash from directory paths (for API calls). */
+function stripSlash(p: string): string {
+  return p.endsWith('/') ? p.slice(0, -1) : p
+}
 
-  useEffect(() => {
-    inputRef.current?.focus()
-    inputRef.current?.select()
-  }, [])
-
-  const commit = useCallback(() => {
-    const trimmed = value.trim()
-    if (trimmed) onCommit(trimmed)
-    else onCancel()
-  }, [value, onCommit, onCancel])
-
-  return (
-    <input
-      ref={inputRef}
-      class="ft-inline-input"
-      value={value}
-      onInput={e => setValue((e.target as HTMLInputElement).value)}
-      onKeyDown={e => {
-        if (e.key === 'Enter') { e.preventDefault(); commit() }
-        if (e.key === 'Escape') { e.preventDefault(); onCancel() }
-      }}
-      onBlur={commit}
-      onClick={e => e.stopPropagation()}
-    />
+/** Filter paths to hide hidden files/directories unless showHidden is true. */
+function filterPaths(paths: string[], showHidden: boolean): string[] {
+  if (showHidden) return paths
+  return paths.filter(p =>
+    p.split('/').every(seg => !seg || !isHiddenName(seg)),
   )
 }
 
-// ── Delete confirmation modal ──
-
-function DeleteModal({
-  node,
-  onConfirm,
-  onCancel,
-}: {
-  node: TreeNode
-  onConfirm: () => void
-  onCancel: () => void
-}) {
-  return (
-    <div class="ft-modal-overlay" onClick={onCancel}>
-      <div class="ft-modal" onClick={e => e.stopPropagation()}>
-        <p class="ft-modal-title">
-          Delete {node.type === 'dir' ? 'folder' : 'file'}?
-        </p>
-        <p class="ft-modal-body">
-          <strong>{node.name}</strong>
-          {node.type === 'dir' && ' and all its contents'} will be permanently deleted.
-        </p>
-        <div class="ft-modal-actions">
-          <button class="ft-modal-cancel" onClick={onCancel}>Cancel</button>
-          <button class="ft-modal-confirm" onClick={onConfirm}>Delete</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ── Adding state ──
-
-interface AddingState {
-  parentPath: string  // relative path of the parent dir
-  type: 'file' | 'dir'
-}
-
-// ── Copy helper ──
-
-/** Returns the path relative to the project root (node.path is already relative). */
-/**
- * Returns the first alive session in `cwd` whose last command argument
- * matches the leaf filename of `relPath`. Used to focus an existing file
- * session instead of spawning a duplicate.
- */
-export function findOpenFileSession(
-  sessionList: Session[],
-  cwd: string,
-  relPath: string,
-): Session | undefined {
-  const base = relPath.split('/').pop() ?? relPath
-  return sessionList.find(
-    s =>
-      s.alive &&
-      s.cwd === cwd &&
-      s.command.length > 0 &&
-      s.command[s.command.length - 1] === base,
-  )
-}
-
-export function copyRelativePath(path: string): Promise<void> {
-  return navigator.clipboard.writeText(path)
-}
-
-// ── FileTreeNode ──
-
-interface FileTreeNodeProps {
-  node: TreeNode
-  slug: string
-  cwd: string
-  depth: number
-  expanded: Set<string>
-  childCache: Map<string, TreeNode[]>
-  adding: AddingState | null
-  renamingPath: string | null
-  dragSource: string | null
-  dropTarget: string | null
-  onToggle: (path: string) => void
-  onLoad: (path: string) => Promise<void>
-  onRenameStart: (path: string) => void
-  onRenameCommit: (node: TreeNode, newName: string) => Promise<void>
-  onRenameCancel: () => void
-  onDeleteRequest: (node: TreeNode) => void
-  onDragStart: (path: string) => void
-  onDragOver: (e: DragEvent, targetPath: string, targetType: 'file' | 'dir') => void
-  onDrop: (e: DragEvent, targetPath: string, targetType: 'file' | 'dir') => void
-  onDragEnd: () => void
-  onAddCommit: (name: string) => Promise<void>
-  onAddCancel: () => void
-}
-
-function FileTreeNode({
-  node,
-  slug,
-  cwd,
-  depth,
-  expanded,
-  childCache,
-  adding,
-  renamingPath,
-  dragSource,
-  dropTarget,
-  onToggle,
-  onLoad,
-  onRenameStart,
-  onRenameCommit,
-  onRenameCancel,
-  onDeleteRequest,
-  onDragStart,
-  onDragOver,
-  onDrop,
-  onDragEnd,
-  onAddCommit,
-  onAddCancel,
-}: FileTreeNodeProps) {
-  const isExpanded = node.type === 'dir' && expanded.has(node.path)
-  const children = childCache.get(node.path) ?? []
-  const isDropTarget = dropTarget === node.path
-  const isDragging = dragSource === node.path
-  const isRenaming = renamingPath === node.path
-  const [justCopied, setJustCopied] = useState(false)
-
-  const indent = depth * 12
-
-  const handleClick = useCallback(async () => {
-    if (node.type === 'dir') {
-      onToggle(node.path)
-      if (!expanded.has(node.path) && !childCache.has(node.path)) {
-        await onLoad(node.path)
-      }
-    } else if (node.path.toLowerCase().endsWith('.md')) {
-      // Open markdown files in the in-browser Milkdown editor.
-      navigateToMarkdownEditor(slug, node.path)
-    } else if (node.path.toLowerCase().endsWith('.html') || node.path.toLowerCase().endsWith('.htm')) {
-      // Open HTML files in the system browser via the daemon.
-      await apiOpenBrowser(slug, node.path)
-    } else if (/\.(png|jpe?g|gif|webp|svg|bmp|ico|tiff?|avif)$/i.test(node.path)) {
-      // Open image files in the in-browser image viewer.
-      navigateToImageViewer(slug, node.path)
-    } else {
-      const existing = findOpenFileSession(sessions.value, cwd, node.path)
-      if (existing) {
-        navigateToSession(existing.id)
-        return
-      }
-      await apiOpen(slug, node.path)
-    }
-  }, [node, slug, expanded, childCache, onToggle, onLoad])
-
-  const visibleChildren = children
-  const addingInThisDir = adding?.parentPath === node.path
-
-  return (
-    <div class="ft-node-group">
-      <div
-        class={[
-          'ft-node',
-          isDropTarget ? 'ft-drop-target' : '',
-          isDragging ? 'ft-dragging' : '',
-        ].filter(Boolean).join(' ')}
-        style={{ paddingLeft: `${8 + indent}px` }}
-        draggable
-        onDragStart={e => {
-          e.dataTransfer!.effectAllowed = 'move'
-          e.dataTransfer!.setData('text/plain', node.path)
-          onDragStart(node.path)
-        }}
-        onDragOver={e => onDragOver(e, node.path, node.type)}
-        onDrop={e => onDrop(e, node.path, node.type)}
-        onDragEnd={onDragEnd}
-      >
-        {/* Chevron for dirs */}
-        <span class="ft-chevron-wrap" onClick={handleClick}>
-          {node.type === 'dir'
-            ? (isExpanded ? <IconChevronDown /> : <IconChevronRight />)
-            : <span class="ft-chevron-spacer" />
-          }
-        </span>
-
-        {/* Icon */}
-        {node.type === 'dir'
-          ? <IconFolder open={isExpanded} />
-          : <IconFile />
-        }
-
-        {/* Name or inline rename input */}
-        {isRenaming
-          ? (
-            <InlineInput
-              initial={node.name}
-              onCommit={newName => onRenameCommit(node, newName)}
-              onCancel={onRenameCancel}
-            />
-          )
-          : (
-            <span class="ft-node-name" onClick={handleClick} title={node.path}>
-              {node.name}
-            </span>
-          )
-        }
-
-        {/* Action buttons (hover-visible) */}
-        {!isRenaming && (
-          <span class="ft-node-actions">
-            <button
-              class="ft-action-btn"
-              title="Rename"
-              onClick={e => { e.stopPropagation(); onRenameStart(node.path) }}
-            >
-              <IconPencil />
-            </button>
-            <button
-              class="ft-action-btn"
-              title="Copy path"
-              onClick={e => {
-                e.stopPropagation()
-                void copyRelativePath(node.path).then(() => {
-                  setJustCopied(true)
-                  setTimeout(() => setJustCopied(false), 1500)
-                })
-              }}
-            >
-              {justCopied ? <IconCheck /> : <IconCopy />}
-            </button>
-            <button
-              class="ft-action-btn ft-action-delete"
-              title="Delete"
-              onClick={e => { e.stopPropagation(); onDeleteRequest(node) }}
-            >
-              <IconTrash />
-            </button>
-          </span>
-        )}
-      </div>
-
-      {/* Children (when expanded) */}
-      {node.type === 'dir' && isExpanded && (
-        <div class="ft-children">
-          {visibleChildren.map(child => (
-            <FileTreeNode
-              key={child.path}
-              node={child}
-              slug={slug}
-              cwd={cwd}
-              depth={depth + 1}
-              expanded={expanded}
-              childCache={childCache}
-              adding={adding}
-              renamingPath={renamingPath}
-              dragSource={dragSource}
-              dropTarget={dropTarget}
-              onToggle={onToggle}
-              onLoad={onLoad}
-              onRenameStart={onRenameStart}
-              onRenameCommit={onRenameCommit}
-              onRenameCancel={onRenameCancel}
-              onDeleteRequest={onDeleteRequest}
-              onDragStart={onDragStart}
-              onDragOver={onDragOver}
-              onDrop={onDrop}
-              onDragEnd={onDragEnd}
-              onAddCommit={onAddCommit}
-              onAddCancel={onAddCancel}
-            />
-          ))}
-          {/* Inline add input appears at bottom of expanded dir */}
-          {addingInThisDir && (
-            <div class="ft-node ft-node-adding" style={{ paddingLeft: `${8 + (depth + 1) * 12}px` }}>
-              {adding!.type === 'dir' ? <IconFolderPlus /> : <IconFile />}
-              <InlineInput
-                initial=""
-                onCommit={onAddCommit}
-                onCancel={onAddCancel}
-              />
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── FileTree (root component) ──
+// ── Component ────────────────────────────────────────────────────────────────
 
 export interface FileTreeProps {
   projectSlug: string
@@ -549,25 +252,30 @@ export interface FileTreeProps {
 }
 
 export function FileTree({ projectSlug, cwd }: FileTreeProps) {
-  const [rootNodes, setRootNodes] = useState<TreeNode[]>([])
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  // childCache is a ref (not state) so updates don't re-render the whole tree.
-  // We use a counter to force re-render after mutations.
-  const childCacheRef = useRef<Map<string, TreeNode[]>>(new Map())
-  const [cacheVersion, setCacheVersion] = useState(0)
-  const bumpCache = useCallback(() => setCacheVersion(v => v + 1), [])
+  const containerRef = useRef<HTMLDivElement>(null)
+  const treeRef = useRef<PierreFileTree | null>(null)
 
-  const [renamingPath, setRenamingPath] = useState<string | null>(null)
-  const [dragSource, setDragSource] = useState<string | null>(null)
-  const [dropTarget, setDropTarget] = useState<string | null>(null)
-  const [pendingDelete, setPendingDelete] = useState<TreeNode | null>(null)
-  const [adding, setAdding] = useState<AddingState | null>(null)
   const [showHidden, setShowHidden] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  // External file drop on the root zone
   const [externalDragOver, setExternalDragOver] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState<{
+    path: string
+    name: string
+    isFolder: boolean
+  } | null>(null)
 
+  // Refs so that callbacks captured at mount time always see fresh values.
+  const showHiddenRef = useRef(showHidden)
+  useEffect(() => { showHiddenRef.current = showHidden }, [showHidden])
+
+  // setPendingDelete is a stable Preact state setter — safe to capture once.
+  const setPendingDeleteRef = useRef(setPendingDelete)
+  useEffect(() => { setPendingDeleteRef.current = setPendingDelete }, [setPendingDelete])
+
+  // Tracks whether the next rename commit is a new-item creation.
+  const pendingCreateTypeRef = useRef<'file' | 'dir' | null>(null)
+
+  // Error banner with auto-dismiss.
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const showError = useCallback((msg: string) => {
     if (errorTimerRef.current !== null) clearTimeout(errorTimerRef.current)
@@ -575,239 +283,230 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
     errorTimerRef.current = setTimeout(() => setError(null), 4000)
   }, [])
 
-  // Load root on mount and after mutations
-  const loadRoot = useCallback(async () => {
+  // ── Data fetchers ──
+
+  const loadPaths = useCallback(async () => {
     try {
-      const entries = await listDir(projectSlug, '', showHidden)
-      setRootNodes(buildTreeNodes(entries, ''))
+      const all = await apiWalkPaths(projectSlug)
+      const filtered = filterPaths(all, showHiddenRef.current)
+      treeRef.current?.resetPaths(filtered)
     } catch (e) {
       showError(String(e))
     }
-  }, [projectSlug, showError, showHidden])
+  }, [projectSlug, showError])
 
-  useEffect(() => { void loadRoot() }, [loadRoot])
-
-  // When showHidden toggles, flush the child cache and reload all expanded dirs.
-  useEffect(() => {
-    childCacheRef.current.clear()
-    bumpCache()
-    for (const path of expandedRef.current) {
-      void loadChildren(path)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showHidden])
-
-  // Refs that mirror mutable state so the polling interval doesn't need to
-  // re-register every time expanded/renamingPath/adding change.
-  const expandedRef = useRef(expanded)
-  useEffect(() => { expandedRef.current = expanded }, [expanded])
-  const renamingRef = useRef(renamingPath)
-  useEffect(() => { renamingRef.current = renamingPath }, [renamingPath])
-  const addingRef = useRef(adding)
-  useEffect(() => { addingRef.current = adding }, [adding])
-
-  // Load children for a directory node
-  const loadChildren = useCallback(async (dirPath: string) => {
+  const refreshGitStatus = useCallback(async () => {
     try {
-      const entries = await listDir(projectSlug, dirPath, showHidden)
-      childCacheRef.current.set(dirPath, buildTreeNodes(entries, dirPath))
-      bumpCache()
-    } catch (e) {
-      showError(String(e))
+      const entries = await apiGitFiles(projectSlug)
+      treeRef.current?.setGitStatus(entries)
+    } catch {
+      // git status errors are non-fatal — keep last known state
     }
-  }, [projectSlug, showError, bumpCache, showHidden])
+  }, [projectSlug])
 
-  // Refresh a directory (re-load its children and the root if needed)
-  const refreshDir = useCallback(async (dirPath: string) => {
-    if (dirPath === '') {
-      await loadRoot()
-    } else {
-      await loadChildren(dirPath)
-    }
-  }, [loadRoot, loadChildren])
+  // ── Mount the @pierre/trees vanilla FileTree ──
 
-  // Poll for external filesystem changes every 2.5 s.
-  // Skip during active edits (rename / add-inline) to avoid stomping the UI.
   useEffect(() => {
-    const id = setInterval(async () => {
-      if (renamingRef.current || addingRef.current) return
-      await loadRoot()
-      for (const path of expandedRef.current) {
-        await loadChildren(path)
-      }
+    const el = containerRef.current
+    if (!el) return
+
+    const tree = new PierreFileTree({
+      paths: [],
+      initialExpansion: 1,
+      search: true,
+
+      dragAndDrop: {
+        onDropComplete: async event => {
+          // `event.target.directoryPath` is null for root drops; treat as ''.
+          const dir = event.target.directoryPath ?? ''
+          await Promise.allSettled(
+            event.draggedPaths.map(async fromPath => {
+              const base = stripSlash(fromPath).split('/').pop() ?? stripSlash(fromPath)
+              const toPath = dir ? `${dir}${base}` : base
+              if (stripSlash(fromPath) !== toPath) {
+                try {
+                  await apiMove(projectSlug, stripSlash(fromPath), toPath)
+                } catch (e) {
+                  showError(String(e))
+                }
+              }
+            }),
+          )
+          void loadPaths()
+        },
+      },
+
+      renaming: {
+        onRename: async event => {
+          const src = stripSlash(event.sourcePath)
+          const dest = stripSlash(event.destinationPath)
+          const createType = pendingCreateTypeRef.current
+          if (createType) {
+            pendingCreateTypeRef.current = null
+            try {
+              if (createType === 'dir') {
+                await apiMkdir(projectSlug, dest)
+              } else {
+                await apiCreateFile(projectSlug, dest)
+                await apiOpen(projectSlug, dest)
+              }
+            } catch (e) {
+              showError(String(e))
+            }
+          } else if (src !== dest) {
+            try {
+              await apiRename(projectSlug, src, dest)
+            } catch (e) {
+              showError(String(e))
+            }
+          }
+          void loadPaths()
+        },
+      },
+
+      onSelectionChange: selectedPaths => {
+        const path = selectedPaths[0]
+        // Skip empty selection or directory selection.
+        if (!path || path.endsWith('/')) return
+        if (path.toLowerCase().endsWith('.md')) {
+          navigateToMarkdownEditor(projectSlug, path)
+        } else if (/\.html?$/i.test(path)) {
+          void apiOpenBrowser(projectSlug, path)
+        } else if (/\.(png|jpe?g|gif|webp|svg|bmp|ico|tiff?|avif)$/i.test(path)) {
+          navigateToImageViewer(projectSlug, path)
+        } else {
+          const existing = findOpenFileSession(sessions.value, cwd, path)
+          if (existing) {
+            navigateToSession(existing.id)
+          } else {
+            void apiOpen(projectSlug, path)
+          }
+        }
+      },
+
+      composition: {
+        contextMenu: {
+          enabled: true,
+          triggerMode: 'both',
+          render: (item, context) => {
+            const menu = document.createElement('div')
+            menu.className = 'ft-ctx-menu'
+            // Mark as owned surface so the library doesn't treat inside-clicks
+            // as outside clicks that dismiss the menu.
+            menu.setAttribute('data-file-tree-context-menu-root', 'true')
+
+            const addBtn = (label: string, className: string, action: () => void) => {
+              const btn = document.createElement('button')
+              btn.className = `ft-ctx-item${className ? ' ' + className : ''}`
+              btn.textContent = label
+              btn.onclick = action
+              menu.appendChild(btn)
+            }
+
+            addBtn('Rename', '', () => {
+              context.close({ restoreFocus: false })
+              treeRef.current?.startRenaming(item.path)
+            })
+
+            addBtn('Copy path', '', () => {
+              context.close()
+              void copyRelativePath(stripSlash(item.path))
+            })
+
+            addBtn('Delete', 'ft-ctx-item--danger', () => {
+              context.close()
+              const name = stripSlash(item.path).split('/').pop() ?? item.path
+              setPendingDeleteRef.current({
+                path: item.path,
+                name,
+                isFolder: item.kind === 'directory',
+              })
+            })
+
+            return menu
+          },
+        },
+      },
+    })
+
+    tree.render({ containerWrapper: el })
+    treeRef.current = tree
+
+    void loadPaths()
+    void refreshGitStatus()
+
+    return () => {
+      tree.cleanUp()
+      treeRef.current = null
+    }
+    // Intentional: only re-mount when projectSlug changes (cwd follows projectSlug).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectSlug])
+
+  // Re-filter paths when showHidden toggles.
+  useEffect(() => {
+    void loadPaths()
+  }, [showHidden, loadPaths])
+
+  // Poll: refresh paths + git status every 2.5 s.
+  useEffect(() => {
+    const id = setInterval(() => {
+      void loadPaths()
+      void refreshGitStatus()
     }, 2500)
     return () => clearInterval(id)
-  }, [loadRoot, loadChildren])
+  }, [loadPaths, refreshGitStatus])
 
-  // Toggle expand/collapse
-  const handleToggle = useCallback((path: string) => {
-    setExpanded(prev => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
+  // ── New item creation ──
+
+  const handleAddStart = useCallback((type: 'file' | 'dir') => {
+    const tree = treeRef.current
+    if (!tree) return
+    // Use a non-hidden placeholder so it's visible regardless of showHidden.
+    const placeholder = type === 'dir' ? '__new-folder__/' : '__new-file__'
+    pendingCreateTypeRef.current = type
+    tree.add(placeholder)
+    tree.startRenaming(placeholder, { removeIfCanceled: true })
   }, [])
 
-  // Rename
-  const handleRenameCommit = useCallback(async (node: TreeNode, newName: string) => {
-    if (newName === node.name) { setRenamingPath(null); return }
-    const parentPath = node.path.includes('/')
-      ? node.path.slice(0, node.path.lastIndexOf('/'))
-      : ''
-    const toPath = joinFsPath(parentPath, newName)
+  // ── Delete confirm ──
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!pendingDelete) return
+    const { path, isFolder } = pendingDelete
+    setPendingDelete(null)
     try {
-      await apiRename(projectSlug, node.path, toPath)
-      setRenamingPath(null)
-      // Invalidate parent dir cache
-      childCacheRef.current.delete(parentPath)
-      await refreshDir(parentPath)
+      await apiDelete(projectSlug, stripSlash(path), isFolder)
+      await loadPaths()
     } catch (e) {
       showError(String(e))
-      setRenamingPath(null)
     }
-  }, [projectSlug, showError, refreshDir])
+  }, [pendingDelete, projectSlug, loadPaths, showError])
 
-  // Drag/drop (internal)
-  const handleDragOver = useCallback((e: DragEvent, targetPath: string, targetType: 'file' | 'dir') => {
-    // Only handle internal drags (no files from OS)
-    if (e.dataTransfer && isExternalFileDrop(e.dataTransfer)) return
+  // ── External file drop onto the tree zone ──
+
+  const handleRootDragOver = useCallback((e: DragEvent) => {
+    if (!e.dataTransfer || e.dataTransfer.files.length === 0) return
     e.preventDefault()
-    e.dataTransfer!.dropEffect = 'move'
-    // Can only drop onto dirs
-    if (targetType === 'dir') setDropTarget(targetPath)
+    e.dataTransfer.dropEffect = 'copy'
+    setExternalDragOver(true)
   }, [])
 
-  const handleDrop = useCallback(async (e: DragEvent, targetPath: string, targetType: 'file' | 'dir') => {
-    e.preventDefault()
-    const dt = e.dataTransfer!
-
-    // External file drop
-    if (isExternalFileDrop(dt)) {
-      // If dropped on a collapsed dir, expand it first
-      if (targetType === 'dir' && !expanded.has(targetPath)) {
-        setExpanded(prev => { const n = new Set(prev); n.add(targetPath); return n })
-        if (!childCacheRef.current.has(targetPath)) {
-          await loadChildren(targetPath)
-        }
-      }
-      const dir = targetType === 'dir' ? targetPath : (
-        targetPath.includes('/') ? targetPath.slice(0, targetPath.lastIndexOf('/')) : ''
-      )
+  const handleRootDrop = useCallback(
+    async (e: DragEvent) => {
+      e.preventDefault()
+      setExternalDragOver(false)
+      if (!e.dataTransfer || e.dataTransfer.files.length === 0) return
       try {
-        await apiUpload(projectSlug, dir, dt.files)
-        childCacheRef.current.delete(dir)
-        await refreshDir(dir)
+        await apiUpload(projectSlug, '', e.dataTransfer.files)
+        await loadPaths()
       } catch (e2) {
         showError(String(e2))
       }
-      setDropTarget(null)
-      return
-    }
+    },
+    [projectSlug, loadPaths, showError],
+  )
 
-    // Internal move
-    const fromPath = dt.getData('text/plain') || dragSource
-    setDragSource(null)
-    setDropTarget(null)
-    if (!fromPath || fromPath === targetPath) return
-    if (targetType !== 'dir') return
-
-    try {
-      await apiMove(projectSlug, fromPath, targetPath)
-      // Expand the target dir
-      setExpanded(prev => { const n = new Set(prev); n.add(targetPath); return n })
-      // Refresh: source's parent and the target dir
-      const srcParent = fromPath.includes('/')
-        ? fromPath.slice(0, fromPath.lastIndexOf('/'))
-        : ''
-      childCacheRef.current.delete(srcParent)
-      childCacheRef.current.delete(targetPath)
-      await refreshDir(srcParent)
-      await refreshDir(targetPath)
-    } catch (e2) {
-      showError(String(e2))
-    }
-  }, [projectSlug, dragSource, expanded, loadChildren, refreshDir, showError])
-
-  // Delete
-  const handleDeleteConfirm = useCallback(async () => {
-    if (!pendingDelete) return
-    const node = pendingDelete
-    setPendingDelete(null)
-    try {
-      await apiDelete(projectSlug, node.path, node.type === 'dir')
-      const parentPath = node.path.includes('/')
-        ? node.path.slice(0, node.path.lastIndexOf('/'))
-        : ''
-      // Remove the deleted item and any expanded sub-paths from the expanded
-      // set so the polling loop doesn't try to list non-existent directories.
-      setExpanded(prev => pruneExpanded(prev, node.path))
-      childCacheRef.current.delete(parentPath)
-      // Clear the deleted node and all cached sub-paths.
-      for (const key of [...childCacheRef.current.keys()]) {
-        if (key === node.path || key.startsWith(node.path + '/')) {
-          childCacheRef.current.delete(key)
-        }
-      }
-      await refreshDir(parentPath)
-    } catch (e) {
-      showError(String(e))
-    }
-  }, [projectSlug, pendingDelete, refreshDir, showError])
-
-  // Add new file/folder
-  const handleAddStart = useCallback(async (type: 'file' | 'dir') => {
-    // Add at root level (parentPath = '')
-    const parentPath = ''
-    // Ensure root is "expanded" so the inline input is visible
-    setAdding({ parentPath, type })
-  }, [])
-
-  const handleAddCommit = useCallback(async (name: string) => {
-    if (!adding) return
-    const newPath = joinFsPath(adding.parentPath, name)
-    try {
-      if (adding.type === 'dir') {
-        await apiMkdir(projectSlug, newPath)
-        setAdding(null)
-        childCacheRef.current.delete(adding.parentPath)
-        await refreshDir(adding.parentPath)
-      } else {
-        await apiCreateFile(projectSlug, newPath)
-        setAdding(null)
-        childCacheRef.current.delete(adding.parentPath)
-        await refreshDir(adding.parentPath)
-        await apiOpen(projectSlug, newPath)
-      }
-    } catch (e) {
-      showError(String(e))
-      setAdding(null)
-    }
-  }, [projectSlug, adding, refreshDir, showError])
-
-  // External drag-over on root zone
-  const handleRootDragOver = useCallback((e: DragEvent) => {
-    if (!e.dataTransfer) return
-    if (isExternalFileDrop(e.dataTransfer)) {
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'copy'
-      setExternalDragOver(true)
-    }
-  }, [])
-
-  const handleRootDrop = useCallback(async (e: DragEvent) => {
-    e.preventDefault()
-    setExternalDragOver(false)
-    if (!e.dataTransfer || !isExternalFileDrop(e.dataTransfer)) return
-    try {
-      await apiUpload(projectSlug, '', e.dataTransfer.files)
-      await loadRoot()
-    } catch (e2) {
-      showError(String(e2))
-    }
-  }, [projectSlug, loadRoot, showError])
-
-  // Short display path for the header
   const displayCwd = cwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
 
   return (
@@ -824,18 +523,10 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
         >
           {showHidden ? <IconEye /> : <IconEyeOff />}
         </button>
-        <button
-          class="ft-header-btn"
-          title="New file"
-          onClick={() => handleAddStart('file')}
-        >
+        <button class="ft-header-btn" title="New file" onClick={() => handleAddStart('file')}>
           <IconPlus />
         </button>
-        <button
-          class="ft-header-btn"
-          title="New folder"
-          onClick={() => handleAddStart('dir')}
-        >
+        <button class="ft-header-btn" title="New folder" onClick={() => handleAddStart('dir')}>
           <IconFolderPlus />
         </button>
       </div>
@@ -843,69 +534,34 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
       {/* Error banner */}
       {error && <div class="ft-error">{error}</div>}
 
-      {/* Tree */}
+      {/* Tree + external drop zone */}
       <div
         class={`ft-tree${externalDragOver ? ' ft-external-dragover' : ''}`}
         onDragOver={handleRootDragOver}
         onDragLeave={() => setExternalDragOver(false)}
         onDrop={handleRootDrop}
       >
-        {rootNodes.map(node => (
-          <FileTreeNode
-            key={node.path}
-            node={node}
-            slug={projectSlug}
-            cwd={cwd}
-            depth={0}
-            expanded={expanded}
-            childCache={childCacheRef.current}
-            adding={adding}
-            renamingPath={renamingPath}
-            dragSource={dragSource}
-            dropTarget={dropTarget}
-            onToggle={handleToggle}
-            onLoad={loadChildren}
-            onRenameStart={setRenamingPath}
-            onRenameCommit={handleRenameCommit}
-            onRenameCancel={() => setRenamingPath(null)}
-            onDeleteRequest={setPendingDelete}
-            onDragStart={setDragSource}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-            onDragEnd={() => { setDragSource(null); setDropTarget(null) }}
-            onAddCommit={handleAddCommit}
-            onAddCancel={() => setAdding(null)}
-          />
-        ))}
-
-        {/* Root-level inline add input (when adding at root) */}
-        {adding && adding.parentPath === '' && (
-          <div class="ft-node ft-node-adding" style={{ paddingLeft: '8px' }}>
-            {adding.type === 'dir' ? <IconFolderPlus /> : <IconFile />}
-            <InlineInput
-              initial=""
-              onCommit={handleAddCommit}
-              onCancel={() => setAdding(null)}
-            />
-          </div>
-        )}
-
-        {rootNodes.length === 0 && !adding && (
-          <div class="ft-empty">Drop files here or click + to add</div>
-        )}
+        <div ref={containerRef} class="ft-tree-inner" />
       </div>
 
       {/* Delete confirmation modal */}
       {pendingDelete && (
-        <DeleteModal
-          node={pendingDelete}
-          onConfirm={handleDeleteConfirm}
-          onCancel={() => setPendingDelete(null)}
-        />
+        <div class="ft-modal-overlay" onClick={() => setPendingDelete(null)}>
+          <div class="ft-modal" onClick={e => e.stopPropagation()}>
+            <p class="ft-modal-title">
+              Delete {pendingDelete.isFolder ? 'folder' : 'file'}?
+            </p>
+            <p class="ft-modal-body">
+              <strong>{pendingDelete.name}</strong>
+              {pendingDelete.isFolder && ' and all its contents'} will be permanently deleted.
+            </p>
+            <div class="ft-modal-actions">
+              <button class="ft-modal-cancel" onClick={() => setPendingDelete(null)}>Cancel</button>
+              <button class="ft-modal-confirm" onClick={handleDeleteConfirm}>Delete</button>
+            </div>
+          </div>
+        </div>
       )}
-
-      {/* Invisible version tracker so cacheVersion is used */}
-      <span data-cache-version={cacheVersion} style={{ display: 'none' }} />
     </div>
   )
 }

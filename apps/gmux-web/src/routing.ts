@@ -112,6 +112,7 @@ export function resolveSessionFromPath(
  *  - `session`: a specific terminal session, by id.
  *  - `markdown-editor`: in-browser Milkdown editor for .md files.
  *  - `image-viewer`: in-browser image viewer for image files.
+ *  - `diff-viewer`: in-browser unified diff panel for a project cwd.
  */
 export type View =
   | { kind: 'home' }
@@ -119,7 +120,7 @@ export type View =
   | { kind: 'session'; sessionId: string }
   | { kind: 'markdown-editor'; projectSlug: string; filePath: string }
   | { kind: 'image-viewer'; projectSlug: string; filePath: string }
-
+  | { kind: 'diff-viewer'; projectSlug: string; cwd: string }
 /** Structural equality for views. */
 export function viewsEqual(a: View, b: View): boolean {
   if (a.kind !== b.kind) return false
@@ -134,6 +135,10 @@ export function viewsEqual(a: View, b: View): boolean {
     case 'image-viewer': {
       const bb = b as { projectSlug: string; filePath: string }
       return a.projectSlug === bb.projectSlug && a.filePath === bb.filePath
+    }
+    case 'diff-viewer': {
+      const bb = b as { projectSlug: string; cwd: string }
+      return a.projectSlug === bb.projectSlug && a.cwd === bb.cwd
     }
   }
 }
@@ -183,6 +188,15 @@ export function resolveViewFromPath(
     }
   }
 
+  // /:project/_diff/:encoded-cwd -> in-browser diff panel.
+  if (parsed.adapter === '_diff' && parsed.slug) {
+    return {
+      kind: 'diff-viewer',
+      projectSlug: project.slug,
+      cwd: decodeURIComponent(parsed.slug),
+    }
+  }
+
   // /:project/:adapter[/:slug] resolves to a concrete session when possible.
   const sessionId = resolveSessionFromPath(parsed, projects, sessions, homeDir)
   if (sessionId) return { kind: 'session', sessionId }
@@ -211,6 +225,8 @@ export function viewToPath(
       return `/${view.projectSlug}/_md/${encodeURIComponent(view.filePath)}`
     case 'image-viewer':
       return `/${view.projectSlug}/_img/${encodeURIComponent(view.filePath)}`
+    case 'diff-viewer':
+      return `/${view.projectSlug}/_diff/${encodeURIComponent(view.cwd)}`
     case 'session': {
       const sess = sessions.find(s => s.id === view.sessionId)
       if (!sess) return null

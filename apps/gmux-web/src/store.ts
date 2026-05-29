@@ -28,6 +28,7 @@ import type { Session as ProtocolSession } from '@gmux/protocol'
 
 export const sessions = signal<Session[]>([])
 export const sessionsLoaded = signal(false)
+export const projectsLoaded = signal(false)
 export const connState = signal<'connecting' | 'connected' | 'error'>('connecting')
 
 export const projects = signal<ProjectItem[]>([])
@@ -118,6 +119,16 @@ export function closeImageTab(projectSlug: string, filePath: string): void {
 export function navigateToImageViewer(projectSlug: string, filePath: string): void {
   ensureImageTab(projectSlug, filePath)
   navigate(`/${projectSlug}/_img/${encodeURIComponent(filePath)}`)
+}
+
+/** Navigate to the diff panel for a project cwd. */
+export function navigateToDiffView(projectSlug: string, cwd: string): void {
+  navigate(`/${projectSlug}/_diff/${encodeURIComponent(cwd)}`)
+}
+
+/** Close the diff view and return to the project hub. */
+export function closeDiffView(projectSlug: string): void {
+  navigate(`/${projectSlug}`)
 }
 export const launchers = signal<LauncherDef[]>([])
 export const defaultLauncher = signal<string>('shell')
@@ -445,6 +456,7 @@ export function setProjects(data: { configured: ProjectItem[]; discovered: Disco
     projects.value = data.configured
     discovered.value = data.discovered
     unmatchedActiveCount.value = data.unmatchedActiveCount
+    projectsLoaded.value = true
   })
 }
 
@@ -698,6 +710,7 @@ export function initStore(): () => void {
       projects.value = MOCK_PROJECTS
       sessions.value = mockSessions
       sessionsLoaded.value = true
+      projectsLoaded.value = true
       connState.value = 'connected'
       terminalOptions.value = buildTerminalOptions(null, null)
       keybinds.value = resolveKeybinds(null, false)
@@ -806,12 +819,13 @@ export function initStore(): () => void {
 
   // URL normalization effect: rewrites the URL when the resolved view
   // differs from the current path (e.g., `/:project` resolves to a
-  // specific session). Gated on sessionsLoaded to prevent the race
-  // where projects load first and clobber the URL before sessions arrive.
+  // specific session). Gated on sessionsLoaded AND projectsLoaded to prevent
+  // the race where one loads before the other and clobbers the URL.
   const disposeUrlNorm = effect(() => {
     const v = view.value
     if (v === null) return
     if (!sessionsLoaded.value) return
+    if (!projectsLoaded.value) return
     const url = viewToPath(v, projects.value, sessions.value, health.value?.home_dir)
     if (url && url !== urlPath.value) {
       navigate(url, true)
