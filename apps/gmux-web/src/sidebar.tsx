@@ -15,7 +15,7 @@ import {
   activityMap, projects, connState,
   updateProjects, reorderSessions,
   peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState,
-  unreadCount,
+  unreadCount, localHostLabel,
   type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -256,7 +256,7 @@ function FolderGroup({
           onClick={onClick}
         >
           {folder.name}
-          <HostSuffix peer={folder.peer} />
+          <HostSuffix peer={folder.peer ?? localHostLabel.value} local={!folder.peer} />
           {folder.missing && <span class="folder-missing-icon" title="Project missing on peer">?</span>}
         </a>
         <LaunchButton

@@ -11,7 +11,7 @@
 import { useCallback, useState } from 'preact/hooks'
 import {
   health, folders, homePartition, dismissSession, projects,
-  updateProjects, removeProject, removePeerReference,
+  updateProjects, removeProject, removePeerReference, localHostLabel,
 } from './store'
 import { HostSuffix } from './host-suffix'
 import { SessionRow } from './session-row'
@@ -273,7 +273,7 @@ function ProjectRow({
       <a class="home-project-link" href={href}>
         <div class="home-project-name">
           {f.name}
-          <HostSuffix peer={f.peer} />
+          <HostSuffix peer={f.peer ?? localHostLabel.value} local={!f.peer} />
         </div>
         <div class="home-project-count">
           {alive > 0 && <span class="home-project-alive">{alive} alive</span>}
