@@ -127,7 +127,11 @@ body {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 6px 0;
+  /* Generous bottom padding so the last row clears the viewport edge:
+   * the extra whitespace is the visual cue that the user has actually
+   * reached the end of the list (rather than wondering whether more
+   * content is hidden by the fold). */
+  padding: 6px 0 48px;
   display: flex;
   flex-direction: column;
 }
