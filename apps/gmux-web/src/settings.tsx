@@ -174,23 +174,27 @@ export function SettingsModal({
 
   return (
     <div class="modal-backdrop" ref={backdropRef} onClick={handleBackdropClick}>
-      <div class="modal-panel manage-projects-modal">
-        <div class="modal-header">
-          <div class="settings-tabs" role="tablist">
-            <button
-              class={`settings-tab${activeTab === 'projects' ? ' active' : ''}`}
-              role="tab"
-              aria-selected={activeTab === 'projects'}
-              onClick={() => onSelectTab('projects')}
-            >Projects</button>
-            <button
-              class={`settings-tab${activeTab === 'hosts' ? ' active' : ''}`}
-              role="tab"
-              aria-selected={activeTab === 'hosts'}
-              onClick={() => onSelectTab('hosts')}
-            >Hosts</button>
-          </div>
-          <div class="modal-header-actions">
+      <div class="modal-panel settings-modal">
+        <button class="modal-close settings-close" onClick={onClose}>&times;</button>
+        <nav class="settings-rail" role="tablist">
+          <div class="settings-rail-title">Settings</div>
+          <button
+            class={`settings-tab${activeTab === 'projects' ? ' active' : ''}`}
+            role="tab"
+            aria-selected={activeTab === 'projects'}
+            onClick={() => onSelectTab('projects')}
+          >Projects</button>
+          <button
+            class={`settings-tab${activeTab === 'hosts' ? ' active' : ''}`}
+            role="tab"
+            aria-selected={activeTab === 'hosts'}
+            onClick={() => onSelectTab('hosts')}
+          >Hosts</button>
+        </nav>
+
+        <div class="settings-main">
+          <div class="settings-main-header">
+            <span class="settings-main-title">{activeTab === 'hosts' ? 'Hosts' : 'Projects'}</span>
             {activeTab === 'projects' && (
               <a
                 class="mp-docs-link"
@@ -200,9 +204,7 @@ export function SettingsModal({
                 title="How match rules work"
               >?</a>
             )}
-            <button class="modal-close" onClick={onClose}>&times;</button>
           </div>
-        </div>
 
         {activeTab === 'hosts' ? (
           <div class="modal-body">
@@ -282,6 +284,7 @@ export function SettingsModal({
           </section>
         </div>
         )}
+        </div>
       </div>
     </div>
   )
