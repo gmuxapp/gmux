@@ -121,15 +121,15 @@ test.describe('new file flow', () => {
 
   test('Escape cancels without creating a file', async ({ page }) => {
     await openProjectHub(page)
-    // Count items before.
-    const countBefore = await page.locator('.ft-tree-inner').getByRole('treeitem').count()
     await page.locator('button[title="New file"]').click()
     const input = page.locator('[data-item-rename-input="true"]')
     await input.waitFor({ state: 'visible', timeout: 3_000 })
+    // Capture count *after* the placeholder appears (should be countBefore + 1).
+    const countWithPlaceholder = await page.locator('.ft-tree-inner').getByRole('treeitem').count()
     await page.keyboard.press('Escape')
     await expect(input).not.toBeVisible({ timeout: 3_000 })
-    // With removeIfCanceled:true the placeholder disappears — treeitem count unchanged.
-    await expect(page.locator('.ft-tree-inner').getByRole('treeitem')).toHaveCount(countBefore)
+    // Placeholder was removed — count should be one less than when it was present.
+    await expect(page.locator('.ft-tree-inner').getByRole('treeitem')).toHaveCount(countWithPlaceholder - 1)
   })
 
   test('Enter creates the file via API and adds it to the tree', async ({ page }) => {
