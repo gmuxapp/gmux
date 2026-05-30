@@ -10,7 +10,7 @@
  * Keybindings are data-driven: the resolved keybind list is iterated on
  * each keydown. Each entry maps a key combo to an action.
  */
-import type { Terminal } from 'ghostty-web'
+import type { WTerm } from '@wterm/dom'
 import {
   eventMatchesKeybind,
   IS_MAC,
@@ -22,7 +22,7 @@ import {
   uploadClipboardBlob,
   type UploadResult,
 } from './clipboard-upload'
-import { selectionToText } from './selection'
+import { getSelectionText, clearSelection, selectAllAndCopy } from './selection'
 
 type SendFn = (data: string) => void
 
@@ -114,7 +114,7 @@ function pasteErrorMessage(code: string): string {
 }
 
 export function attachKeyboardHandler(
-  term: Terminal,
+  term: WTerm,
   send: SendFn,
   sendRaw: SendFn,
   keybinds: ResolvedKeybind[],
@@ -122,40 +122,22 @@ export function attachKeyboardHandler(
   sessionId = '',
   onPasteFeedback: PasteFeedback = defaultPasteFeedback,
 ): () => void {
-  // ghostty-web customKeyEventHandler return-value semantics are the INVERSE
-  // of xterm.js:
-  //
-  //   return true  → consumed: ghostty calls preventDefault() + returns without
-  //                 encoding the key — key is NOT sent to the PTY.
-  //   return false → pass-through: ghostty falls through to its WASM encoder
-  //                 and fires onData, which our sendInput listener forwards
-  //                 to the PTY.
-  //
-  // Every return site below is labelled with the intended semantics.
-
-  term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
+  // Intercept keydown on the wterm element in capture phase so our handler
+  // fires before wterm's internal textarea listener. Call preventDefault() +
+  // stopImmediatePropagation() to consume a key (prevent PTY encoding).
+  // Since we only see keydown events, multi-phase logic is no longer needed.
+  const handleKeyDown = (ev: KeyboardEvent) => {
     // Mobile Enter → newline (not submit).
-    // Bare Enter with no modifiers on a touch device sends \n so the user
-    // can compose multi-line messages. The mobile toolbar send button sends
-    // \r when they are ready to submit.
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey
         && isTouchDevice()) {
-      if (ev.type === 'keydown') send('\n')
+      send('\n')
       ev.preventDefault()
-      return true // consumed — we already sent \n; ghostty must not also encode Enter
+      ev.stopImmediatePropagation()
+      return
     }
 
     // macCommandIsCtrl: on Mac, Cmd+<character> is treated as Ctrl+<character>.
-    // Transform the event for keybind matching, then synthesize the ctrl
-    // sequence if no keybind handles it. Only applies to single-character
-    // keys; Cmd+arrow/backspace keep their default behavior.
     if (macCommandIsCtrl && IS_MAC && ev.metaKey && !ev.ctrlKey && ev.key.length === 1) {
-      if (ev.type !== 'keydown') {
-        ev.preventDefault()
-        return true // consumed — suppress non-keydown phases of a Cmd key we own
-      }
-
-      // Match keybinds as if Ctrl were pressed instead of Cmd.
       const virtualMods = {
         ctrlKey: true, shiftKey: ev.shiftKey,
         altKey: ev.altKey, metaKey: false,
@@ -165,45 +147,30 @@ export function attachKeyboardHandler(
       for (const kb of keybinds) {
         if (!eventMatchesKeybind(virtualMods, kb)) continue
         const handled = executeAction(kb, term, send, sendRaw, sessionId, onPasteFeedback)
-        if (handled) { ev.preventDefault(); return true } // consumed
+        if (handled) { ev.preventDefault(); ev.stopImmediatePropagation(); return }
       }
 
-      // No keybind matched. Synthesize the ctrl code directly.
       const seq = ctrlSequenceFor(ev.key)
       if (seq) send(seq)
       ev.preventDefault()
-      return true // consumed — we sent the ctrl sequence; don't let ghostty also encode
+      ev.stopImmediatePropagation()
+      return
     }
 
     // Check each resolved keybind against the event.
     for (const kb of keybinds) {
       if (!eventMatchesKeybind(ev, kb)) continue
-
-      // For shift+enter we need to block all event types (keydown, keypress,
-      // keyup) to prevent the Kitty keyboard protocol sequence from leaking.
-      if (kb.baseKey === 'enter' && kb.shift) {
-        if (ev.type === 'keydown') executeAction(kb, term, send, sendRaw, sessionId, onPasteFeedback)
-        ev.preventDefault()
-        return true // consumed — all phases of shift+enter are ours
-      }
-
-      // For other bindings, only act on keydown.
-      if (ev.type !== 'keydown') return false // pass-through — non-keydown, ghostty handles
-
       const handled = executeAction(kb, term, send, sendRaw, sessionId, onPasteFeedback)
       if (handled) {
-        // Prevent browser default (e.g. Cmd+Left navigating back on Mac).
-        // ghostty also calls preventDefault when we return true, but calling
-        // it ourselves first is harmless and makes intent explicit.
         ev.preventDefault()
-        return true // consumed — action handled; ghostty must not also encode the key
+        ev.stopImmediatePropagation()
       }
+      return
     }
+  }
 
-    return false // pass-through — no keybind matched; ghostty encodes and sends to PTY
-  })
-
-  return () => {} // no DOM listeners to remove
+  term.element.addEventListener('keydown', handleKeyDown, { capture: true })
+  return () => term.element.removeEventListener('keydown', handleKeyDown, true)
 }
 
 /**
@@ -216,7 +183,7 @@ export function attachKeyboardHandler(
  */
 function executeAction(
   kb: ResolvedKeybind,
-  term: Terminal,
+  term: WTerm,
   send: SendFn,
   sendRaw: SendFn,
   sessionId: string,
@@ -234,21 +201,21 @@ function executeAction(
     }
 
     case 'copyOrInterrupt': {
-      const sel = selectionToText(term)
+      const sel = getSelectionText()
       if (sel) {
         navigator.clipboard.writeText(sel)
-        term.clearSelection()
+        clearSelection()
         return true
       }
-      // No selection: let xterm handle it (sends SIGINT).
+      // No selection: let wterm handle it (sends SIGINT).
       return false
     }
 
     case 'copy': {
-      const sel = selectionToText(term)
+      const sel = getSelectionText()
       if (sel) {
         navigator.clipboard.writeText(sel)
-        term.clearSelection()
+        clearSelection()
       }
       // Always consume the event, even with no selection.
       // Unlike copyOrInterrupt, never falls through to SIGINT.
@@ -266,7 +233,7 @@ function executeAction(
       // via onPasteFeedback so users see why nothing happened.
       void handlePasteAction({
         sessionId,
-        bracketedPasteMode: term.hasBracketedPaste(),
+        bracketedPasteMode: term.bridge?.bracketedPaste() ?? false,
         feedback: onPasteFeedback,
         emit: sendRaw,
       })
@@ -274,7 +241,7 @@ function executeAction(
     }
 
     case 'selectAll':
-      term.selectAll()
+      selectAllAndCopy(term.element)
       return true
 
     default:
@@ -370,7 +337,7 @@ export function formatPasteText(text: string, bracketedPasteMode: boolean): stri
  * Returns a cleanup function.
  */
 export function attachPasteHandler(
-  term: Terminal,
+  term: WTerm,
   container: HTMLElement,
   sendRaw: SendFn,
   sessionId = '',
@@ -397,7 +364,7 @@ export function attachPasteHandler(
         onPasteFeedback('error', 'Paste failed: no session bound')
         return
       }
-      void uploadAndFormatPath(blob, sessionId, term.hasBracketedPaste(), onPasteFeedback)
+      void uploadAndFormatPath(blob, sessionId, term.bridge?.bracketedPaste() ?? false, onPasteFeedback)
         .then(out => { if (out !== null) sendRaw(out) })
       return
     }
@@ -409,7 +376,7 @@ export function attachPasteHandler(
     ev.stopPropagation()
     ev.preventDefault()
 
-    sendRaw(formatPasteText(text, term.hasBracketedPaste()))
+    sendRaw(formatPasteText(text, term.bridge?.bracketedPaste() ?? false))
   }
 
   container.addEventListener('paste', handler, { capture: true })

@@ -1,145 +1,22 @@
 /**
- * Convert an xterm.js selection to a clipboard string.
- *
- * Terminal-buffer-to-text models, summarised:
- *
- * 1. "Trim everything": strip trailing whitespace from every copied line
- *    unconditionally. Ghostty's `clipboard-trim-trailing-spaces` option.
- *    Loses information when the user explicitly drag-selects through pad
- *    inside a row.
- *
- * 2. "Trim never": emit cells verbatim. Wall of trailing spaces after
- *    every short line, because the cells past the content render as
- *    spaces. xterm.js' default `getSelection()` lands here in many cases.
- *
- * 3. **"Trailing whitespace belongs to the line break"**: trim trailing
- *    whitespace only when the selection reaches the row boundary;
- *    preserve mid-row pad the user explicitly dragged across. This is the
- *    model gmux implements. It handles two different cases that look the
- *    same to the buffer:
- *
- *      a. Shell output (`echo hello`) leaves the rest of the row as
- *         never-written cells (codepoint 0). xterm.js's
- *         `translateToString(trimRight=true)` drops these by walking the
- *         line until it finds a cell with `HAS_CONTENT_MASK`.
- *
- *      b. TUI output (pi, Claude Code, btop, fzf, lazygit, k9s, …) fills
- *         each row with *explicit* space cells (codepoint 32) before the
- *         newline. Those cells survive xterm's codepoint-0 trim because
- *         they have content. Without an extra step, copying any TUI
- *         response yields a wall of spaces.
- *
- *    For (b) we post-strip ASCII whitespace from the right edge of every
- *    boundary-reaching slice. Trade-off: a row that ends with
- *    explicitly-typed trailing whitespace, then a hard newline, copies
- *    without those spaces. In practice that's vanishingly rare. The
- *    `trim = ex >= cols` guard still preserves spaces a user explicitly
- *    drags through without crossing the line break.
- *
- * Soft wraps (terminal-driven, signalled by `IBufferLine.isWrapped` on the
- * following row) are joined without an inserted `\n`, matching every modern
- * terminal. TUI-driven wraps (Vim, tmux, Claude Code, pi, …) are
- * indistinguishable from hard newlines in the buffer and copy as separate
- * lines. No terminal can recover those without app cooperation.
- *
- * Coordinate notes (xterm.js 6.x): `getSelectionPosition` returns 0-based
- * `x` and `y`, where `y` is an absolute buffer row index (compatible with
- * `buffer.active.getLine`) and `x` is half-open on the right (`x === cols`
- * means "past last column"). The public typings claim 1-based, but the
- * runtime behavior is 0-based; verified against the bundled source.
+ * Selection helpers for wterm DOM rendering.
+ * Uses window.getSelection() — no terminal-specific buffer API needed.
  */
 
-/** Minimal terminal surface needed for selection-to-text. Subset of
- * `@xterm/xterm`'s public API, redeclared locally so the algorithm can be
- * unit-tested with hand-rolled fakes. */
-export interface SelectionBufferLine {
-  readonly isWrapped: boolean
-  /** Slice the line as a string. With `trimRight=true`, never-written
-   * trailing cells inside the slice are dropped (pad stripping). Written
-   * spaces are preserved either way. */
-  translateToString(trimRight: boolean, startColumn?: number, endColumn?: number): string
+export function getSelectionText(): string {
+  return window.getSelection()?.toString() ?? ''
 }
 
-export interface SelectionBuffer {
-  getLine(y: number): SelectionBufferLine | undefined
+export function selectAllAndCopy(element: HTMLElement): void {
+  const range = document.createRange()
+  range.selectNodeContents(element)
+  const sel = window.getSelection()
+  sel?.removeAllRanges()
+  sel?.addRange(range)
+  const text = sel?.toString()
+  if (text) navigator.clipboard.writeText(text).catch(() => {})
 }
 
-export interface SelectionTerminal {
-  readonly cols: number
-  readonly buffer: { readonly active: SelectionBuffer }
-  getSelectionPosition(): { start: { x: number, y: number }, end: { x: number, y: number } } | undefined
-  /** Total number of scrollback lines (absolute index of first viewport row when at bottom). */
-  getScrollbackLength(): number
-  /**
-   * Lines scrolled back from the bottom of the scrollback buffer.
-   * 0 = viewing live output (at bottom); N = scrolled back N lines.
-   *
-   * Used to convert the viewport-relative row coords returned by
-   * `getSelectionPosition()` into the absolute buffer row indices that
-   * `buffer.active.getLine()` expects:
-   *
-   *   absoluteRow = getScrollbackLength() + viewportRelativeRow - getViewportY()
-   */
-  getViewportY(): number
-}
-
-/**
- * Render the active selection as a clipboard string using the
- * trailing-pad-as-line-break model. Returns `''` when there is no selection.
- */
-export function selectionToText(term: SelectionTerminal): string {
-  const range = term.getSelectionPosition()
-  if (!range) return ''
-
-  const { start, end } = range
-  const buffer = term.buffer.active
-  const cols = term.cols
-
-  // getSelectionPosition() returns viewport-RELATIVE row coords (y=0 = first
-  // visible line).  buffer.active.getLine() expects ABSOLUTE buffer rows
-  // (y=0 = oldest scrollback line).  Convert using:
-  //
-  //   absoluteRow = scrollbackLen + viewportRelativeRow - getViewportY()
-  //
-  // where getViewportY() is the number of lines scrolled back from the bottom
-  // (0 = at bottom/live output).  This is SelectionManager.viewportRowToAbsolute
-  // from ghostty-web's source.
-  const scrollbackLen = term.getScrollbackLength()
-  // Floor to match SelectionManager.getViewportY() which uses Math.floor() internally.
-  // Wheel scrolling sets viewportY = currentY - deltaY/33, which is fractional.
-  // Without flooring, toAbsolute() returns non-integer absolute rows and the WASM
-  // buffer API truncates to one line lower than the renderer shows — the off-by-one.
-  const gvY = Math.floor(term.getViewportY())
-  const toAbsolute = (viewportRow: number): number => scrollbackLen + viewportRow - gvY
-
-  let out = ''
-  for (let y = start.y; y <= end.y; y++) {
-    const line = buffer.getLine(toAbsolute(y))
-    if (!line) continue
-
-    const isLast = y === end.y
-    const sx = y === start.y ? start.x : 0
-
-    // ghostty-web's getSelectionPosition() returns end.x as an INCLUSIVE column
-    // index (the last selected column).  translateToString() uses an EXCLUSIVE
-    // endColumn (iterates `col < end`), so add 1 to convert.  Non-last rows
-    // always use `cols` which is already the correct exclusive bound.
-    const ex = isLast ? end.x + 1 : cols
-
-    // Trim trailing whitespace when the selection reaches the row boundary
-    // (i.e. the full row was selected).  With the +1 above, a full-row select
-    // gives ex === cols in both xterm and ghostty-web.
-    const trim = ex >= cols
-    if (ex > sx) {
-      const slice = line.translateToString(trim, sx, ex)
-      out += trim ? slice.replace(/[ \t]+$/, '') : slice
-    }
-
-    if (!isLast) {
-      // Soft wrap: next row continues this one, suppress the newline.
-      const next = buffer.getLine(toAbsolute(y + 1))
-      if (!next?.isWrapped) out += '\n'
-    }
-  }
-  return out
+export function clearSelection(): void {
+  window.getSelection()?.removeAllRanges()
 }

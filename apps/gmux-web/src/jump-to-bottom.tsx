@@ -1,32 +1,24 @@
 import { useEffect, useState } from 'preact/hooks'
-import type { Terminal } from 'ghostty-web'
+import type { WTerm } from '@wterm/dom'
 
 /**
- * Floating "jump to bottom" button that overlays the bottom-right of an
- * xterm viewport when the user has scrolled up. Hidden when the viewport
- * is already at the bottom.
+ * Floating "jump to bottom" button that overlays the bottom-right of a
+ * wterm viewport when the user has scrolled up.
  *
- * Designed for any view that mounts an xterm.js Terminal: pass the
- * Terminal instance once it's been created. Tracks scroll position via
- * `term.onScroll`, which fires for both user-initiated and programmatic
- * scrolls, so the visibility stays in sync without polling.
- *
- * The button is positioned absolutely; the parent must establish a
- * positioning context (`.terminal-shell` already does, via
- * `position: relative`).
+ * Tracks scroll position via a DOM scroll event on term.element.
  */
-export function JumpToBottom({ term }: { term: Terminal | null }) {
+export function JumpToBottom({ term }: { term: WTerm | null }) {
   const [atBottom, setAtBottom] = useState(true)
 
   useEffect(() => {
     if (!term) return
+    const el = term.element
     const update = () => {
-      // ghostty-web: getViewportY()=0 means viewing live output (at bottom).
-      setAtBottom(term.getViewportY() === 0)
+      setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 5)
     }
     update()
-    const sub = term.onScroll(update)
-    return () => sub.dispose()
+    el.addEventListener('scroll', update, { passive: true })
+    return () => el.removeEventListener('scroll', update)
   }, [term])
 
   if (atBottom || !term) return null
@@ -36,7 +28,10 @@ export function JumpToBottom({ term }: { term: Terminal | null }) {
       class="jump-to-bottom"
       aria-label="Jump to bottom"
       title="Jump to bottom"
-      onClick={() => term.scrollToBottom()}
+      onClick={() => {
+        const el = term.element
+        el.scrollTop = el.scrollHeight
+      }}
     >
       ↓
     </button>

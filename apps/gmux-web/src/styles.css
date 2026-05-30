@@ -1,6 +1,8 @@
 /* gmux — session orchestration UI */
 
 @import './fonts.css';
+@import '@wterm/dom/css';
+
 
 code {
   font-family: 'Fira Code', monospace;
@@ -1676,20 +1678,16 @@ body {
        url('@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-italic.woff2') format('woff2');
 }
 
-.terminal-container .xterm {
+.terminal-container.wterm {
   width: max-content;
   min-width: 100%;
   min-height: 100%;
   padding: 0 6px 6px 6px;
   margin: 0 auto; /* center the character grid horizontally */
+  border-radius: 0;
+  box-shadow: none;
 }
 
-/* Hide xterm's native scrollbar — scrollback is handled by the PTY replay buffer */
-/* Override viewport background — xterm sets it to black inline before theme applies */
-.terminal-container .xterm-viewport {
-  overflow-y: hidden !important;
-  background-color: transparent !important;
-}
 
 /* ── Empty State ── */
 
@@ -1965,9 +1963,10 @@ a.home-host-link:hover {
     font-size: 11px;
   }
 
-  .terminal-container .xterm {
+  .terminal-container.wterm {
     padding: 0 4px 4px;
   }
+
 
   .session-item {
     padding: 8px 10px 8px 14px;
@@ -2148,11 +2147,10 @@ a.home-host-link:hover {
      unable to select any text.  On coarse-pointer devices we switch to the
      DOM renderer (so text lives in real <span> nodes) and override the
      user-select rule so Android/iOS can reach those nodes. */
-  .terminal-container .xterm,
-  .terminal-container .xterm-rows,
-  .terminal-container .xterm-screen {
-    user-select: text !important;
-    -webkit-user-select: text !important;
+  /* wterm uses DOM rendering natively — text is always selectable. */
+  .terminal-container.wterm {
+    user-select: text;
+    -webkit-user-select: text;
   }
 }
 
@@ -2258,9 +2256,10 @@ a.home-host-link:hover {
   overflow: hidden;
 }
 
-.diag-terminal .xterm {
+.diag-terminal.wterm {
   padding: 6px 8px;
 }
+
 
 .diag-log-section {
   flex: 1;

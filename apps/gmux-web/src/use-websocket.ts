@@ -9,7 +9,7 @@
  * [session.id, ghosttyReady].
  */
 import { useEffect } from 'preact/hooks'
-import type { Terminal } from 'ghostty-web'
+import type { WTerm } from '@wterm/dom'
 import { createReplayBuffer } from './replay'
 import { fetchScrollback } from './replay-fetch'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
@@ -27,7 +27,7 @@ export interface UseWebSocketOptions {
   session: Session
   ghosttyReady: boolean
   // Refs
-  termRef:           Ref<Terminal | null>
+  termRef:           Ref<WTerm | null>
   termIoRef:         Ref<ReturnType<typeof createTerminalIO> | null>
   wsRef:             Ref<WebSocket | null>
   reconnectTimer:    Ref<ReturnType<typeof setTimeout> | null>
@@ -35,7 +35,6 @@ export interface UseWebSocketOptions {
   currentSessionId:  Ref<string>
   sessionRef:        Ref<Session>
   termEpochRef:      Ref<number>
-  savedScrollRef:    Ref<Map<string, number>>
   reconnectCountRef: Ref<number>
   ptySizeRef:        Ref<TerminalSize | null>
   viewportSizeRef:   Ref<TerminalSize | null>
@@ -60,7 +59,7 @@ export function useWebSocket(opts: UseWebSocketOptions): void {
   const {
     session, ghosttyReady,
     termRef, termIoRef, wsRef, reconnectTimer, disposed, currentSessionId,
-    sessionRef, termEpochRef, savedScrollRef, reconnectCountRef,
+    sessionRef, termEpochRef, reconnectCountRef,
     ptySizeRef, viewportSizeRef,
     queueData, queueMany, queueResize,
     resetResizeEchoGate, releaseResizeEchoGate, fitAndResize, emitSyncDiag,
@@ -78,9 +77,7 @@ export function useWebSocket(opts: UseWebSocketOptions): void {
     termEpochRef.current = epoch
     termIoRef.current.reset(epoch)
 
-    // Consume any saved scroll position for this session.
-    const savedGvY = Math.floor(savedScrollRef.current.get(session.id) ?? 0)
-    savedScrollRef.current.delete(session.id)
+
 
     resetResizeEchoGate()
     setPtySize(null);     ptySizeRef.current     = null
@@ -91,7 +88,7 @@ export function useWebSocket(opts: UseWebSocketOptions): void {
       syncPhase: 'idle', scrollbackBytes: 0, scrollbackMsgs: 0,
       syncStartedAt: null, syncEndedAt: null, pendingWrite: false,
       wsState: 'connecting', reconnects: 0, prefetchBytes: 0,
-      ghosttyScrollbackLines: 0, ghosttyScrollbackLimit: scrollbackLimit,
+      scrollbackLines: 0, scrollbackLimit: scrollbackLimit,
     })
     setTermLoading(true)
 
@@ -103,7 +100,7 @@ export function useWebSocket(opts: UseWebSocketOptions): void {
         wsRef.current = null
       }
 
-      termIoRef.current?.forceNextScrollToBottom()
+      // wterm auto-scrolls to bottom; no forceNextScrollToBottom needed.
       emitSyncDiag({ syncPhase: 'waiting', wsState: 'connecting' })
 
       const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -202,16 +199,13 @@ export function useWebSocket(opts: UseWebSocketOptions): void {
         const doWrite = () => {
           const filtered = chunks.map(interceptOsc52)
           queueMany(filtered, () => {
-            if (savedGvY > 0 && termRef.current) {
-              termRef.current.scrollToLine(savedGvY)
-            }
             setTermLoading(false)
             emitSyncDiag({
               pendingWrite: false,
-              ghosttyScrollbackLines: termRef.current?.getScrollbackLength()
-                ?? 0,
+              scrollbackLines: termRef.current?.bridge?.getScrollbackCount() ?? 0,
             })
           })
+          emitSyncDiag({ syncEndedAt: Date.now(), pendingWrite: true })
           emitSyncDiag({ syncEndedAt: Date.now(), pendingWrite: true })
         }
         if (prefetchSettled) {
@@ -326,16 +320,7 @@ export function useWebSocket(opts: UseWebSocketOptions): void {
     connect()
 
     return () => {
-      intentionalClose = true
-      const t = termRef.current
-      if (t) {
-        const gvY = Math.floor(t.getViewportY())
-        if (gvY > 0) {
-          savedScrollRef.current.set(session.id, gvY)
-        } else {
-          savedScrollRef.current.delete(session.id)
-        }
-      }
+
       termEpochRef.current = epoch + 1
       termIoRef.current?.reset(termEpochRef.current)
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)

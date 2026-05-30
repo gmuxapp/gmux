@@ -2,36 +2,24 @@ import { defineConfig } from 'vite'
 import type { Plugin } from 'vite'
 import preact from '@preact/preset-vite'
 import { execSync } from 'child_process'
-import { readFileSync, existsSync } from 'fs'
+import { readFileSync } from 'fs'
 import { createRequire } from 'module'
 import { dirname, join } from 'path'
 
 const _require = createRequire(import.meta.url)
 
 /**
- * Resolve the ghostty-vt.wasm path from the installed package.
- * Tries the dist/ subfolder first (matches the JS entry point location),
- * then falls back to the package root.
+ * Vite plugin: serve and bundle @wterm/ghostty's ghostty-vt.wasm.
+ * Vite does not automatically follow new URL() references inside node_modules,
+ * so we replicate the old ghosttyWasm() approach for the new package path.
  */
-function resolveGhosttyWasm(): string {
-  // _require.resolve('ghostty-web') → .../ghostty-web/dist/ghostty-web.js
-  const jsEntry = _require.resolve('ghostty-web')
-  const distDir = dirname(jsEntry)
-  const inDist = join(distDir, 'ghostty-vt.wasm')
-  if (existsSync(inDist)) return inDist
-  // Fallback: package root sibling of dist/
-  return join(dirname(distDir), 'ghostty-vt.wasm')
-}
-
-/**
- * Vite plugin: serve and bundle ghostty-vt.wasm.
- * In dev: adds a middleware that serves the WASM at /ghostty-vt.wasm.
- * In build: emits the WASM as a static asset in the dist root.
- */
-function ghosttyWasm(): Plugin {
-  const wasmSrc = resolveGhosttyWasm()
+function wtermWasm(): Plugin {
+  // @wterm/ghostty exposes its WASM at <package-root>/wasm/ghostty-vt.wasm
+  const pkgEntry = _require.resolve('@wterm/ghostty')
+  const pkgRoot = dirname(dirname(pkgEntry)) // dist/../ → package root
+  const wasmSrc = join(pkgRoot, 'wasm', 'ghostty-vt.wasm')
   return {
-    name: 'ghostty-wasm',
+    name: 'wterm-wasm',
     configureServer(server) {
       server.middlewares.use('/ghostty-vt.wasm', (_req, res) => {
         try {
@@ -66,7 +54,7 @@ const gmuxdToken = process.env.VITE_DEV_TOKEN || ''
 const proxyHeaders = gmuxdToken ? { Authorization: `Bearer ${gmuxdToken}` } : {}
 
 export default defineConfig({
-  plugins: [preact(), ghosttyWasm()],
+  plugins: [preact(), wtermWasm()],
   define: {
     // Baked into the bundle as a literal at build time. Read by
     // home.tsx to render the footer and to compare against the daemon's

@@ -18,7 +18,7 @@ import { LaunchButton } from './launcher'
 import { MarkdownEditor } from './markdown-editor'
 import { ImageViewer } from './image-viewer'
 import { DiffPanel } from './diff-panel'
-import { installCopySession } from './mock-data/export-session'
+
 
 import {
   sessions, connState, selected, selectedId, view, health, peers,
@@ -41,8 +41,7 @@ const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('
 // Mock mode: hide close buttons and other interactive chrome via CSS.
 if (USE_MOCK) document.documentElement.classList.add('mock-mode')
 
-// Debug: __gmuxCopySession() in devtools console
-installCopySession()
+// Debug: __gmuxCopySession() removed (export-session.ts deleted in wterm migration)
 
 // ── Components ──
 
@@ -295,7 +294,7 @@ function SessionMenu({ session, onRestart, syncDiag }: {
               <span class="session-menu-value">{session.peer}</span>
             </div>
           )}
-          {syncDiag && (syncDiag.prefetchBytes > 0 || syncDiag.ghosttyScrollbackLines > 0) && (
+          {syncDiag && (syncDiag.prefetchBytes > 0 || syncDiag.scrollbackLines > 0) && (
             <>
               <div class="session-menu-divider" />
               <div class="session-menu-section-title">Scrollback</div>
@@ -309,8 +308,8 @@ function SessionMenu({ session, onRestart, syncDiag }: {
               )}
               <div class="session-menu-row">
                 <span class="session-menu-label">Buffer</span>
-                <span class={`session-menu-value${syncDiag.ghosttyScrollbackLines >= syncDiag.ghosttyScrollbackLimit * 0.95 ? ' stale' : ''}`}>
-                  {fmtNum(syncDiag.ghosttyScrollbackLines)} / {fmtNum(syncDiag.ghosttyScrollbackLimit)} lines
+                <span class={`session-menu-value${syncDiag.scrollbackLines >= syncDiag.scrollbackLimit * 0.95 ? ' stale' : ''}`}>
+                  {fmtNum(syncDiag.scrollbackLines)} / {fmtNum(syncDiag.scrollbackLimit)} lines
                 </span>
               </div>
             </>

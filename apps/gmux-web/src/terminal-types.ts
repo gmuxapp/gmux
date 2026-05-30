@@ -19,8 +19,8 @@ export interface SyncDiag {
   reconnects: number
   /** Bytes received from GET /v1/sessions/<id>/scrollback?extracted=1 */
   prefetchBytes: number
-  /** Current lines in the ghostty-web scrollback buffer (live) */
-  ghosttyScrollbackLines: number
-  /** Configured ghostty-web scrollback line limit */
-  ghosttyScrollbackLimit: number
+  /** Current lines in the scrollback buffer (live) */
+  scrollbackLines: number
+  /** Configured scrollback line limit */
+  scrollbackLimit: number
 }

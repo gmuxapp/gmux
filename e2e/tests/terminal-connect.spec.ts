@@ -2,30 +2,46 @@ import { test, expect } from '@playwright/test'
 import { getTermState, openApp, gotoTestSession } from '../helpers'
 
 test.describe('terminal connection', () => {
-  test('connects to session and renders terminal', async ({ page }) => {
+  test('connects to session and renders wterm DOM element', async ({ page }) => {
     await openApp(page)
     await gotoTestSession(page)
 
-    // Terminal should exist and have dimensions
+    // wterm renders into DOM — no canvas
+    await expect(page.locator('.terminal-container.wterm')).toBeVisible()
+
     const state = await getTermState(page)
     expect(state.termCols).toBeGreaterThan(0)
     expect(state.termRows).toBeGreaterThan(0)
-
-    // Terminal canvas should be visible
-    await expect(page.locator('.terminal-container canvas')).toBeVisible()
   })
 
-  test('terminal displays session output', async ({ page }) => {
+  test('terminal has rendered output (cursor is placed)', async ({ page }) => {
     await openApp(page)
     await gotoTestSession(page)
 
-    // The test session runs `echo READY` — check that the terminal has content.
-    // We can't easily read xterm's rendered content, but we can check that
-    // the terminal has been written to by verifying it has a cursor.
     const hasCursor = await page.evaluate(() => {
       const term = (window as any).__gmuxTerm
-      return term ? term.buffer.active.cursorY >= 0 : false
+      if (!term) return false
+      // wterm exposes cursor via bridge.getCursor()
+      const cursor = term.bridge?.getCursor?.()
+      return cursor ? cursor.row >= 0 : false
     })
     expect(hasCursor).toBe(true)
+  })
+
+  test('terminal cols and rows are positive after init', async ({ page }) => {
+    await openApp(page)
+    await gotoTestSession(page)
+
+    const { termCols, termRows } = await getTermState(page)
+    expect(termCols).toBeGreaterThanOrEqual(20)
+    expect(termRows).toBeGreaterThanOrEqual(5)
+  })
+
+  test('wterm element is inside .terminal-container', async ({ page }) => {
+    await openApp(page)
+    await gotoTestSession(page)
+
+    const count = await page.locator('.terminal-container.wterm').count()
+    expect(count).toBe(1)
   })
 })

@@ -1,12 +1,16 @@
-import { init as initGhostty } from 'ghostty-web'
+import { GhosttyCore } from '@wterm/ghostty'
 
-// Shared init promise — ghostty-web must be initialised once before any
-// Terminal is constructed. Kicked off at module load time so the WASM is
-// ready by the time the first component mounts.
-export const ghosttyInitPromise: Promise<void> = initGhostty()
+// Shared init promise — GhosttyCore.load() must only be called once; the
+// singleton is safe because each WTerm.init() allocates separate WASM state.
+let _corePromise: Promise<GhosttyCore> | null = null
 
-// Per-session prefetch cache. Avoids re-downloading (up to 20 MB) and
-// re-processing (O(n²) over thousands of blocks) on every tab switch.
-// Key: session ID. Value: extracted bytes to inject, or null if empty.
-// Populated on first load; cleared on page reload only.
+export function getGhosttyCore(): Promise<GhosttyCore> {
+  if (!_corePromise) {
+    _corePromise = GhosttyCore.load({ scrollbackLimit: 10000, wasmPath: '/ghostty-vt.wasm' })
+  }
+  return _corePromise
+}
+
+// Per-session prefetch cache. Avoids re-downloading and re-processing on
+// every tab switch. Key: session ID. Value: extracted bytes or null if empty.
 export const prefetchCache = new Map<string, Uint8Array | null>()

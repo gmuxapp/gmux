@@ -35,7 +35,7 @@ test.describe('session switch — WS connects immediately for live sessions', ()
         if (typeof navigate !== 'function') return false
         return navigate(id) === true
       }, fromSession.id, { timeout: 10_000 })
-      await page.locator('.terminal-container canvas:visible').waitFor({ state: 'visible', timeout: 5_000 })
+      await page.locator('.terminal-shell .terminal-container.wterm.focused').waitFor({ state: 'visible', timeout: 5_000 })
       await page.waitForTimeout(1_500)
 
       // Verify that the scrollback endpoint is NOT called for live sessions.
@@ -87,7 +87,7 @@ test.describe('session switch — WS connects immediately for live sessions', ()
 
       // Terminal must finish loading.
       await expect(page.locator('.terminal-loading')).not.toBeVisible({ timeout: 5_000 })
-      await expect(page.locator('.terminal-container canvas:visible')).toBeVisible()
+      await expect(page.locator('.terminal-shell .terminal-container.wterm.focused')).toBeVisible()
 
       // No scrollback prefetch should have been made for a live session.
       expect(prefetchRequested, 'live sessions must not request the scrollback prefetch').toBe(false)
