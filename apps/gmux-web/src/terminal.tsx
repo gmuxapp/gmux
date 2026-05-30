@@ -5,6 +5,7 @@ import { attachKeyboardHandler, attachPasteHandler, ctrlSequenceFor, defaultPast
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { focusTerminalInput, useTouchPan } from './terminal-touch'
 import { getSelectionText, clearSelection, selectAllAndCopy } from './selection'
+import { handleTerminalLinkClick } from './terminal-links'
 import { createReplayBuffer } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 import { measureTerminalFit } from './terminal-fit'
@@ -251,8 +252,12 @@ export function TerminalView({
   }, [])
 
   const handleShellClick = useCallback((ev: MouseEvent) => {
+    // Don't steal focus when the user just made a text selection.
+    if (!(window.getSelection()?.isCollapsed ?? true)) return
     const target = ev.target
     if (target instanceof HTMLElement && target.closest('button, input, textarea, select, a, label, [role="button"]')) return
+    // Check for a URL at the click position before stealing focus.
+    if (handleTerminalLinkClick(ev)) return
     focusTerminal()
   }, [focusTerminal])
 

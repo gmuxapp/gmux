@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"nhooyr.io/websocket"
 )
@@ -116,6 +117,7 @@ func (p *Proxy) Handler() http.HandlerFunc {
 			p.proxyBackendToClient(proxyCtx, sessionID, backendConn, clientConn)
 		}()
 
+
 		// Client → Backend (keyboard input + resize).
 		go func() {
 			defer wg.Done()
@@ -123,6 +125,31 @@ func (p *Proxy) Handler() http.HandlerFunc {
 			p.proxyClientToBackend(proxyCtx, clientConn, backendConn)
 		}()
 
+		// Keepalive: ping the browser client every 20s so idle TCP connections
+		// through NAT / Tailscale relays don't get dropped by the network.
+		// nhooyr.io/websocket handles the ping/pong internally; a failure here
+		// (e.g. dead browser tab) cancels proxyCtx which tears down both
+		// proxy goroutines cleanly.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer proxyCancel()
+			ticker := time.NewTicker(20 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-proxyCtx.Done():
+					return
+				case <-ticker.C:
+					pingCtx, cancel := context.WithTimeout(proxyCtx, 10*time.Second)
+					err := clientConn.Ping(pingCtx)
+					cancel()
+					if err != nil {
+						return
+					}
+				}
+			}
+		}()
 		wg.Wait()
 
 		clientConn.Close(websocket.StatusNormalClosure, "")

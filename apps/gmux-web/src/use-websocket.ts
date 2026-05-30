@@ -303,7 +303,8 @@ export function useWebSocket(opts: UseWebSocketOptions): void {
         }
       }
 
-      ws.onclose = () => {
+      ws.onclose = (ev: CloseEvent) => {
+        console.debug(`[ws] closed: code=${ev.code} reason=${JSON.stringify(ev.reason)} wasClean=${ev.wasClean} session=${session.id}`)
         resetResizeEchoGate()
         setWsState('lost')
         emitSyncDiag({ wsState: 'lost' })
