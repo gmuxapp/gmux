@@ -179,6 +179,4 @@ The running app exposes these globals on `window`, useful from devtools or an au
 
 ## Known dev issues
 
-**Vite dev server can fail to resolve `@pierre/diffs`.** Under Vite 8 the package's internal `import "../style.js"` is rejected because `dist/style.js` is not listed in the package `exports` map, which crashes the whole app with a `[plugin:builtin:vite-resolve]` overlay. The production build (`vite build`, used by `scripts/build.sh` and the e2e suite) is unaffected, so develop against the embedded build (rebuild to see changes) until this is resolved upstream or worked around in `vite.config.ts`.
-
-**`bin/gmux` may be the wrong architecture.** The checked-in `bin/gmux` symlink can point at a macOS binary; on a Linux host gmuxd's UI session-launch then fails with `exec format error`. `scripts/build.sh` repoints the symlink to the host arch, so run a build first, or launch sessions with the freshly built `bin/gmux-dev`.
+**`bin/gmux` may be the wrong architecture.** The checked-in `bin/gmux` symlink can point at a macOS binary; on a Linux host gmuxd's session-launch fails with `exec format error`. `scripts/build.sh` repoints the symlink to the host arch, so run a build first, or use `just dev` which always builds `bin/gmux-dev` (CLI) and `bin/gmuxd-dev` (daemon) from source before starting.

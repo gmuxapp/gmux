@@ -176,6 +176,9 @@ pnpm install      # JS dependencies
 ./dev              # start all services with watch/HMR
 ```
 
+For frontend iteration, sandbox usage, and session URL conventions see
+[docs/running-dev-frontend.md](docs/running-dev-frontend.md).
+
 ### Monorepo layout
 
 ```mermaid
