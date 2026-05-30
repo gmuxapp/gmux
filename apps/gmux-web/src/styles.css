@@ -887,35 +887,61 @@ body {
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px 12px;
-  border-bottom: 1px solid var(--border);
+/* Settings modal: fixed-size panel with a side tab rail. Dimensions are
+   fixed so switching tabs / changing content count never resizes the
+   panel; the body scrolls within. */
+.settings-modal {
+  position: relative;
+  flex-direction: row;
+  width: 640px;
+  height: 540px;
+  overflow: hidden;
+}
+
+/* Single close button, pinned to the panel's top-right. It lands on the
+   main-pane header on desktop and on the top tab strip on mobile,
+   without needing a duplicate per layout. */
+.settings-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+}
+
+.settings-rail {
   flex-shrink: 0;
-}
-
-.modal-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-/* Settings tab bar (Projects / Hosts). */
-.settings-tabs {
+  width: 156px;
   display: flex;
-  gap: 4px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 10px;
+  border-right: 1px solid var(--border);
+  background: oklch(0% 0 0 / 0.12);
 }
+
+.settings-rail-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding: 0 8px;
+  margin-bottom: 8px;
+}
+
 .settings-tab {
+  display: block;
+  width: 100%;
+  text-align: left;
   background: none;
   border: none;
   color: var(--text-muted);
   font-size: 14px;
   font-weight: 600;
-  padding: 4px 8px;
+  padding: 7px 8px;
   border-radius: 6px;
   cursor: pointer;
+  white-space: nowrap;
   transition: color 0.1s, background 0.1s;
 }
 .settings-tab:hover {
@@ -925,6 +951,58 @@ body {
 .settings-tab.active {
   color: var(--text);
   background: var(--bg-active);
+}
+
+.settings-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-main-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* extra right padding reserves space for the pinned close button */
+  padding: 14px 48px 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.settings-main-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Narrow viewports: stack the rail on top as a horizontal,
+   side-to-side scrollable strip of tabs. */
+@media (max-width: 560px) {
+  .settings-modal {
+    flex-direction: column;
+    width: 480px;
+  }
+  .settings-rail {
+    width: auto;
+    flex-direction: row;
+    gap: 4px;
+    /* right padding clears the pinned close button */
+    padding: 8px 46px 8px 10px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .settings-rail::-webkit-scrollbar { display: none; }
+  .settings-rail-title { display: none; }
+  .settings-tab {
+    width: auto;
+    flex-shrink: 0;
+  }
+  /* On mobile the top tab strip already shows the current page, so the
+     title row is redundant — drop it entirely. */
+  .settings-main-header { display: none; }
 }
 
 /* Hosts roster (read-only). */
