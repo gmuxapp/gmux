@@ -469,7 +469,13 @@ export function Sidebar({
   const currentFolder = activeProjectSlug
     ? foldersVal.find(f => f.path === activeProjectSlug)
     : null
-  const fileTreeCwd = currentFolder?.launchCwd ?? null
+  const fileTreeCwd =
+    currentFolder?.launchCwd
+    // Fallback for projects matched by remote rule (no path rule): use an alive session's
+    // workspace_root or cwd so the file tree still renders.
+    ?? currentFolder?.sessions.find(s => s.alive && s.workspace_root)?.workspace_root
+    ?? currentFolder?.sessions.find(s => s.alive && s.cwd)?.cwd
+    ?? null
 
   // ── Draggable split ───────────────────────────────────────────────────
   const [splitFraction, setSplitFraction] = useState<number>(loadSplit)

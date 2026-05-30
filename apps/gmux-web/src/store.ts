@@ -297,6 +297,7 @@ export const folders = computed(() =>
  */
 export const view = computed((): View | null => {
   if (!sessionsLoaded.value) return null
+  if (!projectsLoaded.value) return null  // prevent URL normalisation before projects load
   return resolveViewFromPath(urlPath.value, projects.value, filteredSessions.value, health.value?.home_dir)
 })
 
@@ -316,10 +317,17 @@ export const selected = computed(() => {
 })
 
 /** Project slug when the view is a project hub. */
-export const currentProjectSlug = computed(() => {
+export const currentProjectSlug = computed((): string | null => {
+  // Primary: use the fully-resolved view (requires both sessionsLoaded + projectsLoaded).
   const v = view.value
-  if (v?.kind === 'project' || v?.kind === 'diff-viewer') {
-    return v.projectSlug
+  if (v?.kind === 'project' || v?.kind === 'diff-viewer') return v.projectSlug
+  // Fallback: before sessions load, derive the slug directly from the URL so
+  // the sidebar file tree can render as soon as projects.value is available.
+  // This avoids a race where fetchSessions is slow but fetchProjects is fast.
+  const match = urlPath.value.match(/^\/([^/?#]+)\/?$/)
+  if (match) {
+    const slug = match[1]
+    if (projects.value.some(p => p.slug === slug)) return slug
   }
   return null
 })

@@ -279,6 +279,11 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
   // Tracks whether the next rename commit is a new-item creation.
   const pendingCreateTypeRef = useRef<'file' | 'dir' | null>(null)
 
+  // Guard: suppress onSelectionChange callbacks that fire when resetPaths()
+  // restores the previously-selected path after a reload (every 2.5s poll).
+  // Without this guard, apiOpen fires on every polling cycle.
+  const resettingPathsRef = useRef(false)
+
   // Error banner with auto-dismiss.
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const showError = useCallback((msg: string) => {
@@ -301,6 +306,10 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
     try {
       const all = await apiWalkPaths(projectSlugRef.current)
       const filtered = filterPaths(all, showHiddenRef.current)
+      // Set the guard before resetPaths so onSelectionChange ignores the
+      // automatic path-restoration that fires in the same tick.
+      resettingPathsRef.current = true
+      setTimeout(() => { resettingPathsRef.current = false }, 0)
       model.resetPaths(filtered)
     } catch (e) {
       showErrorRef.current(String(e))
@@ -332,7 +341,7 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
 
   const { model } = useFileTree({
     paths: [],
-    initialExpansion: 1,
+    initialExpansion: 0,  // start collapsed; auto-expanding races with expand/collapse tests
     search: true,
 
     dragAndDrop: {
@@ -384,6 +393,9 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
     },
 
     onSelectionChange: (selectedPaths: readonly string[]) => {
+      // Ignore auto-selections triggered by resetPaths() restoring the
+      // previously selected path — only act on explicit user interactions.
+      if (resettingPathsRef.current) return
       const path = selectedPaths[0]
       if (!path || path.endsWith('/')) return
       const slug = projectSlugRef.current
@@ -433,6 +445,9 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
   const handleAddStart = useCallback((type: 'file' | 'dir') => {
     const placeholder = type === 'dir' ? '__new-folder__/' : '__new-file__'
     pendingCreateTypeRef.current = type
+    // Suppress the auto-selection that tree.add()+startRenaming() triggers.
+    resettingPathsRef.current = true
+    setTimeout(() => { resettingPathsRef.current = false }, 0)
     model.add(placeholder)
     model.startRenaming(placeholder, { removeIfCanceled: true })
   }, [model])
