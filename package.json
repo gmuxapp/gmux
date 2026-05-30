@@ -15,9 +15,23 @@
   },
   "pnpm": {
     "supportedArchitectures": {
-      "os": ["darwin", "linux", "current"],
-      "cpu": ["arm64", "x64", "current"],
-      "libc": ["glibc", "current"]
+      "os": [
+        "darwin",
+        "linux",
+        "current"
+      ],
+      "cpu": [
+        "arm64",
+        "x64",
+        "current"
+      ],
+      "libc": [
+        "glibc",
+        "current"
+      ]
+    },
+    "patchedDependencies": {
+      "@wterm/ghostty@0.3.0": "patches/@wterm__ghostty@0.3.0.patch"
     }
   },
   "devDependencies": {

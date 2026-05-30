@@ -1,0 +1,25 @@
+diff --git a/dist/ghostty-core.js b/dist/ghostty-core.js
+index d67f6034bf45572e90600566fa886a2d6f0b6f0d..03be0f18736b7394cb285b3a40d387306896c084 100644
+--- a/dist/ghostty-core.js
++++ b/dist/ghostty-core.js
+@@ -191,14 +191,17 @@ export class GhosttyCore {
+         const view = new DataView(this.wasm.exports.memory.buffer, bufPtr, lineSize);
+         const cell = parseCell(view, col * CELL_BYTES);
+         freeBuffer(this.wasm, bufPtr, lineSize);
+-        return {
++        const result = {
+             char: cell.codepoint || 32,
+             fg: DEFAULT_COLOR,
+             bg: DEFAULT_COLOR,
+             flags: cell.flags,
+-            fgRgb: packRgb(cell.fgR, cell.fgG, cell.fgB),
+-            bgRgb: packRgb(cell.bgR, cell.bgG, cell.bgB),
+         };
++        if (cell.colorFlags & 1)
++            result.fgRgb = packRgb(cell.fgR, cell.fgG, cell.fgB);
++        if (cell.colorFlags & 2)
++            result.bgRgb = packRgb(cell.bgR, cell.bgG, cell.bgB);
++        return result;
+     }
+     getScrollbackLineLen(offset) {
+         const maxCols = this._cols;
