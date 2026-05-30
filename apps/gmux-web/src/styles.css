@@ -1688,6 +1688,17 @@ body {
   box-shadow: none;
 }
 
+/* wterm's renderer sets the .term-grid container's inline background to the
+   bottom-right cell's colour (a heuristic for apps that paint a uniform
+   full-screen background). TUIs like pi colour their footer/status bottom
+   line, so that single cell's colour bleeds across the whole terminal behind
+   the otherwise-transparent rows. Force the grid container transparent so it
+   inherits the terminal background; real per-row/per-cell backgrounds still
+   paint normally. */
+.terminal-container.wterm .term-grid {
+  background: transparent !important;
+}
+
 
 /* ── Empty State ── */
 
