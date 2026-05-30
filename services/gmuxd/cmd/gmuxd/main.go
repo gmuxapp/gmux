@@ -432,8 +432,15 @@ func startBackground(stdout, stderr io.Writer) int {
 	cmd.Stdout = nil
 	cmd.Stderr = logFile
 	cmd.Stdin = nil
-	// Strip GMUX_* env vars so the daemon doesn't inherit session identity.
+	// Strip GMUX_* session-identity vars so the daemon doesn't inherit the
+	// launching session's socket, adapter, or session ID. Preserve
+	// GMUX_CONFIG_DIR so a dev-server.sh invocation can point the daemon at
+	// an isolated config directory (e.g. ~/.local/state/gmux-dev/config/gmux).
+	configDir := os.Getenv("GMUX_CONFIG_DIR")
 	cmd.Env = filterEnvPrefix(os.Environ(), "GMUX_")
+	if configDir != "" {
+		cmd.Env = append(cmd.Env, "GMUX_CONFIG_DIR="+configDir)
+	}
 
 	if err := cmd.Start(); err != nil {
 		logFile.Close()

@@ -42,6 +42,42 @@ else
   DEV_TS_HOSTNAME="gmux-dev"
 fi
 
+# ── Tear down any previous instance on these ports ──
+#
+# Kill stale Vite and gmuxd processes that would block port reuse.
+# `gmuxd-dev start` handles stopping a running daemon via its socket, but
+# Vite has no such mechanism — if a previous dev-server.sh left a Vite
+# process behind (e.g. after Ctrl+C didn't propagate), it holds DEV_VITE_PORT
+# and the new Vite falls back to a different port, breaking the daemon proxy.
+
+echo "→ Tearing down any previous $INSTANCE_NAME instance..."
+
+# Stop gmuxd via its socket (graceful; no-op if not running).
+if [[ -S "${XDG_STATE_HOME:-$HOME/.local/state}/$INSTANCE_NAME/state/gmux/gmuxd.sock" ]]; then
+  "$DEV_BIN_DIR/gmuxd-dev" stop 2>/dev/null || true
+fi
+
+# Kill any process listening on our ports.
+_kill_port() {
+  local port="$1"
+  local pid
+  pid=$(lsof -ti :"$port" 2>/dev/null) || return 0
+  echo "  killing pid $pid (port $port)"
+  kill "$pid" 2>/dev/null || true
+  # Wait up to 3 s for the port to free.
+  local i
+  for i in 1 2 3; do
+    sleep 1
+    lsof -ti :"$port" >/dev/null 2>&1 || return 0
+  done
+  kill -9 "$pid" 2>/dev/null || true
+}
+_kill_port "$DEV_VITE_PORT"
+_kill_port "$DEV_PORT"
+
+# Clear the Vite dep-optimisation cache so a config change always takes effect.
+rm -rf "$ROOT/apps/gmux-web/node_modules/.vite"
+
 # ── Prepare directories and config ──
 
 mkdir -p "$DEV_SOCKET_DIR" "$DEV_STATE_DIR/config/gmux" "$DEV_STATE_DIR/state" "$DEV_STATE_DIR/pi-agent"
@@ -85,6 +121,7 @@ fi
 # ── Shared env ──
 
 export GMUX_SOCKET_DIR="$DEV_SOCKET_DIR"
+export GMUX_CONFIG_DIR="$DEV_STATE_DIR/config/gmux"
 export XDG_CONFIG_HOME="$DEV_STATE_DIR/config"
 export XDG_STATE_HOME="$DEV_STATE_DIR/state"
 export GMUXD_DEV_PROXY="http://localhost:$DEV_VITE_PORT"
@@ -143,11 +180,12 @@ watchexec \
     (cd '$ROOT/cli/gmux' && go build -o '$DEV_BIN_DIR/gmux-dev' ./cmd/gmux) &&
     (cd '$ROOT/services/gmuxd' && go build -o '$DEV_BIN_DIR/gmuxd-dev' ./cmd/gmuxd) &&
     echo '→ Restarting gmuxd-dev ($INSTANCE_NAME)...' &&
-    GMUX_SOCKET_DIR=$DEV_SOCKET_DIR \\
-    XDG_CONFIG_HOME='$DEV_STATE_DIR/config' \\
-    XDG_STATE_HOME='$DEV_STATE_DIR/state' \\
-    GMUXD_DEV_PROXY='http://localhost:$DEV_VITE_PORT' \\
-    PI_CODING_AGENT_DIR='$DEV_STATE_DIR/pi-agent' \\
+    GMUX_SOCKET_DIR=$DEV_SOCKET_DIR \
+    GMUX_CONFIG_DIR='$DEV_STATE_DIR/config/gmux' \
+    XDG_CONFIG_HOME='$DEV_STATE_DIR/config' \
+    XDG_STATE_HOME='$DEV_STATE_DIR/state' \
+    GMUXD_DEV_PROXY='http://localhost:$DEV_VITE_PORT' \
+    PI_CODING_AGENT_DIR='$DEV_STATE_DIR/pi-agent' \
     '$DEV_BIN_DIR/gmuxd-dev' start
   " &
 PIDS+=($!)

@@ -1,0 +1,20 @@
+diff --git a/package.json b/package.json
+index 2b6a69c459bebf582781ccff0140e330c83c4068..a40905a82b9fdd376b4f7efa8561e3742c55bd3f 100644
+--- a/package.json
++++ b/package.json
+@@ -51,11 +51,14 @@
+     "./worker/worker-portable.js": {
+       "types": "./dist/worker/worker-portable.d.ts",
+       "import": "./dist/worker/worker-portable.js"
++    },
++    "./style.js": {
++      "import": "./dist/style.js"
+     }
+   },
+   "scripts": {
+     "build": "tsdown --clean",
+-    "dev": "echo 'Watching for changes…' && tsdown --watch --log-level error",
++    "dev": "echo 'Watching for changes\u2026' && tsdown --watch --log-level error",
+     "benchmark:parse-merge-conflict": "bun run ./scripts/benchmarkParseMergeConflictDiffFromFile.ts",
+     "test": "bun test",
+     "tsc": "tsgo --noEmit --pretty",

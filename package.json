@@ -31,7 +31,8 @@
       ]
     },
     "patchedDependencies": {
-      "@wterm/ghostty@0.3.0": "patches/@wterm__ghostty@0.3.0.patch"
+      "@wterm/ghostty@0.3.0": "patches/@wterm__ghostty@0.3.0.patch",
+      "@pierre/diffs@1.2.4": "patches/@pierre__diffs@1.2.4.patch"
     }
   },
   "devDependencies": {
