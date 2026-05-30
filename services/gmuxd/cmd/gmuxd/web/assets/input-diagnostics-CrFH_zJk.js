@@ -1,0 +1,1 @@
+import{t as e}from"./index-BXad7FAE.js";function t(){return e(`div`,{style:{padding:`2rem`,color:`var(--text)`},children:[e(`h1`,{style:{marginBottom:`1rem`},children:`Input Diagnostics`}),e(`p`,{style:{color:`var(--text-secondary)`},children:`Temporarily unavailable during wterm migration.`})]})}export{t as default};

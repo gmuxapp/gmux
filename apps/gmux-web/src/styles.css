@@ -1515,7 +1515,7 @@ body {
   flex: 1;
   min-height: 0;
   position: relative;
-  overflow: auto;
+  overflow: hidden;
   background: #0f141a;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -1697,6 +1697,27 @@ body {
    paint normally. */
 .terminal-container.wterm .term-grid {
   background: transparent !important;
+}
+
+/* wterm's renderer also sets rowEl.style.background and rowEl.style.boxShadow
+   on each full-width row based on the last cell's colour (same heuristic as the
+   grid-level background above). Clear both so the row never floods with a single
+   cell's colour; individual <span> cells still paint their own backgrounds. */
+.terminal-container.wterm .term-row {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Style wterm's own scrollbar (shown when scrollback content exists). */
+.terminal-container.wterm {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.terminal-container.wterm::-webkit-scrollbar { width: 6px; height: 6px; }
+.terminal-container.wterm::-webkit-scrollbar-track { background: transparent; }
+.terminal-container.wterm::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
 }
 
 
