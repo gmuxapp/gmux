@@ -122,4 +122,63 @@ The mock (`?mock`) mode is useful for basic UI rendering checks, but it hides in
 | `VITE_DEV_PROXY_HOST` | `127.0.0.1` | gmuxd hostname for vite proxy |
 | `VITE_DEV_PROXY_PORT` | `8790` | gmuxd port for vite proxy |
 | `VITE_DEV_TOKEN` | _(empty)_ | Bearer token forwarded to gmuxd (for auth-enabled instances) |
+| `VITE_DEV_TOKEN` | _(empty)_ | Bearer token forwarded to gmuxd (for auth-enabled instances) |
 | `VERSION` | `dev-<git-hash>` | Version baked into the bundle (set automatically by `just dev`) |
+
+---
+
+## Making sessions reachable in the UI (projects.json)
+
+A session only becomes openable from the home page or sidebar if it belongs to a configured project. The frontend computes a session URL with `navigateToSession()`, which calls `matchSession()` against the configured projects in `projects.json`. A session whose `cwd`/`workspace_root` matches no project lands in an unreachable "discovered" bucket: it shows in counts but has no URL, so clicking and `window.__gmuxNavigateToSession(id)` both do nothing.
+
+`projects.json` lives at `$XDG_STATE_HOME/gmux/projects.json` (default `~/.local/state/gmux/projects.json`). Schema reference: https://gmux.app/reference/projects-json/. The shape is:
+
+```json
+{
+  "version": 2,
+  "items": [
+    { "slug": "home", "match": [{ "path": "~", "exact": true }] },
+    { "slug": "workspace", "match": [{ "path": "~/james-agent-workspace" }] }
+  ]
+}
+```
+
+Path rules match the directory and (unless `exact: true`) every subdirectory, so one non-exact rule on the workspace root covers the gmux repo and every other project inside it. Remote rules (`{ "remote": "github.com/org/repo" }`) match by normalized git remote regardless of path.
+
+`scripts/dev-server.sh` seeds this file automatically the first time it runs, with a `workspace` project pointing at the agent workspace that contains the repo. Override the path for other layouts:
+
+```bash
+GMUX_DEV_WORKSPACE=/path/to/your/workspace just dev
+```
+
+The seed only writes when the file is absent, so gmuxd keeps managing it (and its per-project `sessions` list) across restarts. Delete the file to re-seed. The e2e suite seeds its own equivalent in `e2e/global-setup.ts`.
+
+---
+
+## Driving a session from the browser (debug hooks)
+
+gmuxd serves the frontend with cookie auth. To open it directly (not through a vite proxy that injects a token), set the cookie once:
+
+```bash
+# auth-token lives under the daemon's state dir: $XDG_STATE_HOME/gmux/auth-token
+# (just dev uses $HOME/.local/state/gmux-dev/state). Use the matching port.
+TOKEN=$(cat "$XDG_STATE_HOME/gmux/auth-token")
+open "http://localhost:8791/auth/login?token=$TOKEN"
+```
+
+The running app exposes these globals on `window`, useful from devtools or an automated browser:
+
+| Hook | Purpose |
+|---|---|
+| `__gmuxNavigateToSession(id)` | Route to a session by id. Returns `true` only once the session and its project have loaded, so poll it. Returns `false` if the session matches no configured project (see projects.json above). |
+| `__gmuxTerm` | The live `WTerm` instance. `__gmuxTerm.write(new TextEncoder().encode("..."))` injects bytes into the renderer. |
+| `__gmuxInject(b64)` | Write base64-encoded bytes into the real terminal (live sessions only). |
+| `__gmuxDiag()` | Sync diagnostics (scrollback bytes, ws state, etc.). |
+
+---
+
+## Known dev issues
+
+**Vite dev server can fail to resolve `@pierre/diffs`.** Under Vite 8 the package's internal `import "../style.js"` is rejected because `dist/style.js` is not listed in the package `exports` map, which crashes the whole app with a `[plugin:builtin:vite-resolve]` overlay. The production build (`vite build`, used by `scripts/build.sh` and the e2e suite) is unaffected, so develop against the embedded build (rebuild to see changes) until this is resolved upstream or worked around in `vite.config.ts`.
+
+**`bin/gmux` may be the wrong architecture.** The checked-in `bin/gmux` symlink can point at a macOS binary; on a Linux host gmuxd's UI session-launch then fails with `exec format error`. `scripts/build.sh` repoints the symlink to the host arch, so run a build first, or launch sessions with the freshly built `bin/gmux-dev`.

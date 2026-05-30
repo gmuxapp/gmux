@@ -54,6 +54,34 @@ enabled = true
 hostname = "$DEV_TS_HOSTNAME"
 EOF
 
+# Seed projects.json so dev sessions launched in the workspace are reachable
+# in the web UI. Without a project whose match rules cover the session's cwd,
+# navigateToSession() can't compute a URL and the session never appears as
+# openable from the home page or sidebar — it just lands in an unreachable
+# "discovered" bucket. (e2e/global-setup.ts seeds an equivalent file for the
+# same reason.)
+#
+# WORKSPACE_DIR is the agent workspace that contains this repo; the path rule
+# is non-exact, so every session under it (the gmux repo, other projects,
+# scratch dirs) is matched into one navigable "workspace" project.
+#
+# Only seed when absent so gmuxd can keep managing the file (e.g. its
+# per-project `sessions` list) across restarts. Delete it to re-seed.
+WORKSPACE_DIR="${GMUX_DEV_WORKSPACE:-$HOME/james-agent-workspace}"
+GMUX_STATE_DIR="$DEV_STATE_DIR/state/gmux"
+mkdir -p "$GMUX_STATE_DIR"
+if [[ ! -f "$GMUX_STATE_DIR/projects.json" ]]; then
+  cat > "$GMUX_STATE_DIR/projects.json" << EOF
+{
+  "version": 2,
+  "items": [
+    { "slug": "home", "match": [{ "path": "~", "exact": true }] },
+    { "slug": "workspace", "match": [{ "path": "$WORKSPACE_DIR" }] }
+  ]
+}
+EOF
+fi
+
 # ── Shared env ──
 
 export GMUX_SOCKET_DIR="$DEV_SOCKET_DIR"
