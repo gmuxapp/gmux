@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { sessions, sessionsLoaded, projects, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap, sessionStaleness, peers, peerAppearance, urlPath, selectedId, navigateToSession, setNavigate } from './store'
+import { sessions, sessionsLoaded, projects, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap, sessionStaleness, peers, peerAppearance, urlPath, selectedId, navigateToSession, setNavigate, currentProjectSlug } from './store'
 import type { Session } from './types'
 import type { ProjectItem } from './types'
 
@@ -372,5 +372,29 @@ describe('peerAppearance', () => {
       { name: 'alpha', url: '', status: 'connected', session_count: 0 },
     ]
     expect(peerAppearance.value.get('alpha')!.color).toBe(color1)
+  })
+})
+
+describe('currentProjectSlug', () => {
+  beforeEach(() => {
+    sessionsLoaded.value = true
+    projects.value = [
+      { slug: 'gmux', match: [{ path: '/home/user/gmux' }] } as any,
+    ]
+  })
+
+  it('returns slug for project view', () => {
+    urlPath.value = '/gmux'
+    expect(currentProjectSlug.value).toBe('gmux')
+  })
+
+  it('returns slug for diff-viewer view', () => {
+    urlPath.value = '/gmux/_diff/' + encodeURIComponent('/home/user/gmux')
+    expect(currentProjectSlug.value).toBe('gmux')
+  })
+
+  it('returns null when no view matches', () => {
+    urlPath.value = '/'
+    expect(currentProjectSlug.value).toBeNull()
   })
 })

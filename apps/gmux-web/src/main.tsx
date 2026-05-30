@@ -755,7 +755,7 @@ function App() {
         ))}
 
         {/* Non-terminal overlay: shown when the active view isn't a live terminal */}
-        {!activeIsTerminal && (
+        {!activeIsTerminal && viewVal?.kind !== 'diff-viewer' && (
           selectedVal && !selectedVal.alive && termOpts && !USE_MOCK ? (
             <ReplayView
               session={selectedVal}

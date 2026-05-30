@@ -3,13 +3,15 @@
  *
  * Fetches GET /v1/git/{slug}/diff?cwd=<path>, parses the patch with
  * @pierre/diffs's `parsePatchFiles`, and renders each file diff using
- * the vanilla JS `FileDiff` class (avoids Preact compat risk).
+ * the React `FileDiff` component from @pierre/diffs/react (aliased to
+ * preact/compat via @preact/preset-vite).
  */
 
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { closeDiffView } from './store'
-import { parsePatchFiles, FileDiff } from '@pierre/diffs'
-import type { FileDiffOptions } from '@pierre/diffs'
+import { parsePatchFiles } from '@pierre/diffs'
+import { FileDiff } from '@pierre/diffs/react'
+import type { FileDiffMetadata, FileDiffOptions } from '@pierre/diffs'
 
 // ── Types ──
 
@@ -18,20 +20,26 @@ interface DiffPanelProps {
   cwd: string
 }
 
+// ── Diff options (stable reference — defined outside component) ──
+
+const DIFF_OPTIONS: FileDiffOptions<undefined> = {
+  theme: 'dark-plus',
+  diffStyle: 'unified',
+  hunkSeparators: 'line-info',
+}
+
 // ── Component ──
 
 export function DiffPanel({ projectSlug, cwd }: DiffPanelProps) {
-  const [patch, setPatch] = useState<string | null>(null)
+  const [files, setFiles] = useState<FileDiffMetadata[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const containerRef = useRef<HTMLDivElement>(null)
-  // Track mounted FileDiff instances for cleanup.
-  const instancesRef = useRef<FileDiff[]>([])
 
   // Fetch the diff from the backend.
   useEffect(() => {
     setLoading(true)
     setError(null)
+    setFiles(null)
     const url = `/v1/git/${encodeURIComponent(projectSlug)}/diff?cwd=${encodeURIComponent(cwd)}`
     fetch(url)
       .then(async res => {
@@ -39,7 +47,12 @@ export function DiffPanel({ projectSlug, cwd }: DiffPanelProps) {
         return res.text()
       })
       .then(text => {
-        setPatch(text)
+        if (text.trim() === '') {
+          setFiles([])
+        } else {
+          const patches = parsePatchFiles(text, 'gmux-diff')
+          setFiles(patches.flatMap(p => p.files))
+        }
         setLoading(false)
       })
       .catch(err => {
@@ -48,49 +61,7 @@ export function DiffPanel({ projectSlug, cwd }: DiffPanelProps) {
       })
   }, [projectSlug, cwd])
 
-  // Render FileDiff instances into the container once patch is available.
-  useEffect(() => {
-    if (!containerRef.current || patch === null) return
-
-    // Destroy previous instances.
-    for (const inst of instancesRef.current) {
-      const el = (inst as any)._fileContainer as HTMLElement | undefined
-      el?.remove()
-    }
-    instancesRef.current = []
-    containerRef.current.innerHTML = ''
-
-    if (patch.trim() === '') return // no changes
-
-    const patches = parsePatchFiles(patch, 'gmux-diff')
-    const files = patches.flatMap(p => p.files)
-
-    for (const fileDiff of files) {
-      const fileContainer = document.createElement('div')
-      fileContainer.className = 'diff-file-container'
-      containerRef.current.appendChild(fileContainer)
-
-      const options: FileDiffOptions<undefined> = {
-        theme: 'dark-plus',
-        diffStyle: 'unified',
-        hunkSeparators: 'line-info',
-      }
-      const inst = new FileDiff(options)
-      ;(inst as any)._fileContainer = fileContainer
-      instancesRef.current.push(inst)
-      inst.render({ fileDiff, fileContainer })
-    }
-
-    return () => {
-      for (const inst of instancesRef.current) {
-        const el = (inst as any)._fileContainer as HTMLElement | undefined
-        el?.remove()
-      }
-      instancesRef.current = []
-    }
-  }, [patch])
-
-  const shortCwd = cwd.replace(/^\/home\/[^/]+/, '~')
+  const shortCwd = cwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
 
   return (
     <div class="diff-panel">
@@ -115,11 +86,19 @@ export function DiffPanel({ projectSlug, cwd }: DiffPanelProps) {
         {error && (
           <div class="diff-panel-state diff-panel-error">Error: {error}</div>
         )}
-        {!loading && !error && patch?.trim() === '' && (
+        {!loading && !error && files?.length === 0 && (
           <div class="diff-panel-state">No changes (working tree is clean).</div>
         )}
-        {!loading && !error && patch && patch.trim() !== '' && (
-          <div class="diff-files" ref={containerRef} />
+        {!loading && !error && files && files.length > 0 && (
+          <div class="diff-files">
+            {files.map(fileDiff => (
+              <FileDiff
+                key={fileDiff.name ?? fileDiff.prevName ?? String(Math.random())}
+                fileDiff={fileDiff}
+                options={DIFF_OPTIONS}
+              />
+            ))}
+          </div>
         )}
       </div>
     </div>

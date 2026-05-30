@@ -316,9 +316,13 @@ export const selected = computed(() => {
 })
 
 /** Project slug when the view is a project hub. */
-export const currentProjectSlug = computed(() =>
-  view.value?.kind === 'project' ? view.value.projectSlug : null,
-)
+export const currentProjectSlug = computed(() => {
+  const v = view.value
+  if (v?.kind === 'project' || v?.kind === 'diff-viewer') {
+    return v.projectSlug
+  }
+  return null
+})
 
 /** Dot state for the mobile hamburger: summarizes background session activity. */
 export type DotState = 'working' | 'error' | 'unread' | 'active' | 'fading' | 'none'
