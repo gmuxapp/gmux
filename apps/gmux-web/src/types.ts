@@ -165,6 +165,13 @@ export interface PeerInfo {
    * stamped by the parent and bucket into local sidebar folders.
    */
   local?: boolean
+  /**
+   * How the peer was added — drives the Hosts-tab grouping. One of
+   * 'tailscale' (auto-discovered on the tailnet), 'devcontainer'
+   * (auto-discovered Docker container), or 'manual' (peers.json /
+   * POST /v1/peers). Absent on older daemons.
+   */
+  source?: 'tailscale' | 'devcontainer' | 'manual'
 }
 
 /**

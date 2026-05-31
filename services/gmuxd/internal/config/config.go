@@ -50,7 +50,19 @@ type PeerConfig struct {
 	// outgoing SSE stream; network peer sessions are not. Set
 	// programmatically by the devcontainer watcher.
 	Local bool
+
+	// Source records how the peer was added, for UI grouping only (it
+	// has no effect on connection behavior). One of SourceTailscale,
+	// SourceDevcontainer, or SourceManual.
+	Source string
 }
+
+// Peer sources (see PeerConfig.Source).
+const (
+	SourceTailscale    = "tailscale"    // auto-discovered on the tailnet
+	SourceDevcontainer = "devcontainer" // auto-discovered Docker devcontainer
+	SourceManual       = "manual"       // added via peers.json / POST /v1/peers
+)
 
 // DiscoveryConfig controls automatic peer discovery.
 type DiscoveryConfig struct {

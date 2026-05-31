@@ -114,6 +114,11 @@ type PeerInfo struct {
 	// which then bucket into the parent's local folders. See ADR
 	// 0002 amendment.
 	Local bool `json:"local,omitempty"`
+	// Source records how the peer was added: "tailscale" (auto-discovered
+	// on the tailnet), "devcontainer" (auto-discovered Docker container),
+	// or "manual" (peers.json / POST /v1/peers). Used by the UI to group
+	// hosts; empty for the synthesized self row.
+	Source string `json:"source,omitempty"`
 }
 
 // NamespaceID returns a store-key for a remote session: "originalID@peerName".

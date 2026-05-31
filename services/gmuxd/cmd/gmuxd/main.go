@@ -1052,7 +1052,7 @@ func serve(stderr io.Writer) int {
 			writeJSON(w, map[string]any{"peer": rec, "already_connected": true})
 			return
 		}
-		peerManager.AddPeer(config.PeerConfig{Name: rec.Name, URL: rec.URL, Token: rec.Token})
+		peerManager.AddPeer(config.PeerConfig{Name: rec.Name, URL: rec.URL, Token: rec.Token, Source: config.SourceManual})
 		log.Printf("peering: connected to %s (%s)", rec.Name, rec.URL)
 		writeJSON(w, map[string]any{"peer": rec})
 	})
@@ -2236,6 +2236,7 @@ func appendOfflinePeers(mgr *peering.Manager, disc *tsdiscovery.Watcher) []peeri
 				Name:   op.Name,
 				URL:    "https://" + op.FQDN,
 				Status: "offline",
+				Source: config.SourceTailscale,
 			})
 		}
 	}

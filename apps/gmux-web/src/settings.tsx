@@ -22,7 +22,7 @@ import {
   health, peers, sessions, connectHost, disconnectHost,
 } from './store'
 import { HostSuffix } from './host-suffix'
-import type { ProjectItem, DiscoveredProject, MatchRule, Folder } from './types'
+import type { ProjectItem, DiscoveredProject, MatchRule, Folder, PeerInfo } from './types'
 
 type SettingsTab = 'projects' | 'hosts'
 
@@ -291,11 +291,29 @@ export function SettingsModal({
 
 // ── Hosts tab (read-only roster) ──
 
+/** A peer's group in the Hosts tab. Uses the daemon's `source` when
+ *  present; falls back for older daemons that don't send it (a Local
+ *  peer is a devcontainer, anything else is treated as manual). */
+function peerSource(p: PeerInfo): 'tailscale' | 'devcontainer' | 'manual' {
+  if (p.source === 'tailscale' || p.source === 'devcontainer' || p.source === 'manual') {
+    return p.source
+  }
+  return p.local ? 'devcontainer' : 'manual'
+}
+
+/** Host groups, in display order. Each maps to a peerSource() bucket. */
+const HOST_GROUPS = [
+  { key: 'tailscale', label: 'Discovered on your tailnet' },
+  { key: 'devcontainer', label: 'Devcontainers' },
+  { key: 'manual', label: 'Added manually' },
+] as const
+
 /** Read-only roster of every host gmux knows about: the local host
- *  ("this host", synthesized from health), then the tailnet-discovered
- *  and configured peers. Reachability is already conveyed by the
- *  sidebar pill colors; this surface is the dig — version, session
- *  count, and the last error behind an unreachable host. */
+ *  ("this host", synthesized from health) first, then peers grouped by
+ *  how they were added — tailnet-discovered, devcontainers, and
+ *  manually connected. Reachability is already conveyed by the sidebar
+ *  pill colors; this surface is the dig — version, session count, and
+ *  the last error behind an unreachable host. */
 function HostsTab() {
   const h = health.value
   const peersVal = peers.value
@@ -337,7 +355,7 @@ function HostsTab() {
   return (
     <>
       <section class="mp-section">
-        <div class="mp-section-label">Hosts</div>
+        <div class="mp-section-label">This host</div>
         <div class="host-list">
           <HostRow
             self
@@ -346,20 +364,34 @@ function HostsTab() {
             sessionCount={localCount}
             version={h?.version}
           />
-          {peersVal.map(p => (
-            <HostRow
-              key={p.name}
-              name={p.name}
-              status={p.status}
-              sessionCount={p.session_count}
-              version={p.version}
-              lastError={p.last_error}
-              local={p.local}
-              onRemove={p.local ? undefined : () => handleRemove(p.name)}
-            />
-          ))}
         </div>
       </section>
+
+      {HOST_GROUPS.map(g => {
+        const rows = peersVal.filter(p => peerSource(p) === g.key)
+        if (rows.length === 0) return null
+        return (
+          <section class="mp-section" key={g.key}>
+            <div class="mp-section-label">{g.label}</div>
+            <div class="host-list">
+              {rows.map(p => (
+                <HostRow
+                  key={p.name}
+                  name={p.name}
+                  status={p.status}
+                  sessionCount={p.session_count}
+                  version={p.version}
+                  lastError={p.last_error}
+                  local={p.local}
+                  // Only manual peers can be disconnected; tailscale and
+                  // devcontainer peers are managed automatically.
+                  onRemove={g.key === 'manual' ? () => handleRemove(p.name) : undefined}
+                />
+              ))}
+            </div>
+          </section>
+        )
+      })}
 
       <section class="mp-section">
         <div class="mp-section-label">Connect to host</div>

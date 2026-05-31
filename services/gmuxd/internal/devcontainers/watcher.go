@@ -231,10 +231,11 @@ func (w *Watcher) scan(ctx context.Context) {
 		name := w.uniqueName(deriveName(r.c))
 		url := fmt.Sprintf("http://%s:%d", r.c.IP, gmuxdPort)
 		cfg := config.PeerConfig{
-			Name:  name,
-			URL:   url,
-			Token: r.token,
-			Local: true,
+			Name:   name,
+			URL:    url,
+			Token:  r.token,
+			Local:  true,
+			Source: config.SourceDevcontainer,
 		}
 		log.Printf("devcontainers: discovered %s (container %s, %s)", name, short(r.c.ID), url)
 		w.mgr.AddPeer(cfg)
