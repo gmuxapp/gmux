@@ -21,7 +21,6 @@ import {
   removeProject, removePeerReference, localHostLabel,
   health, peers, sessions,
 } from './store'
-import { PeerLabel } from './peer-label'
 import { HostSuffix } from './host-suffix'
 import type { ProjectItem, DiscoveredProject, MatchRule, Folder } from './types'
 
@@ -347,9 +346,7 @@ function HostRow({
     <div class="host-row">
       <div class="host-row-main">
         <span class={`host-status-dot${connected ? ' connected' : ''}`} aria-hidden="true" />
-        {self
-          ? <span class="host-self-tag">this host</span>
-          : <PeerLabel name={name} />}
+        {self && <span class="host-self-tag">this host</span>}
         <span class="host-name">
           {name}
           {local && <span class="host-local-tag">local</span>}
@@ -386,8 +383,8 @@ function reorder<T>(arr: readonly T[], from: number, to: number): T[] {
  *  management-only — drag-to-reorder and remove, no navigation, no
  *  launch. This is the single ordering that drives the sidebar; the
  *  list maps 1:1 to projects.json items[] (which buildProjectFolders
- *  preserves). Reference rows are distinguished by a leading colored
- *  PeerLabel chip. */
+ *  preserves). Reference rows are distinguished by the muted " · host"
+ *  suffix after the project name. */
 function ConfiguredProjectsSection({ configured }: { configured: ProjectItem[] }) {
   const foldersVal = folders.value
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -478,7 +475,6 @@ function ConfiguredProjectRow({
       onDragEnd={onDragEnd}
     >
       <span class="mp-configured-drag" title="Drag to reorder" aria-hidden="true">⠿</span>
-      {isReference && <PeerLabel name={project.peer!} />}
       <div class="mp-configured-info">
         <span class="mp-configured-name">
           {f.name}
@@ -516,10 +512,10 @@ function DiscoveredRow({
 
   return (
     <div class="mp-discovered-row" onClick={() => onAdd(project)}>
-      {project.peer && <PeerLabel name={project.peer} />}
       <div class="mp-project-info">
         <span class="mp-project-name">
           {project.suggested_slug}
+          <HostSuffix peer={project.peer ?? localHostLabel.value} local={!project.peer} />
           {project.active_count > 0 && (
             <span class="mp-active-badge">{project.active_count}</span>
           )}
@@ -566,9 +562,8 @@ function PeerReferencesSection({ configured }: { configured: ProjectItem[] }) {
             class="mp-discovered-row"
             onClick={() => addPeerReference(peer, slug)}
           >
-            <PeerLabel name={peer} />
             <div class="mp-project-info">
-              <span class="mp-project-name">{slug}</span>
+              <span class="mp-project-name">{slug}<HostSuffix peer={peer} /></span>
             </div>
             <span class="mp-add-label">+ Add</span>
           </div>
