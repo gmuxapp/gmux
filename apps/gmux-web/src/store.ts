@@ -493,9 +493,15 @@ export async function fetchProjects(): Promise<void> {
         discovered: json.data.discovered ?? [],
         unmatchedActiveCount: json.data.unmatched_active_count ?? 0,
       })
+    } else {
+      // Response arrived but indicated failure (e.g. auth error during dev).
+      // Still mark projects as loaded with empty state so the app doesn't
+      // hang forever waiting for projectsLoaded — view would never resolve.
+      projectsLoaded.value = true
     }
   } catch (err) {
     console.warn('Failed to fetch projects:', err)
+    projectsLoaded.value = true  // don't block the app on network failure
   }
 }
 

@@ -306,12 +306,16 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
     try {
       const all = await apiWalkPaths(projectSlugRef.current)
       const filtered = filterPaths(all, showHiddenRef.current)
+      if (filtered.length === 0 && all.length > 0) {
+        console.warn('[gmux] file-tree: walk returned', all.length, 'paths but all were filtered as hidden')
+      }
       // Set the guard before resetPaths so onSelectionChange ignores the
       // automatic path-restoration that fires in the same tick.
       resettingPathsRef.current = true
       setTimeout(() => { resettingPathsRef.current = false }, 0)
       model.resetPaths(filtered)
     } catch (e) {
+      console.error('[gmux] file-tree: walk failed for slug', projectSlugRef.current, e)
       showErrorRef.current(String(e))
     }
   }, [])
