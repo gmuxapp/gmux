@@ -32,7 +32,7 @@ devcontainers = true     # subscribe to Docker events, register gmux containers
 
 This host's name — what peers see in their UI and URLs — is **not** configured here. When Tailscale is enabled the name is your Tailscale machine name (owned and kept stable by Tailscale itself); otherwise it is the OS hostname. The first time the daemon joins a tailnet it requests `gmux-<hostname>`, and Tailscale keeps that name across restarts and container recreation. See [ADR 0007](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0007-host-identity-and-peer-urls.md).
 
-To seed a specific name at first registration — e.g. when running several daemons on one machine — set the `GMUXD_TS_HOSTNAME` environment variable (used verbatim; prefix it with `gmux-` to stay auto-discoverable). It only applies before the node is registered; afterward Tailscale owns the name.
+To seed a specific name at first registration — e.g. when running several daemons on one machine — set the `GMUXD_TS_HOSTNAME` environment variable (used verbatim). It only applies before the node is registered; afterward Tailscale owns the name.
 
 ## Connecting to other hosts
 
@@ -57,7 +57,7 @@ There is **no `[[peers]]` config**. Add a host you want to aggregate sessions fr
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `tailscale` | `boolean` | `true` | Discover other gmux instances on the tailnet via `WatchIPNBus`. Only active when `tailscale.enabled` is also true. |
+| `tailscale` | `boolean` | `true` | Discover other gmux instances on the tailnet via `WatchIPNBus`: every online tailnet device is probed, and any running gmuxd is added — regardless of its name. (The `gmux-`/`gmux` name only affects whether an *offline* peer is surfaced as a known-but-down host.) Only active when `tailscale.enabled` is also true. |
 | `devcontainers` | `boolean` | `true` | Subscribe to Docker events and register any container with the gmux devcontainer feature **and** the `devcontainer.local_folder` label as a peer. Skipped if the Docker CLI is not installed. |
 
 ## Strict validation

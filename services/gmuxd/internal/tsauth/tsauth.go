@@ -316,8 +316,9 @@ func loadOrSeedHostname(tsnetDir, seed string) string {
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
 // SeedFromHostname derives the first-registration tailscale name from the
-// OS hostname: "gmux-<slug>" so the node is both hostname-derived and
-// matches the tailnet discovery prefix ("gmux-*"). Falls back to "gmux"
+// OS hostname: "gmux-<slug>". The "gmux-" prefix keeps the node in the
+// "gmux-*" family used for the offline-peers hint (online discovery
+// probes every tailnet device regardless of name). Falls back to "gmux"
 // when the hostname has no usable characters. Callers may bypass this
 // with an explicit name (e.g. the GMUXD_TS_HOSTNAME override).
 func SeedFromHostname(osHostname string) string {
