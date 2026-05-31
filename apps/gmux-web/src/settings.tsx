@@ -19,7 +19,7 @@ import {
   projects, discovered, peerProjects, peerStatusByName,
   addProject, addPeerReference, folders, updateProjects,
   removeProject, removePeerReference, localHostLabel,
-  health, peers, sessions,
+  health, peers, sessions, connectHost, disconnectHost,
 } from './store'
 import { PeerLabel } from './peer-label'
 import { HostSuffix } from './host-suffix'
@@ -304,35 +304,101 @@ function HostsTab() {
   // PeerInfo.session_count for the synthesized self row.
   const localCount = sessions.value.filter(s => !s.peer).length
 
+  const [url, setUrl] = useState('')
+  const [token, setToken] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  const handleConnect = useCallback(async () => {
+    const u = url.trim()
+    if (!u) { setError('Enter a host URL.'); return }
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const { name, alreadyConnected } = await connectHost(u, token.trim())
+      setNotice(alreadyConnected ? `Already connected to ${name}.` : `Connected to ${name}.`)
+      setUrl(''); setToken('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not connect.')
+    } finally {
+      setBusy(false)
+    }
+  }, [url, token])
+
+  const handleRemove = useCallback(async (name: string) => {
+    setError(''); setNotice('')
+    try {
+      await disconnectHost(name)
+      setNotice(`Disconnected from ${name}.`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not disconnect.')
+    }
+  }, [])
+
   return (
-    <section class="mp-section">
-      <div class="mp-section-label">Hosts</div>
-      <div class="host-list">
-        <HostRow
-          self
-          name={h?.hostname ?? 'this host'}
-          status="connected"
-          sessionCount={localCount}
-          version={h?.version}
-        />
-        {peersVal.map(p => (
+    <>
+      <section class="mp-section">
+        <div class="mp-section-label">Hosts</div>
+        <div class="host-list">
           <HostRow
-            key={p.name}
-            name={p.name}
-            status={p.status}
-            sessionCount={p.session_count}
-            version={p.version}
-            lastError={p.last_error}
-            local={p.local}
+            self
+            name={h?.hostname ?? 'this host'}
+            status="connected"
+            sessionCount={localCount}
+            version={h?.version}
           />
-        ))}
-      </div>
-    </section>
+          {peersVal.map(p => (
+            <HostRow
+              key={p.name}
+              name={p.name}
+              status={p.status}
+              sessionCount={p.session_count}
+              version={p.version}
+              lastError={p.last_error}
+              local={p.local}
+              onRemove={p.local ? undefined : () => handleRemove(p.name)}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section class="mp-section">
+        <div class="mp-section-label">Connect to host</div>
+        <div class="mp-path-add-row">
+          <input
+            class="mp-filter-input mp-path-input"
+            type="text"
+            placeholder="https://gmux-host.tailnet.ts.net"
+            value={url}
+            onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setError(''); setNotice('') }}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleConnect() }}
+          />
+          <button class="mp-manual-btn" onClick={handleConnect} disabled={busy || url.trim() === ''}>
+            {busy ? 'Connecting…' : 'Connect'}
+          </button>
+        </div>
+        <input
+          class="mp-filter-input mp-host-token"
+          type="password"
+          placeholder="Access token (leave blank on your tailnet)"
+          value={token}
+          onInput={(e) => { setToken((e.target as HTMLInputElement).value) }}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleConnect() }}
+        />
+        {error ? (
+          <div class="mp-manual-error">{error}</div>
+        ) : notice ? (
+          <div class="mp-path-hint">{notice}</div>
+        ) : (
+          <div class="mp-path-hint">Connect to a host you reach by URL. On your tailnet, leave the token blank — it authenticates by identity.</div>
+        )}
+      </section>
+    </>
   )
 }
 
 function HostRow({
-  name, self, status, sessionCount, version, lastError, local,
+  name, self, status, sessionCount, version, lastError, local, onRemove,
 }: {
   name: string
   self?: boolean
@@ -341,6 +407,7 @@ function HostRow({
   version?: string
   lastError?: string
   local?: boolean
+  onRemove?: () => void
 }) {
   const connected = status === 'connected'
   return (
@@ -360,6 +427,13 @@ function HostRow({
           <span>{sessionCount} session{sessionCount === 1 ? '' : 's'}</span>
           {version && <><span class="host-sep">·</span><span>v{version}</span></>}
         </div>
+        {onRemove && (
+          <button
+            class="host-remove"
+            title="Disconnect host"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRemove() }}
+          >×</button>
+        )}
       </div>
       {!connected && lastError && (
         <div class="host-error">{lastError}</div>

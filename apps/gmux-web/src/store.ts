@@ -869,6 +869,37 @@ export async function addPeerReference(peer: string, slug: string): Promise<void
   await putProjects([...existing, { peer, slug }])
 }
 
+/** Connect to a host (ADR 0007): POST /v1/peers probes the target,
+ *  dedups by node_id, and persists it to peers.json. Returns the name
+ *  the peer was stored under (may be suffixed on a collision) and
+ *  whether it was already connected. Throws with the server message. */
+export async function connectHost(
+  url: string,
+  token: string,
+): Promise<{ name: string; alreadyConnected: boolean }> {
+  const resp = await fetch('/v1/peers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, token }),
+  })
+  const body = await resp.json().catch(() => ({})) as {
+    peer?: { name?: string }; already_connected?: boolean; error?: { message?: string }
+  }
+  if (!resp.ok) {
+    throw new Error(body.error?.message || `Could not connect (${resp.status})`)
+  }
+  return { name: body.peer?.name ?? '', alreadyConnected: !!body.already_connected }
+}
+
+/** Disconnect a manually-added host: DELETE /v1/peers/{name}. */
+export async function disconnectHost(name: string): Promise<void> {
+  const resp = await fetch(`/v1/peers/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({})) as { error?: { message?: string } }
+    throw new Error(body.error?.message || `Could not disconnect (${resp.status})`)
+  }
+}
+
 /** Remove a reference item from local projects.json. */
 export async function removePeerReference(peer: string, slug: string): Promise<void> {
   const filtered = projects.value.filter(p => !(p.peer === peer && p.slug === slug))
