@@ -1,7 +1,0 @@
-language: bash
-
-tasks:
-  test:
-    command: go test ./...
-  lint:
-    command: go vet ./...

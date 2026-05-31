@@ -46,38 +46,36 @@ jobs:
       - name: Build web
         run: cd apps/gmux-web && pnpm exec vite build
 
-  go:
-    name: Go (lint, build, test)
+  zig:
+    name: Zig (build, test)
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        optimize: [Debug, ReleaseSafe, ReleaseSmall]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
         with:
-          go-version: "1.26"
-
-      - name: Vet
-        run: |
-          go vet ./cli/gmux/...
-          go vet ./packages/adapter/...
-          go vet ./services/gmuxd/...
-        env:
-          GOWORK: ${{ github.workspace }}/go.work
+          version: 0.16.0
 
       - name: Build
         run: |
-          go build ./cli/gmux/...
-          go build ./services/gmuxd/...
-        env:
-          GOWORK: ${{ github.workspace }}/go.work
+          cd .grove/teak
+          zig build -Doptimize=${{ matrix.optimize }}
 
       - name: Test
+        if: matrix.optimize == 'Debug'
         run: |
-          go test ./cli/gmux/...
-          go test ./packages/adapter/...
-          go test ./services/gmuxd/...
-        env:
-          GOWORK: ${{ github.workspace }}/go.work
+          cd .grove/teak
+          zig build test
+
+      - name: Verify binaries
+        run: |
+          cd .grove/teak
+          zig-out/bin/gmux --help
+          zig-out/bin/gmuxd version
 
   e2e:
     name: E2E (Playwright)
@@ -92,9 +90,10 @@ jobs:
 
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
         with:
-          go-version: "1.26"
+          version: 0.16.0
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -103,7 +102,11 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Build gmux + frontend
-        run: ./scripts/build.sh
+        run: |
+          cd .grove/teak
+          zig build -Doptimize=ReleaseSafe
+          cp zig-out/bin/gmux ../
+          cp zig-out/bin/gmuxd ../
         env:
           GOWORK: ${{ github.workspace }}/go.work
 
