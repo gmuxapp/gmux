@@ -119,6 +119,29 @@ func TestSlugify(t *testing.T) {
 	}
 }
 
+// A failed disk write during Remove must roll back the in-memory slice,
+// so the store stays consistent with disk and a later retry can succeed
+// (rather than leaving the peer gone-from-memory but still on disk).
+func TestRemoveRollsBackOnSaveFailure(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(dir)
+	s.AddOrGet(Record{Name: "keep", URL: "http://a:8790", NodeID: "n"})
+
+	// Make peers.json unwritable so save() fails during the next Remove.
+	if err := os.Chmod(s.path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(s.path, 0o600) })
+
+	_, ok, err := s.Remove("keep")
+	if err == nil || ok {
+		t.Fatalf("expected save failure (ok=%v err=%v)", ok, err)
+	}
+	if recs := s.List(); len(recs) != 1 || recs[0].Name != "keep" {
+		t.Fatalf("record must be rolled back in memory, got %+v", recs)
+	}
+}
+
 func TestRemove(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := Open(dir)

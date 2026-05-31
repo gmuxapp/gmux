@@ -163,8 +163,16 @@ func (s *Store) Remove(name string) (Record, bool, error) {
 	defer s.mu.Unlock()
 	for i, r := range s.records {
 		if r.Name == name {
-			s.records = append(s.records[:i], s.records[i+1:]...)
+			// Build a fresh slice so the original backing array is left
+			// intact for rollback if the disk write fails (mirrors
+			// AddOrGet — keeps the in-memory store consistent with disk).
+			prev := s.records
+			next := make([]Record, 0, len(prev)-1)
+			next = append(next, prev[:i]...)
+			next = append(next, prev[i+1:]...)
+			s.records = next
 			if err := s.save(); err != nil {
+				s.records = prev
 				return Record{}, false, err
 			}
 			return r, true, nil
