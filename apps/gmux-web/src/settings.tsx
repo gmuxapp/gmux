@@ -241,10 +241,10 @@ export function SettingsModal({
 
             <div class="mp-discovered-scroll">
               {activeDiscovered.length > 0 && activeDiscovered.map(d => (
-                <DiscoveredRow key={d.suggested_slug} project={d} onAdd={handleAdd} />
+                <DiscoveredRow key={discoveredKey(d)} project={d} onAdd={handleAdd} />
               ))}
               {inactiveDiscovered.length > 0 && inactiveDiscovered.map(d => (
-                <DiscoveredRow key={d.suggested_slug} project={d} onAdd={handleAdd} />
+                <DiscoveredRow key={discoveredKey(d)} project={d} onAdd={handleAdd} />
               ))}
               {filteredDiscovered.length === 0 && lowerDiscoveredQuery && (
                 <div class="mp-empty-hint">
@@ -582,4 +582,12 @@ function PeerReferencesSection({ configured }: { configured: ProjectItem[] }) {
 
 function shortenPath(p: string): string {
   return p.replace(/^\/home\/[^/]+/, '~')
+}
+
+/** Stable, collision-free key for a discovered row. suggested_slug
+ *  alone collides when two hosts — or two repos on one host — suggest
+ *  the same name; the owning peer plus the repo's remote/path
+ *  disambiguates. */
+function discoveredKey(d: DiscoveredProject): string {
+  return `${d.peer ?? ''}::${d.remote ?? d.paths[0] ?? d.suggested_slug}`
 }
