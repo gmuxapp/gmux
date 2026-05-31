@@ -23,6 +23,7 @@ import (
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/packages/sessionenv"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/identity"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/nodeid"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/clipfile"
@@ -705,9 +706,15 @@ func serve(stderr io.Writer) int {
 			"node_id": nodeID,
 			"status":  "ready",
 		}
-		if h, err := os.Hostname(); err == nil {
-			data["hostname"] = h
+		// Node identity (ADR 0007): the live tailscale name when
+		// connected, else the OS hostname. Evaluated per request so it
+		// converges once the tailscale listener becomes ready.
+		osHost, _ := os.Hostname()
+		tsFQDN := ""
+		if tsListener != nil {
+			tsFQDN = tsListener.FQDN()
 		}
+		data["hostname"] = identity.Resolve(tsFQDN, osHost)
 		if tsListener != nil {
 			diag := tsListener.Diag()
 			if diag.FQDN != "" {
