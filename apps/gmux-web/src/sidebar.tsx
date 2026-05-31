@@ -395,7 +395,7 @@ export function Sidebar({
           )}
           {connected && isOnlyHomeProject && totalVisible > 0 && (
             <div class="py-3 px-4 text-[12px] text-text-muted leading-[1.4]">
-              <button class="bg-transparent border-0 text-accent font-inherit p-0 cursor-pointer underline underline-offset-[2px] hover:text-text" onClick={onOpenSettings}>
+              <button class="bg-transparent border-0 text-accent font-[inherit] p-0 cursor-pointer underline underline-offset-[2px] hover:text-text" onClick={onOpenSettings}>
                 Add a project
               </button> to organize sessions by repo.
             </div>

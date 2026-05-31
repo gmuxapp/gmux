@@ -307,8 +307,19 @@ body {
 /* ── Mock mode ── */
 
 .mock-mode .session-close-btn,
-.mock-mode .session-row-close {
+.mock-mode .session-row-close-btn {
   display: none !important;
+}
+
+/* ── App layout (height fallback cascade) ── */
+/* Three declarations in one rule so browsers skip unsupported values
+ * and fall back to the last valid one (100vh → 100dvh → var(--app-height)). */
+.app-layout {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+  height: var(--app-height, 100dvh);
+  width: 100%;
 }
 
 /* ── Touch device adjustments ── */

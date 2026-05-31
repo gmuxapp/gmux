@@ -150,7 +150,7 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
 // duplicate the one above it.
 function EmptyProject({ projectSlug }: { projectSlug: string }) {
   return (
-    <div class="flex items-center gap-3 py-3.5 px-4 border border-border rounded-lg text-text-muted text-[13px] mt-4">
+    <div class="hub-empty flex items-center gap-3 py-3.5 px-4 border border-border rounded-lg text-text-muted text-[13px] mt-4">
       <span>No sessions yet in {projectSlug}</span>
     </div>
   )

@@ -490,7 +490,7 @@ function App() {
   const handleAltConsumed = useCallback(() => { setAltArmed(false) }, [])
 
   return (
-    <div class="flex h-[100vh] h-[100dvh] h-[var(--app-height,_100dvh)] w-full">
+    <div class="app-layout">
       <Sidebar
         resumingId={resumingId}
         onCloseSession={handleCloseSession}

@@ -92,7 +92,7 @@ export function Home({
           <div class="text-[13px] text-text-muted py-4">Nothing active right now.</div>
         ) : (
           <div class="text-[13px] text-text-muted py-4">
-            No projects yet. <button class="bg-transparent border-0 text-accent cursor-pointer p-0 underline underline-offset-[2px] font-inherit" onClick={onManageProjects}>Add a project</button>
+            No projects yet. <button class="bg-transparent border-0 text-accent cursor-pointer p-0 underline underline-offset-[2px] font-[inherit]" onClick={onManageProjects}>Add a project</button>
           </div>
         )
       )}
@@ -166,7 +166,7 @@ function HomeFooter() {
       {h.update_available && (
         <>
           {' · '}
-          <a class="font-inherit text-accent bg-transparent border-0 p-0 cursor-pointer underline underline-offset-[2px] hover:text-text" href="https://gmux.app/changelog/" target="_blank">
+          <a class="font-[inherit] text-accent bg-transparent border-0 p-0 cursor-pointer underline underline-offset-[2px] hover:text-text" href="https://gmux.app/changelog/" target="_blank">
             version {h.update_available} available!
           </a>
         </>
