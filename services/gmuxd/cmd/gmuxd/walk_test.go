@@ -14,7 +14,7 @@ import (
 
 func TestWalkProjectPaths_empty(t *testing.T) {
 	root := t.TempDir()
-	paths, err := walkProjectPaths(root, 50_000)
+	paths, err := walkProjectPaths(root, 50_000, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestWalkProjectPaths_filesAndDirs(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(root, "README.md"), []byte("hi"), 0o644)
 	_ = os.WriteFile(filepath.Join(root, "src", "main.go"), []byte(""), 0o644)
 
-	paths, err := walkProjectPaths(root, 50_000)
+	paths, err := walkProjectPaths(root, 50_000, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestWalkProjectPaths_dirsHaveTrailingSlash(t *testing.T) {
 	root := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(root, "a", "b"), 0o755)
 
-	paths, err := walkProjectPaths(root, 50_000)
+	paths, err := walkProjectPaths(root, 50_000, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestWalkProjectPaths_maxEntries(t *testing.T) {
 		name := filepath.Join(root, "file"+string(rune('a'+i))+".txt")
 		_ = os.WriteFile(name, nil, 0o644)
 	}
-	paths, err := walkProjectPaths(root, 3)
+	paths, err := walkProjectPaths(root, 3, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,7 +91,7 @@ func walkTestMux(t *testing.T, root string) *http.ServeMux {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/fs/{slug}/walk", func(w http.ResponseWriter, r *http.Request) {
-		paths, err := walkProjectPaths(root, 50_000)
+		paths, err := walkProjectPaths(root, 50_000, true)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -203,5 +203,89 @@ func TestParseGitPorcelain_shortLine(t *testing.T) {
 	entries := parseGitPorcelain("M\n \n??\n")
 	if len(entries) != 0 {
 		t.Fatalf("expected 0 entries, got %v", entries)
+	}
+}
+
+// ── walkProjectPaths includeHidden ──────────────────────────────────────────
+
+func TestWalkProjectPaths_hiddenExcludedByDefault(t *testing.T) {
+	root := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(root, ".git", "objects"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, ".git", "objects", "abc"), nil, 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".gitignore"), nil, 0o644)
+	_ = os.WriteFile(filepath.Join(root, "README.md"), []byte("hi"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "src"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "src", "main.go"), nil, 0o644)
+
+	paths, err := walkProjectPaths(root, 50_000, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	seen := make(map[string]bool)
+	for _, p := range paths {
+		seen[p] = true
+	}
+
+	if seen[".git/"] {
+		t.Error("expected .git/ to be excluded")
+	}
+	if seen[".git/objects/"] {
+		t.Error("expected .git/objects/ to be excluded")
+	}
+	if seen[".gitignore"] {
+		t.Error("expected .gitignore to be excluded")
+	}
+	if !seen["README.md"] {
+		t.Error("expected README.md to be included")
+	}
+	if !seen["src/"] {
+		t.Error("expected src/ to be included")
+	}
+	if !seen["src/main.go"] {
+		t.Error("expected src/main.go to be included")
+	}
+}
+
+func TestWalkProjectPaths_hiddenIncludedWhenRequested(t *testing.T) {
+	root := t.TempDir()
+	_ = os.WriteFile(filepath.Join(root, ".gitignore"), nil, 0o644)
+	_ = os.WriteFile(filepath.Join(root, "README.md"), nil, 0o644)
+
+	paths, err := walkProjectPaths(root, 50_000, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	seen := make(map[string]bool)
+	for _, p := range paths {
+		seen[p] = true
+	}
+	if !seen[".gitignore"] {
+		t.Error("expected .gitignore when includeHidden=true")
+	}
+	if !seen["README.md"] {
+		t.Error("expected README.md when includeHidden=true")
+	}
+}
+
+func TestWalkProjectPaths_capNotExhaustedByHiddenDirs(t *testing.T) {
+	// Hidden dirs must not consume the cap when includeHidden=false.
+	root := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(root, ".hidden"), 0o755)
+	for i := 0; i < 10; i++ {
+		name := filepath.Join(root, ".hidden", "file"+string(rune('a'+i))+".txt")
+		_ = os.WriteFile(name, nil, 0o644)
+	}
+	_ = os.WriteFile(filepath.Join(root, "visible.txt"), nil, 0o644)
+
+	paths, err := walkProjectPaths(root, 5, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	seen := make(map[string]bool)
+	for _, p := range paths {
+		seen[p] = true
+	}
+	if !seen["visible.txt"] {
+		t.Errorf("visible.txt missing from %v", paths)
 	}
 }
