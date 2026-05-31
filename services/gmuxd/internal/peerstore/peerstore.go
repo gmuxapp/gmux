@@ -90,6 +90,12 @@ func Open(stateDir string) (*Store, error) {
 		}
 		return nil, fmt.Errorf("peerstore: reading %s: %w", s.path, err)
 	}
+	// An empty file (e.g. a truncated write from an older build that
+	// didn't persist atomically) is treated as an empty store rather
+	// than a fatal parse error, so the daemon can still start.
+	if len(data) == 0 {
+		return s, nil
+	}
 	if err := json.Unmarshal(data, &s.records); err != nil {
 		return nil, fmt.Errorf("peerstore: parsing %s: %w", s.path, err)
 	}
@@ -109,7 +115,7 @@ func (s *Store) PeerConfigs() []config.PeerConfig {
 	defer s.mu.Unlock()
 	out := make([]config.PeerConfig, 0, len(s.records))
 	for _, r := range s.records {
-		out = append(out, config.PeerConfig{Name: r.Name, URL: r.URL, Token: r.Token})
+		out = append(out, config.PeerConfig{Name: r.Name, URL: r.URL, Token: r.Token, Source: config.SourceManual})
 	}
 	return out
 }
@@ -190,8 +196,15 @@ func (s *Store) save() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("peerstore: creating state dir: %w", err)
 	}
-	if err := os.WriteFile(s.path, append(data, '\n'), 0o600); err != nil {
-		return fmt.Errorf("peerstore: writing %s: %w", s.path, err)
+	// Write-to-tmp-then-rename so a crash mid-write can never leave a
+	// truncated/0-byte peers.json (rename is atomic; matches
+	// projects.go and discovery/persist.go).
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+		return fmt.Errorf("peerstore: writing %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		return fmt.Errorf("peerstore: renaming %s: %w", s.path, err)
 	}
 	return nil
 }

@@ -127,11 +127,13 @@ func TestRemoveRollsBackOnSaveFailure(t *testing.T) {
 	s, _ := Open(dir)
 	s.AddOrGet(Record{Name: "keep", URL: "http://a:8790", NodeID: "n"})
 
-	// Make peers.json unwritable so save() fails during the next Remove.
-	if err := os.Chmod(s.path, 0o400); err != nil {
+	// Make the state dir unwritable so save() can't create its tmp file
+	// during the next Remove (a read-only file wouldn't block the
+	// atomic rename, but a read-only dir blocks the tmp write).
+	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(s.path, 0o600) })
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
 
 	_, ok, err := s.Remove("keep")
 	if err == nil || ok {
@@ -139,6 +141,22 @@ func TestRemoveRollsBackOnSaveFailure(t *testing.T) {
 	}
 	if recs := s.List(); len(recs) != 1 || recs[0].Name != "keep" {
 		t.Fatalf("record must be rolled back in memory, got %+v", recs)
+	}
+}
+
+// A 0-byte peers.json (e.g. left by a non-atomic write in an older
+// build) must not wedge startup: Open treats it as an empty store.
+func TestOpenToleratesEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, fileName), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open on empty file should succeed, got %v", err)
+	}
+	if len(s.List()) != 0 {
+		t.Fatalf("want empty store, got %v", s.List())
 	}
 }
 
