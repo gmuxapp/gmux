@@ -43,18 +43,13 @@ Add one line to your `devcontainer.json` and sessions from inside the container 
 
 The host gmuxd detects the container via Docker events, reads the auth token, and connects over the Docker bridge. See the [Devcontainers](/devcontainers) guide for setup, options, and details.
 
-## Manual peers
+## Connecting to a host manually
 
-For machines that aren't on the same tailnet, configure peers explicitly in `~/.config/gmux/host.toml`:
+For machines that aren't auto-discovered (different tailnet, reachable by URL/IP), open **Settings → Hosts → Connect to host** and enter the host's URL, e.g. `https://gmux-server.your-tailnet.ts.net`. Leave the token blank when the host is on your own tailnet (it authenticates by identity); otherwise paste its auth token.
 
-```toml
-[[peers]]
-name = "server"
-url = "https://gmux-server.your-tailnet.ts.net"
-token = "the-spoke-auth-token"
-```
+gmux probes the host, adopts the name it reports about itself (no name to assign), and saves the connection to `peers.json` in the state directory. If a different host already uses that name, gmux suffixes it (`server-2`) for you. The hub connects immediately and reconnects with exponential backoff on failure; manual and auto-discovered peers use the same protocol.
 
-The hub connects on startup and reconnects with exponential backoff on failure. Manual and auto-discovered peers use the same protocol.
+There is no `[[peers]]` config block (removed in [ADR 0007](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0007-host-identity-and-peer-urls.md)) — peers are runtime state managed from the UI.
 
 ## Session namespacing
 

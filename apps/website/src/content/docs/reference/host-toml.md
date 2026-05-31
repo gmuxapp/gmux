@@ -20,20 +20,21 @@ port = 8790
 # See the Remote Access guide for setup.
 [tailscale]
 enabled = false
-hostname = "gmux"       # → gmux.your-tailnet.ts.net
 allow = []               # additional login names (owner is auto-whitelisted)
 
 # Auto-discover peers. All flags default to true.
 [discovery]
 tailscale = true         # discover other gmux instances on the tailnet
 devcontainers = true     # subscribe to Docker events, register gmux containers
-
-# Manual peers (remote gmuxd instances to aggregate sessions from).
-[[peers]]
-name = "server"
-url = "http://10.0.0.5:8790"
-token_file = "~/.config/gmux/tokens/server"
 ```
+
+## Node identity
+
+This host's name — what peers see in their UI and URLs — is **not** configured here. When Tailscale is enabled the name is your Tailscale machine name (owned and kept stable by Tailscale itself); otherwise it is the OS hostname. The first time the daemon joins a tailnet it requests `gmux-<hostname>`, and Tailscale keeps that name across restarts and container recreation. See [ADR 0007](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0007-host-identity-and-peer-urls.md).
+
+## Connecting to other hosts
+
+There is **no `[[peers]]` config**. Add a host you want to aggregate sessions from at runtime via **Settings → Hosts → Connect to host** (enter its URL; leave the token blank on your own tailnet). Connected hosts are saved to `peers.json` in the state directory, and the peer's name is taken from the host itself — you don't assign one. Hosts on the same tailnet are also discovered automatically.
 
 ## Fields
 
@@ -48,7 +49,6 @@ token_file = "~/.config/gmux/tokens/server"
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | `boolean` | `false` | Enable Tailscale remote access. |
-| `hostname` | `string` | `"gmux"` | Tailscale machine name (becomes `<hostname>.your-tailnet.ts.net`). Must be non-empty when enabled. Changing this value automatically clears the Tailscale state and re-registers the device under the new name on the next restart. |
 | `allow` | `string[]` | `[]` | Additional Tailscale login names to allow (owner is auto-whitelisted). Each must contain `@`. |
 
 ### `[discovery]`
@@ -56,19 +56,7 @@ token_file = "~/.config/gmux/tokens/server"
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `tailscale` | `boolean` | `true` | Discover other gmux instances on the tailnet via `WatchIPNBus`. Only active when `tailscale.enabled` is also true. |
-| `devcontainers` | `boolean` | `true` | Subscribe to Docker events and register any container with the gmux devcontainer feature as a peer. Skipped if the Docker CLI is not installed. |
-
-### `[[peers]]` (array of tables)
-
-One table per manual peer. Each peer requires `name`, `url`, and exactly one of `token`, `token_file`, `token_command`.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | `string` | Unique peer identifier. Appears in URLs (`/@name/`) and session IDs. |
-| `url` | `string` | Base URL of the remote gmuxd, e.g. `http://host:8790`. |
-| `token` | `string` | Inline bearer token. Quick but leaks into your dotfiles. |
-| `token_file` | `string` | Path to a file containing the token. Tilde expansion is supported. |
-| `token_command` | `string` | Shell command (via `sh -c`) whose stdout is the token. Use for 1Password / pass / op integrations. 10 second timeout. |
+| `devcontainers` | `boolean` | `true` | Subscribe to Docker events and register any container with the gmux devcontainer feature **and** the `devcontainer.local_folder` label as a peer. Skipped if the Docker CLI is not installed. |
 
 ## Strict validation
 
@@ -76,10 +64,12 @@ The config file is strictly validated at startup. gmuxd refuses to start if:
 
 - **Unknown keys** are present, catching typos like `alow` instead of `allow`
 - **`allow` entries don't contain `@`**, likely not a valid Tailscale login name
-- **`hostname` is empty** when Tailscale is enabled
 - **`port` is out of range** (must be 1–65535)
-- **A `[[peers]]` entry is missing required fields** (`name`, `url`) or specifies more than one token source
-- **Two `[[peers]]` entries share the same `name`**
 - **TOML syntax is invalid**
+
+Two keys were **removed** and are now rejected with a migration hint (ADR 0007):
+
+- **`tailscale.hostname`** — the node name now comes from Tailscale / the OS hostname.
+- **`[[peers]]`** — manual peers are runtime state; add them via *Connect to host* (stored in `peers.json`).
 
 This is intentional. Silent fallback to defaults is dangerous for security settings. See [Security](/security) for the reasoning.

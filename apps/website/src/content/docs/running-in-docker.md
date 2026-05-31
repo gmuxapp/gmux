@@ -21,12 +21,12 @@ mkdir -p data/{workspace,gmux-config,gmux-state}
 cat > data/gmux-config/host.toml << 'EOF'
 [tailscale]
 enabled = true
-hostname = "dev"
 EOF
 
-docker compose up -d --build
+# The container's hostname becomes its Tailscale name (gmux-<hostname>).
+docker compose up -d --build   # compose sets hostname: dev → joins as gmux-dev
 docker logs dev 2>&1 | grep "login.tailscale.com"
-# Visit the URL to register, then open https://dev.your-tailnet.ts.net
+# Visit the URL to register, then open https://gmux-dev.your-tailnet.ts.net
 ```
 
 See [Remote Access](/remote-access/) for Tailscale setup details.
@@ -114,13 +114,19 @@ The overlay mounts for gmux config and state give the container its own Tailscal
 
 ### Multiple projects
 
-Run separate containers for different projects. Each gets its own Tailscale hostname:
+Run separate containers for different projects. Each joins Tailscale as `gmux-<container-hostname>`, so give each container a distinct hostname (compose `hostname:` or `docker run --hostname`):
+
+```yaml
+# docker-compose.yml
+services:
+  project-a:
+    hostname: project-a   # → joins the tailnet as gmux-project-a
+```
 
 ```toml
 # data/project-a/gmux-config/host.toml
 [tailscale]
 enabled = true
-hostname = "project-a"
 ```
 
-To see sessions from all containers in a single dashboard instead, set up [Multi-Machine Sessions](/multi-machine) with one gmuxd as the hub.
+The node name is owned by Tailscale after first registration (it survives container recreation as long as the state mount persists), so there is no `hostname` key in `host.toml`. To see sessions from all containers in a single dashboard instead, set up [Multi-Machine Sessions](/multi-machine) with one gmuxd as the hub.
