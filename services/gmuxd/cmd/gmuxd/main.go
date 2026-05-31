@@ -1024,6 +1024,10 @@ func serve(stderr io.Writer) int {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
 			return
 		}
+		if peerManager == nil {
+			writeError(w, http.StatusServiceUnavailable, "unavailable", "peering is not available")
+			return
+		}
 		req.URL = strings.TrimRight(strings.TrimSpace(req.URL), "/")
 		if err := peerstore.ValidateURL(req.URL); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -1036,16 +1040,16 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		// Same host already known (this peer, or one reached another way):
-		// not a collision — report the existing record.
-		if existing, ok := peerStore.FindByNodeID(nodeID); ok {
-			writeJSON(w, map[string]any{"peer": existing, "already_connected": true})
-			return
-		}
-
-		rec, err := peerStore.Add(peerstore.Record{Name: name, URL: req.URL, Token: req.Token, NodeID: nodeID})
+		// Atomic dedup-or-add: same node_id ⇒ already connected (not a
+		// duplicate); otherwise the probed name is slugified, de-collided,
+		// and persisted under one lock (no check-then-act race).
+		rec, existed, err := peerStore.AddOrGet(peerstore.Record{Name: name, URL: req.URL, Token: req.Token, NodeID: nodeID})
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+		if existed {
+			writeJSON(w, map[string]any{"peer": rec, "already_connected": true})
 			return
 		}
 		peerManager.AddPeer(config.PeerConfig{Name: rec.Name, URL: rec.URL, Token: rec.Token})
@@ -1055,6 +1059,10 @@ func serve(stderr io.Writer) int {
 
 	// DELETE /v1/peers/{name} — disconnect a manually-added peer.
 	mux.HandleFunc("DELETE /v1/peers/{name}", func(w http.ResponseWriter, r *http.Request) {
+		if peerManager == nil {
+			writeError(w, http.StatusServiceUnavailable, "unavailable", "peering is not available")
+			return
+		}
 		name := r.PathValue("name")
 		rec, ok, err := peerStore.Remove(name)
 		if err != nil {

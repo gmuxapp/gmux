@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
@@ -45,8 +46,15 @@ type Record struct {
 	NodeID string `json:"node_id,omitempty"`
 }
 
-// peerNameRe matches valid peer names: lowercase alphanumeric + hyphens.
-var peerNameRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+// nonSlug matches runs of characters that aren't slug-safe.
+var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
+
+// Slugify lowercases and reduces a host's self-reported name to a
+// URL-safe routing slug (the name appears in `/@name/`). Returns ""
+// when nothing usable remains.
+func Slugify(s string) string {
+	return strings.Trim(nonSlug.ReplaceAllString(strings.ToLower(s), "-"), "-")
+}
 
 // ValidateURL reports whether u is an acceptable peer base URL.
 func ValidateURL(u string) error {
@@ -106,46 +114,46 @@ func (s *Store) PeerConfigs() []config.PeerConfig {
 	return out
 }
 
-// FindByNodeID returns the existing record for a node id, if any. An
-// empty id never matches (a peer that doesn't report a node_id can't be
-// deduplicated and is always treated as new).
-func (s *Store) FindByNodeID(nodeID string) (Record, bool) {
+// AddOrGet atomically connects a host: if a record with the same
+// (non-empty) node_id already exists it is returned with existed=true
+// (the same host reached again is not a duplicate); otherwise the
+// record's name is slugified, de-collided, appended, and persisted.
+//
+// The node_id check and the append happen under one lock, so two
+// concurrent connects to the same host can't both pass the dedup and
+// create duplicates (no check-then-act race).
+func (s *Store) AddOrGet(rec Record) (stored Record, existed bool, err error) {
+	if err := ValidateURL(rec.URL); err != nil {
+		return Record{}, false, err
+	}
+	name := Slugify(rec.Name)
+	if name == "" {
+		return Record{}, false, fmt.Errorf("host name %q has no usable slug characters", rec.Name)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if nodeID == "" {
-		return Record{}, false
-	}
-	for _, r := range s.records {
-		if r.NodeID == nodeID {
-			return r, true
+
+	if rec.NodeID != "" {
+		for _, r := range s.records {
+			if r.NodeID == rec.NodeID {
+				return r, true, nil
+			}
 		}
 	}
-	return Record{}, false
-}
 
-// Add validates and appends a record, resolving any name collision with
-// a different node by suffixing, then persists. Returns the stored
-// record (whose Name may have been suffixed).
-func (s *Store) Add(rec Record) (Record, error) {
-	if err := ValidateURL(rec.URL); err != nil {
-		return Record{}, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	taken := make(map[string]bool, len(s.records))
 	for _, r := range s.records {
 		taken[r.Name] = true
 	}
-	rec.Name = uniqueName(rec.Name, taken)
-	if !peerNameRe.MatchString(rec.Name) {
-		return Record{}, fmt.Errorf("peer name %q must be a lowercase slug", rec.Name)
-	}
+	rec.Name = uniqueName(name, taken)
+
 	s.records = append(s.records, rec)
 	if err := s.save(); err != nil {
 		s.records = s.records[:len(s.records)-1]
-		return Record{}, err
+		return Record{}, false, err
 	}
-	return rec, nil
+	return rec, false, nil
 }
 
 // Remove deletes the record with the given name and persists. Returns
