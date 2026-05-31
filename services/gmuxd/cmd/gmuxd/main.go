@@ -484,6 +484,12 @@ func serve(stderr io.Writer) int {
 		log.Fatalf("FATAL: %v", err)
 	}
 
+	// If logd_url is set, tee all log output to the logd sink.
+	if cfg.LogdURL != "" {
+		log.SetOutput(newLogdWriter(stderr, cfg.LogdURL))
+		log.Printf("logd: forwarding logs to %s", cfg.LogdURL)
+	}
+
 	gmuxBin := resolveGmux() // resolve once, use everywhere
 	if gmuxBin != "" {
 		log.Printf("gmux: %s", gmuxBin)
@@ -2129,7 +2135,8 @@ func serve(stderr io.Writer) int {
 			writeError(w, http.StatusNotFound, "not_found", err.Error())
 			return
 		}
-		paths, err := walkProjectPaths(root, 50_000)
+		includeHidden := r.URL.Query().Get("include_hidden") == "true"
+		paths, err := walkProjectPaths(root, 50_000, includeHidden)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "walk_failed", err.Error())
 			return
@@ -2933,7 +2940,9 @@ func parseGitShortstat(s string) (files, insertions, deletions int) {
 // paths suffixed by '/'. Limited to maxEntries entries; stops early if the
 // limit is reached (caller can detect this by len(paths) == maxEntries).
 // Permission-denied entries are skipped silently. The root itself is omitted.
-func walkProjectPaths(root string, maxEntries int) ([]string, error) {
+// When includeHidden is false, any entry whose name starts with '.' is omitted
+// and hidden directories are not descended into, so they cannot exhaust the cap.
+func walkProjectPaths(root string, maxEntries int, includeHidden bool) ([]string, error) {
 	var paths []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -2947,6 +2956,13 @@ func walkProjectPaths(root string, maxEntries int) ([]string, error) {
 		}
 		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil || rel == "." {
+			return nil
+		}
+		// Skip hidden entries when includeHidden is false.
+		if !includeHidden && strings.HasPrefix(d.Name(), ".") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		relSlash := filepath.ToSlash(rel)

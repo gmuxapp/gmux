@@ -101,11 +101,9 @@ EOF
 # is non-exact, so every session under it (the gmux repo, other projects,
 # scratch dirs) is matched into one navigable "workspace" project.
 #
-# Only seed when absent so gmuxd can keep managing the file (e.g. its
-# per-project `sessions` list) across restarts. Delete it to re-seed.
-WORKSPACE_DIR="${GMUX_DEV_WORKSPACE:-$HOME/james-agent-workspace}"
-GMUX_STATE_DIR="$DEV_STATE_DIR/state/gmux"
-mkdir -p "$GMUX_STATE_DIR"
+# Seed projects.json when absent; if the file already exists but is missing
+# the workspace entry (e.g. seeded by e2e setup or an earlier run), add it.
+# Never remove or rewrite entries gmuxd has added (e.g. per-project sessions lists).
 if [[ ! -f "$GMUX_STATE_DIR/projects.json" ]]; then
   cat > "$GMUX_STATE_DIR/projects.json" << EOF
 {
@@ -116,6 +114,20 @@ if [[ ! -f "$GMUX_STATE_DIR/projects.json" ]]; then
   ]
 }
 EOF
+else
+  # Upsert: add workspace entry if it is missing.
+  python3 - "$GMUX_STATE_DIR/projects.json" "$WORKSPACE_DIR" << 'PYEOF'
+import json, sys
+path, workspace_dir = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    data = json.load(f)
+slugs = {item['slug'] for item in data.get('items', [])}
+if 'workspace' not in slugs:
+    data['items'].append({'slug': 'workspace', 'match': [{'path': workspace_dir}]})
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+    print(f'→ Added workspace project pointing at {workspace_dir}')
+PYEOF
 fi
 
 # ── Shared env ──

@@ -136,8 +136,9 @@ async function apiFetch(
   return resp.json()
 }
 
-async function apiWalkPaths(slug: string): Promise<string[]> {
-  const resp = await apiFetch('GET', `/v1/fs/${encodeURIComponent(slug)}/walk`)
+async function apiWalkPaths(slug: string, includeHidden: boolean): Promise<string[]> {
+  const url = `/v1/fs/${encodeURIComponent(slug)}/walk${includeHidden ? '?include_hidden=true' : ''}`
+  const resp = await apiFetch('GET', url)
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'walk failed')
   return resp.data as string[]
 }
@@ -205,13 +206,6 @@ function stripSlash(p: string): string {
   return p.endsWith('/') ? p.slice(0, -1) : p
 }
 
-/** Filter paths to hide hidden files/directories unless showHidden is true. */
-function filterPaths(paths: string[], showHidden: boolean): string[] {
-  if (showHidden) return paths
-  return paths.filter(p =>
-    p.split('/').every(seg => !seg || !isHiddenName(seg)),
-  )
-}
 
 // ── Minimal icons for the header ────────────────────────────────────────────
 
@@ -304,16 +298,14 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
     const model = modelRef.current
     if (!model) return
     try {
-      const all = await apiWalkPaths(projectSlugRef.current)
-      const filtered = filterPaths(all, showHiddenRef.current)
-      if (filtered.length === 0 && all.length > 0) {
-        console.warn('[gmux] file-tree: walk returned', all.length, 'paths but all were filtered as hidden')
-      }
+      // Pass showHidden to the server so hidden dirs are excluded from the walk
+      // when not needed — preventing the 50k cap from being exhausted by dotfiles.
+      const paths = await apiWalkPaths(projectSlugRef.current, showHiddenRef.current)
       // Set the guard before resetPaths so onSelectionChange ignores the
       // automatic path-restoration that fires in the same tick.
       resettingPathsRef.current = true
       setTimeout(() => { resettingPathsRef.current = false }, 0)
-      model.resetPaths(filtered)
+      model.resetPaths(paths)
     } catch (e) {
       console.error('[gmux] file-tree: walk failed for slug', projectSlugRef.current, e)
       showErrorRef.current(String(e))
