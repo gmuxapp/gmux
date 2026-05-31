@@ -96,34 +96,18 @@ jobs:
 
       - name: Build Zig binaries
         run: |
-          cd .grove/teak
-          # Build for all target platforms
-          for target in x86_64-linux aarch64-linux x86_64-macos aarch64-macos; do
-            zig build -Doptimize=ReleaseSmall -Dtarget=$target
-          done
+          # Linux amd64
+          zig build -Doptimize=ReleaseSmall -Dtarget=x86_64-linux
+          mkdir -p dist/gmux_${{ steps.version.outputs.version }}_linux_amd64
+          cp zig-out/bin/gmux "dist/gmux_${{ steps.version.outputs.version }}_linux_amd64/"
+          cp zig-out/bin/gmuxd "dist/gmux_${{ steps.version.outputs.version }}_linux_amd64/"
 
       - name: Package releases
         run: |
-          mkdir -p dist
-          cd .grove/teak
-          version=${{ steps.version.outputs.version }}
-
-          # Linux amd64
-          mkdir -p "dist/gmux_${version}_linux_amd64"
-          cp zig-out/bin/gmux "dist/gmux_${version}_linux_amd64/"
-          cp zig-out/bin/gmuxd "dist/gmux_${version}_linux_amd64/"
-
-          # Create tarballs
           cd dist
           for dir in gmux_*; do
-            if [[ "$dir" == *"darwin"* ]]; then
-              zip -r "${dir}.zip" "$dir"
-            else
-              tar czf "${dir}.tar.gz" "$dir"
-            fi
+            tar czf "${dir}.tar.gz" "$dir"
           done
-
-          # Generate checksums
           sha256sum gmux_* > checksums.txt
           cat checksums.txt
 

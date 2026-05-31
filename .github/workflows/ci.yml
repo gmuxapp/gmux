@@ -61,19 +61,14 @@ jobs:
           version: 0.16.0
 
       - name: Build
-        run: |
-          cd .grove/teak
-          zig build -Doptimize=${{ matrix.optimize }}
+        run: zig build -Doptimize=${{ matrix.optimize }}
 
       - name: Test
         if: matrix.optimize == 'Debug'
-        run: |
-          cd .grove/teak
-          zig build test
+        run: zig build test
 
       - name: Verify binaries
         run: |
-          cd .grove/teak
           zig-out/bin/gmux --help
           zig-out/bin/gmuxd version
 
@@ -101,14 +96,8 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Build gmux + frontend
-        run: |
-          cd .grove/teak
-          zig build -Doptimize=ReleaseSafe
-          cp zig-out/bin/gmux ../
-          cp zig-out/bin/gmuxd ../
-        env:
-          GOWORK: ${{ github.workspace }}/go.work
+      - name: Build gmux
+        run: zig build -Doptimize=ReleaseSafe
 
       - name: Run e2e tests
         run: pnpm test:e2e

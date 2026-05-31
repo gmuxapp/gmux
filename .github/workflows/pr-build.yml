@@ -74,25 +74,14 @@ jobs:
           cd ../..
 
       - name: Build with Zig
-        run: |
-          cd .grove/teak
-          zig build -Doptimize=ReleaseSafe
+        run: zig build -Doptimize=ReleaseSafe
 
       - name: Package binaries
         run: |
-          mkdir -p dist
-          cd .grove/teak
-          for os_arch in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
-            os=$(echo $os_arch | cut -d_ -f1)
-            arch=$(echo $os_arch | cut -d_ -f2)
-            # Cross-compile would require target-specific builds
-            # For now, just package the native build
-            if [ "$os_arch" = "linux_amd64" ]; then
-              mkdir -p "dist/gmux_pr${PR}_${os}_${arch}"
-              cp zig-out/bin/gmux "dist/gmux_pr${PR}_${os}_${arch}/"
-              cp zig-out/bin/gmuxd "dist/gmux_pr${PR}_${os}_${arch}/"
-            fi
-          done
+          mkdir -p dist/gmux_pr${PR}_linux_amd64
+          cp zig-out/bin/gmux "dist/gmux_pr${PR}_linux_amd64/"
+          cp zig-out/bin/gmuxd "dist/gmux_pr${PR}_linux_amd64/"
+          cd dist && tar czf "gmux_pr${PR}_linux_amd64.tar.gz" "gmux_pr${PR}_linux_amd64"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
