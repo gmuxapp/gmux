@@ -54,8 +54,8 @@ function MainHeader({ session, onRestart }: {
 }) {
   if (!session) {
     return (
-      <div class="main-header">
-        <div class="main-header-title" style={{ color: 'var(--text-muted)' }}>
+      <div class="h-[var(--header-height)] flex items-center justify-between py-0 px-4 gap-3 border-b border-border shrink-0 overflow-visible relative z-[30]">
+        <div class="font-[Source_Sans_3] text-sm font-semibold text-text overflow-hidden text-ellipsis whitespace-nowrap tracking-[-0.01em] flex items-center gap-2" style={{ color: 'var(--text-muted)' }}>
           gmux
         </div>
       </div>
@@ -65,18 +65,18 @@ function MainHeader({ session, onRestart }: {
   const shortCwd = session.cwd.replace(/^\/home\/[^/]+/, '~')
 
   return (
-    <div class="main-header">
-      <div class="main-header-left">
-        <div class="main-header-title">
+    <div class="h-[var(--header-height)] flex items-center justify-between py-0 px-4 gap-3 border-b border-border shrink-0 overflow-visible relative z-[30]">
+      <div class="flex items-center gap-2 min-w-0 overflow-hidden">
+        <div class="font-[Source_Sans_3] text-sm font-semibold text-text overflow-hidden text-ellipsis whitespace-nowrap tracking-[-0.01em] flex items-center gap-2">
           {session.title}
         </div>
-        <div class="main-header-meta">
-          <span class="main-header-cwd">{shortCwd}</span>
+        <div class="flex items-center gap-[5px] text-[12px] text-text-muted">
+          <span class="overflow-hidden text-ellipsis whitespace-nowrap">{shortCwd}</span>
         </div>
       </div>
-      <div class="main-header-right">
+      <div class="flex items-center gap-2 shrink-0">
         {session.status && session.status.label && (
-          <div class={`main-header-status ${session.status.error ? 'error' : session.status.working ? 'working' : ''}`}>
+          <div class={`flex items-center gap-[5px] text-[12px] font-medium whitespace-nowrap shrink-0 ${session.status.error ? 'text-status-error' : session.status.working ? 'text-accent' : 'text-text-secondary'}`}>
             <span
               class={`session-dot ${session.status.error ? 'error' : session.status.working ? 'working' : 'idle'}`}
               style={{ width: 5, height: 5 }}
@@ -133,45 +133,45 @@ function SessionMenu({ session, onRestart }: {
   const hasActions = session.alive && onRestart
 
   return (
-    <div class="session-menu" ref={menuRef}>
+    <div class="relative" ref={menuRef}>
       <button
-        class={`session-menu-trigger${staleKind ? ' stale' : ''}`}
+        class={`relative w-[26px] h-[26px] border-0 rounded bg-transparent text-text-muted cursor-pointer flex items-center justify-center transition-colors duration-100 shrink-0 hover:bg-bg-hover hover:text-text${staleKind ? ' text-[oklch(80%_0.15_65)] hover:bg-[oklch(80%_0.15_65_/0.08)] hover:text-[oklch(88%_0.15_65)]' : ''}`}
         onClick={() => setOpen(!open)}
         title="Session actions"
         aria-expanded={open}
       >
-        <span class="session-menu-icon">⋮</span>
-        {staleKind && <span class="session-menu-badge" />}
+        <span class="text-base leading-none tracking-normal">⋮</span>
+        {staleKind && <span class="absolute top-[3px] right-[3px] w-1.5 h-1.5 rounded-full bg-[oklch(80%_0.15_65)] border-[1.5px] border-bg pointer-events-none" />}
       </button>
       {open && (
-        <div class="session-menu-dropdown">
+        <div class="absolute top-[calc(100%+4px)] right-0 min-w-[200px] bg-bg-surface border border-border-strong rounded py-1 shadow-[0_8px_24px_oklch(0%_0_0_/0.4)] z-[100]">
           {hasActions && (
             <>
               <button
-                class={`session-menu-action${staleKind ? ' stale' : ''}`}
+                class={`flex items-center justify-between w-full py-2 px-3 text-sm ${staleKind ? 'text-[oklch(80%_0.15_65)] hover:bg-[oklch(80%_0.15_65_/0.08)] hover:text-[oklch(88%_0.15_65)]' : 'text-text-secondary hover:bg-bg-hover hover:text-text'} bg-transparent border-0 cursor-pointer transition-colors duration-100 text-left`}
                 onClick={() => { setOpen(false); onRestart!() }}
               >
                 Restart session
-                {staleKind && <span class="session-menu-action-tag">outdated</span>}
+                {staleKind && <span class="text-[10px] font-medium tracking-[0.04em] px-1 py-0 rounded-[3px] bg-[oklch(80%_0.15_65_/0.15)] text-[oklch(80%_0.15_65)] whitespace-nowrap">outdated</span>}
               </button>
-              <div class="session-menu-divider" />
+              <div class="h-px bg-border my-1" />
             </>
           )}
-          <div class="session-menu-section-title">Session info</div>
-          <div class="session-menu-row">
-            <span class="session-menu-label">Adapter</span>
-            <span class="session-menu-value">{session.kind}</span>
+          <div class="text-[11px] font-semibold uppercase tracking-[0.06em] text-text-muted py-1.5 pb-[2px] px-3">Session info</div>
+          <div class="flex justify-between items-baseline py-1 px-3">
+            <span class="text-[13px] text-text-muted">Adapter</span>
+            <span class="font-mono text-[11px] text-text-secondary">{session.kind}</span>
           </div>
-          <div class="session-menu-row">
-            <span class="session-menu-label">Version</span>
-            <span class={`session-menu-value${staleKind ? ' stale' : ''}`}>
+          <div class="flex justify-between items-baseline py-1 px-3">
+            <span class="text-[13px] text-text-muted">Version</span>
+            <span class={`font-mono text-[11px]${staleKind ? ' text-[oklch(80%_0.15_65)]' : ' text-text-secondary'}`}>
               {versionDisplay}
             </span>
           </div>
           {session.peer && (
-            <div class="session-menu-row">
-              <span class="session-menu-label">Host</span>
-              <span class="session-menu-value">{session.peer}</span>
+            <div class="flex justify-between items-baseline py-1 px-3">
+              <span class="text-[13px] text-text-muted">Host</span>
+              <span class="font-mono text-[11px] text-text-secondary">{session.peer}</span>
             </div>
           )}
         </div>
@@ -490,7 +490,7 @@ function App() {
   const handleAltConsumed = useCallback(() => { setAltArmed(false) }, [])
 
   return (
-    <div class="app-layout">
+    <div class="flex h-[100vh] h-[100dvh] h-[var(--app-height,_100dvh)] w-full">
       <Sidebar
         resumingId={resumingId}
         onCloseSession={handleCloseSession}
@@ -506,7 +506,7 @@ function App() {
         onSelectTab={(t) => openSettings(t, true)}
       />
 
-      <div class="main-panel">
+      <div class="flex-1 flex flex-col min-w-0 min-h-0 bg-bg">
         {viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && (
           <MainHeader
             session={selectedVal}

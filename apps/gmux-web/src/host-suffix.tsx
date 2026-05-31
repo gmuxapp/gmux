@@ -30,10 +30,10 @@ export function HostSuffix({ peer, leading = true, local = false }: { peer?: str
 
   return (
     <span
-      class={`host-suffix${offline ? ' offline' : ''}`}
+      class={`text-[0.9em] text-text-muted${offline ? ' text-status-disconnected' : ''}`}
       title={`${peer}${status ? ` (${status})` : ''}`}
     >
-      {leading && <span class="host-suffix-sep" aria-hidden="true"> · </span>}{peer}
+      {leading && <span class="opacity-60 mx-[0.1em]" aria-hidden="true"> · </span>}{peer}
     </span>
   )
 }

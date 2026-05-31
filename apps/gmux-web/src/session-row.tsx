@@ -99,25 +99,25 @@ export function SessionRow({
     ?? (!session.alive && session.exit_code != null ? `exited (${session.exit_code})` : null)
 
   const cls = [
-    'session-row',
-    selected ? 'selected' : '',
-    unavailable ? 'unavailable' : '',
+    'group flex items-center gap-2.5 py-2.5 px-3 rounded bg-bg-surface border border-border no-underline text-inherit transition-colors duration-100 relative hover:bg-bg-hover hover:border-text-muted',
+    selected ? 'border-accent' : '',
+    unavailable ? 'opacity-[0.55]' : '',
   ].filter(Boolean).join(' ')
 
   // Line-2 metadata segments. Render only the ones requested by
   // props; empty arrays produce no separator dots in the output.
   const metaSegments: preact.ComponentChildren[] = []
   if (showProject && projectName) {
-    metaSegments.push(<span class="session-row-project">{projectName}</span>)
+    metaSegments.push(<span class="text-text opacity-[0.85]">{projectName}</span>)
   }
   if (showCwd && cwdLabel) {
-    metaSegments.push(<span class="session-row-cwd">{cwdLabel}</span>)
+    metaSegments.push(<span class="font-mono">{cwdLabel}</span>)
   }
   if (statusText) {
-    metaSegments.push(<span class="session-row-status">{statusText}</span>)
+    metaSegments.push(<span class="italic">{statusText}</span>)
   }
   if (age) {
-    metaSegments.push(<span class="session-row-age">{age}</span>)
+    metaSegments.push(<span class="tabular-nums">{age}</span>)
   }
 
   return (
@@ -130,15 +130,15 @@ export function SessionRow({
       }}
     >
       {unavailable
-        ? <svg class="session-unavailable-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><title>Peer unavailable</title><path d="M2 2 L10 10 M10 2 L2 10" /></svg>
+        ? <svg class="shrink-0 w-[9px] h-[9px] mt-1 text-text-muted opacity-70" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><title>Peer unavailable</title><path d="M2 2 L10 10 M10 2 L2 10" /></svg>
         : sleeping
-        ? <svg class="session-sleep-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
+        ? <svg class="shrink-0 w-[7px] h-[11px] overflow-visible mt-1 text-text-muted opacity-40" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
         : <span class={`session-dot-indicator ${dot}${arrival ? ` ${arrival}` : ''}`} />
       }
-      <div class="session-row-content">
-        <div class="session-row-title">{session.title}</div>
+      <div class="flex-1 min-w-0">
+        <div class="text-[13px] font-medium text-text whitespace-nowrap overflow-hidden truncate">{session.title}</div>
         {(metaSegments.length > 0 || showHost) && (
-          <div class="session-row-meta">
+          <div class="flex flex-wrap items-baseline mt-1 text-[11px] text-text-muted min-w-0">
             {metaSegments.map((seg, i) => (
               // Long-form Fragment carries a key: the shorthand `<>`
               // can't, and without one Preact falls back to index
@@ -147,7 +147,7 @@ export function SessionRow({
               // happens to be this render), so index is the honest
               // key.
               <Fragment key={i}>
-                {i > 0 && <span class="session-row-sep"> · </span>}
+                {i > 0 && <span class="text-text-muted opacity-60"> · </span>}
                 {seg}
               </Fragment>
             ))}
@@ -157,7 +157,7 @@ export function SessionRow({
       </div>
       {onClose && (
         <button
-          class="session-row-close"
+          class={`session-row-close-btn bg-transparent border-0 text-text-muted text-lg leading-none cursor-pointer py-0.5 px-1.5 rounded transition-colors duration-100 ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} hover:text-text hover:bg-bg-active`}
           onClick={(e) => { e.stopPropagation(); e.preventDefault(); onClose() }}
           title={session.alive ? 'Kill session' : 'Dismiss'}
         >

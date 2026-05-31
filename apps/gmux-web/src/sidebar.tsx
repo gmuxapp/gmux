@@ -79,7 +79,7 @@ interface DragState {
  */
 function DevcontainerMarker({ peer }: { peer: string }) {
   return (
-    <svg class="session-container-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <svg class="shrink-0 w-2.5 h-2.5 mt-[3px] text-text-muted opacity-80" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
       <title>{`devcontainer: ${peer}`}</title>
       <rect x="1.5" y="3.5" width="9" height="6" rx="0.5" />
       <path d="M4 3.5v6 M6 3.5v6 M8 3.5v6" />
@@ -135,11 +135,11 @@ function SessionItem({
   const sleeping = !session.alive && session.resumable
 
   const cls = [
-    'session-item',
+    'session-item group flex items-center py-1 px-1 ps-3.5 cursor-pointer gap-2 transition-colors duration-100 relative no-underline text-inherit',
     selected ? 'selected' : '',
     dragging ? 'session-dragging' : '',
     dropTarget ? 'session-drop-target' : '',
-    unavailable ? 'unavailable' : '',
+    unavailable ? 'opacity-[0.55]' : '',
   ].filter(Boolean).join(' ')
 
   return (
@@ -161,19 +161,19 @@ function SessionItem({
       onDragEnd={onDragEnd}
     >
       {unavailable
-        ? <svg class="session-unavailable-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><title>Peer unavailable</title><path d="M2 2 L10 10 M10 2 L2 10" /></svg>
+        ? <svg class="shrink-0 w-[9px] h-[9px] mt-1 text-text-muted opacity-70" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><title>Peer unavailable</title><path d="M2 2 L10 10 M10 2 L2 10" /></svg>
         : sleeping
-        ? <svg class="session-sleep-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
+        ? <svg class="shrink-0 w-[7px] h-[11px] overflow-visible mt-[3px] text-text-muted opacity-40" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
         : <span class={`session-dot-indicator ${dotState}${arrival ? ` ${arrival}` : ''}`} />
       }
       {showHostMarker && session.peer && <DevcontainerMarker peer={session.peer} />}
-      <div class="session-content">
-        <div class="session-title-row">
-          <span class="session-title">{session.title}</span>
+      <div class="flex-1 min-w-0 flex flex-col gap-[1px]">
+        <div class="flex items-baseline gap-[5px] min-w-0">
+          <span class="text-sm font-normal text-text overflow-hidden text-ellipsis whitespace-nowrap leading-[1.35] flex-1 min-w-0">{session.title}</span>
         </div>
         {session.status?.label && (
-          <div class="session-meta">
-            <span class="session-status-label">{session.status.label}</span>
+          <div class="flex items-center gap-1.5 text-[12px] text-text-muted leading-[1.3]">
+            <span class="text-text-secondary">{session.status.label}</span>
           </div>
         )}
       </div>
@@ -254,9 +254,9 @@ function FolderGroup({
   const mixedHosts = folderPeers.size > 1
   return (
     <div class="folder">
-      <div class="folder-header">
+      <div class={`folder-header flex items-center py-1 px-3 ps-3.5 select-none gap-1.5 cursor-pointer transition-colors duration-100${isCurrent ? ' bg-bg-selected' : ''}`}>
         <a
-          class={`folder-name${isCurrent ? ' current' : ''}${folder.missing ? ' missing' : ''}`}
+          class={`text-[12px] font-semibold text-text flex-1 overflow-hidden text-ellipsis whitespace-nowrap no-underline${folder.missing ? ' opacity-50' : ''}`}
           href={href}
           title={folder.missing
             ? `${folder.name} no longer exists on ${folder.peer}; remove via the home page`
@@ -265,7 +265,7 @@ function FolderGroup({
         >
           {folder.name}
           <HostSuffix peer={folder.peer ?? localHostLabel.value} local={!folder.peer} />
-          {folder.missing && <span class="folder-missing-icon" title="Project missing on peer">?</span>}
+          {folder.missing && <span class="inline-flex items-center justify-center w-3.5 h-3.5 ml-1.5 rounded-full bg-[oklch(25%_0.04_30)] text-[oklch(72%_0.12_30)] text-[10px] font-bold leading-[1cap]" title="Project missing on peer">?</span>}
         </a>
         <LaunchButton
           sessions={folder.sessions}
@@ -275,7 +275,7 @@ function FolderGroup({
           className="folder-launch-btn"
         />
       </div>
-      <div class="folder-sessions">
+      <div class="overflow-hidden pt-[1px]">
         {displayItems.map((s, i) => (
           <SessionItem
             key={s.id}
@@ -350,14 +350,14 @@ export function Sidebar({
     <>
       <div class={`sidebar-overlay ${open ? 'visible' : ''}`} onClick={onClose} />
       <aside class={`sidebar ${open ? 'open' : ''}`}>
-        <div class="sidebar-header">
+        <div class="sidebar-header flex items-center h-[var(--header-height)] py-0 px-1.5 ps-3.5 gap-2.5 shrink-0 border-b border-border">
           <a
-            class={`sidebar-logo${waiting ? ' bg-waiting' : ''}${bgArrival ? ` bg-${bgArrival}` : ''}`}
+            class={`sidebar-logo font-[Instrument_Sans] text-lg font-bold tracking-[-0.04em] text-text leading-none no-underline py-1 px-2.5 pb-1.5 -my-1.5 -mx-2.5 cursor-pointer rounded transition-colors duration-150 hover:text-white hover:shadow-[0_0_6px_rgba(255,255,255,0.25)]${waiting ? ' bg-waiting' : ''}${bgArrival ? ` bg-${bgArrival}` : ''}`}
             href="/"
             onClick={onClose}
           >gmux</a>
           <button
-            class="sidebar-settings-btn"
+            class="ml-auto flex items-center justify-center w-7 h-7 p-0 border-0 bg-transparent text-text-muted rounded cursor-pointer transition-colors duration-150 hover:text-text hover:bg-bg-hover"
             onClick={onOpenSettings}
             aria-label="Settings"
             title="Settings"
@@ -365,7 +365,7 @@ export function Sidebar({
             <IconSettings />
           </button>
         </div>
-        <div class="sidebar-scroll">
+        <div class="sidebar-scroll flex-1 overflow-y-auto overflow-x-hidden py-1.5 pb-12 flex flex-col">
           {foldersVal.map(f => (
             <FolderGroup
               key={f.key}
@@ -380,7 +380,7 @@ export function Sidebar({
             />
           ))}
           {connected && !hasProjects && (
-            <div class="sidebar-empty-launch">
+            <div class="flex justify-center py-4 ps-3.5 pb-1">
               <LaunchButton
                 className="sidebar-launch-btn"
                 beforeLaunch={seedHomeProject}
@@ -389,13 +389,13 @@ export function Sidebar({
             </div>
           )}
           {connected && totalVisible === 0 && !hasProjects && (
-            <div class="sidebar-hint">
-              Click <strong>+</strong> to start your first session.
+            <div class="py-3 px-4 text-[12px] text-text-muted leading-[1.4]">
+              Click <strong class="text-text-secondary">+</strong> to start your first session.
             </div>
           )}
           {connected && isOnlyHomeProject && totalVisible > 0 && (
-            <div class="sidebar-hint">
-              <button class="sidebar-hint-link" onClick={onOpenSettings}>
+            <div class="py-3 px-4 text-[12px] text-text-muted leading-[1.4]">
+              <button class="bg-transparent border-0 text-accent font-inherit p-0 cursor-pointer underline underline-offset-[2px] hover:text-text" onClick={onOpenSettings}>
                 Add a project
               </button> to organize sessions by repo.
             </div>

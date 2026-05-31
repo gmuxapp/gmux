@@ -93,13 +93,13 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
 
   return (
     <div class="page">
-      <header class="hub-header">
-        <a class="hub-back" href="/" aria-label="Back to home">
-          <span class="hub-back-arrow" aria-hidden="true">←</span>
+      <header class="mb-5">
+        <a class="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-text-muted no-underline mb-1 transition-colors duration-120 hover:text-text focus-visible:text-text" href="/" aria-label="Back to home">
+          <span class="text-[13px] leading-none" aria-hidden="true">←</span>
           Home
         </a>
-        <div class="hub-title-row">
-          <h2 class="hub-title">
+        <div class="flex items-baseline justify-between gap-3">
+          <h2 class="text-lg font-semibold text-text m-0">
             {projectSlug}
             <HostSuffix peer={projectPeer ?? localHostLabel.value} local={!projectPeer} />
           </h2>
@@ -107,14 +107,14 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
             sessions={allSessions}
             fallbackCwd={sharedCwd ?? projectFirstPath(project) ?? ''}
             peer={projectPeer}
-            className="hub-header-launch"
+            className="shrink-0"
           />
         </div>
         {(remote || sharedCwd) && (
-          <div class="hub-subtitle">
-            {sharedCwd && <span class="hub-cwd">{sharedCwd}</span>}
-            {remote && sharedCwd && <span class="hub-subtitle-sep"> · </span>}
-            {remote && <span class="hub-remote">{remote}</span>}
+          <div class="text-[12px] text-text-muted mt-1">
+            {sharedCwd && <span class="font-[JetBrains_Mono,_SF_Mono,_monospace] text-[11px]">{sharedCwd}</span>}
+            {remote && sharedCwd && <span class="opacity-60"> · </span>}
+            {remote && <span class="font-[JetBrains_Mono,_SF_Mono,_monospace] text-[11px]">{remote}</span>}
           </div>
         )}
       </header>
@@ -150,7 +150,7 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
 // duplicate the one above it.
 function EmptyProject({ projectSlug }: { projectSlug: string }) {
   return (
-    <div class="hub-empty">
+    <div class="flex items-center gap-3 py-3.5 px-4 border border-border rounded-lg text-text-muted text-[13px] mt-4">
       <span>No sessions yet in {projectSlug}</span>
     </div>
   )

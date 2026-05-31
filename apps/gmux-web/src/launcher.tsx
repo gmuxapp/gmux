@@ -201,10 +201,10 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, ses
   }
 
   return (
-    <div class={`launch-container ${className ?? ''}`} ref={containerRef}>
+    <div class={`relative shrink-0 ${className ?? ''}`} ref={containerRef}>
       <button
         ref={btnRef}
-        class={`launch-btn ${isLoading ? 'loading' : ''}`}
+        class={`bg-transparent border-0 text-text-secondary cursor-pointer text-base font-semibold leading-none py-0.5 px-1.5 rounded transition-all duration-150 ease inline-flex items-center justify-center min-w-6 min-h-6 hover:bg-accent hover:text-bg ${isLoading ? 'pointer-events-none' : ''}`}
         title={target.cwd
           ? target.peer ? `New session on ${target.peer} in ${target.cwd}` : `New session in ${target.cwd}`
           : 'New session'}
@@ -219,18 +219,18 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, ses
       </button>
       {isOpen && menuPos && (
         <div
-          class="launch-inline-menu"
+          class="fixed bg-bg-surface border border-border rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.4),_0_2px_8px_rgba(0,0,0,0.2)] min-w-[180px] z-[1000] p-1 overflow-hidden"
           style={{ top: menuPos.top, right: menuPos.right }}
         >
           {showTarget && (
             <>
-              <div class="launch-target-line">{formatTarget(target)}</div>
-              <div class="launch-inline-divider" />
+              <div class="pt-1 pb-1 px-2.5 text-[11px] text-text-muted whitespace-nowrap overflow-hidden truncate font-mono">{formatTarget(target)}</div>
+              <div class="h-px bg-border my-1" />
             </>
           )}
           {defLauncher && (
             <button
-              class="launch-inline-item launch-inline-default"
+              class="block w-full py-1.5 px-2.5 bg-transparent border-0 rounded cursor-pointer text-left transition-colors duration-100 text-text text-sm whitespace-nowrap font-medium hover:bg-bg-hover"
               onClick={(e) => { e.stopPropagation(); handleLaunch(defLauncher!.id) }}
             >
               {defLauncher.label}
@@ -239,7 +239,7 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, ses
           {others.map((l, i) => (
             <button
               key={l.id}
-              class="launch-inline-item"
+              class="block w-full py-1.5 px-2.5 bg-transparent border-0 rounded cursor-pointer text-left transition-colors duration-100 text-text text-sm whitespace-nowrap hover:bg-bg-hover launch-inline-item-animated"
               style={{ animationDelay: `${(i + 1) * 50}ms` }}
               onClick={(e) => { e.stopPropagation(); handleLaunch(l.id) }}
             >

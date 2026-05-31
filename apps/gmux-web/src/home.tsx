@@ -60,9 +60,9 @@ export function Home({
 
   return (
     <div class="page">
-      <header class="hub-header">
-        <div class="home-activity-header">
-          <h2 class="hub-title">Activity</h2>
+      <header class="mb-5">
+        <div class="flex items-center justify-between gap-3">
+          <h2 class="text-lg font-semibold text-text m-0">Activity</h2>
           <NotifPrompt
             permission={notifPermission}
             onRequest={onRequestNotifPermission}
@@ -89,10 +89,10 @@ export function Home({
 
       {!anyActivity && (
         hasProjects ? (
-          <div class="home-empty-hint">Nothing active right now.</div>
+          <div class="text-[13px] text-text-muted py-4">Nothing active right now.</div>
         ) : (
-          <div class="home-empty-hint">
-            No projects yet. <button class="home-empty-action" onClick={onManageProjects}>Add a project</button>
+          <div class="text-[13px] text-text-muted py-4">
+            No projects yet. <button class="bg-transparent border-0 text-accent cursor-pointer p-0 underline underline-offset-[2px] font-inherit" onClick={onManageProjects}>Add a project</button>
           </div>
         )
       )}
@@ -117,7 +117,7 @@ function NotifPrompt({
 }) {
   if (permission === 'default') {
     return (
-      <button class="notif-toggle" onClick={onRequest}>
+      <button class="inline-flex items-center gap-1.5 shrink-0 py-1 px-2.5 border border-border rounded bg-transparent text-text-muted text-[12px] font-[Source_Sans_3] whitespace-nowrap cursor-pointer transition-colors duration-150 hover:border-accent hover:text-text-secondary" onClick={onRequest}>
         <IconBell /> Enable notifications
       </button>
     )
@@ -125,7 +125,7 @@ function NotifPrompt({
   if (permission === 'denied') {
     return (
       <span
-        class="notif-blocked"
+        class="inline-flex items-center shrink-0 text-text-muted cursor-default"
         title="Notifications blocked in browser settings"
       >
         <IconBell muted />
@@ -143,9 +143,9 @@ export function Section({
   children: preact.ComponentChildren
 }) {
   return (
-    <section class="home-section">
-      <h2 class="home-section-title">{title}</h2>
-      <div class="home-section-body">{children}</div>
+    <section class="mb-6">
+      <h2 class="text-[11px] font-semibold uppercase tracking-[0.06em] text-text-muted mb-3">{title}</h2>
+      <div class="flex flex-col gap-1.5">{children}</div>
     </section>
   )
 }
@@ -161,12 +161,12 @@ function HomeFooter() {
   const h = health.value
   if (!h?.version) return null
   return (
-    <footer class="home-footer">
+    <footer class="mt-auto pt-4 border-t border-border text-[11px] text-text-muted leading-[1.5]">
       gmux version {h.version}
       {h.update_available && (
         <>
           {' · '}
-          <a class="home-footer-link" href="https://gmux.app/changelog/" target="_blank">
+          <a class="font-inherit text-accent bg-transparent border-0 p-0 cursor-pointer underline underline-offset-[2px] hover:text-text" href="https://gmux.app/changelog/" target="_blank">
             version {h.update_available} available!
           </a>
         </>
