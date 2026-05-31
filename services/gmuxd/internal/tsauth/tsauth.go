@@ -96,11 +96,11 @@ func (l *Listener) Diag() DiagStatus {
 // Call Shutdown to stop.
 func Start(cfg Config, stateDir string, handler http.Handler) *Listener {
 	tsnetDir := filepath.Join(stateDir, "tsnet")
-	// cfg.Hostname carries the OS hostname seed; the actual tailscale
-	// name is the previously-registered one (sentinel) if any, else
-	// "gmux-<slug>" derived from it. Tailscale owns the identity after
-	// first registration, so we never wipe state on change (ADR 0007).
-	name := loadOrSeedHostname(tsnetDir, seedName(cfg.Hostname))
+	// cfg.Hostname is the requested name for *first* registration. The
+	// actual name is the previously-registered one (sentinel) if any.
+	// Tailscale owns the identity after first registration, so we never
+	// wipe state on change (ADR 0007).
+	name := loadOrSeedHostname(tsnetDir, cfg.Hostname)
 	cfg.Hostname = name
 
 	log.Printf("tsauth: starting with hostname %q", name)
@@ -315,11 +315,12 @@ func loadOrSeedHostname(tsnetDir, seed string) string {
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
-// seedName derives the first-registration tailscale name from the OS
-// hostname: "gmux-<slug>" so the node is both hostname-derived and
+// SeedFromHostname derives the first-registration tailscale name from the
+// OS hostname: "gmux-<slug>" so the node is both hostname-derived and
 // matches the tailnet discovery prefix ("gmux-*"). Falls back to "gmux"
-// when the hostname has no usable characters.
-func seedName(osHostname string) string {
+// when the hostname has no usable characters. Callers may bypass this
+// with an explicit name (e.g. the GMUXD_TS_HOSTNAME override).
+func SeedFromHostname(osHostname string) string {
 	s := strings.Trim(slugRe.ReplaceAllString(strings.ToLower(osHostname), "-"), "-")
 	if s == "" {
 		return "gmux"

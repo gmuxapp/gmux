@@ -2023,10 +2023,17 @@ func serve(stderr io.Writer) int {
 	// ── Optional tailscale listener ──
 
 	if cfg.Tailscale.Enabled {
+		// Requested tailscale name for *first* registration (ADR 0007):
+		// GMUXD_TS_HOSTNAME wins verbatim (used by dev-server and any
+		// multi-instance/container setup that needs a distinct name on a
+		// shared OS hostname); otherwise derive "gmux-<os-hostname>".
+		// Once registered, tailscale owns the name and this is ignored.
+		tsSeed := strings.TrimSpace(os.Getenv("GMUXD_TS_HOSTNAME"))
+		if tsSeed == "" {
+			tsSeed = tsauth.SeedFromHostname(hostname)
+		}
 		tsListener = tsauth.Start(tsauth.Config{
-			// Seed the tailscale name from the OS hostname; tsauth derives
-			// "gmux-<slug>" on first registration and keeps it thereafter.
-			Hostname: hostname,
+			Hostname: tsSeed,
 			Allow:    cfg.Tailscale.Allow,
 		}, stateDir, mux)
 		defer tsListener.Shutdown()

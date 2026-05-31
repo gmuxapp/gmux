@@ -86,7 +86,7 @@ func TestLoadOrSeedHostname_KeepsExistingNeverWipes(t *testing.T) {
 	}
 }
 
-func TestSeedName(t *testing.T) {
+func TestSeedFromHostname(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{"Aquilo", "gmux-aquilo"},
 		{"my.box", "gmux-my-box"},
@@ -95,8 +95,8 @@ func TestSeedName(t *testing.T) {
 		{"---", "gmux"},
 	}
 	for _, tt := range tests {
-		if got := seedName(tt.in); got != tt.want {
-			t.Errorf("seedName(%q) = %q, want %q", tt.in, got, tt.want)
+		if got := SeedFromHostname(tt.in); got != tt.want {
+			t.Errorf("SeedFromHostname(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}
 }

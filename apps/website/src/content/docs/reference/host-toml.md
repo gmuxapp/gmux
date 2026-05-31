@@ -32,6 +32,8 @@ devcontainers = true     # subscribe to Docker events, register gmux containers
 
 This host's name — what peers see in their UI and URLs — is **not** configured here. When Tailscale is enabled the name is your Tailscale machine name (owned and kept stable by Tailscale itself); otherwise it is the OS hostname. The first time the daemon joins a tailnet it requests `gmux-<hostname>`, and Tailscale keeps that name across restarts and container recreation. See [ADR 0007](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0007-host-identity-and-peer-urls.md).
 
+To seed a specific name at first registration — e.g. when running several daemons on one machine — set the `GMUXD_TS_HOSTNAME` environment variable (used verbatim; prefix it with `gmux-` to stay auto-discoverable). It only applies before the node is registered; afterward Tailscale owns the name.
+
 ## Connecting to other hosts
 
 There is **no `[[peers]]` config**. Add a host you want to aggregate sessions from at runtime via **Settings → Hosts → Connect to host** (enter its URL; leave the token blank on your own tailnet). Connected hosts are saved to `peers.json` in the state directory, and the peer's name is taken from the host itself — you don't assign one. Hosts on the same tailnet are also discovered automatically.

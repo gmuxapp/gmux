@@ -9,11 +9,11 @@ container's terminal sessions from any device on your tailnet.
 # 1. Create data directories
 mkdir -p data/{workspace,gmux-config,gmux-state}
 
-# 2. Configure Tailscale (pick a unique hostname)
+# 2. Enable Tailscale. The tailscale name is gmux-<container hostname>
+#    (compose sets `hostname: dev`), so this joins as gmux-dev.
 cat > data/gmux-config/host.toml << 'EOF'
 [tailscale]
 enabled = true
-hostname = "dev"
 EOF
 
 # 3. Build and start
@@ -24,7 +24,7 @@ docker logs dev 2>&1 | grep "login.tailscale.com"
 # Visit the URL to approve the device
 
 # 5. Open in browser
-# https://dev.your-tailnet.ts.net
+# https://gmux-dev.your-tailnet.ts.net
 ```
 
 ## What's included

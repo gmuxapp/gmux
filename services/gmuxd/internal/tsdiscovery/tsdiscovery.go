@@ -132,7 +132,7 @@ func (w *Watcher) SetTailscale(lc *tailscale.LocalClient, transport http.RoundTr
 // is not started.
 func (w *Watcher) Start() {
 	// Re-register known gmux peers immediately (without re-probing).
-	// Skip any that are now manually configured (user added a [[peers]]
+	// Skip any that are now manually configured (user added a manual peer in peers.json
 	// entry after the initial discovery).
 	w.mu.Lock()
 	for _, d := range w.state.Devices {

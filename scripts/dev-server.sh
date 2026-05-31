@@ -51,8 +51,11 @@ port = $DEV_PORT
 
 [tailscale]
 enabled = true
-hostname = "$DEV_TS_HOSTNAME"
 EOF
+
+# The tailscale name is set via env (ADR 0007: no host.toml hostname key).
+# Each instance needs a distinct name on this shared OS hostname.
+export GMUXD_TS_HOSTNAME="$DEV_TS_HOSTNAME"
 
 # ── Shared env ──
 
