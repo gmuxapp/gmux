@@ -1,18 +1,50 @@
-# gmux
+# gmux (Zig port — "Teak")
 
-**Keep tabs on every AI agent, test runner, and long-running process across your machines. Work from your desktop, steer from your phone.**
+**gmux ported to Zig 0.16.0**
 
-Launch any command as a managed session. gmux gives you a live, interactive terminal for each one — grouped by project, with real-time status updates pushed to your browser. When an agent needs input, you'll know. When tests fail, you'll see it. Switch to your phone and the same view is there, ready for you to course-correct.
+This is a Zig port of the [gmux](https://github.com/gmuxapp/gmux) terminal multiplexer for AI agents. The original is written in Go; this port targets Zig 0.16.0.
 
-No Electron, no desktop app. Just a browser and two small binaries.
-
-## Install
+## Build
 
 ```bash
-brew install gmuxapp/tap/gmux
+# Requires Zig 0.16.0
+zig build              # Debug build
+zig build -Doptimize=ReleaseSafe    # ReleaseSafe (smaller, faster)
+zig build -Doptimize=ReleaseSmall   # ReleaseSmall (smallest binary)
+zig build test          # Run unit tests
 ```
 
-Or download from [GitHub Releases](https://github.com/gmuxapp/gmux/releases).
+## Architecture
+
+```
+src/
+├── gmux/          # CLI binary (gmux)
+│   ├── main.zig
+│   ├── actions.zig
+│   ├── attach.zig
+│   ├── browser.zig
+│   ├── cli.zig
+│   ├── daemon.zig
+│   ├── dumpenv.zig
+│   ├── handshake.zig
+│   ├── run.zig
+│   └── wait.zig
+├── gmuxd/         # Daemon binary (gmuxd)
+│   └── main.zig
+├── adapter/       # Adapter framework
+│   ├── adapter.zig
+│   ├── capabilities.zig
+│   ├── normalize.zig
+│   └── registry.zig
+├── adapters/      # Adapter implementations
+│   ├── shell.zig
+│   ├── pi.zig
+│   ├── codex.zig
+│   ├── claude.zig
+│   └── attribution.zig
+├── ...            # Core packages (paths, sessionenv, scrollback, etc.)
+└── root.zig       # Module root
+```
 
 ## Quick start
 

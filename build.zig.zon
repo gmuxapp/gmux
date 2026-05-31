@@ -1,0 +1,17 @@
+.{
+    .name = .gmux,
+    .version = "0.1.0",
+    .fingerprint = 0xcb2c3c68f41de721,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .httpz = .{
+            .url = "git+https://github.com/karlseguin/http.zig?ref=master#744c588608d2b13e6dba2013577b2e0928877f19",
+            .hash = "httpz-0.0.0-PNVzrCzKCAAKOXAKsuPzDZYzstlou0FLBp3HlDoRgmUa",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
