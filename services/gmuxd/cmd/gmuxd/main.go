@@ -1006,6 +1006,70 @@ func serve(stderr io.Writer) int {
 		peer.ForwardPath(w, r, "/"+sub)
 	})
 
+	// POST /v1/peers — connect to a host (ADR 0007 §5,§7). Probes the
+	// target's /v1/health for its node_id + name, dedups by node_id
+	// (already-known host reached again is a no-op, not a duplicate),
+	// resolves any name collision viewer-side, then connects + persists.
+	mux.HandleFunc("POST /v1/peers", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 8192))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "read error")
+			return
+		}
+		var req struct {
+			URL   string `json:"url"`
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		req.URL = strings.TrimRight(strings.TrimSpace(req.URL), "/")
+		if err := peerstore.ValidateURL(req.URL); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+
+		nodeID, name, err := probePeerHealth(r.Context(), req.URL, req.Token)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "unreachable", fmt.Sprintf("could not reach host: %v", err))
+			return
+		}
+
+		// Same host already known (this peer, or one reached another way):
+		// not a collision — report the existing record.
+		if existing, ok := peerStore.FindByNodeID(nodeID); ok {
+			writeJSON(w, map[string]any{"peer": existing, "already_connected": true})
+			return
+		}
+
+		rec, err := peerStore.Add(peerstore.Record{Name: name, URL: req.URL, Token: req.Token, NodeID: nodeID})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+		peerManager.AddPeer(config.PeerConfig{Name: rec.Name, URL: rec.URL, Token: rec.Token})
+		log.Printf("peering: connected to %s (%s)", rec.Name, rec.URL)
+		writeJSON(w, map[string]any{"peer": rec})
+	})
+
+	// DELETE /v1/peers/{name} — disconnect a manually-added peer.
+	mux.HandleFunc("DELETE /v1/peers/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		rec, ok, err := peerStore.Remove(name)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to persist peers")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("peer %q is not a manually-added host", name))
+			return
+		}
+		peerManager.RemovePeer(rec.Name)
+		log.Printf("peering: disconnected from %s", rec.Name)
+		writeJSON(w, map[string]any{"ok": true})
+	})
+
 	// ── Sessions ──
 
 	mux.HandleFunc("GET /v1/sessions", func(w http.ResponseWriter, r *http.Request) {
@@ -1913,29 +1977,30 @@ func serve(stderr io.Writer) int {
 
 	hostname, _ := os.Hostname()
 	manualPeers := peerStore.PeerConfigs()
-	if len(manualPeers) > 0 || cfg.Discovery.Devcontainers || (cfg.Tailscale.Enabled && cfg.Discovery.Tailscale) {
-		peerManager = peering.NewManager(manualPeers, sessions, hostname)
-		// Prune namespaced projects.json keys when a Local peer
-		// (devcontainer) is removed: its `id@<peer>` session keys can
-		// never resolve again and would accumulate dead weight in the
-		// parent's projects.json.
-		peerManager.OnPeerRemoved = func(name string, wasLocal bool) {
-			if wasLocal {
-				projectMgr.PruneNamespacedKeys(name)
-			}
+	// Always create the manager: peers can be added at runtime via
+	// /v1/peers (ADR 0007 §5), so it must exist even when nothing is
+	// configured or discovered at startup.
+	peerManager = peering.NewManager(manualPeers, sessions, hostname)
+	// Prune namespaced projects.json keys when a Local peer
+	// (devcontainer) is removed: its `id@<peer>` session keys can
+	// never resolve again and would accumulate dead weight in the
+	// parent's projects.json.
+	peerManager.OnPeerRemoved = func(name string, wasLocal bool) {
+		if wasLocal {
+			projectMgr.PruneNamespacedKeys(name)
 		}
-		peerManager.Start()
-		if len(manualPeers) > 0 {
-			log.Printf("peering: %d manual peer(s) loaded", len(manualPeers))
-		}
-
-		// Reconnect all peers after system sleep.
-		go func() {
-			for range sleepWatcher.C() {
-				peerManager.OnSleep()
-			}
-		}()
 	}
+	peerManager.Start()
+	if len(manualPeers) > 0 {
+		log.Printf("peering: %d manual peer(s) loaded", len(manualPeers))
+	}
+
+	// Reconnect all peers after system sleep.
+	go func() {
+		for range sleepWatcher.C() {
+			peerManager.OnSleep()
+		}
+	}()
 
 	// ── Devcontainer discovery ──
 
@@ -2335,6 +2400,43 @@ func sendSSE(w http.ResponseWriter, event string, payload any) {
 func writeJSON(w http.ResponseWriter, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// probePeerHealth fetches the target's /v1/health and returns its opaque
+// node_id and self-reported name (ADR 0007). The add-peer flow uses the
+// node_id to dedup and adopts the name as the peer's routing identity.
+// Manual peers use the default transport (as [[peers]] did before).
+func probePeerHealth(ctx context.Context, baseURL, token string) (nodeID, name string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/health", nil)
+	if err != nil {
+		return "", "", err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("health returned %s", resp.Status)
+	}
+	var env struct {
+		Data struct {
+			NodeID   string `json:"node_id"`
+			Hostname string `json:"hostname"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&env); err != nil {
+		return "", "", fmt.Errorf("parsing health: %w", err)
+	}
+	if env.Data.Hostname == "" {
+		return "", "", fmt.Errorf("host did not report a name")
+	}
+	return env.Data.NodeID, env.Data.Hostname, nil
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
