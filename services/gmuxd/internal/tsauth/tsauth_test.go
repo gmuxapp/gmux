@@ -42,55 +42,32 @@ func TestIsAllowedEmptyList(t *testing.T) {
 	}
 }
 
-func TestResetStateIfHostnameChanged(t *testing.T) {
+func TestLoadOrSeedHostname_SeedsWhenAbsent(t *testing.T) {
 	dir := t.TempDir()
 	tsnetDir := filepath.Join(dir, "tsnet")
 
-	// First call: no existing state, creates sentinel.
-	resetStateIfHostnameChanged(tsnetDir, "gmux")
+	name := loadOrSeedHostname(tsnetDir, "gmux-aquilo")
+	if name != "gmux-aquilo" {
+		t.Errorf("name = %q, want %q", name, "gmux-aquilo")
+	}
 	got, err := os.ReadFile(filepath.Join(tsnetDir, hostnameFile))
 	if err != nil {
 		t.Fatalf("sentinel not created: %v", err)
 	}
-	if string(got) != "gmux\n" {
-		t.Errorf("sentinel = %q, want %q", got, "gmux\n")
-	}
-
-	// Simulate tsnet creating a state file.
-	statePath := filepath.Join(tsnetDir, "tailscaled.state")
-	if err := os.WriteFile(statePath, []byte("fake-state"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	// Same hostname: state preserved.
-	resetStateIfHostnameChanged(tsnetDir, "gmux")
-	if _, err := os.Stat(statePath); err != nil {
-		t.Errorf("state file should still exist after same-hostname call: %v", err)
-	}
-
-	// Different hostname: state directory wiped and re-created.
-	resetStateIfHostnameChanged(tsnetDir, "gmux-hs")
-	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
-		t.Errorf("state file should be gone after hostname change, got err=%v", err)
-	}
-	got, err = os.ReadFile(filepath.Join(tsnetDir, hostnameFile))
-	if err != nil {
-		t.Fatalf("sentinel not re-created: %v", err)
-	}
-	if string(got) != "gmux-hs\n" {
-		t.Errorf("sentinel = %q, want %q", got, "gmux-hs\n")
+	if string(got) != "gmux-aquilo\n" {
+		t.Errorf("sentinel = %q, want %q", got, "gmux-aquilo\n")
 	}
 }
 
-// Upgrade scenario: existing tsnet state from a version that didn't write
-// the sentinel file. The state must be preserved (not nuked), and the
-// sentinel must be written for future runs.
-func TestResetStateIfHostnameChanged_UpgradePreservesState(t *testing.T) {
+// The recorded name is kept verbatim and tsnet state is never wiped, even
+// when the seed differs — tailscale owns the identity (ADR 0007).
+func TestLoadOrSeedHostname_KeepsExistingNeverWipes(t *testing.T) {
 	dir := t.TempDir()
 	tsnetDir := filepath.Join(dir, "tsnet")
-
-	// Simulate pre-existing tsnet state with no sentinel.
 	if err := os.MkdirAll(tsnetDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tsnetDir, hostnameFile), []byte("project-a\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	statePath := filepath.Join(tsnetDir, "tailscaled.state")
@@ -98,24 +75,29 @@ func TestResetStateIfHostnameChanged_UpgradePreservesState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resetStateIfHostnameChanged(tsnetDir, "gmux")
-
-	// State file must survive.
+	// A different seed must NOT rename or wipe.
+	name := loadOrSeedHostname(tsnetDir, "gmux-aquilo")
+	if name != "project-a" {
+		t.Errorf("name = %q, want kept %q", name, "project-a")
+	}
 	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("state file was deleted during upgrade: %v", err)
+	if err != nil || string(data) != "existing-keys" {
+		t.Fatalf("state file must survive untouched, got %q err=%v", data, err)
 	}
-	if string(data) != "existing-keys" {
-		t.Errorf("state file content changed: %q", data)
-	}
+}
 
-	// Sentinel must now exist.
-	got, err := os.ReadFile(filepath.Join(tsnetDir, hostnameFile))
-	if err != nil {
-		t.Fatalf("sentinel not written: %v", err)
+func TestSeedName(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"Aquilo", "gmux-aquilo"},
+		{"my.box", "gmux-my-box"},
+		{"ca75413aec31", "gmux-ca75413aec31"},
+		{"", "gmux"},
+		{"---", "gmux"},
 	}
-	if string(got) != "gmux\n" {
-		t.Errorf("sentinel = %q, want %q", got, "gmux\n")
+	for _, tt := range tests {
+		if got := seedName(tt.in); got != tt.want {
+			t.Errorf("seedName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }
 

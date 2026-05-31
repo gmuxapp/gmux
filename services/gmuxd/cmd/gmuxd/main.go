@@ -1954,7 +1954,9 @@ func serve(stderr io.Writer) int {
 
 	if cfg.Tailscale.Enabled {
 		tsListener = tsauth.Start(tsauth.Config{
-			Hostname: cfg.Tailscale.Hostname,
+			// Seed the tailscale name from the OS hostname; tsauth derives
+			// "gmux-<slug>" on first registration and keeps it thereafter.
+			Hostname: hostname,
 			Allow:    cfg.Tailscale.Allow,
 		}, stateDir, mux)
 		defer tsListener.Shutdown()
@@ -1965,7 +1967,7 @@ func serve(stderr io.Writer) int {
 				Manager:        peerManager,
 				StateDir:       stateDir,
 				ManualPeerURLs: tsdiscovery.ManualPeerURLs(cfg.Peers),
-				HostnamePrefix: cfg.Tailscale.Hostname,
+				// HostnamePrefix defaults to "gmux" in tsdiscovery.
 			})
 			tsDiscoveryCtx, tsDiscoveryCancel := context.WithCancel(context.Background())
 			defer tsDiscoveryCancel()

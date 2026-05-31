@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -95,11 +96,16 @@ func (l *Listener) Diag() DiagStatus {
 // Call Shutdown to stop.
 func Start(cfg Config, stateDir string, handler http.Handler) *Listener {
 	tsnetDir := filepath.Join(stateDir, "tsnet")
-	resetStateIfHostnameChanged(tsnetDir, cfg.Hostname)
+	// cfg.Hostname carries the OS hostname seed; the actual tailscale
+	// name is the previously-registered one (sentinel) if any, else
+	// "gmux-<slug>" derived from it. Tailscale owns the identity after
+	// first registration, so we never wipe state on change (ADR 0007).
+	name := loadOrSeedHostname(tsnetDir, seedName(cfg.Hostname))
+	cfg.Hostname = name
 
-	log.Printf("tsauth: starting with hostname %q", cfg.Hostname)
+	log.Printf("tsauth: starting with hostname %q", name)
 	srv := &tsnet.Server{
-		Hostname: cfg.Hostname,
+		Hostname: name,
 		Dir:      tsnetDir,
 	}
 
@@ -281,48 +287,44 @@ func resolveOwnerLogin(lc *tailscale.LocalClient) (string, error) {
 	}
 }
 
-// hostnameFile is a sentinel that records the hostname last used by tsnet.
-// When the configured hostname changes, we must clear the tsnet state so
-// the node re-registers under the new name. Without this, the Tailscale
-// control plane keeps the old device name from the persisted node keys.
+// hostnameFile records the tailscale name this node registered under.
+// It is the durable seed: once written it is never changed by gmuxd, so
+// the node keeps its tailscale identity across restarts and container
+// recreation (ADR 0007 — tailscale owns the name; we never wipe state).
 const hostnameFile = "hostname"
 
-// resetStateIfHostnameChanged removes the tsnet state directory when the
-// configured hostname differs from the last-used hostname. This forces a
-// clean re-registration with the Tailscale control plane.
-func resetStateIfHostnameChanged(tsnetDir, hostname string) {
+// loadOrSeedHostname returns the tailscale name to register under. If a
+// name was recorded on a previous run it is kept verbatim (no rename, no
+// state wipe); otherwise the seed is adopted and recorded.
+func loadOrSeedHostname(tsnetDir, seed string) string {
 	path := filepath.Join(tsnetDir, hostnameFile)
-	prev, err := os.ReadFile(path)
-	if err == nil && strings.TrimSpace(string(prev)) == hostname {
-		return // hostname unchanged
-	}
-
-	dirExists := false
-	if _, serr := os.Stat(tsnetDir); serr == nil {
-		dirExists = true
-	}
-
-	if err != nil && dirExists {
-		// Sentinel missing but directory exists: upgrade from an older
-		// version that didn't write the sentinel. Adopt the current
-		// hostname without nuking state to avoid forcing re-auth.
-		log.Printf("tsauth: writing hostname sentinel for existing state (hostname %q)", hostname)
-	} else if prev != nil {
-		// Sentinel exists with a different hostname: clear everything.
-		log.Printf("tsauth: hostname changed from %q to %q, clearing tsnet state", strings.TrimSpace(string(prev)), hostname)
-		if err := os.RemoveAll(tsnetDir); err != nil {
-			log.Printf("tsauth: WARNING: failed to clear tsnet state dir: %v", err)
+	if prev, err := os.ReadFile(path); err == nil {
+		if name := strings.TrimSpace(string(prev)); name != "" {
+			return name
 		}
 	}
-
-	// (Re-)create the directory and write the sentinel.
 	if err := os.MkdirAll(tsnetDir, 0o700); err != nil {
 		log.Printf("tsauth: WARNING: failed to create tsnet state dir: %v", err)
-		return
+		return seed
 	}
-	if err := os.WriteFile(path, []byte(hostname+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(seed+"\n"), 0o600); err != nil {
 		log.Printf("tsauth: WARNING: failed to write hostname sentinel: %v", err)
 	}
+	return seed
+}
+
+var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+// seedName derives the first-registration tailscale name from the OS
+// hostname: "gmux-<slug>" so the node is both hostname-derived and
+// matches the tailnet discovery prefix ("gmux-*"). Falls back to "gmux"
+// when the hostname has no usable characters.
+func seedName(osHostname string) string {
+	s := strings.Trim(slugRe.ReplaceAllString(strings.ToLower(osHostname), "-"), "-")
+	if s == "" {
+		return "gmux"
+	}
+	return "gmux-" + s
 }
 
 // addIfMissing appends entry to the list if not already present (case-insensitive).

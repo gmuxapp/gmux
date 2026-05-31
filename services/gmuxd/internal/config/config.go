@@ -80,9 +80,9 @@ type TailscaleConfig struct {
 	// Enabled starts a tsnet listener on the tailnet. Default false.
 	Enabled bool `toml:"enabled"`
 
-	// Hostname is the tailscale machine name (e.g. "gmux" -> gmux.tailnet.ts.net).
-	// Default "gmux".
-	Hostname string `toml:"hostname"`
+	// NOTE: there is no `hostname` key (removed in ADR 0007). The node's
+	// tailscale name is derived from the OS hostname on first
+	// registration and then owned/persisted by tailscale itself.
 
 	// Allow is the list of additional tailscale login names permitted to connect
 	// (e.g. "user@github"). The node owner is always auto-whitelisted at runtime.
@@ -116,6 +116,10 @@ func Load() (Config, error) {
 		keys := make([]string, len(undecoded))
 		for i, k := range undecoded {
 			keys[i] = k.String()
+			// Targeted migration hints for keys removed in ADR 0007.
+			if keys[i] == "tailscale.hostname" {
+				return Config{}, fmt.Errorf("config: %s: tailscale.hostname is no longer supported (ADR 0007); remove it — the node name is now derived from the OS hostname and owned by tailscale", path)
+			}
 		}
 		return Config{}, fmt.Errorf("config: unknown keys in %s: %s", path, strings.Join(keys, ", "))
 	}
@@ -153,11 +157,6 @@ func validate(cfg Config) error {
 		if !strings.Contains(entry, "@") {
 			return fmt.Errorf("tailscale.allow entry %q doesn't look like a login name (expected format: user@provider)", entry)
 		}
-	}
-
-	// Tailscale: hostname must be non-empty when enabled.
-	if cfg.Tailscale.Enabled && cfg.Tailscale.Hostname == "" {
-		return fmt.Errorf("tailscale.enabled is true but tailscale.hostname is empty")
 	}
 
 	// Peers: validate each entry.
@@ -262,9 +261,6 @@ func isPrivateOrCGNAT(ip net.IP) bool {
 func defaults() Config {
 	return Config{
 		Port: 8790,
-		Tailscale: TailscaleConfig{
-			Hostname: "gmux",
-		},
 		Discovery: DiscoveryConfig{
 			Devcontainers: true,
 			Tailscale:     true,

@@ -21,9 +21,6 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Tailscale.Enabled {
 		t.Error("tailscale should be disabled by default")
 	}
-	if cfg.Tailscale.Hostname != "gmux" {
-		t.Errorf("hostname = %q, want %q", cfg.Tailscale.Hostname, "gmux")
-	}
 	if !cfg.Discovery.Devcontainers {
 		t.Error("discovery.devcontainers should default to true")
 	}
@@ -37,7 +34,6 @@ port = 9999
 
 [tailscale]
 enabled = true
-hostname = "mybox"
 allow = ["alice@github", "bob@github"]
 `)
 
@@ -50,9 +46,6 @@ allow = ["alice@github", "bob@github"]
 	}
 	if !cfg.Tailscale.Enabled {
 		t.Error("tailscale should be enabled")
-	}
-	if cfg.Tailscale.Hostname != "mybox" {
-		t.Errorf("hostname = %q, want %q", cfg.Tailscale.Hostname, "mybox")
 	}
 	if len(cfg.Tailscale.Allow) != 2 {
 		t.Fatalf("allow = %v, want 2 entries", cfg.Tailscale.Allow)
@@ -93,6 +86,24 @@ alow = ["user@github"]
 	}
 	if !strings.Contains(err.Error(), "unknown keys") {
 		t.Errorf("error = %q, want mention of unknown keys", err)
+	}
+}
+
+func TestLoadRejectsRemovedTailscaleHostname(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+[tailscale]
+enabled = true
+hostname = "project-a"
+`)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for removed key tailscale.hostname")
+	}
+	if !strings.Contains(err.Error(), "tailscale.hostname is no longer supported") {
+		t.Errorf("error = %q, want migration hint for tailscale.hostname", err)
 	}
 }
 
