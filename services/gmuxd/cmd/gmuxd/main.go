@@ -25,6 +25,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/identity"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/nodeid"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/peerstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/clipfile"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/coalesce"
@@ -574,6 +575,13 @@ func serve(stderr io.Writer) int {
 	// persisted alongside the auth token; used for peer dedup, never
 	// shown or routed.
 	nodeID, err := nodeid.LoadOrCreate(stateDir)
+	if err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
+
+	// Manually-added peers are runtime state (ADR 0007 §5), not config.
+	// Opened early so the /v1/peers add/remove handlers can capture it.
+	peerStore, err := peerstore.Open(stateDir)
 	if err != nil {
 		log.Fatalf("FATAL: %v", err)
 	}
@@ -1820,10 +1828,6 @@ func serve(stderr io.Writer) int {
 	if err != nil {
 		log.Fatalf("FATAL: %v", err)
 	}
-	if err := cfg.ResolveTokens(); err != nil {
-		log.Fatalf("FATAL: %v", err)
-	}
-
 	// ── Resolve TCP listen address and auth token ──
 
 	resolved, err := cfg.ListenAddr()
@@ -1908,8 +1912,9 @@ func serve(stderr io.Writer) int {
 	// ── Peer connections (hub protocol) ──
 
 	hostname, _ := os.Hostname()
-	if len(cfg.Peers) > 0 || cfg.Discovery.Devcontainers || (cfg.Tailscale.Enabled && cfg.Discovery.Tailscale) {
-		peerManager = peering.NewManager(cfg.Peers, sessions, hostname)
+	manualPeers := peerStore.PeerConfigs()
+	if len(manualPeers) > 0 || cfg.Discovery.Devcontainers || (cfg.Tailscale.Enabled && cfg.Discovery.Tailscale) {
+		peerManager = peering.NewManager(manualPeers, sessions, hostname)
 		// Prune namespaced projects.json keys when a Local peer
 		// (devcontainer) is removed: its `id@<peer>` session keys can
 		// never resolve again and would accumulate dead weight in the
@@ -1920,8 +1925,8 @@ func serve(stderr io.Writer) int {
 			}
 		}
 		peerManager.Start()
-		if len(cfg.Peers) > 0 {
-			log.Printf("peering: %d peer(s) configured", len(cfg.Peers))
+		if len(manualPeers) > 0 {
+			log.Printf("peering: %d manual peer(s) loaded", len(manualPeers))
 		}
 
 		// Reconnect all peers after system sleep.
@@ -1966,7 +1971,7 @@ func serve(stderr io.Writer) int {
 			tsDiscovery = tsdiscovery.New(tsdiscovery.Config{
 				Manager:        peerManager,
 				StateDir:       stateDir,
-				ManualPeerURLs: tsdiscovery.ManualPeerURLs(cfg.Peers),
+				ManualPeerURLs: tsdiscovery.ManualPeerURLs(manualPeers),
 				// HostnamePrefix defaults to "gmux" in tsdiscovery.
 			})
 			tsDiscoveryCtx, tsDiscoveryCancel := context.WithCancel(context.Background())
