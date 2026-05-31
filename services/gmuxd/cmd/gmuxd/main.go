@@ -23,6 +23,7 @@ import (
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/packages/sessionenv"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/nodeid"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/clipfile"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/coalesce"
@@ -568,6 +569,14 @@ func serve(stderr io.Writer) int {
 	// State directory for persistent files (projects.json, auth-token, etc).
 	stateDir := paths.StateDir()
 
+	// Stable, opaque per-node identity (ADR 0007). Generated once and
+	// persisted alongside the auth token; used for peer dedup, never
+	// shown or routed.
+	nodeID, err := nodeid.LoadOrCreate(stateDir)
+	if err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
+
 	// peerManager and tsDiscovery are initialized later after config is
 	// loaded. Closures (reconcileProjectStamps, buildSessionInfos call
 	// sites) capture these pointers so handlers work once they're set.
@@ -693,7 +702,7 @@ func serve(stderr io.Writer) int {
 		data := map[string]any{
 			"service": "gmuxd",
 			"version": version,
-			"node_id": "node-local",
+			"node_id": nodeID,
 			"status":  "ready",
 		}
 		if h, err := os.Hostname(); err == nil {
