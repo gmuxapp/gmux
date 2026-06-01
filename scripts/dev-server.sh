@@ -103,8 +103,9 @@ EOF
 # Seed projects.json when absent; if the file already exists but is missing
 # the workspace entry (e.g. seeded by e2e setup or an earlier run), add it.
 # Never remove or rewrite entries gmuxd has added (e.g. per-project sessions lists).
-if [[ ! -f "$GMUX_STATE_DIR/projects.json" ]]; then
-  cat > "$GMUX_STATE_DIR/projects.json" << EOF
+if [[ ! -f "$DEV_STATE_DIR/state/gmux/projects.json" ]]; then
+  mkdir -p "$DEV_STATE_DIR/state/gmux"
+  cat > "$DEV_STATE_DIR/state/gmux/projects.json" << EOF
 {
   "version": 2,
   "items": [
@@ -115,7 +116,7 @@ if [[ ! -f "$GMUX_STATE_DIR/projects.json" ]]; then
 EOF
 else
   # Upsert: add workspace entry if it is missing.
-  python3 - "$GMUX_STATE_DIR/projects.json" "$WORKSPACE_DIR" << 'PYEOF'
+  python3 - "$DEV_STATE_DIR/state/gmux/projects.json" "${WORKSPACE_DIR:-$HOME}" << 'PYEOF'
 import json, sys
 path, workspace_dir = sys.argv[1], sys.argv[2]
 with open(path) as f:
