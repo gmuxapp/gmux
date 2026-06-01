@@ -109,6 +109,9 @@ type Config struct {
 	// Port is the TCP port for the HTTP listener (default 8790).
 	Port int `toml:"port"`
 
+	// LogdURL, if set, forwards all daemon log output to a logd sink.
+	LogdURL string `toml:"logd_url"`
+
 	Tailscale TailscaleConfig `toml:"tailscale"`
 	Discovery DiscoveryConfig `toml:"discovery"`
 
