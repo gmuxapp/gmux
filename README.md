@@ -176,8 +176,8 @@ pnpm install      # JS dependencies
 ./dev              # start all services with watch/HMR
 ```
 
-For frontend iteration, sandbox usage, and session URL conventions see
-[docs/running-dev-frontend.md](docs/running-dev-frontend.md).
+For manual verification (bug reproduction, fix confirmation, screenshots) and automated E2E tests see
+[docs/agent-verification.md](docs/agent-verification.md) and [docs/e2e.md](docs/e2e.md).
 
 ### Monorepo layout
 

@@ -41,7 +41,7 @@ moon run gmuxd:dev        # just gmuxd with watchexec
 moon run gmux-web:dev     # just vite
 ```
 
-For additional scenarios (frontend-only against existing gmuxd, sandbox/container setup), see **[docs/running-dev-frontend.md](docs/running-dev-frontend.md)**.
+For manual verification (bug reproduction, fix confirmation, screenshots), see **[docs/agent-verification.md](docs/agent-verification.md)**. For automated E2E tests, see **[docs/e2e.md](docs/e2e.md)**.
 
 ## Tests & linting
 

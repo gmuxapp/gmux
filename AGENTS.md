@@ -58,6 +58,27 @@ messages directly. Rules that follow from this:
   Discord announcement falls back to the auto-generated bullet list
   so subscribers can still see what changed without clicking through.
 
+## Manual verification
+
+Use `docs/agent-verification.md` to pick the right dev setup before reproducing a
+bug or confirming a fix. Three options:
+
+| Scenario | Option |
+|---|---|
+| UI / React / CSS only; no Go changes | **A** — `just dev-frontend` (vite → prod daemon `:8790`) |
+| Go daemon changed | **B** — `just dev` (vite `:5173` + dev daemon `:8791`) |
+| Bug only appears in production bundle | **C** — `just build` + run built `bin/gmuxd-*` |
+
+Default to **A**. Use **B** only when Go code has changed. Use **C** only when the
+bug requires the built artifact.
+
+For agent-browser screenshots with Options A and B, always authenticate and navigate
+via `localhost:5173` — not `:8790`. Vite binds IPv6 (`[::1]`); use `localhost`, not
+`127.0.0.1`. See `docs/agent-verification.md` for the full flow.
+
+For automated E2E tests, see `docs/e2e.md`. The Playwright suite manages its own
+isolated daemon — do not mix it with the manual verification setups above.
+
 ## Other rules
 
 - Push changes and create pull requests. Don't commit directly to
