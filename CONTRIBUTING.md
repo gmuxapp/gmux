@@ -28,9 +28,9 @@ just dev
 ```
 
 This starts:
-- **gmuxd** (`:7799`) — Go, auto-restarts on `.go` changes via watchexec
+- **gmuxd** (`:22226`) — Go, auto-restarts on `.go` changes via watchexec
 - **gmux-web** (`:5173`) — Vite HMR, proxies `/v1/*` and `/ws/*` to gmuxd
-- Open **http://localhost:7799** (gmuxd proxies vite on the same port)
+- Open **http://localhost:22226** (gmuxd proxies vite on the same port)
 
 **No manual kill needed.** When gmuxd starts, it asks any existing instance to shut down gracefully via the Unix socket before binding.
 
