@@ -62,7 +62,7 @@ npx vite &
 
 **Step 2** — Find the auth token (path depends on which daemon is running):
 ```bash
-TOKEN=$(find ~ -name 'auth-token' -path '*/gmux*' 2>/dev/null | head -1 | xargs cat)
+TOKEN=$(find ~/.local/state -name 'auth-token' -path '*/gmux*' 2>/dev/null | head -1 | xargs cat)
 ```
 
 **Step 3** — Log in via **localhost:5173** (not 8790):
@@ -97,6 +97,6 @@ Note: mock mode hides some interactive chrome (close buttons, file tree actions 
 - **`agent-browser` uses a persistent Chromium process** — `agent-browser close` to restart it with different flags.
 - **Use `localhost`, not `127.0.0.1`** — vite binds to `[::1]` (IPv6). `127.0.0.1` is IPv4 and gets `ERR_CONNECTION_REFUSED`.
 - **Log in via port 5173, not 8790** — the auth cookie is origin-scoped. Logging in at `:8790` sets a cookie for `:8790`; the browser at `:5173` stays unauthenticated.
-- **gmuxd token path varies** — use `find ~ -name 'auth-token' -path '*/gmux*' 2>/dev/null` rather than hardcoding the path. For the standard dev setup it is at `/home/agent/.local/state/gmux-dev/state/gmux/auth-token`.
+- **gmuxd token path varies** — use `find ~/.local/state -name 'auth-token' -path '*/gmux*' 2>/dev/null` rather than hardcoding the path. For the standard dev setup it is at `/home/agent/.local/state/gmux-dev/state/gmux/auth-token`.
 - **The e2e test token** is always `e2e` padded to 64 chars (`e2e` + 61 zeros), but the test daemon only lives during a test run — it's gone once the suite finishes.
 - **`E2E_SKIP_BUILD=1`** skips both vite build and `go build` — only use if the `bin/` binaries match the current source.

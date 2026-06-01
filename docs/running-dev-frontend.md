@@ -4,20 +4,6 @@ How to run the gmux-web frontend against a live gmuxd daemon.
 
 ---
 
-## The short version (frontend changes only)
-
-The daemon is already running at `:8790`. You just need vite:
-
-```bash
-cd projects/james/james-gmux/apps/gmux-web
-npx vite
-# Vite starts on :5173 and proxies /v1, /auth, /ws to 127.0.0.1:8790
-```
-
-Open **http://localhost:5173**. Your source changes hot-reload automatically.
-
----
-
 ## Prerequisites
 
 ```bash
@@ -27,9 +13,9 @@ pnpm install    # only needed once, or after lockfile changes
 
 ---
 
-## Option A — Frontend only, against the running daemon (recommended for UI work)
+## Option A — Frontend only, against a running daemon (recommended for UI work)
 
-The daemon at `:8790` is always running with real data. Attach vite to it:
+The PRODUCTION daemon at `:8790` is typically already running with real data and is available in the sandboxed workspace. Connect the gmux-web frontend to it:
 
 ```bash
 cd apps/gmux-web
@@ -87,7 +73,7 @@ and `agent-browser` instead.
 **Step 2** — Find the auth token for the running daemon:
 
 ```bash
-TOKEN=$(find ~ -name 'auth-token' -path '*/gmux*' 2>/dev/null | head -1 | xargs cat)
+TOKEN=$(find ~/.local/state -name 'auth-token' -path '*/gmux*' 2>/dev/null | head -1 | xargs cat)
 ```
 
 The token lives under the daemon's `XDG_STATE_HOME`. For the standard dev setup it
@@ -126,7 +112,7 @@ The markdown editor URL is `/:slug/_md/:path`. The slug must match an entry in
 
 ```bash
 # Path depends on XDG_STATE_HOME of the running daemon — find it dynamically:
-find ~ -name 'projects.json' -path '*/gmux*' 2>/dev/null | head -1 | xargs cat
+find ~/.local/state -name 'projects.json' -path '*/gmux*' 2>/dev/null | head -1 | xargs cat
 ```
 
 For the standard dev setup, the file is at
@@ -157,7 +143,7 @@ Non-matching sessions show in counts but have no navigable URL.
 
 Screenshot flow (always):
 ```bash
-TOKEN=$(find ~ -name 'auth-token' -path '*/gmux*' 2>/dev/null | head -1 | xargs cat)
+TOKEN=$(find ~/.local/state -name 'auth-token' -path '*/gmux*' 2>/dev/null | head -1 | xargs cat)
 agent-browser navigate "http://localhost:5173/auth/login?token=$TOKEN"
 agent-browser navigate "http://localhost:5173/<route>"
 agent-browser screenshot <path>.png
