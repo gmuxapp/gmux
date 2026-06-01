@@ -314,6 +314,11 @@ export function TerminalView({
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(new TextEncoder().encode(data))
           termRef.current?.focus()
+          // Clear any active text selection — it would otherwise persist
+          // visually because keystrokes go to the hidden wterm input, not
+          // the visible text spans that carry ::selection styling.
+          const sel = window.getSelection()
+          if (sel && !sel.isCollapsed) sel.removeAllRanges()
         }
       }
 

@@ -223,7 +223,16 @@ function MarkdownTabItem({
     <a
       class={`session-item${selected ? ' selected' : ''}`}
       href={href}
-      onClick={() => onClick?.()}
+      onClick={(e) => {
+        // Prevent href navigation when the close button is clicked.
+        // stopPropagation on the button normally handles this, but some
+        // browsers still follow the href in certain scenarios.
+        if ((e.target as Element).closest('button')) {
+          e.preventDefault()
+          return
+        }
+        onClick?.()
+      }}
       onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onClose() } }}
     >
       <span class="session-dot-indicator none" />

@@ -345,10 +345,10 @@ body {
 .folder-sessions.folder-sessions-tabs {
   display: flex;
   flex-direction: row;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-wrap: nowrap;
+  gap: 3px;
   padding: 6px 8px;
-  overflow: visible;
+  overflow: hidden;
 }
 
 /* ── Session Item ── */
@@ -573,13 +573,15 @@ body {
 .session-item.session-item-tab {
   display: inline-flex;
   align-items: center;
+  flex: 1 1 0;
+  min-width: 40px;
+  max-width: 140px;
   gap: 4px;
   padding: 3px 6px 3px 6px;
   border-radius: 5px;
   border: 1px solid var(--border);
   font-size: 11.5px;
   white-space: nowrap;
-  max-width: 140px;
   position: relative;
   overflow: hidden;
 }

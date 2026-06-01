@@ -11,8 +11,14 @@ export function measureTerminalFit(
   term: WTerm,
   containerEl: HTMLElement,
 ): TerminalSize | null {
-  const { clientWidth: w, clientHeight: h } = containerEl
-  if (w === 0 || h === 0) return null
+  // Use the element's content box (subtract padding) so the terminal grid
+  // doesn't get one column wider than the visible area and overflow-clip.
+  const cs = getComputedStyle(containerEl)
+  const padH = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+  const padV = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+  const w = containerEl.clientWidth - padH
+  const h = containerEl.clientHeight - padV
+  if (w <= 0 || h <= 0) return null
 
   const probe = document.createElement('span')
   probe.style.cssText = 'visibility:hidden;position:absolute;pointer-events:none;white-space:pre'

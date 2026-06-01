@@ -6,6 +6,7 @@ import type { WTerm } from '@wterm/dom'
 //
 // measureTerminalFit uses:
 //   - containerEl.clientWidth / clientHeight  (spied via vi.spyOn getter)
+//   - getComputedStyle(containerEl).paddingLeft/Right/Top/Bottom  (for padding)
 //   - document.createElement('span')          (stubbed globally)
 //   - probe.style.cssText = ...               (ignored by the fake)
 //   - probe.textContent = 'W'                 (ignored by the fake)
@@ -17,7 +18,15 @@ import type { WTerm } from '@wterm/dom'
 
 class FakeDomElement {
   private _styles = new Map<string, string>()
-  private _styleObj: { cssText: string; setProperty(k: string, v: string): void; getPropertyValue(k: string): string }
+  private _styleObj: {
+    cssText: string
+    setProperty(k: string, v: string): void
+    getPropertyValue(k: string): string
+    readonly paddingLeft: string
+    readonly paddingRight: string
+    readonly paddingTop: string
+    readonly paddingBottom: string
+  }
   textContent = ''
 
   constructor() {
@@ -26,6 +35,10 @@ class FakeDomElement {
       cssText: '',
       setProperty(k: string, v: string) { styles.set(k, v) },
       getPropertyValue(k: string) { return styles.get(k) ?? '' },
+      get paddingLeft()   { return styles.get('paddingLeft')   ?? '' },
+      get paddingRight()  { return styles.get('paddingRight')  ?? '' },
+      get paddingTop()    { return styles.get('paddingTop')    ?? '' },
+      get paddingBottom() { return styles.get('paddingBottom') ?? '' },
     }
   }
 
@@ -132,5 +145,24 @@ describe('measureTerminalFit', () => {
 
     const result = measureTerminalFit(term, container as unknown as HTMLElement)
     expect(result).toEqual({ cols: 1, rows: 1 })
+  })
+
+  it('subtracts container padding from usable dimensions', () => {
+    // Simulates padding: 0 6px 6px 6px — the real terminal-container style.
+    // clientWidth=812, clientHeight=431 → usable 800×425 → 100 cols, 25 rows.
+    const { term, container } = makeTerm(17)
+    vi.spyOn(container, 'clientWidth',  'get').mockReturnValue(812)
+    vi.spyOn(container, 'clientHeight', 'get').mockReturnValue(431)
+    container.style.setProperty('paddingLeft',   '6px')
+    container.style.setProperty('paddingRight',  '6px')
+    container.style.setProperty('paddingTop',    '0px')
+    container.style.setProperty('paddingBottom', '6px')
+    vi.spyOn(FakeDomElement.prototype, 'getBoundingClientRect').mockReturnValue(
+      { width: 8, height: 17, top: 0, left: 0, right: 8, bottom: 17, x: 0, y: 0, toJSON() { return this } },
+    )
+
+    const result = measureTerminalFit(term, container as unknown as HTMLElement)
+    // Without padding subtraction this would be cols: 101, rows: 25
+    expect(result).toEqual({ cols: 100, rows: 25 })
   })
 })
