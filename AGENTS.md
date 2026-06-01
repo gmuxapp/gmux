@@ -60,22 +60,15 @@ messages directly. Rules that follow from this:
 
 ## Manual verification
 
-Use `docs/agent-verification.md` to pick the right dev setup before reproducing a
-bug or confirming a fix. Three options:
+Load the skill for your scenario — it contains all commands, port numbers, and auth steps:
 
-| Scenario | Option |
+| Scenario | Skill |
 |---|---|
-| UI / React / CSS only; no Go changes | **A** — `just dev-frontend` (vite → prod daemon `:8790`) |
-| Go daemon changed | **B** — `just dev` (vite `:5173` + dev daemon `:8791`) |
-| Need to reproduce or verify a bug in production | **C** — agent-browser direct to prod daemon `:8790` (no vite) |
+| UI / React / CSS only; no Go changes | `skills/dev-frontend` |
+| Go daemon code changed | `skills/dev-full` |
+| Confirm a bug exists in production | `skills/dev-prod` |
 
-Default to **A**. Use **B** only when Go code has changed. Use **C** to confirm a bug
-exists in production, or as a last resort to verify a deployed fix — no build step,
-the production daemon is already running.
-
-For agent-browser screenshots with Options A and B, always authenticate and navigate
-via `localhost:5173` — not `:8790`. Vite binds IPv6 (`[::1]`); use `localhost`, not
-`127.0.0.1`. See `docs/agent-verification.md` for the full flow.
+Default to `dev-frontend`. The full decision guide is in `docs/agent-verification.md`.
 
 For automated E2E tests, see `docs/e2e.md`. The Playwright suite manages its own
 isolated daemon — do not mix it with the manual verification setups above.

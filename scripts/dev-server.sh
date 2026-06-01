@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start the dev stack: vite + gmuxd + watchexec.
 #
-# The main checkout uses fixed, well-known values (port 8791, hostname
+# The main checkout uses fixed, well-known values (port 9790, hostname
 # gmux-dev) so tailscale auth state is preserved across restarts.
 #
 # Grove worktrees (.grove/<name>) get isolated ports, socket dirs,
@@ -10,8 +10,7 @@
 #
 # Usage: ./scripts/dev-server.sh
 #
-# Then from another terminal:
-#   source scripts/dev-session.sh && gmux-dev <cmd>
+# Usage: ./scripts/dev-server.sh
 
 set -euo pipefail
 
@@ -35,7 +34,7 @@ if [[ "$(basename "$(dirname "$ROOT")")" == ".grove" ]]; then
 else
   # Main checkout: fixed values, preserves existing tailscale auth.
   INSTANCE_NAME="gmux-dev"
-  DEV_PORT=8791
+  DEV_PORT=9790
   DEV_VITE_PORT=5173
   DEV_SOCKET_DIR="/tmp/gmux-dev-sessions"
   DEV_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/gmux-dev"
@@ -210,8 +209,7 @@ echo "  Local:     http://localhost:$DEV_PORT"
 echo "  Tailscale: https://$DEV_TS_HOSTNAME.<tailnet>"
 echo "  Sockets:   $DEV_SOCKET_DIR"
 echo ""
-echo "  Launch dev sessions:"
-echo "    source scripts/dev-session.sh && gmux-dev <cmd>"
+  echo "  Launch a session: bin/gmux-dev <cmd>"
 echo "══════════════════════════════════════════════════════"
 
 wait
