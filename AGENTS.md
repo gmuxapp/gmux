@@ -67,10 +67,11 @@ bug or confirming a fix. Three options:
 |---|---|
 | UI / React / CSS only; no Go changes | **A** — `just dev-frontend` (vite → prod daemon `:8790`) |
 | Go daemon changed | **B** — `just dev` (vite `:5173` + dev daemon `:8791`) |
-| Bug only appears in production bundle | **C** — `just build` + run built `bin/gmuxd-*` |
+| Need to reproduce or verify a bug in production | **C** — agent-browser direct to prod daemon `:8790` (no vite) |
 
-Default to **A**. Use **B** only when Go code has changed. Use **C** only when the
-bug requires the built artifact.
+Default to **A**. Use **B** only when Go code has changed. Use **C** to confirm a bug
+exists in production, or as a last resort to verify a deployed fix — no build step,
+the production daemon is already running.
 
 For agent-browser screenshots with Options A and B, always authenticate and navigate
 via `localhost:5173` — not `:8790`. Vite binds IPv6 (`[::1]`); use `localhost`, not

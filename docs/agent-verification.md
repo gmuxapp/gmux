@@ -12,13 +12,13 @@ For automated E2E tests, see [docs/e2e.md](e2e.md).
 |---|---|
 | UI / React / CSS changes only; no Go changes | **A** — frontend dev against prod daemon |
 | Go daemon code changed; need backend + frontend together | **B** — full dev stack |
-| Bug only manifests in the production-built artifact | **C** — production build |
+| Need to reproduce or verify a bug in production | **C** — production stack via Chrome remote debugging |
 
 **Default is Option A.** Use it unless Go code has changed. It starts instantly, uses real data, and requires no build step.
 
 Option B is required when Go source has changed and the new daemon behaviour must be exercised together with the frontend.
 
-Option C is for bugs that only appear in the built artifact — asset hashing, static-file embedding, CSP headers, etc. It requires a full `just build` and is the slowest path.
+Option C connects agent-browser directly to the production daemon at `:8790`, which serves its built-in embedded frontend. Use it to confirm a bug exists in production before working on a fix, or as a last resort to verify a fix after deploying. No build step — the production daemon is already running.
 
 ---
 
@@ -74,17 +74,15 @@ Use real data. The dev daemon starts fresh, but point it at real workspace dirs 
 
 ---
 
-## Option C — Production build
+## Option C — Production stack via Chrome remote debugging
 
-Use when the bug only manifests in the production-built artifact.
+The production daemon at `:8790` already serves the production-bundled frontend. No
+build or server start needed. Use this option to:
 
-```bash
-just build    # builds frontend bundle + Go binaries
-bin/gmuxd-$(go env GOOS)-$(go env GOARCH) start
-# daemon starts on :8790 and serves the built frontend statically
-```
+- Confirm a bug exists in production before starting a fix (most common use)
+- Verify a fix after deploying to production (last resort — prefer A or B first)
 
-For agent-browser, both the app and the auth cookie are at `:8790` — no vite server involved:
+Agent-browser talks directly to the daemon. Auth cookie and app are both at `:8790`:
 
 ```bash
 TOKEN=$(find ~/.local/state -name 'auth-token' -path '*/gmux*' 2>/dev/null | head -1 | xargs cat)
@@ -93,6 +91,7 @@ agent-browser navigate "http://localhost:8790/<route>"
 agent-browser screenshot <path>.png
 ```
 
+Do not start vite for this option. Cookie and app must share the same origin (`:8790`).
 ---
 
 ## agent-browser flow (Options A and B)
@@ -161,7 +160,7 @@ A session or file only appears in the UI if its path matches a configured projec
 |---|---|---|
 | A — frontend + prod daemon | `just dev-frontend` | `http://localhost:5173` |
 | B — full dev stack | `just dev` | `http://localhost:5173` |
-| C — production build | `just build` + run `bin/gmuxd-*` | `http://localhost:8790` |
+| C — production stack | _(nothing to start)_ | `http://localhost:8790` |
 
 ---
 
