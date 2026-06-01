@@ -138,6 +138,7 @@ export XDG_CONFIG_HOME="$DEV_STATE_DIR/config"
 export XDG_STATE_HOME="$DEV_STATE_DIR/state"
 export GMUXD_DEV_PROXY="http://localhost:$DEV_VITE_PORT"
 export PI_CODING_AGENT_DIR="$DEV_STATE_DIR/pi-agent"
+export VITE_DEV_PROXY_PORT="$DEV_PORT"
 
 # ── Install deps + build ──
 

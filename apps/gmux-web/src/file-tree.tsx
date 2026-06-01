@@ -152,8 +152,12 @@ async function apiFetch(
   return resp.json()
 }
 
-async function apiWalkPaths(slug: string, includeHidden: boolean): Promise<string[]> {
-  const url = `/v1/fs/${encodeURIComponent(slug)}/walk${includeHidden ? '?include_hidden=true' : ''}`
+async function apiWalkPaths(slug: string, includeHidden: boolean, full = false): Promise<string[]> {
+  const params = new URLSearchParams()
+  if (includeHidden) params.set('include_hidden', 'true')
+  if (full) params.set('full', 'true')
+  const qs = params.size ? `?${params}` : ''
+  const url = `/v1/fs/${encodeURIComponent(slug)}/walk${qs}`
   const resp = await apiFetch('GET', url)
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'walk failed')
   return resp.data as string[]
@@ -314,18 +318,27 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
     const model = modelRef.current
     if (!model) return
     try {
-      // Pass showHidden to the server so hidden dirs are excluded from the walk
-      // when not needed — preventing the 50k cap from being exhausted by dotfiles.
+      // Fast walk: depth 3, no bulk dirs — renders the tree immediately.
       const paths = await apiWalkPaths(projectSlugRef.current, showHiddenRef.current)
-      // Snapshot expanded dirs before reset so the user's open folders survive
-      // the poll cycle. Query each directory path in the new walk response.
       const dirPaths = paths.filter(p => p.endsWith('/'))
       const expandedPaths = getExpandedPaths(model, dirPaths)
-      // Set the guard before resetPaths so onSelectionChange ignores the
-      // automatic path-restoration that fires in the same tick.
       resettingPathsRef.current = true
       setTimeout(() => { resettingPathsRef.current = false }, 0)
-      model.resetPaths(paths, { initialExpandedPaths: expandedPaths })
+      model.resetPaths(paths, {
+        initialExpandedPaths: expandedPaths,
+      })
+
+      // Full walk: stream in the rest (node_modules etc.) in the background.
+      // Uses batch() so the tree stays interactive while new paths arrive.
+      apiWalkPaths(projectSlugRef.current, showHiddenRef.current, true)
+        .then(fullPaths => {
+          const current = new Set(paths)
+          const additions = fullPaths.filter(p => !current.has(p))
+          if (additions.length > 0) {
+            modelRef.current?.batch(additions.map(p => ({ type: 'add' as const, path: p })))
+          }
+        })
+        .catch(e => console.warn('[gmux] file-tree: full walk failed', e))
     } catch (e) {
       console.error('[gmux] file-tree: walk failed for slug', projectSlugRef.current, e)
       showErrorRef.current(String(e))

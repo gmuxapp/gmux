@@ -11,7 +11,6 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
-	"errors"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -2125,8 +2124,10 @@ func serve(stderr io.Writer) int {
 	})
 
 	// GET /v1/fs/{slug}/walk — return a flat list of all paths under the project root.
-	// Directories are suffixed with '/'. No server-side hidden-file filtering;
-	// the frontend decides what to show. Limited to 50 000 entries to avoid OOM.
+	// GET /v1/fs/{slug}/walk — flat list of paths under the project root.
+	// Directories are suffixed with '/'. By default returns up to depth 3 and
+	// skips bulk dependency directories (node_modules, .pnpm, etc.) for fast
+	// initial load. Pass ?full=true to walk the entire tree without restrictions.
 	// Response: { ok: true, data: string[] }.
 	mux.HandleFunc("GET /v1/fs/{slug}/walk", func(w http.ResponseWriter, r *http.Request) {
 		slug := r.PathValue("slug")
@@ -2136,7 +2137,8 @@ func serve(stderr io.Writer) int {
 			return
 		}
 		includeHidden := r.URL.Query().Get("include_hidden") == "true"
-		paths, err := walkProjectPaths(root, 50_000, includeHidden)
+		full := r.URL.Query().Get("full") == "true"
+		paths, err := walkProjectPaths(root, includeHidden, full)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "walk_failed", err.Error())
 			return
@@ -2937,12 +2939,23 @@ func parseGitShortstat(s string) (files, insertions, deletions int) {
 }
 
 // walkProjectPaths returns the flat list of paths under root, with directory
-// paths suffixed by '/'. Limited to maxEntries entries; stops early if the
-// limit is reached (caller can detect this by len(paths) == maxEntries).
-// Permission-denied entries are skipped silently. The root itself is omitted.
-// When includeHidden is false, any entry whose name starts with '.' is omitted
-// and hidden directories are not descended into, so they cannot exhaust the cap.
-func walkProjectPaths(root string, maxEntries int, includeHidden bool) ([]string, error) {
+// paths suffixed by '/'. Permission-denied entries are skipped silently.
+// The root itself is omitted. When includeHidden is false, entries whose
+// name starts with '.' are omitted and hidden directories are not descended.
+// When full is false (the default), the walk is limited to depth 3 and bulk
+// dependency directories (node_modules, .pnpm, .yarn, vendor, __pycache__,
+// .venv, dist, build) are skipped. When full is true, the walk is unlimited.
+func walkProjectPaths(root string, includeHidden bool, full bool) ([]string, error) {
+	// Bulk dirs skipped in the default (non-full) walk.
+	bulkDirs := map[string]bool{
+		"node_modules": true,
+		".pnpm":        true,
+		".yarn":         true,
+		"vendor":        true,
+		"__pycache__":   true,
+		".venv":         true,
+		"venv":          true,
+	}
 	var paths []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -2958,6 +2971,16 @@ func walkProjectPaths(root string, maxEntries int, includeHidden bool) ([]string
 		if relErr != nil || rel == "." {
 			return nil
 		}
+		// In the default (non-full) walk, skip bulk dependency dirs and
+		// enforce a depth-3 limit.
+		if !full && d.IsDir() {
+			if bulkDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			if strings.Count(filepath.ToSlash(rel), "/") >= 3 {
+				return filepath.SkipDir
+			}
+		}
 		// Skip hidden entries when includeHidden is false.
 		if !includeHidden && strings.HasPrefix(d.Name(), ".") {
 			if d.IsDir() {
@@ -2970,14 +2993,8 @@ func walkProjectPaths(root string, maxEntries int, includeHidden bool) ([]string
 			relSlash += "/"
 		}
 		paths = append(paths, relSlash)
-		if len(paths) >= maxEntries {
-			return filepath.SkipAll
-		}
 		return nil
 	})
-	if errors.Is(err, filepath.SkipAll) {
-		err = nil
-	}
 	if paths == nil {
 		paths = []string{}
 	}
