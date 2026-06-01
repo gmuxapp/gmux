@@ -1680,7 +1680,7 @@ body {
 .terminal-container.wterm {
   width: max-content;
   min-width: 100%;
-  min-height: 100%;
+  height: 100%;
   padding: 0 6px 6px 6px;
   margin: 0 auto; /* center the character grid horizontally */
   border-radius: 0;
@@ -1698,13 +1698,14 @@ body {
   background: transparent !important;
 }
 
-/* wterm's renderer also sets rowEl.style.background and rowEl.style.boxShadow
-   on each full-width row based on the last cell's colour (same heuristic as the
-   grid-level background above). Clear both so the row never floods with a single
-   cell's colour; individual <span> cells still paint their own backgrounds. */
+/* wterm's renderer sets rowEl.style.background on each row based on the last
+   cell's colour (same heuristic as the grid-level background above). Clear it
+   so the row never floods with a single cell's colour; individual <span> cells
+   still paint their own backgrounds.
+   Do NOT clear box-shadow: the renderer uses `0 1px 0 <bgColor>` to fill the
+   sub-pixel gap between rows. Removing it creates thin visible lines. */
 .terminal-container.wterm .term-row {
   background: transparent !important;
-  box-shadow: none !important;
 }
 
 /* Style wterm's own scrollbar (shown when scrollback content exists). */
