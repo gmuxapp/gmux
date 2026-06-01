@@ -152,15 +152,24 @@ async function apiFetch(
   return resp.json()
 }
 
-async function apiWalkPaths(slug: string, includeHidden: boolean, full = false): Promise<string[]> {
+async function apiWalkPaths(slug: string, includeHidden: boolean): Promise<string[]> {
   const params = new URLSearchParams()
   if (includeHidden) params.set('include_hidden', 'true')
-  if (full) params.set('full', 'true')
   const qs = params.size ? `?${params}` : ''
-  const url = `/v1/fs/${encodeURIComponent(slug)}/walk${qs}`
-  const resp = await apiFetch('GET', url)
+  const resp = await apiFetch('GET', `/v1/fs/${encodeURIComponent(slug)}/walk${qs}`)
   if (!resp.ok) throw new Error((resp.error?.message) ?? 'walk failed')
   return resp.data as string[]
+}
+
+type WalkDelta =
+  | { reset: true }
+  | { wait: true }
+  | { added: string[]; removed: string[]; version: number }
+
+async function apiWalkDelta(slug: string, version: number): Promise<WalkDelta> {
+  const resp = await apiFetch('GET', `/v1/fs/${encodeURIComponent(slug)}/walk?since=${version}`)
+  if (!resp.ok) return { reset: true }
+  return resp.data as WalkDelta
 }
 
 async function apiGitFiles(slug: string): Promise<GitStatusEntry[]> {
@@ -314,31 +323,62 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
   // synchronously in useState(); updated after each render just in case.
   const modelRef = useRef<ReturnType<typeof useFileTree>['model'] | null>(null)
 
+  // walkVersionRef: the snapshot version last received from the server.
+  // null = Worker hasn't completed yet; poll skips file-tree deltas until set.
+  const walkVersionRef = useRef<number | null>(null)
+  // walkWorkerRef: the active full-walk Worker, so we can terminate it on reload.
+  const walkWorkerRef = useRef<Worker | null>(null)
+
   const loadPaths = useCallback(async () => {
     const model = modelRef.current
     if (!model) return
     try {
-      // Fast walk: depth 3, no bulk dirs — renders the tree immediately.
+      // Phase 1: depth-3 fast walk — renders the tree immediately.
       const paths = await apiWalkPaths(projectSlugRef.current, showHiddenRef.current)
       const dirPaths = paths.filter(p => p.endsWith('/'))
       const expandedPaths = getExpandedPaths(model, dirPaths)
       resettingPathsRef.current = true
       setTimeout(() => { resettingPathsRef.current = false }, 0)
-      model.resetPaths(paths, {
-        initialExpandedPaths: expandedPaths,
-      })
+      model.resetPaths(paths, { initialExpandedPaths: expandedPaths })
 
-      // Full walk: stream in the rest (node_modules etc.) in the background.
-      // Uses batch() so the tree stays interactive while new paths arrive.
-      apiWalkPaths(projectSlugRef.current, showHiddenRef.current, true)
-        .then(fullPaths => {
-          const current = new Set(paths)
-          const additions = fullPaths.filter(p => !current.has(p))
+      // Phase 2: spawn a Worker to stream the full walk without blocking the
+      // main thread. Worker posts batches; we batch-add new paths as they
+      // arrive. On 'done', we record the server version for delta polling.
+      // Terminate any previous Worker so we don't have two racing.
+      walkWorkerRef.current?.terminate()
+      walkVersionRef.current = null
+      const worker = new Worker(new URL('./walk-worker.ts', import.meta.url), { type: 'module' })
+      walkWorkerRef.current = worker
+      const knownPaths = new Set(paths)
+      worker.onmessage = (e: MessageEvent<
+        | { type: 'batch'; paths: string[] }
+        | { type: 'done'; version: number }
+        | { type: 'error'; message: string }
+      >) => {
+        const msg = e.data
+        if (msg.type === 'batch') {
+          // Deduplicate within the batch and against already-known paths.
+          const seen = new Set<string>()
+          const additions = msg.paths.filter(p => {
+            if (knownPaths.has(p) || seen.has(p)) return false
+            seen.add(p)
+            return true
+          })
+          additions.forEach(p => knownPaths.add(p))
           if (additions.length > 0) {
             modelRef.current?.batch(additions.map(p => ({ type: 'add' as const, path: p })))
           }
-        })
-        .catch(e => console.warn('[gmux] file-tree: full walk failed', e))
+        } else if (msg.type === 'done') {
+          walkVersionRef.current = msg.version
+          walkWorkerRef.current = null
+          worker.terminate()
+        } else {
+          console.warn('[gmux] file-tree: walk worker error', msg.message)
+          walkWorkerRef.current = null
+          worker.terminate()
+        }
+      }
+      worker.postMessage({ slug: projectSlugRef.current, includeHidden: showHiddenRef.current })
     } catch (e) {
       console.error('[gmux] file-tree: walk failed for slug', projectSlugRef.current, e)
       showErrorRef.current(String(e))
@@ -460,11 +500,35 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
     void loadPaths()
   }, [showHidden, loadPaths])
 
-  // Poll: refresh paths + git status every 2.5 s.
+  // Poll: delta file-tree update + git status every 2.5 s.
+  // File-tree uses walk?since=<version> for cheap incremental updates.
+  // The file-tree delta poll is skipped until the Worker completes (version known).
   useEffect(() => {
-    const id = setInterval(() => {
-      void loadPaths()
+    const id = setInterval(async () => {
       void refreshGitStatus()
+      const v = walkVersionRef.current
+      if (v === null) return // Worker still streaming; skip
+      const model = modelRef.current
+      if (!model) return
+      try {
+        const delta = await apiWalkDelta(projectSlugRef.current, v)
+        if ('reset' in delta) {
+          // Too far behind or first sync — do a full reload.
+          void loadPathsRef.current()
+        } else if ('wait' in delta) {
+          // Snapshot not ready yet; try again next tick.
+        } else {
+          if (delta.version !== v) walkVersionRef.current = delta.version
+          if (delta.added.length > 0 || delta.removed.length > 0) {
+            model.batch([
+              ...delta.added.map(p => ({ type: 'add' as const, path: p })),
+              ...delta.removed.map(p => ({ type: 'remove' as const, path: p })),
+            ])
+          }
+        }
+      } catch (e) {
+        console.warn('[gmux] file-tree: delta poll failed', e)
+      }
     }, 2500)
     return () => clearInterval(id)
   }, [loadPaths, refreshGitStatus])

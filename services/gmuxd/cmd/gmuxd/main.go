@@ -2123,12 +2123,89 @@ func serve(stderr io.Writer) int {
 		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"pid": pid}})
 	})
 
-	// GET /v1/fs/{slug}/walk — return a flat list of all paths under the project root.
-	// GET /v1/fs/{slug}/walk — flat list of paths under the project root.
-	// Directories are suffixed with '/'. By default returns up to depth 3 and
-	// skips bulk dependency directories (node_modules, .pnpm, etc.) for fast
-	// initial load. Pass ?full=true to walk the entire tree without restrictions.
-	// Response: { ok: true, data: string[] }.
+	// ── Walk snapshot cache ──────────────────────────────────────────────────
+	//
+	// walkSnapshotCache maintains a per-slug full-walk result so that
+	// delta requests (walk?since=<version>) can be answered instantly
+	// without hitting the disk. A background goroutine refreshes each
+	// snapshot every 30 s. Version is a monotonically increasing int64.
+	type walkSnapshot struct {
+		paths        map[string]struct{}
+		version      int64
+		deltaAdded   []string // paths added vs previous snapshot
+		deltaRemoved []string // paths removed vs previous snapshot
+	}
+	var walkSnapMu sync.RWMutex
+	walkSnaps := map[string]*walkSnapshot{} // keyed by slug
+
+	// refreshWalkSnapshot does a full (uncapped) walk, computes the delta vs the
+	// previous snapshot, and atomically updates the cache.
+	refreshWalkSnapshot := func(slug, root string, includeHidden bool) {
+		paths, err := walkProjectPaths(root, includeHidden, true)
+		if err != nil {
+			return
+		}
+		newSet := make(map[string]struct{}, len(paths))
+		for _, p := range paths {
+			newSet[p] = struct{}{}
+		}
+		walkSnapMu.Lock()
+		var version int64 = 1
+		var added, removed []string
+		if prev, ok := walkSnaps[slug]; ok {
+			version = prev.version + 1
+			for p := range newSet {
+				if _, exists := prev.paths[p]; !exists {
+					added = append(added, p)
+				}
+			}
+			for p := range prev.paths {
+				if _, exists := newSet[p]; !exists {
+					removed = append(removed, p)
+				}
+			}
+		} else {
+			// First snapshot: all paths are "added" but we never serve this as a delta.
+			added = []string{}
+			removed = []string{}
+		}
+		if added == nil { added = []string{} }
+		if removed == nil { removed = []string{} }
+		walkSnaps[slug] = &walkSnapshot{
+			paths:        newSet,
+			version:      version,
+			deltaAdded:   added,
+			deltaRemoved: removed,
+		}
+		walkSnapMu.Unlock()
+	}
+
+	// Background goroutine: refresh all cached snapshots every 30 s.
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			walkSnapMu.RLock()
+			slugs := make([]string, 0, len(walkSnaps))
+			for s := range walkSnaps {
+				slugs = append(slugs, s)
+			}
+			walkSnapMu.RUnlock()
+			for _, s := range slugs {
+				root, err := resolveFSProjectRoot(s)
+				if err != nil {
+					continue
+				}
+				refreshWalkSnapshot(s, root, false)
+			}
+		}
+	}()
+
+	// GET /v1/fs/{slug}/walk
+	//   default          → depth-3 JSON array (fast initial load)
+	//   ?full=true       → full NDJSON stream (one path per line, chunked)
+	//   ?since=<version> → delta JSON {ok,data:{added,removed,version}}
+	// Directories are suffixed with '/'.
 	mux.HandleFunc("GET /v1/fs/{slug}/walk", func(w http.ResponseWriter, r *http.Request) {
 		slug := r.PathValue("slug")
 		root, err := resolveFSProjectRoot(slug)
@@ -2137,8 +2214,110 @@ func serve(stderr io.Writer) int {
 			return
 		}
 		includeHidden := r.URL.Query().Get("include_hidden") == "true"
-		full := r.URL.Query().Get("full") == "true"
-		paths, err := walkProjectPaths(root, includeHidden, full)
+
+		// ── delta mode: walk?since=<version> ──
+		if sinceStr := r.URL.Query().Get("since"); sinceStr != "" {
+			var clientVersion int64
+			fmt.Sscan(sinceStr, &clientVersion)
+			walkSnapMu.RLock()
+			snap := walkSnaps[slug]
+			walkSnapMu.RUnlock()
+			if snap == nil {
+				// Snapshot not ready yet — client should wait.
+				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"wait": true}})
+				return
+			}
+			if snap.version == clientVersion {
+				// Nothing changed since last poll.
+				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{
+					"added":   []string{},
+					"removed": []string{},
+					"version": snap.version,
+				}})
+				return
+			}
+			if snap.version == clientVersion+1 {
+				// One refresh behind — serve the stored delta.
+				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{
+					"added":   snap.deltaAdded,
+					"removed": snap.deltaRemoved,
+					"version": snap.version,
+				}})
+				return
+			}
+			// Client too far behind — tell it to reset.
+			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reset": true}})
+			return
+	}
+
+		// ── full streaming mode: walk?full=true ──
+		// Walk the full tree, streaming each path as NDJSON while simultaneously
+		// accumulating paths to build the snapshot. The final line is a JSON
+		// object {"version":N} so the client knows exactly which snapshot version
+		// corresponds to this stream, avoiding any version-mismatch race.
+		if r.URL.Query().Get("full") == "true" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusOK)
+			flusher, canFlush := w.(http.Flusher)
+			var collected []string
+			n := 0
+			walkErr2 := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					if os.IsPermission(walkErr) {
+						if d != nil && d.IsDir() { return filepath.SkipDir }
+						return nil
+					}
+					return walkErr
+				}
+				rel, relErr := filepath.Rel(root, path)
+				if relErr != nil || rel == "." { return nil }
+				if !includeHidden && strings.HasPrefix(d.Name(), ".") {
+					if d.IsDir() { return filepath.SkipDir }
+					return nil
+				}
+				relSlash := filepath.ToSlash(rel)
+				if d.IsDir() { relSlash += "/" }
+				collected = append(collected, relSlash)
+				fmt.Fprintf(w, "%s\n", relSlash)
+				n++
+				if canFlush && n%500 == 0 { flusher.Flush() }
+				return nil
+			})
+			_ = walkErr2
+			// Atomically update the snapshot from the paths we just collected.
+			// This guarantees the version trailer matches the snapshot.
+			newSet := make(map[string]struct{}, len(collected))
+			for _, p := range collected { newSet[p] = struct{}{} }
+			walkSnapMu.Lock()
+			var newVersion int64 = 1
+			var added, removed []string
+			if prev, ok := walkSnaps[slug]; ok {
+				newVersion = prev.version + 1
+				for p := range newSet {
+					if _, exists := prev.paths[p]; !exists { added = append(added, p) }
+				}
+				for p := range prev.paths {
+					if _, exists := newSet[p]; !exists { removed = append(removed, p) }
+				}
+			}
+			if added == nil { added = []string{} }
+			if removed == nil { removed = []string{} }
+			walkSnaps[slug] = &walkSnapshot{
+				paths:        newSet,
+				version:      newVersion,
+				deltaAdded:   added,
+				deltaRemoved: removed,
+			}
+			walkSnapMu.Unlock()
+			fmt.Fprintf(w, "{\"version\":%d}\n", newVersion)
+			if canFlush { flusher.Flush() }
+			return
+		}
+
+		// ── default mode: depth-3 JSON array ──
+		paths, err := walkProjectPaths(root, includeHidden, false)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "walk_failed", err.Error())
 			return
