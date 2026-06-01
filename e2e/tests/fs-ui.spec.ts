@@ -104,10 +104,11 @@ test.describe('new file flow', () => {
 
   test('Escape cancels without creating a file', async ({ page }) => {
     await openProjectHub(page)
+    const beforeCount = await page.getByRole('textbox').count()
     await page.locator('.ft-header-btn[title="New file"]').click()
-    // Wait for inline input to appear.
+    // Wait for the inline input to actually appear before reading initialBoxCount.
+    await expect(page.getByRole('textbox')).toHaveCount(beforeCount + 1, { timeout: 3_000 })
     const initialBoxCount = await page.getByRole('textbox').count()
-    await expect(page.getByRole('textbox')).toHaveCount(initialBoxCount, { timeout: 3_000 })
     await page.keyboard.press('Escape')
     // Inline input gone.
     await expect(page.getByRole('textbox')).toHaveCount(initialBoxCount - 1, { timeout: 3_000 })

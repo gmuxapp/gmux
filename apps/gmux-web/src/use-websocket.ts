@@ -214,6 +214,16 @@ export function useWebSocket(opts: UseWebSocketOptions): void {
               pendingWrite: false,
               scrollbackLines: termRef.current?.bridge?.getScrollbackCount() ?? 0,
             })
+            // Force pixel-exact scroll to bottom after sync. WTerm renders its
+            // DOM update via requestAnimationFrame, so defer two frames to ensure
+            // scrollHeight is final before we set scrollTop.
+            const elRef = termRef
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                const el = elRef.current?.element
+                if (el) el.scrollTop = el.scrollHeight - el.clientHeight
+              })
+            })
           })
           emitSyncDiag({ syncEndedAt: Date.now(), pendingWrite: true })
           emitSyncDiag({ syncEndedAt: Date.now(), pendingWrite: true })

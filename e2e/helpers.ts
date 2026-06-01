@@ -136,8 +136,28 @@ export async function gotoTestSession(page: Page): Promise<void> {
 
   // Wait for the wterm DOM element (replaces .terminal-container canvas)
   await page.locator('.terminal-container.wterm').waitFor({ state: 'visible', timeout: 8_000 })
-  // Give the WS connection time to establish and replay scrollback.
-  await page.waitForTimeout(1500)
+  // Wait for the WS sync to complete (prefetch + snapshot fully processed).
+  // syncPhase reaches 'done' once the WS snapshot write callback fires.
+  await page.waitForFunction(() => {
+    const diag = (window as any).__gmuxDiag?.()
+    if (!diag) return false
+    return diag.syncPhase === 'done' || diag.syncPhase === 'skipped'
+  }, null, { timeout: 8_000 }).catch(() => {
+    // Fall back to a fixed wait if __gmuxDiag isn't available yet.
+    return new Promise(r => setTimeout(r, 1500))
+  })
+  // Wait for scroll position to settle to the bottom. WTerm renders via rAF
+  // so the pixel-exact bottom may not be reached until a few frames after sync.
+  // Poll rather than a fixed timeout to avoid both slow-machine flakiness and
+  // unnecessary waiting on fast machines.
+  await page.waitForFunction(() => {
+    const el = (window as any).__gmuxTerm?.element as HTMLElement | undefined
+    if (!el) return false
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 5
+  }, null, { timeout: 3_000 }).catch(() => {
+    // If the terminal is scrolled in (e.g. during a reconnect test that
+    // scrolled up), don't block — let the individual test assert as needed.
+  })
 }
 
 /** Click the resize pill. */
