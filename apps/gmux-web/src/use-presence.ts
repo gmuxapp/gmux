@@ -12,8 +12,6 @@ import type { NotifyMessage, CancelMessage } from './presence'
 import { selectedId, sessions, navigateToSession } from './store'
 import type { NotifPermission } from './sidebar'
 
-const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
-
 interface UsePresenceResult {
   notifPermission: NotifPermission
   requestNotifPermission: () => void
@@ -25,9 +23,7 @@ export function usePresence(): UsePresenceResult {
   const lastInteractionRef = useRef(Date.now() / 1000)
 
   const [, forceNotifPermUpdate] = useState(0)
-  const notifPermission: NotifPermission = USE_MOCK
-    ? 'granted'
-    : ('Notification' in window ? Notification.permission : 'unavailable')
+  const notifPermission: NotifPermission = 'Notification' in window ? Notification.permission : 'unavailable'
 
   // Show a notification when the daemon tells us to.
   const handleNotify = useCallback((msg: NotifyMessage) => {

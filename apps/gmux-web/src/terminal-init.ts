@@ -20,7 +20,7 @@ const BLANK_CELL: CellData = { char: 32, fg: 256, bg: 256, flags: 0 }
  * cannot provide (stub returns 0). Intercepts writeRaw/writeString, snapshots
  * the viewport before each write, and records rows that scroll off.
  */
-class ScrollbackCapturingCore implements TerminalCore {
+export class ScrollbackCapturingCore implements TerminalCore {
   private readonly inner: GhosttyCore
   // index 0 = most recently scrolled-off row (just above viewport)
   // index N-1 = oldest scrollback row

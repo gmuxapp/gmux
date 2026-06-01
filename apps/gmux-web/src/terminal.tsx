@@ -13,7 +13,6 @@ import { applyWtermTheme } from './terminal-theme'
 import { decideViewportResize, sameSize, useViewportResize } from './terminal-resize'
 import { getGhosttyCore } from './terminal-init'
 import { useWebSocket } from './use-websocket'
-import { MOCK_BY_ID } from './mock-data/index'
 import type { Session } from './types'
 import type { ITheme } from './types'
 
@@ -21,8 +20,6 @@ export type { SyncDiag } from './terminal-types'
 import type { SyncDiag } from './terminal-types'
 
 // ── Config ──
-
-const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
 
 /**
  * Re-export for backward compat (used by input-diagnostics.tsx).
@@ -269,7 +266,7 @@ export function TerminalView({
 
   // ── Terminal init ──
   useEffect(() => {
-    if (!containerRef.current || USE_MOCK) return
+    if (!containerRef.current) return
     let cancelled = false
     let term: WTerm | null = null
     let cleanupKeyboard: (() => void) | null = null
@@ -469,7 +466,6 @@ export function TerminalView({
     && ptySize != null && viewportSize != null
     && (viewportSize.cols !== ptySize.cols || viewportSize.rows !== ptySize.rows)
 
-  if (USE_MOCK) return <MockTerminal sessionId={session.id} />
 
   return (
     <div
@@ -511,55 +507,3 @@ export function TerminalView({
   )
 }
 
-// ── MockTerminal ──
-
-/** Read-only wterm Terminal showing pre-baked ANSI content for mock/demo mode. */
-export function MockTerminal({ sessionId }: { sessionId: string }) {
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!containerRef.current) return
-    let cancelled = false
-    let cleanup: (() => void) | null = null
-
-    const run = async () => {
-      const { WTerm } = await import('@wterm/dom')
-      const core = await getGhosttyCore()
-      if (cancelled || !containerRef.current) return
-
-      const term = new WTerm(containerRef.current, { core, autoResize: true })
-      applyWtermTheme(term.element, {
-        theme: TERM_THEME,
-        fontFamily: "'Fira Code', monospace",
-        fontSize: 13,
-        cursorBlink: false,
-      } as any)
-      await term.init()
-      if (cancelled) { term.destroy(); return }
-
-      const mock = MOCK_BY_ID[sessionId]
-      if (mock?.terminal) term.write(mock.terminal.replace(/\r?\n/g, '\r\n'))
-
-      ;(window as any).__gmuxTerm = term
-
-      cleanup = () => {
-        if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
-        term.destroy()
-      }
-      if (cancelled) cleanup()
-    }
-
-    run().catch(console.error)
-
-    return () => {
-      cancelled = true
-      cleanup?.()
-    }
-  }, [sessionId])
-
-  return (
-    <div class="terminal-shell">
-      <div ref={containerRef} class="terminal-container" />
-    </div>
-  )
-}

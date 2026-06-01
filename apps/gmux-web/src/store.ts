@@ -20,7 +20,6 @@ import { resolveViewFromPath, viewToPath, sessionPath } from './routing'
 import { buildProjectFolders, matchSession } from './projects'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
-import { MOCK_SESSIONS, MOCK_PROJECTS } from './mock-data/index'
 import type { ResolvedTerminalOptions } from './settings-schema'
 import type { Session as ProtocolSession } from '@gmux/protocol'
 
@@ -673,8 +672,6 @@ function consumePendingLaunch(maxAgeMs = 10_000): boolean {
 
 // ── Initialization ──────────────────────────────────────────────────────────
 
-const USE_MOCK = import.meta.env.VITE_MOCK === '1' ||
-  (typeof location !== 'undefined' && location.search.includes('mock'))
 
 /** Navigation callback: set by App on mount so the store can navigate. */
 let _navigate: ((url: string, replace?: boolean) => void) | null = null
@@ -719,33 +716,6 @@ export function navigateToMarkdownEditor(projectSlug: string, filePath: string):
 export function initStore(): () => void {
   const cleanups: (() => void)[] = []
 
-  if (USE_MOCK) {
-    const localHost = new URLSearchParams(location.search).get('host')
-    const mockSessions = localHost
-      ? MOCK_SESSIONS.map(s => s.peer === localHost ? { ...s, peer: undefined } : s)
-      : [...MOCK_SESSIONS]
-    batch(() => {
-      projects.value = MOCK_PROJECTS
-      sessions.value = mockSessions
-      sessionsLoaded.value = true
-      projectsLoaded.value = true
-      connState.value = 'connected'
-      terminalOptions.value = buildTerminalOptions(null, null)
-      keybinds.value = resolveKeybinds(null, false)
-    })
-    const activeIds = MOCK_SESSIONS.filter(s => s.mockActive).map(s => s.id)
-    activeIds.forEach(id => handleActivity(id))
-    const tick = setInterval(() => activeIds.forEach(id => handleActivity(id)), 2000)
-    cleanups.push(() => clearInterval(tick))
-    // Sync direct URL navigation to markdown tabs (mock mode).
-    const disposeMdSync = effect(() => {
-      const v = view.value
-      if (v?.kind === 'markdown-editor') ensureMarkdownTab(v.projectSlug, v.filePath)
-      if (v?.kind === 'image-viewer') ensureImageTab(v.projectSlug, v.filePath)
-    })
-    cleanups.push(disposeMdSync)
-    return () => cleanups.forEach(fn => fn())
-  }
 
   // Fetch initial data in parallel.
   fetchProjects()

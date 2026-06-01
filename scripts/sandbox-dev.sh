@@ -7,8 +7,6 @@
 #
 # ── Usage ──────────────────────────────────────────────────────────────────
 #
-#   # Mock mode (no live gmuxd needed):
-#   VITE_MOCK=1 ./scripts/sandbox-dev.sh
 #
 #   # Live mode — proxy to host gmuxd (requires network policy allow):
 #   ./scripts/sandbox-dev.sh
@@ -17,7 +15,7 @@
 #   VITE_DEV_PROXY_PORT=8790 VITE_DEV_PROXY_HOST=127.0.0.1 ./scripts/sandbox-dev.sh
 #
 #   # Custom server port:
-#   PORT=3000 VITE_MOCK=1 ./scripts/sandbox-dev.sh
+#   PORT=3000 ./scripts/sandbox-dev.sh
 #
 # ── Making the dev server reachable from the host browser ──────────────────
 #
@@ -68,20 +66,14 @@ if [[ ! -x "$ESBUILD_BIN" ]]; then
 fi
 
 export ESBUILD_BINARY_PATH="$ESBUILD_BIN"
-export VITE_MOCK="${VITE_MOCK:-0}"
 
 PORT="${PORT:-5174}"
-
-if [[ "${VITE_MOCK}" == "1" ]]; then
-  echo "→ Starting Vite dev server in MOCK mode (port=${PORT}) …"
-else
-  PROXY_HOST="${VITE_DEV_PROXY_HOST:-${IS_SANDBOX:+host.docker.internal}}"
-  PROXY_HOST="${PROXY_HOST:-127.0.0.1}"
-  PROXY_PORT="${VITE_DEV_PROXY_PORT:-8790}"
-  echo "→ Starting Vite dev server, proxy → ${PROXY_HOST}:${PROXY_PORT} (port=${PORT}) …"
-  export VITE_DEV_PROXY_HOST="$PROXY_HOST"
-  export VITE_DEV_PROXY_PORT="$PROXY_PORT"
-fi
+PROXY_HOST="${VITE_DEV_PROXY_HOST:-${IS_SANDBOX:+host.docker.internal}}"
+PROXY_HOST="${PROXY_HOST:-127.0.0.1}"
+PROXY_PORT="${VITE_DEV_PROXY_PORT:-8790}"
+echo "→ Starting Vite dev server, proxy → ${PROXY_HOST}:${PROXY_PORT} (port=${PORT}) …"
+export VITE_DEV_PROXY_HOST="$PROXY_HOST"
+export VITE_DEV_PROXY_PORT="$PROXY_PORT"
 
 cd "$WEB_DIR"
 exec node_modules/.bin/vite \

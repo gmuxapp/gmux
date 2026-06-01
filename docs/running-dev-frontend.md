@@ -30,13 +30,9 @@ VITE_DEV_PROXY_HOST=127.0.0.1 VITE_DEV_PROXY_PORT=8790 npx vite
 
 Open **http://localhost:5173**. Real sessions, real files, hot-reload.
 
-> **Mock mode** — `http://localhost:5173/?mock` loads canned data without a daemon.
-> Useful for basic rendering checks, but it hides interactive chrome (close buttons,
-> file tree actions). Don't use it for meaningful feature verification.
-
 ---
 
-## Option B — Full dev stack (Go + JS, needed only for backend changes)
+## Option B (Go + JS, needed only for backend changes)
 
 Use this only when you've changed Go code and need backend + frontend together.
 
@@ -137,9 +133,8 @@ Non-matching sessions show in counts but have no navigable URL.
 
 | Scenario | Command | Open |
 |---|---|---|
-| Frontend only (UI changes) | `cd apps/gmux-web && npx vite` | `http://localhost:5173` |
+| Frontend only (UI changes) | `just dev-frontend` | `http://localhost:5173` |
 | Full dev stack (Go changes) | `just dev` | `http://localhost:8791` |
-| Mock mode (no daemon) | `cd apps/gmux-web && npx vite` → append `?mock` | `http://localhost:5173/?mock` |
 
 Screenshot flow (always):
 ```bash
@@ -176,7 +171,7 @@ The running app exposes these globals on `window`:
 ---
 
 ## Known issues
-
+// FIX THIS
 **`bin/gmux` may be the wrong architecture.** The checked-in `bin/gmux` symlink can
 point at a macOS binary; on a Linux host gmuxd's session-launch fails with
 `exec format error`. Run `scripts/build.sh` or use `just dev` (always builds from

@@ -560,9 +560,6 @@ body {
   color: var(--text);
 }
 
-/* Mock mode (landing page screenshots): hide per-session close buttons */
-.mock-mode .session-close-btn,
-.mock-mode .session-card-close { display: none; }
 
 /* Session drag-to-reorder */
 .session-item.session-dragging {

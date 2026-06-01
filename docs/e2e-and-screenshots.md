@@ -80,15 +80,6 @@ agent-browser screenshot tasks/james-gmux/ss-01-description.png
 Replace `<slug>` with the project slug from `projects.json` — see
 `docs/running-dev-frontend.md` for how to find it.
 
-### To screenshot with mock data (no live daemon needed)
-```bash
-cd projects/james/james-gmux/apps/gmux-web
-npx vite &
-agent-browser navigate "http://localhost:5173/?mock"
-agent-browser screenshot tasks/james-gmux/ss-mock.png
-```
-Note: mock mode hides some interactive chrome (close buttons, file tree actions are CSS-hidden).
-
 ---
 
 ## Caveats

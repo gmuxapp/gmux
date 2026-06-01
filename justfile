@@ -29,6 +29,10 @@ test:
 dev:
     bash {{root}}/scripts/dev-server.sh
 
+# Start the vite dev server against the already-running daemon at :8790 (frontend changes only)
+dev-frontend:
+    cd {{root}}/apps/gmux-web && npx vite
+
 # Start gmuxd against built binaries
 start:
     #!/usr/bin/env bash

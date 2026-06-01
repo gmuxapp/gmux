@@ -36,10 +36,6 @@ const InputDiagnostics = lazy(() => import('./input-diagnostics'))
 
 // ── Config ──
 
-const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
-
-// Mock mode: hide close buttons and other interactive chrome via CSS.
-if (USE_MOCK) document.documentElement.classList.add('mock-mode')
 
 // Debug: __gmuxCopySession() removed (export-session.ts deleted in wterm migration)
 
@@ -605,12 +601,12 @@ function App() {
     return () => clearTimeout(t)
   }, [resumingId])
 
-  const canAttach = !!selectedVal?.alive && (!!selectedVal?.socket_path || !!selectedVal?.peer) && !USE_MOCK
+  const canAttach = !!selectedVal?.alive && (!!selectedVal?.socket_path || !!selectedVal?.peer)
 
   // Track which sessions have live TerminalView instances.
   // Mutating the ref during render is safe: the update is visible in the
   // same render pass, before the terminal stack JSX is evaluated below.
-  if (selId && selectedVal?.alive && (canAttach || USE_MOCK)) {
+  if (selId && selectedVal?.alive && canAttach) {
     openedSessionIdsRef.current.add(selId)
   }
   const terminalSessions = (termOpts && keybindsVal)
@@ -756,7 +752,7 @@ function App() {
 
         {/* Non-terminal overlay: shown when the active view isn't a live terminal */}
         {!activeIsTerminal && viewVal?.kind !== 'diff-viewer' && viewVal?.kind !== 'markdown-editor' && viewVal?.kind !== 'image-viewer' && (
-          selectedVal && !selectedVal.alive && termOpts && !USE_MOCK ? (
+          selectedVal && !selectedVal.alive && termOpts ? (
             <ReplayView
               session={selectedVal}
               terminalOptions={termOpts}

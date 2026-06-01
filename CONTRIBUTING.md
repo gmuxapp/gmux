@@ -41,7 +41,7 @@ moon run gmuxd:dev        # just gmuxd with watchexec
 moon run gmux-web:dev     # just vite
 ```
 
-For additional scenarios (frontend-only against existing gmuxd, sandbox/container setup, mock mode), see **[docs/running-dev-frontend.md](docs/running-dev-frontend.md)**.
+For additional scenarios (frontend-only against existing gmuxd, sandbox/container setup), see **[docs/running-dev-frontend.md](docs/running-dev-frontend.md)**.
 
 ## Tests & linting
 
