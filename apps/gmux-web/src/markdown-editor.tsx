@@ -26,6 +26,7 @@ import {
   editorTheme,
   tableField,
   imageField,
+  codeBlockField,
   collapseOnSelectionFacet,
   mouseSelectingField,
   setMouseSelecting,
@@ -144,6 +145,13 @@ const gmuxTheme = EditorView.theme({
     fontFamily: "'Lora', Georgia, serif",
     fontSize: '15px',
     height: '100%',
+    // Bridge editorTheme's CSS-variable colour references to gmux's dark palette.
+    // editorTheme uses hsl(var(--foreground/--muted/--primary)) with light-mode
+    // fallbacks; we map them to equivalent HSL values for our dark theme.
+    '--foreground': '220 10% 90%',    // near-white, maps to oklch(90% 0.01 250)
+    '--muted': '220 15% 18%',         // dark surface for code/muted bg
+    '--primary': '185 55% 60%',       // accent (teal-ish)
+    '--md-heading': '220 10% 92%',    // headings — slightly brighter than body
   },
   '.cm-scroller': {
     fontFamily: "'Lora', Georgia, serif",
@@ -233,6 +241,23 @@ const gmuxTheme = EditorView.theme({
   },
   '.cm-table-editor td': { padding: '6px 10px', border: '1px solid var(--border)', color: 'var(--text)' },
   '.cm-table-toggle': { background: 'var(--bg-surface)', color: 'var(--text)', border: '1px solid var(--border)' },
+  // Code block widget (codeBlockField)
+  '.cm-codeblock-widget': {
+    background: 'var(--bg-selected, oklch(20% 0.02 250))',
+    borderRadius: '6px',
+    margin: '4px 0',
+    overflow: 'hidden',
+    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+    fontSize: '0.88em',
+    lineHeight: '1.55',
+    display: 'block',
+  },
+  '.cm-codeblock-line': { padding: '2px 16px', display: 'block', color: 'var(--text)' },
+  '.cm-codeblock-fence': { color: 'var(--text-muted, oklch(55% 0 0))', padding: '6px 16px' },
+  '.cm-codeblock-copy': {
+    background: 'var(--bg-surface)', color: 'var(--text-muted)', border: '1px solid var(--border)',
+    borderRadius: '4px', fontSize: '11px', padding: '2px 8px', cursor: 'pointer',
+  },
 }, { dark: true })
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -347,6 +372,7 @@ export function MarkdownEditor({ projectSlug, filePath }: MarkdownEditorProps) {
           livePreviewPlugin,                   // hide markers on unfocused lines
           markdownStylePlugin,                 // heading sizes, bold/italic styles
           tableField,                          // GFM tables → HTML
+          codeBlockField(),                    // fenced code blocks → highlighted widget
           imageField(),                        // inline image previews
           editorTheme,                         // package default animations
           // App theme override
