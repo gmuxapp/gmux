@@ -75,27 +75,30 @@ export class ScrollbackCapturingCore implements TerminalCore {
 
   writeRaw(data: Uint8Array): void {
     if (this.inner.usingAltScreen()) {
-      // Alt-screen has no scrollback — skip snapshot.
       this.inner.writeRaw(data)
       return
     }
-    const before = this.inner.getScrollbackCount()
-    const snap = this.snapshotViewport()
-    this.inner.writeRaw(data)
-    const delta = this.inner.getScrollbackCount() - before
-    this.captureScrolledOff(delta, snap)
+    // Split on \n boundaries so each chunk writes at most one newline.
+    // A bulk write (e.g. the WS snapshot) can scroll many lines off in one
+    // call; the pre-write snapshot would be stale by the time each scroll
+    // happens mid-chunk. Writing one line at a time means the snapshot always
+    // contains the row that is about to scroll off the top.
+    let start = 0
+    while (start < data.length) {
+      const nl = data.indexOf(0x0a, start)
+      const end = nl === -1 ? data.length : nl + 1
+      const before = this.inner.getScrollbackCount()
+      const snap = this.snapshotViewport()
+      this.inner.writeRaw(data.subarray(start, end))
+      const delta = this.inner.getScrollbackCount() - before
+      if (delta > 0) this.captureScrolledOff(delta, snap)
+      start = end
+    }
   }
 
   writeString(str: string): void {
-    if (this.inner.usingAltScreen()) {
-      this.inner.writeString(str)
-      return
-    }
-    const before = this.inner.getScrollbackCount()
-    const snap = this.snapshotViewport()
-    this.inner.writeString(str)
-    const delta = this.inner.getScrollbackCount() - before
-    this.captureScrolledOff(delta, snap)
+    // Encode and delegate to writeRaw so chunking logic is applied consistently.
+    this.writeRaw(new TextEncoder().encode(str))
   }
 
   // ── Scrollback reads (from JS buffer) ──
