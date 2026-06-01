@@ -1,6 +1,20 @@
 # Running the Dev Frontend
 
-How to run the gmux-web frontend against a live gmuxd daemon, covering both the standard host workflow and the sandbox/container workflow.
+How to run the gmux-web frontend against a live gmuxd daemon.
+
+---
+
+## The short version (frontend changes only)
+
+The daemon is already running at `:8790`. You just need vite:
+
+```bash
+cd projects/james/james-gmux/apps/gmux-web
+npx vite
+# Vite starts on :5173 and proxies /v1, /auth, /ws to 127.0.0.1:8790
+```
+
+Open **http://localhost:5173**. Your source changes hot-reload automatically.
 
 ---
 
@@ -8,88 +22,128 @@ How to run the gmux-web frontend against a live gmuxd daemon, covering both the 
 
 ```bash
 cd apps/gmux-web
-pnpm install          # or npm install — installs vite and all JS deps
+pnpm install    # only needed once, or after lockfile changes
 ```
 
 ---
 
-## Option A — Standard host workflow (recommended)
+## Option A — Frontend only, against the running daemon (recommended for UI work)
 
-Use this when you have Go installed and want the full dev stack (gmuxd auto-reload on Go file changes):
-
-```bash
-just dev
-# or equivalently:
-bash scripts/dev-server.sh
-```
-
-This single command:
-1. Builds `bin/gmux-dev` and `bin/gmuxd-dev` from source
-2. Starts **vite** on `:5173` with HMR
-3. Starts **gmuxd-dev** on `:8791`, proxying `/v1`, `/auth`, and `/ws` through to vite
-4. Watches `services/gmuxd/`, `cli/gmux/`, and `packages/adapter/` — rebuilds and restarts gmuxd on `.go` changes
-
-Open **http://localhost:8791** (not 5173 — gmuxd proxies vite and serves the API on the same port).
-
-To launch sessions against this dev daemon:
-```bash
-source scripts/dev-session.sh
-gmux-dev bash          # any command
-gmux-dev pi            # coding agent session
-```
-
----
-
-## Option B — Frontend-only (attach to existing gmuxd)
-
-Use this when gmuxd is already running (e.g. the installed production daemon on `:8790`) and you only need to iterate on the frontend. No Go required.
+The daemon at `:8790` is always running with real data. Attach vite to it:
 
 ```bash
 cd apps/gmux-web
-
-# Point vite's proxy at the running gmuxd (default is 127.0.0.1:8790)
 npx vite
 ```
 
-Vite proxies all `/v1`, `/auth`, and `/ws` requests to `http://127.0.0.1:8790` (or whatever gmuxd is running on).
-
-To override the target:
+Vite defaults to proxying `127.0.0.1:8790`. Override if needed:
 
 ```bash
 VITE_DEV_PROXY_HOST=127.0.0.1 VITE_DEV_PROXY_PORT=8790 npx vite
 ```
 
-Open **http://localhost:5173**. The production gmuxd serves real sessions; the frontend builds and reloads via HMR.
+Open **http://localhost:5173**. Real sessions, real files, hot-reload.
 
-> **Note:** Use `?mock` (`http://localhost:5173/?mock`) to load with canned mock data and no live daemon. Some UI chrome (e.g. the × close button on sessions) is hidden in mock mode by CSS — use the live mode to verify interactive behaviour.
+> **Mock mode** — `http://localhost:5173/?mock` loads canned data without a daemon.
+> Useful for basic rendering checks, but it hides interactive chrome (close buttons,
+> file tree actions). Don't use it for meaningful feature verification.
 
 ---
 
-## Option C — Sandbox/container workflow
+## Option B — Full dev stack (Go + JS, needed only for backend changes)
 
-Use this when developing inside a Docker sandbox that can't bind to the host's loopback directly.
-
-**On the host**, expose the running gmuxd port to the sandbox:
+Use this only when you've changed Go code and need backend + frontend together.
 
 ```bash
-# Allow the sandbox to reach host gmuxd
-sbx policy allow network host.docker.internal:8790
+just dev
+# or: bash scripts/dev-server.sh
 ```
 
-**Inside the sandbox**, run vite pointing at the host:
+This builds `bin/gmux-dev` and `bin/gmuxd-dev`, starts vite on `:5173`, starts
+gmuxd-dev on `:8791`, and watches Go sources for rebuild.
+
+Open **http://localhost:8791** (gmuxd-dev proxies vite and serves the API on one port).
+
+To launch sessions against the dev daemon:
 
 ```bash
-cd apps/gmux-web
-VITE_DEV_PROXY_HOST=host.docker.internal VITE_DEV_PROXY_PORT=8790 npx vite --host 0.0.0.0
+source scripts/dev-session.sh
+gmux-dev bash
 ```
 
-Then **on the host**, expose the vite port back so your browser can reach it:
+**Use real data.** The dev daemon at `:8791` starts fresh, but you can point it at
+real workspace dirs via `projects.json`. Don't rely on fabricated test fixtures for
+manual verification — real data surfaces real bugs.
+
+---
+
+## Verifying frontend changes visually (agent-browser)
+
+The sandbox has no display, so headed Playwright doesn't work. Use the dev server
+and `agent-browser` instead.
+
+**Step 1** — Start vite (Option A above).
+
+**Step 2** — Find the auth token for the running daemon:
 
 ```bash
-sbx ports <sandbox-name> --publish 5173:5173/tcp
+TOKEN=$(find ~ -name 'auth-token' -path '*/gmux*' 2>/dev/null | head -1 | xargs cat)
 ```
 
-Open **http://localhost:5173** in your browser on the host. The frontend talks to the sandbox vite server, which proxies API calls to the host's gmuxd.
+The token lives under the daemon's `XDG_STATE_HOME`. For the standard dev setup it
+is at `/home/agent/.local/state/gmux-dev/state/gmux/auth-token`. Don't hardcode
+the path — use `find` so this works regardless of which daemon is running.
+
+**Step 3** — Authenticate via **localhost:5173** (not 8790).
+
+```bash
+agent-browser navigate "http://localhost:5173/auth/login?token=$TOKEN"
+# Browser lands on http://localhost:5173/ — you're now logged in
+```
+
+> **Why localhost, not 127.0.0.1?** Vite binds to `[::1]` (IPv6). `agent-browser`
+> resolves `localhost` to `[::1]` but `127.0.0.1` goes to IPv4 and gets refused.
+>
+> **Why port 5173, not 8790?** The auth cookie is scoped to the origin. Logging in
+> via `:8790` sets a cookie for `:8790` — the browser at `:5173` stays unauthenticated.
+> Log in via `:5173` so the cookie covers the vite dev server.
+
+**Step 4** — Navigate and screenshot:
+
+```bash
+agent-browser navigate "http://localhost:5173/<slug>/_md/AGENTS.md"
+agent-browser screenshot tasks/james-gmux/ss-feature.png
+```
+
+Replace `<slug>` with the project slug from `projects.json` (see below).
+
+---
+
+## Finding your project slug
+
+The markdown editor URL is `/:slug/_md/:path`. The slug must match an entry in
+`projects.json`. Find it:
+
+```bash
+# Path depends on XDG_STATE_HOME of the running daemon — find it dynamically:
+find ~ -name 'projects.json' -path '*/gmux*' 2>/dev/null | head -1 | xargs cat
+```
+
+For the standard dev setup, the file is at
+`/home/agent/.local/state/gmux-dev/state/gmux/projects.json`. A typical config:
+
+```json
+{
+  "version": 2,
+  "items": [
+    { "slug": "james-gmux", "match": [{ "path": "/Users/james-carmody/james-agent-workspace/projects/james/james-gmux" }] },
+    { "slug": "workspace",  "match": [{ "path": "/Users/james-carmody/james-agent-workspace" }] }
+  ]
+}
+```
+
+A session or file only appears in the UI if its path matches a configured project.
+Non-matching sessions show in counts but have no navigable URL.
 
 ---
 
@@ -97,21 +151,17 @@ Open **http://localhost:5173** in your browser on the host. The frontend talks t
 
 | Scenario | Command | Open |
 |---|---|---|
-| Full dev stack (Go + JS) | `just dev` | `http://localhost:8791` |
-| Frontend only, prod gmuxd | `cd apps/gmux-web && npx vite` | `http://localhost:5173` |
+| Frontend only (UI changes) | `cd apps/gmux-web && npx vite` | `http://localhost:5173` |
+| Full dev stack (Go changes) | `just dev` | `http://localhost:8791` |
 | Mock mode (no daemon) | `cd apps/gmux-web && npx vite` → append `?mock` | `http://localhost:5173/?mock` |
-| Sandbox → host gmuxd | `VITE_DEV_PROXY_HOST=host.docker.internal npx vite --host 0.0.0.0` | `http://localhost:5173` (after port-forward) |
 
----
-
-## Verifying frontend changes against a live daemon
-
-The mock (`?mock`) mode is useful for basic UI rendering checks, but it hides interactive chrome (close buttons, file tree actions) and can't exercise any feature that reads or writes real state. For meaningful verification:
-
-1. Ensure gmuxd is running: `curl http://localhost:8790/v1/health`
-2. Start vite in Option B or C mode
-3. Exercise the feature with real sessions — launch one with `gmux bash` or `gmux pi`
-4. For file-tree and markdown editor features, open a project with real `.md` files via the file tree
+Screenshot flow (always):
+```bash
+TOKEN=$(find ~ -name 'auth-token' -path '*/gmux*' 2>/dev/null | head -1 | xargs cat)
+agent-browser navigate "http://localhost:5173/auth/login?token=$TOKEN"
+agent-browser navigate "http://localhost:5173/<route>"
+agent-browser screenshot <path>.png
+```
 
 ---
 
@@ -122,61 +172,26 @@ The mock (`?mock`) mode is useful for basic UI rendering checks, but it hides in
 | `VITE_DEV_PROXY_HOST` | `127.0.0.1` | gmuxd hostname for vite proxy |
 | `VITE_DEV_PROXY_PORT` | `8790` | gmuxd port for vite proxy |
 | `VITE_DEV_TOKEN` | _(empty)_ | Bearer token forwarded to gmuxd (for auth-enabled instances) |
-| `VITE_DEV_TOKEN` | _(empty)_ | Bearer token forwarded to gmuxd (for auth-enabled instances) |
 | `VERSION` | `dev-<git-hash>` | Version baked into the bundle (set automatically by `just dev`) |
-
----
-
-## Making sessions reachable in the UI (projects.json)
-
-A session only becomes openable from the home page or sidebar if it belongs to a configured project. The frontend computes a session URL with `navigateToSession()`, which calls `matchSession()` against the configured projects in `projects.json`. A session whose `cwd`/`workspace_root` matches no project lands in an unreachable "discovered" bucket: it shows in counts but has no URL, so clicking and `window.__gmuxNavigateToSession(id)` both do nothing.
-
-`projects.json` lives at `$XDG_STATE_HOME/gmux/projects.json` (default `~/.local/state/gmux/projects.json`). Schema reference: https://gmux.app/reference/projects-json/. The shape is:
-
-```json
-{
-  "version": 2,
-  "items": [
-    { "slug": "home", "match": [{ "path": "~", "exact": true }] },
-    { "slug": "workspace", "match": [{ "path": "~/james-agent-workspace" }] }
-  ]
-}
-```
-
-Path rules match the directory and (unless `exact: true`) every subdirectory, so one non-exact rule on the workspace root covers the gmux repo and every other project inside it. Remote rules (`{ "remote": "github.com/org/repo" }`) match by normalized git remote regardless of path.
-
-`scripts/dev-server.sh` seeds this file automatically the first time it runs, with a `workspace` project pointing at the agent workspace that contains the repo. Override the path for other layouts:
-
-```bash
-GMUX_DEV_WORKSPACE=/path/to/your/workspace just dev
-```
-
-The seed only writes when the file is absent, so gmuxd keeps managing it (and its per-project `sessions` list) across restarts. Delete the file to re-seed. The e2e suite seeds its own equivalent in `e2e/global-setup.ts`.
 
 ---
 
 ## Driving a session from the browser (debug hooks)
 
-gmuxd serves the frontend with cookie auth. To open it directly (not through a vite proxy that injects a token), set the cookie once:
-
-```bash
-# auth-token lives under the daemon's state dir: $XDG_STATE_HOME/gmux/auth-token
-# (just dev uses $HOME/.local/state/gmux-dev/state). Use the matching port.
-TOKEN=$(cat "$XDG_STATE_HOME/gmux/auth-token")
-open "http://localhost:8791/auth/login?token=$TOKEN"
-```
-
-The running app exposes these globals on `window`, useful from devtools or an automated browser:
+The running app exposes these globals on `window`:
 
 | Hook | Purpose |
 |---|---|
-| `__gmuxNavigateToSession(id)` | Route to a session by id. Returns `true` only once the session and its project have loaded, so poll it. Returns `false` if the session matches no configured project (see projects.json above). |
-| `__gmuxTerm` | The live `WTerm` instance. `__gmuxTerm.write(new TextEncoder().encode("..."))` injects bytes into the renderer. |
+| `__gmuxNavigateToSession(id)` | Route to a session by id. Returns `true` once session and project have loaded; `false` if no matching project. |
+| `__gmuxTerm` | Live `WTerm` instance — `__gmuxTerm.write(new TextEncoder().encode("..."))` injects bytes. |
 | `__gmuxInject(b64)` | Write base64-encoded bytes into the real terminal (live sessions only). |
 | `__gmuxDiag()` | Sync diagnostics (scrollback bytes, ws state, etc.). |
 
 ---
 
-## Known dev issues
+## Known issues
 
-**`bin/gmux` may be the wrong architecture.** The checked-in `bin/gmux` symlink can point at a macOS binary; on a Linux host gmuxd's session-launch fails with `exec format error`. `scripts/build.sh` repoints the symlink to the host arch, so run a build first, or use `just dev` which always builds `bin/gmux-dev` (CLI) and `bin/gmuxd-dev` (daemon) from source before starting.
+**`bin/gmux` may be the wrong architecture.** The checked-in `bin/gmux` symlink can
+point at a macOS binary; on a Linux host gmuxd's session-launch fails with
+`exec format error`. Run `scripts/build.sh` or use `just dev` (always builds from
+source) to fix this.

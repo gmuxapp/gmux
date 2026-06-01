@@ -50,61 +50,41 @@ E2E_SKIP_BUILD=1 npx playwright test --config e2e/playwright.config.ts --grep "s
 
 ### The right way: dev server + agent-browser
 
-The sandbox has no display, so `--headed` Playwright doesn't work. Use the dev server instead:
+The sandbox has no display, so `--headed` Playwright doesn't work. Start the vite
+dev server and use `agent-browser` instead.
 
-**Step 1** — Start the frontend dev server (Option B: frontend-only against the real daemon on `:8790`):
+**Step 1** — Start vite against the already-running daemon at `:8790`:
 ```bash
 cd projects/james/james-gmux/apps/gmux-web
 npx vite &
 # Vite starts on :5173 and proxies /v1, /auth, /ws to localhost:8790
 ```
 
-The host gmuxd is already running on `:8790` with a real token at `~/.local/state/gmux/auth-token`.
-
-**Step 2** — Navigate and screenshot:
+**Step 2** — Find the auth token (path depends on which daemon is running):
 ```bash
-TOKEN=$(cat /home/agent/.local/state/gmux/auth-token)
-agent-browser navigate "http://127.0.0.1:8790/auth/login?token=$TOKEN"
-agent-browser navigate "http://127.0.0.1:8790"         # or whatever URL you want
-agent-browser screenshot tasks/james-gmux/ss-01-home.png
+TOKEN=$(find ~ -name 'auth-token' -path '*/gmux*' 2>/dev/null | head -1 | xargs cat)
 ```
 
-To screenshot the test-branch build specifically, start vite pointing at a test gmuxd (see below).
-
-### Serving the test-branch build for screenshots
-
-The e2e test suite leaves a live gmuxd running only for the duration of the test run. To get a persistent instance from the `test/integration` branch build for screenshots:
-
-**Step 1** — Start the dev frontend against the host's running gmuxd:
+**Step 3** — Log in via **localhost:5173** (not 8790):
 ```bash
-cd projects/james/james-gmux
-# The branch's built frontend is already in bin/gmuxd (embedded)
-# OR serve it via vite to get the test-branch bundle:
-E2E_SKIP_BUILD=1 npx playwright test --config e2e/playwright.config.ts \
-  e2e/tests/harness.spec.ts   # runs global-setup, leaves daemon alive briefly
+agent-browser navigate "http://localhost:5173/auth/login?token=$TOKEN"
+# Browser lands on http://localhost:5173/ — cookie is now set for port 5173
 ```
 
-Actually simpler: **just run `npx vite` from the branch** — it serves the in-tree source against the host's gmuxd on `:8790`, which is always running.
-
+**Step 4** — Navigate and screenshot:
 ```bash
-cd projects/james/james-gmux/apps/gmux-web
-npx vite
-# Open http://127.0.0.1:5173 — serves test/integration frontend, real data
-```
-
-Then screenshot via `agent-browser`:
-```bash
-TOKEN=$(cat /home/agent/.local/state/gmux/auth-token)
-agent-browser navigate "http://127.0.0.1:5173/auth/login?token=$TOKEN"
-agent-browser navigate "http://127.0.0.1:5173/test-project"   # or any route
+agent-browser navigate "http://localhost:5173/<slug>/_md/AGENTS.md"  # or any route
 agent-browser screenshot tasks/james-gmux/ss-01-description.png
 ```
+
+Replace `<slug>` with the project slug from `projects.json` — see
+`docs/running-dev-frontend.md` for how to find it.
 
 ### To screenshot with mock data (no live daemon needed)
 ```bash
 cd projects/james/james-gmux/apps/gmux-web
 npx vite &
-agent-browser navigate "http://127.0.0.1:5173/?mock"
+agent-browser navigate "http://localhost:5173/?mock"
 agent-browser screenshot tasks/james-gmux/ss-mock.png
 ```
 Note: mock mode hides some interactive chrome (close buttons, file tree actions are CSS-hidden).
@@ -115,6 +95,8 @@ Note: mock mode hides some interactive chrome (close buttons, file tree actions 
 
 - **`--headed` Playwright fails** in the sandbox — no display. Don't try it.
 - **`agent-browser` uses a persistent Chromium process** — `agent-browser close` to restart it with different flags.
-- **gmuxd token** for the dev instance is always at `/home/agent/.local/state/gmux/auth-token` — this is NOT the e2e test token.
+- **Use `localhost`, not `127.0.0.1`** — vite binds to `[::1]` (IPv6). `127.0.0.1` is IPv4 and gets `ERR_CONNECTION_REFUSED`.
+- **Log in via port 5173, not 8790** — the auth cookie is origin-scoped. Logging in at `:8790` sets a cookie for `:8790`; the browser at `:5173` stays unauthenticated.
+- **gmuxd token path varies** — use `find ~ -name 'auth-token' -path '*/gmux*' 2>/dev/null` rather than hardcoding the path. For the standard dev setup it is at `/home/agent/.local/state/gmux-dev/state/gmux/auth-token`.
 - **The e2e test token** is always `e2e` padded to 64 chars (`e2e` + 61 zeros), but the test daemon only lives during a test run — it's gone once the suite finishes.
 - **`E2E_SKIP_BUILD=1`** skips both vite build and `go build` — only use if the `bin/` binaries match the current source.
