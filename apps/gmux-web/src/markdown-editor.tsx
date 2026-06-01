@@ -178,6 +178,11 @@ const gmuxTheme = EditorView.theme({
   '.cm-header-1': { color: 'var(--text)' },
   '.cm-header-2': { color: 'var(--text)' },
   '.cm-header-3': { color: 'var(--text)' },
+  '.cm-header-4, .cm-header-5, .cm-header-6': { color: 'var(--text)' },
+  // Inline bold/italic — editorTheme defaults to near-black hsl(220 9% 9%)
+  '.cm-strong': { color: 'var(--text)' },
+  '.cm-emphasis': { color: 'var(--text)' },
+  '.cm-strikethrough': { color: 'var(--text-muted)' },
   // Inline code
   '.cm-inline-code': {
     background: 'var(--bg-selected)',
@@ -211,14 +216,23 @@ const gmuxTheme = EditorView.theme({
   },
   // Links
   '.cm-link': { color: 'var(--accent, oklch(65% 0.18 250))' },
-  // Tables (rendered by tableField)
-  '.cm-table-wrapper table': { borderCollapse: 'collapse', width: '100%', margin: '0.8em 0', fontSize: '14px' },
-  '.cm-table-wrapper th': {
+  '.cm-wikilink': { color: 'var(--accent, oklch(65% 0.18 250))' },
+  // Tables — editorTheme uses .cm-table-widget/.cm-table-editor (not .cm-table-wrapper)
+  '.cm-table-widget table': { borderCollapse: 'collapse', width: '100%', margin: '0.8em 0', fontSize: '14px' },
+  '.cm-table-widget th': {
     background: 'var(--bg-selected)', fontFamily: "'Instrument Sans', sans-serif",
     fontWeight: '600', fontSize: '0.9em', padding: '6px 10px', textAlign: 'left',
-    border: '1px solid var(--border)',
+    border: '1px solid var(--border)', color: 'var(--text)',
   },
-  '.cm-table-wrapper td': { padding: '6px 10px', border: '1px solid var(--border)' },
+  '.cm-table-widget td': { padding: '6px 10px', border: '1px solid var(--border)', color: 'var(--text)' },
+  '.cm-table-editor table': { borderCollapse: 'collapse', width: '100%', margin: '0.8em 0', fontSize: '14px' },
+  '.cm-table-editor th': {
+    background: 'var(--bg-selected)', fontFamily: "'Instrument Sans', sans-serif",
+    fontWeight: '600', fontSize: '0.9em', padding: '6px 10px', textAlign: 'left',
+    border: '1px solid var(--border)', color: 'var(--text)',
+  },
+  '.cm-table-editor td': { padding: '6px 10px', border: '1px solid var(--border)', color: 'var(--text)' },
+  '.cm-table-toggle': { background: 'var(--bg-surface)', color: 'var(--text)', border: '1px solid var(--border)' },
 }, { dark: true })
 
 // ── Types ────────────────────────────────────────────────────────────────────

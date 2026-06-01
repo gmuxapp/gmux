@@ -7,7 +7,7 @@
  * preact/compat via @preact/preset-vite).
  */
 
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useState, useCallback } from 'preact/hooks'
 import { closeDiffView } from './store'
 import { parsePatchFiles } from '@pierre/diffs'
 import { FileDiff } from '@pierre/diffs/react'
@@ -22,16 +22,26 @@ interface DiffPanelProps {
 
 // ── Diff options (stable reference — defined outside component) ──
 
-const DIFF_OPTIONS: FileDiffOptions<undefined> = {
+const DIFF_BASE_OPTIONS: FileDiffOptions<undefined> = {
   theme: 'dark-plus',
-  diffStyle: 'unified',
+  diffStyle: 'split',
+  overflow: 'wrap',
   hunkSeparators: 'line-info',
 }
-
 // ── Component ──
 
 export function DiffPanel({ projectSlug, cwd }: DiffPanelProps) {
   const [files, setFiles] = useState<FileDiffMetadata[] | null>(null)
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+
+  const toggleCollapse = useCallback((key: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -91,13 +101,24 @@ export function DiffPanel({ projectSlug, cwd }: DiffPanelProps) {
         )}
         {!loading && !error && files && files.length > 0 && (
           <div class="diff-files">
-            {files.map(fileDiff => (
-              <FileDiff
-                key={fileDiff.name ?? fileDiff.prevName ?? String(Math.random())}
-                fileDiff={fileDiff}
-                options={DIFF_OPTIONS}
-              />
-            ))}
+            {files.map((fileDiff, idx) => {
+              const key = fileDiff.name ?? fileDiff.prevName ?? String(idx)
+              const isCollapsed = collapsed.has(key)
+              const options: FileDiffOptions<undefined> = { ...DIFF_BASE_OPTIONS, collapsed: isCollapsed }
+              return (
+                <div class="diff-file-wrapper" key={key}>
+                  <button
+                    class="diff-file-collapse-btn"
+                    onClick={() => toggleCollapse(key)}
+                    title={isCollapsed ? 'Expand' : 'Collapse'}
+                  >
+                    <span class="diff-file-collapse-chevron">{isCollapsed ? '▶' : '▼'}</span>
+                    <span class="diff-file-collapse-name">{key}</span>
+                  </button>
+                  <FileDiff fileDiff={fileDiff} options={options} />
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
