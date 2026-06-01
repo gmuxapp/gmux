@@ -59,9 +59,12 @@ export function DiffPanel({ projectSlug, cwd }: DiffPanelProps) {
       .then(text => {
         if (text.trim() === '') {
           setFiles([])
+          setCollapsed(new Set())
         } else {
           const patches = parsePatchFiles(text, 'gmux-diff')
-          setFiles(patches.flatMap(p => p.files))
+          const allFiles = patches.flatMap(p => p.files)
+          setFiles(allFiles)
+          setCollapsed(new Set(allFiles.map((f, i) => f.name ?? f.prevName ?? String(i))))
         }
         setLoading(false)
       })
