@@ -1,7 +1,28 @@
-// @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
 import { applyWtermTheme } from './terminal-theme'
 import type { ResolvedTerminalOptions } from './settings-schema'
+
+/** Minimal fake element — applyWtermTheme only uses style.setProperty and classList.toggle. */
+function makeFakeElement(): HTMLElement {
+  const styles = new Map<string, string>()
+  const classes = new Set<string>()
+  return {
+    style: {
+      setProperty: (k: string, v: string) => { styles.set(k, v) },
+      getPropertyValue: (k: string) => styles.get(k) ?? '',
+    },
+    classList: {
+      add: (c: string) => { classes.add(c) },
+      remove: (c: string) => { classes.delete(c) },
+      contains: (c: string) => classes.has(c),
+      toggle: (c: string, force?: boolean) => {
+        const next = force ?? !classes.has(c)
+        next ? classes.add(c) : classes.delete(c)
+        return next
+      },
+    },
+  } as unknown as HTMLElement
+}
 
 function makeOptions(overrides: Partial<ResolvedTerminalOptions> = {}): ResolvedTerminalOptions {
   return {
@@ -38,7 +59,7 @@ function makeOptions(overrides: Partial<ResolvedTerminalOptions> = {}): Resolved
 
 describe('applyWtermTheme', () => {
   it('sets foreground, background and cursor CSS variables', () => {
-    const el = document.createElement('div')
+    const el = makeFakeElement()
     applyWtermTheme(el, makeOptions())
     expect(el.style.getPropertyValue('--term-fg')).toBe('#d4d4d4')
     expect(el.style.getPropertyValue('--term-bg')).toBe('#1e1e1e')
@@ -46,7 +67,7 @@ describe('applyWtermTheme', () => {
   })
 
   it('sets color palette variables 0–15', () => {
-    const el = document.createElement('div')
+    const el = makeFakeElement()
     applyWtermTheme(el, makeOptions())
     expect(el.style.getPropertyValue('--term-color-0')).toBe('#000000')  // black
     expect(el.style.getPropertyValue('--term-color-1')).toBe('#cd3131')  // red
@@ -56,14 +77,14 @@ describe('applyWtermTheme', () => {
   })
 
   it('sets font-family and font-size variables', () => {
-    const el = document.createElement('div')
+    const el = makeFakeElement()
     applyWtermTheme(el, makeOptions({ fontSize: 13, fontFamily: "'JetBrains Mono'" }))
     expect(el.style.getPropertyValue('--term-font-family')).toBe("'JetBrains Mono'")
     expect(el.style.getPropertyValue('--term-font-size')).toBe('13px')
   })
 
   it('toggles cursor-blink class', () => {
-    const el = document.createElement('div')
+    const el = makeFakeElement()
     applyWtermTheme(el, makeOptions({ cursorBlink: true }))
     expect(el.classList.contains('cursor-blink')).toBe(true)
 
@@ -72,7 +93,7 @@ describe('applyWtermTheme', () => {
   })
 
   it('uses default colors when theme is undefined', () => {
-    const el = document.createElement('div')
+    const el = makeFakeElement()
     const opts = makeOptions()
     // @ts-expect-error – testing undefined theme path
     opts.theme = undefined

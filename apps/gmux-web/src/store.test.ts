@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { sessions, sessionsLoaded, projects, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap, sessionStaleness, peers, peerAppearance, urlPath, selectedId, navigateToSession, setNavigate, currentProjectSlug } from './store'
+import { sessions, sessionsLoaded, projectsLoaded, projects, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap, sessionStaleness, peers, peerAppearance, urlPath, selectedId, navigateToSession, setNavigate, currentProjectSlug } from './store'
 import type { Session } from './types'
 import type { ProjectItem } from './types'
 
@@ -30,6 +30,7 @@ beforeEach(() => {
   sessions.value = []
   projects.value = []
   sessionsLoaded.value = false
+  projectsLoaded.value = false
   urlPath.value = '/'
 })
 
@@ -75,6 +76,8 @@ describe('upsertSession', () => {
     ]
     projects.value = testProjects
     sessionsLoaded.value = true
+    projectsLoaded.value = true
+    sessionsLoaded.value = true
     sessions.value = [
       makeSession({ id: 'sess-1', cwd: '/dev/project', kind: 'pi', slug: 'fix-auth' }),
     ]
@@ -98,6 +101,8 @@ describe('upsertSession', () => {
       { slug: 'myproject', match: [{ path: '/dev/project' }] },
     ]
     projects.value = testProjects
+    sessionsLoaded.value = true
+    projectsLoaded.value = true
     sessionsLoaded.value = true
     sessions.value = [
       makeSession({ id: 'sess-1', cwd: '/dev/project', kind: 'pi', slug: 'fix-auth' }),
@@ -378,6 +383,7 @@ describe('peerAppearance', () => {
 describe('currentProjectSlug', () => {
   beforeEach(() => {
     sessionsLoaded.value = true
+    projectsLoaded.value = true
     projects.value = [
       { slug: 'gmux', match: [{ path: '/home/user/gmux' }] } as any,
     ]

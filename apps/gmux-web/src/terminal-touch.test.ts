@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+
 /**
  * Tests for terminal-touch helpers.
  */

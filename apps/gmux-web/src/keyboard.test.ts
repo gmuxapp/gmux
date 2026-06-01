@@ -1,11 +1,78 @@
-// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { attachKeyboardHandler, ctrlSequenceFor, formatPasteText, pickBinaryDataTransferItem } from './keyboard'
 import { resolveKeybinds } from './keybinds'
 
-// Build an array-like stand-in for DataTransferItemList. Vitest runs in
-// node by default, where the real DOM type isn't available; a plain
-// indexed object with .length matches what the function actually reads.
+// ── Minimal fake DOM (no jsdom needed) ──────────────────────────────────────
+//
+// keyboard.ts only uses element.addEventListener / removeEventListener /
+// dispatchEvent — a lightweight in-process fake is sufficient.
+
+/** Minimal keyboard event — only the properties attachKeyboardHandler reads. */
+class FakeKeyboardEvent {
+  type: string
+  key: string
+  code: string
+  ctrlKey: boolean
+  shiftKey: boolean
+  altKey: boolean
+  metaKey: boolean
+  bubbles: boolean
+  cancelable: boolean
+  defaultPrevented = false
+
+  constructor(type: string, opts: {
+    key?: string; code?: string; ctrlKey?: boolean; shiftKey?: boolean;
+    altKey?: boolean; metaKey?: boolean; bubbles?: boolean; cancelable?: boolean
+  } = {}) {
+    this.type = type
+    this.key  = opts.key  ?? ''
+    this.code = opts.code ?? `Key${(opts.key ?? '').toUpperCase()}`
+    this.ctrlKey    = opts.ctrlKey  ?? false
+    this.shiftKey   = opts.shiftKey ?? false
+    this.altKey     = opts.altKey   ?? false
+    this.metaKey    = opts.metaKey  ?? false
+    this.bubbles    = opts.bubbles  ?? false
+    this.cancelable = opts.cancelable ?? false
+  }
+
+  preventDefault()             { this.defaultPrevented = true }
+  stopImmediatePropagation()   {}
+  stopPropagation()            {}
+}
+
+/** Minimal element with capture-phase addEventListener / dispatchEvent. */
+class FakeElement {
+  private _capture = new Map<string, Array<(ev: FakeKeyboardEvent) => void>>()
+  private _bubble  = new Map<string, Array<(ev: FakeKeyboardEvent) => void>>()
+
+  addEventListener(type: string, fn: (ev: any) => void, opts?: boolean | { capture?: boolean }) {
+    const capture = typeof opts === 'boolean' ? opts : (opts?.capture ?? false)
+    const map = capture ? this._capture : this._bubble
+    if (!map.has(type)) map.set(type, [])
+    map.get(type)!.push(fn)
+  }
+
+  removeEventListener(type: string, fn: (ev: any) => void, opts?: boolean | { capture?: boolean }) {
+    const capture = typeof opts === 'boolean' ? opts : (opts?.capture ?? false)
+    const map = capture ? this._capture : this._bubble
+    const list = map.get(type)
+    if (!list) return
+    const idx = list.indexOf(fn)
+    if (idx >= 0) list.splice(idx, 1)
+  }
+
+  dispatchEvent(ev: FakeKeyboardEvent): boolean {
+    // Target phase: capture listeners fire before bubble listeners.
+    const captures = this._capture.get(ev.type) ?? []
+    const bubbles  = this._bubble.get(ev.type)  ?? []
+    for (const fn of [...captures, ...bubbles]) fn(ev)
+    return !ev.defaultPrevented
+  }
+}
+
+// ── Test helpers ─────────────────────────────────────────────────────────────
+
+// Build an array-like stand-in for DataTransferItemList.
 function makeItems(
   entries: ReadonlyArray<{ kind: 'string' | 'file'; type: string }>,
 ): DataTransferItemList {
@@ -15,6 +82,56 @@ function makeItems(
   })
   return list as unknown as DataTransferItemList
 }
+
+/** Build a minimal WTerm-like mock with a fake DOM element for event testing. */
+function makeTermMock(opts: { hasSelection?: boolean } = {}): {
+  term: any
+  element: FakeElement
+  sent: string[]
+} {
+  const element = new FakeElement()
+  const sent: string[] = []
+
+  const term: any = {
+    element,
+    bridge: { bracketedPaste: () => false },
+  }
+
+  if (opts.hasSelection !== undefined) {
+    vi.stubGlobal('getSelection', vi.fn().mockReturnValue({
+      toString: () => opts.hasSelection ? 'hello' : '',
+      removeAllRanges: vi.fn(),
+      addRange: vi.fn(),
+    }))
+  }
+
+  return { term, element, sent }
+}
+
+/** Dispatch a synthetic key event on the element and return the event. */
+function dispatchKey(element: FakeElement, opts: {
+  key: string
+  code?: string
+  ctrlKey?: boolean
+  shiftKey?: boolean
+  altKey?: boolean
+  metaKey?: boolean
+}): FakeKeyboardEvent {
+  const ev = new FakeKeyboardEvent('keydown', {
+    key:      opts.key,
+    code:     opts.code ?? `Key${opts.key.toUpperCase()}`,
+    ctrlKey:  opts.ctrlKey  ?? false,
+    shiftKey: opts.shiftKey ?? false,
+    altKey:   opts.altKey   ?? false,
+    metaKey:  opts.metaKey  ?? false,
+    bubbles:    true,
+    cancelable: true,
+  })
+  element.dispatchEvent(ev)
+  return ev
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('pickBinaryDataTransferItem', () => {
   it('returns the first file with a non-text MIME', () => {
@@ -27,17 +144,11 @@ describe('pickBinaryDataTransferItem', () => {
   })
 
   it('skips kind=string even when the MIME is non-text', () => {
-    // A 'string' item's getAsFile() returns null; uploading it would
-    // produce a confusing failure-toast race. The kind check is what
-    // prevents that.
     const items = makeItems([{ kind: 'string', type: 'application/json' }])
     expect(pickBinaryDataTransferItem(items)).toBe(null)
   })
 
   it('skips kind=file when the MIME is text/*', () => {
-    // Some browsers expose dragged .txt files as kind='file' with type
-    // 'text/plain'. We treat those as text and let the existing text
-    // paste path handle them, not the binary upload path.
     const items = makeItems([{ kind: 'file', type: 'text/plain' }])
     expect(pickBinaryDataTransferItem(items)).toBe(null)
   })
@@ -47,9 +158,6 @@ describe('pickBinaryDataTransferItem', () => {
   })
 
   it('returns the first qualifying file even when later items are also binary', () => {
-    // Order matters: the function must not pick "the most preferred"
-    // image type, just the first qualifying one. Browsers are responsible
-    // for ordering the representations sensibly.
     const items = makeItems([
       { kind: 'file', type: 'image/jpeg' },
       { kind: 'file', type: 'image/png' },
@@ -74,7 +182,6 @@ describe('formatPasteText', () => {
   })
 
   it('sanitizes ESC inside brackets to prevent early termination', () => {
-    // An attacker could embed \x1b[201~ to break out of bracketed paste.
     expect(formatPasteText('safe\x1b[201~injected', true))
       .toBe('\x1b[200~safe\u241b[201~injected\x1b[201~')
   })
@@ -113,16 +220,15 @@ describe('ctrlSequenceFor', () => {
   })
 
   it('produces CSI u sequences for uppercase letters (Ctrl+Shift)', () => {
-    // Ctrl+Shift+A: ESC [ 97 ; 6 u
     expect(ctrlSequenceFor('A')).toBe('\x1b[97;6u')
     expect(ctrlSequenceFor('C')).toBe('\x1b[99;6u')
     expect(ctrlSequenceFor('Z')).toBe('\x1b[122;6u')
   })
 
   it('handles special characters', () => {
-    expect(ctrlSequenceFor('[')).toBe('\x1b')  // ESC
-    expect(ctrlSequenceFor(']')).toBe('\x1d')  // GS
-    expect(ctrlSequenceFor('\\')).toBe('\x1c') // FS
+    expect(ctrlSequenceFor('[')).toBe('\x1b')   // ESC
+    expect(ctrlSequenceFor(']')).toBe('\x1d')   // GS
+    expect(ctrlSequenceFor('\\')).toBe('\x1c')  // FS
   })
 
   it('returns null for multi-character strings and unknown chars', () => {
@@ -137,57 +243,6 @@ describe('ctrlSequenceFor', () => {
 // ghostty-web's customKeyEventHandler semantics are the INVERSE of xterm.js:
 //   return true  → consumed (ghostty calls preventDefault + returns, key NOT sent to PTY)
 //   return false → pass-through (ghostty encodes and sends key to PTY via WASM)
-//
-// @vitest-environment jsdom
-
-/** Build a minimal WTerm-like mock with a real DOM element for event testing. */
-function makeTermMock(opts: { hasSelection?: boolean } = {}): {
-  term: any
-  element: HTMLElement
-  sent: string[]
-} {
-  const element = document.createElement('div')
-  const sent: string[] = []
-
-  const term: any = {
-    element,
-    bridge: { bracketedPaste: () => false },
-  }
-
-  // Stub window.getSelection() for copy/interrupt tests
-  if (opts.hasSelection !== undefined) {
-    vi.stubGlobal('getSelection', vi.fn().mockReturnValue({
-      toString: () => opts.hasSelection ? 'hello' : '',
-      removeAllRanges: vi.fn(),
-      addRange: vi.fn(),
-    }))
-  }
-
-  return { term, element, sent }
-}
-
-/** Dispatch a synthetic KeyboardEvent on the element, return the event. */
-function dispatchKey(element: HTMLElement, opts: {
-  key: string
-  code?: string
-  ctrlKey?: boolean
-  shiftKey?: boolean
-  altKey?: boolean
-  metaKey?: boolean
-}): KeyboardEvent & { defaultPrevented: boolean } {
-  const ev = new KeyboardEvent('keydown', {
-    key: opts.key,
-    code: opts.code ?? `Key${opts.key.toUpperCase()}`,
-    ctrlKey: opts.ctrlKey ?? false,
-    shiftKey: opts.shiftKey ?? false,
-    altKey: opts.altKey ?? false,
-    metaKey: opts.metaKey ?? false,
-    bubbles: true,
-    cancelable: true,
-  })
-  element.dispatchEvent(ev)
-  return ev as KeyboardEvent & { defaultPrevented: boolean }
-}
 
 const DEFAULT_KEYBINDS = resolveKeybinds(null)
 

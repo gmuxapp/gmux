@@ -1,6 +1,6 @@
-// @vitest-environment jsdom
+
 /**
- * selection.ts now uses window.getSelection() — no terminal buffer API.
+ * selection.ts uses getSelection() — no terminal buffer API.
  * Tests live here after consolidation.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'

@@ -35,7 +35,8 @@ type SendFn = (data: string) => void
  * correctly stays in desktop mode: Enter sends \r and there is no toolbar.
  */
 function isTouchDevice(): boolean {
-  return window.matchMedia('(pointer: coarse)').matches
+  return (globalThis as unknown as { matchMedia?: (q: string) => { matches: boolean } })
+    .matchMedia?.('(pointer: coarse)')?.matches ?? false
 }
 
 /**
