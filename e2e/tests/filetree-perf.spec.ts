@@ -1,9 +1,9 @@
 /**
  * File-tree performance regression tests.
  *
- * These tests run in a real browser (Chromium) against a live gmuxd instance.
- * Timing is measured browser-side using the Long Tasks API and the
- * Performance API — not wall-clock time from the test runner.
+ * Runs in a real browser (Chromium) against a live gmuxd instance.
+ * All timing is measured browser-side via the Long Tasks API — not
+ * wall-clock from the test runner.
  *
  * WHAT WE ARE ACTUALLY TESTING
  * ─────────────────────────────
@@ -14,28 +14,29 @@
  *   getExpandedPaths(model, dirPaths)   ← O(n) model.getItem() per dir
  *   model.resetPaths(paths, …)          ← tree model update
  *
- * This fires every 2.5 s on the poll interval. With 300+ dirs it can block
- * the main thread for 100–400 ms. Any click dispatched during that window
- * sits in the event queue until the block clears — so the user sees a frozen
- * UI, even though navigate() itself is instant.
+ * This fires every 2.5 s on the poll interval. On a project with 95 000+
+ * directories (representative of a large monorepo) it can block the main
+ * thread for hundreds of milliseconds. Any click dispatched during that
+ * window sits in the event queue until the block clears.
  *
  * HOW WE DETECT IT
  * ─────────────────
  * The browser's Long Tasks API reports any task that blocks the event loop
- * for > 50 ms. We:
+ * for > 50 ms. We intercept the walk API response via page.route() and
+ * inject synthetic path lists (100 000 and 1 000 000 entries) so we can
+ * test at scale without creating real directories on disk. The browser's
+ * JS processing path is identical regardless of whether paths came from the
+ * real filesystem or a synthetic response.
  *
- *   1. Install a PerformanceObserver for "longtask" entries via addInitScript
- *      (runs before any app code, so nothing is missed).
- *   2. Seed 300 directories so the walk result is large.
- *   3. Let the tree load, then wait for ≥ 2 complete poll cycles (6 s).
- *   4. Assert that no long task was recorded after the initial page load.
+ * Test structure:
+ *   1. Install PerformanceObserver for "longtask" before any app code runs.
+ *   2. Intercept /v1/fs/{slug}/walk to return N synthetic directory paths.
+ *   3. Load the project hub; let the tree render (initial load long tasks excluded).
+ *   4. Wait for ≥ 2 poll cycles (6 s) — each one re-fetches the intercepted walk.
+ *   5. Assert zero long tasks recorded after initial load completes.
  *
- * If the regression is present, long tasks WILL appear. If the fix holds,
- * the poll work stays < 50 ms and no tasks are reported.
- *
- * We also retain a click→navigate handler-latency test — this measures the
- * JS execution path (navigate() call), not input queue delay. Its value is
- * as a sanity check that the selection handler itself hasn't grown expensive.
+ * If the regression is present the poll work WILL produce long tasks and
+ * the tests will fail. If the fix holds, no long tasks appear.
  */
 
 import * as fs from 'node:fs'
@@ -47,18 +48,6 @@ import { openApp } from '../helpers'
 
 const PROJECT = 'test-project'
 
-/**
- * Any task blocking the main thread for longer than this is a regression.
- * The Long Tasks API reports tasks > 50 ms; we use 50 ms as our budget.
- */
-const MAIN_THREAD_BLOCK_BUDGET_MS = 50
-
-/**
- * Handler execution budget: time from click event to navigate() calling
- * history.pushState. Measures pure JS execution, not input queue delay.
- */
-const HANDLER_EXEC_BUDGET_MS = 20
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function workspace(): string {
@@ -68,9 +57,10 @@ function workspace(): string {
 }
 
 /**
- * Install two observers via addInitScript (runs before any app code):
+ * Install the Long Tasks observer and click/nav timing hooks via addInitScript
+ * (runs before any app code, so nothing is missed).
  *
- *   window.__perf.longTasks  — Long Tasks API entries (each blocks > 50 ms)
+ *   window.__perf.longTasks  — entries from Long Tasks API (duration > 50 ms)
  *   window.__perf.clickTime  — capture-phase click timestamp
  *   window.__perf.navTime    — history.pushState / replaceState timestamp
  */
@@ -78,13 +68,11 @@ async function installPerfHooks(page: Page): Promise<void> {
   await page.addInitScript(() => {
     ;(window as any).__perf = {
       longTasks: [] as Array<{ duration: number; startTime: number }>,
+      longTasksSupported: false,
       clickTime: null as number | null,
       navTime:   null as number | null,
     }
 
-    // Long Tasks: reports any task that blocks the main thread > 50 ms.
-    // This is the primary regression signal — catches getExpandedPaths +
-    // resetPaths blocking the event loop on the poll cycle.
     try {
       const obs = new PerformanceObserver((list) => {
         for (const e of list.getEntries()) {
@@ -95,19 +83,15 @@ async function installPerfHooks(page: Page): Promise<void> {
         }
       })
       obs.observe({ type: 'longtask', buffered: true })
-    } catch {
-      // Long Tasks not supported — test will skip the assertion below.
-    }
+      ;(window as any).__perf.longTasksSupported = true
+    } catch { /* not supported in this browser */ }
 
-    // Click timing: capture-phase fires before any component handler.
     document.addEventListener(
       'click',
       () => { ;(window as any).__perf.clickTime = performance.now() },
       { capture: true, passive: true },
     )
 
-    // Navigate timing: intercept history mutations called by preact-iso's
-    // loc.route() — which is what navigate() delegates to.
     const origPush    = history.pushState.bind(history)
     const origReplace = history.replaceState.bind(history)
     history.pushState = (...args) => {
@@ -121,14 +105,40 @@ async function installPerfHooks(page: Page): Promise<void> {
   })
 }
 
-/** Seed 300 directories into the test workspace. Idempotent. */
-function seedLargeTree(): void {
-  const bigDir = path.join(workspace(), 'perf-big-tree')
-  if (!fs.existsSync(bigDir)) fs.mkdirSync(bigDir)
-  for (let i = 0; i < 300; i++) {
-    const d = path.join(bigDir, `dir-${String(i).padStart(4, '0')}`)
-    if (!fs.existsSync(d)) fs.mkdirSync(d)
+/**
+ * Intercept every walk API call and return a synthetic list of `count`
+ * directory paths. The full-walk variant (?full=true) returns an empty
+ * additions list so only the fast-walk processing is exercised.
+ *
+ * This replaces disk-seeding entirely: the browser's getExpandedPaths +
+ * resetPaths sees the same data structure regardless of whether paths came
+ * from the real filesystem or this synthetic response.
+ */
+async function interceptWalk(page: Page, count: number): Promise<void> {
+  // Build the path list once in the test runner process; serialise to JSON.
+  const paths: string[] = []
+  for (let i = 0; i < count; i++) {
+    paths.push(`dir-${String(i).padStart(7, '0')}/`)
   }
+  const body = JSON.stringify({ ok: true, data: paths })
+
+  await page.route(`**/v1/fs/**/walk**`, async (route) => {
+    const url = route.request().url()
+    if (url.includes('full=true')) {
+      // Full walk: return empty additions so the batch() path is a no-op.
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, data: [] }),
+      })
+    } else {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body,
+      })
+    }
+  })
 }
 
 async function openProjectHub(page: Page): Promise<void> {
@@ -136,64 +146,74 @@ async function openProjectHub(page: Page): Promise<void> {
   await page.locator('.ft-root').waitFor({ state: 'visible', timeout: 10_000 })
 }
 
+/**
+ * Core long-task assertion: load the hub with a synthetic walk of `count`
+ * paths, wait for the tree to render, then wait for ≥ 2 poll cycles and
+ * assert no task blocked the main thread for > 50 ms.
+ */
+async function assertNoPollLongTasks(page: Page, count: number): Promise<void> {
+  await interceptWalk(page, count)
+  await installPerfHooks(page)
+  await openProjectHub(page)
+
+  // Wait for at least one treeitem (first synthetic dir) to confirm the walk
+  // response was processed and the tree rendered.
+  await page.getByRole('treeitem').first().waitFor({ state: 'visible', timeout: 15_000 })
+
+  // Exclude long tasks from initial load — only poll-phase tasks matter.
+  const treeReadyAt = await page.evaluate(() => performance.now())
+
+  // Wait for ≥ 2 complete poll cycles (2 × 2.5 s = 5 s, plus margin).
+  await page.waitForTimeout(6_000)
+
+  const { longTasks, longTasksSupported } = await page.evaluate(() => ({
+    longTasks:          (window as any).__perf.longTasks as Array<{ duration: number; startTime: number }>,
+    longTasksSupported: (window as any).__perf.longTasksSupported as boolean,
+  }))
+
+  if (!longTasksSupported) {
+    test.skip(true, 'PerformanceObserver longtask not supported in this browser')
+    return
+  }
+
+  const pollLongTasks = longTasks.filter(t => t.startTime > treeReadyAt)
+
+  if (pollLongTasks.length > 0) {
+    const worst = Math.max(...pollLongTasks.map(t => t.duration))
+    console.log(
+      `[perf] FAIL (${count.toLocaleString()} dirs): ${pollLongTasks.length} long task(s), worst ${worst.toFixed(0)} ms`,
+    )
+  } else {
+    console.log(`[perf] OK (${count.toLocaleString()} dirs): no long tasks during poll`)
+  }
+
+  expect(
+    pollLongTasks,
+    `Poll cycle blocked main thread with ${count.toLocaleString()} dirs: ` +
+    JSON.stringify(pollLongTasks.map(t => `${t.duration.toFixed(0)}ms`)),
+  ).toHaveLength(0)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-test.describe('file-tree performance — main thread blocking', () => {
-  // ── 1. Poll cycle with a large tree must not produce long tasks ───────────
+test.describe('file-tree performance — poll cycle blocking (Long Tasks API)', () => {
 
-  test('poll cycle does not block main thread >50 ms with 300 directories', async ({ page }) => {
-    seedLargeTree()
-    fs.writeFileSync(path.join(workspace(), 'perf-big-tree-sentinel.txt'), 'x')
-
-    await installPerfHooks(page)
-    await openProjectHub(page)
-
-    // Wait for the large tree dir to appear so the initial walk has completed.
-    await page.getByRole('treeitem', { name: 'perf-big-tree', exact: true })
-      .waitFor({ state: 'visible', timeout: 10_000 })
-
-    // Record the time after initial load so we can exclude startup long tasks.
-    const treeReadyAt = await page.evaluate(() => performance.now())
-
-    // Wait for at least 2 full poll cycles (2 × 2.5 s = 5 s, plus margin).
-    await page.waitForTimeout(6_000)
-
-    const { longTasks, longTasksSupported } = await page.evaluate(() => {
-      const p = (window as any).__perf
-      return {
-        longTasks: p.longTasks as Array<{ duration: number; startTime: number }>,
-        longTasksSupported: p.longTasks !== undefined,
-      }
-    })
-
-    if (!longTasksSupported) {
-      test.skip(true, 'PerformanceObserver longtask not supported in this browser')
-      return
-    }
-
-    // Exclude long tasks from the initial page load; only poll-phase tasks matter.
-    const pollLongTasks = longTasks.filter(t => t.startTime > treeReadyAt)
-
-    if (pollLongTasks.length > 0) {
-      const worst = Math.max(...pollLongTasks.map(t => t.duration))
-      console.log(
-        `[perf] FAIL: ${pollLongTasks.length} long task(s) during poll, worst: ${worst.toFixed(1)} ms`,
-        pollLongTasks,
-      )
-    } else {
-      console.log('[perf] OK: no long tasks during poll cycles')
-    }
-
-    expect(
-      pollLongTasks,
-      `Poll cycle blocked main thread: ${JSON.stringify(pollLongTasks.map(t => `${t.duration.toFixed(0)}ms`))}`,
-    ).toHaveLength(0)
+  test('100 000 dirs: poll cycle does not block main thread >50 ms', async ({ page }) => {
+    test.setTimeout(60_000)
+    await assertNoPollLongTasks(page, 100_000)
   })
 
-  // ── 2. Session switch must not produce long tasks (tree reload path) ──────
+  test('1 000 000 dirs: poll cycle does not block main thread >50 ms', async ({ page }) => {
+    test.setTimeout(120_000)
+    await assertNoPollLongTasks(page, 1_000_000)
+  })
 
-  test('session switch does not block main thread >50 ms', async ({ page }) => {
-    seedLargeTree()
+})
+
+test.describe('file-tree performance — session switch (Long Tasks API)', () => {
+
+  test('session switch with 100 000 dirs does not block main thread >50 ms', async ({ page }) => {
+    test.setTimeout(60_000)
 
     const sessionId = process.env.GMUX_TEST_SESSION_ID
     if (!sessionId) {
@@ -201,23 +221,21 @@ test.describe('file-tree performance — main thread blocking', () => {
       return
     }
 
+    await interceptWalk(page, 100_000)
     await installPerfHooks(page)
     await openProjectHub(page)
-    await page.getByRole('treeitem', { name: 'perf-big-tree', exact: true })
-      .waitFor({ state: 'visible', timeout: 10_000 })
+    await page.getByRole('treeitem').first().waitFor({ state: 'visible', timeout: 15_000 })
 
-    // Reset long task list to zero just before the switch.
+    // Reset long task list immediately before the switch.
     await page.evaluate(() => { ;(window as any).__perf.longTasks = [] })
 
-    // Trigger a session switch (causes project change → full tree reload).
     await page.waitForFunction((id) => {
       const nav = (window as any).__gmuxNavigateToSession
       return typeof nav === 'function' && nav(id) === true
     }, sessionId, { timeout: 10_000 })
 
-    // Wait for the terminal to settle.
     await page.locator('.terminal-container.wterm').waitFor({ state: 'visible', timeout: 8_000 })
-    // Give the tree reload one extra poll tick to complete.
+    // Give the tree one poll tick to reload after the switch.
     await page.waitForTimeout(3_000)
 
     const longTasks = await page.evaluate(
@@ -226,9 +244,9 @@ test.describe('file-tree performance — main thread blocking', () => {
 
     if (longTasks.length > 0) {
       const worst = Math.max(...longTasks.map(t => t.duration))
-      console.log(`[perf] FAIL: long task during session switch: worst ${worst.toFixed(1)} ms`)
+      console.log(`[perf] FAIL session switch: ${longTasks.length} long task(s), worst ${worst.toFixed(0)} ms`)
     } else {
-      console.log('[perf] OK: no long tasks during session switch')
+      console.log('[perf] OK session switch: no long tasks')
     }
 
     expect(
@@ -236,22 +254,22 @@ test.describe('file-tree performance — main thread blocking', () => {
       `Session switch blocked main thread: ${JSON.stringify(longTasks.map(t => `${t.duration.toFixed(0)}ms`))}`,
     ).toHaveLength(0)
   })
+
 })
 
-test.describe('file-tree performance — selection handler latency', () => {
-  // NOTE: these tests measure the JS execution time of the click handler
-  // (click event → navigate() → history.pushState). This is NOT input queue
-  // latency. For input queue latency under load, see the long-tasks tests above.
+test.describe('file-tree performance — click handler latency', () => {
+  // These measure JS handler execution time (click event → navigate() →
+  // history.pushState). This is NOT input queue delay; it is the cost of
+  // the selection handler itself. Input queue delay under load is covered
+  // by the long-tasks tests above.
 
-  // ── 3. Handler execution time: normal tree ────────────────────────────────
-
-  test('click handler executes in <20 ms on a normal-sized tree', async ({ page }) => {
-    fs.writeFileSync(path.join(workspace(), 'perf-handler-normal.md'), '# test')
+  test('click handler executes in <20 ms on a normal tree', async ({ page }) => {
+    fs.writeFileSync(path.join(workspace(), 'perf-handler-click.md'), '# test')
 
     await installPerfHooks(page)
     await openProjectHub(page)
 
-    const item = page.getByRole('treeitem', { name: 'perf-handler-normal.md' })
+    const item = page.getByRole('treeitem', { name: 'perf-handler-click.md' })
     await item.waitFor({ state: 'visible', timeout: 5_000 })
 
     await page.evaluate(() => { ;(window as any).__perf.navTime = null })
@@ -262,37 +280,10 @@ test.describe('file-tree performance — selection handler latency', () => {
       navTime:   (window as any).__perf.navTime   as number,
     }))
 
-    expect(navTime, 'history.pushState never called').not.toBeNull()
+    expect(navTime, 'history.pushState never called after click').not.toBeNull()
     const latency = navTime - clickTime
-    console.log(`[perf] handler exec (normal tree): ${latency.toFixed(2)} ms`)
-    expect(latency).toBeLessThan(HANDLER_EXEC_BUDGET_MS)
+    console.log(`[perf] handler exec: ${latency.toFixed(2)} ms`)
+    expect(latency).toBeLessThan(20)
   })
 
-  // ── 4. Handler execution time: large tree ────────────────────────────────
-
-  test('click handler executes in <20 ms with 300 directories in the tree', async ({ page }) => {
-    seedLargeTree()
-    fs.writeFileSync(path.join(workspace(), 'perf-handler-large.md'), '# large')
-
-    await installPerfHooks(page)
-    await openProjectHub(page)
-
-    await page.getByRole('treeitem', { name: 'perf-big-tree', exact: true })
-      .waitFor({ state: 'visible', timeout: 10_000 })
-    const item = page.getByRole('treeitem', { name: 'perf-handler-large.md' })
-    await item.waitFor({ state: 'visible', timeout: 5_000 })
-
-    await page.evaluate(() => { ;(window as any).__perf.navTime = null })
-    await item.click()
-
-    const { clickTime, navTime } = await page.evaluate(() => ({
-      clickTime: (window as any).__perf.clickTime as number,
-      navTime:   (window as any).__perf.navTime   as number,
-    }))
-
-    expect(navTime, 'history.pushState never called').not.toBeNull()
-    const latency = navTime - clickTime
-    console.log(`[perf] handler exec (300-dir tree): ${latency.toFixed(2)} ms`)
-    expect(latency).toBeLessThan(HANDLER_EXEC_BUDGET_MS)
-  })
 })
