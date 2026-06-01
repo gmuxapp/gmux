@@ -5,7 +5,7 @@ description: Start the full dev stack (vite + dev gmuxd + Go file watcher). Use 
 
 # Dev: full stack (Go + frontend)
 
-Builds `gmuxd-dev` from source, runs it on `:9790`, runs vite on `:5173`, and
+Builds `gmuxd-dev` from source, runs it on `:7799`, runs vite on `:5173`, and
 watches Go files for automatic rebuild. Use this when you've changed Go code.
 
 ## Start the stack
@@ -15,9 +15,9 @@ cd /Users/james-carmody/james-agent-workspace/projects/james/james-gmux
 just dev
 ```
 
-This blocks — keep it running in a background session. The app is at **http://localhost:5173**; the dev daemon API is at `:9790`.
+This blocks — keep it running in a background session. The app is at **http://localhost:5173**; the dev daemon API is at `:7799`.
 
-> `:9790` is the dev daemon. `:8790` is production. They are intentionally far apart.
+> `:7799` is the dev daemon. `:8790` is production. They are intentionally far apart.
 
 ## Authenticate and navigate
 
@@ -34,7 +34,7 @@ agent-browser screenshot <path>.png
 ```
 
 > Use `localhost`, not `127.0.0.1` — Vite binds IPv6 (`[::1]`). Always auth and
-> navigate via `:5173`, not `:9790` — the auth cookie is origin-scoped.
+> navigate via `:5173`, not `:7799` — the auth cookie is origin-scoped.
 
 ## Find your project slug
 
