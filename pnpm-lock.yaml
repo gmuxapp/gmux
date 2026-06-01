@@ -9,7 +9,7 @@ patchedDependencies:
     hash: a18bf3fab7de5a2b7e77000ad91ade33b712be8e7a36f72f628374dc5ca6eae6
     path: patches/@pierre__diffs@1.2.4.patch
   '@wterm/ghostty@0.3.0':
-    hash: 1c712265e1788ddceb26dccc3ba7ce9146ca2c423001c43e484805ff1c096770
+    hash: 03f74565948b582dc33289aa7acb2a479198cc25531cf37717d2f4923fe35163
     path: patches/@wterm__ghostty@0.3.0.patch
 
 importers:
@@ -87,7 +87,7 @@ importers:
         version: 0.3.0
       '@wterm/ghostty':
         specifier: ^0.3.0
-        version: 0.3.0(patch_hash=1c712265e1788ddceb26dccc3ba7ce9146ca2c423001c43e484805ff1c096770)
+        version: 0.3.0(patch_hash=03f74565948b582dc33289aa7acb2a479198cc25531cf37717d2f4923fe35163)
       codemirror-live-markdown:
         specifier: 0.5.1-alpha.1
         version: 0.5.1-alpha.1(@codemirror/lang-markdown@6.5.0)(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.43.0)(@lezer/markdown@1.6.4)
@@ -2605,7 +2605,7 @@ snapshots:
     dependencies:
       '@wterm/core': 0.3.0
 
-  '@wterm/ghostty@0.3.0(patch_hash=1c712265e1788ddceb26dccc3ba7ce9146ca2c423001c43e484805ff1c096770)':
+  '@wterm/ghostty@0.3.0(patch_hash=03f74565948b582dc33289aa7acb2a479198cc25531cf37717d2f4923fe35163)':
     dependencies:
       '@wterm/core': 0.3.0
 
