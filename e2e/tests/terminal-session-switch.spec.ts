@@ -8,15 +8,15 @@ import { openApp, spawnTestSession } from '../helpers'
  * Original root cause (a774dc5): prefetch serialised the WS handshake behind
  * a large HTTP download. Fix: run prefetch and WS in parallel.
  *
- * Current architecture: live sessions skip the scrollback prefetch entirely —
- * they get full scrollback from the WS snapshot (renderScreen). The WS must
- * open immediately, and no scrollback HTTP request should be made.
+ * Current architecture: live sessions prefetch on-disk scrollback (so the user
+ * can scroll back to session start) AND open the WS immediately in parallel.
+ * The WS must open quickly; the scrollback prefetch HTTP request is expected.
  */
 
 const WS_OPEN_DEADLINE_MS = 1_500
 
 test.describe('session switch — WS connects immediately for live sessions', () => {
-  test('WS opens quickly and no scrollback prefetch is requested', async ({ page }) => {
+  test('WS opens quickly even with scrollback prefetch running', async ({ page }) => {
     const fromSession = await spawnTestSession(
       ['bash', '-c', 'echo FROM-SESSION-READY; sleep 60'],
       { cwdName: `switch-from-${Date.now()}` },
@@ -38,7 +38,9 @@ test.describe('session switch — WS connects immediately for live sessions', ()
       await page.locator('.terminal-shell .terminal-container.wterm.focused').waitFor({ state: 'visible', timeout: 5_000 })
       await page.waitForTimeout(1_500)
 
-      // Verify that the scrollback endpoint is NOT called for live sessions.
+      // Track whether the scrollback prefetch endpoint is called.
+      // Live sessions now prefetch on-disk scrollback so the user can scroll
+      // back to session start — the request is expected.
       const scrollbackUrl = `/v1/sessions/${encodeURIComponent(toSession.id)}/scrollback`
       let prefetchRequested = false
       await page.route(`**${scrollbackUrl}*`, async (route) => {
@@ -71,7 +73,7 @@ test.describe('session switch — WS connects immediately for live sessions', ()
         return navigate(id) === true
       }, toSession.id, { timeout: 10_000 })
 
-      // WS must open quickly — no prefetch blocking it.
+      // WS must open quickly — prefetch runs in parallel, not blocking the WS handshake.
       const wsOpenAt = await page.waitForFunction(
         () => (window as any).__gmuxWsOpenAt as number | null,
         null,
@@ -89,8 +91,9 @@ test.describe('session switch — WS connects immediately for live sessions', ()
       await expect(page.locator('.terminal-loading')).not.toBeVisible({ timeout: 5_000 })
       await expect(page.locator('.terminal-shell .terminal-container.wterm.focused')).toBeVisible()
 
-      // No scrollback prefetch should have been made for a live session.
-      expect(prefetchRequested, 'live sessions must not request the scrollback prefetch').toBe(false)
+      // Live sessions DO request the scrollback prefetch (to allow scroll-to-start).
+      // The WS opens in parallel — prefetch must not serialise the handshake.
+      expect(prefetchRequested, 'live sessions request the scrollback prefetch').toBe(true)
     } finally {
       fromSession.kill()
       toSession.kill()
