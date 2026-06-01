@@ -90,6 +90,22 @@ export function pruneExpanded(expanded: Set<string>, deletedPath: string): Set<s
   return next
 }
 
+
+/**
+ * Collect the paths of expanded directories by querying the model for each
+ * directory path in the current walk response. Preserves expansion state
+ * across resetPaths() calls so polling doesn't collapse user-opened folders.
+ */
+export function getExpandedPaths(
+  model: { getItem(path: string): import('@pierre/trees').FileTreeItemHandle | null },
+  dirPaths: string[],
+): string[] {
+  return dirPaths.filter(p => {
+    const item = model.getItem(p)
+    return item !== null && item.isDirectory() && (item as import('@pierre/trees').FileTreeDirectoryHandle).isExpanded()
+  })
+}
+
 /**
  * Returns true if a DragEvent carries external files (e.g. from Finder/Explorer).
  */
@@ -301,11 +317,15 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
       // Pass showHidden to the server so hidden dirs are excluded from the walk
       // when not needed — preventing the 50k cap from being exhausted by dotfiles.
       const paths = await apiWalkPaths(projectSlugRef.current, showHiddenRef.current)
+      // Snapshot expanded dirs before reset so the user's open folders survive
+      // the poll cycle. Query each directory path in the new walk response.
+      const dirPaths = paths.filter(p => p.endsWith('/'))
+      const expandedPaths = getExpandedPaths(model, dirPaths)
       // Set the guard before resetPaths so onSelectionChange ignores the
       // automatic path-restoration that fires in the same tick.
       resettingPathsRef.current = true
       setTimeout(() => { resettingPathsRef.current = false }, 0)
-      model.resetPaths(paths)
+      model.resetPaths(paths, { initialExpandedPaths: expandedPaths })
     } catch (e) {
       console.error('[gmux] file-tree: walk failed for slug', projectSlugRef.current, e)
       showErrorRef.current(String(e))

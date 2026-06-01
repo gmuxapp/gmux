@@ -275,3 +275,52 @@ describe('findOpenFileSession', () => {
     expect(findOpenFileSession([s1, s2], cwd, 'apps/src/file.tsx')).toBe(s1)
   })
 })
+
+// ── getExpandedPaths ──────────────────────────────────────────────────────────
+
+import { getExpandedPaths } from './file-tree'
+import type { FileTreeItemHandle, FileTreeDirectoryHandle } from '@pierre/trees'
+
+function makeModel(expandedPaths: Set<string>): { getItem(path: string): FileTreeItemHandle | null } {
+  return {
+    getItem(path: string): FileTreeItemHandle | null {
+      const isDir = path.endsWith('/')
+      if (!isDir) return { isDirectory: () => false, deselect: () => {}, focus: () => {}, isFocused: () => false, isSelected: () => false, select: () => {}, toggleSelect: () => {}, getPath: () => path } as unknown as FileTreeItemHandle
+      return {
+        isDirectory: () => true,
+        isExpanded: () => expandedPaths.has(path),
+        expand: () => {}, collapse: () => {}, toggle: () => {},
+        deselect: () => {}, focus: () => {}, isFocused: () => false,
+        isSelected: () => false, select: () => {}, toggleSelect: () => {},
+        getPath: () => path,
+      } as unknown as FileTreeDirectoryHandle
+    },
+  }
+}
+
+describe('getExpandedPaths', () => {
+  it('returns expanded directory paths', () => {
+    const model = makeModel(new Set(['src/']))
+    expect(getExpandedPaths(model, ['src/', 'docs/', 'src/main.go'])).toEqual(['src/'])
+  })
+
+  it('returns empty array when nothing is expanded', () => {
+    const model = makeModel(new Set())
+    expect(getExpandedPaths(model, ['src/', 'docs/'])).toEqual([])
+  })
+
+  it('returns empty array for empty dir list', () => {
+    const model = makeModel(new Set())
+    expect(getExpandedPaths(model, [])).toEqual([])
+  })
+
+  it('ignores non-directory paths', () => {
+    const model = makeModel(new Set(['src/']))
+    expect(getExpandedPaths(model, ['src/', 'README.md'])).toEqual(['src/'])
+  })
+
+  it('returns all expanded dirs when multiple are open', () => {
+    const model = makeModel(new Set(['src/', 'docs/']))
+    expect(getExpandedPaths(model, ['src/', 'docs/', 'src/components/'])).toEqual(['src/', 'docs/'])
+  })
+})
