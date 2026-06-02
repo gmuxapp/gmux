@@ -231,7 +231,7 @@ Commands:
   start              Start the daemon in the background
   run                Run the daemon in the foreground (for systemd/Docker)
   stop               Stop the running daemon
-  restart            Restart the daemon (alias for start)
+  restart            Restart the daemon (stops then starts)
   status             Show daemon health, listeners, and sessions
   auth               Show the auth URL and token
   remote             Set up or check remote access via Tailscale
@@ -390,23 +390,32 @@ func startBackground(stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: failed to start: %v\n", err)
 		return 1
 	}
+	done := make(chan struct{})
 	go func() {
 		cmd.Wait()
 		logFile.Close()
+		close(done)
 	}()
 
-	// Wait for the daemon to become healthy.
-	// Initial backoff gives the new process time to fork and begin
-	// initializing; the socket listener is created early in serve()
-	// so this typically succeeds within the first few probes.
+	// Wait for the daemon to become healthy. The new process does heavy
+	// initialization (launcher discovery, session sweep, conversation
+	// index scan, project loading) before it creates the Unix socket, so
+	// the probe can take several seconds on a slow machine or a large
+	// history. Poll with exponential backoff until a generous deadline
+	// rather than a tight fixed budget. Break immediately if the process
+	// exits before becoming healthy (crash, bad config, port conflict).
 	healthy := false
 	backoff := 200 * time.Millisecond
-	for range 50 {
-		time.Sleep(backoff)
-		if unixipc.Healthy(sock) {
-			healthy = true
-			break
+	deadline := time.Now().Add(20 * time.Second)
+	for !healthy && time.Now().Before(deadline) {
+		select {
+		case <-done:
+			// Daemon process exited before becoming healthy.
+			_, _ = fmt.Fprintf(stderr, "gmuxd: daemon exited before becoming healthy\n  Logs: %s\n", logPath)
+			return 1
+		case <-time.After(backoff):
 		}
+		healthy = unixipc.Healthy(sock)
 		backoff = min(backoff*2, 2*time.Second)
 	}
 
@@ -432,125 +441,9 @@ func serve(stderr io.Writer) int {
 			log.Printf("gmux hash: %s…", h[:12])
 		}
 	}
+	launchConfig := discoverLaunchers()
 
-	// ── Early socket listener ──
-	//
-	// Create the Unix socket and start serving *before* the heavy
-	// initialization (launcher discovery, session sweep, conversation
-	// index scan, project loading). This lets gmuxd restart return
-	// promptly: the health probe hits the socket immediately and
-	// gets 200 OK even while the daemon is still warming up.
-	//
-	// Variables captured by the health handler are declared here as
-	// nil/zero so the handler can be registered now and will return
-	// a minimal (but valid) response until they're populated below.
-
-	var (
-		sessions      *store.Store
-		launchConfig  LaunchConfig
-		updateChecker *update.Checker
-		tsListener    *tsauth.Listener
-		peerManager   *peering.Manager
-		tsDiscovery   *tsdiscovery.Watcher
-		tcpAddr       string
-		authToken     string
-	)
-
-	mux := http.NewServeMux()
-
-	// Health handler — safe to call before sessions/updateChecker are
-	// initialized (nil checks inside). Registered early so the socket
-	// is useful the moment it's created.
-	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		data := map[string]any{
-			"service": "gmuxd",
-			"version": version,
-			"node_id": "node-local",
-			"status":  "ready",
-		}
-		if h, err := os.Hostname(); err == nil {
-			data["hostname"] = h
-		}
-		if tsListener != nil {
-			diag := tsListener.Diag()
-			if diag.FQDN != "" {
-				data["tailscale_url"] = "https://" + diag.FQDN
-			}
-			data["tailscale"] = diag
-		}
-		data["listen"] = tcpAddr
-		if updateChecker != nil {
-			if v := updateChecker.Available(); v != "" {
-				data["update_available"] = v
-			}
-		}
-		if r.RemoteAddr == "@" || strings.HasPrefix(r.RemoteAddr, "/") || r.RemoteAddr == "" {
-			data["auth_token"] = authToken
-		}
-		if peers := appendOfflinePeers(peerManager, tsDiscovery); len(peers) > 0 {
-			data["peers"] = peers
-		}
-		if sessions != nil {
-			all := sessions.List()
-			var localAlive, remoteAlive, dead int
-			for _, s := range all {
-				switch {
-				case !s.Alive:
-					dead++
-				case s.Peer == "":
-					localAlive++
-				default:
-					remoteAlive++
-				}
-			}
-			data["sessions"] = map[string]int{
-				"local_alive":  localAlive,
-				"remote_alive": remoteAlive,
-				"dead":         dead,
-			}
-		}
-		if discovery.ExpectedRunnerHash != "" {
-			data["runner_hash"] = discovery.ExpectedRunnerHash
-		}
-		data["default_launcher"] = launchConfig.DefaultLauncher
-		data["launchers"] = launchConfig.Launchers
-		writeJSON(w, map[string]any{"ok": true, "data": data})
-	})
-
-	// Shutdown endpoint (needed before the socket goes live).
-	shutdownCh := make(chan struct{})
-	var shutdownOnce sync.Once
-	mux.HandleFunc("POST /v1/shutdown", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"ok": true})
-		shutdownOnce.Do(func() {
-			log.Printf("shutdown requested — exiting")
-			close(shutdownCh)
-		})
-	})
-
-	sock := paths.SocketPath()
-	if err := unixipc.Replace(sock); err != nil {
-		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
-		return 1
-	}
-
-	sockLn, err := unixipc.Listen(sock)
-	if err != nil {
-		log.Fatalf("FATAL: %v", err)
-	}
-	sockSrv := &http.Server{Handler: mux}
-	go func() {
-		if err := sockSrv.Serve(sockLn); err != http.ErrServerClosed {
-			log.Printf("unix socket listener: %v", err)
-		}
-	}()
-	log.Printf("unix socket: %s", sock)
-
-	// ── Heavy initialization (now behind a live socket) ──
-
-	launchConfig = discoverLaunchers()
-
-	sessions = store.New()
+	sessions := store.New()
 
 	// sessionmeta persists per-session records so dead sessions
 	// survive a gmuxd restart. Sweep on startup repopulates the
@@ -852,34 +745,30 @@ func serve(stderr io.Writer) int {
 			data["tailscale"] = diag
 		}
 		data["listen"] = tcpAddr
-		if updateChecker != nil {
-			if v := updateChecker.Available(); v != "" {
-				data["update_available"] = v
-			}
+		if v := updateChecker.Available(); v != "" {
+			data["update_available"] = v
 		}
 		if peers := appendOfflinePeers(peerManager, tsDiscovery); len(peers) > 0 {
 			data["peers"] = peers
 		}
 
-		// Session summary (defensive: sessions may not be initialized yet during startup).
-		if sessions != nil {
-			all := sessions.List()
-			var localAlive, remoteAlive, dead int
-			for _, s := range all {
-				switch {
-				case !s.Alive:
-					dead++
-				case s.Peer == "":
-					localAlive++
-				default:
-					remoteAlive++
-				}
+		// Session summary.
+		all := sessions.List()
+		var localAlive, remoteAlive, dead int
+		for _, s := range all {
+			switch {
+			case !s.Alive:
+				dead++
+			case s.Peer == "":
+				localAlive++
+			default:
+				remoteAlive++
 			}
-			data["sessions"] = map[string]int{
-				"local_alive":  localAlive,
-				"remote_alive": remoteAlive,
-				"dead":         dead,
-			}
+		}
+		data["sessions"] = map[string]int{
+			"local_alive":  localAlive,
+			"remote_alive": remoteAlive,
+			"dead":         dead,
 		}
 
 		// runner_hash is the sha256 of the gmux runner binary on disk.

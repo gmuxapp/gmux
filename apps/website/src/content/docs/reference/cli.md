@@ -12,8 +12,8 @@ sidebar:
 **`gmux`** — the session runner. Wraps any command in a managed session.
 This is your primary entry point; it auto-starts the daemon if needed.
 
-**`gmuxd`** — the daemon. Manages sessions, serves the web UI, and persists
-scrollback. Rarely invoked directly.
+**`gmuxd`** — the daemon. Manages sessions, serves the web UI and session
+history, and provides optional remote access. Rarely invoked directly.
 
 ## gmux
 
@@ -149,9 +149,9 @@ Run the daemon in the foreground. Same as `start`, but blocks until interrupted.
 ### `gmuxd restart`
 
 Stops any running instance and starts a fresh one. Waits for the new daemon
-to become healthy before returning. Active sessions survive: they keep running
-on the old binary until you resume or restart them, at which point they
-reconnect to the new daemon.
+to become healthy before returning. Active sessions survive: the new daemon
+rediscovers them on startup. Each session keeps running on its previous binary
+until you resume or restart it, which relaunches it on the new binary.
 
 Use this after installing an update to apply the new binary.
 
