@@ -3,8 +3,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { ImageAddon } from '@xterm/addon-image'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import { WebglAddon } from '@xterm/addon-webgl'
 import type { ResolvedTerminalOptions } from './settings-schema'
+import { loadWebglRenderer } from './webgl-renderer'
 import { attachKeyboardHandler, attachPasteHandler, ctrlSequenceFor, defaultPasteFeedback, handlePasteAction } from './keyboard'
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
@@ -17,14 +17,6 @@ import type { Session } from './types'
 // ── Config ──
 
 const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
-
-function loadPreferredRenderer(term: Terminal) {
-  try {
-    term.loadAddon(new WebglAddon())
-  } catch {
-    /* falls back to DOM renderer */
-  }
-}
 
 /**
  * Re-export for backward compat (used by input-diagnostics.tsx).
@@ -424,7 +416,7 @@ export function TerminalView({
     // Detect plain-text URLs in terminal output and make them clickable.
     term.loadAddon(new WebLinksAddon())
     term.open(containerRef.current)
-    loadPreferredRenderer(term)
+    loadWebglRenderer(term)
     // Initial fit: use FitAddon for the first resize (before shellRef is
     // guaranteed stable), then switch to measureTerminalFit for everything after.
     fitAddon.fit()
@@ -1010,7 +1002,7 @@ export function MockTerminal({ sessionId }: { sessionId: string }) {
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(containerRef.current)
-    loadPreferredRenderer(term)
+    loadWebglRenderer(term)
     fit.fit()
 
     const mock = MOCK_BY_ID[sessionId]

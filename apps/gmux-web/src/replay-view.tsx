@@ -3,8 +3,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { ImageAddon } from '@xterm/addon-image'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import { WebglAddon } from '@xterm/addon-webgl'
 import type { ITerminalOptions } from '@xterm/xterm'
+import { loadWebglRenderer } from './webgl-renderer'
 import type { Session } from './types'
 import { fetchScrollback, type ScrollbackResult } from './replay-fetch'
 import { JumpToBottom } from './jump-to-bottom'
@@ -14,10 +14,6 @@ import { JumpToBottom } from './jump-to-bottom'
 // text-heavy sessions; bump it for replay so the user can scroll the full
 // captured history.
 const REPLAY_SCROLLBACK_LINES = 10000
-
-function loadPreferredRenderer(term: Terminal) {
-  try { term.loadAddon(new WebglAddon()) } catch { /* DOM fallback */ }
-}
 
 type ReplayState =
   | { kind: 'loading' }
@@ -108,7 +104,7 @@ export function ReplayView({
     term.loadAddon(new ImageAddon())
     term.loadAddon(new WebLinksAddon())
     term.open(containerRef.current)
-    loadPreferredRenderer(term)
+    loadWebglRenderer(term)
     // Vertical-only fit: use FitAddon's proposal for rows, but keep cols
     // pinned to the recording. FitAddon already knows the cell metrics
     // and shell-padding accounting; reusing it for the row dimension is
