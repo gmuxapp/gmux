@@ -78,18 +78,10 @@ You can also edit `host.toml` manually instead:
 enabled = true
 ```
 
-See [host.toml reference](/reference/host-toml/) for all fields (hostname, allow list).
+See [host.toml reference](/reference/host-toml/) for all fields (allow list).
 
 :::note[Multiple machines]
-Each machine on the same tailnet needs a unique hostname. Set it in `host.toml`:
-
-```toml
-[tailscale]
-enabled = true
-hostname = "gmux-desktop"
-```
-
-This gives you `https://gmux-desktop.your-tailnet.ts.net`.
+Each machine joins the tailnet under `gmux-<its-hostname>`, derived from the OS hostname on first registration and then owned by Tailscale (it dedups names automatically). To use a specific name, set the machine's name in the Tailscale admin console or rename the host — there is no `hostname` key in `host.toml` (see [ADR 0007](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0007-host-identity-and-peer-urls.md)). A machine named `gmux-desktop` is reachable at `https://gmux-desktop.your-tailnet.ts.net`.
 :::
 
 ### 4. Connect

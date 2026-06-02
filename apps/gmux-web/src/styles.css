@@ -1072,6 +1072,32 @@ body {
 .host-sep {
   opacity: 0.5;
 }
+.host-remove {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-left: 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s, background 0.1s, color 0.1s;
+}
+.host-row:hover .host-remove {
+  opacity: 1;
+}
+.host-remove:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.mp-host-token {
+  margin-top: 8px;
+}
+
 .host-error {
   margin-top: 4px;
   margin-left: 15px;

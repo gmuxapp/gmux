@@ -203,6 +203,30 @@ func TestPeerSubscribe_PreservesTitles(t *testing.T) {
 	mgr.Stop()
 }
 
+// PeerStatus must surface how each peer was added (Config.Source) so the
+// UI can group hosts into tailnet / devcontainer / manual sections.
+func TestPeerStatus_CarriesSource(t *testing.T) {
+	mgr := NewManager([]config.PeerConfig{
+		{Name: "ts", URL: "http://a:8790", Source: config.SourceTailscale},
+		{Name: "dc", URL: "http://b:8790", Source: config.SourceDevcontainer, Local: true},
+		{Name: "hand", URL: "http://c:8790", Source: config.SourceManual},
+	}, store.New(), "test-host")
+
+	got := map[string]string{}
+	for _, p := range mgr.PeerStatus() {
+		got[p.Name] = p.Source
+	}
+	for name, want := range map[string]string{
+		"ts":   config.SourceTailscale,
+		"dc":   config.SourceDevcontainer,
+		"hand": config.SourceManual,
+	} {
+		if got[name] != want {
+			t.Errorf("PeerStatus()[%q].Source = %q, want %q", name, got[name], want)
+		}
+	}
+}
+
 func TestPeerSubscribe_InitialSessions(t *testing.T) {
 	st := store.New()
 	sessions := []store.Session{

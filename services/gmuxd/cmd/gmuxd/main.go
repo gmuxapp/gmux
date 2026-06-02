@@ -23,6 +23,9 @@ import (
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/packages/sessionenv"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/identity"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/nodeid"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/peerstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/clipfile"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/coalesce"
@@ -568,6 +571,21 @@ func serve(stderr io.Writer) int {
 	// State directory for persistent files (projects.json, auth-token, etc).
 	stateDir := paths.StateDir()
 
+	// Stable, opaque per-node identity (ADR 0007). Generated once and
+	// persisted alongside the auth token; used for peer dedup, never
+	// shown or routed.
+	nodeID, err := nodeid.LoadOrCreate(stateDir)
+	if err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
+
+	// Manually-added peers are runtime state (ADR 0007 §5), not config.
+	// Opened early so the /v1/peers add/remove handlers can capture it.
+	peerStore, err := peerstore.Open(stateDir)
+	if err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
+
 	// peerManager and tsDiscovery are initialized later after config is
 	// loaded. Closures (reconcileProjectStamps, buildSessionInfos call
 	// sites) capture these pointers so handlers work once they're set.
@@ -693,12 +711,18 @@ func serve(stderr io.Writer) int {
 		data := map[string]any{
 			"service": "gmuxd",
 			"version": version,
-			"node_id": "node-local",
+			"node_id": nodeID,
 			"status":  "ready",
 		}
-		if h, err := os.Hostname(); err == nil {
-			data["hostname"] = h
+		// Node identity (ADR 0007): the live tailscale name when
+		// connected, else the OS hostname. Evaluated per request so it
+		// converges once the tailscale listener becomes ready.
+		osHost, _ := os.Hostname()
+		tsFQDN := ""
+		if tsListener != nil {
+			tsFQDN = tsListener.FQDN()
 		}
+		data["hostname"] = identity.Resolve(tsFQDN, osHost)
 		if tsListener != nil {
 			diag := tsListener.Diag()
 			if diag.FQDN != "" {
@@ -980,6 +1004,78 @@ func serve(stderr io.Writer) int {
 			return
 		}
 		peer.ForwardPath(w, r, "/"+sub)
+	})
+
+	// POST /v1/peers — connect to a host (ADR 0007 §5,§7). Probes the
+	// target's /v1/health for its node_id + name, dedups by node_id
+	// (already-known host reached again is a no-op, not a duplicate),
+	// resolves any name collision viewer-side, then connects + persists.
+	mux.HandleFunc("POST /v1/peers", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 8192))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "read error")
+			return
+		}
+		var req struct {
+			URL   string `json:"url"`
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+			return
+		}
+		if peerManager == nil {
+			writeError(w, http.StatusServiceUnavailable, "unavailable", "peering is not available")
+			return
+		}
+		req.URL = strings.TrimRight(strings.TrimSpace(req.URL), "/")
+		if err := peerstore.ValidateURL(req.URL); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+
+		peerNodeID, name, err := probePeerHealth(r.Context(), req.URL, req.Token)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "unreachable", fmt.Sprintf("could not reach host: %v", err))
+			return
+		}
+
+		// Atomic dedup-or-add: same node_id ⇒ already connected (not a
+		// duplicate); otherwise the probed name is slugified, de-collided,
+		// and persisted under one lock (no check-then-act race).
+		rec, existed, err := peerStore.AddOrGet(peerstore.Record{Name: name, URL: req.URL, Token: req.Token, NodeID: peerNodeID})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+		if existed {
+			writeJSON(w, map[string]any{"peer": rec, "already_connected": true})
+			return
+		}
+		peerManager.AddPeer(config.PeerConfig{Name: rec.Name, URL: rec.URL, Token: rec.Token, Source: config.SourceManual})
+		log.Printf("peering: connected to %s (%s)", rec.Name, rec.URL)
+		writeJSON(w, map[string]any{"peer": rec})
+	})
+
+	// DELETE /v1/peers/{name} — disconnect a manually-added peer.
+	mux.HandleFunc("DELETE /v1/peers/{name}", func(w http.ResponseWriter, r *http.Request) {
+		if peerManager == nil {
+			writeError(w, http.StatusServiceUnavailable, "unavailable", "peering is not available")
+			return
+		}
+		name := r.PathValue("name")
+		rec, ok, err := peerStore.Remove(name)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to persist peers")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("peer %q is not a manually-added host", name))
+			return
+		}
+		peerManager.RemovePeer(rec.Name)
+		log.Printf("peering: disconnected from %s", rec.Name)
+		writeJSON(w, map[string]any{"ok": true})
 	})
 
 	// ── Sessions ──
@@ -1804,10 +1900,6 @@ func serve(stderr io.Writer) int {
 	if err != nil {
 		log.Fatalf("FATAL: %v", err)
 	}
-	if err := cfg.ResolveTokens(); err != nil {
-		log.Fatalf("FATAL: %v", err)
-	}
-
 	// ── Resolve TCP listen address and auth token ──
 
 	resolved, err := cfg.ListenAddr()
@@ -1892,29 +1984,31 @@ func serve(stderr io.Writer) int {
 	// ── Peer connections (hub protocol) ──
 
 	hostname, _ := os.Hostname()
-	if len(cfg.Peers) > 0 || cfg.Discovery.Devcontainers || (cfg.Tailscale.Enabled && cfg.Discovery.Tailscale) {
-		peerManager = peering.NewManager(cfg.Peers, sessions, hostname)
-		// Prune namespaced projects.json keys when a Local peer
-		// (devcontainer) is removed: its `id@<peer>` session keys can
-		// never resolve again and would accumulate dead weight in the
-		// parent's projects.json.
-		peerManager.OnPeerRemoved = func(name string, wasLocal bool) {
-			if wasLocal {
-				projectMgr.PruneNamespacedKeys(name)
-			}
+	manualPeers := peerStore.PeerConfigs()
+	// Always create the manager: peers can be added at runtime via
+	// /v1/peers (ADR 0007 §5), so it must exist even when nothing is
+	// configured or discovered at startup.
+	peerManager = peering.NewManager(manualPeers, sessions, hostname)
+	// Prune namespaced projects.json keys when a Local peer
+	// (devcontainer) is removed: its `id@<peer>` session keys can
+	// never resolve again and would accumulate dead weight in the
+	// parent's projects.json.
+	peerManager.OnPeerRemoved = func(name string, wasLocal bool) {
+		if wasLocal {
+			projectMgr.PruneNamespacedKeys(name)
 		}
-		peerManager.Start()
-		if len(cfg.Peers) > 0 {
-			log.Printf("peering: %d peer(s) configured", len(cfg.Peers))
-		}
-
-		// Reconnect all peers after system sleep.
-		go func() {
-			for range sleepWatcher.C() {
-				peerManager.OnSleep()
-			}
-		}()
 	}
+	peerManager.Start()
+	if len(manualPeers) > 0 {
+		log.Printf("peering: %d manual peer(s) loaded", len(manualPeers))
+	}
+
+	// Reconnect all peers after system sleep.
+	go func() {
+		for range sleepWatcher.C() {
+			peerManager.OnSleep()
+		}
+	}()
 
 	// ── Devcontainer discovery ──
 
@@ -1937,8 +2031,17 @@ func serve(stderr io.Writer) int {
 	// ── Optional tailscale listener ──
 
 	if cfg.Tailscale.Enabled {
+		// Requested tailscale name for *first* registration (ADR 0007):
+		// GMUXD_TS_HOSTNAME wins verbatim (used by dev-server and any
+		// multi-instance/container setup that needs a distinct name on a
+		// shared OS hostname); otherwise derive "gmux-<os-hostname>".
+		// Once registered, tailscale owns the name and this is ignored.
+		tsSeed := strings.TrimSpace(os.Getenv("GMUXD_TS_HOSTNAME"))
+		if tsSeed == "" {
+			tsSeed = tsauth.SeedFromHostname(hostname)
+		}
 		tsListener = tsauth.Start(tsauth.Config{
-			Hostname: cfg.Tailscale.Hostname,
+			Hostname: tsSeed,
 			Allow:    cfg.Tailscale.Allow,
 		}, stateDir, mux)
 		defer tsListener.Shutdown()
@@ -1948,8 +2051,8 @@ func serve(stderr io.Writer) int {
 			tsDiscovery = tsdiscovery.New(tsdiscovery.Config{
 				Manager:        peerManager,
 				StateDir:       stateDir,
-				ManualPeerURLs: tsdiscovery.ManualPeerURLs(cfg.Peers),
-				HostnamePrefix: cfg.Tailscale.Hostname,
+				ManualPeerURLs: tsdiscovery.ManualPeerURLs(manualPeers),
+				// HostnamePrefix defaults to "gmux" in tsdiscovery.
 			})
 			tsDiscoveryCtx, tsDiscoveryCancel := context.WithCancel(context.Background())
 			defer tsDiscoveryCancel()
@@ -2133,6 +2236,7 @@ func appendOfflinePeers(mgr *peering.Manager, disc *tsdiscovery.Watcher) []peeri
 				Name:   op.Name,
 				URL:    "https://" + op.FQDN,
 				Status: "offline",
+				Source: config.SourceTailscale,
 			})
 		}
 	}
@@ -2312,6 +2416,50 @@ func sendSSE(w http.ResponseWriter, event string, payload any) {
 func writeJSON(w http.ResponseWriter, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// probePeerHealth fetches the target's /v1/health and returns its opaque
+// node_id and self-reported name (ADR 0007). The add-peer flow uses the
+// node_id to dedup and adopts the name as the peer's routing identity.
+// Manual peers use the default transport (as [[peers]] did before).
+func probePeerHealth(ctx context.Context, baseURL, token string) (nodeID, name string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/health", nil)
+	if err != nil {
+		return "", "", err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("health returned %s", resp.Status)
+	}
+	var env struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Service  string `json:"service"`
+			NodeID   string `json:"node_id"`
+			Hostname string `json:"hostname"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&env); err != nil {
+		return "", "", fmt.Errorf("parsing health: %w", err)
+	}
+	// Confirm it's actually gmuxd (parity with tsdiscovery.probe), so a
+	// stray HTTP endpoint can't be registered as a peer.
+	if !env.OK || env.Data.Service != "gmuxd" {
+		return "", "", fmt.Errorf("host is not running gmux")
+	}
+	if env.Data.Hostname == "" {
+		return "", "", fmt.Errorf("host did not report a name")
+	}
+	return env.Data.NodeID, env.Data.Hostname, nil
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {

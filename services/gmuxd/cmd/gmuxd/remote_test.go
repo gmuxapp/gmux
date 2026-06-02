@@ -181,9 +181,9 @@ func TestEnableTailscaleConfig_ProducesValidConfig(t *testing.T) {
 	}{
 		{"empty file", ""},
 		{"port only", "port = 9999\n"},
-		{"section disabled", "[tailscale]\nenabled = false\nhostname = \"mybox\"\n"},
-		{"section no enabled", "[tailscale]\nhostname = \"mybox\"\n"},
-		{"no trailing newline", "[tailscale]\nhostname = \"mybox\""},
+		{"section disabled", "[tailscale]\nenabled = false\nallow = [\"alice@github\"]\n"},
+		{"section no enabled", "[tailscale]\nallow = [\"alice@github\"]\n"},
+		{"no trailing newline", "[tailscale]\nallow = [\"alice@github\"]"},
 		{"section header only no newline", "[tailscale]"},
 	}
 	for _, tt := range cases {

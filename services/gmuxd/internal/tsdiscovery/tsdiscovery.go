@@ -132,14 +132,15 @@ func (w *Watcher) SetTailscale(lc *tailscale.LocalClient, transport http.RoundTr
 // is not started.
 func (w *Watcher) Start() {
 	// Re-register known gmux peers immediately (without re-probing).
-	// Skip any that are now manually configured (user added a [[peers]]
+	// Skip any that are now manually configured (user added a manual peer in peers.json
 	// entry after the initial discovery).
 	w.mu.Lock()
 	for _, d := range w.state.Devices {
 		if d.IsGmux && d.PeerName != "" && !w.isManualPeer(d.FQDN) {
 			w.cfg.Manager.AddPeer(config.PeerConfig{
-				Name: d.PeerName,
-				URL:  "https://" + d.FQDN,
+				Name:   d.PeerName,
+				URL:    "https://" + d.FQDN,
+				Source: config.SourceTailscale,
 			}, peering.WithTransport(w.cfg.Transport))
 		}
 	}
@@ -353,8 +354,9 @@ func (w *Watcher) handleOnlinePeer(ctx context.Context, nodeID string, cs peerSn
 		} else {
 			log.Printf("tsdiscovery: discovered %s at %s", peerName, cs.fqdn)
 			w.cfg.Manager.AddPeer(config.PeerConfig{
-				Name: peerName,
-				URL:  "https://" + cs.fqdn,
+				Name:   peerName,
+				URL:    "https://" + cs.fqdn,
+				Source: config.SourceTailscale,
 			}, peering.WithTransport(w.cfg.Transport))
 		}
 	}

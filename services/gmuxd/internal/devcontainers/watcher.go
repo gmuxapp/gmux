@@ -231,10 +231,11 @@ func (w *Watcher) scan(ctx context.Context) {
 		name := w.uniqueName(deriveName(r.c))
 		url := fmt.Sprintf("http://%s:%d", r.c.IP, gmuxdPort)
 		cfg := config.PeerConfig{
-			Name:  name,
-			URL:   url,
-			Token: r.token,
-			Local: true,
+			Name:   name,
+			URL:    url,
+			Token:  r.token,
+			Local:  true,
+			Source: config.SourceDevcontainer,
 		}
 		log.Printf("devcontainers: discovered %s (container %s, %s)", name, short(r.c.ID), url)
 		w.mgr.AddPeer(cfg)
@@ -348,10 +349,20 @@ func dockerSocketPath() string {
 	return "/var/run/docker.sock"
 }
 
-// isGmuxContainer returns true if a container is running gmuxd via the
-// devcontainer feature. Detection: GMUXD_LISTEN env var is set by the
-// feature's containerEnv.
+// isGmuxContainer returns true if a container is a discoverable gmux
+// devcontainer. It must (1) run gmuxd via the devcontainer feature —
+// detected by the GMUXD_LISTEN env var set in the feature's
+// containerEnv — and (2) carry the `devcontainer.local_folder` label
+// (ADR 0007 §3).
+//
+// Gating on the label means discovery only ever names a peer after its
+// host folder (deriveName), never after the ephemeral container ID:
+// a label-less container is simply not discovered, so the ID fallback
+// can't churn the peer name on every container recreation.
 func isGmuxContainer(c container) bool {
+	if _, ok := c.Labels["devcontainer.local_folder"]; !ok {
+		return false
+	}
 	for _, e := range c.Env {
 		if strings.HasPrefix(e, "GMUXD_LISTEN=") {
 			return true

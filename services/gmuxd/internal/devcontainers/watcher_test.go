@@ -727,19 +727,24 @@ func TestDockerSocketPath(t *testing.T) {
 }
 
 func TestIsGmuxContainer(t *testing.T) {
+	// Discovery requires BOTH the GMUXD_LISTEN env var and the
+	// devcontainer.local_folder label (ADR 0007 §3).
+	withLabel := map[string]string{"devcontainer.local_folder": "/home/user/proj"}
 	tests := []struct {
-		name string
-		env  []string
-		want bool
+		name   string
+		env    []string
+		labels map[string]string
+		want   bool
 	}{
-		{"with GMUXD_LISTEN", []string{"PATH=/bin", "GMUXD_LISTEN=0.0.0.0"}, true},
-		{"without GMUXD_LISTEN", []string{"PATH=/bin", "REDIS_PORT=6379"}, false},
-		{"empty env", nil, false},
-		{"partial match", []string{"GMUXD_LISTEN_OTHER=x"}, false},
+		{"env + label", []string{"PATH=/bin", "GMUXD_LISTEN=0.0.0.0"}, withLabel, true},
+		{"env but no label", []string{"PATH=/bin", "GMUXD_LISTEN=0.0.0.0"}, nil, false},
+		{"label but no GMUXD_LISTEN", []string{"PATH=/bin", "REDIS_PORT=6379"}, withLabel, false},
+		{"empty env, with label", nil, withLabel, false},
+		{"partial env match, with label", []string{"GMUXD_LISTEN_OTHER=x"}, withLabel, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := container{Env: tt.env}
+			c := container{Env: tt.env, Labels: tt.labels}
 			if got := isGmuxContainer(c); got != tt.want {
 				t.Errorf("isGmuxContainer = %v, want %v", got, tt.want)
 			}

@@ -18,7 +18,7 @@ type Session struct {
 	ID            string            `json:"id"`
 
 	// Peer identifies which gmuxd instance owns this session.
-	// Empty = local. Non-empty = the peer name from [[peers]] config.
+	// Empty = local. Non-empty = the peer name (manual peer in peers.json, or a discovered peer).
 	Peer string `json:"peer,omitempty"`
 	CreatedAt     string            `json:"created_at,omitempty"`
 	Command       []string          `json:"command,omitempty"`

@@ -19,11 +19,10 @@ import {
   projects, discovered, peerProjects, peerStatusByName,
   addProject, addPeerReference, folders, updateProjects,
   removeProject, removePeerReference, localHostLabel,
-  health, peers, sessions,
+  health, peers, sessions, connectHost, disconnectHost,
 } from './store'
-import { PeerLabel } from './peer-label'
 import { HostSuffix } from './host-suffix'
-import type { ProjectItem, DiscoveredProject, MatchRule, Folder } from './types'
+import type { ProjectItem, DiscoveredProject, MatchRule, Folder, PeerInfo } from './types'
 
 type SettingsTab = 'projects' | 'hosts'
 
@@ -292,11 +291,29 @@ export function SettingsModal({
 
 // ── Hosts tab (read-only roster) ──
 
+/** A peer's group in the Hosts tab. Uses the daemon's `source` when
+ *  present; falls back for older daemons that don't send it (a Local
+ *  peer is a devcontainer, anything else is treated as manual). */
+function peerSource(p: PeerInfo): 'tailscale' | 'devcontainer' | 'manual' {
+  if (p.source === 'tailscale' || p.source === 'devcontainer' || p.source === 'manual') {
+    return p.source
+  }
+  return p.local ? 'devcontainer' : 'manual'
+}
+
+/** Host groups, in display order. Each maps to a peerSource() bucket. */
+const HOST_GROUPS = [
+  { key: 'tailscale', label: 'Discovered on your tailnet' },
+  { key: 'devcontainer', label: 'Devcontainers' },
+  { key: 'manual', label: 'Added manually' },
+] as const
+
 /** Read-only roster of every host gmux knows about: the local host
- *  ("this host", synthesized from health), then the tailnet-discovered
- *  and configured peers. Reachability is already conveyed by the
- *  sidebar pill colors; this surface is the dig — version, session
- *  count, and the last error behind an unreachable host. */
+ *  ("this host", synthesized from health) first, then peers grouped by
+ *  how they were added — tailnet-discovered, devcontainers, and
+ *  manually connected. Reachability is already conveyed by the sidebar
+ *  pill colors; this surface is the dig — version, session count, and
+ *  the last error behind an unreachable host. */
 function HostsTab() {
   const h = health.value
   const peersVal = peers.value
@@ -304,35 +321,115 @@ function HostsTab() {
   // PeerInfo.session_count for the synthesized self row.
   const localCount = sessions.value.filter(s => !s.peer).length
 
+  const [url, setUrl] = useState('')
+  const [token, setToken] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  const handleConnect = useCallback(async () => {
+    const u = url.trim()
+    if (!u) { setError('Enter a host URL.'); return }
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const { name, alreadyConnected } = await connectHost(u, token.trim())
+      setNotice(alreadyConnected ? `Already connected to ${name}.` : `Connected to ${name}.`)
+      setUrl(''); setToken('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not connect.')
+    } finally {
+      setBusy(false)
+    }
+  }, [url, token])
+
+  const handleRemove = useCallback(async (name: string) => {
+    setError(''); setNotice('')
+    try {
+      await disconnectHost(name)
+      setNotice(`Disconnected from ${name}.`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not disconnect.')
+    }
+  }, [])
+
   return (
-    <section class="mp-section">
-      <div class="mp-section-label">Hosts</div>
-      <div class="host-list">
-        <HostRow
-          self
-          name={h?.hostname ?? 'this host'}
-          status="connected"
-          sessionCount={localCount}
-          version={h?.version}
-        />
-        {peersVal.map(p => (
+    <>
+      <section class="mp-section">
+        <div class="mp-section-label">This host</div>
+        <div class="host-list">
           <HostRow
-            key={p.name}
-            name={p.name}
-            status={p.status}
-            sessionCount={p.session_count}
-            version={p.version}
-            lastError={p.last_error}
-            local={p.local}
+            self
+            name={h?.hostname ?? 'this host'}
+            status="connected"
+            sessionCount={localCount}
+            version={h?.version}
           />
-        ))}
-      </div>
-    </section>
+        </div>
+      </section>
+
+      {HOST_GROUPS.map(g => {
+        const rows = peersVal.filter(p => peerSource(p) === g.key)
+        if (rows.length === 0) return null
+        return (
+          <section class="mp-section" key={g.key}>
+            <div class="mp-section-label">{g.label}</div>
+            <div class="host-list">
+              {rows.map(p => (
+                <HostRow
+                  key={p.name}
+                  name={p.name}
+                  status={p.status}
+                  sessionCount={p.session_count}
+                  version={p.version}
+                  lastError={p.last_error}
+                  local={p.local}
+                  // Only manual peers can be disconnected; tailscale and
+                  // devcontainer peers are managed automatically.
+                  onRemove={g.key === 'manual' ? () => handleRemove(p.name) : undefined}
+                />
+              ))}
+            </div>
+          </section>
+        )
+      })}
+
+      <section class="mp-section">
+        <div class="mp-section-label">Connect to host</div>
+        <div class="mp-path-add-row">
+          <input
+            class="mp-filter-input mp-path-input"
+            type="text"
+            placeholder="https://gmux-host.tailnet.ts.net"
+            value={url}
+            onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setError(''); setNotice('') }}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleConnect() }}
+          />
+          <button class="mp-manual-btn" onClick={handleConnect} disabled={busy || url.trim() === ''}>
+            {busy ? 'Connecting…' : 'Connect'}
+          </button>
+        </div>
+        <input
+          class="mp-filter-input mp-host-token"
+          type="password"
+          placeholder="Token (if not using Tailscale)"
+          value={token}
+          onInput={(e) => { setToken((e.target as HTMLInputElement).value) }}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleConnect() }}
+        />
+        {error ? (
+          <div class="mp-manual-error">{error}</div>
+        ) : notice ? (
+          <div class="mp-path-hint">{notice}</div>
+        ) : (
+          <div class="mp-path-hint">Connect to a host you reach by URL. On your tailnet, leave the token blank — it authenticates by identity.</div>
+        )}
+      </section>
+    </>
   )
 }
 
 function HostRow({
-  name, self, status, sessionCount, version, lastError, local,
+  name, self, status, sessionCount, version, lastError, local, onRemove,
 }: {
   name: string
   self?: boolean
@@ -341,15 +438,14 @@ function HostRow({
   version?: string
   lastError?: string
   local?: boolean
+  onRemove?: () => void
 }) {
   const connected = status === 'connected'
   return (
     <div class="host-row">
       <div class="host-row-main">
         <span class={`host-status-dot${connected ? ' connected' : ''}`} aria-hidden="true" />
-        {self
-          ? <span class="host-self-tag">this host</span>
-          : <PeerLabel name={name} />}
+        {self && <span class="host-self-tag">this host</span>}
         <span class="host-name">
           {name}
           {local && <span class="host-local-tag">local</span>}
@@ -360,6 +456,13 @@ function HostRow({
           <span>{sessionCount} session{sessionCount === 1 ? '' : 's'}</span>
           {version && <><span class="host-sep">·</span><span>v{version}</span></>}
         </div>
+        {onRemove && (
+          <button
+            class="host-remove"
+            title="Disconnect host"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRemove() }}
+          >×</button>
+        )}
       </div>
       {!connected && lastError && (
         <div class="host-error">{lastError}</div>
@@ -386,8 +489,8 @@ function reorder<T>(arr: readonly T[], from: number, to: number): T[] {
  *  management-only — drag-to-reorder and remove, no navigation, no
  *  launch. This is the single ordering that drives the sidebar; the
  *  list maps 1:1 to projects.json items[] (which buildProjectFolders
- *  preserves). Reference rows are distinguished by a leading colored
- *  PeerLabel chip. */
+ *  preserves). Reference rows are distinguished by the muted " · host"
+ *  suffix after the project name. */
 function ConfiguredProjectsSection({ configured }: { configured: ProjectItem[] }) {
   const foldersVal = folders.value
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -478,7 +581,6 @@ function ConfiguredProjectRow({
       onDragEnd={onDragEnd}
     >
       <span class="mp-configured-drag" title="Drag to reorder" aria-hidden="true">⠿</span>
-      {isReference && <PeerLabel name={project.peer!} />}
       <div class="mp-configured-info">
         <span class="mp-configured-name">
           {f.name}
@@ -516,10 +618,10 @@ function DiscoveredRow({
 
   return (
     <div class="mp-discovered-row" onClick={() => onAdd(project)}>
-      {project.peer && <PeerLabel name={project.peer} />}
       <div class="mp-project-info">
         <span class="mp-project-name">
           {project.suggested_slug}
+          <HostSuffix peer={project.peer ?? localHostLabel.value} local={!project.peer} />
           {project.active_count > 0 && (
             <span class="mp-active-badge">{project.active_count}</span>
           )}
@@ -566,9 +668,8 @@ function PeerReferencesSection({ configured }: { configured: ProjectItem[] }) {
             class="mp-discovered-row"
             onClick={() => addPeerReference(peer, slug)}
           >
-            <PeerLabel name={peer} />
             <div class="mp-project-info">
-              <span class="mp-project-name">{slug}</span>
+              <span class="mp-project-name">{slug}<HostSuffix peer={peer} /></span>
             </div>
             <span class="mp-add-label">+ Add</span>
           </div>
