@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@xterm/addon-webgl@0.20.0-beta.194':
+    hash: d9125d12d13397d8171c9874eae71c1adcc92e3510a7b24eafdb4d19339489a1
+    path: patches/@xterm__addon-webgl@0.20.0-beta.194.patch
+
 importers:
 
   .:
@@ -58,7 +63,7 @@ importers:
         version: 0.13.0-beta.195(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)
       '@xterm/addon-webgl':
         specifier: 0.20.0-beta.194
-        version: 0.20.0-beta.194(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)
+        version: 0.20.0-beta.194(patch_hash=d9125d12d13397d8171c9874eae71c1adcc92e3510a7b24eafdb4d19339489a1)(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)
       '@xterm/xterm':
         specifier: github:gmuxapp/xterm.js#v6.1.0-beta.195-gmux.2
         version: https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed
@@ -4224,7 +4229,7 @@ snapshots:
     dependencies:
       '@xterm/xterm': https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed
 
-  '@xterm/addon-webgl@0.20.0-beta.194(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)':
+  '@xterm/addon-webgl@0.20.0-beta.194(patch_hash=d9125d12d13397d8171c9874eae71c1adcc92e3510a7b24eafdb4d19339489a1)(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)':
     dependencies:
       '@xterm/xterm': https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed
 
