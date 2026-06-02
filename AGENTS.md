@@ -60,19 +60,23 @@ messages directly. Rules that follow from this:
 
 ## Manual verification
 
-Load the skill for your scenario — it contains all commands, port numbers, and auth steps:
+Call `gmux_verify` with the right scenario — it starts the dev stack if needed,
+finds the project slug, authenticates the browser, and navigates.
 
-| Scenario | Skill |
+| Scenario | `scenario` arg |
 |---|---|
-| UI / React / CSS only; no Go changes | `skills/dev-frontend` |
-| Go daemon code changed | `skills/dev-full` |
-| Confirm a bug exists in production | `skills/dev-prod` |
+| UI / React / CSS only; no Go changes | `frontend` |
+| Any `.go` file changed | `full` |
+| Reproduce a bug in production, or verify after `just install` | `prod` |
 
-Default to `dev-frontend`. The full decision guide is in `docs/agent-verification.md`.
+Default to `frontend`. Use `full` only when Go source has changed.
+
+```
+gmux_verify({ scenario: "frontend", route: "sessions" })
+```
 
 For automated E2E tests, see `docs/e2e.md`. The Playwright suite manages its own
 isolated daemon — do not mix it with the manual verification setups above.
-
 ## Other rules
 
 - Push changes and create pull requests. Don't commit directly to

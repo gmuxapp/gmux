@@ -1,0 +1,10 @@
+{
+  "name": "james-gmux-pi",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.78.0",
+    "typebox": "^1.1.39",
+    "typescript": "^6.0.3"
+  }
+}
