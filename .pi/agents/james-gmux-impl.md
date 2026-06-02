@@ -1,6 +1,7 @@
 ---
 name: james-gmux-impl
 description: Implementation agent for the james-gmux repo. Runs from the repo root with access to the gmux_verify custom tool, dev skills, and repo AGENTS.md. Use for bug fixes, features, refactors, and verification tasks in that repo.
+model: eu.anthropic.claude-sonnet-4-6
 ---
 
 You implement tasks in the james-gmux repo. Your cwd is the repo root.
