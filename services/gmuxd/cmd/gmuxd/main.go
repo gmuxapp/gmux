@@ -1034,7 +1034,7 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		nodeID, name, err := probePeerHealth(r.Context(), req.URL, req.Token)
+		peerNodeID, name, err := probePeerHealth(r.Context(), req.URL, req.Token)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "unreachable", fmt.Sprintf("could not reach host: %v", err))
 			return
@@ -1043,7 +1043,7 @@ func serve(stderr io.Writer) int {
 		// Atomic dedup-or-add: same node_id ⇒ already connected (not a
 		// duplicate); otherwise the probed name is slugified, de-collided,
 		// and persisted under one lock (no check-then-act race).
-		rec, existed, err := peerStore.AddOrGet(peerstore.Record{Name: name, URL: req.URL, Token: req.Token, NodeID: nodeID})
+		rec, existed, err := peerStore.AddOrGet(peerstore.Record{Name: name, URL: req.URL, Token: req.Token, NodeID: peerNodeID})
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
@@ -2441,13 +2441,20 @@ func probePeerHealth(ctx context.Context, baseURL, token string) (nodeID, name s
 		return "", "", fmt.Errorf("health returned %s", resp.Status)
 	}
 	var env struct {
+		OK   bool `json:"ok"`
 		Data struct {
+			Service  string `json:"service"`
 			NodeID   string `json:"node_id"`
 			Hostname string `json:"hostname"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&env); err != nil {
 		return "", "", fmt.Errorf("parsing health: %w", err)
+	}
+	// Confirm it's actually gmuxd (parity with tsdiscovery.probe), so a
+	// stray HTTP endpoint can't be registered as a peer.
+	if !env.OK || env.Data.Service != "gmuxd" {
+		return "", "", fmt.Errorf("host is not running gmux")
 	}
 	if env.Data.Hostname == "" {
 		return "", "", fmt.Errorf("host did not report a name")

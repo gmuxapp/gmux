@@ -21,7 +21,7 @@ func TestProbePeerHealth(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		_, _ = w.Write([]byte(`{"data":{"node_id":"node_abc","hostname":"gmux-laptop"}}`))
+		_, _ = w.Write([]byte(`{"ok":true,"data":{"service":"gmuxd","node_id":"node_abc","hostname":"gmux-laptop"}}`))
 	}))
 	defer srv.Close()
 
@@ -46,11 +46,23 @@ func TestProbePeerHealth_Unauthorized(t *testing.T) {
 
 func TestProbePeerHealth_MissingName(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":{"node_id":"node_abc"}}`))
+		_, _ = w.Write([]byte(`{"ok":true,"data":{"service":"gmuxd","node_id":"node_abc"}}`))
 	}))
 	defer srv.Close()
 	// A host that reports no name can't be given a routing identity.
 	if _, _, err := probePeerHealth(context.Background(), srv.URL, ""); err == nil {
 		t.Fatal("expected an error when the host reports no name")
+	}
+}
+
+func TestProbePeerHealth_NotGmux(t *testing.T) {
+	// A reachable HTTP endpoint that isn't gmuxd must be rejected, so a
+	// stray URL can't be registered as a peer (parity with discovery).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"data":{"service":"other","hostname":"x"}}`))
+	}))
+	defer srv.Close()
+	if _, _, err := probePeerHealth(context.Background(), srv.URL, ""); err == nil {
+		t.Fatal("expected an error when the host is not running gmux")
 	}
 }
