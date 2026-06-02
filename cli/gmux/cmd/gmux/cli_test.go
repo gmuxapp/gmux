@@ -59,11 +59,21 @@ func TestParseCLI(t *testing.T) {
 			args:     []string{"--list"},
 			wantMode: modeList,
 		},
-		{
-			name:     "-l is the short form of --list",
-			args:     []string{"-l"},
-			wantMode: modeList,
+	{
+		name:     "-l is the short form of --list",
+		args:     []string{"-l"},
+		wantMode: modeList,
+	},
+	{
+		name:     "--list --all passes the all flag",
+		args:     []string{"--list", "--all"},
+		wantMode: modeList,
+		check: func(t *testing.T, f *flags) {
+			if !f.all {
+				t.Error("expected f.all to be true")
+			}
 		},
+	},
 		{
 			name:     "--attach takes one session id",
 			args:     []string{"--attach", "sess-abcd"},
@@ -264,6 +274,8 @@ func TestParseCLIErrors(t *testing.T) {
 		{"--no-attach", "--wait", "sess-a"},      // --no-attach has no effect with --wait
 		{"--timeout", "30", "sess-a"},            // --timeout only applies with --wait
 		{"--wait", "--timeout", "-1", "sess-a"},  // --timeout must be non-negative
+		{"--all"},                               // --all requires --list
+		{"--all", "--kill", "sess-a"},           // --all requires --list
 	}
 
 	for _, args := range invalid {

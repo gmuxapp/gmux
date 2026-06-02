@@ -175,3 +175,35 @@ func TestBuildSendBody(t *testing.T) {
 }
 
 func stringPtr(s string) *string { return &s }
+
+// TestFilterAlive asserts that filterAlive keeps only sessions where
+// Alive is true and drops the rest.
+func TestFilterAlive(t *testing.T) {
+	sessions := []cliSession{
+		{ID: "sess-1", Alive: true},
+		{ID: "sess-2", Alive: false},
+		{ID: "sess-3", Alive: true},
+	}
+	got := filterAlive(sessions)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 alive sessions, got %d", len(got))
+	}
+	for _, s := range got {
+		if !s.Alive {
+			t.Errorf("filterAlive returned dead session %s", s.ID)
+		}
+	}
+}
+
+// TestFilterAliveAllDead asserts that filterAlive returns an empty
+// slice when every session is dead.
+func TestFilterAliveAllDead(t *testing.T) {
+	sessions := []cliSession{
+		{ID: "sess-1", Alive: false},
+		{ID: "sess-2", Alive: false},
+	}
+	got := filterAlive(sessions)
+	if len(got) != 0 {
+		t.Fatalf("expected 0 alive sessions, got %d", len(got))
+	}
+}

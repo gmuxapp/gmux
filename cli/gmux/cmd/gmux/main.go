@@ -72,7 +72,7 @@ func main() {
 		runSession(rest, !f.noAttach)
 		return
 	case modeList:
-		os.Exit(cmdList())
+		os.Exit(cmdList(f.all))
 	case modeKill:
 		os.Exit(cmdKill(rest[0]))
 	case modeTail:

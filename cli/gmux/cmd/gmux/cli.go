@@ -29,6 +29,7 @@ const (
 type flags struct {
 	noAttach    bool
 	list        bool
+	all         bool // with --list: include dead sessions; default shows alive only
 	attach      bool
 	kill        bool
 	send        bool
@@ -55,6 +56,7 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 	fs.BoolVar(&f.noAttach, "no-attach", false, "run the command detached from the terminal")
 	fs.BoolVar(&f.list, "list", false, "list known sessions")
 	fs.BoolVar(&f.list, "l", false, "list known sessions (short)")
+	fs.BoolVar(&f.all, "all", false, "with --list: show all sessions including dead ones")
 	fs.BoolVar(&f.attach, "attach", false, "reattach to an existing session")
 	fs.BoolVar(&f.attach, "a", false, "reattach to an existing session (short)")
 	fs.BoolVar(&f.kill, "kill", false, "kill a running session")
@@ -117,6 +119,10 @@ func parseCLI(args []string) (mode, *flags, []string, error) {
 	// else it would silently do nothing, so reject it loudly.
 	if f.noSubmit && !f.send {
 		return modeHelp, nil, nil, errors.New("--no-submit only applies with --send")
+	}
+	// --all controls what --list shows; it has no meaning elsewhere.
+	if f.all && !f.list {
+		return modeHelp, nil, nil, errors.New("--all only applies with --list")
 	}
 	// --timeout is meaningless without --wait. (Once we add other
 	// time-bounded actions it can grow into a shared option.)
@@ -257,7 +263,8 @@ Usage:
   gmux -- <cmd> [args]              use -- if <cmd> starts with a dash
 
 Session management:
-  gmux --list                       list known sessions
+  gmux --list                       list alive sessions
+  gmux --list --all                 list all sessions including dead ones
   gmux --attach <id>                reattach to an existing session
   gmux --tail <N> <id>              print the last N lines of a session
   gmux --kill <id>                  terminate a session

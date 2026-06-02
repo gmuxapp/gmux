@@ -129,21 +129,42 @@ func shortID(id string) string {
 	return trimmed
 }
 
-// cmdList implements `gmux --list`.
+// filterAlive returns a new slice containing only sessions where Alive
+// is true. The input slice is not modified.
+func filterAlive(sessions []cliSession) []cliSession {
+	out := make([]cliSession, 0, len(sessions))
+	for _, s := range sessions {
+		if s.Alive {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// cmdList implements `gmux --list [--all]`.
 //
 // Prints one row per session, grouped alive-first then by start time.
 // The columns are kept intentionally shallow (id, status, kind, title,
 // cwd) so the output stays readable in a narrow terminal; anyone who
 // wants richer data can open the UI.
-func cmdList() int {
+// When all is false (the default), dead sessions are omitted.
+func cmdList(all bool) int {
 	sessions, err := fetchSessions()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
 	}
 
+	if !all {
+		sessions = filterAlive(sessions)
+	}
+
 	if len(sessions) == 0 {
-		fmt.Println("no sessions")
+		if !all {
+			fmt.Println("no alive sessions (use --all to include dead sessions)")
+		} else {
+			fmt.Println("no sessions")
+		}
 		return 0
 	}
 
