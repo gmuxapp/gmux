@@ -65,10 +65,13 @@ main() {
   install -m 755 "$tmpdir/out/gmuxd" "${INSTALL_DIR}/gmuxd"
   echo "Installed gmux and gmuxd from PR #${PR} to ${INSTALL_DIR}"
 
-  # Restart daemon if it was running
+  # If gmuxd was already running, restart it so the new version takes effect.
+  # Active sessions survive (they reconnect to the new daemon).
   if curl -sSf http://localhost:8790/v1/health > /dev/null 2>&1; then
-    "${INSTALL_DIR}/gmuxd" start 2>/dev/null || true
-    echo "Restarted gmuxd"
+    "${INSTALL_DIR}/gmuxd" start || true
+    echo "gmuxd restarted to apply the update."
+  else
+    echo "To start gmux, run: gmux"
   fi
 }
 
