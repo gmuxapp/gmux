@@ -411,7 +411,7 @@ function HostsTab() {
         <input
           class="mp-filter-input mp-host-token"
           type="password"
-          placeholder="Access token (leave blank on your tailnet)"
+          placeholder="Token (if not using Tailscale)"
           value={token}
           onInput={(e) => { setToken((e.target as HTMLInputElement).value) }}
           onKeyDown={(e) => { if (e.key === 'Enter') handleConnect() }}
