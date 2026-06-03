@@ -64,18 +64,21 @@ func (p *Proxy) Handler() http.HandlerFunc {
 			return
 		}
 
-		// Accept browser WebSocket.
-		//
-		// CompressionContextTakeover: terminal output is highly
-		// repetitive, so permessage-deflate cuts the on-wire size of
-		// scrollback replay and full redraws substantially. Only the
-		// browser-facing hop is compressed; the backend hop is a local
-		// Unix socket where compression would be pure CPU cost. Safari
-		// does not implement permessage-deflate and silently falls back
-		// to uncompressed. See issue #242.
+		// Accept browser WebSocket. No permessage-deflate: the library
+		// defaults CompressionMode to CompressionDisabled, and we keep it
+		// that way. Compression (tried in #242 to shrink the on-connect
+		// scrollback replay) breaks at least one mobile browser, which
+		// negotiates deflate but can't decode gmuxd's frames and drops
+		// the socket right after the first large frame (the replay). The
+		// frontend reconnects, re-ships the replay, the browser drops
+		// again — a reconnect storm that also narrows the PTY one column
+		// per drop (the runner's shrinkForReconnect). Neither deflate
+		// mode fixed it; only no compression does. The storm re-ships the
+		// replay far more than compression ever saved, so this is the
+		// right call for every client. Revisit #242's bandwidth goal
+		// another way (e.g. bounding replay size) if it proves necessary.
 		clientConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			InsecureSkipVerify: true,
-			CompressionMode:    websocket.CompressionContextTakeover,
 		})
 		if err != nil {
 			log.Printf("wsproxy: accept: %v", err)
