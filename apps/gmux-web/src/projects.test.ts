@@ -301,6 +301,37 @@ describe('buildProjectFolders', () => {
     expect(folders[0].missing).toBeUndefined()
   })
 
+  it('buckets a renamed host\'s sessions under a reference resolved by node_id', () => {
+    // The seam with resolveReferences: the reference is stored under the
+    // old name "unraid" but resolveRef maps it to the host's current
+    // name "gmux-hs". The session (stamped with the live name) must land
+    // in the folder, and the folder must carry the live name.
+    const projects: ProjectItem[] = [{ slug: 'apps', peer: 'unraid', node_id: 'node_hs' }]
+    const sessions = [
+      makeSession({ id: 's1', cwd: '/mnt/apps', peer: 'gmux-hs', project_slug: 'apps', alive: true }),
+    ]
+    const resolveRef = (peer: string, slug: string) =>
+      peer === 'unraid' && slug === 'apps' ? { effectivePeer: 'gmux-hs', resolved: true } : undefined
+    const folders = buildProjectFolders(projects, sessions, undefined, {}, resolveRef)
+    expect(folders).toHaveLength(1)
+    expect(folders[0].peer).toBe('gmux-hs')
+    expect(folders[0].unresolved).toBeUndefined()
+    expect(folders[0].sessions.map(s => s.id)).toEqual(['s1'])
+  })
+
+  it('flags an unresolved reference and takes precedence over missing', () => {
+    // resolveRef reports the host is in no roster bucket. Even though we
+    // have no peer_projects entry for it, the folder is flagged
+    // unresolved (host renamed/removed) rather than left as a plain
+    // empty reference — and unresolved is never conflated with missing.
+    const projects: ProjectItem[] = [{ slug: 'apps', peer: 'hs' }]
+    const resolveRef = () => ({ effectivePeer: 'hs', resolved: false })
+    const folders = buildProjectFolders(projects, [], undefined, {}, resolveRef)
+    expect(folders[0].unresolved).toBe(true)
+    expect(folders[0].missing).toBeUndefined()
+    expect(folders[0].peer).toBe('hs')
+  })
+
   it('keeps a local owned project and a same-slug reference as separate folders', () => {
     const projects: ProjectItem[] = [
       { slug: 'gmux', match: [{ path: '/dev/gmux' }] },

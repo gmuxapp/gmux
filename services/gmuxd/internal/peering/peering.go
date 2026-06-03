@@ -84,6 +84,10 @@ type SpokeHealth struct {
 	Version         string        `json:"version"`
 	DefaultLauncher string        `json:"default_launcher"`
 	Launchers       []LauncherDef `json:"launchers"`
+	// NodeID is the spoke's stable opaque identity (ADR 0007). The
+	// viewer anchors peer references on it so they survive the host
+	// being renamed. Empty when talking to a pre-ADR-0007 daemon.
+	NodeID string `json:"node_id"`
 }
 
 // SpokeProject is the minimal projection of a peer's project that
@@ -119,6 +123,11 @@ type PeerInfo struct {
 	// or "manual" (peers.json / POST /v1/peers). Used by the UI to group
 	// hosts; empty for the synthesized self row.
 	Source string `json:"source,omitempty"`
+	// NodeID is the peer's stable opaque identity (ADR 0007), reported
+	// by its /v1/health. The viewer anchors references on it so they
+	// survive the peer being renamed. Empty for offline peers we've
+	// never probed and for pre-ADR-0007 daemons.
+	NodeID string `json:"node_id,omitempty"`
 }
 
 // NamespaceID returns a store-key for a remote session: "originalID@peerName".

@@ -876,7 +876,7 @@ func TestPeerStatus_IncludesHealthData(t *testing.T) {
 
 	spoke2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true,"data":{"version":"0.7.9","default_launcher":"pi","launchers":[{"id":"shell"},{"id":"pi"}]}}`))
+		w.Write([]byte(`{"ok":true,"data":{"version":"0.7.9","default_launcher":"pi","node_id":"node_ws","launchers":[{"id":"shell"},{"id":"pi"}]}}`))
 	}))
 	defer spoke2.Close()
 
@@ -908,6 +908,11 @@ func TestPeerStatus_IncludesHealthData(t *testing.T) {
 	}
 	if ws.Version != "0.7.9" {
 		t.Errorf("version = %q, want %q", ws.Version, "0.7.9")
+	}
+	// node_id flows from the spoke's health to the roster so the viewer
+	// can anchor references on it (refs #270).
+	if ws.NodeID != "node_ws" {
+		t.Errorf("node_id = %q, want %q", ws.NodeID, "node_ws")
 	}
 	if ws.DefaultLauncher != "pi" {
 		t.Errorf("default_launcher = %q, want %q", ws.DefaultLauncher, "pi")

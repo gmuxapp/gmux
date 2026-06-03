@@ -87,6 +87,15 @@ export interface Folder {
    * by the PeerLabel offline state).
    */
   missing?: boolean
+  /**
+   * True when this folder is a reference whose peer name matches no
+   * host in the current roster (not on the tailnet online/offline, not
+   * manually added, not a devcontainer). The host may have been
+   * renamed or removed; the sidebar flags it and the Hosts tab offers
+   * a remap/remove. Distinct from `missing` (peer connected, slug
+   * gone) and from a disconnected-but-known peer. (refs #270)
+   */
+  unresolved?: boolean
   sessions: Session[]
 }
 
@@ -116,6 +125,13 @@ export interface ProjectItem {
   slug: string
   /** Set when this item is a reference to a peer-owned project. */
   peer?: string
+  /**
+   * Stable opaque identity (ADR 0007) of the referenced peer, used to
+   * resolve the reference even after the peer is renamed. Set only on
+   * references; opportunistically backfilled once the peer is
+   * reachable. Absent on legacy references and owned projects.
+   */
+  node_id?: string
   /** Owned-project match rules. Empty/absent for references. */
   match?: MatchRule[]
   /** Server-managed ordering. Absent for references. */
@@ -172,6 +188,13 @@ export interface PeerInfo {
    * POST /v1/peers). Absent on older daemons.
    */
   source?: 'tailscale' | 'devcontainer' | 'manual'
+  /**
+   * The peer's stable opaque identity (ADR 0007), reported by its
+   * /v1/health. References anchor on this so they survive the peer
+   * being renamed. Absent for offline peers we've never probed and
+   * for pre-ADR-0007 daemons.
+   */
+  node_id?: string
 }
 
 /**

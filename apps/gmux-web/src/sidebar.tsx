@@ -15,7 +15,7 @@ import {
   activityMap, projects, connState,
   updateProjects, reorderSessions,
   peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState,
-  unreadCount, localHostLabel,
+  unreadCount, localHostLabel, unresolvedHosts,
   type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -256,9 +256,11 @@ function FolderGroup({
     <div class="folder">
       <div class="folder-header">
         <a
-          class={`folder-name${isCurrent ? ' current' : ''}${folder.missing ? ' missing' : ''}`}
+          class={`folder-name${isCurrent ? ' current' : ''}${folder.missing ? ' missing' : ''}${folder.unresolved ? ' unresolved' : ''}`}
           href={href}
-          title={folder.missing
+          title={folder.unresolved
+            ? `Host “${folder.peer}” isn't on your tailnet or manually added — it may have been renamed or removed. Open Settings → Hosts to remap or remove it.`
+            : folder.missing
             ? `${folder.name} no longer exists on ${folder.peer}; remove via the home page`
             : `Open ${folder.name} hub`}
           onClick={onClick}
@@ -266,14 +268,19 @@ function FolderGroup({
           {folder.name}
           <HostSuffix peer={folder.peer ?? localHostLabel.value} local={!folder.peer} />
           {folder.missing && <span class="folder-missing-icon" title="Project missing on peer">?</span>}
+          {folder.unresolved && (
+            <span class="folder-unresolved-icon" title="Host not found — fix in Settings → Hosts">!</span>
+          )}
         </a>
-        <LaunchButton
-          sessions={folder.sessions}
-          selectedId={selId}
-          fallbackCwd={folder.launchCwd ?? ''}
-          peer={folder.peer}
-          className="folder-launch-btn"
-        />
+        {!folder.unresolved && (
+          <LaunchButton
+            sessions={folder.sessions}
+            selectedId={selId}
+            fallbackCwd={folder.launchCwd ?? ''}
+            peer={folder.peer}
+            className="folder-launch-btn"
+          />
+        )}
       </div>
       <div class="folder-sessions">
         {displayItems.map((s, i) => (
@@ -329,6 +336,9 @@ export function Sidebar({
   // when an additional session enters the waiting state.
   const waitingCount = unreadCount.value
   const waiting = waitingCount > 0
+  // A reference points at a host that's in no roster bucket (renamed /
+  // removed): flag the gear so the user knows where the fix lives. (refs #270)
+  const hasUnresolved = unresolvedHosts.value.length > 0
   const bgArrival = useArrivalPulse(waiting ? 'unread' : 'none', waitingCount)
 
   const totalVisible = foldersVal.reduce(
@@ -359,10 +369,11 @@ export function Sidebar({
           <button
             class="sidebar-settings-btn"
             onClick={onOpenSettings}
-            aria-label="Settings"
-            title="Settings"
+            aria-label={hasUnresolved ? 'Settings (a referenced host needs attention)' : 'Settings'}
+            title={hasUnresolved ? 'A referenced host was not found — open Settings → Hosts' : 'Settings'}
           >
             <IconSettings />
+            {hasUnresolved && <span class="settings-attention-pip" aria-hidden="true" />}
           </button>
         </div>
         <div class="sidebar-scroll">
