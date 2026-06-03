@@ -1362,6 +1362,46 @@ func TestValidateRejectsReferenceWithMatchRules(t *testing.T) {
 	}
 }
 
+// A reference's node_id anchor must survive a Save/Load round-trip so
+// the viewer can resolve renamed peers (refs #270).
+func TestReferenceNodeIDRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	orig := &State{Items: []Item{
+		{Slug: "apps", Peer: "gmux-hs", NodeID: "node_abc"},
+	}}
+	if err := orig.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Items) != 1 || loaded.Items[0].NodeID != "node_abc" || loaded.Items[0].Peer != "gmux-hs" {
+		t.Errorf("reference did not round-trip: %+v", loaded.Items)
+	}
+}
+
+func TestValidateRejectsNodeIDOnOwnedProject(t *testing.T) {
+	s := State{Items: []Item{
+		{Slug: "gmux", Match: []MatchRule{{Path: "/x"}}, NodeID: "node_abc"},
+	}}
+	if err := s.Validate(); err == nil {
+		t.Error("expected validation error for node_id on an owned project")
+	}
+}
+
+// The positive counterpart: a reference *with* a node_id is valid — it's
+// the rename-proof anchor — so Validate must accept it. Guards against a
+// future change that mistakenly rejects node_id on references too.
+func TestValidateAcceptsNodeIDOnReference(t *testing.T) {
+	s := State{Items: []Item{
+		{Slug: "apps", Peer: "gmux-hs", NodeID: "node_abc"},
+	}}
+	if err := s.Validate(); err != nil {
+		t.Errorf("node_id on a reference should be valid, got: %v", err)
+	}
+}
+
 func TestValidateAllowsSameSlugAsOwnedAndReference(t *testing.T) {
 	s := State{Items: []Item{
 		{Slug: "gmux", Match: []MatchRule{{Path: "/x"}}},

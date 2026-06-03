@@ -116,6 +116,13 @@ export interface ProjectItem {
   slug: string
   /** Set when this item is a reference to a peer-owned project. */
   peer?: string
+  /**
+   * Stable opaque identity (ADR 0007) of the referenced peer, used to
+   * resolve the reference even after the peer is renamed. Set only on
+   * references; opportunistically backfilled once the peer is
+   * reachable. Absent on legacy references and owned projects.
+   */
+  node_id?: string
   /** Owned-project match rules. Empty/absent for references. */
   match?: MatchRule[]
   /** Server-managed ordering. Absent for references. */

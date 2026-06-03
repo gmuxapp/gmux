@@ -59,6 +59,12 @@ type Item struct {
 	Peer     string      `json:"peer,omitempty"`
 	Match    []MatchRule `json:"match,omitempty"`
 	Sessions []string    `json:"sessions,omitempty"`
+	// NodeID anchors a reference on the peer's stable opaque identity
+	// (ADR 0007) so it survives the peer being renamed: the viewer
+	// resolves the reference by NodeID first, falling back to Peer
+	// (the display name). Set only on references; opportunistically
+	// backfilled once the referenced peer is reachable (refs #270).
+	NodeID string `json:"node_id,omitempty"`
 }
 
 // IsReference reports whether this item is a reference to a peer-owned
@@ -162,6 +168,12 @@ func (s *State) Validate() error {
 			return fmt.Errorf("duplicate slug %q", item.Slug)
 		}
 		slugs[key] = true
+
+		// node_id is a reference anchor; it's meaningless on an owned
+		// project (the viewer owns it, so there's no peer to anchor to).
+		if item.NodeID != "" && !item.IsReference() {
+			return fmt.Errorf("item %q: node_id is only valid on references", item.Slug)
+		}
 
 		if item.IsReference() {
 			// References carry no rules or sessions of their own.
