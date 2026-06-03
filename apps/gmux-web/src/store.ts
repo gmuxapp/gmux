@@ -26,6 +26,18 @@ import type { Session as ProtocolSession } from '@gmux/protocol'
 // ── Raw state (sources of truth) ────────────────────────────────────────────
 
 export const sessions = signal<Session[]>([])
+
+/**
+ * Per-session dot-indicator state: the two fields that drive the status dot
+ * on each SessionItem. Updated on every SSE upsert (including status-only
+ * and unread-only events). Changing this signal does NOT trigger
+ * buildProjectFolders or a full sidebar re-render.
+ */
+export interface SessionDotState {
+  status: Session['status']
+  unread: boolean
+}
+export const sessionDotStates = signal<ReadonlyMap<string, SessionDotState>>(new Map())
 export const sessionsLoaded = signal(false)
 export const projectsLoaded = signal(false)
 export const connState = signal<'connecting' | 'connected' | 'error'>('connecting')
@@ -227,8 +239,36 @@ const _fadeTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const ACTIVITY_MS = 3000
 const FADE_MS = 800
 
+// Whether a rAF/setTimeout publish is already scheduled.
+let _rafPending = false
+
 function publishActivity() {
-  activityMap.value = new Map(_actMap)
+  if (_rafPending) return
+  _rafPending = true
+  // Use requestAnimationFrame in browser; fall back to setTimeout(fn, 0) in
+  // test/SSR environments where rAF is unavailable. The fallback fires on the
+  // next microtask batch, giving the same "at most one write per frame" guarantee.
+  const schedule = typeof requestAnimationFrame !== 'undefined'
+    ? (fn: () => void) => requestAnimationFrame(fn)
+    : (fn: () => void) => setTimeout(fn, 0)
+  schedule(() => {
+    _rafPending = false
+    activityMap.value = new Map(_actMap)
+  })
+}
+
+/**
+ * Reset all activity state. Exposed for test environments only — ensures
+ * `_rafPending` and timer maps are clean between test cases.
+ */
+export function _resetActivityStateForTest(): void {
+  _actTimers.forEach(t => clearTimeout(t))
+  _actTimers.clear()
+  _fadeTimers.forEach(t => clearTimeout(t))
+  _fadeTimers.clear()
+  _actMap.clear()
+  _rafPending = false
+  activityMap.value = new Map()
 }
 
 export function handleActivity(sessionId: string) {
@@ -243,15 +283,19 @@ export function handleActivity(sessionId: string) {
   _actTimers.set(sessionId, setTimeout(() => {
     _actTimers.delete(sessionId)
     _actMap.set(sessionId, 'fading')
-    publishActivity()
+    // Direct write for timer-triggered transitions (no batching needed).
+    activityMap.value = new Map(_actMap)
 
     _fadeTimers.set(sessionId, setTimeout(() => {
       _fadeTimers.delete(sessionId)
       _actMap.delete(sessionId)
-      publishActivity()
+      // Direct write for timer-triggered transitions.
+      activityMap.value = new Map(_actMap)
     }, FADE_MS))
   }, ACTIVITY_MS))
 
+  // Throttled publish: batches rapid SSE activity events into one signal
+  // write per animation frame instead of one per event.
   publishActivity()
 }
 
@@ -407,6 +451,29 @@ export function sessionStaleness(
  *  re-adding them before the server confirms the removal. Cleared on session-remove. */
 const _dismissedIds = new Set<string>()
 
+/**
+ * Structural fields: changes to any of these require a full `sessions.value`
+ * write so `buildProjectFolders` (and thus the sidebar) re-renders.
+ *
+ * Intentionally excluded (dot-indicator or metadata only):
+ *   status, unread         → written to sessionDotStates only
+ *   subtitle, started_at, exited_at, exit_code  → display metadata
+ *   socket_path, runner_version, binary_hash     → connection/identity metadata
+ *   terminal_cols, terminal_rows, remotes        → terminal config
+ *   command, created_at                          → launch metadata
+ */
+const STRUCTURAL: ReadonlySet<keyof Session> = new Set<keyof Session>([
+  'alive', 'resumable', 'cwd', 'workspace_root', 'slug', 'title', 'kind', 'peer', 'pid',
+])
+
+/** Build a fresh sessionDotStates map from an array of sessions (used on
+ *  initial load and SSE reconnect). */
+function buildDotStates(list: Session[]): ReadonlyMap<string, SessionDotState> {
+  const map = new Map<string, SessionDotState>()
+  for (const s of list) map.set(s.id, { status: s.status, unread: s.unread })
+  return map
+}
+
 export function upsertSession(raw: ProtocolSession): boolean {
   if (_dismissedIds.has(raw.id)) return false
   const updated = toUISession(raw)
@@ -415,6 +482,26 @@ export function upsertSession(raw: ProtocolSession): boolean {
   const idx = prev.findIndex(s => s.id === updated.id)
   if (idx >= 0) {
     const old = prev[idx]
+
+    // Always sync the dot-state signal (status + unread). This is cheap and
+    // must happen even when the structural write is skipped.
+    const prevDs = sessionDotStates.value.get(updated.id)
+    if (!prevDs ||
+        prevDs.status !== updated.status ||
+        prevDs.unread !== updated.unread) {
+      const dsMap = new Map(sessionDotStates.value)
+      dsMap.set(updated.id, { status: updated.status, unread: updated.unread })
+      sessionDotStates.value = dsMap
+    }
+
+    // Early-return if no structural field changed. This skips the
+    // sessions.value write and therefore skips buildProjectFolders + full
+    // sidebar re-render.
+    const hasStructuralChange = (Array.from(STRUCTURAL) as (keyof Session)[]).some(
+      k => old[k] !== updated[k],
+    )
+    if (!hasStructuralChange) return isNew
+
     const next = [...prev]
     next[idx] = updated
 
@@ -443,6 +530,10 @@ export function upsertSession(raw: ProtocolSession): boolean {
     sessions.value = next
   } else {
     isNew = true
+    // Initialize dot state for the new session.
+    const dsMap = new Map(sessionDotStates.value)
+    dsMap.set(updated.id, { status: updated.status, unread: updated.unread })
+    sessionDotStates.value = dsMap
     sessions.value = [...prev, updated]
   }
   return isNew
@@ -451,14 +542,25 @@ export function upsertSession(raw: ProtocolSession): boolean {
 export function removeSession(id: string) {
   _dismissedIds.delete(id)  // server confirmed removal; clear the guard
   sessions.value = sessions.value.filter(s => s.id !== id)
+  const dsMap = new Map(sessionDotStates.value)
+  dsMap.delete(id)
+  sessionDotStates.value = dsMap
 }
 
 export function markSessionRead(id: string) {
-  sessions.value = sessions.value.map(s =>
+  const updated = sessions.value.map(s =>
     s.id === id
       ? { ...s, unread: false, status: s.status?.error ? { ...s.status, error: false } : s.status }
       : s,
   )
+  sessions.value = updated
+  // Keep sessionDotStates in sync.
+  const updatedSession = updated.find(s => s.id === id)
+  if (updatedSession) {
+    const dsMap = new Map(sessionDotStates.value)
+    dsMap.set(id, { status: updatedSession.status, unread: updatedSession.unread })
+    sessionDotStates.value = dsMap
+  }
   fetch(`/v1/sessions/${id}/read`, { method: 'POST' }).catch(() => {})
 }
 
@@ -607,6 +709,9 @@ export function killSession(sessionId: string): Promise<void> {
 export function dismissSession(sessionId: string): Promise<void> {
   _dismissedIds.add(sessionId)
   sessions.value = sessions.value.filter(s => s.id !== sessionId)
+  const dsMap = new Map(sessionDotStates.value)
+  dsMap.delete(sessionId)
+  sessionDotStates.value = dsMap
   return postAction(`/v1/sessions/${sessionId}/dismiss`)
 }
 
@@ -722,6 +827,7 @@ export function initStore(): () => void {
   fetchSessions().then(list => {
     batch(() => {
       sessions.value = list
+      sessionDotStates.value = buildDotStates(list)
       sessionsLoaded.value = true
       connState.value = 'connected'
     })
@@ -756,7 +862,12 @@ export function initStore(): () => void {
     if (sseConnected) {
       // Reconnect: refresh everything to catch missed events.
       fetchProjects()
-      fetchSessions().then(list => { sessions.value = list }).catch(() => {})
+      fetchSessions().then(list => {
+        batch(() => {
+          sessions.value = list
+          sessionDotStates.value = buildDotStates(list)
+        })
+      }).catch(() => {})
     }
     sseConnected = true
   })

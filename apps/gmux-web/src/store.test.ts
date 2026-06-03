@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { sessions, sessionsLoaded, projectsLoaded, projects, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap, sessionStaleness, peers, peerAppearance, urlPath, selectedId, navigateToSession, setNavigate, currentProjectSlug } from './store'
+import { sessions, sessionsLoaded, projectsLoaded, projects, upsertSession, removeSession, markSessionRead, handleActivity, isSessionActive, isSessionFading, activityMap, sessionDotStates, _resetActivityStateForTest, sessionStaleness, peers, peerAppearance, urlPath, selectedId, navigateToSession, setNavigate, currentProjectSlug } from './store'
 import type { Session } from './types'
 import type { ProjectItem } from './types'
 
@@ -28,6 +28,7 @@ function makeSession(overrides: Partial<Session> & { id: string }): Session {
 // Reset signal state between tests.
 beforeEach(() => {
   sessions.value = []
+  sessionDotStates.value = new Map()
   projects.value = []
   sessionsLoaded.value = false
   projectsLoaded.value = false
@@ -123,6 +124,70 @@ describe('upsertSession', () => {
   })
 })
 
+describe('upsertSession signal routing', () => {
+  it('skips sessions.value write when only status changes', () => {
+    sessions.value = [makeSession({ id: 'sess-1', title: 'foo', status: null })]
+    sessionDotStates.value = new Map([['sess-1', { status: null, unread: false }]])
+    const prevRef = sessions.value
+    upsertSession({
+      id: 'sess-1', alive: true, title: 'foo', cwd: '/home/user',
+      command: ['/bin/sh'], kind: 'shell', pid: 1,
+      status: { label: 'working', working: true, error: false },
+    } as any)
+    expect(sessions.value).toBe(prevRef)
+    // But sessionDotStates should be updated.
+    expect(sessionDotStates.value.get('sess-1')?.status?.working).toBe(true)
+  })
+
+  it('skips sessions.value write when only unread changes', () => {
+    sessions.value = [makeSession({ id: 'sess-1', title: 'foo', unread: false })]
+    sessionDotStates.value = new Map([['sess-1', { status: null, unread: false }]])
+    const prevRef = sessions.value
+    upsertSession({
+      id: 'sess-1', alive: true, title: 'foo', cwd: '/home/user',
+      command: ['/bin/sh'], kind: 'shell', pid: 1,
+      unread: true,
+    } as any)
+    expect(sessions.value).toBe(prevRef)
+    expect(sessionDotStates.value.get('sess-1')?.unread).toBe(true)
+  })
+
+  it('writes sessions.value when alive changes', () => {
+    sessions.value = [makeSession({ id: 'sess-1', alive: true })]
+    sessionDotStates.value = new Map([['sess-1', { status: null, unread: false }]])
+    const prevRef = sessions.value
+    upsertSession({
+      id: 'sess-1', alive: false, title: 'shell', cwd: '/home/user',
+      command: ['/bin/sh'], kind: 'shell', pid: 1,
+    } as any)
+    expect(sessions.value).not.toBe(prevRef)
+    expect(sessions.value[0].alive).toBe(false)
+  })
+
+  it('writes sessions.value when title changes', () => {
+    sessions.value = [makeSession({ id: 'sess-1', title: 'old' })]
+    sessionDotStates.value = new Map([['sess-1', { status: null, unread: false }]])
+    const prevRef = sessions.value
+    upsertSession({
+      id: 'sess-1', alive: true, title: 'new', cwd: '/home/user',
+      command: ['/bin/sh'], kind: 'shell', pid: 1,
+    } as any)
+    expect(sessions.value).not.toBe(prevRef)
+    expect(sessions.value[0].title).toBe('new')
+  })
+
+  it('initializes sessionDotStates when a new session is inserted', () => {
+    upsertSession({
+      id: 'sess-1', alive: true, cwd: '/home/user', command: ['/bin/sh'], kind: 'shell',
+      status: { label: 'working', working: true, error: false }, unread: true,
+    } as any)
+    const ds = sessionDotStates.value.get('sess-1')
+    expect(ds).toBeDefined()
+    expect(ds?.status?.working).toBe(true)
+    expect(ds?.unread).toBe(true)
+  })
+})
+
 describe('removeSession', () => {
   it('removes the session with the given id', () => {
     sessions.value = [
@@ -181,17 +246,32 @@ describe('markSessionRead', () => {
 describe('activity tracking', () => {
   beforeEach(() => {
     vi.useFakeTimers()
-    // Reset the activity map to a clean state.
-    activityMap.value = new Map()
+    // Reset all activity state (including _rafPending) between tests.
+    _resetActivityStateForTest()
   })
   afterEach(() => {
     vi.useRealTimers()
   })
 
-  it('marks a session as active immediately', () => {
+  it('marks a session as active after the current frame', () => {
     handleActivity('sess-1')
+    // Publishing is rAF-throttled; flush the deferred setTimeout(fn, 0).
+    vi.advanceTimersByTime(0)
     expect(isSessionActive('sess-1')).toBe(true)
     expect(isSessionFading('sess-1')).toBe(false)
+  })
+
+  it('batches multiple handleActivity calls into one activityMap write per frame', () => {
+    handleActivity('sess-1')
+    handleActivity('sess-2')
+    handleActivity('sess-3')
+    // Before the rAF/setTimeout fires, activityMap is still empty.
+    expect(activityMap.value.size).toBe(0)
+    // One flush → all three entries appear in a single write.
+    vi.advanceTimersByTime(0)
+    expect(activityMap.value.get('sess-1')).toBe('active')
+    expect(activityMap.value.get('sess-2')).toBe('active')
+    expect(activityMap.value.get('sess-3')).toBe('active')
   })
 
   it('transitions to fading after the active window', () => {

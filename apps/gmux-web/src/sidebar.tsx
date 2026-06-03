@@ -11,7 +11,7 @@ import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
 import {
   folders, selectedId, currentProjectSlug,
-  activityMap, unmatchedActiveCount, projects, connState,
+  activityMap, sessionDotStates, unmatchedActiveCount, projects, connState,
   updateProjects, reorderSessions, view,
   openMarkdownTabs, closeMarkdownTab,
   openImageTabs, closeImageTab,
@@ -90,7 +90,6 @@ function SessionItem({
   href,
   selected,
   resuming,
-  dotState: rawDotState,
   dragging,
   dropTarget,
   onClose,
@@ -104,7 +103,6 @@ function SessionItem({
   href: string
   selected: boolean
   resuming?: boolean
-  dotState: DotState
   dragging?: boolean
   dropTarget?: boolean
   onClose?: () => void
@@ -115,9 +113,21 @@ function SessionItem({
   onDragEnd?: () => void
   layout?: SessionListLayout
 }) {
-  const effectiveDotState = resuming ? 'working' : rawDotState
+  // Read dot-state signals directly so Preact subscribes *this* component
+  // to the signals, not the parent FolderGroup or Sidebar. Changes to status
+  // or activity for one session only re-render that session's item.
+  const ds = sessionDotStates.value.get(session.id)
+  const act = activityMap.value.get(session.id)
+  const rawFromSignals: DotState =
+    session.alive && ds?.status?.error   ? 'error'
+    : session.alive && ds?.status?.working ? 'working'
+    : ds?.unread                           ? 'unread'
+    : act === 'active'                     ? 'active'
+    : act === 'fading'                     ? 'fading'
+    : 'none'
+  const rawDotState = resuming ? 'working' : rawFromSignals
   // Nothing is "unread" if you're already looking at it.
-  const dotState = (selected && (effectiveDotState === 'error' || effectiveDotState === 'unread')) ? 'none' : effectiveDotState
+  const dotState = (selected && (rawDotState === 'error' || rawDotState === 'unread')) ? 'none' : rawDotState
   const arrival = useArrivalPulse(dotState)
   const sleeping = !session.alive && session.resumable
 
@@ -261,7 +271,6 @@ function FolderGroup({
   selId,
   curProjectSlug,
   resumingId,
-  am,
   markdownTabs,
   currentMdView,
   onCloseMdTab,
@@ -277,7 +286,6 @@ function FolderGroup({
   selId: string | null
   curProjectSlug: string | null
   resumingId: string | null
-  am: ReadonlyMap<string, 'active' | 'fading'>
   markdownTabs: MarkdownTab[]
   currentMdView: { projectSlug: string; filePath: string } | null
   onCloseMdTab: (projectSlug: string, filePath: string) => void
@@ -361,7 +369,6 @@ function FolderGroup({
             href={sessionPath(folder.path, s)}
             selected={selId === s.id}
             resuming={resumingId === s.id}
-            dotState={sessionDotState(s, am)}
             dragging={drag !== null && s.id === visible[drag.from]?.id}
             dropTarget={drag !== null && drag.over === i && drag.from !== i}
             onClose={() => onCloseSession(s)}
@@ -441,7 +448,8 @@ export function Sidebar({
   const selId = selectedId.value
   const curProjectSlug = currentProjectSlug.value
   const unmatchedCount = unmatchedActiveCount.value
-  const am = activityMap.value
+  // NOTE: activityMap is no longer read here. SessionItem reads it directly,
+  // so only the affected item re-renders on activity changes (not the whole sidebar).
   const projectBySlug = new Map(projectsVal.map(p => [p.slug, p]))
   const viewVal = view.value
   const mdTabs = openMarkdownTabs.value
@@ -534,7 +542,6 @@ export function Sidebar({
                     selId={selId}
                     curProjectSlug={curProjectSlug}
                     resumingId={resumingId}
-                    am={am}
                     markdownTabs={mdTabs}
                     currentMdView={currentMdView}
                     onCloseMdTab={closeMarkdownTab}
