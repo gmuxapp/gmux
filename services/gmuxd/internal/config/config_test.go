@@ -88,39 +88,65 @@ alow = ["user@github"]
 	}
 }
 
-func TestLoadRejectsRemovedTailscaleHostname(t *testing.T) {
+// Removed ADR 0007 keys must not brick a daemon on upgrade: they are
+// ignored with a deprecation warning, and the rest of the config still
+// loads normally.
+func TestLoadIgnoresRemovedTailscaleHostname(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+port = 8123
+[tailscale]
+enabled = true
+hostname = "project-a"
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("deprecated tailscale.hostname should be ignored, got error: %v", err)
+	}
+	if cfg.Port != 8123 || !cfg.Tailscale.Enabled {
+		t.Errorf("rest of config should still load, got %+v", cfg)
+	}
+}
+
+func TestLoadIgnoresRemovedPeers(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+port = 8124
+[[peers]]
+name = "server"
+url = "https://gmux-server.ts.net"
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("deprecated [[peers]] should be ignored, got error: %v", err)
+	}
+	if cfg.Port != 8124 {
+		t.Errorf("rest of config should still load, got port %d", cfg.Port)
+	}
+}
+
+// A genuinely unknown key (e.g. a typo) must still fail loudly, even
+// when it appears alongside a tolerated deprecated key.
+func TestLoadRejectsRemovedKeyMixedWithTypo(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	writeConfig(t, dir, `
 [tailscale]
 enabled = true
 hostname = "project-a"
+alow = ["user@github"]
 `)
 
 	_, err := Load()
 	if err == nil {
-		t.Fatal("expected error for removed key tailscale.hostname")
+		t.Fatal("expected error for unknown key 'alow' even alongside a deprecated key")
 	}
-	if !strings.Contains(err.Error(), "tailscale.hostname is no longer supported") {
-		t.Errorf("error = %q, want migration hint for tailscale.hostname", err)
-	}
-}
-
-func TestLoadRejectsRemovedPeers(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
-	writeConfig(t, dir, `
-[[peers]]
-name = "server"
-url = "https://gmux-server.ts.net"
-`)
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error for removed [[peers]] config")
-	}
-	if !strings.Contains(err.Error(), "[[peers]] is no longer supported") {
-		t.Errorf("error = %q, want migration hint for [[peers]]", err)
+	if !strings.Contains(err.Error(), "unknown keys") || strings.Contains(err.Error(), "hostname") {
+		t.Errorf("error = %q, want unknown-keys error mentioning only the typo", err)
 	}
 }
 

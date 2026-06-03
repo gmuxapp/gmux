@@ -69,9 +69,9 @@ The config file is strictly validated at startup. gmuxd refuses to start if:
 - **`port` is out of range** (must be 1–65535)
 - **TOML syntax is invalid**
 
-Two keys were **removed** and are now rejected with a migration hint (ADR 0007):
+This is intentional. Silent fallback to defaults is dangerous for security settings. See [Security](/security) for the reasoning.
+
+Two keys were **removed** in ADR 0007 and are now **ignored with a deprecation warning** (rather than failing startup), so upgrading a host that still has an old config doesn't brick the daemon. Remove them to silence the warning:
 
 - **`tailscale.hostname`** — the node name now comes from Tailscale / the OS hostname.
 - **`[[peers]]`** — manual peers are runtime state; add them via *Connect to host* (stored in `peers.json`).
-
-This is intentional. Silent fallback to defaults is dangerous for security settings. See [Security](/security) for the reasoning.
