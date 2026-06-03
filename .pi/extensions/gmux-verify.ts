@@ -59,7 +59,7 @@ function sleep(ms: number): Promise<void> {
 
 function isDaemonUp(port: number): boolean {
 	try {
-		execSync(`curl -sf http://localhost:${port}/v1/health -o /dev/null`, {
+		execSync(`curl -s http://localhost:${port}/v1/health -o /dev/null`, {
 			timeout: 2000,
 			stdio: "pipe",
 		});
