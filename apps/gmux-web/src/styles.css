@@ -1178,7 +1178,7 @@ body {
   flex-shrink: 0;
   background: var(--bg-sidebar);
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
+  overflow-x: hidden;
   overflow-y: hidden;
   scrollbar-width: none;
 }
@@ -1189,9 +1189,9 @@ body {
   align-items: center;
   gap: 5px;
   padding: 0 10px 0 10px;
-  min-width: 80px;
+  flex: 1 1 0;
+  min-width: 40px;
   max-width: 200px;
-  flex-shrink: 0;
   border-right: 1px solid var(--border);
   cursor: pointer;
   text-decoration: none;
