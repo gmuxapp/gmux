@@ -51,6 +51,18 @@ gmux probes the host, adopts the name it reports about itself (no name to assign
 
 There is no `[[peers]]` config block (removed in [ADR 0007](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0007-host-identity-and-peer-urls.md)) — peers are runtime state managed from the UI.
 
+## When a referenced host is renamed
+
+A host's name is derived from Tailscale (or its OS hostname), so it can change — for example when you upgrade a machine. A project reference pins another host's project into your sidebar by name, so a rename could silently strip those projects out.
+
+To prevent that, a reference is anchored on the host's stable, opaque node ID, not just its name. References you create from the UI capture that ID immediately, so a later rename is followed automatically and the projects stay put under the new name.
+
+If gmux can't match a reference to any current host — the host was renamed before it was anchored, or removed entirely — the reference is **not** silently dropped:
+
+- The sidebar shows the project muted, with a warning marker.
+- The settings gear gets a small red pip.
+- **Settings → Hosts → Referenced but not found** lists each unmatched host with the projects pointing at it. Pick the host's current name from **Remap to…** to repoint every reference at once (this re-anchors them on the node ID, so the same rename won't break them again), or remove the references if the host is gone for good.
+
 ## Session namespacing
 
 Remote sessions carry their origin in the session ID using `@` separators:

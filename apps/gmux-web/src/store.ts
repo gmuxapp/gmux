@@ -882,7 +882,11 @@ export async function addProject(
 export async function addPeerReference(peer: string, slug: string): Promise<void> {
   const existing = projects.value
   if (existing.some(p => p.peer === peer && p.slug === slug)) return
-  await putProjects([...existing, { peer, slug }])
+  // Stamp the peer's stable node_id at creation (when known) so the
+  // reference is rename-proof from the start: a later rename of the
+  // host follows automatically rather than orphaning it. (refs #270)
+  const node_id = peers.value.find(p => p.name === peer)?.node_id
+  await putProjects([...existing, node_id ? { peer, slug, node_id } : { peer, slug }])
 }
 
 /** Connect to a host (ADR 0007): POST /v1/peers probes the target,
