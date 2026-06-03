@@ -172,6 +172,13 @@ export interface PeerInfo {
    * POST /v1/peers). Absent on older daemons.
    */
   source?: 'tailscale' | 'devcontainer' | 'manual'
+  /**
+   * The peer's stable opaque identity (ADR 0007), reported by its
+   * /v1/health. References anchor on this so they survive the peer
+   * being renamed. Absent for offline peers we've never probed and
+   * for pre-ADR-0007 daemons.
+   */
+  node_id?: string
 }
 
 /**

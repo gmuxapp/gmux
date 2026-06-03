@@ -237,6 +237,7 @@ func (m *Manager) PeerStatus() []PeerInfo {
 			info.Version = h.Version
 			info.DefaultLauncher = h.DefaultLauncher
 			info.Launchers = h.Launchers
+			info.NodeID = h.NodeID
 		}
 		infos = append(infos, info)
 	}
