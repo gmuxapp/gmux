@@ -593,6 +593,26 @@ body {
 .folder-name.missing {
   opacity: 0.5;
 }
+/* Unresolved reference: the host this reference points at isn't in the
+   roster (renamed/removed). Muted like `missing`, but with a warning
+   pip directing the user to Settings -> Hosts to remap or remove. */
+.folder-name.unresolved {
+  opacity: 0.5;
+}
+.folder-unresolved-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: oklch(28% 0.06 75);
+  color: oklch(80% 0.14 75);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1cap;
+}
 .folder-missing-icon {
   display: inline-flex;
   align-items: center;

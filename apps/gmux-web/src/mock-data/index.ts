@@ -70,4 +70,9 @@ export const MOCK_PROJECTS: ProjectItem[] = [
       { path: '~/dev/openclaw' },
     ],
   },
+  // A resolved reference to a roster peer (server).
+  { slug: 'api', peer: 'server' },
+  // An unresolved reference: 'old-tower' is in no roster bucket, so it
+  // surfaces as a host-not-found state in the sidebar and Hosts tab.
+  { slug: 'legacy-app', peer: 'old-tower' },
 ]
