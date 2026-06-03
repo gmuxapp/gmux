@@ -533,6 +533,39 @@ export function FileTree({ projectSlug, cwd }: FileTreeProps) {
     return () => clearInterval(id)
   }, [loadPaths, refreshGitStatus])
 
+  // ── Filename tooltips in shadow DOM ──
+  // @pierre/trees renders inside a shadow root — we can't add `title` via CSS.
+  // This observer watches the shadow root for label elements and stamps the
+  // full path as a native tooltip so truncated names are readable on hover.
+  useEffect(() => {
+    const container = document.querySelector('file-tree-container')
+    const shadow = container?.shadowRoot
+    if (!shadow) return
+
+    function stampTitles(root: ShadowRoot | Element) {
+      // The library marks item labels with data-item-section="label" or
+      // data-item-section="name". Fall back to any span inside [data-path].
+      const labelEls = root.querySelectorAll<HTMLElement>([
+        '[data-item-section="label"]',
+        '[data-item-section="name"]',
+        '[data-path] [data-item-label]',
+        '[data-path] span[class*="label"]',
+      ].join(','))
+      labelEls.forEach(el => {
+        const row = el.closest<HTMLElement>('[data-path]')
+        if (!row) return
+        const path = row.dataset.path ?? ''
+        const name = path.replace(/\/$/, '').split('/').pop() ?? path
+        if (name && el.getAttribute('title') !== name) el.setAttribute('title', name)
+      })
+    }
+
+    stampTitles(shadow)
+    const obs = new MutationObserver(() => stampTitles(shadow))
+    obs.observe(shadow, { childList: true, subtree: true, attributes: false })
+    return () => obs.disconnect()
+  }, [])  // run once — observer handles all subsequent updates
+
   // ── New item creation ──
 
   const handleAddStart = useCallback((type: 'file' | 'dir') => {

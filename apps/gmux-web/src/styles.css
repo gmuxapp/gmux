@@ -2753,7 +2753,12 @@ a.home-host-link:hover {
   --trees-border-radius-override: var(--radius);
   --trees-font-family-override: 'Source Sans 3', system-ui, sans-serif;
   --trees-font-size-override: 13.5px;
-  --trees-row-height-override: 26px;
+  /* Compact density: tighter indent, smaller icons, less padding */
+  --trees-item-height: 24px;
+  --trees-level-gap-override: 10px;
+  --trees-icon-width-override: 13px;
+  --trees-item-padding-x-override: 6px;
+  --trees-item-margin-x-override: 1px;
   --trees-input-bg-override: var(--bg-surface);
   --trees-border-color-override: var(--border);
   --trees-scrollbar-thumb-override: var(--border-strong);
