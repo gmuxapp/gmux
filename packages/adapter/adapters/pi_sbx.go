@@ -37,15 +37,15 @@ func (p *PiSbx) Discover() bool {
 	return err == nil
 }
 
-// Match returns true for sbx commands that reference pi-workspace.
-// Handles both `sbx run pi-workspace` and `sbx exec -it pi-workspace -- pi`.
+// Match returns true for sbx commands that reference sbx-pi-james-agent-workspace.
+// Handles both `sbx run sbx-pi-james-agent-workspace` and `sbx exec -it sbx-pi-james-agent-workspace -- pi`.
 func (p *PiSbx) Match(cmd []string) bool {
 	hasSbx := false
 	for _, arg := range cmd {
 		if filepath.Base(arg) == "sbx" {
 			hasSbx = true
 		}
-		if hasSbx && arg == "pi-workspace" {
+		if hasSbx && arg == "sbx-pi-james-agent-workspace" {
 			return true
 		}
 		if arg == "--" {
@@ -65,7 +65,7 @@ func (p *PiSbx) Launchers() []adapter.Launcher {
 	return []adapter.Launcher{{
 		ID:          "pi-sbx",
 		Label:       "Pi (sandbox)",
-		Command:     []string{"sbx", "exec", "-it", "pi-workspace", "--", "pi"},
+		Command:     []string{"sbx", "exec", "-it", "sbx-pi-james-agent-workspace", "--", "pi"},
 		Description: "Launch pi in the workspace sandbox",
 	}}
 }

@@ -18,28 +18,28 @@ func TestPiSbxName(t *testing.T) {
 
 func TestPiSbxMatchExecCommand(t *testing.T) {
 	p := NewPiSbx()
-	if !p.Match([]string{"sbx", "exec", "-it", "pi-workspace", "--", "pi"}) {
-		t.Fatal("should match sbx exec -it pi-workspace -- pi")
+	if !p.Match([]string{"sbx", "exec", "-it", "sbx-pi-james-agent-workspace", "--", "pi"}) {
+		t.Fatal("should match sbx exec -it sbx-pi-james-agent-workspace -- pi")
 	}
 }
 
 func TestPiSbxMatchRunCommand(t *testing.T) {
 	p := NewPiSbx()
-	if !p.Match([]string{"sbx", "run", "pi-workspace"}) {
-		t.Fatal("should match sbx run pi-workspace")
+	if !p.Match([]string{"sbx", "run", "sbx-pi-james-agent-workspace"}) {
+		t.Fatal("should match sbx run sbx-pi-james-agent-workspace")
 	}
 }
 
 func TestPiSbxMatchFullPathSbx(t *testing.T) {
 	p := NewPiSbx()
-	if !p.Match([]string{"/usr/local/bin/sbx", "exec", "-it", "pi-workspace", "--", "pi"}) {
+	if !p.Match([]string{"/usr/local/bin/sbx", "exec", "-it", "sbx-pi-james-agent-workspace", "--", "pi"}) {
 		t.Fatal("should match full path to sbx")
 	}
 }
 
 func TestPiSbxNoMatchWithoutSbx(t *testing.T) {
 	p := NewPiSbx()
-	if p.Match([]string{"bash", "pi-workspace"}) {
+	if p.Match([]string{"bash", "sbx-pi-james-agent-workspace"}) {
 		t.Fatal("should not match without sbx in command")
 	}
 }
@@ -53,9 +53,9 @@ func TestPiSbxNoMatchOtherWorkspace(t *testing.T) {
 
 func TestPiSbxNoMatchAfterDoubleDash(t *testing.T) {
 	p := NewPiSbx()
-	// pi-workspace appearing after -- should not match
-	if p.Match([]string{"echo", "--", "sbx", "pi-workspace"}) {
-		t.Fatal("should not match pi-workspace after '--'")
+	// sbx-pi-james-agent-workspace appearing after -- should not match
+	if p.Match([]string{"echo", "--", "sbx", "sbx-pi-james-agent-workspace"}) {
+		t.Fatal("should not match sbx-pi-james-agent-workspace after '--'")
 	}
 }
 
@@ -88,7 +88,7 @@ func TestPiSbxLaunchers(t *testing.T) {
 	if l.Label == "" {
 		t.Error("launcher label must not be empty")
 	}
-	want := []string{"sbx", "exec", "-it", "pi-workspace", "--", "pi"}
+	want := []string{"sbx", "exec", "-it", "sbx-pi-james-agent-workspace", "--", "pi"}
 	if len(l.Command) != len(want) {
 		t.Fatalf("expected command %v, got %v", want, l.Command)
 	}
