@@ -330,6 +330,10 @@ export function buildProjectFolders(
   sessions: Session[],
   isLocalPeer?: (peerName: string) => boolean,
   peerProjects?: Record<string, { slug: string; launch_cwd?: string }[]>,
+  // Resolve a reference (by its stored peer+slug) to the live host's
+  // current name and whether it's in the roster at all. When omitted,
+  // references resolve to their stored name (legacy behavior). (refs #270)
+  resolveRef?: (peer: string, slug: string) => { effectivePeer: string; resolved: boolean } | undefined,
 ): Folder[] {
   // Bucket every stamped session by `${ownerPeer}::${slug}`.
   // ownerPeer is '' for sessions owned by the viewer (local sessions,
@@ -354,7 +358,20 @@ export function buildProjectFolders(
 
   const folders: Folder[] = []
   for (const project of projects) {
-    const ownerPeer = project.peer ?? ''
+    const storedPeer = project.peer ?? ''
+    // For references, resolve to the live host's current name (which
+    // may differ from the stored name after a rename) and learn
+    // whether the host is in the roster at all. Owned projects pass
+    // through unchanged.
+    let ownerPeer = storedPeer
+    let unresolved = false
+    if (storedPeer !== '' && resolveRef) {
+      const r = resolveRef(storedPeer, project.slug)
+      if (r) {
+        ownerPeer = r.effectivePeer
+        unresolved = !r.resolved
+      }
+    }
     const ss = buckets.get(`${ownerPeer}::${project.slug}`) ?? []
     const visible = ss.filter(s => s.alive || s.resumable === true)
     visible.sort(compareFolderSessions)
@@ -368,6 +385,10 @@ export function buildProjectFolders(
     let missing = false
     if (ownerPeer === '') {
       launchCwd = project.match?.find(r => r.path)?.path
+    } else if (unresolved) {
+      // No live host matches this reference; don't probe peer_projects
+      // for a slug under a name that isn't connected. The unresolved
+      // flag carries the state.
     } else if (peerProjects) {
       const peerEntry = peerProjects[ownerPeer]
       if (peerEntry) {
@@ -388,6 +409,7 @@ export function buildProjectFolders(
       peer: ownerPeer || undefined,
       launchCwd,
       missing: missing || undefined,
+      unresolved: unresolved || undefined,
       sessions: visible,
     })
   }
