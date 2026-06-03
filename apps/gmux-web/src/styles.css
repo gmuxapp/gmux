@@ -128,6 +128,7 @@ body {
 
 /* Settings gear, pinned opposite the logo in the header. */
 .sidebar-settings-btn {
+  position: relative;
   margin-left: auto;
   display: flex;
   align-items: center;
@@ -145,6 +146,18 @@ body {
 .sidebar-settings-btn:hover {
   color: var(--text);
   background: var(--bg-hover);
+}
+/* Attention pip: a referenced host is unresolved and needs a fix in
+   Settings -> Hosts. (refs #270) */
+.settings-attention-pip {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-error, oklch(63% 0.2 25));
+  box-shadow: 0 0 0 2px var(--bg-sidebar, var(--bg));
 }
 
 /* Empty-state launch affordance: when there are no projects yet, the

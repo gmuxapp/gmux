@@ -15,7 +15,7 @@ import {
   activityMap, projects, connState,
   updateProjects, reorderSessions,
   peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState,
-  unreadCount, localHostLabel,
+  unreadCount, localHostLabel, unresolvedHosts,
   type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -336,6 +336,9 @@ export function Sidebar({
   // when an additional session enters the waiting state.
   const waitingCount = unreadCount.value
   const waiting = waitingCount > 0
+  // A reference points at a host that's in no roster bucket (renamed /
+  // removed): flag the gear so the user knows where the fix lives. (refs #270)
+  const hasUnresolved = unresolvedHosts.value.length > 0
   const bgArrival = useArrivalPulse(waiting ? 'unread' : 'none', waitingCount)
 
   const totalVisible = foldersVal.reduce(
@@ -366,10 +369,11 @@ export function Sidebar({
           <button
             class="sidebar-settings-btn"
             onClick={onOpenSettings}
-            aria-label="Settings"
-            title="Settings"
+            aria-label={hasUnresolved ? 'Settings (a referenced host needs attention)' : 'Settings'}
+            title={hasUnresolved ? 'A referenced host was not found — open Settings → Hosts' : 'Settings'}
           >
             <IconSettings />
+            {hasUnresolved && <span class="settings-attention-pip" aria-hidden="true" />}
           </button>
         </div>
         <div class="sidebar-scroll">
