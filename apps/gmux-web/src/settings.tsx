@@ -20,7 +20,7 @@ import {
   addProject, addPeerReference, folders, updateProjects,
   removeProject, removePeerReference, localHostLabel,
   health, peers, sessions, connectHost, disconnectHost,
-  unresolvedHosts, remapReferences, removeReferencesForPeer,
+  unresolvedHosts, remapReferences, removeReferences,
 } from './store'
 import { HostSuffix } from './host-suffix'
 import type { ProjectItem, DiscoveredProject, MatchRule, Folder, PeerInfo } from './types'
@@ -460,7 +460,7 @@ function UnresolvedHostRow({ host, targets }: { host: UnresolvedHost; targets: P
     const target = targets.find(t => t.name === toName)
     setBusy(true); setErr('')
     try {
-      await remapReferences(host.name, toName, target?.node_id)
+      await remapReferences(host.name, host.slugs, toName, target?.node_id)
     } catch (e) {
       // Reset to the placeholder so re-picking the same target fires
       // onChange again (otherwise the user must choose a different
@@ -475,7 +475,7 @@ function UnresolvedHostRow({ host, targets }: { host: UnresolvedHost; targets: P
   const onRemove = useCallback(async () => {
     setBusy(true); setErr('')
     try {
-      await removeReferencesForPeer(host.name)
+      await removeReferences(host.name, host.slugs)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Could not remove.')
     } finally {

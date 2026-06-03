@@ -79,6 +79,11 @@ export function resolveReferences(
   const byNodeId = new Map<string, PeerInfo>()
   const byName = new Map<string, PeerInfo>()
   for (const p of roster) {
+    // Last-write-wins if two roster entries report the same node_id
+    // (the duplicate-entry case — see the discovery-dedup follow-up).
+    // Resolution stays correct (both names are the same physical node),
+    // but which display name a reference resolves to then depends on
+    // roster order. Deduping the roster upstream removes the ambiguity.
     if (p.node_id) byNodeId.set(p.node_id, p)
     byName.set(p.name, p)
   }
@@ -108,11 +113,13 @@ export function resolveReferences(
     }
 
     // 2. name match: legacy references, or a reference whose stored
-    //    node_id matched no live peer (host gone / replaced). Stamp the
-    //    matched peer's node_id whenever it differs from what's stored
-    //    — covering both the never-stamped case and refreshing a stale
-    //    node_id — so the reference is (re)made rename-proof rather than
-    //    repeating the failed-id-then-name dance on every load.
+    //    node_id matched no live peer (host gone / replaced). When the
+    //    matched peer's node_id differs from what's stored — covering
+    //    both the never-stamped and the stale cases — record a backfill
+    //    so the (deferred) backfill writer can refresh projects.json.
+    //    Resolution is already correct here; until that writer lands the
+    //    refreshed id isn't persisted, so the id-then-name fallback
+    //    recurs harmlessly on each load.
     const named = byName.get(item.peer)
     if (named) {
       resolution.set(key, { effectivePeer: item.peer, resolved: true })
@@ -137,32 +144,61 @@ export function resolveReferences(
 }
 
 /**
- * Rewrite every reference pointing at `fromPeer` to point at `toPeer`,
- * stamping the target's `nodeId` so it survives future renames. Pure:
- * returns a new items array; the caller persists it. A reference whose
- * slug `toPeer` already references is dropped (the target wins) so the
- * result has no duplicate (peer, slug). Used to recover references
- * orphaned by a host rename. (refs #270)
+ * Rewrite the references `(fromPeer, slug)` for `slug` in `slugs` to
+ * point at `toPeer`, stamping the target's `nodeId`. Pure: returns a
+ * new items array; the caller persists it.
  *
- * The remapped reference takes the target's `nodeId` verbatim — if the
- * target has none (offline/legacy peer), the reference's node_id is
- * *cleared*, never left pointing at the old host's id (which would let
- * the old host silently re-claim the reference if it reappeared).
+ * Scoping to `slugs` (the *unresolved* slugs the UI surfaced for this
+ * host) is critical: a stored peer name can be shared by both an
+ * unresolved reference and one that already resolves correctly via
+ * node_id during a rename transition. Matching by name alone would
+ * silently move the working reference too. Only the named slugs are
+ * touched. (refs #270)
+ *
+ * A reference whose slug `toPeer` already references is dropped (the
+ * target wins) so the result has no duplicate (peer, slug). The
+ * remapped reference takes the target's `nodeId` verbatim — if the
+ * target has none (offline/legacy peer), the node_id is *cleared*,
+ * never left pointing at the old host's id (which would let the old
+ * host silently re-claim the reference if it reappeared).
  */
 export function remapReferenceItems(
   items: readonly ProjectItem[],
   fromPeer: string,
+  slugs: readonly string[],
   toPeer: string,
   nodeId?: string,
 ): ProjectItem[] {
+  // No-op remap (same source and target): without this guard every
+  // matching item would collide with itself in targetSlugs below and be
+  // dropped, silently wiping the references. Not reachable from the UI
+  // (you remap an unresolved host to a *different* live one) but a
+  // footgun for any future caller.
+  if (fromPeer === toPeer) return items.slice()
+  const scope = new Set(slugs)
   const targetSlugs = new Set(
     items.filter(p => p.peer === toPeer).map(p => p.slug),
   )
   const next: ProjectItem[] = []
   for (const it of items) {
-    if (it.peer !== fromPeer) { next.push(it); continue }
+    if (it.peer !== fromPeer || !scope.has(it.slug)) { next.push(it); continue }
     if (targetSlugs.has(it.slug)) continue // target already references this slug
     next.push({ ...it, peer: toPeer, node_id: nodeId })
   }
   return next
+}
+
+/**
+ * Remove the references `(peer, slug)` for `slug` in `slugs`. Pure:
+ * returns a new items array. Like the remap above, scoping to the
+ * surfaced unresolved `slugs` is what prevents deleting a same-named
+ * reference that's actually resolving correctly via node_id. (refs #270)
+ */
+export function removeReferenceItems(
+  items: readonly ProjectItem[],
+  peer: string,
+  slugs: readonly string[],
+): ProjectItem[] {
+  const scope = new Set(slugs)
+  return items.filter(p => !(p.peer === peer && scope.has(p.slug)))
 }

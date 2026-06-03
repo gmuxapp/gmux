@@ -19,7 +19,7 @@ import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects } from './projects'
-import { resolveReferences, remapReferenceItems, refKey, type UnresolvedHost } from './references'
+import { resolveReferences, remapReferenceItems, removeReferenceItems, refKey, type UnresolvedHost } from './references'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS, MOCK_PEERS, MOCK_HEALTH } from './mock-data/index'
@@ -933,16 +933,18 @@ export async function removePeerReference(peer: string, slug: string): Promise<v
  *  duplicate. */
 export async function remapReferences(
   fromPeer: string,
+  slugs: readonly string[],
   toPeer: string,
   nodeId?: string,
 ): Promise<void> {
-  await putProjects(remapReferenceItems(projects.value, fromPeer, toPeer, nodeId))
+  await putProjects(remapReferenceItems(projects.value, fromPeer, slugs, toPeer, nodeId))
 }
 
-/** Drop every reference pointing at `peer` (used to clear out an
- *  unresolved host whose references are no longer wanted). */
-export async function removeReferencesForPeer(peer: string): Promise<void> {
-  await putProjects(projects.value.filter(p => p.peer !== peer))
+/** Drop the unresolved references `(peer, slug)` for the given slugs.
+ *  Scoped to the surfaced slugs so a same-named reference that still
+ *  resolves correctly (via node_id) is never deleted. */
+export async function removeReferences(peer: string, slugs: readonly string[]): Promise<void> {
+  await putProjects(removeReferenceItems(projects.value, peer, slugs))
 }
 
 export async function updateProjects(items: ProjectItem[]): Promise<void> {

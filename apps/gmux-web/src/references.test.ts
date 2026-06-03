@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveReferences, remapReferenceItems, refKey } from './references'
+import { resolveReferences, remapReferenceItems, removeReferenceItems, refKey } from './references'
 import type { PeerInfo, ProjectItem } from './types'
 
 function peer(name: string, node_id?: string): PeerInfo {
@@ -92,9 +92,9 @@ describe('resolveReferences', () => {
 })
 
 describe('remapReferenceItems', () => {
-  it('repoints all references from one host to another and stamps node_id', () => {
+  it('repoints the named references from one host to another and stamps node_id', () => {
     const items = [owned('gmux'), ref('hs', 'apps'), ref('hs', 'home'), ref('ft', 'dots')]
-    const next = remapReferenceItems(items, 'hs', 'gmux-hs', 'node_hs')
+    const next = remapReferenceItems(items, 'hs', ['apps', 'home'], 'gmux-hs', 'node_hs')
     expect(next).toEqual([
       owned('gmux'),
       { slug: 'apps', peer: 'gmux-hs', node_id: 'node_hs' },
@@ -103,13 +103,29 @@ describe('remapReferenceItems', () => {
     ])
   })
 
+  it('does not touch a same-named reference outside the slug scope', () => {
+    // Data-loss guard: during a rename transition a stored name can be
+    // shared by an unresolved reference (in scope) and one already
+    // resolving via node_id (out of scope). Only the scoped slug moves.
+    const items = [
+      ref('hs', 'apps', 'node_hs'), // resolves via node_id; NOT in scope
+      ref('hs', 'legacy'),          // unresolved; in scope
+    ]
+    const next = remapReferenceItems(items, 'hs', ['legacy'], 'gmux-hs', 'node_hs')
+    expect(next).toEqual([
+      ref('hs', 'apps', 'node_hs'),
+      { slug: 'legacy', peer: 'gmux-hs', node_id: 'node_hs' },
+    ])
+  })
+
+  it('is a no-op when fromPeer equals toPeer (never wipes references)', () => {
+    const items = [ref('hs', 'apps', 'node_hs'), ref('hs', 'home', 'node_hs'), owned('gmux')]
+    expect(remapReferenceItems(items, 'hs', ['apps', 'home'], 'hs', 'node_hs')).toEqual(items)
+  })
+
   it('clears a stale node_id when the remap target has no node_id', () => {
-    // Source references carry a stale node_id from the original host;
-    // the target (offline/legacy) has none. The stale id must be
-    // cleared, not preserved — keeping it would let the old host
-    // silently re-claim the reference if it came back.
     const items = [ref('hs', 'apps', 'stale_node'), ref('hs', 'home', 'stale_node')]
-    const next = remapReferenceItems(items, 'hs', 'gmux-hs', undefined)
+    const next = remapReferenceItems(items, 'hs', ['apps', 'home'], 'gmux-hs', undefined)
     expect(next).toEqual([
       { slug: 'apps', peer: 'gmux-hs', node_id: undefined },
       { slug: 'home', peer: 'gmux-hs', node_id: undefined },
@@ -118,12 +134,24 @@ describe('remapReferenceItems', () => {
 
   it('drops a remapped reference whose slug the target already has', () => {
     const items = [ref('gmux-hs', 'apps', 'node_hs'), ref('hs', 'apps'), ref('hs', 'home')]
-    const next = remapReferenceItems(items, 'hs', 'gmux-hs', 'node_hs')
-    // hs/apps collides with the existing gmux-hs/apps and is dropped;
-    // hs/home is remapped.
+    const next = remapReferenceItems(items, 'hs', ['apps', 'home'], 'gmux-hs', 'node_hs')
     expect(next).toEqual([
       ref('gmux-hs', 'apps', 'node_hs'),
       { slug: 'home', peer: 'gmux-hs', node_id: 'node_hs' },
     ])
+  })
+})
+
+describe('removeReferenceItems', () => {
+  it('removes only the named references for the host', () => {
+    const items = [owned('gmux'), ref('hs', 'apps'), ref('hs', 'home'), ref('ft', 'dots')]
+    expect(removeReferenceItems(items, 'hs', ['apps', 'home'])).toEqual([owned('gmux'), ref('ft', 'dots')])
+  })
+
+  it('keeps a same-named reference that resolves via node_id (outside scope)', () => {
+    // The data-loss path Greptile caught: removing the unresolved
+    // "legacy" slug must not delete the working node_id-anchored "apps".
+    const items = [ref('hs', 'apps', 'node_hs'), ref('hs', 'legacy')]
+    expect(removeReferenceItems(items, 'hs', ['legacy'])).toEqual([ref('hs', 'apps', 'node_hs')])
   })
 })
