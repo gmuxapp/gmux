@@ -9,6 +9,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -111,21 +112,32 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("config: parsing %s: %w", path, err)
 	}
 
-	// Reject unknown keys — a typo like "alow" instead of "allow" would
-	// silently result in an empty allow list, which is a security issue.
+	// Keys removed in ADR 0007 are tolerated with a deprecation warning
+	// rather than a hard failure, so upgrading a host that still has an
+	// old config doesn't brick the daemon — it just ignores them. Any
+	// other unknown key is still rejected: a typo like "alow" instead of
+	// "allow" would silently produce an empty allow list (a security
+	// issue), so those must fail loudly.
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
-		keys := make([]string, len(undecoded))
-		for i, k := range undecoded {
-			keys[i] = k.String()
-			// Targeted migration hints for keys removed in ADR 0007.
-			if keys[i] == "tailscale.hostname" {
-				return Config{}, fmt.Errorf("config: %s: tailscale.hostname is no longer supported (ADR 0007); remove it — the node name is now derived from the OS hostname and owned by tailscale", path)
-			}
-			if keys[i] == "peers" {
-				return Config{}, fmt.Errorf("config: %s: [[peers]] is no longer supported (ADR 0007); add peers at runtime via \"Connect to host\" in Settings (stored in peers.json)", path)
+		var unknown []string
+		warnedPeers := false
+		for _, k := range undecoded {
+			key := k.String()
+			switch {
+			case key == "tailscale.hostname":
+				log.Printf("config: %s: ignoring deprecated tailscale.hostname (removed in ADR 0007); the node name is now derived from the OS hostname and owned by tailscale. Remove it to silence this warning.", path)
+			case key == "peers" || strings.HasPrefix(key, "peers."):
+				if !warnedPeers {
+					log.Printf("config: %s: ignoring deprecated [[peers]] (removed in ADR 0007); add peers at runtime via \"Connect to host\" in Settings (stored in peers.json). Remove it to silence this warning.", path)
+					warnedPeers = true
+				}
+			default:
+				unknown = append(unknown, key)
 			}
 		}
-		return Config{}, fmt.Errorf("config: unknown keys in %s: %s", path, strings.Join(keys, ", "))
+		if len(unknown) > 0 {
+			return Config{}, fmt.Errorf("config: unknown keys in %s: %s", path, strings.Join(unknown, ", "))
+		}
 	}
 
 	// Normalize allow list: trim whitespace, remove empty entries.
