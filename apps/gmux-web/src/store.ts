@@ -19,7 +19,7 @@ import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects } from './projects'
-import { resolveReferences, refKey, type UnresolvedHost } from './references'
+import { resolveReferences, remapReferenceItems, refKey, type UnresolvedHost } from './references'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS, MOCK_PEERS, MOCK_HEALTH } from './mock-data/index'
@@ -920,6 +920,25 @@ export async function disconnectHost(name: string): Promise<void> {
 export async function removePeerReference(peer: string, slug: string): Promise<void> {
   const filtered = projects.value.filter(p => !(p.peer === peer && p.slug === slug))
   await putProjects(filtered)
+}
+
+/** Remap every reference pointing at `fromPeer` onto `toPeer`, stamping
+ *  the target's stable node_id so the reference survives future
+ *  renames. Recovers references orphaned by a host rename (refs #270).
+ *  References whose slug the target already has are dropped to avoid a
+ *  duplicate. */
+export async function remapReferences(
+  fromPeer: string,
+  toPeer: string,
+  nodeId?: string,
+): Promise<void> {
+  await putProjects(remapReferenceItems(projects.value, fromPeer, toPeer, nodeId))
+}
+
+/** Drop every reference pointing at `peer` (used to clear out an
+ *  unresolved host whose references are no longer wanted). */
+export async function removeReferencesForPeer(peer: string): Promise<void> {
+  await putProjects(projects.value.filter(p => p.peer !== peer))
 }
 
 export async function updateProjects(items: ProjectItem[]): Promise<void> {

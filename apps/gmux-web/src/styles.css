@@ -1114,6 +1114,41 @@ body {
   background: var(--bg-hover);
   color: var(--text);
 }
+/* Unresolved host row: referenced but matching no roster peer. (refs #270) */
+.host-row.unresolved {
+  border-left: 2px solid oklch(60% 0.13 75);
+  background: oklch(28% 0.04 75 / 0.18);
+}
+.host-unresolved-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: oklch(28% 0.06 75);
+  color: oklch(80% 0.14 75);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1cap;
+}
+.host-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.host-remap-select {
+  max-width: 220px;
+  cursor: pointer;
+}
+/* The remove button is always visible on an unresolved row (no hover
+   reveal): the whole row is a call to action. */
+.host-row-actions .host-remove {
+  opacity: 1;
+  border: 1px solid var(--border);
+}
 .mp-host-token {
   margin-top: 8px;
 }

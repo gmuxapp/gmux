@@ -20,9 +20,11 @@ import {
   addProject, addPeerReference, folders, updateProjects,
   removeProject, removePeerReference, localHostLabel,
   health, peers, sessions, connectHost, disconnectHost,
+  unresolvedHosts, remapReferences, removeReferencesForPeer,
 } from './store'
 import { HostSuffix } from './host-suffix'
 import type { ProjectItem, DiscoveredProject, MatchRule, Folder, PeerInfo } from './types'
+import type { UnresolvedHost } from './references'
 
 type SettingsTab = 'projects' | 'hosts'
 
@@ -354,6 +356,21 @@ function HostsTab() {
 
   return (
     <>
+      {/* Surfaced first so a broken reference is the first thing seen. */}
+      {unresolvedHosts.value.length > 0 && (
+        <section class="mp-section">
+          <div class="mp-section-label">Referenced but not found</div>
+          <div class="mp-path-hint" style="margin-bottom:8px">
+            These hosts are referenced by your projects but aren't on your tailnet or manually added. They may have been renamed or removed. Remap each to a current host, or remove its references.
+          </div>
+          <div class="host-list">
+            {unresolvedHosts.value.map(u => (
+              <UnresolvedHostRow key={u.name} host={u} targets={peersVal} />
+            ))}
+          </div>
+        </section>
+      )}
+
       <section class="mp-section">
         <div class="mp-section-label">This host</div>
         <div class="host-list">
@@ -425,6 +442,64 @@ function HostsTab() {
         )}
       </section>
     </>
+  )
+}
+
+/** A host that projects reference but that matches no current peer
+ *  (renamed or removed). Offers a one-click remap onto a roster host
+ *  — stamping the target's node_id so it survives future renames —
+ *  and a remove that drops all its references. (refs #270) */
+function UnresolvedHostRow({ host, targets }: { host: UnresolvedHost; targets: PeerInfo[] }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const onRemap = useCallback(async (e: Event) => {
+    const sel = e.target as HTMLSelectElement
+    const toName = sel.value
+    if (!toName) return
+    const target = targets.find(t => t.name === toName)
+    setBusy(true); setErr('')
+    try {
+      await remapReferences(host.name, toName, target?.node_id)
+    } catch (e) {
+      // Reset to the placeholder so re-picking the same target fires
+      // onChange again (otherwise the user must choose a different
+      // option before they can retry).
+      sel.value = ''
+      setErr(e instanceof Error ? e.message : 'Could not remap.')
+    } finally {
+      setBusy(false)
+    }
+  }, [host.name, targets])
+
+  const onRemove = useCallback(async () => {
+    setBusy(true); setErr('')
+    try {
+      await removeReferencesForPeer(host.name)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not remove.')
+    } finally {
+      setBusy(false)
+    }
+  }, [host.name])
+
+  const count = host.slugs.length
+  return (
+    <div class="host-row unresolved">
+      <div class="host-row-main">
+        <span class="host-unresolved-icon" title="Host not found">!</span>
+        <span class="host-name">{host.name}</span>
+        <span class="host-meta">{count} reference{count === 1 ? '' : 's'}: {host.slugs.join(', ')}</span>
+      </div>
+      <div class="host-row-actions">
+        <select class="mp-filter-input host-remap-select" disabled={busy} onChange={onRemap}>
+          <option value="">Remap to…</option>
+          {targets.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
+        </select>
+        <button class="host-remove" disabled={busy} title="Remove these references" onClick={onRemove}>×</button>
+      </div>
+      {err && <div class="mp-manual-error">{err}</div>}
+    </div>
   )
 }
 

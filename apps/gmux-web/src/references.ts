@@ -135,3 +135,34 @@ export function resolveReferences(
 
   return { resolution, unresolved, backfills }
 }
+
+/**
+ * Rewrite every reference pointing at `fromPeer` to point at `toPeer`,
+ * stamping the target's `nodeId` so it survives future renames. Pure:
+ * returns a new items array; the caller persists it. A reference whose
+ * slug `toPeer` already references is dropped (the target wins) so the
+ * result has no duplicate (peer, slug). Used to recover references
+ * orphaned by a host rename. (refs #270)
+ *
+ * The remapped reference takes the target's `nodeId` verbatim — if the
+ * target has none (offline/legacy peer), the reference's node_id is
+ * *cleared*, never left pointing at the old host's id (which would let
+ * the old host silently re-claim the reference if it reappeared).
+ */
+export function remapReferenceItems(
+  items: readonly ProjectItem[],
+  fromPeer: string,
+  toPeer: string,
+  nodeId?: string,
+): ProjectItem[] {
+  const targetSlugs = new Set(
+    items.filter(p => p.peer === toPeer).map(p => p.slug),
+  )
+  const next: ProjectItem[] = []
+  for (const it of items) {
+    if (it.peer !== fromPeer) { next.push(it); continue }
+    if (targetSlugs.has(it.slug)) continue // target already references this slug
+    next.push({ ...it, peer: toPeer, node_id: nodeId })
+  }
+  return next
+}

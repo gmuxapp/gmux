@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveReferences, refKey } from './references'
+import { resolveReferences, remapReferenceItems, refKey } from './references'
 import type { PeerInfo, ProjectItem } from './types'
 
 function peer(name: string, node_id?: string): PeerInfo {
@@ -88,5 +88,42 @@ describe('resolveReferences', () => {
     expect(unresolved).toContainEqual({ name: 'hs', slugs: ['apps', 'home'] })
     expect(unresolved).toContainEqual({ name: 'old-laptop', slugs: ['dots'] })
     expect(unresolved).toHaveLength(2)
+  })
+})
+
+describe('remapReferenceItems', () => {
+  it('repoints all references from one host to another and stamps node_id', () => {
+    const items = [owned('gmux'), ref('hs', 'apps'), ref('hs', 'home'), ref('ft', 'dots')]
+    const next = remapReferenceItems(items, 'hs', 'gmux-hs', 'node_hs')
+    expect(next).toEqual([
+      owned('gmux'),
+      { slug: 'apps', peer: 'gmux-hs', node_id: 'node_hs' },
+      { slug: 'home', peer: 'gmux-hs', node_id: 'node_hs' },
+      ref('ft', 'dots'), // untouched
+    ])
+  })
+
+  it('clears a stale node_id when the remap target has no node_id', () => {
+    // Source references carry a stale node_id from the original host;
+    // the target (offline/legacy) has none. The stale id must be
+    // cleared, not preserved — keeping it would let the old host
+    // silently re-claim the reference if it came back.
+    const items = [ref('hs', 'apps', 'stale_node'), ref('hs', 'home', 'stale_node')]
+    const next = remapReferenceItems(items, 'hs', 'gmux-hs', undefined)
+    expect(next).toEqual([
+      { slug: 'apps', peer: 'gmux-hs', node_id: undefined },
+      { slug: 'home', peer: 'gmux-hs', node_id: undefined },
+    ])
+  })
+
+  it('drops a remapped reference whose slug the target already has', () => {
+    const items = [ref('gmux-hs', 'apps', 'node_hs'), ref('hs', 'apps'), ref('hs', 'home')]
+    const next = remapReferenceItems(items, 'hs', 'gmux-hs', 'node_hs')
+    // hs/apps collides with the existing gmux-hs/apps and is dropped;
+    // hs/home is remapped.
+    expect(next).toEqual([
+      ref('gmux-hs', 'apps', 'node_hs'),
+      { slug: 'home', peer: 'gmux-hs', node_id: 'node_hs' },
+    ])
   })
 })
