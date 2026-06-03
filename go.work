@@ -8,4 +8,5 @@ use (
 	./packages/workspace
 	./services/gmuxd
 	./tests/e2e
+	./tools/logd
 )

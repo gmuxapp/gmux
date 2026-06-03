@@ -14,7 +14,7 @@ import (
 
 func TestWalkProjectPaths_empty(t *testing.T) {
 	root := t.TempDir()
-	paths, err := walkProjectPaths(root, 50_000, true)
+	paths, err := walkProjectPaths(root, false, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestWalkProjectPaths_filesAndDirs(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(root, "README.md"), []byte("hi"), 0o644)
 	_ = os.WriteFile(filepath.Join(root, "src", "main.go"), []byte(""), 0o644)
 
-	paths, err := walkProjectPaths(root, 50_000, true)
+	paths, err := walkProjectPaths(root, false, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestWalkProjectPaths_dirsHaveTrailingSlash(t *testing.T) {
 	root := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(root, "a", "b"), 0o755)
 
-	paths, err := walkProjectPaths(root, 50_000, true)
+	paths, err := walkProjectPaths(root, false, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -70,20 +70,6 @@ func TestWalkProjectPaths_dirsHaveTrailingSlash(t *testing.T) {
 	}
 }
 
-func TestWalkProjectPaths_maxEntries(t *testing.T) {
-	root := t.TempDir()
-	for i := 0; i < 10; i++ {
-		name := filepath.Join(root, "file"+string(rune('a'+i))+".txt")
-		_ = os.WriteFile(name, nil, 0o644)
-	}
-	paths, err := walkProjectPaths(root, 3, true)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(paths) != 3 {
-		t.Errorf("expected 3 paths (limit hit), got %d", len(paths))
-	}
-}
 
 // ── walk endpoint (integration via httptest) ──────────────────────────────────
 
@@ -91,7 +77,7 @@ func walkTestMux(t *testing.T, root string) *http.ServeMux {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/fs/{slug}/walk", func(w http.ResponseWriter, r *http.Request) {
-		paths, err := walkProjectPaths(root, 50_000, true)
+		paths, err := walkProjectPaths(root, true, true)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -217,7 +203,7 @@ func TestWalkProjectPaths_hiddenExcludedByDefault(t *testing.T) {
 	_ = os.MkdirAll(filepath.Join(root, "src"), 0o755)
 	_ = os.WriteFile(filepath.Join(root, "src", "main.go"), nil, 0o644)
 
-	paths, err := walkProjectPaths(root, 50_000, false)
+	paths, err := walkProjectPaths(root, false, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -251,7 +237,7 @@ func TestWalkProjectPaths_hiddenIncludedWhenRequested(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(root, ".gitignore"), nil, 0o644)
 	_ = os.WriteFile(filepath.Join(root, "README.md"), nil, 0o644)
 
-	paths, err := walkProjectPaths(root, 50_000, true)
+	paths, err := walkProjectPaths(root, true, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -268,7 +254,7 @@ func TestWalkProjectPaths_hiddenIncludedWhenRequested(t *testing.T) {
 }
 
 func TestWalkProjectPaths_capNotExhaustedByHiddenDirs(t *testing.T) {
-	// Hidden dirs must not consume the cap when includeHidden=false.
+	// Hidden dirs and their contents must be excluded when includeHidden=false.
 	root := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(root, ".hidden"), 0o755)
 	for i := 0; i < 10; i++ {
@@ -277,7 +263,7 @@ func TestWalkProjectPaths_capNotExhaustedByHiddenDirs(t *testing.T) {
 	}
 	_ = os.WriteFile(filepath.Join(root, "visible.txt"), nil, 0o644)
 
-	paths, err := walkProjectPaths(root, 5, false)
+	paths, err := walkProjectPaths(root, false, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
