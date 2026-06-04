@@ -19,7 +19,7 @@ import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects } from './projects'
-import { resolveReferences, remapReferenceItems, removeReferenceItems, removeHostReferenceItems, refKey, type UnresolvedHost } from './references'
+import { resolveReferences, removeReferenceItems, removeHostReferenceItems, refKey, type UnresolvedHost } from './references'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS, MOCK_PEERS, MOCK_HEALTH } from './mock-data/index'
@@ -951,20 +951,6 @@ export async function removeHost(name: string, nodeId?: string): Promise<void> {
 export async function removePeerReference(peer: string, slug: string): Promise<void> {
   const filtered = projects.value.filter(p => !(p.peer === peer && p.slug === slug))
   await putProjects(filtered)
-}
-
-/** Remap every reference pointing at `fromPeer` onto `toPeer`, stamping
- *  the target's stable node_id so the reference survives future
- *  renames. Recovers references orphaned by a host rename (refs #270).
- *  References whose slug the target already has are dropped to avoid a
- *  duplicate. */
-export async function remapReferences(
-  fromPeer: string,
-  slugs: readonly string[],
-  toPeer: string,
-  nodeId?: string,
-): Promise<void> {
-  await putProjects(remapReferenceItems(projects.value, fromPeer, slugs, toPeer, nodeId))
 }
 
 /** Drop the unresolved references `(peer, slug)` for the given slugs.

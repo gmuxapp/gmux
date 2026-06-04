@@ -1152,10 +1152,6 @@ body {
   gap: 8px;
   margin-top: 8px;
 }
-.host-remap-select {
-  max-width: 220px;
-  cursor: pointer;
-}
 /* The remove button is always visible on an unresolved row (no hover
    reveal): the whole row is a call to action. */
 .host-row-actions .host-remove {
