@@ -889,6 +889,23 @@ export async function addPeerReference(peer: string, slug: string): Promise<void
   await putProjects([...existing, node_id ? { peer, slug, node_id } : { peer, slug }])
 }
 
+/** Parse a pasted connect URL of the form
+ *  `https://host[/auth/login]?token=<token>` (printed by `gmuxd auth`)
+ *  into its peer URL (the origin) and token. Returns null when the
+ *  input has no `token` query param so callers can treat it as a plain
+ *  URL and use the separate token field (ADR 0008). */
+export function parseConnectURL(input: string): { url: string; token: string } | null {
+  let parsed: URL
+  try {
+    parsed = new URL(input.trim())
+  } catch {
+    return null
+  }
+  const token = parsed.searchParams.get('token')
+  if (!token) return null
+  return { url: parsed.origin, token }
+}
+
 /** Connect to a host (ADR 0007): POST /v1/peers probes the target,
  *  dedups by node_id, and persists it to peers.json. Returns the name
  *  the peer was stored under (may be suffixed on a collision) and

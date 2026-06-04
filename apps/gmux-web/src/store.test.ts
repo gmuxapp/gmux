@@ -7,7 +7,7 @@ import {
   isSessionUnavailable, urlPath, selectedId,
   navigateToSession, setNavigate,
   applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
-  toUISession, localHostLabel,
+  toUISession, localHostLabel, parseConnectURL,
 } from './store'
 import type { PendingMutation } from './store'
 import type { Session } from './types'
@@ -749,3 +749,22 @@ describe('pending mutations overlay', () => {
 })
 
 
+describe('parseConnectURL', () => {
+  it('splits a pasted connect URL into origin + token', () => {
+    expect(parseConnectURL('https://gmux-host.tailnet.ts.net/auth/login?token=abc123'))
+      .toEqual({ url: 'https://gmux-host.tailnet.ts.net', token: 'abc123' })
+  })
+
+  it('handles a token on the bare origin (no /auth/login path)', () => {
+    expect(parseConnectURL('https://gmux-host.tailnet.ts.net/?token=xyz'))
+      .toEqual({ url: 'https://gmux-host.tailnet.ts.net', token: 'xyz' })
+  })
+
+  it('returns null for a plain URL with no token param', () => {
+    expect(parseConnectURL('https://gmux-host.tailnet.ts.net')).toBeNull()
+  })
+
+  it('returns null for non-URL input so the separate token field is used', () => {
+    expect(parseConnectURL('gmux-host')).toBeNull()
+  })
+})

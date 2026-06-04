@@ -19,7 +19,7 @@ import {
   projects, discovered, peerProjects, peerStatusByName,
   addProject, addPeerReference, folders, updateProjects,
   removeProject, removePeerReference, localHostLabel,
-  health, peers, sessions, connectHost, disconnectHost,
+  health, peers, sessions, connectHost, disconnectHost, parseConnectURL,
   unresolvedHosts, remapReferences, removeReferences,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -295,9 +295,14 @@ export function SettingsModal({
 
 /** A peer's group in the Hosts tab. Uses the daemon's `source` when
  *  present; falls back for older daemons that don't send it (a Local
- *  peer is a devcontainer, anything else is treated as manual). */
-function peerSource(p: PeerInfo): 'tailscale' | 'devcontainer' | 'manual' {
-  if (p.source === 'tailscale' || p.source === 'devcontainer' || p.source === 'manual') {
+ *  peer is a devcontainer, anything else is treated as manual).
+ *
+ *  Tailnet peers added via Connect-to-host report `source: 'manual'`
+ *  (ADR 0008 removed tailscale autodiscovery), so there is no separate
+ *  tailnet bucket. A legacy daemon's `'tailscale'` source is folded
+ *  into manual. */
+function peerSource(p: PeerInfo): 'devcontainer' | 'manual' {
+  if (p.source === 'devcontainer' || p.source === 'manual') {
     return p.source
   }
   return p.local ? 'devcontainer' : 'manual'
@@ -305,15 +310,16 @@ function peerSource(p: PeerInfo): 'tailscale' | 'devcontainer' | 'manual' {
 
 /** Host groups, in display order. Each maps to a peerSource() bucket. */
 const HOST_GROUPS = [
-  { key: 'tailscale', label: 'Discovered on your tailnet' },
   { key: 'devcontainer', label: 'Devcontainers' },
-  { key: 'manual', label: 'Added manually' },
+  { key: 'manual', label: 'Remote hosts' },
 ] as const
 
 /** Read-only roster of every host gmux knows about: the local host
  *  ("this host", synthesized from health) first, then peers grouped by
- *  how they were added — tailnet-discovered, devcontainers, and
- *  manually connected. Reachability is already conveyed by the sidebar
+ *  how they were added — auto-discovered devcontainers and remote
+ *  hosts you connected to by address (tailnet hosts included; ADR
+ *  0008). Reachability is
+ *  already conveyed by the sidebar
  *  pill colors; this surface is the dig — version, session count, and
  *  the last error behind an unreachable host. */
 function HostsTab() {
@@ -412,13 +418,24 @@ function HostsTab() {
 
       <section class="mp-section">
         <div class="mp-section-label">Connect to host</div>
+        <div class="mp-path-hint mp-connect-help">
+          Run <code>gmuxd auth</code> on the host you want to add, then paste the <strong>connect URL</strong> it prints — it carries the token, and fills both fields below.
+        </div>
         <div class="mp-path-add-row">
           <input
             class="mp-filter-input mp-path-input"
             type="text"
-            placeholder="https://gmux-host.tailnet.ts.net"
+            placeholder="Paste connect URL (or https://host…)"
             value={url}
-            onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setError(''); setNotice('') }}
+            onInput={(e) => {
+              // Accept a pasted connect URL (carries ?token=): split it
+              // into the URL + token fields so the user sees the result.
+              const v = (e.target as HTMLInputElement).value
+              const parsed = parseConnectURL(v)
+              if (parsed) { setUrl(parsed.url); setToken(parsed.token) }
+              else setUrl(v)
+              setError(''); setNotice('')
+            }}
             onKeyDown={(e) => { if (e.key === 'Enter') handleConnect() }}
           />
           <button class="mp-manual-btn" onClick={handleConnect} disabled={busy || url.trim() === ''}>
@@ -428,7 +445,7 @@ function HostsTab() {
         <input
           class="mp-filter-input mp-host-token"
           type="password"
-          placeholder="Token (if not using Tailscale)"
+          placeholder="Token (only if the URL has none)"
           value={token}
           onInput={(e) => { setToken((e.target as HTMLInputElement).value) }}
           onKeyDown={(e) => { if (e.key === 'Enter') handleConnect() }}
@@ -438,7 +455,7 @@ function HostsTab() {
         ) : notice ? (
           <div class="mp-path-hint">{notice}</div>
         ) : (
-          <div class="mp-path-hint">Connect to a host you reach by URL. On your tailnet, leave the token blank — it authenticates by identity.</div>
+          <div class="mp-path-hint">No connect URL? Enter the host's address and its token (from <code>gmuxd auth</code>) separately. A token is required for every host.</div>
         )}
       </section>
     </>

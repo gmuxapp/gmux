@@ -183,9 +183,10 @@ export interface PeerInfo {
   local?: boolean
   /**
    * How the peer was added — drives the Hosts-tab grouping. One of
-   * 'tailscale' (auto-discovered on the tailnet), 'devcontainer'
-   * (auto-discovered Docker container), or 'manual' (peers.json /
-   * POST /v1/peers). Absent on older daemons.
+   * 'devcontainer' (auto-discovered Docker container) or 'manual'
+   * (peers.json / POST /v1/peers, including tailnet hosts). Absent on
+   * older daemons. 'tailscale' is legacy (autodiscovery removed in
+   * ADR 0008) and is folded into the manual group.
    */
   source?: 'tailscale' | 'devcontainer' | 'manual'
   /**

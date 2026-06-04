@@ -31,8 +31,8 @@ export const MOCK_SESSIONS: MockSession[] = [
  *  disconnected row, and a manual host carrying a last_error so the
  *  grouping and every row state are exercised. */
 export const MOCK_PEERS: PeerInfo[] = [
-  { name: 'laptop', url: 'https://laptop.tail-scale.ts.net', status: 'connected', session_count: 2, version: '1.2.0', source: 'tailscale' },
-  { name: 'server', url: 'https://server.tail-scale.ts.net', status: 'connected', session_count: 4, version: '1.1.9', source: 'tailscale' },
+  { name: 'laptop', url: 'https://laptop.tail-scale.ts.net', status: 'connected', session_count: 2, version: '1.2.0', source: 'manual' },
+  { name: 'server', url: 'https://server.tail-scale.ts.net', status: 'connected', session_count: 4, version: '1.1.9', source: 'manual' },
   { name: 'devcontainer', url: 'https://devcontainer.tail-scale.ts.net', status: 'connected', session_count: 1, version: '1.2.0', local: true, source: 'devcontainer' },
   { name: 'konyvtar', url: 'https://gmux.tail95157a.ts.net', status: 'connected', session_count: 1, version: '1.2.0', source: 'manual' },
   { name: 'bespin', url: 'https://bespin.tail-scale.ts.net', status: 'disconnected', session_count: 0, last_error: 'dial tcp 100.84.12.9:443: connect: connection refused', source: 'manual' },

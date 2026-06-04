@@ -1442,6 +1442,12 @@ body {
   line-height: 1.4;
 }
 
+/* Instruction line shown *above* the Connect-to-host inputs. */
+.mp-connect-help {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
 .mp-manual-error {
   font-size: 12px;
   color: var(--status-error);
