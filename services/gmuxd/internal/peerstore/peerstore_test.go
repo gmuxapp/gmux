@@ -47,36 +47,72 @@ func TestAddOrGetRejectsBadURL(t *testing.T) {
 	}
 }
 
-// Re-adding the same node_id returns the existing record (existed=true)
-// rather than creating a duplicate — and does so under one lock, so it's
-// safe against concurrent connects (no check-then-act race).
+// Re-adding the same node_id matches the existing record (no duplicate)
+// and refreshes its URL/token in place, keeping the display name — under
+// one lock, so it's safe against concurrent connects (no check-then-act
+// race).
 func TestAddOrGetDedupsByNodeID(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := Open(dir)
-	first, _, _ := s.AddOrGet(Record{Name: "laptop", URL: "http://a:8790", NodeID: "node_x"})
+	first, _, _ := s.AddOrGet(Record{Name: "laptop", URL: "http://a:8790", Token: "t1", NodeID: "node_x"})
 
-	got, existed, err := s.AddOrGet(Record{Name: "laptop-again", URL: "http://b:8790", NodeID: "node_x"})
+	got, outcome, err := s.AddOrGet(Record{Name: "laptop-again", URL: "http://b:8790", Token: "t2", NodeID: "node_x"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !existed {
-		t.Fatal("re-adding same node_id should report existed=true")
+	if outcome != Updated {
+		t.Fatalf("re-adding same node_id with new creds should report Updated, got %v", outcome)
 	}
-	if got.Name != first.Name || got.URL != "http://a:8790" {
-		t.Fatalf("dedup should return the original record, got %+v", got)
+	if got.Name != first.Name || got.URL != "http://b:8790" || got.Token != "t2" {
+		t.Fatalf("upsert should keep the name and refresh url/token, got %+v", got)
 	}
 	if len(s.List()) != 1 {
-		t.Fatalf("dedup must not append, got %d records", len(s.List()))
+		t.Fatalf("upsert must not append, got %d records", len(s.List()))
 	}
 }
 
-// An empty node_id is undedupable: each add is a distinct host.
-func TestAddOrGetEmptyNodeIDNotDeduped(t *testing.T) {
+// Re-adding identical creds is a no-op: outcome Unchanged, no rewrite.
+func TestAddOrGetUnchanged(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	s.AddOrGet(Record{Name: "laptop", URL: "http://a:8790", Token: "t", NodeID: "node_x"})
+	_, outcome, err := s.AddOrGet(Record{Name: "laptop", URL: "http://a:8790", Token: "t", NodeID: "node_x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Unchanged {
+		t.Fatalf("identical re-add should report Unchanged, got %v", outcome)
+	}
+}
+
+// A host added without a node_id (e.g. migrated from autodiscovery) is
+// matched by URL on the next connect, so supplying a token updates that
+// record and stamps the now-known node_id instead of duplicating it.
+func TestAddOrGetUpsertsByURLWhenNodeIDUnknown(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	s.AddOrGet(Record{Name: "old-tower", URL: "https://old-tower.ts.net"}) // no token, no node_id
+
+	got, outcome, err := s.AddOrGet(Record{Name: "old-tower", URL: "https://old-tower.ts.net", Token: "secret", NodeID: "node_ot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Updated {
+		t.Fatalf("supplying a token for a URL-matched host should report Updated, got %v", outcome)
+	}
+	if got.Token != "secret" || got.NodeID != "node_ot" {
+		t.Fatalf("upsert should set token and stamp node_id, got %+v", got)
+	}
+	if len(s.List()) != 1 {
+		t.Fatalf("URL match must not append, got %d records", len(s.List()))
+	}
+}
+
+// Distinct URLs with no node_id stay distinct hosts.
+func TestAddOrGetEmptyNodeIDDistinctURLsNotDeduped(t *testing.T) {
 	s, _ := Open(t.TempDir())
 	s.AddOrGet(Record{Name: "a", URL: "http://a:8790"})
 	s.AddOrGet(Record{Name: "b", URL: "http://b:8790"})
 	if len(s.List()) != 2 {
-		t.Fatalf("empty node_id must not dedup, got %d", len(s.List()))
+		t.Fatalf("distinct URLs must not dedup, got %d", len(s.List()))
 	}
 }
 

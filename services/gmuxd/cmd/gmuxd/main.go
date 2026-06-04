@@ -1059,21 +1059,27 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		// Atomic dedup-or-add: same node_id ⇒ already connected (not a
-		// duplicate); otherwise the probed name is slugified, de-collided,
-		// and persisted under one lock (no check-then-act race).
-		rec, existed, err := peerStore.AddOrGet(peerstore.Record{Name: name, URL: req.URL, Token: req.Token, NodeID: peerNodeID})
+		// Atomic upsert: a known host (by node_id, else URL) refreshes its
+		// URL/token in place; a new host is slugified, de-collided, and
+		// persisted — all under one lock (no check-then-act race).
+		rec, outcome, err := peerStore.AddOrGet(peerstore.Record{Name: name, URL: req.URL, Token: req.Token, NodeID: peerNodeID})
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}
-		if existed {
+		if outcome == peerstore.Unchanged {
 			writeJSON(w, map[string]any{"peer": rec, "already_connected": true})
 			return
 		}
+		if outcome == peerstore.Updated {
+			// Credentials changed (e.g. a token supplied for a host added
+			// without one). AddPeer is a no-op when the name already exists,
+			// so drop the live peer first to force a reconnect with them.
+			peerManager.RemovePeer(rec.Name)
+		}
 		peerManager.AddPeer(config.PeerConfig{Name: rec.Name, URL: rec.URL, Token: rec.Token, Source: config.SourceManual})
 		log.Printf("peering: connected to %s (%s)", rec.Name, rec.URL)
-		writeJSON(w, map[string]any{"peer": rec})
+		writeJSON(w, map[string]any{"peer": rec, "updated": outcome == peerstore.Updated})
 	})
 
 	// DELETE /v1/peers/{name} — disconnect a manually-added peer.
