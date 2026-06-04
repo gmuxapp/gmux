@@ -69,12 +69,12 @@ const (
 type DiscoveryConfig struct {
 	// Devcontainers enables auto-discovery of gmuxd instances running
 	// inside dev containers on the local Docker daemon. Default true.
+	//
+	// NOTE: there is no `tailscale` key (removed in ADR 0008). Tailscale
+	// autodiscovery was deleted because token-everywhere made it
+	// insecure to auto-connect; tailnet peers are now added manually via
+	// "Connect to host".
 	Devcontainers bool `toml:"devcontainers"`
-
-	// Tailscale enables auto-discovery of gmuxd instances on the same
-	// tailnet. Only active when tailscale.enabled is also true.
-	// Default true.
-	Tailscale bool `toml:"tailscale"`
 }
 
 // TailscaleConfig controls the optional tailscale (tsnet) listener.
@@ -126,6 +126,8 @@ func Load() (Config, error) {
 			switch {
 			case key == "tailscale.hostname":
 				log.Printf("config: %s: ignoring deprecated tailscale.hostname (removed in ADR 0007); the node name is now derived from the OS hostname and owned by tailscale. Remove it to silence this warning.", path)
+			case key == "discovery.tailscale":
+				log.Printf("config: %s: ignoring deprecated discovery.tailscale (removed in ADR 0008); tailscale autodiscovery was removed, add tailnet peers via \"Connect to host\". Remove it to silence this warning.", path)
 			case key == "peers" || strings.HasPrefix(key, "peers."):
 				if !warnedPeers {
 					log.Printf("config: %s: ignoring deprecated [[peers]] (removed in ADR 0007); add peers at runtime via \"Connect to host\" in Settings (stored in peers.json). Remove it to silence this warning.", path)
@@ -230,7 +232,6 @@ func defaults() Config {
 		Port: 8790,
 		Discovery: DiscoveryConfig{
 			Devcontainers: true,
-			Tailscale:     true,
 		},
 	}
 }
