@@ -47,6 +47,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/update"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/wsproxy"
+	qrterminal "github.com/mdp/qrterminal/v3"
 	"nhooyr.io/websocket"
 )
 
@@ -2291,6 +2292,10 @@ func runAuth(stdout, stderr io.Writer) int {
 	if health.Data.TailscaleURL != "" {
 		connectURL := fmt.Sprintf("%s/auth/login?token=%s", strings.TrimRight(health.Data.TailscaleURL, "/"), health.Data.AuthToken)
 		_, _ = fmt.Fprintf(stdout, "\nTo add this host from another gmux machine, paste this into \"Connect to host\":\n  %s\n", connectURL)
+		// Inline QR for the same connect URL: scan from a phone on the
+		// tailnet to open gmux authenticated, no typing the token.
+		_, _ = fmt.Fprintf(stdout, "\nOr scan to open gmux on a device on your tailnet:\n")
+		qrterminal.GenerateHalfBlock(connectURL, qrterminal.L, stdout)
 	}
 
 	return 0

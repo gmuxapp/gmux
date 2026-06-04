@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/tidwall/jsonc v0.3.3
 	nhooyr.io/websocket v1.8.17
 	tailscale.com v1.96.1
@@ -69,4 +70,5 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8 // indirect
+	rsc.io/qr v0.2.0 // indirect
 )

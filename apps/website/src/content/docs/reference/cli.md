@@ -191,9 +191,12 @@ Open this URL to authenticate in a browser on this machine:
 
 To add this host from another gmux machine, paste this into "Connect to host":
   https://gmux-host.your-tailnet.ts.net/auth/login?token=abc123...
+
+Or scan to open gmux on a device on your tailnet:
+  [inline QR code]
 ```
 
-The second URL appears only when Tailscale is enabled. It is the **connect URL** for pairing: paste it into **Settings → Hosts → Connect to host** on another machine and it splits into the host URL and token. A token is required for every host — tailnet reachability alone does not authorize ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
+The second URL appears only when Tailscale is enabled. It is the **connect URL** for pairing: paste it into **Settings → Hosts → Connect to host** on another machine and it splits into the host URL and token, or scan the inline QR from a phone on your tailnet to open gmux authenticated. A token is required for every host — tailnet reachability alone does not authorize ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
 
 ### `gmuxd remote`
 
