@@ -172,60 +172,114 @@ func serveLoginPage(w http.ResponseWriter, errMsg string) {
 
 	errorHTML := ""
 	if errMsg != "" {
-		errorHTML = `<p style="color:#e74c3c;margin-bottom:1em">` + errMsg + `</p>`
+		errorHTML = `<div class="error" role="alert">` + errMsg + `</div>`
 	}
 
-	// Minimal inline page. No external dependencies, no JavaScript required.
+	// Inline page with no JavaScript and no auth-gated assets (the app
+	// bundle is behind this very gate, so the page must stand alone).
+	// Colors mirror the app's tokens (oklch, near-black blue-tinted
+	// surfaces and the teal accent) with hex fallbacks for older engines.
+	// The one external resource is the Instrument Sans webfont for the
+	// wordmark (the bundled @fontsource copy is auth-gated); it degrades
+	// to a system font when offline.
 	_, _ = w.Write([]byte(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>gmux - Authentication Required</title>
+<meta name="color-scheme" content="dark">
+<title>gmux — sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@700&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; }
+  :root {
+    --bg: #0c0e11; --surface: #16191e; --border: #2b2f36;
+    --border-strong: #353a42; --text: #e2e5e9; --muted: #9aa0a8;
+    --accent: #3bc4c9; --accent-hover: #4ad4d9; --error: #e5705f;
+  }
+  @supports (color: oklch(0% 0 0)) {
+    :root {
+      --bg: oklch(12% 0.015 250); --surface: oklch(19% 0.015 250);
+      --border: oklch(32% 0.015 250); --border-strong: oklch(38% 0.015 250);
+      --text: oklch(90% 0.01 250); --muted: oklch(65% 0.01 250);
+      --accent: oklch(72% 0.1 195); --accent-hover: oklch(78% 0.11 195);
+      --error: oklch(65% 0.18 25);
+    }
+  }
   body {
     font-family: system-ui, -apple-system, sans-serif;
-    background: #0a0a0a; color: #e0e0e0;
-    display: flex; align-items: center; justify-content: center;
-    min-height: 100vh; margin: 0; padding: 1em;
+    background: var(--bg); color: var(--text);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 100vh; margin: 0; padding: 24px;
+    -webkit-font-smoothing: antialiased;
   }
   .card {
-    background: #1a1a1a; border: 1px solid #333; border-radius: 8px;
-    padding: 2em; max-width: 420px; width: 100%;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 32px 28px; max-width: 380px; width: 100%;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.45);
   }
-  h1 { font-size: 1.2em; margin: 0 0 0.5em; color: #fff; }
-  p { font-size: 0.9em; line-height: 1.5; margin: 0 0 1.5em; color: #999; }
-  label { display: block; font-size: 0.85em; margin-bottom: 0.4em; color: #ccc; }
+  .brand {
+    font-family: 'Instrument Sans', system-ui, sans-serif;
+    font-size: 20px; font-weight: 700; letter-spacing: -0.04em;
+    color: var(--text); margin-bottom: 20px;
+  }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 18px; color: var(--text); }
+  .error {
+    font-size: 13px; line-height: 1.4; color: var(--error);
+    background: color-mix(in srgb, var(--error) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
+    border-radius: 6px; padding: 9px 11px; margin: 0 0 16px;
+  }
   input[type="password"] {
-    width: 100%; padding: 0.6em 0.8em; font-size: 0.95em;
-    font-family: monospace; background: #111; color: #fff;
-    border: 1px solid #444; border-radius: 4px; outline: none;
+    width: 100%; padding: 11px 12px; font-size: 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border-strong); border-radius: 7px; outline: none;
+    transition: border-color 0.12s, box-shadow 0.12s;
   }
-  input[type="password"]:focus { border-color: #666; }
+  input[type="password"]:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+  }
   button {
-    width: 100%; padding: 0.7em; margin-top: 1em; font-size: 0.95em;
-    background: #fff; color: #000; border: none; border-radius: 4px;
-    cursor: pointer; font-weight: 500;
+    width: 100%; padding: 11px; margin-top: 14px; font-size: 14px;
+    background: var(--accent); color: var(--bg); border: none; border-radius: 7px;
+    cursor: pointer; font-weight: 600; transition: background 0.12s;
   }
-  button:hover { background: #ddd; }
-  .hint { font-size: 0.8em; color: #666; margin-top: 1em; }
-  code { background: #222; padding: 0.15em 0.4em; border-radius: 3px; font-size: 0.9em; }
+  button:hover { background: var(--accent-hover); }
+  .hint {
+    font-size: 12.5px; line-height: 1.55; color: var(--muted);
+    margin: 18px 0 0; padding-top: 16px; border-top: 1px solid var(--border);
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--bg); border: 1px solid var(--border);
+    padding: 1px 5px; border-radius: 4px; font-size: 12px; color: var(--text);
+  }
+  .tip {
+    font-size: 12px; line-height: 1.5; color: var(--muted);
+    text-align: center; max-width: 380px; margin: 16px auto 0;
+  }
+  .tip a { color: var(--accent); text-decoration: none; white-space: nowrap; }
+  .tip a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
-<div class="card">
-  <h1>gmux</h1>
-  <p>This gmux instance requires authentication. Enter the access token to continue.</p>
+<main class="card">
+  <div class="brand">gmux</div>
+  <h1>Enter your access token</h1>
   ` + errorHTML + `
   <form method="POST" action="/auth/login" autocomplete="off">
-    <label for="token">Access Token</label>
     <input type="password" id="token" name="token" required autofocus
-           placeholder="Paste token here" autocomplete="off">
-    <button type="submit">Sign In</button>
+           aria-label="Access token" placeholder="Paste token" autocomplete="off"
+           autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button type="submit">Sign in</button>
   </form>
-  <p class="hint">Find your token by running <code>gmuxd auth</code> on the host machine.</p>
-</div>
+  <p class="hint">Run <code>gmuxd auth</code> on the host for instructions.</p>
+</main>
+<p class="tip">One gmux can show every machine's sessions in a single sidebar. <a href="https://gmux.app/multi-machine/" target="_blank" rel="noopener">Multi-machine setup →</a></p>
 </body>
 </html>`))
 }

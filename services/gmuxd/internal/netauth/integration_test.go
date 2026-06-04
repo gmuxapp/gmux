@@ -50,7 +50,7 @@ func TestIntegrationFullLoginFlow(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("step 2: status = %d, want 200", resp.StatusCode)
 	}
-	if !strings.Contains(string(body), "Access Token") {
+	if !strings.Contains(string(body), `name="token"`) {
 		t.Fatal("step 2: login page missing token input")
 	}
 
