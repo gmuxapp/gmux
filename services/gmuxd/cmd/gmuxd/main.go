@@ -2257,8 +2257,9 @@ func runAuth(stdout, stderr io.Writer) int {
 	var health struct {
 		OK   bool `json:"ok"`
 		Data struct {
-			Listen    string `json:"listen"`
-			AuthToken string `json:"auth_token"`
+			Listen       string `json:"listen"`
+			AuthToken    string `json:"auth_token"`
+			TailscaleURL string `json:"tailscale_url"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil || !health.OK {
@@ -2275,7 +2276,16 @@ func runAuth(stdout, stderr io.Writer) int {
 
 	_, _ = fmt.Fprintf(stdout, "Listen:     %s\n", health.Data.Listen)
 	_, _ = fmt.Fprintf(stdout, "Auth token: %s\n", health.Data.AuthToken)
-	_, _ = fmt.Fprintf(stdout, "\nOpen this URL to authenticate:\n  %s\n", url)
+	_, _ = fmt.Fprintf(stdout, "\nOpen this URL to authenticate in a browser on this machine:\n  %s\n", url)
+
+	// When tailscale is enabled, the same token-in-URL form over the
+	// tailnet FQDN is the connect string for pairing from another gmux
+	// machine: paste it into "Connect to host", which splits it back into
+	// {url, token} (ADR 0008 — tailnet peers are added manually).
+	if health.Data.TailscaleURL != "" {
+		connectURL := fmt.Sprintf("%s/auth/login?token=%s", strings.TrimRight(health.Data.TailscaleURL, "/"), health.Data.AuthToken)
+		_, _ = fmt.Fprintf(stdout, "\nTo add this host from another gmux machine, paste this into \"Connect to host\":\n  %s\n", connectURL)
+	}
 
 	return 0
 }
