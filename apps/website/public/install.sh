@@ -137,10 +137,16 @@ main() {
     install_desktop_entry
   fi
 
-  # If gmuxd was already running, restart it so the new version takes over.
-  # Running sessions keep using the previous binary until restarted.
+  # If gmuxd was already running, restart it so the new version takes effect.
+  # Active sessions survive (the new daemon rediscovers them on startup).
   if "${INSTALL_DIR}/gmuxd" status > /dev/null 2>&1; then
-    "${INSTALL_DIR}/gmuxd" start || true
+    if "${INSTALL_DIR}/gmuxd" start; then
+      echo "gmuxd restarted to apply the update."
+    else
+      echo "Warning: gmuxd restart did not complete successfully; check logs."
+    fi
+  else
+    echo "To start gmux, run: gmux"
   fi
 
   case ":${PATH}:" in

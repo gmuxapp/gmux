@@ -2,8 +2,8 @@
 # Build and install gmux + gmuxd to ~/.local/bin.
 #
 # Stops the running gmuxd, replaces the binaries, and restarts it.
-# Existing sessions keep running (they use the old binary via open
-# file descriptors); new sessions will use the new binary.
+# Active sessions survive (the new daemon rediscovers them on startup);
+# the running runner keeps its old binary until that session restarts.
 #
 # Usage: ./scripts/install.sh [--skip-frontend]
 set -euo pipefail

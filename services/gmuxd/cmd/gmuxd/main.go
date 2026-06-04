@@ -231,7 +231,7 @@ Commands:
   start              Start the daemon in the background
   run                Run the daemon in the foreground (for systemd/Docker)
   stop               Stop the running daemon
-  restart            Restart the daemon (alias for start)
+  restart            Restart the daemon (stops then starts)
   status             Show daemon health, listeners, and sessions
   auth               Show the auth URL and token
   remote             Set up or check remote access via Tailscale
@@ -390,19 +390,33 @@ func startBackground(stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: failed to start: %v\n", err)
 		return 1
 	}
+	done := make(chan struct{})
 	go func() {
 		cmd.Wait()
 		logFile.Close()
+		close(done)
 	}()
 
-	// Wait for the daemon to become healthy.
+	// Wait for the daemon to become healthy. The new process does heavy
+	// initialization (launcher discovery, session sweep, conversation
+	// index scan, project loading) before it creates the Unix socket, so
+	// the probe can take several seconds on a slow machine or a large
+	// history. Poll with exponential backoff until a generous deadline
+	// rather than a tight fixed budget. Break immediately if the process
+	// exits before becoming healthy (crash, bad config, port conflict).
 	healthy := false
-	for range 30 {
-		time.Sleep(100 * time.Millisecond)
-		if unixipc.Healthy(sock) {
-			healthy = true
-			break
+	backoff := 200 * time.Millisecond
+	deadline := time.Now().Add(20 * time.Second)
+	for !healthy && time.Now().Before(deadline) {
+		select {
+		case <-done:
+			// Daemon process exited before becoming healthy.
+			_, _ = fmt.Fprintf(stderr, "gmuxd: daemon exited before becoming healthy\n  Logs: %s\n", logPath)
+			return 1
+		case <-time.After(backoff):
 		}
+		healthy = unixipc.Healthy(sock)
+		backoff = min(backoff*2, 2*time.Second)
 	}
 
 	if !healthy {
