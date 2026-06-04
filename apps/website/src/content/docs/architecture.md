@@ -44,7 +44,7 @@ The frontend is built with Preact and xterm.js, compiled into a static bundle, a
 `gmuxd` consumes its own public API for peer connections. Two small internal packages hold the protocol primitives:
 
 - **`sseclient`** decodes Server-Sent Events from `/v1/events`. It handles `event:` / `data:` / `:` comment framing, enforces payload size limits, supports a configurable idle timeout (sliding read deadline), and calls a user-supplied handler per event. Reconnect is the caller's job, matching how the browser's `EventSource` works.
-- **`apiclient`** is a typed wrapper around the public gmuxd API: `GetHealth`, `ForwardAction`, `ForwardLaunch`, `DialWS`, `ProxyWS`, plus `Events` which returns a configured `sseclient`. It sets bearer auth once and accepts an `http.RoundTripper` so Tailscale-discovered peers can route through `tsnet`.
+- **`apiclient`** is a typed wrapper around the public gmuxd API: `GetHealth`, `ForwardAction`, `ForwardLaunch`, `DialWS`, `ProxyWS`, plus `Events` which returns a configured `sseclient`. It sets bearer auth once and accepts an `http.RoundTripper` so peer traffic can route through an alternative transport such as `tsnet`.
 
 Peer daemons use these packages to talk to other gmuxd instances. There are no peer-only endpoints: if the browser path works, the peer path works, because they both flow through the same code. Read limits, auth, error handling, and keepalive live in one place instead of being duplicated per consumer.
 

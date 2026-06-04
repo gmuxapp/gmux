@@ -22,9 +22,8 @@ port = 8790
 enabled = false
 allow = []               # additional login names (owner is auto-whitelisted)
 
-# Auto-discover peers. All flags default to true.
+# Auto-discover devcontainer peers. Defaults to true.
 [discovery]
-tailscale = true         # discover other gmux instances on the tailnet
 devcontainers = true     # subscribe to Docker events, register gmux containers
 ```
 
@@ -36,7 +35,7 @@ To seed a specific name at first registration — e.g. when running several daem
 
 ## Connecting to other hosts
 
-There is **no `[[peers]]` config**. Add a host you want to aggregate sessions from at runtime via **Settings → Hosts → Connect to host** (enter its URL; leave the token blank on your own tailnet). Connected hosts are saved to `peers.json` in the state directory, and the peer's name is taken from the host itself — you don't assign one. Hosts on the same tailnet are also discovered automatically.
+There is **no `[[peers]]` config**. Add a host you want to aggregate sessions from at runtime via **Settings → Hosts → Connect to host** (paste the connect URL from `gmuxd auth`, or enter the host's URL and token). A token is required for every host, tailnet or not ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)). Connected hosts are saved to `peers.json` in the state directory, and the peer's name is taken from the host itself — you don't assign one.
 
 ## Fields
 
@@ -57,8 +56,9 @@ There is **no `[[peers]]` config**. Add a host you want to aggregate sessions fr
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `tailscale` | `boolean` | `true` | Discover other gmux instances on the tailnet via `WatchIPNBus`: every online tailnet device is probed, and any running gmuxd is added — regardless of its name. (The `gmux-`/`gmux` name only affects whether an *offline* peer is surfaced as a known-but-down host.) Only active when `tailscale.enabled` is also true. |
 | `devcontainers` | `boolean` | `true` | Subscribe to Docker events and register any container with the gmux devcontainer feature **and** the `devcontainer.local_folder` label as a peer. Skipped if the Docker CLI is not installed. |
+
+There is no `tailscale` discovery flag (removed in [ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)). Tailnet autodiscovery was removed because auto-connecting peers without a token let a single compromised node drive the whole tailnet; add tailnet hosts manually via **Connect to host**.
 
 ## Strict validation
 
