@@ -160,13 +160,21 @@ func (s *Store) AddOrGet(rec Record) (stored Record, outcome AddOutcome, err err
 
 	if i := s.matchIndex(rec); i >= 0 {
 		cur := s.records[i]
-		changed := cur.URL != rec.URL || cur.Token != rec.Token ||
+		// Empty Token/NodeID mean "unknown", not "clear it": only a non-empty
+		// value updates the stored one. This keeps the legacy-discovery
+		// import (token-less) from wiping the token of a host that was also
+		// added manually, and there's no flow that deliberately blanks a
+		// token. URL is always present (validated) so it always updates.
+		changed := cur.URL != rec.URL ||
+			(rec.Token != "" && cur.Token != rec.Token) ||
 			(rec.NodeID != "" && cur.NodeID != rec.NodeID)
 		if !changed {
 			return cur, Unchanged, nil
 		}
 		s.records[i].URL = rec.URL
-		s.records[i].Token = rec.Token
+		if rec.Token != "" {
+			s.records[i].Token = rec.Token
+		}
 		if rec.NodeID != "" {
 			s.records[i].NodeID = rec.NodeID
 		}

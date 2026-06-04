@@ -81,6 +81,31 @@ func TestImportLegacyDiscoverySkipsUnreferenced(t *testing.T) {
 	}
 }
 
+// A host that was both added manually (with a token) and present in the
+// legacy cache must keep its token through the migration — importing it
+// token-less must not knock it back to "auth needed".
+func TestImportLegacyDiscoveryPreservesExistingToken(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(dir)
+	s.AddOrGet(Record{Name: "laptop", URL: "https://gmux-laptop.ts.net", Token: "keep-me", NodeID: "node_l"})
+
+	cache := `{"devices":{"n1":{"fqdn":"gmux-laptop.ts.net","peer_name":"laptop","is_gmux":true}}}`
+	if err := os.WriteFile(filepath.Join(dir, legacyDiscoveryFile), []byte(cache), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.ImportLegacyDiscovery(dir, map[string]bool{"laptop": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("imported = %d, want 0 (host already present)", n)
+	}
+	recs := s.List()
+	if len(recs) != 1 || recs[0].Token != "keep-me" || recs[0].NodeID != "node_l" {
+		t.Fatalf("existing token/node_id must survive a token-less import, got %+v", recs)
+	}
+}
+
 func TestImportLegacyDiscoveryAbsent(t *testing.T) {
 	s, _ := Open(t.TempDir())
 	if n, err := s.ImportLegacyDiscovery(t.TempDir(), map[string]bool{"x": true}); err != nil || n != 0 {
@@ -185,6 +210,23 @@ func TestAddOrGetUpsertsByURLWhenNodeIDUnknown(t *testing.T) {
 	}
 	if len(s.List()) != 1 {
 		t.Fatalf("URL match must not append, got %d records", len(s.List()))
+	}
+}
+
+// URL matching ignores a trailing slash, so re-adding the same host with
+// a "/"-suffixed URL upserts rather than creating a second record.
+func TestAddOrGetUpsertMatchesURLIgnoringTrailingSlash(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	s.AddOrGet(Record{Name: "oldbox", URL: "https://oldbox.ts.net"})
+	_, outcome, err := s.AddOrGet(Record{Name: "oldbox", URL: "https://oldbox.ts.net/", Token: "secret", NodeID: "node_ob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Updated {
+		t.Fatalf("trailing-slash variant should match and update, got %v", outcome)
+	}
+	if len(s.List()) != 1 {
+		t.Fatalf("trailing-slash variant must not append, got %d records", len(s.List()))
 	}
 }
 

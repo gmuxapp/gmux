@@ -351,8 +351,12 @@ function HostsTab() {
     if (!u) { setError('Enter a host URL.'); return }
     setBusy(true); setError(''); setNotice('')
     try {
-      const { name, alreadyConnected } = await connectHost(u, token.trim())
-      setNotice(alreadyConnected ? `Already connected to ${name}.` : `Connected to ${name}.`)
+      const { name, alreadyConnected, updated } = await connectHost(u, token.trim())
+      setNotice(
+        alreadyConnected ? `Already connected to ${name}.`
+          : updated ? `Reconnected to ${name}.`
+            : `Connected to ${name}.`,
+      )
       setUrl(''); setToken('')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not connect.')

@@ -913,19 +913,21 @@ export function parseConnectURL(input: string): { url: string; token: string } |
 export async function connectHost(
   url: string,
   token: string,
-): Promise<{ name: string; alreadyConnected: boolean }> {
+): Promise<{ name: string; alreadyConnected: boolean; updated: boolean }> {
   const resp = await fetch('/v1/peers', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, token }),
   })
   const body = await resp.json().catch(() => ({})) as {
-    peer?: { name?: string }; already_connected?: boolean; error?: { message?: string }
+    peer?: { name?: string }; already_connected?: boolean; updated?: boolean; error?: { message?: string }
   }
   if (!resp.ok) {
     throw new Error(body.error?.message || `Could not connect (${resp.status})`)
   }
-  return { name: body.peer?.name ?? '', alreadyConnected: !!body.already_connected }
+  // updated: the host was already known and its URL/token were refreshed
+  // (the "Add token" path). alreadyConnected: known with identical creds.
+  return { name: body.peer?.name ?? '', alreadyConnected: !!body.already_connected, updated: !!body.updated }
 }
 
 /** Disconnect a manually-added host: DELETE /v1/peers/{name}. */
