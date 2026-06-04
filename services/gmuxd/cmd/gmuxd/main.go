@@ -584,6 +584,12 @@ func serve(stderr io.Writer) int {
 	// State directory for persistent files (projects.json, auth-token, etc).
 	stateDir := paths.StateDir()
 
+	// Remove the legacy tailscale-discovery.json cache. Tailscale
+	// autodiscovery was removed in ADR 0008 (token-everywhere made
+	// auto-connect unsafe); nothing reads or writes this file anymore, so
+	// clean it up on first start after the upgrade. Best-effort.
+	_ = os.Remove(filepath.Join(stateDir, "tailscale-discovery.json"))
+
 	// Stable, opaque per-node identity (ADR 0007). Generated once and
 	// persisted alongside the auth token; used for peer dedup, never
 	// shown or routed.
