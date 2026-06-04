@@ -23,6 +23,7 @@ import {
   unresolvedHosts, removeReferences,
 } from './store'
 import { HostSuffix } from './host-suffix'
+import { hostStatus } from './host-status'
 import type { ProjectItem, DiscoveredProject, MatchRule, Folder, PeerInfo } from './types'
 import type { UnresolvedHost } from './references'
 
@@ -334,6 +335,16 @@ function HostsTab() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const tokenInputRef = useRef<HTMLInputElement>(null)
+
+  // "Add token" on an auth-needed host: pre-fill the connect form with
+  // its URL and focus the token field. Connecting re-runs POST /v1/peers,
+  // which upserts the token onto the existing record (matched by URL).
+  const handleAddToken = useCallback((peerUrl: string) => {
+    setUrl(peerUrl); setToken(''); setError('')
+    setNotice("Paste this host's token and press Connect.")
+    requestAnimationFrame(() => tokenInputRef.current?.focus())
+  }, [])
 
   const handleConnect = useCallback(async () => {
     const u = url.trim()
@@ -409,6 +420,7 @@ function HostsTab() {
                   // Only manual peers can be disconnected; tailscale and
                   // devcontainer peers are managed automatically.
                   onRemove={g.key === 'manual' ? () => handleRemove(p.name, p.node_id) : undefined}
+                  onAddToken={g.key === 'manual' ? () => handleAddToken(p.url) : undefined}
                 />
               ))}
             </div>
@@ -443,6 +455,7 @@ function HostsTab() {
           </button>
         </div>
         <input
+          ref={tokenInputRef}
           class="mp-filter-input mp-host-token"
           type="password"
           placeholder="Token (only if the URL has none)"
@@ -498,7 +511,7 @@ function UnresolvedHostRow({ host }: { host: UnresolvedHost }) {
 }
 
 function HostRow({
-  name, self, status, sessionCount, version, lastError, local, onRemove,
+  name, self, status, sessionCount, version, lastError, local, onRemove, onAddToken,
 }: {
   name: string
   self?: boolean
@@ -508,33 +521,41 @@ function HostRow({
   lastError?: string
   local?: boolean
   onRemove?: () => void
+  onAddToken?: () => void
 }) {
-  const connected = status === 'connected'
+  const st = hostStatus(status, lastError)
   return (
     <div class="host-row">
       <div class="host-row-main">
-        <span class={`host-status-dot${connected ? ' connected' : ''}`} aria-hidden="true" />
+        <span class={`host-status-dot ${st.kind}`} aria-hidden="true" />
         {self && <span class="host-self-tag">this host</span>}
         <span class="host-name">
           {name}
           {local && <span class="host-local-tag">local</span>}
         </span>
         <div class="host-meta">
-          <span class="host-status-label">{status}</span>
+          <span class={`host-status-label ${st.kind}`}>{st.label}</span>
           <span class="host-sep">·</span>
           <span>{sessionCount} session{sessionCount === 1 ? '' : 's'}</span>
           {version && <><span class="host-sep">·</span><span>v{version}</span></>}
         </div>
+        {st.kind === 'auth' && onAddToken && (
+          <button
+            class="host-add-token"
+            title="Supply this host's access token"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onAddToken() }}
+          >Add token</button>
+        )}
         {onRemove && (
           <button
             class="host-remove"
-            title="Disconnect host"
+            title="Remove host"
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRemove() }}
           >×</button>
         )}
       </div>
-      {!connected && lastError && (
-        <div class="host-error">{lastError}</div>
+      {st.kind === 'offline' && st.detail && (
+        <div class="host-error">{st.detail}</div>
       )}
     </div>
   )
