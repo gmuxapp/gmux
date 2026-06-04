@@ -26,9 +26,8 @@ Each machine (local and remote) gets a card with a status indicator, session cou
 | **Green dot** | Connected, sessions visible |
 | **Pulsing dot** | Connecting to peer |
 | **Red ✗** | Peer disconnected (shows error reason) |
-| **Dimmed card** | Offline: a tailnet device that looks like a gmux instance but is currently unreachable |
 
-Offline cards appear for tailnet devices whose hostname matches the configured tsnet prefix (e.g. `gmux-dev`). They're informational only: no launch buttons, no session count. Once the device comes online and is confirmed as gmux, it becomes a full peer and persists across restarts.
+Hosts you add via **Settings → Hosts → Connect to host** persist across restarts and reconnect automatically. A disconnected host keeps its card (with the last error) until you remove it. gmux does not auto-discover tailnet machines — adding one is an explicit, token-authenticated step (see [Multi-Machine](/multi-machine/) and [ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
 
 Connected peers show launch buttons for each configured adapter, just like the local host.
 

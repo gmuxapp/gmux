@@ -1162,6 +1162,26 @@ body {
   opacity: 1;
   border: 1px solid var(--border);
 }
+/* Explicit text button: removing references is destructive (it drops the
+   project links to this host), so it's spelled out, not a bare ×. */
+.host-remove-refs {
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-family: 'Source Sans 3', sans-serif;
+  font-weight: 500;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.host-remove-refs:hover {
+  border-color: var(--status-error);
+  color: var(--status-error);
+}
+.host-remove-refs:disabled { opacity: 0.5; cursor: default; }
 .mp-host-token {
   margin-top: 8px;
 }
@@ -1440,6 +1460,12 @@ body {
   margin-top: 5px;
   padding-left: 2px;
   line-height: 1.4;
+}
+
+/* Instruction line shown *above* the Connect-to-host inputs. */
+.mp-connect-help {
+  margin-top: 0;
+  margin-bottom: 8px;
 }
 
 .mp-manual-error {

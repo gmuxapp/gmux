@@ -44,10 +44,10 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsauth"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsdiscovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/update"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/wsproxy"
+	qrterminal "github.com/mdp/qrterminal/v3"
 	"nhooyr.io/websocket"
 )
 
@@ -585,6 +585,12 @@ func serve(stderr io.Writer) int {
 	// State directory for persistent files (projects.json, auth-token, etc).
 	stateDir := paths.StateDir()
 
+	// Remove the legacy tailscale-discovery.json cache. Tailscale
+	// autodiscovery was removed in ADR 0008 (token-everywhere made
+	// auto-connect unsafe); nothing reads or writes this file anymore, so
+	// clean it up on first start after the upgrade. Best-effort.
+	_ = os.Remove(filepath.Join(stateDir, "tailscale-discovery.json"))
+
 	// Stable, opaque per-node identity (ADR 0007). Generated once and
 	// persisted alongside the auth token; used for peer dedup, never
 	// shown or routed.
@@ -600,11 +606,10 @@ func serve(stderr io.Writer) int {
 		log.Fatalf("FATAL: %v", err)
 	}
 
-	// peerManager and tsDiscovery are initialized later after config is
-	// loaded. Closures (reconcileProjectStamps, buildSessionInfos call
-	// sites) capture these pointers so handlers work once they're set.
+	// peerManager is initialized later after config is loaded. Closures
+	// (reconcileProjectStamps, buildSessionInfos call sites) capture this
+	// pointer so handlers work once it's set.
 	var peerManager *peering.Manager
-	var tsDiscovery *tsdiscovery.Watcher
 
 	// Project manager handles concurrent access to projects.json and
 	// auto-assignment of sessions to projects.
@@ -748,7 +753,7 @@ func serve(stderr io.Writer) int {
 		if v := updateChecker.Available(); v != "" {
 			data["update_available"] = v
 		}
-		if peers := appendOfflinePeers(peerManager, tsDiscovery); len(peers) > 0 {
+		if peers := currentPeers(peerManager); len(peers) > 0 {
 			data["peers"] = peers
 		}
 
@@ -1812,7 +1817,7 @@ func serve(stderr io.Writer) int {
 			health := composeHealth()
 			return snapshot.WorldPayload{
 				Projects:        items,
-				Peers:           appendOfflinePeers(peerManager, tsDiscovery),
+				Peers:           currentPeers(peerManager),
 				Health:          health,
 				Launchers:       launchConfig.Launchers,
 				DefaultLauncher: launchConfig.DefaultLauncher,
@@ -2054,36 +2059,16 @@ func serve(stderr io.Writer) int {
 		if tsSeed == "" {
 			tsSeed = tsauth.SeedFromHostname(hostname)
 		}
+		// The tailnet handler is the *token-authenticated* handler, not the
+		// raw mux: tsauth's identity check is the outer gate (only the
+		// owner's tailnet login may reach the prompt) and netauth's bearer
+		// token is the inner gate (ADR 0008). A passing tailnet identity no
+		// longer grants the full API on its own.
 		tsListener = tsauth.Start(tsauth.Config{
 			Hostname: tsSeed,
 			Allow:    cfg.Tailscale.Allow,
-		}, stateDir, mux)
+		}, stateDir, authedHandler)
 		defer tsListener.Shutdown()
-
-		// Start tailscale peer discovery once the listener is ready.
-		if cfg.Discovery.Tailscale && peerManager != nil {
-			tsDiscovery = tsdiscovery.New(tsdiscovery.Config{
-				Manager:        peerManager,
-				StateDir:       stateDir,
-				ManualPeerURLs: tsdiscovery.ManualPeerURLs(manualPeers),
-				// HostnamePrefix defaults to "gmux" in tsdiscovery.
-			})
-			tsDiscoveryCtx, tsDiscoveryCancel := context.WithCancel(context.Background())
-			defer tsDiscoveryCancel()
-			go func() {
-				select {
-				case <-tsListener.Ready():
-				case <-tsDiscoveryCtx.Done():
-					return
-				}
-				tsDiscovery.SetTailscale(
-					tsListener.LocalClient(),
-					tsListener.Transport(),
-					tsListener.FQDN(),
-				)
-				tsDiscovery.Start()
-			}()
-		}
 	}
 
 	// ── Signal handling for graceful shutdown ──
@@ -2097,9 +2082,6 @@ func serve(stderr io.Writer) int {
 		log.Printf("shutdown requested — shutting down")
 	}
 
-	if tsDiscovery != nil {
-		tsDiscovery.Stop()
-	}
 	if dcWatcher != nil {
 		dcWatcher.Stop()
 	}
@@ -2237,24 +2219,14 @@ func composePeerProjects(mgr *peering.Manager) map[string][]peering.SpokeProject
 	return out
 }
 
-// appendOfflinePeers merges active peers from the manager with offline
-// discovered peers from tailscale discovery. Returns nil if no peers.
-func appendOfflinePeers(mgr *peering.Manager, disc *tsdiscovery.Watcher) []peering.PeerInfo {
-	var peers []peering.PeerInfo
+// currentPeers returns the manager's active peer status list, or nil if
+// there are none. (Offline tailnet-discovery hints were removed with
+// tsdiscovery in ADR 0008.)
+func currentPeers(mgr *peering.Manager) []peering.PeerInfo {
 	if mgr != nil && mgr.HasPeers() {
-		peers = mgr.PeerStatus()
+		return mgr.PeerStatus()
 	}
-	if disc != nil {
-		for _, op := range disc.OfflinePeers() {
-			peers = append(peers, peering.PeerInfo{
-				Name:   op.Name,
-				URL:    "https://" + op.FQDN,
-				Status: "offline",
-				Source: config.SourceTailscale,
-			})
-		}
-	}
-	return peers
+	return nil
 }
 
 func statusDot(status string) string {
@@ -2292,8 +2264,9 @@ func runAuth(stdout, stderr io.Writer) int {
 	var health struct {
 		OK   bool `json:"ok"`
 		Data struct {
-			Listen    string `json:"listen"`
-			AuthToken string `json:"auth_token"`
+			Listen       string `json:"listen"`
+			AuthToken    string `json:"auth_token"`
+			TailscaleURL string `json:"tailscale_url"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil || !health.OK {
@@ -2310,7 +2283,20 @@ func runAuth(stdout, stderr io.Writer) int {
 
 	_, _ = fmt.Fprintf(stdout, "Listen:     %s\n", health.Data.Listen)
 	_, _ = fmt.Fprintf(stdout, "Auth token: %s\n", health.Data.AuthToken)
-	_, _ = fmt.Fprintf(stdout, "\nOpen this URL to authenticate:\n  %s\n", url)
+	_, _ = fmt.Fprintf(stdout, "\nOpen this URL to authenticate in a browser on this machine:\n  %s\n", url)
+
+	// When tailscale is enabled, the same token-in-URL form over the
+	// tailnet FQDN is the connect string for pairing from another gmux
+	// machine: paste it into "Connect to host", which splits it back into
+	// {url, token} (ADR 0008 — tailnet peers are added manually).
+	if health.Data.TailscaleURL != "" {
+		connectURL := fmt.Sprintf("%s/auth/login?token=%s", strings.TrimRight(health.Data.TailscaleURL, "/"), health.Data.AuthToken)
+		_, _ = fmt.Fprintf(stdout, "\nTo add this host from another gmux machine, paste this into \"Connect to host\":\n  %s\n", connectURL)
+		// Inline QR for the same connect URL: scan from a phone on the
+		// tailnet to open gmux authenticated, no typing the token.
+		_, _ = fmt.Fprintf(stdout, "\nOr scan to open gmux on a device on your tailnet:\n")
+		qrterminal.GenerateHalfBlock(connectURL, qrterminal.L, stdout)
+	}
 
 	return 0
 }
@@ -2465,8 +2451,8 @@ func probePeerHealth(ctx context.Context, baseURL, token string) (nodeID, name s
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&env); err != nil {
 		return "", "", fmt.Errorf("parsing health: %w", err)
 	}
-	// Confirm it's actually gmuxd (parity with tsdiscovery.probe), so a
-	// stray HTTP endpoint can't be registered as a peer.
+	// Confirm it's actually gmuxd, so a stray HTTP endpoint can't be
+	// registered as a peer.
 	if !env.OK || env.Data.Service != "gmuxd" {
 		return "", "", fmt.Errorf("host is not running gmux")
 	}

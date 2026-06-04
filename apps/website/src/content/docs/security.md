@@ -53,13 +53,16 @@ For remote access without managing certificates yourself, use [Tailscale](/remot
 
 Remote access is available via a separate, optional Tailscale (tsnet) listener. When enabled, gmuxd joins your tailnet and serves on `https://hostname.your-tailnet.ts.net`. See [Remote Access](/remote-access) for setup.
 
-This listener combines three protections:
+This listener combines four protections:
 
 - **Network isolation.** The tsnet listener only accepts connections through the Tailscale network. It is not reachable from the public internet or local networks.
 - **Encrypted transport.** HTTPS only, using certificates issued automatically by Let's Encrypt through Tailscale. No HTTP fallback, no TLS downgrade.
-- **Identity verification.** Every request is authenticated by calling Tailscale's local `WhoIs` API, which returns the connecting peer's cryptographic identity. The peer's **login name** (e.g. `user@github`) is checked against the configured allow list. This identity is derived from Tailscale's WireGuard key exchange and cannot be forged without possessing the peer's private key.
+- **Identity verification (outer gate).** Every request is authenticated by calling Tailscale's local `WhoIs` API, which returns the connecting peer's cryptographic identity. The peer's **login name** (e.g. `user@github`) is checked against the configured allow list. This identity is derived from Tailscale's WireGuard key exchange and cannot be forged without possessing the peer's private key.
+- **Token authorization (inner gate).** Passing the allow list lets you *reach* the host; the request must also carry the host's bearer token, exactly like the localhost listener. Identity is necessary but not sufficient ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
 
-The Tailscale account that owns the node is automatically added to the allow list at startup. The minimal config (`enabled = true`) gives access to you and only you. Additional login names in the `allow` list are checked strictly; there is no "allow all" default. Denied connections are logged with the peer's identity for auditing.
+The two-gate design is deliberate. A tailnet routinely mixes trust levels — a laptop, a phone, a throwaway container running an untrusted agent — yet they may all authenticate as the same owner. If identity alone granted the full API, a single compromised node (e.g. a container escape) could launch shells and inject keystrokes on every other gmux machine on the tailnet. Requiring the host's token means a node can only drive hosts whose token it holds: your machine holds a container's token, never the reverse, so the compromise can't pivot back. For the same reason, **tailscale autodiscovery was removed** — auto-connecting peers without a token is exactly the hole the token closes.
+
+The Tailscale account that owns the node is automatically added to the allow list at startup. Additional login names in the `allow` list are checked strictly; there is no "allow all" default. Denied connections are logged with the peer's identity for auditing.
 
 ### Allow list design
 
@@ -81,7 +84,7 @@ The file remains the primary storage. Environment variables are inherited by chi
 
 The [`examples/`](https://github.com/gmuxapp/gmux/tree/main/examples) directory has ready-to-run Docker Compose setups showing how to handle auth in common deployment scenarios: [Tailscale](/running-in-docker/#tailscale-recommended), [WireGuard](/running-in-docker/#wireguard), and [Traefik with OIDC](/running-in-docker/#reverse-proxy-with-oidc-traefik--pocketid).
 
-**For easy access from other devices**, use [Tailscale remote access](/remote-access). It gives you HTTPS with automatic certificates and cryptographic identity verification, without any tokens to manage.
+**For easy access from other devices**, use [Tailscale remote access](/remote-access). It gives you HTTPS with automatic certificates and cryptographic identity verification; access still requires the host's token (run `gmuxd auth` to get its connect URL).
 
 ## Config validation
 

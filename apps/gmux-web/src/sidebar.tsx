@@ -259,7 +259,7 @@ function FolderGroup({
           class={`folder-name${isCurrent ? ' current' : ''}${folder.missing ? ' missing' : ''}${folder.unresolved ? ' unresolved' : ''}`}
           href={href}
           title={folder.unresolved
-            ? `Host “${folder.peer}” isn't on your tailnet or manually added — it may have been renamed or removed. Open Settings → Hosts to remap or remove it.`
+            ? `Host “${folder.peer}” isn't a connected or manually-added host — it may have been renamed or removed. Open Settings → Hosts to remap or remove it.`
             : folder.missing
             ? `${folder.name} no longer exists on ${folder.peer}; remove via the home page`
             : `Open ${folder.name} hub`}

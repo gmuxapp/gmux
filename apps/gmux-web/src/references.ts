@@ -21,8 +21,8 @@
 //      name match against a peer that has a node_id yields a backfill,
 //      so the reference becomes rename-proof going forward.
 //   3. unresolved — no roster peer matches by id or name. The host
-//      isn't on the tailnet (online or offline), manually added, or a
-//      devcontainer; it may have been renamed or removed.
+//      isn't a current peer (manually added or a devcontainer); it may
+//      have been renamed or removed.
 
 import type { PeerInfo, ProjectItem } from './types'
 
@@ -108,8 +108,8 @@ export function resolveReferences(
         }
         continue
       }
-      // node_id set but no live peer reports it (host offline and never
-      // re-probed, or gone) — fall through to a name match.
+      // node_id set but no live peer reports it (host not currently a
+      // peer, or gone) — fall through to a name match.
     }
 
     // 2. name match: legacy references, or a reference whose stored
@@ -201,4 +201,19 @@ export function removeReferenceItems(
 ): ProjectItem[] {
   const scope = new Set(slugs)
   return items.filter(p => !(p.peer === peer && scope.has(p.slug)))
+}
+
+/** Drop every project reference to a host being removed from the
+ *  roster, matched by node_id (rename-proof) or cached name. Removing a
+ *  host is deliberate, so its references go with it rather than
+ *  lingering as "Referenced but not found". Owned projects (no peer) and
+ *  references to other hosts are left untouched. */
+export function removeHostReferenceItems(
+  items: readonly ProjectItem[],
+  name: string,
+  nodeId?: string,
+): ProjectItem[] {
+  return items.filter(
+    p => !(p.peer !== undefined && (p.peer === name || (nodeId !== undefined && p.node_id === nodeId))),
+  )
 }

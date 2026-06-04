@@ -180,17 +180,23 @@ Peers:
     https://peer.example.com
 ```
 
-### `gmuxd auth`
-
-Show the TCP listen address, auth token, and a ready-to-open login URL. Useful for connecting from another device on the local network.
+Show the TCP listen address, auth token, and ready-to-open URLs. Useful for connecting from another device, and for pairing another gmux machine.
 
 ```
 Listen:     127.0.0.1:8790
 Auth token: abc123...
 
-Open this URL to authenticate:
+Open this URL to authenticate in a browser on this machine:
   http://127.0.0.1:8790/auth/login?token=abc123...
+
+To add this host from another gmux machine, paste this into "Connect to host":
+  https://gmux-host.your-tailnet.ts.net/auth/login?token=abc123...
+
+Or scan to open gmux on a device on your tailnet:
+  [inline QR code]
 ```
+
+The second URL appears only when Tailscale is enabled. It is the **connect URL** for pairing: paste it into **Settings → Hosts → Connect to host** on another machine and it splits into the host URL and token, or scan the inline QR from a phone on your tailnet to open gmux authenticated. A token is required for every host — tailnet reachability alone does not authorize ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
 
 ### `gmuxd remote`
 

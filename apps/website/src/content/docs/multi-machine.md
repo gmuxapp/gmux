@@ -16,20 +16,18 @@ browser --> gmux-laptop (hub)
 
 Spokes need zero configuration changes. The hub authenticates with each spoke's bearer token and subscribes to its event stream. Actions like kill, resume, and launch are forwarded transparently.
 
-## Tailscale auto-discovery
+## Adding a tailnet machine
 
-When [Tailscale](/remote-access) is enabled, gmuxd automatically discovers other gmux instances on the same tailnet. No manual peer configuration is needed: install gmux on two machines, enable Tailscale on both, and they find each other.
+gmux does **not** auto-connect machines on your tailnet. Being on the same tailnet lets a machine *reach* another, but connecting still requires that host's bearer token, exactly like any other peer ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)). This keeps a single compromised node (say, a container running an untrusted agent) from driving every other machine on the tailnet.
 
-gmuxd subscribes to tailnet changes via Tailscale's `WatchIPNBus` API and reacts immediately when devices come online. Each new device is probed with a `/v1/health` request to confirm it's running gmux, then added as a peer. Results are cached so known devices are re-registered instantly on restart without re-probing.
+To add a tailnet machine, run `gmuxd auth` on it and copy the **connect URL** it prints:
 
-Authentication is handled by Tailscale identity. The tailscale listener uses `WhoIs` to verify the connecting peer belongs to the same user. No bearer tokens are exchanged.
-
-To disable auto-discovery while keeping remote access:
-
-```toml
-[discovery]
-tailscale = false
 ```
+To add this host from another gmux machine, paste this into "Connect to host":
+  https://gmux-server.your-tailnet.ts.net/auth/login?token=…
+```
+
+Then paste it into **Settings → Hosts → Connect to host** (see below). The token rides in the URL, so it's one paste.
 
 ## Devcontainer auto-discovery
 
@@ -45,9 +43,9 @@ The host gmuxd detects the container via Docker events, reads the auth token, an
 
 ## Connecting to a host manually
 
-For machines that aren't auto-discovered (different tailnet, reachable by URL/IP), open **Settings → Hosts → Connect to host** and enter the host's URL, e.g. `https://gmux-server.your-tailnet.ts.net`. Leave the token blank when the host is on your own tailnet (it authenticates by identity); otherwise paste its auth token.
+Open **Settings → Hosts → Connect to host**. Paste the connect URL from `gmuxd auth` (it splits into the URL and token fields automatically), or enter the host's URL (e.g. `https://gmux-server.your-tailnet.ts.net`) and its token separately. A token is required for every host, tailnet or not.
 
-gmux probes the host, adopts the name it reports about itself (no name to assign), and saves the connection to `peers.json` in the state directory. If a different host already uses that name, gmux suffixes it (`server-2`) for you. The hub connects immediately and reconnects with exponential backoff on failure; manual and auto-discovered peers use the same protocol.
+gmux probes the host, adopts the name it reports about itself (no name to assign), and saves the connection to `peers.json` in the state directory. If a different host already uses that name, gmux suffixes it (`server-2`) for you. The hub connects immediately and reconnects with exponential backoff on failure; every peer uses the same token-authenticated protocol.
 
 There is no `[[peers]]` config block (removed in [ADR 0007](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0007-host-identity-and-peer-urls.md)) — peers are runtime state managed from the UI.
 

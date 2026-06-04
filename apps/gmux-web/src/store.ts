@@ -19,7 +19,7 @@ import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects } from './projects'
-import { resolveReferences, remapReferenceItems, removeReferenceItems, refKey, type UnresolvedHost } from './references'
+import { resolveReferences, remapReferenceItems, removeReferenceItems, removeHostReferenceItems, refKey, type UnresolvedHost } from './references'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS, MOCK_PEERS, MOCK_HEALTH } from './mock-data/index'
@@ -889,6 +889,23 @@ export async function addPeerReference(peer: string, slug: string): Promise<void
   await putProjects([...existing, node_id ? { peer, slug, node_id } : { peer, slug }])
 }
 
+/** Parse a pasted connect URL of the form
+ *  `https://host[/auth/login]?token=<token>` (printed by `gmuxd auth`)
+ *  into its peer URL (the origin) and token. Returns null when the
+ *  input has no `token` query param so callers can treat it as a plain
+ *  URL and use the separate token field (ADR 0008). */
+export function parseConnectURL(input: string): { url: string; token: string } | null {
+  let parsed: URL
+  try {
+    parsed = new URL(input.trim())
+  } catch {
+    return null
+  }
+  const token = parsed.searchParams.get('token')
+  if (!token) return null
+  return { url: parsed.origin, token }
+}
+
 /** Connect to a host (ADR 0007): POST /v1/peers probes the target,
  *  dedups by node_id, and persists it to peers.json. Returns the name
  *  the peer was stored under (may be suffixed on a collision) and
@@ -918,6 +935,16 @@ export async function disconnectHost(name: string): Promise<void> {
     const body = await resp.json().catch(() => ({})) as { error?: { message?: string } }
     throw new Error(body.error?.message || `Could not disconnect (${resp.status})`)
   }
+}
+
+/** Remove a manual host from the roster and drop every project
+ *  reference to it. Removal is deliberate, so its references go too —
+ *  otherwise they'd resurface as "Referenced but not found" the moment
+ *  the host left the roster. */
+export async function removeHost(name: string, nodeId?: string): Promise<void> {
+  await disconnectHost(name)
+  const pruned = removeHostReferenceItems(projects.value, name, nodeId)
+  if (pruned.length !== projects.value.length) await putProjects(pruned)
 }
 
 /** Remove a reference item from local projects.json. */

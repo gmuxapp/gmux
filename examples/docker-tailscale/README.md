@@ -25,7 +25,25 @@ docker logs dev 2>&1 | grep "login.tailscale.com"
 
 # 5. Open in browser
 # https://gmux-dev.your-tailnet.ts.net
+#    You'll be asked for the access token (see "Connecting" below).
 ```
+
+## Connecting from your main machine
+
+The container is a peer like any other: being on your tailnet lets you
+reach it, but you authorize the connection with its token. Print the
+container's connect URL and paste it into **Settings → Hosts → Connect
+to host** on your main gmux:
+
+```bash
+docker exec dev gmuxd auth
+# copy the "Connect to host" URL it prints (carries the token)
+```
+
+This direction — your machine holds the container's token — is the only
+one that exists: the container never receives your machine's token, so a
+compromise inside the container (e.g. an untrusted agent) can't drive
+your other machines ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
 
 ## What's included
 

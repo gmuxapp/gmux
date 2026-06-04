@@ -110,6 +110,28 @@ hostname = "project-a"
 	}
 }
 
+// discovery.tailscale was removed in ADR 0008 (tailscale autodiscovery
+// deleted). A host upgrading with the old key set must keep loading, not
+// brick on an "unknown key" error.
+func TestLoadIgnoresRemovedDiscoveryTailscale(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+port = 8125
+[discovery]
+tailscale = false
+devcontainers = true
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("deprecated discovery.tailscale should be ignored, got error: %v", err)
+	}
+	if cfg.Port != 8125 || !cfg.Discovery.Devcontainers {
+		t.Errorf("rest of config should still load, got %+v", cfg)
+	}
+}
+
 func TestLoadIgnoresRemovedPeers(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)

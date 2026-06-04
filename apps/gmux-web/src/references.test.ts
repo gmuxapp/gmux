@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveReferences, remapReferenceItems, removeReferenceItems, refKey } from './references'
+import { resolveReferences, remapReferenceItems, removeReferenceItems, removeHostReferenceItems, refKey } from './references'
 import type { PeerInfo, ProjectItem } from './types'
 
 function peer(name: string, node_id?: string): PeerInfo {
@@ -153,5 +153,24 @@ describe('removeReferenceItems', () => {
     // "legacy" slug must not delete the working node_id-anchored "apps".
     const items = [ref('hs', 'apps', 'node_hs'), ref('hs', 'legacy')]
     expect(removeReferenceItems(items, 'hs', ['legacy'])).toEqual([ref('hs', 'apps', 'node_hs')])
+  })
+})
+
+describe('removeHostReferenceItems', () => {
+  it('drops every reference to the host by name, keeping owned and other hosts', () => {
+    const items = [owned('gmux'), ref('hs', 'apps'), ref('hs', 'home'), ref('ft', 'dots')]
+    expect(removeHostReferenceItems(items, 'hs')).toEqual([owned('gmux'), ref('ft', 'dots')])
+  })
+
+  it('matches by node_id even when the cached name differs (post-rename)', () => {
+    // The reference was stamped under the old name 'hs' but the host is
+    // now removed under its current name 'gmux-hs'; node_id catches it.
+    const items = [ref('hs', 'apps', 'node_hs'), ref('ft', 'dots', 'node_ft')]
+    expect(removeHostReferenceItems(items, 'gmux-hs', 'node_hs')).toEqual([ref('ft', 'dots', 'node_ft')])
+  })
+
+  it('leaves everything untouched when nothing references the host', () => {
+    const items = [owned('gmux'), ref('ft', 'dots')]
+    expect(removeHostReferenceItems(items, 'hs', 'node_hs')).toEqual(items)
   })
 })

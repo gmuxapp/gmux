@@ -109,7 +109,7 @@ func TestLoginPageServedWithoutAuth(t *testing.T) {
 	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
 		t.Errorf("Content-Type = %q, want text/html", ct)
 	}
-	if !strings.Contains(rr.Body.String(), "Access Token") {
+	if !strings.Contains(rr.Body.String(), `name="token"`) {
 		t.Error("login page should contain token input")
 	}
 }

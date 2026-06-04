@@ -86,7 +86,7 @@ Each machine joins the tailnet under `gmux-<its-hostname>`, derived from the OS 
 
 ### 4. Connect
 
-On your other device, open `https://gmux.your-tailnet.ts.net`. The connection is HTTPS with a valid certificate.
+On your other device, open `https://gmux.your-tailnet.ts.net`. The connection is HTTPS with a valid certificate. You'll be asked for the host's access token (run `gmuxd auth` on the host to get it, or scan its QR/connect URL) — being on the tailnet lets you *reach* the host, but the token is what authorizes you ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
 
 :::note
 The Tailscale listener is independent from the localhost listener. Local access (`127.0.0.1:8790`) always works, so you can't lock yourself out by misconfiguring Tailscale.
@@ -94,7 +94,7 @@ The Tailscale listener is independent from the localhost listener. Local access 
 
 ## Sharing access
 
-Every connection is verified by Tailscale's cryptographic identity and checked against an allow list. Your primary account is allowed automatically. See [Security](/security) for the full verification design.
+Every connection over the tailnet is gated twice: Tailscale's cryptographic identity is checked against an allow list (your primary account is allowed automatically), **and** the request must carry the host's bearer token. The allow list is the outer gate — who may reach the host at all — not the access decision on its own ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)). See [Security](/security) for the full verification design.
 
 ### Adding your other accounts
 
