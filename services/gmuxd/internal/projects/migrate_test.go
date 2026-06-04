@@ -165,6 +165,43 @@ func TestV3References(t *testing.T) {
 	}
 }
 
+func TestLoadBacksUpBeforeMigration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, fileName)
+	bak := path + ".bak"
+
+	// A pre-version (v0/v1) file triggers a real migration → backup.
+	v1 := `{"items":[{"slug":"gmux","remote":"github.com/gmuxapp/gmux","paths":["/home/x/dev/gmux"]}]}`
+	if err := os.WriteFile(path, []byte(v1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got, err := os.ReadFile(bak)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", bak, err)
+	}
+	if string(got) != v1 {
+		t.Fatalf("backup should hold the verbatim pre-migration bytes, got %q", got)
+	}
+
+	// A file already at the current version is not backed up again.
+	os.Remove(bak)
+	current := `{"version":` + itoa(currentVersion) + `,"items":[]}`
+	if err := os.WriteFile(path, []byte(current), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := os.Stat(bak); !os.IsNotExist(err) {
+		t.Fatal("a current-version file should not be backed up")
+	}
+}
+
+func itoa(n int) string { return fmt.Sprintf("%d", n) }
+
 func TestMigrateRoundtrip(t *testing.T) {
 	// Save state, reload, verify identical.
 	dir := t.TempDir()

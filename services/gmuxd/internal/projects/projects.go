@@ -11,6 +11,7 @@ package projects
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -94,6 +95,13 @@ func Load(stateDir string) (*State, error) {
 		return nil, fmt.Errorf("projects: reading %s: %w", path, err)
 	}
 
+	// Before a real schema upgrade rewrites the file, snapshot the
+	// pre-migration bytes to projects.json.bak so the change is
+	// recoverable (notably across the 2.0 upgrade). Best-effort.
+	if onDiskVersion(data) < currentVersion {
+		backupFile(path, data)
+	}
+
 	// Run migrations on the raw JSON before unmarshaling into the
 	// current struct layout. This keeps each migration self-contained
 	// and independent of the Go types.
@@ -107,6 +115,29 @@ func Load(stateDir string) (*State, error) {
 		return nil, fmt.Errorf("projects: parsing %s: %w", path, err)
 	}
 	return &s, nil
+}
+
+// onDiskVersion peeks at the schema version of a raw projects.json
+// document. A missing or invalid version field is the original
+// pre-version format (0).
+func onDiskVersion(data []byte) int {
+	var doc struct {
+		Version int `json:"version"`
+	}
+	_ = json.Unmarshal(data, &doc)
+	return doc.Version
+}
+
+// backupFile writes the pre-migration bytes to path+".bak" (0600),
+// overwriting any earlier backup. Best-effort: a failure is logged but
+// never fatal — a missing backup must not stop projects.json loading.
+func backupFile(path string, original []byte) {
+	bak := path + ".bak"
+	if err := os.WriteFile(bak, original, 0o600); err != nil {
+		log.Printf("projects: could not write %s: %v", bak, err)
+		return
+	}
+	log.Printf("projects: backed up pre-migration state to %s", bak)
 }
 
 // Save writes the project state atomically to stateDir/projects.json.
