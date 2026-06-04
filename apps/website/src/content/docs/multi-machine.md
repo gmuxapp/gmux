@@ -55,11 +55,17 @@ A host's name is derived from Tailscale (or its OS hostname), so it can change �
 
 To prevent that, a reference is anchored on the host's stable, opaque node ID, not just its name. References you create from the UI capture that ID immediately, so a later rename is followed automatically and the projects stay put under the new name.
 
-If gmux can't match a reference to any current host — the host was renamed before it was anchored, or removed entirely — the reference is **not** silently dropped:
+If gmux can't match a reference to any current host — it's not in the roster because it was removed, or set up on a previous install — the reference is **not** silently dropped:
 
 - The sidebar shows the project muted, with a warning marker.
 - The settings gear gets a small red pip.
-- **Settings → Hosts → Referenced but not found** lists each unmatched host with the projects pointing at it. Pick the host's current name from **Remap to…** to repoint every reference at once (this re-anchors them on the node ID, so the same rename won't break them again), or remove the references if the host is gone for good.
+- **Settings → Hosts → Referenced but not found** lists each unmatched host with the projects pointing at it. Re-add the host under **Connect to host** (a manual peer's references are anchored on its node ID, so a later rename follows it automatically) and the references resolve again; otherwise remove them.
+
+Removing a host clears the references that pointed at it, so a deliberate removal leaves nothing behind here.
+
+## Upgrading from a version with tailnet autodiscovery
+
+Earlier versions auto-discovered gmux machines on your tailnet. [ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md) removed that, so on first start the daemon migrates the hosts **you had projects on** into the roster as **Auth needed** (it imports the old discovery cache, then deletes it). Click **Add token** on each in **Settings → Hosts** and paste its token (`gmuxd auth` on that host) to bring it online. Machines you never pinned a project on aren't carried over — add them with **Connect to host** if you want them. `projects.json` is backed up to `projects.json.bak` before any schema migration.
 
 ## Session namespacing
 
