@@ -53,14 +53,14 @@ type PeerConfig struct {
 	Local bool
 
 	// Source records how the peer was added, for UI grouping only (it
-	// has no effect on connection behavior). One of SourceTailscale,
-	// SourceDevcontainer, or SourceManual.
+	// has no effect on connection behavior). One of SourceDevcontainer
+	// or SourceManual. (Tailnet hosts are added manually since ADR 0008
+	// removed autodiscovery.)
 	Source string
 }
 
 // Peer sources (see PeerConfig.Source).
 const (
-	SourceTailscale    = "tailscale"    // auto-discovered on the tailnet
 	SourceDevcontainer = "devcontainer" // auto-discovered Docker devcontainer
 	SourceManual       = "manual"       // added via peers.json / POST /v1/peers
 )

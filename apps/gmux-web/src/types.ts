@@ -89,8 +89,8 @@ export interface Folder {
   missing?: boolean
   /**
    * True when this folder is a reference whose peer name matches no
-   * host in the current roster (not on the tailnet online/offline, not
-   * manually added, not a devcontainer). The host may have been
+   * host in the current roster (not a manually-added host and not a
+   * devcontainer). The host may have been
    * renamed or removed; the sidebar flags it and the Hosts tab offers
    * a remap/remove. Distinct from `missing` (peer connected, slug
    * gone) and from a disconnected-but-known peer. (refs #270)

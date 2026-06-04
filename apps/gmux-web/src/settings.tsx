@@ -367,7 +367,7 @@ function HostsTab() {
         <section class="mp-section">
           <div class="mp-section-label">Referenced but not found</div>
           <div class="mp-path-hint" style="margin-bottom:8px">
-            These hosts are referenced by your projects but aren't on your tailnet or manually added. They may have been renamed or removed. Remap each to a current host, or remove its references.
+            These hosts are referenced by your projects but aren't a current host (manually added or a devcontainer). They may have been renamed or removed. Remap each to a current host, or remove its references.
           </div>
           <div class="host-list">
             {unresolvedHosts.value.map(u => (
