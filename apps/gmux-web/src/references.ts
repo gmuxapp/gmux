@@ -202,3 +202,18 @@ export function removeReferenceItems(
   const scope = new Set(slugs)
   return items.filter(p => !(p.peer === peer && scope.has(p.slug)))
 }
+
+/** Drop every project reference to a host being removed from the
+ *  roster, matched by node_id (rename-proof) or cached name. Removing a
+ *  host is deliberate, so its references go with it rather than
+ *  lingering as "Referenced but not found". Owned projects (no peer) and
+ *  references to other hosts are left untouched. */
+export function removeHostReferenceItems(
+  items: readonly ProjectItem[],
+  name: string,
+  nodeId?: string,
+): ProjectItem[] {
+  return items.filter(
+    p => !(p.peer !== undefined && (p.peer === name || (nodeId !== undefined && p.node_id === nodeId))),
+  )
+}

@@ -19,7 +19,7 @@ import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects } from './projects'
-import { resolveReferences, remapReferenceItems, removeReferenceItems, refKey, type UnresolvedHost } from './references'
+import { resolveReferences, remapReferenceItems, removeReferenceItems, removeHostReferenceItems, refKey, type UnresolvedHost } from './references'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS, MOCK_PEERS, MOCK_HEALTH } from './mock-data/index'
@@ -935,6 +935,16 @@ export async function disconnectHost(name: string): Promise<void> {
     const body = await resp.json().catch(() => ({})) as { error?: { message?: string } }
     throw new Error(body.error?.message || `Could not disconnect (${resp.status})`)
   }
+}
+
+/** Remove a manual host from the roster and drop every project
+ *  reference to it. Removal is deliberate, so its references go too —
+ *  otherwise they'd resurface as "Referenced but not found" the moment
+ *  the host left the roster. */
+export async function removeHost(name: string, nodeId?: string): Promise<void> {
+  await disconnectHost(name)
+  const pruned = removeHostReferenceItems(projects.value, name, nodeId)
+  if (pruned.length !== projects.value.length) await putProjects(pruned)
 }
 
 /** Remove a reference item from local projects.json. */

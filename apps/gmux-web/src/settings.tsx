@@ -19,7 +19,7 @@ import {
   projects, discovered, peerProjects, peerStatusByName,
   addProject, addPeerReference, folders, updateProjects,
   removeProject, removePeerReference, localHostLabel,
-  health, peers, sessions, connectHost, disconnectHost, parseConnectURL,
+  health, peers, sessions, connectHost, removeHost, parseConnectURL,
   unresolvedHosts, remapReferences, removeReferences,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -350,13 +350,13 @@ function HostsTab() {
     }
   }, [url, token])
 
-  const handleRemove = useCallback(async (name: string) => {
+  const handleRemove = useCallback(async (name: string, nodeId?: string) => {
     setError(''); setNotice('')
     try {
-      await disconnectHost(name)
-      setNotice(`Disconnected from ${name}.`)
+      await removeHost(name, nodeId)
+      setNotice(`Removed ${name}.`)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not disconnect.')
+      setError(e instanceof Error ? e.message : 'Could not remove host.')
     }
   }, [])
 
@@ -367,7 +367,7 @@ function HostsTab() {
         <section class="mp-section">
           <div class="mp-section-label">Referenced but not found</div>
           <div class="mp-path-hint" style="margin-bottom:8px">
-            These hosts are referenced by your projects but aren't a current host (manually added or a devcontainer). They may have been renamed or removed. Remap each to a current host, or remove its references.
+            These projects reference a host that isn't in your roster. If it's a host you still have, re-add it under <strong>Connect to host</strong> below and its references will resolve again automatically. Otherwise, remap them to a current host or remove them.
           </div>
           <div class="host-list">
             {unresolvedHosts.value.map(u => (
@@ -408,7 +408,7 @@ function HostsTab() {
                   local={p.local}
                   // Only manual peers can be disconnected; tailscale and
                   // devcontainer peers are managed automatically.
-                  onRemove={g.key === 'manual' ? () => handleRemove(p.name) : undefined}
+                  onRemove={g.key === 'manual' ? () => handleRemove(p.name, p.node_id) : undefined}
                 />
               ))}
             </div>
@@ -513,7 +513,7 @@ function UnresolvedHostRow({ host, targets }: { host: UnresolvedHost; targets: P
           <option value="">Remap to…</option>
           {targets.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
         </select>
-        <button class="host-remove" disabled={busy} title="Remove these references" onClick={onRemove}>×</button>
+        <button class="host-remove-refs" disabled={busy} title="Delete this host's project references" onClick={onRemove}>Remove references</button>
       </div>
       {err && <div class="mp-manual-error">{err}</div>}
     </div>
