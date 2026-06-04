@@ -6,6 +6,88 @@ import (
 	"testing"
 )
 
+func TestImportLegacyDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	cache := `{"devices":{
+		"n1":{"fqdn":"gmux-laptop.angler-map.ts.net","peer_name":"laptop","is_gmux":true},
+		"n2":{"fqdn":"phone.angler-map.ts.net","peer_name":"","is_gmux":false},
+		"n3":{"fqdn":"gmux-server.angler-map.ts.net","peer_name":"server","is_gmux":true}
+	}}`
+	if err := os.WriteFile(filepath.Join(dir, legacyDiscoveryFile), []byte(cache), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, _ := Open(dir)
+	// Both gmux devices are referenced by a project; the non-gmux one
+	// can't be (and is filtered by IsGmux anyway).
+	referenced := map[string]bool{"laptop": true, "server": true}
+	n, err := s.ImportLegacyDiscovery(dir, referenced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("imported = %d, want 2 (referenced gmux devices)", n)
+	}
+
+	recs := s.List()
+	if len(recs) != 2 {
+		t.Fatalf("records = %d, want 2", len(recs))
+	}
+	for _, r := range recs {
+		if r.Token != "" || r.NodeID != "" {
+			t.Errorf("migrated peer %q should have no token/node_id, got %+v", r.Name, r)
+		}
+		if r.URL == "" || r.URL[:8] != "https://" {
+			t.Errorf("migrated peer %q should have an https URL, got %q", r.Name, r.URL)
+		}
+	}
+
+	// Cache is removed so the migration runs once.
+	if _, err := os.Stat(filepath.Join(dir, legacyDiscoveryFile)); !os.IsNotExist(err) {
+		t.Fatal("legacy cache should be removed after import")
+	}
+
+	// Re-running is a no-op (cache gone).
+	if n, err := s.ImportLegacyDiscovery(dir, referenced); err != nil || n != 0 {
+		t.Fatalf("second import = (%d, %v), want (0, nil)", n, err)
+	}
+}
+
+// Only hosts a project references are carried forward; an unreferenced
+// gmux device is skipped, but the cache is still removed (migration runs
+// once regardless).
+func TestImportLegacyDiscoverySkipsUnreferenced(t *testing.T) {
+	dir := t.TempDir()
+	cache := `{"devices":{
+		"n1":{"fqdn":"gmux-laptop.ts.net","peer_name":"laptop","is_gmux":true},
+		"n2":{"fqdn":"gmux-spare.ts.net","peer_name":"spare","is_gmux":true}
+	}}`
+	if err := os.WriteFile(filepath.Join(dir, legacyDiscoveryFile), []byte(cache), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := Open(dir)
+	n, err := s.ImportLegacyDiscovery(dir, map[string]bool{"laptop": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("imported = %d, want 1 (only the referenced host)", n)
+	}
+	if recs := s.List(); len(recs) != 1 || recs[0].Name != "laptop" {
+		t.Fatalf("want only 'laptop', got %+v", recs)
+	}
+	if _, err := os.Stat(filepath.Join(dir, legacyDiscoveryFile)); !os.IsNotExist(err) {
+		t.Fatal("cache should be removed even when some devices are skipped")
+	}
+}
+
+func TestImportLegacyDiscoveryAbsent(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	if n, err := s.ImportLegacyDiscovery(t.TempDir(), map[string]bool{"x": true}); err != nil || n != 0 {
+		t.Fatalf("absent cache = (%d, %v), want (0, nil)", n, err)
+	}
+}
+
 func TestOpenEmptyWhenAbsent(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {

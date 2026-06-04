@@ -585,12 +585,6 @@ func serve(stderr io.Writer) int {
 	// State directory for persistent files (projects.json, auth-token, etc).
 	stateDir := paths.StateDir()
 
-	// Remove the legacy tailscale-discovery.json cache. Tailscale
-	// autodiscovery was removed in ADR 0008 (token-everywhere made
-	// auto-connect unsafe); nothing reads or writes this file anymore, so
-	// clean it up on first start after the upgrade. Best-effort.
-	_ = os.Remove(filepath.Join(stateDir, "tailscale-discovery.json"))
-
 	// Stable, opaque per-node identity (ADR 0007). Generated once and
 	// persisted alongside the auth token; used for peer dedup, never
 	// shown or routed.
@@ -614,6 +608,29 @@ func serve(stderr io.Writer) int {
 	// Project manager handles concurrent access to projects.json and
 	// auto-assignment of sessions to projects.
 	projectMgr := projects.NewManager(stateDir)
+
+	// One-time upgrade: ADR 0008 removed tailscale autodiscovery, so the
+	// hosts it surfaced automatically would otherwise vanish (orphaning
+	// their project references). Migrate the legacy discovery cache into
+	// the peer store as token-less manual peers — but only the hosts a
+	// project actually references — then delete the cache. The user
+	// supplies each token via "Add token". Best-effort: never blocks
+	// startup.
+	if state, err := projectMgr.Load(); err != nil {
+		log.Printf("peerstore: legacy discovery migration skipped (projects load: %v)", err)
+	} else {
+		referenced := make(map[string]bool)
+		for _, it := range state.Items {
+			if it.Peer != "" {
+				referenced[it.Peer] = true
+			}
+		}
+		if n, err := peerStore.ImportLegacyDiscovery(stateDir, referenced); err != nil {
+			log.Printf("peerstore: legacy discovery migration: %v", err)
+		} else if n > 0 {
+			log.Printf("peerstore: migrated %d referenced host(s) from the legacy autodiscovery cache (supply a token to reconnect)", n)
+		}
+	}
 
 	// reconcileProjectStamps is the single point that updates each
 	// owned session's ProjectSlug / ProjectIndex from the current

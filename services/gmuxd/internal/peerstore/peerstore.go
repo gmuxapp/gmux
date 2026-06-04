@@ -17,6 +17,7 @@ package peerstore
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -214,6 +215,79 @@ func (s *Store) matchIndex(rec Record) int {
 // ignoring a trailing slash and case.
 func sameURL(a, b string) bool {
 	return strings.EqualFold(strings.TrimRight(a, "/"), strings.TrimRight(b, "/"))
+}
+
+// legacyDiscoveryFile is the pre-2.0 tailscale autodiscovery cache.
+const legacyDiscoveryFile = "tailscale-discovery.json"
+
+// legacyDiscoveryState / legacyDeviceEntry mirror the shape the removed
+// tsdiscovery package (ADR 0008) wrote to tailscale-discovery.json. They
+// exist only to migrate that cache's gmux entries into the peer store on
+// the first upgrade start.
+type legacyDiscoveryState struct {
+	Devices map[string]*legacyDeviceEntry `json:"devices"`
+}
+
+type legacyDeviceEntry struct {
+	FQDN     string `json:"fqdn"`
+	PeerName string `json:"peer_name"`
+	IsGmux   bool   `json:"is_gmux"`
+}
+
+// ImportLegacyDiscovery one-time-migrates the pre-2.0 autodiscovery
+// cache into the peer store: a cached gmux device becomes a manual peer
+// with no token (ADR 0008 removed autodiscovery, so the user
+// re-authenticates each host by supplying its token) — but only if a
+// project references it (its slugified name is in referenced). Those are
+// the hosts whose references would otherwise orphan; other gmux boxes
+// the tailnet once surfaced are left out rather than cluttering the
+// roster with "auth needed" rows, and can be re-added on demand. The
+// cache is removed afterward so the migration runs once regardless of
+// how many hosts matched. Returns the number of hosts newly added; an
+// absent cache is (0, nil).
+func (s *Store) ImportLegacyDiscovery(stateDir string, referenced map[string]bool) (int, error) {
+	path := filepath.Join(stateDir, legacyDiscoveryFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("peerstore: reading %s: %w", path, err)
+	}
+
+	var st legacyDiscoveryState
+	if err := json.Unmarshal(data, &st); err != nil {
+		// Unparseable cache: nothing to salvage. Drop it and move on.
+		_ = os.Remove(path)
+		return 0, nil
+	}
+
+	imported := 0
+	for _, d := range st.Devices {
+		if d == nil || !d.IsGmux || d.PeerName == "" || d.FQDN == "" {
+			continue
+		}
+		// Only carry forward hosts a project references; skip gmux boxes
+		// the tailnet surfaced but the user never pinned anything on.
+		if !referenced[Slugify(d.PeerName)] {
+			continue
+		}
+		// No token, no node_id: the host lands as "auth needed" until the
+		// user supplies its token, which upserts this record by URL.
+		_, outcome, err := s.AddOrGet(Record{Name: d.PeerName, URL: "https://" + d.FQDN})
+		if err != nil {
+			log.Printf("peerstore: skipping legacy peer %q: %v", d.PeerName, err)
+			continue
+		}
+		if outcome == Added {
+			imported++
+		}
+	}
+
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		log.Printf("peerstore: could not remove legacy %s: %v", legacyDiscoveryFile, err)
+	}
+	return imported, nil
 }
 
 // Remove deletes the record with the given name and persists. Returns
