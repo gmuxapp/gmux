@@ -24,6 +24,7 @@ import {
 } from './store'
 import { HostSuffix } from './host-suffix'
 import { hostStatus } from './host-status'
+import { projectAvailability } from './projects'
 import type { ProjectItem, DiscoveredProject, MatchRule, Folder, PeerInfo } from './types'
 import type { UnresolvedHost } from './references'
 
@@ -657,9 +658,13 @@ function ConfiguredProjectRow({
   const alive = f.sessions.filter(s => s.alive).length
   const resumable = f.sessions.filter(s => !s.alive && s.resumable).length
   const isReference = !!project.peer
+  // Mirror the sidebar: a reference whose host is unresolved, dangling,
+  // or offline reads as unavailable here too — muted row + a marker
+  // sharing the sidebar's pip vocabulary.
+  const availability = projectAvailability(f, peerStatusByName.value)
   return (
     <div
-      class={`mp-configured-row${dragging ? ' dragging' : ''}${dropTarget ? ' drop-target' : ''}`}
+      class={`mp-configured-row${availability !== 'ok' ? ' unavailable' : ''}${dragging ? ' dragging' : ''}${dropTarget ? ' drop-target' : ''}`}
       draggable
       onDragStart={(e) => {
         e.dataTransfer!.effectAllowed = 'move'
@@ -679,6 +684,15 @@ function ConfiguredProjectRow({
         <span class="mp-configured-name">
           {f.name}
           <HostSuffix peer={f.peer ?? localHostLabel.value} local={!f.peer} />
+          {availability === 'unresolved' && (
+            <span class="folder-unresolved-icon" title="Host not found — fix in Settings → Hosts">!</span>
+          )}
+          {availability === 'missing' && (
+            <span class="folder-missing-icon" title="Project missing on host">?</span>
+          )}
+          {availability === 'offline' && (
+            <span class="folder-offline-icon" title="Host offline">×</span>
+          )}
         </span>
         <span class="mp-configured-count">
           {alive > 0 && <span class="mp-configured-alive">{alive} alive</span>}

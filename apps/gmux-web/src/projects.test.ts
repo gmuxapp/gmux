@@ -14,6 +14,7 @@ import {
   mostCommonRemote,
   discoverProjects,
   countUnmatchedActive,
+  projectAvailability,
 } from './projects'
 import { makeSession } from './test-helpers'
 
@@ -1002,5 +1003,42 @@ describe('countUnmatchedActive', () => {
 
   it('returns 0 when there are no sessions', () => {
     expect(countUnmatchedActive([], [])).toBe(0)
+  })
+})
+
+describe('projectAvailability', () => {
+  const connected = new Map([['server', 'connected'], ['bespin', 'disconnected']])
+
+  it('reports owned (local) projects as ok regardless of peer roster', () => {
+    expect(projectAvailability({ peer: undefined }, new Map())).toBe('ok')
+  })
+
+  it('reports a reference to a connected host as ok', () => {
+    expect(projectAvailability({ peer: 'server' }, connected)).toBe('ok')
+  })
+
+  it('reports a reference to a roster host that is not connected as offline', () => {
+    expect(projectAvailability({ peer: 'bespin' }, connected)).toBe('offline')
+  })
+
+  it('reports a reference to a host absent from the roster as offline', () => {
+    // peer set but not in the status map at all (e.g. removed peer that
+    // still resolved by name moments ago) is treated as not reachable.
+    expect(projectAvailability({ peer: 'ghost' }, connected)).toBe('offline')
+  })
+
+  it('reports an unresolved reference as unresolved', () => {
+    expect(projectAvailability({ peer: 'old-tower', unresolved: true }, connected)).toBe('unresolved')
+  })
+
+  it('reports a connected host missing the slug as missing', () => {
+    expect(projectAvailability({ peer: 'server', missing: true }, connected)).toBe('missing')
+  })
+
+  it('prefers unresolved over offline when both could apply', () => {
+    // A stored name that is both unresolved and (coincidentally) a
+    // disconnected roster entry surfaces as unresolved — the actionable
+    // state — not offline.
+    expect(projectAvailability({ peer: 'bespin', unresolved: true }, connected)).toBe('unresolved')
   })
 })

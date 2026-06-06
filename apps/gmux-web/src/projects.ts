@@ -418,6 +418,38 @@ export function buildProjectFolders(
 }
 
 /**
+ * Why a project's host can't be reached right now, or `'ok'` when it
+ * can. Lets management surfaces (the settings modal) mirror the
+ * sidebar's muted/marked treatment of unavailable projects from one
+ * place.
+ *
+ *   - `'ok'`         — owned (local) project, or a reference whose host
+ *                      is connected and still reports the slug.
+ *   - `'unresolved'` — reference whose host is in no roster bucket
+ *                      (renamed/removed); fix under Settings -> Hosts.
+ *   - `'missing'`    — reference whose host is connected but no longer
+ *                      reports the slug (project removed upstream).
+ *   - `'offline'`    — reference whose host is in the roster but not
+ *                      connected right now.
+ *
+ * Precedence matches the order above: an unresolved or dangling
+ * reference is reported as such even when its (stored) name also
+ * happens to be a disconnected peer.
+ */
+export type ProjectAvailability = 'ok' | 'unresolved' | 'missing' | 'offline'
+
+export function projectAvailability(
+  folder: Pick<Folder, 'peer' | 'missing' | 'unresolved'>,
+  peerStatusByName: ReadonlyMap<string, string>,
+): ProjectAvailability {
+  if (!folder.peer) return 'ok' // owned/local: always reachable
+  if (folder.unresolved) return 'unresolved'
+  if (folder.missing) return 'missing'
+  if (peerStatusByName.get(folder.peer) !== 'connected') return 'offline'
+  return 'ok'
+}
+
+/**
  * Sort key for a session inside a folder.
  *
  * Stamps are now the sole authority for both folder membership and

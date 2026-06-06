@@ -73,6 +73,9 @@ export const MOCK_PROJECTS: ProjectItem[] = [
   },
   // A resolved reference to a roster peer (server).
   { slug: 'api', peer: 'server' },
+  // A reference to a roster host that is currently disconnected
+  // (bespin) — surfaces as an offline/unavailable project.
+  { slug: 'telemetry', peer: 'bespin' },
   // An unresolved reference: 'old-tower' is in no roster bucket, so it
   // surfaces as a host-not-found state in the sidebar and Hosts tab.
   { slug: 'legacy-app', peer: 'old-tower' },
