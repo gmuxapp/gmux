@@ -989,6 +989,12 @@ body {
 .settings-main {
   flex: 1;
   min-width: 0;
+  /* Without this, the auto min-height of a flex item keeps this column
+     from shrinking below its content, so the .modal-body scroller grows
+     to its full content height and overflows the (capped) panel instead
+     of scrolling. Bites on short/mobile viewports where the panel's
+     max-height is well below the content. */
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
