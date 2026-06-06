@@ -639,6 +639,41 @@ func TestProxyWS_ClientDisconnectClosesSpoke(t *testing.T) {
 	}
 }
 
+// TestProxyWS_NoCompressionToBrowser locks in #279's fix for the
+// peer-proxy hop: the browser-facing WebSocket must never negotiate
+// permessage-deflate. At least one mobile browser offers deflate but
+// then mis-decodes gmuxd's frames and drops the socket right after the
+// first large replay frame, producing a reconnect storm. #279 disabled
+// compression on the local-session hop (wsproxy); a session that lives
+// on a remote host is proxied here instead, so this hop must match or
+// the storm comes back when you view a peer's session on mobile.
+func TestProxyWS_NoCompressionToBrowser(t *testing.T) {
+	spoke := wsEchoServer(t, nil, "")
+	defer spoke.Close()
+
+	c := New(spoke.URL)
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c.ProxyWS(w, r, "sess")
+	}))
+	defer hub.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	wsURL := "ws" + strings.TrimPrefix(hub.URL, "http")
+	// Offer permessage-deflate, exactly as the affected mobile browsers do.
+	browser, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		CompressionMode: websocket.CompressionContextTakeover,
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer browser.Close(websocket.StatusNormalClosure, "")
+
+	if ext := resp.Header.Get("Sec-WebSocket-Extensions"); strings.Contains(ext, "permessage-deflate") {
+		t.Errorf("server negotiated permessage-deflate (%q); it must stay disabled on the browser-facing peer hop (#279)", ext)
+	}
+}
+
 
 // TestForwardAction_PreservesQueryString locks in the contract that
 // action endpoints with query parameters (e.g. /scrollback?tail=N)
