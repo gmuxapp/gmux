@@ -26,6 +26,8 @@ Created by gmuxd. Lives under `~/.local/state/gmux` (or `$XDG_STATE_HOME/gmux`).
 | `~/.local/state/gmux/gmuxd.sock` | Daemon Unix socket (local IPC between gmux CLI and gmuxd) |
 | `~/.local/state/gmux/auth-token` | Bearer token for TCP authentication |
 | `~/.local/state/gmux/projects.json` | User-curated project list (sidebar grouping, ordering) |
+| `~/.local/state/gmux/projects.json.bak` | Snapshot of `projects.json` taken before a schema migration rewrites it (notably the 2.0 upgrade) |
+| `~/.local/state/gmux/peers.json` | Hosts you connected to via **Connect to host** — URL, token, and node id (0600; it carries a token) |
 | `~/.local/state/gmux/gmuxd.log` | Daemon log (when started via `gmuxd start`) |
 | `~/.local/state/gmux/tsnet/` | Tailscale state directory (when remote access is enabled) |
 

@@ -144,51 +144,6 @@ export function resolveReferences(
 }
 
 /**
- * Rewrite the references `(fromPeer, slug)` for `slug` in `slugs` to
- * point at `toPeer`, stamping the target's `nodeId`. Pure: returns a
- * new items array; the caller persists it.
- *
- * Scoping to `slugs` (the *unresolved* slugs the UI surfaced for this
- * host) is critical: a stored peer name can be shared by both an
- * unresolved reference and one that already resolves correctly via
- * node_id during a rename transition. Matching by name alone would
- * silently move the working reference too. Only the named slugs are
- * touched. (refs #270)
- *
- * A reference whose slug `toPeer` already references is dropped (the
- * target wins) so the result has no duplicate (peer, slug). The
- * remapped reference takes the target's `nodeId` verbatim — if the
- * target has none (offline/legacy peer), the node_id is *cleared*,
- * never left pointing at the old host's id (which would let the old
- * host silently re-claim the reference if it reappeared).
- */
-export function remapReferenceItems(
-  items: readonly ProjectItem[],
-  fromPeer: string,
-  slugs: readonly string[],
-  toPeer: string,
-  nodeId?: string,
-): ProjectItem[] {
-  // No-op remap (same source and target): without this guard every
-  // matching item would collide with itself in targetSlugs below and be
-  // dropped, silently wiping the references. Not reachable from the UI
-  // (you remap an unresolved host to a *different* live one) but a
-  // footgun for any future caller.
-  if (fromPeer === toPeer) return items.slice()
-  const scope = new Set(slugs)
-  const targetSlugs = new Set(
-    items.filter(p => p.peer === toPeer).map(p => p.slug),
-  )
-  const next: ProjectItem[] = []
-  for (const it of items) {
-    if (it.peer !== fromPeer || !scope.has(it.slug)) { next.push(it); continue }
-    if (targetSlugs.has(it.slug)) continue // target already references this slug
-    next.push({ ...it, peer: toPeer, node_id: nodeId })
-  }
-  return next
-}
-
-/**
  * Remove the references `(peer, slug)` for `slug` in `slugs`. Pure:
  * returns a new items array. Like the remap above, scoping to the
  * surfaced unresolved `slugs` is what prevents deleting a same-named

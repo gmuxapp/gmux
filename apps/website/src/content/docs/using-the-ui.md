@@ -27,7 +27,20 @@ Each machine (local and remote) gets a card with a status indicator, session cou
 | **Pulsing dot** | Connecting to peer |
 | **Red ✗** | Peer disconnected (shows error reason) |
 
-Hosts you add via **Settings → Hosts → Connect to host** persist across restarts and reconnect automatically. A disconnected host keeps its card (with the last error) until you remove it. gmux does not auto-discover tailnet machines — adding one is an explicit, token-authenticated step (see [Multi-Machine](/multi-machine/) and [ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
+Hosts you add via **Settings → Hosts → Connect to host** persist across restarts and reconnect automatically. gmux does not auto-discover tailnet machines — adding one is an explicit, token-authenticated step (see [Multi-Machine](/multi-machine/) and [ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
+
+In **Settings → Hosts**, each host shows an explicit status:
+
+| Status | Meaning |
+|--------|---------|
+| **Online** | Connected and authenticated |
+| **Connecting…** | Handshake in progress |
+| **Auth needed** | Reachable, but the token is missing or wrong — an **Add token** button pre-fills the connect form so you can supply it |
+| **Offline** | Unreachable right now (shows the connection error); it reconnects on its own when the host comes back |
+
+Removing a host also clears the project references that pointed at it, so it leaves nothing behind under **Referenced but not found**.
+
+**Upgrading to 2.0:** hosts you had projects on — that earlier versions auto-discovered on your tailnet — are migrated into the roster as **Auth needed**. Click **Add token** on each and paste its token (run `gmuxd auth` on that host) to bring it back online. Other tailnet machines aren't carried over; re-add them with **Connect to host** if you want them. Your `projects.json` is backed up to `projects.json.bak` before the upgrade rewrites it.
 
 Connected peers show launch buttons for each configured adapter, just like the local host.
 

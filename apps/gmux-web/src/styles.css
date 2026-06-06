@@ -989,6 +989,12 @@ body {
 .settings-main {
   flex: 1;
   min-width: 0;
+  /* Without this, the auto min-height of a flex item keeps this column
+     from shrinking below its content, so the .modal-body scroller grows
+     to its full content height and overflows the (capped) panel instead
+     of scrolling. Bites on short/mobile viewports where the panel's
+     max-height is well below the content. */
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -1060,8 +1066,15 @@ body {
   background: var(--status-disconnected);
   flex-shrink: 0;
 }
-.host-status-dot.connected {
+.host-status-dot.online {
   background: var(--status-connected);
+}
+.host-status-dot.connecting,
+.host-status-dot.auth {
+  background: oklch(78% 0.15 75); /* amber: needs attention */
+}
+.host-status-dot.offline {
+  background: oklch(58% 0.012 250); /* muted grey: down, not an error */
 }
 .host-self-tag {
   font-size: 10px;
@@ -1099,8 +1112,30 @@ body {
   white-space: nowrap;
   flex-shrink: 0;
 }
-.host-status-label {
-  text-transform: capitalize;
+.host-status-label.auth {
+  color: oklch(78% 0.15 75);
+}
+.host-status-label.offline {
+  color: var(--text-secondary);
+}
+/* Inline "Add token" on an auth-needed host: pre-fills the connect form. */
+.host-add-token {
+  flex-shrink: 0;
+  margin-left: 8px;
+  border: 1px solid oklch(78% 0.15 75 / 0.5);
+  border-radius: 5px;
+  background: transparent;
+  color: oklch(80% 0.13 75);
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.host-add-token:hover {
+  background: oklch(78% 0.15 75 / 0.12);
+  border-color: oklch(78% 0.15 75 / 0.8);
 }
 .host-sep {
   opacity: 0.5;
@@ -1152,10 +1187,6 @@ body {
   gap: 8px;
   margin-top: 8px;
 }
-.host-remap-select {
-  max-width: 220px;
-  cursor: pointer;
-}
 /* The remove button is always visible on an unresolved row (no hover
    reveal): the whole row is a call to action. */
 .host-row-actions .host-remove {
@@ -1190,7 +1221,7 @@ body {
   margin-top: 4px;
   margin-left: 15px;
   font-size: 12px;
-  color: var(--status-disconnected);
+  color: var(--text-secondary);
   font-family: var(--mono, monospace);
   white-space: nowrap;
   overflow: hidden;

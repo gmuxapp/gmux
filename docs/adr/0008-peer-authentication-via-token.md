@@ -1,6 +1,6 @@
 # ADR 0008: Peer authentication via token
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-03
 **Related:** ADR 0007 (host identity and peer URLs)
 **Target:** gmux 2.0 (breaking; no backwards compatibility)
@@ -253,14 +253,24 @@ not part of this change.
 
 This is a breaking change appropriate to a major version.
 
-- **Existing 2.0-prerelease auto-discovered peers go dark on upgrade.**
-  They were never persisted (they lived only in the `tsdiscovery`
-  cache, re-added each boot), so the cache file
-  (`tailscale-discovery.json`) is simply removed and each tailnet host
-  is re-added once via Connect-to-host.
+- **Previously auto-discovered peers are migrated into the roster as
+  `Auth needed`.** They were never persisted as peers (they lived only
+  in the `tsdiscovery` cache, re-added each boot), so on the first
+  upgrade start the cache file (`tailscale-discovery.json`) is imported:
+  each cached gmux device **that a project references** becomes a
+  token-less manual peer, then the cache is deleted. Scoping to
+  referenced hosts is deliberate — those are the ones whose references
+  would otherwise orphan; other gmux boxes the tailnet once surfaced are
+  left out rather than filling the roster with `Auth needed` rows, and
+  can be re-added on demand. A migrated host shows as `Auth needed`
+  until the user supplies its token via **Add token** (which upserts the
+  token onto the existing record, matched by URL). `projects.json` is
+  backed up to `projects.json.bak` before any schema migration rewrites
+  it.
 - **Release notes must call this out loudly:** after upgrading, each
-  remote host must be re-added with its connect URL (`gmuxd auth` on
-  the remote, paste into Connect-to-host on the hub).
+  migrated host needs its token supplied once (`gmuxd auth` on the
+  remote, then **Add token** on the hub); hosts that were never
+  auto-discovered are added via Connect-to-host as before.
 - Docs to update: `multi-machine.md`, `remote-access.md`, and the
   `docker-tailscale` example — "on my tailnet" must no longer imply
   "can drive my machines"; pairing is now an explicit per-host token

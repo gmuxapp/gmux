@@ -6,6 +6,113 @@ import (
 	"testing"
 )
 
+func TestImportLegacyDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	cache := `{"devices":{
+		"n1":{"fqdn":"gmux-laptop.angler-map.ts.net","peer_name":"laptop","is_gmux":true},
+		"n2":{"fqdn":"phone.angler-map.ts.net","peer_name":"","is_gmux":false},
+		"n3":{"fqdn":"gmux-server.angler-map.ts.net","peer_name":"server","is_gmux":true}
+	}}`
+	if err := os.WriteFile(filepath.Join(dir, legacyDiscoveryFile), []byte(cache), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, _ := Open(dir)
+	// Both gmux devices are referenced by a project; the non-gmux one
+	// can't be (and is filtered by IsGmux anyway).
+	referenced := map[string]bool{"laptop": true, "server": true}
+	n, err := s.ImportLegacyDiscovery(dir, referenced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("imported = %d, want 2 (referenced gmux devices)", n)
+	}
+
+	recs := s.List()
+	if len(recs) != 2 {
+		t.Fatalf("records = %d, want 2", len(recs))
+	}
+	for _, r := range recs {
+		if r.Token != "" || r.NodeID != "" {
+			t.Errorf("migrated peer %q should have no token/node_id, got %+v", r.Name, r)
+		}
+		if r.URL == "" || r.URL[:8] != "https://" {
+			t.Errorf("migrated peer %q should have an https URL, got %q", r.Name, r.URL)
+		}
+	}
+
+	// Cache is removed so the migration runs once.
+	if _, err := os.Stat(filepath.Join(dir, legacyDiscoveryFile)); !os.IsNotExist(err) {
+		t.Fatal("legacy cache should be removed after import")
+	}
+
+	// Re-running is a no-op (cache gone).
+	if n, err := s.ImportLegacyDiscovery(dir, referenced); err != nil || n != 0 {
+		t.Fatalf("second import = (%d, %v), want (0, nil)", n, err)
+	}
+}
+
+// Only hosts a project references are carried forward; an unreferenced
+// gmux device is skipped, but the cache is still removed (migration runs
+// once regardless).
+func TestImportLegacyDiscoverySkipsUnreferenced(t *testing.T) {
+	dir := t.TempDir()
+	cache := `{"devices":{
+		"n1":{"fqdn":"gmux-laptop.ts.net","peer_name":"laptop","is_gmux":true},
+		"n2":{"fqdn":"gmux-spare.ts.net","peer_name":"spare","is_gmux":true}
+	}}`
+	if err := os.WriteFile(filepath.Join(dir, legacyDiscoveryFile), []byte(cache), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := Open(dir)
+	n, err := s.ImportLegacyDiscovery(dir, map[string]bool{"laptop": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("imported = %d, want 1 (only the referenced host)", n)
+	}
+	if recs := s.List(); len(recs) != 1 || recs[0].Name != "laptop" {
+		t.Fatalf("want only 'laptop', got %+v", recs)
+	}
+	if _, err := os.Stat(filepath.Join(dir, legacyDiscoveryFile)); !os.IsNotExist(err) {
+		t.Fatal("cache should be removed even when some devices are skipped")
+	}
+}
+
+// A host that was both added manually (with a token) and present in the
+// legacy cache must keep its token through the migration — importing it
+// token-less must not knock it back to "auth needed".
+func TestImportLegacyDiscoveryPreservesExistingToken(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(dir)
+	s.AddOrGet(Record{Name: "laptop", URL: "https://gmux-laptop.ts.net", Token: "keep-me", NodeID: "node_l"})
+
+	cache := `{"devices":{"n1":{"fqdn":"gmux-laptop.ts.net","peer_name":"laptop","is_gmux":true}}}`
+	if err := os.WriteFile(filepath.Join(dir, legacyDiscoveryFile), []byte(cache), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.ImportLegacyDiscovery(dir, map[string]bool{"laptop": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("imported = %d, want 0 (host already present)", n)
+	}
+	recs := s.List()
+	if len(recs) != 1 || recs[0].Token != "keep-me" || recs[0].NodeID != "node_l" {
+		t.Fatalf("existing token/node_id must survive a token-less import, got %+v", recs)
+	}
+}
+
+func TestImportLegacyDiscoveryAbsent(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	if n, err := s.ImportLegacyDiscovery(t.TempDir(), map[string]bool{"x": true}); err != nil || n != 0 {
+		t.Fatalf("absent cache = (%d, %v), want (0, nil)", n, err)
+	}
+}
+
 func TestOpenEmptyWhenAbsent(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {
@@ -47,36 +154,89 @@ func TestAddOrGetRejectsBadURL(t *testing.T) {
 	}
 }
 
-// Re-adding the same node_id returns the existing record (existed=true)
-// rather than creating a duplicate — and does so under one lock, so it's
-// safe against concurrent connects (no check-then-act race).
+// Re-adding the same node_id matches the existing record (no duplicate)
+// and refreshes its URL/token in place, keeping the display name — under
+// one lock, so it's safe against concurrent connects (no check-then-act
+// race).
 func TestAddOrGetDedupsByNodeID(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := Open(dir)
-	first, _, _ := s.AddOrGet(Record{Name: "laptop", URL: "http://a:8790", NodeID: "node_x"})
+	first, _, _ := s.AddOrGet(Record{Name: "laptop", URL: "http://a:8790", Token: "t1", NodeID: "node_x"})
 
-	got, existed, err := s.AddOrGet(Record{Name: "laptop-again", URL: "http://b:8790", NodeID: "node_x"})
+	got, outcome, err := s.AddOrGet(Record{Name: "laptop-again", URL: "http://b:8790", Token: "t2", NodeID: "node_x"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !existed {
-		t.Fatal("re-adding same node_id should report existed=true")
+	if outcome != Updated {
+		t.Fatalf("re-adding same node_id with new creds should report Updated, got %v", outcome)
 	}
-	if got.Name != first.Name || got.URL != "http://a:8790" {
-		t.Fatalf("dedup should return the original record, got %+v", got)
+	if got.Name != first.Name || got.URL != "http://b:8790" || got.Token != "t2" {
+		t.Fatalf("upsert should keep the name and refresh url/token, got %+v", got)
 	}
 	if len(s.List()) != 1 {
-		t.Fatalf("dedup must not append, got %d records", len(s.List()))
+		t.Fatalf("upsert must not append, got %d records", len(s.List()))
 	}
 }
 
-// An empty node_id is undedupable: each add is a distinct host.
-func TestAddOrGetEmptyNodeIDNotDeduped(t *testing.T) {
+// Re-adding identical creds is a no-op: outcome Unchanged, no rewrite.
+func TestAddOrGetUnchanged(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	s.AddOrGet(Record{Name: "laptop", URL: "http://a:8790", Token: "t", NodeID: "node_x"})
+	_, outcome, err := s.AddOrGet(Record{Name: "laptop", URL: "http://a:8790", Token: "t", NodeID: "node_x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Unchanged {
+		t.Fatalf("identical re-add should report Unchanged, got %v", outcome)
+	}
+}
+
+// A host added without a node_id (e.g. migrated from autodiscovery) is
+// matched by URL on the next connect, so supplying a token updates that
+// record and stamps the now-known node_id instead of duplicating it.
+func TestAddOrGetUpsertsByURLWhenNodeIDUnknown(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	s.AddOrGet(Record{Name: "old-tower", URL: "https://old-tower.ts.net"}) // no token, no node_id
+
+	got, outcome, err := s.AddOrGet(Record{Name: "old-tower", URL: "https://old-tower.ts.net", Token: "secret", NodeID: "node_ot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Updated {
+		t.Fatalf("supplying a token for a URL-matched host should report Updated, got %v", outcome)
+	}
+	if got.Token != "secret" || got.NodeID != "node_ot" {
+		t.Fatalf("upsert should set token and stamp node_id, got %+v", got)
+	}
+	if len(s.List()) != 1 {
+		t.Fatalf("URL match must not append, got %d records", len(s.List()))
+	}
+}
+
+// URL matching ignores a trailing slash, so re-adding the same host with
+// a "/"-suffixed URL upserts rather than creating a second record.
+func TestAddOrGetUpsertMatchesURLIgnoringTrailingSlash(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	s.AddOrGet(Record{Name: "oldbox", URL: "https://oldbox.ts.net"})
+	_, outcome, err := s.AddOrGet(Record{Name: "oldbox", URL: "https://oldbox.ts.net/", Token: "secret", NodeID: "node_ob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Updated {
+		t.Fatalf("trailing-slash variant should match and update, got %v", outcome)
+	}
+	if len(s.List()) != 1 {
+		t.Fatalf("trailing-slash variant must not append, got %d records", len(s.List()))
+	}
+}
+
+// Distinct URLs with no node_id stay distinct hosts.
+func TestAddOrGetEmptyNodeIDDistinctURLsNotDeduped(t *testing.T) {
 	s, _ := Open(t.TempDir())
 	s.AddOrGet(Record{Name: "a", URL: "http://a:8790"})
 	s.AddOrGet(Record{Name: "b", URL: "http://b:8790"})
 	if len(s.List()) != 2 {
-		t.Fatalf("empty node_id must not dedup, got %d", len(s.List()))
+		t.Fatalf("distinct URLs must not dedup, got %d", len(s.List()))
 	}
 }
 

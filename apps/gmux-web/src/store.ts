@@ -19,7 +19,7 @@ import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects } from './projects'
-import { resolveReferences, remapReferenceItems, removeReferenceItems, removeHostReferenceItems, refKey, type UnresolvedHost } from './references'
+import { resolveReferences, removeReferenceItems, removeHostReferenceItems, refKey, type UnresolvedHost } from './references'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS, MOCK_PEERS, MOCK_HEALTH } from './mock-data/index'
@@ -913,19 +913,21 @@ export function parseConnectURL(input: string): { url: string; token: string } |
 export async function connectHost(
   url: string,
   token: string,
-): Promise<{ name: string; alreadyConnected: boolean }> {
+): Promise<{ name: string; alreadyConnected: boolean; updated: boolean }> {
   const resp = await fetch('/v1/peers', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, token }),
   })
   const body = await resp.json().catch(() => ({})) as {
-    peer?: { name?: string }; already_connected?: boolean; error?: { message?: string }
+    peer?: { name?: string }; already_connected?: boolean; updated?: boolean; error?: { message?: string }
   }
   if (!resp.ok) {
     throw new Error(body.error?.message || `Could not connect (${resp.status})`)
   }
-  return { name: body.peer?.name ?? '', alreadyConnected: !!body.already_connected }
+  // updated: the host was already known and its URL/token were refreshed
+  // (the "Add token" path). alreadyConnected: known with identical creds.
+  return { name: body.peer?.name ?? '', alreadyConnected: !!body.already_connected, updated: !!body.updated }
 }
 
 /** Disconnect a manually-added host: DELETE /v1/peers/{name}. */
@@ -951,20 +953,6 @@ export async function removeHost(name: string, nodeId?: string): Promise<void> {
 export async function removePeerReference(peer: string, slug: string): Promise<void> {
   const filtered = projects.value.filter(p => !(p.peer === peer && p.slug === slug))
   await putProjects(filtered)
-}
-
-/** Remap every reference pointing at `fromPeer` onto `toPeer`, stamping
- *  the target's stable node_id so the reference survives future
- *  renames. Recovers references orphaned by a host rename (refs #270).
- *  References whose slug the target already has are dropped to avoid a
- *  duplicate. */
-export async function remapReferences(
-  fromPeer: string,
-  slugs: readonly string[],
-  toPeer: string,
-  nodeId?: string,
-): Promise<void> {
-  await putProjects(remapReferenceItems(projects.value, fromPeer, slugs, toPeer, nodeId))
 }
 
 /** Drop the unresolved references `(peer, slug)` for the given slugs.

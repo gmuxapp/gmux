@@ -17,6 +17,7 @@ package peerstore
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -120,32 +121,69 @@ func (s *Store) PeerConfigs() []config.PeerConfig {
 	return out
 }
 
-// AddOrGet atomically connects a host: if a record with the same
-// (non-empty) node_id already exists it is returned with existed=true
-// (the same host reached again is not a duplicate); otherwise the
-// record's name is slugified, de-collided, appended, and persisted.
+// AddOutcome reports what AddOrGet did to the store.
+type AddOutcome int
+
+const (
+	// Added: a brand-new record was appended.
+	Added AddOutcome = iota
+	// Updated: an existing record matched and its URL/token (and any
+	// newly-learned node_id) were refreshed in place.
+	Updated
+	// Unchanged: an existing record matched and nothing differed.
+	Unchanged
+)
+
+// AddOrGet upserts a host. It matches an existing record by node_id (the
+// durable identity) or, when that misses, by URL — so supplying a token
+// for a host added without one (e.g. one migrated from autodiscovery,
+// whose node_id isn't known until it first authenticates) refreshes that
+// record in place instead of creating a duplicate. On a match it updates
+// the URL, token, and (if newly learned) node_id while keeping the
+// existing display name; otherwise the name is slugified, de-collided,
+// appended, and persisted.
 //
-// The node_id check and the append happen under one lock, so two
-// concurrent connects to the same host can't both pass the dedup and
-// create duplicates (no check-then-act race).
-func (s *Store) AddOrGet(rec Record) (stored Record, existed bool, err error) {
+// Matching and the append happen under one lock, so two concurrent
+// connects to the same host can't both pass the dedup and create
+// duplicates (no check-then-act race).
+func (s *Store) AddOrGet(rec Record) (stored Record, outcome AddOutcome, err error) {
 	if err := ValidateURL(rec.URL); err != nil {
-		return Record{}, false, err
+		return Record{}, Added, err
 	}
 	name := Slugify(rec.Name)
 	if name == "" {
-		return Record{}, false, fmt.Errorf("host name %q has no usable slug characters", rec.Name)
+		return Record{}, Added, fmt.Errorf("host name %q has no usable slug characters", rec.Name)
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if rec.NodeID != "" {
-		for _, r := range s.records {
-			if r.NodeID == rec.NodeID {
-				return r, true, nil
-			}
+	if i := s.matchIndex(rec); i >= 0 {
+		cur := s.records[i]
+		// Empty Token/NodeID mean "unknown", not "clear it": only a non-empty
+		// value updates the stored one. This keeps the legacy-discovery
+		// import (token-less) from wiping the token of a host that was also
+		// added manually, and there's no flow that deliberately blanks a
+		// token. URL is always present (validated) so it always updates.
+		changed := cur.URL != rec.URL ||
+			(rec.Token != "" && cur.Token != rec.Token) ||
+			(rec.NodeID != "" && cur.NodeID != rec.NodeID)
+		if !changed {
+			return cur, Unchanged, nil
 		}
+		s.records[i].URL = rec.URL
+		if rec.Token != "" {
+			s.records[i].Token = rec.Token
+		}
+		if rec.NodeID != "" {
+			s.records[i].NodeID = rec.NodeID
+		}
+		updated := s.records[i]
+		if err := s.save(); err != nil {
+			s.records[i] = cur // roll back the in-memory change
+			return Record{}, Added, err
+		}
+		return updated, Updated, nil
 	}
 
 	taken := make(map[string]bool, len(s.records))
@@ -157,9 +195,107 @@ func (s *Store) AddOrGet(rec Record) (stored Record, existed bool, err error) {
 	s.records = append(s.records, rec)
 	if err := s.save(); err != nil {
 		s.records = s.records[:len(s.records)-1]
-		return Record{}, false, err
+		return Record{}, Added, err
 	}
-	return rec, false, nil
+	return rec, Added, nil
+}
+
+// matchIndex returns the index of the record representing the same host
+// as rec — same node_id when known, else same URL — or -1 if none.
+// Caller holds s.mu.
+func (s *Store) matchIndex(rec Record) int {
+	if rec.NodeID != "" {
+		for i, r := range s.records {
+			if r.NodeID == rec.NodeID {
+				return i
+			}
+		}
+	}
+	for i, r := range s.records {
+		if sameURL(r.URL, rec.URL) {
+			return i
+		}
+	}
+	return -1
+}
+
+// sameURL reports whether two peer base URLs address the same host,
+// ignoring a trailing slash and case.
+func sameURL(a, b string) bool {
+	return strings.EqualFold(strings.TrimRight(a, "/"), strings.TrimRight(b, "/"))
+}
+
+// legacyDiscoveryFile is the pre-2.0 tailscale autodiscovery cache.
+const legacyDiscoveryFile = "tailscale-discovery.json"
+
+// legacyDiscoveryState / legacyDeviceEntry mirror the shape the removed
+// tsdiscovery package (ADR 0008) wrote to tailscale-discovery.json. They
+// exist only to migrate that cache's gmux entries into the peer store on
+// the first upgrade start.
+type legacyDiscoveryState struct {
+	Devices map[string]*legacyDeviceEntry `json:"devices"`
+}
+
+type legacyDeviceEntry struct {
+	FQDN     string `json:"fqdn"`
+	PeerName string `json:"peer_name"`
+	IsGmux   bool   `json:"is_gmux"`
+}
+
+// ImportLegacyDiscovery one-time-migrates the pre-2.0 autodiscovery
+// cache into the peer store: a cached gmux device becomes a manual peer
+// with no token (ADR 0008 removed autodiscovery, so the user
+// re-authenticates each host by supplying its token) — but only if a
+// project references it (its slugified name is in referenced). Those are
+// the hosts whose references would otherwise orphan; other gmux boxes
+// the tailnet once surfaced are left out rather than cluttering the
+// roster with "auth needed" rows, and can be re-added on demand. The
+// cache is removed afterward so the migration runs once regardless of
+// how many hosts matched. Returns the number of hosts newly added; an
+// absent cache is (0, nil).
+func (s *Store) ImportLegacyDiscovery(stateDir string, referenced map[string]bool) (int, error) {
+	path := filepath.Join(stateDir, legacyDiscoveryFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("peerstore: reading %s: %w", path, err)
+	}
+
+	var st legacyDiscoveryState
+	if err := json.Unmarshal(data, &st); err != nil {
+		// Unparseable cache: nothing to salvage. Drop it and move on.
+		_ = os.Remove(path)
+		return 0, nil
+	}
+
+	imported := 0
+	for _, d := range st.Devices {
+		if d == nil || !d.IsGmux || d.PeerName == "" || d.FQDN == "" {
+			continue
+		}
+		// Only carry forward hosts a project references; skip gmux boxes
+		// the tailnet surfaced but the user never pinned anything on.
+		if !referenced[Slugify(d.PeerName)] {
+			continue
+		}
+		// No token, no node_id: the host lands as "auth needed" until the
+		// user supplies its token, which upserts this record by URL.
+		_, outcome, err := s.AddOrGet(Record{Name: d.PeerName, URL: "https://" + d.FQDN})
+		if err != nil {
+			log.Printf("peerstore: skipping legacy peer %q: %v", d.PeerName, err)
+			continue
+		}
+		if outcome == Added {
+			imported++
+		}
+	}
+
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		log.Printf("peerstore: could not remove legacy %s: %v", legacyDiscoveryFile, err)
+	}
+	return imported, nil
 }
 
 // Remove deletes the record with the given name and persists. Returns
