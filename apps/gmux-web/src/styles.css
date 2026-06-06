@@ -640,6 +640,23 @@ body {
   font-weight: 700;
   line-height: 1cap;
 }
+/* Offline reference: the host is in the roster but not connected right
+   now. Neutral grey — it's a transient "down, comes back" state, not a
+   "fix me" warning like unresolved/missing. */
+.folder-offline-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: oklch(30% 0 0);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1cap;
+}
 .session-status-label {
   color: var(--text-secondary);
 }
@@ -2016,6 +2033,13 @@ body {
 }
 .mp-configured-row.drop-target {
   box-shadow: inset 0 -2px 0 0 var(--accent);
+}
+/* Unavailable reference (unresolved / missing / offline host): dim the
+   name + count like the sidebar dims unreachable folders, while leaving
+   the drag handle and remove control at full strength so the row stays
+   manageable. */
+.mp-configured-row.unavailable .mp-configured-info {
+  opacity: 0.55;
 }
 .mp-configured-drag {
   color: var(--text-muted);
