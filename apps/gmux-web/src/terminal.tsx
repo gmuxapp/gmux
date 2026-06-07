@@ -156,8 +156,9 @@ function focusTerminalInput(term: Terminal | null): void {
  *
  * Architecture: one Terminal lives for the app lifetime. Switching sessions
  * closes the old WS, clears the terminal, and opens a new WS. The runner's
- * 128KB scrollback ring buffer replays on connect, so history is preserved
- * without keeping per-session xterm instances alive.
+ * persisted scrollback (an on-disk append-only file that rotates at ~1 MiB,
+ * not a ring buffer) replays on connect, so history is preserved without
+ * keeping per-session xterm instances alive.
  *
  * Resize model: selecting a session claims ownership — the first WS connect
  * resizes the PTY to fit this browser's viewport. While driving, viewport
