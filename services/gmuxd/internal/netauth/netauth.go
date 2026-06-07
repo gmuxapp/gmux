@@ -14,12 +14,28 @@
 package netauth
 
 import (
+	_ "embed"
+	"encoding/base64"
 	"log"
 	"net/http"
 	"strings"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
 )
+
+// brandFontWOFF2 is Instrument Sans 700, subset to only the wordmark glyphs
+// ("gmux"). It is OFL-licensed and embedded so the pre-auth login page can
+// render the brand font without any outbound request. The app's full
+// @fontsource copy lives behind auth in the web bundle; this standalone
+// page cannot reach it, so it carries its own ~1 KB subset.
+//
+//go:embed brand-instrument-sans-700.woff2
+var brandFontWOFF2 []byte
+
+// brandFontFace is an inline @font-face rule whose src is a self-contained
+// data: URI built from brandFontWOFF2 (no network fetch).
+var brandFontFace = `@font-face{font-family:'Instrument Sans';font-style:normal;font-weight:700;font-display:swap;src:url(data:font/woff2;base64,` +
+	base64.StdEncoding.EncodeToString(brandFontWOFF2) + `) format('woff2');}`
 
 const (
 	cookieName = "gmux-token"
@@ -179,9 +195,10 @@ func serveLoginPage(w http.ResponseWriter, errMsg string) {
 	// bundle is behind this very gate, so the page must stand alone).
 	// Colors mirror the app's tokens (oklch, near-black blue-tinted
 	// surfaces and the teal accent) with hex fallbacks for older engines.
-	// The one external resource is the Instrument Sans webfont for the
-	// wordmark (the bundled @fontsource copy is auth-gated); it degrades
-	// to a system font when offline.
+	// No external resources are loaded: the page stands fully alone so it
+	// works air-gapped/offline and leaks nothing pre-auth. The wordmark
+	// uses an embedded Instrument Sans subset, inlined as a data: URI, with
+	// a system-font fallback.
 	_, _ = w.Write([]byte(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -189,10 +206,8 @@ func serveLoginPage(w http.ResponseWriter, errMsg string) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>gmux — sign in</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@700&display=swap" rel="stylesheet">
 <style>
+  ` + brandFontFace + `
   *, *::before, *::after { box-sizing: border-box; }
   :root {
     --bg: #0c0e11; --surface: #16191e; --border: #2b2f36;
@@ -221,7 +236,7 @@ func serveLoginPage(w http.ResponseWriter, errMsg string) {
     box-shadow: 0 12px 40px rgba(0,0,0,0.45);
   }
   .brand {
-    font-family: 'Instrument Sans', system-ui, sans-serif;
+    font-family: 'Instrument Sans', system-ui, -apple-system, sans-serif;
     font-size: 20px; font-weight: 700; letter-spacing: -0.04em;
     color: var(--text); margin-bottom: 20px;
   }
