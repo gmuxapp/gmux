@@ -49,6 +49,26 @@ func TestLocalWriter_FirstWriteIsPaste1(t *testing.T) {
 	}
 }
 
+// New paste files must be 0600 so other local users can't read pasted
+// secrets, while the short paste-N.<ext> path stays in os.TempDir().
+func TestLocalWriter_FilePermissions(t *testing.T) {
+	dir := t.TempDir()
+	w := NewLocalWriter(dir)
+
+	path, err := w.Write(pngBytes(), "image/png")
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat file: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Errorf("file mode = %o, want 0600", got)
+	}
+}
+
 // Sanity check on filename predicate so later tests can rely on it without
 // duplicating the regex.
 func TestPasteFilenameRecognition(t *testing.T) {

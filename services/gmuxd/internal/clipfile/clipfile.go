@@ -33,6 +33,9 @@ type Writer interface {
 // Files are named paste-N.<ext> with N the next free positive integer
 // for the recognized paste-* filename pattern in the directory.
 // Concurrent writers race-safely via O_CREAT|O_EXCL retry.
+//
+// Files are created 0600 so other local users can't read pasted
+// secrets (screenshots/PDFs/videos may carry sensitive data).
 type LocalWriter struct {
 	dir string
 }
@@ -134,7 +137,7 @@ func (w *LocalWriter) Write(payload []byte, mime string) (string, error) {
 		n := start + i
 		name := fmt.Sprintf("paste-%d.%s", n, ext)
 		path := filepath.Join(w.dir, name)
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err != nil {
 			if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
 				continue
