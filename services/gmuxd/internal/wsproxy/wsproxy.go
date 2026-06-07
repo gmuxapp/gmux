@@ -21,6 +21,17 @@ import (
 	"nhooyr.io/websocket"
 )
 
+// maxClientsPerSession caps how many browser WebSocket connections the
+// proxy will hold open for a single session at once. The limit is
+// generous enough for legit multi-tab / multi-device use (desktop +
+// phone + a couple of spare tabs) but bounded so an authed-but-buggy
+// client stuck in a reconnect loop (the #242 storm) can't pile up
+// unbounded proxy connections — each one carries goroutines plus a
+// 4 MiB backend read buffer. Beyond the cap, new connections are
+// refused with a clear close reason rather than evicting existing
+// viewers, so a storming client can't knock a healthy tab offline.
+const maxClientsPerSession = 8
+
 // SessionStore provides terminal-size read/write for the proxy.
 type SessionStore interface {
 	SetTerminalSize(sessionID string, cols, rows uint16) bool
@@ -85,6 +96,18 @@ func (p *Proxy) Handler() http.HandlerFunc {
 			return
 		}
 
+		// Enforce the per-session connection cap before dialing the
+		// backend. Doing this first bounds the blast radius of a
+		// reconnect storm: a refused client never causes the runner to
+		// allocate a wsClient, render the on-connect snapshot, or hold a
+		// 4 MiB read buffer. addConn reserves the slot atomically; if the
+		// backend dial below fails we release it via removeConn.
+		if !p.addConn(sessionID, clientConn) {
+			log.Printf("wsproxy: session %s at connection cap (%d), refusing", sessionID, maxClientsPerSession)
+			clientConn.Close(websocket.StatusTryAgainLater, "too many connections for this session")
+			return
+		}
+
 		// Connect to gmux-run's Unix socket.
 		ctx := r.Context()
 		backendConn, _, err := websocket.Dial(ctx, "ws://localhost/ws", &websocket.DialOptions{
@@ -98,11 +121,10 @@ func (p *Proxy) Handler() http.HandlerFunc {
 		})
 		if err != nil {
 			log.Printf("wsproxy: dial backend %s: %v", sockPath, err)
+			p.removeConn(sessionID, clientConn)
 			clientConn.Close(websocket.StatusInternalError, "backend unavailable")
 			return
 		}
-
-		p.addConn(sessionID, clientConn)
 		log.Printf("wsproxy: proxying %s via %s", sessionID, sockPath)
 
 		// Read limits must exceed the scrollback buffer size (128KB)
@@ -208,10 +230,19 @@ func (p *Proxy) proxyBackendToClient(ctx context.Context, sessionID string, src,
 	}
 }
 
-func (p *Proxy) addConn(sessionID string, ws *websocket.Conn) {
+// addConn registers a browser connection for the session, enforcing
+// maxClientsPerSession. It returns false (without registering) when the
+// session is already at the cap, so the caller can refuse the new
+// connection. The check and append happen under the same lock so
+// concurrent connects can't race past the cap.
+func (p *Proxy) addConn(sessionID string, ws *websocket.Conn) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if len(p.sessions[sessionID]) >= maxClientsPerSession {
+		return false
+	}
 	p.sessions[sessionID] = append(p.sessions[sessionID], ws)
+	return true
 }
 
 func (p *Proxy) removeConn(sessionID string, ws *websocket.Conn) {
