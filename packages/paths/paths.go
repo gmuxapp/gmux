@@ -2,6 +2,7 @@
 package paths
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,31 @@ import (
 // SocketPath returns the path to the gmuxd Unix socket for local IPC.
 func SocketPath() string {
 	return filepath.Join(StateDir(), "gmuxd.sock")
+}
+
+// SessionSocketDir returns the directory that holds per-session Unix
+// sockets. Both the runner (which binds the sockets) and gmuxd (which
+// scans them for discovery) resolve it here so they always agree on a
+// single location.
+//
+// The GMUX_SOCKET_DIR env var overrides everything; it is used by tests
+// and devcontainers and is passed through to the daemon so both ends
+// scan the same place. Otherwise the default is per-user so that two OS
+// users on the same host never collide on one world-shared directory
+// (whoever creates it first owns it 0700, locking everyone else out):
+//
+//   - $XDG_RUNTIME_DIR/gmux/sessions when XDG_RUNTIME_DIR is set (the
+//     standard per-user, 0700, tmpfs-backed runtime dir on Linux), else
+//   - a per-uid subdirectory of the system temp dir, e.g.
+//     /tmp/gmux-sessions-1000.
+func SessionSocketDir() string {
+	if d := os.Getenv("GMUX_SOCKET_DIR"); d != "" {
+		return d
+	}
+	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" {
+		return filepath.Join(rt, "gmux", "sessions")
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("gmux-sessions-%d", os.Getuid()))
 }
 
 // StateDir returns the gmux state directory (~/.local/state/gmux).

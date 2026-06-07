@@ -102,10 +102,7 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	if sessionID == "" {
 		sessionID = naming.SessionID()
 	}
-	socketDir := os.Getenv("GMUX_SOCKET_DIR")
-	if socketDir == "" {
-		socketDir = "/tmp/gmux-sessions"
-	}
+	socketDir := paths.SessionSocketDir()
 	sockPath := filepath.Join(socketDir, sessionID+".sock")
 
 	// Bind the socket BEFORE any sessionID-dependent setup
