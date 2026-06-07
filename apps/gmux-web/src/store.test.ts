@@ -4,7 +4,7 @@ import {
   markSessionRead, dismissSession, reorderSessions,
   handleActivity, isSessionActive, isSessionFading, activityMap,
   sessionStaleness, peers, peerAppearance, peerStatusByName,
-  isSessionUnavailable, urlPath, selectedId,
+  isSessionUnavailable, urlPath, urlSearch, filteredSessions, selectedId,
   navigateToSession, setNavigate,
   applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
   toUISession, localHostLabel, parseConnectURL,
@@ -42,6 +42,30 @@ beforeEach(() => {
   _pendingMutations.value = []
   sessionsLoaded.value = false
   urlPath.value = '/'
+  urlSearch.value = ''
+})
+
+describe('filteredSessions reactivity to the URL query string', () => {
+  it('recomputes when urlSearch flips, without an SSE session update', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'a', cwd: '/home/user/projects/alpha' }),
+      makeSession({ id: 'b', cwd: '/home/user/projects/beta' }),
+    ]
+    // No query: all sessions pass through.
+    expect(filteredSessions.value.map(s => s.id)).toEqual(['a', 'b'])
+
+    // Flip only the query signal (no sessions.value change): filter applies.
+    urlSearch.value = '?project=alpha'
+    expect(filteredSessions.value.map(s => s.id)).toEqual(['a'])
+
+    // cwd prefix filter, again query-only.
+    urlSearch.value = '?cwd=/home/user/projects/beta'
+    expect(filteredSessions.value.map(s => s.id)).toEqual(['b'])
+
+    // Clearing the query restores the full list.
+    urlSearch.value = ''
+    expect(filteredSessions.value.map(s => s.id)).toEqual(['a', 'b'])
+  })
 })
 
 // Pin the protocol-to-UI translation for stamp fields. Stamps are

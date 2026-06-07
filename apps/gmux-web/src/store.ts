@@ -325,6 +325,16 @@ export const urlPath = signal(
   typeof location !== 'undefined' ? (location.pathname.replace(/\/+$/, '') || '/') : '/',
 )
 
+/** Current URL query string (including the leading '?'), kept in sync
+ * with preact-iso's location alongside `urlPath`. Tracked as its own
+ * signal so query-only changes (?project=, ?cwd=) reactively recompute
+ * `filteredSessions` and its dependents (folders, view, sidebar)
+ * without waiting for an unrelated SSE session update to nudge
+ * `sessions.value`. */
+export const urlSearch = signal(
+  typeof location !== 'undefined' ? location.search : '',
+)
+
 /**
  * Activity tracking: which sessions recently produced output.
  *
@@ -385,8 +395,7 @@ export function isSessionFading(id: string): boolean {
 
 /** Sessions filtered by URL params (?project=, ?cwd=). */
 export const filteredSessions = computed(() => {
-  const search = typeof location !== 'undefined' ? location.search : ''
-  const params = new URLSearchParams(search)
+  const params = new URLSearchParams(urlSearch.value)
   const project = params.get('project')
   const cwdFilter = params.get('cwd')
   if (!project && !cwdFilter) return sessions.value

@@ -22,7 +22,7 @@ import {
   sessions, connState, selected, selectedId, view, health, peers,
   terminalOptions, keybinds, macCommandIsCtrl,
   unreadCount,
-  urlPath,
+  urlPath, urlSearch,
   initStore, setNavigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
   sessionStaleness,
@@ -360,7 +360,11 @@ function App() {
   // computed reacts before the browser renders a stale frame.
   useLayoutEffect(() => {
     urlPath.value = loc.path
-  }, [loc.path])
+    // Derive the query string from loc.url (path+search) so query-only
+    // navigations (?project=, ?cwd=) reactively re-filter sessions.
+    const q = loc.url.indexOf('?')
+    urlSearch.value = q >= 0 ? loc.url.slice(q) : ''
+  }, [loc.url])
 
   // Settings modal is driven by the `?settings` query param rather than
   // local state, so it's deep-linkable and shareable. It's read off the
