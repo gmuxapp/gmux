@@ -240,6 +240,14 @@ func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, 
 		return err
 	}
 
+	// The runner's /meta supplies the session ID, which is then used
+	// as a path segment for persisted metadata and scrollback. Reject
+	// anything that isn't a well-formed sess-<hex> ID so a crafted
+	// socket_path cannot steer writes outside the sessions dir.
+	if !paths.IsValidSessionID(newSess.ID) {
+		return fmt.Errorf("register: invalid session id %q from %s", newSess.ID, socketPath)
+	}
+
 	if existing, ok := sessions.Get(newSess.ID); ok {
 		// Re-registration. The runner reports fresh runtime state;
 		// the store has the historical and attribution-derived
