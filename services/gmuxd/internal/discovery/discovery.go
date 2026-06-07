@@ -1,6 +1,7 @@
-// Package discovery scans /tmp/gmux-sessions/*.sock for live gmux-run
-// instances and queries their GET /meta endpoint to populate the store.
-// Replaces the old file-polling approach from /tmp/gmux-meta/.
+// Package discovery scans the per-session socket directory (see
+// paths.SessionSocketDir) for live gmux-run instances and queries their
+// GET /meta endpoint to populate the store. Replaces the old
+// file-polling approach.
 package discovery
 
 import (
@@ -18,6 +19,7 @@ import (
 
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
+	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
@@ -27,10 +29,7 @@ import (
 var ExpectedRunnerHash string
 
 func socketDir() string {
-	if d := os.Getenv("GMUX_SOCKET_DIR"); d != "" {
-		return d
-	}
-	return "/tmp/gmux-sessions"
+	return paths.SessionSocketDir()
 }
 
 // OnDeadFunc is invoked after a session has just landed as Alive=false
