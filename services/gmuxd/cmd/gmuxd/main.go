@@ -452,7 +452,7 @@ func serve(stderr io.Writer) int {
 	// hook below persists every Alive=false landing; Dismiss /
 	// Resume merge / slug takeover drop the corresponding directory.
 	// See sessionmeta package doc for the full lifecycle.
-	metaStore := sessionmeta.New(sessionmeta.DefaultDir())
+	metaStore := sessionmeta.New(sessionmeta.DefaultDir(), sessionmeta.WithRetention(sessionmeta.DefaultRetention()))
 	if loaded, err := metaStore.Sweep(); err != nil {
 		log.Printf("sessionmeta: sweep failed: %v", err)
 	} else {

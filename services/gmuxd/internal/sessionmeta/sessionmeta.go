@@ -17,6 +17,13 @@
 // sidebar across restarts. On Dismiss / Resume merge / slug
 // takeover, the per-session directory is removed.
 //
+// Sweep also enforces a retention policy on dead-but-not-dismissed
+// sessions so the state dir doesn't grow without bound: corpses older
+// than 30 days are aged out, and only the newest 200 dead sessions are
+// kept (LRU by exit time). Both limits are configurable via the
+// GMUX_SESSION_RETENTION_DAYS and GMUX_SESSION_RETENTION_MAX environment
+// variables (0 disables a limit). See RetentionPolicy and Sweep.
+//
 // Peer-owned sessions are excluded: the hub re-receives them from
 // the spoke on reconnect, so persisting on the hub would create
 // duplicate ghosts. Write is a no-op for sess.Peer != "".
@@ -33,6 +40,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"time"
 
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
@@ -43,6 +53,69 @@ const (
 	dirMode  = 0o700
 	fileMode = 0o600
 )
+
+// Retention defaults bound the disk footprint of dead-but-not-dismissed
+// sessions. Each dead session keeps a meta.json plus up to ~2 MiB of
+// rotated scrollback under $XDG_STATE_HOME/gmux/sessions/<id>/; without a
+// cap these accumulate forever for users who never dismiss. The Sweep at
+// startup applies the policy: corpses older than MaxAge are aged out, and
+// once that's done only the newest MaxCount dead sessions are kept (LRU by
+// effective timestamp). Live sessions are never on the chopping block here
+// because Sweep only loads Alive=false records, and any still-running
+// runner re-registers as alive immediately afterwards.
+//
+// Resumable sessions get no special exemption, and that is safe:
+// store.Upsert derives Resumable = !Alive && len(Command) > 0, so it is
+// a UI affordance offering to re-run a dead session's command, not a
+// handle on a live OS process. A resumable corpse has no backing
+// process to orphan; pruning a 30-day-old one only retires a stale
+// "resume" button, and the command itself was never the artifact we
+// promised to keep forever. Recently-dead resumables stay because they
+// are the newest by timestamp and well within MaxAge.
+const (
+	DefaultMaxAge   = 30 * 24 * time.Hour
+	DefaultMaxCount = 200
+)
+
+// Environment variables that override the retention defaults at startup.
+// Both accept a non-negative integer; 0 disables that limit (unbounded).
+const (
+	envRetentionDays  = "GMUX_SESSION_RETENTION_DAYS"
+	envRetentionCount = "GMUX_SESSION_RETENTION_MAX"
+)
+
+// RetentionPolicy bounds how many dead-session directories survive a
+// Sweep. A zero value for either field disables that limit.
+type RetentionPolicy struct {
+	// MaxAge ages out dead sessions whose effective timestamp is older
+	// than now-MaxAge. Zero means no age limit.
+	MaxAge time.Duration
+	// MaxCount keeps only the newest MaxCount dead sessions (by
+	// effective timestamp) after age-out. Zero means no count limit.
+	MaxCount int
+}
+
+// DefaultRetention returns the built-in policy, with the
+// GMUX_SESSION_RETENTION_DAYS / GMUX_SESSION_RETENTION_MAX environment
+// overrides applied when set to a valid non-negative integer.
+func DefaultRetention() RetentionPolicy {
+	p := RetentionPolicy{MaxAge: DefaultMaxAge, MaxCount: DefaultMaxCount}
+	if v := os.Getenv(envRetentionDays); v != "" {
+		if days, err := strconv.Atoi(v); err == nil && days >= 0 {
+			p.MaxAge = time.Duration(days) * 24 * time.Hour
+		} else {
+			log.Printf("sessionmeta: ignoring invalid %s=%q", envRetentionDays, v)
+		}
+	}
+	if v := os.Getenv(envRetentionCount); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			p.MaxCount = n
+		} else {
+			log.Printf("sessionmeta: ignoring invalid %s=%q", envRetentionCount, v)
+		}
+	}
+	return p
+}
 
 // Per-session directories may also contain scrollback files written
 // by the runner (see packages/scrollback). sessionmeta does not
@@ -59,12 +132,37 @@ func DefaultDir() string {
 // is constructed at gmuxd startup with DefaultDir(); tests construct
 // their own with a temp dir.
 type Store struct {
-	dir string
+	dir       string
+	retention RetentionPolicy
+	// now is the clock used by Sweep's retention pass. Overridable in
+	// tests via WithClock; defaults to time.Now.
+	now func() time.Time
+}
+
+// Option configures a Store at construction.
+type Option func(*Store)
+
+// WithRetention sets the dead-session retention policy applied during
+// Sweep. Without it, Sweep performs no age/count pruning.
+func WithRetention(p RetentionPolicy) Option {
+	return func(s *Store) { s.retention = p }
+}
+
+// WithClock overrides the clock used by Sweep's retention pass. Tests
+// inject a fixed clock to make age-out deterministic.
+func WithClock(now func() time.Time) Option {
+	return func(s *Store) { s.now = now }
 }
 
 // New returns a Store rooted at dir. The directory is created lazily
 // on first Write; no IO happens at construction.
-func New(dir string) *Store { return &Store{dir: dir} }
+func New(dir string, opts ...Option) *Store {
+	s := &Store{dir: dir, now: time.Now}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
 
 // Dir is the base directory under which per-session subdirectories
 // live. Exposed for tests and for diagnostic logging.
@@ -227,6 +325,11 @@ func (s *Store) WatchRemovals(events <-chan store.Event) {
 //     left in place (operator may want to inspect)
 //   - non-directory entries under the base dir are ignored
 //
+// After loading, the retention policy (if any) prunes dead-session
+// directories: corpses older than MaxAge are aged out, then only the
+// newest MaxCount survive (LRU by effective timestamp). Pruned sessions
+// are not returned. See RetentionPolicy.
+//
 // Returns nil error when the base dir doesn't exist (clean install).
 func (s *Store) Sweep() ([]store.Session, error) {
 	entries, err := os.ReadDir(s.dir)
@@ -267,5 +370,78 @@ func (s *Store) Sweep() ([]store.Session, error) {
 		sess.Alive = false
 		loaded = append(loaded, sess)
 	}
-	return loaded, nil
+	return s.prune(loaded), nil
+}
+
+// effectiveTime returns the timestamp used to rank a dead session for
+// retention: ExitedAt (when it died) is preferred, falling back to
+// LastActivityAt then CreatedAt. The bool is false when none parse, in
+// which case the session is treated conservatively (never aged out,
+// kept as if newest) so an undatable record is never evicted.
+func effectiveTime(sess store.Session) (time.Time, bool) {
+	for _, ts := range []string{sess.ExitedAt, sess.LastActivityAt, sess.CreatedAt} {
+		if ts == "" {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339, ts); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// prune applies the retention policy to the freshly-loaded dead
+// sessions, removing the on-disk directories of the losers and
+// returning the survivors. Age-out runs first, then the count cap on
+// what remains. A no-op when the policy disables both limits.
+func (s *Store) prune(loaded []store.Session) []store.Session {
+	if s.retention.MaxAge <= 0 && s.retention.MaxCount <= 0 {
+		return loaded
+	}
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+
+	survivors := loaded[:0:0]
+	if s.retention.MaxAge > 0 {
+		cutoff := now().Add(-s.retention.MaxAge)
+		for _, sess := range loaded {
+			t, ok := effectiveTime(sess)
+			if ok && t.Before(cutoff) {
+				s.evict(sess.ID, "age")
+				continue
+			}
+			survivors = append(survivors, sess)
+		}
+	} else {
+		survivors = append(survivors, loaded...)
+	}
+
+	if s.retention.MaxCount > 0 && len(survivors) > s.retention.MaxCount {
+		// Sort newest-first; undatable records sort as newest so they
+		// survive the count cap. Stable so equal timestamps keep their
+		// readdir order.
+		sort.SliceStable(survivors, func(i, j int) bool {
+			ti, oki := effectiveTime(survivors[i])
+			tj, okj := effectiveTime(survivors[j])
+			if oki != okj {
+				return !oki // undatable (newest) before datable
+			}
+			return ti.After(tj)
+		})
+		for _, sess := range survivors[s.retention.MaxCount:] {
+			s.evict(sess.ID, "count")
+		}
+		survivors = survivors[:s.retention.MaxCount]
+	}
+	return survivors
+}
+
+// evict removes a pruned session's directory and logs the reason.
+func (s *Store) evict(id, reason string) {
+	log.Printf("sessionmeta: pruning dead session %s (retention: %s)", id, reason)
+	if err := s.Remove(id); err != nil {
+		log.Printf("sessionmeta: prune remove %s: %v", id, err)
+	}
 }

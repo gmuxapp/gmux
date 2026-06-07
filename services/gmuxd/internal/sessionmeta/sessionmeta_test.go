@@ -479,3 +479,138 @@ func TestWriteAcceptsWellFormedID(t *testing.T) {
 		t.Fatalf("meta.json not written: %v", err)
 	}
 }
+
+// --- Retention policy (T22) ---------------------------------------
+
+// writeDead persists a dead session with the given id and ExitedAt so
+// retention tests can stage aged corpses on disk.
+func writeDead(t *testing.T, s *Store, id, exitedAt string) {
+	t.Helper()
+	sess := store.Session{ID: id, Kind: "shell", Alive: false, ExitedAt: exitedAt}
+	if err := s.Write(sess); err != nil {
+		t.Fatalf("Write %s: %v", id, err)
+	}
+}
+
+func loadedIDs(sessions []store.Session) map[string]bool {
+	m := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		m[s.ID] = true
+	}
+	return m
+}
+
+// TestSweepAgesOutOldSessions pins the age limit: corpses older than
+// MaxAge are removed from disk and excluded from the loaded set, while
+// recently-dead sessions are preserved.
+func TestSweepAgesOutOldSessions(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	s := New(t.TempDir(),
+		WithRetention(RetentionPolicy{MaxAge: 7 * 24 * time.Hour}),
+		WithClock(func() time.Time { return now }))
+
+	writeDead(t, s, "sess-old", now.Add(-30*24*time.Hour).Format(time.RFC3339))
+	writeDead(t, s, "sess-fresh", now.Add(-1*time.Hour).Format(time.RFC3339))
+
+	loaded, err := s.Sweep()
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	ids := loadedIDs(loaded)
+	if ids["sess-old"] {
+		t.Error("old session should have been aged out")
+	}
+	if !ids["sess-fresh"] {
+		t.Error("fresh session should be preserved")
+	}
+	if _, err := os.Stat(s.SessionDir("sess-old")); !os.IsNotExist(err) {
+		t.Errorf("old dir should be removed; err=%v", err)
+	}
+	if _, err := os.Stat(s.SessionDir("sess-fresh")); err != nil {
+		t.Errorf("fresh dir should remain: %v", err)
+	}
+}
+
+// TestSweepCountCapKeepsNewest pins the count limit: only the newest
+// MaxCount dead sessions survive, ranked by ExitedAt.
+func TestSweepCountCapKeepsNewest(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	s := New(t.TempDir(),
+		WithRetention(RetentionPolicy{MaxCount: 2}),
+		WithClock(func() time.Time { return now }))
+
+	writeDead(t, s, "sess-oldest", now.Add(-3*time.Hour).Format(time.RFC3339))
+	writeDead(t, s, "sess-middle", now.Add(-2*time.Hour).Format(time.RFC3339))
+	writeDead(t, s, "sess-newest", now.Add(-1*time.Hour).Format(time.RFC3339))
+
+	loaded, err := s.Sweep()
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	ids := loadedIDs(loaded)
+	if len(loaded) != 2 || !ids["sess-newest"] || !ids["sess-middle"] {
+		t.Errorf("expected newest+middle kept, got %v", ids)
+	}
+	if _, err := os.Stat(s.SessionDir("sess-oldest")); !os.IsNotExist(err) {
+		t.Errorf("oldest dir should be removed; err=%v", err)
+	}
+}
+
+// TestSweepNoPolicyKeepsEverything pins that the default New (no
+// retention option) does not prune, preserving prior behavior.
+func TestSweepNoPolicyKeepsEverything(t *testing.T) {
+	s := New(t.TempDir())
+	writeDead(t, s, "sess-a", "2000-01-01T00:00:00Z") // ancient
+	writeDead(t, s, "sess-b", "2000-01-02T00:00:00Z")
+
+	loaded, err := s.Sweep()
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if len(loaded) != 2 {
+		t.Errorf("expected both sessions kept without a policy, got %d", len(loaded))
+	}
+}
+
+// TestSweepUndatableSurvives pins the conservative rule: a record with
+// no parseable timestamp is never aged out and is treated as newest for
+// the count cap, so it is never evicted unexpectedly.
+func TestSweepUndatableSurvives(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	s := New(t.TempDir(),
+		WithRetention(RetentionPolicy{MaxAge: time.Hour, MaxCount: 1}),
+		WithClock(func() time.Time { return now }))
+
+	writeDead(t, s, "sess-dated", now.Add(-10*time.Hour).Format(time.RFC3339)) // ages out
+	writeDead(t, s, "sess-undated", "")                                        // no timestamp
+
+	loaded, err := s.Sweep()
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	ids := loadedIDs(loaded)
+	if !ids["sess-undated"] {
+		t.Error("undatable session must survive retention")
+	}
+	if ids["sess-dated"] {
+		t.Error("dated stale session should have been aged out")
+	}
+}
+
+// TestDefaultRetentionEnvOverride pins the env-var overrides.
+func TestDefaultRetentionEnvOverride(t *testing.T) {
+	t.Setenv(envRetentionDays, "5")
+	t.Setenv(envRetentionCount, "10")
+	p := DefaultRetention()
+	if p.MaxAge != 5*24*time.Hour {
+		t.Errorf("MaxAge: got %v, want 5d", p.MaxAge)
+	}
+	if p.MaxCount != 10 {
+		t.Errorf("MaxCount: got %d, want 10", p.MaxCount)
+	}
+
+	t.Setenv(envRetentionDays, "0")
+	if got := DefaultRetention().MaxAge; got != 0 {
+		t.Errorf("MaxAge with days=0 should disable age limit, got %v", got)
+	}
+}
