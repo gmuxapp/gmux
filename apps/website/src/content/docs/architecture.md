@@ -11,7 +11,7 @@ One per session. It:
 
 - Launches the child process under a PTY
 - Owns the live session state (title, status, working flag)
-- Maintains a scrollback ring buffer for session replay on reconnect
+- Persists PTY output to an on-disk scrollback file for session replay on reconnect
 - Exposes the session on a Unix socket (metadata, events, terminal attach)
 - Runs adapter logic over child output
 
@@ -77,7 +77,11 @@ Each `gmux` runner exposes its session on a Unix socket. `gmuxd` discovers these
 
 ## Scrollback replay
 
-Each runner maintains a 128KB ring buffer that captures PTY output. When a browser connects or switches sessions, the runner sends the buffered content so the terminal shows the session's current state immediately. Screen clears reset the buffer, and TUI frame boundaries are detected so replay starts at a clean frame.
+Two distinct mechanisms back replay, and they should not be conflated:
+
+- **On-connect emulator snapshot** — the runner keeps a virtual terminal (line-bounded, ~2000 lines via `SetScrollbackSize`) of the live session. When a browser connects or switches sessions, the runner sends this snapshot so the terminal shows the session's current state immediately. Screen clears reset the emulator, and TUI frame boundaries are detected so replay starts at a clean frame. This snapshot lives only while the runner is alive.
+
+- **Persisted on-disk scrollback** — the runner also appends raw PTY bytes to an on-disk scrollback file (`packages/scrollback`). This is **not a ring buffer**: it's an append-only active file that rotates when it exceeds `MaxBytes` (1 MiB). On rotation the active file is renamed to `scrollback.0` and a fresh active file is opened, so total on-disk usage is bounded at `2 * MaxBytes` (2 MiB). Because it lives on disk, this scrollback survives runner exit and serves post-mortem replay for dead sessions.
 
 ## API surface
 

@@ -51,7 +51,7 @@ graph LR
 
 **`gmuxd`** runs once per machine (auto-started by `gmux`). It discovers sessions via their Unix sockets, caches their state, proxies WebSocket connections, and pushes real-time updates to the browser via SSE. It's stateless — restart it anytime, it rebuilds from what's running.
 
-**`gmux-web`** is the browser UI. The sidebar groups sessions by working directory, with status dots that pulse when something needs attention. The terminal is xterm.js — the same battle-tested terminal emulator that powers VS Code's integrated terminal — with synchronized output for flicker-free session switching and 128KB of scrollback that replays instantly on reconnect.
+**`gmux-web`** is the browser UI. The sidebar groups sessions by working directory, with status dots that pulse when something needs attention. The terminal is xterm.js — the same battle-tested terminal emulator that powers VS Code's integrated terminal — with synchronized output for flicker-free session switching and ~1 MiB of persisted scrollback that replays instantly on reconnect.
 
 ## What you see
 
@@ -86,7 +86,7 @@ Sessions are grouped into **folders** by working directory. Each folder heading 
 ### Sessions
 - **Launch anything** — `gmux <command>` wraps any process in a managed session
 - **Full terminal** — xterm.js with WebSocket transport, the same terminal emulator as VS Code
-- **128KB scrollback** — replays instantly on reconnect, no lost context
+- **~1 MiB persisted scrollback** — replays instantly on reconnect, survives runner exit, no lost context
 - **Flicker-free switching** — DEC 2026 synchronized output renders session swaps in a single frame
 - **Session lifecycle** — live status, exit codes, kill from the UI
 - **Reconnecting** — tab away, come back, the terminal is right where you left it
