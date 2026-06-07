@@ -1,9 +1,13 @@
 package apiclient
 
 import (
+	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -639,6 +643,67 @@ func TestProxyWS_ClientDisconnectClosesSpoke(t *testing.T) {
 	}
 }
 
+
+// TestProxyWS_NoCompressionNegotiated is the T18 regression test:
+// the remote/peer proxy must not negotiate permessage-deflate, the
+// same policy the local-session proxy (wsproxy.go) enforces. #242
+// found that compression triggers a mobile-browser reconnect storm;
+// leaving it enabled on this path was a latent bug. We assert the
+// handshake response omits permessage-deflate even when the browser
+// offers it.
+func TestProxyWS_NoCompressionNegotiated(t *testing.T) {
+	spokeServer := wsEchoServer(t, nil, "")
+	defer spokeServer.Close()
+
+	c := New(spokeServer.URL)
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c.ProxyWS(w, r, "sess")
+	}))
+	defer hub.Close()
+
+	// Perform a raw WebSocket upgrade handshake, offering
+	// permessage-deflate, and inspect the response headers directly.
+	addr := strings.TrimPrefix(hub.URL, "http://")
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	keyBytes := make([]byte, 16)
+	if _, err := rand.Read(keyBytes); err != nil {
+		t.Fatalf("rand: %v", err)
+	}
+	key := base64.StdEncoding.EncodeToString(keyBytes)
+
+	req := "GET /ws/sess HTTP/1.1\r\n" +
+		"Host: " + addr + "\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Key: " + key + "\r\n" +
+		"Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n" +
+		"\r\n"
+	if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatalf("write handshake: %v", err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodGet})
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want 101", resp.StatusCode)
+	}
+	if ext := resp.Header.Get("Sec-WebSocket-Extensions"); strings.Contains(ext, "permessage-deflate") {
+		t.Errorf("Sec-WebSocket-Extensions = %q, want no permessage-deflate (T18: must match local proxy)", ext)
+	}
+}
 
 // TestForwardAction_PreservesQueryString locks in the contract that
 // action endpoints with query parameters (e.g. /scrollback?tail=N)

@@ -75,8 +75,10 @@ func (p *Proxy) Handler() http.HandlerFunc {
 		// per drop (the runner's shrinkForReconnect). Neither deflate
 		// mode fixed it; only no compression does. The storm re-ships the
 		// replay far more than compression ever saved, so this is the
-		// right call for every client. Revisit #242's bandwidth goal
-		// another way (e.g. bounding replay size) if it proves necessary.
+		// right call for every client. The remote/peer proxy
+		// (apiclient.ProxyWS) disables it for the same reason — same
+		// browsers, same hop type. Revisit #242's bandwidth goal another
+		// way (e.g. bounding replay size) if it proves necessary.
 		clientConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			InsecureSkipVerify: true,
 		})

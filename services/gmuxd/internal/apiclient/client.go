@@ -354,12 +354,19 @@ func (c *Client) DialWS(ctx context.Context, sessionID string) (*websocket.Conn,
 // sessionID is the ORIGINAL (unnamespaced) session ID on the spoke,
 // not the namespaced wire ID. Callers strip the suffix first.
 func (c *Client) ProxyWS(w http.ResponseWriter, r *http.Request, sessionID string) {
-	// CompressionContextTakeover compresses the browser-facing hop
-	// (terminal output is highly repetitive); the hub->spoke hop is
-	// left uncompressed. Safari falls back to uncompressed. See #242.
+	// No permessage-deflate on the browser-facing hop, matching the
+	// local-session proxy (wsproxy.go). #242 enabled compression here
+	// to shrink the on-connect scrollback replay, but it triggers a
+	// mobile-browser reconnect storm: the browser negotiates deflate,
+	// can't decode gmuxd's frames, and drops the socket after the
+	// first large frame (the replay); the frontend reconnects and
+	// re-ships the replay, which costs far more than compression ever
+	// saved. Same browsers and same hop type as the local proxy, so
+	// the policy must match — leaving it on here was a latent storm
+	// bug on remote/peer sessions. The library defaults
+	// CompressionMode to CompressionDisabled; we keep it that way.
 	clientConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
-		CompressionMode:    websocket.CompressionContextTakeover,
 	})
 	if err != nil {
 		log.Printf("apiclient ProxyWS: accept: %v", err)
