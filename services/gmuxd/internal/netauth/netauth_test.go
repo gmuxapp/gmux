@@ -114,6 +114,30 @@ func TestLoginPageServedWithoutAuth(t *testing.T) {
 	}
 }
 
+func TestLoginPageHasNoExternalResources(t *testing.T) {
+	h := Middleware(testToken, okHandler())
+	req := httptest.NewRequest("GET", "/auth/login", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	body := rr.Body.String()
+	// No auto-loaded external resources (fonts, preconnect, stylesheets):
+	// rendering /auth/login must not trigger any outbound request.
+	for _, needle := range []string{"preconnect", "googleapis", "gstatic", "<link"} {
+		if strings.Contains(body, needle) {
+			t.Errorf("login page must not reference external resource %q", needle)
+		}
+	}
+	// The wordmark font is self-hosted: an embedded Instrument Sans subset
+	// inlined as a data: URI, so the brand renders correctly fully offline.
+	if !strings.Contains(body, "@font-face") || !strings.Contains(body, "src:url(data:font/woff2;base64,") {
+		t.Error("login page should embed the brand font as a self-contained data: URI")
+	}
+	if !strings.Contains(body, "'Instrument Sans'") {
+		t.Error("brand wordmark should use the embedded Instrument Sans font")
+	}
+}
+
 func TestLoginPageRedirectsWhenAuthenticated(t *testing.T) {
 	h := Middleware(testToken, okHandler())
 	req := httptest.NewRequest("GET", "/auth/login", nil)
