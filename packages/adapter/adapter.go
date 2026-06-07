@@ -66,6 +66,19 @@ func BaseName(arg string) string {
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
+// validSlugRe matches a normalized slug: lowercase alphanumeric
+// segments joined by single hyphens, no leading/trailing hyphen.
+// Mirrors the daemon's project-slug rule so session slugs that flow
+// into /@<peer>/<slug> URLs and the ${peer}::${slug} folder key can't
+// carry "/", "::", newlines, or other separators.
+var validSlugRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// IsValidSlug reports whether s is already a well-formed slug
+// (the canonical output shape of Slugify).
+func IsValidSlug(s string) bool {
+	return validSlugRe.MatchString(s)
+}
+
 // Slugify converts a string to a URL-safe slug: lowercase, non-alphanum
 // runs replaced by hyphens, trimmed, capped at 40 characters.
 func Slugify(s string) string {
