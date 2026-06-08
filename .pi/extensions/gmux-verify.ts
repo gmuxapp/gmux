@@ -124,7 +124,16 @@ function findStateDir(
 		.filter((d) => d.includes(tokenGlob))
 		.filter((d) => !tokenExclude || !d.includes(tokenExclude))
 		.map((d) => join(base, d));
-	return match[0] ?? null;
+	if (!match[0]) return null;
+	// The dev-server script nests state under <dir>/state/gmux/; fall back to
+	// the top-level dir for older layouts that wrote the token directly there.
+	const nested = join(match[0], "state", "gmux");
+	try {
+		readdirSync(nested);
+		return nested;
+	} catch {
+		return match[0];
+	}
 }
 
 function readToken(stateDir: string): string {
