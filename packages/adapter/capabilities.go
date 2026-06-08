@@ -145,3 +145,12 @@ type Resumer interface {
 	// session (vs a corrupted/empty/incompatible one).
 	CanResume(path string) bool
 }
+
+// SubprocessAdapter is implemented by adapters that manage their own
+// subprocess directly (no PTY/gmux-run wrapper). The subprocess communicates
+// via JSON lines on stdin/stdout.
+type SubprocessAdapter interface {
+	// SubprocessCommand returns the command + args to run as a direct subprocess
+	// for a new session in the given cwd.
+	SubprocessCommand(cwd string) []string
+}

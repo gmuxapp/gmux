@@ -40,6 +40,23 @@ func FindByKind(kind string) adapter.Adapter {
 	return nil
 }
 
+// FindAdapterByLauncherID returns the adapter that owns the launcher with the
+// given ID, or nil if not found. Only checks non-fallback adapters.
+func FindAdapterByLauncherID(id string) adapter.Adapter {
+	for _, a := range All {
+		l, ok := a.(adapter.Launchable)
+		if !ok {
+			continue
+		}
+		for _, launcher := range l.Launchers() {
+			if launcher.ID == id {
+				return a
+			}
+		}
+	}
+	return nil
+}
+
 // Compile-time interface checks.
 var (
 	_ adapter.SessionFiler    = (*Shell)(nil)

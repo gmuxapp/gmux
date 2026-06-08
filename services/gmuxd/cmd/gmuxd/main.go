@@ -48,7 +48,9 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsdiscovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/update"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/pisdk"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/wsproxy"
+	"github.com/google/uuid"
 	"nhooyr.io/websocket"
 )
 
@@ -501,6 +503,7 @@ func serve(stderr io.Writer) int {
 	launchConfig := discoverLaunchers()
 
 	sessions := store.New()
+	piSDKManager := pisdk.New(sessions)
 
 	// sessionmeta persists per-session records so dead sessions
 	// survive a gmuxd restart. Sweep on startup repopulates the
@@ -1123,6 +1126,38 @@ func serve(stderr io.Writer) int {
 		// Expand ~ to absolute path for exec.Command.Dir.
 		cwd = projects.NormalizePath(cwd)
 
+		// If the launcher's adapter manages its own subprocess (no PTY/gmux-run),
+		// spawn it directly and register it in the store.
+		if a := adapters.FindAdapterByLauncherID(req.LauncherID); a != nil {
+			if sa, ok := a.(adapter.SubprocessAdapter); ok {
+				sessionID := uuid.New().String()
+				now := time.Now().UTC().Format(time.RFC3339)
+				sessions.Upsert(store.Session{
+					ID:        sessionID,
+					Kind:      a.Name(),
+					Cwd:       cwd,
+					Alive:     true,
+					Command:   sa.SubprocessCommand(cwd),
+					CreatedAt: now,
+					StartedAt: now,
+				})
+				if fileMon != nil {
+					fileMon.NotifyNewSession(sessionID)
+				}
+				if err := piSDKManager.Launch(sessionID, sa.SubprocessCommand(cwd)); err != nil {
+					log.Printf("launch: pi-sdk subprocess failed: %v", err)
+					writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
+					return
+				}
+				log.Printf("launch: pi-sdk session %s cwd=%s", sessionID, cwd)
+				writeJSON(w, map[string]any{
+					"ok":   true,
+					"data": map[string]any{"session_id": sessionID},
+				})
+				return
+			}
+		}
+
 		if gmuxBin == "" {
 			writeError(w, http.StatusInternalServerError, "gmux_not_found", "gmux not found (install gmux alongside gmuxd)")
 			return
@@ -1458,6 +1493,12 @@ func serve(stderr io.Writer) int {
 			}
 		}
 
+		// Check if this is a subprocess (pi-sdk) session handled directly by gmuxd.
+		if sess, ok := sessions.Get(sessionID); ok && sess.Kind == "pi-sdk" {
+			piSDKManager.HandleWebSocket(w, r, sessionID)
+			return
+		}
+		
 		// Local session: use the existing Unix socket proxy.
 		wsProxy.Handler()(w, r)
 	})
