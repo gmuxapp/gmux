@@ -1494,10 +1494,14 @@ func serve(stderr io.Writer) int {
 			}
 		}
 
-		// Check if this is a subprocess (pi-sdk) session handled directly by gmuxd.
-		if sess, ok := sessions.Get(sessionID); ok && sess.Kind == "pi-sdk" {
-			piSDKManager.HandleWebSocket(w, r, sessionID)
-			return
+		// Check if this is a subprocess (pi-sdk / pi-sdk-sbx) session.
+		if sess, ok := sessions.Get(sessionID); ok {
+			if a := adapters.FindByKind(sess.Kind); a != nil {
+				if _, isSub := a.(adapter.SubprocessAdapter); isSub {
+					piSDKManager.HandleWebSocket(w, r, sessionID)
+					return
+				}
+			}
 		}
 		
 		// Local session: use the existing Unix socket proxy.
