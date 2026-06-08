@@ -3221,3 +3221,199 @@ a.home-host-link:hover {
 .diff-file-container {
   margin-bottom: 16px;
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   PiSessionView — terminal-style chat for pi-sdk sessions
+   ──────────────────────────────────────────────────────────────────────── */
+
+.pi-session {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+  font-family: 'Fira Code', monospace;
+  font-size: 13px;
+  color: var(--text);
+}
+
+/* Message list */
+.pi-session-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Shared item base */
+.pi-session-item {
+  line-height: 1.55;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* User prompt */
+.pi-session-item-user {
+  color: var(--text-secondary);
+}
+
+.pi-session-prompt-prefix {
+  color: var(--text-muted);
+  user-select: none;
+}
+
+/* Assistant text */
+.pi-session-text {
+  color: var(--text);
+}
+
+/* Streaming cursor */
+.pi-session-cursor {
+  display: inline-block;
+  color: var(--accent);
+  animation: pi-blink 1s step-end infinite;
+}
+@keyframes pi-blink {
+  50% { opacity: 0; }
+}
+
+/* Thinking block */
+.pi-session-thinking {
+  margin: 4px 0;
+}
+.pi-session-thinking-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0.6;
+}
+.pi-session-thinking-toggle:hover {
+  opacity: 1;
+}
+.pi-session-thinking-body {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding-left: 16px;
+  opacity: 0.7;
+  white-space: pre-wrap;
+  margin-top: 2px;
+}
+
+/* Tool block */
+.pi-session-tool {
+  margin: 6px 0;
+  color: var(--text-secondary);
+}
+.pi-session-tool-header {
+  color: var(--accent);
+  opacity: 0.8;
+}
+.pi-session-tool-args {
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+.pi-session-tool-output {
+  color: var(--text);
+  opacity: 0.9;
+}
+.pi-session-tool-footer {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+.pi-session-tool-done {
+  color: var(--status-connected);
+  opacity: 0.85;
+}
+.pi-session-tool-error {
+  color: var(--status-error);
+  opacity: 0.9;
+}
+
+/* System items */
+.pi-session-item-system {
+  font-style: italic;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+.pi-session-item-system-ready {
+  color: var(--status-connected);
+  opacity: 0.8;
+}
+.pi-session-item-system-error {
+  color: var(--status-error);
+  opacity: 1;
+  font-style: normal;
+  font-weight: 500;
+}
+.pi-session-item-system-warning {
+  color: oklch(78% 0.12 75);
+  opacity: 0.85;
+}
+
+/* Input bar */
+.pi-session-input-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.pi-session-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: 'Fira Code', monospace;
+  font-size: 13px;
+  padding: 6px 10px;
+  outline: none;
+}
+.pi-session-input:focus {
+  border-color: var(--accent);
+}
+.pi-session-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+.pi-session-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pi-session-abort-btn {
+  background: none;
+  border: 1px solid var(--status-error);
+  color: var(--status-error);
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.pi-session-abort-btn:hover {
+  background: oklch(18% 0.04 25);
+}
+
+.pi-session-ws-state {
+  font-size: 11px;
+  font-family: 'Fira Code', monospace;
+  flex-shrink: 0;
+}
+.pi-session-ws-state-connecting {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+.pi-session-ws-state-lost {
+  color: var(--status-error);
+}
