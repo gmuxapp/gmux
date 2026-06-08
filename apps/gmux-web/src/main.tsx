@@ -5,6 +5,7 @@ import './styles.css'
 
 import { ReplayView } from './replay-view'
 import { TerminalView, type SyncDiag } from './terminal'
+import { PiSessionView, isPiSDKSession } from './pi-session'
 import { useArrivalPulse } from './use-arrival-pulse'
 import { Sidebar, sessionDotState, sessionEnvironmentIcon, type SessionListLayout, LAYOUT_KEY, loadLayout } from './sidebar'
 import type { DotState } from './store'
@@ -602,11 +603,12 @@ function App() {
   }, [resumingId])
 
   const canAttach = !!selectedVal?.alive && (!!selectedVal?.socket_path || !!selectedVal?.peer)
+  const canAttachPiSDK = !!selectedVal?.alive && isPiSDKSession(selectedVal)
 
   // Track which sessions have live TerminalView instances.
   // Mutating the ref during render is safe: the update is visible in the
   // same render pass, before the terminal stack JSX is evaluated below.
-  if (selId && selectedVal?.alive && canAttach) {
+  if (selId && selectedVal?.alive && canAttach && !isPiSDKSession(selectedVal)) {
     openedSessionIdsRef.current.add(selId)
   }
   const terminalSessions = (termOpts && keybindsVal)
@@ -614,6 +616,14 @@ function App() {
     : []
   // The active view is a live terminal if it's in the opened set.
   const activeIsTerminal = !!selectedVal?.alive && openedSessionIdsRef.current.has(selectedVal.id)
+
+  // Track which sessions have live PiSessionView instances.
+  const openedPiSessionIdsRef = useRef(new Set<string>())
+  if (selId && canAttachPiSDK) {
+    openedPiSessionIdsRef.current.add(selId)
+  }
+  const piSdkSessions = sessionsVal.filter(s => s.alive && openedPiSessionIdsRef.current.has(s.id))
+  const activeIsPiSDK = !!selectedVal?.alive && openedPiSessionIdsRef.current.has(selectedVal.id)
 
   // Clear modifiers when terminal isn't attachable.
   useEffect(() => {
@@ -750,8 +760,17 @@ function App() {
           />
         ))}
 
-        {/* Non-terminal overlay: shown when the active view isn't a live terminal */}
-        {!activeIsTerminal && viewVal?.kind !== 'diff-viewer' && viewVal?.kind !== 'markdown-editor' && viewVal?.kind !== 'image-viewer' && (
+        {/* Persistent pi-sdk session stack: one PiSessionView per opened pi-sdk session. */}
+        {piSdkSessions.map(s => (
+          <PiSessionView
+            key={s.id}
+            session={s}
+            isActive={s.id === selId}
+          />
+        ))}
+
+        {/* Non-terminal overlay: shown when the active view isn't a live terminal or pi-sdk session */}
+        {!activeIsTerminal && !activeIsPiSDK && viewVal?.kind !== 'diff-viewer' && viewVal?.kind !== 'markdown-editor' && viewVal?.kind !== 'image-viewer' && (
           selectedVal && !selectedVal.alive && termOpts ? (
             <ReplayView
               session={selectedVal}
