@@ -101,6 +101,17 @@ async function main(): Promise<void> {
       const auth = AuthStorage.create();
       const registry = ModelRegistry.create(auth);
       modelObj = registry.find(provider, modelId) ?? undefined;
+      if (!modelObj) {
+        emit({
+          type: "warning",
+          message: `model "${args.model}" not found in registry — using default`,
+        });
+      }
+    } else {
+      emit({
+        type: "warning",
+        message: `invalid --model format "${args.model}" (expected provider/modelId) — using default`,
+      });
     }
   }
 

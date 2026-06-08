@@ -1130,25 +1130,26 @@ func serve(stderr io.Writer) int {
 		// spawn it directly and register it in the store.
 		if a := adapters.FindAdapterByLauncherID(req.LauncherID); a != nil {
 			if sa, ok := a.(adapter.SubprocessAdapter); ok {
-				sessionID := uuid.New().String()
-				now := time.Now().UTC().Format(time.RFC3339)
-				sessions.Upsert(store.Session{
-					ID:        sessionID,
-					Kind:      a.Name(),
-					Cwd:       cwd,
-					Alive:     true,
-					Command:   sa.SubprocessCommand(cwd),
-					CreatedAt: now,
-					StartedAt: now,
-				})
+			subCmd := sa.SubprocessCommand(cwd)
+			sessionID := uuid.New().String()
+			now := time.Now().UTC().Format(time.RFC3339)
+			sessions.Upsert(store.Session{
+				ID:        sessionID,
+				Kind:      a.Name(),
+				Cwd:       cwd,
+				Alive:     true,
+				Command:   subCmd,
+				CreatedAt: now,
+				StartedAt: now,
+			})
 				if fileMon != nil {
 					fileMon.NotifyNewSession(sessionID)
 				}
-				if err := piSDKManager.Launch(sessionID, sa.SubprocessCommand(cwd)); err != nil {
-					log.Printf("launch: pi-sdk subprocess failed: %v", err)
-					writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
-					return
-				}
+			if err := piSDKManager.Launch(sessionID, subCmd); err != nil {
+				log.Printf("launch: pi-sdk subprocess failed: %v", err)
+				writeError(w, http.StatusInternalServerError, "launch_failed", err.Error())
+				return
+			}
 				log.Printf("launch: pi-sdk session %s cwd=%s", sessionID, cwd)
 				writeJSON(w, map[string]any{
 					"ok":   true,
@@ -1507,6 +1508,8 @@ func serve(stderr io.Writer) int {
 
 	mux.HandleFunc("/v1/presence", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+			// InsecureSkipVerify disables Origin checking. gmuxd is a localhost
+			// daemon; cross-origin WebSocket connections are acceptable here.
 			InsecureSkipVerify: true,
 		})
 		if err != nil {
@@ -2616,6 +2619,7 @@ func serve(stderr io.Writer) int {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	piSDKManager.Shutdown(3 * time.Second)
 	tcpSrv.Shutdown(ctx)
 	sockSrv.Shutdown(ctx)
 	unixipc.Cleanup(sock)

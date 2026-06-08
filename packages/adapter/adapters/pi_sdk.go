@@ -88,12 +88,7 @@ func (a *PiSDK) ResumeCommand(info *adapter.SessionFileInfo) []string {
 
 func (a *PiSDK) CanResume(path string) bool { return a.pi.CanResume(path) }
 
-func (a *PiSDK) CommandTitle(command []string) string {
-	if len(command) == 0 {
-		return "pi"
-	}
-	return "pi"
-}
+func (a *PiSDK) CommandTitle(_ []string) string { return "pi" }
 
 // ── Path resolution ─────────────────────────────────────────────────────────
 
@@ -103,7 +98,7 @@ func (a *PiSDK) CommandTitle(command []string) string {
 //  3. ~/.gmux/pi-sdk-lib/dist/index.js (user install location)
 func resolvePiSDKLibPath() string {
 	if p := os.Getenv("GMUX_PI_SDK_LIB"); p != "" {
-		if _, err := os.Stat(p); err == nil {
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
 			return p
 		}
 	}

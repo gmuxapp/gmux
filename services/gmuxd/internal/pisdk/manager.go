@@ -187,6 +187,8 @@ func (m *Manager) HandleWebSocket(w http.ResponseWriter, r *http.Request, sessio
 	}
 
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		// InsecureSkipVerify disables Origin checking. gmuxd is a localhost
+		// daemon; cross-origin WebSocket connections are acceptable here.
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
@@ -198,6 +200,24 @@ func (m *Manager) HandleWebSocket(w http.ResponseWriter, r *http.Request, sessio
 	proc.mu.Lock()
 	proc.conns = append(proc.conns, conn)
 	proc.mu.Unlock()
+
+	// Guard against the subprocess having already exited between the nil check
+	// above and registering the conn. If done is closed, waitLoop already ran
+	// and will not clean up this conn; close it here and bail out.
+	select {
+	case <-proc.done:
+		proc.mu.Lock()
+		for i, c := range proc.conns {
+			if c == conn {
+				proc.conns = append(proc.conns[:i], proc.conns[i+1:]...)
+				break
+			}
+		}
+		proc.mu.Unlock()
+		conn.Close(websocket.StatusNormalClosure, "process exited")
+		return
+	default:
+	}
 
 	defer func() {
 		proc.mu.Lock()
@@ -232,4 +252,49 @@ func (m *Manager) IsRunning(sessionID string) bool {
 	_, ok := m.sessions[sessionID]
 	m.mu.Unlock()
 	return ok
+}
+
+// Shutdown closes stdin on all running subprocesses, triggering graceful exit,
+// then waits up to timeout for them to finish. Any still running after the
+// deadline are force-killed.
+func (m *Manager) Shutdown(timeout time.Duration) {
+	m.mu.Lock()
+	procs := make([]*subprocess, 0, len(m.sessions))
+	for _, p := range m.sessions {
+		procs = append(procs, p)
+	}
+	m.mu.Unlock()
+
+	// Close stdin on all subprocesses (sends EOF → graceful shutdown).
+	for _, p := range procs {
+		p.stdin.Close()
+	}
+
+	// Wait for all to exit, then force-kill any that exceed the deadline.
+	done := make(chan struct{})
+	go func() {
+		for _, p := range procs {
+			<-p.done
+		}
+		close(done)
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		// All exited gracefully.
+	case <-timer.C:
+		// Force-kill anything still running.
+		for _, p := range procs {
+			select {
+			case <-p.done:
+				// already exited
+			default:
+				if p.cmd.Process != nil {
+					p.cmd.Process.Kill()
+				}
+			}
+		}
+	}
 }
