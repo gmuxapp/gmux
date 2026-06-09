@@ -7,12 +7,18 @@ tasks:
       - gmux:build
     preset: server
   build:
-    script: go build -o ../../bin/gmuxd ./cmd/gmuxd
+    script: |
+      go build -o ../../bin/gmuxd ./cmd/gmuxd
+      (cd pi-sdk-lib && pnpm bundle)
+      mkdir -p ../../bin/pi-sdk-lib/dist
+      cp pi-sdk-lib/dist/index.js ../../bin/pi-sdk-lib/dist/index.js
     inputs:
       - "cmd/**/*"
       - "internal/**/*"
       - "go.mod"
       - "/packages/adapter/**/*.go"
+      - "pi-sdk-lib/src/**/*"
+      - "pi-sdk-lib/package.json"
   test:
     command: go test ./...
   lint:

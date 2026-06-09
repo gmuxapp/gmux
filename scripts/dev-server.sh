@@ -149,6 +149,11 @@ echo "→ Building Go binaries..."
 (cd "$ROOT/cli/gmux" && go build -o "$DEV_BIN_DIR/gmux-dev" ./cmd/gmux)
 (cd "$ROOT/services/gmuxd" && go build -o "$DEV_BIN_DIR/gmuxd-dev" ./cmd/gmuxd)
 
+echo "→ Bundling pi-sdk-lib..."
+(cd "$ROOT/services/gmuxd/pi-sdk-lib" && pnpm bundle)
+mkdir -p "$DEV_BIN_DIR/pi-sdk-lib/dist"
+cp "$ROOT/services/gmuxd/pi-sdk-lib/dist/index.js" "$DEV_BIN_DIR/pi-sdk-lib/dist/index.js"
+
 # ── Cleanup ──
 
 PIDS=()

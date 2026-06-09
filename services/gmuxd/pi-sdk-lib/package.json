@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=dist/index.js --banner:js='const __importMetaUrl=require(\"url\").pathToFileURL(__filename).href;' --define:import.meta.url=__importMetaUrl",
     "dev": "tsx src/index.ts",
     "test": "vitest run --testTimeout=30000 --passWithNoTests",
     "lint": "tsc --noEmit"
@@ -14,6 +15,7 @@
     "@earendil-works/pi-coding-agent": "^0.78.1"
   },
   "devDependencies": {
+    "esbuild": "^0.25.0",
     "tsx": "^4.19.2",
     "typescript": "^5.8.2",
     "vitest": "^4.0.0"
