@@ -10,6 +10,7 @@ import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { createReplayBuffer } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
+import { openLinkAtPoint } from './terminal-link'
 import { decideViewportResize, sameSize } from './terminal-resize'
 import { MOCK_BY_ID } from './mock-data/index'
 import type { Session } from './types'
@@ -608,19 +609,28 @@ export function TerminalView({
       ev.stopPropagation()
     }
 
-    const handleTouchEndCapture = () => {
+    const handleTouchEndCapture = (ev: TouchEvent) => {
       if (touchPanState.active && !touchPanState.moved) {
+        // Tap on a link opens it by driving xterm's Linkifier with a
+        // synthetic mousemove/mousedown/mouseup handshake (see
+        // terminal-link.ts for why the browser's own synthesized cascade
+        // is unreliable here, especially on iOS). preventDefault stops
+        // the browser from synthesizing its own cascade for this touch,
+        // so the link can't be activated twice. When a link opens, skip
+        // the keyboard focus/scroll — the tap was navigation, not input
+        // intent.
+        if (openLinkAtPoint(term, touchPanState.startX, touchPanState.startY)) {
+          ev.preventDefault()
+          touchPanState.active = false
+          touchPanState.moved = false
+          return
+        }
+
         focusTerminalInput(term)
-        // Defer scroll so synthesized mouse events (which the browser fires
-        // after touchend returns) reach xterm's Linkifier at the current
-        // scroll position. Without this, scrollToBottom() changes the
-        // viewport before the Linkifier can resolve the link under the tap
-        // coordinates, making link taps a no-op on mobile.
-        //
-        // setTimeout(0) and not rAF: synthesized mouse events fire as part
-        // of the current user interaction, before queued tasks. rAF timing
-        // relative to synthesized events is unspecified and varies by
-        // browser; on some it fires before them, reproducing the bug.
+        // Defer the scroll-to-bottom past the focus-driven layout work
+        // (keyboard opening resizes the viewport) and the browser's
+        // synthesized mouse events for this touch, so it lands once on
+        // the settled layout instead of racing them.
         setTimeout(() => {
           term.scrollToBottom()
           const host = shellRef.current
@@ -641,7 +651,7 @@ export function TerminalView({
 
     shell?.addEventListener('touchstart', handleTouchStartCapture, { capture: true, passive: false })
     shell?.addEventListener('touchmove', handleTouchMoveCapture, { capture: true, passive: false })
-    shell?.addEventListener('touchend', handleTouchEndCapture, true)
+    shell?.addEventListener('touchend', handleTouchEndCapture, { capture: true, passive: false })
     shell?.addEventListener('touchcancel', clearTouchPan, true)
 
     // Resize strategy:
