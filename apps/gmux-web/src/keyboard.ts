@@ -267,6 +267,81 @@ function executeAction(
 }
 
 /**
+ * Result of applying armed mobile modifiers to an input payload.
+ *
+ * `ctrlApplied` / `altApplied` tell the caller which arms were actually
+ * encoded into `seq`, so only those get consumed (disarmed). A ctrl arm
+ * stays armed when the payload has no ctrl encoding (e.g. a digit),
+ * matching the long-standing sendInput behavior.
+ */
+export interface ArmedModifierResult {
+  seq: string
+  ctrlApplied: boolean
+  altApplied: boolean
+}
+
+/**
+ * Apply armed ctrl/alt modifiers to an outgoing input payload.
+ *
+ * This is the single source of truth for the mobile "arm a modifier, then
+ * press a key" feature. It understands more than bare characters:
+ *
+ *  - Single characters: ctrl via ctrlSequenceFor (legacy control codes,
+ *    CSI-u for uppercase), alt via ESC prefix, both combined when armed
+ *    together (legacy ESC + control code; CSI-u modifier bits for
+ *    uppercase).
+ *  - CSI cursor keys (arrows, Home, End): modifier parameter injection,
+ *    e.g. \x1b[D + ctrl → \x1b[1;5D (the standard word-left encoding).
+ *  - Enter / Tab / Esc: alt uses the universal ESC prefix. Ctrl has no
+ *    legacy encoding for these (ctrl+enter is byte-identical to enter),
+ *    so CSI-u is emitted — consistent with ctrlSequenceFor's uppercase
+ *    handling. Apps without kitty-protocol support won't see it, but
+ *    nothing else can represent the combo at all.
+ *
+ * The CSI-u modifier parameter is 1 + shift(1) + alt(2) + ctrl(4).
+ */
+export function applyArmedModifiers(
+  data: string,
+  ctrl: boolean,
+  alt: boolean,
+): ArmedModifierResult {
+  const unchanged = { seq: data, ctrlApplied: false, altApplied: false }
+  if (!ctrl && !alt) return unchanged
+  const mod = 1 + (alt ? 2 : 0) + (ctrl ? 4 : 0)
+
+  // CSI cursor-key sequences: inject the modifier parameter.
+  const csi = /^\x1b\[([A-DHF])$/.exec(data)
+  if (csi) return { seq: `\x1b[1;${mod}${csi[1]}`, ctrlApplied: ctrl, altApplied: alt }
+
+  // Enter / Tab / Esc with ctrl involved: CSI-u (no legacy encoding exists).
+  const csiUCode = data === '\r' ? 13 : data === '\t' ? 9 : data === '\x1b' ? 27 : null
+  if (csiUCode !== null && ctrl) {
+    return { seq: `\x1b[${csiUCode};${mod}u`, ctrlApplied: true, altApplied: alt }
+  }
+
+  if (data.length === 1 && ctrl) {
+    // Uppercase: ctrlSequenceFor would emit CSI-u with mod 6 (shift+ctrl);
+    // fold an armed alt into the modifier bits instead of ESC-prefixing.
+    if (data >= 'A' && data <= 'Z') {
+      return {
+        seq: `\x1b[${data.toLowerCase().charCodeAt(0)};${mod + 1}u`,
+        ctrlApplied: true,
+        altApplied: alt,
+      }
+    }
+    const code = ctrlSequenceFor(data)
+    if (code) return { seq: alt ? `\x1b${code}` : code, ctrlApplied: true, altApplied: alt }
+  }
+
+  // Alt fallback: ESC prefix is the universal legacy alt encoding and is
+  // valid for any remaining payload (chars, \r, \t, even whole sequences).
+  if (alt) return { seq: `\x1b${data}`, ctrlApplied: false, altApplied: true }
+
+  // Ctrl armed but no encoding for this payload: leave it armed.
+  return unchanged
+}
+
+/**
  * Translate a single character into its Ctrl+<key> sequence.
  *
  * Lowercase letters produce the traditional ASCII control code (a=\x01).

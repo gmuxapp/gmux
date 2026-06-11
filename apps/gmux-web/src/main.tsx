@@ -4,6 +4,7 @@ import { LocationProvider, Router, Route, lazy, useLocation } from 'preact-iso'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
+import { applyArmedModifiers } from './keyboard'
 import { ReplayView } from './replay-view'
 import { TerminalView } from './terminal'
 import { useArrivalPulse } from './use-arrival-pulse'
@@ -203,6 +204,8 @@ function MobileTerminalBar({
   onPaste,
   onToggleCtrl,
   onToggleAlt,
+  onCtrlConsumed,
+  onAltConsumed,
   onFocusTerminal,
 }: {
   canSend: boolean
@@ -213,6 +216,8 @@ function MobileTerminalBar({
   onPaste: () => void
   onToggleCtrl: () => void
   onToggleAlt: () => void
+  onCtrlConsumed: () => void
+  onAltConsumed: () => void
   onFocusTerminal: () => void
 }) {
   // Read signals directly; no props needed for these. The hamburger
@@ -226,6 +231,20 @@ function MobileTerminalBar({
 
   const keepFocus = (ev: Event) => ev.preventDefault()
   const tap = (seq: string) => { onSend(seq); onFocusTerminal() }
+
+  // Modifier-aware tap: the toolbar sends through the raw input channel
+  // (bypassing the arm logic in sendInput), so armed ctrl/alt must be
+  // applied here. Consumes whichever arms were actually encoded.
+  // Used by keys where an armed modifier should combine (send, ←/→);
+  // NOT used by the ↑/↓ layer buttons, whose entire purpose is plain
+  // arrow access while a modifier is armed.
+  const tapKey = (seq: string, ctrl = ctrlArmed, alt = altArmed): string => {
+    const r = applyArmedModifiers(seq, ctrl, alt)
+    if (r.ctrlApplied && ctrlArmed) onCtrlConsumed()
+    if (r.altApplied) onAltConsumed()
+    tap(r.seq)
+    return r.seq
+  }
 
   const [holdWordMode, setHoldWordMode] = useState(false)
   const holdTimer1   = useRef<ReturnType<typeof setTimeout>  | null>(null)
@@ -305,7 +324,7 @@ function MobileTerminalBar({
           <button
             class="mobile-bottom-action"
             disabled={!canSend}
-            onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); e.preventDefault(); const s = showCtrl ? wordSeq : seq; tap(s); startArrowHold(s, wordSeq) }}
+            onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); e.preventDefault(); const s = tapKey(seq, showCtrl, altArmed); startArrowHold(s, wordSeq) }}
             onPointerUp={clearHold}
             onPointerCancel={clearHold}
             onContextMenu={e => e.preventDefault()}
@@ -319,10 +338,7 @@ function MobileTerminalBar({
           : <button
               class="mobile-bottom-action send-btn"
               disabled={!canSend}
-              // The toolbar sends through the raw input channel (no ctrl/alt
-              // arm transformation), so an armed Alt must be applied here:
-              // prefix ESC (alt+enter) and consume the arm.
-              onClick={() => { if (altArmed) { onToggleAlt(); tap('\x1b\r') } else { tap('\r') } }}
+              onClick={() => tapKey('\r')}
               title={altArmed ? 'Send Alt+Enter' : 'Send'}
             ><IconSend /></button>
         }
@@ -589,6 +605,8 @@ function App() {
           onPaste={handleMobilePaste}
           onToggleCtrl={handleToggleCtrl}
           onToggleAlt={handleToggleAlt}
+          onCtrlConsumed={handleCtrlConsumed}
+          onAltConsumed={handleAltConsumed}
           onFocusTerminal={handleFocusTerminal}
         />
       </div>
