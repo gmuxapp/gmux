@@ -59,6 +59,40 @@ code {
   box-sizing: border-box;
 }
 
+/* ── Scrollbars ──
+ *
+ * One scrollbar style for the whole app, derived from the sidebar's slim
+ * thumb but a touch wider and brighter so it's easier to spot and grab.
+ *
+ * Two mechanisms on purpose: Chromium 121+ and Firefox honor the standard
+ * scrollbar-width/scrollbar-color properties (and then ignore the
+ * ::-webkit-scrollbar pseudos entirely); Safari only understands the
+ * webkit pseudos. Each browser picks the one it supports.
+ *
+ * Keeping the thumb thin also keeps the layout cost of classic
+ * (non-overlay) scrollbars small wherever they take up space. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: oklch(46% 0.015 250);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 html, body, #app {
   height: 100%;
   overflow: hidden;
@@ -207,19 +241,6 @@ body {
   padding: 6px 0 48px;
   display: flex;
   flex-direction: column;
-}
-
-.sidebar-scroll::-webkit-scrollbar {
-  width: 3px;
-}
-
-.sidebar-scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.sidebar-scroll::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 2px;
 }
 
 /* ── Folder ── */
@@ -1272,9 +1293,6 @@ body {
   padding: 12px 16px 16px;
 }
 
-.modal-body::-webkit-scrollbar { width: 3px; }
-.modal-body::-webkit-scrollbar-track { background: transparent; }
-.modal-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 /* Section layout */
 .mp-section + .mp-section {
@@ -1414,9 +1432,6 @@ body {
   gap: 2px;
 }
 
-.mp-discovered-scroll::-webkit-scrollbar { width: 3px; }
-.mp-discovered-scroll::-webkit-scrollbar-track { background: transparent; }
-.mp-discovered-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 /* Discovered rows */
 .mp-discovered-row {

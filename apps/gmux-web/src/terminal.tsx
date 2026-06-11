@@ -55,12 +55,21 @@ function measureTerminalFit(
   const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
   const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
 
-  // Measure the shell, the stable flex-allocated viewport.
-  const availW = shellEl.clientWidth - padX - reserveWidth
-  const availH = shellEl.clientHeight - padY
+  // Measure the shell, the stable flex-allocated viewport. Use offsetWidth/
+  // offsetHeight, NOT clientWidth/clientHeight: the shell is the scroll
+  // container (overflow: auto), so client* shrinks when a scrollbar appears.
+  // Measuring client* creates a feedback loop — e.g. after a DPR change
+  // (moving the window between monitors) the grid can overflow by 1px,
+  // a scrollbar appears, client* shrinks, we refit smaller, the scrollbar
+  // disappears, client* grows, we refit bigger, the grid overflows again,
+  // forever. offset* is the border-box and ignores scrollbars, so the
+  // measurement is a fixed point regardless of transient overflow.
+  // (.terminal-shell has no border/padding, so offset* == the viewport.)
+  const availW = shellEl.offsetWidth - padX - reserveWidth
+  const availH = shellEl.offsetHeight - padY
 
   let cols = Math.max(2, Math.floor(availW / dims.css.cell.width))
-  const rows = Math.max(1, Math.floor(availH / dims.css.cell.height))
+  let rows = Math.max(1, Math.floor(availH / dims.css.cell.height))
 
   // Guard against 1px overflow: xterm computes screen width as
   // Math.round(device.cell.width * cols / dpr). Because css.cell.width is
@@ -72,6 +81,13 @@ function measureTerminalFit(
   if (dims.device.cell.width > 0) {
     const predictedWidth = Math.round(dims.device.cell.width * cols / dpr)
     if (predictedWidth > availW && cols > 2) cols--
+  }
+  // Same guard vertically: row height rounding across device/css pixels can
+  // overflow by 1px at fractional DPRs (the monitor-move case), which is
+  // exactly what seeds the scrollbar flicker described above.
+  if (dims.device.cell.height > 0) {
+    const predictedHeight = Math.round(dims.device.cell.height * rows / dpr)
+    if (predictedHeight > availH && rows > 1) rows--
   }
 
   return { cols, rows }
@@ -87,9 +103,11 @@ export function getProposedTerminalSize(fit: FitAddon | null): TerminalSize | nu
 
 function getResizeSignalPixels(host: HTMLElement | null, vv: VisualViewport | null): { width: number; height: number } {
   if (host) {
+    // offset* not client*: must match measureTerminalFit so scrollbar
+    // appearance/disappearance doesn't register as a size change.
     return {
-      width: host.clientWidth,
-      height: host.clientHeight,
+      width: host.offsetWidth,
+      height: host.offsetHeight,
     }
   }
 
