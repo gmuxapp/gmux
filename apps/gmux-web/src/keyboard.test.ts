@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ctrlSequenceFor, formatPasteText, pickBinaryDataTransferItem } from './keyboard'
+import { applyArmedModifiers, ctrlSequenceFor, formatPasteText, pickBinaryDataTransferItem } from './keyboard'
 
 // Build an array-like stand-in for DataTransferItemList. Vitest runs in
 // node by default, where the real DOM type isn't available; a plain
@@ -127,5 +127,64 @@ describe('ctrlSequenceFor', () => {
     expect(ctrlSequenceFor('ab')).toBeNull()
     expect(ctrlSequenceFor('1')).toBeNull()
     expect(ctrlSequenceFor('')).toBeNull()
+  })
+})
+
+describe('applyArmedModifiers', () => {
+  it('passes data through unchanged when nothing is armed', () => {
+    expect(applyArmedModifiers('a', false, false))
+      .toEqual({ seq: 'a', ctrlApplied: false, altApplied: false })
+    expect(applyArmedModifiers('\r', false, false))
+      .toEqual({ seq: '\r', ctrlApplied: false, altApplied: false })
+  })
+
+  it('applies ctrl to single characters via control codes', () => {
+    expect(applyArmedModifiers('c', true, false))
+      .toEqual({ seq: '\x03', ctrlApplied: true, altApplied: false })
+  })
+
+  it('applies alt to single characters via ESC prefix', () => {
+    expect(applyArmedModifiers('b', false, true))
+      .toEqual({ seq: '\x1bb', ctrlApplied: false, altApplied: true })
+  })
+
+  it('combines ctrl+alt on lowercase characters (ESC + control code)', () => {
+    expect(applyArmedModifiers('c', true, true))
+      .toEqual({ seq: '\x1b\x03', ctrlApplied: true, altApplied: true })
+  })
+
+  it('folds alt into the CSI-u modifier for uppercase ctrl combos', () => {
+    // ctrl only: shift+ctrl = 6 (matches ctrlSequenceFor)
+    expect(applyArmedModifiers('A', true, false).seq).toBe('\x1b[97;6u')
+    // ctrl+alt: shift+alt+ctrl = 8
+    expect(applyArmedModifiers('A', true, true).seq).toBe('\x1b[97;8u')
+  })
+
+  it('leaves ctrl armed when the payload has no ctrl encoding', () => {
+    expect(applyArmedModifiers('1', true, false))
+      .toEqual({ seq: '1', ctrlApplied: false, altApplied: false })
+  })
+
+  it('injects modifier params into CSI cursor-key sequences', () => {
+    expect(applyArmedModifiers('\x1b[D', true, false).seq).toBe('\x1b[1;5D')  // ctrl+left = word-left
+    expect(applyArmedModifiers('\x1b[C', false, true).seq).toBe('\x1b[1;3C')  // alt+right
+    expect(applyArmedModifiers('\x1b[A', true, true).seq).toBe('\x1b[1;7A')   // ctrl+alt+up
+  })
+
+  it('encodes alt+enter as ESC CR', () => {
+    expect(applyArmedModifiers('\r', false, true))
+      .toEqual({ seq: '\x1b\r', ctrlApplied: false, altApplied: true })
+  })
+
+  it('encodes ctrl+enter / ctrl+tab / ctrl+esc as CSI-u (no legacy encoding exists)', () => {
+    expect(applyArmedModifiers('\r', true, false).seq).toBe('\x1b[13;5u')
+    expect(applyArmedModifiers('\t', true, false).seq).toBe('\x1b[9;5u')
+    expect(applyArmedModifiers('\x1b', true, false).seq).toBe('\x1b[27;5u')
+    expect(applyArmedModifiers('\r', true, true).seq).toBe('\x1b[13;7u')
+  })
+
+  it('ESC-prefixes alt for keys without special handling', () => {
+    expect(applyArmedModifiers('\t', false, true).seq).toBe('\x1b\t')
+    expect(applyArmedModifiers('\n', false, true).seq).toBe('\x1b\n')
   })
 })

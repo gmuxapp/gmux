@@ -5,7 +5,7 @@ import { ImageAddon } from '@xterm/addon-image'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import type { ResolvedTerminalOptions } from './settings-schema'
 import { loadWebglRenderer } from './webgl-renderer'
-import { attachKeyboardHandler, attachPasteHandler, ctrlSequenceFor, defaultPasteFeedback, handlePasteAction } from './keyboard'
+import { applyArmedModifiers, attachKeyboardHandler, attachPasteHandler, defaultPasteFeedback, handlePasteAction } from './keyboard'
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { createReplayBuffer } from './replay'
@@ -482,22 +482,10 @@ export function TerminalView({
     }
 
     const sendInput = (data: string) => {
-      if (ctrlArmedRef.current) {
-        const ctrlData = ctrlSequenceFor(data)
-        if (ctrlData) {
-          ctrlArmedRef.current = false
-          onCtrlConsumed()
-          sendRawInput(ctrlData)
-          return
-        }
-      }
-      if (altArmedRef.current) {
-        altArmedRef.current = false
-        onAltConsumed()
-        sendRawInput('\x1b' + data)
-        return
-      }
-      sendRawInput(data)
+      const r = applyArmedModifiers(data, ctrlArmedRef.current, altArmedRef.current)
+      if (r.ctrlApplied) { ctrlArmedRef.current = false; onCtrlConsumed() }
+      if (r.altApplied) { altArmedRef.current = false; onAltConsumed() }
+      sendRawInput(r.seq)
     }
 
     onInputReady?.(sendRawInput)
