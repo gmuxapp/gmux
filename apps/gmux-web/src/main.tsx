@@ -316,7 +316,15 @@ function MobileTerminalBar({
         ))}
         {ctrlArmed
           ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => { onPaste(); onFocusTerminal() }} title="Paste from clipboard"><IconPaste /></button>
-          : <button class="mobile-bottom-action send-btn" disabled={!canSend} onClick={() => tap('\r')} title="Send"><IconSend /></button>
+          : <button
+              class="mobile-bottom-action send-btn"
+              disabled={!canSend}
+              // The toolbar sends through the raw input channel (no ctrl/alt
+              // arm transformation), so an armed Alt must be applied here:
+              // prefix ESC (alt+enter) and consume the arm.
+              onClick={() => { if (altArmed) { onToggleAlt(); tap('\x1b\r') } else { tap('\r') } }}
+              title={altArmed ? 'Send Alt+Enter' : 'Send'}
+            ><IconSend /></button>
         }
       </div>
     </div>
