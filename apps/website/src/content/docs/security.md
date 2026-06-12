@@ -49,6 +49,22 @@ This is acceptable when:
 For remote access without managing certificates yourself, use [Tailscale](/remote-access/). For container deployments, see [Running in Docker](/running-in-docker/) for examples with WireGuard and Traefik.
 :::
 
+### Host-header allowlist (DNS-rebinding defense)
+
+The TCP listener validates the `Host` header on every request. A request is accepted only when its Host is one of:
+
+- a loopback name (`localhost`) or any IP literal (covers `127.0.0.1`, `::1`, and tailnet IPs)
+- the configured bind host (`GMUXD_LISTEN`, when it is a hostname)
+- the tailnet FQDN, once the optional Tailscale listener is up
+
+Everything else is rejected with `403 Forbidden`. This is defense-in-depth against [DNS rebinding](https://en.wikipedia.org/wiki/DNS_rebinding): a malicious web page whose domain resolves to your loopback address can make your browser issue requests to the daemon, but those requests carry the attacker's domain in the Host header, so the allowlist drops them. The bearer token / `SameSite=Strict` cookie already block this attack; the Host check is a cheap second layer at the listener level. The Unix-socket and tsnet listeners are exempt — they are reached over channels that DNS rebinding cannot target.
+
+If you front gmuxd with a reverse proxy that forwards a public hostname (e.g. Traefik routing `gmux.example.com` to the daemon), add that hostname to the `GMUXD_TRUSTED_HOSTS` environment variable (comma-separated) so it passes the check. It is empty by default.
+
+### Why WebSocket Origin checks are skipped
+
+gmuxd accepts WebSocket upgrades with Origin verification disabled (`InsecureSkipVerify`). This is intentional. Cross-origin abuse is already prevented by the bearer token and the `SameSite=Strict` session cookie, and a working Origin allowlist would have to enumerate every name the daemon can legitimately be reached by — localhost, the bind host, any tailnet FQDN, and any reverse-proxy hostname a user fronts it with — which is brittle and easy to misconfigure into a lockout. The Host-header allowlist above covers the rebinding case that an Origin check would otherwise address, at the listener level and without that enumeration burden.
+
 ## Remote access: Tailscale
 
 Remote access is available via a separate, optional Tailscale (tsnet) listener. When enabled, gmuxd joins your tailnet and serves on `https://hostname.your-tailnet.ts.net`. See [Remote Access](/remote-access) for setup.
