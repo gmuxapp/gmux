@@ -47,6 +47,15 @@ installCopySession()
 // watcher is pointless there and would risk masking real bugs.
 if (!USE_MOCK) installVersionWatch()
 
+// Disable pinch-to-zoom app-wide. This is a terminal, not a document;
+// page zoom only breaks the layout. iOS Safari ignores user-scalable=no
+// and touch-action for *page* pinch, so the only reliable lever is
+// preventing the non-standard gesture events it fires. Harmless on
+// browsers that don't emit them.
+for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+  document.addEventListener(type, e => e.preventDefault(), { passive: false })
+}
+
 // ── Components ──
 
 function MainHeader({ session, onRestart }: {

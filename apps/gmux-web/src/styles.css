@@ -97,6 +97,14 @@ html, body, #app {
   height: 100%;
   overflow: hidden;
   overscroll-behavior: none;
+  /* This is a terminal, not a document. `manipulation` drops
+     double-tap-to-zoom and the tap delay/suppression it causes —
+     notably taps landing right after a long-press release. (Pinch-zoom
+     is killed separately in JS via gesturestart; iOS Safari honors
+     neither touch-action nor user-scalable=no for page pinch.)
+     Elements needing stricter handling (e.g. .terminal-shell-passive)
+     override locally. */
+  touch-action: manipulation;
 }
 
 body {
@@ -2719,3 +2727,54 @@ body {
 }
 .jump-to-bottom:hover { background: oklch(28% 0.015 250); }
 .jump-to-bottom:active { transform: translateY(1px); }
+
+/* ── Link action sheet (long-press a link on touch devices) ────────
+   Reuses the modal backdrop/panel conventions; the panel is a narrow
+   menu rather than a dialog. The preview intentionally shows the full
+   URI (word-broken, scrollable past ~6 lines) — for OSC 8 hyperlinks
+   this is the only place the real target is visible before opening. */
+.link-sheet {
+  width: 320px;
+  padding: 6px;
+  gap: 2px;
+}
+
+.link-sheet-preview {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.link-sheet-label {
+  color: var(--text);
+  font-size: 13px;
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+
+.link-sheet-uri {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  word-break: break-all;
+  max-height: 108px;
+  overflow-y: auto;
+}
+
+.link-sheet-action {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 14px;
+  font-family: inherit;
+  padding: 12px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.link-sheet-action:hover,
+.link-sheet-action:active {
+  background: var(--bg-hover);
+}

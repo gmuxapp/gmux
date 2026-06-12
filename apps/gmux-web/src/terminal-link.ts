@@ -36,28 +36,48 @@
  */
 import type { Terminal } from '@xterm/xterm'
 
-/** Internal Linkifier surface we rely on (stable in our pinned fork). */
-interface CoreWithLinkifier {
-  _core?: { linkifier?: { currentLink?: unknown } }
+/**
+ * Internal Linkifier surface we rely on (stable in our pinned fork).
+ * The range is 1-based; y is an absolute buffer row (scrollback
+ * included). `text` is the link's URI for both built-in providers:
+ * WebLinksAddon stores the regex match, OscLinkProvider stores the
+ * OSC 8 URI (not the visible label).
+ */
+interface InternalLink {
+  text: string
+  range: {
+    start: { x: number, y: number }
+    end: { x: number, y: number }
+  }
 }
 
-/**
- * If a link is under (clientX, clientY), activate it via the Linkifier
- * and return true. Returns false (with no side effects beyond a hover)
- * when there is no link, the renderer hasn't measured yet, or the
- * internal linkifier is unavailable.
- *
- * The mousedown/mouseup pair is only dispatched when a link was
- * resolved, and all events are non-bubbling, so the handshake never
- * reaches selection handling, PTY mouse reporting, or the focus-
- * grabbing MouseService handler on the outer element.
- */
-export function openLinkAtPoint(term: Terminal, clientX: number, clientY: number): boolean {
+interface CoreWithLinkifier {
+  _core?: { linkifier?: { currentLink?: { link: InternalLink } } }
+}
+
+/** A link resolved under a touch point. */
+export interface LinkInfo {
+  /** The target URI (what activation would open). */
+  uri: string
+  /** The text painted in the terminal for this link. Equals `uri` for
+   * plain-text URLs; differs for OSC 8 hyperlinks, where the buffer
+   * shows a label and the URI is hidden — surfacing both lets the user
+   * inspect the real target before opening. */
+  label: string
+}
+
+interface ResolvedLink {
+  screen: Element
+  init: MouseEventInit
+  link: InternalLink
+}
+
+function resolveLinkAtPoint(term: Terminal, clientX: number, clientY: number): ResolvedLink | null {
   const screen = term.element?.querySelector('.xterm-screen')
-  if (!screen) return false
+  if (!screen) return null
 
   const linkifier = (term as unknown as CoreWithLinkifier)._core?.linkifier
-  if (!linkifier) return false
+  if (!linkifier) return null
 
   // Non-bubbling on purpose: the Linkifier listens on the screen
   // element itself, so it receives these regardless (events always
@@ -68,13 +88,54 @@ export function openLinkAtPoint(term: Terminal, clientX: number, clientY: number
   // reporting.
   const init: MouseEventInit = { bubbles: false, clientX, clientY }
 
-  // Step 1: hover. Link providers reply synchronously, so currentLink
-  // is settled by the time dispatchEvent returns.
+  // Hover step of the handshake. Link providers reply synchronously,
+  // so currentLink is settled by the time dispatchEvent returns.
   screen.dispatchEvent(new MouseEvent('mousemove', init))
-  if (!linkifier.currentLink) return false
+  const link = linkifier.currentLink?.link
+  if (!link) return null
 
-  // Steps 2+3: press and release at the same point → Linkifier calls
+  return { screen, init, link }
+}
+
+/** Read the text the link's range covers in the buffer (its visible
+ * label). Falls back to the URI if any row is unavailable. */
+function labelForLink(term: Terminal, link: InternalLink): string {
+  const { start, end } = link.range
+  let label = ''
+  for (let y = start.y; y <= end.y; y++) {
+    const line = term.buffer.active.getLine(y - 1)
+    if (!line) return link.text
+    const fromCol = y === start.y ? start.x - 1 : 0
+    const toCol = y === end.y ? end.x : term.cols
+    label += line.translateToString(false, fromCol, toCol)
+  }
+  return label
+}
+
+/**
+ * Query-only: resolve the link under (clientX, clientY) without
+ * activating it. Side effects are limited to a synthetic hover.
+ * Returns null when there is no link, the renderer hasn't measured
+ * yet, or the internal linkifier is unavailable.
+ */
+export function linkAtPoint(term: Terminal, clientX: number, clientY: number): LinkInfo | null {
+  const resolved = resolveLinkAtPoint(term, clientX, clientY)
+  if (!resolved) return null
+  return { uri: resolved.link.text, label: labelForLink(term, resolved.link) }
+}
+
+/**
+ * If a link is under (clientX, clientY), activate it via the Linkifier
+ * and return true. The mousedown/mouseup pair is only dispatched when
+ * a link was resolved, so plain taps inject nothing.
+ */
+export function openLinkAtPoint(term: Terminal, clientX: number, clientY: number): boolean {
+  const resolved = resolveLinkAtPoint(term, clientX, clientY)
+  if (!resolved) return false
+
+  // Press and release at the same point → Linkifier calls
   // link.activate() (WebLinksAddon's handler or the OSC 8 handler).
+  const { screen, init } = resolved
   screen.dispatchEvent(new MouseEvent('mousedown', { ...init, button: 0, buttons: 1 }))
   screen.dispatchEvent(new MouseEvent('mouseup', { ...init, button: 0 }))
   return true
