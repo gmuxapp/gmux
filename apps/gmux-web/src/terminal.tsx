@@ -10,7 +10,9 @@ import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
 import { createReplayBuffer } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
-import { openLinkAtPoint } from './terminal-link'
+import { linkAtPoint, type LinkInfo, openLinkAtPoint } from './terminal-link'
+import { createLongPressRecognizer } from './long-press'
+import { LinkActionSheet } from './link-action-sheet'
 import { decideViewportResize, sameSize } from './terminal-resize'
 import { MOCK_BY_ID } from './mock-data/index'
 import type { Session } from './types'
@@ -238,6 +240,7 @@ export function TerminalView({
   const [wsState, setWsState] = useState<'connecting' | 'open' | 'lost'>('connecting')
   const [viewportSize, setViewportSize] = useState<TerminalSize | null>(null)
   const [scrolledUp, setScrolledUp] = useState(false)
+  const [linkSheet, setLinkSheet] = useState<LinkInfo | null>(null)
   const SCROLL_THRESHOLD = 3 // rows above bottom before showing the button
   // Track the last PTY size we know about so we can derive the pill.
   const [ptySize, setPtySize] = useState<TerminalSize | null>(null)
@@ -545,8 +548,21 @@ export function TerminalView({
     window.addEventListener('keydown', handleGlobalKeydown, true)
 
     const shell = shellRef.current
+    // Overlays (the link action sheet) render inside the shell; their
+    // touches must not arm tap/pan/long-press handling.
     const isInteractiveTarget = (target: EventTarget | null) => target instanceof HTMLElement
-      && !!target.closest('button, input, textarea, select, a, label, [role="button"]')
+      && !!target.closest('button, input, textarea, select, a, label, [role="button"], .modal-backdrop')
+
+    // Long-press on a link → action sheet (copy / open / inspect the
+    // real target of OSC 8 hyperlinks). A ≥500ms hold is a distinct
+    // intent from a tap: even when nothing is under the finger, the
+    // release must not open a link or toggle the keyboard.
+    const longPress = createLongPressRecognizer((x, y) => {
+      const link = linkAtPoint(term, x, y)
+      if (!link) return
+      try { navigator.vibrate?.(10) } catch { /* unsupported */ }
+      setLinkSheet(link)
+    })
     const touchPanState = {
       active: false,
       moved: false,
@@ -558,6 +574,7 @@ export function TerminalView({
 
     const handleTouchStartCapture = (ev: TouchEvent) => {
       if (ev.touches.length !== 1 || isInteractiveTarget(ev.target)) {
+        longPress.cancel()
         touchPanState.active = false
         touchPanState.moved = false
         return
@@ -578,6 +595,7 @@ export function TerminalView({
       touchPanState.startY = ev.touches[0].clientY
       touchPanState.startScrollLeft = host.scrollLeft
       touchPanState.startScrollTop = host.scrollTop
+      longPress.start(touchPanState.startX, touchPanState.startY)
     }
 
     const handleTouchMoveCapture = (ev: TouchEvent) => {
@@ -591,6 +609,7 @@ export function TerminalView({
       const deltaY = touch.clientY - touchPanState.startY
       if (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6) {
         touchPanState.moved = true
+        longPress.cancel()
       }
 
       // If viewport matches PTY (in sync), no overflow to pan — let xterm
@@ -610,6 +629,15 @@ export function TerminalView({
     }
 
     const handleTouchEndCapture = (ev: TouchEvent) => {
+      // A fired long-press owns this touch: suppress tap behavior and
+      // the browser's synthesized cascade.
+      if (longPress.end()) {
+        ev.preventDefault()
+        touchPanState.active = false
+        touchPanState.moved = false
+        return
+      }
+
       if (touchPanState.active && !touchPanState.moved) {
         // Tap on a link opens it by driving xterm's Linkifier with a
         // synthetic mousemove/mousedown/mouseup handshake (see
@@ -645,6 +673,7 @@ export function TerminalView({
     }
 
     const clearTouchPan = () => {
+      longPress.end() // full reset: discard pending and fired state
       touchPanState.active = false
       touchPanState.moved = false
     }
@@ -740,6 +769,7 @@ export function TerminalView({
       if (resizeTimer !== null) clearTimeout(resizeTimer)
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       if (refocusTimer !== null) clearTimeout(refocusTimer)
+      longPress.cancel()
       disposed.current = true
       window.removeEventListener('keydown', handleGlobalKeydown, true)
       window.removeEventListener('resize', onViewportResize)
@@ -994,6 +1024,9 @@ export function TerminalView({
         >
           End ↓
         </button>
+      )}
+      {linkSheet && (
+        <LinkActionSheet link={linkSheet} onClose={() => setLinkSheet(null)} />
       )}
     </div>
   )
