@@ -140,6 +140,48 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 	}
 }
 
+// waitForSessionExit blocks until the session identified by sessionID
+// has transitioned to its resumable exit state (Alive == false with a
+// non-empty resume Command), the overall timeout elapses, or the event
+// channel closes. It returns the exited session snapshot and true on
+// success, or a zero session and false on timeout.
+//
+// Callers subscribe BEFORE triggering the kill and pass the resulting
+// channel here so the exit upsert can't be missed between subscribe and
+// kill. store.broadcast drops events when a subscriber's 64-slot buffer
+// is full, so under an event burst the exit upsert we're waiting on can
+// be dropped. Mirroring handleWait, we re-poll the store every tick so a
+// dropped event delays the result by at most one tick instead of
+// timing out with a spurious kill_timeout.
+func waitForSessionExit(sessions *store.Store, evCh <-chan store.Event, sessionID string, timeout, tick time.Duration) (store.Session, bool) {
+	exited := func(s store.Session) bool { return !s.Alive && len(s.Command) > 0 }
+
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(tick)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			return store.Session{}, false
+		case ev, ok := <-evCh:
+			if !ok {
+				return store.Session{}, false
+			}
+			if ev.ID != sessionID || ev.Session == nil {
+				continue
+			}
+			if exited(*ev.Session) {
+				return *ev.Session, true
+			}
+		case <-ticker.C:
+			if cur, ok := sessions.Get(sessionID); ok && exited(cur) {
+				return cur, true
+			}
+		}
+	}
+}
+
 // terminalReason inspects a session and reports whether --wait should
 // return now and with what reason. Centralised so the initial-snapshot
 // check, the per-event check, and the periodic re-poll stay in sync.
