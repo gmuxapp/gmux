@@ -57,3 +57,37 @@ func TestCanonicalizePath(t *testing.T) {
 		}
 	}
 }
+
+func TestIsValidSessionID(t *testing.T) {
+	valid := []string{
+		"sess-abcd1234",
+		"sess-0",
+		"sess-claude",
+		"sess-resume_1",
+		"sess-codex-2",
+	}
+	for _, id := range valid {
+		if !IsValidSessionID(id) {
+			t.Errorf("IsValidSessionID(%q) = false, want true", id)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"abcd1234",          // missing prefix
+		"sess-",             // empty suffix
+		"sess-../escape",    // path traversal
+		"sess-..",           // parent dir
+		"../sess-abcd",      // leading traversal
+		"sess-a/b",          // separator
+		`sess-a\b`,          // backslash separator
+		"sess-a::b",         // folder-key separator
+		"sess-a b",          // space
+		"sess-a\n",          // newline
+	}
+	for _, id := range invalid {
+		if IsValidSessionID(id) {
+			t.Errorf("IsValidSessionID(%q) = true, want false", id)
+		}
+	}
+}

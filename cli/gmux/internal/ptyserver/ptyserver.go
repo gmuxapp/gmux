@@ -526,6 +526,17 @@ func (s *Server) handlePutSlug(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "slug is empty", http.StatusBadRequest)
 		return
 	}
+	// Session slugs flow into /@<peer>/<slug> URLs and the
+	// ${peer}::${slug} folder key, so normalize to the same URL-safe
+	// shape as project slugs: reject "/", "::", newlines, and other
+	// separators by slugifying anything not already well-formed.
+	if !adapter.IsValidSlug(slug) {
+		slug = adapter.Slugify(slug)
+	}
+	if slug == "" {
+		http.Error(w, "slug is invalid", http.StatusBadRequest)
+		return
+	}
 	s.state.SetSlug(slug)
 	w.WriteHeader(http.StatusNoContent)
 }

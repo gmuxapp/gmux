@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -405,5 +406,76 @@ func TestWriteOverwritesExisting(t *testing.T) {
 	}
 	if verify.Title != "second" {
 		t.Errorf("on-disk title: got %q, want %q", verify.Title, "second")
+	}
+}
+
+// TestWriteRejectsUnsafeID guards the write path: a crafted ID with
+// path separators or ".." must never escape the sessions dir. The
+// daemon derives the ID from a runner's /meta, so a malicious
+// socket_path could otherwise steer Persist outside its base dir.
+func TestWriteRejectsUnsafeID(t *testing.T) {
+	s := newStore(t)
+	unsafe := []string{
+		"sess-../../../etc/cron.d/x",
+		"sess-..",
+		"../escape",
+		"sess-a/b",
+	}
+	for _, id := range unsafe {
+		sess := sampleSession()
+		sess.ID = id
+		if err := s.Write(sess); err == nil {
+			t.Errorf("Write(id=%q) = nil error, want rejection", id)
+		}
+	}
+
+	// Nothing should have been created outside the base dir.
+	if entries, _ := os.ReadDir(filepath.Dir(s.Dir())); len(entries) > 0 {
+		// Dir()'s parent is the temp root; the base dir itself is
+		// created lazily only on a successful write, so an unsafe-only
+		// run must leave the parent empty.
+		for _, e := range entries {
+			if e.Name() != filepath.Base(s.Dir()) {
+				t.Errorf("unexpected entry outside base dir: %s", e.Name())
+			}
+		}
+	}
+}
+
+// TestSessionDirContainsUnsafeIDs confirms the path constructor itself
+// never returns a path outside the base dir for a crafted ID, so every
+// disk op fed by it (including Remove's RemoveAll) stays contained.
+func TestSessionDirContainsUnsafeIDs(t *testing.T) {
+	s := newStore(t)
+	base := filepath.Clean(s.Dir())
+	unsafe := []string{
+		"sess-../../../etc",
+		"..",
+		"../escape",
+		"sess-a/b",
+		"",
+	}
+	for _, id := range unsafe {
+		got := filepath.Clean(s.SessionDir(id))
+		if got != base && !strings.HasPrefix(got, base+string(filepath.Separator)) {
+			t.Errorf("SessionDir(%q) = %q escaped base %q", id, got, base)
+		}
+		if got == base {
+			t.Errorf("SessionDir(%q) = %q collapsed to base dir (RemoveAll would wipe all sessions)", id, got)
+		}
+	}
+}
+
+// TestWriteAcceptsWellFormedID confirms normal sess-<hex> IDs still
+// persist after the validation guard was added.
+func TestWriteAcceptsWellFormedID(t *testing.T) {
+	s := newStore(t)
+	sess := sampleSession()
+	sess.ID = "sess-abcd1234"
+	if err := s.Write(sess); err != nil {
+		t.Fatalf("Write(well-formed id) = %v, want nil", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.SessionDir(sess.ID), metaFile)); err != nil {
+		t.Fatalf("meta.json not written: %v", err)
 	}
 }
