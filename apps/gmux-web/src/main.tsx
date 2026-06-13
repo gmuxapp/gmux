@@ -22,7 +22,7 @@ import { installVersionWatch } from './version-watch'
 import {
   sessions, connState, selected, selectedId, view, health, peers,
   terminalOptions, keybinds, macCommandIsCtrl,
-  unreadCount,
+  unreadCount, keyboardOpen,
   urlPath, urlSearch,
   initStore, setNavigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
@@ -35,6 +35,11 @@ const InputDiagnostics = lazy(() => import('./input-diagnostics'))
 // ── Config ──
 
 const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
+
+/** Visual-viewport occlusion (px) above which the on-screen keyboard is
+ * considered open. Low enough to trip early in the slide-up animation,
+ * well above sub-pixel/URL-bar noise. */
+const KEYBOARD_PRESENCE_PX = 60
 
 // Mock mode: hide close buttons and other interactive chrome via CSS.
 if (USE_MOCK) document.documentElement.classList.add('mock-mode')
@@ -75,7 +80,7 @@ function MainHeader({ session, onRestart }: {
   const shortCwd = session.cwd.replace(/^\/home\/[^/]+/, '~')
 
   return (
-    <div class="main-header">
+    <div class={`main-header ${keyboardOpen.value ? 'keyboard-collapsed' : ''}`}>
       <div class="main-header-left">
         <div class="main-header-title">
           {session.title}
@@ -359,12 +364,27 @@ function MobileTerminalBar({
 // ── App ──
 
 function App() {
-  // Visual viewport tracking for keyboard-aware layout.
+  // Visual viewport tracking for keyboard-aware layout. Lives here (not
+  // in TerminalView) because viewport occlusion is an app-global fact:
+  // App never unmounts, so keyboardOpen can't flash on session switch or
+  // navigation, and there's no per-component cleanup to get wrong.
   useEffect(() => {
     const vv = window.visualViewport
     if (!vv) return
+    // On touch, the on-screen keyboard shrinks the visual viewport without
+    // shrinking the layout viewport (window.innerHeight) on iOS, so their
+    // difference is the occluded height. The URL bar moves both together,
+    // so it doesn't register — letting a small threshold detect the
+    // keyboard early in its slide. Detected via the viewport, not textarea
+    // focus, which lies (the resize path re-focuses after the keyboard
+    // closes). CSS decides whether a collapse actually applies.
+    const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
+      || navigator.maxTouchPoints > 0
     const update = () => {
       document.documentElement.style.setProperty('--app-height', `${vv.height}px`)
+      if (isTouchDevice) {
+        keyboardOpen.value = window.innerHeight - vv.height > KEYBOARD_PRESENCE_PX
+      }
     }
     update()
     vv.addEventListener('resize', update)
