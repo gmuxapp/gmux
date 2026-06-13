@@ -67,6 +67,15 @@ export interface RawWorld {
    * without proxying a separate request.
    */
   peerProjects: Record<string, PeerProject[]>
+  /**
+   * Per-peer authoritative discovered list, keyed by peer name.
+   * Discovery is host-authoritative (ADR 0002/0005): each connected
+   * peer advertises the sessions it owns but no project of its own
+   * claims, and the viewer renders these rows verbatim rather than
+   * recomputing peer discovery blind. The viewer's own (local) sessions
+   * are discovered client-side; see the `discovered` computed.
+   */
+  peerDiscovered: Record<string, DiscoveredProject[]>
 }
 
 export const _rawSessions = signal<Session[]>([])
@@ -77,6 +86,7 @@ export const _rawWorld = signal<RawWorld>({
   launchers: [],
   defaultLauncher: 'shell',
   peerProjects: {},
+  peerDiscovered: {},
 })
 
 /** Merge a partial world update into `_rawWorld`. Used by SSE handlers,
@@ -213,12 +223,50 @@ effect(() => {
 export const sessionsLoaded = signal(false)
 export const connState = signal<'connecting' | 'connected' | 'error'>('connecting')
 
-// Per ADR 0001: Discovered is a per-viewer projection, not
-// server-pushed state. It derives from the same public
-// sessions/projects projections everyone else uses.
-export const discovered = computed<DiscoveredProject[]>(
-  () => discoverProjects(sessions.value, projects.value, peerStatusByName.value),
-)
+// Discovered is host-authoritative (ADR 0002/0005): each host runs its
+// own match rules over its own sessions and decides which are
+// unclaimed. So this viewer computes discovery only for its OWN (local)
+// sessions, and merges in each connected peer's self-advertised
+// discovered list verbatim. A peer can therefore never offer (in
+// Discovered) a project it already owns by a rule the viewer can't see.
+//
+// Per ADR 0001's note: "Discovered is a per-viewer projection." That
+// remains true for the viewer's own local sessions (the viewer is their
+// owner); for peer sessions the projection is the peer's own, relayed
+// over the wire.
+export const discovered = computed<DiscoveredProject[]>(() => {
+  const lp = localPeerNames.value
+  const local = discoverProjects(sessions.value, projects.value, (name) => lp.has(name))
+  const statuses = peerStatusByName.value
+  const peerRows: DiscoveredProject[] = []
+  const byPeer = _rawWorld.value.peerDiscovered
+  for (const [peerName, rows] of Object.entries(byPeer)) {
+    // Disconnected peers contribute no rows: their advertised list may
+    // be stale and "+ Add" would hit a host we can't reach.
+    if (statuses.get(peerName) !== 'connected') continue
+    for (const row of rows) {
+      peerRows.push({ ...row, peer: peerName })
+    }
+  }
+  return sortDiscovered([...local, ...peerRows])
+})
+
+/** Sort discovered suggestions by recency, then active count, then
+ *  session count, then suggested_slug, then originating path. Mirrors
+ *  the Go-side Discovered() sort so local and peer-advertised rows
+ *  interleave consistently. */
+function sortDiscovered(rows: DiscoveredProject[]): DiscoveredProject[] {
+  return rows.sort((a, b) => {
+    const ta = a.last_active ?? ''
+    const tb = b.last_active ?? ''
+    if (ta !== tb) return tb < ta ? -1 : 1
+    if (a.active_count !== b.active_count) return b.active_count - a.active_count
+    if (a.session_count !== b.session_count) return b.session_count - a.session_count
+    const slugCmp = a.suggested_slug.localeCompare(b.suggested_slug)
+    if (slugCmp !== 0) return slugCmp
+    return (a.paths[0] ?? '').localeCompare(b.paths[0] ?? '')
+  })
+}
 
 // ── Peer appearance: unique prefix + deterministic color ─────────────────────
 
@@ -1245,6 +1293,7 @@ export function initStore(): () => void {
         launchers?: LauncherDef[]
         default_launcher?: string
         peer_projects?: Record<string, PeerProject[]>
+        peer_discovered?: Record<string, DiscoveredProject[]>
       }
       _setRawWorld({
         projects: env.projects ?? [],
@@ -1253,6 +1302,7 @@ export function initStore(): () => void {
         launchers: env.launchers ?? [],
         defaultLauncher: env.default_launcher ?? 'shell',
         peerProjects: env.peer_projects ?? {},
+        peerDiscovered: env.peer_discovered ?? {},
       })
     } catch (err) {
       console.warn('snapshot.world: bad event', err)
