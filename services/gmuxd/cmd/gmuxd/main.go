@@ -1843,6 +1843,7 @@ func serve(stderr io.Writer) int {
 				Launchers:       launchConfig.Launchers,
 				DefaultLauncher: launchConfig.DefaultLauncher,
 				PeerProjects:    composePeerProjects(peerManager),
+				PeerDiscovered:  composePeerDiscovered(peerManager),
 			}
 		}
 
@@ -2240,6 +2241,38 @@ func composePeerProjects(mgr *peering.Manager) map[string][]peering.SpokeProject
 	return out
 }
 
+// composePeerDiscovered gathers each connected peer's self-advertised
+// discovered list into a map keyed by peer name. Discovery is
+// host-authoritative (ADR 0002/0005): the viewer renders each peer's
+// own discovered rows verbatim instead of recomputing them blind. Local
+// peers are skipped (their sessions flow through the parent's local
+// discovery). Peers not yet fetched appear with an empty list.
+func composePeerDiscovered(mgr *peering.Manager) map[string][]peering.SpokeDiscovered {
+	if mgr == nil {
+		return nil
+	}
+	infos := mgr.PeerStatus()
+	if len(infos) == 0 {
+		return nil
+	}
+	out := make(map[string][]peering.SpokeDiscovered, len(infos))
+	for _, info := range infos {
+		if info.Local {
+			continue
+		}
+		p := mgr.GetPeer(info.Name)
+		if p == nil {
+			continue
+		}
+		discovered, _ := p.CachedDiscovered()
+		if discovered == nil {
+			discovered = []peering.SpokeDiscovered{}
+		}
+		out[info.Name] = discovered
+	}
+	return out
+}
+
 // currentPeers returns the manager's active peer status list, or nil if
 // there are none. (Offline tailnet-discovery hints were removed with
 // tsdiscovery in ADR 0008.)
@@ -2406,6 +2439,16 @@ func isAllowedPeerProxyPath(method, sub string) bool {
 	return false
 }
 
+// sessionLastActive returns the timestamp used to sort discovered
+// suggestions by recency: the session's last_activity_at, falling back
+// to created_at when no activity has been recorded yet.
+func sessionLastActive(s store.Session) string {
+	if s.LastActivityAt != "" {
+		return s.LastActivityAt
+	}
+	return s.CreatedAt
+}
+
 // buildSessionInfos converts store sessions to project SessionInfo structs.
 func buildSessionInfos(sessions *store.Store, isLocalPeer func(string) bool) []projects.SessionInfo {
 	list := sessions.List()
@@ -2421,6 +2464,7 @@ func buildSessionInfos(sessions *store.Store, isLocalPeer func(string) bool) []p
 			Alive:         s.Alive,
 			Resumable:     s.Resumable,
 			Slug:          s.Slug,
+			LastActive:    sessionLastActive(s),
 		}
 	}
 	return infos

@@ -614,6 +614,51 @@ func TestDiscoveredAllMatched(t *testing.T) {
 	}
 }
 
+// TestDiscoveredExcludesRemoteOwnedButPathMatched is the exact
+// apps/apps-2 repro: the host owns project `apps` by a PATH rule
+// (/mnt/user/apps), while its sessions also report a github remote.
+// A viewer recomputing discovery by remote would still offer `apps`
+// (it can't see the path rule); the owning host's own Discovered()
+// must not, because Match() claims the session via the path rule.
+func TestDiscoveredExcludesRemoteOwnedButPathMatched(t *testing.T) {
+	s := &State{Items: []Item{
+		{Slug: "apps", Match: []MatchRule{{Path: "/mnt/user/apps"}}},
+	}}
+	sessions := []SessionInfo{
+		{ID: "s1", Cwd: "/mnt/user/apps", WorkspaceRoot: "/mnt/user/apps",
+			Remotes: map[string]string{"origin": "https://github.com/mgabor3141/apps.git"}},
+	}
+	if d := s.Discovered(sessions); d != nil {
+		t.Errorf("owned-by-path session must not be discovered, got %+v", d)
+	}
+}
+
+// TestDiscoveredLastActive verifies the LastActive field is populated
+// from the most-recent session in the group and drives recency sort.
+func TestDiscoveredLastActive(t *testing.T) {
+	s := &State{}
+	sessions := []SessionInfo{
+		{ID: "old", Cwd: "/work/old", LastActive: "2026-01-01T00:00:00Z"},
+		{ID: "newA", Cwd: "/work/new", LastActive: "2026-01-01T00:00:00Z"},
+		{ID: "newB", Cwd: "/work/new", LastActive: "2026-03-01T00:00:00Z"},
+	}
+	d := s.Discovered(sessions)
+	if len(d) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(d))
+	}
+	// Group /work/new has the most-recent LastActive, so it sorts first
+	// and carries the max timestamp of its sessions.
+	if d[0].Paths[0] != "/work/new" {
+		t.Errorf("expected /work/new first (most recent), got %q", d[0].Paths[0])
+	}
+	if d[0].LastActive != "2026-03-01T00:00:00Z" {
+		t.Errorf("LastActive = %q, want 2026-03-01T00:00:00Z", d[0].LastActive)
+	}
+	if d[1].LastActive != "2026-01-01T00:00:00Z" {
+		t.Errorf("second group LastActive = %q, want 2026-01-01T00:00:00Z", d[1].LastActive)
+	}
+}
+
 // --- Session membership ---
 
 func TestAddSession(t *testing.T) {

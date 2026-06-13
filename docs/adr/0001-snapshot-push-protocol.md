@@ -176,6 +176,22 @@ computation to local `computed` derivations; the server keeps them
 on the HTTP `GET /v1/projects` path for CLI compatibility but
 removes them from the SSE path.
 
+**Amendment (host-authoritative discovery).** The "discovered is a
+per-viewer projection" framing is correct only for the viewer's OWN
+(local) sessions, whose owner is the viewer. Discovery is the inverse
+of ownership ("which of MY sessions does no project of mine claim"),
+and per ADR 0002/0005 ownership is host-authoritative — so a PEER's
+discovery belongs to that peer, not the viewer. A viewer recomputing
+peer discovery is rule-blind (it can't see the peer's match rules) and
+would offer a project the peer already owns by a path-vs-remote rule
+mismatch, forking a duplicate slug on "+ Add". The viewer therefore
+computes discovery only for its local sessions and merges in each
+connected peer's self-advertised `discovered` list verbatim, relayed
+through the hub's `snapshot.world.peer_discovered` map (the hub caches
+it from the peer's `GET /v1/projects` response). Local-peer /
+devcontainer sessions flow through the parent's local discovery (ADR
+0005). Disconnected peers contribute no rows.
+
 A `ready` computed gates initial render: `_rawSessions !== null &&
 _rawWorld !== null`. The hydration race the existing
 `sessionsLoaded` gate addresses goes away because each raw signal
