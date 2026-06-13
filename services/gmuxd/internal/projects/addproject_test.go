@@ -5,6 +5,63 @@ import (
 	"testing"
 )
 
+// Update is the single validation chokepoint: when fn commits (returns
+// true) but leaves the state invalid, nothing must be saved and the
+// caller must receive a *ValidationError. Previously Update never
+// validated, so an invalid mutation was persisted (or, for callers that
+// validated by hand and returned false, silently reported as success).
+func TestManagerUpdate_InvalidStateRejected(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(dir)
+
+	// Seed a valid project.
+	if err := m.Update(func(s *State) bool {
+		s.Items = []Item{{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}}}
+		return true
+	}); err != nil {
+		t.Fatalf("seed Update: %v", err)
+	}
+
+	broadcasts := 0
+	m.Broadcast = func(*State) { broadcasts++ }
+
+	// A committing mutation that produces a duplicate slug must be
+	// rejected and must not save or broadcast.
+	err := m.Update(func(s *State) bool {
+		s.Items = append(s.Items, Item{Slug: "gmux", Match: []MatchRule{{Path: "/dev/other"}}})
+		return true
+	})
+	if err == nil {
+		t.Fatal("Update accepted invalid state, want *ValidationError")
+	}
+	var verr *ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("error type = %T (%v), want *ValidationError", err, err)
+	}
+	if broadcasts != 0 {
+		t.Errorf("broadcast fired on rejected update: %d", broadcasts)
+	}
+
+	// Nothing must have been persisted beyond the seed project.
+	s, err := m.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(s.Items) != 1 || s.Items[0].Slug != "gmux" {
+		t.Fatalf("persisted items = %#v, want only the seed 'gmux'", s.Items)
+	}
+}
+
+// An aborted update (fn returns false) is still a nil error, distinct
+// from a validation failure.
+func TestManagerUpdate_AbortIsNotError(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(dir)
+	if err := m.Update(func(s *State) bool { return false }); err != nil {
+		t.Fatalf("aborted Update returned error: %v", err)
+	}
+}
+
 func TestManagerAddProject_Success(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManager(dir)

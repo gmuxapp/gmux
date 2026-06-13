@@ -1,6 +1,7 @@
 package projects
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -71,33 +72,41 @@ func (m *Manager) SeedIfEmpty() {
 // item (with its final, possibly deduplicated slug) is returned.
 //
 // This exists so the caller can tell "created" from "rejected": a bare
-// Update cannot, because its fn returning false (abort) and returning
-// true (saved) both surface as a nil error. Reporting success on an
-// aborted add let clients pin references to projects that were never
-// created (see the dangling peer-reference bug).
+// Update returning false (abort) and returning true with invalid state
+// would both surface as a nil error if Update did not validate.
+// Reporting success on an aborted add let clients pin references to
+// projects that were never created (see the dangling peer-reference
+// bug). Update now validates centrally, so AddProject just contextualises
+// the resulting *ValidationError with the requested slug.
 func (m *Manager) AddProject(baseSlug string, rules []MatchRule) (Item, error) {
 	var created Item
-	var valErr error
 	err := m.Update(func(s *State) bool {
 		created = Item{Slug: UniqueSlug(baseSlug, s.Items), Match: rules}
 		s.Items = append(s.Items, created)
-		if err := s.Validate(); err != nil {
-			valErr = err
-			return false
-		}
 		return true
 	})
 	if err != nil {
+		var verr *ValidationError
+		if errors.As(err, &verr) {
+			return Item{}, &ValidationError{Err: fmt.Errorf("project %q: %w", baseSlug, verr.Err)}
+		}
 		return Item{}, err
-	}
-	if valErr != nil {
-		return Item{}, &ValidationError{Err: fmt.Errorf("project %q: %w", baseSlug, valErr)}
 	}
 	return created, nil
 }
 
-// Update atomically loads state, calls fn to modify it, validates, and saves.
-// If fn returns false, the update is aborted (no save, no broadcast).
+// Update atomically loads state, calls fn to modify it, validates, and
+// saves. If fn returns false, the update is aborted (no save, no
+// broadcast, nil error).
+//
+// Validation is the single chokepoint here, not in each caller: when fn
+// returns true but leaves the state invalid, Update saves nothing and
+// returns a *ValidationError. This makes a silently-discarded mutation
+// impossible — every caller now sees a non-nil error instead of a
+// success that persisted nothing. User-initiated callers (HTTP handlers)
+// map it to a 4xx; background/reconcile callers log and drop it (their
+// mutations only add/remove session keys, which Validate never rejects,
+// so in practice they never hit this path).
 func (m *Manager) Update(fn func(s *State) bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -109,6 +118,10 @@ func (m *Manager) Update(fn func(s *State) bool) error {
 
 	if !fn(state) {
 		return nil // aborted by fn
+	}
+
+	if err := state.Validate(); err != nil {
+		return &ValidationError{Err: err}
 	}
 
 	if err := state.Save(m.stateDir); err != nil {
