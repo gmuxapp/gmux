@@ -432,15 +432,21 @@ export const unresolvedHosts = computed<UnresolvedHost[]>(
   () => resolvedReferences.value.unresolved,
 )
 
-export const folders = computed(() =>
-  buildProjectFolders(
+/** Build sidebar folders from an arbitrary session list. Shared by the
+ *  visible `folders` (filtered by URL params) and the unfiltered folder
+ *  set behind `unreadCount` (a global signal that must ignore the
+ *  ?project=/?cwd= view filter). */
+function foldersFrom(ss: Session[]): Folder[] {
+  return buildProjectFolders(
     projects.value,
-    filteredSessions.value,
+    ss,
     (name) => localPeerNames.value.has(name),
     _rawWorld.value.peerProjects,
     (peer, slug) => resolvedReferences.value.resolution.get(refKey(peer, slug)),
-  ),
-)
+  )
+}
+
+export const folders = computed(() => foldersFrom(filteredSessions.value))
 
 /**
  * Local host's display name, but only when the shown folders span more
@@ -524,10 +530,30 @@ export const backgroundActivity = computed((): DotState => {
   return 'none'
 })
 
-/** Count of unread sessions (excluding selected). */
-export const unreadCount = computed(() =>
-  sessions.value.filter(s => s.id !== selectedId.value && s.alive && s.unread).length,
-)
+/** Count of unread sessions (excluding selected).
+ *
+ * Folder-derived rather than read off the raw `sessions` set, so the
+ * attention blip counts only sessions stamped into a project in
+ * projects.json (owned project or resolved reference) — discovered
+ * (unstamped/unreferenced) sessions render nowhere in the sidebar and
+ * must not ping for attention. `buildProjectFolders` buckets each
+ * session into at most one folder, so summing across folders needs no
+ * dedup.
+ *
+ * Built from the *unfiltered* session set (`foldersFrom(sessions)`),
+ * not the visible `folders` (which honor the ?project=/?cwd= view
+ * filter). The blip is a global signal: an unread session in another
+ * project must still count while the user browses a filtered view. */
+export const unreadCount = computed(() => {
+  const sel = selectedId.value
+  let n = 0
+  for (const f of foldersFrom(sessions.value)) {
+    for (const s of f.sessions) {
+      if (s.id !== sel && s.alive && s.unread) n++
+    }
+  }
+  return n
+})
 
 // ── Home dashboard partitioning ─────────────────────────────────────────────
 //

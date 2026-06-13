@@ -7,7 +7,7 @@ import {
   isSessionUnavailable, urlPath, urlSearch, filteredSessions, selectedId,
   navigateToSession, setNavigate,
   applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
-  toUISession, localHostLabel, parseConnectURL,
+  toUISession, localHostLabel, parseConnectURL, unreadCount,
 } from './store'
 import type { PendingMutation } from './store'
 import type { Session } from './types'
@@ -565,6 +565,52 @@ describe('raw signal projections', () => {
     // projects survived; peers cleared.
     expect(projects.value).toHaveLength(1)
     expect(peers.value).toHaveLength(0)
+  })
+})
+
+describe('unreadCount (sidebar-only attention blip)', () => {
+  beforeEach(() => {
+    _rawSessions.value = []
+    _setRawWorld({ projects: [{ slug: 'proj', match: [{ path: '/work' }] }], peers: [] })
+    sessionsLoaded.value = true
+    urlPath.value = '/'
+  })
+
+  it('excludes discovered (unstamped) sessions even when alive + unread', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'disc', cwd: '/work', alive: true, unread: true }), // no project_slug
+    ]
+    expect(unreadCount.value).toBe(0)
+  })
+
+  it('counts alive + unread sessions stamped into a folder', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'a', cwd: '/work', alive: true, unread: true, project_slug: 'proj' }),
+      makeSession({ id: 'b', cwd: '/work', alive: true, unread: false, project_slug: 'proj' }),
+      makeSession({ id: 'c', cwd: '/work', alive: false, unread: true, project_slug: 'proj' }),
+    ]
+    expect(unreadCount.value).toBe(1)
+  })
+
+  it('excludes the currently-selected session', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'a', cwd: '/work', kind: 'shell', slug: 'aa', alive: true, unread: true, project_slug: 'proj' }),
+      makeSession({ id: 'b', cwd: '/work', kind: 'shell', slug: 'bb', alive: true, unread: true, project_slug: 'proj' }),
+    ]
+    expect(unreadCount.value).toBe(2)
+    urlPath.value = '/proj/shell/aa'
+    expect(selectedId.value).toBe('a')
+    expect(unreadCount.value).toBe(1)
+  })
+
+  it('ignores the ?project=/?cwd= view filter (global signal)', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'a', cwd: '/work', alive: true, unread: true, project_slug: 'proj' }),
+    ]
+    // A cwd filter that excludes the unread session from the visible
+    // sidebar must not zero out the global blip.
+    urlSearch.value = '?cwd=/elsewhere'
+    expect(unreadCount.value).toBe(1)
   })
 })
 
