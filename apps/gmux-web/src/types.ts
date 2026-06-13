@@ -158,8 +158,9 @@ export interface DiscoveredProject {
    */
   peer?: string
   /**
-   * Most-recent created_at among the sessions in this group, as an
-   * RFC3339 string. Used to sort suggestions by recency.
+   * Most-recent last_activity_at (falling back to created_at) among the
+   * sessions in this group, as an RFC3339 string. Used to sort
+   * suggestions by recency.
    */
   last_active?: string
 }

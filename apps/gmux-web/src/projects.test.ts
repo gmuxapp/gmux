@@ -866,11 +866,14 @@ describe('discoverProjects', () => {
   })
 
   it('sorts by active count, then session count, then alphabetically', () => {
+    // Equal created_at so the recency key ties and the active/session
+    // count keys are what's exercised here.
+    const ts = '2026-01-01T00:00:00Z'
     const sessions = [
-      makeSession({ id: '1', cwd: '/a', alive: false }),
-      makeSession({ id: '2', cwd: '/b', alive: true }),
-      makeSession({ id: '3', cwd: '/c', alive: true }),
-      makeSession({ id: '4', cwd: '/c', alive: false }),
+      makeSession({ id: '1', cwd: '/a', alive: false, created_at: ts }),
+      makeSession({ id: '2', cwd: '/b', alive: true, created_at: ts }),
+      makeSession({ id: '3', cwd: '/c', alive: true, created_at: ts }),
+      makeSession({ id: '4', cwd: '/c', alive: false, created_at: ts }),
     ]
     const out = discoverProjects(sessions, [])
     expect(out.map(d => d.paths[0])).toEqual(['/c', '/b', '/a'])
@@ -908,8 +911,10 @@ describe('discoverProjects', () => {
     // snapshot.sessions, whose Go-map iteration is randomized, so
     // every snapshot re-emit would visually flip the rows. The
     // paths[0] tiebreak pins them.
-    const a = makeSession({ id: 'sa', cwd: '/home/me/api', alive: true })
-    const b = makeSession({ id: 'sb', cwd: '/srv/api', alive: true })
+    // Pin created_at equal so the recency sort key ties and the
+    // path tiebreak is what's under test.
+    const a = makeSession({ id: 'sa', cwd: '/home/me/api', alive: true, created_at: '2026-01-01T00:00:00Z' })
+    const b = makeSession({ id: 'sb', cwd: '/srv/api', alive: true, created_at: '2026-01-01T00:00:00Z' })
 
     for (const input of [[a, b], [b, a]]) {
       const out = discoverProjects(input, [])
@@ -917,18 +922,42 @@ describe('discoverProjects', () => {
     }
   })
 
-  it('excludes sessions from disconnected peers', () => {
-    // A disconnected peer's disclaimed sessions may be stale: the
-    // peer may have grown rules we haven't seen yet. Surfacing them
-    // as discoverable would let the user click + Add against an
-    // unreachable peer and create a dangling reference.
+  it('excludes ALL peer sessions (discovery is host-authoritative)', () => {
+    // Discovery is owned by the originating host (ADR 0002/0005): the
+    // viewer computes discovery only for its own local sessions. Peer
+    // sessions — connected or not — are discovered by their owning
+    // host and relayed verbatim (merged in store.discovered), never
+    // recomputed here.
     const sessions = [
       makeSession({ id: 'a@up', cwd: '/work/a', alive: true, peer: 'up' }),
       makeSession({ id: 'b@down', cwd: '/work/b', alive: true, peer: 'down' }),
+      makeSession({ id: 'local', cwd: '/work/local', alive: true }),
     ]
-    const status = new Map([['up', 'connected'], ['down', 'disconnected']])
-    const out = discoverProjects(sessions, [], status)
-    expect(out.map(d => d.peer)).toEqual(['up'])
+    const out = discoverProjects(sessions, [])
+    expect(out.map(d => d.paths[0])).toEqual(['/work/local'])
+    expect(out.every(d => d.peer === undefined)).toBe(true)
+  })
+
+  it('treats local-peer (devcontainer) sessions as local', () => {
+    // Per ADR 0005 a Local peer's project assignment is owned by the
+    // parent, so its disclaimed sessions flow through the parent's
+    // local discovery rather than the container's own.
+    const sessions = [
+      makeSession({ id: 's@dev', cwd: '/work/dc', alive: true, peer: 'dev' }),
+    ]
+    const out = discoverProjects(sessions, [], (name) => name === 'dev')
+    expect(out).toHaveLength(1)
+    expect(out[0].paths).toEqual(['/work/dc'])
+    expect(out[0].peer).toBeUndefined()
+  })
+
+  it('populates last_active from the most recent session timestamp', () => {
+    const sessions = [
+      makeSession({ id: 'a', cwd: '/work/foo', alive: true, created_at: '2026-01-01T00:00:00Z' }),
+      makeSession({ id: 'b', cwd: '/work/foo', alive: true, created_at: '2026-02-01T00:00:00Z' }),
+    ]
+    const out = discoverProjects(sessions, [])
+    expect(out[0].last_active).toBe('2026-02-01T00:00:00Z')
   })
 })
 

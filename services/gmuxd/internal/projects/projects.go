@@ -600,6 +600,12 @@ type SessionInfo struct {
 	Alive     bool
 	Resumable bool // dead but has a resume command persisted
 	Slug      string
+	// LastActive is an RFC3339 timestamp of the session's most recent
+	// noteworthy activity (last_activity_at, falling back to
+	// created_at). Used to sort discovered suggestions by recency so a
+	// peer-advertised discovered row sorts consistently against the
+	// viewer's own local discovery.
+	LastActive string
 }
 
 // matchParamsFromInfo builds MatchParams from a SessionInfo.
@@ -619,6 +625,11 @@ type DiscoveredProject struct {
 	Paths         []string `json:"paths"`
 	SessionCount  int      `json:"session_count"`
 	ActiveCount   int      `json:"active_count"`
+	// LastActive is the most-recent LastActive among the sessions in
+	// this group, as an RFC3339 string. Mirrors the TS
+	// DiscoveredProject.last_active field so peer-advertised rows sort
+	// consistently with the viewer's locally-computed ones.
+	LastActive string `json:"last_active,omitempty"`
 }
 
 // UnmatchedActiveCount returns the number of alive sessions that don't
@@ -668,9 +679,13 @@ func (s *State) Discovered(sessions []SessionInfo) []DiscoveredProject {
 	result := make([]DiscoveredProject, 0, len(byDir))
 	for dir, group := range byDir {
 		active := 0
+		lastActive := ""
 		for _, s := range group {
 			if s.Alive {
 				active++
+			}
+			if s.LastActive > lastActive {
+				lastActive = s.LastActive
 			}
 		}
 
@@ -678,6 +693,7 @@ func (s *State) Discovered(sessions []SessionInfo) []DiscoveredProject {
 			Paths:        []string{dir},
 			SessionCount: len(group),
 			ActiveCount:  active,
+			LastActive:   lastActive,
 		}
 
 		// Extract the most common remote for display and the add request.
@@ -697,15 +713,23 @@ func (s *State) Discovered(sessions []SessionInfo) []DiscoveredProject {
 		result = append(result, dp)
 	}
 
-	// Active sessions first, then most sessions, then alphabetically.
+	// Recency first, then active sessions, then most sessions, then
+	// alphabetically by slug, then by path. Mirrors the TS sort so
+	// peer-advertised rows interleave consistently with local ones.
 	sort.Slice(result, func(i, j int) bool {
+		if result[i].LastActive != result[j].LastActive {
+			return result[i].LastActive > result[j].LastActive
+		}
 		if result[i].ActiveCount != result[j].ActiveCount {
 			return result[i].ActiveCount > result[j].ActiveCount
 		}
 		if result[i].SessionCount != result[j].SessionCount {
 			return result[i].SessionCount > result[j].SessionCount
 		}
-		return result[i].SuggestedSlug < result[j].SuggestedSlug
+		if result[i].SuggestedSlug != result[j].SuggestedSlug {
+			return result[i].SuggestedSlug < result[j].SuggestedSlug
+		}
+		return result[i].Paths[0] < result[j].Paths[0]
 	})
 
 	return result

@@ -165,46 +165,45 @@ export function mostCommonRemote(sessions: Session[]): string {
   return best
 }
 
-/** Group disclaimed sessions into suggested projects, scoped per host.
+/** Discover suggested projects from the viewer's OWN (local) sessions.
  *
- * Each host's discovery is independent: a session is in scope for host X
- * iff (s.peer ?? '') === X and s.project_slug is empty. The viewer no
- * longer adopts peer sessions via its own match rules, so the bucket is
- * exactly "sessions whose origin host hasn't filed them."
+ * Discovery is host-authoritative (ADR 0002/0005): each host runs its
+ * own match rules over its own sessions and decides which are unclaimed.
+ * This function therefore handles local sessions only — peer sessions
+ * are discovered by their owning host and relayed verbatim (merged in
+ * by the `discovered` computed in store.ts).
  *
- * Suggestions from different hosts mix into one returned list, sorted
- * by recency (most-recently-active first). Each carries a `peer` field
- * (absent for local) so the modal can render a host chip and route the
- * "+ Add" action to the right daemon.
+ * A session is in scope iff it is local (`s.peer` empty, or a Local
+ * peer / devcontainer whose project assignment the parent owns — see
+ * ADR 0005), it is disclaimed (`s.project_slug` empty), and it doesn't
+ * match a local owned project (those get stamped imminently by
+ * auto-assign, so surfacing them as discovered would just flicker).
  *
- * Disconnected-peer suggestions are excluded: their disclaimed status
- * could be stale (the peer's projects.json may have grown rules we
- * haven't seen yet), and clicking + Add on one would hit a peer we
- * can't actually reach, producing a confusing failure.
- *
- * Local groups whose disclaimed sessions would still match a local
- * owned project are skipped: the user already has a place for them, and
- * the auto-assign hook will stamp them on next attribution. */
+ * Results carry no `peer` field (they are local). The merge in
+ * store.ts attaches `peer` to the peer-advertised rows. */
 export function discoverProjects(
   sessions: Session[],
   projects: ProjectItem[],
-  peerStatusByName?: ReadonlyMap<string, string>,
+  isLocalPeer?: (peerName: string) => boolean,
 ): DiscoveredProject[] {
   // Bucket by (peer, dir). peer '' is local; dir is workspace_root if
   // set, else cwd. Sessions with no dir are dropped.
   const byKey = new Map<string, { peer: string; dir: string; group: Session[] }>()
   for (const s of sessions) {
     if (s.project_slug) continue // claimed by origin
-    const peer = s.peer ?? ''
-    if (peer === '') {
-      // Local-host discovery still defers to local owned projects:
-      // a session matching a local rule will be stamped imminently by
-      // auto-assign, so don't surface it as discovered.
-      if (matchSession(s, projects)) continue
-    } else if (peerStatusByName && peerStatusByName.get(peer) !== 'connected') {
-      // Unreachable peer: skip. Same logic as countUnmatchedActive.
-      continue
-    }
+    // Discovery is host-authoritative (ADR 0002/0005): this viewer only
+    // discovers its OWN (local) sessions. Peer sessions are discovered
+    // by their owning host and relayed verbatim (see store.discovered).
+    // Local-peer/devcontainer sessions count as local: per ADR 0005
+    // their project assignment is owned by the parent's rules, so they
+    // flow through the parent's local discovery, not the container's.
+    const rawPeer = s.peer ?? ''
+    const peer = rawPeer !== '' && isLocalPeer?.(rawPeer) ? '' : rawPeer
+    if (peer !== '') continue
+    // Local-host discovery still defers to local owned projects: a
+    // session matching a local rule will be stamped imminently by
+    // auto-assign, so don't surface it as discovered.
+    if (matchSession(s, projects)) continue
     const dir = s.workspace_root || s.cwd
     if (!dir) continue
     const key = `${peer}\u0000${dir}`
@@ -221,9 +220,13 @@ export function discoverProjects(
     let suggested = remote ? slugFromRemote(remote) : ''
     if (!suggested) suggested = slugFromPath(dir)
     if (!suggested) suggested = 'project'
+    // Mirror the server-side sessionLastActive: prefer last_activity_at,
+    // fall back to created_at, so local rows sort consistently against
+    // peer-advertised ones.
     let lastActive = ''
     for (const s of group) {
-      if (s.created_at > lastActive) lastActive = s.created_at
+      const t = s.last_activity_at || s.created_at
+      if (t > lastActive) lastActive = t
     }
     const dp: DiscoveredProject = {
       suggested_slug: suggested,

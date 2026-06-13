@@ -7,7 +7,7 @@ import {
   isSessionUnavailable, urlPath, urlSearch, filteredSessions, selectedId,
   navigateToSession, setNavigate,
   applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
-  toUISession, localHostLabel, parseConnectURL, unreadCount,
+  toUISession, localHostLabel, parseConnectURL, unreadCount, discovered,
 } from './store'
 import type { PendingMutation } from './store'
 import type { Session } from './types'
@@ -530,6 +530,63 @@ describe('peerStatusByName + isSessionUnavailable', () => {
     // reach the session yet, so render as unavailable.
     const map = new Map([['tower', 'connecting']])
     expect(isSessionUnavailable({ peer: 'tower' }, map)).toBe(true)
+  })
+})
+
+describe('discovered (host-authoritative)', () => {
+  beforeEach(() => {
+    _rawSessions.value = []
+    _setRawWorld({ projects: [], peers: [], peerProjects: {}, peerDiscovered: {} })
+  })
+  afterEach(() => {
+    _rawSessions.value = []
+    _setRawWorld({ projects: [], peers: [], peerProjects: {}, peerDiscovered: {} })
+  })
+
+  it('merges local discovery with a connected peer\'s advertised list', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'local', cwd: '/work/local', alive: true, created_at: '2026-01-01T00:00:00Z' }),
+    ]
+    _setRawWorld({
+      peers: [{ name: 'tower', url: '', status: 'connected', session_count: 0 }],
+      peerDiscovered: {
+        tower: [{
+          suggested_slug: 'apps', remote: 'github.com/mgabor3141/apps',
+          paths: ['/mnt/user/apps'], session_count: 1, active_count: 1,
+          last_active: '2026-02-01T00:00:00Z',
+        }],
+      },
+    })
+    const out = discovered.value
+    expect(out).toHaveLength(2)
+    // Peer row is more recent, so it sorts first.
+    expect(out[0]).toMatchObject({ suggested_slug: 'apps', peer: 'tower' })
+    expect(out[1]).toMatchObject({ paths: ['/work/local'] })
+    expect(out[1].peer).toBeUndefined()
+  })
+
+  it('drops a disconnected peer\'s advertised discovered rows', () => {
+    _setRawWorld({
+      peers: [{ name: 'tower', url: '', status: 'disconnected', session_count: 0 }],
+      peerDiscovered: {
+        tower: [{ suggested_slug: 'apps', paths: ['/mnt/user/apps'], session_count: 1, active_count: 1 }],
+      },
+    })
+    expect(discovered.value).toEqual([])
+  })
+
+  it('does not recompute peer sessions locally', () => {
+    // A peer session present in the snapshot must NOT generate a
+    // discovered row on the viewer side; only the peer's own
+    // advertised list (peerDiscovered) counts.
+    _rawSessions.value = [
+      makeSession({ id: 's@tower', cwd: '/mnt/user/apps', alive: true, peer: 'tower' }),
+    ]
+    _setRawWorld({
+      peers: [{ name: 'tower', url: '', status: 'connected', session_count: 1 }],
+      peerDiscovered: {},
+    })
+    expect(discovered.value).toEqual([])
   })
 })
 

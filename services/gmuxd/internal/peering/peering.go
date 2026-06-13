@@ -101,6 +101,23 @@ type SpokeProject struct {
 	LaunchCwd string `json:"launch_cwd,omitempty"`
 }
 
+// SpokeDiscovered is the hub's verbatim copy of a single entry from a
+// spoke's authoritative `discovered` list (GET /v1/projects). Discovery
+// is host-authoritative (ADR 0002/0005): only the owning host runs its
+// own match rules over its own sessions, so the hub re-broadcasts the
+// spoke's self-advertised discovered rows under
+// peer_discovered[<peerName>][] rather than recomputing them blind.
+// The shape mirrors projects.DiscoveredProject (and the TS
+// DiscoveredProject) field-for-field.
+type SpokeDiscovered struct {
+	SuggestedSlug string   `json:"suggested_slug"`
+	Remote        string   `json:"remote,omitempty"`
+	Paths         []string `json:"paths"`
+	SessionCount  int      `json:"session_count"`
+	ActiveCount   int      `json:"active_count"`
+	LastActive    string   `json:"last_active,omitempty"`
+}
+
 // PeerInfo is the public status of a single peer connection.
 type PeerInfo struct {
 	Name            string        `json:"name"`

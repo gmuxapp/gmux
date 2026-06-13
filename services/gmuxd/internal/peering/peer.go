@@ -42,6 +42,10 @@ type Peer struct {
 	healthLoaded   bool        // true after first successful health fetch
 	cachedProjects []SpokeProject // peer's projects, refreshed on connect and on projects-update
 	projectsLoaded bool
+	// cachedDiscovered is the spoke's self-advertised discovered list
+	// (host-authoritative; see SpokeDiscovered). Refreshed alongside
+	// cachedProjects in fetchProjects.
+	cachedDiscovered []SpokeDiscovered
 
 	// onStatus is called when connection state changes.
 	onStatus func(name string, status Status)
@@ -156,6 +160,15 @@ func (p *Peer) CachedProjects() ([]SpokeProject, bool) {
 	return p.cachedProjects, p.projectsLoaded
 }
 
+// CachedDiscovered returns the peer's self-advertised discovered list
+// (host-authoritative). The bool tracks the same projectsLoaded flag as
+// CachedProjects: both are populated by the one fetchProjects call.
+func (p *Peer) CachedDiscovered() ([]SpokeDiscovered, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.cachedDiscovered, p.projectsLoaded
+}
+
 // fetchProjects fetches the spoke's project list via GET /v1/projects,
 // projects each Item down to a SpokeProject (slug + launch_cwd hint
 // derived from the first path rule), and caches the result. Called
@@ -175,6 +188,7 @@ func (p *Peer) fetchProjects(ctx context.Context) {
 				Path string `json:"path,omitempty"`
 			} `json:"match"`
 		} `json:"configured"`
+		Discovered []SpokeDiscovered `json:"discovered"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		log.Printf("peering: %s: parse projects: %v", p.Config.Name, err)
@@ -201,8 +215,16 @@ func (p *Peer) fetchProjects(ctx context.Context) {
 		}
 		projects = append(projects, sp)
 	}
+	// The spoke's discovered list is host-authoritative: it ran its
+	// own match rules over its own sessions, so we cache it verbatim
+	// rather than recomputing peer discovery blind (ADR 0002/0005).
+	discovered := envelope.Discovered
+	if discovered == nil {
+		discovered = []SpokeDiscovered{}
+	}
 	p.mu.Lock()
 	p.cachedProjects = projects
+	p.cachedDiscovered = discovered
 	p.projectsLoaded = true
 	p.mu.Unlock()
 	// Signal a status change so the hub's world coalescer re-emits

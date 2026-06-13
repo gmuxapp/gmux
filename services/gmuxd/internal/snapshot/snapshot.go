@@ -72,6 +72,17 @@ type WorldPayload struct {
 	// last-active timestamps are derived client-side from stamped
 	// sessions; nothing else needs to ride on this field.
 	PeerProjects any `json:"peer_projects,omitempty"`
+
+	// PeerDiscovered carries each connected peer's self-advertised
+	// discovered list (sessions the peer owns but no project of its own
+	// claims), keyed by peer name. Discovery is host-authoritative
+	// (ADR 0002/0005): the owning host runs its own match rules over
+	// its own sessions, so the viewer renders these rows verbatim
+	// rather than recomputing peer discovery blind (which could offer a
+	// project the peer already owns by a rule the viewer can't see).
+	// Empty for peer consumers and for local peers (whose sessions flow
+	// through the parent's local discovery).
+	PeerDiscovered any `json:"peer_discovered,omitempty"`
 }
 
 // ComposeSessions builds a snapshot.sessions payload from the live
