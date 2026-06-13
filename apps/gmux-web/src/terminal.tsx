@@ -27,6 +27,11 @@ const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('
  */
 export const TERM_THEME = DEFAULT_THEME_COLORS
 
+// ── Keyboard / resize timing (touch) ──
+
+/** Debounce before measuring a height-only viewport change, so an
+ * unsettled mid-animation height never drives a resize. */
+const KEYBOARD_RESIZE_DEBOUNCE_MS = 20
 // ── Utilities ──
 
 /**
@@ -683,6 +688,9 @@ export function TerminalView({
     shell?.addEventListener('touchend', handleTouchEndCapture, { capture: true, passive: false })
     shell?.addEventListener('touchcancel', clearTouchPan, true)
 
+    const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
+      || navigator.maxTouchPoints > 0
+
     // Resize strategy:
     // - A ResizeObserver on the shell element detects all layout changes:
     //   initial flex settle, sidebar toggle, window resize, etc.
@@ -695,9 +703,6 @@ export function TerminalView({
     // - Height-only viewport changes (soft keyboard slide) get a short debounce
     //   before that frame measurement, so we skip unstable intermediate heights.
     const vv = window.visualViewport
-    const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
-      || navigator.maxTouchPoints > 0
-    const KEYBOARD_RESIZE_DEBOUNCE_MS = 20
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null
     let resizeFrame: number | null = null

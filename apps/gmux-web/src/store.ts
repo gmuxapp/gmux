@@ -368,6 +368,15 @@ export const terminalOptions = signal<ResolvedTerminalOptions | null>(null)
 export const keybinds = signal<ResolvedKeybind[] | null>(null)
 export const macCommandIsCtrl = signal(false)
 
+/**
+ * True while the on-screen keyboard is open, detected via visual-viewport
+ * occlusion on touch devices (window.innerHeight - visualViewport.height
+ * exceeds a threshold). Drives keyboard-aware layout (e.g. collapsing the
+ * header on phones to reclaim rows). Set by App's viewport effect; CSS
+ * decides whether/when a collapse actually applies.
+ */
+export const keyboardOpen = signal(false)
+
 /** Current URL path, kept in sync with preact-iso's location. */
 export const urlPath = signal(
   typeof location !== 'undefined' ? (location.pathname.replace(/\/+$/, '') || '/') : '/',

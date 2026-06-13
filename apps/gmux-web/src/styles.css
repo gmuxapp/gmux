@@ -2350,6 +2350,22 @@ body {
   .sidebar-scroll { order: 1; }
 }
 
+/* Collapse the session header while the on-screen keyboard is open on
+   phone-sized touch screens, reclaiming a row for the terminal. The
+   keyboardOpen signal (set from textarea focus) toggles
+   .keyboard-collapsed; this query gates *when* it actually hides.
+   We gate on width, not height: the iOS keyboard doesn't shrink the
+   layout viewport (what media queries read), so a phone in portrait
+   stays ~800px tall and a max-height gate would never match. Width is
+   the reliable "this is a phone" proxy — reusing the 640px narrow
+   breakpoint — where the keyboard always eats a large share of the
+   screen. Tablets (wider) keep the header. */
+@media (pointer: coarse) and (max-width: 640px) {
+  .main-header.keyboard-collapsed {
+    display: none;
+  }
+}
+
 /* ── Session Detail (non-terminal) ── */
 
 
