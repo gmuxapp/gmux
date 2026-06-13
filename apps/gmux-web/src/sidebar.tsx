@@ -263,13 +263,13 @@ function FolderGroup({
           title={folder.unresolved
             ? `Host “${folder.peer}” isn't a connected or manually-added host — it may have been renamed or removed. Open Settings → Hosts to remap or remove it.`
             : folder.missing
-            ? `${folder.name} no longer exists on ${folder.peer}; remove via the home page`
+            ? `${folder.name} no longer exists on ${folder.peer} — remove this reference in Settings → Projects.`
             : `Open ${folder.name} hub`}
           onClick={onClick}
         >
           {folder.name}
           <HostSuffix peer={folder.peer ?? localHostLabel.value} local={!folder.peer} />
-          {folder.missing && <span class="folder-missing-icon" title="Project missing on peer">?</span>}
+          {folder.missing && <span class="folder-missing-icon" title="Project missing on host — remove in Settings → Projects">?</span>}
           {folder.unresolved && (
             <span class="folder-unresolved-icon" title="Host not found — fix in Settings → Hosts">!</span>
           )}
