@@ -1,9 +1,20 @@
 package projects
 
 import (
+	"fmt"
 	"log"
 	"sync"
 )
+
+// ValidationError wraps a State.Validate failure produced while applying
+// a mutation. Callers (notably the HTTP layer) can detect it with
+// errors.As to map the failure to a 4xx response rather than a 500: the
+// request was well-formed but conflicts with existing state (e.g. a
+// duplicate path), so nothing was persisted.
+type ValidationError struct{ Err error }
+
+func (e *ValidationError) Error() string { return e.Err.Error() }
+func (e *ValidationError) Unwrap() error { return e.Err }
 
 // Manager provides concurrent access to project state and handles
 // auto-assignment of sessions to projects. All mutations go through
@@ -50,6 +61,39 @@ func (m *Manager) SeedIfEmpty() {
 	if err != nil {
 		log.Printf("projects: seed error: %v", err)
 	}
+}
+
+// AddProject appends a new owned project built from the given match
+// rules, assigning a unique slug derived from baseSlug. The mutation is
+// validated before it is persisted: if the resulting state is invalid
+// (e.g. baseSlug's path duplicates an existing project), nothing is
+// saved and a *ValidationError is returned. On success the created
+// item (with its final, possibly deduplicated slug) is returned.
+//
+// This exists so the caller can tell "created" from "rejected": a bare
+// Update cannot, because its fn returning false (abort) and returning
+// true (saved) both surface as a nil error. Reporting success on an
+// aborted add let clients pin references to projects that were never
+// created (see the dangling peer-reference bug).
+func (m *Manager) AddProject(baseSlug string, rules []MatchRule) (Item, error) {
+	var created Item
+	var valErr error
+	err := m.Update(func(s *State) bool {
+		created = Item{Slug: UniqueSlug(baseSlug, s.Items), Match: rules}
+		s.Items = append(s.Items, created)
+		if err := s.Validate(); err != nil {
+			valErr = err
+			return false
+		}
+		return true
+	})
+	if err != nil {
+		return Item{}, err
+	}
+	if valErr != nil {
+		return Item{}, &ValidationError{Err: fmt.Errorf("project %q: %w", baseSlug, valErr)}
+	}
+	return created, nil
 }
 
 // Update atomically loads state, calls fn to modify it, validates, and saves.

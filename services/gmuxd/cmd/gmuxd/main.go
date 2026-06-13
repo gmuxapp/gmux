@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -950,21 +951,18 @@ func serve(stderr io.Writer) int {
 			slug = projects.SlugFromPath(req.Paths[0])
 		}
 
-		var item projects.Item
-		err = projectMgr.Update(func(state *projects.State) bool {
-			slug = projects.UniqueSlug(slug, state.Items)
-			item = projects.Item{
-				Slug:  slug,
-				Match: rules,
-			}
-			state.Items = append(state.Items, item)
-			if err := state.Validate(); err != nil {
-				log.Printf("projects: add validation error: %v", err)
-				return false
-			}
-			return true
-		})
+		// AddProject persists only on a valid result. A *ValidationError
+		// means the add conflicts with existing state (e.g. a duplicate
+		// path) and nothing was saved: report it as a 409 so the client
+		// does not pin a reference to a project that was never created.
+		item, err := projectMgr.AddProject(slug, rules)
 		if err != nil {
+			var verr *projects.ValidationError
+			if errors.As(err, &verr) {
+				log.Printf("projects: add rejected: %v", err)
+				writeError(w, http.StatusConflict, "validation_error", verr.Error())
+				return
+			}
 			log.Printf("projects: add error: %v", err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
 			return
