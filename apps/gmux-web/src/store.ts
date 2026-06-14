@@ -370,10 +370,16 @@ export const macCommandIsCtrl = signal(false)
 
 /**
  * True while the on-screen keyboard is open, detected via visual-viewport
- * occlusion on touch devices (window.innerHeight - visualViewport.height
- * exceeds a threshold). Drives keyboard-aware layout (e.g. collapsing the
- * header on phones to reclaim rows). Set by App's viewport effect; CSS
- * decides whether/when a collapse actually applies.
+ * occlusion on touch devices: layout viewport (window.innerHeight) minus
+ * visual viewport (visualViewport.height) above a threshold. Relies on the
+ * keyboard shrinking only the visual viewport while the layout viewport
+ * stays full — guaranteed on iOS Safari and, via the
+ * interactive-widget=resizes-visual viewport meta, Chrome >=108. Browsers
+ * that resize the layout viewport instead read ~0 and leave this false
+ * (fail-safe: no header collapse). Drives keyboard-aware layout (e.g.
+ * collapsing the header on phones to reclaim rows). Set by App's viewport
+ * effect; CSS decides whether/when a collapse actually applies. See the
+ * detection comment in main.tsx for the full cross-device matrix.
  */
 export const keyboardOpen = signal(false)
 

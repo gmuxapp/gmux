@@ -37,9 +37,17 @@ const InputDiagnostics = lazy(() => import('./input-diagnostics'))
 const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
 
 /** Visual-viewport occlusion (px) above which the on-screen keyboard is
- * considered open. Low enough to trip early in the slide-up animation,
- * well above sub-pixel/URL-bar noise. */
+ * considered open. Low enough to trip early in the slide-up animation and
+ * above sub-pixel/URL-bar noise, yet above a hardware-keyboard accessory
+ * bar (~44px on iPad) so that doesn't read as a soft keyboard. */
 const KEYBOARD_PRESENCE_PX = 60
+
+// On touch devices, focusing the terminal's hidden textarea pops the
+// on-screen keyboard. So auto-focus (session select, terminal mount) is
+// gated to non-touch — the keyboard opens only when the user taps the
+// terminal. Toolbar keys send via the raw input channel and never focus.
+const isTouchDevice = (): boolean =>
+  window.matchMedia?.('(pointer: coarse)').matches || navigator.maxTouchPoints > 0
 
 // Mock mode: hide close buttons and other interactive chrome via CSS.
 if (USE_MOCK) document.documentElement.classList.add('mock-mode')
@@ -207,7 +215,6 @@ const IconRight = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><
 const IconWordLeft  = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="3.5" y1="3" x2="3.5" y2="11"/><path d="M13 7H6m0 0 3-3M6 7l3 3"/></svg>
 const IconWordRight = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="14.5" y1="3" x2="14.5" y2="11"/><path d="M5 7h7m0 0-3-3m3 3-3 3"/></svg>
 const IconSend = () => <svg viewBox="0 0 14 14" width="16" height="16" fill="currentColor" stroke="none"><path d="M3 2.5l8 4.5-8 4.5V8.5L7.5 7 3 5.5z"/></svg>
-const IconPaste = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><rect x="3" y="3" width="8" height="9" rx="1"/><path d="M5.5 3V2.5a1.5 1.5 0 0 1 3 0V3"/><path d="M7 7v3m0 0-1.5-1.5M7 10l1.5-1.5"/></svg>
 
 function MobileTerminalBar({
   canSend,
@@ -215,24 +222,20 @@ function MobileTerminalBar({
   altArmed,
   onMenu,
   onSend,
-  onPaste,
   onToggleCtrl,
   onToggleAlt,
   onCtrlConsumed,
   onAltConsumed,
-  onFocusTerminal,
 }: {
   canSend: boolean
   ctrlArmed: boolean
   altArmed: boolean
   onMenu: () => void
   onSend: (data: string) => void
-  onPaste: () => void
   onToggleCtrl: () => void
   onToggleAlt: () => void
   onCtrlConsumed: () => void
   onAltConsumed: () => void
-  onFocusTerminal: () => void
 }) {
   // Read signals directly; no props needed for these. The hamburger
   // badge surfaces only the waiting (unread) state — working/active are
@@ -243,120 +246,79 @@ function MobileTerminalBar({
   const waiting = waitingCount > 0
   const arrival = useArrivalPulse(waiting ? 'unread' : 'none', waitingCount)
 
+  // Don't steal focus from the terminal: a control tap leaves the
+  // keyboard exactly as it is (open or closed). Bytes reach the PTY via
+  // the raw input channel (onSend), independent of DOM focus, so every
+  // key works with the keyboard closed without ever opening it — which
+  // is the whole point of arrows/esc being reachable while navigating.
   const keepFocus = (ev: Event) => ev.preventDefault()
-  const tap = (seq: string) => { onSend(seq); onFocusTerminal() }
 
-  // Modifier-aware tap: the toolbar sends through the raw input channel
-  // (bypassing the arm logic in sendInput), so armed ctrl/alt must be
-  // applied here. Consumes whichever arms were actually encoded.
-  // Used by keys where an armed modifier should combine (send, ←/→);
-  // NOT used by the ↑/↓ layer buttons, whose entire purpose is plain
-  // arrow access while a modifier is armed.
-  const tapKey = (seq: string, ctrl = ctrlArmed, alt = altArmed): string => {
-    const r = applyArmedModifiers(seq, ctrl, alt)
+  // Modifier-aware send: the toolbar writes through the raw input
+  // channel (bypassing the arm logic in sendInput), so armed ctrl/alt
+  // are encoded here. Consumes whichever arms were actually applied.
+  // ctrl+esc / ctrl+↑ / alt+esc all encode correctly via CSI-u.
+  const sendKey = (seq: string) => {
+    const r = applyArmedModifiers(seq, ctrlArmed, altArmed)
     if (r.ctrlApplied && ctrlArmed) onCtrlConsumed()
     if (r.altApplied) onAltConsumed()
-    tap(r.seq)
-    return r.seq
+    onSend(r.seq)
   }
 
-  const [holdWordMode, setHoldWordMode] = useState(false)
-  const holdTimer1   = useRef<ReturnType<typeof setTimeout>  | null>(null)
-  const holdTimer2   = useRef<ReturnType<typeof setTimeout>  | null>(null)
-  const holdInterval = useRef<ReturnType<typeof setInterval> | null>(null)
-  const holdGen      = useRef(0)
-
-  const clearHold = () => {
-    holdGen.current++
-    if (holdTimer1.current)   { clearTimeout(holdTimer1.current);   holdTimer1.current   = null }
-    if (holdTimer2.current)   { clearTimeout(holdTimer2.current);   holdTimer2.current   = null }
-    if (holdInterval.current) { clearInterval(holdInterval.current); holdInterval.current = null }
-    setHoldWordMode(false)
+  // Word-jump is intrinsically ctrl+arrow. Force ctrl on so it works
+  // regardless of armed state, fold in an armed alt (→ ctrl+alt+arrow),
+  // and consume both arms so neither leaks to the next key.
+  const sendWord = (arrow: string) => {
+    const r = applyArmedModifiers(arrow, true, altArmed)
+    if (ctrlArmed) onCtrlConsumed()
+    if (r.altApplied) onAltConsumed()
+    onSend(r.seq)
   }
 
-  useEffect(() => () => clearHold(), [])
-
-  const startArrowHold = (arrowSeq: string, wordSeq: string) => {
-    const gen = holdGen.current
-    holdTimer1.current = setTimeout(() => {
-      if (holdGen.current !== gen) return
-      holdInterval.current = setInterval(() => tap(arrowSeq), 50)
-      holdTimer2.current = setTimeout(() => {
-        if (holdGen.current !== gen) return
-        clearInterval(holdInterval.current!)
-        holdInterval.current = null
-        setHoldWordMode(true)
-        tap(wordSeq)
-        holdInterval.current = setInterval(() => tap(wordSeq), 180)
-      }, 700)
-    }, 400)
-  }
-
-  const showCtrl = ctrlArmed || holdWordMode
+  // Static two-row grid, identical whether the keyboard is open or
+  // closed (no relabeling, no reflow). ☰ and send are double-height
+  // bookends; the inner 5×2 grid holds the keys with ↑/↓ stacked into a
+  // center D-pad column (← ↓ → across the bottom, word-jumps tucked into
+  // the top corners). ctrl/alt only arm + highlight — they never change
+  // another key's meaning.
+  const armedClass = (armed: boolean) => `mobile-bottom-action${armed ? ' armed' : ''}`
 
   return (
-    <div class="mobile-bottom-bar" aria-label="Mobile terminal controls">
+    <div class="mobile-bottom-bar" aria-label="Mobile terminal controls" onMouseDown={keepFocus}>
       <button
         class={`mobile-bottom-action menu-btn${waiting ? ' bg-waiting' : ''}${arrival ? ` bg-${arrival}` : ''}`}
-        onClick={onMenu}
+        onClick={() => {
+          // Dismiss the on-screen keyboard when opening the menu. keepFocus
+          // holds focus on the textarea through pointerdown, so it's still
+          // the active element here; blurring it slides the keyboard away.
+          (document.activeElement as HTMLElement | null)?.blur()
+          onMenu()
+        }}
         title="Open sessions"
       >
         ☰
       </button>
-      <div class="mobile-bottom-sep" />
-      <div class="mobile-terminal-actions" role="toolbar" aria-label="Terminal keys" onMouseDown={keepFocus}>
-        {(ctrlArmed || altArmed)
-          ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b[A')} title="Up arrow"><IconUp /></button>
-          : <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b')} title="Escape">esc</button>
-        }
-        {(ctrlArmed || altArmed)
-          ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\x1b[B')} title="Down arrow"><IconDown /></button>
-          : <button class="mobile-bottom-action" disabled={!canSend} onClick={() => tap('\t')} title="Tab">tab</button>
-        }
-        <button
-          class={`mobile-bottom-action ${showCtrl ? 'armed' : ''}`}
-          disabled={!canSend}
-          onClick={() => { if (holdWordMode) { clearHold(); } else { onToggleCtrl(); } onFocusTerminal() }}
-          title={showCtrl ? 'Ctrl armed for next typed key' : 'Arm Ctrl for next typed key'}
-          aria-pressed={showCtrl}
-        >
-          ctrl
-        </button>
-        <button
-          class={`mobile-bottom-action ${altArmed ? 'armed' : ''}`}
-          disabled={!canSend}
-          onClick={() => { onToggleAlt(); onFocusTerminal() }}
-          title={altArmed ? 'Alt armed for next typed key' : 'Arm Alt for next typed key'}
-          aria-pressed={altArmed}
-        >
-          alt
-        </button>
-        {([
-          { seq: '\x1b[D', wordSeq: '\x1b[1;5D', title: 'Left arrow',  wordTitle: 'Word left',  Icon: IconLeft,  WordIcon: IconWordLeft  },
-          { seq: '\x1b[C', wordSeq: '\x1b[1;5C', title: 'Right arrow', wordTitle: 'Word right', Icon: IconRight, WordIcon: IconWordRight },
-        ] as const).map(({ seq, wordSeq, title, wordTitle, Icon, WordIcon }) => (
-          <button
-            class="mobile-bottom-action"
-            disabled={!canSend}
-            onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); e.preventDefault(); const s = tapKey(seq, showCtrl, altArmed); startArrowHold(s, wordSeq) }}
-            onPointerUp={clearHold}
-            onPointerCancel={clearHold}
-            onContextMenu={e => e.preventDefault()}
-            title={showCtrl ? wordTitle : `${title} (hold to repeat)`}
-          >
-            {showCtrl ? <WordIcon /> : <Icon />}
-          </button>
-        ))}
-        {ctrlArmed
-          ? <button class="mobile-bottom-action" disabled={!canSend} onClick={() => { onPaste(); onFocusTerminal() }} title="Paste from clipboard"><IconPaste /></button>
-          : <button
-              class="mobile-bottom-action send-btn"
-              disabled={!canSend}
-              onClick={() => tapKey('\r')}
-              title={altArmed ? 'Send Alt+Enter' : 'Send'}
-            ><IconSend /></button>
-        }
+
+      <div class="mobile-key-grid" role="toolbar" aria-label="Terminal keys">
+        {/* Row 1 */}
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\x1b')} title="Escape">esc</button>
+        <button class={armedClass(altArmed)} disabled={!canSend} aria-pressed={altArmed} onClick={onToggleAlt} title={altArmed ? 'Alt armed for next key' : 'Arm Alt'}>alt</button>
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendWord('\x1b[D')} title="Word left"><IconWordLeft /></button>
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\x1b[A')} title="Up arrow"><IconUp /></button>
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendWord('\x1b[C')} title="Word right"><IconWordRight /></button>
+        {/* Row 2 */}
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\t')} title="Tab">tab</button>
+        <button class={armedClass(ctrlArmed)} disabled={!canSend} aria-pressed={ctrlArmed} onClick={onToggleCtrl} title={ctrlArmed ? 'Ctrl armed for next key' : 'Arm Ctrl'}>ctrl</button>
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\x1b[D')} title="Left arrow"><IconLeft /></button>
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\x1b[B')} title="Down arrow"><IconDown /></button>
+        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\x1b[C')} title="Right arrow"><IconRight /></button>
       </div>
+
+      <button
+        class="mobile-bottom-action send-btn"
+        disabled={!canSend}
+        onClick={() => sendKey('\r')}
+        title={altArmed ? 'Send Alt+Enter' : 'Send'}
+      ><IconSend /></button>
     </div>
   )
 }
@@ -371,18 +333,39 @@ function App() {
   useEffect(() => {
     const vv = window.visualViewport
     if (!vv) return
-    // On touch, the on-screen keyboard shrinks the visual viewport without
-    // shrinking the layout viewport (window.innerHeight) on iOS, so their
-    // difference is the occluded height. The URL bar moves both together,
-    // so it doesn't register — letting a small threshold detect the
-    // keyboard early in its slide. Detected via the viewport, not textarea
-    // focus, which lies (the resize path re-focuses after the keyboard
-    // closes). CSS decides whether a collapse actually applies.
-    const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
-      || navigator.maxTouchPoints > 0
+    // Keyboard presence = occluded height = layout viewport (innerHeight)
+    // minus visual viewport (vv.height). This is only meaningful because
+    // the keyboard shrinks the *visual* viewport while the *layout*
+    // viewport stays full — which holds on:
+    //   - iOS Safari: always (it ignores interactive-widget but already
+    //     behaves this way).
+    //   - Chrome/Android >=108: because index.html sets the viewport meta
+    //     interactive-widget=resizes-visual. That meta is load-bearing
+    //     here; without it Chrome's default (resizes-content) shrinks the
+    //     layout viewport too, and the difference collapses to ~0.
+    // Browsers that ignore the meta and resize the layout viewport read
+    // ~0 and so never flip keyboardOpen — a deliberate fail-safe: the
+    // header just doesn't collapse, nothing breaks. (We don't support
+    // pre-108 Android beyond that.)
+    //
+    // Deliberately not the VirtualKeyboard API (navigator.virtualKeyboard):
+    // it's Chromium-only (no iOS Safari — our primary target — and no
+    // Firefox), and its boundingRect/geometrychange only report anything
+    // once overlaysContent=true, which stops the browser resizing the
+    // viewport and makes the keyboard overlay content instead. That would
+    // invert this entire vv-resize model for no gain: we need a boolean,
+    // not pixel geometry, and the continuous resize is already free here.
+    //
+    // The URL bar moves both viewports together, so it nets out and
+    // doesn't trip the threshold. Detected via the viewport, never
+    // textarea focus, which lies: the textarea can stay focused while the
+    // keyboard is dismissed (hardware keyboard, swipe-to-hide), and
+    // focus/blur don't track the keyboard's slide. CSS decides whether a
+    // collapse actually applies.
+    const touch = isTouchDevice()
     const update = () => {
       document.documentElement.style.setProperty('--app-height', `${vv.height}px`)
-      if (isTouchDevice) {
+      if (touch) {
         keyboardOpen.value = window.innerHeight - vv.height > KEYBOARD_PRESENCE_PX
       }
     }
@@ -488,7 +471,8 @@ function App() {
     setResumingId(null)
     setCtrlArmed(false)
     setAltArmed(false)
-    requestAnimationFrame(() => terminalFocusRef.current?.())
+    // Don't auto-open the keyboard on touch when switching sessions.
+    if (!isTouchDevice()) requestAnimationFrame(() => terminalFocusRef.current?.())
   }, [selId])
 
   // When a resumed session comes alive, navigate to it.
@@ -522,18 +506,18 @@ function App() {
   }, [])
   const handleTerminalFocusReady = useCallback((focus: (() => void) | null) => {
     terminalFocusRef.current = focus
-    focus?.()
+    // Auto-focus on mount only off-touch; on touch this would pop the
+    // on-screen keyboard the moment a session opens (surprising).
+    if (!isTouchDevice()) focus?.()
   }, [])
-  const handleFocusTerminal = useCallback(() => { terminalFocusRef.current?.() }, [])
   const handleMobileInput = useCallback((data: string) => { terminalInputRef.current?.(data) }, [])
+  // Paste capability is wired up (TerminalView reports its trigger here)
+  // but currently has no UI affordance on mobile: the toolbar paste
+  // button was removed in favor of a forthcoming long-press-to-paste on
+  // the terminal, which will call terminalPasteRef. Desktop paste still
+  // goes through the keyboard handler.
   const handleTerminalPasteReady = useCallback((paste: (() => void) | null) => {
     terminalPasteRef.current = paste
-  }, [])
-  // The trigger encapsulates clipboard read, binary detection, upload,
-  // and PTY emission. Mobile and desktop now share one paste code path,
-  // so binary clipboard items work from the toolbar button too.
-  const handleMobilePaste = useCallback(() => {
-    terminalPasteRef.current?.()
   }, [])
   const handleToggleCtrl = useCallback(() => {
     if (!canAttach) return
@@ -631,12 +615,10 @@ function App() {
           altArmed={altArmed}
           onMenu={() => setSidebarOpen(true)}
           onSend={handleMobileInput}
-          onPaste={handleMobilePaste}
           onToggleCtrl={handleToggleCtrl}
           onToggleAlt={handleToggleAlt}
           onCtrlConsumed={handleCtrlConsumed}
           onAltConsumed={handleAltConsumed}
-          onFocusTerminal={handleFocusTerminal}
         />
       </div>
     </div>
