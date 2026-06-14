@@ -27,11 +27,6 @@ const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('
  */
 export const TERM_THEME = DEFAULT_THEME_COLORS
 
-// ── Keyboard / resize timing (touch) ──
-
-/** Debounce before measuring a height-only viewport change, so an
- * unsettled mid-animation height never drives a resize. */
-const KEYBOARD_RESIZE_DEBOUNCE_MS = 20
 // ── Utilities ──
 
 /**
@@ -660,18 +655,12 @@ export function TerminalView({
         }
 
         focusTerminalInput(term)
-        // Defer the scroll-to-bottom past the focus-driven layout work
-        // (keyboard opening resizes the viewport) and the browser's
-        // synthesized mouse events for this touch, so it lands once on
-        // the settled layout instead of racing them.
-        setTimeout(() => {
-          term.scrollToBottom()
-          const host = shellRef.current
-          if (host) {
-            host.scrollTop = host.scrollHeight
-            host.scrollLeft = 0
-          }
-        }, 0)
+        // No eager scroll-to-bottom here: the keyboard-open viewport
+        // shrink triggers one PTY reflow that already lands at the
+        // bottom. A scrollToBottom here would fire mid-slide (its
+        // setTimeout is deferred by the focus/layout work to ~30% of
+        // the keyboard animation), producing a redundant scroll jump
+        // before the reflow does the same thing again.
       }
       touchPanState.active = false
       touchPanState.moved = false
@@ -688,41 +677,27 @@ export function TerminalView({
     shell?.addEventListener('touchend', handleTouchEndCapture, { capture: true, passive: false })
     shell?.addEventListener('touchcancel', clearTouchPan, true)
 
-    const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
-      || navigator.maxTouchPoints > 0
-
-    // Resize strategy:
-    // - A ResizeObserver on the shell element detects all layout changes:
-    //   initial flex settle, sidebar toggle, window resize, etc.
-    // - Measure on the next animation frame, after browser layout settles.
-    //   In practice width can update before flex heights finish recalculating,
-    //   so measuring synchronously in the resize event can read a stale height.
-    // - After each outbound resize, wait for the matching terminal_resize echo
-    //   before sending the next one. This keeps drag-resize responsive without
-    //   flooding the server with intermediate sizes.
-    // - Height-only viewport changes (soft keyboard slide) get a short debounce
-    //   before that frame measurement, so we skip unstable intermediate heights.
+    // Resize strategy (no debounce — two natural throttles make it
+    // unnecessary, and dropping it lets the soft-keyboard reflow fire in
+    // sync with the layout change instead of ~36ms later):
+    // - A ResizeObserver on the shell + window/visualViewport resize
+    //   events detect every layout change (flex settle, sidebar, soft
+    //   keyboard, rotation).
+    // - Measure on the next animation frame so layout has settled (width
+    //   can update before flex heights finish recalculating).
+    // - Cell quantization: measureTerminalFit floors pixels to cols/rows,
+    //   so sub-character jitter never produces a resize at all.
+    // - Echo gate: only one resize is in flight at a time (send → await the
+    //   server terminal_resize echo → send the latest pending), which
+    //   serializes and coalesces drag-resizes without flooding the PTY.
     const vv = window.visualViewport
 
-    let resizeTimer: ReturnType<typeof setTimeout> | null = null
     let resizeFrame: number | null = null
-    let refocusTimer: ReturnType<typeof setTimeout> | null = null
     let lastViewportPixels = getResizeSignalPixels(shell, vv)
-    let pendingHeightChange = false
 
     const flushViewportResize = () => {
-      resizeTimer = null
       resizeFrame = null
       processViewportResize()
-
-      const shouldRefocus = pendingHeightChange && isTouchDevice
-      pendingHeightChange = false
-      if (!shouldRefocus) return
-
-      // Let iOS finish the keyboard transition before grabbing focus,
-      // otherwise the OS immediately re-blurs the textarea.
-      if (refocusTimer !== null) clearTimeout(refocusTimer)
-      refocusTimer = setTimeout(() => focusTerminalInput(termRef.current), 120)
     }
 
     const scheduleViewportResize = () => {
@@ -741,21 +716,6 @@ export function TerminalView({
       if (!widthChanged && !heightChanged) return
 
       lastViewportPixels = nextViewportPixels
-      pendingHeightChange = pendingHeightChange || heightChanged
-
-      if (resizeTimer !== null) {
-        clearTimeout(resizeTimer)
-        resizeTimer = null
-      }
-
-      // Soft keyboard animations are mostly height-only, so debounce just that
-      // case on touch devices. Desktop resizes go through immediately, even if
-      // only the height changed.
-      if (isTouchDevice && heightChanged && !widthChanged) {
-        resizeTimer = setTimeout(scheduleViewportResize, KEYBOARD_RESIZE_DEBOUNCE_MS)
-        return
-      }
-
       scheduleViewportResize()
     }
 
@@ -771,9 +731,7 @@ export function TerminalView({
 
     return () => {
       shellObserver.disconnect()
-      if (resizeTimer !== null) clearTimeout(resizeTimer)
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
-      if (refocusTimer !== null) clearTimeout(refocusTimer)
       longPress.cancel()
       disposed.current = true
       window.removeEventListener('keydown', handleGlobalKeydown, true)

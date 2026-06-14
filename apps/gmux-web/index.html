@@ -2,7 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <!-- interactive-widget=resizes-visual: when the soft keyboard opens, shrink
+         only the visual viewport and keep the layout viewport (innerHeight) full.
+         Load-bearing for keyboard detection (innerHeight - visualViewport.height)
+         on Chrome >=108; iOS Safari already behaves this way. We deliberately do
+         NOT use the Chromium-only VirtualKeyboard API (it requires overlay mode);
+         see the detection comment in src/main.tsx. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual" />
     <meta name="theme-color" content="#0a0e13" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.json" />
