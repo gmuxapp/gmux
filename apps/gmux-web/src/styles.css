@@ -1795,7 +1795,6 @@ body {
   overflow: auto;
   background: #0f141a;
   overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
 }
 
 .terminal-shell-passive {
@@ -2756,6 +2755,50 @@ body {
    menu rather than a dialog. The preview intentionally shows the full
    URI (word-broken, scrollable past ~6 lines) — for OSC 8 hyperlinks
    this is the only place the real target is visible before opening. */
+/* Shared button for the long-press sheets (link + text). Default is a
+   surface-filled button; .sheet-btn-primary gets the accent fill. */
+.sheet-btn {
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text);
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 11px 12px;
+  border-radius: 8px;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.sheet-btn:active {
+  background: var(--bg-hover);
+}
+
+.sheet-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: oklch(13% 0.015 250);
+}
+
+.sheet-btn-primary:active {
+  background: oklch(66% 0.1 195);
+}
+
+/* Quiet dismiss (Close): set apart from the real actions — no fill, a
+   hairline border (lighter than their --border-strong), muted text — so
+   it reads as a real button but not a third equal choice. */
+.sheet-btn-quiet {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+
+.sheet-btn-quiet:active {
+  background: var(--bg-hover);
+}
+
 .link-sheet {
   width: 320px;
   padding: 6px;
@@ -2784,20 +2827,66 @@ body {
   overflow-y: auto;
 }
 
-.link-sheet-action {
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  font-size: 14px;
-  font-family: inherit;
-  padding: 12px 12px;
-  border-radius: 8px;
-  cursor: pointer;
+.link-sheet-actions {
+  display: flex;
+  gap: 8px;
+  padding: 4px;
 }
 
-.link-sheet-action:hover,
-.link-sheet-action:active {
-  background: var(--bg-hover);
+.link-sheet-actions .sheet-btn {
+  flex: 1;
+}
+
+/* Text-sheet backdrop is constrained to the visible viewport (var set by
+   App's viewport effect), not the layout viewport: with the soft keyboard
+   open the layout viewport still spans the full window behind the
+   keyboard, so a plain inset:0 backdrop would centre the panel too low
+   (partly behind the keyboard). */
+.action-sheet-backdrop {
+  bottom: auto;
+  height: var(--app-height, 100dvh);
+}
+
+/* Text sheet: the terminal buffer as natively-selectable text, scrolled
+   to the long-pressed row, with Paste pinned below. Tall and wide so it
+   reads like a text view rather than a menu. */
+.text-sheet {
+  width: 560px;
+  /* Near full width: a full-width terminal line (13px cells) fits without
+     horizontal scroll at the sheet's 12px font, while wider content still
+     scrolls. Capped height leaves backdrop above/below to tap-dismiss. */
+  max-width: calc(100vw - 12px);
+  height: min(640px, calc(var(--app-height, 100vh) - 120px));
+  padding: 0;
+}
+
+.text-sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 8px;
+}
+
+.text-sheet-pre {
+  margin: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre;
+  /* The whole point: the app shell sets user-select:none on chrome, so
+     re-enable native selection here. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.text-sheet-footer {
+  border-top: 1px solid var(--border);
+  padding: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.text-sheet-footer .sheet-btn {
+  flex: 1;
 }

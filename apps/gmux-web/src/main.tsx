@@ -436,7 +436,6 @@ function App() {
 
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   const terminalFocusRef = useRef<(() => void) | null>(null)
-  const terminalPasteRef = useRef<(() => void) | null>(null)
 
   // Read signals.
   const viewVal = view.value
@@ -511,14 +510,6 @@ function App() {
     if (!isTouchDevice()) focus?.()
   }, [])
   const handleMobileInput = useCallback((data: string) => { terminalInputRef.current?.(data) }, [])
-  // Paste capability is wired up (TerminalView reports its trigger here)
-  // but currently has no UI affordance on mobile: the toolbar paste
-  // button was removed in favor of a forthcoming long-press-to-paste on
-  // the terminal, which will call terminalPasteRef. Desktop paste still
-  // goes through the keyboard handler.
-  const handleTerminalPasteReady = useCallback((paste: (() => void) | null) => {
-    terminalPasteRef.current = paste
-  }, [])
   const handleToggleCtrl = useCallback(() => {
     if (!canAttach) return
     setCtrlArmed(armed => !armed)
@@ -587,7 +578,6 @@ function App() {
             altArmed={altArmed}
             onAltConsumed={handleAltConsumed}
             onInputReady={handleTerminalInputReady}
-            onPasteReady={handleTerminalPasteReady}
             onFocusReady={handleTerminalFocusReady}
           />
         ) : selectedVal && !selectedVal.alive && termOpts && !USE_MOCK ? (

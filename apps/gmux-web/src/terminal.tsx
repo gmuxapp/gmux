@@ -13,6 +13,8 @@ import { createTerminalIO, type TerminalSize } from './terminal-io'
 import { linkAtPoint, type LinkInfo, openLinkAtPoint } from './terminal-link'
 import { createLongPressRecognizer } from './long-press'
 import { LinkActionSheet } from './link-action-sheet'
+import { TerminalTextSheet } from './terminal-text-sheet'
+import { pressedBufferRow, readTerminalText } from './terminal-text'
 import { decideViewportResize, sameSize } from './terminal-resize'
 import { MOCK_BY_ID } from './mock-data/index'
 import type { Session } from './types'
@@ -204,7 +206,6 @@ export function TerminalView({
   altArmed,
   onAltConsumed,
   onInputReady,
-  onPasteReady,
   onFocusReady,
 }: {
   session: Session
@@ -216,7 +217,6 @@ export function TerminalView({
   altArmed: boolean
   onAltConsumed: () => void
   onInputReady?: (send: ((data: string) => void) | null) => void
-  onPasteReady?: (paste: (() => void) | null) => void
   onFocusReady?: (focus: (() => void) | null) => void
 }) {
   const shellRef = useRef<HTMLDivElement>(null)
@@ -241,6 +241,11 @@ export function TerminalView({
   const [viewportSize, setViewportSize] = useState<TerminalSize | null>(null)
   const [scrolledUp, setScrolledUp] = useState(false)
   const [linkSheet, setLinkSheet] = useState<LinkInfo | null>(null)
+  const [textSheet, setTextSheet] = useState<{ lines: string[]; anchorRow: number } | null>(null)
+  // The paste trigger lives in the attach effect (it reads bracketed-paste
+  // mode + clipboard fresh), so bridge it out to the sheet's Paste button
+  // via a ref.
+  const pasteActionRef = useRef<(() => void) | null>(null)
   const SCROLL_THRESHOLD = 3 // rows above bottom before showing the button
   // Track the last PTY size we know about so we can derive the pill.
   const [ptySize, setPtySize] = useState<TerminalSize | null>(null)
@@ -496,16 +501,16 @@ export function TerminalView({
     // The paste trigger reads bracketedPasteMode and the clipboard fresh
     // on every invocation: bracketed mode flips at runtime as TUIs come
     // and go, and the clipboard contents are obviously volatile. Sharing
-    // handlePasteAction with the keybind path means the mobile toolbar
-    // button gets binary-paste support without divergent code.
-    onPasteReady?.(() => {
+    // handlePasteAction with the keybind path means long-press paste gets
+    // binary-paste support without divergent code.
+    pasteActionRef.current = () => {
       void handlePasteAction({
         sessionId: session.id,
         bracketedPasteMode: term.modes.bracketedPasteMode,
         feedback: defaultPasteFeedback,
         emit: sendRawInput,
       })
-    })
+    }
     onFocusReady?.(() => focusTerminalInput(term))
 
     const dataDisposable = term.onData((data) => sendInput(data))
@@ -559,9 +564,14 @@ export function TerminalView({
     // release must not open a link or toggle the keyboard.
     const longPress = createLongPressRecognizer((x, y) => {
       const link = linkAtPoint(term, x, y)
-      if (!link) return
       try { navigator.vibrate?.(10) } catch { /* unsupported */ }
-      setLinkSheet(link)
+      // On a link: offer open/copy. On empty space: open the text sheet —
+      // the buffer as natively-selectable text, scrolled to the pressed
+      // row, with Paste at the bottom.
+      if (link) { setLinkSheet(link); return }
+      const lines = readTerminalText(term)
+      const anchorRow = Math.max(0, Math.min(pressedBufferRow(term, y), lines.length - 1))
+      setTextSheet({ lines, anchorRow })
     })
     const touchPanState = {
       active: false,
@@ -751,7 +761,7 @@ export function TerminalView({
       wsRef.current?.close()
       wsRef.current = null
       onInputReady?.(null)
-      onPasteReady?.(null)
+      pasteActionRef.current = null
       onFocusReady?.(null)
       if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
       ;(window as any).__gmuxInject = null
@@ -990,6 +1000,14 @@ export function TerminalView({
       )}
       {linkSheet && (
         <LinkActionSheet link={linkSheet} onClose={() => setLinkSheet(null)} />
+      )}
+      {textSheet && (
+        <TerminalTextSheet
+          lines={textSheet.lines}
+          anchorRow={textSheet.anchorRow}
+          onPaste={() => pasteActionRef.current?.()}
+          onClose={() => setTextSheet(null)}
+        />
       )}
     </div>
   )
