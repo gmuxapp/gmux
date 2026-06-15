@@ -127,6 +127,10 @@ function announceResize(ws: WebSocket | null, dims: TerminalSize): void {
   ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
 }
 
+function isTouchDevice(): boolean {
+  return window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0
+}
+
 function focusTerminalInput(term: Terminal | null): void {
   if (!term) return
 
@@ -135,9 +139,7 @@ function focusTerminalInput(term: Terminal | null): void {
   const textarea = term.textarea
   if (!textarea) return
 
-  const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
-    || navigator.maxTouchPoints > 0
-  if (!isTouchDevice) return
+  if (!isTouchDevice()) return
 
   const prev = {
     position: textarea.style.position,
@@ -388,6 +390,10 @@ export function TerminalView({
   }, [])
 
   const handleShellClick = useCallback((ev: MouseEvent) => {
+    // Touch focuses the terminal via the touchend handler (a deliberate
+    // tap opens the keyboard). Ignore synthesized clicks here so a click
+    // falling through from a just-dismissed sheet can't reopen it.
+    if (isTouchDevice()) return
     const target = ev.target
     if (target instanceof HTMLElement && target.closest('button, input, textarea, select, a, label, [role="button"]')) {
       return
@@ -484,10 +490,14 @@ export function TerminalView({
 
     const sendRawInput = (data: string) => {
       const ws = wsRef.current
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(new TextEncoder().encode(data))
-        term.focus()
-      }
+      if (!ws || ws.readyState !== WebSocket.OPEN) return
+      // Only re-assert focus if the terminal already had it (keyboard
+      // open). Grabbing focus unconditionally would pop the on-screen
+      // keyboard on every toolbar key, even when it was closed — the
+      // whole point of the toolbar is to work with the keyboard down.
+      const hadFocus = document.activeElement === term.textarea
+      ws.send(new TextEncoder().encode(data))
+      if (hadFocus) term.focus()
     }
 
     const sendInput = (data: string) => {
