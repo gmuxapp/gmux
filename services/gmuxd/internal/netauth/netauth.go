@@ -187,8 +187,27 @@ func serveLoginPage(w http.ResponseWriter, errMsg string) {
 	w.Header().Set("Cache-Control", "no-store")
 
 	errorHTML := ""
+	bounceScript := ""
 	if errMsg != "" {
 		errorHTML = `<div class="error" role="alert">` + errMsg + `</div>`
+	} else {
+		// Self-heal: a cross-site-initiated navigation (e.g. tapping through
+		// from a browser error page while the daemon was down) makes
+		// the browser withhold the SameSite=Strict cookie, stranding an
+		// authenticated user here. We are now on the gmux origin, so
+		// location.replace('/') is same-site and DOES send the cookie.
+		// The timestamp guard fires once, then self-expires.
+		bounceScript = `<script>
+(function(){ try {
+  var k = 'gmux-auth-bounce';
+  var now = Date.now();
+  var last = parseInt(sessionStorage.getItem(k) || '0', 10);
+  if (now - last > 10000) {
+    sessionStorage.setItem(k, String(now));
+    location.replace('/');
+  }
+} catch (e) {} })();
+</script>`
 	}
 
 	// Inline page with no JavaScript and no auth-gated assets (the app
@@ -206,6 +225,7 @@ func serveLoginPage(w http.ResponseWriter, errMsg string) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>gmux — sign in</title>
+` + bounceScript + `
 <style>
   ` + brandFontFace + `
   *, *::before, *::after { box-sizing: border-box; }

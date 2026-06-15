@@ -112,6 +112,25 @@ func TestLoginPageServedWithoutAuth(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), `name="token"`) {
 		t.Error("login page should contain token input")
 	}
+	// Fresh GET should include the self-heal bounce script.
+	if !strings.Contains(rr.Body.String(), "gmux-auth-bounce") {
+		t.Error("fresh login page should include the self-heal bounce script")
+	}
+}
+
+func TestLoginPageErrorHasNoSelfHeal(t *testing.T) {
+	// On an error re-render the bounce script must be absent, otherwise a
+	// wrong-token submit would bounce and lose its error message.
+	h := Middleware(testToken, okHandler())
+	form := url.Values{"token": {"wrong-token"}}
+	req := httptest.NewRequest("POST", "/auth/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if strings.Contains(rr.Body.String(), "gmux-auth-bounce") {
+		t.Error("error login page must not include the self-heal bounce script")
+	}
 }
 
 func TestLoginPageHasNoExternalResources(t *testing.T) {
