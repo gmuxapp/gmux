@@ -66,6 +66,27 @@ func BaseName(arg string) string {
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
+// maxSlugLen caps slug length. Slugify truncates to this and
+// IsValidSlug enforces it, so the two agree on the canonical shape
+// and downstream consumers (/@<peer>/<slug> URLs, ${peer}::${slug}
+// folder keys) always see a bounded slug.
+const maxSlugLen = 40
+
+// validSlugRe matches a normalized slug: lowercase alphanumeric
+// segments joined by single hyphens, no leading/trailing hyphen.
+// Mirrors the daemon's project-slug rule so session slugs that flow
+// into /@<peer>/<slug> URLs and the ${peer}::${slug} folder key can't
+// carry "/", "::", newlines, or other separators.
+var validSlugRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// IsValidSlug reports whether s is already a well-formed slug
+// (the canonical output shape of Slugify): the right character shape
+// and within the length cap, so a valid slug never bypasses Slugify's
+// truncation.
+func IsValidSlug(s string) bool {
+	return len(s) <= maxSlugLen && validSlugRe.MatchString(s)
+}
+
 // Slugify converts a string to a URL-safe slug: lowercase, non-alphanum
 // runs replaced by hyphens, trimmed, capped at 40 characters.
 func Slugify(s string) string {
@@ -75,8 +96,8 @@ func Slugify(s string) string {
 	if s == "" {
 		return ""
 	}
-	if len(s) > 40 {
-		s = s[:40]
+	if len(s) > maxSlugLen {
+		s = s[:maxSlugLen]
 		s = strings.TrimRight(s, "-")
 	}
 	return s

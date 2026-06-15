@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/scrollback"
 	"nhooyr.io/websocket"
 )
@@ -1600,5 +1601,81 @@ func TestBindSocketCreatesParentDir(t *testing.T) {
 
 	if _, err := os.Stat(sockPath); err != nil {
 		t.Errorf("sockfile not created: %v", err)
+	}
+}
+
+// TestPutSlugValidation guards the slug write path: session slugs flow
+// into /@<peer>/<slug> URLs and the ${peer}::${slug} folder key, so a
+// slug carrying "/" or "::" must be rejected or normalized before it
+// reaches the state.
+func TestPutSlugValidation(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	srv, err := New(Config{
+		Command:    []string{"sleep", "5"},
+		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
+		SocketPath: sockPath,
+		State:      session.New(session.Config{ID: "sess-abcd1234"}),
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", sockPath)
+			},
+		},
+	}
+
+	putSlug := func(body string) int {
+		req, _ := http.NewRequest(http.MethodPut, "http://unix/slug", strings.NewReader(body))
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("put slug: %v", err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	currentSlug := func() string {
+		resp, err := client.Get("http://unix/meta")
+		if err != nil {
+			t.Fatalf("get meta: %v", err)
+		}
+		defer resp.Body.Close()
+		var meta struct {
+			Slug string `json:"slug"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+			t.Fatalf("decode meta: %v", err)
+		}
+		return meta.Slug
+	}
+
+	// Already well-formed: stored verbatim.
+	if code := putSlug("my-session-2"); code != http.StatusNoContent {
+		t.Fatalf("put valid slug = %d, want 204", code)
+	}
+	if got := currentSlug(); got != "my-session-2" {
+		t.Errorf("slug = %q, want %q", got, "my-session-2")
+	}
+
+	// Contains separators / uppercase: normalized, never stored raw.
+	if code := putSlug("Foo/Bar::Baz"); code != http.StatusNoContent {
+		t.Fatalf("put dirty slug = %d, want 204", code)
+	}
+	if got := currentSlug(); got != "foo-bar-baz" {
+		t.Errorf("normalized slug = %q, want %q", got, "foo-bar-baz")
+	}
+	if strings.ContainsAny(currentSlug(), "/:") {
+		t.Errorf("slug %q still contains separators", currentSlug())
+	}
+
+	// Empty after slugify (only separators): rejected.
+	if code := putSlug("///"); code != http.StatusBadRequest {
+		t.Errorf("put unslugifiable = %d, want 400", code)
 	}
 }

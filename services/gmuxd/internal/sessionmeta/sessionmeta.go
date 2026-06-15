@@ -71,7 +71,20 @@ func New(dir string) *Store { return &Store{dir: dir} }
 func (s *Store) Dir() string { return s.dir }
 
 // SessionDir is the per-session subdirectory: <Dir()>/<id>/.
+//
+// Defense in depth: id becomes a path segment, and SessionDir feeds
+// every disk operation in this package — including Remove's
+// RemoveAll. A crafted id with separators or ".." must never let
+// those escape s.dir, so an id that isn't a well-formed session ID is
+// routed to a single reserved ".invalid" subdir that stays inside
+// s.dir and can never collide with a real session. Well-formed IDs
+// (which contain no separators) join unchanged, and Write rejects
+// invalid IDs with an explicit error before reaching disk, so this
+// fallback is purely a containment backstop.
 func (s *Store) SessionDir(id string) string {
+	if !paths.IsValidSessionID(id) {
+		return filepath.Join(s.dir, ".invalid")
+	}
 	return filepath.Join(s.dir, id)
 }
 
@@ -96,6 +109,14 @@ func (s *Store) Write(sess store.Session) error {
 	}
 	if sess.ID == "" {
 		return errors.New("sessionmeta: cannot persist session with empty id")
+	}
+	// Defense in depth: the ID becomes a path segment under the
+	// sessions dir, so reject anything that isn't a well-formed
+	// session ID before it reaches MkdirAll/Rename. The registration
+	// boundary validates too, but this guarantees the write path can
+	// never escape the sessions dir regardless of caller.
+	if !paths.IsValidSessionID(sess.ID) {
+		return fmt.Errorf("sessionmeta: invalid session id %q", sess.ID)
 	}
 
 	sessDir := s.SessionDir(sess.ID)
