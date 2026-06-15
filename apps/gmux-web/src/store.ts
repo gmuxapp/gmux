@@ -221,6 +221,18 @@ effect(() => {
 
 // Local-only UI state (never sourced from the wire).
 export const sessionsLoaded = signal(false)
+/**
+ * Whether the leading-edge `snapshot.world` (projects, peers, health)
+ * has arrived at least once. Tracked separately from `sessionsLoaded`
+ * because the daemon emits `snapshot.sessions` and `snapshot.world` as
+ * two distinct SSE events (sessions first; ADR 0001). On a deep-link
+ * refresh the sessions event lands while `projects` is still empty, and
+ * resolving a local-project URL against an empty projects list yields
+ * `home` — which the URL-normalization effect would then write to the
+ * address bar, dropping the session the user was on. Gating the view on
+ * *both* flags keeps it `null` until a coherent snapshot exists.
+ */
+export const worldLoaded = signal(false)
 export const connState = signal<'connecting' | 'connected' | 'error'>('connecting')
 
 // Discovered is host-authoritative (ADR 0002/0005): each host runs its
@@ -536,13 +548,15 @@ export const localHostLabel = computed<string | undefined>(() => {
 /**
  * Current view, derived from the URL + data.
  *
- * Returns null until sessions have loaded at least once. This prevents
- * the URL normalization effect from overwriting a deep session URL with
- * a fallback before data arrives. After loading, always returns a
- * concrete View (home/project/session).
+ * Returns null until both the sessions and world snapshots have loaded
+ * at least once. This prevents the URL normalization effect from
+ * overwriting a deep session URL with a fallback before data arrives —
+ * in particular before `projects` is populated, when a local-project
+ * URL would otherwise mis-resolve to home. After loading, always
+ * returns a concrete View (home/project/session).
  */
 export const view = computed((): View | null => {
-  if (!sessionsLoaded.value) return null
+  if (!sessionsLoaded.value || !worldLoaded.value) return null
   return resolveViewFromPath(urlPath.value, projects.value, filteredSessions.value)
 })
 
@@ -1223,6 +1237,7 @@ export function initStore(): () => void {
       _setRawWorld({ projects: MOCK_PROJECTS, peers: MOCK_PEERS, health: MOCK_HEALTH })
       _rawSessions.value = mockSessions
       sessionsLoaded.value = true
+      worldLoaded.value = true
       connState.value = 'connected'
       terminalOptions.value = buildTerminalOptions(null, null)
       keybinds.value = resolveKeybinds(null, false)
@@ -1304,14 +1319,17 @@ export function initStore(): () => void {
         peer_projects?: Record<string, PeerProject[]>
         peer_discovered?: Record<string, DiscoveredProject[]>
       }
-      _setRawWorld({
-        projects: env.projects ?? [],
-        peers: env.peers ?? env.health?.peers ?? [],
-        health: env.health ?? null,
-        launchers: env.launchers ?? [],
-        defaultLauncher: env.default_launcher ?? 'shell',
-        peerProjects: env.peer_projects ?? {},
-        peerDiscovered: env.peer_discovered ?? {},
+      batch(() => {
+        _setRawWorld({
+          projects: env.projects ?? [],
+          peers: env.peers ?? env.health?.peers ?? [],
+          health: env.health ?? null,
+          launchers: env.launchers ?? [],
+          defaultLauncher: env.default_launcher ?? 'shell',
+          peerProjects: env.peer_projects ?? {},
+          peerDiscovered: env.peer_discovered ?? {},
+        })
+        worldLoaded.value = true
       })
     } catch (err) {
       console.warn('snapshot.world: bad event', err)
@@ -1329,12 +1347,13 @@ export function initStore(): () => void {
 
   // URL normalization effect: rewrites the URL when the resolved view
   // differs from the current path (e.g., `/:project` resolves to a
-  // specific session). Gated on sessionsLoaded to prevent the race
-  // where projects load first and clobber the URL before sessions arrive.
+  // specific session). `view` is null until both the sessions and
+  // world snapshots have loaded, so the early `v === null` return
+  // already gates this against the load-order race that would
+  // otherwise clobber a deep-link URL before projects arrive.
   const disposeUrlNorm = effect(() => {
     const v = view.value
     if (v === null) return
-    if (!sessionsLoaded.value) return
     const url = viewToPath(v, projects.value, sessions.value)
     if (url && url !== urlPath.value) {
       navigate(url, true)
