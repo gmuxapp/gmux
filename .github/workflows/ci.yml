@@ -28,6 +28,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Lint (Biome)
+        # biome lint (not `biome ci`): the repo enables only the linter;
+        # formatter and import-sort assists are intentionally off, and
+        # `biome ci` would also run those. Match the root `lint` script.
+        # --error-on-warnings: biome.json configures several rules at "warn"
+        # (noEmptyBlockStatements, noUnusedVariables, noUnusedImports); without
+        # this flag they'd surface locally but silently pass CI.
+        run: pnpm exec biome lint --error-on-warnings .
+
       - name: Build protocol
         run: cd packages/protocol && pnpm exec tsc -p tsconfig.json
 
