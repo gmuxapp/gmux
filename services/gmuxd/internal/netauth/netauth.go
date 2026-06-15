@@ -192,14 +192,11 @@ func serveLoginPage(w http.ResponseWriter, errMsg string) {
 		errorHTML = `<div class="error" role="alert">` + errMsg + `</div>`
 	} else {
 		// Self-heal: a cross-site-initiated navigation (e.g. tapping through
-		// from a Tailscale funnel error page while the daemon was down) makes
+		// from a browser error page while the daemon was down) makes
 		// the browser withhold the SameSite=Strict cookie, stranding an
 		// authenticated user here. We are now on the gmux origin, so
 		// location.replace('/') is same-site and DOES send the cookie.
-		//
-		// The timestamp guard fires once, then self-expires: a real logout
-		// bounces once and sees the form instead of looping, and no stale
-		// value can permanently disable the retry (a boolean flag could).
+		// The timestamp guard fires once, then self-expires.
 		bounceScript = `<script>
 (function(){ try {
   var k = 'gmux-auth-bounce';
