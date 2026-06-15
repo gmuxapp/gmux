@@ -8,6 +8,7 @@ import { loadWebglRenderer } from './webgl-renderer'
 import { applyArmedModifiers, attachKeyboardHandler, attachPasteHandler, defaultPasteFeedback, handlePasteAction } from './keyboard'
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
+import { isTouchDevice } from './touch'
 import { createReplayBuffer } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 import { linkAtPoint, type LinkInfo, openLinkAtPoint } from './terminal-link'
@@ -125,10 +126,6 @@ function getResizeSignalPixels(host: HTMLElement | null, vv: VisualViewport | nu
 function announceResize(ws: WebSocket | null, dims: TerminalSize): void {
   if (!ws || ws.readyState !== WebSocket.OPEN) return
   ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
-}
-
-function isTouchDevice(): boolean {
-  return window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0
 }
 
 function focusTerminalInput(term: Terminal | null): void {

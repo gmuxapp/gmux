@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
 import { applyArmedModifiers } from './keyboard'
+import { isTouchDevice } from './touch'
 import { ReplayView } from './replay-view'
 import { TerminalView } from './terminal'
 import { useArrivalPulse } from './use-arrival-pulse'
@@ -41,13 +42,6 @@ const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('
  * above sub-pixel/URL-bar noise, yet above a hardware-keyboard accessory
  * bar (~44px on iPad) so that doesn't read as a soft keyboard. */
 const KEYBOARD_PRESENCE_PX = 60
-
-// On touch devices, focusing the terminal's hidden textarea pops the
-// on-screen keyboard. So auto-focus (session select, terminal mount) is
-// gated to non-touch — the keyboard opens only when the user taps the
-// terminal. Toolbar keys send via the raw input channel and never focus.
-const isTouchDevice = (): boolean =>
-  window.matchMedia?.('(pointer: coarse)').matches || navigator.maxTouchPoints > 0
 
 // Mock mode: hide close buttons and other interactive chrome via CSS.
 if (USE_MOCK) document.documentElement.classList.add('mock-mode')

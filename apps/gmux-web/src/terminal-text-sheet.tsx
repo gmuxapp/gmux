@@ -55,12 +55,12 @@ export function TerminalTextSheet({ lines, anchorRow, onPaste, onClose }: Termin
   return (
     <SheetBackdrop onClose={onClose}>
       <div class="modal-panel text-sheet" role="dialog" aria-label="Terminal text">
-        {/* Single text flow (only the anchor line is wrapped, for the
-            scroll target + highlight) so native selection runs clean. */}
+        {/* Single text flow (only the anchor line is wrapped, as the
+            scroll target) so native selection runs clean. */}
         <div class="text-sheet-body" ref={bodyRef}>
           <pre class="text-sheet-pre">
             {before.length > 0 && `${before.join('\n')}\n`}
-            <span ref={anchorRef} class="text-sheet-anchor">{lines[anchorRow] ?? ''}</span>
+            <span ref={anchorRef}>{lines[anchorRow] ?? ''}</span>
             {after.length > 0 && `\n${after.join('\n')}`}
           </pre>
         </div>
