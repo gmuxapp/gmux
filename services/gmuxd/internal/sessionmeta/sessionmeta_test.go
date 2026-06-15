@@ -613,4 +613,12 @@ func TestDefaultRetentionEnvOverride(t *testing.T) {
 	if got := DefaultRetention().MaxAge; got != 0 {
 		t.Errorf("MaxAge with days=0 should disable age limit, got %v", got)
 	}
+
+	// A day count that would overflow time.Duration when multiplied by
+	// 24h is rejected and falls back to the default rather than wrapping
+	// to a negative duration.
+	t.Setenv(envRetentionDays, "100000000000")
+	if got := DefaultRetention().MaxAge; got != DefaultMaxAge {
+		t.Errorf("MaxAge with overflowing days should fall back to default %v, got %v", DefaultMaxAge, got)
+	}
 }

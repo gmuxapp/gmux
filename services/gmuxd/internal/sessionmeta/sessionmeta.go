@@ -101,7 +101,12 @@ type RetentionPolicy struct {
 func DefaultRetention() RetentionPolicy {
 	p := RetentionPolicy{MaxAge: DefaultMaxAge, MaxCount: DefaultMaxCount}
 	if v := os.Getenv(envRetentionDays); v != "" {
-		if days, err := strconv.Atoi(v); err == nil && days >= 0 {
+		// Cap at the largest day count that still fits in a
+		// time.Duration (int64 ns) once multiplied by 24h, so a huge
+		// value can't overflow to a negative duration that prune would
+		// silently treat as "no age limit".
+		const maxSafeDays = int(^uint(0)>>1) / int(24*time.Hour) // ~106 751 on 64-bit
+		if days, err := strconv.Atoi(v); err == nil && days >= 0 && days <= maxSafeDays {
 			p.MaxAge = time.Duration(days) * 24 * time.Hour
 		} else {
 			log.Printf("sessionmeta: ignoring invalid %s=%q", envRetentionDays, v)
