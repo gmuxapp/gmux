@@ -48,11 +48,29 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
    Adding a new top-level verb is a breaking change requiring a major
    bump.
 
-6. **`gmuxd` becomes a pure daemon executable: foreground serve only.**
-   Bare `gmuxd` serves in the foreground (what `gmuxd run` did);
-   `gmuxd run` is kept as a hidden compatibility alias. All human-facing
-   daemon control moved to `gmux daemon …`. `gmuxd` stays a separate
-   binary (like `dockerd`/`tailscaled`) for systemd/Docker supervision.
+6. **`gmux daemon …` is the canonical front; `gmuxd` keeps its verbs for
+   backwards-compatible ops.** `gmux daemon start|stop|restart|status|
+   log-path`, `gmux auth`, and `gmux remote` are the documented surface
+   and bridge (thin `exec`) to the `gmuxd` binary, which retains its
+   existing verbs (`run`, `start`, `stop`, `restart`, `status`, `auth`,
+   `remote`, `log-path`; bare `gmuxd` prints help, `gmuxd run` serves
+   foreground). The bridge keeps a **single implementation** (in gmuxd)
+   rather than copying lifecycle code into gmux.
+
+   This deliberately steps back from "strip `gmuxd` to bare-serve only."
+   Rationale: the constraint that drove top-level minimalism — shorthand
+   collisions — is gone (decision 4 dropped the shorthand), and daemon
+   control is rare, human, and non-scriptable, so a second entry point
+   costs little. Against that, a hard break would force migration on
+   *infrastructure* config (systemd `ExecStart=…/gmuxd run`, Dockerfiles,
+   runbooks) — edited rarely, by different people, and not covered by the
+   scriptable-surface migration shim. Keeping `gmuxd`'s verbs is
+   backwards-compatible there and lower-risk than moving working code
+   across the binary boundary. Docs steer everyone to `gmux daemon …`;
+   `gmuxd --help` cross-references it. (This is *not* the `open`/`ui`/`app`
+   alias smell of decision 2: that was three names for the single most
+   common action; this is one canonical name plus the underlying binary
+   that infra already invokes.)
 
 7. **Daemon auto-start is intent-driven.** Session verbs (`open`, `ls`,
    `attach`, `tail`, `send`, `wait`, `kill`, and `gmux -- <cmd>`)
@@ -190,7 +208,10 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
   shim would have forced keeping them). The table deletes cleanly in
   2.1. Cost accepted: existing *scripts* break immediately rather than
   working-with-warning — appropriate for a major version, and agents
-  migrate the instant the skill is updated.
+  migrate the instant the skill is updated. Note the shim covers the
+  *scriptable* surface only; daemon/ops invocations (`gmuxd <verb>`)
+  keep working unchanged per decision 6, so infrastructure config needs
+  no migration.
 - `--host` is dropped. `<id>@<peer>` is the **sole** way to address a
   peer session, which simplifies `matchSession` (the `host` parameter
   and the `--host`/`@suffix` reconciliation branch both go away).

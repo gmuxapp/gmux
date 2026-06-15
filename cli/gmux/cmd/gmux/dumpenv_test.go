@@ -6,18 +6,12 @@ import (
 )
 
 func TestParseCLIDumpEnv(t *testing.T) {
-	m, f, rest, err := parseCLI([]string{"--dump-env"})
+	c, err := parseCLI([]string{"__dump-env"})
 	if err != nil {
-		t.Fatalf("parseCLI(--dump-env) error: %v", err)
+		t.Fatalf("parseCLI(__dump-env) error: %v", err)
 	}
-	if m != modeDumpEnv {
-		t.Errorf("mode = %v, want modeDumpEnv", m)
-	}
-	if !f.dumpEnv {
-		t.Errorf("f.dumpEnv = false, want true")
-	}
-	if len(rest) != 0 {
-		t.Errorf("rest = %v, want empty", rest)
+	if c.mode != modeDumpEnv {
+		t.Errorf("mode = %v, want modeDumpEnv", c.mode)
 	}
 }
 

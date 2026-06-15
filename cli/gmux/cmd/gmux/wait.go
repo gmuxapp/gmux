@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
+	"time"
 )
 
 // Exit codes from cmdWait. Distinct codes let scripts dispatch on the
@@ -38,11 +41,14 @@ const (
 // against its local store and consults the adapter allowlist; remote
 // peer sessions are out of scope until peer subscriptions stream
 // Status events back to the hub.
-func cmdWait(ref string, timeoutSecs int) int {
+func cmdWait(ref, forText, forRegex string, timeoutSecs int) int {
 	sess, err := resolveSession(ref, "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
+	}
+	if forText != "" || forRegex != "" {
+		return waitForOutput(sess, forText, forRegex, timeoutSecs)
 	}
 	if sess.Peer != "" {
 		// Use the bare shortID here: the message already names the peer
@@ -113,6 +119,53 @@ func cmdWait(ref string, timeoutSecs int) int {
 		body, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "gmux: wait failed: %s: %s\n", resp.Status, extractMessage(body))
 		return 1
+	}
+}
+
+// waitForOutput polls the session's scrollback until a fixed substring
+// (forText) or a regex (forRegex) appears, or --timeout elapses. On
+// timeout it prints the current tail to stderr so the wait is
+// diagnosable, and exits with waitExitTimeout.
+//
+// Polling lives client-side for now; absorbing it into a gmuxd endpoint
+// (so the match happens where the bytes are) is a planned follow-up.
+func waitForOutput(sess cliSession, forText, forRegex string, timeoutSecs int) int {
+	var re *regexp.Regexp
+	if forRegex != "" {
+		var err error
+		re, err = regexp.Compile(forRegex)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "gmux: invalid --for-regex: %v\n", err)
+			return 1
+		}
+	}
+
+	var deadline time.Time
+	if timeoutSecs > 0 {
+		deadline = time.Now().Add(time.Duration(timeoutSecs) * time.Second)
+	}
+
+	var last []byte
+	for {
+		data, code := fetchScrollback(sess, 2000)
+		if code != 0 {
+			return code
+		}
+		last = data
+		if re != nil {
+			if re.Match(data) {
+				return waitExitIdle
+			}
+		} else if bytes.Contains(data, []byte(forText)) {
+			return waitExitIdle
+		}
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			fmt.Fprintf(os.Stderr, "gmux: wait timed out after %ds; last output:\n", timeoutSecs)
+			os.Stderr.Write(stripANSI(last))
+			fmt.Fprintln(os.Stderr)
+			return waitExitTimeout
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 

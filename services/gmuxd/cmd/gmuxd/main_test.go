@@ -626,19 +626,22 @@ func TestIsAllowedPeerProxyPath(t *testing.T) {
 func TestBuildLaunchArgs(t *testing.T) {
 	cmd := []string{"claude", "--continue", "-p", "hi"}
 
-	t.Run("fresh launch: no directives, command verbatim", func(t *testing.T) {
+	t.Run("fresh launch: __run then -- then command verbatim", func(t *testing.T) {
 		got := buildLaunchArgs("", 0, 0, cmd)
-		if !slices.Equal(got, cmd) {
-			t.Errorf("got %v, want %v", got, cmd)
+		want := append([]string{"__run", "--"}, cmd...)
+		if !slices.Equal(got, want) {
+			t.Errorf("got %v, want %v", got, want)
 		}
 	})
 
-	t.Run("restart: all directives precede the command", func(t *testing.T) {
+	t.Run("restart: directives precede --, then the command", func(t *testing.T) {
 		got := buildLaunchArgs("sess-abc", 142, 47, cmd)
 		want := []string{
+			"__run",
 			"--resume-id=sess-abc",
 			"--initial-cols=142",
 			"--initial-rows=47",
+			"--",
 			"claude", "--continue", "-p", "hi",
 		}
 		if !slices.Equal(got, want) {
@@ -648,22 +651,22 @@ func TestBuildLaunchArgs(t *testing.T) {
 
 	t.Run("zero dims omit the size flags", func(t *testing.T) {
 		got := buildLaunchArgs("sess-1", 0, 0, cmd)
-		want := append([]string{"--resume-id=sess-1"}, cmd...)
+		want := append([]string{"__run", "--resume-id=sess-1", "--"}, cmd...)
 		if !slices.Equal(got, want) {
 			t.Errorf("got %v, want %v", got, want)
 		}
 	})
 
-	t.Run("command flags survive intact (parser stops at first positional)", func(t *testing.T) {
-		// If the daemon's directive args bled into the command, the
-		// runner's flag parser would consume --resume-id from the
-		// child's own argv. Verify ordering: directives appear before
-		// the first positional only.
+	t.Run("command flags survive intact (-- terminator)", func(t *testing.T) {
+		// The `--` terminator delivers the command verbatim even when its
+		// own args look like directive flags.
 		got := buildLaunchArgs("sess-1", 80, 24, []string{"weirdcli", "--resume-id=evil"})
 		want := []string{
+			"__run",
 			"--resume-id=sess-1",
 			"--initial-cols=80",
 			"--initial-rows=24",
+			"--",
 			"weirdcli", "--resume-id=evil",
 		}
 		if !slices.Equal(got, want) {

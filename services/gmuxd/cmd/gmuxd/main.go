@@ -204,13 +204,14 @@ func launchGmux(gmuxBin string, command []string, cwd, resumeID string, initialC
 	return cmd.Process.Pid, nil
 }
 
-// buildLaunchArgs assembles the gmux runner argv: any non-empty
-// daemon→runner directive flags first, then the user command
-// verbatim. The gmux flag parser stops at the first positional, so
-// the user command is delivered intact even when its own arguments
-// look like flags.
+// buildLaunchArgs assembles the gmux runner argv for the internal
+// `gmux __run [directives] -- <command>` form (ADR 0009): the hidden
+// __run verb, any non-empty daemon→runner directive flags, then a `--`
+// terminator and the user command verbatim. The `--` delivers the
+// command intact even when its own arguments look like flags.
 func buildLaunchArgs(resumeID string, initialCols, initialRows uint16, command []string) []string {
-	args := make([]string, 0, len(command)+3)
+	args := make([]string, 0, len(command)+5)
+	args = append(args, "__run")
 	if resumeID != "" {
 		args = append(args, "--resume-id="+resumeID)
 	}
@@ -220,6 +221,7 @@ func buildLaunchArgs(resumeID string, initialCols, initialRows uint16, command [
 	if initialRows > 0 {
 		args = append(args, fmt.Sprintf("--initial-rows=%d", initialRows))
 	}
+	args = append(args, "--")
 	return append(args, command...)
 }
 
@@ -241,7 +243,8 @@ Commands:
   help               Show this help
 
 Tip:
-  gmux <command>     Run a command; gmux auto-starts gmuxd if needed
+  gmux daemon <cmd>  Canonical front for these commands (start/stop/status/...)
+  gmux -- <command>  Run a command; gmux auto-starts gmuxd if needed
   More help: https://gmux.app
 `, version)
 }

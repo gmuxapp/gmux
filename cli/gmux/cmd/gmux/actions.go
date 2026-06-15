@@ -243,7 +243,7 @@ func displayID(s cliSession) string {
 // Rows are grouped alive-first then by start time; columns are kept
 // shallow (id, status, kind, title, cwd) so the output stays readable
 // in a narrow terminal.
-func cmdList(host string, all bool) int {
+func cmdList(all bool, asJSON bool) int {
 	sessions, err := fetchSessions()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
@@ -253,13 +253,12 @@ func cmdList(host string, all bool) int {
 	// Scope to the requested view:
 	//   default → local only (Peer == "")
 	//   --all   → everything
-	//   --host  → just that peer
-	// (parseCLI already rejects --host + --all.)
-	switch {
-	case host != "":
-		sessions = filterByHost(sessions, host)
-	case !all:
+	if !all {
 		sessions = filterByHost(sessions, "")
+	}
+
+	if asJSON {
+		return emitSessionsJSON(sessions)
 	}
 
 	if len(sessions) == 0 {
@@ -324,8 +323,8 @@ func cmdList(host string, all bool) int {
 // peers work the same way local sessions do. gmuxd translates this into
 // a SIGTERM on the child process and lets the normal exit lifecycle
 // update the store.
-func cmdKill(ref, host string) int {
-	sess, err := resolveSession(ref, host)
+func cmdKill(ref string) int {
+	sess, err := resolveSession(ref, "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
@@ -361,35 +360,53 @@ func cmdKill(ref, host string) int {
 // to the owning gmuxd), and peer-dead (forward-then-disk on the peer).
 // Output is raw PTY bytes including ANSI; pipe through your favorite
 // stripper if you want plain text.
-func cmdTail(ref string, n int, host string) int {
-	sess, err := resolveSession(ref, host)
+func cmdTail(ref string, n int, raw bool) int {
+	sess, err := resolveSession(ref, "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
 	}
 
+	data, code := fetchScrollback(sess, n)
+	if code != 0 {
+		return code
+	}
+	if !raw {
+		data = stripANSI(data)
+	}
+	if _, err := os.Stdout.Write(data); err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return 1
+	}
+	return 0
+}
+
+// fetchScrollback pulls the last n lines of a session's scrollback from
+// gmuxd's broker. Returns the raw bytes and a process exit code (0 ok).
+func fetchScrollback(sess cliSession, n int) ([]byte, int) {
 	client := gmuxdClient()
 	url := fmt.Sprintf("%s/v1/sessions/%s/scrollback?tail=%d", gmuxdBaseURL(), sess.ID, n)
 	resp, err := client.Get(url)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return 1
+		return nil, 1
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode == http.StatusNotFound {
 			fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", displayID(sess))
-			return 1
+			return nil, 1
 		}
 		fmt.Fprintf(os.Stderr, "gmux: tail failed: %s: %s\n", resp.Status, strings.TrimSpace(string(body)))
-		return 1
+		return nil, 1
 	}
-	if _, err := io.Copy(os.Stdout, resp.Body); err != nil && !errors.Is(err, io.EOF) {
+	data, err := io.ReadAll(resp.Body)
+	if err != nil && !errors.Is(err, io.EOF) {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return 1
+		return nil, 1
 	}
-	return 0
+	return data, 0
 }
 
 // cmdSend implements `gmux --send [--no-submit] <id> [text]`.
@@ -411,14 +428,24 @@ func cmdTail(ref string, n int, host string) int {
 // peer sessions (gmuxd forwards to the owning peer transparently).
 // Access control inherits from gmuxd: local IPC is owner-only, and
 // peers honor their own `tailscale.allow` config.
-func cmdSend(ref string, text *string, noSubmit bool, host string) int {
-	sess, err := resolveSession(ref, host)
+func cmdSend(ref string, text *string, keys []string) int {
+	return sendBytes(ref, buildSendBody(text, keys, os.Stdin))
+}
+
+// cmdSendKeys implements the tmux-compatible `gmux send-keys -t <id>
+// <keys...>` form: every argument is a key name unless -l (literal)
+// is set, in which case arguments are sent as literal text.
+func cmdSendKeys(ref string, keys []string, literal bool) int {
+	return sendBytes(ref, strings.NewReader(renderKeys(keys, literal)))
+}
+
+// sendBytes resolves ref and POSTs body to the session's input endpoint.
+func sendBytes(ref string, body io.Reader) int {
+	sess, err := resolveSession(ref, "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
 	}
-
-	body := buildSendBody(text, os.Stdin, noSubmit)
 
 	client := gmuxdClient()
 	// Stdin may be paced by a human or upstream process; the default
@@ -470,17 +497,79 @@ const maxSendBytes = 1 << 20 // 1 MiB
 // failing for users who expected `cat`-style behavior. A redundant \r
 // in the input is harmless (submits an empty line at most), so we don't
 // try to detect and dedupe.
-func buildSendBody(text *string, stdin io.Reader, noSubmit bool) io.Reader {
-	var body io.Reader
+func buildSendBody(text *string, keys []string, stdin io.Reader) io.Reader {
+	// No text and no keys: read from stdin verbatim (the pipe form,
+	// `echo hi | gmux send <id>`). Callers wanting submission include a
+	// trailing Enter key explicitly.
+	if text == nil && len(keys) == 0 {
+		return io.LimitReader(stdin, maxSendBytes)
+	}
+	readers := make([]io.Reader, 0, 2)
 	if text != nil {
-		body = strings.NewReader(*text)
-	} else {
-		body = io.LimitReader(stdin, maxSendBytes)
+		readers = append(readers, strings.NewReader(*text))
 	}
-	if !noSubmit {
-		body = io.MultiReader(body, strings.NewReader("\r"))
+	if len(keys) > 0 {
+		readers = append(readers, strings.NewReader(renderKeys(keys, false)))
 	}
-	return body
+	return io.MultiReader(readers...)
 }
 
+// emitSessionsJSON prints sessions as a single JSON array with a stable
+// schema so agents can consume `gmux ls --json` without scraping the
+// human table. Always emits an array (never null) even when empty.
+func emitSessionsJSON(sessions []cliSession) int {
+	if sessions == nil {
+		sessions = []cliSession{}
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(sessions); err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return 1
+	}
+	return 0
+}
 
+// stripANSI removes ANSI/VT escape sequences from PTY output so the
+// default `gmux tail` is grep-friendly plain text. `--raw` bypasses
+// this. Handles CSI (ESC [ ... letter), OSC (ESC ] ... BEL/ST), and
+// lone two-byte escapes; this is a pragmatic stripper, not a full
+// terminal emulator.
+func stripANSI(b []byte) []byte {
+	out := make([]byte, 0, len(b))
+	for i := 0; i < len(b); {
+		c := b[i]
+		if c != 0x1b { // not ESC
+			if c != '\r' { // collapse bare CRs that survive re-render
+				out = append(out, c)
+			}
+			i++
+			continue
+		}
+		// ESC sequence.
+		if i+1 >= len(b) {
+			break
+		}
+		switch b[i+1] {
+		case '[': // CSI: ESC [ params... final-byte (0x40-0x7e)
+			j := i + 2
+			for j < len(b) && (b[j] < 0x40 || b[j] > 0x7e) {
+				j++
+			}
+			i = j + 1
+		case ']': // OSC: ESC ] ... (BEL | ESC \)
+			j := i + 2
+			for j < len(b) && b[j] != 0x07 {
+				if b[j] == 0x1b && j+1 < len(b) && b[j+1] == '\\' {
+					j++
+					break
+				}
+				j++
+			}
+			i = j + 1
+		default: // two-byte escape
+			i += 2
+		}
+	}
+	return out
+}
