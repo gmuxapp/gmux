@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import {
-  sessions, sessionsLoaded, projects, upsertSession, removeSession,
+  sessions, sessionsLoaded, worldLoaded, projects, upsertSession, removeSession,
   markSessionRead, dismissSession, reorderSessions,
   handleActivity, isSessionActive, isSessionFading, activityMap,
   sessionStaleness, peers, peerAppearance, peerStatusByName,
@@ -8,6 +8,7 @@ import {
   navigateToSession, setNavigate,
   applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
   toUISession, localHostLabel, parseConnectURL, unreadCount, discovered,
+  view,
 } from './store'
 import type { PendingMutation } from './store'
 import type { Session } from './types'
@@ -41,6 +42,7 @@ beforeEach(() => {
   _setRawWorld({ projects: [], peers: [] })
   _pendingMutations.value = []
   sessionsLoaded.value = false
+  worldLoaded.value = false
   urlPath.value = '/'
   urlSearch.value = ''
 })
@@ -171,6 +173,7 @@ describe('upsertSession', () => {
     ]
     _setRawWorld({ projects: testProjects })
     sessionsLoaded.value = true
+    worldLoaded.value = true
     _rawSessions.value = [
       makeSession({ id: 'sess-1', cwd: '/dev/project', kind: 'pi', slug: 'fix-auth' }),
     ]
@@ -195,6 +198,7 @@ describe('upsertSession', () => {
     ]
     _setRawWorld({ projects: testProjects })
     sessionsLoaded.value = true
+    worldLoaded.value = true
     _rawSessions.value = [
       makeSession({ id: 'sess-1', cwd: '/dev/project', kind: 'pi', slug: 'fix-auth' }),
       makeSession({ id: 'sess-2', cwd: '/dev/project', kind: 'pi', slug: 'old-slug' }),
@@ -210,6 +214,37 @@ describe('upsertSession', () => {
 
     // URL should be unchanged.
     expect(urlPath.value).toBe('/myproject/pi/fix-auth')
+    expect(selectedId.value).toBe('sess-1')
+  })
+})
+
+describe('deep-link refresh: snapshot ordering race (#308-adjacent)', () => {
+  // The daemon emits snapshot.sessions *before* snapshot.world on a
+  // fresh SSE subscription (ADR 0001). On a refresh while viewing a
+  // session, the sessions event lands first and flips sessionsLoaded
+  // while projects are still empty. Resolving the local-project URL
+  // against an empty projects list yields `home`, which the URL
+  // normalization effect would then write to the address bar —
+  // bouncing the user off their session. The view must stay `null`
+  // until the world snapshot has also arrived.
+  it('does not resolve a session URL to home before the world loads', () => {
+    urlPath.value = '/myproject/pi/fix-auth'
+    _rawSessions.value = [
+      makeSession({ id: 'sess-1', cwd: '/dev/project', kind: 'pi', slug: 'fix-auth', project_slug: 'myproject' }),
+    ]
+    // Sessions snapshot arrived; world has not (projects still empty).
+    sessionsLoaded.value = true
+    worldLoaded.value = false
+
+    // View must be unresolved — NOT home — so nothing rewrites the URL.
+    expect(view.value).toBeNull()
+    expect(selectedId.value).toBeNull()
+
+    // World snapshot arrives: now the session resolves.
+    _setRawWorld({ projects: [{ slug: 'myproject', match: [{ path: '/dev/project' }] }] })
+    worldLoaded.value = true
+
+    expect(view.value).toEqual({ kind: 'session', sessionId: 'sess-1' })
     expect(selectedId.value).toBe('sess-1')
   })
 })
@@ -630,6 +665,7 @@ describe('unreadCount (sidebar-only attention blip)', () => {
     _rawSessions.value = []
     _setRawWorld({ projects: [{ slug: 'proj', match: [{ path: '/work' }] }], peers: [] })
     sessionsLoaded.value = true
+    worldLoaded.value = true
     urlPath.value = '/'
   })
 
