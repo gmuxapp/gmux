@@ -120,7 +120,9 @@ body {
 
 .app-layout {
   display: flex;
+  /* Progressive fallbacks: vh for old browsers, dvh, then JS-measured var. */
   height: 100vh;
+  /* biome-ignore lint/suspicious/noDuplicateProperties: intentional height fallback chain */
   height: 100dvh;
   height: var(--app-height, 100dvh);
   width: 100%;
@@ -728,6 +730,7 @@ body {
   background: oklch(22% 0.01 250 / 0.45);
 }
 .session-close-btn:hover {
+  /* biome-ignore lint/complexity/noImportantStyles: needed to beat the more specific .session-item:hover .session-close-btn rule */
   background: oklch(28% 0.015 250) !important;
   color: var(--text);
 }
@@ -951,6 +954,7 @@ body {
   width: 440px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
+  /* biome-ignore lint/suspicious/noDuplicateProperties: intentional vh -> JS-measured var fallback */
   max-height: calc(var(--app-height, 100vh) - 64px);
   display: flex;
   flex-direction: column;
@@ -1957,7 +1961,9 @@ body {
 /* Hide xterm's native scrollbar — scrollback is handled by the PTY replay buffer */
 /* Override viewport background — xterm sets it to black inline before theme applies */
 .terminal-container .xterm-viewport {
+  /* biome-ignore lint/complexity/noImportantStyles: overriding xterm's inline styles */
   overflow-y: hidden !important;
+  /* biome-ignore lint/complexity/noImportantStyles: overriding xterm's inline styles */
   background-color: transparent !important;
 }
 

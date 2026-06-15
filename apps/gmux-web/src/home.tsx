@@ -166,7 +166,7 @@ function HomeFooter() {
       {h.update_available && (
         <>
           {' · '}
-          <a class="home-footer-link" href="https://gmux.app/changelog/" target="_blank">
+          <a class="home-footer-link" href="https://gmux.app/changelog/" target="_blank" rel="noopener">
             version {h.update_available} available!
           </a>
         </>

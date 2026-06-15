@@ -15,7 +15,6 @@ import type { Session } from './types'
 import { SettingsModal } from './settings'
 import { ProjectHub } from './project-hub'
 import { Home } from './home'
-import { LaunchButton } from './launcher'
 import { installCopySession } from './mock-data/export-session'
 import { installVersionWatch } from './version-watch'
 
@@ -90,7 +89,7 @@ function MainHeader({ session, onRestart }: {
         </div>
       </div>
       <div class="main-header-right">
-        {session.status && session.status.label && (
+        {session.status?.label && (
           <div class={`main-header-status ${session.status.error ? 'error' : session.status.working ? 'working' : ''}`}>
             <span
               class={`session-dot ${session.status.error ? 'error' : session.status.working ? 'working' : 'idle'}`}

@@ -897,7 +897,7 @@ export function markSessionRead(id: string) {
   // raw with the authoritative state and `isResolved` clears the
   // mutation; if the server stays silent the TTL drops it eventually.
   addPending({ kind: 'mark-read', id, at: Date.now() })
-  fetch(`/v1/sessions/${id}/read`, { method: 'POST' }).catch(() => {})
+  fetch(`/v1/sessions/${id}/read`, { method: 'POST' }).catch(() => {/* fire-and-forget; TTL handles failures */})
 }
 
 // ── Project mutations (used by manage-projects) ─────────────────────────────
@@ -1228,10 +1228,10 @@ export function initStore(): () => void {
       keybinds.value = resolveKeybinds(null, false)
     })
     const activeIds = MOCK_SESSIONS.filter(s => s.mockActive).map(s => s.id)
-    activeIds.forEach(id => handleActivity(id))
-    const tick = setInterval(() => activeIds.forEach(id => handleActivity(id)), 2000)
+    activeIds.forEach(id => { handleActivity(id) })
+    const tick = setInterval(() => activeIds.forEach(id => { handleActivity(id) }), 2000)
     cleanups.push(() => clearInterval(tick))
-    return () => cleanups.forEach(fn => fn())
+    return () => cleanups.forEach(fn => { fn() })
   }
 
   // Fetch one-shot per-user config (theme, settings, keybinds) that
@@ -1353,5 +1353,5 @@ export function initStore(): () => void {
   })
   cleanups.push(disposeMarkRead)
 
-  return () => cleanups.forEach(fn => fn())
+  return () => cleanups.forEach(fn => { fn() })
 }

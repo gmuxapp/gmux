@@ -122,7 +122,7 @@ export interface InstallOptions {
  * Returns a teardown function (mainly for tests).
  */
 export function installVersionWatch(opts: InstallOptions = {}): () => void {
-  if (installed) return () => {}
+  if (installed) return () => {/* already installed; no-op uninstaller */}
   installed = true
 
   const bundleVersion = opts.bundleVersion ?? __GMUX_VERSION__

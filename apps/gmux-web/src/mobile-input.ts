@@ -86,7 +86,7 @@ export function attachMobileInputHandler(
   send: SendFn,
 ): () => void {
   const textarea = term.textarea
-  if (!textarea) return () => {}
+  if (!textarea) return () => {/* nothing to tear down */}
 
   // Autocorrect / word-replacement is a mobile-keyboard concern (iOS,
   // Android). On desktop, xterm.js manages the textarea selection

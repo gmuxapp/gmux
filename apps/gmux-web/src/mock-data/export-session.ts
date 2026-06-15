@@ -152,6 +152,7 @@ function extractVariables(terminal: string): { vars: string; body: string } {
   // Collect unique escape sequences in order of first appearance
   const seen = new Set<string>()
   const ordered: string[] = []
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching real ESC (\x1b) in SGR escape sequences
   for (const m of terminal.matchAll(/\x1b\[[0-9;]*m/g)) {
     if (!seen.has(m[0])) {
       seen.add(m[0])
@@ -181,6 +182,7 @@ function extractVariables(terminal: string): { vars: string; body: string } {
   // Build variable declarations
   const vars = [...nameMap.entries()]
     .map(([esc, name]) => {
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: matching real ESC (\x1b) to render it as a literal
       const escaped = esc.replace(/\x1b/g, '\\x1b')
       return `const ${name} = '${escaped}'`
     })
