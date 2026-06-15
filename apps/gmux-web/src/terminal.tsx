@@ -532,7 +532,7 @@ export function TerminalView({
         // bytes are UTF-8, so we must re-decode through TextDecoder.
         const bytes = Uint8Array.from(atob(payload), c => c.charCodeAt(0))
         const text = new TextDecoder().decode(bytes)
-        navigator.clipboard.writeText(text).catch(() => {})
+        navigator.clipboard.writeText(text).catch(() => {/* clipboard write can fail silently */})
       } catch {
         // invalid base64; ignore
       }
@@ -957,6 +957,7 @@ export function TerminalView({
       }
 
       ws.onerror = () => {
+        // errors surface via onclose; nothing to do here
       }
     }
 

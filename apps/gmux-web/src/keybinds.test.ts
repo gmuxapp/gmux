@@ -176,14 +176,14 @@ describe('resolveKeybinds', () => {
   })
 
   it('warns about entries missing key or action', () => {
-    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {/* suppress console output in test */})
     resolveKeybinds([{ key: '', action: 'sendText' }])
     expect(spy).toHaveBeenCalled()
     spy.mockRestore()
   })
 
   it('warns about unknown actions', () => {
-    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {/* suppress console output in test */})
     resolveKeybinds([{ key: 'ctrl+x', action: 'bogusAction' }])
     expect(spy).toHaveBeenCalledWith(expect.stringContaining('unknown action'))
     spy.mockRestore()

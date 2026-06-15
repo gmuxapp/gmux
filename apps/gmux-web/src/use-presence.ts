@@ -63,8 +63,8 @@ export function usePresence(): UsePresenceResult {
   useEffect(() => {
     const update = () => { lastInteractionRef.current = Date.now() / 1000 }
     const events = ['mousemove', 'keydown', 'touchstart', 'scroll'] as const
-    events.forEach(e => document.addEventListener(e, update, { passive: true }))
-    return () => events.forEach(e => document.removeEventListener(e, update))
+    events.forEach(e => { document.addEventListener(e, update, { passive: true }) })
+    return () => events.forEach(e => { document.removeEventListener(e, update) })
   }, [])
 
   // Report state changes to the daemon.

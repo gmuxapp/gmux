@@ -25,39 +25,10 @@ import {
 import { HostSuffix } from './host-suffix'
 import { hostStatus } from './host-status'
 import { projectAvailability } from './projects'
-import type { ProjectItem, DiscoveredProject, MatchRule, Folder, PeerInfo } from './types'
+import type { ProjectItem, DiscoveredProject, Folder, PeerInfo } from './types'
 import type { UnresolvedHost } from './references'
 
 type SettingsTab = 'projects' | 'hosts'
-
-// ── Rule description ──
-
-/** Human-readable parts of a single match rule. */
-interface RuleDescription {
-  prefix?: string   // e.g. "Remote"
-  label: string     // monospace part: path or URL
-  qualifier: string // dimmed suffix
-}
-
-function describeRule(rule: MatchRule): RuleDescription {
-  if (rule.path) {
-    const suffix = rule.exact ? ' only' : ''
-    return {
-      label: `${rule.path}${suffix}`,
-      qualifier: '',
-    }
-  }
-
-  if (rule.remote) {
-    return {
-      prefix: 'Remote',
-      label: rule.remote,
-      qualifier: 'in any directory',
-    }
-  }
-
-  return { label: '(empty rule)', qualifier: '' }
-}
 
 // ── SettingsModal ──
 
@@ -112,7 +83,7 @@ export function SettingsModal({
     return discoveredVal.filter(d =>
       d.suggested_slug.toLowerCase().includes(lowerDiscoveredQuery)
       || d.paths.some(p => p.toLowerCase().includes(lowerDiscoveredQuery))
-      || (d.remote && d.remote.toLowerCase().includes(lowerDiscoveredQuery)),
+      || (d.remote?.toLowerCase().includes(lowerDiscoveredQuery)),
     )
   }, [discoveredVal, lowerDiscoveredQuery])
 
@@ -143,7 +114,7 @@ export function SettingsModal({
         // Surface in the UI eventually via a toast; out of scope for now.
       }
     } else {
-      await addProject({ remote: d.remote, paths: d.paths }).catch(() => {})
+      await addProject({ remote: d.remote, paths: d.paths }).catch(() => {/* surfaced elsewhere; ignore here */})
     }
   }, [])
 

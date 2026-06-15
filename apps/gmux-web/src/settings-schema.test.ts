@@ -91,14 +91,14 @@ describe('buildTerminalOptions', () => {
   })
 
   it('warns about unknown keys in settings', () => {
-    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {/* suppress console output in test */})
     buildTerminalOptions({ bogusKey: 42 } as any, null)
     expect(spy).toHaveBeenCalledWith(expect.stringContaining('unknown key "bogusKey"'))
     spy.mockRestore()
   })
 
   it('ignores keybinds and macCommandIsCtrl keys without warning', () => {
-    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {/* suppress console output in test */})
     buildTerminalOptions({ keybinds: [], macCommandIsCtrl: true }, null)
     expect(spy).not.toHaveBeenCalled()
     spy.mockRestore()
@@ -114,7 +114,7 @@ describe('buildTerminalOptions', () => {
   })
 
   it('falls back to defaults for invalid settings', () => {
-    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {/* suppress console output in test */})
     // fontSize as a string instead of number should trigger safeParse failure
     const opts = buildTerminalOptions({ fontSize: 'big' } as any, null)
     expect(opts.fontSize).toBe(13) // default

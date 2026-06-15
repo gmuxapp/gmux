@@ -393,7 +393,7 @@ describe('navigateToSession', () => {
     setNavigate(navigateMock)
   })
   afterEach(() => {
-    setNavigate(() => {})
+    setNavigate(() => {/* no-op navigation */})
   })
 
   it('returns false and does not navigate when the session is unknown', () => {

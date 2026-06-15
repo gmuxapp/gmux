@@ -310,6 +310,7 @@ export function applyArmedModifiers(
   const mod = 1 + (alt ? 2 : 0) + (ctrl ? 4 : 0)
 
   // CSI cursor-key sequences: inject the modifier parameter.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching real ESC (\x1b) in terminal control sequences
   const csi = /^\x1b\[([A-DHF])$/.exec(data)
   if (csi) return { seq: `\x1b[1;${mod}${csi[1]}`, ctrlApplied: ctrl, altApplied: alt }
 
@@ -394,6 +395,7 @@ export function formatPasteText(text: string, bracketedPasteMode: boolean): stri
     // Normalize to \r inside brackets (standard terminal paste convention).
     const normalized = text.replace(/\r?\n/g, '\r')
     // Sanitize ESC so nothing inside the text can break out of the bracket.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately matching ESC (\x1b) to neutralize it
     const sanitized = normalized.replace(/\x1b/g, '\u241b')
     return `\x1b[200~${sanitized}\x1b[201~`
   }
