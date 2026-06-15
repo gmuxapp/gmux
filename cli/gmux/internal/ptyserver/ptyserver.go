@@ -82,6 +82,10 @@ func probeSocket(sockPath string) bool {
 	return true
 }
 
+// newScreen builds the off-path virtual terminal used for reconnect
+// snapshots and scrollback text. It is deliberately NOT wired into the
+// live byte stream to attached clients (that path is raw passthrough in
+// readPTY); it only consumes the parallel screenPending copy.
 func newScreen(cols, rows int, cursorCb func(visible bool)) *vt.Emulator {
 	// Default to 80x24 when launched non-interactively (no terminal).
 	// The first resize from a connecting client will set the real size.
@@ -154,7 +158,16 @@ type Server struct {
 	ptmx     *os.File
 	sockPath string
 	listener net.Listener
-	screen       *vt.Emulator // virtual terminal for replay snapshots (guarded by mu)
+	// screen is a virtual terminal that is NOT in the live render path.
+	// Attached clients (WS + localOut) receive raw PTY bytes directly (see
+	// readPTY's flush); this emulator only ever sees a parallel copy fed via
+	// screenPending, and exists solely to reconstruct state for clients that
+	// weren't watching live: the reconnect snapshot (renderScreen) and the
+	// scrollback-text endpoint (screenText). Because it reconstructs from
+	// cells, non-cell sequences the live stream carries verbatim (OSC 133
+	// prompt marks, private-mode DECSETs, etc.) are not reproduced in the
+	// snapshot. Guarded by mu.
+	screen       *vt.Emulator
 	adapter      adapter.Adapter
 	state        *session.State
 
@@ -869,9 +882,12 @@ func (s *Server) readPTY() {
 			}
 		}
 
-		// Queue data for the virtual terminal emulator (processed by
-		// processScreen in the background). Snapshot the client list
-		// atomically so new clients always see their replay frame first.
+		// Queue a PARALLEL copy of this chunk for the off-path virtual
+		// terminal (drained by processScreen in the background). This copy
+		// feeds only the reconnect snapshot and scrollback text — it is NOT
+		// what live clients render (they get the raw bytes below). Snapshot
+		// the client list atomically so new clients always see their replay
+		// frame first.
 		s.mu.Lock()
 		s.screenPending = append(s.screenPending, data...)
 		localOut := s.localOut
@@ -901,6 +917,12 @@ func (s *Server) readPTY() {
 			s.scrollback.Write(data)
 		}
 
+		// Live render path: attached WS clients receive the raw, unmodified
+		// PTY bytes — the emulator is bypassed entirely here. This is why
+		// sequences the vt emulator doesn't reproduce (OSC 133 prompt marks,
+		// mouse-mode DECSETs, ...) still reach xterm.js intact during a live
+		// session, and only go missing across a reconnect (which replays the
+		// emulator-reconstructed snapshot instead of the raw stream).
 		for _, c := range clients {
 			if err := c.write(websocket.MessageBinary, data); err != nil {
 				c.cancel()

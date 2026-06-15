@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { ImageAddon } from '@xterm/addon-image'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { ClickToMoveAddon } from '@gmux/addon-click-to-move'
 import type { ResolvedTerminalOptions } from './settings-schema'
 import { loadWebglRenderer } from './webgl-renderer'
 import { applyArmedModifiers, attachKeyboardHandler, attachPasteHandler, defaultPasteFeedback, handlePasteAction } from './keyboard'
@@ -432,6 +433,9 @@ export function TerminalView({
     // Add non-serializable options that can't live in JSON config.
     const term = new Terminal({
       ...terminalOptions,
+      // Disable xterm's built-in alt-click arrow-key simulation so it can't
+      // fight ClickToMoveAddon (which uses plain left-click + OSC 133).
+      altClickMovesCursor: false,
       linkHandler: {
         activate(_event, text) {
           window.open(text, '_blank', 'noopener')
@@ -517,6 +521,12 @@ export function TerminalView({
     attachKeyboardHandler(term, sendInput, sendRawInput, keybinds, macCommandIsCtrl, session.id)
     const disposePasteHandler = attachPasteHandler(term, containerRef.current!, sendRawInput, session.id)
     const disposeMobileHandler = attachMobileInputHandler(term, containerRef.current!, sendRawInput)
+
+    // Click-to-move-cursor, driven by OSC 133 prompt marks. Reports are sent
+    // via sendRawInput so they bypass sendInput's armed-modifier handling
+    // (a synthetic SGR mouse report must not be rewritten as ctrl/alt input).
+    const clickToMoveAddon = new ClickToMoveAddon({ sendInput: sendRawInput })
+    term.loadAddon(clickToMoveAddon)
 
     // OSC 52 clipboard: applications (e.g. pi /copy) write
     //   ESC ] 52 ; <selection> ; <base64-payload> BEL
@@ -785,6 +795,7 @@ export function TerminalView({
       shell?.removeEventListener('touchcancel', clearTouchPan, true)
       disposePasteHandler()
       disposeMobileHandler()
+      clickToMoveAddon.dispose()
       osc52Disposable.dispose()
       dataDisposable.dispose()
       scrollDisposable.dispose()

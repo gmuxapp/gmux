@@ -15,6 +15,7 @@
     "@fontsource/instrument-sans": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@fontsource/source-sans-3": "^5.2.9",
+    "@gmux/addon-click-to-move": "workspace:*",
     "@gmux/protocol": "workspace:*",
     "@preact/signals": "^2.9.0",
     "@trpc/client": "^11.6.0",

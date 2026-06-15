@@ -43,6 +43,9 @@ importers:
       '@fontsource/source-sans-3':
         specifier: ^5.2.9
         version: 5.2.9
+      '@gmux/addon-click-to-move':
+        specifier: workspace:*
+        version: link:../../packages/addon-click-to-move
       '@gmux/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -110,6 +113,18 @@ importers:
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
+
+  packages/addon-click-to-move:
+    devDependencies:
+      '@xterm/xterm':
+        specifier: github:gmuxapp/xterm.js#v6.1.0-beta.195-gmux.2
+        version: https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.7
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.12.0)(tsx@4.21.0)
 
   packages/protocol:
     dependencies:
