@@ -40,7 +40,7 @@ gmux send $id 'pytest -q' Enter   # type and run
 gmux send $id 'half a line'       # type without submitting
 gmux send $id C-c                 # interrupt (Ctrl-C)
 gmux send $id Escape              # send Escape
-echo "$body" | gmux send $id      # pipe stdin (verbatim; add Enter yourself)
+echo "$body" | gmux send $id Enter  # pipe stdin, then submit (Enter optional)
 ```
 
 Key names follow tmux: `Enter`, `Tab`, `Escape`, `Up`/`Down`/`Left`/`Right`,

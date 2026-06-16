@@ -68,9 +68,6 @@ type command struct {
 
 	// daemon
 	daemonSub string // start|stop|restart|status|log-path
-
-	// help
-	helpTopic string // optional verb to show focused help for
 }
 
 // reservedVerbs is the closed top-level namespace (ADR 0009). Growth
@@ -135,12 +132,12 @@ func parseCLI(args []string) (*command, error) {
 
 	switch head {
 	case "help", "-h", "--help":
-		c := &command{mode: modeHelp}
-		if len(rest) == 1 {
-			c.helpTopic = rest[0]
-		}
-		return c, nil
-	case "version", "--version", "-v":
+		// Lenient: `gmux help` and `gmux help <anything>` both print the
+		// full usage. Per-verb help is intentionally not implemented (see
+		// ADR 0009); accepting a trailing word avoids an error on the
+		// natural `gmux help send`.
+		return &command{mode: modeHelp}, nil
+	case "version", "--version":
 		return &command{mode: modeVersion}, nil
 	case "open":
 		if len(rest) > 0 {
@@ -192,10 +189,16 @@ func parseCLI(args []string) (*command, error) {
 	if strings.HasPrefix(head, "-") {
 		return nil, fmt.Errorf("unknown flag %q", head)
 	}
-	if hint := didYouMean(head); hint != "" {
-		return nil, fmt.Errorf("unknown command %q; did you mean %q?", head, hint)
+	// Unknown bare word: it could be a fat-fingered verb OR a real program
+	// the user meant to run but forgot `--` (e.g. `gmux sed -i ...`). We
+	// can't know which, so always surface the run form, and add a verb
+	// suggestion only when one is close. Never replace the run hint with
+	// the suggestion alone — that misleads when the word is a real command.
+	runHint := "to run a command use: gmux -- " + strings.Join(args, " ")
+	if v := didYouMean(head); v != "" {
+		return nil, fmt.Errorf("unknown command %q; did you mean %q? (%s)", head, v, runHint)
 	}
-	return nil, fmt.Errorf("unknown command %q; to run a command use: gmux -- %s", head, strings.Join(args, " "))
+	return nil, fmt.Errorf("unknown command %q; %s", head, runHint)
 }
 
 func parseLs(args []string) (*command, error) {

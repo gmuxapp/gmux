@@ -9,6 +9,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/gmuxapp/gmux/cli/gmux/internal/localterm"
 )
 
 // session is the subset of gmuxd's Session model that the CLI cares
@@ -429,7 +431,16 @@ func fetchScrollback(sess cliSession, n int) ([]byte, int) {
 // Access control inherits from gmuxd: local IPC is owner-only, and
 // peers honor their own `tailscale.allow` config.
 func cmdSend(ref string, text *string, keys []string) int {
-	return sendBytes(ref, buildSendBody(text, keys, os.Stdin))
+	// Read stdin only when no inline text was given AND stdin is a pipe.
+	// The tty guard is essential: without it, `gmux send <id> Enter` typed
+	// interactively would block reading the terminal. With it, piped input
+	// composes with trailing keys, so `echo hi | gmux send <id> Enter`
+	// sends "hi" then submits instead of silently dropping "hi".
+	var stdin io.Reader
+	if text == nil && !localterm.IsInteractive() {
+		stdin = os.Stdin
+	}
+	return sendBytes(ref, buildSendBody(text, keys, stdin))
 }
 
 // cmdSendKeys implements the tmux-compatible `gmux send-keys -t <id>
@@ -497,16 +508,18 @@ const maxSendBytes = 1 << 20 // 1 MiB
 // failing for users who expected `cat`-style behavior. A redundant \r
 // in the input is harmless (submits an empty line at most), so we don't
 // try to detect and dedupe.
+// buildSendBody assembles the bytes to write to the session PTY: the
+// message body (inline text, else piped stdin if provided) followed by
+// any trailing key sequences. stdin is nil unless the caller determined
+// it is a pipe to read (see cmdSend). Submission is explicit — a
+// trailing Enter key, or a \r in the piped bytes.
 func buildSendBody(text *string, keys []string, stdin io.Reader) io.Reader {
-	// No text and no keys: read from stdin verbatim (the pipe form,
-	// `echo hi | gmux send <id>`). Callers wanting submission include a
-	// trailing Enter key explicitly.
-	if text == nil && len(keys) == 0 {
-		return io.LimitReader(stdin, maxSendBytes)
-	}
 	readers := make([]io.Reader, 0, 2)
-	if text != nil {
+	switch {
+	case text != nil:
 		readers = append(readers, strings.NewReader(*text))
+	case stdin != nil:
+		readers = append(readers, io.LimitReader(stdin, maxSendBytes))
 	}
 	if len(keys) > 0 {
 		readers = append(readers, strings.NewReader(renderKeys(keys, false)))

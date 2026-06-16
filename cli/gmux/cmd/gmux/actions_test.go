@@ -124,45 +124,60 @@ func TestShortID(t *testing.T) {
 // they construct the body differently and the carriage-return logic
 // has to wrap both.
 func TestBuildSendBody(t *testing.T) {
+	noStdin := "\x00NIL" // sentinel: this case passes a nil stdin reader
 	tests := []struct {
 		name  string
 		text  *string
 		keys  []string
-		stdin string
+		stdin string // noStdin → nil reader (the tty / no-pipe case)
 		want  string
 	}{
 		{
-			name: "text without keys sends verbatim, no submit",
-			text: stringPtr("hello"),
-			want: "hello",
+			name:  "text without keys sends verbatim, no submit",
+			text:  stringPtr("hello"),
+			stdin: noStdin,
+			want:  "hello",
 		},
 		{
-			name: "text + Enter submits with trailing \\r",
-			text: stringPtr("hello"),
-			keys: []string{"Enter"},
-			want: "hello\r",
+			name:  "text + Enter submits with trailing \\r",
+			text:  stringPtr("hello"),
+			keys:  []string{"Enter"},
+			stdin: noStdin,
+			want:  "hello\r",
 		},
 		{
-			name: "text + C-c appends the control byte",
-			text: stringPtr("hello"),
-			keys: []string{"C-c"},
-			want: "hello\x03",
+			name:  "text + C-c appends the control byte",
+			text:  stringPtr("hello"),
+			keys:  []string{"C-c"},
+			stdin: noStdin,
+			want:  "hello\x03",
 		},
 		{
-			name: "keys only, no text",
-			keys: []string{"Escape", "Enter"},
-			want: "\x1b\r",
+			name:  "keys only at a tty (nil stdin) sends just the keys",
+			keys:  []string{"Escape", "Enter"},
+			stdin: noStdin,
+			want:  "\x1b\r",
 		},
 		{
-			name:  "stdin verbatim when no text and no keys",
+			name:  "piped stdin, no keys, verbatim",
 			stdin: "prompt body\nwith newline\n",
 			want:  "prompt body\nwith newline\n",
+		},
+		{
+			name:  "piped stdin composes with trailing Enter (no silent drop)",
+			keys:  []string{"Enter"},
+			stdin: "hi",
+			want:  "hi\r",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			body := buildSendBody(tc.text, tc.keys, strings.NewReader(tc.stdin))
+			var stdin io.Reader
+			if tc.stdin != noStdin {
+				stdin = strings.NewReader(tc.stdin)
+			}
+			body := buildSendBody(tc.text, tc.keys, stdin)
 			got, err := io.ReadAll(body)
 			if err != nil {
 				t.Fatalf("read body: %v", err)
@@ -217,8 +232,8 @@ func TestMatchSessionFriendlyHintForPeerOnlyMatch(t *testing.T) {
 // action subcommands.
 func TestMatchSessionAtSuffixRoutes(t *testing.T) {
 	sessions := []cliSession{
-		{ID: "sess-abcd1234"},                       // local
-		{ID: "sess-abcd1234", Peer: "konyvtar"},     // namespaced collision
+		{ID: "sess-abcd1234"},                   // local
+		{ID: "sess-abcd1234", Peer: "konyvtar"}, // namespaced collision
 		{ID: "sess-ef019283", Peer: "bespin"},
 	}
 	got, err := matchSession(sessions, "abcd1234@konyvtar", "")
@@ -323,5 +338,29 @@ func TestMatchSessionMultiplePeerMatchesGetCandidateList(t *testing.T) {
 	// pick the right one and retypes.
 	if !strings.Contains(msg, "abcd1234@konyvtar") || !strings.Contains(msg, "ab98ef76@bespin") {
 		t.Errorf("error should list both qualified candidates, got: %s", msg)
+	}
+}
+
+func TestStripANSI(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain text untouched", "hello world\n", "hello world\n"},
+		{"CSI color codes removed", "\x1b[31mred\x1b[0m text", "red text"},
+		{"cursor-move CSI removed", "a\x1b[2Kb\x1b[1;5Hc", "abc"},
+		{"OSC title (BEL-terminated) removed", "\x1b]0;my title\x07done", "done"},
+		{"OSC (ST-terminated) removed", "\x1b]8;;http://x\x1b\\link", "link"},
+		{"CRLF normalized to LF", "line1\r\nline2\r\n", "line1\nline2\n"},
+		{"UTF-8 multibyte preserved", "café — π ✓", "café — π ✓"},
+		{"lone ESC at end does not panic", "trailing\x1b", "trailing"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := string(stripANSI([]byte(tc.in))); got != tc.want {
+				t.Errorf("stripANSI(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }

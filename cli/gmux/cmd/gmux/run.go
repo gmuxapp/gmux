@@ -365,6 +365,15 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	os.Exit(exitCode)
 }
 
+// reexecRunArgs builds the argv for re-execing gmux to run a command
+// detached: the internal `__run -- <cmd>` form (ADR 0009). The `--`
+// delivers the command verbatim even when its own args look like flags,
+// and `__run` is required because the bare-command shorthand was removed
+// in 2.0 (a bare `gmux <cmd>` is now an "unknown command" error).
+func reexecRunArgs(args []string) []string {
+	return append([]string{"__run", "--"}, args...)
+}
+
 // spawnDetached re-execs gmux with the given args as a setsid'd
 // background process, disconnected from the current terminal. Used
 // for both --no-attach and nested-gmux scenarios: the child registers
@@ -398,8 +407,7 @@ func spawnDetached(args []string, msg string, waitForRegistration bool) {
 	// shorthand no longer exists, and `--` delivers the command verbatim
 	// even when its own args look like flags. Because the child's stdin
 	// is /dev/null it runs non-interactively without trying to attach.
-	reexecArgs := append([]string{"__run", "--"}, args...)
-	cmd := exec.Command(self, reexecArgs...)
+	cmd := exec.Command(self, reexecRunArgs(args)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull

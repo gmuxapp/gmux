@@ -16,12 +16,7 @@ func TestParseCLI(t *testing.T) {
 	}{
 		{name: "no args prints help", args: nil, wantMode: modeHelp},
 		{name: "help verb", args: []string{"help"}, wantMode: modeHelp},
-		{name: "help topic", args: []string{"help", "send"}, wantMode: modeHelp,
-			check: func(t *testing.T, c *command) {
-				if c.helpTopic != "send" {
-					t.Errorf("helpTopic = %q, want send", c.helpTopic)
-				}
-			}},
+		{name: "help with trailing word is lenient", args: []string{"help", "send"}, wantMode: modeHelp},
 		{name: "version", args: []string{"version"}, wantMode: modeVersion},
 		{name: "open", args: []string{"open"}, wantMode: modeOpen},
 
@@ -181,20 +176,20 @@ func TestParseCLI(t *testing.T) {
 
 func TestParseCLIErrors(t *testing.T) {
 	bad := [][]string{
-		{"-d"},                          // detach without command
-		{"-d", "ls"},                    // detach only pairs with --
-		{"--"},                          // run with no command
-		{"open", "extra"},               // open takes no args
-		{"attach"},                      // missing id
-		{"attach", "a", "b"},            // too many
-		{"tail"},                        // missing id
-		{"tail", "-n", "0", "abc"},      // non-positive count
-		{"wait"},                        // missing id
+		{"-d"},                     // detach without command
+		{"-d", "ls"},               // detach only pairs with --
+		{"--"},                     // run with no command
+		{"open", "extra"},          // open takes no args
+		{"attach"},                 // missing id
+		{"attach", "a", "b"},       // too many
+		{"tail"},                   // missing id
+		{"tail", "-n", "0", "abc"}, // non-positive count
+		{"wait"},                   // missing id
 		{"wait", "--for-text", "x", "--for-regex", "y", "abc"}, // mutually exclusive
-		{"send-keys", "C-c"},            // missing -t
-		{"daemon"},                      // missing subcommand
-		{"daemon", "frobnicate"},        // unknown subcommand
-		{"ls", "stray"},                 // ls takes no positional
+		{"send-keys", "C-c"},     // missing -t
+		{"daemon"},               // missing subcommand
+		{"daemon", "frobnicate"}, // unknown subcommand
+		{"ls", "stray"},          // ls takes no positional
 	}
 	for _, args := range bad {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
@@ -239,5 +234,49 @@ func TestDidYouMean(t *testing.T) {
 	}
 	if got := didYouMean("klil"); got != "" { // two edits away
 		t.Errorf("didYouMean(klil) = %q, want empty", got)
+	}
+}
+
+// TestReexecRunArgsRoundTrips guards the regression where detached runs
+// re-execed via the removed bare-command shorthand. The argv produced for
+// the detached child must parse back to the same run command, including
+// when the command's own args look like gmux flags.
+func TestReexecRunArgsRoundTrips(t *testing.T) {
+	cases := [][]string{
+		{"pytest", "-q"},
+		{"pi", "--all", "a prompt"},
+		{"bash", "-c", "echo hi; sleep 1"},
+	}
+	for _, cmd := range cases {
+		t.Run(strings.Join(cmd, "_"), func(t *testing.T) {
+			c, err := parseCLI(reexecRunArgs(cmd))
+			if err != nil {
+				t.Fatalf("parseCLI(reexec %v) error: %v", cmd, err)
+			}
+			if c.mode != modeRun {
+				t.Fatalf("mode = %v, want modeRun", c.mode)
+			}
+			if strings.Join(c.runArgs, "\x00") != strings.Join(cmd, "\x00") {
+				t.Errorf("runArgs = %v, want %v", c.runArgs, cmd)
+			}
+		})
+	}
+}
+
+// TestUnknownCommandAlwaysShowsRunHint locks the rule that a bare unknown
+// word always surfaces the `gmux -- ...` run form, even when it is close
+// to a verb. `sed` is a real program one letter from `send`; suggesting
+// only the verb would mislead a user who meant to run sed.
+func TestUnknownCommandAlwaysShowsRunHint(t *testing.T) {
+	_, err := parseCLI([]string{"sed", "-i", "s/a/b/"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "gmux -- sed -i s/a/b/") {
+		t.Errorf("missing run hint in %q", msg)
+	}
+	if !strings.Contains(msg, "send") {
+		t.Errorf("missing verb suggestion in %q", msg)
 	}
 }
