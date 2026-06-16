@@ -235,3 +235,30 @@ func TestExitEventDoesNotResurrectDismissedSession(t *testing.T) {
 		t.Fatalf("dismissed session was resurrected by late exit event: %+v", got)
 	}
 }
+
+func TestSessionFileEventInvokesHook(t *testing.T) {
+	sessions := store.New()
+	subs := NewSubscriptions(sessions)
+
+	var gotID, gotPath string
+	subs.OnSessionFile = func(sessionID, filePath string) {
+		gotID, gotPath = sessionID, filePath
+	}
+
+	subs.handleEvent("sess-1", "/sock", "session_file",
+		[]byte(`{"path":"/home/u/.pi/agent/sessions/x/2026_sess.jsonl"}`))
+
+	if gotID != "sess-1" || gotPath != "/home/u/.pi/agent/sessions/x/2026_sess.jsonl" {
+		t.Fatalf("OnSessionFile got (%q,%q)", gotID, gotPath)
+	}
+}
+
+func TestSessionFileEventEmptyPathIgnored(t *testing.T) {
+	subs := NewSubscriptions(store.New())
+	called := false
+	subs.OnSessionFile = func(string, string) { called = true }
+	subs.handleEvent("sess-1", "/sock", "session_file", []byte(`{"path":""}`))
+	if called {
+		t.Error("OnSessionFile should not fire for empty path")
+	}
+}

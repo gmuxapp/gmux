@@ -60,6 +60,7 @@ type FileMonitor struct {
 	rootDirs       map[string]bool              // session root dirs being watched
 	sessions       map[string]*monitoredSession // sessionID -> info
 	attributions   map[string]string            // filePath -> sessionID (sticky)
+	shimFiles      map[string]string            // filePath -> sessionID (authoritative, from agent-shim)
 	activeFiles    map[string]string            // sessionID -> filePath (tracks current file for Slug)
 	fileOffsets    map[string]int64             // filePath -> read offset
 	candidateFiles map[string]bool              // files seen but not yet attributed
@@ -111,6 +112,7 @@ func NewFileMonitorWithAttributions(s *store.Store, attrs map[string]string) *Fi
 		rootDirs:       make(map[string]bool),
 		sessions:       make(map[string]*monitoredSession),
 		attributions:   attrs,
+		shimFiles:      make(map[string]string),
 		activeFiles:    make(map[string]string),
 		fileOffsets:    make(map[string]int64),
 		candidateFiles: make(map[string]bool),
@@ -445,6 +447,18 @@ func (fm *FileMonitor) NotifyNewSession(sessionID string) {
 	}
 	log.Printf("filemon: watching %d session dirs for %s (kind=%s)", nDirs, sessionID, sess.Kind)
 
+	// If an attribution already exists for this session (a shim
+	// session_file event that landed before registration completed, or
+	// a persisted attribution), process it now so title/slug/status
+	// derive immediately. The session_file event only fires on change,
+	// so a missed first event would otherwise leave the session
+	// unprocessed until a rebind.
+	for path, sid := range fm.attributions {
+		if sid == sessionID {
+			fm.processAttributedFileLocked(sessionID, path)
+		}
+	}
+
 	fm.pokeLocked()
 }
 
@@ -544,13 +558,21 @@ func (fm *FileMonitor) NotifySessionDied(sessionID string) {
 	delete(fm.sessions, sessionID)
 	delete(fm.activeFiles, sessionID)
 
-	// Remove attributions pointing to this session.
+	// Remove attributions pointing to this session (including the
+	// authoritative shim-sourced ones, so a dead session leaves no
+	// stale file->session mapping behind).
 	changed := false
 	for path, sid := range fm.attributions {
 		if sid == sessionID {
 			delete(fm.attributions, path)
 			delete(fm.fileOffsets, path)
+			delete(fm.shimFiles, path)
 			changed = true
+		}
+	}
+	for path, sid := range fm.shimFiles {
+		if sid == sessionID {
+			delete(fm.shimFiles, path)
 		}
 	}
 	if changed {
@@ -594,6 +616,7 @@ func (fm *FileMonitor) handleFileChange(path string) {
 	if attributed {
 		if _, ok := fm.sessions[sessionID]; !ok {
 			delete(fm.attributions, path)
+			delete(fm.shimFiles, path)
 			attributed = false
 		}
 	}
@@ -770,6 +793,66 @@ func (fm *FileMonitor) ApplyPersistedAttributions() {
 
 // --- Attribution ---
 
+// AttributeFromShim records an authoritative file->session attribution
+// reported by the agent-shim preload (via the runner's session_file
+// event). Unlike scrollback matching this is not a guess: the agent
+// itself wrote the file, so it overrides and suppresses scrollback
+// attribution for both the file and the session (see
+// sessionHasShimLocked / tryAttributeUnmatched).
+//
+// A change of file for an already-shim-attributed session is a rebind
+// (/resume): the session no longer holds its previous file, so the old
+// attribution is dropped.
+func (fm *FileMonitor) AttributeFromShim(sessionID, filePath string) {
+	if sessionID == "" || filePath == "" {
+		return
+	}
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+
+	// Already the authoritative attribution for this session+file: nothing
+	// to do (the session_file event only fires on change, but be safe).
+	if fm.shimFiles[filePath] == sessionID {
+		return
+	}
+
+	// Rebind: drop any prior file this session held via the shim.
+	for p, sid := range fm.shimFiles {
+		if sid == sessionID && p != filePath {
+			delete(fm.shimFiles, p)
+			if fm.attributions[p] == sessionID {
+				delete(fm.attributions, p)
+				delete(fm.fileOffsets, p)
+			}
+		}
+	}
+
+	fm.shimFiles[filePath] = sessionID
+	fm.attributions[filePath] = sessionID
+	delete(fm.candidateFiles, filePath)
+	log.Printf("filemon: shim-attributed %s -> %s", filepath.Base(filePath), sessionID)
+
+	// Derive title/slug/status now if the session is already monitored;
+	// otherwise NotifyNewSession will process it once the runner registers.
+	if _, ok := fm.sessions[sessionID]; ok {
+		fm.processAttributedFileLocked(sessionID, filePath)
+	}
+	fm.persistAttributionsLocked()
+}
+
+// sessionHasShimLocked reports whether the session has a live
+// shim-sourced attribution. Such sessions are excluded from scrollback
+// candidate matching: the shim is authoritative, so scrollback must not
+// second-guess it. Caller must hold fm.mu.
+func (fm *FileMonitor) sessionHasShimLocked(sessionID string) bool {
+	for _, sid := range fm.shimFiles {
+		if sid == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
 // tryAttributeUnmatched attempts to match candidate files to sessions
 // using scrollback similarity. Called from the Run loop on a throttled
 // timer. Returns true if unattributed files remain (caller should keep
@@ -819,6 +902,11 @@ func (fm *FileMonitor) tryAttributeUnmatched() bool {
 	}
 	snaps := make(map[string]*sessionSnap)
 	for _, ms := range fm.sessions {
+		// Shim-attributed sessions are authoritative; never offer them
+		// to scrollback matching (it must not re-attribute them).
+		if fm.sessionHasShimLocked(ms.id) {
+			continue
+		}
 		snap := &sessionSnap{
 			id: ms.id, cwd: ms.cwd, kind: ms.kind,
 			socketPath: ms.socketPath,

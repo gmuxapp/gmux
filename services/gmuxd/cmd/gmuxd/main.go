@@ -518,6 +518,11 @@ func serve(stderr io.Writer) int {
 		}
 		return false
 	}
+	// The agent-shim preload reports the JSONL file its agent writes; this
+	// is authoritative attribution and overrides scrollback matching.
+	subs.OnSessionFile = func(sessionID, filePath string) {
+		fileMon.AttributeFromShim(sessionID, filePath)
+	}
 	stopFileMon := make(chan struct{})
 	go fileMon.Run(stopFileMon)
 	defer close(stopFileMon)
