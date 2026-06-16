@@ -5,7 +5,7 @@ sidebar:
   order: 0
 ---
 
-`gmux` was designed so that the same binary works whether you're attaching to a session by hand or driving sessions from a script. This page covers the scripted shape: how to start sessions non-interactively, how to send input and wait for output, and how to compose the primitives into agent-orchestration patterns.
+`gmux` is designed so the same binary works whether you attach to a session by hand or drive sessions from a script. This page covers the scripted shape: starting sessions non-interactively, sending input, waiting for output, and composing these into agent-orchestration patterns.
 
 :::tip[Driving gmux from an agent?]
 Install the [gmux skill](https://github.com/gmuxapp/gmux/blob/main/skills/gmux/SKILL.md) so your agent picks up these patterns automatically:
@@ -19,109 +19,117 @@ The skill follows the [agentskills.io](https://agentskills.io/) standard and wor
 
 ## The piped flow
 
-The most useful primitive for scripting is `gmux <cmd>` with stdin redirected away from a terminal:
+The most useful primitive for scripting is `gmux -- <cmd>` with stdin redirected away from a terminal:
 
 ```bash
-gmux make build < /dev/null
-gmux pi -p "summarize this PR" < /dev/null
+gmux -- make build < /dev/null
+gmux -- pi -p "summarize this PR" < /dev/null
 ```
 
-The `-p` (print) flag tells `pi` to process the prompt and exit instead of staying interactive. Other agents have similar one-shot modes (`claude -p`, `codex exec`); without one, the agent stays running and `gmux <cmd>` blocks indefinitely. For multi-turn orchestration, see the [parallel orchestration](#parallel-orchestration) section below: spawn with `--no-attach`, then drive with `--send` / `--wait`.
+Running a command always uses the explicit `--` separator — there is no bare `gmux <cmd>` shorthand. The `-p` (print) flag tells `pi` to process the prompt and exit instead of staying interactive; other agents have similar one-shot modes (`claude -p`, `codex exec`). Without one, the agent stays running and the call blocks indefinitely — for multi-turn work, spawn detached and drive it instead (see [parallel orchestration](#parallel-orchestration)).
 
-When stdin is not a TTY, `gmux <cmd>`:
+When stdin is not a TTY, `gmux -- <cmd>`:
 
 - **Blocks** until the child exits.
 - **Streams bounded metadata** to stdout (session id, kind, exit status), not the full PTY output. Your script's logs stay readable.
-- **Exits with the child's exit code**, so `gmux make build < /dev/null && deploy.sh` works.
+- **Exits with the child's exit code**, so `gmux -- make build < /dev/null && deploy.sh` works.
 - **Keeps the session in the UI** for the duration: a human can watch it live in the browser without affecting the script.
 
-This is the shape every other line on this page builds on. It works the same in CI, in cron jobs, in agent harnesses (whose stdin is a pipe by default), and in any scripted invocation.
+This is the shape every other line on this page builds on. It works the same in CI, cron jobs, and agent harnesses (whose stdin is a pipe by default).
+
+## Spawning detached
+
+To start a session and drive it later, spawn it detached with `-d`. It returns immediately and prints the session id:
+
+```bash
+id=$(gmux -d -- pi "build the feature")
+```
+
+Capture that id and pass it to `send`, `wait`, `tail`, and `kill`.
 
 ## Sending input
 
-Use [`--send`](/reference/cli/#gmux---send---no-submit-id-text) to push input into an already-running session, as if the bytes had been typed at the keyboard. By default `--send` submits the input (appends the carriage return that signals Enter), so the canonical shape is just:
+`gmux send <id> [text] [keys]` pushes input into a running session, as if typed at the keyboard. Text is sent literally; trailing key names (`Enter`, `C-c`, …) are sent as keys. **Submission is explicit** — add a trailing `Enter` to dispatch a line:
 
 ```bash
-gmux --send <id> < prompt.txt
-gmux --send <id> 'shorter inline message'
+gmux send <id> 'shorter inline message' Enter
+gmux send <id> Enter < prompt.txt          # pipe a file, then submit
+gmux send <id> C-c                          # interrupt, no Enter
 ```
 
-Use `--no-submit` for the rare case where you want to pre-fill the input box without dispatching, e.g. agent-assisted human authoring or sending a control character without an extra Enter:
+When no text is given and stdin is a pipe, gmux reads stdin until EOF (capped at 1 MiB). `send` is gated by Unix-socket file permissions (owner-only); see the [CLI reference](/reference/cli/) for the access-control story.
+
+## Waiting
+
+`gmux wait <id>` blocks until an agent session finishes its current turn — the primitive that turns sequential orchestration into one line per step:
 
 ```bash
-printf '\x03' | gmux --send --no-submit <id>   # Ctrl-C, no extra Enter
-gmux --send --no-submit <id> 'draft '          # leave "draft " in the input
+gmux send <id> Enter < step-1.txt
+gmux wait <id>
+
+gmux send <id> Enter < step-2.txt
+gmux wait <id>
+
+gmux tail <id> -n 200          # extract the final answer
 ```
 
-`--send` is local-only and gated by Unix-socket file permissions (owner-only `0700`); see the CLI reference for the access-control story.
+The idle signal is the same `Status.Working` flag the UI's spinner consumes, so `wait` returns the moment the agent emits its closing message. Exit codes: `0` idle/matched, `2` the session died first, `3` `--timeout N` elapsed.
 
-## Waiting for the turn to finish
-
-`gmux --wait <id>` blocks until an agent session has finished its current turn. It's the primitive that turns sequential orchestration into a one-line-per-step pattern:
+`wait` with no condition is for agent sessions (`claude`, `codex`, `pi`); shell sessions have no working signal. For those, either run them through the blocking piped flow (`gmux -- make build < /dev/null`) or wait for expected output:
 
 ```bash
-gmux --send <id> < step-1.txt
-gmux --wait <id>
-
-gmux --send <id> < step-2.txt
-gmux --wait <id>
-
-# extract the final answer
-gmux --tail 200 <id>
+gmux wait <id> --for-text '__DONE__' --timeout 120   # fixed substring
+gmux wait <id> --for-regex '^\$ $' --timeout 30        # or a regex
 ```
 
-The idle signal is the same `Status.Working` flag the UI's spinner consumes, so `--wait` returns the moment the agent emits its closing message for the turn. If the session dies first, `--wait` exits 2; if you set `--timeout N` and N seconds pass, it exits 3. Idle is exit 0.
-
-`--wait` is for agent sessions (`claude`, `codex`, `pi`); shell sessions don't emit a working signal and are rejected with a clear error. To wait for a shell command to finish, run it through the piped flow above instead — the blocking shape is exactly what `gmux make build < /dev/null` already provides.
+`--for-text` / `--for-regex` poll the session's output and replace the old "loop over `tail` and `grep`" pattern.
 
 ## Reading output
 
-`gmux --tail N <id>` dumps the last N lines of a session's output as plain text (ANSI stripped). Pair it with `--wait` to capture the agent's final answer:
+`gmux tail <id>` prints recent output as plain text (ANSI stripped; `-n N` for line count, default 100). Pair it with `wait` to capture an agent's final answer:
 
 ```bash
-gmux --send <id> < ship-prompt.txt
-gmux --wait --timeout 600 <id>
-url=$(gmux --tail 50 <id> | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1)
+gmux send <id> Enter < ship-prompt.txt
+gmux wait <id> --timeout 600
+url=$(gmux tail <id> -n 50 | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1)
 echo "$url"
 ```
-
-`--tail` is local-only today.
 
 ## Discovery and cleanup
 
 ```bash
-gmux --list                  # all sessions, alive first, newest first
-gmux --kill <id>             # SIGTERM the runner, normal exit lifecycle
+gmux ls            # all local sessions, alive first, newest first
+gmux ls --json     # machine-readable, for parsing in scripts
+gmux kill <id>     # SIGTERM the runner, normal exit lifecycle
 ```
 
-`--list` accepts ID prefixes, full session IDs, or slugs anywhere a session is named, so the eight-character short form it prints can be passed straight back to `--kill`, `--send`, `--tail`, or `--wait`.
+Every verb accepts id prefixes, full session ids, or slugs, so the eight-character short form `ls` prints passes straight back to `kill`, `send`, `tail`, or `wait`.
 
 ## Parallel orchestration
 
-Spawn N agents in parallel, then wait for each in turn. Sequential waiting finishes when the slowest agent finishes — same wall-clock as backgrounding the `--wait` calls, but exit codes are per-session and the loop reads as a straight line:
+Spawn N agents in parallel, then wait for each in turn. Sequential waiting finishes when the slowest agent does — same wall-clock as backgrounding the `wait` calls, but exit codes are per-session and the loop reads as a straight line:
 
 ```bash
 ids=()
 for ticket in fa-48 fa-49 fa-52; do
-  prompt="Implement $ticket. Return when you're done."
-  ids+=( "$(gmux --no-attach pi "$prompt")" )
+  ids+=( "$(gmux -d -- pi "Implement $ticket. Return when you're done.")" )
 done
 
 for id in "${ids[@]}"; do
-  gmux --wait --timeout 600 "$id" || echo "$id did not finish cleanly: $?"
+  gmux wait "$id" --timeout 600 || echo "$id did not finish cleanly: $?"
 done
 
 for id in "${ids[@]}"; do
   echo "=== $id ==="
-  gmux --tail 100 "$id"
+  gmux tail "$id" -n 100
 done
 ```
 
-The agents run concurrently because `gmux --no-attach pi <prompt>` returns as soon as the session registers (and `--no-attach` prints just the session id, no grep needed); the wait loop just gates the harvest step on every agent reaching idle. Background `&` + `wait` is only useful when you want to dispatch the next step as soon as **any** agent finishes (rare for orchestration, where you usually want all of them done before you act).
+The agents run concurrently because `gmux -d -- pi <prompt>` returns as soon as the session registers and prints just the session id (no grep needed); the wait loop gates the harvest step on every agent reaching idle.
 
 ## Nested gmux
 
-When `gmux <cmd>` is run inside an existing gmux session (detected via the `GMUX=1` env var), gmux auto-detaches into a headless background process so you don't end up with a PTY-within-PTY. Importantly, the auto-detach only triggers when stdin is a TTY: agent harnesses whose stdin is a pipe land in the piped / non-tty flow described above and behave normally, blocking with bounded output. You don't need to special-case nested invocations in your scripts.
+When `gmux -- <cmd>` runs inside an existing gmux session (detected via the `GMUX=1` env var), gmux auto-detaches into a headless background process so you don't get a PTY-within-PTY. The auto-detach only triggers when stdin is a TTY: agent harnesses whose stdin is a pipe land in the piped flow above and behave normally. You don't need to special-case nested invocations.
 
 ## Agent-specific integrations
 

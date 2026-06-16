@@ -54,9 +54,9 @@ Peer daemons use these packages to talk to other gmuxd instances. There are no p
 %%{init: {'theme': 'dark'}}%%
 graph LR
     subgraph runners ["gmux (one per session)"]
-        r1["gmux pi"]
-        r2["gmux pytest"]
-        r3["gmux make build"]
+        r1["gmux -- pi"]
+        r2["gmux -- pytest"]
+        r3["gmux -- make build"]
     end
 
     d["gmuxd"]

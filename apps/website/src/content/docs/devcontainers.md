@@ -90,6 +90,6 @@ If you're running a container without host-side gmux (e.g. a remote server), add
 }
 ```
 
-Then open the forwarded port and authenticate with `docker exec <container> gmuxd auth`.
+Then open the forwarded port and authenticate with `docker exec <container> gmux auth`.
 
 For standalone Docker deployments without devcontainers, see [Running in Docker](/running-in-docker).

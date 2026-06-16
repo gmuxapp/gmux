@@ -20,7 +20,7 @@ Spokes need zero configuration changes. The hub authenticates with each spoke's 
 
 gmux does **not** auto-connect machines on your tailnet. Being on the same tailnet lets a machine *reach* another, but connecting still requires that host's bearer token, exactly like any other peer ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)). This keeps a single compromised node (say, a container running an untrusted agent) from driving every other machine on the tailnet.
 
-To add a tailnet machine, run `gmuxd auth` on it and copy the **connect URL** it prints:
+To add a tailnet machine, run `gmux auth` on it and copy the **connect URL** it prints:
 
 ```
 To add this host from another gmux machine, paste this into "Connect to host":
@@ -43,7 +43,7 @@ The host gmuxd detects the container via Docker events, reads the auth token, an
 
 ## Connecting to a host manually
 
-Open **Settings → Hosts → Connect to host**. Paste the connect URL from `gmuxd auth` (it splits into the URL and token fields automatically), or enter the host's URL (e.g. `https://gmux-server.your-tailnet.ts.net`) and its token separately. A token is required for every host, tailnet or not.
+Open **Settings → Hosts → Connect to host**. Paste the connect URL from `gmux auth` (it splits into the URL and token fields automatically), or enter the host's URL (e.g. `https://gmux-server.your-tailnet.ts.net`) and its token separately. A token is required for every host, tailnet or not.
 
 gmux probes the host, adopts the name it reports about itself (no name to assign), and saves the connection to `peers.json` in the state directory. If a different host already uses that name, gmux suffixes it (`server-2`) for you. The hub connects immediately and reconnects with exponential backoff on failure; every peer uses the same token-authenticated protocol.
 
@@ -65,7 +65,7 @@ Removing a host clears the references that pointed at it, so a deliberate remova
 
 ## Upgrading from a version with tailnet autodiscovery
 
-Earlier versions auto-discovered gmux machines on your tailnet. [ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md) removed that, so on first start the daemon migrates the hosts **you had projects on** into the roster as **Auth needed** (it imports the old discovery cache, then deletes it). Click **Add token** on each in **Settings → Hosts** and paste its token (`gmuxd auth` on that host) to bring it online. Machines you never pinned a project on aren't carried over — add them with **Connect to host** if you want them. `projects.json` is backed up to `projects.json.bak` before any schema migration.
+Earlier versions auto-discovered gmux machines on your tailnet. [ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md) removed that, so on first start the daemon migrates the hosts **you had projects on** into the roster as **Auth needed** (it imports the old discovery cache, then deletes it). Click **Add token** on each in **Settings → Hosts** and paste its token (`gmux auth` on that host) to bring it online. Machines you never pinned a project on aren't carried over — add them with **Connect to host** if you want them. `projects.json` is backed up to `projects.json.bak` before any schema migration.
 
 ## Session namespacing
 

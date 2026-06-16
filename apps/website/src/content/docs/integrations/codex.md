@@ -40,10 +40,10 @@ Codex appears in the launch menu only when the `codex` binary is on `PATH`. `gmu
 - **Runtime matching** in `gmux`: scan the launched command for a `codex` binary name
 
 ```bash
-gmux codex                           # ✓ matched
-gmux codex "Fix the auth bug"        # ✓ matched
-gmux /usr/bin/codex                  # ✓ matched
-gmux echo "not codex"             # ✗ not matched
+gmux -- codex                        # ✓ matched
+gmux -- codex "Fix the auth bug"     # ✓ matched
+gmux -- /usr/bin/codex               # ✓ matched
+gmux -- echo "not codex"             # ✗ not matched
 ```
 
 If detection fails, override it:

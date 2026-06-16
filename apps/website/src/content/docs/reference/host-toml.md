@@ -7,7 +7,7 @@ tableOfContents:
 
 `~/.config/gmux/host.toml` (or `$XDG_CONFIG_HOME/gmux/host.toml`)
 
-Daemon behavior. gmuxd reads this file once at startup. Create or edit it manually. The only command that modifies this file is `gmuxd remote`, which can add the `[tailscale]` section with your confirmation. If the file does not exist, safe defaults are used. Changes require restarting gmuxd.
+Daemon behavior. gmuxd reads this file once at startup. Create or edit it manually. The only command that modifies this file is `gmux remote`, which can add the `[tailscale]` section with your confirmation. If the file does not exist, safe defaults are used. Changes require restarting gmuxd.
 
 ## Example
 
@@ -35,7 +35,7 @@ To seed a specific name at first registration — e.g. when running several daem
 
 ## Connecting to other hosts
 
-There is **no `[[peers]]` config**. Add a host you want to aggregate sessions from at runtime via **Settings → Hosts → Connect to host** (paste the connect URL from `gmuxd auth`, or enter the host's URL and token). A token is required for every host, tailnet or not ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)). Connected hosts are saved to `peers.json` in the state directory, and the peer's name is taken from the host itself — you don't assign one.
+There is **no `[[peers]]` config**. Add a host you want to aggregate sessions from at runtime via **Settings → Hosts → Connect to host** (paste the connect URL from `gmux auth`, or enter the host's URL and token). A token is required for every host, tailnet or not ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)). Connected hosts are saved to `peers.json` in the state directory, and the peer's name is taken from the host itself — you don't assign one.
 
 ## Fields
 

@@ -7,7 +7,7 @@ sidebar:
 
 ## Config files
 
-Created by the user. gmux does not write to these, except that `gmuxd remote` can add `[tailscale]` to `host.toml` with your confirmation.
+Created by the user. gmux does not write to these, except that `gmux remote` can add `[tailscale]` to `host.toml` with your confirmation.
 
 | Path | Purpose | Reference |
 |------|---------|-----------|
@@ -28,7 +28,7 @@ Created by gmuxd. Lives under `~/.local/state/gmux` (or `$XDG_STATE_HOME/gmux`).
 | `~/.local/state/gmux/projects.json` | User-curated project list (sidebar grouping, ordering) |
 | `~/.local/state/gmux/projects.json.bak` | Snapshot of `projects.json` taken before a schema migration rewrites it (notably the 2.0 upgrade) |
 | `~/.local/state/gmux/peers.json` | Hosts you connected to via **Connect to host** — URL, token, and node id (0600; it carries a token) |
-| `~/.local/state/gmux/gmuxd.log` | Daemon log (when started via `gmuxd start`) |
+| `~/.local/state/gmux/gmuxd.log` | Daemon log (when started via `gmux daemon start`) |
 | `~/.local/state/gmux/tsnet/` | Tailscale state directory (when remote access is enabled) |
 
 ## Session sockets
@@ -51,4 +51,4 @@ Override the directory with `GMUX_SOCKET_DIR`.
 
 | Path | Purpose |
 |------|---------|
-| `~/.local/state/gmux/gmuxd.log` | Daemon log when started via `gmuxd start` or auto-started by `gmux` |
+| `~/.local/state/gmux/gmuxd.log` | Daemon log when started via `gmux daemon start` or auto-started by `gmux` |

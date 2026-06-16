@@ -19,11 +19,11 @@ Without an adapter, gmux still tracks whether the process is alive — but with 
 You don't configure adapters. gmux recognizes tools by their command name:
 
 ```bash
-gmux claude        # → claude adapter
-gmux codex         # → codex adapter
-gmux pi            # → pi adapter
-gmux bash          # → shell adapter (fallback)
-gmux make build    # → shell adapter (fallback)
+gmux -- claude       # → claude adapter
+gmux -- codex        # → codex adapter
+gmux -- pi           # → pi adapter
+gmux -- bash         # → shell adapter (fallback)
+gmux -- make build   # → shell adapter (fallback)
 ```
 
 If no specific adapter matches, the **shell** adapter handles it.

@@ -3,7 +3,7 @@ title: Using the UI
 description: What you see in gmux and how to work with it.
 ---
 
-Running `gmux` with no arguments opens the dashboard in a dedicated browser window. You can also navigate to **[localhost:8790](http://localhost:8790)** directly; the first time you'll need to authenticate by visiting the login URL from `gmuxd auth`.
+Running `gmux open` opens the dashboard in a dedicated browser window. You can also navigate to **[localhost:8790](http://localhost:8790)** directly; the first time you'll need to authenticate by visiting the login URL from `gmux auth`.
 
 ## The sidebar
 
@@ -40,7 +40,7 @@ In **Settings → Hosts**, each host shows an explicit status:
 
 Removing a host also clears the project references that pointed at it, so it leaves nothing behind under **Referenced but not found**.
 
-**Upgrading to 2.0:** hosts you had projects on — that earlier versions auto-discovered on your tailnet — are migrated into the roster as **Auth needed**. Click **Add token** on each and paste its token (run `gmuxd auth` on that host) to bring it back online. Other tailnet machines aren't carried over; re-add them with **Connect to host** if you want them. Your `projects.json` is backed up to `projects.json.bak` before the upgrade rewrites it.
+**Upgrading to 2.0:** hosts you had projects on — that earlier versions auto-discovered on your tailnet — are migrated into the roster as **Auth needed**. Click **Add token** on each and paste its token (run `gmux auth` on that host) to bring it back online. Other tailnet machines aren't carried over; re-add them with **Connect to host** if you want them. Your `projects.json` is backed up to `projects.json.bak` before the upgrade rewrites it.
 
 Connected peers show launch buttons for each configured adapter, just like the local host.
 
@@ -108,8 +108,8 @@ Click a session to attach. You get a full interactive terminal powered by [xterm
 ### From the command line
 
 ```bash
-gmux pi              # coding agent
-gmux pytest --watch  # any command
+gmux -- pi              # coding agent
+gmux -- pytest --watch  # any command
 ```
 
 ### From the UI

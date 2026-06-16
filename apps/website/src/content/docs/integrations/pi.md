@@ -46,10 +46,10 @@ There are two separate pi checks:
 The runtime matching works with direct invocation, full paths, `npx`, `nix run`, and other wrappers:
 
 ```bash
-gmux pi                              # ✓ matched
-gmux /home/user/.local/bin/pi        # ✓ matched
-gmux npx pi                          # ✓ matched
-gmux echo "not pi"                # ✗ not matched
+gmux -- pi                           # ✓ matched
+gmux -- /home/user/.local/bin/pi     # ✓ matched
+gmux -- npx pi                       # ✓ matched
+gmux -- echo "not pi"                # ✗ not matched
 ```
 
 If detection fails (e.g., an unusual wrapper), override it:

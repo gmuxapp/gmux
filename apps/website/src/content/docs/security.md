@@ -84,7 +84,7 @@ The file remains the primary storage. Environment variables are inherited by chi
 
 The [`examples/`](https://github.com/gmuxapp/gmux/tree/main/examples) directory has ready-to-run Docker Compose setups showing how to handle auth in common deployment scenarios: [Tailscale](/running-in-docker/#tailscale-recommended), [WireGuard](/running-in-docker/#wireguard), and [Traefik with OIDC](/running-in-docker/#reverse-proxy-with-oidc-traefik--pocketid).
 
-**For easy access from other devices**, use [Tailscale remote access](/remote-access). It gives you HTTPS with automatic certificates and cryptographic identity verification; access still requires the host's token (run `gmuxd auth` to get its connect URL).
+**For easy access from other devices**, use [Tailscale remote access](/remote-access). It gives you HTTPS with automatic certificates and cryptographic identity verification; access still requires the host's token (run `gmux auth` to get its connect URL).
 
 ## Config validation
 

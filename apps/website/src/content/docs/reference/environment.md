@@ -87,10 +87,10 @@ See [Adapter Architecture](/develop/adapter-architecture) for how to use the chi
 
 ## How a session's environment is sourced
 
-When the daemon starts, resumes, or **restarts** a session (the launch buttons in the UI), it sources a fresh environment from an interactive login shell — roughly `$SHELL -l -i` run in the session's working directory — and hands that to the session. This means edits to your `~/.zshrc` / `~/.bashrc` / `~/.profile` (and per-directory hooks like `direnv`) take effect on the next launch or restart, **without** needing a `gmuxd restart`. Clicking **Restart session** behaves like opening a fresh terminal.
+When the daemon starts, resumes, or **restarts** a session (the launch buttons in the UI), it sources a fresh environment from an interactive login shell — roughly `$SHELL -l -i` run in the session's working directory — and hands that to the session. This means edits to your `~/.zshrc` / `~/.bashrc` / `~/.profile` (and per-directory hooks like `direnv`) take effect on the next launch or restart, **without** needing a `gmux daemon restart`. Clicking **Restart session** behaves like opening a fresh terminal.
 
 The captured environment is merged onto the daemon's own environment, so session/desktop variables that your dotfiles never set — `DISPLAY`, `SSH_AUTH_SOCK`, `XDG_RUNTIME_DIR`, and similar — are preserved. (One consequence of the merge: a variable you *remove* from your dotfiles may linger until the daemon itself is restarted.)
 
-If `$SHELL` is unset (typical for systemd- or Docker-managed daemons), this step is skipped and the session inherits the daemon's environment unchanged. The same fallback applies if the login shell fails or takes longer than 5 seconds. Sessions you start directly from a terminal (`gmux <cmd>`) always use that terminal's live environment.
+If `$SHELL` is unset (typical for systemd- or Docker-managed daemons), this step is skipped and the session inherits the daemon's environment unchanged. The same fallback applies if the login shell fails or takes longer than 5 seconds. Sessions you start directly from a terminal (`gmux -- <cmd>`) always use that terminal's live environment.
 
 See [ADR 0006](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0006-fresh-login-env-on-launch.md) for the full rationale.
