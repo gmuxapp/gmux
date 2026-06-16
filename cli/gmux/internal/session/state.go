@@ -44,6 +44,11 @@ type State struct {
 	// Slug is an adapter-provided stable identifier for URL routing.
 	Slug string `json:"slug,omitempty"`
 
+	// shimActive records that the agent-shim preload announced itself
+	// (its hello). Replayed to new /events subscribers so a reconnecting
+	// daemon re-learns shim coverage. Guarded by mu.
+	shimActive bool
+
 	// SessionFile is the agent's on-disk JSONL conversation file, as
 	// reported authoritatively by the agent-shim preload (ADR 0009). It
 	// is the immutable Tool ID's address; a change here is a rebind
@@ -225,9 +230,22 @@ func (s *State) SetSlug(slug string) {
 // EmitShimActive announces that the agent-shim preload is live in the
 // session's process (its `hello`). The daemon uses this to suppress
 // scrollback attribution for the session until the shim reports the real
-// file. Carries no durable state; it's a one-shot signal.
+// file. The active flag is retained so it can be replayed to a
+// reconnecting subscriber (see ShimSnapshot).
 func (s *State) EmitShimActive() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.shimActive = true
 	s.emit(Event{Type: "shim", Data: map[string]bool{"active": true}})
+}
+
+// ShimSnapshot returns the current shim coverage and held session file,
+// for replay to a newly-connected /events subscriber so a reconnecting
+// daemon re-learns attribution without persisted state.
+func (s *State) ShimSnapshot() (sessionFile string, active bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.SessionFile, s.shimActive
 }
 
 // SetSessionFile records the agent's current session file as reported by
@@ -235,12 +253,11 @@ func (s *State) EmitShimActive() {
 // daemon sees first-attribution and rebind (/resume) but not every write.
 func (s *State) SetSessionFile(path string) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if path == "" || path == s.SessionFile {
-		s.mu.Unlock()
 		return
 	}
 	s.SessionFile = path
-	s.mu.Unlock()
 	s.emit(Event{Type: "session_file", Data: map[string]string{"path": path}})
 }
 

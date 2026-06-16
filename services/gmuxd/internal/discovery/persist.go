@@ -1,3 +1,10 @@
+// Deprecated: attributions.json persistence is retired. Attribution is now
+// re-established on daemon restart by the runner re-announcing its held
+// session file when the daemon resubscribes to /events (see
+// session.State.ShimSnapshot and ptyserver handleEvents), with scrollback
+// re-derivation as the fallback for unshimmed sessions. These functions are
+// no longer called from the live path; they are retained (and still tested)
+// so persistence can be reinstated if a future need arises.
 package discovery
 
 import (

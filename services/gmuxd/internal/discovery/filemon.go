@@ -80,7 +80,11 @@ type monitoredSession struct {
 }
 
 func NewFileMonitor(s *store.Store) *FileMonitor {
-	return NewFileMonitorWithAttributions(s, loadAttributions())
+	// attributions.json is retired: shimmed runners re-announce their held
+	// session file when the daemon (re)subscribes to /events (see
+	// ptyserver handleEvents replay), and unshimmed sessions re-derive via
+	// the scrollback fallback. Start with an empty map.
+	return NewFileMonitorWithAttributions(s, nil)
 }
 
 // NewFileMonitorWithAttributions creates a FileMonitor pre-seeded with
@@ -752,12 +756,18 @@ func (fm *FileMonitor) syncFileMetadataLocked(sessionID, filePath string) {
 	})
 }
 
-// persistAttributionsLocked writes the current attributions to disk.
-func (fm *FileMonitor) persistAttributionsLocked() {
-	saveAttributions(fm.attributions, fm.sessions)
-}
+// persistAttributionsLocked is retained as a no-op. Attribution state is
+// no longer persisted to disk (attributions.json is retired): on daemon
+// restart, shimmed runners re-announce their held file via the /events
+// replay and unshimmed sessions re-derive via scrollback. Kept so the
+// call sites read as "a decision changed here" and to ease reinstating
+// persistence if ever needed.
+func (fm *FileMonitor) persistAttributionsLocked() {}
 
-// ApplyPersistedAttributions walks the loaded attributions map and,
+// ApplyPersistedAttributions is retained for the onFirstScan hook but is
+// now effectively a no-op: nothing is loaded from disk, so the map is
+// empty at startup and slug/title are re-derived from the runner's
+// re-announced session_file event instead.
 // for each (filePath, sessionID) entry whose target is currently a
 // monitored live session, propagates the slug and title from the
 // session file into the store.

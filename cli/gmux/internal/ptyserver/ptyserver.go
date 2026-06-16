@@ -650,6 +650,22 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch := s.state.Subscribe()
 	defer s.state.Unsubscribe(ch)
 
+	// Re-announce current shim state to this (possibly reconnecting)
+	// subscriber so a restarted daemon re-learns attribution without any
+	// persisted state. Subscribe happened first, so a concurrent update
+	// may also arrive on ch; that's harmless (AttributeFromShim and the
+	// daemon's coverage marking are idempotent).
+	if file, active := s.state.ShimSnapshot(); active || file != "" {
+		if active {
+			fmt.Fprintf(w, "event: shim\ndata: %s\n\n", `{"active":true}`)
+		}
+		if file != "" {
+			if data, err := json.Marshal(map[string]string{"path": file}); err == nil {
+				fmt.Fprintf(w, "event: session_file\ndata: %s\n\n", data)
+			}
+		}
+	}
+
 	flusher.Flush()
 
 	for {
