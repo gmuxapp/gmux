@@ -104,6 +104,20 @@ type FileAttributor interface {
 	AttributeFile(filePath string, candidates []FileCandidate) string
 }
 
+// SessionShimmer marks adapters whose agent process runs under Node or Bun
+// and persists a JSONL session file. For these adapters the runner injects
+// the agent-shim preload (NODE_OPTIONS/BUN_OPTIONS) so it learns the held
+// session file from the agent's own writes instead of guessing via
+// scrollback (ADR 0009).
+//
+// Shells and other non-jsonl adapters must not opt in: injecting
+// NODE_OPTIONS into a shell session would leak the shim into every node
+// process the user runs inside that shell.
+type SessionShimmer interface {
+	// UsesSessionShim reports whether the runner should inject the shim.
+	UsesSessionShim() bool
+}
+
 // CommandTitler is optionally implemented by adapters that want to
 // control how a command array is displayed as a fallback title.
 // Without it, the store joins the full command (e.g. "pytest -x").

@@ -44,6 +44,13 @@ type State struct {
 	// Slug is an adapter-provided stable identifier for URL routing.
 	Slug string `json:"slug,omitempty"`
 
+	// SessionFile is the agent's on-disk JSONL conversation file, as
+	// reported authoritatively by the agent-shim preload (ADR 0009). It
+	// is the immutable Tool ID's address; a change here is a rebind
+	// (/resume). Empty until the agent's first write or for unshimmed
+	// adapters.
+	SessionFile string `json:"session_file,omitempty"`
+
 	// Terminal size (updated by the runner whenever PTY is resized).
 	TerminalCols uint16 `json:"terminal_cols,omitempty"`
 	TerminalRows uint16 `json:"terminal_rows,omitempty"`
@@ -213,6 +220,20 @@ func (s *State) SetSlug(slug string) {
 	}
 	s.Slug = slug
 	s.emit(Event{Type: "meta", Data: map[string]string{"slug": slug}})
+}
+
+// SetSessionFile records the agent's current session file as reported by
+// the shim. Emits a session_file event only when the path changes, so the
+// daemon sees first-attribution and rebind (/resume) but not every write.
+func (s *State) SetSessionFile(path string) {
+	s.mu.Lock()
+	if path == "" || path == s.SessionFile {
+		s.mu.Unlock()
+		return
+	}
+	s.SessionFile = path
+	s.mu.Unlock()
+	s.emit(Event{Type: "session_file", Data: map[string]string{"path": path}})
 }
 
 // SetSubtitle updates the display subtitle.

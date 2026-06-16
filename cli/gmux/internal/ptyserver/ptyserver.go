@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/gmuxapp/gmux/cli/gmux/internal/agentshim"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
@@ -243,6 +244,18 @@ func New(cfg Config) (*Server, error) {
 	cmd.Dir = cfg.Cwd
 	cmd.Env = buildChildEnv(os.Environ(), cfg.Env, cfg.Version)
 
+	// Inject the agent-shim preload for adapters that run a node/bun agent
+	// with a JSONL session file (pi, claude, codex). The shim posts session
+	// file writes to this runner's socket (POST /shim/event), giving us
+	// authoritative attribution instead of scrollback guessing (ADR 0009).
+	if sh, ok := cfg.Adapter.(adapter.SessionShimmer); ok && sh.UsesSessionShim() {
+		if shimPath, err := agentshim.Path(); err != nil {
+			log.Printf("ptyserver: agent-shim unavailable, falling back to scrollback attribution: %v", err)
+		} else {
+			cmd.Env = agentshim.PreloadEnv(cmd.Env, shimPath, cfg.SocketPath)
+		}
+	}
+
 	// Start command in a new PTY
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
 		Cols: cfg.Cols,
@@ -415,6 +428,7 @@ func (s *Server) serve() {
 	// HTTP endpoints (checked first via explicit paths)
 	mux.HandleFunc("GET /meta", s.handleMeta)
 	mux.HandleFunc("GET /scrollback/text", s.handleScrollbackText)
+	mux.HandleFunc("POST /shim/event", s.handleShimEvent)
 	mux.HandleFunc("POST /input", s.handleInput)
 	mux.HandleFunc("PUT /status", s.handlePutStatus)
 	mux.HandleFunc("PUT /slug", s.handlePutSlug)
@@ -474,6 +488,38 @@ const maxInputBytes = 1 << 20 // 1 MiB
 // Access control is delegated to the Unix socket's file permissions
 // (owner-only, 0o700): anyone who can connect() to this socket already
 // owns the session and could do arbitrary worse things to it.
+// shimEvent is the payload posted by the agent-shim preload (hook.mjs) on
+// every JSONL session-file write in the agent process.
+type shimEvent struct {
+	Op    string `json:"op"`   // "hello" | "append" | "write"
+	Path  string `json:"path"` // session file path (empty for "hello")
+	Pid   int    `json:"pid"`
+	Bytes int    `json:"bytes"`
+	Data  string `json:"data,omitempty"` // inline delta, may be empty if oversized
+}
+
+// handleShimEvent records the session file the agent reported writing. A
+// write (append or full rewrite) is the authoritative signal that this
+// runner holds that conversation; a change of path is a rebind (/resume).
+// Reads are never sent by the shim (the /resume picker bulk-reads every
+// file), so any path we see here is one the agent is actively writing.
+func (s *Server) handleShimEvent(w http.ResponseWriter, r *http.Request) {
+	var ev shimEvent
+	if err := json.NewDecoder(io.LimitReader(r.Body, 512*1024)).Decode(&ev); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	switch ev.Op {
+	case "append", "write":
+		if ev.Path != "" {
+			s.state.SetSessionFile(ev.Path)
+		}
+	case "hello":
+		// Liveness only; nothing to record yet.
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxInputBytes))
 	if err != nil {

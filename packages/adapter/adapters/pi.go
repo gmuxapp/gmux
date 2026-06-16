@@ -21,6 +21,7 @@ var (
 	_ adapter.FileMonitor     = (*Pi)(nil)
 	_ adapter.FileAttributor  = (*Pi)(nil)
 	_ adapter.Resumer         = (*Pi)(nil)
+	_ adapter.SessionShimmer  = (*Pi)(nil)
 )
 
 func init() {
@@ -60,6 +61,11 @@ func (p *Pi) Match(cmd []string) bool {
 
 // Env returns no extra environment variables.
 func (p *Pi) Env(_ adapter.EnvContext) []string { return nil }
+
+// UsesSessionShim opts pi into the agent-shim preload: pi runs under
+// node/bun and persists a JSONL session file, so the runner injects the
+// shim to learn the held session file authoritatively (ADR 0009).
+func (p *Pi) UsesSessionShim() bool { return true }
 
 func (p *Pi) Launchers() []adapter.Launcher {
 	return []adapter.Launcher{{
