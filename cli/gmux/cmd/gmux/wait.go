@@ -127,6 +127,11 @@ func cmdWait(ref, forText, forRegex string, timeoutSecs int) int {
 // timeout it prints the current tail to stderr so the wait is
 // diagnosable, and exits with waitExitTimeout.
 //
+// Exit codes match the idle-wait path (cmdWait): waitExitIdle on match,
+// waitExitDied if the session exits before the pattern appears (no more
+// output will ever come, so we fail fast rather than spin to timeout),
+// waitExitTimeout on --timeout.
+//
 // Polling lives client-side for now; absorbing it into a gmuxd endpoint
 // (so the match happens where the bytes are) is a planned follow-up.
 func waitForOutput(sess cliSession, forText, forRegex string, timeoutSecs int) int {
@@ -138,6 +143,12 @@ func waitForOutput(sess cliSession, forText, forRegex string, timeoutSecs int) i
 			fmt.Fprintf(os.Stderr, "gmux: invalid --for-regex: %v\n", err)
 			return 1
 		}
+	}
+	matched := func(b []byte) bool {
+		if re != nil {
+			return re.Match(b)
+		}
+		return bytes.Contains(b, []byte(forText))
 	}
 
 	var deadline time.Time
@@ -152,12 +163,24 @@ func waitForOutput(sess cliSession, forText, forRegex string, timeoutSecs int) i
 			return code
 		}
 		last = data
-		if re != nil {
-			if re.Match(data) {
-				return waitExitIdle
-			}
-		} else if bytes.Contains(data, []byte(forText)) {
+		if matched(data) {
 			return waitExitIdle
+		}
+		// No match yet. If the session has exited, no further output will
+		// arrive — give up with the "died" code instead of spinning to
+		// timeout. Re-read scrollback first to close the race where the
+		// pattern was printed and the session exited between our read and
+		// this liveness check (a dead session's scrollback is still served
+		// from disk, so the final bytes are there).
+		if sessionExited(sess.ID) {
+			if data, code = fetchScrollback(sess, 2000); code == 0 {
+				last = data
+				if matched(data) {
+					return waitExitIdle
+				}
+			}
+			fmt.Fprintf(os.Stderr, "gmux: session %s exited before the expected output appeared\n", displayID(sess))
+			return waitExitDied
 		}
 		if !deadline.IsZero() && time.Now().After(deadline) {
 			fmt.Fprintf(os.Stderr, "gmux: wait timed out after %ds; last output:\n", timeoutSecs)

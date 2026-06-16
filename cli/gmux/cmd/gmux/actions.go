@@ -56,6 +56,23 @@ func fetchSessions() ([]cliSession, error) {
 	return envelope.Data, nil
 }
 
+// sessionExited reports whether gmuxd considers the session no longer
+// alive: either it is present but dead, or gmuxd no longer knows the id
+// at all (it was pruned). A fetch error returns false so a transient
+// network hiccup is never mistaken for session death.
+func sessionExited(id string) bool {
+	sessions, err := fetchSessions()
+	if err != nil {
+		return false
+	}
+	for _, s := range sessions {
+		if s.ID == id {
+			return !s.Alive
+		}
+	}
+	return true
+}
+
 // resolveSession fetches the session list from gmuxd and finds the one
 // the user's reference points to. See matchSession for the matching
 // rules.
