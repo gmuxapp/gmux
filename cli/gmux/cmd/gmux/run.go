@@ -393,11 +393,13 @@ func spawnDetached(args []string, msg string, waitForRegistration bool) {
 	}
 	defer devNull.Close()
 
-	// args is the command-remainder after gmux flag parsing, so it does
-	// not contain any gmux flags. The detached child sees no gmux flags,
-	// takes the default run path, and — because its stdin is /dev/null —
-	// runs non-interactively without trying to attach.
-	cmd := exec.Command(self, args...)
+	// args is the command-remainder after gmux flag parsing. Re-exec via
+	// the internal `__run -- <cmd>` form (ADR 0009): the bare-command
+	// shorthand no longer exists, and `--` delivers the command verbatim
+	// even when its own args look like flags. Because the child's stdin
+	// is /dev/null it runs non-interactively without trying to attach.
+	reexecArgs := append([]string{"__run", "--"}, args...)
+	cmd := exec.Command(self, reexecArgs...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull
