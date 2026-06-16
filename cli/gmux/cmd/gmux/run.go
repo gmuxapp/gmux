@@ -68,9 +68,9 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		return
 	}
 
-	// Explicit --no-attach: spawn detached, wait for the child to finish
+	// Explicit -d/--detach: spawn detached, wait for the child to finish
 	// registering with gmuxd, then print the session id on stdout so the
-	// caller (typically a script) can capture it for --tail / --dismiss
+	// caller (typically a script) can capture it for tail / kill
 	// without polling.
 	if !attach {
 		spawnDetached(args, "", true)
@@ -365,16 +365,25 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	os.Exit(exitCode)
 }
 
+// reexecRunArgs builds the argv for re-execing gmux to run a command
+// detached: the internal `__run -- <cmd>` form (ADR 0009). The `--`
+// delivers the command verbatim even when its own args look like flags,
+// and `__run` is required because the bare-command shorthand was removed
+// in 2.0 (a bare `gmux <cmd>` is now an "unknown command" error).
+func reexecRunArgs(args []string) []string {
+	return append([]string{"__run", "--"}, args...)
+}
+
 // spawnDetached re-execs gmux with the given args as a setsid'd
 // background process, disconnected from the current terminal. Used
-// for both --no-attach and nested-gmux scenarios: the child registers
+// for both detached (-d) and nested-gmux scenarios: the child registers
 // with gmuxd and appears in the UI.
 //
 // When waitForRegistration is true, the parent blocks until the child
 // either acknowledges registration via the handshake pipe or fails;
 // on success it prints the session id on stdout, on failure it exits
-// non-zero with a stderr error. This is the --no-attach path: scripts
-// capture the id with id=$(gmux --no-attach foo) and use it
+// non-zero with a stderr error. This is the detached (-d) path: scripts
+// capture the id with id=$(gmux -d -- foo) and use it
 // immediately, without polling.
 //
 // When waitForRegistration is false, the parent prints msg on stderr
@@ -393,11 +402,12 @@ func spawnDetached(args []string, msg string, waitForRegistration bool) {
 	}
 	defer devNull.Close()
 
-	// args is the command-remainder after gmux flag parsing, so it does
-	// not contain any gmux flags. The detached child sees no gmux flags,
-	// takes the default run path, and — because its stdin is /dev/null —
-	// runs non-interactively without trying to attach.
-	cmd := exec.Command(self, args...)
+	// args is the command-remainder after gmux flag parsing. Re-exec via
+	// the internal `__run -- <cmd>` form (ADR 0009): the bare-command
+	// shorthand no longer exists, and `--` delivers the command verbatim
+	// even when its own args look like flags. Because the child's stdin
+	// is /dev/null it runs non-interactively without trying to attach.
+	cmd := exec.Command(self, reexecRunArgs(args)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull
@@ -445,7 +455,7 @@ func spawnDetached(args []string, msg string, waitForRegistration bool) {
 
 // explainHandshakeFailure converts a readHandshake error into a
 // short human-readable reason for the stderr message a script
-// developer sees when --no-attach can't return a session id.
+// developer sees when a detached run cannot return a session id.
 func explainHandshakeFailure(err error) string {
 	switch {
 	case errors.Is(err, os.ErrDeadlineExceeded):

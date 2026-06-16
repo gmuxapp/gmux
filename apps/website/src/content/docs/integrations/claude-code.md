@@ -47,10 +47,10 @@ Claude Code appears in the launch menu only when the `claude` binary is on `PATH
 The runtime matching works with direct invocation, full paths, and wrappers:
 
 ```bash
-gmux claude                          # ✓ matched
-gmux /usr/bin/claude                 # ✓ matched
-gmux env claude                      # ✓ matched
-gmux echo "not claude"            # ✗ not matched
+gmux -- claude                       # ✓ matched
+gmux -- /usr/bin/claude              # ✓ matched
+gmux -- env claude                   # ✓ matched
+gmux -- echo "not claude"            # ✗ not matched
 ```
 
 If detection fails, override it:

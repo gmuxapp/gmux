@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-// Handshake protocol used by spawnDetached's --no-attach path so the
+// Handshake protocol used by spawnDetached's detached (-d) path so the
 // parent process can return a deterministic session id to its caller
-// (typically a script doing id=$(gmux --no-attach foo)) without
+// (typically a script doing id=$(gmux -d -- foo)) without
 // polling /v1/sessions or guessing.
 //
 // Wire:

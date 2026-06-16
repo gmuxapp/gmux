@@ -5,30 +5,58 @@ description: Drive long-running terminal commands and AI coding agents through g
 
 # gmux
 
+A command run through gmux becomes a managed session the user can watch live
+in a browser. The grammar is verb-first; **running a command always uses the
+explicit `--` separator** so gmux never guesses where its own flags end and
+the command begins.
+
 ## Primitives
 
 ```bash
-gmux --no-attach <cmd>       # spawn detached; prints the session id on stdout
-gmux <cmd> < /dev/null       # spawn blocking; exits with the child's exit code
-gmux --send <id> [text]      # send text (or stdin) to a session and submit
-gmux --wait <id>             # block until the agent finishes its turn
-gmux --tail N <id>           # last N lines of output (ANSI stripped)
-gmux --list                  # all sessions
-gmux --kill <id>             # SIGTERM the runner
+gmux -- <cmd> [args]         # run blocking; exits with the child's exit code
+gmux -d -- <cmd> [args]      # run detached; prints the session id on stdout
+gmux send <id> 'text' Enter  # type text and submit (Enter is explicit)
+gmux send <id> C-c           # send a control key (interrupt), no text
+gmux wait <id>               # block until the agent finishes its turn
+gmux tail <id> [-n N]        # last N lines of output (ANSI stripped; default 100)
+gmux ls [--json]             # list sessions (--json for machine parsing)
+gmux kill <id>               # SIGTERM the runner
 ```
 
-`--list` IDs are 8-character prefixes; pass them directly to `--send` / `--wait` / `--tail` / `--kill`.
+`ls` IDs are 8-character prefixes; pass them directly to
+`send` / `wait` / `tail` / `kill`. Tip: `alias gm='gmux --'` makes
+`gm pytest` shorthand for `gmux -- pytest`.
+
+Because `gmux -- <cmd>` propagates the child's exit code, it composes:
+`if gmux -- pytest -q; then ...`.
+
+## Sending input and keys
+
+`send` types literal text; any trailing token that is a key name is sent as a
+key. **Enter is not implicit** — add it to submit:
+
+```bash
+gmux send $id 'pytest -q' Enter   # type and run
+gmux send $id 'half a line'       # type without submitting
+gmux send $id C-c                 # interrupt (Ctrl-C)
+gmux send $id Escape              # send Escape
+echo "$body" | gmux send $id Enter  # pipe stdin, then submit (Enter optional)
+```
+
+Key names follow tmux: `Enter`, `Tab`, `Escape`, `Up`/`Down`/`Left`/`Right`,
+`C-c`, `C-d`, etc. For verbatim tmux compatibility there is also
+`gmux send-keys -t <id> <keys...>` (with `-l` for literal text).
 
 ## Sequential orchestration
 
 ```bash
-id=$(gmux --no-attach pi "implement the feature")
-gmux --wait $id
+id=$(gmux -d -- pi "implement the feature")
+gmux wait $id
 
-gmux --send $id < review.txt
-gmux --wait $id
+gmux send $id "$(cat review.txt)" Enter
+gmux wait $id
 
-gmux --tail 100 $id
+gmux tail $id -n 100
 ```
 
 ## Parallel orchestration
@@ -36,39 +64,51 @@ gmux --tail 100 $id
 ```bash
 ids=()
 for ticket in fa-48 fa-49 fa-52; do
-  ids+=( "$(gmux --no-attach pi "Implement $ticket. Return when done.")" )
+  ids+=( "$(gmux -d -- pi "Implement $ticket. Return when done.")" )
 done
 
 for id in "${ids[@]}"; do
-  gmux --wait --timeout 600 "$id" || echo "$id failed: $?"
+  gmux wait "$id" --timeout 600 || echo "$id failed: $?"
 done
 
 for id in "${ids[@]}"; do
   echo "=== $id ==="
-  gmux --tail 100 "$id"
+  gmux tail "$id" -n 100
 done
 ```
 
-## `--wait` exit codes
+## Waiting
 
-- `0` agent reached idle
-- `2` session died
+`gmux wait <id>` blocks until an **agent** session goes idle (turn finished) or
+the session exits, optionally bounded by `--timeout N`. Exit codes:
+
+- `0` agent reached idle (or session exited)
+- `2` session died before going idle
 - `3` `--timeout` elapsed
 
-`--wait` only works for agent sessions (`claude`, `codex`, `pi`). For shell commands use the blocking piped flow: `gmux make build < /dev/null`.
+Plain **shell** commands don't emit an idle signal and are rejected, so run
+those blocking instead: `gmux -- make build < /dev/null` exits with the
+command's own status. (Waiting on arbitrary output — "until this text
+appears" — is planned as a server-side condition; until then, poll `gmux tail`
+yourself if you must.)
 
 ## Other agents have one-shot modes
 
-Agents stay running by default. To make them exit after one prompt, use the agent's print mode: `pi -p`, `claude -p`, `codex exec`. Pair with the piped flow for fire-and-forget:
+Agents stay running by default. To make them exit after one prompt, use the
+agent's print mode: `pi -p`, `claude -p`, `codex exec`:
 
 ```bash
-gmux pi -p "summarize this PR" < /dev/null
+gmux -- pi -p "summarize this PR"
 ```
 
-## Sending control characters
+## Sessions on other machines
+
+Sessions are **local by default** — bare IDs only ever match this host, so you
+can't accidentally act on another machine. To address a peer session
+explicitly, suffix the ID with `@<peer>` (see them with `gmux ls --all`):
 
 ```bash
-printf '\x03' | gmux --send --no-submit $id   # Ctrl-C without an extra Enter
+gmux tail abc123@laptop
 ```
 
 ## Reference

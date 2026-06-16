@@ -9,35 +9,39 @@ sidebar:
 
 ## Overview
 
-**`gmux`** — the session runner. Wraps any command in a managed session.
-This is your primary entry point; it auto-starts the daemon if needed.
+**`gmux`** — the command you use. It runs commands in managed sessions and
+drives them (list, attach, tail, send, wait, kill), plus daemon control and
+pairing. It auto-starts the daemon when needed.
 
-**`gmuxd`** — the daemon. Manages sessions, serves the web UI and session
-history, and provides optional remote access. Rarely invoked directly.
+**`gmuxd`** — the daemon process. Serves the web UI, session history, and
+optional remote access. You rarely invoke it directly; `gmux` starts it for
+you, and `gmux daemon …` controls it.
 
-## gmux
+`gmux` is verb-first: `gmux <verb> [args]`. Running a command is the one form
+that isn't a verb — it uses an explicit `--` separator so gmux never has to
+guess where its flags end and your command begins.
 
-The session runner and primary entry point. Auto-starts gmuxd if needed.
+## Running a command
 
-`gmux` has no subcommands. Flags before the command apply to gmux itself; once the first positional argument is seen, everything after it is the command to run, verbatim, including its own flags. Use `--` to disambiguate when the command starts with a dash.
+### `gmux -- <command> [args...]`
 
-### `gmux`
-
-Open the gmux UI in a browser. Starts gmuxd if it is not already running. Prefers Chrome/Chromium in `--app` mode for a standalone window; falls back to the default browser.
-
-### `gmux [--no-attach] <command> [args...]`
-
-Run a command inside a gmux session. The session registers with gmuxd and appears in the web UI.
+Run a command inside a gmux session. Everything after `--` is your command,
+verbatim — including its own flags. The session registers with gmuxd and
+appears in the web UI.
 
 ```bash
-gmux bash
-gmux python3 main.py
-gmux pi "build the feature"
-gmux --no-attach pytest --watch       # detach from the terminal
-gmux -- --my-dash-cmd                 # `--` preserves a dashy command
+gmux -- bash
+gmux -- python3 main.py
+gmux -- pi "build the feature"
+gmux -- pytest --watch        # --watch belongs to pytest, not gmux
 ```
 
-Which behavior `gmux <cmd>` exhibits depends on whether stdin is a terminal and whether you're already inside a gmux session:
+There's no bare shorthand: `gmux pytest` is an "unknown command" error (gmux
+suggests the `gmux -- pytest` form). If you run commands constantly,
+`alias gm='gmux --'` gives you `gm pytest` back.
+
+Behavior depends on whether stdin is a terminal and whether you're already
+inside a gmux session:
 
 | Stdin              | Inside `GMUX=1`? | Behavior                                                                                                |
 | ------------------ | ---------------- | ------------------------------------------------------------------------------------------------------- |
@@ -45,126 +49,171 @@ Which behavior `gmux <cmd>` exhibits depends on whether stdin is a terminal and 
 | TTY                | yes              | Auto-detach: spawn the session in the background and return immediately, so PTYs don't nest.            |
 | Pipe / file / null | either           | Block, stream bounded metadata to stdout, exit with the child's exit code. The session keeps running for the UI to attach to. |
 
-The pipe / file / null row is the canonical shape for scripts and agent harnesses: you get a blocking call, bounded stdout (no full PTY noise leaks into your script's logs), and reliable exit-code propagation. `--no-attach` forces the auto-detach behavior even from a terminal.
+The pipe/file/null row is the canonical shape for scripts and agent harnesses:
+a blocking call, bounded stdout (no full PTY noise in your logs), and reliable
+exit-code propagation — so `if gmux -- pytest -q; then …` works.
 
-See [Scripts and agents](/integrations/scripts-and-agents/) for the narrative version, including a worked build-and-report example.
+See [Scripts and agents](/integrations/scripts-and-agents/) for the narrative
+version with a worked build-and-report example.
 
-### `gmux --list` (`-l`)
+### `gmux -d -- <command> [args...]`
 
-List known sessions, alive first, newest first.
+Detached run. Spawns the session in the background and prints its session id on
+stdout, so a script can capture it (`id=$(gmux -d -- pi "…")`) and drive it
+without polling. `-d` must come before `--`.
+
+## Managing sessions
+
+Sessions are **local by default**: a bare id only ever matches a session on
+this machine, so you can't accidentally act on another host. To target a peer,
+suffix the id with `@<peer>` (see `gmux ls --all`). IDs are the 8-character
+short form the UI shows; verbs also accept a unique id prefix, the full id, or
+the session's slug.
+
+### `gmux ls`
+
+List sessions, alive first, newest first. Local only unless `--all`.
 
 ```
-$ gmux --list
+$ gmux ls
 ID        STATUS  KIND   TITLE
 a3f20187  alive   pi     fix auth bug  (/home/mg/dev/myapp)
 be14b052  alive   shell  bash          (/home/mg/dev/gmux)
 7d3304e9  dead    shell  make build    (/home/mg/dev/myapp)
 ```
 
-The ID column shows the 8-character short form the web UI uses; most management flags accept unique ID prefixes, the full session ID, or the session's slug.
+- `--all` — include sessions from every connected peer (adds a peer column).
+- `--json` — emit a JSON array instead of the table, for scripts and agents.
 
-### `gmux --attach <id>` (`-a`)
+### `gmux attach <id>`
 
-Reattach your local terminal to an existing session. The session's scrollback is replayed on connect, SIGWINCH is forwarded, and closing the terminal detaches without killing the session — identical to how `gmux <cmd>` itself behaves.
-
-```bash
-gmux --attach a3f20187
-gmux -a fix-auth-bug        # slug also works
-```
-
-Attach requires an interactive terminal. Remote peer sessions are supported transparently — gmuxd proxies the WebSocket to the owning node.
-
-### `gmux --tail <N> <id>` (`-t`)
-
-Print the last `N` lines of a session's output as plain text (scrollback plus the currently visible screen, ANSI stripped). Useful for peeking at a background session without attaching to it.
+Reattach your local terminal to a session. Scrollback is replayed on connect,
+SIGWINCH is forwarded, and closing the terminal detaches without killing the
+session. Requires an interactive terminal. Peer sessions work transparently —
+gmuxd proxies the WebSocket to the owning host.
 
 ```bash
-gmux --tail 100 a3f20187
-gmux -t 20 fix-auth-bug
+gmux attach a3f20187
+gmux attach fix-auth-bug      # slug also works
+gmux attach a3f20187@desktop  # a session on a peer
 ```
 
-`--tail` currently only works for sessions owned by the local node; remote peer sessions are rejected with a clear error.
+### `gmux tail <id>`
 
-### `gmux --kill <id>` (`-k`)
-
-Terminate a running session. Sends the same signal chain the UI's kill button does: `SIGTERM` to the child, normal exit lifecycle, session marked dead.
+Print recent output as plain text. ANSI escapes are stripped by default so the
+output is grep-friendly.
 
 ```bash
-gmux --kill a3f20187
+gmux tail a3f20187            # last 100 lines (default)
+gmux tail -n 500 a3f20187     # last 500 lines
+gmux tail --raw a3f20187      # keep ANSI escapes (-e also works)
 ```
 
-### `gmux --send [--no-submit] <id> [text]`
+It's a snapshot, not a stream — to watch a session live, attach to it or open
+it in the browser.
 
-Inject input into a running session, as if the bytes had been typed at the terminal, and submit it. By default `--send` appends a carriage return after the payload so the agent or shell processes it as a complete line; `--no-submit` suppresses that for the rare flow where you want to pre-fill the input box without dispatching it.
+### `gmux send <id> [text] [Key...]`
+
+Inject input into a running session as if typed at the keyboard. The text is
+sent literally; any trailing arguments that name keys (`Enter`, `C-c`,
+`Escape`, `Up`, …) are sent as those keys. **Submission is explicit** — add a
+trailing `Enter` to dispatch a line; omit it to leave the input unsent.
 
 ```bash
-gmux --send a3f20187 'describe yourself'           # submits
-gmux --send a3f20187 < prompt.txt                  # submits stdin
-echo 'describe yourself' | gmux --send a3f20187    # equivalent
-printf '\x03' | gmux --send --no-submit a3f20187   # send Ctrl-C without an extra Enter
-gmux --send --no-submit a3f20187 'draft '          # leave "draft " in the input box
+gmux send a3f20187 'describe yourself' Enter   # type and submit
+gmux send a3f20187 'half a thought'            # type, leave it unsent
+gmux send a3f20187 C-c                          # interrupt (Ctrl-C)
+gmux send a3f20187 Escape                       # send Escape
+echo "$body" | gmux send a3f20187 Enter         # pipe stdin, then submit
 ```
 
-When `text` is omitted, gmux reads from stdin until EOF and sends whatever it sees (capped at 1 MiB). Stdin mode is the natural shape for piping multi-line input from files or heredocs.
+When no text is given and stdin is a pipe, gmux reads stdin until EOF (capped
+at 1 MiB) and sends it — the natural shape for files and heredocs. Include a
+trailing `Enter` to submit piped input.
 
-**Access control.** `--send` is powerful — anything you send lands in the session's PTY, and the child has no way to distinguish it from keyboard input. Access is gated by filesystem permissions on the session's Unix socket (owner-only, `0700`), which means only the user that started the session can send to it. Other users on the same machine cannot connect to the socket at all. For the same reason, `--send` is local-only: cross-machine sending would need an explicit authorization model that doesn't exist yet.
+For verbatim tmux compatibility there's also `gmux send-keys -t <id> <keys...>`
+(all arguments are key names by default; `-l` sends them as literal text).
+Use plain `send` for everyday use; `send-keys` only when porting tmux commands.
 
-### `gmux --wait [--timeout N] <id>`
+**Access control.** `send` is powerful — anything you send lands in the
+session's PTY, indistinguishable from keyboard input. Access is gated by
+filesystem permissions on the session's Unix socket (owner-only), so only the
+user who started a session can send to it. Peer sessions are reached through
+gmuxd's authenticated proxy.
 
-Block until the agent in the session has finished its turn. Returns 0 when the agent reaches an idle state (the spinner stops), 2 if the session dies before becoming idle, and 3 if the optional `--timeout` elapses first.
+### `gmux wait <id>`
+
+Block until an **agent** session finishes its current turn (its spinner stops),
+optionally bounded by `--timeout N`.
 
 ```bash
-gmux --send a3f20187 < prompt.txt
-gmux --wait a3f20187
-gmux --tail 50 a3f20187 > result.log
+gmux send a3f20187 'do the thing' Enter
+gmux wait a3f20187
+gmux wait a3f20187 --timeout 600   # or fail after 600s
 ```
 
-The idle signal is the same `Status.Working` flag the UI's spinner consumes: each agent adapter (claude, codex, pi) flips it false once its agent has emitted its final message for the turn. Wait returns immediately if the agent is already idle when called (so composition with `--send` is reliable when the agent races ahead between the two CLI hops).
+The idle signal is the same `Status.Working` flag the UI's spinner consumes,
+so `wait` returns the moment the agent emits its closing message. Exit codes
+(so scripts can branch on the outcome):
 
-Shell sessions don't emit an idle signal and are rejected with a clear error rather than returning a misleading idle. To wait for a shell command to finish, run it directly via the piped flow above or compose with `timeout`.
+- `0` — the agent reached idle
+- `2` — the session exited before becoming idle
+- `3` — `--timeout` elapsed
 
-Local sessions only; remote peer sessions are rejected until peer subscriptions stream `Status` events back to the hub.
+Plain **shell** sessions have no idle signal and are rejected with a clear
+error; to wait for a shell command, run it through the blocking piped form
+(`gmux -- make build < /dev/null`) instead. Idle wait is local-only for now
+(peer support is pending). Waiting on arbitrary output ("until this text
+appears") is planned as a server-side `wait` condition
+([#313](https://github.com/gmuxapp/gmux/issues/313)).
 
-## gmuxd
+### `gmux kill <id>`
 
-The daemon. Manages sessions, serves the web UI, and optionally provides Tailscale remote access.
+Terminate a running session: `SIGTERM` to the child, normal exit lifecycle,
+session marked dead — the same path as the UI's kill button.
 
-### `gmuxd start`
+```bash
+gmux kill a3f20187
+```
 
-Start the daemon in the background. If an existing instance is running, it is stopped first (the old version is printed for confirmation). Logs to `~/.local/state/gmux/gmuxd.log`. Prints the PID on success.
+## UI, pairing, and the daemon
+
+### `gmux open`
+
+Open the gmux UI in a browser, starting gmuxd if needed. Prefers Chrome/Chromium
+in app mode for a standalone window; falls back to the default browser. (Bare
+`gmux` with no arguments prints help — use `gmux open` to launch the UI.)
+
+### `gmux auth`
+
+Print this host's login URL and token, plus a connect URL and QR code for
+pairing another machine. This reveals a secret — run it deliberately, not as a
+status check.
+
+### `gmux remote`
+
+Set up or check Tailscale remote access. Walks you through enabling it the
+first time, then reports connection status on later runs. See
+[Remote Access](/remote-access/). (Shows connection *state* only; it never
+prints the token — use `gmux auth` for that.)
+
+### `gmux daemon <command>`
+
+Control the daemon process. This is the canonical front for daemon lifecycle;
+the underlying `gmuxd` binary keeps the same verbs for service managers.
+
+```bash
+gmux daemon status     # health, session counts, peer status
+gmux daemon start      # start in the background (replaces a running instance)
+gmux daemon stop       # stop the running daemon
+gmux daemon restart    # restart; active sessions survive and are rediscovered
+gmux daemon log-path   # print the log file path (for scripting)
+```
+
+`gmux daemon status` example:
 
 ```
-$ gmuxd start
-gmuxd: stopping existing daemon (1.0.0)...
-gmuxd: running (pid 12345)
-  Logs: /home/user/.local/state/gmux/gmuxd.log
-```
-
-Reads [`host.toml`](/reference/host-toml/) for configuration. Binds to `127.0.0.1` on the configured port (default 8790) and creates a Unix socket for local IPC.
-
-### `gmuxd run`
-
-Run the daemon in the foreground. Same as `start`, but blocks until interrupted. Use this for systemd services, Docker containers, or debugging.
-
-### `gmuxd restart`
-
-Stops any running instance and starts a fresh one. Waits for the new daemon
-to become healthy before returning. Active sessions survive: the new daemon
-rediscovers them on startup. Each session keeps running on its previous binary
-until you resume or restart it, which relaunches it on the new binary.
-
-Use this after installing an update to apply the new binary.
-
-### `gmuxd stop`
-
-Stop the running daemon via the Unix socket.
-
-### `gmuxd status`
-
-Show daemon health, session counts, and peer status.
-
-```
-gmuxd 1.0.0 (ready)
+gmuxd 2.0.0 (ready)
   tcp:    127.0.0.1:8790
   socket: /home/user/.local/state/gmux/gmuxd.sock
   remote: https://gmux.tailnet.ts.net
@@ -172,55 +221,29 @@ gmuxd 1.0.0 (ready)
 Sessions: 3 alive (2 local, 1 remote), 12 dead (15 total)
 
 Peers:
-  • desktop (1 session)
-    https://gmux-desktop.tailnet.ts.net
-  ○ gmux-server (offline)
-    https://gmux-server.tailnet.ts.net
-  ✗ manual-peer (connection refused)
-    https://peer.example.com
+  • desktop (1 session)        https://gmux-desktop.tailnet.ts.net
+  ○ gmux-server (offline)      https://gmux-server.tailnet.ts.net
+  ✗ manual-peer (refused)      https://peer.example.com
 ```
 
-Show the TCP listen address, auth token, and ready-to-open URLs. Useful for connecting from another device, and for pairing another gmux machine.
+### `gmux version` · `gmux help`
 
-```
-Listen:     127.0.0.1:8790
-Auth token: abc123...
+Print the version, or the usage summary. `gmux help` accepts a trailing verb
+name (it prints the full usage either way).
 
-Open this URL to authenticate in a browser on this machine:
-  http://127.0.0.1:8790/auth/login?token=abc123...
+## gmuxd
 
-To add this host from another gmux machine, paste this into "Connect to host":
-  https://gmux-host.your-tailnet.ts.net/auth/login?token=abc123...
-
-Or scan to open gmux on a device on your tailnet:
-  [inline QR code]
-```
-
-The second URL appears only when Tailscale is enabled. It is the **connect URL** for pairing: paste it into **Settings → Hosts → Connect to host** on another machine and it splits into the host URL and token, or scan the inline QR from a phone on your tailnet to open gmux authenticated. A token is required for every host — tailnet reachability alone does not authorize ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
-
-### `gmuxd remote`
-
-Set up or check Tailscale remote access.
-
-If Tailscale is not yet configured, explains what remote access is, asks for confirmation, enables it in `host.toml`, restarts the daemon, and waits for Tailscale to connect. The command guides you through the entire process interactively.
-
-If already enabled, polls the daemon until Tailscale reaches a known state, then shows the connection status. It only reports HTTPS/MagicDNS problems after confirming the connection is established, so you never see false warnings from a daemon that is still starting.
-
-See [Remote Access](/remote-access/) for the full guide.
-
-### `gmuxd log-path`
-
-Print the daemon log file path with no extra output, suitable for scripting.
+The daemon process. You normally start and control it through `gmux` (which
+auto-starts it) and `gmux daemon …`. Invoke `gmuxd` directly only when a service
+manager needs to own the process:
 
 ```bash
-tail -f $(gmuxd log-path)
-cat $(gmuxd log-path) | grep tsauth
+gmuxd          # run in the foreground (for systemd, Docker, debugging)
+gmuxd run      # same thing, explicit
 ```
 
-### `gmuxd version`
-
-Print the version string.
-
-### `gmuxd help`
-
-Show the usage summary.
+Foreground `gmuxd` reads [`host.toml`](/reference/host-toml/), binds
+`127.0.0.1` on the configured port (default 8790), and creates a Unix socket
+for local IPC. For background start/stop/status/restart and the log path, use
+`gmux daemon …` above. `gmuxd --help` lists the binary's own verbs and points
+back to the `gmux daemon` equivalents.

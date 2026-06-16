@@ -13,7 +13,7 @@ import (
 	"nhooyr.io/websocket"
 )
 
-// cmdAttach implements `gmux --attach <id>`.
+// cmdAttach implements `gmux attach <id>`.
 //
 // Opens a WebSocket to gmuxd's /ws/{id} handler via the local Unix
 // socket. gmuxd proxies to the session's own Unix socket for local
@@ -24,8 +24,8 @@ import (
 // helper that `gmux <cmd>` uses, so attach feels the same as an
 // original launch: transparent I/O, SIGWINCH → resize, SIGHUP →
 // detach (session keeps running), Ctrl-C goes to the child.
-func cmdAttach(ref, host string) int {
-	sess, err := resolveSession(ref, host)
+func cmdAttach(ref string) int {
+	sess, err := resolveSession(ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
@@ -41,7 +41,7 @@ func cmdAttach(ref, host string) int {
 	}
 
 	if !localterm.IsInteractive() {
-		fmt.Fprintln(os.Stderr, "gmux: --attach requires an interactive terminal")
+		fmt.Fprintln(os.Stderr, "gmux: attach requires an interactive terminal")
 		return 1
 	}
 
@@ -161,4 +161,3 @@ func sendResize(ctx context.Context, conn *websocket.Conn, cols, rows uint16) {
 	}
 	_ = conn.Write(ctx, websocket.MessageText, data)
 }
-

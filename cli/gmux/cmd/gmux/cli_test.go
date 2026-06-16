@@ -1,358 +1,281 @@
 package main
 
 import (
-	"reflect"
+	"strings"
 	"testing"
 )
 
-// TestParseCLI covers every distinct dispatch path the user can reach.
-// We check the returned mode, the relevant flag values, and the
-// positional remainder — these three together describe what main.go
-// will actually do.
+// TestParseCLI exercises the verb-first grammar (ADR 0009): each verb,
+// the explicit run form, and the daemon-internal forms.
 func TestParseCLI(t *testing.T) {
 	tests := []struct {
 		name     string
 		args     []string
 		wantMode mode
-		wantRest []string
-		check    func(t *testing.T, f *flags)
+		check    func(t *testing.T, c *command)
 	}{
-		// ── Run-mode shapes ─────────────────────────────────────────
-		{
-			name:     "bare gmux opens the UI",
-			args:     nil,
-			wantMode: modeUI,
-		},
-		{
-			name:     "plain command is a run",
-			args:     []string{"pytest"},
-			wantMode: modeRun,
-			wantRest: []string{"pytest"},
-		},
-		{
-			name:     "command keeps its own flags",
-			args:     []string{"pytest", "--watch", "-x"},
-			wantMode: modeRun,
-			wantRest: []string{"pytest", "--watch", "-x"},
-		},
-		{
-			name:     "double-dash shields a dash-prefixed command",
-			args:     []string{"--", "--weird-binary", "arg"},
-			wantMode: modeRun,
-			wantRest: []string{"--weird-binary", "arg"},
-		},
-		{
-			name:     "no-attach carries into run mode",
-			args:     []string{"--no-attach", "pytest", "--watch"},
-			wantMode: modeRun,
-			wantRest: []string{"pytest", "--watch"},
-			check: func(t *testing.T, f *flags) {
-				if !f.noAttach {
-					t.Error("noAttach should be true")
-				}
-			},
-		},
+		{name: "no args prints help", args: nil, wantMode: modeHelp},
+		{name: "help verb", args: []string{"help"}, wantMode: modeHelp},
+		{name: "help with trailing word is lenient", args: []string{"help", "send"}, wantMode: modeHelp},
+		{name: "version", args: []string{"version"}, wantMode: modeVersion},
+		{name: "open", args: []string{"open"}, wantMode: modeOpen},
 
-		// ── Management shapes ───────────────────────────────────────
-		{
-			name:     "--list has no positionals",
-			args:     []string{"--list"},
-			wantMode: modeList,
-		},
-		{
-			name:     "-l is the short form of --list",
-			args:     []string{"-l"},
-			wantMode: modeList,
-		},
-		{
-			// --all extends --list across peers. Without it, the new
-			// default keeps --list local-only (the one breaking
-			// change in this milestone).
-			name:     "--list --all dispatches to list with f.all set",
-			args:     []string{"--list", "--all"},
-			wantMode: modeList,
-		},
-		{
-			// --host scopes a session action to a peer. Co-existing
-			// with the positional id, the resolver reconciles them.
-			name:     "--kill --host=peer routes",
-			args:     []string{"--kill", "--host=konyvtar", "sess-abcd"},
-			wantMode: modeKill,
-			wantRest: []string{"sess-abcd"},
-		},
-		{
-			name:     "--attach takes one session id",
-			args:     []string{"--attach", "sess-abcd"},
-			wantMode: modeAttach,
-			wantRest: []string{"sess-abcd"},
-		},
-		{
-			name:     "--kill takes one session id",
-			args:     []string{"--kill", "sess-abcd"},
-			wantMode: modeKill,
-			wantRest: []string{"sess-abcd"},
-		},
-		{
-			name:     "--tail takes a count and a session id",
-			args:     []string{"--tail", "100", "sess-abcd"},
-			wantMode: modeTail,
-			wantRest: []string{"sess-abcd"},
-			check: func(t *testing.T, f *flags) {
-				if f.tail != 100 {
-					t.Errorf("tail = %d, want 100", f.tail)
+		{name: "run via --", args: []string{"--", "pytest", "-q"}, wantMode: modeRun,
+			check: func(t *testing.T, c *command) {
+				if strings.Join(c.runArgs, " ") != "pytest -q" {
+					t.Errorf("runArgs = %v", c.runArgs)
 				}
-			},
-		},
-		{
-			name:     "--send with inline text",
-			args:     []string{"--send", "sess-abcd", "hello"},
-			wantMode: modeSend,
-			wantRest: []string{"sess-abcd", "hello"},
-		},
-		{
-			name:     "--send without text reads stdin",
-			args:     []string{"--send", "sess-abcd"},
-			wantMode: modeSend,
-			wantRest: []string{"sess-abcd"},
-			check: func(t *testing.T, f *flags) {
-				if f.noSubmit {
-					t.Errorf("noSubmit = true, want false (submit-by-default)")
+				if c.detach {
+					t.Error("detach should be false")
 				}
-			},
-		},
-		{
-			name:     "--send --no-submit suppresses the submit",
-			args:     []string{"--send", "--no-submit", "sess-abcd", "draft"},
-			wantMode: modeSend,
-			wantRest: []string{"sess-abcd", "draft"},
-			check: func(t *testing.T, f *flags) {
-				if !f.noSubmit {
-					t.Errorf("noSubmit = false, want true")
+			}},
+		{name: "detached run", args: []string{"-d", "--", "server"}, wantMode: modeRun,
+			check: func(t *testing.T, c *command) {
+				if !c.detach {
+					t.Error("detach should be true")
 				}
-			},
-		},
-		{
-			name:     "--wait takes a session id",
-			args:     []string{"--wait", "sess-abcd"},
-			wantMode: modeWait,
-			wantRest: []string{"sess-abcd"},
-			check: func(t *testing.T, f *flags) {
-				if f.waitTimeout != 0 {
-					t.Errorf("waitTimeout = %d, want 0", f.waitTimeout)
+				if strings.Join(c.runArgs, " ") != "server" {
+					t.Errorf("runArgs = %v", c.runArgs)
 				}
-			},
-		},
-		{
-			name:     "--wait with --timeout",
-			args:     []string{"--wait", "--timeout", "30", "sess-abcd"},
-			wantMode: modeWait,
-			wantRest: []string{"sess-abcd"},
-			check: func(t *testing.T, f *flags) {
-				if f.waitTimeout != 30 {
-					t.Errorf("waitTimeout = %d, want 30", f.waitTimeout)
+			}},
+		{name: "detach long form", args: []string{"--detach", "--", "x"}, wantMode: modeRun,
+			check: func(t *testing.T, c *command) {
+				if !c.detach {
+					t.Error("detach should be true")
 				}
-			},
-		},
-		// Management modes accept flags in any order: there's no
-		// wrapped child command at the end, so the POSIX runner
-		// stop-at-first-positional rule that run mode needs would only
-		// turn `gmux --wait <id> --timeout 60` into a silent foot-trap.
-		// These cases pin the lenient parsing for each management
-		// action that takes a flag besides its mode flag.
-		{
-			name:     "--wait accepts --timeout after the id",
-			args:     []string{"--wait", "sess-abcd", "--timeout", "30"},
-			wantMode: modeWait,
-			wantRest: []string{"sess-abcd"},
-			check: func(t *testing.T, f *flags) {
-				if f.waitTimeout != 30 {
-					t.Errorf("waitTimeout = %d, want 30", f.waitTimeout)
+			}},
+		{name: "child flags after -- are not gmux flags", args: []string{"--", "pi", "--all", "prompt"}, wantMode: modeRun,
+			check: func(t *testing.T, c *command) {
+				if strings.Join(c.runArgs, " ") != "pi --all prompt" {
+					t.Errorf("runArgs = %v, child flags must pass through", c.runArgs)
 				}
-			},
-		},
-		{
-			name:     "--send accepts --no-submit after the id",
-			args:     []string{"--send", "sess-abcd", "--no-submit", "text"},
-			wantMode: modeSend,
-			wantRest: []string{"sess-abcd", "text"},
-			check: func(t *testing.T, f *flags) {
-				if !f.noSubmit {
-					t.Errorf("noSubmit = false, want true")
+			}},
+
+		{name: "ls", args: []string{"ls"}, wantMode: modeList},
+		{name: "ls --all --json", args: []string{"ls", "--all", "--json"}, wantMode: modeList,
+			check: func(t *testing.T, c *command) {
+				if !c.all || !c.json {
+					t.Errorf("all=%v json=%v, want both true", c.all, c.json)
 				}
-			},
-		},
-		{
-			name:     "--send accepts --no-submit after both positionals",
-			args:     []string{"--send", "sess-abcd", "text", "--no-submit"},
-			wantMode: modeSend,
-			wantRest: []string{"sess-abcd", "text"},
-			check: func(t *testing.T, f *flags) {
-				if !f.noSubmit {
-					t.Errorf("noSubmit = false, want true")
+			}},
+
+		{name: "attach", args: []string{"attach", "abc"}, wantMode: modeAttach,
+			check: func(t *testing.T, c *command) {
+				if c.ref != "abc" {
+					t.Errorf("ref = %q", c.ref)
 				}
-			},
-		},
-		// `gmux --send <id> -- <text>` is the documented escape for
-		// inline text that starts with dashes. The lenient flag parser
-		// must respect `--` as a hard terminator, otherwise text like
-		// `--no-submit` (a real gmux flag name) gets silently swallowed
-		// as a flag and never reaches the agent. This is the case where
-		// being too lenient would corrupt user data, so it gets a test
-		// of its own rather than living inside the table.
-		{
-			name:     "--send respects -- as a flag terminator for inline text",
-			args:     []string{"--send", "sess-abcd", "--", "--no-submit"},
-			wantMode: modeSend,
-			wantRest: []string{"sess-abcd", "--no-submit"},
-			check: func(t *testing.T, f *flags) {
-				if f.noSubmit {
-					t.Errorf("noSubmit = true, want false: -- should have stopped flag parsing so --no-submit is text, not a flag")
+			}},
+		{name: "kill with peer ref", args: []string{"kill", "abc@laptop"}, wantMode: modeKill,
+			check: func(t *testing.T, c *command) {
+				if c.ref != "abc@laptop" {
+					t.Errorf("ref = %q", c.ref)
 				}
-			},
-		},
+			}},
+
+		{name: "tail defaults to 100 lines", args: []string{"tail", "abc"}, wantMode: modeTail,
+			check: func(t *testing.T, c *command) {
+				if c.tailLines != 100 || c.raw {
+					t.Errorf("tailLines=%d raw=%v", c.tailLines, c.raw)
+				}
+			}},
+		{name: "tail -n and --raw", args: []string{"tail", "-n", "500", "--raw", "abc"}, wantMode: modeTail,
+			check: func(t *testing.T, c *command) {
+				if c.tailLines != 500 || !c.raw {
+					t.Errorf("tailLines=%d raw=%v", c.tailLines, c.raw)
+				}
+			}},
+
+		{name: "send text + Enter", args: []string{"send", "abc", "pytest -q", "Enter"}, wantMode: modeSend,
+			check: func(t *testing.T, c *command) {
+				if c.ref != "abc" || c.sendText == nil || *c.sendText != "pytest -q" {
+					t.Errorf("ref=%q text=%v", c.ref, c.sendText)
+				}
+				if len(c.sendKeys) != 1 || c.sendKeys[0] != "Enter" {
+					t.Errorf("keys = %v", c.sendKeys)
+				}
+			}},
+		{name: "send keys only", args: []string{"send", "abc", "C-c"}, wantMode: modeSend,
+			check: func(t *testing.T, c *command) {
+				if c.sendText != nil {
+					t.Errorf("text should be nil, got %v", *c.sendText)
+				}
+				if len(c.sendKeys) != 1 || c.sendKeys[0] != "C-c" {
+					t.Errorf("keys = %v", c.sendKeys)
+				}
+			}},
+		{name: "send stdin (ref only)", args: []string{"send", "abc"}, wantMode: modeSend,
+			check: func(t *testing.T, c *command) {
+				if c.sendText != nil || len(c.sendKeys) != 0 {
+					t.Errorf("expected stdin form: text=%v keys=%v", c.sendText, c.sendKeys)
+				}
+			}},
+
+		{name: "send-keys tmux compat", args: []string{"send-keys", "-t", "abc", "C-c"}, wantMode: modeSendKeys,
+			check: func(t *testing.T, c *command) {
+				if c.ref != "abc" || len(c.keys) != 1 || c.keys[0] != "C-c" {
+					t.Errorf("ref=%q keys=%v", c.ref, c.keys)
+				}
+			}},
+		{name: "send-keys literal", args: []string{"send-keys", "-t", "abc", "-l", "hello"}, wantMode: modeSendKeys,
+			check: func(t *testing.T, c *command) {
+				if !c.keysLiteral {
+					t.Error("keysLiteral should be true")
+				}
+			}},
+
+		{name: "wait idle default", args: []string{"wait", "abc"}, wantMode: modeWait},
+		{name: "wait --timeout", args: []string{"wait", "--timeout", "30", "abc"}, wantMode: modeWait,
+			check: func(t *testing.T, c *command) {
+				if c.timeout != 30 || c.ref != "abc" {
+					t.Errorf("timeout=%d ref=%q", c.timeout, c.ref)
+				}
+			}},
+		{name: "wait flags after positional", args: []string{"wait", "abc", "--timeout", "5"}, wantMode: modeWait,
+			check: func(t *testing.T, c *command) {
+				if c.timeout != 5 || c.ref != "abc" {
+					t.Errorf("timeout=%d ref=%q", c.timeout, c.ref)
+				}
+			}},
+
+		{name: "daemon status", args: []string{"daemon", "status"}, wantMode: modeDaemon,
+			check: func(t *testing.T, c *command) {
+				if c.daemonSub != "status" {
+					t.Errorf("daemonSub = %q", c.daemonSub)
+				}
+			}},
+		{name: "auth", args: []string{"auth"}, wantMode: modeAuth},
+		{name: "remote", args: []string{"remote"}, wantMode: modeRemote},
+
+		{name: "internal __run with directives", args: []string{"__run", "--resume-id=sess-1", "--initial-cols=80", "--", "pi"}, wantMode: modeRun,
+			check: func(t *testing.T, c *command) {
+				if c.resumeID != "sess-1" || c.initialCols != 80 {
+					t.Errorf("resumeID=%q cols=%d", c.resumeID, c.initialCols)
+				}
+				if strings.Join(c.runArgs, " ") != "pi" {
+					t.Errorf("runArgs = %v", c.runArgs)
+				}
+			}},
+		{name: "internal __dump-env", args: []string{"__dump-env"}, wantMode: modeDumpEnv},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			m, f, rest, err := parseCLI(tc.args)
+			c, err := parseCLI(tc.args)
 			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+				t.Fatalf("parseCLI(%v) unexpected error: %v", tc.args, err)
 			}
-			if m != tc.wantMode {
-				t.Errorf("mode = %v, want %v", m, tc.wantMode)
+			if c.mode != tc.wantMode {
+				t.Fatalf("mode = %v, want %v", c.mode, tc.wantMode)
 			}
-			if !reflect.DeepEqual(rest, tc.wantRest) {
-				// Treat nil and empty slice as equivalent for readability.
-				if !(len(rest) == 0 && len(tc.wantRest) == 0) {
-					t.Errorf("rest = %v, want %v", rest, tc.wantRest)
-				}
-			}
-			if tc.check != nil && f != nil {
-				tc.check(t, f)
+			if tc.check != nil {
+				tc.check(t, c)
 			}
 		})
 	}
 }
 
-// TestRunModeKeepsPOSIXRunnerSemantics pins the contract that flags
-// after the wrapped command go to the child, not to gmux. This is
-// the load-bearing case for run mode and the reason management modes
-// (which lack a wrapped command) get lenient parsing while run mode
-// keeps the strict stop-at-first-positional behavior.
-func TestParseCLIDaemonDirectives(t *testing.T) {
-	t.Run("resume-id + size hints are exposed as flags in run mode", func(t *testing.T) {
-		m, f, rest, err := parseCLI([]string{
-			"--resume-id=sess-abc",
-			"--initial-cols=142",
-			"--initial-rows=47",
-			"claude", "--continue",
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if m != modeRun {
-			t.Errorf("mode = %v, want modeRun", m)
-		}
-		if f.resumeID != "sess-abc" || f.initialCols != 142 || f.initialRows != 47 {
-			t.Errorf("directives not captured: resume=%q cols=%d rows=%d", f.resumeID, f.initialCols, f.initialRows)
-		}
-		wantRest := []string{"claude", "--continue"}
-		if len(rest) != 2 || rest[0] != wantRest[0] || rest[1] != wantRest[1] {
-			t.Errorf("rest = %v, want %v", rest, wantRest)
-		}
-	})
-
-	t.Run("directives do not leak from a child command's own argv", func(t *testing.T) {
-		// Defends the daemon↔runner contract: a child command that
-		// happens to use the same flag names (`weirdcli
-		// --resume-id=...`) must not have its flag consumed by gmux.
-		// POSIX runner semantics (stop at first positional) is what
-		// makes this safe; the test pins it.
-		_, f, rest, err := parseCLI([]string{"weirdcli", "--resume-id=evil"})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if f.resumeID != "" {
-			t.Errorf("resumeID should not be set from child argv, got %q", f.resumeID)
-		}
-		if len(rest) != 2 || rest[0] != "weirdcli" || rest[1] != "--resume-id=evil" {
-			t.Errorf("rest should preserve child argv verbatim, got %v", rest)
-		}
-	})
-}
-
-func TestRunModeKeepsPOSIXRunnerSemantics(t *testing.T) {
-	// `gmux pi --some-pi-flag` — --some-pi-flag must reach pi as part
-	// of the command, not be parsed as an unknown gmux flag.
-	_, _, rest, err := parseCLI([]string{"pi", "--some-pi-flag", "prompt"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := []string{"pi", "--some-pi-flag", "prompt"}
-	if !reflect.DeepEqual(rest, want) {
-		t.Errorf("rest = %v, want %v", rest, want)
-	}
-}
-
-// TestParseCLIErrors asserts that every user-facing invariant the CLI
-// promises is actually enforced. We don't pin error strings (those are
-// free to improve), only that an error is returned in each case.
 func TestParseCLIErrors(t *testing.T) {
-	invalid := [][]string{
-		{"--list", "extra"},                      // --list takes no args
-		{"--attach"},                             // --attach needs an id
-		{"--attach", "a", "b"},                   // --attach takes exactly one id
-		{"--kill"},                               // --kill needs an id
-		{"--tail", "100"},                        // --tail needs an id
-		{"--tail", "0", "sess-a"},                // --tail needs a positive count
-		{"--send"},                               // --send needs an id
-		{"--send", "a", "b", "c"},                // --send takes at most two args
-		{"--list", "--attach", "sess-a"},         // mutually exclusive actions
-		{"--kill", "--attach", "sess-a"},         // mutually exclusive actions
-		{"--send", "--kill", "sess-a"},           // mutually exclusive actions
-		{"--no-attach"},                          // --no-attach needs a command
-		{"--no-attach", "--list"},                // --no-attach doesn't make sense with --list
-		{"--no-attach", "--attach", "sess-a"},
-		{"--no-attach", "--send", "sess-a", "x"}, // --no-attach doesn't make sense with --send
-		{"--no-submit", "sess-a"},                // --no-submit only applies with --send
-		{"--no-submit", "--list"},                // --no-submit only applies with --send
-		{"--wait"},                               // --wait needs an id
-		{"--wait", "a", "b"},                     // --wait takes exactly one id
-		{"--wait", "--send", "sess-a"},           // mutually exclusive
-		{"--no-attach", "--wait", "sess-a"},      // --no-attach has no effect with --wait
-		{"--timeout", "30", "sess-a"},            // --timeout only applies with --wait
-		{"--wait", "--timeout", "-1", "sess-a"},  // --timeout must be non-negative
-		{"--all", "--send", "sess-a", "x"},        // --all is discovery-only
-		{"--all", "--kill", "sess-a"},             // --all is discovery-only
-		{"--host=konyvtar", "--all", "--list"},    // --host and --all are mutually exclusive
-		{"--host=konyvtar", "--wait", "sess-a"},   // --wait + --host not yet supported
-		{"--host=konyvtar", "fish"},               // remote create deferred
-		{"--resume-id=sess-1", "--list"},          // directives are run-mode only
-		{"--initial-cols=80", "--kill", "sess-a"}, // directives are run-mode only
-		{"--initial-rows=24", "--attach", "sess-a"}, // directives are run-mode only
-		{"--initial-cols=-1", "claude"},           // size must be non-negative
-		{"--initial-rows=-1", "claude"},
+	bad := [][]string{
+		{"-d"},                     // detach without command
+		{"-d", "ls"},               // detach only pairs with --
+		{"--"},                     // run with no command
+		{"open", "extra"},          // open takes no args
+		{"attach"},                 // missing id
+		{"attach", "a", "b"},       // too many
+		{"tail"},                   // missing id
+		{"tail", "-n", "0", "abc"}, // non-positive count
+		{"wait"},                   // missing id
+		{"send-keys", "C-c"},     // missing -t
+		{"daemon"},               // missing subcommand
+		{"daemon", "frobnicate"}, // unknown subcommand
+		{"ls", "stray"},          // ls takes no positional
 	}
-
-	for _, args := range invalid {
-		t.Run(joinArgs(args), func(t *testing.T) {
-			if _, _, _, err := parseCLI(args); err == nil {
-				t.Errorf("expected error for %v", args)
+	for _, args := range bad {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			if _, err := parseCLI(args); err == nil {
+				t.Errorf("parseCLI(%v) = nil error, want error", args)
 			}
 		})
 	}
 }
 
-func joinArgs(args []string) string {
-	out := ""
-	for i, a := range args {
-		if i > 0 {
-			out += " "
-		}
-		out += a
+// TestParseCLIMigrationShim checks that removed pre-2.0 forms and the
+// dropped bare-command shorthand produce guidance errors, not silent
+// behavior (ADR 0009 error-only shim).
+func TestParseCLIMigrationShim(t *testing.T) {
+	cases := []struct {
+		args     []string
+		contains string
+	}{
+		{[]string{"--list"}, "gmux ls"},
+		{[]string{"-l"}, "gmux ls"},
+		{[]string{"--kill", "abc"}, "gmux kill"},
+		{[]string{"--no-attach", "x"}, "gmux -d"},
+		{[]string{"--host=laptop"}, "@<peer>"},
+		{[]string{"pytest", "-q"}, "gmux -- pytest"},
 	}
-	if out == "" {
-		return "(no args)"
+	for _, tc := range cases {
+		t.Run(strings.Join(tc.args, "_"), func(t *testing.T) {
+			_, err := parseCLI(tc.args)
+			if err == nil {
+				t.Fatalf("parseCLI(%v) = nil error, want migration error", tc.args)
+			}
+			if !strings.Contains(err.Error(), tc.contains) {
+				t.Errorf("error %q does not mention %q", err.Error(), tc.contains)
+			}
+		})
 	}
-	return out
+}
+
+func TestDidYouMean(t *testing.T) {
+	if got := didYouMean("opn"); got != "open" {
+		t.Errorf("didYouMean(opn) = %q, want open", got)
+	}
+	if got := didYouMean("klil"); got != "" { // two edits away
+		t.Errorf("didYouMean(klil) = %q, want empty", got)
+	}
+}
+
+// TestReexecRunArgsRoundTrips guards the regression where detached runs
+// re-execed via the removed bare-command shorthand. The argv produced for
+// the detached child must parse back to the same run command, including
+// when the command's own args look like gmux flags.
+func TestReexecRunArgsRoundTrips(t *testing.T) {
+	cases := [][]string{
+		{"pytest", "-q"},
+		{"pi", "--all", "a prompt"},
+		{"bash", "-c", "echo hi; sleep 1"},
+	}
+	for _, cmd := range cases {
+		t.Run(strings.Join(cmd, "_"), func(t *testing.T) {
+			c, err := parseCLI(reexecRunArgs(cmd))
+			if err != nil {
+				t.Fatalf("parseCLI(reexec %v) error: %v", cmd, err)
+			}
+			if c.mode != modeRun {
+				t.Fatalf("mode = %v, want modeRun", c.mode)
+			}
+			if strings.Join(c.runArgs, "\x00") != strings.Join(cmd, "\x00") {
+				t.Errorf("runArgs = %v, want %v", c.runArgs, cmd)
+			}
+		})
+	}
+}
+
+// TestUnknownCommandAlwaysShowsRunHint locks the rule that a bare unknown
+// word always surfaces the `gmux -- ...` run form, even when it is close
+// to a verb. `sed` is a real program one letter from `send`; suggesting
+// only the verb would mislead a user who meant to run sed.
+func TestUnknownCommandAlwaysShowsRunHint(t *testing.T) {
+	_, err := parseCLI([]string{"sed", "-i", "s/a/b/"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "gmux -- sed -i s/a/b/") {
+		t.Errorf("missing run hint in %q", msg)
+	}
+	if !strings.Contains(msg, "send") {
+		t.Errorf("missing verb suggestion in %q", msg)
+	}
 }

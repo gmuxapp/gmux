@@ -6,7 +6,7 @@ import (
 	"os"
 )
 
-// dumpEnvFD is the file descriptor gmuxd hands to the `gmux --dump-env`
+// dumpEnvFD is the file descriptor gmuxd hands to the `gmux __dump-env`
 // probe (via cmd.ExtraFiles[0], which the child sees as fd 3). Writing
 // the environment to a dedicated fd — rather than stdout — keeps the
 // payload clean of any banner/prompt noise a login shell's rc files
@@ -16,7 +16,7 @@ const dumpEnvFD = 3
 // dumpEnv writes os.Environ() to fd 3 as NUL-terminated entries, then
 // exits. It is the inner command of gmuxd's env-capture probe
 //
-//	$SHELL -l -i -c '<gmux> --dump-env'
+//	$SHELL -l -i -c '<gmux> __dump-env'
 //
 // The login shell sources the user's dotfiles, so the environment we
 // observe here is the freshly-sourced one gmuxd wants to launch the
@@ -29,13 +29,13 @@ const dumpEnvFD = 3
 func dumpEnv() int {
 	f := os.NewFile(dumpEnvFD, "gmux-dump-env")
 	if f == nil {
-		log.Printf("--dump-env: fd %d not available", dumpEnvFD)
+		log.Printf("__dump-env: fd %d not available", dumpEnvFD)
 		return 1
 	}
 	defer f.Close()
 
 	if err := writeNulEnv(f, os.Environ()); err != nil {
-		log.Printf("--dump-env: write fd %d: %v", dumpEnvFD, err)
+		log.Printf("__dump-env: write fd %d: %v", dumpEnvFD, err)
 		return 1
 	}
 	return 0

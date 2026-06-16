@@ -10,7 +10,7 @@ description: Common problems and how to fix them.
 **Check the log:**
 
 ```bash
-cat $(gmuxd log-path)
+cat $(gmux daemon log-path)
 ```
 
 Common causes:
@@ -25,13 +25,13 @@ Common causes:
 gmuxd run
 ```
 
-This runs the daemon in the foreground so you can see errors directly. Use `gmuxd start` for normal background operation.
+This runs the daemon in the foreground so you can see errors directly. Use `gmux daemon start` for normal background operation.
 
 ## Sessions don't appear in the sidebar
 
 - **No project configured.** gmux discovers session groups but doesn't add them to the sidebar automatically. Click **Add project** in the empty state, or the **Manage projects** button. Unmatched sessions show a badge count on the manage button.
 - **Session exited immediately.** If the command exits before gmuxd discovers it, it won't appear. Check if the command works when run directly (outside of `gmux`).
-- **Different daemon.** If you have multiple gmux installs (e.g. Homebrew and a dev build), `gmux` and `gmuxd` might not be talking to the same instance. Run `gmuxd status` to check which binary is running.
+- **Different daemon.** If you have multiple gmux installs (e.g. Homebrew and a dev build), `gmux` and `gmuxd` might not be talking to the same instance. Run `gmux daemon status` to check which binary is running.
 
 ## "outdated" badge on a session
 
@@ -69,4 +69,4 @@ After updating, the old daemon is replaced automatically:
 - **`curl | sh` installer**: restarts the daemon if it was running
 - **Manual installs**: the next `gmux` invocation detects the version mismatch and replaces the daemon
 
-To force a restart manually: `gmuxd restart` (or just `gmuxd start`, which replaces any running instance).
+To force a restart manually: `gmux daemon restart` (or just `gmux daemon start`, which replaces any running instance).

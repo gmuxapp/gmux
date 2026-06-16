@@ -4,6 +4,11 @@
 **Date:** 2026-05-17
 **Related:** gmuxapp/gmux#221 (peer --send/--tail), gmuxapp/gmux#222 (tail on dead sessions)
 
+> **Note (2026-06, CLI 2.0):** The *routing* decision below stands — the CLI
+> still speaks one gmuxd HTTP API. Only the command **syntax** in the examples
+> is pre-2.0 (`--list`/`--tail`/`--send`/…); see ADR 0009 for the current
+> verb-first grammar (`gmux ls`/`gmux tail`/`gmux send`).
+
 ## Context
 
 Until this change, four of the CLI's session subcommands split cleanly

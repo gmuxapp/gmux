@@ -34,7 +34,7 @@ func TestMatchSession(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := matchSession(sessions, tc.ref, "")
+			got, err := matchSession(sessions, tc.ref)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -54,7 +54,7 @@ func TestMatchSessionAmbiguous(t *testing.T) {
 		{ID: "sess-abcd1234", Slug: "fix-auth"},
 		{ID: "sess-abcd5678", Slug: "fix-bug"},
 	}
-	_, err := matchSession(sessions, "abcd", "")
+	_, err := matchSession(sessions, "abcd")
 	if err == nil {
 		t.Fatal("expected ambiguous error")
 	}
@@ -75,7 +75,7 @@ func TestMatchSessionExactBeatsPrefix(t *testing.T) {
 		{ID: "sess-abcd"},     // exact match for short form "abcd"
 		{ID: "sess-abcdef01"}, // also starts with "abcd"
 	}
-	got, err := matchSession(sessions, "abcd", "")
+	got, err := matchSession(sessions, "abcd")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -89,13 +89,13 @@ func TestMatchSessionExactBeatsPrefix(t *testing.T) {
 // random one.
 func TestMatchSessionNoMatch(t *testing.T) {
 	sessions := []cliSession{{ID: "sess-abcd1234"}}
-	if _, err := matchSession(sessions, "zzzz", ""); err == nil {
+	if _, err := matchSession(sessions, "zzzz"); err == nil {
 		t.Error("expected error for non-matching ref")
 	}
-	if _, err := matchSession(nil, "anything", ""); err == nil {
+	if _, err := matchSession(nil, "anything"); err == nil {
 		t.Error("expected error when session list is empty")
 	}
-	if _, err := matchSession(sessions, "", ""); err == nil {
+	if _, err := matchSession(sessions, ""); err == nil {
 		t.Error("expected error for empty ref")
 	}
 }
@@ -124,45 +124,60 @@ func TestShortID(t *testing.T) {
 // they construct the body differently and the carriage-return logic
 // has to wrap both.
 func TestBuildSendBody(t *testing.T) {
+	noStdin := "\x00NIL" // sentinel: this case passes a nil stdin reader
 	tests := []struct {
-		name     string
-		text     *string
-		stdin    string
-		noSubmit bool
-		want     string
+		name  string
+		text  *string
+		keys  []string
+		stdin string // noStdin → nil reader (the tty / no-pipe case)
+		want  string
 	}{
 		{
-			name: "inline text submits with trailing \\r",
-			text: stringPtr("hello"),
-			want: "hello\r",
+			name:  "text without keys sends verbatim, no submit",
+			text:  stringPtr("hello"),
+			stdin: noStdin,
+			want:  "hello",
 		},
 		{
-			name:     "inline text with --no-submit sends verbatim",
-			text:     stringPtr("hello"),
-			noSubmit: true,
-			want:     "hello",
+			name:  "text + Enter submits with trailing \\r",
+			text:  stringPtr("hello"),
+			keys:  []string{"Enter"},
+			stdin: noStdin,
+			want:  "hello\r",
 		},
 		{
-			name:  "stdin submits with trailing \\r",
+			name:  "text + C-c appends the control byte",
+			text:  stringPtr("hello"),
+			keys:  []string{"C-c"},
+			stdin: noStdin,
+			want:  "hello\x03",
+		},
+		{
+			name:  "keys only at a tty (nil stdin) sends just the keys",
+			keys:  []string{"Escape", "Enter"},
+			stdin: noStdin,
+			want:  "\x1b\r",
+		},
+		{
+			name:  "piped stdin, no keys, verbatim",
 			stdin: "prompt body\nwith newline\n",
-			want:  "prompt body\nwith newline\n\r",
+			want:  "prompt body\nwith newline\n",
 		},
 		{
-			name:     "stdin with --no-submit preserves trailing newline only",
-			stdin:    "prompt body\nwith newline\n",
-			noSubmit: true,
-			want:     "prompt body\nwith newline\n",
-		},
-		{
-			name: "empty inline text still submits an empty line",
-			text: stringPtr(""),
-			want: "\r",
+			name:  "piped stdin composes with trailing Enter (no silent drop)",
+			keys:  []string{"Enter"},
+			stdin: "hi",
+			want:  "hi\r",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			body := buildSendBody(tc.text, strings.NewReader(tc.stdin), tc.noSubmit)
+			var stdin io.Reader
+			if tc.stdin != noStdin {
+				stdin = strings.NewReader(tc.stdin)
+			}
+			body := buildSendBody(tc.text, tc.keys, stdin)
 			got, err := io.ReadAll(body)
 			if err != nil {
 				t.Fatalf("read body: %v", err)
@@ -185,7 +200,7 @@ func TestMatchSessionStrictLocalDefault(t *testing.T) {
 	sessions := []cliSession{
 		{ID: "sess-abcd1234", Peer: "konyvtar"},
 	}
-	_, err := matchSession(sessions, "abcd1234", "")
+	_, err := matchSession(sessions, "abcd1234")
 	if err == nil {
 		t.Fatal("strict-local lookup should not see a peer-only session")
 	}
@@ -200,7 +215,7 @@ func TestMatchSessionFriendlyHintForPeerOnlyMatch(t *testing.T) {
 	sessions := []cliSession{
 		{ID: "sess-abcd1234", Peer: "konyvtar"},
 	}
-	_, err := matchSession(sessions, "abcd1234", "")
+	_, err := matchSession(sessions, "abcd1234")
 	if err == nil {
 		t.Fatal("expected error for peer-only short id without --host")
 	}
@@ -217,60 +232,11 @@ func TestMatchSessionFriendlyHintForPeerOnlyMatch(t *testing.T) {
 // action subcommands.
 func TestMatchSessionAtSuffixRoutes(t *testing.T) {
 	sessions := []cliSession{
-		{ID: "sess-abcd1234"},                       // local
-		{ID: "sess-abcd1234", Peer: "konyvtar"},     // namespaced collision
+		{ID: "sess-abcd1234"},                   // local
+		{ID: "sess-abcd1234", Peer: "konyvtar"}, // namespaced collision
 		{ID: "sess-ef019283", Peer: "bespin"},
 	}
-	got, err := matchSession(sessions, "abcd1234@konyvtar", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Peer != "konyvtar" {
-		t.Errorf("expected konyvtar session, got peer=%q", got.Peer)
-	}
-}
-
-// TestMatchSessionHostFlag exercises the equivalence between
-// --host=peer and @peer. Both should resolve to the same session;
-// otherwise the design's "two forms, same meaning" claim is wrong.
-func TestMatchSessionHostFlag(t *testing.T) {
-	sessions := []cliSession{
-		{ID: "sess-abcd1234", Peer: "konyvtar"},
-	}
-	got, err := matchSession(sessions, "abcd1234", "konyvtar")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Peer != "konyvtar" {
-		t.Errorf("expected konyvtar session, got peer=%q", got.Peer)
-	}
-}
-
-// TestMatchSessionHostAndSuffixConflict guards the contract that a
-// user can't address two different hosts in one invocation. Silent
-// preference for either side would be a footgun.
-func TestMatchSessionHostAndSuffixConflict(t *testing.T) {
-	sessions := []cliSession{
-		{ID: "sess-abcd1234", Peer: "konyvtar"},
-	}
-	_, err := matchSession(sessions, "abcd1234@bespin", "konyvtar")
-	if err == nil {
-		t.Fatal("expected error when @suffix and --host disagree")
-	}
-	if !strings.Contains(err.Error(), "konyvtar") || !strings.Contains(err.Error(), "bespin") {
-		t.Errorf("error should mention both hosts, got: %s", err.Error())
-	}
-}
-
-// TestMatchSessionHostAndSuffixAgreeing covers the redundancy case:
-// `--host=konyvtar abcd@konyvtar` should resolve cleanly rather than
-// be rejected as conflicting. People copy-paste IDs that already
-// carry the @suffix.
-func TestMatchSessionHostAndSuffixAgreeing(t *testing.T) {
-	sessions := []cliSession{
-		{ID: "sess-abcd1234", Peer: "konyvtar"},
-	}
-	got, err := matchSession(sessions, "abcd1234@konyvtar", "konyvtar")
+	got, err := matchSession(sessions, "abcd1234@konyvtar")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -289,7 +255,7 @@ func TestMatchSessionEmptyHostSuffixRejected(t *testing.T) {
 		{ID: "sess-abcd1234"},                   // local
 		{ID: "sess-abcd1234", Peer: "konyvtar"}, // peer
 	}
-	_, err := matchSession(sessions, "abcd1234@", "")
+	_, err := matchSession(sessions, "abcd1234@")
 	if err == nil {
 		t.Fatal("expected error for trailing @ with empty host suffix")
 	}
@@ -314,7 +280,7 @@ func TestMatchSessionMultiplePeerMatchesGetCandidateList(t *testing.T) {
 		{ID: "sess-abcd1234", Peer: "konyvtar"},
 		{ID: "sess-ab98ef76", Peer: "bespin"},
 	}
-	_, err := matchSession(sessions, "ab", "")
+	_, err := matchSession(sessions, "ab")
 	if err == nil {
 		t.Fatal("expected error for prefix matching multiple peer sessions")
 	}
@@ -323,5 +289,29 @@ func TestMatchSessionMultiplePeerMatchesGetCandidateList(t *testing.T) {
 	// pick the right one and retypes.
 	if !strings.Contains(msg, "abcd1234@konyvtar") || !strings.Contains(msg, "ab98ef76@bespin") {
 		t.Errorf("error should list both qualified candidates, got: %s", msg)
+	}
+}
+
+func TestStripANSI(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain text untouched", "hello world\n", "hello world\n"},
+		{"CSI color codes removed", "\x1b[31mred\x1b[0m text", "red text"},
+		{"cursor-move CSI removed", "a\x1b[2Kb\x1b[1;5Hc", "abc"},
+		{"OSC title (BEL-terminated) removed", "\x1b]0;my title\x07done", "done"},
+		{"OSC (ST-terminated) removed", "\x1b]8;;http://x\x1b\\link", "link"},
+		{"CRLF normalized to LF", "line1\r\nline2\r\n", "line1\nline2\n"},
+		{"UTF-8 multibyte preserved", "café — π ✓", "café — π ✓"},
+		{"lone ESC at end does not panic", "trailing\x1b", "trailing"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := string(stripANSI([]byte(tc.in))); got != tc.want {
+				t.Errorf("stripANSI(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }

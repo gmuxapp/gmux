@@ -23,7 +23,7 @@ const loginEnvTimeout = 5 * time.Second
 // captureLoginEnv returns a freshly-sourced login environment for a
 // session about to be launched in cwd, by running
 //
-//	$SHELL -l -i -c '<gmuxBin> --dump-env'
+//	$SHELL -l -i -c '<gmuxBin> __dump-env'
 //
 // in that cwd and reading the NUL-delimited environment the probe
 // writes to fd 3. The interactive login shell sources the user's
@@ -86,7 +86,7 @@ func runLoginEnvProbe(shell, gmuxBin, cwd string, timeout time.Duration) ([]stri
 	// -l (login) sources the profile files; -i (interactive) sources
 	// ~/.zshrc / ~/.bashrc, where most users' PATH/exports/tool-shims
 	// live. shellQuote guards a gmuxBin path containing spaces.
-	cmd := exec.CommandContext(ctx, shell, "-l", "-i", "-c", shellQuote(gmuxBin)+" --dump-env")
+	cmd := exec.CommandContext(ctx, shell, "-l", "-i", "-c", shellQuote(gmuxBin)+" __dump-env")
 	cmd.Dir = cwd
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 	cmd.ExtraFiles = []*os.File{pw} // child sees this as fd 3

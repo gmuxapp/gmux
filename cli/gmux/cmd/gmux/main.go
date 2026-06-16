@@ -1,11 +1,11 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"time"
 )
 
@@ -17,52 +17,78 @@ func main() {
 	log.SetPrefix("gmux: ")
 	log.SetFlags(0)
 
-	m, f, rest, err := parseCLI(os.Args[1:])
+	cmd, err := parseCLI(os.Args[1:])
 	if err != nil {
-		if err != flag.ErrHelp {
-			fmt.Fprintln(os.Stderr, "gmux:", err)
-			fmt.Fprintln(os.Stderr)
-		}
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		fmt.Fprintln(os.Stderr)
 		printUsage(os.Stderr)
 		os.Exit(2)
 	}
 
-	switch m {
+	switch cmd.mode {
 	case modeHelp:
 		printUsage(os.Stdout)
-		return
-	case modeUI:
+	case modeVersion:
+		fmt.Println(version)
+	case modeOpen:
 		openUI()
-		return
 	case modeRun:
-		runSession(rest, !f.noAttach, runDirectives{
-			ResumeID:    f.resumeID,
-			InitialCols: f.initialCols,
-			InitialRows: f.initialRows,
+		runSession(cmd.runArgs, !cmd.detach, runDirectives{
+			ResumeID:    cmd.resumeID,
+			InitialCols: cmd.initialCols,
+			InitialRows: cmd.initialRows,
 		})
-		return
 	case modeList:
-		os.Exit(cmdList(f.host, f.all))
+		os.Exit(cmdList(cmd.all, cmd.json))
 	case modeKill:
-		os.Exit(cmdKill(rest[0], f.host))
+		os.Exit(cmdKill(cmd.ref))
 	case modeTail:
-		os.Exit(cmdTail(rest[0], f.tail, f.host))
+		os.Exit(cmdTail(cmd.ref, cmd.tailLines, cmd.raw))
 	case modeAttach:
-		os.Exit(cmdAttach(rest[0], f.host))
+		os.Exit(cmdAttach(cmd.ref))
 	case modeSend:
-		var text *string
-		if len(rest) == 2 {
-			text = &rest[1]
-		}
-		os.Exit(cmdSend(rest[0], text, f.noSubmit, f.host))
+		os.Exit(cmdSend(cmd.ref, cmd.sendText, cmd.sendKeys))
+	case modeSendKeys:
+		os.Exit(cmdSendKeys(cmd.ref, cmd.keys, cmd.keysLiteral))
 	case modeWait:
-		os.Exit(cmdWait(rest[0], f.waitTimeout))
+		os.Exit(cmdWait(cmd.ref, cmd.timeout))
+	case modeDaemon:
+		os.Exit(execGmuxd(cmd.daemonSub))
+	case modeAuth:
+		os.Exit(execGmuxd("auth"))
+	case modeRemote:
+		os.Exit(execGmuxd("remote"))
 	case modeDumpEnv:
 		os.Exit(dumpEnv())
 	}
 }
 
-// openUI implements the bare `gmux` invocation: ensure gmuxd is up,
+// execGmuxd bridges the `gmux daemon …`, `gmux auth`, and `gmux remote`
+// verbs to the gmuxd binary, which still owns the implementation. A
+// later slice moves the logic into gmux and slims gmuxd to a pure
+// serve binary (ADR 0009). Streams stdio so interactive flows (remote
+// setup y/N, auth QR) work transparently.
+func execGmuxd(args ...string) int {
+	bin := findGmuxdBin()
+	if bin == "" {
+		fmt.Fprintln(os.Stderr, "gmux: gmuxd not found (install it alongside gmux or add it to PATH)")
+		return 1
+	}
+	c := exec.Command(bin, args...)
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			return exit.ExitCode()
+		}
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return 1
+	}
+	return 0
+}
+
+// openUI implements the `gmux open` invocation: ensure gmuxd is up,
 // learn its TCP listen address and auth token from /v1/health, and
 // hand those to the local browser.
 func openUI() {
