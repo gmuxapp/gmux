@@ -9,6 +9,16 @@ import (
 )
 
 // --- Shared attribution helpers ---
+//
+// Deprecated: scrollback-based attribution (attributeByScrollbackNormalized,
+// similarityScore, longestCommonSubstring) is the FALLBACK path. The
+// authoritative path is the agent-shim, which reports the agent's held
+// session file directly to the daemon. These helpers remain for sessions
+// with no shim signal (unshimmed agent builds, injection failures, runners
+// that started before any daemon). They are a post-hoc guess and are
+// ambiguous for small or overlapping sessions; do not extend them in
+// preference to the shim. See services/gmuxd/internal/discovery
+// tryAttributeUnmatched.
 
 // attributeByScrollbackNormalized matches a file to a session by
 // comparing conversation text against terminal scrollback, after

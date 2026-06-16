@@ -535,7 +535,7 @@ func serve(stderr io.Writer) int {
 	// Start socket-based discovery (scans paths.SessionSocketDir() for *.sock)
 	// Discovery also subscribes to each runner's /events SSE for live updates.
 	stopDiscovery := make(chan struct{})
-	go discovery.Watch(sessions, subs, fileMon, persistDead, fileMon.ApplyPersistedAttributions, 3*time.Second, stopDiscovery)
+	go discovery.Watch(sessions, subs, fileMon, persistDead, nil, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
 	// Session file scanner — discovers resumable sessions from adapter

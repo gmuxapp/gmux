@@ -80,16 +80,16 @@ type monitoredSession struct {
 }
 
 func NewFileMonitor(s *store.Store) *FileMonitor {
-	// attributions.json is retired: shimmed runners re-announce their held
-	// session file when the daemon (re)subscribes to /events (see
-	// ptyserver handleEvents replay), and unshimmed sessions re-derive via
-	// the scrollback fallback. Start with an empty map.
+	// Attribution is never loaded from disk: shimmed runners re-announce
+	// their held session file when the daemon (re)subscribes to /events
+	// (see ptyserver handleEvents replay), and unshimmed sessions re-derive
+	// via the scrollback fallback. Start with an empty map.
 	return NewFileMonitorWithAttributions(s, nil)
 }
 
 // NewFileMonitorWithAttributions creates a FileMonitor pre-seeded with
-// the given attributions. Used by NewFileMonitor (with persisted state
-// from disk) and by tests.
+// the given attributions. The live daemon passes nil (NewFileMonitor);
+// the seed parameter exists so tests can install attributions directly.
 func NewFileMonitorWithAttributions(s *store.Store, attrs map[string]string) *FileMonitor {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -582,9 +582,7 @@ func (fm *FileMonitor) NotifySessionDied(sessionID string) {
 		}
 	}
 	delete(fm.shimCovered, sessionID)
-	if changed {
-		fm.persistAttributionsLocked()
-	}
+	_ = changed
 
 	// If no more sessions need this session dir, remove the watch.
 	if exists && ms != nil {
@@ -756,54 +754,6 @@ func (fm *FileMonitor) syncFileMetadataLocked(sessionID, filePath string) {
 	})
 }
 
-// persistAttributionsLocked is retained as a no-op. Attribution state is
-// no longer persisted to disk (attributions.json is retired): on daemon
-// restart, shimmed runners re-announce their held file via the /events
-// replay and unshimmed sessions re-derive via scrollback. Kept so the
-// call sites read as "a decision changed here" and to ease reinstating
-// persistence if ever needed.
-func (fm *FileMonitor) persistAttributionsLocked() {}
-
-// ApplyPersistedAttributions is retained for the onFirstScan hook but is
-// now effectively a no-op: nothing is loaded from disk, so the map is
-// empty at startup and slug/title are re-derived from the runner's
-// re-announced session_file event instead.
-// for each (filePath, sessionID) entry whose target is currently a
-// monitored live session, propagates the slug and title from the
-// session file into the store.
-//
-// This bridges the daemon-restart gap: attribution decisions persist
-// in attributions.json, but slug/title are runtime fields that live
-// only in the in-memory store. Without this pass, a freshly
-// re-registered runner stays slug-less until the next file event
-// re-triggers syncFileMetadataLocked, which can be a long time for
-// idle sessions.
-//
-// Entries pointing at unknown session IDs are skipped silently;
-// they're either dismissed sessions whose entries haven't been
-// pruned yet, or sessions that haven't re-registered yet (in which
-// case a later NotifyNewSession will trigger sync via the normal
-// file-event path).
-//
-// Must be called after live sessions have been registered with
-// NotifyNewSession (i.e. after the first discovery.Scan pass).
-func (fm *FileMonitor) ApplyPersistedAttributions() {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-
-	var applied int
-	for path, sessionID := range fm.attributions {
-		if _, ok := fm.sessions[sessionID]; !ok {
-			continue
-		}
-		fm.syncFileMetadataLocked(sessionID, path)
-		applied++
-	}
-	if applied > 0 {
-		log.Printf("filemon: applied %d persisted attribution(s) at startup", applied)
-	}
-}
-
 // --- Attribution ---
 
 // AttributeFromShim records an authoritative file->session attribution
@@ -857,7 +807,6 @@ func (fm *FileMonitor) AttributeFromShim(sessionID, filePath string) {
 	if _, ok := fm.sessions[sessionID]; ok {
 		fm.processAttributedFileLocked(sessionID, filePath)
 	}
-	fm.persistAttributionsLocked()
 }
 
 // MarkShimCovered records that the agent-shim preload is live in this
@@ -895,6 +844,16 @@ func (fm *FileMonitor) sessionHasShimLocked(sessionID string) bool {
 // using scrollback similarity. Called from the Run loop on a throttled
 // timer. Returns true if unattributed files remain (caller should keep
 // retrying).
+//
+// Deprecated: this is the FALLBACK attribution path. The authoritative
+// path is the agent-shim, which reports the held session file directly
+// (AttributeFromShim) and suppresses this scan for covered sessions
+// (sessionHasShimLocked). Scrollback matching is a post-hoc guess and is
+// retained only for sessions with no shim signal: shells (which don't use
+// this path at all), agent versions/builds where the shim couldn't be
+// injected, and runners that started before any daemon could send their
+// GMUX_RUNNER_SOCK. Successful fallback attributions are logged with a
+// "(FALLBACK)" marker so reliance can be monitored in production.
 //
 // The expensive work (scrollback fetches, file I/O) happens with the
 // lock released. The lock is only held briefly to snapshot state and
@@ -1046,13 +1005,16 @@ func (fm *FileMonitor) tryAttributeUnmatched() bool {
 		}
 		fm.attributions[path] = sessionID
 		delete(fm.candidateFiles, path)
-		log.Printf("filemon: attributed %s -> %s", filepath.Base(path), sessionID)
+		// FALLBACK path: this attribution came from scrollback matching,
+		// not the authoritative agent-shim. Logged distinctly so we can
+		// monitor how often we rely on it in production (unshimmed agents,
+		// shim-injection failures, or runners that started pre-hello).
+		log.Printf("filemon: scrollback-attributed (FALLBACK) %s -> %s", filepath.Base(path), sessionID)
 
 		// Process the file: sets active file, reads all lines, derives
 		// title, and applies status/title/unread updates.
 		fm.processAttributedFileLocked(sessionID, path)
 	}
-	fm.persistAttributionsLocked()
 
 	hasUnattributed := len(fm.candidateFiles) > 0
 	fm.mu.Unlock()
@@ -1142,6 +1104,9 @@ func (fm *FileMonitor) readNewLines(path string, readAll bool) []string {
 
 // --- Network helpers ---
 
+// fetchScrollbackText pulls the runner's rendered scrollback for the
+// deprecated scrollback fallback (see tryAttributeUnmatched). Unused once
+// every live agent is shim-covered.
 func fetchScrollbackText(socketPath string) string {
 	if socketPath == "" {
 		return ""

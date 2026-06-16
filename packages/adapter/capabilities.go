@@ -97,6 +97,16 @@ type FileCandidate struct {
 // AttributeFile is called for every candidate count (including 1).
 // Returning "" rejects the file; for single-candidate cases, the daemon
 // may still attribute via a freshness-based fallback (mtime < 30s).
+// FileAttributor is the FALLBACK attribution mechanism: the daemon asks the
+// adapter to guess which live session owns a session file, using scrollback
+// similarity and/or file metadata.
+//
+// Deprecated: for adapters implementing SessionShimmer the authoritative
+// agent-shim reports the held file directly, and the daemon suppresses this
+// guessing for shim-covered sessions. AttributeFile is only consulted for
+// sessions with no shim signal (unshimmed agent builds, injection failures,
+// runners that started before a daemon). Prefer the shim path; do not invest
+// in making these guesses smarter.
 type FileAttributor interface {
 	// AttributeFile returns the session ID of the candidate that owns
 	// the file, or "" if no candidate matches. The daemon provides
