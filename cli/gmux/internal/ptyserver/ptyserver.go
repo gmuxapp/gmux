@@ -515,7 +515,10 @@ func (s *Server) handleShimEvent(w http.ResponseWriter, r *http.Request) {
 			s.state.SetSessionFile(ev.Path)
 		}
 	case "hello":
-		// Liveness only; nothing to record yet.
+		// The shim is live in the agent process. Announce it so the
+		// daemon suppresses scrollback attribution for this session
+		// until the shim reports the real file on first write.
+		s.state.EmitShimActive()
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

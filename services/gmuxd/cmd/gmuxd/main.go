@@ -523,6 +523,11 @@ func serve(stderr io.Writer) int {
 	subs.OnSessionFile = func(sessionID, filePath string) {
 		fileMon.AttributeFromShim(sessionID, filePath)
 	}
+	// The shim's hello suppresses scrollback for the session until it
+	// reports the real file, avoiding mis-attribution in the pre-write gap.
+	subs.OnShimActive = func(sessionID string) {
+		fileMon.MarkShimCovered(sessionID)
+	}
 	stopFileMon := make(chan struct{})
 	go fileMon.Run(stopFileMon)
 	defer close(stopFileMon)

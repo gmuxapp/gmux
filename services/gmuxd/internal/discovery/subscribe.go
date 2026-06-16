@@ -40,6 +40,10 @@ type Subscriptions struct {
 	// authoritative attribution signal (ADR 0009); gmuxd wires it to
 	// FileMonitor.AttributeFromShim.
 	OnSessionFile func(sessionID, filePath string)
+	// OnShimActive fires when a runner reports its agent-shim preload is
+	// live (before any file write). gmuxd wires it to
+	// FileMonitor.MarkShimCovered to suppress scrollback for the session.
+	OnShimActive func(sessionID string)
 	// OnDead fires after the store Upsert that records an exit
 	// event. The session passed is the post-Upsert snapshot,
 	// including any Title / Resumable derivation the store applied
@@ -314,6 +318,11 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		}
 		if sf.Path != "" && sub.OnSessionFile != nil {
 			sub.OnSessionFile(sessionID, sf.Path)
+		}
+
+	case "shim":
+		if sub.OnShimActive != nil {
+			sub.OnShimActive(sessionID)
 		}
 
 	case "activity":

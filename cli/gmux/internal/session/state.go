@@ -222,6 +222,14 @@ func (s *State) SetSlug(slug string) {
 	s.emit(Event{Type: "meta", Data: map[string]string{"slug": slug}})
 }
 
+// EmitShimActive announces that the agent-shim preload is live in the
+// session's process (its `hello`). The daemon uses this to suppress
+// scrollback attribution for the session until the shim reports the real
+// file. Carries no durable state; it's a one-shot signal.
+func (s *State) EmitShimActive() {
+	s.emit(Event{Type: "shim", Data: map[string]bool{"active": true}})
+}
+
 // SetSessionFile records the agent's current session file as reported by
 // the shim. Emits a session_file event only when the path changes, so the
 // daemon sees first-attribution and rebind (/resume) but not every write.

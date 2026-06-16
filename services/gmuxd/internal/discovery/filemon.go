@@ -61,6 +61,7 @@ type FileMonitor struct {
 	sessions       map[string]*monitoredSession // sessionID -> info
 	attributions   map[string]string            // filePath -> sessionID (sticky)
 	shimFiles      map[string]string            // filePath -> sessionID (authoritative, from agent-shim)
+	shimCovered    map[string]bool              // sessionID -> shim is live (suppress scrollback)
 	activeFiles    map[string]string            // sessionID -> filePath (tracks current file for Slug)
 	fileOffsets    map[string]int64             // filePath -> read offset
 	candidateFiles map[string]bool              // files seen but not yet attributed
@@ -113,6 +114,7 @@ func NewFileMonitorWithAttributions(s *store.Store, attrs map[string]string) *Fi
 		sessions:       make(map[string]*monitoredSession),
 		attributions:   attrs,
 		shimFiles:      make(map[string]string),
+		shimCovered:    make(map[string]bool),
 		activeFiles:    make(map[string]string),
 		fileOffsets:    make(map[string]int64),
 		candidateFiles: make(map[string]bool),
@@ -575,6 +577,7 @@ func (fm *FileMonitor) NotifySessionDied(sessionID string) {
 			delete(fm.shimFiles, path)
 		}
 	}
+	delete(fm.shimCovered, sessionID)
 	if changed {
 		fm.persistAttributionsLocked()
 	}
@@ -816,14 +819,21 @@ func (fm *FileMonitor) AttributeFromShim(sessionID, filePath string) {
 		return
 	}
 
-	// Rebind: drop any prior file this session held via the shim.
-	for p, sid := range fm.shimFiles {
-		if sid == sessionID && p != filePath {
+	// The shim is authoritative: this session holds exactly filePath now.
+	// Drop every other file currently attributed to it — whether a prior
+	// shim file (a /resume rebind) or a stale scrollback guess made in the
+	// window before the agent's first write. Without this, a fresh shimmed
+	// session that scrollback mis-attributed keeps the wrong file alongside
+	// the right one.
+	for p := range fm.shimFiles {
+		if fm.shimFiles[p] == sessionID && p != filePath {
 			delete(fm.shimFiles, p)
-			if fm.attributions[p] == sessionID {
-				delete(fm.attributions, p)
-				delete(fm.fileOffsets, p)
-			}
+		}
+	}
+	for p := range fm.attributions {
+		if fm.attributions[p] == sessionID && p != filePath {
+			delete(fm.attributions, p)
+			delete(fm.fileOffsets, p)
 		}
 	}
 
@@ -840,11 +850,29 @@ func (fm *FileMonitor) AttributeFromShim(sessionID, filePath string) {
 	fm.persistAttributionsLocked()
 }
 
-// sessionHasShimLocked reports whether the session has a live
-// shim-sourced attribution. Such sessions are excluded from scrollback
-// candidate matching: the shim is authoritative, so scrollback must not
-// second-guess it. Caller must hold fm.mu.
+// MarkShimCovered records that the agent-shim preload is live in this
+// session's process (its `hello`). From that point scrollback attribution
+// is suppressed for the session: the shim will report the real file when
+// the agent writes it, and guessing in the meantime only produces
+// mis-attributions to stale files (observed in practice). A covered
+// session with no conversation yet correctly stays unattributed until it
+// writes.
+func (fm *FileMonitor) MarkShimCovered(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	fm.mu.Lock()
+	fm.shimCovered[sessionID] = true
+	fm.mu.Unlock()
+}
+
+// sessionHasShimLocked reports whether scrollback must not attribute this
+// session: either the shim is live (hello received) or it already has an
+// authoritative shim attribution. Caller must hold fm.mu.
 func (fm *FileMonitor) sessionHasShimLocked(sessionID string) bool {
+	if fm.shimCovered[sessionID] {
+		return true
+	}
 	for _, sid := range fm.shimFiles {
 		if sid == sessionID {
 			return true
