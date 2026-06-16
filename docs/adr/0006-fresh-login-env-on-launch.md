@@ -4,6 +4,9 @@
 **Date:** 2026-05-29
 **Related:** ADR 0003 (daemon-initiated resume / restart passes Session.ID), ADR 0005 (CLI routes through gmuxd)
 
+> **Note (2026-06, CLI 2.0):** Decision stands. The env-capture probe is now
+> invoked as `gmux __dump-env` (was `gmux --dump-env`); see ADR 0009.
+
 ## Context
 
 Every managed session's environment is, today, a frozen copy of the

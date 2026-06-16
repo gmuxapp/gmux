@@ -4,6 +4,9 @@
 **Date:** 2026-05-04
 **Related:** ADR 0003 (Daemon-initiated resume passes Session.ID to the runner)
 
+> **Note (2026-06, CLI 2.0):** Decision stands; any pre-2.0 command syntax in
+> the examples (e.g. `--tail`) is superseded by ADR 0009's verb-first grammar.
+
 ## Context
 
 A user attached to a session whose runner exits expects the
