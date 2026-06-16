@@ -210,6 +210,40 @@ const IconWordLeft  = () => <svg viewBox="0 0 18 14" width="20" height="16" {...
 const IconWordRight = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="14.5" y1="3" x2="14.5" y2="11"/><path d="M5 7h7m0 0-3-3m3 3-3 3"/></svg>
 const IconSend = () => <svg viewBox="0 0 14 14" width="16" height="16" fill="currentColor" stroke="none"><path d="M3 2.5l8 4.5-8 4.5V8.5L7.5 7 3 5.5z"/></svg>
 
+// Press-and-hold auto-repeat for the navigation keys: fire once on press,
+// then after a short delay repeat until release. Arrows repeat briskly;
+// word-jumps slower, since each hop covers a whole word and a fast rate
+// would overshoot. (No native key-repeat reaches these on-screen keys.)
+const REPEAT_DELAY_MS = 300
+const ARROW_REPEAT_MS = 70
+const WORD_REPEAT_MS = 250
+
+/** Returns a factory that builds the press-and-hold pointer handlers for a
+ * repeatable key. One timer pair total — only a single key is held at a
+ * time on touch — and any running timer is cleared on unmount. */
+function useAutoRepeat() {
+  const timers = useRef<{ delay?: number; interval?: number }>({})
+  const stop = useCallback(() => {
+    clearTimeout(timers.current.delay)
+    clearInterval(timers.current.interval)
+    timers.current = {}
+  }, [])
+  useEffect(() => stop, [stop])
+  return useCallback((fire: () => void, intervalMs: number) => ({
+    onPointerDown: (ev: Event) => {
+      ev.preventDefault() // act on press; no focus-steal or long-press callout
+      stop()              // defensive: never stack onto a lingering hold
+      fire()
+      timers.current.delay = window.setTimeout(() => {
+        timers.current.interval = window.setInterval(fire, intervalMs)
+      }, REPEAT_DELAY_MS)
+    },
+    onPointerUp: stop,
+    onPointerLeave: stop,
+    onPointerCancel: stop,
+  }), [stop])
+}
+
 function MobileTerminalBar({
   canSend,
   ctrlArmed,
@@ -268,6 +302,9 @@ function MobileTerminalBar({
     onSend(r.seq)
   }
 
+  // Arrows and word-jumps key-repeat on hold; the rest fire once per tap.
+  const repeat = useAutoRepeat()
+
   // Static two-row grid, identical whether the keyboard is open or
   // closed (no relabeling, no reflow). ☰ and send are double-height
   // bookends; the inner 5×2 grid holds the keys with ↑/↓ stacked into a
@@ -295,16 +332,16 @@ function MobileTerminalBar({
       <div class="mobile-key-grid" role="toolbar" aria-label="Terminal keys">
         {/* Row 1 */}
         <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\x1b')} title="Escape">esc</button>
-        <button class={armedClass(altArmed)} disabled={!canSend} aria-pressed={altArmed} onClick={onToggleAlt} title={altArmed ? 'Alt armed for next key' : 'Arm Alt'}>alt</button>
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendWord('\x1b[D')} title="Word left"><IconWordLeft /></button>
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\x1b[A')} title="Up arrow"><IconUp /></button>
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendWord('\x1b[C')} title="Word right"><IconWordRight /></button>
-        {/* Row 2 */}
         <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\t')} title="Tab">tab</button>
+        <button class="mobile-bottom-action" disabled={!canSend} {...repeat(() => sendWord('\x1b[D'), WORD_REPEAT_MS)} title="Word left"><IconWordLeft /></button>
+        <button class="mobile-bottom-action" disabled={!canSend} {...repeat(() => sendKey('\x1b[A'), ARROW_REPEAT_MS)} title="Up arrow"><IconUp /></button>
+        <button class="mobile-bottom-action" disabled={!canSend} {...repeat(() => sendWord('\x1b[C'), WORD_REPEAT_MS)} title="Word right"><IconWordRight /></button>
+        {/* Row 2 */}
         <button class={armedClass(ctrlArmed)} disabled={!canSend} aria-pressed={ctrlArmed} onClick={onToggleCtrl} title={ctrlArmed ? 'Ctrl armed for next key' : 'Arm Ctrl'}>ctrl</button>
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\x1b[D')} title="Left arrow"><IconLeft /></button>
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\x1b[B')} title="Down arrow"><IconDown /></button>
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\x1b[C')} title="Right arrow"><IconRight /></button>
+        <button class={armedClass(altArmed)} disabled={!canSend} aria-pressed={altArmed} onClick={onToggleAlt} title={altArmed ? 'Alt armed for next key' : 'Arm Alt'}>alt</button>
+        <button class="mobile-bottom-action" disabled={!canSend} {...repeat(() => sendKey('\x1b[D'), ARROW_REPEAT_MS)} title="Left arrow"><IconLeft /></button>
+        <button class="mobile-bottom-action" disabled={!canSend} {...repeat(() => sendKey('\x1b[B'), ARROW_REPEAT_MS)} title="Down arrow"><IconDown /></button>
+        <button class="mobile-bottom-action" disabled={!canSend} {...repeat(() => sendKey('\x1b[C'), ARROW_REPEAT_MS)} title="Right arrow"><IconRight /></button>
       </div>
 
       <button
