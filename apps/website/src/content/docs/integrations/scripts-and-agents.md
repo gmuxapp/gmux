@@ -73,16 +73,9 @@ gmux wait <id>
 gmux tail <id> -n 200          # extract the final answer
 ```
 
-The idle signal is the same `Status.Working` flag the UI's spinner consumes, so `wait` returns the moment the agent emits its closing message. Exit codes: `0` idle/matched, `2` the session died first, `3` `--timeout N` elapsed.
+The idle signal is the same `Status.Working` flag the UI's spinner consumes, so `wait` returns the moment the agent emits its closing message. Exit codes: `0` idle, `2` the session died first, `3` `--timeout N` elapsed.
 
-`wait` with no condition is for agent sessions (`claude`, `codex`, `pi`); shell sessions have no working signal. For those, either run them through the blocking piped flow (`gmux -- make build < /dev/null`) or wait for expected output:
-
-```bash
-gmux wait <id> --for-text '__DONE__' --timeout 120   # fixed substring
-gmux wait <id> --for-regex '^\$ $' --timeout 30        # or a regex
-```
-
-`--for-text` / `--for-regex` poll the session's output and replace the old "loop over `tail` and `grep`" pattern.
+`wait` is for agent sessions (`claude`, `codex`, `pi`); shell sessions have no working signal and are rejected with a clear error. To wait for a shell command, run it through the blocking piped flow above (`gmux -- make build < /dev/null`) — that's exactly the shape `gmux -- <cmd>` already provides. (Waiting on arbitrary output — "until this text appears" — is planned as a server-side `wait` condition, [#313](https://github.com/gmuxapp/gmux/issues/313).)
 
 ## Reading output
 

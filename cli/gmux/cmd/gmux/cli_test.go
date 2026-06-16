@@ -124,16 +124,16 @@ func TestParseCLI(t *testing.T) {
 			}},
 
 		{name: "wait idle default", args: []string{"wait", "abc"}, wantMode: modeWait},
-		{name: "wait --for-text --timeout", args: []string{"wait", "--for-text", "DONE", "--timeout", "30", "abc"}, wantMode: modeWait,
+		{name: "wait --timeout", args: []string{"wait", "--timeout", "30", "abc"}, wantMode: modeWait,
 			check: func(t *testing.T, c *command) {
-				if c.forText != "DONE" || c.timeout != 30 {
-					t.Errorf("forText=%q timeout=%d", c.forText, c.timeout)
+				if c.timeout != 30 || c.ref != "abc" {
+					t.Errorf("timeout=%d ref=%q", c.timeout, c.ref)
 				}
 			}},
-		{name: "wait flags after positional", args: []string{"wait", "abc", "--for-regex", "^>>>"}, wantMode: modeWait,
+		{name: "wait flags after positional", args: []string{"wait", "abc", "--timeout", "5"}, wantMode: modeWait,
 			check: func(t *testing.T, c *command) {
-				if c.forRegex != "^>>>" || c.ref != "abc" {
-					t.Errorf("forRegex=%q ref=%q", c.forRegex, c.ref)
+				if c.timeout != 5 || c.ref != "abc" {
+					t.Errorf("timeout=%d ref=%q", c.timeout, c.ref)
 				}
 			}},
 
@@ -185,7 +185,6 @@ func TestParseCLIErrors(t *testing.T) {
 		{"tail"},                   // missing id
 		{"tail", "-n", "0", "abc"}, // non-positive count
 		{"wait"},                   // missing id
-		{"wait", "--for-text", "x", "--for-regex", "y", "abc"}, // mutually exclusive
 		{"send-keys", "C-c"},     // missing -t
 		{"daemon"},               // missing subcommand
 		{"daemon", "frobnicate"}, // unknown subcommand

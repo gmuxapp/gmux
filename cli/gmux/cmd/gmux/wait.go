@@ -1,16 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strconv"
-	"time"
 )
 
 // Exit codes from cmdWait. Distinct codes let scripts dispatch on the
@@ -28,7 +25,7 @@ const (
 	waitExitTimeout = 3
 )
 
-// cmdWait implements `gmux wait <id> [--for-text S | --for-regex P] [--timeout N]`.
+// cmdWait implements `gmux wait <id> [--timeout N]`.
 //
 // The wait itself happens server-side: gmuxd already subscribes to
 // per-session events for its own bookkeeping, so we just hand it the
@@ -41,14 +38,11 @@ const (
 // against its local store and consults the adapter allowlist; remote
 // peer sessions are out of scope until peer subscriptions stream
 // Status events back to the hub.
-func cmdWait(ref, forText, forRegex string, timeoutSecs int) int {
+func cmdWait(ref string, timeoutSecs int) int {
 	sess, err := resolveSession(ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
-	}
-	if forText != "" || forRegex != "" {
-		return waitForOutput(sess, forText, forRegex, timeoutSecs)
 	}
 	if sess.Peer != "" {
 		// Use the bare shortID here: the message already names the peer
@@ -119,76 +113,6 @@ func cmdWait(ref, forText, forRegex string, timeoutSecs int) int {
 		body, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "gmux: wait failed: %s: %s\n", resp.Status, extractMessage(body))
 		return 1
-	}
-}
-
-// waitForOutput polls the session's scrollback until a fixed substring
-// (forText) or a regex (forRegex) appears, or --timeout elapses. On
-// timeout it prints the current tail to stderr so the wait is
-// diagnosable, and exits with waitExitTimeout.
-//
-// Exit codes match the idle-wait path (cmdWait): waitExitIdle on match,
-// waitExitDied if the session exits before the pattern appears (no more
-// output will ever come, so we fail fast rather than spin to timeout),
-// waitExitTimeout on --timeout.
-//
-// Polling lives client-side for now; absorbing it into a gmuxd endpoint
-// (so the match happens where the bytes are) is a planned follow-up.
-func waitForOutput(sess cliSession, forText, forRegex string, timeoutSecs int) int {
-	var re *regexp.Regexp
-	if forRegex != "" {
-		var err error
-		re, err = regexp.Compile(forRegex)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "gmux: invalid --for-regex: %v\n", err)
-			return 1
-		}
-	}
-	matched := func(b []byte) bool {
-		if re != nil {
-			return re.Match(b)
-		}
-		return bytes.Contains(b, []byte(forText))
-	}
-
-	var deadline time.Time
-	if timeoutSecs > 0 {
-		deadline = time.Now().Add(time.Duration(timeoutSecs) * time.Second)
-	}
-
-	var last []byte
-	for {
-		data, code := fetchScrollback(sess, 2000)
-		if code != 0 {
-			return code
-		}
-		last = data
-		if matched(data) {
-			return waitExitIdle
-		}
-		// No match yet. If the session has exited, no further output will
-		// arrive — give up with the "died" code instead of spinning to
-		// timeout. Re-read scrollback first to close the race where the
-		// pattern was printed and the session exited between our read and
-		// this liveness check (a dead session's scrollback is still served
-		// from disk, so the final bytes are there).
-		if sessionExited(sess.ID) {
-			if data, code = fetchScrollback(sess, 2000); code == 0 {
-				last = data
-				if matched(data) {
-					return waitExitIdle
-				}
-			}
-			fmt.Fprintf(os.Stderr, "gmux: session %s exited before the expected output appeared\n", displayID(sess))
-			return waitExitDied
-		}
-		if !deadline.IsZero() && time.Now().After(deadline) {
-			fmt.Fprintf(os.Stderr, "gmux: wait timed out after %ds; last output:\n", timeoutSecs)
-			os.Stderr.Write(stripANSI(last))
-			fmt.Fprintln(os.Stderr)
-			return waitExitTimeout
-		}
-		time.Sleep(500 * time.Millisecond)
 	}
 }
 

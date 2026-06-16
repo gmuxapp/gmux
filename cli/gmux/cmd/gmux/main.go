@@ -51,7 +51,7 @@ func main() {
 	case modeSendKeys:
 		os.Exit(cmdSendKeys(cmd.ref, cmd.keys, cmd.keysLiteral))
 	case modeWait:
-		os.Exit(cmdWait(cmd.ref, cmd.forText, cmd.forRegex, cmd.timeout))
+		os.Exit(cmdWait(cmd.ref, cmd.timeout))
 	case modeDaemon:
 		os.Exit(execGmuxd(cmd.daemonSub))
 	case modeAuth:

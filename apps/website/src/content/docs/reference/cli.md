@@ -109,8 +109,8 @@ gmux tail -n 500 a3f20187     # last 500 lines
 gmux tail --raw a3f20187      # keep ANSI escapes (-e also works)
 ```
 
-It's a snapshot, not a stream — to block until specific output appears, use
-`gmux wait --for-text` below.
+It's a snapshot, not a stream — to watch a session live, attach to it or open
+it in the browser.
 
 ### `gmux send <id> [text] [Key...]`
 
@@ -143,28 +143,29 @@ gmuxd's authenticated proxy.
 
 ### `gmux wait <id>`
 
-Block until the session is done with what you're waiting for.
+Block until an **agent** session finishes its current turn (its spinner stops),
+optionally bounded by `--timeout N`.
 
 ```bash
-gmux wait a3f20187                              # until the agent finishes its turn
-gmux wait a3f20187 --for-text DONE --timeout 60 # until "DONE" appears, or 60s
-gmux wait a3f20187 --for-regex '^\$ ' --timeout 30
+gmux send a3f20187 'do the thing' Enter
+gmux wait a3f20187
+gmux wait a3f20187 --timeout 600   # or fail after 600s
 ```
 
-With no condition, `wait` blocks until an **agent** session goes idle (its
-spinner stops) or the session exits. Plain shell sessions have no idle signal,
-so for those either run them with the blocking piped form (`gmux -- make
-build`) or wait for expected output with `--for-text` / `--for-regex`, which
-poll the session's output and replace the old `tail | grep` loop.
+The idle signal is the same `Status.Working` flag the UI's spinner consumes,
+so `wait` returns the moment the agent emits its closing message. Exit codes
+(so scripts can branch on the outcome):
 
-Exit codes (so scripts can branch on the outcome):
+- `0` — the agent reached idle
+- `2` — the session exited before becoming idle
+- `3` — `--timeout` elapsed
 
-- `0` — matched / agent reached idle
-- `2` — the session exited before the condition was met
-- `3` — `--timeout` elapsed (the current tail is printed to stderr to help diagnose)
-
-`--for-text`/`--for-regex` are matched client-side for now;
-the idle wait is local-only (peer support is pending).
+Plain **shell** sessions have no idle signal and are rejected with a clear
+error; to wait for a shell command, run it through the blocking piped form
+(`gmux -- make build < /dev/null`) instead. Idle wait is local-only for now
+(peer support is pending). Waiting on arbitrary output ("until this text
+appears") is planned as a server-side `wait` condition
+([#313](https://github.com/gmuxapp/gmux/issues/313)).
 
 ### `gmux kill <id>`
 

@@ -150,9 +150,9 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
 13a. **`gmux tail` is snapshot-only.** `gmux tail <id>` (default ~100
      lines), `-n N` for count, `--raw`/`-e` to preserve ANSI (stripped by
      default). **No `-f`/follow and no `logs` verb**: "block until output
-     X" is served by `wait --for-text`/`--for-regex` (better: in-daemon,
-     timeout, exit code); live human watching is served by the browser
-     and `attach`. Streaming a pane elsewhere (tmux `pipe-pane`) is niche
+     X" is served by a future `wait` output-condition (see decision 13);
+     live human watching is served by the browser and `attach`.
+     Streaming a pane elsewhere (tmux `pipe-pane`) is niche
      and deferred to a future namespace if requested.
 
 13b. **`gmux ls` output.** Human default: short id · state
@@ -163,15 +163,19 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
      tmux-style `-F`/`--format` is deferred (addable under the
      frozen-namespace policy).
 
-13. **`gmux wait` condition is explicit; default is idle-or-exit.**
+13. **`gmux wait` waits for agent idle, bounded by `--timeout`.**
     `gmux wait <id>` blocks until the session goes **idle** (agent turn
-    end; shell idle-detection is a planned follow-up) **or the session
-    exits** — whichever comes first, so a detached non-agent command
-    (`gmux -d -- pytest`) is waitable without hanging. Explicit
-    conditions: `--for-text <str>` (fixed substring), `--for-regex <pat>`,
-    bounded by `--timeout <secs>`. On timeout, exit nonzero **and print
-    the current tail to stderr** so the wait is diagnosable. Cross-peer
-    `wait` returns "not supported across peers yet" (ADR 0005 deferral).
+    end) or exits; `--timeout <secs>` bounds it (exit 0 idle, 2 died,
+    3 timeout). Cross-peer `wait` returns "not supported across peers
+    yet" (ADR 0005 deferral).
+
+    Output-condition variants (`--for-text` / `--for-regex` — "block
+    until this text appears") were designed but **deferred**: the only
+    sound implementation matches where the bytes are, i.e. a gmuxd
+    endpoint, not client-side scrollback polling. Tracked as a
+    follow-up ([#313](https://github.com/gmuxapp/gmux/issues/313)).
+    Until then, shell "wait for output" is served by running the command
+    through the blocking piped form (`gmux -- <cmd>`).
 
 ## Considered alternatives
 

@@ -79,23 +79,18 @@ done
 
 ## Waiting
 
-`gmux wait <id>` (no flags) blocks until an **agent** session goes idle (turn
-finished) or the session exits. Exit codes:
+`gmux wait <id>` blocks until an **agent** session goes idle (turn finished) or
+the session exits, optionally bounded by `--timeout N`. Exit codes:
 
 - `0` agent reached idle (or session exited)
 - `2` session died before going idle
 - `3` `--timeout` elapsed
 
-Plain **shell** commands don't emit an idle signal, so for those either run
-blocking (`gmux -- make build`) or wait for expected output:
-
-```bash
-gmux wait $id --for-text '__DONE__' --timeout 120   # fixed substring
-gmux wait $id --for-regex '^\$ $' --timeout 30       # or a regex
-```
-
-`--for-text` / `--for-regex` replace the old "poll `tail` in an `until grep`
-loop" pattern — gmux does the polling and prints the tail to stderr on timeout.
+Plain **shell** commands don't emit an idle signal and are rejected, so run
+those blocking instead: `gmux -- make build < /dev/null` exits with the
+command's own status. (Waiting on arbitrary output — "until this text
+appears" — is planned as a server-side condition; until then, poll `gmux tail`
+yourself if you must.)
 
 ## Other agents have one-shot modes
 

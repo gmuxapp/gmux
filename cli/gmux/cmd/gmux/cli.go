@@ -62,9 +62,7 @@ type command struct {
 	keys        []string // key/text arguments
 
 	// wait
-	forText  string // --for-text: fixed substring
-	forRegex string // --for-regex: regular expression
-	timeout  int    // --timeout seconds (0 = none)
+	timeout int // --timeout seconds (0 = none)
 
 	// daemon
 	daemonSub string // start|stop|restart|status|log-path
@@ -289,8 +287,6 @@ func parseSendKeys(args []string) (*command, error) {
 func parseWait(args []string) (*command, error) {
 	c := &command{mode: modeWait}
 	fs := newFlagSet("wait")
-	fs.StringVar(&c.forText, "for-text", "", "wait until this fixed substring appears")
-	fs.StringVar(&c.forRegex, "for-regex", "", "wait until this regex matches")
 	fs.IntVar(&c.timeout, "timeout", 0, "fail after N seconds")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
@@ -298,9 +294,6 @@ func parseWait(args []string) (*command, error) {
 	}
 	if len(pos) != 1 {
 		return nil, errors.New("wait requires a session id")
-	}
-	if c.forText != "" && c.forRegex != "" {
-		return nil, errors.New("--for-text and --for-regex are mutually exclusive")
 	}
 	if c.timeout < 0 {
 		return nil, errors.New("--timeout must be a non-negative number of seconds")
@@ -438,7 +431,7 @@ Sessions (local by default; address a peer with <id>@<peer>):
   gmux tail <id> [-n N] [--raw]     print recent output (snapshot)
   gmux send <id> <text> [Key...]    type text and/or send keys (e.g. Enter, C-c)
   gmux send-keys -t <id> <keys...>  tmux-compatible key sending
-  gmux wait <id> [--for-text S | --for-regex P] [--timeout N]
+  gmux wait <id> [--timeout N]      block until an agent session is idle
   gmux kill <id>                    terminate a session
 
 UI & pairing:
