@@ -8,12 +8,16 @@ import { loadWebglRenderer } from './webgl-renderer'
 import { applyArmedModifiers, attachKeyboardHandler, attachPasteHandler, defaultPasteFeedback, handlePasteAction } from './keyboard'
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
+import { isTouchDevice } from './touch'
 import { createReplayBuffer } from './replay'
 import { createTerminalIO, type TerminalSize } from './terminal-io'
 import { linkAtPoint, type LinkInfo, openLinkAtPoint } from './terminal-link'
 import { createLongPressRecognizer } from './long-press'
 import { LinkActionSheet } from './link-action-sheet'
+import { TerminalTextSheet } from './terminal-text-sheet'
+import { pressedBufferRow, readTerminalText } from './terminal-text'
 import { decideViewportResize, sameSize } from './terminal-resize'
+import { terminalScrolledUp, terminalScrollToBottom } from './store'
 import { MOCK_BY_ID } from './mock-data/index'
 import type { Session } from './types'
 
@@ -27,11 +31,6 @@ const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('
  */
 export const TERM_THEME = DEFAULT_THEME_COLORS
 
-// ── Keyboard / resize timing (touch) ──
-
-/** Debounce before measuring a height-only viewport change, so an
- * unsettled mid-animation height never drives a resize. */
-const KEYBOARD_RESIZE_DEBOUNCE_MS = 20
 // ── Utilities ──
 
 /**
@@ -73,11 +72,22 @@ function measureTerminalFit(
   // forever. offset* is the border-box and ignores scrollbars, so the
   // measurement is a fixed point regardless of transient overflow.
   // (.terminal-shell has no border/padding, so offset* == the viewport.)
+  // On mobile the control bar floats over the terminal's bottom (out of
+  // flow, translucent — see styles.css), so the shell fills the full height
+  // behind it. Reserve the bar's height, but round the row count UP: the
+  // terminal then claims one extra row whose bottom sliver tucks behind the
+  // translucent keys, instead of leaving a sub-cell gap above an opaque bar.
+  // Detected here — not at the call sites — so every resize path (initial
+  // fit, keyboard transitions, manual refit) computes identically. The bar's
+  // offsetParent is null when it's display:none (desktop) ⇒ plain floor fit.
+  const bar = document.querySelector<HTMLElement>('.mobile-bottom-bar')
+  const overlayBar = bar?.offsetParent ? bar.offsetHeight : 0
+
   const availW = shellEl.offsetWidth - padX - reserveWidth
-  const availH = shellEl.offsetHeight - padY
+  const availH = shellEl.offsetHeight - padY - overlayBar
 
   let cols = Math.max(2, Math.floor(availW / dims.css.cell.width))
-  let rows = Math.max(1, Math.floor(availH / dims.css.cell.height))
+  let rows = Math.max(1, (overlayBar > 0 ? Math.ceil : Math.floor)(availH / dims.css.cell.height))
 
   // Guard against 1px overflow: xterm computes screen width as
   // Math.round(device.cell.width * cols / dpr). Because css.cell.width is
@@ -93,7 +103,9 @@ function measureTerminalFit(
   // Same guard vertically: row height rounding across device/css pixels can
   // overflow by 1px at fractional DPRs (the monitor-move case), which is
   // exactly what seeds the scrollbar flicker described above.
-  if (dims.device.cell.height > 0) {
+  // (Skipped in overlay-bar mode: the gained row intentionally exceeds
+  // availH, spilling its bottom sliver behind the translucent bar.)
+  if (overlayBar === 0 && dims.device.cell.height > 0) {
     const predictedHeight = Math.round(dims.device.cell.height * rows / dpr)
     if (predictedHeight > availH && rows > 1) rows--
   }
@@ -138,9 +150,7 @@ function focusTerminalInput(term: Terminal | null): void {
   const textarea = term.textarea
   if (!textarea) return
 
-  const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
-    || navigator.maxTouchPoints > 0
-  if (!isTouchDevice) return
+  if (!isTouchDevice()) return
 
   const prev = {
     position: textarea.style.position,
@@ -209,7 +219,6 @@ export function TerminalView({
   altArmed,
   onAltConsumed,
   onInputReady,
-  onPasteReady,
   onFocusReady,
 }: {
   session: Session
@@ -221,7 +230,6 @@ export function TerminalView({
   altArmed: boolean
   onAltConsumed: () => void
   onInputReady?: (send: ((data: string) => void) | null) => void
-  onPasteReady?: (paste: (() => void) | null) => void
   onFocusReady?: (focus: (() => void) | null) => void
 }) {
   const shellRef = useRef<HTMLDivElement>(null)
@@ -244,8 +252,12 @@ export function TerminalView({
   const [termLoading, setTermLoading] = useState(true)
   const [wsState, setWsState] = useState<'connecting' | 'open' | 'lost'>('connecting')
   const [viewportSize, setViewportSize] = useState<TerminalSize | null>(null)
-  const [scrolledUp, setScrolledUp] = useState(false)
   const [linkSheet, setLinkSheet] = useState<LinkInfo | null>(null)
+  const [textSheet, setTextSheet] = useState<{ lines: string[]; anchorRow: number } | null>(null)
+  // The paste trigger lives in the attach effect (it reads bracketed-paste
+  // mode + clipboard fresh), so bridge it out to the sheet's Paste button
+  // via a ref.
+  const pasteActionRef = useRef<(() => void) | null>(null)
   const SCROLL_THRESHOLD = 3 // rows above bottom before showing the button
   // Track the last PTY size we know about so we can derive the pill.
   const [ptySize, setPtySize] = useState<TerminalSize | null>(null)
@@ -387,13 +399,39 @@ export function TerminalView({
     focusTerminalInput(termRef.current)
   }, [])
 
+  // A tap on the shell *outside* the rendered grid (the strip that slides
+  // under the translucent toolbar, including the empty key-row corners)
+  // would let the browser's synthesized mousedown blur the textarea and
+  // dismiss the soft keyboard. Hold focus there by cancelling the default,
+  // mirroring the toolbar's keepFocus. The grid (.xterm) manages its own
+  // focus, so leave those taps untouched. Touch-only: there's no soft
+  // keyboard to protect off-touch, and cancelling mousedown there would
+  // only suppress focus/selection on shell controls for no benefit.
+  const holdShellFocus = useCallback((ev: MouseEvent) => {
+    if (!isTouchDevice()) return
+    if (!(ev.target instanceof Element) || !ev.target.closest('.xterm')) ev.preventDefault()
+  }, [])
+
   const handleShellClick = useCallback((ev: MouseEvent) => {
+    // Touch focuses the terminal via the touchend handler (a deliberate
+    // tap opens the keyboard). Ignore synthesized clicks here so a click
+    // falling through from a just-dismissed sheet can't reopen it.
+    if (isTouchDevice()) return
     const target = ev.target
     if (target instanceof HTMLElement && target.closest('button, input, textarea, select, a, label, [role="button"]')) {
       return
     }
     focusTerminal()
   }, [focusTerminal])
+
+  // Mirror the resolved terminal background into CSS (--terminal-bg) so the
+  // overlay fade and the shell/container fills match a themed background
+  // instead of a hard-coded literal. Falls back to the default in CSS when
+  // unset, so behaviour is unchanged for the default theme.
+  useEffect(() => {
+    const bg = terminalOptions.theme.background
+    if (shellRef.current && bg) shellRef.current.style.setProperty('--terminal-bg', bg)
+  }, [terminalOptions.theme.background])
 
   // Force-fetch the terminal font before mounting xterm.
   //
@@ -484,10 +522,14 @@ export function TerminalView({
 
     const sendRawInput = (data: string) => {
       const ws = wsRef.current
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(new TextEncoder().encode(data))
-        term.focus()
-      }
+      if (!ws || ws.readyState !== WebSocket.OPEN) return
+      // Only re-assert focus if the terminal already had it (keyboard
+      // open). Grabbing focus unconditionally would pop the on-screen
+      // keyboard on every toolbar key, even when it was closed — the
+      // whole point of the toolbar is to work with the keyboard down.
+      const hadFocus = document.activeElement === term.textarea
+      ws.send(new TextEncoder().encode(data))
+      if (hadFocus) term.focus()
     }
 
     const sendInput = (data: string) => {
@@ -498,19 +540,20 @@ export function TerminalView({
     }
 
     onInputReady?.(sendRawInput)
+    terminalScrollToBottom.value = () => term.scrollToBottom()
     // The paste trigger reads bracketedPasteMode and the clipboard fresh
     // on every invocation: bracketed mode flips at runtime as TUIs come
     // and go, and the clipboard contents are obviously volatile. Sharing
-    // handlePasteAction with the keybind path means the mobile toolbar
-    // button gets binary-paste support without divergent code.
-    onPasteReady?.(() => {
+    // handlePasteAction with the keybind path means long-press paste gets
+    // binary-paste support without divergent code.
+    pasteActionRef.current = () => {
       void handlePasteAction({
         sessionId: session.id,
         bracketedPasteMode: term.modes.bracketedPasteMode,
         feedback: defaultPasteFeedback,
         emit: sendRawInput,
       })
-    })
+    }
     onFocusReady?.(() => focusTerminalInput(term))
 
     const dataDisposable = term.onData((data) => sendInput(data))
@@ -541,7 +584,7 @@ export function TerminalView({
 
     const scrollDisposable = term.onScroll(() => {
       const buf = term.buffer.active
-      setScrolledUp(buf.baseY - buf.viewportY > SCROLL_THRESHOLD)
+      terminalScrolledUp.value = buf.baseY - buf.viewportY > SCROLL_THRESHOLD
     })
 
     const handleGlobalKeydown = (ev: KeyboardEvent) => {
@@ -564,9 +607,14 @@ export function TerminalView({
     // release must not open a link or toggle the keyboard.
     const longPress = createLongPressRecognizer((x, y) => {
       const link = linkAtPoint(term, x, y)
-      if (!link) return
       try { navigator.vibrate?.(10) } catch { /* unsupported */ }
-      setLinkSheet(link)
+      // On a link: offer open/copy. On empty space: open the text sheet —
+      // the buffer as natively-selectable text, scrolled to the pressed
+      // row, with Paste at the bottom.
+      if (link) { setLinkSheet(link); return }
+      const lines = readTerminalText(term)
+      const anchorRow = Math.max(0, Math.min(pressedBufferRow(term, y), lines.length - 1))
+      setTextSheet({ lines, anchorRow })
     })
     const touchPanState = {
       active: false,
@@ -660,18 +708,12 @@ export function TerminalView({
         }
 
         focusTerminalInput(term)
-        // Defer the scroll-to-bottom past the focus-driven layout work
-        // (keyboard opening resizes the viewport) and the browser's
-        // synthesized mouse events for this touch, so it lands once on
-        // the settled layout instead of racing them.
-        setTimeout(() => {
-          term.scrollToBottom()
-          const host = shellRef.current
-          if (host) {
-            host.scrollTop = host.scrollHeight
-            host.scrollLeft = 0
-          }
-        }, 0)
+        // No eager scroll-to-bottom here: the keyboard-open viewport
+        // shrink triggers one PTY reflow that already lands at the
+        // bottom. A scrollToBottom here would fire mid-slide (its
+        // setTimeout is deferred by the focus/layout work to ~30% of
+        // the keyboard animation), producing a redundant scroll jump
+        // before the reflow does the same thing again.
       }
       touchPanState.active = false
       touchPanState.moved = false
@@ -688,41 +730,27 @@ export function TerminalView({
     shell?.addEventListener('touchend', handleTouchEndCapture, { capture: true, passive: false })
     shell?.addEventListener('touchcancel', clearTouchPan, true)
 
-    const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
-      || navigator.maxTouchPoints > 0
-
-    // Resize strategy:
-    // - A ResizeObserver on the shell element detects all layout changes:
-    //   initial flex settle, sidebar toggle, window resize, etc.
-    // - Measure on the next animation frame, after browser layout settles.
-    //   In practice width can update before flex heights finish recalculating,
-    //   so measuring synchronously in the resize event can read a stale height.
-    // - After each outbound resize, wait for the matching terminal_resize echo
-    //   before sending the next one. This keeps drag-resize responsive without
-    //   flooding the server with intermediate sizes.
-    // - Height-only viewport changes (soft keyboard slide) get a short debounce
-    //   before that frame measurement, so we skip unstable intermediate heights.
+    // Resize strategy (no debounce — two natural throttles make it
+    // unnecessary, and dropping it lets the soft-keyboard reflow fire in
+    // sync with the layout change instead of ~36ms later):
+    // - A ResizeObserver on the shell + window/visualViewport resize
+    //   events detect every layout change (flex settle, sidebar, soft
+    //   keyboard, rotation).
+    // - Measure on the next animation frame so layout has settled (width
+    //   can update before flex heights finish recalculating).
+    // - Cell quantization: measureTerminalFit floors pixels to cols/rows,
+    //   so sub-character jitter never produces a resize at all.
+    // - Echo gate: only one resize is in flight at a time (send → await the
+    //   server terminal_resize echo → send the latest pending), which
+    //   serializes and coalesces drag-resizes without flooding the PTY.
     const vv = window.visualViewport
 
-    let resizeTimer: ReturnType<typeof setTimeout> | null = null
     let resizeFrame: number | null = null
-    let refocusTimer: ReturnType<typeof setTimeout> | null = null
     let lastViewportPixels = getResizeSignalPixels(shell, vv)
-    let pendingHeightChange = false
 
     const flushViewportResize = () => {
-      resizeTimer = null
       resizeFrame = null
       processViewportResize()
-
-      const shouldRefocus = pendingHeightChange && isTouchDevice
-      pendingHeightChange = false
-      if (!shouldRefocus) return
-
-      // Let iOS finish the keyboard transition before grabbing focus,
-      // otherwise the OS immediately re-blurs the textarea.
-      if (refocusTimer !== null) clearTimeout(refocusTimer)
-      refocusTimer = setTimeout(() => focusTerminalInput(termRef.current), 120)
     }
 
     const scheduleViewportResize = () => {
@@ -741,21 +769,6 @@ export function TerminalView({
       if (!widthChanged && !heightChanged) return
 
       lastViewportPixels = nextViewportPixels
-      pendingHeightChange = pendingHeightChange || heightChanged
-
-      if (resizeTimer !== null) {
-        clearTimeout(resizeTimer)
-        resizeTimer = null
-      }
-
-      // Soft keyboard animations are mostly height-only, so debounce just that
-      // case on touch devices. Desktop resizes go through immediately, even if
-      // only the height changed.
-      if (isTouchDevice && heightChanged && !widthChanged) {
-        resizeTimer = setTimeout(scheduleViewportResize, KEYBOARD_RESIZE_DEBOUNCE_MS)
-        return
-      }
-
       scheduleViewportResize()
     }
 
@@ -771,9 +784,7 @@ export function TerminalView({
 
     return () => {
       shellObserver.disconnect()
-      if (resizeTimer !== null) clearTimeout(resizeTimer)
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
-      if (refocusTimer !== null) clearTimeout(refocusTimer)
       longPress.cancel()
       disposed.current = true
       window.removeEventListener('keydown', handleGlobalKeydown, true)
@@ -788,12 +799,13 @@ export function TerminalView({
       osc52Disposable.dispose()
       dataDisposable.dispose()
       scrollDisposable.dispose()
-      setScrolledUp(false)
+      terminalScrolledUp.value = false
+      terminalScrollToBottom.value = null
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       wsRef.current?.close()
       wsRef.current = null
       onInputReady?.(null)
-      onPasteReady?.(null)
+      pasteActionRef.current = null
       onFocusReady?.(null)
       if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
       ;(window as any).__gmuxInject = null
@@ -995,6 +1007,7 @@ export function TerminalView({
     <div
       ref={shellRef}
       class={`terminal-shell ${showResizePill ? 'terminal-shell-passive' : ''}`}
+      onMouseDown={holdShellFocus}
       onClick={handleShellClick}
     >
       {showDisconnectedPill && (
@@ -1021,7 +1034,7 @@ export function TerminalView({
           Waiting for output…
         </div>
       )}
-      {scrolledUp && (
+      {terminalScrolledUp.value && (
         <button
           type="button"
           class="terminal-scroll-end"
@@ -1033,6 +1046,14 @@ export function TerminalView({
       )}
       {linkSheet && (
         <LinkActionSheet link={linkSheet} onClose={() => setLinkSheet(null)} />
+      )}
+      {textSheet && (
+        <TerminalTextSheet
+          lines={textSheet.lines}
+          anchorRow={textSheet.anchorRow}
+          onPaste={() => pasteActionRef.current?.()}
+          onClose={() => setTextSheet(null)}
+        />
       )}
     </div>
   )

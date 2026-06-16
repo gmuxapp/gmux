@@ -1797,9 +1797,8 @@ body {
   min-height: 0;
   position: relative;
   overflow: auto;
-  background: #0f141a;
+  background: var(--terminal-bg, #0f141a);
   overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
 }
 
 .terminal-shell-passive {
@@ -1811,7 +1810,7 @@ body {
   min-height: 100%;
   position: relative;
   overflow: visible;
-  background: #0f141a;
+  background: var(--terminal-bg, #0f141a);
 }
 
 /* Zero-height sticky anchor: sticks to the top of .terminal-shell's scroll
@@ -2235,43 +2234,116 @@ body {
 
   .main-panel {
     width: 100%;
+    /* Stacking-context root for the key layering: key borders (z:1) <
+       terminal (z:2) < glyphs + feedback (z:3). Also anchors the overlaid
+       control bar. */
+    position: relative;
+    z-index: 0;
   }
 
+  /* Control bar floating over the bottom of the terminal (out of flow,
+     transparent container) so the terminal can slide one rounded-up row in
+     behind the translucent keys instead of stopping short above an opaque
+     strip — see the ceil/reserve path in measureTerminalFit. Keys are placed
+     by named grid-area (.mk-*); the layout (incl. the single-row landscape /
+     tablet steps further down) is purely a matter of redefining the template,
+     never the DOM. */
   .mobile-bottom-bar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 52px;
-    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
-    border-top: 1px solid var(--border);
-    background: var(--bg-sidebar);
-    flex-shrink: 0;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    /* Phones: 7-column × 2-row grid. The empty top-left corner and the
+       scroll-end / empty top-right simply fall out of the template (no
+       placeholder elements needed). */
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    grid-template-rows: repeat(2, 40px);
+    grid-template-areas:
+      '.    esc  tab  wl  au  wr  end'
+      'menu ctrl alt  al  ad  ar  send';
+    /* One knob for spacing: the visual gap between keys. Hitboxes bridge it
+       automatically (each .mkey-face extends half of it), so there are no
+       dead gaps between buttons no matter what you set this to. */
+    --key-gap: 5px;
+    gap: var(--key-gap);
+    padding: 0 4px calc(4px + env(safe-area-inset-bottom));
+    background: transparent;
+    /* No z-index: the bar must NOT form a stacking context, so its keys'
+       borders (z:1) and glyphs (z:3) can sit on either side of the
+       terminal (z:2) in .main-panel's context. */
   }
 
-  .mobile-bottom-sep {
-    width: 1px;
-    height: 24px;
-    background: var(--border);
-    flex-shrink: 0;
+  /* Key → grid-area map. The same names are reused by every breakpoint, so
+     only the template (above / below) changes between layouts. */
+  .mk-menu { grid-area: menu; }
+  .mk-esc  { grid-area: esc; }
+  .mk-tab  { grid-area: tab; }
+  .mk-ctrl { grid-area: ctrl; }
+  .mk-alt  { grid-area: alt; }
+  .mk-wl   { grid-area: wl; }
+  .mk-wr   { grid-area: wr; }
+  .mk-al   { grid-area: al; }
+  .mk-ad   { grid-area: ad; }
+  .mk-au   { grid-area: au; }
+  .mk-ar   { grid-area: ar; }
+  .mk-end  { grid-area: end; }
+  .mk-send { grid-area: send; }
+
+  /* No bottom padding under the grid: the control bar overlays it, so the
+     reclaimed terminal row can run right to the bottom edge. */
+  .terminal-container .xterm {
+    padding-bottom: 0;
   }
 
-  .mobile-terminal-actions {
-    display: flex;
-    gap: 6px;
-    min-width: 0;
-    flex: 1;
+  /* Middle layer. The shell/container go transparent and the opaque fill
+     moves onto the grid itself (.xterm-screen), so the terminal's painted
+     area ends exactly at the content's bottom edge — wherever the row math
+     lands it. A background-coloured drop shadow extends just below that
+     edge, masking the key borders into the terminal as it overlaps them. */
+  .terminal-shell {
+    z-index: 2;
+    background: transparent;
+    /* No OS text-selection / callout on long-press of the dead strip that
+       slides under the toolbar. Real text selection on touch goes through
+       the long-press text sheet, not native grid selection. */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .terminal-container {
+    background: transparent;
+  }
+  .terminal-container .xterm-screen {
+    background: var(--terminal-bg, #0f141a);
+  }
+  /* Background-coloured drop shadow on the viewport (the grid's visible
+     box), bleeding past its edges to mask the key borders into the terminal
+     exactly at the content edge. */
+  .terminal-container .xterm-viewport {
+    box-shadow: 0 0 16px 16px var(--terminal-bg, #0f141a);
+  }
+
+  /* The floating scroll-to-end pill is desktop-only; on touch the toolbar's
+     top-right key takes over. */
+  .terminal-scroll-end {
+    display: none;
   }
 
   .mobile-bottom-action {
+    /* Just a layout/hit box. Visuals split across two layers: the border
+       (::before, z:1) sits UNDER the terminal so it's hidden where the
+       terminal overlaps and visible below it; the glyph + feedback
+       (.mkey-face, z:3) sit ON TOP of the terminal, always crisp. The
+       button itself must create no stacking context (no filter/opacity/
+       z-index) or it would trap both layers together. */
     appearance: none;
-    border: 1px solid var(--border-strong);
-    background: var(--bg-surface);
-    color: oklch(76% 0.012 250);
+    border: none;
+    background: transparent;
     border-radius: 6px;
     min-height: 40px;
-    min-width: 36px;
-    padding: 0 10px;
-    flex: 0 0 auto;
+    min-width: 0;
+    padding: 0 8px;
     font-family: 'Source Sans 3', sans-serif;
     font-size: 13px;
     font-weight: 600;
@@ -2279,8 +2351,63 @@ body {
     align-items: center;
     justify-content: center;
     touch-action: manipulation;
-    transition: background 0.1s, border-color 0.1s, color 0.1s;
+    /* Suppress the OS long-press text-selection / callout on keys held down
+       (e.g. scroll-to-end or an arrow on auto-repeat). */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
     position: relative;
+  }
+
+  /* Bottom layer: the key border outline. (Background omitted for now —
+     this is where a key fill would go.) */
+  .mobile-bottom-action::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border-radius: inherit;
+    border: 1px solid oklch(from var(--border-strong) l c h / 0.65);
+    pointer-events: none;
+  }
+
+  /* Top layer: glyph + press/armed feedback, lifted above the terminal. */
+  .mkey-face {
+    position: absolute;
+    /* Extend the hit area by half the gap on every side so neighbouring
+       faces meet edge-to-edge (the CSS equivalent of hitSlop). The glyph
+       stays centred and the visual border (::before) keeps the cell's
+       true bounds, so only the tappable area grows. */
+    inset: calc(var(--key-gap) / -2);
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: inherit;
+    color: oklch(88% 0.012 250);
+    /* --bg-coloured outline so a glyph stays legible where it overlaps
+       terminal text. Built purely from stacked drop-shadows (not
+       text-stroke) so text and SVG icons get the *same* treatment —
+       text-stroke would only affect the text. More stacks = heavier. */
+    filter:
+      drop-shadow(0 0 0.75px var(--bg))
+      drop-shadow(0 0 0.75px var(--bg))
+      drop-shadow(0 0 0.75px var(--bg))
+      drop-shadow(0 0 0.75px var(--bg))
+      drop-shadow(0 0 0.75px var(--bg));
+    /* Must catch taps: this layer sits above the terminal (z:3), whereas the
+       <button> itself is below it (z:auto, so the border can sit at z:1).
+       With pointer-events:none the tap fell through to the terminal-shell;
+       auto makes this layer the hit target and the event bubbles to the
+       button. (On-device this was masked by iOS touch-target fuzzing.) */
+    pointer-events: auto;
+  }
+
+  /* Cells take their height from the grid track, not min-height. */
+  .mobile-bottom-bar .mobile-bottom-action {
+    min-height: 0;
+    padding: 0 4px;
   }
 
   /* Waiting dot on the hamburger menu button. Only the waiting (unread)
@@ -2295,6 +2422,7 @@ body {
     border-radius: 50%;
     top: -3px;
     right: -3px;
+    z-index: 3;
     pointer-events: none;
     background: var(--unread);
     /* Ring in the page background so the dot reads cleanly against the button border */
@@ -2306,26 +2434,42 @@ body {
     animation: dot-arrival 520ms cubic-bezier(0.25, 1, 0.5, 1) both;
   }
 
-  .mobile-terminal-actions .mobile-bottom-action {
-    flex: 1 1 0;
-    min-width: 0;
+  /* Press feedback rides the top layer and snaps in/out (no transition):
+     ring the key in the accent with a soft glow — strong but tasteful. */
+  /* Feedback fill/ring is confined to the cell's true bounds (cancelling
+     the hit area's negative inset) so it never spills into the gap — only
+     the tappable area grew, not the visuals. */
+  .mobile-bottom-action:active .mkey-face::before,
+  .mobile-bottom-action.armed .mkey-face::before {
+    content: '';
+    position: absolute;
+    inset: calc(var(--key-gap) / 2);
+    border-radius: inherit;
+    pointer-events: none;
   }
-
-  .mobile-bottom-action:active {
-    background: var(--bg-hover);
+  .mobile-bottom-action:active .mkey-face {
+    color: var(--text);
+  }
+  .mobile-bottom-action:active .mkey-face::before {
+    background: color-mix(in oklch, var(--accent) 18%, transparent);
+    box-shadow:
+      0 0 0 1px var(--accent),
+      0 0 12px 1px oklch(from var(--accent) l c h / 0.55);
   }
 
   .mobile-bottom-action:disabled {
     opacity: 0.35;
   }
 
-  .mobile-bottom-action.armed {
-    background: color-mix(in oklch, var(--accent) 20%, var(--bg-surface));
-    border-color: var(--accent);
+  .mobile-bottom-action.armed .mkey-face {
     color: var(--text);
   }
+  .mobile-bottom-action.armed .mkey-face::before {
+    background: color-mix(in oklch, var(--accent) 20%, transparent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
 
-  .mobile-bottom-action.send-btn {
+  .mobile-bottom-action.send-btn .mkey-face {
     color: var(--accent);
   }
 
@@ -2755,6 +2899,50 @@ body {
    menu rather than a dialog. The preview intentionally shows the full
    URI (word-broken, scrollable past ~6 lines) — for OSC 8 hyperlinks
    this is the only place the real target is visible before opening. */
+/* Shared button for the long-press sheets (link + text). Default is a
+   surface-filled button; .sheet-btn-primary gets the accent fill. */
+.sheet-btn {
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text);
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 11px 12px;
+  border-radius: 8px;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.sheet-btn:active {
+  background: var(--bg-hover);
+}
+
+.sheet-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: oklch(13% 0.015 250);
+}
+
+.sheet-btn-primary:active {
+  background: oklch(66% 0.1 195);
+}
+
+/* Quiet dismiss (Close): set apart from the real actions — no fill, a
+   hairline border (lighter than their --border-strong), muted text — so
+   it reads as a real button but not a third equal choice. */
+.sheet-btn-quiet {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+
+.sheet-btn-quiet:active {
+  background: var(--bg-hover);
+}
+
 .link-sheet {
   width: 320px;
   padding: 6px;
@@ -2783,20 +2971,113 @@ body {
   overflow-y: auto;
 }
 
-.link-sheet-action {
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  font-size: 14px;
-  font-family: inherit;
-  padding: 12px 12px;
-  border-radius: 8px;
-  cursor: pointer;
+.link-sheet-actions {
+  display: flex;
+  gap: 8px;
+  padding: 4px;
 }
 
-.link-sheet-action:hover,
-.link-sheet-action:active {
-  background: var(--bg-hover);
+.link-sheet-actions .sheet-btn {
+  flex: 1;
+}
+
+/* Text-sheet backdrop is constrained to the visible viewport (var set by
+   App's viewport effect), not the layout viewport: with the soft keyboard
+   open the layout viewport still spans the full window behind the
+   keyboard, so a plain inset:0 backdrop would centre the panel too low
+   (partly behind the keyboard). */
+.action-sheet-backdrop {
+  bottom: auto;
+  height: var(--app-height, 100dvh);
+}
+
+/* Text sheet: the terminal buffer as natively-selectable text, scrolled
+   to the long-pressed row, with Paste pinned below. Tall and wide so it
+   reads like a text view rather than a menu. */
+.text-sheet {
+  width: 560px;
+  /* Near full width: a full-width terminal line (13px cells) fits without
+     horizontal scroll at the sheet's 12px font, while wider content still
+     scrolls. Capped height leaves backdrop above/below to tap-dismiss. */
+  max-width: calc(100vw - 12px);
+  height: min(640px, calc(var(--app-height, 100vh) - 120px));
+  padding: 0;
+}
+
+.text-sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 8px;
+}
+
+.text-sheet-pre {
+  margin: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre;
+  /* The whole point: the app shell sets user-select:none on chrome, so
+     re-enable native selection here. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.text-sheet-footer {
+  border-top: 1px solid var(--border);
+  padding: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.text-sheet-footer .sheet-btn {
+  flex: 1;
+}
+
+/* ── Wide control bar: single-row layouts ───────────────────────────────
+   Landscape phones and tablets are wide enough to lay the whole key set in
+   one row, reclaiming a terminal row. Placed after the base coarse block so
+   these win; both thresholds are placeholders to fine-tune. Keys are moved
+   purely by re-stating grid-template-areas (see .mk-* map). */
+
+/* Single row, word-jumps dropped. */
+@media (pointer: coarse) and (min-width: 600px) {
+  .mobile-bottom-bar {
+    grid-template-columns: repeat(10, 1fr);
+    grid-template-rows: 40px;
+    grid-template-areas: 'menu esc tab ctrl alt al ad au ar send';
+  }
+  /* Word-jumps aren't part of the single-row layout. */
+  .mk-wl,
+  .mk-wr {
+    display: none;
+  }
+  /* Scroll-end floats above the top-right of the row instead of taking a
+     column. Unlike the in-row keys (which the terminal slides under), it
+     sits fully above the terminal with its own fill + border at z:3. */
+  .mk-end {
+    position: absolute;
+    grid-area: auto;
+    right: 6px;
+    bottom: calc(100% + 8px);
+    z-index: 3;
+    width: 46px;
+    height: 34px;
+    min-height: 0;
+    border-radius: 8px;
+    background: var(--bg-surface);
+  }
+}
+
+/* Wider still: fold the word-jumps back in, flanking the arrow cluster. */
+@media (pointer: coarse) and (min-width: 820px) {
+  .mobile-bottom-bar {
+    grid-template-columns: repeat(12, 1fr);
+    grid-template-areas: 'menu esc tab ctrl alt wl al ad au ar wr send';
+  }
+  .mk-wl,
+  .mk-wr {
+    display: inline-flex;
+  }
 }
