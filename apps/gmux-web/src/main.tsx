@@ -23,7 +23,7 @@ import { installVersionWatch } from './version-watch'
 import {
   sessions, connState, selected, selectedId, view, health, peers,
   terminalOptions, keybinds, macCommandIsCtrl,
-  unreadCount, keyboardOpen,
+  unreadCount, keyboardOpen, terminalScrolledUp, terminalScrollToBottom,
   urlPath, urlSearch,
   initStore, setNavigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
@@ -209,6 +209,7 @@ const IconRight = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><
 const IconWordLeft  = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="3.5" y1="3" x2="3.5" y2="11"/><path d="M13 7H6m0 0 3-3M6 7l3 3"/></svg>
 const IconWordRight = () => <svg viewBox="0 0 18 14" width="20" height="16" {...S}><line x1="14.5" y1="3" x2="14.5" y2="11"/><path d="M5 7h7m0 0-3-3m3 3-3 3"/></svg>
 const IconSend = () => <svg viewBox="0 0 14 14" width="16" height="16" fill="currentColor" stroke="none"><path d="M3 2.5l8 4.5-8 4.5V8.5L7.5 7 3 5.5z"/></svg>
+const IconEnd = () => <svg viewBox="0 0 14 14" width="16" height="16" {...S}><path d="M7 2v7m0 0-3-3m3 3 3-3"/><path d="M3.5 12h7"/></svg>
 
 // Press-and-hold auto-repeat for the navigation keys: fire once on press,
 // then after a short delay repeat until release. Arrows repeat briskly;
@@ -305,18 +306,18 @@ function MobileTerminalBar({
   // Arrows and word-jumps key-repeat on hold; the rest fire once per tap.
   const repeat = useAutoRepeat()
 
-  // Static two-row grid, identical whether the keyboard is open or
-  // closed (no relabeling, no reflow). ☰ and send are double-height
-  // bookends; the inner 5×2 grid holds the keys with ↑/↓ stacked into a
-  // center D-pad column (← ↓ → across the bottom, word-jumps tucked into
-  // the top corners). ctrl/alt only arm + highlight — they never change
-  // another key's meaning.
+  // The bar is a CSS grid laid out via named areas (.mk-* → grid-area), so the
+  // DOM order below is only tab/reading order — the visual arrangement lives
+  // in styles.css. Narrow phones get a 7×2 grid (empty top-left corner;
+  // scroll-end or empty top-right). Wider viewports (landscape / tablets)
+  // collapse to a single row, and the widest step folds the word-jumps back
+  // in. Keys never relabel; ctrl/alt only arm + highlight.
   const armedClass = (armed: boolean) => `mobile-bottom-action${armed ? ' armed' : ''}`
 
   return (
-    <div class="mobile-bottom-bar" aria-label="Mobile terminal controls" onMouseDown={keepFocus}>
+    <div class="mobile-bottom-bar" role="toolbar" aria-label="Terminal keys" onMouseDown={keepFocus}>
       <button
-        class={`mobile-bottom-action menu-btn${waiting ? ' bg-waiting' : ''}${arrival ? ` bg-${arrival}` : ''}`}
+        class={`mobile-bottom-action menu-btn mk-menu${waiting ? ' bg-waiting' : ''}${arrival ? ` bg-${arrival}` : ''}`}
         onClick={() => {
           // Dismiss the on-screen keyboard when opening the menu. keepFocus
           // holds focus on the textarea through pointerdown, so it's still
@@ -325,31 +326,21 @@ function MobileTerminalBar({
           onMenu()
         }}
         title="Open sessions"
-      >
-        ☰
-      </button>
-
-      <div class="mobile-key-grid" role="toolbar" aria-label="Terminal keys">
-        {/* Row 1 */}
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\x1b')} title="Escape">esc</button>
-        <button class="mobile-bottom-action" disabled={!canSend} onClick={() => sendKey('\t')} title="Tab">tab</button>
-        <button class="mobile-bottom-action" disabled={!canSend} {...repeat(() => sendWord('\x1b[D'), WORD_REPEAT_MS)} title="Word left"><IconWordLeft /></button>
-        <button class="mobile-bottom-action" disabled={!canSend} {...repeat(() => sendKey('\x1b[A'), ARROW_REPEAT_MS)} title="Up arrow"><IconUp /></button>
-        <button class="mobile-bottom-action" disabled={!canSend} {...repeat(() => sendWord('\x1b[C'), WORD_REPEAT_MS)} title="Word right"><IconWordRight /></button>
-        {/* Row 2 */}
-        <button class={armedClass(ctrlArmed)} disabled={!canSend} aria-pressed={ctrlArmed} onClick={onToggleCtrl} title={ctrlArmed ? 'Ctrl armed for next key' : 'Arm Ctrl'}>ctrl</button>
-        <button class={armedClass(altArmed)} disabled={!canSend} aria-pressed={altArmed} onClick={onToggleAlt} title={altArmed ? 'Alt armed for next key' : 'Arm Alt'}>alt</button>
-        <button class="mobile-bottom-action" disabled={!canSend} {...repeat(() => sendKey('\x1b[D'), ARROW_REPEAT_MS)} title="Left arrow"><IconLeft /></button>
-        <button class="mobile-bottom-action" disabled={!canSend} {...repeat(() => sendKey('\x1b[B'), ARROW_REPEAT_MS)} title="Down arrow"><IconDown /></button>
-        <button class="mobile-bottom-action" disabled={!canSend} {...repeat(() => sendKey('\x1b[C'), ARROW_REPEAT_MS)} title="Right arrow"><IconRight /></button>
-      </div>
-
-      <button
-        class="mobile-bottom-action send-btn"
-        disabled={!canSend}
-        onClick={() => sendKey('\r')}
-        title={altArmed ? 'Send Alt+Enter' : 'Send'}
-      ><IconSend /></button>
+      ><span class="mkey-face">☰</span></button>
+      <button class="mobile-bottom-action mk-esc" disabled={!canSend} onClick={() => sendKey('\x1b')} title="Escape"><span class="mkey-face">esc</span></button>
+      <button class="mobile-bottom-action mk-tab" disabled={!canSend} onClick={() => sendKey('\t')} title="Tab"><span class="mkey-face">tab</span></button>
+      <button class={`${armedClass(ctrlArmed)} mk-ctrl`} disabled={!canSend} aria-pressed={ctrlArmed} onClick={onToggleCtrl} title={ctrlArmed ? 'Ctrl armed for next key' : 'Arm Ctrl'}><span class="mkey-face">ctrl</span></button>
+      <button class={`${armedClass(altArmed)} mk-alt`} disabled={!canSend} aria-pressed={altArmed} onClick={onToggleAlt} title={altArmed ? 'Alt armed for next key' : 'Arm Alt'}><span class="mkey-face">alt</span></button>
+      <button class="mobile-bottom-action mk-wl" disabled={!canSend} {...repeat(() => sendWord('\x1b[D'), WORD_REPEAT_MS)} title="Word left"><span class="mkey-face"><IconWordLeft /></span></button>
+      <button class="mobile-bottom-action mk-al" disabled={!canSend} {...repeat(() => sendKey('\x1b[D'), ARROW_REPEAT_MS)} title="Left arrow"><span class="mkey-face"><IconLeft /></span></button>
+      <button class="mobile-bottom-action mk-ad" disabled={!canSend} {...repeat(() => sendKey('\x1b[B'), ARROW_REPEAT_MS)} title="Down arrow"><span class="mkey-face"><IconDown /></span></button>
+      <button class="mobile-bottom-action mk-au" disabled={!canSend} {...repeat(() => sendKey('\x1b[A'), ARROW_REPEAT_MS)} title="Up arrow"><span class="mkey-face"><IconUp /></span></button>
+      <button class="mobile-bottom-action mk-ar" disabled={!canSend} {...repeat(() => sendKey('\x1b[C'), ARROW_REPEAT_MS)} title="Right arrow"><span class="mkey-face"><IconRight /></span></button>
+      <button class="mobile-bottom-action mk-wr" disabled={!canSend} {...repeat(() => sendWord('\x1b[C'), WORD_REPEAT_MS)} title="Word right"><span class="mkey-face"><IconWordRight /></span></button>
+      {terminalScrolledUp.value && (
+        <button class="mobile-bottom-action mk-end" onClick={() => terminalScrollToBottom.value?.()} title="Scroll to bottom"><span class="mkey-face"><IconEnd /></span></button>
+      )}
+      <button class="mobile-bottom-action send-btn mk-send" disabled={!canSend} onClick={() => sendKey('\r')} title={altArmed ? 'Send Alt+Enter' : 'Send'}><span class="mkey-face"><IconSend /></span></button>
     </div>
   )
 }
@@ -630,17 +621,19 @@ function App() {
           />
         )}
 
-        <MobileTerminalBar
-          canSend={canAttach}
-          ctrlArmed={ctrlArmed}
-          altArmed={altArmed}
-          onMenu={() => setSidebarOpen(true)}
-          onSend={handleMobileInput}
-          onToggleCtrl={handleToggleCtrl}
-          onToggleAlt={handleToggleAlt}
-          onCtrlConsumed={handleCtrlConsumed}
-          onAltConsumed={handleAltConsumed}
-        />
+        {selectedVal && (canAttach || USE_MOCK) && termOpts && keybindsVal && (
+          <MobileTerminalBar
+            canSend={canAttach}
+            ctrlArmed={ctrlArmed}
+            altArmed={altArmed}
+            onMenu={() => setSidebarOpen(true)}
+            onSend={handleMobileInput}
+            onToggleCtrl={handleToggleCtrl}
+            onToggleAlt={handleToggleAlt}
+            onCtrlConsumed={handleCtrlConsumed}
+            onAltConsumed={handleAltConsumed}
+          />
+        )}
       </div>
     </div>
   )

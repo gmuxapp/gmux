@@ -383,6 +383,15 @@ export const macCommandIsCtrl = signal(false)
  */
 export const keyboardOpen = signal(false)
 
+/** True while the terminal viewport is scrolled up from the bottom (past a
+ * small threshold). Lets a scroll-to-end control live outside the terminal
+ * (the mobile toolbar) and stay in sync, without threading state through App. */
+export const terminalScrolledUp = signal(false)
+
+/** Scroll-to-bottom handle for the live terminal, or null when none is
+ * mounted. Set by TerminalView, invoked by the toolbar's end key. */
+export const terminalScrollToBottom = signal<(() => void) | null>(null)
+
 /** Current URL path, kept in sync with preact-iso's location. */
 export const urlPath = signal(
   typeof location !== 'undefined' ? (location.pathname.replace(/\/+$/, '') || '/') : '/',

@@ -17,6 +17,7 @@ import { LinkActionSheet } from './link-action-sheet'
 import { TerminalTextSheet } from './terminal-text-sheet'
 import { pressedBufferRow, readTerminalText } from './terminal-text'
 import { decideViewportResize, sameSize } from './terminal-resize'
+import { terminalScrolledUp, terminalScrollToBottom } from './store'
 import { MOCK_BY_ID } from './mock-data/index'
 import type { Session } from './types'
 
@@ -71,11 +72,22 @@ function measureTerminalFit(
   // forever. offset* is the border-box and ignores scrollbars, so the
   // measurement is a fixed point regardless of transient overflow.
   // (.terminal-shell has no border/padding, so offset* == the viewport.)
+  // On mobile the control bar floats over the terminal's bottom (out of
+  // flow, translucent — see styles.css), so the shell fills the full height
+  // behind it. Reserve the bar's height, but round the row count UP: the
+  // terminal then claims one extra row whose bottom sliver tucks behind the
+  // translucent keys, instead of leaving a sub-cell gap above an opaque bar.
+  // Detected here — not at the call sites — so every resize path (initial
+  // fit, keyboard transitions, manual refit) computes identically. The bar's
+  // offsetParent is null when it's display:none (desktop) ⇒ plain floor fit.
+  const bar = document.querySelector<HTMLElement>('.mobile-bottom-bar')
+  const overlayBar = bar?.offsetParent ? bar.offsetHeight : 0
+
   const availW = shellEl.offsetWidth - padX - reserveWidth
-  const availH = shellEl.offsetHeight - padY
+  const availH = shellEl.offsetHeight - padY - overlayBar
 
   let cols = Math.max(2, Math.floor(availW / dims.css.cell.width))
-  let rows = Math.max(1, Math.floor(availH / dims.css.cell.height))
+  let rows = Math.max(1, (overlayBar > 0 ? Math.ceil : Math.floor)(availH / dims.css.cell.height))
 
   // Guard against 1px overflow: xterm computes screen width as
   // Math.round(device.cell.width * cols / dpr). Because css.cell.width is
@@ -91,7 +103,9 @@ function measureTerminalFit(
   // Same guard vertically: row height rounding across device/css pixels can
   // overflow by 1px at fractional DPRs (the monitor-move case), which is
   // exactly what seeds the scrollbar flicker described above.
-  if (dims.device.cell.height > 0) {
+  // (Skipped in overlay-bar mode: the gained row intentionally exceeds
+  // availH, spilling its bottom sliver behind the translucent bar.)
+  if (overlayBar === 0 && dims.device.cell.height > 0) {
     const predictedHeight = Math.round(dims.device.cell.height * rows / dpr)
     if (predictedHeight > availH && rows > 1) rows--
   }
@@ -238,7 +252,6 @@ export function TerminalView({
   const [termLoading, setTermLoading] = useState(true)
   const [wsState, setWsState] = useState<'connecting' | 'open' | 'lost'>('connecting')
   const [viewportSize, setViewportSize] = useState<TerminalSize | null>(null)
-  const [scrolledUp, setScrolledUp] = useState(false)
   const [linkSheet, setLinkSheet] = useState<LinkInfo | null>(null)
   const [textSheet, setTextSheet] = useState<{ lines: string[]; anchorRow: number } | null>(null)
   // The paste trigger lives in the attach effect (it reads bracketed-paste
@@ -386,6 +399,19 @@ export function TerminalView({
     focusTerminalInput(termRef.current)
   }, [])
 
+  // A tap on the shell *outside* the rendered grid (the strip that slides
+  // under the translucent toolbar, including the empty key-row corners)
+  // would let the browser's synthesized mousedown blur the textarea and
+  // dismiss the soft keyboard. Hold focus there by cancelling the default,
+  // mirroring the toolbar's keepFocus. The grid (.xterm) manages its own
+  // focus, so leave those taps untouched. Touch-only: there's no soft
+  // keyboard to protect off-touch, and cancelling mousedown there would
+  // only suppress focus/selection on shell controls for no benefit.
+  const holdShellFocus = useCallback((ev: MouseEvent) => {
+    if (!isTouchDevice()) return
+    if (!(ev.target instanceof Element) || !ev.target.closest('.xterm')) ev.preventDefault()
+  }, [])
+
   const handleShellClick = useCallback((ev: MouseEvent) => {
     // Touch focuses the terminal via the touchend handler (a deliberate
     // tap opens the keyboard). Ignore synthesized clicks here so a click
@@ -505,6 +531,7 @@ export function TerminalView({
     }
 
     onInputReady?.(sendRawInput)
+    terminalScrollToBottom.value = () => term.scrollToBottom()
     // The paste trigger reads bracketedPasteMode and the clipboard fresh
     // on every invocation: bracketed mode flips at runtime as TUIs come
     // and go, and the clipboard contents are obviously volatile. Sharing
@@ -548,7 +575,7 @@ export function TerminalView({
 
     const scrollDisposable = term.onScroll(() => {
       const buf = term.buffer.active
-      setScrolledUp(buf.baseY - buf.viewportY > SCROLL_THRESHOLD)
+      terminalScrolledUp.value = buf.baseY - buf.viewportY > SCROLL_THRESHOLD
     })
 
     const handleGlobalKeydown = (ev: KeyboardEvent) => {
@@ -763,7 +790,8 @@ export function TerminalView({
       osc52Disposable.dispose()
       dataDisposable.dispose()
       scrollDisposable.dispose()
-      setScrolledUp(false)
+      terminalScrolledUp.value = false
+      terminalScrollToBottom.value = null
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       wsRef.current?.close()
       wsRef.current = null
@@ -969,6 +997,7 @@ export function TerminalView({
     <div
       ref={shellRef}
       class={`terminal-shell ${showResizePill ? 'terminal-shell-passive' : ''}`}
+      onMouseDown={holdShellFocus}
       onClick={handleShellClick}
     >
       {showDisconnectedPill && (
@@ -995,7 +1024,7 @@ export function TerminalView({
           Waiting for output…
         </div>
       )}
-      {scrolledUp && (
+      {terminalScrolledUp.value && (
         <button
           type="button"
           class="terminal-scroll-end"
