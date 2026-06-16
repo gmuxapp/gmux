@@ -77,15 +77,10 @@ func materialize() (string, error) {
 	return path, nil
 }
 
-// PreloadEnv returns env with the shim wired in: GMUX_RUNNER_SOCK set to the
-// runner's socket, and the runtime preload flag appended (append-safe) to
-// both NODE_OPTIONS and BUN_OPTIONS. Both vars are set because the runner
-// doesn't know whether the agent will run under node or bun; each runtime
-// honours its own and ignores the other.
-//
-// Appending (rather than overwriting) preserves any flags the user already
-// set upstream. The shim deletes these vars from its own process.env on
-// startup so child processes the agent spawns don't inherit them.
+// PreloadEnv wires the shim into env: GMUX_RUNNER_SOCK plus the preload flag
+// appended (append-safe) to both NODE_OPTIONS and BUN_OPTIONS — both set
+// because we don't know the agent's runtime; each honours its own. The shim
+// strips these from its own process.env so children inherit a clean env.
 func PreloadEnv(env []string, shimPath, sockPath string) []string {
 	out := make([]string, 0, len(env)+1)
 	seenNode, seenBun := false, false

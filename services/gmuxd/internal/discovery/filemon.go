@@ -80,10 +80,8 @@ type monitoredSession struct {
 }
 
 func NewFileMonitor(s *store.Store) *FileMonitor {
-	// Attribution is never loaded from disk: shimmed runners re-announce
-	// their held session file when the daemon (re)subscribes to /events
-	// (see ptyserver handleEvents replay), and unshimmed sessions re-derive
-	// via the scrollback fallback. Start with an empty map.
+	// Attribution is never persisted: runners re-announce their held file on
+	// (re)subscribe, and unshimmed sessions re-derive via the fallback.
 	return NewFileMonitorWithAttributions(s, nil)
 }
 
@@ -756,16 +754,11 @@ func (fm *FileMonitor) syncFileMetadataLocked(sessionID, filePath string) {
 
 // --- Attribution ---
 
-// AttributeFromShim records an authoritative file->session attribution
-// reported by the agent-shim preload (via the runner's session_file
-// event). Unlike scrollback matching this is not a guess: the agent
-// itself wrote the file, so it overrides and suppresses scrollback
-// attribution for both the file and the session (see
-// sessionHasShimLocked / tryAttributeUnmatched).
-//
-// A change of file for an already-shim-attributed session is a rebind
-// (/resume): the session no longer holds its previous file, so the old
-// attribution is dropped.
+// AttributeFromShim records the authoritative file->session attribution the
+// agent-shim reported (via the runner's session_file event). The agent wrote
+// the file, so this overrides scrollback for both file and session. A
+// different file for an already-attributed session is a /resume rebind; the
+// prior file is dropped.
 func (fm *FileMonitor) AttributeFromShim(sessionID, filePath string) {
 	if sessionID == "" || filePath == "" {
 		return
@@ -779,12 +772,9 @@ func (fm *FileMonitor) AttributeFromShim(sessionID, filePath string) {
 		return
 	}
 
-	// The shim is authoritative: this session holds exactly filePath now.
-	// Drop every other file currently attributed to it — whether a prior
-	// shim file (a /resume rebind) or a stale scrollback guess made in the
-	// window before the agent's first write. Without this, a fresh shimmed
-	// session that scrollback mis-attributed keeps the wrong file alongside
-	// the right one.
+	// Authoritative: this session holds exactly filePath. Drop every other
+	// file attributed to it (a prior rebind file, or a stale scrollback guess
+	// from before the first write).
 	for p := range fm.shimFiles {
 		if fm.shimFiles[p] == sessionID && p != filePath {
 			delete(fm.shimFiles, p)
@@ -809,13 +799,10 @@ func (fm *FileMonitor) AttributeFromShim(sessionID, filePath string) {
 	}
 }
 
-// MarkShimCovered records that the agent-shim preload is live in this
-// session's process (its `hello`). From that point scrollback attribution
-// is suppressed for the session: the shim will report the real file when
-// the agent writes it, and guessing in the meantime only produces
-// mis-attributions to stale files (observed in practice). A covered
-// session with no conversation yet correctly stays unattributed until it
-// writes.
+// MarkShimCovered marks that the shim is live in this session (its `hello`),
+// suppressing scrollback for it: the shim reports the real file on first
+// write, and guessing before then only mis-attributes to stale files. A
+// covered session with no conversation stays unattributed until it writes.
 func (fm *FileMonitor) MarkShimCovered(sessionID string) {
 	if sessionID == "" {
 		return
@@ -840,24 +827,15 @@ func (fm *FileMonitor) sessionHasShimLocked(sessionID string) bool {
 	return false
 }
 
-// tryAttributeUnmatched attempts to match candidate files to sessions
-// using scrollback similarity. Called from the Run loop on a throttled
-// timer. Returns true if unattributed files remain (caller should keep
-// retrying).
+// tryAttributeUnmatched matches candidate files to sessions by content
+// similarity. Throttled; returns true if unattributed files remain.
 //
-// Deprecated: this is the FALLBACK attribution path. The authoritative
-// path is the agent-shim, which reports the held session file directly
-// (AttributeFromShim) and suppresses this scan for covered sessions
-// (sessionHasShimLocked). Scrollback matching is a post-hoc guess and is
-// retained only for sessions with no shim signal: shells (which don't use
-// this path at all), agent versions/builds where the shim couldn't be
-// injected, and runners that started before any daemon could send their
-// GMUX_RUNNER_SOCK. Successful fallback attributions are logged with a
-// "(FALLBACK)" marker so reliance can be monitored in production.
+// Deprecated: FALLBACK path. The agent-shim reports the held file directly
+// (AttributeFromShim) and this scan is skipped for shim-covered sessions.
+// It's a post-hoc guess, kept only for agents the shim can't cover. Hits log
+// a "(FALLBACK)" marker so reliance can be tracked.
 //
-// The expensive work (scrollback fetches, file I/O) happens with the
-// lock released. The lock is only held briefly to snapshot state and
-// record results.
+// Expensive work (scrollback fetch, file I/O) runs with the lock released.
 func (fm *FileMonitor) tryAttributeUnmatched() bool {
 	fm.mu.Lock()
 

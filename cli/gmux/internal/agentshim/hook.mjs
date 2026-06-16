@@ -1,9 +1,9 @@
 // gmux agent shim
 // ----------------------------------------------------------------------------
-// A tiny, readable preload that gmux injects into node/bun-based agent
-// processes (pi, claude, codex — anything that persists a JSONL session file)
-// so gmux learns *authoritatively* which conversation file a runner holds,
-// the moment the agent writes it. This replaces post-hoc scrollback matching.
+// A tiny, readable preload that gmux injects into node/bun agent processes
+// (pi today; any node/bun agent that persists a JSONL session file) so gmux
+// learns *authoritatively* which conversation file a runner holds, the
+// moment the agent writes it. This replaces post-hoc scrollback matching.
 //
 // How it gets loaded (set by the gmux runner when it spawns the agent):
 //   node:  NODE_OPTIONS="... --import file:///abs/path/hook.mjs"
