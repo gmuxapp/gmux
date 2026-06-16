@@ -194,7 +194,7 @@ export default async function globalSetup(_config: FullConfig) {
 
   // Start a test shell session (non-interactive — no local terminal attach).
   // cwd=workspaceDir so the session is matched into the seeded project.
-  const gmux = spawn(GMUX, ['bash', '-c', 'echo READY; while true; do sleep 60; done'], {
+  const gmux = spawn(GMUX, ['--', 'bash', '-c', 'echo READY; while true; do sleep 60; done'], {
     env,
     cwd: workspaceDir,
     stdio: ['ignore', 'pipe', 'pipe'],
