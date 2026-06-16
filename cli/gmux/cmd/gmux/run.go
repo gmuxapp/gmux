@@ -68,9 +68,9 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		return
 	}
 
-	// Explicit --no-attach: spawn detached, wait for the child to finish
+	// Explicit -d/--detach: spawn detached, wait for the child to finish
 	// registering with gmuxd, then print the session id on stdout so the
-	// caller (typically a script) can capture it for --tail / --dismiss
+	// caller (typically a script) can capture it for tail / kill
 	// without polling.
 	if !attach {
 		spawnDetached(args, "", true)
@@ -376,14 +376,14 @@ func reexecRunArgs(args []string) []string {
 
 // spawnDetached re-execs gmux with the given args as a setsid'd
 // background process, disconnected from the current terminal. Used
-// for both --no-attach and nested-gmux scenarios: the child registers
+// for both detached (-d) and nested-gmux scenarios: the child registers
 // with gmuxd and appears in the UI.
 //
 // When waitForRegistration is true, the parent blocks until the child
 // either acknowledges registration via the handshake pipe or fails;
 // on success it prints the session id on stdout, on failure it exits
-// non-zero with a stderr error. This is the --no-attach path: scripts
-// capture the id with id=$(gmux --no-attach foo) and use it
+// non-zero with a stderr error. This is the detached (-d) path: scripts
+// capture the id with id=$(gmux -d -- foo) and use it
 // immediately, without polling.
 //
 // When waitForRegistration is false, the parent prints msg on stderr
@@ -455,7 +455,7 @@ func spawnDetached(args []string, msg string, waitForRegistration bool) {
 
 // explainHandshakeFailure converts a readHandshake error into a
 // short human-readable reason for the stderr message a script
-// developer sees when --no-attach can't return a session id.
+// developer sees when a detached run cannot return a session id.
 func explainHandshakeFailure(err error) string {
 	switch {
 	case errors.Is(err, os.ErrDeadlineExceeded):

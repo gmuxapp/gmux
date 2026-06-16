@@ -57,42 +57,43 @@ func fetchSessions() ([]cliSession, error) {
 }
 
 // resolveSession fetches the session list from gmuxd and finds the one
-// the user's reference points to. host is the optional --host flag; an
-// empty host means "local sessions only". See matchSession for the
-// matching rules.
-func resolveSession(ref, host string) (cliSession, error) {
+// the user's reference points to. See matchSession for the matching
+// rules.
+func resolveSession(ref string) (cliSession, error) {
 	sessions, err := fetchSessions()
 	if err != nil {
 		return cliSession{}, err
 	}
-	return matchSession(sessions, ref, host)
+	return matchSession(sessions, ref)
 }
 
-// matchSession resolves a user-supplied reference to a single session,
-// scoped by host.
+// matchSession resolves a user-supplied reference to a single session.
 //
 // A reference can be:
 //   - the full session ID ("sess-abcd1234") or full slug
-//   - the short form shown by --list ("abcd1234", i.e. the ID with its
-//     "sess-" prefix stripped)
+//   - the short form shown by `gmux ls` ("abcd1234", i.e. the ID with
+//     its "sess-" prefix stripped)
 //   - a unique prefix of any of the above
-//   - any of the above with an "@<host>" suffix to target a peer
+//   - any of the above with an "@<peer>" suffix to target a peer
 //
-// host comes from the --host flag. An @-suffix in ref overrides host
-// (or must agree if both are present). An empty effective host scopes
-// the lookup to local sessions only; consistency over magic.
+// Local-by-default (ADR 0009): without an @suffix the lookup is scoped
+// to local sessions only, so a bare ref can never match — let alone act
+// on — a session on another host. Addressing a peer requires explicitly
+// typing "@<peer>".
 //
 // Exact matches (on either ID or slug) always win, even when a shorter
 // prefix would also match something else. Ambiguous prefixes return a
 // human-readable error listing the candidates. As a friendly hint, if
 // a strict-local lookup fails but exactly one peer session matches the
 // ref, the error suggests the qualified id@peer form.
-func matchSession(sessions []cliSession, ref, host string) (cliSession, error) {
+func matchSession(sessions []cliSession, ref string) (cliSession, error) {
 	if ref == "" {
 		return cliSession{}, fmt.Errorf("empty session reference")
 	}
 
-	// Split off any @host suffix. Reconcile with the --host flag.
+	// The only way to widen the scope past local is an explicit @peer
+	// suffix on the ref.
+	host := ""
 	if idx := strings.LastIndex(ref, "@"); idx > 0 {
 		suffixHost := ref[idx+1:]
 		if suffixHost == "" {
@@ -100,9 +101,6 @@ func matchSession(sessions []cliSession, ref, host string) (cliSession, error) {
 			// as local would silently scope wrong; demand the user make
 			// the intent explicit.
 			return cliSession{}, fmt.Errorf("session ref %q has empty @host suffix", ref)
-		}
-		if host != "" && host != suffixHost {
-			return cliSession{}, fmt.Errorf("--host=%q conflicts with %q in session ref", host, suffixHost)
 		}
 		host = suffixHost
 		ref = ref[:idx]
@@ -126,7 +124,7 @@ func matchSession(sessions []cliSession, ref, host string) (cliSession, error) {
 	// Friendly miss: if the user gave no host and the ref matches
 	// peer sessions, suggest the qualified form rather than just
 	// saying "not found". This is the most common confused-paste
-	// case (`gmux --list --all` shows c0b3c1a1@konyvtar, user copies
+	// case (`gmux ls --all` shows c0b3c1a1@konyvtar, user copies
 	// just the c0b3c1a1).
 	if host == "" {
 		peerPool := make([]cliSession, 0, len(sessions))
@@ -226,7 +224,7 @@ func shortID(id string) string {
 // displayID returns the user-visible address for a session: shortID for
 // local sessions, shortID@peer for peer sessions. Use it in error
 // messages so the printed id matches what the user typed (and what
-// --list shows), instead of dropping the @peer suffix and leaving them
+// `gmux ls` shows), instead of dropping the @peer suffix and leaving them
 // wondering which session the message refers to.
 func displayID(s cliSession) string {
 	if s.Peer == "" {
@@ -235,12 +233,12 @@ func displayID(s cliSession) string {
 	return shortID(s.ID) + "@" + s.Peer
 }
 
-// cmdList implements `gmux --list`.
+// cmdList implements `gmux ls [--all] [--json]`.
 //
-// Defaults to local sessions only; pass --all to include every peer, or
-// --host=<peer> to scope to one. The ID column carries the @host
-// suffix for peer sessions so the displayed ID is a single copy-paste
-// unit that works directly with --send, --kill, etc.
+// Defaults to local sessions only; pass --all to include every peer.
+// The ID column carries the @peer suffix for peer sessions so the
+// displayed ID is a single copy-paste unit that works directly with
+// send, kill, etc.
 //
 // Rows are grouped alive-first then by start time; columns are kept
 // shallow (id, status, kind, title, cwd) so the output stays readable
@@ -288,7 +286,7 @@ func cmdList(all bool, asJSON bool) int {
 		if s.Peer != "" {
 			// The @peer suffix is part of the addressable ID, not just
 			// status flavor: copy-pasting this row's ID into
-			// `gmux --send` must work without further typing.
+			// `gmux send` must work without further typing.
 			id += "@" + s.Peer
 		}
 		title := s.Title
@@ -319,14 +317,14 @@ func cmdList(all bool, asJSON bool) int {
 	return 0
 }
 
-// cmdKill implements `gmux --kill <id>`.
+// cmdKill implements `gmux kill <id>`.
 //
 // Routes through gmuxd rather than the session's own socket so remote
 // peers work the same way local sessions do. gmuxd translates this into
 // a SIGTERM on the child process and lets the normal exit lifecycle
 // update the store.
 func cmdKill(ref string) int {
-	sess, err := resolveSession(ref, "")
+	sess, err := resolveSession(ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
@@ -353,7 +351,7 @@ func cmdKill(ref string) int {
 	return 0
 }
 
-// cmdTail implements `gmux --tail N <id>`.
+// cmdTail implements `gmux tail <id> [-n N] [--raw]`.
 //
 // Routes through gmuxd's scrollback broker rather than the per-session
 // Unix socket so the same code path serves four cases uniformly:
@@ -363,7 +361,7 @@ func cmdKill(ref string) int {
 // Output is raw PTY bytes including ANSI; pipe through your favorite
 // stripper if you want plain text.
 func cmdTail(ref string, n int, raw bool) int {
-	sess, err := resolveSession(ref, "")
+	sess, err := resolveSession(ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
@@ -411,19 +409,17 @@ func fetchScrollback(sess cliSession, n int) ([]byte, int) {
 	return data, 0
 }
 
-// cmdSend implements `gmux --send [--no-submit] <id> [text]`.
+// cmdSend implements `gmux send <id> [text] [Key...]`.
 //
-// Sends bytes to the session's PTY as if they had been typed at the
-// terminal, then appends a carriage return so the input is submitted.
-// The submit-by-default shape matches what every other "send a message"
-// CLI does (gh issue comment, slack send, jira issue comment add) and
-// avoids the silent-failure trap of bytes-without-\r sitting in the
-// agent's input box forever. `--no-submit` opts out for the rare
-// flow where you want to pre-fill input without dispatching it.
+// Sends bytes to the session's PTY as if typed at the terminal: the
+// inline text (or piped stdin) followed by any trailing key tokens.
+// Submission is explicit (ADR 0009) — a trailing `Enter` key, or a \r
+// in piped bytes — so there is no implicit carriage return.
 //
-// When text is provided inline it is sent verbatim before the submit;
-// when text is omitted, stdin is read until EOF — the natural shape
-// for piping: `echo hello | gmux --send abc`.
+// When text is provided inline it is sent verbatim; when it is omitted
+// and stdin is a pipe, stdin is read until EOF (`echo hi | gmux send
+// <id> Enter`). Trailing keys (`Enter`, `C-c`, ...) render to their
+// terminal byte sequences and are appended after the body.
 //
 // Routes through gmuxd's session-action API rather than dialing the
 // runner socket directly, so the same code path handles local and
@@ -452,7 +448,7 @@ func cmdSendKeys(ref string, keys []string, literal bool) int {
 
 // sendBytes resolves ref and POSTs body to the session's input endpoint.
 func sendBytes(ref string, body io.Reader) int {
-	sess, err := resolveSession(ref, "")
+	sess, err := resolveSession(ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1

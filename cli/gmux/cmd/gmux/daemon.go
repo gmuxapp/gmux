@@ -157,7 +157,7 @@ func gmuxdHealthy(timeout time.Duration) bool {
 // returns true once gmuxd accepts it. Retries a handful of times to
 // cover the case where gmuxd is still starting up. Returns false if
 // every attempt fails: callers that care about registration outcome
-// (e.g. the --no-attach handshake) treat false as "give up".
+// (e.g. the detached (-d) handshake) treat false as "give up".
 func registerWithGmuxd(sessionID, socketPath string) bool {
 	baseURL := gmuxdBaseURL()
 

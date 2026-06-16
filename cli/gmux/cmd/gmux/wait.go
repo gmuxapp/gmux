@@ -28,7 +28,7 @@ const (
 	waitExitTimeout = 3
 )
 
-// cmdWait implements `gmux --wait [--timeout N] <id>`.
+// cmdWait implements `gmux wait <id> [--for-text S | --for-regex P] [--timeout N]`.
 //
 // The wait itself happens server-side: gmuxd already subscribes to
 // per-session events for its own bookkeeping, so we just hand it the
@@ -42,7 +42,7 @@ const (
 // peer sessions are out of scope until peer subscriptions stream
 // Status events back to the hub.
 func cmdWait(ref, forText, forRegex string, timeoutSecs int) int {
-	sess, err := resolveSession(ref, "")
+	sess, err := resolveSession(ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
@@ -53,7 +53,7 @@ func cmdWait(ref, forText, forRegex string, timeoutSecs int) int {
 	if sess.Peer != "" {
 		// Use the bare shortID here: the message already names the peer
 		// separately, so displayID's "shortID@peer" would just repeat it.
-		fmt.Fprintf(os.Stderr, "gmux: --wait is only supported for local sessions (%s is on peer %q)\n",
+		fmt.Fprintf(os.Stderr, "gmux: wait is only supported for local sessions (%s is on peer %q)\n",
 			shortID(sess.ID), sess.Peer)
 		return 1
 	}
@@ -101,13 +101,13 @@ func cmdWait(ref, forText, forRegex string, timeoutSecs int) int {
 			return 1
 		}
 	case http.StatusRequestTimeout:
-		fmt.Fprintf(os.Stderr, "gmux: --wait timed out after %ds\n", timeoutSecs)
+		fmt.Fprintf(os.Stderr, "gmux: wait timed out after %ds\n", timeoutSecs)
 		return waitExitTimeout
 	case http.StatusUnprocessableEntity:
 		// Adapter kind doesn't emit an idle signal. Surface the
 		// daemon's message so the user knows which kind they hit.
 		body, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "gmux: --wait not supported for this session: %s\n",
+		fmt.Fprintf(os.Stderr, "gmux: wait not supported for this session: %s\n",
 			extractMessage(body))
 		return 1
 	case http.StatusNotFound:
