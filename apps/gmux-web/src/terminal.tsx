@@ -424,6 +424,15 @@ export function TerminalView({
     focusTerminal()
   }, [focusTerminal])
 
+  // Mirror the resolved terminal background into CSS (--terminal-bg) so the
+  // overlay fade and the shell/container fills match a themed background
+  // instead of a hard-coded literal. Falls back to the default in CSS when
+  // unset, so behaviour is unchanged for the default theme.
+  useEffect(() => {
+    const bg = terminalOptions.theme.background
+    if (shellRef.current && bg) shellRef.current.style.setProperty('--terminal-bg', bg)
+  }, [terminalOptions.theme.background])
+
   // Force-fetch the terminal font before mounting xterm.
   //
   // xterm picks its cell metrics from the first measurement it takes

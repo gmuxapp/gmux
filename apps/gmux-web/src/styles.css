@@ -1793,7 +1793,7 @@ body {
   min-height: 0;
   position: relative;
   overflow: auto;
-  background: #0f141a;
+  background: var(--terminal-bg, #0f141a);
   overscroll-behavior: contain;
 }
 
@@ -1806,7 +1806,7 @@ body {
   min-height: 100%;
   position: relative;
   overflow: visible;
-  background: #0f141a;
+  background: var(--terminal-bg, #0f141a);
 }
 
 /* Zero-height sticky anchor: sticks to the top of .terminal-shell's scroll
@@ -2309,13 +2309,13 @@ body {
     background: transparent;
   }
   .terminal-container .xterm-screen {
-    background: #0f141a;
+    background: var(--terminal-bg, #0f141a);
   }
   /* Background-coloured drop shadow on the viewport (the grid's visible
      box), bleeding past its edges to mask the key borders into the terminal
      exactly at the content edge. */
   .terminal-container .xterm-viewport {
-    box-shadow: 0 0 16px 16px #0f141a;
+    box-shadow: 0 0 16px 16px var(--terminal-bg, #0f141a);
   }
 
   /* The floating scroll-to-end pill is desktop-only; on touch the toolbar's
