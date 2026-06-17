@@ -42,9 +42,11 @@ func TestAttributeFromShimIsAuthoritative(t *testing.T) {
 	if !fm.sessionHasShimLocked("sess-pi") {
 		t.Errorf("session should be marked shim-attributed")
 	}
-	// Title was derived from the file on attribution.
-	if sess, _ := s.Get("sess-pi"); sess.AdapterTitle != "hello there" {
-		t.Errorf("title not derived from shim attribution: %q", sess.AdapterTitle)
+	// The daemon must NOT derive title/status for a shim-covered session:
+	// that's the runner's job now (ADR 0011 phase 1, sessionFileReader). The
+	// daemon only records the attribution and relies on /events for state.
+	if sess, _ := s.Get("sess-pi"); sess.AdapterTitle != "" {
+		t.Errorf("daemon derived title %q for shim session; runner owns it", sess.AdapterTitle)
 	}
 }
 

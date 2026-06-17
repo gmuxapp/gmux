@@ -158,6 +158,7 @@ type Server struct {
 	screen       *vt.Emulator // virtual terminal for replay snapshots (guarded by mu)
 	adapter      adapter.Adapter
 	state        *session.State
+	fileReader   *sessionFileReader
 
 	mu             sync.Mutex
 	clients        map[*wsClient]struct{}
@@ -275,6 +276,7 @@ func New(cfg Config) (*Server, error) {
 		screen:     nil, // set below after s is constructed
 		adapter:    cfg.Adapter,
 		state:      cfg.State,
+		fileReader: newSessionFileReader(cfg.State, cfg.Adapter),
 		clients:    make(map[*wsClient]struct{}),
 		localOut:   cfg.LocalOut,   // wired before readPTY starts so early output is never lost
 		scrollback: cfg.Scrollback, // same: wired pre-readPTY so fast-exit output is never lost
@@ -513,6 +515,10 @@ func (s *Server) handleShimEvent(w http.ResponseWriter, r *http.Request) {
 	case "append", "write":
 		if ev.Path != "" {
 			s.state.SetSessionFile(ev.Path)
+			// Runner owns derived state (ADR 0011 phase 1): read+parse the
+			// file ourselves and emit status/meta, rather than leaving it
+			// to the daemon's fallback file monitor.
+			s.fileReader.onWrite(ev.Path)
 		}
 	case "hello":
 		// The shim is live in the agent process. Announce it so the

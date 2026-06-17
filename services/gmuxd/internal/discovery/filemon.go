@@ -643,6 +643,13 @@ func (fm *FileMonitor) processAttributedFileLocked(sessionID, path string) {
 		return
 	}
 
+	// Shim-covered sessions are owned by their runner, which parses the file
+	// itself and emits status/meta over /events (ADR 0011 phase 1). The
+	// daemon must not also write derived state for them.
+	if fm.sessionHasShimLocked(sessionID) {
+		return
+	}
+
 	readAll := ms.readAll
 	lines := fm.readNewLines(path, readAll)
 	if readAll {
@@ -792,11 +799,9 @@ func (fm *FileMonitor) AttributeFromShim(sessionID, filePath string) {
 	delete(fm.candidateFiles, filePath)
 	log.Printf("filemon: shim-attributed %s -> %s", filepath.Base(filePath), sessionID)
 
-	// Derive title/slug/status now if the session is already monitored;
-	// otherwise NotifyNewSession will process it once the runner registers.
-	if _, ok := fm.sessions[sessionID]; ok {
-		fm.processAttributedFileLocked(sessionID, filePath)
-	}
+	// No daemon-side parse: the shimmed runner owns derived state and emits
+	// it over /events (ADR 0011 phase 1, enforced by the guard in
+	// processAttributedFileLocked).
 }
 
 // MarkShimCovered marks that the shim is live in this session (its `hello`),
