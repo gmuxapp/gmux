@@ -84,6 +84,18 @@ function install(socketPath) {
 
   const isSession = (p) => typeof p === "string" && p.endsWith(".jsonl");
 
+  // A read-open of an existing session file is the agent *binding* to a
+  // conversation (a /resume selection, or a `--session X` launch): it reads
+  // but doesn't write, so the write hooks never fire. Reporting it lets the
+  // runner attribute on bind, not only on the first subsequent write.
+  // O_RDONLY is 0, so numeric flags are read-open when no write bit is set;
+  // string flags starting with "r" (r, rs, r+) are a read/bind.
+  const isReadOpen = (flags) => {
+    if (flags == null) return true; // openSync default is "r"
+    if (typeof flags === "number") return (flags & 3) === 0;
+    return String(flags).startsWith("r");
+  };
+
   function report(op, path, data) {
     let bytes = 0;
     let text;
@@ -113,12 +125,47 @@ function install(socketPath) {
   }
 
   // --- wrap openSync: remember which path an fd points at ---
+  // Reading a single session file always starts by opening a handle to it,
+  // whether sync, async, or promise-based. Hooking the whole open family
+  // means we attribute a bind regardless of which one the agent picks, so we
+  // don't couple to pi using openSync specifically (a sync→async change
+  // wouldn't break us). The subsequent read (readSync, handle.read, ...) is
+  // implied by the open and needs no separate hook. Bulk/stream reads
+  // (createReadStream, the /resume picker's list scan) are deliberately NOT
+  // hooked: those touch many files and would churn attribution.
+  const noteReadOpen = (path, flags) => {
+    if (isSession(path) && isReadOpen(flags)) report("read", String(path));
+  };
+
   const origOpenSync = fs.openSync;
-  fs.openSync = function (path, ...rest) {
-    const fd = origOpenSync.call(this, path, ...rest);
-    if (isSession(path)) fdPaths.set(fd, String(path));
+  fs.openSync = function (path, flags, ...rest) {
+    const fd = origOpenSync.call(this, path, flags, ...rest);
+    if (isSession(path)) {
+      fdPaths.set(fd, String(path));
+      noteReadOpen(path, flags);
+    }
     return fd;
   };
+
+  // Async callback form: fs.open(path[, flags[, mode]], cb). When flags is
+  // omitted the next arg is the callback and the default mode is "r".
+  const origOpen = fs.open;
+  if (typeof origOpen === "function") {
+    fs.open = function (path, ...rest) {
+      const flags = typeof rest[0] === "function" ? undefined : rest[0];
+      noteReadOpen(path, flags);
+      return origOpen.call(this, path, ...rest);
+    };
+  }
+
+  // Promise form: fs.promises.open(path[, flags[, mode]]) → FileHandle.
+  if (fs.promises && typeof fs.promises.open === "function") {
+    const origPOpen = fs.promises.open;
+    fs.promises.open = function (path, flags, ...rest) {
+      noteReadOpen(path, flags);
+      return origPOpen.call(this, path, flags, ...rest);
+    };
+  }
 
   const origCloseSync = fs.closeSync;
   fs.closeSync = function (fd, ...rest) {

@@ -19,13 +19,13 @@ import (
 	"syscall"
 	"time"
 
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/agentshim"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
-	uv "github.com/charmbracelet/ultraviolet"
-	"github.com/charmbracelet/x/vt"
 	"nhooyr.io/websocket"
 )
 
@@ -151,24 +151,25 @@ type ResizeMsg struct {
 
 // Server holds a PTY and serves WebSocket connections.
 type Server struct {
-	cmd      *exec.Cmd
-	ptmx     *os.File
-	sockPath string
-	listener net.Listener
-	screen       *vt.Emulator // virtual terminal for replay snapshots (guarded by mu)
-	adapter      adapter.Adapter
-	state        *session.State
-	fileReader   *sessionFileReader
+	cmd        *exec.Cmd
+	ptmx       *os.File
+	sockPath   string
+	listener   net.Listener
+	screen     *vt.Emulator // virtual terminal for replay snapshots (guarded by mu)
+	adapter    adapter.Adapter
+	state      *session.State
+	fileReader *sessionFileReader
+	readBinder *readBinder
 
 	mu             sync.Mutex
 	clients        map[*wsClient]struct{}
-	localOut       io.Writer       // optional local terminal output sink
-	scrollback     io.WriteCloser  // optional persistent scrollback sink (closed in waitChild)
-	ptyCols        uint16          // last applied PTY cols (guarded by mu)
-	ptyRows        uint16          // last applied PTY rows (guarded by mu)
-	cursorHidden   bool            // tracks DECTCEM via callback (guarded by mu)
-	screenPending  []byte          // raw PTY data not yet fed to screen (guarded by mu)
-	lastClientLeft time.Time       // when the last WS client disconnected (guarded by mu)
+	localOut       io.Writer      // optional local terminal output sink
+	scrollback     io.WriteCloser // optional persistent scrollback sink (closed in waitChild)
+	ptyCols        uint16         // last applied PTY cols (guarded by mu)
+	ptyRows        uint16         // last applied PTY rows (guarded by mu)
+	cursorHidden   bool           // tracks DECTCEM via callback (guarded by mu)
+	screenPending  []byte         // raw PTY data not yet fed to screen (guarded by mu)
+	lastClientLeft time.Time      // when the last WS client disconnected (guarded by mu)
 
 	done    chan struct{} // closed when child exits
 	ptyDone chan struct{} // closed when readPTY finishes draining
@@ -289,6 +290,13 @@ func New(cfg Config) (*Server, error) {
 	// The callback fires under s.mu (held during drainScreenLocked → screen.Write).
 	s.screen = newScreen(int(cfg.Cols), int(cfg.Rows), func(visible bool) {
 		s.cursorHidden = !visible
+	})
+
+	// Debounce shim read events: a lone read binds (instant /resume-select),
+	// a multi-file burst is a picker scan and is ignored (ADR 0011).
+	s.readBinder = newReadBinder(150*time.Millisecond, func(path string) {
+		s.state.SetSessionFile(path)
+		s.fileReader.onWrite(path)
 	})
 
 	go s.readPTY()
@@ -414,6 +422,7 @@ func (s *Server) Resize(cols, rows uint16) {
 func (s *Server) Shutdown() {
 	s.listener.Close()
 	s.ptmx.Close()
+	s.readBinder.stop()
 	os.Remove(s.sockPath)
 
 	s.mu.Lock()
@@ -493,7 +502,7 @@ const maxInputBytes = 1 << 20 // 1 MiB
 // shimEvent is the payload posted by the agent-shim preload (hook.mjs) on
 // every JSONL session-file write in the agent process.
 type shimEvent struct {
-	Op    string `json:"op"`   // "hello" | "append" | "write"
+	Op    string `json:"op"`   // "hello" | "append" | "write" | "read"
 	Path  string `json:"path"` // session file path (empty for "hello")
 	Pid   int    `json:"pid"`
 	Bytes int    `json:"bytes"`
@@ -520,6 +529,12 @@ func (s *Server) handleShimEvent(w http.ResponseWriter, r *http.Request) {
 			// to the daemon's fallback file monitor.
 			s.fileReader.onWrite(ev.Path)
 		}
+	case "read":
+		// A bind without a write (/resume select, --session launch). Reads are
+		// debounced so a lone read attributes instantly but a picker's bulk
+		// scan does not churn (readBinder). The onBind callback then attributes
+		// + parses like a write.
+		s.readBinder.observe(ev.Path)
 	case "hello":
 		// The shim is live in the agent process. Announce it so the
 		// daemon suppresses scrollback attribution for this session
@@ -1042,7 +1057,6 @@ func (s *Server) readPTY() {
 		}
 	}
 }
-
 
 func (s *Server) waitChild() {
 	s.err = s.cmd.Wait()
