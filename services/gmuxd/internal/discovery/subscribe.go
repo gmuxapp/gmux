@@ -316,7 +316,18 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			log.Printf("subscribe: %s: bad session_file event: %v", sessionID, err)
 			return
 		}
-		if sf.Path != "" && sub.OnSessionFile != nil {
+		if sf.Path == "" {
+			return
+		}
+		// session → file is authoritative and per-session (ADR 0011): record it
+		// on the session itself so the frontend can derive file → {sessions}
+		// and warn when a conversation is open in more than one runner. A
+		// rebind (/resume) just overwrites this session's own file; it never
+		// clobbers another session's.
+		sub.store.Update(sessionID, func(sess *store.Session) {
+			sess.SessionFile = sf.Path
+		})
+		if sub.OnSessionFile != nil {
 			sub.OnSessionFile(sessionID, sf.Path)
 		}
 
