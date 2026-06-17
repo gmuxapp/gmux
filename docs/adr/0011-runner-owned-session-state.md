@@ -55,6 +55,20 @@ and the **daemon is a read cache plus a raw file-event source**.
    `attributions`/`shimFiles`/`shimCovered` maps, the `FileAttributor`
    fallback) is removed.
 
+5. **Attribution is keyed `session → file`, not `file → session` (N:1).** A
+   conversation file can legitimately be open in more than one runner (you
+   resume a session that's already running in another tab). The old daemon
+   map `file → one session` makes the last writer clobber the previous one,
+   so attribution "jumps" between tabs and an aborted runner leaves a stale
+   binding. Because each runner authoritatively owns the one file it writes,
+   the natural key is `session → file`: every session carries its own file
+   and nothing collides. The daemon (or frontend) derives the inverse view
+   `file → {sessions}`; when that set has more than one live session, both
+   stay attributed and the UI shows a "this conversation is open in N tabs"
+   warning rather than fighting over a single slot. Rebind becomes "a session
+   updates its own file," eliminating the clear-other-files logic in
+   `AttributeFromShim`.
+
 This realises ADR 0009's "identity is adapter-owned; shells aren't special":
 once the adapter owns state and identity in the runner, the daemon stops
 making per-adapter decisions entirely.
@@ -72,6 +86,14 @@ making per-adapter decisions entirely.
   only by runner `/events`. This unifies pi/claude onto the same path shell
   already uses and removes one of the two store writers. Highest-risk phase:
   needs status/title parity tests per adapter.
+
+- **Phase 1b — session-keyed attribution + duplicate-open warning (N:1).**
+  The runner already owns `session → file` (`State.SessionFile`); surface it
+  on the store session and let the frontend derive `file → {sessions}` and
+  warn when a conversation is live in more than one runner. Fixes the
+  attribution "jump" and the stale binding an aborted duplicate leaves
+  behind. Lands ahead of Phase 2 because it only adds a field; the
+  collision-prone `file → session` maps are deleted in Phase 2.
 
 - **Phase 2 — daemon file-watch → raw broadcast.** The daemon emits raw
   file-changed events to same-kind runners; adapters claim/ignore. Delete
