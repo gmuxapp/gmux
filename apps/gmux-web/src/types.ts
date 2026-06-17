@@ -40,6 +40,12 @@ export interface Session {
   terminal_cols?: number
   terminal_rows?: number
   slug?: string
+  /**
+   * Conversation file this runner authoritatively writes (session → file,
+   * ADR 0011). Two live sessions sharing a session_file means the same
+   * conversation is open in multiple tabs — surfaced as a warning.
+   */
+  session_file?: string
   /** Version string of the gmux runner binary that owns this session. */
   runner_version?: string
   /** SHA-256 of the gmux runner binary (first 8 chars useful for display). */

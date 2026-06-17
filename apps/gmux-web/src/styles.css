@@ -824,6 +824,11 @@ body {
 .session-row-age {
   font-variant-numeric: tabular-nums;
 }
+.session-row-dup,
+.session-dup-warning {
+  color: var(--warning, #d08770);
+  font-weight: 500;
+}
 
 .session-row-close {
   background: none;

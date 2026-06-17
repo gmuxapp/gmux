@@ -194,6 +194,21 @@ export const sessions = computed<Session[]>(() =>
 export const projects = computed<ProjectItem[]>(() =>
   applyPending(_rawSessions.value, _rawWorld.value.projects, _pendingMutations.value).projects,
 )
+
+/** Conversation files that are live in more than one runner (session → file
+ *  is authoritative per-runner; ADR 0011). Two alive sessions sharing a
+ *  session_file means the same conversation is open in multiple tabs, which
+ *  the UI surfaces as a warning. Keyed by session_file. */
+export const duplicateSessionFiles = computed<Set<string>>(() => {
+  const counts = new Map<string, number>()
+  for (const s of sessions.value) {
+    if (!s.alive || !s.session_file) continue
+    counts.set(s.session_file, (counts.get(s.session_file) ?? 0) + 1)
+  }
+  const dups = new Set<string>()
+  for (const [file, n] of counts) if (n > 1) dups.add(file)
+  return dups
+})
 export const peers = computed<PeerInfo[]>(() => _rawWorld.value.peers)
 export const health = computed<HealthData | null>(() => _rawWorld.value.health)
 export const launchers = computed<LauncherDef[]>(() => _rawWorld.value.launchers)
