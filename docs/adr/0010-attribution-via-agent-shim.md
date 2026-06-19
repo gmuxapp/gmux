@@ -1,9 +1,22 @@
 # ADR 0010: Authoritative session attribution via an agent-shim
 
-**Status:** Accepted
+**Status:** Superseded by ADR 0011
 **Date:** 2026-06-16
 **Related:** ADR 0002 (project ownership from session origin), ADR 0003
-(resume by id passthrough), ADR 0004 (SessionStream)
+(resume by id passthrough), ADR 0004 (SessionStream), ADR 0011 (runner-owned
+state; the agent-hook that replaced this shim)
+
+> **Superseded.** The fs-preload shim described here shipped and worked, but
+> inferred the held file from filesystem syscalls. It could not see a
+> cache-served `/resume`-select (pi reads no file, so there is nothing to
+> observe) and spammed the runner when broadened to catch reads. ADR 0011
+> replaces it with an **agent-hook**: a pi extension that subscribes to pi's
+> own `session_*`/`agent_*` lifecycle and reports the held file, title, and
+> status directly — no inference. The shim, its `NODE_OPTIONS`/`BUN_OPTIONS`
+> injection, and the scrollback fallback have been removed. The context below
+> is retained as the historical record of why the shim was chosen over
+> scrollback matching; the same reasoning (authoritative > guessing) led to
+> the hook.
 
 ## Context
 

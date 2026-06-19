@@ -1,13 +1,23 @@
 # ADR 0011: Runner-owned session state; the daemon is a read cache
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-16
-**Related:** ADR 0004 (SessionStream), ADR 0010 (agent-shim attribution)
+**Related:** ADR 0004 (SessionStream), ADR 0010 (the agent-shim this supersedes)
+
+> **Outcome.** Built and shipped. The decisive change beyond the original plan:
+> the fragile fs signal (ADR 0010's shim) was replaced by an **agent-hook** —
+> a pi extension (`pi -e <ext>`) that subscribes to pi's own session/agent
+> lifecycle and reports the held file, title, and status *directly*. Because
+> the hook reports everything, pi needs no runner-side file parsing and no
+> daemon file-watch at all. The agent-shim, its read-inference debouncer, and
+> the pi scrollback content matcher have been **removed**; codex (no hook) is
+> the only remaining file-watch + metadata-attribution consumer. The phased
+> plan below records how we got here; notes mark what the hook changed.
 
 ## Context
 
 After ADR 0010, attribution (which conversation file a runner holds) is
-authoritative and **runner-owned**: the agent-shim reports the file to the
+authoritative and **runner-owned**: the agent-hook reports the file to the
 runner, the runner records it on `session.State` and replays it, and the
 daemon's attribution map is a derived cache fed by that replay.
 
@@ -31,10 +41,13 @@ machinery and the duplicated "session file" state between runner and daemon.
 Invert ownership so the **runner's adapter owns all state for its session**,
 and the **daemon is a read cache plus a raw file-event source**.
 
-1. **Adapter parsing runs in the runner.** The runner feeds the shim delta
-   (and, for unshimmed agents, raw file-changed events from the daemon) to
-   its adapter, which updates `session.State`. `session.State` is the single
-   source of truth for a live session.
+1. **Live state is set in the runner.** A hooked agent (pi) reports its title
+   and status to the runner directly, which sets `session.State` — no file
+   parsing. An unhooked, file-driven agent (codex) is parsed from raw
+   file-changed events; whether that parse runs in the runner or the daemon's
+   file-watch, `session.State`/the store is the single source of truth for a
+   live session. (As built, pi is fully hook-driven and codex still parses via
+   the daemon file-watch.)
 
 2. **The daemon `store.Store` is a read model.** Its only live feed is the
    runner `/events` stream (already built via re-announce). It no longer
@@ -42,34 +55,31 @@ and the **daemon is a read cache plus a raw file-event source**.
    runner snapshot persisted to `meta.json` — the one piece of state the
    daemon owns, because no runner can once it has exited.
 
-3. **The daemon's file watching becomes a raw event source.** inotify emits
-   `{path, bytes}` with no parsing, no adapter logic, no attribution. It is
-   needed **only for unshimmed agents** (e.g. the Rust `codex`); shimmed
-   agents get path + delta directly from their shim and need nothing from
-   the daemon.
+3. **File watching is fallback-only.** The daemon's inotify file-watch is
+   needed **only for unhooked agents** (e.g. the Rust `codex`, which can't
+   load a node/bun hook); hooked agents (pi) report path, title, and status
+   directly and need nothing from the daemon's file machinery.
 
-4. **Identity/attribution is adapter-owned, in the runner, from the strongest
-   available signal.** In order of authority:
-   1. **Native extension/hook** (Tier 1). Agents with an extension API tell us
-      the active session directly. The gmux pi extension (`pi -e <path>`,
-      package `agentext`, capability `adapter.SessionExtender`) subscribes to
-      pi's `session_start`/`session_switch`/`session_fork` and posts an
-      authoritative `session` event (`getSessionFile()`) on every bind. This
-      is the only signal that survives pi's cache-served `/resume`-select,
-      where no read of the chosen file happens for the shim to observe.
-   2. **Agent-shim** (Tier 2). The env-borne fs preload (`agentshim`,
-      `NODE_OPTIONS`/`BUN_OPTIONS`) reports writes (authoritative) and
-      best-effort read-opens. Survives shell-wrapped launches that argv
-      injection can't reach; covers node/bun agents with no extension API.
-   3. **Scrollback / metadata** (Tier 3). Last resort for codex (Rust,
-      unshimmable) and unhooked shells.
+4. **Identity/attribution is adapter-owned, from the strongest available
+   signal.** Two tiers, in order of authority:
+   1. **Agent-hook** (primary). An agent with an extension API tells us the
+      active session directly. The gmux pi hook (`pi -e <path>`, package
+      `agentext`, capability `adapter.SessionExtender`) subscribes to pi's
+      `session_start`/`session_switch`/`session_fork` and posts an
+      authoritative `session` event (`getSessionFile()`) on every bind — the
+      only signal that survives pi's cache-served `/resume`-select, where no
+      file is read for an fs probe to observe. It also posts title and status
+      from `agent_start`/`agent_end`.
+   2. **Metadata** (fallback). For agents with no hook (codex), the daemon
+      matches a changed file to a candidate session by cwd + start time
+      (`adapter.FileAttributor`). A lone fresh candidate is attributed by
+      mtime; ambiguous sets wait.
 
-   Raw file events are broadcast to same-kind runners; each adapter decides
-   "is this mine?" (by the authoritative path, by cwd, or — last resort — by
-   content).
-   Daemon-side attribution (`AttributeFromShim`, `tryAttributeUnmatched`, the
-   `attributions`/`shimFiles`/`shimCovered` maps, the `FileAttributor`
-   fallback) is removed.
+   The earlier ADR 0010 **agent-shim** (fs preload) and the **pi scrollback**
+   content matcher were intermediate tiers; both are now removed. Daemon-side
+   attribution survives only as `AttributeFromHook` (recording the hook's
+   authoritative `session → file` and suppressing daemon parsing for that
+   session) plus the codex metadata fallback.
 
 5. **Attribution is keyed `session → file`, not `file → session` (N:1).** A
    conversation file can legitimately be open in more than one runner (you
@@ -83,7 +93,7 @@ and the **daemon is a read cache plus a raw file-event source**.
    stay attributed and the UI shows a "this conversation is open in N tabs"
    warning rather than fighting over a single slot. Rebind becomes "a session
    updates its own file," eliminating the clear-other-files logic in
-   `AttributeFromShim`.
+   `AttributeFromHook`.
 
 This realises ADR 0009's "identity is adapter-owned; shells aren't special":
 once the adapter owns state and identity in the runner, the daemon stops
@@ -95,13 +105,11 @@ making per-adapter decisions entirely.
   is a re-announce-fed cache; `attributions.json` retired; scrollback
   demoted to a logged fallback.
 
-- **Phase 1 — move file parsing into the runner.** For shimmed sessions the
-  shim already delivers path + delta; the runner runs `ParseNewLines` and
-  sets its own `session.State` (status/title/unread/slug). The daemon's
-  `FileMonitor` stops writing `store.Store` for content; the store is fed
-  only by runner `/events`. This unifies pi/claude onto the same path shell
-  already uses and removes one of the two store writers. Highest-risk phase:
-  needs status/title parity tests per adapter.
+- **Phase 1 — move file parsing into the runner.** Done, then largely
+  obsoleted: the runner first parsed the file from shim deltas, but once the
+  **hook** reported title/status directly (`agent_start`/`agent_end`), pi
+  stopped parsing the file at all. The daemon's `FileMonitor` no longer writes
+  `store.Store` for hooked sessions; the store is fed by runner `/events`.
 
 - **Phase 1b — session-keyed attribution + duplicate-open warning (N:1).**
   The runner already owns `session → file` (`State.SessionFile`); surface it
@@ -111,11 +119,11 @@ making per-adapter decisions entirely.
   behind. Lands ahead of Phase 2 because it only adds a field; the
   collision-prone `file → session` maps are deleted in Phase 2.
 
-- **Phase 2 — daemon file-watch → raw broadcast.** The daemon emits raw
-  file-changed events to same-kind runners; adapters claim/ignore. Delete
-  daemon-side attribution and the scrollback content matcher (pi-only).
-  Unshimmed agents (codex) now attribute + parse entirely in their runner
-  (which already links the adapter).
+- **Phase 2 — remove the inference machinery.** Done: the agent-shim
+  (fs preload + read-inference debouncer) and the pi scrollback content
+  matcher are deleted. The daemon file-watch remains as the codex-only
+  fallback (metadata attribution + parse); broadcasting raw file events to
+  runners was unnecessary once pi went fully hook-driven.
 
 - **Phase 3 — store is explicitly a cache.** Single live feed (runner
   `/events`), dead snapshots to `meta.json`. Collapse the remaining
@@ -127,18 +135,16 @@ making per-adapter decisions entirely.
 - One owner per session (the runner), one store writer, adapter logic in one
   place. The "two update channels" and "duplicated truth" problems dissolve
   rather than being patched.
-- Shimmed sessions are self-contained; the daemon does zero file work for
+- Hooked sessions (pi) are self-contained; the daemon does zero file work for
   them. The daemon shrinks toward registry + cache + broker + frontend.
-- Loss/ordering of shim deltas becomes a runner-local concern: the runner
-  reconciles deltas against its own on-disk file (it has the path), so disk
-  stays the loss-proof source of truth inside the runner and the daemon
-  never handles raw content.
-- More processes do small parse work (one per session) instead of one daemon
-  loop; file events are low-rate, so the fan-out from broadcasting is cheap.
+- pi state is push-based from the agent's own lifecycle, so there is no
+  syscall inference to get wrong and no scrollback to fetch or match.
+- codex remains daemon-parsed via the file-watch fallback until it grows a
+  comparable hook (its own Rust process can't load a node/bun extension).
 
 ## Alternatives considered
 
-- **Keep daemon-side parsing, just collapse the shim/inotify channels.**
+- **Keep daemon-side parsing, just collapse the hook/inotify channels.**
   Patches the symptom; leaves the daemon owning file-driven state and the
   split intact. Rejected as a stopping point.
 - **Push deltas as the source of truth (no disk re-read).** Simpler channel

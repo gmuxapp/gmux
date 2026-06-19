@@ -29,7 +29,7 @@
 | **Daemon**      | The single per-host `gmuxd` process; central registry, broker, and proxy                         | Server, gmuxd (in prose)    |
 | **Broker**      | The daemon's role serving readonly state (today: scrollback) sourced from disk for dead sessions | Replay server               |
 | **Adapter**     | A plugin (pi, claude, shell, ...) that resolves commands, derives slugs, and may write tool files | Plugin, kind                |
-| **Agent-shim**  | A readable JS preload the runner injects into node/bun agents (`NODE_OPTIONS`/`BUN_OPTIONS`); reports the agent's written session file to the runner for authoritative **Attribution** (ADR 0010) | Hook, preload               |
+| **Agent-hook**  | A small extension the runner injects into the agent (pi: `-e <ext>`) that subscribes to the agent's own session/agent lifecycle and reports the held session file, title, and status to the runner authoritatively (ADR 0011). Supersedes the removed agent-shim fs preload (ADR 0010) | Hook, extension             |
 | **Frontend**    | The web UI consuming `/v1/events` SSE and `/ws/<id>` WebSockets                                  | Client (overloaded), web    |
 
 ## Peering
@@ -76,7 +76,7 @@ The four stores have orthogonal concerns. Mixing them is a smell:
 | **Slug-takeover**     | A fresh live session evicting a dead one with the same `(kind, peer, slug)` from the store                              | Slug eviction                  |
 | **Dismiss**           | Explicit user removal: runner killed if alive, store entry removed, sessionmeta + scrollback dropped                    | Delete, close                  |
 | **Sweep**             | Daemon startup operation: read every `meta.json` and Upsert as `Alive=false`; sessions appear in the sidebar only if `projects.json` still contains their key | Restore                        |
-| **Attribution**       | Binding a tool-backed session to its adapter session file. **Primary:** authoritative, reported by the **Agent-shim** the moment the agent writes the file (overrides scrollback, handles `/resume` rebind). **Fallback:** deprecated scrollback content-matching for unshimmed sessions. See ADR 0010 | Naming                         |
+| **Attribution**       | Binding a tool-backed session to its adapter session file. **Primary:** authoritative, reported by the **Agent-hook** (pi names the held file directly, including cache-served `/resume` rebinds). **Fallback:** metadata matching (cwd + start time) for agents with no hook (codex). See ADR 0011 | Naming                         |
 
 ## Relationships
 
