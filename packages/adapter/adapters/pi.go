@@ -1,9 +1,7 @@
 package adapters
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,7 +17,6 @@ var (
 	_ adapter.Launchable      = (*Pi)(nil)
 	_ adapter.SessionFiler    = (*Pi)(nil)
 	_ adapter.FileMonitor     = (*Pi)(nil)
-	_ adapter.FileAttributor  = (*Pi)(nil)
 	_ adapter.Resumer         = (*Pi)(nil)
 	_ adapter.SessionExtender = (*Pi)(nil)
 )
@@ -65,8 +62,8 @@ func (p *Pi) Env(_ adapter.EnvContext) []string { return nil }
 // SessionExtensionArgs loads the gmux pi extension via `pi -e <path>`. pi's
 // arg parser is order-independent and extensions accumulate, so this coexists
 // with the user's own -e flags. The extension reports the active session
-// authoritatively (start/switch/fork), fixing the warm /resume-select that
-// the shim's read inference can't catch.
+// authoritatively (start/switch/fork), including the warm /resume-select that
+// reads no file and so leaves no fs signal to infer from.
 func (p *Pi) SessionExtensionArgs(extPath string) []string {
 	return []string{"-e", extPath}
 }
@@ -430,105 +427,6 @@ func ListSessionFiles(dir string) []string {
 		}
 	}
 	return files
-}
-
-// --- FileAttributor ---
-
-// AttributeFile matches a session file to a live session using content
-// similarity between the file's conversation text and each candidate's
-// terminal scrollback.
-//
-// The file text is extracted from all message types (user, assistant,
-// toolResult) and compared against each candidate's scrollback after
-// stripping box-drawing characters, markdown formatting, and collapsing
-// whitespace. These normalizations are needed because the scrollback is
-// a terminal rendering of the same content the file stores as structured
-// JSONL.
-func (p *Pi) AttributeFile(filePath string, candidates []adapter.FileCandidate) string {
-	fileText, err := extractPiText(filePath)
-	if err != nil {
-		return ""
-	}
-	return attributeByScrollbackNormalized(fileText, candidates)
-}
-
-// extractPiText reads the tail of a pi JSONL session file and extracts
-// conversation text from all message types (user, assistant, toolResult).
-// Including tool output is important because it dominates the scrollback.
-//
-// Only the last 32KB is read since we only need tail(200) of the
-// extracted text. Session files can be tens of MB; reading them fully
-// for every unattributed file in a directory would be costly on startup.
-func extractPiText(path string) (string, error) {
-	const maxRead = 32 * 1024
-
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	info, err := f.Stat()
-	if err != nil {
-		return "", err
-	}
-
-	offset := info.Size() - maxRead
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > 0 {
-		f.Seek(offset, 0)
-	}
-
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return "", err
-	}
-
-	// If we seeked into the middle of a line, skip the partial first line.
-	if offset > 0 {
-		if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
-			data = data[idx+1:]
-		}
-	}
-
-	var out strings.Builder
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		if line == "" {
-			continue
-		}
-		var entry struct {
-			Type    string `json:"type"`
-			Message *struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
-		if err := json.Unmarshal([]byte(line), &entry); err != nil || entry.Message == nil {
-			continue
-		}
-		// Try array of content blocks (user/assistant messages).
-		var blocks []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal(entry.Message.Content, &blocks); err == nil {
-			for _, b := range blocks {
-				if b.Text != "" {
-					out.WriteString(b.Text)
-					out.WriteByte(' ')
-				}
-			}
-			continue
-		}
-		// Try plain string (toolResult content).
-		var s string
-		if err := json.Unmarshal(entry.Message.Content, &s); err == nil && s != "" {
-			out.WriteString(s)
-			out.WriteByte(' ')
-		}
-	}
-	return out.String(), nil
 }
 
 func extractFirstUserText(line string) string {

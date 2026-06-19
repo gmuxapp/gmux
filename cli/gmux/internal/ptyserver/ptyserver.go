@@ -246,7 +246,7 @@ func New(cfg Config) (*Server, error) {
 
 	// For adapters with a native extension API (pi), inject the gmux session
 	// extension. It reports the active session, title, and status
-	// authoritatively over the runner socket (POST /shim/event) on every bind
+	// authoritatively over the runner socket (POST /hook/event) on every bind
 	// and agent-loop transition (ADR 0011) — no fs inference, no scrollback.
 	if ext, ok := cfg.Adapter.(adapter.SessionExtender); ok {
 		if extPath, err := agentext.Path(); err != nil {
@@ -428,8 +428,7 @@ func (s *Server) serve() {
 
 	// HTTP endpoints (checked first via explicit paths)
 	mux.HandleFunc("GET /meta", s.handleMeta)
-	mux.HandleFunc("GET /scrollback/text", s.handleScrollbackText)
-	mux.HandleFunc("POST /shim/event", s.handleShimEvent)
+	mux.HandleFunc("POST /hook/event", s.handleHookEvent)
 	mux.HandleFunc("POST /input", s.handleInput)
 	mux.HandleFunc("PUT /status", s.handlePutStatus)
 	mux.HandleFunc("PUT /slug", s.handlePutSlug)
@@ -453,24 +452,6 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// handleScrollbackText returns the visible screen content as plain text,
-// suitable for content-similarity matching (ADR-0009).
-func (s *Server) handleScrollbackText(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	s.drainScreenLocked()
-	text := s.screenText()
-	s.mu.Unlock()
-
-	// Return only the tail, 2000 chars is plenty for similarity matching.
-	const maxChars = 2000
-	if len(text) > maxChars {
-		text = text[len(text)-maxChars:]
-	}
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Write([]byte(text))
-}
-
 // screenText returns the visible screen content as plain text.
 // Caller must hold s.mu.
 func (s *Server) screenText() string {
@@ -489,12 +470,12 @@ const maxInputBytes = 1 << 20 // 1 MiB
 // Access control is delegated to the Unix socket's file permissions
 // (owner-only, 0o700): anyone who can connect() to this socket already
 // owns the session and could do arbitrary worse things to it.
-// shimEvent is the payload the agent extension (pi-ext.mjs) posts to
-// POST /shim/event. The agent reports its own state authoritatively:
+// hookEvent is the payload the agent extension (pi-ext.mjs) posts to
+// POST /hook/event. The agent reports its own state authoritatively:
 //
 //	op "session" — the bound conversation file, id, name (on bind)
 //	op "status"  — working/unread/error/title (on agent-loop transitions)
-type shimEvent struct {
+type hookEvent struct {
 	Op   string `json:"op"`
 	Path string `json:"path"`
 	Pid  int    `json:"pid"`
@@ -510,12 +491,12 @@ type shimEvent struct {
 	Error   bool   `json:"error,omitempty"`
 }
 
-// handleShimEvent applies the authoritative session state the agent's
+// handleHookEvent applies the authoritative session state the agent's
 // extension reports (pi-ext.mjs): the bound conversation file + title + slug
 // on every bind, and busy/idle/unread/error on every agent-loop transition.
 // There is no inference — the agent tells us exactly what it holds and does.
-func (s *Server) handleShimEvent(w http.ResponseWriter, r *http.Request) {
-	var ev shimEvent
+func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
+	var ev hookEvent
 	if err := json.NewDecoder(io.LimitReader(r.Body, 512*1024)).Decode(&ev); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return

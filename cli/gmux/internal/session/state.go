@@ -45,10 +45,9 @@ type State struct {
 	Slug string `json:"slug,omitempty"`
 
 	// SessionFile is the agent's on-disk JSONL conversation file, as
-	// reported authoritatively by the agent-shim preload (ADR 0009). It
-	// is the immutable Tool ID's address; a change here is a rebind
-	// (/resume). Empty until the agent's first write or for unshimmed
-	// adapters.
+	// reported authoritatively by the agent hook (ADR 0011). It is the
+	// immutable Tool ID's address; a change here is a rebind (/resume).
+	// Empty until the agent reports it, or for unhooked adapters.
 	SessionFile string `json:"session_file,omitempty"`
 
 	// Terminal size (updated by the runner whenever PTY is resized).

@@ -15,20 +15,17 @@
 //     already-attributed files. Unattributed files are queued and
 //     matched on the next throttled attribution scan.
 //
-// Attribution:
+// Attribution (FALLBACK only — agents that report their own session file via
+// the runner are attributed authoritatively, never reaching this monitor):
 //   - Candidates are all live sessions of the same adapter kind
-//   - Content-similarity matching between file tail and session scrollback
-//     (fetched via GET /scrollback/text on the runner) picks the right one
-//   - Scrollback fetches happen off the event loop on a throttled timer
+//   - codex matches by session metadata (cwd + start time)
+//   - A lone candidate is attributed directly; ambiguous sets wait
 //   - Sticky: once attributed, re-match only when a DIFFERENT file writes
 package discovery
 
 import (
-	"context"
-	"io"
 	"io/fs"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,7 +57,7 @@ type FileMonitor struct {
 	rootDirs     map[string]bool              // session root dirs being watched
 	sessions     map[string]*monitoredSession // sessionID -> info
 	attributions map[string]string            // filePath -> sessionID (sticky)
-	shimFiles    map[string]string            // filePath -> sessionID (authoritative, from agent-shim)
+	hookFiles    map[string]string            // filePath -> sessionID (authoritative, from agent hook)
 
 	activeFiles    map[string]string // sessionID -> filePath (tracks current file for Slug)
 	fileOffsets    map[string]int64  // filePath -> read offset
@@ -69,19 +66,18 @@ type FileMonitor struct {
 
 // monitoredSession tracks a live session for file monitoring.
 type monitoredSession struct {
-	id         string
-	cwd        string
-	kind       string
-	socketPath string
-	adapter    adapter.Adapter
-	fileMon    adapter.FileMonitor
-	filer      adapter.SessionFiler
-	readAll    bool // true if we should read from beginning on first attribution
+	id      string
+	cwd     string
+	kind    string
+	adapter adapter.Adapter
+	fileMon adapter.FileMonitor
+	filer   adapter.SessionFiler
+	readAll bool // true if we should read from beginning on first attribution
 }
 
 func NewFileMonitor(s *store.Store) *FileMonitor {
 	// Attribution is never persisted: runners re-announce their held file on
-	// (re)subscribe, and unshimmed sessions re-derive via the fallback.
+	// (re)subscribe, and unhooked sessions re-derive via the fallback.
 	return NewFileMonitorWithAttributions(s, nil)
 }
 
@@ -115,7 +111,7 @@ func NewFileMonitorWithAttributions(s *store.Store, attrs map[string]string) *Fi
 		rootDirs:       make(map[string]bool),
 		sessions:       make(map[string]*monitoredSession),
 		attributions:   attrs,
-		shimFiles:      make(map[string]string),
+		hookFiles:      make(map[string]string),
 		activeFiles:    make(map[string]string),
 		fileOffsets:    make(map[string]int64),
 		candidateFiles: make(map[string]bool),
@@ -396,14 +392,13 @@ func (fm *FileMonitor) NotifyNewSession(sessionID string) {
 	}
 
 	fm.sessions[sessionID] = &monitoredSession{
-		id:         sessionID,
-		cwd:        sess.Cwd,
-		kind:       sess.Kind,
-		socketPath: sess.SocketPath,
-		adapter:    a,
-		fileMon:    fileMon,
-		filer:      filer,
-		readAll:    true,
+		id:      sessionID,
+		cwd:     sess.Cwd,
+		kind:    sess.Kind,
+		adapter: a,
+		fileMon: fileMon,
+		filer:   filer,
+		readAll: true,
 	}
 
 	// Ensure the root dir is watched (to catch new session subdirs).
@@ -450,7 +445,7 @@ func (fm *FileMonitor) NotifyNewSession(sessionID string) {
 	}
 	log.Printf("filemon: watching %d session dirs for %s (kind=%s)", nDirs, sessionID, sess.Kind)
 
-	// If an attribution already exists for this session (a shim
+	// If an attribution already exists for this session (a hook
 	// session_file event that landed before registration completed, or
 	// a persisted attribution), process it now so title/slug/status
 	// derive immediately. The session_file event only fires on change,
@@ -562,20 +557,20 @@ func (fm *FileMonitor) NotifySessionDied(sessionID string) {
 	delete(fm.activeFiles, sessionID)
 
 	// Remove attributions pointing to this session (including the
-	// authoritative shim-sourced ones, so a dead session leaves no
+	// authoritative hook-sourced ones, so a dead session leaves no
 	// stale file->session mapping behind).
 	changed := false
 	for path, sid := range fm.attributions {
 		if sid == sessionID {
 			delete(fm.attributions, path)
 			delete(fm.fileOffsets, path)
-			delete(fm.shimFiles, path)
+			delete(fm.hookFiles, path)
 			changed = true
 		}
 	}
-	for path, sid := range fm.shimFiles {
+	for path, sid := range fm.hookFiles {
 		if sid == sessionID {
-			delete(fm.shimFiles, path)
+			delete(fm.hookFiles, path)
 		}
 	}
 	_ = changed
@@ -617,7 +612,7 @@ func (fm *FileMonitor) handleFileChange(path string) {
 	if attributed {
 		if _, ok := fm.sessions[sessionID]; !ok {
 			delete(fm.attributions, path)
-			delete(fm.shimFiles, path)
+			delete(fm.hookFiles, path)
 			attributed = false
 		}
 	}
@@ -641,10 +636,10 @@ func (fm *FileMonitor) processAttributedFileLocked(sessionID, path string) {
 		return
 	}
 
-	// Shim-covered sessions are owned by their runner, which parses the file
+	// Hook-covered sessions are owned by their runner, which parses the file
 	// itself and emits status/meta over /events (ADR 0011 phase 1). The
 	// daemon must not also write derived state for them.
-	if fm.sessionHasShimLocked(sessionID) {
+	if fm.sessionHasHookLocked(sessionID) {
 		return
 	}
 
@@ -759,12 +754,12 @@ func (fm *FileMonitor) syncFileMetadataLocked(sessionID, filePath string) {
 
 // --- Attribution ---
 
-// AttributeFromShim records the authoritative file->session attribution the
-// agent-shim reported (via the runner's session_file event). The agent wrote
+// AttributeFromHook records the authoritative file->session attribution the
+// agent hook reported (via the runner's session_file event). The agent wrote
 // the file, so this overrides scrollback for both file and session. A
 // different file for an already-attributed session is a /resume rebind; the
 // prior file is dropped.
-func (fm *FileMonitor) AttributeFromShim(sessionID, filePath string) {
+func (fm *FileMonitor) AttributeFromHook(sessionID, filePath string) {
 	if sessionID == "" || filePath == "" {
 		return
 	}
@@ -773,16 +768,16 @@ func (fm *FileMonitor) AttributeFromShim(sessionID, filePath string) {
 
 	// Already the authoritative attribution for this session+file: nothing
 	// to do (the session_file event only fires on change, but be safe).
-	if fm.shimFiles[filePath] == sessionID {
+	if fm.hookFiles[filePath] == sessionID {
 		return
 	}
 
 	// Authoritative: this session holds exactly filePath. Drop every other
 	// file attributed to it (a prior rebind file, or a stale scrollback guess
 	// from before the first write).
-	for p := range fm.shimFiles {
-		if fm.shimFiles[p] == sessionID && p != filePath {
-			delete(fm.shimFiles, p)
+	for p := range fm.hookFiles {
+		if fm.hookFiles[p] == sessionID && p != filePath {
+			delete(fm.hookFiles, p)
 		}
 	}
 	for p := range fm.attributions {
@@ -792,22 +787,22 @@ func (fm *FileMonitor) AttributeFromShim(sessionID, filePath string) {
 		}
 	}
 
-	fm.shimFiles[filePath] = sessionID
+	fm.hookFiles[filePath] = sessionID
 	fm.attributions[filePath] = sessionID
 	delete(fm.candidateFiles, filePath)
-	log.Printf("filemon: shim-attributed %s -> %s", filepath.Base(filePath), sessionID)
+	log.Printf("filemon: runner-attributed %s -> %s", filepath.Base(filePath), sessionID)
 
-	// No daemon-side parse: the shimmed runner owns derived state and emits
+	// No daemon-side parse: the hooked runner owns derived state and emits
 	// it over /events (ADR 0011 phase 1, enforced by the guard in
 	// processAttributedFileLocked).
 }
 
-// sessionHasShimLocked reports whether daemon-side parsing/attribution must
+// sessionHasHookLocked reports whether daemon-side parsing/attribution must
 // be suppressed for this session: its runner has reported an authoritative
 // session file (via the agent extension), so the runner owns derived state.
 // Caller must hold fm.mu.
-func (fm *FileMonitor) sessionHasShimLocked(sessionID string) bool {
-	for _, sid := range fm.shimFiles {
+func (fm *FileMonitor) sessionHasHookLocked(sessionID string) bool {
+	for _, sid := range fm.hookFiles {
 		if sid == sessionID {
 			return true
 		}
@@ -818,9 +813,9 @@ func (fm *FileMonitor) sessionHasShimLocked(sessionID string) bool {
 // tryAttributeUnmatched matches candidate files to sessions by content
 // similarity. Throttled; returns true if unattributed files remain.
 //
-// Deprecated: FALLBACK path. The agent-shim reports the held file directly
-// (AttributeFromShim) and this scan is skipped for shim-covered sessions.
-// It's a post-hoc guess, kept only for agents the shim can't cover. Hits log
+// Deprecated: FALLBACK path. The agent hook reports the held file directly
+// (AttributeFromHook) and this scan is skipped for hook-covered sessions.
+// It's a post-hoc guess, kept only for agents the hook can't cover. Hits log
 // a "(FALLBACK)" marker so reliance can be tracked.
 //
 // Expensive work (scrollback fetch, file I/O) runs with the lock released.
@@ -857,22 +852,20 @@ func (fm *FileMonitor) tryAttributeUnmatched() bool {
 
 	// Snapshot session state needed for attribution.
 	type sessionSnap struct {
-		id         string
-		cwd        string
-		kind       string
-		socketPath string
-		startedAt  time.Time
+		id        string
+		cwd       string
+		kind      string
+		startedAt time.Time
 	}
 	snaps := make(map[string]*sessionSnap)
 	for _, ms := range fm.sessions {
-		// Shim-attributed sessions are authoritative; never offer them
+		// Hook-attributed sessions are authoritative; never offer them
 		// to scrollback matching (it must not re-attribute them).
-		if fm.sessionHasShimLocked(ms.id) {
+		if fm.sessionHasHookLocked(ms.id) {
 			continue
 		}
 		snap := &sessionSnap{
 			id: ms.id, cwd: ms.cwd, kind: ms.kind,
-			socketPath: ms.socketPath,
 		}
 		if sess, ok := fm.store.Get(ms.id); ok {
 			snap.startedAt, _ = time.Parse(time.RFC3339, sess.StartedAt)
@@ -902,15 +895,8 @@ func (fm *FileMonitor) tryAttributeUnmatched() bool {
 
 	fm.mu.Unlock()
 
-	// --- Expensive work outside the lock ---
+	// --- Attribution outside the lock ---
 
-	// Fetch scrollback for each session (one HTTP call each).
-	scrollbacks := make(map[string]string)
-	for id, snap := range snaps {
-		scrollbacks[id] = fetchScrollbackText(snap.socketPath)
-	}
-
-	// Try to attribute each file.
 	newAttrs := make(map[string]string)
 	for _, path := range files {
 		kind := fileKinds[path]
@@ -924,33 +910,32 @@ func (fm *FileMonitor) tryAttributeUnmatched() bool {
 				continue
 			}
 			candidates = append(candidates, adapter.FileCandidate{
-				SessionID:  snap.id,
-				Cwd:        snap.cwd,
-				StartedAt:  snap.startedAt,
-				Scrollback: scrollbacks[snap.id],
+				SessionID: snap.id,
+				Cwd:       snap.cwd,
+				StartedAt: snap.startedAt,
 			})
 		}
 		if len(candidates) == 0 {
 			continue
 		}
 
-		a := adapterByKind[kind]
-		attr, hasAttr := a.(adapter.FileAttributor)
-		if hasAttr {
-			if id := attr.AttributeFile(path, candidates); id != "" {
-				newAttrs[path] = id
-				continue
+		// Only adapters with a metadata FileAttributor (codex) attribute here.
+		// Extension-driven agents (pi) report their file authoritatively over
+		// /events and never rely on this fallback.
+		attr, ok := adapterByKind[kind].(adapter.FileAttributor)
+		if !ok {
+			continue
+		}
+		if id := attr.AttributeFile(path, candidates); id != "" {
+			newAttrs[path] = id
+			continue
+		}
+		// Adapter couldn't match. Single candidate with a freshly-written
+		// file: fall back to mtime heuristic.
+		if len(candidates) == 1 {
+			if info, err := os.Stat(path); err == nil && time.Since(info.ModTime()) < 30*time.Second {
+				newAttrs[path] = candidates[0].SessionID
 			}
-			// Adapter couldn't match. Single candidate with a
-			// freshly-written file: fall back to mtime heuristic.
-			if len(candidates) == 1 {
-				if info, err := os.Stat(path); err == nil && time.Since(info.ModTime()) < 30*time.Second {
-					newAttrs[path] = candidates[0].SessionID
-				}
-			}
-		} else {
-			// No FileAttributor; trivial attribution.
-			newAttrs[path] = candidates[0].SessionID
 		}
 	}
 
@@ -971,11 +956,10 @@ func (fm *FileMonitor) tryAttributeUnmatched() bool {
 		}
 		fm.attributions[path] = sessionID
 		delete(fm.candidateFiles, path)
-		// FALLBACK path: this attribution came from scrollback matching,
-		// not the authoritative agent-shim. Logged distinctly so we can
-		// monitor how often we rely on it in production (unshimmed agents,
-		// shim-injection failures, or runners that started pre-hello).
-		log.Printf("filemon: scrollback-attributed (FALLBACK) %s -> %s", filepath.Base(path), sessionID)
+		// FALLBACK path: attributed by metadata (codex) or lone-candidate,
+		// not an authoritative runner session_file. Logged distinctly so we
+		// can monitor how often we rely on it in production.
+		log.Printf("filemon: metadata-attributed (FALLBACK) %s -> %s", filepath.Base(path), sessionID)
 
 		// Process the file: sets active file, reads all lines, derives
 		// title, and applies status/title/unread updates.
@@ -1069,31 +1053,6 @@ func (fm *FileMonitor) readNewLines(path string, readAll bool) []string {
 }
 
 // --- Network helpers ---
-
-// fetchScrollbackText pulls the runner's rendered scrollback for the
-// deprecated scrollback fallback (see tryAttributeUnmatched). Unused once
-// every live agent is shim-covered.
-func fetchScrollbackText(socketPath string) string {
-	if socketPath == "" {
-		return ""
-	}
-
-	resp, err := runnerRequest(context.Background(), socketPath, http.MethodGet, "/scrollback/text", nil)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return ""
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
-	if err != nil {
-		return ""
-	}
-	return string(body)
-}
 
 // isUnderRoot reports whether dir is root itself or a subdirectory of root.
 func isUnderRoot(dir, root string) bool {

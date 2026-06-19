@@ -65,7 +65,7 @@ type Session struct {
 	Slug string `json:"slug,omitempty"`
 
 	// SessionFile is the conversation file this runner authoritatively
-	// writes, as reported by the agent-shim (session → file; ADR 0011).
+	// writes, as reported by the agent hook (session → file; ADR 0011).
 	// Two live sessions may carry the same SessionFile when the same
 	// conversation is resumed in more than one tab; the frontend groups
 	// by this to warn about a conversation open in multiple runners.

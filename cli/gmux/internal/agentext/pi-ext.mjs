@@ -1,20 +1,17 @@
 // gmux pi session extension
 // ----------------------------------------------------------------------------
-// The authoritative source of session state for pi, replacing the agent-shim's
-// fs-syscall inference and the daemon's scrollback matching. pi knows exactly
-// which conversation it holds and what it's doing; this extension forwards
-// that to the gmux runner so attribution, title, and status are all push-based
-// and exact.
+// The authoritative source of session state for pi. pi knows exactly which
+// conversation it holds and what it's doing; this hook forwards that to the
+// gmux runner so attribution, title, and status are all push-based and exact
+// — no fs-syscall inference, no scrollback matching.
 //
 // How it gets loaded (set by the gmux runner when it spawns pi):
 //   pi -e /abs/path/pi-ext.mjs          (extensions accumulate; coexists with
 //                                         the user's own -e extensions)
 //
-// Socket: GMUX_SESSION_SOCK, set by the runner. We use a var distinct from the
-// shim's GMUX_RUNNER_SOCK because the shim deletes GMUX_RUNNER_SOCK from the
-// env at bootstrap (to disarm children) before pi loads this extension.
+// Socket: GMUX_SESSION_SOCK, set by the runner.
 //
-// Events posted to POST /shim/event on the runner socket:
+// Events posted to POST /hook/event on the runner socket:
 //   { op: "session", path, id, name, cwd, reason }  on bind (start/switch/fork)
 //   { op: "status", working, unread, error, title } on agent loop start/end
 //
@@ -52,8 +49,8 @@ export default function (pi) {
   // session_start: initial bind (a resume launch already has a file here).
   pi.on("session_start", (_ev, ctx) => reportSession("start", ctx));
   // session_switch: the user picked another conversation (/resume select or
-  // /new). reason is "new" | "resume". The case the shim's read inference
-  // misses, since pi serves the pick from cache without re-reading the file.
+  // /new). reason is "new" | "resume". A cache-served /resume-select reads no
+  // file, so only pi's own event reveals it — nothing on disk to observe.
   pi.on("session_switch", (ev, ctx) => reportSession(ev.reason ?? "switch", ctx));
   // session_fork: branched into a new file off the current one.
   pi.on("session_fork", (_ev, ctx) => reportSession("fork", ctx));
@@ -96,7 +93,7 @@ function post(socketPath, event) {
     const body = Buffer.from(JSON.stringify(event), "utf8");
     const req = http.request({
       socketPath,
-      path: "/shim/event",
+      path: "/hook/event",
       method: "POST",
       headers: { "content-type": "application/json", "content-length": body.length },
     });

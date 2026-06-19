@@ -84,38 +84,30 @@ type SessionFileLister interface {
 // FileCandidate describes a live session that could own a file.
 // Passed to FileAttributor.AttributeFile for matching.
 type FileCandidate struct {
-	SessionID  string
-	Cwd        string
-	StartedAt  time.Time
-	Scrollback string // recent terminal text; empty if unavailable
+	SessionID string
+	Cwd       string
+	StartedAt time.Time
 }
 
-// FileAttributor is optionally implemented by adapters that need custom
-// file-to-session matching. Without it, the daemon falls back to the
-// first candidate.
+// FileAttributor is the FALLBACK attribution mechanism for agents that do not
+// report their own session file: the adapter guesses which live session owns
+// a file by metadata (cwd + start time). Used by codex (Rust, no extension).
 //
-// AttributeFile is called for every candidate count (including 1).
-// Returning "" rejects the file; for single-candidate cases, the daemon
-// may still attribute via a freshness-based fallback (mtime < 30s).
-// FileAttributor is the FALLBACK attribution mechanism: the adapter guesses
-// which live session owns a file (by scrollback similarity or metadata).
-//
-// Deprecated: SessionShimmer adapters get authoritative attribution from the
-// agent-shim, and this is skipped for shim-covered sessions. Consulted only
-// for agents the shim can't cover. Don't make these guesses smarter.
+// Agents that report their session file authoritatively (pi, via its
+// extension) are attributed before reaching this path and need not implement
+// it. Don't make these guesses smarter — add a native signal instead.
 type FileAttributor interface {
 	// AttributeFile returns the session ID of the candidate that owns
-	// the file, or "" if no candidate matches. The daemon provides
-	// scrollback text when available.
+	// the file, or "" if no candidate matches.
 	AttributeFile(filePath string, candidates []FileCandidate) string
 }
 
 // SessionExtender marks adapters whose agent exposes a native extension/hook
-// API that can report the active session authoritatively — superseding the
-// shim's syscall inference (which loses on a cache-served /resume-select).
-// The runner materializes the gmux extension and injects it into the launch
-// argv via SessionExtensionArgs; the extension posts an authoritative
-// "session" event to the runner socket on every bind (start/switch/fork).
+// API that can report the active session authoritatively — the strongest
+// signal, catching even a cache-served /resume-select that leaves no fs
+// trace. The runner materializes the gmux hook and injects it into the launch
+// argv via SessionExtensionArgs; the hook posts an authoritative "session"
+// event to the runner socket on every bind (start/switch/fork).
 //
 // Only adapters whose argv gmux fully controls should opt in: argv injection
 // (unlike env injection) does not survive a shell-wrapped launch.

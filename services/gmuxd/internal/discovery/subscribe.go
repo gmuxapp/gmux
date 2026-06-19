@@ -38,7 +38,7 @@ type Subscriptions struct {
 	// OnSessionFile fires when a runner reports (via the agent extension)
 	// the JSONL session file its agent holds. This is the authoritative
 	// attribution signal (ADR 0011); gmuxd wires it to
-	// FileMonitor.AttributeFromShim, which also suppresses daemon-side
+	// FileMonitor.AttributeFromHook, which also suppresses daemon-side
 	// parsing for the session (its runner owns derived state).
 	OnSessionFile func(sessionID, filePath string)
 	// OnDead fires after the store Upsert that records an exit

@@ -17,13 +17,13 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 )
 
-// postSessionEvent posts an extension event to the runner's /shim/event.
+// postSessionEvent posts an extension event to the runner's /hook/event.
 func postSessionEvent(t *testing.T, sockPath, body string) {
 	t.Helper()
 	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return net.Dial("unix", sockPath)
 	}}}
-	resp, err := c.Post("http://unix/shim/event", "application/json", strings.NewReader(body))
+	resp, err := c.Post("http://unix/hook/event", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("post event: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestSessionEventIsAuthoritative(t *testing.T) {
 		c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return net.Dial("unix", sockPath)
 		}}}
-		resp, err := c.Post("http://unix/shim/event", "application/json", strings.NewReader(body))
+		resp, err := c.Post("http://unix/hook/event", "application/json", strings.NewReader(body))
 		if err != nil {
 			t.Fatalf("post session event: %v", err)
 		}
@@ -175,7 +175,7 @@ func TestStatusEventDrivesState(t *testing.T) {
 		c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return net.Dial("unix", sockPath)
 		}}}
-		resp, err := c.Post("http://unix/shim/event", "application/json", strings.NewReader(body))
+		resp, err := c.Post("http://unix/hook/event", "application/json", strings.NewReader(body))
 		if err != nil {
 			t.Fatalf("post: %v", err)
 		}

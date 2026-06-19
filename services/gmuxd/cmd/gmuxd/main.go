@@ -522,7 +522,7 @@ func serve(stderr io.Writer) int {
 	// authoritative attribution and also suppresses daemon-side parsing for
 	// the session (its runner owns derived state).
 	subs.OnSessionFile = func(sessionID, filePath string) {
-		fileMon.AttributeFromShim(sessionID, filePath)
+		fileMon.AttributeFromHook(sessionID, filePath)
 	}
 	stopFileMon := make(chan struct{})
 	go fileMon.Run(stopFileMon)
