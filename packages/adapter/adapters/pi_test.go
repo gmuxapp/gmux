@@ -641,3 +641,12 @@ func TestExtractPiTextIncludesToolResult(t *testing.T) {
 		t.Error("missing assistant text")
 	}
 }
+
+func TestPiSessionExtensionArgs(t *testing.T) {
+	p := NewPi()
+	got := p.SessionExtensionArgs("/cache/pi-ext.mjs")
+	want := []string{"-e", "/cache/pi-ext.mjs"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("SessionExtensionArgs = %v, want %v", got, want)
+	}
+}

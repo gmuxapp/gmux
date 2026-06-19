@@ -22,6 +22,7 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
+	"github.com/gmuxapp/gmux/cli/gmux/internal/agentext"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/agentshim"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -255,6 +256,21 @@ func New(cfg Config) (*Server, error) {
 			log.Printf("ptyserver: agent-shim unavailable, falling back to scrollback attribution: %v", err)
 		} else {
 			cmd.Env = agentshim.PreloadEnv(cmd.Env, shimPath, cfg.SocketPath)
+		}
+	}
+
+	// For adapters with a native extension API (pi), also inject the gmux
+	// session extension. It reports the active session authoritatively on
+	// every bind (start/switch/fork) — fixing the warm /resume-select the
+	// shim's read inference misses (ADR 0011). GMUX_SESSION_SOCK is distinct
+	// from the shim's GMUX_RUNNER_SOCK because the shim deletes the latter at
+	// bootstrap before pi loads the extension.
+	if ext, ok := cfg.Adapter.(adapter.SessionExtender); ok {
+		if extPath, err := agentext.Path(); err != nil {
+			log.Printf("ptyserver: agent extension unavailable, relying on shim: %v", err)
+		} else if extArgs := ext.SessionExtensionArgs(extPath); len(extArgs) > 0 {
+			cmd.Args = append([]string{cmd.Args[0]}, append(extArgs, cmd.Args[1:]...)...)
+			cmd.Env = append(cmd.Env, "GMUX_SESSION_SOCK="+cfg.SocketPath)
 		}
 	}
 
@@ -502,11 +518,21 @@ const maxInputBytes = 1 << 20 // 1 MiB
 // shimEvent is the payload posted by the agent-shim preload (hook.mjs) on
 // every JSONL session-file write in the agent process.
 type shimEvent struct {
-	Op    string `json:"op"`   // "hello" | "append" | "write" | "read"
+	Op    string `json:"op"`   // "hello" | "append" | "write" | "read" | "session" | "status"
 	Path  string `json:"path"` // session file path (empty for "hello")
 	Pid   int    `json:"pid"`
 	Bytes int    `json:"bytes"`
 	Data  string `json:"data,omitempty"` // inline delta, may be empty if oversized
+
+	// Extension fields (op "session" / "status"): pi reports identity and
+	// state directly, so the runner doesn't parse the file or guess.
+	ID      string `json:"id,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Title   string `json:"title,omitempty"`
+	Working bool   `json:"working,omitempty"`
+	Unread  bool   `json:"unread,omitempty"`
+	Error   bool   `json:"error,omitempty"`
 }
 
 // handleShimEvent records the session file the agent reported writing. A
@@ -535,6 +561,30 @@ func (s *Server) handleShimEvent(w http.ResponseWriter, r *http.Request) {
 		// scan does not churn (readBinder). The onBind callback then attributes
 		// + parses like a write.
 		s.readBinder.observe(ev.Path)
+	case "session":
+		// Authoritative bind from the agent's extension/hook API (pi's
+		// session_start/switch/fork). No inference, no debounce: the agent
+		// told us exactly which conversation it holds, named and slugged.
+		if ev.Path != "" {
+			s.state.SetSessionFile(ev.Path)
+			s.fileReader.onWrite(ev.Path)
+		}
+		if ev.Name != "" {
+			s.state.SetAdapterTitle(ev.Name)
+		}
+		if ev.ID != "" {
+			s.state.SetSlug(adapter.Slugify(ev.ID))
+		}
+	case "status":
+		// Authoritative status from the agent's loop (pi's agent_start/end),
+		// replacing JSONL status parsing.
+		s.state.SetStatus(&adapter.Status{Working: ev.Working, Error: ev.Error})
+		if ev.Unread {
+			s.state.SetUnread(true)
+		}
+		if ev.Title != "" {
+			s.state.SetAdapterTitle(ev.Title)
+		}
 	case "hello":
 		// The shim is live in the agent process. Announce it so the
 		// daemon suppresses scrollback attribution for this session

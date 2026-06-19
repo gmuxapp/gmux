@@ -124,6 +124,22 @@ type SessionShimmer interface {
 	UsesSessionShim() bool
 }
 
+// SessionExtender marks adapters whose agent exposes a native extension/hook
+// API that can report the active session authoritatively — superseding the
+// shim's syscall inference (which loses on a cache-served /resume-select).
+// The runner materializes the gmux extension and injects it into the launch
+// argv via SessionExtensionArgs; the extension posts an authoritative
+// "session" event to the runner socket on every bind (start/switch/fork).
+//
+// Only adapters whose argv gmux fully controls should opt in: argv injection
+// (unlike env injection) does not survive a shell-wrapped launch.
+type SessionExtender interface {
+	// SessionExtensionArgs returns argv flags that load the gmux session
+	// extension at extPath (e.g. {"-e", extPath} for pi), inserted right
+	// after the agent binary. Return nil to inject nothing.
+	SessionExtensionArgs(extPath string) []string
+}
+
 // CommandTitler is optionally implemented by adapters that want to
 // control how a command array is displayed as a fallback title.
 // Without it, the store joins the full command (e.g. "pytest -x").

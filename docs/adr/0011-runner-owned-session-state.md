@@ -48,9 +48,25 @@ and the **daemon is a read cache plus a raw file-event source**.
    agents get path + delta directly from their shim and need nothing from
    the daemon.
 
-4. **Identity/attribution is adapter-owned, in the runner.** Raw file events
-   are broadcast to same-kind runners; each adapter decides "is this mine?"
-   (by the shim's authoritative path, by cwd, or — last resort — by content).
+4. **Identity/attribution is adapter-owned, in the runner, from the strongest
+   available signal.** In order of authority:
+   1. **Native extension/hook** (Tier 1). Agents with an extension API tell us
+      the active session directly. The gmux pi extension (`pi -e <path>`,
+      package `agentext`, capability `adapter.SessionExtender`) subscribes to
+      pi's `session_start`/`session_switch`/`session_fork` and posts an
+      authoritative `session` event (`getSessionFile()`) on every bind. This
+      is the only signal that survives pi's cache-served `/resume`-select,
+      where no read of the chosen file happens for the shim to observe.
+   2. **Agent-shim** (Tier 2). The env-borne fs preload (`agentshim`,
+      `NODE_OPTIONS`/`BUN_OPTIONS`) reports writes (authoritative) and
+      best-effort read-opens. Survives shell-wrapped launches that argv
+      injection can't reach; covers node/bun agents with no extension API.
+   3. **Scrollback / metadata** (Tier 3). Last resort for codex (Rust,
+      unshimmable) and unhooked shells.
+
+   Raw file events are broadcast to same-kind runners; each adapter decides
+   "is this mine?" (by the authoritative path, by cwd, or — last resort — by
+   content).
    Daemon-side attribution (`AttributeFromShim`, `tryAttributeUnmatched`, the
    `attributions`/`shimFiles`/`shimCovered` maps, the `FileAttributor`
    fallback) is removed.

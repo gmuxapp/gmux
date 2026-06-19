@@ -22,6 +22,7 @@ var (
 	_ adapter.FileAttributor  = (*Pi)(nil)
 	_ adapter.Resumer         = (*Pi)(nil)
 	_ adapter.SessionShimmer  = (*Pi)(nil)
+	_ adapter.SessionExtender = (*Pi)(nil)
 )
 
 func init() {
@@ -66,6 +67,15 @@ func (p *Pi) Env(_ adapter.EnvContext) []string { return nil }
 // node/bun and persists a JSONL session file, so the runner injects the
 // shim to learn the held session file authoritatively (ADR 0009).
 func (p *Pi) UsesSessionShim() bool { return true }
+
+// SessionExtensionArgs loads the gmux pi extension via `pi -e <path>`. pi's
+// arg parser is order-independent and extensions accumulate, so this coexists
+// with the user's own -e flags. The extension reports the active session
+// authoritatively (start/switch/fork), fixing the warm /resume-select that
+// the shim's read inference can't catch.
+func (p *Pi) SessionExtensionArgs(extPath string) []string {
+	return []string{"-e", extPath}
+}
 
 func (p *Pi) Launchers() []adapter.Launcher {
 	return []adapter.Launcher{{
@@ -296,7 +306,7 @@ func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.Event {
 							})
 						}
 					}
-				// Unknown stopReasons: no state change.
+					// Unknown stopReasons: no state change.
 				}
 			}
 		}
@@ -572,7 +582,6 @@ func truncateTitle(s string, maxLen int) string {
 	}
 	return s[:cut] + "…"
 }
-
 
 var (
 	errEmpty      = &parseError{"empty file"}
