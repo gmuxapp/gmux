@@ -35,15 +35,12 @@ type Subscriptions struct {
 	// Returns true if the session was transitioned to resumable
 	// (caller should not set exit status).
 	OnExit func(sess *store.Session) bool
-	// OnSessionFile fires when a runner reports (via the agent-shim
-	// preload) the JSONL session file its agent is writing. This is the
-	// authoritative attribution signal (ADR 0009); gmuxd wires it to
-	// FileMonitor.AttributeFromShim.
+	// OnSessionFile fires when a runner reports (via the agent extension)
+	// the JSONL session file its agent holds. This is the authoritative
+	// attribution signal (ADR 0011); gmuxd wires it to
+	// FileMonitor.AttributeFromShim, which also suppresses daemon-side
+	// parsing for the session (its runner owns derived state).
 	OnSessionFile func(sessionID, filePath string)
-	// OnShimActive fires when a runner reports its agent-shim preload is
-	// live (before any file write). gmuxd wires it to
-	// FileMonitor.MarkShimCovered to suppress scrollback for the session.
-	OnShimActive func(sessionID string)
 	// OnDead fires after the store Upsert that records an exit
 	// event. The session passed is the post-Upsert snapshot,
 	// including any Title / Resumable derivation the store applied
@@ -329,11 +326,6 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		})
 		if sub.OnSessionFile != nil {
 			sub.OnSessionFile(sessionID, sf.Path)
-		}
-
-	case "shim":
-		if sub.OnShimActive != nil {
-			sub.OnShimActive(sessionID)
 		}
 
 	case "activity":

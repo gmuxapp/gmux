@@ -115,30 +115,3 @@ func TestShimAttributedSessionExcludedFromScrollback(t *testing.T) {
 		t.Errorf("unattributed file was attributed to %q despite only session being shim-held", sid)
 	}
 }
-
-func TestShimCoveredSuppressesScrollbackBeforeWrite(t *testing.T) {
-	t.Setenv("GMUX_SOCKET_DIR", t.TempDir())
-	fm, _, dir := setupPiFileMonitor(t)
-
-	// hello arrived: session is shim-covered but hasn't written yet.
-	fm.MarkShimCovered("sess-pi")
-
-	// An unattributed file in the dir must NOT be scrollback-attributed
-	// to the covered session (the pre-write mis-attribution window).
-	other := filepath.Join(dir, "other.jsonl")
-	writeJSONL(t, other,
-		`{"type":"session","id":"tool-2","timestamp":"2026-06-16T10:05:00Z"}`,
-		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"a reasonably long message for matching purposes"}]}}`,
-	)
-	fm.candidateFiles[other] = true
-	fm.tryAttributeUnmatched()
-	if sid, ok := fm.attributions[other]; ok {
-		t.Errorf("scrollback attributed %q to shim-covered session during pre-write window", sid)
-	}
-
-	// Death clears coverage.
-	fm.NotifySessionDied("sess-pi")
-	if fm.sessionHasShimLocked("sess-pi") {
-		t.Errorf("coverage not cleared on death")
-	}
-}

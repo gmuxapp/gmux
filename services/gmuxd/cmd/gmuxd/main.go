@@ -24,9 +24,6 @@ import (
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/packages/sessionenv"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/identity"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/nodeid"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/peerstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/clipfile"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/coalesce"
@@ -34,9 +31,12 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/conversations"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/devcontainers"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/identity"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/nodeid"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/notify"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/peerstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
@@ -518,15 +518,11 @@ func serve(stderr io.Writer) int {
 		}
 		return false
 	}
-	// The agent-shim preload reports the JSONL file its agent writes; this
-	// is authoritative attribution and overrides scrollback matching.
+	// The agent extension reports the JSONL file its agent holds; this is
+	// authoritative attribution and also suppresses daemon-side parsing for
+	// the session (its runner owns derived state).
 	subs.OnSessionFile = func(sessionID, filePath string) {
 		fileMon.AttributeFromShim(sessionID, filePath)
-	}
-	// The shim's hello suppresses scrollback for the session until it
-	// reports the real file, avoiding mis-attribution in the pre-write gap.
-	subs.OnShimActive = func(sessionID string) {
-		fileMon.MarkShimCovered(sessionID)
 	}
 	stopFileMon := make(chan struct{})
 	go fileMon.Run(stopFileMon)

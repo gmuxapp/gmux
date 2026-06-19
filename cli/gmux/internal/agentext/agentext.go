@@ -1,15 +1,14 @@
 // Package agentext ships the gmux pi session extension (pi-ext.mjs) and the
 // helper the runner uses to materialize it.
 //
-// Where the agent-shim (package agentshim) infers the active conversation
-// from fs syscalls, this extension gets it authoritatively from pi's own
-// session lifecycle events (start/switch/fork) and forwards the session file
-// to the runner. It is loaded via `pi -e <path>`; see pi-ext.mjs for the
-// design comment.
+// pi reports its active session, title, and status authoritatively via its
+// own lifecycle events (session_start/switch/fork, agent_start/agent_end);
+// this extension forwards them to the runner. It is loaded via `pi -e <path>`;
+// see pi-ext.mjs for the design comment.
 //
 // The .mjs source is embedded and materialized to a stable, content-addressed
-// path on disk (same scheme as agentshim) so a single gmux binary self-heals
-// across upgrades and the file stays inspectable.
+// path on disk so a single gmux binary self-heals across upgrades and the
+// file stays inspectable.
 package agentext
 
 import (

@@ -110,20 +110,6 @@ type FileAttributor interface {
 	AttributeFile(filePath string, candidates []FileCandidate) string
 }
 
-// SessionShimmer marks adapters whose agent process runs under Node or Bun
-// and persists a JSONL session file. For these adapters the runner injects
-// the agent-shim preload (NODE_OPTIONS/BUN_OPTIONS) so it learns the held
-// session file from the agent's own writes instead of guessing via
-// scrollback (ADR 0009).
-//
-// Shells and other non-jsonl adapters must not opt in: injecting
-// NODE_OPTIONS into a shell session would leak the shim into every node
-// process the user runs inside that shell.
-type SessionShimmer interface {
-	// UsesSessionShim reports whether the runner should inject the shim.
-	UsesSessionShim() bool
-}
-
 // SessionExtender marks adapters whose agent exposes a native extension/hook
 // API that can report the active session authoritatively — superseding the
 // shim's syscall inference (which loses on a cache-served /resume-select).

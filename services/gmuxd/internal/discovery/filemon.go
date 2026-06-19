@@ -46,7 +46,7 @@ import (
 type FileMonitor struct {
 	store   *store.Store
 	watcher *fsnotify.Watcher
-	poke    chan struct{} // non-blocking signal to retry attribution
+	poke    chan struct{}        // non-blocking signal to retry attribution
 	index   *conversations.Index // optional; nil in unit tests
 
 	// rootToAdapter maps each adapter's SessionRootDir() to its adapter.
@@ -55,16 +55,16 @@ type FileMonitor struct {
 	// that kind. Read-only after NewFileMonitor returns.
 	rootToAdapter map[string]adapter.Adapter
 
-	mu             sync.Mutex
-	watchedDirs    map[string]bool              // all dirs currently watched (roots + session dirs)
-	rootDirs       map[string]bool              // session root dirs being watched
-	sessions       map[string]*monitoredSession // sessionID -> info
-	attributions   map[string]string            // filePath -> sessionID (sticky)
-	shimFiles      map[string]string            // filePath -> sessionID (authoritative, from agent-shim)
-	shimCovered    map[string]bool              // sessionID -> shim is live (suppress scrollback)
-	activeFiles    map[string]string            // sessionID -> filePath (tracks current file for Slug)
-	fileOffsets    map[string]int64             // filePath -> read offset
-	candidateFiles map[string]bool              // files seen but not yet attributed
+	mu           sync.Mutex
+	watchedDirs  map[string]bool              // all dirs currently watched (roots + session dirs)
+	rootDirs     map[string]bool              // session root dirs being watched
+	sessions     map[string]*monitoredSession // sessionID -> info
+	attributions map[string]string            // filePath -> sessionID (sticky)
+	shimFiles    map[string]string            // filePath -> sessionID (authoritative, from agent-shim)
+
+	activeFiles    map[string]string // sessionID -> filePath (tracks current file for Slug)
+	fileOffsets    map[string]int64  // filePath -> read offset
+	candidateFiles map[string]bool   // files seen but not yet attributed
 }
 
 // monitoredSession tracks a live session for file monitoring.
@@ -116,7 +116,6 @@ func NewFileMonitorWithAttributions(s *store.Store, attrs map[string]string) *Fi
 		sessions:       make(map[string]*monitoredSession),
 		attributions:   attrs,
 		shimFiles:      make(map[string]string),
-		shimCovered:    make(map[string]bool),
 		activeFiles:    make(map[string]string),
 		fileOffsets:    make(map[string]int64),
 		candidateFiles: make(map[string]bool),
@@ -579,7 +578,6 @@ func (fm *FileMonitor) NotifySessionDied(sessionID string) {
 			delete(fm.shimFiles, path)
 		}
 	}
-	delete(fm.shimCovered, sessionID)
 	_ = changed
 
 	// If no more sessions need this session dir, remove the watch.
@@ -804,26 +802,11 @@ func (fm *FileMonitor) AttributeFromShim(sessionID, filePath string) {
 	// processAttributedFileLocked).
 }
 
-// MarkShimCovered marks that the shim is live in this session (its `hello`),
-// suppressing scrollback for it: the shim reports the real file on first
-// write, and guessing before then only mis-attributes to stale files. A
-// covered session with no conversation stays unattributed until it writes.
-func (fm *FileMonitor) MarkShimCovered(sessionID string) {
-	if sessionID == "" {
-		return
-	}
-	fm.mu.Lock()
-	fm.shimCovered[sessionID] = true
-	fm.mu.Unlock()
-}
-
-// sessionHasShimLocked reports whether scrollback must not attribute this
-// session: either the shim is live (hello received) or it already has an
-// authoritative shim attribution. Caller must hold fm.mu.
+// sessionHasShimLocked reports whether daemon-side parsing/attribution must
+// be suppressed for this session: its runner has reported an authoritative
+// session file (via the agent extension), so the runner owns derived state.
+// Caller must hold fm.mu.
 func (fm *FileMonitor) sessionHasShimLocked(sessionID string) bool {
-	if fm.shimCovered[sessionID] {
-		return true
-	}
 	for _, sid := range fm.shimFiles {
 		if sid == sessionID {
 			return true

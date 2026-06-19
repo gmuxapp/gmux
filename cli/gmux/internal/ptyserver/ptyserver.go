@@ -23,7 +23,6 @@ import (
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/agentext"
-	"github.com/gmuxapp/gmux/cli/gmux/internal/agentshim"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
@@ -152,15 +151,13 @@ type ResizeMsg struct {
 
 // Server holds a PTY and serves WebSocket connections.
 type Server struct {
-	cmd        *exec.Cmd
-	ptmx       *os.File
-	sockPath   string
-	listener   net.Listener
-	screen     *vt.Emulator // virtual terminal for replay snapshots (guarded by mu)
-	adapter    adapter.Adapter
-	state      *session.State
-	fileReader *sessionFileReader
-	readBinder *readBinder
+	cmd      *exec.Cmd
+	ptmx     *os.File
+	sockPath string
+	listener net.Listener
+	screen   *vt.Emulator // virtual terminal for replay snapshots (guarded by mu)
+	adapter  adapter.Adapter
+	state    *session.State
 
 	mu             sync.Mutex
 	clients        map[*wsClient]struct{}
@@ -247,27 +244,13 @@ func New(cfg Config) (*Server, error) {
 	cmd.Dir = cfg.Cwd
 	cmd.Env = buildChildEnv(os.Environ(), cfg.Env, cfg.Version)
 
-	// Inject the agent-shim preload for adapters that run a node/bun agent
-	// with a JSONL session file (pi, claude, codex). The shim posts session
-	// file writes to this runner's socket (POST /shim/event), giving us
-	// authoritative attribution instead of scrollback guessing (ADR 0009).
-	if sh, ok := cfg.Adapter.(adapter.SessionShimmer); ok && sh.UsesSessionShim() {
-		if shimPath, err := agentshim.Path(); err != nil {
-			log.Printf("ptyserver: agent-shim unavailable, falling back to scrollback attribution: %v", err)
-		} else {
-			cmd.Env = agentshim.PreloadEnv(cmd.Env, shimPath, cfg.SocketPath)
-		}
-	}
-
-	// For adapters with a native extension API (pi), also inject the gmux
-	// session extension. It reports the active session authoritatively on
-	// every bind (start/switch/fork) — fixing the warm /resume-select the
-	// shim's read inference misses (ADR 0011). GMUX_SESSION_SOCK is distinct
-	// from the shim's GMUX_RUNNER_SOCK because the shim deletes the latter at
-	// bootstrap before pi loads the extension.
+	// For adapters with a native extension API (pi), inject the gmux session
+	// extension. It reports the active session, title, and status
+	// authoritatively over the runner socket (POST /shim/event) on every bind
+	// and agent-loop transition (ADR 0011) — no fs inference, no scrollback.
 	if ext, ok := cfg.Adapter.(adapter.SessionExtender); ok {
 		if extPath, err := agentext.Path(); err != nil {
-			log.Printf("ptyserver: agent extension unavailable, relying on shim: %v", err)
+			log.Printf("ptyserver: agent extension unavailable: %v", err)
 		} else if extArgs := ext.SessionExtensionArgs(extPath); len(extArgs) > 0 {
 			cmd.Args = append([]string{cmd.Args[0]}, append(extArgs, cmd.Args[1:]...)...)
 			cmd.Env = append(cmd.Env, "GMUX_SESSION_SOCK="+cfg.SocketPath)
@@ -293,7 +276,6 @@ func New(cfg Config) (*Server, error) {
 		screen:     nil, // set below after s is constructed
 		adapter:    cfg.Adapter,
 		state:      cfg.State,
-		fileReader: newSessionFileReader(cfg.State, cfg.Adapter),
 		clients:    make(map[*wsClient]struct{}),
 		localOut:   cfg.LocalOut,   // wired before readPTY starts so early output is never lost
 		scrollback: cfg.Scrollback, // same: wired pre-readPTY so fast-exit output is never lost
@@ -306,13 +288,6 @@ func New(cfg Config) (*Server, error) {
 	// The callback fires under s.mu (held during drainScreenLocked → screen.Write).
 	s.screen = newScreen(int(cfg.Cols), int(cfg.Rows), func(visible bool) {
 		s.cursorHidden = !visible
-	})
-
-	// Debounce shim read events: a lone read binds (instant /resume-select),
-	// a multi-file burst is a picker scan and is ignored (ADR 0011).
-	s.readBinder = newReadBinder(150*time.Millisecond, func(path string) {
-		s.state.SetSessionFile(path)
-		s.fileReader.onWrite(path)
 	})
 
 	go s.readPTY()
@@ -438,7 +413,6 @@ func (s *Server) Resize(cols, rows uint16) {
 func (s *Server) Shutdown() {
 	s.listener.Close()
 	s.ptmx.Close()
-	s.readBinder.stop()
 	os.Remove(s.sockPath)
 
 	s.mu.Lock()
@@ -515,14 +489,15 @@ const maxInputBytes = 1 << 20 // 1 MiB
 // Access control is delegated to the Unix socket's file permissions
 // (owner-only, 0o700): anyone who can connect() to this socket already
 // owns the session and could do arbitrary worse things to it.
-// shimEvent is the payload posted by the agent-shim preload (hook.mjs) on
-// every JSONL session-file write in the agent process.
+// shimEvent is the payload the agent extension (pi-ext.mjs) posts to
+// POST /shim/event. The agent reports its own state authoritatively:
+//
+//	op "session" — the bound conversation file, id, name (on bind)
+//	op "status"  — working/unread/error/title (on agent-loop transitions)
 type shimEvent struct {
-	Op    string `json:"op"`   // "hello" | "append" | "write" | "read" | "session" | "status"
-	Path  string `json:"path"` // session file path (empty for "hello")
-	Pid   int    `json:"pid"`
-	Bytes int    `json:"bytes"`
-	Data  string `json:"data,omitempty"` // inline delta, may be empty if oversized
+	Op   string `json:"op"`
+	Path string `json:"path"`
+	Pid  int    `json:"pid"`
 
 	// Extension fields (op "session" / "status"): pi reports identity and
 	// state directly, so the runner doesn't parse the file or guess.
@@ -535,11 +510,10 @@ type shimEvent struct {
 	Error   bool   `json:"error,omitempty"`
 }
 
-// handleShimEvent records the session file the agent reported writing. A
-// write (append or full rewrite) is the authoritative signal that this
-// runner holds that conversation; a change of path is a rebind (/resume).
-// Reads are never sent by the shim (the /resume picker bulk-reads every
-// file), so any path we see here is one the agent is actively writing.
+// handleShimEvent applies the authoritative session state the agent's
+// extension reports (pi-ext.mjs): the bound conversation file + title + slug
+// on every bind, and busy/idle/unread/error on every agent-loop transition.
+// There is no inference — the agent tells us exactly what it holds and does.
 func (s *Server) handleShimEvent(w http.ResponseWriter, r *http.Request) {
 	var ev shimEvent
 	if err := json.NewDecoder(io.LimitReader(r.Body, 512*1024)).Decode(&ev); err != nil {
@@ -547,27 +521,11 @@ func (s *Server) handleShimEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch ev.Op {
-	case "append", "write":
-		if ev.Path != "" {
-			s.state.SetSessionFile(ev.Path)
-			// Runner owns derived state (ADR 0011 phase 1): read+parse the
-			// file ourselves and emit status/meta, rather than leaving it
-			// to the daemon's fallback file monitor.
-			s.fileReader.onWrite(ev.Path)
-		}
-	case "read":
-		// A bind without a write (/resume select, --session launch). Reads are
-		// debounced so a lone read attributes instantly but a picker's bulk
-		// scan does not churn (readBinder). The onBind callback then attributes
-		// + parses like a write.
-		s.readBinder.observe(ev.Path)
 	case "session":
-		// Authoritative bind from the agent's extension/hook API (pi's
-		// session_start/switch/fork). No inference, no debounce: the agent
-		// told us exactly which conversation it holds, named and slugged.
+		// Authoritative bind (pi's session_start/switch/fork): the file the
+		// agent holds, named and slugged.
 		if ev.Path != "" {
 			s.state.SetSessionFile(ev.Path)
-			s.fileReader.onWrite(ev.Path)
 		}
 		if ev.Name != "" {
 			s.state.SetAdapterTitle(ev.Name)
@@ -576,8 +534,7 @@ func (s *Server) handleShimEvent(w http.ResponseWriter, r *http.Request) {
 			s.state.SetSlug(adapter.Slugify(ev.ID))
 		}
 	case "status":
-		// Authoritative status from the agent's loop (pi's agent_start/end),
-		// replacing JSONL status parsing.
+		// Authoritative status (pi's agent_start/agent_end).
 		s.state.SetStatus(&adapter.Status{Working: ev.Working, Error: ev.Error})
 		if ev.Unread {
 			s.state.SetUnread(true)
@@ -585,11 +542,6 @@ func (s *Server) handleShimEvent(w http.ResponseWriter, r *http.Request) {
 		if ev.Title != "" {
 			s.state.SetAdapterTitle(ev.Title)
 		}
-	case "hello":
-		// The shim is live in the agent process. Announce it so the
-		// daemon suppresses scrollback attribution for this session
-		// until the shim reports the real file on first write.
-		s.state.EmitShimActive()
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -721,17 +673,12 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch := s.state.Subscribe()
 	defer s.state.Unsubscribe(ch)
 
-	// Replay current shim state to this (possibly reconnecting) subscriber so
-	// a restarted daemon re-learns attribution with no persisted state. A
+	// Replay the bound session file to this (possibly reconnecting) subscriber
+	// so a restarted daemon re-learns attribution with no persisted state. A
 	// concurrent update may also arrive on ch; harmless (idempotent).
-	if file, active := s.state.ShimSnapshot(); active || file != "" {
-		if active {
-			fmt.Fprintf(w, "event: shim\ndata: %s\n\n", `{"active":true}`)
-		}
-		if file != "" {
-			if data, err := json.Marshal(map[string]string{"path": file}); err == nil {
-				fmt.Fprintf(w, "event: session_file\ndata: %s\n\n", data)
-			}
+	if file := s.state.SessionFileSnapshot(); file != "" {
+		if data, err := json.Marshal(map[string]string{"path": file}); err == nil {
+			fmt.Fprintf(w, "event: session_file\ndata: %s\n\n", data)
 		}
 	}
 
