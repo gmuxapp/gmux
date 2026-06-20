@@ -223,6 +223,20 @@ type Config struct {
 	Scrollback io.WriteCloser
 }
 
+// injectAfterBinary returns args with extra spliced in immediately after the
+// binary (args[0]): [bin, extra..., rest...]. Order matters — pi recognizes a
+// subcommand only at argv[1] and applies the agent's own args after its flags,
+// so the extension flags must sit between the binary and the agent's args.
+func injectAfterBinary(args, extra []string) []string {
+	if len(args) == 0 || len(extra) == 0 {
+		return args
+	}
+	out := make([]string, 0, len(args)+len(extra))
+	out = append(out, args[0])
+	out = append(out, extra...)
+	return append(out, args[1:]...)
+}
+
 // New creates and starts a PTY server.
 func New(cfg Config) (*Server, error) {
 	if len(cfg.Command) == 0 {
@@ -252,7 +266,7 @@ func New(cfg Config) (*Server, error) {
 		if extPath, err := agentext.Path(); err != nil {
 			log.Printf("ptyserver: agent extension unavailable: %v", err)
 		} else if extArgs := ext.SessionExtensionArgs(extPath); len(extArgs) > 0 {
-			cmd.Args = append([]string{cmd.Args[0]}, append(extArgs, cmd.Args[1:]...)...)
+			cmd.Args = injectAfterBinary(cmd.Args, extArgs)
 			cmd.Env = append(cmd.Env, "GMUX_SESSION_SOCK="+cfg.SocketPath)
 		}
 	}

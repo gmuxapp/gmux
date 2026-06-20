@@ -636,9 +636,9 @@ func (fm *FileMonitor) processAttributedFileLocked(sessionID, path string) {
 		return
 	}
 
-	// Hook-covered sessions are owned by their runner, which parses the file
-	// itself and emits status/meta over /events (ADR 0011 phase 1). The
-	// daemon must not also write derived state for them.
+	// Hook-covered sessions are owned by their runner: the agent hook reports
+	// title/status directly and the runner emits them over /events (ADR 0011).
+	// The daemon must not also write derived state for them.
 	if fm.sessionHasHookLocked(sessionID) {
 		return
 	}
@@ -793,7 +793,7 @@ func (fm *FileMonitor) AttributeFromHook(sessionID, filePath string) {
 	log.Printf("filemon: runner-attributed %s -> %s", filepath.Base(filePath), sessionID)
 
 	// No daemon-side parse: the hooked runner owns derived state and emits
-	// it over /events (ADR 0011 phase 1, enforced by the guard in
+	// it over /events (ADR 0011, enforced by the guard in
 	// processAttributedFileLocked).
 }
 

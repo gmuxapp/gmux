@@ -22,9 +22,12 @@ var (
 	_ adapter.PassthroughDetector = (*Pi)(nil)
 )
 
-// piSubcommands are pi's one-shot CLI verbs (`pi <verb> ...`). pi only treats
-// these as subcommands when they sit at argv[1]; anywhere else they're a chat
-// message. Kept in sync with `pi --help`.
+// piSubcommands are pi's one-shot CLI verbs (`pi <verb> ...`). pi recognizes
+// these only at argv[1]; anywhere else they're a chat message. This list is
+// CORRECTNESS-critical: gmux injects `-e` right after the binary for the
+// session extension, which shoves the verb off argv[1] and demotes it to a
+// prompt — so a verb missing here means `gmux -- pi <verb>` silently starts a
+// chat instead of running the command. Keep synced with `pi --help`.
 var piSubcommands = map[string]bool{
 	"install":   true,
 	"remove":    true,
@@ -34,7 +37,9 @@ var piSubcommands = map[string]bool{
 	"config":    true,
 }
 
-// piInfoFlags short-circuit pi to print-and-exit; they're not sessions either.
+// piInfoFlags short-circuit pi to print-and-exit. Passing these through is
+// POLISH, not correctness: `-e` injection doesn't break them (pi still prints
+// help/version), we just skip spawning a throwaway session for them.
 var piInfoFlags = map[string]bool{
 	"--help":    true,
 	"-h":        true,
@@ -45,9 +50,10 @@ func init() {
 	All = append(All, NewPi())
 }
 
-// Pi is the adapter for the pi coding agent.
-// Status is driven by the JSONL session file (FileMonitor), not PTY output.
-// Implements SessionFiler, FileMonitor, and Resumer.
+// Pi is the adapter for the pi coding agent. Session identity, title, and
+// status are reported authoritatively by the gmux pi extension (SessionExtender;
+// see pi-ext.mjs), not inferred from PTY output. See the var block above for
+// the full set of implemented capabilities.
 type Pi struct{}
 
 func NewPi() *Pi { return &Pi{} }
@@ -61,19 +67,24 @@ func (p *Pi) Discover() bool {
 	return err == nil
 }
 
-// Match returns true if any argument in the command is the `pi` or
-// `pi-coding-agent` binary.
-func (p *Pi) Match(cmd []string) bool {
-	for _, arg := range cmd {
-		base := filepath.Base(arg)
-		if base == "pi" || base == "pi-coding-agent" {
-			return true
-		}
+// piBinaryIndex returns the index of the pi binary token in args, or -1 if
+// none appears before a `--` separator.
+func piBinaryIndex(args []string) int {
+	for i, arg := range args {
 		if arg == "--" {
-			break
+			return -1
+		}
+		if base := filepath.Base(arg); base == "pi" || base == "pi-coding-agent" {
+			return i
 		}
 	}
-	return false
+	return -1
+}
+
+// Match returns true if the command invokes the `pi` or `pi-coding-agent`
+// binary (before any `--` separator).
+func (p *Pi) Match(cmd []string) bool {
+	return piBinaryIndex(cmd) >= 0
 }
 
 // Env returns no extra environment variables.
@@ -85,34 +96,29 @@ func (p *Pi) Env(_ adapter.EnvContext) []string { return nil }
 // a subcommand only as the token immediately after the binary; info flags
 // short-circuit from anywhere in the top-level args.
 func (p *Pi) IsPassthrough(args []string) bool {
-	for i, arg := range args {
-		if arg == "--" {
-			return false
+	i := piBinaryIndex(args)
+	if i < 0 {
+		return false
+	}
+	if i+1 < len(args) && piSubcommands[args[i+1]] {
+		return true
+	}
+	for _, rest := range args[i+1:] {
+		if rest == "--" {
+			break
 		}
-		if base := filepath.Base(arg); base == "pi" || base == "pi-coding-agent" {
-			if i+1 < len(args) && piSubcommands[args[i+1]] {
-				return true
-			}
-			for _, rest := range args[i+1:] {
-				if rest == "--" {
-					break
-				}
-				if piInfoFlags[rest] {
-					return true
-				}
-			}
-			return false
+		if piInfoFlags[rest] {
+			return true
 		}
 	}
 	return false
 }
 
-// SessionExtensionArgs loads the gmux pi extension via `pi -e <path>`. pi's
-// arg parser is order-independent and extensions accumulate, so this coexists
-// with the user's own -e flags. The extension reports the active session
-// authoritatively (pi's session_start fires on every bind), including the
-// warm /resume-select that
-// reads no file and so leaves no fs signal to infer from.
+// SessionExtensionArgs loads the gmux pi extension via `pi -e <path>`.
+// Extensions accumulate, so this coexists with the user's own -e flags. The
+// extension reports the active session authoritatively (pi's session_start
+// fires on every bind), including the warm /resume-select that reads no file
+// and so leaves no fs signal to infer from.
 func (p *Pi) SessionExtensionArgs(extPath string) []string {
 	return []string{"-e", extPath}
 }
@@ -126,9 +132,9 @@ func (p *Pi) Launchers() []adapter.Launcher {
 	}}
 }
 
-// Monitor is a no-op for the pi adapter — status is driven by the
-// JSONL session file via FileMonitor.ParseNewLines instead of PTY output.
-// This avoids flicker from spinner redraws.
+// Monitor is a no-op for the pi adapter — status is reported by the gmux pi
+// extension (turn events over the runner socket), not inferred from PTY
+// output. This avoids flicker from spinner redraws.
 func (p *Pi) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
@@ -247,6 +253,13 @@ func (p *Pi) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 
 // ParseNewLines receives lines appended to an attributed session file
 // and returns events for meaningful changes.
+//
+// NOTE: this is now vestigial for pi. pi sessions are attributed only by the
+// agent hook (no metadata FileAttributor), so the daemon always suppresses its
+// file parse for them (see filemon.processAttributedFileLocked) and status
+// flows from the hook instead. It's retained — along with FileMonitor — pending
+// a focused follow-up to drop pi's FileMonitor role (which must first settle
+// how unnamed sessions get their first-prompt title, today derived here).
 //
 // Signals:
 //   - session_info with name → title update (no status change)

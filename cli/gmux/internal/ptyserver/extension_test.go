@@ -17,6 +17,37 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 )
 
+func TestInjectAfterBinary(t *testing.T) {
+	eq := func(a, b []string) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+	cases := []struct {
+		name        string
+		args, extra []string
+		want        []string
+	}{
+		{"flags after binary", []string{"pi", "--name", "x"}, []string{"-e", "/p.mjs"}, []string{"pi", "-e", "/p.mjs", "--name", "x"}},
+		{"bare binary", []string{"pi"}, []string{"-e", "/p.mjs"}, []string{"pi", "-e", "/p.mjs"}},
+		{"no extra is a no-op", []string{"pi", "-c"}, nil, []string{"pi", "-c"}},
+		{"empty args is a no-op", nil, []string{"-e", "/p.mjs"}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := injectAfterBinary(tc.args, tc.extra); !eq(got, tc.want) {
+				t.Errorf("injectAfterBinary(%v, %v) = %v, want %v", tc.args, tc.extra, got, tc.want)
+			}
+		})
+	}
+}
+
 // postSessionEvent posts an extension event to the runner's /hook/event.
 func postSessionEvent(t *testing.T, sockPath, body string) {
 	t.Helper()
