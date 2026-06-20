@@ -83,8 +83,8 @@ func TestPiCommandsWithExtensionInjected(t *testing.T) {
 			}
 			argv := tc.user
 			if !pi.IsPassthrough(tc.user) {
-				// gmux injects the extension right after the binary.
-				argv = append([]string{tc.user[0]}, append(pi.SessionExtensionArgs(extPath), tc.user[1:]...)...)
+				// gmux splices the extension in right after the pi binary.
+				argv = pi.ExtendCommand(tc.user, extPath)
 				if argv[1] != "-e" || argv[2] != extPath {
 					t.Fatalf("expected -e injected after binary, got %v", argv)
 				}

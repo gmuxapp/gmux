@@ -17,34 +17,22 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 )
 
-func TestInjectAfterBinary(t *testing.T) {
-	eq := func(a, b []string) bool {
-		if len(a) != len(b) {
-			return false
-		}
-		for i := range a {
-			if a[i] != b[i] {
-				return false
-			}
-		}
-		return true
-	}
+func TestAgentHookDisabled(t *testing.T) {
 	cases := []struct {
-		name        string
-		args, extra []string
-		want        []string
+		val  string
+		want bool
 	}{
-		{"flags after binary", []string{"pi", "--name", "x"}, []string{"-e", "/p.mjs"}, []string{"pi", "-e", "/p.mjs", "--name", "x"}},
-		{"bare binary", []string{"pi"}, []string{"-e", "/p.mjs"}, []string{"pi", "-e", "/p.mjs"}},
-		{"no extra is a no-op", []string{"pi", "-c"}, nil, []string{"pi", "-c"}},
-		{"empty args is a no-op", nil, []string{"-e", "/p.mjs"}, nil},
+		{"", false},  // unset / empty → hook enabled
+		{"0", false}, // explicit off-switch → enabled
+		{"1", true},  // the documented way to disable
+		{"true", true},
+		{"anything", true},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := injectAfterBinary(tc.args, tc.extra); !eq(got, tc.want) {
-				t.Errorf("injectAfterBinary(%v, %v) = %v, want %v", tc.args, tc.extra, got, tc.want)
-			}
-		})
+		t.Setenv("GMUX_NO_AGENT_HOOK", tc.val)
+		if got := agentHookDisabled(); got != tc.want {
+			t.Errorf("GMUX_NO_AGENT_HOOK=%q: agentHookDisabled()=%v, want %v", tc.val, got, tc.want)
+		}
 	}
 }
 

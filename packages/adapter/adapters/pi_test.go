@@ -724,11 +724,40 @@ func TestListSessionFiles(t *testing.T) {
 	}
 }
 
-func TestPiSessionExtensionArgs(t *testing.T) {
+func TestPiExtendCommand(t *testing.T) {
 	p := NewPi()
-	got := p.SessionExtensionArgs("/cache/pi-ext.mjs")
-	want := []string{"-e", "/cache/pi-ext.mjs"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("SessionExtensionArgs = %v, want %v", got, want)
+	const ext = "/cache/pi-ext.mjs"
+	eq := func(a, b []string) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+	cases := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"direct", []string{"pi", "--name", "x"}, []string{"pi", "-e", ext, "--name", "x"}},
+		{"bare", []string{"pi"}, []string{"pi", "-e", ext}},
+		// The binary is not args[0]: -e must go after pi, not the wrapper, or the
+		// wrapper rejects it (the env/npx-pi launch-failure bug).
+		{"env wrapper", []string{"env", "pi", "--name", "x"}, []string{"env", "pi", "-e", ext, "--name", "x"}},
+		{"npx wrapper", []string{"npx", "pi"}, []string{"npx", "pi", "-e", ext}},
+		{"path-qualified", []string{"/usr/bin/pi", "-c"}, []string{"/usr/bin/pi", "-e", ext, "-c"}},
+		// No pi token before --: inject nothing.
+		{"no pi", []string{"echo", "hi"}, []string{"echo", "hi"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := p.ExtendCommand(tc.args, ext); !eq(got, tc.want) {
+				t.Errorf("ExtendCommand(%v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
 	}
 }

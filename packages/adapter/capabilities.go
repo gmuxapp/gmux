@@ -105,17 +105,18 @@ type FileAttributor interface {
 // SessionExtender marks adapters whose agent exposes a native extension/hook
 // API that can report the active session authoritatively — the strongest
 // signal, catching even a cache-served /resume-select that leaves no fs
-// trace. The runner materializes the gmux hook and injects it into the launch
-// argv via SessionExtensionArgs; the hook posts an authoritative "session"
-// event to the runner socket on every bind (pi's session_start).
+// trace. The runner materializes the gmux hook and asks the adapter to splice
+// it into the launch argv via ExtendCommand; the hook posts an authoritative
+// "session" event to the runner socket on every bind (pi's session_start).
 //
 // Only adapters whose argv gmux fully controls should opt in: argv injection
 // (unlike env injection) does not survive a shell-wrapped launch.
 type SessionExtender interface {
-	// SessionExtensionArgs returns argv flags that load the gmux session
-	// extension at extPath (e.g. {"-e", extPath} for pi), inserted right
-	// after the agent binary. Return nil to inject nothing.
-	SessionExtensionArgs(extPath string) []string
+	// ExtendCommand returns args with the flags that load the gmux session
+	// extension at extPath spliced in immediately after the agent binary —
+	// which is NOT necessarily args[0] (e.g. `npx pi`, `env pi`). The adapter
+	// owns locating its own binary. Return args unchanged to inject nothing.
+	ExtendCommand(args []string, extPath string) []string
 }
 
 // PassthroughDetector marks adapters that recognize invocations which are NOT

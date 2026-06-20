@@ -223,18 +223,19 @@ type Config struct {
 	Scrollback io.WriteCloser
 }
 
-// injectAfterBinary returns args with extra spliced in immediately after the
-// binary (args[0]): [bin, extra..., rest...]. Order matters — pi recognizes a
-// subcommand only at argv[1] and applies the agent's own args after its flags,
-// so the extension flags must sit between the binary and the agent's args.
-func injectAfterBinary(args, extra []string) []string {
-	if len(args) == 0 || len(extra) == 0 {
-		return args
-	}
-	out := make([]string, 0, len(args)+len(extra))
-	out = append(out, args[0])
-	out = append(out, extra...)
-	return append(out, args[1:]...)
+// agentHookDisabled reports whether the user opted out of injecting the gmux
+// agent hook via GMUX_NO_AGENT_HOOK — an escape hatch for when an agent release
+// breaks the extension (e.g. pi changes its extension API and the hook fails to
+// load, which could otherwise stop the agent from starting). With the hook off,
+// the agent runs unmodified; gmux just loses hook-driven title/status/
+// attribution for it. Any value other than "" or "0" disables.
+//
+// Read in the runner process, so it covers foreground (`gmux -- pi`) and
+// detached (`-d`) launches; for daemon-initiated launches (resume/restart/UI)
+// the var must be present in the daemon's environment.
+func agentHookDisabled() bool {
+	v := os.Getenv("GMUX_NO_AGENT_HOOK")
+	return v != "" && v != "0"
 }
 
 // New creates and starts a PTY server.
@@ -263,10 +264,12 @@ func New(cfg Config) (*Server, error) {
 	// authoritatively over the runner socket (POST /hook/event) on every bind
 	// and agent-loop transition (ADR 0011) — no fs inference, no scrollback.
 	if ext, ok := cfg.Adapter.(adapter.SessionExtender); ok {
-		if extPath, err := agentext.Path(); err != nil {
+		if agentHookDisabled() {
+			log.Printf("ptyserver: GMUX_NO_AGENT_HOOK set; launching %s without the gmux hook (no hook-driven title/status/attribution)", cfg.Adapter.Name())
+		} else if extPath, err := agentext.Path(); err != nil {
 			log.Printf("ptyserver: agent extension unavailable: %v", err)
-		} else if extArgs := ext.SessionExtensionArgs(extPath); len(extArgs) > 0 {
-			cmd.Args = injectAfterBinary(cmd.Args, extArgs)
+		} else if extended := ext.ExtendCommand(cmd.Args, extPath); len(extended) > len(cmd.Args) {
+			cmd.Args = extended
 			cmd.Env = append(cmd.Env, "GMUX_SESSION_SOCK="+cfg.SocketPath)
 		}
 	}

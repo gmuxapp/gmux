@@ -114,13 +114,21 @@ func (p *Pi) IsPassthrough(args []string) bool {
 	return false
 }
 
-// SessionExtensionArgs loads the gmux pi extension via `pi -e <path>`.
-// Extensions accumulate, so this coexists with the user's own -e flags. The
-// extension reports the active session authoritatively (pi's session_start
-// fires on every bind), including the warm /resume-select that reads no file
-// and so leaves no fs signal to infer from.
-func (p *Pi) SessionExtensionArgs(extPath string) []string {
-	return []string{"-e", extPath}
+// ExtendCommand splices `-e <extPath>` in right after the pi binary so pi loads
+// the gmux extension. The binary may not be args[0] (e.g. `npx pi`, `env pi`),
+// so we insert after the binary token, not the front — inserting at the front
+// would hand -e to the wrapper. Extensions accumulate, so this coexists with
+// the user's own -e flags. pi's session_start (which the extension hooks) fires
+// on every bind, including the warm /resume-select that reads no file.
+func (p *Pi) ExtendCommand(args []string, extPath string) []string {
+	i := piBinaryIndex(args)
+	if i < 0 {
+		return args
+	}
+	out := make([]string, 0, len(args)+2)
+	out = append(out, args[:i+1]...)
+	out = append(out, "-e", extPath)
+	return append(out, args[i+1:]...)
 }
 
 func (p *Pi) Launchers() []adapter.Launcher {
