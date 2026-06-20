@@ -2,11 +2,80 @@ package adapters
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
 )
+
+// TestPiSubcommandsMatchHelp is a drift-guard against real pi: it parses the
+// Commands block of `pi --help` and asserts it exactly matches piSubcommands.
+// This is the detector for the highest-risk drift — pi adding or renaming a
+// subcommand — which IsPassthrough would otherwise miss, silently demoting
+// `gmux -- pi <newverb>` to a chat prompt. CI runs it against pi@latest (PRs +
+// nightly) so a pi release that changes the verb set fails loudly and demands a
+// fast-tracked fix to piSubcommands. Skips when pi is absent or under -short.
+func TestPiSubcommandsMatchHelp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real-pi drift guard in -short mode")
+	}
+	if _, err := exec.LookPath("pi"); err != nil {
+		t.Skip("pi binary not on PATH; skipping drift guard")
+	}
+
+	cmd := exec.Command("pi", "--help")
+	cmd.Env = append(os.Environ(), "NO_COLOR=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pi --help: %v\n%s", err, out)
+	}
+
+	got := parseHelpSubcommands(string(out))
+	if len(got) == 0 {
+		t.Fatalf("found no subcommands in `pi --help` — has the Commands block format changed?\n%s", out)
+	}
+	for verb := range got {
+		if !piSubcommands[verb] {
+			t.Errorf("pi added subcommand %q not in piSubcommands — `gmux -- pi %s` would be demoted to a prompt; add it (pi.go)", verb, verb)
+		}
+	}
+	for verb := range piSubcommands {
+		if !got[verb] {
+			t.Errorf("piSubcommands has %q but `pi --help` no longer lists it — remove it (pi.go)", verb)
+		}
+	}
+}
+
+// parseHelpSubcommands extracts the verbs from the `Commands:` block of
+// `pi --help` (indented `  pi <verb> ...` lines; the `pi <command> --help`
+// hint line doesn't match and is skipped).
+func parseHelpSubcommands(help string) map[string]bool {
+	verb := regexp.MustCompile(`^\s+pi ([a-z][a-z-]*)\b`)
+	got := map[string]bool{}
+	inCommands := false
+	for _, line := range strings.Split(help, "\n") {
+		if strings.HasPrefix(line, "Commands:") {
+			inCommands = true
+			continue
+		}
+		if !inCommands {
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, " ") {
+			break // dedented line → next section (Options:)
+		}
+		if m := verb.FindStringSubmatch(line); m != nil {
+			got[m[1]] = true
+		}
+	}
+	return got
+}
 
 // --- Matching ---
 
@@ -56,7 +125,7 @@ func TestPiIsPassthrough(t *testing.T) {
 		{"pi", "remove", "foo"},
 		{"pi", "uninstall", "foo"},
 		{"/home/user/.local/bin/pi", "update"}, // path-qualified binary
-		{"pi", "--help"},                        // info flags short-circuit pi
+		{"pi", "--help"},                       // info flags short-circuit pi
 		{"pi", "-h"},
 		{"pi", "--version"},
 		{"pi", "--name", "x", "--help"}, // info flag anywhere in top-level args
@@ -67,13 +136,13 @@ func TestPiIsPassthrough(t *testing.T) {
 		}
 	}
 	sessions := [][]string{
-		{"pi"},                       // bare interactive
-		{"pi", "--name", "x"},         // named session
-		{"pi", "-c"},                  // continue
-		{"pi", "-r"},                  // resume picker
-		{"pi", "--session", "abc"},    // resume by id
-		{"pi", "update is broken"},    // a chat message that starts with a verb
-		{"pi", "--name", "list"},      // "list" as a flag value, not argv[1]
+		{"pi"},                         // bare interactive
+		{"pi", "--name", "x"},          // named session
+		{"pi", "-c"},                   // continue
+		{"pi", "-r"},                   // resume picker
+		{"pi", "--session", "abc"},     // resume by id
+		{"pi", "update is broken"},     // a chat message that starts with a verb
+		{"pi", "--name", "list"},       // "list" as a flag value, not argv[1]
 		{"echo", "--", "pi", "update"}, // not pi at all
 	}
 	for _, args := range sessions {
