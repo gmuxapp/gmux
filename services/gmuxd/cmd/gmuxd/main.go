@@ -456,11 +456,23 @@ func serve(stderr io.Writer) int {
 	// Resume merge / slug takeover drop the corresponding directory.
 	// See sessionmeta package doc for the full lifecycle.
 	metaStore := sessionmeta.New(sessionmeta.DefaultDir())
+	// persistedKeys records the id and slug of every session sessionmeta
+	// holds on disk at startup (the post-retention sweep survivors). The
+	// startup CleanupSessions unions this with the live store so a project
+	// membership key is pruned only when it is neither live nor persisted.
+	// Capturing it here rather than re-deriving it from the store at
+	// cleanup time keeps the guard correct regardless of whether the swept
+	// dead sessions are still populated in the store by then.
+	persistedKeys := make(map[string]bool)
 	if loaded, err := metaStore.Sweep(); err != nil {
 		log.Printf("sessionmeta: sweep failed: %v", err)
 	} else {
 		for _, sess := range loaded {
 			sessions.Upsert(sess)
+			persistedKeys[sess.ID] = true
+			if sess.Slug != "" {
+				persistedKeys[sess.Slug] = true
+			}
 		}
 		if n := len(loaded); n > 0 {
 			log.Printf("sessionmeta: restored %d session(s) from %s", n, metaStore.Dir())
@@ -691,10 +703,14 @@ func serve(stderr io.Writer) int {
 		reconcileProjectStamps(state)
 	}
 
-	// After store is populated, clean up orphaned project entries
-	// (slugs that no longer resolve to a store session).
+	// After the store is populated, clean up orphaned project entries
+	// (keys that resolve to neither a live session nor a persisted one).
+	// known = persisted-on-disk ∪ live store; see persistedKeys above.
 	scanner.OnFirstScan = func() {
-		known := make(map[string]bool)
+		known := make(map[string]bool, len(persistedKeys))
+		for k := range persistedKeys {
+			known[k] = true
+		}
 		for _, s := range sessions.List() {
 			known[s.ID] = true
 			if s.Slug != "" {
