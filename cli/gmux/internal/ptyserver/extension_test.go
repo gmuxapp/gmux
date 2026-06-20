@@ -89,10 +89,10 @@ func TestReconnectReplaysSessionFile(t *testing.T) {
 
 	postSessionEvent(t, sockPath, `{"op":"session","path":`+strconv.Quote(sessFile)+`}`)
 	deadline := time.After(5 * time.Second)
-	for st.SessionFile != sessFile {
+	for st.SessionFileSnapshot() != sessFile {
 		select {
 		case <-deadline:
-			t.Fatalf("runner never recorded session file; got %q", st.SessionFile)
+			t.Fatalf("runner never recorded session file; got %q", st.SessionFileSnapshot())
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
@@ -162,10 +162,10 @@ func TestSessionEventIsAuthoritative(t *testing.T) {
 	waitFor := func(want string) {
 		t.Helper()
 		deadline := time.After(2 * time.Second)
-		for st.SessionFile != want {
+		for st.SessionFileSnapshot() != want {
 			select {
 			case <-deadline:
-				t.Fatalf("runner did not bind to %q; got %q", want, st.SessionFile)
+				t.Fatalf("runner did not bind to %q; got %q", want, st.SessionFileSnapshot())
 			case <-time.After(20 * time.Millisecond):
 			}
 		}
@@ -216,20 +216,24 @@ func TestTurnEventDrivesState(t *testing.T) {
 
 	post(`{"op":"turn","phase":"start"}`)
 	deadline := time.After(2 * time.Second)
-	for st.Status == nil || !st.Status.Working {
+	for s := st.StatusSnapshot(); s == nil || !s.Working; s = st.StatusSnapshot() {
 		select {
 		case <-deadline:
-			t.Fatalf("status never went working; got %+v", st.Status)
+			t.Fatalf("status never went working; got %+v", st.StatusSnapshot())
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
 
 	post(`{"op":"turn","phase":"end","outcome":"completed","title":"my chat"}`)
 	deadline = time.After(2 * time.Second)
-	for st.Status == nil || st.Status.Working || st.Title() != "my chat" || !st.Unread {
+	for {
+		s := st.StatusSnapshot()
+		if s != nil && !s.Working && st.Title() == "my chat" && st.UnreadSnapshot() {
+			break
+		}
 		select {
 		case <-deadline:
-			t.Fatalf("status/title not applied; status=%+v title=%q unread=%v", st.Status, st.Title(), st.Unread)
+			t.Fatalf("status/title not applied; status=%+v title=%q unread=%v", st.StatusSnapshot(), st.Title(), st.UnreadSnapshot())
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
@@ -250,14 +254,15 @@ func TestApplyTurnEnd(t *testing.T) {
 		st := session.New(session.Config{ID: "s1", Kind: "pi"})
 		srv := &Server{state: st}
 		srv.applyTurnEnd(tc.outcome, "")
-		if st.Status == nil || st.Status.Working {
-			t.Errorf("%s: expected idle, got %+v", tc.outcome, st.Status)
+		status := st.StatusSnapshot()
+		if status == nil || status.Working {
+			t.Errorf("%s: expected idle, got %+v", tc.outcome, status)
 		}
-		if st.Unread != tc.wantUnread {
-			t.Errorf("%s: unread=%v want %v", tc.outcome, st.Unread, tc.wantUnread)
+		if st.UnreadSnapshot() != tc.wantUnread {
+			t.Errorf("%s: unread=%v want %v", tc.outcome, st.UnreadSnapshot(), tc.wantUnread)
 		}
-		if st.Status != nil && st.Status.Error != tc.wantError {
-			t.Errorf("%s: error=%v want %v", tc.outcome, st.Status.Error, tc.wantError)
+		if status != nil && status.Error != tc.wantError {
+			t.Errorf("%s: error=%v want %v", tc.outcome, status.Error, tc.wantError)
 		}
 	}
 }

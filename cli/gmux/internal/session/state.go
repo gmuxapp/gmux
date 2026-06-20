@@ -230,6 +230,25 @@ func (s *State) SessionFileSnapshot() string {
 	return s.SessionFile
 }
 
+// StatusSnapshot returns a copy of the current status (nil if unset), safe to
+// read from another goroutine while the runner concurrently updates state.
+func (s *State) StatusSnapshot() *adapter.Status {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.Status == nil {
+		return nil
+	}
+	cp := *s.Status
+	return &cp
+}
+
+// UnreadSnapshot returns the current unread flag under lock.
+func (s *State) UnreadSnapshot() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Unread
+}
+
 // SetSessionFile records the agent's current session file as reported by
 // the extension. Emits a session_file event only when the path changes, so
 // the daemon sees first-attribution and rebind (/resume) but not every write.
