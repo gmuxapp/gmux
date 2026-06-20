@@ -9,11 +9,11 @@ gmux has built-in support for [pi](https://github.com/mariozechner/pi-coding-age
 
 ### Live status
 
-The sidebar shows when pi is actively working. gmux monitors pi's session file for message events and reports the agent as **working** (pulsing cyan dot) while it is processing. When the turn completes, the dot disappears.
+The sidebar shows when pi is actively working. gmux loads a small extension into pi at launch which reports each turn boundary, so the agent shows as **working** (pulsing cyan dot) while it is processing and clears when the turn completes — no PTY scraping or log parsing.
 
 ### Session titles from conversations
 
-Instead of showing "pi" for every session, gmux reads pi's session files and extracts the first message you sent as the title:
+Instead of showing "pi" for every session, the extension reports pi's session name — which pi auto-generates from the conversation (and you can change with pi's `/name` command):
 
 ```
 ▼ ~/dev/myapp
@@ -22,7 +22,7 @@ Instead of showing "pi" for every session, gmux reads pi's session files and ext
   ○ Refactor database layer
 ```
 
-If you rename a session with pi's `/name` command, gmux picks up the new name automatically.
+Renaming with pi's `/name` command updates the sidebar live.
 
 ### Resumable sessions
 
@@ -69,27 +69,29 @@ Pi stores conversations as JSONL files in `~/.pi/agent/sessions/`. Each working 
     2026-03-15T11-30-00-000Z_def456.jsonl
 ```
 
-gmuxd watches these directories and reads the files to populate the sidebar. The first line of each file is a session header with a UUID and timestamp. Message entries contain the conversation text used for titles.
+gmuxd indexes these files for conversation search and history. Live session state — attribution, title, and status — comes from the extension, not from parsing these files. The first line of each file is a session header with a UUID and timestamp.
 
-### Session file attribution
+### The gmux extension
 
-When pi creates or updates a session file, gmuxd needs to figure out which running session it belongs to. For the common case (one pi session per directory), this is trivial. When multiple pi sessions share a directory, gmuxd uses content similarity matching — it compares text extracted from the file against each session's terminal scrollback to find the best match.
+When gmux owns the launch, it injects the gmux session extension into pi (`pi -e <materialized-extension>`; extensions accumulate, so it coexists with your own). The extension subscribes to pi's own lifecycle and reports state to the runner authoritatively — no inference:
 
-Attribution is sticky: once a file is matched to a session, it stays matched until a different file starts receiving writes (e.g., after using `/resume` or `/fork` in pi).
+- **`session_start`** (fires on startup *and* on every `/new`, `/resume`, and `/fork`) reports the active conversation file, id, and name. This is what binds a session to its file, and it's the only signal that survives selecting an already-loaded session from pi's `/resume` picker — pi serves that from memory without touching disk, so there is nothing for an external heuristic to observe. (This replaces the old scrollback content-matching; see ADR 0011.)
+- **`agent_start` / `agent_end`** report each turn, so gmux drives status without watching the file.
 
-### Status detection
+### Status
 
-Status is driven by pi's JSONL session file, not PTY output. gmuxd watches for appended message entries and infers the agent's state:
+The extension reports each turn with a normalized, agent-agnostic outcome; gmux maps it to the sidebar:
 
-- **user message** → working (assistant will respond)
-- **assistant with `stopReason: "toolUse"`** → working (tool loop continues)
-- **assistant with `stopReason: "stop"`** → idle (turn complete)
-- **assistant with `stopReason: "aborted"`** → idle (user cancelled)
-- **assistant with `stopReason: "error"`** → no change unless retries are exhausted. Pi auto-retries transient errors (overloaded, rate-limited). gmux reads the file to count consecutive errors and only flags an error when the count reaches pi's retry limit (default 3 retries, configurable via `retry.maxRetries` in pi's settings). Exhausted errors show a red dot in the sidebar; the dot clears when you view the session or send a new message.
+- **turn start** → working (pulsing cyan dot)
+- **completed** → idle, marked unread
+- **aborted** (you pressed Esc) → idle
+- **error** (pi exhausted its auto-retries) → red dot; clears when you view the session or send a new message
 
-Unknown event types (including custom extension events) are silently ignored and never disrupt the current state.
+### Disabling the extension
+
+If a pi release ever breaks the extension, set `GMUX_NO_AGENT_HOOK=1` to launch pi without it. Pi runs normally; gmux just won't show hook-driven title/status/attribution until you unset it (or a fix ships). One-shot pi commands (`pi update`, `pi list`, `pi --help`, …) are never extended — gmux runs them directly rather than wrapping them in a session.
 
 ## Limitations
 
-- **Title appears after the first turn.** Pi creates the session file on launch but doesn't write conversation content until the first assistant response completes. The title (derived from your first message) appears once that write happens.
-- **Multi-instance attribution needs content matching.** If you run two pi sessions in the same directory, gmux uses content similarity to attribute files. This works well in practice but has a one-write delay for initial attribution.
+- **Title appears after the first turn.** Pi generates the session name once the first response completes, so a brand-new session shows a generic title until then.
+- **The extension only loads when gmux controls the launch.** A shell-wrapped invocation (e.g. `bash -lc "pi …"`) doesn't receive the `-e` flag, so that session won't report hook-driven state.

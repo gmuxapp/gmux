@@ -29,6 +29,7 @@
 | **Daemon**      | The single per-host `gmuxd` process; central registry, broker, and proxy                         | Server, gmuxd (in prose)    |
 | **Broker**      | The daemon's role serving readonly state (today: scrollback) sourced from disk for dead sessions | Replay server               |
 | **Adapter**     | A plugin (pi, claude, shell, ...) that resolves commands, derives slugs, and may write tool files | Plugin, kind                |
+| **Agent-hook**  | A small extension the runner injects into the agent (pi: `-e <ext>`) that subscribes to the agent's own session/agent lifecycle and reports the held session file, title, and status to the runner authoritatively (ADR 0011). Supersedes the removed agent-shim fs preload (ADR 0010) | Hook, extension             |
 | **Frontend**    | The web UI consuming `/v1/events` SSE and `/ws/<id>` WebSockets                                  | Client (overloaded), web    |
 
 ## Peering
@@ -75,7 +76,7 @@ The four stores have orthogonal concerns. Mixing them is a smell:
 | **Slug-takeover**     | A fresh live session evicting a dead one with the same `(kind, peer, slug)` from the store                              | Slug eviction                  |
 | **Dismiss**           | Explicit user removal: runner killed if alive, store entry removed, sessionmeta + scrollback dropped                    | Delete, close                  |
 | **Sweep**             | Daemon startup operation: read every `meta.json` and Upsert as `Alive=false`; sessions appear in the sidebar only if `projects.json` still contains their key | Restore                        |
-| **Attribution**       | The pre-attribution → attributed transition for tool-backed sessions when their adapter file appears                    | Naming                         |
+| **Attribution**       | Binding a tool-backed session to its adapter session file. **Primary:** authoritative, reported by the **Agent-hook** (pi names the held file directly, including cache-served `/resume` rebinds). **Fallback:** metadata matching (cwd + start time) for agents with no hook (codex). See ADR 0011 | Naming                         |
 
 ## Relationships
 

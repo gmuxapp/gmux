@@ -58,6 +58,19 @@ type runDirectives struct {
 // this call returns immediately once the session is running, leaving
 // the session visible in the gmux UI.
 func runSession(args []string, attach bool, dir runDirectives) {
+	// Resolve the adapter up front so we can short-circuit one-shot, non-session
+	// invocations (e.g. `pi update`, `pi list`) before any session machinery.
+	// These are not interactive sessions: exec them directly so they behave
+	// exactly as if typed by hand (same tty, env, exit code) and never get
+	// wrapped in a runner/PTY or registered with gmuxd. This must run before the
+	// nested/detach branches below — detaching or re-execing a one-shot command
+	// would be wrong (and would hang -d on a registration handshake that never
+	// comes).
+	a := resolveAdapter(args)
+	if pt, ok := a.(adapter.PassthroughDetector); ok && pt.IsPassthrough(args) {
+		execPassthrough(args)
+	}
+
 	// Nested gmux detection: if we're running interactively inside an
 	// existing gmux session, re-exec as a detached headless process instead
 	// of doing PTY passthrough (which would nest PTY-within-PTY). The
@@ -121,14 +134,6 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	if err != nil {
 		log.Fatalf("failed to bind session socket: %v", err)
 	}
-
-	// Resolve adapter — registered adapters first, shell fallback
-	registry := adapter.NewRegistry()
-	for _, a := range adapters.All {
-		registry.Register(a)
-	}
-	registry.SetFallback(adapters.DefaultFallback())
-	a := registry.Resolve(args)
 
 	// Get adapter-specific env vars
 	adapterEnv := a.Env(adapter.EnvContext{
@@ -363,6 +368,29 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		fmt.Printf("exited:   %d\n", exitCode)
 	}
 	os.Exit(exitCode)
+}
+
+// resolveAdapter builds the adapter registry (registered adapters first,
+// shell fallback) and resolves the one matching the command.
+func resolveAdapter(args []string) adapter.Adapter {
+	registry := adapter.NewRegistry()
+	for _, a := range adapters.All {
+		registry.Register(a)
+	}
+	registry.SetFallback(adapters.DefaultFallback())
+	return registry.Resolve(args)
+}
+
+// execPassthrough replaces the gmux process with args, so a one-shot
+// invocation runs exactly as if typed directly. Never returns on success.
+func execPassthrough(args []string) {
+	bin, err := exec.LookPath(args[0])
+	if err != nil {
+		log.Fatalf("gmux: %s: %v", args[0], err)
+	}
+	if err := syscall.Exec(bin, args, os.Environ()); err != nil {
+		log.Fatalf("gmux: exec %s: %v", args[0], err)
+	}
 }
 
 // reexecRunArgs builds the argv for re-execing gmux to run a command

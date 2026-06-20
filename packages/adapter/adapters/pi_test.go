@@ -2,12 +2,80 @@ package adapters
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
 )
+
+// TestPiSubcommandsMatchHelp is a drift-guard against real pi: it parses the
+// Commands block of `pi --help` and asserts it exactly matches piSubcommands.
+// This is the detector for the highest-risk drift — pi adding or renaming a
+// subcommand — which IsPassthrough would otherwise miss, silently demoting
+// `gmux -- pi <newverb>` to a chat prompt. CI runs it against pi@latest (PRs +
+// nightly) so a pi release that changes the verb set fails loudly and demands a
+// fast-tracked fix to piSubcommands. Skips when pi is absent or under -short.
+func TestPiSubcommandsMatchHelp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real-pi drift guard in -short mode")
+	}
+	if _, err := exec.LookPath("pi"); err != nil {
+		t.Skip("pi binary not on PATH; skipping drift guard")
+	}
+
+	cmd := exec.Command("pi", "--help")
+	cmd.Env = append(os.Environ(), "NO_COLOR=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pi --help: %v\n%s", err, out)
+	}
+
+	got := parseHelpSubcommands(string(out))
+	if len(got) == 0 {
+		t.Fatalf("found no subcommands in `pi --help` — has the Commands block format changed?\n%s", out)
+	}
+	for verb := range got {
+		if !piSubcommands[verb] {
+			t.Errorf("pi added subcommand %q not in piSubcommands — `gmux -- pi %s` would be demoted to a prompt; add it (pi.go)", verb, verb)
+		}
+	}
+	for verb := range piSubcommands {
+		if !got[verb] {
+			t.Errorf("piSubcommands has %q but `pi --help` no longer lists it — remove it (pi.go)", verb)
+		}
+	}
+}
+
+// parseHelpSubcommands extracts the verbs from the `Commands:` block of
+// `pi --help` (indented `  pi <verb> ...` lines; the `pi <command> --help`
+// hint line doesn't match and is skipped).
+func parseHelpSubcommands(help string) map[string]bool {
+	verb := regexp.MustCompile(`^\s+pi ([a-z][a-z-]*)\b`)
+	got := map[string]bool{}
+	inCommands := false
+	for _, line := range strings.Split(help, "\n") {
+		if strings.HasPrefix(line, "Commands:") {
+			inCommands = true
+			continue
+		}
+		if !inCommands {
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, " ") {
+			break // dedented line → next section (Options:)
+		}
+		if m := verb.FindStringSubmatch(line); m != nil {
+			got[m[1]] = true
+		}
+	}
+	return got
+}
 
 // --- Matching ---
 
@@ -43,6 +111,44 @@ func TestPiMatchWrapped(t *testing.T) {
 func TestPiMatchStopsAtDoubleDash(t *testing.T) {
 	if NewPi().Match([]string{"echo", "--", "pi"}) {
 		t.Fatal("should not match 'pi' after '--'")
+	}
+}
+
+func TestPiIsPassthrough(t *testing.T) {
+	p := NewPi()
+	passthrough := [][]string{
+		{"pi", "update"},
+		{"pi", "update", "self"},
+		{"pi", "list"},
+		{"pi", "config"},
+		{"pi", "install", "foo"},
+		{"pi", "remove", "foo"},
+		{"pi", "uninstall", "foo"},
+		{"/home/user/.local/bin/pi", "update"}, // path-qualified binary
+		{"pi", "--help"},                       // info flags short-circuit pi
+		{"pi", "-h"},
+		{"pi", "--version"},
+		{"pi", "--name", "x", "--help"}, // info flag anywhere in top-level args
+	}
+	for _, args := range passthrough {
+		if !p.IsPassthrough(args) {
+			t.Errorf("expected passthrough for %v", args)
+		}
+	}
+	sessions := [][]string{
+		{"pi"},                         // bare interactive
+		{"pi", "--name", "x"},          // named session
+		{"pi", "-c"},                   // continue
+		{"pi", "-r"},                   // resume picker
+		{"pi", "--session", "abc"},     // resume by id
+		{"pi", "update is broken"},     // a chat message that starts with a verb
+		{"pi", "--name", "list"},       // "list" as a flag value, not argv[1]
+		{"echo", "--", "pi", "update"}, // not pi at all
+	}
+	for _, args := range sessions {
+		if p.IsPassthrough(args) {
+			t.Errorf("expected session (not passthrough) for %v", args)
+		}
 	}
 }
 
@@ -618,26 +724,40 @@ func TestListSessionFiles(t *testing.T) {
 	}
 }
 
-// --- extractPiText ---
-
-func TestExtractPiTextIncludesToolResult(t *testing.T) {
-	path := writeTempJSONL(t,
-		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp"}`,
-		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"run tests"}]}}`,
-		`{"type":"message","id":"tr1","message":{"role":"toolResult","content":"PASS: 5 tests passed"}}`,
-		`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"text","text":"All tests pass."}]}}`,
-	)
-	text, err := extractPiText(path)
-	if err != nil {
-		t.Fatal(err)
+func TestPiExtendCommand(t *testing.T) {
+	p := NewPi()
+	const ext = "/cache/pi-ext.mjs"
+	eq := func(a, b []string) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
 	}
-	if !strings.Contains(text, "run tests") {
-		t.Error("missing user message text")
+	cases := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"direct", []string{"pi", "--name", "x"}, []string{"pi", "-e", ext, "--name", "x"}},
+		{"bare", []string{"pi"}, []string{"pi", "-e", ext}},
+		// The binary is not args[0]: -e must go after pi, not the wrapper, or the
+		// wrapper rejects it (the env/npx-pi launch-failure bug).
+		{"env wrapper", []string{"env", "pi", "--name", "x"}, []string{"env", "pi", "-e", ext, "--name", "x"}},
+		{"npx wrapper", []string{"npx", "pi"}, []string{"npx", "pi", "-e", ext}},
+		{"path-qualified", []string{"/usr/bin/pi", "-c"}, []string{"/usr/bin/pi", "-e", ext, "-c"}},
+		// No pi token before --: inject nothing.
+		{"no pi", []string{"echo", "hi"}, []string{"echo", "hi"}},
 	}
-	if !strings.Contains(text, "PASS: 5 tests passed") {
-		t.Error("missing toolResult text")
-	}
-	if !strings.Contains(text, "All tests pass") {
-		t.Error("missing assistant text")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := p.ExtendCommand(tc.args, ext); !eq(got, tc.want) {
+				t.Errorf("ExtendCommand(%v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
 	}
 }

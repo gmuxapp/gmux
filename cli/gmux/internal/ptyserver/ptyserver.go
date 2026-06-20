@@ -19,12 +19,13 @@ import (
 	"syscall"
 	"time"
 
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
+	"github.com/gmuxapp/gmux/cli/gmux/internal/agentext"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
-	uv "github.com/charmbracelet/ultraviolet"
-	"github.com/charmbracelet/x/vt"
 	"nhooyr.io/websocket"
 )
 
@@ -154,19 +155,19 @@ type Server struct {
 	ptmx     *os.File
 	sockPath string
 	listener net.Listener
-	screen       *vt.Emulator // virtual terminal for replay snapshots (guarded by mu)
-	adapter      adapter.Adapter
-	state        *session.State
+	screen   *vt.Emulator // virtual terminal for replay snapshots (guarded by mu)
+	adapter  adapter.Adapter
+	state    *session.State
 
 	mu             sync.Mutex
 	clients        map[*wsClient]struct{}
-	localOut       io.Writer       // optional local terminal output sink
-	scrollback     io.WriteCloser  // optional persistent scrollback sink (closed in waitChild)
-	ptyCols        uint16          // last applied PTY cols (guarded by mu)
-	ptyRows        uint16          // last applied PTY rows (guarded by mu)
-	cursorHidden   bool            // tracks DECTCEM via callback (guarded by mu)
-	screenPending  []byte          // raw PTY data not yet fed to screen (guarded by mu)
-	lastClientLeft time.Time       // when the last WS client disconnected (guarded by mu)
+	localOut       io.Writer      // optional local terminal output sink
+	scrollback     io.WriteCloser // optional persistent scrollback sink (closed in waitChild)
+	ptyCols        uint16         // last applied PTY cols (guarded by mu)
+	ptyRows        uint16         // last applied PTY rows (guarded by mu)
+	cursorHidden   bool           // tracks DECTCEM via callback (guarded by mu)
+	screenPending  []byte         // raw PTY data not yet fed to screen (guarded by mu)
+	lastClientLeft time.Time      // when the last WS client disconnected (guarded by mu)
 
 	done    chan struct{} // closed when child exits
 	ptyDone chan struct{} // closed when readPTY finishes draining
@@ -222,6 +223,21 @@ type Config struct {
 	Scrollback io.WriteCloser
 }
 
+// agentHookDisabled reports whether the user opted out of injecting the gmux
+// agent hook via GMUX_NO_AGENT_HOOK — an escape hatch for when an agent release
+// breaks the extension (e.g. pi changes its extension API and the hook fails to
+// load, which could otherwise stop the agent from starting). With the hook off,
+// the agent runs unmodified; gmux just loses hook-driven title/status/
+// attribution for it. Any value other than "" or "0" disables.
+//
+// Read in the runner process, so it covers foreground (`gmux -- pi`) and
+// detached (`-d`) launches; for daemon-initiated launches (resume/restart/UI)
+// the var must be present in the daemon's environment.
+func agentHookDisabled() bool {
+	v := os.Getenv("GMUX_NO_AGENT_HOOK")
+	return v != "" && v != "0"
+}
+
 // New creates and starts a PTY server.
 func New(cfg Config) (*Server, error) {
 	if len(cfg.Command) == 0 {
@@ -242,6 +258,21 @@ func New(cfg Config) (*Server, error) {
 	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
 	cmd.Dir = cfg.Cwd
 	cmd.Env = buildChildEnv(os.Environ(), cfg.Env, cfg.Version)
+
+	// For adapters with a native extension API (pi), inject the gmux session
+	// extension. It reports the active session, title, and status
+	// authoritatively over the runner socket (POST /hook/event) on every bind
+	// and agent-loop transition (ADR 0011) — no fs inference, no scrollback.
+	if ext, ok := cfg.Adapter.(adapter.SessionExtender); ok {
+		if agentHookDisabled() {
+			log.Printf("ptyserver: GMUX_NO_AGENT_HOOK set; launching %s without the gmux hook (no hook-driven title/status/attribution)", cfg.Adapter.Name())
+		} else if extPath, err := agentext.Path(); err != nil {
+			log.Printf("ptyserver: agent extension unavailable: %v", err)
+		} else if extended := ext.ExtendCommand(cmd.Args, extPath); len(extended) > len(cmd.Args) {
+			cmd.Args = extended
+			cmd.Env = append(cmd.Env, "GMUX_SESSION_SOCK="+cfg.SocketPath)
+		}
+	}
 
 	// Start command in a new PTY
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
@@ -414,7 +445,7 @@ func (s *Server) serve() {
 
 	// HTTP endpoints (checked first via explicit paths)
 	mux.HandleFunc("GET /meta", s.handleMeta)
-	mux.HandleFunc("GET /scrollback/text", s.handleScrollbackText)
+	mux.HandleFunc("POST /hook/event", s.handleHookEvent)
 	mux.HandleFunc("POST /input", s.handleInput)
 	mux.HandleFunc("PUT /status", s.handlePutStatus)
 	mux.HandleFunc("PUT /slug", s.handlePutSlug)
@@ -438,24 +469,6 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// handleScrollbackText returns the visible screen content as plain text,
-// suitable for content-similarity matching (ADR-0009).
-func (s *Server) handleScrollbackText(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	s.drainScreenLocked()
-	text := s.screenText()
-	s.mu.Unlock()
-
-	// Return only the tail, 2000 chars is plenty for similarity matching.
-	const maxChars = 2000
-	if len(text) > maxChars {
-		text = text[len(text)-maxChars:]
-	}
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Write([]byte(text))
-}
-
 // screenText returns the visible screen content as plain text.
 // Caller must hold s.mu.
 func (s *Server) screenText() string {
@@ -474,6 +487,81 @@ const maxInputBytes = 1 << 20 // 1 MiB
 // Access control is delegated to the Unix socket's file permissions
 // (owner-only, 0o700): anyone who can connect() to this socket already
 // owns the session and could do arbitrary worse things to it.
+// hookEvent is the payload the agent extension (pi-ext.mjs) posts to
+// POST /hook/event. The agent reports facts about itself; the runner maps
+// them to sidebar state:
+//
+//	op "session"          — the bound conversation file, id, name (on bind)
+//	op "turn" phase start — the agent loop began (→ working)
+//	op "turn" phase end   — the loop ended with Outcome + title
+//
+// Outcome is a stable, agent-agnostic vocabulary ("completed" | "aborted" |
+// "error"); each agent's extension normalizes its own terminal state into it,
+// and the runner owns what each means for the sidebar (see applyTurnEnd).
+type hookEvent struct {
+	Op   string `json:"op"`
+	Path string `json:"path"`
+	Pid  int    `json:"pid"`
+
+	ID      string `json:"id,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Title   string `json:"title,omitempty"`
+	Phase   string `json:"phase,omitempty"`   // "start" | "end" (op "turn")
+	Outcome string `json:"outcome,omitempty"` // "completed" | "aborted" | "error"
+}
+
+// handleHookEvent applies the authoritative session state the agent's
+// extension reports (pi-ext.mjs): the bound conversation file + title + slug
+// on every bind, and busy/idle/unread/error on every agent-loop transition.
+// There is no inference — the agent tells us exactly what it holds and does.
+func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
+	var ev hookEvent
+	if err := json.NewDecoder(io.LimitReader(r.Body, 512*1024)).Decode(&ev); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	switch ev.Op {
+	case "session":
+		// Authoritative bind (pi's session_start): the file the
+		// agent holds, named and slugged.
+		if ev.Path != "" {
+			s.state.SetSessionFile(ev.Path)
+		}
+		if ev.Name != "" {
+			s.state.SetAdapterTitle(ev.Name)
+		}
+		if ev.ID != "" {
+			s.state.SetSlug(adapter.Slugify(ev.ID))
+		}
+	case "turn":
+		// Agent-loop transition. The extension reports phase + outcome; the
+		// sidebar policy (what an outcome means) lives here, in testable Go.
+		if ev.Phase == "start" {
+			s.state.SetStatus(&adapter.Status{Working: true})
+			break
+		}
+		s.applyTurnEnd(ev.Outcome, ev.Title)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// applyTurnEnd maps a normalized turn outcome to sidebar state. This is the
+// one place gmux decides what an agent's terminal state means:
+//
+//	completed — the agent finished on its own; the reply is unread.
+//	error     — the agent gave up (e.g. exhausted retries); show a red dot.
+//	aborted   — the user interrupted; just go idle, nothing unread.
+func (s *Server) applyTurnEnd(outcome, title string) {
+	s.state.SetStatus(&adapter.Status{Working: false, Error: outcome == "error"})
+	if outcome == "completed" {
+		s.state.SetUnread(true)
+	}
+	if title != "" {
+		s.state.SetAdapterTitle(title)
+	}
+}
+
 func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxInputBytes))
 	if err != nil {
@@ -600,6 +688,15 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	ch := s.state.Subscribe()
 	defer s.state.Unsubscribe(ch)
+
+	// Replay the bound session file to this (possibly reconnecting) subscriber
+	// so a restarted daemon re-learns attribution with no persisted state. A
+	// concurrent update may also arrive on ch; harmless (idempotent).
+	if file := s.state.SessionFileSnapshot(); file != "" {
+		if data, err := json.Marshal(map[string]string{"path": file}); err == nil {
+			fmt.Fprintf(w, "event: session_file\ndata: %s\n\n", data)
+		}
+	}
 
 	flusher.Flush()
 
@@ -973,7 +1070,6 @@ func (s *Server) readPTY() {
 		}
 	}
 }
-
 
 func (s *Server) waitChild() {
 	s.err = s.cmd.Wait()

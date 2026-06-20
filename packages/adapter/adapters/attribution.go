@@ -1,70 +1,19 @@
 package adapters
 
 import (
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
 )
 
 // --- Shared attribution helpers ---
-
-// attributeByScrollbackNormalized matches a file to a session by
-// comparing conversation text against terminal scrollback, after
-// stripping TUI chrome and normalizing formatting.
-// Both the file text and scrollback represent the same conversation,
-// but the scrollback is a terminal rendering with box-drawing borders,
-// status bars, and collapsed whitespace, while the file text is raw
-// JSONL content with markdown formatting and newlines. Cleaning both
-// sides makes the underlying conversation text match.
 //
-// Uses a 200-char file tail (not 500) because the scrollback is a
-// narrow window and a shorter tail is more likely to overlap with
-// the visible screen.
-func attributeByScrollbackNormalized(fileText string, candidates []adapter.FileCandidate) string {
-	if fileText == "" {
-		return ""
-	}
-	fileTail := cleanForMatching(tail(fileText, 200))
-	if len(fileTail) < 20 {
-		return "" // too short for reliable matching
-	}
-
-	bestID := ""
-	bestScore := 0.0
-
-	for _, c := range candidates {
-		if c.Scrollback == "" {
-			continue
-		}
-		sbTail := cleanForMatching(tail(c.Scrollback, 2000))
-		score := similarityScore(fileTail, sbTail)
-		if score > bestScore {
-			bestScore = score
-			bestID = c.SessionID
-		}
-	}
-
-	if bestScore < 0.3 {
-		return ""
-	}
-	return bestID
-}
-
-// boxDrawing matches box-drawing characters used by TUI borders.
-var boxDrawing = regexp.MustCompile("[─━│┌┐└┘├┤┬┴┼╭╮╰╯║═╔╗╚╝╠╣╦╩╬]+")
-
-// cleanForMatching strips TUI chrome (box-drawing borders), markdown
-// formatting (backticks, bold markers), and collapses whitespace.
-// This brings terminal-rendered text and JSONL source text into the
-// same form for LCS comparison.
-func cleanForMatching(s string) string {
-	s = boxDrawing.ReplaceAllString(s, " ")
-	s = strings.ReplaceAll(s, "`", "")
-	s = strings.ReplaceAll(s, "*", "")
-	return strings.Join(strings.Fields(s), " ")
-}
+// Authoritative attribution comes from the agent reporting its own session
+// file (pi via its extension; see packages/agent-ext). These helpers are the
+// FALLBACK for agents with no such signal: codex (Rust, no extension) matches
+// a file to a session by metadata. They are a post-hoc guess — ambiguous for
+// sessions started close together in the same directory — so do not extend
+// them in preference to a native signal.
 
 // attributeByMetadata picks the candidate whose cwd and start time best
 // match the file's session metadata. Returns "" if no match within the
@@ -92,48 +41,4 @@ func attributeByMetadata(info *adapter.SessionFileInfo, candidates []adapter.Fil
 		return ""
 	}
 	return bestID
-}
-
-// --- String utilities ---
-
-func similarityScore(fileTail, scrollbackTail string) float64 {
-	if len(fileTail) == 0 || len(scrollbackTail) == 0 {
-		return 0
-	}
-	lcs := longestCommonSubstring(fileTail, scrollbackTail)
-	return float64(lcs) / float64(len(fileTail))
-}
-
-func longestCommonSubstring(a, b string) int {
-	if len(a) > len(b) {
-		a, b = b, a
-	}
-	prev := make([]int, len(a)+1)
-	curr := make([]int, len(a)+1)
-	best := 0
-
-	for j := 1; j <= len(b); j++ {
-		for i := 1; i <= len(a); i++ {
-			if a[i-1] == b[j-1] {
-				curr[i] = prev[i-1] + 1
-				if curr[i] > best {
-					best = curr[i]
-				}
-			} else {
-				curr[i] = 0
-			}
-		}
-		prev, curr = curr, prev
-		for i := range curr {
-			curr[i] = 0
-		}
-	}
-	return best
-}
-
-func tail(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[len(s)-n:]
 }

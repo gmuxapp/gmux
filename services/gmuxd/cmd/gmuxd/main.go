@@ -24,9 +24,6 @@ import (
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/packages/sessionenv"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/identity"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/nodeid"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/peerstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/binhash"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/clipfile"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/coalesce"
@@ -34,9 +31,12 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/conversations"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/devcontainers"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/identity"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/netauth"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/nodeid"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/notify"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/peerstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
@@ -518,6 +518,12 @@ func serve(stderr io.Writer) int {
 		}
 		return false
 	}
+	// The agent extension reports the JSONL file its agent holds; this is
+	// authoritative attribution and also suppresses daemon-side parsing for
+	// the session (its runner owns derived state).
+	subs.OnSessionFile = func(sessionID, filePath string) {
+		fileMon.AttributeFromHook(sessionID, filePath)
+	}
 	stopFileMon := make(chan struct{})
 	go fileMon.Run(stopFileMon)
 	defer close(stopFileMon)
@@ -525,7 +531,7 @@ func serve(stderr io.Writer) int {
 	// Start socket-based discovery (scans paths.SessionSocketDir() for *.sock)
 	// Discovery also subscribes to each runner's /events SSE for live updates.
 	stopDiscovery := make(chan struct{})
-	go discovery.Watch(sessions, subs, fileMon, persistDead, fileMon.ApplyPersistedAttributions, 3*time.Second, stopDiscovery)
+	go discovery.Watch(sessions, subs, fileMon, persistDead, nil, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
 	// Session file scanner — discovers resumable sessions from adapter

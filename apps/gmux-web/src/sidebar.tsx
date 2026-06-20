@@ -15,7 +15,7 @@ import {
   activityMap, projects, connState,
   updateProjects, reorderSessions,
   peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState,
-  unreadCount, localHostLabel, unresolvedHosts,
+  unreadCount, localHostLabel, unresolvedHosts, duplicateSessionFiles,
   type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -133,6 +133,8 @@ function SessionItem({
   const dotState = (selected && (effectiveDotState === 'error' || effectiveDotState === 'unread')) ? 'none' : effectiveDotState
   const arrival = useArrivalPulse(dotState)
   const sleeping = !session.alive && session.resumable
+  // Same conversation file live in another runner (ADR 0011 N:1).
+  const duplicateOpen = !!session.session_file && duplicateSessionFiles.value.has(session.session_file)
 
   const cls = [
     'session-item',
@@ -171,9 +173,12 @@ function SessionItem({
         <div class="session-title-row">
           <span class="session-title">{session.title}</span>
         </div>
-        {session.status?.label && (
+        {(session.status?.label || duplicateOpen) && (
           <div class="session-meta">
-            <span class="session-status-label">{session.status.label}</span>
+            {session.status?.label && <span class="session-status-label">{session.status.label}</span>}
+            {duplicateOpen && (
+              <span class="session-dup-warning" title="This conversation is open in more than one tab">⚠ open elsewhere</span>
+            )}
           </div>
         )}
       </div>

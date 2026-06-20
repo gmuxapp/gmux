@@ -64,6 +64,13 @@ type Session struct {
 	// to project membership arrays. Unique within (kind, peer).
 	Slug string `json:"slug,omitempty"`
 
+	// SessionFile is the conversation file this runner authoritatively
+	// writes, as reported by the agent hook (session → file; ADR 0011).
+	// Two live sessions may carry the same SessionFile when the same
+	// conversation is resumed in more than one tab; the frontend groups
+	// by this to warn about a conversation open in multiple runners.
+	SessionFile string `json:"session_file,omitempty"`
+
 	// RunnerVersion is the version string of the gmux runner binary that
 	// launched this session. Set by the runner at startup. The frontend
 	// derives staleness by comparing this to the daemon's own version
@@ -130,6 +137,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		TerminalCols  uint16            `json:"terminal_cols,omitempty"`
 		TerminalRows  uint16            `json:"terminal_rows,omitempty"`
 		Slug          string            `json:"slug,omitempty"`
+		SessionFile   string            `json:"session_file,omitempty"`
 		RunnerVersion string            `json:"runner_version,omitempty"`
 		BinaryHash    string            `json:"binary_hash,omitempty"`
 		ProjectSlug   string            `json:"project_slug,omitempty"`
@@ -145,6 +153,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		Unread: s.Unread, Resumable: s.Resumable,
 		SocketPath: s.SocketPath, TerminalCols: s.TerminalCols,
 		TerminalRows: s.TerminalRows, Slug: s.Slug,
+		SessionFile:   s.SessionFile,
 		RunnerVersion: s.RunnerVersion, BinaryHash: s.BinaryHash,
 		ProjectSlug: s.ProjectSlug, ProjectIndex: s.ProjectIndex,
 		LastActivityAt: s.LastActivityAt,

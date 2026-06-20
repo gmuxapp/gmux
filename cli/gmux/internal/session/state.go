@@ -17,13 +17,13 @@ type State struct {
 	mu sync.RWMutex
 
 	// Core identity (immutable after creation)
-	ID             string   `json:"id"`
-	CreatedAt      string   `json:"created_at"`
-	Command        []string `json:"command"`
-	Cwd            string   `json:"cwd"`
-	Kind           string   `json:"kind"`
-	WorkspaceRoot  string            `json:"workspace_root,omitempty"`
-	Remotes        map[string]string `json:"remotes,omitempty"`
+	ID            string            `json:"id"`
+	CreatedAt     string            `json:"created_at"`
+	Command       []string          `json:"command"`
+	Cwd           string            `json:"cwd"`
+	Kind          string            `json:"kind"`
+	WorkspaceRoot string            `json:"workspace_root,omitempty"`
+	Remotes       map[string]string `json:"remotes,omitempty"`
 
 	// Process state (owned by runner)
 	Alive     bool   `json:"alive"`
@@ -43,6 +43,12 @@ type State struct {
 
 	// Slug is an adapter-provided stable identifier for URL routing.
 	Slug string `json:"slug,omitempty"`
+
+	// SessionFile is the agent's on-disk JSONL conversation file, as
+	// reported authoritatively by the agent hook (ADR 0011). It is the
+	// immutable Tool ID's address; a change here is a rebind (/resume).
+	// Empty until the agent reports it, or for unhooked adapters.
+	SessionFile string `json:"session_file,omitempty"`
 
 	// Terminal size (updated by the runner whenever PTY is resized).
 	TerminalCols uint16 `json:"terminal_cols,omitempty"`
@@ -213,6 +219,47 @@ func (s *State) SetSlug(slug string) {
 	}
 	s.Slug = slug
 	s.emit(Event{Type: "meta", Data: map[string]string{"slug": slug}})
+}
+
+// SessionFileSnapshot returns the held session file, for replay to a
+// newly-connected /events subscriber so a reconnecting daemon re-learns
+// attribution without persisted state.
+func (s *State) SessionFileSnapshot() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.SessionFile
+}
+
+// StatusSnapshot returns a copy of the current status (nil if unset), safe to
+// read from another goroutine while the runner concurrently updates state.
+func (s *State) StatusSnapshot() *adapter.Status {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.Status == nil {
+		return nil
+	}
+	cp := *s.Status
+	return &cp
+}
+
+// UnreadSnapshot returns the current unread flag under lock.
+func (s *State) UnreadSnapshot() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Unread
+}
+
+// SetSessionFile records the agent's current session file as reported by
+// the extension. Emits a session_file event only when the path changes, so
+// the daemon sees first-attribution and rebind (/resume) but not every write.
+func (s *State) SetSessionFile(path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if path == "" || path == s.SessionFile {
+		return
+	}
+	s.SessionFile = path
+	s.emit(Event{Type: "session_file", Data: map[string]string{"path": path}})
 }
 
 // SetSubtitle updates the display subtitle.

@@ -1064,6 +1064,7 @@ func fullyPopulatedSession() Session {
 		TerminalCols:   80,
 		TerminalRows:   24,
 		Slug:           "slug",
+		SessionFile:    "/home/u/.pi/sess.jsonl",
 		RunnerVersion:  "v1",
 		BinaryHash:     "hash",
 		ShellTitle:     "shell-internal",

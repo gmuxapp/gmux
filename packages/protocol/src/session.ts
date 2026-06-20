@@ -27,6 +27,11 @@ export const SessionSchema = z.object({
   status: SessionStatusSchema.optional().nullable(),
   unread: z.boolean().optional().default(false),
   resumable: z.boolean().optional().default(false),
+  // Absolute path of the agent conversation file this session holds, as
+  // reported by the agent hook (ADR 0011). Two live sessions sharing one
+  // session_file means the same conversation is open in multiple tabs; the UI
+  // surfaces that as an "open elsewhere" warning.
+  session_file: z.string().optional(),
   // RFC3339 timestamp of the most recent noteworthy state transition
   // (exited, unread on, working on, error on). Set by the owning
   // daemon; the UI uses it to populate the "Recent" section on the

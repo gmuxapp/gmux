@@ -1,9 +1,7 @@
 package adapters
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,20 +14,46 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ adapter.Launchable      = (*Pi)(nil)
-	_ adapter.SessionFiler    = (*Pi)(nil)
-	_ adapter.FileMonitor     = (*Pi)(nil)
-	_ adapter.FileAttributor  = (*Pi)(nil)
-	_ adapter.Resumer         = (*Pi)(nil)
+	_ adapter.Launchable          = (*Pi)(nil)
+	_ adapter.SessionFiler        = (*Pi)(nil)
+	_ adapter.FileMonitor         = (*Pi)(nil)
+	_ adapter.Resumer             = (*Pi)(nil)
+	_ adapter.SessionExtender     = (*Pi)(nil)
+	_ adapter.PassthroughDetector = (*Pi)(nil)
 )
+
+// piSubcommands are pi's one-shot CLI verbs (`pi <verb> ...`). pi recognizes
+// these only at argv[1]; anywhere else they're a chat message. This list is
+// CORRECTNESS-critical: gmux injects `-e` right after the binary for the
+// session extension, which shoves the verb off argv[1] and demotes it to a
+// prompt — so a verb missing here means `gmux -- pi <verb>` silently starts a
+// chat instead of running the command. Keep synced with `pi --help`.
+var piSubcommands = map[string]bool{
+	"install":   true,
+	"remove":    true,
+	"uninstall": true,
+	"update":    true,
+	"list":      true,
+	"config":    true,
+}
+
+// piInfoFlags short-circuit pi to print-and-exit. Passing these through is
+// POLISH, not correctness: `-e` injection doesn't break them (pi still prints
+// help/version), we just skip spawning a throwaway session for them.
+var piInfoFlags = map[string]bool{
+	"--help":    true,
+	"-h":        true,
+	"--version": true,
+}
 
 func init() {
 	All = append(All, NewPi())
 }
 
-// Pi is the adapter for the pi coding agent.
-// Status is driven by the JSONL session file (FileMonitor), not PTY output.
-// Implements SessionFiler, FileMonitor, and Resumer.
+// Pi is the adapter for the pi coding agent. Session identity, title, and
+// status are reported authoritatively by the gmux pi extension (SessionExtender;
+// see pi-ext.mjs), not inferred from PTY output. See the var block above for
+// the full set of implemented capabilities.
 type Pi struct{}
 
 func NewPi() *Pi { return &Pi{} }
@@ -43,23 +67,69 @@ func (p *Pi) Discover() bool {
 	return err == nil
 }
 
-// Match returns true if any argument in the command is the `pi` or
-// `pi-coding-agent` binary.
-func (p *Pi) Match(cmd []string) bool {
-	for _, arg := range cmd {
-		base := filepath.Base(arg)
-		if base == "pi" || base == "pi-coding-agent" {
-			return true
-		}
+// piBinaryIndex returns the index of the pi binary token in args, or -1 if
+// none appears before a `--` separator.
+func piBinaryIndex(args []string) int {
+	for i, arg := range args {
 		if arg == "--" {
+			return -1
+		}
+		if base := filepath.Base(arg); base == "pi" || base == "pi-coding-agent" {
+			return i
+		}
+	}
+	return -1
+}
+
+// Match returns true if the command invokes the `pi` or `pi-coding-agent`
+// binary (before any `--` separator).
+func (p *Pi) Match(cmd []string) bool {
+	return piBinaryIndex(cmd) >= 0
+}
+
+// Env returns no extra environment variables.
+func (p *Pi) Env(_ adapter.EnvContext) []string { return nil }
+
+// IsPassthrough reports whether the invocation is a one-shot, non-session pi
+// command rather than an interactive agent session: a subcommand (`pi update`,
+// `pi list`, ...) or an info flag (`pi --help`, `pi --version`). pi recognizes
+// a subcommand only as the token immediately after the binary; info flags
+// short-circuit from anywhere in the top-level args.
+func (p *Pi) IsPassthrough(args []string) bool {
+	i := piBinaryIndex(args)
+	if i < 0 {
+		return false
+	}
+	if i+1 < len(args) && piSubcommands[args[i+1]] {
+		return true
+	}
+	for _, rest := range args[i+1:] {
+		if rest == "--" {
 			break
+		}
+		if piInfoFlags[rest] {
+			return true
 		}
 	}
 	return false
 }
 
-// Env returns no extra environment variables.
-func (p *Pi) Env(_ adapter.EnvContext) []string { return nil }
+// ExtendCommand splices `-e <extPath>` in right after the pi binary so pi loads
+// the gmux extension. The binary may not be args[0] (e.g. `npx pi`, `env pi`),
+// so we insert after the binary token, not the front — inserting at the front
+// would hand -e to the wrapper. Extensions accumulate, so this coexists with
+// the user's own -e flags. pi's session_start (which the extension hooks) fires
+// on every bind, including the warm /resume-select that reads no file.
+func (p *Pi) ExtendCommand(args []string, extPath string) []string {
+	i := piBinaryIndex(args)
+	if i < 0 {
+		return args
+	}
+	out := make([]string, 0, len(args)+2)
+	out = append(out, args[:i+1]...)
+	out = append(out, "-e", extPath)
+	return append(out, args[i+1:]...)
+}
 
 func (p *Pi) Launchers() []adapter.Launcher {
 	return []adapter.Launcher{{
@@ -70,9 +140,9 @@ func (p *Pi) Launchers() []adapter.Launcher {
 	}}
 }
 
-// Monitor is a no-op for the pi adapter — status is driven by the
-// JSONL session file via FileMonitor.ParseNewLines instead of PTY output.
-// This avoids flicker from spinner redraws.
+// Monitor is a no-op for the pi adapter — status is reported by the gmux pi
+// extension (turn events over the runner socket), not inferred from PTY
+// output. This avoids flicker from spinner redraws.
 func (p *Pi) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
@@ -192,6 +262,13 @@ func (p *Pi) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 // ParseNewLines receives lines appended to an attributed session file
 // and returns events for meaningful changes.
 //
+// NOTE: this is now vestigial for pi. pi sessions are attributed only by the
+// agent hook (no metadata FileAttributor), so the daemon always suppresses its
+// file parse for them (see filemon.processAttributedFileLocked) and status
+// flows from the hook instead. It's retained — along with FileMonitor — pending
+// a focused follow-up to drop pi's FileMonitor role (which must first settle
+// how unnamed sessions get their first-prompt title, today derived here).
+//
 // Signals:
 //   - session_info with name → title update (no status change)
 //   - message role:"user" → working (assistant will respond)
@@ -290,7 +367,7 @@ func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.Event {
 							})
 						}
 					}
-				// Unknown stopReasons: no state change.
+					// Unknown stopReasons: no state change.
 				}
 			}
 		}
@@ -422,105 +499,6 @@ func ListSessionFiles(dir string) []string {
 	return files
 }
 
-// --- FileAttributor ---
-
-// AttributeFile matches a session file to a live session using content
-// similarity between the file's conversation text and each candidate's
-// terminal scrollback.
-//
-// The file text is extracted from all message types (user, assistant,
-// toolResult) and compared against each candidate's scrollback after
-// stripping box-drawing characters, markdown formatting, and collapsing
-// whitespace. These normalizations are needed because the scrollback is
-// a terminal rendering of the same content the file stores as structured
-// JSONL.
-func (p *Pi) AttributeFile(filePath string, candidates []adapter.FileCandidate) string {
-	fileText, err := extractPiText(filePath)
-	if err != nil {
-		return ""
-	}
-	return attributeByScrollbackNormalized(fileText, candidates)
-}
-
-// extractPiText reads the tail of a pi JSONL session file and extracts
-// conversation text from all message types (user, assistant, toolResult).
-// Including tool output is important because it dominates the scrollback.
-//
-// Only the last 32KB is read since we only need tail(200) of the
-// extracted text. Session files can be tens of MB; reading them fully
-// for every unattributed file in a directory would be costly on startup.
-func extractPiText(path string) (string, error) {
-	const maxRead = 32 * 1024
-
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	info, err := f.Stat()
-	if err != nil {
-		return "", err
-	}
-
-	offset := info.Size() - maxRead
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > 0 {
-		f.Seek(offset, 0)
-	}
-
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return "", err
-	}
-
-	// If we seeked into the middle of a line, skip the partial first line.
-	if offset > 0 {
-		if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
-			data = data[idx+1:]
-		}
-	}
-
-	var out strings.Builder
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		if line == "" {
-			continue
-		}
-		var entry struct {
-			Type    string `json:"type"`
-			Message *struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
-		if err := json.Unmarshal([]byte(line), &entry); err != nil || entry.Message == nil {
-			continue
-		}
-		// Try array of content blocks (user/assistant messages).
-		var blocks []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal(entry.Message.Content, &blocks); err == nil {
-			for _, b := range blocks {
-				if b.Text != "" {
-					out.WriteString(b.Text)
-					out.WriteByte(' ')
-				}
-			}
-			continue
-		}
-		// Try plain string (toolResult content).
-		var s string
-		if err := json.Unmarshal(entry.Message.Content, &s); err == nil && s != "" {
-			out.WriteString(s)
-			out.WriteByte(' ')
-		}
-	}
-	return out.String(), nil
-}
-
 func extractFirstUserText(line string) string {
 	var entry struct {
 		Message *struct {
@@ -566,7 +544,6 @@ func truncateTitle(s string, maxLen int) string {
 	}
 	return s[:cut] + "…"
 }
-
 
 var (
 	errEmpty      = &parseError{"empty file"}

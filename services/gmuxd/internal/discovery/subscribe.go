@@ -35,6 +35,12 @@ type Subscriptions struct {
 	// Returns true if the session was transitioned to resumable
 	// (caller should not set exit status).
 	OnExit func(sess *store.Session) bool
+	// OnSessionFile fires when a runner reports (via the agent extension)
+	// the JSONL session file its agent holds. This is the authoritative
+	// attribution signal (ADR 0011); gmuxd wires it to
+	// FileMonitor.AttributeFromHook, which also suppresses daemon-side
+	// parsing for the session (its runner owns derived state).
+	OnSessionFile func(sessionID, filePath string)
 	// OnDead fires after the store Upsert that records an exit
 	// event. The session passed is the post-Upsert snapshot,
 	// including any Title / Resumable derivation the store applied
@@ -297,6 +303,29 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		}
 		if sub.OnDead != nil {
 			sub.OnDead(sess)
+		}
+
+	case "session_file":
+		var sf struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal(data, &sf); err != nil {
+			log.Printf("subscribe: %s: bad session_file event: %v", sessionID, err)
+			return
+		}
+		if sf.Path == "" {
+			return
+		}
+		// session → file is authoritative and per-session (ADR 0011): record it
+		// on the session itself so the frontend can derive file → {sessions}
+		// and warn when a conversation is open in more than one runner. A
+		// rebind (/resume) just overwrites this session's own file; it never
+		// clobbers another session's.
+		sub.store.Update(sessionID, func(sess *store.Session) {
+			sess.SessionFile = sf.Path
+		})
+		if sub.OnSessionFile != nil {
+			sub.OnSessionFile(sessionID, sf.Path)
 		}
 
 	case "activity":

@@ -1,0 +1,80 @@
+name: pi compat (latest)
+
+# gmux's launch + attribution code mirrors a slice of pi's CLI grammar (the
+# subcommand set, the `-e` extension flag, info flags). pi ships frequently and
+# most users track @latest, so we test against @latest rather than a pin:
+#   - on every PR/push, so a drift that lands while we're working fails loudly;
+#   - nightly, so a pi release that changes the grammar is caught within a day
+#     even when no PRs are open (failure opens a tracking issue).
+# A failure here means pi changed something gmux assumes — fast-track a fix to
+# piSubcommands / the pi adapter (see packages/adapter/adapters/pi.go).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 7 * * *" # ~07:00 UTC nightly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pi-compat:
+    name: pi @latest compatibility
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # for the nightly drift-issue notifier
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: "1.26"
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: "22"
+
+      - name: Install pi @latest
+        run: |
+          npm install -g @earendil-works/pi-coding-agent@latest
+          echo "pi version: $(pi --version)"
+
+      - name: Run pi compatibility tests
+        # The drift guard (subcommand set vs `pi --help`) and the end-to-end
+        # injection test both skip when pi is absent; here pi is installed, so
+        # they run for real against @latest.
+        run: |
+          go test ./packages/adapter/adapters/ -run TestPiSubcommandsMatchHelp -v
+          go test ./cli/gmux/cmd/gmux/ -run TestPiCommandsWithExtensionInjected -v
+        env:
+          GOWORK: ${{ github.workspace }}/go.work
+
+      - name: Open drift issue (nightly only)
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create pi-drift --color FBCA04 \
+            --description "pi CLI drift vs gmux assumptions" 2>/dev/null || true
+          {
+            echo "The nightly \`pi @latest\` compatibility run failed: pi likely changed its CLI in a way gmux's launch/attribution code assumes."
+            echo
+            echo "Run: $RUN_URL"
+            echo
+            echo "Fast-track a fix to \`piSubcommands\` / the pi adapter (\`packages/adapter/adapters/pi.go\`). The failing test shows whether a subcommand was added/renamed (drift guard) or existing behavior changed (injection test)."
+          } > /tmp/drift-body.md
+          existing=$(gh issue list --label pi-drift --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still failing as of $(date -u +%FT%TZ): $RUN_URL"
+          else
+            gh issue create --title "pi @latest drift detected" --label pi-drift --body-file /tmp/drift-body.md
+          fi

@@ -84,24 +84,52 @@ type SessionFileLister interface {
 // FileCandidate describes a live session that could own a file.
 // Passed to FileAttributor.AttributeFile for matching.
 type FileCandidate struct {
-	SessionID  string
-	Cwd        string
-	StartedAt  time.Time
-	Scrollback string // recent terminal text; empty if unavailable
+	SessionID string
+	Cwd       string
+	StartedAt time.Time
 }
 
-// FileAttributor is optionally implemented by adapters that need custom
-// file-to-session matching. Without it, the daemon falls back to the
-// first candidate.
+// FileAttributor is the FALLBACK attribution mechanism for agents that do not
+// report their own session file: the adapter guesses which live session owns
+// a file by metadata (cwd + start time). Used by codex (Rust, no extension).
 //
-// AttributeFile is called for every candidate count (including 1).
-// Returning "" rejects the file; for single-candidate cases, the daemon
-// may still attribute via a freshness-based fallback (mtime < 30s).
+// Agents that report their session file authoritatively (pi, via its
+// extension) are attributed before reaching this path and need not implement
+// it. Don't make these guesses smarter — add a native signal instead.
 type FileAttributor interface {
 	// AttributeFile returns the session ID of the candidate that owns
-	// the file, or "" if no candidate matches. The daemon provides
-	// scrollback text when available.
+	// the file, or "" if no candidate matches.
 	AttributeFile(filePath string, candidates []FileCandidate) string
+}
+
+// SessionExtender marks adapters whose agent exposes a native extension/hook
+// API that can report the active session authoritatively — the strongest
+// signal, catching even a cache-served /resume-select that leaves no fs
+// trace. The runner materializes the gmux hook and asks the adapter to splice
+// it into the launch argv via ExtendCommand; the hook posts an authoritative
+// "session" event to the runner socket on every bind (pi's session_start).
+//
+// Only adapters whose argv gmux fully controls should opt in: argv injection
+// (unlike env injection) does not survive a shell-wrapped launch.
+type SessionExtender interface {
+	// ExtendCommand returns args with the flags that load the gmux session
+	// extension at extPath spliced in immediately after the agent binary —
+	// which is NOT necessarily args[0] (e.g. `npx pi`, `env pi`). The adapter
+	// owns locating its own binary. Return args unchanged to inject nothing.
+	ExtendCommand(args []string, extPath string) []string
+}
+
+// PassthroughDetector marks adapters that recognize invocations which are NOT
+// interactive sessions — one-shot subcommands like `pi update` or `pi list`.
+// gmux execs these directly (inheriting the tty, returning their exit code)
+// instead of wrapping them in a runner/PTY and registering a session. Wrapping
+// would be both pointless (a one-shot command is not a session to monitor) and
+// broken (pi requires its subcommand at argv[1], but gmux prepends -e for the
+// session extension, demoting the subcommand to a chat prompt).
+type PassthroughDetector interface {
+	// IsPassthrough reports whether args (args[0] = binary) is a one-shot,
+	// non-session invocation that gmux should exec directly rather than manage.
+	IsPassthrough(args []string) bool
 }
 
 // CommandTitler is optionally implemented by adapters that want to
