@@ -471,24 +471,27 @@ const maxInputBytes = 1 << 20 // 1 MiB
 // (owner-only, 0o700): anyone who can connect() to this socket already
 // owns the session and could do arbitrary worse things to it.
 // hookEvent is the payload the agent extension (pi-ext.mjs) posts to
-// POST /hook/event. The agent reports its own state authoritatively:
+// POST /hook/event. The agent reports facts about itself; the runner maps
+// them to sidebar state:
 //
-//	op "session" — the bound conversation file, id, name (on bind)
-//	op "status"  — working/unread/error/title (on agent-loop transitions)
+//	op "session"          — the bound conversation file, id, name (on bind)
+//	op "turn" phase start — the agent loop began (→ working)
+//	op "turn" phase end   — the loop ended with Outcome + title
+//
+// Outcome is a stable, agent-agnostic vocabulary ("completed" | "aborted" |
+// "error"); each agent's extension normalizes its own terminal state into it,
+// and the runner owns what each means for the sidebar (see applyTurnEnd).
 type hookEvent struct {
 	Op   string `json:"op"`
 	Path string `json:"path"`
 	Pid  int    `json:"pid"`
 
-	// Extension fields (op "session" / "status"): pi reports identity and
-	// state directly, so the runner doesn't parse the file or guess.
 	ID      string `json:"id,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Title   string `json:"title,omitempty"`
-	Working bool   `json:"working,omitempty"`
-	Unread  bool   `json:"unread,omitempty"`
-	Error   bool   `json:"error,omitempty"`
+	Phase   string `json:"phase,omitempty"`   // "start" | "end" (op "turn")
+	Outcome string `json:"outcome,omitempty"` // "completed" | "aborted" | "error"
 }
 
 // handleHookEvent applies the authoritative session state the agent's
@@ -503,7 +506,7 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	switch ev.Op {
 	case "session":
-		// Authoritative bind (pi's session_start/switch/fork): the file the
+		// Authoritative bind (pi's session_start): the file the
 		// agent holds, named and slugged.
 		if ev.Path != "" {
 			s.state.SetSessionFile(ev.Path)
@@ -514,17 +517,32 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 		if ev.ID != "" {
 			s.state.SetSlug(adapter.Slugify(ev.ID))
 		}
-	case "status":
-		// Authoritative status (pi's agent_start/agent_end).
-		s.state.SetStatus(&adapter.Status{Working: ev.Working, Error: ev.Error})
-		if ev.Unread {
-			s.state.SetUnread(true)
+	case "turn":
+		// Agent-loop transition. The extension reports phase + outcome; the
+		// sidebar policy (what an outcome means) lives here, in testable Go.
+		if ev.Phase == "start" {
+			s.state.SetStatus(&adapter.Status{Working: true})
+			break
 		}
-		if ev.Title != "" {
-			s.state.SetAdapterTitle(ev.Title)
-		}
+		s.applyTurnEnd(ev.Outcome, ev.Title)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// applyTurnEnd maps a normalized turn outcome to sidebar state. This is the
+// one place gmux decides what an agent's terminal state means:
+//
+//	completed — the agent finished on its own; the reply is unread.
+//	error     — the agent gave up (e.g. exhausted retries); show a red dot.
+//	aborted   — the user interrupted; just go idle, nothing unread.
+func (s *Server) applyTurnEnd(outcome, title string) {
+	s.state.SetStatus(&adapter.Status{Working: false, Error: outcome == "error"})
+	if outcome == "completed" {
+		s.state.SetUnread(true)
+	}
+	if title != "" {
+		s.state.SetAdapterTitle(title)
+	}
 }
 
 func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {

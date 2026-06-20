@@ -20,8 +20,8 @@ func TestPathMaterializesReadableExtension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read materialized ext: %v", err)
 	}
-	if !strings.Contains(string(data), "session_switch") {
-		t.Error("materialized extension missing session_switch handler")
+	if !strings.Contains(string(data), "session_start") {
+		t.Error("materialized extension missing session_start handler")
 	}
 
 	// Idempotent: a second call returns the same path.

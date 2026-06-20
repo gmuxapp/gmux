@@ -45,6 +45,44 @@ func TestPiMatchStopsAtDoubleDash(t *testing.T) {
 	}
 }
 
+func TestPiIsPassthrough(t *testing.T) {
+	p := NewPi()
+	passthrough := [][]string{
+		{"pi", "update"},
+		{"pi", "update", "self"},
+		{"pi", "list"},
+		{"pi", "config"},
+		{"pi", "install", "foo"},
+		{"pi", "remove", "foo"},
+		{"pi", "uninstall", "foo"},
+		{"/home/user/.local/bin/pi", "update"}, // path-qualified binary
+		{"pi", "--help"},                        // info flags short-circuit pi
+		{"pi", "-h"},
+		{"pi", "--version"},
+		{"pi", "--name", "x", "--help"}, // info flag anywhere in top-level args
+	}
+	for _, args := range passthrough {
+		if !p.IsPassthrough(args) {
+			t.Errorf("expected passthrough for %v", args)
+		}
+	}
+	sessions := [][]string{
+		{"pi"},                       // bare interactive
+		{"pi", "--name", "x"},         // named session
+		{"pi", "-c"},                  // continue
+		{"pi", "-r"},                  // resume picker
+		{"pi", "--session", "abc"},    // resume by id
+		{"pi", "update is broken"},    // a chat message that starts with a verb
+		{"pi", "--name", "list"},      // "list" as a flag value, not argv[1]
+		{"echo", "--", "pi", "update"}, // not pi at all
+	}
+	for _, args := range sessions {
+		if p.IsPassthrough(args) {
+			t.Errorf("expected session (not passthrough) for %v", args)
+		}
+	}
+}
+
 func TestPiNoMatchOther(t *testing.T) {
 	p := NewPi()
 	if p.Match([]string{"pytest"}) {

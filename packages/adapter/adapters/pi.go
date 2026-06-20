@@ -14,12 +14,32 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ adapter.Launchable      = (*Pi)(nil)
-	_ adapter.SessionFiler    = (*Pi)(nil)
-	_ adapter.FileMonitor     = (*Pi)(nil)
-	_ adapter.Resumer         = (*Pi)(nil)
-	_ adapter.SessionExtender = (*Pi)(nil)
+	_ adapter.Launchable          = (*Pi)(nil)
+	_ adapter.SessionFiler        = (*Pi)(nil)
+	_ adapter.FileMonitor         = (*Pi)(nil)
+	_ adapter.Resumer             = (*Pi)(nil)
+	_ adapter.SessionExtender     = (*Pi)(nil)
+	_ adapter.PassthroughDetector = (*Pi)(nil)
 )
+
+// piSubcommands are pi's one-shot CLI verbs (`pi <verb> ...`). pi only treats
+// these as subcommands when they sit at argv[1]; anywhere else they're a chat
+// message. Kept in sync with `pi --help`.
+var piSubcommands = map[string]bool{
+	"install":   true,
+	"remove":    true,
+	"uninstall": true,
+	"update":    true,
+	"list":      true,
+	"config":    true,
+}
+
+// piInfoFlags short-circuit pi to print-and-exit; they're not sessions either.
+var piInfoFlags = map[string]bool{
+	"--help":    true,
+	"-h":        true,
+	"--version": true,
+}
 
 func init() {
 	All = append(All, NewPi())
@@ -59,10 +79,39 @@ func (p *Pi) Match(cmd []string) bool {
 // Env returns no extra environment variables.
 func (p *Pi) Env(_ adapter.EnvContext) []string { return nil }
 
+// IsPassthrough reports whether the invocation is a one-shot, non-session pi
+// command rather than an interactive agent session: a subcommand (`pi update`,
+// `pi list`, ...) or an info flag (`pi --help`, `pi --version`). pi recognizes
+// a subcommand only as the token immediately after the binary; info flags
+// short-circuit from anywhere in the top-level args.
+func (p *Pi) IsPassthrough(args []string) bool {
+	for i, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if base := filepath.Base(arg); base == "pi" || base == "pi-coding-agent" {
+			if i+1 < len(args) && piSubcommands[args[i+1]] {
+				return true
+			}
+			for _, rest := range args[i+1:] {
+				if rest == "--" {
+					break
+				}
+				if piInfoFlags[rest] {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return false
+}
+
 // SessionExtensionArgs loads the gmux pi extension via `pi -e <path>`. pi's
 // arg parser is order-independent and extensions accumulate, so this coexists
 // with the user's own -e flags. The extension reports the active session
-// authoritatively (start/switch/fork), including the warm /resume-select that
+// authoritatively (pi's session_start fires on every bind), including the
+// warm /resume-select that
 // reads no file and so leaves no fs signal to infer from.
 func (p *Pi) SessionExtensionArgs(extPath string) []string {
 	return []string{"-e", extPath}

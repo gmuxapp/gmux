@@ -12,8 +12,13 @@
 // Socket: GMUX_SESSION_SOCK, set by the runner.
 //
 // Events posted to POST /hook/event on the runner socket:
-//   { op: "session", path, id, name, cwd, reason }  on bind (start/switch/fork)
-//   { op: "status", working, unread, error, title } on agent loop start/end
+//   { op: "session", path, id, name, cwd, reason }      on bind (session_start)
+//   { op: "turn", phase: "start" }                       on agent loop start
+//   { op: "turn", phase: "end", outcome, title }         on agent loop end
+// outcome is pi's terminal state normalized to a stable vocabulary
+// ("completed" | "aborted" | "error"); the runner owns what each means for the
+// sidebar (e.g. completed → unread). The extension reports pi facts, not gmux
+// policy.
 //
 // It is fire-and-forget: a failed POST never throws back into pi.
 // ----------------------------------------------------------------------------
@@ -46,20 +51,18 @@ export default function (pi) {
     post(sock, { op: "session", path: String(file), id, name, cwd, reason });
   }
 
-  // session_start: initial bind (a resume launch already has a file here).
-  pi.on("session_start", (_ev, ctx) => reportSession("start", ctx));
-  // session_switch: the user picked another conversation (/resume select or
-  // /new). reason is "new" | "resume". A cache-served /resume-select reads no
-  // file, so only pi's own event reveals it — nothing on disk to observe.
-  pi.on("session_switch", (ev, ctx) => reportSession(ev.reason ?? "switch", ctx));
-  // session_fork: branched into a new file off the current one.
-  pi.on("session_fork", (_ev, ctx) => reportSession("fork", ctx));
+  // session_start is the one authoritative bind event: pi fires it on startup
+  // AND on every switch/new/resume/fork (each preceded by session_shutdown of
+  // the old session), carrying the new file and a reason of
+  // startup | new | resume | fork. This is what catches a cache-served
+  // /resume-select, where no file is read for an fs probe to observe.
+  pi.on("session_start", (ev, ctx) => reportSession(ev?.reason ?? "start", ctx));
 
-  // --- status: drive the sidebar busy/idle/unread/error directly ----------
-  // Replaces parsing the JSONL file for status. pi's agent loop bounds map
-  // onto the sidebar states; agent_end carries the final messages so we read
-  // the terminal stopReason without touching disk.
-  pi.on("agent_start", () => post(sock, { op: "status", working: true }));
+  // --- turn lifecycle: drive the sidebar busy/idle without parsing the file -
+  // pi's agent loop bounds map onto the sidebar's working/idle; agent_end
+  // carries the final messages so we read the terminal stopReason off-disk and
+  // normalize it. The runner decides what each outcome means for the sidebar.
+  pi.on("agent_start", () => post(sock, { op: "turn", phase: "start" }));
 
   pi.on("agent_end", (ev, ctx) => {
     let stopReason;
@@ -74,15 +77,13 @@ export default function (pi) {
     try {
       name = ctx.sessionManager.getSessionName();
     } catch {}
-    // stop  → finished, mark unread.   aborted → idle, no unread (user Esc).
-    // error → pi exhausted its retries and gave up → red dot.
-    post(sock, {
-      op: "status",
-      working: false,
-      unread: stopReason === "stop",
-      error: stopReason === "error",
-      title: name || undefined,
-    });
+    // Normalize pi's stopReason to a stable outcome vocabulary:
+    //   stop  → completed (turn finished on its own)
+    //   error → error     (pi exhausted retries and gave up)
+    //   else  → aborted   (user Esc, or any other non-completion)
+    const outcome =
+      stopReason === "stop" ? "completed" : stopReason === "error" ? "error" : "aborted";
+    post(sock, { op: "turn", phase: "end", outcome, title: name || undefined });
     // A brand-new session's file exists by now; make sure it's attributed.
     reportSession("activity", ctx);
   });

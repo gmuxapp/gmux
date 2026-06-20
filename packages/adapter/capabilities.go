@@ -107,7 +107,7 @@ type FileAttributor interface {
 // signal, catching even a cache-served /resume-select that leaves no fs
 // trace. The runner materializes the gmux hook and injects it into the launch
 // argv via SessionExtensionArgs; the hook posts an authoritative "session"
-// event to the runner socket on every bind (start/switch/fork).
+// event to the runner socket on every bind (pi's session_start).
 //
 // Only adapters whose argv gmux fully controls should opt in: argv injection
 // (unlike env injection) does not survive a shell-wrapped launch.
@@ -116,6 +116,19 @@ type SessionExtender interface {
 	// extension at extPath (e.g. {"-e", extPath} for pi), inserted right
 	// after the agent binary. Return nil to inject nothing.
 	SessionExtensionArgs(extPath string) []string
+}
+
+// PassthroughDetector marks adapters that recognize invocations which are NOT
+// interactive sessions — one-shot subcommands like `pi update` or `pi list`.
+// gmux execs these directly (inheriting the tty, returning their exit code)
+// instead of wrapping them in a runner/PTY and registering a session. Wrapping
+// would be both pointless (a one-shot command is not a session to monitor) and
+// broken (pi requires its subcommand at argv[1], but gmux prepends -e for the
+// session extension, demoting the subcommand to a chat prompt).
+type PassthroughDetector interface {
+	// IsPassthrough reports whether args (args[0] = binary) is a one-shot,
+	// non-session invocation that gmux should exec directly rather than manage.
+	IsPassthrough(args []string) bool
 }
 
 // CommandTitler is optionally implemented by adapters that want to

@@ -147,10 +147,11 @@ func TestSessionEventIsAuthoritative(t *testing.T) {
 	waitFor(fileB)
 }
 
-// TestStatusEventDrivesState checks the extension status path: a "status"
-// event sets working/unread/title on session state directly, with no file
-// parsing.
-func TestStatusEventDrivesState(t *testing.T) {
+// TestTurnEventDrivesState checks the extension turn path: a "turn" start goes
+// working, and a "turn" end with outcome "completed" goes idle + unread and
+// applies the title — no file parsing. The outcome→state policy lives in the
+// runner (applyTurnEnd), so this is also its mapping test.
+func TestTurnEventDrivesState(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not available")
@@ -182,7 +183,7 @@ func TestStatusEventDrivesState(t *testing.T) {
 		resp.Body.Close()
 	}
 
-	post(`{"op":"status","working":true}`)
+	post(`{"op":"turn","phase":"start"}`)
 	deadline := time.After(2 * time.Second)
 	for st.Status == nil || !st.Status.Working {
 		select {
@@ -192,13 +193,40 @@ func TestStatusEventDrivesState(t *testing.T) {
 		}
 	}
 
-	post(`{"op":"status","working":false,"unread":true,"title":"my chat"}`)
+	post(`{"op":"turn","phase":"end","outcome":"completed","title":"my chat"}`)
 	deadline = time.After(2 * time.Second)
 	for st.Status == nil || st.Status.Working || st.Title() != "my chat" || !st.Unread {
 		select {
 		case <-deadline:
 			t.Fatalf("status/title not applied; status=%+v title=%q unread=%v", st.Status, st.Title(), st.Unread)
 		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// TestApplyTurnEnd pins the outcome→sidebar-state policy directly (no node).
+func TestApplyTurnEnd(t *testing.T) {
+	cases := []struct {
+		outcome    string
+		wantUnread bool
+		wantError  bool
+	}{
+		{"completed", true, false},
+		{"aborted", false, false},
+		{"error", false, true},
+	}
+	for _, tc := range cases {
+		st := session.New(session.Config{ID: "s1", Kind: "pi"})
+		srv := &Server{state: st}
+		srv.applyTurnEnd(tc.outcome, "")
+		if st.Status == nil || st.Status.Working {
+			t.Errorf("%s: expected idle, got %+v", tc.outcome, st.Status)
+		}
+		if st.Unread != tc.wantUnread {
+			t.Errorf("%s: unread=%v want %v", tc.outcome, st.Unread, tc.wantUnread)
+		}
+		if st.Status != nil && st.Status.Error != tc.wantError {
+			t.Errorf("%s: error=%v want %v", tc.outcome, st.Status.Error, tc.wantError)
 		}
 	}
 }
