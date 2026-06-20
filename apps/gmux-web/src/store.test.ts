@@ -8,8 +8,9 @@ import {
   navigateToSession, setNavigate,
   applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
   toUISession, localHostLabel, parseConnectURL, unreadCount, discovered,
-  view,
+  view, duplicateSessionFiles,
 } from './store'
+import { SessionSchema } from '@gmux/protocol'
 import type { PendingMutation } from './store'
 import type { Session } from './types'
 import type { ProjectItem } from './types'
@@ -929,5 +930,28 @@ describe('parseConnectURL', () => {
 
   it('returns null for non-URL input so the separate token field is used', () => {
     expect(parseConnectURL('gmux-host')).toBeNull()
+  })
+})
+
+describe('session_file (duplicate-open warning)', () => {
+  it('carries session_file from the wire through to the UI session', () => {
+    // Guards the two gaps that silently disabled the warning: the protocol
+    // Zod schema must keep session_file (not strip it), and toUISession must
+    // map it through.
+    const parsed = SessionSchema.parse({ id: 'a', alive: true, session_file: '/conv.jsonl' })
+    expect(parsed.session_file).toBe('/conv.jsonl')
+    expect(toUISession(parsed).session_file).toBe('/conv.jsonl')
+  })
+
+  it('flags a conversation that is live in more than one tab', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'a', alive: true, session_file: '/conv.jsonl' }),
+      makeSession({ id: 'b', alive: true, session_file: '/conv.jsonl' }),
+      makeSession({ id: 'c', alive: true, session_file: '/other.jsonl' }),
+      makeSession({ id: 'd', alive: false, session_file: '/conv.jsonl' }), // dead doesn't count
+    ]
+    const dups = duplicateSessionFiles.value
+    expect(dups.has('/conv.jsonl')).toBe(true)
+    expect(dups.has('/other.jsonl')).toBe(false)
   })
 })

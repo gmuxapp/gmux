@@ -848,6 +848,7 @@ export function toUISession(s: ProtocolSession): Session {
     status: s.status ?? null,
     unread: s.unread ?? false,
     resumable: s.resumable ?? false,
+    session_file: s.session_file ?? undefined,
     last_activity_at: s.last_activity_at ?? undefined,
     socket_path: s.socket_path ?? '',
     terminal_cols: s.terminal_cols ?? undefined,
