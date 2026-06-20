@@ -95,7 +95,7 @@ and the **daemon is a read cache plus a raw file-event source**.
    updates its own file," eliminating the clear-other-files logic in
    `AttributeFromHook`.
 
-This realises ADR 0009's "identity is adapter-owned; shells aren't special":
+This realises the principle that identity is adapter-owned and shells aren't special:
 once the adapter owns state and identity in the runner, the daemon stops
 making per-adapter decisions entirely.
 

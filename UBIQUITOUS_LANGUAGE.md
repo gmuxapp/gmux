@@ -5,7 +5,8 @@
 | Term                | Definition                                                                                                | Aliases to avoid          |
 | ------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------- |
 | **Session**         | The user-facing unit of work in a directory: a terminal pane plus everything we know about it             | Pane, terminal, tab       |
-| **Slug**            | A session's stable, human-readable identity; persistent across runner restarts and resume                 | Name                      |
+| **Conversation**    | An agent's own thread of dialogue (pi/claude/codex's "session"), identified by its on-disk file path. The path (= **Tool ID**) is immutable; the conversation's display name (slug) is mutable. A tool-backed **Session** corresponds to a Conversation; a **Runner** binds to one and may rebind (`/resume`) to another | Agent session, thread     |
+| **Slug**            | A session's mutable, human-readable display name; persistent across runner restarts and resume, but renamable. Not identity (the immutable Tool ID is) | Name                      |
 | **Session ID**      | A specific runner instance's identifier; ephemeral for shell, stable (= tool ID) for pi/claude            | Identifier (alone is too generic) |
 | **Key**             | The single string projects.json uses per session: slug if attributed, session ID otherwise                |                           |
 | **Tool ID**         | An adapter-managed file identifier (e.g. JSONL filename) used as session ID for tool-backed sessions      |                           |
@@ -46,7 +47,7 @@
 
 | Term                     | Definition                                                                                                   | Aliases to avoid              |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------ | ----------------------------- |
-| **Store**                | The daemon's in-memory `store.Store`: the live, authoritative session table                                  | Session table                 |
+| **Store**                | The daemon's in-memory `store.Store`: a **read cache** of live session state, fed by runner `/events` (ADR 0011). The runner owns live state; the store no longer parses files or writes session content                                  | Session table                 |
 | **Sessionmeta**          | Per-session runtime persistence: `<state>/sessions/<id>/meta.json`. SOT for **runtime state** of dead sessions | Session metadata, meta files |
 | **Scrollback**           | Per-session persisted PTY byte stream: `<state>/sessions/<id>/scrollback{,.0}`. SOT for terminal history     | History, log                  |
 | **Projects.json**        | The on-disk SOT for **sidebar membership and ordering** (project rules + ordered key lists)                  | Project state, projects file  |
@@ -59,7 +60,7 @@ The four stores have orthogonal concerns. Mixing them is a smell:
 
 | Store                  | Owns                                                              | Keyed by                          |
 | ---------------------- | ----------------------------------------------------------------- | --------------------------------- |
-| **Store**              | Live runtime state of every session the hub knows about           | Session ID                        |
+| **Store**              | Caches live runtime state (the runner owns it; ADR 0011)          | Session ID                        |
 | **Sessionmeta**        | Persisted runtime state (exit code, status, title, timestamps)    | Session ID                        |
 | **Projects.json**      | Which sessions appear in the sidebar, in what project, what order | Project slug → list of **Key**s   |
 | **Conversations Index**| Cross-reference between IDs and slugs for adapter-backed sessions | (kind, ID) and (kind, slug)       |
@@ -75,7 +76,7 @@ The four stores have orthogonal concerns. Mixing them is a smell:
 | **Restart**           | Like Resume but kills the live runner first; goes through Resume after exit                                            |                                |
 | **Slug-takeover**     | A fresh live session evicting a dead one with the same `(kind, peer, slug)` from the store                              | Slug eviction                  |
 | **Dismiss**           | Explicit user removal: runner killed if alive, store entry removed, sessionmeta + scrollback dropped                    | Delete, close                  |
-| **Sweep**             | Daemon startup operation: read every `meta.json` and Upsert as `Alive=false`; sessions appear in the sidebar only if `projects.json` still contains their key | Restore                        |
+| **Sweep**             | Daemon startup operation: read every `meta.json` and Upsert as `Alive=false`, so previously-seen dead sessions reappear. Whether each then renders depends on project membership and match rules — `State.Discovered()` also surfaces unfiled sessions, so visibility is not strictly gated by `projects.json` | Restore                        |
 | **Attribution**       | Binding a tool-backed session to its adapter session file. **Primary:** authoritative, reported by the **Agent-hook** (pi names the held file directly, including cache-served `/resume` rebinds). **Fallback:** metadata matching (cwd + start time) for agents with no hook (codex). See ADR 0011 | Naming                         |
 
 ## Relationships
