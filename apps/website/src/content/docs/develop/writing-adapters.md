@@ -166,33 +166,20 @@ Implement this if your tool writes session or conversation files to disk.
 - `SessionDir(cwd)` returns the directory for a particular working directory
 - `ParseSessionFile(path)` extracts display metadata from one file
 
-### `FileMonitor`
+### `ConversationSource`
 
 ```go
-type FileMonitor interface {
-    ParseNewLines(lines []string, filePath string) []FileEvent
+type ConversationSource interface {
+    SnapshotConversations(sink ConversationSink)
+    WatchConversations(ctx context.Context, sink ConversationSink) error
 }
 ```
 
-Implement this if appended file content should update the live sidebar. Return `FileEvent` values with a `Title` or `Status`.
+Implement this if your tool's conversations live in files (or anywhere else) that gmux should index for URL resolution and search. The adapter owns *how* it discovers them: `SnapshotConversations` reports everything that exists now (synchronous, at startup), and `WatchConversations` streams changes until `ctx` is cancelled. Both report absolute paths to a `ConversationSink` (`Upsert(path)` / `Remove(path)`); the daemon parses each via your `ParseSessionFile`.
 
-The `filePath` parameter is the attributed session file being monitored. Adapters can read it to inspect preceding context when needed (e.g. counting consecutive errors to detect exhausted retries). Pass `""` in tests that don't need file context.
+File-backed adapters build both on `packages/adapter/filewatch`, a reusable recursive tree watcher, in a few lines each — see `pi.go`. A non-file source (e.g. a database) implements the same interface with a poller or subscription instead.
 
-### `FileAttributor`
-
-```go
-type FileAttributor interface {
-    AttributeFile(filePath string, candidates []FileCandidate) string
-}
-```
-
-Implement this if multiple live sessions can share the same watch directory. The daemon calls this to determine which session owns a newly written file. Each candidate carries `SessionID`, `Cwd`, `StartedAt`, and `Scrollback` (recent terminal text). Return the matching session ID, or `""` to reject the file.
-
-Common strategies:
-- **Metadata matching** (codex, claude): parse the file header for cwd + timestamp, pick the candidate with the closest `StartedAt`
-- **Content similarity** (pi): compare file text against each candidate's `Scrollback`
-
-Without this interface, single-candidate directories use trivial attribution and multi-candidate directories fall back to the first candidate.
+Note: live session state — title, status, and the held conversation file — is **not** reported here. That flows authoritatively from the agent hook (`SessionExtender` for pi, `SessionHookCommand` for codex/claude); see [Adapter Architecture](/develop/adapter-architecture).
 
 ### `Resumer`
 
@@ -208,7 +195,7 @@ Implement this if your tool supports resuming previous sessions.
 - `CanResume()` filters out invalid or empty files
 - `ResumeCommand()` tells gmux how to resume a valid session
 
-All dead sessions are resumable. When a session exits, gmuxd checks whether the adapter implements `Resumer` and has an attributed session file. If so, the session's command is replaced with the adapter's resume command (e.g. `["claude", "--resume", "abc"]`). If not, the original launch command is kept as-is, so "resume" simply re-runs the command in the same working directory.
+All dead sessions are resumable. When a session exits, gmuxd checks whether the adapter implements `Resumer` and has a recorded session file (`SessionFile`, reported by the agent hook). If so, the session's command is replaced with the adapter's resume command (e.g. `["claude", "--resume", "abc"]`). If not, the original launch command is kept as-is, so "resume" simply re-runs the command in the same working directory.
 
 This means adapters that don't implement `Resumer` still get resume for free: the user clicks resume, a new session starts with the same command and cwd. This is the right behavior for shell sessions and simple tools. Only implement `Resumer` when your tool has native resume support that you want to use instead.
 
@@ -222,18 +209,18 @@ type CommandTitler interface {
 
 Implement this if your adapter needs custom fallback title display from the command array. Without it, the fallback title is the adapter name (e.g. "codex", "pi"). Shell implements this to show the full command with args (e.g. "pytest -x").
 
-This only matters when no adapter or shell title has been set yet, which is rare for adapters that implement `FileMonitor` (titles come from file parsing) but common for plain shell sessions.
+This only matters when no adapter or shell title has been set yet, which is rare for agent adapters (titles come from the agent hook or session file) but common for plain shell sessions.
 
 ### Capability composition
 
 An adapter implements only what it needs:
 
-| Adapter | Base | Launchable | SessionFiler | FileMonitor | FileAttributor | Resumer |
-|---------|------|------------|-------------|-------------|----------------|---------|
-| Shell | ✓ | ✓ | — | — | — | —* |
-| Claude | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Pi | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Adapter | Base | Launchable | SessionFiler | ConversationSource | Resumer |
+|---------|------|------------|-------------|--------------------|---------|
+| Shell | ✓ | ✓ | — | — | —* |
+| Claude | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Codex | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Pi | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 \* Shell sessions are still resumable (all sessions are). They just re-run the original command in the same cwd, which starts a fresh shell. Adapters only need to implement `Resumer` when the tool has native resume (e.g. `claude --resume`).
 

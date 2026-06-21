@@ -29,8 +29,8 @@ That split is why the adapter system is a set of small interfaces instead of one
 | Child self-report API | `gmux` | Unix socket HTTP endpoints |
 | Launch menu discovery | `gmuxd` | `Launchable` + compiled adapter set |
 | Session file discovery | `gmuxd` | `SessionFiler` |
-| Session file attribution | `gmuxd` | file scanner + matching |
-| Live file monitoring | `gmuxd` | `FileMonitor.ParseNewLines()` |
+| Live session state | runner → `gmuxd` | agent hook (`SessionExtender` / `SessionHookCommand`) |
+| Conversation discovery | `gmuxd` | `ConversationSource` (snapshot + watch) |
 | Resumable session discovery | `gmuxd` | `SessionFiler` + `Resumer` |
 | Resume command generation | `gmuxd` | `Resumer.ResumeCommand()` |
 
@@ -130,20 +130,16 @@ Use this when a tool stores session state on disk and gmux should be able to dis
 - `SessionDir(cwd)` returns the directory for one working directory
 - `ParseSessionFile(path)` extracts display metadata such as ID, title, cwd, created time, and message count
 
-### `FileMonitor`
+### `ConversationSource`
 
 ```go
-type FileMonitor interface {
-    ParseNewLines(lines []string, filePath string) []FileEvent
+type ConversationSource interface {
+    SnapshotConversations(sink ConversationSink)
+    WatchConversations(ctx context.Context, sink ConversationSink) error
 }
 ```
 
-Use this when new file content should update the live sidebar. `gmuxd` tracks offsets and passes only appended lines. The `filePath` parameter gives adapters access to the full session file for context lookups (e.g. reading preceding events).
-
-Typical uses:
-- title changes
-- status updates inferred from appended records
-- metadata updates from structured session logs
+Use this so `gmuxd` can index your tool's conversations (for URL resolution and search). The adapter owns discovery: `SnapshotConversations` reports everything that exists now, `WatchConversations` streams changes until `ctx` ends. File-backed adapters build on the shared `filewatch` tree watcher; the daemon parses each reported path via `ParseSessionFile`.
 
 ### `Resumer`
 
@@ -159,46 +155,30 @@ Use this when a finished session can be resumed later.
 - `CanResume(path)` filters out invalid or empty files
 - `ResumeCommand(info)` tells gmux how to resume the session when the user clicks it
 
-## File attribution and live updates
+## Live state and conversation discovery
 
-For adapters that implement `SessionFiler`, `gmuxd` does more than just scan files.
+These are two separate concerns, with two different owners.
 
-### Session file attribution
+### Live session state comes from the agent hook
 
-When a tool starts writing files in a watched directory, `gmuxd` needs to figure out which running session owns which file. Adapters control this by implementing `FileAttributor`:
+Which running session holds which conversation file — and its title and status —
+is **not** inferred by the daemon. The runner injects a gmux agent hook
+(`SessionExtender` for pi's `-e` extension; `SessionHookCommand` for codex/claude
+hooks), and the agent reports the held file, title, and status authoritatively
+over the runner socket. `gmuxd` records the file on the session (`SessionFile`);
+a `/resume` rebind to a different file is just another hook report. When a tool
+can't be hooked, the session runs without daemon-reported live state — there is
+no metadata-matching fallback.
 
-```go
-type FileAttributor interface {
-    AttributeFile(filePath string, candidates []FileCandidate) string
-}
-```
+### Conversation discovery via `ConversationSource`
 
-Each candidate carries `SessionID`, `Cwd`, `StartedAt`, and `Scrollback` (recent terminal text). The adapter decides how to match:
-
-- **pi** uses content similarity between the file text and terminal scrollback
-- **claude** and **codex** use metadata matching (cwd + timestamp proximity from the file's session header)
-
-Typical flow:
-
-1. watch the adapter's `SessionDir(cwd)` via inotify
-2. notice file creation or writes
-3. call the adapter's `AttributeFile` to match the file to a live session
-4. once attributed, keep the association sticky
-5. track the **active file** per session — when a different file is attributed (e.g. the user runs `/new` or `/resume` in the tool's TUI), `resume_key` updates to the new file's session ID
-
-This is what lets gmux connect a running session to a later-created conversation file.
-
-### Live file monitoring
-
-After attribution, `gmuxd` can continue watching the file:
-
-1. read newly appended lines
-2. if the session still has no adapter title (common when the tool creates the file before the first user message), re-derive the title from `ParseSessionFile()` on the full file
-3. pass new lines to `ParseNewLines()`
-4. apply returned `FileEvent`s to the live session
-5. publish the updates to the frontend via SSE
-
-That is how file-backed tools can update titles or other metadata in real time even when those changes never appear in terminal output.
+Independently, `gmuxd` indexes every conversation file on disk — including dead
+conversations with no running session — for URL resolution and search. Each
+`SessionFiler` adapter also implements `ConversationSource`: it reports a
+startup snapshot and then streams changes, and the daemon parses each path via
+`ParseSessionFile` into the index. File-backed adapters share the `filewatch`
+tree watcher; a database-backed tool would poll or subscribe instead. There is
+no daemon-global file monitor.
 
 ## Resumable sessions
 
@@ -270,7 +250,7 @@ A session's displayed state can come from multiple places:
 
 - process lifecycle defaults from gmux itself
 - adapter PTY monitoring via `Monitor()`
-- file-backed updates via `FileMonitor`
+- authoritative agent-hook reports (held file, title, status)
 - direct child callbacks via `/status` and `PATCH /meta`
 
 The important design point is that adapters do not own the whole session model. They contribute structured hints into a runner-owned session state that `gmuxd` then aggregates and serves.

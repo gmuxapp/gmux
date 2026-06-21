@@ -236,29 +236,26 @@ func TestExitEventDoesNotResurrectDismissedSession(t *testing.T) {
 	}
 }
 
-func TestSessionFileEventInvokesHook(t *testing.T) {
+func TestSessionFileEventRecordsPath(t *testing.T) {
 	sessions := store.New()
+	sessions.Upsert(store.Session{ID: "sess-1", Alive: true})
 	subs := NewSubscriptions(sessions)
 
-	var gotID, gotPath string
-	subs.OnSessionFile = func(sessionID, filePath string) {
-		gotID, gotPath = sessionID, filePath
-	}
+	const path = "/home/u/.pi/agent/sessions/x/2026_sess.jsonl"
+	subs.handleEvent("sess-1", "/sock", "session_file", []byte(`{"path":"`+path+`"}`))
 
-	subs.handleEvent("sess-1", "/sock", "session_file",
-		[]byte(`{"path":"/home/u/.pi/agent/sessions/x/2026_sess.jsonl"}`))
-
-	if gotID != "sess-1" || gotPath != "/home/u/.pi/agent/sessions/x/2026_sess.jsonl" {
-		t.Fatalf("OnSessionFile got (%q,%q)", gotID, gotPath)
+	got, ok := sessions.Get("sess-1")
+	if !ok || got.SessionFile != path {
+		t.Fatalf("SessionFile = %q (ok=%v), want %q", got.SessionFile, ok, path)
 	}
 }
 
 func TestSessionFileEventEmptyPathIgnored(t *testing.T) {
-	subs := NewSubscriptions(store.New())
-	called := false
-	subs.OnSessionFile = func(string, string) { called = true }
+	sessions := store.New()
+	sessions.Upsert(store.Session{ID: "sess-1", Alive: true})
+	subs := NewSubscriptions(sessions)
 	subs.handleEvent("sess-1", "/sock", "session_file", []byte(`{"path":""}`))
-	if called {
-		t.Error("OnSessionFile should not fire for empty path")
+	if got, _ := sessions.Get("sess-1"); got.SessionFile != "" {
+		t.Errorf("empty path should not set SessionFile, got %q", got.SessionFile)
 	}
 }

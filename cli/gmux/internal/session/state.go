@@ -188,7 +188,7 @@ func (s *State) SetStatus(status *adapter.Status) {
 	s.emit(Event{Type: "status", Data: status})
 }
 
-// SetAdapterTitle sets the high-priority title from the adapter/file monitor.
+// SetAdapterTitle sets the high-priority title from the adapter (agent hook / session file).
 func (s *State) SetAdapterTitle(title string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
