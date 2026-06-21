@@ -33,3 +33,6 @@ cli/gmux/gmux
 test-results/
 tests/pi-adapter/pi-adapter
 gmux gmuxd
+
+# Agent handoff/scratch docs
+.memory/

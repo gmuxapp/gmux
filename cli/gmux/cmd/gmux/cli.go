@@ -28,6 +28,7 @@ const (
 	modeRemote                // gmux remote
 	modeDumpEnv               // (internal) gmux __dump-env
 	modeCodexHook             // (internal) gmux __codex-hook <Event>
+	modeClaudeHook            // (internal) gmux __claude-hook
 )
 
 // command is the fully-parsed CLI invocation. One struct for every
@@ -181,6 +182,8 @@ func parseCLI(args []string) (*command, error) {
 			return nil, errors.New("__codex-hook requires exactly one event name")
 		}
 		return &command{mode: modeCodexHook, codexHookEvent: rest[0]}, nil
+	case "__claude-hook":
+		return &command{mode: modeClaudeHook}, nil
 	}
 
 	// Error-only migration shim (ADR 0009): recognize removed forms and
