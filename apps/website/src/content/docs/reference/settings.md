@@ -52,7 +52,7 @@ Terminal font size in pixels.
 Font family (CSS font-family value).
 
 - **Type:** `string`
-- **Default:** <code>"'Fira Code', monospace"</code>
+- **Default:** <code>"'Fira Code', 'Symbols Nerd Font Mono', monospace"</code>
 
 ### `fontWeight`
 

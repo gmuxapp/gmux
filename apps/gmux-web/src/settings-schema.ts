@@ -157,7 +157,7 @@ export type Keybind = v.InferOutput<typeof KeybindSchema>
 /** Field definitions for settings.jsonc, separated for introspection. */
 const settingsEntries = {
     fontSize:         clampedNumber(13, 6, 48, 'Terminal font size in pixels.'),
-    fontFamily:       optStr("'Fira Code', monospace", 'Font family (CSS font-family value).'),
+    fontFamily:       optStr("'Fira Code', 'Symbols Nerd Font Mono', monospace", 'Font family (CSS font-family value).'),
     fontWeight:       v.optional(v.pipe(FontWeightSchema, v.description('Font weight for normal text.')), 'normal' as const),
     fontWeightBold:   v.optional(v.pipe(FontWeightSchema, v.description('Font weight for bold text.')), 'bold' as const),
     lineHeight:       clampedNumber(1.0, 0.5, 3, 'Line height multiplier.'),

@@ -16,3 +16,39 @@
 /* JetBrains Mono italic — fallback for Fira Code italic (which has none) */
 @import '@fontsource/jetbrains-mono/400-italic.css';
 @import '@fontsource/jetbrains-mono/500-italic.css';
+
+/* Nerd Font icon glyphs (Powerline, file-type, git, devicon, etc.).
+ *
+ * Layered as a fallback behind the terminal text font so prompts,
+ * statuslines, and TUI file-trees render their icons on any host.
+ *
+ * src order matters:
+ *  1. local() — if the user has the *full* Symbols Nerd Font (or the
+ *     mono variant) installed, use it. That covers all ~10k glyphs
+ *     with zero download.
+ *  2. url()  — otherwise fall back to the bundled subset (~490 KB),
+ *     which covers the icon ranges people actually see in a terminal.
+ *
+ * unicode-range pins the @font-face to Nerd Font icon code points (kept in
+ * sync with scripts/build-nerd-font-subset.sh). Without it the browser would
+ * treat this font as a candidate for *any* glyph Fira Code lacks — e.g. CJK
+ * or emoji in terminal output — and fetch the 490 KB woff2 even when no icon
+ * glyph is ever shown.
+ */
+@font-face {
+  font-family: 'Symbols Nerd Font Mono';
+  src:
+    local('Symbols Nerd Font Mono'),
+    local('SymbolsNerdFontMono-Regular'),
+    local('Symbols Nerd Font'),
+    local('SymbolsNerdFont-Regular'),
+    url('./assets/symbols-nerd-font-mono-subset.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+  unicode-range:
+    U+23FB-23FE, U+2665, U+26A1, U+2B58,
+    U+E000-E00A, U+E0A0-E0D7, U+E200-E2A9, U+E300-E3E3,
+    U+E5FA-E6B7, U+E700-E8EF, U+EA60-EBEB,
+    U+F000-F2FF, U+F300-F375, U+F400-F533;
+}
