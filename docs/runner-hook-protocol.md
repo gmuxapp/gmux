@@ -96,3 +96,7 @@ but `/events` replay.
   global `--dangerously-bypass-hook-trust`). Version-gated; older codex falls
   back to daemon metadata attribution, and a hash mismatch degrades to the same
   fallback rather than broadening trust.
+- **`SessionHookCommand`** (claude): Claude Code takes hooks through settings,
+  so the runner splices `--settings <inline-json>` (a `gmux __claude-hook`
+  command hook). That layer merges with the user's settings and hook arrays
+  concatenate, so gmux's hooks add to rather than clobber the user's.

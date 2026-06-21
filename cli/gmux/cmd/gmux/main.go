@@ -62,6 +62,8 @@ func main() {
 		os.Exit(dumpEnv())
 	case modeCodexHook:
 		os.Exit(codexHook(cmd.codexHookEvent))
+	case modeClaudeHook:
+		os.Exit(claudeHook())
 	}
 }
 
