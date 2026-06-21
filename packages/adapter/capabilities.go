@@ -119,6 +119,21 @@ type SessionExtender interface {
 	ExtendCommand(args []string, extPath string) []string
 }
 
+// SessionHookCommand marks adapters whose agent runs the gmux binary itself as
+// a command hook (`gmux __<agent>-hook <event>`), injected per-launch on the
+// argv via the agent's config-override flags. Contrast SessionExtender, whose
+// hook is a separate materialized extension file. codex is the first
+// implementer; see ADR 0013 and docs/runner-hook-protocol.md.
+type SessionHookCommand interface {
+	// HookCommand returns args with the flags spliced in that (a) define a gmux
+	// hook which relays session events to the runner socket and (b) let it run.
+	// selfBin is the absolute path of the gmux binary the hook invokes. The
+	// binary token may not be args[0] (e.g. `env codex`). Returns ok=false (and
+	// args unchanged) when the agent version doesn't support hooks, so the
+	// runner launches unmodified and the daemon's fallback attribution applies.
+	HookCommand(args []string, selfBin string) (out []string, ok bool)
+}
+
 // PassthroughDetector marks adapters that recognize invocations which are NOT
 // interactive sessions — one-shot subcommands like `pi update` or `pi list`.
 // gmux execs these directly (inheriting the tty, returning their exit code)

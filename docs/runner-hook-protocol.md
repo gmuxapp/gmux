@@ -79,9 +79,20 @@ but `/events` replay.
 
 ## Implementing for a new agent
 
-1. **Load the hook** via the injection seam matching how the agent loads
-   extensions — `adapter.SessionExtender.ExtendCommand` splices a loader flag
-   into the argv (pi: `-e <path>`). Both seams are ephemeral and scoped to the
-   gmux-launched process; the injected hook no-ops without `GMUX_SESSION_SOCK`.
+1. **Load the hook** via the seam matching how the agent loads extensions
+   (below). Both are ephemeral, scoped to the launch, and no-op without
+   `GMUX_SESSION_SOCK`.
 2. Report a `session` event on every bind.
 3. Report `turn` start/end, normalizing to the outcome vocabulary.
+
+### Injection seams
+
+- **`SessionExtender`** (pi): the runner materializes the embedded pi extension
+  and splices `pi -e <path>` into the argv.
+- **`SessionHookCommand`** (codex): the runner injects a `gmux __codex-hook`
+  command hook via the agent's config-override flags (`-c hooks.<Event>=...`),
+  with the gmux binary itself as the hook program. It also carries the per-hook
+  `trusted_hash` codex computes so only gmux's own hooks are trusted (never the
+  global `--dangerously-bypass-hook-trust`). Version-gated; older codex falls
+  back to daemon metadata attribution, and a hash mismatch degrades to the same
+  fallback rather than broadening trust.

@@ -227,6 +227,51 @@ func TestTurnEventDrivesState(t *testing.T) {
 	}
 }
 
+// TestSessionSlugPrefersExplicitSlug pins, through the real /hook/event
+// handler, that an explicit slug in a session event wins over Slugify(id) — the
+// codex path reports a title-derived slug because its session id is a UUID that
+// slugifies badly — while a session event with only an id still slugifies the
+// id (pi's behavior, unchanged).
+func TestSessionSlugPrefersExplicitSlug(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not available")
+	}
+	check := func(name, body, wantSlug string) {
+		t.Helper()
+		dir := t.TempDir()
+		sockPath := filepath.Join(dir, "test.sock")
+		st := session.New(session.Config{ID: "s1", Kind: "codex", SocketPath: sockPath})
+		srv, err := New(Config{
+			Command:    []string{node, "-e", "setTimeout(()=>{},2000)"},
+			Cwd:        dir,
+			Listener:   mustBindSocket(t, sockPath),
+			SocketPath: sockPath,
+			Adapter:    adapters.NewCodex(),
+			State:      st,
+		})
+		if err != nil {
+			t.Fatalf("%s: new server: %v", name, err)
+		}
+		defer srv.Shutdown()
+		postSessionEvent(t, sockPath, body)
+		deadline := time.After(2 * time.Second)
+		for st.SlugSnapshot() != wantSlug {
+			select {
+			case <-deadline:
+				t.Fatalf("%s: slug = %q, want %q", name, st.SlugSnapshot(), wantSlug)
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	}
+	check("explicit-slug",
+		`{"op":"session","path":"/x.jsonl","id":"019cfb54-dead-beef","slug":"fix the auth bug"}`,
+		"fix-the-auth-bug")
+	check("id-fallback",
+		`{"op":"session","path":"/y.jsonl","id":"my-chat"}`,
+		"my-chat")
+}
+
 // TestApplyTurnEnd pins the outcome→sidebar-state policy directly (no node).
 func TestApplyTurnEnd(t *testing.T) {
 	cases := []struct {

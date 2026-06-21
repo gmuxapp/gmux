@@ -12,21 +12,22 @@ import (
 type mode int
 
 const (
-	modeHelp     mode = iota // print usage and exit
-	modeVersion              // print version and exit
-	modeOpen                 // open the web UI
-	modeRun                  // run a command in a new session (gmux -- <cmd>)
-	modeList                 // gmux ls
-	modeAttach               // gmux attach <id>
-	modeTail                 // gmux tail <id>
-	modeKill                 // gmux kill <id>
-	modeSend                 // gmux send <id> <text> [keys...]
-	modeSendKeys             // gmux send-keys -t <id> ... (tmux-compat)
-	modeWait                 // gmux wait <id>
-	modeDaemon               // gmux daemon <start|stop|restart|status|log-path>
-	modeAuth                 // gmux auth
-	modeRemote               // gmux remote
-	modeDumpEnv              // (internal) gmux __dump-env
+	modeHelp      mode = iota // print usage and exit
+	modeVersion               // print version and exit
+	modeOpen                  // open the web UI
+	modeRun                   // run a command in a new session (gmux -- <cmd>)
+	modeList                  // gmux ls
+	modeAttach                // gmux attach <id>
+	modeTail                  // gmux tail <id>
+	modeKill                  // gmux kill <id>
+	modeSend                  // gmux send <id> <text> [keys...]
+	modeSendKeys              // gmux send-keys -t <id> ... (tmux-compat)
+	modeWait                  // gmux wait <id>
+	modeDaemon                // gmux daemon <start|stop|restart|status|log-path>
+	modeAuth                  // gmux auth
+	modeRemote                // gmux remote
+	modeDumpEnv               // (internal) gmux __dump-env
+	modeCodexHook             // (internal) gmux __codex-hook <Event>
 )
 
 // command is the fully-parsed CLI invocation. One struct for every
@@ -66,6 +67,9 @@ type command struct {
 
 	// daemon
 	daemonSub string // start|stop|restart|status|log-path
+
+	// codex hook (internal __codex-hook)
+	codexHookEvent string // the codex hook event name (SessionStart, ...)
 }
 
 // reservedVerbs is the closed top-level namespace (ADR 0009). Growth
@@ -172,6 +176,11 @@ func parseCLI(args []string) (*command, error) {
 		return parseInternalRun(rest)
 	case "__dump-env":
 		return &command{mode: modeDumpEnv}, nil
+	case "__codex-hook":
+		if len(rest) != 1 {
+			return nil, errors.New("__codex-hook requires exactly one event name")
+		}
+		return &command{mode: modeCodexHook, codexHookEvent: rest[0]}, nil
 	}
 
 	// Error-only migration shim (ADR 0009): recognize removed forms and

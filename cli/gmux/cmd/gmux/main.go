@@ -60,6 +60,8 @@ func main() {
 		os.Exit(execGmuxd("remote"))
 	case modeDumpEnv:
 		os.Exit(dumpEnv())
+	case modeCodexHook:
+		os.Exit(codexHook(cmd.codexHookEvent))
 	}
 }
 
