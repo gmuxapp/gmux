@@ -5,6 +5,7 @@ import { ImageAddon } from '@xterm/addon-image'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import type { ResolvedTerminalOptions } from './settings-schema'
 import { loadWebglRenderer } from './webgl-renderer'
+import { refreshAtlasWhenIconFontLoads } from './nerd-font'
 import { applyArmedModifiers, attachKeyboardHandler, attachPasteHandler, defaultPasteFeedback, handlePasteAction } from './keyboard'
 import { DEFAULT_THEME_COLORS, type ResolvedKeybind } from './config'
 import { attachMobileInputHandler } from './mobile-input'
@@ -483,6 +484,9 @@ export function TerminalView({
     term.loadAddon(new WebLinksAddon())
     term.open(containerRef.current)
     loadWebglRenderer(term)
+    // The Nerd Font icon fallback loads lazily; refresh the glyph atlas once
+    // it arrives so icons rasterized as tofu beforehand get redrawn.
+    const disposeIconFontWatch = refreshAtlasWhenIconFontLoads(term, terminalOptions.fontSize)
     // Initial fit: use FitAddon for the first resize (before shellRef is
     // guaranteed stable), then switch to measureTerminalFit for everything after.
     fitAddon.fit()
@@ -809,6 +813,7 @@ export function TerminalView({
       onFocusReady?.(null)
       if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
       ;(window as any).__gmuxInject = null
+      disposeIconFontWatch()
       term.dispose()
       termRef.current = null
       termIoRef.current = null
@@ -1070,7 +1075,7 @@ export function MockTerminal({ sessionId }: { sessionId: string }) {
 
     const term = new Terminal({
       theme: TERM_THEME,
-      fontFamily: "'Fira Code', monospace",
+      fontFamily: "'Fira Code', 'Symbols Nerd Font Mono', monospace",
       fontSize: 13,
       disableStdin: true,
       cursorBlink: false,
