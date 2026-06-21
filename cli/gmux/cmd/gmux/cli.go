@@ -12,22 +12,22 @@ import (
 type mode int
 
 const (
-	modeHelp     mode = iota // print usage and exit
-	modeVersion              // print version and exit
-	modeOpen                 // open the web UI
-	modeRun                  // run a command in a new session (gmux -- <cmd>)
-	modeList                 // gmux ls
-	modeAttach               // gmux attach <id>
-	modeTail                 // gmux tail <id>
-	modeKill                 // gmux kill <id>
-	modeSend                 // gmux send <id> <text> [keys...]
-	modeSendKeys             // gmux send-keys -t <id> ... (tmux-compat)
-	modeWait                 // gmux wait <id>
-	modeDaemon               // gmux daemon <start|stop|restart|status|log-path>
-	modeAuth                 // gmux auth
-	modeRemote               // gmux remote
-	modeDumpEnv              // (internal) gmux __dump-env
-	modeCodexHook            // (internal) gmux __codex-hook <Event>
+	modeHelp      mode = iota // print usage and exit
+	modeVersion               // print version and exit
+	modeOpen                  // open the web UI
+	modeRun                   // run a command in a new session (gmux -- <cmd>)
+	modeList                  // gmux ls
+	modeAttach                // gmux attach <id>
+	modeTail                  // gmux tail <id>
+	modeKill                  // gmux kill <id>
+	modeSend                  // gmux send <id> <text> [keys...]
+	modeSendKeys              // gmux send-keys -t <id> ... (tmux-compat)
+	modeWait                  // gmux wait <id>
+	modeDaemon                // gmux daemon <start|stop|restart|status|log-path>
+	modeAuth                  // gmux auth
+	modeRemote                // gmux remote
+	modeDumpEnv               // (internal) gmux __dump-env
+	modeCodexHook             // (internal) gmux __codex-hook <Event>
 )
 
 // command is the fully-parsed CLI invocation. One struct for every

@@ -96,6 +96,11 @@ protocol unchanged. Concretely:
   the hook reports the held file even for a cache-served resume, and the daemon
   suppresses its file parse for hook-attributed sessions (the existing
   `AttributeFromHook` path, adapter-independent).
+- Turn-end status is coarser than pi's. Codex's `Stop` hook input carries no
+  outcome field (`stop.command.input.schema.json`: 9 fields, none about how the
+  turn ended), so the hook always reports `completed` — a user interrupt or
+  error exit shows as completed+unread, not idle/error. Revisit if codex adds an
+  outcome-bearing Stop field.
 - The daemon's metadata-attribution engine (`filemon.go` fallback,
   `FileAttributor`) is **no longer codex's only path** — but it is still
   required for older codex. It can be removed only once a hooks-capable codex is

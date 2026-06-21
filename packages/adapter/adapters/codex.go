@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -485,13 +486,10 @@ func CodexHookBodies(eventName string, input []byte) [][]byte {
 		b, _ := json.Marshal(map[string]string{"op": "turn", "phase": "start"})
 		return [][]byte{b}
 	case "Stop":
-		// outcome is hardcoded "completed": codex's Stop payload carries no
-		// exit-reason field (only session_id/turn_id/cwd/transcript_path/
-		// last_assistant_message/stop_hook_active), so the hook can't tell a clean
-		// completion from a user interrupt or error exit. A user abort therefore
-		// shows as completed+unread rather than idle — the daemon's FileMonitor
-		// fallback (turn_cancelled → idle) is more precise, but the hook has no
-		// equivalent signal. Revisit if codex adds an outcome-bearing Stop field.
+		// outcome hardcoded "completed": codex's Stop payload has no exit-reason
+		// field, so the hook can't distinguish a clean completion from an
+		// interrupt/error (a user abort shows as completed+unread). Revisit if
+		// codex adds an outcome-bearing Stop field.
 		turn, _ := json.Marshal(map[string]string{
 			"op": "turn", "phase": "end", "outcome": "completed",
 		})
@@ -530,12 +528,57 @@ func codexSessionBody(input []byte) ([]byte, bool) {
 		body["reason"] = in.Source
 	}
 	// Derive a human title + slug from the transcript's first user prompt.
-	if info, err := (&Codex{}).ParseSessionFile(in.TranscriptPath); err == nil && info.Title != "" && info.Title != "(new)" {
-		body["name"] = info.Title
-		body["slug"] = info.Slug
+	if title := codexHookTitle(in.TranscriptPath); title != "" {
+		body["name"] = title
+		body["slug"] = adapter.Slugify(title)
 	}
 	b, _ := json.Marshal(body)
 	return b, true
+}
+
+// codexHookTitle returns a codex session's display title — the first non-system
+// user prompt, truncated — or "" if the transcript has none yet.
+//
+// Unlike ParseSessionFile it early-exits at the first user message instead of
+// reading the whole file. This matters because the hook derives the title on
+// every turn-end (codex blocks on the Stop hook), the title never changes after
+// the first prompt, and the transcript grows each turn: a full re-parse would be
+// O(file) per turn, O(n²) over a session. The first prompt sits near the top, so
+// this stays effectively O(1).
+func codexHookTitle(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	// codex transcript lines (tool output, assistant messages) can be large;
+	// raise the line cap well above bufio's 64KiB default.
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var entry struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type    string          `json:"type"`
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(line, &entry) != nil {
+			continue
+		}
+		if entry.Type == "response_item" && entry.Payload.Role == "user" && entry.Payload.Type == "message" {
+			if text := extractCodexUserText(entry.Payload.Content); text != "" {
+				return truncateTitle(text, 80)
+			}
+		}
+	}
+	return ""
 }
 
 // --- FileAttributor ---

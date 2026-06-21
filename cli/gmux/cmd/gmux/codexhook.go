@@ -27,19 +27,27 @@ import (
 // gmux, so the hook is a no-op — this is why the globally-installed hook is
 // safe for plain `codex` invocations outside gmux.
 func codexHook(eventName string) int {
-	// Always read stdin (codex pipes the event JSON in and may block on the
-	// write if we don't drain it), bounded so a pathological payload can't
-	// exhaust memory.
-	input, _ := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
+	runCodexHook(eventName, os.Stdin, os.Stdout, os.Getenv("GMUX_SESSION_SOCK"))
+	return 0
+}
 
-	if sock := os.Getenv("GMUX_SESSION_SOCK"); sock != "" {
+// runCodexHook is the testable core of the subcommand. sock is the runner
+// socket (GMUX_SESSION_SOCK); when empty the codex run was not launched by gmux
+// and the hook is a pure no-op apart from emitting the obligatory "{}" — this is
+// what keeps the per-launch-injected hook inert for plain `codex` invocations.
+func runCodexHook(eventName string, in io.Reader, out io.Writer, sock string) {
+	// Always drain stdin (codex pipes the event JSON in and can block on the
+	// write if we don't read it), bounded so a pathological payload can't
+	// exhaust memory.
+	input, _ := io.ReadAll(io.LimitReader(in, 1<<20))
+
+	if sock != "" {
 		for _, body := range adapters.CodexHookBodies(eventName, input) {
 			postCodexHookEvent(sock, body)
 		}
 	}
 
-	fmt.Println("{}")
-	return 0
+	fmt.Fprintln(out, "{}")
 }
 
 // postCodexHookEvent POSTs one event body to the runner's /hook/event over the
