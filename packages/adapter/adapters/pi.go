@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -9,11 +10,13 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/filewatch"
 	"github.com/gmuxapp/gmux/packages/paths"
 )
 
 // Compile-time interface checks.
 var (
+	_ adapter.ConversationSource  = (*Pi)(nil)
 	_ adapter.Launchable          = (*Pi)(nil)
 	_ adapter.SessionFiler        = (*Pi)(nil)
 	_ adapter.Resumer             = (*Pi)(nil)
@@ -271,21 +274,6 @@ func (p *Pi) CanResume(path string) bool {
 
 // --- Helpers ---
 
-// ListSessionFiles returns all .jsonl files in a directory.
-func ListSessionFiles(dir string) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var files []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
-			files = append(files, filepath.Join(dir, e.Name()))
-		}
-	}
-	return files
-}
-
 func extractFirstUserText(line string) string {
 	var entry struct {
 		Message *struct {
@@ -340,3 +328,19 @@ var (
 type parseError struct{ msg string }
 
 func (e *parseError) Error() string { return e.msg }
+
+// --- ConversationSource ---
+
+func (p *Pi) SnapshotConversations(sink adapter.ConversationSink) {
+	filewatch.Snapshot(p.SessionRootDir(), ".jsonl", sink.Upsert)
+}
+
+func (p *Pi) WatchConversations(ctx context.Context, sink adapter.ConversationSink) error {
+	return filewatch.Watch(ctx, p.SessionRootDir(), ".jsonl", func(e filewatch.Event) {
+		if e.Removed {
+			sink.Remove(e.Path)
+		} else {
+			sink.Upsert(e.Path)
+		}
+	})
+}

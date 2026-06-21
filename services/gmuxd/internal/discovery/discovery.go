@@ -51,8 +51,7 @@ type OnDeadFunc func(sess store.Session)
 //
 // onFirstScan, if non-nil, runs once after the initial Scan completes.
 // This is the right point to invoke work that depends on live sessions
-// being registered with the FileMonitor (e.g. applying persisted
-// attributions to freshly-rehydrated runners).
+// being registered (e.g. cleaning up orphaned project session refs).
 func Watch(sessions *store.Store, subs *Subscriptions, onDead OnDeadFunc, onFirstScan func(), interval time.Duration, stop <-chan struct{}) {
 	// Initial scan immediately
 	Scan(sessions, subs, onDead)
@@ -246,8 +245,8 @@ func Register(sessions *store.Store, subs *Subscriptions, socketPath string, onD
 		// the store has the historical and attribution-derived
 		// state from before the seam. Merge by overwriting only the
 		// runtime-owned fields so anything the runner doesn't know
-		// about (slug, created_at, FileMonitor-attributed title /
-		// subtitle, workspace metadata) survives.
+		// about (slug, created_at, hook-reported title / subtitle,
+		// workspace metadata) survives.
 		existing.Alive = newSess.Alive
 		existing.Pid = newSess.Pid
 		existing.SocketPath = socketPath

@@ -84,9 +84,6 @@ func TestCodexImplementsCapabilities(t *testing.T) {
 	if _, ok := a.(adapter.SessionFiler); !ok {
 		t.Fatal("should implement SessionFiler")
 	}
-	if _, ok := a.(adapter.SessionFileLister); !ok {
-		t.Fatal("should implement SessionFileLister")
-	}
 	if _, ok := a.(adapter.Resumer); !ok {
 		t.Fatal("should implement Resumer")
 	}
@@ -200,8 +197,6 @@ func TestCodexParseSessionFileNotSessionMeta(t *testing.T) {
 	}
 }
 
-// --- FileMonitor ---
-
 // --- Resumer ---
 
 func TestCodexResumeCommand(t *testing.T) {
@@ -229,44 +224,6 @@ func TestCodexCanResume(t *testing.T) {
 	if NewCodex().CanResume(empty) {
 		t.Fatal("empty session should not be resumable")
 	}
-}
-
-// --- ListSessionFiles ---
-
-func TestCodexListSessionFilesNested(t *testing.T) {
-	// Create a fake date-nested directory structure
-	root := t.TempDir()
-	c := &Codex{}
-
-	// Override root by creating the structure directly
-	dir := filepath.Join(root, "2026", "03", "17")
-	os.MkdirAll(dir, 0755)
-	os.WriteFile(filepath.Join(dir, "rollout-a.jsonl"), []byte("{}"), 0644)
-	os.WriteFile(filepath.Join(dir, "rollout-b.jsonl"), []byte("{}"), 0644)
-
-	dir2 := filepath.Join(root, "2026", "03", "16")
-	os.MkdirAll(dir2, 0755)
-	os.WriteFile(filepath.Join(dir2, "rollout-c.jsonl"), []byte("{}"), 0644)
-	os.WriteFile(filepath.Join(dir2, "not-a-session.txt"), []byte("nope"), 0644)
-
-	// Test the walk function directly since we can't override home dir
-	var files []string
-	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !d.IsDir() && filepath.Ext(path) == ".jsonl" {
-			files = append(files, path)
-		}
-		return nil
-	})
-
-	if len(files) != 3 {
-		t.Errorf("expected 3 jsonl files, got %d: %v", len(files), files)
-	}
-
-	// Verify SessionFileLister is implemented
-	var _ adapter.SessionFileLister = c
 }
 
 // --- Helpers ---

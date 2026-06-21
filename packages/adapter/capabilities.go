@@ -1,6 +1,9 @@
 package adapter
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // SessionFileInfo holds metadata extracted from a tool's session file.
 type SessionFileInfo struct {
@@ -48,18 +51,33 @@ type SessionFiler interface {
 	SessionDir(cwd string) string
 
 	// ParseSessionFile reads a session file and returns display metadata.
-	// Called by gmuxd for resumable discovery and live file monitoring.
+	// Called by gmuxd to index conversations and resolve resume commands.
 	ParseSessionFile(path string) (*SessionFileInfo, error)
 }
 
-// SessionFileLister is an optional extension of SessionFiler for adapters
-// whose session files aren't organized as direct children of per-cwd
-// subdirectories. When implemented, the scanner uses ListSessionFiles
-// instead of the default one-level directory listing.
-type SessionFileLister interface {
-	// ListSessionFiles returns all session file paths under the root.
-	// Called instead of the default per-subdirectory listing.
-	ListSessionFiles() []string
+// ConversationSink receives conversation-file changes from a ConversationSource.
+// Paths are absolute session-file paths the daemon resolves via the adapter's
+// ParseSessionFile.
+type ConversationSink interface {
+	// Upsert reports a conversation file that exists, was created, or changed.
+	Upsert(path string)
+	// Remove reports a conversation file that no longer exists.
+	Remove(path string)
+}
+
+// ConversationSource is implemented by adapters that expose a set of
+// conversations and can report them to the daemon's index. The adapter owns
+// the observation mechanism (file watching, polling, a DB subscription); the
+// daemon only consumes events. This is the single seam the daemon uses to keep
+// the conversations index (URL resolution, search) current — there is no
+// daemon-side file monitor.
+type ConversationSource interface {
+	// SnapshotConversations emits every currently-existing conversation to sink.
+	// Synchronous; used once at startup to populate the index.
+	SnapshotConversations(sink ConversationSink)
+	// WatchConversations emits incremental conversation changes to sink until
+	// ctx is cancelled. Returns ctx.Err() on cancellation.
+	WatchConversations(ctx context.Context, sink ConversationSink) error
 }
 
 // SessionExtender marks adapters whose agent exposes a native extension/hook

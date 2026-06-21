@@ -3,6 +3,7 @@ package adapters
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,13 +17,14 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/filewatch"
 )
 
 // Compile-time interface checks.
 var (
+	_ adapter.ConversationSource = (*Codex)(nil)
 	_ adapter.Launchable         = (*Codex)(nil)
 	_ adapter.SessionFiler       = (*Codex)(nil)
-	_ adapter.SessionFileLister  = (*Codex)(nil)
 	_ adapter.SessionHookCommand = (*Codex)(nil)
 	_ adapter.Resumer            = (*Codex)(nil)
 )
@@ -98,8 +100,8 @@ func (c *Codex) SessionRootDir() string {
 }
 
 // SessionDir returns today's date-nested directory where Codex writes new
-// session files. Codex organizes by date (YYYY/MM/DD), not by cwd.
-// The scanner uses ListSessionFiles() for historical sessions across all dates.
+// session files. Codex organizes by date (YYYY/MM/DD), not by cwd; the
+// ConversationSource walks the whole tree for historical sessions.
 func (c *Codex) SessionDir(_ string) string {
 	root := c.SessionRootDir()
 	if root == "" {
@@ -107,26 +109,6 @@ func (c *Codex) SessionDir(_ string) string {
 	}
 	now := time.Now()
 	return filepath.Join(root, now.Format("2006"), now.Format("01"), now.Format("02"))
-}
-
-// ListSessionFiles walks the date-nested directory tree
-// (~/.codex/sessions/YYYY/MM/DD/*.jsonl) and returns all session files.
-func (c *Codex) ListSessionFiles() []string {
-	root := c.SessionRootDir()
-	if root == "" {
-		return nil
-	}
-	var files []string
-	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable dirs
-		}
-		if !d.IsDir() && strings.HasSuffix(d.Name(), ".jsonl") {
-			files = append(files, path)
-		}
-		return nil
-	})
-	return files
 }
 
 // codexSessionMeta is the JSON shape of the session_meta payload.
@@ -626,4 +608,20 @@ func isCodexSystemContext(s string) bool {
 		strings.HasPrefix(s, "<environment_context>") ||
 		strings.HasPrefix(s, "# AGENTS.md") ||
 		strings.HasPrefix(s, "<turn_aborted>")
+}
+
+// --- ConversationSource ---
+
+func (c *Codex) SnapshotConversations(sink adapter.ConversationSink) {
+	filewatch.Snapshot(c.SessionRootDir(), ".jsonl", sink.Upsert)
+}
+
+func (c *Codex) WatchConversations(ctx context.Context, sink adapter.ConversationSink) error {
+	return filewatch.Watch(ctx, c.SessionRootDir(), ".jsonl", func(e filewatch.Event) {
+		if e.Removed {
+			sink.Remove(e.Path)
+		} else {
+			sink.Upsert(e.Path)
+		}
+	})
 }

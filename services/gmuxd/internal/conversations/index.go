@@ -2,22 +2,18 @@
 // discovered on disk. It maps (kind, slug) to file metadata, enabling
 // URL resolution for dead conversations and (future) fulltext search.
 //
-// The index is populated on startup by scanning adapter session
-// directories and updated as filemon detects new or changed files.
-// It never writes to the session store.
+// The index is populated and kept current by adapter ConversationSources
+// (snapshot at startup, incremental thereafter). It never writes to the
+// session store.
 package conversations
 
 import (
-	"log"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
-	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 )
 
 // Info holds metadata for a single conversation file.
@@ -136,83 +132,8 @@ func (idx *Index) All() []Info {
 	return out
 }
 
-// Scan discovers all conversation files from all SessionFiler adapters
-// and populates the index. Safe to call multiple times; existing entries
-// are updated, new entries are added.
-func (idx *Index) Scan() {
-	for _, a := range adapters.AllAdapters() {
-		sf, ok := a.(adapter.SessionFiler)
-		if !ok {
-			continue
-		}
-		resumer, hasResume := a.(adapter.Resumer)
-
-		root := sf.SessionRootDir()
-		if root == "" {
-			continue
-		}
-
-		var allFiles []string
-		if lister, ok := a.(adapter.SessionFileLister); ok {
-			allFiles = lister.ListSessionFiles()
-		} else {
-			subdirs, err := os.ReadDir(root)
-			if err != nil {
-				if !os.IsNotExist(err) {
-					log.Printf("conversations: read root %s: %v", root, err)
-				}
-				continue
-			}
-			for _, d := range subdirs {
-				if !d.IsDir() {
-					continue
-				}
-				dir := filepath.Join(root, d.Name())
-				allFiles = append(allFiles, adapters.ListSessionFiles(dir)...)
-			}
-		}
-
-		for _, path := range allFiles {
-			fileInfo, err := sf.ParseSessionFile(path)
-			if err != nil {
-				continue
-			}
-
-			if fileInfo.Cwd == "" {
-				continue
-			}
-
-			if hasResume && !resumer.CanResume(path) {
-				continue
-			}
-
-			slug := fileInfo.Slug
-			if slug == "" {
-				slug = adapter.Slugify(fileInfo.ID)
-			}
-
-			var cmd []string
-			if hasResume {
-				cmd = resumer.ResumeCommand(fileInfo)
-			}
-
-			info := Info{
-				ToolID:        fileInfo.ID,
-				Slug:          slug,
-				Kind:          a.Name(),
-				Title:         fileInfo.Title,
-				Cwd:           fileInfo.Cwd,
-				FilePath:      path,
-				ResumeCommand: cmd,
-				Created:       fileInfo.Created,
-			}
-			idx.Upsert(info)
-		}
-	}
-}
-
-// ScanFile indexes a single conversation file. Called by filemon when
-// a file is created or modified. Returns the assigned slug.
+// ScanFile indexes a single conversation file (snapshot or live update
+// from an adapter ConversationSource). Returns the assigned slug.
 func (idx *Index) ScanFile(a adapter.Adapter, path string) string {
 	sf, ok := a.(adapter.SessionFiler)
 	if !ok {
@@ -270,7 +191,7 @@ func (idx *Index) Remove(kind, toolID string) bool {
 }
 
 // RemoveByPath deletes any conversation whose FilePath matches path.
-// Used when filemon observes a deletion event and we don't have the
+// Used when a ConversationSource observes a deletion event and we don't have the
 // (kind, toolID) handy. Linear walk over the index; that's fine
 // because Remove events are rare (manual `rm`, file rotation) and
 // the index size stays in the hundreds-to-low-thousands range.

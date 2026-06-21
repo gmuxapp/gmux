@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -10,14 +11,16 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/filewatch"
 	"github.com/gmuxapp/gmux/packages/paths"
 )
 
 // Compile-time interface checks.
 var (
-	_ adapter.Launchable   = (*Claude)(nil)
-	_ adapter.SessionFiler = (*Claude)(nil)
-	_ adapter.Resumer      = (*Claude)(nil)
+	_ adapter.ConversationSource = (*Claude)(nil)
+	_ adapter.Launchable         = (*Claude)(nil)
+	_ adapter.SessionFiler       = (*Claude)(nil)
+	_ adapter.Resumer            = (*Claude)(nil)
 )
 
 func init() {
@@ -277,4 +280,20 @@ func cleanClaudeUserText(s string) string {
 		return ""
 	}
 	return s
+}
+
+// --- ConversationSource ---
+
+func (c *Claude) SnapshotConversations(sink adapter.ConversationSink) {
+	filewatch.Snapshot(c.SessionRootDir(), ".jsonl", sink.Upsert)
+}
+
+func (c *Claude) WatchConversations(ctx context.Context, sink adapter.ConversationSink) error {
+	return filewatch.Watch(ctx, c.SessionRootDir(), ".jsonl", func(e filewatch.Event) {
+		if e.Removed {
+			sink.Remove(e.Path)
+		} else {
+			sink.Upsert(e.Path)
+		}
+	})
 }

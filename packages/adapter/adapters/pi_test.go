@@ -179,7 +179,7 @@ func TestPiDiscover(t *testing.T) {
 }
 
 func TestPiMonitorNoOp(t *testing.T) {
-	// Pi Monitor is a no-op — status is driven by FileMonitor.
+	// Pi Monitor is a no-op — status is driven by the agent hook.
 	pi := NewPi()
 	if pi.Monitor([]byte("⠋ Working...")) != nil {
 		t.Fatal("should return nil (file-driven, not PTY)")
@@ -292,8 +292,6 @@ func TestParseSessionFileStringContent(t *testing.T) {
 	}
 }
 
-// --- FileMonitor ---
-
 // --- Resumer ---
 
 func TestResumeCommand(t *testing.T) {
@@ -350,17 +348,6 @@ func TestSessionRootDirDefaultWithoutEnvVar(t *testing.T) {
 		t.Errorf("expected %s, got %s", want, root)
 	}
 }
-
-func TestListSessionFiles(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.jsonl"), []byte("{}"), 0644)
-	os.WriteFile(filepath.Join(dir, "b.jsonl"), []byte("{}"), 0644)
-	os.WriteFile(filepath.Join(dir, "c.txt"), []byte("nope"), 0644)
-	if len(ListSessionFiles(dir)) != 2 {
-		t.Fatal("expected 2 jsonl files")
-	}
-}
-
 func TestPiExtendCommand(t *testing.T) {
 	p := NewPi()
 	const ext = "/cache/pi-ext.mjs"

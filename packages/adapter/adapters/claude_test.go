@@ -274,8 +274,6 @@ func TestClaudeParseSessionFileNoSessionID(t *testing.T) {
 	}
 }
 
-// --- FileMonitor ---
-
 // --- Resumer ---
 
 func TestClaudeResumeCommand(t *testing.T) {
