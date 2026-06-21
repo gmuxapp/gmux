@@ -27,6 +27,7 @@ const (
 	modeAuth                 // gmux auth
 	modeRemote               // gmux remote
 	modeDumpEnv              // (internal) gmux __dump-env
+	modeCodexHook            // (internal) gmux __codex-hook <Event>
 )
 
 // command is the fully-parsed CLI invocation. One struct for every
@@ -66,6 +67,9 @@ type command struct {
 
 	// daemon
 	daemonSub string // start|stop|restart|status|log-path
+
+	// codex hook (internal __codex-hook)
+	codexHookEvent string // the codex hook event name (SessionStart, ...)
 }
 
 // reservedVerbs is the closed top-level namespace (ADR 0009). Growth
@@ -172,6 +176,11 @@ func parseCLI(args []string) (*command, error) {
 		return parseInternalRun(rest)
 	case "__dump-env":
 		return &command{mode: modeDumpEnv}, nil
+	case "__codex-hook":
+		if len(rest) != 1 {
+			return nil, errors.New("__codex-hook requires exactly one event name")
+		}
+		return &command{mode: modeCodexHook, codexHookEvent: rest[0]}, nil
 	}
 
 	// Error-only migration shim (ADR 0009): recognize removed forms and

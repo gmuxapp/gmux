@@ -1,3 +1,5 @@
+github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
+github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/gmuxapp/gmux/packages/paths v0.0.0-20260407104454-8824700c4612 h1:vCzKJq/1ILsIep08LhaNlTWpNt3wnkmI60u1OA+8Jvg=
 github.com/gmuxapp/gmux/packages/paths v0.0.0-20260407104454-8824700c4612/go.mod h1:USC5rSsXTjloXV9kuxUlhYUT9YHxCFm/HGMcXhotWEA=
 golang.org/x/sys v0.42.0 h1:omrd2nAlyT5ESRdCLYdm3+fMfNFE/+Rf4bDIQImRJeo=

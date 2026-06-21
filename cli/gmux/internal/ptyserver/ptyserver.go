@@ -259,20 +259,35 @@ func New(cfg Config) (*Server, error) {
 	cmd.Dir = cfg.Cwd
 	cmd.Env = buildChildEnv(os.Environ(), cfg.Env, cfg.Version)
 
-	// Inject the gmux session hook for adapters with a native extension API. It
-	// reports session/title/status authoritatively over POST /hook/event (ADR
-	// 0011; tool-neutral protocol in docs/runner-hook-protocol.md). pi is the
-	// first implementer.
-	//
-	// NOTE: extPath is always the embedded pi extension today. A future non-pi
-	// SessionExtender needs its own materialized hook; making extPath
-	// adapter-supplied is deferred (touches the adapter API).
-	if ext, ok := cfg.Adapter.(adapter.SessionExtender); ok {
-		if agentHookDisabled() {
+	// Inject the gmux session hook for adapters with a native extension/hook
+	// API: it reports session/title/status authoritatively over POST
+	// /hook/event (ADR 0011; tool-neutral protocol in
+	// docs/runner-hook-protocol.md). Two seams by how the agent loads hooks:
+	// SessionExtender splices a loader flag (pi: -e <materialized ext>);
+	// SessionHookCommand injects a command hook via the agent's config-override
+	// flags with the gmux binary as the hook program (codex: -c hooks.X=...).
+	// Both are ephemeral, scoped to this launch, and no-op without
+	// GMUX_SESSION_SOCK. GMUX_NO_AGENT_HOOK opts out.
+	if agentHookDisabled() {
+		_, isExt := cfg.Adapter.(adapter.SessionExtender)
+		_, isHC := cfg.Adapter.(adapter.SessionHookCommand)
+		if isExt || isHC {
 			log.Printf("ptyserver: GMUX_NO_AGENT_HOOK set; launching %s without the gmux hook (no hook-driven title/status/attribution)", cfg.Adapter.Name())
-		} else if extPath, err := agentext.Path(); err != nil {
-			log.Printf("ptyserver: agent extension unavailable: %v", err)
+		}
+	} else if ext, ok := cfg.Adapter.(adapter.SessionExtender); ok {
+		// Argv injection (pi): splice the gmux extension into the launch argv.
+		if extPath, err := agentext.Path(); err != nil {
 		} else if extended := ext.ExtendCommand(cmd.Args, extPath); len(extended) > len(cmd.Args) {
+			cmd.Args = extended
+			cmd.Env = append(cmd.Env, "GMUX_SESSION_SOCK="+cfg.SocketPath)
+		}
+	} else if hc, ok := cfg.Adapter.(adapter.SessionHookCommand); ok {
+		// Config injection (codex): inject a command hook on the launch argv via
+		// the agent's config-override flags. The hook program is the gmux binary
+		// itself (`gmux __codex-hook <Event>`), so the runner passes its own path.
+		if self, err := os.Executable(); err != nil {
+			log.Printf("ptyserver: cannot resolve gmux binary for %s hook: %v", cfg.Adapter.Name(), err)
+		} else if extended, ok := hc.HookCommand(cmd.Args, self); ok {
 			cmd.Args = extended
 			cmd.Env = append(cmd.Env, "GMUX_SESSION_SOCK="+cfg.SocketPath)
 		}
@@ -511,6 +526,7 @@ type hookEvent struct {
 	Pid  int    `json:"pid"`
 
 	ID      string `json:"id,omitempty"`
+	Slug    string `json:"slug,omitempty"` // explicit URL-safe slug; preferred over Slugify(ID)
 	Name    string `json:"name,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Title   string `json:"title,omitempty"`
@@ -541,7 +557,12 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 		if ev.Name != "" {
 			s.state.SetAdapterTitle(ev.Name)
 		}
-		if ev.ID != "" {
+		// Slug source, in order of preference: an explicit slug the agent
+		// reports (e.g. codex, whose session id is a UUID that slugifies badly,
+		// sends a title-derived slug), else the identity to slugify.
+		if ev.Slug != "" {
+			s.state.SetSlug(adapter.Slugify(ev.Slug))
+		} else if ev.ID != "" {
 			s.state.SetSlug(adapter.Slugify(ev.ID))
 		}
 	case "turn":

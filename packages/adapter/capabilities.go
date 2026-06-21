@@ -119,6 +119,37 @@ type SessionExtender interface {
 	ExtendCommand(args []string, extPath string) []string
 }
 
+// SessionHookCommand marks adapters whose agent reports session state via a
+// hook injected per-launch on the argv, where the hook *program* is the gmux
+// binary itself (the agent runs `gmux __<agent>-hook <event>`). Contrast
+// SessionExtender, whose hook is a separate materialized extension file loaded
+// with a flag like `pi -e <path>`.
+//
+// codex is the first implementer: codex loads command hooks from its config,
+// and crucially accepts hook definitions via per-invocation `-c` config
+// overrides (a SessionFlags config layer), so gmux can inject
+// `-c hooks.SessionStart=...` etc. on the launch argv without touching the
+// user's global ~/.codex — ephemeral and scoped to the gmux-launched process,
+// just like pi's `-e`. The injected hook runs `gmux __codex-hook <Event>` and
+// POSTs authoritative session/turn events to the runner socket; it no-ops
+// unless the runner-set GMUX_SESSION_SOCK is present. The wire protocol is the
+// same tool-neutral /hook/event contract as pi (docs/runner-hook-protocol.md).
+//
+// A CLI-injected hook is untrusted and codex would otherwise silently skip it,
+// so the injection also carries the exact per-hook `trusted_hash` codex computes
+// (scoping trust to only gmux's own hooks, never a global bypass). The path is
+// gated on a codex version that supports hooks; older codex falls back to the
+// daemon's metadata attribution unchanged.
+type SessionHookCommand interface {
+	// HookCommand returns args with the flags spliced in that (a) define a gmux
+	// hook which relays session events to the runner socket and (b) let it run.
+	// selfBin is the absolute path of the gmux binary the hook invokes. The
+	// binary token may not be args[0] (e.g. `env codex`). Returns ok=false (and
+	// args unchanged) when the agent version doesn't support hooks, so the
+	// runner launches unmodified and the daemon's fallback attribution applies.
+	HookCommand(args []string, selfBin string) (out []string, ok bool)
+}
+
 // PassthroughDetector marks adapters that recognize invocations which are NOT
 // interactive sessions — one-shot subcommands like `pi update` or `pi list`.
 // gmux execs these directly (inheriting the tty, returning their exit code)

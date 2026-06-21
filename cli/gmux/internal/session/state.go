@@ -230,6 +230,13 @@ func (s *State) SessionFileSnapshot() string {
 	return s.SessionFile
 }
 
+// SlugSnapshot returns the current URL-safe slug under lock.
+func (s *State) SlugSnapshot() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Slug
+}
+
 // StatusSnapshot returns a copy of the current status (nil if unset), safe to
 // read from another goroutine while the runner concurrently updates state.
 func (s *State) StatusSnapshot() *adapter.Status {
