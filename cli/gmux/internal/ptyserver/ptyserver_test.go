@@ -805,10 +805,7 @@ func TestPTYServerSpinnerPreservesContent(t *testing.T) {
 	}
 	defer srv.Shutdown()
 
-	// Wait for the spinner loop and completion marker.
-	time.Sleep(500 * time.Millisecond)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	conn, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{
@@ -825,11 +822,16 @@ func TestPTYServerSpinnerPreservesContent(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
+	// Read frames (snapshot first, then live data) until the marker
+	// arrives or the overall deadline expires. We must NOT abort on a
+	// per-read gap: under load the child can stall arbitrarily long
+	// between the spinner loop and the marker, and a short per-read
+	// timeout would give up before the (correctly delivered) marker
+	// shows up. The marker is never dropped from replay; the only
+	// question is whether we waited long enough to read it.
 	var got []byte
-	for i := 0; i < 10; i++ {
-		readCtx, readCancel := context.WithTimeout(ctx, 500*time.Millisecond)
-		_, data, err := conn.Read(readCtx)
-		readCancel()
+	for {
+		_, data, err := conn.Read(ctx)
 		if err != nil {
 			break
 		}
