@@ -259,10 +259,14 @@ func New(cfg Config) (*Server, error) {
 	cmd.Dir = cfg.Cwd
 	cmd.Env = buildChildEnv(os.Environ(), cfg.Env, cfg.Version)
 
-	// For adapters with a native extension API (pi), inject the gmux session
-	// extension. It reports the active session, title, and status
-	// authoritatively over the runner socket (POST /hook/event) on every bind
-	// and agent-loop transition (ADR 0011) — no fs inference, no scrollback.
+	// Inject the gmux session hook for adapters with a native extension API. It
+	// reports session/title/status authoritatively over POST /hook/event (ADR
+	// 0011; tool-neutral protocol in docs/runner-hook-protocol.md). pi is the
+	// first implementer.
+	//
+	// NOTE: extPath is always the embedded pi extension today. A future non-pi
+	// SessionExtender needs its own materialized hook; making extPath
+	// adapter-supplied is deferred (touches the adapter API).
 	if ext, ok := cfg.Adapter.(adapter.SessionExtender); ok {
 		if agentHookDisabled() {
 			log.Printf("ptyserver: GMUX_NO_AGENT_HOOK set; launching %s without the gmux hook (no hook-driven title/status/attribution)", cfg.Adapter.Name())
@@ -487,17 +491,20 @@ const maxInputBytes = 1 << 20 // 1 MiB
 // Access control is delegated to the Unix socket's file permissions
 // (owner-only, 0o700): anyone who can connect() to this socket already
 // owns the session and could do arbitrary worse things to it.
-// hookEvent is the payload the agent extension (pi-ext.mjs) posts to
-// POST /hook/event. The agent reports facts about itself; the runner maps
-// them to sidebar state:
+// hookEvent is the tool-neutral payload an agent's gmux hook posts to
+// POST /hook/event. Any agent can target this endpoint; the runner makes no
+// per-adapter assumptions. The agent reports facts about itself; the runner
+// maps them to sidebar state:
 //
 //	op "session"          — the bound conversation file, id, name (on bind)
 //	op "turn" phase start — the agent loop began (→ working)
 //	op "turn" phase end   — the loop ended with Outcome + title
 //
 // Outcome is a stable, agent-agnostic vocabulary ("completed" | "aborted" |
-// "error"); each agent's extension normalizes its own terminal state into it,
-// and the runner owns what each means for the sidebar (see applyTurnEnd).
+// "error"); each agent's hook normalizes its own terminal state into it, and
+// the runner owns what each means for the sidebar (see applyTurnEnd). The full
+// wire contract is documented in docs/runner-hook-protocol.md. pi's hook
+// (pi-ext.mjs) is the reference implementation.
 type hookEvent struct {
 	Op   string `json:"op"`
 	Path string `json:"path"`
@@ -511,10 +518,13 @@ type hookEvent struct {
 	Outcome string `json:"outcome,omitempty"` // "completed" | "aborted" | "error"
 }
 
-// handleHookEvent applies the authoritative session state the agent's
-// extension reports (pi-ext.mjs): the bound conversation file + title + slug
-// on every bind, and busy/idle/unread/error on every agent-loop transition.
-// There is no inference — the agent tells us exactly what it holds and does.
+// handleHookEvent applies the authoritative session state an agent's gmux hook
+// reports: the bound conversation file + title + slug on every bind, and
+// busy/idle/unread/error on every agent-loop transition. There is no
+// inference and no per-adapter branching — the agent tells us exactly what it
+// holds and does, and the runner relays those facts (ADR 0011). State written
+// here (SetSessionFile et al.) is a relay snapshot for /events replay, not
+// derived or sticky.
 func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 	var ev hookEvent
 	if err := json.NewDecoder(io.LimitReader(r.Body, 512*1024)).Decode(&ev); err != nil {
@@ -523,7 +533,7 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	switch ev.Op {
 	case "session":
-		// Authoritative bind (pi's session_start): the file the
+		// Authoritative bind (e.g. pi's session_start): the file the
 		// agent holds, named and slugged.
 		if ev.Path != "" {
 			s.state.SetSessionFile(ev.Path)
