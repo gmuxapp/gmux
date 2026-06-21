@@ -211,7 +211,11 @@ func ClaudeHookBodies(input []byte) [][]byte {
 	case "UserPromptSubmit":
 		return [][]byte{turn("start", "")}
 	case "Stop":
-		if b, ok := claudeSessionBody(in.TranscriptPath, in.SessionID, "activity", in.SessionTitle); ok {
+		// Stop fires only on a clean finish — Claude routes interrupts/API errors
+		// elsewhere (StopFailure, which we don't wire) — so "completed" is
+		// accurate here (unlike codex, whose Stop can't tell completion from
+		// abort). An Esc-interrupted turn stays working until the next prompt.
+		if b, ok := claudeSessionBody(in.TranscriptPath, in.SessionID, "", in.SessionTitle); ok {
 			return [][]byte{b, turn("end", "completed")} // refresh title/slug, then end the turn
 		}
 		return [][]byte{turn("end", "completed")}

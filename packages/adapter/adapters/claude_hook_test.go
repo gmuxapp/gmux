@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -97,6 +98,30 @@ func TestClaudeHookBodies_NoTranscriptNoBind(t *testing.T) {
 	}
 }
 
+func TestClaudeHookBodies_MalformedNil(t *testing.T) {
+	if got := ClaudeHookBodies([]byte("not json")); got != nil {
+		t.Fatalf("malformed payload → nil, got %v", got)
+	}
+}
+
+func TestClaudeHookBodies_BindsBeforeTranscriptHasContent(t *testing.T) {
+	// SessionStart can fire before the transcript is written. We still bind the
+	// held path + id authoritatively; title/slug are omitted (runner falls back
+	// to the id) and get filled in when Stop re-binds after the first turn.
+	in, _ := json.Marshal(map[string]string{
+		"hook_event_name": "SessionStart",
+		"session_id":      "uuid-2",
+		"transcript_path": filepath.Join(t.TempDir(), "missing.jsonl"),
+	})
+	b := decodeBodies(t, ClaudeHookBodies(in))[0]
+	if b["op"] != "session" || b["id"] != "uuid-2" {
+		t.Fatalf("want authoritative bind, got %v", b)
+	}
+	if _, hasName := b["name"]; hasName {
+		t.Fatalf("no title until transcript has content, got %v", b)
+	}
+}
+
 func TestClaudeHookCommand_Splices(t *testing.T) {
 	out, ok := (&Claude{}).HookCommand([]string{"claude", "--model", "opus"}, "/usr/bin/gmux")
 	if !ok {
@@ -135,7 +160,19 @@ func TestClaudeHookCommand_MergesUserSettings(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok")
 	}
-	// Exactly one --settings flag remains (the merged one).
+	s := mergedSettings(t, out)
+	if s["model"] != "opus" {
+		t.Fatalf("user scalar lost: %v", s)
+	}
+	if n := sessionStartHookCount(s); n != 2 {
+		t.Fatalf("hook arrays should concatenate (gmux + user), got %d: %v", n, s)
+	}
+}
+
+// mergedSettings asserts exactly one --settings flag survives in out and
+// returns its parsed JSON (the single combined layer Claude honors).
+func mergedSettings(t *testing.T, out []string) map[string]any {
+	t.Helper()
 	n := 0
 	var merged string
 	for i, a := range out {
@@ -148,12 +185,82 @@ func TestClaudeHookCommand_MergesUserSettings(t *testing.T) {
 		t.Fatalf("want exactly one --settings, got %d: %v", n, out)
 	}
 	var s map[string]any
-	json.Unmarshal([]byte(merged), &s)
-	if s["model"] != "opus" {
-		t.Fatalf("user scalar lost: %v", s)
+	if err := json.Unmarshal([]byte(merged), &s); err != nil {
+		t.Fatalf("merged --settings not JSON: %v", err)
 	}
-	starts, _ := s["hooks"].(map[string]any)["SessionStart"].([]any)
-	if len(starts) != 2 {
-		t.Fatalf("hook arrays should concatenate (gmux + user), got %d: %v", len(starts), s)
+	return s
+}
+
+func parseJSON(t *testing.T, s string) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	return m
+}
+
+func sessionStartHookCount(s map[string]any) int {
+	hooks, _ := s["hooks"].(map[string]any)
+	starts, _ := hooks["SessionStart"].([]any)
+	return len(starts)
+}
+
+func TestClaudeHookCommand_MergesUserSettingsFile(t *testing.T) {
+	// A user --settings given as a *file path* (not inline JSON) must be read
+	// and merged — the branch the greptile "trimmed path" note lived in.
+	userFile := filepath.Join(t.TempDir(), "user.json")
+	if err := os.WriteFile(userFile, []byte(`{"model":"haiku","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"user"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, ok := (&Claude{}).HookCommand([]string{"claude", "--settings", userFile}, "/usr/bin/gmux")
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	s := mergedSettings(t, out)
+	if s["model"] != "haiku" {
+		t.Fatalf("settings file not read/merged: %v", s)
+	}
+	if n := sessionStartHookCount(s); n != 2 {
+		t.Fatalf("want gmux + user SessionStart hooks, got %d", n)
+	}
+}
+
+func TestClaudeHookCommand_MergesEqualsForm(t *testing.T) {
+	out, ok := (&Claude{}).HookCommand([]string{"claude", `--settings={"model":"opus"}`}, "/usr/bin/gmux")
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if s := mergedSettings(t, out); s["model"] != "opus" {
+		t.Fatalf("--settings=<inline> not merged: %v", s)
+	}
+}
+
+func TestClaudeHookCommand_StopsAtDoubleDash(t *testing.T) {
+	// Tokens after `--` are positional and must be passed through verbatim — a
+	// `--settings` there is a prompt, not a flag to extract.
+	out, ok := (&Claude{}).HookCommand([]string{"claude", "--", "--settings", "hi"}, "/usr/bin/gmux")
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	// Our --settings is injected right after the binary; the post-`--` tokens
+	// (which include a literal "--settings hi") survive verbatim as positionals.
+	if out[1] != "--settings" || sessionStartHookCount(parseJSON(t, out[2])) != 1 {
+		t.Fatalf("gmux --settings not injected after binary: %v", out)
+	}
+	if joined := strings.Join(out, " "); !strings.HasSuffix(joined, "-- --settings hi") {
+		t.Fatalf("positional tokens after -- altered: %v", out)
+	}
+}
+
+func TestClaudeHookCommand_UserCannotWipeHooks(t *testing.T) {
+	// A user `hooks: null` must not erase gmux's hooks (our attribution would
+	// silently break). The deep-merge keeps gmux's container over a null.
+	out, ok := (&Claude{}).HookCommand([]string{"claude", "--settings", `{"hooks":null}`}, "/usr/bin/gmux")
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if n := sessionStartHookCount(mergedSettings(t, out)); n != 1 {
+		t.Fatalf("gmux SessionStart hook must survive hooks:null, got %d", n)
 	}
 }
