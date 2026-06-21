@@ -516,25 +516,19 @@ func serve(stderr io.Writer) int {
 	subs.OnDead = persistDead
 	var resumeMu sync.Mutex
 
-	// Start file monitor — watches adapter session directories with inotify
-	// to extract title and working status from JSONL files.
-	fileMon := discovery.NewFileMonitor(sessions)
+	// Start file monitor — watches adapter session-file roots with inotify and
+	// feeds the conversations index. Live state comes from the agent hooks.
+	fileMon := discovery.NewFileMonitor()
 
 	// When a session exits, derive the resume command so it transitions
 	// to resumable immediately — no "exited" limbo state.
 	subs.OnExit = func(sess *store.Session) bool {
-		if cmd := fileMon.ResolveResumeCommand(sess); cmd != nil {
+		if cmd := discovery.ResolveResumeCommand(sess); cmd != nil {
 			sess.Command = cmd
 			sess.Status = nil // clear exit status for clean resumable display
 			return true
 		}
 		return false
-	}
-	// The agent extension reports the JSONL file its agent holds; this is
-	// authoritative attribution and also suppresses daemon-side parsing for
-	// the session (its runner owns derived state).
-	subs.OnSessionFile = func(sessionID, filePath string) {
-		fileMon.AttributeFromHook(sessionID, filePath)
 	}
 	stopFileMon := make(chan struct{})
 	go fileMon.Run(stopFileMon)
@@ -543,7 +537,7 @@ func serve(stderr io.Writer) int {
 	// Start socket-based discovery (scans paths.SessionSocketDir() for *.sock)
 	// Discovery also subscribes to each runner's /events SSE for live updates.
 	stopDiscovery := make(chan struct{})
-	go discovery.Watch(sessions, subs, fileMon, persistDead, nil, 3*time.Second, stopDiscovery)
+	go discovery.Watch(sessions, subs, persistDead, nil, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
 	// Session file scanner — discovers resumable sessions from adapter
@@ -1196,7 +1190,7 @@ func serve(stderr io.Writer) int {
 		}
 
 		log.Printf("register: %s at %s", req.SessionID, req.SocketPath)
-		if err := discovery.Register(sessions, subs, fileMon, req.SocketPath, persistDead); err != nil {
+		if err := discovery.Register(sessions, subs, req.SocketPath, persistDead); err != nil {
 			log.Printf("register: failed to query meta for %s: %v", req.SessionID, err)
 			writeError(w, http.StatusBadGateway, "runner_unreachable", err.Error())
 			return
@@ -1523,17 +1517,12 @@ func serve(stderr io.Writer) int {
 					log.Printf("kill: %s: runner unreachable, forcing dead: %v", sessionID, err)
 					sess.Alive = false
 					sess.Status = nil
-					if fileMon != nil {
-						if cmd := fileMon.ResolveResumeCommand(&sess); cmd != nil {
-							sess.Command = cmd
-						}
+					if cmd := discovery.ResolveResumeCommand(&sess); cmd != nil {
+						sess.Command = cmd
 					}
 					sessions.Upsert(sess)
 					persistDead(sess)
 					subs.Unsubscribe(sessionID)
-					if fileMon != nil {
-						fileMon.NotifySessionDied(sessionID)
-					}
 					os.Remove(sess.SocketPath)
 				}
 			}
@@ -1639,9 +1628,6 @@ func serve(stderr io.Writer) int {
 			forgetMeta(sessionID)
 			if subs != nil {
 				subs.Unsubscribe(sessionID)
-			}
-			if fileMon != nil {
-				fileMon.NotifySessionDied(sessionID)
 			}
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
 

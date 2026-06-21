@@ -35,11 +35,10 @@ type Subscriptions struct {
 	// Returns true if the session was transitioned to resumable
 	// (caller should not set exit status).
 	OnExit func(sess *store.Session) bool
-	// OnSessionFile fires when a runner reports (via the agent extension)
-	// the JSONL session file its agent holds. This is the authoritative
-	// attribution signal (ADR 0011); gmuxd wires it to
-	// FileMonitor.AttributeFromHook, which also suppresses daemon-side
-	// parsing for the session (its runner owns derived state).
+	// OnSessionFile fires when a runner reports (via the agent hook) the
+	// session file its agent holds. The authoritative path is recorded on the
+	// session itself (see the session_file handler); this hook is an optional
+	// extra notification with no default consumer.
 	OnSessionFile func(sessionID, filePath string)
 	// OnDead fires after the store Upsert that records an exit
 	// event. The session passed is the post-Upsert snapshot,

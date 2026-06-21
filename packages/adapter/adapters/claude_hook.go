@@ -16,8 +16,8 @@ import (
 // highest-precedence-but-merged layer whose hook arrays concatenate across
 // sources, so ours add to — never clobber — the user's hooks. The injected
 // hooks run `gmux __claude-hook`, which relays an authoritative event to the
-// runner socket. The metadata FileAttributor stays as the fallback for launches
-// the hook can't cover (e.g. a shell-wrapped argv where injection is lost).
+// runner socket. Launches the hook can't cover (e.g. a shell-wrapped argv where
+// injection is lost) run without daemon-reported live state (no fallback).
 var _ adapter.SessionHookCommand = (*Claude)(nil)
 
 // HookCommand splices `--settings <inline-json>` in right after the claude

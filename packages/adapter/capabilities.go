@@ -13,9 +13,8 @@ type SessionFileInfo struct {
 	FilePath     string
 }
 
-// Event is a partial session state update emitted by an adapter in response
-// to observed output — either PTY bytes (via Monitor) or session file lines
-// (via ParseNewLines). Zero/nil fields are no-ops; the system only applies
+// Event is a partial session state update emitted by an adapter from observed
+// PTY bytes (via Monitor). Zero/nil fields are no-ops; the system only applies
 // fields that are explicitly set.
 type Event struct {
 	Title  string  // non-empty: update the adapter title
@@ -53,24 +52,6 @@ type SessionFiler interface {
 	ParseSessionFile(path string) (*SessionFileInfo, error)
 }
 
-// FileMonitor is implemented by adapters that want to react to changes
-// in their attributed session file. gmuxd calls ParseNewLines when
-// inotify fires on an attributed file.
-type FileMonitor interface {
-	// ParseNewLines receives newly visible lines from an attributed session
-	// file. On first attribution all historical lines are passed (readAll
-	// mode); on subsequent writes only the lines added since the last read
-	// are passed. filePath is the attributed file; adapters may read it to
-	// inspect preceding context (e.g. counting consecutive errors).
-	//
-	// Cwd events are only applied by the daemon in readAll mode, so adapters
-	// should emit Event{Cwd: ...} from the session header/first record where
-	// the canonical project directory lives.
-	//
-	// Returns events that should update the session's state.
-	ParseNewLines(lines []string, filePath string) []Event
-}
-
 // SessionFileLister is an optional extension of SessionFiler for adapters
 // whose session files aren't organized as direct children of per-cwd
 // subdirectories. When implemented, the scanner uses ListSessionFiles
@@ -79,27 +60,6 @@ type SessionFileLister interface {
 	// ListSessionFiles returns all session file paths under the root.
 	// Called instead of the default per-subdirectory listing.
 	ListSessionFiles() []string
-}
-
-// FileCandidate describes a live session that could own a file.
-// Passed to FileAttributor.AttributeFile for matching.
-type FileCandidate struct {
-	SessionID string
-	Cwd       string
-	StartedAt time.Time
-}
-
-// FileAttributor is the FALLBACK attribution mechanism for agents that do not
-// report their own session file: the adapter guesses which live session owns
-// a file by metadata (cwd + start time). Used by codex (Rust, no extension).
-//
-// Agents that report their session file authoritatively (pi, via its
-// extension) are attributed before reaching this path and need not implement
-// it. Don't make these guesses smarter — add a native signal instead.
-type FileAttributor interface {
-	// AttributeFile returns the session ID of the candidate that owns
-	// the file, or "" if no candidate matches.
-	AttributeFile(filePath string, candidates []FileCandidate) string
 }
 
 // SessionExtender marks adapters whose agent exposes a native extension/hook

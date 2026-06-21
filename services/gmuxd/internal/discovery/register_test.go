@@ -56,7 +56,7 @@ func TestRegisterReRegistrationPreservesPersistedSlug(t *testing.T) {
 		Slug:  "post-attribution-name",
 	})
 
-	if err := Register(sessions, nil, nil, srv.socketPath, nil); err != nil {
+	if err := Register(sessions, nil, srv.socketPath, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -111,7 +111,7 @@ func TestRegisterReRegistrationPreservesAttributionAndHistory(t *testing.T) {
 		Remotes:       map[string]string{"origin": "git@github.com:acme/web.git"},
 	})
 
-	if err := Register(sessions, nil, nil, srv.socketPath, nil); err != nil {
+	if err := Register(sessions, nil, srv.socketPath, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -173,7 +173,7 @@ func TestRegisterFreshSessionRunsOnRegisterForShell(t *testing.T) {
 	defer srv.cleanup()
 
 	sessions := store.New()
-	if err := Register(sessions, nil, nil, srv.socketPath, nil); err != nil {
+	if err := Register(sessions, nil, srv.socketPath, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -185,7 +185,6 @@ func TestRegisterFreshSessionRunsOnRegisterForShell(t *testing.T) {
 		t.Error("Slug = \"\", want non-empty (Shell.OnRegister derives a slug from cwd)")
 	}
 }
-
 
 // TestScanIgnoresMissingPathWhileSubscriptionAlive guards a race
 // introduced by ptyserver.handleKill's early sockfile unlink:
@@ -247,7 +246,7 @@ func TestScanIgnoresMissingPathWhileSubscriptionAlive(t *testing.T) {
 
 	// Run a Scan in this race window. Without the fix, phase 2
 	// classifies the session as dead and clears its attribution.
-	Scan(sessions, subs, nil, nil)
+	Scan(sessions, subs, nil)
 
 	got, _ := sessions.Get("sess-graceful-kill")
 	if !got.Alive {

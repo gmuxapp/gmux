@@ -53,9 +53,9 @@ type OnDeadFunc func(sess store.Session)
 // This is the right point to invoke work that depends on live sessions
 // being registered with the FileMonitor (e.g. applying persisted
 // attributions to freshly-rehydrated runners).
-func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDead OnDeadFunc, onFirstScan func(), interval time.Duration, stop <-chan struct{}) {
+func Watch(sessions *store.Store, subs *Subscriptions, onDead OnDeadFunc, onFirstScan func(), interval time.Duration, stop <-chan struct{}) {
 	// Initial scan immediately
-	Scan(sessions, subs, fileMon, onDead)
+	Scan(sessions, subs, onDead)
 	if onFirstScan != nil {
 		onFirstScan()
 	}
@@ -69,7 +69,7 @@ func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onD
 			subs.UnsubscribeAll()
 			return
 		case <-ticker.C:
-			Scan(sessions, subs, fileMon, onDead)
+			Scan(sessions, subs, onDead)
 		}
 	}
 }
@@ -77,7 +77,7 @@ func Watch(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onD
 // Scan finds all .sock files and queries each runner's /meta endpoint.
 // Reachable sockets → upsert session + subscribe to /events.
 // Unreachable → remove + cleanup + unsubscribe.
-func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDead OnDeadFunc) {
+func Scan(sessions *store.Store, subs *Subscriptions, onDead OnDeadFunc) {
 	dir := socketDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -125,7 +125,7 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDe
 		if t, ok := tracked[sockPath]; ok && t.alive && subs.IsActive(t.id) {
 			continue // already current — runner is alive and we're streaming /events
 		}
-		if err := Register(sessions, subs, fileMon, sockPath, onDead); err != nil {
+		if err := Register(sessions, subs, sockPath, onDead); err != nil {
 			// Only remove sockets old enough to be genuinely stale.
 			// Two ways Register can land here:
 			//
@@ -156,9 +156,7 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDe
 	// the dying listener; see ADR 0003); during that window the path
 	// is gone but the SSE subscription is still streaming the runner's
 	// final exit event. Treating the missing path as a death signal
-	// would race ahead of the exit event and call NotifySessionDied,
-	// dropping the file→session attribution that resume / restart
-	// expects to keep across the seam.
+	// would race ahead of that authoritative exit event.
 	//
 	// Only when the subscription itself has dropped do we fall back to
 	// stat / probe to distinguish a stale path from a live runner whose
@@ -176,10 +174,8 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDe
 		// Socket gone or unresponsive — mark dead.
 		s.Alive = false
 		s.Status = nil
-		if fileMon != nil {
-			if cmd := fileMon.ResolveResumeCommand(&s); cmd != nil {
-				s.Command = cmd
-			}
+		if cmd := ResolveResumeCommand(&s); cmd != nil {
+			s.Command = cmd
 		}
 		sessions.Upsert(s)
 		if onDead != nil {
@@ -187,9 +183,6 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDe
 		}
 		if subs != nil {
 			subs.Unsubscribe(s.ID)
-		}
-		if fileMon != nil {
-			fileMon.NotifySessionDied(s.ID)
 		}
 	}
 }
@@ -234,7 +227,7 @@ func probeSocket(socketPath string) bool {
 // arrives, so the /meta payload reports alive=false. In that case
 // Register is the session's only landing point in the store, and
 // onDead fires after the Upsert so the record is persisted to disk.
-func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, socketPath string, onDead OnDeadFunc) error {
+func Register(sessions *store.Store, subs *Subscriptions, socketPath string, onDead OnDeadFunc) error {
 	newSess, err := queryMeta(socketPath)
 	if err != nil {
 		return err
@@ -292,9 +285,6 @@ func Register(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, 
 	}
 	if subs != nil {
 		subs.Subscribe(newSess.ID, socketPath)
-	}
-	if fileMon != nil {
-		fileMon.NotifyNewSession(newSess.ID)
 	}
 	return nil
 }
