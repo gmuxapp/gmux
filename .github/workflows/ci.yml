@@ -31,6 +31,8 @@ jobs:
           # head and makes `moon run` fail with git exit 128.
           fetch-depth: 0
 
+      # Go isn't moon-managed (the Go projects shell out to `go` directly),
+      # so it still needs its own setup + cache.
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: "1.26"
@@ -38,23 +40,24 @@ jobs:
             **/go.sum
             go.work.sum
 
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+      # proto + moon, with the toolchain (~/.proto) cached. Node + pnpm are
+      # provisioned by moon at the versions pinned in .prototools; the first
+      # `moon run` of a JS task auto-installs deps (InstallDependencies),
+      # so there's no setup-node / pnpm/action-setup / `pnpm install` step.
+      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
         with:
-          node-version: "22"
+          auto-install: true
 
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+      # moon auto-installs JS deps and provisions the toolchain.
+      - name: Lint, build, test
+        run: moon run :lint :build :test
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Build
-        run: pnpm build
-
-      - name: Test
-        run: pnpm test
+      # biome lives outside moon (repo-wide, not a per-project task); run it
+      # after a moon task so deps are present. Matches the root `lint` script.
+      # (Open question if we adopt this: make biome a moon task so the whole
+      # pipeline is one `moon run` and `pnpm lint` == CI still holds.)
+      - name: Biome
+        run: pnpm exec biome lint --error-on-warnings .
 
   e2e:
     name: E2E (Playwright)

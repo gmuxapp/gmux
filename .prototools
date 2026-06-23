@@ -1,0 +1,5 @@
+# Pinned tool versions, resolved by proto (and moon's toolchain).
+# Single source of truth for Node + pnpm across dev and CI.
+node = "22"
+pnpm = "10.32.1"
+moon = "2.0.4"

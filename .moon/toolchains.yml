@@ -1,0 +1,23 @@
+# Toolchain management (moon v2). With this file present, moon provisions
+# Node + pnpm itself (via proto) at the versions pinned in .prototools, and
+# runs an InstallDependencies action before any task when the lockfile or
+# manifest changed — so `pnpm install` is no longer a manual prerequisite,
+# and dev/CI/prod all run identical tooling.
+#
+# moon v2 splits the old monolithic `node` platform into three independent
+# toolchains that must each be enabled: the `javascript` toolchain (told
+# which package manager to use), the `node` runtime, and the `pnpm` package
+# manager. Versions are inherited from .prototools (single source of truth).
+
+# JavaScript ecosystem — selects the package manager.
+javascript:
+  packageManager: 'pnpm'
+  # Don't rewrite pnpm-lock.yaml on every install: the default dedupe
+  # reorders the lockfile and adds churn we don't want in diffs/CI.
+  dedupeOnLockfileChange: false
+
+# Node.js runtime (version from .prototools).
+node: {}
+
+# pnpm package manager (version from .prototools).
+pnpm: {}
