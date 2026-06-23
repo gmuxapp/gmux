@@ -307,7 +307,12 @@ body {
 }
 
 .folder-header:hover .launch-container.folder-launch-btn,
-.launch-container.folder-launch-btn:has(.loading) {
+/* Keep the button (and its open menu, which is a DOM descendant) fully
+   opaque while launching or while the menu is open — otherwise leaving the
+   folder row's hover fades the open menu out from under the cursor. */
+.launch-container.folder-launch-btn:has(.loading),
+.launch-container.folder-launch-btn.open,
+.launch-container.folder-launch-btn:has(.launch-inline-menu) {
   opacity: 1;
 }
 
@@ -397,17 +402,6 @@ body {
   height: 1px;
   background: var(--border);
   margin: 4px 0;
-}
-
-/* Non-default items fade in with stagger */
-.launch-inline-item:not(.launch-inline-default) {
-  opacity: 0;
-  animation: launch-item-in 0.12s ease-out forwards;
-}
-
-@keyframes launch-item-in {
-  from { opacity: 0; transform: translateY(-3px); }
-  to { opacity: 1; transform: translateY(0); }
 }
 
 .folder-name {

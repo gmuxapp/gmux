@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { launchersForPeer, resolveTarget, formatTarget } from './launcher'
+import { launchersForPeer, resolveTarget, formatTarget, computeMenuPos } from './launcher'
 import type { Session, LauncherDef, PeerInfo } from './types'
 
 const localLaunchers: LauncherDef[] = [
@@ -122,6 +122,37 @@ describe('resolveTarget', () => {
     ]
     const target = resolveTarget(sessions, null, '/fallback')
     expect(target).toEqual({ cwd: '/fallback' })
+  })
+})
+
+describe('computeMenuPos', () => {
+  const viewport = { innerWidth: 1000, innerHeight: 800 }
+
+  test('anchors left edge slightly left of the button', () => {
+    const pos = computeMenuPos({ top: 100, left: 200 }, viewport, false)
+    expect(pos.left).toBe(200 - 6)
+  })
+
+  test('clamps right edge inside the viewport for buttons near the right', () => {
+    const pos = computeMenuPos({ top: 100, left: 980 }, viewport, false, 180)
+    // maxLeft = 1000 - 8 - 180 = 812
+    expect(pos.left).toBe(812)
+  })
+
+  test('clamps to left margin when menu is wider than viewport', () => {
+    const narrow = { innerWidth: 120, innerHeight: 800 }
+    const pos = computeMenuPos({ top: 100, left: 10 }, narrow, false, 180)
+    expect(pos.left).toBe(8)
+  })
+
+  test('lifts the menu so the default item lands under the button (no target line)', () => {
+    const pos = computeMenuPos({ top: 100, left: 200 }, viewport, false)
+    expect(pos.top).toBe(100 - 4)
+  })
+
+  test('offsets for the target line + divider so the default stays under the button', () => {
+    const pos = computeMenuPos({ top: 100, left: 200 }, viewport, true)
+    expect(pos.top).toBe(100 - 4 - 32)
   })
 })
 
