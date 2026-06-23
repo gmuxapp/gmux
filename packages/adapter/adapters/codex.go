@@ -120,7 +120,8 @@ type codexSessionMeta struct {
 
 // ParseSessionFile reads a Codex JSONL session file and returns display
 // metadata.
-// Title priority: first user prompt text > "(new)".
+// Title priority: first user prompt text > "" (no conversation-derived title
+// yet; callers fall back to cwd/kind).
 func (c *Codex) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -191,7 +192,7 @@ func (c *Codex) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) 
 	case firstUserText != "":
 		info.Title = truncateTitle(firstUserText, 80)
 	default:
-		info.Title = "(new)"
+		info.Title = "" // no message yet
 	}
 
 	info.Slug = adapter.Slugify(info.Title)

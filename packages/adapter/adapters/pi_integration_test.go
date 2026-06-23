@@ -67,7 +67,7 @@ func TestPiTurnAndTitle(t *testing.T) {
 
 	// Title should come from the first user message.
 	updated := g.WaitForSession(sess.ID, func(s testutil.Session) bool {
-		return s.Title != "" && s.Title != "pi" && s.Title != "(new)"
+		return s.Title != "" && s.Title != "pi"
 	}, 15*time.Second, "title from first user message")
 	t.Logf("title=%q slug=%s", updated.Title, updated.Slug)
 }

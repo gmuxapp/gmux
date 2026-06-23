@@ -116,7 +116,8 @@ type claudeFirstLine struct {
 
 // ParseSessionFile reads a Claude Code JSONL session file and returns
 // display metadata.
-// Title priority: custom-title line > first user message text > "(new)".
+// Title priority: custom-title line > first user message text > "" (no
+// conversation-derived title yet; callers fall back to cwd/kind).
 func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -182,7 +183,7 @@ func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error)
 		created, _ := time.Parse(time.RFC3339Nano, header.Timestamp)
 		return &adapter.SessionFileInfo{
 			ID:           header.SessionID,
-			Title:        "(new)",
+			Title:        "", // header only, no messages yet
 			Created:      created,
 			MessageCount: messageCount,
 			FilePath:     path,
@@ -207,7 +208,7 @@ func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error)
 	case firstUserText != "":
 		info.Title = truncateTitle(firstUserText, 80)
 	default:
-		info.Title = "(new)"
+		info.Title = "" // no custom title and no message yet
 	}
 
 	// Slug from the first user message (immutable), not custom-title

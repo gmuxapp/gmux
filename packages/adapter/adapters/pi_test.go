@@ -264,8 +264,8 @@ func TestParseSessionFileNoMessages(t *testing.T) {
 		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`,
 	)
 	info, _ := NewPi().ParseSessionFile(path)
-	if info.Title != "(new)" {
-		t.Errorf("expected '(new)', got %q", info.Title)
+	if info.Title != "" {
+		t.Errorf("expected empty title for a session with no messages, got %q", info.Title)
 	}
 }
 

@@ -219,8 +219,8 @@ func TestClaudeParseSessionFileQueueOnly(t *testing.T) {
 	if info.ID != "q-123" {
 		t.Errorf("expected id q-123, got %s", info.ID)
 	}
-	if info.Title != "(new)" {
-		t.Errorf("expected '(new)', got %q", info.Title)
+	if info.Title != "" {
+		t.Errorf("expected empty title for a session with no messages, got %q", info.Title)
 	}
 }
 
