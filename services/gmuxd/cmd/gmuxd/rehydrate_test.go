@@ -110,7 +110,7 @@ func TestRehydrateProjects_PreventsDuplicateForToolBackedAdapter(t *testing.T) {
 		ToolID:  "jsonl-uuid-XYZ",
 		Slug:    "fix-auth",
 		Kind:    "pi",
-		Title:   "(new)",
+		Title:   "fix auth",
 		Cwd:     "/work",
 		Created: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 	})

@@ -14,6 +14,16 @@ runner only **relays** these facts; the one bit of state it keeps is a snapshot
 replayed to `/events` (so a restarted daemon re-learns attribution), never used
 to guess.
 
+**The hook is the adapter's agent-side translation surface** (ADR 0015). It
+translates the tool's *native* events into the `{op}` contract below, in
+whatever language the tool dictates — JS in pi's extension (typed access to
+pi's API), Go for codex/claude (in the adapter package). It does **not** forward
+raw tool events for the runner to parse: translating at the typed-access point
+keeps this wire a small, stable contract instead of the tool's churny internal
+event model, and keeps `handleHookEvent` tool-neutral. So tool-specific logic
+(e.g. pi deriving a first-user-message title until pi names the session) lives
+in the hook, mirroring what codex/claude already do.
+
 ## Transport
 
 - Runner exports `GMUX_SESSION_SOCK` (its Unix socket) to the agent env.

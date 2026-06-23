@@ -66,7 +66,7 @@ func TestCodexTurnAndTitle(t *testing.T) {
 	codexSendAndWait(t, g, send, sess.ID)
 
 	updated := g.WaitForSession(sess.ID, func(s testutil.Session) bool {
-		return s.Title != "" && s.Title != "codex" && s.Title != "(new)"
+		return s.Title != "" && s.Title != "codex"
 	}, 15*time.Second, "title from first user message")
 	t.Logf("title: %q", updated.Title)
 

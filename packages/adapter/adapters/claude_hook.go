@@ -255,7 +255,7 @@ func claudeTitleSlug(transcriptPath, sessionTitle string) (title, slug string) {
 		return t, adapter.Slugify(t)
 	}
 	info, err := NewClaude().ParseSessionFile(transcriptPath)
-	if err != nil || info == nil || info.Title == "" || info.Title == "(new)" {
+	if err != nil || info == nil || info.Title == "" {
 		return "", ""
 	}
 	return info.Title, info.Slug

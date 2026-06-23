@@ -181,7 +181,8 @@ func (p *Pi) SessionDir(cwd string) string {
 }
 
 // ParseSessionFile reads a pi JSONL session file and returns display metadata.
-// Title priority: session_info.name > first user message > "(new)".
+// Title priority: session_info.name > first user message > "" (no
+// conversation-derived title yet; callers fall back to cwd/kind).
 func (p *Pi) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -251,7 +252,7 @@ func (p *Pi) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 	case firstUserMsg != "":
 		info.Title = truncateTitle(firstUserMsg, 80)
 	default:
-		info.Title = "(new)"
+		info.Title = "" // no name and no message yet
 	}
 
 	info.Slug = adapter.Slugify(info.Title)
