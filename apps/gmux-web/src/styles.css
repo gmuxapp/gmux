@@ -3076,3 +3076,172 @@ body {
     display: inline-flex;
   }
 }
+
+/* ── Toasts ───────────────────────────────────────────────────────────────
+ * Transient notifications for backend/action failures. Fixed overlay,
+ * bottom-right on desktop; above modals (settings is z 1000). Never traps
+ * focus — purely informational, dismissible. */
+.toast-host {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 4px 16px oklch(0% 0 0 / 0.4);
+  animation: toast-in 140ms ease-out;
+}
+
+.toast-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.toast-error {
+  border-left-color: var(--status-error);
+}
+
+.toast-info {
+  border-left-color: var(--accent);
+}
+
+.toast-message {
+  flex: 1;
+  word-break: break-word;
+}
+
+.toast-count {
+  flex: none;
+  align-self: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-hover);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.toast-dismiss {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.toast-dismiss:hover {
+  color: var(--text);
+}
+
+/* Countdown bar: shrinks across the toast's TTL (duration set inline).
+ * Its animationend drives dismissal, so this bar and the actual removal
+ * are one clock. Pausing on hover freezes both. */
+.toast-countdown {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  transform-origin: left center;
+  background: var(--border-strong);
+  animation-name: toast-countdown;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.toast-error .toast-countdown { background: var(--status-error); }
+.toast-info .toast-countdown { background: var(--accent); }
+
+.toast:hover .toast-countdown,
+.toast:focus-within .toast-countdown {
+  animation-play-state: paused;
+}
+
+@keyframes toast-countdown {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Honor reduced-motion: no shrink animation means no animationend to
+ * dismiss on, so fall back to opacity and let the toast persist until
+ * manually dismissed. */
+@media (prefers-reduced-motion: reduce) {
+  .toast-countdown { animation: none; opacity: 0.4; }
+}
+
+/* On phones, span the bottom edge above the mobile bar. */
+@media (max-width: 640px) {
+  .toast-host {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    max-width: none;
+  }
+}
+
+/* ── Crash fallback (error boundary) ──────────────────────────────────────── */
+.crash-fallback {
+  max-width: 560px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.crash-report-links {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.crash-report-links a {
+  color: var(--accent);
+}
+
+.crash-report {
+  margin-top: 14px;
+  text-align: left;
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.crash-actions {
+  margin-top: 14px;
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
