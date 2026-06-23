@@ -91,7 +91,7 @@ func TestRoundTripFullSession(t *testing.T) {
 		ExitedAt:      "2026-04-26T10:05:00Z",
 		Title:         "my title",
 		Subtitle:      "my subtitle",
-		Status:        &store.Status{Label: "working", Working: true, Error: false},
+		Status:        &store.Status{Working: true, Error: false},
 		Unread:        true,
 		Resumable:     true,
 		SocketPath:    "/tmp/gmux-sessions/sess-full.sock",

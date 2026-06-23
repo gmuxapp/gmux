@@ -129,16 +129,17 @@ The terminal renders when `selected.alive && selected.socket_path` is true. This
 - Alive but no socket yet: impossible — `Register()` always sets both `alive` and `socket_path` atomically
 - Alive with socket: terminal connects via WebSocket proxy
 
-## Status labels
+## Status
 
-Status is **null by default**. A label should only be set when it carries information the user can't already see from the session's visual state.
+Status carries only granular booleans (`working`, `error`) and is **null by default**. It describes *live* state; display text is the frontend's concern, derived from these plus `exit_code`.
 
 | State | What the UI shows | Status field |
 |---|---|---|
 | Alive, idle | Steady dot | `null` |
-| Alive, working | Pulsing dot | `{ working: true }` (no label) |
-| Dead, clean exit | Dimmed row | `null` |
-| Dead, non-zero exit | Dimmed row + label | `{ label: "exited (1)" }` |
+| Alive, working | Pulsing dot + header "Working…" | `{ working: true }` |
+| Alive, error | Red dot + header "Error" | `{ working: false, error: true }` |
+| Dead, clean exit | Dimmed row, "Session ended" | `null` |
+| Dead, non-zero exit | Dimmed row, "exited (N)" from `exit_code` | `null` |
 | Resumable | Normal row, clickable | `null` |
 
-Don't set labels like "completed", "idle", or "working" — they repeat what the dot and alive/dead state already communicate. Labels are for genuinely informative states like `"exited (1)"` or `"tests: 3 failed"`.
+Exit text (`exited (N)` / `Session ended`) is derived in the frontend from `exit_code`, not carried in Status. On exit the daemon sets Status to `null`.

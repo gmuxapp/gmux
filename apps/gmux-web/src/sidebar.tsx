@@ -173,12 +173,9 @@ function SessionItem({
         <div class="session-title-row">
           <span class="session-title">{session.title}</span>
         </div>
-        {(session.status?.label || duplicateOpen) && (
+        {duplicateOpen && (
           <div class="session-meta">
-            {session.status?.label && <span class="session-status-label">{session.status.label}</span>}
-            {duplicateOpen && (
-              <span class="session-dup-warning" title="This conversation is open in more than one tab">⚠ open elsewhere</span>
-            )}
+            <span class="session-dup-warning" title="This conversation is open in more than one tab">⚠ open elsewhere</span>
           </div>
         )}
       </div>

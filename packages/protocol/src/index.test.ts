@@ -14,7 +14,7 @@ describe('protocol schemas', () => {
       alive: true,
       pid: 12345,
       title: 'test session',
-      status: { label: 'thinking', working: true },
+      status: { working: true },
       terminal_cols: 120,
       terminal_rows: 40,
     })
@@ -22,7 +22,6 @@ describe('protocol schemas', () => {
     expect(result.id).toBe('sess-1')
     expect(result.alive).toBe(true)
     expect(result.status?.working).toBe(true)
-    expect(result.status?.label).toBe('thinking')
     expect(result.terminal_cols).toBe(120)
     expect(result.terminal_rows).toBe(40)
   })
@@ -47,7 +46,7 @@ describe('protocol schemas', () => {
         id: 'sess-1',
         kind: 'pi',
         alive: true,
-        status: { label: 'running', working: true },
+        status: { working: true },
       },
     })
 
@@ -67,7 +66,7 @@ describe('protocol schemas', () => {
 
   it('builds typed success envelopes', () => {
     const Schema = successEnvelope(SessionStatusSchema)
-    const parsed = Schema.parse({ ok: true, data: { label: 'test', working: false } })
-    expect(parsed.data.label).toBe('test')
+    const parsed = Schema.parse({ ok: true, data: { working: false } })
+    expect(parsed.data.working).toBe(false)
   })
 })

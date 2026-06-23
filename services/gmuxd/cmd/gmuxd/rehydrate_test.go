@@ -34,7 +34,7 @@ func TestRehydrateProjects_PreservesSessionmetaState(t *testing.T) {
 		Alive:      false,
 		ExitCode:   &exitCode,
 		ExitedAt:   exitedAt,
-		Status:     &store.Status{Label: "exited (42)", Error: true},
+		Status:     &store.Status{Error: true},
 		ShellTitle: "bash -c echo hi; exit 42",
 		CreatedAt:  "2024-01-01T11:00:00Z",
 	}
@@ -74,7 +74,7 @@ func TestRehydrateProjects_PreservesSessionmetaState(t *testing.T) {
 	if got.ExitedAt != exitedAt {
 		t.Errorf("ExitedAt lost: got %q, want %q", got.ExitedAt, exitedAt)
 	}
-	if got.Status == nil || got.Status.Label != "exited (42)" {
+	if got.Status == nil || !got.Status.Error {
 		t.Errorf("Status lost: got %+v", got.Status)
 	}
 	if got.Title != "bash -c echo hi; exit 42" {

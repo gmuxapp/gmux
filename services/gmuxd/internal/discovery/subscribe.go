@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -284,11 +283,10 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			resumed = sub.OnExit(&sess)
 		}
 		if !resumed {
-			if exit.ExitCode == 0 {
-				sess.Status = nil // clean exit, no label needed
-			} else {
-				sess.Status = &store.Status{Label: fmt.Sprintf("exited (%d)", exit.ExitCode)}
-			}
+			// Status carries only live working/error state; on exit it's
+			// meaningless. The frontend derives any "exited (N)" text from
+			// exit_code, so just clear it.
+			sess.Status = nil
 		}
 		if !sub.store.Update(sessionID, func(current *store.Session) {
 			*current = sess

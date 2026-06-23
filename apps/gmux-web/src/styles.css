@@ -682,10 +682,6 @@ body {
   font-weight: 700;
   line-height: 1cap;
 }
-.session-status-label {
-  color: var(--text-secondary);
-}
-
 @keyframes subtle-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }

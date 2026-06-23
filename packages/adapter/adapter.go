@@ -10,10 +10,11 @@ import (
 )
 
 // Status represents an application-reported status for the sidebar.
+// It carries only granular booleans; any display text is the
+// frontend's concern, derived from these plus exit_code.
 type Status struct {
-	Label   string `json:"label"`           // display text ("working", "3/5 passed")
-	Working bool   `json:"working"`         // true while adapter is busy (spinner, building)
-	Error   bool   `json:"error,omitempty"` // true when the adapter hit a retryable error (red dot)
+	Working bool `json:"working"`         // true while adapter is busy (spinner, building)
+	Error   bool `json:"error,omitempty"` // true when the adapter hit a retryable error (red dot)
 }
 
 // Adapter teaches gmux how to work with a specific child process.

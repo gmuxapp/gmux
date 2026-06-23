@@ -1056,7 +1056,7 @@ func fullyPopulatedSession() Session {
 		ExitedAt:       "2026-01-01T00:00:02Z",
 		Title:          "t",
 		Subtitle:       "s",
-		Status:         &Status{Label: "l", Working: true, Error: true},
+		Status:         &Status{Working: true, Error: true},
 		Unread:         true,
 		LastActivityAt: "2026-01-01T00:00:03Z",
 		Resumable:      true,
@@ -1367,7 +1367,7 @@ func TestLastActivityAt_BumpOnTransitions(t *testing.T) {
 }
 
 // TestLastActivityAt_NoBumpOnNoise pins that benign updates do not
-// bump: title changes, slug changes, cwd changes, status label-only
+// bump: title changes, slug changes, cwd changes, no-op status
 // changes. Without this, the recency list would jitter on every
 // adapter title refresh.
 func TestLastActivityAt_NoBumpOnNoise(t *testing.T) {
@@ -1378,7 +1378,7 @@ func TestLastActivityAt_NoBumpOnNoise(t *testing.T) {
 		{"title", func(s *Session) { s.AdapterTitle = "renamed" }},
 		{"slug", func(s *Session) { s.Slug = "new-slug" }},
 		{"cwd", func(s *Session) { s.Cwd = "/tmp/elsewhere" }},
-		{"status-label", func(s *Session) { s.Status = &Status{Label: "running"} }},
+		{"status-noop", func(s *Session) { s.Status = &Status{} }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1497,8 +1497,8 @@ func TestLastActivityAt_UpsertNoBumpPreservesStamp(t *testing.T) {
 // before fn runs sidesteps the alias entirely.
 func TestLastActivityAt_PointerAliasingDoesNotHideTransition(t *testing.T) {
 	s := New()
-	// Seed with a Status pointer present (label only, not working).
-	s.Upsert(Session{ID: "s1", Kind: "pi", Alive: true, Status: &Status{Label: "idle"}})
+	// Seed with a non-working Status pointer present.
+	s.Upsert(Session{ID: "s1", Kind: "pi", Alive: true, Status: &Status{}})
 
 	// Mutator writes Working=true through the existing Status pointer
 	// rather than allocating a new Status. This is the alias-risk

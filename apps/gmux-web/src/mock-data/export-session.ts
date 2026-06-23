@@ -234,7 +234,8 @@ function generateFile(session: Session, terminal: string, cursorX: number, curso
   lines.push(`  title: ${JSON.stringify(session.title)},`)
   lines.push(`  subtitle: ${JSON.stringify(session.subtitle)},`)
   if (session.status) {
-    lines.push(`  status: { label: ${JSON.stringify(session.status.label)}, working: ${session.status.working} },`)
+    const errorPart = session.status.error ? ', error: true' : ''
+    lines.push(`  status: { working: ${session.status.working}${errorPart} },`)
   } else {
     lines.push(`  status: null,`)
   }

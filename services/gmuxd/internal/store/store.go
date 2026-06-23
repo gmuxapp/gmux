@@ -48,8 +48,8 @@ type Session struct {
 	//   - status.error: false → true  (status went into error)
 	//
 	// Not bumped on: new session creation (the first follow-up
-	// transition does it), title/cwd/slug/stamp changes, status
-	// label-only updates, sessionmeta rehydrate at startup.
+	// transition does it), title/cwd/slug/stamp changes, no-op status
+	// updates, sessionmeta rehydrate at startup.
 	//
 	// Peer sessions arrive over the wire with this already set by
 	// the owning daemon; UpsertRemote preserves it as-received.
@@ -160,11 +160,11 @@ func (s Session) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// Status is the application-reported status.
+// Status is the application-reported status. Carries only granular
+// booleans; display text is derived in the frontend.
 type Status struct {
-	Label   string `json:"label"`
-	Working bool   `json:"working"`
-	Error   bool   `json:"error,omitempty"`
+	Working bool `json:"working"`
+	Error   bool `json:"error,omitempty"`
 }
 
 type Event struct {

@@ -30,7 +30,7 @@ export default {
   exited_at: null,
   title: "refactor adapters",
   subtitle: "",
-  status: { label: "", working: true },
+  status: { working: true },
   unread: false,
   socket_path: '/tmp/gmux-sessions/sess-4ab4995b.sock',
   peer: 'laptop',

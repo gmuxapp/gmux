@@ -3,7 +3,6 @@
 // Pure interfaces for the frontend data model. No logic, no imports.
 
 export interface SessionStatus {
-  label: string
   working: boolean
   error?: boolean
 }

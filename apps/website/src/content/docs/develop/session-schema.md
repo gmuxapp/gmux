@@ -243,4 +243,4 @@ Note the differences: `shell_title`, `adapter_title`, and `binary_hash` are abse
 - **Cost/tokens** — same
 - **Git branch / PR status** — could be a future Status extension, not core
 - **Conversation history** — belongs to the application, not the multiplexer
-- **Progress bar** — deferred; `Status.label` like `"3/10 tests"` is sufficient
+- **Progress bar** — deferred; Status carries only `working`/`error` booleans today

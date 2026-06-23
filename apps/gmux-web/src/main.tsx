@@ -91,13 +91,13 @@ function MainHeader({ session, onRestart }: {
         </div>
       </div>
       <div class="main-header-right">
-        {session.status?.label && (
-          <div class={`main-header-status ${session.status.error ? 'error' : session.status.working ? 'working' : ''}`}>
+        {(session.status?.working || session.status?.error) && (
+          <div class={`main-header-status ${session.status.error ? 'error' : 'working'}`}>
             <span
-              class={`session-dot ${session.status.error ? 'error' : session.status.working ? 'working' : 'idle'}`}
+              class={`session-dot ${session.status.error ? 'error' : 'working'}`}
               style={{ width: 5, height: 5 }}
             />
-            {session.status.label}
+            {session.status.error ? 'Error' : 'Working…'}
           </div>
         )}
         <SessionMenu session={session} onRestart={onRestart} />
