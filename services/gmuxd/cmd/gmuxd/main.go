@@ -455,7 +455,7 @@ func serve(stderr io.Writer) int {
 	// hook below persists every Alive=false landing; Dismiss /
 	// Resume merge / slug takeover drop the corresponding directory.
 	// See sessionmeta package doc for the full lifecycle.
-	metaStore := sessionmeta.New(sessionmeta.DefaultDir())
+	metaStore := sessionmeta.New(sessionmeta.DefaultDir(), sessionmeta.WithRetention(sessionmeta.DefaultRetention()))
 	// persistedKeys records the id and slug of every session sessionmeta
 	// holds on disk at startup (the post-retention sweep survivors). The
 	// startup CleanupSessions unions this with the live store so a project
@@ -486,6 +486,48 @@ func serve(stderr io.Writer) int {
 	forgetMeta := func(id string) {
 		if err := metaStore.Remove(id); err != nil {
 			log.Printf("sessionmeta: remove %s: %v", id, err)
+		}
+	}
+	// aliveSessionIDs snapshots which locally-owned sessions have a live
+	// runner. Scrollback pruning consults it so a runner's open
+	// scrollback file is never deleted out from under it (the runner
+	// writes scrollback live into the same session dir).
+	aliveSessionIDs := func() map[string]bool {
+		alive := map[string]bool{}
+		for _, s := range sessions.List() {
+			if s.Alive {
+				alive[s.ID] = true
+			}
+		}
+		return alive
+	}
+	// scrollbackCacheInterval throttles the dismiss-triggered scrollback
+	// prune: a long-running daemon reclaims cache at a natural moment
+	// (a dismiss) at most this often, with no background timer. Startup
+	// runs an unthrottled prune via discovery's first-scan hook below.
+	const scrollbackCacheInterval = 12 * time.Hour
+
+	// Retire the dead session(s) backed by a conversation file when that
+	// file disappears: the conversations index reports the removal, and
+	// meta.json mirrors conversation existence (ADR 0016). The store
+	// applies the alive/peer/N:1 guards; its session-remove broadcast is
+	// what WatchRemovals turns into a meta-dir delete.
+	convRetireMeta := func(path string) { sessions.RemoveDeadBySessionFile(path) }
+
+	// retireDeleted closes the gap the runtime index signal can't cover:
+	// a conversation file deleted while gmuxd was *down* emits no removal
+	// event. Run from discovery's first-scan hook (live runners flagged),
+	// it asks each owning adapter whether its dead sessions' files are
+	// gone. See reconcileDeletedConversations for the safety gate.
+	convProbe := func(kind, path string) (gone, known bool) {
+		if p, ok := adapters.FindByKind(kind).(adapter.ConversationProber); ok {
+			return p.ConversationGone(path)
+		}
+		return false, false
+	}
+	retireDeleted := func(path string) {
+		if ids := sessions.RemoveDeadBySessionFile(path); len(ids) > 0 {
+			log.Printf("sessionmeta: retired %d dead session(s) for deleted conversation %s", len(ids), path)
 		}
 	}
 
@@ -529,7 +571,13 @@ func serve(stderr io.Writer) int {
 	// Start socket-based discovery (scans paths.SessionSocketDir() for *.sock)
 	// Discovery also subscribes to each runner's /events SSE for live updates.
 	stopDiscovery := make(chan struct{})
-	go discovery.Watch(sessions, subs, persistDead, nil, 3*time.Second, stopDiscovery)
+	// onFirstScan fires after the initial socket scan has registered live
+	// runners as Alive, so the startup scrollback prune can safely skip
+	// their open files. Runs unthrottled and refreshes the prune stamp.
+	go discovery.Watch(sessions, subs, persistDead, func() {
+		reconcileDeletedConversations(sessions.List(), convProbe, retireDeleted)
+		metaStore.PruneScrollback(aliveSessionIDs())
+	}, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
 	// Session file scanner — discovers resumable sessions from adapter
@@ -546,6 +594,7 @@ func serve(stderr io.Writer) int {
 	// adapter's ConversationSource supplies a snapshot at startup and
 	// incremental updates thereafter; the daemon owns no file monitor.
 	convIndex := conversations.New()
+	convIndex.SetOnRemoveByPath(convRetireMeta)
 	convIndex.Snapshot()
 	log.Printf("conversations: indexed %d files", convIndex.Count())
 
@@ -1618,6 +1667,10 @@ func serve(stderr io.Writer) int {
 			if subs != nil {
 				subs.Unsubscribe(sessionID)
 			}
+			// Reclaim scrollback cache at this natural moment, throttled
+			// so frequent dismisses don't re-walk the dir each time.
+			// Async: dismiss shouldn't block on disk eviction.
+			go metaStore.MaybePruneScrollback(aliveSessionIDs(), scrollbackCacheInterval)
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
 
 		case "wait":

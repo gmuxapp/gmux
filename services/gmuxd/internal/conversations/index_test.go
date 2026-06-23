@@ -248,3 +248,27 @@ func TestAll(t *testing.T) {
 		t.Fatalf("expected 2, got %d", len(all))
 	}
 }
+
+// TestRemoveByPathFiresCallback pins that the onRemoveByPath hook fires
+// with the path exactly when an entry is removed, and not on a miss.
+func TestRemoveByPathFiresCallback(t *testing.T) {
+	idx := New()
+	idx.Upsert(Info{ToolID: "a", Slug: "one", Kind: "pi", FilePath: "/x/a.jsonl"})
+
+	var got []string
+	idx.SetOnRemoveByPath(func(p string) { got = append(got, p) })
+
+	if idx.RemoveByPath("/x/missing.jsonl") {
+		t.Fatal("expected false for unindexed path")
+	}
+	if len(got) != 0 {
+		t.Errorf("callback must not fire on a miss, got %v", got)
+	}
+
+	if !idx.RemoveByPath("/x/a.jsonl") {
+		t.Fatal("expected true for indexed path")
+	}
+	if len(got) != 1 || got[0] != "/x/a.jsonl" {
+		t.Errorf("callback should fire once with the path, got %v", got)
+	}
+}
