@@ -63,7 +63,7 @@ func TestClaudeTurnAndTitle(t *testing.T) {
 	claudeSendAndWait(t, g, send, sess.ID)
 
 	updated := g.WaitForSession(sess.ID, func(s testutil.Session) bool {
-		return s.Title != "" && s.Title != "claude" && s.Title != "(new)"
+		return s.Title != "" && s.Title != "claude"
 	}, 15*time.Second, "title from first user message")
 	t.Logf("title: %q", updated.Title)
 

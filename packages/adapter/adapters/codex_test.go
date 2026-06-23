@@ -162,8 +162,8 @@ func TestCodexParseSessionFileNoMessages(t *testing.T) {
 		`{"timestamp":"2026-03-17T01:00:00Z","type":"session_meta","payload":{"id":"abc","timestamp":"2026-03-17T01:00:00Z","cwd":"/tmp"}}`,
 	)
 	info, _ := NewCodex().ParseSessionFile(path)
-	if info.Title != "(new)" {
-		t.Errorf("expected '(new)', got %q", info.Title)
+	if info.Title != "" {
+		t.Errorf("expected empty title for a session with no messages, got %q", info.Title)
 	}
 }
 
