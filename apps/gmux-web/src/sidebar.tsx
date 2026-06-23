@@ -276,9 +276,12 @@ function FolderGroup({
         </a>
         {!folder.unresolved && (
           <LaunchButton
-            sessions={folder.sessions}
-            selectedId={selId}
-            fallbackCwd={folder.launchCwd ?? ''}
+            // Project-row "+" always launches in the project's canonical
+            // dir (the first match-rule path, carried by launchCwd), not
+            // the MRU session cwd. Explicit cwd bypasses resolveTarget's
+            // selected/most-recent-session resolution; peer stays
+            // authoritative for references (refs: project-launch-cwd).
+            cwd={folder.launchCwd ?? ''}
             peer={folder.peer}
             className="folder-launch-btn"
           />

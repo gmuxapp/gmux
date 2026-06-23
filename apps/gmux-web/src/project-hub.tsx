@@ -23,7 +23,7 @@ import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
 import {
   sessions, projects, peers, localPeerNames, partitionForProject,
-  localHostLabel,
+  localHostLabel, folders,
 } from './store'
 import { HostSuffix } from './host-suffix'
 import { SessionRow } from './session-row'
@@ -60,6 +60,15 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
   )
   const allSessions = hosts.flatMap(h => h.folders.flatMap(f => f.sessions))
   const remote = projectRemote(project)
+
+  // Canonical launch dir for the project-level "+", resolved identically
+  // to the sidebar project-row button: the matching folder's launchCwd
+  // (first match-rule path for owned projects, peer_projects.launch_cwd
+  // for references). Falls back to the project's first path rule.
+  const launchFolder = folders.value.find(
+    f => f.slug === projectSlug && (f.peer ?? '') === (projectPeer ?? ''),
+  )
+  const canonicalCwd = launchFolder?.launchCwd ?? projectFirstPath(project) ?? ''
 
   // Adaptive cwd disambiguator: a project whose sessions all live in
   // one cwd shows that cwd as a subtitle (clean, no repetition); a
@@ -104,8 +113,10 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
             <HostSuffix peer={projectPeer ?? localHostLabel.value} local={!projectPeer} />
           </h2>
           <LaunchButton
-            sessions={allSessions}
-            fallbackCwd={sharedCwd ?? projectFirstPath(project) ?? ''}
+            // Project-level "+": launch in the canonical dir, consistent
+            // with the sidebar project-row button. Explicit cwd bypasses
+            // resolveTarget's MRU resolution (refs: project-launch-cwd).
+            cwd={canonicalCwd}
             peer={projectPeer}
             className="hub-header-launch"
           />
