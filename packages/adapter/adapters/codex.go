@@ -23,6 +23,7 @@ import (
 // Compile-time interface checks.
 var (
 	_ adapter.ConversationSource = (*Codex)(nil)
+	_ adapter.ConversationProber = (*Codex)(nil)
 	_ adapter.Launchable         = (*Codex)(nil)
 	_ adapter.SessionFiler       = (*Codex)(nil)
 	_ adapter.SessionHookCommand = (*Codex)(nil)
@@ -97,6 +98,14 @@ func (c *Codex) SessionRootDir() string {
 		return ""
 	}
 	return filepath.Join(home, ".codex", "sessions")
+}
+
+// ConversationGone anchors deletion detection on SessionRootDir
+// (~/.codex/sessions). The date-nested YYYY/MM/DD subtree may be
+// cleaned up around a deleted transcript, so the stable root — not the
+// file's immediate parent — is the right availability anchor.
+func (c *Codex) ConversationGone(path string) (gone bool, ok bool) {
+	return adapter.ConversationGoneAtRoot(path, c.SessionRootDir())
 }
 
 // SessionDir returns today's date-nested directory where Codex writes new

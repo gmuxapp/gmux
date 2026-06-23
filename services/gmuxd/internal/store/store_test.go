@@ -65,6 +65,71 @@ func TestRemove(t *testing.T) {
 	}
 }
 
+func TestRemoveDeadBySessionFile(t *testing.T) {
+	const file = "/home/u/.claude/projects/abc/conv.jsonl"
+	s := New()
+	// Two dead sessions share the file (N:1, e.g. resumed in two tabs).
+	s.Upsert(Session{ID: "dead-1", Kind: "claude", Alive: false, SessionFile: file})
+	s.Upsert(Session{ID: "dead-2", Kind: "claude", Alive: false, SessionFile: file})
+	// A live session on the same file must survive (runner still writing).
+	s.Upsert(Session{ID: "live", Kind: "claude", Alive: true, SessionFile: file})
+	// A peer-owned dead session on the same file is not ours to retire.
+	s.Upsert(Session{ID: "peer", Kind: "claude", Alive: false, Peer: "box2", SessionFile: file})
+	// An unrelated dead session must be untouched.
+	s.Upsert(Session{ID: "other", Kind: "claude", Alive: false, SessionFile: "/home/u/.claude/projects/xyz/other.jsonl"})
+
+	// Cosmetic path difference must still match (filepath.Clean).
+	removed := s.RemoveDeadBySessionFile("/home/u/.claude/projects/abc/./conv.jsonl")
+
+	got := map[string]bool{}
+	for _, id := range removed {
+		got[id] = true
+	}
+	if len(removed) != 2 || !got["dead-1"] || !got["dead-2"] {
+		t.Fatalf("expected dead-1+dead-2 removed, got %v", removed)
+	}
+	for _, id := range []string{"live", "peer", "other"} {
+		if _, ok := s.Get(id); !ok {
+			t.Errorf("%s should have survived", id)
+		}
+	}
+	for _, id := range []string{"dead-1", "dead-2"} {
+		if _, ok := s.Get(id); ok {
+			t.Errorf("%s should have been removed", id)
+		}
+	}
+}
+
+func TestRemoveDeadBySessionFileNoMatch(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "a", Kind: "claude", Alive: false, SessionFile: "/x/a.jsonl"})
+	if got := s.RemoveDeadBySessionFile("/x/missing.jsonl"); got != nil {
+		t.Errorf("no-match should return nil, got %v", got)
+	}
+	if got := s.RemoveDeadBySessionFile(""); got != nil {
+		t.Errorf("empty path should return nil, got %v", got)
+	}
+	if _, ok := s.Get("a"); !ok {
+		t.Error("unrelated session must survive")
+	}
+}
+
+// TestRemoveDeadBySessionFileBroadcasts pins that retirement emits one
+// session-remove per removed session (so WatchRemovals drops the dir).
+func TestRemoveDeadBySessionFileBroadcasts(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "dead", Kind: "claude", Alive: false, SessionFile: "/x/c.jsonl"})
+	ch, cancel := s.Subscribe()
+	defer cancel()
+
+	s.RemoveDeadBySessionFile("/x/c.jsonl")
+
+	ev, ok := recvEvent(t, ch)
+	if !ok || ev.Type != "session-remove" || ev.ID != "dead" {
+		t.Fatalf("expected session-remove for dead, got %+v ok=%v", ev, ok)
+	}
+}
+
 func TestSubscribe(t *testing.T) {
 	s := New()
 	ch, cancel := s.Subscribe()

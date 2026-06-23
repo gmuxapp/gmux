@@ -17,6 +17,7 @@ import (
 // Compile-time interface checks.
 var (
 	_ adapter.ConversationSource  = (*Pi)(nil)
+	_ adapter.ConversationProber  = (*Pi)(nil)
 	_ adapter.Launchable          = (*Pi)(nil)
 	_ adapter.SessionFiler        = (*Pi)(nil)
 	_ adapter.Resumer             = (*Pi)(nil)
@@ -164,6 +165,14 @@ func (p *Pi) SessionRootDir() string {
 		return ""
 	}
 	return filepath.Join(home, ".pi", "agent", "sessions")
+}
+
+// ConversationGone anchors deletion detection on SessionRootDir
+// (PI_CODING_AGENT_DIR/sessions or ~/.pi/agent/sessions): present root
+// means a missing session file was deleted; absent root means the
+// storage is unavailable.
+func (p *Pi) ConversationGone(path string) (gone bool, ok bool) {
+	return adapter.ConversationGoneAtRoot(path, p.SessionRootDir())
 }
 
 // SessionDir returns pi's session directory for a given cwd.

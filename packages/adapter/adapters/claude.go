@@ -18,6 +18,7 @@ import (
 // Compile-time interface checks.
 var (
 	_ adapter.ConversationSource = (*Claude)(nil)
+	_ adapter.ConversationProber = (*Claude)(nil)
 	_ adapter.Launchable         = (*Claude)(nil)
 	_ adapter.SessionFiler       = (*Claude)(nil)
 	_ adapter.Resumer            = (*Claude)(nil)
@@ -80,6 +81,13 @@ func (c *Claude) SessionRootDir() string {
 		return ""
 	}
 	return filepath.Join(home, ".claude", "projects")
+}
+
+// ConversationGone anchors deletion detection on SessionRootDir
+// (~/.claude/projects): if that tree is present, a missing transcript
+// was deleted; if it's absent, the storage is unavailable.
+func (c *Claude) ConversationGone(path string) (gone bool, ok bool) {
+	return adapter.ConversationGoneAtRoot(path, c.SessionRootDir())
 }
 
 // encodeClaudeCwd encodes a working directory into Claude Code's directory

@@ -80,6 +80,29 @@ type ConversationSource interface {
 	WatchConversations(ctx context.Context, sink ConversationSink) error
 }
 
+// ConversationProber is implemented by SessionFiler adapters that can
+// tell a *deleted* conversation file apart from one whose storage is
+// merely *unavailable* (unmounted home, a tool dir that doesn't exist
+// yet). The startup retention reconcile (services/gmuxd) uses it to
+// retire dead sessions whose backing conversation is genuinely gone
+// without nuking entries when the tool's on-disk layout simply isn't
+// reachable.
+//
+// The distinction is adapter-owned because only the adapter knows which
+// directory anchors "storage is present" for its layout — e.g. the
+// per-cwd project dir under ~/.claude/projects vs codex's date-nested
+// ~/.codex/sessions/YYYY/MM/DD. The shared ConversationGoneAtRoot helper
+// implements the common root-anchored rule; adapters with quirkier
+// layouts may answer differently.
+type ConversationProber interface {
+	// ConversationGone reports whether the conversation file at path was
+	// deleted. ok=false means the answer is undeterminable (storage
+	// unavailable), in which case the caller MUST NOT treat the
+	// conversation as gone. When the file is present, returns
+	// (false, true).
+	ConversationGone(path string) (gone bool, ok bool)
+}
+
 // SessionExtender marks adapters whose agent exposes a native extension/hook
 // API that can report the active session authoritatively — the strongest
 // signal, catching even a cache-served /resume-select that leaves no fs

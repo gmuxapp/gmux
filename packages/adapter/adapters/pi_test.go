@@ -385,3 +385,36 @@ func TestPiExtendCommand(t *testing.T) {
 		})
 	}
 }
+
+// TestPiConversationGone verifies the adapter anchors deletion detection
+// on its own SessionRootDir: a missing file under a live root reads as
+// deleted, while a missing root (unreachable storage) is undeterminable.
+func TestPiConversationGone(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", dir)
+	p := NewPi()
+	root := p.SessionRootDir() // <dir>/sessions
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// File deleted, storage present → gone.
+	if gone, ok := p.ConversationGone(filepath.Join(root, "x", "conv.jsonl")); !gone || !ok {
+		t.Errorf("deleted-under-live-root: got (gone=%v ok=%v), want (true true)", gone, ok)
+	}
+
+	// File present → not gone.
+	live := filepath.Join(root, "live.jsonl")
+	if err := os.WriteFile(live, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if gone, ok := p.ConversationGone(live); gone || !ok {
+		t.Errorf("present: got (gone=%v ok=%v), want (false true)", gone, ok)
+	}
+
+	// Storage root absent → undeterminable, never a false deletion.
+	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(dir, "unmounted"))
+	if gone, ok := p.ConversationGone(filepath.Join(dir, "unmounted", "sessions", "c.jsonl")); gone || ok {
+		t.Errorf("absent-root: got (gone=%v ok=%v), want (false false)", gone, ok)
+	}
+}

@@ -79,6 +79,14 @@ func SessionsDir() string {
 // SessionsDir. The directory holds meta.json (written by gmuxd's
 // sessionmeta package) and scrollback / scrollback.0 (written by
 // the runner's scrollback package).
+//
+// gmuxd bounds the growth of these artifacts (see ADR 0016 and
+// services/gmuxd/internal/sessionmeta): scrollback is treated as a
+// cache capped at an aggregate byte budget (GMUX_SCROLLBACK_CACHE_MB,
+// default 256), evicted oldest-first while meta.json survives; a dead
+// session's whole entry is retired when its conversation file
+// disappears, and conversation-less corpses fall back to an age/count
+// cap (GMUX_SESSION_RETENTION_DAYS / GMUX_SESSION_RETENTION_MAX).
 func SessionDir(id string) string {
 	return filepath.Join(SessionsDir(), id)
 }

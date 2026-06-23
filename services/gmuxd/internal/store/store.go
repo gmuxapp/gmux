@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"time"
@@ -492,6 +493,51 @@ func (s *Store) Reconcile(assignFn func(Session) (slug string, index int)) {
 		sess.ProjectIndex = index
 		s.sessions[id] = sess
 	}
+}
+
+// RemoveDeadBySessionFile retires every locally-owned, dead session
+// whose SessionFile points at path, broadcasting session-remove for
+// each and returning the removed IDs. Used when the conversations
+// index reports a conversation file has disappeared: meta.json mirrors
+// conversation existence (ADR 0016), so the backing file going away
+// retires the sidebar entry.
+//
+// Guards, all load-bearing:
+//   - !Alive: a live runner may still be writing this conversation; its
+//     record is authoritative and must not be torn down here.
+//   - Peer == "": peer-owned records are re-received from the spoke; the
+//     hub doesn't own their lifecycle.
+//   - all matches: the file→session mapping is N:1 (a conversation can be
+//     resumed in several runners), so every dead match is retired.
+//
+// Paths are compared after filepath.Clean so a cosmetic difference
+// (trailing slash, "./") between the watcher-reported path and the
+// hook-reported SessionFile doesn't defeat the match. Symlinks are not
+// resolved: the file is already gone, so EvalSymlinks couldn't run, and
+// both paths derive from the same real $HOME in practice.
+func (s *Store) RemoveDeadBySessionFile(path string) []string {
+	if path == "" {
+		return nil
+	}
+	target := filepath.Clean(path)
+	s.mu.Lock()
+	var removed []string
+	for id, sess := range s.sessions {
+		if sess.Peer != "" || sess.Alive || sess.SessionFile == "" {
+			continue
+		}
+		if filepath.Clean(sess.SessionFile) != target {
+			continue
+		}
+		delete(s.sessions, id)
+		removed = append(removed, id)
+	}
+	s.mu.Unlock()
+
+	for _, id := range removed {
+		s.broadcast(Event{Type: "session-remove", ID: id})
+	}
+	return removed
 }
 
 // RemoveByPeer removes all sessions belonging to a peer and broadcasts
