@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveReferences, removeReferenceItems, removeHostReferenceItems, refKey } from './references'
+import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems } from './references'
 import type { PeerInfo, ProjectItem } from './types'
 
 function peer(name: string, node_id?: string): PeerInfo {
@@ -12,79 +12,82 @@ function owned(slug: string): ProjectItem {
   return { slug, match: [{ path: `/home/${slug}` }] }
 }
 
-describe('resolveReferences', () => {
-  it('resolves a legacy name-only reference and backfills its node_id', () => {
-    const projects = [ref('gmux-hs', 'apps')]
-    const roster = [peer('gmux-hs', 'node_hs')]
-    const { resolution, unresolved, backfills } = resolveReferences(projects, roster)
-    expect(resolution.get(refKey('gmux-hs', 'apps'))).toEqual({ effectivePeer: 'gmux-hs', resolved: true })
-    expect(unresolved).toEqual([])
-    expect(backfills).toEqual([{ slug: 'apps', fromPeer: 'gmux-hs', toPeer: 'gmux-hs', node_id: 'node_hs' }])
+describe('referencePresence', () => {
+  it('matches a reference by node_id (name-reuse-proof)', () => {
+    // node_id is the authority: a different host now holding the same
+    // name must NOT count as present.
+    const present = referencePresence([peer('gmux-hs', 'node_hs')])
+    expect(present('gmux-hs', 'node_hs')).toBe(true)
+    // node_id present under a different roster name: still present
+    expect(present('whatever', 'node_hs')).toBe(true)
+    // anchor gone, a confirmed different node_id holds the name: hijack,
+    // so not present
+    expect(present('gmux-hs', 'node_other')).toBe(false)
   })
 
-  it('resolves by node_id and follows a renamed host (name drift)', () => {
-    // Reference stored "unraid" + node, host now reports "gmux-hs".
-    const projects = [ref('unraid', 'apps', 'node_hs')]
-    const roster = [peer('gmux-hs', 'node_hs')]
-    const { resolution, unresolved, backfills } = resolveReferences(projects, roster)
-    expect(resolution.get(refKey('unraid', 'apps'))).toEqual({ effectivePeer: 'gmux-hs', resolved: true })
-    expect(unresolved).toEqual([])
-    // Backfill follows the rename: update the cached display name.
-    expect(backfills).toEqual([{ slug: 'apps', fromPeer: 'unraid', toPeer: 'gmux-hs', node_id: 'node_hs' }])
+  it('stays present when the named peer has no node_id yet (post-restart)', () => {
+    // After a daemon restart a peer is listed but its node_id isn't
+    // cached until it reconnects. A stamped reference to it must not
+    // flash "host not found" — an unknown node_id is not a confirmed
+    // mismatch.
+    const present = referencePresence([
+      { name: 'gmux-hs', url: 'https://gmux-hs', status: 'connecting', session_count: 0 },
+    ])
+    expect(present('gmux-hs', 'node_hs')).toBe(true)
   })
 
-  it('node_id match needs no backfill when the name is unchanged', () => {
+  it('matches a name-only reference by name', () => {
+    // A reference with no node_id (hand-authored/legacy) falls back to
+    // a plain name membership check.
+    const present = referencePresence([peer('workstation', 'N1')])
+    expect(present('workstation', undefined)).toBe(true)
+    expect(present('elsewhere', undefined)).toBe(false)
+  })
+
+  it('treats an offline-but-known host (no node_id) as present by name', () => {
+    // Offline peers sit in the roster without a cached node_id; a
+    // reference to one is reachable-but-offline, not unresolved.
+    const present = referencePresence([
+      { name: 'bespin', url: 'https://bespin', status: 'offline', session_count: 0 },
+    ])
+    expect(present('bespin', undefined)).toBe(true)
+  })
+
+  it('keeps a stamped reference present while its host is offline', () => {
+    // Once stamped, presence is by node_id. An offline peer still
+    // carries its cached node_id in the roster (peer.go keeps
+    // cachedHealth across disconnects), so a stamped reference to it
+    // stays present (reachable-but-offline) rather than flipping to
+    // unresolved. Guards against a future change that drops node_id
+    // from offline roster entries.
+    const present = referencePresence([
+      { name: 'bespin', url: 'https://bespin', status: 'offline', session_count: 0, node_id: 'N_bespin' },
+    ])
+    expect(present('bespin', 'N_bespin')).toBe(true)
+  })
+})
+
+describe('unresolvedReferences', () => {
+  it('flags a reference whose anchor is in no roster bucket', () => {
+    const projects = [ref('hs', 'apps', 'node_hs'), ref('hs', 'home', 'node_hs')]
+    const roster = [peer('unraid', 'node_other'), peer('ft', 'node_ft')]
+    expect(unresolvedReferences(projects, roster)).toEqual([{ name: 'hs', slugs: ['apps', 'home'] }])
+  })
+
+  it('does not flag a present (node_id-matched) reference', () => {
     const projects = [ref('gmux-hs', 'apps', 'node_hs')]
     const roster = [peer('gmux-hs', 'node_hs')]
-    const { backfills } = resolveReferences(projects, roster)
-    expect(backfills).toEqual([])
-  })
-
-  it('flags a reference whose host is in no roster bucket as unresolved', () => {
-    // The classic broken case: reference points at "hs", live host is
-    // "unraid"/"gmux-hs" — no roster peer named "hs".
-    const projects = [ref('hs', 'apps'), ref('hs', 'home'), ref('hs', 'chezmoi')]
-    const roster = [peer('unraid', 'node_hs'), peer('ft', 'node_ft')]
-    const { resolution, unresolved, backfills } = resolveReferences(projects, roster)
-    expect(resolution.get(refKey('hs', 'apps'))).toEqual({ effectivePeer: 'hs', resolved: false })
-    expect(backfills).toEqual([])
-    expect(unresolved).toEqual([{ name: 'hs', slugs: ['apps', 'home', 'chezmoi'] }])
-  })
-
-  it('treats an offline-but-known host (no node_id) as resolved, not unresolved', () => {
-    // Offline tailnet peers are in the roster without a node_id.
-    const projects = [ref('bespin', 'home')]
-    const roster: PeerInfo[] = [{ name: 'bespin', url: 'https://bespin', status: 'offline', session_count: 0 }]
-    const { resolution, unresolved, backfills } = resolveReferences(projects, roster)
-    expect(resolution.get(refKey('bespin', 'home'))).toEqual({ effectivePeer: 'bespin', resolved: true })
-    expect(unresolved).toEqual([])
-    expect(backfills).toEqual([]) // nothing to stamp; offline peer has no node_id
-  })
-
-  it('falls back to name and refreshes a stale node_id', () => {
-    // node_id was stamped, but that host is gone; another host now has
-    // the referenced name. Resolve by name rather than orphaning, and
-    // backfill the *current* node_id so the stale one doesn't linger
-    // (otherwise every load repeats the failed-id-then-name dance).
-    const projects = [ref('shared', 'proj', 'node_gone')]
-    const roster = [peer('shared', 'node_new')]
-    const { resolution, unresolved, backfills } = resolveReferences(projects, roster)
-    expect(resolution.get(refKey('shared', 'proj'))).toEqual({ effectivePeer: 'shared', resolved: true })
-    expect(unresolved).toEqual([])
-    expect(backfills).toEqual([{ slug: 'proj', fromPeer: 'shared', toPeer: 'shared', node_id: 'node_new' }])
+    expect(unresolvedReferences(projects, roster)).toEqual([])
   })
 
   it('ignores owned projects entirely', () => {
-    const projects = [owned('gmux'), ref('hs', 'apps')]
-    const roster: PeerInfo[] = []
-    const { resolution, unresolved } = resolveReferences(projects, roster)
-    expect(resolution.has(refKey('', 'gmux'))).toBe(false)
-    expect(unresolved).toEqual([{ name: 'hs', slugs: ['apps'] }])
+    const projects = [owned('gmux'), ref('hs', 'apps', 'node_hs')]
+    expect(unresolvedReferences(projects, [])).toEqual([{ name: 'hs', slugs: ['apps'] }])
   })
 
   it('groups multiple unresolved hosts independently', () => {
     const projects = [ref('hs', 'apps'), ref('old-laptop', 'dots'), ref('hs', 'home')]
-    const { unresolved } = resolveReferences(projects, [])
+    const unresolved = unresolvedReferences(projects, [])
     expect(unresolved).toContainEqual({ name: 'hs', slugs: ['apps', 'home'] })
     expect(unresolved).toContainEqual({ name: 'old-laptop', slugs: ['dots'] })
     expect(unresolved).toHaveLength(2)

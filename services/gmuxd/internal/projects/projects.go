@@ -60,11 +60,11 @@ type Item struct {
 	Peer     string      `json:"peer,omitempty"`
 	Match    []MatchRule `json:"match,omitempty"`
 	Sessions []string    `json:"sessions,omitempty"`
-	// NodeID anchors a reference on the peer's stable opaque identity
-	// (ADR 0007) so it survives the peer being renamed: the viewer
-	// resolves the reference by NodeID first, falling back to Peer
-	// (the display name). Set only on references; opportunistically
-	// backfilled once the referenced peer is reachable (refs #270).
+	// NodeID is the referenced peer's stable opaque identity (ADR 0007).
+	// Peer (the display name) is the runtime key; NodeID is only the
+	// viewer's liveness anchor (ADR 0015): it keeps a reference matching
+	// the right host across re-adds and stops a reused name from matching
+	// the wrong one. Set only on references; stamped at creation.
 	NodeID string `json:"node_id,omitempty"`
 }
 
