@@ -66,6 +66,24 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: "1.26"
+          # We manage the Go caches explicitly below (the go.work workspace
+          # has no root go.sum, so setup-go's default cache no-ops anyway).
+          cache: false
+
+      # Persist GOCACHE + the module cache so incremental PR pushes don't
+      # recompile the std lib for all four cross-compile targets from
+      # scratch. Key on go.sum + Go sources; restore-keys fall back to the
+      # nearest prior cache on a miss.
+      - name: Cache Go build + modules
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-gobuild-${{ hashFiles('**/go.sum', 'go.work.sum') }}-${{ hashFiles('**/*.go') }}
+          restore-keys: |
+            ${{ runner.os }}-gobuild-${{ hashFiles('**/go.sum', 'go.work.sum') }}-
+            ${{ runner.os }}-gobuild-
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
