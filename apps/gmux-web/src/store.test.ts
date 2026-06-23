@@ -281,11 +281,10 @@ describe('markSessionRead', () => {
   it('clears error flag from status', () => {
     _rawSessions.value = [makeSession({
       id: 'sess-1',
-      status: { label: 'failed', working: false, error: true },
+      status: { working: false, error: true },
     })]
     markSessionRead('sess-1')
     expect(sessions.value[0].status?.error).toBe(false)
-    expect(sessions.value[0].status?.label).toBe('failed')
   })
 
   it('does not touch other sessions', () => {
@@ -771,14 +770,13 @@ describe('pending mutations overlay', () => {
 
     it('mark-read clears unread and status.error on the targeted session', () => {
       const sess = [
-        makeSession({ id: 'a', unread: true, status: { label: 'oops', working: false, error: true } }),
+        makeSession({ id: 'a', unread: true, status: { working: false, error: true } }),
         makeSession({ id: 'b', unread: true }),
       ]
       const m: PendingMutation = { kind: 'mark-read', id: 'a', at: 0 }
       const out = applyPending(sess, [], [m])
       expect(out.sessions[0].unread).toBe(false)
       expect(out.sessions[0].status?.error).toBe(false)
-      expect(out.sessions[0].status?.label).toBe('oops')
       // Untouched session keeps its flags.
       expect(out.sessions[1].unread).toBe(true)
     })

@@ -45,7 +45,7 @@ describe('partitionForHome', () => {
       // session lands in; that's covered by other tests.
       const s = makeSession({
         id: 's1', cwd: '/x', alive: true,
-        status: { label: 'failed', working: false, error: true },
+        status: { working: false, error: true },
       })
       const { needsAttention } = partitionForHome([s], NOW)
       expect(needsAttention).toEqual([])
@@ -54,7 +54,7 @@ describe('partitionForHome', () => {
     it('puts alive+working sessions in running', () => {
       const s = makeSession({
         id: 's1', cwd: '/x', alive: true,
-        status: { label: 'building', working: true, error: false },
+        status: { working: true, error: false },
       })
       const { needsAttention, running } = partitionForHome([s], NOW)
       expect(needsAttention).toEqual([])
@@ -84,7 +84,7 @@ describe('partitionForHome', () => {
   })
 
   describe('sort order', () => {
-    const working = { label: 'x', working: true, error: false }
+    const working = { working: true, error: false }
 
     it('sorts each section newest-first by last_activity_at', () => {
       const a = makeSession({ id: 'a', cwd: '/x', alive: true, status: working, last_activity_at: stamp(-10_000) })
@@ -188,7 +188,7 @@ describe('partitionForHome', () => {
     })
 
     it('returns no buckets when every session is working or unread', () => {
-      const working = { label: 'x', working: true, error: false }
+      const working = { working: true, error: false }
       const sessions = [
         makeSession({ id: 'a', cwd: '/x', alive: true, status: working }),
         makeSession({ id: 'b', cwd: '/x', alive: true, unread: true }),
@@ -214,7 +214,7 @@ describe('partitionForProject', () => {
       id: 'ancient',
       cwd: '/x',
       alive: true,
-      status: { label: '', working: false, error: false },
+      status: { working: false, error: false },
       last_activity_at: weekAgo,
     })
     const { rest } = partitionForProject([s])
@@ -248,7 +248,7 @@ describe('partitionForProject', () => {
     const att = makeSession({ id: 'att', cwd: '/x', alive: true, unread: true })
     const run = makeSession({
       id: 'run', cwd: '/x', alive: true,
-      status: { label: 'building', working: true, error: false },
+      status: { working: true, error: false },
     })
     const idle = makeSession({ id: 'idle', cwd: '/x', alive: true })
     const { needsAttention, running, rest } = partitionForProject([att, run, idle])

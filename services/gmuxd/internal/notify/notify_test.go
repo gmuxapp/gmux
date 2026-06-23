@@ -70,9 +70,9 @@ func (e *testEnv) addClient(id, deviceType string) {
 func (e *testEnv) upsertSession(id string, working, unread, alive bool) {
 	var status *store.Status
 	if working {
-		status = &store.Status{Label: "working", Working: true}
+		status = &store.Status{Working: true}
 	} else {
-		status = &store.Status{Label: "idle", Working: false}
+		status = &store.Status{Working: false}
 	}
 	e.store.Upsert(store.Session{
 		ID:        id,

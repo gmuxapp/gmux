@@ -19,7 +19,7 @@ export default {
   exited_at: null,
   title: 'logs',
   subtitle: '',
-  status: { label: '', working: false },
+  status: { working: false },
   unread: false,
   socket_path: '/tmp/gmux-sessions/mock.sock',
   peer: 'server/container',

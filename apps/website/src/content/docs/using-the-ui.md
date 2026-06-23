@@ -101,7 +101,7 @@ If a project has no sessions yet, the hub shows the project's configured path wi
 
 ## The terminal
 
-Click a session to attach. You get a full interactive terminal powered by [xterm.js](https://xtermjs.org/). Colors, cursor positioning, mouse support, and images all work. The header bar shows the session title, status label, and a working indicator.
+Click a session to attach. You get a full interactive terminal powered by [xterm.js](https://xtermjs.org/). Colors, cursor positioning, mouse support, and images all work. The header bar shows the session title and, while an agent is busy, a working/error status indicator.
 
 ## Launching sessions
 

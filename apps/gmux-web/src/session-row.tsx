@@ -93,11 +93,12 @@ export function SessionRow({
   // that haven't transitioned yet (matches the dashboard sort).
   const age = formatAge(session.last_activity_at ?? session.created_at, Date.now())
 
-  // Status label / exit code: surface whichever the session actually
-  // exposes. Dead sessions get a synthetic "exited (N)" if no label
-  // is set, so the row never goes silent about why a session is dead.
-  const statusText = session.status?.label
-    ?? (!session.alive && session.exit_code != null ? `exited (${session.exit_code})` : null)
+  // Exit code: dead sessions surface "exited (N)" so the row never goes
+  // silent about why a session is dead. Live status (working/error) is
+  // conveyed by the dot, not text.
+  const statusText = !session.alive && session.exit_code != null
+    ? `exited (${session.exit_code})`
+    : null
 
   const cls = [
     'session-row',

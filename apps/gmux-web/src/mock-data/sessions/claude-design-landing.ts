@@ -22,7 +22,7 @@ export default {
   exited_at: null,
   title: 'design landing page',
   subtitle: '',
-  status: { label: '', working: false },
+  status: { working: false },
   unread: true,
   socket_path: '/tmp/gmux-sessions/sess-claude-01.sock',
   peer: 'laptop',

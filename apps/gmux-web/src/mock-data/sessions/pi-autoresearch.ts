@@ -22,7 +22,7 @@ export default {
   exited_at: null,
   title: 'autoresearch benchmark',
   subtitle: '',
-  status: { label: '', working: true },
+  status: { working: true },
   unread: false,
   socket_path: '/tmp/gmux-sessions/mock.sock',
   peer: 'server',

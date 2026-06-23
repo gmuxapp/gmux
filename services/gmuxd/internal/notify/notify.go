@@ -164,11 +164,7 @@ func (r *Router) handleEvent(ev store.Event) {
 
 	// Transition: unread flipped on
 	if !prev.Unread && cur.Unread {
-		body := "New output"
-		if sess.Status != nil && sess.Status.Label != "" {
-			body = sess.Status.Label
-		}
-		r.scheduleNotification(sess.ID, "unread", sess.Title, body)
+		r.scheduleNotification(sess.ID, "unread", sess.Title, "New output")
 	}
 }
 

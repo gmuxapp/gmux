@@ -95,10 +95,10 @@ func TestSetExited(t *testing.T) {
 
 func TestSetStatus(t *testing.T) {
 	s := New(Config{ID: "s", Command: []string{"echo"}, Kind: "generic"})
-	s.SetStatus(&adapter.Status{Label: "thinking", Working: true})
+	s.SetStatus(&adapter.Status{Working: true, Error: true})
 
-	if s.Status == nil || s.Status.Label != "thinking" {
-		t.Fatalf("expected 'thinking', got %v", s.Status)
+	if s.Status == nil || !s.Status.Working || !s.Status.Error {
+		t.Fatalf("expected working+error, got %v", s.Status)
 	}
 }
 
@@ -134,7 +134,7 @@ func TestSubscribeEvents(t *testing.T) {
 	ch := s.Subscribe()
 	defer s.Unsubscribe(ch)
 
-	s.SetStatus(&adapter.Status{Label: "test"})
+	s.SetStatus(&adapter.Status{Working: true})
 
 	evt := <-ch
 	if evt.Type != "status" {
