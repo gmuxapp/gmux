@@ -41,10 +41,24 @@ moon run gmux-web:dev     # just vite
 
 ## Tests & linting
 
+Run the same entrypoints CI does — local and CI are kept in sync by
+construction (CI just runs these):
+
 ```bash
-moon run :test    # all tests (Go + JS)
-moon run :lint    # all lint/typecheck
+pnpm lint    # biome + all lint/typecheck (Go vet + tsc)
+pnpm build   # build everything
+pnpm test    # all tests (Go + JS)
 ```
+
+These wrap moon (`moon run :lint` / `:build` / `:test`). Prefer the `pnpm`
+scripts: `pnpm lint` also runs biome with `--error-on-warnings`, which
+bare `moon run :lint` does not — running moon directly will silently skip
+the biome lint that CI enforces.
+
+Note: moon does not manage the JS toolchain or auto-install dependencies.
+Run `pnpm install` first, or tasks fail with "command not found".
+
+To target one project: `moon run gmux-web:test`, `moon run gmuxd:lint`, etc.
 
 ## Project structure
 

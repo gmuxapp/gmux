@@ -60,6 +60,11 @@ messages directly. Rules that follow from this:
 
 ## Other rules
 
+- Before pushing, run `pnpm lint && pnpm build && pnpm test` — these are
+  the exact entrypoints CI runs, so green locally means green in CI.
+  `pnpm lint` includes biome with `--error-on-warnings`; bare
+  `moon run :lint` skips biome and will pass while CI fails. Run
+  `pnpm install` first if you haven't — moon does not auto-install deps.
 - Push changes and create pull requests. Don't commit directly to
   `main`.
 - Use `./scripts/install.sh` when asked to install locally.
