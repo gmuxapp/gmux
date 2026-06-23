@@ -9,7 +9,7 @@
     "dev": "./scripts/dev-kill.sh && moon run :dev",
     "test": "moon run :test",
     "test:e2e": "npx playwright test --config e2e/playwright.config.ts",
-    "lint": "biome lint . && moon run :lint",
+    "lint": "biome lint --error-on-warnings . && moon run :lint",
     "check": "moon check :build :test",
     "graph": "moon project-graph"
   },

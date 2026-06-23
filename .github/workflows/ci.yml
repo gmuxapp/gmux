@@ -13,11 +13,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  js:
-    name: JS (lint, build, test)
+  checks:
+    name: Lint, build, test
     runs-on: ubuntu-latest
+    # One source of truth: run the same pnpm entrypoints developers run
+    # locally. The actual commands live once in moon.yml (moon discovers
+    # projects from the workspace globs), so CI can't drift from local.
+    # `pnpm lint` = biome (--error-on-warnings, matching the root script)
+    # + `moon run :lint`; build/test fan out the same way.
+    env:
+      GOWORK: ${{ github.workspace }}/go.work
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          # moon's VCS layer needs the default branch ref to compute a
+          # touched-files baseline; a shallow checkout has only the PR
+          # head and makes `moon run` fail with git exit 128.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: "1.26"
+          cache-dependency-path: |
+            **/go.sum
+            go.work.sum
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
@@ -28,65 +47,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Lint (Biome)
-        # biome lint (not `biome ci`): the repo enables only the linter;
-        # formatter and import-sort assists are intentionally off, and
-        # `biome ci` would also run those. Match the root `lint` script.
-        # --error-on-warnings: biome.json configures several rules at "warn"
-        # (noEmptyBlockStatements, noUnusedVariables, noUnusedImports); without
-        # this flag they'd surface locally but silently pass CI.
-        run: pnpm exec biome lint --error-on-warnings .
-
-      - name: Build protocol
-        run: cd packages/protocol && pnpm exec tsc -p tsconfig.json
-
-      - name: Lint protocol
-        run: cd packages/protocol && pnpm exec tsc --noEmit
-
-      - name: Test protocol
-        run: cd packages/protocol && pnpm exec vitest run --passWithNoTests
-
-      - name: Lint web
-        run: cd apps/gmux-web && pnpm exec tsc --noEmit
-
-      - name: Test web
-        run: cd apps/gmux-web && pnpm exec vitest run --passWithNoTests
-
-      - name: Build web
-        run: cd apps/gmux-web && pnpm exec vite build
-
-  go:
-    name: Go (lint, build, test)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
-        with:
-          go-version: "1.26"
-
-      - name: Vet
-        run: |
-          go vet ./cli/gmux/...
-          go vet ./packages/adapter/...
-          go vet ./services/gmuxd/...
-        env:
-          GOWORK: ${{ github.workspace }}/go.work
+      - name: Lint
+        run: pnpm lint
 
       - name: Build
-        run: |
-          go build ./cli/gmux/...
-          go build ./services/gmuxd/...
-        env:
-          GOWORK: ${{ github.workspace }}/go.work
+        run: pnpm build
 
       - name: Test
-        run: |
-          go test ./cli/gmux/...
-          go test ./packages/adapter/...
-          go test ./services/gmuxd/...
-        env:
-          GOWORK: ${{ github.workspace }}/go.work
+        run: pnpm test
 
   e2e:
     name: E2E (Playwright)
