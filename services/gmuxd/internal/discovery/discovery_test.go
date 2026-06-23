@@ -91,7 +91,7 @@ func TestScanReregistersDeadButAliveRunnerAfterDaemonRestart(t *testing.T) {
 	subs := NewSubscriptions(sessions)
 	t.Cleanup(func() { subs.UnsubscribeAll() })
 
-	Scan(sessions, subs, nil, nil)
+	Scan(sessions, subs, nil)
 
 	got, ok := sessions.Get(id)
 	if !ok {
@@ -191,7 +191,7 @@ func TestScanSkipsTrackedAliveSubscribedSession(t *testing.T) {
 		t.Fatalf("unexpected /meta traffic before Scan: metaCalls=%d", n)
 	}
 
-	Scan(sessions, subs, nil, nil)
+	Scan(sessions, subs, nil)
 
 	if n := metaCalls.Load(); n != 0 {
 		t.Errorf("/meta called %d times during Scan; want 0 — Phase 1 must skip tracked-alive-subscribed sockets", n)
@@ -258,7 +258,7 @@ func TestScanReregistersOnTransientSubscriptionDrop(t *testing.T) {
 	// window, which dials /meta once and Subscribes once.
 	// Re-subscription is the load-bearing effect; the /meta call
 	// is the observable side effect we can count on.
-	Scan(sessions, subs, nil, nil)
+	Scan(sessions, subs, nil)
 
 	if n := metaCalls.Load(); n != 1 {
 		t.Errorf("/meta called %d times; want 1 (Phase 1 must reconcile alive-but-unsubscribed sessions via Register)", n)
@@ -271,5 +271,3 @@ func TestScanReregistersOnTransientSubscriptionDrop(t *testing.T) {
 		t.Errorf("Pid = %d, want 99 (re-registration must refresh runtime fields)", got.Pid)
 	}
 }
-
-

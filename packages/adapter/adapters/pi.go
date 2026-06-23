@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -9,14 +10,15 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/filewatch"
 	"github.com/gmuxapp/gmux/packages/paths"
 )
 
 // Compile-time interface checks.
 var (
+	_ adapter.ConversationSource  = (*Pi)(nil)
 	_ adapter.Launchable          = (*Pi)(nil)
 	_ adapter.SessionFiler        = (*Pi)(nil)
-	_ adapter.FileMonitor         = (*Pi)(nil)
 	_ adapter.Resumer             = (*Pi)(nil)
 	_ adapter.SessionExtender     = (*Pi)(nil)
 	_ adapter.PassthroughDetector = (*Pi)(nil)
@@ -257,218 +259,6 @@ func (p *Pi) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 	return info, nil
 }
 
-// --- FileMonitor ---
-
-// ParseNewLines receives lines appended to an attributed session file
-// and returns events for meaningful changes.
-//
-// NOTE: this is now vestigial for pi. pi sessions are attributed only by the
-// agent hook (no metadata FileAttributor), so the daemon always suppresses its
-// file parse for them (see filemon.processAttributedFileLocked) and status
-// flows from the hook instead. It's retained — along with FileMonitor — pending
-// a focused follow-up to drop pi's FileMonitor role (which must first settle
-// how unnamed sessions get their first-prompt title, today derived here).
-//
-// Signals:
-//   - session_info with name → title update (no status change)
-//   - message role:"user" → working (assistant will respond)
-//   - message role:"assistant" — status depends on stopReason:
-//   - "toolUse" → working (tool loop continues)
-//   - "stop"    → idle (turn complete)
-//   - "aborted" → idle (user cancelled via Esc)
-//   - "error"   → error state only if retries exhausted (consecutive errors
-//     reach pi's retry limit); otherwise no change (retry expected)
-//
-// Unknown event types and unknown stopReasons produce no state change.
-// Extensions can emit custom events; these must not disrupt existing state.
-func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.Event {
-	var events []adapter.Event
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		var peek struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal([]byte(line), &peek); err != nil {
-			continue
-		}
-
-		switch peek.Type {
-		case "session":
-			// Session header — emit the canonical project cwd so the daemon
-			// can correct the session's directory if it was resumed from a
-			// different location.
-			var header struct {
-				Cwd string `json:"cwd"`
-			}
-			if err := json.Unmarshal([]byte(line), &header); err == nil && header.Cwd != "" {
-				events = append(events, adapter.Event{Cwd: header.Cwd})
-			}
-
-		case "session_info":
-			var si struct {
-				Name string `json:"name"`
-			}
-			if err := json.Unmarshal([]byte(line), &si); err == nil && si.Name != "" {
-				events = append(events, adapter.Event{
-					Title: strings.TrimSpace(si.Name),
-				})
-			}
-
-		case "message":
-			var msg struct {
-				Message *struct {
-					Role       string `json:"role"`
-					StopReason string `json:"stopReason"`
-				} `json:"message"`
-			}
-			if err := json.Unmarshal([]byte(line), &msg); err != nil || msg.Message == nil {
-				continue
-			}
-
-			switch msg.Message.Role {
-			case "user":
-				// User submitted a message — assistant will start working.
-				events = append(events, adapter.Event{
-					Status: &adapter.Status{Working: true},
-				})
-
-			case "assistant":
-				switch msg.Message.StopReason {
-				case "toolUse":
-					// Assistant wants to call tools — agent loop continues.
-					events = append(events, adapter.Event{
-						Status: &adapter.Status{Working: true},
-					})
-				case "stop":
-					// Assistant finished its turn — clear status, mark unread.
-					events = append(events, adapter.Event{
-						Status: &adapter.Status{},
-						Unread: adapter.BoolPtr(true),
-					})
-				case "aborted":
-					// User pressed Esc to cancel — agent is idle.
-					events = append(events, adapter.Event{
-						Status: &adapter.Status{},
-					})
-				case "error":
-					// Errors are often transient (overloaded, rate-limited)
-					// and pi retries automatically. While retries are
-					// pending, don't change state (stay working). When
-					// retries are exhausted, signal error so the frontend
-					// can show a red dot.
-					if filePath != "" {
-						count, cwd := countTrailingErrors(filePath)
-						if count >= piMaxRetries(cwd) {
-							// Retries exhausted — agent gave up.
-							events = append(events, adapter.Event{
-								Status: &adapter.Status{Error: true},
-							})
-						}
-					}
-					// Unknown stopReasons: no state change.
-				}
-			}
-		}
-	}
-	return events
-}
-
-// piDefaultMaxRetries is the fallback when settings can't be read.
-// Pi's default is maxRetries=3, so exhaustion = 1 original + 3 retries = 4.
-const piDefaultMaxRetries = 4
-
-// piMaxRetries reads pi's retry setting from its config files.
-// Returns maxRetries+1 (the total number of error messages when exhausted).
-// Pi merges ~/.pi/agent/settings.json (global) with <cwd>/.pi/settings.json
-// (project-level); project settings take precedence.
-func piMaxRetries(cwd string) int {
-	read := func(path string) int {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return -1
-		}
-		var cfg struct {
-			Retry *struct {
-				MaxRetries *int `json:"maxRetries"`
-			} `json:"retry"`
-		}
-		if err := json.Unmarshal(data, &cfg); err != nil || cfg.Retry == nil || cfg.Retry.MaxRetries == nil {
-			return -1
-		}
-		return *cfg.Retry.MaxRetries
-	}
-
-	// Project-level overrides global (matches pi's deepMergeSettings).
-	if cwd != "" {
-		if v := read(filepath.Join(cwd, ".pi", "settings.json")); v >= 0 {
-			return v + 1
-		}
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return piDefaultMaxRetries
-	}
-	if v := read(filepath.Join(home, ".pi", "agent", "settings.json")); v >= 0 {
-		return v + 1
-	}
-	return piDefaultMaxRetries
-}
-
-// countTrailingErrors reads a pi session file and counts consecutive
-// assistant error messages from the end, ignoring non-message lines
-// (custom events, labels, etc.). Also extracts the cwd from the
-// session header for config lookup.
-func countTrailingErrors(filePath string) (count int, cwd string) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return 0, ""
-	}
-	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-
-	// Extract cwd from the session header (first line).
-	if len(lines) > 0 {
-		var header struct {
-			Type string `json:"type"`
-			Cwd  string `json:"cwd"`
-		}
-		if err := json.Unmarshal([]byte(lines[0]), &header); err == nil && header.Type == "session" {
-			cwd = header.Cwd
-		}
-	}
-
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := lines[i]
-		if line == "" {
-			continue
-		}
-		var entry struct {
-			Type    string `json:"type"`
-			Message *struct {
-				Role       string `json:"role"`
-				StopReason string `json:"stopReason"`
-			} `json:"message"`
-		}
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			continue
-		}
-		// Skip non-message lines (custom events, labels, etc.)
-		if entry.Type != "message" {
-			continue
-		}
-		if entry.Message != nil && entry.Message.Role == "assistant" && entry.Message.StopReason == "error" {
-			count++
-		} else {
-			break // hit a non-error message, stop counting
-		}
-	}
-	return count, cwd
-}
-
-// --- Resumer ---
-
-// ResumeCommand returns the command to resume a pi session.
 func (p *Pi) ResumeCommand(info *adapter.SessionFileInfo) []string {
 	return []string{"pi", "--session", info.FilePath, "-c"}
 }
@@ -483,21 +273,6 @@ func (p *Pi) CanResume(path string) bool {
 }
 
 // --- Helpers ---
-
-// ListSessionFiles returns all .jsonl files in a directory.
-func ListSessionFiles(dir string) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var files []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
-			files = append(files, filepath.Join(dir, e.Name()))
-		}
-	}
-	return files
-}
 
 func extractFirstUserText(line string) string {
 	var entry struct {
@@ -553,3 +328,19 @@ var (
 type parseError struct{ msg string }
 
 func (e *parseError) Error() string { return e.msg }
+
+// --- ConversationSource ---
+
+func (p *Pi) SnapshotConversations(sink adapter.ConversationSink) {
+	filewatch.Snapshot(p.SessionRootDir(), ".jsonl", sink.Upsert)
+}
+
+func (p *Pi) WatchConversations(ctx context.Context, sink adapter.ConversationSink) error {
+	return filewatch.Watch(ctx, p.SessionRootDir(), ".jsonl", func(e filewatch.Event) {
+		if e.Removed {
+			sink.Remove(e.Path)
+		} else {
+			sink.Upsert(e.Path)
+		}
+	})
+}

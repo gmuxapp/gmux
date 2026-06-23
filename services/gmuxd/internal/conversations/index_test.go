@@ -248,5 +248,3 @@ func TestAll(t *testing.T) {
 		t.Fatalf("expected 2, got %d", len(all))
 	}
 }
-
-

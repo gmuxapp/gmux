@@ -3,6 +3,7 @@ package adapters
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,15 +17,14 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/filewatch"
 )
 
 // Compile-time interface checks.
 var (
+	_ adapter.ConversationSource = (*Codex)(nil)
 	_ adapter.Launchable         = (*Codex)(nil)
 	_ adapter.SessionFiler       = (*Codex)(nil)
-	_ adapter.SessionFileLister  = (*Codex)(nil)
-	_ adapter.FileMonitor        = (*Codex)(nil)
-	_ adapter.FileAttributor     = (*Codex)(nil)
 	_ adapter.SessionHookCommand = (*Codex)(nil)
 	_ adapter.Resumer            = (*Codex)(nil)
 )
@@ -42,8 +42,8 @@ func init() {
 // hook runs `gmux __codex-hook <Event>` and POSTs to the runner socket on every
 // SessionStart/UserPromptSubmit/Stop — ephemeral, with no mutation of the
 // user's ~/.codex. When codex is too old to support hooks, nothing is injected
-// and the daemon's metadata attribution + FileMonitor parsing
-// (FileAttributor/ParseNewLines) remain the fallback.
+// and the session runs without daemon-reported live state (there is no
+// metadata-attribution fallback).
 type Codex struct {
 	hooksOnce sync.Once
 	hooksOK   bool
@@ -83,7 +83,7 @@ func (c *Codex) Launchers() []adapter.Launcher {
 	}}
 }
 
-// Monitor is a no-op — status is driven by FileMonitor.ParseNewLines.
+// Monitor is a no-op — status is driven by the agent hook.
 func (c *Codex) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
@@ -100,8 +100,8 @@ func (c *Codex) SessionRootDir() string {
 }
 
 // SessionDir returns today's date-nested directory where Codex writes new
-// session files. Codex organizes by date (YYYY/MM/DD), not by cwd.
-// The scanner uses ListSessionFiles() for historical sessions across all dates.
+// session files. Codex organizes by date (YYYY/MM/DD), not by cwd; the
+// ConversationSource walks the whole tree for historical sessions.
 func (c *Codex) SessionDir(_ string) string {
 	root := c.SessionRootDir()
 	if root == "" {
@@ -109,26 +109,6 @@ func (c *Codex) SessionDir(_ string) string {
 	}
 	now := time.Now()
 	return filepath.Join(root, now.Format("2006"), now.Format("01"), now.Format("02"))
-}
-
-// ListSessionFiles walks the date-nested directory tree
-// (~/.codex/sessions/YYYY/MM/DD/*.jsonl) and returns all session files.
-func (c *Codex) ListSessionFiles() []string {
-	root := c.SessionRootDir()
-	if root == "" {
-		return nil
-	}
-	var files []string
-	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable dirs
-		}
-		if !d.IsDir() && strings.HasSuffix(d.Name(), ".jsonl") {
-			files = append(files, path)
-		}
-		return nil
-	})
-	return files
 }
 
 // codexSessionMeta is the JSON shape of the session_meta payload.
@@ -219,82 +199,14 @@ func (c *Codex) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) 
 	return info, nil
 }
 
-// --- FileMonitor ---
-
-// ParseNewLines receives lines appended to an attributed session file
-// and returns events for meaningful changes.
-//
-// Signals (from event_msg lines):
-//   - user_message → working + title from preceding user response_item
-//   - task_complete or turn_cancelled → idle
-//
-// Signals (from response_item lines):
-//   - role:"user" type:"message" → extract text for title hint
-func (c *Codex) ParseNewLines(lines []string, _ string) []adapter.Event {
-	var events []adapter.Event
-
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		var entry struct {
-			Type    string `json:"type"`
-			Payload struct {
-				Type    string          `json:"type"`
-				Role    string          `json:"role"`
-				Content json.RawMessage `json:"content"`
-			} `json:"payload"`
-		}
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			continue
-		}
-
-		switch entry.Type {
-		case "session_meta":
-			// Session metadata record — emit the canonical project cwd.
-			var meta struct {
-				Payload struct {
-					Cwd string `json:"cwd"`
-				} `json:"payload"`
-			}
-			if err := json.Unmarshal([]byte(line), &meta); err == nil && meta.Payload.Cwd != "" {
-				events = append(events, adapter.Event{Cwd: meta.Payload.Cwd})
-			}
-		case "event_msg":
-			switch entry.Payload.Type {
-			case "user_message":
-				// User submitted a prompt — assistant will start working.
-				// Title comes from ParseSessionFile on attribution, not here.
-				events = append(events, adapter.Event{
-					Status: &adapter.Status{Working: true},
-				})
-
-			case "task_complete":
-				// Agent finished work — clear status, mark unread.
-				events = append(events, adapter.Event{
-					Status: &adapter.Status{},
-					Unread: adapter.BoolPtr(true),
-				})
-
-			case "turn_cancelled", "turn_aborted":
-				// User-initiated cancel — clear status but no unread.
-				events = append(events, adapter.Event{
-					Status: &adapter.Status{},
-				})
-			}
-		}
-	}
-	return events
-}
-
 // --- SessionHookCommand ---
 
 // codexMinHookVersion is the floor codex version for the gmux hook integration.
 // By v0.135 codex's command-hook system is documented and stable, and the hook
 // config + per-hook trust-state shapes we depend on (`-c hooks.<Event>=...` and
 // `hooks.state.<key>.trusted_hash`) are present. Below this we inject nothing
-// (an older codex would reject the -c hooks overrides, breaking launch); the
-// daemon's metadata attribution stays in charge instead.
+// (an older codex would reject the -c hooks overrides, breaking launch); such
+// sessions run without daemon-reported live state.
 const codexMinHookVersion = "0.135.0"
 
 // codexHookEvents are the codex hook events the gmux hook subscribes to, mapped
@@ -351,7 +263,7 @@ func (c *Codex) HookCommand(args []string, selfBin string) ([]string, bool) {
 // `trusted_hash` codex computes, so only gmux's own benign reporting hooks are
 // trusted and codex's trust model is preserved for everything else. If our hash
 // ever fails to match (e.g. a codex internal change), the hook is simply
-// Untrusted → skipped → the daemon's metadata attribution takes over. It
+// Untrusted → skipped → the session runs without hook-reported state. It
 // degrades; it never broadens trust.
 //
 // Returns args unchanged if no codex binary token is found.
@@ -581,19 +493,6 @@ func codexHookTitle(path string) string {
 	return ""
 }
 
-// --- FileAttributor ---
-
-// AttributeFile matches a file to a session using the file's session_meta
-// header (cwd + timestamp proximity). Codex uses date-nested directories
-// shared by all sessions, so metadata matching is essential.
-func (c *Codex) AttributeFile(filePath string, candidates []adapter.FileCandidate) string {
-	info, err := c.ParseSessionFile(filePath)
-	if err != nil {
-		return ""
-	}
-	return attributeByMetadata(info, candidates)
-}
-
 // --- semver (codex --version gating) ---
 
 // parseCodexVersion extracts the first dotted numeric version from `codex
@@ -709,4 +608,20 @@ func isCodexSystemContext(s string) bool {
 		strings.HasPrefix(s, "<environment_context>") ||
 		strings.HasPrefix(s, "# AGENTS.md") ||
 		strings.HasPrefix(s, "<turn_aborted>")
+}
+
+// --- ConversationSource ---
+
+func (c *Codex) SnapshotConversations(sink adapter.ConversationSink) {
+	filewatch.Snapshot(c.SessionRootDir(), ".jsonl", sink.Upsert)
+}
+
+func (c *Codex) WatchConversations(ctx context.Context, sink adapter.ConversationSink) error {
+	return filewatch.Watch(ctx, c.SessionRootDir(), ".jsonl", func(e filewatch.Event) {
+		if e.Removed {
+			sink.Remove(e.Path)
+		} else {
+			sink.Upsert(e.Path)
+		}
+	})
 }

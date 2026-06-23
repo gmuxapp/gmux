@@ -56,7 +56,7 @@ func TestRegisterReRegistrationPreservesPersistedSlug(t *testing.T) {
 		Slug:  "post-attribution-name",
 	})
 
-	if err := Register(sessions, nil, nil, srv.socketPath, nil); err != nil {
+	if err := Register(sessions, nil, srv.socketPath, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -78,14 +78,14 @@ func TestRegisterReRegistrationPreservesPersistedSlug(t *testing.T) {
 // TestRegisterReRegistrationPreservesAttributionAndHistory pins
 // the broader field-preservation contract of re-registration: a
 // resumed runner reports fresh runtime state but cannot know the
-// session's history (CreatedAt) or the FileMonitor-derived
+// session's history (CreatedAt) or the hook-derived
 // attribution (AdapterTitle / Subtitle / WorkspaceRoot / Remotes).
 // Anything the runner doesn't own must carry across the seam,
 // otherwise users see a re-titled session card and lose their
 // project's birth time on every resume.
 func TestRegisterReRegistrationPreservesAttributionAndHistory(t *testing.T) {
 	// The runner reports fresh runtime state with empty values
-	// for everything attribution / FileMonitor would have set.
+	// for everything the agent hook would have set.
 	srv := startUnixServer(t, metaHandler(store.Session{
 		ID:        "sess-resume",
 		Kind:      "pi",
@@ -111,7 +111,7 @@ func TestRegisterReRegistrationPreservesAttributionAndHistory(t *testing.T) {
 		Remotes:       map[string]string{"origin": "git@github.com:acme/web.git"},
 	})
 
-	if err := Register(sessions, nil, nil, srv.socketPath, nil); err != nil {
+	if err := Register(sessions, nil, srv.socketPath, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -173,7 +173,7 @@ func TestRegisterFreshSessionRunsOnRegisterForShell(t *testing.T) {
 	defer srv.cleanup()
 
 	sessions := store.New()
-	if err := Register(sessions, nil, nil, srv.socketPath, nil); err != nil {
+	if err := Register(sessions, nil, srv.socketPath, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -185,7 +185,6 @@ func TestRegisterFreshSessionRunsOnRegisterForShell(t *testing.T) {
 		t.Error("Slug = \"\", want non-empty (Shell.OnRegister derives a slug from cwd)")
 	}
 }
-
 
 // TestScanIgnoresMissingPathWhileSubscriptionAlive guards a race
 // introduced by ptyserver.handleKill's early sockfile unlink:
@@ -247,7 +246,7 @@ func TestScanIgnoresMissingPathWhileSubscriptionAlive(t *testing.T) {
 
 	// Run a Scan in this race window. Without the fix, phase 2
 	// classifies the session as dead and clears its attribution.
-	Scan(sessions, subs, nil, nil)
+	Scan(sessions, subs, nil)
 
 	got, _ := sessions.Get("sess-graceful-kill")
 	if !got.Alive {

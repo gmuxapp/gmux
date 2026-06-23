@@ -56,7 +56,7 @@ Detect working/idle state by monitoring the SQLite database for changes.
 
 The approach: watch the `.opencode/opencode.db-wal` file via inotify. On change, query the messages table for the latest message in the active session. If the most recent message has `role = "user"` and no subsequent assistant message with `finished_at IS NOT NULL`, the session is working. Otherwise idle.
 
-An alternative is to propose that OpenCode write a lightweight status file (e.g. `.opencode/status.json`) upstream, which would let gmux use the existing `FileMonitor` infrastructure.
+An alternative is to propose that OpenCode write a lightweight status file (e.g. `.opencode/status.json`) upstream, which a `ConversationSource` (or a future status hook) could consume.
 
 ### Phase 4: Session resume
 

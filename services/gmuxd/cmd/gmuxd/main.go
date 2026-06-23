@@ -516,34 +516,20 @@ func serve(stderr io.Writer) int {
 	subs.OnDead = persistDead
 	var resumeMu sync.Mutex
 
-	// Start file monitor — watches adapter session directories with inotify
-	// to extract title and working status from JSONL files.
-	fileMon := discovery.NewFileMonitor(sessions)
-
 	// When a session exits, derive the resume command so it transitions
 	// to resumable immediately — no "exited" limbo state.
 	subs.OnExit = func(sess *store.Session) bool {
-		if cmd := fileMon.ResolveResumeCommand(sess); cmd != nil {
+		if cmd := discovery.ResolveResumeCommand(sess); cmd != nil {
 			sess.Command = cmd
 			sess.Status = nil // clear exit status for clean resumable display
 			return true
 		}
 		return false
 	}
-	// The agent extension reports the JSONL file its agent holds; this is
-	// authoritative attribution and also suppresses daemon-side parsing for
-	// the session (its runner owns derived state).
-	subs.OnSessionFile = func(sessionID, filePath string) {
-		fileMon.AttributeFromHook(sessionID, filePath)
-	}
-	stopFileMon := make(chan struct{})
-	go fileMon.Run(stopFileMon)
-	defer close(stopFileMon)
-
 	// Start socket-based discovery (scans paths.SessionSocketDir() for *.sock)
 	// Discovery also subscribes to each runner's /events SSE for live updates.
 	stopDiscovery := make(chan struct{})
-	go discovery.Watch(sessions, subs, fileMon, persistDead, nil, 3*time.Second, stopDiscovery)
+	go discovery.Watch(sessions, subs, persistDead, nil, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
 	// Session file scanner — discovers resumable sessions from adapter
@@ -556,19 +542,16 @@ func serve(stderr io.Writer) int {
 	defer close(stopScanner)
 
 	// Conversations index — maps (kind, slug) to file metadata for URL
-	// resolution of dead conversations and future fulltext search.
-	// One bootstrap scan at startup; from then on the index is kept
-	// fresh by filemon's fsnotify event handler (SetConvIndex below).
+	// resolution of dead conversations and future fulltext search. Each
+	// adapter's ConversationSource supplies a snapshot at startup and
+	// incremental updates thereafter; the daemon owns no file monitor.
 	convIndex := conversations.New()
-	convIndex.Scan()
+	convIndex.Snapshot()
 	log.Printf("conversations: indexed %d files", convIndex.Count())
 
-	// Wire filemon to the conversations index and install always-on
-	// watches on every adapter session root. After this, every .jsonl
-	// Create/Write/Remove under any adapter root updates the index
-	// automatically, with no periodic scan involved.
-	fileMon.SetConvIndex(convIndex)
-	fileMon.WatchRoots()
+	srcCtx, cancelSources := context.WithCancel(context.Background())
+	defer cancelSources()
+	convIndex.WatchSources(srcCtx)
 
 	// Start background update checker
 	updateChecker := update.New(version)
@@ -721,12 +704,12 @@ func serve(stderr io.Writer) int {
 	}
 	go scanner.Run(30*time.Second, stopScanner)
 
-	// Conversations index updates are watcher-driven via filemon
-	// (see SetConvIndex + WatchRoots above). No periodic rescan: a
-	// healthy fsnotify watch tree plus the startup bootstrap scan
-	// covers steady state. If reports of staleness emerge after
-	// suspend or inotify queue overflow, add an explicit reconcile
-	// hook — don't reintroduce the periodic ticker.
+	// Conversations index updates are watcher-driven via the adapter
+	// ConversationSources (WatchSources above). No periodic rescan: a
+	// healthy watch tree plus the startup snapshot covers steady state.
+	// If reports of staleness emerge after suspend or inotify queue
+	// overflow, add an explicit reconcile hook — don't reintroduce the
+	// periodic ticker.
 
 	// Auto-assign sessions to projects when they appear or get a Slug.
 	sessionEvents, unsubSessionEvents := sessions.Subscribe()
@@ -1196,7 +1179,7 @@ func serve(stderr io.Writer) int {
 		}
 
 		log.Printf("register: %s at %s", req.SessionID, req.SocketPath)
-		if err := discovery.Register(sessions, subs, fileMon, req.SocketPath, persistDead); err != nil {
+		if err := discovery.Register(sessions, subs, req.SocketPath, persistDead); err != nil {
 			log.Printf("register: failed to query meta for %s: %v", req.SessionID, err)
 			writeError(w, http.StatusBadGateway, "runner_unreachable", err.Error())
 			return
@@ -1523,17 +1506,12 @@ func serve(stderr io.Writer) int {
 					log.Printf("kill: %s: runner unreachable, forcing dead: %v", sessionID, err)
 					sess.Alive = false
 					sess.Status = nil
-					if fileMon != nil {
-						if cmd := fileMon.ResolveResumeCommand(&sess); cmd != nil {
-							sess.Command = cmd
-						}
+					if cmd := discovery.ResolveResumeCommand(&sess); cmd != nil {
+						sess.Command = cmd
 					}
 					sessions.Upsert(sess)
 					persistDead(sess)
 					subs.Unsubscribe(sessionID)
-					if fileMon != nil {
-						fileMon.NotifySessionDied(sessionID)
-					}
 					os.Remove(sess.SocketPath)
 				}
 			}
@@ -1639,9 +1617,6 @@ func serve(stderr io.Writer) int {
 			forgetMeta(sessionID)
 			if subs != nil {
 				subs.Unsubscribe(sessionID)
-			}
-			if fileMon != nil {
-				fileMon.NotifySessionDied(sessionID)
 			}
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
 
@@ -1998,7 +1973,7 @@ func serve(stderr io.Writer) int {
 	// shutdownCh is closed by the /v1/shutdown handler to trigger the
 	// same graceful exit path as SIGINT/SIGTERM. Without this, the
 	// handler only shut down HTTP listeners, leaving background
-	// goroutines (peering, discovery, file monitors) running
+	// goroutines (peering, discovery, conversation sources) running
 	// indefinitely as a zombie process.
 	shutdownCh := make(chan struct{})
 	var shutdownOnce sync.Once

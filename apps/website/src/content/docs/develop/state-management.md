@@ -3,7 +3,7 @@ title: State Management
 description: How session state flows between the daemon, runners, and the web UI.
 ---
 
-Session state flows one way: runners and file monitors produce it, `gmuxd` aggregates it in a store, and the frontend renders it. The frontend never modifies session state — it sends actions and waits for the backend to broadcast the result.
+Session state flows one way: runners (and their agent hooks) produce it, `gmuxd` aggregates it in a store, and the frontend renders it. The frontend never modifies session state — it sends actions and waits for the backend to broadcast the result.
 
 ## The store
 
@@ -30,7 +30,7 @@ Each field on a session has a single owner. No two subsystems write the same fie
 | Session appears (live) | **Register** | Runner calls `POST /v1/register` |
 | Session appears (from file) | **Scanner** | Periodic scan of adapter session directories |
 | Metadata updates | **Subscription** | Runner SSE `status` / `meta` events |
-| File attribution + title | **FileMonitor** | inotify on `.jsonl` files |
+| Held file + title + status | **Agent hook** | runner SSE `session_file` / `status` events |
 | Session dies (clean exit) | **Subscription** | Runner SSE `exit` event |
 | Session dies (crash) | **Discovery Scan** | Socket file gone |
 | Session removed | **Dismiss handler** | User clicks × |
@@ -50,14 +50,13 @@ Scan runs every 3 seconds and does two things:
 
 This means discovery can never race with Register to create duplicate sessions.
 
-### FileMonitor: file-driven updates
+### Agent hook: authoritative live state
 
-Watches adapter session directories with inotify. When a `.jsonl` file is written:
+Live session state is reported by the agent itself, not inferred by the daemon. The runner injects a gmux hook into the agent (`pi -e`, or codex/claude hooks), and the agent POSTs the held conversation file, title, and status to the runner socket; the runner forwards them over SSE. `gmuxd` records the file on the session (`SessionFile`). A `/resume` rebind to a different file is just another report. Tools that can't be hooked run without daemon-reported live state — there is no metadata-matching fallback.
 
-1. Attributes the file to a live session via the adapter's `FileAttributor` interface (pi uses scrollback similarity; claude and codex use cwd + timestamp proximity)
-2. Tracks the **active file** per session — when a different file is attributed (e.g. `/new` or `/resume` in the tool's TUI), the internal `resume_key` updates to the new file's session ID
-3. On first attribution, derives the initial title from `ParseSessionFile()`. If the title is still empty on subsequent writes (common when the tool creates the file before the first user message), re-derives it.
-4. Feeds new lines to the adapter's `ParseNewLines()` for title and status updates
+### Conversation sources: index updates
+
+Separately, each file-backed adapter implements `ConversationSource` to keep the conversations index (URL resolution + search) current: a snapshot at startup, then incremental create/change/remove events via the shared `filewatch` watcher. This covers dead conversations that have no running session, which the hook path cannot.
 
 ### Scanner: file-discovered sessions
 

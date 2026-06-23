@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -10,16 +11,16 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/filewatch"
 	"github.com/gmuxapp/gmux/packages/paths"
 )
 
 // Compile-time interface checks.
 var (
-	_ adapter.Launchable      = (*Claude)(nil)
-	_ adapter.SessionFiler    = (*Claude)(nil)
-	_ adapter.FileMonitor     = (*Claude)(nil)
-	_ adapter.FileAttributor  = (*Claude)(nil)
-	_ adapter.Resumer         = (*Claude)(nil)
+	_ adapter.ConversationSource = (*Claude)(nil)
+	_ adapter.Launchable         = (*Claude)(nil)
+	_ adapter.SessionFiler       = (*Claude)(nil)
+	_ adapter.Resumer            = (*Claude)(nil)
 )
 
 func init() {
@@ -28,7 +29,7 @@ func init() {
 
 // Claude is the adapter for Claude Code (claude CLI).
 // Session files are JSONL in ~/.claude/projects/<encoded-cwd>/.
-// Status is driven by the JSONL session file (FileMonitor), not PTY output.
+// Status is driven by the agent hook (see claude_hook.go), not PTY output.
 type Claude struct{}
 
 func NewClaude() *Claude { return &Claude{} }
@@ -65,7 +66,7 @@ func (c *Claude) Launchers() []adapter.Launcher {
 	}}
 }
 
-// Monitor is a no-op — status is driven by FileMonitor.ParseNewLines.
+// Monitor is a no-op — status is driven by the agent hook.
 func (c *Claude) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
@@ -220,120 +221,6 @@ func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error)
 	return info, nil
 }
 
-// --- FileMonitor ---
-
-// ParseNewLines receives lines appended to an attributed session file
-// and returns events for meaningful changes.
-//
-// Signals:
-//   - custom-title → title update
-//   - type:"user" → working (assistant will respond)
-//   - type:"assistant" → status from stop_reason + content analysis:
-//       stop_reason=null + tool_use  → working (tool loop continues)
-//       stop_reason=null + text only → idle (final response, no stop_reason on streaming)
-//       stop_reason="end_turn"       → idle (normal completion)
-//       stop_reason="stop_sequence"  → idle (user pressed Esc)
-//       thinking-only                → intermediate, ignored
-func (c *Claude) ParseNewLines(lines []string, _ string) []adapter.Event {
-	var events []adapter.Event
-	cwdEmitted := false
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		var peek struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal([]byte(line), &peek); err != nil {
-			continue
-		}
-
-		switch peek.Type {
-		case "custom-title":
-			var ct struct {
-				CustomTitle string `json:"customTitle"`
-			}
-			if err := json.Unmarshal([]byte(line), &ct); err == nil && ct.CustomTitle != "" {
-				events = append(events, adapter.Event{
-					Title: strings.TrimSpace(ct.CustomTitle),
-				})
-			}
-
-		case "user":
-			// User submitted a message — assistant will start working.
-			// Title comes from ParseSessionFile on attribution, not here.
-			// The cwd on the first user line is the canonical project directory.
-			var userLine struct {
-				Cwd string `json:"cwd"`
-			}
-			if !cwdEmitted {
-				if err := json.Unmarshal([]byte(line), &userLine); err == nil && userLine.Cwd != "" {
-					events = append(events, adapter.Event{Cwd: userLine.Cwd})
-					cwdEmitted = true
-				}
-			}
-			events = append(events, adapter.Event{
-				Status: &adapter.Status{Working: true},
-			})
-
-		case "assistant":
-			var msg struct {
-				Message struct {
-					StopReason *string `json:"stop_reason"`
-					Content    []struct {
-						Type string `json:"type"`
-					} `json:"content"`
-				} `json:"message"`
-			}
-			if err := json.Unmarshal([]byte(line), &msg); err != nil {
-				continue
-			}
-
-			hasToolUse := false
-			hasText := false
-			for _, block := range msg.Message.Content {
-				switch block.Type {
-				case "tool_use":
-					hasToolUse = true
-				case "text":
-					hasText = true
-				}
-			}
-
-			switch {
-			case hasToolUse:
-				// Tool use = still working (will get tool result, then continue).
-				// Re-assert working so recovery from transient states works.
-				events = append(events, adapter.Event{
-					Status: &adapter.Status{Working: true},
-				})
-			case hasText:
-				// Text with no tool_use = turn complete (end_turn, stop_sequence,
-				// or streaming null stop_reason). All mean idle.
-				events = append(events, adapter.Event{
-					Status: &adapter.Status{},
-					Unread: adapter.BoolPtr(true),
-				})
-			// thinking-only = intermediate, no event.
-			}
-		}
-	}
-	return events
-}
-
-// --- FileAttributor ---
-
-// AttributeFile matches a file to a session using metadata (cwd + timestamp
-// proximity). Claude uses per-cwd directories, so this is usually trivial —
-// but multiple concurrent sessions in the same project can share a dir.
-func (c *Claude) AttributeFile(filePath string, candidates []adapter.FileCandidate) string {
-	info, err := c.ParseSessionFile(filePath)
-	if err != nil {
-		return ""
-	}
-	return attributeByMetadata(info, candidates)
-}
-
 // --- Resumer ---
 
 // ResumeCommand returns the command to resume a Claude Code session.
@@ -393,4 +280,20 @@ func cleanClaudeUserText(s string) string {
 		return ""
 	}
 	return s
+}
+
+// --- ConversationSource ---
+
+func (c *Claude) SnapshotConversations(sink adapter.ConversationSink) {
+	filewatch.Snapshot(c.SessionRootDir(), ".jsonl", sink.Upsert)
+}
+
+func (c *Claude) WatchConversations(ctx context.Context, sink adapter.ConversationSink) error {
+	return filewatch.Watch(ctx, c.SessionRootDir(), ".jsonl", func(e filewatch.Event) {
+		if e.Removed {
+			sink.Remove(e.Path)
+		} else {
+			sink.Upsert(e.Path)
+		}
+	})
 }

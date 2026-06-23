@@ -93,9 +93,9 @@ but `/events` replay.
   command hook via the agent's config-override flags (`-c hooks.<Event>=...`),
   with the gmux binary itself as the hook program. It also carries the per-hook
   `trusted_hash` codex computes so only gmux's own hooks are trusted (never the
-  global `--dangerously-bypass-hook-trust`). Version-gated; older codex falls
-  back to daemon metadata attribution, and a hash mismatch degrades to the same
-  fallback rather than broadening trust.
+  global `--dangerously-bypass-hook-trust`). Version-gated; older codex (or a
+  hash mismatch) injects nothing and the session runs without daemon-reported
+  live state — there is no metadata-attribution fallback.
 - **`SessionHookCommand`** (claude): Claude Code takes hooks through settings,
   so the runner splices `--settings <inline-json>` (a `gmux __claude-hook`
   command hook). That layer merges with the user's settings and hook arrays

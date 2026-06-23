@@ -42,9 +42,9 @@ func FindByKind(kind string) adapter.Adapter {
 
 // Compile-time interface checks.
 var (
-	_ adapter.SessionFiler    = (*Shell)(nil)
-	_ adapter.Resumer         = (*Shell)(nil)
-	_ adapter.CommandTitler   = (*Shell)(nil)
+	_ adapter.SessionFiler     = (*Shell)(nil)
+	_ adapter.Resumer          = (*Shell)(nil)
+	_ adapter.CommandTitler    = (*Shell)(nil)
 	_ adapter.SessionRegistrar = (*Shell)(nil)
 	_ adapter.SessionFinalizer = (*Shell)(nil)
 )

@@ -84,12 +84,6 @@ func TestCodexImplementsCapabilities(t *testing.T) {
 	if _, ok := a.(adapter.SessionFiler); !ok {
 		t.Fatal("should implement SessionFiler")
 	}
-	if _, ok := a.(adapter.SessionFileLister); !ok {
-		t.Fatal("should implement SessionFileLister")
-	}
-	if _, ok := a.(adapter.FileMonitor); !ok {
-		t.Fatal("should implement FileMonitor")
-	}
 	if _, ok := a.(adapter.Resumer); !ok {
 		t.Fatal("should implement Resumer")
 	}
@@ -203,112 +197,6 @@ func TestCodexParseSessionFileNotSessionMeta(t *testing.T) {
 	}
 }
 
-// --- FileMonitor ---
-
-func TestCodexParseNewLinesCwd(t *testing.T) {
-	events := NewCodex().ParseNewLines([]string{
-		`{"type":"session_meta","payload":{"id":"abc","timestamp":"2026-03-19T10:00:00Z","cwd":"/home/user/dev/gmux"}}`,
-	}, "")
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d: %v", len(events), events)
-	}
-	if events[0].Cwd != "/home/user/dev/gmux" {
-		t.Errorf("expected cwd '/home/user/dev/gmux', got %q", events[0].Cwd)
-	}
-}
-
-func TestCodexParseNewLinesUserMessage(t *testing.T) {
-	events := NewCodex().ParseNewLines([]string{
-		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the bug"}]}}`,
-		`{"type":"event_msg","payload":{"type":"user_message"}}`,
-	}, "")
-	// Should produce: working status only (title comes from ParseSessionFile on attribution)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Status == nil || !events[0].Status.Working {
-		t.Error("expected working=true status")
-	}
-}
-
-func TestCodexParseNewLinesTaskComplete(t *testing.T) {
-	events := NewCodex().ParseNewLines([]string{
-		`{"type":"event_msg","payload":{"type":"task_complete"}}`,
-	}, "")
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Status == nil || events[0].Status.Working {
-		t.Error("expected working=false")
-	}
-	if events[0].Unread == nil || !*events[0].Unread {
-		t.Error("expected unread=true on task_complete")
-	}
-}
-
-func TestCodexParseNewLinesTurnAborted(t *testing.T) {
-	events := NewCodex().ParseNewLines([]string{
-		`{"type":"event_msg","payload":{"type":"turn_aborted"}}`,
-	}, "")
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Status == nil || events[0].Status.Working {
-		t.Error("expected working=false on turn_aborted")
-	}
-	// User-initiated cancel: no unread.
-	if events[0].Unread != nil {
-		t.Error("expected unread=nil on turn_aborted (user cancelled)")
-	}
-}
-
-func TestCodexParseNewLinesSkipsSystemContext(t *testing.T) {
-	events := NewCodex().ParseNewLines([]string{
-		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<permissions instructions>sandbox rules</permissions instructions>"}]}}`,
-		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context><cwd>/tmp</cwd></environment_context>"}]}}`,
-		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the bug"}]}}`,
-		`{"type":"event_msg","payload":{"type":"user_message"}}`,
-	}, "")
-	// Should produce: working status only (title comes from ParseSessionFile)
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Status == nil || !events[0].Status.Working {
-		t.Error("expected working=true status")
-	}
-}
-
-func TestCodexParseNewLinesAgentMessage(t *testing.T) {
-	// agent_message alone should not generate events
-	events := NewCodex().ParseNewLines([]string{
-		`{"type":"event_msg","payload":{"type":"agent_message"}}`,
-	}, "")
-	if len(events) != 0 {
-		t.Errorf("expected 0 events for agent_message, got %d", len(events))
-	}
-}
-
-func TestCodexParseNewLinesMultiTurn(t *testing.T) {
-	events := NewCodex().ParseNewLines([]string{
-		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix it"}]}}`,
-		`{"type":"event_msg","payload":{"type":"user_message"}}`,
-		`{"type":"response_item","payload":{"type":"function_call"}}`,
-		`{"type":"response_item","payload":{"type":"function_call_output"}}`,
-		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}]}}`,
-		`{"type":"event_msg","payload":{"type":"task_complete"}}`,
-	}, "")
-	// user_message → working, task_complete → idle
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events, got %d: %v", len(events), events)
-	}
-	if !events[0].Status.Working {
-		t.Error("first should be working=true")
-	}
-	if events[1].Status.Working {
-		t.Error("second should be working=false")
-	}
-}
-
 // --- Resumer ---
 
 func TestCodexResumeCommand(t *testing.T) {
@@ -336,44 +224,6 @@ func TestCodexCanResume(t *testing.T) {
 	if NewCodex().CanResume(empty) {
 		t.Fatal("empty session should not be resumable")
 	}
-}
-
-// --- ListSessionFiles ---
-
-func TestCodexListSessionFilesNested(t *testing.T) {
-	// Create a fake date-nested directory structure
-	root := t.TempDir()
-	c := &Codex{}
-
-	// Override root by creating the structure directly
-	dir := filepath.Join(root, "2026", "03", "17")
-	os.MkdirAll(dir, 0755)
-	os.WriteFile(filepath.Join(dir, "rollout-a.jsonl"), []byte("{}"), 0644)
-	os.WriteFile(filepath.Join(dir, "rollout-b.jsonl"), []byte("{}"), 0644)
-
-	dir2 := filepath.Join(root, "2026", "03", "16")
-	os.MkdirAll(dir2, 0755)
-	os.WriteFile(filepath.Join(dir2, "rollout-c.jsonl"), []byte("{}"), 0644)
-	os.WriteFile(filepath.Join(dir2, "not-a-session.txt"), []byte("nope"), 0644)
-
-	// Test the walk function directly since we can't override home dir
-	var files []string
-	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !d.IsDir() && filepath.Ext(path) == ".jsonl" {
-			files = append(files, path)
-		}
-		return nil
-	})
-
-	if len(files) != 3 {
-		t.Errorf("expected 3 jsonl files, got %d: %v", len(files), files)
-	}
-
-	// Verify SessionFileLister is implemented
-	var _ adapter.SessionFileLister = c
 }
 
 // --- Helpers ---
