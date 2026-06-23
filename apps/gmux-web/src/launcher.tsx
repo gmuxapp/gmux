@@ -68,6 +68,55 @@ export function formatTarget(target: LaunchTarget): string {
   return shortCwd
 }
 
+// ── Menu positioning ──
+
+/** A button rect (the subset of DOMRect we need). */
+export interface Rect {
+  top: number
+  left: number
+}
+
+/** Viewport bounds for clamping. */
+export interface Viewport {
+  innerWidth: number
+}
+
+/** Margin kept between the menu and the viewport edges (px). */
+const MENU_VIEWPORT_MARGIN = 8
+/** How far left of the button the menu's left edge sits (px). */
+const MENU_LEFT_OFFSET = 6
+
+/**
+ * Compute the fixed position for the launch menu.
+ *
+ * Horizontal: anchor the menu's LEFT edge slightly left of the button so the
+ * text appears right where the user just clicked, growing rightward, clamped
+ * to the viewport so it never overflows either edge.
+ *
+ * Vertical: lift the menu so its default item (first adapter) lands directly
+ * under the button — enabling open-then-double-click on the default. The menu
+ * has 4px padding-top; a shown target line adds ~32px (line + divider) that we
+ * offset so the first adapter stays aligned.
+ */
+export function computeMenuPos(
+  rect: Rect,
+  viewport: Viewport,
+  showTarget: boolean,
+  menuWidth = 180,
+): { top: number; left: number } {
+  const targetOffset = showTarget ? 32 : 0
+  const top = rect.top - 4 - targetOffset // 4px = menu padding-top
+
+  let left = rect.left - MENU_LEFT_OFFSET
+  // Clamp right edge inside the viewport...
+  const maxLeft = viewport.innerWidth - MENU_VIEWPORT_MARGIN - menuWidth
+  if (left > maxLeft) left = maxLeft
+  // ...then clamp left edge (wins if the menu is wider than the viewport).
+  if (left < MENU_VIEWPORT_MARGIN) left = MENU_VIEWPORT_MARGIN
+
+  return { top, left }
+}
+
 // ── LaunchButton ──
 //
 // Transforms into an inline menu on click:
@@ -122,32 +171,25 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, ses
   const showTarget = target.cwd !== ''
 
   const [state, setState] = useState<'idle' | 'open' | 'launching'>('idle')
-  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null)
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
 
   // Read launcher config from the store (populated by /v1/health).
   const hasLaunchers = launchersSignal.value.length > 0
 
-  /** Compute fixed position for the menu so it escapes overflow:hidden parents. */
-  const computeMenuPos = () => {
+  /** Position the menu (fixed, so it escapes overflow:hidden parents). */
+  const positionMenu = () => {
     const btn = btnRef.current
     if (!btn) return
     const r = btn.getBoundingClientRect()
-    // Align the menu's default item (first adapter) with the button.
-    // The menu has 4px padding; if a target line is shown it adds ~32px
-    // (target line + divider) that we offset so the first adapter stays aligned.
-    const targetOffset = showTarget ? 32 : 0
-    setMenuPos({
-      top: r.top - 4 - targetOffset,       // 4px = menu padding-top
-      right: window.innerWidth - r.right,  // align menu's right edge with button's right edge
-    })
+    setMenuPos(computeMenuPos(r, { innerWidth: window.innerWidth }, showTarget))
   }
 
   const handleClick = (e: MouseEvent) => {
     e.stopPropagation()
     if (state === 'idle') {
-      computeMenuPos()
+      positionMenu()
       setState('open')
     } else if (state === 'open') {
       setState('idle')
@@ -201,7 +243,7 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, ses
   }
 
   return (
-    <div class={`launch-container ${className ?? ''}`} ref={containerRef}>
+    <div class={`launch-container ${className ?? ''} ${isOpen ? 'open' : ''}`} ref={containerRef}>
       <button
         ref={btnRef}
         class={`launch-btn ${isLoading ? 'loading' : ''}`}
@@ -220,7 +262,7 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, ses
       {isOpen && menuPos && (
         <div
           class="launch-inline-menu"
-          style={{ top: menuPos.top, right: menuPos.right }}
+          style={{ top: menuPos.top, left: menuPos.left }}
         >
           {showTarget && (
             <>
@@ -236,11 +278,10 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, ses
               {defLauncher.label}
             </button>
           )}
-          {others.map((l, i) => (
+          {others.map((l) => (
             <button
               key={l.id}
               class="launch-inline-item"
-              style={{ animationDelay: `${(i + 1) * 50}ms` }}
               onClick={(e) => { e.stopPropagation(); handleLaunch(l.id) }}
             >
               {l.label}
