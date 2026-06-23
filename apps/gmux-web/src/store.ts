@@ -20,6 +20,7 @@ import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects } from './projects'
 import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems, type UnresolvedHost } from './references'
+import { pushError } from './toasts'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS, MOCK_PEERS, MOCK_HEALTH } from './mock-data/index'
@@ -175,12 +176,31 @@ function isResolved(
   }
 }
 
-/** Push a mutation onto the pending stack and schedule its TTL drop. */
-function addPending(m: PendingMutation) {
+/** Push a mutation onto the pending stack and schedule its TTL drop.
+ *  Returns a `retract` that drops the mutation immediately and idempotently
+ *  — used by `optimistic()` to roll back as soon as the server rejects,
+ *  instead of waiting out the full TTL (the lagged-rollback artifact). */
+function addPending(m: PendingMutation): () => void {
   _pendingMutations.value = [..._pendingMutations.value, m]
-  setTimeout(() => {
+  const retract = () => {
     _pendingMutations.value = _pendingMutations.value.filter(x => x !== m)
-  }, PENDING_TTL_MS)
+  }
+  setTimeout(retract, PENDING_TTL_MS)
+  return retract
+}
+
+/**
+ * Run an optimistic mutation: apply it locally now, fire `action`, and
+ * retract immediately if the action reports failure (rather than letting
+ * the row/order linger until the TTL sweeps it). `action` returns whether
+ * the server accepted it. Shared by `dismissSession` and `reorderSessions`;
+ * `mark-read` deliberately opts out (it's fire-and-forget — a failed
+ * mark-read silently self-heals on the next snapshot and needs no toast
+ * or eager rollback).
+ */
+async function optimistic(m: PendingMutation, action: () => Promise<boolean>): Promise<void> {
+  const retract = addPending(m)
+  if (!(await action())) retract()
 }
 
 // ── Public projections of raw state ─────────────────────────────────────────
@@ -946,9 +966,14 @@ async function putProjects(items: ProjectItem[]): Promise<void> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items }),
     })
-    if (!resp.ok) console.warn('PUT /v1/projects failed:', resp.status)
-  } catch (err) {
-    console.warn('PUT /v1/projects error:', err)
+    if (!resp.ok) {
+      pushError(`Save projects failed: ${await errorMessageFromResponse(resp)}`)
+    }
+  } catch {
+    // Network reject = connectivity, not a semantic failure. The
+    // reconnecting pill owns "we're offline"; don't add a toast flood
+    // on top of it. (See postAction for the full rationale.)
+    console.debug('PUT /v1/projects: network error (suppressed toast)')
   }
 }
 
@@ -1117,27 +1142,84 @@ export async function reorderSessions(
   sessionKeys: string[],
   peer?: string,
 ): Promise<void> {
-  if (peer === undefined) {
-    addPending({ kind: 'reorder', slug: projectSlug, sessions: sessionKeys, at: Date.now() })
-  }
   const url = peer
     ? `/v1/peers/${encodeURIComponent(peer)}/v1/projects/${encodeURIComponent(projectSlug)}/sessions`
     : `/v1/projects/${encodeURIComponent(projectSlug)}/sessions`
-  try {
-    const resp = await fetch(url, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessions: sessionKeys }),
-    })
-    if (!resp.ok) console.warn('PATCH sessions failed:', resp.status)
-  } catch (err) {
-    console.warn('PATCH sessions error:', err)
+
+  // PATCH the new order. Returns whether the server accepted it; a
+  // received error toasts, a network reject stays silent (connectivity,
+  // owned by the reconnecting pill) — same contract as postAction.
+  const patch = async (): Promise<boolean> => {
+    try {
+      const resp = await fetch(url, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessions: sessionKeys }),
+      })
+      if (!resp.ok) {
+        pushError(`Reorder failed: ${await errorMessageFromResponse(resp)}`)
+        return false
+      }
+      return true
+    } catch {
+      console.debug(`${url}: network error (suppressed toast)`)
+      return false
+    }
+  }
+
+  // Local reorders get an optimistic overlay that retracts on failure.
+  // Peer reorders have no local overlay (the sidebar derives peer-folder
+  // order from server-stamped project_index, not a local array), so
+  // there's nothing to roll back — just fire and let the toast report.
+  if (peer === undefined) {
+    await optimistic(
+      { kind: 'reorder', slug: projectSlug, sessions: sessionKeys, at: Date.now() },
+      patch,
+    )
+  } else {
+    await patch()
   }
 }
 
 // ── Session actions ─────────────────────────────────────────────────────────
 
-async function postAction(endpoint: string, body?: Record<string, unknown>): Promise<void> {
+/**
+ * Pull a human message out of a failed response. The daemon's
+ * `writeError` (services/gmuxd) returns
+ * `{ ok:false, error:{ code, message } }`, so prefer `error.message`;
+ * fall back to a raw text body, then the HTTP status line, so even an
+ * unexpected non-JSON 500 still produces something legible.
+ */
+async function errorMessageFromResponse(resp: Response): Promise<string> {
+  const raw = await resp.text().catch(() => '')
+  if (raw) {
+    try {
+      const body = JSON.parse(raw) as { error?: { message?: string } }
+      if (body?.error?.message) return body.error.message
+    } catch { /* not the structured shape; fall through to raw text */ }
+    const trimmed = raw.trim()
+    if (trimmed) return trimmed
+  }
+  return resp.statusText || `HTTP ${resp.status}`
+}
+
+/**
+ * Single seam for session actions (kill/dismiss/resume/restart).
+ *
+ * Failures are classified by whether the server *answered*:
+ *  - `!resp.ok` (we got an HTTP response carrying a structured error) is
+ *    a semantic failure — the server was reachable and is telling us why
+ *    — so it always surfaces a labelled toast ("Resume failed: …").
+ *  - a `fetch` *reject* (no response: offline / connection dropped) is a
+ *    connectivity symptom, which the reconnecting pill already owns. We
+ *    deliberately do NOT toast it; otherwise a connection drop produces a
+ *    toast flood duplicating the pill, exactly when it's least wanted.
+ *
+ * Returns whether the action succeeded, so optimistic callers can retract
+ * on failure. A network reject counts as "not succeeded" for rollback,
+ * even though it's silent toast-wise.
+ */
+async function postAction(endpoint: string, label = 'Action', body?: Record<string, unknown>): Promise<boolean> {
   try {
     const resp = await fetch(endpoint, {
       method: 'POST',
@@ -1146,31 +1228,42 @@ async function postAction(endpoint: string, body?: Record<string, unknown>): Pro
         body: JSON.stringify(body),
       } : {}),
     })
-    if (!resp.ok) console.warn(`${endpoint} failed:`, resp.status, await resp.text().catch(() => ''))
-  } catch (err) {
-    console.warn(`${endpoint} error:`, err)
+    if (!resp.ok) {
+      pushError(`${label} failed: ${await errorMessageFromResponse(resp)}`)
+      return false
+    }
+    return true
+  } catch {
+    console.debug(`${endpoint}: network error (suppressed toast)`)
+    return false
   }
 }
 
-export function killSession(sessionId: string): Promise<void> {
-  return postAction(`/v1/sessions/${sessionId}/kill`)
+// Kill/resume/restart return postAction's success boolean so callers can
+// sync UI state (e.g. clear a "resuming…" spinner) the moment a rejection
+// toast fires, instead of waiting out a timeout. Note these promises never
+// reject — postAction converts all failures into `false` — so `.catch()`
+// on them is dead code; branch on the boolean instead.
+export function killSession(sessionId: string): Promise<boolean> {
+  return postAction(`/v1/sessions/${sessionId}/kill`, 'Kill')
 }
 
 export function dismissSession(sessionId: string): Promise<void> {
-  // Optimistic dismissal: hide the session locally until the next
-  // snapshot.sessions confirms it's gone. If the server rejects the
-  // dismiss, the mutation TTL-expires and the session reappears on the
-  // following snapshot.
-  addPending({ kind: 'dismiss', id: sessionId, at: Date.now() })
-  return postAction(`/v1/sessions/${sessionId}/dismiss`)
+  // Optimistic dismissal: hide the session locally now, and retract
+  // immediately if the server rejects — so the toast and the row
+  // reappearing are coincident, not lagged by the pending TTL.
+  return optimistic(
+    { kind: 'dismiss', id: sessionId, at: Date.now() },
+    () => postAction(`/v1/sessions/${sessionId}/dismiss`, 'Dismiss'),
+  )
 }
 
-export function resumeSession(sessionId: string): Promise<void> {
-  return postAction(`/v1/sessions/${sessionId}/resume`)
+export function resumeSession(sessionId: string): Promise<boolean> {
+  return postAction(`/v1/sessions/${sessionId}/resume`, 'Resume')
 }
 
-export function restartSession(sessionId: string): Promise<void> {
-  return postAction(`/v1/sessions/${sessionId}/restart`)
+export function restartSession(sessionId: string): Promise<boolean> {
+  return postAction(`/v1/sessions/${sessionId}/restart`, 'Restart')
 }
 
 // ── Launch ───────────────────────────────────────────────────────────────────
@@ -1185,9 +1278,11 @@ export async function launchSession(launcherId: string, opts?: { cwd?: string; p
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ launcher_id: launcherId, cwd: opts?.cwd, peer: opts?.peer }),
     })
-    if (!resp.ok) console.warn('/v1/launch failed:', resp.status, await resp.text().catch(() => ''))
-  } catch (err) {
-    console.warn('/v1/launch error:', err)
+    if (!resp.ok) {
+      pushError(`Launch failed: ${await errorMessageFromResponse(resp)}`)
+    }
+  } catch {
+    console.debug('/v1/launch: network error (suppressed toast)')
   }
 }
 

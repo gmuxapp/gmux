@@ -1,4 +1,4 @@
-import { render } from 'preact'
+import { Component, Fragment, render, type ComponentChildren } from 'preact'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { LocationProvider, Router, Route, lazy, useLocation } from 'preact-iso'
 import '@xterm/xterm/css/xterm.css'
@@ -18,6 +18,8 @@ import { ProjectHub } from './project-hub'
 import { Home } from './home'
 import { installCopySession } from './mock-data/export-session'
 import { installVersionWatch } from './version-watch'
+import { ToastHost } from './toast-host'
+import { pushError } from './toasts'
 
 import {
   sessions, connState, selected, selectedId, view, health, peers,
@@ -60,6 +62,105 @@ if (!USE_MOCK) installVersionWatch()
 // browsers that don't emit them.
 for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
   document.addEventListener(type, e => e.preventDefault(), { passive: false })
+}
+
+// ── Error boundary ──
+
+const GITHUB_ISSUES_URL = 'https://github.com/gmuxapp/gmux/issues/new'
+const DISCORD_URL = 'https://discord.gg/Mg6EJHFZxu'
+
+/** Build a copyable crash report. Mirrors input-diagnostics' buildReport:
+ *  environment first, then the error + stacks. The `gmux` version comes
+ *  from the last health snapshot (may be unknown if we crashed before it
+ *  arrived). */
+function buildCrashReport(err: unknown, componentStack?: string): string {
+  const lines: string[] = []
+  lines.push('=== gmux Crash Report ===')
+  lines.push(`Date: ${new Date().toISOString()}`)
+  lines.push(`gmux: ${health.value?.version ?? 'unknown'}`)
+  lines.push(`URL: ${location.pathname}${location.search}`)
+  lines.push(`User-Agent: ${navigator.userAgent}`)
+  lines.push('')
+  lines.push(`Error: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`)
+  if (err instanceof Error && err.stack) {
+    lines.push('Stack:')
+    lines.push(err.stack)
+  }
+  if (componentStack) {
+    lines.push('Component stack:')
+    lines.push(componentStack.trim())
+  }
+  lines.push('=== End Report ===')
+  return lines.join('\n')
+}
+
+// A thrown render error used to white-screen the whole app with nothing
+// in the UI. This catches it (render-phase throws only — async/event
+// failures go through toasts instead), shows a recoverable fallback with
+// a copyable crash report + report links, and pushes an error toast.
+// Preact supports componentDidCatch / getDerivedStateFromError on class
+// components.
+class ErrorBoundary extends Component<
+  { children: ComponentChildren },
+  { failed: boolean; report: string; copied: boolean }
+> {
+  state = { failed: false, report: '', copied: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  componentDidCatch(err: unknown, info: { componentStack?: string }) {
+    console.error('render error caught by boundary:', err)
+    pushError(`Something broke: ${err instanceof Error ? err.message : 'render error'}`)
+    this.setState({ report: buildCrashReport(err, info?.componentStack) })
+  }
+
+  copyReport = async () => {
+    // Clipboard-then-textarea fallback, matching input-diagnostics so the
+    // copy works in non-secure contexts / older browsers too.
+    try {
+      await navigator.clipboard.writeText(this.state.report)
+    } catch {
+      const ta = document.createElement('textarea')
+      ta.value = this.state.report
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    this.setState({ copied: true })
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <div class="state-message crash-fallback">
+          <div class="state-icon" style={{ color: 'var(--status-error)' }}>⚠</div>
+          <div class="state-title">Something broke</div>
+          <div class="state-subtitle">
+            gmux hit an unexpected error and couldn't render this view.
+          </div>
+          <div class="crash-report-links">
+            Please report it so we can fix it:{' '}
+            <a href={GITHUB_ISSUES_URL} target="_blank" rel="noreferrer">GitHub Issues</a>
+            {' · '}
+            <a href={DISCORD_URL} target="_blank" rel="noreferrer">Discord</a>
+          </div>
+          <pre class="crash-report">{this.state.report}</pre>
+          <div class="crash-actions">
+            <button class="btn" onClick={this.copyReport}>
+              {this.state.copied ? 'Copied!' : 'Copy report'}
+            </button>
+            <button class="btn btn-primary" onClick={() => location.reload()}>
+              Reload
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }
 
 // ── Components ──
@@ -479,9 +580,12 @@ function App() {
 
   const handleResume = useCallback((id: string) => {
     setResumingId(id)
-    resumeSession(id).catch(err => {
-      console.error('resume failed:', err)
-      setResumingId(prev => prev === id ? null : prev)
+    // resumeSession never rejects (postAction converts failures to false
+    // and surfaces the toast itself); branch on the boolean to clear the
+    // "resuming…" spinner immediately on rejection instead of letting it
+    // linger until the 10s timeout.
+    void resumeSession(id).then(ok => {
+      if (!ok) setResumingId(prev => prev === id ? null : prev)
     })
   }, [])
 
@@ -563,7 +667,7 @@ function App() {
         {viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && (
           <MainHeader
             session={selectedVal}
-            onRestart={selectedVal ? () => { restartSession(selectedVal.id).catch(err => console.error('restart failed:', err)) } : undefined}
+            onRestart={selectedVal ? () => { void restartSession(selectedVal.id) } : undefined}
           />
         )}
 
@@ -639,11 +743,21 @@ function App() {
 }
 
 render(
-  <LocationProvider>
-    <Router>
-      <Route path="/_/input-diagnostics" component={InputDiagnostics} />
-      <Route default component={App} />
-    </Router>
-  </LocationProvider>,
+  // ToastHost is a *sibling* of the boundary, not a child: when the
+  // boundary fires it unmounts its children, so a ToastHost nested
+  // inside would be gone exactly when componentDidCatch pushes its
+  // error toast (the signal would update with no mounted consumer).
+  // Keeping it outside means toasts survive an app crash.
+  <Fragment>
+    <ErrorBoundary>
+      <LocationProvider>
+        <Router>
+          <Route path="/_/input-diagnostics" component={InputDiagnostics} />
+          <Route default component={App} />
+        </Router>
+      </LocationProvider>
+    </ErrorBoundary>
+    <ToastHost />
+  </Fragment>,
   document.getElementById('app')!,
 )
