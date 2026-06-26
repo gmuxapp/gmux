@@ -33,10 +33,6 @@ function projectRemote(p: ProjectItem | undefined): string | undefined {
   return p?.match?.find(r => r.remote)?.remote
 }
 
-function projectFirstPath(p: ProjectItem | undefined): string | undefined {
-  return p?.match?.find(r => r.path)?.path
-}
-
 interface ProjectHubProps {
   projectSlug: string
   projectPeer?: string
@@ -61,14 +57,14 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
   const allSessions = hosts.flatMap(h => h.folders.flatMap(f => f.sessions))
   const remote = projectRemote(project)
 
-  // Canonical launch dir for the project-level "+", resolved identically
-  // to the sidebar project-row button: the matching folder's launchCwd
-  // (first match-rule path for owned projects, peer_projects.launch_cwd
-  // for references). Falls back to the project's first path rule.
-  const launchFolder = folders.value.find(
+  // Canonical launch dir for the project-level "+", taken from the same
+  // folder the sidebar uses: launchCwd is the first match-rule path for
+  // owned projects, peer_projects.launch_cwd for references. buildProjectFolders
+  // emits a folder per project item, so this resolves whenever the
+  // project exists; '' (default dir) otherwise.
+  const canonicalCwd = folders.value.find(
     f => f.slug === projectSlug && (f.peer ?? '') === (projectPeer ?? ''),
-  )
-  const canonicalCwd = launchFolder?.launchCwd ?? projectFirstPath(project) ?? ''
+  )?.launchCwd ?? ''
 
   // Adaptive cwd disambiguator: a project whose sessions all live in
   // one cwd shows that cwd as a subtitle (clean, no repetition); a
@@ -114,8 +110,7 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
           </h2>
           <LaunchButton
             // Project-level "+": launch in the canonical dir, consistent
-            // with the sidebar project-row button. Explicit cwd bypasses
-            // resolveTarget's MRU resolution (refs: project-launch-cwd).
+            // with the sidebar project-row button.
             cwd={canonicalCwd}
             peer={projectPeer}
             className="hub-header-launch"

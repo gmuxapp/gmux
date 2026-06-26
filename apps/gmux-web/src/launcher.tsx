@@ -5,7 +5,7 @@
 // from /v1/health). The component reads them reactively.
 
 import { useState, useRef, useEffect, useMemo } from 'preact/hooks'
-import type { Session, LauncherDef, PeerInfo } from './types'
+import type { LauncherDef, PeerInfo } from './types'
 import { launchers as launchersSignal, defaultLauncher as defaultLauncherSignal, peers as peersSignal, launchSession } from './store'
 
 /** Resolved launch target: where the session will be created. */
@@ -28,37 +28,6 @@ export function launchersForPeer(
     }
   }
   return { default_launcher: localDefault, launchers: localLaunchers }
-}
-
-// ── Target resolution ──
-
-/**
- * Derive the launch target from the user's current context.
- *
- * Priority:
- *  1. The currently selected session (if it belongs to this project)
- *  2. The most recently created alive session in the project
- *  3. The project's configured fallback path (local)
- */
-export function resolveTarget(
-  sessions: Session[],
-  selectedId: string | null,
-  fallbackCwd: string,
-): LaunchTarget {
-  // 1. Selected session in this project?
-  if (selectedId) {
-    const selected = sessions.find(s => s.id === selectedId)
-    if (selected) return { peer: selected.peer, cwd: selected.cwd }
-  }
-
-  // 2. Most recently created alive session?
-  const alive = sessions
-    .filter(s => s.alive)
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-  if (alive.length > 0) return { peer: alive[0].peer, cwd: alive[0].cwd }
-
-  // 3. Fallback to the project's configured path, local.
-  return { cwd: fallbackCwd }
 }
 
 /** Format a target for display: "~/dev/gmux" or "laptop: ~/dev/gmux". */
@@ -128,45 +97,23 @@ export function computeMenuPos(
 // Double-click works because the default adapter occupies the exact same
 // position as the + button. First click opens, second click hits default.
 //
-// Two modes:
-//  - Explicit target: `cwd` and optional `peer` passed directly (used by
-//    project hub folder rows where the target is known from topology).
-//  - Context-aware: `sessions`, `selectedId`, and `fallbackCwd` passed;
-//    the target is derived from the user's current context (used by
-//    sidebar folder headers).
+// The launch target is explicit: callers pass `cwd` (the project's
+// canonical dir) and optional `peer`. The button never derives a cwd
+// from session context.
 
 interface LaunchButtonProps {
   className?: string
   onLaunch?: () => void
   /** Async action to run before the launch request (e.g. seed a project). */
   beforeLaunch?: () => Promise<void>
-  /** Explicit target: working directory for the new session. */
+  /** Working directory for the new session (the project's canonical dir). */
   cwd?: string
-  /** Explicit target: peer name for remote launch. */
+  /** Peer name for a remote launch; authoritative for the target's host. */
   peer?: string
-  /**
-   * Context-aware target: when `sessions` is provided, the launch target
-   * is derived from the user's current context (selected session or most
-   * recent alive session) instead of `cwd`/`peer`.
-   */
-  sessions?: Session[]
-  selectedId?: string | null
-  fallbackCwd?: string
 }
 
-export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer, sessions, selectedId, fallbackCwd }: LaunchButtonProps) {
-  // Resolve the target: context-aware mode (sessions provided) derives
-  // a smart cwd, while an explicit `peer` prop is always authoritative
-  // (the caller knows the folder's owner; ADR 0002). This matters for
-  // peer folders whose sessions are all dead-resumable, where context
-  // mode would otherwise lose the peer in resolveTarget's fallback.
-  const target = useMemo((): LaunchTarget => {
-    if (sessions && fallbackCwd !== undefined) {
-      const ctx = resolveTarget(sessions, selectedId ?? null, fallbackCwd)
-      return peer ? { ...ctx, peer } : ctx
-    }
-    return { peer, cwd: cwd || '' }
-  }, [sessions, selectedId, fallbackCwd, cwd, peer])
+export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer }: LaunchButtonProps) {
+  const target = useMemo((): LaunchTarget => ({ peer, cwd: cwd || '' }), [peer, cwd])
 
   const showTarget = target.cwd !== ''
 
