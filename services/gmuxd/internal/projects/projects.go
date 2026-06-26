@@ -62,7 +62,7 @@ type Item struct {
 	Sessions []string    `json:"sessions,omitempty"`
 	// NodeID is the referenced peer's stable opaque identity (ADR 0007).
 	// Peer (the display name) is the runtime key; NodeID is only the
-	// viewer's liveness anchor (ADR 0015): it keeps a reference matching
+	// viewer's liveness anchor (ADR 0017): it keeps a reference matching
 	// the right host across re-adds and stops a reused name from matching
 	// the wrong one. Set only on references; stamped at creation.
 	NodeID string `json:"node_id,omitempty"`

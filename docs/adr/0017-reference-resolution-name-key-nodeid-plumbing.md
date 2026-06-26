@@ -1,4 +1,4 @@
-# ADR 0015: References identify by name; node_id is a liveness anchor
+# ADR 0017: References identify by name; node_id is a liveness anchor
 
 **Status:** Proposed
 **Date:** 2026-06-23

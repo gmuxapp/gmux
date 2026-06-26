@@ -1408,7 +1408,7 @@ func TestValidateRejectsReferenceWithMatchRules(t *testing.T) {
 }
 
 // A reference's node_id anchor must survive a Save/Load round-trip so
-// the daemon can follow a renamed peer across restarts (ADR 0015).
+// the daemon can follow a renamed peer across restarts (ADR 0017).
 func TestReferenceNodeIDRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	orig := &State{Items: []Item{
