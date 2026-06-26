@@ -117,8 +117,8 @@ gmux -- pytest --watch  # any command
 There are several places to launch:
 
 - **Sidebar header**: click the **+** button at the top of the sidebar to launch in the default directory.
-- **Sidebar project**: hover a project name to reveal a **+** button. This launcher is context-aware: it targets the host and directory of whatever you're currently looking at. Select a session on a remote peer, and the **+** targets that peer. Switch to a local session, it targets local.
-- **Project hub**: click the **+** on any folder row to launch in that specific directory on that host. For projects with [peers](/multi-machine), the per-host launcher routes the session to the correct machine.
+- **Sidebar project**: hover a project name to reveal a **+** button. It launches in the project's own directory — the first configured path for a project you own, or the upstream directory for a [referenced](/multi-machine) project (which routes to the owning machine) — regardless of which session you're currently viewing.
+- **Project hub**: the **+** in the header launches in that same project directory, routing to the owning machine for referenced projects.
 - **Home screen**: quick-launch buttons for starting a session without any project context.
 
 All launch menus show the available adapters (Shell, pi, Claude Code, Codex). The first item aligns with the **+** button so a double-click launches the default adapter instantly.

@@ -23,7 +23,7 @@ import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
 import {
   sessions, projects, peers, localPeerNames, partitionForProject,
-  localHostLabel,
+  localHostLabel, folders,
 } from './store'
 import { HostSuffix } from './host-suffix'
 import { SessionRow } from './session-row'
@@ -31,10 +31,6 @@ import { Section } from './home'
 
 function projectRemote(p: ProjectItem | undefined): string | undefined {
   return p?.match?.find(r => r.remote)?.remote
-}
-
-function projectFirstPath(p: ProjectItem | undefined): string | undefined {
-  return p?.match?.find(r => r.path)?.path
 }
 
 interface ProjectHubProps {
@@ -60,6 +56,15 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
   )
   const allSessions = hosts.flatMap(h => h.folders.flatMap(f => f.sessions))
   const remote = projectRemote(project)
+
+  // Canonical launch dir for the project-level "+", taken from the same
+  // folder the sidebar uses: launchCwd is the first match-rule path for
+  // owned projects, peer_projects.launch_cwd for references. buildProjectFolders
+  // emits a folder per project item, so this resolves whenever the
+  // project exists; '' (default dir) otherwise.
+  const canonicalCwd = folders.value.find(
+    f => f.slug === projectSlug && (f.peer ?? '') === (projectPeer ?? ''),
+  )?.launchCwd ?? ''
 
   // Adaptive cwd disambiguator: a project whose sessions all live in
   // one cwd shows that cwd as a subtitle (clean, no repetition); a
@@ -104,8 +109,9 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
             <HostSuffix peer={projectPeer ?? localHostLabel.value} local={!projectPeer} />
           </h2>
           <LaunchButton
-            sessions={allSessions}
-            fallbackCwd={sharedCwd ?? projectFirstPath(project) ?? ''}
+            // Project-level "+": launch in the canonical dir, consistent
+            // with the sidebar project-row button.
+            cwd={canonicalCwd}
             peer={projectPeer}
             className="hub-header-launch"
           />

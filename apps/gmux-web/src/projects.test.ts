@@ -180,6 +180,20 @@ describe('buildProjectFolders', () => {
     expect(folders[0].launchCwd).toBe('/dev/proj')
   })
 
+  it('launchCwd is the canonical first path, not the MRU session cwd', () => {
+    // The project-row "+" launches in launchCwd, so it must stay the
+    // project's canonical dir regardless of where recent sessions ran.
+    const projects: ProjectItem[] = [
+      { slug: 'proj', match: [{ path: '/dev/proj' }] },
+    ]
+    const sessions = [
+      makeSession({ id: 'a', project_slug: 'proj', cwd: '/dev/proj/subdir', created_at: '2026-01-01T00:00:00Z' }),
+      makeSession({ id: 'b', project_slug: 'proj', cwd: '/dev/elsewhere', created_at: '2026-04-01T00:00:00Z' }),
+    ]
+    const folders = buildProjectFolders(projects, sessions)
+    expect(folders[0].launchCwd).toBe('/dev/proj')
+  })
+
   it('drops disclaimed sessions even when their cwd matches a local rule', () => {
     // Under the references model, viewer match rules don't adopt
     // sessions client-side. Only stamps put a session in a folder.

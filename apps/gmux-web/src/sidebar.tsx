@@ -276,9 +276,11 @@ function FolderGroup({
         </a>
         {!folder.unresolved && (
           <LaunchButton
-            sessions={folder.sessions}
-            selectedId={selId}
-            fallbackCwd={folder.launchCwd ?? ''}
+            // Project-row "+" always launches in the project's canonical
+            // dir (the first match-rule path, carried by launchCwd), never
+            // a recently-used session's cwd. peer stays authoritative for
+            // references.
+            cwd={folder.launchCwd ?? ''}
             peer={folder.peer}
             className="folder-launch-btn"
           />
