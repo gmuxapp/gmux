@@ -333,10 +333,10 @@ export function buildProjectFolders(
   sessions: Session[],
   isLocalPeer?: (peerName: string) => boolean,
   peerProjects?: Record<string, { slug: string; launch_cwd?: string }[]>,
-  // Resolve a reference (by its stored peer+slug) to the live host's
-  // current name and whether it's in the roster at all. When omitted,
-  // references resolve to their stored name (legacy behavior). (refs #270)
-  resolveRef?: (peer: string, slug: string) => { effectivePeer: string; resolved: boolean } | undefined,
+  // Liveness predicate: is a reference's host in the roster? (ADR 0015).
+  // `peer` is a frozen viewer-owned label, so references bucket/label by
+  // it directly; this only sets the unresolved flag. Omitted ⇒ present.
+  isPresent?: (peer: string, nodeId?: string) => boolean,
 ): Folder[] {
   // Bucket every stamped session by `${ownerPeer}::${slug}`.
   // ownerPeer is '' for sessions owned by the viewer (local sessions,
@@ -361,20 +361,12 @@ export function buildProjectFolders(
 
   const folders: Folder[] = []
   for (const project of projects) {
-    const storedPeer = project.peer ?? ''
-    // For references, resolve to the live host's current name (which
-    // may differ from the stored name after a rename) and learn
-    // whether the host is in the roster at all. Owned projects pass
-    // through unchanged.
-    let ownerPeer = storedPeer
-    let unresolved = false
-    if (storedPeer !== '' && resolveRef) {
-      const r = resolveRef(storedPeer, project.slug)
-      if (r) {
-        ownerPeer = r.effectivePeer
-        unresolved = !r.resolved
-      }
-    }
+    // `peer` is the runtime key (viewer-owned, frozen — ADR 0007 §7), so
+    // bucket and label references by it directly. The only roster
+    // question is liveness, which also blocks a reused name from
+    // adopting a stale reference (node_id mismatch).
+    const ownerPeer = project.peer ?? ''
+    const unresolved = ownerPeer !== '' && !!isPresent && !isPresent(ownerPeer, project.node_id)
     const ss = buckets.get(`${ownerPeer}::${project.slug}`) ?? []
     const visible = ss.filter(s => s.alive || s.resumable === true)
     visible.sort(compareFolderSessions)

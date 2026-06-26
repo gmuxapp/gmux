@@ -302,18 +302,16 @@ describe('buildProjectFolders', () => {
     expect(folders[0].missing).toBeUndefined()
   })
 
-  it('buckets a renamed host\'s sessions under a reference resolved by node_id', () => {
-    // The seam with resolveReferences: the reference is stored under the
-    // old name "unraid" but resolveRef maps it to the host's current
-    // name "gmux-hs". The session (stamped with the live name) must land
-    // in the folder, and the folder must carry the live name.
-    const projects: ProjectItem[] = [{ slug: 'apps', peer: 'unraid', node_id: 'node_hs' }]
+  it('buckets a reference\'s sessions by its stored name and stays resolved when present', () => {
+    // `peer` is the runtime key (ADR 0015): sessions stamped with the
+    // same name land in the folder, and the liveness predicate (node_id
+    // present) keeps it resolved.
+    const projects: ProjectItem[] = [{ slug: 'apps', peer: 'gmux-hs', node_id: 'node_hs' }]
     const sessions = [
       makeSession({ id: 's1', cwd: '/mnt/apps', peer: 'gmux-hs', project_slug: 'apps', alive: true }),
     ]
-    const resolveRef = (peer: string, slug: string) =>
-      peer === 'unraid' && slug === 'apps' ? { effectivePeer: 'gmux-hs', resolved: true } : undefined
-    const folders = buildProjectFolders(projects, sessions, undefined, {}, resolveRef)
+    const isPresent = (_peer: string, nodeId?: string) => nodeId === 'node_hs'
+    const folders = buildProjectFolders(projects, sessions, undefined, {}, isPresent)
     expect(folders).toHaveLength(1)
     expect(folders[0].peer).toBe('gmux-hs')
     expect(folders[0].unresolved).toBeUndefined()
@@ -321,13 +319,13 @@ describe('buildProjectFolders', () => {
   })
 
   it('flags an unresolved reference and takes precedence over missing', () => {
-    // resolveRef reports the host is in no roster bucket. Even though we
-    // have no peer_projects entry for it, the folder is flagged
-    // unresolved (host renamed/removed) rather than left as a plain
-    // empty reference — and unresolved is never conflated with missing.
-    const projects: ProjectItem[] = [{ slug: 'apps', peer: 'hs' }]
-    const resolveRef = () => ({ effectivePeer: 'hs', resolved: false })
-    const folders = buildProjectFolders(projects, [], undefined, {}, resolveRef)
+    // The reference's anchor (node_id) is in no roster bucket — host
+    // renamed-away-and-gone or removed. Even with no peer_projects entry,
+    // the folder is flagged unresolved rather than left a plain empty
+    // reference — and unresolved is never conflated with missing.
+    const projects: ProjectItem[] = [{ slug: 'apps', peer: 'hs', node_id: 'node_gone' }]
+    const isPresent = () => false
+    const folders = buildProjectFolders(projects, [], undefined, {}, isPresent)
     expect(folders[0].unresolved).toBe(true)
     expect(folders[0].missing).toBeUndefined()
     expect(folders[0].peer).toBe('hs')

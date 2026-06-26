@@ -1,43 +1,15 @@
-// --- Peer reference resolution (refs #270) ---
+// --- Peer reference liveness (ADR 0015) ---
 //
-// A reference item in projects.json points at a project owned by
-// another host. It stores the host's display `peer` name and,
-// optionally, the host's stable opaque `node_id` (ADR 0007). Because
-// ADR 0007 derives a host's name from Tailscale / the OS hostname, that
-// name can change on upgrade — so resolving a reference purely by name
-// breaks silently when a host is renamed.
-//
-// `resolveReferences` is the single source of truth for "which live
-// host (if any) does this reference point at, and under what current
-// name." Every surface — the sidebar folders, the Hosts tab, the
-// settings gear pip — reads off its output so they all agree.
-//
-// Resolution order, per reference:
-//   1. by node_id — if the reference has a node_id and a roster peer
-//      reports the same one, it resolves to that peer's *current* name
-//      (the display name follows the live host across renames).
-//   2. by name — legacy references with no node_id (or whose node_id
-//      matches no live peer) fall back to matching the stored name. A
-//      name match against a peer that has a node_id yields a backfill,
-//      so the reference becomes rename-proof going forward.
-//   3. unresolved — no roster peer matches by id or name. The host
-//      isn't a current peer (manually added or a devcontainer); it may
-//      have been renamed or removed.
+// A reference points at a peer-owned project. Its `peer` name is the
+// runtime key (folder bucketing, peer_projects, URLs, routing) and is a
+// viewer-owned label frozen at first contact (ADR 0007 §7), so it
+// doesn't drift and the viewer renders it directly — no name
+// resolution. The only question left is liveness: is the host in the
+// roster? Answered by node_id when the reference has one (immune to a
+// reused name), else by name. That also blocks a freed-then-reused
+// name from adopting a stale reference.
 
 import type { PeerInfo, ProjectItem } from './types'
-
-/** Composite key for a reference, by its stored (peer, slug). */
-export function refKey(peer: string, slug: string): string {
-  return `${peer}\u0000${slug}`
-}
-
-export interface RefResolution {
-  /** Peer name to bucket sessions under and label the folder with.
-   *  Equals the live host's current name when resolved by node_id. */
-  effectivePeer: string
-  /** True when the reference points at a host in the current roster. */
-  resolved: boolean
-}
 
 /** A referenced host name that matches no roster peer, with the slugs
  *  that point at it. One entry per distinct unresolved name. */
@@ -46,108 +18,63 @@ export interface UnresolvedHost {
   slugs: string[]
 }
 
-/** A projects.json write needed to make a reference rename-proof:
- *  stamp `node_id` (and follow a drifted display name). The writer
- *  finds the item by (fromPeer, slug) and rewrites it to
- *  { peer: toPeer, node_id }. */
-export interface RefBackfill {
-  slug: string
-  fromPeer: string
-  toPeer: string
-  node_id: string
-}
-
-export interface ResolvedReferences {
-  /** Per-reference resolution, keyed by refKey(item.peer, item.slug). */
-  resolution: Map<string, RefResolution>
-  /** Distinct referenced host names not present in the roster. */
-  unresolved: UnresolvedHost[]
-  /** Opportunistic projects.json updates (stamp node_id / follow rename). */
-  backfills: RefBackfill[]
+/**
+ * Predicate: is a reference's host in the roster?
+ *
+ *  - node_id present in the roster → present (the anchor is live).
+ *  - name absent from the roster → not present.
+ *  - name present but the reference's node_id isn't: present *unless* a
+ *    confirmed, different node_id holds that name. A roster peer with no
+ *    node_id yet (e.g. not reconnected after a daemon restart) is not a
+ *    confirmed mismatch, so we stay present rather than flashing
+ *    "host not found"; a different node_id *is* name reuse, so we don't.
+ */
+export function referencePresence(
+  roster: readonly PeerInfo[],
+): (peer: string, nodeId?: string) => boolean {
+  const liveNodeIds = new Set<string>()
+  const nodeIdByName = new Map<string, string>() // '' = in roster, node_id unknown
+  for (const p of roster) {
+    if (p.node_id) liveNodeIds.add(p.node_id)
+    nodeIdByName.set(p.name, p.node_id ?? '')
+  }
+  return (peer, nodeId) => {
+    if (nodeId && liveNodeIds.has(nodeId)) return true
+    const named = nodeIdByName.get(peer)
+    if (named === undefined) return false // name not in roster
+    if (!nodeId) return true // name-only reference: name match suffices
+    return named === '' // present unless a different node_id owns the name
+  }
 }
 
 /**
- * Resolve every reference item in `projects` against the live peer
- * `roster`. Owned items (no `peer`) are ignored. Pure: no I/O, no
- * signals — callers feed it the current projects + peers and act on
- * the result.
+ * Distinct referenced hosts absent from the roster, with the slugs
+ * pointing at each. Drives the Hosts-tab "Referenced but not found"
+ * group and the gear pip.
  */
-export function resolveReferences(
+export function unresolvedReferences(
   projects: readonly ProjectItem[],
   roster: readonly PeerInfo[],
-): ResolvedReferences {
-  const byNodeId = new Map<string, PeerInfo>()
-  const byName = new Map<string, PeerInfo>()
-  for (const p of roster) {
-    // Last-write-wins if two roster entries report the same node_id
-    // (the duplicate-entry case — see the discovery-dedup follow-up).
-    // Resolution stays correct (both names are the same physical node),
-    // but which display name a reference resolves to then depends on
-    // roster order. Deduping the roster upstream removes the ambiguity.
-    if (p.node_id) byNodeId.set(p.node_id, p)
-    byName.set(p.name, p)
-  }
-
-  const resolution = new Map<string, RefResolution>()
-  const unresolvedMap = new Map<string, string[]>()
-  const backfills: RefBackfill[] = []
-
+): UnresolvedHost[] {
+  const present = referencePresence(roster)
+  const byName = new Map<string, string[]>()
   for (const item of projects) {
     if (!item.peer) continue // owned project, not a reference
-    const key = refKey(item.peer, item.slug)
-
-    // 1. node_id anchor: the durable identity. The live host's current
-    //    name wins, so a renamed host stays linked.
-    if (item.node_id) {
-      const live = byNodeId.get(item.node_id)
-      if (live) {
-        resolution.set(key, { effectivePeer: live.name, resolved: true })
-        if (live.name !== item.peer) {
-          // Host was renamed; follow it and refresh the cached name.
-          backfills.push({ slug: item.slug, fromPeer: item.peer, toPeer: live.name, node_id: item.node_id })
-        }
-        continue
-      }
-      // node_id set but no live peer reports it (host not currently a
-      // peer, or gone) — fall through to a name match.
-    }
-
-    // 2. name match: legacy references, or a reference whose stored
-    //    node_id matched no live peer (host gone / replaced). When the
-    //    matched peer's node_id differs from what's stored — covering
-    //    both the never-stamped and the stale cases — record a backfill
-    //    so the (deferred) backfill writer can refresh projects.json.
-    //    Resolution is already correct here; until that writer lands the
-    //    refreshed id isn't persisted, so the id-then-name fallback
-    //    recurs harmlessly on each load.
-    const named = byName.get(item.peer)
-    if (named) {
-      resolution.set(key, { effectivePeer: item.peer, resolved: true })
-      if (named.node_id && named.node_id !== item.node_id) {
-        backfills.push({ slug: item.slug, fromPeer: item.peer, toPeer: item.peer, node_id: named.node_id })
-      }
-      continue
-    }
-
-    // 3. unresolved: no live host matches. Keep the dangling name for
-    //    the folder label; the surface flags it.
-    resolution.set(key, { effectivePeer: item.peer, resolved: false })
-    const slugs = unresolvedMap.get(item.peer) ?? []
+    if (present(item.peer, item.node_id)) continue
+    const slugs = byName.get(item.peer) ?? []
     slugs.push(item.slug)
-    unresolvedMap.set(item.peer, slugs)
+    byName.set(item.peer, slugs)
   }
-
-  const unresolved: UnresolvedHost[] = []
-  for (const [name, slugs] of unresolvedMap) unresolved.push({ name, slugs })
-
-  return { resolution, unresolved, backfills }
+  const out: UnresolvedHost[] = []
+  for (const [name, slugs] of byName) out.push({ name, slugs })
+  return out
 }
 
 /**
  * Remove the references `(peer, slug)` for `slug` in `slugs`. Pure:
- * returns a new items array. Like the remap above, scoping to the
- * surfaced unresolved `slugs` is what prevents deleting a same-named
- * reference that's actually resolving correctly via node_id. (refs #270)
+ * returns a new items array. Scoping to the surfaced unresolved `slugs`
+ * is what prevents deleting a same-named reference that is actually
+ * present via its node_id anchor (ADR 0015).
  */
 export function removeReferenceItems(
   items: readonly ProjectItem[],

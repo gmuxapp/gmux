@@ -19,7 +19,7 @@ import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects } from './projects'
-import { resolveReferences, removeReferenceItems, removeHostReferenceItems, refKey, type UnresolvedHost } from './references'
+import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems, type UnresolvedHost } from './references'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS, MOCK_PEERS, MOCK_HEALTH } from './mock-data/index'
@@ -516,19 +516,11 @@ export const localPeerNames = computed<ReadonlySet<string>>(() => {
   return set
 })
 
-/** Project folders for the sidebar, built from projects + sessions. */
-/** Reference resolution against the live roster: maps each reference
- *  to the host's current name (rename-proof via node_id) or flags it
- *  unresolved. Single source of truth for folders, the Hosts tab, and
- *  the gear pip. (refs #270) */
-export const resolvedReferences = computed(() =>
-  resolveReferences(projects.value, peers.value),
-)
-
-/** Distinct referenced host names that match no roster peer. Drives
- *  the Hosts-tab "Referenced but not found" group and the gear pip. */
+/** Distinct referenced host names absent from the roster. Drives the
+ *  Hosts-tab "Referenced but not found" group and the gear pip — a
+ *  node_id/name membership check against the roster (ADR 0015). */
 export const unresolvedHosts = computed<UnresolvedHost[]>(
-  () => resolvedReferences.value.unresolved,
+  () => unresolvedReferences(projects.value, peers.value),
 )
 
 /** Build sidebar folders from an arbitrary session list. Shared by the
@@ -541,7 +533,7 @@ function foldersFrom(ss: Session[]): Folder[] {
     ss,
     (name) => localPeerNames.value.has(name),
     _rawWorld.value.peerProjects,
-    (peer, slug) => resolvedReferences.value.resolution.get(refKey(peer, slug)),
+    referencePresence(peers.value),
   )
 }
 

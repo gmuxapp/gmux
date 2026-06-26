@@ -131,10 +131,11 @@ export interface ProjectItem {
   /** Set when this item is a reference to a peer-owned project. */
   peer?: string
   /**
-   * Stable opaque identity (ADR 0007) of the referenced peer, used to
-   * resolve the reference even after the peer is renamed. Set only on
-   * references; opportunistically backfilled once the peer is
-   * reachable. Absent on legacy references and owned projects.
+   * Referenced peer's stable opaque identity (ADR 0007). `peer` (the
+   * display name) is the runtime key the viewer renders and routes by;
+   * node_id is only the liveness anchor (see referencePresence),
+   * keeping a reference matched to the right host across re-adds and
+   * name reuse. Set only on references; absent on owned projects.
    */
   node_id?: string
   /** Owned-project match rules. Empty/absent for references. */
