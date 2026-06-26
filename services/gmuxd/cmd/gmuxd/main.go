@@ -204,6 +204,59 @@ func launchGmux(gmuxBin string, command []string, cwd, resumeID string, initialC
 	return cmd.Process.Pid, nil
 }
 
+// resolveResumeDir picks the directory to (re)launch a runner in for a
+// dead session whose original cwd may have been deleted. Order:
+//
+//  1. the session's stored cwd, if it still exists;
+//  2. the owning project's canonical dir (first match-rule path), if it
+//     exists — so a resume lands where the project "+" button would;
+//  3. $HOME, as a last resort, so resume still succeeds.
+//
+// Returns the chosen dir and whether a fallback (anything but the
+// original cwd) was used. Returns ("", false) only when none of the
+// candidates exist as directories — the caller then returns a clear
+// cwd_missing error instead of letting exec fail with the misleading
+// "fork/exec .../gmux: no such file or directory" (Go reports the
+// child's chdir ENOENT against argv0).
+//
+// Every candidate is Stat'd via projects.IsDir, so a missing target can
+// never reach exec.
+func resolveResumeDir(mgr *projects.Manager, sess store.Session) (string, bool) {
+	cwd := projects.NormalizePath(sess.Cwd)
+	canonical := ""
+	if state, err := mgr.Load(); err != nil {
+		// Don't fail the resume over an unreadable projects.json: the
+		// canonical-dir candidate just drops out and we fall through to
+		// cwd/$HOME. Log it so a surprise $HOME resume is explained.
+		log.Printf("resolveResumeDir: %s: load projects: %v (canonical dir unavailable)", sess.ID, err)
+	} else {
+		canonical = state.CanonicalDirForSession(sess.ProjectSlug, projects.MatchParams{
+			Cwd:           sess.Cwd,
+			WorkspaceRoot: sess.WorkspaceRoot,
+			Remotes:       sess.Remotes,
+		})
+	}
+	dir, idx := projects.ResolveLaunchDir(projects.IsDir, cwd, canonical, os.Getenv("HOME"))
+	if dir == "" {
+		return "", false
+	}
+	return dir, idx > 0
+}
+
+// relaunchData builds the success payload for /resume and /restart. On
+// a fallback (cwd was gone), it carries original_cwd + fallback_cwd so
+// the frontend can surface an info toast ("original folder gone; resumed
+// in <fallback_cwd>") without re-deriving anything. Omitted on the
+// common path where the original cwd was used.
+func relaunchData(sessionID string, pid int, originalCwd, usedCwd string, fellBack bool) map[string]any {
+	data := map[string]any{"pid": pid, "session_id": sessionID}
+	if fellBack {
+		data["original_cwd"] = originalCwd
+		data["fallback_cwd"] = usedCwd
+	}
+	return data
+}
+
 // buildLaunchArgs assembles the gmux runner argv for the internal
 // `gmux __run [directives] -- <command>` form (ADR 0009): the hidden
 // __run verb, any non-empty daemon→runner directive flags, then a `--`
@@ -1328,6 +1381,19 @@ func serve(stderr io.Writer) int {
 		// Expand ~ to absolute path for exec.Command.Dir.
 		cwd = projects.NormalizePath(cwd)
 
+		// Stat the target before exec. Without this a missing dir reaches
+		// the child's chdir and Go reports the ENOENT against argv0,
+		// surfacing the misleading "fork/exec .../gmux: no such file or
+		// directory". Fresh launches carry an explicit user-chosen cwd, so
+		// we return a clear error rather than silently redirecting (unlike
+		// resume/restart, which fall back to the project's canonical dir).
+		if !projects.IsDir(cwd) {
+			log.Printf("launch: cwd %q does not exist", cwd)
+			writeError(w, http.StatusUnprocessableEntity, "cwd_missing",
+				fmt.Sprintf("working directory %q does not exist", cwd))
+			return
+		}
+
 		if gmuxBin == "" {
 			writeError(w, http.StatusInternalServerError, "gmux_not_found", "gmux not found (install gmux alongside gmuxd)")
 			return
@@ -1440,7 +1506,16 @@ func serve(stderr io.Writer) int {
 			// preserve the last-known PTY dimensions through the
 			// fork; without them claude / vim / prompt frameworks
 			// reading $COLUMNS at startup would clamp to 80.
-			resumeCwd := projects.NormalizePath(sess.Cwd)
+			resumeCwd, fellBack := resolveResumeDir(projectMgr, sess)
+			if resumeCwd == "" {
+				log.Printf("resume: %s: cwd %q gone and no fallback dir exists", sessionID, projects.NormalizePath(sess.Cwd))
+				writeError(w, http.StatusUnprocessableEntity, "cwd_missing",
+					"the session's working directory no longer exists and no fallback directory is available")
+				return
+			}
+			if fellBack {
+				log.Printf("resume: %s: cwd %q missing, resuming in %q", sessionID, projects.NormalizePath(sess.Cwd), resumeCwd)
+			}
 			pid, err := launchGmux(gmuxBin, sess.Command, resumeCwd, sessionID, sess.TerminalCols, sess.TerminalRows)
 			if err != nil {
 				log.Printf("resume: failed to start gmux: %v", err)
@@ -1455,7 +1530,7 @@ func serve(stderr io.Writer) int {
 			log.Printf("resume: started gmux pid=%d for %s cwd=%s", pid, sessionID, resumeCwd)
 			writeJSON(w, map[string]any{
 				"ok":   true,
-				"data": map[string]any{"pid": pid, "session_id": sessionID},
+				"data": relaunchData(sessionID, pid, projects.NormalizePath(sess.Cwd), resumeCwd, fellBack),
 			})
 
 		case "restart":
@@ -1524,7 +1599,16 @@ func serve(stderr io.Writer) int {
 			// Same as /resume: launch a new runner under the existing
 			// session id; Register's re-registration branch handles
 			// the rest.
-			restartCwd := projects.NormalizePath(sess.Cwd)
+			restartCwd, fellBack := resolveResumeDir(projectMgr, sess)
+			if restartCwd == "" {
+				log.Printf("restart: %s: cwd %q gone and no fallback dir exists", sessionID, projects.NormalizePath(sess.Cwd))
+				writeError(w, http.StatusUnprocessableEntity, "cwd_missing",
+					"the session's working directory no longer exists and no fallback directory is available")
+				return
+			}
+			if fellBack {
+				log.Printf("restart: %s: cwd %q missing, restarting in %q", sessionID, projects.NormalizePath(sess.Cwd), restartCwd)
+			}
 			pid, err := launchGmux(gmuxBin, sess.Command, restartCwd, sessionID, sess.TerminalCols, sess.TerminalRows)
 			if err != nil {
 				log.Printf("restart: failed to start gmux: %v", err)
@@ -1534,7 +1618,7 @@ func serve(stderr io.Writer) int {
 			log.Printf("restart: started gmux pid=%d for %s cwd=%s", pid, sessionID, restartCwd)
 			writeJSON(w, map[string]any{
 				"ok":   true,
-				"data": map[string]any{"pid": pid, "session_id": sessionID},
+				"data": relaunchData(sessionID, pid, projects.NormalizePath(sess.Cwd), restartCwd, fellBack),
 			})
 
 		case "kill":
