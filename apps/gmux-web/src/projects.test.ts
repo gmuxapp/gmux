@@ -317,7 +317,7 @@ describe('buildProjectFolders', () => {
   })
 
   it('buckets a reference\'s sessions by its stored name and stays resolved when present', () => {
-    // `peer` is the runtime key (ADR 0015): sessions stamped with the
+    // `peer` is the runtime key (ADR 0017): sessions stamped with the
     // same name land in the folder, and the liveness predicate (node_id
     // present) keeps it resolved.
     const projects: ProjectItem[] = [{ slug: 'apps', peer: 'gmux-hs', node_id: 'node_hs' }]

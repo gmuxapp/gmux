@@ -1,4 +1,4 @@
-// --- Peer reference liveness (ADR 0015) ---
+// --- Peer reference liveness (ADR 0017) ---
 //
 // A reference points at a peer-owned project. Its `peer` name is the
 // runtime key (folder bucketing, peer_projects, URLs, routing) and is a
@@ -74,7 +74,7 @@ export function unresolvedReferences(
  * Remove the references `(peer, slug)` for `slug` in `slugs`. Pure:
  * returns a new items array. Scoping to the surfaced unresolved `slugs`
  * is what prevents deleting a same-named reference that is actually
- * present via its node_id anchor (ADR 0015).
+ * present via its node_id anchor (ADR 0017).
  */
 export function removeReferenceItems(
   items: readonly ProjectItem[],

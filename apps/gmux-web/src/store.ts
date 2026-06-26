@@ -518,7 +518,7 @@ export const localPeerNames = computed<ReadonlySet<string>>(() => {
 
 /** Distinct referenced host names absent from the roster. Drives the
  *  Hosts-tab "Referenced but not found" group and the gear pip — a
- *  node_id/name membership check against the roster (ADR 0015). */
+ *  node_id/name membership check against the roster (ADR 0017). */
 export const unresolvedHosts = computed<UnresolvedHost[]>(
   () => unresolvedReferences(projects.value, peers.value),
 )

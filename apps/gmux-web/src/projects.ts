@@ -333,7 +333,7 @@ export function buildProjectFolders(
   sessions: Session[],
   isLocalPeer?: (peerName: string) => boolean,
   peerProjects?: Record<string, { slug: string; launch_cwd?: string }[]>,
-  // Liveness predicate: is a reference's host in the roster? (ADR 0015).
+  // Liveness predicate: is a reference's host in the roster? (ADR 0017).
   // `peer` is a frozen viewer-owned label, so references bucket/label by
   // it directly; this only sets the unresolved flag. Omitted ⇒ present.
   isPresent?: (peer: string, nodeId?: string) => boolean,
