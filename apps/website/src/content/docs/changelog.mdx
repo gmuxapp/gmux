@@ -38,6 +38,94 @@ Or download binaries directly from [GitHub Releases](https://github.com/gmuxapp/
 
 ---
 
+## v2.0.0 - 2026-06-27
+
+Gmux now persists the scrollback and metadata for finished processes. This allows gmux to be more ergonomic to use for agents and automations from the CLI. See the new documentation for details, including the new **gmux skill!**
+https://gmux.app/scripts-and-agents
+
+### Breaking
+- remove protocol-1 SSE/bulk-GET compat surface ([#224](https://github.com/gmuxapp/gmux/pull/224))
+- **(gmuxd)** host identity, naming & peer URLs (ADR 0007) ([#265](https://github.com/gmuxapp/gmux/pull/265))
+- **(gmuxd)** token-authenticate tailnet peers; remove tailscale autodiscovery (ADR 0008) ([#280](https://github.com/gmuxapp/gmux/pull/280))
+- **(cli)** verb-first gmux 2.0 CLI ([#314](https://github.com/gmuxapp/gmux/pull/314))
+
+### Security
+- **(daemon)** create clipboard paste files with 0600 permissions ([#291](https://github.com/gmuxapp/gmux/pull/291))
+- **(daemon)** drop google fonts from login page ([#287](https://github.com/gmuxapp/gmux/pull/287))
+- move per-session sockets off shared /tmp to a per-user dir ([#295](https://github.com/gmuxapp/gmux/pull/295))
+- validate session ids and slugs before filesystem and url use ([#297](https://github.com/gmuxapp/gmux/pull/297))
+
+### Features
+- snapshot push protocol + cross-host project ownership ([#191](https://github.com/gmuxapp/gmux/pull/191))
+- **(cli)** route session actions through gmuxd; add --host/@suffix; local-default --list ([#225](https://github.com/gmuxapp/gmux/pull/225))
+- project ownership polish (references over adoption) ([#227](https://github.com/gmuxapp/gmux/pull/227))
+- **(daemon)** stamp sessions with last_activity_at on noteworthy state transitions ([#229](https://github.com/gmuxapp/gmux/pull/229))
+- **(web)** cross-host indicators — host suffix + devcontainer marker ([#230](https://github.com/gmuxapp/gmux/pull/230))
+- **(web)** activity-first home dashboard ([#231](https://github.com/gmuxapp/gmux/pull/231))
+- **(web)** rewrite project page with three activity sections and adaptive cwd subtitle ([#232](https://github.com/gmuxapp/gmux/pull/232))
+- **(web)** home owns reorder/remove; modal trimmed to additions only ([#233](https://github.com/gmuxapp/gmux/pull/233))
+- **(web)** auto-reload tab when bundle goes stale relative to daemon ([#234](https://github.com/gmuxapp/gmux/pull/234))
+- **(web)** tidy home/project navigation; fix terminal color bleed and replay width ([#237](https://github.com/gmuxapp/gmux/pull/237))
+- **(gmuxd)** keepalive ping on browser-facing PTY WebSocket ([#245](https://github.com/gmuxapp/gmux/pull/245))
+- **(gmuxd)** permessage-deflate on browser-facing PTY WebSocket ([#245](https://github.com/gmuxapp/gmux/pull/245))
+- **(env)** source a fresh login environment when launching sessions ([#246](https://github.com/gmuxapp/gmux/pull/246))
+- **(web)** show waiting indicator on sidebar logo ([#248](https://github.com/gmuxapp/gmux/pull/248))
+- **(web)** hamburger badge shows only the waiting state ([#248](https://github.com/gmuxapp/gmux/pull/248))
+- **(web)** move enable-notifications into Activity header as a ghost pill ([#248](https://github.com/gmuxapp/gmux/pull/248))
+- **(web)** show local host on project headers when projects span multiple hosts ([#248](https://github.com/gmuxapp/gmux/pull/248))
+- **(web)** settings modal shell + gear button (deep-linkable via ?settings) ([#248](https://github.com/gmuxapp/gmux/pull/248))
+- **(web)** move project management into Settings; home becomes pure overview ([#248](https://github.com/gmuxapp/gmux/pull/248))
+- **(web)** hosts tab in settings (read-only roster: self + peers) ([#248](https://github.com/gmuxapp/gmux/pull/248))
+- **(web)** home recency buckets (last hour / earlier today / yesterday / earlier this week) ([#248](https://github.com/gmuxapp/gmux/pull/248))
+- **(web)** settings modal — fixed-size panel with side tab rail (responsive) ([#248](https://github.com/gmuxapp/gmux/pull/248))
+- rename-proof peer references — surface & recover unresolved references ([#278](https://github.com/gmuxapp/gmux/pull/278))
+- 2.0 upgrade migration and explicit host auth status ([#282](https://github.com/gmuxapp/gmux/pull/282))
+- **(web)** show unavailable state for projects in the settings modal ([#284](https://github.com/gmuxapp/gmux/pull/284))
+- make project discovery host-authoritative ([#305](https://github.com/gmuxapp/gmux/pull/305))
+- **(web)** long-press a terminal link on mobile to copy or open it ([#302](https://github.com/gmuxapp/gmux/pull/302))
+- **(web)** collapse the session header while the keyboard is open on phones ([#307](https://github.com/gmuxapp/gmux/pull/307))
+- **(web)** rework the mobile terminal — toolbar, keyboard, resize, copy & paste ([#308](https://github.com/gmuxapp/gmux/pull/308))
+- authoritative attribution + runner-owned state via an agent-hook (ADR 0010/0011) ([#315](https://github.com/gmuxapp/gmux/pull/315))
+- **(web)** bundle Nerd Font symbols subset with local() fallback to full font ([#321](https://github.com/gmuxapp/gmux/pull/321))
+- **(codex)** authoritative session state via codex hooks ([#319](https://github.com/gmuxapp/gmux/pull/319))
+- **(claude)** authoritative session/status via Claude Code hooks ([#320](https://github.com/gmuxapp/gmux/pull/320))
+- **(gmuxd)** bound session state dir — scrollback as cache, meta mirrors conversation existence ([#333](https://github.com/gmuxapp/gmux/pull/333))
+
+### Fixes
+- **(web)** break suggested_slug ties on path in discoverProjects sort ([#226](https://github.com/gmuxapp/gmux/pull/226))
+- project sidebar polish (stamps, dismiss, peer scoping, manage UX) ([#228](https://github.com/gmuxapp/gmux/pull/228))
+- **(web)** hide session close buttons in mock mode (dangling comma) ([#235](https://github.com/gmuxapp/gmux/pull/235))
+- **(daemon)** preserve PTY size across /resume and /restart ([#238](https://github.com/gmuxapp/gmux/pull/238))
+- **(daemon)** reconcile alive runners after daemon restart ([#239](https://github.com/gmuxapp/gmux/pull/239))
+- **(daemon)** suppress no-op session broadcasts; deterministic snapshot order ([#240](https://github.com/gmuxapp/gmux/pull/240))
+- **(env)** stop leaking session identity into spawned daemons ([#246](https://github.com/gmuxapp/gmux/pull/246))
+- **(web)** unique keys for discovered project rows ([#260](https://github.com/gmuxapp/gmux/pull/260))
+- **(web)** black rectangles in WebGL terminal — atlas mipmap driver bug + context-loss recovery ([#267](https://github.com/gmuxapp/gmux/pull/267))
+- **(gmuxd)** warn instead of fail on removed ADR 0007 config keys ([#269](https://github.com/gmuxapp/gmux/pull/269))
+- **(gmuxd)** disable permessage-deflate on the browser PTY WebSocket (mobile reconnect storm) ([#279](https://github.com/gmuxapp/gmux/pull/279))
+- **(gmuxd)** make restart wait for health; clarify install behavior ([#268](https://github.com/gmuxapp/gmux/pull/268))
+- **(gmuxd)** disable permessage-deflate on the peer-proxy browser WebSocket too (mobile reconnect storm) ([#285](https://github.com/gmuxapp/gmux/pull/285))
+- **(web)** make filteredSessions reactive to the URL query string ([#294](https://github.com/gmuxapp/gmux/pull/294))
+- terminal resize/scrollbar feedback loop; standardize scrollbars ([#299](https://github.com/gmuxapp/gmux/pull/299))
+- **(web)** mobile toolbar respects armed ctrl/alt modifiers ([#300](https://github.com/gmuxapp/gmux/pull/300))
+- **(web)** open links reliably on mobile by replaying the Linkifier mouse handshake on tap ([#301](https://github.com/gmuxapp/gmux/pull/301))
+- **(gmuxd)** reject /v1/projects/add on validation failure instead of reporting phantom success ([#303](https://github.com/gmuxapp/gmux/pull/303))
+- **(web)** blip counts only sidebar sessions, not discovered ([#304](https://github.com/gmuxapp/gmux/pull/304))
+- **(daemon)** recover the login page when a Strict-SameSite cookie was withheld ([#309](https://github.com/gmuxapp/gmux/pull/309))
+- **(web)** keep session URL on refresh until world snapshot loads ([#311](https://github.com/gmuxapp/gmux/pull/311))
+- **(pi)** derive first-user-message title in the extension; drop the (new) sentinel ([#327](https://github.com/gmuxapp/gmux/pull/327))
+- **(web)** rework launch menu popup positioning + remove appear animations ([#326](https://github.com/gmuxapp/gmux/pull/326))
+- **(web)** launch project-level "+" in the project's canonical dir ([#325](https://github.com/gmuxapp/gmux/pull/325))
+- **(gmuxd)** resume in project's canonical folder when cwd is gone ([#334](https://github.com/gmuxapp/gmux/pull/334))
+
+### Docs
+- correct scrollback size and architecture description ([#288](https://github.com/gmuxapp/gmux/pull/288))
+- relational storage is a non-goal (ADR 0012) + post-#315 cleanup ([#317](https://github.com/gmuxapp/gmux/pull/317))
+- document tool-neutral authoritative hook protocol + guard test ([#318](https://github.com/gmuxapp/gmux/pull/318))
+- renumber duplicate ADR 0015 (references) to 0017 ([#335](https://github.com/gmuxapp/gmux/pull/335))
+- **(adr)** 0018 — stateful notifications with resolve-once interactive actions ([#336](https://github.com/gmuxapp/gmux/pull/336))
+
+---
 ## v1.6.0 - 2026-05-08
 
 Gmux now persists the scrollback and metadata for finished processes. This allows gmux to be more ergonomic to use for agents and automations from the CLI. See the new documentation for details, including the new **gmux skill!**
