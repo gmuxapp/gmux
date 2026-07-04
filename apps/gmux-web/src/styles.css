@@ -307,12 +307,12 @@ body {
 }
 
 .folder-header:hover .launch-container.folder-launch-btn,
-/* Keep the button (and its open menu, which is a DOM descendant) fully
-   opaque while launching or while the menu is open — otherwise leaving the
-   folder row's hover fades the open menu out from under the cursor. */
+/* Keep the button fully opaque while launching or while the menu is open —
+   otherwise leaving the folder row's hover fades the button out from under
+   the cursor. (The open menu itself is portaled to <body>, so it never
+   inherits this opacity.) */
 .launch-container.folder-launch-btn:has(.loading),
-.launch-container.folder-launch-btn.open,
-.launch-container.folder-launch-btn:has(.launch-inline-menu) {
+.launch-container.folder-launch-btn.open {
   opacity: 1;
 }
 
@@ -351,7 +351,9 @@ body {
   to { transform: rotate(360deg); }
 }
 
-/* Inline menu — fixed-positioned by JS so it escapes overflow:hidden parents */
+/* Inline menu — portaled to <body> and fixed-positioned by JS so it escapes
+   overflow:hidden parents and transformed ancestors (the mobile sidebar
+   drawer's translateX would otherwise become its containing block). */
 .launch-inline-menu {
   position: fixed;
   background: var(--bg-surface);
@@ -359,6 +361,8 @@ body {
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
   min-width: 180px;
+  /* Backstop for the JS re-clamp: never wider than the viewport. */
+  max-width: calc(100vw - 16px);
   z-index: 1000;
   padding: 4px;
   overflow: hidden;

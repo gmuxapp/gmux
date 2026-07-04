@@ -4,7 +4,8 @@
 // Launcher definitions come from the store's health signal (populated
 // from /v1/health). The component reads them reactively.
 
-import { useState, useRef, useEffect, useMemo } from 'preact/hooks'
+import { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'preact/hooks'
+import { createPortal } from 'preact/compat'
 import type { LauncherDef, PeerInfo } from './types'
 import { launchers as launchersSignal, defaultLauncher as defaultLauncherSignal, peers as peersSignal, launchSession } from './store'
 
@@ -52,6 +53,18 @@ export interface Viewport {
 
 /** Margin kept between the menu and the viewport edges (px). */
 const MENU_VIEWPORT_MARGIN = 8
+
+/**
+ * Clamp a menu's left coordinate so a menu of `width` stays inside the
+ * viewport: right edge first, then left edge (which wins if the menu is
+ * wider than the viewport).
+ */
+export function clampMenuLeft(left: number, width: number, innerWidth: number): number {
+  const maxLeft = innerWidth - MENU_VIEWPORT_MARGIN - width
+  if (left > maxLeft) left = maxLeft
+  if (left < MENU_VIEWPORT_MARGIN) left = MENU_VIEWPORT_MARGIN
+  return left
+}
 /** How far left of the button the menu's left edge sits (px). */
 const MENU_LEFT_OFFSET = 6
 
@@ -65,7 +78,9 @@ const MENU_LEFT_OFFSET = 6
  * Vertical: lift the menu so its default item (first adapter) lands directly
  * under the button — enabling open-then-double-click on the default. The menu
  * has 4px padding-top; a shown target line adds ~32px (line + divider) that we
- * offset so the first adapter stays aligned.
+ * offset so the first adapter stays aligned. The lift is clamped so the menu
+ * never pokes above the viewport (e.g. a button in the very first sidebar row
+ * on mobile, where the sidebar has no header above the project list).
  */
 export function computeMenuPos(
   rect: Rect,
@@ -74,14 +89,10 @@ export function computeMenuPos(
   menuWidth = 180,
 ): { top: number; left: number } {
   const targetOffset = showTarget ? 32 : 0
-  const top = rect.top - 4 - targetOffset // 4px = menu padding-top
+  let top = rect.top - 4 - targetOffset // 4px = menu padding-top
+  if (top < MENU_VIEWPORT_MARGIN) top = MENU_VIEWPORT_MARGIN
 
-  let left = rect.left - MENU_LEFT_OFFSET
-  // Clamp right edge inside the viewport...
-  const maxLeft = viewport.innerWidth - MENU_VIEWPORT_MARGIN - menuWidth
-  if (left > maxLeft) left = maxLeft
-  // ...then clamp left edge (wins if the menu is wider than the viewport).
-  if (left < MENU_VIEWPORT_MARGIN) left = MENU_VIEWPORT_MARGIN
+  const left = clampMenuLeft(rect.left - MENU_LEFT_OFFSET, menuWidth, viewport.innerWidth)
 
   return { top, left }
 }
@@ -121,6 +132,7 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer }: L
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   // Read launcher config from the store (populated by /v1/health).
   const hasLaunchers = launchersSignal.value.length > 0
@@ -132,6 +144,16 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer }: L
     const r = btn.getBoundingClientRect()
     setMenuPos(computeMenuPos(r, { innerWidth: window.innerWidth }, showTarget))
   }
+
+  // computeMenuPos clamps with the menu's *minimum* width (180px); nowrap
+  // items can render it wider, overflowing the right edge on narrow screens.
+  // Re-clamp with the real width once the menu is in the DOM — layout effect,
+  // so the correction lands in the same paint as the initial position.
+  useLayoutEffect(() => {
+    if (state !== 'open' || !menuRef.current || !menuPos) return
+    const left = clampMenuLeft(menuPos.left, menuRef.current.offsetWidth, window.innerWidth)
+    if (left !== menuPos.left) setMenuPos({ top: menuPos.top, left })
+  }, [state, menuPos])
 
   const handleClick = (e: MouseEvent) => {
     e.stopPropagation()
@@ -156,9 +178,10 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer }: L
   useEffect(() => {
     if (state !== 'open') return
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setState('idle')
-      }
+      const t = e.target as Node
+      if (containerRef.current?.contains(t)) return
+      if (menuRef.current?.contains(t)) return
+      setState('idle')
     }
     const timer = setTimeout(() => document.addEventListener('mousedown', handler), 0)
     return () => {
@@ -206,8 +229,14 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer }: L
           </svg>
         ) : '+'}
       </button>
-      {isOpen && menuPos && (
+      {/* Portaled to <body>: on mobile the sidebar is a transformed drawer
+          (translateX), which makes it the containing block for fixed
+          descendants — rendered in place the menu would be positioned
+          relative to the sidebar and clipped at its edge. The portal keeps
+          the fixed coords viewport-relative on every layout. */}
+      {isOpen && menuPos && createPortal(
         <div
+          ref={menuRef}
           class="launch-inline-menu"
           style={{ top: menuPos.top, left: menuPos.left }}
         >
@@ -234,7 +263,8 @@ export function LaunchButton({ className, onLaunch, beforeLaunch, cwd, peer }: L
               {l.label}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
