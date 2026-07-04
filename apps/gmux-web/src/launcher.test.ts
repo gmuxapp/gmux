@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { launchersForPeer, formatTarget, computeMenuPos } from './launcher'
+import { launchersForPeer, formatTarget, computeMenuPos, clampMenuLeft } from './launcher'
 import type { LauncherDef, PeerInfo } from './types'
 
 const localLaunchers: LauncherDef[] = [
@@ -71,6 +71,28 @@ describe('computeMenuPos', () => {
   test('offsets for the target line + divider so the default stays under the button', () => {
     const pos = computeMenuPos({ top: 100, left: 200 }, viewport, true)
     expect(pos.top).toBe(100 - 4 - 32)
+  })
+
+  test('clamps the top so a button in the first row never lifts the menu off-screen', () => {
+    // rect.top 11 (first sidebar row on mobile): 11 - 4 - 32 = -25 unclamped.
+    const pos = computeMenuPos({ top: 11, left: 200 }, viewport, true)
+    expect(pos.top).toBe(8)
+  })
+})
+
+describe('clampMenuLeft', () => {
+  test('re-clamps with the real (wider than min) menu width', () => {
+    // Menu opened at left=202 assuming 180px wide; real width 240 on a
+    // 390px viewport must pull it left so the right edge stays inside.
+    expect(clampMenuLeft(202, 240, 390)).toBe(390 - 8 - 240)
+  })
+
+  test('keeps position when it already fits', () => {
+    expect(clampMenuLeft(100, 180, 1000)).toBe(100)
+  })
+
+  test('left margin wins when menu is wider than viewport', () => {
+    expect(clampMenuLeft(50, 500, 390)).toBe(8)
   })
 })
 
