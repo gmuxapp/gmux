@@ -39,19 +39,6 @@ type Index struct {
 	// byToolID maps "kind/toolID" → slug for reverse lookup
 	// (e.g., finding a conversation's slug from its tool UUID).
 	byToolID map[string]string
-	// onRemoveByPath, if set, is invoked (outside the lock) with the
-	// file path whenever RemoveByPath drops a conversation because its
-	// file disappeared. cmd/gmuxd wires this to retire dead sessions
-	// whose SessionFile matches. Set once at startup; not guarded.
-	onRemoveByPath func(path string)
-}
-
-// SetOnRemoveByPath registers a callback fired after RemoveByPath
-// removes a conversation (i.e. its file vanished on disk). Wired at
-// startup so a conversation-file deletion can retire the dead
-// session(s) backed by that file.
-func (idx *Index) SetOnRemoveByPath(fn func(path string)) {
-	idx.onRemoveByPath = fn
 }
 
 // New creates an empty index.
@@ -208,28 +195,24 @@ func (idx *Index) Remove(kind, toolID string) bool {
 // (kind, toolID) handy. Linear walk over the index; that's fine
 // because Remove events are rare (manual `rm`, file rotation) and
 // the index size stays in the hundreds-to-low-thousands range.
-// Returns true if an entry was removed. On removal it fires the
-// onRemoveByPath callback (if set) outside the lock, so the caller can
-// retire sessions backed by the now-gone file without risking a
-// re-entrant deadlock.
+// Returns true if an entry was removed.
+//
+// Session retirement on file-gone deliberately does NOT hang off this
+// method: an unindexed conversation (parse failure, CanResume=false,
+// empty cwd) still needs retiring when its file disappears, so the
+// watcher-level sink (sources.go) owns that signal instead.
 func (idx *Index) RemoveByPath(path string) bool {
 	idx.mu.Lock()
-	removed := false
+	defer idx.mu.Unlock()
 	for key, info := range idx.byKey {
 		if info.FilePath != path {
 			continue
 		}
 		delete(idx.byKey, key)
 		delete(idx.byToolID, toolKey(info.Kind, info.ToolID))
-		removed = true
-		break
+		return true
 	}
-	idx.mu.Unlock()
-
-	if removed && idx.onRemoveByPath != nil {
-		idx.onRemoveByPath(path)
-	}
-	return removed
+	return false
 }
 
 // SlugExists reports whether a slug is taken within a kind.

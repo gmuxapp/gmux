@@ -39,7 +39,7 @@ func TestSnapshotAndWatchSources(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	idx.WatchSources(ctx)
+	idx.WatchSources(ctx, nil)
 	time.Sleep(150 * time.Millisecond) // let the watchers establish
 
 	writePiFile(t, filepath.Join(root, "--tmp-b--", "id-2.jsonl"), "id-2")

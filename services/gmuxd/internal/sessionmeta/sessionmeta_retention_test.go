@@ -3,6 +3,7 @@ package sessionmeta
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -376,4 +377,99 @@ func TestPruneScrollbackFailedRemoveKeepsEvicting(t *testing.T) {
 	if exists(t, filepath.Join(s.SessionDir("sess-evictable"), scrollback.ActiveName)) {
 		t.Error("evictable scrollback must still be reclaimed despite the earlier failure")
 	}
+}
+
+// TestEvictScrollbackSkipsFreshlyWritten pins the write-freshness guard
+// against the prune-vs-resume race: a victim whose scrollback mtime
+// advanced past its scan-time value (someone — e.g. a just-resumed
+// runner — wrote it after the scan) is skipped entirely, freeing 0.
+func TestEvictScrollbackSkipsFreshlyWritten(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	s := New(t.TempDir(),
+		WithRetention(RetentionPolicy{ScrollbackCacheBytes: 1}),
+		WithClock(func() time.Time { return now }))
+	writeDead(t, s, "sess-a", now.Format(time.RFC3339), "")
+	writeScrollback(t, s, "sess-a", 100, now)
+
+	// Scan-time snapshot says the file is older than it now is.
+	stale := scrollbackUsage{id: "sess-a", bytes: 100, mtime: now.Add(-time.Hour)}
+	if freed := s.evictScrollback(stale); freed != 0 {
+		t.Errorf("freshly-written victim must be skipped, freed %d", freed)
+	}
+	if !exists(t, filepath.Join(s.SessionDir("sess-a"), scrollback.ActiveName)) {
+		t.Error("freshly-written scrollback must survive")
+	}
+
+	// With an accurate snapshot the same victim is evicted.
+	current := scrollbackUsage{id: "sess-a", bytes: 100, mtime: now}
+	if freed := s.evictScrollback(current); freed != 100 {
+		t.Errorf("accurate-snapshot victim should free 100, freed %d", freed)
+	}
+	if exists(t, filepath.Join(s.SessionDir("sess-a"), scrollback.ActiveName)) {
+		t.Error("scrollback should be evicted")
+	}
+}
+
+// TestPruneScrollbackCoalesces pins the TryLock coalescing: a prune
+// entering while another holds the lock must do nothing (no eviction,
+// no stamp), and a later un-contended run must evict normally.
+func TestPruneScrollbackCoalesces(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	s := New(t.TempDir(),
+		WithRetention(RetentionPolicy{ScrollbackCacheBytes: 1}),
+		WithClock(func() time.Time { return now }))
+	writeDead(t, s, "sess-a", now.Format(time.RFC3339), "")
+	writeScrollback(t, s, "sess-a", 100, now)
+
+	s.pruneMu.Lock()
+	s.PruneScrollback(nil) // contended: must skip
+	s.pruneMu.Unlock()
+
+	if !exists(t, filepath.Join(s.SessionDir("sess-a"), scrollback.ActiveName)) {
+		t.Fatal("contended prune must not evict")
+	}
+	if exists(t, filepath.Join(s.Dir(), pruneStampFile)) {
+		t.Error("contended prune must not advance the throttle stamp")
+	}
+
+	s.PruneScrollback(nil) // uncontended: evicts
+	if exists(t, filepath.Join(s.SessionDir("sess-a"), scrollback.ActiveName)) {
+		t.Error("uncontended prune should evict")
+	}
+}
+
+// TestRemoveDeadBySessionFileDrivesWatchRemovals pins the seam between
+// the store broadcast and the meta persister: retiring a dead session
+// via RemoveDeadBySessionFile must, through the session-remove event
+// consumed by WatchRemovals, delete the on-disk meta dir.
+func TestRemoveDeadBySessionFileDrivesWatchRemovals(t *testing.T) {
+	metaStore := New(t.TempDir())
+	sess := store.Session{ID: "sess-dead1", Kind: "claude", Alive: false, SessionFile: "/c/conv.jsonl"}
+	if err := metaStore.Write(sess); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := store.New()
+	sessions.Upsert(sess)
+	events, cancel := sessions.Subscribe()
+	var cancelOnce sync.Once
+	stopWatch := func() { cancelOnce.Do(cancel) }
+	defer stopWatch()
+	done := make(chan struct{})
+	go func() { metaStore.WatchRemovals(events); close(done) }()
+
+	if ids := sessions.RemoveDeadBySessionFile("/c/conv.jsonl"); len(ids) != 1 {
+		t.Fatalf("expected 1 retired session, got %v", ids)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for exists(t, metaStore.SessionDir("sess-dead1")) {
+		select {
+		case <-deadline:
+			t.Fatal("meta dir not removed via WatchRemovals within 2s")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	stopWatch()
+	<-done
 }
