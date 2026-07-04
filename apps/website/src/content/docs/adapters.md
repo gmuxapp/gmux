@@ -12,7 +12,7 @@ An adapter watches the terminal output of your process and reports structured st
 - **Working** — the tool is busy (cyan pulsing dot)
 - **Idle** — the tool is waiting (no dot)
 
-Without an adapter, gmux still tracks whether the process is alive — but with one, you get meaningful at-a-glance status like "thinking" or "42/50 passed".
+Without an adapter, gmux still tracks whether the process is alive — but with one, you get at-a-glance working/error state, unread markers, and meaningful session titles.
 
 ## Automatic detection
 
@@ -72,7 +72,7 @@ Any process can report its own status without a custom adapter. `gmux` sets `$GM
 curl -X PUT --unix-socket "$GMUX_SOCKET" \
   http://localhost/status \
   -H 'Content-Type: application/json' \
-  -d '{"label": "building", "working": true}'
+  -d '{"working": true}'
 ```
 
 ## Writing an adapter

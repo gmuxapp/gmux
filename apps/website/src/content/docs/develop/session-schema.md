@@ -29,7 +29,7 @@ Two paths: the runner's `GET /meta` endpoint (polled by discovery) and its SSE `
 
 | Event | Fields |
 |-------|--------|
-| `status` | `label`, `working`, `error` |
+| `status` | `working`, `error` |
 | `meta` | `title`, `shell_title`, `adapter_title`, `subtitle`, `unread` |
 | `exit` | `exit_code` |
 | `terminal_resize` | `cols`, `rows` |
@@ -60,7 +60,7 @@ gmuxd exposes the aggregated store via `GET /v1/sessions` and `session-upsert` /
 | **Display** |
 | `title` | ✓ computed | ✓ re-resolved | ✓ | ✓ header, sidebar |
 | `subtitle` | ✓ | ✓ | ✓ | — |
-| `status` | ✓ | ✓ | ✓ | ✓ dots, label |
+| `status` | ✓ | ✓ | ✓ | ✓ dots, header indicator |
 | `unread` | ✓ | ✓ | ✓ | ✓ dots, tab badge |
 | **Resume** |
 | `resumable` | — | ✓ derived | ✓ | ✓ sidebar |
@@ -158,7 +158,6 @@ Status is **null by default** and should only be set when it carries meaningful 
 
 ```typescript
 interface Status {
-  label: string    // Short text, shown next to the dot.
   working: boolean // Pulsing dot animation.
   error?: boolean  // Red dot, treated as enhanced unread.
 }
@@ -167,9 +166,9 @@ interface Status {
 **Design principle: no status is the default.**
 
 - **`null`** — normal. Alive sessions show a steady dot, dead sessions are dimmed.
-- **`working: true`** — pulsing dot, no label needed. The animation says "something is happening."
-- **`label` without `working`** — informational text like `"exited (1)"` or `"tests: 3 failed"`. Use sparingly.
-- **Don't set `"completed"`, `"idle"`, or `"working"` as labels.** These repeat what the dot and alive/dead state already show.
+- **`working: true`** — pulsing dot. The animation says "something is happening."
+- **`error: true`** — red dot; the agent gave up and needs attention.
+- Display text is the frontend's concern: it derives "Working…"/"Error" from the booleans and `exited (N)` from `exit_code`.
 
 ### How Children Set Status
 
@@ -180,13 +179,13 @@ GMUX_SOCKET=/tmp/gmux-sessions/sess-abc123.sock
 
 # Child (or a hook) sets status via HTTP on the same socket
 curl --unix-socket $GMUX_SOCKET http://localhost/status \
-  -X PUT -d '{"label":"thinking","working":true}'
+  -X PUT -d '{"working":true}'
 ```
 
 **Option B — OSC escape sequences** (terminal-native):
 ```bash
 # OSC 7777 ; json ST  (custom, parsed by gmux's PTY reader)
-printf '\e]7777;{"label":"waiting","working":false}\e\\'
+printf '\e]7777;{"working":false}\e\\'
 ```
 
 ### Full Example
@@ -206,7 +205,7 @@ As served by `GET /meta` on a runner's Unix socket (runner → gmuxd):
   "title": "fix auth bug",
   "shell_title": "user@host:~/dev/gmux",
   "adapter_title": "fix auth bug",
-  "status": { "label": "thinking", "working": true },
+  "status": { "working": true },
   "unread": false,
   "socket_path": "/tmp/gmux-sessions/sess-abc123.sock",
   "binary_hash": "a1b2c3d4e5f6..."
@@ -226,7 +225,7 @@ As served by `GET /v1/sessions` (gmuxd → frontend):
   "pid": 12345,
   "started_at": "2026-03-14T10:00:01Z",
   "title": "fix auth bug",
-  "status": { "label": "thinking", "working": true },
+  "status": { "working": true },
   "unread": false,
   "socket_path": "/tmp/gmux-sessions/sess-abc123.sock",
   "slug": "fix-auth-bug",
