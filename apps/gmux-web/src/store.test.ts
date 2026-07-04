@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
+import { toasts } from './toasts'
 import {
   sessions, sessionsLoaded, worldLoaded, projects, upsertSession, removeSession,
-  markSessionRead, dismissSession, reorderSessions,
+  markSessionRead, dismissSession, reorderSessions, resumeSession, killSession,
   handleActivity, isSessionActive, isSessionFading, activityMap,
   sessionStaleness, peers, peerAppearance, peerStatusByName,
   isSessionUnavailable, urlPath, urlSearch, filteredSessions, selectedId,
@@ -46,6 +47,94 @@ beforeEach(() => {
   worldLoaded.value = false
   urlPath.value = '/'
   urlSearch.value = ''
+})
+
+describe('postAction surfaces backend failures as error toasts', () => {
+  beforeEach(() => { toasts.value = [] })
+  afterEach(() => { vi.unstubAllGlobals(); toasts.value = [] })
+
+  it('parses the structured error contract and labels the action', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      text: () => Promise.resolve(JSON.stringify({
+        ok: false, error: { code: 'not_resumable', message: 'session is not resumable' },
+      })),
+    }))
+    await resumeSession('s1')
+    expect(toasts.value).toHaveLength(1)
+    expect(toasts.value[0]).toMatchObject({ kind: 'error', message: 'Resume failed: session is not resumable' })
+  })
+
+  it('falls back to the status line when the body is not the structured shape', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false, status: 500, statusText: 'Internal Server Error',
+      text: () => Promise.resolve(''),
+    }))
+    await killSession('s1')
+    expect(toasts.value[0].message).toBe('Kill failed: Internal Server Error')
+  })
+
+  it('does NOT toast a network reject (connectivity is owned by the reconnecting pill)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
+    await resumeSession('s1')
+    expect(toasts.value).toHaveLength(0)
+  })
+
+  it('pushes nothing on success', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true, status: 200, statusText: 'OK', text: () => Promise.resolve(''),
+    }))
+    await killSession('s1')
+    expect(toasts.value).toHaveLength(0)
+  })
+
+  it('resolves the success boolean and never rejects (callers branch, not catch)', async () => {
+    // handleResume clears its "resuming…" spinner off this boolean; a
+    // rejection-based contract would leave the spinner stuck for the
+    // fallback timeout since postAction swallows all throws.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false, status: 500, statusText: 'Internal Server Error',
+      text: () => Promise.resolve(''),
+    }))
+    await expect(resumeSession('s1')).resolves.toBe(false)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true, status: 200, statusText: 'OK', text: () => Promise.resolve(''),
+    }))
+    await expect(resumeSession('s1')).resolves.toBe(true)
+  })
+})
+
+describe('optimistic dismiss retracts on failure', () => {
+  beforeEach(() => { toasts.value = []; _pendingMutations.value = [] })
+  afterEach(() => { vi.unstubAllGlobals(); toasts.value = []; _pendingMutations.value = [] })
+
+  it('hides the row, then retracts immediately when the server rejects', async () => {
+    _rawSessions.value = [makeSession({ id: 's1' })]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false, status: 404, statusText: 'Not Found',
+      text: () => Promise.resolve(JSON.stringify({ error: { message: 'no such session' } })),
+    }))
+    await dismissSession('s1')
+    // Toast surfaced AND the optimistic mutation was retracted (not left
+    // to linger until the TTL), so the session is visible again now.
+    expect(toasts.value[0].message).toBe('Dismiss failed: no such session')
+    expect(_pendingMutations.value).toHaveLength(0)
+    expect(sessions.value.some(s => s.id === 's1')).toBe(true)
+  })
+
+  it('keeps the optimistic dismissal when the server accepts', async () => {
+    _rawSessions.value = [makeSession({ id: 's1' })]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true, status: 200, statusText: 'OK', text: () => Promise.resolve(''),
+    }))
+    await dismissSession('s1')
+    expect(toasts.value).toHaveLength(0)
+    // Mutation stands until the next snapshot confirms removal.
+    expect(_pendingMutations.value).toHaveLength(1)
+    expect(sessions.value.some(s => s.id === 's1')).toBe(false)
+  })
 })
 
 describe('filteredSessions reactivity to the URL query string', () => {
