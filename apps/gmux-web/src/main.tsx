@@ -11,6 +11,7 @@ import { TerminalView } from './terminal'
 import { useArrivalPulse } from './use-arrival-pulse'
 import { Sidebar } from './sidebar'
 import { usePresence } from './use-presence'
+import { lifecycleAction, showMobileBar } from './session-actions'
 
 import type { Session } from './types'
 import { SettingsModal } from './settings'
@@ -165,9 +166,11 @@ class ErrorBoundary extends Component<
 
 // ── Components ──
 
-function MainHeader({ session, onRestart }: {
+function MainHeader({ session, onRestart, onResume, resuming }: {
   session: Session | null
   onRestart?: () => void
+  onResume?: (id: string) => void
+  resuming?: boolean
 }) {
   if (!session) {
     return (
@@ -192,7 +195,13 @@ function MainHeader({ session, onRestart }: {
         </div>
       </div>
       <div class="main-header-right">
-        {(session.status?.working || session.status?.error) && (
+        {!session.alive ? (
+          // Dead session: the exit status lives in the header (same slot as
+          // the alive working/error chip) so alive ↔ resumable share chrome.
+          <div class="main-header-status ended">
+            {session.exit_code != null ? `Exited (${session.exit_code})` : 'Exited'}
+          </div>
+        ) : (session.status?.working || session.status?.error) && (
           <div class={`main-header-status ${session.status.error ? 'error' : 'working'}`}>
             <span
               class={`session-dot ${session.status.error ? 'error' : 'working'}`}
@@ -201,15 +210,17 @@ function MainHeader({ session, onRestart }: {
             {session.status.error ? 'Error' : 'Working…'}
           </div>
         )}
-        <SessionMenu session={session} onRestart={onRestart} />
+        <SessionMenu session={session} onRestart={onRestart} onResume={onResume} resuming={resuming} />
       </div>
     </div>
   )
 }
 
-function SessionMenu({ session, onRestart }: {
+function SessionMenu({ session, onRestart, onResume, resuming }: {
   session: Session
   onRestart?: () => void
+  onResume?: (id: string) => void
+  resuming?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -252,6 +263,14 @@ function SessionMenu({ session, onRestart }: {
   // for the secondary+F keybind).
   const canFind = session.alive
 
+  // One lifecycle action per state (Restart alive, Resume/Rerun dead);
+  // the menu is the single home for it in both states.
+  const action = lifecycleAction(session, resuming)
+  const actionHandler = action?.id === 'restart' ? onRestart
+    : action?.id === 'resume' && onResume ? () => onResume(session.id)
+    : undefined
+  const showStale = action?.id === 'restart' && !!staleKind
+
   return (
     <div class="session-menu" ref={menuRef}>
       <button
@@ -273,16 +292,17 @@ function SessionMenu({ session, onRestart }: {
               Find in terminal
             </button>
           )}
-          {session.alive && onRestart && (
+          {action && actionHandler && (
             <button
-              class={`session-menu-action${staleKind ? ' stale' : ''}`}
-              onClick={() => { setOpen(false); onRestart!() }}
+              class={`session-menu-action${showStale ? ' stale' : ''}`}
+              disabled={action.disabled}
+              onClick={() => { setOpen(false); actionHandler() }}
             >
-              Restart session
-              {staleKind && <span class="session-menu-action-tag">outdated</span>}
+              {action.label}
+              {showStale && <span class="session-menu-action-tag">outdated</span>}
             </button>
           )}
-          {(canFind || (session.alive && onRestart)) && <div class="session-menu-divider" />}
+          {(canFind || (action && actionHandler)) && <div class="session-menu-divider" />}
           <div class="session-menu-section-title">Session info</div>
           <div class="session-menu-row">
             <span class="session-menu-label">Adapter</span>
@@ -677,6 +697,8 @@ function App() {
           <MainHeader
             session={selectedVal}
             onRestart={selectedVal ? () => { void restartSession(selectedVal.id) } : undefined}
+            onResume={handleResume}
+            resuming={!!selectedVal && resumingId === selectedVal.id}
           />
         )}
 
@@ -718,8 +740,6 @@ function App() {
           <ReplayView
             session={selectedVal}
             terminalOptions={termOpts}
-            onResume={handleResume}
-            resuming={resumingId === selectedVal.id}
           />
         ) : selectedVal ? (
           <div class="state-message">
@@ -733,7 +753,10 @@ function App() {
           />
         )}
 
-        {selectedVal && (canAttach || USE_MOCK) && termOpts && keybindsVal && (
+        {/* Rendered for any selected session — alive or dead — because on
+            touch the bar's ☰ is the only way to open the sidebar overlay.
+            Dead sessions get disabled keys (canSend=false) but a live ☰. */}
+        {showMobileBar(selectedVal) && (
           <MobileTerminalBar
             canSend={canAttach}
             ctrlArmed={ctrlArmed}
