@@ -196,11 +196,20 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
       </div>
       <div class="main-header-right">
         {!session.alive ? (
-          // Dead session: the exit status lives in the header (same slot as
-          // the alive working/error chip) so alive ↔ resumable share chrome.
-          <div class="main-header-status ended">
-            {session.exit_code != null ? `Exited (${session.exit_code})` : 'Exited'}
-          </div>
+          // Dead session: status lives in the header (same slot as the alive
+          // working/error chip) so alive ↔ resumable share chrome. While a
+          // resume is in flight it flips to the busy label — the menu closes
+          // on click, so this chip is the visible feedback.
+          resuming ? (
+            <div class="main-header-status working">
+              <span class="session-dot working" style={{ width: 5, height: 5 }} />
+              {lifecycleAction(session, true)?.label ?? 'Resuming…'}
+            </div>
+          ) : (
+            <div class="main-header-status ended">
+              {session.exit_code != null ? `Exited (${session.exit_code})` : 'Exited'}
+            </div>
+          )
         ) : (session.status?.working || session.status?.error) && (
           <div class={`main-header-status ${session.status.error ? 'error' : 'working'}`}>
             <span
