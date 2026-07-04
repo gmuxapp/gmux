@@ -2943,6 +2943,60 @@ body {
   cursor: progress;
 }
 
+/* Replay (read-only dead session) layout: terminal area fills remaining
+   vertical space, action bar pinned beneath. The bar carries the primary
+   Resume/Rerun action (also mirrored in the header menu, where Restart
+   lives for alive sessions). */
+.replay-root {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.replay-root > .terminal-shell {
+  flex: 1;
+  min-height: 0;
+}
+
+.replay-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+}
+
+.replay-status {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.replay-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+/* Touch: the floating key bar (see .mobile-bottom-bar) overlays the bottom
+   of .main-panel, so the action bar reserves the bar's height to keep the
+   Resume button reachable above the keys; the footer surface extends down
+   behind the translucent keys. Values mirror the bar's grid templates
+   (2×40px rows + 5px gap + 4px padding, or a single 40px row + 4px on the
+   wide single-row layout) — keep in sync. */
+@media (pointer: coarse) {
+  .replay-actions {
+    padding-bottom: calc(8px + 89px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (pointer: coarse) and (min-width: 600px) {
+  .replay-actions {
+    padding-bottom: calc(8px + 44px + env(safe-area-inset-bottom));
+  }
+}
+
 
 /* Floating "jump to bottom" overlay for any xterm-hosting view (replay,
    live terminal). Anchors to the nearest positioned ancestor, which

@@ -8,6 +8,7 @@ import { loadWebglRenderer } from './webgl-renderer'
 import type { Session } from './types'
 import { fetchScrollback, type ScrollbackResult } from './replay-fetch'
 import { JumpToBottom } from './jump-to-bottom'
+import { RESUMABLE_AGENT_KINDS } from './session-actions'
 
 // gmuxd caps scrollback at 1 MiB × 2 files (~2 MiB max). xterm's default
 // scrollback line cap (1000) would silently truncate most of that for
@@ -19,6 +20,16 @@ type ReplayState =
   | { kind: 'loading' }
   | ScrollbackResult
 
+/** Short button label for the action bar. Same agent-vs-rerun split as
+ * the header menu's lifecycleAction (shared RESUMABLE_AGENT_KINDS), just
+ * without the "session" suffix — the bar sits inside the session view,
+ * so the noun is redundant there. */
+function resumeButtonLabel(kind: string, busy: boolean): string {
+  const isAgent = RESUMABLE_AGENT_KINDS.has(kind)
+  if (busy) return isAgent ? 'Resuming…' : 'Rerunning…'
+  return isAgent ? 'Resume' : 'Rerun'
+}
+
 /**
  * Read-only xterm view that replays a dead session's persisted scrollback
  * from the gmuxd broker. No WebSocket, no input, no resize messages: this
@@ -28,18 +39,32 @@ type ReplayState =
  * sidebar-click model). Live sessions go through TerminalView instead;
  * see main.tsx for the routing.
  *
- * Lifecycle controls (Resume / Rerun / Restart) live in the header
- * SessionMenu, shared with alive sessions — this view is body-only,
- * matching TerminalView. Dismissal is intentionally not exposed here;
- * the sidebar's per-session close affordance is the single way to
- * remove a dead session.
+ * The action bar at the bottom carries the *primary* lifecycle action
+ * for a dead session: Resume / Rerun (if the adapter is resumable).
+ * The same action is deliberately duplicated in the header SessionMenu
+ * — that's where Restart lives for alive sessions, so muscle memory
+ * finds it there too. Promoting it out of an implicit sidebar click
+ * means clicking a dead session navigates to its scrollback first, and
+ * any state-changing action is a deliberate second click.
+ *
+ * The button label depends on the adapter kind: agent adapters
+ * (claude/codex/pi) say "Resume" because they have explicit resume
+ * semantics (`--resume <id>`), shells and one-off commands say "Rerun"
+ * because there's no state to resume — re-launching just runs the
+ * command again. Dismissal is intentionally not exposed here; the
+ * sidebar's per-session close affordance is the single way to remove
+ * a dead session.
  */
 export function ReplayView({
   session,
   terminalOptions,
+  onResume,
+  resuming,
 }: {
   session: Session
   terminalOptions: ITerminalOptions
+  onResume?: (id: string) => void
+  resuming?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [term, setTerm] = useState<Terminal | null>(null)
@@ -135,30 +160,51 @@ export function ReplayView({
     }
   }, [session.id])
 
+  const exitLabel = session.exit_code != null
+    ? `Session ended (exit ${session.exit_code})`
+    : 'Session ended'
+
   return (
-    <div class="terminal-shell">
-      <div ref={containerRef} class="terminal-container" />
-      <JumpToBottom term={term} />
-      {state.kind === 'loading' && (
-        <div class="terminal-loading">
-          Loading scrollback…
+    <div class="replay-root">
+      <div class="terminal-shell">
+        <div ref={containerRef} class="terminal-container" />
+        <JumpToBottom term={term} />
+        {state.kind === 'loading' && (
+          <div class="terminal-loading">
+            Loading scrollback…
+          </div>
+        )}
+        {state.kind === 'empty' && (
+          <div class="terminal-loading">
+            No scrollback was captured for this session.
+          </div>
+        )}
+        {state.kind === 'not-found' && (
+          <div class="terminal-loading">
+            This session is no longer known to gmuxd.
+          </div>
+        )}
+        {state.kind === 'error' && (
+          <div class="terminal-loading">
+            Couldn't load scrollback (HTTP {state.status}: {state.message}).
+          </div>
+        )}
+      </div>
+      <div class="replay-actions">
+        <span class="replay-status">{exitLabel}</span>
+        <div class="replay-buttons">
+          {session.resumable && onResume && (
+            <button
+              type="button"
+              class="btn btn-primary"
+              disabled={!!resuming}
+              onClick={() => onResume(session.id)}
+            >
+              {resumeButtonLabel(session.kind, !!resuming)}
+            </button>
+          )}
         </div>
-      )}
-      {state.kind === 'empty' && (
-        <div class="terminal-loading">
-          No scrollback was captured for this session.
-        </div>
-      )}
-      {state.kind === 'not-found' && (
-        <div class="terminal-loading">
-          This session is no longer known to gmuxd.
-        </div>
-      )}
-      {state.kind === 'error' && (
-        <div class="terminal-loading">
-          Couldn't load scrollback (HTTP {state.status}: {state.message}).
-        </div>
-      )}
+      </div>
     </div>
   )
 }

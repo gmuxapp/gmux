@@ -272,8 +272,10 @@ function SessionMenu({ session, onRestart, onResume, resuming }: {
   // for the secondary+F keybind).
   const canFind = session.alive
 
-  // One lifecycle action per state (Restart alive, Resume/Rerun dead);
-  // the menu is the single home for it in both states.
+  // One lifecycle action per state (Restart alive, Resume/Rerun dead).
+  // The menu is where muscle memory expects it in both states; for dead
+  // sessions the same action is deliberately mirrored as the primary
+  // button in ReplayView's action bar.
   const action = lifecycleAction(session, resuming)
   const actionHandler = action?.id === 'restart' ? onRestart
     : action?.id === 'resume' && onResume ? () => onResume(session.id)
@@ -749,6 +751,8 @@ function App() {
           <ReplayView
             session={selectedVal}
             terminalOptions={termOpts}
+            onResume={handleResume}
+            resuming={resumingId === selectedVal.id}
           />
         ) : selectedVal ? (
           <div class="state-message">

@@ -1,8 +1,10 @@
 import type { Session } from './types'
 
 /**
- * Lifecycle-action gating for the header session menu — the single home
- * for "control this session's lifecycle" across alive and dead states.
+ * Lifecycle-action gating for the header session menu, which offers the
+ * lifecycle action in a consistent spot across alive and dead states.
+ * (For dead sessions the same action is deliberately mirrored as the
+ * primary button in ReplayView's action bar.)
  *
  * Adapter kinds whose runners have an explicit resume protocol
  * (--resume <id> or equivalent). Anything not in this set falls back to
