@@ -473,3 +473,45 @@ func TestRemoveDeadBySessionFileDrivesWatchRemovals(t *testing.T) {
 	stopWatch()
 	<-done
 }
+
+// TestSweepSparesLiveRunnerScrollbackDir pins the fix for the
+// restart-nukes-live-scrollback bug: a session dir containing only
+// scrollback (no meta.json) belongs to a live, never-died runner —
+// meta.json is written only on dead landings — or to a crash leftover
+// that PruneScrollback's cap reclaims. Sweep must NOT RemoveAll it;
+// doing so unlinks the runner's open scrollback file and sticky-breaks
+// its next rotation, destroying the session's post-mortem replay on
+// every daemon restart. Truly empty dirs are still swept.
+func TestSweepSparesLiveRunnerScrollbackDir(t *testing.T) {
+	s := New(t.TempDir())
+
+	// Live runner's dir: scrollback only, no meta.json.
+	liveDir := s.SessionDir("sess-live1")
+	if err := os.MkdirAll(liveDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sb := filepath.Join(liveDir, scrollback.ActiveName)
+	if err := os.WriteFile(sb, []byte("live output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Genuinely empty orphan dir: still swept.
+	emptyDir := s.SessionDir("sess-empty1")
+	if err := os.MkdirAll(emptyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := s.Sweep()
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if len(loaded) != 0 {
+		t.Errorf("no meta.json anywhere; nothing should load, got %d", len(loaded))
+	}
+	if !exists(t, sb) {
+		t.Error("live runner's scrollback must survive Sweep")
+	}
+	if exists(t, emptyDir) {
+		t.Error("empty orphan dir should still be removed")
+	}
+}

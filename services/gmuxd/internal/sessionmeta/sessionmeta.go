@@ -373,8 +373,13 @@ func (s *Store) WatchRemovals(events <-chan store.Event) {
 // register.
 //
 // Cleanup performed during the sweep:
-//   - directories with no meta.json (orphan scrollback or empty
+//   - directories with no meta.json AND no scrollback (empty or junk
 //     dirs) are logged and removed
+//   - directories with scrollback but no meta.json are left alone:
+//     they belong to live, never-died runners (meta.json is written
+//     only on dead landings) whose open scrollback file must not be
+//     unlinked; crash leftovers among them are reclaimed by
+//     PruneScrollback's cap and swept once empty
 //   - directories whose meta.json fails to parse are logged and
 //     left in place (operator may want to inspect)
 //   - non-directory entries under the base dir are ignored
@@ -408,6 +413,18 @@ func (s *Store) Sweep() ([]store.Session, error) {
 
 		if _, err := os.Stat(metaPath); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
+				// No meta.json. If the dir holds scrollback, it belongs to
+				// a live, never-died runner — meta.json is written only on
+				// dead landings, and the runner keeps its scrollback file
+				// open in this dir from launch — so removing it here would
+				// unlink the open file and sticky-break the runner's next
+				// rotation, destroying the session's post-mortem replay on
+				// every daemon restart. Leave it alone: if it is instead a
+				// crash leftover, PruneScrollback's cap reclaims the bytes
+				// and a later Sweep removes the then-empty dir.
+				if hasScrollback(sessDir) {
+					continue
+				}
 				log.Printf("sessionmeta: orphan dir %s (no %s); removing", sessDir, metaFile)
 				_ = os.RemoveAll(sessDir)
 				continue
@@ -520,6 +537,18 @@ type scrollbackUsage struct {
 
 // scrollbackNames are the runner-written files PruneScrollback reclaims.
 var scrollbackNames = []string{scrollback.ActiveName, scrollback.PreviousName}
+
+// hasScrollback reports whether the session dir contains any
+// runner-written scrollback file. Used by Sweep's orphan check to spare
+// live runners' dirs (which have scrollback but no meta.json yet).
+func hasScrollback(sessDir string) bool {
+	for _, name := range scrollbackNames {
+		if _, err := os.Stat(filepath.Join(sessDir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
 
 // PruneScrollback enforces ScrollbackCacheBytes: it sums the scrollback
 // bytes across every session dir and, if the total exceeds the cap,
