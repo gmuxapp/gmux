@@ -198,6 +198,15 @@ func launchGmux(gmuxBin string, command []string, cwd, resumeID string, initialC
 	cmd.Env = sessionenv.Strip(captureLoginEnv(gmuxBin, cwd))
 
 	if err := cmd.Start(); err != nil {
+		// Go surfaces the child's chdir ENOENT against argv0, so a
+		// missing cwd reads as "fork/exec .../gmux: no such file or
+		// directory" — as if the gmux binary were gone. Callers Stat
+		// their target first (resolveResumeDir, the /launch guard), but
+		// the directory can still vanish between that check and Start.
+		// Disambiguate here so the misleading message can never escape.
+		if cwd != "" && !projects.IsDir(cwd) {
+			return 0, fmt.Errorf("working directory %q does not exist: %w", cwd, err)
+		}
 		return 0, err
 	}
 	go cmd.Wait()
