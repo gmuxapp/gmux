@@ -18,7 +18,7 @@ import { LinkActionSheet } from './link-action-sheet'
 import { TerminalTextSheet } from './terminal-text-sheet'
 import { pressedBufferRow, readTerminalText } from './terminal-text'
 import { decideViewportResize, sameSize } from './terminal-resize'
-import { wsStateOnClose, type WsState } from './ws-state'
+import { wsStateOnClose, wsStateOnOutput, type WsState } from './ws-state'
 import { terminalScrolledUp, terminalScrollToBottom } from './store'
 import { MOCK_BY_ID } from './mock-data/index'
 import type { Session } from './types'
@@ -915,7 +915,7 @@ export function TerminalView({
         if (wsRef.current !== ws) return
         // Safety net: live output proves the connection works. Never show the
         // disconnected pill while data is flowing on the current socket.
-        setWsState(prev => prev === 'lost' ? 'open' : prev)
+        setWsState(wsStateOnOutput)
         if (typeof ev.data === 'string') {
           try {
             const msg = JSON.parse(ev.data)
@@ -974,9 +974,10 @@ export function TerminalView({
         // fires *after* the replacement socket opened, and marking the
         // connection 'lost' then would leave the pill stuck on screen
         // forever while the live socket streams output behind it.
-        if (wsRef.current !== ws) return
+        const isCurrent = wsRef.current === ws
+        setWsState(prev => wsStateOnClose(prev, isCurrent))
+        if (!isCurrent) return
         resetResizeEchoGate()
-        setWsState(prev => wsStateOnClose(prev, true))
         if (disposed.current || intentionalClose) return
         if (currentSessionId.current !== session.id) return
 
