@@ -13,6 +13,7 @@
 //
 // Events posted to POST /hook/event on the runner socket:
 //   { op: "session", path, id, name, cwd, reason }      on bind (session_start)
+//                                                         and rename (session_info_changed)
 //   { op: "turn", phase: "start" }                       on agent loop start
 //   { op: "turn", phase: "end", outcome, title }         on agent loop end
 //
@@ -73,6 +74,12 @@ export default function (pi) {
     firstUserTitle = ""; // new bind → forget the previous conversation's fallback
     reportSession(ev?.reason ?? "start", ctx);
   });
+
+  // /name (or any extension calling setSessionName) renames the bound session
+  // without running a turn; session_start/agent_end won't fire until the next
+  // interaction, so forward the rename immediately or the sidebar title stays
+  // stale.
+  pi.on("session_info_changed", (_ev, ctx) => reportSession("rename", ctx));
 
   // --- turn lifecycle: drive the sidebar busy/idle without parsing the file -
   // pi's agent loop bounds map onto the sidebar's working/idle; agent_end
