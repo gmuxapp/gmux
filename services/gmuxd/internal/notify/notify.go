@@ -103,10 +103,15 @@ func (r *Router) Run(ctx context.Context) {
 	defer cancel()
 
 	// Seed prevState from current sessions so we don't fire notifications
-	// for pre-existing state on startup.
+	// for pre-existing state on startup. Under r.mu like every other
+	// prevState access: Run executes on its own goroutine, and presence
+	// callbacks (CancelForSession et al.) can touch router state
+	// concurrently from the moment the router is wired up.
+	r.mu.Lock()
 	for _, s := range r.sessions.List() {
 		r.prevState[s.ID] = snapshotOf(s)
 	}
+	r.mu.Unlock()
 
 	for {
 		select {
