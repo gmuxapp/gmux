@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
@@ -99,5 +100,37 @@ func TestResolveResumeDir_NoProject_CwdMissingFallsToHome(t *testing.T) {
 	dir, fellBack := resolveResumeDir(mgr, sess)
 	if dir != home || !fellBack {
 		t.Errorf("got (%q, %v), want (%q, true)", dir, fellBack, home)
+	}
+}
+
+// launchGmux must never surface a missing cwd as the misleading
+// "fork/exec .../gmux: no such file or directory". Callers Stat their
+// target first, but the dir can vanish between check and Start (TOCTOU);
+// the wrap in launchGmux is the last line of defense.
+func TestLaunchGmux_MissingCwd_DisambiguatedError(t *testing.T) {
+	t.Setenv("SHELL", "") // skip the login-env probe; inherit daemon env
+	gone := filepath.Join(t.TempDir(), "vanished")
+
+	_, err := launchGmux("/bin/true", []string{"true"}, gone, "", 0, 0)
+	if err == nil {
+		t.Fatal("expected error for missing cwd")
+	}
+	if !strings.Contains(err.Error(), "working directory") || !strings.Contains(err.Error(), gone) {
+		t.Errorf("error does not name the missing cwd: %v", err)
+	}
+}
+
+// A genuinely missing binary (with a valid cwd) must keep the original
+// exec error — the disambiguation must not mislabel it as a cwd problem.
+func TestLaunchGmux_MissingBinary_KeepsExecError(t *testing.T) {
+	t.Setenv("SHELL", "")
+	cwd := t.TempDir()
+
+	_, err := launchGmux(filepath.Join(t.TempDir(), "no-such-gmux"), []string{"x"}, cwd, "", 0, 0)
+	if err == nil {
+		t.Fatal("expected error for missing binary")
+	}
+	if strings.Contains(err.Error(), "working directory") {
+		t.Errorf("missing binary mislabeled as cwd problem: %v", err)
 	}
 }
