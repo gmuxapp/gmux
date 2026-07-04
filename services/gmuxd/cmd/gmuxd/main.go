@@ -561,8 +561,9 @@ func serve(stderr io.Writer) int {
 	const scrollbackCacheInterval = 12 * time.Hour
 
 	// Retire the dead session(s) backed by a conversation file when that
-	// file disappears: the conversations index reports the removal, and
-	// meta.json mirrors conversation existence (ADR 0016). The store
+	// file disappears: the adapter conversation watchers report file-gone
+	// (WatchSources below — fires even for files the index never held),
+	// and meta.json mirrors conversation existence (ADR 0016). The store
 	// applies the alive/peer/N:1 guards; its session-remove broadcast is
 	// what WatchRemovals turns into a meta-dir delete.
 	convRetireMeta := func(path string) { sessions.RemoveDeadBySessionFile(path) }
@@ -647,13 +648,12 @@ func serve(stderr io.Writer) int {
 	// adapter's ConversationSource supplies a snapshot at startup and
 	// incremental updates thereafter; the daemon owns no file monitor.
 	convIndex := conversations.New()
-	convIndex.SetOnRemoveByPath(convRetireMeta)
 	convIndex.Snapshot()
 	log.Printf("conversations: indexed %d files", convIndex.Count())
 
 	srcCtx, cancelSources := context.WithCancel(context.Background())
 	defer cancelSources()
-	convIndex.WatchSources(srcCtx)
+	convIndex.WatchSources(srcCtx, convRetireMeta)
 
 	// Start background update checker
 	updateChecker := update.New(version)

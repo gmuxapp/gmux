@@ -48,6 +48,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -132,8 +133,8 @@ func DefaultRetention() RetentionPolicy {
 		// (int64 ns) once multiplied by 24h, so a huge value can't
 		// overflow to a negative duration that prune would silently treat
 		// as "no age limit".
-		const maxSafeDays = int(^uint(0)>>1) / int(24*time.Hour) // ~106 751 on 64-bit
-		if days, err := strconv.Atoi(v); err == nil && days >= 0 && days <= maxSafeDays {
+		const maxSafeDays = math.MaxInt64 / int64(24*time.Hour) // ~106 751
+		if days, err := strconv.Atoi(v); err == nil && days >= 0 && int64(days) <= maxSafeDays {
 			p.MaxAge = time.Duration(days) * 24 * time.Hour
 		} else {
 			log.Printf("sessionmeta: ignoring invalid %s=%q", envRetentionDays, v)
@@ -148,8 +149,8 @@ func DefaultRetention() RetentionPolicy {
 	}
 	if v := os.Getenv(envScrollbackCacheMB); v != "" {
 		// Guard the MiB→bytes shift against int64 overflow the same way.
-		const maxSafeMB = int((^uint64(0) >> 1) >> 20) // bytes that fit in int64
-		if mb, err := strconv.Atoi(v); err == nil && mb >= 0 && mb <= maxSafeMB {
+		const maxSafeMB = math.MaxInt64 >> 20 // MiB counts whose byte value fits in int64
+		if mb, err := strconv.Atoi(v); err == nil && mb >= 0 && int64(mb) <= maxSafeMB {
 			p.ScrollbackCacheBytes = int64(mb) << 20
 		} else {
 			log.Printf("sessionmeta: ignoring invalid %s=%q", envScrollbackCacheMB, v)
@@ -593,28 +594,49 @@ func (s *Store) PruneScrollback(alive map[string]bool) {
 		if total <= s.retention.ScrollbackCacheBytes {
 			break
 		}
-		sessDir := s.SessionDir(u.id)
-		freed := int64(0)
-		for _, name := range scrollbackNames {
-			p := filepath.Join(sessDir, name)
-			fi, err := os.Stat(p)
-			if err != nil {
-				continue
-			}
-			if err := os.Remove(p); err != nil {
-				log.Printf("sessionmeta: scrollback prune remove %s: %v", p, err)
-				continue
-			}
-			freed += fi.Size()
-		}
-		if freed > 0 {
-			log.Printf("sessionmeta: reclaimed %d bytes of scrollback from %s (cache cap)", freed, u.id)
-		}
 		// Decrement by what was actually freed, not the scan-time size:
-		// if a remove failed those bytes are still on disk, so we must
-		// keep evicting rather than stop early on a phantom reclaim.
-		total -= freed
+		// if a remove failed (or the victim was skipped) those bytes are
+		// still on disk, so we must keep evicting rather than stop early
+		// on a phantom reclaim.
+		total -= s.evictScrollback(u)
 	}
+}
+
+// evictScrollback removes one session's scrollback files and returns
+// the bytes actually freed.
+//
+// Write-freshness guard: the alive set is a snapshot, so a session
+// resumed *during* the prune isn't in it — yet its fresh runner reopens
+// (truncating) the same scrollback path (see cli/gmux run). Deleting
+// that open file would leave the runner appending to an unlinked inode
+// and break its next rotation (sticky failure). Any writer — including
+// a runner the store doesn't know about — bumps the file mtime, so a
+// victim whose scrollback mtime advanced past its scan-time value is
+// skipped entirely. The remaining stat→remove window is microseconds.
+func (s *Store) evictScrollback(u scrollbackUsage) (freed int64) {
+	sessDir := s.SessionDir(u.id)
+	for _, name := range scrollbackNames {
+		if fi, err := os.Stat(filepath.Join(sessDir, name)); err == nil && fi.ModTime().After(u.mtime) {
+			log.Printf("sessionmeta: scrollback prune skipping %s (written since scan)", u.id)
+			return 0
+		}
+	}
+	for _, name := range scrollbackNames {
+		p := filepath.Join(sessDir, name)
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if err := os.Remove(p); err != nil {
+			log.Printf("sessionmeta: scrollback prune remove %s: %v", p, err)
+			continue
+		}
+		freed += fi.Size()
+	}
+	if freed > 0 {
+		log.Printf("sessionmeta: reclaimed %d bytes of scrollback from %s (cache cap)", freed, u.id)
+	}
+	return freed
 }
 
 // MaybePruneScrollback runs PruneScrollback only when at least

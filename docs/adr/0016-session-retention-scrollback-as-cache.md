@@ -38,7 +38,10 @@ durable record.
 live session's scrollback must never be evicted. The store is the authority on
 liveness; the prune skips any session ID the store reports `Alive`. At startup
 this runs only from discovery's first-scan hook, *after* live runners have
-re-registered as alive.
+re-registered as alive. Because the alive set is a snapshot, a session resumed
+*during* the prune (or a runner the store hasn't registered yet) is covered by
+a write-freshness guard instead: a victim whose scrollback mtime advanced past
+its scan-time value is skipped — any writer bumps the mtime.
 
 **When it runs.** At startup (first-scan hook) and, throttled to ≥12 h since
 the last run, when a session is **dismissed**. No background timer: a periodic
@@ -49,12 +52,13 @@ throttle is tracked by the mtime of a `.scrollback-prune-stamp` marker.
 ### 2. `meta.json` mirrors conversation existence
 
 A dead session's *whole* entry is retired only when its backing conversation
-file disappears. The conversations index (ADR 0014) already observes file
-removals via adapter sources; `RemoveByPath` now fires a callback, and gmuxd
-retires the dead session(s) whose `SessionFile` matches (skipping any alive or
-peer-owned session — the mapping is N:1). `sessions.Remove` broadcasts
-`session-remove`, which the existing `WatchRemovals` loop catches to drop the
-dir.
+file disappears. The adapter conversation watchers (ADR 0014) already observe
+file removals; the watcher-level sink reports every file-gone event —
+including files the index never held (parse failure, `CanResume=false`, empty
+cwd) — and gmuxd retires the dead session(s) whose `SessionFile` matches
+(skipping any alive or peer-owned session — the mapping is N:1).
+`sessions.Remove` broadcasts `session-remove`, which the existing
+`WatchRemovals` loop catches to drop the dir.
 
 The index only observes removals while gmuxd runs, so a file deleted *while the
 daemon is down* would otherwise leave an orphan entry. A **startup reconcile**

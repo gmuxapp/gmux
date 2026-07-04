@@ -249,26 +249,33 @@ func TestAll(t *testing.T) {
 	}
 }
 
-// TestRemoveByPathFiresCallback pins that the onRemoveByPath hook fires
-// with the path exactly when an entry is removed, and not on a miss.
-func TestRemoveByPathFiresCallback(t *testing.T) {
+// TestSinkRemoveFiresOnRemovedEvenWhenUnindexed pins the retirement
+// seam: the watcher-level sink reports every file-gone event to
+// onRemoved — including files the index never held (parse failure,
+// CanResume=false, empty cwd) — because a dead session bound to an
+// unindexed conversation must still retire when its file is deleted.
+// It also still removes indexed entries from the index.
+func TestSinkRemoveFiresOnRemovedEvenWhenUnindexed(t *testing.T) {
 	idx := New()
 	idx.Upsert(Info{ToolID: "a", Slug: "one", Kind: "pi", FilePath: "/x/a.jsonl"})
 
 	var got []string
-	idx.SetOnRemoveByPath(func(p string) { got = append(got, p) })
+	sink := indexSink{idx: idx, onRemoved: func(p string) { got = append(got, p) }}
 
-	if idx.RemoveByPath("/x/missing.jsonl") {
-		t.Fatal("expected false for unindexed path")
+	sink.Remove("/x/never-indexed.jsonl")
+	sink.Remove("/x/a.jsonl")
+
+	want := []string{"/x/never-indexed.jsonl", "/x/a.jsonl"}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("onRemoved should fire for every removal event, got %v want %v", got, want)
 	}
-	if len(got) != 0 {
-		t.Errorf("callback must not fire on a miss, got %v", got)
+	if _, ok := idx.Lookup("pi", "one"); ok {
+		t.Error("indexed entry should have been removed from the index")
+	}
+	if idx.Count() != 0 {
+		t.Errorf("index should be empty, count=%d", idx.Count())
 	}
 
-	if !idx.RemoveByPath("/x/a.jsonl") {
-		t.Fatal("expected true for indexed path")
-	}
-	if len(got) != 1 || got[0] != "/x/a.jsonl" {
-		t.Errorf("callback should fire once with the path, got %v", got)
-	}
+	// nil callback must not panic.
+	indexSink{idx: idx}.Remove("/x/whatever.jsonl")
 }
