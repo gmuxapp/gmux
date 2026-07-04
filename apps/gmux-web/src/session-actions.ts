@@ -17,7 +17,12 @@ export const RESUMABLE_AGENT_KINDS = new Set(['claude', 'codex', 'pi'])
 
 export type LifecycleAction = {
   id: 'restart' | 'resume'
+  /** Menu-item label ("Resume session") — needs the noun, since the menu
+   * also holds non-lifecycle rows. */
   label: string
+  /** Button label for ReplayView's action bar ("Resume") — the bar sits
+   * inside the session view, so the noun is redundant there. */
+  shortLabel: string
   disabled: boolean
 }
 
@@ -35,17 +40,16 @@ export function lifecycleAction(
   resuming = false,
 ): LifecycleAction | null {
   if (session.alive) {
-    return { id: 'restart', label: 'Restart session', disabled: false }
+    return { id: 'restart', label: 'Restart session', shortLabel: 'Restart', disabled: false }
   }
   if (!session.resumable) return null
   const isAgent = RESUMABLE_AGENT_KINDS.has(session.adapter)
-  return {
-    id: 'resume',
-    label: resuming
-      ? (isAgent ? 'Resuming…' : 'Rerunning…')
-      : (isAgent ? 'Resume session' : 'Rerun session'),
-    disabled: resuming,
+  if (resuming) {
+    const busy = isAgent ? 'Resuming…' : 'Rerunning…'
+    return { id: 'resume', label: busy, shortLabel: busy, disabled: true }
   }
+  const verb = isAgent ? 'Resume' : 'Rerun'
+  return { id: 'resume', label: `${verb} session`, shortLabel: verb, disabled: false }
 }
 
 /**

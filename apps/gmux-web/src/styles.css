@@ -2946,7 +2946,8 @@ body {
 /* Replay (read-only dead session) layout: terminal area fills remaining
    vertical space, action bar pinned beneath. The bar carries the primary
    Resume/Rerun action (also mirrored in the header menu, where Restart
-   lives for alive sessions). */
+   lives for alive sessions); exit status is header chrome, and
+   non-resumable sessions render no bar. */
 .replay-root {
   flex: 1;
   display: flex;
@@ -2962,21 +2963,11 @@ body {
 .replay-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   padding: 8px 16px;
   background: var(--bg-surface);
   border-top: 1px solid var(--border);
-}
-
-.replay-status {
-  color: var(--text-muted);
-  font-size: 13px;
-}
-
-.replay-buttons {
-  display: flex;
-  gap: 8px;
 }
 
 /* Touch: the floating key bar (see .mobile-bottom-bar) overlays the bottom

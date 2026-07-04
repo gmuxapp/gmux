@@ -11,7 +11,7 @@ const sess = (over: Partial<{ alive: boolean; resumable: boolean; adapter: strin
 describe('lifecycleAction', () => {
   it('alive session offers Restart', () => {
     expect(lifecycleAction(sess({ alive: true }))).toEqual({
-      id: 'restart', label: 'Restart session', disabled: false,
+      id: 'restart', label: 'Restart session', shortLabel: 'Restart', disabled: false,
     })
   })
 
@@ -22,18 +22,18 @@ describe('lifecycleAction', () => {
   it('dead resumable agent offers Resume', () => {
     for (const adapter of ['claude', 'codex', 'pi']) {
       expect(lifecycleAction(sess({ resumable: true, adapter }))).toEqual({
-        id: 'resume', label: 'Resume session', disabled: false,
+        id: 'resume', label: 'Resume session', shortLabel: 'Resume', disabled: false,
       })
     }
   })
 
   it('dead resumable non-agent offers Rerun', () => {
     expect(lifecycleAction(sess({ resumable: true, adapter: 'shell' }))).toEqual({
-      id: 'resume', label: 'Rerun session', disabled: false,
+      id: 'resume', label: 'Rerun session', shortLabel: 'Rerun', disabled: false,
     })
     // Unknown adapter kinds default to the safe Rerun label.
-    expect(lifecycleAction(sess({ resumable: true, adapter: 'future-agent' }))!.label)
-      .toBe('Rerun session')
+    expect(lifecycleAction(sess({ resumable: true, adapter: 'future-agent' }))!.shortLabel)
+      .toBe('Rerun')
   })
 
   it('dead non-resumable session offers nothing', () => {
@@ -42,10 +42,10 @@ describe('lifecycleAction', () => {
 
   it('resuming disables the action and shows busy label per kind', () => {
     expect(lifecycleAction(sess({ resumable: true, adapter: 'claude' }), true)).toEqual({
-      id: 'resume', label: 'Resuming…', disabled: true,
+      id: 'resume', label: 'Resuming…', shortLabel: 'Resuming…', disabled: true,
     })
     expect(lifecycleAction(sess({ resumable: true, adapter: 'shell' }), true)).toEqual({
-      id: 'resume', label: 'Rerunning…', disabled: true,
+      id: 'resume', label: 'Rerunning…', shortLabel: 'Rerunning…', disabled: true,
     })
   })
 

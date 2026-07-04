@@ -195,32 +195,45 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
         </div>
       </div>
       <div class="main-header-right">
-        {!session.alive ? (
-          // Dead session: status lives in the header (same slot as the alive
-          // working/error chip) so alive ↔ resumable share chrome. While a
-          // resume is in flight it flips to the busy label — the menu closes
-          // on click, so this chip is the visible feedback.
-          resuming ? (
-            <div class="main-header-status working">
-              <span class="session-dot working" style={{ width: 5, height: 5 }} />
-              {lifecycleAction(session, true)?.label ?? 'Resuming…'}
-            </div>
-          ) : (
-            <div class="main-header-status ended">
-              {session.exit_code != null ? `Exited (${session.exit_code})` : 'Exited'}
-            </div>
-          )
-        ) : (session.status?.working || session.status?.error) && (
-          <div class={`main-header-status ${session.status.error ? 'error' : 'working'}`}>
-            <span
-              class={`session-dot ${session.status.error ? 'error' : 'working'}`}
-              style={{ width: 5, height: 5 }}
-            />
-            {session.status.error ? 'Error' : 'Working…'}
-          </div>
-        )}
+        <HeaderStatusChip session={session} resuming={resuming} />
         <SessionMenu session={session} onRestart={onRestart} onResume={onResume} resuming={resuming} />
       </div>
+    </div>
+  )
+}
+
+/** Session status in the header, one chip slot for both states: alive shows
+ * Working…/Error, dead shows Exited (N). While a resume is in flight the
+ * dead chip flips to the busy label — the menu closes on click, so this
+ * chip is the visible feedback until the session comes alive. */
+function HeaderStatusChip({ session, resuming }: {
+  session: Session
+  resuming?: boolean
+}) {
+  if (!session.alive) {
+    if (resuming) {
+      return (
+        <div class="main-header-status working">
+          <span class="session-dot working" style={{ width: 5, height: 5 }} />
+          {lifecycleAction(session, true)?.label ?? 'Resuming…'}
+        </div>
+      )
+    }
+    return (
+      <div class="main-header-status ended">
+        {session.exit_code != null ? `Exited (${session.exit_code})` : 'Exited'}
+      </div>
+    )
+  }
+  if (!session.status?.working && !session.status?.error) return null
+  const error = !!session.status.error
+  return (
+    <div class={`main-header-status ${error ? 'error' : 'working'}`}>
+      <span
+        class={`session-dot ${error ? 'error' : 'working'}`}
+        style={{ width: 5, height: 5 }}
+      />
+      {error ? 'Error' : 'Working…'}
     </div>
   )
 }
