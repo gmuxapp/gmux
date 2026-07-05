@@ -76,6 +76,35 @@ func TestClaudeHookBodies_TurnLifecycle(t *testing.T) {
 	}
 }
 
+// /rename appends a custom-title line to the transcript without firing any
+// hook; the next UserPromptSubmit must refresh the title so the rename isn't
+// invisible until the turn ends.
+func TestClaudeHookBodies_PromptSubmitRefreshesRenamedTitle(t *testing.T) {
+	tr := writeClaudeTranscript(t)
+	ct := `{"type":"custom-title","customTitle":"Renamed Session"}`
+	f, err := os.OpenFile(tr, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(ct + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	in, _ := json.Marshal(map[string]string{"hook_event_name": "UserPromptSubmit", "transcript_path": tr})
+	got := decodeBodies(t, ClaudeHookBodies(in))
+	if len(got) != 2 || got[0]["op"] != "session" || got[1]["op"] != "turn" || got[1]["phase"] != "start" {
+		t.Fatalf("UserPromptSubmit → [session, turn start], got %v", got)
+	}
+	if got[0]["name"] != "Renamed Session" {
+		t.Fatalf("want renamed title, got %v", got[0]["name"])
+	}
+	// Slug stays derived from the first user message (immutable), so the URL
+	// doesn't churn on rename.
+	if got[0]["slug"] != "hello-world" {
+		t.Fatalf("slug must stay stable across rename, got %v", got[0]["slug"])
+	}
+}
+
 func TestClaudeHookBodies_StopRefreshesThenEnds(t *testing.T) {
 	tr := writeClaudeTranscript(t)
 	in, _ := json.Marshal(map[string]string{"hook_event_name": "Stop", "transcript_path": tr})

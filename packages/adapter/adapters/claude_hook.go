@@ -104,7 +104,8 @@ func buildClaudeSettings(selfBin string, userSettings []string) (string, error) 
 //
 //   - SessionStart    → bind held transcript + id + title/slug; fires on
 //     startup AND resume/clear/compact, so it rebinds on /resume.
-//   - UserPromptSubmit → turn start (working).
+//   - UserPromptSubmit → title refresh + turn start (working); the refresh
+//     picks up a /rename, which fires no hook of its own.
 //   - Stop             → rebind + turn end completed.
 //   - SessionEnd       → turn end aborted; covers Ctrl+C / exit where Stop
 //     does not fire.
@@ -209,6 +210,13 @@ func ClaudeHookBodies(input []byte) [][]byte {
 			return [][]byte{b}
 		}
 	case "UserPromptSubmit":
+		// /rename fires no hook of its own — it only appends a custom-title
+		// line to the transcript. Refresh the title here (custom-title wins in
+		// ParseSessionFile) so a mid-session rename shows up at the next
+		// prompt instead of waiting for the turn to end.
+		if b, ok := claudeSessionBody(in.TranscriptPath, in.SessionID, "", in.SessionTitle); ok {
+			return [][]byte{b, turn("start", "")}
+		}
 		return [][]byte{turn("start", "")}
 	case "Stop":
 		// Stop fires only on a clean finish — Claude routes interrupts/API errors
