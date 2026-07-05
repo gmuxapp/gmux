@@ -202,9 +202,10 @@ func TestClaudeParseSessionFileCustomTitle(t *testing.T) {
 	if info.Title != "Auth refactor" {
 		t.Errorf("expected custom title, got %q", info.Title)
 	}
-	// Slug uses first user message (immutable), not custom-title.
-	if info.Slug != "fix-the-bug" {
-		t.Errorf("expected slug from first user message, got %q", info.Slug)
+	// Slug follows the resolved title: a rename moves the slug (slug is the
+	// mutable display name, not identity — the Tool ID is).
+	if info.Slug != "auth-refactor" {
+		t.Errorf("expected slug from custom title, got %q", info.Slug)
 	}
 }
 

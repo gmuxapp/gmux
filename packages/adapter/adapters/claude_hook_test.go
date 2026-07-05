@@ -98,10 +98,10 @@ func TestClaudeHookBodies_PromptSubmitRefreshesRenamedTitle(t *testing.T) {
 	if got[0]["name"] != "Renamed Session" {
 		t.Fatalf("want renamed title, got %v", got[0]["name"])
 	}
-	// Slug stays derived from the first user message (immutable), so the URL
-	// doesn't churn on rename.
-	if got[0]["slug"] != "hello-world" {
-		t.Fatalf("slug must stay stable across rename, got %v", got[0]["slug"])
+	// Slug follows the rename: slug is the mutable display name, not
+	// identity. The frontend rewrites the URL atomically on slug change.
+	if got[0]["slug"] != "renamed-session" {
+		t.Fatalf("slug must follow rename, got %v", got[0]["slug"])
 	}
 }
 
