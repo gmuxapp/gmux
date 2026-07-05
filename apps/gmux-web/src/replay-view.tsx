@@ -9,6 +9,8 @@ import type { Session } from './types'
 import { fetchScrollback, type ScrollbackResult } from './replay-fetch'
 import { JumpToBottom } from './jump-to-bottom'
 import { lifecycleAction } from './session-actions'
+import { MenuButton } from './menu-button'
+import { isTouchDevice } from './touch'
 
 // gmuxd caps scrollback at 1 MiB × 2 files (~2 MiB max). xterm's default
 // scrollback line cap (1000) would silently truncate most of that for
@@ -37,21 +39,28 @@ type ReplayState =
  * an implicit sidebar click means clicking a dead session navigates to
  * its scrollback first, and any state-changing action is a deliberate
  * second click. Exit status is header chrome (MainHeader's "Exited"
- * chip), not repeated here; non-resumable sessions render no bar at
- * all. Dismissal is intentionally not exposed here; the sidebar's
- * per-session close affordance is the single way to remove a dead
- * session.
+ * chip), not repeated here.
+ *
+ * On touch the bar also carries the sidebar ☰: dead sessions render no
+ * mobile key bar (a full set of dead keys just to carry ☰ reads as
+ * clutter), so this is where the menu stays reachable. Without either
+ * a resume action or a touch pointer there's nothing to show and the
+ * bar is omitted. Dismissal is intentionally not exposed here; the
+ * sidebar's per-session close affordance is the single way to remove
+ * a dead session.
  */
 export function ReplayView({
   session,
   terminalOptions,
   onResume,
   resuming,
+  onMenu,
 }: {
   session: Session
   terminalOptions: ITerminalOptions
   onResume?: (id: string) => void
   resuming?: boolean
+  onMenu?: () => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [term, setTerm] = useState<Terminal | null>(null)
@@ -148,6 +157,8 @@ export function ReplayView({
   }, [session.id])
 
   const action = lifecycleAction(session, !!resuming)
+  const resumeShown = action?.id === 'resume' && !!onResume
+  const menuShown = !!onMenu && isTouchDevice()
 
   return (
     <div class="replay-root">
@@ -175,16 +186,19 @@ export function ReplayView({
           </div>
         )}
       </div>
-      {action?.id === 'resume' && onResume && (
+      {(resumeShown || menuShown) && (
         <div class="replay-actions">
-          <button
-            type="button"
-            class="btn btn-primary"
-            disabled={action.disabled}
-            onClick={() => onResume(session.id)}
-          >
-            {action.shortLabel}
-          </button>
+          {menuShown && <MenuButton variant="footer" onMenu={onMenu!} />}
+          {resumeShown && (
+            <button
+              type="button"
+              class="btn btn-primary"
+              disabled={action!.disabled}
+              onClick={() => onResume!(session.id)}
+            >
+              {action!.shortLabel}
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -2963,28 +2963,56 @@ body {
 .replay-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 12px;
   padding: 8px 16px;
   background: var(--bg-surface);
   border-top: 1px solid var(--border);
 }
 
-/* Touch: the floating key bar (see .mobile-bottom-bar) overlays the bottom
-   of .main-panel, so the action bar reserves the bar's height to keep the
-   Resume button reachable above the keys; the footer surface extends down
-   behind the translucent keys. Values mirror the bar's grid templates
-   (2×40px rows + 5px gap + 4px padding, or a single 40px row + 4px on the
-   wide single-row layout) — keep in sync. */
+/* Resume stays on the right whether or not the (touch-only) ☰ occupies
+   the left slot. */
+.replay-actions .btn {
+  margin-left: auto;
+}
+
+/* Notched devices: the replay action bar is the bottom-most chrome on
+   dead sessions (no key bar there), so it absorbs the safe-area inset. */
 @media (pointer: coarse) {
   .replay-actions {
-    padding-bottom: calc(8px + 89px + env(safe-area-inset-bottom));
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
   }
 }
 
-@media (pointer: coarse) and (min-width: 600px) {
-  .replay-actions {
-    padding-bottom: calc(8px + 44px + env(safe-area-inset-bottom));
+/* Standalone ☰ (replay footer / floating home + project variant): only
+   meaningful on touch, where the sidebar is an off-canvas overlay. On fine
+   pointers the sidebar is always visible, so hide it (this also skips the
+   key-visual styles, which live inside the coarse block). */
+.menu-btn-standalone {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  /* Same two-layer key visuals as the bar cells, with a local --key-gap
+     (the bar defines it on the grid) and an explicit size since there's
+     no grid track to size against. */
+  .menu-btn-standalone {
+    --key-gap: 0px;
+    display: inline-flex;
+    width: 48px;
+    min-height: 38px;
+  }
+
+  /* Floating over screens without any bottom bar (home / project hub /
+     transient states). Bottom-left — the same corner the key bar's ☰
+     occupies on session screens — with an opaque fill since it overlays
+     scrollable content. */
+  .menu-btn-floating {
+    position: absolute;
+    left: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    z-index: 50;
+    background: var(--bg-surface);
+    box-shadow: 0 2px 8px oklch(0% 0 0 / 0.35);
   }
 }
 

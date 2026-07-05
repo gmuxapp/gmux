@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { lifecycleAction, showMobileBar } from './session-actions'
+import { lifecycleAction } from './session-actions'
 
 const sess = (over: Partial<{ alive: boolean; resumable: boolean; adapter: string }>) => ({
   alive: false,
@@ -54,16 +54,3 @@ describe('lifecycleAction', () => {
   })
 })
 
-describe('showMobileBar', () => {
-  it('shows for an alive session', () => {
-    expect(showMobileBar({ id: 'a' })).toBe(true)
-  })
-
-  it('shows for a dead session (☰ must stay reachable on touch)', () => {
-    expect(showMobileBar({ id: 'dead' })).toBe(true)
-  })
-
-  it('hides when nothing is selected', () => {
-    expect(showMobileBar(null)).toBe(false)
-  })
-})

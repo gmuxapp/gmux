@@ -8,10 +8,10 @@ import { applyArmedModifiers } from './keyboard'
 import { isTouchDevice } from './touch'
 import { ReplayView } from './replay-view'
 import { TerminalView } from './terminal'
-import { useArrivalPulse } from './use-arrival-pulse'
 import { Sidebar } from './sidebar'
 import { usePresence } from './use-presence'
-import { lifecycleAction, showMobileBar } from './session-actions'
+import { lifecycleAction } from './session-actions'
+import { MenuButton } from './menu-button'
 
 import type { Session } from './types'
 import { SettingsModal } from './settings'
@@ -25,7 +25,7 @@ import { pushError } from './toasts'
 import {
   sessions, connState, selected, selectedId, view, health, peers,
   terminalOptions, keybinds, macCommandIsCtrl,
-  unreadCount, keyboardOpen, terminalFindOpen, terminalScrolledUp, terminalScrollToBottom,
+  keyboardOpen, terminalFindOpen, terminalScrolledUp, terminalScrollToBottom,
   urlPath, urlSearch,
   initStore, setNavigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
@@ -419,15 +419,6 @@ function MobileTerminalBar({
   onCtrlConsumed: () => void
   onAltConsumed: () => void
 }) {
-  // Read signals directly; no props needed for these. The hamburger
-  // badge surfaces only the waiting (unread) state — working/active are
-  // deliberately omitted. unreadCount excludes the selected session and
-  // its value re-fires the arrival pulse when another session starts
-  // waiting.
-  const waitingCount = unreadCount.value
-  const waiting = waitingCount > 0
-  const arrival = useArrivalPulse(waiting ? 'unread' : 'none', waitingCount)
-
   // Don't steal focus from the terminal: a control tap leaves the
   // keyboard exactly as it is (open or closed). Bytes reach the PTY via
   // the raw input channel (onSend), independent of DOM focus, so every
@@ -469,17 +460,7 @@ function MobileTerminalBar({
 
   return (
     <div class="mobile-bottom-bar" role="toolbar" aria-label="Terminal keys" onMouseDown={keepFocus}>
-      <button
-        class={`mobile-bottom-action menu-btn mk-menu${waiting ? ' bg-waiting' : ''}${arrival ? ` bg-${arrival}` : ''}`}
-        onClick={() => {
-          // Dismiss the on-screen keyboard when opening the menu. keepFocus
-          // holds focus on the textarea through pointerdown, so it's still
-          // the active element here; blurring it slides the keyboard away.
-          (document.activeElement as HTMLElement | null)?.blur()
-          onMenu()
-        }}
-        title="Open sessions"
-      ><span class="mkey-face">☰</span></button>
+      <MenuButton variant="bar" onMenu={onMenu} />
       <button class="mobile-bottom-action mk-esc" disabled={!canSend} onClick={() => sendKey('\x1b')} title="Escape"><span class="mkey-face">esc</span></button>
       <button class="mobile-bottom-action mk-tab" disabled={!canSend} onClick={() => sendKey('\t')} title="Tab"><span class="mkey-face">tab</span></button>
       <button class={`${armedClass(ctrlArmed)} mk-ctrl`} disabled={!canSend} aria-pressed={ctrlArmed} onClick={onToggleCtrl} title={ctrlArmed ? 'Ctrl armed for next key' : 'Arm Ctrl'}><span class="mkey-face">ctrl</span></button>
@@ -699,6 +680,15 @@ function App() {
   }, [canAttach])
   const handleAltConsumed = useCallback(() => { setAltArmed(false) }, [])
 
+  const openSidebar = useCallback(() => setSidebarOpen(true), [])
+
+  // The key bar only accompanies an attached (or mock) terminal; dead
+  // sessions carry ☰ in ReplayView's action bar instead of a full set of
+  // disabled keys. Everything else (home, project hub, transient states)
+  // gets the floating ☰ so the sidebar overlay stays reachable on touch.
+  const keyBarShown = !!selectedVal && (canAttach || USE_MOCK) && !!termOpts && !!keybindsVal
+  const replayShown = !keyBarShown && !!selectedVal && !selectedVal.alive && !!termOpts && !USE_MOCK
+
   return (
     <div class="app-layout">
       <Sidebar
@@ -766,6 +756,7 @@ function App() {
             terminalOptions={termOpts}
             onResume={handleResume}
             resuming={resumingId === selectedVal.id}
+            onMenu={openSidebar}
           />
         ) : selectedVal ? (
           <div class="state-message">
@@ -779,21 +770,27 @@ function App() {
           />
         )}
 
-        {/* Rendered for any selected session — alive or dead — because on
-            touch the bar's ☰ is the only way to open the sidebar overlay.
-            Dead sessions get disabled keys (canSend=false) but a live ☰. */}
-        {showMobileBar(selectedVal) && (
+        {keyBarShown && (
           <MobileTerminalBar
             canSend={canAttach}
             ctrlArmed={ctrlArmed}
             altArmed={altArmed}
-            onMenu={() => setSidebarOpen(true)}
+            onMenu={openSidebar}
             onSend={handleMobileInput}
             onToggleCtrl={handleToggleCtrl}
             onToggleAlt={handleToggleAlt}
             onCtrlConsumed={handleCtrlConsumed}
             onAltConsumed={handleAltConsumed}
           />
+        )}
+
+        {/* On touch the sidebar is an off-canvas overlay, so every screen
+            must carry a ☰ somewhere. The key bar and ReplayView's action
+            bar have their own; everything else (home, project hub,
+            connecting/error states) gets the floating one. Hidden on fine
+            pointers via CSS. */}
+        {!keyBarShown && !replayShown && (
+          <MenuButton variant="floating" onMenu={openSidebar} />
         )}
       </div>
     </div>

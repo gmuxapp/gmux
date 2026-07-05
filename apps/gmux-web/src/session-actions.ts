@@ -52,13 +52,3 @@ export function lifecycleAction(
   return { id: 'resume', label: `${verb} session`, shortLabel: verb, disabled: false }
 }
 
-/**
- * Whether the mobile bottom bar renders for the current selection. It
- * must appear for *any* selected session — alive or dead — because on
- * touch devices its ☰ button is the only way to open the sidebar
- * overlay. Dead sessions get the bar with keys disabled (canSend=false)
- * but the menu reachable.
- */
-export function showMobileBar(session: Pick<Session, 'id'> | null): boolean {
-  return session !== null
-}
