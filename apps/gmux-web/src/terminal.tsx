@@ -18,6 +18,7 @@ import { LinkActionSheet } from './link-action-sheet'
 import { TerminalTextSheet } from './terminal-text-sheet'
 import { pressedBufferRow, readTerminalText } from './terminal-text'
 import { decideViewportResize, sameSize } from './terminal-resize'
+import { wsStateOnClose, wsStateOnOutput, type WsState } from './ws-state'
 import { terminalScrolledUp, terminalScrollToBottom } from './store'
 import { MOCK_BY_ID } from './mock-data/index'
 import type { Session } from './types'
@@ -251,7 +252,7 @@ export function TerminalView({
   const [fontReady, setFontReady] = useState(false)
 
   const [termLoading, setTermLoading] = useState(true)
-  const [wsState, setWsState] = useState<'connecting' | 'open' | 'lost'>('connecting')
+  const [wsState, setWsState] = useState<WsState>('connecting')
   const [viewportSize, setViewportSize] = useState<TerminalSize | null>(null)
   const [linkSheet, setLinkSheet] = useState<LinkInfo | null>(null)
   const [textSheet, setTextSheet] = useState<{ lines: string[]; anchorRow: number } | null>(null)
@@ -880,6 +881,7 @@ export function TerminalView({
       wsRef.current = ws
 
       ws.onopen = () => {
+        if (wsRef.current !== ws) return
         attempt = 0
         setWsState('open')
 
@@ -910,6 +912,10 @@ export function TerminalView({
       }
 
       ws.onmessage = (ev) => {
+        if (wsRef.current !== ws) return
+        // Safety net: live output proves the connection works. Never show the
+        // disconnected pill while data is flowing on the current socket.
+        setWsState(wsStateOnOutput)
         if (typeof ev.data === 'string') {
           try {
             const msg = JSON.parse(ev.data)
@@ -963,8 +969,15 @@ export function TerminalView({
       }
 
       ws.onclose = () => {
+        // A stale socket (superseded by a newer connect() or by the effect
+        // re-running) must not touch shared state: its close event often
+        // fires *after* the replacement socket opened, and marking the
+        // connection 'lost' then would leave the pill stuck on screen
+        // forever while the live socket streams output behind it.
+        const isCurrent = wsRef.current === ws
+        setWsState(prev => wsStateOnClose(prev, isCurrent))
+        if (!isCurrent) return
         resetResizeEchoGate()
-        setWsState(prev => prev === 'open' ? 'lost' : prev)
         if (disposed.current || intentionalClose) return
         if (currentSessionId.current !== session.id) return
 
