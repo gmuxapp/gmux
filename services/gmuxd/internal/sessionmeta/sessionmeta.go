@@ -322,6 +322,24 @@ func (s *Store) Read(id string) (store.Session, error) {
 	if err := json.Unmarshal(data, &ps); err != nil {
 		return store.Session{}, fmt.Errorf("sessionmeta: parse %s: %w", path, err)
 	}
+	// Legacy-read shim: pre-v2 meta.json used "kind" and "session_file".
+	// meta.json has no schema version, so fall back to the old keys when
+	// the new ones are absent. Write emits only the new keys.
+	// TODO(v2.1): drop this shim.
+	if ps.Kind == "" || ps.SessionFile == "" {
+		var legacy struct {
+			Kind        string `json:"kind"`
+			SessionFile string `json:"session_file"`
+		}
+		if err := json.Unmarshal(data, &legacy); err == nil {
+			if ps.Kind == "" {
+				ps.Kind = legacy.Kind
+			}
+			if ps.SessionFile == "" {
+				ps.SessionFile = legacy.SessionFile
+			}
+		}
+	}
 	return store.Session(ps), nil
 }
 

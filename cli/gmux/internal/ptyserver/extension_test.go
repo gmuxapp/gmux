@@ -102,10 +102,10 @@ func TestReconnectReplaysSessionFile(t *testing.T) {
 	sc := bufio.NewScanner(resp.Body)
 	for sc.Scan() {
 		if strings.Contains(sc.Text(), sessFile) {
-			return // success: session_file replayed
+			return // success: conversation_file replayed
 		}
 	}
-	t.Error("reconnecting subscriber did not receive replayed session_file")
+	t.Error("reconnecting subscriber did not receive replayed conversation_file")
 }
 func TestSessionEventIsAuthoritative(t *testing.T) {
 	node, err := exec.LookPath("node")

@@ -14,7 +14,7 @@ import type { Session } from './types'
 import {
   activityMap, peerStatusByName,
   sessionDotState, isSessionUnavailable,
-  duplicateSessionFiles,
+  duplicateConversationFiles,
 } from './store'
 import { useArrivalPulse } from './use-arrival-pulse'
 import { HostSuffix } from './host-suffix'
@@ -119,7 +119,7 @@ export function SessionRow({
     metaSegments.push(<span class="session-row-status">{statusText}</span>)
   }
   // Same conversation file open in another live runner (ADR 0011 N:1).
-  if (session.session_file && duplicateSessionFiles.value.has(session.session_file)) {
+  if (session.conversation_file && duplicateConversationFiles.value.has(session.conversation_file)) {
     metaSegments.push(
       <span class="session-row-dup" title="This conversation is open in more than one tab">⚠ open elsewhere</span>,
     )

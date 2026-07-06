@@ -16,10 +16,10 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-export type AdapterKind = 'pi' | 'claude' | 'codex'
+export type AdapterName = 'pi' | 'claude' | 'codex'
 
 export interface FixtureSpec {
-  kind: AdapterKind
+  adapter: AdapterName
   /** Synthetic cwd for path encoding; must be unique within a test run. */
   cwd: string
   /** Session ID / UUID, used as filename. */
@@ -145,7 +145,7 @@ function codexContent(spec: FixtureSpec): string {
 export function writeFakeSession(home: string, spec: FixtureSpec): FixtureResult {
   let filePath: string
   let content: string
-  switch (spec.kind) {
+  switch (spec.adapter) {
     case 'pi':
       filePath = piFile(home, spec)
       content = piContent(spec)
@@ -186,19 +186,19 @@ export function appendToSession(filePath: string, jsonLine: object): void {
  */
 export const SMOKE_FIXTURES: FixtureSpec[] = [
   {
-    kind: 'pi',
+    adapter: 'pi',
     cwd: '/var/gmux-e2e/smoke-pi',
     conversationID: '00000000-0000-0000-0000-0000000000a1',
     title: 'pi smoke fixture',
   },
   {
-    kind: 'claude',
+    adapter: 'claude',
     cwd: '/var/gmux-e2e/smoke-claude',
     conversationID: '00000000-0000-0000-0000-0000000000a2',
     title: 'claude smoke fixture',
   },
   {
-    kind: 'codex',
+    adapter: 'codex',
     cwd: '/var/gmux-e2e/smoke-codex',
     conversationID: '00000000-0000-0000-0000-0000000000a3',
     title: 'codex smoke fixture',

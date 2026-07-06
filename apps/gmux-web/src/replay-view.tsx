@@ -201,7 +201,7 @@ export function ReplayView({
               disabled={!!resuming}
               onClick={() => onResume(session.id)}
             >
-              {resumeButtonLabel(session.kind, !!resuming)}
+              {resumeButtonLabel(session.adapter, !!resuming)}
             </button>
           )}
         </div>

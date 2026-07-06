@@ -24,7 +24,10 @@ type Session struct {
 	CreatedAt     string            `json:"created_at,omitempty"`
 	Command       []string          `json:"command,omitempty"`
 	Cwd           string            `json:"cwd,omitempty"`
-	Kind          string            `json:"kind"`
+	// Kind holds the adapter name ("pi", "claude", "shell", ...). The wire
+	// key is "adapter" (v2 rename); the Go identifier's rename to Adapter
+	// trails with the internal cleanup.
+	Kind          string            `json:"adapter"`
 	WorkspaceRoot string            `json:"workspace_root,omitempty"`
 	Remotes       map[string]string `json:"remotes,omitempty"`
 	Alive         bool              `json:"alive"`
@@ -70,7 +73,7 @@ type Session struct {
 	// Two live sessions may carry the same SessionFile when the same
 	// conversation is resumed in more than one tab; the frontend groups
 	// by this to warn about a conversation open in multiple runners.
-	SessionFile string `json:"session_file,omitempty"`
+	SessionFile string `json:"conversation_file,omitempty"`
 
 	// RunnerVersion is the version string of the gmux runner binary that
 	// launched this session. Set by the runner at startup. The frontend
@@ -121,7 +124,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		CreatedAt     string            `json:"created_at,omitempty"`
 		Command       []string          `json:"command,omitempty"`
 		Cwd           string            `json:"cwd,omitempty"`
-		Kind          string            `json:"kind"`
+		Kind          string            `json:"adapter"`
 		WorkspaceRoot string            `json:"workspace_root,omitempty"`
 		Remotes       map[string]string `json:"remotes,omitempty"`
 		Alive         bool              `json:"alive"`
@@ -138,7 +141,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		TerminalCols  uint16            `json:"terminal_cols,omitempty"`
 		TerminalRows  uint16            `json:"terminal_rows,omitempty"`
 		Slug          string            `json:"slug,omitempty"`
-		SessionFile   string            `json:"session_file,omitempty"`
+		SessionFile   string            `json:"conversation_file,omitempty"`
 		RunnerVersion string            `json:"runner_version,omitempty"`
 		BinaryHash    string            `json:"binary_hash,omitempty"`
 		ProjectSlug   string            `json:"project_slug,omitempty"`

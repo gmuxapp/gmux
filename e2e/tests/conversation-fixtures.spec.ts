@@ -4,7 +4,7 @@ import { SMOKE_FIXTURES, slugify } from '../fixtures'
 
 /**
  * Smoke spec: pre-seeded fixtures (written by global-setup before gmuxd
- * starts) must be reachable at /v1/conversations/{kind}/{slug} once the
+ * starts) must be reachable at /v1/conversations/{adapter}/{slug} once the
  * bootstrap scan completes.
  *
  * Purpose: detect drift between the TS fixtures in `e2e/fixtures.ts`
@@ -20,9 +20,9 @@ import { SMOKE_FIXTURES, slugify } from '../fixtures'
  */
 test.describe('conversation fixtures (bootstrap scan)', () => {
   // Each smoke fixture rendered as one parameterized test, so a
-  // failure names the offending kind directly.
+  // failure names the offending adapter directly.
   for (const fixture of SMOKE_FIXTURES) {
-    test(`${fixture.kind}: pre-seeded fixture reachable via API`, async () => {
+    test(`${fixture.adapter}: pre-seeded fixture reachable via API`, async () => {
       const expectedSlug = slugify(fixture.title)
       // Bootstrap is one-shot at daemon start, but we still poll: the
       // first test in the run might race the daemon's `Scan()` call,
@@ -30,19 +30,19 @@ test.describe('conversation fixtures (bootstrap scan)', () => {
       // of milliseconds.
       const result = await pollUntil(
         async () => {
-          const { status, body } = await apiGet<{ data: { kind: string; title: string; cwd: string } }>(
-            `/v1/conversations/${fixture.kind}/${expectedSlug}`,
+          const { status, body } = await apiGet<{ data: { adapter: string; title: string; cwd: string } }>(
+            `/v1/conversations/${fixture.adapter}/${expectedSlug}`,
           )
           if (status !== 200) return null
           return body.data
         },
         {
           timeoutMs: 5_000,
-          description: `fixture ${fixture.kind}/${expectedSlug} reachable via API`,
+          description: `fixture ${fixture.adapter}/${expectedSlug} reachable via API`,
         },
       )
 
-      expect(result.kind).toBe(fixture.kind)
+      expect(result.adapter).toBe(fixture.adapter)
       expect(result.title).toBe(fixture.title)
       expect(result.cwd).toBe(fixture.cwd)
     })

@@ -70,7 +70,7 @@ export function parseSessionPath(path: string): {
  */
 export function sessionPath(
   projectSlug: string,
-  session: { kind: string; slug?: string; id: string; peer?: string },
+  session: { adapter: string; slug?: string; id: string; peer?: string },
   projectPeer?: string,
 ): string {
   const slug = session.slug || session.id.slice(0, 8)
@@ -78,7 +78,7 @@ export function sessionPath(
   // Mid-path session-host segment is needed only when the session
   // lives on a different host than the project owner.
   const sessionHost = session.peer && session.peer !== projectPeer ? `/@${session.peer}` : ''
-  return `${ownerPrefix}/${projectSlug}${sessionHost}/${session.kind}/${slug}`
+  return `${ownerPrefix}/${projectSlug}${sessionHost}/${session.adapter}/${slug}`
 }
 
 /** Build the URL for a project hub (no session). */
@@ -141,7 +141,7 @@ export function resolveSessionFromPath(
   }
 
   // Filter by adapter kind.
-  const adapterSessions = projectSessions.filter(s => s.kind === parsed.adapter)
+  const adapterSessions = projectSessions.filter(s => s.adapter === parsed.adapter)
 
   if (!parsed.slug) {
     // /:project/:adapter only - return first alive, or first.

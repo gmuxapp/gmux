@@ -306,6 +306,24 @@ func queryMeta(socketPath string) (*store.Session, error) {
 		return nil, err
 	}
 
+	// Legacy-read shim: pre-v2 runners report "kind" and "session_file"
+	// in /meta. Long-lived runners survive daemon upgrades, so accept the
+	// old keys for one release. TODO(v2.1): drop this shim.
+	if sess.Kind == "" || sess.SessionFile == "" {
+		var legacy struct {
+			Kind        string `json:"kind"`
+			SessionFile string `json:"session_file"`
+		}
+		if err := json.Unmarshal(body, &legacy); err == nil {
+			if sess.Kind == "" {
+				sess.Kind = legacy.Kind
+			}
+			if sess.SessionFile == "" {
+				sess.SessionFile = legacy.SessionFile
+			}
+		}
+	}
+
 	// Ensure socket_path is set (runner might not include it)
 	if sess.SocketPath == "" {
 		sess.SocketPath = socketPath

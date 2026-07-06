@@ -1243,12 +1243,12 @@ func serve(stderr io.Writer) int {
 		writeJSON(w, map[string]any{"ok": true, "data": sessions.List()})
 	})
 
-	// Conversation lookup — resolve dead conversations by (kind, slug)
+	// Conversation lookup — resolve dead conversations by (adapter, slug)
 	// for URL resolution. Returns file metadata + resume command.
-	mux.HandleFunc("GET /v1/conversations/{kind}/{slug}", func(w http.ResponseWriter, r *http.Request) {
-		kind := r.PathValue("kind")
+	mux.HandleFunc("GET /v1/conversations/{adapter}/{slug}", func(w http.ResponseWriter, r *http.Request) {
+		adapterName := r.PathValue("adapter")
 		slug := r.PathValue("slug")
-		info, ok := convIndex.Lookup(kind, slug)
+		info, ok := convIndex.Lookup(adapterName, slug)
 		if !ok {
 			writeError(w, http.StatusNotFound, "not_found", "conversation not found")
 			return
@@ -1257,7 +1257,7 @@ func serve(stderr io.Writer) int {
 			"ok": true,
 			"data": map[string]any{
 				"slug":           info.Slug,
-				"kind":           info.Kind,
+				"adapter":        info.Kind,
 				"title":          info.Title,
 				"cwd":            info.Cwd,
 				"resume_command": info.ResumeCommand,

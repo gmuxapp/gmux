@@ -30,7 +30,7 @@ Each field on a session has a single owner. No two subsystems write the same fie
 | Session appears (live) | **Register** | Runner calls `POST /v1/register` |
 | Session appears (from file) | **Scanner** | Periodic scan of adapter session directories |
 | Metadata updates | **Subscription** | Runner SSE `status` / `meta` events |
-| Held file + title + status | **Agent hook** | runner SSE `session_file` / `status` events |
+| Held file + title + status | **Agent hook** | runner SSE `conversation_file` / `status` events |
 | Session dies (clean exit) | **Subscription** | Runner SSE `exit` event |
 | Session dies (crash) | **Discovery Scan** | Socket file gone |
 | Session removed | **Dismiss handler** | User clicks × |

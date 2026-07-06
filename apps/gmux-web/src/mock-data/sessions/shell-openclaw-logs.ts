@@ -11,7 +11,7 @@ export default {
   cwd: '/home/user/dev/openclaw',
   workspace_root: '/home/user/dev/openclaw',
   remotes: { origin: 'github.com/acme/openclaw' },
-  kind: 'shell',
+  adapter: 'shell',
   alive: true,
   pid: 9200,
   exit_code: null,

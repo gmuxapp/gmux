@@ -297,12 +297,16 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			sub.OnDead(sess)
 		}
 
-	case "session_file":
+	// "session_file" is the pre-v2 name for the same event: long-lived
+	// runners survive daemon upgrades, so the daemon accepts both for one
+	// release. New runners emit only "conversation_file".
+	// TODO(v2.1): drop the "session_file" case.
+	case "conversation_file", "session_file":
 		var sf struct {
 			Path string `json:"path"`
 		}
 		if err := json.Unmarshal(data, &sf); err != nil {
-			log.Printf("subscribe: %s: bad session_file event: %v", sessionID, err)
+			log.Printf("subscribe: %s: bad conversation_file event: %v", sessionID, err)
 			return
 		}
 		if sf.Path == "" {

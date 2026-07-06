@@ -277,7 +277,7 @@ function SessionMenu({ session, onRestart }: {
           <div class="session-menu-section-title">Session info</div>
           <div class="session-menu-row">
             <span class="session-menu-label">Adapter</span>
-            <span class="session-menu-value">{session.kind}</span>
+            <span class="session-menu-value">{session.adapter}</span>
           </div>
           <div class="session-menu-row">
             <span class="session-menu-label">Version</span>

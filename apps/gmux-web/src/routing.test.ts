@@ -71,17 +71,17 @@ describe('parseSessionPath', () => {
 
 describe('sessionPath', () => {
   it('builds URL from slug', () => {
-    expect(sessionPath('gmux', { kind: 'pi', slug: 'fix-auth', id: 'abc' }))
+    expect(sessionPath('gmux', { adapter: 'pi', slug: 'fix-auth', id: 'abc' }))
       .toBe('/gmux/pi/fix-auth')
   })
 
   it('falls back to ID prefix when slug missing', () => {
-    expect(sessionPath('gmux', { kind: 'pi', id: 'abcdef12-3456-7890' }))
+    expect(sessionPath('gmux', { adapter: 'pi', id: 'abcdef12-3456-7890' }))
       .toBe('/gmux/pi/abcdef12')
   })
 
   it('includes @peer for remote sessions', () => {
-    expect(sessionPath('gmux', { kind: 'pi', slug: 'fix-auth', id: 'abc', peer: 'server' }))
+    expect(sessionPath('gmux', { adapter: 'pi', slug: 'fix-auth', id: 'abc', peer: 'server' }))
       .toBe('/gmux/@server/pi/fix-auth')
   })
 
@@ -90,7 +90,7 @@ describe('sessionPath', () => {
     // segment is redundant and is omitted.
     expect(sessionPath(
       'gmux',
-      { id: 'sess-1@tower', kind: 'pi', slug: 'fix-auth', peer: 'tower' },
+      { id: 'sess-1@tower', adapter: 'pi', slug: 'fix-auth', peer: 'tower' },
       'tower',
     )).toBe('/@tower/gmux/pi/fix-auth')
   })
@@ -101,12 +101,12 @@ describe('sessionPath', () => {
     // (mid-path @<host> needed to disambiguate).
     expect(sessionPath(
       'gmux',
-      { id: 'sess-1@dev', kind: 'pi', slug: 'fix-auth', peer: 'dev' },
+      { id: 'sess-1@dev', adapter: 'pi', slug: 'fix-auth', peer: 'dev' },
     )).toBe('/gmux/@dev/pi/fix-auth')
   })
 
   it('omits @peer for local sessions', () => {
-    expect(sessionPath('gmux', { kind: 'pi', slug: 'fix-auth', id: 'abc', peer: undefined }))
+    expect(sessionPath('gmux', { adapter: 'pi', slug: 'fix-auth', id: 'abc', peer: undefined }))
       .toBe('/gmux/pi/fix-auth')
   })
 })
@@ -116,9 +116,9 @@ describe('resolveSessionFromPath', () => {
     { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },
   ]
   const localSessions = [
-    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
+    makeSession({ id: 'sess-1', cwd: '/dev/gmux', adapter: 'pi', slug: 'fix-auth',
       remotes: { origin: 'github.com/gmuxapp/gmux' } }),
-    makeSession({ id: 'sess-2', cwd: '/dev/gmux', kind: 'shell', slug: 'fish',
+    makeSession({ id: 'sess-2', cwd: '/dev/gmux', adapter: 'shell', slug: 'fish',
       remotes: { origin: 'github.com/gmuxapp/gmux' } }),
   ]
 
@@ -142,9 +142,9 @@ describe('resolveSessionFromPath', () => {
   // Peer-aware resolution
   const mixedSessions = [
     ...localSessions,
-    makeSession({ id: 'sess-r1@server', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
+    makeSession({ id: 'sess-r1@server', cwd: '/dev/gmux', adapter: 'pi', slug: 'fix-auth',
       peer: 'server', remotes: { origin: 'github.com/gmuxapp/gmux' } }),
-    makeSession({ id: 'sess-r2@server', cwd: '/dev/gmux', kind: 'shell', slug: 'bash',
+    makeSession({ id: 'sess-r2@server', cwd: '/dev/gmux', adapter: 'shell', slug: 'bash',
       peer: 'server', remotes: { origin: 'github.com/gmuxapp/gmux' } }),
   ]
 
@@ -182,7 +182,7 @@ describe('resolveSessionFromPath', () => {
 
   it('resolves by ID prefix when session has no slug', () => {
     const unattributed = [
-      makeSession({ id: 'sess-abc12345', cwd: '/dev/gmux', kind: 'pi',
+      makeSession({ id: 'sess-abc12345', cwd: '/dev/gmux', adapter: 'pi',
         remotes: { origin: 'github.com/gmuxapp/gmux' } }),
     ]
     const id = resolveSessionFromPath(
@@ -197,7 +197,7 @@ describe('resolveSessionFromPath', () => {
     // a 'gmux' project, but the URL `/@tower/gmux/...` addresses the
     // peer-owned one; we must trust the stamp, not re-run match.
     const claimed = makeSession({
-      id: 'sess-t1@tower', cwd: '/elsewhere', kind: 'pi', slug: 'fix-auth',
+      id: 'sess-t1@tower', cwd: '/elsewhere', adapter: 'pi', slug: 'fix-auth',
       peer: 'tower', project_slug: 'gmux', project_index: 0,
     })
     const id = resolveSessionFromPath(
@@ -209,11 +209,11 @@ describe('resolveSessionFromPath', () => {
 
   it('peer-owned project URL ignores local-stamped same-slug sessions', () => {
     const localGmux = makeSession({
-      id: 'sess-local', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
+      id: 'sess-local', cwd: '/dev/gmux', adapter: 'pi', slug: 'fix-auth',
       project_slug: 'gmux', project_index: 0,
     })
     const towerGmux = makeSession({
-      id: 'sess-t@tower', cwd: '/elsewhere', kind: 'pi', slug: 'fix-auth',
+      id: 'sess-t@tower', cwd: '/elsewhere', adapter: 'pi', slug: 'fix-auth',
       peer: 'tower', project_slug: 'gmux', project_index: 0,
     })
     const id = resolveSessionFromPath(
@@ -229,7 +229,7 @@ describe('resolveViewFromPath', () => {
     { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },
   ]
   const sessions = [
-    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
+    makeSession({ id: 'sess-1', cwd: '/dev/gmux', adapter: 'pi', slug: 'fix-auth',
       remotes: { origin: 'github.com/gmuxapp/gmux' } }),
   ]
 
@@ -259,7 +259,7 @@ describe('resolveViewFromPath', () => {
 
   it('peer-owned project URL resolves to project view when sessions exist', () => {
     const peerSession = makeSession({
-      id: 'sess-t@tower', cwd: '/elsewhere', kind: 'pi', slug: 'fix-auth',
+      id: 'sess-t@tower', cwd: '/elsewhere', adapter: 'pi', slug: 'fix-auth',
       peer: 'tower', project_slug: 'gmux', project_index: 0,
     })
     expect(resolveViewFromPath('/@tower/gmux', projects, [peerSession])).toEqual({
@@ -289,7 +289,7 @@ describe('resolveViewFromPath', () => {
 
   it('remote session URL resolves to session view', () => {
     const remoteSess = makeSession({
-      id: 'sess-3@server', cwd: '/dev/gmux', kind: 'shell', slug: 'bash',
+      id: 'sess-3@server', cwd: '/dev/gmux', adapter: 'shell', slug: 'bash',
       peer: 'server', remotes: { origin: 'github.com/gmuxapp/gmux' },
     })
     expect(resolveViewFromPath('/gmux/@server/shell/bash', projects, [...sessions, remoteSess])).toEqual({
@@ -309,9 +309,9 @@ describe('viewToPath', () => {
     { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },
   ]
   const sessions = [
-    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
+    makeSession({ id: 'sess-1', cwd: '/dev/gmux', adapter: 'pi', slug: 'fix-auth',
       remotes: { origin: 'github.com/gmuxapp/gmux' } }),
-    makeSession({ id: 'sess-2@server', cwd: '/dev/gmux', kind: 'shell', slug: 'bash',
+    makeSession({ id: 'sess-2@server', cwd: '/dev/gmux', adapter: 'shell', slug: 'bash',
       peer: 'server', remotes: { origin: 'github.com/gmuxapp/gmux' } }),
   ]
 
@@ -338,7 +338,7 @@ describe('viewToPath', () => {
   })
 
   it('session view for unmatched session -> null', () => {
-    const orphan = makeSession({ id: 'orphan', cwd: '/nowhere', kind: 'pi' })
+    const orphan = makeSession({ id: 'orphan', cwd: '/nowhere', adapter: 'pi' })
     expect(viewToPath({ kind: 'session', sessionId: 'orphan' }, projects, [orphan])).toBeNull()
   })
 
@@ -351,7 +351,7 @@ describe('viewToPath', () => {
 
   it('peer-claimed session -> /@<owner>/<slug>/...', () => {
     const claimed = makeSession({
-      id: 'sess-c@tower', cwd: '/dev/gmux', kind: 'pi', slug: 'on-tower',
+      id: 'sess-c@tower', cwd: '/dev/gmux', adapter: 'pi', slug: 'on-tower',
       peer: 'tower', project_slug: 'gmux', project_index: 0,
     })
     expect(viewToPath(
@@ -362,7 +362,7 @@ describe('viewToPath', () => {
 
   it('local-claimed session uses local URL form', () => {
     const claimed = makeSession({
-      id: 'sess-l', cwd: '/dev/gmux', kind: 'pi', slug: 'local',
+      id: 'sess-l', cwd: '/dev/gmux', adapter: 'pi', slug: 'local',
       project_slug: 'gmux', project_index: 0,
     })
     expect(viewToPath(
@@ -411,7 +411,7 @@ describe('View round-trip', () => {
     { slug: 'gmux', match: [{ remote: 'github.com/gmuxapp/gmux' }, { path: '/dev/gmux' }] },
   ]
   const sessions = [
-    makeSession({ id: 'sess-1', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
+    makeSession({ id: 'sess-1', cwd: '/dev/gmux', adapter: 'pi', slug: 'fix-auth',
       remotes: { origin: 'github.com/gmuxapp/gmux' } }),
   ]
 

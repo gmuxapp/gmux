@@ -24,7 +24,7 @@ import (
 // session mirrors the schema v2 fields we care about.
 type session struct {
 	ID         string  `json:"id"`
-	Kind       string  `json:"kind"`
+	Kind       string  `json:"adapter"`
 	Alive      bool    `json:"alive"`
 	Pid        int     `json:"pid"`
 	Title      string  `json:"title"`
