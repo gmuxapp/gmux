@@ -17,6 +17,12 @@ export interface Session {
   workspace_root?: string
   remotes?: Record<string, string>
   adapter: string
+  /**
+   * Session this one was spawned from (e.g. `gmux edit` invoked as
+   * $EDITOR inside an existing session). Drives adjacent placement in
+   * the sidebar: the child renders directly under its parent.
+   */
+  parent_session_id?: string
   alive: boolean
   pid: number | null
   exit_code: number | null

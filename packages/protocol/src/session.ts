@@ -16,6 +16,10 @@ export const SessionSchema = z.object({
   workspace_root: z.string().optional(),
   remotes: z.record(z.string()).optional(),
   adapter: z.string().default('shell'),
+  // Session this one was spawned from (e.g. `gmux edit` invoked as
+  // $EDITOR inside an existing session). The UI places the child
+  // directly under its parent in the sidebar.
+  parent_session_id: z.string().optional(),
   alive: z.boolean(),
   pid: z.number().optional().nullable(),
   exit_code: z.number().optional().nullable(),

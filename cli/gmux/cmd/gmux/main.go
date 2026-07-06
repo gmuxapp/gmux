@@ -54,6 +54,8 @@ func main() {
 		os.Exit(cmdWait(cmd.ref, cmd.timeout))
 	case modeEdit:
 		runEdit(cmd.editFile)
+	case modeEditChild:
+		os.Exit(editChild(cmd.editFile))
 	case modeDaemon:
 		os.Exit(execGmuxd(cmd.daemonSub))
 	case modeAuth:

@@ -56,6 +56,11 @@ type runDirectives struct {
 	// closes the file), where detaching would silently return exit code 0
 	// to the invoking program (git would commit an unedited message).
 	ForceForeground bool
+
+	// ParentSessionID records the session this one was spawned from
+	// (e.g. `gmux edit` invoked as $EDITOR inside an existing session).
+	// Flows into session meta so the UI can relate the two.
+	ParentSessionID string
 }
 
 // runSession launches a new managed session for the given command.
@@ -156,15 +161,16 @@ func runSession(args []string, attach bool, dir runDirectives) {
 
 	// Create in-memory session state
 	state := session.New(session.Config{
-		ID:            sessionID,
-		Command:       args,
-		Cwd:           workDir,
-		Adapter:       a.Name(),
-		WorkspaceRoot: wsRoot,
-		Remotes:       remotes,
-		SocketPath:    sockPath,
-		BinaryHash:    binhash.Self(),
-		RunnerVersion: version,
+		ID:              sessionID,
+		Command:         args,
+		Cwd:             workDir,
+		Adapter:         a.Name(),
+		ParentSessionID: dir.ParentSessionID,
+		WorkspaceRoot:   wsRoot,
+		Remotes:         remotes,
+		SocketPath:      sockPath,
+		BinaryHash:      binhash.Self(),
+		RunnerVersion:   version,
 	})
 
 	// Common env vars — set for every child, per ADR-0005

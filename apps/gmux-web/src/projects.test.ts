@@ -15,8 +15,44 @@ import {
   discoverProjects,
   countUnmatchedActive,
   projectAvailability,
+  placeChildSessions,
 } from './projects'
 import { makeSession } from './test-helpers'
+
+describe('placeChildSessions', () => {
+  const s = (id: string, parent?: string) =>
+    makeSession({ id, cwd: '/p', parent_session_id: parent })
+
+  it('moves a child directly after its parent', () => {
+    const list = [s('child', 'parent'), s('a'), s('parent'), s('b')]
+    placeChildSessions(list)
+    expect(list.map(x => x.id)).toEqual(['a', 'parent', 'child', 'b'])
+  })
+
+  it('keeps multiple children in relative order after the parent', () => {
+    const list = [s('c1', 'p'), s('p'), s('c2', 'p'), s('x')]
+    placeChildSessions(list)
+    expect(list.map(x => x.id)).toEqual(['p', 'c1', 'c2', 'x'])
+  })
+
+  it('leaves orphans (parent not in folder) in place', () => {
+    const list = [s('a'), s('orphan', 'elsewhere'), s('b')]
+    placeChildSessions(list)
+    expect(list.map(x => x.id)).toEqual(['a', 'orphan', 'b'])
+  })
+
+  it('ignores self-referential parents', () => {
+    const list = [s('a'), s('weird', 'weird')]
+    placeChildSessions(list)
+    expect(list.map(x => x.id)).toEqual(['a', 'weird'])
+  })
+
+  it('no-ops without parent stamps', () => {
+    const list = [s('a'), s('b')]
+    placeChildSessions(list)
+    expect(list.map(x => x.id)).toEqual(['a', 'b'])
+  })
+})
 
 describe('normalizeRemote', () => {
   it('strips protocol and .git suffix', () => {

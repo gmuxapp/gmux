@@ -219,3 +219,17 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
 - `--host` is dropped. `<id>@<peer>` is the **sole** way to address a
   peer session, which simplifies `matchSession` (the `host` parameter
   and the `--host`/`@suffix` reconciliation branch both go away).
+
+## Amendment (2026-07-06): `edit` joins the top-level namespace
+
+`gmux edit [file]` is added as a top-level verb. It cannot live under a
+namespace group because its primary use is `EDITOR="gmux edit"` — the
+string a third-party program execs must be a single terse invocation.
+
+This amends decision 5's "adding a new top-level verb is a breaking
+change requiring a major bump" in practice: the namespace remains
+*deliberately small and closed to casual growth*, but first-class
+session/tab types (of which the editor is the first; more are expected)
+warrant top-level verbs when the verb is itself an external interface
+contract like `$EDITOR`. Each such addition still requires an explicit
+amendment here.
