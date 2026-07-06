@@ -77,11 +77,22 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 	evCh, unsub := sessions.Subscribe()
 	defer unsub()
 
+	// Whether we've observed this session with Alive == true at any
+	// point during this wait. There is a startup window between
+	// sessions.Register returning the id (so the CLI can resolve it)
+	// and the runner flipping Alive to true; during that window
+	// Alive == false means "not started yet", not "died". Gating
+	// "died" on seenAlive keeps its contract as "was alive, isn't
+	// anymore" — mirroring how a nil Status is treated as "no state
+	// yet" rather than idle (see terminalReason).
+	seenAlive := false
+
 	// Already in a terminal state? Return without waiting for a
 	// transition. Callers like `--send-wait` (composition) want
 	// `--wait` to be a no-op when the agent is already idle.
 	if cur, ok := sessions.Get(sessionID); ok {
-		if reason, done := terminalReason(cur); done {
+		seenAlive = seenAlive || cur.Alive
+		if reason, done := terminalReason(cur, seenAlive); done {
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
 			return
 		}
@@ -121,7 +132,8 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "died"}})
 				return
 			}
-			if reason, done := terminalReason(*ev.Session); done {
+			seenAlive = seenAlive || ev.Session.Alive
+			if reason, done := terminalReason(*ev.Session, seenAlive); done {
 				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
 				return
 			}
@@ -133,7 +145,8 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "died"}})
 				return
 			}
-			if reason, done := terminalReason(cur); done {
+			seenAlive = seenAlive || cur.Alive
+			if reason, done := terminalReason(cur, seenAlive); done {
 				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
 				return
 			}
@@ -216,9 +229,22 @@ func waitForSessionExit(sessions *store.Store, evCh <-chan store.Event, sessionI
 // would race the runner's first Working:true event and return
 // immediately without the agent having processed anything. Wait
 // instead for the adapter to assert a real state.
-func terminalReason(s store.Session) (string, bool) {
+//
+// The Alive flag needs the symmetric treatment: right after launch
+// the session exists in the store with Alive == false until the
+// runner's first upsert lands, and reporting "died" during that
+// window is a phantom death (issue #216). seenAlive is the caller's
+// record of whether this wait ever observed Alive == true; "died" is
+// only reported after a true→false transition, or when ExitCode is
+// set — a non-nil ExitCode means the runner watched the child
+// process exit, which is definitive regardless of the startup race
+// and keeps genuinely dead-on-arrival sessions failing fast.
+func terminalReason(s store.Session, seenAlive bool) (string, bool) {
 	if !s.Alive {
-		return "died", true
+		if seenAlive || s.ExitCode != nil {
+			return "died", true
+		}
+		return "", false
 	}
 	if s.Status != nil && !s.Status.Working {
 		return "idle", true

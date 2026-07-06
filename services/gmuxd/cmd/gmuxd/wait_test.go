@@ -165,6 +165,102 @@ func TestWaitReturnsDiedWhenSessionDies(t *testing.T) {
 	}
 }
 
+// TestWaitDoesNotReportDiedBeforeFirstAlive pins the fix for the
+// early-Alive race (issue #216): right after `gmux --no-attach`, the
+// session exists in the store with Alive == false until the runner's
+// first upsert lands. --wait during that window must not report a
+// phantom death; it should block until the session comes alive and
+// then resolve normally.
+func TestWaitDoesNotReportDiedBeforeFirstAlive(t *testing.T) {
+	srv, st := waitTestServer(t)
+	// Registered but not yet alive: no ExitCode, no Status — the
+	// runner hasn't reported anything.
+	st.Upsert(store.Session{
+		ID:      "sess-starting",
+		Adapter: "pi",
+		Alive:   false,
+	})
+
+	done := make(chan struct{})
+	var resp *http.Response
+	var body map[string]any
+	go func() {
+		resp, body = postWait(t, srv, "sess-starting")
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("--wait returned before the session ever became alive")
+	default:
+	}
+
+	// Runner comes up mid-turn...
+	st.Upsert(store.Session{
+		ID:      "sess-starting",
+		Adapter: "pi",
+		Alive:   true,
+		Status:  &store.Status{Working: true},
+	})
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("--wait returned while the agent was still working")
+	default:
+	}
+
+	// ...and finishes its turn.
+	st.Upsert(store.Session{
+		ID:      "sess-starting",
+		Adapter: "pi",
+		Alive:   true,
+		Status:  &store.Status{Working: false},
+	})
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("--wait did not return after the session became idle")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "idle" {
+		t.Errorf("reason = %v, want idle", got)
+	}
+}
+
+// TestWaitReportsDiedOnArrivalWithExitCode covers the fast-fail path
+// for sessions that are genuinely dead on arrival: a non-nil ExitCode
+// means the runner watched the child process exit, so "died" is
+// definitive even though this wait never observed Alive == true.
+func TestWaitReportsDiedOnArrivalWithExitCode(t *testing.T) {
+	srv, st := waitTestServer(t)
+	code := 1
+	st.Upsert(store.Session{
+		ID:       "sess-doa",
+		Adapter:  "claude",
+		Alive:    false,
+		ExitCode: &code,
+	})
+
+	start := time.Now()
+	resp, body := postWait(t, srv, "sess-doa")
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "died" {
+		t.Errorf("reason = %v, want died", got)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("returned in %v, want immediate", elapsed)
+	}
+}
+
 // TestWaitTimesOut verifies the timeout escape hatch returns a
 // distinct HTTP status (408) so the CLI can tell timeout apart from
 // idle and from died.
