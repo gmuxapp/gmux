@@ -17,7 +17,7 @@ func ResolveResumeCommand(sess *store.Session) []string {
 	if a == nil {
 		return nil
 	}
-	filer, ok := a.(adapter.SessionFiler)
+	filer, ok := a.(adapter.ConversationFiler)
 	if !ok {
 		return nil
 	}
@@ -25,7 +25,7 @@ func ResolveResumeCommand(sess *store.Session) []string {
 	if !ok {
 		return nil
 	}
-	info, err := filer.ParseSessionFile(sess.SessionFile)
+	info, err := filer.ParseConversationFile(sess.SessionFile)
 	if err != nil {
 		return nil
 	}

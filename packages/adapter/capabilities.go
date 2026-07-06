@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// SessionFileInfo holds metadata extracted from a tool's session file.
-type SessionFileInfo struct {
+// ConversationInfo holds metadata extracted from a tool's conversation file.
+type ConversationInfo struct {
 	ID           string
 	Title        string
 	Slug         string // Human-readable, URL-safe session identity. Set by the adapter.
@@ -37,27 +37,27 @@ type Launchable interface {
 	Launchers() []Launcher
 }
 
-// SessionFiler is implemented by adapters whose tools write session
-// files to disk (pi, claude-code, etc). Used by gmuxd for resumable
-// session discovery and session file attribution.
-type SessionFiler interface {
-	// SessionRootDir returns the parent directory containing all per-cwd
-	// session subdirectories (e.g. ~/.pi/agent/sessions/).
+// ConversationFiler is implemented by adapters whose tools write
+// conversation files to disk (pi, claude-code, etc). Used by gmuxd for
+// resumable-conversation discovery and conversation file attribution.
+type ConversationFiler interface {
+	// ConversationRootDir returns the parent directory containing all per-cwd
+	// conversation subdirectories (e.g. ~/.pi/agent/sessions/).
 	// Used by the scanner to enumerate all known working directories.
-	SessionRootDir() string
+	ConversationRootDir() string
 
-	// SessionDir returns the directory where this tool stores session
-	// files for the given cwd. Returns "" if not applicable.
-	SessionDir(cwd string) string
+	// ConversationDir returns the directory where this tool stores
+	// conversation files for the given cwd. Returns "" if not applicable.
+	ConversationDir(cwd string) string
 
-	// ParseSessionFile reads a session file and returns display metadata.
+	// ParseConversationFile reads a conversation file and returns display metadata.
 	// Called by gmuxd to index conversations and resolve resume commands.
-	ParseSessionFile(path string) (*SessionFileInfo, error)
+	ParseConversationFile(path string) (*ConversationInfo, error)
 }
 
 // ConversationSink receives conversation-file changes from a ConversationSource.
-// Paths are absolute session-file paths the daemon resolves via the adapter's
-// ParseSessionFile.
+// Paths are absolute conversation-file paths the daemon resolves via the adapter's
+// ParseConversationFile.
 type ConversationSink interface {
 	// Upsert reports a conversation file that exists, was created, or changed.
 	Upsert(path string)
@@ -80,7 +80,7 @@ type ConversationSource interface {
 	WatchConversations(ctx context.Context, sink ConversationSink) error
 }
 
-// ConversationProber is implemented by SessionFiler adapters that can
+// ConversationProber is implemented by ConversationFiler adapters that can
 // tell a *deleted* conversation file apart from one whose storage is
 // merely *unavailable* (unmounted home, a tool dir that doesn't exist
 // yet). The startup retention reconcile (services/gmuxd) uses it to
@@ -183,9 +183,9 @@ type SessionFinalizer interface {
 // after the process exits.
 type Resumer interface {
 	// ResumeCommand returns the command to resume the given session.
-	ResumeCommand(info *SessionFileInfo) []string
+	ResumeCommand(info *ConversationInfo) []string
 
-	// CanResume returns whether a session file represents a resumable
+	// CanResume returns whether a conversation file represents a resumable
 	// session (vs a corrupted/empty/incompatible one).
 	CanResume(path string) bool
 }

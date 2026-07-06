@@ -10,8 +10,8 @@ import (
 
 func TestShellImplementsInterfaces(t *testing.T) {
 	var s adapter.Adapter = NewShell()
-	if _, ok := s.(adapter.SessionFiler); !ok {
-		t.Fatal("Shell should implement SessionFiler")
+	if _, ok := s.(adapter.ConversationFiler); !ok {
+		t.Fatal("Shell should implement ConversationFiler")
 	}
 	if _, ok := s.(adapter.Resumer); !ok {
 		t.Fatal("Shell should implement Resumer")
@@ -42,9 +42,9 @@ func TestShellWriteAndParseStateFile(t *testing.T) {
 	}
 
 	sh := NewShell()
-	info, err := sh.ParseSessionFile(path)
+	info, err := sh.ParseConversationFile(path)
 	if err != nil {
-		t.Fatalf("ParseSessionFile: %v", err)
+		t.Fatalf("ParseConversationFile: %v", err)
 	}
 
 	if info.ID != "sess-abc123" {
@@ -88,7 +88,7 @@ func TestShellCanResume(t *testing.T) {
 func TestShellResumeCommand(t *testing.T) {
 	t.Setenv("SHELL", "/usr/bin/fish")
 	sh := NewShell()
-	cmd := sh.ResumeCommand(&adapter.SessionFileInfo{
+	cmd := sh.ResumeCommand(&adapter.ConversationInfo{
 		Cwd: "/home/user/project",
 	})
 	if len(cmd) != 1 || cmd[0] != "/usr/bin/fish" {
@@ -96,15 +96,15 @@ func TestShellResumeCommand(t *testing.T) {
 	}
 }
 
-func TestShellSessionDir(t *testing.T) {
+func TestShellConversationDir(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", tmp)
 
 	sh := NewShell()
-	dir := sh.SessionDir("/home/user/dev/project")
+	dir := sh.ConversationDir("/home/user/dev/project")
 	expected := filepath.Join(tmp, "gmux", "shell-sessions", "--home-user-dev-project--")
 	if dir != expected {
-		t.Errorf("SessionDir = %q, want %q", dir, expected)
+		t.Errorf("ConversationDir = %q, want %q", dir, expected)
 	}
 }
 
@@ -170,7 +170,7 @@ func TestShellOnRegister(t *testing.T) {
 	}
 
 	// State file should exist so the session can be rediscovered after restart.
-	statePath := filepath.Join(sh.SessionDir("/home/user/dev/myproject"), "sess-reg1.json")
+	statePath := filepath.Join(sh.ConversationDir("/home/user/dev/myproject"), "sess-reg1.json")
 	if _, err := os.Stat(statePath); err != nil {
 		t.Fatalf("state file not created at %s: %v", statePath, err)
 	}
@@ -190,7 +190,7 @@ func TestShellOnDismiss(t *testing.T) {
 	if _, err := sh.OnRegister("sess-dis1", "/home/user/dev/proj", []string{"zsh"}); err != nil {
 		t.Fatalf("OnRegister: %v", err)
 	}
-	statePath := filepath.Join(sh.SessionDir("/home/user/dev/proj"), "sess-dis1.json")
+	statePath := filepath.Join(sh.ConversationDir("/home/user/dev/proj"), "sess-dis1.json")
 	if _, err := os.Stat(statePath); err != nil {
 		t.Fatalf("state file should exist before dismiss: %v", err)
 	}

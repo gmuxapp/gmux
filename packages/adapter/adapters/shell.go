@@ -42,11 +42,11 @@ func FindByAdapter(name string) adapter.Adapter {
 
 // Compile-time interface checks.
 var (
-	_ adapter.SessionFiler     = (*Shell)(nil)
-	_ adapter.Resumer          = (*Shell)(nil)
-	_ adapter.CommandTitler    = (*Shell)(nil)
-	_ adapter.SessionRegistrar = (*Shell)(nil)
-	_ adapter.SessionFinalizer = (*Shell)(nil)
+	_ adapter.ConversationFiler = (*Shell)(nil)
+	_ adapter.Resumer           = (*Shell)(nil)
+	_ adapter.CommandTitler     = (*Shell)(nil)
+	_ adapter.SessionRegistrar  = (*Shell)(nil)
+	_ adapter.SessionFinalizer  = (*Shell)(nil)
 )
 
 // Shell is the fallback adapter. It matches all commands and parses
@@ -89,19 +89,19 @@ func (g *Shell) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
 
-// --- SessionFiler ---
+// --- ConversationFiler ---
 
 // shellSessionsDir returns the directory for shell state files.
 func shellSessionsDir() string {
 	return filepath.Join(paths.StateDir(), "shell-sessions")
 }
 
-func (g *Shell) SessionRootDir() string {
+func (g *Shell) ConversationRootDir() string {
 	return shellSessionsDir()
 }
 
-func (g *Shell) SessionDir(cwd string) string {
-	root := g.SessionRootDir()
+func (g *Shell) ConversationDir(cwd string) string {
+	root := g.ConversationRootDir()
 	if root == "" {
 		return ""
 	}
@@ -121,7 +121,7 @@ type shellStateFile struct {
 	Created time.Time `json:"created"`
 }
 
-func (g *Shell) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
+func (g *Shell) ParseConversationFile(path string) (*adapter.ConversationInfo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -133,7 +133,7 @@ func (g *Shell) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) 
 	if sf.ID == "" || sf.Cwd == "" {
 		return nil, os.ErrInvalid
 	}
-	return &adapter.SessionFileInfo{
+	return &adapter.ConversationInfo{
 		ID:       sf.ID,
 		Title:    g.CommandTitle(sf.Command),
 		Slug:     adapter.Slugify(filepath.Base(sf.Cwd)),
@@ -145,7 +145,7 @@ func (g *Shell) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) 
 
 // --- Resumer ---
 
-func (g *Shell) ResumeCommand(info *adapter.SessionFileInfo) []string {
+func (g *Shell) ResumeCommand(info *adapter.ConversationInfo) []string {
 	// Resume a shell session by launching the user's default shell in the
 	// original cwd. The cwd is passed via the session metadata, not the
 	// command itself.
@@ -157,7 +157,7 @@ func (g *Shell) ResumeCommand(info *adapter.SessionFileInfo) []string {
 }
 
 func (g *Shell) CanResume(path string) bool {
-	_, err := g.ParseSessionFile(path)
+	_, err := g.ParseConversationFile(path)
 	return err == nil
 }
 
@@ -189,7 +189,7 @@ func (g *Shell) OnDismiss(id, cwd string) {
 // after a gmuxd restart.
 func WriteShellStateFile(sessionID, cwd string, command []string) (string, error) {
 	sh := NewShell()
-	dir := sh.SessionDir(cwd)
+	dir := sh.ConversationDir(cwd)
 	if dir == "" {
 		return "", os.ErrInvalid
 	}
@@ -219,7 +219,7 @@ func WriteShellStateFile(sessionID, cwd string, command []string) (string, error
 // Called when a shell session is dismissed.
 func RemoveShellStateFile(sessionID, cwd string) {
 	sh := NewShell()
-	dir := sh.SessionDir(cwd)
+	dir := sh.ConversationDir(cwd)
 	if dir == "" {
 		return
 	}

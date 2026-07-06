@@ -16,7 +16,7 @@ import (
 //   - path absent, root absent/unreadable    → (false, false) undeterminable
 //   - any non-NotExist stat error on path    → (false, false) undeterminable
 //
-// root is the adapter's layout anchor (e.g. SessionRootDir). It lives
+// root is the adapter's layout anchor (e.g. ConversationRootDir). It lives
 // under the same storage as path, so an unmounted home or a tool that
 // was never installed makes root absent too — yielding ok=false rather
 // than a false "deleted". Empty path or root is undeterminable.

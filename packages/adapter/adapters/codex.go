@@ -25,7 +25,7 @@ var (
 	_ adapter.ConversationSource = (*Codex)(nil)
 	_ adapter.ConversationProber = (*Codex)(nil)
 	_ adapter.Launchable         = (*Codex)(nil)
-	_ adapter.SessionFiler       = (*Codex)(nil)
+	_ adapter.ConversationFiler  = (*Codex)(nil)
 	_ adapter.SessionHookCommand = (*Codex)(nil)
 	_ adapter.Resumer            = (*Codex)(nil)
 )
@@ -89,10 +89,10 @@ func (c *Codex) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
 
-// --- SessionFiler ---
+// --- ConversationFiler ---
 
-// SessionRootDir returns Codex's sessions directory.
-func (c *Codex) SessionRootDir() string {
+// ConversationRootDir returns Codex's sessions directory.
+func (c *Codex) ConversationRootDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -100,19 +100,19 @@ func (c *Codex) SessionRootDir() string {
 	return filepath.Join(home, ".codex", "sessions")
 }
 
-// ConversationGone anchors deletion detection on SessionRootDir
+// ConversationGone anchors deletion detection on ConversationRootDir
 // (~/.codex/sessions). The date-nested YYYY/MM/DD subtree may be
 // cleaned up around a deleted transcript, so the stable root — not the
 // file's immediate parent — is the right availability anchor.
 func (c *Codex) ConversationGone(path string) (gone bool, ok bool) {
-	return adapter.ConversationGoneAtRoot(path, c.SessionRootDir())
+	return adapter.ConversationGoneAtRoot(path, c.ConversationRootDir())
 }
 
-// SessionDir returns today's date-nested directory where Codex writes new
-// session files. Codex organizes by date (YYYY/MM/DD), not by cwd; the
+// ConversationDir returns today's date-nested directory where Codex writes new
+// conversation files. Codex organizes by date (YYYY/MM/DD), not by cwd; the
 // ConversationSource walks the whole tree for historical sessions.
-func (c *Codex) SessionDir(_ string) string {
-	root := c.SessionRootDir()
+func (c *Codex) ConversationDir(_ string) string {
+	root := c.ConversationRootDir()
 	if root == "" {
 		return ""
 	}
@@ -127,11 +127,11 @@ type codexSessionMeta struct {
 	Cwd       string `json:"cwd"`
 }
 
-// ParseSessionFile reads a Codex JSONL session file and returns display
+// ParseConversationFile reads a Codex JSONL conversation file and returns display
 // metadata.
 // Title priority: first user prompt text > "" (no conversation-derived title
 // yet; callers fall back to cwd/adapter).
-func (c *Codex) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
+func (c *Codex) ParseConversationFile(path string) (*adapter.ConversationInfo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -157,7 +157,7 @@ func (c *Codex) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) 
 	meta := firstLine.Payload
 	created, _ := time.Parse(time.RFC3339Nano, meta.Timestamp)
 
-	info := &adapter.SessionFileInfo{
+	info := &adapter.ConversationInfo{
 		ID:       meta.ID,
 		Cwd:      meta.Cwd,
 		Created:  created,
@@ -395,7 +395,7 @@ func shellQuote(s string) string {
 // stdin (its SessionStart/Stop input carries session_id, transcript_path, cwd).
 //
 // codex has no title/slug field of its own, so this derives them by parsing the
-// transcript's first user prompt (reusing ParseSessionFile) and reports them as
+// transcript's first user prompt (reusing ParseConversationFile) and reports them as
 // the session title + an explicit slug — codex's session_id is a UUID that would
 // slugify into an unreadable URL.
 func CodexHookBodies(eventName string, input []byte) [][]byte {
@@ -461,7 +461,7 @@ func codexSessionBody(input []byte) ([]byte, bool) {
 // codexHookTitle returns a codex session's display title — the first non-system
 // user prompt, truncated — or "" if the transcript has none yet.
 //
-// Unlike ParseSessionFile it early-exits at the first user message instead of
+// Unlike ParseConversationFile it early-exits at the first user message instead of
 // reading the whole file. This matters because the hook derives the title on
 // every turn-end (codex blocks on the Stop hook), the title never changes after
 // the first prompt, and the transcript grows each turn: a full re-parse would be
@@ -571,13 +571,13 @@ func semverLess(a, b []int) bool {
 // --- Resumer ---
 
 // ResumeCommand returns the command to resume a Codex session.
-func (c *Codex) ResumeCommand(info *adapter.SessionFileInfo) []string {
+func (c *Codex) ResumeCommand(info *adapter.ConversationInfo) []string {
 	return []string{"codex", "resume", info.ID}
 }
 
-// CanResume checks if a session file has user messages worth resuming.
+// CanResume checks if a conversation file has user messages worth resuming.
 func (c *Codex) CanResume(path string) bool {
-	info, err := c.ParseSessionFile(path)
+	info, err := c.ParseConversationFile(path)
 	if err != nil {
 		return false
 	}
@@ -623,11 +623,11 @@ func isCodexSystemContext(s string) bool {
 // --- ConversationSource ---
 
 func (c *Codex) SnapshotConversations(sink adapter.ConversationSink) {
-	filewatch.Snapshot(c.SessionRootDir(), ".jsonl", sink.Upsert)
+	filewatch.Snapshot(c.ConversationRootDir(), ".jsonl", sink.Upsert)
 }
 
 func (c *Codex) WatchConversations(ctx context.Context, sink adapter.ConversationSink) error {
-	return filewatch.Watch(ctx, c.SessionRootDir(), ".jsonl", func(e filewatch.Event) {
+	return filewatch.Watch(ctx, c.ConversationRootDir(), ".jsonl", func(e filewatch.Event) {
 		if e.Removed {
 			sink.Remove(e.Path)
 		} else {

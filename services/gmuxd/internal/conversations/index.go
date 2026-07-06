@@ -135,12 +135,12 @@ func (idx *Index) All() []Info {
 // ScanFile indexes a single conversation file (snapshot or live update
 // from an adapter ConversationSource). Returns the assigned slug.
 func (idx *Index) ScanFile(a adapter.Adapter, path string) string {
-	sf, ok := a.(adapter.SessionFiler)
+	sf, ok := a.(adapter.ConversationFiler)
 	if !ok {
 		return ""
 	}
 
-	fileInfo, err := sf.ParseSessionFile(path)
+	fileInfo, err := sf.ParseConversationFile(path)
 	if err != nil {
 		return ""
 	}

@@ -56,7 +56,7 @@ func TestResolveResumeCommand(t *testing.T) {
 }
 
 // A shell session never carries a SessionFile, so the guard returns before the
-// adapter lookup — even though shell is itself a SessionFiler/Resumer.
+// adapter lookup — even though shell is itself a ConversationFiler/Resumer.
 func TestResolveResumeCommandShellGuarded(t *testing.T) {
 	if cmd := ResolveResumeCommand(&store.Session{Adapter: "shell"}); cmd != nil {
 		t.Fatalf("shell session should not resolve a resume command, got %v", cmd)
