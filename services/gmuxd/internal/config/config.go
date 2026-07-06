@@ -165,11 +165,19 @@ func validate(cfg Config) error {
 		return fmt.Errorf("port %d is out of range (1-65535)", cfg.Port)
 	}
 
-	// Tailscale: allow list entries must look like login names.
+	// Tailscale: allow list entries must look like login names or device
+	// tags. Tagged devices have no user identity, so they are allowed by
+	// tag (e.g. "tag:gmux") instead of login name.
 	// An empty allow list is fine — the node owner is auto-whitelisted at runtime.
 	for _, entry := range cfg.Tailscale.Allow {
+		if strings.HasPrefix(entry, "tag:") {
+			if len(entry) == len("tag:") {
+				return fmt.Errorf("tailscale.allow entry %q is missing a tag name (expected format: tag:name)", entry)
+			}
+			continue
+		}
 		if !strings.Contains(entry, "@") {
-			return fmt.Errorf("tailscale.allow entry %q doesn't look like a login name (expected format: user@provider)", entry)
+			return fmt.Errorf("tailscale.allow entry %q doesn't look like a login name or device tag (expected format: user@provider or tag:name)", entry)
 		}
 	}
 

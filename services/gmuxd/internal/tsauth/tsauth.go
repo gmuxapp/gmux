@@ -30,7 +30,7 @@ import (
 // Config mirrors the tailscale section of the gmuxd config file.
 type Config struct {
 	Hostname string
-	Allow    []string // tailscale login names (e.g. "user@github")
+	Allow    []string // tailscale login names (e.g. "user@github") or device tags (e.g. "tag:gmux")
 }
 
 // DiagStatus contains diagnostic information about the Tailscale connection.
@@ -199,9 +199,15 @@ func (l *Listener) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		loginName := who.UserProfile.LoginName
+		var tags []string
+		var device string
+		if who.Node != nil {
+			tags = who.Node.Tags
+			device = who.Node.ComputedName
+		}
 
-		if !l.isAllowed(loginName) {
-			log.Printf("tsauth: DENIED %s (login=%s device=%s)", r.RemoteAddr, loginName, who.Node.ComputedName)
+		if !l.isAllowed(loginName, tags) {
+			log.Printf("tsauth: DENIED %s (login=%s tags=%v device=%s)", r.RemoteAddr, loginName, tags, device)
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
@@ -210,20 +216,22 @@ func (l *Listener) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// isAllowed checks if the connecting peer's login name matches any entry
-// in the allow list. Login names (e.g. "user@github") are stable identities
-// tied to the user's auth provider. Device names are not checked — use
-// tailscale ACLs for per-device control.
-// Comparison is case-insensitive.
-func (l *Listener) isAllowed(loginName string) bool {
-	if loginName == "" {
-		return false
-	}
-	loginLower := strings.ToLower(loginName)
-
+// isAllowed checks if the connecting peer's login name or one of its
+// device tags matches any entry in the allow list. Login names (e.g.
+// "user@github") are stable identities tied to the user's auth provider.
+// Tagged devices don't carry a user identity (WhoIs reports
+// login=tagged-devices), so they are matched by their ACL tags (e.g.
+// "tag:gmux") instead. Device names are not checked — use tailscale ACLs
+// for per-device control. Comparison is case-insensitive.
+func (l *Listener) isAllowed(loginName string, tags []string) bool {
 	for _, entry := range l.cfg.Allow {
-		if strings.ToLower(entry) == loginLower {
+		if loginName != "" && strings.EqualFold(entry, loginName) {
 			return true
+		}
+		for _, tag := range tags {
+			if strings.EqualFold(entry, tag) {
+				return true
+			}
 		}
 	}
 	return false

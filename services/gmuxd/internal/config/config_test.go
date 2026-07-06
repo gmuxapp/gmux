@@ -204,6 +204,42 @@ allow = ["not-a-login-name"]
 	}
 }
 
+func TestLoadAcceptsDeviceTags(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+[tailscale]
+enabled = true
+allow = ["alice@github", "tag:gmux"]
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Tailscale.Allow) != 2 {
+		t.Fatalf("allow = %v, want 2 entries", cfg.Tailscale.Allow)
+	}
+}
+
+func TestLoadRejectsEmptyTag(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+[tailscale]
+enabled = true
+allow = ["tag:"]
+`)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for empty tag name")
+	}
+	if !strings.Contains(err.Error(), "missing a tag name") {
+		t.Errorf("error = %q", err)
+	}
+}
+
 func TestLoadRejectsBadTOML(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)

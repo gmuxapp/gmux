@@ -9,25 +9,32 @@ import (
 func TestIsAllowed(t *testing.T) {
 	l := &Listener{
 		cfg: Config{
-			Allow: []string{"alice@github", "bob@github"},
+			Allow: []string{"alice@github", "bob@github", "tag:gmux"},
 		},
 	}
 
 	tests := []struct {
 		login string
+		tags  []string
 		want  bool
 	}{
-		{"alice@github", true},    // exact match
-		{"bob@github", true},      // exact match
-		{"eve@github", false},     // no match
-		{"Alice@GitHub", true},    // case-insensitive
-		{"", false},               // empty
+		{"alice@github", nil, true},                             // exact match
+		{"bob@github", nil, true},                               // exact match
+		{"eve@github", nil, false},                              // no match
+		{"Alice@GitHub", nil, true},                             // case-insensitive
+		{"", nil, false},                                        // empty
+		{"tagged-devices", []string{"tag:gmux"}, true},          // tagged device, allowed tag
+		{"tagged-devices", []string{"tag:other"}, false},        // tagged device, tag not on list
+		{"tagged-devices", []string{"tag:a", "tag:gmux"}, true}, // any tag matches
+		{"tagged-devices", []string{"Tag:GMux"}, true},          // tags case-insensitive
+		{"tagged-devices", nil, false},                          // pseudo-login never matches by name
+		{"", []string{"tag:gmux"}, true},                        // tag match doesn't need login
 	}
 
 	for _, tt := range tests {
-		got := l.isAllowed(tt.login)
+		got := l.isAllowed(tt.login, tt.tags)
 		if got != tt.want {
-			t.Errorf("isAllowed(%q) = %v, want %v", tt.login, got, tt.want)
+			t.Errorf("isAllowed(%q, %v) = %v, want %v", tt.login, tt.tags, got, tt.want)
 		}
 	}
 }
@@ -37,8 +44,11 @@ func TestIsAllowedEmptyList(t *testing.T) {
 		cfg: Config{Allow: nil},
 	}
 
-	if l.isAllowed("anyone@github") {
+	if l.isAllowed("anyone@github", nil) {
 		t.Error("empty allow list should deny everyone")
+	}
+	if l.isAllowed("tagged-devices", []string{"tag:gmux"}) {
+		t.Error("empty allow list should deny tagged devices too")
 	}
 }
 
