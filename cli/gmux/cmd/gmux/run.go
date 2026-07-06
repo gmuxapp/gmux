@@ -48,6 +48,14 @@ type runDirectives struct {
 	ResumeID    string
 	InitialCols int
 	InitialRows int
+
+	// ForceForeground disables the nested-gmux auto-detach: even when
+	// running inside an existing gmux session, attach the local terminal
+	// and block until the child exits. Required by callers with blocking
+	// semantics (`gmux edit` as $EDITOR must not return before the user
+	// closes the file), where detaching would silently return exit code 0
+	// to the invoking program (git would commit an unedited message).
+	ForceForeground bool
 }
 
 // runSession launches a new managed session for the given command.
@@ -76,7 +84,7 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	// of doing PTY passthrough (which would nest PTY-within-PTY). The
 	// detached process registers with gmuxd and the session appears in the
 	// gmux UI. The original process returns immediately to the parent shell.
-	if os.Getenv("GMUX") == "1" && localterm.IsInteractive() {
+	if os.Getenv("GMUX") == "1" && localterm.IsInteractive() && !dir.ForceForeground {
 		spawnDetached(args, "started "+strings.Join(args, " ")+" in background (visible in gmux)", false)
 		return
 	}

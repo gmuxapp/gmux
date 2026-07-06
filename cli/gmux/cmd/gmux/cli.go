@@ -23,6 +23,7 @@ const (
 	modeSend                  // gmux send <id> <text> [keys...]
 	modeSendKeys              // gmux send-keys -t <id> ... (tmux-compat)
 	modeWait                  // gmux wait <id>
+	modeEdit                  // gmux edit <file>
 	modeDaemon                // gmux daemon <start|stop|restart|status|log-path>
 	modeAuth                  // gmux auth
 	modeRemote                // gmux remote
@@ -66,6 +67,9 @@ type command struct {
 	// wait
 	timeout int // --timeout seconds (0 = none)
 
+	// edit
+	editFile string // file path to open
+
 	// daemon
 	daemonSub string // start|stop|restart|status|log-path
 
@@ -79,7 +83,7 @@ type command struct {
 // command in the error-only migration shim.
 var reservedVerbs = []string{
 	"open", "ls", "attach", "tail", "kill", "send", "send-keys",
-	"wait", "daemon", "auth", "remote", "version", "help",
+	"wait", "edit", "daemon", "auth", "remote", "version", "help",
 }
 
 // removedFlags maps every pre-2.0 action flag to the verb that replaced
@@ -161,6 +165,8 @@ func parseCLI(args []string) (*command, error) {
 		return parseSendKeys(rest)
 	case "wait":
 		return parseWait(rest)
+	case "edit":
+		return parseEdit(rest)
 	case "daemon":
 		return parseDaemon(rest)
 	case "auth":
@@ -314,6 +320,22 @@ func parseWait(args []string) (*command, error) {
 	return c, nil
 }
 
+// parseEdit handles `gmux edit <file>`: exactly one file path. The verb
+// is designed to be usable as $EDITOR (git commit, etc.): it blocks
+// until the editor session exits and propagates its exit code. Today it
+// opens a fallback terminal editor in a managed session; a future
+// release renders a browser-based editor tab instead, keeping this
+// interface (one path, blocking, exit code) unchanged.
+func parseEdit(args []string) (*command, error) {
+	if len(args) != 1 {
+		return nil, errors.New("edit requires exactly one file path")
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return nil, fmt.Errorf("edit takes no flags (got %q)", args[0])
+	}
+	return &command{mode: modeEdit, editFile: args[0]}, nil
+}
+
 var daemonSubs = map[string]bool{
 	"start": true, "stop": true, "restart": true, "status": true, "log-path": true,
 }
@@ -445,6 +467,9 @@ Sessions (local by default; address a peer with <id>@<peer>):
   gmux send-keys -t <id> <keys...>  tmux-compatible key sending
   gmux wait <id> [--timeout N]      block until an agent session is idle
   gmux kill <id>                    terminate a session
+
+Editing (usable as $EDITOR; blocks until the editor closes):
+  gmux edit <file>                  open a file in a managed editor session
 
 UI & pairing:
   gmux open                         open the web UI

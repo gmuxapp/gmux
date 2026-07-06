@@ -51,6 +51,13 @@ func TestParseCLI(t *testing.T) {
 				}
 			}},
 
+		{name: "edit", args: []string{"edit", "notes.txt"}, wantMode: modeEdit,
+			check: func(t *testing.T, c *command) {
+				if c.editFile != "notes.txt" {
+					t.Errorf("editFile = %q", c.editFile)
+				}
+			}},
+
 		{name: "ls", args: []string{"ls"}, wantMode: modeList},
 		{name: "ls --all --json", args: []string{"ls", "--all", "--json"}, wantMode: modeList,
 			check: func(t *testing.T, c *command) {
@@ -189,6 +196,9 @@ func TestParseCLIErrors(t *testing.T) {
 		{"daemon"},               // missing subcommand
 		{"daemon", "frobnicate"}, // unknown subcommand
 		{"ls", "stray"},          // ls takes no positional
+		{"edit"},                 // missing file
+		{"edit", "a", "b"},       // too many files
+		{"edit", "--wait"},       // no flags on edit (yet)
 	}
 	for _, args := range bad {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
