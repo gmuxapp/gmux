@@ -16,19 +16,23 @@ import (
 // session is the subset of gmuxd's Session model that the CLI cares
 // about. Defined locally to avoid pulling in the gmuxd store package.
 type cliSession struct {
-	ID         string   `json:"id"`
-	Peer       string   `json:"peer,omitempty"`
-	Cwd        string   `json:"cwd,omitempty"`
-	Adapter    string   `json:"adapter"`
-	Alive      bool     `json:"alive"`
-	Pid        int      `json:"pid,omitempty"`
-	Title      string   `json:"title,omitempty"`
-	Slug       string   `json:"slug,omitempty"`
-	SocketPath string   `json:"socket_path,omitempty"`
-	Command    []string `json:"command,omitempty"`
-	StartedAt  string   `json:"started_at,omitempty"`
-	ExitedAt   string   `json:"exited_at,omitempty"`
-	ExitCode   *int     `json:"exit_code,omitempty"`
+	ID      string `json:"id"`
+	Peer    string `json:"peer,omitempty"`
+	Cwd     string `json:"cwd,omitempty"`
+	Adapter string `json:"adapter"`
+	Alive   bool   `json:"alive"`
+	Pid     int    `json:"pid,omitempty"`
+	Title   string `json:"title,omitempty"`
+	Slug    string `json:"slug,omitempty"`
+	// ParentSessionID links a session to the one it was spawned from
+	// (e.g. `gmux edit` as $EDITOR inside a session). Must round-trip
+	// through `gmux ls --json` for scripts to see the relationship.
+	ParentSessionID string   `json:"parent_session_id,omitempty"`
+	SocketPath      string   `json:"socket_path,omitempty"`
+	Command         []string `json:"command,omitempty"`
+	StartedAt       string   `json:"started_at,omitempty"`
+	ExitedAt        string   `json:"exited_at,omitempty"`
+	ExitCode        *int     `json:"exit_code,omitempty"`
 }
 
 // fetchSessions queries gmuxd for the full session list. Starts gmuxd

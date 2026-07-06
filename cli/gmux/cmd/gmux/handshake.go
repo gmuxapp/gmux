@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -30,34 +31,67 @@ import (
 //   - os.ErrDeadlineExceeded     → child wedged between register and ack
 //   - "empty session id…"        → child wrote only whitespace
 //
-// After dispatching the ack, handshakeAck unsets GMUX_HANDSHAKE_FD so
-// the (now-closed) fd doesn't get re-interpreted by any nested fork
-// the runner spawns later (the user's command, or a `gmux` invoked
-// from within it).
+// The env var is consumed at process startup (captureHandshakeFD),
+// NOT at ack time. The runner forwards os.Environ to its PTY child,
+// and the child is spawned before the ack — so a lazily-read env var
+// leaks to every process inside the session. A nested `gmux` (e.g.
+// `gmux edit` invoked as $EDITOR inside the session) would then
+// interpret the stale "3" against its own fd table, where fd 3 is
+// typically the Go runtime's epoll fd — writing to and closing it is
+// an instant `netpoll failed` crash. Capturing + unsetting first
+// thing in main() makes the inheritance impossible.
 const handshakeFDEnv = "GMUX_HANDSHAKE_FD"
 
-// handshakeAck signals registration outcome to the parent process via
-// the file descriptor named in GMUX_HANDSHAKE_FD. No-op when the env
-// var is unset (the common case: this gmux wasn't spawned with a
-// handshake parent).
+// capturedHandshakeFD is the fd number recorded by captureHandshakeFD,
+// or -1 when this process has no handshake parent. Consumed (and
+// reset) by the single handshakeAck call.
+var capturedHandshakeFD = -1
+
+// captureHandshakeFD reads GMUX_HANDSHAKE_FD, validates it, records
+// the fd for the eventual handshakeAck, and ALWAYS unsets the env var
+// so no child of this process can inherit it. Must be called at the
+// top of main(), before anything can fork.
 //
-// Errors are swallowed: a malformed env var, a stale fd, or a write
-// failure leaves the parent's read returning EOF, which is already
-// the failure signal. The child continues running regardless, because
-// the session itself is independent of whether the parent ever
-// learns about it.
+// Validation is deliberately paranoid: besides the numeric/range
+// checks, the fd must actually be a pipe. This guards the rolling-
+// upgrade window where an old runner (which leaked the env var to its
+// session) is still alive: a nested gmux would otherwise ack against
+// whatever its own fd 3 happens to be, and closing an arbitrary fd
+// (e.g. the runtime's epoll fd) is fatal.
+func captureHandshakeFD() {
+	defer func() { _ = os.Unsetenv(handshakeFDEnv) }()
+	fdStr := os.Getenv(handshakeFDEnv)
+	if fdStr == "" {
+		return
+	}
+	fd, err := strconv.Atoi(fdStr)
+	if err != nil || fd < 3 {
+		return
+	}
+	var st syscall.Stat_t
+	if syscall.Fstat(fd, &st) != nil || st.Mode&syscall.S_IFMT != syscall.S_IFIFO {
+		return
+	}
+	capturedHandshakeFD = fd
+}
+
+// handshakeAck signals registration outcome to the parent process via
+// the fd recorded by captureHandshakeFD. No-op when no handshake
+// parent exists (the common case).
+//
+// Errors are swallowed: a write failure leaves the parent's read
+// returning EOF, which is already the failure signal. The child
+// continues running regardless, because the session itself is
+// independent of whether the parent ever learns about it.
 func handshakeAck(sessionID string, registered bool) {
-	f := openHandshakeFD()
+	if capturedHandshakeFD < 0 {
+		return
+	}
+	f := os.NewFile(uintptr(capturedHandshakeFD), "gmux-handshake")
+	capturedHandshakeFD = -1
 	if f == nil {
 		return
 	}
-	// Clear the env var so the (about-to-be-closed) fd isn't
-	// re-interpreted by any process the runner forks later. The
-	// runner forwards os.Environ to user commands, and a nested
-	// `gmux` would otherwise call handshakeAck against a fd that
-	// in its own fd table is either closed or pointing at
-	// something unrelated.
-	_ = os.Unsetenv(handshakeFDEnv)
 	handshakeAckFD(f, sessionID, registered)
 }
 
@@ -71,22 +105,6 @@ func handshakeAckFD(f *os.File, sessionID string, registered bool) {
 	if registered {
 		fmt.Fprintln(f, sessionID)
 	}
-}
-
-// openHandshakeFD returns a *os.File wrapping GMUX_HANDSHAKE_FD, or
-// nil if the env var is unset, malformed, or names one of fds 0-2
-// (which are stdin/stdout/stderr and never a valid handshake
-// channel).
-func openHandshakeFD() *os.File {
-	fdStr := os.Getenv(handshakeFDEnv)
-	if fdStr == "" {
-		return nil
-	}
-	fd, err := strconv.Atoi(fdStr)
-	if err != nil || fd < 3 {
-		return nil
-	}
-	return os.NewFile(uintptr(fd), "gmux-handshake")
 }
 
 // readHandshake blocks on r until the child writes its session id
