@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gmuxapp/gmux/packages/adapter"
 )
 
 // TestPiExtSessionEventCarriesSlug is a regression test for session URLs
@@ -108,18 +110,23 @@ func TestPiExtSessionEventCarriesSlug(t *testing.T) {
 		t.Fatalf("expected >=2 session events, got %d (%v)", len(sessions), events)
 	}
 
-	// The bind after the first turn carries the first-user-message title;
-	// the slug source must follow it — never left to the UUID id fallback.
+	// The runner slugifies whatever the hook sends, so pin behavior, not the
+	// wire encoding: every titled bind must carry a slug source that slugifies
+	// to the title's slug — never left to the UUID id fallback. The pre-title
+	// bind (session_start before any message) legitimately has no slug source.
 	foundTitled := false
 	for _, ev := range sessions {
 		name, _ := ev["name"].(string)
 		slug, _ := ev["slug"].(string)
 		if name == "" {
-			continue // pre-title bind: no slug source yet, id fallback is expected
+			if slug != "" {
+				t.Errorf("pre-title bind: want no slug source, got %q", slug)
+			}
+			continue
 		}
 		foundTitled = true
-		if slug != name {
-			t.Errorf("session event with name %q: want slug %q, got %q", name, name, slug)
+		if got, want := adapter.Slugify(slug), adapter.Slugify(name); got == "" || got != want {
+			t.Errorf("session event with name %q: slug source %q slugifies to %q, want %q", name, slug, got, want)
 		}
 	}
 	if !foundTitled {
