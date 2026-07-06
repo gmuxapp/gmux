@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -398,12 +399,64 @@ func TestWaitForSessionExitRepollsDroppedEvent(t *testing.T) {
 	// can only learn about it via the re-poll ticker.
 	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: false, Command: []string{"bash"}})
 
-	exited, ok := waitForSessionExit(st, evCh, id, 2*time.Second, 20*time.Millisecond)
-	if !ok {
-		t.Fatal("waitForSessionExit timed out despite the store holding the exit state")
+	exited, err := waitForSessionExit(st, evCh, id, 2*time.Second, 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("waitForSessionExit failed despite the store holding the exit state: %v", err)
 	}
-	if exited.Alive || len(exited.Command) == 0 {
+	if !exited.Resumable {
 		t.Fatalf("returned session not in resumable exit state: %+v", exited)
+	}
+}
+
+// TestWaitForSessionExitReturnsOnEvent covers the primary path: the
+// exit upsert arrives on the subscriber channel (no drop), so the
+// helper must return the event's snapshot without waiting for a tick.
+// The generous tick makes the test fail loudly if the event path ever
+// regresses into relying on the re-poll fallback.
+func TestWaitForSessionExitReturnsOnEvent(t *testing.T) {
+	st := store.New()
+	const id = "sess-event"
+	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: true})
+
+	evCh, unsub := st.Subscribe()
+	defer unsub()
+
+	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: false, Command: []string{"bash"}})
+
+	start := time.Now()
+	exited, err := waitForSessionExit(st, evCh, id, 2*time.Second, time.Minute)
+	if err != nil {
+		t.Fatalf("waitForSessionExit failed on the event path: %v", err)
+	}
+	if !exited.Resumable {
+		t.Fatalf("returned session not in resumable exit state: %+v", exited)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("event path took %v; should return immediately without a tick", elapsed)
+	}
+}
+
+// TestWaitForSessionExitFailsFastOnRemove verifies that a session
+// dropped from the store mid-wait (UI dismiss, retention prune) makes
+// the helper return errExitWaitRemoved promptly instead of hanging
+// for the full deadline and masquerading as a kill timeout.
+func TestWaitForSessionExitFailsFastOnRemove(t *testing.T) {
+	st := store.New()
+	const id = "sess-dismissed"
+	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: true})
+
+	evCh, unsub := st.Subscribe()
+	defer unsub()
+
+	st.Remove(id)
+
+	start := time.Now()
+	_, err := waitForSessionExit(st, evCh, id, 5*time.Second, 10*time.Millisecond)
+	if !errors.Is(err, errExitWaitRemoved) {
+		t.Fatalf("expected errExitWaitRemoved, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("removal took %v to surface; must fail fast, not ride out the deadline", elapsed)
 	}
 }
 
@@ -418,7 +471,7 @@ func TestWaitForSessionExitTimesOut(t *testing.T) {
 	evCh, unsub := st.Subscribe()
 	defer unsub()
 
-	if _, ok := waitForSessionExit(st, evCh, id, 50*time.Millisecond, 10*time.Millisecond); ok {
-		t.Fatal("waitForSessionExit reported success for a session that never exited")
+	if _, err := waitForSessionExit(st, evCh, id, 50*time.Millisecond, 10*time.Millisecond); !errors.Is(err, errExitWaitTimeout) {
+		t.Fatalf("expected errExitWaitTimeout for a session that never exited, got %v", err)
 	}
 }

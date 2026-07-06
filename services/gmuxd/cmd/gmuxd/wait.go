@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -140,11 +141,21 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 	}
 }
 
+// Sentinel results for waitForSessionExit. Distinct errors let the
+// restart handler report an honest status: a session that vanished
+// mid-restart is a conflict with a concurrent dismiss/prune, not a
+// kill that timed out.
+var (
+	errExitWaitTimeout = errors.New("session did not exit in time")
+	errExitWaitRemoved = errors.New("session removed while waiting for exit")
+)
+
 // waitForSessionExit blocks until the session identified by sessionID
-// has transitioned to its resumable exit state (Alive == false with a
-// non-empty resume Command), the overall timeout elapses, or the event
-// channel closes. It returns the exited session snapshot and true on
-// success, or a zero session and false on timeout.
+// has transitioned to its resumable exit state (Resumable, i.e.
+// Alive == false with a non-empty resume Command — the store stamps
+// this on every write), the overall timeout elapses, or the session
+// disappears from the store. On success it returns the exited session
+// snapshot; otherwise errExitWaitTimeout or errExitWaitRemoved.
 //
 // Callers subscribe BEFORE triggering the kill and pass the resulting
 // channel here so the exit upsert can't be missed between subscribe and
@@ -152,10 +163,11 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 // is full, so under an event burst the exit upsert we're waiting on can
 // be dropped. Mirroring handleWait, we re-poll the store every tick so a
 // dropped event delays the result by at most one tick instead of
-// timing out with a spurious kill_timeout.
-func waitForSessionExit(sessions *store.Store, evCh <-chan store.Event, sessionID string, timeout, tick time.Duration) (store.Session, bool) {
-	exited := func(s store.Session) bool { return !s.Alive && len(s.Command) > 0 }
-
+// timing out with a spurious kill_timeout — and, also like handleWait,
+// we fail fast when the session is removed (UI dismiss, retention
+// prune) rather than hanging out the full deadline for a session that
+// can never become resumable.
+func waitForSessionExit(sessions *store.Store, evCh <-chan store.Event, sessionID string, timeout, tick time.Duration) (store.Session, error) {
 	deadline := time.After(timeout)
 	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
@@ -163,20 +175,31 @@ func waitForSessionExit(sessions *store.Store, evCh <-chan store.Event, sessionI
 	for {
 		select {
 		case <-deadline:
-			return store.Session{}, false
+			return store.Session{}, errExitWaitTimeout
 		case ev, ok := <-evCh:
 			if !ok {
-				return store.Session{}, false
+				return store.Session{}, errExitWaitTimeout
 			}
-			if ev.ID != sessionID || ev.Session == nil {
+			if ev.ID != sessionID {
 				continue
 			}
-			if exited(*ev.Session) {
-				return *ev.Session, true
+			if ev.Session == nil {
+				// session-remove for our id: the store dropped the
+				// session (a remove is never followed by a transient
+				// re-upsert of the same id; shadow eviction only
+				// removes other ids).
+				return store.Session{}, errExitWaitRemoved
+			}
+			if ev.Session.Resumable {
+				return *ev.Session, nil
 			}
 		case <-ticker.C:
-			if cur, ok := sessions.Get(sessionID); ok && exited(cur) {
-				return cur, true
+			cur, ok := sessions.Get(sessionID)
+			if !ok {
+				return store.Session{}, errExitWaitRemoved
+			}
+			if cur.Resumable {
+				return cur, nil
 			}
 		}
 	}
