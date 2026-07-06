@@ -1938,10 +1938,25 @@ func serve(stderr io.Writer) int {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 
-		flusher, ok := w.(http.Flusher)
-		if !ok {
+		if _, ok := w.(http.Flusher); !ok {
 			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 			return
+		}
+
+		// A half-dead client (peer gone, no FIN/RST seen) makes writes
+		// buffer locally without erroring, leaking this subscriber and
+		// its coalescer subscriptions for minutes (#243). Bound every
+		// write with a deadline via ResponseController and treat any
+		// write/flush failure as a disconnect: the deferred cancels
+		// below tear the subscriber down.
+		rc := http.NewResponseController(w)
+		const sseWriteTimeout = 10 * time.Second
+		sendFrame := func(event string, payload any) error {
+			_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+			if err := sendSSE(w, event, payload); err != nil {
+				return err
+			}
+			return rc.Flush()
 		}
 
 		// asPeer consumers (?as=peer) get owned sessions only and no
@@ -2017,12 +2032,14 @@ func serve(stderr io.Writer) int {
 		defer cancelActivity()
 
 		// Initial snapshots (leading edge: subscriber is idle).
-		sendSSE(w, "snapshot.sessions", composeSessions())
-		if !asPeer {
-			sendSSE(w, "snapshot.world", composeWorld())
+		if err := sendFrame("snapshot.sessions", composeSessions()); err != nil {
+			return
 		}
-
-		flusher.Flush()
+		if !asPeer {
+			if err := sendFrame("snapshot.world", composeWorld()); err != nil {
+				return
+			}
+		}
 
 		// Heartbeat: send an SSE comment every 30s to keep the connection
 		// alive through idle periods. Without this, the hub's sseclient
@@ -2038,20 +2055,27 @@ func serve(stderr io.Writer) int {
 			case <-notify:
 				return
 			case <-heartbeat.C:
-				fmt.Fprint(w, ":\n\n")
-				flusher.Flush()
+				_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+				if _, err := fmt.Fprint(w, ":\n\n"); err != nil {
+					return
+				}
+				if err := rc.Flush(); err != nil {
+					return
+				}
 			case _, open := <-sessionsSub:
 				if !open {
 					return
 				}
-				sendSSE(w, "snapshot.sessions", composeSessions())
-				flusher.Flush()
+				if err := sendFrame("snapshot.sessions", composeSessions()); err != nil {
+					return
+				}
 			case _, open := <-worldSub:
 				if !open {
 					return
 				}
-				sendSSE(w, "snapshot.world", composeWorld())
-				flusher.Flush()
+				if err := sendFrame("snapshot.world", composeWorld()); err != nil {
+					return
+				}
 			case ev, open := <-activityCh:
 				if !open {
 					return
@@ -2064,8 +2088,9 @@ func serve(stderr io.Writer) int {
 					if !shouldForwardActivity(asPeer, ev.ID, isLocalPeer) {
 						continue
 					}
-					sendSSE(w, "session-activity", ev)
-					flusher.Flush()
+					if err := sendFrame("session-activity", ev); err != nil {
+						return
+					}
 				case "projects-update":
 					// Peer-hub trigger only. A `?as=peer` subscriber has
 					// no snapshot.world, so it relies on this event to
@@ -2078,8 +2103,9 @@ func serve(stderr io.Writer) int {
 					if !asPeer {
 						continue
 					}
-					sendSSE(w, ev.Type, ev)
-					flusher.Flush()
+					if err := sendFrame(ev.Type, ev); err != nil {
+						return
+					}
 				}
 			}
 		}
@@ -2624,12 +2650,16 @@ func buildSessionInfos(sessions *store.Store, isLocalPeer func(string) bool) []p
 	return infos
 }
 
-func sendSSE(w http.ResponseWriter, event string, payload any) {
+// sendSSE writes one SSE frame. A marshal failure skips the frame
+// (payload bug, not a connection problem); a write failure is
+// returned so the caller can treat it as a client disconnect.
+func sendSSE(w io.Writer, event string, payload any) error {
 	bytes, err := json.Marshal(payload)
 	if err != nil {
-		return
+		return nil
 	}
-	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, bytes)
+	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, bytes)
+	return err
 }
 
 func writeJSON(w http.ResponseWriter, payload any) {

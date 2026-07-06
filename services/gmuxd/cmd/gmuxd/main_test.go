@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -674,3 +675,28 @@ func TestBuildLaunchArgs(t *testing.T) {
 		}
 	})
 }
+
+// sendSSE must surface write errors so the events handler can treat
+// them as a client disconnect and tear the subscriber down (#243).
+func TestSendSSEPropagatesWriteError(t *testing.T) {
+	if err := sendSSE(failWriter{}, "snapshot.sessions", map[string]int{"a": 1}); err == nil {
+		t.Fatal("expected write error to propagate")
+	}
+	var buf bytes.Buffer
+	if err := sendSSE(&buf, "snapshot.sessions", map[string]int{"a": 1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "event: snapshot.sessions\ndata: {\"a\":1}\n\n"
+	if buf.String() != want {
+		t.Errorf("got %q, want %q", buf.String(), want)
+	}
+	// A marshal failure skips the frame; it is a payload bug, not a
+	// connection problem, so no error is returned.
+	if err := sendSSE(failWriter{}, "x", make(chan int)); err != nil {
+		t.Errorf("marshal failure should not report a connection error, got %v", err)
+	}
+}
+
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
