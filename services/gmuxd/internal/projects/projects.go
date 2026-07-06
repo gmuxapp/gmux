@@ -114,7 +114,39 @@ func Load(stateDir string) (*State, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("projects: parsing %s: %w", path, err)
 	}
+
+	// Drop invalid items (e.g. a hand-edited "match": null) instead of
+	// letting them poison the whole state: Manager.Update validates the
+	// full state before every save, so one bad on-disk entry would make
+	// every future mutation fail. The repaired form persists on the next
+	// Save; the original bytes were backed up above if a migration ran,
+	// and we snapshot here too before dropping anything.
+	if dropped := s.sanitize(); len(dropped) > 0 {
+		backupFile(path, data)
+		for _, err := range dropped {
+			log.Printf("projects: dropping invalid item in %s: %v", path, err)
+		}
+	}
 	return &s, nil
+}
+
+// sanitize removes items that fail validation, keeping the rest in
+// order. Each item is checked against the already-accepted prefix, so
+// cross-item rules (duplicate slugs, duplicate paths) resolve
+// first-wins. Returns one error per dropped item.
+func (s *State) sanitize() []error {
+	valid := State{Version: s.Version}
+	var dropped []error
+	for _, item := range s.Items {
+		candidate := State{Version: s.Version, Items: append(append([]Item{}, valid.Items...), item)}
+		if err := candidate.Validate(); err != nil {
+			dropped = append(dropped, fmt.Errorf("item %q: %w", item.Slug, err))
+			continue
+		}
+		valid.Items = candidate.Items
+	}
+	s.Items = valid.Items
+	return dropped
 }
 
 // onDiskVersion peeks at the schema version of a raw projects.json
