@@ -1576,23 +1576,16 @@ func serve(stderr io.Writer) int {
 					writeError(w, http.StatusInternalServerError, "kill_failed", err.Error())
 					return
 				}
-				deadline := time.After(5 * time.Second)
-				ready := false
-				for !ready {
-					select {
-					case <-deadline:
-						writeError(w, http.StatusGatewayTimeout, "kill_timeout", "session did not exit in time")
-						return
-					case ev := <-evCh:
-						if ev.ID != sessionID || ev.Session == nil {
-							continue
-						}
-						if !ev.Session.Alive && len(ev.Session.Command) > 0 {
-							sess = *ev.Session
-							ready = true
-						}
-					}
+				exited, err := waitForSessionExit(sessions, evCh, sessionID, 5*time.Second, 500*time.Millisecond)
+				if errors.Is(err, errExitWaitRemoved) {
+					writeError(w, http.StatusConflict, "session_removed", err.Error())
+					return
 				}
+				if err != nil {
+					writeError(w, http.StatusGatewayTimeout, "kill_timeout", err.Error())
+					return
+				}
+				sess = exited
 				// /kill releases the canonical socket path before
 				// responding 204, so by the time KillSession returned
 				// (above) the path was already free. The replacement

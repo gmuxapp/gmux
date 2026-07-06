@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -370,4 +371,107 @@ func postWait(t *testing.T, srv *httptest.Server, id string) (*http.Response, ma
 		}
 	}
 	return resp, body
+}
+
+// TestWaitForSessionExitRepollsDroppedEvent verifies that the restart
+// handler's exit-wait helper recovers when the broadcast bus drops the
+// exit upsert because the subscriber's buffer is saturated. The helper
+// must fall back to its re-poll ticker and return the exited session
+// rather than timing out with a spurious kill_timeout. Regression guard
+// for review ticket T19.
+func TestWaitForSessionExitRepollsDroppedEvent(t *testing.T) {
+	st := store.New()
+	const id = "sess-restart"
+	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: true})
+
+	// Subscribe BEFORE the kill, exactly as the restart handler does.
+	evCh, unsub := st.Subscribe()
+	defer unsub()
+
+	// Saturate the 64-slot subscriber buffer so any further broadcast —
+	// including the exit upsert below — is dropped on the floor.
+	for i := 0; i < 128; i++ {
+		st.Broadcast(store.Event{Type: "session-activity", ID: "other"})
+	}
+
+	// The exit upsert: session goes dead but keeps a resume Command.
+	// Its broadcast is dropped because the buffer is full, so the helper
+	// can only learn about it via the re-poll ticker.
+	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: false, Command: []string{"bash"}})
+
+	exited, err := waitForSessionExit(st, evCh, id, 2*time.Second, 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("waitForSessionExit failed despite the store holding the exit state: %v", err)
+	}
+	if !exited.Resumable {
+		t.Fatalf("returned session not in resumable exit state: %+v", exited)
+	}
+}
+
+// TestWaitForSessionExitReturnsOnEvent covers the primary path: the
+// exit upsert arrives on the subscriber channel (no drop), so the
+// helper must return the event's snapshot without waiting for a tick.
+// The generous tick makes the test fail loudly if the event path ever
+// regresses into relying on the re-poll fallback.
+func TestWaitForSessionExitReturnsOnEvent(t *testing.T) {
+	st := store.New()
+	const id = "sess-event"
+	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: true})
+
+	evCh, unsub := st.Subscribe()
+	defer unsub()
+
+	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: false, Command: []string{"bash"}})
+
+	start := time.Now()
+	exited, err := waitForSessionExit(st, evCh, id, 2*time.Second, time.Minute)
+	if err != nil {
+		t.Fatalf("waitForSessionExit failed on the event path: %v", err)
+	}
+	if !exited.Resumable {
+		t.Fatalf("returned session not in resumable exit state: %+v", exited)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("event path took %v; should return immediately without a tick", elapsed)
+	}
+}
+
+// TestWaitForSessionExitFailsFastOnRemove verifies that a session
+// dropped from the store mid-wait (UI dismiss, retention prune) makes
+// the helper return errExitWaitRemoved promptly instead of hanging
+// for the full deadline and masquerading as a kill timeout.
+func TestWaitForSessionExitFailsFastOnRemove(t *testing.T) {
+	st := store.New()
+	const id = "sess-dismissed"
+	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: true})
+
+	evCh, unsub := st.Subscribe()
+	defer unsub()
+
+	st.Remove(id)
+
+	start := time.Now()
+	_, err := waitForSessionExit(st, evCh, id, 5*time.Second, 10*time.Millisecond)
+	if !errors.Is(err, errExitWaitRemoved) {
+		t.Fatalf("expected errExitWaitRemoved, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("removal took %v to surface; must fail fast, not ride out the deadline", elapsed)
+	}
+}
+
+// TestWaitForSessionExitTimesOut confirms the 5 s overall deadline still
+// fires when the session never reaches its exit state, so the re-poll
+// fallback doesn't mask a genuine kill failure.
+func TestWaitForSessionExitTimesOut(t *testing.T) {
+	st := store.New()
+	const id = "sess-stuck"
+	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: true})
+
+	evCh, unsub := st.Subscribe()
+	defer unsub()
+
+	if _, err := waitForSessionExit(st, evCh, id, 50*time.Millisecond, 10*time.Millisecond); !errors.Is(err, errExitWaitTimeout) {
+		t.Fatalf("expected errExitWaitTimeout for a session that never exited, got %v", err)
+	}
 }
