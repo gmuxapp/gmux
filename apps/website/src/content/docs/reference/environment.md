@@ -69,7 +69,7 @@ Variables that affect the session runner.
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `GMUX_ADAPTER` | Force a specific adapter instead of auto-detection. | *(auto)* |
-| `GMUX_SOCKET_DIR` | Directory for per-session Unix sockets. | `/tmp/gmux-sessions` |
+| `GMUX_SOCKET_DIR` | Directory for per-session Unix sockets. | `~/.local/state/gmux/run/sessions` |
 | `GMUX_NO_AGENT_HOOK` | Disable injecting the gmux agent extension/hook (e.g. the pi extension). An escape hatch if an agent release breaks the extension: the agent runs unmodified, and gmux loses hook-driven title/status/attribution for it. Any value other than `0`/empty disables. Read by the runner, so it covers foreground and `-d` launches; for daemon-initiated launches set it in the daemon's environment. | *(unset)* |
 
 ## Set by gmux in child processes
@@ -79,11 +79,11 @@ These are available inside every session launched by `gmux`. Use them to detect 
 | Variable | Purpose | Example |
 |----------|---------|---------|
 | `GMUX` | Always `1` inside a gmux session. Used for nested-session detection. | `1` |
-| `GMUX_SOCKET` | Unix socket path for callbacks to the session runner. | `/tmp/gmux-sessions/sess-abc123.sock` |
+| `GMUX_SOCKET` | Unix socket path for callbacks to the session runner. | `~/.local/state/gmux/run/sessions/sess-abc123.sock` |
 | `GMUX_SESSION_ID` | Unique session identifier. | `sess-abc123` |
 | `GMUX_ADAPTER` | Name of the matched adapter. | `pi`, `shell` |
 | `GMUX_RUNNER_VERSION` | Version of the gmux runner hosting the session. | `0.4.0` |
-| `GMUX_SESSION_SOCK` | Socket the agent extension/hook posts session + turn events to. Set only for adapters that ship a hook (pi); absent if `GMUX_NO_AGENT_HOOK` is set. | `/tmp/gmux-sessions/sess-abc123.sock` |
+| `GMUX_SESSION_SOCK` | Socket the agent extension/hook posts session + turn events to. Set only for adapters that ship a hook (pi); absent if `GMUX_NO_AGENT_HOOK` is set. | `~/.local/state/gmux/run/sessions/sess-abc123.sock` |
 
 See [Adapter Architecture](/develop/adapter-architecture) for how to use the child-to-runner API.
 
