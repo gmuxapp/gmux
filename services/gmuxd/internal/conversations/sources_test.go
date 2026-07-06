@@ -33,7 +33,7 @@ func TestSnapshotAndWatchSources(t *testing.T) {
 
 	idx := New()
 	idx.Snapshot()
-	if idx.LookupByToolID("pi", "id-1") == "" {
+	if idx.LookupByConversationID("pi", "id-1") == "" {
 		t.Fatal("Snapshot did not index the pre-existing conversation")
 	}
 
@@ -45,7 +45,7 @@ func TestSnapshotAndWatchSources(t *testing.T) {
 	writePiFile(t, filepath.Join(root, "--tmp-b--", "id-2.jsonl"), "id-2")
 
 	deadline := time.After(3 * time.Second)
-	for idx.LookupByToolID("pi", "id-2") == "" {
+	for idx.LookupByConversationID("pi", "id-2") == "" {
 		select {
 		case <-deadline:
 			t.Fatal("WatchSources did not index a conversation created after startup")

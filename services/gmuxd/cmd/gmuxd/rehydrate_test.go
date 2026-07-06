@@ -47,12 +47,12 @@ func TestRehydrateProjects_PreservesSessionmetaState(t *testing.T) {
 	// clobber Title to the generic kind label.
 	idx := conversations.New()
 	idx.Upsert(conversations.Info{
-		ToolID:  "tool-abc",
-		Slug:    "fix-auth",
-		Kind:    "shell",
-		Title:   "shell", // becomes AdapterTitle on rehydrate
-		Cwd:     "/home/me/proj",
-		Created: time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC),
+		ConversationID: "tool-abc",
+		Slug:           "fix-auth",
+		Kind:           "shell",
+		Title:          "shell", // becomes AdapterTitle on rehydrate
+		Cwd:            "/home/me/proj",
+		Created:        time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC),
 	})
 
 	state := &projects.State{
@@ -103,16 +103,16 @@ func TestRehydrateProjects_PreventsDuplicateForToolBackedAdapter(t *testing.T) {
 		Alive: false,
 	})
 
-	// convIndex entry: same logical session, but ToolID is the JSONL
+	// convIndex entry: same logical session, but ConversationID is the JSONL
 	// UUID, which is a different string from the runner ID.
 	idx := conversations.New()
 	idx.Upsert(conversations.Info{
-		ToolID:  "jsonl-uuid-XYZ",
-		Slug:    "fix-auth",
-		Kind:    "pi",
-		Title:   "fix auth",
-		Cwd:     "/work",
-		Created: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		ConversationID: "jsonl-uuid-XYZ",
+		Slug:           "fix-auth",
+		Kind:           "pi",
+		Title:          "fix auth",
+		Cwd:            "/work",
+		Created:        time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
 
 	state := &projects.State{
@@ -144,13 +144,13 @@ func TestRehydrateProjects_FallbackForMissingSessionmeta(t *testing.T) {
 
 	idx := conversations.New()
 	idx.Upsert(conversations.Info{
-		ToolID:        "tool-old",
-		Slug:          "legacy",
-		Kind:          "shell",
-		Title:         "shell",
-		Cwd:           "/home/me/legacy",
-		Created:       time.Date(2023, 6, 1, 0, 0, 0, 0, time.UTC),
-		ResumeCommand: []string{"bash"},
+		ConversationID: "tool-old",
+		Slug:           "legacy",
+		Kind:           "shell",
+		Title:          "shell",
+		Cwd:            "/home/me/legacy",
+		Created:        time.Date(2023, 6, 1, 0, 0, 0, 0, time.UTC),
+		ResumeCommand:  []string{"bash"},
 	})
 
 	state := &projects.State{

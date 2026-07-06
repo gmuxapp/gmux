@@ -5,11 +5,11 @@
 | Term                | Definition                                                                                                | Aliases to avoid          |
 | ------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------- |
 | **Session**         | The user-facing unit of work in a directory: a terminal pane plus everything we know about it             | Pane, terminal, tab       |
-| **Conversation**    | An agent's own thread of dialogue (pi/claude/codex's "session"), identified by its on-disk file path. The path (= **Tool ID**) is immutable; the conversation's display name (slug) is mutable. A tool-backed **Session** corresponds to a Conversation; a **Runner** binds to one and may rebind (`/resume`) to another | Agent session, thread     |
-| **Slug**            | A session's mutable, human-readable display name; persistent across runner restarts and resume, but renamable. Not identity (the immutable Tool ID is) | Name                      |
-| **Session ID**      | A specific runner instance's identifier; ephemeral for shell, stable (= tool ID) for pi/claude            | Identifier (alone is too generic) |
+| **Conversation**    | An agent's own thread of dialogue (pi/claude/codex's "session"), identified by the agent's own **Conversation ID** (a UUID in the transcript header). It lives at an on-disk **conversation file** path; the path can change (resume/fork), the ID is the stable handle. A tool-backed **Session** corresponds to a Conversation; a **Runner** binds to one and may rebind (`/resume`) to another | Agent session, thread, session file |
+| **Slug**            | A session's mutable, human-readable display name; persistent across runner restarts and resume, but renamable. Not identity (the immutable Conversation ID is) | Name                      |
+| **Session ID**      | A specific runner instance's identifier; ephemeral for shell, stable (= conversation ID) for pi/claude    | Identifier (alone is too generic) |
 | **Key**             | The single string projects.json uses per session: slug if attributed, session ID otherwise                |                           |
-| **Tool ID**         | An adapter-managed file identifier (e.g. JSONL filename) used as session ID for tool-backed sessions      |                           |
+| **Conversation ID** | The agent's own identifier for a Conversation, parsed from inside the conversation file by the adapter (`ConversationInfo.ID`). Used with the adapter name as the conversations-index key `(adapter, conversationID)` | Tool ID (the old name)    |
 
 ## Session lifecycle
 
@@ -29,7 +29,7 @@
 | **Runner**      | A `gmux` process holding a child PTY and serving WS / scrollback over a per-session Unix socket  | gmux process, child         |
 | **Daemon**      | The single per-host `gmuxd` process; central registry, broker, and proxy                         | Server, gmuxd (in prose)    |
 | **Broker**      | The daemon's role serving readonly state (today: scrollback) sourced from disk for dead sessions | Replay server               |
-| **Adapter**     | A plugin (pi, claude, shell, ...) that resolves commands, derives slugs, and may write tool files | Plugin, kind                |
+| **Adapter**     | A plugin (pi, claude, shell, ...) that resolves commands, derives slugs, and may write tool files | Plugin, kind (the old wire field name) |
 | **Agent-hook**  | A small extension the runner injects into the agent (pi: `-e <ext>`) that subscribes to the agent's own session/agent lifecycle and reports the held session file, title, and status to the runner authoritatively (ADR 0011). Supersedes the removed agent-shim fs preload (ADR 0010) | Hook, extension             |
 | **Frontend**    | The web UI consuming `/v1/events` SSE and `/ws/<id>` WebSockets                                  | Client (overloaded), web    |
 
@@ -63,7 +63,7 @@ The four stores have orthogonal concerns. Mixing them is a smell:
 | **Store**              | Caches live runtime state (the runner owns it; ADR 0011)          | Session ID                        |
 | **Sessionmeta**        | Persisted runtime state (exit code, status, title, timestamps)    | Session ID                        |
 | **Projects.json**      | Which sessions appear in the sidebar, in what project, what order | Project slug → list of **Key**s   |
-| **Conversations Index**| Cross-reference between IDs and slugs for adapter-backed sessions | (kind, ID) and (kind, slug)       |
+| **Conversations Index**| Cross-reference between IDs and slugs for adapter-backed sessions | (adapter, conversationID) and (adapter, slug) |
 
 ## Lifecycle events
 
@@ -74,7 +74,7 @@ The four stores have orthogonal concerns. Mixing them is a smell:
 | **Resume**            | User-initiated: spawn a new runner with the dead session's resume `Command`, merge new runner onto the existing ID      | Restart (overloaded — see below) |
 | **Resume merge**      | The internal step inside `Register` where a pending resume's existing ID swallows the fresh runner's ID                | Reattach                       |
 | **Restart**           | Like Resume but kills the live runner first; goes through Resume after exit                                            |                                |
-| **Slug-takeover**     | A fresh live session evicting a dead one with the same `(kind, peer, slug)` from the store                              | Slug eviction                  |
+| **Slug-takeover**     | A fresh live session evicting a dead one with the same `(adapter, peer, slug)` from the store                              | Slug eviction                  |
 | **Dismiss**           | Explicit user removal: runner killed if alive, store entry removed, sessionmeta + scrollback dropped                    | Delete, close                  |
 | **Sweep**             | Daemon startup operation: read every `meta.json` and Upsert as `Alive=false`, so previously-seen dead sessions reappear. Whether each then renders depends on project membership and match rules — `State.Discovered()` also surfaces unfiled sessions, so visibility is not strictly gated by `projects.json` | Restore                        |
 | **Attribution**       | Binding a tool-backed session to its adapter session file. **Primary:** authoritative, reported by the **Agent-hook** (pi names the held file directly, including cache-served `/resume` rebinds). **Fallback:** metadata matching (cwd + start time) for agents with no hook (codex). See ADR 0011 | Naming                         |
@@ -119,5 +119,7 @@ The four stores have orthogonal concerns. Mixing them is a smell:
 - **"Identity"**: in this codebase, **Slug** is identity, **Session ID** is instance. Treat them as distinct columns even though `SessionKey` coalesces them for projects.json's purposes.
 
 - **"Local"** has two meanings: the local *machine* (where this gmuxd runs), and a **Local peer** (`PeerConfig.Local = true`, currently devcontainers only). Prefer **Local peer** for the latter to avoid collision with "the local daemon".
+
+- **"Session file"** is banned: say **conversation file** (gmux's term) — or use the agent's own term only at its API boundary (ADR 0015: agent-native JSON tags like `sessionId`/`transcript_path` keep the agent's language).
 
 - **"Broker"** was introduced for the scrollback endpoint. Reserve it for read-only daemon endpoints serving disk-backed state for dead sessions; not a synonym for the daemon as a whole.

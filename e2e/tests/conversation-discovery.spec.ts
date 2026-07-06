@@ -69,7 +69,7 @@ function uniqueFixture(kind: AdapterKind, label: string): FixtureSpec {
   return {
     kind,
     cwd: `/var/gmux-e2e/discovery/${tag}`,
-    toolID: `disc-${tag}`,
+    conversationID: `disc-${tag}`,
     title: `${kind} discovery ${tag}`,
   }
 }

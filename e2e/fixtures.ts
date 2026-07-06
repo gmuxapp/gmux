@@ -23,7 +23,7 @@ export interface FixtureSpec {
   /** Synthetic cwd for path encoding; must be unique within a test run. */
   cwd: string
   /** Session ID / UUID, used as filename. */
-  toolID: string
+  conversationID: string
   /**
    * Human-readable title. Drives slug derivation. Use clean
    * lowercase-with-spaces text so the slug is predictable.
@@ -63,12 +63,12 @@ function encodeClaudeCwd(cwd: string): string {
 
 function piFile(home: string, spec: FixtureSpec): string {
   const root = path.join(home, '.pi', 'agent', 'sessions')
-  return path.join(root, encodePiCwd(spec.cwd), `${spec.toolID}.jsonl`)
+  return path.join(root, encodePiCwd(spec.cwd), `${spec.conversationID}.jsonl`)
 }
 
 function claudeFile(home: string, spec: FixtureSpec): string {
   const root = path.join(home, '.claude', 'projects')
-  return path.join(root, encodeClaudeCwd(spec.cwd), `${spec.toolID}.jsonl`)
+  return path.join(root, encodeClaudeCwd(spec.cwd), `${spec.conversationID}.jsonl`)
 }
 
 function codexFile(home: string, spec: FixtureSpec): string {
@@ -84,7 +84,7 @@ function codexFile(home: string, spec: FixtureSpec): string {
   const yyyy = String(now.getFullYear())
   const mm = String(now.getMonth() + 1).padStart(2, '0')
   const dd = String(now.getDate()).padStart(2, '0')
-  return path.join(root, yyyy, mm, dd, `${spec.toolID}.jsonl`)
+  return path.join(root, yyyy, mm, dd, `${spec.conversationID}.jsonl`)
 }
 
 function piContent(spec: FixtureSpec): string {
@@ -93,7 +93,7 @@ function piContent(spec: FixtureSpec): string {
   // (so `MessageCount > 0` and the conversation passes `CanResume`).
   const header = JSON.stringify({
     type: 'session',
-    id: spec.toolID,
+    id: spec.conversationID,
     cwd: spec.cwd,
     timestamp: ts,
   })
@@ -114,7 +114,7 @@ function claudeContent(spec: FixtureSpec): string {
   // we use a user message so the title round-trip is observable.
   const userLine = JSON.stringify({
     type: 'user',
-    sessionId: spec.toolID,
+    sessionId: spec.conversationID,
     cwd: spec.cwd,
     timestamp: ts,
     message: { role: 'user', content: spec.title },
@@ -128,7 +128,7 @@ function codexContent(spec: FixtureSpec): string {
   // first-user-text (codex has no custom-title mechanism).
   const meta = JSON.stringify({
     type: 'session_meta',
-    payload: { id: spec.toolID, timestamp: ts, cwd: spec.cwd },
+    payload: { id: spec.conversationID, timestamp: ts, cwd: spec.cwd },
   })
   const userMsg = JSON.stringify({
     type: 'response_item',
@@ -180,7 +180,7 @@ export function appendToSession(filePath: string, jsonLine: object): void {
  * Pre-seeded smoke fixtures, written by global-setup before gmuxd
  * starts. Each tests the bootstrap scan path through a real parser.
  *
- * These slugs and toolIDs are referenced from the smoke spec, so the
+ * These slugs and conversationIDs are referenced from the smoke spec, so the
  * spec asserts the same fixtures global-setup wrote without
  * re-deriving them.
  */
@@ -188,19 +188,19 @@ export const SMOKE_FIXTURES: FixtureSpec[] = [
   {
     kind: 'pi',
     cwd: '/var/gmux-e2e/smoke-pi',
-    toolID: '00000000-0000-0000-0000-0000000000a1',
+    conversationID: '00000000-0000-0000-0000-0000000000a1',
     title: 'pi smoke fixture',
   },
   {
     kind: 'claude',
     cwd: '/var/gmux-e2e/smoke-claude',
-    toolID: '00000000-0000-0000-0000-0000000000a2',
+    conversationID: '00000000-0000-0000-0000-0000000000a2',
     title: 'claude smoke fixture',
   },
   {
     kind: 'codex',
     cwd: '/var/gmux-e2e/smoke-codex',
-    toolID: '00000000-0000-0000-0000-0000000000a3',
+    conversationID: '00000000-0000-0000-0000-0000000000a3',
     title: 'codex smoke fixture',
   },
 ]
