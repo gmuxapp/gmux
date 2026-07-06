@@ -8,6 +8,9 @@ import { loadWebglRenderer } from './webgl-renderer'
 import type { Session } from './types'
 import { fetchScrollback, type ScrollbackResult } from './replay-fetch'
 import { JumpToBottom } from './jump-to-bottom'
+import { lifecycleAction } from './session-actions'
+import { MenuButton } from './menu-button'
+import { isTouchDevice } from './touch'
 
 // gmuxd caps scrollback at 1 MiB × 2 files (~2 MiB max). xterm's default
 // scrollback line cap (1000) would silently truncate most of that for
@@ -19,20 +22,6 @@ type ReplayState =
   | { kind: 'loading' }
   | ScrollbackResult
 
-// Adapter kinds whose runners have an explicit resume protocol
-// (--resume <id> or equivalent). Anything not in this set falls back
-// to "Rerun" because there's no captured agent state to pick up from;
-// re-launching just runs the original command again. Listed
-// explicitly so adding a new agent adapter is a deliberate one-line
-// change here, and unknown kinds default to the safe "Rerun" label.
-const RESUMABLE_AGENT_KINDS = new Set(['claude', 'codex', 'pi'])
-
-function resumeButtonLabel(kind: string, busy: boolean): string {
-  const isAgent = RESUMABLE_AGENT_KINDS.has(kind)
-  if (busy) return isAgent ? 'Resuming…' : 'Rerunning…'
-  return isAgent ? 'Resume' : 'Rerun'
-}
-
 /**
  * Read-only xterm view that replays a dead session's persisted scrollback
  * from the gmuxd broker. No WebSocket, no input, no resize messages: this
@@ -42,17 +31,21 @@ function resumeButtonLabel(kind: string, busy: boolean): string {
  * sidebar-click model). Live sessions go through TerminalView instead;
  * see main.tsx for the routing.
  *
- * The action bar at the bottom carries the lifecycle controls that
- * previously lived as auto-trigger-on-click in the sidebar: Resume /
- * Rerun (if the adapter is resumable). Promoting it out of an implicit
- * click means clicking a dead session navigates to its scrollback
- * first, and any state-changing action is a deliberate second click.
+ * The action bar at the bottom carries the *primary* lifecycle action
+ * for a dead session: Resume / Rerun (see lifecycleAction for the
+ * agent-vs-rerun split). The same action is deliberately mirrored in
+ * the header SessionMenu — that's where Restart lives for alive
+ * sessions, so muscle memory finds it there too. Promoting it out of
+ * an implicit sidebar click means clicking a dead session navigates to
+ * its scrollback first, and any state-changing action is a deliberate
+ * second click. Exit status is header chrome (MainHeader's "Exited"
+ * chip), not repeated here.
  *
- * The button label depends on the adapter kind: agent adapters
- * (claude/codex/pi) say "Resume" because they have explicit resume
- * semantics (`--resume <id>`), shells and one-off commands say "Rerun"
- * because there's no state to resume — re-launching just runs the
- * command again. Dismissal is intentionally not exposed here; the
+ * On touch the bar also carries the sidebar ☰: dead sessions render no
+ * mobile key bar (a full set of dead keys just to carry ☰ reads as
+ * clutter), so this is where the menu stays reachable. Without either
+ * a resume action or a touch pointer there's nothing to show and the
+ * bar is omitted. Dismissal is intentionally not exposed here; the
  * sidebar's per-session close affordance is the single way to remove
  * a dead session.
  */
@@ -61,11 +54,13 @@ export function ReplayView({
   terminalOptions,
   onResume,
   resuming,
+  onMenu,
 }: {
   session: Session
   terminalOptions: ITerminalOptions
   onResume?: (id: string) => void
   resuming?: boolean
+  onMenu?: () => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [term, setTerm] = useState<Terminal | null>(null)
@@ -161,9 +156,9 @@ export function ReplayView({
     }
   }, [session.id])
 
-  const exitLabel = session.exit_code != null
-    ? `Session ended (exit ${session.exit_code})`
-    : 'Session ended'
+  const action = lifecycleAction(session, !!resuming)
+  const resumeShown = action?.id === 'resume' && !!onResume
+  const menuShown = !!onMenu && isTouchDevice()
 
   return (
     <div class="replay-root">
@@ -191,21 +186,21 @@ export function ReplayView({
           </div>
         )}
       </div>
-      <div class="replay-actions">
-        <span class="replay-status">{exitLabel}</span>
-        <div class="replay-buttons">
-          {session.resumable && onResume && (
+      {(resumeShown || menuShown) && (
+        <div class="replay-actions">
+          {menuShown && <MenuButton variant="footer" onMenu={onMenu!} />}
+          {resumeShown && (
             <button
               type="button"
               class="btn btn-primary"
-              disabled={!!resuming}
-              onClick={() => onResume(session.id)}
+              disabled={action!.disabled}
+              onClick={() => onResume!(session.id)}
             >
-              {resumeButtonLabel(session.adapter, !!resuming)}
+              {action!.shortLabel}
             </button>
           )}
         </div>
-      </div>
+      )}
     </div>
   )
 }

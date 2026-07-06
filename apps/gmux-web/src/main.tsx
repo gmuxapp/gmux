@@ -8,9 +8,10 @@ import { applyArmedModifiers } from './keyboard'
 import { isTouchDevice } from './touch'
 import { ReplayView } from './replay-view'
 import { TerminalView } from './terminal'
-import { useArrivalPulse } from './use-arrival-pulse'
 import { Sidebar } from './sidebar'
 import { usePresence } from './use-presence'
+import { lifecycleAction } from './session-actions'
+import { MenuButton } from './menu-button'
 
 import type { Session } from './types'
 import { SettingsModal } from './settings'
@@ -24,7 +25,7 @@ import { pushError } from './toasts'
 import {
   sessions, connState, selected, selectedId, view, health, peers,
   terminalOptions, keybinds, macCommandIsCtrl,
-  unreadCount, keyboardOpen, terminalFindOpen, terminalScrolledUp, terminalScrollToBottom,
+  keyboardOpen, terminalFindOpen, terminalScrolledUp, terminalScrollToBottom,
   urlPath, urlSearch,
   initStore, setNavigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
@@ -165,9 +166,11 @@ class ErrorBoundary extends Component<
 
 // ── Components ──
 
-function MainHeader({ session, onRestart }: {
+function MainHeader({ session, onRestart, onResume, resuming }: {
   session: Session | null
   onRestart?: () => void
+  onResume?: (id: string) => void
+  resuming?: boolean
 }) {
   if (!session) {
     return (
@@ -192,24 +195,54 @@ function MainHeader({ session, onRestart }: {
         </div>
       </div>
       <div class="main-header-right">
-        {(session.status?.working || session.status?.error) && (
-          <div class={`main-header-status ${session.status.error ? 'error' : 'working'}`}>
-            <span
-              class={`session-dot ${session.status.error ? 'error' : 'working'}`}
-              style={{ width: 5, height: 5 }}
-            />
-            {session.status.error ? 'Error' : 'Working…'}
-          </div>
-        )}
-        <SessionMenu session={session} onRestart={onRestart} />
+        <HeaderStatusChip session={session} resuming={resuming} />
+        <SessionMenu session={session} onRestart={onRestart} onResume={onResume} resuming={resuming} />
       </div>
     </div>
   )
 }
 
-function SessionMenu({ session, onRestart }: {
+/** Session status in the header, one chip slot for both states: alive shows
+ * Working…/Error, dead shows Exited (N). While a resume is in flight the
+ * dead chip flips to the busy label — the menu closes on click, so this
+ * chip is the visible feedback until the session comes alive. */
+function HeaderStatusChip({ session, resuming }: {
+  session: Session
+  resuming?: boolean
+}) {
+  if (!session.alive) {
+    if (resuming) {
+      return (
+        <div class="main-header-status working">
+          <span class="session-dot working" style={{ width: 5, height: 5 }} />
+          {lifecycleAction(session, true)?.label ?? 'Resuming…'}
+        </div>
+      )
+    }
+    return (
+      <div class="main-header-status ended">
+        {session.exit_code != null ? `Exited (${session.exit_code})` : 'Exited'}
+      </div>
+    )
+  }
+  if (!session.status?.working && !session.status?.error) return null
+  const error = !!session.status.error
+  return (
+    <div class={`main-header-status ${error ? 'error' : 'working'}`}>
+      <span
+        class={`session-dot ${error ? 'error' : 'working'}`}
+        style={{ width: 5, height: 5 }}
+      />
+      {error ? 'Error' : 'Working…'}
+    </div>
+  )
+}
+
+function SessionMenu({ session, onRestart, onResume, resuming }: {
   session: Session
   onRestart?: () => void
+  onResume?: (id: string) => void
+  resuming?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -252,6 +285,16 @@ function SessionMenu({ session, onRestart }: {
   // for the secondary+F keybind).
   const canFind = session.alive
 
+  // One lifecycle action per state (Restart alive, Resume/Rerun dead).
+  // The menu is where muscle memory expects it in both states; for dead
+  // sessions the same action is deliberately mirrored as the primary
+  // button in ReplayView's action bar.
+  const action = lifecycleAction(session, resuming)
+  const actionHandler = action?.id === 'restart' ? onRestart
+    : action?.id === 'resume' && onResume ? () => onResume(session.id)
+    : undefined
+  const showStale = action?.id === 'restart' && !!staleKind
+
   return (
     <div class="session-menu" ref={menuRef}>
       <button
@@ -273,16 +316,17 @@ function SessionMenu({ session, onRestart }: {
               Find in terminal
             </button>
           )}
-          {session.alive && onRestart && (
+          {action && actionHandler && (
             <button
-              class={`session-menu-action${staleKind ? ' stale' : ''}`}
-              onClick={() => { setOpen(false); onRestart!() }}
+              class={`session-menu-action${showStale ? ' stale' : ''}`}
+              disabled={action.disabled}
+              onClick={() => { setOpen(false); actionHandler() }}
             >
-              Restart session
-              {staleKind && <span class="session-menu-action-tag">outdated</span>}
+              {action.label}
+              {showStale && <span class="session-menu-action-tag">outdated</span>}
             </button>
           )}
-          {(canFind || (session.alive && onRestart)) && <div class="session-menu-divider" />}
+          {(canFind || (action && actionHandler)) && <div class="session-menu-divider" />}
           <div class="session-menu-section-title">Session info</div>
           <div class="session-menu-row">
             <span class="session-menu-label">Adapter</span>
@@ -375,15 +419,6 @@ function MobileTerminalBar({
   onCtrlConsumed: () => void
   onAltConsumed: () => void
 }) {
-  // Read signals directly; no props needed for these. The hamburger
-  // badge surfaces only the waiting (unread) state — working/active are
-  // deliberately omitted. unreadCount excludes the selected session and
-  // its value re-fires the arrival pulse when another session starts
-  // waiting.
-  const waitingCount = unreadCount.value
-  const waiting = waitingCount > 0
-  const arrival = useArrivalPulse(waiting ? 'unread' : 'none', waitingCount)
-
   // Don't steal focus from the terminal: a control tap leaves the
   // keyboard exactly as it is (open or closed). Bytes reach the PTY via
   // the raw input channel (onSend), independent of DOM focus, so every
@@ -425,17 +460,7 @@ function MobileTerminalBar({
 
   return (
     <div class="mobile-bottom-bar" role="toolbar" aria-label="Terminal keys" onMouseDown={keepFocus}>
-      <button
-        class={`mobile-bottom-action menu-btn mk-menu${waiting ? ' bg-waiting' : ''}${arrival ? ` bg-${arrival}` : ''}`}
-        onClick={() => {
-          // Dismiss the on-screen keyboard when opening the menu. keepFocus
-          // holds focus on the textarea through pointerdown, so it's still
-          // the active element here; blurring it slides the keyboard away.
-          (document.activeElement as HTMLElement | null)?.blur()
-          onMenu()
-        }}
-        title="Open sessions"
-      ><span class="mkey-face">☰</span></button>
+      <MenuButton variant="bar" onMenu={onMenu} />
       <button class="mobile-bottom-action mk-esc" disabled={!canSend} onClick={() => sendKey('\x1b')} title="Escape"><span class="mkey-face">esc</span></button>
       <button class="mobile-bottom-action mk-tab" disabled={!canSend} onClick={() => sendKey('\t')} title="Tab"><span class="mkey-face">tab</span></button>
       <button class={`${armedClass(ctrlArmed)} mk-ctrl`} disabled={!canSend} aria-pressed={ctrlArmed} onClick={onToggleCtrl} title={ctrlArmed ? 'Ctrl armed for next key' : 'Arm Ctrl'}><span class="mkey-face">ctrl</span></button>
@@ -655,6 +680,15 @@ function App() {
   }, [canAttach])
   const handleAltConsumed = useCallback(() => { setAltArmed(false) }, [])
 
+  const openSidebar = useCallback(() => setSidebarOpen(true), [])
+
+  // The key bar only accompanies an attached (or mock) terminal; dead
+  // sessions carry ☰ in ReplayView's action bar instead of a full set of
+  // disabled keys. Everything else (home, project hub, transient states)
+  // gets the floating ☰ so the sidebar overlay stays reachable on touch.
+  const keyBarShown = !!selectedVal && (canAttach || USE_MOCK) && !!termOpts && !!keybindsVal
+  const replayShown = !keyBarShown && !!selectedVal && !selectedVal.alive && !!termOpts && !USE_MOCK
+
   return (
     <div class="app-layout">
       <Sidebar
@@ -677,6 +711,8 @@ function App() {
           <MainHeader
             session={selectedVal}
             onRestart={selectedVal ? () => { void restartSession(selectedVal.id) } : undefined}
+            onResume={handleResume}
+            resuming={!!selectedVal && resumingId === selectedVal.id}
           />
         )}
 
@@ -720,6 +756,7 @@ function App() {
             terminalOptions={termOpts}
             onResume={handleResume}
             resuming={resumingId === selectedVal.id}
+            onMenu={openSidebar}
           />
         ) : selectedVal ? (
           <div class="state-message">
@@ -733,18 +770,27 @@ function App() {
           />
         )}
 
-        {selectedVal && (canAttach || USE_MOCK) && termOpts && keybindsVal && (
+        {keyBarShown && (
           <MobileTerminalBar
             canSend={canAttach}
             ctrlArmed={ctrlArmed}
             altArmed={altArmed}
-            onMenu={() => setSidebarOpen(true)}
+            onMenu={openSidebar}
             onSend={handleMobileInput}
             onToggleCtrl={handleToggleCtrl}
             onToggleAlt={handleToggleAlt}
             onCtrlConsumed={handleCtrlConsumed}
             onAltConsumed={handleAltConsumed}
           />
+        )}
+
+        {/* On touch the sidebar is an off-canvas overlay, so every screen
+            must carry a ☰ somewhere. The key bar and ReplayView's action
+            bar have their own; everything else (home, project hub,
+            connecting/error states) gets the floating one. Hidden on fine
+            pointers via CSS. */}
+        {!keyBarShown && !replayShown && (
+          <MenuButton variant="floating" onMenu={openSidebar} />
         )}
       </div>
     </div>

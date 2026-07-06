@@ -1647,6 +1647,7 @@ body {
 
 .main-header-status.working { color: var(--accent); }
 .main-header-status.error   { color: var(--status-error); }
+.main-header-status.ended   { color: var(--text-muted); }
 
 /* Session actions menu */
 
@@ -1729,6 +1730,16 @@ body {
 .session-menu-action:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+
+/* Resume in flight: keep the busy label visible but inert. */
+.session-menu-action:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.session-menu-action:disabled:hover {
+  background: none;
+  color: var(--text-secondary);
 }
 
 .session-menu-action.stale {
@@ -2933,8 +2944,10 @@ body {
 }
 
 /* Replay (read-only dead session) layout: terminal area fills remaining
-   vertical space, action bar pinned beneath. The action bar carries the
-   resume/dismiss buttons that the sidebar used to auto-trigger on click. */
+   vertical space, action bar pinned beneath. The bar carries the primary
+   Resume/Rerun action (also mirrored in the header menu, where Restart
+   lives for alive sessions); exit status is header chrome, and
+   non-resumable sessions render no bar. */
 .replay-root {
   flex: 1;
   display: flex;
@@ -2950,21 +2963,57 @@ body {
 .replay-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   padding: 8px 16px;
   background: var(--bg-surface);
   border-top: 1px solid var(--border);
 }
 
-.replay-status {
-  color: var(--text-muted);
-  font-size: 13px;
+/* Resume stays on the right whether or not the (touch-only) ☰ occupies
+   the left slot. */
+.replay-actions .btn {
+  margin-left: auto;
 }
 
-.replay-buttons {
-  display: flex;
-  gap: 8px;
+/* Notched devices: the replay action bar is the bottom-most chrome on
+   dead sessions (no key bar there), so it absorbs the safe-area inset. */
+@media (pointer: coarse) {
+  .replay-actions {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+}
+
+/* Standalone ☰ (replay footer / floating home + project variant): only
+   meaningful on touch, where the sidebar is an off-canvas overlay. On fine
+   pointers the sidebar is always visible, so hide it (this also skips the
+   key-visual styles, which live inside the coarse block). */
+.menu-btn-standalone {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  /* Same two-layer key visuals as the bar cells, with a local --key-gap
+     (the bar defines it on the grid) and an explicit size since there's
+     no grid track to size against. */
+  .menu-btn-standalone {
+    --key-gap: 0px;
+    display: inline-flex;
+    width: 48px;
+    min-height: 38px;
+  }
+
+  /* Floating over screens without any bottom bar (home / project hub /
+     transient states). Bottom-left — the same corner the key bar's ☰
+     occupies on session screens — with an opaque fill since it overlays
+     scrollable content. */
+  .menu-btn-floating {
+    position: absolute;
+    left: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    z-index: 50;
+    background: var(--bg-surface);
+    box-shadow: 0 2px 8px oklch(0% 0 0 / 0.35);
+  }
 }
 
 
