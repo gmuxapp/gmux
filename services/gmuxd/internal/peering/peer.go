@@ -277,15 +277,30 @@ func (p *Peer) ProxyWS(w http.ResponseWriter, r *http.Request, originalID string
 	p.api.ProxyWS(w, r, originalID)
 }
 
+// Backoff bounds for peer reconnects. The ceiling stays at 30s
+// deliberately: peering is a dial-out-only relationship (the hub
+// opens the SSE stream; the spoke cannot push "I'm online"), so
+// reconnect latency is bounded solely by this interval. A longer
+// ceiling would mean a peer that just came online stays invisible
+// for minutes. The log spam that motivated issue #244 is handled by
+// deduping the disconnect log (see run's lastLogged), not by
+// stretching the retry cadence. Transient drops recover fast because
+// backoff resets to initialBackoff after any successful connection.
+const (
+	initialBackoff = 1 * time.Second
+	maxBackoff     = 30 * time.Second
+)
+
 // run connects to the spoke's SSE stream and processes events until
 // the context is cancelled. Handles reconnection with exponential
 // backoff.
 func (p *Peer) run(ctx context.Context) {
-	const (
-		initialBackoff = 1 * time.Second
-		maxBackoff     = 30 * time.Second
-	)
 	backoff := initialBackoff
+	// lastLogged dedupes disconnect logs: repeated identical failures
+	// against a down host are logged once, not on every retry. Any
+	// change in the failure (or a successful connection in between)
+	// logs again.
+	lastLogged := ""
 
 	for {
 		if ctx.Err() != nil {
@@ -322,9 +337,14 @@ func (p *Peer) run(ctx context.Context) {
 		// reconnect quickly instead of carrying over stale backoff.
 		if wasConnected {
 			backoff = initialBackoff
+			lastLogged = ""
 		}
 
-		log.Printf("peering: %s: disconnected: %v (retry in %s)", p.Config.Name, err, backoff)
+		msg := fmt.Sprintf("%v", err)
+		if msg != lastLogged {
+			log.Printf("peering: %s: disconnected: %v (retrying, up to every %s)", p.Config.Name, err, maxBackoff)
+			lastLogged = msg
+		}
 
 		select {
 		case <-ctx.Done():
