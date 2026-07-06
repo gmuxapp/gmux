@@ -13,7 +13,7 @@ func ResolveResumeCommand(sess *store.Session) []string {
 	if sess.SessionFile == "" {
 		return nil
 	}
-	a := adapters.FindByKind(sess.Kind)
+	a := adapters.FindByAdapter(sess.Adapter)
 	if a == nil {
 		return nil
 	}

@@ -125,7 +125,7 @@ type claudeFirstLine struct {
 // ParseSessionFile reads a Claude Code JSONL session file and returns
 // display metadata.
 // Title priority: custom-title line > first user message text > "" (no
-// conversation-derived title yet; callers fall back to cwd/kind).
+// conversation-derived title yet; callers fall back to cwd/adapter).
 func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

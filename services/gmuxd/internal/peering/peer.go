@@ -37,9 +37,9 @@ type Peer struct {
 
 	mu             sync.RWMutex
 	status         Status
-	lastError      string      // human-readable reason for last disconnect
-	cachedHealth   SpokeHealth // peer's /v1/health data, fetched on connect
-	healthLoaded   bool        // true after first successful health fetch
+	lastError      string         // human-readable reason for last disconnect
+	cachedHealth   SpokeHealth    // peer's /v1/health data, fetched on connect
+	healthLoaded   bool           // true after first successful health fetch
 	cachedProjects []SpokeProject // peer's projects, refreshed on connect and on projects-update
 	projectsLoaded bool
 	// cachedDiscovered is the spoke's self-advertised discovered list
@@ -486,7 +486,7 @@ func (p *Peer) applySessionsSnapshot(remote []store.Session) {
 		// Title and Resumable. Upsert would re-run resolveTitle against
 		// the wire session where ShellTitle/AdapterTitle are absent
 		// (they're internal fields, intentionally off the wire) and
-		// overwrite the correct title with the Kind fallback.
+		// overwrite the correct title with the adapter-name fallback.
 		p.store.UpsertRemote(sess)
 	}
 

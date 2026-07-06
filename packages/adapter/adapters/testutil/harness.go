@@ -27,7 +27,7 @@ import (
 // Session mirrors the gmuxd session schema fields we care about.
 type Session struct {
 	ID           string   `json:"id"`
-	Kind         string   `json:"adapter"`
+	Adapter      string   `json:"adapter"`
 	Alive        bool     `json:"alive"`
 	Pid          int      `json:"pid"`
 	Title        string   `json:"title"`
@@ -36,7 +36,7 @@ type Session struct {
 	SocketPath   string   `json:"socket_path"`
 	Status       *Status  `json:"status"`
 	Resumable    bool     `json:"resumable"`
-	Slug    string   `json:"slug"`
+	Slug         string   `json:"slug"`
 	Command      []string `json:"command"`
 }
 
@@ -134,7 +134,7 @@ func (g *Gmuxd) Launch(command []string, cwd string) Session {
 	}
 
 	return g.WaitFor(func(s Session) bool {
-		return s.Alive && s.Cwd == cwd && s.Kind != "" && s.SocketPath != ""
+		return s.Alive && s.Cwd == cwd && s.Adapter != "" && s.SocketPath != ""
 	}, 15*time.Second, "session to appear alive")
 }
 
@@ -146,7 +146,9 @@ func (g *Gmuxd) Sessions() []Session {
 		g.t.Fatalf("list sessions: %v", err)
 	}
 	defer resp.Body.Close()
-	var env struct{ Data []Session `json:"data"` }
+	var env struct {
+		Data []Session `json:"data"`
+	}
 	json.NewDecoder(resp.Body).Decode(&env)
 	return env.Data
 }
@@ -298,7 +300,9 @@ func findRepoRoot(t *testing.T) string {
 func freePort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "localhost:0")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 	return port

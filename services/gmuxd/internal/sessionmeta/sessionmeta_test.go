@@ -21,7 +21,7 @@ func sampleSession() store.Session {
 	exit := 42
 	return store.Session{
 		ID:           "sess-test123",
-		Kind:         "shell",
+		Adapter:      "shell",
 		Command:      []string{"bash", "-l"},
 		Cwd:          "/home/u/proj",
 		Alive:        false,
@@ -39,7 +39,7 @@ func sampleSession() store.Session {
 // claim of this package: persisted sessions come back with the
 // internal Title-precedence fields (ShellTitle, AdapterTitle) intact.
 // Without this, a restored session loses its title resolution and
-// shows up as the bare Kind ("shell") instead of "proj".
+// shows up as the bare adapter name ("shell") instead of "proj".
 func TestRoundTripPreservesInternalFields(t *testing.T) {
 	s := newStore(t)
 	in := sampleSession()
@@ -77,31 +77,31 @@ func TestRoundTripFullSession(t *testing.T) {
 	s := newStore(t)
 	exit := 7
 	in := store.Session{
-		ID:            "sess-full",
-		CreatedAt:     "2026-04-26T10:00:00Z",
-		Command:       []string{"bash", "-c", "echo hi"},
-		Cwd:           "~/work",
-		Kind:          "shell",
-		WorkspaceRoot: "~/work/repo",
-		Remotes:       map[string]string{"origin": "github.com/me/repo"},
-		Alive:         false,
-		Pid:           12345,
-		ExitCode:      &exit,
-		StartedAt:     "2026-04-26T10:00:01Z",
-		ExitedAt:      "2026-04-26T10:05:00Z",
-		Title:         "my title",
-		Subtitle:      "my subtitle",
-		Status:        &store.Status{Working: true, Error: false},
-		Unread:        true,
-		Resumable:     true,
-		SocketPath:    "/tmp/gmux-sessions/sess-full.sock",
-		TerminalCols:  120,
-		TerminalRows:  40,
-		Slug:          "my-slug",
-		RunnerVersion: "v1.4.0",
-		BinaryHash:    "abc123",
-		ShellTitle:    "shell-title",
-		AdapterTitle:  "adapter-title",
+		ID:             "sess-full",
+		CreatedAt:      "2026-04-26T10:00:00Z",
+		Command:        []string{"bash", "-c", "echo hi"},
+		Cwd:            "~/work",
+		Adapter:        "shell",
+		WorkspaceRoot:  "~/work/repo",
+		Remotes:        map[string]string{"origin": "github.com/me/repo"},
+		Alive:          false,
+		Pid:            12345,
+		ExitCode:       &exit,
+		StartedAt:      "2026-04-26T10:00:01Z",
+		ExitedAt:       "2026-04-26T10:05:00Z",
+		Title:          "my title",
+		Subtitle:       "my subtitle",
+		Status:         &store.Status{Working: true, Error: false},
+		Unread:         true,
+		Resumable:      true,
+		SocketPath:     "/tmp/gmux-sessions/sess-full.sock",
+		TerminalCols:   120,
+		TerminalRows:   40,
+		Slug:           "my-slug",
+		RunnerVersion:  "v1.4.0",
+		BinaryHash:     "abc123",
+		ShellTitle:     "shell-title",
+		AdapterTitle:   "adapter-title",
 		LastActivityAt: "2026-04-26T10:04:30Z",
 	}
 
@@ -205,8 +205,8 @@ func TestReadLegacyPreV2Keys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if got.Kind != "pi" {
-		t.Errorf("Kind = %q, want %q (legacy \"kind\" fallback)", got.Kind, "pi")
+	if got.Adapter != "pi" {
+		t.Errorf("Adapter = %q, want %q (legacy \"kind\" fallback)", got.Adapter, "pi")
 	}
 	if want := "/home/u/.pi/agent/sessions/x/conv.jsonl"; got.SessionFile != want {
 		t.Errorf("SessionFile = %q, want %q (legacy \"session_file\" fallback)", got.SessionFile, want)

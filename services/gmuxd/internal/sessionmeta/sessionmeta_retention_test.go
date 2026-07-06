@@ -17,7 +17,7 @@ import (
 // SessionFile so retention tests can stage corpses on disk.
 func writeDead(t *testing.T, s *Store, id, exitedAt, sessionFile string) {
 	t.Helper()
-	sess := store.Session{ID: id, Kind: "shell", Alive: false, ExitedAt: exitedAt, SessionFile: sessionFile}
+	sess := store.Session{ID: id, Adapter: "shell", Alive: false, ExitedAt: exitedAt, SessionFile: sessionFile}
 	if err := s.Write(sess); err != nil {
 		t.Fatalf("Write %s: %v", id, err)
 	}
@@ -444,7 +444,7 @@ func TestPruneScrollbackCoalesces(t *testing.T) {
 // consumed by WatchRemovals, delete the on-disk meta dir.
 func TestRemoveDeadBySessionFileDrivesWatchRemovals(t *testing.T) {
 	metaStore := New(t.TempDir())
-	sess := store.Session{ID: "sess-dead1", Kind: "claude", Alive: false, SessionFile: "/c/conv.jsonl"}
+	sess := store.Session{ID: "sess-dead1", Adapter: "claude", Alive: false, SessionFile: "/c/conv.jsonl"}
 	if err := metaStore.Write(sess); err != nil {
 		t.Fatal(err)
 	}

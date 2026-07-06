@@ -131,7 +131,7 @@ func TestScrollbackPiNoSpinnerFrames(t *testing.T) {
 
 // --- Claude scrollback tests ---
 // NOTE: Claude integration tests are currently broken due to a pre-existing
-// adapter detection issue (claude detected as kind "pi") and TUI interaction
+// adapter detection issue (claude detected as adapter "pi") and TUI interaction
 // changes (welcome overlay intercepts input). These need a separate fix to
 // the claude adapter and test harness. The scrollback fix itself is validated
 // by the pi and shell tests below, which exercise the same TermWriter code path.

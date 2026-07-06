@@ -8,7 +8,7 @@ import "github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 // confidently reports deleted. It covers the gap the index can't —
 // a conversation file removed while gmuxd was down emits no event.
 //
-// probe answers "is this kind's conversation file at path gone?" as
+// probe answers "is this adapter's conversation file at path gone?" as
 // (gone, known). Retirement happens only on (known && gone): when the
 // adapter can't tell (known=false, e.g. its storage root is unreachable
 // because home isn't mounted), the entry is kept. That gate is the
@@ -20,7 +20,7 @@ import "github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 // that path. Alive, peer-owned, and file-less sessions are skipped.
 func reconcileDeletedConversations(
 	list []store.Session,
-	probe func(kind, sessionFile string) (gone, known bool),
+	probe func(adapter, conversationFile string) (gone, known bool),
 	retire func(sessionFile string),
 ) {
 	seen := map[string]bool{}
@@ -29,7 +29,7 @@ func reconcileDeletedConversations(
 			continue
 		}
 		seen[sess.SessionFile] = true
-		if gone, known := probe(sess.Kind, sess.SessionFile); known && gone {
+		if gone, known := probe(sess.Adapter, sess.SessionFile); known && gone {
 			retire(sess.SessionFile)
 		}
 	}

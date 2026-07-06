@@ -582,8 +582,8 @@ func serve(stderr io.Writer) int {
 	// event. Run from discovery's first-scan hook (live runners flagged),
 	// it asks each owning adapter whether its dead sessions' files are
 	// gone. See reconcileDeletedConversations for the safety gate.
-	convProbe := func(kind, path string) (gone, known bool) {
-		if p, ok := adapters.FindByKind(kind).(adapter.ConversationProber); ok {
+	convProbe := func(adapterName, path string) (gone, known bool) {
+		if p, ok := adapters.FindByAdapter(adapterName).(adapter.ConversationProber); ok {
 			return p.ConversationGone(path)
 		}
 		return false, false
@@ -652,7 +652,7 @@ func serve(stderr io.Writer) int {
 	stopScanner := make(chan struct{})
 	defer close(stopScanner)
 
-	// Conversations index — maps (kind, slug) to file metadata for URL
+	// Conversations index — maps (adapter, slug) to file metadata for URL
 	// resolution of dead conversations and future fulltext search. Each
 	// adapter's ConversationSource supplies a snapshot at startup and
 	// incremental updates thereafter; the daemon owns no file monitor.
@@ -1257,7 +1257,7 @@ func serve(stderr io.Writer) int {
 			"ok": true,
 			"data": map[string]any{
 				"slug":           info.Slug,
-				"adapter":        info.Kind,
+				"adapter":        info.Adapter,
 				"title":          info.Title,
 				"cwd":            info.Cwd,
 				"resume_command": info.ResumeCommand,
@@ -1745,7 +1745,7 @@ func serve(stderr io.Writer) int {
 				}
 			}
 			// Let the adapter perform any cleanup (e.g. removing a state file).
-			if a := adapters.FindByKind(sess.Kind); a != nil {
+			if a := adapters.FindByAdapter(sess.Adapter); a != nil {
 				if fin, ok := a.(adapter.SessionFinalizer); ok {
 					fin.OnDismiss(sessionID, projects.NormalizePath(sess.Cwd))
 				}

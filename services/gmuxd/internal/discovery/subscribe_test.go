@@ -76,7 +76,7 @@ func TestSubscribeReplacesExistingForSameID(t *testing.T) {
 
 	const id = "sess-restart-race"
 	sessions := store.New()
-	sessions.Upsert(store.Session{ID: id, Kind: "shell", Alive: true, SocketPath: r1.socketPath})
+	sessions.Upsert(store.Session{ID: id, Adapter: "shell", Alive: true, SocketPath: r1.socketPath})
 
 	subs := NewSubscriptions(sessions)
 	t.Cleanup(func() { subs.UnsubscribeAll() })
@@ -154,7 +154,7 @@ func TestSubscribeOldDeferDoesNotEvictNewEntry(t *testing.T) {
 
 	const id = "sess-defer-eviction"
 	sessions := store.New()
-	sessions.Upsert(store.Session{ID: id, Kind: "shell", Alive: true})
+	sessions.Upsert(store.Session{ID: id, Adapter: "shell", Alive: true})
 
 	subs := NewSubscriptions(sessions)
 	t.Cleanup(func() { subs.UnsubscribeAll() })
@@ -193,7 +193,7 @@ func TestExitEventDoesNotResurrectDismissedSession(t *testing.T) {
 	sessions := store.New()
 	sessions.Upsert(store.Session{
 		ID:      id,
-		Kind:    "shell",
+		Adapter: "shell",
 		Alive:   true,
 		Command: []string{"bash"},
 	})

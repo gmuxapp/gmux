@@ -35,7 +35,7 @@ func newBrokerFixture(t *testing.T) *brokerFixture {
 
 func (f *brokerFixture) addSession(t *testing.T, id string) {
 	t.Helper()
-	f.sessions.Upsert(store.Session{ID: id, Kind: "shell", Alive: true})
+	f.sessions.Upsert(store.Session{ID: id, Adapter: "shell", Alive: true})
 }
 
 func (f *brokerFixture) writeScrollback(t *testing.T, id, body string) {

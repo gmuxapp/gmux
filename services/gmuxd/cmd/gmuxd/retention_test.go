@@ -14,11 +14,11 @@ import (
 // the reconcile asks an adapter instead of stat'ing the file directly.
 func TestReconcileDeletedConversations_SafetyGate(t *testing.T) {
 	list := []store.Session{
-		{ID: "deleted", Kind: "claude", SessionFile: "/c/deleted.jsonl"},
-		{ID: "present", Kind: "claude", SessionFile: "/c/present.jsonl"},
-		{ID: "unreachable", Kind: "codex", SessionFile: "/x/unreachable.jsonl"},
+		{ID: "deleted", Adapter: "claude", SessionFile: "/c/deleted.jsonl"},
+		{ID: "present", Adapter: "claude", SessionFile: "/c/present.jsonl"},
+		{ID: "unreachable", Adapter: "codex", SessionFile: "/x/unreachable.jsonl"},
 	}
-	probe := func(kind, path string) (gone, known bool) {
+	probe := func(adapter, path string) (gone, known bool) {
 		switch path {
 		case "/c/deleted.jsonl":
 			return true, true // confidently deleted
@@ -42,9 +42,9 @@ func TestReconcileDeletedConversations_SafetyGate(t *testing.T) {
 // and file-less sessions are never probed or retired.
 func TestReconcileDeletedConversations_Skips(t *testing.T) {
 	list := []store.Session{
-		{ID: "alive", Kind: "claude", SessionFile: "/c/a.jsonl", Alive: true},
-		{ID: "peer", Kind: "claude", SessionFile: "/c/b.jsonl", Peer: "box2"},
-		{ID: "nofile", Kind: "claude", SessionFile: ""},
+		{ID: "alive", Adapter: "claude", SessionFile: "/c/a.jsonl", Alive: true},
+		{ID: "peer", Adapter: "claude", SessionFile: "/c/b.jsonl", Peer: "box2"},
+		{ID: "nofile", Adapter: "claude", SessionFile: ""},
 	}
 	var probed, retired []string
 	reconcileDeletedConversations(list,
@@ -65,9 +65,9 @@ func TestReconcileDeletedConversations_Skips(t *testing.T) {
 func TestReconcileDeletedConversations_DedupsPaths(t *testing.T) {
 	const shared = "/c/shared.jsonl"
 	list := []store.Session{
-		{ID: "d1", Kind: "claude", SessionFile: shared},
-		{ID: "d2", Kind: "claude", SessionFile: shared},
-		{ID: "d3", Kind: "claude", SessionFile: shared},
+		{ID: "d1", Adapter: "claude", SessionFile: shared},
+		{ID: "d2", Adapter: "claude", SessionFile: shared},
+		{ID: "d3", Adapter: "claude", SessionFile: shared},
 	}
 	var probed, retired []string
 	reconcileDeletedConversations(list,
@@ -82,16 +82,16 @@ func TestReconcileDeletedConversations_DedupsPaths(t *testing.T) {
 	}
 }
 
-// TestReconcileDeletedConversations_NoProberKind pins that a kind whose
+// TestReconcileDeletedConversations_NoProberKind pins that an adapter whose
 // adapter can't probe (probe returns known=false) is left alone — this
 // is how the real convProbe reports a missing/incapable adapter.
 func TestReconcileDeletedConversations_NoProberKind(t *testing.T) {
-	list := []store.Session{{ID: "s", Kind: "shell", SessionFile: "/s/x"}}
+	list := []store.Session{{ID: "s", Adapter: "shell", SessionFile: "/s/x"}}
 	var retired []string
 	reconcileDeletedConversations(list,
 		func(_, _ string) (bool, bool) { return false, false },
 		func(p string) { retired = append(retired, p) })
 	if len(retired) != 0 {
-		t.Errorf("kind without a prober must not retire, got %v", retired)
+		t.Errorf("adapter without a prober must not retire, got %v", retired)
 	}
 }

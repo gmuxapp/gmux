@@ -61,7 +61,7 @@ func TestReconnectReplaysSessionFile(t *testing.T) {
 	sockPath := filepath.Join(dir, "test.sock")
 	sessFile := filepath.Join(dir, "2026-06-19_sess-reconnect.jsonl")
 
-	st := session.New(session.Config{ID: "s1", Kind: "pi", SocketPath: sockPath})
+	st := session.New(session.Config{ID: "s1", Adapter: "pi", SocketPath: sockPath})
 	srv, err := New(Config{
 		Command:    []string{node, "-e", "setTimeout(()=>{},3000)"},
 		Cwd:        dir,
@@ -122,7 +122,7 @@ func TestSessionEventIsAuthoritative(t *testing.T) {
 		}
 	}
 
-	st := session.New(session.Config{ID: "s1", Kind: "pi", SocketPath: sockPath})
+	st := session.New(session.Config{ID: "s1", Adapter: "pi", SocketPath: sockPath})
 	srv, err := New(Config{
 		Command:    []string{node, "-e", "setTimeout(()=>{},2000)"},
 		Cwd:        dir,
@@ -177,7 +177,7 @@ func TestTurnEventDrivesState(t *testing.T) {
 	}
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "test.sock")
-	st := session.New(session.Config{ID: "s1", Kind: "pi", SocketPath: sockPath})
+	st := session.New(session.Config{ID: "s1", Adapter: "pi", SocketPath: sockPath})
 	srv, err := New(Config{
 		Command:    []string{node, "-e", "setTimeout(()=>{},2000)"},
 		Cwd:        dir,
@@ -241,7 +241,7 @@ func TestSessionSlugPrefersExplicitSlug(t *testing.T) {
 		t.Helper()
 		dir := t.TempDir()
 		sockPath := filepath.Join(dir, "test.sock")
-		st := session.New(session.Config{ID: "s1", Kind: "codex", SocketPath: sockPath})
+		st := session.New(session.Config{ID: "s1", Adapter: "codex", SocketPath: sockPath})
 		srv, err := New(Config{
 			Command:    []string{node, "-e", "setTimeout(()=>{},2000)"},
 			Cwd:        dir,
@@ -284,7 +284,7 @@ func TestApplyTurnEnd(t *testing.T) {
 		{"error", false, true},
 	}
 	for _, tc := range cases {
-		st := session.New(session.Config{ID: "s1", Kind: "pi"})
+		st := session.New(session.Config{ID: "s1", Adapter: "pi"})
 		srv := &Server{state: st}
 		srv.applyTurnEnd(tc.outcome, "")
 		status := st.StatusSnapshot()

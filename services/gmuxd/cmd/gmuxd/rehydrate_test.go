@@ -29,7 +29,7 @@ func TestRehydrateProjects_PreservesSessionmetaState(t *testing.T) {
 	loaded := store.Session{
 		ID:         "tool-abc",
 		Slug:       "fix-auth",
-		Kind:       "shell",
+		Adapter:    "shell",
 		Cwd:        "/home/me/proj",
 		Alive:      false,
 		ExitCode:   &exitCode,
@@ -44,12 +44,12 @@ func TestRehydrateProjects_PreservesSessionmetaState(t *testing.T) {
 	// from scanning adapter state files. Pre-fix, this would feed
 	// into Upsert via projects rehydration, take precedence over the
 	// already-loaded ShellTitle (AdapterTitle > ShellTitle), and
-	// clobber Title to the generic kind label.
+	// clobber Title to the generic adapter label.
 	idx := conversations.New()
 	idx.Upsert(conversations.Info{
 		ConversationID: "tool-abc",
 		Slug:           "fix-auth",
-		Kind:           "shell",
+		Adapter:        "shell",
 		Title:          "shell", // becomes AdapterTitle on rehydrate
 		Cwd:            "/home/me/proj",
 		Created:        time.Date(2024, 1, 1, 11, 0, 0, 0, time.UTC),
@@ -96,11 +96,11 @@ func TestRehydrateProjects_PreventsDuplicateForToolBackedAdapter(t *testing.T) {
 
 	// Sessionmeta-loaded entry: keyed by runner session ID.
 	sessions.Upsert(store.Session{
-		ID:    "sess-runner-A",
-		Slug:  "fix-auth",
-		Kind:  "pi",
-		Cwd:   "/work",
-		Alive: false,
+		ID:      "sess-runner-A",
+		Slug:    "fix-auth",
+		Adapter: "pi",
+		Cwd:     "/work",
+		Alive:   false,
 	})
 
 	// convIndex entry: same logical session, but ConversationID is the JSONL
@@ -109,7 +109,7 @@ func TestRehydrateProjects_PreventsDuplicateForToolBackedAdapter(t *testing.T) {
 	idx.Upsert(conversations.Info{
 		ConversationID: "jsonl-uuid-XYZ",
 		Slug:           "fix-auth",
-		Kind:           "pi",
+		Adapter:        "pi",
 		Title:          "fix auth",
 		Cwd:            "/work",
 		Created:        time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -146,7 +146,7 @@ func TestRehydrateProjects_FallbackForMissingSessionmeta(t *testing.T) {
 	idx.Upsert(conversations.Info{
 		ConversationID: "tool-old",
 		Slug:           "legacy",
-		Kind:           "shell",
+		Adapter:        "shell",
 		Title:          "shell",
 		Cwd:            "/home/me/legacy",
 		Created:        time.Date(2023, 6, 1, 0, 0, 0, 0, time.UTC),

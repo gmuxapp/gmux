@@ -21,9 +21,7 @@ type State struct {
 	CreatedAt     string            `json:"created_at"`
 	Command       []string          `json:"command"`
 	Cwd           string            `json:"cwd"`
-	// Kind holds the adapter name; wire key "adapter" (v2 rename), Go
-	// identifier rename trails with the internal cleanup.
-	Kind          string            `json:"adapter"`
+	Adapter       string            `json:"adapter"`
 	WorkspaceRoot string            `json:"workspace_root,omitempty"`
 	Remotes       map[string]string `json:"remotes,omitempty"`
 
@@ -81,7 +79,7 @@ type Config struct {
 	ID            string
 	Command       []string
 	Cwd           string
-	Kind          string
+	Adapter       string
 	SocketPath    string
 	BinaryHash    string
 	RunnerVersion string
@@ -96,7 +94,7 @@ func New(cfg Config) *State {
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 		Command:       cfg.Command,
 		Cwd:           cfg.Cwd,
-		Kind:          cfg.Kind,
+		Adapter:       cfg.Adapter,
 		WorkspaceRoot: cfg.WorkspaceRoot,
 		Remotes:       cfg.Remotes,
 		SocketPath:    cfg.SocketPath,

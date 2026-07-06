@@ -24,7 +24,7 @@ import (
 // session mirrors the schema v2 fields we care about.
 type session struct {
 	ID         string  `json:"id"`
-	Kind       string  `json:"adapter"`
+	Adapter    string  `json:"adapter"`
 	Alive      bool    `json:"alive"`
 	Pid        int     `json:"pid"`
 	Title      string  `json:"title"`
@@ -146,8 +146,8 @@ func TestEndToEnd(t *testing.T) {
 	if !found.Alive {
 		t.Error("expected alive=true")
 	}
-	if found.Kind != "generic" {
-		t.Errorf("expected kind=generic, got %q", found.Kind)
+	if found.Adapter != "generic" {
+		t.Errorf("expected adapter=generic, got %q", found.Adapter)
 	}
 	if found.Pid == 0 {
 		t.Error("expected non-zero pid")

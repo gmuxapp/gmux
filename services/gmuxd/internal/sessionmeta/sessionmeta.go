@@ -326,14 +326,14 @@ func (s *Store) Read(id string) (store.Session, error) {
 	// meta.json has no schema version, so fall back to the old keys when
 	// the new ones are absent. Write emits only the new keys.
 	// TODO(v2.1): drop this shim.
-	if ps.Kind == "" || ps.SessionFile == "" {
+	if ps.Adapter == "" || ps.SessionFile == "" {
 		var legacy struct {
 			Kind        string `json:"kind"`
 			SessionFile string `json:"session_file"`
 		}
 		if err := json.Unmarshal(data, &legacy); err == nil {
-			if ps.Kind == "" {
-				ps.Kind = legacy.Kind
+			if ps.Adapter == "" {
+				ps.Adapter = legacy.Kind
 			}
 			if ps.SessionFile == "" {
 				ps.SessionFile = legacy.SessionFile
@@ -365,7 +365,7 @@ func (s *Store) Remove(id string) error {
 // paths that have explicit Remove calls.
 //
 // Catches the slug-takeover case: when a fresh live session
-// shadows a dead one with the same (kind, peer, slug), the store
+// shadows a dead one with the same (adapter, peer, slug), the store
 // silently evicts the dead record and broadcasts session-remove.
 // Without this loop those orphan meta.json files accumulate — the
 // next Sweep would re-load them and the next slug collision would

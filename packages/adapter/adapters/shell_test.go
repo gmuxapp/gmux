@@ -145,7 +145,7 @@ func TestAllAdaptersIncludesShell(t *testing.T) {
 func TestFindByKind(t *testing.T) {
 	// Shell is the fallback — not in All — so FindByKind is the only way
 	// to look it up by name without a match call.
-	shell := FindByKind("shell")
+	shell := FindByAdapter("shell")
 	if shell == nil {
 		t.Fatal("FindByKind(\"shell\") returned nil")
 	}
@@ -153,8 +153,8 @@ func TestFindByKind(t *testing.T) {
 		t.Errorf("got adapter name %q, want \"shell\"", shell.Name())
 	}
 
-	// Unknown kind should return nil.
-	if got := FindByKind("nonexistent"); got != nil {
+	// Unknown adapter should return nil.
+	if got := FindByAdapter("nonexistent"); got != nil {
 		t.Errorf("FindByKind(\"nonexistent\") = %v, want nil", got)
 	}
 }

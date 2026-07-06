@@ -29,11 +29,11 @@ func AllAdapters() []adapter.Adapter {
 	return result
 }
 
-// FindByKind returns the adapter with the given name, or nil if not found.
+// FindByAdapter returns the adapter with the given name, or nil if not found.
 // Includes the shell fallback adapter.
-func FindByKind(kind string) adapter.Adapter {
+func FindByAdapter(name string) adapter.Adapter {
 	for _, a := range AllAdapters() {
-		if a.Name() == kind {
+		if a.Name() == name {
 			return a
 		}
 	}
