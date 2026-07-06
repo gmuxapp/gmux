@@ -77,13 +77,29 @@ func Watch(sessions *store.Store, subs *Subscriptions, onDead OnDeadFunc, onFirs
 // Reachable sockets → upsert session + subscribe to /events.
 // Unreachable → remove + cleanup + unsubscribe.
 func Scan(sessions *store.Store, subs *Subscriptions, onDead OnDeadFunc) {
-	dir := socketDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("discovery: read dir: %v", err)
+	// Primary dir first, then legacy dirs (pre-upgrade runners outlive
+	// a gmuxd upgrade and keep their sockets where they bound them; see
+	// paths.LegacySessionSocketDirs). Entries carry their absolute path
+	// so the rest of the scan is location-agnostic.
+	type sockEntry struct {
+		path string
+		entry os.DirEntry
+	}
+	var socks []sockEntry
+	for _, dir := range append([]string{socketDir()}, paths.LegacySessionSocketDirs()...) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				log.Printf("discovery: read dir %s: %v", dir, err)
+			}
+			continue
 		}
-		return
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sock") {
+				continue
+			}
+			socks = append(socks, sockEntry{path: filepath.Join(dir, entry.Name()), entry: entry})
+		}
 	}
 
 	// Index existing store entries by SocketPath so Phase 1 can
@@ -116,11 +132,8 @@ func Scan(sessions *store.Store, subs *Subscriptions, onDead OnDeadFunc) {
 
 	// Phase 1: discover new sockets → Register is the single entry
 	// point for creating/merging sessions.
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sock") {
-			continue
-		}
-		sockPath := filepath.Join(dir, entry.Name())
+	for _, se := range socks {
+		sockPath := se.path
 		if t, ok := tracked[sockPath]; ok && t.alive && subs.IsActive(t.id) {
 			continue // already current — runner is alive and we're streaming /events
 		}
@@ -138,7 +151,7 @@ func Scan(sessions *store.Store, subs *Subscriptions, onDead OnDeadFunc) {
 			// The 10s ModTime threshold is generous for the first case
 			// (a runner takes milliseconds to listen) and irrelevant
 			// for the second (the file is hours / days old).
-			if info, serr := entry.Info(); serr == nil && time.Since(info.ModTime()) > 10*time.Second {
+			if info, serr := se.entry.Info(); serr == nil && time.Since(info.ModTime()) > 10*time.Second {
 				os.Remove(sockPath)
 			}
 		}

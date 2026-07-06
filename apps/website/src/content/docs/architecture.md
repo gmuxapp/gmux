@@ -21,7 +21,7 @@ One per session. It:
 
 One per machine. It:
 
-- Discovers live runner sockets (`/tmp/gmux-sessions/*.sock`)
+- Discovers live runner sockets (`~/.local/state/gmux/run/sessions/*.sock`)
 - Subscribes to runner events for live updates
 - Watches adapter session files (e.g. pi's JSONL conversations)
 - Serves the REST API, SSE event stream, and WebSocket proxy

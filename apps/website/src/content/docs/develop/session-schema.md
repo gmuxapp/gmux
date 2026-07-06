@@ -175,7 +175,7 @@ interface Status {
 **Option A — Environment variable + HTTP** (preferred):
 ```bash
 # gmux sets this in the child's environment
-GMUX_SOCKET=/tmp/gmux-sessions/sess-abc123.sock
+GMUX_SOCKET=~/.local/state/gmux/run/sessions/sess-abc123.sock
 
 # Child (or a hook) sets status via HTTP on the same socket
 curl --unix-socket $GMUX_SOCKET http://localhost/status \
@@ -207,7 +207,7 @@ As served by `GET /meta` on a runner's Unix socket (runner → gmuxd):
   "adapter_title": "fix auth bug",
   "status": { "working": true },
   "unread": false,
-  "socket_path": "/tmp/gmux-sessions/sess-abc123.sock",
+  "socket_path": "~/.local/state/gmux/run/sessions/sess-abc123.sock",
   "binary_hash": "a1b2c3d4e5f6..."
 }
 ```
@@ -227,7 +227,7 @@ As served by `GET /v1/sessions` (gmuxd → frontend):
   "title": "fix auth bug",
   "status": { "working": true },
   "unread": false,
-  "socket_path": "/tmp/gmux-sessions/sess-abc123.sock",
+  "socket_path": "~/.local/state/gmux/run/sessions/sess-abc123.sock",
   "slug": "fix-auth-bug",
   "resume_key": "2026-03-14T10-00-00_abc123",
   "stale": false

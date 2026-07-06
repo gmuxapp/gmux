@@ -68,26 +68,50 @@ func TestSessionSocketDir(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to XDG_RUNTIME_DIR", func(t *testing.T) {
+	t.Run("defaults to state dir, ignoring XDG_RUNTIME_DIR", func(t *testing.T) {
 		t.Setenv("GMUX_SOCKET_DIR", "")
+		// logind/elogind tear down $XDG_RUNTIME_DIR on last logout, so it
+		// must never be the socket home for login-outliving runners.
 		t.Setenv("XDG_RUNTIME_DIR", "/run/user/1000")
-		want := "/run/user/1000/gmux/sessions"
+		t.Setenv("XDG_STATE_HOME", "/home/u/.local/state")
+		want := "/home/u/.local/state/gmux/run/sessions"
 		if got := SessionSocketDir(); got != want {
 			t.Errorf("SessionSocketDir() = %q, want %q", got, want)
 		}
+		// Must not be the old world-shared path either.
+		if got := SessionSocketDir(); got == "/tmp/gmux-sessions" {
+			t.Errorf("SessionSocketDir() must not default to the shared /tmp/gmux-sessions")
+		}
+	})
+}
+
+func TestLegacySessionSocketDirs(t *testing.T) {
+	t.Run("empty when GMUX_SOCKET_DIR is set", func(t *testing.T) {
+		t.Setenv("GMUX_SOCKET_DIR", "/tmp/custom-sockets")
+		if got := LegacySessionSocketDirs(); len(got) != 0 {
+			t.Errorf("LegacySessionSocketDirs() = %v, want empty", got)
+		}
 	})
 
-	t.Run("per-uid temp dir when no XDG_RUNTIME_DIR", func(t *testing.T) {
+	t.Run("includes XDG runtime dir and per-uid temp dir", func(t *testing.T) {
+		t.Setenv("GMUX_SOCKET_DIR", "")
+		t.Setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+		got := LegacySessionSocketDirs()
+		want := []string{
+			"/run/user/1000/gmux/sessions",
+			filepath.Join(os.TempDir(), fmt.Sprintf("gmux-sessions-%d", os.Getuid())),
+		}
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Errorf("LegacySessionSocketDirs() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("per-uid temp dir only when no XDG_RUNTIME_DIR", func(t *testing.T) {
 		t.Setenv("GMUX_SOCKET_DIR", "")
 		t.Setenv("XDG_RUNTIME_DIR", "")
-		got := SessionSocketDir()
-		want := filepath.Join(os.TempDir(), fmt.Sprintf("gmux-sessions-%d", os.Getuid()))
-		if got != want {
-			t.Errorf("SessionSocketDir() = %q, want %q", got, want)
-		}
-		// Must not be the old world-shared path.
-		if got == "/tmp/gmux-sessions" {
-			t.Errorf("SessionSocketDir() must not default to the shared /tmp/gmux-sessions")
+		got := LegacySessionSocketDirs()
+		if len(got) != 1 {
+			t.Fatalf("LegacySessionSocketDirs() = %v, want 1 entry", got)
 		}
 	})
 }

@@ -37,9 +37,9 @@ Created by `gmux` (the CLI) for each running session. gmuxd connects to these to
 
 | Path | Purpose |
 |------|---------|
-| `/tmp/gmux-sessions/<session-id>.sock` | Per-session Unix socket |
+| `~/.local/state/gmux/run/sessions/<session-id>.sock` | Per-session Unix socket |
 
-Override the directory with `GMUX_SOCKET_DIR`.
+Override the directory with `GMUX_SOCKET_DIR`. The default deliberately lives under the state dir rather than `$XDG_RUNTIME_DIR`: runtime dirs are torn down by logind when your last login session ends, which would unlink the sockets of still-running sessions.
 
 ## Adapter-specific paths
 

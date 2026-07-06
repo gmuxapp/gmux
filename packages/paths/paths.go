@@ -39,22 +39,44 @@ func SocketPath() string {
 //
 // The GMUX_SOCKET_DIR env var overrides everything; it is used by tests
 // and devcontainers and is passed through to the daemon so both ends
-// scan the same place. Otherwise the default is per-user so that two OS
-// users on the same host never collide on one world-shared directory
-// (whoever creates it first owns it 0700, locking everyone else out):
+// scan the same place. Otherwise the default is StateDir()/run/sessions
+// (~/.local/state/gmux/run/sessions), which is:
 //
-//   - $XDG_RUNTIME_DIR/gmux/sessions when XDG_RUNTIME_DIR is set (the
-//     standard per-user, 0700, tmpfs-backed runtime dir on Linux), else
-//   - a per-uid subdirectory of the system temp dir, e.g.
-//     /tmp/gmux-sessions-1000.
+//   - per-user by construction (under $HOME), preserving the property
+//     from the /tmp/gmux-sessions fix that two OS users never collide
+//     on one world-shared, squattable directory (the runner creates it
+//     0700 via ptyserver.BindSocket), and
+//   - tied to the same lifetime as the daemon socket (gmuxd.sock lives
+//     in the same state tree). Earlier versions defaulted to
+//     $XDG_RUNTIME_DIR/gmux/sessions, but the XDG runtime dir is by
+//     spec torn down when the user's last login session ends
+//     (logind/elogind unmount /run/user/$UID unless Linger=yes), which
+//     unlinked the sockets of live runners that outlived the login —
+//     gmux's whole design. See LegacySessionSocketDirs.
 func SessionSocketDir() string {
 	if d := os.Getenv("GMUX_SOCKET_DIR"); d != "" {
 		return d
 	}
-	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" {
-		return filepath.Join(rt, "gmux", "sessions")
+	return filepath.Join(StateDir(), "run", "sessions")
+}
+
+// LegacySessionSocketDirs returns socket directories that older runner
+// versions may still be binding sockets in. Long-lived runners survive
+// daemon upgrades, so gmuxd's discovery scans these read-mostly for one
+// release alongside SessionSocketDir. TODO(v2.1): drop this shim.
+//
+// Not consulted when GMUX_SOCKET_DIR is set: the override pins both
+// ends (tests, devcontainers) to a single explicit directory.
+func LegacySessionSocketDirs() []string {
+	if os.Getenv("GMUX_SOCKET_DIR") != "" {
+		return nil
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("gmux-sessions-%d", os.Getuid()))
+	var dirs []string
+	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" {
+		dirs = append(dirs, filepath.Join(rt, "gmux", "sessions"))
+	}
+	dirs = append(dirs, filepath.Join(os.TempDir(), fmt.Sprintf("gmux-sessions-%d", os.Getuid())))
+	return dirs
 }
 
 // StateDir returns the gmux state directory (~/.local/state/gmux).
