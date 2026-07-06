@@ -28,10 +28,10 @@ That split is why the adapter system is a set of small interfaces instead of one
 | PTY output monitoring | `gmux` | `Adapter.Monitor()` |
 | Child self-report API | `gmux` | Unix socket HTTP endpoints |
 | Launch menu discovery | `gmuxd` | `Launchable` + compiled adapter set |
-| Session file discovery | `gmuxd` | `SessionFiler` |
+| Conversation file discovery | `gmuxd` | `ConversationFiler` |
 | Live session state | runner → `gmuxd` | agent hook (`SessionExtender` / `SessionHookCommand`) |
 | Conversation discovery | `gmuxd` | `ConversationSource` (snapshot + watch) |
-| Resumable session discovery | `gmuxd` | `SessionFiler` + `Resumer` |
+| Resumable session discovery | `gmuxd` | `ConversationFiler` + `Resumer` |
 | Resume command generation | `gmuxd` | `Resumer.ResumeCommand()` |
 
 ## Launch lifecycle
@@ -114,21 +114,21 @@ The current built-in launcher ordering is simple:
 
 Some tools write session or conversation files to disk. Those integrations use optional capabilities discovered by `gmuxd`.
 
-### `SessionFiler`
+### `ConversationFiler`
 
 ```go
-type SessionFiler interface {
-    SessionRootDir() string
-    SessionDir(cwd string) string
-    ParseSessionFile(path string) (*SessionFileInfo, error)
+type ConversationFiler interface {
+    ConversationRootDir() string
+    ConversationDir(cwd string) string
+    ParseConversationFile(path string) (*ConversationInfo, error)
 }
 ```
 
 Use this when a tool stores session state on disk and gmux should be able to discover or inspect it.
 
-- `SessionRootDir()` returns the root containing all per-project session directories
-- `SessionDir(cwd)` returns the directory for one working directory
-- `ParseSessionFile(path)` extracts display metadata such as ID, title, cwd, created time, and message count
+- `ConversationRootDir()` returns the root containing all per-project conversation directories
+- `ConversationDir(cwd)` returns the directory for one working directory
+- `ParseConversationFile(path)` extracts display metadata such as ID, title, cwd, created time, and message count
 
 ### `ConversationSource`
 
@@ -139,13 +139,13 @@ type ConversationSource interface {
 }
 ```
 
-Use this so `gmuxd` can index your tool's conversations (for URL resolution and search). The adapter owns discovery: `SnapshotConversations` reports everything that exists now, `WatchConversations` streams changes until `ctx` ends. File-backed adapters build on the shared `filewatch` tree watcher; the daemon parses each reported path via `ParseSessionFile`.
+Use this so `gmuxd` can index your tool's conversations (for URL resolution and search). The adapter owns discovery: `SnapshotConversations` reports everything that exists now, `WatchConversations` streams changes until `ctx` ends. File-backed adapters build on the shared `filewatch` tree watcher; the daemon parses each reported path via `ParseConversationFile`.
 
 ### `Resumer`
 
 ```go
 type Resumer interface {
-    ResumeCommand(info *SessionFileInfo) []string
+    ResumeCommand(info *ConversationInfo) []string
     CanResume(path string) bool
 }
 ```
@@ -165,7 +165,7 @@ Which running session holds which conversation file — and its title and status
 is **not** inferred by the daemon. The runner injects a gmux agent hook
 (`SessionExtender` for pi's `-e` extension; `SessionHookCommand` for codex/claude
 hooks), and the agent reports the held file, title, and status authoritatively
-over the runner socket. `gmuxd` records the file on the session (`SessionFile`);
+over the runner socket. `gmuxd` records the file on the session (`ConversationFile`);
 a `/resume` rebind to a different file is just another hook report. When a tool
 can't be hooked, the session runs without daemon-reported live state — there is
 no metadata-matching fallback.
@@ -174,9 +174,9 @@ no metadata-matching fallback.
 
 Independently, `gmuxd` indexes every conversation file on disk — including dead
 conversations with no running session — for URL resolution and search. Each
-`SessionFiler` adapter also implements `ConversationSource`: it reports a
+`ConversationFiler` adapter also implements `ConversationSource`: it reports a
 startup snapshot and then streams changes, and the daemon parses each path via
-`ParseSessionFile` into the index. File-backed adapters share the `filewatch`
+`ParseConversationFile` into the index. File-backed adapters share the `filewatch`
 tree watcher; a database-backed tool would poll or subscribe instead. There is
 no daemon-global file monitor.
 
@@ -195,11 +195,11 @@ When a session exits, `gmuxd` checks whether its adapter implements `Resumer` an
 
 ### File-discovered sessions
 
-For adapters that implement both `SessionFiler` and `Resumer`, `gmuxd` also discovers sessions from files on disk (e.g. from before the daemon started):
+For adapters that implement both `ConversationFiler` and `Resumer`, `gmuxd` also discovers sessions from files on disk (e.g. from before the daemon started):
 
-1. enumerate files under `SessionRootDir()` / known `SessionDir(cwd)` directories
+1. enumerate files under `ConversationRootDir()` / known `ConversationDir(cwd)` directories
 2. filter them with `CanResume(path)`
-3. parse them with `ParseSessionFile(path)`
+3. parse them with `ParseConversationFile(path)`
 4. deduplicate them against live sessions by resume key
 5. publish them as resumable entries
 

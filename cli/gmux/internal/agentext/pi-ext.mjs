@@ -140,7 +140,7 @@ function extractUserText(msg) {
 
 // truncateTitle collapses whitespace and caps length at a word boundary, with
 // an ellipsis. Mirrors pi.go's truncateTitle (maxLen 80) so the live title and
-// the one ParseSessionFile recovers after a restart agree. Go measures length
+// the one ParseConversationFile recovers after a restart agree. Go measures length
 // in UTF-8 bytes, so we operate on bytes too (JS string length is UTF-16 code
 // units, which would diverge for non-ASCII prompts near the boundary).
 function truncateTitle(s) {

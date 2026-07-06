@@ -8,7 +8,7 @@
  * if those parsers grow new required fields, the smoke spec is the
  * first place to fail and the failure points at fixture drift.
  *
- * Path encoding mirrors each adapter's `SessionDir(cwd)` exactly. We
+ * Path encoding mirrors each adapter's `ConversationDir(cwd)` exactly. We
  * intentionally don't import any Go logic; the fixtures stand on their
  * own and the smoke spec round-trips them through the real parsers via
  * the public API.
@@ -76,7 +76,7 @@ function codexFile(home: string, spec: FixtureSpec): string {
   // Codex is date-nested by file creation time. Path layout is
   // YYYY/MM/DD/. Bootstrap uses ListSessionFiles which walks the
   // entire tree (date-agnostic), so any reasonable date works for
-  // the smoke spec. Use *local* time to match Go's codex.SessionDir,
+  // the smoke spec. Use *local* time to match Go's codex.ConversationDir,
   // which calls time.Now() (local) — keeps the fixture path
   // identical to whatever a real codex session would create today
   // on the same machine.
