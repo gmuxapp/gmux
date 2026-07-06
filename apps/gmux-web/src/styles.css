@@ -3045,7 +3045,7 @@ body {
   .mobile-bottom-bar {
     grid-template-columns: repeat(10, 1fr);
     grid-template-rows: 40px;
-    grid-template-areas: 'menu esc tab ctrl alt al ad au ar send';
+    grid-template-areas: 'menu esc tab ctrl alt al au ad ar send';
   }
   /* Word-jumps aren't part of the single-row layout. */
   .mk-wl,
@@ -3073,7 +3073,7 @@ body {
 @media (pointer: coarse) and (min-width: 820px) {
   .mobile-bottom-bar {
     grid-template-columns: repeat(12, 1fr);
-    grid-template-areas: 'menu esc tab ctrl alt wl al ad au ar wr send';
+    grid-template-areas: 'menu esc tab ctrl alt wl al au ad ar wr send';
   }
   .mk-wl,
   .mk-wr {
