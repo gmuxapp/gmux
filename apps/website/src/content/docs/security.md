@@ -49,6 +49,27 @@ This is acceptable when:
 For remote access without managing certificates yourself, use [Tailscale](/remote-access/). For container deployments, see [Running in Docker](/running-in-docker/) for examples with WireGuard and Traefik.
 :::
 
+### Browser sessions: same-origin enforcement
+
+The two credentials behave very differently in a browser, so they are constrained differently:
+
+- **Bearer header** — attached explicitly by the client. A web page on another origin cannot forge it, so bearer-authenticated requests carry **no origin constraint**. CLI, API, and hub↔spoke peering traffic all use bearer auth and are unaffected by everything below.
+- **Session cookie** — attached *ambiently* by the browser, regardless of which page initiated the request. Cookie-authenticated requests must therefore prove they came from the gmux UI itself.
+
+The cookie is `HttpOnly` and `SameSite=Strict` (and `Secure` when served over HTTPS), which blocks classic cross-**site** attacks like DNS rebinding: a malicious page on `evil.com` that resolves to your loopback address gets neither the token nor the cookie. But `SameSite` reasons about *sites*, not *origins* — and `ts.net` is on the [Public Suffix List](https://publicsuffix.org/), which makes `<tailnet>.ts.net` the registrable domain. Every other web service on your own tailnet is **same-site** with gmux, so `SameSite=Strict` does nothing between them. A compromised or XSS'd co-tenant tailnet service could otherwise ride the cookie into gmux's control plane — which, via a WebSocket to a terminal, is code execution.
+
+So for cookie-authenticated requests, gmuxd enforces **same-origin**:
+
+- **WebSocket upgrades** must originate from the gmux origin itself. This closes cross-origin WebSocket hijacking of terminal I/O, the highest-value path.
+- **State-changing requests** (`POST`/`PUT`/`PATCH`/`DELETE` on `/v1/`) must carry `Sec-Fetch-Site: same-origin` or an `Origin` header matching the request's own host. Anything else gets `403`.
+- **Reads over `GET`** are exempt: gmuxd never emits CORS headers, so a foreign page cannot read the response anyway.
+
+The check is a single dynamic comparison against the request's **own** Host (honoring `X-Forwarded-Host` behind proxies that rewrite it) — whatever hostname the browser used to load the UI is, by definition, the hostname it sends in both `Origin` and `Host`. Localhost, LAN IPs, tailnet FQDNs, and reverse-proxy vhosts (e.g. Traefik routing `gmux.example.com`) all work without configuration.
+
+**Why not a hostname allowlist?** An earlier design validated the `Host` header against a configured list of trusted names (`GMUXD_TRUSTED_HOSTS`). It was rejected: an allowlist must enumerate every name the daemon can legitimately be reached by — localhost, the bind host, every tailnet FQDN, every reverse-proxy hostname — which is brittle and easy to misconfigure into a lockout, while adding nothing the token, the cookie attributes, and the same-origin check don't already provide.
+
+The UI also sends `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` on every response, so gmux can never be embedded in another page's frame.
+
 ## Remote access: Tailscale
 
 Remote access is available via a separate, optional Tailscale (tsnet) listener. When enabled, gmuxd joins your tailnet and serves on `https://hostname.your-tailnet.ts.net`. See [Remote Access](/remote-access) for setup.

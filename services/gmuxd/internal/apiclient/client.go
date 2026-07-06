@@ -364,6 +364,9 @@ func (c *Client) ProxyWS(w http.ResponseWriter, r *http.Request, sessionID strin
 	// the storm returns the moment you view a peer's session on mobile.
 	// The hub->spoke hop (DialWS) is uncompressed too. Revisit #242's
 	// bandwidth goal another way (e.g. bounding replay size) if needed.
+	//
+	// InsecureSkipVerify: Origin enforcement for cookie-authed upgrades
+	// happens upstream in netauth.Middleware on the hub.
 	clientConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})

@@ -77,6 +77,10 @@ func (p *Proxy) Handler() http.HandlerFunc {
 		// replay far more than compression ever saved, so this is the
 		// right call for every client. Revisit #242's bandwidth goal
 		// another way (e.g. bounding replay size) if it proves necessary.
+		// InsecureSkipVerify disables the library's blanket Origin==Host
+		// check, which would break bearer-authed clients (no Origin) and
+		// proxied setups. Origin enforcement for cookie-authed upgrades
+		// happens upstream in netauth.Middleware instead.
 		clientConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			InsecureSkipVerify: true,
 		})

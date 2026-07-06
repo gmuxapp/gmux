@@ -1805,6 +1805,8 @@ func serve(stderr io.Writer) int {
 	// ── Presence WebSocket ──
 
 	mux.HandleFunc("/v1/presence", func(w http.ResponseWriter, r *http.Request) {
+		// InsecureSkipVerify: Origin enforcement for cookie-authed
+		// upgrades happens upstream in netauth.Middleware.
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			InsecureSkipVerify: true,
 		})

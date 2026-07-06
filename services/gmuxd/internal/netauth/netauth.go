@@ -18,6 +18,7 @@ import (
 	"encoding/base64"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/authtoken"
@@ -52,6 +53,12 @@ const (
 // Browser requests without valid auth are redirected to the login page.
 func Middleware(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The control plane is a full terminal: never allow it to be
+		// embedded in another origin's frame (clickjacking → keystroke
+		// injection). Set on every response from the network listener.
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+		w.Header().Set("X-Frame-Options", "DENY")
+
 		// The login page and its POST handler must be accessible without auth.
 		if r.URL.Path == "/auth/login" {
 			handleLogin(token, w, r)
@@ -73,7 +80,30 @@ func Middleware(token string, next http.Handler) http.Handler {
 			return
 		}
 
-		if isAuthorized(r, token) {
+		switch authMethod(r, token) {
+		case authBearer:
+			// A bearer header cannot be attached by a foreign origin's
+			// page, so bearer-authed requests carry no origin constraint.
+			next.ServeHTTP(w, r)
+			return
+		case authCookie:
+			// Cookies ARE attached cross-origin. SameSite=Strict blocks
+			// cross-SITE attachment, but ts.net is on the Public Suffix
+			// List, so every co-tenant service on the same tailnet is
+			// same-site with gmux and SameSite does nothing between them.
+			// Enforce same-ORIGIN for anything state-changing: mutating
+			// methods and WebSocket upgrades (WS → PTY is remote code
+			// execution). Reads over GET stay unconstrained because a
+			// cross-origin page cannot read the response anyway (no CORS
+			// headers are ever emitted).
+			if requiresSameOrigin(r) && !isSameOrigin(r) {
+				log.Printf("netauth: blocked cross-origin cookie-authed %s %s (Origin=%q, Host=%q) from %s",
+					r.Method, r.URL.Path, r.Header.Get("Origin"), r.Host, r.RemoteAddr)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"ok":false,"error":{"code":"cross_origin","message":"cookie-authenticated request must be same-origin; use a bearer token for programmatic access"}}`))
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -91,21 +121,111 @@ func Middleware(token string, next http.Handler) http.Handler {
 	})
 }
 
-func isAuthorized(r *http.Request, token string) bool {
+// authKind identifies which credential authenticated a request. The
+// distinction matters because cookies are ambient (the browser attaches
+// them regardless of who initiated the request) while bearer headers are
+// explicit and cannot be forged cross-origin.
+type authKind int
+
+const (
+	authNone authKind = iota
+	authBearer
+	authCookie
+)
+
+func authMethod(r *http.Request, token string) authKind {
 	// Check Authorization header.
 	if h := r.Header.Get("Authorization"); h != "" {
 		val := strings.TrimPrefix(h, "Bearer ")
 		if val != h && authtoken.Equal(val, token) {
-			return true
+			return authBearer
 		}
 	}
 
 	// Check cookie.
 	if c, err := r.Cookie(cookieName); err == nil && authtoken.Equal(c.Value, token) {
-		return true
+		return authCookie
 	}
 
+	return authNone
+}
+
+func isAuthorized(r *http.Request, token string) bool {
+	return authMethod(r, token) != authNone
+}
+
+// requiresSameOrigin reports whether a cookie-authenticated request must
+// prove it originated from the gmux UI itself. WebSocket upgrades (terminal
+// I/O = code execution) and mutating methods qualify; plain reads do not.
+func requiresSameOrigin(r *http.Request) bool {
+	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		return true
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	return true
+}
+
+// isSameOrigin reports whether the browser that issued the request was on
+// the gmux control origin itself. It compares against the request's OWN
+// host rather than a configured canonical name, so every legitimate way of
+// reaching the daemon (localhost, LAN IP, tailscale FQDN, reverse-proxy
+// vhost) works without configuration: whatever host the browser used to
+// load the UI is, by definition, the host it sends in both Origin and Host.
+func isSameOrigin(r *http.Request) bool {
+	// Fetch metadata is the most precise signal when present (all
+	// evergreen browsers send it).
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin":
+		return true
+	case "cross-site", "same-site":
+		// Explicitly attested as NOT same-origin. "same-site" is exactly
+		// the ts.net co-tenant case this check exists for.
+		return false
+	}
+
+	// Older browsers: fall back to comparing Origin against the host the
+	// request itself was addressed to. Browsers always send Origin on
+	// WebSocket handshakes and on non-GET fetch/XHR/form requests.
+	origin := r.Header.Get("Origin")
+	if origin == "" || origin == "null" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if hostsMatch(u.Host, r.Host) {
+		return true
+	}
+	// Behind a reverse proxy that rewrites Host, the browser-facing host
+	// arrives in X-Forwarded-Host (Traefik forwards Host verbatim by
+	// default, but not every proxy does).
+	if xfh := r.Header.Get("X-Forwarded-Host"); xfh != "" {
+		// Take the first hop if the header is a comma-separated chain.
+		if i := strings.IndexByte(xfh, ','); i >= 0 {
+			xfh = xfh[:i]
+		}
+		if hostsMatch(u.Host, strings.TrimSpace(xfh)) {
+			return true
+		}
+	}
 	return false
+}
+
+// hostsMatch compares two host[:port] strings, treating explicit default
+// ports (:80, :443) as equivalent to their absence.
+func hostsMatch(a, b string) bool {
+	return normalizeHost(a) == normalizeHost(b)
+}
+
+func normalizeHost(h string) string {
+	h = strings.ToLower(h)
+	h = strings.TrimSuffix(h, ":80")
+	h = strings.TrimSuffix(h, ":443")
+	return h
 }
 
 func isAPIRequest(r *http.Request) bool {
@@ -137,7 +257,7 @@ func handleLogin(token string, w http.ResponseWriter, r *http.Request) {
 		// login page when scanning a QR code.
 		if qToken := strings.TrimSpace(r.URL.Query().Get("token")); qToken != "" {
 			if authtoken.Equal(qToken, token) {
-				setAuthCookie(w, token)
+				setAuthCookie(w, r, token)
 				log.Printf("netauth: successful login via URL token from %s", r.RemoteAddr)
 				http.Redirect(w, r, "/", http.StatusSeeOther)
 				return
@@ -162,7 +282,7 @@ func handleLogin(token string, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		setAuthCookie(w, token)
+		setAuthCookie(w, r, token)
 		log.Printf("netauth: successful login from %s", r.RemoteAddr)
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 
@@ -171,7 +291,7 @@ func handleLogin(token string, w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func setAuthCookie(w http.ResponseWriter, token string) {
+func setAuthCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookieName,
 		Value:    token,
@@ -179,7 +299,22 @@ func setAuthCookie(w http.ResponseWriter, token string) {
 		MaxAge:   cookieMaxAge,
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
+		// Secure is keyed on the transport the login actually used: the
+		// tailscale listener and TLS-terminating reverse proxies are
+		// https (Secure sticks), while plain-http localhost/LAN access
+		// must not set it or the browser drops the cookie entirely.
+		Secure: requestIsTLS(r),
 	})
+}
+
+// requestIsTLS reports whether the browser-facing transport is HTTPS,
+// either directly (tsnet listener terminates TLS in-process) or via a
+// reverse proxy that terminated TLS upstream.
+func requestIsTLS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 func serveLoginPage(w http.ResponseWriter, errMsg string) {
