@@ -144,7 +144,7 @@ export default async function globalSetup(_config: FullConfig) {
 
   // Pre-seed smoke fixtures (one valid JSONL per adapter) before
   // gmuxd starts. The bootstrap scan picks them up and the smoke spec
-  // asserts they're reachable at /v1/conversations/{kind}/{slug}. If a
+  // asserts they're reachable at /v1/conversations/{adapter}/{slug}. If a
   // fixture is invalid for its parser, the smoke spec fails first with
   // a clear "fixture didn't reach the index" signal, before the
   // discovery spec's tests run.

@@ -22,14 +22,14 @@ import (
 //
 // Two skip checks, in priority order:
 //
-//  1. Same instance ID present (sessions.Get(info.ToolID)). This is
+//  1. Same instance ID present (sessions.Get(info.ConversationID)). This is
 //     the steady-state for shell sessions, where the runner ID and
-//     the conversations-index ToolID are the same string.
+//     the conversations-index ConversationID are the same string.
 //
 //  2. Same (kind, slug) present (sessions.HasLocalSlug). This is
-//     critical for tool-backed adapters (pi, claude, codex) where
+//     critical for agent-backed adapters (pi, claude, codex) where
 //     the conversations index uses the adapter's own UUID (e.g. the
-//     JSONL filename) as ToolID, while sessionmeta keys by the
+//     JSONL filename) as ConversationID, while sessionmeta keys by the
 //     runner-generated session ID. Without this check, a single
 //     pi/claude session restored from sessionmeta would gain a
 //     parallel ghost entry from convIndex, surfacing as a duplicate
@@ -51,7 +51,7 @@ func rehydrateProjects(sessions *store.Store, convIndex *conversations.Index, st
 				// orphan-cleanup pass below removes the latter.
 				continue
 			}
-			if _, exists := sessions.Get(info.ToolID); exists {
+			if _, exists := sessions.Get(info.ConversationID); exists {
 				continue
 			}
 			if sessions.HasLocalSlug(info.Kind, info.Slug) {
@@ -59,7 +59,7 @@ func rehydrateProjects(sessions *store.Store, convIndex *conversations.Index, st
 			}
 			fallbacks++
 			sessions.Upsert(store.Session{
-				ID:           info.ToolID,
+				ID:           info.ConversationID,
 				CreatedAt:    info.Created.UTC().Format(time.RFC3339),
 				Command:      info.ResumeCommand,
 				Cwd:          info.Cwd,

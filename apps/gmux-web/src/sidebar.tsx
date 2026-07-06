@@ -15,7 +15,7 @@ import {
   activityMap, projects, connState,
   updateProjects, reorderSessions,
   peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState,
-  unreadCount, localHostLabel, unresolvedHosts, duplicateSessionFiles,
+  unreadCount, localHostLabel, unresolvedHosts, duplicateConversationFiles,
   type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
@@ -134,7 +134,7 @@ function SessionItem({
   const arrival = useArrivalPulse(dotState)
   const sleeping = !session.alive && session.resumable
   // Same conversation file live in another runner (ADR 0011 N:1).
-  const duplicateOpen = !!session.session_file && duplicateSessionFiles.value.has(session.session_file)
+  const duplicateOpen = !!session.conversation_file && duplicateConversationFiles.value.has(session.conversation_file)
 
   const cls = [
     'session-item',

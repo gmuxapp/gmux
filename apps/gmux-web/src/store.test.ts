@@ -9,7 +9,7 @@ import {
   navigateToSession, setNavigate,
   applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
   toUISession, localHostLabel, parseConnectURL, unreadCount, discovered,
-  view, duplicateSessionFiles,
+  view, duplicateConversationFiles,
 } from './store'
 import { SessionSchema } from '@gmux/protocol'
 import type { PendingMutation } from './store'
@@ -21,7 +21,7 @@ function makeSession(overrides: Partial<Session> & { id: string }): Session {
     created_at: '2026-01-01T00:00:00Z',
     command: ['/bin/sh'],
     cwd: '/home/user',
-    kind: 'shell',
+    adapter: 'shell',
     alive: true,
     pid: 1,
     exit_code: null,
@@ -225,7 +225,7 @@ describe('upsertSession', () => {
   it('inserts a new session and returns true', () => {
     const isNew = upsertSession({
       id: 'sess-1', alive: true, cwd: '/home/user',
-      command: ['/bin/sh'], kind: 'shell',
+      command: ['/bin/sh'], adapter: 'shell',
     } as any)
     expect(isNew).toBe(true)
     expect(sessions.value).toHaveLength(1)
@@ -236,7 +236,7 @@ describe('upsertSession', () => {
     _rawSessions.value = [makeSession({ id: 'sess-1', title: 'old' })]
     const isNew = upsertSession({
       id: 'sess-1', alive: true, title: 'new',
-      cwd: '/home/user', command: ['/bin/sh'], kind: 'shell',
+      cwd: '/home/user', command: ['/bin/sh'], adapter: 'shell',
     } as any)
     expect(isNew).toBe(false)
     expect(sessions.value).toHaveLength(1)
@@ -250,7 +250,7 @@ describe('upsertSession', () => {
     ]
     upsertSession({
       id: 'sess-1', alive: false, title: 'updated',
-      cwd: '/home/user', command: ['/bin/sh'], kind: 'shell',
+      cwd: '/home/user', command: ['/bin/sh'], adapter: 'shell',
     } as any)
     expect(sessions.value).toHaveLength(2)
     expect(sessions.value[0].title).toBe('updated')
@@ -265,7 +265,7 @@ describe('upsertSession', () => {
     sessionsLoaded.value = true
     worldLoaded.value = true
     _rawSessions.value = [
-      makeSession({ id: 'sess-1', cwd: '/dev/project', kind: 'pi', slug: 'fix-auth' }),
+      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
     ]
     // Simulate the session being selected via URL.
     urlPath.value = '/myproject/pi/fix-auth'
@@ -273,7 +273,7 @@ describe('upsertSession', () => {
 
     // SSE upserts with a new slug (e.g., /new changed the active file).
     upsertSession({
-      id: 'sess-1', alive: true, cwd: '/dev/project', kind: 'pi',
+      id: 'sess-1', alive: true, cwd: '/dev/project', adapter: 'pi',
       slug: 'refactor-login', command: ['pi'], title: 'pi',
     } as any)
 
@@ -290,15 +290,15 @@ describe('upsertSession', () => {
     sessionsLoaded.value = true
     worldLoaded.value = true
     _rawSessions.value = [
-      makeSession({ id: 'sess-1', cwd: '/dev/project', kind: 'pi', slug: 'fix-auth' }),
-      makeSession({ id: 'sess-2', cwd: '/dev/project', kind: 'pi', slug: 'old-slug' }),
+      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
+      makeSession({ id: 'sess-2', cwd: '/dev/project', adapter: 'pi', slug: 'old-slug' }),
     ]
     urlPath.value = '/myproject/pi/fix-auth'
     expect(selectedId.value).toBe('sess-1')
 
     // sess-2's slug changes, but it's not the selected session.
     upsertSession({
-      id: 'sess-2', alive: true, cwd: '/dev/project', kind: 'pi',
+      id: 'sess-2', alive: true, cwd: '/dev/project', adapter: 'pi',
       slug: 'new-slug', command: ['pi'], title: 'pi',
     } as any)
 
@@ -320,7 +320,7 @@ describe('deep-link refresh: snapshot ordering race (#308-adjacent)', () => {
   it('does not resolve a session URL to home before the world loads', () => {
     urlPath.value = '/myproject/pi/fix-auth'
     _rawSessions.value = [
-      makeSession({ id: 'sess-1', cwd: '/dev/project', kind: 'pi', slug: 'fix-auth', project_slug: 'myproject' }),
+      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', project_slug: 'myproject' }),
     ]
     // Sessions snapshot arrived; world has not (projects still empty).
     sessionsLoaded.value = true
@@ -536,7 +536,7 @@ describe('navigateToSession', () => {
 
   it('returns true and dispatches the project-prefixed URL once both are loaded', () => {
     _setRawWorld({ projects: [{ slug: 'myproject', match: [{ path: '/dev/p' }] }] })
-    _rawSessions.value = [makeSession({ id: 'sess-1', cwd: '/dev/p', kind: 'shell' })]
+    _rawSessions.value = [makeSession({ id: 'sess-1', cwd: '/dev/p', adapter: 'shell' })]
     expect(navigateToSession('sess-1', true)).toBe(true)
     expect(navigateMock).toHaveBeenCalledTimes(1)
     const [url, replace] = navigateMock.mock.calls[0]
@@ -553,7 +553,7 @@ describe('navigateToSession', () => {
     _setRawWorld({ projects: [] })
     _rawSessions.value = [makeSession({
       id: 'remote-1',
-      kind: 'shell',
+      adapter: 'shell',
       slug: 'remote-1-slug',
       peer: 'workstation',
       project_slug: 'gmux',
@@ -776,8 +776,8 @@ describe('unreadCount (sidebar-only attention blip)', () => {
 
   it('excludes the currently-selected session', () => {
     _rawSessions.value = [
-      makeSession({ id: 'a', cwd: '/work', kind: 'shell', slug: 'aa', alive: true, unread: true, project_slug: 'proj' }),
-      makeSession({ id: 'b', cwd: '/work', kind: 'shell', slug: 'bb', alive: true, unread: true, project_slug: 'proj' }),
+      makeSession({ id: 'a', cwd: '/work', adapter: 'shell', slug: 'aa', alive: true, unread: true, project_slug: 'proj' }),
+      makeSession({ id: 'b', cwd: '/work', adapter: 'shell', slug: 'bb', alive: true, unread: true, project_slug: 'proj' }),
     ]
     expect(unreadCount.value).toBe(2)
     urlPath.value = '/proj/shell/aa'
@@ -1020,24 +1020,24 @@ describe('parseConnectURL', () => {
   })
 })
 
-describe('session_file (duplicate-open warning)', () => {
-  it('carries session_file from the wire through to the UI session', () => {
+describe('conversation_file (duplicate-open warning)', () => {
+  it('carries conversation_file from the wire through to the UI session', () => {
     // Guards the two gaps that silently disabled the warning: the protocol
-    // Zod schema must keep session_file (not strip it), and toUISession must
+    // Zod schema must keep conversation_file (not strip it), and toUISession must
     // map it through.
-    const parsed = SessionSchema.parse({ id: 'a', alive: true, session_file: '/conv.jsonl' })
-    expect(parsed.session_file).toBe('/conv.jsonl')
-    expect(toUISession(parsed).session_file).toBe('/conv.jsonl')
+    const parsed = SessionSchema.parse({ id: 'a', alive: true, conversation_file: '/conv.jsonl' })
+    expect(parsed.conversation_file).toBe('/conv.jsonl')
+    expect(toUISession(parsed).conversation_file).toBe('/conv.jsonl')
   })
 
   it('flags a conversation that is live in more than one tab', () => {
     _rawSessions.value = [
-      makeSession({ id: 'a', alive: true, session_file: '/conv.jsonl' }),
-      makeSession({ id: 'b', alive: true, session_file: '/conv.jsonl' }),
-      makeSession({ id: 'c', alive: true, session_file: '/other.jsonl' }),
-      makeSession({ id: 'd', alive: false, session_file: '/conv.jsonl' }), // dead doesn't count
+      makeSession({ id: 'a', alive: true, conversation_file: '/conv.jsonl' }),
+      makeSession({ id: 'b', alive: true, conversation_file: '/conv.jsonl' }),
+      makeSession({ id: 'c', alive: true, conversation_file: '/other.jsonl' }),
+      makeSession({ id: 'd', alive: false, conversation_file: '/conv.jsonl' }), // dead doesn't count
     ]
-    const dups = duplicateSessionFiles.value
+    const dups = duplicateConversationFiles.value
     expect(dups.has('/conv.jsonl')).toBe(true)
     expect(dups.has('/other.jsonl')).toBe(false)
   })

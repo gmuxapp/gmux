@@ -38,7 +38,9 @@ One JSON object per event, discriminated by `op`. Unknown ops/values are ignored
 
 ```jsonc
 // op "session" — authoritative bind. Sent on startup and on every rebind
-// (switch/new/resume/fork).
+// (switch/new/resume/fork). "session" here denotes the agent's own session
+// (its conversation) — the agent's language, per ADR 0015; gmux calls the
+// bound artifact a conversation file.
 {
   "op":     "session",
   "path":   "/abs/path/to/conversation-file",  // required
@@ -84,7 +86,7 @@ agent's concern.
 ## The runner does NOT, for hooked sessions
 
 Parse the conversation file, infer status from PTY/scrollback, apply per-adapter
-heuristics in `handleHookEvent`, or use the `session_file` snapshot for anything
+heuristics in `handleHookEvent`, or use the `conversation_file` snapshot for anything
 but `/events` replay.
 
 ## Implementing for a new agent

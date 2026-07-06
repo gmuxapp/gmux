@@ -236,12 +236,29 @@ func TestExitEventDoesNotResurrectDismissedSession(t *testing.T) {
 	}
 }
 
-func TestSessionFileEventRecordsPath(t *testing.T) {
+func TestConversationFileEventRecordsPath(t *testing.T) {
 	sessions := store.New()
 	sessions.Upsert(store.Session{ID: "sess-1", Alive: true})
 	subs := NewSubscriptions(sessions)
 
 	const path = "/home/u/.pi/agent/sessions/x/2026_sess.jsonl"
+	subs.handleEvent("sess-1", "/sock", "conversation_file", []byte(`{"path":"`+path+`"}`))
+
+	got, ok := sessions.Get("sess-1")
+	if !ok || got.SessionFile != path {
+		t.Fatalf("SessionFile = %q (ok=%v), want %q", got.SessionFile, ok, path)
+	}
+}
+
+// Pre-v2 runners emit "session_file" for the same event; long-lived
+// runners survive daemon upgrades, so the daemon must keep accepting it
+// for one release. TODO(v2.1): drop alongside the subscribe.go case.
+func TestLegacySessionFileEventStillAccepted(t *testing.T) {
+	sessions := store.New()
+	sessions.Upsert(store.Session{ID: "sess-1", Alive: true})
+	subs := NewSubscriptions(sessions)
+
+	const path = "/home/u/.claude/projects/x/old-runner.jsonl"
 	subs.handleEvent("sess-1", "/sock", "session_file", []byte(`{"path":"`+path+`"}`))
 
 	got, ok := sessions.Get("sess-1")
@@ -250,11 +267,11 @@ func TestSessionFileEventRecordsPath(t *testing.T) {
 	}
 }
 
-func TestSessionFileEventEmptyPathIgnored(t *testing.T) {
+func TestConversationFileEventEmptyPathIgnored(t *testing.T) {
 	sessions := store.New()
 	sessions.Upsert(store.Session{ID: "sess-1", Alive: true})
 	subs := NewSubscriptions(sessions)
-	subs.handleEvent("sess-1", "/sock", "session_file", []byte(`{"path":""}`))
+	subs.handleEvent("sess-1", "/sock", "conversation_file", []byte(`{"path":""}`))
 	if got, _ := sessions.Get("sess-1"); got.SessionFile != "" {
 		t.Errorf("empty path should not set SessionFile, got %q", got.SessionFile)
 	}

@@ -19,7 +19,7 @@ type cliSession struct {
 	ID         string `json:"id"`
 	Peer       string `json:"peer,omitempty"`
 	Cwd        string `json:"cwd,omitempty"`
-	Kind       string `json:"kind"`
+	Kind       string `json:"adapter"`
 	Alive      bool   `json:"alive"`
 	Pid        int    `json:"pid,omitempty"`
 	Title      string `json:"title,omitempty"`
@@ -275,7 +275,7 @@ func cmdList(all bool, asJSON bool) int {
 	})
 
 	// Measure columns.
-	idW, statusW, kindW := len("ID"), len("STATUS"), len("KIND")
+	idW, statusW, adapterW := len("ID"), len("STATUS"), len("ADAPTER")
 	rows := make([][5]string, 0, len(sessions))
 	for _, s := range sessions {
 		status := "dead"
@@ -301,14 +301,14 @@ func cmdList(all bool, asJSON bool) int {
 		if n := len(row[1]); n > statusW {
 			statusW = n
 		}
-		if n := len(row[2]); n > kindW {
-			kindW = n
+		if n := len(row[2]); n > adapterW {
+			adapterW = n
 		}
 	}
 
-	fmt.Printf("%-*s  %-*s  %-*s  %s\n", idW, "ID", statusW, "STATUS", kindW, "KIND", "TITLE")
+	fmt.Printf("%-*s  %-*s  %-*s  %s\n", idW, "ID", statusW, "STATUS", adapterW, "ADAPTER", "TITLE")
 	for _, r := range rows {
-		line := fmt.Sprintf("%-*s  %-*s  %-*s  %s", idW, r[0], statusW, r[1], kindW, r[2], r[3])
+		line := fmt.Sprintf("%-*s  %-*s  %-*s  %s", idW, r[0], statusW, r[1], adapterW, r[2], r[3])
 		if r[4] != "" {
 			line += "  (" + r[4] + ")"
 		}

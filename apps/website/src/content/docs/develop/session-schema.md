@@ -100,7 +100,7 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 | `created_at` | ISO 8601 | When the session was created |
 | `command` | string[] | The command being run. For resumed sessions, replaced with the resume command. |
 | `cwd` | string | Working directory |
-| `kind` | string | Adapter kind: `"shell"`, `"claude"`, `"codex"`, `"pi"`, etc. |
+| `adapter` | string | Adapter name: `"shell"`, `"claude"`, `"codex"`, `"pi"`, etc. |
 | `workspace_root` | string? | Root of the workspace (jj/git), if detected. Used for folder grouping. |
 | `remotes` | map? | Git/jj remote URLs. Used for cross-machine folder grouping. |
 
@@ -198,7 +198,7 @@ As served by `GET /meta` on a runner's Unix socket (runner → gmuxd):
   "created_at": "2026-03-14T10:00:00Z",
   "command": ["pi"],
   "cwd": "/home/user/dev/gmux",
-  "kind": "pi",
+  "adapter": "pi",
   "alive": true,
   "pid": 12345,
   "started_at": "2026-03-14T10:00:01Z",
@@ -220,7 +220,7 @@ As served by `GET /v1/sessions` (gmuxd → frontend):
   "created_at": "2026-03-14T10:00:00Z",
   "command": ["pi"],
   "cwd": "/home/user/dev/gmux",
-  "kind": "pi",
+  "adapter": "pi",
   "alive": true,
   "pid": 12345,
   "started_at": "2026-03-14T10:00:01Z",

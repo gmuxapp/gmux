@@ -4,7 +4,7 @@ export function makeSession(overrides: Partial<Session> & { id: string; cwd: str
   return {
     created_at: new Date().toISOString(),
     command: ['pi'],
-    kind: 'pi',
+    adapter: 'pi',
     alive: true,
     pid: 1234,
     exit_code: null,

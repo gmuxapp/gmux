@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { apiGet, pollUntil } from '../helpers'
 import {
-  type AdapterKind,
+  type AdapterName,
   type FixtureSpec,
   appendToSession,
   writeFakeSession,
@@ -27,7 +27,7 @@ import {
  */
 
 interface ConvBody {
-  data: { kind: string; title: string; cwd: string; slug: string }
+  data: { adapter: string; title: string; cwd: string; slug: string }
 }
 
 const TEST_HOME = (): string => {
@@ -36,26 +36,26 @@ const TEST_HOME = (): string => {
   return home
 }
 
-/** Poll /v1/conversations/{kind}/{slug} until it returns 200, or timeout. */
-async function awaitIndexed(kind: AdapterKind, slug: string, timeoutMs = 2_000): Promise<ConvBody['data']> {
+/** Poll /v1/conversations/{adapter}/{slug} until it returns 200, or timeout. */
+async function awaitIndexed(adapter: AdapterName, slug: string, timeoutMs = 2_000): Promise<ConvBody['data']> {
   return pollUntil(
     async () => {
-      const { status, body } = await apiGet<ConvBody>(`/v1/conversations/${kind}/${slug}`)
+      const { status, body } = await apiGet<ConvBody>(`/v1/conversations/${adapter}/${slug}`)
       if (status !== 200) return null
       return body.data
     },
-    { timeoutMs, description: `${kind}/${slug} reachable via API` },
+    { timeoutMs, description: `${adapter}/${slug} reachable via API` },
   )
 }
 
-/** Poll until /v1/conversations/{kind}/{slug} returns 404, or timeout. */
-async function awaitRemoved(kind: AdapterKind, slug: string, timeoutMs = 2_000): Promise<void> {
+/** Poll until /v1/conversations/{adapter}/{slug} returns 404, or timeout. */
+async function awaitRemoved(adapter: AdapterName, slug: string, timeoutMs = 2_000): Promise<void> {
   await pollUntil(
     async () => {
-      const { status } = await apiGet<unknown>(`/v1/conversations/${kind}/${slug}`)
+      const { status } = await apiGet<unknown>(`/v1/conversations/${adapter}/${slug}`)
       return status === 404 ? true : null
     },
-    { timeoutMs, description: `${kind}/${slug} removed from API` },
+    { timeoutMs, description: `${adapter}/${slug} removed from API` },
   )
 }
 
@@ -64,13 +64,13 @@ async function awaitRemoved(kind: AdapterKind, slug: string, timeoutMs = 2_000):
  * name + a random suffix so concurrent tests (or repeat runs) don't
  * collide on slug/path.
  */
-function uniqueFixture(kind: AdapterKind, label: string): FixtureSpec {
+function uniqueFixture(adapter: AdapterName, label: string): FixtureSpec {
   const tag = `${label}-${Math.random().toString(36).slice(2, 10)}`
   return {
-    kind,
+    adapter,
     cwd: `/var/gmux-e2e/discovery/${tag}`,
-    toolID: `disc-${tag}`,
-    title: `${kind} discovery ${tag}`,
+    conversationID: `disc-${tag}`,
+    title: `${adapter} discovery ${tag}`,
   }
 }
 
@@ -86,14 +86,14 @@ test.describe('conversation discovery (watcher-driven)', () => {
     }
   })
 
-  for (const kind of ['pi', 'claude', 'codex'] as const) {
-    test(`${kind}: write session file -> reachable in API within 2s`, async () => {
-      const spec = uniqueFixture(kind, 'create')
+  for (const adapter of ['pi', 'claude', 'codex'] as const) {
+    test(`${adapter}: write session file -> reachable in API within 2s`, async () => {
+      const spec = uniqueFixture(adapter, 'create')
       const { filePath, expectedSlug } = writeFakeSession(TEST_HOME(), spec)
       filesCreated.push(filePath)
 
-      const result = await awaitIndexed(kind, expectedSlug)
-      expect(result.kind).toBe(kind)
+      const result = await awaitIndexed(adapter, expectedSlug)
+      expect(result.adapter).toBe(adapter)
       expect(result.title).toBe(spec.title)
       expect(result.cwd).toBe(spec.cwd)
       expect(result.slug).toBe(expectedSlug)

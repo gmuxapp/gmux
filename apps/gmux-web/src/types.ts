@@ -16,7 +16,7 @@ export interface Session {
   cwd: string
   workspace_root?: string
   remotes?: Record<string, string>
-  kind: string
+  adapter: string
   alive: boolean
   pid: number | null
   exit_code: number | null
@@ -41,10 +41,10 @@ export interface Session {
   slug?: string
   /**
    * Conversation file this runner authoritatively writes (session → file,
-   * ADR 0011). Two live sessions sharing a session_file means the same
+   * ADR 0011). Two live sessions sharing a conversation_file means the same
    * conversation is open in multiple tabs — surfaced as a warning.
    */
-  session_file?: string
+  conversation_file?: string
   /** Version string of the gmux runner binary that owns this session. */
   runner_version?: string
   /** SHA-256 of the gmux runner binary (first 8 chars useful for display). */

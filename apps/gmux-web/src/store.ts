@@ -217,13 +217,13 @@ export const projects = computed<ProjectItem[]>(() =>
 
 /** Conversation files that are live in more than one runner (session → file
  *  is authoritative per-runner; ADR 0011). Two alive sessions sharing a
- *  session_file means the same conversation is open in multiple tabs, which
- *  the UI surfaces as a warning. Keyed by session_file. */
-export const duplicateSessionFiles = computed<Set<string>>(() => {
+ *  conversation_file means the same conversation is open in multiple tabs, which
+ *  the UI surfaces as a warning. Keyed by conversation_file. */
+export const duplicateConversationFiles = computed<Set<string>>(() => {
   const counts = new Map<string, number>()
   for (const s of sessions.value) {
-    if (!s.alive || !s.session_file) continue
-    counts.set(s.session_file, (counts.get(s.session_file) ?? 0) + 1)
+    if (!s.alive || !s.conversation_file) continue
+    counts.set(s.conversation_file, (counts.get(s.conversation_file) ?? 0) + 1)
   }
   const dups = new Set<string>()
   for (const [file, n] of counts) if (n > 1) dups.add(file)
@@ -849,7 +849,7 @@ export function toUISession(s: ProtocolSession): Session {
     cwd: s.cwd ?? '',
     workspace_root: s.workspace_root ?? undefined,
     remotes: s.remotes ?? undefined,
-    kind: s.kind ?? 'shell',
+    adapter: s.adapter ?? 'shell',
     alive: s.alive,
     pid: s.pid ?? null,
     exit_code: s.exit_code ?? null,
@@ -860,7 +860,7 @@ export function toUISession(s: ProtocolSession): Session {
     status: s.status ?? null,
     unread: s.unread ?? false,
     resumable: s.resumable ?? false,
-    session_file: s.session_file ?? undefined,
+    conversation_file: s.conversation_file ?? undefined,
     last_activity_at: s.last_activity_at ?? undefined,
     socket_path: s.socket_path ?? '',
     terminal_cols: s.terminal_cols ?? undefined,

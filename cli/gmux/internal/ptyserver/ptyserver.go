@@ -725,7 +725,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// concurrent update may also arrive on ch; harmless (idempotent).
 	if file := s.state.SessionFileSnapshot(); file != "" {
 		if data, err := json.Marshal(map[string]string{"path": file}); err == nil {
-			fmt.Fprintf(w, "event: session_file\ndata: %s\n\n", data)
+			fmt.Fprintf(w, "event: conversation_file\ndata: %s\n\n", data)
 		}
 	}
 

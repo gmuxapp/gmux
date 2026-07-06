@@ -271,3 +271,77 @@ func TestScanReregistersOnTransientSubscriptionDrop(t *testing.T) {
 		t.Errorf("Pid = %d, want 99 (re-registration must refresh runtime fields)", got.Pid)
 	}
 }
+
+// serveMetaJSON starts a fake runner on a Unix socket whose /meta
+// returns the given raw JSON body verbatim, so tests can exercise
+// queryMeta against wire shapes a store.Session round-trip could
+// never produce (e.g. pre-v2 key names).
+func serveMetaJSON(t *testing.T, body string) (socketPath string) {
+	t.Helper()
+	sockPath := filepath.Join(t.TempDir(), "runner.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen %s: %v", sockPath, err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/meta", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	})
+	srv := &http.Server{Handler: mux}
+	done := make(chan struct{})
+	go func() { _ = srv.Serve(ln); close(done) }()
+	t.Cleanup(func() { _ = srv.Close(); <-done })
+	return sockPath
+}
+
+// TestQueryMetaLegacyPreV2Keys covers queryMeta's legacy-read shim:
+// long-lived pre-v2 runners survive a daemon upgrade and still report
+// "kind" / "session_file" in /meta, so the new daemon must map them to
+// the renamed fields. TODO(v2.1): drop alongside the shim.
+func TestQueryMetaLegacyPreV2Keys(t *testing.T) {
+	sock := serveMetaJSON(t, `{
+		"id": "sess-old-runner",
+		"kind": "pi",
+		"session_file": "/home/u/.pi/agent/sessions/x/conv.jsonl",
+		"alive": true
+	}`)
+
+	sess, err := queryMeta(sock)
+	if err != nil {
+		t.Fatalf("queryMeta: %v", err)
+	}
+	if sess.Kind != "pi" {
+		t.Errorf("Kind = %q, want %q (legacy \"kind\" fallback)", sess.Kind, "pi")
+	}
+	if want := "/home/u/.pi/agent/sessions/x/conv.jsonl"; sess.SessionFile != want {
+		t.Errorf("SessionFile = %q, want %q (legacy \"session_file\" fallback)", sess.SessionFile, want)
+	}
+}
+
+// TestQueryMetaNewKeysWinOverLegacy pins the shim's precedence: the
+// fallback only fills fields the new keys left empty. A payload
+// carrying both (never emitted by a real runner, but the invariant
+// that keeps the shim safe to leave in place) must resolve to the new
+// keys' values.
+func TestQueryMetaNewKeysWinOverLegacy(t *testing.T) {
+	sock := serveMetaJSON(t, `{
+		"id": "sess-mixed",
+		"adapter": "claude",
+		"kind": "pi",
+		"conversation_file": "/new/conv.jsonl",
+		"session_file": "/old/conv.jsonl",
+		"alive": true
+	}`)
+
+	sess, err := queryMeta(sock)
+	if err != nil {
+		t.Fatalf("queryMeta: %v", err)
+	}
+	if sess.Kind != "claude" {
+		t.Errorf("Kind = %q, want %q (new key must win)", sess.Kind, "claude")
+	}
+	if sess.SessionFile != "/new/conv.jsonl" {
+		t.Errorf("SessionFile = %q, want /new/conv.jsonl (new key must win)", sess.SessionFile)
+	}
+}

@@ -18,14 +18,14 @@ import (
 
 // Info holds metadata for a single conversation file.
 type Info struct {
-	ToolID        string    // full UUID from the session file header
-	Slug          string    // human-readable URL identifier, unique within (kind)
-	Kind          string    // adapter name (claude, codex, pi, shell)
-	Title         string    // display title
-	Cwd           string    // working directory
-	FilePath      string    // absolute path to the session file
-	ResumeCommand []string  // command to resume this conversation
-	Created       time.Time // when the conversation started
+	ConversationID string    // full UUID from the session file header
+	Slug           string    // human-readable URL identifier, unique within (kind)
+	Kind           string    // adapter name (claude, codex, pi, shell)
+	Title          string    // display title
+	Cwd            string    // working directory
+	FilePath       string    // absolute path to the session file
+	ResumeCommand  []string  // command to resume this conversation
+	Created        time.Time // when the conversation started
 }
 
 // Index is a concurrency-safe lookup table for conversation files.
@@ -36,16 +36,16 @@ type Index struct {
 	mu sync.RWMutex
 	// byKey maps "kind/slug" → Info.
 	byKey map[string]Info
-	// byToolID maps "kind/toolID" → slug for reverse lookup
-	// (e.g., finding a conversation's slug from its tool UUID).
-	byToolID map[string]string
+	// byConversationID maps "kind/conversationID" → slug for reverse lookup
+	// (e.g., finding a conversation's slug from the agent's conversation UUID).
+	byConversationID map[string]string
 }
 
 // New creates an empty index.
 func New() *Index {
 	return &Index{
-		byKey:    make(map[string]Info),
-		byToolID: make(map[string]string),
+		byKey:            make(map[string]Info),
+		byConversationID: make(map[string]string),
 	}
 }
 
@@ -53,8 +53,8 @@ func indexKey(kind, slug string) string {
 	return kind + "/" + slug
 }
 
-func toolKey(kind, toolID string) string {
-	return kind + "/" + toolID
+func convKey(kind, conversationID string) string {
+	return kind + "/" + conversationID
 }
 
 // Lookup returns the conversation info for a (kind, slug) pair.
@@ -66,25 +66,25 @@ func (idx *Index) Lookup(kind, slug string) (Info, bool) {
 	return info, ok
 }
 
-// LookupByToolID returns the slug for a conversation identified by
-// its adapter-level tool ID. Returns empty string if unknown.
-func (idx *Index) LookupByToolID(kind, toolID string) string {
+// LookupByConversationID returns the slug for a conversation identified by
+// its agent-native conversation ID. Returns empty string if unknown.
+func (idx *Index) LookupByConversationID(kind, conversationID string) string {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	return idx.byToolID[toolKey(kind, toolID)]
+	return idx.byConversationID[convKey(kind, conversationID)]
 }
 
 // Upsert adds or updates a conversation in the index. If the slug
 // collides with an existing entry of the same kind (but different
-// tool ID), a -2, -3, ... suffix is appended. Returns the final
+// conversation ID), a -2, -3, ... suffix is appended. Returns the final
 // (possibly suffixed) slug.
 func (idx *Index) Upsert(info Info) string {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	// If this tool ID already has a slug, update in place.
-	tk := toolKey(info.Kind, info.ToolID)
-	if existing, ok := idx.byToolID[tk]; ok {
+	// If this conversation ID already has a slug, update in place.
+	tk := convKey(info.Kind, info.ConversationID)
+	if existing, ok := idx.byConversationID[tk]; ok {
 		ik := indexKey(info.Kind, existing)
 		info.Slug = existing
 		idx.byKey[ik] = info
@@ -92,22 +92,22 @@ func (idx *Index) Upsert(info Info) string {
 	}
 
 	// Assign a unique slug.
-	info.Slug = idx.uniqueSlugLocked(info.Kind, info.Slug, info.ToolID)
+	info.Slug = idx.uniqueSlugLocked(info.Kind, info.Slug, info.ConversationID)
 	ik := indexKey(info.Kind, info.Slug)
 	idx.byKey[ik] = info
-	idx.byToolID[tk] = info.Slug
+	idx.byConversationID[tk] = info.Slug
 	return info.Slug
 }
 
 // uniqueSlugLocked returns a slug that doesn't collide within the
 // given kind. Appends -2, -3, ... on collision. Must be called with
 // idx.mu held.
-func (idx *Index) uniqueSlugLocked(kind, slug, toolID string) string {
+func (idx *Index) uniqueSlugLocked(kind, slug, conversationID string) string {
 	base := slug
 	for i := 2; ; i++ {
 		ik := indexKey(kind, slug)
 		existing, occupied := idx.byKey[ik]
-		if !occupied || existing.ToolID == toolID {
+		if !occupied || existing.ConversationID == conversationID {
 			return slug
 		}
 		slug = base + "-" + strconv.Itoa(i)
@@ -163,36 +163,36 @@ func (idx *Index) ScanFile(a adapter.Adapter, path string) string {
 	}
 
 	info := Info{
-		ToolID:        fileInfo.ID,
-		Slug:          slug,
-		Kind:          a.Name(),
-		Title:         fileInfo.Title,
-		Cwd:           fileInfo.Cwd,
-		FilePath:      path,
-		ResumeCommand: cmd,
-		Created:       fileInfo.Created,
+		ConversationID: fileInfo.ID,
+		Slug:           slug,
+		Kind:           a.Name(),
+		Title:          fileInfo.Title,
+		Cwd:            fileInfo.Cwd,
+		FilePath:       path,
+		ResumeCommand:  cmd,
+		Created:        fileInfo.Created,
 	}
 	return idx.Upsert(info)
 }
 
-// Remove deletes a conversation from the index by tool ID.
+// Remove deletes a conversation from the index by conversation ID.
 // Returns true if it was present.
-func (idx *Index) Remove(kind, toolID string) bool {
+func (idx *Index) Remove(kind, conversationID string) bool {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	tk := toolKey(kind, toolID)
-	slug, ok := idx.byToolID[tk]
+	tk := convKey(kind, conversationID)
+	slug, ok := idx.byConversationID[tk]
 	if !ok {
 		return false
 	}
-	delete(idx.byToolID, tk)
+	delete(idx.byConversationID, tk)
 	delete(idx.byKey, indexKey(kind, slug))
 	return true
 }
 
 // RemoveByPath deletes any conversation whose FilePath matches path.
 // Used when a ConversationSource observes a deletion event and we don't have the
-// (kind, toolID) handy. Linear walk over the index; that's fine
+// (kind, conversationID) handy. Linear walk over the index; that's fine
 // because Remove events are rare (manual `rm`, file rotation) and
 // the index size stays in the hundreds-to-low-thousands range.
 // Returns true if an entry was removed.
@@ -209,7 +209,7 @@ func (idx *Index) RemoveByPath(path string) bool {
 			continue
 		}
 		delete(idx.byKey, key)
-		delete(idx.byToolID, toolKey(info.Kind, info.ToolID))
+		delete(idx.byConversationID, convKey(info.Kind, info.ConversationID))
 		return true
 	}
 	return false

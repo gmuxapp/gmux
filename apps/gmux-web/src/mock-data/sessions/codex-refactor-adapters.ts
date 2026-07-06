@@ -22,7 +22,7 @@ export default {
   cwd: '/home/user/dev/my-project',
   workspace_root: '/home/user/dev/my-project',
   remotes: { origin: 'github.com/acme/my-project' },
-  kind: 'codex',
+  adapter: 'codex',
   alive: true,
   pid: 568143,
   exit_code: null,

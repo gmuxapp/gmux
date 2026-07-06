@@ -14,7 +14,7 @@ export default {
   cwd: '/home/user/dev/my-project',
   workspace_root: '/home/user/dev/my-project',
   remotes: { origin: 'github.com/acme/my-project' },
-  kind: 'pi',
+  adapter: 'pi',
   alive: true,
   pid: 44300,
   exit_code: null,

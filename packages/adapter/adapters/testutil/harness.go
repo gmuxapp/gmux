@@ -27,7 +27,7 @@ import (
 // Session mirrors the gmuxd session schema fields we care about.
 type Session struct {
 	ID           string   `json:"id"`
-	Kind         string   `json:"kind"`
+	Kind         string   `json:"adapter"`
 	Alive        bool     `json:"alive"`
 	Pid          int      `json:"pid"`
 	Title        string   `json:"title"`

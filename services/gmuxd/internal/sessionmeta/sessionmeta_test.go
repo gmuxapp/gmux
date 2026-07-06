@@ -180,6 +180,69 @@ func TestWriteFilePermissions(t *testing.T) {
 	}
 }
 
+// TestReadLegacyPreV2Keys covers the legacy-read shim: pre-v2 meta.json
+// files carry "kind" and "session_file" instead of "adapter" and
+// "conversation_file". meta.json has no schema version, so Read falls
+// back to the old keys. TODO(v2.1): drop alongside the shim.
+func TestReadLegacyPreV2Keys(t *testing.T) {
+	s := newStore(t)
+	legacy := []byte(`{
+		"id": "sess-legacy1",
+		"kind": "pi",
+		"session_file": "/home/u/.pi/agent/sessions/x/conv.jsonl",
+		"alive": false,
+		"cwd": "/home/u/proj"
+	}`)
+	dir := s.SessionDir("sess-legacy1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, metaFile), legacy, 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	got, err := s.Read("sess-legacy1")
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.Kind != "pi" {
+		t.Errorf("Kind = %q, want %q (legacy \"kind\" fallback)", got.Kind, "pi")
+	}
+	if want := "/home/u/.pi/agent/sessions/x/conv.jsonl"; got.SessionFile != want {
+		t.Errorf("SessionFile = %q, want %q (legacy \"session_file\" fallback)", got.SessionFile, want)
+	}
+}
+
+// TestWriteEmitsOnlyNewKeys pins the write side of the shim: new
+// meta.json files must not contain the legacy keys.
+func TestWriteEmitsOnlyNewKeys(t *testing.T) {
+	s := newStore(t)
+	sess := sampleSession()
+	sess.SessionFile = "/tmp/conv.jsonl"
+	if err := s.Write(sess); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(s.SessionDir(sess.ID), metaFile))
+	if err != nil {
+		t.Fatalf("read meta.json: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("parse meta.json: %v", err)
+	}
+	for _, legacy := range []string{"kind", "session_file"} {
+		if _, ok := raw[legacy]; ok {
+			t.Errorf("meta.json still contains legacy key %q", legacy)
+		}
+	}
+	if _, ok := raw["adapter"]; !ok {
+		t.Error("meta.json missing \"adapter\" key")
+	}
+	if _, ok := raw["conversation_file"]; !ok {
+		t.Error("meta.json missing \"conversation_file\" key")
+	}
+}
+
 func TestRemoveIsIdempotent(t *testing.T) {
 	s := newStore(t)
 	if err := s.Write(sampleSession()); err != nil {

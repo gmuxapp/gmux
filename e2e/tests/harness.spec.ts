@@ -47,14 +47,14 @@ test.describe('harness isolation', () => {
     const resp = await fetch(`http://127.0.0.1:${port()}/v1/sessions`, { headers: headers() })
     expect(resp.ok).toBe(true)
     const body = await resp.json() as {
-      data: Array<{ id: string; alive: boolean; cwd: string; kind: string }>
+      data: Array<{ id: string; alive: boolean; cwd: string; adapter: string }>
     }
     const alive = body.data.filter(s => s.alive)
     expect(alive).toHaveLength(1)
 
     const ours = alive[0]
     expect(ours.id).toBe(sessionId())
-    expect(ours.kind).toBe('shell')
+    expect(ours.adapter).toBe('shell')
     // The session was spawned with cwd=$tmpDir/workspace; we don't
     // pin the exact path (it's per-run) but it must end in
     // /workspace and live under the OS temp dir.

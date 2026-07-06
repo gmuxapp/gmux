@@ -225,7 +225,7 @@ function generateFile(session: Session, terminal: string, cursorX: number, curso
   if (session.workspace_root) {
     lines.push(`  workspace_root: '${session.workspace_root}',`)
   }
-  lines.push(`  kind: '${session.kind}',`)
+  lines.push(`  adapter: '${session.adapter}',`)
   lines.push(`  alive: ${session.alive},`)
   lines.push(`  pid: ${session.pid},`)
   lines.push(`  exit_code: ${session.exit_code},`)
