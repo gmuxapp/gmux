@@ -53,16 +53,22 @@ type DiagStatus struct {
 
 // Listener manages a tsnet server and its HTTPS listener.
 type Listener struct {
-	srv   *tsnet.Server
-	lc    *tailscale.LocalClient
-	cfg   Config
-	fqdn  string         // resolved tailnet FQDN, set once ready
-	ready chan struct{}   // closed when the listener is fully connected
+	srv         *tsnet.Server
+	lc          *tailscale.LocalClient
+	cfg         Config
+	fqdn        string        // resolved tailnet FQDN, set once ready
+	magicSuffix string        // tailnet MagicDNS suffix (e.g. "tailnet.ts.net"), set once ready
+	ready       chan struct{} // closed when the listener is fully connected
 }
 
 // FQDN returns the full tailnet DNS name (e.g. "gmuxd.angler-map.ts.net")
 // once the listener is ready. Returns "" if tailscale hasn't connected yet.
 func (l *Listener) FQDN() string { return l.fqdn }
+
+// MagicDNSSuffix returns the tailnet's MagicDNS suffix (e.g.
+// "tailnet.ts.net") once the listener is ready. Returns "" if tailscale
+// hasn't connected yet or MagicDNS is disabled.
+func (l *Listener) MagicDNSSuffix() string { return l.magicSuffix }
 
 // Diag returns diagnostic status about the Tailscale connection.
 // Safe to call at any time, including before the listener is ready.
@@ -168,10 +174,17 @@ func (l *Listener) run(handler http.Handler) {
 
 	// Resolve the full tailnet FQDN so users know exactly what to type.
 	fqdn := l.cfg.Hostname
-	if status, err := lc.Status(context.Background()); err == nil && status.Self != nil {
-		if dnsName := strings.TrimSuffix(status.Self.DNSName, "."); dnsName != "" {
-			fqdn = dnsName
+	if status, err := lc.Status(context.Background()); err == nil {
+		if status.Self != nil {
+			if dnsName := strings.TrimSuffix(status.Self.DNSName, "."); dnsName != "" {
+				fqdn = dnsName
+			}
 		}
+		suffix := status.MagicDNSSuffix
+		if status.CurrentTailnet != nil && status.CurrentTailnet.MagicDNSSuffix != "" {
+			suffix = status.CurrentTailnet.MagicDNSSuffix
+		}
+		l.magicSuffix = strings.TrimSuffix(suffix, ".")
 	}
 	l.fqdn = fqdn
 	close(l.ready)
