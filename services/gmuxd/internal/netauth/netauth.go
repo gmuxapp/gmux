@@ -203,16 +203,32 @@ func isSameOrigin(r *http.Request) bool {
 	// Behind a reverse proxy that rewrites Host, the browser-facing host
 	// arrives in X-Forwarded-Host (Traefik forwards Host verbatim by
 	// default, but not every proxy does).
-	if xfh := r.Header.Get("X-Forwarded-Host"); xfh != "" {
-		// Take the first hop if the header is a comma-separated chain.
-		if i := strings.IndexByte(xfh, ','); i >= 0 {
-			xfh = xfh[:i]
-		}
-		if hostsMatch(u.Host, strings.TrimSpace(xfh)) {
+	//
+	// Trusting a client-suppliable header here is safe against browser-
+	// mediated attacks, which are the only ones this check defends
+	// against (a non-browser attacker holding the cookie holds the token
+	// itself and needs no CSRF). A hostile page cannot reach this branch
+	// with a matching pair: any browser that can attach a custom
+	// X-Forwarded-Host via fetch() also sends Sec-Fetch-Site (handled
+	// above, returns false for cross-site/same-site), and the custom
+	// header makes the request non-simple, forcing a CORS preflight that
+	// fails because gmuxd never emits Access-Control-Allow-* headers.
+	// Browser WebSocket APIs cannot set custom headers at all.
+	if xfh := firstForwarded(r.Header.Get("X-Forwarded-Host")); xfh != "" {
+		if hostsMatch(u.Host, xfh) {
 			return true
 		}
 	}
 	return false
+}
+
+// firstForwarded returns the first hop of a possibly comma-separated
+// X-Forwarded-* header value, trimmed.
+func firstForwarded(v string) string {
+	if i := strings.IndexByte(v, ','); i >= 0 {
+		v = v[:i]
+	}
+	return strings.TrimSpace(v)
 }
 
 // hostsMatch compares two host[:port] strings, treating explicit default
@@ -314,7 +330,7 @@ func requestIsTLS(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	return strings.EqualFold(firstForwarded(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
 func serveLoginPage(w http.ResponseWriter, errMsg string) {

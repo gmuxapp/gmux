@@ -70,6 +70,8 @@ The check is a single dynamic comparison against the request's **own** Host (hon
 
 The UI also sends `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` on every response, so gmux can never be embedded in another page's frame.
 
+The full decision record is [ADR 0020](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0020-same-origin-enforcement-for-cookie-auth.md).
+
 ## Remote access: Tailscale
 
 Remote access is available via a separate, optional Tailscale (tsnet) listener. When enabled, gmuxd joins your tailnet and serves on `https://hostname.your-tailnet.ts.net`. See [Remote Access](/remote-access) for setup.

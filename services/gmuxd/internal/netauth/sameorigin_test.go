@@ -161,6 +161,28 @@ func TestBearerPostCrossOriginAllowed(t *testing.T) {
 	}
 }
 
+func TestBearerPrecedenceOverCookie(t *testing.T) {
+	// When both credentials are present and the bearer is valid, the
+	// request authenticated explicitly — no origin constraint applies,
+	// even if the browser also attached the ambient cookie.
+	req := cookieReq("POST", "/v1/sessions", "gmux.example.com")
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	if rr := serve(t, req); rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (valid bearer wins over cookie)", rr.Code)
+	}
+}
+
+func TestInvalidBearerFallsBackToCookieConstraints(t *testing.T) {
+	// A wrong bearer must not grant the bearer exemption: auth falls back
+	// to the cookie, and the cookie's same-origin rules apply.
+	req := cookieReq("POST", "/v1/sessions", "gmux.example.com")
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	req.Header.Set("Origin", "https://evil.example.net")
+	if rr := serve(t, req); rr.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (invalid bearer must not lift origin constraint)", rr.Code)
+	}
+}
+
 func TestBearerWSUpgradeNoOriginAllowed(t *testing.T) {
 	// Hub→spoke WS proxying and CLI clients dial with a bearer header and
 	// no Origin. They must keep working.
@@ -194,6 +216,31 @@ func TestCookiePostBehindProxyPreservedHost(t *testing.T) {
 	req.Header.Set("Origin", "https://gmux.example.com")
 	if rr := serve(t, req); rr.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rr.Code)
+	}
+}
+
+func TestCookiePostSpoofedForwardedHostBlockedByFetchMetadata(t *testing.T) {
+	// The X-Forwarded-Host spoof shape: a hostile page fetch()es with
+	// credentials and sets X-Forwarded-Host to its own origin's host so
+	// that Origin == XFH "matches". Any browser capable of attaching that
+	// custom header sends Sec-Fetch-Site, which must win over the header
+	// comparison. (The other layer — the CORS preflight such a request
+	// triggers — can't be expressed in a unit test.)
+	req := cookieReq("POST", "/v1/sessions", "gmux-host.tailnet.ts.net")
+	req.Header.Set("Sec-Fetch-Site", "same-site")
+	req.Header.Set("Origin", "https://evil.tailnet.ts.net")
+	req.Header.Set("X-Forwarded-Host", "evil.tailnet.ts.net")
+	if rr := serve(t, req); rr.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (Sec-Fetch-Site must override spoofed X-Forwarded-Host)", rr.Code)
+	}
+}
+
+func TestForwardedHostChainUsesFirstHop(t *testing.T) {
+	req := cookieReq("POST", "/v1/sessions", "127.0.0.1:8790")
+	req.Header.Set("Origin", "https://gmux.example.com")
+	req.Header.Set("X-Forwarded-Host", "gmux.example.com, 10.0.0.5:8080")
+	if rr := serve(t, req); rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (first hop of X-Forwarded-Host chain)", rr.Code)
 	}
 }
 
@@ -239,6 +286,15 @@ func TestCookieSecureOverTLS(t *testing.T) {
 func TestCookieSecureBehindTLSProxy(t *testing.T) {
 	req := httptest.NewRequest("GET", "/auth/login?token="+testToken, nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
+	rr := serve(t, req)
+	assertCookieSecure(t, rr, true)
+}
+
+func TestCookieSecureBehindChainedTLSProxy(t *testing.T) {
+	// Multiple proxy hops append to X-Forwarded-Proto; the browser-facing
+	// hop is the first element.
+	req := httptest.NewRequest("GET", "/auth/login?token="+testToken, nil)
+	req.Header.Set("X-Forwarded-Proto", "https, http")
 	rr := serve(t, req)
 	assertCookieSecure(t, rr, true)
 }
