@@ -439,6 +439,11 @@ export const terminalScrolledUp = signal(false)
  * mounted. Set by TerminalView, invoked by the toolbar's end key. */
 export const terminalScrollToBottom = signal<(() => void) | null>(null)
 
+/** True while the find-in-terminal bar is open. Lives here (not in
+ * TerminalView state) so both the keybind handler (keyboard.ts) and the
+ * session "⋮" menu (main.tsx) can open it without threading callbacks. */
+export const terminalFindOpen = signal(false)
+
 /** Current URL path, kept in sync with preact-iso's location. */
 export const urlPath = signal(
   typeof location !== 'undefined' ? (location.pathname.replace(/\/+$/, '') || '/') : '/',

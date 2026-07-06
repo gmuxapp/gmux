@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { ImageAddon } from '@xterm/addon-image'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { SearchAddon } from '@xterm/addon-search'
 import type { ResolvedTerminalOptions } from './settings-schema'
 import { loadWebglRenderer } from './webgl-renderer'
 import { refreshAtlasWhenIconFontLoads } from './nerd-font'
@@ -19,7 +20,8 @@ import { TerminalTextSheet } from './terminal-text-sheet'
 import { pressedBufferRow, readTerminalText } from './terminal-text'
 import { decideViewportResize, sameSize } from './terminal-resize'
 import { wsStateOnClose, wsStateOnOutput, type WsState } from './ws-state'
-import { terminalScrolledUp, terminalScrollToBottom } from './store'
+import { terminalFindOpen, terminalScrolledUp, terminalScrollToBottom } from './store'
+import { TerminalFindBar } from './terminal-find'
 import { MOCK_BY_ID } from './mock-data/index'
 import type { Session } from './types'
 
@@ -245,6 +247,7 @@ export function TerminalView({
   const ctrlArmedRef = useRef(ctrlArmed)
   const altArmedRef = useRef(altArmed)
   const termIoRef = useRef<ReturnType<typeof createTerminalIO> | null>(null)
+  const searchAddonRef = useRef<SearchAddon | null>(null)
   const termEpochRef = useRef(0)
 
   // True once the terminal's font is downloaded; gates xterm mount.
@@ -411,7 +414,9 @@ export function TerminalView({
   // only suppress focus/selection on shell controls for no benefit.
   const holdShellFocus = useCallback((ev: MouseEvent) => {
     if (!isTouchDevice()) return
-    if (!(ev.target instanceof Element) || !ev.target.closest('.xterm')) ev.preventDefault()
+    // The find bar's input/buttons need default mousedown behavior to
+    // gain focus, so exempt it alongside the grid.
+    if (!(ev.target instanceof Element) || !ev.target.closest('.xterm, .terminal-find-bar')) ev.preventDefault()
   }, [])
 
   const handleShellClick = useCallback((ev: MouseEvent) => {
@@ -483,6 +488,10 @@ export function TerminalView({
     term.loadAddon(new ImageAddon())
     // Detect plain-text URLs in terminal output and make them clickable.
     term.loadAddon(new WebLinksAddon())
+    // Find-in-terminal (the find bar drives it; see terminal-find.tsx).
+    const searchAddon = new SearchAddon()
+    term.loadAddon(searchAddon)
+    searchAddonRef.current = searchAddon
     term.open(containerRef.current)
     loadWebglRenderer(term)
     // The Nerd Font icon fallback loads lazily; refresh the glyph atlas once
@@ -806,6 +815,8 @@ export function TerminalView({
       scrollDisposable.dispose()
       terminalScrolledUp.value = false
       terminalScrollToBottom.value = null
+      terminalFindOpen.value = false
+      searchAddonRef.current = null
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       wsRef.current?.close()
       wsRef.current = null
@@ -1044,6 +1055,19 @@ export function TerminalView({
           >
             Sized for another device, click to resize
           </button>
+        </div>
+      )}
+      {terminalFindOpen.value && searchAddonRef.current && (
+        <div class="terminal-find-anchor">
+          <TerminalFindBar
+            addon={searchAddonRef.current}
+            onClose={() => {
+              terminalFindOpen.value = false
+              // Hand focus back to the terminal — but not on touch, where
+              // that would immediately re-pop the on-screen keyboard.
+              if (!isTouchDevice()) focusTerminal()
+            }}
+          />
         </div>
       )}
       <div ref={containerRef} class="terminal-container" />

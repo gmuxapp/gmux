@@ -24,7 +24,7 @@ import { pushError } from './toasts'
 import {
   sessions, connState, selected, selectedId, view, health, peers,
   terminalOptions, keybinds, macCommandIsCtrl,
-  unreadCount, keyboardOpen, terminalScrolledUp, terminalScrollToBottom,
+  unreadCount, keyboardOpen, terminalFindOpen, terminalScrolledUp, terminalScrollToBottom,
   urlPath, urlSearch,
   initStore, setNavigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
@@ -247,7 +247,10 @@ function SessionMenu({ session, onRestart }: {
       ? session.binary_hash.slice(0, 8)
       : 'unknown'
 
-  const hasActions = session.alive && onRestart
+  // Find works whenever the live terminal is mounted, i.e. the session is
+  // alive. This is the touch path to the find bar (no hardware keyboard
+  // for the secondary+F keybind).
+  const canFind = session.alive
 
   return (
     <div class="session-menu" ref={menuRef}>
@@ -262,18 +265,24 @@ function SessionMenu({ session, onRestart }: {
       </button>
       {open && (
         <div class="session-menu-dropdown">
-          {hasActions && (
-            <>
-              <button
-                class={`session-menu-action${staleKind ? ' stale' : ''}`}
-                onClick={() => { setOpen(false); onRestart!() }}
-              >
-                Restart session
-                {staleKind && <span class="session-menu-action-tag">outdated</span>}
-              </button>
-              <div class="session-menu-divider" />
-            </>
+          {canFind && (
+            <button
+              class="session-menu-action"
+              onClick={() => { setOpen(false); terminalFindOpen.value = true }}
+            >
+              Find in terminal
+            </button>
           )}
+          {session.alive && onRestart && (
+            <button
+              class={`session-menu-action${staleKind ? ' stale' : ''}`}
+              onClick={() => { setOpen(false); onRestart!() }}
+            >
+              Restart session
+              {staleKind && <span class="session-menu-action-tag">outdated</span>}
+            </button>
+          )}
+          {(canFind || (session.alive && onRestart)) && <div class="session-menu-divider" />}
           <div class="session-menu-section-title">Session info</div>
           <div class="session-menu-row">
             <span class="session-menu-label">Adapter</span>

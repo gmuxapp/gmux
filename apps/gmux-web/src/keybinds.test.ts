@@ -135,6 +135,21 @@ describe('resolveKeybinds', () => {
     expect(keys).toContain('ctrl+alt+t')
   })
 
+  it('includes the find keybind on secondary+f', () => {
+    const resolved = resolveKeybinds(null)
+    const find = resolved.find(r => r.action === 'find')
+    expect(find).toBeDefined()
+    expect(find!.baseKey).toBe('f')
+    // "secondary" resolves to exactly one platform modifier.
+    expect(find!.ctrl || find!.meta).toBe(true)
+    expect(find!.ctrl && find!.meta).toBe(false)
+  })
+
+  it('allows disabling the find keybind', () => {
+    const resolved = resolveKeybinds([{ key: 'secondary+f', action: 'none' }])
+    expect(resolved.find(r => r.action === 'find')).toBeUndefined()
+  })
+
   it('adds new user keybinds', () => {
     const user: Keybind[] = [
       { key: 'ctrl+alt+n', action: 'sendKeys', args: 'ctrl+n' },

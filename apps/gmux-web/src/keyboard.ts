@@ -23,6 +23,7 @@ import {
   type UploadResult,
 } from './clipboard-upload'
 import { selectionToText } from './selection'
+import { terminalFindOpen } from './store'
 
 type SendFn = (data: string) => void
 
@@ -259,6 +260,13 @@ function executeAction(
 
     case 'selectAll':
       term.selectAll()
+      return true
+
+    case 'find':
+      // Opens the find bar rendered by TerminalView. Via a signal (not a
+      // callback) because this runs deep inside the key handler, far from
+      // the component tree. The bar focuses its own input on mount.
+      terminalFindOpen.value = true
       return true
 
     default:

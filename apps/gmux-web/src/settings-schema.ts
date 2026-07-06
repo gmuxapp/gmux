@@ -116,7 +116,7 @@ export type ThemeColors = v.InferInput<typeof ThemeColorsSchema>
 // ── Keybind schema ──
 
 export const KEYBIND_ACTIONS = [
-  'sendText', 'sendKeys', 'copyOrInterrupt', 'copy', 'paste', 'selectAll', 'none',
+  'sendText', 'sendKeys', 'copyOrInterrupt', 'copy', 'paste', 'selectAll', 'find', 'none',
 ] as const
 
 /** Per-action descriptions. Source of truth for runtime warnings and doc generation. */
@@ -127,6 +127,7 @@ export const KEYBIND_ACTION_DESCRIPTIONS: Record<string, string> = {
   copy:             'Copy selection to clipboard. Does nothing if no text is selected.',
   paste:            'Read system clipboard and send contents to the PTY.',
   selectAll:        'Select all terminal content.',
+  find:             'Open the find-in-terminal search bar.',
   none:             'Disable this key combo (removes a built-in default).',
 }
 
