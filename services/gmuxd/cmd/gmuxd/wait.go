@@ -55,7 +55,7 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 	}
 	if !adapterEmitsIdleSignal(sess.Adapter) {
 		writeError(w, http.StatusUnprocessableEntity, "no_idle_signal",
-			"session kind "+sess.Adapter+" does not emit an idle signal; --wait is only supported for agent sessions")
+			"the "+sess.Adapter+" adapter does not emit an idle signal; --wait is only supported for agent sessions")
 		return
 	}
 
