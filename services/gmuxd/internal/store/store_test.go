@@ -65,21 +65,21 @@ func TestRemove(t *testing.T) {
 	}
 }
 
-func TestRemoveDeadBySessionFile(t *testing.T) {
+func TestRemoveDeadByConversationFile(t *testing.T) {
 	const file = "/home/u/.claude/projects/abc/conv.jsonl"
 	s := New()
 	// Two dead sessions share the file (N:1, e.g. resumed in two tabs).
-	s.Upsert(Session{ID: "dead-1", Adapter: "claude", Alive: false, SessionFile: file})
-	s.Upsert(Session{ID: "dead-2", Adapter: "claude", Alive: false, SessionFile: file})
+	s.Upsert(Session{ID: "dead-1", Adapter: "claude", Alive: false, ConversationFile: file})
+	s.Upsert(Session{ID: "dead-2", Adapter: "claude", Alive: false, ConversationFile: file})
 	// A live session on the same file must survive (runner still writing).
-	s.Upsert(Session{ID: "live", Adapter: "claude", Alive: true, SessionFile: file})
+	s.Upsert(Session{ID: "live", Adapter: "claude", Alive: true, ConversationFile: file})
 	// A peer-owned dead session on the same file is not ours to retire.
-	s.Upsert(Session{ID: "peer", Adapter: "claude", Alive: false, Peer: "box2", SessionFile: file})
+	s.Upsert(Session{ID: "peer", Adapter: "claude", Alive: false, Peer: "box2", ConversationFile: file})
 	// An unrelated dead session must be untouched.
-	s.Upsert(Session{ID: "other", Adapter: "claude", Alive: false, SessionFile: "/home/u/.claude/projects/xyz/other.jsonl"})
+	s.Upsert(Session{ID: "other", Adapter: "claude", Alive: false, ConversationFile: "/home/u/.claude/projects/xyz/other.jsonl"})
 
 	// Cosmetic path difference must still match (filepath.Clean).
-	removed := s.RemoveDeadBySessionFile("/home/u/.claude/projects/abc/./conv.jsonl")
+	removed := s.RemoveDeadByConversationFile("/home/u/.claude/projects/abc/./conv.jsonl")
 
 	got := map[string]bool{}
 	for _, id := range removed {
@@ -100,13 +100,13 @@ func TestRemoveDeadBySessionFile(t *testing.T) {
 	}
 }
 
-func TestRemoveDeadBySessionFileNoMatch(t *testing.T) {
+func TestRemoveDeadByConversationFileNoMatch(t *testing.T) {
 	s := New()
-	s.Upsert(Session{ID: "a", Adapter: "claude", Alive: false, SessionFile: "/x/a.jsonl"})
-	if got := s.RemoveDeadBySessionFile("/x/missing.jsonl"); got != nil {
+	s.Upsert(Session{ID: "a", Adapter: "claude", Alive: false, ConversationFile: "/x/a.jsonl"})
+	if got := s.RemoveDeadByConversationFile("/x/missing.jsonl"); got != nil {
 		t.Errorf("no-match should return nil, got %v", got)
 	}
-	if got := s.RemoveDeadBySessionFile(""); got != nil {
+	if got := s.RemoveDeadByConversationFile(""); got != nil {
 		t.Errorf("empty path should return nil, got %v", got)
 	}
 	if _, ok := s.Get("a"); !ok {
@@ -114,15 +114,15 @@ func TestRemoveDeadBySessionFileNoMatch(t *testing.T) {
 	}
 }
 
-// TestRemoveDeadBySessionFileBroadcasts pins that retirement emits one
+// TestRemoveDeadByConversationFileBroadcasts pins that retirement emits one
 // session-remove per removed session (so WatchRemovals drops the dir).
-func TestRemoveDeadBySessionFileBroadcasts(t *testing.T) {
+func TestRemoveDeadByConversationFileBroadcasts(t *testing.T) {
 	s := New()
-	s.Upsert(Session{ID: "dead", Adapter: "claude", Alive: false, SessionFile: "/x/c.jsonl"})
+	s.Upsert(Session{ID: "dead", Adapter: "claude", Alive: false, ConversationFile: "/x/c.jsonl"})
 	ch, cancel := s.Subscribe()
 	defer cancel()
 
-	s.RemoveDeadBySessionFile("/x/c.jsonl")
+	s.RemoveDeadByConversationFile("/x/c.jsonl")
 
 	ev, ok := recvEvent(t, ch)
 	if !ok || ev.Type != "session-remove" || ev.ID != "dead" {
@@ -997,15 +997,15 @@ func TestUpsertRemote_BroadcastsEvent(t *testing.T) {
 
 func TestSessionMarshalJSON_WireFormat(t *testing.T) {
 	s := Session{
-		ID:            "sess-abc",
-		Adapter:       "pi",
-		Alive:         true,
-		RunnerVersion: "1.2.0",
-		BinaryHash:    "aabbccdd",
-		ShellTitle:    "internal-only",
-		AdapterTitle:  "internal-only",
-		Slug:          "my-slug",
-		SessionFile:   "/home/u/.pi/agent/sessions/x/conv.jsonl",
+		ID:               "sess-abc",
+		Adapter:          "pi",
+		Alive:            true,
+		RunnerVersion:    "1.2.0",
+		BinaryHash:       "aabbccdd",
+		ShellTitle:       "internal-only",
+		AdapterTitle:     "internal-only",
+		Slug:             "my-slug",
+		ConversationFile: "/home/u/.pi/agent/sessions/x/conv.jsonl",
 	}
 	b, err := json.Marshal(s)
 	if err != nil {
@@ -1120,36 +1120,36 @@ func TestSessionMarshalJSON_AllFieldsAppearOnWire(t *testing.T) {
 func fullyPopulatedSession() Session {
 	exit := 0
 	return Session{
-		ID:             "sess-full",
-		Peer:           "peer-x",
-		CreatedAt:      "2026-01-01T00:00:00Z",
-		Command:        []string{"bash"},
-		Cwd:            "/tmp/work",
-		Adapter:        "pi",
-		WorkspaceRoot:  "/tmp/work",
-		Remotes:        map[string]string{"origin": "github.com/x/y"},
-		Alive:          true,
-		Pid:            42,
-		ExitCode:       &exit,
-		StartedAt:      "2026-01-01T00:00:01Z",
-		ExitedAt:       "2026-01-01T00:00:02Z",
-		Title:          "t",
-		Subtitle:       "s",
-		Status:         &Status{Working: true, Error: true},
-		Unread:         true,
-		LastActivityAt: "2026-01-01T00:00:03Z",
-		Resumable:      true,
-		SocketPath:     "/tmp/sock",
-		TerminalCols:   80,
-		TerminalRows:   24,
-		Slug:           "slug",
-		SessionFile:    "/home/u/.pi/sess.jsonl",
-		RunnerVersion:  "v1",
-		BinaryHash:     "hash",
-		ShellTitle:     "shell-internal",
-		AdapterTitle:   "adapter-internal",
-		ProjectSlug:    "proj",
-		ProjectIndex:   3,
+		ID:               "sess-full",
+		Peer:             "peer-x",
+		CreatedAt:        "2026-01-01T00:00:00Z",
+		Command:          []string{"bash"},
+		Cwd:              "/tmp/work",
+		Adapter:          "pi",
+		WorkspaceRoot:    "/tmp/work",
+		Remotes:          map[string]string{"origin": "github.com/x/y"},
+		Alive:            true,
+		Pid:              42,
+		ExitCode:         &exit,
+		StartedAt:        "2026-01-01T00:00:01Z",
+		ExitedAt:         "2026-01-01T00:00:02Z",
+		Title:            "t",
+		Subtitle:         "s",
+		Status:           &Status{Working: true, Error: true},
+		Unread:           true,
+		LastActivityAt:   "2026-01-01T00:00:03Z",
+		Resumable:        true,
+		SocketPath:       "/tmp/sock",
+		TerminalCols:     80,
+		TerminalRows:     24,
+		Slug:             "slug",
+		ConversationFile: "/home/u/.pi/sess.jsonl",
+		RunnerVersion:    "v1",
+		BinaryHash:       "hash",
+		ShellTitle:       "shell-internal",
+		AdapterTitle:     "adapter-internal",
+		ProjectSlug:      "proj",
+		ProjectIndex:     3,
 	}
 }
 

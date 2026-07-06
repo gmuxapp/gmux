@@ -34,10 +34,10 @@ func TestResolveResumeCommand(t *testing.T) {
 		sess    store.Session
 		wantNil bool
 	}{
-		{"no session file", store.Session{Adapter: "pi"}, true},
-		{"unknown adapter", store.Session{Adapter: "nope", SessionFile: good}, true},
-		{"unparseable file", store.Session{Adapter: "pi", SessionFile: filepath.Join(dir, "ghost.jsonl")}, true},
-		{"resumable pi", store.Session{Adapter: "pi", SessionFile: good}, false},
+		{"no conversation file", store.Session{Adapter: "pi"}, true},
+		{"unknown adapter", store.Session{Adapter: "nope", ConversationFile: good}, true},
+		{"unparseable file", store.Session{Adapter: "pi", ConversationFile: filepath.Join(dir, "ghost.jsonl")}, true},
+		{"resumable pi", store.Session{Adapter: "pi", ConversationFile: good}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -55,7 +55,7 @@ func TestResolveResumeCommand(t *testing.T) {
 	}
 }
 
-// A shell session never carries a SessionFile, so the guard returns before the
+// A shell session never carries a ConversationFile, so the guard returns before the
 // adapter lookup — even though shell is itself a ConversationFiler/Resumer.
 func TestResolveResumeCommandShellGuarded(t *testing.T) {
 	if cmd := ResolveResumeCommand(&store.Session{Adapter: "shell"}); cmd != nil {

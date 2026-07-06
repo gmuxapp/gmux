@@ -575,7 +575,7 @@ func serve(stderr io.Writer) int {
 	// and meta.json mirrors conversation existence (ADR 0016). The store
 	// applies the alive/peer/N:1 guards; its session-remove broadcast is
 	// what WatchRemovals turns into a meta-dir delete.
-	convRetireMeta := func(path string) { sessions.RemoveDeadBySessionFile(path) }
+	convRetireMeta := func(path string) { sessions.RemoveDeadByConversationFile(path) }
 
 	// retireDeleted closes the gap the runtime index signal can't cover:
 	// a conversation file deleted while gmuxd was *down* emits no removal
@@ -589,7 +589,7 @@ func serve(stderr io.Writer) int {
 		return false, false
 	}
 	retireDeleted := func(path string) {
-		if ids := sessions.RemoveDeadBySessionFile(path); len(ids) > 0 {
+		if ids := sessions.RemoveDeadByConversationFile(path); len(ids) > 0 {
 			log.Printf("sessionmeta: retired %d dead session(s) for deleted conversation %s", len(ids), path)
 		}
 	}
@@ -643,8 +643,8 @@ func serve(stderr io.Writer) int {
 	}, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
-	// Session file scanner — discovers resumable sessions from adapter
-	// session files (e.g. pi's JSONL conversations). Also purges stale
+	// Conversation file scanner — discovers resumable sessions from adapter
+	// conversation files (e.g. pi's JSONL conversations). Also purges stale
 	// dead sessions that were never attributed to a file. Started below
 	// after the project manager is set up so the first-scan callback
 	// can clean up orphaned project session refs.

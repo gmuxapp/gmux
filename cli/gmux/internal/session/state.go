@@ -44,11 +44,11 @@ type State struct {
 	// Slug is an adapter-provided stable identifier for URL routing.
 	Slug string `json:"slug,omitempty"`
 
-	// SessionFile is the agent's on-disk JSONL conversation file, as
+	// ConversationFile is the agent's on-disk JSONL conversation file, as
 	// reported authoritatively by the agent hook (ADR 0011). It is the
 	// immutable Tool ID's address; a change here is a rebind (/resume).
 	// Empty until the agent reports it, or for unhooked adapters.
-	SessionFile string `json:"conversation_file,omitempty"`
+	ConversationFile string `json:"conversation_file,omitempty"`
 
 	// Terminal size (updated by the runner whenever PTY is resized).
 	TerminalCols uint16 `json:"terminal_cols,omitempty"`
@@ -188,7 +188,7 @@ func (s *State) SetStatus(status *adapter.Status) {
 	s.emit(Event{Type: "status", Data: status})
 }
 
-// SetAdapterTitle sets the high-priority title from the adapter (agent hook / session file).
+// SetAdapterTitle sets the high-priority title from the adapter (agent hook / conversation file).
 func (s *State) SetAdapterTitle(title string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -221,13 +221,13 @@ func (s *State) SetSlug(slug string) {
 	s.emit(Event{Type: "meta", Data: map[string]string{"slug": slug}})
 }
 
-// SessionFileSnapshot returns the held conversation file, for replay to a
+// ConversationFileSnapshot returns the held conversation file, for replay to a
 // newly-connected /events subscriber so a reconnecting daemon re-learns
 // attribution without persisted state.
-func (s *State) SessionFileSnapshot() string {
+func (s *State) ConversationFileSnapshot() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.SessionFile
+	return s.ConversationFile
 }
 
 // SlugSnapshot returns the current URL-safe slug under lock.
@@ -256,16 +256,16 @@ func (s *State) UnreadSnapshot() bool {
 	return s.Unread
 }
 
-// SetSessionFile records the agent's current conversation file as reported by
+// SetConversationFile records the agent's current conversation file as reported by
 // the extension. Emits a conversation_file event only when the path changes, so
 // the daemon sees first-attribution and rebind (/resume) but not every write.
-func (s *State) SetSessionFile(path string) {
+func (s *State) SetConversationFile(path string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if path == "" || path == s.SessionFile {
+	if path == "" || path == s.ConversationFile {
 		return
 	}
-	s.SessionFile = path
+	s.ConversationFile = path
 	s.emit(Event{Type: "conversation_file", Data: map[string]string{"path": path}})
 }
 

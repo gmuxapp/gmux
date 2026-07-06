@@ -314,8 +314,8 @@ func TestQueryMetaLegacyPreV2Keys(t *testing.T) {
 	if sess.Adapter != "pi" {
 		t.Errorf("Adapter = %q, want %q (legacy \"kind\" fallback)", sess.Adapter, "pi")
 	}
-	if want := "/home/u/.pi/agent/sessions/x/conv.jsonl"; sess.SessionFile != want {
-		t.Errorf("SessionFile = %q, want %q (legacy \"session_file\" fallback)", sess.SessionFile, want)
+	if want := "/home/u/.pi/agent/sessions/x/conv.jsonl"; sess.ConversationFile != want {
+		t.Errorf("ConversationFile = %q, want %q (legacy \"session_file\" fallback)", sess.ConversationFile, want)
 	}
 }
 
@@ -341,7 +341,7 @@ func TestQueryMetaNewKeysWinOverLegacy(t *testing.T) {
 	if sess.Adapter != "claude" {
 		t.Errorf("Adapter = %q, want %q (new key must win)", sess.Adapter, "claude")
 	}
-	if sess.SessionFile != "/new/conv.jsonl" {
-		t.Errorf("SessionFile = %q, want /new/conv.jsonl (new key must win)", sess.SessionFile)
+	if sess.ConversationFile != "/new/conv.jsonl" {
+		t.Errorf("ConversationFile = %q, want /new/conv.jsonl (new key must win)", sess.ConversationFile)
 	}
 }

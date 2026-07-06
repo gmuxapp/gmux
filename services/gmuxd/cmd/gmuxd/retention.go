@@ -21,16 +21,16 @@ import "github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 func reconcileDeletedConversations(
 	list []store.Session,
 	probe func(adapter, conversationFile string) (gone, known bool),
-	retire func(sessionFile string),
+	retire func(conversationFile string),
 ) {
 	seen := map[string]bool{}
 	for _, sess := range list {
-		if sess.Alive || sess.Peer != "" || sess.SessionFile == "" || seen[sess.SessionFile] {
+		if sess.Alive || sess.Peer != "" || sess.ConversationFile == "" || seen[sess.ConversationFile] {
 			continue
 		}
-		seen[sess.SessionFile] = true
-		if gone, known := probe(sess.Adapter, sess.SessionFile); known && gone {
-			retire(sess.SessionFile)
+		seen[sess.ConversationFile] = true
+		if gone, known := probe(sess.Adapter, sess.ConversationFile); known && gone {
+			retire(sess.ConversationFile)
 		}
 	}
 }

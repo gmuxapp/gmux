@@ -539,7 +539,7 @@ type hookEvent struct {
 // busy/idle/unread/error on every agent-loop transition. There is no
 // inference and no per-adapter branching — the agent tells us exactly what it
 // holds and does, and the runner relays those facts (ADR 0011). State written
-// here (SetSessionFile et al.) is a relay snapshot for /events replay, not
+// here (SetConversationFile et al.) is a relay snapshot for /events replay, not
 // derived or sticky.
 func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 	var ev hookEvent
@@ -552,7 +552,7 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 		// Authoritative bind (e.g. pi's session_start): the file the
 		// agent holds, named and slugged.
 		if ev.Path != "" {
-			s.state.SetSessionFile(ev.Path)
+			s.state.SetConversationFile(ev.Path)
 		}
 		if ev.Name != "" {
 			s.state.SetAdapterTitle(ev.Name)
@@ -720,10 +720,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch := s.state.Subscribe()
 	defer s.state.Unsubscribe(ch)
 
-	// Replay the bound session file to this (possibly reconnecting) subscriber
+	// Replay the bound conversation file to this (possibly reconnecting) subscriber
 	// so a restarted daemon re-learns attribution with no persisted state. A
 	// concurrent update may also arrive on ch; harmless (idempotent).
-	if file := s.state.SessionFileSnapshot(); file != "" {
+	if file := s.state.ConversationFileSnapshot(); file != "" {
 		if data, err := json.Marshal(map[string]string{"path": file}); err == nil {
 			fmt.Fprintf(w, "event: conversation_file\ndata: %s\n\n", data)
 		}

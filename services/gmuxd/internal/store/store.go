@@ -61,17 +61,17 @@ type Session struct {
 	TerminalCols   uint16 `json:"terminal_cols,omitempty"`
 	TerminalRows   uint16 `json:"terminal_rows,omitempty"`
 	// Slug is a human-readable stable identifier derived from the
-	// adapter's session file slug. Used for URL routing (the frontend
+	// adapter's conversation file slug. Used for URL routing (the frontend
 	// falls back to id[:8] when empty) and for matching dead sessions
 	// to project membership arrays. Unique within (adapter, peer).
 	Slug string `json:"slug,omitempty"`
 
-	// SessionFile is the conversation file this runner authoritatively
+	// ConversationFile is the conversation file this runner authoritatively
 	// writes, as reported by the agent hook (session → file; ADR 0011).
-	// Two live sessions may carry the same SessionFile when the same
+	// Two live sessions may carry the same ConversationFile when the same
 	// conversation is resumed in more than one tab; the frontend groups
 	// by this to warn about a conversation open in multiple runners.
-	SessionFile string `json:"conversation_file,omitempty"`
+	ConversationFile string `json:"conversation_file,omitempty"`
 
 	// RunnerVersion is the version string of the gmux runner binary that
 	// launched this session. Set by the runner at startup. The frontend
@@ -117,34 +117,34 @@ type Session struct {
 // fields (ShellTitle, AdapterTitle) that are resolved into Title before sending.
 func (s Session) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		ID             string            `json:"id"`
-		Peer           string            `json:"peer,omitempty"`
-		CreatedAt      string            `json:"created_at,omitempty"`
-		Command        []string          `json:"command,omitempty"`
-		Cwd            string            `json:"cwd,omitempty"`
-		Adapter        string            `json:"adapter"`
-		WorkspaceRoot  string            `json:"workspace_root,omitempty"`
-		Remotes        map[string]string `json:"remotes,omitempty"`
-		Alive          bool              `json:"alive"`
-		Pid            int               `json:"pid,omitempty"`
-		ExitCode       *int              `json:"exit_code,omitempty"`
-		StartedAt      string            `json:"started_at,omitempty"`
-		ExitedAt       string            `json:"exited_at,omitempty"`
-		Title          string            `json:"title,omitempty"`
-		Subtitle       string            `json:"subtitle,omitempty"`
-		Status         *Status           `json:"status"`
-		Unread         bool              `json:"unread"`
-		Resumable      bool              `json:"resumable,omitempty"`
-		SocketPath     string            `json:"socket_path,omitempty"`
-		TerminalCols   uint16            `json:"terminal_cols,omitempty"`
-		TerminalRows   uint16            `json:"terminal_rows,omitempty"`
-		Slug           string            `json:"slug,omitempty"`
-		SessionFile    string            `json:"conversation_file,omitempty"`
-		RunnerVersion  string            `json:"runner_version,omitempty"`
-		BinaryHash     string            `json:"binary_hash,omitempty"`
-		ProjectSlug    string            `json:"project_slug,omitempty"`
-		ProjectIndex   int               `json:"project_index,omitempty"`
-		LastActivityAt string            `json:"last_activity_at,omitempty"`
+		ID               string            `json:"id"`
+		Peer             string            `json:"peer,omitempty"`
+		CreatedAt        string            `json:"created_at,omitempty"`
+		Command          []string          `json:"command,omitempty"`
+		Cwd              string            `json:"cwd,omitempty"`
+		Adapter          string            `json:"adapter"`
+		WorkspaceRoot    string            `json:"workspace_root,omitempty"`
+		Remotes          map[string]string `json:"remotes,omitempty"`
+		Alive            bool              `json:"alive"`
+		Pid              int               `json:"pid,omitempty"`
+		ExitCode         *int              `json:"exit_code,omitempty"`
+		StartedAt        string            `json:"started_at,omitempty"`
+		ExitedAt         string            `json:"exited_at,omitempty"`
+		Title            string            `json:"title,omitempty"`
+		Subtitle         string            `json:"subtitle,omitempty"`
+		Status           *Status           `json:"status"`
+		Unread           bool              `json:"unread"`
+		Resumable        bool              `json:"resumable,omitempty"`
+		SocketPath       string            `json:"socket_path,omitempty"`
+		TerminalCols     uint16            `json:"terminal_cols,omitempty"`
+		TerminalRows     uint16            `json:"terminal_rows,omitempty"`
+		Slug             string            `json:"slug,omitempty"`
+		ConversationFile string            `json:"conversation_file,omitempty"`
+		RunnerVersion    string            `json:"runner_version,omitempty"`
+		BinaryHash       string            `json:"binary_hash,omitempty"`
+		ProjectSlug      string            `json:"project_slug,omitempty"`
+		ProjectIndex     int               `json:"project_index,omitempty"`
+		LastActivityAt   string            `json:"last_activity_at,omitempty"`
 	}
 	return json.Marshal(wire{
 		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,
@@ -155,8 +155,8 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		Unread: s.Unread, Resumable: s.Resumable,
 		SocketPath: s.SocketPath, TerminalCols: s.TerminalCols,
 		TerminalRows: s.TerminalRows, Slug: s.Slug,
-		SessionFile:   s.SessionFile,
-		RunnerVersion: s.RunnerVersion, BinaryHash: s.BinaryHash,
+		ConversationFile: s.ConversationFile,
+		RunnerVersion:    s.RunnerVersion, BinaryHash: s.BinaryHash,
 		ProjectSlug: s.ProjectSlug, ProjectIndex: s.ProjectIndex,
 		LastActivityAt: s.LastActivityAt,
 	})
@@ -496,8 +496,8 @@ func (s *Store) Reconcile(assignFn func(Session) (slug string, index int)) {
 	}
 }
 
-// RemoveDeadBySessionFile retires every locally-owned, dead session
-// whose SessionFile points at path, broadcasting session-remove for
+// RemoveDeadByConversationFile retires every locally-owned, dead session
+// whose ConversationFile points at path, broadcasting session-remove for
 // each and returning the removed IDs. Used when the conversations
 // index reports a conversation file has disappeared: meta.json mirrors
 // conversation existence (ADR 0016), so the backing file going away
@@ -513,10 +513,10 @@ func (s *Store) Reconcile(assignFn func(Session) (slug string, index int)) {
 //
 // Paths are compared after filepath.Clean so a cosmetic difference
 // (trailing slash, "./") between the watcher-reported path and the
-// hook-reported SessionFile doesn't defeat the match. Symlinks are not
+// hook-reported ConversationFile doesn't defeat the match. Symlinks are not
 // resolved: the file is already gone, so EvalSymlinks couldn't run, and
 // both paths derive from the same real $HOME in practice.
-func (s *Store) RemoveDeadBySessionFile(path string) []string {
+func (s *Store) RemoveDeadByConversationFile(path string) []string {
 	if path == "" {
 		return nil
 	}
@@ -524,10 +524,10 @@ func (s *Store) RemoveDeadBySessionFile(path string) []string {
 	s.mu.Lock()
 	var removed []string
 	for id, sess := range s.sessions {
-		if sess.Peer != "" || sess.Alive || sess.SessionFile == "" {
+		if sess.Peer != "" || sess.Alive || sess.ConversationFile == "" {
 			continue
 		}
-		if filepath.Clean(sess.SessionFile) != target {
+		if filepath.Clean(sess.ConversationFile) != target {
 			continue
 		}
 		delete(s.sessions, id)

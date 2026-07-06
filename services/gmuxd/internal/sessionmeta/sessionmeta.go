@@ -102,7 +102,7 @@ const (
 // RetentionPolicy bounds the disk footprint of dead sessions. A zero
 // value for any field disables that limit.
 type RetentionPolicy struct {
-	// MaxAge ages out conversation-less dead sessions (SessionFile == "")
+	// MaxAge ages out conversation-less dead sessions (ConversationFile == "")
 	// whose effective timestamp is older than now-MaxAge. Sessions with a
 	// conversation file are exempt: their lifecycle is the conversation's
 	// (index-driven removal). Zero means no age limit.
@@ -326,7 +326,7 @@ func (s *Store) Read(id string) (store.Session, error) {
 	// meta.json has no schema version, so fall back to the old keys when
 	// the new ones are absent. Write emits only the new keys.
 	// TODO(v2.1): drop this shim.
-	if ps.Adapter == "" || ps.SessionFile == "" {
+	if ps.Adapter == "" || ps.ConversationFile == "" {
 		var legacy struct {
 			Kind        string `json:"kind"`
 			SessionFile string `json:"session_file"`
@@ -335,8 +335,8 @@ func (s *Store) Read(id string) (store.Session, error) {
 			if ps.Adapter == "" {
 				ps.Adapter = legacy.Kind
 			}
-			if ps.SessionFile == "" {
-				ps.SessionFile = legacy.SessionFile
+			if ps.ConversationFile == "" {
+				ps.ConversationFile = legacy.SessionFile
 			}
 		}
 	}
@@ -403,7 +403,7 @@ func (s *Store) WatchRemovals(events <-chan store.Event) {
 //   - non-directory entries under the base dir are ignored
 //
 // After loading, the whole-dir retention cap is applied to
-// conversation-less dead sessions (SessionFile == ""): corpses older
+// conversation-less dead sessions (ConversationFile == ""): corpses older
 // than MaxAge are aged out, then only the newest MaxCount survive.
 // Sessions with a conversation file are exempt — they are retired only
 // when their conversation file disappears (see the conversations index
@@ -495,7 +495,7 @@ func (s *Store) prune(loaded []store.Session) []store.Session {
 	// pruned here; their lifecycle is index-driven.
 	var exempt, corpses []store.Session
 	for _, sess := range loaded {
-		if sess.SessionFile != "" {
+		if sess.ConversationFile != "" {
 			exempt = append(exempt, sess)
 		} else {
 			corpses = append(corpses, sess)

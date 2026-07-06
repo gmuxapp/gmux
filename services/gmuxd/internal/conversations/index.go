@@ -18,12 +18,12 @@ import (
 
 // Info holds metadata for a single conversation file.
 type Info struct {
-	ConversationID string    // full UUID from the session file header
+	ConversationID string    // full UUID from the conversation file header
 	Slug           string    // human-readable URL identifier, unique within (adapter)
 	Adapter        string    // adapter name (claude, codex, pi, shell)
 	Title          string    // display title
 	Cwd            string    // working directory
-	FilePath       string    // absolute path to the session file
+	FilePath       string    // absolute path to the conversation file
 	ResumeCommand  []string  // command to resume this conversation
 	Created        time.Time // when the conversation started
 }

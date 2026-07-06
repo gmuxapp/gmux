@@ -318,7 +318,7 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		// rebind (/resume) just overwrites this session's own file; it never
 		// clobbers another session's.
 		sub.store.Update(sessionID, func(sess *store.Session) {
-			sess.SessionFile = sf.Path
+			sess.ConversationFile = sf.Path
 		})
 
 	case "activity":
