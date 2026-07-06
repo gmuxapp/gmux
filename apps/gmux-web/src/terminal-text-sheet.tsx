@@ -5,10 +5,9 @@
  *
  * The long-press is a "give me my clipboard actions" gesture, so Copy all
  * and Paste are co-equal peers (neither is the accent), with a quiet Close
- * set apart. Copy doesn't dismiss — a copy is often not the end of the
- * task, and an auto-dismiss timer is an unwinnable guess. (A toast will
- * eventually confirm + close on its own; until then the sheet just stays
- * open with inline feedback.)
+ * set apart. Copy closes the sheet immediately and a toast confirms —
+ * confirmation is decoupled from the surface, so no lingering sheet and
+ * no arbitrary auto-close timer.
  *
  * Why plain text instead of growing xterm's own selection: on touch,
  * native selection (OS handles, magnifier, the system Copy callout) is
@@ -66,7 +65,7 @@ export function TerminalTextSheet({ lines, anchorRow, onPaste, onClose }: Termin
         </div>
         <div class="text-sheet-footer">
           <SheetButton quiet onActivate={onClose}>Close</SheetButton>
-          <CopyButton label="Copy all" text={lines.join('\n')} />
+          <CopyButton label="Copy all" text={lines.join('\n')} onClose={onClose} />
           <SheetButton onActivate={() => { onPaste(); onClose() }}>Paste</SheetButton>
         </div>
       </div>

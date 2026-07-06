@@ -36,7 +36,7 @@ export function LinkActionSheet({ link, onClose }: LinkActionSheetProps) {
           <div class="link-sheet-uri">{link.uri}</div>
         </div>
         <div class="link-sheet-actions">
-          <CopyButton label="Copy URL" text={link.uri} />
+          <CopyButton label="Copy URL" text={link.uri} onClose={onClose} />
           <SheetButton primary onActivate={handleOpen}>Open</SheetButton>
         </div>
       </div>
