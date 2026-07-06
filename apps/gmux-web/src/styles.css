@@ -1890,6 +1890,107 @@ body {
   white-space: nowrap;
 }
 
+/* ── Find-in-terminal bar ────────────────────────────────────────────────────────
+   Floats over the top-right of the terminal (sticky, like the resize
+   anchor, so it stays put when the shell scrolls in passive mode). Shares
+   the pill design language: translucent surface, blur, soft border. */
+.terminal-find-anchor {
+  position: sticky;
+  top: 0;
+  height: 0;
+  overflow: visible;
+  display: flex;
+  justify-content: flex-end;
+  /* The anchor is height:0; the default align-items:stretch would crush
+     the bar's content height to zero. */
+  align-items: flex-start;
+  z-index: 14;
+  pointer-events: none;
+}
+
+.terminal-find-bar {
+  pointer-events: auto;
+  position: relative;
+  top: 8px;
+  margin-right: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in oklch, var(--accent) 22%, var(--border-strong));
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--bg-sidebar) 82%, #0f141a 18%);
+  box-shadow: 0 8px 24px oklch(0% 0 0 / 0.28);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.terminal-find-input {
+  appearance: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 4px 6px;
+  width: 160px;
+}
+
+.terminal-find-input::placeholder {
+  color: var(--text-muted);
+}
+
+.terminal-find-count {
+  min-width: 34px;
+  text-align: right;
+  padding-right: 4px;
+  color: var(--text-muted);
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.terminal-find-count.no-matches {
+  color: oklch(0.7 0.12 20);
+}
+
+.terminal-find-btn {
+  appearance: none;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.terminal-find-btn:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--bg-sidebar) 40%, var(--accent) 12%);
+  color: var(--text);
+}
+
+.terminal-find-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Touch: bigger tap targets, and a wider input is unnecessary — keep the
+   bar compact so it doesn't cover half the terminal on phones. */
+@media (pointer: coarse) {
+  .terminal-find-bar { gap: 4px; }
+  .terminal-find-input { width: 132px; font-size: 14px; }
+  .terminal-find-btn { width: 38px; height: 38px; font-size: 18px; }
+}
+
 .terminal-loading {
   position: absolute;
   inset: 0;

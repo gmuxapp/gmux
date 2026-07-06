@@ -58,6 +58,9 @@ importers:
       '@xterm/addon-image':
         specifier: github:gmuxapp/xterm.js#v6.1.0-beta.195-gmux.2&path:addons/addon-image
         version: https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed#path:addons/addon-image
+      '@xterm/addon-search':
+        specifier: 0.17.0-beta.195
+        version: 0.17.0-beta.195(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)
       '@xterm/addon-web-links':
         specifier: 0.13.0-beta.195
         version: 0.13.0-beta.195(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)
@@ -1375,6 +1378,12 @@ packages:
   '@xterm/addon-image@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed#path:addons/addon-image':
     resolution: {path: addons/addon-image, tarball: https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed}
     version: 0.9.0
+
+  '@xterm/addon-search@0.17.0-beta.195':
+    resolution: {integrity: sha512-n7sQ3u1e1gSfKJvhKCz3W/Ov7KLAOB8auC9m+7sSaFgPCuFfi2/bP4I/TswPUDF5YpkYs9leBzeVdo08/+Cglg==}
+    version: 0.17.0-beta.195
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.195
 
   '@xterm/addon-web-links@0.13.0-beta.195':
     resolution: {integrity: sha512-3x1jjud/TAVCSd3Jn7E9ielvPUwHAqvtqL1AKeH9sD5RKUuNr+Z4B+vhkvR0XF2BAk9af6ErgyygdAMnOL2Rwg==}
@@ -4224,6 +4233,10 @@ snapshots:
       '@xterm/xterm': https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed
 
   '@xterm/addon-image@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed#path:addons/addon-image': {}
+
+  '@xterm/addon-search@0.17.0-beta.195(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)':
+    dependencies:
+      '@xterm/xterm': https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed
 
   '@xterm/addon-web-links@0.13.0-beta.195(@xterm/xterm@https://codeload.github.com/gmuxapp/xterm.js/tar.gz/a8d82b583c09be14a98d7a092a294b154dc5deed)':
     dependencies:

@@ -60,6 +60,9 @@ const KNOWN_ACTIONS = new Set<string>(KEYBIND_ACTIONS)
 const UNIVERSAL_KEYBINDS: Keybind[] = [
   { key: 'shift+enter', action: 'sendText', args: '\n' },
   { key: 'ctrl+c', action: 'copyOrInterrupt' },
+  // "secondary" = Cmd on macOS, Ctrl elsewhere. Replaces the browser's
+  // in-page find, which is useless inside a canvas-rendered terminal.
+  { key: 'secondary+f', action: 'find' },
 ]
 
 /** Linux / Windows defaults. */
