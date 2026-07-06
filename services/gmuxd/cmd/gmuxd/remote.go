@@ -280,11 +280,22 @@ func remotePoll(stdout, stderr io.Writer) int {
 
 	fmt.Fprintln(stdout) // end the "Connecting..." line
 
-	if result == nil || result.TS == nil {
+	if result == nil {
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stderr, "Could not reach the daemon. Check that it's running:")
 		fmt.Fprintln(stderr, "  gmuxd start")
 		return 1
+	}
+	if result.TS == nil {
+		// Daemon is reachable but hasn't started Tailscale yet.
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "The daemon is running but Tailscale hasn't started yet.")
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Try again shortly:")
+		fmt.Fprintln(stdout, "  gmuxd remote")
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
+		return 0
 	}
 
 	return displayStatus(result, stdout)
@@ -339,7 +350,24 @@ func displayStatus(h *tailscaleHealth, stdout io.Writer) int {
 		return 0
 	}
 
-	// Not connected and no auth URL. Tailscale is in some intermediate state.
+	// Not connected and no auth URL. Tailscale is in some intermediate
+	// state. If the tailnet doesn't have HTTPS certificates enabled,
+	// the listener can never come up: tsnet needs a cert to serve.
+	// Surface that directly instead of telling the user to retry forever.
+	if !ts.HTTPS {
+		fmt.Fprintln(stdout, "Tailscale is logged in but the connection isn't coming up.")
+		fmt.Fprintln(stdout, "The most likely cause: HTTPS is not enabled in your tailnet,")
+		fmt.Fprintln(stdout, "which gmuxd needs to serve remote access.")
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Enable HTTPS (and MagicDNS) in your Tailscale admin console:")
+		fmt.Fprintln(stdout, "  https://login.tailscale.com/admin/dns")
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Then run `gmuxd remote` again.")
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
+		return 1
+	}
+
 	fmt.Fprintln(stdout, "Tailscale is still connecting. This can take a minute on first setup.")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Try again shortly:")

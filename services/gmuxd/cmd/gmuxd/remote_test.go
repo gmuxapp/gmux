@@ -293,6 +293,8 @@ func TestDisplayStatus_NotConnected(t *testing.T) {
 		Listen: "127.0.0.1:8790",
 		TS: &tsHealth{
 			Connected: false,
+			HTTPS:     true,
+			MagicDNS:  true,
 		},
 	}
 	code := displayStatus(h, &stdout)
@@ -303,9 +305,30 @@ func TestDisplayStatus_NotConnected(t *testing.T) {
 	if !strings.Contains(out, "still connecting") {
 		t.Errorf("should say still connecting:\n%s", out)
 	}
-	// Should NOT mention HTTPS or MagicDNS problems.
-	if strings.Contains(out, "HTTPS") || strings.Contains(out, "MagicDNS") {
-		t.Errorf("should not mention HTTPS/MagicDNS when not connected:\n%s", out)
+	if strings.Contains(out, "login.tailscale.com/admin/dns") {
+		t.Errorf("should not point at admin console when tailnet is fine:\n%s", out)
+	}
+}
+
+func TestDisplayStatus_NotConnectedMissingHTTPS(t *testing.T) {
+	var stdout bytes.Buffer
+	h := &tailscaleHealth{
+		Listen: "127.0.0.1:8790",
+		TS: &tsHealth{
+			Connected: false,
+			HTTPS:     false,
+		},
+	}
+	code := displayStatus(h, &stdout)
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "HTTPS is not enabled") {
+		t.Errorf("should name HTTPS as the likely cause:\n%s", out)
+	}
+	if !strings.Contains(out, "login.tailscale.com/admin/dns") {
+		t.Errorf("should link to admin console:\n%s", out)
 	}
 }
 
