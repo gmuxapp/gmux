@@ -370,6 +370,7 @@ export function buildProjectFolders(
     const ss = buckets.get(`${ownerPeer}::${project.slug}`) ?? []
     const visible = ss.filter(s => s.alive || s.resumable === true)
     visible.sort(compareFolderSessions)
+    placeChildSessions(visible)
     // Owned: derive launchCwd from the project's first path rule.
     // Reference: pull launchCwd from peer_projects so the launch
     // button works even when the folder is empty (no session to
@@ -454,6 +455,30 @@ export function projectAvailability(
  * server hands out distinct indices) but we fall back to `created_at`
  * then `id` so the order is deterministic across snapshot re-emits.
  */
+/**
+ * Re-place sessions that declare a parent (`parent_session_id`, e.g.
+ * an editor session spawned by `gmux edit` as $EDITOR inside another
+ * session) directly after that parent, when the parent is in the same
+ * folder. Runs after compareFolderSessions so index order is the base;
+ * children keep their relative order. Sessions whose parent isn't
+ * present stay where the base sort put them. Deliberately one level —
+ * a full hierarchy/tree UI is out of scope.
+ */
+export function placeChildSessions(sessions: Session[]): void {
+  const ids = new Set(sessions.map(s => s.id))
+  const children = sessions.filter(
+    s => s.parent_session_id && ids.has(s.parent_session_id) && s.parent_session_id !== s.id,
+  )
+  for (const child of children) {
+    const from = sessions.indexOf(child)
+    sessions.splice(from, 1)
+    // After the parent and after any earlier-placed siblings.
+    let at = sessions.findIndex(s => s.id === child.parent_session_id) + 1
+    while (at < sessions.length && sessions[at].parent_session_id === child.parent_session_id) at++
+    sessions.splice(at, 0, child)
+  }
+}
+
 function compareFolderSessions(a: Session, b: Session): number {
   const idx = (a.project_index ?? 0) - (b.project_index ?? 0)
   if (idx !== 0) return idx

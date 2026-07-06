@@ -28,15 +28,19 @@ type Session struct {
 	Adapter       string            `json:"adapter"`
 	WorkspaceRoot string            `json:"workspace_root,omitempty"`
 	Remotes       map[string]string `json:"remotes,omitempty"`
-	Alive         bool              `json:"alive"`
-	Pid           int               `json:"pid,omitempty"`
-	ExitCode      *int              `json:"exit_code,omitempty"`
-	StartedAt     string            `json:"started_at,omitempty"`
-	ExitedAt      string            `json:"exited_at,omitempty"`
-	Title         string            `json:"title,omitempty"`
-	Subtitle      string            `json:"subtitle,omitempty"`
-	Status        *Status           `json:"status"`
-	Unread        bool              `json:"unread"`
+	// ParentSessionID is the session this one was spawned from (e.g.
+	// `gmux edit` invoked as $EDITOR inside an existing session). The
+	// UI uses it to place the child next to its parent in the sidebar.
+	ParentSessionID string  `json:"parent_session_id,omitempty"`
+	Alive           bool    `json:"alive"`
+	Pid             int     `json:"pid,omitempty"`
+	ExitCode        *int    `json:"exit_code,omitempty"`
+	StartedAt       string  `json:"started_at,omitempty"`
+	ExitedAt        string  `json:"exited_at,omitempty"`
+	Title           string  `json:"title,omitempty"`
+	Subtitle        string  `json:"subtitle,omitempty"`
+	Status          *Status `json:"status"`
+	Unread          bool    `json:"unread"`
 
 	// LastActivityAt timestamps the most recent noteworthy state
 	// transition for this session, used by the UI to surface
@@ -125,6 +129,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		Adapter          string            `json:"adapter"`
 		WorkspaceRoot    string            `json:"workspace_root,omitempty"`
 		Remotes          map[string]string `json:"remotes,omitempty"`
+		ParentSessionID  string            `json:"parent_session_id,omitempty"`
 		Alive            bool              `json:"alive"`
 		Pid              int               `json:"pid,omitempty"`
 		ExitCode         *int              `json:"exit_code,omitempty"`
@@ -149,7 +154,8 @@ func (s Session) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire{
 		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,
 		Cwd: s.Cwd, Adapter: s.Adapter, WorkspaceRoot: s.WorkspaceRoot,
-		Remotes: s.Remotes, Alive: s.Alive, Pid: s.Pid,
+		Remotes: s.Remotes, ParentSessionID: s.ParentSessionID,
+		Alive: s.Alive, Pid: s.Pid,
 		ExitCode: s.ExitCode, StartedAt: s.StartedAt, ExitedAt: s.ExitedAt,
 		Title: s.Title, Subtitle: s.Subtitle, Status: s.Status,
 		Unread: s.Unread, Resumable: s.Resumable,

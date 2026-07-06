@@ -73,51 +73,98 @@ func TestHandshakeAckFD_ClosesFDOnSuccess(t *testing.T) {
 	}
 }
 
-// ── openHandshakeFD / handshakeAck: env-lookup + dispatch glue ──
+// ── captureHandshakeFD / handshakeAck: startup capture + dispatch ──
 
-func TestOpenHandshakeFD_NilWhenEnvUnset(t *testing.T) {
+// resetCapture isolates the package-level capture state per test.
+func resetCapture(t *testing.T) {
+	t.Helper()
+	capturedHandshakeFD = -1
+	t.Cleanup(func() { capturedHandshakeFD = -1 })
+}
+
+func TestCaptureHandshakeFD_NoopWhenEnvUnset(t *testing.T) {
+	resetCapture(t)
 	t.Setenv(handshakeFDEnv, "")
-	if f := openHandshakeFD(); f != nil {
-		t.Fatalf("expected nil with empty env, got %+v", f)
+	captureHandshakeFD()
+	if capturedHandshakeFD != -1 {
+		t.Fatalf("expected no capture with empty env, got fd %d", capturedHandshakeFD)
 	}
 }
 
-func TestOpenHandshakeFD_NilForInvalidEnv(t *testing.T) {
+func TestCaptureHandshakeFD_RejectsInvalidEnv(t *testing.T) {
 	for _, v := range []string{"not-a-number", "0", "1", "2", "-1"} {
 		t.Run(v, func(t *testing.T) {
+			resetCapture(t)
 			t.Setenv(handshakeFDEnv, v)
-			if f := openHandshakeFD(); f != nil {
-				t.Fatalf("expected nil for %q, got %+v", v, f)
+			captureHandshakeFD()
+			if capturedHandshakeFD != -1 {
+				t.Fatalf("expected rejection for %q, got fd %d", v, capturedHandshakeFD)
+			}
+			if got := os.Getenv(handshakeFDEnv); got != "" {
+				t.Fatalf("env not cleared for %q: got %q", v, got)
 			}
 		})
 	}
 }
 
-// TestHandshakeAck_UnsetsEnvAfterDispatch is the regression test for
-// the env-leak fix: after handshakeAck runs once, GMUX_HANDSHAKE_FD
-// must be unset so a fork inheriting os.Environ doesn't try to write
-// to the (now-closed) fd.
-func TestHandshakeAck_UnsetsEnvAfterDispatch(t *testing.T) {
+// TestCaptureHandshakeFD_UnsetsEnvImmediately is the regression test
+// for the env-leak crash: the env var must be gone BEFORE any child
+// is spawned (i.e. right after capture), not merely after the ack.
+// A leaked GMUX_HANDSHAKE_FD=3 makes a nested gmux inside the session
+// close its own fd 3 — typically the Go runtime's epoll fd — which is
+// a fatal `netpoll failed`.
+func TestCaptureHandshakeFD_UnsetsEnvImmediately(t *testing.T) {
+	resetCapture(t)
 	_, w := pipePair(t)
 	t.Setenv(handshakeFDEnv, strconv.Itoa(int(w.Fd())))
 
-	handshakeAck("sess-xyz", true)
+	captureHandshakeFD()
 
 	if v := os.Getenv(handshakeFDEnv); v != "" {
-		t.Fatalf("env not cleared after ack: got %q", v)
+		t.Fatalf("env not cleared after capture: got %q", v)
+	}
+	if capturedHandshakeFD != int(w.Fd()) {
+		t.Fatalf("captured fd = %d, want %d", capturedHandshakeFD, int(w.Fd()))
 	}
 }
 
-// TestHandshakeAck_SecondCallIsNoOp follows from
-// UnsetsEnvAfterDispatch: a second call within the same process
-// finds an empty env and writes nothing. Captures the property from
-// the consumer's perspective (one ack per pipe).
+// TestCaptureHandshakeFD_RejectsNonPipeFD guards the rolling-upgrade
+// window: an OLD runner may still leak GMUX_HANDSHAKE_FD=3 into its
+// session, where a NEW nested gmux's fd 3 is something unrelated
+// (epoll fd, an open file, ...). Capture must refuse any fd that
+// isn't a pipe, and must not close or touch it.
+func TestCaptureHandshakeFD_RejectsNonPipeFD(t *testing.T) {
+	resetCapture(t)
+	f, err := os.Open(os.DevNull) // char device, not a FIFO
+	if err != nil {
+		t.Fatalf("open devnull: %v", err)
+	}
+	defer f.Close()
+	t.Setenv(handshakeFDEnv, strconv.Itoa(int(f.Fd())))
+
+	captureHandshakeFD()
+	handshakeAck("sess-xyz", true) // must be a no-op
+
+	if capturedHandshakeFD != -1 {
+		t.Fatalf("non-pipe fd was captured: %d", capturedHandshakeFD)
+	}
+	// The fd must still be usable — proving nothing closed it.
+	if _, err := f.Stat(); err != nil {
+		t.Fatalf("fd was damaged by capture/ack: %v", err)
+	}
+}
+
+// TestHandshakeAck_SecondCallIsNoOp: the captured fd is consumed by
+// the first ack; a second call within the same process writes
+// nothing (one ack per pipe).
 func TestHandshakeAck_SecondCallIsNoOp(t *testing.T) {
+	resetCapture(t)
 	r, w := pipePair(t)
 	t.Setenv(handshakeFDEnv, strconv.Itoa(int(w.Fd())))
+	captureHandshakeFD()
 
 	handshakeAck("first-id", true)
-	handshakeAck("second-id", true) // would re-write if env still set
+	handshakeAck("second-id", true) // would re-write if fd still captured
 
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -128,12 +175,11 @@ func TestHandshakeAck_SecondCallIsNoOp(t *testing.T) {
 	}
 }
 
-// TestHandshakeAck_NoOpWithoutEnv pins down the common-case fast
-// path: handshakeAck returns immediately when the env var is absent,
-// touching no fds. Asserted by the absence of side effects: the test
-// should run cleanly with no goroutines blocked.
-func TestHandshakeAck_NoOpWithoutEnv(t *testing.T) {
-	t.Setenv(handshakeFDEnv, "")
+// TestHandshakeAck_NoOpWithoutCapture pins down the common-case fast
+// path: handshakeAck returns immediately when no handshake parent
+// was captured, touching no fds.
+func TestHandshakeAck_NoOpWithoutCapture(t *testing.T) {
+	resetCapture(t)
 	handshakeAck("abc", true)
 	handshakeAck("abc", false)
 }
@@ -230,6 +276,9 @@ func TestPipeHandshakeRoundTripViaSubprocess(t *testing.T) {
 	const expectedID = "sess-fromchild"
 
 	if os.Getenv(childIDEnv) == "1" {
+		// Mirror production: main() captures at startup, the runner
+		// acks after registration.
+		captureHandshakeFD()
 		handshakeAck(expectedID, true)
 		os.Exit(0)
 	}

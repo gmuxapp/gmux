@@ -1319,6 +1319,18 @@ func serve(stderr io.Writer) int {
 		// already marked it alive: false. Just clean up the subscription.
 		subs.Unsubscribe(req.SessionID)
 		log.Printf("deregister: %s", req.SessionID)
+
+		// Editor sessions are ephemeral: a closed editor has no replay
+		// value (its scrollback is a text editor screen) and would only
+		// clutter the sidebar, so auto-dismiss it on close instead of
+		// keeping a dead session around. A general "ephemeral session"
+		// flag is future work; for now the adapter kind is the marker.
+		if sess, ok := sessions.Get(req.SessionID); ok && sess.Adapter == "editor" {
+			projectMgr.DismissSession(req.SessionID, sess.Slug)
+			sessions.Remove(req.SessionID)
+			forgetMeta(req.SessionID)
+			log.Printf("deregister: auto-dismissed editor session %s", req.SessionID)
+		}
 		writeJSON(w, map[string]any{"ok": true})
 	})
 

@@ -12,23 +12,25 @@ import (
 type mode int
 
 const (
-	modeHelp      mode = iota // print usage and exit
-	modeVersion               // print version and exit
-	modeOpen                  // open the web UI
-	modeRun                   // run a command in a new session (gmux -- <cmd>)
-	modeList                  // gmux ls
-	modeAttach                // gmux attach <id>
-	modeTail                  // gmux tail <id>
-	modeKill                  // gmux kill <id>
-	modeSend                  // gmux send <id> <text> [keys...]
-	modeSendKeys              // gmux send-keys -t <id> ... (tmux-compat)
-	modeWait                  // gmux wait <id>
-	modeDaemon                // gmux daemon <start|stop|restart|status|log-path>
-	modeAuth                  // gmux auth
-	modeRemote                // gmux remote
-	modeDumpEnv               // (internal) gmux __dump-env
-	modeCodexHook             // (internal) gmux __codex-hook <Event>
-	modeClaudeHook            // (internal) gmux __claude-hook
+	modeHelp       mode = iota // print usage and exit
+	modeVersion                // print version and exit
+	modeOpen                   // open the web UI
+	modeRun                    // run a command in a new session (gmux -- <cmd>)
+	modeList                   // gmux ls
+	modeAttach                 // gmux attach <id>
+	modeTail                   // gmux tail <id>
+	modeKill                   // gmux kill <id>
+	modeSend                   // gmux send <id> <text> [keys...]
+	modeSendKeys               // gmux send-keys -t <id> ... (tmux-compat)
+	modeWait                   // gmux wait <id>
+	modeEdit                   // gmux edit [file]
+	modeEditChild              // (internal) gmux __edit-child [file]
+	modeDaemon                 // gmux daemon <start|stop|restart|status|log-path>
+	modeAuth                   // gmux auth
+	modeRemote                 // gmux remote
+	modeDumpEnv                // (internal) gmux __dump-env
+	modeCodexHook              // (internal) gmux __codex-hook <Event>
+	modeClaudeHook             // (internal) gmux __claude-hook
 )
 
 // command is the fully-parsed CLI invocation. One struct for every
@@ -66,6 +68,9 @@ type command struct {
 	// wait
 	timeout int // --timeout seconds (0 = none)
 
+	// edit
+	editFile string // file path to open
+
 	// daemon
 	daemonSub string // start|stop|restart|status|log-path
 
@@ -79,7 +84,7 @@ type command struct {
 // command in the error-only migration shim.
 var reservedVerbs = []string{
 	"open", "ls", "attach", "tail", "kill", "send", "send-keys",
-	"wait", "daemon", "auth", "remote", "version", "help",
+	"wait", "edit", "daemon", "auth", "remote", "version", "help",
 }
 
 // removedFlags maps every pre-2.0 action flag to the verb that replaced
@@ -161,6 +166,8 @@ func parseCLI(args []string) (*command, error) {
 		return parseSendKeys(rest)
 	case "wait":
 		return parseWait(rest)
+	case "edit":
+		return parseEdit(rest)
 	case "daemon":
 		return parseDaemon(rest)
 	case "auth":
@@ -184,6 +191,17 @@ func parseCLI(args []string) (*command, error) {
 		return &command{mode: modeCodexHook, codexHookEvent: rest[0]}, nil
 	case "__claude-hook":
 		return &command{mode: modeClaudeHook}, nil
+	case "__edit-child":
+		// Child process of an editor session: prompt (if needed) and exec
+		// the fallback editor. Reuses the editFile field.
+		if len(rest) > 1 {
+			return nil, errors.New("__edit-child takes at most one file path")
+		}
+		c := &command{mode: modeEditChild}
+		if len(rest) == 1 {
+			c.editFile = rest[0]
+		}
+		return c, nil
 	}
 
 	// Error-only migration shim (ADR 0009): recognize removed forms and
@@ -312,6 +330,27 @@ func parseWait(args []string) (*command, error) {
 	}
 	c.ref = pos[0]
 	return c, nil
+}
+
+// parseEdit handles `gmux edit [file]`: at most one file path. The verb
+// is designed to be usable as $EDITOR (git commit, etc.): it blocks
+// until the editor session exits and propagates its exit code. With no
+// path (the + launcher menu can't parameterize one) the session prompts
+// for a path interactively. Today it opens a fallback terminal editor
+// in a managed session; a future release renders a browser-based editor
+// tab instead, keeping this interface (0-1 paths, blocking, exit code)
+// unchanged.
+func parseEdit(args []string) (*command, error) {
+	if len(args) > 1 {
+		return nil, errors.New("edit takes at most one file path")
+	}
+	if len(args) == 1 {
+		if strings.HasPrefix(args[0], "-") {
+			return nil, fmt.Errorf("edit takes no flags (got %q)", args[0])
+		}
+		return &command{mode: modeEdit, editFile: args[0]}, nil
+	}
+	return &command{mode: modeEdit}, nil
 }
 
 var daemonSubs = map[string]bool{
@@ -445,6 +484,10 @@ Sessions (local by default; address a peer with <id>@<peer>):
   gmux send-keys -t <id> <keys...>  tmux-compatible key sending
   gmux wait <id> [--timeout N]      block until an agent session is idle
   gmux kill <id>                    terminate a session
+
+Editing (usable as $EDITOR; blocks until the editor closes):
+  gmux edit [file]                  open a file in a managed editor session
+                                    (no file: prompts for a path)
 
 UI & pairing:
   gmux open                         open the web UI

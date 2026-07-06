@@ -48,6 +48,19 @@ type runDirectives struct {
 	ResumeID    string
 	InitialCols int
 	InitialRows int
+
+	// ForceForeground disables the nested-gmux auto-detach: even when
+	// running inside an existing gmux session, attach the local terminal
+	// and block until the child exits. Required by callers with blocking
+	// semantics (`gmux edit` as $EDITOR must not return before the user
+	// closes the file), where detaching would silently return exit code 0
+	// to the invoking program (git would commit an unedited message).
+	ForceForeground bool
+
+	// ParentSessionID records the session this one was spawned from
+	// (e.g. `gmux edit` invoked as $EDITOR inside an existing session).
+	// Flows into session meta so the UI can relate the two.
+	ParentSessionID string
 }
 
 // runSession launches a new managed session for the given command.
@@ -76,7 +89,7 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	// of doing PTY passthrough (which would nest PTY-within-PTY). The
 	// detached process registers with gmuxd and the session appears in the
 	// gmux UI. The original process returns immediately to the parent shell.
-	if os.Getenv("GMUX") == "1" && localterm.IsInteractive() {
+	if os.Getenv("GMUX") == "1" && localterm.IsInteractive() && !dir.ForceForeground {
 		spawnDetached(args, "started "+strings.Join(args, " ")+" in background (visible in gmux)", false)
 		return
 	}
@@ -148,15 +161,16 @@ func runSession(args []string, attach bool, dir runDirectives) {
 
 	// Create in-memory session state
 	state := session.New(session.Config{
-		ID:            sessionID,
-		Command:       args,
-		Cwd:           workDir,
-		Adapter:       a.Name(),
-		WorkspaceRoot: wsRoot,
-		Remotes:       remotes,
-		SocketPath:    sockPath,
-		BinaryHash:    binhash.Self(),
-		RunnerVersion: version,
+		ID:              sessionID,
+		Command:         args,
+		Cwd:             workDir,
+		Adapter:         a.Name(),
+		ParentSessionID: dir.ParentSessionID,
+		WorkspaceRoot:   wsRoot,
+		Remotes:         remotes,
+		SocketPath:      sockPath,
+		BinaryHash:      binhash.Self(),
+		RunnerVersion:   version,
 	})
 
 	// Common env vars — set for every child, per ADR-0005
@@ -168,6 +182,7 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		"GMUX_RUNNER_VERSION=" + version,
 	}
 	env = append(env, adapterEnv...)
+	env = append(env, sessionEditorEnv(os.LookupEnv, os.Executable)...)
 
 	interactive := localterm.IsInteractive()
 
@@ -368,6 +383,37 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		fmt.Printf("exited:   %d\n", exitCode)
 	}
 	os.Exit(exitCode)
+}
+
+// sessionEditorEnv returns EDITOR/VISUAL entries pointing at `gmux
+// edit` for whichever of the two the invoking environment does NOT
+// already define. Inside a gmux session, programs that shell out to an
+// editor (git commit, crontab -e, ...) then open the file as a managed
+// editor session with zero user configuration.
+//
+// Default-if-unset, never override: duplicate env keys resolve
+// inconsistently across consumers (glibc getenv takes the first entry,
+// bash exports the last), so appending an override would be
+// unreliable — and a user who exported EDITOR=vim chose vim. Shell rc
+// files that export EDITOR, and git's core.editor, still outrank this
+// default, as they should.
+//
+// The value uses the runner's own absolute binary path (selfExe), not
+// a bare "gmux": dev builds and per-session runners aren't necessarily
+// on the child's PATH. Falls back to "gmux" if the path is unknown.
+func sessionEditorEnv(lookupEnv func(string) (string, bool), selfExe func() (string, error)) []string {
+	bin := "gmux"
+	if p, err := selfExe(); err == nil {
+		bin = p
+	}
+	editCmd := bin + " edit"
+	var out []string
+	for _, name := range []string{"EDITOR", "VISUAL"} {
+		if _, set := lookupEnv(name); !set {
+			out = append(out, name+"="+editCmd)
+		}
+	}
+	return out
 }
 
 // resolveAdapter builds the adapter registry (registered adapters first,

@@ -17,6 +17,11 @@ func main() {
 	log.SetPrefix("gmux: ")
 	log.SetFlags(0)
 
+	// Consume GMUX_HANDSHAKE_FD before anything can fork: a lazily-read
+	// env var leaks into the session's environment and makes any nested
+	// gmux close an arbitrary fd of its own (see handshake.go).
+	captureHandshakeFD()
+
 	cmd, err := parseCLI(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
@@ -52,6 +57,10 @@ func main() {
 		os.Exit(cmdSendKeys(cmd.ref, cmd.keys, cmd.keysLiteral))
 	case modeWait:
 		os.Exit(cmdWait(cmd.ref, cmd.timeout))
+	case modeEdit:
+		runEdit(cmd.editFile)
+	case modeEditChild:
+		os.Exit(editChild(cmd.editFile))
 	case modeDaemon:
 		os.Exit(execGmuxd(cmd.daemonSub))
 	case modeAuth:

@@ -1128,6 +1128,7 @@ func fullyPopulatedSession() Session {
 		Adapter:          "pi",
 		WorkspaceRoot:    "/tmp/work",
 		Remotes:          map[string]string{"origin": "github.com/x/y"},
+		ParentSessionID:  "sess-parent",
 		Alive:            true,
 		Pid:              42,
 		ExitCode:         &exit,

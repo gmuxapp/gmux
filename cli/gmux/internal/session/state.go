@@ -25,6 +25,11 @@ type State struct {
 	WorkspaceRoot string            `json:"workspace_root,omitempty"`
 	Remotes       map[string]string `json:"remotes,omitempty"`
 
+	// ParentSessionID is the session this one was spawned from (e.g.
+	// `gmux edit` invoked as $EDITOR inside an existing session).
+	// Empty for top-level sessions. Immutable after creation.
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+
 	// Process state (owned by runner)
 	Alive     bool   `json:"alive"`
 	Pid       int    `json:"pid"`
@@ -76,31 +81,33 @@ type Event struct {
 
 // Config for creating a new session state.
 type Config struct {
-	ID            string
-	Command       []string
-	Cwd           string
-	Adapter       string
-	SocketPath    string
-	BinaryHash    string
-	RunnerVersion string
-	WorkspaceRoot string
-	Remotes       map[string]string
+	ID              string
+	Command         []string
+	Cwd             string
+	Adapter         string
+	SocketPath      string
+	BinaryHash      string
+	RunnerVersion   string
+	WorkspaceRoot   string
+	Remotes         map[string]string
+	ParentSessionID string
 }
 
 // New creates a new session state.
 func New(cfg Config) *State {
 	return &State{
-		ID:            cfg.ID,
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-		Command:       cfg.Command,
-		Cwd:           cfg.Cwd,
-		Adapter:       cfg.Adapter,
-		WorkspaceRoot: cfg.WorkspaceRoot,
-		Remotes:       cfg.Remotes,
-		SocketPath:    cfg.SocketPath,
-		BinaryHash:    cfg.BinaryHash,
-		RunnerVersion: cfg.RunnerVersion,
-		Alive:         false,
+		ID:              cfg.ID,
+		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+		Command:         cfg.Command,
+		Cwd:             cfg.Cwd,
+		Adapter:         cfg.Adapter,
+		WorkspaceRoot:   cfg.WorkspaceRoot,
+		Remotes:         cfg.Remotes,
+		ParentSessionID: cfg.ParentSessionID,
+		SocketPath:      cfg.SocketPath,
+		BinaryHash:      cfg.BinaryHash,
+		RunnerVersion:   cfg.RunnerVersion,
+		Alive:           false,
 	}
 }
 

@@ -51,6 +51,26 @@ func TestParseCLI(t *testing.T) {
 				}
 			}},
 
+		{name: "edit", args: []string{"edit", "notes.txt"}, wantMode: modeEdit,
+			check: func(t *testing.T, c *command) {
+				if c.editFile != "notes.txt" {
+					t.Errorf("editFile = %q", c.editFile)
+				}
+			}},
+		{name: "edit without path prompts later", args: []string{"edit"}, wantMode: modeEdit,
+			check: func(t *testing.T, c *command) {
+				if c.editFile != "" {
+					t.Errorf("editFile = %q, want empty", c.editFile)
+				}
+			}},
+		{name: "edit child internal", args: []string{"__edit-child", "/tmp/x"}, wantMode: modeEditChild,
+			check: func(t *testing.T, c *command) {
+				if c.editFile != "/tmp/x" {
+					t.Errorf("editFile = %q", c.editFile)
+				}
+			}},
+		{name: "edit child without path", args: []string{"__edit-child"}, wantMode: modeEditChild},
+
 		{name: "ls", args: []string{"ls"}, wantMode: modeList},
 		{name: "ls --all --json", args: []string{"ls", "--all", "--json"}, wantMode: modeList,
 			check: func(t *testing.T, c *command) {
@@ -185,10 +205,13 @@ func TestParseCLIErrors(t *testing.T) {
 		{"tail"},                   // missing id
 		{"tail", "-n", "0", "abc"}, // non-positive count
 		{"wait"},                   // missing id
-		{"send-keys", "C-c"},     // missing -t
-		{"daemon"},               // missing subcommand
-		{"daemon", "frobnicate"}, // unknown subcommand
-		{"ls", "stray"},          // ls takes no positional
+		{"send-keys", "C-c"},       // missing -t
+		{"daemon"},                 // missing subcommand
+		{"daemon", "frobnicate"},   // unknown subcommand
+		{"ls", "stray"},            // ls takes no positional
+		{"edit", "a", "b"},         // too many files
+		{"edit", "--wait"},         // no flags on edit (yet)
+		{"__edit-child", "a", "b"}, // too many files
 	}
 	for _, args := range bad {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
