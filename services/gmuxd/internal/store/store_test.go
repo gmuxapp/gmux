@@ -1008,6 +1008,7 @@ func TestSessionMarshalJSON_WireFormat(t *testing.T) {
 		ShellTitle:    "internal-only",
 		AdapterTitle:  "internal-only",
 		Slug:          "my-slug",
+		SessionFile:   "/home/u/.pi/agent/sessions/x/conv.jsonl",
 	}
 	b, err := json.Marshal(s)
 	if err != nil {
@@ -1027,6 +1028,22 @@ func TestSessionMarshalJSON_WireFormat(t *testing.T) {
 	}
 	if got := m["slug"]; got != "my-slug" {
 		t.Errorf("slug = %v, want my-slug", got)
+	}
+	// v2 renamed the wire keys: "kind" → "adapter", "session_file" →
+	// "conversation_file". Pin both the new names and the absence of the
+	// old ones — the frontend, peering, and meta.json all consume this
+	// exact shape.
+	if got := m["adapter"]; got != "pi" {
+		t.Errorf("adapter = %v, want pi", got)
+	}
+	if got := m["conversation_file"]; got != "/home/u/.pi/agent/sessions/x/conv.jsonl" {
+		t.Errorf("conversation_file = %v, want the session's conversation file", got)
+	}
+	if _, ok := m["kind"]; ok {
+		t.Error("legacy key \"kind\" must not appear in wire JSON")
+	}
+	if _, ok := m["session_file"]; ok {
+		t.Error("legacy key \"session_file\" must not appear in wire JSON")
 	}
 
 	// Internal fields must not appear on the wire.

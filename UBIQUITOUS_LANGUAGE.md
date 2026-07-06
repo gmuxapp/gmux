@@ -9,7 +9,7 @@
 | **Slug**            | A session's mutable, human-readable display name; persistent across runner restarts and resume, but renamable. Not identity (the immutable Conversation ID is) | Name                      |
 | **Session ID**      | A specific runner instance's identifier; ephemeral for shell, stable (= conversation ID) for pi/claude    | Identifier (alone is too generic) |
 | **Key**             | The single string projects.json uses per session: slug if attributed, session ID otherwise                |                           |
-| **Conversation ID** | The agent's own identifier for a Conversation, parsed from inside the conversation file by the adapter (`ConversationInfo.ID`). Used with the adapter name as the conversations-index key `(adapter, conversationID)` | Tool ID (the old name)    |
+| **Conversation ID** | The agent's own identifier for a Conversation, parsed from inside the conversation file by the adapter (`SessionFileInfo.ID`; the Go type's rename to `ConversationInfo` trails with the internal cleanup). Used with the adapter name as the conversations-index key `(adapter, conversationID)` | Tool ID (the old name)    |
 
 ## Session lifecycle
 
