@@ -219,13 +219,12 @@ func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error)
 		info.Title = "" // no custom title and no message yet
 	}
 
-	// Slug from the first user message (immutable), not custom-title
-	// (which the user can change). Falls back to display title.
-	if firstUserText != "" {
-		info.Slug = adapter.Slugify(truncateTitle(firstUserText, 80))
-	} else {
-		info.Slug = adapter.Slugify(info.Title)
-	}
+	// Slug from the resolved title, custom-title included. Slug is the
+	// session's mutable display name (UBIQUITOUS_LANGUAGE.md), not identity
+	// — the immutable Tool ID is — so a /rename moves the slug with it,
+	// matching pi and the hook path (claudeTitleSlug already slugs
+	// session_title when the payload carries it).
+	info.Slug = adapter.Slugify(info.Title)
 
 	return info, nil
 }
