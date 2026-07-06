@@ -109,8 +109,9 @@ var FallbackEditors = []string{"nano", "vim", "vi"}
 // flags ("vim -u NONE"); otherwise the first of FallbackEditors on
 // PATH. getenv and lookPath are injected for tests.
 func ResolveFallbackEditor(getenv func(string) string, lookPath func(string) (string, error)) ([]string, error) {
-	if custom := getenv("GMUX_EDIT_FALLBACK"); custom != "" {
-		parts := strings.Fields(custom)
+	// strings.Fields first: a whitespace-only value yields no parts and
+	// is treated like unset instead of panicking on parts[0].
+	if parts := strings.Fields(getenv("GMUX_EDIT_FALLBACK")); len(parts) > 0 {
 		if _, err := lookPath(parts[0]); err != nil {
 			return nil, errors.New("GMUX_EDIT_FALLBACK editor not found: " + parts[0])
 		}

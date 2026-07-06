@@ -116,6 +116,21 @@ func TestResolveFallbackEditor(t *testing.T) {
 		}
 	})
 
+	// Regression (greptile P1): a whitespace-only value must behave
+	// like unset — fall through to the chain — not panic on parts[0].
+	t.Run("GMUX_EDIT_FALLBACK whitespace-only treated as unset", func(t *testing.T) {
+		env := func(k string) string {
+			if k == "GMUX_EDIT_FALLBACK" {
+				return "   \t "
+			}
+			return ""
+		}
+		got, err := ResolveFallbackEditor(env, lookPathAllowing("nano"))
+		if err != nil || strings.Join(got, " ") != "nano" {
+			t.Errorf("got %v, %v; want [nano]", got, err)
+		}
+	})
+
 	t.Run("GMUX_EDIT_FALLBACK missing from PATH errors", func(t *testing.T) {
 		env := func(k string) string {
 			if k == "GMUX_EDIT_FALLBACK" {
