@@ -182,6 +182,7 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		"GMUX_RUNNER_VERSION=" + version,
 	}
 	env = append(env, adapterEnv...)
+	env = append(env, sessionEditorEnv(os.LookupEnv, os.Executable)...)
 
 	interactive := localterm.IsInteractive()
 
@@ -382,6 +383,37 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		fmt.Printf("exited:   %d\n", exitCode)
 	}
 	os.Exit(exitCode)
+}
+
+// sessionEditorEnv returns EDITOR/VISUAL entries pointing at `gmux
+// edit` for whichever of the two the invoking environment does NOT
+// already define. Inside a gmux session, programs that shell out to an
+// editor (git commit, crontab -e, ...) then open the file as a managed
+// editor session with zero user configuration.
+//
+// Default-if-unset, never override: duplicate env keys resolve
+// inconsistently across consumers (glibc getenv takes the first entry,
+// bash exports the last), so appending an override would be
+// unreliable — and a user who exported EDITOR=vim chose vim. Shell rc
+// files that export EDITOR, and git's core.editor, still outrank this
+// default, as they should.
+//
+// The value uses the runner's own absolute binary path (selfExe), not
+// a bare "gmux": dev builds and per-session runners aren't necessarily
+// on the child's PATH. Falls back to "gmux" if the path is unknown.
+func sessionEditorEnv(lookupEnv func(string) (string, bool), selfExe func() (string, error)) []string {
+	bin := "gmux"
+	if p, err := selfExe(); err == nil {
+		bin = p
+	}
+	editCmd := bin + " edit"
+	var out []string
+	for _, name := range []string{"EDITOR", "VISUAL"} {
+		if _, set := lookupEnv(name); !set {
+			out = append(out, name+"="+editCmd)
+		}
+	}
+	return out
 }
 
 // resolveAdapter builds the adapter registry (registered adapters first,
