@@ -631,7 +631,8 @@ func serve(stderr io.Writer) int {
 		}
 		return false
 	}
-	// Start socket-based discovery (scans paths.SessionSocketDir() for *.sock)
+	// Start socket-based discovery (scans paths.SessionSocketDir() — plus
+	// paths.LegacySessionSocketDirs() for pre-upgrade runners — for *.sock).
 	// Discovery also subscribes to each runner's /events SSE for live updates.
 	stopDiscovery := make(chan struct{})
 	// onFirstScan fires after the initial socket scan has registered live

@@ -132,16 +132,16 @@ func TestIsValidSessionID(t *testing.T) {
 
 	invalid := []string{
 		"",
-		"abcd1234",          // missing prefix
-		"sess-",             // empty suffix
-		"sess-../escape",    // path traversal
-		"sess-..",           // parent dir
-		"../sess-abcd",      // leading traversal
-		"sess-a/b",          // separator
-		`sess-a\b`,          // backslash separator
-		"sess-a::b",         // folder-key separator
-		"sess-a b",          // space
-		"sess-a\n",          // newline
+		"abcd1234",       // missing prefix
+		"sess-",          // empty suffix
+		"sess-../escape", // path traversal
+		"sess-..",        // parent dir
+		"../sess-abcd",   // leading traversal
+		"sess-a/b",       // separator
+		`sess-a\b`,       // backslash separator
+		"sess-a::b",      // folder-key separator
+		"sess-a b",       // space
+		"sess-a\n",       // newline
 	}
 	for _, id := range invalid {
 		if IsValidSessionID(id) {

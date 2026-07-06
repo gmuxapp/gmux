@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
@@ -343,5 +345,76 @@ func TestQueryMetaNewKeysWinOverLegacy(t *testing.T) {
 	}
 	if sess.ConversationFile != "/new/conv.jsonl" {
 		t.Errorf("ConversationFile = %q, want /new/conv.jsonl (new key must win)", sess.ConversationFile)
+	}
+}
+
+// serveAliveRunner binds a fake runner at sockPath whose /meta reports
+// the given session id as alive. /events is left unregistered (404) so
+// the subscription goroutine exits quickly; these tests assert on the
+// Scan→Register→Upsert seam, not SSE behavior.
+func serveAliveRunner(t *testing.T, sockPath, id string) {
+	t.Helper()
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen %s: %v", sockPath, err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/meta", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(store.Session{ID: id, Adapter: "shell", Alive: true, Pid: 1})
+	})
+	srv := &http.Server{Handler: mux}
+	done := make(chan struct{})
+	go func() { _ = srv.Serve(ln); close(done) }()
+	t.Cleanup(func() { _ = srv.Close(); <-done })
+}
+
+// TestScanDiscoversRunnersInPrimaryAndLegacyDirs pins the upgrade
+// contract of the XDG_RUNTIME_DIR → state-dir socket move: runners
+// outlive gmuxd upgrades, so a runner that bound its socket in the old
+// default ($XDG_RUNTIME_DIR/gmux/sessions) must stay discoverable —
+// and attachable via its stored absolute SocketPath — alongside
+// runners in the new default (StateDir()/run/sessions). Without the
+// legacy scan, every pre-upgrade session would go dark on daemon
+// upgrade exactly the way the logind-teardown incident stranded them.
+func TestScanDiscoversRunnersInPrimaryAndLegacyDirs(t *testing.T) {
+	// Route every SessionSocketDir/LegacySessionSocketDirs branch into
+	// isolated temp dirs: no GMUX_SOCKET_DIR override (that disables
+	// the legacy scan by design), fresh XDG dirs, and a fresh TMPDIR so
+	// the per-uid temp fallback can't pick up real sockets on the host.
+	t.Setenv("GMUX_SOCKET_DIR", "")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("TMPDIR", t.TempDir())
+
+	primary := paths.SessionSocketDir()
+	legacy := paths.LegacySessionSocketDirs()[0]
+	for _, dir := range []string{primary, legacy} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	newSock := filepath.Join(primary, "sess-new.sock")
+	oldSock := filepath.Join(legacy, "sess-old.sock")
+	serveAliveRunner(t, newSock, "sess-new")
+	serveAliveRunner(t, oldSock, "sess-old")
+
+	sessions := store.New()
+	subs := NewSubscriptions(sessions)
+	t.Cleanup(func() { subs.UnsubscribeAll() })
+
+	Scan(sessions, subs, nil)
+
+	for id, wantSock := range map[string]string{"sess-new": newSock, "sess-old": oldSock} {
+		got, ok := sessions.Get(id)
+		if !ok {
+			t.Fatalf("session %s missing from store after Scan", id)
+		}
+		if !got.Alive {
+			t.Errorf("%s: Alive = false, want true", id)
+		}
+		if got.SocketPath != wantSock {
+			t.Errorf("%s: SocketPath = %q, want %q (must keep the dir it bound in)", id, got.SocketPath, wantSock)
+		}
 	}
 }

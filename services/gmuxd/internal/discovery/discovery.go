@@ -82,7 +82,7 @@ func Scan(sessions *store.Store, subs *Subscriptions, onDead OnDeadFunc) {
 	// paths.LegacySessionSocketDirs). Entries carry their absolute path
 	// so the rest of the scan is location-agnostic.
 	type sockEntry struct {
-		path string
+		path  string
 		entry os.DirEntry
 	}
 	var socks []sockEntry
