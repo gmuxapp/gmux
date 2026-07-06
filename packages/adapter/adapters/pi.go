@@ -19,7 +19,7 @@ var (
 	_ adapter.ConversationSource  = (*Pi)(nil)
 	_ adapter.ConversationProber  = (*Pi)(nil)
 	_ adapter.Launchable          = (*Pi)(nil)
-	_ adapter.SessionFiler        = (*Pi)(nil)
+	_ adapter.ConversationFiler   = (*Pi)(nil)
 	_ adapter.Resumer             = (*Pi)(nil)
 	_ adapter.SessionExtender     = (*Pi)(nil)
 	_ adapter.PassthroughDetector = (*Pi)(nil)
@@ -150,13 +150,13 @@ func (p *Pi) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
 
-// --- SessionFiler ---
+// --- ConversationFiler ---
 
-// SessionRootDir returns pi's top-level sessions directory.
+// ConversationRootDir returns pi's top-level sessions directory.
 // Respects PI_CODING_AGENT_DIR (pi's own env var for overriding the
 // agent data directory, default ~/.pi/agent). This lets dev instances
 // use an isolated session store.
-func (p *Pi) SessionRootDir() string {
+func (p *Pi) ConversationRootDir() string {
 	if dir := os.Getenv("PI_CODING_AGENT_DIR"); dir != "" {
 		return filepath.Join(dir, "sessions")
 	}
@@ -167,19 +167,19 @@ func (p *Pi) SessionRootDir() string {
 	return filepath.Join(home, ".pi", "agent", "sessions")
 }
 
-// ConversationGone anchors deletion detection on SessionRootDir
+// ConversationGone anchors deletion detection on ConversationRootDir
 // (PI_CODING_AGENT_DIR/sessions or ~/.pi/agent/sessions): present root
-// means a missing session file was deleted; absent root means the
+// means a missing conversation file was deleted; absent root means the
 // storage is unavailable.
 func (p *Pi) ConversationGone(path string) (gone bool, ok bool) {
-	return adapter.ConversationGoneAtRoot(path, p.SessionRootDir())
+	return adapter.ConversationGoneAtRoot(path, p.ConversationRootDir())
 }
 
-// SessionDir returns pi's session directory for a given cwd.
+// ConversationDir returns pi's session directory for a given cwd.
 // Pi encodes: strip leading /, replace remaining / with -, wrap in --.
 // /home/mg/dev/gmux → --home-mg-dev-gmux--
-func (p *Pi) SessionDir(cwd string) string {
-	root := p.SessionRootDir()
+func (p *Pi) ConversationDir(cwd string) string {
+	root := p.ConversationRootDir()
 	if root == "" {
 		return ""
 	}
@@ -189,10 +189,10 @@ func (p *Pi) SessionDir(cwd string) string {
 	return filepath.Join(root, encoded)
 }
 
-// ParseSessionFile reads a pi JSONL session file and returns display metadata.
+// ParseConversationFile reads a pi JSONL conversation file and returns display metadata.
 // Title priority: session_info.name > first user message > "" (no
-// conversation-derived title yet; callers fall back to cwd/kind).
-func (p *Pi) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
+// conversation-derived title yet; callers fall back to cwd/adapter).
+func (p *Pi) ParseConversationFile(path string) (*adapter.ConversationInfo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -218,7 +218,7 @@ func (p *Pi) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 
 	created, _ := time.Parse(time.RFC3339Nano, header.Timestamp)
 
-	info := &adapter.SessionFileInfo{
+	info := &adapter.ConversationInfo{
 		ID:       header.ID,
 		Cwd:      header.Cwd,
 		Created:  created,
@@ -269,13 +269,13 @@ func (p *Pi) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
 	return info, nil
 }
 
-func (p *Pi) ResumeCommand(info *adapter.SessionFileInfo) []string {
+func (p *Pi) ResumeCommand(info *adapter.ConversationInfo) []string {
 	return []string{"pi", "--session", info.FilePath, "-c"}
 }
 
-// CanResume checks if a session file is valid and has content worth resuming.
+// CanResume checks if a conversation file is valid and has content worth resuming.
 func (p *Pi) CanResume(path string) bool {
-	info, err := p.ParseSessionFile(path)
+	info, err := p.ParseConversationFile(path)
 	if err != nil {
 		return false
 	}
@@ -342,11 +342,11 @@ func (e *parseError) Error() string { return e.msg }
 // --- ConversationSource ---
 
 func (p *Pi) SnapshotConversations(sink adapter.ConversationSink) {
-	filewatch.Snapshot(p.SessionRootDir(), ".jsonl", sink.Upsert)
+	filewatch.Snapshot(p.ConversationRootDir(), ".jsonl", sink.Upsert)
 }
 
 func (p *Pi) WatchConversations(ctx context.Context, sink adapter.ConversationSink) error {
-	return filewatch.Watch(ctx, p.SessionRootDir(), ".jsonl", func(e filewatch.Event) {
+	return filewatch.Watch(ctx, p.ConversationRootDir(), ".jsonl", func(e filewatch.Event) {
 		if e.Removed {
 			sink.Remove(e.Path)
 		} else {

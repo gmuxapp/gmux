@@ -12,7 +12,7 @@ func TestNewState(t *testing.T) {
 		ID:         "sess-test",
 		Command:    []string{"echo", "hello"},
 		Cwd:        "/tmp",
-		Kind:       "generic",
+		Adapter:    "generic",
 		SocketPath: "/tmp/gmux-sessions/sess-test.sock",
 	})
 
@@ -28,14 +28,14 @@ func TestNewState(t *testing.T) {
 }
 
 func TestTitleFallsBackToCommandBasename(t *testing.T) {
-	s := New(Config{ID: "s", Command: []string{"/usr/bin/pi"}, Kind: "pi"})
+	s := New(Config{ID: "s", Command: []string{"/usr/bin/pi"}, Adapter: "pi"})
 	if s.Title() != "pi" {
 		t.Fatalf("expected 'pi', got %q", s.Title())
 	}
 }
 
 func TestShellTitleBeforeAdapterTitle(t *testing.T) {
-	s := New(Config{ID: "s", Command: []string{"pi"}, Kind: "pi"})
+	s := New(Config{ID: "s", Command: []string{"pi"}, Adapter: "pi"})
 
 	s.SetShellTitle("~/dev/project")
 	if s.Title() != "~/dev/project" {
@@ -54,7 +54,7 @@ func TestShellTitleBeforeAdapterTitle(t *testing.T) {
 }
 
 func TestClearAdapterTitleRevealsShellTitle(t *testing.T) {
-	s := New(Config{ID: "s", Command: []string{"pi"}, Kind: "pi"})
+	s := New(Config{ID: "s", Command: []string{"pi"}, Adapter: "pi"})
 
 	s.SetShellTitle("~/dev/project")
 	s.SetAdapterTitle("named task")
@@ -69,7 +69,7 @@ func TestClearAdapterTitleRevealsShellTitle(t *testing.T) {
 }
 
 func TestSetRunning(t *testing.T) {
-	s := New(Config{ID: "s", Command: []string{"echo"}, Kind: "generic"})
+	s := New(Config{ID: "s", Command: []string{"echo"}, Adapter: "generic"})
 	s.SetRunning(12345)
 
 	if !s.Alive {
@@ -81,7 +81,7 @@ func TestSetRunning(t *testing.T) {
 }
 
 func TestSetExited(t *testing.T) {
-	s := New(Config{ID: "s", Command: []string{"echo"}, Kind: "generic"})
+	s := New(Config{ID: "s", Command: []string{"echo"}, Adapter: "generic"})
 	s.SetRunning(12345)
 	s.SetExited(42)
 
@@ -94,7 +94,7 @@ func TestSetExited(t *testing.T) {
 }
 
 func TestSetStatus(t *testing.T) {
-	s := New(Config{ID: "s", Command: []string{"echo"}, Kind: "generic"})
+	s := New(Config{ID: "s", Command: []string{"echo"}, Adapter: "generic"})
 	s.SetStatus(&adapter.Status{Working: true, Error: true})
 
 	if s.Status == nil || !s.Status.Working || !s.Status.Error {
@@ -107,7 +107,7 @@ func TestJSONIncludesComputedTitle(t *testing.T) {
 		ID:      "sess-json",
 		Command: []string{"pi"},
 		Cwd:     "/home/user",
-		Kind:    "pi",
+		Adapter: "pi",
 	})
 	s.SetShellTitle("~/dev/gmux")
 
@@ -130,7 +130,7 @@ func TestJSONIncludesComputedTitle(t *testing.T) {
 }
 
 func TestSubscribeEvents(t *testing.T) {
-	s := New(Config{ID: "s", Command: []string{"echo"}, Kind: "generic"})
+	s := New(Config{ID: "s", Command: []string{"echo"}, Adapter: "generic"})
 	ch := s.Subscribe()
 	defer s.Unsubscribe(ch)
 
@@ -143,7 +143,7 @@ func TestSubscribeEvents(t *testing.T) {
 }
 
 func TestUnsubscribe(t *testing.T) {
-	s := New(Config{ID: "s", Command: []string{"echo"}, Kind: "generic"})
+	s := New(Config{ID: "s", Command: []string{"echo"}, Adapter: "generic"})
 	ch := s.Subscribe()
 	s.Unsubscribe(ch)
 
@@ -154,7 +154,7 @@ func TestUnsubscribe(t *testing.T) {
 }
 
 func TestEmitActivityThrottles(t *testing.T) {
-	s := New(Config{ID: "s", Command: []string{"echo"}, Kind: "generic"})
+	s := New(Config{ID: "s", Command: []string{"echo"}, Adapter: "generic"})
 	ch := s.Subscribe()
 	defer s.Unsubscribe(ch)
 

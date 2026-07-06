@@ -98,8 +98,8 @@ func cmdWait(ref string, timeoutSecs int) int {
 		fmt.Fprintf(os.Stderr, "gmux: wait timed out after %ds\n", timeoutSecs)
 		return waitExitTimeout
 	case http.StatusUnprocessableEntity:
-		// Adapter kind doesn't emit an idle signal. Surface the
-		// daemon's message so the user knows which kind they hit.
+		// Adapter doesn't emit an idle signal. Surface the
+		// daemon's message so the user knows which adapter they hit.
 		body, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "gmux: wait not supported for this session: %s\n",
 			extractMessage(body))

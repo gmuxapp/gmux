@@ -196,15 +196,15 @@ func TestPiImplementsCapabilities(t *testing.T) {
 	if _, ok := a.(adapter.Launchable); !ok {
 		t.Fatal("should implement Launchable")
 	}
-	if _, ok := a.(adapter.SessionFiler); !ok {
-		t.Fatal("should implement SessionFiler")
+	if _, ok := a.(adapter.ConversationFiler); !ok {
+		t.Fatal("should implement ConversationFiler")
 	}
 	if _, ok := a.(adapter.Resumer); !ok {
 		t.Fatal("should implement Resumer")
 	}
 }
 
-// --- SessionFiler ---
+// --- ConversationFiler ---
 
 func writeTempJSONL(t *testing.T, lines ...string) string {
 	t.Helper()
@@ -218,14 +218,14 @@ func writeTempJSONL(t *testing.T, lines ...string) string {
 	return path
 }
 
-func TestParseSessionFileFirstUserMessage(t *testing.T) {
+func TestParseConversationFileFirstUserMessage(t *testing.T) {
 	path := writeTempJSONL(t,
 		`{"type":"session","version":3,"id":"abc-123","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`,
 		`{"type":"model_change","id":"m1","timestamp":"2026-03-15T10:00:00Z"}`,
 		`{"type":"message","id":"u1","timestamp":"2026-03-15T10:01:00Z","message":{"role":"user","content":[{"type":"text","text":"Fix the auth bug in login.go"}]}}`,
 		`{"type":"message","id":"a1","timestamp":"2026-03-15T10:01:05Z","message":{"role":"assistant","content":[{"type":"text","text":"I'll fix that for you."}]}}`,
 	)
-	info, err := NewPi().ParseSessionFile(path)
+	info, err := NewPi().ParseConversationFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,13 +243,13 @@ func TestParseSessionFileFirstUserMessage(t *testing.T) {
 	}
 }
 
-func TestParseSessionFileNameOverrides(t *testing.T) {
+func TestParseConversationFileNameOverrides(t *testing.T) {
 	path := writeTempJSONL(t,
 		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`,
 		`{"type":"message","id":"u1","timestamp":"2026-03-15T10:01:00Z","message":{"role":"user","content":[{"type":"text","text":"Fix the auth bug"}]}}`,
 		`{"type":"session_info","name":"  Auth refactor  "}`,
 	)
-	info, _ := NewPi().ParseSessionFile(path)
+	info, _ := NewPi().ParseConversationFile(path)
 	if info.Title != "Auth refactor" {
 		t.Errorf("expected session_info name, got %q", info.Title)
 	}
@@ -259,34 +259,34 @@ func TestParseSessionFileNameOverrides(t *testing.T) {
 	}
 }
 
-func TestParseSessionFileNoMessages(t *testing.T) {
+func TestParseConversationFileNoMessages(t *testing.T) {
 	path := writeTempJSONL(t,
 		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`,
 	)
-	info, _ := NewPi().ParseSessionFile(path)
+	info, _ := NewPi().ParseConversationFile(path)
 	if info.Title != "" {
 		t.Errorf("expected empty title for a session with no messages, got %q", info.Title)
 	}
 }
 
-func TestParseSessionFileLongTitleTruncated(t *testing.T) {
+func TestParseConversationFileLongTitleTruncated(t *testing.T) {
 	long := "Please help me with this very long request that goes on and on about many different things and really should be truncated for the sidebar"
 	path := writeTempJSONL(t,
 		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`,
 		`{"type":"message","id":"u1","timestamp":"2026-03-15T10:01:00Z","message":{"role":"user","content":[{"type":"text","text":"`+long+`"}]}}`,
 	)
-	info, _ := NewPi().ParseSessionFile(path)
+	info, _ := NewPi().ParseConversationFile(path)
 	if len(info.Title) > 85 {
 		t.Errorf("title too long: %q", info.Title)
 	}
 }
 
-func TestParseSessionFileStringContent(t *testing.T) {
+func TestParseConversationFileStringContent(t *testing.T) {
 	path := writeTempJSONL(t,
 		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`,
 		`{"type":"message","id":"u1","timestamp":"2026-03-15T10:01:00Z","message":{"role":"user","content":"Help me debug this"}}`,
 	)
-	info, _ := NewPi().ParseSessionFile(path)
+	info, _ := NewPi().ParseConversationFile(path)
 	if info.Title != "Help me debug this" {
 		t.Errorf("expected string content as title, got %q", info.Title)
 	}
@@ -295,7 +295,7 @@ func TestParseSessionFileStringContent(t *testing.T) {
 // --- Resumer ---
 
 func TestResumeCommand(t *testing.T) {
-	cmd := NewPi().ResumeCommand(&adapter.SessionFileInfo{
+	cmd := NewPi().ResumeCommand(&adapter.ConversationInfo{
 		FilePath: "/tmp/test.jsonl",
 	})
 	if len(cmd) != 4 || cmd[0] != "pi" || cmd[1] != "--session" || cmd[3] != "-c" {
@@ -322,26 +322,26 @@ func TestCanResume(t *testing.T) {
 
 // --- Helpers ---
 
-func TestSessionDirEncoding(t *testing.T) {
-	dir := NewPi().SessionDir("/home/mg/dev/gmux")
+func TestConversationDirEncoding(t *testing.T) {
+	dir := NewPi().ConversationDir("/home/mg/dev/gmux")
 	if base := filepath.Base(dir); base != "--home-mg-dev-gmux--" {
 		t.Errorf("expected --home-mg-dev-gmux--, got %s", base)
 	}
 }
 
-func TestSessionRootDirRespectsEnvVar(t *testing.T) {
+func TestConversationRootDirRespectsEnvVar(t *testing.T) {
 	custom := t.TempDir()
 	t.Setenv("PI_CODING_AGENT_DIR", custom)
-	root := NewPi().SessionRootDir()
+	root := NewPi().ConversationRootDir()
 	want := filepath.Join(custom, "sessions")
 	if root != want {
 		t.Errorf("expected %s, got %s", want, root)
 	}
 }
 
-func TestSessionRootDirDefaultWithoutEnvVar(t *testing.T) {
+func TestConversationRootDirDefaultWithoutEnvVar(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", "")
-	root := NewPi().SessionRootDir()
+	root := NewPi().ConversationRootDir()
 	home, _ := os.UserHomeDir()
 	want := filepath.Join(home, ".pi", "agent", "sessions")
 	if root != want {
@@ -387,13 +387,13 @@ func TestPiExtendCommand(t *testing.T) {
 }
 
 // TestPiConversationGone verifies the adapter anchors deletion detection
-// on its own SessionRootDir: a missing file under a live root reads as
+// on its own ConversationRootDir: a missing file under a live root reads as
 // deleted, while a missing root (unreachable storage) is undeterminable.
 func TestPiConversationGone(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PI_CODING_AGENT_DIR", dir)
 	p := NewPi()
-	root := p.SessionRootDir() // <dir>/sessions
+	root := p.ConversationRootDir() // <dir>/sessions
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}

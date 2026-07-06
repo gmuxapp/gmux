@@ -52,8 +52,8 @@ func TestClaudeTurnAndTitle(t *testing.T) {
 	cwd := t.TempDir()
 
 	sess := g.Launch(claudeModel, cwd)
-	if sess.Kind != "claude" {
-		t.Fatalf("expected kind=claude, got %q", sess.Kind)
+	if sess.Adapter != "claude" {
+		t.Fatalf("expected adapter=claude, got %q", sess.Adapter)
 	}
 	t.Logf("session %s alive", sess.ID)
 

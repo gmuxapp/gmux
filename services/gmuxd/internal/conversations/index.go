@@ -1,5 +1,5 @@
 // Package conversations maintains an index of conversation files
-// discovered on disk. It maps (kind, slug) to file metadata, enabling
+// discovered on disk. It maps (adapter, slug) to file metadata, enabling
 // URL resolution for dead conversations and (future) fulltext search.
 //
 // The index is populated and kept current by adapter ConversationSources
@@ -18,25 +18,25 @@ import (
 
 // Info holds metadata for a single conversation file.
 type Info struct {
-	ConversationID string    // full UUID from the session file header
-	Slug           string    // human-readable URL identifier, unique within (kind)
-	Kind           string    // adapter name (claude, codex, pi, shell)
+	ConversationID string    // full UUID from the conversation file header
+	Slug           string    // human-readable URL identifier, unique within (adapter)
+	Adapter        string    // adapter name (claude, codex, pi, shell)
 	Title          string    // display title
 	Cwd            string    // working directory
-	FilePath       string    // absolute path to the session file
+	FilePath       string    // absolute path to the conversation file
 	ResumeCommand  []string  // command to resume this conversation
 	Created        time.Time // when the conversation started
 }
 
 // Index is a concurrency-safe lookup table for conversation files.
 // It is the authority on slug uniqueness: when two conversations
-// produce the same slug within the same kind, the index assigns
+// produce the same slug within the same adapter, the index assigns
 // -2, -3 suffixes.
 type Index struct {
 	mu sync.RWMutex
-	// byKey maps "kind/slug" → Info.
+	// byKey maps "adapter/slug" → Info.
 	byKey map[string]Info
-	// byConversationID maps "kind/conversationID" → slug for reverse lookup
+	// byConversationID maps "adapter/conversationID" → slug for reverse lookup
 	// (e.g., finding a conversation's slug from the agent's conversation UUID).
 	byConversationID map[string]string
 }
@@ -49,33 +49,33 @@ func New() *Index {
 	}
 }
 
-func indexKey(kind, slug string) string {
-	return kind + "/" + slug
+func indexKey(adapterName, slug string) string {
+	return adapterName + "/" + slug
 }
 
-func convKey(kind, conversationID string) string {
-	return kind + "/" + conversationID
+func convKey(adapterName, conversationID string) string {
+	return adapterName + "/" + conversationID
 }
 
-// Lookup returns the conversation info for a (kind, slug) pair.
+// Lookup returns the conversation info for an (adapter, slug) pair.
 // Returns ok=false if no matching conversation exists.
-func (idx *Index) Lookup(kind, slug string) (Info, bool) {
+func (idx *Index) Lookup(adapterName, slug string) (Info, bool) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	info, ok := idx.byKey[indexKey(kind, slug)]
+	info, ok := idx.byKey[indexKey(adapterName, slug)]
 	return info, ok
 }
 
 // LookupByConversationID returns the slug for a conversation identified by
 // its agent-native conversation ID. Returns empty string if unknown.
-func (idx *Index) LookupByConversationID(kind, conversationID string) string {
+func (idx *Index) LookupByConversationID(adapterName, conversationID string) string {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	return idx.byConversationID[convKey(kind, conversationID)]
+	return idx.byConversationID[convKey(adapterName, conversationID)]
 }
 
 // Upsert adds or updates a conversation in the index. If the slug
-// collides with an existing entry of the same kind (but different
+// collides with an existing entry of the same adapter (but different
 // conversation ID), a -2, -3, ... suffix is appended. Returns the final
 // (possibly suffixed) slug.
 func (idx *Index) Upsert(info Info) string {
@@ -83,29 +83,29 @@ func (idx *Index) Upsert(info Info) string {
 	defer idx.mu.Unlock()
 
 	// If this conversation ID already has a slug, update in place.
-	tk := convKey(info.Kind, info.ConversationID)
+	tk := convKey(info.Adapter, info.ConversationID)
 	if existing, ok := idx.byConversationID[tk]; ok {
-		ik := indexKey(info.Kind, existing)
+		ik := indexKey(info.Adapter, existing)
 		info.Slug = existing
 		idx.byKey[ik] = info
 		return existing
 	}
 
 	// Assign a unique slug.
-	info.Slug = idx.uniqueSlugLocked(info.Kind, info.Slug, info.ConversationID)
-	ik := indexKey(info.Kind, info.Slug)
+	info.Slug = idx.uniqueSlugLocked(info.Adapter, info.Slug, info.ConversationID)
+	ik := indexKey(info.Adapter, info.Slug)
 	idx.byKey[ik] = info
 	idx.byConversationID[tk] = info.Slug
 	return info.Slug
 }
 
 // uniqueSlugLocked returns a slug that doesn't collide within the
-// given kind. Appends -2, -3, ... on collision. Must be called with
+// given adapter. Appends -2, -3, ... on collision. Must be called with
 // idx.mu held.
-func (idx *Index) uniqueSlugLocked(kind, slug, conversationID string) string {
+func (idx *Index) uniqueSlugLocked(adapterName, slug, conversationID string) string {
 	base := slug
 	for i := 2; ; i++ {
-		ik := indexKey(kind, slug)
+		ik := indexKey(adapterName, slug)
 		existing, occupied := idx.byKey[ik]
 		if !occupied || existing.ConversationID == conversationID {
 			return slug
@@ -135,12 +135,12 @@ func (idx *Index) All() []Info {
 // ScanFile indexes a single conversation file (snapshot or live update
 // from an adapter ConversationSource). Returns the assigned slug.
 func (idx *Index) ScanFile(a adapter.Adapter, path string) string {
-	sf, ok := a.(adapter.SessionFiler)
+	sf, ok := a.(adapter.ConversationFiler)
 	if !ok {
 		return ""
 	}
 
-	fileInfo, err := sf.ParseSessionFile(path)
+	fileInfo, err := sf.ParseConversationFile(path)
 	if err != nil {
 		return ""
 	}
@@ -165,7 +165,7 @@ func (idx *Index) ScanFile(a adapter.Adapter, path string) string {
 	info := Info{
 		ConversationID: fileInfo.ID,
 		Slug:           slug,
-		Kind:           a.Name(),
+		Adapter:        a.Name(),
 		Title:          fileInfo.Title,
 		Cwd:            fileInfo.Cwd,
 		FilePath:       path,
@@ -177,22 +177,22 @@ func (idx *Index) ScanFile(a adapter.Adapter, path string) string {
 
 // Remove deletes a conversation from the index by conversation ID.
 // Returns true if it was present.
-func (idx *Index) Remove(kind, conversationID string) bool {
+func (idx *Index) Remove(adapterName, conversationID string) bool {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	tk := convKey(kind, conversationID)
+	tk := convKey(adapterName, conversationID)
 	slug, ok := idx.byConversationID[tk]
 	if !ok {
 		return false
 	}
 	delete(idx.byConversationID, tk)
-	delete(idx.byKey, indexKey(kind, slug))
+	delete(idx.byKey, indexKey(adapterName, slug))
 	return true
 }
 
 // RemoveByPath deletes any conversation whose FilePath matches path.
 // Used when a ConversationSource observes a deletion event and we don't have the
-// (kind, conversationID) handy. Linear walk over the index; that's fine
+// (adapter, conversationID) handy. Linear walk over the index; that's fine
 // because Remove events are rare (manual `rm`, file rotation) and
 // the index size stays in the hundreds-to-low-thousands range.
 // Returns true if an entry was removed.
@@ -209,28 +209,28 @@ func (idx *Index) RemoveByPath(path string) bool {
 			continue
 		}
 		delete(idx.byKey, key)
-		delete(idx.byConversationID, convKey(info.Kind, info.ConversationID))
+		delete(idx.byConversationID, convKey(info.Adapter, info.ConversationID))
 		return true
 	}
 	return false
 }
 
-// SlugExists reports whether a slug is taken within a kind.
-func (idx *Index) SlugExists(kind, slug string) bool {
+// SlugExists reports whether a slug is taken within an adapter.
+func (idx *Index) SlugExists(adapterName, slug string) bool {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	_, ok := idx.byKey[indexKey(kind, slug)]
+	_, ok := idx.byKey[indexKey(adapterName, slug)]
 	return ok
 }
 
 // LookupBySlug searches for a conversation by slug across all kinds.
-// Returns the first match. Used when the caller doesn't know the kind
+// Returns the first match. Used when the caller doesn't know the adapter
 // (e.g., project session arrays that store bare slugs).
 func (idx *Index) LookupBySlug(slug string) (Info, bool) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	for key, info := range idx.byKey {
-		// key is "kind/slug"; check if the slug suffix matches.
+		// key is "adapter/slug"; check if the slug suffix matches.
 		if i := len(key) - len(slug); i > 0 && key[i-1] == '/' && key[i:] == slug {
 			return info, true
 		}
@@ -239,12 +239,12 @@ func (idx *Index) LookupBySlug(slug string) (Info, bool) {
 }
 
 // FindByPrefix returns conversations whose slug starts with the given
-// prefix, within a kind. Used for URL resolution when the frontend
+// prefix, within an adapter. Used for URL resolution when the frontend
 // provides a partial slug (e.g. from session.id.slice(0, 8)).
-func (idx *Index) FindByPrefix(kind, prefix string) (Info, bool) {
+func (idx *Index) FindByPrefix(adapterName, prefix string) (Info, bool) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	keyPrefix := kind + "/" + prefix
+	keyPrefix := adapterName + "/" + prefix
 	for key, info := range idx.byKey {
 		if strings.HasPrefix(key, keyPrefix) {
 			return info, true

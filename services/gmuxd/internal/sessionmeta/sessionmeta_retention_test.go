@@ -14,10 +14,10 @@ import (
 // --- helpers -------------------------------------------------------
 
 // writeDead persists a dead session with the given id, ExitedAt and
-// SessionFile so retention tests can stage corpses on disk.
-func writeDead(t *testing.T, s *Store, id, exitedAt, sessionFile string) {
+// ConversationFile so retention tests can stage corpses on disk.
+func writeDead(t *testing.T, s *Store, id, exitedAt, conversationFile string) {
 	t.Helper()
-	sess := store.Session{ID: id, Kind: "shell", Alive: false, ExitedAt: exitedAt, SessionFile: sessionFile}
+	sess := store.Session{ID: id, Adapter: "shell", Alive: false, ExitedAt: exitedAt, ConversationFile: conversationFile}
 	if err := s.Write(sess); err != nil {
 		t.Fatalf("Write %s: %v", id, err)
 	}
@@ -438,13 +438,13 @@ func TestPruneScrollbackCoalesces(t *testing.T) {
 	}
 }
 
-// TestRemoveDeadBySessionFileDrivesWatchRemovals pins the seam between
+// TestRemoveDeadByConversationFileDrivesWatchRemovals pins the seam between
 // the store broadcast and the meta persister: retiring a dead session
-// via RemoveDeadBySessionFile must, through the session-remove event
+// via RemoveDeadByConversationFile must, through the session-remove event
 // consumed by WatchRemovals, delete the on-disk meta dir.
-func TestRemoveDeadBySessionFileDrivesWatchRemovals(t *testing.T) {
+func TestRemoveDeadByConversationFileDrivesWatchRemovals(t *testing.T) {
 	metaStore := New(t.TempDir())
-	sess := store.Session{ID: "sess-dead1", Kind: "claude", Alive: false, SessionFile: "/c/conv.jsonl"}
+	sess := store.Session{ID: "sess-dead1", Adapter: "claude", Alive: false, ConversationFile: "/c/conv.jsonl"}
 	if err := metaStore.Write(sess); err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +458,7 @@ func TestRemoveDeadBySessionFileDrivesWatchRemovals(t *testing.T) {
 	done := make(chan struct{})
 	go func() { metaStore.WatchRemovals(events); close(done) }()
 
-	if ids := sessions.RemoveDeadBySessionFile("/c/conv.jsonl"); len(ids) != 1 {
+	if ids := sessions.RemoveDeadByConversationFile("/c/conv.jsonl"); len(ids) != 1 {
 		t.Fatalf("expected 1 retired session, got %v", ids)
 	}
 

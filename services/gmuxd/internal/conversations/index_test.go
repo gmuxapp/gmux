@@ -18,7 +18,7 @@ func TestUpsert_BasicLookup(t *testing.T) {
 	slug := idx.Upsert(Info{
 		ConversationID: "abc-123",
 		Slug:           "fix-auth",
-		Kind:           "pi",
+		Adapter:        "pi",
 		Title:          "fix auth bug",
 	})
 	if slug != "fix-auth" {
@@ -41,13 +41,13 @@ func TestUpsert_UpdateInPlace(t *testing.T) {
 	idx.Upsert(Info{
 		ConversationID: "abc-123",
 		Slug:           "fix-auth",
-		Kind:           "pi",
+		Adapter:        "pi",
 		Title:          "old title",
 	})
 	idx.Upsert(Info{
 		ConversationID: "abc-123",
 		Slug:           "fix-auth",
-		Kind:           "pi",
+		Adapter:        "pi",
 		Title:          "new title",
 	})
 	if idx.Count() != 1 {
@@ -61,9 +61,9 @@ func TestUpsert_UpdateInPlace(t *testing.T) {
 
 func TestUpsert_SlugCollision(t *testing.T) {
 	idx := New()
-	s1 := idx.Upsert(Info{ConversationID: "aaa", Slug: "say-hi", Kind: "claude"})
-	s2 := idx.Upsert(Info{ConversationID: "bbb", Slug: "say-hi", Kind: "claude"})
-	s3 := idx.Upsert(Info{ConversationID: "ccc", Slug: "say-hi", Kind: "claude"})
+	s1 := idx.Upsert(Info{ConversationID: "aaa", Slug: "say-hi", Adapter: "claude"})
+	s2 := idx.Upsert(Info{ConversationID: "bbb", Slug: "say-hi", Adapter: "claude"})
+	s3 := idx.Upsert(Info{ConversationID: "ccc", Slug: "say-hi", Adapter: "claude"})
 
 	if s1 != "say-hi" {
 		t.Errorf("first should be unsuffixed, got %q", s1)
@@ -81,23 +81,23 @@ func TestUpsert_SlugCollision(t *testing.T) {
 
 func TestUpsert_SlugCollisionAcrossKinds(t *testing.T) {
 	idx := New()
-	s1 := idx.Upsert(Info{ConversationID: "aaa", Slug: "fix-auth", Kind: "pi"})
-	s2 := idx.Upsert(Info{ConversationID: "bbb", Slug: "fix-auth", Kind: "claude"})
+	s1 := idx.Upsert(Info{ConversationID: "aaa", Slug: "fix-auth", Adapter: "pi"})
+	s2 := idx.Upsert(Info{ConversationID: "bbb", Slug: "fix-auth", Adapter: "claude"})
 
 	// Different kinds should not collide.
 	if s1 != "fix-auth" || s2 != "fix-auth" {
-		t.Errorf("cross-kind collision: pi=%q, claude=%q", s1, s2)
+		t.Errorf("cross-adapter collision: pi=%q, claude=%q", s1, s2)
 	}
 }
 
 func TestUpsert_UpdatePreservesSlug(t *testing.T) {
 	idx := New()
-	idx.Upsert(Info{ConversationID: "aaa", Slug: "say-hi", Kind: "claude"})
-	idx.Upsert(Info{ConversationID: "bbb", Slug: "say-hi", Kind: "claude"})
+	idx.Upsert(Info{ConversationID: "aaa", Slug: "say-hi", Adapter: "claude"})
+	idx.Upsert(Info{ConversationID: "bbb", Slug: "say-hi", Adapter: "claude"})
 
 	// Update the second one with a different base slug (e.g., title changed).
 	// It should keep its assigned slug "say-hi-2", not get a new one.
-	s := idx.Upsert(Info{ConversationID: "bbb", Slug: "hello", Kind: "claude", Title: "updated"})
+	s := idx.Upsert(Info{ConversationID: "bbb", Slug: "hello", Adapter: "claude", Title: "updated"})
 	if s != "say-hi-2" {
 		t.Errorf("update should preserve assigned slug, got %q", s)
 	}
@@ -105,7 +105,7 @@ func TestUpsert_UpdatePreservesSlug(t *testing.T) {
 
 func TestLookupByConversationID(t *testing.T) {
 	idx := New()
-	idx.Upsert(Info{ConversationID: "abc-123", Slug: "fix-auth", Kind: "pi"})
+	idx.Upsert(Info{ConversationID: "abc-123", Slug: "fix-auth", Adapter: "pi"})
 
 	slug := idx.LookupByConversationID("pi", "abc-123")
 	if slug != "fix-auth" {
@@ -120,7 +120,7 @@ func TestLookupByConversationID(t *testing.T) {
 
 func TestRemove(t *testing.T) {
 	idx := New()
-	idx.Upsert(Info{ConversationID: "abc-123", Slug: "fix-auth", Kind: "pi"})
+	idx.Upsert(Info{ConversationID: "abc-123", Slug: "fix-auth", Adapter: "pi"})
 
 	if !idx.Remove("pi", "abc-123") {
 		t.Error("expected remove to return true")
@@ -138,9 +138,9 @@ func TestRemove(t *testing.T) {
 
 func TestRemoveByPath(t *testing.T) {
 	idx := New()
-	idx.Upsert(Info{ConversationID: "a", Slug: "one", Kind: "pi", FilePath: "/x/a.jsonl"})
-	idx.Upsert(Info{ConversationID: "b", Slug: "two", Kind: "pi", FilePath: "/x/b.jsonl"})
-	idx.Upsert(Info{ConversationID: "c", Slug: "three", Kind: "claude", FilePath: "/y/c.jsonl"})
+	idx.Upsert(Info{ConversationID: "a", Slug: "one", Adapter: "pi", FilePath: "/x/a.jsonl"})
+	idx.Upsert(Info{ConversationID: "b", Slug: "two", Adapter: "pi", FilePath: "/x/b.jsonl"})
+	idx.Upsert(Info{ConversationID: "c", Slug: "three", Adapter: "claude", FilePath: "/y/c.jsonl"})
 
 	if !idx.RemoveByPath("/x/b.jsonl") {
 		t.Fatal("expected RemoveByPath to return true for indexed path")
@@ -151,18 +151,18 @@ func TestRemoveByPath(t *testing.T) {
 	if _, ok := idx.Lookup("pi", "two"); ok {
 		t.Error("expected miss for removed slug")
 	}
-	// Sibling entries with same kind unaffected.
+	// Sibling entries with same adapter unaffected.
 	if _, ok := idx.Lookup("pi", "one"); !ok {
 		t.Error("sibling pi entry was incorrectly removed")
 	}
-	// Cross-kind unaffected.
+	// Cross-adapter unaffected.
 	if _, ok := idx.Lookup("claude", "three"); !ok {
-		t.Error("cross-kind entry was incorrectly removed")
+		t.Error("cross-adapter entry was incorrectly removed")
 	}
 	// Reverse-lookup (byConversationID) cleared too: Upserting the same conversationID
 	// at a new slug should yield the new slug, not update-in-place at
 	// the old one.
-	slug := idx.Upsert(Info{ConversationID: "b", Slug: "different", Kind: "pi", FilePath: "/x/b2.jsonl"})
+	slug := idx.Upsert(Info{ConversationID: "b", Slug: "different", Adapter: "pi", FilePath: "/x/b2.jsonl"})
 	if slug != "different" {
 		t.Errorf("expected fresh slug 'different' (byConversationID was cleared), got %q", slug)
 	}
@@ -173,7 +173,7 @@ func TestRemoveByPath(t *testing.T) {
 
 func TestSlugExists(t *testing.T) {
 	idx := New()
-	idx.Upsert(Info{ConversationID: "abc", Slug: "fix-auth", Kind: "pi"})
+	idx.Upsert(Info{ConversationID: "abc", Slug: "fix-auth", Adapter: "pi"})
 
 	if !idx.SlugExists("pi", "fix-auth") {
 		t.Error("expected true")
@@ -182,14 +182,14 @@ func TestSlugExists(t *testing.T) {
 		t.Error("expected false for unknown slug")
 	}
 	if idx.SlugExists("claude", "fix-auth") {
-		t.Error("expected false for wrong kind")
+		t.Error("expected false for wrong adapter")
 	}
 }
 
 func TestFindByPrefix(t *testing.T) {
 	idx := New()
-	idx.Upsert(Info{ConversationID: "abc-123", Slug: "fix-auth-bug", Kind: "pi"})
-	idx.Upsert(Info{ConversationID: "def-456", Slug: "fix-typo", Kind: "pi"})
+	idx.Upsert(Info{ConversationID: "abc-123", Slug: "fix-auth-bug", Adapter: "pi"})
+	idx.Upsert(Info{ConversationID: "def-456", Slug: "fix-typo", Adapter: "pi"})
 
 	info, ok := idx.FindByPrefix("pi", "fix-auth")
 	if !ok {
@@ -207,23 +207,23 @@ func TestFindByPrefix(t *testing.T) {
 
 func TestLookupBySlug_AcrossKinds(t *testing.T) {
 	idx := New()
-	idx.Upsert(Info{ConversationID: "aaa", Slug: "fix-auth", Kind: "pi", Title: "pi session"})
-	idx.Upsert(Info{ConversationID: "bbb", Slug: "add-tests", Kind: "claude", Title: "claude session"})
+	idx.Upsert(Info{ConversationID: "aaa", Slug: "fix-auth", Adapter: "pi", Title: "pi session"})
+	idx.Upsert(Info{ConversationID: "bbb", Slug: "add-tests", Adapter: "claude", Title: "claude session"})
 
 	info, ok := idx.LookupBySlug("fix-auth")
 	if !ok {
 		t.Fatal("expected hit for fix-auth")
 	}
-	if info.Kind != "pi" {
-		t.Errorf("expected kind pi, got %q", info.Kind)
+	if info.Adapter != "pi" {
+		t.Errorf("expected adapter pi, got %q", info.Adapter)
 	}
 
 	info, ok = idx.LookupBySlug("add-tests")
 	if !ok {
 		t.Fatal("expected hit for add-tests")
 	}
-	if info.Kind != "claude" {
-		t.Errorf("expected kind claude, got %q", info.Kind)
+	if info.Adapter != "claude" {
+		t.Errorf("expected adapter claude, got %q", info.Adapter)
 	}
 
 	_, ok = idx.LookupBySlug("nonexistent")
@@ -240,8 +240,8 @@ func TestLookupBySlug_AcrossKinds(t *testing.T) {
 
 func TestAll(t *testing.T) {
 	idx := New()
-	idx.Upsert(Info{ConversationID: "a", Slug: "one", Kind: "pi", Created: time.Now()})
-	idx.Upsert(Info{ConversationID: "b", Slug: "two", Kind: "claude", Created: time.Now()})
+	idx.Upsert(Info{ConversationID: "a", Slug: "one", Adapter: "pi", Created: time.Now()})
+	idx.Upsert(Info{ConversationID: "b", Slug: "two", Adapter: "claude", Created: time.Now()})
 
 	all := idx.All()
 	if len(all) != 2 {
@@ -257,7 +257,7 @@ func TestAll(t *testing.T) {
 // It also still removes indexed entries from the index.
 func TestSinkRemoveFiresOnRemovedEvenWhenUnindexed(t *testing.T) {
 	idx := New()
-	idx.Upsert(Info{ConversationID: "a", Slug: "one", Kind: "pi", FilePath: "/x/a.jsonl"})
+	idx.Upsert(Info{ConversationID: "a", Slug: "one", Adapter: "pi", FilePath: "/x/a.jsonl"})
 
 	var got []string
 	sink := indexSink{idx: idx, onRemoved: func(p string) { got = append(got, p) }}

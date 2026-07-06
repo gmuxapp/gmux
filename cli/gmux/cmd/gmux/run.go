@@ -151,7 +151,7 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		ID:            sessionID,
 		Command:       args,
 		Cwd:           workDir,
-		Kind:          a.Name(),
+		Adapter:       a.Name(),
 		WorkspaceRoot: wsRoot,
 		Remotes:       remotes,
 		SocketPath:    sockPath,

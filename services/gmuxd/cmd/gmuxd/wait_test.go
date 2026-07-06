@@ -48,10 +48,10 @@ func waitURL(srv *httptest.Server, id string) string {
 func TestWaitReturnsImmediatelyWhenAlreadyIdle(t *testing.T) {
 	srv, st := waitTestServer(t)
 	st.Upsert(store.Session{
-		ID:     "sess-idle",
-		Kind:   "claude",
-		Alive:  true,
-		Status: &store.Status{Working: false},
+		ID:      "sess-idle",
+		Adapter: "claude",
+		Alive:   true,
+		Status:  &store.Status{Working: false},
 	})
 
 	start := time.Now()
@@ -77,10 +77,10 @@ func TestWaitReturnsImmediatelyWhenAlreadyIdle(t *testing.T) {
 func TestWaitBlocksUntilWorkingFlipsFalse(t *testing.T) {
 	srv, st := waitTestServer(t)
 	st.Upsert(store.Session{
-		ID:     "sess-busy",
-		Kind:   "pi",
-		Alive:  true,
-		Status: &store.Status{Working: true},
+		ID:      "sess-busy",
+		Adapter: "pi",
+		Alive:   true,
+		Status:  &store.Status{Working: true},
 	})
 
 	done := make(chan struct{})
@@ -102,10 +102,10 @@ func TestWaitBlocksUntilWorkingFlipsFalse(t *testing.T) {
 	}
 
 	st.Upsert(store.Session{
-		ID:     "sess-busy",
-		Kind:   "pi",
-		Alive:  true,
-		Status: &store.Status{Working: false},
+		ID:      "sess-busy",
+		Adapter: "pi",
+		Alive:   true,
+		Status:  &store.Status{Working: false},
 	})
 
 	select {
@@ -129,10 +129,10 @@ func TestWaitBlocksUntilWorkingFlipsFalse(t *testing.T) {
 func TestWaitReturnsDiedWhenSessionDies(t *testing.T) {
 	srv, st := waitTestServer(t)
 	st.Upsert(store.Session{
-		ID:     "sess-busy",
-		Kind:   "claude",
-		Alive:  true,
-		Status: &store.Status{Working: true},
+		ID:      "sess-busy",
+		Adapter: "claude",
+		Alive:   true,
+		Status:  &store.Status{Working: true},
 	})
 
 	done := make(chan struct{})
@@ -147,10 +147,10 @@ func TestWaitReturnsDiedWhenSessionDies(t *testing.T) {
 	// true at the point of death (adapter never got to emit a final
 	// flip) — that's exactly the case the "died" reason is for.
 	st.Upsert(store.Session{
-		ID:     "sess-busy",
-		Kind:   "claude",
-		Alive:  false,
-		Status: &store.Status{Working: true},
+		ID:      "sess-busy",
+		Adapter: "claude",
+		Alive:   false,
+		Status:  &store.Status{Working: true},
 	})
 
 	select {
@@ -170,10 +170,10 @@ func TestWaitReturnsDiedWhenSessionDies(t *testing.T) {
 func TestWaitTimesOut(t *testing.T) {
 	srv, st := waitTestServer(t)
 	st.Upsert(store.Session{
-		ID:     "sess-stuck",
-		Kind:   "codex",
-		Alive:  true,
-		Status: &store.Status{Working: true},
+		ID:      "sess-stuck",
+		Adapter: "codex",
+		Alive:   true,
+		Status:  &store.Status{Working: true},
 	})
 
 	// 1-second timeout; production callers compose with `timeout`
@@ -203,9 +203,9 @@ func TestWaitTimesOut(t *testing.T) {
 func TestWaitRejectsShellSessions(t *testing.T) {
 	srv, st := waitTestServer(t)
 	st.Upsert(store.Session{
-		ID:    "sess-shell",
-		Kind:  "shell",
-		Alive: true,
+		ID:      "sess-shell",
+		Adapter: "shell",
+		Alive:   true,
 	})
 
 	resp, _ := postWait(t, srv, "sess-shell")
@@ -222,10 +222,10 @@ func TestWaitRejectsShellSessions(t *testing.T) {
 func TestWaitDoesNotTreatNilStatusAsIdle(t *testing.T) {
 	srv, st := waitTestServer(t)
 	st.Upsert(store.Session{
-		ID:     "sess-fresh",
-		Kind:   "pi",
-		Alive:  true,
-		Status: nil, // hasn't emitted its first status yet
+		ID:      "sess-fresh",
+		Adapter: "pi",
+		Alive:   true,
+		Status:  nil, // hasn't emitted its first status yet
 	})
 
 	done := make(chan struct{})
@@ -246,10 +246,10 @@ func TestWaitDoesNotTreatNilStatusAsIdle(t *testing.T) {
 	}
 
 	st.Upsert(store.Session{
-		ID:     "sess-fresh",
-		Kind:   "pi",
-		Alive:  true,
-		Status: &store.Status{Working: false},
+		ID:      "sess-fresh",
+		Adapter: "pi",
+		Alive:   true,
+		Status:  &store.Status{Working: false},
 	})
 
 	select {
@@ -274,10 +274,10 @@ func TestWaitDoesNotTreatNilStatusAsIdle(t *testing.T) {
 func TestWaitUnderHighEventLoad(t *testing.T) {
 	srv, st := waitTestServer(t)
 	st.Upsert(store.Session{
-		ID:     "sess-drop",
-		Kind:   "claude",
-		Alive:  true,
-		Status: &store.Status{Working: true},
+		ID:      "sess-drop",
+		Adapter: "claude",
+		Alive:   true,
+		Status:  &store.Status{Working: true},
 	})
 
 	done := make(chan struct{})
@@ -289,13 +289,13 @@ func TestWaitUnderHighEventLoad(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	for i := 0; i < 500; i++ {
-		st.Upsert(store.Session{ID: "sess-noise", Kind: "claude", Alive: true, Status: &store.Status{Working: true}})
+		st.Upsert(store.Session{ID: "sess-noise", Adapter: "claude", Alive: true, Status: &store.Status{Working: true}})
 	}
 	st.Upsert(store.Session{
-		ID:     "sess-drop",
-		Kind:   "claude",
-		Alive:  true,
-		Status: &store.Status{Working: false},
+		ID:      "sess-drop",
+		Adapter: "claude",
+		Alive:   true,
+		Status:  &store.Status{Working: false},
 	})
 
 	select {
@@ -319,10 +319,10 @@ func TestWaitUnderHighEventLoad(t *testing.T) {
 func TestWaitReturnsDiedWhenSessionRemoved(t *testing.T) {
 	srv, st := waitTestServer(t)
 	st.Upsert(store.Session{
-		ID:     "sess-dismiss",
-		Kind:   "pi",
-		Alive:  true,
-		Status: &store.Status{Working: true},
+		ID:      "sess-dismiss",
+		Adapter: "pi",
+		Alive:   true,
+		Status:  &store.Status{Working: true},
 	})
 
 	done := make(chan struct{})

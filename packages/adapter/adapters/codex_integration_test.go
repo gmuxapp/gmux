@@ -55,8 +55,8 @@ func TestCodexTurnAndTitle(t *testing.T) {
 	cwd := t.TempDir()
 
 	sess := g.Launch(codexModel, cwd)
-	if sess.Kind != "codex" {
-		t.Fatalf("expected kind=codex, got %q", sess.Kind)
+	if sess.Adapter != "codex" {
+		t.Fatalf("expected adapter=codex, got %q", sess.Adapter)
 	}
 	t.Logf("session %s alive", sess.ID)
 

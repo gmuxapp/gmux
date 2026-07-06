@@ -170,15 +170,15 @@ func spokeServer(t *testing.T, token string, sessions []store.Session) *spoke {
 // resolved by the spoke but with empty ShellTitle/AdapterTitle
 // (those are internal, intentionally off-wire). The hub must not
 // re-resolve the title or it would replace the spoke's value with
-// the Kind fallback (e.g. "codex" instead of "fix remote bug").
+// the adapter-name fallback (e.g. "codex" instead of "fix remote bug").
 func TestPeerSubscribe_PreservesTitles(t *testing.T) {
 	st := store.New()
 	sessions := []store.Session{
 		{
-			ID:    "sess-1",
-			Kind:  "codex",
-			Alive: true,
-			Title: "fix remote bug",
+			ID:      "sess-1",
+			Adapter: "codex",
+			Alive:   true,
+			Title:   "fix remote bug",
 			// ShellTitle/AdapterTitle intentionally empty: that's
 			// how they arrive on the wire because store.MarshalJSON
 			// drops them.
@@ -228,8 +228,8 @@ func TestPeerStatus_CarriesSource(t *testing.T) {
 func TestPeerSubscribe_InitialSessions(t *testing.T) {
 	st := store.New()
 	sessions := []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "fix-auth"},
-		{ID: "sess-2", Kind: "shell", Alive: true, Slug: "bash"},
+		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "fix-auth"},
+		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "bash"},
 	}
 
 	token := "test-token-abc"
@@ -253,8 +253,8 @@ func TestPeerSubscribe_InitialSessions(t *testing.T) {
 	if s1.Peer != "server" {
 		t.Errorf("peer = %q, want %q", s1.Peer, "server")
 	}
-	if s1.Kind != "pi" {
-		t.Errorf("kind = %q, want %q", s1.Kind, "pi")
+	if s1.Adapter != "pi" {
+		t.Errorf("adapter = %q, want %q", s1.Adapter, "pi")
 	}
 	if s1.SocketPath != "" {
 		t.Errorf("socket_path should be cleared for remote sessions, got %q", s1.SocketPath)
@@ -264,8 +264,8 @@ func TestPeerSubscribe_InitialSessions(t *testing.T) {
 	if !ok {
 		t.Fatal("expected sess-2@server in store")
 	}
-	if s2.Kind != "shell" {
-		t.Errorf("kind = %q, want %q", s2.Kind, "shell")
+	if s2.Adapter != "shell" {
+		t.Errorf("adapter = %q, want %q", s2.Adapter, "shell")
 	}
 
 	mgr.Stop()
@@ -313,7 +313,7 @@ func TestPeerSubscribe_AuthFailure(t *testing.T) {
 func TestPeerSubscribe_SocketPathCleared(t *testing.T) {
 	st := store.New()
 	sessions := []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, SocketPath: "/tmp/gmux-sessions/sess-1.sock"},
+		{ID: "sess-1", Adapter: "pi", Alive: true, SocketPath: "/tmp/gmux-sessions/sess-1.sock"},
 	}
 
 	sk := spokeServer(t, "", sessions)
@@ -377,8 +377,8 @@ func TestFindPeer_UnknownPeer(t *testing.T) {
 
 func TestPeerStatus(t *testing.T) {
 	st := store.New()
-	st.Upsert(store.Session{ID: "s1@server", Kind: "pi", Alive: true, Peer: "server"})
-	st.Upsert(store.Session{ID: "s2@server", Kind: "shell", Alive: true, Peer: "server"})
+	st.Upsert(store.Session{ID: "s1@server", Adapter: "pi", Alive: true, Peer: "server"})
+	st.Upsert(store.Session{ID: "s2@server", Adapter: "shell", Alive: true, Peer: "server"})
 
 	cfg := []config.PeerConfig{
 		{Name: "server", URL: "http://10.0.0.5:8790", Token: "t"},
@@ -412,7 +412,7 @@ func TestPeerStatus(t *testing.T) {
 func TestPeerStatusEventBroadcast(t *testing.T) {
 	st := store.New()
 	sk := spokeServer(t, "", []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "test"},
+		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "test"},
 	})
 
 	// Subscribe to store events before starting the manager.
@@ -443,8 +443,8 @@ func TestPeerStatusEventBroadcast(t *testing.T) {
 func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 	st := store.New()
 	initialSessions := []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "fix-auth"},
-		{ID: "sess-2", Kind: "shell", Alive: true, Slug: "bash"},
+		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "fix-auth"},
+		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "bash"},
 	}
 
 	sk := spokeServer(t, "", initialSessions)
@@ -458,7 +458,7 @@ func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 
 	// Drop sess-1 from the spoke's snapshot. The hub diffs and removes.
 	sk.setSessions([]store.Session{
-		{ID: "sess-2", Kind: "shell", Alive: true, Slug: "bash"},
+		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "bash"},
 	})
 
 	// Wait for removal.
@@ -485,7 +485,7 @@ func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 func TestPeerSubscribe_ActivityForwarded(t *testing.T) {
 	st := store.New()
 	initialSessions := []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "fix-auth"},
+		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "fix-auth"},
 	}
 
 	sk := spokeServer(t, "", initialSessions)
@@ -525,7 +525,7 @@ func TestPeerSubscribe_NewSessionViaPush(t *testing.T) {
 
 	// Start with one session.
 	sk := spokeServer(t, "", []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "initial"},
+		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "initial"},
 	})
 
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
@@ -536,8 +536,8 @@ func TestPeerSubscribe_NewSessionViaPush(t *testing.T) {
 
 	// Add a new session to the spoke and re-emit the snapshot.
 	sk.setSessions([]store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "initial"},
-		{ID: "sess-new", Kind: "shell", Alive: true, Slug: "new-one"},
+		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "initial"},
+		{ID: "sess-new", Adapter: "shell", Alive: true, Slug: "new-one"},
 	})
 
 	waitForSessions(t, st, "server", 2)
@@ -546,8 +546,8 @@ func TestPeerSubscribe_NewSessionViaPush(t *testing.T) {
 	if !ok {
 		t.Fatal("expected sess-new@server in store")
 	}
-	if got.Kind != "shell" {
-		t.Errorf("kind = %q, want %q", got.Kind, "shell")
+	if got.Adapter != "shell" {
+		t.Errorf("adapter = %q, want %q", got.Adapter, "shell")
 	}
 	if got.Peer != "server" {
 		t.Errorf("peer = %q, want %q", got.Peer, "server")
@@ -565,7 +565,7 @@ func TestPeerSubscribe_ProjectStampsPropagateFromOrigin(t *testing.T) {
 
 	originSess := store.Session{
 		ID:           "sess-1",
-		Kind:         "pi",
+		Adapter:      "pi",
 		Alive:        true,
 		Slug:         "fix-auth",
 		ProjectSlug:  "gmux",
@@ -600,10 +600,10 @@ func TestPeerSubscribe_DisclaimedSessionRoundTripsAsZero(t *testing.T) {
 	st := store.New()
 
 	origin := store.Session{
-		ID:    "sess-1",
-		Kind:  "pi",
-		Alive: true,
-		Slug:  "loose",
+		ID:      "sess-1",
+		Adapter: "pi",
+		Alive:   true,
+		Slug:    "loose",
 		// ProjectSlug == "", ProjectIndex == 0.
 	}
 	sk := spokeServer(t, "", []store.Session{origin})
@@ -646,8 +646,8 @@ func waitForSessions(t *testing.T, st *store.Store, peer string, want int) {
 
 func TestManagerStop_CleansUpSessions(t *testing.T) {
 	st := store.New()
-	st.Upsert(store.Session{ID: "local-1", Kind: "pi", Alive: true})
-	st.Upsert(store.Session{ID: "s1@server", Kind: "pi", Alive: true, Peer: "server"})
+	st.Upsert(store.Session{ID: "local-1", Adapter: "pi", Alive: true})
+	st.Upsert(store.Session{ID: "s1@server", Adapter: "pi", Alive: true, Peer: "server"})
 
 	cfg := []config.PeerConfig{{Name: "server", URL: "http://10.0.0.5:8790", Token: "t"}}
 	mgr := NewManager(cfg, st, "test-host")
@@ -706,7 +706,7 @@ func TestManager_AddPeerIdempotent(t *testing.T) {
 func TestManager_RemovePeer(t *testing.T) {
 	st := store.New()
 	sk := spokeServer(t, "", []store.Session{
-		{ID: "s1", Kind: "pi", Alive: true},
+		{ID: "s1", Adapter: "pi", Alive: true},
 	})
 
 	mgr := NewManager(nil, st, "test-host")
@@ -745,8 +745,8 @@ func TestManager_RemovePeer(t *testing.T) {
 // peers; the projects-side cleanup relies on the wasLocal branch.
 func TestManager_RemovePeer_FiresOnPeerRemoved(t *testing.T) {
 	type call struct {
-		name    string
-		local   bool
+		name  string
+		local bool
 	}
 
 	run := func(t *testing.T, peerLocal bool) {
@@ -1087,8 +1087,8 @@ func TestForwardLaunch_StripsPeerField(t *testing.T) {
 
 func TestPeerStatusCountsOnlyAlive(t *testing.T) {
 	st := store.New()
-	st.Upsert(store.Session{ID: "alive@server", Kind: "shell", Alive: true, Peer: "server"})
-	st.Upsert(store.Session{ID: "dead@server", Kind: "pi", Alive: false, Peer: "server", Command: []string{"pi"}})
+	st.Upsert(store.Session{ID: "alive@server", Adapter: "shell", Alive: true, Peer: "server"})
+	st.Upsert(store.Session{ID: "dead@server", Adapter: "pi", Alive: false, Peer: "server", Command: []string{"pi"}})
 
 	cfg := []config.PeerConfig{
 		{Name: "server", URL: "http://10.0.0.5:8790", Token: "t"},
@@ -1111,11 +1111,11 @@ func TestForwardingFilter_SelfEchoPrevented(t *testing.T) {
 	// Peer "remote" sends us a session "sess-1@test-host" — that's our
 	// own session echoed back. It should be dropped.
 	st := store.New()
-	st.Upsert(store.Session{ID: "sess-1", Kind: "shell", Alive: true}) // our local session
+	st.Upsert(store.Session{ID: "sess-1", Adapter: "shell", Alive: true}) // our local session
 
 	sk := spokeServer(t, "", []store.Session{
 		// The spoke has our session in its store as "sess-1@test-host".
-		{ID: "sess-1@test-host", Kind: "shell", Alive: true, Peer: "test-host"},
+		{ID: "sess-1@test-host", Adapter: "shell", Alive: true, Peer: "test-host"},
 	})
 
 	mgr := NewManager([]config.PeerConfig{
@@ -1146,11 +1146,11 @@ func TestForwardingFilter_KnownPeerSessionDropped(t *testing.T) {
 	st := store.New()
 
 	skAlpha := spokeServer(t, "", []store.Session{
-		{ID: "sess-a", Kind: "shell", Alive: true},
+		{ID: "sess-a", Adapter: "shell", Alive: true},
 	})
 	skBeta := spokeServer(t, "", []store.Session{
-		{ID: "sess-b", Kind: "shell", Alive: true},
-		{ID: "sess-a@alpha", Kind: "shell", Alive: true, Peer: "alpha"}, // forwarded
+		{ID: "sess-b", Adapter: "shell", Alive: true},
+		{ID: "sess-a@alpha", Adapter: "shell", Alive: true, Peer: "alpha"}, // forwarded
 	})
 
 	mgr := NewManager([]config.PeerConfig{
@@ -1186,8 +1186,8 @@ func TestForwardingFilter_UnknownPeerSessionKept(t *testing.T) {
 	st := store.New()
 
 	sk := spokeServer(t, "", []store.Session{
-		{ID: "sess-1", Kind: "shell", Alive: true},
-		{ID: "sess-d@devcontainer", Kind: "pi", Alive: true, Peer: "devcontainer"},
+		{ID: "sess-1", Adapter: "shell", Alive: true},
+		{ID: "sess-d@devcontainer", Adapter: "pi", Alive: true, Peer: "devcontainer"},
 	})
 
 	mgr := NewManager([]config.PeerConfig{
@@ -1211,8 +1211,8 @@ func TestOnSleep_ReconnectsAndResyncs(t *testing.T) {
 	st := store.New()
 
 	sessions := []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true},
-		{ID: "sess-2", Kind: "shell", Alive: true},
+		{ID: "sess-1", Adapter: "pi", Alive: true},
+		{ID: "sess-2", Adapter: "shell", Alive: true},
 	}
 	sk := spokeServer(t, "", sessions)
 
@@ -1226,7 +1226,7 @@ func TestOnSleep_ReconnectsAndResyncs(t *testing.T) {
 	// (no SSE event delivered).
 	sk.mu.Lock()
 	sk.sessions = []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true},
+		{ID: "sess-1", Adapter: "pi", Alive: true},
 		// sess-2 is gone
 	}
 	sk.mu.Unlock()
@@ -1264,8 +1264,8 @@ func TestOnSleep_ReconnectsAndResyncs(t *testing.T) {
 func TestDisconnect_SessionsPersist(t *testing.T) {
 	st := store.New()
 	sessions := []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, Title: "important work"},
-		{ID: "sess-2", Kind: "codex", Alive: true, Title: "background task"},
+		{ID: "sess-1", Adapter: "pi", Alive: true, Title: "important work"},
+		{ID: "sess-2", Adapter: "codex", Alive: true, Title: "background task"},
 	}
 
 	// spokeServer sends sessions then closes, simulating a disconnect.
@@ -1311,9 +1311,9 @@ func TestApplySessionsSnapshot_DedupsIdenticalState(t *testing.T) {
 	p := newPeer(cfg, st, nil)
 
 	sessions := []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
-		{ID: "sess-2", Kind: "shell", Alive: true, Slug: "b", Cwd: "/home"},
-		{ID: "sess-3", Kind: "pi", Alive: false, Slug: "c", Cwd: "/var"},
+		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
+		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "b", Cwd: "/home"},
+		{ID: "sess-3", Adapter: "pi", Alive: false, Slug: "c", Cwd: "/var"},
 	}
 
 	// First application: every session is new, so each one must
@@ -1367,8 +1367,8 @@ func TestApplySessionsSnapshot_BroadcastsOnRealChange(t *testing.T) {
 	p := newPeer(cfg, st, nil)
 
 	sessions := []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
-		{ID: "sess-2", Kind: "shell", Alive: true, Slug: "b", Cwd: "/home"},
+		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
+		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "b", Cwd: "/home"},
 	}
 	p.applySessionsSnapshot(sessions)
 
@@ -1386,8 +1386,8 @@ drained2:
 
 	// Flip alive on sess-2 only.
 	sessions2 := []store.Session{
-		{ID: "sess-1", Kind: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
-		{ID: "sess-2", Kind: "shell", Alive: false, Slug: "b", Cwd: "/home"},
+		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
+		{ID: "sess-2", Adapter: "shell", Alive: false, Slug: "b", Cwd: "/home"},
 	}
 	p.applySessionsSnapshot(sessions2)
 

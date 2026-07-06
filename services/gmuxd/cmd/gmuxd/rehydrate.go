@@ -26,7 +26,7 @@ import (
 //     the steady-state for shell sessions, where the runner ID and
 //     the conversations-index ConversationID are the same string.
 //
-//  2. Same (kind, slug) present (sessions.HasLocalSlug). This is
+//  2. Same (adapter, slug) present (sessions.HasLocalSlug). This is
 //     critical for agent-backed adapters (pi, claude, codex) where
 //     the conversations index uses the adapter's own UUID (e.g. the
 //     JSONL filename) as ConversationID, while sessionmeta keys by the
@@ -54,7 +54,7 @@ func rehydrateProjects(sessions *store.Store, convIndex *conversations.Index, st
 			if _, exists := sessions.Get(info.ConversationID); exists {
 				continue
 			}
-			if sessions.HasLocalSlug(info.Kind, info.Slug) {
+			if sessions.HasLocalSlug(info.Adapter, info.Slug) {
 				continue
 			}
 			fallbacks++
@@ -63,7 +63,7 @@ func rehydrateProjects(sessions *store.Store, convIndex *conversations.Index, st
 				CreatedAt:    info.Created.UTC().Format(time.RFC3339),
 				Command:      info.ResumeCommand,
 				Cwd:          info.Cwd,
-				Kind:         info.Kind,
+				Adapter:      info.Adapter,
 				Alive:        false,
 				AdapterTitle: info.Title,
 				Slug:         info.Slug,

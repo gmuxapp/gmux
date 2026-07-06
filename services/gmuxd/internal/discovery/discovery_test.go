@@ -58,11 +58,11 @@ func TestScanReregistersDeadButAliveRunnerAfterDaemonRestart(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/meta", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(store.Session{
-			ID:    id,
-			Kind:  "shell",
-			Cwd:   "/home/user/proj",
-			Alive: true,
-			Pid:   12345,
+			ID:      id,
+			Adapter: "shell",
+			Cwd:     "/home/user/proj",
+			Alive:   true,
+			Pid:     12345,
 			// Empty Slug here mirrors what an adapter-less /meta would
 			// return; the post-attribution slug in the store must win.
 		})
@@ -78,7 +78,7 @@ func TestScanReregistersDeadButAliveRunnerAfterDaemonRestart(t *testing.T) {
 	sessions := store.New()
 	sessions.Upsert(store.Session{
 		ID:           id,
-		Kind:         "shell",
+		Adapter:      "shell",
 		Cwd:          "/home/user/proj",
 		SocketPath:   sockPath,
 		Alive:        false,
@@ -149,7 +149,7 @@ func TestScanSkipsTrackedAliveSubscribedSession(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/meta", func(w http.ResponseWriter, r *http.Request) {
 		metaCalls.Add(1)
-		_ = json.NewEncoder(w).Encode(store.Session{ID: id, Kind: "shell", Alive: true})
+		_ = json.NewEncoder(w).Encode(store.Session{ID: id, Adapter: "shell", Alive: true})
 	})
 	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -167,7 +167,7 @@ func TestScanSkipsTrackedAliveSubscribedSession(t *testing.T) {
 	sessions := store.New()
 	sessions.Upsert(store.Session{
 		ID:         id,
-		Kind:       "shell",
+		Adapter:    "shell",
 		Alive:      true,
 		SocketPath: sockPath,
 	})
@@ -231,7 +231,7 @@ func TestScanReregistersOnTransientSubscriptionDrop(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/meta", func(w http.ResponseWriter, r *http.Request) {
 		metaCalls.Add(1)
-		_ = json.NewEncoder(w).Encode(store.Session{ID: id, Kind: "shell", Alive: true, Pid: 99})
+		_ = json.NewEncoder(w).Encode(store.Session{ID: id, Adapter: "shell", Alive: true, Pid: 99})
 	})
 	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
 		// Close immediately so the daemon-side subscription drops.
@@ -246,7 +246,7 @@ func TestScanReregistersOnTransientSubscriptionDrop(t *testing.T) {
 	sessions := store.New()
 	sessions.Upsert(store.Session{
 		ID:         id,
-		Kind:       "shell",
+		Adapter:    "shell",
 		Alive:      true,
 		SocketPath: sockPath,
 	})
@@ -311,11 +311,11 @@ func TestQueryMetaLegacyPreV2Keys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("queryMeta: %v", err)
 	}
-	if sess.Kind != "pi" {
-		t.Errorf("Kind = %q, want %q (legacy \"kind\" fallback)", sess.Kind, "pi")
+	if sess.Adapter != "pi" {
+		t.Errorf("Adapter = %q, want %q (legacy \"kind\" fallback)", sess.Adapter, "pi")
 	}
-	if want := "/home/u/.pi/agent/sessions/x/conv.jsonl"; sess.SessionFile != want {
-		t.Errorf("SessionFile = %q, want %q (legacy \"session_file\" fallback)", sess.SessionFile, want)
+	if want := "/home/u/.pi/agent/sessions/x/conv.jsonl"; sess.ConversationFile != want {
+		t.Errorf("ConversationFile = %q, want %q (legacy \"session_file\" fallback)", sess.ConversationFile, want)
 	}
 }
 
@@ -338,10 +338,10 @@ func TestQueryMetaNewKeysWinOverLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("queryMeta: %v", err)
 	}
-	if sess.Kind != "claude" {
-		t.Errorf("Kind = %q, want %q (new key must win)", sess.Kind, "claude")
+	if sess.Adapter != "claude" {
+		t.Errorf("Adapter = %q, want %q (new key must win)", sess.Adapter, "claude")
 	}
-	if sess.SessionFile != "/new/conv.jsonl" {
-		t.Errorf("SessionFile = %q, want /new/conv.jsonl (new key must win)", sess.SessionFile)
+	if sess.ConversationFile != "/new/conv.jsonl" {
+		t.Errorf("ConversationFile = %q, want /new/conv.jsonl (new key must win)", sess.ConversationFile)
 	}
 }

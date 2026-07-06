@@ -575,21 +575,21 @@ func serve(stderr io.Writer) int {
 	// and meta.json mirrors conversation existence (ADR 0016). The store
 	// applies the alive/peer/N:1 guards; its session-remove broadcast is
 	// what WatchRemovals turns into a meta-dir delete.
-	convRetireMeta := func(path string) { sessions.RemoveDeadBySessionFile(path) }
+	convRetireMeta := func(path string) { sessions.RemoveDeadByConversationFile(path) }
 
 	// retireDeleted closes the gap the runtime index signal can't cover:
 	// a conversation file deleted while gmuxd was *down* emits no removal
 	// event. Run from discovery's first-scan hook (live runners flagged),
 	// it asks each owning adapter whether its dead sessions' files are
 	// gone. See reconcileDeletedConversations for the safety gate.
-	convProbe := func(kind, path string) (gone, known bool) {
-		if p, ok := adapters.FindByKind(kind).(adapter.ConversationProber); ok {
+	convProbe := func(adapterName, path string) (gone, known bool) {
+		if p, ok := adapters.FindByAdapter(adapterName).(adapter.ConversationProber); ok {
 			return p.ConversationGone(path)
 		}
 		return false, false
 	}
 	retireDeleted := func(path string) {
-		if ids := sessions.RemoveDeadBySessionFile(path); len(ids) > 0 {
+		if ids := sessions.RemoveDeadByConversationFile(path); len(ids) > 0 {
 			log.Printf("sessionmeta: retired %d dead session(s) for deleted conversation %s", len(ids), path)
 		}
 	}
@@ -643,8 +643,8 @@ func serve(stderr io.Writer) int {
 	}, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
-	// Session file scanner — discovers resumable sessions from adapter
-	// session files (e.g. pi's JSONL conversations). Also purges stale
+	// Conversation file scanner — discovers resumable sessions from adapter
+	// conversation files (e.g. pi's JSONL conversations). Also purges stale
 	// dead sessions that were never attributed to a file. Started below
 	// after the project manager is set up so the first-scan callback
 	// can clean up orphaned project session refs.
@@ -652,7 +652,7 @@ func serve(stderr io.Writer) int {
 	stopScanner := make(chan struct{})
 	defer close(stopScanner)
 
-	// Conversations index — maps (kind, slug) to file metadata for URL
+	// Conversations index — maps (adapter, slug) to file metadata for URL
 	// resolution of dead conversations and future fulltext search. Each
 	// adapter's ConversationSource supplies a snapshot at startup and
 	// incremental updates thereafter; the daemon owns no file monitor.
@@ -1257,7 +1257,7 @@ func serve(stderr io.Writer) int {
 			"ok": true,
 			"data": map[string]any{
 				"slug":           info.Slug,
-				"adapter":        info.Kind,
+				"adapter":        info.Adapter,
 				"title":          info.Title,
 				"cwd":            info.Cwd,
 				"resume_command": info.ResumeCommand,
@@ -1745,7 +1745,7 @@ func serve(stderr io.Writer) int {
 				}
 			}
 			// Let the adapter perform any cleanup (e.g. removing a state file).
-			if a := adapters.FindByKind(sess.Kind); a != nil {
+			if a := adapters.FindByAdapter(sess.Adapter); a != nil {
 				if fin, ok := a.(adapter.SessionFinalizer); ok {
 					fin.OnDismiss(sessionID, projects.NormalizePath(sess.Cwd))
 				}

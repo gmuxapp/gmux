@@ -16,19 +16,19 @@ import (
 // session is the subset of gmuxd's Session model that the CLI cares
 // about. Defined locally to avoid pulling in the gmuxd store package.
 type cliSession struct {
-	ID         string `json:"id"`
-	Peer       string `json:"peer,omitempty"`
-	Cwd        string `json:"cwd,omitempty"`
-	Kind       string `json:"adapter"`
-	Alive      bool   `json:"alive"`
-	Pid        int    `json:"pid,omitempty"`
-	Title      string `json:"title,omitempty"`
-	Slug       string `json:"slug,omitempty"`
-	SocketPath string `json:"socket_path,omitempty"`
+	ID         string   `json:"id"`
+	Peer       string   `json:"peer,omitempty"`
+	Cwd        string   `json:"cwd,omitempty"`
+	Adapter    string   `json:"adapter"`
+	Alive      bool     `json:"alive"`
+	Pid        int      `json:"pid,omitempty"`
+	Title      string   `json:"title,omitempty"`
+	Slug       string   `json:"slug,omitempty"`
+	SocketPath string   `json:"socket_path,omitempty"`
 	Command    []string `json:"command,omitempty"`
-	StartedAt  string `json:"started_at,omitempty"`
-	ExitedAt   string `json:"exited_at,omitempty"`
-	ExitCode   *int   `json:"exit_code,omitempty"`
+	StartedAt  string   `json:"started_at,omitempty"`
+	ExitedAt   string   `json:"exited_at,omitempty"`
+	ExitCode   *int     `json:"exit_code,omitempty"`
 }
 
 // fetchSessions queries gmuxd for the full session list. Starts gmuxd
@@ -241,7 +241,7 @@ func displayID(s cliSession) string {
 // send, kill, etc.
 //
 // Rows are grouped alive-first then by start time; columns are kept
-// shallow (id, status, kind, title, cwd) so the output stays readable
+// shallow (id, status, adapter, title, cwd) so the output stays readable
 // in a narrow terminal.
 func cmdList(all bool, asJSON bool) int {
 	sessions, err := fetchSessions()
@@ -293,7 +293,7 @@ func cmdList(all bool, asJSON bool) int {
 		if title == "" {
 			title = strings.Join(s.Command, " ")
 		}
-		row := [5]string{id, status, s.Kind, title, s.Cwd}
+		row := [5]string{id, status, s.Adapter, title, s.Cwd}
 		rows = append(rows, row)
 		if n := len(row[0]); n > idW {
 			idW = n

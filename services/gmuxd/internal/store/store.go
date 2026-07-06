@@ -16,18 +16,16 @@ import (
 // backend logic but excluded from MarshalJSON).
 type Session struct {
 	// ── API-visible fields ──
-	ID            string            `json:"id"`
+	ID string `json:"id"`
 
 	// Peer identifies which gmuxd instance owns this session.
 	// Empty = local. Non-empty = the peer name (manual peer in peers.json, or a discovered peer).
-	Peer string `json:"peer,omitempty"`
-	CreatedAt     string            `json:"created_at,omitempty"`
-	Command       []string          `json:"command,omitempty"`
-	Cwd           string            `json:"cwd,omitempty"`
-	// Kind holds the adapter name ("pi", "claude", "shell", ...). The wire
-	// key is "adapter" (v2 rename); the Go identifier's rename to Adapter
-	// trails with the internal cleanup.
-	Kind          string            `json:"adapter"`
+	Peer      string   `json:"peer,omitempty"`
+	CreatedAt string   `json:"created_at,omitempty"`
+	Command   []string `json:"command,omitempty"`
+	Cwd       string   `json:"cwd,omitempty"`
+	// Adapter holds the adapter name ("pi", "claude", "shell", ...).
+	Adapter       string            `json:"adapter"`
 	WorkspaceRoot string            `json:"workspace_root,omitempty"`
 	Remotes       map[string]string `json:"remotes,omitempty"`
 	Alive         bool              `json:"alive"`
@@ -58,22 +56,22 @@ type Session struct {
 	// Peer sessions arrive over the wire with this already set by
 	// the owning daemon; UpsertRemote preserves it as-received.
 	LastActivityAt string `json:"last_activity_at,omitempty"`
-	Resumable     bool              `json:"resumable,omitempty"`
-	SocketPath    string            `json:"socket_path,omitempty"`
-	TerminalCols  uint16            `json:"terminal_cols,omitempty"`
-	TerminalRows  uint16            `json:"terminal_rows,omitempty"`
+	Resumable      bool   `json:"resumable,omitempty"`
+	SocketPath     string `json:"socket_path,omitempty"`
+	TerminalCols   uint16 `json:"terminal_cols,omitempty"`
+	TerminalRows   uint16 `json:"terminal_rows,omitempty"`
 	// Slug is a human-readable stable identifier derived from the
-	// adapter's session file slug. Used for URL routing (the frontend
+	// adapter's conversation file slug. Used for URL routing (the frontend
 	// falls back to id[:8] when empty) and for matching dead sessions
-	// to project membership arrays. Unique within (kind, peer).
+	// to project membership arrays. Unique within (adapter, peer).
 	Slug string `json:"slug,omitempty"`
 
-	// SessionFile is the conversation file this runner authoritatively
+	// ConversationFile is the conversation file this runner authoritatively
 	// writes, as reported by the agent hook (session → file; ADR 0011).
-	// Two live sessions may carry the same SessionFile when the same
+	// Two live sessions may carry the same ConversationFile when the same
 	// conversation is resumed in more than one tab; the frontend groups
 	// by this to warn about a conversation open in multiple runners.
-	SessionFile string `json:"conversation_file,omitempty"`
+	ConversationFile string `json:"conversation_file,omitempty"`
 
 	// RunnerVersion is the version string of the gmux runner binary that
 	// launched this session. Set by the runner at startup. The frontend
@@ -119,46 +117,46 @@ type Session struct {
 // fields (ShellTitle, AdapterTitle) that are resolved into Title before sending.
 func (s Session) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		ID            string            `json:"id"`
-		Peer          string            `json:"peer,omitempty"`
-		CreatedAt     string            `json:"created_at,omitempty"`
-		Command       []string          `json:"command,omitempty"`
-		Cwd           string            `json:"cwd,omitempty"`
-		Kind          string            `json:"adapter"`
-		WorkspaceRoot string            `json:"workspace_root,omitempty"`
-		Remotes       map[string]string `json:"remotes,omitempty"`
-		Alive         bool              `json:"alive"`
-		Pid           int               `json:"pid,omitempty"`
-		ExitCode      *int              `json:"exit_code,omitempty"`
-		StartedAt     string            `json:"started_at,omitempty"`
-		ExitedAt      string            `json:"exited_at,omitempty"`
-		Title         string            `json:"title,omitempty"`
-		Subtitle      string            `json:"subtitle,omitempty"`
-		Status        *Status           `json:"status"`
-		Unread        bool              `json:"unread"`
-		Resumable     bool              `json:"resumable,omitempty"`
-		SocketPath    string            `json:"socket_path,omitempty"`
-		TerminalCols  uint16            `json:"terminal_cols,omitempty"`
-		TerminalRows  uint16            `json:"terminal_rows,omitempty"`
-		Slug          string            `json:"slug,omitempty"`
-		SessionFile   string            `json:"conversation_file,omitempty"`
-		RunnerVersion string            `json:"runner_version,omitempty"`
-		BinaryHash    string            `json:"binary_hash,omitempty"`
-		ProjectSlug   string            `json:"project_slug,omitempty"`
-		ProjectIndex  int               `json:"project_index,omitempty"`
-		LastActivityAt string           `json:"last_activity_at,omitempty"`
+		ID               string            `json:"id"`
+		Peer             string            `json:"peer,omitempty"`
+		CreatedAt        string            `json:"created_at,omitempty"`
+		Command          []string          `json:"command,omitempty"`
+		Cwd              string            `json:"cwd,omitempty"`
+		Adapter          string            `json:"adapter"`
+		WorkspaceRoot    string            `json:"workspace_root,omitempty"`
+		Remotes          map[string]string `json:"remotes,omitempty"`
+		Alive            bool              `json:"alive"`
+		Pid              int               `json:"pid,omitempty"`
+		ExitCode         *int              `json:"exit_code,omitempty"`
+		StartedAt        string            `json:"started_at,omitempty"`
+		ExitedAt         string            `json:"exited_at,omitempty"`
+		Title            string            `json:"title,omitempty"`
+		Subtitle         string            `json:"subtitle,omitempty"`
+		Status           *Status           `json:"status"`
+		Unread           bool              `json:"unread"`
+		Resumable        bool              `json:"resumable,omitempty"`
+		SocketPath       string            `json:"socket_path,omitempty"`
+		TerminalCols     uint16            `json:"terminal_cols,omitempty"`
+		TerminalRows     uint16            `json:"terminal_rows,omitempty"`
+		Slug             string            `json:"slug,omitempty"`
+		ConversationFile string            `json:"conversation_file,omitempty"`
+		RunnerVersion    string            `json:"runner_version,omitempty"`
+		BinaryHash       string            `json:"binary_hash,omitempty"`
+		ProjectSlug      string            `json:"project_slug,omitempty"`
+		ProjectIndex     int               `json:"project_index,omitempty"`
+		LastActivityAt   string            `json:"last_activity_at,omitempty"`
 	}
 	return json.Marshal(wire{
 		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,
-		Cwd: s.Cwd, Kind: s.Kind, WorkspaceRoot: s.WorkspaceRoot,
+		Cwd: s.Cwd, Adapter: s.Adapter, WorkspaceRoot: s.WorkspaceRoot,
 		Remotes: s.Remotes, Alive: s.Alive, Pid: s.Pid,
 		ExitCode: s.ExitCode, StartedAt: s.StartedAt, ExitedAt: s.ExitedAt,
 		Title: s.Title, Subtitle: s.Subtitle, Status: s.Status,
 		Unread: s.Unread, Resumable: s.Resumable,
 		SocketPath: s.SocketPath, TerminalCols: s.TerminalCols,
 		TerminalRows: s.TerminalRows, Slug: s.Slug,
-		SessionFile:   s.SessionFile,
-		RunnerVersion: s.RunnerVersion, BinaryHash: s.BinaryHash,
+		ConversationFile: s.ConversationFile,
+		RunnerVersion:    s.RunnerVersion, BinaryHash: s.BinaryHash,
 		ProjectSlug: s.ProjectSlug, ProjectIndex: s.ProjectIndex,
 		LastActivityAt: s.LastActivityAt,
 	})
@@ -197,7 +195,7 @@ func New() *Store {
 	}
 }
 
-// SetCommandTitlers configures per-kind functions that derive a display
+// SetCommandTitlers configures per-adapter functions that derive a display
 // title from a command array. Used as the fallback when no adapter or
 // shell title is set (e.g. "codex" instead of "codex resume <id>").
 func (s *Store) SetCommandTitlers(titlers map[string]func([]string) string) {
@@ -223,18 +221,18 @@ func (s *Store) Get(id string) (Session, bool) {
 }
 
 // HasLocalSlug reports whether the store already contains a local
-// (non-peer) session with the given (kind, slug). Slug is identity
+// (non-peer) session with the given (adapter, slug). Slug is identity
 // for sidebar purposes (see UBIQUITOUS_LANGUAGE.md), so this is the
 // right check when deciding whether a project-tracked session is
 // already represented, regardless of which instance ID it carries.
-func (s *Store) HasLocalSlug(kind, slug string) bool {
+func (s *Store) HasLocalSlug(adapter, slug string) bool {
 	if slug == "" {
 		return false
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, sess := range s.sessions {
-		if sess.Peer == "" && sess.Kind == kind && sess.Slug == slug {
+		if sess.Peer == "" && sess.Adapter == adapter && sess.Slug == slug {
 			return true
 		}
 	}
@@ -250,12 +248,12 @@ func (s *Store) resolveTitle(sess Session) string {
 		return sess.ShellTitle
 	}
 	// Ask the adapter for a command title if it implements CommandTitler.
-	if fn := s.commandTitlers[sess.Kind]; fn != nil && len(sess.Command) > 0 {
+	if fn := s.commandTitlers[sess.Adapter]; fn != nil && len(sess.Command) > 0 {
 		return fn(sess.Command)
 	}
-	// Default: use the adapter kind as the title (e.g. "codex", "claude").
-	if sess.Kind != "" {
-		return sess.Kind
+	// Default: use the adapter name as the title (e.g. "codex", "claude").
+	if sess.Adapter != "" {
+		return sess.Adapter
 	}
 	return sess.Title
 }
@@ -272,7 +270,7 @@ func (s *Store) Upsert(sess Session) {
 // arriving in the SSE payload already. The spoke intentionally keeps
 // its internal ShellTitle/AdapterTitle fields off the wire, so the
 // hub never has enough information to re-resolve correctly and would
-// otherwise overwrite a correct Title with the adapter Kind fallback.
+// otherwise overwrite a correct Title with the adapter-name fallback.
 //
 // Canonicalization, duplicate-slug handling, unique-slug
 // numbering, and event broadcast all still run; only the title and
@@ -427,7 +425,7 @@ func (s *Store) SetTerminalSize(id string, cols, rows uint16) bool {
 }
 
 // resolveDuplicateSlugsLocked deduplicates sessions that share a Slug
-// within the same (kind, peer) scope. When a live session arrives and
+// within the same (adapter, peer) scope. When a live session arrives and
 // a dead session with the same slug exists, the dead one is removed.
 // When a dead session arrives and a live one exists, the dead one is
 // skipped.
@@ -439,8 +437,8 @@ func (s *Store) resolveDuplicateSlugsLocked(sess Session) (removed []string, ski
 		if id == sess.ID || other.Slug != sess.Slug {
 			continue
 		}
-		// Same (kind, peer) scope check.
-		if other.Kind != sess.Kind || other.Peer != sess.Peer {
+		// Same (adapter, peer) scope check.
+		if other.Adapter != sess.Adapter || other.Peer != sess.Peer {
 			continue
 		}
 		switch {
@@ -498,8 +496,8 @@ func (s *Store) Reconcile(assignFn func(Session) (slug string, index int)) {
 	}
 }
 
-// RemoveDeadBySessionFile retires every locally-owned, dead session
-// whose SessionFile points at path, broadcasting session-remove for
+// RemoveDeadByConversationFile retires every locally-owned, dead session
+// whose ConversationFile points at path, broadcasting session-remove for
 // each and returning the removed IDs. Used when the conversations
 // index reports a conversation file has disappeared: meta.json mirrors
 // conversation existence (ADR 0016), so the backing file going away
@@ -515,10 +513,10 @@ func (s *Store) Reconcile(assignFn func(Session) (slug string, index int)) {
 //
 // Paths are compared after filepath.Clean so a cosmetic difference
 // (trailing slash, "./") between the watcher-reported path and the
-// hook-reported SessionFile doesn't defeat the match. Symlinks are not
+// hook-reported ConversationFile doesn't defeat the match. Symlinks are not
 // resolved: the file is already gone, so EvalSymlinks couldn't run, and
 // both paths derive from the same real $HOME in practice.
-func (s *Store) RemoveDeadBySessionFile(path string) []string {
+func (s *Store) RemoveDeadByConversationFile(path string) []string {
 	if path == "" {
 		return nil
 	}
@@ -526,10 +524,10 @@ func (s *Store) RemoveDeadBySessionFile(path string) []string {
 	s.mu.Lock()
 	var removed []string
 	for id, sess := range s.sessions {
-		if sess.Peer != "" || sess.Alive || sess.SessionFile == "" {
+		if sess.Peer != "" || sess.Alive || sess.ConversationFile == "" {
 			continue
 		}
-		if filepath.Clean(sess.SessionFile) != target {
+		if filepath.Clean(sess.ConversationFile) != target {
 			continue
 		}
 		delete(s.sessions, id)
@@ -615,7 +613,7 @@ func NowUnix() float64 {
 }
 
 // ensureUniqueSlug appends "-2", "-3" suffixes to the session's
-// Slug when another session in the same (kind, peer) scope already
+// Slug when another session in the same (adapter, peer) scope already
 // uses that key. Sessions without a Slug (fresh launches before
 // file attribution) are left alone; the frontend falls back to the
 // session ID prefix for URL routing.
@@ -629,7 +627,7 @@ func (s *Store) ensureUniqueSlug(sess *Session) {
 	for i := 2; ; i++ {
 		conflict := false
 		for _, existing := range s.sessions {
-			if existing.ID != sess.ID && existing.Kind == sess.Kind && existing.Peer == sess.Peer && existing.Slug == sess.Slug {
+			if existing.ID != sess.ID && existing.Adapter == sess.Adapter && existing.Peer == sess.Peer && existing.Slug == sess.Slug {
 				conflict = true
 				break
 			}
@@ -640,7 +638,6 @@ func (s *Store) ensureUniqueSlug(sess *Session) {
 		sess.Slug = fmt.Sprintf("%s-%d", base, i)
 	}
 }
-
 
 // activitySnapshot captures the four scalar bits that determine
 // whether a session transition bumps LastActivityAt. Snapshotting

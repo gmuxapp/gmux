@@ -102,7 +102,7 @@ const (
 // RetentionPolicy bounds the disk footprint of dead sessions. A zero
 // value for any field disables that limit.
 type RetentionPolicy struct {
-	// MaxAge ages out conversation-less dead sessions (SessionFile == "")
+	// MaxAge ages out conversation-less dead sessions (ConversationFile == "")
 	// whose effective timestamp is older than now-MaxAge. Sessions with a
 	// conversation file are exempt: their lifecycle is the conversation's
 	// (index-driven removal). Zero means no age limit.
@@ -326,17 +326,17 @@ func (s *Store) Read(id string) (store.Session, error) {
 	// meta.json has no schema version, so fall back to the old keys when
 	// the new ones are absent. Write emits only the new keys.
 	// TODO(v2.1): drop this shim.
-	if ps.Kind == "" || ps.SessionFile == "" {
+	if ps.Adapter == "" || ps.ConversationFile == "" {
 		var legacy struct {
 			Kind        string `json:"kind"`
 			SessionFile string `json:"session_file"`
 		}
 		if err := json.Unmarshal(data, &legacy); err == nil {
-			if ps.Kind == "" {
-				ps.Kind = legacy.Kind
+			if ps.Adapter == "" {
+				ps.Adapter = legacy.Kind
 			}
-			if ps.SessionFile == "" {
-				ps.SessionFile = legacy.SessionFile
+			if ps.ConversationFile == "" {
+				ps.ConversationFile = legacy.SessionFile
 			}
 		}
 	}
@@ -365,7 +365,7 @@ func (s *Store) Remove(id string) error {
 // paths that have explicit Remove calls.
 //
 // Catches the slug-takeover case: when a fresh live session
-// shadows a dead one with the same (kind, peer, slug), the store
+// shadows a dead one with the same (adapter, peer, slug), the store
 // silently evicts the dead record and broadcasts session-remove.
 // Without this loop those orphan meta.json files accumulate — the
 // next Sweep would re-load them and the next slug collision would
@@ -403,7 +403,7 @@ func (s *Store) WatchRemovals(events <-chan store.Event) {
 //   - non-directory entries under the base dir are ignored
 //
 // After loading, the whole-dir retention cap is applied to
-// conversation-less dead sessions (SessionFile == ""): corpses older
+// conversation-less dead sessions (ConversationFile == ""): corpses older
 // than MaxAge are aged out, then only the newest MaxCount survive.
 // Sessions with a conversation file are exempt — they are retired only
 // when their conversation file disappears (see the conversations index
@@ -495,7 +495,7 @@ func (s *Store) prune(loaded []store.Session) []store.Session {
 	// pruned here; their lifecycle is index-driven.
 	var exempt, corpses []store.Session
 	for _, sess := range loaded {
-		if sess.SessionFile != "" {
+		if sess.ConversationFile != "" {
 			exempt = append(exempt, sess)
 		} else {
 			corpses = append(corpses, sess)

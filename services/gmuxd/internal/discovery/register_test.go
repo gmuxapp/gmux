@@ -38,22 +38,22 @@ func metaHandler(sess store.Session) http.Handler {
 // runner's /meta cannot speak to it on resume.
 func TestRegisterReRegistrationPreservesPersistedSlug(t *testing.T) {
 	srv := startUnixServer(t, metaHandler(store.Session{
-		ID:    "sess-resume",
-		Kind:  "shell",
-		Cwd:   t.TempDir(),
-		Alive: true,
-		Pid:   4242,
-		Slug:  "initial-from-runner",
+		ID:      "sess-resume",
+		Adapter: "shell",
+		Cwd:     t.TempDir(),
+		Alive:   true,
+		Pid:     4242,
+		Slug:    "initial-from-runner",
 	}))
 	defer srv.cleanup()
 
 	sessions := store.New()
 	sessions.Upsert(store.Session{
-		ID:    "sess-resume",
-		Kind:  "shell",
-		Cwd:   "/old/cwd",
-		Alive: false, // dead: the resume target
-		Slug:  "post-attribution-name",
+		ID:      "sess-resume",
+		Adapter: "shell",
+		Cwd:     "/old/cwd",
+		Alive:   false, // dead: the resume target
+		Slug:    "post-attribution-name",
 	})
 
 	if err := Register(sessions, nil, srv.socketPath, nil); err != nil {
@@ -88,7 +88,7 @@ func TestRegisterReRegistrationPreservesAttributionAndHistory(t *testing.T) {
 	// for everything the agent hook would have set.
 	srv := startUnixServer(t, metaHandler(store.Session{
 		ID:        "sess-resume",
-		Kind:      "pi",
+		Adapter:   "pi",
 		Cwd:       "/work/repo",
 		Alive:     true,
 		Pid:       9001,
@@ -99,7 +99,7 @@ func TestRegisterReRegistrationPreservesAttributionAndHistory(t *testing.T) {
 	sessions := store.New()
 	sessions.Upsert(store.Session{
 		ID:            "sess-resume",
-		Kind:          "pi",
+		Adapter:       "pi",
 		Cwd:           "/work/repo",
 		Alive:         false,
 		Resumable:     true,
@@ -161,10 +161,10 @@ func TestRegisterReRegistrationPreservesAttributionAndHistory(t *testing.T) {
 func TestRegisterFreshSessionRunsOnRegisterForShell(t *testing.T) {
 	cwd := filepath.Join(t.TempDir(), "myproject")
 	srv := startUnixServer(t, metaHandler(store.Session{
-		ID:    "sess-fresh",
-		Kind:  "shell",
-		Cwd:   cwd,
-		Alive: true,
+		ID:      "sess-fresh",
+		Adapter: "shell",
+		Cwd:     cwd,
+		Alive:   true,
 		// Empty slug from runner: forces the test to depend on
 		// OnRegister rather than coincidentally passing because the
 		// runner happened to have populated Slug.
@@ -218,7 +218,7 @@ func TestScanIgnoresMissingPathWhileSubscriptionAlive(t *testing.T) {
 	sessions := store.New()
 	sessions.Upsert(store.Session{
 		ID:         "sess-graceful-kill",
-		Kind:       "shell",
+		Adapter:    "shell",
 		Alive:      true,
 		SocketPath: srv.socketPath,
 	})

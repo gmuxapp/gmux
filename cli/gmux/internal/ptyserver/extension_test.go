@@ -49,10 +49,10 @@ func postSessionEvent(t *testing.T, sockPath, body string) {
 	resp.Body.Close()
 }
 
-// TestReconnectReplaysSessionFile checks that a newly-connected /events
-// subscriber (a reconnecting daemon) is replayed the bound session file, so
+// TestReconnectReplaysConversationFile checks that a newly-connected /events
+// subscriber (a reconnecting daemon) is replayed the bound conversation file, so
 // attribution survives a daemon restart without persisted state.
-func TestReconnectReplaysSessionFile(t *testing.T) {
+func TestReconnectReplaysConversationFile(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not available")
@@ -61,7 +61,7 @@ func TestReconnectReplaysSessionFile(t *testing.T) {
 	sockPath := filepath.Join(dir, "test.sock")
 	sessFile := filepath.Join(dir, "2026-06-19_sess-reconnect.jsonl")
 
-	st := session.New(session.Config{ID: "s1", Kind: "pi", SocketPath: sockPath})
+	st := session.New(session.Config{ID: "s1", Adapter: "pi", SocketPath: sockPath})
 	srv, err := New(Config{
 		Command:    []string{node, "-e", "setTimeout(()=>{},3000)"},
 		Cwd:        dir,
@@ -77,10 +77,10 @@ func TestReconnectReplaysSessionFile(t *testing.T) {
 
 	postSessionEvent(t, sockPath, `{"op":"session","path":`+strconv.Quote(sessFile)+`}`)
 	deadline := time.After(5 * time.Second)
-	for st.SessionFileSnapshot() != sessFile {
+	for st.ConversationFileSnapshot() != sessFile {
 		select {
 		case <-deadline:
-			t.Fatalf("runner never recorded session file; got %q", st.SessionFileSnapshot())
+			t.Fatalf("runner never recorded conversation file; got %q", st.ConversationFileSnapshot())
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
@@ -122,7 +122,7 @@ func TestSessionEventIsAuthoritative(t *testing.T) {
 		}
 	}
 
-	st := session.New(session.Config{ID: "s1", Kind: "pi", SocketPath: sockPath})
+	st := session.New(session.Config{ID: "s1", Adapter: "pi", SocketPath: sockPath})
 	srv, err := New(Config{
 		Command:    []string{node, "-e", "setTimeout(()=>{},2000)"},
 		Cwd:        dir,
@@ -150,10 +150,10 @@ func TestSessionEventIsAuthoritative(t *testing.T) {
 	waitFor := func(want string) {
 		t.Helper()
 		deadline := time.After(2 * time.Second)
-		for st.SessionFileSnapshot() != want {
+		for st.ConversationFileSnapshot() != want {
 			select {
 			case <-deadline:
-				t.Fatalf("runner did not bind to %q; got %q", want, st.SessionFileSnapshot())
+				t.Fatalf("runner did not bind to %q; got %q", want, st.ConversationFileSnapshot())
 			case <-time.After(20 * time.Millisecond):
 			}
 		}
@@ -177,7 +177,7 @@ func TestTurnEventDrivesState(t *testing.T) {
 	}
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "test.sock")
-	st := session.New(session.Config{ID: "s1", Kind: "pi", SocketPath: sockPath})
+	st := session.New(session.Config{ID: "s1", Adapter: "pi", SocketPath: sockPath})
 	srv, err := New(Config{
 		Command:    []string{node, "-e", "setTimeout(()=>{},2000)"},
 		Cwd:        dir,
@@ -241,7 +241,7 @@ func TestSessionSlugPrefersExplicitSlug(t *testing.T) {
 		t.Helper()
 		dir := t.TempDir()
 		sockPath := filepath.Join(dir, "test.sock")
-		st := session.New(session.Config{ID: "s1", Kind: "codex", SocketPath: sockPath})
+		st := session.New(session.Config{ID: "s1", Adapter: "codex", SocketPath: sockPath})
 		srv, err := New(Config{
 			Command:    []string{node, "-e", "setTimeout(()=>{},2000)"},
 			Cwd:        dir,
@@ -284,7 +284,7 @@ func TestApplyTurnEnd(t *testing.T) {
 		{"error", false, true},
 	}
 	for _, tc := range cases {
-		st := session.New(session.Config{ID: "s1", Kind: "pi"})
+		st := session.New(session.Config{ID: "s1", Adapter: "pi"})
 		srv := &Server{state: st}
 		srv.applyTurnEnd(tc.outcome, "")
 		status := st.StatusSnapshot()

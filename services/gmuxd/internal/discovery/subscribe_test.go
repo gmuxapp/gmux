@@ -76,7 +76,7 @@ func TestSubscribeReplacesExistingForSameID(t *testing.T) {
 
 	const id = "sess-restart-race"
 	sessions := store.New()
-	sessions.Upsert(store.Session{ID: id, Kind: "shell", Alive: true, SocketPath: r1.socketPath})
+	sessions.Upsert(store.Session{ID: id, Adapter: "shell", Alive: true, SocketPath: r1.socketPath})
 
 	subs := NewSubscriptions(sessions)
 	t.Cleanup(func() { subs.UnsubscribeAll() })
@@ -154,7 +154,7 @@ func TestSubscribeOldDeferDoesNotEvictNewEntry(t *testing.T) {
 
 	const id = "sess-defer-eviction"
 	sessions := store.New()
-	sessions.Upsert(store.Session{ID: id, Kind: "shell", Alive: true})
+	sessions.Upsert(store.Session{ID: id, Adapter: "shell", Alive: true})
 
 	subs := NewSubscriptions(sessions)
 	t.Cleanup(func() { subs.UnsubscribeAll() })
@@ -193,7 +193,7 @@ func TestExitEventDoesNotResurrectDismissedSession(t *testing.T) {
 	sessions := store.New()
 	sessions.Upsert(store.Session{
 		ID:      id,
-		Kind:    "shell",
+		Adapter: "shell",
 		Alive:   true,
 		Command: []string{"bash"},
 	})
@@ -245,8 +245,8 @@ func TestConversationFileEventRecordsPath(t *testing.T) {
 	subs.handleEvent("sess-1", "/sock", "conversation_file", []byte(`{"path":"`+path+`"}`))
 
 	got, ok := sessions.Get("sess-1")
-	if !ok || got.SessionFile != path {
-		t.Fatalf("SessionFile = %q (ok=%v), want %q", got.SessionFile, ok, path)
+	if !ok || got.ConversationFile != path {
+		t.Fatalf("ConversationFile = %q (ok=%v), want %q", got.ConversationFile, ok, path)
 	}
 }
 
@@ -262,8 +262,8 @@ func TestLegacySessionFileEventStillAccepted(t *testing.T) {
 	subs.handleEvent("sess-1", "/sock", "session_file", []byte(`{"path":"`+path+`"}`))
 
 	got, ok := sessions.Get("sess-1")
-	if !ok || got.SessionFile != path {
-		t.Fatalf("SessionFile = %q (ok=%v), want %q", got.SessionFile, ok, path)
+	if !ok || got.ConversationFile != path {
+		t.Fatalf("ConversationFile = %q (ok=%v), want %q", got.ConversationFile, ok, path)
 	}
 }
 
@@ -272,7 +272,7 @@ func TestConversationFileEventEmptyPathIgnored(t *testing.T) {
 	sessions.Upsert(store.Session{ID: "sess-1", Alive: true})
 	subs := NewSubscriptions(sessions)
 	subs.handleEvent("sess-1", "/sock", "conversation_file", []byte(`{"path":""}`))
-	if got, _ := sessions.Get("sess-1"); got.SessionFile != "" {
-		t.Errorf("empty path should not set SessionFile, got %q", got.SessionFile)
+	if got, _ := sessions.Get("sess-1"); got.ConversationFile != "" {
+		t.Errorf("empty path should not set ConversationFile, got %q", got.ConversationFile)
 	}
 }

@@ -20,7 +20,7 @@ var (
 	_ adapter.ConversationSource = (*Claude)(nil)
 	_ adapter.ConversationProber = (*Claude)(nil)
 	_ adapter.Launchable         = (*Claude)(nil)
-	_ adapter.SessionFiler       = (*Claude)(nil)
+	_ adapter.ConversationFiler  = (*Claude)(nil)
 	_ adapter.Resumer            = (*Claude)(nil)
 )
 
@@ -29,7 +29,7 @@ func init() {
 }
 
 // Claude is the adapter for Claude Code (claude CLI).
-// Session files are JSONL in ~/.claude/projects/<encoded-cwd>/.
+// Conversation files are JSONL in ~/.claude/projects/<encoded-cwd>/.
 // Status is driven by the agent hook (see claude_hook.go), not PTY output.
 type Claude struct{}
 
@@ -72,10 +72,10 @@ func (c *Claude) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
 
-// --- SessionFiler ---
+// --- ConversationFiler ---
 
-// SessionRootDir returns Claude Code's per-project sessions directory.
-func (c *Claude) SessionRootDir() string {
+// ConversationRootDir returns Claude Code's per-project sessions directory.
+func (c *Claude) ConversationRootDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -83,11 +83,11 @@ func (c *Claude) SessionRootDir() string {
 	return filepath.Join(home, ".claude", "projects")
 }
 
-// ConversationGone anchors deletion detection on SessionRootDir
+// ConversationGone anchors deletion detection on ConversationRootDir
 // (~/.claude/projects): if that tree is present, a missing transcript
 // was deleted; if it's absent, the storage is unavailable.
 func (c *Claude) ConversationGone(path string) (gone bool, ok bool) {
-	return adapter.ConversationGoneAtRoot(path, c.SessionRootDir())
+	return adapter.ConversationGoneAtRoot(path, c.ConversationRootDir())
 }
 
 // encodeClaudeCwd encodes a working directory into Claude Code's directory
@@ -100,9 +100,9 @@ func encodeClaudeCwd(cwd string) string {
 
 var claudeCwdReplacer = strings.NewReplacer("/", "-", ".", "-")
 
-// SessionDir returns Claude Code's session directory for a given cwd.
-func (c *Claude) SessionDir(cwd string) string {
-	root := c.SessionRootDir()
+// ConversationDir returns Claude Code's session directory for a given cwd.
+func (c *Claude) ConversationDir(cwd string) string {
+	root := c.ConversationRootDir()
 	if root == "" {
 		return ""
 	}
@@ -110,7 +110,7 @@ func (c *Claude) SessionDir(cwd string) string {
 }
 
 // claudeFirstLine is the JSON shape of the first meaningful line in a
-// Claude Code session file (type "user").
+// Claude Code conversation file (type "user").
 type claudeFirstLine struct {
 	Type      string `json:"type"`
 	SessionID string `json:"sessionId"`
@@ -122,11 +122,11 @@ type claudeFirstLine struct {
 	} `json:"message"`
 }
 
-// ParseSessionFile reads a Claude Code JSONL session file and returns
+// ParseConversationFile reads a Claude Code JSONL conversation file and returns
 // display metadata.
 // Title priority: custom-title line > first user message text > "" (no
-// conversation-derived title yet; callers fall back to cwd/kind).
-func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error) {
+// conversation-derived title yet; callers fall back to cwd/adapter).
+func (c *Claude) ParseConversationFile(path string) (*adapter.ConversationInfo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -189,7 +189,7 @@ func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error)
 		}
 
 		created, _ := time.Parse(time.RFC3339Nano, header.Timestamp)
-		return &adapter.SessionFileInfo{
+		return &adapter.ConversationInfo{
 			ID:           header.SessionID,
 			Title:        "", // header only, no messages yet
 			Created:      created,
@@ -200,7 +200,7 @@ func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error)
 
 	created, _ := time.Parse(time.RFC3339Nano, firstUser.Timestamp)
 
-	info := &adapter.SessionFileInfo{
+	info := &adapter.ConversationInfo{
 		ID:           firstUser.SessionID,
 		Cwd:          firstUser.Cwd,
 		Created:      created,
@@ -232,13 +232,13 @@ func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error)
 // --- Resumer ---
 
 // ResumeCommand returns the command to resume a Claude Code session.
-func (c *Claude) ResumeCommand(info *adapter.SessionFileInfo) []string {
+func (c *Claude) ResumeCommand(info *adapter.ConversationInfo) []string {
 	return []string{"claude", "--resume", info.ID}
 }
 
-// CanResume checks if a session file has user messages worth resuming.
+// CanResume checks if a conversation file has user messages worth resuming.
 func (c *Claude) CanResume(path string) bool {
-	info, err := c.ParseSessionFile(path)
+	info, err := c.ParseConversationFile(path)
 	if err != nil {
 		return false
 	}
@@ -293,11 +293,11 @@ func cleanClaudeUserText(s string) string {
 // --- ConversationSource ---
 
 func (c *Claude) SnapshotConversations(sink adapter.ConversationSink) {
-	filewatch.Snapshot(c.SessionRootDir(), ".jsonl", sink.Upsert)
+	filewatch.Snapshot(c.ConversationRootDir(), ".jsonl", sink.Upsert)
 }
 
 func (c *Claude) WatchConversations(ctx context.Context, sink adapter.ConversationSink) error {
-	return filewatch.Watch(ctx, c.SessionRootDir(), ".jsonl", func(e filewatch.Event) {
+	return filewatch.Watch(ctx, c.ConversationRootDir(), ".jsonl", func(e filewatch.Event) {
 		if e.Removed {
 			sink.Remove(e.Path)
 		} else {

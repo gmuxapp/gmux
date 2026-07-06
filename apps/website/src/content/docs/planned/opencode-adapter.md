@@ -5,7 +5,7 @@ description: Adapter for the OpenCode AI coding agent.
 
 > This feature is not yet implemented. Depends on [folder management](/planned/folder-management/).
 
-[OpenCode](https://opencode.ai) is an open-source AI coding agent that runs in the terminal. Unlike Claude Code, pi, and Codex (which write JSONL session files to central directories), OpenCode stores sessions in a SQLite database at `.opencode/opencode.db` relative to the working directory. This per-project storage model requires the folder management refactor before the adapter can discover sessions.
+[OpenCode](https://opencode.ai) is an open-source AI coding agent that runs in the terminal. Unlike Claude Code, pi, and Codex (which write JSONL conversation files to central directories), OpenCode stores sessions in a SQLite database at `.opencode/opencode.db` relative to the working directory. This per-project storage model requires the folder management refactor before the adapter can discover sessions.
 
 ## Phases
 
@@ -44,9 +44,9 @@ parts TEXT NOT NULL default '[]',  -- JSON array
 finished_at INTEGER
 ```
 
-The adapter would implement `SessionFiler` by:
+The adapter would implement `ConversationFiler` by:
 - Querying `SELECT id, title, message_count, created_at FROM sessions ORDER BY updated_at DESC`
-- Mapping results to `SessionFileInfo` structs
+- Mapping results to `ConversationInfo` structs
 
 This requires a SQLite dependency. `modernc.org/sqlite` (pure Go, no CGo) is preferred to avoid requiring a C compiler in the build chain.
 

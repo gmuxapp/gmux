@@ -56,8 +56,8 @@ func TestPiTurnAndTitle(t *testing.T) {
 	cwd := t.TempDir()
 
 	sess := g.Launch(piModel, cwd)
-	if sess.Kind != "pi" {
-		t.Fatalf("expected kind=pi, got %q", sess.Kind)
+	if sess.Adapter != "pi" {
+		t.Fatalf("expected adapter=pi, got %q", sess.Adapter)
 	}
 
 	send, _ := g.ConnectSession(sess.ID)

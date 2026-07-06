@@ -263,15 +263,15 @@ func Register(sessions *store.Store, subs *Subscriptions, socketPath string, onD
 		// re-registration means alive, so always clear.
 		existing.Resumable = false
 		*newSess = existing
-		log.Printf("register: re-registered %s session %s (slug=%s)", newSess.Kind, newSess.ID, newSess.Slug)
-	} else if a := adapters.FindByKind(newSess.Kind); a != nil {
+		log.Printf("register: re-registered %s session %s (slug=%s)", newSess.Adapter, newSess.ID, newSess.Slug)
+	} else if a := adapters.FindByAdapter(newSess.Adapter); a != nil {
 		if reg, ok := a.(adapter.SessionRegistrar); ok {
 			info, err := reg.OnRegister(newSess.ID, newSess.Cwd, newSess.Command)
 			if err != nil {
-				log.Printf("register: %s adapter OnRegister failed for %s: %v", newSess.Kind, newSess.ID, err)
+				log.Printf("register: %s adapter OnRegister failed for %s: %v", newSess.Adapter, newSess.ID, err)
 			} else if info.Slug != "" {
 				newSess.Slug = info.Slug
-				log.Printf("register: %s registered session %s (slug=%s)", newSess.Kind, newSess.ID, info.Slug)
+				log.Printf("register: %s registered session %s (slug=%s)", newSess.Adapter, newSess.ID, info.Slug)
 			}
 		}
 	}
@@ -309,17 +309,17 @@ func queryMeta(socketPath string) (*store.Session, error) {
 	// Legacy-read shim: pre-v2 runners report "kind" and "session_file"
 	// in /meta. Long-lived runners survive daemon upgrades, so accept the
 	// old keys for one release. TODO(v2.1): drop this shim.
-	if sess.Kind == "" || sess.SessionFile == "" {
+	if sess.Adapter == "" || sess.ConversationFile == "" {
 		var legacy struct {
 			Kind        string `json:"kind"`
 			SessionFile string `json:"session_file"`
 		}
 		if err := json.Unmarshal(body, &legacy); err == nil {
-			if sess.Kind == "" {
-				sess.Kind = legacy.Kind
+			if sess.Adapter == "" {
+				sess.Adapter = legacy.Kind
 			}
-			if sess.SessionFile == "" {
-				sess.SessionFile = legacy.SessionFile
+			if sess.ConversationFile == "" {
+				sess.ConversationFile = legacy.SessionFile
 			}
 		}
 	}

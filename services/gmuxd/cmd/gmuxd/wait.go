@@ -40,7 +40,7 @@ import (
 //   - 200 with {reason}: terminal state reached (caller maps to its
 //     own exit code)
 //   - 408 Request Timeout: --timeout deadline elapsed
-//   - 422: session kind has no idle signal
+//   - 422: session adapter has no idle signal
 //   - 404: session not found
 func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, sessionID string) {
 	if r.Method != http.MethodPost {
@@ -53,9 +53,9 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 		writeError(w, http.StatusNotFound, "not_found", "session not found")
 		return
 	}
-	if !kindEmitsIdleSignal(sess.Kind) {
+	if !adapterEmitsIdleSignal(sess.Adapter) {
 		writeError(w, http.StatusUnprocessableEntity, "no_idle_signal",
-			"session kind "+sess.Kind+" does not emit an idle signal; --wait is only supported for agent sessions")
+			"the "+sess.Adapter+" adapter does not emit an idle signal; --wait is only supported for agent sessions")
 		return
 	}
 
@@ -161,16 +161,16 @@ func terminalReason(s store.Session) (string, bool) {
 	return "", false
 }
 
-// kindEmitsIdleSignal reports whether sessions of the given adapter
-// kind ever transition Status.Working — i.e. whether --wait can
+// adapterEmitsIdleSignal reports whether sessions of the given
+// adapter ever transition Status.Working — i.e. whether --wait can
 // observe a meaningful idle event for them. Currently the agent
 // adapters (claude, codex, pi) all emit Working; the shell adapter
 // doesn't. Kept as an explicit allowlist so adding a new agent
-// adapter requires a deliberate update here, and so unknown kinds
+// adapter requires a deliberate update here, and so unknown adapters
 // (peer sessions whose adapter we don't know about, future adapters)
 // fail loudly instead of silently degrading to "always idle."
-func kindEmitsIdleSignal(kind string) bool {
-	switch kind {
+func adapterEmitsIdleSignal(adapter string) bool {
+	switch adapter {
 	case "claude", "codex", "pi":
 		return true
 	}
