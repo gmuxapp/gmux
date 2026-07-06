@@ -382,7 +382,7 @@ func postWait(t *testing.T, srv *httptest.Server, id string) (*http.Response, ma
 func TestWaitForSessionExitRepollsDroppedEvent(t *testing.T) {
 	st := store.New()
 	const id = "sess-restart"
-	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: true})
+	st.Upsert(store.Session{ID: id, Adapter: "shell", Alive: true})
 
 	// Subscribe BEFORE the kill, exactly as the restart handler does.
 	evCh, unsub := st.Subscribe()
@@ -397,7 +397,7 @@ func TestWaitForSessionExitRepollsDroppedEvent(t *testing.T) {
 	// The exit upsert: session goes dead but keeps a resume Command.
 	// Its broadcast is dropped because the buffer is full, so the helper
 	// can only learn about it via the re-poll ticker.
-	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: false, Command: []string{"bash"}})
+	st.Upsert(store.Session{ID: id, Adapter: "shell", Alive: false, Command: []string{"bash"}})
 
 	exited, err := waitForSessionExit(st, evCh, id, 2*time.Second, 20*time.Millisecond)
 	if err != nil {
@@ -416,12 +416,12 @@ func TestWaitForSessionExitRepollsDroppedEvent(t *testing.T) {
 func TestWaitForSessionExitReturnsOnEvent(t *testing.T) {
 	st := store.New()
 	const id = "sess-event"
-	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: true})
+	st.Upsert(store.Session{ID: id, Adapter: "shell", Alive: true})
 
 	evCh, unsub := st.Subscribe()
 	defer unsub()
 
-	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: false, Command: []string{"bash"}})
+	st.Upsert(store.Session{ID: id, Adapter: "shell", Alive: false, Command: []string{"bash"}})
 
 	start := time.Now()
 	exited, err := waitForSessionExit(st, evCh, id, 2*time.Second, time.Minute)
@@ -443,7 +443,7 @@ func TestWaitForSessionExitReturnsOnEvent(t *testing.T) {
 func TestWaitForSessionExitFailsFastOnRemove(t *testing.T) {
 	st := store.New()
 	const id = "sess-dismissed"
-	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: true})
+	st.Upsert(store.Session{ID: id, Adapter: "shell", Alive: true})
 
 	evCh, unsub := st.Subscribe()
 	defer unsub()
@@ -466,7 +466,7 @@ func TestWaitForSessionExitFailsFastOnRemove(t *testing.T) {
 func TestWaitForSessionExitTimesOut(t *testing.T) {
 	st := store.New()
 	const id = "sess-stuck"
-	st.Upsert(store.Session{ID: id, Kind: "shell", Alive: true})
+	st.Upsert(store.Session{ID: id, Adapter: "shell", Alive: true})
 
 	evCh, unsub := st.Subscribe()
 	defer unsub()
