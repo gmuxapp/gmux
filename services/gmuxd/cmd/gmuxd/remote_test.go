@@ -315,8 +315,9 @@ func TestDisplayStatus_NotConnectedMissingHTTPS(t *testing.T) {
 	h := &tailscaleHealth{
 		Listen: "127.0.0.1:8790",
 		TS: &tsHealth{
-			Connected: false,
-			HTTPS:     false,
+			Connected:    false,
+			HTTPS:        false,
+			BackendState: "Running",
 		},
 	}
 	code := displayStatus(h, &stdout)
@@ -329,6 +330,47 @@ func TestDisplayStatus_NotConnectedMissingHTTPS(t *testing.T) {
 	}
 	if !strings.Contains(out, "login.tailscale.com/admin/dns") {
 		t.Errorf("should link to admin console:\n%s", out)
+	}
+}
+
+// Before the backend reaches Running, HTTPS=false may just mean the
+// tailnet state isn't known yet. Don't blame HTTPS settings then.
+func TestDisplayStatus_StartingHTTPSUnknown(t *testing.T) {
+	var stdout bytes.Buffer
+	h := &tailscaleHealth{
+		Listen: "127.0.0.1:8790",
+		TS: &tsHealth{
+			Connected:    false,
+			HTTPS:        false,
+			BackendState: "Starting",
+		},
+	}
+	code := displayStatus(h, &stdout)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "still connecting") {
+		t.Errorf("should say still connecting:\n%s", out)
+	}
+	if strings.Contains(out, "login.tailscale.com/admin/dns") {
+		t.Errorf("should not blame HTTPS while backend state is unknown:\n%s", out)
+	}
+}
+
+func TestDisplayStatus_TailscaleNotStarted(t *testing.T) {
+	var stdout bytes.Buffer
+	h := &tailscaleHealth{Listen: "127.0.0.1:8790", TS: nil}
+	code := displayStatus(h, &stdout)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Tailscale hasn't started yet") {
+		t.Errorf("should say tailscale hasn't started:\n%s", out)
+	}
+	if strings.Contains(out, "Could not reach the daemon") {
+		t.Errorf("should not claim the daemon is unreachable:\n%s", out)
 	}
 }
 
