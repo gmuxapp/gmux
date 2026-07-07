@@ -186,7 +186,7 @@ func remoteStatus(stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "Remote access is enabled but the daemon is not running.")
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stdout, "Start it with:")
-		fmt.Fprintln(stdout, "  gmuxd start")
+		fmt.Fprintln(stdout, "  gmux daemon start")
 		return 0
 	}
 
@@ -283,7 +283,7 @@ func remotePoll(stdout, stderr io.Writer) int {
 	if result == nil || result.TS == nil {
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stderr, "Could not reach the daemon. Check that it's running:")
-		fmt.Fprintln(stderr, "  gmuxd start")
+		fmt.Fprintln(stderr, "  gmux daemon start")
 		return 1
 	}
 
@@ -300,7 +300,7 @@ func displayStatus(h *tailscaleHealth, stdout io.Writer) int {
 		fmt.Fprintln(stdout, "To complete setup, log in to Tailscale:")
 		fmt.Fprintf(stdout, "  %s\n", ts.AuthURL)
 		fmt.Fprintln(stdout)
-		fmt.Fprintln(stdout, "After logging in, run `gmuxd remote` again to check the connection.")
+		fmt.Fprintln(stdout, "After logging in, run `gmux remote` again to check the connection.")
 		fmt.Fprintln(stdout)
 		fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
 		return 0
@@ -343,7 +343,7 @@ func displayStatus(h *tailscaleHealth, stdout io.Writer) int {
 	fmt.Fprintln(stdout, "Tailscale is still connecting. This can take a minute on first setup.")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Try again shortly:")
-	fmt.Fprintln(stdout, "  gmuxd remote")
+	fmt.Fprintln(stdout, "  gmux remote")
 	fmt.Fprintln(stdout)
 	fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
 	return 0

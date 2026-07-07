@@ -463,7 +463,7 @@ func serveLoginPage(w http.ResponseWriter, errMsg string) {
            autocapitalize="off" autocorrect="off" spellcheck="false">
     <button type="submit">Sign in</button>
   </form>
-  <p class="hint">Run <code>gmuxd auth</code> on the host for instructions.</p>
+  <p class="hint">Run <code>gmux auth</code> on the host for instructions.</p>
 </main>
 <p class="tip">One gmux can show every machine's sessions in a single sidebar. <a href="https://gmux.app/multi-machine/" target="_blank" rel="noopener">Multi-machine setup →</a></p>
 </body>

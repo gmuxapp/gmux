@@ -29,7 +29,7 @@ docker logs dev 2>&1 | grep "login.tailscale.com"   # first run only; the state 
 # Visit the URL to register, then open https://gmux-dev.your-tailnet.ts.net
 ```
 
-On first visit you'll see the gmux login page — being on the tailnet lets you *reach* the host, but the token is what authorizes you. Paste the container's token (`docker exec dev cat /root/.local/state/gmux/auth-token`, or run `docker exec dev gmuxd auth`).
+On first visit you'll see the gmux login page — being on the tailnet lets you *reach* the host, but the token is what authorizes you. Paste the container's token (`docker exec dev cat /root/.local/state/gmux/auth-token`, or run `docker exec dev gmux auth`).
 
 See [Remote Access](/remote-access/) for Tailscale setup details.
 
@@ -38,7 +38,7 @@ See [Remote Access](/remote-access/) for Tailscale setup details.
 To aggregate the container's sessions into your main dashboard:
 
 ```bash
-docker exec dev gmuxd auth
+docker exec dev gmux auth
 # paste the printed "Connect to host" URL into Settings → Hosts → Connect to host
 ```
 
