@@ -45,6 +45,8 @@ There is **no `[[peers]]` config**. Add a host you want to aggregate sessions fr
 |-------|------|---------|-------|-------------|
 | `port` | `number` | `8790` | 1–65535 | TCP port for the HTTP listener. |
 
+The bind address is not configurable here — it is the `GMUXD_LISTEN` environment variable (default `127.0.0.1`). See [Environment variables](/reference/environment/#bind-address).
+
 ### `[tailscale]`
 
 | Field | Type | Default | Description |
@@ -71,7 +73,8 @@ The config file is strictly validated at startup. gmuxd refuses to start if:
 
 This is intentional. Silent fallback to defaults is dangerous for security settings. See [Security](/security) for the reasoning.
 
-Two keys were **removed** in ADR 0007 and are now **ignored with a deprecation warning** (rather than failing startup), so upgrading a host that still has an old config doesn't brick the daemon. Remove them to silence the warning:
+Three keys were **removed** (ADR 0007 / ADR 0008) and are now **ignored with a deprecation warning** (rather than failing startup), so upgrading a host that still has an old config doesn't brick the daemon. Remove them to silence the warning:
 
-- **`tailscale.hostname`** — the node name now comes from Tailscale / the OS hostname.
-- **`[[peers]]`** — manual peers are runtime state; add them via *Connect to host* (stored in `peers.json`).
+- **`tailscale.hostname`** (ADR 0007) — the node name now comes from Tailscale / the OS hostname.
+- **`[[peers]]`** (ADR 0007) — manual peers are runtime state; add them via *Connect to host* (stored in `peers.json`).
+- **`discovery.tailscale`** (ADR 0008) — tailnet autodiscovery was removed; add tailnet hosts via *Connect to host*.

@@ -21,6 +21,10 @@ you, and `gmux daemon …` controls it.
 that isn't a verb — it uses an explicit `--` separator so gmux never has to
 guess where its flags end and your command begins.
 
+Coming from a pre-2.0 version? Every removed flag (`--list`, `--attach`,
+`--send`, …) and the old bare-command shorthand print a precise error naming
+the new form — see [Migrating to 2.0](/migrating-to-2/).
+
 ## Running a command
 
 ### `gmux -- <command> [args...]`
@@ -76,14 +80,14 @@ List sessions, alive first, newest first. Local only unless `--all`.
 
 ```
 $ gmux ls
-ID        STATUS  KIND   TITLE
-a3f20187  alive   pi     fix auth bug  (/home/mg/dev/myapp)
-be14b052  alive   shell  bash          (/home/mg/dev/gmux)
-7d3304e9  dead    shell  make build    (/home/mg/dev/myapp)
+ID        STATUS  ADAPTER  TITLE
+a3f20187  alive   pi       fix auth bug  (/home/mg/dev/myapp)
+be14b052  alive   shell    bash          (/home/mg/dev/gmux)
+7d3304e9  dead    shell    make build    (/home/mg/dev/myapp)
 ```
 
-- `--all` — include sessions from every connected peer (adds a peer column).
-- `--json` — emit a JSON array instead of the table, for scripts and agents.
+- `--all` — include sessions from every connected peer (ids print as `<id>@<peer>`).
+- `--json` — emit a JSON array instead of the table, for scripts and agents (the adapter field is `"adapter"`).
 
 ### `gmux attach <id>`
 
@@ -137,9 +141,9 @@ Use plain `send` for everyday use; `send-keys` only when porting tmux commands.
 
 **Access control.** `send` is powerful — anything you send lands in the
 session's PTY, indistinguishable from keyboard input. Access is gated by
-filesystem permissions on the session's Unix socket (owner-only), so only the
-user who started a session can send to it. Peer sessions are reached through
-gmuxd's authenticated proxy.
+gmuxd's local IPC: the daemon's Unix socket is owner-only, so only your user
+can send to sessions on this host. Peer sessions are reached through gmuxd's
+authenticated proxy.
 
 ### `gmux wait <id>`
 
@@ -176,6 +180,24 @@ session marked dead — the same path as the UI's kill button.
 gmux kill a3f20187
 ```
 
+### `gmux edit [file]`
+
+Open a file in a managed **editor session** — a first-class tab in the UI.
+Blocks until the editor exits and propagates its exit code, so it works as
+`$EDITOR` (git commit, etc.), even from inside another gmux session. With no
+file, the session prompts for a path (`~` expands).
+
+```bash
+gmux edit notes.md
+export EDITOR='gmux edit'   # git commit opens an editor tab
+```
+
+Inside gmux sessions, `EDITOR`/`VISUAL` already default to `gmux edit` when
+your dotfiles don't set them. Today the session runs a fallback terminal
+editor: `$GMUX_EDIT_FALLBACK` if set (may include flags, e.g. `vim -u NONE`),
+otherwise the first of `nano`, `vim`, `vi` on PATH. `edit` takes at most one
+path and no flags.
+
 ## UI, pairing, and the daemon
 
 ### `gmux open`
@@ -186,8 +208,8 @@ in app mode for a standalone window; falls back to the default browser. (Bare
 
 ### `gmux auth`
 
-Print this host's login URL and token, plus a connect URL and QR code for
-pairing another machine. This reveals a secret — run it deliberately, not as a
+Print this host's login URL and token — plus, when remote access is enabled,
+a connect URL and QR code for pairing another machine. This reveals a secret — run it deliberately, not as a
 status check.
 
 ### `gmux remote`
@@ -221,9 +243,12 @@ gmuxd 2.0.0 (ready)
 Sessions: 3 alive (2 local, 1 remote), 12 dead (15 total)
 
 Peers:
-  • desktop (1 session)        https://gmux-desktop.tailnet.ts.net
-  ○ gmux-server (offline)      https://gmux-server.tailnet.ts.net
-  ✗ manual-peer (refused)      https://peer.example.com
+  • desktop (1 session)
+    https://gmux-desktop.tailnet.ts.net
+  ○ gmux-server (offline)
+    https://gmux-server.tailnet.ts.net
+  ✗ manual-peer (connection refused)
+    https://peer.example.com
 ```
 
 ### `gmux version` · `gmux help`
