@@ -3,13 +3,13 @@ title: Codex
 description: How gmux works with OpenAI Codex CLI.
 ---
 
-gmux has built-in support for [Codex CLI](https://developers.openai.com/codex/cli). No configuration is needed — launch Codex through gmux and everything works automatically.
+gmux has built-in support for [Codex CLI](https://developers.openai.com/codex/cli). No configuration is needed — launch Codex through gmux and everything works automatically. Live status requires Codex CLI **0.135.0 or newer**; older versions still launch, resume, and get titles from the transcript, but show no working/idle status.
 
 ## What you get
 
 ### Live status
 
-The sidebar shows when Codex is actively working. gmux detects `user_message` and `task_complete` events in the session file — a user message sets the status to **working** (pulsing cyan dot), and a completed task clears it.
+The sidebar shows when Codex is actively working. gmux injects a lightweight hook into every Codex launch; Codex reports prompt-submitted and turn-finished events directly to gmux, so status is exact — no file polling.
 
 ### Session titles
 
@@ -46,11 +46,19 @@ gmux -- /usr/bin/codex               # ✓ matched
 gmux -- echo "not codex"             # ✗ not matched
 ```
 
-If detection fails, override it:
+`GMUX_ADAPTER=codex` only disambiguates between adapters that already match — some argv token must still be a `codex` binary (e.g. `GMUX_ADAPTER=codex gmux -- env codex …`). It cannot force codex handling for an arbitrarily-named wrapper, and hook injection also needs a literal `codex` token in argv.
 
-```bash
-GMUX_ADAPTER=codex gmux my-codex-wrapper
-```
+### Live status via hooks
+
+When gmux owns the launch (and codex ≥ 0.135.0), it appends per-launch `-c hooks.…` config overrides so codex runs `gmux __codex-hook` on lifecycle events. Nothing is written to `~/.codex` — the injection is ephemeral. gmux pre-trusts *only its own* hooks by computing codex's per-hook trusted hash; your own hook trust model is untouched, and on any mismatch the hook is silently skipped (the session just lacks live state). Set `GMUX_NO_AGENT_HOOK=1` to disable injection.
+
+| Codex hook event | Effect |
+|---|---|
+| `SessionStart` | Binds the session (transcript path, title, slug) |
+| `UserPromptSubmit` | Working (cyan dot) |
+| `Stop` | Idle + unread; title refreshed |
+
+The hook also reports an explicit URL slug derived from your first prompt (codex's UUID session ids would make unreadable URLs), and refreshes the title at each turn end.
 
 ### Session files
 
@@ -67,7 +75,7 @@ Codex stores sessions as JSONL files in `~/.codex/sessions/`, organized by date:
 
 Unlike Claude Code and pi which organize by working directory, Codex uses a flat date-based structure. The working directory is stored inside each session's `session_meta` header.
 
-gmuxd walks the full date tree to discover session files.
+The codex adapter walks the full date tree to discover conversation files. If a transcript is deleted, the session stops being offered for resume.
 
 ### Session file format
 
@@ -77,21 +85,12 @@ Each line is a JSON object with a `type` field:
 |---|---|
 | `session_meta` | First line — session ID, cwd, timestamp, CLI version |
 | `response_item` | Message content — user prompts, assistant responses, function calls |
-| `event_msg` | Lifecycle events — `user_message`, `agent_message`, `task_complete`, `task_started` |
+| `event_msg` | Codex's own lifecycle log — `user_message`, `agent_message`, `task_complete`, … (not consumed by gmux) |
 | `turn_context` | Per-turn metadata (model, instructions) |
-
-### Status detection
-
-gmux watches event_msg lines in the session file for status signals:
-
-| Event type | Sidebar effect |
-|---|---|
-| `user_message` | Working (cyan dot) — assistant will respond |
-| `task_complete` | Idle (dot clears) — turn complete |
-| `turn_cancelled` / `turn_aborted` | Idle — turn ended early |
 
 ## Limitations
 
+- **Requires codex ≥ 0.135.0 for live status.** Below that, no hooks are injected and the session runs without working/idle status (there is no file-watch fallback).
 - **No custom titles.** Codex doesn't generate session titles like Claude Code does. gmux uses the first user prompt as the title.
-- **Date-based storage.** Sessions aren't grouped by project. gmux scans all session files and matches them to working directories by reading the `session_meta` header.
-- **Status is event-based.** gmux doesn't distinguish between "thinking", "running a command", or "writing code" — all are shown as "working" between `user_message` and `task_complete`.
+- **Date-based storage.** Sessions aren't grouped by project. gmux scans all conversation files and matches them to working directories by reading the `session_meta` header.
+- **Status is coarse.** gmux doesn't distinguish between "thinking", "running a command", or "writing code" — all are shown as "working". Codex's `Stop` hook carries no exit reason, so an interrupted turn is reported as completed (idle + unread) rather than aborted.
