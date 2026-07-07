@@ -276,3 +276,31 @@ func TestConversationFileEventEmptyPathIgnored(t *testing.T) {
 		t.Errorf("empty path should not set ConversationFile, got %q", got.ConversationFile)
 	}
 }
+
+// TestMetaEventUpdatesSlugAndIgnoresEmpty pins the daemon half of the
+// session-URL slug chain: a runner "meta" event carrying a slug updates
+// the store (the web UI builds session URLs from it), and a later meta
+// event without a slug — the runner emits other meta fields
+// independently — must not clobber the one already recorded.
+func TestMetaEventUpdatesSlugAndIgnoresEmpty(t *testing.T) {
+	sessions := store.New()
+	sessions.Upsert(store.Session{ID: "sess-1", Alive: true})
+	subs := NewSubscriptions(sessions)
+
+	subs.handleEvent("sess-1", "/sock", "meta", []byte(`{"slug":"fix-the-login-bug"}`))
+	if got, _ := sessions.Get("sess-1"); got.Slug != "fix-the-login-bug" {
+		t.Fatalf("Slug = %q, want %q", got.Slug, "fix-the-login-bug")
+	}
+
+	// Unrelated meta update (title only) and an explicit empty slug: both
+	// must leave the recorded slug intact.
+	subs.handleEvent("sess-1", "/sock", "meta", []byte(`{"adapter_title":"Fix the login bug"}`))
+	subs.handleEvent("sess-1", "/sock", "meta", []byte(`{"slug":""}`))
+	got, _ := sessions.Get("sess-1")
+	if got.Slug != "fix-the-login-bug" {
+		t.Errorf("Slug after slug-less meta events = %q, want %q preserved", got.Slug, "fix-the-login-bug")
+	}
+	if got.AdapterTitle != "Fix the login bug" {
+		t.Errorf("AdapterTitle = %q, want %q", got.AdapterTitle, "Fix the login bug")
+	}
+}
