@@ -23,21 +23,22 @@ Session data flows through three boundaries. Not every field crosses every bound
 
 Two paths: the runner's `GET /meta` endpoint (polled by discovery) and its SSE `/events` stream (subscribed for live updates).
 
-**GET /meta** returns the full session state including internal title inputs (`shell_title`, `adapter_title`) and build identity (`binary_hash`). gmuxd deserializes this into `store.Session`.
+**GET /meta** returns the full session state including internal title inputs (`shell_title`, `adapter_title`) and build identity (`binary_hash`, `runner_version`). gmuxd deserializes this into `store.Session`.
 
 **SSE events** carry incremental updates:
 
 | Event | Fields |
 |-------|--------|
 | `status` | `working`, `error` |
-| `meta` | `title`, `shell_title`, `adapter_title`, `subtitle`, `unread` |
+| `meta` | `shell_title`, `adapter_title`, `subtitle`, `unread`, `slug` |
 | `exit` | `exit_code` |
+| `conversation_file` | `path` (legacy name `session_file` accepted until v2.1) |
 | `terminal_resize` | `cols`, `rows` |
 | `activity` | (no fields, signal only) |
 
 ### gmuxd → frontend
 
-gmuxd exposes the aggregated store via `GET /v1/sessions` and `session-upsert` / `session-remove` SSE events. A custom `MarshalJSON` on `store.Session` controls which fields are serialized. Internal fields are excluded; their derived outputs are included instead.
+gmuxd exposes the aggregated store to the browser via `GET /v1/events` (SSE). Session state arrives as coalesced `snapshot.sessions` full-replacement snapshots (ADR 0001); `session-activity` is forwarded as a bare signal. `GET /v1/sessions` remains for CLI/scripting. A custom `MarshalJSON` on `store.Session` controls which fields are serialized in both. Internal fields are excluded; their derived outputs are included instead.
 
 ### Field map
 
@@ -48,7 +49,9 @@ gmuxd exposes the aggregated store via `GET /v1/sessions` and `session-upsert` /
 | `created_at` | ✓ | ✓ | ✓ | ✓ age display |
 | `command` | ✓ | ✓ | ✓ | title fallback only |
 | `cwd` | ✓ | ✓ | ✓ | ✓ header, grouping |
-| `kind` | ✓ | ✓ | ✓ | ✓ adapter badge |
+| `adapter` | ✓ | ✓ | ✓ | ✓ adapter badge, URLs |
+| `peer` | — | ✓ (hub) | ✓ | ✓ host attribution |
+| `parent_session_id` | ✓ | ✓ | ✓ | ✓ sidebar placement of editor children |
 | `workspace_root` | ✓ | ✓ | ✓ | ✓ folder grouping |
 | `remotes` | ✓ | ✓ | ✓ | ✓ folder grouping |
 | **Process state** |
@@ -57,14 +60,15 @@ gmuxd exposes the aggregated store via `GET /v1/sessions` and `session-upsert` /
 | `exit_code` | ✓ | ✓ | ✓ | — |
 | `started_at` | ✓ | ✓ | ✓ | — |
 | `exited_at` | ✓ | ✓ | ✓ | — |
+| `last_activity_at` | — | ✓ stamped | ✓ | ✓ home recency buckets |
 | **Display** |
 | `title` | ✓ computed | ✓ re-resolved | ✓ | ✓ header, sidebar |
 | `subtitle` | ✓ | ✓ | ✓ | — |
 | `status` | ✓ | ✓ | ✓ | ✓ dots, header indicator |
 | `unread` | ✓ | ✓ | ✓ | ✓ dots, tab badge |
-| **Resume** |
+| **Resume & conversations** |
 | `resumable` | — | ✓ derived | ✓ | ✓ sidebar |
-| `resume_key` | — | ✓ | ✓ | ✓ project membership |
+| `conversation_file` | ✓ (hook) | ✓ | ✓ | ✓ duplicate-conversation warning |
 | **Routing** |
 | `slug` | ✓ opt | ✓ auto-derived | ✓ | ✓ URL routing |
 | **Terminal** |
@@ -72,23 +76,17 @@ gmuxd exposes the aggregated store via `GET /v1/sessions` and `session-upsert` /
 | `terminal_cols` | ✓ | ✓ | ✓ | ✓ initial size |
 | `terminal_rows` | ✓ | ✓ | ✓ | ✓ initial size |
 | **Build identity** |
-| `stale` | — | ✓ derived | ✓ | ✓ "outdated" badge |
+| `runner_version` | ✓ | ✓ | ✓ | ✓ staleness input |
+| `binary_hash` | ✓ | ✓ | ✓ | ✓ staleness input |
+| **Project assignment (ADR 0002)** |
+| `project_slug`, `project_index` | — | ✓ stamped | ✓ | ✓ folder rendering |
 | **Internal (not in API)** |
 | `shell_title` | ✓ | ✓ | — | — |
 | `adapter_title` | ✓ | ✓ | — | — |
-| `resume_key` | — | ✓ | ✓ | ✓ project membership |
-| `binary_hash` | ✓ | ✓ | — | — |
 
-Fields marked "—" in the "Frontend reads" column are sent by the API but not used by any rendering or logic code. They exist for future features (exit codes, process timing, subtitle display) or as defensive redundancy.
+Fields marked "—" in the "Frontend reads" column are sent by the API but not used by any rendering or logic code. They exist for future features or as defensive redundancy.
 
-Internal fields are inputs to derived fields. The API only exposes the derived output:
-
-| Internal input | Derived output |
-|---|---|
-| `shell_title`, `adapter_title` | `title` (via `resolveTitle`) |
-| `binary_hash` | `stale` (via `markStale`) |
-
-`resume_key` is both an input to `resumable` and directly API-visible (the frontend needs it for project session array membership to identify dead sessions).
+Internal fields are inputs to derived fields. The API only exposes the derived output: `shell_title` and `adapter_title` resolve into `title` (via `resolveTitle`). There is no `stale` field — the frontend derives staleness by comparing `runner_version`/`binary_hash` against `GET /v1/health`'s daemon version and `runner_hash`.
 
 ## Schema
 
@@ -103,6 +101,8 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 | `adapter` | string | Adapter name: `"shell"`, `"claude"`, `"codex"`, `"pi"`, etc. |
 | `workspace_root` | string? | Root of the workspace (jj/git), if detected. Used for folder grouping. |
 | `remotes` | map? | Git/jj remote URLs. Used for cross-machine folder grouping. |
+| `peer` | string? | Owning gmuxd instance; empty = local. Set by the hub for remote sessions, never by runners. |
+| `parent_session_id` | string? | Session this one was spawned from (`gmux edit` as `$EDITOR`); places the child next to its parent in the sidebar. |
 
 ### Process State (owned by gmux, authoritative)
 
@@ -113,27 +113,28 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 | `exit_code` | number? | Exit code when dead |
 | `started_at` | ISO 8601 | When the process was started |
 | `exited_at` | ISO 8601? | When the process exited |
+| `last_activity_at` | ISO 8601? | Stamped by the owning daemon on noteworthy transitions (exit, unread on, working on, error on). Powers the home screen's recency buckets. |
 
-### Resume (derived by gmuxd)
+### Resume & conversations
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `resumable` | boolean | Derived: `!alive && command present`. Never set manually. |
-| `resume_key` | string? | Session-file ID used for resume. Also used by the frontend to match dead sessions against project membership arrays. |
+| `conversation_file` | string? | The agent's on-disk conversation file, reported authoritatively by the agent hook (ADR 0011). Drives resume-command derivation on exit; duplicate values across live sessions trigger a "conversation open in multiple tabs" warning. |
 
-All dead sessions with a command are resumable.
+All dead sessions with a command are resumable. On exit, adapters with native resume (pi, claude, codex) get their command replaced with a tool-specific resume command derived from the conversation file; sessions without one keep the original command, so "resume" re-runs it in the same working directory. Dead conversations can be resolved via `GET /v1/conversations/{adapter}/{slug}`.
 
 ### Routing
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `slug` | string? | Stable URL-friendly identifier. Auto-derived from resume_key basename, command basename, or session ID prefix. Unique within a kind. Adapters can override via the runner's `PUT /slug` endpoint. | Adapters with native resume (pi, claude, codex) provide a tool-specific resume command derived from the session file. Adapters without native resume (shell) keep the original command, so "resume" re-runs it in the same working directory.
+| `slug` | string? | Stable URL-friendly identifier, unique within (adapter, peer). Reported by the agent hook (or set via the runner's `PUT /slug` endpoint); gmuxd enforces uniqueness; the frontend falls back to the short ID when empty. |
 
 ### Display (set by child or gmux, mutable)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `title` | string | Primary display name. Resolved by gmuxd: adapter title > shell title > CommandTitler > adapter kind. |
+| `title` | string | Primary display name. Resolved by gmuxd: adapter title > shell title > CommandTitler > adapter name. |
 | `subtitle` | string? | Secondary context line. |
 | `status` | Status? | Application-reported status (see below). |
 | `unread` | boolean | Whether this session has unseen activity. |
@@ -150,7 +151,8 @@ All dead sessions with a command are resumable.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `stale` | boolean | True when the session's binary hash doesn't match the current gmux binary. Derived from the internal `binary_hash` field. |
+| `runner_version` | string | Version of the runner binary hosting the session. |
+| `binary_hash` | string | sha256 of the runner binary. The frontend compares both against `GET /v1/health` to derive the "outdated" badge (version mismatch, or hash drift in dev). |
 
 ### Status Object (set by child process)
 
@@ -167,26 +169,29 @@ interface Status {
 
 - **`null`** — normal. Alive sessions show a steady dot, dead sessions are dimmed.
 - **`working: true`** — pulsing dot. The animation says "something is happening."
-- **`error: true`** — red dot; the agent gave up and needs attention.
+- **`error: true`** — red dot; the agent gave up and needs attention. A turn-end `unread` report clears it — error is treated as enhanced unread.
 - Display text is the frontend's concern: it derives "Working…"/"Error" from the booleans and `exited (N)` from `exit_code`.
 
 ### How Children Set Status
 
-**Option A — Environment variable + HTTP** (preferred):
+**Option A — the agent hook** (agents; primary): gmux injects a hook into pi/claude/codex launches. The hook `POST`s to `/hook/event` on `$GMUX_SESSION_SOCK`:
+
+- `op: "session"` — binds the session: `path` (conversation file), `name` (title), `slug`/`id`.
+- `op: "turn"` — `phase: "start"` sets working; `phase: "end"` + `outcome` (`completed` → idle + unread, `error` → red dot, `aborted` → idle).
+
+See `docs/runner-hook-protocol.md` in the repo and ADRs 0010/0011/0013/0015.
+
+**Option B — `PUT /status` on `$GMUX_SOCKET`** (any process; generic fallback):
 ```bash
 # gmux sets this in the child's environment
 GMUX_SOCKET=~/.local/state/gmux/run/sessions/sess-abc123.sock
 
-# Child (or a hook) sets status via HTTP on the same socket
+# Child (or a wrapper script) sets status via HTTP on the socket
 curl --unix-socket $GMUX_SOCKET http://localhost/status \
-  -X PUT -d '{"working":true}'
+  -X PUT -d '{"working":true}'    # 'null' clears
 ```
 
-**Option B — OSC escape sequences** (terminal-native):
-```bash
-# OSC 7777 ; json ST  (custom, parsed by gmux's PTY reader)
-printf '\e]7777;{"working":false}\e\\'
-```
+There is no OSC status channel; the PTY reader parses only OSC 0/2 titles (which set `shell_title`).
 
 ### Full Example
 
@@ -208,6 +213,8 @@ As served by `GET /meta` on a runner's Unix socket (runner → gmuxd):
   "status": { "working": true },
   "unread": false,
   "socket_path": "~/.local/state/gmux/run/sessions/sess-abc123.sock",
+  "conversation_file": "/home/user/.pi/agent/sessions/…/abc.jsonl",
+  "runner_version": "2.0.0",
   "binary_hash": "a1b2c3d4e5f6..."
 }
 ```
@@ -229,12 +236,18 @@ As served by `GET /v1/sessions` (gmuxd → frontend):
   "unread": false,
   "socket_path": "~/.local/state/gmux/run/sessions/sess-abc123.sock",
   "slug": "fix-auth-bug",
-  "resume_key": "2026-03-14T10-00-00_abc123",
-  "stale": false
+  "conversation_file": "/home/user/.pi/agent/sessions/…/abc.jsonl",
+  "last_activity_at": "2026-03-14T10:05:00Z",
+  "runner_version": "2.0.0",
+  "binary_hash": "a1b2c3d4e5f6..."
 }
 ```
 
-Note the differences: `shell_title`, `adapter_title`, and `binary_hash` are absent from the API response. `title` is the resolved value. `stale` is derived from `binary_hash`. `slug` is auto-derived. `resume_key` is passed through for project membership matching.
+Note the differences: `shell_title` and `adapter_title` are absent from the API response — `title` is the resolved value. `runner_version` and `binary_hash` ride the wire so the frontend can derive staleness against `/v1/health`. `last_activity_at` is stamped by the daemon.
+
+## Terminology (2.0)
+
+Pre-2.0 docs and payloads used `kind` (now `adapter`), `session_file` (now `conversation_file`), and `resume_key` (gone — its roles are covered by `conversation_file` and `slug`). See [Migrating to 2.0](/migrating-to-2/).
 
 ## What's NOT in This Schema
 
