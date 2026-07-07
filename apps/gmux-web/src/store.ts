@@ -909,6 +909,103 @@ export function sessionStaleness(
   return null
 }
 
+/**
+ * When the currently-selected session's slug changes between two session
+ * arrays, compute the canonical URL for the new slug. Callers rewrite the
+ * address bar in place with this URL so the stale slug doesn't fail to
+ * resolve and boot the user back to the project hub.
+ *
+ * The slug is title-derived (#348/#360), so it changes on rename *and*
+ * when a pi `/resume` swaps the active conversation. Both cases keep the
+ * same underlying gmux session id; only the slug moves. Resolving the
+ * post-update session list here means the returned URL sees the new slug.
+ *
+ * `selectedId` is read before the caller commits the new array, so it
+ * still resolves against the current (pre-change) slug in the URL.
+ *
+ * Returns null when nothing needs rewriting.
+ */
+function selectedSlugRewrite(prev: Session[], next: Session[]): string | null {
+  const id = selectedId.value
+  if (!id) return null
+  const old = prev.find(s => s.id === id)
+  const cur = next.find(s => s.id === id)
+  if (!old || !cur || old.slug === cur.slug) return null
+  // viewToPath routes peer-owned sessions through `/@<peer>/...` (ADR 0002)
+  // just like every other URL serializer.
+  return viewToPath({ kind: 'session', sessionId: id }, projects.value, next)
+}
+
+/**
+ * Rewrite the address bar in place when the selected session's slug moved.
+ * Sets `urlPath` inside the same batch as the session commit so the `view`
+ * computed never observes the new slug against the old URL (which would
+ * briefly fail to resolve and deselect the session). Returns true when a
+ * rewrite happened, meaning the caller has already committed `nextSessions`
+ * to `_rawSessions` inside the batch.
+ */
+function commitWithSlugRewrite(
+  nextSessions: Session[],
+  extra?: () => void,
+): boolean {
+  const newUrl = selectedSlugRewrite(_rawSessions.value, nextSessions)
+  if (!newUrl) return false
+  batch(() => {
+    _rawSessions.value = nextSessions
+    urlPath.value = newUrl
+    extra?.()
+  })
+  // Sync the browser URL bar. navigate(replace) uses history.replaceState
+  // via preact-iso, so back/forward history isn't polluted. urlPath was
+  // already set above inside the batch for atomicity with the session data.
+  navigate(newUrl, true)
+  return true
+}
+
+/**
+ * Apply a wholesale `snapshot.sessions` payload (protocol 2 / ADR 0001):
+ * the daemon re-sends the *entire* session list on any session state
+ * change, and we replace `_rawSessions` in one shot rather than patching
+ * individual entries.
+ *
+ * Because the replacement is wholesale, a slug change on the currently
+ * viewed session (a rename, or a pi `/resume` that swaps the active
+ * conversation — #348/#360) arrives here, NOT via `upsertSession`. This is
+ * the seam that silently regressed when #191 replaced per-session
+ * `session-upsert` events (which ran `upsertSession`, and with it the
+ * slug→URL rewrite) with snapshots: the rewrite logic was left in
+ * `upsertSession`, which the live path no longer calls. Routing the
+ * commit through `commitWithSlugRewrite` reconnects it, so the URL follows
+ * the new slug in place instead of the stale slug failing to resolve and
+ * booting the user back to the project hub.
+ */
+export function applySessionsSnapshot(list: Session[]): void {
+  // Detect newly-arrived IDs vs the previous snapshot so a pending launch
+  // (just-POSTed /v1/launch awaiting an id) can navigate to its session as
+  // soon as the daemon publishes it. Computed before we commit the new
+  // array so the launch navigation runs against the new state.
+  const prevIds = new Set(_rawSessions.value.map(s => s.id))
+  const newIds = list.filter(s => !prevIds.has(s.id)).map(s => s.id)
+
+  const rewritten = commitWithSlugRewrite(list, () => {
+    sessionsLoaded.value = true
+    connState.value = 'connected'
+  })
+  if (!rewritten) {
+    batch(() => {
+      _rawSessions.value = list
+      sessionsLoaded.value = true
+      connState.value = 'connected'
+    })
+  }
+
+  if (newIds.length > 0 && consumePendingLaunch()) {
+    // Most recent new id wins; with one launch in flight at a time this
+    // is unambiguous.
+    navigateToSession(newIds[newIds.length - 1], true)
+  }
+}
+
 /** Upsert a session from SSE. Returns true if the session was new. */
 export function upsertSession(raw: ProtocolSession): boolean {
   const updated = toUISession(raw)
@@ -916,38 +1013,9 @@ export function upsertSession(raw: ProtocolSession): boolean {
   const prev = _rawSessions.value
   const idx = prev.findIndex(s => s.id === updated.id)
   if (idx >= 0) {
-    const old = prev[idx]
     const next = [...prev]
     next[idx] = updated
-
-    // When the currently-selected session changes slug, update the URL
-    // atomically with the session data. Without batch(), the view
-    // computed would see the new sessions (slug changed) but the old
-    // URL (still has the old slug), fail to resolve, and briefly
-    // deselect the session.
-    if (old.slug !== updated.slug && selectedId.value === updated.id) {
-      // viewToPath gets the post-update sessions array so it sees the
-      // new slug. Routes peer-owned sessions through `/@<peer>/...`
-      // (ADR 0002) just like every other URL serializer.
-      const newUrl = viewToPath(
-        { kind: 'session', sessionId: updated.id },
-        projects.value,
-        next,
-      )
-      if (newUrl) {
-        batch(() => {
-          _rawSessions.value = next
-          urlPath.value = newUrl
-        })
-        // Sync the browser URL bar. navigate() calls preact-iso's
-        // loc.route which would also set urlPath via the
-        // useLayoutEffect in App, but we already set it above
-        // inside the batch for atomicity.
-        navigate(newUrl, true)
-        return isNew
-      }
-    }
-
+    if (commitWithSlugRewrite(next)) return isNew
     _rawSessions.value = next
   } else {
     isNew = true
@@ -1418,27 +1486,7 @@ export function initStore(): () => void {
   source.addEventListener('snapshot.sessions', (e) => {
     try {
       const envelope = JSON.parse(e.data) as { sessions?: ProtocolSession[] }
-      const list = (envelope.sessions ?? []).map(toUISession)
-
-      // Detect newly-arrived IDs vs the previous snapshot so a
-      // pending launch (just-POSTed /v1/launch awaiting an id) can
-      // navigate to its session as soon as the daemon publishes it.
-      // Done before we commit the new array so consumers see the
-      // navigation against the new state.
-      const prevIds = new Set(_rawSessions.value.map(s => s.id))
-      const newIds = list.filter(s => !prevIds.has(s.id)).map(s => s.id)
-
-      batch(() => {
-        _rawSessions.value = list
-        sessionsLoaded.value = true
-        connState.value = 'connected'
-      })
-
-      if (newIds.length > 0 && consumePendingLaunch()) {
-        // Most recent new id wins; with one launch in flight at a
-        // time this is unambiguous.
-        navigateToSession(newIds[newIds.length - 1], true)
-      }
+      applySessionsSnapshot((envelope.sessions ?? []).map(toUISession))
     } catch (err) {
       console.warn('snapshot.sessions: bad event', err)
     }

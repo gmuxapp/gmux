@@ -8,6 +8,7 @@ import {
   isSessionUnavailable, urlPath, urlSearch, filteredSessions, selectedId,
   navigateToSession, setNavigate,
   applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
+  applySessionsSnapshot,
   toUISession, localHostLabel, parseConnectURL, unreadCount, discovered,
   view, duplicateConversationFiles,
 } from './store'
@@ -305,6 +306,97 @@ describe('upsertSession', () => {
     // URL should be unchanged.
     expect(urlPath.value).toBe('/myproject/pi/fix-auth')
     expect(selectedId.value).toBe('sess-1')
+  })
+})
+
+describe('applySessionsSnapshot: /resume keeps the terminal mounted', () => {
+  // Regression for the /resume boot-to-project bug (and the same class of
+  // rename bug, #348/#360). A pi /resume keeps the gmux session id but
+  // swaps the active conversation, so the title-derived slug changes. The
+  // daemon re-pushes the *entire* session list (protocol 2 / ADR 0001),
+  // which the client applies wholesale via applySessionsSnapshot.
+  //
+  // These drive the real production entry point (not the extracted helper
+  // in isolation) and assert the observable that actually regressed: the
+  // resolved `view` must stay on the session, with the URL rewritten in
+  // place — not fall back to the project hub. Testing the seam, not just
+  // the helper, is deliberate: the original regression was precisely that
+  // the rewrite logic existed but nothing on the live path called it.
+  const testProjects: ProjectItem[] = [
+    { slug: 'myproject', match: [{ path: '/dev/project' }] },
+  ]
+  const navCalls: Array<[string, boolean | undefined]> = []
+  beforeEach(() => {
+    navCalls.length = 0
+    setNavigate((url, replace) => { navCalls.push([url, replace]) })
+    _setRawWorld({ projects: testProjects })
+    _rawSessions.value = [
+      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
+    ]
+    sessionsLoaded.value = true
+    worldLoaded.value = true
+    urlPath.value = '/myproject/pi/fix-auth'
+  })
+
+  it('rewrites the URL and keeps the session view when the selected slug changes', () => {
+    expect(view.value).toEqual({ kind: 'session', sessionId: 'sess-1' })
+
+    // Snapshot: same id, resumed slug, brand-new array (the wire shape).
+    applySessionsSnapshot([
+      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'refactor-login' }),
+    ])
+
+    expect(urlPath.value).toBe('/myproject/pi/refactor-login')
+    // The user stays on the terminal — no boot to the project hub.
+    expect(view.value).toEqual({ kind: 'session', sessionId: 'sess-1' })
+    // Address bar synced via replaceState (replace=true), so back/forward
+    // history isn't polluted.
+    expect(navCalls).toContainEqual(['/myproject/pi/refactor-login', true])
+  })
+
+  it('leaves the URL untouched when the selected slug is unchanged', () => {
+    applySessionsSnapshot([
+      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', title: 'now working' }),
+    ])
+
+    expect(urlPath.value).toBe('/myproject/pi/fix-auth')
+    expect(view.value).toEqual({ kind: 'session', sessionId: 'sess-1' })
+    expect(navCalls).toEqual([])
+  })
+
+  it('does not rewrite when a non-selected session changes slug', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
+      makeSession({ id: 'sess-2', cwd: '/dev/project', adapter: 'pi', slug: 'old' }),
+    ]
+
+    applySessionsSnapshot([
+      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth' }),
+      makeSession({ id: 'sess-2', cwd: '/dev/project', adapter: 'pi', slug: 'new' }),
+    ])
+
+    expect(urlPath.value).toBe('/myproject/pi/fix-auth')
+    expect(navCalls).toEqual([])
+  })
+
+  it('boots to the hub only when the selected session is genuinely gone', () => {
+    // A snapshot that drops the session (killed) — distinct from a slug
+    // change — should fall through to the normal commit and let the view
+    // resolve to the project hub.
+    applySessionsSnapshot([])
+
+    expect(view.value).toEqual({ kind: 'project', projectSlug: 'myproject' })
+  })
+
+  it('still commits the snapshot (loaded flags flip) when nothing is selected', () => {
+    urlPath.value = '/'
+    sessionsLoaded.value = false
+    applySessionsSnapshot([
+      makeSession({ id: 'sess-9', cwd: '/dev/project', adapter: 'pi', slug: 'x' }),
+    ])
+    expect(sessionsLoaded.value).toBe(true)
+    expect(sessions.value.map(s => s.id)).toContain('sess-9')
+    expect(navCalls).toEqual([])
   })
 })
 
