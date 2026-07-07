@@ -26,7 +26,7 @@ Renaming with pi's `/name` command updates the sidebar live.
 
 ### Resumable sessions
 
-When a pi session exits, it remains in the sidebar as a resumable entry. Click it to resume exactly where you left off — gmux launches `pi --session <path> -c` with the right session file.
+When a pi session exits, it remains in the sidebar as a resumable entry. Click it to resume exactly where you left off — gmux launches `pi --session <path> -c` with the right conversation file.
 
 Resumable sessions are deduplicated: if you're already running a session that matches a resumable entry, only the live one appears.
 

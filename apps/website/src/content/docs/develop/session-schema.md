@@ -52,8 +52,8 @@ gmuxd exposes the aggregated store to the browser via `GET /v1/events` (SSE). Se
 | `adapter` | ✓ | ✓ | ✓ | ✓ adapter badge, URLs |
 | `peer` | — | ✓ (hub) | ✓ | ✓ host attribution |
 | `parent_session_id` | ✓ | ✓ | ✓ | ✓ sidebar placement of editor children |
-| `workspace_root` | ✓ | ✓ | ✓ | ✓ folder grouping |
-| `remotes` | ✓ | ✓ | ✓ | ✓ folder grouping |
+| `workspace_root` | ✓ | ✓ | ✓ | ✓ project grouping |
+| `remotes` | ✓ | ✓ | ✓ | ✓ project grouping |
 | **Process state** |
 | `alive` | ✓ | ✓ | ✓ | ✓ everywhere |
 | `pid` | ✓ | ✓ | ✓ | — |
@@ -79,7 +79,7 @@ gmuxd exposes the aggregated store to the browser via `GET /v1/events` (SSE). Se
 | `runner_version` | ✓ | ✓ | ✓ | ✓ staleness input |
 | `binary_hash` | ✓ | ✓ | ✓ | ✓ staleness input |
 | **Project assignment (ADR 0002)** |
-| `project_slug`, `project_index` | — | ✓ stamped | ✓ | ✓ folder rendering |
+| `project_slug`, `project_index` | — | ✓ stamped | ✓ | ✓ project rendering |
 | **Internal (not in API)** |
 | `shell_title` | ✓ | ✓ | — | — |
 | `adapter_title` | ✓ | ✓ | — | — |
@@ -99,8 +99,8 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 | `command` | string[] | The command being run. For resumed sessions, replaced with the resume command. |
 | `cwd` | string | Working directory |
 | `adapter` | string | Adapter name: `"shell"`, `"claude"`, `"codex"`, `"pi"`, etc. |
-| `workspace_root` | string? | Root of the workspace (jj/git), if detected. Used for folder grouping. |
-| `remotes` | map? | Git/jj remote URLs. Used for cross-machine folder grouping. |
+| `workspace_root` | string? | Root of the workspace (jj/git), if detected. Used for project grouping. |
+| `remotes` | map? | Git/jj remote URLs. Used for cross-machine project grouping. |
 | `peer` | string? | Owning gmuxd instance; empty = local. Set by the hub for remote sessions, never by runners. |
 | `parent_session_id` | string? | Session this one was spawned from (`gmux edit` as `$EDITOR`); places the child next to its parent in the sidebar. |
 

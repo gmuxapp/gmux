@@ -76,6 +76,8 @@ Backs `gmux edit [file]` — editor sessions as a first-class tab type, usable a
 
 For claude, codex, and pi, gmux injects a lightweight hook (a pi extension, or command hooks for claude/codex) into each launch. The agent reports which conversation it holds, turn boundaries (working/idle), titles, and slugs directly to gmux — the launch is otherwise unmodified, and nothing is written to the tools' config directories. Set `GMUX_NO_AGENT_HOOK=1` to launch the agent completely unmodified; the session then runs without hook-driven title/status/attribution.
 
+The hook mechanism is documented in depth in [Adapter Architecture](/develop/adapter-architecture/#live-session-state-comes-from-the-agent-hook); per-tool specifics are on the [pi](/integrations/pi/), [Claude Code](/integrations/claude-code/), and [Codex](/integrations/codex/) pages.
+
 ## Self-reporting
 
 Any process or script can report its own status without a custom adapter. `gmux` sets `$GMUX_SOCKET` in the child's environment:

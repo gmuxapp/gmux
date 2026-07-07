@@ -3,9 +3,11 @@ title: Probes
 description: Planned folder-level metadata and project context.
 ---
 
-> This feature is not yet implemented.
+:::note[Not implemented]
+Probes are a design sketch; nothing here has shipped.
+:::
 
-Probes would add project-level context to folder groups in the sidebar — things like git branch, CI status, or dependency health. They're distinct from adapters, which operate per-session.
+Probes would add project-level context to project groups in the sidebar — things like git branch, CI status, or dependency health. They're distinct from adapters, which operate per-session.
 
 Open questions:
 

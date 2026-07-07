@@ -1,9 +1,11 @@
 ---
 title: Distribution
-description: How gmux will be shipped — binaries, packaging, and deployment modes.
+description: How gmux is shipped — binaries, packaging, and deployment modes.
 ---
 
-> **Status (2.0):** largely shipped — goreleaser releases with checksums, the Homebrew tap, `install.sh`, and automatic daemon upgrade all exist. Still open: signing/provenance, `gmux doctor`, AUR/Nix packaging.
+:::note[Design record]
+This is the design/ops record for how gmux ships. Most of it is in place today (goreleaser releases with checksums, the Homebrew tap, `install.sh`, automatic daemon upgrade). Items still open are called out inline; anything not marked is shipped.
+:::
 
 ## Artifacts
 
