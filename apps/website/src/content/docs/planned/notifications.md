@@ -3,6 +3,8 @@ title: Notifications
 description: Daemon-driven session notifications with presence tracking and smart routing.
 ---
 
+> **Status (2.0): implemented** as described (presence tracking, grace period, coalescing, best-client routing). A follow-up redesign toward stateful, resolve-once interactive notifications is proposed in ADR 0018.
+
 ## How it works
 
 The daemon owns all notification decisions. Browser clients are dumb reporters

@@ -3,7 +3,8 @@ title: Project Management
 description: User-curated project list with VCS-aware matching and stable URL routing.
 ---
 
-> This feature is not yet implemented.
+> **Status (2.0): implemented.** Server-side project state (`projects.json`, host-authoritative discovery), the Settings → Projects UI, and hierarchical URL routing all shipped — see [Using the UI](/using-the-ui/) and [projects.json](/reference/projects-json/). Terminology note: `kind` in this document is now `adapter`. Kept for design rationale.
+
 
 Today, folders appear in the sidebar automatically when sessions start, and the scanner walks all adapter session directories to discover every resumable session across all projects. This works but creates noise, doesn't sync between clients, and prevents adapters with per-project storage (like OpenCode's SQLite) from integrating cleanly.
 

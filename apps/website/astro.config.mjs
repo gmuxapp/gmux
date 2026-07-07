@@ -20,6 +20,7 @@ export default defineConfig({
       customCss: ['./src/styles/custom.css'],
       sidebar: [
         { label: 'Getting Started', slug: 'getting-started' },
+        { label: 'Migrating to 2.0', slug: 'migrating-to-2' },
         { label: 'Changelog', slug: 'changelog' },
         {
           label: 'Guides',

@@ -3,6 +3,8 @@ title: Versioning
 description: How gmux versions its artifacts and contracts.
 ---
 
+> **Status (2.0): implemented.** This page describes shipped behavior (binary-hash staleness, automatic daemon upgrade, `/v1` API prefix); it is kept here as the design record.
+
 ## Principles
 
 - Version user-facing artifacts, not internal implementation details.

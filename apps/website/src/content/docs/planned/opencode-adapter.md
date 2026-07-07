@@ -3,7 +3,8 @@ title: OpenCode Adapter
 description: Adapter for the OpenCode AI coding agent.
 ---
 
-> This feature is not yet implemented. Depends on [folder management](/planned/folder-management/).
+> **Status (2.0):** not implemented, but the stated blocker is gone — project management shipped. The mechanism described below predates the 2.0 architecture: discovery would now be an adapter-owned `ConversationSource` (ADR 0014), and status should come from an agent hook (ADR 0013/0015) rather than DB polling.
+
 
 [OpenCode](https://opencode.ai) is an open-source AI coding agent that runs in the terminal. Unlike Claude Code, pi, and Codex (which write JSONL conversation files to central directories), OpenCode stores sessions in a SQLite database at `.opencode/opencode.db` relative to the working directory. This per-project storage model requires the folder management refactor before the adapter can discover sessions.
 
