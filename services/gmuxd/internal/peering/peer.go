@@ -57,8 +57,9 @@ type Peer struct {
 	isKnownOrigin func(name string) bool
 
 	// transport is the HTTP round-tripper for all spoke connections.
-	// nil means use the default transport. Set via WithTransport for
-	// tailscale-discovered peers that route through tsnet.
+	// nil means use the default transport. Set via WithTransport; the
+	// hub passes a routed transport that sends same-tailnet MagicDNS
+	// hosts through tsnet.
 	transport http.RoundTripper
 
 	// streamIdleTimeout overrides the default SSE idle timeout.

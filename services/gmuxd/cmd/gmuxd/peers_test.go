@@ -25,7 +25,7 @@ func TestProbePeerHealth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	id, name, err := probePeerHealth(context.Background(), srv.URL, "tok")
+	id, name, err := probePeerHealth(context.Background(), http.DefaultTransport, srv.URL, "tok")
 	if err != nil {
 		t.Fatalf("probePeerHealth: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestProbePeerHealth_Unauthorized(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
-	if _, _, err := probePeerHealth(context.Background(), srv.URL, ""); err == nil {
+	if _, _, err := probePeerHealth(context.Background(), http.DefaultTransport, srv.URL, ""); err == nil {
 		t.Fatal("expected an error when the probe is unauthorized")
 	}
 }
@@ -50,7 +50,7 @@ func TestProbePeerHealth_MissingName(t *testing.T) {
 	}))
 	defer srv.Close()
 	// A host that reports no name can't be given a routing identity.
-	if _, _, err := probePeerHealth(context.Background(), srv.URL, ""); err == nil {
+	if _, _, err := probePeerHealth(context.Background(), http.DefaultTransport, srv.URL, ""); err == nil {
 		t.Fatal("expected an error when the host reports no name")
 	}
 }
@@ -62,7 +62,7 @@ func TestProbePeerHealth_NotGmux(t *testing.T) {
 		_, _ = w.Write([]byte(`{"ok":true,"data":{"service":"other","hostname":"x"}}`))
 	}))
 	defer srv.Close()
-	if _, _, err := probePeerHealth(context.Background(), srv.URL, ""); err == nil {
+	if _, _, err := probePeerHealth(context.Background(), http.DefaultTransport, srv.URL, ""); err == nil {
 		t.Fatal("expected an error when the host is not running gmux")
 	}
 }

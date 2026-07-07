@@ -709,6 +709,13 @@ func serve(stderr io.Writer) int {
 	// the health handler can include the tailscale URL.
 	var tsListener *tsauth.Listener
 
+	// peerTransport routes peer HTTP traffic. Hosts under the local
+	// tailnet's MagicDNS suffix go through gmux's embedded tsnet once it
+	// is ready (set below via SetTailnet); everything else uses the
+	// default transport. Shared by the health probe and all peers so a
+	// tsnet-only hub can reach same-tailnet peers added manually (#281).
+	peerTransport := tsauth.NewRoutedTransport()
+
 	// tcpAddr and authToken are resolved after config load. Declared here
 	// so the health handler can report the address.
 	var tcpAddr string
@@ -1198,7 +1205,7 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		peerNodeID, name, err := probePeerHealth(r.Context(), req.URL, req.Token)
+		peerNodeID, name, err := probePeerHealth(r.Context(), peerTransport, req.URL, req.Token)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "unreachable", fmt.Sprintf("could not reach host: %v", err))
 			return
@@ -2193,7 +2200,7 @@ func serve(stderr io.Writer) int {
 	// Always create the manager: peers can be added at runtime via
 	// /v1/peers (ADR 0007 §5), so it must exist even when nothing is
 	// configured or discovered at startup.
-	peerManager = peering.NewManager(manualPeers, sessions, hostname)
+	peerManager = peering.NewManager(manualPeers, sessions, hostname, peering.WithTransport(peerTransport))
 	// Prune namespaced projects.json keys when a Local peer
 	// (devcontainer) is removed: its `id@<peer>` session keys can
 	// never resolve again and would accumulate dead weight in the
@@ -2255,6 +2262,17 @@ func serve(stderr io.Writer) int {
 			Allow:    cfg.Tailscale.Allow,
 		}, stateDir, authedHandler)
 		defer tsListener.Shutdown()
+
+		// Once tsnet is up, route same-tailnet MagicDNS peers through it
+		// (#281). Existing peers share peerTransport, so they pick up
+		// tsnet routing on their next reconnect without re-construction.
+		go func(l *tsauth.Listener) {
+			<-l.Ready()
+			if suffix := l.MagicDNSSuffix(); suffix != "" {
+				peerTransport.SetTailnet(suffix, l.Transport())
+				log.Printf("peering: routing *.%s peers through tsnet", suffix)
+			}
+		}(tsListener)
 	}
 
 	// ── Signal handling for graceful shutdown ──
@@ -2650,8 +2668,9 @@ func writeJSON(w http.ResponseWriter, payload any) {
 // probePeerHealth fetches the target's /v1/health and returns its opaque
 // node_id and self-reported name (ADR 0007). The add-peer flow uses the
 // node_id to dedup and adopts the name as the peer's routing identity.
-// Manual peers use the default transport (as [[peers]] did before).
-func probePeerHealth(ctx context.Context, baseURL, token string) (nodeID, name string, err error) {
+// The transport routes same-tailnet MagicDNS hosts through tsnet once
+// it is ready; everything else uses the default transport (#281).
+func probePeerHealth(ctx context.Context, transport http.RoundTripper, baseURL, token string) (nodeID, name string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/health", nil)
@@ -2661,7 +2680,8 @@ func probePeerHealth(ctx context.Context, baseURL, token string) (nodeID, name s
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Transport: transport}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", err
 	}

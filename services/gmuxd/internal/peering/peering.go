@@ -30,8 +30,9 @@ import (
 type PeerOption func(*Peer)
 
 // WithTransport sets a custom HTTP transport for all peer connections.
-// Used for tailscale-discovered peers that route through tsnet. The
-// transport is stored and applied when newPeer constructs the
+// The hub passes a shared tsauth.RoutedTransport so same-tailnet
+// MagicDNS peers route through the embedded tsnet once it is ready.
+// The transport is stored and applied when newPeer constructs the
 // underlying apiclient.Client.
 func WithTransport(rt http.RoundTripper) PeerOption {
 	return func(p *Peer) {
