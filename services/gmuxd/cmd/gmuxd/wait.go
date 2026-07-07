@@ -234,27 +234,11 @@ func waitForSessionExit(sessions *store.Store, evCh <-chan store.Event, sessionI
 // the session exists in the store with Alive == false until the
 // runner's first upsert lands, and reporting "died" during that
 // window is a phantom death (issue #216). "died" therefore requires
-// evidence the session ever ran, from any of:
-//
-//   - seenAlive: this wait observed Alive == true, then it flipped
-//     (the caller's record across snapshot/event/poll observations);
-//   - ExitCode != nil: the runner watched the child process exit
-//     (SetExited), definitive for dead-on-arrival fast-exit commands;
-//   - StartedAt != "": the runner stamped SetRunning at some point.
-//     This is what keeps already-dead sessions failing fast when the
-//     runner never reported an exit code: force-marked-dead sessions
-//     (unreachable runner on kill, stale-socket sweep) and sessions
-//     restored from sessionmeta after a daemon restart all carry
-//     their historical StartedAt, so --wait on them must not block
-//     waiting for a resurrection that can't happen.
-//
-// A session with none of the three has never run — either it's in
-// the startup window (the common case, resolved by the runner's next
-// upsert) or its runner died before ever spawning the child (rare;
-// bounded by --timeout).
+// hasRunEvidence(s, seenAlive) — see that helper for the three signals
+// that count as "this session actually ran."
 func terminalReason(s store.Session, seenAlive bool) (string, bool) {
 	if !s.Alive {
-		if seenAlive || s.ExitCode != nil || s.StartedAt != "" {
+		if hasRunEvidence(s, seenAlive) {
 			return "died", true
 		}
 		return "", false
@@ -263,6 +247,33 @@ func terminalReason(s store.Session, seenAlive bool) (string, bool) {
 		return "idle", true
 	}
 	return "", false
+}
+
+// hasRunEvidence reports whether a not-Alive session ever actually
+// ran, which is what distinguishes a genuine death from the startup
+// window where the session is registered but the runner's first
+// upsert hasn't flipped Alive to true yet (issue #216). Evidence comes
+// from any of:
+//
+//   - seenAlive: the caller observed Alive == true earlier in this
+//     wait (tracked across its snapshot/event/poll observations), so a
+//     later Alive == false is a true→false transition;
+//   - ExitCode != nil: the runner watched the child process exit
+//     (SetExited) — definitive even if this wait never saw it alive;
+//   - StartedAt != "": the runner stamped SetRunning at some point.
+//     Force-marked-dead sessions (unreachable runner on kill,
+//     stale-socket sweep) and sessions restored from sessionmeta after
+//     a daemon restart carry their historical StartedAt with no live
+//     ExitCode, so a wait on them must fail fast rather than block for
+//     a resurrection that can't come.
+//
+// A session with none of the three has never run: either it's in the
+// startup window (common; the runner's next upsert resolves it) or its
+// runner died before spawning the child (rare; bounded by --timeout).
+// Shared by the idle wait (terminalReason) and the output-condition
+// wait so the gate can't drift between them.
+func hasRunEvidence(s store.Session, seenAlive bool) bool {
+	return seenAlive || s.ExitCode != nil || s.StartedAt != ""
 }
 
 // adapterEmitsIdleSignal reports whether sessions of the given
