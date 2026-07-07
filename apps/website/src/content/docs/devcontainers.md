@@ -24,14 +24,18 @@ That's it. Rebuild the container and any `gmux` session you start inside it show
 
 The feature installs `gmux` and `gmuxd` into the container and starts the daemon automatically. The host gmuxd discovers the container through Docker events:
 
-1. Container starts with `GMUXD_LISTEN=0.0.0.0` in its environment (set by the feature)
-2. Host gmuxd detects the start event and reads the container's auth token via `docker exec`
+1. Container starts with `GMUXD_LISTEN=0.0.0.0` in its environment (set by the feature) and the `devcontainer.local_folder` label (set automatically by the devcontainer CLI / VS Code). Both are required — containers launched outside a devcontainer tool are not discovered.
+2. Host gmuxd detects the start event and reads the container's auth token via `docker exec` (retried for slow-starting containers)
 3. Host connects to the container's gmuxd over the Docker bridge network
 4. Container sessions stream into the host dashboard via the standard peer protocol
 
-The container's sessions appear in the sidebar with a topology breadcrumb showing the chain (e.g. `workstation > alpine-dev`). Launching from the project hub's per-folder **+** button routes new sessions to the correct container.
+The container's sessions appear in the sidebar with a container icon and an `@<peer>` suffix (the peer is named after the host folder, e.g. `my-project`). Discovered containers also show up in **Settings → Hosts** with `Source: devcontainer`. Launching from that project routes new sessions to the correct container.
 
-When the container stops, its sessions are marked as disconnected. When it starts again, they reconnect.
+When the container stops, its sessions disappear from the dashboard. When it starts again, the host re-discovers it and the sessions come back — conversation history lives inside the container, so nothing is lost.
+
+:::note[2.0 upgrade]
+Host and container must run the same major version: a 2.0 host cannot connect to a 1.x container daemon. After upgrading the host, rebuild your devcontainers so the feature installs a matching gmux.
+:::
 
 ## Pin a version
 
@@ -66,7 +70,7 @@ With auto-discovery, you rarely need a pre-provisioned token. The host reads it 
 
 ## Disabling auto-discovery
 
-To keep containers from being auto-discovered (e.g. if you want to manage them as manual peers):
+Devcontainer discovery is on by default. To keep containers from being auto-discovered (e.g. if you want to manage them as manual peers):
 
 ```toml
 # ~/.config/gmux/host.toml

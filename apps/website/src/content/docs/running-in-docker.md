@@ -25,11 +25,24 @@ EOF
 
 # The container's hostname becomes its Tailscale name (gmux-<hostname>).
 docker compose up -d --build   # compose sets hostname: dev → joins as gmux-dev
-docker logs dev 2>&1 | grep "login.tailscale.com"
+docker logs dev 2>&1 | grep "login.tailscale.com"   # first run only; the state mount persists registration
 # Visit the URL to register, then open https://gmux-dev.your-tailnet.ts.net
 ```
 
+On first visit you'll see the gmux login page — being on the tailnet lets you *reach* the host, but the token is what authorizes you. Paste the container's token (`docker exec dev cat /root/.local/state/gmux/auth-token`, or run `docker exec dev gmuxd auth`).
+
 See [Remote Access](/remote-access/) for Tailscale setup details.
+
+### Connecting the container to your main gmux
+
+To aggregate the container's sessions into your main dashboard:
+
+```bash
+docker exec dev gmuxd auth
+# paste the printed "Connect to host" URL into Settings → Hosts → Connect to host
+```
+
+Only your machine holds the container's token — the container never gets yours — so a compromised agent inside the container can't drive your other machines ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
 
 ## WireGuard
 
@@ -55,7 +68,7 @@ This gives you a valid Let's Encrypt certificate on your own domain, with the gm
 
 By default, gmuxd generates a random auth token on first start. For container deployments where you need a known value (reverse proxy injection, health checks, scripting), there are two options.
 
-**Option 1: Environment variable (recommended for containers).** Set `GMUXD_TOKEN` in your compose file. On first start, gmuxd writes it to disk. On subsequent starts, the file already exists and the env var is verified against it.
+**Option 1: Environment variable (recommended for containers).** Set `GMUXD_TOKEN` in your compose file. On first start, gmuxd writes it to disk. On subsequent starts, the env var must match the existing file or gmuxd refuses to start. Tokens must be at least 64 hex characters (`openssl rand -hex 32`).
 
 ```bash
 openssl rand -hex 32   # copy the output into your compose.yaml or .env
@@ -79,7 +92,7 @@ Either way, any client that needs access can set the `Authorization: Bearer <tok
 
 ## How it works
 
-The container runs `gmuxd` as its entrypoint. Inside the container, `GMUXD_LISTEN=0.0.0.0` binds to all interfaces so the host (or Tailscale) can reach the port. The entrypoint script auto-updates gmux binaries on each start.
+The container runs `gmuxd run` as its entrypoint. In the WireGuard and Traefik examples, `GMUXD_LISTEN=0.0.0.0` binds the TCP listener to all interfaces so the host can map the port. The Tailscale example doesn't need it — the tsnet listener is reachable over the tailnet directly, and the TCP listener stays on loopback (used only by the compose health check). The entrypoint script auto-updates gmux binaries on each start.
 
 ### Bind address
 
@@ -129,4 +142,4 @@ services:
 enabled = true
 ```
 
-The node name is owned by Tailscale after first registration (it survives container recreation as long as the state mount persists), so there is no `hostname` key in `host.toml`. To see sessions from all containers in a single dashboard instead, set up [Multi-Machine Sessions](/multi-machine) with one gmuxd as the hub.
+The node name is owned by Tailscale after first registration (it survives container recreation as long as the state mount persists), so there is no `hostname` key in `host.toml`; alternatively, set `GMUXD_TS_HOSTNAME` in the container environment to pick the tailscale name directly. To see sessions from all containers in a single dashboard instead, set up [Multi-Machine Sessions](/multi-machine) with one gmuxd as the hub.

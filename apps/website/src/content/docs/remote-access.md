@@ -49,7 +49,7 @@ Enable remote access? [y/N] y
 
 Enabled tailscale in /home/user/.config/gmux/host.toml
 Restarting daemon...
-gmuxd: running (pid 12345)
+gmuxd: running v2.0.0 (pid 12345)
   Logs: /home/user/.local/state/gmux/gmuxd.log
 
 Connecting to Tailscale...
@@ -66,7 +66,7 @@ Visit the URL to approve the device. gmux registers as its own device in your ta
 $ gmux remote
 Connecting to Tailscale...
   local:  http://127.0.0.1:8790
-  remote: https://gmux.your-tailnet.ts.net
+  remote: https://gmux-laptop.your-tailnet.ts.net
 
 Remote access is active.
 ```
@@ -81,12 +81,12 @@ enabled = true
 See [host.toml reference](/reference/host-toml/) for all fields (allow list).
 
 :::note[Multiple machines]
-Each machine joins the tailnet under `gmux-<its-hostname>`, derived from the OS hostname on first registration and then owned by Tailscale (it dedups names automatically). To use a specific name, set the machine's name in the Tailscale admin console or rename the host — there is no `hostname` key in `host.toml` (see [ADR 0007](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0007-host-identity-and-peer-urls.md)). A machine named `gmux-desktop` is reachable at `https://gmux-desktop.your-tailnet.ts.net`.
+Each machine joins the tailnet under `gmux-<its-hostname>`, derived from the OS hostname on first registration and then owned by Tailscale (it dedups names automatically). To use a specific name, set the machine's name in the Tailscale admin console or rename the host — there is no `hostname` key in `host.toml` (see [ADR 0007](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0007-host-identity-and-peer-urls.md)). To seed a different name *before first registration*, set `GMUXD_TS_HOSTNAME` in the daemon's environment. A machine named `gmux-desktop` is reachable at `https://gmux-desktop.your-tailnet.ts.net`.
 :::
 
 ### 4. Connect
 
-On your other device, open `https://gmux.your-tailnet.ts.net`. The connection is HTTPS with a valid certificate. You'll be asked for the host's access token (run `gmux auth` on the host to get it, or scan its QR/connect URL) — being on the tailnet lets you *reach* the host, but the token is what authorizes you ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
+On your other device, open the URL that `gmux remote` printed — typically `https://gmux-<hostname>.your-tailnet.ts.net`. The connection is HTTPS with a valid certificate. You'll be asked for the host's access token (run `gmux auth` on the host to get it, or scan its QR/connect URL) — being on the tailnet lets you *reach* the host, but the token is what authorizes you ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)).
 
 :::note
 The Tailscale listener is independent from the localhost listener. Local access (`127.0.0.1:8790`) always works, so you can't lock yourself out by misconfiguring Tailscale.
@@ -108,7 +108,11 @@ allow = ["your-work-account@github"]
 
 Then restart: `gmux daemon restart`.
 
-If the other account is on a **different tailnet**, you also need to share the gmux device via the [Machines](https://login.tailscale.com/admin/machines) page (⋯ → Share). The device is then accessible at `gmux.owner-tailnet.ts.net` (using the owner's tailnet name).
+If the other account is on a **different tailnet**, you also need to share the gmux device via the [Machines](https://login.tailscale.com/admin/machines) page (⋯ → Share). The device is then accessible at its `gmux-<hostname>.owner-tailnet.ts.net` name (using the owner's tailnet name).
+
+### Connecting another gmux host
+
+To aggregate this machine's sessions into another machine's dashboard, run `gmux auth` here and paste the connect URL it prints into **Settings → Hosts → Connect to host** on the other machine. Since tailscale autodiscovery was removed in 2.0, this is the only way two gmux hosts peer — see [Multi-machine](/multi-machine/). Note that all peered hosts must run gmux 2.0.
 
 ## Troubleshooting
 
