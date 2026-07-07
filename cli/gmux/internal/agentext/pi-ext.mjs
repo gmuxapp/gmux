@@ -12,7 +12,7 @@
 // Socket: GMUX_SESSION_SOCK, set by the runner.
 //
 // Events posted to POST /hook/event on the runner socket:
-//   { op: "session", path, id, name, cwd, reason }      on bind (session_start)
+//   { op: "session", path, id, name, slug, cwd, reason } on bind (session_start)
 //                                                         and rename (session_info_changed)
 //   { op: "turn", phase: "start" }                       on agent loop start
 //   { op: "turn", phase: "end", outcome, title }         on agent loop end
@@ -62,7 +62,21 @@ export default function (pi) {
     }
     if (!file) return; // nothing to attribute yet
     const title = name || firstUserTitle;
-    post(sock, { op: "session", path: String(file), id, name: title || undefined, cwd, reason });
+    // Report the title as the slug source too. pi's session id is a UUID that
+    // slugifies into an unreadable URL; without an explicit slug the runner
+    // falls back to Slugify(id) and session URLs become UUIDs. The runner
+    // slugifies whatever we send, so the raw title is fine here. Mirrors the
+    // codex and claude hooks, which send a title-derived slug for the same
+    // reason.
+    post(sock, {
+      op: "session",
+      path: String(file),
+      id,
+      name: title || undefined,
+      slug: title || undefined,
+      cwd,
+      reason,
+    });
   }
 
   // session_start is the one authoritative bind event: pi fires it on startup

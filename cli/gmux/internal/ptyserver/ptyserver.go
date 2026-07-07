@@ -526,7 +526,7 @@ type hookEvent struct {
 	Pid  int    `json:"pid"`
 
 	ID      string `json:"id,omitempty"`
-	Slug    string `json:"slug,omitempty"` // explicit URL-safe slug; preferred over Slugify(ID)
+	Slug    string `json:"slug,omitempty"` // slug source (runner slugifies); preferred over Slugify(ID)
 	Name    string `json:"name,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Title   string `json:"title,omitempty"`
@@ -558,8 +558,8 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 			s.state.SetAdapterTitle(ev.Name)
 		}
 		// Slug source, in order of preference: an explicit slug the agent
-		// reports (e.g. codex, whose session id is a UUID that slugifies badly,
-		// sends a title-derived slug), else the identity to slugify.
+		// reports (codex and pi session ids are UUIDs that slugify badly, so
+		// their hooks send a title-derived slug), else the identity to slugify.
 		if ev.Slug != "" {
 			s.state.SetSlug(adapter.Slugify(ev.Slug))
 		} else if ev.ID != "" {
