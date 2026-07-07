@@ -20,6 +20,7 @@
 import type { Session, ProjectItem } from './types'
 import { buildProjectTopology } from './projects'
 import { sessionPath } from './routing'
+import { relativeCwd } from './cwd-format'
 import { LaunchButton } from './launcher'
 import {
   sessions, projects, peers, localPeerNames, partitionForProject,
@@ -75,6 +76,15 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
   const uniqueCwds = new Set(allSessions.map(s => s.cwd).filter(Boolean))
   const sharedCwd = uniqueCwds.size === 1 ? [...uniqueCwds][0] : null
 
+  // Shared cwd shown as a subtitle: express it relative to the
+  // canonical folder so a single-worktree project reads as `./sub`
+  // rather than a long absolute path. Empty (== canonical) keeps the
+  // absolute form, since the header only carries the slug and the
+  // path is still useful context there.
+  const sharedCwdLabel = sharedCwd
+    ? (relativeCwd(sharedCwd, canonicalCwd) || sharedCwd)
+    : null
+
   // Multi-host iff sessions disagree on .peer. Local-peer
   // (devcontainer) sessions in a local project's folder are the
   // common case: they make the folder mixed and earn a host suffix
@@ -90,7 +100,9 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
       session={s}
       href={sessionPath(projectSlug, s, projectPeer)}
       showCwd={!sharedCwd}
-      cwdLabel={s.cwd}
+      // Multi-cwd disambiguator: express each cwd relative to the
+      // canonical folder ('.' for a session at the project root).
+      cwdLabel={relativeCwd(s.cwd, canonicalCwd) || '.'}
       showHost={mixedHosts}
       onClose={() => onCloseSession(s)}
     />
@@ -118,7 +130,7 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
         </div>
         {(remote || sharedCwd) && (
           <div class="hub-subtitle">
-            {sharedCwd && <span class="hub-cwd">{sharedCwd}</span>}
+            {sharedCwdLabel && <span class="hub-cwd">{sharedCwdLabel}</span>}
             {remote && sharedCwd && <span class="hub-subtitle-sep"> · </span>}
             {remote && <span class="hub-remote">{remote}</span>}
           </div>

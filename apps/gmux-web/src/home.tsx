@@ -12,6 +12,7 @@ import {
 } from './store'
 import { SessionRow } from './session-row'
 import { sessionPath } from './routing'
+import { cwdBadge } from './cwd-format'
 import { IconBell, type NotifPermission } from './sidebar'
 import type { Folder, Session } from './types'
 
@@ -43,6 +44,10 @@ export function Home({
     // without a folder (mid-arrival race), skip rendering rather
     // than crashing the dashboard.
     if (!folder) return null
+    // Surface the session's cwd only when it strays from the project's
+    // canonical folder (a subfolder or worktree/grove workspace);
+    // sessions at the project root stay quiet.
+    const cwd = cwdBadge(s.cwd, folder.launchCwd)
     return (
       <SessionRow
         key={s.id}
@@ -51,6 +56,8 @@ export function Home({
         showProject
         projectName={folder.name}
         showHost
+        showCwd={!!cwd}
+        cwdLabel={cwd ?? undefined}
         onClose={() => dismissSession(s.id)}
       />
     )
