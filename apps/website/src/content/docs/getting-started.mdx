@@ -36,7 +36,9 @@ gmux open               # open the dashboard
 
 Running a command uses the `--` separator: everything after it is your command, verbatim. `gmux` auto-starts the daemon (`gmuxd`) on first run. `gmux open` launches the dashboard in a dedicated browser window (Chrome/Chromium app mode when available, otherwise your default browser); bare `gmux` prints help. If you run commands often, `alias gm='gmux --'` lets you type `gm pi`.
 
-The first time, the sidebar will be empty. Click **Add project** to pick which project directories appear. Once added, sessions in those directories show up automatically. Click a session to attach a live terminal.
+The first time, the sidebar shows just your new session. To organize sessions by repo, open **Settings** (gear icon) **→ Projects** and add your project directories — gmux also suggests directories it discovered from past sessions. Click a session to attach a live terminal.
+
+gmux is also a full CLI: `gmux ls`, `gmux attach <id>`, `gmux send <id> …`, `gmux wait <id>`, `gmux edit <file>` — see the [CLI reference](/reference/cli/).
 
 See [Using the UI](/using-the-ui) for a full walkthrough.
 
