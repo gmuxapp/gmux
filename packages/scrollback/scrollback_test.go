@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -592,3 +593,39 @@ func equalLines(a, b []string) bool {
 type errReader struct{ err error }
 
 func (e *errReader) Read(p []byte) (int, error) { return 0, e.err }
+
+// TestRenderTailDoesNotLeakGoroutines pins that RenderTail tears down
+// its drain goroutine. Every call spawns one to soak up emulator
+// write-backs (DSR reports etc.); without closing the emulator it
+// blocks on the pipe forever. One-shot tail requests barely noticed
+// the leak, but gmuxd's output-condition wait calls RenderTail on a
+// ticker, so a leak here grows for as long as a wait is in flight.
+func TestRenderTailDoesNotLeakGoroutines(t *testing.T) {
+	// Cursor-movement-heavy input so the emulator has something to
+	// write back on some terminals; content itself doesn't matter.
+	raw := []byte("hello\r\nworld\x1b[6n\r\n")
+
+	// Warm up (lazy runtime goroutines, pools).
+	for i := 0; i < 3; i++ {
+		if _, err := RenderTail(bytes.NewReader(raw), 80, 24, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.GC()
+	before := runtime.NumGoroutine()
+
+	const n = 50
+	for i := 0; i < n; i++ {
+		if _, err := RenderTail(bytes.NewReader(raw), 80, 24, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// RenderTail waits for its drain goroutine before returning, so no
+	// settling sleep should be needed; allow a little runtime noise.
+	runtime.GC()
+	after := runtime.NumGoroutine()
+	if after > before+5 {
+		t.Fatalf("goroutines grew from %d to %d across %d renders; drain goroutine is leaking", before, after, n)
+	}
+}
