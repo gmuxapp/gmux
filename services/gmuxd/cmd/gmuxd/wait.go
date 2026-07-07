@@ -233,15 +233,28 @@ func waitForSessionExit(sessions *store.Store, evCh <-chan store.Event, sessionI
 // The Alive flag needs the symmetric treatment: right after launch
 // the session exists in the store with Alive == false until the
 // runner's first upsert lands, and reporting "died" during that
-// window is a phantom death (issue #216). seenAlive is the caller's
-// record of whether this wait ever observed Alive == true; "died" is
-// only reported after a true→false transition, or when ExitCode is
-// set — a non-nil ExitCode means the runner watched the child
-// process exit, which is definitive regardless of the startup race
-// and keeps genuinely dead-on-arrival sessions failing fast.
+// window is a phantom death (issue #216). "died" therefore requires
+// evidence the session ever ran, from any of:
+//
+//   - seenAlive: this wait observed Alive == true, then it flipped
+//     (the caller's record across snapshot/event/poll observations);
+//   - ExitCode != nil: the runner watched the child process exit
+//     (SetExited), definitive for dead-on-arrival fast-exit commands;
+//   - StartedAt != "": the runner stamped SetRunning at some point.
+//     This is what keeps already-dead sessions failing fast when the
+//     runner never reported an exit code: force-marked-dead sessions
+//     (unreachable runner on kill, stale-socket sweep) and sessions
+//     restored from sessionmeta after a daemon restart all carry
+//     their historical StartedAt, so --wait on them must not block
+//     waiting for a resurrection that can't happen.
+//
+// A session with none of the three has never run — either it's in
+// the startup window (the common case, resolved by the runner's next
+// upsert) or its runner died before ever spawning the child (rare;
+// bounded by --timeout).
 func terminalReason(s store.Session, seenAlive bool) (string, bool) {
 	if !s.Alive {
-		if seenAlive || s.ExitCode != nil {
+		if seenAlive || s.ExitCode != nil || s.StartedAt != "" {
 			return "died", true
 		}
 		return "", false

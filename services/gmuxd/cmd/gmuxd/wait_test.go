@@ -261,6 +261,38 @@ func TestWaitReportsDiedOnArrivalWithExitCode(t *testing.T) {
 	}
 }
 
+// TestWaitReportsDiedForStaleDeadSession pins the other side of the
+// #216 fix: sessions that ran in the past but are dead now must not
+// be mistaken for "still starting up". Force-marked-dead sessions
+// (unreachable runner on kill, stale-socket sweep) and sessions
+// restored from sessionmeta after a daemon restart carry StartedAt
+// but may have no ExitCode — --wait on them must return died
+// immediately, not hang until timeout.
+func TestWaitReportsDiedForStaleDeadSession(t *testing.T) {
+	srv, st := waitTestServer(t)
+	st.Upsert(store.Session{
+		ID:        "sess-stale",
+		Adapter:   "pi",
+		Alive:     false,
+		StartedAt: "2026-01-01T00:00:00Z",
+		Command:   []string{"pi", "--resume", "abc"},
+	})
+
+	start := time.Now()
+	resp, body := postWait(t, srv, "sess-stale")
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "died" {
+		t.Errorf("reason = %v, want died", got)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("returned in %v, want immediate", elapsed)
+	}
+}
+
 // TestWaitTimesOut verifies the timeout escape hatch returns a
 // distinct HTTP status (408) so the CLI can tell timeout apart from
 // idle and from died.
