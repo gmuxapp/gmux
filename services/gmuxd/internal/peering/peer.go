@@ -64,6 +64,11 @@ type Peer struct {
 	// streamIdleTimeout overrides the default SSE idle timeout.
 	// Zero means use defaultStreamIdleTimeout.
 	streamIdleTimeout time.Duration
+
+	// reconnectBackoff overrides initialBackoff in the run loop.
+	// Zero means use initialBackoff. Test-only: lets the reconnect
+	// tests run at millisecond cadence instead of real seconds.
+	reconnectBackoff time.Duration
 }
 
 func newPeer(cfg config.PeerConfig, st *store.Store, onStatus func(string, Status), opts ...PeerOption) *Peer {
@@ -295,7 +300,11 @@ const (
 // the context is cancelled. Handles reconnection with exponential
 // backoff.
 func (p *Peer) run(ctx context.Context) {
-	backoff := initialBackoff
+	minBackoff := initialBackoff
+	if p.reconnectBackoff > 0 {
+		minBackoff = p.reconnectBackoff
+	}
+	backoff := minBackoff
 	// lastLogged dedupes disconnect logs: repeated identical failures
 	// against a down host are logged once, not on every retry. Any
 	// change in the failure (or a successful connection in between)
@@ -336,7 +345,7 @@ func (p *Peer) run(ctx context.Context) {
 		// Reset backoff after a successful connection so transient drops
 		// reconnect quickly instead of carrying over stale backoff.
 		if wasConnected {
-			backoff = initialBackoff
+			backoff = minBackoff
 			lastLogged = ""
 		}
 
