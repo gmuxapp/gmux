@@ -304,3 +304,30 @@ func TestMetaEventUpdatesSlugAndIgnoresEmpty(t *testing.T) {
 		t.Errorf("AdapterTitle = %q, want %q", got.AdapterTitle, "Fix the login bug")
 	}
 }
+
+// TestActivityEventBumpsLastActivity pins the wire half of the
+// stale-"last activity" fix: an "activity" event from a live runner
+// (raw terminal output, which triggers no alive/unread/status edge)
+// must refresh the session's persisted LastActivityAt, not just fire
+// the transient session-activity dot. This is the gap that made an
+// actively-used session read "last activity N days ago".
+func TestActivityEventBumpsLastActivity(t *testing.T) {
+	sessions := store.New()
+	stale := time.Now().UTC().Add(-72 * time.Hour).Format(time.RFC3339)
+	sessions.Upsert(store.Session{ID: "sess-1", Alive: true, LastActivityAt: stale})
+	subs := NewSubscriptions(sessions)
+
+	subs.handleEvent("sess-1", "/sock", "activity", nil)
+
+	got, _ := sessions.Get("sess-1")
+	if got.LastActivityAt == stale {
+		t.Fatalf("activity event should freshen LastActivityAt, still %q", got.LastActivityAt)
+	}
+	ts, err := time.Parse(time.RFC3339, got.LastActivityAt)
+	if err != nil {
+		t.Fatalf("LastActivityAt %q not RFC3339: %v", got.LastActivityAt, err)
+	}
+	if time.Since(ts) > time.Minute {
+		t.Fatalf("activity event should stamp ~now, got %q", got.LastActivityAt)
+	}
+}

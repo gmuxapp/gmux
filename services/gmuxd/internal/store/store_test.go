@@ -1701,3 +1701,17 @@ func TestBumpActivity_UnknownSessionNoPanic(t *testing.T) {
 	s := New()
 	s.BumpActivity("nope")
 }
+
+// TestBumpActivity_IgnoresDeadSession pins that a late activity event
+// racing a session's exit does not resurrect its timestamp: a dead
+// session must freeze at its last real activity.
+func TestBumpActivity_IgnoresDeadSession(t *testing.T) {
+	s := New()
+	stale := time.Now().UTC().Add(-72 * time.Hour).Format(time.RFC3339)
+	s.Upsert(Session{ID: "s1", Adapter: "shell", Alive: false, LastActivityAt: stale})
+	s.BumpActivity("s1")
+	after, _ := s.Get("s1")
+	if after.LastActivityAt != stale {
+		t.Fatalf("BumpActivity on dead session must not bump (was %q, now %q)", stale, after.LastActivityAt)
+	}
+}

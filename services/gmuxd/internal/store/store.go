@@ -416,11 +416,16 @@ const activityBumpInterval = 60 * time.Second
 // relayed as a transient session-activity event and never bumps a
 // timestamp here, so a dead/peer session correctly freezes at its
 // last real activity.
+//
+// Dead sessions are ignored: a final buffered activity event can race
+// the exit event over the same SSE stream, and stamping a just-exited
+// session at ~now would make it read as active. The requirement is
+// that a dead session freezes at its last real activity.
 func (s *Store) BumpActivity(id string) {
 	now := time.Now().UTC()
 	s.mu.Lock()
 	prev, ok := s.sessions[id]
-	if !ok {
+	if !ok || !prev.Alive {
 		s.mu.Unlock()
 		return
 	}
