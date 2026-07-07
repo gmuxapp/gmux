@@ -20,6 +20,7 @@
 // Events posted to POST /acp/ingest (ADR 0021 streaming conversation schema):
 //   { op: "message_start", messageId }        on assistant message_start
 //   { op: "chunk", messageId, delta }         per assistant text token
+//   { op: "thinking_chunk", messageId, delta } per assistant reasoning token
 //   { op: "message_end" }                     on assistant message_end
 //
 // The /acp/ingest channel is the token-level assistant-text feed the runner
@@ -116,14 +117,16 @@ export default function (pi) {
   // Forward token-level assistant text to the runner's ACP ingest channel.
   // message_start/message_end bound the assistant message; message_update
   // carries the token-by-token stream via event.assistantMessageEvent, whose
-  // text_delta variant holds the incremental text in `.delta`. We forward only
-  // assistant text this slice (thinking/tool activity are later slices).
+  // text_delta variant holds incremental visible text and whose thinking_delta
+  // variant holds incremental reasoning — both in `.delta` (verified against
+  // pi-ai's AssistantMessageEvent union, pi 0.80.3). We forward text as `chunk`
+  // and thinking as `thinking_chunk`; toolcall deltas are a later slice.
   //
   // messageId correlates the deltas of one assistant message so the runner and
-  // frontend can group them. pi's in-memory AssistantMessage has no id field,
-  // so we mint a monotonic per-turn counter on each assistant message_start.
-  // message_update fires only for assistant messages (per pi's event protocol),
-  // and we forward only text_delta — thinking/toolcall deltas are later slices.
+  // frontend can group them (thinking and text share the message's id, ordered
+  // by arrival). pi's in-memory AssistantMessage has no id field, so we mint a
+  // monotonic per-turn counter on each assistant message_start. message_update
+  // fires only for assistant messages (per pi's event protocol).
   let acpMsgId = "";
   let acpMsgSeq = 0;
 
@@ -135,10 +138,13 @@ export default function (pi) {
 
   pi.on("message_update", (ev) => {
     const ame = ev?.assistantMessageEvent;
-    if (!ame || ame.type !== "text_delta" || !ame.delta) return;
+    if (!ame || !ame.delta) return;
+    const op =
+      ame.type === "text_delta" ? "chunk" : ame.type === "thinking_delta" ? "thinking_chunk" : null;
+    if (!op) return; // ignore start/end/toolcall/other stream events
     // Open a message implicitly if a delta somehow precedes message_start.
     if (!acpMsgId) acpMsgId = `m${++acpMsgSeq}`;
-    postACP(sock, { op: "chunk", messageId: acpMsgId, delta: ame.delta });
+    postACP(sock, { op, messageId: acpMsgId, delta: ame.delta });
   });
 
   pi.on("message_end", (ev) => {

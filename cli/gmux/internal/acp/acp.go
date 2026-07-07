@@ -4,10 +4,11 @@
 // pi extension for terminal pi, or re-published from a real ACP agent later);
 // the frontend consumes them through one renderer regardless of adapter.
 //
-// SCOPE (tracer #1): only streaming assistant text. This package defines just
-// the `session/load` history snapshot and the `session/update`
-// `agent_message_chunk` variant. Thinking, tool calls, prompt/cancel, and the
-// rest of ADR 0021 §7 are intentionally omitted; add them in later slices.
+// SCOPE (slice #2): streaming assistant text AND thinking. This package
+// defines the `session/load` history snapshot and the `session/update`
+// `agent_message_chunk` (assistant text) + `agent_thought_chunk` (reasoning)
+// variants. Tool calls, prompt/cancel, and the rest of ADR 0021 §7 are
+// intentionally omitted; add them in later slices.
 //
 // The full wire contract (both channels) is documented in
 // docs/acp-conversation-stream.md.
@@ -34,11 +35,15 @@ const (
 
 // SessionUpdate discriminator values (ACP `update.sessionUpdate`).
 const (
-	UpdateAgentMessageChunk = "agent_message_chunk"
+	UpdateAgentMessageChunk = "agent_message_chunk" // assistant text delta
+	UpdateAgentThoughtChunk = "agent_thought_chunk" // assistant reasoning/thinking delta
 )
 
-// ContentType discriminates a content block. Only text is used this slice.
-const ContentTypeText = "text"
+// ContentType discriminates a content block.
+const (
+	ContentTypeText     = "text"     // assistant/user visible text
+	ContentTypeThinking = "thinking" // assistant reasoning (rendered distinctly)
+)
 
 // Notification is a JSON-RPC 2.0 notification frame (no id, no response).
 // Both the snapshot and the live stream are sent as notifications.
@@ -48,9 +53,10 @@ type Notification struct {
 	Params  json.RawMessage `json:"params"`
 }
 
-// ContentBlock is a single piece of message content. This slice emits only
-// text blocks; Type is carried explicitly so later slices can add image /
-// resource without a schema break.
+// ContentBlock is a single piece of message content. Type discriminates text
+// vs thinking (and, in later slices, image / resource) without a schema break.
+// Both text and thinking carry their payload in Text: the wire shape stays
+// uniform, and Type tells the renderer how to present it.
 type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
@@ -59,6 +65,11 @@ type ContentBlock struct {
 // TextBlock is a convenience constructor for a text content block.
 func TextBlock(text string) ContentBlock {
 	return ContentBlock{Type: ContentTypeText, Text: text}
+}
+
+// ThinkingBlock is a convenience constructor for a reasoning content block.
+func ThinkingBlock(text string) ContentBlock {
+	return ContentBlock{Type: ContentTypeThinking, Text: text}
 }
 
 // Message is one turn in the conversation history snapshot: a role plus its
@@ -89,9 +100,9 @@ type UpdateParams struct {
 	Update    SessionUpdate `json:"update"`
 }
 
-// SessionUpdate is the discriminated update payload. This slice emits only
-// agent_message_chunk (SessionUpdate == UpdateAgentMessageChunk), carrying a
-// single token-level text delta in Content.
+// SessionUpdate is the discriminated update payload. This slice emits
+// agent_message_chunk (assistant text) and agent_thought_chunk (reasoning),
+// each carrying a single token-level delta in Content.
 type SessionUpdate struct {
 	SessionUpdate string       `json:"sessionUpdate"`
 	MessageID     string       `json:"messageId,omitempty"`
@@ -107,14 +118,24 @@ func NewLoad(sessionID string, messages []Message) (Notification, error) {
 	return Notification{JSONRPC: JSONRPCVersion, Method: MethodSessionLoad, Params: p}, nil
 }
 
-// NewAgentMessageChunk builds a live token-delta notification frame.
+// NewAgentMessageChunk builds a live assistant-text token-delta frame.
 func NewAgentMessageChunk(sessionID, messageID, delta string) (Notification, error) {
+	return newUpdate(sessionID, UpdateAgentMessageChunk, messageID, TextBlock(delta))
+}
+
+// NewAgentThoughtChunk builds a live reasoning/thinking token-delta frame,
+// parallel to NewAgentMessageChunk but carrying a thinking content block.
+func NewAgentThoughtChunk(sessionID, messageID, delta string) (Notification, error) {
+	return newUpdate(sessionID, UpdateAgentThoughtChunk, messageID, ThinkingBlock(delta))
+}
+
+func newUpdate(sessionID, kind, messageID string, content ContentBlock) (Notification, error) {
 	p, err := json.Marshal(UpdateParams{
 		SessionID: sessionID,
 		Update: SessionUpdate{
-			SessionUpdate: UpdateAgentMessageChunk,
+			SessionUpdate: kind,
 			MessageID:     messageID,
-			Content:       TextBlock(delta),
+			Content:       content,
 		},
 	})
 	if err != nil {
