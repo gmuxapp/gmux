@@ -33,6 +33,29 @@ func TestNewAgentMessageChunkShape(t *testing.T) {
 	}
 }
 
+func TestNewAgentThoughtChunkShape(t *testing.T) {
+	note, err := NewAgentThoughtChunk("sess1", "m1", "pondering")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if note.JSONRPC != "2.0" || note.Method != MethodSessionUpdate {
+		t.Fatalf("bad envelope: %+v", note)
+	}
+	var p UpdateParams
+	if err := json.Unmarshal(note.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Update.SessionUpdate != UpdateAgentThoughtChunk {
+		t.Errorf("sessionUpdate = %q, want %q", p.Update.SessionUpdate, UpdateAgentThoughtChunk)
+	}
+	if p.Update.MessageID != "m1" {
+		t.Errorf("messageId = %q", p.Update.MessageID)
+	}
+	if p.Update.Content.Type != ContentTypeThinking || p.Update.Content.Text != "pondering" {
+		t.Errorf("content = %+v", p.Update.Content)
+	}
+}
+
 func TestNewLoadShape(t *testing.T) {
 	note, err := NewLoad("s", []Message{{Role: "user", Content: []ContentBlock{TextBlock("hi")}}})
 	if err != nil {
@@ -73,9 +96,15 @@ func TestLoadHistory(t *testing.T) {
 	if msgs[0].Role != "user" || msgs[0].Content[0].Text != "install cowsay" {
 		t.Errorf("msg0 = %+v", msgs[0])
 	}
-	// thinking block dropped, only text surfaces
-	if msgs[1].Role != "assistant" || msgs[1].Content[0].Text != "Sure!" {
-		t.Errorf("msg1 = %+v", msgs[1])
+	// thinking + text both surface, in order, with distinct block types (slice #2)
+	if msgs[1].Role != "assistant" || len(msgs[1].Content) != 2 {
+		t.Fatalf("msg1 = %+v", msgs[1])
+	}
+	if msgs[1].Content[0].Type != ContentTypeThinking || msgs[1].Content[0].Text != "skip me" {
+		t.Errorf("msg1 thinking block = %+v", msgs[1].Content[0])
+	}
+	if msgs[1].Content[1].Type != ContentTypeText || msgs[1].Content[1].Text != "Sure!" {
+		t.Errorf("msg1 text block = %+v", msgs[1].Content[1])
 	}
 	if msgs[2].Content[0].Text != "plain string form" {
 		t.Errorf("msg2 = %+v", msgs[2])
