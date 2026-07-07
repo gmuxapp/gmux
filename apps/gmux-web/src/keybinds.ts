@@ -74,10 +74,14 @@ const LINUX_KEYBINDS: Keybind[] = [
   { key: 'ctrl+alt+n', action: 'sendKeys', args: 'ctrl+n' },
   { key: 'ctrl+alt+w', action: 'sendKeys', args: 'ctrl+w' },
   // Ctrl+Backspace/Delete: explicitly intercepted so the browser does not
-  // swallow the event on xterm's hidden textarea. Sequences match what
-  // gnome-terminal, xterm, and alacritty send.
-  { key: 'ctrl+backspace', action: 'sendText', args: '\x08' },
-  { key: 'ctrl+delete',    action: 'sendText', args: '\x1b[3;5~' },
+  // swallow the event on xterm's hidden textarea, and mapped to word-delete
+  // (the convention Linux/Windows terminal users expect from Ctrl+Backspace).
+  //   backward-kill-word: ESC DEL  (readline `backward-kill-word`, aka Alt+Backspace)
+  //   forward-kill-word:  ESC d    (readline `kill-word`, aka Alt+d)
+  // NB: BS (\x08) is only backward-delete-*char* in readline, so the previous
+  // \x08 binding never deleted a word — that was the reported bug.
+  { key: 'ctrl+backspace', action: 'sendText', args: '\x1b\x7f' },
+  { key: 'ctrl+delete',    action: 'sendText', args: '\x1bd' },
 ]
 
 /** macOS defaults. Replicate iTerm2 / macOS Terminal conventions. */
@@ -216,9 +220,9 @@ export function keyComboToSequence(combo: string): string {
   } else if (baseKey === 'tab') {
     seq = '\t'
   } else if (baseKey === 'backspace') {
-    // Ctrl+Backspace: \x08 (BS), matching gnome-terminal/xterm/alacritty.
-    // Plain backspace: \x7f (DEL).
-    seq = ctrl ? '\x08' : '\x7f'
+    // Ctrl+Backspace: ESC DEL (readline backward-kill-word) so it deletes a
+    // word rather than a char. Plain backspace: \x7f (DEL).
+    seq = ctrl ? '\x1b\x7f' : '\x7f'
   } else if (baseKey.length === 1) {
     seq = baseKey
   }
