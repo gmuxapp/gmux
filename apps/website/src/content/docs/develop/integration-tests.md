@@ -3,7 +3,7 @@ title: Integration Tests
 description: End-to-end tests that launch real tools through gmuxd.
 ---
 
-Integration tests verify the full pipeline — from launching a real tool through gmuxd to observing session state transitions, file attribution, title derivation, and resume. They catch issues that unit tests can't: timing between inotify and file writes, TUI input handling, trust prompts, and adapter attribution against real session files.
+Integration tests verify the full pipeline — from launching a real tool through gmuxd to observing session state transitions, file attribution, title derivation, and resume. They catch issues that unit tests can't: hook/file attribution timing, TUI input handling, trust prompts, and title derivation against real conversation files. (pi's discovery is file-watch based; claude and codex report state via authoritative agent hooks.)
 
 ## Running
 
@@ -33,12 +33,12 @@ Each adapter has a consistent set of tests:
 
 | Test | Verifies |
 |------|----------|
-| `TurnAndTitle` | Send a message → file attribution → title from first user message → resume key set |
+| `TurnAndTitle` | Send a message → attribution (slug set) → title from first user message |
 | `SecondTurnKeepsTitle` | Send two messages → title stays as first message |
-| `Resumability` | Send message → kill → session becomes resumable → resume → alive again with same title |
+| `Resumability` | Send message → kill → session becomes resumable with a resume command → resume → alive again with same title |
 | `NameOverridesTitle` (pi only) | Use `/name` command → title updates to explicit name |
 
-Shell has a single `WSInput` smoke test that verifies the WebSocket → PTY input pipeline.
+Shell has lifecycle tests (`WSInput`, `Kill`, `KillFish`, `Restart`) covering the WebSocket → PTY input pipeline and kill/restart semantics. A scrollback suite (`TestScrollback*`) verifies persisted scrollback captures conversation content and omits overwritten spinner frames.
 
 ## Test harness
 
@@ -47,23 +47,26 @@ Tests use a shared harness in `packages/adapter/adapters/testutil/`. The key com
 ### `StartGmuxd(t)`
 
 Launches an isolated gmuxd instance:
-- Random port (no conflicts with dev or other tests)
-- Temp socket directory
-- Empty `XDG_CONFIG_HOME` (no tailscale, no user config)
+- Random free port, written into a temp `host.toml` (isolated `XDG_CONFIG_HOME`)
+- Temp state dir (`XDG_STATE_HOME`) and temp socket dir (`GMUX_SOCKET_DIR`)
+- HTTP calls go over the daemon's Unix socket, bypassing the TCP listener's token auth
 - `PATH` includes the built `bin/gmux` binary
 - Cleaned up automatically when the test ends
 
+Launching and driving sessions goes through `g.Launch`, `g.Kill`, `g.Resume`, `g.Restart`, `g.Dismiss`.
+
 ### `ConnectSession(sessionID)`
 
-Opens a WebSocket directly to the runner's Unix socket (bypassing gmuxd's WS proxy). Sends an initial resize message so TUI apps render properly. Returns a `send` function for typing into the terminal.
+Opens a WebSocket directly to the runner's Unix socket (bypassing gmuxd's WS proxy). Sends an initial resize message so TUI apps render properly. Returns `(send, close)`; cleanup is automatic via `t.Cleanup`, so the close function can usually be ignored.
 
 ### Polling helpers
 
 | Helper | What it does |
 |--------|-------------|
-| `WaitForSession(id, pred, timeout)` | Polls `GET /v1/sessions` until the predicate matches |
-| `WaitForOutput(sessionID, timeout)` | Polls scrollback until the TUI has rendered |
+| `WaitForSession(id, pred, timeout, desc)` | Polls `GET /v1/sessions` until the predicate matches |
+| `WaitForOutput(sessionID, timeout)` | Polls scrollback until the TUI has rendered (returns the text) |
 | `WaitForScrollback(socketPath, substr, timeout)` | Polls scrollback for a specific string |
+| `ReadScrollback(t, socketPath)` | One-shot scrollback read |
 
 ## Writing a test for a new adapter
 
@@ -91,10 +94,10 @@ func TestMyAppTurnAndTitle(t *testing.T) {
     time.Sleep(2 * time.Second)
     send("say hi\r")
 
-    // Wait for file attribution.
+    // Wait for attribution (slug is derived from the conversation title).
     g.WaitForSession(sess.ID, func(s testutil.Session) bool {
-        return s.ResumeKey != ""
-    }, 60*time.Second, "file attribution")
+        return s.Slug != ""
+    }, 60*time.Second, "attribution (slug)")
 
     // Verify title.
     updated := g.WaitForSession(sess.ID, func(s testutil.Session) bool {
@@ -109,7 +112,8 @@ func TestMyAppTurnAndTitle(t *testing.T) {
 - **Trust prompts.** Claude Code and Codex both ask "do you trust this directory?" on first launch in a new workspace. Dismiss them by waiting for `"trust"` in the scrollback, then sending `\r`.
 - **TUI readiness.** Ink-based TUIs (pi, codex) need a moment after rendering before they accept input. A 2-second sleep after `WaitForOutput` is usually enough.
 - **Batch file writes.** Some tools write user + assistant messages in one batch after the turn completes (pi does this). You can't reliably observe transient `working=true` status via polling — wait for the final state instead.
-- **Shared session directories.** Codex uses date-based directories shared across all sessions. Old files from previous test runs may be present. The adapter's `AttributeFile` handles this, but expect attribution-rejection log lines for stale files.
+- **Hook-driven adapters attribute fast.** Claude and Codex report session identity through an injected hook (ADR 0010/0011), so attribution appears as soon as the hook fires — no file-watcher race. The long attribution timeout is only needed for file-watch adapters like pi.
+- **Not every adapter needs these tests.** Shell and editor sessions have no API cost and are covered by cheaper lifecycle tests; the API-cost suite is for agent adapters.
 
 ## Related docs
 
