@@ -21,6 +21,55 @@ func TestACPHubBroadcastsChunks(t *testing.T) {
 	}
 }
 
+func TestACPHubBroadcastsThinkingAsThoughtChunk(t *testing.T) {
+	h := newACPHub("sess1")
+	_, ch, _ := h.attach("")
+
+	h.ingest(acpIngest{Op: "message_start", MessageID: "m1"})
+	h.ingest(acpIngest{Op: "thinking_chunk", MessageID: "m1", Delta: "hmm"})
+
+	note := <-ch
+	var p acp.UpdateParams
+	if err := json.Unmarshal(note.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Update.SessionUpdate != acp.UpdateAgentThoughtChunk {
+		t.Errorf("sessionUpdate = %q, want %q", p.Update.SessionUpdate, acp.UpdateAgentThoughtChunk)
+	}
+	if p.Update.Content.Type != acp.ContentTypeThinking || p.Update.Content.Text != "hmm" {
+		t.Errorf("thought content = %+v", p.Update.Content)
+	}
+}
+
+// Interleaved thinking then text within one message must snapshot as two
+// ordered blocks (thinking first, text second), each coalesced.
+func TestACPHubTailKeepsThinkingAndTextInOrder(t *testing.T) {
+	h := newACPHub("sess1")
+	h.ingest(acpIngest{Op: "message_start", MessageID: "m1"})
+	h.ingest(acpIngest{Op: "thinking_chunk", MessageID: "m1", Delta: "think"})
+	h.ingest(acpIngest{Op: "thinking_chunk", MessageID: "m1", Delta: "ing"})
+	h.ingest(acpIngest{Op: "chunk", MessageID: "m1", Delta: "ans"})
+	h.ingest(acpIngest{Op: "chunk", MessageID: "m1", Delta: "wer"})
+
+	h.mu.Lock()
+	note, _ := h.snapshotLocked("")
+	h.mu.Unlock()
+	var p acp.LoadParams
+	if err := json.Unmarshal(note.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Messages) != 1 || len(p.Messages[0].Content) != 2 {
+		t.Fatalf("snapshot = %+v", p.Messages)
+	}
+	c := p.Messages[0].Content
+	if c[0].Type != acp.ContentTypeThinking || c[0].Text != "thinking" {
+		t.Errorf("block0 = %+v", c[0])
+	}
+	if c[1].Type != acp.ContentTypeText || c[1].Text != "answer" {
+		t.Errorf("block1 = %+v", c[1])
+	}
+}
+
 func TestACPHubSnapshotIncludesUnwrittenTail(t *testing.T) {
 	h := newACPHub("sess1")
 	h.ingest(acpIngest{Op: "message_start", MessageID: "m1"})

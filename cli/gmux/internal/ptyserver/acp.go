@@ -31,11 +31,12 @@ type acpHub struct {
 	mu   sync.Mutex
 	subs map[chan acp.Notification]struct{}
 
-	// In-memory unwritten tail: the current partial assistant message.
+	// In-memory unwritten tail: the current partial assistant message, held as
+	// ordered content blocks so interleaved thinking + text keep their order.
 	// tailActive is false between turns (nothing unflushed).
 	tailActive bool
 	tailMsgID  string
-	tailText   string
+	tailBlocks []acp.ContentBlock
 }
 
 func newACPHub(sessionID string) *acpHub {
@@ -46,46 +47,65 @@ func newACPHub(sessionID string) *acpHub {
 }
 
 // acpIngest is the one-way payload the read-only pi extension POSTs to
-// /acp/ingest. It is deliberately tiny: begin a message, append a token
-// delta, or finalize. See pi-ext.mjs.
+// /acp/ingest. It is deliberately tiny: begin a message, append a text or
+// thinking token delta, or finalize. See pi-ext.mjs.
 type acpIngest struct {
-	Op        string `json:"op"`                  // "message_start" | "chunk" | "message_end"
+	Op        string `json:"op"`                  // "message_start" | "chunk" | "thinking_chunk" | "message_end"
 	MessageID string `json:"messageId,omitempty"` // stable id for the in-flight message
-	Delta     string `json:"delta,omitempty"`     // token-level text (op "chunk")
+	Delta     string `json:"delta,omitempty"`     // token-level delta (op "chunk"/"thinking_chunk")
 }
 
 // ingest applies one extension event: it updates the unwritten tail and, for a
-// chunk, broadcasts an agent_message_chunk to live subscribers.
+// text/thinking chunk, broadcasts the matching session/update variant to live
+// subscribers.
 func (h *acpHub) ingest(ev acpIngest) {
 	switch ev.Op {
 	case "message_start":
 		h.mu.Lock()
 		h.tailActive = true
 		h.tailMsgID = ev.MessageID
-		h.tailText = ""
+		h.tailBlocks = nil
 		h.mu.Unlock()
 	case "chunk":
-		h.mu.Lock()
-		if !h.tailActive {
-			// A chunk with no preceding message_start (e.g. extension loaded
-			// mid-turn): open a tail implicitly so nothing is lost.
-			h.tailActive = true
-			h.tailMsgID = ev.MessageID
-		}
-		h.tailText += ev.Delta
-		msgID := h.tailMsgID
-		h.mu.Unlock()
-		if note, err := acp.NewAgentMessageChunk(h.sessionID, msgID, ev.Delta); err == nil {
-			h.broadcast(note)
-		}
+		h.appendAndBroadcast(ev, acp.ContentTypeText, acp.NewAgentMessageChunk)
+	case "thinking_chunk":
+		h.appendAndBroadcast(ev, acp.ContentTypeThinking, acp.NewAgentThoughtChunk)
 	case "message_end":
 		// pi has appended the finalized message to JSONL; forget the tail so
 		// session/load reads it from disk, not from memory (ADR 0011/0016).
 		h.mu.Lock()
 		h.tailActive = false
 		h.tailMsgID = ""
-		h.tailText = ""
+		h.tailBlocks = nil
 		h.mu.Unlock()
+	}
+}
+
+// appendAndBroadcast extends the unwritten tail with one delta of the given
+// content type (coalescing consecutive deltas of the same type into one block,
+// so interleaved thinking/text keep their order) and fans out the live frame
+// built by mk.
+func (h *acpHub) appendAndBroadcast(
+	ev acpIngest,
+	ctype string,
+	mk func(sessionID, messageID, delta string) (acp.Notification, error),
+) {
+	h.mu.Lock()
+	if !h.tailActive {
+		// A chunk with no preceding message_start (e.g. extension loaded
+		// mid-turn): open a tail implicitly so nothing is lost.
+		h.tailActive = true
+		h.tailMsgID = ev.MessageID
+	}
+	if n := len(h.tailBlocks); n > 0 && h.tailBlocks[n-1].Type == ctype {
+		h.tailBlocks[n-1].Text += ev.Delta
+	} else {
+		h.tailBlocks = append(h.tailBlocks, acp.ContentBlock{Type: ctype, Text: ev.Delta})
+	}
+	msgID := h.tailMsgID
+	h.mu.Unlock()
+	if note, err := mk(h.sessionID, msgID, ev.Delta); err == nil {
+		h.broadcast(note)
 	}
 }
 
@@ -95,11 +115,11 @@ func (h *acpHub) ingest(ev acpIngest) {
 // coordinates) so no live delta can slip in before the snapshot.
 func (h *acpHub) snapshotLocked(convFile string) (acp.Notification, error) {
 	msgs, _ := acp.LoadHistory(convFile) // best-effort; empty history is fine
-	if h.tailActive && h.tailText != "" {
+	if h.tailActive && len(h.tailBlocks) > 0 {
 		msgs = append(msgs, acp.Message{
 			Role:      "assistant",
 			MessageID: h.tailMsgID, // lets a mid-turn joiner keep appending live deltas
-			Content:   []acp.ContentBlock{acp.TextBlock(h.tailText)},
+			Content:   append([]acp.ContentBlock(nil), h.tailBlocks...),
 		})
 	}
 	return acp.NewLoad(h.sessionID, msgs)

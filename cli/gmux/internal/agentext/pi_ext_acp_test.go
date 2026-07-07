@@ -59,10 +59,13 @@ func TestPiExtForwardsAssistantTextDeltas(t *testing.T) {
 		ext({ on: (ev, fn) => { handlers[ev] = fn; } });
 		const ctx = {};
 		handlers.message_start({ message: { role: "assistant" } }, ctx);
+		handlers.message_update({ assistantMessageEvent: { type: "thinking_delta", delta: "pon" } }, ctx);
+		handlers.message_update({ assistantMessageEvent: { type: "thinking_delta", delta: "der" } }, ctx);
 		handlers.message_update({ assistantMessageEvent: { type: "text_delta", delta: "Hel" } }, ctx);
 		handlers.message_update({ assistantMessageEvent: { type: "text_delta", delta: "lo" } }, ctx);
-		// a non-text stream event must be ignored
-		handlers.message_update({ assistantMessageEvent: { type: "reasoning_delta", delta: "nope" } }, ctx);
+		// start/end/toolcall stream events must be ignored
+		handlers.message_update({ assistantMessageEvent: { type: "thinking_start" } }, ctx);
+		handlers.message_update({ assistantMessageEvent: { type: "toolcall_delta", delta: "nope" } }, ctx);
 		handlers.message_end({ message: { role: "assistant", id: "msg-1" } }, ctx);
 		await new Promise((r) => setTimeout(r, 300));
 	`
@@ -82,29 +85,35 @@ func TestPiExtForwardsAssistantTextDeltas(t *testing.T) {
 		mu.Lock()
 		got = append([]map[string]any(nil), acpEvents...)
 		mu.Unlock()
-		if len(got) >= 4 || time.Now().After(deadline) {
+		if len(got) >= 6 || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// Expect: message_start, chunk "Hel", chunk "lo", message_end.
-	// reasoning_delta must NOT appear.
+	// Expect: message_start, thinking_chunk "pon", thinking_chunk "der",
+	// chunk "Hel", chunk "lo", message_end.
+	// thinking_start / toolcall_delta must NOT appear.
 	var ops []string
-	var text string
+	var text, thinking string
 	for _, ev := range got {
 		op, _ := ev["op"].(string)
 		ops = append(ops, op)
+		d, _ := ev["delta"].(string)
 		if op == "chunk" {
-			d, _ := ev["delta"].(string)
 			text += d
+		} else if op == "thinking_chunk" {
+			thinking += d
 		}
 	}
-	if len(ops) != 4 {
-		t.Fatalf("want 4 acp events, got %d: %v", len(ops), ops)
+	if len(ops) != 6 {
+		t.Fatalf("want 6 acp events, got %d: %v", len(ops), ops)
 	}
-	if ops[0] != "message_start" || ops[3] != "message_end" {
+	if ops[0] != "message_start" || ops[5] != "message_end" {
 		t.Errorf("bounds ops = %v", ops)
+	}
+	if thinking != "ponder" {
+		t.Errorf("forwarded thinking = %q, want %q", thinking, "ponder")
 	}
 	if text != "Hello" {
 		t.Errorf("forwarded text = %q, want %q", text, "Hello")
