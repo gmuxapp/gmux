@@ -811,6 +811,12 @@ body {
 }
 .session-row-cwd {
   font-family: var(--font-mono, monospace);
+  /* Long worktree/subfolder paths truncate rather than pushing the
+   * rest of the meta line off-screen; full path is in the title. */
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .session-row-status {
   font-style: italic;

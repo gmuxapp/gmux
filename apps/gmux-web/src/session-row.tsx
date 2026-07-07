@@ -113,7 +113,9 @@ export function SessionRow({
     metaSegments.push(<span class="session-row-project">{projectName}</span>)
   }
   if (showCwd && cwdLabel) {
-    metaSegments.push(<span class="session-row-cwd">{cwdLabel}</span>)
+    // Truncated in CSS; the title carries the full absolute cwd so a
+    // hover/long-press reveals the path the relative label abbreviates.
+    metaSegments.push(<span class="session-row-cwd" title={session.cwd || cwdLabel}>{cwdLabel}</span>)
   }
   if (statusText) {
     metaSegments.push(<span class="session-row-status">{statusText}</span>)
