@@ -103,8 +103,8 @@ describe('keyComboToSequence', () => {
     expect(keyComboToSequence('ctrl+shift+right')).toBe('\x1b[1;6C')
   })
 
-  it('converts ctrl+backspace to BS (\x08)', () => {
-    expect(keyComboToSequence('ctrl+backspace')).toBe('\x08')
+  it('converts ctrl+backspace to backward-kill-word (ESC DEL)', () => {
+    expect(keyComboToSequence('ctrl+backspace')).toBe('\x1b\x7f')
   })
 
   it('encodes alt in CSI parameter, not as ESC prefix', () => {
@@ -143,6 +143,22 @@ describe('resolveKeybinds', () => {
     // "secondary" resolves to exactly one platform modifier.
     expect(find!.ctrl || find!.meta).toBe(true)
     expect(find!.ctrl && find!.meta).toBe(false)
+  })
+
+  it('maps secondary+Backspace to backward-kill-word by default', () => {
+    const resolved = resolveKeybinds(null)
+    const bs = resolved.find(r => r.baseKey === 'backspace')
+    expect(bs).toBeDefined()
+    expect(bs!.action).toBe('sendText')
+    expect(bs!.args).toBe('\x1b\x7f')
+  })
+
+  it('maps secondary+Delete to forward-kill-word by default', () => {
+    const resolved = resolveKeybinds(null)
+    const del = resolved.find(r => r.baseKey === 'delete')
+    expect(del).toBeDefined()
+    expect(del!.action).toBe('sendText')
+    expect(del!.args).toBe('\x1bd')
   })
 
   it('allows disabling the find keybind', () => {
