@@ -56,7 +56,7 @@ func main() {
 	case modeSendKeys:
 		os.Exit(cmdSendKeys(cmd.ref, cmd.keys, cmd.keysLiteral))
 	case modeWait:
-		os.Exit(cmdWait(cmd.ref, cmd.timeout))
+		os.Exit(cmdWait(cmd.ref, cmd.timeout, cmd.forText, cmd.forRegex))
 	case modeEdit:
 		runEdit(cmd.editFile)
 	case modeEditChild:

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 )
 
@@ -66,7 +67,9 @@ type command struct {
 	keys        []string // key/text arguments
 
 	// wait
-	timeout int // --timeout seconds (0 = none)
+	timeout  int    // --timeout seconds (0 = none)
+	forText  string // --for-text: wait for substring in output
+	forRegex string // --for-regex: wait for regex match in output
 
 	// edit
 	editFile string // file path to open
@@ -318,6 +321,8 @@ func parseWait(args []string) (*command, error) {
 	c := &command{mode: modeWait}
 	fs := newFlagSet("wait")
 	fs.IntVar(&c.timeout, "timeout", 0, "fail after N seconds")
+	fs.StringVar(&c.forText, "for-text", "", "wait for this substring in the session's output")
+	fs.StringVar(&c.forRegex, "for-regex", "", "wait for a regex match in the session's output")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return nil, err
@@ -327,6 +332,16 @@ func parseWait(args []string) (*command, error) {
 	}
 	if c.timeout < 0 {
 		return nil, errors.New("--timeout must be a non-negative number of seconds")
+	}
+	if c.forText != "" && c.forRegex != "" {
+		return nil, errors.New("--for-text and --for-regex are mutually exclusive")
+	}
+	if c.forRegex != "" {
+		// Validate here so a typo fails as a usage error instead of a
+		// daemon round-trip; the daemon validates again server-side.
+		if _, err := regexp.Compile(c.forRegex); err != nil {
+			return nil, fmt.Errorf("--for-regex: %v", err)
+		}
 	}
 	c.ref = pos[0]
 	return c, nil
@@ -483,6 +498,7 @@ Sessions (local by default; address a peer with <id>@<peer>):
   gmux send <id> <text> [Key...]    type text and/or send keys (e.g. Enter, C-c)
   gmux send-keys -t <id> <keys...>  tmux-compatible key sending
   gmux wait <id> [--timeout N]      block until an agent session is idle
+       [--for-text S|--for-regex P] ... or until output matches S / P
   gmux kill <id>                    terminate a session
 
 Editing (usable as $EDITOR; blocks until the editor closes):

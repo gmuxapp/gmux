@@ -13,32 +13,37 @@ import (
 // Exit codes from cmdWait. Distinct codes let scripts dispatch on the
 // reason a wait ended without parsing strings.
 //
-//   - waitExitIdle (0): session reached a Working == false state
-//   - waitExitDied (2): session crashed or was killed before going idle
+//   - waitExitOK (0): session reached a Working == false state (idle
+//     wait) or its output matched --for-text/--for-regex
+//   - waitExitDied (2): session crashed, was killed, or exited before
+//     going idle / before its output matched
 //   - waitExitTimeout (3): --timeout elapsed
 //
 // Any other usage / network error returns 1, matching the rest of the
 // CLI.
 const (
-	waitExitIdle    = 0
+	waitExitOK      = 0
 	waitExitDied    = 2
 	waitExitTimeout = 3
 )
 
-// cmdWait implements `gmux wait <id> [--timeout N]`.
+// cmdWait implements `gmux wait <id> [--timeout N] [--for-text S |
+// --for-regex P]`.
 //
 // The wait itself happens server-side: gmuxd already subscribes to
 // per-session events for its own bookkeeping, so we just hand it the
 // session id and block on the HTTP response. That keeps the CLI free
 // of SSE-parsing logic and ensures the idle-detection rules (which
 // adapter kinds emit Status.Working, what counts as "died") live in
-// one place.
+// one place. Output conditions equally belong server-side: the bytes
+// live in the daemon's scrollback tee, and matching there can't miss
+// output the way client-side scrollback polling could.
 //
 // Local sessions only: the daemon's wait handler resolves the session
 // against its local store and consults the adapter allowlist; remote
 // peer sessions are out of scope until peer subscriptions stream
 // Status events back to the hub.
-func cmdWait(ref string, timeoutSecs int) int {
+func cmdWait(ref string, timeoutSecs int, forText, forRegex string) int {
 	sess, err := resolveSession(ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
@@ -52,9 +57,19 @@ func cmdWait(ref string, timeoutSecs int) int {
 		return 1
 	}
 
-	endpoint := gmuxdBaseURL() + "/v1/sessions/" + url.PathEscape(sess.ID) + "/wait"
+	query := url.Values{}
 	if timeoutSecs > 0 {
-		endpoint += "?timeout=" + strconv.Itoa(timeoutSecs)
+		query.Set("timeout", strconv.Itoa(timeoutSecs))
+	}
+	if forText != "" {
+		query.Set("for_text", forText)
+	}
+	if forRegex != "" {
+		query.Set("for_regex", forRegex)
+	}
+	endpoint := gmuxdBaseURL() + "/v1/sessions/" + url.PathEscape(sess.ID) + "/wait"
+	if len(query) > 0 {
+		endpoint += "?" + query.Encode()
 	}
 
 	client := gmuxdClient()
@@ -74,7 +89,7 @@ func cmdWait(ref string, timeoutSecs int) int {
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		// Body is { ok: true, data: { reason: "idle" | "died" } }
+		// Body is { ok: true, data: { reason: "idle" | "matched" | "died" } }
 		var env struct {
 			Data struct {
 				Reason string `json:"reason"`
@@ -85,10 +100,14 @@ func cmdWait(ref string, timeoutSecs int) int {
 			return 1
 		}
 		switch env.Data.Reason {
-		case "idle":
-			return waitExitIdle
+		case "idle", "matched":
+			return waitExitOK
 		case "died":
-			fmt.Fprintf(os.Stderr, "gmux: session %s died before becoming idle\n", displayID(sess))
+			if forText != "" || forRegex != "" {
+				fmt.Fprintf(os.Stderr, "gmux: session %s exited before its output matched\n", displayID(sess))
+			} else {
+				fmt.Fprintf(os.Stderr, "gmux: session %s died before becoming idle\n", displayID(sess))
+			}
 			return waitExitDied
 		default:
 			fmt.Fprintf(os.Stderr, "gmux: unexpected wait reason %q\n", env.Data.Reason)

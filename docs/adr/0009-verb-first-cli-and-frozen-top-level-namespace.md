@@ -170,12 +170,14 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
     yet" (ADR 0005 deferral).
 
     Output-condition variants (`--for-text` / `--for-regex` — "block
-    until this text appears") were designed but **deferred**: the only
-    sound implementation matches where the bytes are, i.e. a gmuxd
-    endpoint, not client-side scrollback polling. Tracked as a
-    follow-up ([#313](https://github.com/gmuxapp/gmux/issues/313)).
-    Until then, shell "wait for output" is served by running the command
-    through the blocking piped form (`gmux -- <cmd>`).
+    until this text appears") were designed but initially **deferred**:
+    the only sound implementation matches where the bytes are, i.e. a
+    gmuxd endpoint, not client-side scrollback polling. Since
+    implemented server-side
+    ([#313](https://github.com/gmuxapp/gmux/issues/313)): gmuxd's wait
+    handler polls the on-disk scrollback tee and matches per rendered
+    (ANSI-stripped) line, so shell sessions are supported too (exit 0
+    matched, 2 exited first, 3 timeout).
 
 ## Considered alternatives
 

@@ -6,10 +6,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gmuxapp/gmux/packages/scrollback"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
@@ -19,9 +22,14 @@ import (
 // daemon's response. The store is the load-bearing dependency here:
 // faking it would only test the test, since the whole point of
 // handleWait is to consume real session-event broadcasts.
-func waitTestServer(t *testing.T) (*httptest.Server, *store.Store) {
+// The per-session scrollback dir maps into a test temp dir so
+// output-condition tests can drive matches by appending to the
+// scrollback file, exactly as the runner's tee does in production.
+func waitTestServer(t *testing.T) (*httptest.Server, *store.Store, func(string) string) {
 	t.Helper()
 	st := store.New()
+	root := t.TempDir()
+	dirFor := func(id string) string { return filepath.Join(root, id) }
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/sessions/", func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -29,11 +37,28 @@ func waitTestServer(t *testing.T) (*httptest.Server, *store.Store) {
 			http.NotFound(w, r)
 			return
 		}
-		handleWait(w, r, st, parts[2])
+		handleWait(w, r, st, parts[2], dirFor)
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv, st
+	return srv, st, dirFor
+}
+
+// appendScrollback appends raw PTY bytes to a session's active
+// scrollback file, mimicking the runner's live tee.
+func appendScrollback(t *testing.T, dir, text string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, scrollback.ActiveName), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(text); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func waitURL(srv *httptest.Server, id string) string {
@@ -47,7 +72,7 @@ func waitURL(srv *httptest.Server, id string) string {
 // races ahead between the two CLI calls), and the no-op-when-idle
 // behavior is what makes that composition reliable.
 func TestWaitReturnsImmediatelyWhenAlreadyIdle(t *testing.T) {
-	srv, st := waitTestServer(t)
+	srv, st, _ := waitTestServer(t)
 	st.Upsert(store.Session{
 		ID:      "sess-idle",
 		Adapter: "claude",
@@ -76,7 +101,7 @@ func TestWaitReturnsImmediatelyWhenAlreadyIdle(t *testing.T) {
 // asynchronously so the test exercises the subscription path rather
 // than the initial-snapshot fast path.
 func TestWaitBlocksUntilWorkingFlipsFalse(t *testing.T) {
-	srv, st := waitTestServer(t)
+	srv, st, _ := waitTestServer(t)
 	st.Upsert(store.Session{
 		ID:      "sess-busy",
 		Adapter: "pi",
@@ -128,7 +153,7 @@ func TestWaitBlocksUntilWorkingFlipsFalse(t *testing.T) {
 // for this turn to finish"; if the agent dies first we surface that
 // with reason=died so the CLI can map it to a non-zero exit code.
 func TestWaitReturnsDiedWhenSessionDies(t *testing.T) {
-	srv, st := waitTestServer(t)
+	srv, st, _ := waitTestServer(t)
 	st.Upsert(store.Session{
 		ID:      "sess-busy",
 		Adapter: "claude",
@@ -172,7 +197,7 @@ func TestWaitReturnsDiedWhenSessionDies(t *testing.T) {
 // phantom death; it should block until the session comes alive and
 // then resolve normally.
 func TestWaitDoesNotReportDiedBeforeFirstAlive(t *testing.T) {
-	srv, st := waitTestServer(t)
+	srv, st, _ := waitTestServer(t)
 	// Registered but not yet alive: no ExitCode, no Status — the
 	// runner hasn't reported anything.
 	st.Upsert(store.Session{
@@ -237,7 +262,7 @@ func TestWaitDoesNotReportDiedBeforeFirstAlive(t *testing.T) {
 // means the runner watched the child process exit, so "died" is
 // definitive even though this wait never observed Alive == true.
 func TestWaitReportsDiedOnArrivalWithExitCode(t *testing.T) {
-	srv, st := waitTestServer(t)
+	srv, st, _ := waitTestServer(t)
 	code := 1
 	st.Upsert(store.Session{
 		ID:       "sess-doa",
@@ -269,7 +294,7 @@ func TestWaitReportsDiedOnArrivalWithExitCode(t *testing.T) {
 // but may have no ExitCode — --wait on them must return died
 // immediately, not hang until timeout.
 func TestWaitReportsDiedForStaleDeadSession(t *testing.T) {
-	srv, st := waitTestServer(t)
+	srv, st, _ := waitTestServer(t)
 	st.Upsert(store.Session{
 		ID:        "sess-stale",
 		Adapter:   "pi",
@@ -297,7 +322,7 @@ func TestWaitReportsDiedForStaleDeadSession(t *testing.T) {
 // distinct HTTP status (408) so the CLI can tell timeout apart from
 // idle and from died.
 func TestWaitTimesOut(t *testing.T) {
-	srv, st := waitTestServer(t)
+	srv, st, _ := waitTestServer(t)
 	st.Upsert(store.Session{
 		ID:      "sess-stuck",
 		Adapter: "codex",
@@ -330,7 +355,7 @@ func TestWaitTimesOut(t *testing.T) {
 // wrong thing for `gmux make build && gmux --wait <id>`-style
 // composition. 422 surfaces the limitation explicitly.
 func TestWaitRejectsShellSessions(t *testing.T) {
-	srv, st := waitTestServer(t)
+	srv, st, _ := waitTestServer(t)
 	st.Upsert(store.Session{
 		ID:      "sess-shell",
 		Adapter: "shell",
@@ -349,7 +374,7 @@ func TestWaitRejectsShellSessions(t *testing.T) {
 // this guard, `gmux pi <prompt> --no-attach && gmux --wait $id` would
 // race the runner's first Working:true event and return immediately.
 func TestWaitDoesNotTreatNilStatusAsIdle(t *testing.T) {
-	srv, st := waitTestServer(t)
+	srv, st, _ := waitTestServer(t)
 	st.Upsert(store.Session{
 		ID:      "sess-fresh",
 		Adapter: "pi",
@@ -401,7 +426,7 @@ func TestWaitDoesNotTreatNilStatusAsIdle(t *testing.T) {
 // the response is correct regardless of which path (subscription or
 // re-snapshot) caught the transition.
 func TestWaitUnderHighEventLoad(t *testing.T) {
-	srv, st := waitTestServer(t)
+	srv, st, _ := waitTestServer(t)
 	st.Upsert(store.Session{
 		ID:      "sess-drop",
 		Adapter: "claude",
@@ -446,7 +471,7 @@ func TestWaitUnderHighEventLoad(t *testing.T) {
 // missing sessions. --wait would then hang forever, which is the
 // exact failure mode no-default-timeout was meant to avoid.
 func TestWaitReturnsDiedWhenSessionRemoved(t *testing.T) {
-	srv, st := waitTestServer(t)
+	srv, st, _ := waitTestServer(t)
 	st.Upsert(store.Session{
 		ID:      "sess-dismiss",
 		Adapter: "pi",
@@ -477,7 +502,7 @@ func TestWaitReturnsDiedWhenSessionRemoved(t *testing.T) {
 // TestWaitNotFound keeps the "missing session" case from being
 // confused with "session is busy forever."
 func TestWaitNotFound(t *testing.T) {
-	srv, _ := waitTestServer(t)
+	srv, _, _ := waitTestServer(t)
 	resp, _ := postWait(t, srv, "sess-nope")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
@@ -601,5 +626,293 @@ func TestWaitForSessionExitTimesOut(t *testing.T) {
 
 	if _, err := waitForSessionExit(st, evCh, id, 50*time.Millisecond, 10*time.Millisecond); !errors.Is(err, errExitWaitTimeout) {
 		t.Fatalf("expected errExitWaitTimeout for a session that never exited, got %v", err)
+	}
+}
+
+// ── output-condition waits (--for-text / --for-regex) ──
+
+func postWaitQuery(t *testing.T, srv *httptest.Server, id, query string) (*http.Response, map[string]any) {
+	t.Helper()
+	resp, err := http.Post(waitURL(srv, id)+"?"+query, "", nil)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	raw, _ := io.ReadAll(resp.Body)
+	var body map[string]any
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatalf("unmarshal %q: %v", raw, err)
+		}
+	}
+	return resp, body
+}
+
+func reasonOf(t *testing.T, body map[string]any) string {
+	t.Helper()
+	data, ok := body["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("no data envelope in %v", body)
+	}
+	reason, _ := data["reason"].(string)
+	return reason
+}
+
+// TestWaitForTextMatchesExistingOutput pins the "match whole
+// scrollback" contract: text that appeared before the wait call still
+// matches, mirroring the `until gmux tail | grep` loop this replaces
+// and avoiding the race where output lands between send and wait.
+func TestWaitForTextMatchesExistingOutput(t *testing.T) {
+	srv, st, dirFor := waitTestServer(t)
+	st.Upsert(store.Session{ID: "sess-out", Adapter: "shell", Alive: true})
+	appendScrollback(t, dirFor("sess-out"), "compiling...\r\nBUILD SUCCESSFUL\r\n")
+
+	resp, body := postWaitQuery(t, srv, "sess-out", "for_text=BUILD+SUCCESSFUL")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := reasonOf(t, body); got != "matched" {
+		t.Errorf("reason = %v, want matched", got)
+	}
+}
+
+// TestWaitForTextBlocksUntilOutputAppears is the headline behavior:
+// the wait blocks while the pattern is absent and unblocks once the
+// runner's tee appends matching bytes.
+func TestWaitForTextBlocksUntilOutputAppears(t *testing.T) {
+	srv, st, dirFor := waitTestServer(t)
+	st.Upsert(store.Session{ID: "sess-block", Adapter: "shell", Alive: true})
+	appendScrollback(t, dirFor("sess-block"), "starting server\r\n")
+
+	done := make(chan struct{})
+	var body map[string]any
+	go func() {
+		_, body = postWaitQuery(t, srv, "sess-block", "for_text=listening+on")
+		close(done)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("wait returned before the text appeared")
+	default:
+	}
+
+	appendScrollback(t, dirFor("sess-block"), "listening on :8080\r\n")
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("wait did not return after the text appeared")
+	}
+	if got := reasonOf(t, body); got != "matched" {
+		t.Errorf("reason = %v, want matched", got)
+	}
+}
+
+// TestWaitForRegexMatchesRenderedLine verifies the regex variant and
+// that matching happens against rendered (ANSI-stripped) lines: the
+// escape sequence splitting the words must not defeat the pattern.
+func TestWaitForRegexMatchesRenderedLine(t *testing.T) {
+	srv, st, dirFor := waitTestServer(t)
+	st.Upsert(store.Session{ID: "sess-re", Adapter: "pi", Alive: true, Status: &store.Status{Working: true}})
+	appendScrollback(t, dirFor("sess-re"), "tests \x1b[32mpassed\x1b[0m: 42\r\n")
+
+	resp, body := postWaitQuery(t, srv, "sess-re", "for_regex="+"tests+passed%3A+%5Cd%2B")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := reasonOf(t, body); got != "matched" {
+		t.Errorf("reason = %v, want matched", got)
+	}
+}
+
+// TestWaitForTextDiedBeforeMatch: session exits while the pattern
+// never appears → reason=died (CLI exit 2), not a hang.
+func TestWaitForTextDiedBeforeMatch(t *testing.T) {
+	srv, st, dirFor := waitTestServer(t)
+	st.Upsert(store.Session{ID: "sess-die", Adapter: "shell", Alive: true})
+	appendScrollback(t, dirFor("sess-die"), "nothing to see\r\n")
+
+	done := make(chan struct{})
+	var body map[string]any
+	go func() {
+		_, body = postWaitQuery(t, srv, "sess-die", "for_text=never-appears")
+		close(done)
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	st.Upsert(store.Session{ID: "sess-die", Adapter: "shell", Alive: false})
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("wait did not return after session died")
+	}
+	if got := reasonOf(t, body); got != "died" {
+		t.Errorf("reason = %v, want died", got)
+	}
+}
+
+// TestWaitForTextMatchAtExitWins: output written in the same breath as
+// the exit (the normal shape of `gmux -- <cmd>` one-shots) must count
+// as a match, not be masked by reason=died.
+func TestWaitForTextMatchAtExitWins(t *testing.T) {
+	srv, st, dirFor := waitTestServer(t)
+	st.Upsert(store.Session{ID: "sess-final", Adapter: "shell", Alive: true})
+
+	done := make(chan struct{})
+	var body map[string]any
+	go func() {
+		_, body = postWaitQuery(t, srv, "sess-final", "for_text=all+done")
+		close(done)
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	// Final output lands, then the session exits before the next tick.
+	appendScrollback(t, dirFor("sess-final"), "all done\r\n")
+	st.Upsert(store.Session{ID: "sess-final", Adapter: "shell", Alive: false})
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("wait did not return")
+	}
+	if got := reasonOf(t, body); got != "matched" {
+		t.Errorf("reason = %v, want matched (final render before died)", got)
+	}
+}
+
+// TestWaitForTextTimesOut keeps the 408 escape hatch working in
+// output mode.
+func TestWaitForTextTimesOut(t *testing.T) {
+	srv, st, _ := waitTestServer(t)
+	st.Upsert(store.Session{ID: "sess-slow", Adapter: "shell", Alive: true})
+
+	start := time.Now()
+	resp, _ := postWaitQuery(t, srv, "sess-slow", "for_text=never&timeout=1")
+	if resp.StatusCode != http.StatusRequestTimeout {
+		t.Fatalf("status = %d, want 408", resp.StatusCode)
+	}
+	if elapsed := time.Since(start); elapsed < 900*time.Millisecond || elapsed > 2*time.Second {
+		t.Errorf("elapsed = %v, want ~1s", elapsed)
+	}
+}
+
+// TestWaitForTextAllowsShellSessions pins that output conditions skip
+// the idle-signal allowlist: shell sessions have no Working flag but
+// their scrollback tee is as good as anyone's.
+func TestWaitForTextAllowsShellSessions(t *testing.T) {
+	srv, st, dirFor := waitTestServer(t)
+	st.Upsert(store.Session{ID: "sess-sh", Adapter: "shell", Alive: true})
+	appendScrollback(t, dirFor("sess-sh"), "ready\r\n")
+
+	resp, body := postWaitQuery(t, srv, "sess-sh", "for_text=ready")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (shell must be allowed in output mode)", resp.StatusCode)
+	}
+	if got := reasonOf(t, body); got != "matched" {
+		t.Errorf("reason = %v, want matched", got)
+	}
+}
+
+// TestWaitOutputConditionBadRequests covers the 400 family: mutually
+// exclusive conditions and invalid regex syntax.
+func TestWaitOutputConditionBadRequests(t *testing.T) {
+	srv, st, _ := waitTestServer(t)
+	st.Upsert(store.Session{ID: "sess-bad", Adapter: "shell", Alive: true})
+
+	if resp, _ := postWaitQuery(t, srv, "sess-bad", "for_text=a&for_regex=b"); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("both conditions: status = %d, want 400", resp.StatusCode)
+	}
+	if resp, _ := postWaitQuery(t, srv, "sess-bad", "for_regex=%5B"); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("bad regex: status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestWaitForTextNoPhantomDeathDuringStartup pins the startup window:
+// right after launch the session exists in the store with Alive ==
+// false until the runner's first upsert. Reporting "died" there would
+// break `gmux -d -- cmd && gmux wait $id --for-text …`. The wait must
+// ride out the window and match once the session comes up and emits.
+func TestWaitForTextNoPhantomDeathDuringStartup(t *testing.T) {
+	srv, st, dirFor := waitTestServer(t)
+	// Registered but not yet alive: the runner's first upsert hasn't landed.
+	st.Upsert(store.Session{ID: "sess-boot", Adapter: "shell", Alive: false})
+
+	done := make(chan struct{})
+	var body map[string]any
+	go func() {
+		_, body = postWaitQuery(t, srv, "sess-boot", "for_text=ready")
+		close(done)
+	}()
+
+	// Long enough for at least one poll tick to run against the
+	// not-yet-alive session.
+	select {
+	case <-done:
+		t.Fatal("wait returned during the startup window (phantom death)")
+	case <-time.After(700 * time.Millisecond):
+	}
+
+	st.Upsert(store.Session{ID: "sess-boot", Adapter: "shell", Alive: true})
+	appendScrollback(t, dirFor("sess-boot"), "ready\r\n")
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("wait did not return after the session came up and matched")
+	}
+	if got := reasonOf(t, body); got != "matched" {
+		t.Errorf("reason = %v, want matched", got)
+	}
+}
+
+// TestWaitForTextDeadOnArrivalWithExitCode: a session the runner
+// definitively watched exit (ExitCode set) fails fast with died even
+// though this wait never saw it alive — no riding out the timeout.
+func TestWaitForTextDeadOnArrivalWithExitCode(t *testing.T) {
+	srv, st, _ := waitTestServer(t)
+	code := 1
+	st.Upsert(store.Session{ID: "sess-doa", Adapter: "shell", Alive: false, ExitCode: &code})
+
+	start := time.Now()
+	resp, body := postWaitQuery(t, srv, "sess-doa", "for_text=never")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := reasonOf(t, body); got != "died" {
+		t.Errorf("reason = %v, want died", got)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("took %v; dead-on-arrival must fail fast", elapsed)
+	}
+}
+
+// TestWaitForTextDiedForStaleDeadSession pins the output wait's use of
+// the shared hasRunEvidence gate: a force-marked-dead or
+// restart-restored session carries StartedAt but often no live
+// ExitCode. A gate of only seenAlive||ExitCode would hang such a wait
+// to the timeout; hasRunEvidence's StartedAt clause makes it fail
+// fast, matching the idle wait (TestWaitReportsDiedForStaleDeadSession).
+func TestWaitForTextDiedForStaleDeadSession(t *testing.T) {
+	srv, st, _ := waitTestServer(t)
+	st.Upsert(store.Session{
+		ID:        "sess-stale-out",
+		Adapter:   "shell",
+		Alive:     false,
+		StartedAt: "2026-01-01T00:00:00Z",
+	})
+
+	start := time.Now()
+	resp, body := postWaitQuery(t, srv, "sess-stale-out", "for_text=never")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := reasonOf(t, body); got != "died" {
+		t.Errorf("reason = %v, want died", got)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("took %v; stale-dead session must fail fast", elapsed)
 	}
 }

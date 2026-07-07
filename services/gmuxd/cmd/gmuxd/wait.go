@@ -3,15 +3,28 @@ package main
 import (
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/gmuxapp/gmux/packages/scrollback"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
 // handleWait implements POST /v1/sessions/{id}/wait?timeout=N. It blocks
 // until the session is idle (Status.Working == false), the session
 // dies, the optional timeout elapses, or the client disconnects.
+//
+// An optional output condition switches the wait from "agent idle" to
+// "text appeared in the session's output": ?for_text=<substr> matches
+// a fixed substring, ?for_regex=<pattern> a Go regexp. Output waits
+// consume the on-disk scrollback tee the runner writes live into the
+// session dir — the daemon-side source of truth for output bytes — so
+// nothing can scroll past unseen between polls (loss is bounded by the
+// scrollback cap, not the poll interval). See waitForOutput.
 //
 // The single signal we wait on is the per-session Status.Working flag
 // the adapters emit. That's a precise, debounced signal: each adapter
@@ -41,9 +54,14 @@ import (
 //   - 200 with {reason}: terminal state reached (caller maps to its
 //     own exit code)
 //   - 408 Request Timeout: --timeout deadline elapsed
-//   - 422: session adapter has no idle signal
+//   - 422: session adapter has no idle signal (idle mode only;
+//     output conditions work for every adapter, including shell)
 //   - 404: session not found
-func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, sessionID string) {
+//   - 400: bad timeout, bad regex, or both output conditions at once
+//
+// dirFor maps a session id to its per-session state dir (production:
+// sessionmeta.Store.SessionDir); only output-condition waits read it.
+func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, sessionID string, dirFor func(string) string) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
 		return
@@ -54,7 +72,17 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 		writeError(w, http.StatusNotFound, "not_found", "session not found")
 		return
 	}
-	if !adapterEmitsIdleSignal(sess.Adapter) {
+
+	forText := r.URL.Query().Get("for_text")
+	forRegex := r.URL.Query().Get("for_regex")
+	if forText != "" && forRegex != "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "for_text and for_regex are mutually exclusive")
+		return
+	}
+
+	// Output conditions don't need the idle signal: they read the
+	// scrollback tee, which every adapter (including shell) produces.
+	if forText == "" && forRegex == "" && !adapterEmitsIdleSignal(sess.Adapter) {
 		writeError(w, http.StatusUnprocessableEntity, "no_idle_signal",
 			"the "+sess.Adapter+" adapter does not emit an idle signal; --wait is only supported for agent sessions")
 		return
@@ -68,6 +96,22 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 			return
 		}
 		deadline = time.After(time.Duration(secs) * time.Second)
+	}
+
+	if forText != "" || forRegex != "" {
+		var match func(string) bool
+		if forText != "" {
+			match = func(line string) bool { return strings.Contains(line, forText) }
+		} else {
+			re, err := regexp.Compile(forRegex)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "bad_request", "invalid regex: "+err.Error())
+				return
+			}
+			match = re.MatchString
+		}
+		waitForOutput(w, r, sessions, sessionID, dirFor(sessionID), match, deadline)
+		return
 	}
 
 	// Subscribe BEFORE re-reading current state. If we read first then
@@ -152,6 +196,182 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 			}
 		}
 	}
+}
+
+// waitForOutput blocks until a rendered line of the session's output
+// matches, the session dies, the optional deadline elapses, or the
+// client disconnects.
+//
+// The bytes come from the on-disk scrollback tee the runner writes
+// live into the session dir. Polling that file — instead of the store
+// event bus or a client-side scrollback re-fetch — is what makes the
+// condition sound: the file is append-only (with bounded rotation),
+// so output can't slip past between polls; at worst a match is
+// reported one tick late. Each poll replays the tee through a fresh
+// terminal emulator and matches per rendered line, i.e. against the
+// same ANSI-stripped text `gmux tail` prints. Matching raw PTY bytes
+// instead would foot-trap agent TUIs, whose escape sequences routinely
+// split a plain substring. Consequence: the pattern must fit on one
+// rendered (wrapped) terminal line.
+//
+// The whole persisted scrollback is matched, not just bytes that
+// arrive after the request: this mirrors the `until gmux tail | grep`
+// loop the condition replaces, and avoids the race where the text
+// appears between `gmux send` and `gmux wait`. Re-rendering is skipped
+// while the scrollback files' sizes are unchanged, so an idle session
+// costs two stat(2) calls per tick.
+//
+// Reasons: "matched" on success; "died" when the session exits or is
+// removed before matching — with one final render first, so output
+// that arrives in the same instant the session exits (the common case
+// for `gmux -- <cmd>` one-shots) still counts as a match.
+//
+// "died" is gated on hasRunEvidence (the same predicate the idle wait
+// uses): right after launch the session exists in the store with
+// Alive == false until the runner's first upsert lands, and reporting
+// "died" in that window would be a phantom death breaking the primary
+// composition `gmux -d -- cmd && gmux wait $id --for-text …` (issue
+// #216). See hasRunEvidence for the three signals that count as ran.
+func waitForOutput(
+	w http.ResponseWriter,
+	r *http.Request,
+	sessions *store.Store,
+	sessionID string,
+	dir string,
+	match func(string) bool,
+	deadline <-chan time.Time,
+) {
+	var lastSig scrollbackSig
+	rendered := false
+
+	// check re-renders (only when the scrollback files changed) and
+	// reports a match. The change signature folds in modification time
+	// as well as size, so a rotation that happens to land both files on
+	// a previously-seen size pair still forces a re-render (the mtimes
+	// advance) rather than silently hiding a match written across it.
+	check := func() bool {
+		sig := statScrollback(dir)
+		if rendered && sig == lastSig {
+			return false
+		}
+		lastSig, rendered = sig, true
+		return outputMatches(dir, sessions, sessionID, match)
+	}
+
+	respond := func(reason string) {
+		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
+	}
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	// diedUnlessFinalMatch does one last render before conceding death.
+	// The output and the exit are separate writes (scrollback tee vs
+	// store upsert) with no ordering between them, so matching final
+	// bytes can land after this loop's top-of-iteration check() but
+	// before we observe Alive == false. Without a final check() here,
+	// `gmux -- <cmd>` one-shots that print their result in the same
+	// breath as exiting would race to "died" (exit 2) instead of
+	// "matched" (exit 0). check() re-renders because the final bytes
+	// grew the scrollback file, so the just-appended output is seen.
+	diedUnlessFinalMatch := func() {
+		if check() {
+			respond("matched")
+			return
+		}
+		respond("died")
+	}
+
+	seenAlive := false
+	for {
+		if check() {
+			respond("matched")
+			return
+		}
+		cur, ok := sessions.Get(sessionID)
+		if !ok {
+			// Removed from the store (UI dismiss, prune): no more
+			// output is ever coming, startup window or not.
+			diedUnlessFinalMatch()
+			return
+		}
+		seenAlive = seenAlive || cur.Alive
+		// Same #216 startup-window gate the idle wait uses: don't call
+		// a not-yet-started session dead. hasRunEvidence also covers the
+		// force-dead / restart-restored shape (StartedAt set, no live
+		// ExitCode) that a bare seenAlive||ExitCode check would hang on.
+		if !cur.Alive && hasRunEvidence(cur, seenAlive) {
+			diedUnlessFinalMatch()
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			// Client disconnected; nothing to write.
+			return
+		case <-deadline:
+			writeError(w, http.StatusRequestTimeout, "timeout", "no matching output within timeout")
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// statScrollback captures a change signature (size + mtime) for the
+// session's scrollback files (previous + active). Missing files report
+// size -2, and the caller's separate `rendered` flag guarantees the
+// very first check always renders even when no scrollback exists yet.
+type scrollbackSig struct {
+	prevSize, prevModNs     int64
+	activeSize, activeModNs int64
+}
+
+func statScrollback(dir string) scrollbackSig {
+	statOf := func(name string) (int64, int64) {
+		fi, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			return -2, 0 // missing: distinct from any real (size>=0) stat
+		}
+		return fi.Size(), fi.ModTime().UnixNano()
+	}
+	var s scrollbackSig
+	s.prevSize, s.prevModNs = statOf(scrollback.PreviousName)
+	s.activeSize, s.activeModNs = statOf(scrollback.ActiveName)
+	return s
+}
+
+// outputMatches replays the session's persisted scrollback through a
+// terminal emulator and reports whether any rendered line satisfies
+// match. Terminal dimensions come from the session's last-known size
+// (RenderTail falls back to 80x24 for sessions that never resized).
+// Render errors report no-match: the wait keeps polling and, worst
+// case, ends in timeout/died rather than a spurious success.
+func outputMatches(dir string, sessions *store.Store, sessionID string, match func(string) bool) bool {
+	rc, err := scrollback.OpenReader(dir)
+	if err != nil || rc == nil {
+		return false
+	}
+	defer rc.Close()
+
+	var cols, rows int
+	if sess, ok := sessions.Get(sessionID); ok {
+		cols, rows = int(sess.TerminalCols), int(sess.TerminalRows)
+	}
+	if rows <= 0 {
+		rows = 24
+	}
+	// The emulator retains at most RenderScrollbackSize scrolled-off
+	// lines plus the visible screen; asking for that many lines back
+	// means "everything the replay can know about".
+	lines, err := scrollback.RenderTail(rc, cols, rows, scrollback.RenderScrollbackSize+rows)
+	if err != nil {
+		return false
+	}
+	for _, line := range lines {
+		if match(line) {
+			return true
+		}
+	}
+	return false
 }
 
 // Sentinel results for waitForSessionExit. Distinct errors let the
