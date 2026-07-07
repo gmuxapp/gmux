@@ -69,6 +69,16 @@ type Peer struct {
 	// Zero means use initialBackoff. Test-only: lets the reconnect
 	// tests run at millisecond cadence instead of real seconds.
 	reconnectBackoff time.Duration
+
+	// wake shortcuts the reconnect backoff wait. A signal here makes a
+	// backing-off peer retry immediately and resets its backoff to the
+	// initial interval. Buffered (cap 1) and sent non-blocking, so a
+	// signal that arrives while the peer is connected (not waiting)
+	// simply queues and is consumed at the next disconnect — harmless.
+	// Peering is dial-out only, so this is the only way an external
+	// event (e.g. a browser client connecting) can pull a just-online
+	// peer in faster than the backoff schedule.
+	wake chan struct{}
 }
 
 func newPeer(cfg config.PeerConfig, st *store.Store, onStatus func(string, Status), opts ...PeerOption) *Peer {
@@ -77,6 +87,7 @@ func newPeer(cfg config.PeerConfig, st *store.Store, onStatus func(string, Statu
 		store:    st,
 		status:   StatusDisconnected,
 		onStatus: onStatus,
+		wake:     make(chan struct{}, 1),
 	}
 	for _, o := range opts {
 		o(p)
@@ -95,6 +106,18 @@ func newPeer(cfg config.PeerConfig, st *store.Store, onStatus func(string, Statu
 	apiOpts = append(apiOpts, apiclient.WithStreamIdleTimeout(idleTimeout))
 	p.api = apiclient.New(cfg.URL, apiOpts...)
 	return p
+}
+
+// Reconnect signals the run loop to stop waiting out its backoff and
+// retry immediately, resetting backoff to the initial interval. Safe
+// to call at any time and from any goroutine: the send is
+// non-blocking, so it never stalls the caller, and a signal delivered
+// while the peer is connected (or already pending) is coalesced.
+func (p *Peer) Reconnect() {
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Status returns the current connection state.
@@ -358,6 +381,14 @@ func (p *Peer) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-p.wake:
+			// External trigger (e.g. a browser client connected):
+			// retry now and start over from the initial backoff so a
+			// peer that just came online is picked up promptly rather
+			// than after a grown wait.
+			backoff = minBackoff
+			lastLogged = ""
+			continue
 		case <-time.After(backoff):
 		}
 

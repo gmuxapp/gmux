@@ -210,3 +210,29 @@ func TestRemove(t *testing.T) {
 		t.Fatal("removed client should not be counted")
 	}
 }
+
+// TestOnClientConnectedFires verifies the callback fires exactly once
+// per Add, carrying the client's ID. This is the hook peering uses to
+// nudge dial-out-only peers to reconnect when a user shows up.
+func TestOnClientConnectedFires(t *testing.T) {
+	var gotIDs []string
+	tbl := New(Callbacks{
+		OnClientConnected: func(id string) { gotIDs = append(gotIDs, id) },
+	})
+
+	tbl.Add(nilClient("a", "desktop", "granted", nowSecs()))
+	tbl.Add(nilClient("b", "mobile", "granted", nowSecs()))
+
+	if len(gotIDs) != 2 || gotIDs[0] != "a" || gotIDs[1] != "b" {
+		t.Errorf("want callback fired for [a b], got %v", gotIDs)
+	}
+}
+
+// TestOnClientConnectedNilSafe verifies Add works when no callback is set.
+func TestOnClientConnectedNilSafe(t *testing.T) {
+	tbl := New(Callbacks{})
+	tbl.Add(nilClient("a", "desktop", "granted", nowSecs())) // must not panic
+	if got := len(tbl.Conns()); got != 1 {
+		t.Errorf("client should be registered, got %d conns", got)
+	}
+}

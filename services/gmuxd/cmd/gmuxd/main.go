@@ -670,8 +670,23 @@ func serve(stderr io.Writer) int {
 
 	// ── Presence + Notification router ──
 
+	// peerManager is initialized later after config is loaded. Declared
+	// here (ahead of the presence callbacks and various handler closures
+	// that capture it) so it can be referenced before assignment; all
+	// uses run at request time, after Start().
+	var peerManager *peering.Manager
+
 	notifRouter := (*notify.Router)(nil) // assigned after presence table
 	presenceTable := presence.New(presence.Callbacks{
+		OnClientConnected: func(clientID string) {
+			// A browser client just connected: the user is here and
+			// wants current data. Nudge dial-out-only peers to retry
+			// now instead of waiting out a backoff, so a peer that
+			// came online while we were backing off shows up promptly.
+			if peerManager != nil {
+				peerManager.ReconnectAll()
+			}
+		},
 		OnClientFocused: func(clientID string) {
 			if notifRouter != nil {
 				notifRouter.CancelAllPending()
@@ -716,11 +731,6 @@ func serve(stderr io.Writer) int {
 	if err != nil {
 		log.Fatalf("FATAL: %v", err)
 	}
-
-	// peerManager is initialized later after config is loaded. Closures
-	// (reconcileProjectStamps, buildSessionInfos call sites) capture this
-	// pointer so handlers work once it's set.
-	var peerManager *peering.Manager
 
 	// Project manager handles concurrent access to projects.json and
 	// auto-assignment of sessions to projects.
