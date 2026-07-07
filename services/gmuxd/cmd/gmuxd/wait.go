@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -88,14 +90,10 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 		return
 	}
 
-	var deadline <-chan time.Time
-	if ts := r.URL.Query().Get("timeout"); ts != "" {
-		secs, err := strconv.Atoi(ts)
-		if err != nil || secs <= 0 {
-			writeError(w, http.StatusBadRequest, "bad_request", "timeout must be a positive integer of seconds")
-			return
-		}
-		deadline = time.After(time.Duration(secs) * time.Second)
+	deadline, err := timeoutChan(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
 	}
 
 	if forText != "" || forRegex != "" {
@@ -132,8 +130,11 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 	seenAlive := false
 
 	// Already in a terminal state? Return without waiting for a
-	// transition. Callers like `--send-wait` (composition) want
-	// `--wait` to be a no-op when the agent is already idle.
+	// transition. Composing scripts want `gmux wait` to be a no-op
+	// when the agent is already idle. (Note this is also why the bare
+	// `send && wait` composition is racy: the "already idle" snapshot
+	// may be the previous turn's. `gmux send --wait` routes through
+	// handleInputWait instead, which requires a fresh Working pulse.)
 	if cur, ok := sessions.Get(sessionID); ok {
 		seenAlive = seenAlive || cur.Alive
 		if reason, done := terminalReason(cur, seenAlive); done {
@@ -372,6 +373,175 @@ func outputMatches(dir string, sessions *store.Store, sessionID string, match fu
 		}
 	}
 	return false
+}
+
+// timeoutChan parses the optional ?timeout=N query parameter into a
+// deadline channel. A nil channel (no timeout) blocks forever in a
+// select, which is exactly the no-deadline behavior we want.
+func timeoutChan(r *http.Request) (<-chan time.Time, error) {
+	ts := r.URL.Query().Get("timeout")
+	if ts == "" {
+		return nil, nil
+	}
+	secs, err := strconv.Atoi(ts)
+	if err != nil || secs <= 0 {
+		return nil, errors.New("timeout must be a positive integer of seconds")
+	}
+	return time.After(time.Duration(secs) * time.Second), nil
+}
+
+// handleInputWait implements POST /v1/sessions/{id}/input?wait=idle:
+// deliver input to the session and block until the turn it triggers
+// completes (issue #218).
+//
+// The bare composition `gmux send <id> ... && gmux wait <id>` has an
+// inherent race: `wait`'s initial snapshot can observe the *previous*
+// turn's idle state before the send-induced Working=true has propagated
+// from the runner's adapter into the store, returning "idle"
+// immediately with stale output. The fix is ordering, done here where
+// both halves live in one process: subscribe to the store BEFORE
+// forwarding the input bytes, then require a fresh Working=true
+// observation before any Working=false counts as "this turn is done".
+// The Working pulse cannot be missed because the subscription predates
+// the input delivery.
+//
+// Contract mirrors handleWait: 200 {reason: idle|died}, 408 on
+// ?timeout=N elapsing, 422 for adapters with no idle signal. One
+// additional 422 ("input_no_submit") rejects bodies that carry no
+// carriage return: input that doesn't submit never starts a turn, so
+// waiting on it would only ever time out — fail loudly at the edge
+// instead.
+//
+// send is a closure over the runner delivery (discovery.SendInput)
+// so this handler — and its tests — stay independent of the socket
+// transport.
+func handleInputWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, sess store.Session, body []byte, send func() error) {
+	if mode := r.URL.Query().Get("wait"); mode != "idle" {
+		// "idle" is the only wait mode today; the value exists so
+		// future conditions (e.g. output text, #313) can slot in.
+		// Rejecting unknown modes keeps a client typo from silently
+		// degrading to fire-and-forget.
+		writeError(w, http.StatusBadRequest, "bad_request",
+			"unsupported wait mode "+strconv.Quote(mode)+`; expected "idle"`)
+		return
+	}
+	if !adapterEmitsIdleSignal(sess.Adapter) {
+		writeError(w, http.StatusUnprocessableEntity, "no_idle_signal",
+			"the "+sess.Adapter+" adapter does not emit an idle signal; --wait is only supported for agent sessions")
+		return
+	}
+	if !bytes.ContainsRune(body, '\r') {
+		writeError(w, http.StatusUnprocessableEntity, "input_no_submit",
+			"input does not submit (no carriage return \\r; a bare newline \\n is treated as literal text, not a submit); "+
+				"add a trailing Enter key or drop --wait")
+		return
+	}
+	deadline, err := timeoutChan(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+
+	// Subscribe BEFORE delivering the input. This ordering is the
+	// entire point of the endpoint: the Working=true pulse the input
+	// triggers is broadcast to subscribers that already exist, so it
+	// can't slip between "bytes delivered" and "wait armed".
+	evCh, unsub := sessions.Subscribe()
+	defer unsub()
+
+	if err := send(); err != nil {
+		writeError(w, http.StatusBadGateway, "runner_unreachable", err.Error())
+		return
+	}
+
+	reason, timedOut := awaitTurn(r.Context(), sessions, evCh, sess.ID, deadline)
+	switch {
+	case timedOut:
+		writeError(w, http.StatusRequestTimeout, "timeout", "session did not become idle within timeout")
+	case reason != "":
+		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
+		// reason == "" and !timedOut: client disconnected; nothing to write.
+	}
+}
+
+// awaitTurn blocks until the session completes a turn: a Working=true
+// observation followed by Working=false ("idle"), or the session dying
+// or being removed at any point ("died"). Unlike terminalReason, a
+// Working=false state observed before any Working=true does NOT
+// terminate — that's exactly the stale previous-turn idle the caller
+// subscribed early to skip past.
+//
+// Returns ("", false) when ctx is cancelled and ("", true) on deadline.
+//
+// Like handleWait, events are complemented by a periodic re-poll: the
+// 64-slot subscriber buffers drop events under load, so both edges of
+// the pulse could theoretically be missed. The poll recovers the
+// Working=true edge whenever the turn outlasts one tick; a sub-tick
+// turn whose both edge events were dropped is the one (vanishingly
+// unlikely) case that rides out the deadline.
+func awaitTurn(ctx context.Context, sessions *store.Store, evCh <-chan store.Event, sessionID string, deadline <-chan time.Time) (reason string, timedOut bool) {
+	seenWorking := false
+	check := func(s store.Session) (string, bool) {
+		if !s.Alive {
+			// No #216 startup-window gate here (unlike terminalReason /
+			// hasRunEvidence): handleInputWait only runs after the input
+			// handler's `!sess.Alive => 409` check, so we enter with a
+			// live session and any Alive==false is a genuine death.
+			return "died", true
+		}
+		if s.Status != nil && s.Status.Working {
+			seenWorking = true
+			return "", false
+		}
+		if seenWorking {
+			// Status went non-working after a fresh Working pulse:
+			// the turn our input triggered is over.
+			if s.Status != nil && !s.Status.Working {
+				return "idle", true
+			}
+		}
+		return "", false
+	}
+
+	// Initial snapshot: catches a session already mid-turn (our bytes
+	// queue behind the current turn; treat its end as the answer) or
+	// already dead.
+	if cur, ok := sessions.Get(sessionID); !ok {
+		return "died", false
+	} else if reason, done := check(cur); done {
+		return reason, false
+	}
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", false
+		case <-deadline:
+			return "", true
+		case ev := <-evCh:
+			if ev.ID != sessionID {
+				continue
+			}
+			if ev.Session == nil {
+				// session-remove: dismissed mid-wait. See handleWait.
+				return "died", false
+			}
+			if reason, done := check(*ev.Session); done {
+				return reason, false
+			}
+		case <-ticker.C:
+			cur, ok := sessions.Get(sessionID)
+			if !ok {
+				return "died", false
+			}
+			if reason, done := check(cur); done {
+				return reason, false
+			}
+		}
+	}
 }
 
 // Sentinel results for waitForSessionExit. Distinct errors let the

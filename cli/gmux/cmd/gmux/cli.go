@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -61,6 +62,7 @@ type command struct {
 	// send
 	sendText *string  // literal text to type (nil = none)
 	sendKeys []string // trailing key-name tokens (Enter, C-c, ...)
+	sendWait bool     // --wait: block until the triggered turn completes
 
 	// send-keys (tmux-compat)
 	keysLiteral bool     // -l: treat args as literal text, not key names
@@ -273,16 +275,65 @@ func parseTail(args []string) (*command, error) {
 	return c, nil
 }
 
-// parseSend handles `gmux send <id> [text] [Key...]`. The first
-// positional is the session ref; an optional second positional is the
-// literal text; any further bare tokens are key-name tokens. With no
-// text and no keys, stdin supplies the text.
+// parseSend handles `gmux send [--wait] [--timeout N] [--] <id> [text]
+// [Key...]`. The first positional is the session ref; an optional
+// second positional is the literal text; any further bare tokens are
+// key-name tokens. With no text and no keys, stdin supplies the text.
+//
+// Grammar (ADR 0009 decision 9, verbatim-content rule): behavior
+// modifiers precede the session ref; the ref is the first non-flag
+// token, and *everything after it is verbatim* — including tokens that
+// start with a dash. So `gmux send abc -v` sends the literal `-v`, and
+// `gmux send abc '--weird text'` needs no `--` guard. This deliberately
+// diverges from parsing flags anywhere: send's trailing content is
+// arbitrary user text, so taxing the common case with a `--` guard to
+// support two rare flags is the wrong trade. To wait, put the flag
+// before the id: `gmux send --wait abc 'do it' Enter`. A `--` before
+// the ref is accepted as an explicit end-of-flags marker.
 func parseSend(args []string) (*command, error) {
-	if len(args) < 1 {
+	c := &command{mode: modeSend}
+	i := 0
+	for i < len(args) {
+		a := args[i]
+		if a == "--" { // explicit end-of-flags; ref follows
+			i++
+			break
+		}
+		if !strings.HasPrefix(a, "-") { // first non-flag token is the ref
+			break
+		}
+		switch {
+		case a == "--wait":
+			c.sendWait = true
+		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
+			val := strings.TrimPrefix(a, "--timeout")
+			if val == "" {
+				i++
+				if i >= len(args) {
+					return nil, errors.New("--timeout requires a number of seconds")
+				}
+				val = args[i]
+			} else {
+				val = strings.TrimPrefix(val, "=")
+			}
+			n, err := strconv.Atoi(val)
+			if err != nil || n <= 0 {
+				return nil, errors.New("--timeout must be a positive number of seconds")
+			}
+			c.timeout = n
+		default:
+			return nil, fmt.Errorf("send: unknown flag %q (flags go before the session id; text after the id is literal)", a)
+		}
+		i++
+	}
+	if c.timeout > 0 && !c.sendWait {
+		return nil, errors.New("send: --timeout only applies with --wait")
+	}
+	if i >= len(args) {
 		return nil, errors.New("send requires a session id")
 	}
-	c := &command{mode: modeSend, ref: args[0]}
-	rest := args[1:]
+	c.ref = args[i]
+	rest := args[i+1:]
 	if len(rest) > 0 {
 		// Heuristic: the first non-key token is the literal text; the
 		// rest are keys. If the first token is itself a key name, there
@@ -496,6 +547,8 @@ Sessions (local by default; address a peer with <id>@<peer>):
   gmux attach <id>                  reattach to a session
   gmux tail <id> [-n N] [--raw]     print recent output (snapshot)
   gmux send <id> <text> [Key...]    type text and/or send keys (e.g. Enter, C-c)
+  gmux send --wait [--timeout N] <id> <text> [Key...]
+                                    ... and block until the triggered turn ends
   gmux send-keys -t <id> <keys...>  tmux-compatible key sending
   gmux wait <id> [--timeout N]      block until an agent session is idle
        [--for-text S|--for-regex P] ... or until output matches S / P

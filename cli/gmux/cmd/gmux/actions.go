@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gmuxapp/gmux/cli/gmux/internal/localterm"
@@ -430,7 +431,7 @@ func fetchScrollback(sess cliSession, n int) ([]byte, int) {
 // peer sessions (gmuxd forwards to the owning peer transparently).
 // Access control inherits from gmuxd: local IPC is owner-only, and
 // peers honor their own `tailscale.allow` config.
-func cmdSend(ref string, text *string, keys []string) int {
+func cmdSend(ref string, text *string, keys []string, wait bool, timeoutSecs int) int {
 	// Read stdin only when no inline text was given AND stdin is a pipe.
 	// The tty guard is essential: without it, `gmux send <id> Enter` typed
 	// interactively would block reading the terminal. With it, piped input
@@ -440,7 +441,11 @@ func cmdSend(ref string, text *string, keys []string) int {
 	if text == nil && !localterm.IsInteractive() {
 		stdin = os.Stdin
 	}
-	return sendBytes(ref, buildSendBody(text, keys, stdin))
+	body := buildSendBody(text, keys, stdin)
+	if wait {
+		return sendBytesAndWait(ref, body, timeoutSecs)
+	}
+	return sendBytes(ref, body)
 }
 
 // cmdSendKeys implements the tmux-compatible `gmux send-keys -t <id>
@@ -457,14 +462,50 @@ func sendBytes(ref string, body io.Reader) int {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
 	}
+	return postInput(sess, body, "")
+}
 
+// sendBytesAndWait implements `gmux send --wait`: one request delivers
+// the input AND blocks until the turn it triggers completes. gmuxd
+// subscribes to session events *before* forwarding the bytes to the
+// runner, so unlike the `gmux send X && gmux wait X` composition it
+// cannot mistake the previous turn's idle state for the reply (#218).
+//
+// Exit codes mirror `gmux wait`: 0 idle, 2 died, 3 timeout, 1 usage/
+// transport errors.
+func sendBytesAndWait(ref string, body io.Reader, timeoutSecs int) int {
+	sess, err := resolveSession(ref)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return 1
+	}
+	if sess.Peer != "" {
+		// Same scope rule as `gmux wait`: the wait half needs the
+		// owning daemon's event stream, which peers don't expose to
+		// the CLI yet. Bare shortID: the message names the peer itself.
+		fmt.Fprintf(os.Stderr, "gmux: send --wait is only supported for local sessions (%s is on peer %q)\n",
+			shortID(sess.ID), sess.Peer)
+		return 1
+	}
+	query := "?wait=idle"
+	if timeoutSecs > 0 {
+		query += "&timeout=" + strconv.Itoa(timeoutSecs)
+	}
+	return postInput(sess, body, query)
+}
+
+// postInput POSTs body to the session's input endpoint. With an empty
+// query this is fire-and-forget (204). With "?wait=idle..." gmuxd
+// holds the response until the triggered turn completes and answers
+// with a wait-style reason payload, mapped to `gmux wait` exit codes.
+func postInput(sess cliSession, body io.Reader, query string) int {
 	client := gmuxdClient()
 	// Stdin may be paced by a human or upstream process; the default
 	// 5s timeout would cut off legitimately slow inputs. gmuxd buffers
 	// the whole body before forwarding to the runner, so a long-lived
 	// connection here is fine.
 	client.Timeout = 0
-	url := gmuxdBaseURL() + "/v1/sessions/" + sess.ID + "/input"
+	url := gmuxdBaseURL() + "/v1/sessions/" + sess.ID + "/input" + query
 	req, err := http.NewRequest(http.MethodPost, url, body)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
@@ -485,12 +526,39 @@ func sendBytes(ref string, body io.Reader) int {
 			fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", displayID(sess))
 		case http.StatusConflict:
 			fmt.Fprintf(os.Stderr, "gmux: session %s is not running\n", displayID(sess))
+		case http.StatusRequestTimeout:
+			fmt.Fprintln(os.Stderr, "gmux: session did not become idle within --timeout")
+			return waitExitTimeout
+		case http.StatusUnprocessableEntity:
+			fmt.Fprintf(os.Stderr, "gmux: %s\n", extractMessage(msg))
 		default:
 			fmt.Fprintf(os.Stderr, "gmux: send failed: %s: %s\n", resp.Status, strings.TrimSpace(string(msg)))
 		}
 		return 1
 	}
-	return 0
+	if query == "" {
+		return 0
+	}
+	// wait=idle response: { ok: true, data: { reason: "idle" | "died" } }
+	var env struct {
+		Data struct {
+			Reason string `json:"reason"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		fmt.Fprintln(os.Stderr, "gmux: decode send --wait response:", err)
+		return 1
+	}
+	switch env.Data.Reason {
+	case "idle":
+		return waitExitOK
+	case "died":
+		fmt.Fprintf(os.Stderr, "gmux: session %s died before becoming idle\n", displayID(sess))
+		return waitExitDied
+	default:
+		fmt.Fprintf(os.Stderr, "gmux: unexpected send --wait reason %q\n", env.Data.Reason)
+		return 1
+	}
 }
 
 // maxSendBytes caps the number of bytes read from stdin for a single

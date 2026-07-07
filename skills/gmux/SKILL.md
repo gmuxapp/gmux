@@ -17,6 +17,7 @@ gmux -- <cmd> [args]         # run blocking; exits with the child's exit code
 gmux -d -- <cmd> [args]      # run detached; prints the session id on stdout
 gmux send <id> 'text' Enter  # type text and submit (Enter is explicit)
 gmux send <id> C-c           # send a control key (interrupt), no text
+gmux send --wait <id> 'text' Enter  # send AND block until the reply is done
 gmux wait <id>               # block until the agent finishes its turn
 gmux wait <id> --for-text S  # block until S appears in the output
 gmux tail <id> [-n N]        # last N lines of output (ANSI stripped; default 100)
@@ -54,11 +55,18 @@ Key names follow tmux: `Enter`, `Tab`, `Escape`, `Up`/`Down`/`Left`/`Right`,
 id=$(gmux -d -- pi "implement the feature")
 gmux wait $id
 
-gmux send $id "$(cat review.txt)" Enter
-gmux wait $id
+gmux send --wait $id "$(cat review.txt)" Enter
 
 gmux tail $id -n 100
 ```
+
+**Prefer `gmux send --wait` over `gmux send … && gmux wait`** for "send a
+prompt and wait for the reply": the two-command composition can observe the
+*previous* turn's idle state and return before the agent has even started,
+while `--wait` is race-free (the daemon arms the wait before delivering the
+input and requires a fresh working→idle transition). `--wait` requires the
+input to submit (a trailing `Enter` or a `\r` in piped stdin) and accepts
+`--timeout N`; exit codes match `gmux wait` below.
 
 ## Parallel orchestration
 
