@@ -83,7 +83,10 @@ func probeSocket(sockPath string) bool {
 	return true
 }
 
-func newScreen(cols, rows int, cursorCb func(visible bool)) *vt.Emulator {
+// newScreen builds the replay emulator and starts the DSR drain goroutine. It
+// returns the emulator and a channel that is closed when the drain goroutine
+// exits, so shutdown can join it (see stopScreenDrain).
+func newScreen(cols, rows int, cursorCb func(visible bool)) (*vt.Emulator, chan struct{}) {
 	// Default to 80x24 when launched non-interactively (no terminal).
 	// The first resize from a connecting client will set the real size.
 	if cols <= 0 {
@@ -99,9 +102,39 @@ func newScreen(cols, rows int, cursorCb func(visible bool)) *vt.Emulator {
 	})
 	// The emulator writes responses (e.g. DSR cursor position reports)
 	// to an internal pipe. If nothing reads them, Write blocks. We don't
-	// need the responses, so drain them in the background.
-	go io.Copy(io.Discard, e)
-	return e
+	// need the responses, so drain them in the background. The goroutine
+	// exits when the pipe is closed during shutdown (see stopScreenDrain),
+	// at which point drainDone is closed.
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		_, _ = io.Copy(io.Discard, e)
+	}()
+	return e, drainDone
+}
+
+// stopScreenDrain unblocks and joins the DSR drain goroutine, then closes the
+// emulator.
+//
+// We must NOT call e.Close() while the drain goroutine's io.Copy is still
+// calling e.Read(): vt.Emulator guards its `closed` flag with no
+// synchronization, so a concurrent Read (drain) and Close (shutdown) is a data
+// race (github.com/charmbracelet/x/vt, still present as of the latest version).
+//
+// Instead we close the emulator's pipe directly via InputPipe(), which uses
+// only io.Pipe's concurrency-safe methods. That returns EOF from the pending
+// e.Read(), so the drain goroutine's io.Copy returns and drainDone closes. Once
+// the drain goroutine has exited, no Read is in flight and e.Close() is safe.
+func stopScreenDrain(e *vt.Emulator, drainDone chan struct{}) {
+	if c, ok := e.InputPipe().(io.Closer); ok {
+		_ = c.Close()
+	} else {
+		// Fallback: no closable pipe exposed. Close() races the drain, but
+		// it's the only lever left. Should not happen with current vt.
+		_ = e.Close()
+	}
+	<-drainDone
+	_ = e.Close()
 }
 
 // renderScreen produces the ANSI snapshot: scrollback lines followed by
@@ -151,13 +184,14 @@ type ResizeMsg struct {
 
 // Server holds a PTY and serves WebSocket connections.
 type Server struct {
-	cmd      *exec.Cmd
-	ptmx     *os.File
-	sockPath string
-	listener net.Listener
-	screen   *vt.Emulator // virtual terminal for replay snapshots (guarded by mu)
-	adapter  adapter.Adapter
-	state    *session.State
+	cmd             *exec.Cmd
+	ptmx            *os.File
+	sockPath        string
+	listener        net.Listener
+	screen          *vt.Emulator  // virtual terminal for replay snapshots (guarded by mu)
+	screenDrainDone chan struct{} // closed when the DSR drain goroutine exits
+	adapter         adapter.Adapter
+	state           *session.State
 
 	mu             sync.Mutex
 	clients        map[*wsClient]struct{}
@@ -166,6 +200,7 @@ type Server struct {
 	ptyCols        uint16         // last applied PTY cols (guarded by mu)
 	ptyRows        uint16         // last applied PTY rows (guarded by mu)
 	cursorHidden   bool           // tracks DECTCEM via callback (guarded by mu)
+	ptmxClosed     bool           // true once ptmx is closed by Shutdown (guarded by mu)
 	screenPending  []byte         // raw PTY data not yet fed to screen (guarded by mu)
 	lastClientLeft time.Time      // when the last WS client disconnected (guarded by mu)
 
@@ -322,7 +357,7 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	// The callback fires under s.mu (held during drainScreenLocked → screen.Write).
-	s.screen = newScreen(int(cfg.Cols), int(cfg.Rows), func(visible bool) {
+	s.screen, s.screenDrainDone = newScreen(int(cfg.Cols), int(cfg.Rows), func(visible bool) {
 		s.cursorHidden = !visible
 	})
 
@@ -448,15 +483,34 @@ func (s *Server) Resize(cols, rows uint16) {
 // Shutdown closes the listener and all connections.
 func (s *Server) Shutdown() {
 	s.listener.Close()
-	s.ptmx.Close()
 	os.Remove(s.sockPath)
 
 	s.mu.Lock()
-	s.screen.Close() // unblocks the DSR drain goroutine
+	// Close ptmx and mark it closed under mu. pty.Setsize (setPtySize) calls
+	// (*os.File).Fd(), which races (*os.File).Close(); serializing both under
+	// mu, plus the ptmxClosed guard, keeps resize/shrink from touching the fd
+	// once Shutdown has closed it. (Read/Write go through the reference-counted
+	// poll.FD and are already safe against Close.)
+	s.ptmxClosed = true
+	s.ptmx.Close()
+	stopScreenDrain(s.screen, s.screenDrainDone) // unblocks + joins the DSR drain goroutine, then closes
 	for c := range s.clients {
 		c.cancel()
 	}
 	s.mu.Unlock()
+}
+
+// setPtySize applies a window size to the PTY unless Shutdown has already closed
+// it. pty.Setsize calls (*os.File).Fd(), which is not safe against a concurrent
+// (*os.File).Close(); holding mu (which Shutdown also holds while closing) and
+// skipping once closed serializes the two.
+func (s *Server) setPtySize(ws *pty.Winsize) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ptmxClosed {
+		return
+	}
+	_ = pty.Setsize(s.ptmx, ws)
 }
 
 func (s *Server) serve() {
@@ -890,7 +944,7 @@ func (s *Server) shrinkForReconnect() {
 	s.screen.Resize(int(cols), int(rows))
 	s.mu.Unlock()
 
-	pty.Setsize(s.ptmx, &pty.Winsize{Cols: cols, Rows: rows})
+	s.setPtySize(&pty.Winsize{Cols: cols, Rows: rows})
 	if s.cmd.Process != nil {
 		syscall.Kill(-s.cmd.Process.Pid, syscall.SIGWINCH)
 	}
@@ -918,7 +972,7 @@ func (s *Server) resize(msg ResizeMsg) {
 	s.mu.Unlock()
 
 	if sizeChanged {
-		pty.Setsize(s.ptmx, &pty.Winsize{
+		s.setPtySize(&pty.Winsize{
 			Cols: msg.Cols,
 			Rows: msg.Rows,
 			X:    msg.PixelWidth,

@@ -12,6 +12,9 @@ tasks:
       - "go.mod"
       - "/packages/adapter/**/*.go"
   test:
-    command: go test ./...
+    # -race guards against concurrency regressions (e.g. the ptyserver
+    # Shutdown vs DSR-drain / PTY-Setsize races). The whole module is
+    # race-clean; keep it that way.
+    command: go test -race ./...
   lint:
     command: go vet ./...
