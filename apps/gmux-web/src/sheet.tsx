@@ -44,8 +44,9 @@
  * The panel (with its role/aria-label) is passed as children.
  */
 import type { ComponentChildren } from 'preact'
-import { useEffect, useState } from 'preact/hooks'
 import { createPortal } from 'preact/compat'
+import { useEffect } from 'preact/hooks'
+import { pushError, pushToast } from './toasts'
 
 /**
  * Defer a sheet's *dismissal* (the DOM unmount) to the next macrotask
@@ -116,26 +117,32 @@ export function SheetButton({ primary = false, quiet = false, onActivate, childr
   )
 }
 
-type CopyState = 'idle' | 'copied' | 'failed'
-
-/** A {@link SheetButton} that copies `text` to the clipboard and shows
- * inline feedback in place of `label`. Deliberately does NOT dismiss: a
- * copy is often mid-task, and an auto-close timer is an unwinnable guess
- * (a toast will confirm + close on its own once that lands). Centralises
- * the copy-with-feedback both the link and text sheets need. */
-export function CopyButton({ label, text }: { label: string; text: string }) {
-  const [state, setState] = useState<CopyState>('idle')
-  const copy = async () => {
+/** A {@link SheetButton} that copies `text` to the clipboard, closes the
+ * sheet immediately, and confirms via a toast (`Copied to clipboard` /
+ * `Copy failed`). Confirmation is decoupled from the surface: the sheet
+ * doesn't need to linger (or guess an auto-close delay) just to show
+ * feedback. The clipboard write is initiated synchronously inside the
+ * click task — WebKit gesture-gates it (see {@link dismissAfterGesture}) —
+ * and the toast fires when the promise settles. Centralises the copy
+ * behaviour both the link and text sheets need. */
+export function CopyButton({ label, text, onClose }: {
+  label: string
+  text: string
+  onClose: () => void
+}) {
+  const copy = () => {
+    // The write can also throw synchronously (e.g. `navigator.clipboard`
+    // is undefined outside a secure context); either way the sheet still
+    // closes and the failure surfaces as a toast.
     try {
-      await navigator.clipboard.writeText(text)
-      setState('copied')
+      navigator.clipboard.writeText(text).then(
+        () => pushToast('info', 'Copied to clipboard'),
+        () => pushError('Copy failed'),
+      )
     } catch {
-      setState('failed')
+      pushError('Copy failed')
     }
+    onClose()
   }
-  return (
-    <SheetButton onActivate={copy}>
-      {state === 'idle' ? label : state === 'copied' ? 'Copied ✓' : 'Copy failed'}
-    </SheetButton>
-  )
+  return <SheetButton onActivate={copy}>{label}</SheetButton>
 }
