@@ -97,7 +97,9 @@ The Tailscale account that owns the node is automatically added to the allow lis
 
 ### Allow list design
 
-The allow list matches **login names**, not device names. Tailscale device names are unique within a tailnet, but they can be renamed by the user. A renamed device would silently fall off the allow list. Login names are stable identities tied to the authentication provider (GitHub, Google, etc.). For per-device access control, use [Tailscale ACLs](https://tailscale.com/kb/1018/acls).
+The allow list matches **login names** and **device tags**, not device names. Tailscale device names are unique within a tailnet, but they can be renamed by the user. A renamed device would silently fall off the allow list. Login names are stable identities tied to the authentication provider (GitHub, Google, etc.). For per-device access control, use [Tailscale ACLs](https://tailscale.com/kb/1018/acls).
+
+[Tagged devices](https://tailscale.com/kb/1068/tags) carry no user identity — `WhoIs` reports the pseudo-login `tagged-devices` — so they cannot be allowed by login name. Instead, add the device's ACL tag (e.g. `tag:gmux`) to the allow list. Tags are assigned via your tailnet's ACL policy and can only be changed by tailnet admins, making them a stable, admin-controlled identity.
 
 The allow list is for when you have multiple accounts on the same tailnet (e.g. a personal and a work account) or when you've shared the gmux device to another tailnet you own. It is not designed for giving other people access. See the [not a collaboration tool](/remote-access) caveat.
 

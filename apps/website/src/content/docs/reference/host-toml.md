@@ -20,7 +20,7 @@ port = 8790
 # See the Remote Access guide for setup.
 [tailscale]
 enabled = false
-allow = []               # additional login names (owner is auto-whitelisted)
+allow = []               # additional login names or device tags (owner is auto-whitelisted)
 
 # Auto-discover devcontainer peers. Defaults to true.
 [discovery]
@@ -52,7 +52,7 @@ The bind address is not configurable here — it is the `GMUXD_LISTEN` environme
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | `boolean` | `false` | Enable Tailscale remote access. |
-| `allow` | `string[]` | `[]` | Additional Tailscale login names to allow (owner is auto-whitelisted). Each must contain `@`. |
+| `allow` | `string[]` | `[]` | Additional Tailscale login names (e.g. `user@github`) or device tags (e.g. `tag:gmux`) to allow (owner is auto-whitelisted). Login entries must contain `@`; tag entries start with `tag:`. |
 
 ### `[discovery]`
 
@@ -67,7 +67,8 @@ There is no `tailscale` discovery flag (removed in [ADR 0008](https://github.com
 The config file is strictly validated at startup. gmuxd refuses to start if:
 
 - **Unknown keys** are present, catching typos like `alow` instead of `allow`
-- **`allow` entries don't contain `@`**, likely not a valid Tailscale login name
+- **`allow` entries don't contain `@` and don't start with `tag:`**, likely not a valid Tailscale login name or device tag
+- **`allow` tag entries are malformed** — the name after `tag:` must start with a letter and contain only lowercase letters, digits, and hyphens
 - **`port` is out of range** (must be 1–65535)
 - **TOML syntax is invalid**
 

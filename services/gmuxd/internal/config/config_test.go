@@ -204,6 +204,54 @@ allow = ["not-a-login-name"]
 	}
 }
 
+func TestLoadAcceptsDeviceTags(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	writeConfig(t, dir, `
+[tailscale]
+enabled = true
+allow = ["alice@github", "tag:gmux"]
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Tailscale.Allow) != 2 {
+		t.Fatalf("allow = %v, want 2 entries", cfg.Tailscale.Allow)
+	}
+}
+
+func TestLoadRejectsMalformedTags(t *testing.T) {
+	bad := []string{
+		"tag:",           // empty name
+		"tag:my tag",     // whitespace
+		"tag:tag:double", // nested prefix
+		"tag:GMux",       // uppercase
+		"tag:1abc",       // must start with a letter
+		"tag:-abc",       // must start with a letter
+	}
+	for _, entry := range bad {
+		t.Run(entry, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			writeConfig(t, dir, `
+[tailscale]
+enabled = true
+allow = ["`+entry+`"]
+`)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("expected error for malformed tag %q", entry)
+			}
+			if !strings.Contains(err.Error(), "not a valid device tag") {
+				t.Errorf("error = %q", err)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsBadTOML(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)

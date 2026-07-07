@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -159,17 +160,30 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+// tagNameRe matches valid Tailscale ACL tag names: they must start with
+// a letter and contain only lowercase letters, digits, and hyphens.
+// https://tailscale.com/kb/1068/tags
+var tagNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
 func validate(cfg Config) error {
 	// Port range.
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		return fmt.Errorf("port %d is out of range (1-65535)", cfg.Port)
 	}
 
-	// Tailscale: allow list entries must look like login names.
+	// Tailscale: allow list entries must look like login names or device
+	// tags. Tagged devices have no user identity, so they are allowed by
+	// tag (e.g. "tag:gmux") instead of login name.
 	// An empty allow list is fine — the node owner is auto-whitelisted at runtime.
 	for _, entry := range cfg.Tailscale.Allow {
+		if strings.HasPrefix(entry, "tag:") {
+			if !tagNameRe.MatchString(strings.TrimPrefix(entry, "tag:")) {
+				return fmt.Errorf("tailscale.allow entry %q is not a valid device tag (expected format: tag:name, where name starts with a letter and contains only lowercase letters, digits, and hyphens)", entry)
+			}
+			continue
+		}
 		if !strings.Contains(entry, "@") {
-			return fmt.Errorf("tailscale.allow entry %q doesn't look like a login name (expected format: user@provider)", entry)
+			return fmt.Errorf("tailscale.allow entry %q doesn't look like a login name or device tag (expected format: user@provider or tag:name)", entry)
 		}
 	}
 
