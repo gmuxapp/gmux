@@ -700,7 +700,7 @@ function App() {
   return (
     <div class="app-layout">
       {showReconnecting && (
-        <div class="app-reconnecting-pill" role="status">
+        <div class="reconnecting-pill app-reconnecting-pill" role="status">
           Connection lost, reconnecting…
         </div>
       )}

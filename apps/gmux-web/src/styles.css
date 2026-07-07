@@ -1876,14 +1876,17 @@ body {
     0 8px 24px oklch(0% 0 0 / 0.28);
 }
 
-.terminal-disconnected-pill {
+/* Shared "reconnecting" pill skin. One visual source of truth for the
+   offline/reconnecting cue across both data planes — the per-terminal
+   PTY WebSocket (`.terminal-disconnected-pill`) and the app-level SSE
+   control plane (`.app-reconnecting-pill`). The two keep separate
+   drivers (they watch independent transports) and separate positioning
+   wrappers; only the look and copy are shared here. */
+.reconnecting-pill {
   pointer-events: none;
-  position: relative;
-  top: 12px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: min(calc(100% - 24px), 460px);
   padding: 10px 16px;
   border: 1px solid oklch(0.45 0.12 20 / 0.5);
   border-radius: 999px;
@@ -1901,36 +1904,24 @@ body {
   white-space: nowrap;
 }
 
-/* App-level SSE reconnecting pill. Shares the terminal pill's design
-   language (translucent warm surface, blur, rounded) so "we're offline,
-   reconnecting" reads the same across the WS and SSE data planes. Floats
-   fixed at top-center over whatever view is showing (sidebar, home,
-   project hub) without taking over the screen. */
+/* Terminal PTY-socket pill: anchored inside the terminal shell so it
+   points at the affected pane. Skin comes from `.reconnecting-pill`. */
+.terminal-disconnected-pill {
+  position: relative;
+  top: 12px;
+  max-width: min(calc(100% - 24px), 460px);
+}
+
+/* App-level SSE pill: fixed top-center overlay for views with no
+   terminal pane to anchor to (sidebar, home, project hub). Skin comes
+   from `.reconnecting-pill`. */
 .app-reconnecting-pill {
-  pointer-events: none;
   position: fixed;
   top: 12px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 60;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
   max-width: min(calc(100vw - 24px), 460px);
-  padding: 10px 16px;
-  border: 1px solid oklch(0.45 0.12 20 / 0.5);
-  border-radius: 999px;
-  background: oklch(0.22 0.06 20 / 0.88);
-  color: oklch(0.78 0.1 20);
-  box-shadow:
-    0 8px 24px oklch(0% 0 0 / 0.28),
-    0 0 12px oklch(0.5 0.15 20 / 0.12);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  font-size: 13px;
-  line-height: 1;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
 }
 
 /* ── Find-in-terminal bar ────────────────────────────────────────────────────────
