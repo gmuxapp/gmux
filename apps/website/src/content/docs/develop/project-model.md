@@ -1,15 +1,17 @@
 ---
-title: Project Management
-description: User-curated project list with VCS-aware matching and stable URL routing.
+title: Project Model
+description: The design behind gmux's user-curated project list, VCS-aware matching, and stable URL routing.
 ---
 
-> This feature is not yet implemented.
+:::note[Design record]
+This is the design rationale behind gmux's project model, which shipped in 2.0. For current behavior and configuration see [Using the UI](/using-the-ui/) and the [projects.json reference](/reference/projects-json/). Terminology note: `kind` throughout this document is now `adapter`.
+:::
 
-Today, folders appear in the sidebar automatically when sessions start, and the scanner walks all adapter session directories to discover every resumable session across all projects. This works but creates noise, doesn't sync between clients, and prevents adapters with per-project storage (like OpenCode's SQLite) from integrating cleanly.
+Before this model, folders appeared in the sidebar automatically when sessions started, and a scanner walked all adapter session directories to discover every resumable session across all projects. That created noise, didn't sync between clients, and prevented adapters with per-project storage (like OpenCode's SQLite) from integrating cleanly.
 
-This document describes the replacement, delivered in three steps:
-1. Server-side project state with user-curated project list
-2. Manage projects UI
+The replacement shipped in three parts:
+1. Server-side project state with a user-curated project list
+2. The Settings → Projects UI
 3. URL routing (stable, hierarchical session URLs)
 
 ## Design principles

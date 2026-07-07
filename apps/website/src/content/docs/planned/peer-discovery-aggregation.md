@@ -1,7 +1,11 @@
 ---
-title: Planned Features
-description: Features under consideration for future releases.
+title: Peer Discovery & Aggregation
+description: Features under consideration for cross-host discovery and nested aggregation.
 ---
+
+:::note[Not implemented]
+These are ideas under consideration; nothing here has shipped. For what multi-machine does today, see [Multi-Machine Sessions](/multi-machine/).
+:::
 
 ## Canonical project URI
 

@@ -318,6 +318,16 @@ These are ready to paste into \`settings.jsonc\`.
 }
 \`\`\`
 
+**Restore browser find** -- gmux binds \`secondary+f\` (Cmd+F on macOS, Ctrl+F elsewhere) to open the find-in-terminal search bar, replacing the browser's in-page find (which can't see into a canvas-rendered terminal). To get browser find back:
+
+\`\`\`jsonc
+{
+  "keybinds": [
+    { "key": "secondary+f", "action": "none" }
+  ]
+}
+\`\`\`
+
 **Disable all browser workarounds** -- if you run gmux as a PWA or \`--app\` window, the browser doesn't steal Ctrl+T/N/W, so the Ctrl+Alt workarounds are unnecessary:
 
 \`\`\`jsonc

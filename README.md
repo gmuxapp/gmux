@@ -17,15 +17,15 @@ Or download from [GitHub Releases](https://github.com/gmuxapp/gmux/releases).
 ## Quick start
 
 ```bash
-gmux pi                    # launch a coding agent
-gmux pytest --watch        # launch a test watcher
-gmux make build            # or literally any command
-gmux                       # open the UI
+gmux -- pi                 # launch a coding agent
+gmux -- pytest --watch     # launch a test watcher
+gmux -d -- make build      # detached; prints the session id
+gmux open                  # open the UI
 ```
 
-Open `localhost:8790` — all three sessions are there, grouped by project, with live status indicators. Click one to attach a full terminal. The same xterm.js that powers the VS Code terminal, running in your browser.
+Open the dashboard — all three sessions are there, grouped by project, with live status indicators. Click one to attach a full terminal. The same xterm.js that powers the VS Code terminal, running in your browser.
 
-The daemon (`gmuxd`) starts automatically on first use. There's nothing else to set up. For daemon commands, run `gmuxd -h`.
+The daemon (`gmuxd`) starts automatically on first use. There's nothing else to set up. Power users alias `gm='gmux --'`. For daemon lifecycle commands, run `gmux daemon status` (see `gmux help`).
 
 ## How it works
 
@@ -47,102 +47,89 @@ graph LR
     gmuxd -- "HTTP · SSE · WS" --> web
 ```
 
-**`gmux`** wraps any command in a managed session. It allocates a PTY, serves a WebSocket for terminal access, and runs an **adapter** that understands what the child process is doing. A pi session knows when the agent is thinking vs waiting for input. A test runner knows when tests are failing. A generic command gets alive/dead/activity tracking out of the box. With no arguments, it opens the UI in your browser.
+**`gmux`** wraps any command in a managed session. It allocates a PTY, serves a WebSocket for terminal access, and runs an **adapter** that understands what the child process is doing. For agent tools (pi, Claude Code, Codex), gmux installs a small hook into the agent so the agent itself reports its state — working, idle, which conversation it holds — authoritatively, with no output scraping. A generic command gets alive/dead/activity tracking out of the box.
 
-**`gmuxd`** runs once per machine (auto-started by `gmux`). It discovers sessions via their Unix sockets, caches their state, proxies WebSocket connections, and pushes real-time updates to the browser via SSE. It's stateless — restart it anytime, it rebuilds from what's running.
+**`gmuxd`** runs once per machine (auto-started by `gmux`). It discovers sessions via their Unix sockets, caches their state, proxies WebSocket connections, and pushes real-time updates to the browser via SSE. Session state lives with each runner, so gmuxd's session cache rebuilds on restart; projects, peers, and the auth token persist in `~/.local/state/gmux`.
 
-**`gmux-web`** is the browser UI. The sidebar groups sessions by working directory, with status dots that pulse when something needs attention. The terminal is xterm.js — the same battle-tested terminal emulator that powers VS Code's integrated terminal — with synchronized output for flicker-free session switching and ~1 MiB of persisted scrollback that replays instantly on reconnect.
+**`gmux-web`** is the browser UI. The sidebar groups sessions into projects, with status dots that pulse when something needs attention. The terminal is xterm.js — the same battle-tested terminal emulator that powers VS Code's integrated terminal — with synchronized output for flicker-free session switching and ~1 MiB of persisted scrollback that replays instantly on reconnect.
 
 ## What you see
 
 ```
 ┌─────────────────────────────────────┐
-│ gmux                          alpha │
+│ gmux                             ⚙  │
 │                                     │
 │ ▼ myapp                        ● 2  │
-│   main · 3 changed · PR #42        │
 │                                     │
 │   ● fix auth bug               now  │
-│     thinking · pi                   │
+│     working · pi                    │
 │                                     │
 │   ● test watcher             2m ago │
-│     47/47 passing · pytest          │
+│     pytest --watch                  │
 │                                     │
 │ ▼ gmux                         ● 1  │
-│   feature/probes · clean            │
 │                                     │
 │   ● bootstrap                  5m   │
-│     waiting for input · pi          │
+│     unread · pi                     │
 │                                     │
-│ ▸ docs                        ○ 1   │
-│   main · completed                  │
+│ ▸ docs                         ○ 1  │
 └─────────────────────────────────────┘
 ```
 
-Sessions are grouped into **folders** by working directory. Each folder heading is enriched by **probes** — lightweight observers that report git branch, dirty state, open PRs, or anything you script. The folder's status dot reflects the most urgent session inside it.
+Sessions are grouped into **projects** by working directory — manage the project list in Settings, where gmux also suggests directories it discovered from past sessions. Each project's status dot reflects the most urgent session inside it.
 
 ## Features
 
 ### Sessions
-- **Launch anything** — `gmux <command>` wraps any process in a managed session
+- **Launch anything** — `gmux -- <command>` wraps any process in a managed session
 - **Full terminal** — xterm.js with WebSocket transport, the same terminal emulator as VS Code
 - **~1 MiB persisted scrollback** — replays instantly on reconnect, survives runner exit, no lost context
 - **Flicker-free switching** — DEC 2026 synchronized output renders session swaps in a single frame
-- **Session lifecycle** — live status, exit codes, kill from the UI
+- **Session lifecycle** — live status, exit codes, kill from the UI; dead sessions stay resumable
 - **Reconnecting** — tab away, come back, the terminal is right where you left it
+- **Editor tabs** — `gmux edit <file>` opens a managed editor session; works as `$EDITOR` (blocks and propagates the exit code, so `git commit` just works)
 
 ### Adapters — session-level intelligence
 Adapters teach gmux how to work with specific tools. They're compiled into the binary and selected automatically by command name.
 
-- **Auto-detection** — `gmux pi` recognizes pi and activates the pi adapter. No flags needed.
-- **Rich status** — adapters report what the child is doing: thinking, waiting for input, tests passing, build failing
+- **Auto-detection** — `gmux -- pi` recognizes pi and activates the pi adapter. No flags needed.
+- **Authoritative agent status** — pi, Claude Code, and Codex report session identity, titles, and working/idle state through the tools' own hook mechanisms, injected per launch
 - **Child awareness** — any tool can self-report status via `PUT /status` on `$GMUX_SOCKET`, no adapter required
 - **Graceful fallback** — unknown commands get the shell adapter
 
-### Probes — directory-level intelligence
-Probes observe the working directory and enrich folder headings with project context.
+### Scripting & agents
+gmux is a full CLI, designed to compose into scripts and agent workflows:
 
-```mermaid
-graph TD
-    subgraph "Folder: ~/dev/myapp"
-        git["git probe\nmain · 3 files changed"]
-        pr["github-pr probe\nPR #42 open"]
-        s1["Session: pi\n● thinking"]
-        s2["Session: pytest --watch\n● 47/47 passing"]
-    end
-
-    git --> heading["Folder heading\nmyapp — main · 3 changed · PR #42"]
-    pr --> heading
-    s1 --> dot["Aggregate status dot"]
-    s2 --> dot
+```bash
+id=$(gmux -d -- pi)                     # launch detached, capture the id
+gmux send "$id" 'refactor the auth module' Enter
+gmux wait "$id" --timeout 600           # block until the agent goes idle
+gmux tail "$id" -n 50                   # read the plain-text tail
 ```
 
-- **Git** — branch name, dirty file count
-- **GitHub PR** — PR number, status, clickable link
-- **Script probes** — drop a bash script in `~/.config/gmux/probes/`, it runs against each matching directory and returns JSON. Five lines gets you custom folder intelligence.
+`gmux ls --json` gives agents a machine-readable session list; `gmux send-keys -t` is tmux-compatible. See the [scripting guide](apps/website/src/content/docs/integrations/scripts-and-agents.md).
+
+### Multi-machine
+Run gmux on each machine, then connect them: `gmux auth` on the remote host prints a connect URL you paste into **Settings → Hosts → Connect to host**. Peers authenticate with bearer tokens; sessions on other hosts are addressable as `<id>@<peer>`. Devcontainers running the gmux feature are discovered automatically. See [Multi-machine](apps/website/src/content/docs/multi-machine.md).
 
 ### UI
-- **Triage-first** — sessions sorted by what needs attention, not alphabetically
-- **Automatic grouping** — sessions sharing a working directory group into folders, no manual organization
-- **Header bar** — contextual metadata and actions for the selected session
-- **Mobile responsive** — same URL on your phone, tap a session, type a steering message, done
-- **URL scoping** — `?project=myapp` filters to one project. Bookmark it for a per-project browser tab.
-- **Nord dark theme** — designed for long sessions, Inter + JetBrains Mono typography
+- **Triage-first** — the home screen surfaces waiting and active sessions first, then recency buckets
+- **Project grouping** — sessions group into projects by working directory; manage the list in Settings
+- **Find in terminal** — Cmd/Ctrl+F searches the terminal buffer
+- **Mobile responsive** — same URL on your phone; a dedicated toolbar, keyboard handling, and long-press link actions
+- **URL routing** — every project and session has a stable URL you can bookmark
+- **Customizable theme** — dark theme with a Windows Terminal–compatible terminal palette (`theme.jsonc`)
 
 ### Architecture
-- **Runner-authoritative** — gmux is the source of truth, gmuxd is a rebuildable cache
+- **Runner-authoritative** — each session's runner is the source of truth for its state; gmuxd's session cache is rebuilt from running sessions
 - **No external dependencies** — no tmux, no screen, no abduco. Two Go binaries and a web app.
 - **Web-first** — works on desktop, tablet, phone. Same URL everywhere.
-- **Zero config** — run `gmux <command>`, open a browser
+- **Zero config** — run `gmux -- <command>`, open a browser
 
 ## Extensibility
 
-| Layer | Mechanism | Runs in | What it does |
-|-------|-----------|---------|--------------|
-| Session | **Adapters** (Go) | gmux | Recognize commands, monitor output, report rich status |
-| Directory | **Probes** (Go or bash) | gmuxd | Observe directories, report git/PR/CI metadata |
-| Child process | **HTTP API** on `$GMUX_SOCKET` | child | Self-report status without any adapter |
-| User scripts | **Script probes** in `~/.config/gmux/probes/` | gmuxd | Custom directory intelligence, no compilation |
+- **Adapters** (Go, compiled in) — recognize commands, launch presets, titles, resume, hook-driven status
+- **Child self-reporting** — any process can `PUT /status` on `$GMUX_SOCKET` to set working/error state, no adapter required
 
 ## Development
 
@@ -150,7 +137,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites and setup.
 
 ```bash
 pnpm install      # JS dependencies
-./dev              # start all services with watch/HMR
+pnpm dev          # start all services with watch/HMR
 ```
 
 ### Monorepo layout
@@ -158,11 +145,11 @@ pnpm install      # JS dependencies
 ```mermaid
 graph TB
     subgraph "CLI"
-        gmux2["cli/gmux\nGo — PTY, WebSocket, adapters"]
+        gmux2["cli/gmux\nGo — PTY, WebSocket, runner"]
     end
 
     subgraph "Daemon"
-        gmuxd1["services/gmuxd\nGo — discovery, cache, proxy, probes"]
+        gmuxd1["services/gmuxd\nGo — discovery, cache, proxy"]
     end
 
     subgraph "Web"
@@ -177,8 +164,9 @@ graph TB
 
 | Path | Language | Purpose |
 |------|----------|---------|
-| `cli/gmux` | Go | Session launcher — PTY, WebSocket, adapters |
+| `cli/gmux` | Go | Session launcher — PTY, WebSocket, runner |
 | `services/gmuxd` | Go | Machine daemon — discovery, cache, WS proxy, embedded web UI |
+| `packages/*` | Go | Shared libraries — adapters, paths, scrollback, session env |
 | `apps/gmux-web` | TypeScript/Preact | Browser UI — sidebar, terminal, header bar |
 | `packages/protocol` | TypeScript | Shared schemas, zod-validated |
 | `apps/website` | Astro/Starlight | Documentation site |
@@ -187,11 +175,14 @@ graph TB
 
 Documentation lives in the [website](apps/website/src/content/docs/):
 
+- [Getting Started](apps/website/src/content/docs/getting-started.mdx) — install and first session
 - [Architecture](apps/website/src/content/docs/architecture.md) — runtime structure (gmux, gmuxd, web UI)
+- [CLI Reference](apps/website/src/content/docs/reference/cli.md) — every verb and flag
+- [Multi-machine](apps/website/src/content/docs/multi-machine.md) — connecting hosts
 - [Session Schema](apps/website/src/content/docs/develop/session-schema.md) — metadata model
 - [Adapter Architecture](apps/website/src/content/docs/develop/adapter-architecture.md) — how adapters work
 - [Security](apps/website/src/content/docs/security.md) — threat model and safeguards
-- [Remote Access](apps/website/src/content/docs/remote-access.md) — tailscale setup
+- [Remote Access](apps/website/src/content/docs/remote-access.md) — `gmux remote` / Tailscale setup
 
 ## License
 

@@ -9,7 +9,7 @@ gmux has built-in support for [Claude Code](https://docs.anthropic.com/en/docs/c
 
 ### Live status
 
-The sidebar shows when Claude Code is actively working. gmux detects user and assistant messages in the session file — a user message sets the status to **working** (pulsing cyan dot), and a completed assistant response clears it.
+The sidebar shows when Claude Code is actively working. gmux injects a small hook configuration (via `--settings`) when it launches `claude`; the hooks report turn boundaries directly to gmux, so status is authoritative rather than inferred from output or file writes. A user prompt sets the status to **working** (pulsing cyan dot); the end of the turn clears it.
 
 ### Session titles
 
@@ -23,9 +23,9 @@ Instead of showing "claude" for every session, gmux extracts a meaningful title:
 ```
 
 Title priority:
-1. Claude Code's auto-generated title (the `custom-title` entry in the session file)
+1. Claude Code's own session title (reported by the hook, or the `custom-title` entry in the conversation file) — renaming with `/rename` shows up at your next prompt, and the URL slug follows the resolved title
 2. The text of your first message
-3. "(new)" if there are no messages yet
+3. Otherwise the session falls back to its working directory / adapter name
 
 ### Resumable sessions
 
@@ -53,15 +53,24 @@ gmux -- env claude                   # ✓ matched
 gmux -- echo "not claude"            # ✗ not matched
 ```
 
-If detection fails, override it:
+`GMUX_ADAPTER` can force adapter selection, but only if the adapter's own matcher also accepts the command — the binary must still be named `claude` (e.g. a symlink `claude -> my-wrapper`). A wrapper with a different name is not matched and cannot be overridden.
 
-```bash
-GMUX_ADAPTER=claude gmux my-claude-wrapper
-```
+### Hooks
 
-### Session files
+When gmux owns the launch, it appends a `--settings` argument registering Claude Code hooks that run `gmux __claude-hook`. If you pass your own `--settings` or have hooks configured, gmux deep-merges: hook arrays concatenate, your scalar values win, and your settings can never wipe gmux's hook entries. Nothing is written to `~/.claude` — the injection is per-launch and ephemeral. Set `GMUX_NO_AGENT_HOOK=1` to launch claude unmodified (the session then runs without live status).
 
-Claude Code stores conversations as JSONL files in `~/.claude/projects/`. Each working directory gets its own subfolder with an encoded name — `/` and `.` are replaced with `-`:
+| Hook event | Effect |
+|---|---|
+| `SessionStart` | Binds the session to its conversation file, ID, and title (also fires on `/resume`, `/clear`, compaction — gmux follows the new transcript) |
+| `UserPromptSubmit` | Working (cyan dot); also refreshes the title, so a `/rename` shows up at your next prompt |
+| `Stop` | Idle — turn completed |
+| `SessionEnd` | Idle — session ended/aborted (Ctrl+C, exit) |
+
+Because turn state is authoritative, `gmux wait <id>` works reliably with Claude Code for scripting.
+
+### Conversation files
+
+Claude Code stores conversations (it calls them session transcripts) as JSONL files in `~/.claude/projects/`. Each working directory gets its own subfolder with an encoded name — `/` and `.` are replaced with `-`:
 
 ```
 ~/.claude/projects/
@@ -74,23 +83,9 @@ Claude Code stores conversations as JSONL files in `~/.claude/projects/`. Each w
 
 Note the double dash in `-home-mg--local-share-chezmoi` — that's because `/home/mg/.local` has a dot that also becomes a dash.
 
-gmuxd watches these directories and reads the files to populate the sidebar. Each line in the file is a JSON object with a `type` field (`user`, `assistant`, `system`, `custom-title`, etc.).
-
-### Status detection
-
-gmux watches the session file (not PTY output) for status signals:
-
-| File event | Sidebar effect |
-|---|---|
-| `type: "user"` line appended | Working (cyan dot) — assistant will respond |
-| `type: "assistant"` with only text content | Idle (dot clears) — turn complete |
-| `type: "assistant"` with `tool_use` content | Still working — tool execution in progress |
-| `type: "custom-title"` line appended | Title updates to the generated title |
-
-This approach avoids the flickering that would result from parsing Claude Code's TUI spinner output.
+gmuxd's Claude adapter watches these directories to discover past conversations and populate resumable entries. Each line in the file is a JSON object with a `type` field (`user`, `assistant`, `system`, `custom-title`, etc.). Live status and attribution do **not** come from these files — the hook binds the exact transcript path at `SessionStart`, so multiple sessions in one directory attribute correctly and immediately.
 
 ## Limitations
 
-- **Status has one-message granularity.** gmux marks the session as working after a user message and idle after a text-only assistant message. It doesn't distinguish between "thinking", "writing code", or "running a tool" — all are shown as "working".
-- **File creation timing.** Claude Code writes to the session file in real time, so there's no significant delay for initial title or status.
-- **Multi-instance attribution.** If you run two Claude Code sessions in the same directory, gmuxd uses content matching to attribute files. This works well in practice but has a one-write delay for initial attribution.
+- **Status is coarse.** gmux doesn't distinguish thinking/tool-use sub-states — all are shown as "working". An Esc-interrupted turn stays "working" until the next prompt (Claude's `Stop` hook only fires on a clean finish).
+- **Hook injection needs a visible `claude` binary.** A shell-wrapped launch (`gmux -- bash -c 'claude'`, or `claude` after a `--`) can't be extended, so that session runs without live status.

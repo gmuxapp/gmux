@@ -3,7 +3,9 @@ title: Mobile Notifications
 description: Push notifications for mobile — current landscape and planned approach.
 ---
 
-> This feature is not yet implemented.
+:::note[Not implemented]
+This is a design sketch; nothing here has shipped.
+:::
 
 ## The problem with Web Push on iOS
 

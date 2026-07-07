@@ -26,13 +26,13 @@ Renaming with pi's `/name` command updates the sidebar live.
 
 ### Resumable sessions
 
-When a pi session exits, it remains in the sidebar as a resumable entry. Click it to resume exactly where you left off — gmux launches `pi --session <path> -c` with the right session file.
+When a pi session exits, it remains in the sidebar as a resumable entry. Click it to resume exactly where you left off — gmux launches `pi --session <path> -c` with the right conversation file.
 
 Resumable sessions are deduplicated: if you're already running a session that matches a resumable entry, only the live one appears.
 
 ### Launch from the UI
 
-Pi appears in the launch menu only when it is available on the current machine. `gmuxd` checks this at startup by running `pi --version`; if that fails, the pi launcher is omitted from the UI.
+Pi appears in the launch menu only when it is available on the current machine. `gmuxd` checks this at startup by looking for a `pi` binary on `PATH`; if none is found, the pi launcher is omitted from the UI. (Restart the daemon after installing pi.)
 
 ## How it works
 
@@ -40,7 +40,7 @@ Pi appears in the launch menu only when it is available on the current machine. 
 
 There are two separate pi checks:
 
-- **availability discovery** in `gmuxd`: run `pi --version` at startup to see whether pi is installed and the pi launcher should be shown
+- **availability discovery** in `gmuxd`: look up `pi` on `PATH` at daemon startup to decide whether the pi launcher should be shown
 - **runtime matching** in `gmux`: scan the launched command for a `pi` or `pi-coding-agent` binary name
 
 The runtime matching works with direct invocation, full paths, `npx`, `nix run`, and other wrappers:
@@ -49,14 +49,11 @@ The runtime matching works with direct invocation, full paths, `npx`, `nix run`,
 gmux -- pi                           # ✓ matched
 gmux -- /home/user/.local/bin/pi     # ✓ matched
 gmux -- npx pi                       # ✓ matched
+gmux -- pi update                    # ✓ matched, but runs directly (passthrough)
 gmux -- echo "not pi"                # ✗ not matched
 ```
 
-If detection fails (e.g., an unusual wrapper), override it:
-
-```bash
-GMUX_ADAPTER=pi gmux my-pi-wrapper
-```
+Detection is validated: `GMUX_ADAPTER=pi` only takes effect if the command actually invokes a `pi` / `pi-coding-agent` binary, so it can't force the pi adapter onto an arbitrary wrapper script. If you wrap pi, keep the binary name visible in the command (e.g. `gmux -- env FOO=1 pi`), or name your wrapper `pi`/`pi-coding-agent`.
 
 ### Session files
 
@@ -69,7 +66,7 @@ Pi stores conversations as JSONL files in `~/.pi/agent/sessions/`. Each working 
     2026-03-15T11-30-00-000Z_def456.jsonl
 ```
 
-gmuxd indexes these files for conversation search and history. Live session state — attribution, title, and status — comes from the extension, not from parsing these files. The first line of each file is a session header with a UUID and timestamp.
+gmuxd watches this directory to discover resumable conversations and to notice when a conversation file is deleted (a deleted conversation also retires its resumable entry). gmux honors pi's own `PI_CODING_AGENT_DIR` override: if you point pi at an isolated data directory, gmux looks for conversations under `$PI_CODING_AGENT_DIR/sessions`. Live session state — attribution, title, and status — comes from the extension, not from parsing these files. The first line of each file is a session header with a UUID and timestamp.
 
 ### The gmux extension
 
@@ -89,9 +86,11 @@ The extension reports each turn with a normalized, agent-agnostic outcome; gmux 
 
 ### Disabling the extension
 
-If a pi release ever breaks the extension, set `GMUX_NO_AGENT_HOOK=1` to launch pi without it. Pi runs normally; gmux just won't show hook-driven title/status/attribution until you unset it (or a fix ships). One-shot pi commands (`pi update`, `pi list`, `pi --help`, …) are never extended — gmux runs them directly rather than wrapping them in a session.
+If a pi release ever breaks the extension, set `GMUX_NO_AGENT_HOOK=1` to launch pi without it. Pi runs normally; gmux just won't show hook-driven title/status/attribution until you unset it (or a fix ships). For sessions launched from the web UI or resumed by the daemon, set the variable in the daemon's environment (it's read by the runner, which the daemon spawns).
+
+One-shot pi commands are never extended or wrapped in a session — gmux execs them directly: the subcommands `install`, `remove`, `uninstall`, `update`, `list`, `config` (immediately after the binary) and the info flags `--help`/`-h`/`--version`.
 
 ## Limitations
 
-- **Title appears after the first turn.** Pi generates the session name once the first response completes, so a brand-new session shows a generic title until then.
+- **Title appears after the first turn.** While the first turn is running, the session shows a generic title. Once the turn ends, gmux titles it with your first message; when pi generates or you set a session name, that name takes over.
 - **The extension only loads when gmux controls the launch.** A shell-wrapped invocation (e.g. `bash -lc "pi …"`) doesn't receive the `-e` flag, so that session won't report hook-driven state.

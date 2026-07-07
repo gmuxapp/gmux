@@ -7,13 +7,13 @@ tableOfContents:
 
 `~/.local/state/gmux/projects.json` (or `$XDG_STATE_HOME/gmux/projects.json`)
 
-Projects control which sessions appear in the sidebar and how they're grouped. gmuxd reads and writes this file. You can also edit it directly; changes are picked up on the next daemon restart. The UI's **Manage projects** modal is the primary editing interface.
+Projects control which sessions appear in the sidebar and how they're grouped. gmuxd reads and writes this file. You can also edit it directly — gmuxd re-reads the file on every access, so manual edits take effect immediately (open UIs won't refresh until the next change made through gmux, and a daemon-side mutation racing your edit will overwrite it). **Settings → Projects** is the primary editing interface. gmuxd seeds a default `home` project when the file is empty or missing.
 
 ## Example
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "items": [
     {
       "slug": "home",
@@ -31,9 +31,8 @@ Projects control which sessions appear in the sidebar and how they're grouped. g
     },
     {
       "slug": "ml-data",
-      "match": [
-        { "path": "/data/ml", "hosts": ["gpu-server"] }
-      ]
+      "peer": "gpu-server",
+      "node_id": "n-3f9c…"
     }
   ]
 }
@@ -43,16 +42,20 @@ Projects control which sessions appear in the sidebar and how they're grouped. g
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `version` | `number` | Schema version. Currently `2`. Managed by gmuxd; do not change manually. |
+| `version` | `number` | Schema version. Currently `3`. Managed by gmuxd; do not change manually. |
 | `items` | `Item[]` | Ordered list of projects. Order matters: it controls sidebar display order and tiebreaking for remote matches. |
 
 ## Item fields
 
+An item is either an **owned project** (`slug` + `match`, optionally `sessions`) or a **peer reference** (`slug` + `peer`, optionally `node_id`). References carry no `match` or `sessions` — the peer's own `projects.json` is the source of truth.
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `slug` | `string` | yes | URL-safe identifier. Lowercase alphanumeric and hyphens, no leading/trailing hyphen. Appears in URLs (`/:slug/:adapter/:session`). |
-| `match` | `MatchRule[]` | yes | One or more rules that determine which sessions belong to this project. At least one rule is required. |
-| `sessions` | `string[]` | no | Session keys (resume keys or IDs) assigned to this project. Managed by gmuxd; preserved but not required when editing. |
+| `match` | `MatchRule[]` | owned items | One or more rules that determine which sessions belong to this project. Required on owned items; forbidden on references. |
+| `sessions` | `string[]` | no | Session keys (the session's slug when attributed, otherwise its ID; devcontainer sessions are suffixed `@<peer>`) assigned to this project. Managed by gmuxd; owned items only. |
+| `peer` | `string` | references | The display name of the peer host that owns this project. Its presence makes the item a reference. |
+| `node_id` | `string` | no | References only. Stable opaque identity of the referenced peer; keeps the reference anchored to the right host across removes/re-adds. Stamped by gmuxd. |
 
 ## Match rules
 
@@ -62,7 +65,6 @@ Each rule is either a **path rule** or a **remote rule**. A rule cannot have bot
 |-------|------|-------------|
 | `path` | `string` | Filesystem path. Sessions whose working directory is at or under this path match. Paths starting with `~/` are expanded to `$HOME`. |
 | `remote` | `string` | Normalized git remote URL (e.g. `github.com/org/repo`). Sessions whose repository has a matching remote match regardless of filesystem path. |
-| `hosts` | `string[]` | Restrict this rule to sessions from specific peer hosts. Empty or absent means any host. |
 | `exact` | `boolean` | Path rules only. When `true`, only sessions whose working directory equals the path exactly match. Subdirectories do not match. |
 
 ### Path rules
@@ -95,9 +97,11 @@ By default, path rules match subdirectories. Set `exact: true` to match only the
 
 This matches sessions started from `$HOME` itself, but not `~/dev/gmux` or any other subdirectory. The default "home" project uses this to avoid catching every session.
 
-### Host ownership
+## Peer references
 
-Match rules are local to the host that owns the project. Network peer projects are represented as reference items with `peer`; their match rules and session order live in that peer's own `projects.json`. The old `hosts` match-rule field is ignored by current gmuxd versions and is dropped the next time the file is saved.
+Match rules are local to the host that owns the project. Another host's project is pinned into your sidebar as a **reference item** (`{ "slug": …, "peer": …, "node_id": … }`); its match rules and session order live in that peer's own `projects.json`. See [Multi-machine](/multi-machine/) for how references resolve and recover.
+
+The pre-2.0 `hosts` match-rule field is gone: it decodes silently for compatibility and is dropped the next time the file is saved. Host scoping is now implicit in ownership — each project is owned by exactly one host, and other hosts see it via a reference.
 
 ## Match precedence
 
@@ -105,7 +109,7 @@ When multiple projects could match a session:
 
 1. **Path specificity**: the project with the longest matching path wins. A session in `~/dev/gmux/.grove/teak/src` matches `~/dev/gmux/.grove/teak` over `~/dev/gmux`.
 2. **Path over remote**: a path match always takes priority over a remote match.
-3. **First remote wins**: when only remote rules match, the first matching project in list order wins. Drag to reorder projects in the manage modal to control this.
+3. **First remote wins**: when only remote rules match, the first matching project in list order wins. Drag to reorder projects in **Settings → Projects** to control this.
 
 ## Combining rules
 
@@ -135,28 +139,20 @@ The remote catches sessions in any clone on any machine. The path catches sessio
 }
 ```
 
-**Host-specific rules** for the same project on different machines:
-```json
-{
-  "slug": "ml",
-  "match": [
-    { "path": "~/ml", "hosts": ["laptop"] },
-    { "path": "/data/ml", "hosts": ["gpu-server"] }
-  ]
-}
-```
-
 ## Validation
 
 gmuxd validates the file on load. Invalid state is rejected with an error. Rules:
 
 - Every item must have a non-empty `slug` matching `^[a-z0-9]+(-[a-z0-9]+)*$`
-- No duplicate slugs
-- Every item must have at least one match rule
+- No duplicate slugs among owned projects; no duplicate `peer`+`slug` pairs among references (an owned project and a peer reference may share a slug)
+- Every owned item must have at least one match rule; references must not carry `match` or `sessions`
+- `node_id` is only valid on references
 - Each rule must have exactly one of `path` or `remote` (not both, not neither)
 - `exact` is only valid on path rules
 - No duplicate normalized paths across items (nesting is allowed)
 
+All API mutations are validated the same way; an invalid mutation is rejected (4xx) and nothing is written.
+
 ## Migration
 
-Older projects.json files (version 1 or unversioned) are migrated automatically on load. The migration converts the old `remote`/`paths` fields to `match` rules and canonicalizes paths under `$HOME` to `~/...` form. The migrated version is written back on the next save.
+Older projects.json files are migrated automatically on load: unversioned files' `remote`/`paths` fields become `match` rules (paths canonicalized to `~/...` form), and version-2 files pass through with the removed `hosts` field dropped. Before any schema upgrade rewrites the file, the pre-migration bytes are snapshotted to `projects.json.bak`. The migrated version is written back on the next save.

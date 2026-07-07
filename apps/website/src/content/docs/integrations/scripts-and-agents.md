@@ -31,11 +31,13 @@ Running a command always uses the explicit `--` separator — there is no bare `
 When stdin is not a TTY, `gmux -- <cmd>`:
 
 - **Blocks** until the child exits.
-- **Streams bounded metadata** to stdout (session id, kind, exit status), not the full PTY output. Your script's logs stay readable.
+- **Streams bounded metadata** to stdout (session id, adapter, command, pid, exit status), not the full PTY output. Your script's logs stay readable.
 - **Exits with the child's exit code**, so `gmux -- make build < /dev/null && deploy.sh` works.
 - **Keeps the session in the UI** for the duration: a human can watch it live in the browser without affecting the script.
 
 This is the shape every other line on this page builds on. It works the same in CI, cron jobs, and agent harnesses (whose stdin is a pipe by default).
+
+One exception: recognized one-shot adapter subcommands (e.g. `pi update`, `pi --version`) are exec'd directly and never create a session.
 
 ## Spawning detached
 
@@ -57,7 +59,7 @@ gmux send <id> Enter < prompt.txt          # pipe a file, then submit
 gmux send <id> C-c                          # interrupt, no Enter
 ```
 
-When no text is given and stdin is a pipe, gmux reads stdin until EOF (capped at 1 MiB). `send` is gated by Unix-socket file permissions (owner-only); see the [CLI reference](/reference/cli/) for the access-control story.
+When no text argument is given and stdin is a pipe, gmux reads stdin until EOF (capped at 1 MiB). `send` is gated by the daemon's owner-only Unix socket; see the [CLI reference](/reference/cli/) for the access-control story. For drop-in tmux compatibility, `gmux send-keys -t <id> [-l] <keys...>` is also supported.
 
 ## Waiting
 
@@ -75,7 +77,7 @@ gmux tail <id> -n 200          # extract the final answer
 
 The idle signal is the same `Status.Working` flag the UI's spinner consumes, so `wait` returns the moment the agent emits its closing message. Exit codes: `0` idle, `2` the session died first, `3` `--timeout N` elapsed.
 
-`wait` is for agent sessions (`claude`, `codex`, `pi`); shell sessions have no working signal and are rejected with a clear error. To wait for a shell command, run it through the blocking piped flow above (`gmux -- make build < /dev/null`) — that's exactly the shape `gmux -- <cmd>` already provides. (Waiting on arbitrary output — "until this text appears" — is planned as a server-side `wait` condition, [#313](https://github.com/gmuxapp/gmux/issues/313).)
+`wait` is for agent sessions (`claude`, `codex`, `pi`); shell sessions have no working signal and are rejected with a clear error, and `wait` only works for sessions on the local host — peer sessions (`<id>@<peer>`) are rejected. To wait for a shell command, run it through the blocking piped flow above (`gmux -- make build < /dev/null`) — that's exactly the shape `gmux -- <cmd>` already provides. (Waiting on arbitrary output — "until this text appears" — is planned as a server-side `wait` condition, [#313](https://github.com/gmuxapp/gmux/issues/313).)
 
 ## Reading output
 
@@ -92,9 +94,12 @@ echo "$url"
 
 ```bash
 gmux ls            # all local sessions, alive first, newest first
+gmux ls --all      # include sessions on paired peer hosts (ids print as <id>@<peer>)
 gmux ls --json     # machine-readable, for parsing in scripts
 gmux kill <id>     # SIGTERM the runner, normal exit lifecycle
 ```
+
+`send`, `tail`, and `kill` accept `<id>@<peer>` ids; `wait` does not (local only).
 
 Every verb accepts id prefixes, full session ids, or slugs, so the eight-character short form `ls` prints passes straight back to `kill`, `send`, `tail`, or `wait`.
 
@@ -123,6 +128,10 @@ The agents run concurrently because `gmux -d -- pi <prompt>` returns as soon as 
 ## Nested gmux
 
 When `gmux -- <cmd>` runs inside an existing gmux session (detected via the `GMUX=1` env var), gmux auto-detaches into a headless background process so you don't get a PTY-within-PTY. The auto-detach only triggers when stdin is a TTY: agent harnesses whose stdin is a pipe land in the piped flow above and behave normally. You don't need to special-case nested invocations.
+
+## Editor sessions as $EDITOR
+
+`gmux edit <file>` opens a managed editor session, blocks until the editor closes, and propagates its exit code — so it works anywhere `$EDITOR` does (`git commit`, `crontab -e`). Inside gmux sessions, `EDITOR`/`VISUAL` already default to `gmux edit` when your dotfiles don't set them, so an agent asking git to open an editor gets a proper tab in the UI.
 
 ## Agent-specific integrations
 

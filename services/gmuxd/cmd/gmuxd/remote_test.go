@@ -230,8 +230,8 @@ func TestDisplayStatus_NeedsLogin(t *testing.T) {
 	if !strings.Contains(out, "https://login.tailscale.com/a/abc123") {
 		t.Errorf("missing auth URL in:\n%s", out)
 	}
-	if !strings.Contains(out, "gmuxd remote") {
-		t.Errorf("should tell user to run gmuxd remote again:\n%s", out)
+	if !strings.Contains(out, "gmux remote") {
+		t.Errorf("should tell user to run gmux remote again:\n%s", out)
 	}
 	// Should NOT mention HTTPS or MagicDNS problems.
 	if strings.Contains(out, "HTTPS") || strings.Contains(out, "MagicDNS") {

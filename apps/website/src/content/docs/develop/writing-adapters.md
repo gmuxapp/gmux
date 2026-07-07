@@ -41,7 +41,7 @@ func (m *MyApp) Match(cmd []string) bool {
 
 func (m *MyApp) Env(_ adapter.EnvContext) []string { return nil }
 
-func (m *MyApp) Monitor(output []byte) *adapter.Status { return nil }
+func (m *MyApp) Monitor(output []byte) *adapter.Event { return nil }
 ```
 
 That's enough for a valid adapter. It:
@@ -49,7 +49,7 @@ That's enough for a valid adapter. It:
 - reports whether the tool is available on this machine with `Discover()`
 - activates when the command matches `myapp`
 - contributes no extra environment yet
-- reports no custom status yet
+- reports no events yet
 - is available for richer optional capabilities later
 
 Write tests in `myapp_test.go` alongside it.
@@ -87,43 +87,49 @@ type Adapter interface {
     Discover() bool
     Match(command []string) bool
     Env(ctx EnvContext) []string
-    Monitor(output []byte) *Status
+    Monitor(output []byte) *Event
 }
 ```
 
 **`Name()`** returns a short identifier like `"pi"` or `"myapp"`.
 
-**`Discover()`** reports whether the backing tool is available on the current machine. `gmuxd` runs this in parallel for all compiled adapters during startup and only includes launchers from adapters whose discovery succeeds. Keep it cheap and deterministic. For example, shell returns `true`, while pi runs `pi --version` and checks whether it succeeds.
+**`Discover()`** reports whether the backing tool is available on the current machine. `gmuxd` runs this in parallel for all compiled adapters during startup and only includes launchers from adapters whose discovery succeeds. Keep it cheap and deterministic. For example, shell returns `true`, while pi checks that the `pi` binary is on `PATH` (`exec.LookPath`) without executing it — running the binary would be too slow.
 
 **`Match(cmd)`** receives the full command array and decides whether this adapter should handle it. Match on `filepath.Base(arg)` so full paths and wrappers work. Stop scanning at `"--"`.
 
 **`Env(ctx)`** returns extra environment variables for the child. The runner already sets `GMUX`, `GMUX_SOCKET`, `GMUX_SESSION_ID`, `GMUX_ADAPTER`, and `GMUX_RUNNER_VERSION`. Most adapters return `nil`.
 
-**`Monitor(output)`** receives raw PTY bytes on every read. Return a `*Status` when something meaningful happens, `nil` otherwise. This runs frequently, so keep it cheap.
+**`Monitor(output)`** receives raw PTY bytes on every read. Return a `*Event` when something meaningful happens, `nil` otherwise. This runs frequently, so keep it cheap. The built-in agent adapters (pi/claude/codex) return `nil` here — their status comes from the agent hook, not PTY parsing.
 
-### Important: adapters never modify the command
+### Important: adapters do not rewrite the user's command
 
-The command the user typed is exactly what runs. `Env()` can add environment variables, but adapters do not inject flags, wrap the process, or rewrite argv.
+The command the user typed is what runs. `Env()` can add environment variables; adapters don't inject flags or wrap the process. The only sanctioned argv change is the hook-injection seam (`SessionExtender`/`SessionHookCommand`, below), which the runner drives.
 
-## Reporting status
+## Reporting events
 
-Return a `Status` from `Monitor()` to update the sidebar:
+Return an `Event` from `Monitor()` to update the session. Zero/nil fields are no-ops — only explicitly set fields are applied:
 
 ```go
+type Event struct {
+    Title  string  // non-empty: update the adapter title
+    Status *Status // non-nil: update status; &Status{} clears it
+    Unread *bool   // non-nil: set or clear the unread flag (adapter.BoolPtr)
+    Cwd    string  // non-empty: update the session's canonical directory
+}
+
 type Status struct {
-    Label   string // Short text: "thinking", "3/10 passed"
-    Working bool   // true while the tool is busy (shows pulsing cyan dot)
-    Title   string // Optional: if set, updates the session title
+    Working bool // true while the tool is busy (pulsing dot)
+    Error   bool // true on a retryable error (red dot)
 }
 ```
 
-`Working` controls the sidebar dot (cyan pulse when true, hidden when false). `Label` appears as secondary text below the session title. Set `Title` if the PTY output should rename the session.
+Status carries only booleans; any display text is derived by the frontend from these plus the exit code.
 
 ## Adapter resolution
 
 When `gmux` launches a command, adapters are tried in this order:
 
-1. **`GMUX_ADAPTER` env var** — explicit override
+1. **`GMUX_ADAPTER` env var** — explicit override, validated against `Match()`. If the named adapter doesn't match the command (or is unknown), resolution falls through — this prevents a `GMUX_ADAPTER` leaked from a parent session from forcing the wrong adapter.
 2. **Registered adapters** — `Match()` in registration order; first match wins
 3. **Shell fallback** — always matches
 
@@ -179,7 +185,28 @@ Implement this if your tool's conversations live in files (or anywhere else) tha
 
 File-backed adapters build both on `packages/adapter/filewatch`, a reusable recursive tree watcher, in a few lines each — see `pi.go`. A non-file source (e.g. a database) implements the same interface with a poller or subscription instead.
 
-Note: live session state — title, status, and the held conversation file — is **not** reported here. That flows authoritatively from the agent hook (`SessionExtender` for pi, `SessionHookCommand` for codex/claude); see [Adapter Architecture](/develop/adapter-architecture).
+Note: live session state — title, status, and the held conversation file — is **not** reported here. That flows authoritatively from the agent hook (`SessionExtender` for pi, `SessionHookCommand` for codex/claude); see below and [Adapter Architecture](/develop/adapter-architecture).
+
+### `SessionExtender` / `SessionHookCommand`
+
+These are *the* way an agent adapter reports authoritative session identity, titles, and turn status (ADR 0010/0011/0013; protocol in `docs/runner-hook-protocol.md`). The runner splices the hook into the launch argv:
+
+- **`SessionExtender.ExtendCommand`** — injects an extension file into the agent's own extension mechanism (pi: `-e <ext.mjs>`).
+- **`SessionHookCommand.HookCommand`** — injects config overrides that make the agent run `gmux __<agent>-hook` on lifecycle events (claude: `--settings`, codex: `-c hooks.…`).
+
+Only opt in if gmux fully controls the argv — a shell-wrapped launch (`bash -c 'claude'`) can't be extended and simply runs without live state. `GMUX_NO_AGENT_HOOK` disables injection.
+
+### `ConversationProber`
+
+Optional. Lets the startup retention reconcile distinguish a *deleted* conversation file from *unavailable* storage, so dead sessions are only retired when their conversation is genuinely gone (ADR 0016). The agent adapters implement it via the shared `ConversationGoneAtRoot` helper.
+
+### `SessionRegistrar` / `SessionFinalizer`
+
+Optional lifecycle callbacks: `OnRegister` runs at registration time (return a slug, write a state file — shell and editor use this), `OnDismiss` cleans up when a session is dismissed.
+
+### `PassthroughDetector`
+
+Optional. Marks one-shot invocations (e.g. `pi update`, `pi --version`) that should be exec'd directly instead of wrapped in a session. Implement this for CLI tools with management subcommands.
 
 ### `Resumer`
 
@@ -195,9 +222,9 @@ Implement this if your tool supports resuming previous sessions.
 - `CanResume()` filters out invalid or empty files
 - `ResumeCommand()` tells gmux how to resume a valid session
 
-All dead sessions are resumable. When a session exits, gmuxd checks whether the adapter implements `Resumer` and has a recorded conversation file (`ConversationFile`, reported by the agent hook). If so, the session's command is replaced with the adapter's resume command (e.g. `["claude", "--resume", "abc"]`). If not, the original launch command is kept as-is, so "resume" simply re-runs the command in the same working directory.
+All dead sessions are resumable. When a session exits, gmuxd checks whether the adapter implements `Resumer` **and** the session has a recorded conversation file (`ConversationFile`, reported by the agent hook). If so, the session's command is replaced with the adapter's resume command (e.g. `["claude", "--resume", "abc"]`). If not, the original launch command is kept as-is, so "resume" simply re-runs the command in the same working directory.
 
-This means adapters that don't implement `Resumer` still get resume for free: the user clicks resume, a new session starts with the same command and cwd. This is the right behavior for shell sessions and simple tools. Only implement `Resumer` when your tool has native resume support that you want to use instead.
+This means adapters that don't implement `Resumer` still get resume for free: the user clicks resume, a new session starts with the same command and cwd. This is the right behavior for simple tools. Only implement `Resumer` when your tool has native resume support that you want to use instead.
 
 ### `CommandTitler`
 
@@ -207,7 +234,7 @@ type CommandTitler interface {
 }
 ```
 
-Implement this if your adapter needs custom fallback title display from the command array. Without it, the fallback title is the adapter name (e.g. "codex", "pi"). Shell implements this to show the full command with args (e.g. "pytest -x").
+Implement this to customize the fallback title derived from the command array. Without it, the store joins the full command (e.g. `pytest -x`). Adapters that use resume commands implement this to avoid titles like `codex resume 019cfb54-…`; the editor adapter shows the edited file's basename.
 
 This only matters when no adapter or shell title has been set yet, which is rare for agent adapters (titles come from the agent hook or conversation file) but common for plain shell sessions.
 
@@ -215,18 +242,21 @@ This only matters when no adapter or shell title has been set yet, which is rare
 
 An adapter implements only what it needs:
 
-| Adapter | Base | Launchable | ConversationFiler | ConversationSource | Resumer |
-|---------|------|------------|-------------|--------------------|---------|
-| Shell | ✓ | ✓ | — | — | —* |
-| Claude | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Codex | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Pi | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Adapter | Base | Launchable | ConversationFiler | ConversationSource | Resumer | Other |
+|---------|------|------------|-------------------|--------------------|---------|-------|
+| Shell | ✓ | ✓ | ✓ | — | ✓ | CommandTitler, SessionRegistrar, SessionFinalizer |
+| Editor | ✓ | ✓ | — | — | — | CommandTitler, SessionRegistrar |
+| Claude | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationProber, SessionHookCommand |
+| Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationProber, SessionHookCommand |
+| Pi | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationProber, SessionExtender, PassthroughDetector |
 
-\* Shell sessions are still resumable (all sessions are). They just re-run the original command in the same cwd, which starts a fresh shell. Adapters only need to implement `Resumer` when the tool has native resume (e.g. `claude --resume`).
+Shell writes a small JSON state file per session under `~/.local/state/gmux/shell-sessions/` and resumes by launching `$SHELL` in the original cwd. The editor adapter (backing `gmux edit`) is a good minimal non-agent example: it matches an internal sentinel command and is ephemeral (auto-dismissed on close).
+
+A house pattern worth copying: assert your capabilities at compile time — `var _ adapter.Resumer = (*MyApp)(nil)`.
 
 ## Testing
 
-Write unit tests in `myapp_test.go` next to your adapter. Test `Match()` with different command shapes and `Monitor()` with representative output.
+Write unit tests in `myapp_test.go` next to your adapter. Test `Match()` with different command shapes and `Monitor()` with representative output (if it does anything).
 
 If the adapter implements `Launchable`, test the returned launcher IDs, labels, and commands.
 

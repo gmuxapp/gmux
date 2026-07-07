@@ -3,6 +3,10 @@ title: Versioning
 description: How gmux versions its artifacts and contracts.
 ---
 
+:::note[Design record]
+This describes shipped behavior — binary-hash staleness, automatic daemon upgrade, and the `/v1` API prefix. See [Migrating to 2.0](/migrating-to-2/) for the 2.0 compatibility break and [Session Schema](/develop/session-schema/) for schema versioning.
+:::
+
 ## Principles
 
 - Version user-facing artifacts, not internal implementation details.

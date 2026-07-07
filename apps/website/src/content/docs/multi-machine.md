@@ -20,7 +20,9 @@ Spokes need zero configuration changes. The hub authenticates with each spoke's 
 
 gmux does **not** auto-connect machines on your tailnet. Being on the same tailnet lets a machine *reach* another, but connecting still requires that host's bearer token, exactly like any other peer ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)). This keeps a single compromised node (say, a container running an untrusted agent) from driving every other machine on the tailnet.
 
-To add a tailnet machine, run `gmux auth` on it and copy the **connect URL** it prints:
+All connected hosts must run gmux 2.0. A 2.0 hub cannot aggregate a 1.x spoke and vice versa; upgrade every machine (and rebuild devcontainers) together.
+
+To add a tailnet machine, run `gmux auth` on it and copy the **connect URL** it prints (it also prints a QR code you can scan from a device on your tailnet). If the machine doesn't have gmux remote access enabled yet, run `gmux remote` first — without it, `gmux auth` prints only the local URL:
 
 ```
 To add this host from another gmux machine, paste this into "Connect to host":
@@ -49,17 +51,15 @@ gmux probes the host, adopts the name it reports about itself (no name to assign
 
 There is no `[[peers]]` config block (removed in [ADR 0007](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0007-host-identity-and-peer-urls.md)) — peers are runtime state managed from the UI.
 
-## When a referenced host is renamed
+## When a referenced host is renamed or removed
 
-A host's name is derived from Tailscale (or its OS hostname), so it can change — for example when you upgrade a machine. A project reference pins another host's project into your sidebar by name, so a rename could silently strip those projects out.
-
-To prevent that, a reference is anchored on the host's stable, opaque node ID, not just its name. References you create from the UI capture that ID immediately, so a later rename is followed automatically and the projects stay put under the new name.
+A host's name is adopted at first contact and then frozen — renaming the machine later doesn't change what your roster calls it, so references keep working under the original label until you remove and re-add the host. Each reference also records the host's stable, opaque node ID as a liveness anchor: it lets a re-added host reclaim its old references automatically, and stops a *different* machine that reuses the name from silently adopting them.
 
 If gmux can't match a reference to any current host — it's not in the roster because it was removed, or set up on a previous install — the reference is **not** silently dropped:
 
 - The sidebar shows the project muted, with a warning marker.
 - The settings gear gets a small red pip.
-- **Settings → Hosts → Referenced but not found** lists each unmatched host with the projects pointing at it. Re-add the host under **Connect to host** (a manual peer's references are anchored on its node ID, so a later rename follows it automatically) and the references resolve again; otherwise remove them.
+- **Settings → Hosts → Referenced but not found** lists each unmatched host with the projects pointing at it. Re-add the host under **Connect to host** (the reference re-anchors on the re-added host's node ID) and the references resolve again; otherwise remove them.
 
 Removing a host clears the references that pointed at it, so a deliberate removal leaves nothing behind here.
 
@@ -74,10 +74,10 @@ Remote sessions carry their origin in the session ID using `@` separators:
 ```
 sess-abc123               # local
 sess-abc123@desktop       # from spoke "desktop"
-sess-abc123@dev@server    # from spoke "dev", which is a spoke of "server"
+sess-abc123@dev@server    # from "dev", a devcontainer attached to spoke "server"
 ```
 
-The UI parses these to build the topology breadcrumbs on the project hub. Routing uses the chain to forward actions hop-by-hop: the hub only knows its direct spokes, each spoke only knows its own.
+The UI parses these to attribute each session to its host (the `@host` suffix and devcontainer marker). Actions are routed by splitting on the last `@` and forwarding one hop; only devcontainer (local-peer) sessions forward through their parent host — sessions of one network peer are never relayed through another.
 
 ## Fault tolerance
 
@@ -86,7 +86,7 @@ Each spoke connection is independent. A slow or dead spoke never blocks the hub 
 When a spoke goes offline:
 
 - Its sessions remain visible but marked as disconnected.
-- The host status indicator turns red on the project hub.
+- The host shows as **Offline** in Settings → Hosts (with the connection error as detail); a host whose token is missing or wrong shows **Auth needed** instead.
 - The hub reconnects with exponential backoff (1s initial, 30s max, reset on success).
 - When the spoke comes back, sessions go live again. No user action needed.
 
@@ -108,9 +108,9 @@ The hub connects to these public gmuxd endpoints on each spoke:
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /v1/events` | SSE subscription for session updates |
-| `GET /v1/sessions` | Initial session list on connect |
-| `GET /v1/health` | Version, hostname, available launchers |
+| `GET /v1/events?as=peer` | SSE snapshot stream — full `snapshot.sessions` on connect and on every change |
+| `GET /v1/projects` | Spoke's projects + discovered list (refreshed on `projects-update` events) |
+| `GET /v1/health` | Version, hostname, node ID, available launchers |
 | `POST /v1/launch` | Forward launch requests |
 | `WS /ws/:id` | Proxy terminal WebSocket connections |
 | `POST /v1/sessions/:id/kill` | Forward kill |

@@ -3,7 +3,10 @@ title: Session Persistence
 description: Survive reboots — resume all sessions from where you left off.
 ---
 
-> This feature is not yet implemented.
+:::note[Mostly shipped]
+The core of this landed in 2.0, differently than described below: the runner writes scrollback live (not on shutdown), dead sessions persist across daemon restarts and are resumable from the UI, and dead-session scrollback is a bounded cache ([ADR 0016](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0016-session-retention-scrollback-as-cache.md); see [State Management](/develop/state-management/)). **What remains planned** is the bulk workflow: a per-project **Resume All**, and seeding a resumed shell's PTY with its prior scrollback above a separator. The rest of this page is the original design sketch.
+:::
+
 
 When your computer reboots (or gmuxd restarts), all sessions are lost. Session persistence would let you pick up exactly where you left off.
 

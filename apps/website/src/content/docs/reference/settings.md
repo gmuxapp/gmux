@@ -202,6 +202,7 @@ Action to perform.
 | `copy` | Copy selection to clipboard. Does nothing if no text is selected. |
 | `paste` | Read system clipboard and send contents to the PTY. |
 | `selectAll` | Select all terminal content. |
+| `find` | Open the find-in-terminal search bar. |
 | `none` | Disable this key combo (removes a built-in default). |
 
 #### `args`
@@ -309,6 +310,16 @@ These are ready to paste into `settings.jsonc`.
 {
   "keybinds": [
     { "key": "ctrl+c", "action": "none" }
+  ]
+}
+```
+
+**Restore browser find** -- gmux binds `secondary+f` (Cmd+F on macOS, Ctrl+F elsewhere) to open the find-in-terminal search bar, replacing the browser's in-page find (which can't see into a canvas-rendered terminal). To get browser find back:
+
+```jsonc
+{
+  "keybinds": [
+    { "key": "secondary+f", "action": "none" }
   ]
 }
 ```
