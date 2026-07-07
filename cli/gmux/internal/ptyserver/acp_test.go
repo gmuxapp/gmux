@@ -9,7 +9,7 @@ import (
 
 func TestACPHubBroadcastsChunks(t *testing.T) {
 	h := newACPHub("sess1")
-	ch := h.subscribe()
+	_, ch, _ := h.attach("") // subscribe to the live stream
 
 	h.ingest(acpIngest{Op: "message_start", MessageID: "m1"})
 	h.ingest(acpIngest{Op: "chunk", MessageID: "m1", Delta: "Hel"})
@@ -41,6 +41,11 @@ func TestACPHubSnapshotIncludesUnwrittenTail(t *testing.T) {
 	}
 	if p.Messages[0].Content[0].Text != "partial" {
 		t.Errorf("tail text = %q", p.Messages[0].Content[0].Text)
+	}
+	// The tail must carry its streaming messageId so a mid-turn joiner keeps
+	// appending subsequent deltas to the same message rather than duplicating it.
+	if p.Messages[0].MessageID != "m1" {
+		t.Errorf("tail messageId = %q, want m1", p.Messages[0].MessageID)
 	}
 }
 

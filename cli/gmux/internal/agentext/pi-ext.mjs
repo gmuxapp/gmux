@@ -25,7 +25,8 @@
 // The /acp/ingest channel is the token-level assistant-text feed the runner
 // turns into ACP session/update notifications. It is one-way and read-only
 // (the extension only observes; the write path is keystrokes, per ADR 0021 §6)
-// and, like /hook/event, fire-and-forget.
+// and, like /hook/event, fire-and-forget — but ordered (see postACP). The full
+// contract is documented in docs/acp-conversation-stream.md.
 //
 // `name`/`title` is pi's session name when it has one; until pi titles the
 // conversation we fall back to its first user message (truncated), so a working
@@ -118,21 +119,24 @@ export default function (pi) {
   // text_delta variant holds the incremental text in `.delta`. We forward only
   // assistant text this slice (thinking/tool activity are later slices).
   //
-  // messageId: pi's message_start carries event.message with an id; we reuse it
-  // to correlate the deltas of one message. Fall back to a monotonic counter
-  // if pi ever omits it.
+  // messageId correlates the deltas of one assistant message so the runner and
+  // frontend can group them. pi's in-memory AssistantMessage has no id field,
+  // so we mint a monotonic per-turn counter on each assistant message_start.
+  // message_update fires only for assistant messages (per pi's event protocol),
+  // and we forward only text_delta — thinking/toolcall deltas are later slices.
   let acpMsgId = "";
   let acpMsgSeq = 0;
 
   pi.on("message_start", (ev) => {
     if (ev?.message?.role !== "assistant") return;
-    acpMsgId = String(ev.message.id ?? `m${++acpMsgSeq}`);
+    acpMsgId = `m${++acpMsgSeq}`;
     postACP(sock, { op: "message_start", messageId: acpMsgId });
   });
 
   pi.on("message_update", (ev) => {
     const ame = ev?.assistantMessageEvent;
     if (!ame || ame.type !== "text_delta" || !ame.delta) return;
+    // Open a message implicitly if a delta somehow precedes message_start.
     if (!acpMsgId) acpMsgId = `m${++acpMsgSeq}`;
     postACP(sock, { op: "chunk", messageId: acpMsgId, delta: ame.delta });
   });
