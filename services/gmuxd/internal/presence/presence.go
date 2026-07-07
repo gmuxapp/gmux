@@ -26,6 +26,11 @@ type Client struct {
 // Callbacks lets the notification router react to presence changes
 // synchronously inside Update(). Set these before any clients connect.
 type Callbacks struct {
+	// OnClientConnected fires after a new browser client is registered.
+	// It's the "a user is here and wants fresh data" signal — used to
+	// nudge dial-out-only peer connections to retry immediately rather
+	// than wait out a backoff.
+	OnClientConnected func(clientID string)
 	OnClientFocused   func(clientID string)
 	OnSessionSelected func(clientID string, sessionID string)
 }
@@ -50,6 +55,11 @@ func (t *Table) Add(client *Client) {
 	t.mu.Lock()
 	t.clients[client.ID] = client
 	t.mu.Unlock()
+
+	// Fire outside the lock to avoid holding it across the callback.
+	if t.callbacks.OnClientConnected != nil {
+		t.callbacks.OnClientConnected(client.ID)
+	}
 }
 
 // Remove unregisters a client by ID.

@@ -206,3 +206,61 @@ func TestRun_LogsAgainAfterReconnect(t *testing.T) {
 		t.Errorf("want a disconnect log per post-reconnect drop, got %d\nlogs:\n%s", got, buf.String())
 	}
 }
+
+// TestReconnect_ShortcutsBackoffWait verifies that Reconnect() cuts a
+// long backoff wait short: an external nudge makes a backing-off peer
+// retry promptly instead of waiting out the full interval.
+func TestReconnect_ShortcutsBackoffWait(t *testing.T) {
+	ft := &failingTransport{errs: []error{errors.New("connection refused")}}
+	p := newPeer(config.PeerConfig{Name: "down", URL: "http://spoke.invalid"}, store.New(), nil,
+		WithTransport(ft))
+	// Large backoff: without a nudge the second attempt would be ~30s away.
+	p.reconnectBackoff = 30 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		p.run(ctx)
+		close(done)
+	}()
+	defer func() { cancel(); <-done }()
+
+	// Wait for the first (immediate) attempt, then confirm we're parked
+	// in the backoff wait (no second attempt yet).
+	waitForAttempts(t, ft, 1)
+	time.Sleep(50 * time.Millisecond)
+	if got := ft.count(); got != 1 {
+		t.Fatalf("expected to be waiting out backoff after 1 attempt, got %d", got)
+	}
+
+	// Nudge: a second attempt should follow quickly despite the 30s wait.
+	p.Reconnect()
+	waitForAttempts(t, ft, 2)
+}
+
+// TestReconnect_NonBlockingAndCoalesced verifies Reconnect() never
+// blocks and repeated calls collapse to at most one pending wake.
+func TestReconnect_NonBlockingAndCoalesced(t *testing.T) {
+	p := newPeer(config.PeerConfig{Name: "x", URL: "http://spoke.invalid"}, store.New(), nil)
+	// No run loop consuming the channel: every call must still return.
+	for i := 0; i < 100; i++ {
+		p.Reconnect()
+	}
+	// Exactly one signal buffered; the rest were dropped.
+	if got := len(p.wake); got != 1 {
+		t.Errorf("want 1 buffered wake after repeated calls, got %d", got)
+	}
+}
+
+// waitForAttempts blocks until the transport has seen at least n
+// attempts or fails the test after a generous deadline.
+func waitForAttempts(t *testing.T, ft *failingTransport, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for ft.count() < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d attempts (got %d)", n, ft.count())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}

@@ -132,6 +132,21 @@ func (m *Manager) OnSleep() {
 	}
 }
 
+// ReconnectAll signals every peer to retry immediately, cutting short
+// any backoff wait. Used when an external event suggests peers may now
+// be reachable — e.g. a browser client connecting (the user opened or
+// returned to the UI and wants to see peer sessions promptly). Peering
+// is dial-out only, so without a nudge like this a just-online peer is
+// only discovered on its next scheduled retry. A healthy connected
+// peer is unaffected: the signal only shortcuts the reconnect wait.
+func (m *Manager) ReconnectAll() {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, mp := range m.peers {
+		mp.peer.Reconnect()
+	}
+}
+
 // Stop cancels all peer connections and waits for goroutines to finish.
 func (m *Manager) Stop() {
 	if m.cancel != nil {
