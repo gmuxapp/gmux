@@ -8,7 +8,9 @@ import (
 
 type stubRT struct{ name string }
 
-func (s *stubRT) RoundTrip(*http.Request) (*http.Response, error) { return nil, nil }
+func (s *stubRT) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{Header: http.Header{"X-Stub": []string{s.name}}}, nil
+}
 
 func reqFor(t *testing.T, rawURL string) *http.Request {
 	t.Helper()
@@ -64,6 +66,26 @@ func TestRoutedTransport_SuffixRouting(t *testing.T) {
 		got := rt.pick(reqFor(t, c.url).URL.Hostname())
 		if (got == ts) != c.wantTS {
 			t.Errorf("pick(%s): tsnet=%v, want %v", c.url, got == ts, c.wantTS)
+		}
+	}
+}
+
+// RoundTrip must dispatch to whichever transport pick selects — the
+// routing decision is worthless if the actual request path ignores it.
+func TestRoutedTransport_RoundTripDispatch(t *testing.T) {
+	rt := &RoutedTransport{fallback: &stubRT{name: "fallback"}}
+	rt.SetTailnet("tailnet.ts.net", &stubRT{name: "tsnet"})
+
+	for _, c := range []struct{ url, want string }{
+		{"https://gmux.tailnet.ts.net/v1/health", "tsnet"},
+		{"http://192.168.1.10:9999/v1/health", "fallback"},
+	} {
+		resp, err := rt.RoundTrip(reqFor(t, c.url))
+		if err != nil {
+			t.Fatalf("RoundTrip(%s): %v", c.url, err)
+		}
+		if got := resp.Header.Get("X-Stub"); got != c.want {
+			t.Errorf("RoundTrip(%s) went through %q, want %q", c.url, got, c.want)
 		}
 	}
 }
