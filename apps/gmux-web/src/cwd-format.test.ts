@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { relativeCwd, cwdBadge } from './cwd-format'
+import { relativeCwd, cwdBadge, hubCwdLabel } from './cwd-format'
 
 describe('relativeCwd', () => {
   it('returns empty when cwd equals the canonical folder', () => {
@@ -46,5 +46,23 @@ describe('cwdBadge', () => {
 
   it('surfaces an unrelated cwd as an absolute path', () => {
     expect(cwdBadge('~/tmp/scratch', '~/dev/gmux')).toBe('~/tmp/scratch')
+  })
+})
+
+describe('hubCwdLabel', () => {
+  it('marks a session at the project root with a dot', () => {
+    expect(hubCwdLabel('~/dev/gmux', '~/dev/gmux')).toBe('.')
+  })
+
+  it('is blank for an unresolved (empty) cwd, not a stray dot', () => {
+    // Regression guard: an empty cwd must not collapse to '.', which
+    // would label a placeholder as if it were the project root.
+    expect(hubCwdLabel('', '~/dev/gmux')).toBe('')
+    expect(hubCwdLabel(undefined, '~/dev/gmux')).toBe('')
+  })
+
+  it('shows descendants and unrelated paths like relativeCwd', () => {
+    expect(hubCwdLabel('~/dev/gmux/apps/web', '~/dev/gmux')).toBe('./apps/web')
+    expect(hubCwdLabel('~/tmp/scratch', '~/dev/gmux')).toBe('~/tmp/scratch')
   })
 })

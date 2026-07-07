@@ -34,3 +34,15 @@ export function cwdBadge(cwd: string | undefined, canonical?: string): string | 
   const rel = relativeCwd(cwd, canonical)
   return rel === '' ? null : rel
 }
+
+/**
+ * Project-hub row disambiguator: like relativeCwd, but a session sitting
+ * at the project root reads as '.' (a meaningful "here" marker when rows
+ * disagree on cwd) rather than a blank segment. An unresolved (empty)
+ * cwd still yields '' so the row renders nothing — a placeholder cwd is
+ * not a location worth labelling.
+ */
+export function hubCwdLabel(cwd: string | undefined, canonical?: string): string {
+  if (!cwd) return ''
+  return relativeCwd(cwd, canonical) || '.'
+}

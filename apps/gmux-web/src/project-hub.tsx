@@ -11,6 +11,9 @@
 //     under the project title and omit it from rows.
 //   - Otherwise show each session's cwd on its row, since worktree
 //     identity is the most useful disambiguator in multi-cwd projects.
+// Both are formatted relative to the project's canonical folder (see
+// cwd-format.ts): a descendant reads as `./sub`, the project root as
+// `.`, an unrelated path as its abbreviated absolute form.
 //
 // Worktree grouping (the legacy `~/dev/gmux/.grove/<name>` headings)
 // is intentionally dropped: activity-first sectioning is more useful
@@ -20,7 +23,7 @@
 import type { Session, ProjectItem } from './types'
 import { buildProjectTopology } from './projects'
 import { sessionPath } from './routing'
-import { relativeCwd } from './cwd-format'
+import { relativeCwd, hubCwdLabel } from './cwd-format'
 import { LaunchButton } from './launcher'
 import {
   sessions, projects, peers, localPeerNames, partitionForProject,
@@ -101,8 +104,9 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
       href={sessionPath(projectSlug, s, projectPeer)}
       showCwd={!sharedCwd}
       // Multi-cwd disambiguator: express each cwd relative to the
-      // canonical folder ('.' for a session at the project root).
-      cwdLabel={relativeCwd(s.cwd, canonicalCwd) || '.'}
+      // canonical folder ('.' for a session at the project root, blank
+      // for an unresolved cwd so its segment is dropped).
+      cwdLabel={hubCwdLabel(s.cwd, canonicalCwd)}
       showHost={mixedHosts}
       onClose={() => onCloseSession(s)}
     />
