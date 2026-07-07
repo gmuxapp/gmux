@@ -77,11 +77,22 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 	evCh, unsub := sessions.Subscribe()
 	defer unsub()
 
+	// Whether we've observed this session with Alive == true at any
+	// point during this wait. There is a startup window between
+	// sessions.Register returning the id (so the CLI can resolve it)
+	// and the runner flipping Alive to true; during that window
+	// Alive == false means "not started yet", not "died". Gating
+	// "died" on seenAlive keeps its contract as "was alive, isn't
+	// anymore" — mirroring how a nil Status is treated as "no state
+	// yet" rather than idle (see terminalReason).
+	seenAlive := false
+
 	// Already in a terminal state? Return without waiting for a
 	// transition. Callers like `--send-wait` (composition) want
 	// `--wait` to be a no-op when the agent is already idle.
 	if cur, ok := sessions.Get(sessionID); ok {
-		if reason, done := terminalReason(cur); done {
+		seenAlive = seenAlive || cur.Alive
+		if reason, done := terminalReason(cur, seenAlive); done {
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
 			return
 		}
@@ -121,7 +132,8 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "died"}})
 				return
 			}
-			if reason, done := terminalReason(*ev.Session); done {
+			seenAlive = seenAlive || ev.Session.Alive
+			if reason, done := terminalReason(*ev.Session, seenAlive); done {
 				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
 				return
 			}
@@ -133,7 +145,8 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "died"}})
 				return
 			}
-			if reason, done := terminalReason(cur); done {
+			seenAlive = seenAlive || cur.Alive
+			if reason, done := terminalReason(cur, seenAlive); done {
 				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
 				return
 			}
@@ -216,14 +229,51 @@ func waitForSessionExit(sessions *store.Store, evCh <-chan store.Event, sessionI
 // would race the runner's first Working:true event and return
 // immediately without the agent having processed anything. Wait
 // instead for the adapter to assert a real state.
-func terminalReason(s store.Session) (string, bool) {
+//
+// The Alive flag needs the symmetric treatment: right after launch
+// the session exists in the store with Alive == false until the
+// runner's first upsert lands, and reporting "died" during that
+// window is a phantom death (issue #216). "died" therefore requires
+// hasRunEvidence(s, seenAlive) — see that helper for the three signals
+// that count as "this session actually ran."
+func terminalReason(s store.Session, seenAlive bool) (string, bool) {
 	if !s.Alive {
-		return "died", true
+		if hasRunEvidence(s, seenAlive) {
+			return "died", true
+		}
+		return "", false
 	}
 	if s.Status != nil && !s.Status.Working {
 		return "idle", true
 	}
 	return "", false
+}
+
+// hasRunEvidence reports whether a not-Alive session ever actually
+// ran, which is what distinguishes a genuine death from the startup
+// window where the session is registered but the runner's first
+// upsert hasn't flipped Alive to true yet (issue #216). Evidence comes
+// from any of:
+//
+//   - seenAlive: the caller observed Alive == true earlier in this
+//     wait (tracked across its snapshot/event/poll observations), so a
+//     later Alive == false is a true→false transition;
+//   - ExitCode != nil: the runner watched the child process exit
+//     (SetExited) — definitive even if this wait never saw it alive;
+//   - StartedAt != "": the runner stamped SetRunning at some point.
+//     Force-marked-dead sessions (unreachable runner on kill,
+//     stale-socket sweep) and sessions restored from sessionmeta after
+//     a daemon restart carry their historical StartedAt with no live
+//     ExitCode, so a wait on them must fail fast rather than block for
+//     a resurrection that can't come.
+//
+// A session with none of the three has never run: either it's in the
+// startup window (common; the runner's next upsert resolves it) or its
+// runner died before spawning the child (rare; bounded by --timeout).
+// Shared by the idle wait (terminalReason) and the output-condition
+// wait so the gate can't drift between them.
+func hasRunEvidence(s store.Session, seenAlive bool) bool {
+	return seenAlive || s.ExitCode != nil || s.StartedAt != ""
 }
 
 // adapterEmitsIdleSignal reports whether sessions of the given
