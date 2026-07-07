@@ -1,0 +1,116 @@
+package agentext
+
+import (
+	"encoding/json"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+)
+
+// TestPiExtForwardsAssistantTextDeltas drives the embedded pi-ext.mjs with a
+// stub `pi` that fires the assistant message lifecycle (message_start →
+// message_update text_delta ×N → message_end) and asserts the extension
+// forwards them one-way to the runner's /acp/ingest channel as
+// message_start / chunk / message_end (ADR 0021 tracer #1).
+func TestPiExtForwardsAssistantTextDeltas(t *testing.T) {
+	nodeBin, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; skipping pi-ext behavior test")
+	}
+
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "runner.sock")
+
+	// Fake runner: capture every POST /acp/ingest body.
+	var mu sync.Mutex
+	var acpEvents []map[string]any
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/acp/ingest" {
+			var ev map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&ev); err == nil {
+				mu.Lock()
+				acpEvents = append(acpEvents, ev)
+				mu.Unlock()
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})}
+	go srv.Serve(ln)
+	defer srv.Close()
+
+	extPath := filepath.Join(dir, "pi-ext.mjs")
+	if err := os.WriteFile(extPath, extSource, 0o644); err != nil {
+		t.Fatalf("materialize extension: %v", err)
+	}
+
+	driver := `
+		const ext = (await import(process.argv[2])).default;
+		const handlers = {};
+		ext({ on: (ev, fn) => { handlers[ev] = fn; } });
+		const ctx = {};
+		handlers.message_start({ message: { role: "assistant", id: "msg-1" } }, ctx);
+		handlers.message_update({ assistantMessageEvent: { type: "text_delta", delta: "Hel" } }, ctx);
+		handlers.message_update({ assistantMessageEvent: { type: "text_delta", delta: "lo" } }, ctx);
+		// a non-text stream event must be ignored
+		handlers.message_update({ assistantMessageEvent: { type: "reasoning_delta", delta: "nope" } }, ctx);
+		handlers.message_end({ message: { role: "assistant", id: "msg-1" } }, ctx);
+		await new Promise((r) => setTimeout(r, 300));
+	`
+	driverPath := filepath.Join(dir, "driver.mjs")
+	if err := os.WriteFile(driverPath, []byte(driver), 0o644); err != nil {
+		t.Fatalf("write driver: %v", err)
+	}
+	cmd := exec.Command(nodeBin, driverPath, extPath)
+	cmd.Env = append(os.Environ(), "GMUX_SESSION_SOCK="+sockPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("node driver: %v\n%s", err, out)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var got []map[string]any
+	for {
+		mu.Lock()
+		got = append([]map[string]any(nil), acpEvents...)
+		mu.Unlock()
+		if len(got) >= 4 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Expect: message_start, chunk "Hel", chunk "lo", message_end.
+	// reasoning_delta must NOT appear.
+	var ops []string
+	var text string
+	for _, ev := range got {
+		op, _ := ev["op"].(string)
+		ops = append(ops, op)
+		if op == "chunk" {
+			d, _ := ev["delta"].(string)
+			text += d
+		}
+	}
+	if len(ops) != 4 {
+		t.Fatalf("want 4 acp events, got %d: %v", len(ops), ops)
+	}
+	if ops[0] != "message_start" || ops[3] != "message_end" {
+		t.Errorf("bounds ops = %v", ops)
+	}
+	if text != "Hello" {
+		t.Errorf("forwarded text = %q, want %q", text, "Hello")
+	}
+	// messageId propagated from pi's message.id
+	if id, _ := got[0]["messageId"].(string); id != "msg-1" {
+		t.Errorf("messageId = %q, want msg-1", id)
+	}
+}

@@ -8,6 +8,7 @@ import { applyArmedModifiers } from './keyboard'
 import { isTouchDevice } from './touch'
 import { ReplayView } from './replay-view'
 import { TerminalView } from './terminal'
+import { ConversationView } from './conversation-view'
 import { Sidebar } from './sidebar'
 import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
@@ -779,6 +780,16 @@ function App() {
             notifPermission={notifPermission}
             onRequestNotifPermission={requestNotifPermission}
           />
+        )}
+
+        {/* ACP conversation panel (ADR 0021 tracer #1). Opt-in via ?conv so
+            it's non-invasive while the transport/schema are proven: the
+            terminal remains the primary surface and keeps working. Renders
+            live streaming assistant text over the same session. */}
+        {selectedVal && new URLSearchParams(location.search).has('conv') && (
+          <div class="conversation-panel">
+            <ConversationView sessionId={selectedVal.id} />
+          </div>
         )}
 
         {keyBarShown && (

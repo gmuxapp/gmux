@@ -1857,6 +1857,21 @@ func serve(stderr io.Writer) int {
 		wsProxy.Handler()(w, r)
 	})
 
+	// ── ACP conversation stream (ADR 0021) ──
+	// Snapshot-then-stream conversation WebSocket, proxied to the runner's
+	// /acp endpoint. Local sessions only for this tracer slice; peer proxying
+	// (remote sessions) is a documented follow-up.
+	mux.HandleFunc("/acp/{sessionID}", func(w http.ResponseWriter, r *http.Request) {
+		sessionID := r.PathValue("sessionID")
+		if peerManager != nil {
+			if peer, _ := peerManager.FindPeer(sessionID); peer != nil {
+				http.Error(w, "acp stream not yet proxied for remote sessions", http.StatusNotImplemented)
+				return
+			}
+		}
+		wsProxy.ACPHandler()(w, r)
+	})
+
 	// ── Presence WebSocket ──
 
 	mux.HandleFunc("/v1/presence", func(w http.ResponseWriter, r *http.Request) {

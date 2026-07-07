@@ -25,6 +25,10 @@ export default defineConfig({
         target: `http://127.0.0.1:${gmuxdPort}`,
         ws: true,
       },
+      '/acp': {
+        target: `http://127.0.0.1:${gmuxdPort}`,
+        ws: true,
+      },
     },
   },
 })
