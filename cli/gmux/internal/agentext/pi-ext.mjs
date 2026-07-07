@@ -17,6 +17,16 @@
 //   { op: "turn", phase: "start" }                       on agent loop start
 //   { op: "turn", phase: "end", outcome, title }         on agent loop end
 //
+// Events posted to POST /acp/ingest (ADR 0021 streaming conversation schema):
+//   { op: "message_start", messageId }        on assistant message_start
+//   { op: "chunk", messageId, delta }         per assistant text token
+//   { op: "message_end" }                     on assistant message_end
+//
+// The /acp/ingest channel is the token-level assistant-text feed the runner
+// turns into ACP session/update notifications. It is one-way and read-only
+// (the extension only observes; the write path is keystrokes, per ADR 0021 §6)
+// and, like /hook/event, fire-and-forget.
+//
 // `name`/`title` is pi's session name when it has one; until pi titles the
 // conversation we fall back to its first user message (truncated), so a working
 // session is identifiable by what it's about rather than a bare cwd. This
@@ -101,6 +111,38 @@ export default function (pi) {
   // normalize it. The runner decides what each outcome means for the sidebar.
   pi.on("agent_start", () => post(sock, { op: "turn", phase: "start" }));
 
+  // --- streaming assistant text (ADR 0021) --------------------------------
+  // Forward token-level assistant text to the runner's ACP ingest channel.
+  // message_start/message_end bound the assistant message; message_update
+  // carries the token-by-token stream via event.assistantMessageEvent, whose
+  // text_delta variant holds the incremental text in `.delta`. We forward only
+  // assistant text this slice (thinking/tool activity are later slices).
+  //
+  // messageId: pi's message_start carries event.message with an id; we reuse it
+  // to correlate the deltas of one message. Fall back to a monotonic counter
+  // if pi ever omits it.
+  let acpMsgId = "";
+  let acpMsgSeq = 0;
+
+  pi.on("message_start", (ev) => {
+    if (ev?.message?.role !== "assistant") return;
+    acpMsgId = String(ev.message.id ?? `m${++acpMsgSeq}`);
+    postACP(sock, { op: "message_start", messageId: acpMsgId });
+  });
+
+  pi.on("message_update", (ev) => {
+    const ame = ev?.assistantMessageEvent;
+    if (!ame || ame.type !== "text_delta" || !ame.delta) return;
+    if (!acpMsgId) acpMsgId = `m${++acpMsgSeq}`;
+    postACP(sock, { op: "chunk", messageId: acpMsgId, delta: ame.delta });
+  });
+
+  pi.on("message_end", (ev) => {
+    if (ev?.message?.role !== "assistant") return;
+    postACP(sock, { op: "message_end", messageId: acpMsgId });
+    acpMsgId = "";
+  });
+
   pi.on("agent_end", (ev, ctx) => {
     const msgs = ev.messages ?? [];
     let stopReason;
@@ -169,11 +211,55 @@ function truncateTitle(s) {
 }
 
 function post(socketPath, event) {
+  postTo(socketPath, "/hook/event", event);
+}
+
+// postACP forwards a streaming-conversation event to the runner's ACP ingest
+// channel. Unlike /hook/event (low-frequency, order-independent facts), token
+// deltas MUST arrive in order: independent fire-and-forget requests can
+// complete out of order and corrupt the reassembled text. So ACP posts are
+// serialized through a promise chain — each request is issued only after the
+// previous one has completed. Still fire-and-forget: errors are swallowed and
+// never surface into pi. Ordering is per-message and cheap over a local
+// socket.
+let acpChain = Promise.resolve();
+function postACP(socketPath, event) {
+  acpChain = acpChain.then(() => postToAwait(socketPath, "/acp/ingest", event)).catch(() => {});
+}
+
+// postToAwait issues a POST and resolves when the request completes (response
+// received or error), so callers can chain to preserve ordering.
+function postToAwait(socketPath, path, event) {
+  return new Promise((resolve) => {
+    try {
+      const body = Buffer.from(JSON.stringify(event), "utf8");
+      const req = http.request(
+        {
+          socketPath,
+          path,
+          method: "POST",
+          headers: { "content-type": "application/json", "content-length": body.length },
+        },
+        (res) => {
+          res.on("end", resolve);
+          res.on("error", resolve);
+          res.resume(); // drain
+        },
+      );
+      req.on("error", resolve); // never surface transport errors into pi
+      req.end(body);
+    } catch {
+      resolve();
+    }
+  });
+}
+
+function postTo(socketPath, path, event) {
   try {
     const body = Buffer.from(JSON.stringify(event), "utf8");
     const req = http.request({
       socketPath,
-      path: "/hook/event",
+      path,
       method: "POST",
       headers: { "content-type": "application/json", "content-length": body.length },
     });
