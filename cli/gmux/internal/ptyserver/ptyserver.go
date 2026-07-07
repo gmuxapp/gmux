@@ -200,6 +200,7 @@ type Server struct {
 	ptyCols        uint16         // last applied PTY cols (guarded by mu)
 	ptyRows        uint16         // last applied PTY rows (guarded by mu)
 	cursorHidden   bool           // tracks DECTCEM via callback (guarded by mu)
+	ptmxClosed     bool           // true once ptmx is closed by Shutdown (guarded by mu)
 	screenPending  []byte         // raw PTY data not yet fed to screen (guarded by mu)
 	lastClientLeft time.Time      // when the last WS client disconnected (guarded by mu)
 
@@ -482,15 +483,34 @@ func (s *Server) Resize(cols, rows uint16) {
 // Shutdown closes the listener and all connections.
 func (s *Server) Shutdown() {
 	s.listener.Close()
-	s.ptmx.Close()
 	os.Remove(s.sockPath)
 
 	s.mu.Lock()
+	// Close ptmx and mark it closed under mu. pty.Setsize (setPtySize) calls
+	// (*os.File).Fd(), which races (*os.File).Close(); serializing both under
+	// mu, plus the ptmxClosed guard, keeps resize/shrink from touching the fd
+	// once Shutdown has closed it. (Read/Write go through the reference-counted
+	// poll.FD and are already safe against Close.)
+	s.ptmxClosed = true
+	s.ptmx.Close()
 	stopScreenDrain(s.screen, s.screenDrainDone) // unblocks + joins the DSR drain goroutine, then closes
 	for c := range s.clients {
 		c.cancel()
 	}
 	s.mu.Unlock()
+}
+
+// setPtySize applies a window size to the PTY unless Shutdown has already closed
+// it. pty.Setsize calls (*os.File).Fd(), which is not safe against a concurrent
+// (*os.File).Close(); holding mu (which Shutdown also holds while closing) and
+// skipping once closed serializes the two.
+func (s *Server) setPtySize(ws *pty.Winsize) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ptmxClosed {
+		return
+	}
+	_ = pty.Setsize(s.ptmx, ws)
 }
 
 func (s *Server) serve() {
@@ -924,7 +944,7 @@ func (s *Server) shrinkForReconnect() {
 	s.screen.Resize(int(cols), int(rows))
 	s.mu.Unlock()
 
-	pty.Setsize(s.ptmx, &pty.Winsize{Cols: cols, Rows: rows})
+	s.setPtySize(&pty.Winsize{Cols: cols, Rows: rows})
 	if s.cmd.Process != nil {
 		syscall.Kill(-s.cmd.Process.Pid, syscall.SIGWINCH)
 	}
@@ -952,7 +972,7 @@ func (s *Server) resize(msg ResizeMsg) {
 	s.mu.Unlock()
 
 	if sizeChanged {
-		pty.Setsize(s.ptmx, &pty.Winsize{
+		s.setPtySize(&pty.Winsize{
 			Cols: msg.Cols,
 			Rows: msg.Rows,
 			X:    msg.PixelWidth,

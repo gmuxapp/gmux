@@ -555,7 +555,9 @@ func TestPTYServerSnapshotBeforeLiveData(t *testing.T) {
 
 	for i := 0; i < numClients; i++ {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// Generous timeout: 20 concurrent clients over the race detector
+			// take several seconds; a tighter budget flakes under -race.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
 			conn, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{
