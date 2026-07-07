@@ -98,8 +98,11 @@ func Load(stateDir string) (*State, error) {
 	// Before a real schema upgrade rewrites the file, snapshot the
 	// pre-migration bytes to projects.json.bak so the change is
 	// recoverable (notably across the 2.0 upgrade). Best-effort.
+	original := data
+	backedUp := false
 	if onDiskVersion(data) < currentVersion {
-		backupFile(path, data)
+		backupFile(path, original)
+		backedUp = true
 	}
 
 	// Run migrations on the raw JSON before unmarshaling into the
@@ -118,11 +121,17 @@ func Load(stateDir string) (*State, error) {
 	// Drop invalid items (e.g. a hand-edited "match": null) instead of
 	// letting them poison the whole state: Manager.Update validates the
 	// full state before every save, so one bad on-disk entry would make
-	// every future mutation fail. The repaired form persists on the next
-	// Save; the original bytes were backed up above if a migration ran,
-	// and we snapshot here too before dropping anything.
+	// every future mutation fail. The repair is in-memory only: the
+	// on-disk file is untouched until the next Save persists the
+	// sanitized form, so repeated loads of a still-invalid file re-drop
+	// the same items (and re-write an identical backup, since the file
+	// hasn't changed). Snapshot the original bytes before dropping —
+	// unless the migration path above already did, in which case the
+	// pre-migration backup must not be clobbered with migrated bytes.
 	if dropped := s.sanitize(); len(dropped) > 0 {
-		backupFile(path, data)
+		if !backedUp {
+			backupFile(path, original)
+		}
 		for _, err := range dropped {
 			log.Printf("projects: dropping invalid item in %s: %v", path, err)
 		}
