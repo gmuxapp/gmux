@@ -1041,7 +1041,7 @@ export function TerminalView({
     >
       {showDisconnectedPill && (
         <div class="terminal-resize-anchor">
-          <div class="terminal-disconnected-pill">
+          <div class="reconnecting-pill terminal-disconnected-pill">
             Connection lost, reconnecting…
           </div>
         </div>
