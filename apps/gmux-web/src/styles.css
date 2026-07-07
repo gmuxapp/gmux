@@ -3442,38 +3442,105 @@ body {
 /* ACP conversation panel (ADR 0021 tracer #1: streaming assistant text).
    A floating overlay over the terminal surface, toggled with ?conv. Minimal
    by design — the assistant-ui vs. native renderer decision is deferred. */
+/* Header toggle: reuses .session-menu-trigger; active = panel open. */
+.conversation-toggle.active {
+  background: var(--bg-selected);
+  color: var(--accent);
+}
+
 .conversation-panel {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: min(480px, 42vw);
-  height: 100%;
-  overflow-y: auto;
-  background: var(--bg, #14171c);
-  border-left: 1px solid var(--border, #2a2f37);
-  padding: 12px 14px;
-  z-index: 20;
+  /* Full main-panel view, replacing the terminal (not an overlay). */
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* the island's viewport scrolls, not the panel */
+  /* Match the terminal surface (DEFAULT_THEME_COLORS bg/fg). */
+  background: var(--term-bg, #0f141a);
+  color: var(--term-fg, #d3d8de);
   font-size: 14px;
   line-height: 1.5;
 }
+/* Mount host (Preact div holding the React island) + the island's Thread
+   root both fill the panel so the composer pins to the bottom. */
+.conversation-view,
+.conversation-thread {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.conversation-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+}
 .conversation-empty {
-  color: var(--fg-muted, #7a828e);
+  color: var(--text-muted, #7a828e);
   font-style: italic;
 }
 .conversation-message {
   margin-bottom: 12px;
   word-break: break-word;
 }
-.conversation-role {
-  display: block;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--fg-muted, #7a828e);
-  margin-bottom: 2px;
+/* User turns get a distinct surface bubble; assistant text stays full-width
+   prose. No vertical bars. */
+.conversation-message--user {
+  background: var(--bg-surface, #19191f);
+  border: 1px solid var(--border, #2a2f37);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--text, #e6e6e6);
 }
-.conversation-message--assistant .conversation-role {
-  color: var(--accent, #6ea8fe);
+.conversation-message--user .conversation-markdown {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Composer: one row, input grows, icon buttons match the app's controls. */
+.conversation-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border, #2a2f37);
+  background: var(--bg-surface, #19191f);
+}
+.conversation-composer-input {
+  flex: 1;
+  resize: none;
+  min-height: 22px;
+  max-height: 140px;
+  padding: 6px 8px;
+  color: var(--text, #e6e6e6);
+  background: var(--bg, #14171c);
+  border: 1px solid var(--border, #2a2f37);
+  border-radius: 6px;
+  font: inherit;
+}
+.conversation-composer-input:focus {
+  outline: none;
+  border-color: var(--accent, #6ea8fe);
+}
+.conversation-composer-mic,
+.conversation-composer-send {
+  flex: none;
+  padding: 6px 10px;
+  color: var(--text, #e6e6e6);
+  background: var(--bg-hover, #21242b);
+  border: 1px solid var(--border, #2a2f37);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.conversation-composer-send {
+  color: var(--bg, #14171c);
+  background: var(--accent, #6ea8fe);
+  border-color: var(--accent, #6ea8fe);
+}
+.conversation-composer-mic[data-dictating] {
+  color: var(--status-error, #e5484d);
+  border-color: var(--status-error, #e5484d);
 }
 
 /* Slice #2: markdown-rendered content + distinct thinking blocks. */
@@ -3523,11 +3590,15 @@ body {
 .conversation-thinking {
   margin-bottom: 8px;
   padding: 6px 10px;
-  border-left: 2px solid var(--border, #2a2f37);
   background: color-mix(in srgb, var(--bg-elevated, #1b1f26) 60%, transparent);
   border-radius: 4px;
   color: var(--fg-muted, #7a828e);
   font-size: 13px;
+}
+.conversation-thinking-body {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .conversation-thinking-label {
   cursor: pointer;
@@ -3541,35 +3612,34 @@ body {
   margin-bottom: 6px;
 }
 
-/* highlight.js token colors (minimal dark palette, theme-var driven). */
-.conversation-markdown .hljs-keyword,
-.conversation-markdown .hljs-selector-tag,
-.conversation-markdown .hljs-built_in {
+/* Prism token colors (same minimal dark palette as the prior hljs block;
+   react-syntax-highlighter emits `.token.<type>` class names). */
+.conversation-markdown .token.keyword,
+.conversation-markdown .token.selector,
+.conversation-markdown .token.builtin {
   color: #c586c0;
 }
-.conversation-markdown .hljs-string,
-.conversation-markdown .hljs-attr {
+.conversation-markdown .token.string,
+.conversation-markdown .token.attr-value {
   color: #ce9178;
 }
-.conversation-markdown .hljs-number,
-.conversation-markdown .hljs-literal {
+.conversation-markdown .token.number,
+.conversation-markdown .token.boolean {
   color: #b5cea8;
 }
-.conversation-markdown .hljs-comment {
+.conversation-markdown .token.comment {
   color: #6a9955;
   font-style: italic;
 }
-.conversation-markdown .hljs-function .hljs-title,
-.conversation-markdown .hljs-title,
-.conversation-markdown .hljs-section {
+.conversation-markdown .token.function,
+.conversation-markdown .token.class-name {
   color: #dcdcaa;
 }
-.conversation-markdown .hljs-type,
-.conversation-markdown .hljs-class .hljs-title {
-  color: #4ec9b0;
-}
-.conversation-markdown .hljs-variable,
-.conversation-markdown .hljs-name,
-.conversation-markdown .hljs-attribute {
+.conversation-markdown .token.attr-name,
+.conversation-markdown .token.property {
   color: #9cdcfe;
+}
+.conversation-markdown .token.operator,
+.conversation-markdown .token.punctuation {
+  color: var(--text-secondary, #b8c0cc);
 }

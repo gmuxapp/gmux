@@ -1824,7 +1824,9 @@ func serve(stderr io.Writer) int {
 
 	// ── WebSocket proxy ──
 
-	wsProxy := wsproxy.New(func(sessionID string) (string, error) {
+	// Shared local-session socket resolver: used by the PTY proxy, the ACP
+	// stream, and the conversation write path below.
+	resolveSocket := func(sessionID string) (string, error) {
 		sess, ok := sessions.Get(sessionID)
 		if !ok {
 			return "", fmt.Errorf("session %s not found", sessionID)
@@ -1838,7 +1840,8 @@ func serve(stderr io.Writer) int {
 			return "", fmt.Errorf("session %s has no socket", sessionID)
 		}
 		return sess.SocketPath, nil
-	}, sessions)
+	}
+	wsProxy := wsproxy.New(resolveSocket, sessions)
 
 	// WS handler: local sessions use the Unix proxy, remote sessions
 	// are proxied to the spoke's WS endpoint over TCP.
@@ -1870,6 +1873,33 @@ func serve(stderr io.Writer) int {
 			}
 		}
 		wsProxy.ACPHandler()(w, r)
+	})
+
+	// ── Conversation write path (ADR 0021 §6) ──
+	// Keystroke delivery for surfaces without a mounted terminal (the
+	// conversation UI composer): proxies raw body bytes to the runner's
+	// POST /input — the same actuator `gmux send` uses. Local sessions only,
+	// mirroring the ACP stream; peer proxying is a documented follow-up.
+	mux.HandleFunc("POST /input/{sessionID}", func(w http.ResponseWriter, r *http.Request) {
+		sessionID := r.PathValue("sessionID")
+		if peerManager != nil {
+			if peer, _ := peerManager.FindPeer(sessionID); peer != nil {
+				http.Error(w, "input not yet proxied for remote sessions", http.StatusNotImplemented)
+				return
+			}
+		}
+		sockPath, err := resolveSocket(sessionID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("session not found: %v", err), http.StatusNotFound)
+			return
+		}
+		// The runner caps input at 1 MiB; bound the body to match.
+		if err := discovery.SendInput(r.Context(), sockPath, io.LimitReader(r.Body, 1<<20)); err != nil {
+			log.Printf("input proxy %s: %v", sessionID, err)
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	// ── Presence WebSocket ──

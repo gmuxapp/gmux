@@ -247,7 +247,7 @@ func normalizeHost(h string) string {
 func isAPIRequest(r *http.Request) bool {
 	// WebSocket upgrades, API paths, and SSE requests are programmatic.
 	if strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/ws/") ||
-		strings.HasPrefix(r.URL.Path, "/acp/") {
+		strings.HasPrefix(r.URL.Path, "/acp/") || strings.HasPrefix(r.URL.Path, "/input/") {
 		return true
 	}
 	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {

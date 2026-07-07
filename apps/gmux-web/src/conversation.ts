@@ -90,7 +90,9 @@ export function createConversationStore(): ConversationStore {
     // tags the in-flight assistant tail (if any) with its streaming messageId,
     // so the live deltas that follow keep appending to that same message
     // instead of opening a duplicate bubble.
-    messages = p.messages.map((m) => ({
+    // A session with no history sends `messages: null` (not []), so guard it —
+    // otherwise .map throws and the (swallowed) snapshot is silently lost.
+    messages = (p.messages ?? []).map((m) => ({
       role: m.role,
       messageId: m.messageId,
       content: [...m.content],
@@ -158,6 +160,21 @@ export function createConversationStore(): ConversationStore {
 /** Plain-text of one message's content, for rendering. */
 export function messageText(m: ConvMessage): string {
   return textOf(m.content)
+}
+
+/**
+ * Send composed text to the session as keystrokes (ADR 0021 §6). POSTs raw
+ * bytes to the daemon's /input/{id}, which proxies to the runner's POST /input
+ * — the same actuator `gmux send` uses. Works whether or not a terminal is
+ * mounted, so the conversation composer is independent of the PTY view.
+ */
+export async function sendSessionInput(sessionId: string, data: string): Promise<void> {
+  const res = await fetch(`/input/${sessionId}`, {
+    method: 'POST',
+    body: data,
+    headers: { 'Content-Type': 'application/octet-stream' },
+  })
+  if (!res.ok) throw new Error(`send input failed: ${res.status}`)
 }
 
 export interface ConversationConnection {

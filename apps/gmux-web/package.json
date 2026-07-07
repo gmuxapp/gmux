@@ -11,6 +11,9 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@assistant-ui/react": "^0.14.26",
+    "@assistant-ui/react-markdown": "^0.14.5",
+    "@assistant-ui/react-syntax-highlighter": "^0.14.2",
     "@fontsource/fira-code": "^5.2.7",
     "@fontsource/instrument-sans": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
@@ -24,15 +27,16 @@
     "@xterm/addon-web-links": "0.13.0-beta.195",
     "@xterm/addon-webgl": "0.20.0-beta.194",
     "@xterm/xterm": "github:gmuxapp/xterm.js#v6.1.0-beta.195-gmux.2",
-    "highlight.js": "^11.11.1",
-    "markdown-it": "^14.3.0",
     "preact": "^10.26.4",
     "preact-iso": "^2.11.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "valibot": "^1.3.1"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.2",
-    "@types/markdown-it": "^14.1.2",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
     "preact-render-to-string": "^6.6.6",
     "typescript": "^5.8.2",
     "vite": "^6.2.0",
