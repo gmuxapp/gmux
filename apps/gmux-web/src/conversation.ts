@@ -32,7 +32,7 @@ export interface ConvMessage {
 
 interface LoadParams {
   sessionId: string
-  messages: ConvMessage[]
+  messages: (ConvMessage & { messageId?: string })[]
 }
 
 interface UpdateParams {
@@ -81,10 +81,15 @@ export function createConversationStore(): ConversationStore {
   }
 
   function applyLoad(p: LoadParams) {
-    // The snapshot is authoritative history: replace everything. Any partial
-    // assistant tail the runner included arrives as a plain message here; the
-    // live stream that follows continues appending to its messageId.
-    messages = p.messages.map((m) => ({ role: m.role, content: [...m.content] }))
+    // The snapshot is authoritative history: replace everything. The runner
+    // tags the in-flight assistant tail (if any) with its streaming messageId,
+    // so the live deltas that follow keep appending to that same message
+    // instead of opening a duplicate bubble.
+    messages = p.messages.map((m) => ({
+      role: m.role,
+      messageId: m.messageId,
+      content: [...m.content],
+    }))
     notify()
   }
 

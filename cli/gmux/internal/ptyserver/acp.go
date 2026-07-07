@@ -97,20 +97,31 @@ func (h *acpHub) snapshotLocked(convFile string) (acp.Notification, error) {
 	msgs, _ := acp.LoadHistory(convFile) // best-effort; empty history is fine
 	if h.tailActive && h.tailText != "" {
 		msgs = append(msgs, acp.Message{
-			Role:    "assistant",
-			Content: []acp.ContentBlock{acp.TextBlock(h.tailText)},
+			Role:      "assistant",
+			MessageID: h.tailMsgID, // lets a mid-turn joiner keep appending live deltas
+			Content:   []acp.ContentBlock{acp.TextBlock(h.tailText)},
 		})
 	}
 	return acp.NewLoad(h.sessionID, msgs)
 }
 
-// subscribe registers a new subscriber channel. Buffered so brief frontend
-// stalls don't block ingest.
-func (h *acpHub) subscribe() chan acp.Notification {
-	ch := make(chan acp.Notification, 256)
+// attach atomically builds the session/load snapshot and registers a live
+// subscriber under the same lock, so no session/update delta can be broadcast
+// in the gap between reading the snapshot and subscribing (the snapshot-then-
+// stream ordering guarantee, ADR 0004/0021).
+func (h *acpHub) attach(convFile string) (acp.Notification, chan acp.Notification, error) {
 	h.mu.Lock()
+	defer h.mu.Unlock()
+	snapshot, err := h.snapshotLocked(convFile)
+	ch := h.addSubLocked()
+	return snapshot, ch, err
+}
+
+// addSubLocked registers and returns a new buffered subscriber, sized so brief
+// frontend stalls don't block ingest. Caller holds mu.
+func (h *acpHub) addSubLocked() chan acp.Notification {
+	ch := make(chan acp.Notification, 256)
 	h.subs[ch] = struct{}{}
-	h.mu.Unlock()
 	return ch
 }
 
@@ -178,13 +189,7 @@ func (s *Server) handleACP(w http.ResponseWriter, r *http.Request) {
 		convFile = s.state.ConversationFileSnapshot()
 	}
 
-	// Register the subscriber and build the snapshot under the same lock so no
-	// live delta can be broadcast between the snapshot read and subscription.
-	s.acp.mu.Lock()
-	snapshot, snapErr := s.acp.snapshotLocked(convFile)
-	ch := make(chan acp.Notification, 256)
-	s.acp.subs[ch] = struct{}{}
-	s.acp.mu.Unlock()
+	snapshot, ch, snapErr := s.acp.attach(convFile)
 	defer s.acp.unsubscribe(ch)
 
 	if snapErr == nil {
