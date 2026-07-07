@@ -73,7 +73,7 @@ Hover over a session to reveal the **×** button. This dismisses the session: li
 
 Click a project name in the sidebar (or navigate to `/:project`) to see the project hub — an overview of every session in the project, mirroring the home layout: **Waiting**, **Active**, and **All sessions** rows, newest-first.
 
-When every session shares the same working directory, it appears once as a subtitle; otherwise each row shows its own directory. If the project spans hosts, rows carry an `@host` suffix (devcontainer sessions get a container icon). The **+** in the hub header launches a new session in the project's canonical directory — for a referenced project this routes to the owning machine. If a project has no sessions yet, the hub shows the project's configured path with a **+** launcher to get started.
+When every session shares the same working directory, it appears once as a subtitle; otherwise each row shows its own directory. On the home dashboard, a session card surfaces its working directory only when it differs from the project's canonical folder — a subfolder or worktree shows as a relative `./sub/dir` badge, an unrelated path as its absolute `~/…` form — so sessions launched somewhere other than the project root are easy to spot. If the project spans hosts, rows carry an `@host` suffix (devcontainer sessions get a container icon). The **+** in the hub header launches a new session in the project's canonical directory — for a referenced project this routes to the owning machine. If a project has no sessions yet, the hub shows the project's configured path with a **+** launcher to get started.
 
 ## The terminal
 

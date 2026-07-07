@@ -66,26 +66,30 @@ When no text argument is given and stdin is a pipe, gmux reads stdin until EOF (
 `gmux wait <id>` blocks until an agent session finishes its current turn — the primitive that turns sequential orchestration into one line per step:
 
 ```bash
-gmux send <id> Enter < step-1.txt
-gmux wait <id>
-
-gmux send <id> Enter < step-2.txt
-gmux wait <id>
+gmux send --wait <id> Enter < step-1.txt
+gmux send --wait <id> Enter < step-2.txt
 
 gmux tail <id> -n 200          # extract the final answer
 ```
 
-The idle signal is the same `Status.Working` flag the UI's spinner consumes, so `wait` returns the moment the agent emits its closing message. Exit codes: `0` idle, `2` the session died first, `3` `--timeout N` elapsed.
+The idle signal is the same `Status.Working` flag the UI's spinner consumes, so `wait` returns the moment the agent emits its closing message. Exit codes: `0` idle (or matched), `2` the session died first, `3` `--timeout N` elapsed.
 
-`wait` is for agent sessions (`claude`, `codex`, `pi`); shell sessions have no working signal and are rejected with a clear error, and `wait` only works for sessions on the local host — peer sessions (`<id>@<peer>`) are rejected. To wait for a shell command, run it through the blocking piped flow above (`gmux -- make build < /dev/null`) — that's exactly the shape `gmux -- <cmd>` already provides. (Waiting on arbitrary output — "until this text appears" — is planned as a server-side `wait` condition, [#313](https://github.com/gmuxapp/gmux/issues/313).)
+**Prefer `send --wait` over `send` then `wait`.** The two-command form is subtly racy: `wait`'s opening snapshot can catch the *previous* turn's idle state before the send-induced `Working=true` has propagated, returning immediately. `gmux send --wait <id> … Enter` subscribes before delivering the input, so it always gates on a fresh turn. Bound it with `--timeout N`; exit codes match `wait`. A standalone `gmux wait <id>` is still the right tool when you're waiting on a turn you didn't just trigger.
+
+**Waiting on output.** `gmux wait <id> --for-text 'DONE'` (or `--for-regex 'error: \d+'`) blocks until text appears in the session's output instead of on the idle signal. The match runs server-side against gmuxd's scrollback (per rendered line), and — unlike the idle wait — works for **shell** sessions too:
+
+```bash
+gmux wait <id> --for-text 'Listening on' --timeout 30   # wait for a server to come up
+```
+
+`wait` (idle mode) is for agent sessions (`claude`, `codex`, `pi`); shell sessions have no working signal and are rejected with a clear error unless you give an output condition. `wait` only works for sessions on the local host — peer sessions (`<id>@<peer>`) are rejected. To wait for a shell *command* to finish, run it through the blocking piped flow above (`gmux -- make build < /dev/null`) — that's exactly the shape `gmux -- <cmd>` already provides.
 
 ## Reading output
 
 `gmux tail <id>` prints recent output as plain text (ANSI stripped; `-n N` for line count, default 100). Pair it with `wait` to capture an agent's final answer:
 
 ```bash
-gmux send <id> Enter < ship-prompt.txt
-gmux wait <id> --timeout 600
+gmux send --wait --timeout 600 <id> Enter < ship-prompt.txt
 url=$(gmux tail <id> -n 50 | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1)
 echo "$url"
 ```
