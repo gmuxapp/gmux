@@ -145,20 +145,26 @@ describe('resolveKeybinds', () => {
     expect(find!.ctrl && find!.meta).toBe(false)
   })
 
-  it('maps secondary+Backspace to backward-kill-word by default', () => {
+  // Closes the loop on the reported bug: pressing Ctrl+Backspace (secondary on
+  // Linux, where these tests run) must resolve to a *word* delete, not the old
+  // \x08 char-delete. Drives a real KeyboardEvent through the same match path
+  // the keyboard handler uses.
+  it('resolves a real secondary+Backspace event to backward-kill-word', () => {
     const resolved = resolveKeybinds(null)
-    const bs = resolved.find(r => r.baseKey === 'backspace')
-    expect(bs).toBeDefined()
-    expect(bs!.action).toBe('sendText')
-    expect(bs!.args).toBe('\x1b\x7f')
+    const ev = { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, key: 'Backspace' } as KeyboardEvent
+    const match = resolved.find(kb => eventMatchesKeybind(ev, kb))
+    expect(match).toBeDefined()
+    expect(match!.action).toBe('sendText')
+    expect(match!.args).toBe('\x1b\x7f')
   })
 
-  it('maps secondary+Delete to forward-kill-word by default', () => {
+  it('resolves a real secondary+Delete event to forward-kill-word', () => {
     const resolved = resolveKeybinds(null)
-    const del = resolved.find(r => r.baseKey === 'delete')
-    expect(del).toBeDefined()
-    expect(del!.action).toBe('sendText')
-    expect(del!.args).toBe('\x1bd')
+    const ev = { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, key: 'Delete' } as KeyboardEvent
+    const match = resolved.find(kb => eventMatchesKeybind(ev, kb))
+    expect(match).toBeDefined()
+    expect(match!.action).toBe('sendText')
+    expect(match!.args).toBe('\x1bd')
   })
 
   it('allows disabling the find keybind', () => {
