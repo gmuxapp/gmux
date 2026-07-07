@@ -156,6 +156,18 @@ func TestParseCLI(t *testing.T) {
 					t.Errorf("timeout=%d ref=%q", c.timeout, c.ref)
 				}
 			}},
+		{name: "wait --for-text", args: []string{"wait", "abc", "--for-text", "BUILD OK"}, wantMode: modeWait,
+			check: func(t *testing.T, c *command) {
+				if c.forText != "BUILD OK" || c.ref != "abc" {
+					t.Errorf("forText=%q ref=%q", c.forText, c.ref)
+				}
+			}},
+		{name: "wait --for-regex with timeout", args: []string{"wait", "--for-regex", `error: \d+`, "--timeout", "30", "abc"}, wantMode: modeWait,
+			check: func(t *testing.T, c *command) {
+				if c.forRegex != `error: \d+` || c.timeout != 30 || c.ref != "abc" {
+					t.Errorf("forRegex=%q timeout=%d ref=%q", c.forRegex, c.timeout, c.ref)
+				}
+			}},
 
 		{name: "daemon status", args: []string{"daemon", "status"}, wantMode: modeDaemon,
 			check: func(t *testing.T, c *command) {
@@ -205,13 +217,15 @@ func TestParseCLIErrors(t *testing.T) {
 		{"tail"},                   // missing id
 		{"tail", "-n", "0", "abc"}, // non-positive count
 		{"wait"},                   // missing id
-		{"send-keys", "C-c"},       // missing -t
-		{"daemon"},                 // missing subcommand
-		{"daemon", "frobnicate"},   // unknown subcommand
-		{"ls", "stray"},            // ls takes no positional
-		{"edit", "a", "b"},         // too many files
-		{"edit", "--wait"},         // no flags on edit (yet)
-		{"__edit-child", "a", "b"}, // too many files
+		{"wait", "abc", "--for-text", "a", "--for-regex", "b"}, // mutually exclusive
+		{"wait", "abc", "--for-regex", "["},                    // invalid regex
+		{"send-keys", "C-c"},                                   // missing -t
+		{"daemon"},                                             // missing subcommand
+		{"daemon", "frobnicate"},                               // unknown subcommand
+		{"ls", "stray"},                                        // ls takes no positional
+		{"edit", "a", "b"},                                     // too many files
+		{"edit", "--wait"},                                     // no flags on edit (yet)
+		{"__edit-child", "a", "b"},                             // too many files
 	}
 	for _, args := range bad {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {

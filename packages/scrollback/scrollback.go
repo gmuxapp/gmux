@@ -270,11 +270,20 @@ func RenderTail(r io.Reader, cols, rows, n int) ([]string, error) {
 	e.SetScrollbackSize(RenderScrollbackSize)
 	// The emulator writes back responses (e.g. DSR cursor position
 	// reports) into a pipe. Nothing reads them here, and a blocked
-	// write would deadlock our Write below. Drain in the background.
+	// write would deadlock our Write below. Drain in the background,
+	// and close the emulator on the way out so the drain goroutine
+	// sees EOF and exits — without the Close it blocks on the pipe
+	// forever, leaking one goroutine per render. One-shot tail
+	// requests barely noticed; the output-condition wait re-renders
+	// on a ticker and would accumulate them.
 	drainDone := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(io.Discard, e)
 		close(drainDone)
+	}()
+	defer func() {
+		_ = e.Close()
+		<-drainDone
 	}()
 	if _, err := e.Write(raw); err != nil {
 		return nil, fmt.Errorf("replay through emulator: %w", err)

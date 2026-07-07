@@ -18,6 +18,7 @@ gmux -d -- <cmd> [args]      # run detached; prints the session id on stdout
 gmux send <id> 'text' Enter  # type text and submit (Enter is explicit)
 gmux send <id> C-c           # send a control key (interrupt), no text
 gmux wait <id>               # block until the agent finishes its turn
+gmux wait <id> --for-text S  # block until S appears in the output
 gmux tail <id> [-n N]        # last N lines of output (ANSI stripped; default 100)
 gmux ls [--json]             # list sessions (--json for machine parsing)
 gmux kill <id>               # SIGTERM the runner
@@ -88,9 +89,20 @@ the session exits, optionally bounded by `--timeout N`. Exit codes:
 
 Plain **shell** commands don't emit an idle signal and are rejected, so run
 those blocking instead: `gmux -- make build < /dev/null` exits with the
-command's own status. (Waiting on arbitrary output — "until this text
-appears" — is planned as a server-side condition; until then, poll `gmux tail`
-yourself if you must.)
+command's own status.
+
+To wait for specific **output** instead of idle, use `--for-text <substr>` or
+`--for-regex <pattern>` (works for shell sessions too — no grep loop needed):
+
+```bash
+gmux wait $id --for-text 'listening on' --timeout 60
+gmux wait $id --for-regex 'tests? passed: \d+' --timeout 120
+```
+
+Same exit codes (`0` matched, `2` session exited first, `3` timeout). Matching
+is line-wise against the rendered terminal output (ANSI stripped, same text
+`gmux tail` shows), including output that appeared before the wait started, so
+the pattern must fit on one terminal line.
 
 ## Other agents have one-shot modes
 
