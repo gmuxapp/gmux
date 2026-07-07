@@ -24,12 +24,15 @@
     "@xterm/addon-web-links": "0.13.0-beta.288",
     "@xterm/addon-webgl": "0.20.0-beta.287",
     "@xterm/xterm": "github:gmuxapp/xterm.js#v6.1.0-beta.288-gmux.5",
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.3.0",
     "preact": "^10.26.4",
     "preact-iso": "^2.11.1",
     "valibot": "^1.3.1"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.2",
+    "@types/markdown-it": "^14.1.2",
     "preact-render-to-string": "^6.6.6",
     "typescript": "^5.8.2",
     "vite": "^6.2.0",
