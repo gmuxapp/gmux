@@ -1943,20 +1943,16 @@ func serve(stderr io.Writer) int {
 			return
 		}
 
-		// A half-dead client (peer gone, no FIN/RST seen) makes writes
-		// buffer locally without erroring, leaking this subscriber and
-		// its coalescer subscriptions for minutes (#243). Bound every
-		// write with a deadline via ResponseController and treat any
-		// write/flush failure as a disconnect: the deferred cancels
-		// below tear the subscriber down.
+		// Error-checked, deadline-bounded writes (#243). Previously the
+		// heartbeat and snapshot writes ignored their errors, so a
+		// half-dead client was reaped only when OS TCP keepalive gave
+		// up (minutes, tunable-dependent). Now every write goes through
+		// a deadline-armed helper and any write/flush failure returns
+		// from the handler, letting the deferred cancels below tear the
+		// subscriber's coalescer subscriptions and activity channel down.
 		rc := http.NewResponseController(w)
-		const sseWriteTimeout = 10 * time.Second
 		sendFrame := func(event string, payload any) error {
-			_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
-			if err := sendSSE(w, event, payload); err != nil {
-				return err
-			}
-			return rc.Flush()
+			return sendSSEFrame(rc, w, event, payload)
 		}
 
 		// asPeer consumers (?as=peer) get owned sessions only and no
@@ -2055,11 +2051,7 @@ func serve(stderr io.Writer) int {
 			case <-notify:
 				return
 			case <-heartbeat.C:
-				_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
-				if _, err := fmt.Fprint(w, ":\n\n"); err != nil {
-					return
-				}
-				if err := rc.Flush(); err != nil {
+				if err := sendSSEComment(rc, w); err != nil {
 					return
 				}
 			case _, open := <-sessionsSub:
@@ -2648,6 +2640,41 @@ func buildSessionInfos(sessions *store.Store, isLocalPeer func(string) bool) []p
 		}
 	}
 	return infos
+}
+
+// sseWriteTimeout bounds every SSE write so the daemon reacts to its
+// own failed writes instead of delegating all client-liveness
+// detection to OS TCP keepalive (#243). Without it, a half-dead client
+// (peer gone, no FIN/RST seen) is only reaped when the kernel exhausts
+// TCP retransmits — non-deterministic and dependent on host tunables.
+//
+// This governs how long a Write blocks waiting for kernel send-buffer
+// space, not end-to-end delivery: it fires only if the client drains
+// nothing for the full window, which is exactly a dead peer. A healthy
+// slow client whose frame fits the send buffer is never affected, and
+// the deadline is re-armed before every write so it can't fire on an
+// idle-but-live connection between frames.
+const sseWriteTimeout = 10 * time.Second
+
+// sendSSEFrame writes one event frame with a fresh write deadline and
+// flushes it. Any write or flush error means the client is gone; the
+// caller must treat it as a disconnect and tear the subscriber down.
+func sendSSEFrame(rc *http.ResponseController, w io.Writer, event string, payload any) error {
+	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+	if err := sendSSE(w, event, payload); err != nil {
+		return err
+	}
+	return rc.Flush()
+}
+
+// sendSSEComment writes a heartbeat comment frame (":") with a fresh
+// write deadline and flushes it. Same error contract as sendSSEFrame.
+func sendSSEComment(rc *http.ResponseController, w io.Writer) error {
+	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+	if _, err := fmt.Fprint(w, ":\n\n"); err != nil {
+		return err
+	}
+	return rc.Flush()
 }
 
 // sendSSE writes one SSE frame. A marshal failure skips the frame
