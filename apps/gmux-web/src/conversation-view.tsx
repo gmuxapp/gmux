@@ -1,33 +1,29 @@
 /**
- * Conversation view (ADR 0021 tracer #1): a live, structured render of one
- * session's assistant text, separate from the xterm PTY surface. It attaches
- * to the runner's ACP stream via connectConversation and re-renders as token
- * deltas coalesce into the store.
+ * Conversation view (ADR 0021): the boundary where the Preact app hands off to
+ * the @assistant-ui/react island.
  *
- * NOTE (convention flagged for review): ADR 0021 and the tracer brief suggest
- * `@assistant-ui/react`. This app is Preact, not React; assistant-ui is
- * React-only and pulling react/react-dom in behind preact/compat is a
- * consequential dependency+build decision that shouldn't be baked in silently
- * by the foundational tracer. So this slice ships a minimal native Preact
- * renderer over the same store, and defers the assistant-ui decision (compat
- * alias vs. a dedicated React island) to when rich tool-call UIs land. The
- * store (conversation.ts) is UI-framework-agnostic, so swapping the renderer
- * later touches only this file.
+ * This file is deliberately tiny. It owns the framework-agnostic store
+ * (conversation.ts) and the live ACP WebSocket, then mounts a *real React 18*
+ * root (conversation-island.tsx) into a plain DOM node. Preact renders the
+ * container; React owns everything inside it. The two runtimes never share a
+ * tree — the only crossing is props passed at mount and imperative re-renders
+ * when the props change.
  *
- * Slice #2 adds markdown rendering (assistant text + thinking) and a distinct,
- * collapsible presentation for reasoning (`thinking` blocks). Markdown → HTML
- * happens in markdown.ts, which escapes raw HTML and tolerates the incomplete
- * markdown that arrives mid-stream.
+ * Why a manual React root rather than preact/compat: assistant-ui relies on
+ * genuine React 18 semantics (useSyncExternalStore, concurrent rendering,
+ * context identity) that the compat shim reproduces imperfectly. See
+ * vite.config.ts (`reactAliasesEnabled: false`).
  */
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef } from 'preact/hooks'
+import { createRoot, type Root } from 'react-dom/client'
+import { createElement } from 'react'
 import {
   type ConversationStore,
-  type ConvMessage,
-  type ContentBlock,
   createConversationStore,
   connectConversation,
+  sendSessionInput,
 } from './conversation'
-import { renderMarkdown } from './markdown'
+import { ConversationIsland } from './conversation-island'
 
 interface Props {
   sessionId: string
@@ -38,66 +34,41 @@ interface Props {
 }
 
 export function ConversationView({ sessionId, store: injected, connect = true }: Props) {
-  const [store] = useState(() => injected ?? createConversationStore())
-  const [, forceRender] = useState(0)
-  const [connState, setConnState] = useState<'open' | 'closed'>('closed')
+  const hostRef = useRef<HTMLDivElement>(null)
+  const rootRef = useRef<Root | null>(null)
+  const storeRef = useRef<ConversationStore>()
+  if (!storeRef.current) storeRef.current = injected ?? createConversationStore()
 
+  // Live ACP stream → store. Store lifetime matches this component.
   useEffect(() => {
-    const unsub = store.subscribe(() => forceRender((n) => n + 1))
-    let conn: { close(): void } | undefined
-    if (connect) {
-      conn = connectConversation(sessionId, store, { onStateChange: setConnState })
-    }
+    if (!connect) return
+    const conn = connectConversation(sessionId, storeRef.current!)
+    return () => conn.close()
+  }, [sessionId, connect])
+
+  // Create the React root once, tear it down on unmount.
+  useEffect(() => {
+    if (!hostRef.current) return
+    const root = createRoot(hostRef.current)
+    rootRef.current = root
     return () => {
-      unsub()
-      conn?.close()
+      rootRef.current = null
+      root.unmount()
     }
-  }, [sessionId, store, connect])
+  }, [])
 
-  const messages = store.getMessages()
-
-  return (
-    <div class="conversation-view" data-conn={connState}>
-      {messages.length === 0 ? (
-        <div class="conversation-empty">No conversation yet.</div>
-      ) : (
-        messages.map((m, i) => <MessageRow key={m.messageId ?? i} message={m} />)
-      )}
-    </div>
-  )
-}
-
-function MessageRow({ message }: { message: ConvMessage }) {
-  return (
-    <div class={`conversation-message conversation-message--${message.role}`} data-role={message.role}>
-      <span class="conversation-role">{message.role}</span>
-      <div class="conversation-content">
-        {message.content.map((block, i) => (
-          <ContentBlockView key={i} block={block} />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// A single content block. Text renders as markdown; thinking renders as a
-// dimmed, collapsible markdown block so reasoning is visually distinct from
-// the answer. Both go through the same defensive markdown renderer.
-function ContentBlockView({ block }: { block: ContentBlock }) {
-  const html = renderMarkdown(block.text ?? '')
-  if (block.type === 'thinking') {
-    return (
-      <details class="conversation-thinking" data-block="thinking">
-        <summary class="conversation-thinking-label">Thinking</summary>
-        <div class="conversation-markdown" dangerouslySetInnerHTML={{ __html: html }} />
-      </details>
+  // (Re)render the island whenever the session changes. Runs after the mount
+  // effect above on first commit, so the root always exists here. The composer
+  // sends via the §6 HTTP keystroke path keyed by sessionId — no dependency on
+  // a mounted terminal.
+  useEffect(() => {
+    rootRef.current?.render(
+      createElement(ConversationIsland, {
+        store: storeRef.current!,
+        onSend: (data: string) => void sendSessionInput(sessionId, data),
+      }),
     )
-  }
-  return (
-    <div
-      class="conversation-markdown conversation-text"
-      data-block="text"
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
-  )
+  }, [sessionId])
+
+  return <div ref={hostRef} class="conversation-view" />
 }

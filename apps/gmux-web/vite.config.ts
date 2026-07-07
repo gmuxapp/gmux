@@ -4,7 +4,16 @@ import preact from '@preact/preset-vite'
 const gmuxdPort = process.env.VITE_DEV_PROXY_PORT || '8790'
 
 export default defineConfig({
-  plugins: [preact()],
+  plugins: [
+    // reactAliasesEnabled: false — the app is Preact, but the ACP
+    // conversation panel is a real-React island (@assistant-ui/react needs
+    // genuine React 18 semantics: useSyncExternalStore, concurrent features,
+    // context identity). Aliasing react→preact/compat (the preset default)
+    // would break it. The Preact app never imports bare `react`, so turning
+    // the alias off is safe; the island imports the real react/react-dom,
+    // and it's lazy-loaded behind ?conv so it stays out of the main bundle.
+    preact({ reactAliasesEnabled: false }),
+  ],
   define: {
     // Baked into the bundle as a literal at build time. Read by
     // home.tsx to render the footer and to compare against the daemon's

@@ -5,6 +5,9 @@
   },
   "linter": {
     "enabled": true,
+    "domains": {
+      "react": "none"
+    },
     "rules": {
       "recommended": true,
       "a11y": {
