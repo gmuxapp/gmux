@@ -268,7 +268,13 @@ export const sessionsLoaded = signal(false)
  * *both* flags keeps it `null` until a coherent snapshot exists.
  */
 export const worldLoaded = signal(false)
-export const connState = signal<'connecting' | 'connected' | 'error'>('connecting')
+// 'connecting'   — initial connect, never yet established (full-screen)
+// 'connected'    — live snapshot flowing
+// 'reconnecting' — an *established* stream dropped; EventSource is
+//                  auto-reconnecting. Subtle pill, not full-screen: the
+//                  last snapshot stays on screen (sessionsLoaded holds).
+// 'error'        — initial connect failed (full-screen + Retry)
+export const connState = signal<'connecting' | 'connected' | 'reconnecting' | 'error'>('connecting')
 
 // Discovered is host-authoritative (ADR 0002/0005): each host runs its
 // own match rules over its own sessions and decides which are
@@ -1395,7 +1401,14 @@ export function initStore(): () => void {
     // Browser EventSource auto-reconnects; flag the UI as degraded
     // until the next snapshot arrives. `sessionsLoaded` stays true
     // once it has flipped, so reconnect doesn't blank the sidebar.
+    //
+    // A drop on the *initial* connect is a hard failure (full-screen +
+    // Retry). A drop on an *established* stream is transient: show a
+    // subtle reconnecting pill and keep the last snapshot on screen
+    // while EventSource retries. The next snapshot flips it back to
+    // 'connected'.
     if (connState.value === 'connecting') connState.value = 'error'
+    else if (connState.value === 'connected') connState.value = 'reconnecting'
   })
 
   // Protocol 2 (ADR 0001). The server pushes two snapshot kinds plus

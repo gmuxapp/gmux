@@ -1901,6 +1901,38 @@ body {
   white-space: nowrap;
 }
 
+/* App-level SSE reconnecting pill. Shares the terminal pill's design
+   language (translucent warm surface, blur, rounded) so "we're offline,
+   reconnecting" reads the same across the WS and SSE data planes. Floats
+   fixed at top-center over whatever view is showing (sidebar, home,
+   project hub) without taking over the screen. */
+.app-reconnecting-pill {
+  pointer-events: none;
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(calc(100vw - 24px), 460px);
+  padding: 10px 16px;
+  border: 1px solid oklch(0.45 0.12 20 / 0.5);
+  border-radius: 999px;
+  background: oklch(0.22 0.06 20 / 0.88);
+  color: oklch(0.78 0.1 20);
+  box-shadow:
+    0 8px 24px oklch(0% 0 0 / 0.28),
+    0 0 12px oklch(0.5 0.15 20 / 0.12);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
 /* ── Find-in-terminal bar ────────────────────────────────────────────────────────
    Floats over the top-right of the terminal (sticky, like the resize
    anchor, so it stays put when the shell scrolls in passive mode). Shares

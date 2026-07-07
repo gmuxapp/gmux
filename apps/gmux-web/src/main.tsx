@@ -689,8 +689,21 @@ function App() {
   const keyBarShown = !!selectedVal && (canAttach || USE_MOCK) && !!termOpts && !!keybindsVal
   const replayShown = !keyBarShown && !!selectedVal && !selectedVal.alive && !!termOpts && !USE_MOCK
 
+  // App-level reconnecting cue for the SSE control-plane. Distinct from
+  // the per-terminal WS pill: it covers the sidebar / home / project
+  // views where no terminal WS is active. When a terminal *is* attached
+  // its own "Connection lost, reconnecting…" pill already owns the
+  // offline cue for that view, so we suppress this one to avoid a
+  // doubled-up message on the same screen.
+  const showReconnecting = connVal === 'reconnecting' && !(selectedVal && canAttach)
+
   return (
     <div class="app-layout">
+      {showReconnecting && (
+        <div class="app-reconnecting-pill" role="status">
+          Connection lost, reconnecting…
+        </div>
+      )}
       <Sidebar
         resumingId={resumingId}
         onCloseSession={handleCloseSession}
