@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -159,6 +160,11 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+// tagNameRe matches valid Tailscale ACL tag names: they must start with
+// a letter and contain only lowercase letters, digits, and hyphens.
+// https://tailscale.com/kb/1068/tags
+var tagNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
 func validate(cfg Config) error {
 	// Port range.
 	if cfg.Port < 1 || cfg.Port > 65535 {
@@ -171,8 +177,8 @@ func validate(cfg Config) error {
 	// An empty allow list is fine — the node owner is auto-whitelisted at runtime.
 	for _, entry := range cfg.Tailscale.Allow {
 		if strings.HasPrefix(entry, "tag:") {
-			if len(entry) == len("tag:") {
-				return fmt.Errorf("tailscale.allow entry %q is missing a tag name (expected format: tag:name)", entry)
+			if !tagNameRe.MatchString(strings.TrimPrefix(entry, "tag:")) {
+				return fmt.Errorf("tailscale.allow entry %q is not a valid device tag (expected format: tag:name, where name starts with a letter and contains only lowercase letters, digits, and hyphens)", entry)
 			}
 			continue
 		}

@@ -66,6 +66,7 @@ The config file is strictly validated at startup. gmuxd refuses to start if:
 
 - **Unknown keys** are present, catching typos like `alow` instead of `allow`
 - **`allow` entries don't contain `@` and don't start with `tag:`**, likely not a valid Tailscale login name or device tag
+- **`allow` tag entries are malformed** — the name after `tag:` must start with a letter and contain only lowercase letters, digits, and hyphens
 - **`port` is out of range** (must be 1–65535)
 - **TOML syntax is invalid**
 

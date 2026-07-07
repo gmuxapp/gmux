@@ -222,21 +222,33 @@ allow = ["alice@github", "tag:gmux"]
 	}
 }
 
-func TestLoadRejectsEmptyTag(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
-	writeConfig(t, dir, `
+func TestLoadRejectsMalformedTags(t *testing.T) {
+	bad := []string{
+		"tag:",           // empty name
+		"tag:my tag",     // whitespace
+		"tag:tag:double", // nested prefix
+		"tag:GMux",       // uppercase
+		"tag:1abc",       // must start with a letter
+		"tag:-abc",       // must start with a letter
+	}
+	for _, entry := range bad {
+		t.Run(entry, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			writeConfig(t, dir, `
 [tailscale]
 enabled = true
-allow = ["tag:"]
+allow = ["`+entry+`"]
 `)
 
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error for empty tag name")
-	}
-	if !strings.Contains(err.Error(), "missing a tag name") {
-		t.Errorf("error = %q", err)
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("expected error for malformed tag %q", entry)
+			}
+			if !strings.Contains(err.Error(), "not a valid device tag") {
+				t.Errorf("error = %q", err)
+			}
+		})
 	}
 }
 
