@@ -47,6 +47,11 @@ type DiagStatus struct {
 	// AuthURL is set when the node needs login. The user must visit
 	// this URL to register the device in their tailnet.
 	AuthURL string `json:"auth_url,omitempty"`
+	// BackendState is the tailscale backend state (e.g. "Running",
+	// "Starting", "NeedsLogin"). When it is "Running", the netmap is
+	// synced and HTTPS/MagicDNS above are authoritative; otherwise
+	// they may read false simply because the state isn't known yet.
+	BackendState string `json:"backend_state,omitempty"`
 	// Connected is true when the listener is fully operational.
 	Connected bool `json:"connected"`
 }
@@ -81,6 +86,7 @@ func (l *Listener) Diag() DiagStatus {
 	if status.AuthURL != "" {
 		ds.AuthURL = status.AuthURL
 	}
+	ds.BackendState = status.BackendState
 	ds.HTTPS = len(status.CertDomains) > 0
 	if status.CurrentTailnet != nil {
 		ds.MagicDNS = status.CurrentTailnet.MagicDNSSuffix != ""

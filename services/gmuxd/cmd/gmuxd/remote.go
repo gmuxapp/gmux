@@ -200,11 +200,12 @@ type tailscaleHealth struct {
 }
 
 type tsHealth struct {
-	FQDN      string `json:"fqdn"`
-	MagicDNS  bool   `json:"magic_dns"`
-	HTTPS     bool   `json:"https"`
-	AuthURL   string `json:"auth_url"`
-	Connected bool   `json:"connected"`
+	FQDN         string `json:"fqdn"`
+	MagicDNS     bool   `json:"magic_dns"`
+	HTTPS        bool   `json:"https"`
+	AuthURL      string `json:"auth_url"`
+	BackendState string `json:"backend_state"`
+	Connected    bool   `json:"connected"`
 }
 
 // fetchTailscaleHealth fetches the tailscale status from the daemon.
@@ -280,7 +281,7 @@ func remotePoll(stdout, stderr io.Writer) int {
 
 	fmt.Fprintln(stdout) // end the "Connecting..." line
 
-	if result == nil || result.TS == nil {
+	if result == nil {
 		fmt.Fprintln(stdout)
 		fmt.Fprintln(stderr, "Could not reach the daemon. Check that it's running:")
 		fmt.Fprintln(stderr, "  gmuxd start")
@@ -293,6 +294,18 @@ func remotePoll(stdout, stderr io.Writer) int {
 // displayStatus renders the tailscale connection status.
 func displayStatus(h *tailscaleHealth, stdout io.Writer) int {
 	ts := h.TS
+
+	// Daemon is reachable but hasn't started Tailscale yet.
+	if ts == nil {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "The daemon is running but Tailscale hasn't started yet.")
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Try again shortly:")
+		fmt.Fprintln(stdout, "  gmuxd remote")
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
+		return 0
+	}
 
 	// Needs login: show the auth URL and nothing else. The user must
 	// complete login before we can know about HTTPS/MagicDNS.
@@ -339,7 +352,27 @@ func displayStatus(h *tailscaleHealth, stdout io.Writer) int {
 		return 0
 	}
 
-	// Not connected and no auth URL. Tailscale is in some intermediate state.
+	// Not connected and no auth URL. Tailscale is in some intermediate
+	// state. If the backend is running (logged in, netmap synced) but
+	// the tailnet has no HTTPS certificates enabled, the listener can
+	// never come up: tsnet needs a cert to serve. Surface that directly
+	// instead of telling the user to retry forever. Only trust the
+	// HTTPS flag when the backend reports Running; before that, false
+	// may just mean the state isn't known yet.
+	if ts.BackendState == "Running" && !ts.HTTPS {
+		fmt.Fprintln(stdout, "Tailscale is logged in but the connection isn't coming up.")
+		fmt.Fprintln(stdout, "The cause: HTTPS is not enabled in your tailnet, which gmuxd")
+		fmt.Fprintln(stdout, "needs to serve remote access.")
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Enable HTTPS (and MagicDNS) in your Tailscale admin console:")
+		fmt.Fprintln(stdout, "  https://login.tailscale.com/admin/dns")
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Then run `gmuxd remote` again.")
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "Docs: %s\n", remoteDocsURL)
+		return 1
+	}
+
 	fmt.Fprintln(stdout, "Tailscale is still connecting. This can take a minute on first setup.")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Try again shortly:")
