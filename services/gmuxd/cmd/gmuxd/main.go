@@ -1728,6 +1728,21 @@ func serve(stderr io.Writer) int {
 					fmt.Sprintf("input exceeds %d bytes", maxInputBytes))
 				return
 			}
+			if r.URL.Query().Get("wait") != "" {
+				// `gmux send --wait`: deliver the input and block until
+				// the turn it triggers completes. handleInputWait
+				// validates the wait mode and subscribes to the store
+				// before invoking send, which is what makes the
+				// composition race-free (issue #218).
+				handleInputWait(w, r, sessions, sess, body, func() error {
+					err := discovery.SendInput(r.Context(), sess.SocketPath, bytes.NewReader(body))
+					if err != nil {
+						log.Printf("input: %s: %v", sessionID, err)
+					}
+					return err
+				})
+				return
+			}
 			if err := discovery.SendInput(r.Context(), sess.SocketPath, bytes.NewReader(body)); err != nil {
 				log.Printf("input: %s: %v", sessionID, err)
 				writeError(w, http.StatusBadGateway, "runner_unreachable", err.Error())

@@ -222,6 +222,39 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
   peer session, which simplifies `matchSession` (the `host` parameter
   and the `--host`/`@suffix` reconciliation branch both go away).
 
+## Amendment (2026-07-06): `send --wait` composes send and wait
+
+`gmux send` gains a `--wait` behavior modifier (with `--timeout N`):
+deliver the input and block until the turn it triggers completes, with
+`gmux wait`'s exit codes (0 idle, 2 died, 3 timeout).
+
+This exists because the obvious composition `gmux send <id> … &&
+gmux wait <id>` is inherently racy: `wait`'s initial snapshot can
+observe the previous turn's idle state before the send-induced
+`Working=true` has propagated into gmuxd's store ([#218]). The fix is
+ordering — subscribe before delivering the input, then require a fresh
+working→idle transition — which only one actor can guarantee, so the
+two verbs must fuse for this use case. It lands as a flag, not a new
+top-level verb (`send-wait` would breach decision 5), and server-side
+(`POST …/input?wait=idle`), keeping idle-detection rules in gmuxd per
+ADR 0005 and the `wait` design in decision 13.
+
+Consequences for `send`'s grammar: to keep `send`'s trailing content
+fully verbatim (its whole point — arbitrary text, including tokens that
+start with a dash), the new flags are parsed **only before the session
+ref**. The ref is the first non-flag token; everything after it is
+literal, so `gmux send abc -v` still sends `-v` and no `--` guard is
+needed for dash-leading text. To wait, the flag precedes the id:
+`gmux send --wait abc 'do it' Enter`. A `--` before the ref is accepted
+as an explicit end-of-flags marker. This applies decision 9's
+verbatim-content rule (flags-then-`--`-then-verbatim, as in `gmux --
+<cmd>`) rather than parsing flags amongst the content, which would have
+taxed the common case with a guard. Under `--wait`, non-submitting
+input (no `\r`) is rejected — it would never start a turn, so the wait
+could only time out.
+
+[#218]: https://github.com/gmuxapp/gmux/issues/218
+
 ## Amendment (2026-07-06): `edit` joins the top-level namespace
 
 `gmux edit [file]` is added as a top-level verb. It cannot live under a

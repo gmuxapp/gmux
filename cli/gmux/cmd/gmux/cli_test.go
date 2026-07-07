@@ -128,6 +128,46 @@ func TestParseCLI(t *testing.T) {
 				if c.sendText != nil || len(c.sendKeys) != 0 {
 					t.Errorf("expected stdin form: text=%v keys=%v", c.sendText, c.sendKeys)
 				}
+				if c.sendWait {
+					t.Error("sendWait should default to false")
+				}
+			}},
+		{name: "send --wait with timeout", args: []string{"send", "--wait", "--timeout", "60", "abc", "do it", "Enter"}, wantMode: modeSend,
+			check: func(t *testing.T, c *command) {
+				if !c.sendWait || c.timeout != 60 {
+					t.Errorf("sendWait=%v timeout=%d", c.sendWait, c.timeout)
+				}
+				if c.ref != "abc" || c.sendText == nil || *c.sendText != "do it" ||
+					len(c.sendKeys) != 1 || c.sendKeys[0] != "Enter" {
+					t.Errorf("ref=%q text=%v keys=%v", c.ref, c.sendText, c.sendKeys)
+				}
+			}},
+		{name: "send --timeout=N form before ref", args: []string{"send", "--wait", "--timeout=30", "abc", "go", "Enter"}, wantMode: modeSend,
+			check: func(t *testing.T, c *command) {
+				if !c.sendWait || c.timeout != 30 {
+					t.Errorf("sendWait=%v timeout=%d", c.sendWait, c.timeout)
+				}
+			}},
+		{name: "send dash-leading text after ref is literal (no guard)", args: []string{"send", "abc", "-v"}, wantMode: modeSend,
+			check: func(t *testing.T, c *command) {
+				if c.sendText == nil || *c.sendText != "-v" {
+					t.Errorf("text = %v, want literal -v", c.sendText)
+				}
+			}},
+		{name: "send flag-looking text after ref is literal", args: []string{"send", "abc", "--wait"}, wantMode: modeSend,
+			check: func(t *testing.T, c *command) {
+				if c.sendWait {
+					t.Error("--wait after the ref must be literal text, not a flag")
+				}
+				if c.sendText == nil || *c.sendText != "--wait" {
+					t.Errorf("text = %v, want literal --wait", c.sendText)
+				}
+			}},
+		{name: "send -- guard before ref still works", args: []string{"send", "--", "abc", "hi"}, wantMode: modeSend,
+			check: func(t *testing.T, c *command) {
+				if c.ref != "abc" || c.sendText == nil || *c.sendText != "hi" {
+					t.Errorf("ref=%q text=%v", c.ref, c.sendText)
+				}
 			}},
 
 		{name: "send-keys tmux compat", args: []string{"send-keys", "-t", "abc", "C-c"}, wantMode: modeSendKeys,
@@ -220,6 +260,10 @@ func TestParseCLIErrors(t *testing.T) {
 		{"wait", "abc", "--for-text", "a", "--for-regex", "b"}, // mutually exclusive
 		{"wait", "abc", "--for-regex", "["},                    // invalid regex
 		{"send-keys", "C-c"},                                   // missing -t
+		{"send", "--timeout", "5", "abc", "x"},                 // --timeout without --wait
+		{"send", "--wait", "--timeout", "0", "abc", "x"},       // non-positive timeout
+		{"send", "--frob", "abc"},                              // unknown leading flag
+		{"send", "--wait"},                                     // missing id (only a flag given)
 		{"daemon"},                                             // missing subcommand
 		{"daemon", "frobnicate"},                               // unknown subcommand
 		{"ls", "stray"},                                        // ls takes no positional
