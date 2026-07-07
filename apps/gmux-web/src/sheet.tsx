@@ -131,10 +131,17 @@ export function CopyButton({ label, text, onClose }: {
   onClose: () => void
 }) {
   const copy = () => {
-    navigator.clipboard.writeText(text).then(
-      () => pushToast('info', 'Copied to clipboard'),
-      () => pushError('Copy failed'),
-    )
+    // The write can also throw synchronously (e.g. `navigator.clipboard`
+    // is undefined outside a secure context); either way the sheet still
+    // closes and the failure surfaces as a toast.
+    try {
+      navigator.clipboard.writeText(text).then(
+        () => pushToast('info', 'Copied to clipboard'),
+        () => pushError('Copy failed'),
+      )
+    } catch {
+      pushError('Copy failed')
+    }
     onClose()
   }
   return <SheetButton onActivate={copy}>{label}</SheetButton>
