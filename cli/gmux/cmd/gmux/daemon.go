@@ -153,12 +153,37 @@ func gmuxdHealthy(timeout time.Duration) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
+// registerOutcome classifies the result of a registration attempt so
+// callers can react differently to "gmuxd isn't ready yet" versus
+// "gmuxd will never accept this id."
+type registerOutcome int
+
+const (
+	// registerOK: gmuxd accepted the registration (HTTP 200).
+	registerOK registerOutcome = iota
+	// registerUnavailable: every attempt failed transiently — connection
+	// refused, timeout, or a 5xx while gmuxd was still starting. Retrying
+	// later (or a discovery-scan pickup) may still succeed, so the runner
+	// keeps serving.
+	registerUnavailable
+	// registerFatal: gmuxd answered with a client error (4xx) — a
+	// permanent rejection this id can never recover from, e.g. a
+	// malformed session id that fails the daemon's IsValidSessionID
+	// guard. Retrying is pointless; a headless runner in this state is
+	// an orphan and should exit rather than serve a session gmuxd will
+	// never track. See run.go's fatal-registration shutdown.
+	registerFatal
+)
+
+func (o registerOutcome) ok() bool { return o == registerOK }
+
 // registerWithGmuxd posts the session's registration to gmuxd and
-// returns true once gmuxd accepts it. Retries a handful of times to
-// cover the case where gmuxd is still starting up. Returns false if
-// every attempt fails: callers that care about registration outcome
-// (e.g. the detached (-d) handshake) treat false as "give up".
-func registerWithGmuxd(sessionID, socketPath string) bool {
+// reports the outcome. Transient failures (gmuxd still starting) are
+// retried a handful of times; a 4xx is fatal and returned immediately
+// without burning the retry budget. Callers that care about the
+// outcome (the detached (-d) handshake, the orphan-reap path) branch
+// on the returned registerOutcome.
+func registerWithGmuxd(sessionID, socketPath string) registerOutcome {
 	baseURL := gmuxdBaseURL()
 
 	payload, _ := json.Marshal(map[string]string{
@@ -176,12 +201,22 @@ func registerWithGmuxd(sessionID, socketPath string) bool {
 		if err != nil {
 			continue
 		}
+		status := resp.StatusCode
 		resp.Body.Close()
-		if resp.StatusCode == 200 {
-			return true
+		if status == http.StatusOK {
+			return registerOK
+		}
+		// A 4xx is a permanent verdict on this id — the daemon
+		// understood the request and refused it (invalid session id,
+		// malformed body). No amount of retrying changes the answer, so
+		// short-circuit instead of wasting the budget. 5xx (and any
+		// other status) stays in the transient bucket: gmuxd may still
+		// be coming up.
+		if status >= 400 && status < 500 {
+			return registerFatal
 		}
 	}
-	return false
+	return registerUnavailable
 }
 
 func deregisterFromGmuxd(sessionID string) {

@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -416,5 +417,47 @@ func TestScanDiscoversRunnersInPrimaryAndLegacyDirs(t *testing.T) {
 		if got.SocketPath != wantSock {
 			t.Errorf("%s: SocketPath = %q, want %q (must keep the dir it bound in)", id, got.SocketPath, wantSock)
 		}
+	}
+}
+
+// TestRegisterRejectsInvalidSessionID pins the fatal-registration
+// seam behind the convIndex-rehydrate resume bug: a runner that
+// binds a socket under an id that is not a well-formed sess-<hex>
+// (e.g. a rehydrated agent session keyed by its conversation UUID)
+// must be rejected with ErrInvalidSessionID, not silently accepted
+// and not confused with a transient gateway error. The runner keys
+// off this to exit rather than linger as an orphan.
+func TestRegisterRejectsInvalidSessionID(t *testing.T) {
+	sockDir := t.TempDir()
+	t.Setenv("GMUX_SOCKET_DIR", sockDir)
+
+	// The runner reports a bare UUID as its id — exactly what a
+	// convIndex-rehydrated agent session would carry.
+	const badID = "019e03b3-1111-2222-3333-444455556666"
+	sockPath := filepath.Join(sockDir, badID+".sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen %s: %v", sockPath, err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/meta", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(store.Session{ID: badID, Adapter: "pi", Alive: true})
+	})
+	srv := &http.Server{Handler: mux}
+	done := make(chan struct{})
+	go func() { _ = srv.Serve(ln); close(done) }()
+	t.Cleanup(func() { _ = srv.Close(); <-done })
+
+	sessions := store.New()
+	subs := NewSubscriptions(sessions)
+	t.Cleanup(func() { subs.UnsubscribeAll() })
+
+	err = Register(sessions, subs, sockPath, nil)
+	if !errors.Is(err, ErrInvalidSessionID) {
+		t.Fatalf("Register err = %v, want ErrInvalidSessionID", err)
+	}
+	if _, ok := sessions.Get(badID); ok {
+		t.Errorf("invalid-id session was added to the store; must be rejected")
 	}
 }

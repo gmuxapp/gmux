@@ -63,6 +63,27 @@ type runDirectives struct {
 	ParentSessionID string
 }
 
+// reapOnFatalRegistration reports whether a runner should tear itself
+// down because registration with gmuxd failed permanently.
+//
+// Only the combination of a fatal (4xx) verdict and a headless runner
+// qualifies:
+//
+//   - registerFatal means gmuxd understood the request and refused it
+//     for good (e.g. its IsValidSessionID guard rejected the id) —
+//     retrying or waiting changes nothing. registerUnavailable, by
+//     contrast, is a transient "gmuxd not ready" and must NOT reap: the
+//     runner keeps serving so a later discovery scan can pick it up.
+//   - !interactive means no local terminal is attached, so gmuxd is the
+//     only consumer; once gmuxd has permanently rejected it, the
+//     process is a pure orphan (the convIndex-rehydrate resume bug,
+//     where a session keyed by its conversation UUID could never
+//     register). An interactive runner is spared: the user's terminal
+//     is still usefully attached even if gmux never tracks the session.
+func reapOnFatalRegistration(outcome registerOutcome, interactive bool) bool {
+	return outcome == registerFatal && !interactive
+}
+
 // runSession launches a new managed session for the given command.
 //
 // When attach is true and stdin is a tty, the local terminal is wired
@@ -303,8 +324,12 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	regDone := make(chan struct{})
 	go func() {
 		defer close(regDone)
-		ok := registerWithGmuxd(sessionID, sockPath)
-		handshakeAck(sessionID, ok)
+		outcome := registerWithGmuxd(sessionID, sockPath)
+		handshakeAck(sessionID, outcome.ok())
+		if reapOnFatalRegistration(outcome, interactive) {
+			log.Printf("gmux: registration permanently rejected for %s; shutting down orphaned runner", sessionID)
+			srv.Shutdown()
+		}
 	}()
 
 	if interactive {

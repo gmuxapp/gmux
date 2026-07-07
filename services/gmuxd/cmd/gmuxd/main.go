@@ -1309,6 +1309,16 @@ func serve(stderr io.Writer) int {
 
 		log.Printf("register: %s at %s", req.SessionID, req.SocketPath)
 		if err := discovery.Register(sessions, subs, req.SocketPath, persistDead); err != nil {
+			// A malformed session id is a permanent rejection, not a
+			// gateway hiccup: answer 400 so the runner can tell "this id
+			// is hopeless, exit" from "gmuxd is unreachable, retry."
+			// Without this the runner retried, gave up, and lingered
+			// headless as an orphan (the convIndex-rehydrate resume bug).
+			if errors.Is(err, discovery.ErrInvalidSessionID) {
+				log.Printf("register: rejecting %s: %v", req.SessionID, err)
+				writeError(w, http.StatusBadRequest, "invalid_session_id", err.Error())
+				return
+			}
 			log.Printf("register: failed to query meta for %s: %v", req.SessionID, err)
 			writeError(w, http.StatusBadGateway, "runner_unreachable", err.Error())
 			return
