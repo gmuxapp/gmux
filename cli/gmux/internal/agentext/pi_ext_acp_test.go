@@ -58,7 +58,7 @@ func TestPiExtForwardsAssistantTextDeltas(t *testing.T) {
 		const handlers = {};
 		ext({ on: (ev, fn) => { handlers[ev] = fn; } });
 		const ctx = {};
-		handlers.message_start({ message: { role: "assistant", id: "msg-1" } }, ctx);
+		handlers.message_start({ message: { role: "assistant" } }, ctx);
 		handlers.message_update({ assistantMessageEvent: { type: "text_delta", delta: "Hel" } }, ctx);
 		handlers.message_update({ assistantMessageEvent: { type: "text_delta", delta: "lo" } }, ctx);
 		// a non-text stream event must be ignored
@@ -109,8 +109,17 @@ func TestPiExtForwardsAssistantTextDeltas(t *testing.T) {
 	if text != "Hello" {
 		t.Errorf("forwarded text = %q, want %q", text, "Hello")
 	}
-	// messageId propagated from pi's message.id
-	if id, _ := got[0]["messageId"].(string); id != "msg-1" {
-		t.Errorf("messageId = %q, want msg-1", id)
+	// pi's in-memory AssistantMessage has no id, so the extension mints a
+	// per-turn counter; the same id must tag the whole message's deltas.
+	startID, _ := got[0]["messageId"].(string)
+	if startID != "m1" {
+		t.Errorf("message_start messageId = %q, want m1", startID)
+	}
+	for _, ev := range got {
+		if ev["op"] == "chunk" {
+			if id, _ := ev["messageId"].(string); id != startID {
+				t.Errorf("chunk messageId = %q, want %q", id, startID)
+			}
+		}
 	}
 }

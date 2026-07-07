@@ -9,6 +9,9 @@
 // `agent_message_chunk` variant. Thinking, tool calls, prompt/cancel, and the
 // rest of ADR 0021 §7 are intentionally omitted; add them in later slices.
 //
+// The full wire contract (both channels) is documented in
+// docs/acp-conversation-stream.md.
+//
 // CONVENTION (flagged for review — ADR 0021 tracer): the wire framing is
 // JSON-RPC 2.0 objects over a WebSocket. Mirroring the PTY attach
 // (ADR 0004 snapshot-then-stream), the server pushes an unsolicited
@@ -61,9 +64,15 @@ func TextBlock(text string) ContentBlock {
 // Message is one turn in the conversation history snapshot: a role plus its
 // content blocks. Roles mirror pi/ACP: "user" and "assistant" (this slice
 // renders only these two; toolResult and others are dropped from the snapshot).
+//
+// MessageID is set only for the in-flight assistant tail in a session/load
+// snapshot: it carries the streaming id so a client that joins mid-turn keeps
+// appending subsequent session/update deltas to the same message instead of
+// starting a new one. Durable (JSONL) history messages leave it empty.
 type Message struct {
-	Role    string         `json:"role"`
-	Content []ContentBlock `json:"content"`
+	Role      string         `json:"role"`
+	MessageID string         `json:"messageId,omitempty"`
+	Content   []ContentBlock `json:"content"`
 }
 
 // LoadParams is the params of the first `session/load` frame: the full

@@ -55,20 +55,21 @@ describe('conversation store', () => {
     expect(messageText(msgs[1])).toBe('second')
   })
 
-  it('continues streaming after a snapshot that includes a partial tail', () => {
+  it('continues the same message when a mid-turn snapshot tail carries its messageId', () => {
     const s = createConversationStore()
-    // snapshot: prior user turn + a partial assistant tail (no id in snapshot)
+    // snapshot: prior user turn + the in-flight assistant tail, tagged with its
+    // streaming messageId (as the runner sends for a mid-turn joiner).
     s.applyFrame(
       loadFrame([
         { role: 'user', content: [{ type: 'text', text: 'q' }] },
-        { role: 'assistant', content: [{ type: 'text', text: 'par' }] },
+        { role: 'assistant', messageId: 'm9', content: [{ type: 'text', text: 'par' }] },
       ]),
     )
-    // a fresh assistant message with an id streams next
+    // subsequent deltas of the SAME message append rather than opening a new one
     s.applyFrame(chunkFrame('tial', 'm9'))
     const msgs = s.getMessages()
-    expect(msgs).toHaveLength(3)
-    expect(messageText(msgs[2])).toBe('tial')
+    expect(msgs).toHaveLength(2)
+    expect(messageText(msgs[1])).toBe('partial')
   })
 
   it('notifies subscribers once per burst (coalesced)', async () => {
