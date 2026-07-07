@@ -102,8 +102,7 @@ gmux is a full CLI, designed to compose into scripts and agent workflows:
 
 ```bash
 id=$(gmux -d -- pi)                     # launch detached, capture the id
-gmux send "$id" 'refactor the auth module' Enter
-gmux wait "$id" --timeout 600           # block until the agent goes idle
+gmux send --wait --timeout 600 "$id" 'refactor the auth module' Enter  # send, block until the turn ends
 gmux tail "$id" -n 50                   # read the plain-text tail
 ```
 

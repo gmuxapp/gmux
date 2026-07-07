@@ -141,7 +141,7 @@ The remote catches sessions in any clone on any machine. The path catches sessio
 
 ## Validation
 
-gmuxd validates the file on load. Invalid state is rejected with an error. Rules:
+gmuxd validates the file on load. A file that can't be parsed as JSON is a hard error, but individual items that fail the rules below are **dropped** on load (each logged) rather than rejecting the whole file — one hand-edited bad entry can't poison the roster and block every later mutation. The original bytes are snapshotted to `projects.json.bak` before the sanitized form is written back on the next save. Rules:
 
 - Every item must have a non-empty `slug` matching `^[a-z0-9]+(-[a-z0-9]+)*$`
 - No duplicate slugs among owned projects; no duplicate `peer`+`slug` pairs among references (an owned project and a peer reference may share a slug)
@@ -151,7 +151,7 @@ gmuxd validates the file on load. Invalid state is rejected with an error. Rules
 - `exact` is only valid on path rules
 - No duplicate normalized paths across items (nesting is allowed)
 
-All API mutations are validated the same way; an invalid mutation is rejected (4xx) and nothing is written.
+All API mutations are validated the same way, but here the whole mutation is rejected (4xx) and nothing is written — the drop-invalid-items repair applies only to what's already on disk at load time.
 
 ## Migration
 

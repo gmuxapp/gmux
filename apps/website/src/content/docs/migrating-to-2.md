@@ -64,7 +64,8 @@ Note the **inverted `send` semantics**: 1.x auto-appended a newline unless `--no
 
 - `gmux edit [file]` — managed editor sessions, usable as `$EDITOR`. Inside gmux sessions, `EDITOR`/`VISUAL` now default to `gmux edit` when your dotfiles don't set them — scripts that branch on `EDITOR` being empty inside sessions will see a value.
 - `gmux send-keys -t <id> …` — tmux-compatible key sending.
-- `gmux wait --timeout N` with exit codes `0` (idle) / `2` (died) / `3` (timeout).
+- `gmux wait --timeout N` with exit codes `0` (idle/matched) / `2` (died) / `3` (timeout). `gmux wait --for-text S` / `--for-regex P` wait until output appears instead of the idle signal, and work for shell sessions too.
+- `gmux send --wait [--timeout N]` fuses send-and-wait race-free (subscribes before delivering the input). Note `send`'s grammar: flags go **before** the id; everything after the id is verbatim, so `gmux send abc -v` sends a literal `-v` with no `--` guard needed.
 
 ---
 

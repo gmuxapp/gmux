@@ -49,6 +49,10 @@ Key names follow tmux: `Enter`, `Tab`, `Escape`, `Up`/`Down`/`Left`/`Right`,
 `C-c`, `C-d`, etc. For verbatim tmux compatibility there is also
 `gmux send-keys -t <id> <keys...>` (with `-l` for literal text).
 
+**Everything after the id is verbatim** — including dash-leading tokens, so
+`gmux send $id -v` sends a literal `-v` with no `--` guard needed. `send`'s own
+flags (`--wait`, `--timeout`) only work *before* the id.
+
 ## Sequential orchestration
 
 ```bash
@@ -91,8 +95,8 @@ done
 `gmux wait <id>` blocks until an **agent** session goes idle (turn finished) or
 the session exits, optionally bounded by `--timeout N`. Exit codes:
 
-- `0` agent reached idle (or session exited)
-- `2` session died before going idle
+- `0` agent reached idle
+- `2` session exited/died before going idle
 - `3` `--timeout` elapsed
 
 Plain **shell** commands don't emit an idle signal and are rejected, so run

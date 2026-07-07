@@ -116,7 +116,7 @@ gmux tail --raw a3f20187      # keep ANSI escapes (-e also works)
 It's a snapshot, not a stream — to watch a session live, attach to it or open
 it in the browser.
 
-### `gmux send <id> [text] [Key...]`
+### `gmux send [--wait [--timeout N]] <id> [text] [Key...]`
 
 Inject input into a running session as if typed at the keyboard. The text is
 sent literally; any trailing arguments that name keys (`Enter`, `C-c`,
@@ -134,6 +134,27 @@ echo "$body" | gmux send a3f20187 Enter         # pipe stdin, then submit
 When no text is given and stdin is a pipe, gmux reads stdin until EOF (capped
 at 1 MiB) and sends it — the natural shape for files and heredocs. Include a
 trailing `Enter` to submit piped input.
+
+**Everything after the session id is verbatim** — including tokens that start
+with a dash. `gmux send abc -v` sends the literal `-v`, and no `--` guard is
+needed for dash-leading text. The trade-off is that `send`'s own flags are only
+recognized *before* the id (the first non-flag token). A `--` before the id is
+accepted as an explicit end-of-flags marker.
+
+**`--wait`** fuses send-and-wait into one race-free step: deliver the input,
+then block until the turn it triggers completes, with the same exit codes as
+[`gmux wait`](#gmux-wait-id) (`0` idle, `2` died, `3` timeout). Bound it with
+`--timeout N`. Because gmuxd subscribes to the session's events *before*
+forwarding the bytes, it can't mistake the previous turn's idle state for the
+reply — unlike the racy `gmux send X Enter && gmux wait X` composition. The
+flags precede the id:
+
+```bash
+gmux send --wait a3f20187 'do the thing' Enter        # block until the reply lands
+gmux send --wait --timeout 600 a3f20187 'go' Enter    # ...or fail after 600s
+```
+
+Like `gmux wait`, `--wait` is agent-only and local-only for now.
 
 For verbatim tmux compatibility there's also `gmux send-keys -t <id> <keys...>`
 (all arguments are key names by default; `-l` sends them as literal text).
@@ -160,16 +181,29 @@ The idle signal is the same `Status.Working` flag the UI's spinner consumes,
 so `wait` returns the moment the agent emits its closing message. Exit codes
 (so scripts can branch on the outcome):
 
-- `0` — the agent reached idle
-- `2` — the session exited before becoming idle
+- `0` — the agent reached idle, or the output condition matched
+- `2` — the session exited before becoming idle / before its output matched
 - `3` — `--timeout` elapsed
 
-Plain **shell** sessions have no idle signal and are rejected with a clear
-error; to wait for a shell command, run it through the blocking piped form
-(`gmux -- make build < /dev/null`) instead. Idle wait is local-only for now
-(peer support is pending). Waiting on arbitrary output ("until this text
-appears") is planned as a server-side `wait` condition
-([#313](https://github.com/gmuxapp/gmux/issues/313)).
+**Output conditions.** Instead of the idle signal, wait until specific text
+appears in the session's output:
+
+```bash
+gmux wait a3f20187 --for-text 'BUILD OK'          # substring match
+gmux wait a3f20187 --for-regex 'error: \d+'       # Go regexp match
+```
+
+`--for-text` and `--for-regex` are mutually exclusive, and an invalid regexp
+is a usage error. The match runs **server-side** against gmuxd's on-disk
+scrollback (matched per rendered, ANSI-stripped line), so nothing scrolls past
+unseen between polls (loss is bounded by the scrollback cap, not a poll
+interval). Output conditions work for **every** adapter, shell sessions
+included — unlike the idle wait below.
+
+Plain **shell** sessions have no idle signal, so a plain `gmux wait` (no output
+condition) rejects them with a clear error; use `--for-text`/`--for-regex`, or
+run the command through the blocking piped form (`gmux -- make build <
+/dev/null`) instead. Idle wait is local-only for now (peer support is pending).
 
 ### `gmux kill <id>`
 
