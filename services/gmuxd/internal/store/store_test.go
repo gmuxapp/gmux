@@ -1616,3 +1616,88 @@ func TestLastActivityAt_UpsertRemotePreserves(t *testing.T) {
 		t.Fatalf("UpsertRemote alive→false should preserve peer-supplied timestamp (want %q, got %q)", wired, got2.LastActivityAt)
 	}
 }
+
+// TestBumpActivity_FreshensInteractiveSession is the regression test
+// for the "last activity N days ago" bug: an alive session that only
+// ever produces raw terminal output (no alive/unread/working/error
+// transition) never bumps via shouldBumpActivity, so its
+// LastActivityAt would stay frozen. BumpActivity is the path that
+// keeps it fresh.
+func TestBumpActivity_FreshensInteractiveSession(t *testing.T) {
+	s := New()
+	// A shell created "days ago", stamped once (e.g. its first unread
+	// edge) and then read, so it sits alive with a stale timestamp.
+	s.Upsert(Session{ID: "s1", Adapter: "shell", Alive: true})
+	stale := time.Now().UTC().Add(-72 * time.Hour).Format(time.RFC3339)
+	s.Update("s1", func(sess *Session) { sess.LastActivityAt = stale })
+
+	// Raw terminal output arrives — no transition, only BumpActivity.
+	s.BumpActivity("s1")
+
+	after, _ := s.Get("s1")
+	if after.LastActivityAt == stale {
+		t.Fatalf("BumpActivity should freshen stale LastActivityAt, still %q", after.LastActivityAt)
+	}
+	ts, err := time.Parse(time.RFC3339, after.LastActivityAt)
+	if err != nil {
+		t.Fatalf("LastActivityAt %q not RFC3339: %v", after.LastActivityAt, err)
+	}
+	if time.Since(ts) > time.Minute {
+		t.Fatalf("BumpActivity should stamp ~now, got %q", after.LastActivityAt)
+	}
+}
+
+// TestBumpActivity_ThrottledWithinInterval pins the coarse throttle:
+// a second bump inside activityBumpInterval is a no-op, so a busy
+// session doesn't re-broadcast/re-persist on every 2s activity tick.
+func TestBumpActivity_ThrottledWithinInterval(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "s1", Adapter: "shell", Alive: true})
+	s.BumpActivity("s1")
+	first, _ := s.Get("s1")
+	if first.LastActivityAt == "" {
+		t.Fatal("first BumpActivity on unstamped session should stamp")
+	}
+	s.BumpActivity("s1")
+	second, _ := s.Get("s1")
+	if second.LastActivityAt != first.LastActivityAt {
+		t.Fatalf("bump within interval should be a no-op (was %q, now %q)", first.LastActivityAt, second.LastActivityAt)
+	}
+}
+
+// TestBumpActivity_BroadcastsOnStamp pins that a real bump emits a
+// session-upsert so subscribers (and thereby the UI) observe the
+// refreshed timestamp, while a throttled no-op stays silent.
+func TestBumpActivity_BroadcastsOnStamp(t *testing.T) {
+	s := New()
+	stale := time.Now().UTC().Add(-72 * time.Hour).Format(time.RFC3339)
+	s.Upsert(Session{ID: "s1", Adapter: "shell", Alive: true, LastActivityAt: stale})
+
+	ch, cancel := s.Subscribe()
+	defer cancel()
+
+	s.BumpActivity("s1")
+	select {
+	case ev := <-ch:
+		if ev.Type != "session-upsert" || ev.ID != "s1" {
+			t.Fatalf("expected session-upsert for s1, got %+v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("BumpActivity on stale session should broadcast session-upsert")
+	}
+
+	// Second bump is throttled → no broadcast.
+	s.BumpActivity("s1")
+	select {
+	case ev := <-ch:
+		t.Fatalf("throttled BumpActivity should not broadcast, got %+v", ev)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestBumpActivity_UnknownSessionNoPanic pins that bumping a missing
+// session is a safe no-op (activity can race session removal).
+func TestBumpActivity_UnknownSessionNoPanic(t *testing.T) {
+	s := New()
+	s.BumpActivity("nope")
+}

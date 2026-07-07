@@ -322,8 +322,12 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		})
 
 	case "activity":
-		// Transient signal: terminal produced output with no attached clients.
-		// Forward to the store's subscribers without mutating state.
+		// Raw terminal output. Bump the persisted last-activity timestamp
+		// (coarsely throttled inside the store) so interactively-used
+		// sessions surface as recently active even when they trigger no
+		// alive/unread/status transition — then forward the transient
+		// signal to the store's subscribers for the live activity dot.
+		sub.store.BumpActivity(sessionID)
 		sub.store.Broadcast(store.Event{
 			Type: "session-activity",
 			ID:   sessionID,

@@ -52,6 +52,9 @@ type Session struct {
 	//   - unread: false → true  (new output the user hasn't seen)
 	//   - status.working: false → true  (adapter started a task)
 	//   - status.error: false → true  (status went into error)
+	//   - raw terminal output (via BumpActivity, coarsely throttled
+	//     to once per activityBumpInterval) — covers interactive use
+	//     that triggers none of the edges above.
 	//
 	// Not bumped on: new session creation (the first follow-up
 	// transition does it), title/cwd/slug/stamp changes, no-op status
@@ -387,6 +390,49 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 	s.mu.Unlock()
 	s.broadcastCommit(sess, removed, skip, unchanged)
 	return true
+}
+
+// activityBumpInterval is the coarse throttle for BumpActivity: raw
+// terminal output refreshes LastActivityAt at most once per interval
+// per session. The runner already throttles its "activity" SSE to one
+// per 2s; this second, coarser gate keeps a busy session from
+// broadcasting a full session-upsert (and re-persisting) every 2s
+// while still keeping "last activity" fresh to within a minute.
+const activityBumpInterval = 60 * time.Second
+
+// BumpActivity refreshes LastActivityAt to now for raw terminal
+// activity (PTY output), coarsely throttled by activityBumpInterval.
+//
+// It exists because shouldBumpActivity only fires on alive/unread/
+// working/error edges. An interactively-used session — a shell the
+// user is typing in, or an agent streaming output while its tab is
+// focused (so unread stays false) — produces none of those
+// transitions, so without this its LastActivityAt would stay frozen
+// at the first post-creation transition (often creation-ish time),
+// making an actively-used session read "last activity N days ago".
+//
+// Only locally-owned sessions reach this path (the discovery
+// subscriber calls it for runners this daemon owns). Peer activity is
+// relayed as a transient session-activity event and never bumps a
+// timestamp here, so a dead/peer session correctly freezes at its
+// last real activity.
+func (s *Store) BumpActivity(id string) {
+	now := time.Now().UTC()
+	s.mu.Lock()
+	prev, ok := s.sessions[id]
+	if !ok {
+		s.mu.Unlock()
+		return
+	}
+	if t, err := time.Parse(time.RFC3339, prev.LastActivityAt); err == nil && now.Sub(t) < activityBumpInterval {
+		s.mu.Unlock()
+		return
+	}
+	sess := prev
+	sess.LastActivityAt = now.Format(time.RFC3339)
+	removed, skip, unchanged := s.commitLocked(prev, true, &sess)
+	s.mu.Unlock()
+	s.broadcastCommit(sess, removed, skip, unchanged)
 }
 
 // GetTerminalSize returns the current terminal dimensions for a session.
