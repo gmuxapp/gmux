@@ -8,7 +8,9 @@ import { applyArmedModifiers } from './keyboard'
 import { isTouchDevice } from './touch'
 import { ReplayView } from './replay-view'
 import { TerminalView } from './terminal'
-import { ConversationView } from './conversation-view'
+// Lazy: the conversation panel pulls markdown-it + highlight.js (~104KB gzip),
+// and it's opt-in via ?conv, so keep it out of the main bundle until opened.
+const ConversationView = lazy(() => import('./conversation-view').then((m) => m.ConversationView))
 import { Sidebar } from './sidebar'
 import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'

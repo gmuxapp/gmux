@@ -10,18 +10,24 @@
  * consequential dependency+build decision that shouldn't be baked in silently
  * by the foundational tracer. So this slice ships a minimal native Preact
  * renderer over the same store, and defers the assistant-ui decision (compat
- * alias vs. a dedicated React island) to a follow-up. The store
- * (conversation.ts) is UI-framework-agnostic, so swapping the renderer later
- * touches only this file.
+ * alias vs. a dedicated React island) to when rich tool-call UIs land. The
+ * store (conversation.ts) is UI-framework-agnostic, so swapping the renderer
+ * later touches only this file.
+ *
+ * Slice #2 adds markdown rendering (assistant text + thinking) and a distinct,
+ * collapsible presentation for reasoning (`thinking` blocks). Markdown → HTML
+ * happens in markdown.ts, which escapes raw HTML and tolerates the incomplete
+ * markdown that arrives mid-stream.
  */
 import { useEffect, useState } from 'preact/hooks'
 import {
   type ConversationStore,
   type ConvMessage,
+  type ContentBlock,
   createConversationStore,
   connectConversation,
-  messageText,
 } from './conversation'
+import { renderMarkdown } from './markdown'
 
 interface Props {
   sessionId: string
@@ -65,7 +71,33 @@ function MessageRow({ message }: { message: ConvMessage }) {
   return (
     <div class={`conversation-message conversation-message--${message.role}`} data-role={message.role}>
       <span class="conversation-role">{message.role}</span>
-      <span class="conversation-text">{messageText(message)}</span>
+      <div class="conversation-content">
+        {message.content.map((block, i) => (
+          <ContentBlockView key={i} block={block} />
+        ))}
+      </div>
     </div>
+  )
+}
+
+// A single content block. Text renders as markdown; thinking renders as a
+// dimmed, collapsible markdown block so reasoning is visually distinct from
+// the answer. Both go through the same defensive markdown renderer.
+function ContentBlockView({ block }: { block: ContentBlock }) {
+  const html = renderMarkdown(block.text ?? '')
+  if (block.type === 'thinking') {
+    return (
+      <details class="conversation-thinking" data-block="thinking">
+        <summary class="conversation-thinking-label">Thinking</summary>
+        <div class="conversation-markdown" dangerouslySetInnerHTML={{ __html: html }} />
+      </details>
+    )
+  }
+  return (
+    <div
+      class="conversation-markdown conversation-text"
+      data-block="text"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
   )
 }

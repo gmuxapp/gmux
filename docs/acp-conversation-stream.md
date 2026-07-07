@@ -1,6 +1,6 @@
 # ACP conversation stream: runner-synthesized `session/update`
 
-**Status:** Tracer (streaming assistant text only) · **Related:** ADR 0021, ADR 0004, ADR 0011, ADR 0016, `cli/gmux/internal/acp`, `cli/gmux/internal/ptyserver`
+**Status:** Streaming assistant text + thinking · **Related:** ADR 0021, ADR 0004, ADR 0011, ADR 0016, `cli/gmux/internal/acp`, `cli/gmux/internal/ptyserver`
 
 gmux adopts a minimal subset of the Agent Client Protocol (ACP) as its internal
 normalized conversation schema (ADR 0021). The runner produces it; one frontend
@@ -8,9 +8,11 @@ client consumes it. For terminal pi the runner **synthesizes** the stream from
 the read-only pi extension; a future ACP-native adapter re-publishes the same
 shapes from a real agent. Everything above the runner is adapter-agnostic.
 
-This document is the wire contract for the **first tracer slice: streaming
-assistant text**. Later slices extend it (thinking, tool calls, prompt/cancel);
-they add variants without breaking these shapes.
+This document is the wire contract for **streaming assistant text and
+thinking**. Slice #2 added the `agent_thought_chunk` variant (reasoning)
+additively, alongside the tracer's `agent_message_chunk` (assistant text).
+Later slices extend it (tool calls, prompt/cancel); they add variants without
+breaking these shapes.
 
 ## Two channels
 
@@ -24,16 +26,20 @@ chain (independent fire-and-forget requests can complete out of order and
 corrupt the reassembled text).
 
 ```jsonc
-{ "op": "message_start", "messageId": "m1" }            // assistant message begins
-{ "op": "chunk", "messageId": "m1", "delta": "Hel" }     // one token-level text delta
-{ "op": "message_end", "messageId": "m1" }               // pi finalized it to JSONL
+{ "op": "message_start", "messageId": "m1" }                  // assistant message begins
+{ "op": "thinking_chunk", "messageId": "m1", "delta": "Hm" }  // one reasoning delta
+{ "op": "chunk", "messageId": "m1", "delta": "Hel" }          // one visible-text delta
+{ "op": "message_end", "messageId": "m1" }                    // pi finalized it to JSONL
 ```
 
 `messageId` is a per-turn monotonic counter minted by the extension (pi's
 in-memory `AssistantMessage` has no id). It correlates the deltas of one
-message. Sourced from pi's `message_start` / `message_update`
-(`assistantMessageEvent.type === "text_delta"`) / `message_end` events; only
-`text_delta` is forwarded this slice.
+message; thinking and text deltas share it and keep their arrival order.
+Sourced from pi's `message_start` / `message_update` / `message_end` events.
+On `message_update` the extension inspects `assistantMessageEvent.type`:
+`text_delta` → `chunk`, `thinking_delta` → `thinking_chunk` (both carry the
+incremental text in `.delta`, verified against pi-ai's `AssistantMessageEvent`
+union, pi 0.80.3). Tool-call deltas are a later slice.
 
 ### 2. Runner → client stream (`/acp` WebSocket, snapshot-then-stream)
 
@@ -52,12 +58,29 @@ messages (the write path is keystrokes via `/input`, per ADR 0021 §6).
     { "role": "assistant", "messageId": "m1", "content": [{ "type": "text", "text": "Hel" }] }
   ] } }
 
-// Live frames — token deltas.
+// Live frames — token deltas. Assistant text:
 { "jsonrpc": "2.0", "method": "session/update",
   "params": { "sessionId": "...", "update": {
     "sessionUpdate": "agent_message_chunk", "messageId": "m1",
     "content": { "type": "text", "text": "lo" } } } }
+
+// ...and reasoning (rendered distinctly, e.g. a dimmed/collapsible block):
+{ "jsonrpc": "2.0", "method": "session/update",
+  "params": { "sessionId": "...", "update": {
+    "sessionUpdate": "agent_thought_chunk", "messageId": "m1",
+    "content": { "type": "thinking", "text": "Hmm" } } } }
 ```
+
+Within one assistant message, thinking and text accumulate into **separate,
+ordered content blocks** (`type: "thinking"` / `"text"`). The runner's
+unwritten tail and the `session/load` snapshot preserve this ordering; a
+durable-history message reconstructs it from the JSONL `thinking` / `text`
+content blocks.
+
+Assistant text and thinking are rendered as **markdown with fenced-code syntax
+highlighting** by the one frontend client (see `apps/gmux-web/src/markdown.ts`).
+Rendering escapes raw HTML and tolerates the incomplete markdown that arrives
+mid-stream.
 
 ## Content ownership (ADR 0011 / 0016 intact)
 
@@ -78,8 +101,8 @@ coalesces deltas into one render per burst.
 
 ## Known limits (this slice)
 
-- Only `agent_message_chunk` (assistant text). Thinking, tool calls,
-  `session/prompt`, `session/cancel` are later slices.
+- `agent_message_chunk` (assistant text) and `agent_thought_chunk` (thinking).
+  Tool calls, `session/prompt`, `session/cancel` are later slices.
 - **Stitch-across-flush window:** between `message_end` (tail forgotten) and pi
   actually appending to JSONL, a client connecting in that gap can miss the
   just-finished message from its snapshot. Full parity hardening is a later

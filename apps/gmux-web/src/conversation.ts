@@ -7,7 +7,12 @@
  *
  *   - `session/load`   — the history snapshot, sent unsolicited as the first
  *                        frame (mirrors the PTY renderScreen snapshot).
- *   - `session/update` — live `agent_message_chunk` token deltas.
+ *   - `session/update` — live `agent_message_chunk` (assistant text) and
+ *                        `agent_thought_chunk` (reasoning) token deltas.
+ *
+ * Text and thinking deltas of one message accumulate into separate, ordered
+ * content blocks (type `text` / `thinking`), so a renderer can present
+ * reasoning distinctly while preserving interleaving order.
  *
  * Tokens are chatty by design (per-token on the wire); this store COALESCES
  * them: deltas with the same messageId append to one assistant message, and
@@ -95,7 +100,14 @@ export function createConversationStore(): ConversationStore {
 
   function applyUpdate(p: UpdateParams) {
     const u = p.update
-    if (u.sessionUpdate !== 'agent_message_chunk') return // only text this slice
+    // Assistant text and reasoning accumulate into blocks of the matching type.
+    const blockType =
+      u.sessionUpdate === 'agent_message_chunk'
+        ? 'text'
+        : u.sessionUpdate === 'agent_thought_chunk'
+          ? 'thinking'
+          : null
+    if (!blockType) return // tool_call etc. are later slices
     const delta = u.content?.text ?? ''
     if (!delta && !u.messageId) return
 
@@ -108,17 +120,19 @@ export function createConversationStore(): ConversationStore {
       (u.messageId ? last.messageId === u.messageId : last.messageId === undefined)
 
     if (matches) {
+      // Coalesce into the trailing block only if it's the same type, so
+      // interleaved thinking/text keep their order as separate blocks.
       const block = last.content[last.content.length - 1]
-      if (block && block.type === 'text') {
+      if (block && block.type === blockType) {
         block.text = (block.text ?? '') + delta
       } else {
-        last.content.push({ type: 'text', text: delta })
+        last.content.push({ type: blockType, text: delta })
       }
     } else {
       messages.push({
         role: 'assistant',
         messageId: u.messageId,
-        content: [{ type: 'text', text: delta }],
+        content: [{ type: blockType, text: delta }],
       })
     }
     notify()

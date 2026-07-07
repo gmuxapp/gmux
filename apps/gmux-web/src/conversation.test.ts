@@ -16,6 +16,15 @@ const chunkFrame = (delta: string, messageId?: string) => ({
   },
 })
 
+const thoughtFrame = (delta: string, messageId?: string) => ({
+  jsonrpc: '2.0',
+  method: 'session/update',
+  params: {
+    sessionId: 's1',
+    update: { sessionUpdate: 'agent_thought_chunk', messageId, content: { type: 'thinking', text: delta } },
+  },
+})
+
 // flush the coalesced microtask notification
 const tick = () => new Promise((r) => queueMicrotask(() => r(undefined)))
 
@@ -83,7 +92,23 @@ describe('conversation store', () => {
     expect(count).toBe(1)
   })
 
-  it('ignores non-text updates and malformed frames', () => {
+  it('accumulates thinking deltas into a distinct thinking block, then text', () => {
+    const s = createConversationStore()
+    s.applyFrame(thoughtFrame('reason', 'm1'))
+    s.applyFrame(thoughtFrame('ing', 'm1'))
+    s.applyFrame(chunkFrame('answer', 'm1'))
+    const msgs = s.getMessages()
+    expect(msgs).toHaveLength(1)
+    // one message, two ordered blocks: thinking then text
+    expect(msgs[0].content).toEqual([
+      { type: 'thinking', text: 'reasoning' },
+      { type: 'text', text: 'answer' },
+    ])
+    // messageText surfaces only visible text, not reasoning
+    expect(messageText(msgs[0])).toBe('answer')
+  })
+
+  it('ignores tool_call updates and malformed frames', () => {
     const s = createConversationStore()
     s.applyFrame({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'tool_call' } } })
     s.applyFrame(null)

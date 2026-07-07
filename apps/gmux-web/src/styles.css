@@ -3423,7 +3423,6 @@ body {
 }
 .conversation-message {
   margin-bottom: 12px;
-  white-space: pre-wrap;
   word-break: break-word;
 }
 .conversation-role {
@@ -3436,4 +3435,102 @@ body {
 }
 .conversation-message--assistant .conversation-role {
   color: var(--accent, #6ea8fe);
+}
+
+/* Slice #2: markdown-rendered content + distinct thinking blocks. */
+.conversation-markdown > *:first-child {
+  margin-top: 0;
+}
+.conversation-markdown > *:last-child {
+  margin-bottom: 0;
+}
+.conversation-markdown p {
+  margin: 0 0 8px;
+}
+.conversation-markdown pre {
+  background: var(--bg-elevated, #1b1f26);
+  border: 1px solid var(--border, #2a2f37);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.conversation-markdown :not(pre) > code {
+  background: var(--bg-elevated, #1b1f26);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 0.92em;
+}
+.conversation-markdown pre code {
+  padding: 0;
+  background: none;
+}
+.conversation-markdown a {
+  color: var(--accent, #6ea8fe);
+}
+.conversation-markdown ul,
+.conversation-markdown ol {
+  margin: 0 0 8px;
+  padding-left: 1.4em;
+}
+.conversation-markdown blockquote {
+  margin: 0 0 8px;
+  padding-left: 10px;
+  border-left: 3px solid var(--border, #2a2f37);
+  color: var(--fg-muted, #7a828e);
+}
+
+.conversation-thinking {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border, #2a2f37);
+  background: color-mix(in srgb, var(--bg-elevated, #1b1f26) 60%, transparent);
+  border-radius: 4px;
+  color: var(--fg-muted, #7a828e);
+  font-size: 13px;
+}
+.conversation-thinking-label {
+  cursor: pointer;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted, #7a828e);
+  user-select: none;
+}
+.conversation-thinking[open] .conversation-thinking-label {
+  margin-bottom: 6px;
+}
+
+/* highlight.js token colors (minimal dark palette, theme-var driven). */
+.conversation-markdown .hljs-keyword,
+.conversation-markdown .hljs-selector-tag,
+.conversation-markdown .hljs-built_in {
+  color: #c586c0;
+}
+.conversation-markdown .hljs-string,
+.conversation-markdown .hljs-attr {
+  color: #ce9178;
+}
+.conversation-markdown .hljs-number,
+.conversation-markdown .hljs-literal {
+  color: #b5cea8;
+}
+.conversation-markdown .hljs-comment {
+  color: #6a9955;
+  font-style: italic;
+}
+.conversation-markdown .hljs-function .hljs-title,
+.conversation-markdown .hljs-title,
+.conversation-markdown .hljs-section {
+  color: #dcdcaa;
+}
+.conversation-markdown .hljs-type,
+.conversation-markdown .hljs-class .hljs-title {
+  color: #4ec9b0;
+}
+.conversation-markdown .hljs-variable,
+.conversation-markdown .hljs-name,
+.conversation-markdown .hljs-attribute {
+  color: #9cdcfe;
 }
