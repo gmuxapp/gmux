@@ -7,6 +7,7 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -22,6 +23,17 @@ import (
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
+
+// ErrInvalidSessionID reports that a runner registered under an id that
+// fails paths.IsValidSessionID. It is a permanent verdict, not a
+// transient gateway hiccup: the id can never be accepted (it would be
+// unsafe as a path segment under SessionsDir), so callers surface it as
+// a 4xx rather than a 502, letting the runner distinguish "gmuxd will
+// never accept me" (exit) from "gmuxd is unreachable" (retry). This is
+// the seam the orphaned-resume bug turned up: a convIndex-rehydrated
+// agent session is keyed by its conversation UUID, which is not a
+// sess-<hex> id, so its resume runner used to retry-then-linger forever.
+var ErrInvalidSessionID = errors.New("register: invalid session id")
 
 // ExpectedRunnerHash is the sha256 hash of the gmux binary that gmuxd
 // would launch for new sessions. Set by main at startup. Exposed via
@@ -250,7 +262,7 @@ func Register(sessions *store.Store, subs *Subscriptions, socketPath string, onD
 	// anything that isn't a well-formed sess-<hex> ID so a crafted
 	// socket_path cannot steer writes outside the sessions dir.
 	if !paths.IsValidSessionID(newSess.ID) {
-		return fmt.Errorf("register: invalid session id %q from %s", newSess.ID, socketPath)
+		return fmt.Errorf("%w %q from %s", ErrInvalidSessionID, newSess.ID, socketPath)
 	}
 
 	if existing, ok := sessions.Get(newSess.ID); ok {

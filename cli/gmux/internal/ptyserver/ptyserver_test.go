@@ -1707,3 +1707,52 @@ func TestPutSlugValidation(t *testing.T) {
 		t.Errorf("put unslugifiable = %d, want 400", code)
 	}
 }
+
+// TestShutdownIdempotent guards the sync.Once added to Shutdown: the
+// registration-reap path and a signal handler can now both call
+// Shutdown concurrently, so a second (or concurrent) call must not
+// panic on a double listener/ptmx close or a re-closed screen.
+func TestShutdownIdempotent(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	// A short-lived child keeps the Done assertion robust: Shutdown
+	// closes the PTY master to SIGHUP the child, but delivery races the
+	// child's controlling-terminal setup — calling Shutdown microseconds
+	// after New (as this test does) can land before that, so the SIGHUP
+	// is missed. A 1s command means the child self-exits well within the
+	// timeout even in that case; we're asserting Shutdown doesn't
+	// deadlock, not that it kills instantly.
+	srv, err := New(Config{
+		Command:    []string{"sleep", "1"},
+		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
+		SocketPath: sockPath,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	// Concurrent shutdowns — the exact race the sync.Once defends. None
+	// may panic (double listener/ptmx close, re-closed screen, double
+	// drain-join) and all must return (no deadlock in the once'd body).
+	const n = 8
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			srv.Shutdown()
+		}()
+	}
+	wg.Wait()
+
+	// Done must fire: either the SIGHUP took, or the child ran to
+	// completion. Generous timeout so this can't flake under CI load.
+	select {
+	case <-srv.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout: Done not closed after Shutdown")
+	}
+
+	// A further call after the child has exited must also be safe.
+	srv.Shutdown()
+}

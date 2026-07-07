@@ -193,6 +193,8 @@ type Server struct {
 	adapter         adapter.Adapter
 	state           *session.State
 
+	shutdownOnce sync.Once
+
 	mu             sync.Mutex
 	clients        map[*wsClient]struct{}
 	localOut       io.Writer      // optional local terminal output sink
@@ -482,22 +484,27 @@ func (s *Server) Resize(cols, rows uint16) {
 
 // Shutdown closes the listener and all connections.
 func (s *Server) Shutdown() {
-	s.listener.Close()
-	os.Remove(s.sockPath)
+	// Idempotent: Shutdown can now be invoked from more than one
+	// goroutine — a signal handler and the registration goroutine's
+	// fatal-rejection reap can race — so the whole teardown runs once.
+	s.shutdownOnce.Do(func() {
+		s.listener.Close()
+		os.Remove(s.sockPath)
 
-	s.mu.Lock()
-	// Close ptmx and mark it closed under mu. pty.Setsize (setPtySize) calls
-	// (*os.File).Fd(), which races (*os.File).Close(); serializing both under
-	// mu, plus the ptmxClosed guard, keeps resize/shrink from touching the fd
-	// once Shutdown has closed it. (Read/Write go through the reference-counted
-	// poll.FD and are already safe against Close.)
-	s.ptmxClosed = true
-	s.ptmx.Close()
-	stopScreenDrain(s.screen, s.screenDrainDone) // unblocks + joins the DSR drain goroutine, then closes
-	for c := range s.clients {
-		c.cancel()
-	}
-	s.mu.Unlock()
+		s.mu.Lock()
+		// Close ptmx and mark it closed under mu. pty.Setsize (setPtySize) calls
+		// (*os.File).Fd(), which races (*os.File).Close(); serializing both under
+		// mu, plus the ptmxClosed guard, keeps resize/shrink from touching the fd
+		// once Shutdown has closed it. (Read/Write go through the reference-counted
+		// poll.FD and are already safe against Close.)
+		s.ptmxClosed = true
+		s.ptmx.Close()
+		stopScreenDrain(s.screen, s.screenDrainDone) // unblocks + joins the DSR drain goroutine, then closes
+		for c := range s.clients {
+			c.cancel()
+		}
+		s.mu.Unlock()
+	})
 }
 
 // setPtySize applies a window size to the PTY unless Shutdown has already closed
