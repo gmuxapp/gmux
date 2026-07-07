@@ -500,6 +500,8 @@ type Server struct {
 	screenPending  []byte         // raw PTY data not yet fed to screen (guarded by mu)
 	lastClientLeft time.Time      // when the last WS client disconnected (guarded by mu)
 
+	acp *acpHub // ACP conversation stream synthesizer (ADR 0021)
+
 	done    chan struct{} // closed when child exits
 	ptyDone chan struct{} // closed when readPTY finishes draining
 	err     error         // child exit error
@@ -680,6 +682,12 @@ func New(cfg Config) (*Server, error) {
 	// net.Listener; those servers own no pathname and never unlink one.
 	if bs, ok := listener.(*BoundSocket); ok {
 		s.bound = bs
+	}
+	// ACP conversation hub (ADR 0021): synthesizes session/load + session/update
+	// from the read-only pi extension's token deltas. sessionID drives the
+	// sessionId field on every ACP frame.
+	if cfg.State != nil {
+		s.acp = newACPHub(cfg.State.ID)
 	}
 
 	// The callback fires under s.mu (held during drainScreenLocked → screen.Write).
@@ -976,6 +984,11 @@ func (s *Server) serve() {
 	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("POST /kill", s.handleKill)
 	mux.HandleFunc("POST /reap", s.handleReap)
+
+	// ACP conversation stream (ADR 0021): one-way ingest from the read-only pi
+	// extension, and the snapshot-then-stream WebSocket the frontend attaches to.
+	mux.HandleFunc("POST /acp/ingest", s.handleACPIngest)
+	mux.HandleFunc("/acp", s.handleACP)
 
 	// WebSocket terminal attach (fallback for / with Upgrade header)
 	mux.HandleFunc("/", s.handleWS)

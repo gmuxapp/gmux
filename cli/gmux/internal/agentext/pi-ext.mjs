@@ -31,6 +31,16 @@
 // every downstream consumer pairs facts by it and can never pair a running
 // turn's trigger with the previous turn's answer.
 //
+// Events posted to POST /acp/ingest (ADR 0021 streaming conversation schema):
+//   { op: "message_start", messageId }        on assistant message_start
+//   { op: "chunk", messageId, delta }         per assistant text token
+//   { op: "message_end" }                     on assistant message_end
+//
+// The /acp/ingest channel is the token-level assistant-text feed the runner
+// turns into ACP session/update notifications. It is one-way and read-only
+// (the extension only observes; the write path is keystrokes, per ADR 0021 §6)
+// and, like /hook/event, fire-and-forget.
+//
 // `name`/`title` is pi's session name when it has one; until pi titles the
 // conversation we fall back to its first user message (truncated), so a working
 // session is identifiable by what it's about rather than a bare cwd. This
@@ -249,6 +259,38 @@ export default function (pi) {
     }
   });
 
+  // --- streaming assistant text (ADR 0021) --------------------------------
+  // Forward token-level assistant text to the runner's ACP ingest channel.
+  // message_start/message_end bound the assistant message; message_update
+  // carries the token-by-token stream via event.assistantMessageEvent, whose
+  // text_delta variant holds the incremental text in `.delta`. We forward only
+  // assistant text this slice (thinking/tool activity are later slices).
+  //
+  // messageId: pi's message_start carries event.message with an id; we reuse it
+  // to correlate the deltas of one message. Fall back to a monotonic counter
+  // if pi ever omits it.
+  let acpMsgId = "";
+  let acpMsgSeq = 0;
+
+  pi.on("message_start", (ev) => {
+    if (ev?.message?.role !== "assistant") return;
+    acpMsgId = String(ev.message.id ?? `m${++acpMsgSeq}`);
+    postACP(sock, { op: "message_start", messageId: acpMsgId });
+  });
+
+  pi.on("message_update", (ev) => {
+    const ame = ev?.assistantMessageEvent;
+    if (!ame || ame.type !== "text_delta" || !ame.delta) return;
+    if (!acpMsgId) acpMsgId = `m${++acpMsgSeq}`;
+    postACP(sock, { op: "chunk", messageId: acpMsgId, delta: ame.delta });
+  });
+
+  pi.on("message_end", (ev) => {
+    if (ev?.message?.role !== "assistant") return;
+    postACP(sock, { op: "message_end", messageId: acpMsgId });
+    acpMsgId = "";
+  });
+
   pi.on("agent_end", (ev, ctx) => {
     const msgs = ev.messages ?? [];
     settledMessages = msgs;
@@ -444,30 +486,17 @@ function truncateTitle(s) {
 }
 
 // --- delivery ---------------------------------------------------------------
-// Hook events are ORDER-SENSITIVE: the runner closes a turn only while one is
-// open (polarity, not identity), so a turn end that overtakes a later turn
-// start would close the wrong turn. Independent fire-and-forget HTTP requests
-// give no ordering guarantee, so delivery is serialized here: every post is
-// appended to a promise chain and request N+1 is not issued until N has
-// settled.
-//
-// Non-negotiables kept intact:
-//   - pi's own handlers are never delayed — post() returns synchronously and
-//     the chain advances on the microtask queue;
-//   - the chain can never block permanently: the request's "close" event (which
-//     follows a response, a transport error and a destroyed socket alike) or the
-//     overall deadline settles each link exactly once;
-//   - transport failures never surface into pi.
+// Hook and conversation events are order-sensitive. Keep one chain per channel
+// so token deltas cannot overtake one another without coupling hook delivery to
+// the higher-volume conversation stream.
 const POST_TIMEOUT_MS = 2000;
 const DELIVERY_NOTICE_INTERVAL_MS = 5000;
 
 let deliveryChain = Promise.resolve();
+let acpChain = Promise.resolve();
 let deliveryNotifier;
 let lastDeliveryNotice = 0;
 
-// Capture pi's UI notifier without retaining or depending on the rest of an
-// event context. Notification itself is best-effort: reporting a reporting
-// failure must never become another failure path into pi.
 function rememberNotifier(ctx) {
   if (typeof ctx?.ui?.notify !== "function") return;
   deliveryNotifier = (message) => ctx.ui.notify(message, "warning");
@@ -487,7 +516,11 @@ function notifyDeliveryFailure(error) {
   }
 }
 
-function sendOne(socketPath, event) {
+function postACP(socketPath, event) {
+  acpChain = acpChain.then(() => sendOne(socketPath, event, "/acp/ingest", false)).catch(() => {});
+}
+
+function sendOne(socketPath, event, path = "/hook/event", notify = true) {
   return new Promise((resolve) => {
     let done = false;
     const settle = () => {
@@ -504,7 +537,7 @@ function sendOne(socketPath, event) {
       const body = Buffer.from(JSON.stringify(event), "utf8");
       const req = http.request({
         socketPath,
-        path: "/hook/event",
+        path,
         method: "POST",
         timeout: POST_TIMEOUT_MS,
         headers: { "content-type": "application/json", "content-length": body.length },
@@ -513,7 +546,7 @@ function sendOne(socketPath, event) {
         if (res.statusCode < 200 || res.statusCode >= 300) {
           const error = new Error(`hook endpoint answered HTTP ${res.statusCode}`);
           error.code = `HTTP_${res.statusCode}`;
-          notifyDeliveryFailure(error);
+          if (notify) notifyDeliveryFailure(error);
         }
         res.resume(); // drain so the socket can close
       });
@@ -522,7 +555,7 @@ function sendOne(socketPath, event) {
       // to uncaughtException even though "close" follows. Consume it, notify
       // best-effort, and settle this delivery link so later hooks still run.
       req.on("error", (error) => {
-        notifyDeliveryFailure(error);
+        if (notify) notifyDeliveryFailure(error);
         settle();
       });
       req.on("close", settle);

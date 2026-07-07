@@ -155,6 +155,74 @@ func (p *Proxy) Handler() http.HandlerFunc {
 	}
 }
 
+// ACPHandler returns the http.HandlerFunc for /acp/{sessionID}: the ACP
+// conversation stream (ADR 0021). Unlike the PTY proxy it is a transparent
+// bidirectional pipe with no resize interception — it carries JSON-RPC 2.0
+// text frames (session/load snapshot then session/update deltas). Local
+// sessions only for this tracer slice; peer proxying is a follow-up.
+func (p *Proxy) ACPHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sessionID := r.PathValue("sessionID")
+		if sessionID == "" {
+			http.Error(w, "missing session_id", http.StatusBadRequest)
+			return
+		}
+		sockPath, err := p.resolve(sessionID)
+		if err != nil {
+			log.Printf("wsproxy: acp resolve %s: %v", sessionID, err)
+			http.Error(w, fmt.Sprintf("session not found: %v", err), http.StatusNotFound)
+			return
+		}
+		clientConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+			InsecureSkipVerify: true,
+		})
+		if err != nil {
+			log.Printf("wsproxy: acp accept: %v", err)
+			return
+		}
+		ctx := r.Context()
+		backendConn, _, err := websocket.Dial(ctx, "ws://localhost/acp", &websocket.DialOptions{
+			HTTPClient: &http.Client{
+				Transport: &http.Transport{
+					DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+						return net.Dial("unix", sockPath)
+					},
+				},
+			},
+		})
+		if err != nil {
+			log.Printf("wsproxy: acp dial backend %s: %v", sockPath, err)
+			clientConn.Close(websocket.StatusInternalError, "backend unavailable")
+			return
+		}
+		clientConn.SetReadLimit(256 * 1024)
+		backendConn.SetReadLimit(4 * 1024 * 1024) // session/load snapshot can be large
+
+		proxyCtx, proxyCancel := context.WithCancel(ctx)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); defer proxyCancel(); pipeWS(proxyCtx, backendConn, clientConn) }()
+		go func() { defer wg.Done(); defer proxyCancel(); pipeWS(proxyCtx, clientConn, backendConn) }()
+		wg.Wait()
+
+		clientConn.Close(websocket.StatusNormalClosure, "")
+		backendConn.Close(websocket.StatusNormalClosure, "")
+	}
+}
+
+// pipeWS forwards every frame from src to dst until either side errors.
+func pipeWS(ctx context.Context, src, dst *websocket.Conn) {
+	for {
+		typ, data, err := src.Read(ctx)
+		if err != nil {
+			return
+		}
+		if err := dst.Write(ctx, typ, data); err != nil {
+			return
+		}
+	}
+}
+
 // proxyClientToBackend forwards all client messages to the backend.
 // Resize messages are tagged with source=web_client before forwarding.
 func (p *Proxy) proxyClientToBackend(ctx context.Context, client, backend *websocket.Conn) {

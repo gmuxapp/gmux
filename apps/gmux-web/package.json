@@ -30,6 +30,7 @@
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.2",
+    "preact-render-to-string": "^6.6.6",
     "typescript": "^5.8.2",
     "vite": "^6.2.0",
     "vitest": "^3.0.7"
