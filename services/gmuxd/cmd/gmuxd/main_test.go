@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -673,4 +674,96 @@ func TestBuildLaunchArgs(t *testing.T) {
 			t.Errorf("got %v, want %v", got, want)
 		}
 	})
+}
+
+// sendSSE must surface write errors so the events handler can treat
+// them as a client disconnect and tear the subscriber down (#243).
+func TestSendSSEPropagatesWriteError(t *testing.T) {
+	if err := sendSSE(failWriter{}, "snapshot.sessions", map[string]int{"a": 1}); err == nil {
+		t.Fatal("expected write error to propagate")
+	}
+	var buf bytes.Buffer
+	if err := sendSSE(&buf, "snapshot.sessions", map[string]int{"a": 1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "event: snapshot.sessions\ndata: {\"a\":1}\n\n"
+	if buf.String() != want {
+		t.Errorf("got %q, want %q", buf.String(), want)
+	}
+	// A marshal failure skips the frame; it is a payload bug, not a
+	// connection problem, so no error is returned.
+	if err := sendSSE(failWriter{}, "x", make(chan int)); err != nil {
+		t.Errorf("marshal failure should not report a connection error, got %v", err)
+	}
+}
+
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+// fakeSSEWriter implements the optional ResponseController interfaces
+// (FlushError, SetWriteDeadline) so frame-level behavior — fresh
+// deadline per write, flush errors surfacing as disconnects — can be
+// verified without a real connection.
+type fakeSSEWriter struct {
+	buf       bytes.Buffer
+	writeErr  error
+	flushErr  error
+	deadlines []time.Time
+}
+
+func (f *fakeSSEWriter) Header() http.Header { return http.Header{} }
+func (f *fakeSSEWriter) WriteHeader(int)     {}
+func (f *fakeSSEWriter) Write(p []byte) (int, error) {
+	if f.writeErr != nil {
+		return 0, f.writeErr
+	}
+	return f.buf.Write(p)
+}
+func (f *fakeSSEWriter) FlushError() error { return f.flushErr }
+func (f *fakeSSEWriter) SetWriteDeadline(t time.Time) error {
+	f.deadlines = append(f.deadlines, t)
+	return nil
+}
+
+// Every SSE write (frame or heartbeat) must arm a fresh write deadline
+// and surface write/flush failures so the events handler tears the
+// subscriber down instead of leaking it on a half-dead client (#243).
+func TestSSEFrameDeadlineAndErrorPropagation(t *testing.T) {
+	fw := &fakeSSEWriter{}
+	rc := http.NewResponseController(fw)
+
+	if err := sendSSEFrame(rc, fw, "snapshot.sessions", map[string]int{"a": 1}); err != nil {
+		t.Fatalf("healthy write: %v", err)
+	}
+	if err := sendSSEComment(rc, fw); err != nil {
+		t.Fatalf("healthy heartbeat: %v", err)
+	}
+	if got := len(fw.deadlines); got != 2 {
+		t.Fatalf("expected a fresh deadline per write, got %d", got)
+	}
+	if !fw.deadlines[1].After(time.Now().Add(sseWriteTimeout - time.Minute)) {
+		t.Errorf("deadline not re-armed into the future: %v", fw.deadlines[1])
+	}
+	if !strings.HasSuffix(fw.buf.String(), ":\n\n") {
+		t.Errorf("heartbeat comment missing, got %q", fw.buf.String())
+	}
+
+	fw = &fakeSSEWriter{writeErr: errors.New("broken pipe")}
+	rc = http.NewResponseController(fw)
+	if err := sendSSEFrame(rc, fw, "x", 1); err == nil {
+		t.Error("frame write error not propagated")
+	}
+	if err := sendSSEComment(rc, fw); err == nil {
+		t.Error("heartbeat write error not propagated")
+	}
+
+	fw = &fakeSSEWriter{flushErr: errors.New("deadline exceeded")}
+	rc = http.NewResponseController(fw)
+	if err := sendSSEFrame(rc, fw, "x", 1); err == nil {
+		t.Error("frame flush error not propagated")
+	}
+	if err := sendSSEComment(rc, fw); err == nil {
+		t.Error("heartbeat flush error not propagated")
+	}
 }
