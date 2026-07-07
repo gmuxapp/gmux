@@ -1,4 +1,4 @@
-# ADR 0020: ACP `session/update` as gmux's internal normalized conversation schema
+# ADR 0021: ACP `session/update` as gmux's internal normalized conversation schema
 
 **Status:** Proposed
 **Date:** 2026-07-06
