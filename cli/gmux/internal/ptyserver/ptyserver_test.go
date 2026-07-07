@@ -874,8 +874,8 @@ func stringContains(s, sub string) bool {
 // response-drain goroutine, Write blocks forever because the emulator
 // writes the response to an internal pipe that nobody reads.
 func TestNewScreenDSRNonBlocking(t *testing.T) {
-	screen := newScreen(80, 24, func(bool) {})
-	defer screen.Close()
+	screen, screenDrain := newScreen(80, 24, func(bool) {})
+	defer stopScreenDrain(screen, screenDrain)
 
 	done := make(chan struct{})
 	go func() {
@@ -892,11 +892,35 @@ func TestNewScreenDSRNonBlocking(t *testing.T) {
 	}
 }
 
+// TestShutdownDrainNoRace guards against the data race between the DSR drain
+// goroutine's e.Read (via io.Copy) and shutting the emulator down. It writes
+// DSR-generating input continuously (forcing the drain goroutine to keep
+// Reading) and then tears the screen down via stopScreenDrain. Under -race
+// this fails if the drain goroutine's Read runs concurrently with Close
+// touching the emulator's unsynchronized `closed` flag.
+func TestShutdownDrainNoRace(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		screen, screenDrain := newScreen(80, 24, func(bool) {})
+
+		// Writes are serialized w.r.t. shutdown in the real Server (both run
+		// under s.mu), so we finish writing before tearing down. Each DSR
+		// (ESC[6n) makes the emulator queue a response the drain goroutine
+		// must Read, keeping the drain busy right up to teardown.
+		for j := 0; j < 100; j++ {
+			screen.Write([]byte("x\x1b[6n"))
+		}
+
+		// Tears down while the drain goroutine is still Reading queued
+		// responses: its e.Read must not race the emulator Close.
+		stopScreenDrain(screen, screenDrain)
+	}
+}
+
 // TestRenderScreenIncludesScrollback verifies that renderScreen includes
 // lines that scrolled off the top of the screen, not just the visible rows.
 func TestRenderScreenIncludesScrollback(t *testing.T) {
-	screen := newScreen(80, 5, func(bool) {})
-	defer screen.Close()
+	screen, screenDrain := newScreen(80, 5, func(bool) {})
+	defer stopScreenDrain(screen, screenDrain)
 
 	// Write 10 lines through a 5-row terminal: lines 1-5 scroll off,
 	// lines 6-10 remain visible.
@@ -918,8 +942,8 @@ func TestRenderScreenIncludesScrollback(t *testing.T) {
 // filled screen has exactly Height-1 CRLF separators (no extra blank rows
 // from buffer growth) and that adding scrollback increases the total.
 func TestRenderScreenLineCount(t *testing.T) {
-	screen := newScreen(40, 5, func(bool) {})
-	defer screen.Close()
+	screen, screenDrain := newScreen(40, 5, func(bool) {})
+	defer stopScreenDrain(screen, screenDrain)
 
 	// Write 3 short lines, staying within the 5-row screen.
 	for i := 1; i <= 3; i++ {
@@ -934,8 +958,8 @@ func TestRenderScreenLineCount(t *testing.T) {
 	}
 
 	// Now push content into scrollback: write 10 lines through a 5-row terminal.
-	screen2 := newScreen(40, 5, func(bool) {})
-	defer screen2.Close()
+	screen2, screen2Drain := newScreen(40, 5, func(bool) {})
+	defer stopScreenDrain(screen2, screen2Drain)
 	for i := 1; i <= 10; i++ {
 		fmt.Fprintf(screen2, "Line-%02d\r\n", i)
 	}
