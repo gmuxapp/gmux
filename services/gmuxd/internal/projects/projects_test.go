@@ -55,6 +55,87 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestLoadDropsInvalidItems(t *testing.T) {
+	// Regression: a hand-edited "match": null entry must be dropped on
+	// load instead of poisoning the state (issue #118). Manager.Update
+	// validates the whole state before every save, so a bad on-disk
+	// entry would otherwise block all future mutations.
+	dir := t.TempDir()
+	raw := `{"version": 3, "items": [
+		{"slug": "good", "match": [{"path": "/home/user/good"}]},
+		{"slug": "broken", "match": null},
+		{"slug": "good", "match": [{"path": "/home/user/dup-slug"}]},
+		{"slug": "also-good", "match": [{"path": "/home/user/also"}]}
+	]}`
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Items) != 2 {
+		t.Fatalf("expected 2 items after sanitize, got %d: %+v", len(s.Items), s.Items)
+	}
+	if s.Items[0].Slug != "good" || s.Items[1].Slug != "also-good" {
+		t.Errorf("items = %+v", s.Items)
+	}
+	if err := s.Validate(); err != nil {
+		t.Errorf("sanitized state should validate: %v", err)
+	}
+
+	// The original bytes must be backed up before repair.
+	if _, err := os.Stat(filepath.Join(dir, fileName+".bak")); err != nil {
+		t.Errorf("expected backup file: %v", err)
+	}
+
+	// Mutations through the Manager must work again (this was the
+	// user-visible breakage: invalid state blocked every update).
+	mgr := NewManager(dir)
+	if _, err := mgr.AddProject("fresh", []MatchRule{{Path: "/home/user/fresh"}}); err != nil {
+		t.Fatalf("AddProject after repair: %v", err)
+	}
+	reloaded, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Items) != 3 {
+		t.Fatalf("expected repaired state persisted with 3 items, got %d", len(reloaded.Items))
+	}
+}
+
+func TestLoadMigrationBackupNotClobberedByRepair(t *testing.T) {
+	// When a legacy file both needs migration and contains an invalid
+	// item, projects.json.bak must hold the original pre-migration
+	// bytes, not the migrated form: the backup exists so the user can
+	// roll back the schema upgrade.
+	dir := t.TempDir()
+	raw := []byte(`{"items": [
+		{"slug": "good", "paths": ["/home/user/good"]},
+		{"slug": "broken"}
+	]}`)
+	if err := os.WriteFile(filepath.Join(dir, fileName), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Items) != 1 || s.Items[0].Slug != "good" {
+		t.Fatalf("items = %+v", s.Items)
+	}
+
+	bak, err := os.ReadFile(filepath.Join(dir, fileName+".bak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(bak) != string(raw) {
+		t.Errorf("backup = %s, want original pre-migration bytes", bak)
+	}
+}
+
 func TestSaveCreatesNestedDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "state", "gmux")
 	s := &State{Items: []Item{{Slug: "a", Match: []MatchRule{{Path: "/tmp/a"}}}}}
