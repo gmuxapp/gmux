@@ -50,9 +50,15 @@ func newACPHub(sessionID string) *acpHub {
 // /acp/ingest. It is deliberately tiny: begin a message, append a text or
 // thinking token delta, or finalize. See pi-ext.mjs.
 type acpIngest struct {
-	Op        string `json:"op"`                  // "message_start" | "chunk" | "thinking_chunk" | "message_end"
+	Op        string `json:"op"`                  // "message_start" | "chunk" | "thinking_chunk" | "tool_call" | "tool_call_update" | "message_end"
 	MessageID string `json:"messageId,omitempty"` // stable id for the in-flight message
 	Delta     string `json:"delta,omitempty"`     // token-level delta (op "chunk"/"thinking_chunk")
+	// Tool-call fields (op "tool_call" / "tool_call_update").
+	ToolCallID string `json:"toolCallId,omitempty"` // stable invocation id
+	ToolName   string `json:"toolName,omitempty"`   // tool name (op "tool_call")
+	Args       string `json:"args,omitempty"`       // raw JSON arguments (op "tool_call")
+	Status     string `json:"status,omitempty"`     // completed | failed (op "tool_call_update")
+	Output     string `json:"output,omitempty"`     // textual result (op "tool_call_update")
 }
 
 // ingest applies one extension event: it updates the unwritten tail and, for a
@@ -70,6 +76,10 @@ func (h *acpHub) ingest(ev acpIngest) {
 		h.appendAndBroadcast(ev, acp.ContentTypeText, acp.NewAgentMessageChunk)
 	case "thinking_chunk":
 		h.appendAndBroadcast(ev, acp.ContentTypeThinking, acp.NewAgentThoughtChunk)
+	case "tool_call":
+		h.appendToolCall(ev)
+	case "tool_call_update":
+		h.updateToolCall(ev)
 	case "message_end":
 		// pi has appended the finalized message to JSONL; forget the tail so
 		// session/load reads it from disk, not from memory (ADR 0011/0016).
@@ -105,6 +115,56 @@ func (h *acpHub) appendAndBroadcast(
 	msgID := h.tailMsgID
 	h.mu.Unlock()
 	if note, err := mk(h.sessionID, msgID, ev.Delta); err == nil {
+		h.broadcast(note)
+	}
+}
+
+// appendToolCall adds a new tool-call block (in progress) to the unwritten
+// tail and broadcasts a tool_call frame. Unlike text/thinking, tool-call
+// blocks are never coalesced: each is a distinct invocation keyed by id.
+func (h *acpHub) appendToolCall(ev acpIngest) {
+	h.mu.Lock()
+	if !h.tailActive {
+		h.tailActive = true
+		h.tailMsgID = ev.MessageID
+	}
+	block := acp.ToolCallBlock(ev.ToolCallID, ev.ToolName, ev.Args)
+	h.tailBlocks = append(h.tailBlocks, block)
+	msgID := h.tailMsgID
+	h.mu.Unlock()
+	if note, err := acp.NewToolCall(h.sessionID, msgID, block); err == nil {
+		h.broadcast(note)
+	}
+}
+
+// updateToolCall mutates an existing tool-call block in the unwritten tail by
+// id (status + output) and broadcasts a tool_call_update frame. If the block
+// isn't found (e.g. the extension joined after the tool started), the update is
+// still broadcast so a live subscriber can render it.
+func (h *acpHub) updateToolCall(ev acpIngest) {
+	h.mu.Lock()
+	var block acp.ContentBlock
+	found := false
+	for i := range h.tailBlocks {
+		if h.tailBlocks[i].Type == acp.ContentTypeToolCall && h.tailBlocks[i].ToolCallID == ev.ToolCallID {
+			h.tailBlocks[i].Status = ev.Status
+			h.tailBlocks[i].Output = ev.Output
+			block = h.tailBlocks[i]
+			found = true
+			break
+		}
+	}
+	if !found {
+		block = acp.ContentBlock{
+			Type:       acp.ContentTypeToolCall,
+			ToolCallID: ev.ToolCallID,
+			Status:     ev.Status,
+			Output:     ev.Output,
+		}
+	}
+	msgID := h.tailMsgID
+	h.mu.Unlock()
+	if note, err := acp.NewToolCallUpdate(h.sessionID, msgID, block); err == nil {
 		h.broadcast(note)
 	}
 }

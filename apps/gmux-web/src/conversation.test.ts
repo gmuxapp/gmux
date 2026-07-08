@@ -25,6 +25,42 @@ const thoughtFrame = (delta: string, messageId?: string) => ({
   },
 })
 
+const toolCallFrame = (
+  toolCallId: string,
+  toolName: string,
+  args: string,
+  messageId?: string,
+) => ({
+  jsonrpc: '2.0',
+  method: 'session/update',
+  params: {
+    sessionId: 's1',
+    update: {
+      sessionUpdate: 'tool_call',
+      messageId,
+      content: { type: 'tool_call', toolCallId, toolName, args, status: 'in_progress' },
+    },
+  },
+})
+
+const toolCallUpdateFrame = (
+  toolCallId: string,
+  status: string,
+  output: string,
+  messageId?: string,
+) => ({
+  jsonrpc: '2.0',
+  method: 'session/update',
+  params: {
+    sessionId: 's1',
+    update: {
+      sessionUpdate: 'tool_call_update',
+      messageId,
+      content: { type: 'tool_call', toolCallId, status, output },
+    },
+  },
+})
+
 // flush the coalesced microtask notification
 const tick = () => new Promise((r) => queueMicrotask(() => r(undefined)))
 
@@ -108,11 +144,47 @@ describe('conversation store', () => {
     expect(messageText(msgs[0])).toBe('answer')
   })
 
-  it('ignores tool_call updates and malformed frames', () => {
+  it('ignores unknown update kinds and malformed frames', () => {
     const s = createConversationStore()
-    s.applyFrame({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'tool_call' } } })
+    s.applyFrame({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'unknown_kind' } } })
     s.applyFrame(null)
     s.applyFrame({ foo: 'bar' })
     expect(s.getMessages()).toHaveLength(0)
+  })
+
+  it('appends a tool_call block, then mutates it in place on tool_call_update', () => {
+    const s = createConversationStore()
+    s.applyFrame(chunkFrame('let me check', 'm1'))
+    s.applyFrame(toolCallFrame('t1', 'bash', '{"cmd":"ls"}', 'm1'))
+    let msgs = s.getMessages()
+    expect(msgs).toHaveLength(1)
+    // text block then a distinct tool_call block, in order
+    expect(msgs[0].content).toEqual([
+      { type: 'text', text: 'let me check' },
+      { type: 'tool_call', toolCallId: 't1', toolName: 'bash', args: '{"cmd":"ls"}', status: 'in_progress' },
+    ])
+    // the update mutates the same block by id (no new block appended)
+    s.applyFrame(toolCallUpdateFrame('t1', 'completed', 'file.txt', 'm1'))
+    msgs = s.getMessages()
+    expect(msgs[0].content).toHaveLength(2)
+    expect(msgs[0].content[1]).toEqual({
+      type: 'tool_call',
+      toolCallId: 't1',
+      toolName: 'bash',
+      args: '{"cmd":"ls"}',
+      status: 'completed',
+      output: 'file.txt',
+    })
+  })
+
+  it('keeps multiple tool calls distinct and updates the right one by id', () => {
+    const s = createConversationStore()
+    s.applyFrame(toolCallFrame('t1', 'read', '{}', 'm1'))
+    s.applyFrame(toolCallFrame('t2', 'write', '{}', 'm1'))
+    s.applyFrame(toolCallUpdateFrame('t2', 'failed', 'boom', 'm1'))
+    const c = s.getMessages()[0].content
+    expect(c).toHaveLength(2)
+    expect(c[0]).toMatchObject({ toolCallId: 't1', status: 'in_progress' })
+    expect(c[1]).toMatchObject({ toolCallId: 't2', status: 'failed', output: 'boom' })
   })
 })

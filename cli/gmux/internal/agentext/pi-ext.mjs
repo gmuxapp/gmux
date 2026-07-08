@@ -21,6 +21,8 @@
 //   { op: "message_start", messageId }        on assistant message_start
 //   { op: "chunk", messageId, delta }         per assistant text token
 //   { op: "thinking_chunk", messageId, delta } per assistant reasoning token
+//   { op: "tool_call", messageId, toolCallId, toolName, args }  on tool start
+//   { op: "tool_call_update", toolCallId, status, output }      on tool end
 //   { op: "message_end" }                     on assistant message_end
 //
 // The /acp/ingest channel is the token-level assistant-text feed the runner
@@ -153,6 +155,43 @@ export default function (pi) {
     acpMsgId = "";
   });
 
+  // --- streaming tool calls (ADR 0021) ------------------------------------
+  // pi surfaces tool execution as dedicated events (verified against pi's
+  // extension API, @earendil-works/pi-coding-agent): tool_execution_start
+  // carries { toolCallId, toolName, args }, tool_execution_end carries
+  // { toolCallId, result, isError } where result is an AgentToolResult whose
+  // `.content` is an array of text/image blocks. We forward the start as a
+  // `tool_call` (in progress) and the end as a `tool_call_update` (terminal
+  // status + textual output), keyed by toolCallId so the runner mutates the
+  // existing block rather than appending. Tool calls belong to the current
+  // assistant message, so they carry acpMsgId to interleave with its text.
+  pi.on("tool_execution_start", (ev) => {
+    if (!ev?.toolCallId) return;
+    if (!acpMsgId) acpMsgId = `m${++acpMsgSeq}`;
+    let args = "";
+    try {
+      args = ev.args === undefined ? "" : JSON.stringify(ev.args);
+    } catch {}
+    postACP(sock, {
+      op: "tool_call",
+      messageId: acpMsgId,
+      toolCallId: ev.toolCallId,
+      toolName: ev.toolName || "",
+      args,
+    });
+  });
+
+  pi.on("tool_execution_end", (ev) => {
+    if (!ev?.toolCallId) return;
+    postACP(sock, {
+      op: "tool_call_update",
+      messageId: acpMsgId,
+      toolCallId: ev.toolCallId,
+      status: ev.isError ? "failed" : "completed",
+      output: toolResultText(ev.result),
+    });
+  });
+
   pi.on("agent_end", (ev, ctx) => {
     const msgs = ev.messages ?? [];
     let stopReason;
@@ -188,6 +227,23 @@ export default function (pi) {
     // A brand-new session's file exists by now; make sure it's attributed.
     reportSession("activity", ctx);
   });
+}
+
+// toolResultText flattens a pi AgentToolResult into plain text for the ACP
+// stream. result.content is an array of typed blocks (text/image); only text
+// is surfaced. Tolerates a bare string or missing content.
+function toolResultText(result) {
+  if (!result) return "";
+  if (typeof result === "string") return result;
+  const c = result.content;
+  if (typeof c === "string") return c;
+  if (Array.isArray(c)) {
+    return c
+      .filter((b) => b && b.type === "text" && typeof b.text === "string")
+      .map((b) => b.text)
+      .join("");
+  }
+  return "";
 }
 
 // extractUserText pulls the text of a pi user message. content is either a

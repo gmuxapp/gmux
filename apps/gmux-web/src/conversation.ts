@@ -26,6 +26,15 @@ export type Role = 'user' | 'assistant'
 export interface ContentBlock {
   type: string
   text?: string
+  // Tool-call fields (type === 'tool_call').
+  toolCallId?: string
+  toolName?: string
+  /** Raw JSON arguments text. */
+  args?: string
+  /** in_progress | completed | failed */
+  status?: string
+  /** Textual tool result. */
+  output?: string
 }
 
 export interface ConvMessage {
@@ -100,8 +109,52 @@ export function createConversationStore(): ConversationStore {
     notify()
   }
 
+  // Tool calls append a distinct block (never coalesced) on tool_call, then
+  // mutate it in place by toolCallId on tool_call_update. Both belong to the
+  // in-flight assistant message identified by messageId.
+  function applyToolCall(u: UpdateParams['update']) {
+    const block = u.content
+    const last = messages[messages.length - 1]
+    const matches =
+      last &&
+      last.role === 'assistant' &&
+      (u.messageId ? last.messageId === u.messageId : last.messageId === undefined)
+    if (matches) {
+      last.content.push({ ...block })
+    } else {
+      messages.push({
+        role: 'assistant',
+        messageId: u.messageId,
+        content: [{ ...block }],
+      })
+    }
+    notify()
+  }
+
+  function applyToolCallUpdate(u: UpdateParams['update']) {
+    const id = u.content?.toolCallId
+    if (!id) return
+    // Find the matching tool-call block, scanning from the most recent message
+    // (the in-flight one) backwards.
+    for (let mi = messages.length - 1; mi >= 0; mi--) {
+      const m = messages[mi]
+      if (m.role !== 'assistant') continue
+      for (let bi = m.content.length - 1; bi >= 0; bi--) {
+        const b = m.content[bi]
+        if (b.type === 'tool_call' && b.toolCallId === id) {
+          b.status = u.content.status
+          b.output = u.content.output
+          notify()
+          return
+        }
+      }
+    }
+  }
+
   function applyUpdate(p: UpdateParams) {
     const u = p.update
+    if (u.sessionUpdate === 'tool_call') return applyToolCall(u)
+    if (u.sessionUpdate === 'tool_call_update') return applyToolCallUpdate(u)
     // Assistant text and reasoning accumulate into blocks of the matching type.
     const blockType =
       u.sessionUpdate === 'agent_message_chunk'
@@ -109,7 +162,7 @@ export function createConversationStore(): ConversationStore {
         : u.sessionUpdate === 'agent_thought_chunk'
           ? 'thinking'
           : null
-    if (!blockType) return // tool_call etc. are later slices
+    if (!blockType) return // unknown update kinds ignored
     const delta = u.content?.text ?? ''
     if (!delta && !u.messageId) return
 

@@ -3612,6 +3612,65 @@ body {
   margin-bottom: 6px;
 }
 
+/* Tool calls (ACP tool_call). Minimal card matching the thinking block; a
+   small status dot goes amber while running, green on success, red on error. */
+.conversation-tool {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--bg-elevated, #1b1f26) 60%, transparent);
+  border-radius: 4px;
+  font-size: 13px;
+}
+.conversation-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.conversation-tool-status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fg-muted, #7a828e);
+  flex: none;
+}
+.conversation-tool[data-state='running'] .conversation-tool-status {
+  background: #d7a53a;
+}
+.conversation-tool[data-state='done'] .conversation-tool-status {
+  background: #5aa469;
+}
+.conversation-tool[data-state='error'] .conversation-tool-status {
+  background: #c65b5b;
+}
+.conversation-tool-name {
+  font-family: var(--font-mono, monospace);
+  color: var(--term-fg, #d3d8de);
+}
+.conversation-tool-args,
+.conversation-tool-output {
+  margin-top: 6px;
+}
+.conversation-tool-args-label {
+  cursor: pointer;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted, #7a828e);
+  user-select: none;
+}
+.conversation-tool-args-body,
+.conversation-tool-output {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--fg-muted, #7a828e);
+}
+.conversation-tool-output {
+  max-height: 240px;
+  overflow: auto;
+}
+
 /* Prism token colors (same minimal dark palette as the prior hljs block;
    react-syntax-highlighter emits `.token.<type>` class names). */
 .conversation-markdown .token.keyword,

@@ -33,6 +33,7 @@ import {
   WebSpeechDictationAdapter,
   type ThreadMessageLike,
   type AppendMessage,
+  type ToolCallMessagePartProps,
 } from '@assistant-ui/react'
 import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown'
 // The only styling the packages ship: a streaming "pulse cursor" appended to
@@ -81,6 +82,31 @@ const Reasoning = ({ text }: { text?: string }) => (
   </details>
 )
 
+// Tool call (ACP tool_call/tool_call_update → assistant-ui tool-call part).
+// Renders the tool name, a status indicator, collapsible arguments, and the
+// output once it arrives. assistant-ui computes `status` from the message +
+// whether a result is present, so we drive the running→done indicator off it.
+const ToolCall = ({ toolName, argsText, result, isError, status }: ToolCallMessagePartProps) => {
+  const running = status?.type === 'running'
+  const state = isError ? 'error' : running ? 'running' : 'done'
+  const output = typeof result === 'string' ? result : result != null ? String(result) : ''
+  return (
+    <div className="conversation-tool" data-block="tool" data-state={state}>
+      <div className="conversation-tool-head">
+        <span className="conversation-tool-status" aria-hidden="true" />
+        <span className="conversation-tool-name">{toolName}</span>
+      </div>
+      {argsText ? (
+        <details className="conversation-tool-args">
+          <summary className="conversation-tool-args-label">Arguments</summary>
+          <pre className="conversation-tool-args-body">{argsText}</pre>
+        </details>
+      ) : null}
+      {output ? <pre className="conversation-tool-output">{output}</pre> : null}
+    </div>
+  )
+}
+
 const UserMessage = () => (
   <MessagePrimitive.Root
     className="conversation-message conversation-message--user"
@@ -95,7 +121,9 @@ const AssistantMessage = () => (
     className="conversation-message conversation-message--assistant"
     data-role="assistant"
   >
-    <MessagePrimitive.Parts components={{ Text: MarkdownText, Reasoning }} />
+    <MessagePrimitive.Parts
+      components={{ Text: MarkdownText, Reasoning, tools: { Fallback: ToolCall } }}
+    />
   </MessagePrimitive.Root>
 )
 

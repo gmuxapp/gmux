@@ -56,6 +56,58 @@ func TestNewAgentThoughtChunkShape(t *testing.T) {
 	}
 }
 
+func TestNewToolCallShape(t *testing.T) {
+	block := ToolCallBlock("t1", "bash", `{"cmd":"ls"}`)
+	note, err := NewToolCall("sess1", "m1", block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if note.JSONRPC != "2.0" || note.Method != MethodSessionUpdate {
+		t.Fatalf("bad envelope: %+v", note)
+	}
+	var p UpdateParams
+	if err := json.Unmarshal(note.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Update.SessionUpdate != UpdateToolCall {
+		t.Errorf("sessionUpdate = %q, want %q", p.Update.SessionUpdate, UpdateToolCall)
+	}
+	if p.Update.MessageID != "m1" {
+		t.Errorf("messageId = %q", p.Update.MessageID)
+	}
+	c := p.Update.Content
+	if c.Type != ContentTypeToolCall || c.ToolCallID != "t1" || c.ToolName != "bash" {
+		t.Errorf("content = %+v", c)
+	}
+	if c.Args != `{"cmd":"ls"}` || c.Status != ToolStatusInProgress {
+		t.Errorf("content args/status = %+v", c)
+	}
+}
+
+func TestNewToolCallUpdateShape(t *testing.T) {
+	block := ContentBlock{
+		Type:       ContentTypeToolCall,
+		ToolCallID: "t1",
+		Status:     ToolStatusCompleted,
+		Output:     "file.txt",
+	}
+	note, err := NewToolCallUpdate("sess1", "m1", block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p UpdateParams
+	if err := json.Unmarshal(note.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Update.SessionUpdate != UpdateToolCallUpdate {
+		t.Errorf("sessionUpdate = %q, want %q", p.Update.SessionUpdate, UpdateToolCallUpdate)
+	}
+	c := p.Update.Content
+	if c.ToolCallID != "t1" || c.Status != ToolStatusCompleted || c.Output != "file.txt" {
+		t.Errorf("content = %+v", c)
+	}
+}
+
 func TestNewLoadShape(t *testing.T) {
 	note, err := NewLoad("s", []Message{{Role: "user", Content: []ContentBlock{TextBlock("hi")}}})
 	if err != nil {
@@ -108,6 +160,45 @@ func TestLoadHistory(t *testing.T) {
 	}
 	if msgs[2].Content[0].Text != "plain string form" {
 		t.Errorf("msg2 = %+v", msgs[2])
+	}
+}
+
+func TestLoadHistoryToolCalls(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conv.jsonl")
+	lines := []string{
+		`{"type":"message","message":{"role":"user","content":"run ls"}}`,
+		`{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"on it"},{"type":"toolCall","id":"tc1","name":"bash","arguments":{"cmd":"ls"}}]}}`,
+		`{"type":"message","message":{"role":"toolResult","toolCallId":"tc1","toolName":"bash","content":[{"type":"text","text":"file.txt"}],"isError":false}}`,
+		`{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"tc2","name":"read","arguments":{}}]}}`,
+		`{"type":"message","message":{"role":"toolResult","toolCallId":"tc2","toolName":"read","content":[{"type":"text","text":"boom"}],"isError":true}}`,
+	}
+	if err := os.WriteFile(path, []byte(join(lines)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := LoadHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// user, assistant(text+toolCall), assistant(toolCall) — toolResults fold in.
+	if len(msgs) != 3 {
+		t.Fatalf("want 3 messages, got %d: %+v", len(msgs), msgs)
+	}
+	// First assistant: text then a completed tool call with output.
+	tc := msgs[1].Content[1]
+	if tc.Type != ContentTypeToolCall || tc.ToolCallID != "tc1" || tc.ToolName != "bash" {
+		t.Fatalf("tc1 block = %+v", tc)
+	}
+	if tc.Args != `{"cmd":"ls"}` {
+		t.Errorf("tc1 args = %q", tc.Args)
+	}
+	if tc.Status != ToolStatusCompleted || tc.Output != "file.txt" {
+		t.Errorf("tc1 status/output = %+v", tc)
+	}
+	// Second assistant: a failed tool call.
+	tc2 := msgs[2].Content[0]
+	if tc2.ToolCallID != "tc2" || tc2.Status != ToolStatusFailed || tc2.Output != "boom" {
+		t.Errorf("tc2 block = %+v", tc2)
 	}
 }
 
