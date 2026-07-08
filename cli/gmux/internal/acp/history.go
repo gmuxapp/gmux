@@ -140,7 +140,7 @@ func extractBlocks(raw json.RawMessage) []ContentBlock {
 			if len(blk.Arguments) > 0 {
 				args = string(blk.Arguments)
 			}
-			out = append(out, ToolCallBlock(blk.ID, blk.Name, args))
+			out = append(out, ToolCallBlock(blk.ID, blk.Name, KindForToolName(blk.Name), args))
 		}
 	}
 	return out

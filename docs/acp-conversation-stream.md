@@ -30,8 +30,9 @@ corrupt the reassembled text).
 { "op": "message_start", "messageId": "m1" }                  // assistant message begins
 { "op": "thinking_chunk", "messageId": "m1", "delta": "Hm" }  // one reasoning delta
 { "op": "chunk", "messageId": "m1", "delta": "Hel" }          // one visible-text delta
-// A tool call appears (in progress), then updates when it finishes:
-{ "op": "tool_call", "messageId": "m1", "toolCallId": "t1", "toolName": "bash", "args": "{\"cmd\":\"ls\"}" }
+// A tool call appears (in progress), then updates when it finishes. `kind` is
+// the ACP ToolKind (read/edit/execute/search/...), mapped from the pi tool name:
+{ "op": "tool_call", "messageId": "m1", "toolCallId": "t1", "toolName": "bash", "kind": "execute", "args": "{\"cmd\":\"ls\"}" }
 { "op": "tool_call_update", "messageId": "m1", "toolCallId": "t1", "status": "completed", "output": "file.txt" }
 { "op": "message_end", "messageId": "m1" }                    // pi finalized it to JSONL
 ```
@@ -53,6 +54,15 @@ Tool calls come from pi's dedicated `tool_execution_start` /
 `failed`, output flattened from the result's text content). `args` is the raw
 JSON arguments text. A tool call belongs to the current assistant message, so
 it carries the same `messageId` and interleaves with its text/thinking blocks.
+
+`kind` is the ACP **ToolKind** — the semantic category the frontend switches on
+for icon/header/body (rather than matching the free-form tool name). The
+extension maps the pi tool name → kind (`bash`→`execute`, `read`/`ls`→`read`,
+`edit`/`write`→`edit`, `grep`/`find`/`glob`→`search`, else `other`); the
+Go-side history path mirrors this via `acp.KindForToolName` so the durable
+snapshot and the live stream agree. ACP also defines typed `diff` / `terminal`
+content for edits / shell; emitting those (so edits render as real diffs) is a
+planned follow-up — today the result is a flat text `output`.
 
 ### 2. Runner → client stream (`/acp` WebSocket, snapshot-then-stream)
 

@@ -57,7 +57,7 @@ func TestNewAgentThoughtChunkShape(t *testing.T) {
 }
 
 func TestNewToolCallShape(t *testing.T) {
-	block := ToolCallBlock("t1", "bash", `{"cmd":"ls"}`)
+	block := ToolCallBlock("t1", "bash", ToolKindExecute, `{"cmd":"ls"}`)
 	note, err := NewToolCall("sess1", "m1", block)
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +78,9 @@ func TestNewToolCallShape(t *testing.T) {
 	c := p.Update.Content
 	if c.Type != ContentTypeToolCall || c.ToolCallID != "t1" || c.ToolName != "bash" {
 		t.Errorf("content = %+v", c)
+	}
+	if c.Kind != ToolKindExecute {
+		t.Errorf("content kind = %q, want %q", c.Kind, ToolKindExecute)
 	}
 	if c.Args != `{"cmd":"ls"}` || c.Status != ToolStatusInProgress {
 		t.Errorf("content args/status = %+v", c)
@@ -189,6 +192,9 @@ func TestLoadHistoryToolCalls(t *testing.T) {
 	if tc.Type != ContentTypeToolCall || tc.ToolCallID != "tc1" || tc.ToolName != "bash" {
 		t.Fatalf("tc1 block = %+v", tc)
 	}
+	if tc.Kind != ToolKindExecute {
+		t.Errorf("tc1 kind = %q, want %q (inferred from tool name)", tc.Kind, ToolKindExecute)
+	}
 	if tc.Args != `{"cmd":"ls"}` {
 		t.Errorf("tc1 args = %q", tc.Args)
 	}
@@ -199,6 +205,26 @@ func TestLoadHistoryToolCalls(t *testing.T) {
 	tc2 := msgs[2].Content[0]
 	if tc2.ToolCallID != "tc2" || tc2.Status != ToolStatusFailed || tc2.Output != "boom" {
 		t.Errorf("tc2 block = %+v", tc2)
+	}
+}
+
+func TestKindForToolName(t *testing.T) {
+	cases := map[string]string{
+		"bash":    ToolKindExecute,
+		"read":    ToolKindRead,
+		"ls":      ToolKindRead,
+		"edit":    ToolKindEdit,
+		"write":   ToolKindEdit,
+		"grep":    ToolKindSearch,
+		"find":    ToolKindSearch,
+		"glob":    ToolKindSearch,
+		"mystery": ToolKindOther,
+		"":        ToolKindOther,
+	}
+	for name, want := range cases {
+		if got := KindForToolName(name); got != want {
+			t.Errorf("KindForToolName(%q) = %q, want %q", name, got, want)
+		}
 	}
 }
 

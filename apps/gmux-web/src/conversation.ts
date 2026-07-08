@@ -29,6 +29,8 @@ export interface ContentBlock {
   // Tool-call fields (type === 'tool_call').
   toolCallId?: string
   toolName?: string
+  /** ACP ToolKind (read/edit/execute/search/...); absent → 'other'. */
+  kind?: string
   /** Raw JSON arguments text. */
   args?: string
   /** in_progress | completed | failed */

@@ -21,8 +21,8 @@
 //   { op: "message_start", messageId }        on assistant message_start
 //   { op: "chunk", messageId, delta }         per assistant text token
 //   { op: "thinking_chunk", messageId, delta } per assistant reasoning token
-//   { op: "tool_call", messageId, toolCallId, toolName, args }  on tool start
-//   { op: "tool_call_update", toolCallId, status, output }      on tool end
+//   { op: "tool_call", messageId, toolCallId, toolName, kind, args }  on tool start
+//   { op: "tool_call_update", toolCallId, status, output }            on tool end
 //   { op: "message_end" }                     on assistant message_end
 //
 // The /acp/ingest channel is the token-level assistant-text feed the runner
@@ -177,6 +177,7 @@ export default function (pi) {
       messageId: acpMsgId,
       toolCallId: ev.toolCallId,
       toolName: ev.toolName || "",
+      kind: kindForToolName(ev.toolName),
       args,
     });
   });
@@ -227,6 +228,30 @@ export default function (pi) {
     // A brand-new session's file exists by now; make sure it's attributed.
     reportSession("activity", ctx);
   });
+}
+
+// kindForToolName maps a pi tool name to an ACP ToolKind (the semantic category
+// the frontend switches on for icon/header/body). Mirrors Go's
+// acp.KindForToolName (history path) so the live and durable snapshots agree;
+// unknown tools fall back to "other". Translation lives here, at the typed pi
+// access point (ADR 0015).
+function kindForToolName(name) {
+  switch (name) {
+    case "bash":
+      return "execute";
+    case "read":
+    case "ls":
+      return "read";
+    case "edit":
+    case "write":
+      return "edit";
+    case "grep":
+    case "find":
+    case "glob":
+      return "search";
+    default:
+      return "other";
+  }
 }
 
 // toolResultText flattens a pi AgentToolResult into plain text for the ACP
