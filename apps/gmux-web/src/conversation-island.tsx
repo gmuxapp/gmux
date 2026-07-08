@@ -357,9 +357,11 @@ export function ConversationIsland({ store, onSend, working, sessionId }: Conver
           {attachments ? (
             <ComposerPrimitive.AttachmentDropzone className="conversation-composer-dropzone">
               <div className="conversation-composer-main">
-                <ComposerPrimitive.Attachments
-                  components={{ Attachment: ComposerAttachment }}
-                />
+                <div className="conversation-attachments">
+                  <ComposerPrimitive.Attachments
+                    components={{ Attachment: ComposerAttachment }}
+                  />
+                </div>
                 <div className="conversation-composer-row">
                   <ComposerPrimitive.AddAttachment
                     className="conversation-composer-add"
