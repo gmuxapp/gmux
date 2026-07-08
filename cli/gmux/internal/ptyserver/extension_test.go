@@ -227,17 +227,19 @@ func TestTurnEventDrivesState(t *testing.T) {
 	}
 }
 
-// TestSessionSlugPrefersExplicitSlug pins, through the real /hook/event
-// handler, that an explicit slug in a session event wins over Slugify(id) — the
-// codex path reports a title-derived slug because its session id is a UUID that
-// slugifies badly — while a session event with only an id still slugifies the
-// id (pi's behavior, unchanged).
-func TestSessionSlugPrefersExplicitSlug(t *testing.T) {
+// TestSessionSlugFromExplicitSourceOnly pins, through the real /hook/event
+// handler, that the runner sets the slug ONLY from an explicit title-derived
+// source and never synthesizes one from the adapter session id: ev.ID is a
+// UUID for every real adapter, and slugifying it produces an unreadable
+// full-UUID URL that also defeats the web's short id.slice(0,8) fallback
+// (the pre-title-window regression behind #360's follow-up). With no slug
+// source the runner leaves Slug empty for the web layer to fill.
+func TestSessionSlugFromExplicitSourceOnly(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not available")
 	}
-	check := func(name, body, wantSlug string) {
+	newSrv := func(t *testing.T) (*Server, *session.State, string) {
 		t.Helper()
 		dir := t.TempDir()
 		sockPath := filepath.Join(dir, "test.sock")
@@ -251,25 +253,73 @@ func TestSessionSlugPrefersExplicitSlug(t *testing.T) {
 			State:      st,
 		})
 		if err != nil {
-			t.Fatalf("%s: new server: %v", name, err)
+			t.Fatalf("new server: %v", err)
 		}
-		defer srv.Shutdown()
-		postSessionEvent(t, sockPath, body)
+		t.Cleanup(srv.Shutdown)
+		return srv, st, sockPath
+	}
+
+	// A real title-derived slug is slugified and recorded.
+	t.Run("explicit-slug", func(t *testing.T) {
+		_, st, sockPath := newSrv(t)
+		postSessionEvent(t, sockPath,
+			`{"op":"session","path":"/x.jsonl","id":"019cfb54-dead-beef","slug":"fix the auth bug"}`)
 		deadline := time.After(2 * time.Second)
-		for st.SlugSnapshot() != wantSlug {
+		for st.SlugSnapshot() != "fix-the-auth-bug" {
 			select {
 			case <-deadline:
-				t.Fatalf("%s: slug = %q, want %q", name, st.SlugSnapshot(), wantSlug)
+				t.Fatalf("slug = %q, want %q", st.SlugSnapshot(), "fix-the-auth-bug")
 			case <-time.After(20 * time.Millisecond):
 			}
 		}
-	}
-	check("explicit-slug",
-		`{"op":"session","path":"/x.jsonl","id":"019cfb54-dead-beef","slug":"fix the auth bug"}`,
-		"fix-the-auth-bug")
-	check("id-fallback",
-		`{"op":"session","path":"/y.jsonl","id":"my-chat"}`,
-		"my-chat")
+	})
+
+	// A pre-title bind (only an id, no slug) must leave the slug EMPTY so the
+	// web fallback applies. Poll for a settle window to catch a synthesized
+	// slug that arrives slightly after the POST returns.
+	t.Run("no-slug-source-stays-empty", func(t *testing.T) {
+		_, st, sockPath := newSrv(t)
+		postSessionEvent(t, sockPath,
+			`{"op":"session","path":"/y.jsonl","id":"019f2c75-5279-7012-b054-ce2a71441a4e"}`)
+		deadline := time.After(500 * time.Millisecond)
+		for {
+			if got := st.SlugSnapshot(); got != "" {
+				t.Fatalf("slug = %q, want empty (no title source → web owns the fallback)", got)
+			}
+			select {
+			case <-deadline:
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	})
+
+	// A bind is authoritative: switching from a titled conversation to a
+	// fresh untitled one (pi re-binds through the same runner on
+	// new/switch/resume/fork) must CLEAR the old slug, not keep serving it.
+	t.Run("no-slug-source-clears-prior-slug", func(t *testing.T) {
+		_, st, sockPath := newSrv(t)
+		postSessionEvent(t, sockPath,
+			`{"op":"session","path":"/a.jsonl","id":"id-a","slug":"fix the auth bug"}`)
+		deadline := time.After(2 * time.Second)
+		for st.SlugSnapshot() != "fix-the-auth-bug" {
+			select {
+			case <-deadline:
+				t.Fatalf("setup: slug = %q, want %q", st.SlugSnapshot(), "fix-the-auth-bug")
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+		postSessionEvent(t, sockPath,
+			`{"op":"session","path":"/b.jsonl","id":"019f2c75-5279-7012-b054-ce2a71441a4e","reason":"new"}`)
+		deadline = time.After(2 * time.Second)
+		for st.SlugSnapshot() != "" {
+			select {
+			case <-deadline:
+				t.Fatalf("slug = %q, want cleared after untitled re-bind", st.SlugSnapshot())
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	})
 }
 
 // TestApplyTurnEnd pins the outcome→sidebar-state policy directly (no node).

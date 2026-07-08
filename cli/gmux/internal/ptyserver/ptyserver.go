@@ -586,8 +586,8 @@ type hookEvent struct {
 	Path string `json:"path"`
 	Pid  int    `json:"pid"`
 
-	ID      string `json:"id,omitempty"`
-	Slug    string `json:"slug,omitempty"` // slug source (runner slugifies); preferred over Slugify(ID)
+	ID      string `json:"id,omitempty"`   // adapter session id; informational (the runner keys on the gmux id)
+	Slug    string `json:"slug,omitempty"` // slug source (runner slugifies); empty until the session has a title
 	Name    string `json:"name,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Title   string `json:"title,omitempty"`
@@ -618,13 +618,20 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 		if ev.Name != "" {
 			s.state.SetAdapterTitle(ev.Name)
 		}
-		// Slug source, in order of preference: an explicit slug the agent
-		// reports (codex and pi session ids are UUIDs that slugify badly, so
-		// their hooks send a title-derived slug), else the identity to slugify.
+		// A session bind is authoritative for the slug, so set it on every bind
+		// — including clearing it when there's no title-derived source. We do
+		// NOT synthesize one from ev.ID: it's the adapter's session id, which
+		// for every real adapter is a UUID that slugifies into an unreadable
+		// URL. Leaving the slug empty lets the web layer own the fallback — a
+		// short, stable id.slice(0,8) off the *gmux* session id (routing.ts
+		// sessionPath), which the runner doesn't know. Clearing (not just
+		// skipping) matters because pi re-binds through the same runner on
+		// switch/new/resume/fork: switching from a titled conversation to a
+		// fresh untitled one must drop the old slug, not keep serving it.
 		if ev.Slug != "" {
 			s.state.SetSlug(adapter.Slugify(ev.Slug))
-		} else if ev.ID != "" {
-			s.state.SetSlug(adapter.Slugify(ev.ID))
+		} else {
+			s.state.SetSlug("")
 		}
 	case "turn":
 		// Agent-loop transition. The extension reports phase + outcome; the

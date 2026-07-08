@@ -44,8 +44,8 @@ One JSON object per event, discriminated by `op`. Unknown ops/values are ignored
 {
   "op":     "session",
   "path":   "/abs/path/to/conversation-file",  // required; the conversation ref (a transcript path for today's file-backed agents)
-  "id":     "session-id",                       // optional; slugified for the URL if no slug
-  "slug":   "human-title",                      // optional; slug source (runner slugifies), preferred over id
+  "id":     "session-id",                       // optional; adapter session id, informational
+  "slug":   "human-title",                      // optional; slug source (runner slugifies); omit until titled
   "name":   "human title",                      // optional; sets the adapter title
   "cwd":    "/project/dir",                      // optional; accepted, not yet applied
   "reason": "startup|new|resume|fork|activity"  // optional; informational
@@ -62,8 +62,8 @@ One JSON object per event, discriminated by `op`. Unknown ops/values are ignored
 | Field     | Op       | Meaning |
 |-----------|----------|---------|
 | `path`    | session  | The held conversation's ref — adapter-opaque above the runner (ADR 0022); today's file-backed agents report the transcript's absolute path. |
-| `id`      | session  | Session identity; slugified into the URL when no `slug`. |
-| `slug`    | session  | Slug source, slugified by the runner; preferred over `id` (codex/pi session ids are UUIDs that slugify badly). |
+| `id`      | session  | Adapter's session id. Informational — the runner keys on the gmux session id, and never derives a slug from this (it's a UUID for real adapters). |
+| `slug`    | session  | Slug source, slugified by the runner. Send only once the session has a title; while omitted the runner leaves the slug empty and the web layer falls back to a short `id.slice(0,8)` of the gmux session id. |
 | `name`    | session  | Display title at bind time. |
 | `cwd`     | session  | Project dir. Accepted for forward-compat but not applied — the runner knows the launch cwd. |
 | `reason`  | session  | Why the bind happened; informational. |
