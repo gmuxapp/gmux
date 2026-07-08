@@ -41,12 +41,13 @@ import {
   makeAttachmentAdapter,
 } from './composer-attachments'
 import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown'
-// The only styling the packages ship: a streaming "pulse cursor" appended to
-// the last element while a message is generating (targets .aui-md[data-status
-// =running]). Bundled into the lazy island chunk. Typographic markdown styling
-// is NOT shipped (it's Tailwind `prose` in assistant-ui's copied components,
-// which we skip) — that stays in our minimal .conversation-markdown rules.
-import '@assistant-ui/react-markdown/styles/dot.css'
+// NB: we intentionally do NOT import '@assistant-ui/react-markdown/styles/
+// dot.css'. That stylesheet's sole effect is a streaming "pulse cursor" (●)
+// appended to the last element while a message generates — driven by the same
+// isRunning (= gmux `working`) signal as our composer "Working…" pill, so it's
+// a redundant second indicator. The pill is authoritative (whole-turn); the ●
+// also reads like content mid-prose. Typographic markdown styling isn't shipped
+// either (it's Tailwind `prose`); that stays in our .conversation-markdown CSS.
 import { makePrismAsyncLightSyntaxHighlighter } from '@assistant-ui/react-syntax-highlighter'
 import type { ConversationStore, ConvMessage } from './conversation'
 import { toThreadMessage, toolCallKind } from './conversation-adapter'
