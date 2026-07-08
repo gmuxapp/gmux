@@ -30,10 +30,16 @@ import {
   ThreadPrimitive,
   MessagePrimitive,
   ComposerPrimitive,
+  AttachmentPrimitive,
   type ThreadMessageLike,
   type AppendMessage,
   type ToolCallMessagePartProps,
 } from '@assistant-ui/react'
+import {
+  attachmentPaths,
+  composeMessageWithAttachments,
+  makeAttachmentAdapter,
+} from './composer-attachments'
 import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown'
 // The only styling the packages ship: a streaming "pulse cursor" appended to
 // the last element while a message is generating (targets .aui-md[data-status
@@ -51,7 +57,23 @@ export interface ConversationIslandProps {
   onSend?: (data: string) => void
   /** gmux session "working" status — drives the composer indicator + isRunning. */
   working?: boolean
+  /** Session id — needed to upload composer attachments to the owning gmuxd. */
+  sessionId?: string
 }
+
+// One attachment chip: a pill showing the file name with a remove button,
+// styled to match the composer. assistant-ui drives add/remove; we only render.
+const ComposerAttachment = () => (
+  <AttachmentPrimitive.Root className="conversation-attachment">
+    <AttachmentPrimitive.Name />
+    <AttachmentPrimitive.Remove
+      className="conversation-attachment-remove"
+      aria-label="Remove attachment"
+    >
+      ×
+    </AttachmentPrimitive.Remove>
+  </AttachmentPrimitive.Root>
+)
 
 // Code highlighting comes from the dependency (replaces the removed
 // highlight.js). Async-light registers languages on demand, keeping the
@@ -236,12 +258,22 @@ const AssistantMessage = () => (
   </MessagePrimitive.Root>
 )
 
-export function ConversationIsland({ store, onSend, working }: ConversationIslandProps) {
+export function ConversationIsland({ store, onSend, working, sessionId }: ConversationIslandProps) {
   const [tick, setTick] = useState(0)
   // Optimistic local echo of sent user turns (see SPIKE TODO above).
   const [echoes, setEchoes] = useState<ConvMessage[]>([])
+  // Visible surface for an attachment-upload failure (chip-level error copy).
+  const [attachError, setAttachError] = useState<string | null>(null)
 
   useEffect(() => store.subscribe(() => setTick((n) => n + 1)), [store])
+
+  // Upload-on-add attachment adapter, rebuilt when the session changes so the
+  // upload always targets the gmuxd that owns the current PTY. Omitted when we
+  // have no session id (attachments simply stay disabled then).
+  const attachments = useMemo(
+    () => (sessionId ? makeAttachmentAdapter(sessionId) : undefined),
+    [sessionId],
+  )
 
   const messages: ThreadMessageLike[] = useMemo(
     () => [...store.getMessages(), ...echoes].map(toThreadMessage),
@@ -258,20 +290,37 @@ export function ConversationIsland({ store, onSend, working }: ConversationIslan
     // messages are already ThreadMessageLike, so conversion is identity — this
     // also sidesteps assistant-ui not passing an index to convertMessage.
     convertMessage: (m: ThreadMessageLike) => m,
+    adapters: attachments ? { attachments } : undefined,
     onNew: async (message: AppendMessage) => {
       const text = message.content
         .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
         .map((p) => p.text)
         .join('')
-      if (!text) return
+      // Uploaded /tmp path(s) carried by completed attachments (upload happened
+      // on add). Splice them into the outgoing text before the submit \r.
+      const paths = attachmentPaths(message.attachments)
+      const composed = composeMessageWithAttachments(text, paths)
+      if (!composed) return
+      // Echo exactly what we send (text + spliced paths) so the local echo
+      // matches the turn pi receives.
       setEchoes((prev) => [
         ...prev,
-        { role: 'user', content: [{ type: 'text', text }] },
+        { role: 'user', content: [{ type: 'text', text: composed.trimEnd() }] },
       ])
       // §6: composed text reaches pi as keystrokes + Enter.
-      onSend?.(text + '\r')
+      onSend?.(composed + '\r')
     },
   })
+
+  // Surface attachment-upload failures (adapter throws → runtime emits
+  // attachmentAddError) as an inline error under the composer.
+  useEffect(
+    () =>
+      runtime.thread.composer.unstable_on('attachmentAddError', (e) => {
+        setAttachError(e.message || 'Attachment failed')
+      }),
+    [runtime],
+  )
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -290,14 +339,55 @@ export function ConversationIsland({ store, onSend, working }: ConversationIslan
             Working…
           </div>
         ) : null}
+        {attachError ? (
+          <div className="conversation-attach-error" role="alert">
+            {attachError}
+            <button
+              type="button"
+              className="conversation-attach-error-dismiss"
+              aria-label="Dismiss"
+              onClick={() => setAttachError(null)}
+            >
+              ×
+            </button>
+          </div>
+        ) : null}
         <ComposerPrimitive.Root className="conversation-composer">
-          <ComposerPrimitive.Input
-            className="conversation-composer-input"
-            placeholder="Message…"
-          />
-          <ComposerPrimitive.Send className="conversation-composer-send">
-            Send
-          </ComposerPrimitive.Send>
+          {attachments ? (
+            <ComposerPrimitive.AttachmentDropzone className="conversation-composer-dropzone">
+              <div className="conversation-composer-main">
+                <ComposerPrimitive.Attachments
+                  components={{ Attachment: ComposerAttachment }}
+                />
+                <div className="conversation-composer-row">
+                  <ComposerPrimitive.AddAttachment
+                    className="conversation-composer-add"
+                    aria-label="Attach file"
+                    multiple
+                  >
+                    +
+                  </ComposerPrimitive.AddAttachment>
+                  <ComposerPrimitive.Input
+                    className="conversation-composer-input"
+                    placeholder="Message…"
+                  />
+                  <ComposerPrimitive.Send className="conversation-composer-send">
+                    Send
+                  </ComposerPrimitive.Send>
+                </div>
+              </div>
+            </ComposerPrimitive.AttachmentDropzone>
+          ) : (
+            <>
+              <ComposerPrimitive.Input
+                className="conversation-composer-input"
+                placeholder="Message…"
+              />
+              <ComposerPrimitive.Send className="conversation-composer-send">
+                Send
+              </ComposerPrimitive.Send>
+            </>
+          )}
         </ComposerPrimitive.Root>
       </ThreadPrimitive.Root>
     </AssistantRuntimeProvider>
