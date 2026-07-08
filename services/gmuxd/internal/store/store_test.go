@@ -1409,6 +1409,49 @@ func TestLastActivityAt_NewSessionDoesNotBump(t *testing.T) {
 	}
 }
 
+// TestActivitySeed_ReseedsEmptyStamp pins the restart-recovery fix: a
+// session upserted with no LastActivityAt (the alive-across-restart
+// re-register case) is seeded from the activitySeed hook. This is the
+// regression — without the hook the stamp stays empty and the UI falls
+// back to created_at ("3 days ago").
+func TestActivitySeed_ReseedsEmptyStamp(t *testing.T) {
+	seed := "2026-01-02T03:04:05Z"
+	s := New()
+	s.SetActivitySeed(func(Session) string { return seed })
+	s.Upsert(Session{ID: "s1", Adapter: "pi", Alive: true})
+	got, _ := s.Get("s1")
+	if got.LastActivityAt != seed {
+		t.Fatalf("expected reseed to %q, got %q", seed, got.LastActivityAt)
+	}
+}
+
+// TestActivitySeed_DoesNotOverwriteExistingStamp pins that the seed is
+// a floor, not an override: a session that already carries a stamp (a
+// live value, or one restored from sessionmeta) keeps it.
+func TestActivitySeed_DoesNotOverwriteExistingStamp(t *testing.T) {
+	existing := "2026-05-05T05:05:05Z"
+	s := New()
+	s.SetActivitySeed(func(Session) string { return "2020-01-01T00:00:00Z" })
+	s.Upsert(Session{ID: "s1", Adapter: "pi", Alive: true, LastActivityAt: existing})
+	got, _ := s.Get("s1")
+	if got.LastActivityAt != existing {
+		t.Fatalf("expected existing stamp %q preserved, got %q", existing, got.LastActivityAt)
+	}
+}
+
+// TestActivitySeed_SkippedForPeer pins that peer sessions (UpsertRemote)
+// are not reseeded: the owning daemon stamps its own, and the mtime
+// source lives on the owning host.
+func TestActivitySeed_SkippedForPeer(t *testing.T) {
+	s := New()
+	s.SetActivitySeed(func(Session) string { return "2026-01-02T03:04:05Z" })
+	s.UpsertRemote(Session{ID: "s1", Adapter: "pi", Alive: true, Peer: "host2"})
+	got, _ := s.Get("s1")
+	if got.LastActivityAt != "" {
+		t.Fatalf("peer session should not be reseeded, got %q", got.LastActivityAt)
+	}
+}
+
 // TestLastActivityAt_BumpOnTransitions pins the exact set of state
 // transitions that bump: exited, unread on, working on, error on.
 // Each subtest starts from an alive-and-idle baseline and applies
