@@ -225,15 +225,13 @@ function HeaderStatusChip({ session, resuming }: {
       </div>
     )
   }
-  if (!session.status?.working && !session.status?.error) return null
-  const error = !!session.status.error
+  // A live "Working…" chip is redundant with the session's own dot
+  // indicator, so only the error state earns a header chip here.
+  if (!session.status?.error) return null
   return (
-    <div class={`main-header-status ${error ? 'error' : 'working'}`}>
-      <span
-        class={`session-dot ${error ? 'error' : 'working'}`}
-        style={{ width: 5, height: 5 }}
-      />
-      {error ? 'Error' : 'Working…'}
+    <div class="main-header-status error">
+      <span class="session-dot error" style={{ width: 5, height: 5 }} />
+      Error
     </div>
   )
 }

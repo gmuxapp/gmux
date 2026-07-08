@@ -17,7 +17,7 @@
 
 import { peerStatusByName } from './store'
 
-export function HostSuffix({ peer, leading = true, local = false }: { peer?: string; leading?: boolean; local?: boolean }) {
+export function HostSuffix({ peer, leading = true, local = false, connective }: { peer?: string; leading?: boolean; local?: boolean; connective?: string }) {
   if (!peer) return null
 
   // 'connected' or unknown (undefined) reads as normal; anything
@@ -33,7 +33,9 @@ export function HostSuffix({ peer, leading = true, local = false }: { peer?: str
       class={`host-suffix${offline ? ' offline' : ''}`}
       title={`${peer}${status ? ` (${status})` : ''}`}
     >
-      {leading && <span class="host-suffix-sep" aria-hidden="true"> · </span>}{peer}
+      {connective
+        ? <span class="host-suffix-prep">{connective} </span>
+        : leading && <span class="host-suffix-sep" aria-hidden="true"> · </span>}{peer}
     </span>
   )
 }

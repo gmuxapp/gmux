@@ -106,11 +106,23 @@ export function SessionRow({
     unavailable ? 'unavailable' : '',
   ].filter(Boolean).join(' ')
 
-  // Line-2 metadata segments. Render only the ones requested by
-  // props; empty arrays produce no separator dots in the output.
+  // Line-2 metadata, in reading order: time · project on host · folder.
+  // The bold project → muted host rhythm mirrors the sidebar folder
+  // header. Only requested segments render; empty ones add no separator.
   const metaSegments: preact.ComponentChildren[] = []
+  if (age) {
+    metaSegments.push(<span class="session-row-age">{age}</span>)
+  }
+  const hostEl = showHost && session.peer
+    ? <HostSuffix peer={session.peer} connective="on" />
+    : null
   if (showProject && projectName) {
-    metaSegments.push(<span class="session-row-project">{projectName}</span>)
+    // Grouped so the host joins the project with "on" and no dot between.
+    metaSegments.push(
+      <span class="session-row-project">{projectName}{hostEl && <> {hostEl}</>}</span>,
+    )
+  } else if (hostEl) {
+    metaSegments.push(hostEl)
   }
   if (showCwd && cwdLabel) {
     // Truncated in CSS; the title carries the full absolute cwd so a
@@ -125,9 +137,6 @@ export function SessionRow({
     metaSegments.push(
       <span class="session-row-dup" title="This conversation is open in more than one tab">⚠ open elsewhere</span>,
     )
-  }
-  if (age) {
-    metaSegments.push(<span class="session-row-age">{age}</span>)
   }
 
   return (
@@ -147,7 +156,7 @@ export function SessionRow({
       }
       <div class="session-row-content">
         <div class="session-row-title">{session.title}</div>
-        {(metaSegments.length > 0 || showHost) && (
+        {metaSegments.length > 0 && (
           <div class="session-row-meta">
             {metaSegments.map((seg, i) => (
               // Long-form Fragment carries a key: the shorthand `<>`
@@ -161,7 +170,6 @@ export function SessionRow({
                 {seg}
               </Fragment>
             ))}
-            {showHost && <HostSuffix peer={session.peer} leading={metaSegments.length > 0} />}
           </div>
         )}
       </div>

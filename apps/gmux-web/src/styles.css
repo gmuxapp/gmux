@@ -439,6 +439,10 @@ body {
   opacity: 0.6;
   margin: 0 0.1em;
 }
+/* "on" connective before a host name: inherits the host's muted colour. */
+.host-suffix-prep {
+  color: inherit;
+}
 
 /* ── Session Item ── */
 
@@ -796,24 +800,26 @@ body {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  margin-top: 3px;
-  font-size: 11px;
+  margin-top: 4px;
+  font-size: 12px;
   color: var(--text-muted);
   min-width: 0;
 }
 .session-row-sep {
   color: var(--text-muted);
   opacity: 0.6;
+  margin: 0 0.4em; /* air so the meta line doesn't read as a run-on */
 }
 .session-row-project {
+  /* Bold, matching the sidebar folder header (.folder-name). */
   color: var(--text);
-  opacity: 0.85;
+  font-weight: 600;
 }
 .session-row-cwd {
-  font-family: var(--font-mono, monospace);
-  /* Long worktree/subfolder paths truncate rather than pushing the
-   * rest of the meta line off-screen; full path is in the title. */
-  max-width: 22ch;
+  /* No monospace: the ./ ~/ / prefix already marks it as a folder, and
+   * the shared font keeps the meta line one size. Ellipsizes only when
+   * a path exceeds the line (full path is in the title). */
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -823,6 +829,9 @@ body {
 }
 .session-row-age {
   font-variant-numeric: tabular-nums;
+  /* Weight + colour matched to the project so the time reads as its peer. */
+  font-weight: 600;
+  color: var(--text);
 }
 .session-row-dup,
 .session-dup-warning {
@@ -1599,7 +1608,8 @@ body {
 
 .main-header-left {
   display: flex;
-  align-items: center;
+  /* Baseline so the bold title and smaller muted cwd align. */
+  align-items: baseline;
   gap: 8px;
   min-width: 0;
   overflow: hidden;

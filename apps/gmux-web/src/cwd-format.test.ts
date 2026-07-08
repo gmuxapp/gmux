@@ -50,12 +50,13 @@ describe('cwdBadge', () => {
 })
 
 describe('hubCwdLabel', () => {
-  it('marks a session at the project root with a dot', () => {
-    expect(hubCwdLabel('~/dev/gmux', '~/dev/gmux')).toBe('.')
+  it('marks a session at the project root with a folder-shaped ./', () => {
+    // './' (not a bare '.') so the token always reads as a directory.
+    expect(hubCwdLabel('~/dev/gmux', '~/dev/gmux')).toBe('./')
   })
 
-  it('is blank for an unresolved (empty) cwd, not a stray dot', () => {
-    // Regression guard: an empty cwd must not collapse to '.', which
+  it('is blank for an unresolved (empty) cwd, not a stray ./', () => {
+    // Regression guard: an empty cwd must not collapse to './', which
     // would label a placeholder as if it were the project root.
     expect(hubCwdLabel('', '~/dev/gmux')).toBe('')
     expect(hubCwdLabel(undefined, '~/dev/gmux')).toBe('')
