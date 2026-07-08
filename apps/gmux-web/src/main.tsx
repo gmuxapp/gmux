@@ -258,8 +258,9 @@ function HeaderStatusChip({ session, resuming }: {
       </div>
     )
   }
-  // A live "Working…" chip is redundant with the session's own dot
-  // indicator, so only the error state earns a header chip here.
+  // A live "Working…" chip is redundant with the session's own dot indicator,
+  // so only the error state earns a header chip here. (ADR 0021 additionally
+  // surfaces a "Working…" pill above the conversation composer.)
   if (!session.status?.error) return null
   return (
     <div class="main-header-status error">
@@ -807,7 +808,10 @@ function App() {
             {/* Full-panel conversation view (replaces the terminal). Composer
                 writes via the daemon /input/{id} keystroke proxy (ADR 0021
                 §6), independent of a mounted terminal. */}
-            <ConversationView sessionId={selectedVal!.id} />
+            <ConversationView
+              sessionId={selectedVal!.id}
+              working={!!(selectedVal!.alive && selectedVal!.status?.working)}
+            />
           </div>
         ) : selectedVal && (canAttach || USE_MOCK) && termOpts && keybindsVal ? (
           <TerminalView

@@ -3498,49 +3498,89 @@ body {
   word-break: break-word;
 }
 
-/* Composer: one row, input grows, icon buttons match the app's controls. */
+/* Working indicator: sits just above the composer (replaces the header
+   "Working…" chip, ADR 0021). Muted, with a gently pulsing dot — mirrors the
+   old header chip's language. */
+.conversation-working {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 16px 4px;
+  font-size: 12px;
+  color: var(--fg-muted, #7a828e);
+}
+.conversation-working-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-muted, #7a828e);
+  animation: conversation-pulse 1.3s ease-in-out infinite;
+}
+@keyframes conversation-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Composer: a single rounded shell (assistant-ui / hakanai shape) — the input
+   is borderless inside it, actions are compact icon buttons. */
 .conversation-composer {
   display: flex;
   align-items: flex-end;
   gap: 6px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--border, #2a2f37);
-  background: var(--bg-surface, #19191f);
+  margin: 8px 14px 12px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid var(--border, #2a2f37);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--bg-elevated, #1b1f26) 35%, var(--bg, #14171c));
+}
+.conversation-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent, #6ea8fe) 55%, var(--border, #2a2f37));
 }
 .conversation-composer-input {
   flex: 1;
   resize: none;
-  min-height: 22px;
-  max-height: 140px;
-  padding: 6px 8px;
+  min-height: 24px;
+  max-height: 160px;
+  padding: 4px 2px;
   color: var(--text, #e6e6e6);
-  background: var(--bg, #14171c);
-  border: 1px solid var(--border, #2a2f37);
-  border-radius: 6px;
-  font: inherit;
-}
-.conversation-composer-input:focus {
+  background: transparent;
+  border: 0;
   outline: none;
-  border-color: var(--accent, #6ea8fe);
+  font: inherit;
 }
 .conversation-composer-mic,
 .conversation-composer-send {
   flex: none;
-  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  min-width: 30px;
+  padding: 0 10px;
   color: var(--text, #e6e6e6);
-  background: var(--bg-hover, #21242b);
-  border: 1px solid var(--border, #2a2f37);
-  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 15px;
   cursor: pointer;
+}
+.conversation-composer-mic:hover {
+  background: var(--bg-hover, #21242b);
 }
 .conversation-composer-send {
   color: var(--bg, #14171c);
   background: var(--accent, #6ea8fe);
-  border-color: var(--accent, #6ea8fe);
+  font-weight: 500;
+}
+.conversation-composer-send:hover {
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 85%, #fff);
 }
 .conversation-composer-mic[data-dictating] {
   color: var(--status-error, #e5484d);
-  border-color: var(--status-error, #e5484d);
 }
 
 /* Slice #2: markdown-rendered content + distinct thinking blocks. */
@@ -3587,88 +3627,159 @@ body {
   color: var(--fg-muted, #7a828e);
 }
 
-.conversation-thinking {
-  margin-bottom: 8px;
-  padding: 6px 10px;
-  background: color-mix(in srgb, var(--bg-elevated, #1b1f26) 60%, transparent);
-  border-radius: 4px;
+/* Thinking + tool calls are secondary: dim, quiet log lines, not UI chrome.
+   No dots, chevrons, boxes, or hover fills — muted text carries the weight, and
+   both share `.conversation-disclosure` so they read identically. */
+.conversation-disclosure {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
   color: var(--fg-muted, #7a828e);
   font-size: 13px;
+  line-height: 1.5;
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conversation-disclosure::-webkit-details-marker {
+  display: none;
+}
+
+/* Text-shimmer for the active verb ("Thinking", "Executing…") while a block is
+   streaming: a bright band sweeps across the muted text. Plain-CSS translation
+   of assistant-ui's tw-shimmer. Honors reduced-motion. */
+@keyframes conversation-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.conversation-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--fg-muted, #7a828e) 0%,
+    var(--fg-muted, #7a828e) 35%,
+    var(--term-fg, #d3d8de) 50%,
+    var(--fg-muted, #7a828e) 65%,
+    var(--fg-muted, #7a828e) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: conversation-shimmer 2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .conversation-shimmer {
+    animation: none;
+    background: none;
+    color: var(--fg-muted, #7a828e);
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
+/* Thinking + tool rows share the prose vertical rhythm (8px), so text,
+   reasoning, and tool blocks in one message are evenly spaced; adjacent
+   margins collapse so a run of tool calls stays evenly spaced too. */
+.conversation-thinking {
+  margin: 8px 0;
 }
 .conversation-thinking-body {
-  margin-top: 6px;
+  margin: 3px 0 8px;
+  color: var(--fg-muted, #7a828e);
+  font-size: 13px;
   white-space: pre-wrap;
   word-break: break-word;
 }
-.conversation-thinking-label {
-  cursor: pointer;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--fg-muted, #7a828e);
-  user-select: none;
-}
-.conversation-thinking[open] .conversation-thinking-label {
-  margin-bottom: 6px;
-}
 
-/* Tool calls (ACP tool_call). Minimal card matching the thinking block; a
-   small status dot goes amber while running, green on success, red on error. */
 .conversation-tool {
-  margin-bottom: 8px;
-  padding: 6px 10px;
-  background: color-mix(in srgb, var(--bg-elevated, #1b1f26) 60%, transparent);
-  border-radius: 4px;
+  margin: 8px 0;
   font-size: 13px;
 }
-.conversation-tool-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.conversation-tool-status {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--fg-muted, #7a828e);
-  flex: none;
-}
-.conversation-tool[data-state='running'] .conversation-tool-status {
-  background: #d7a53a;
-}
-.conversation-tool[data-state='done'] .conversation-tool-status {
-  background: #5aa469;
-}
-.conversation-tool[data-state='error'] .conversation-tool-status {
-  background: #c65b5b;
-}
-.conversation-tool-name {
-  font-family: var(--font-mono, monospace);
-  color: var(--term-fg, #d3d8de);
-}
-.conversation-tool-args,
-.conversation-tool-output {
-  margin-top: 6px;
-}
-.conversation-tool-args-label {
-  cursor: pointer;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+/* Collapsed row: "<verb> <target>". Everything muted; the bash command is the
+   only emphasized token (mono + bold) so it stands out as what actually ran. */
+.conversation-tool-verb {
   color: var(--fg-muted, #7a828e);
-  user-select: none;
 }
-.conversation-tool-args-body,
-.conversation-tool-output {
+.conversation-tool-arg,
+.conversation-tool-cmd {
+  margin-left: 0.5ch;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--fg-muted, #7a828e);
+}
+.conversation-tool-cmd {
+  font-weight: 600;
+}
+/* When a bash row is open the command moves into the ❯ body, so drop it from
+   the summary to avoid showing it twice. */
+.conversation-tool[open] .conversation-tool-cmd {
+  display: none;
+}
+/* Failure: a single subtle red dot at the end of the line. */
+.conversation-tool-fail {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 0.6ch;
+  border-radius: 50%;
+  background: #c65b5b;
+  vertical-align: middle;
+}
+.conversation-tool-body {
+  margin: 3px 0 8px;
+}
+/* Bash open state: pi-style prompt line then output, all muted. */
+.conversation-tool-cmdline {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--fg-muted, #7a828e);
+  font-weight: 600;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.conversation-tool-prompt {
+  opacity: 0.6;
+  font-weight: 400;
+}
+.conversation-tool-pre {
+  margin: 2px 0 0;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--font-mono, monospace);
   font-size: 12px;
   color: var(--fg-muted, #7a828e);
-}
-.conversation-tool-output {
-  max-height: 240px;
+  max-height: 360px;
   overflow: auto;
+}
+.conversation-tool-hint {
+  color: var(--fg-muted, #7a828e);
+  font-style: italic;
+}
+.conversation-tool-more {
+  margin-top: 4px;
+  padding: 0;
+  font-size: 11px;
+  color: var(--fg-muted, #7a828e);
+  background: transparent;
+  border: 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.conversation-tool-more:hover {
+  color: var(--term-fg, #d3d8de);
+}
+.conversation-tool-args {
+  margin-top: 6px;
+}
+.conversation-tool-args-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 /* Prism token colors (same minimal dark palette as the prior hljs block;

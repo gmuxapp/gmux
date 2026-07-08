@@ -27,13 +27,15 @@ import { ConversationIsland } from './conversation-island'
 
 interface Props {
   sessionId: string
+  /** gmux "working" status of the session; surfaced as the composer indicator. */
+  working?: boolean
   /** Injectable for tests; defaults to a fresh store wired to the live WS. */
   store?: ConversationStore
   /** When false, skip opening the WebSocket (tests pass a pre-fed store). */
   connect?: boolean
 }
 
-export function ConversationView({ sessionId, store: injected, connect = true }: Props) {
+export function ConversationView({ sessionId, working, store: injected, connect = true }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<Root | null>(null)
   const storeRef = useRef<ConversationStore>()
@@ -65,10 +67,11 @@ export function ConversationView({ sessionId, store: injected, connect = true }:
     rootRef.current?.render(
       createElement(ConversationIsland, {
         store: storeRef.current!,
+        working,
         onSend: (data: string) => void sendSessionInput(sessionId, data),
       }),
     )
-  }, [sessionId])
+  }, [sessionId, working])
 
   return <div ref={hostRef} class="conversation-view" />
 }
