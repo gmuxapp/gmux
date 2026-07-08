@@ -104,7 +104,7 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
       href={sessionPath(projectSlug, s, projectPeer)}
       showCwd={!sharedCwd}
       // Multi-cwd disambiguator: express each cwd relative to the
-      // canonical folder ('.' for a session at the project root, blank
+      // canonical folder ('./' for a session at the project root, blank
       // for an unresolved cwd so its segment is dropped).
       cwdLabel={hubCwdLabel(s.cwd, canonicalCwd)}
       showHost={mixedHosts}

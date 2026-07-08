@@ -36,13 +36,13 @@ export function cwdBadge(cwd: string | undefined, canonical?: string): string | 
 }
 
 /**
- * Project-hub row disambiguator: like relativeCwd, but a session sitting
- * at the project root reads as '.' (a meaningful "here" marker when rows
- * disagree on cwd) rather than a blank segment. An unresolved (empty)
- * cwd still yields '' so the row renders nothing — a placeholder cwd is
- * not a location worth labelling.
+ * Project-hub row disambiguator: like relativeCwd, but a session at the
+ * project root reads as './' rather than a bare '.', keeping the
+ * invariant that every rendered folder token starts with './', '~/', or
+ * '/'. An empty cwd still yields '' (never './') so its row renders no
+ * location marker.
  */
 export function hubCwdLabel(cwd: string | undefined, canonical?: string): string {
   if (!cwd) return ''
-  return relativeCwd(cwd, canonical) || '.'
+  return relativeCwd(cwd, canonical) || './'
 }
