@@ -68,6 +68,7 @@ export function ConversationView({ sessionId, working, store: injected, connect 
       createElement(ConversationIsland, {
         store: storeRef.current!,
         working,
+        sessionId,
         onSend: (data: string) => void sendSessionInput(sessionId, data),
       }),
     )
