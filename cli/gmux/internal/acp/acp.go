@@ -56,6 +56,43 @@ const (
 	ToolStatusFailed     = "failed"      // finished with an error
 )
 
+// Tool-call kind values (mirroring ACP `ToolKind`). The kind is the *semantic
+// category* of a tool, which the frontend switches on to pick an icon, header
+// shape, and body renderer — rather than matching the free-form tool name
+// (ADR 0021 favors ACP wire names; ACP: "Tool kinds help Clients choose
+// appropriate icons and optimize how they display tool execution progress").
+const (
+	ToolKindRead    = "read"    // reading files or data
+	ToolKindEdit    = "edit"    // modifying/creating files or content
+	ToolKindDelete  = "delete"  // removing files or data
+	ToolKindMove    = "move"    // moving or renaming files
+	ToolKindSearch  = "search"  // searching for information
+	ToolKindExecute = "execute" // running commands or code
+	ToolKindThink   = "think"   // internal reasoning or planning
+	ToolKindFetch   = "fetch"   // retrieving external data
+	ToolKindOther   = "other"   // anything else (default)
+)
+
+// KindForToolName maps a pi tool name to an ACP ToolKind. It is the single
+// source of truth for the name→kind translation on the Go side (the durable
+// JSONL history path); the pi extension mirrors this table for the live path
+// (both are pi facts, translated at the typed-access point per ADR 0015).
+// Unknown tools fall back to ToolKindOther, so rendering degrades gracefully.
+func KindForToolName(name string) string {
+	switch name {
+	case "bash":
+		return ToolKindExecute
+	case "read", "ls":
+		return ToolKindRead
+	case "edit", "write":
+		return ToolKindEdit
+	case "grep", "find", "glob":
+		return ToolKindSearch
+	default:
+		return ToolKindOther
+	}
+}
+
 // Notification is a JSON-RPC 2.0 notification frame (no id, no response).
 // Both the snapshot and the live stream are sent as notifications.
 type Notification struct {
@@ -80,6 +117,7 @@ type ContentBlock struct {
 	// Tool-call fields (Type == ContentTypeToolCall).
 	ToolCallID string `json:"toolCallId,omitempty"`
 	ToolName   string `json:"toolName,omitempty"`
+	Kind       string `json:"kind,omitempty"`   // ACP ToolKind (read/edit/execute/...)
 	Args       string `json:"args,omitempty"`   // raw JSON arguments text
 	Status     string `json:"status,omitempty"` // in_progress | completed | failed
 	Output     string `json:"output,omitempty"` // textual tool result
@@ -96,12 +134,15 @@ func ThinkingBlock(text string) ContentBlock {
 }
 
 // ToolCallBlock is a convenience constructor for a tool-call content block in
-// its initial (in-progress) state: id, name, and raw JSON arguments.
-func ToolCallBlock(id, name, args string) ContentBlock {
+// its initial (in-progress) state: id, name, kind, and raw JSON arguments.
+// The kind is the caller's declared ACP ToolKind; an empty kind is left empty
+// (the frontend treats a missing kind as "other").
+func ToolCallBlock(id, name, kind, args string) ContentBlock {
 	return ContentBlock{
 		Type:       ContentTypeToolCall,
 		ToolCallID: id,
 		ToolName:   name,
+		Kind:       kind,
 		Args:       args,
 		Status:     ToolStatusInProgress,
 	}

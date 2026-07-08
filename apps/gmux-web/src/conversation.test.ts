@@ -30,6 +30,7 @@ const toolCallFrame = (
   toolName: string,
   args: string,
   messageId?: string,
+  kind = 'execute',
 ) => ({
   jsonrpc: '2.0',
   method: 'session/update',
@@ -38,7 +39,7 @@ const toolCallFrame = (
     update: {
       sessionUpdate: 'tool_call',
       messageId,
-      content: { type: 'tool_call', toolCallId, toolName, args, status: 'in_progress' },
+      content: { type: 'tool_call', toolCallId, toolName, kind, args, status: 'in_progress' },
     },
   },
 })
@@ -161,7 +162,7 @@ describe('conversation store', () => {
     // text block then a distinct tool_call block, in order
     expect(msgs[0].content).toEqual([
       { type: 'text', text: 'let me check' },
-      { type: 'tool_call', toolCallId: 't1', toolName: 'bash', args: '{"cmd":"ls"}', status: 'in_progress' },
+      { type: 'tool_call', toolCallId: 't1', toolName: 'bash', kind: 'execute', args: '{"cmd":"ls"}', status: 'in_progress' },
     ])
     // the update mutates the same block by id (no new block appended)
     s.applyFrame(toolCallUpdateFrame('t1', 'completed', 'file.txt', 'm1'))
@@ -171,6 +172,7 @@ describe('conversation store', () => {
       type: 'tool_call',
       toolCallId: 't1',
       toolName: 'bash',
+      kind: 'execute',
       args: '{"cmd":"ls"}',
       status: 'completed',
       output: 'file.txt',

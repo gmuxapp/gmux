@@ -20,6 +20,17 @@ import type { ThreadMessageLike } from '@assistant-ui/react'
 type Part = Extract<ThreadMessageLike['content'], readonly unknown[]>[number]
 type ToolCallPart = Extract<Part, { type: 'tool-call' }>
 
+// Our tool-call part additionally carries the ACP `kind` (read/edit/execute/
+// ...). assistant-ui's part type doesn't declare it, but `fromThreadMessageLike`
+// spreads unknown fields through to the rendered part, so the renderer can read
+// it via `toolCallKind(part)`. Keeping it a named extension localizes the cast.
+export type ToolCallPartWithKind = ToolCallPart & { kind?: string }
+
+/** Read the ACP kind smuggled onto a rendered tool-call part (absent → 'other'). */
+export function toolCallKind(part: { kind?: string }): string {
+  return part.kind || 'other'
+}
+
 // Map a gmux tool-call block to assistant-ui's tool-call content part. The
 // raw JSON `args` text is parsed to an object (assistant-ui also keeps the raw
 // text via argsText for streaming/partial display); the textual output becomes
@@ -38,15 +49,17 @@ function toToolCallPart(block: ContentBlock): ToolCallPart {
     }
   }
   const done = block.status === 'completed' || block.status === 'failed'
-  return {
+  const part: ToolCallPartWithKind = {
     type: 'tool-call',
     toolCallId: block.toolCallId ?? '',
     toolName: block.toolName ?? '',
+    kind: block.kind || 'other',
     args,
     argsText,
     ...(done ? { result: block.output ?? '' } : {}),
     ...(block.status === 'failed' ? { isError: true } : {}),
   }
+  return part
 }
 
 export function toThreadMessage(m: ConvMessage, index: number): ThreadMessageLike {

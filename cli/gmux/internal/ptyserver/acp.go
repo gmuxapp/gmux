@@ -56,6 +56,7 @@ type acpIngest struct {
 	// Tool-call fields (op "tool_call" / "tool_call_update").
 	ToolCallID string `json:"toolCallId,omitempty"` // stable invocation id
 	ToolName   string `json:"toolName,omitempty"`   // tool name (op "tool_call")
+	Kind       string `json:"kind,omitempty"`       // ACP ToolKind (op "tool_call")
 	Args       string `json:"args,omitempty"`       // raw JSON arguments (op "tool_call")
 	Status     string `json:"status,omitempty"`     // completed | failed (op "tool_call_update")
 	Output     string `json:"output,omitempty"`     // textual result (op "tool_call_update")
@@ -128,7 +129,7 @@ func (h *acpHub) appendToolCall(ev acpIngest) {
 		h.tailActive = true
 		h.tailMsgID = ev.MessageID
 	}
-	block := acp.ToolCallBlock(ev.ToolCallID, ev.ToolName, ev.Args)
+	block := acp.ToolCallBlock(ev.ToolCallID, ev.ToolName, ev.Kind, ev.Args)
 	h.tailBlocks = append(h.tailBlocks, block)
 	msgID := h.tailMsgID
 	h.mu.Unlock()

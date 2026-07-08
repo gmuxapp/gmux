@@ -59,6 +59,7 @@ describe('conversation-adapter: ConvMessage → ThreadMessageLike', () => {
           type: 'tool_call',
           toolCallId: 't1',
           toolName: 'bash',
+          kind: 'execute',
           args: '{"cmd":"ls"}',
           status: 'in_progress',
         },
@@ -69,10 +70,25 @@ describe('conversation-adapter: ConvMessage → ThreadMessageLike', () => {
         type: 'tool-call',
         toolCallId: 't1',
         toolName: 'bash',
+        kind: 'execute',
         args: { cmd: 'ls' },
         argsText: '{"cmd":"ls"}',
       },
     ])
+  })
+
+  it('carries the ACP kind onto the tool-call part; defaults to "other" when absent', () => {
+    const withKind: ConvMessage = {
+      role: 'assistant',
+      content: [{ type: 'tool_call', toolCallId: 't1', toolName: 'grep', kind: 'search', args: '' }],
+    }
+    expect(toThreadMessage(withKind, 0).content[0]).toMatchObject({ kind: 'search' })
+
+    const noKind: ConvMessage = {
+      role: 'assistant',
+      content: [{ type: 'tool_call', toolCallId: 't2', toolName: 'weird', args: '' }],
+    }
+    expect(toThreadMessage(noKind, 0).content[0]).toMatchObject({ kind: 'other' })
   })
 
   it('maps a completed tool_call to a tool-call part with result', () => {
@@ -83,6 +99,7 @@ describe('conversation-adapter: ConvMessage → ThreadMessageLike', () => {
           type: 'tool_call',
           toolCallId: 't1',
           toolName: 'bash',
+          kind: 'execute',
           args: '{"cmd":"ls"}',
           status: 'completed',
           output: 'file.txt',
@@ -94,6 +111,7 @@ describe('conversation-adapter: ConvMessage → ThreadMessageLike', () => {
         type: 'tool-call',
         toolCallId: 't1',
         toolName: 'bash',
+        kind: 'execute',
         args: { cmd: 'ls' },
         argsText: '{"cmd":"ls"}',
         result: 'file.txt',
@@ -105,7 +123,7 @@ describe('conversation-adapter: ConvMessage → ThreadMessageLike', () => {
     const m: ConvMessage = {
       role: 'assistant',
       content: [
-        { type: 'tool_call', toolCallId: 't1', toolName: 'bash', args: '', status: 'failed', output: 'boom' },
+        { type: 'tool_call', toolCallId: 't1', toolName: 'bash', kind: 'execute', args: '', status: 'failed', output: 'boom' },
       ],
     }
     expect(toThreadMessage(m, 0).content).toEqual([
@@ -113,6 +131,7 @@ describe('conversation-adapter: ConvMessage → ThreadMessageLike', () => {
         type: 'tool-call',
         toolCallId: 't1',
         toolName: 'bash',
+        kind: 'execute',
         args: {},
         argsText: '',
         result: 'boom',
@@ -125,11 +144,11 @@ describe('conversation-adapter: ConvMessage → ThreadMessageLike', () => {
     const m: ConvMessage = {
       role: 'assistant',
       content: [
-        { type: 'tool_call', toolCallId: 't1', toolName: 'bash', args: '{"cmd":', status: 'in_progress' },
+        { type: 'tool_call', toolCallId: 't1', toolName: 'bash', kind: 'execute', args: '{"cmd":', status: 'in_progress' },
       ],
     }
     expect(toThreadMessage(m, 0).content).toEqual([
-      { type: 'tool-call', toolCallId: 't1', toolName: 'bash', args: {}, argsText: '{"cmd":' },
+      { type: 'tool-call', toolCallId: 't1', toolName: 'bash', kind: 'execute', args: {}, argsText: '{"cmd":' },
     ])
   })
 

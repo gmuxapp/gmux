@@ -77,7 +77,7 @@ func TestACPHubBroadcastsToolCall(t *testing.T) {
 	h.ingest(acpIngest{Op: "message_start", MessageID: "m1"})
 	h.ingest(acpIngest{
 		Op: "tool_call", MessageID: "m1",
-		ToolCallID: "t1", ToolName: "bash", Args: `{"cmd":"ls"}`,
+		ToolCallID: "t1", ToolName: "bash", Kind: acp.ToolKindExecute, Args: `{"cmd":"ls"}`,
 	})
 
 	note := <-ch
@@ -91,6 +91,9 @@ func TestACPHubBroadcastsToolCall(t *testing.T) {
 	c := p.Update.Content
 	if c.Type != acp.ContentTypeToolCall || c.ToolCallID != "t1" || c.ToolName != "bash" {
 		t.Errorf("tool call content = %+v", c)
+	}
+	if c.Kind != acp.ToolKindExecute {
+		t.Errorf("tool call kind = %q, want %q", c.Kind, acp.ToolKindExecute)
 	}
 	if c.Args != `{"cmd":"ls"}` || c.Status != acp.ToolStatusInProgress {
 		t.Errorf("tool call args/status = %+v", c)
