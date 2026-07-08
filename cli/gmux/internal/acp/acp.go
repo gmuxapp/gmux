@@ -4,11 +4,12 @@
 // pi extension for terminal pi, or re-published from a real ACP agent later);
 // the frontend consumes them through one renderer regardless of adapter.
 //
-// SCOPE (slice #2): streaming assistant text AND thinking. This package
-// defines the `session/load` history snapshot and the `session/update`
-// `agent_message_chunk` (assistant text) + `agent_thought_chunk` (reasoning)
-// variants. Tool calls, prompt/cancel, and the rest of ADR 0021 §7 are
-// intentionally omitted; add them in later slices.
+// SCOPE (slice #3): streaming assistant text, thinking, AND tool calls. This
+// package defines the `session/load` history snapshot and the `session/update`
+// `agent_message_chunk` (assistant text), `agent_thought_chunk` (reasoning),
+// `tool_call` (a tool invocation) + `tool_call_update` (its status/output)
+// variants. prompt/cancel and the rest of ADR 0021 §7 are intentionally
+// omitted; add them in later slices.
 //
 // The full wire contract (both channels) is documented in
 // docs/acp-conversation-stream.md.
@@ -37,12 +38,22 @@ const (
 const (
 	UpdateAgentMessageChunk = "agent_message_chunk" // assistant text delta
 	UpdateAgentThoughtChunk = "agent_thought_chunk" // assistant reasoning/thinking delta
+	UpdateToolCall          = "tool_call"           // a tool call appears (name + args)
+	UpdateToolCallUpdate    = "tool_call_update"    // a tool call's status/output changes
 )
 
 // ContentType discriminates a content block.
 const (
-	ContentTypeText     = "text"     // assistant/user visible text
-	ContentTypeThinking = "thinking" // assistant reasoning (rendered distinctly)
+	ContentTypeText     = "text"      // assistant/user visible text
+	ContentTypeThinking = "thinking"  // assistant reasoning (rendered distinctly)
+	ContentTypeToolCall = "tool_call" // a tool invocation + its status/output
+)
+
+// Tool-call status values (mirroring ACP `toolCall.status`).
+const (
+	ToolStatusInProgress = "in_progress" // executing
+	ToolStatusCompleted  = "completed"   // finished successfully
+	ToolStatusFailed     = "failed"      // finished with an error
 )
 
 // Notification is a JSON-RPC 2.0 notification frame (no id, no response).
@@ -57,9 +68,21 @@ type Notification struct {
 // vs thinking (and, in later slices, image / resource) without a schema break.
 // Both text and thinking carry their payload in Text: the wire shape stays
 // uniform, and Type tells the renderer how to present it.
+//
+// A tool-call block (Type == ContentTypeToolCall) is not text: it carries the
+// invocation id, tool name, raw JSON arguments, an execution status, and (once
+// finished) the textual output. Unlike text/thinking, a tool-call block is
+// mutated in place by a later tool_call_update (status/output), keyed on
+// ToolCallID, rather than appended to.
 type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+	// Tool-call fields (Type == ContentTypeToolCall).
+	ToolCallID string `json:"toolCallId,omitempty"`
+	ToolName   string `json:"toolName,omitempty"`
+	Args       string `json:"args,omitempty"`   // raw JSON arguments text
+	Status     string `json:"status,omitempty"` // in_progress | completed | failed
+	Output     string `json:"output,omitempty"` // textual tool result
 }
 
 // TextBlock is a convenience constructor for a text content block.
@@ -70,6 +93,18 @@ func TextBlock(text string) ContentBlock {
 // ThinkingBlock is a convenience constructor for a reasoning content block.
 func ThinkingBlock(text string) ContentBlock {
 	return ContentBlock{Type: ContentTypeThinking, Text: text}
+}
+
+// ToolCallBlock is a convenience constructor for a tool-call content block in
+// its initial (in-progress) state: id, name, and raw JSON arguments.
+func ToolCallBlock(id, name, args string) ContentBlock {
+	return ContentBlock{
+		Type:       ContentTypeToolCall,
+		ToolCallID: id,
+		ToolName:   name,
+		Args:       args,
+		Status:     ToolStatusInProgress,
+	}
 }
 
 // Message is one turn in the conversation history snapshot: a role plus its
@@ -127,6 +162,18 @@ func NewAgentMessageChunk(sessionID, messageID, delta string) (Notification, err
 // parallel to NewAgentMessageChunk but carrying a thinking content block.
 func NewAgentThoughtChunk(sessionID, messageID, delta string) (Notification, error) {
 	return newUpdate(sessionID, UpdateAgentThoughtChunk, messageID, ThinkingBlock(delta))
+}
+
+// NewToolCall builds a live frame announcing a new tool call (in progress). The
+// content block carries the invocation id, tool name, and raw JSON arguments.
+func NewToolCall(sessionID, messageID string, block ContentBlock) (Notification, error) {
+	return newUpdate(sessionID, UpdateToolCall, messageID, block)
+}
+
+// NewToolCallUpdate builds a live frame mutating an existing tool call by id:
+// the content block carries the same ToolCallID plus its new status and output.
+func NewToolCallUpdate(sessionID, messageID string, block ContentBlock) (Notification, error) {
+	return newUpdate(sessionID, UpdateToolCallUpdate, messageID, block)
 }
 
 func newUpdate(sessionID, kind, messageID string, content ContentBlock) (Notification, error) {

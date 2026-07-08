@@ -70,6 +70,67 @@ func TestACPHubTailKeepsThinkingAndTextInOrder(t *testing.T) {
 	}
 }
 
+func TestACPHubBroadcastsToolCall(t *testing.T) {
+	h := newACPHub("sess1")
+	_, ch, _ := h.attach("")
+
+	h.ingest(acpIngest{Op: "message_start", MessageID: "m1"})
+	h.ingest(acpIngest{
+		Op: "tool_call", MessageID: "m1",
+		ToolCallID: "t1", ToolName: "bash", Args: `{"cmd":"ls"}`,
+	})
+
+	note := <-ch
+	var p acp.UpdateParams
+	if err := json.Unmarshal(note.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Update.SessionUpdate != acp.UpdateToolCall {
+		t.Errorf("sessionUpdate = %q, want %q", p.Update.SessionUpdate, acp.UpdateToolCall)
+	}
+	c := p.Update.Content
+	if c.Type != acp.ContentTypeToolCall || c.ToolCallID != "t1" || c.ToolName != "bash" {
+		t.Errorf("tool call content = %+v", c)
+	}
+	if c.Args != `{"cmd":"ls"}` || c.Status != acp.ToolStatusInProgress {
+		t.Errorf("tool call args/status = %+v", c)
+	}
+}
+
+// A tool_call then tool_call_update must mutate the same tail block by id
+// (status + output), not append a second block.
+func TestACPHubToolCallUpdateMutatesTailByID(t *testing.T) {
+	h := newACPHub("sess1")
+	h.ingest(acpIngest{Op: "message_start", MessageID: "m1"})
+	h.ingest(acpIngest{Op: "chunk", MessageID: "m1", Delta: "on it"})
+	h.ingest(acpIngest{
+		Op: "tool_call", MessageID: "m1",
+		ToolCallID: "t1", ToolName: "bash", Args: "{}",
+	})
+	h.ingest(acpIngest{
+		Op: "tool_call_update", MessageID: "m1",
+		ToolCallID: "t1", Status: acp.ToolStatusCompleted, Output: "file.txt",
+	})
+
+	h.mu.Lock()
+	note, _ := h.snapshotLocked("")
+	h.mu.Unlock()
+	var p acp.LoadParams
+	if err := json.Unmarshal(note.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Messages) != 1 || len(p.Messages[0].Content) != 2 {
+		t.Fatalf("snapshot = %+v", p.Messages)
+	}
+	tc := p.Messages[0].Content[1]
+	if tc.Type != acp.ContentTypeToolCall || tc.ToolCallID != "t1" {
+		t.Fatalf("tool call block = %+v", tc)
+	}
+	if tc.Status != acp.ToolStatusCompleted || tc.Output != "file.txt" {
+		t.Errorf("tool call status/output not mutated: %+v", tc)
+	}
+}
+
 func TestACPHubSnapshotIncludesUnwrittenTail(t *testing.T) {
 	h := newACPHub("sess1")
 	h.ingest(acpIngest{Op: "message_start", MessageID: "m1"})

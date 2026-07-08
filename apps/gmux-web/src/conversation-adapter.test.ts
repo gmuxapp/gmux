@@ -40,15 +40,97 @@ describe('conversation-adapter: ConvMessage → ThreadMessageLike', () => {
     expect(toThreadMessage(m, 0).content).toEqual([{ type: 'text', text: '' }])
   })
 
-  it('ignores unknown block types (future tool_call etc.)', () => {
+  it('ignores unknown block types', () => {
     const m: ConvMessage = {
       role: 'assistant',
       content: [
         { type: 'text', text: 'ok' },
-        { type: 'tool_call', text: 'ignored' },
+        { type: 'mystery', text: 'ignored' },
       ],
     }
     expect(toThreadMessage(m, 0).content).toEqual([{ type: 'text', text: 'ok' }])
+  })
+
+  it('maps an in-progress tool_call block to a tool-call part (no result yet)', () => {
+    const m: ConvMessage = {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_call',
+          toolCallId: 't1',
+          toolName: 'bash',
+          args: '{"cmd":"ls"}',
+          status: 'in_progress',
+        },
+      ],
+    }
+    expect(toThreadMessage(m, 0).content).toEqual([
+      {
+        type: 'tool-call',
+        toolCallId: 't1',
+        toolName: 'bash',
+        args: { cmd: 'ls' },
+        argsText: '{"cmd":"ls"}',
+      },
+    ])
+  })
+
+  it('maps a completed tool_call to a tool-call part with result', () => {
+    const m: ConvMessage = {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_call',
+          toolCallId: 't1',
+          toolName: 'bash',
+          args: '{"cmd":"ls"}',
+          status: 'completed',
+          output: 'file.txt',
+        },
+      ],
+    }
+    expect(toThreadMessage(m, 0).content).toEqual([
+      {
+        type: 'tool-call',
+        toolCallId: 't1',
+        toolName: 'bash',
+        args: { cmd: 'ls' },
+        argsText: '{"cmd":"ls"}',
+        result: 'file.txt',
+      },
+    ])
+  })
+
+  it('marks a failed tool_call as an error', () => {
+    const m: ConvMessage = {
+      role: 'assistant',
+      content: [
+        { type: 'tool_call', toolCallId: 't1', toolName: 'bash', args: '', status: 'failed', output: 'boom' },
+      ],
+    }
+    expect(toThreadMessage(m, 0).content).toEqual([
+      {
+        type: 'tool-call',
+        toolCallId: 't1',
+        toolName: 'bash',
+        args: {},
+        argsText: '',
+        result: 'boom',
+        isError: true,
+      },
+    ])
+  })
+
+  it('tolerates partial/invalid args JSON mid-stream (empty args, raw text kept)', () => {
+    const m: ConvMessage = {
+      role: 'assistant',
+      content: [
+        { type: 'tool_call', toolCallId: 't1', toolName: 'bash', args: '{"cmd":', status: 'in_progress' },
+      ],
+    }
+    expect(toThreadMessage(m, 0).content).toEqual([
+      { type: 'tool-call', toolCallId: 't1', toolName: 'bash', args: {}, argsText: '{"cmd":' },
+    ])
   })
 
   it('assigns stable positional ids when no messageId is present', () => {
