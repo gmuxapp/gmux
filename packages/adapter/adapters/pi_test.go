@@ -191,6 +191,23 @@ func TestPiMonitorNoOp(t *testing.T) {
 	}
 }
 
+// TestPiSubmitSeq pins the composer keybinds `gmux send
+// --steering/--follow-up` relies on: steering is Enter (delivered into
+// the current turn immediately), follow-up is Alt+Enter (ESC CR — what
+// xterm-class terminals and the gmux web terminal emit), queued until
+// the current turn ends. Changing these bytes changes what agents
+// receive on those flags, so any intentional change must update this
+// test and the CLI docs together.
+func TestPiSubmitSeq(t *testing.T) {
+	pi := NewPi()
+	if seq, ok := pi.SubmitSeq(adapter.SubmitSteering); !ok || seq != "\r" {
+		t.Errorf("SubmitSeq(SubmitSteering) = %q, %v; want \\r, true", seq, ok)
+	}
+	if seq, ok := pi.SubmitSeq(adapter.SubmitFollowUp); !ok || seq != "\x1b\r" {
+		t.Errorf("SubmitSeq(SubmitFollowUp) = %q, %v; want ESC CR, true", seq, ok)
+	}
+}
+
 // --- Capability interface checks ---
 
 func TestPiImplementsCapabilities(t *testing.T) {

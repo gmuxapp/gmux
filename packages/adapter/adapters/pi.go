@@ -25,6 +25,7 @@ var (
 	_ adapter.Resumer               = (*Pi)(nil)
 	_ adapter.SessionExtender       = (*Pi)(nil)
 	_ adapter.PassthroughDetector   = (*Pi)(nil)
+	_ adapter.PromptSubmitter       = (*Pi)(nil)
 )
 
 // piSubcommands are pi's one-shot CLI verbs (`pi <verb> ...`). pi recognizes
@@ -143,6 +144,22 @@ func (p *Pi) Launchers() []adapter.Launcher {
 		Command:     []string{"pi"},
 		Description: "Coding agent",
 	}}
+}
+
+// SubmitSeq maps gmux's submit modes to pi's composer keybinds:
+// steering is Enter (\r) — delivered into the current turn immediately —
+// and follow-up is Alt+Enter (ESC CR, \x1b\r) — queued until the current
+// turn ends. Both act as a plain submit when pi is idle. The encodings
+// match what an xterm-class terminal (and the gmux web terminal, see
+// keyboard.ts) emits for those keystrokes.
+func (p *Pi) SubmitSeq(mode adapter.SubmitMode) (string, bool) {
+	switch mode {
+	case adapter.SubmitSteering:
+		return "\r", true
+	case adapter.SubmitFollowUp:
+		return "\x1b\r", true
+	}
+	return "", false
 }
 
 // Monitor is a no-op for the pi adapter — status is reported by the gmux pi

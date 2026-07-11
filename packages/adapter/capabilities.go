@@ -172,6 +172,48 @@ type PassthroughDetector interface {
 	IsPassthrough(args []string) bool
 }
 
+// SubmitMode selects which submit keystroke ends a prompt typed into an
+// agent's composer. `gmux send --steering / --follow-up` resolves the
+// mode to concrete PTY bytes via SubmitSeqFor, so callers never need to
+// know adapter-specific key encodings (issue #385).
+type SubmitMode int
+
+const (
+	// SubmitSteering delivers the prompt into the current turn
+	// immediately (pi: Enter). On an idle agent it simply submits.
+	SubmitSteering SubmitMode = iota
+	// SubmitFollowUp queues the prompt until the current turn ends
+	// (pi: Alt+Enter). On an idle agent it degrades to a plain submit.
+	SubmitFollowUp
+)
+
+// PromptSubmitter is optionally implemented by adapters whose agent
+// distinguishes submit keystrokes by mode. Adapters that don't
+// implement it get the universal default (see SubmitSeqFor): Enter for
+// both modes — correct for shells and for agents like claude/codex,
+// where Enter both submits when idle and queues when busy. An
+// implementer may reject a mode it can't honor by returning ok=false;
+// the CLI surfaces that as a usage error instead of sending bytes with
+// the wrong meaning.
+type PromptSubmitter interface {
+	// SubmitSeq returns the PTY byte sequence that submits a composed
+	// prompt in the given mode, exactly as an xterm-class terminal
+	// would emit for the corresponding keystroke.
+	SubmitSeq(mode SubmitMode) (seq string, ok bool)
+}
+
+// SubmitSeqFor resolves the submit byte sequence for a session's
+// adapter. Nil adapters (names FindByAdapter doesn't know, e.g. a peer
+// session created by a newer gmux) and adapters without the
+// PromptSubmitter capability fall back to "\r" — Enter, the single
+// submit keystroke of every PTY application — for both modes.
+func SubmitSeqFor(a Adapter, mode SubmitMode) (string, bool) {
+	if ps, ok := a.(PromptSubmitter); ok {
+		return ps.SubmitSeq(mode)
+	}
+	return "\r", true
+}
+
 // CommandTitler is optionally implemented by adapters that want to
 // control how a command array is displayed as a fallback title.
 // Without it, the store joins the full command (e.g. "pytest -x").
