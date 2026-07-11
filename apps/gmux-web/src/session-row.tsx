@@ -1,8 +1,7 @@
-// Wide session row used on the home dashboard and (later) the
-// rewritten project page. Companion to the sidebar's compact
-// SessionItem: same data, more room to breathe. Two lines, optional
-// metadata (project / host / cwd / age), shared dot-state and
-// unavailability logic via store helpers.
+// Wide session row used on the home dashboard. Companion to the
+// sidebar's compact SessionItem: same data, more room to breathe. Two
+// lines, optional metadata (project / host / cwd / age), shared
+// dot-state and unavailability logic via store helpers.
 //
 // Kept deliberately separate from SessionItem rather than unified
 // behind a density prop: the sidebar variant is dense, drag-aware,
@@ -27,7 +26,7 @@ export interface SessionRowProps {
   selected?: boolean
   /** Currently resuming: forces the dot into a working state. */
   resuming?: boolean
-  /** Show the project name on line 2 (off on the project page). */
+  /** Show the project name on line 2. */
   showProject?: boolean
   /** Project display name to render when showProject is true. */
   projectName?: string

@@ -187,7 +187,8 @@ body {
   cursor: pointer;
   transition: color 0.15s, background 0.15s;
 }
-.sidebar-settings-btn:hover {
+.sidebar-settings-btn:hover,
+.sidebar-settings-btn.open {
   color: var(--text);
   background: var(--bg-hover);
 }
@@ -248,9 +249,16 @@ body {
    * the extra whitespace is the visual cue that the user has actually
    * reached the end of the list (rather than wondering whether more
    * content is hidden by the fold). */
-  padding: 6px 0 48px;
+  padding: 0 0 48px;
   display: flex;
   flex-direction: column;
+}
+/* Keep the initial breathing room as scrollable content, not scrollport
+ * padding. Top padding remains visible while scrolling, so a sticky header
+ * pinned below it leaves a strip where rows can bleed through. */
+.sidebar-scroll::before {
+  content: '';
+  flex: 0 0 6px;
 }
 
 /* ── Folder ── */
@@ -281,11 +289,23 @@ body {
   gap: 6px;
   cursor: pointer;
   transition: background 0.1s;
+  /* Pin the project title while its sessions scroll underneath. Opaque
+   * background so rows don't bleed through; z-index sits above the
+   * session rows (which are position:relative). */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-sidebar);
 }
 .folder-header:hover {
   background: var(--bg-hover);
 }
-.folder-header.current {
+.folder-header:has(.folder-name:focus-visible) {
+  background: var(--bg-hover);
+}
+/* Pressed: a touch brighter than hover while the mouse button is held
+ * on the title, so the header reads as actively engaged. */
+.folder-header:has(.folder-name:active) {
   background: var(--bg-selected);
 }
 
@@ -409,14 +429,47 @@ body {
 }
 
 .folder-name {
+  display: flex;
+  align-items: center;
+  /* gap between chevron and label; sized so the label lands at the
+   * session-title column (14px header pad + 12px chevron + 3px = 29px,
+   * matching .session-item's 14px pad + 7px dot + 8px gap). The chevron
+   * itself sits in the status-dot column, so headers and rows share one
+   * clean two-column grid. */
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+  /* Reset the <button> we now render as. */
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
-  flex: 1;
+  outline: none;
+}
+
+.folder-name-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-decoration: none;
+}
+
+.folder-chevron {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  color: var(--text-muted);
+}
+/* Expanded state points down (glyph default); collapsed rotates the
+ * same glyph to point right. */
+.folder-chevron.collapsed {
+  transform: rotate(-90deg);
 }
 
 
@@ -751,6 +804,138 @@ body {
 .session-item.session-drop-target {
   box-shadow: inset 0 -2px 0 0 var(--accent);
 }
+
+/* ── Sidebar view menu (mode switcher) ── */
+/* One small entry point in the header; a compact popover with two
+   radio groups (View / Show). Selection applies instantly — the list
+   itself is the preview — and persists in localStorage. */
+
+.view-menu-anchor {
+  position: relative;
+  margin-left: auto; /* takes over the gear's auto-margin; gear follows */
+}
+.view-menu-anchor .sidebar-settings-btn,
+.view-menu-anchor + .sidebar-settings-btn { margin-left: 0; }
+
+.view-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 29; /* just under .view-menu */
+}
+
+.view-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: -30px; /* roughly under the gear; keeps the popover on-screen */
+  z-index: 30;
+  min-width: 160px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 4px;
+}
+.view-menu-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  padding: 6px 10px 2px;
+}
+.view-menu-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 10px 5px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: left;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.view-menu-option:hover { background: var(--bg-hover); color: var(--text); }
+.view-menu-option.active { color: var(--text); }
+.view-menu-check {
+  width: 14px;
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 11px;
+  text-align: center;
+}
+
+/* Chip row: one removable chip per ?filter= selector. Rendered only
+   when the tab is narrowed — zero pixels otherwise. */
+.sidebar-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 12px 2px 14px;
+  flex-shrink: 0;
+}
+.sidebar-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text);
+  background: var(--bg-selected);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 4px 1px 8px;
+  max-width: 100%;
+}
+.sidebar-chip-x {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.sidebar-chip-x:hover { color: var(--text); background: var(--bg-hover); }
+
+/* ── Sidebar activity view ── */
+/* Home's partition at sidebar density: section labels replace folder
+   headers; SessionRow is compacted (no card chrome, tighter padding,
+   single-line meta). */
+
+.sidebar-activity-section + .sidebar-activity-section { margin-top: 10px; }
+
+.sidebar-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  padding: 4px 14px;
+}
+
+.sidebar-scroll .session-row {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 5px 12px 5px 14px;
+  gap: 8px;
+}
+.sidebar-scroll .session-row:hover { background: var(--bg-hover); }
+.sidebar-scroll .session-row.selected {
+  background: var(--bg-selected);
+}
+.sidebar-scroll .session-row-title { font-size: 13px; font-weight: 400; }
+.sidebar-scroll .session-row-meta {
+  margin-top: 1px;
+  font-size: 11px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.sidebar-scroll .session-row-project { font-weight: 500; color: var(--text-muted); }
+.sidebar-scroll .session-row-age { font-weight: 400; color: var(--text-muted); }
 
 /* ── Wide session row (dashboard / project page) ────────────────────── */
 /* Two-line variant of the sidebar's SessionItem. Same dot conventions

@@ -5,12 +5,14 @@ import {
   markSessionRead, dismissSession, reorderSessions, resumeSession, killSession,
   handleActivity, isSessionActive, isSessionFading, activityMap,
   sessionStaleness, peers, peerAppearance, peerStatusByName,
-  isSessionUnavailable, urlPath, urlSearch, filteredSessions, selectedId,
+  isSessionUnavailable, urlPath, urlSearch, filteredSessions, sidebarSessions, selectedId, folders,
   navigateToSession, setNavigate,
   applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
   applySessionsSnapshot,
   toUISession, localHostLabel, parseConnectURL, unreadCount, discovered,
   view, duplicateConversationFiles,
+  sidebarMode, setSidebarMode, setFilterSelectors, setHostFilter, homePartition,
+  sidebarActivity, setAliveOnly,
 } from './store'
 import { SessionSchema } from '@gmux/protocol'
 import type { PendingMutation } from './store'
@@ -141,23 +143,151 @@ describe('optimistic dismiss retracts on failure', () => {
 describe('filteredSessions reactivity to the URL query string', () => {
   it('recomputes when urlSearch flips, without an SSE session update', () => {
     _rawSessions.value = [
-      makeSession({ id: 'a', cwd: '/home/user/projects/alpha' }),
-      makeSession({ id: 'b', cwd: '/home/user/projects/beta' }),
+      makeSession({ id: 'a', project_slug: 'alpha' }),
+      makeSession({ id: 'b', project_slug: 'beta', peer: 'server' }),
     ]
     // No query: all sessions pass through.
     expect(filteredSessions.value.map(s => s.id)).toEqual(['a', 'b'])
 
-    // Flip only the query signal (no sessions.value change): filter applies.
-    urlSearch.value = '?project=alpha'
+    // Flip only the query signal (no sessions.value change): the
+    // ?filter= selectors apply.
+    urlSearch.value = '?filter=alpha'
     expect(filteredSessions.value.map(s => s.id)).toEqual(['a'])
 
-    // cwd prefix filter, again query-only.
-    urlSearch.value = '?cwd=/home/user/projects/beta'
+    // Host-wide selector, again query-only.
+    urlSearch.value = '?filter=*@server'
     expect(filteredSessions.value.map(s => s.id)).toEqual(['b'])
+
+    // Union of selectors.
+    urlSearch.value = '?filter=alpha,*@server'
+    expect(filteredSessions.value.map(s => s.id)).toEqual(['a', 'b'])
 
     // Clearing the query restores the full list.
     urlSearch.value = ''
     expect(filteredSessions.value.map(s => s.id)).toEqual(['a', 'b'])
+  })
+})
+
+describe('filter never evicts the selected session', () => {
+  beforeEach(() => {
+    _setRawWorld({
+      projects: [
+        { slug: 'alpha', match: [{ path: '/a' }] },
+        { slug: 'beta', match: [{ path: '/b' }] },
+      ],
+      peers: [],
+    })
+    _rawSessions.value = [
+      makeSession({ id: 'a', cwd: '/a', adapter: 'shell', slug: 'aa', project_slug: 'alpha' }),
+      makeSession({ id: 'b', cwd: '/b', adapter: 'shell', slug: 'bb', project_slug: 'beta' }),
+    ]
+    sessionsLoaded.value = true
+    worldLoaded.value = true
+    urlPath.value = '/beta/shell/bb'
+  })
+
+  it('routing is filter-blind: a filter excluding the open session keeps the session view', () => {
+    expect(view.value).toEqual({ kind: 'session', sessionId: 'b' })
+    // Narrow the tab to the *other* project: the terminal must stay put,
+    // not fall back to the hub/home.
+    urlSearch.value = '?filter=alpha'
+    expect(view.value).toEqual({ kind: 'session', sessionId: 'b' })
+    expect(selectedId.value).toBe('b')
+  })
+
+  it('sidebar pins the selected session into the list past the filter', () => {
+    urlSearch.value = '?filter=alpha'
+    // filteredSessions drops the out-of-scope session...
+    expect(filteredSessions.value.map(s => s.id)).toEqual(['a'])
+    // ...but the sidebar presentation set keeps the selected one.
+    expect(sidebarSessions.value.map(s => s.id).sort()).toEqual(['a', 'b'])
+    // ...and its folder is therefore rendered.
+    expect(folders.value.some(f => f.slug === 'beta')).toBe(true)
+  })
+
+  it('no pin when nothing is selected (equals the filtered set)', () => {
+    urlPath.value = '/'
+    urlSearch.value = '?filter=alpha'
+    expect(selectedId.value).toBeNull()
+    expect(sidebarSessions.value.map(s => s.id)).toEqual(['a'])
+  })
+})
+
+describe('sidebar views share one membership (Projects == Activity)', () => {
+  const ids = (p: { needsAttention: { id: string }[]; running: { id: string }[]; buckets: { sessions: { id: string }[] }[]; older: { id: string }[] }) =>
+    [
+      ...p.needsAttention, ...p.running,
+      ...p.buckets.flatMap(b => b.sessions), ...p.older,
+    ].map(s => s.id).sort()
+  const folderIds = () => folders.value.flatMap(f => f.sessions.map(s => s.id)).sort()
+
+  beforeEach(() => {
+    _setRawWorld({ projects: [{ slug: 'proj', match: [{ path: '/p' }] }], peers: [] })
+    sessionsLoaded.value = true
+    worldLoaded.value = true
+    urlPath.value = '/'
+    urlSearch.value = ''
+    setAliveOnly(false)
+  })
+  afterEach(() => setAliveOnly(false))
+
+  it('Activity lists exactly the sessions the folders do (alive, resumable, dead-selected)', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'live', cwd: '/p', adapter: 'shell', slug: 'lv', alive: true, project_slug: 'proj' }),
+      makeSession({ id: 'resumable', cwd: '/p', adapter: 'shell', slug: 'rs', alive: false, resumable: true, project_slug: 'proj' }),
+    ]
+    // No selection: folders and Activity agree.
+    expect(ids(sidebarActivity.value)).toEqual(folderIds())
+    expect(ids(sidebarActivity.value)).toEqual(['live', 'resumable'])
+  })
+
+  it('keeps Activity aligned with Projects while recovered sessions are unstamped', () => {
+    // gmuxd emits recovered sessions before its asynchronous project
+    // stamping pass completes. They are sidebar-eligible but cannot be
+    // placed in a project folder yet, so neither view should render them.
+    _rawSessions.value = [
+      makeSession({ id: 'recovered', cwd: '/p', adapter: 'shell', slug: 'rc', alive: true }),
+    ]
+    expect(sidebarSessions.value.map(s => s.id)).toEqual(['recovered'])
+    expect(folderIds()).toEqual([])
+    expect(ids(sidebarActivity.value)).toEqual([])
+
+    // The later sessions snapshot carries the stamp and both views
+    // repopulate from the same membership in the same update.
+    _rawSessions.value = [
+      makeSession({ id: 'recovered', cwd: '/p', adapter: 'shell', slug: 'rc', alive: true, project_slug: 'proj' }),
+    ]
+    expect(folderIds()).toEqual(['recovered'])
+    expect(ids(sidebarActivity.value)).toEqual(['recovered'])
+  })
+
+  it('a resumable-dead session is reachable in Activity via `older` (Finding 1)', () => {
+    // The original bug: Activity ran through partitionForHome, which
+    // dropped dead sessions, so a resumable corpse was open in the
+    // terminal but had no row in Activity view. Now it lands in `older`.
+    _rawSessions.value = [
+      makeSession({ id: 'live', cwd: '/p', adapter: 'shell', slug: 'lv', alive: true, last_activity_at: new Date().toISOString(), project_slug: 'proj' }),
+      makeSession({ id: 'corpse', cwd: '/p', adapter: 'shell', slug: 'cp', alive: false, resumable: true, project_slug: 'proj' }),
+    ]
+    expect(sidebarActivity.value.older.map(s => s.id)).toEqual(['corpse'])
+    // And both views still agree on membership.
+    expect(ids(sidebarActivity.value)).toEqual(folderIds())
+    expect(ids(sidebarActivity.value)).toEqual(['corpse', 'live'])
+  })
+
+  it('alive-only narrows both views identically (but keeps the selected)', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'live', cwd: '/p', adapter: 'shell', slug: 'lv', alive: true, project_slug: 'proj' }),
+      makeSession({ id: 'resumable', cwd: '/p', adapter: 'shell', slug: 'rs', alive: false, resumable: true, project_slug: 'proj' }),
+    ]
+    setAliveOnly(true)
+    expect(ids(sidebarActivity.value)).toEqual(folderIds())
+    expect(ids(sidebarActivity.value)).toEqual(['live'])
+    // Selecting the resumable one keeps it visible in both despite alive-only.
+    urlPath.value = '/proj/shell/rs'
+    expect(selectedId.value).toBe('resumable')
+    expect(folderIds()).toEqual(['live', 'resumable'])
+    expect(ids(sidebarActivity.value)).toEqual(['live', 'resumable'])
   })
 })
 
@@ -379,13 +509,13 @@ describe('applySessionsSnapshot: /resume keeps the terminal mounted', () => {
     expect(navCalls).toEqual([])
   })
 
-  it('boots to the hub only when the selected session is genuinely gone', () => {
+  it('boots home only when the selected session is genuinely gone', () => {
     // A snapshot that drops the session (killed) — distinct from a slug
     // change — should fall through to the normal commit and let the view
-    // resolve to the project hub.
+    // resolve home (project hubs are retired).
     applySessionsSnapshot([])
 
-    expect(view.value).toEqual({ kind: 'project', projectSlug: 'myproject' })
+    expect(view.value).toEqual({ kind: 'home' })
   })
 
   it('still commits the snapshot (loaded flags flip) when nothing is selected', () => {
@@ -877,14 +1007,86 @@ describe('unreadCount (sidebar-only attention blip)', () => {
     expect(unreadCount.value).toBe(1)
   })
 
-  it('ignores the ?project=/?cwd= view filter (global signal)', () => {
+  it('is scoped to the tab\u2019s ?filter= selectors', () => {
+    // A pinned tab must not blink for sessions outside its scope
+    // (another tab or a notification covers those), and must still
+    // blink for in-scope ones.
+    _setRawWorld({
+      projects: [
+        { slug: 'proj', match: [{ path: '/work' }] },
+        { slug: 'other', match: [{ path: '/other' }] },
+      ],
+      peers: [],
+    })
     _rawSessions.value = [
-      makeSession({ id: 'a', cwd: '/work', alive: true, unread: true, project_slug: 'proj' }),
+      makeSession({ id: 'in', cwd: '/work', alive: true, unread: true, project_slug: 'proj' }),
+      makeSession({ id: 'out', cwd: '/other', alive: true, unread: true, project_slug: 'other' }),
     ]
-    // A cwd filter that excludes the unread session from the visible
-    // sidebar must not zero out the global blip.
-    urlSearch.value = '?cwd=/elsewhere'
+    expect(unreadCount.value).toBe(2)
+    urlSearch.value = '?filter=proj'
     expect(unreadCount.value).toBe(1)
+    urlSearch.value = '?filter=elsewhere'
+    expect(unreadCount.value).toBe(0)
+  })
+})
+
+describe('tab-identity params (?filter=, ?sidebar=)', () => {
+  let navigateMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    navigateMock = vi.fn()
+    setNavigate(navigateMock)
+    urlPath.value = '/'
+    urlSearch.value = ''
+  })
+  afterEach(() => {
+    setNavigate(() => {/* no-op */})
+  })
+
+  it('sidebarMode parses ?sidebar=activity and defaults to projects', () => {
+    expect(sidebarMode.value).toBe('projects')
+    urlSearch.value = '?sidebar=activity'
+    expect(sidebarMode.value).toBe('activity')
+    // Unknown values fall back to the default rather than erroring.
+    urlSearch.value = '?sidebar=garbage'
+    expect(sidebarMode.value).toBe('projects')
+  })
+
+  it('setSidebarMode omits the param at the default and preserves ?filter=', () => {
+    // The default state leaves a clean URL: no ?sidebar=projects.
+    urlSearch.value = '?filter=gmux&sidebar=activity'
+    setSidebarMode('projects')
+    expect(navigateMock).toHaveBeenLastCalledWith('/?filter=gmux', true)
+
+    urlSearch.value = '?filter=gmux'
+    setSidebarMode('activity')
+    expect(navigateMock).toHaveBeenLastCalledWith('/?filter=gmux&sidebar=activity', true)
+  })
+
+  it('setFilterSelectors clears the param when the list empties', () => {
+    urlSearch.value = '?filter=gmux&sidebar=activity'
+    setFilterSelectors([])
+    expect(navigateMock).toHaveBeenLastCalledWith('/?sidebar=activity', true)
+  })
+
+  it('setHostFilter replaces host-wide selectors but keeps project selectors', () => {
+    urlSearch.value = '?filter=gmux,*@laptop'
+    setHostFilter('server')
+    expect(navigateMock).toHaveBeenLastCalledWith('/?filter=gmux%2C*%40server', true)
+
+    urlSearch.value = '?filter=gmux,*@server'
+    setHostFilter(null)
+    expect(navigateMock).toHaveBeenLastCalledWith('/?filter=gmux', true)
+  })
+
+  it('homePartition participates in the tab scope', () => {
+    _setRawWorld({ projects: [{ slug: 'proj', match: [{ path: '/work' }] }], peers: [] })
+    _rawSessions.value = [
+      makeSession({ id: 'in', cwd: '/work', alive: true, unread: true, project_slug: 'proj' }),
+      makeSession({ id: 'out', alive: true, unread: true, project_slug: 'other', peer: 'server' }),
+    ]
+    urlSearch.value = '?filter=proj'
+    expect(homePartition.value.needsAttention.map(s => s.id)).toEqual(['in'])
   })
 })
 

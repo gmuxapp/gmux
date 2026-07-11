@@ -9,7 +9,7 @@ import { useArrivalPulse } from './use-arrival-pulse'
  * - `footer`: in ReplayView's action bar (dead sessions, which render no
  *   key bar — showing a full set of dead keys just to carry ☰ read as
  *   clutter).
- * - `floating`: bottom-left overlay on the home / project-hub screens,
+ * - `floating`: bottom-left overlay on the home screen,
  *   which have no bottom bar at all.
  *
  * The badge surfaces only the waiting (unread) state — working/active are

@@ -15,7 +15,6 @@ import { MenuButton } from './menu-button'
 
 import type { Session } from './types'
 import { SettingsModal } from './settings'
-import { ProjectHub } from './project-hub'
 import { Home } from './home'
 import { installCopySession } from './mock-data/export-session'
 import { installVersionWatch } from './version-watch'
@@ -50,6 +49,10 @@ if (USE_MOCK) document.documentElement.classList.add('mock-mode')
 
 // Debug: __gmuxCopySession() in devtools console
 installCopySession()
+// Debug: whole store namespace for console poking in mock mode.
+if (USE_MOCK) {
+  import('./store').then(m => { (window as unknown as Record<string, unknown>).__store = m })
+}
 
 // Auto-reload when the bundle goes stale relative to the daemon.
 // Mock mode is offline-only and the daemon version is fixed, so the
@@ -682,7 +685,7 @@ function App() {
 
   // The key bar only accompanies an attached (or mock) terminal; dead
   // sessions carry ☰ in ReplayView's action bar instead of a full set of
-  // disabled keys. Everything else (home, project hub, transient states)
+  // disabled keys. Everything else (home, transient states)
   // gets the floating ☰ so the sidebar overlay stays reachable on touch.
   const keyBarShown = !!selectedVal && (canAttach || USE_MOCK) && !!termOpts && !!keybindsVal
   const replayShown = !keyBarShown && !!selectedVal && !selectedVal.alive && !!termOpts && !USE_MOCK
@@ -718,7 +721,7 @@ function App() {
       />
 
       <div class="main-panel">
-        {viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && (
+        {viewVal !== null && viewVal.kind !== 'home' && (
           <MainHeader
             session={selectedVal}
             onRestart={selectedVal ? () => { void restartSession(selectedVal.id) } : undefined}
@@ -742,12 +745,6 @@ function App() {
               Retry
             </button>
           </div>
-        ) : viewVal?.kind === 'project' ? (
-          <ProjectHub
-            projectSlug={viewVal.projectSlug}
-            projectPeer={viewVal.projectPeer}
-            onCloseSession={handleCloseSession}
-          />
         ) : selectedVal && (canAttach || USE_MOCK) && termOpts && keybindsVal ? (
           <TerminalView
             session={selectedVal}
@@ -797,7 +794,7 @@ function App() {
 
         {/* On touch the sidebar is an off-canvas overlay, so every screen
             must carry a ☰ somewhere. The key bar and ReplayView's action
-            bar have their own; everything else (home, project hub,
+            bar have their own; everything else (home,
             connecting/error states) gets the floating one. Hidden on fine
             pointers via CSS. */}
         {!keyBarShown && !replayShown && (

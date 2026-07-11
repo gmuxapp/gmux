@@ -14,6 +14,7 @@ import piAutoresearch from './sessions/pi-autoresearch'
 import codexMigrateConvex from './sessions/codex-migrate'
 import shellOpenclawConfigure from './sessions/shell-openclaw-configure'
 import shellOpenclawLogs from './sessions/shell-openclaw-logs'
+import { DEMO_ACTIVITY } from './sessions/demo-activity'
 
 /** All mock sessions. First alive session is auto-selected. */
 export const MOCK_SESSIONS: MockSession[] = [
@@ -24,6 +25,7 @@ export const MOCK_SESSIONS: MockSession[] = [
   codexMigrateConvex,
   shellOpenclawConfigure,
   shellOpenclawLogs,
+  ...DEMO_ACTIVITY,
 ]
 
 /** Mock peers (host roster). Exercises the Hosts-tab groups

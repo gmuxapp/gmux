@@ -13,6 +13,30 @@ The left panel lists your sessions grouped into projects.
 
 Click the **gmux** logo at the top of the sidebar to return to the home screen. The logo doubles as a cue: it lights up when a session elsewhere is waiting on you. The gear button next to it opens **Settings**; a red pip on the gear flags unresolved host references.
 
+### List options
+
+The arrange button next to the gear opens a compact menu controlling how the sidebar presents your sessions:
+
+- **View** — **Projects** (the default: grouped by project, your manual order) or **Activity** (a flat list partitioned like the home dashboard: Waiting, Active, then recency buckets). The choice is stored in the URL (`?sidebar=activity`), so each tab keeps its own view.
+- **Host** — narrow the tab to a single host. Picking a host adds a filter chip above the list; **All hosts** clears it.
+- **Alive only** — hide dead-but-resumable sessions. This one is per-tab and intentionally forgotten when the tab closes (after a reboot every session is resumable, so a remembered toggle would greet you with an empty sidebar).
+
+A dot on the arrange button marks any non-default state.
+
+### Filtering a tab
+
+A tab can be narrowed to specific projects or hosts with the `?filter=` URL parameter — a comma-separated list of selectors:
+
+| Selector | Matches |
+|----------|---------|
+| `gmux` | the gmux project on every host |
+| `*@server` | everything on the host named `server` |
+| `gmux@server` | exactly that project on that host |
+
+Multiple selectors combine as a union: `?filter=gmux,api@server`. The filter scopes the whole tab — sidebar, home dashboard, and the waiting indicator — and every in-app link preserves it. Each selector shows as a removable chip above the sidebar list.
+
+Because the filter lives in the URL, a narrowed tab is bookmarkable: keep one browser window per project, pin a tab to a remote host, or add a filtered view to your phone's home screen. Your own host matches by its hostname or the alias `local`.
+
 ## Home: the Activity dashboard
 
 The home screen is a pure overview of your sessions across all hosts, newest-first:
@@ -44,7 +68,7 @@ Removing a host also clears the project references that pointed at it, so it lea
 
 Sessions don't appear in the sidebar until you add a project. The first time you open the dashboard, click the **+** button to launch a session. gmux creates a default "home" project that catches sessions started in your home directory itself. As you work in more repositories, open **Settings → Projects** to organize sessions by repo.
 
-Click a **project name** to open the [project hub](#project-hub), an overview of all sessions in that project. The active project is highlighted in the sidebar.
+In the sidebar, sessions are grouped into a **folder** per project. Click a **project name** to collapse or expand its folder (a chevron shows the state); the header stays pinned to the top of the list while you scroll through its sessions. Collapsed state is remembered per browser tab.
 
 Each project has **match rules** that determine which sessions belong to it. Rules can match by filesystem path (`~/dev/gmux` and its subdirectories) or by git remote URL (grouping clones across machines). See [`projects.json`](/reference/projects-json/) for the full reference on rules, precedence, and advanced options like exact matching.
 
@@ -69,11 +93,13 @@ Agent sessions (pi, Claude, Codex) only trigger the unread dot when the assistan
 
 Hover over a session to reveal the **×** button. This dismisses the session: live runners are killed, the sidebar/project membership is removed, and persisted runtime metadata is dropped so the session does not come back as resumable. Use **Resume** from a dead session view only when you want to continue it.
 
-## Project hub
+## The activity dashboard
 
-Click a project name in the sidebar (or navigate to `/:project`) to see the project hub — an overview of every session in the project, mirroring the home layout: **Waiting**, **Active**, and **All sessions** rows, newest-first.
+Home (`/`) is an activity-first overview of every session, grouped into **Waiting**, **Active**, and recency sections (Last hour / Earlier today / Yesterday / Earlier this week), newest-first. It's a triage surface: it shows what you can act on right now, so dead and week-old sessions drop off (the sidebar still lists them).
 
-When every session shares the same working directory, it appears once as a subtitle; otherwise each row shows its own directory. On the home dashboard, a session card surfaces its working directory only when it differs from the project's canonical folder — a subfolder or worktree shows as a relative `./sub/dir` badge, an unrelated path as its absolute `~/…` form — so sessions launched somewhere other than the project root are easy to spot. If the project spans hosts, rows carry an `@host` suffix (devcontainer sessions get a container icon). The **+** in the hub header launches a new session in the project's canonical directory — for a referenced project this routes to the owning machine. If a project has no sessions yet, the hub shows the project's configured path with a **+** launcher to get started.
+A session row surfaces its working directory only when it differs from the project's canonical folder — a subfolder or worktree shows as a relative `./sub/dir` badge, an unrelated path as its absolute `~/…` form — so sessions launched somewhere other than the project root are easy to spot. Sessions on another host carry an `@host` suffix (devcontainer sessions get a container icon).
+
+The sidebar's **Activity** view (via the list-options menu) shows the same sections in the sidebar's compact density, plus an **Older** section so nothing is hidden.
 
 ## The terminal
 
@@ -105,10 +131,7 @@ gmux edit notes.md      # editor session; also works as $EDITOR
 
 ### From the UI
 
-There are two places to launch:
-
-- **Sidebar project**: hover a project name to reveal a **+** button. It launches in the project's own directory — the first configured path for a project you own, or the upstream directory for a [referenced](/multi-machine) project (which routes to the owning machine) — regardless of which session you're currently viewing.
-- **Project hub**: the **+** in the header launches in that same project directory, routing to the owning machine for referenced projects.
+Launch from the sidebar: hover a project name to reveal a **+** button. It launches in the project's own directory — the first configured path for a project you own, or the upstream directory for a [referenced](/multi-machine) project (which routes to the owning machine) — regardless of which session you're currently viewing. Before you've added any projects, the sidebar shows a single **+** to start your first session.
 
 Launch menus show the adapters available on that host (by default: Shell, pi, Claude Code, Codex, Editor — whichever are installed). The first item aligns with the **+** button so a double-click launches the default adapter instantly.
 
@@ -119,11 +142,13 @@ Every view has a stable URL:
 | URL pattern | What it shows |
 |-------------|---------------|
 | `/` | Home: the Activity dashboard |
-| `/:project` | Project hub overview |
+| `/:project` | Redirects to home (project hub pages were retired) |
 | `/:project/:adapter/:slug` | A specific session's terminal |
 | `/@:owner/:project/...` | A project owned by a peer host |
 
 For example, `/gmux/pi/fix-auth-bug` links directly to a pi session in the gmux project. URLs update as you navigate, work with browser back/forward, and are bookmarkable. Session slugs remain stable across kill and resume.
+
+Two query parameters define a tab's identity and are preserved across in-app navigation: `?filter=` (narrow the tab to projects/hosts — see [Filtering a tab](#filtering-a-tab)) and `?sidebar=activity` (the sidebar's Activity view). Both are omitted in the default state.
 
 ## Keyboard shortcuts
 

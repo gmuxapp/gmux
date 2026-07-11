@@ -7,8 +7,21 @@ import {
   resolveViewFromPath,
   viewToPath,
   viewsEqual,
+  withTabParams,
 } from './routing'
 import { makeSession } from './test-helpers'
+
+describe('withTabParams', () => {
+  it('carries filter and sidebar params onto a path', () => {
+    expect(withTabParams('/gmux/shell/x', '?filter=gmux%40server&sidebar=activity'))
+      .toBe('/gmux/shell/x?filter=gmux%40server&sidebar=activity')
+  })
+
+  it('drops transient params (settings) and returns the bare path when none apply', () => {
+    expect(withTabParams('/gmux', '?settings=hosts')).toBe('/gmux')
+    expect(withTabParams('/gmux', '')).toBe('/gmux')
+  })
+})
 
 describe('parseSessionPath', () => {
   it('parses full local path', () => {
@@ -248,30 +261,16 @@ describe('resolveViewFromPath', () => {
     expect(resolveViewFromPath('/_/input-diagnostics', projects, sessions)).toEqual({ kind: 'home' })
   })
 
-  it('project-only path resolves to project view (hub page)', () => {
-    expect(resolveViewFromPath('/gmux', projects, sessions)).toEqual({
-      kind: 'project', projectSlug: 'gmux',
-    })
+  it('project-only path resolves to home (hubs retired)', () => {
+    expect(resolveViewFromPath('/gmux', projects, sessions)).toEqual({ kind: 'home' })
   })
 
-  it('project-only path with no sessions still resolves to project view', () => {
-    expect(resolveViewFromPath('/gmux', projects, [])).toEqual({
-      kind: 'project', projectSlug: 'gmux',
-    })
-  })
-
-  it('peer-owned project URL resolves to project view when sessions exist', () => {
+  it('peer-owned project URL resolves to home (hubs retired)', () => {
     const peerSession = makeSession({
       id: 'sess-t@tower', cwd: '/elsewhere', adapter: 'pi', slug: 'fix-auth',
       peer: 'tower', project_slug: 'gmux', project_index: 0,
     })
-    expect(resolveViewFromPath('/@tower/gmux', projects, [peerSession])).toEqual({
-      kind: 'project', projectSlug: 'gmux', projectPeer: 'tower',
-    })
-  })
-
-  it('peer-owned project URL with no matching sessions resolves to home', () => {
-    expect(resolveViewFromPath('/@tower/gmux', projects, sessions)).toEqual({ kind: 'home' })
+    expect(resolveViewFromPath('/@tower/gmux', projects, [peerSession])).toEqual({ kind: 'home' })
   })
 
   it('unknown project resolves to home', () => {
@@ -284,10 +283,8 @@ describe('resolveViewFromPath', () => {
     })
   })
 
-  it('session path with missing session falls back to project view', () => {
-    expect(resolveViewFromPath('/gmux/pi/no-such-session', projects, sessions)).toEqual({
-      kind: 'project', projectSlug: 'gmux',
-    })
+  it('session path with missing session falls back to home', () => {
+    expect(resolveViewFromPath('/gmux/pi/no-such-session', projects, sessions)).toEqual({ kind: 'home' })
   })
 
   it('remote session URL resolves to session view', () => {
@@ -300,10 +297,8 @@ describe('resolveViewFromPath', () => {
     })
   })
 
-  it('remote URL with missing session falls back to project view', () => {
-    expect(resolveViewFromPath('/gmux/@server/shell/gone', projects, sessions)).toEqual({
-      kind: 'project', projectSlug: 'gmux',
-    })
+  it('remote URL with missing session falls back to home', () => {
+    expect(resolveViewFromPath('/gmux/@server/shell/gone', projects, sessions)).toEqual({ kind: 'home' })
   })
 })
 
@@ -320,10 +315,6 @@ describe('viewToPath', () => {
 
   it('home view -> /', () => {
     expect(viewToPath({ kind: 'home' }, projects, sessions)).toBe('/')
-  })
-
-  it('project view -> /:project', () => {
-    expect(viewToPath({ kind: 'project', projectSlug: 'gmux' }, projects, sessions)).toBe('/gmux')
   })
 
   it('session view -> full session path', () => {
@@ -343,13 +334,6 @@ describe('viewToPath', () => {
   it('session view for unmatched session -> null', () => {
     const orphan = makeSession({ id: 'orphan', cwd: '/nowhere', adapter: 'pi' })
     expect(viewToPath({ kind: 'session', sessionId: 'orphan' }, projects, [orphan])).toBeNull()
-  })
-
-  it('peer-owned project hub view -> /@<owner>/<slug>', () => {
-    expect(viewToPath(
-      { kind: 'project', projectSlug: 'gmux', projectPeer: 'tower' },
-      projects, sessions,
-    )).toBe('/@tower/gmux')
   })
 
   it('peer-claimed session -> /@<owner>/<slug>/...', () => {
@@ -380,20 +364,6 @@ describe('viewsEqual', () => {
     expect(viewsEqual({ kind: 'home' }, { kind: 'home' })).toBe(true)
   })
 
-  it('same project views are equal', () => {
-    expect(viewsEqual(
-      { kind: 'project', projectSlug: 'a' },
-      { kind: 'project', projectSlug: 'a' },
-    )).toBe(true)
-  })
-
-  it('different project slugs are not equal', () => {
-    expect(viewsEqual(
-      { kind: 'project', projectSlug: 'a' },
-      { kind: 'project', projectSlug: 'b' },
-    )).toBe(false)
-  })
-
   it('same session views are equal', () => {
     expect(viewsEqual(
       { kind: 'session', sessionId: 'x' },
@@ -404,7 +374,7 @@ describe('viewsEqual', () => {
   it('different kinds are not equal', () => {
     expect(viewsEqual(
       { kind: 'home' },
-      { kind: 'project', projectSlug: 'a' },
+      { kind: 'session', sessionId: 'x' },
     )).toBe(false)
   })
 })
@@ -432,16 +402,7 @@ describe('View round-trip', () => {
     })
   })
 
-  it('project view round-trips regardless of sessions', () => {
-    const path = viewToPath({ kind: 'project', projectSlug: 'gmux' }, projects, sessions)
-    expect(path).toBe('/gmux')
-    expect(viewsEqual(
-      resolveViewFromPath(path!, projects, sessions),
-      { kind: 'project', projectSlug: 'gmux' },
-    )).toBe(true)
-    expect(viewsEqual(
-      resolveViewFromPath(path!, projects, []),
-      { kind: 'project', projectSlug: 'gmux' },
-    )).toBe(true)
+  it('bare project path round-trips to home (hubs retired)', () => {
+    expect(resolveViewFromPath('/gmux', projects, sessions)).toEqual({ kind: 'home' })
   })
 })
