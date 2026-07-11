@@ -7,7 +7,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   partitionForHome,
-  partitionForProject,
 } from './store'
 import { makeSession } from './test-helpers'
 
@@ -197,76 +196,33 @@ describe('partitionForHome', () => {
       expect(buckets).toEqual([])
     })
   })
+
+  describe('older catch-all (totality)', () => {
+    // The partition is total: every input session lands somewhere.
+    // Dead sessions and stale-idle ones fall to `older` instead of
+    // being dropped, so the sidebar's Activity view (which renders
+    // `older`) shows exactly the sessions the Projects view does.
+    it('routes dead sessions to `older`, keeping them out of the live sections', () => {
+      const dead = makeSession({ id: 'd', cwd: '/x', alive: false, unread: true })
+      const live = makeSession({ id: 'l', cwd: '/x', alive: true, unread: true })
+      const { needsAttention, running, buckets, older } = partitionForHome([dead, live], NOW)
+      expect(needsAttention.map(s => s.id)).toEqual(['l'])
+      expect(running).toEqual([])
+      expect(buckets).toEqual([])
+      expect(older.map(s => s.id)).toEqual(['d'])
+    })
+
+    it('sorts `older` newest-first (dead + stale mixed)', () => {
+      const dead = makeSession({
+        id: 'dead', cwd: '/x', alive: false, last_activity_at: stamp(-2 * HOUR),
+      })
+      const stale = makeSession({
+        id: 'stale', cwd: '/x', alive: true, last_activity_at: stamp(-10 * DAY),
+      })
+      const { older } = partitionForHome([stale, dead], NOW)
+      // dead was active 2h ago, stale 10d ago -> dead is newer.
+      expect(older.map(s => s.id)).toEqual(['dead', 'stale'])
+    })
+  })
 })
 
-describe('partitionForProject', () => {
-  // The project page diverges from home in one specific way: the
-  // third bucket holds every remaining session, with no recency
-  // window or cap. These tests pin that divergence; section
-  // assignment for Needs attention / Running is identical to home
-  // and covered by the partitionForHome suite above.
-
-  it('keeps idle-alive sessions from arbitrarily long ago in `rest`', () => {
-    // A session last active a week ago would be dropped from home's
-    // recency buckets (>7 days) but must remain on the project page.
-    const weekAgo = new Date(NOW - 7 * DAY).toISOString()
-    const s = makeSession({
-      id: 'ancient',
-      cwd: '/x',
-      alive: true,
-      status: { working: false, error: false },
-      last_activity_at: weekAgo,
-    })
-    const { rest } = partitionForProject([s])
-    expect(rest.map(x => x.id)).toEqual(['ancient'])
-  })
-
-  it('keeps exited sessions in `rest` regardless of age', () => {
-    const longAgo = new Date(NOW - 30 * DAY).toISOString()
-    const s = makeSession({
-      id: 'old-exit',
-      cwd: '/x',
-      alive: false,
-      last_activity_at: longAgo,
-    })
-    const { rest } = partitionForProject([s])
-    expect(rest.map(x => x.id)).toEqual(['old-exit'])
-  })
-
-  it('does not cap or window `rest`', () => {
-    // Generate a large set so a regression that accidentally reused
-    // home's bucketing/dropping would show up as a shorter list.
-    const sessions = Array.from({ length: 15 }, (_, i) =>
-      makeSession({ id: `s${i}`, cwd: '/x', alive: false }),
-    )
-    const { rest } = partitionForProject(sessions)
-    expect(rest.length).toBe(15)
-  })
-
-  it('routes unread-alive to needsAttention and working-alive to running', () => {
-    // Smoke test that the two non-rest buckets still split as expected.
-    const att = makeSession({ id: 'att', cwd: '/x', alive: true, unread: true })
-    const run = makeSession({
-      id: 'run', cwd: '/x', alive: true,
-      status: { working: true, error: false },
-    })
-    const idle = makeSession({ id: 'idle', cwd: '/x', alive: true })
-    const { needsAttention, running, rest } = partitionForProject([att, run, idle])
-    expect(needsAttention.map(s => s.id)).toEqual(['att'])
-    expect(running.map(s => s.id)).toEqual(['run'])
-    expect(rest.map(s => s.id)).toEqual(['idle'])
-  })
-
-  it('routes dead-unread sessions to `rest`, not needsAttention', () => {
-    // Mirrors partitionForHome's alive-only Waiting predicate:
-    // a dead session with unread output is no longer "waiting on
-    // you"; it belongs in the All-sessions tail where dead
-    // sessions live.
-    const s = makeSession({
-      id: 'dead-unread', cwd: '/x', alive: false, unread: true,
-    })
-    const { needsAttention, rest } = partitionForProject([s])
-    expect(needsAttention).toEqual([])
-    expect(rest.map(x => x.id)).toEqual(['dead-unread'])
-  })
-})

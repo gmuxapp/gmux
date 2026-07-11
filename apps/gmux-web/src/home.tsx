@@ -8,7 +8,7 @@
 // live in store.ts:partitionForHome. This file is presentation.
 
 import {
-  health, folders, homePartition, dismissSession,
+  health, folders, homePartition, dismissSession, tabHref,
 } from './store'
 import { SessionRow } from './session-row'
 import { sessionPath } from './routing'
@@ -37,12 +37,22 @@ export function Home({
     for (const s of f.sessions) folderBySessionId.set(s.id, f)
   }
 
+  // Sessions with no folder can't be rendered (no project name / href)
+  // and would otherwise leave a section heading with no rows during the
+  // brief window after a daemon restart where recovered sessions arrive
+  // before their project stamp does. Drop them here so a section only
+  // shows when it has rows to render.
+  const placed = (arr: readonly Session[]) => arr.filter(s => folderBySessionId.has(s.id))
+  const waiting = placed(needsAttention)
+  const active = placed(running)
+  const recency = buckets
+    .map(b => ({ label: b.label, sessions: placed(b.sessions) }))
+    .filter(b => b.sessions.length > 0)
+
   const renderRow = (s: Session) => {
     const folder = folderBySessionId.get(s.id)
-    // A session always belongs to a folder once stamps land (post
-    // #228). Defensive fallback: if we somehow get a session
-    // without a folder (mid-arrival race), skip rendering rather
-    // than crashing the dashboard.
+    // Guarded by `placed()` above; the fallback stays as a defensive
+    // guard against a mid-arrival race.
     if (!folder) return null
     // Surface the session's cwd only when it strays from the project's
     // canonical folder (a subfolder or worktree/grove workspace);
@@ -52,7 +62,7 @@ export function Home({
       <SessionRow
         key={s.id}
         session={s}
-        href={sessionPath(folder.slug, s, folder.peer)}
+        href={tabHref(sessionPath(folder.slug, s, folder.peer))}
         showProject
         projectName={folder.name}
         showHost
@@ -63,7 +73,7 @@ export function Home({
     )
   }
 
-  const anyActivity = needsAttention.length > 0 || running.length > 0 || buckets.length > 0
+  const anyActivity = waiting.length > 0 || active.length > 0 || recency.length > 0
 
   return (
     <div class="page">
@@ -76,19 +86,19 @@ export function Home({
           />
         </div>
       </header>
-      {needsAttention.length > 0 && (
+      {waiting.length > 0 && (
         <Section title="Waiting">
-          {needsAttention.map(renderRow)}
+          {waiting.map(renderRow)}
         </Section>
       )}
 
-      {running.length > 0 && (
+      {active.length > 0 && (
         <Section title="Active">
-          {running.map(renderRow)}
+          {active.map(renderRow)}
         </Section>
       )}
 
-      {buckets.map(b => (
+      {recency.map(b => (
         <Section key={b.label} title={b.label}>
           {b.sessions.map(renderRow)}
         </Section>

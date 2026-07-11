@@ -1,8 +1,8 @@
 /** Textual " · host" suffix for project headers.
  *
  * Renders the peer's name in muted body text after a project name
- * on the sidebar folder header, home project card, and project page
- * h2. Turns the disconnect color when the peer is unreachable.
+ * on the sidebar folder header and home dashboard rows. Turns the
+ * disconnect color when the peer is unreachable.
  *
  * Locally-owned projects (peer omitted) render nothing: the viewer
  * is on that host, so naming it is noise. The suffix exists to flag

@@ -87,9 +87,23 @@ export function sessionPath(
   return `${ownerPrefix}/${projectSlug}${sessionHost}/${session.adapter}/${slug}`
 }
 
-/** Build the URL for a project hub (no session). */
-export function projectPath(slug: string, peer?: string): string {
-  return peer ? `/@${peer}/${slug}` : `/${slug}`
+/** Query params that define a tab's identity (its narrowing scope and
+ *  sidebar view). In-app links must carry them so navigation within a
+ *  pinned tab doesn't silently un-pin it. */
+const TAB_PARAMS = ['filter', 'sidebar'] as const
+
+/** Append the tab-identity params from `search` (a location.search
+ *  string) onto `path`. Other params (e.g. ?settings) are not carried:
+ *  they're transient UI state, not tab identity. */
+export function withTabParams(path: string, search: string): string {
+  const current = new URLSearchParams(search)
+  const carried = new URLSearchParams()
+  for (const key of TAB_PARAMS) {
+    const v = current.get(key)
+    if (v) carried.set(key, v)
+  }
+  const qs = carried.toString()
+  return qs ? `${path}?${qs}` : path
 }
 
 /**
@@ -170,14 +184,15 @@ export function resolveSessionFromPath(
  * The top-level thing the app is currently showing. Derived from the URL
  * and drives what the main panel renders.
  *
- *  - `home`: overview / landing (host status, projects, quick-launch)
- *  - `project`: the project hub page for a single project. `projectPeer`
- *    is set for peer-owned projects (ADR 0002); absent for local.
+ *  - `home`: overview / landing (activity dashboard, quick-launch)
  *  - `session`: a specific terminal session, by id.
+ *
+ * There is no project-hub view: project navigation lives entirely in the
+ * sidebar (folders collapse/expand in place), and a bare `/:project` URL
+ * redirects to home.
  */
 export type View =
   | { kind: 'home' }
-  | { kind: 'project'; projectSlug: string; projectPeer?: string }
   | { kind: 'session'; sessionId: string }
 
 /** Structural equality for views. */
@@ -185,10 +200,6 @@ export function viewsEqual(a: View, b: View): boolean {
   if (a.kind !== b.kind) return false
   switch (a.kind) {
     case 'home': return true
-    case 'project': {
-      const bp = b as { projectSlug: string; projectPeer?: string }
-      return a.projectSlug === bp.projectSlug && a.projectPeer === bp.projectPeer
-    }
     case 'session': return a.sessionId === (b as { sessionId: string }).sessionId
   }
 }
@@ -198,11 +209,10 @@ export function viewsEqual(a: View, b: View): boolean {
  *
  * Rules:
  *  - `/` (or unparseable / internal) -> home
- *  - `/:project` where project is unknown -> home
- *  - `/:project` where project exists -> project (hub page)
+ *  - `/:project` (no adapter) -> home (project hubs are retired; folder
+ *    navigation lives in the sidebar)
  *  - `/:project/:adapter[/:slug]` where a session resolves -> session view
- *  - `/:project/:adapter[/:slug]` with no matching session but project
- *    exists -> project view (hub)
+ *  - `/:project/:adapter[/:slug]` with no matching session -> home
  */
 export function resolveViewFromPath(
   path: string,
@@ -212,34 +222,15 @@ export function resolveViewFromPath(
   const parsed = parseSessionPath(path)
   if (!parsed.project) return { kind: 'home' }
 
-  // Validate that the addressed project exists in the viewer's view.
-  if (parsed.projectPeer) {
-    // Peer-owned: project exists iff at least one session carries the
-    // matching `(peer, slug)` stamp. We don't sync peer projects
-    // separately (ADR 0002); empty peer projects don't render.
-    const hasOne = sessions.some(
-      s => s.peer === parsed.projectPeer && s.project_slug === parsed.project,
-    )
-    if (!hasOne) return { kind: 'home' }
-  } else {
-    if (!projects.find(p => p.slug === parsed.project)) return { kind: 'home' }
-  }
+  // A bare project URL no longer has a destination of its own — send it
+  // home. Only session URLs (with an adapter segment) resolve to a view.
+  if (!parsed.adapter) return { kind: 'home' }
 
-  const projectView: View = {
-    kind: 'project',
-    projectSlug: parsed.project,
-    ...(parsed.projectPeer ? { projectPeer: parsed.projectPeer } : {}),
-  }
-
-  // /:project alone goes straight to the project hub.
-  if (!parsed.adapter) return projectView
-
-  // /:project/:adapter[/:slug] resolves to a concrete session when possible.
+  // /:project/:adapter[/:slug] resolves to a concrete session when
+  // possible; anything else (project gone, session gone) falls to home.
   const sessionId = resolveSessionFromPath(parsed, projects, sessions)
   if (sessionId) return { kind: 'session', sessionId }
-
-  // URL pointed at a session that no longer exists -> fall back to hub.
-  return projectView
+  return { kind: 'home' }
 }
 
 /**
@@ -255,8 +246,6 @@ export function viewToPath(
   switch (view.kind) {
     case 'home':
       return '/'
-    case 'project':
-      return projectPath(view.projectSlug, view.projectPeer)
     case 'session': {
       const sess = sessions.find(s => s.id === view.sessionId)
       if (!sess) return null

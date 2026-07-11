@@ -16,10 +16,11 @@
 import { signal, computed, batch, effect } from '@preact/signals'
 import type { Session, ProjectItem, DiscoveredProject, PeerInfo, PeerProject, LauncherDef, Folder } from './types'
 import type { View } from './routing'
-import { resolveViewFromPath, viewToPath } from './routing'
+import { resolveViewFromPath, viewToPath, withTabParams } from './routing'
 import { navigateWithReload } from './version-watch'
 import { buildProjectFolders, discoverProjects } from './projects'
 import { referencePresence, unresolvedReferences, removeReferenceItems, removeHostReferenceItems, type UnresolvedHost } from './references'
+import { parseFilterParam, formatFilterParam, sessionMatchesFilter, type Selector } from './tab-filter'
 import { pushError } from './toasts'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
@@ -523,18 +524,58 @@ export function isSessionFading(id: string): boolean {
 
 // ── Derived state (computed, auto-cached) ───────────────────────────────────
 
-/** Sessions filtered by URL params (?project=, ?cwd=). */
+/** Selectors parsed from the tab's `?filter=` param (see selectors.ts).
+ *  The URL is the persistence layer for tab narrowing: pin a tab to
+ *  `?filter=gmux` or `?filter=*@server`, bookmark it, and the browser's
+ *  own tab management becomes gmux's window manager. */
+export const activeSelectors = computed<Selector[]>(() =>
+  parseFilterParam(new URLSearchParams(urlSearch.value).get('filter')),
+)
+
+/** Sessions narrowed by the tab's `?filter=` selectors. This scopes the
+ *  tab's browsing surfaces — sidebar (both views), home dashboard, and
+ *  the waiting badge — not just one list: a pinned tab that leaked
+ *  global activity would defeat the pin. Management surfaces (Settings,
+ *  project discovery) deliberately stay global. */
 export const filteredSessions = computed(() => {
-  const params = new URLSearchParams(urlSearch.value)
-  const project = params.get('project')
-  const cwdFilter = params.get('cwd')
-  if (!project && !cwdFilter) return sessions.value
-  return sessions.value.filter(s => {
-    if (project && !s.cwd.toLowerCase().includes(project.toLowerCase())) return false
-    if (cwdFilter && !s.cwd.startsWith(cwdFilter)) return false
-    return true
-  })
+  const sel = activeSelectors.value
+  if (sel.length === 0) return sessions.value
+  const localHost = _rawWorld.value.health?.hostname
+  return sessions.value.filter(s => sessionMatchesFilter(s, sel, localHost))
 })
+
+/** Rewrite the tab's `?filter=` param (null/empty clears it). Replaces
+ *  the history entry: narrowing tweaks shouldn't pollute Back. */
+export function setFilterSelectors(selectors: readonly Selector[]) {
+  const params = new URLSearchParams(urlSearch.value)
+  const value = formatFilterParam(selectors)
+  if (value) params.set('filter', value)
+  else params.delete('filter')
+  const qs = params.toString()
+  navigate(qs ? `${urlPath.value}?${qs}` : urlPath.value, true)
+}
+
+/** Href that carries the tab-identity params (?filter=, ?sidebar=).
+ *  Every in-app link should go through this so navigating within a
+ *  pinned tab keeps the pin. Reads the urlSearch signal, so links
+ *  re-render when the tab's params change. */
+export function tabHref(path: string): string {
+  return withTabParams(path, urlSearch.value)
+}
+
+export function removeSelector(sel: Selector) {
+  setFilterSelectors(activeSelectors.value.filter(
+    s => !(s.project === sel.project && s.host === sel.host),
+  ))
+}
+
+/** Convenience for the sidebar's Host menu: narrow the tab to one host
+ *  (`*@host`), replacing any previous host-wide selector. `null` clears
+ *  host narrowing but keeps project selectors. */
+export function setHostFilter(host: string | null) {
+  const keep = activeSelectors.value.filter(s => !(s.project === '*'))
+  setFilterSelectors(host ? [...keep, { project: '*', host }] : keep)
+}
 
 /** Set of peer names that are Local (devcontainers, PeerConfig.Local).
  *  Local peers don't own their own project assignments; their sessions
@@ -568,7 +609,128 @@ function foldersFrom(ss: Session[]): Folder[] {
   )
 }
 
-export const folders = computed(() => foldersFrom(filteredSessions.value))
+/** The single source of truth for which sessions are eligible for the
+ *  sidebar. Projects places this list into configured folders; Activity
+ *  rearranges that placed set, so unstamped/unreferenced sessions that
+ *  cannot appear in Projects cannot leak into Activity either. Every
+ *  user-facing inclusion rule lives here:
+ *
+ *   1. the tab's `?filter=` scope (via `filteredSessions`),
+ *   2. a baseline of "sessions you can still act on" — alive or
+ *      resumable (a truly-gone corpse is unreachable, so it's dropped),
+ *   3. the alive-only toggle, which narrows (2) to just alive,
+ *   4. the selected session, always kept — you can't navigate away from
+ *      what you're looking at, even if (1)–(3) would hide it.
+ *
+ *  Distinct from routing: `view` / `selectedId` resolve against the full
+ *  `sessions` (filter-blind), so a filter never evicts the open
+ *  terminal; rule 4 only ever *adds* the selected session back here. */
+export const sidebarSessions = computed(() => {
+  const sel = selectedId.value
+  const onlyAlive = aliveOnly.value
+  const base = filteredSessions.value.filter(s =>
+    s.id === sel || (onlyAlive ? s.alive : s.alive || s.resumable),
+  )
+  // The selected session may be absent from `filteredSessions` entirely
+  // (the `?filter=` excluded it); add it back from the full list.
+  if (sel && !base.some(s => s.id === sel)) {
+    const s = sessions.value.find(x => x.id === sel)
+    if (s) return [...base, s]
+  }
+  return base
+})
+
+export const folders = computed(() => foldersFrom(sidebarSessions.value))
+
+/** Activity-grouped arrangement of the sessions that Projects can
+ *  actually place in folders. In particular, recovered sessions may be
+ *  briefly unstamped while gmuxd reapplies project ownership after a
+ *  restart. `sidebarSessions` already contains them, but Projects cannot
+ *  show them until their `project_slug` arrives. Flattening `folders`
+ *  keeps both views' membership identical through that reconnect window
+ *  (and makes every Activity row's folder lookup total).
+ *
+ *  Renders the `older` catch-all too, so resumable sessions remain
+ *  reachable in both views. */
+export const sidebarActivity = computed(() =>
+  partitionForHome(folders.value.flatMap(folder => folder.sessions), Date.now()),
+)
+
+// ── Sidebar view mode ───────────────────────────────────────────────────────
+//
+// The sidebar list has two presentations, switched from a compact menu
+// in the sidebar header:
+//
+//   'projects' — grouped by project folder, manual order (the classic).
+//   'activity' — flat, partitioned by activity/recency exactly like the
+//                home dashboard (Waiting / Active / recency buckets).
+//
+// Persistence is the URL (`?sidebar=activity`; absent = projects), so a
+// pinned tab keeps its view across reloads and other tabs can't
+// reconfigure it out from under the user.
+
+export type SidebarMode = 'projects' | 'activity'
+
+export const sidebarMode = computed<SidebarMode>(() =>
+  new URLSearchParams(urlSearch.value).get('sidebar') === 'activity'
+    ? 'activity'
+    : 'projects',
+)
+
+export function setSidebarMode(m: SidebarMode) {
+  const params = new URLSearchParams(urlSearch.value)
+  if (m === 'activity') params.set('sidebar', 'activity')
+  else params.delete('sidebar')
+  const qs = params.toString()
+  navigate(qs ? `${urlPath.value}?${qs}` : urlPath.value, true)
+}
+
+// ── Alive-only toggle ────────────────────────────────────────────────────
+//
+// Hide dead-but-resumable sessions in the Projects view. Deliberately
+// sessionStorage (per tab, dies with it): after a host reboot every
+// session becomes resumable, so a durable version of this toggle would
+// greet the user with an empty sidebar and no obvious reason why.
+
+const ALIVE_ONLY_KEY = 'gmux.aliveOnly'
+
+export const aliveOnly = signal<boolean>((() => {
+  try { return sessionStorage.getItem(ALIVE_ONLY_KEY) === '1' } catch { return false }
+})())
+
+export function setAliveOnly(v: boolean) {
+  aliveOnly.value = v
+  try {
+    if (v) sessionStorage.setItem(ALIVE_ONLY_KEY, '1')
+    else sessionStorage.removeItem(ALIVE_ONLY_KEY)
+  } catch { /* private mode */ }
+}
+
+// ── Collapsed folders ─────────────────────────────────────────────────
+//
+// Which sidebar folders are collapsed (sessions hidden). Keyed by
+// `Folder.key` (`${peer ?? ''}::${slug}`). Per-tab sessionStorage, same
+// browser-first ethos as the alive-only toggle: collapse is a transient
+// view preference, not durable config.
+
+const COLLAPSED_KEY = 'gmux.collapsedFolders'
+
+export const collapsedFolders = signal<ReadonlySet<string>>((() => {
+  try {
+    const raw = sessionStorage.getItem(COLLAPSED_KEY)
+    return new Set<string>(raw ? JSON.parse(raw) as string[] : [])
+  } catch { return new Set<string>() }
+})())
+
+export function toggleFolderCollapsed(key: string) {
+  const next = new Set(collapsedFolders.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  collapsedFolders.value = next
+  try {
+    sessionStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
+  } catch { /* private mode */ }
+}
 
 /**
  * Local host's display name, but only when the shown folders span more
@@ -610,7 +772,12 @@ export const localHostLabel = computed<string | undefined>(() => {
  */
 export const view = computed((): View | null => {
   if (!sessionsLoaded.value || !worldLoaded.value) return null
-  return resolveViewFromPath(urlPath.value, projects.value, filteredSessions.value)
+  // Filter-blind: routing addresses session *identity*, which the tab's
+  // `?filter=` must never change. Resolving against `filteredSessions`
+  // would let a narrowing filter evict the currently-open terminal back
+  // to the hub. Filtering is a sidebar-presentation concern only (see
+  // `sidebarSessions`).
+  return resolveViewFromPath(urlPath.value, projects.value, sessions.value)
 })
 
 /** Currently selected session ID, if the view is a session view. */
@@ -626,17 +793,6 @@ export const selected = computed(() => {
   // Expose on window for debugging.
   ;(window as any).__gmuxSession = s
   return s
-})
-
-/**
- * Folder key when the view is a project hub. Matches `Folder.key`
- * (`${peer ?? ''}::${slug}`) so the sidebar can highlight the active
- * folder uniformly across local and peer-owned projects (ADR 0002).
- */
-export const currentProjectKey = computed(() => {
-  const v = view.value
-  if (v?.kind !== 'project') return null
-  return `${v.projectPeer ?? ''}::${v.projectSlug}`
 })
 
 /** Dot state for the mobile hamburger: summarizes background session activity. */
@@ -664,14 +820,14 @@ export const backgroundActivity = computed((): DotState => {
  * session into at most one folder, so summing across folders needs no
  * dedup.
  *
- * Built from the *unfiltered* session set (`foldersFrom(sessions)`),
- * not the visible `folders` (which honor the ?project=/?cwd= view
- * filter). The blip is a global signal: an unread session in another
- * project must still count while the user browses a filtered view. */
+ * Scoped to the tab's `?filter=` selectors: a tab pinned to a project
+ * or host shouldn't blink for sessions outside its scope (another tab
+ * or a notification covers those). Within the scope it's built from
+ * folder-bucketed sessions so unstamped strays can't ping. */
 export const unreadCount = computed(() => {
   const sel = selectedId.value
   let n = 0
-  for (const f of foldersFrom(sessions.value)) {
+  for (const f of foldersFrom(filteredSessions.value)) {
     for (const s of f.sessions) {
       if (s.id !== sel && s.alive && s.unread) n++
     }
@@ -692,8 +848,8 @@ export const unreadCount = computed(() => {
 // hour / Earlier today / Yesterday / Earlier this week) rather than a
 // single capped list. Buckets give structure so the section can grow
 // without truncation; anything older than a week drops off home (find
-// it via the project page or search). Dead sessions are NOT included
-// (they live on the project page).
+// it in the sidebar, which lists every session). Dead sessions are NOT
+// included on home (the sidebar still lists resumable ones).
 export const RECENT_WINDOW_DAYS = 7
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 const MS_PER_HOUR = 60 * 60 * 1000
@@ -727,30 +883,38 @@ function byActivityDesc(a: Session, b: Session): number {
 }
 
 /**
- * Pure partition of a session list into the dashboard sections:
- * Waiting (unread), Active (working), and recency buckets for the
- * idle-alive remainder. Exported so tests can drive it with fixtures
- * and `now` injected (real wall-clock time would otherwise make the
- * day boundaries untestable).
+ * Pure partition of a session list into activity sections: Waiting
+ * (unread), Active (working), recency buckets for the idle-alive
+ * remainder, and an `older` catch-all (dead sessions + idle sessions
+ * past the recency window). Total: every input session lands in
+ * exactly one section, nothing is dropped. Exported so tests can drive
+ * it with fixtures and `now` injected (real wall-clock time would
+ * otherwise make the day boundaries untestable).
  *
- * Alive-only: dead sessions never appear on the home dashboard.
- * They live exclusively in the project page's "All sessions"
- * section (see partitionForProject). The home page is a triage
- * surface for sessions you can still interact with right now;
- * dead corpses would dilute the signal.
+ * Two surfaces arrange the result differently:
+ *   - The home dashboard renders Waiting / Active / recency buckets and
+ *     ignores `older`, so dead and stale sessions stay off the triage
+ *     surface (they'd dilute "what can I act on right now").
+ *   - The sidebar's Activity view renders every section including
+ *     `older`, so it lists exactly the sessions the Projects view does
+ *     — same set, different arrangement.
  */
 export function partitionForHome(
   all: readonly Session[],
   now: number,
-): { needsAttention: Session[]; running: Session[]; buckets: RecentBucket[] } {
+): { needsAttention: Session[]; running: Session[]; buckets: RecentBucket[]; older: Session[] } {
   const needsAttention: Session[] = []
   const running: Session[] = []
   const leftover: Session[] = []
+  const older: Session[] = []
 
   for (const s of all) {
-    // Dead sessions never surface on the home dashboard; they live
-    // only in the project page's "All sessions" section.
-    if (!s.alive) continue
+    // Dead sessions can't be "waiting on you" or "active" anymore, so
+    // they skip those sections and fall to `older`.
+    if (!s.alive) {
+      older.push(s)
+      continue
+    }
     // status.error is intentionally NOT escalated here: most error
     // states come from background subcommands that exited non-zero
     // without the agent itself halting, so flagging them as "needs
@@ -790,12 +954,13 @@ export function partitionForHome(
   const earlierWeek: Session[] = []
   for (const s of leftover) {
     const t = activityTimeMs(s)
-    if (t <= 0) continue
     if (t >= hourAgo) lastHour.push(s)
     else if (t >= todayMidnight) earlierToday.push(s)
     else if (t >= yesterdayMidnight) yesterday.push(s)
     else if (t >= weekAgo) earlierWeek.push(s)
+    else older.push(s) // past the week window, or no parseable timestamp
   }
+  older.sort(byActivityDesc)
 
   const buckets: RecentBucket[] = [
     { label: 'Last hour', sessions: lastHour },
@@ -804,51 +969,16 @@ export function partitionForHome(
     { label: 'Earlier this week', sessions: earlierWeek },
   ].filter(b => b.sessions.length > 0)
 
-  return { needsAttention, running, buckets }
+  return { needsAttention, running, buckets, older }
 }
 
 export const homePartition = computed(() =>
-  partitionForHome(sessions.value, Date.now()),
+  // The home dashboard is its own curated surface: scoped to the tab's
+  // `?filter=` but independent of the sidebar's list rules (alive-only,
+  // selected-pin). It ignores the `older` bucket, so dead and stale
+  // sessions stay off the triage view.
+  partitionForHome(filteredSessions.value, Date.now()),
 )
-
-/**
- * Project-page partition: same Needs-attention / Running buckets as
- * the home dashboard, but the third bucket holds *every* remaining
- * session in the project, not a recency-windowed subset. Rationale:
- * the project page is the user's exhaustive view of a project; an
- * idle shell from yesterday or an exited session from last week
- * must remain visible here or they're effectively unreachable (the
- * sidebar still lists them, but losing them from the project page
- * means losing them from the only dedicated project surface).
- *
- * Pure; tests drive it with fixtures.
- */
-export function partitionForProject(
-  all: readonly Session[],
-): { needsAttention: Session[]; running: Session[]; rest: Session[] } {
-  const needsAttention: Session[] = []
-  const running: Session[] = []
-  const rest: Session[] = []
-
-  for (const s of all) {
-    // Waiting/Active are alive-only here too (mirrors
-    // partitionForHome): a dead session, even with unread output,
-    // can't be "waiting on you" or "active" anymore. It belongs in
-    // the All-sessions tail. See partitionForHome for why
-    // status.error is also intentionally not escalated.
-    if (s.alive && s.unread) {
-      needsAttention.push(s)
-    } else if (s.alive && s.status?.working) {
-      running.push(s)
-    } else {
-      rest.push(s)
-    }
-  }
-  needsAttention.sort(byActivityDesc)
-  running.sort(byActivityDesc)
-  rest.sort(byActivityDesc)
-  return { needsAttention, running, rest }
-}
 
 // ── Mutators ────────────────────────────────────────────────────────────────
 
@@ -913,7 +1043,7 @@ export function sessionStaleness(
  * When the currently-selected session's slug changes between two session
  * arrays, compute the canonical URL for the new slug. Callers rewrite the
  * address bar in place with this URL so the stale slug doesn't fail to
- * resolve and boot the user back to the project hub.
+ * resolve and boot the user back home.
  *
  * The slug is title-derived (#348/#360), so it changes on rename *and*
  * when a pi `/resume` swaps the active conversation. Both cases keep the
@@ -977,7 +1107,7 @@ function commitWithSlugRewrite(
  * `upsertSession`, which the live path no longer calls. Routing the
  * commit through `commitWithSlugRewrite` reconnects it, so the URL follows
  * the new slug in place instead of the stale slug failing to resolve and
- * booting the user back to the project hub.
+ * booting the user back home.
  */
 export function applySessionsSnapshot(list: Session[]): void {
   // Detect newly-arrived IDs vs the previous snapshot so a pending launch
@@ -1414,7 +1544,9 @@ export function navigateToSession(sessionId: string, replace?: boolean): boolean
     sessions.value,
   )
   if (!path) return false
-  navigate(path, replace)
+  // Carry the tab-identity params (?filter=, ?sidebar=) so programmatic
+  // navigation doesn't un-pin a narrowed tab.
+  navigate(withTabParams(path, urlSearch.value), replace)
   return true
 }
 
@@ -1540,7 +1672,9 @@ export function initStore(): () => void {
     if (v === null) return
     const url = viewToPath(v, projects.value, sessions.value)
     if (url && url !== urlPath.value) {
-      navigate(url, true)
+      // Preserve tab-identity params across normalization; the raw
+      // path replace would otherwise strip ?filter=/?sidebar=.
+      navigate(withTabParams(url, urlSearch.value), true)
     }
   })
   cleanups.push(disposeUrlNorm)

@@ -1,10 +1,10 @@
 // --- Project-session matching and topology ---
 //
 // Maps sessions to projects using match rules (path prefix, git remote).
-// Builds sidebar folders and project hub topology. Pure functions with
+// Builds sidebar folders and session-ID host-path helpers. Pure functions with
 // no side effects or signal dependencies.
 
-import type { Session, Folder, ProjectItem, PeerInfo, DiscoveredProject } from './types'
+import type { Session, Folder, ProjectItem, DiscoveredProject } from './types'
 
 // --- Remote normalization (mirrors Go NormalizeRemote) ---
 
@@ -31,7 +31,7 @@ function pathUnder(candidate: string | undefined, base: string): boolean {
 
 /**
  * Whether a session should be visible in this project's UI (sidebar
- * folder, project hub page).
+ * folder).
  *
  * Under the references model, stamps are the sole authority for folder
  * membership. A session arrives in a folder because its origin host
@@ -487,36 +487,7 @@ function compareFolderSessions(a: Session, b: Session): number {
   return a.id.localeCompare(b.id)
 }
 
-// --- Project hub topology ---
-
-/** Sessions in a single working directory on a host. */
-export interface FolderNode {
-  cwd: string
-  sessions: Session[]
-}
-
-/** A host (local or peer) with all its project sessions, grouped by cwd. */
-export interface HostNode {
-  /**
-   * Path from the outermost peer down to this host (root-first). Empty
-   * array for the local gmuxd. E.g. `['workstation']` for a direct peer,
-   * `['workstation', 'alpine-dev']` for a devcontainer nested on that peer.
-   */
-  path: string[]
-
-  /**
-   * Connection state. Local hosts report 'local'; direct peers mirror
-   * `/v1/peers`. Nested hosts inherit their root peer's status since the
-   * hub only sees the outermost hop directly.
-   */
-  status: 'local' | 'connected' | 'connecting' | 'disconnected'
-
-  /** Free-form display hint (peer URL for remote, 'local' for local). */
-  meta: string
-
-  /** Folders grouped by cwd, sorted alphabetically. */
-  folders: FolderNode[]
-}
+// --- Session-ID host-path parsing ---
 
 /**
  * Parse a (possibly namespaced) session ID into its original identity and
@@ -587,123 +558,4 @@ export function reorderKeysForFolder(
       }
       return parseSessionHostPath(s.id).originalId
     })
-}
-
-/**
- * Build the host topology for a single project. Sessions that match the
- * project are bucketed by their host path (derived from the session id
- * chain), then by cwd within each host. Used by the project hub page.
- *
- * Returns an empty array when the project slug is unknown or has no
- * sessions. The caller can render a project-is-empty state for that case.
- */
-export function buildProjectTopology(
-  projectSlug: string,
-  sessions: Session[],
-  projects: ProjectItem[],
-  peers: PeerInfo[],
-  projectPeer?: string,
-  isLocalPeer?: (peerName: string) => boolean,
-): HostNode[] {
-  // Find the matching items[] entry. The hub can be reached at
-  // `/<slug>` (local owned) or `/@<peer>/<slug>` (reference); the
-  // caller passes `projectPeer` for the latter.
-  const ownerPeer = projectPeer ?? ''
-  const project = projects.find(p =>
-    p.slug === projectSlug && (p.peer ?? '') === ownerPeer,
-  )
-  if (!project) return []
-
-  // Match the sidebar bucketing: a session belongs in this project's
-  // hub iff its stamp matches AND its effective owner matches the
-  // project's owner. For owned projects, the owner is the viewer
-  // (Local-peer sessions count as owned by the viewer because their
-  // stamps come from the parent's rules). For references, the owner
-  // is the named peer.
-  const projectSessions = sessions.filter(s => {
-    if (s.project_slug !== projectSlug) return false
-    const sessionPeer = s.peer ?? ''
-    const effectiveOwner = sessionPeer && !(isLocalPeer?.(sessionPeer))
-      ? sessionPeer
-      : ''
-    if (effectiveOwner !== ownerPeer) return false
-    return isSessionVisibleInProject(s, project)
-  })
-
-  // Bucket by host path. The session id chain encodes the namespace
-  // hops innermost-first; parseSessionHostPath reverses them so the
-  // path reads root → leaf. We strip any leading Local-peer hop:
-  // those peers are co-tenants of the viewer, so their sessions live
-  // in the viewer's local host node, not a separate peer node.
-  const hostBuckets = new Map<string, { path: string[]; sessions: Session[] }>()
-  for (const s of projectSessions) {
-    const { path } = parseSessionHostPath(s.id)
-    const effectivePath = path.length > 0 && isLocalPeer?.(path[0])
-      ? path.slice(1)
-      : path
-    const key = effectivePath.join('\0')
-    let bucket = hostBuckets.get(key)
-    if (!bucket) {
-      bucket = { path: effectivePath, sessions: [] }
-      hostBuckets.set(key, bucket)
-    }
-    bucket.sessions.push(s)
-  }
-
-  // Convert each bucket -> HostNode with cwd-grouped folders.
-  const hosts: HostNode[] = []
-  for (const bucket of hostBuckets.values()) {
-    const folderMap = new Map<string, Session[]>()
-    for (const s of bucket.sessions) {
-      const cwd = s.cwd || ''
-      let list = folderMap.get(cwd)
-      if (!list) { list = []; folderMap.set(cwd, list) }
-      list.push(s)
-    }
-    const folders: FolderNode[] = [...folderMap.entries()]
-      .map(([cwd, ss]) => ({ cwd, sessions: sortHubSessions(ss) }))
-      .sort((a, b) => a.cwd.localeCompare(b.cwd))
-
-    const { status, meta } = resolveHostStatusAndMeta(bucket.path, peers)
-    hosts.push({ path: bucket.path, status, meta, folders })
-  }
-
-  // Local first, then peers alphabetically by full path.
-  hosts.sort((a, b) => {
-    if (a.path.length === 0 && b.path.length > 0) return -1
-    if (b.path.length === 0 && a.path.length > 0) return 1
-    return a.path.join('/').localeCompare(b.path.join('/'))
-  })
-
-  return hosts
-}
-
-function resolveHostStatusAndMeta(
-  path: string[],
-  peers: PeerInfo[],
-): { status: HostNode['status']; meta: string } {
-  if (path.length === 0) return { status: 'local', meta: 'local' }
-  const rootPeerName = path[0]
-  const peer = peers.find(p => p.name === rootPeerName)
-  if (!peer) return { status: 'disconnected', meta: '' }
-  const raw = peer.status
-  const status: HostNode['status']
-    = raw === 'connected' || raw === 'connecting' || raw === 'disconnected'
-      ? raw
-      : 'disconnected'
-  return { status, meta: peer.url }
-}
-
-function sortHubSessions(sessions: Session[]): Session[] {
-  // Alive first, then newest-first. Tiebreak on id so sessions that
-  // share a second-precision created_at (e.g. v1-spoke entries
-  // rehydrated together on startup) keep a stable order across
-  // snapshot.sessions re-emits.
-  return [...sessions].sort((a, b) => {
-    if (a.alive !== b.alive) return a.alive ? -1 : 1
-    const ta = new Date(a.created_at || 0).getTime()
-    const tb = new Date(b.created_at || 0).getTime()
-    if (ta !== tb) return tb - ta
-    return a.id.localeCompare(b.id)
-  })
 }
