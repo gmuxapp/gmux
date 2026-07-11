@@ -32,8 +32,9 @@ export default {
   subtitle: "",
   status: { working: true },
   unread: false,
+  project_slug: 'my-project',
+  last_activity_at: ago(0),
   socket_path: '/tmp/gmux-sessions/sess-4ab4995b.sock',
-  peer: 'laptop',
   cursorX: 2,
   cursorY: 70,
   terminal: `

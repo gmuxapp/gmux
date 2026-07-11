@@ -21,8 +21,10 @@ export default {
   subtitle: '',
   status: { working: false },
   unread: false,
+  project_slug: 'openclaw',
+  last_activity_at: ago(51),
   socket_path: '/tmp/gmux-sessions/mock.sock',
-  peer: 'server/container',
+  peer: 'devcontainer',
   mockActive: true,
   terminal: [
     `${GRAY}[09:14:22]${RST} ${DIM}info${RST}  worker started pid=4821`,
