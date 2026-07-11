@@ -5,7 +5,7 @@
  * callbacks and the mobile open/close toggle are passed as props.
  */
 
-import { useState, useCallback } from 'preact/hooks'
+import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
 import { sessionPath } from './routing'
 import { reorderKeysForFolder } from './projects'
 import { LaunchButton } from './launcher'
@@ -345,6 +345,23 @@ export function Sidebar({
   const hasUnresolved = unresolvedHosts.value.length > 0
   const bgArrival = useArrivalPulse(waiting ? 'unread' : 'none', waitingCount)
 
+  // Mobile: when the off-canvas sidebar opens, reveal the selected
+  // session instead of dumping the user at the top of the list. Only
+  // scrolls when the row is actually outside the viewport (a visible
+  // row stays put), and centers it so neighbors give context. Desktop
+  // is unaffected: there `open` never transitions to true.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const container = scrollRef.current
+    const el = container?.querySelector<HTMLElement>('.session-item.selected')
+    if (!container || !el) return
+    const c = container.getBoundingClientRect()
+    const r = el.getBoundingClientRect()
+    const fullyVisible = r.top >= c.top && r.bottom <= c.bottom
+    if (!fullyVisible) el.scrollIntoView({ block: 'center' })
+  }, [open])
+
   const totalVisible = foldersVal.reduce(
     (n, f) => n + f.sessions.filter(s => s.alive || s.resumable).length, 0,
   )
@@ -380,7 +397,7 @@ export function Sidebar({
             {hasUnresolved && <span class="settings-attention-pip" aria-hidden="true" />}
           </button>
         </div>
-        <div class="sidebar-scroll">
+        <div class="sidebar-scroll" ref={scrollRef}>
           {foldersVal.map(f => (
             <FolderGroup
               key={f.key}
