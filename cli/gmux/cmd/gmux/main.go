@@ -52,7 +52,7 @@ func main() {
 	case modeAttach:
 		os.Exit(cmdAttach(cmd.ref))
 	case modeSend:
-		os.Exit(cmdSend(cmd.ref, cmd.sendText, cmd.sendKeys, cmd.sendWait, cmd.timeout))
+		os.Exit(cmdSend(cmd.ref, cmd.sendText, cmd.sendKeys, cmd.sendSubmit, cmd.sendWait, cmd.timeout))
 	case modeSendKeys:
 		os.Exit(cmdSendKeys(cmd.ref, cmd.keys, cmd.keysLiteral))
 	case modeWait:

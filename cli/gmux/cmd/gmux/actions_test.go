@@ -117,20 +117,20 @@ func TestShortID(t *testing.T) {
 	}
 }
 
-// TestBuildSendBody pins the wire-level contract of --send: by default
-// the bytes written to the PTY end with the carriage return that
-// submits the input, and --no-submit suppresses exactly that byte and
-// nothing else. Both inline-text and stdin paths are covered because
-// they construct the body differently and the carriage-return logic
-// has to wrap both.
+// TestBuildSendBody pins the wire-level contract of `gmux send`: the
+// bytes written to the PTY are exactly text/stdin, then rendered keys,
+// then the adapter submit sequence — nothing implicit. Inline-text and
+// stdin paths are both covered because they construct the body
+// differently, and the submit sequence has to compose with both.
 func TestBuildSendBody(t *testing.T) {
 	noStdin := "\x00NIL" // sentinel: this case passes a nil stdin reader
 	tests := []struct {
-		name  string
-		text  *string
-		keys  []string
-		stdin string // noStdin → nil reader (the tty / no-pipe case)
-		want  string
+		name   string
+		text   *string
+		keys   []string
+		stdin  string // noStdin → nil reader (the tty / no-pipe case)
+		submit string // adapter submit sequence (--follow-up/--steering)
+		want   string
 	}{
 		{
 			name:  "text without keys sends verbatim, no submit",
@@ -169,6 +169,19 @@ func TestBuildSendBody(t *testing.T) {
 			stdin: "hi",
 			want:  "hi\r",
 		},
+		{
+			name:   "text + follow-up submit seq (pi Alt+Enter)",
+			text:   stringPtr("also do X"),
+			stdin:  noStdin,
+			submit: "\x1b\r",
+			want:   "also do X\x1b\r",
+		},
+		{
+			name:   "piped stdin + steering submit seq",
+			stdin:  "course-correct",
+			submit: "\r",
+			want:   "course-correct\r",
+		},
 	}
 
 	for _, tc := range tests {
@@ -177,7 +190,7 @@ func TestBuildSendBody(t *testing.T) {
 			if tc.stdin != noStdin {
 				stdin = strings.NewReader(tc.stdin)
 			}
-			body := buildSendBody(tc.text, tc.keys, stdin)
+			body := buildSendBody(tc.text, tc.keys, stdin, tc.submit)
 			got, err := io.ReadAll(body)
 			if err != nil {
 				t.Fatalf("read body: %v", err)
@@ -190,6 +203,39 @@ func TestBuildSendBody(t *testing.T) {
 }
 
 func stringPtr(s string) *string { return &s }
+
+// TestSubmitSeqFor pins the adapter-name → submit-bytes mapping that
+// `gmux send --follow-up/--steering` relies on: pi distinguishes the
+// two modes (Enter vs Alt+Enter), while every other adapter — shells,
+// agents whose Enter both submits and queues, and adapter names this
+// build doesn't know (e.g. a peer session created by a newer gmux) —
+// falls back to the universal Enter for both.
+func TestSubmitSeqFor(t *testing.T) {
+	cases := []struct {
+		adapter string
+		mode    string
+		want    string
+	}{
+		{"pi", "steering", "\r"},
+		{"pi", "follow-up", "\x1b\r"}, // Alt+Enter = ESC CR
+		{"shell", "steering", "\r"},
+		{"shell", "follow-up", "\r"},
+		{"claude", "follow-up", "\r"},
+		{"codex", "steering", "\r"},
+		{"some-future-adapter", "follow-up", "\r"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.adapter+"/"+tc.mode, func(t *testing.T) {
+			got, ok := submitSeqFor(tc.adapter, tc.mode)
+			if !ok {
+				t.Fatalf("submitSeqFor(%q, %q) not ok", tc.adapter, tc.mode)
+			}
+			if got != tc.want {
+				t.Errorf("submitSeqFor(%q, %q) = %q, want %q", tc.adapter, tc.mode, got, tc.want)
+			}
+		})
+	}
+}
 
 // TestMatchSessionStrictLocalDefault locks in the rule that drove
 // the new addressing design: with no --host and no @suffix, peer

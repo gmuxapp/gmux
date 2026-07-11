@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/gmuxapp/gmux/cli/gmux/internal/localterm"
+	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 )
 
 // session is the subset of gmuxd's Session model that the CLI cares
@@ -419,7 +421,12 @@ func fetchScrollback(sess cliSession, n int) ([]byte, int) {
 // Sends bytes to the session's PTY as if typed at the terminal: the
 // inline text (or piped stdin) followed by any trailing key tokens.
 // Submission is explicit (ADR 0009) — a trailing `Enter` key, or a \r
-// in piped bytes — so there is no implicit carriage return.
+// in piped bytes — so there is no implicit carriage return. The one
+// adapter-aware exception is submit ("follow-up" or "steering"): it
+// appends the session adapter's submit keystroke for that mode, so the
+// caller doesn't have to know adapter-specific key encodings (pi
+// queues a follow-up with Alt+Enter — undiscoverable, and not even
+// expressible as a `send` key token).
 //
 // When text is provided inline it is sent verbatim; when it is omitted
 // and stdin is a pipe, stdin is read until EOF (`echo hi | gmux send
@@ -431,7 +438,27 @@ func fetchScrollback(sess cliSession, n int) ([]byte, int) {
 // peer sessions (gmuxd forwards to the owning peer transparently).
 // Access control inherits from gmuxd: local IPC is owner-only, and
 // peers honor their own `tailscale.allow` config.
-func cmdSend(ref string, text *string, keys []string, wait bool, timeoutSecs int) int {
+func cmdSend(ref string, text *string, keys []string, submit string, wait bool, timeoutSecs int) int {
+	// Resolve up front: the submit sequence depends on the session's
+	// adapter, which only the resolved session knows. Because the
+	// adapter name travels with the session record, this works for peer
+	// sessions too — the mapping happens here, the peer just gets bytes.
+	sess, err := resolveSession(ref)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return 1
+	}
+
+	var submitSeq string
+	if submit != "" {
+		seq, ok := submitSeqFor(sess.Adapter, submit)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "gmux: the %s adapter does not support --%s\n", sess.Adapter, submit)
+			return 1
+		}
+		submitSeq = seq
+	}
+
 	// Read stdin only when no inline text was given AND stdin is a pipe.
 	// The tty guard is essential: without it, `gmux send <id> Enter` typed
 	// interactively would block reading the terminal. With it, piped input
@@ -441,11 +468,50 @@ func cmdSend(ref string, text *string, keys []string, wait bool, timeoutSecs int
 	if text == nil && !localterm.IsInteractive() {
 		stdin = os.Stdin
 	}
-	body := buildSendBody(text, keys, stdin)
-	if wait {
-		return sendBytesAndWait(ref, body, timeoutSecs)
+	body := buildSendBody(text, keys, stdin, submitSeq)
+	if !wait {
+		return postInput(sess, body, "")
 	}
-	return sendBytes(ref, body)
+
+	// `gmux send --wait`: one request delivers the input AND blocks
+	// until the turn it triggers completes. gmuxd subscribes to session
+	// events *before* forwarding the bytes to the runner, so unlike the
+	// `gmux send X && gmux wait X` composition it cannot mistake the
+	// previous turn's idle state for the reply (#218). With --follow-up
+	// on a busy pi session this also waits for the queued prompt's
+	// reply, not just the current turn: pi drains its follow-up queue
+	// inside the same agent loop, so Working stays true until the
+	// queued turn is done.
+	//
+	// Exit codes mirror `gmux wait`: 0 idle, 2 died, 3 timeout, 1
+	// usage/transport errors.
+	if sess.Peer != "" {
+		// Same scope rule as `gmux wait`: the wait half needs the
+		// owning daemon's event stream, which peers don't expose to
+		// the CLI yet. Bare shortID: the message names the peer itself.
+		fmt.Fprintf(os.Stderr, "gmux: send --wait is only supported for local sessions (%s is on peer %q)\n",
+			shortID(sess.ID), sess.Peer)
+		return 1
+	}
+	query := "?wait=idle"
+	if timeoutSecs > 0 {
+		query += "&timeout=" + strconv.Itoa(timeoutSecs)
+	}
+	return postInput(sess, body, query)
+}
+
+// submitSeqFor maps a session's adapter name plus a submit-mode flag
+// ("follow-up" | "steering") to the PTY byte sequence that submits the
+// prompt. The adapter capability (adapter.PromptSubmitter) owns the
+// mapping; adapters without it — and adapter names this build doesn't
+// know — fall back to Enter for both modes, the universal single
+// submit (see adapter.SubmitSeqFor).
+func submitSeqFor(adapterName, mode string) (string, bool) {
+	m := adapter.SubmitSteering
+	if mode == "follow-up" {
+		m = adapter.SubmitFollowUp
+	}
+	return adapter.SubmitSeqFor(adapters.FindByAdapter(adapterName), m)
 }
 
 // cmdSendKeys implements the tmux-compatible `gmux send-keys -t <id>
@@ -463,35 +529,6 @@ func sendBytes(ref string, body io.Reader) int {
 		return 1
 	}
 	return postInput(sess, body, "")
-}
-
-// sendBytesAndWait implements `gmux send --wait`: one request delivers
-// the input AND blocks until the turn it triggers completes. gmuxd
-// subscribes to session events *before* forwarding the bytes to the
-// runner, so unlike the `gmux send X && gmux wait X` composition it
-// cannot mistake the previous turn's idle state for the reply (#218).
-//
-// Exit codes mirror `gmux wait`: 0 idle, 2 died, 3 timeout, 1 usage/
-// transport errors.
-func sendBytesAndWait(ref string, body io.Reader, timeoutSecs int) int {
-	sess, err := resolveSession(ref)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return 1
-	}
-	if sess.Peer != "" {
-		// Same scope rule as `gmux wait`: the wait half needs the
-		// owning daemon's event stream, which peers don't expose to
-		// the CLI yet. Bare shortID: the message names the peer itself.
-		fmt.Fprintf(os.Stderr, "gmux: send --wait is only supported for local sessions (%s is on peer %q)\n",
-			shortID(sess.ID), sess.Peer)
-		return 1
-	}
-	query := "?wait=idle"
-	if timeoutSecs > 0 {
-		query += "&timeout=" + strconv.Itoa(timeoutSecs)
-	}
-	return postInput(sess, body, query)
 }
 
 // postInput POSTs body to the session's input endpoint. With an empty
@@ -566,23 +603,16 @@ func postInput(sess cliSession, body io.Reader, query string) int {
 // fast on the client side rather than letting the server truncate us.
 const maxSendBytes = 1 << 20 // 1 MiB
 
-// buildSendBody assembles the bytes that --send writes to the session's
-// PTY input. When text is non-nil it is sent verbatim; otherwise stdin
-// is read up to maxSendBytes. Unless noSubmit is set, a trailing \r is
-// appended — that's what xterm sends for Enter and what every PTY
-// (agent or shell) treats as "submit this line." \n alone is not
-// enough: most agents see it as a literal newline and keep buffering,
-// which is how `gmux --send <id> < prompt.txt` ended up silently
-// failing for users who expected `cat`-style behavior. A redundant \r
-// in the input is harmless (submits an empty line at most), so we don't
-// try to detect and dedupe.
 // buildSendBody assembles the bytes to write to the session PTY: the
 // message body (inline text, else piped stdin if provided) followed by
-// any trailing key sequences. stdin is nil unless the caller determined
-// it is a pipe to read (see cmdSend). Submission is explicit — a
-// trailing Enter key, or a \r in the piped bytes.
-func buildSendBody(text *string, keys []string, stdin io.Reader) io.Reader {
-	readers := make([]io.Reader, 0, 2)
+// any trailing key sequences, then the adapter submit sequence (from
+// --follow-up/--steering; "" for neither — the parser guarantees keys
+// and submitSeq never coexist). stdin is nil unless the caller
+// determined it is a pipe to read (see cmdSend). Submission is
+// explicit — a trailing Enter key, a \r in the piped bytes, or a
+// submit-mode flag.
+func buildSendBody(text *string, keys []string, stdin io.Reader, submitSeq string) io.Reader {
+	readers := make([]io.Reader, 0, 3)
 	switch {
 	case text != nil:
 		readers = append(readers, strings.NewReader(*text))
@@ -591,6 +621,9 @@ func buildSendBody(text *string, keys []string, stdin io.Reader) io.Reader {
 	}
 	if len(keys) > 0 {
 		readers = append(readers, strings.NewReader(renderKeys(keys, false)))
+	}
+	if submitSeq != "" {
+		readers = append(readers, strings.NewReader(submitSeq))
 	}
 	return io.MultiReader(readers...)
 }
