@@ -288,6 +288,46 @@ blocks until the queued prompt's reply, per the issue's contract.
 
 [#385]: https://github.com/gmuxapp/gmux/issues/385
 
+## Amendment (2026-07-12): `tail` defaults to the conversation transcript
+
+`gmux tail` (decision 13a) changes its default view for sessions whose
+adapter persists a structured conversation file (pi's JSONL; the
+adapter capability is `ConversationRenderer`): it prints clean markdown
+reconstructed from that file — the actual user/assistant exchange with
+compact tool-call lines — instead of the emulator-rendered PTY
+scrollback, which for agent TUIs is box-drawing, spinners, and
+viewport-truncated redraws ([#384]). Sessions without a renderable
+conversation (shells, deleted conversations, no messages yet, adapters
+without the capability) keep the PTY output, so scripts against shell
+sessions see no change. The capability takes the opaque adapter-scoped
+conversation ref of ADR 0022; for file adapters the ref is the
+transcript's path, but that stays the adapter's private convention.
+
+Grammar consequences, per the behavior-modifier-flag pattern (no new
+verbs):
+
+- **`--raw` forces the PTY scrollback view** — the pre-change default
+  output. `-e` remains an alias. 13a described `--raw`/`-e` as
+  "preserve ANSI escapes", but that had already been vestigial since
+  the broker began rendering `?tail=N` through a terminal emulator
+  (which strips escapes server-side); both flags' *observable*
+  behavior — plain-text PTY output — is unchanged.
+- **`-n` counts messages in the conversation view**, lines in the PTY
+  view. One knob, unit follows the view.
+- Still snapshot-only; no `-f` (13a stands). A live conversation
+  stream is ADR 0021's `session/load` + `session/update` territory.
+
+Server-side this is `GET /v1/sessions/{id}/conversation?tail=N` on
+gmuxd (ADR 0005: the CLI routes through the daemon; peer sessions
+forward to the owning host, where the conversation lives). The
+endpoint answers 404 `no_conversation` when there is nothing to
+render, which is the CLI's signal to fall back to scrollback — also
+the path taken against older daemons that lack the endpoint entirely.
+The daemon stays content-free (ADR 0011): the adapter re-reads the
+stored conversation per request; nothing is cached or stored.
+
+[#384]: https://github.com/gmuxapp/gmux/issues/384
+
 ## Amendment (2026-07-06): `edit` joins the top-level namespace
 
 `gmux edit [file]` is added as a top-level verb. It cannot live under a

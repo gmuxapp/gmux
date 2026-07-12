@@ -69,7 +69,7 @@ When no text argument is given and stdin is a pipe, gmux reads stdin until EOF (
 gmux send --wait <id> Enter < step-1.txt
 gmux send --wait <id> Enter < step-2.txt
 
-gmux tail <id> -n 200          # extract the final answer
+gmux tail <id> -n 2            # the prompt and the reply, clean markdown
 ```
 
 The idle signal is the same `Status.Working` flag the UI's spinner consumes, so `wait` returns the moment the agent emits its closing message. Exit codes: `0` idle (or matched), `2` the session died first, `3` `--timeout N` elapsed.
@@ -86,11 +86,11 @@ gmux wait <id> --for-text 'Listening on' --timeout 30   # wait for a server to c
 
 ## Reading output
 
-`gmux tail <id>` prints recent output as plain text (ANSI stripped; `-n N` for line count, default 100). Pair it with `wait` to capture an agent's final answer:
+`gmux tail <id>` prints the session's conversation as clean markdown when the agent persists a conversation file (pi): `## User` / `## Assistant` messages with compact `[tool] …` one-liners — the actual exchange, not the TUI's box-drawing and spinners. `-n N` counts messages there (default 100). Sessions without a conversation file (shells, plain commands) print recent terminal output as plain text instead, where `-n` counts lines; `--raw` forces that terminal view for any session. Pair it with `wait` to capture an agent's final answer:
 
 ```bash
 gmux send --wait --timeout 600 <id> Enter < ship-prompt.txt
-url=$(gmux tail <id> -n 50 | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1)
+url=$(gmux tail <id> -n 1 | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1)
 echo "$url"
 ```
 
