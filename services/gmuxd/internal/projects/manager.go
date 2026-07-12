@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"sync"
+
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
 // ValidationError wraps a State.Validate failure produced while applying
@@ -138,7 +140,6 @@ func (m *Manager) Update(fn func(s *State) bool) error {
 // to that project's sessions list. Returns the project slug if assigned.
 // This is called when:
 //   - A new session is discovered (Register)
-//   - A session gets a Slug (file attribution)
 //
 // Dead/resumable sessions are not auto-assigned. projects.json is the
 // source of truth for sidebar membership; if dismiss removed a session key,
@@ -156,33 +157,11 @@ func (m *Manager) AutoAssignSession(info SessionInfo) string {
 	}
 	var assigned string
 	err := m.Update(func(state *State) bool {
-		key := SessionKey(info.ID, info.Slug)
+		key := info.ID
 
 		// Already in a project?
 		if state.FindSessionProject(key) != "" {
 			return false
-		}
-
-		// If the session has a Slug different from its ID, check if
-		// the old key (session ID) is already assigned. This handles the
-		// transition when a session gets attributed: replace the ID-based
-		// entry with the Slug-based entry to preserve ordering.
-		if info.Slug != "" && info.Slug != info.ID {
-			if slug := state.FindSessionProject(info.ID); slug != "" {
-				// Replace ID with Slug in the same position.
-				for i := range state.Items {
-					if state.Items[i].Slug != slug {
-						continue
-					}
-					for j, existing := range state.Items[i].Sessions {
-						if existing == info.ID {
-							state.Items[i].Sessions[j] = info.Slug
-							assigned = slug
-							return true
-						}
-					}
-				}
-			}
 		}
 
 		// Match against project rules.
@@ -223,7 +202,7 @@ func (m *Manager) AutoAssignAll(sessions []SessionInfo) {
 			if info.Host != "" && !info.LocalHost {
 				continue
 			}
-			key := SessionKey(info.ID, info.Slug)
+			key := info.ID
 			if state.FindSessionProject(key) != "" {
 				continue
 			}
@@ -299,20 +278,12 @@ func (m *Manager) CleanupSessions(known map[string]bool) {
 	}
 }
 
-// DismissSession removes a session from its project's sessions list.
+// DismissSession removes a session ID from its project's sessions list.
 // Returns the project slug if the session was found.
-func (m *Manager) DismissSession(id, slug string) string {
+func (m *Manager) DismissSession(id string) string {
 	var removed string
 	err := m.Update(func(state *State) bool {
-		key := SessionKey(id, slug)
-		projectSlug := state.RemoveSessionFromAll(key)
-		if projectSlug == "" {
-			// Also try the ID if we used slug.
-			if slug != "" && slug != id {
-				projectSlug = state.RemoveSessionFromAll(id)
-			}
-		}
-		if projectSlug != "" {
+		if projectSlug := state.RemoveSessionFromAll(id); projectSlug != "" {
 			removed = projectSlug
 			return true
 		}
@@ -322,4 +293,24 @@ func (m *Manager) DismissSession(id, slug string) string {
 		log.Printf("projects: dismiss error: %v", err)
 	}
 	return removed
+}
+
+// WatchRemovals removes project membership for every removed store session.
+// Errors are logged so a failed cleanup does not stop the event loop.
+func (m *Manager) WatchRemovals(events <-chan store.Event) {
+	for ev := range events {
+		if ev.Type != "session-remove" {
+			continue
+		}
+		if err := m.RemoveSessionFromAll(ev.ID); err != nil {
+			log.Printf("projects: cleanup remove %s: %v", ev.ID, err)
+		}
+	}
+}
+
+// RemoveSessionFromAll removes an ID from project membership.
+func (m *Manager) RemoveSessionFromAll(id string) error {
+	return m.Update(func(state *State) bool {
+		return state.RemoveSessionFromAll(id) != ""
+	})
 }

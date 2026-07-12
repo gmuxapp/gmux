@@ -128,7 +128,7 @@ The four stores have orthogonal concerns. Mixing them is a smell:
 
 - **"State"** has been overloaded across **Store** (in-memory), **Sessionmeta** (per-session runtime fields on disk), **adapter state files** (per-adapter on-disk records), and the runtime Alive/Dead/Resumable. Always qualify which one.
 
-- **"Identity"**: in this codebase, **Slug** is identity, **Session ID** is instance. Treat them as distinct columns even though `SessionKey` coalesces them for projects.json's purposes.
+- **"Identity"**: a **Session ID** is the durable identity of a session and the projects.json membership key. A **session slug** is a mutable display/URL name; treat them as distinct columns.
 
 - **"Local"** has two meanings: the local *machine* (where this gmuxd runs), and a **Local peer** (`PeerConfig.Local = true`, currently devcontainers only). Prefer **Local peer** for the latter to avoid collision with "the local daemon".
 

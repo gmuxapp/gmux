@@ -47,7 +47,7 @@ type MatchRule struct {
 //
 //   - Owned: Slug + Match[] + Sessions[]. This is a project owned by
 //     this host. Match drives session attribution; Sessions[] holds
-//     the ordered list of session keys for sidebar order.
+//     the ordered list of session IDs for sidebar order.
 //   - Reference: Slug + Peer. This is a viewer-side reference to a
 //     project owned by a peer. Match and Sessions are unused: the
 //     peer's projects.json is the source of truth for both. The viewer
@@ -578,15 +578,11 @@ type Assignment struct {
 	Index int
 }
 
-// AssignmentsByKey returns a flat map from session key to the
-// project Assignment claiming it. Pure derivation from State; the
-// caller is expected to use the result to stamp sessions (see
-// store.Store.Reconcile).
-//
-// First occurrence wins on duplicate keys: a key appearing in two
-// items would point at the first item's Assignment. This shouldn't
-// happen because dismiss/auto-assign keep entries unique, but the
-// behaviour is at least defined.
+// AssignmentsByKey returns a flat map from session ID to the project
+// Assignment claiming it. Pure derivation from State; the caller is expected
+// to use the result to stamp sessions (see store.Store.Reconcile). IDs are
+// unique by construction because auto-assignment never adds an ID already
+// present in a project.
 func (s *State) AssignmentsByKey() map[string]Assignment {
 	out := make(map[string]Assignment)
 	for _, item := range s.Items {
@@ -613,16 +609,6 @@ func (s *State) FindSessionProject(key string) string {
 	return ""
 }
 
-// SessionKey returns the key used to identify a session in project arrays.
-// Uses Slug if available (stable across restarts), falls back to
-// session ID (ephemeral, for sessions without attribution).
-func SessionKey(id, slug string) string {
-	if slug != "" {
-		return slug
-	}
-	return id
-}
-
 // --- Discovery (offered projects) ---
 
 // SessionInfo contains the session fields needed for matching and discovery.
@@ -639,7 +625,6 @@ type SessionInfo struct {
 	LocalHost bool
 	Alive     bool
 	Resumable bool // dead but has a resume command persisted
-	Slug      string
 	// LastActive is an RFC3339 timestamp of the session's most recent
 	// noteworthy activity (last_activity_at, falling back to
 	// created_at). Used to sort discovered suggestions by recency so a
@@ -680,7 +665,7 @@ func (s *State) UnmatchedActiveCount(sessions []SessionInfo) int {
 		if !sess.Alive {
 			continue
 		}
-		key := SessionKey(sess.ID, sess.Slug)
+		key := sess.ID
 		if s.FindSessionProject(key) != "" {
 			continue
 		}
