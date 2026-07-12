@@ -299,7 +299,9 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 
 	// "session_file" is the pre-v2 name for the same event: long-lived
 	// runners survive daemon upgrades, so the daemon accepts both for one
-	// release. New runners emit only "conversation_file".
+	// release. New runners emit only "conversation_file" — itself a legacy
+	// wire name whose "path" payload carries the adapter-opaque
+	// conversation ref (ADR 0022).
 	// TODO(v2.1): drop the "session_file" case.
 	case "conversation_file", "session_file":
 		var sf struct {
@@ -312,13 +314,13 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		if sf.Path == "" {
 			return
 		}
-		// session → file is authoritative and per-session (ADR 0011): record it
-		// on the session itself so the frontend can derive file → {sessions}
-		// and warn when a conversation is open in more than one runner. A
-		// rebind (/resume) just overwrites this session's own file; it never
-		// clobbers another session's.
+		// session → conversation is authoritative and per-session (ADR 0011):
+		// record the ref on the session itself so the frontend can derive
+		// ref → {sessions} and warn when a conversation is open in more than
+		// one runner. A rebind (/resume) just overwrites this session's own
+		// ref; it never clobbers another session's.
 		sub.store.Update(sessionID, func(sess *store.Session) {
-			sess.ConversationFile = sf.Path
+			sess.ConversationRef = sf.Path
 		})
 
 	case "activity":

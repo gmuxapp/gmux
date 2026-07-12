@@ -1,4 +1,4 @@
-package sessionfiles
+package storegc
 
 import (
 	"testing"

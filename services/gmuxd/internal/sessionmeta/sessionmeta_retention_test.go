@@ -14,10 +14,10 @@ import (
 // --- helpers -------------------------------------------------------
 
 // writeDead persists a dead session with the given id, ExitedAt and
-// ConversationFile so retention tests can stage corpses on disk.
+// ConversationRef so retention tests can stage corpses on disk.
 func writeDead(t *testing.T, s *Store, id, exitedAt, conversationFile string) {
 	t.Helper()
-	sess := store.Session{ID: id, Adapter: "shell", Alive: false, ExitedAt: exitedAt, ConversationFile: conversationFile}
+	sess := store.Session{ID: id, Adapter: "shell", Alive: false, ExitedAt: exitedAt, ConversationRef: conversationFile}
 	if err := s.Write(sess); err != nil {
 		t.Fatalf("Write %s: %v", id, err)
 	}
@@ -438,13 +438,13 @@ func TestPruneScrollbackCoalesces(t *testing.T) {
 	}
 }
 
-// TestRemoveDeadByConversationFileDrivesWatchRemovals pins the seam between
+// TestRemoveDeadByConversationRefDrivesWatchRemovals pins the seam between
 // the store broadcast and the meta persister: retiring a dead session
-// via RemoveDeadByConversationFile must, through the session-remove event
+// via RemoveDeadByConversationRef must, through the session-remove event
 // consumed by WatchRemovals, delete the on-disk meta dir.
-func TestRemoveDeadByConversationFileDrivesWatchRemovals(t *testing.T) {
+func TestRemoveDeadByConversationRefDrivesWatchRemovals(t *testing.T) {
 	metaStore := New(t.TempDir())
-	sess := store.Session{ID: "sess-dead1", Adapter: "claude", Alive: false, ConversationFile: "/c/conv.jsonl"}
+	sess := store.Session{ID: "sess-dead1", Adapter: "claude", Alive: false, ConversationRef: "/c/conv.jsonl"}
 	if err := metaStore.Write(sess); err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +458,7 @@ func TestRemoveDeadByConversationFileDrivesWatchRemovals(t *testing.T) {
 	done := make(chan struct{})
 	go func() { metaStore.WatchRemovals(events); close(done) }()
 
-	if ids := sessions.RemoveDeadByConversationFile("/c/conv.jsonl"); len(ids) != 1 {
+	if ids := sessions.RemoveDeadByConversationRef("/c/conv.jsonl"); len(ids) != 1 {
 		t.Fatalf("expected 1 retired session, got %v", ids)
 	}
 

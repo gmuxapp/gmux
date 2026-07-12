@@ -39,11 +39,11 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peerstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionmeta"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sleep"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/storegc"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsauth"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/update"
@@ -577,28 +577,29 @@ func serve(stderr io.Writer) int {
 	// runs an unthrottled prune via discovery's first-scan hook below.
 	const scrollbackCacheInterval = 12 * time.Hour
 
-	// Retire the dead session(s) backed by a conversation file when that
-	// file disappears: the adapter conversation watchers report file-gone
-	// (WatchSources below — fires even for files the index never held),
-	// and meta.json mirrors conversation existence (ADR 0016). The store
-	// applies the alive/peer/N:1 guards; its session-remove broadcast is
-	// what WatchRemovals turns into a meta-dir delete.
-	convRetireMeta := func(path string) { sessions.RemoveDeadByConversationFile(path) }
+	// Retire the dead session(s) backed by a conversation when that
+	// conversation disappears: the adapter ConversationSources report
+	// conversation-gone (WatchSources below — fires even for refs the
+	// index never held), and meta.json mirrors conversation existence
+	// (ADR 0016). The store applies the alive/peer/N:1 guards; its
+	// session-remove broadcast is what WatchRemovals turns into a
+	// meta-dir delete.
+	convRetireMeta := func(ref string) { sessions.RemoveDeadByConversationRef(ref) }
 
 	// retireDeleted closes the gap the runtime index signal can't cover:
-	// a conversation file deleted while gmuxd was *down* emits no removal
+	// a conversation deleted while gmuxd was *down* emits no removal
 	// event. Run from discovery's first-scan hook (live runners flagged),
-	// it asks each owning adapter whether its dead sessions' files are
-	// gone. See reconcileDeletedConversations for the safety gate.
-	convProbe := func(adapterName, path string) (gone, known bool) {
+	// it asks each owning adapter whether its dead sessions' conversations
+	// are gone. See reconcileDeletedConversations for the safety gate.
+	convProbe := func(adapterName, ref string) (gone, known bool) {
 		if p, ok := adapters.FindByAdapter(adapterName).(adapter.ConversationProber); ok {
-			return p.ConversationGone(path)
+			return p.ConversationGone(ref)
 		}
 		return false, false
 	}
-	retireDeleted := func(path string) {
-		if ids := sessions.RemoveDeadByConversationFile(path); len(ids) > 0 {
-			log.Printf("sessionmeta: retired %d dead session(s) for deleted conversation %s", len(ids), path)
+	retireDeleted := func(ref string) {
+		if ids := sessions.RemoveDeadByConversationRef(ref); len(ids) > 0 {
+			log.Printf("sessionmeta: retired %d dead session(s) for deleted conversation %s", len(ids), ref)
 		}
 	}
 
@@ -652,22 +653,21 @@ func serve(stderr io.Writer) int {
 	}, 3*time.Second, stopDiscovery)
 	defer close(stopDiscovery)
 
-	// Conversation file scanner — discovers resumable sessions from adapter
-	// conversation files (e.g. pi's JSONL conversations). Also purges stale
-	// dead sessions that were never attributed to a file. Started below
-	// after the project manager is set up so the first-scan callback
-	// can clean up orphaned project session refs.
-	scanner := sessionfiles.New(sessions)
+	// Store GC — purges stale dead sessions that were never attributed to
+	// a conversation. Started below after the project manager is set up so
+	// the first-scan callback can clean up orphaned project session refs.
+	scanner := storegc.New(sessions)
 	stopScanner := make(chan struct{})
 	defer close(stopScanner)
 
-	// Conversations index — maps (adapter, slug) to file metadata for URL
-	// resolution of dead conversations and future fulltext search. Each
-	// adapter's ConversationSource supplies a snapshot at startup and
-	// incremental updates thereafter; the daemon owns no file monitor.
+	// Conversations index — maps (adapter, slug) to conversation metadata
+	// for URL resolution of dead conversations and future fulltext search.
+	// Each adapter's ConversationSource supplies a snapshot at startup and
+	// incremental updates thereafter; the daemon owns no file monitor and
+	// treats conversation refs as adapter-opaque.
 	convIndex := conversations.New()
 	convIndex.Snapshot()
-	log.Printf("conversations: indexed %d files", convIndex.Count())
+	log.Printf("conversations: indexed %d conversations", convIndex.Count())
 
 	srcCtx, cancelSources := context.WithCancel(context.Background())
 	defer cancelSources()

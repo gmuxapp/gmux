@@ -136,14 +136,14 @@ func TestRemove(t *testing.T) {
 	}
 }
 
-func TestRemoveByPath(t *testing.T) {
+func TestRemoveByRef(t *testing.T) {
 	idx := New()
-	idx.Upsert(Info{ConversationID: "a", Slug: "one", Adapter: "pi", FilePath: "/x/a.jsonl"})
-	idx.Upsert(Info{ConversationID: "b", Slug: "two", Adapter: "pi", FilePath: "/x/b.jsonl"})
-	idx.Upsert(Info{ConversationID: "c", Slug: "three", Adapter: "claude", FilePath: "/y/c.jsonl"})
+	idx.Upsert(Info{ConversationID: "a", Slug: "one", Adapter: "pi", Ref: "/x/a.jsonl"})
+	idx.Upsert(Info{ConversationID: "b", Slug: "two", Adapter: "pi", Ref: "/x/b.jsonl"})
+	idx.Upsert(Info{ConversationID: "c", Slug: "three", Adapter: "claude", Ref: "/y/c.jsonl"})
 
-	if !idx.RemoveByPath("/x/b.jsonl") {
-		t.Fatal("expected RemoveByPath to return true for indexed path")
+	if !idx.RemoveByRef("/x/b.jsonl") {
+		t.Fatal("expected RemoveByRef to return true for indexed path")
 	}
 	if idx.Count() != 2 {
 		t.Errorf("expected count 2 after remove, got %d", idx.Count())
@@ -162,12 +162,12 @@ func TestRemoveByPath(t *testing.T) {
 	// Reverse-lookup (byConversationID) cleared too: Upserting the same conversationID
 	// at a new slug should yield the new slug, not update-in-place at
 	// the old one.
-	slug := idx.Upsert(Info{ConversationID: "b", Slug: "different", Adapter: "pi", FilePath: "/x/b2.jsonl"})
+	slug := idx.Upsert(Info{ConversationID: "b", Slug: "different", Adapter: "pi", Ref: "/x/b2.jsonl"})
 	if slug != "different" {
 		t.Errorf("expected fresh slug 'different' (byConversationID was cleared), got %q", slug)
 	}
-	if idx.RemoveByPath("/x/nope.jsonl") {
-		t.Error("expected RemoveByPath to return false for unknown path")
+	if idx.RemoveByRef("/x/nope.jsonl") {
+		t.Error("expected RemoveByRef to return false for unknown path")
 	}
 }
 
@@ -257,7 +257,7 @@ func TestAll(t *testing.T) {
 // It also still removes indexed entries from the index.
 func TestSinkRemoveFiresOnRemovedEvenWhenUnindexed(t *testing.T) {
 	idx := New()
-	idx.Upsert(Info{ConversationID: "a", Slug: "one", Adapter: "pi", FilePath: "/x/a.jsonl"})
+	idx.Upsert(Info{ConversationID: "a", Slug: "one", Adapter: "pi", Ref: "/x/a.jsonl"})
 
 	var got []string
 	sink := indexSink{idx: idx, onRemoved: func(p string) { got = append(got, p) }}

@@ -5,11 +5,12 @@
 | Term                | Definition                                                                                                | Aliases to avoid          |
 | ------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------- |
 | **Session**         | The user-facing unit of work in a directory: a terminal pane plus everything we know about it             | Pane, terminal, tab       |
-| **Conversation**    | An agent's own thread of dialogue (pi/claude/codex's "session"), identified by the agent's own **Conversation ID** (a UUID in the transcript header). It lives at an on-disk **conversation file** path; the path can change (resume/fork), the ID is the stable handle. A tool-backed **Session** corresponds to a Conversation; a **Runner** binds to one and may rebind (`/resume`) to another | Agent session, thread, session file |
+| **Conversation**    | An agent's own thread of dialogue (pi/claude/codex's "session"), identified by the agent's own **Conversation ID** (a UUID in the transcript header). It lives in adapter-owned storage, located by a **Conversation Ref**; the ref can change (resume/fork), the ID is the stable handle. A tool-backed **Session** corresponds to a Conversation; a **Runner** binds to one and may rebind (`/resume`) to another | Agent session, thread, session file |
 | **Slug**            | A session's mutable, human-readable display name; persistent across runner restarts and resume, but renamable. Not identity (the immutable Conversation ID is) | Name                      |
 | **Session ID**      | A specific runner instance's identifier; ephemeral for shell, stable (= conversation ID) for pi/claude    | Identifier (alone is too generic) |
 | **Key**             | The single string projects.json uses per session: slug if attributed, session ID otherwise                |                           |
-| **Conversation ID** | The agent's own identifier for a Conversation, parsed from inside the conversation file by the adapter (`ConversationInfo.ID`). Used with the adapter name as the conversations-index key `(adapter, conversationID)` | Tool ID (the old name)    |
+| **Conversation ID** | The agent's own identifier for a Conversation, extracted from the conversation's stored content by the adapter (`ConversationInfo.ID`). Used with the adapter name as the conversations-index key `(adapter, conversationID)` | Tool ID (the old name)    |
+| **Conversation Ref** | An opaque, adapter-scoped locator for one stored Conversation (ADR 0022). Only the owning adapter interprets it: file-backed adapters use the transcript's absolute path; a DB-backed adapter may use a row key. The wire/persisted key `conversation_file` carries it for compatibility | Conversation file path (as an identity), session file |
 
 ## Session lifecycle
 
@@ -51,8 +52,8 @@
 | **Sessionmeta**          | Per-session runtime persistence: `<state>/sessions/<id>/meta.json`. SOT for **runtime state** of dead sessions | Session metadata, meta files |
 | **Scrollback**           | Per-session persisted PTY byte stream: `<state>/sessions/<id>/scrollback{,.0}`. SOT for terminal history     | History, log                  |
 | **Projects.json**        | The on-disk SOT for **sidebar membership and ordering** (project rules + ordered key lists)                  | Project state, projects file  |
-| **Conversations Index**  | In-memory id↔slug map rebuilt on startup by scanning **adapter state files**; serves URL resolution & search | Conv index, conversations DB  |
-| **Adapter state files**  | Per-adapter on-disk records the conversations index reads (shell `<cwd>/<id>.json`, pi/claude JSONLs, ...)    | Session files                 |
+| **Conversations Index**  | In-memory id↔slug map rebuilt on startup from each adapter's **ConversationSource** (refs resolved via `DescribeConversation`); serves URL resolution & search | Conv index, conversations DB  |
+| **Adapter state files**  | Per-adapter on-disk records behind file-backed ConversationSources (shell `<cwd>/<id>.json`, pi/claude JSONLs, ...) — an adapter implementation detail    | Session files                 |
 
 ## State separation
 

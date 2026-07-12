@@ -10,22 +10,22 @@ import (
 )
 
 // indexSink bridges one adapter's ConversationSource to the index.
-// onRemoved, if set, additionally observes every file-gone event —
-// including files the index never held (parse failure, CanResume=false,
+// onRemoved, if set, additionally observes every conversation-gone event —
+// including refs the index never held (describe failure, CanResume=false,
 // empty cwd), which is why retirement hangs here and not off
-// Index.RemoveByPath: a dead session bound to an unindexed conversation
-// must still retire when that file is deleted.
+// Index.RemoveByRef: a dead session bound to an unindexed conversation
+// must still retire when that conversation is deleted.
 type indexSink struct {
 	idx       *Index
 	a         adapter.Adapter
-	onRemoved func(path string)
+	onRemoved func(ref string)
 }
 
-func (s indexSink) Upsert(path string) { s.idx.ScanFile(s.a, path) }
-func (s indexSink) Remove(path string) {
-	s.idx.RemoveByPath(path)
+func (s indexSink) Upsert(ref string) { s.idx.Scan(s.a, ref) }
+func (s indexSink) Remove(ref string) {
+	s.idx.RemoveByRef(ref)
 	if s.onRemoved != nil {
-		s.onRemoved(path)
+		s.onRemoved(ref)
 	}
 }
 
@@ -40,18 +40,18 @@ func (idx *Index) Snapshot() {
 }
 
 // WatchSources starts every adapter ConversationSource in its own goroutine,
-// feeding the index until ctx is cancelled. onFileRemoved, if non-nil,
-// is invoked (from the watcher goroutines) with each conversation file
-// path observed to disappear — whether or not it was indexed. cmd/gmuxd
-// wires this to retire dead sessions backed by the deleted file.
-func (idx *Index) WatchSources(ctx context.Context, onFileRemoved func(path string)) {
+// feeding the index until ctx is cancelled. onRemoved, if non-nil, is
+// invoked (from the source goroutines) with each conversation ref
+// observed to disappear — whether or not it was indexed. cmd/gmuxd
+// wires this to retire dead sessions backed by the deleted conversation.
+func (idx *Index) WatchSources(ctx context.Context, onRemoved func(ref string)) {
 	for _, a := range adapters.AllAdapters() {
 		src, ok := a.(adapter.ConversationSource)
 		if !ok {
 			continue
 		}
 		go func(a adapter.Adapter, src adapter.ConversationSource) {
-			if err := src.WatchConversations(ctx, indexSink{idx: idx, a: a, onRemoved: onFileRemoved}); err != nil && !errors.Is(err, context.Canceled) {
+			if err := src.WatchConversations(ctx, indexSink{idx: idx, a: a, onRemoved: onRemoved}); err != nil && !errors.Is(err, context.Canceled) {
 				log.Printf("conversations: source %s stopped: %v", a.Name(), err)
 			}
 		}(a, src)

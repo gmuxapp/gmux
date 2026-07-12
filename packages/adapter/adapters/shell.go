@@ -42,11 +42,11 @@ func FindByAdapter(name string) adapter.Adapter {
 
 // Compile-time interface checks.
 var (
-	_ adapter.ConversationFiler = (*Shell)(nil)
-	_ adapter.Resumer           = (*Shell)(nil)
-	_ adapter.CommandTitler     = (*Shell)(nil)
-	_ adapter.SessionRegistrar  = (*Shell)(nil)
-	_ adapter.SessionFinalizer  = (*Shell)(nil)
+	_ adapter.ConversationDescriber = (*Shell)(nil)
+	_ adapter.Resumer               = (*Shell)(nil)
+	_ adapter.CommandTitler         = (*Shell)(nil)
+	_ adapter.SessionRegistrar      = (*Shell)(nil)
+	_ adapter.SessionFinalizer      = (*Shell)(nil)
 )
 
 // Shell is the fallback adapter. It matches all commands and parses
@@ -89,7 +89,7 @@ func (g *Shell) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
 
-// --- ConversationFiler ---
+// --- Conversation storage (file-backed: refs are shell state-file paths) ---
 
 // shellSessionsDir returns the directory for shell state files.
 func shellSessionsDir() string {
@@ -121,7 +121,10 @@ type shellStateFile struct {
 	Created time.Time `json:"created"`
 }
 
-func (g *Shell) ParseConversationFile(path string) (*adapter.ConversationInfo, error) {
+// DescribeConversation reads a shell state file (the ref is the absolute
+// file path) and returns display metadata.
+func (g *Shell) DescribeConversation(ref string) (*adapter.ConversationInfo, error) {
+	path := ref
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -134,12 +137,13 @@ func (g *Shell) ParseConversationFile(path string) (*adapter.ConversationInfo, e
 		return nil, os.ErrInvalid
 	}
 	return &adapter.ConversationInfo{
-		ID:       sf.ID,
-		Title:    g.CommandTitle(sf.Command),
-		Slug:     adapter.Slugify(filepath.Base(sf.Cwd)),
-		Cwd:      sf.Cwd,
-		Created:  sf.Created,
-		FilePath: path,
+		ID:           sf.ID,
+		Title:        g.CommandTitle(sf.Command),
+		Slug:         adapter.Slugify(filepath.Base(sf.Cwd)),
+		Cwd:          sf.Cwd,
+		Created:      sf.Created,
+		LastActivity: fileLastActivity(path),
+		Ref:          path,
 	}, nil
 }
 
@@ -156,8 +160,8 @@ func (g *Shell) ResumeCommand(info *adapter.ConversationInfo) []string {
 	return []string{shell}
 }
 
-func (g *Shell) CanResume(path string) bool {
-	_, err := g.ParseConversationFile(path)
+func (g *Shell) CanResume(ref string) bool {
+	_, err := g.DescribeConversation(ref)
 	return err == nil
 }
 

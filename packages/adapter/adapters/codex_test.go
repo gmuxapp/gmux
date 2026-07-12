@@ -81,8 +81,8 @@ func TestCodexImplementsCapabilities(t *testing.T) {
 	if _, ok := a.(adapter.Launchable); !ok {
 		t.Fatal("should implement Launchable")
 	}
-	if _, ok := a.(adapter.ConversationFiler); !ok {
-		t.Fatal("should implement ConversationFiler")
+	if _, ok := a.(adapter.ConversationDescriber); !ok {
+		t.Fatal("should implement ConversationDescriber")
 	}
 	if _, ok := a.(adapter.Resumer); !ok {
 		t.Fatal("should implement Resumer")
@@ -105,7 +105,7 @@ func TestCodexLaunchers(t *testing.T) {
 	}
 }
 
-// --- ParseConversationFile ---
+// --- DescribeConversation ---
 
 func writeCodexJSONL(t *testing.T, lines ...string) string {
 	t.Helper()
@@ -119,13 +119,13 @@ func writeCodexJSONL(t *testing.T, lines ...string) string {
 	return path
 }
 
-func TestCodexParseConversationFileBasic(t *testing.T) {
+func TestCodexDescribeConversationBasic(t *testing.T) {
 	path := writeCodexJSONL(t,
 		`{"timestamp":"2026-03-17T01:00:00Z","type":"session_meta","payload":{"id":"abc-123","timestamp":"2026-03-17T01:00:00Z","cwd":"/home/mg/dev/test"}}`,
 		`{"timestamp":"2026-03-17T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the auth bug"}]}}`,
 		`{"timestamp":"2026-03-17T01:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I'll fix that for you."}]}}`,
 	)
-	info, err := NewCodex().ParseConversationFile(path)
+	info, err := NewCodex().DescribeConversation(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestCodexParseConversationFileBasic(t *testing.T) {
 	}
 }
 
-func TestCodexParseConversationFileSkipsSystemContext(t *testing.T) {
+func TestCodexDescribeConversationSkipsSystemContext(t *testing.T) {
 	path := writeCodexJSONL(t,
 		`{"timestamp":"2026-03-17T01:00:00Z","type":"session_meta","payload":{"id":"abc","timestamp":"2026-03-17T01:00:00Z","cwd":"/tmp"}}`,
 		`{"timestamp":"2026-03-17T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<permissions instructions>sandboxing...</permissions instructions>"}]}}`,
@@ -151,47 +151,47 @@ func TestCodexParseConversationFileSkipsSystemContext(t *testing.T) {
 		`{"timestamp":"2026-03-17T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /tmp\n<INSTRUCTIONS>...</INSTRUCTIONS>"}]}}`,
 		`{"timestamp":"2026-03-17T01:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"What files are in this directory?"}]}}`,
 	)
-	info, _ := NewCodex().ParseConversationFile(path)
+	info, _ := NewCodex().DescribeConversation(path)
 	if info.Title != "What files are in this directory?" {
 		t.Errorf("expected user prompt as title (skipping system context), got %q", info.Title)
 	}
 }
 
-func TestCodexParseConversationFileNoMessages(t *testing.T) {
+func TestCodexDescribeConversationNoMessages(t *testing.T) {
 	path := writeCodexJSONL(t,
 		`{"timestamp":"2026-03-17T01:00:00Z","type":"session_meta","payload":{"id":"abc","timestamp":"2026-03-17T01:00:00Z","cwd":"/tmp"}}`,
 	)
-	info, _ := NewCodex().ParseConversationFile(path)
+	info, _ := NewCodex().DescribeConversation(path)
 	if info.Title != "" {
 		t.Errorf("expected empty title for a session with no messages, got %q", info.Title)
 	}
 }
 
-func TestCodexParseConversationFileLongTitle(t *testing.T) {
+func TestCodexDescribeConversationLongTitle(t *testing.T) {
 	long := "Please help me with this very long request that goes on and on about many different things and really should be truncated for the sidebar"
 	path := writeCodexJSONL(t,
 		`{"timestamp":"2026-03-17T01:00:00Z","type":"session_meta","payload":{"id":"abc","timestamp":"2026-03-17T01:00:00Z","cwd":"/tmp"}}`,
 		`{"timestamp":"2026-03-17T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"`+long+`"}]}}`,
 	)
-	info, _ := NewCodex().ParseConversationFile(path)
+	info, _ := NewCodex().DescribeConversation(path)
 	if len(info.Title) > 85 {
 		t.Errorf("title too long: %q", info.Title)
 	}
 }
 
-func TestCodexParseConversationFileEmpty(t *testing.T) {
+func TestCodexDescribeConversationEmpty(t *testing.T) {
 	path := writeCodexJSONL(t)
-	_, err := NewCodex().ParseConversationFile(path)
+	_, err := NewCodex().DescribeConversation(path)
 	if err == nil {
 		t.Fatal("expected error for empty file")
 	}
 }
 
-func TestCodexParseConversationFileNotSessionMeta(t *testing.T) {
+func TestCodexDescribeConversationNotSessionMeta(t *testing.T) {
 	path := writeCodexJSONL(t,
 		`{"type":"response_item","payload":{"type":"message","role":"user"}}`,
 	)
-	_, err := NewCodex().ParseConversationFile(path)
+	_, err := NewCodex().DescribeConversation(path)
 	if err != errNotSession {
 		t.Errorf("expected errNotSession, got %v", err)
 	}

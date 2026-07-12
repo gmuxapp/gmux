@@ -1,12 +1,14 @@
 package adapters
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
 )
@@ -196,15 +198,15 @@ func TestPiImplementsCapabilities(t *testing.T) {
 	if _, ok := a.(adapter.Launchable); !ok {
 		t.Fatal("should implement Launchable")
 	}
-	if _, ok := a.(adapter.ConversationFiler); !ok {
-		t.Fatal("should implement ConversationFiler")
+	if _, ok := a.(adapter.ConversationDescriber); !ok {
+		t.Fatal("should implement ConversationDescriber")
 	}
 	if _, ok := a.(adapter.Resumer); !ok {
 		t.Fatal("should implement Resumer")
 	}
 }
 
-// --- ConversationFiler ---
+// --- Conversation storage ---
 
 func writeTempJSONL(t *testing.T, lines ...string) string {
 	t.Helper()
@@ -218,14 +220,57 @@ func writeTempJSONL(t *testing.T, lines ...string) string {
 	return path
 }
 
-func TestParseConversationFileFirstUserMessage(t *testing.T) {
+// The ref/LastActivity contract (ADR 0022): DescribeConversation must echo
+// the ref it was given and report freshness itself — file-backed adapters
+// answer with the transcript's mtime, so consumers (activity reseeding,
+// search recency) never stat anything.
+func TestDescribeConversationRefAndLastActivity(t *testing.T) {
+	path := writeTempJSONL(t,
+		`{"type":"session","version":3,"id":"abc-123","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`,
+	)
+	mtime := time.Date(2026, 3, 16, 9, 30, 0, 0, time.UTC)
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	info, err := NewPi().DescribeConversation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Ref != path {
+		t.Errorf("Ref = %q, want the ref echoed back (%q)", info.Ref, path)
+	}
+	if !info.LastActivity.Equal(mtime) {
+		t.Errorf("LastActivity = %v, want transcript mtime %v", info.LastActivity, mtime)
+	}
+}
+
+// OpenConversation is the content seam for derived consumers (fulltext
+// search): it must stream the raw transcript bytes for a ref.
+func TestOpenConversationStreamsTranscript(t *testing.T) {
+	line := `{"type":"session","version":3,"id":"abc-123","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`
+	path := writeTempJSONL(t, line)
+	rc, err := NewPi().OpenConversation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	got, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != line+"\n" {
+		t.Errorf("OpenConversation content = %q, want the raw transcript", got)
+	}
+}
+
+func TestDescribeConversationFirstUserMessage(t *testing.T) {
 	path := writeTempJSONL(t,
 		`{"type":"session","version":3,"id":"abc-123","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`,
 		`{"type":"model_change","id":"m1","timestamp":"2026-03-15T10:00:00Z"}`,
 		`{"type":"message","id":"u1","timestamp":"2026-03-15T10:01:00Z","message":{"role":"user","content":[{"type":"text","text":"Fix the auth bug in login.go"}]}}`,
 		`{"type":"message","id":"a1","timestamp":"2026-03-15T10:01:05Z","message":{"role":"assistant","content":[{"type":"text","text":"I'll fix that for you."}]}}`,
 	)
-	info, err := NewPi().ParseConversationFile(path)
+	info, err := NewPi().DescribeConversation(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,13 +288,13 @@ func TestParseConversationFileFirstUserMessage(t *testing.T) {
 	}
 }
 
-func TestParseConversationFileNameOverrides(t *testing.T) {
+func TestDescribeConversationNameOverrides(t *testing.T) {
 	path := writeTempJSONL(t,
 		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`,
 		`{"type":"message","id":"u1","timestamp":"2026-03-15T10:01:00Z","message":{"role":"user","content":[{"type":"text","text":"Fix the auth bug"}]}}`,
 		`{"type":"session_info","name":"  Auth refactor  "}`,
 	)
-	info, _ := NewPi().ParseConversationFile(path)
+	info, _ := NewPi().DescribeConversation(path)
 	if info.Title != "Auth refactor" {
 		t.Errorf("expected session_info name, got %q", info.Title)
 	}
@@ -259,34 +304,34 @@ func TestParseConversationFileNameOverrides(t *testing.T) {
 	}
 }
 
-func TestParseConversationFileNoMessages(t *testing.T) {
+func TestDescribeConversationNoMessages(t *testing.T) {
 	path := writeTempJSONL(t,
 		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`,
 	)
-	info, _ := NewPi().ParseConversationFile(path)
+	info, _ := NewPi().DescribeConversation(path)
 	if info.Title != "" {
 		t.Errorf("expected empty title for a session with no messages, got %q", info.Title)
 	}
 }
 
-func TestParseConversationFileLongTitleTruncated(t *testing.T) {
+func TestDescribeConversationLongTitleTruncated(t *testing.T) {
 	long := "Please help me with this very long request that goes on and on about many different things and really should be truncated for the sidebar"
 	path := writeTempJSONL(t,
 		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`,
 		`{"type":"message","id":"u1","timestamp":"2026-03-15T10:01:00Z","message":{"role":"user","content":[{"type":"text","text":"`+long+`"}]}}`,
 	)
-	info, _ := NewPi().ParseConversationFile(path)
+	info, _ := NewPi().DescribeConversation(path)
 	if len(info.Title) > 85 {
 		t.Errorf("title too long: %q", info.Title)
 	}
 }
 
-func TestParseConversationFileStringContent(t *testing.T) {
+func TestDescribeConversationStringContent(t *testing.T) {
 	path := writeTempJSONL(t,
 		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`,
 		`{"type":"message","id":"u1","timestamp":"2026-03-15T10:01:00Z","message":{"role":"user","content":"Help me debug this"}}`,
 	)
-	info, _ := NewPi().ParseConversationFile(path)
+	info, _ := NewPi().DescribeConversation(path)
 	if info.Title != "Help me debug this" {
 		t.Errorf("expected string content as title, got %q", info.Title)
 	}
@@ -296,7 +341,7 @@ func TestParseConversationFileStringContent(t *testing.T) {
 
 func TestResumeCommand(t *testing.T) {
 	cmd := NewPi().ResumeCommand(&adapter.ConversationInfo{
-		FilePath: "/tmp/test.jsonl",
+		Ref: "/tmp/test.jsonl",
 	})
 	if len(cmd) != 4 || cmd[0] != "pi" || cmd[1] != "--session" || cmd[3] != "-c" {
 		t.Errorf("unexpected resume command: %v", cmd)
