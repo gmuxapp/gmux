@@ -545,13 +545,17 @@ func (s *Store) Reconcile(assignFn func(Session) (slug string, index int)) {
 }
 
 // RemoveDeadByConversationRef retires every locally-owned, dead session
-// whose ConversationRef matches ref, broadcasting session-remove for
-// each and returning the removed IDs. Used when the conversations
-// index reports a conversation has disappeared: meta.json mirrors
-// conversation existence (ADR 0016), so the backing conversation going
-// away retires the sidebar entry.
+// of the given adapter whose ConversationRef matches ref, broadcasting
+// session-remove for each and returning the removed IDs. Used when the
+// conversations index reports a conversation has disappeared: meta.json
+// mirrors conversation existence (ADR 0016), so the backing conversation
+// going away retires the sidebar entry.
 //
 // Guards, all load-bearing:
+//   - Adapter match: refs are only unique within an adapter (ADR 0022:
+//     opaque, adapter-scoped), so adapter A reporting ref "x" deleted must
+//     never retire adapter B's session that happens to carry the same
+//     ref string.
 //   - !Alive: a live runner may still be writing this conversation; its
 //     record is authoritative and must not be torn down here.
 //   - Peer == "": peer-owned records are re-received from the spoke; the
@@ -566,15 +570,15 @@ func (s *Store) Reconcile(assignFn func(Session) (slug string, index int)) {
 // the comparison degrades to exact equality. Symlinks are not resolved:
 // the file is already gone, so EvalSymlinks couldn't run, and both paths
 // derive from the same real $HOME in practice.
-func (s *Store) RemoveDeadByConversationRef(ref string) []string {
-	if ref == "" {
+func (s *Store) RemoveDeadByConversationRef(adapterName, ref string) []string {
+	if adapterName == "" || ref == "" {
 		return nil
 	}
 	target := filepath.Clean(ref)
 	s.mu.Lock()
 	var removed []string
 	for id, sess := range s.sessions {
-		if sess.Peer != "" || sess.Alive || sess.ConversationRef == "" {
+		if sess.Adapter != adapterName || sess.Peer != "" || sess.Alive || sess.ConversationRef == "" {
 			continue
 		}
 		if filepath.Clean(sess.ConversationRef) != target {

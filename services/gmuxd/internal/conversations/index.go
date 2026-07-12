@@ -197,22 +197,24 @@ func (idx *Index) Remove(adapterName, conversationID string) bool {
 	return true
 }
 
-// RemoveByRef deletes any conversation whose Ref matches ref.
-// Used when a ConversationSource observes a removal event and we don't have the
-// (adapter, conversationID) handy. Linear walk over the index; that's fine
-// because Remove events are rare (manual `rm`, file rotation) and
-// the index size stays in the hundreds-to-low-thousands range.
-// Returns true if an entry was removed.
+// RemoveByRef deletes the conversation whose (Adapter, Ref) matches.
+// Used when a ConversationSource observes a removal event and we don't have
+// the (adapter, conversationID) handy. Refs are only unique within an
+// adapter (ADR 0022: opaque, adapter-scoped), so the match is scoped to the
+// reporting adapter — two adapters may legitimately use the same ref string.
+// Linear walk over the index; that's fine because Remove events are rare
+// (manual `rm`, file rotation) and the index size stays in the
+// hundreds-to-low-thousands range. Returns true if an entry was removed.
 //
 // Session retirement on conversation-gone deliberately does NOT hang off
 // this method: an unindexed conversation (describe failure,
 // CanResume=false, empty cwd) still needs retiring when it disappears, so
 // the source-level sink (sources.go) owns that signal instead.
-func (idx *Index) RemoveByRef(ref string) bool {
+func (idx *Index) RemoveByRef(adapterName, ref string) bool {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	for key, info := range idx.byKey {
-		if info.Ref != ref {
+		if info.Adapter != adapterName || info.Ref != ref {
 			continue
 		}
 		delete(idx.byKey, key)

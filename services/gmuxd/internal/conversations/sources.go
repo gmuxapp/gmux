@@ -18,14 +18,18 @@ import (
 type indexSink struct {
 	idx       *Index
 	a         adapter.Adapter
-	onRemoved func(ref string)
+	onRemoved func(adapterName, ref string)
 }
 
 func (s indexSink) Upsert(ref string) { s.idx.Scan(s.a, ref) }
+
+// Remove re-scopes the source's bare ref with the owning adapter before it
+// touches anything: refs are only unique within an adapter (ADR 0022), so
+// both the index removal and the retirement callback carry (adapter, ref).
 func (s indexSink) Remove(ref string) {
-	s.idx.RemoveByRef(ref)
+	s.idx.RemoveByRef(s.a.Name(), ref)
 	if s.onRemoved != nil {
-		s.onRemoved(ref)
+		s.onRemoved(s.a.Name(), ref)
 	}
 }
 
@@ -41,10 +45,10 @@ func (idx *Index) Snapshot() {
 
 // WatchSources starts every adapter ConversationSource in its own goroutine,
 // feeding the index until ctx is cancelled. onRemoved, if non-nil, is
-// invoked (from the source goroutines) with each conversation ref
-// observed to disappear — whether or not it was indexed. cmd/gmuxd
-// wires this to retire dead sessions backed by the deleted conversation.
-func (idx *Index) WatchSources(ctx context.Context, onRemoved func(ref string)) {
+// invoked (from the source goroutines) with each (adapter, ref) observed
+// to disappear — whether or not it was indexed. cmd/gmuxd wires this to
+// retire dead sessions backed by the deleted conversation.
+func (idx *Index) WatchSources(ctx context.Context, onRemoved func(adapterName, ref string)) {
 	for _, a := range adapters.AllAdapters() {
 		src, ok := a.(adapter.ConversationSource)
 		if !ok {

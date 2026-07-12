@@ -15,22 +15,24 @@ import "github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 // whole point — it must never retire on undeterminable storage — so it
 // lives in one tested place rather than inline at the call site.
 //
-// Each distinct conversation ref is probed once (the conversation→session
-// mapping is N:1); retire is expected to drop every dead session for
-// that ref. Alive, peer-owned, and conversation-less sessions are skipped.
+// Each distinct (adapter, ref) pair is probed once (the conversation→session
+// mapping is N:1, and refs are only unique within an adapter — ADR 0022);
+// retire is expected to drop every dead session of that adapter for that
+// ref. Alive, peer-owned, and conversation-less sessions are skipped.
 func reconcileDeletedConversations(
 	list []store.Session,
 	probe func(adapter, ref string) (gone, known bool),
-	retire func(ref string),
+	retire func(adapter, ref string),
 ) {
-	seen := map[string]bool{}
+	seen := map[[2]string]bool{}
 	for _, sess := range list {
-		if sess.Alive || sess.Peer != "" || sess.ConversationRef == "" || seen[sess.ConversationRef] {
+		key := [2]string{sess.Adapter, sess.ConversationRef}
+		if sess.Alive || sess.Peer != "" || sess.ConversationRef == "" || seen[key] {
 			continue
 		}
-		seen[sess.ConversationRef] = true
+		seen[key] = true
 		if gone, known := probe(sess.Adapter, sess.ConversationRef); known && gone {
-			retire(sess.ConversationRef)
+			retire(sess.Adapter, sess.ConversationRef)
 		}
 	}
 }

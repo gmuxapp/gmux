@@ -66,15 +66,21 @@ inside `packages/adapter/adapters` and its tests.
 ### Daemon changes (`services/gmuxd`)
 
 - `conversations.Index` speaks refs: `Info.Ref` (+ `Info.LastActivity`),
-  `Scan(adapter, ref)` via `ConversationDescriber`, `RemoveByRef`.
+  `Scan(adapter, ref)` via `ConversationDescriber`, `RemoveByRef(adapter, ref)`.
+  Because a ref is only unique *within* an adapter, every removal path is
+  keyed by `(adapter, ref)` — the sink re-scopes its source's bare ref with
+  the owning adapter's name before touching the index or the retirement
+  callback, so two adapters using the same ref string can never delete
+  each other's conversations. (Absolute file paths made this collision
+  impossible by accident; opaque refs make the scoping explicit.)
 - `store.Session.ConversationFile` → **`ConversationRef`**. The wire and
   persisted JSON key stays `conversation_file`, and the runner's
   `conversation_file` /events event (payload key `path`) stays, purely for
   compatibility — both are documented as legacy names carrying a ref.
   Likewise the runner's `session.State.ConversationRef`.
-- Retention (`RemoveDeadByConversationRef`, `reconcileDeletedConversations`)
-  and resume (`ResolveResumeCommand`) key off the ref and hand it straight
-  back to the owning adapter. The one residual path-ism is deliberate:
+- Retention (`RemoveDeadByConversationRef(adapter, ref)`,
+  `reconcileDeletedConversations`) and resume (`ResolveResumeCommand`) key
+  off `(adapter, ref)` and hand the ref straight back to the owning adapter. The one residual path-ism is deliberate:
   `RemoveDeadByConversationRef` still compares refs after `filepath.Clean`,
   because hook-reported and watcher-reported *paths* can differ cosmetically;
   for non-path refs (no separators) `Clean` is the identity, so it degrades to

@@ -14,10 +14,16 @@ import (
 // DB-backed adapter needs only ConversationDescriber (+ Resumer) — no
 // directory layout, no stat, no path semantics anywhere in the daemon.
 type dbAdapter struct {
+	name string                              // adapter name; "dbtool" when empty
 	rows map[string]adapter.ConversationInfo // ref → row
 }
 
-func (d *dbAdapter) Name() string                      { return "dbtool" }
+func (d *dbAdapter) Name() string {
+	if d.name == "" {
+		return "dbtool"
+	}
+	return d.name
+}
 func (d *dbAdapter) Discover() bool                    { return true }
 func (d *dbAdapter) Match(_ []string) bool             { return false }
 func (d *dbAdapter) Env(_ adapter.EnvContext) []string { return nil }
@@ -88,7 +94,7 @@ func TestScan_OpaqueRefAdapter(t *testing.T) {
 	}
 
 	// A source Remove event carries the same ref; the index must match it.
-	if !idx.RemoveByRef("row:42") {
+	if !idx.RemoveByRef("dbtool", "row:42") {
 		t.Fatal("RemoveByRef(row:42) = false, want removal by opaque ref")
 	}
 	if _, ok := idx.Lookup("dbtool", slug); ok {

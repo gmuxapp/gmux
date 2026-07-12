@@ -141,12 +141,15 @@ func TestRemoveByRef(t *testing.T) {
 	idx.Upsert(Info{ConversationID: "a", Slug: "one", Adapter: "pi", Ref: "/x/a.jsonl"})
 	idx.Upsert(Info{ConversationID: "b", Slug: "two", Adapter: "pi", Ref: "/x/b.jsonl"})
 	idx.Upsert(Info{ConversationID: "c", Slug: "three", Adapter: "claude", Ref: "/y/c.jsonl"})
+	// Same ref string under a different adapter: refs are only unique
+	// within an adapter (ADR 0022), so pi's removal must not touch it.
+	idx.Upsert(Info{ConversationID: "d", Slug: "four", Adapter: "claude", Ref: "/x/b.jsonl"})
 
-	if !idx.RemoveByRef("/x/b.jsonl") {
+	if !idx.RemoveByRef("pi", "/x/b.jsonl") {
 		t.Fatal("expected RemoveByRef to return true for indexed path")
 	}
-	if idx.Count() != 2 {
-		t.Errorf("expected count 2 after remove, got %d", idx.Count())
+	if idx.Count() != 3 {
+		t.Errorf("expected count 3 after remove, got %d", idx.Count())
 	}
 	if _, ok := idx.Lookup("pi", "two"); ok {
 		t.Error("expected miss for removed slug")
@@ -159,6 +162,10 @@ func TestRemoveByRef(t *testing.T) {
 	if _, ok := idx.Lookup("claude", "three"); !ok {
 		t.Error("cross-adapter entry was incorrectly removed")
 	}
+	// Cross-adapter entry with the SAME ref unaffected.
+	if _, ok := idx.Lookup("claude", "four"); !ok {
+		t.Error("cross-adapter entry sharing the ref string was incorrectly removed")
+	}
 	// Reverse-lookup (byConversationID) cleared too: Upserting the same conversationID
 	// at a new slug should yield the new slug, not update-in-place at
 	// the old one.
@@ -166,7 +173,7 @@ func TestRemoveByRef(t *testing.T) {
 	if slug != "different" {
 		t.Errorf("expected fresh slug 'different' (byConversationID was cleared), got %q", slug)
 	}
-	if idx.RemoveByRef("/x/nope.jsonl") {
+	if idx.RemoveByRef("pi", "/x/nope.jsonl") {
 		t.Error("expected RemoveByRef to return false for unknown path")
 	}
 }
@@ -260,7 +267,7 @@ func TestSinkRemoveFiresOnRemovedEvenWhenUnindexed(t *testing.T) {
 	idx.Upsert(Info{ConversationID: "a", Slug: "one", Adapter: "pi", Ref: "/x/a.jsonl"})
 
 	var got []string
-	sink := indexSink{idx: idx, onRemoved: func(p string) { got = append(got, p) }}
+	sink := indexSink{idx: idx, a: &dbAdapter{name: "pi"}, onRemoved: func(_, ref string) { got = append(got, ref) }}
 
 	sink.Remove("/x/never-indexed.jsonl")
 	sink.Remove("/x/a.jsonl")
@@ -277,5 +284,5 @@ func TestSinkRemoveFiresOnRemovedEvenWhenUnindexed(t *testing.T) {
 	}
 
 	// nil callback must not panic.
-	indexSink{idx: idx}.Remove("/x/whatever.jsonl")
+	indexSink{idx: idx, a: &dbAdapter{name: "pi"}}.Remove("/x/whatever.jsonl")
 }

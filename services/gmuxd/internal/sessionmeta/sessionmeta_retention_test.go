@@ -458,7 +458,7 @@ func TestRemoveDeadByConversationRefDrivesWatchRemovals(t *testing.T) {
 	done := make(chan struct{})
 	go func() { metaStore.WatchRemovals(events); close(done) }()
 
-	if ids := sessions.RemoveDeadByConversationRef("/c/conv.jsonl"); len(ids) != 1 {
+	if ids := sessions.RemoveDeadByConversationRef("claude", "/c/conv.jsonl"); len(ids) != 1 {
 		t.Fatalf("expected 1 retired session, got %v", ids)
 	}
 

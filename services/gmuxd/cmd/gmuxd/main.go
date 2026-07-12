@@ -584,7 +584,7 @@ func serve(stderr io.Writer) int {
 	// (ADR 0016). The store applies the alive/peer/N:1 guards; its
 	// session-remove broadcast is what WatchRemovals turns into a
 	// meta-dir delete.
-	convRetireMeta := func(ref string) { sessions.RemoveDeadByConversationRef(ref) }
+	convRetireMeta := func(adapterName, ref string) { sessions.RemoveDeadByConversationRef(adapterName, ref) }
 
 	// retireDeleted closes the gap the runtime index signal can't cover:
 	// a conversation deleted while gmuxd was *down* emits no removal
@@ -597,9 +597,9 @@ func serve(stderr io.Writer) int {
 		}
 		return false, false
 	}
-	retireDeleted := func(ref string) {
-		if ids := sessions.RemoveDeadByConversationRef(ref); len(ids) > 0 {
-			log.Printf("sessionmeta: retired %d dead session(s) for deleted conversation %s", len(ids), ref)
+	retireDeleted := func(adapterName, ref string) {
+		if ids := sessions.RemoveDeadByConversationRef(adapterName, ref); len(ids) > 0 {
+			log.Printf("sessionmeta: retired %d dead session(s) for deleted %s conversation %s", len(ids), adapterName, ref)
 		}
 	}
 

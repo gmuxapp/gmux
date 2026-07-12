@@ -79,7 +79,7 @@ func TestRemoveDeadByConversationRef(t *testing.T) {
 	s.Upsert(Session{ID: "other", Adapter: "claude", Alive: false, ConversationRef: "/home/u/.claude/projects/xyz/other.jsonl"})
 
 	// Cosmetic path difference must still match (filepath.Clean).
-	removed := s.RemoveDeadByConversationRef("/home/u/.claude/projects/abc/./conv.jsonl")
+	removed := s.RemoveDeadByConversationRef("claude", "/home/u/.claude/projects/abc/./conv.jsonl")
 
 	got := map[string]bool{}
 	for _, id := range removed {
@@ -101,30 +101,36 @@ func TestRemoveDeadByConversationRef(t *testing.T) {
 }
 
 // Non-path refs (a DB-backed adapter's row keys — ADR 0022) must match by
-// exact equality: the filepath.Clean normalization used for cosmetic path
-// variance has to be the identity for separator-free refs, and near-miss
-// refs must not be conflated.
+// exact equality within the reporting adapter: the filepath.Clean
+// normalization used for cosmetic path variance has to be the identity for
+// separator-free refs, near-miss refs must not be conflated, and — refs
+// being only unique within an adapter — another adapter's session carrying
+// the same ref string must survive.
 func TestRemoveDeadByConversationRefOpaque(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "dead", Adapter: "dbtool", Alive: false, ConversationRef: "row:42"})
 	s.Upsert(Session{ID: "near", Adapter: "dbtool", Alive: false, ConversationRef: "row:421"})
+	s.Upsert(Session{ID: "other-adapter", Adapter: "othertool", Alive: false, ConversationRef: "row:42"})
 
-	removed := s.RemoveDeadByConversationRef("row:42")
+	removed := s.RemoveDeadByConversationRef("dbtool", "row:42")
 	if len(removed) != 1 || removed[0] != "dead" {
 		t.Fatalf("expected exactly [dead] removed, got %v", removed)
 	}
 	if _, ok := s.Get("near"); !ok {
 		t.Error("near-miss ref row:421 must survive a row:42 removal")
 	}
+	if _, ok := s.Get("other-adapter"); !ok {
+		t.Error("another adapter's session with the same ref string must survive")
+	}
 }
 
 func TestRemoveDeadByConversationRefNoMatch(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "a", Adapter: "claude", Alive: false, ConversationRef: "/x/a.jsonl"})
-	if got := s.RemoveDeadByConversationRef("/x/missing.jsonl"); got != nil {
+	if got := s.RemoveDeadByConversationRef("claude", "/x/missing.jsonl"); got != nil {
 		t.Errorf("no-match should return nil, got %v", got)
 	}
-	if got := s.RemoveDeadByConversationRef(""); got != nil {
+	if got := s.RemoveDeadByConversationRef("claude", ""); got != nil {
 		t.Errorf("empty path should return nil, got %v", got)
 	}
 	if _, ok := s.Get("a"); !ok {
@@ -140,7 +146,7 @@ func TestRemoveDeadByConversationRefBroadcasts(t *testing.T) {
 	ch, cancel := s.Subscribe()
 	defer cancel()
 
-	s.RemoveDeadByConversationRef("/x/c.jsonl")
+	s.RemoveDeadByConversationRef("claude", "/x/c.jsonl")
 
 	ev, ok := recvEvent(t, ch)
 	if !ok || ev.Type != "session-remove" || ev.ID != "dead" {

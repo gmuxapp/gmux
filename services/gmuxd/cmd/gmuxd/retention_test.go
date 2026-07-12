@@ -31,7 +31,7 @@ func TestReconcileDeletedConversations_SafetyGate(t *testing.T) {
 	}
 
 	var retired []string
-	reconcileDeletedConversations(list, probe, func(p string) { retired = append(retired, p) })
+	reconcileDeletedConversations(list, probe, func(_, p string) { retired = append(retired, p) })
 
 	if !reflect.DeepEqual(retired, []string{"/c/deleted.jsonl"}) {
 		t.Fatalf("only the confidently-deleted file should retire, got %v", retired)
@@ -49,7 +49,7 @@ func TestReconcileDeletedConversations_Skips(t *testing.T) {
 	var probed, retired []string
 	reconcileDeletedConversations(list,
 		func(_, path string) (bool, bool) { probed = append(probed, path); return true, true },
-		func(p string) { retired = append(retired, p) })
+		func(_, p string) { retired = append(retired, p) })
 
 	if len(probed) != 0 {
 		t.Errorf("alive/peer/file-less sessions must not be probed, probed %v", probed)
@@ -72,7 +72,7 @@ func TestReconcileDeletedConversations_DedupsPaths(t *testing.T) {
 	var probed, retired []string
 	reconcileDeletedConversations(list,
 		func(_, path string) (bool, bool) { probed = append(probed, path); return true, true },
-		func(p string) { retired = append(retired, p) })
+		func(_, p string) { retired = append(retired, p) })
 
 	if !reflect.DeepEqual(probed, []string{shared}) {
 		t.Errorf("shared path should be probed once, got %v", probed)
@@ -90,7 +90,7 @@ func TestReconcileDeletedConversations_NoProberKind(t *testing.T) {
 	var retired []string
 	reconcileDeletedConversations(list,
 		func(_, _ string) (bool, bool) { return false, false },
-		func(p string) { retired = append(retired, p) })
+		func(_, p string) { retired = append(retired, p) })
 	if len(retired) != 0 {
 		t.Errorf("adapter without a prober must not retire, got %v", retired)
 	}
