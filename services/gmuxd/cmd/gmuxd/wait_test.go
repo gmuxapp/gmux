@@ -370,6 +370,29 @@ func TestWaitRejectsShellSessionsWithoutPromptMarks(t *testing.T) {
 	}
 }
 
+// TestWaitRejectsNonShellStatusEvidence pins the scope of the
+// per-session evidence gate: a non-agent, non-shell session with a
+// non-nil Status (a one-off Monitor event, a child's single
+// PUT /status — even a status clear round-trips as a non-nil zero
+// value) is NOT waitable. Such a status proves something was emitted
+// once, not that the session produces the busy→idle pulse the wait
+// contract needs; admitting it would trade the loud 422 for a silent
+// timeout. New adapter kinds must be allowlisted deliberately.
+func TestWaitRejectsNonShellStatusEvidence(t *testing.T) {
+	srv, st, _ := waitTestServer(t)
+	st.Upsert(store.Session{
+		ID:      "sess-editor",
+		Adapter: "editor",
+		Alive:   true,
+		Status:  &store.Status{Working: false},
+	})
+
+	resp, _ := postWait(t, srv, "sess-editor")
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want 422", resp.StatusCode)
+	}
+}
+
 // TestWaitDeadShellWithoutMarksReturnsDied: a shell session that
 // already exited — the one-shot `gmux -d -- make && gmux wait $id`
 // arriving after the command finished — must resolve as "died"

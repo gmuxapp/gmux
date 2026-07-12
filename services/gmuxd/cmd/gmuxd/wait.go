@@ -96,11 +96,14 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 		// missing capability: idle includes process exit, so answer
 		// "died" (same as a dead agent) instead of rejecting with
 		// shell-integration advice that can't help a dead session.
-		// The 422 below only fires for sessions that could otherwise
-		// hang the wait forever — live (or startup-window) sessions
-		// that have never demonstrated an idle signal.
-		if reason, done := terminalReason(sess, false); done {
-			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
+		// Strictly death, though — NOT terminalReason, whose idle arm
+		// would let a live no-signal session with a stale one-off
+		// Status silently return "idle", the exact foot-gun this 422
+		// exists to prevent. The 422 below fires only for sessions
+		// that could otherwise hang the wait forever — live (or
+		// startup-window) sessions with no demonstrated idle signal.
+		if !sess.Alive && hasRunEvidence(sess, false) {
+			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "died"}})
 			return
 		}
 		writeError(w, http.StatusUnprocessableEntity, "no_idle_signal", noIdleSignalMessage(sess))
@@ -711,21 +714,30 @@ func hasRunEvidence(s store.Session, seenAlive bool) bool {
 //     Status there means "turn in flight, hook not fired yet", and
 //     terminalReason correctly holds the wait for it).
 //
-//   - Per-session evidence: any other session whose Status is non-nil
-//     has demonstrably emitted a status transition. This is how shell
-//     sessions qualify (issue #373): the runner derives Working from
-//     OSC 133 prompt marks, so a shell whose integration emits them
-//     carries a non-nil Status from its first prompt on. A shell
+//   - Per-session evidence, for shell sessions only (issue #373): the
+//     runner derives Working from OSC 133 prompt marks, so a shell
+//     whose integration emits them carries a non-nil Status from its
+//     first prompt on — evidence of a real busy/idle cycle. A shell
 //     without that integration keeps a nil Status forever and is
 //     rejected up front, instead of accepting a wait that can never
 //     end. The cost of the evidence gate is a small startup window:
 //     a wait issued before the shell has drawn its first prompt is
 //     rejected even if the integration would have emitted marks.
+//
+// The evidence check is deliberately NOT generalized to other
+// adapters: a non-nil Status only proves *some* status was emitted
+// (a one-off Monitor event, a child's single PUT /status, even a
+// status *clear*), not that the session produces the busy→idle turn
+// pulse send --wait requires — accepting those would trade the loud
+// 422 for a silent timeout. For the shell adapter the runner itself
+// owns the semantics (prompt marks are the only Status writer), so
+// the evidence is trustworthy. New adapter kinds should be admitted
+// deliberately, matching adapterEmitsIdleSignal's allowlist stance.
 func sessionHasIdleSignal(sess store.Session) bool {
 	if adapterEmitsIdleSignal(sess.Adapter) {
 		return true
 	}
-	return sess.Status != nil
+	return sess.Adapter == "shell" && sess.Status != nil
 }
 
 // noIdleSignalMessage explains a no_idle_signal rejection. Shell
