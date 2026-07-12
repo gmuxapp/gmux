@@ -8,6 +8,10 @@ import { applyArmedModifiers } from './keyboard'
 import { isTouchDevice } from './touch'
 import { ReplayView } from './replay-view'
 import { TerminalView } from './terminal'
+// Lazy: the conversation panel pulls the assistant-ui React island (react-dom +
+// @assistant-ui/* + Prism, ~178KB gzip in its own chunk), and it's opt-in via
+// ?conv, so keep it out of the main bundle until opened.
+const ConversationView = lazy(() => import('./conversation-view').then((m) => m.ConversationView))
 import { Sidebar } from './sidebar'
 import { usePresence } from './use-presence'
 import { lifecycleAction } from './session-actions'
@@ -38,6 +42,17 @@ const InputDiagnostics = lazy(() => import('./input-diagnostics'))
 // ── Config ──
 
 const USE_MOCK = import.meta.env.VITE_MOCK === '1' || location.search.includes('mock')
+
+/**
+ * Whether a session offers the ACP conversation UI. The single place that
+ * decides where the conversation surface (and its toggle) is available:
+ * requires a live, local session on an adapter that produces an ACP
+ * conversation stream (thinking/text). Extend the adapter check as ACP-native
+ * adapters land; the eventual home is a daemon-provided capability flag.
+ */
+function supportsConversation(s: Session | null): boolean {
+  return !!s && s.alive && !s.peer && s.adapter === 'pi'
+}
 
 /** Visual-viewport occlusion (px) above which the on-screen keyboard is
  * considered open. Low enough to trip early in the slide-up animation and
@@ -166,11 +181,20 @@ class ErrorBoundary extends Component<
 
 // ── Components ──
 
-function MainHeader({ session, onRestart, onResume, resuming }: {
+// Speech-bubble icon for the conversation-panel toggle.
+const IconConversation = () => (
+  <svg viewBox="0 0 16 16" width="16" height="16" {...S}>
+    <path d="M3 3h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H6l-3 2.5V4a1 1 0 0 1 1-1Z" />
+  </svg>
+)
+
+function MainHeader({ session, onRestart, onResume, resuming, convOpen, onToggleConv }: {
   session: Session | null
   onRestart?: () => void
   onResume?: (id: string) => void
   resuming?: boolean
+  convOpen?: boolean
+  onToggleConv?: () => void
 }) {
   if (!session) {
     return (
@@ -196,6 +220,16 @@ function MainHeader({ session, onRestart, onResume, resuming }: {
       </div>
       <div class="main-header-right">
         <HeaderStatusChip session={session} resuming={resuming} />
+        {onToggleConv && (
+          <button
+            class={`session-menu-trigger conversation-toggle${convOpen ? ' active' : ''}`}
+            onClick={onToggleConv}
+            aria-pressed={convOpen}
+            title={convOpen ? 'Hide conversation panel' : 'Show conversation panel'}
+          >
+            <IconConversation />
+          </button>
+        )}
         <SessionMenu session={session} onRestart={onRestart} onResume={onResume} resuming={resuming} />
       </div>
     </div>
@@ -225,8 +259,9 @@ function HeaderStatusChip({ session, resuming }: {
       </div>
     )
   }
-  // A live "Working…" chip is redundant with the session's own dot
-  // indicator, so only the error state earns a header chip here.
+  // A live "Working…" chip is redundant with the session's own dot indicator,
+  // so only the error state earns a header chip here. (ADR 0021 additionally
+  // surfaces a "Working…" pill above the conversation composer.)
   if (!session.status?.error) return null
   return (
     <div class="main-header-status error">
@@ -564,6 +599,18 @@ function App() {
   // collapsed entry doesn't reopen on a subsequent back.
   const settingsOpen = loc.query.settings !== undefined
   const settingsTab = loc.query.settings ?? 'projects'
+
+  // Conversation panel is driven by the `?conv` query param (deep-linkable,
+  // and the panel itself reads the same flag). Toggle replaces history rather
+  // than pushing, so flipping the side panel doesn't grow the back stack.
+  const convOpen = loc.query.conv !== undefined
+  const toggleConv = useCallback(() => {
+    const params = new URLSearchParams(location.search)
+    if (params.has('conv')) params.delete('conv')
+    else params.set('conv', '')
+    const qs = params.toString()
+    loc.route(qs ? `${loc.path}?${qs}` : loc.path, true)
+  }, [loc])
   const openSettings = useCallback((tab = 'projects', replace = false) => {
     const params = new URLSearchParams(location.search)
     // Replace (don't push) when the requested tab is already active,
@@ -684,8 +731,15 @@ function App() {
   // sessions carry ☰ in ReplayView's action bar instead of a full set of
   // disabled keys. Everything else (home, project hub, transient states)
   // gets the floating ☰ so the sidebar overlay stays reachable on touch.
-  const keyBarShown = !!selectedVal && (canAttach || USE_MOCK) && !!termOpts && !!keybindsVal
-  const replayShown = !keyBarShown && !!selectedVal && !selectedVal.alive && !!termOpts && !USE_MOCK
+  // Conversation UI replaces the terminal when its toggle is on (and the
+  // session supports it). The terminal unmounts (disconnecting its PTY) and
+  // the conversation view mounts (connecting its ACP stream) — a mount-swap,
+  // like switching sessions.
+  const convToggleShown = supportsConversation(selectedVal)
+  const showConversation = convOpen && convToggleShown
+
+  const keyBarShown = !!selectedVal && (canAttach || USE_MOCK) && !!termOpts && !!keybindsVal && !showConversation
+  const replayShown = !keyBarShown && !showConversation && !!selectedVal && !selectedVal.alive && !!termOpts && !USE_MOCK
 
   // App-level reconnecting cue for the SSE control-plane. Distinct from
   // the per-terminal WS pill: it covers the sidebar / home / project
@@ -724,6 +778,8 @@ function App() {
             onRestart={selectedVal ? () => { void restartSession(selectedVal.id) } : undefined}
             onResume={handleResume}
             resuming={!!selectedVal && resumingId === selectedVal.id}
+            convOpen={convOpen}
+            onToggleConv={convToggleShown ? toggleConv : undefined}
           />
         )}
 
@@ -748,6 +804,19 @@ function App() {
             projectPeer={viewVal.projectPeer}
             onCloseSession={handleCloseSession}
           />
+        ) : showConversation ? (
+          <div class="conversation-panel">
+            {/* Full-panel conversation view (replaces the terminal). Composer
+                writes via the daemon /input/{id} keystroke proxy (ADR 0021
+                §6), independent of a mounted terminal. */}
+            <ConversationView
+              // Key by session so switching sessions fully remounts the store,
+              // WS, and island — no stale messages or echoes bleed across.
+              key={selectedVal!.id}
+              sessionId={selectedVal!.id}
+              working={!!(selectedVal!.alive && selectedVal!.status?.working)}
+            />
+          </div>
         ) : selectedVal && (canAttach || USE_MOCK) && termOpts && keybindsVal ? (
           <TerminalView
             session={selectedVal}

@@ -1,0 +1,139 @@
+/**
+ * Pure mapping from gmux's framework-agnostic conversation store
+ * (conversation.ts) to assistant-ui's ThreadMessageLike shape.
+ *
+ * This is the whole "shape mismatch" surface between our ACP-derived store and
+ * @assistant-ui/react, isolated here so it's unit-testable without React:
+ *
+ *   - role            → role (both use 'user' | 'assistant')
+ *   - {type:'text'}   → { type: 'text', text }         (rendered as markdown)
+ *   - {type:'thinking'} → { type: 'reasoning', text }  (assistant-ui's CoT part)
+ *   - {type:'tool_call'} → { type: 'tool-call', ... }  (assistant-ui's tool part)
+ *
+ * Block order is preserved so interleaved reasoning/text/tool-call keeps its
+ * sequence. Empty text/thinking blocks are dropped (mid-stream a block can
+ * momentarily be ''); tool-call blocks are always kept.
+ */
+import type { ConvMessage, ContentBlock } from './conversation'
+import type { ThreadMessageLike } from '@assistant-ui/react'
+
+type Part = Extract<ThreadMessageLike['content'], readonly unknown[]>[number]
+type ToolCallPart = Extract<Part, { type: 'tool-call' }>
+
+// Our tool-call part additionally carries the ACP `kind` (read/edit/execute/
+// ...). assistant-ui's part type doesn't declare it, but `fromThreadMessageLike`
+// spreads unknown fields through to the rendered part, so the renderer can read
+// it via `toolCallKind(part)`. Keeping it a named extension localizes the cast.
+export type ToolCallPartWithKind = ToolCallPart & { kind?: string }
+
+/** Read the ACP kind smuggled onto a rendered tool-call part (absent → 'other'). */
+export function toolCallKind(part: { kind?: string }): string {
+  return part.kind || 'other'
+}
+
+// Map a gmux tool-call block to assistant-ui's tool-call content part. The
+// raw JSON `args` text is parsed to an object (assistant-ui also keeps the raw
+// text via argsText for streaming/partial display); the textual output becomes
+// the result, and a `failed` status maps to isError. assistant-ui derives the
+// running/complete status from the message + whether a result is present.
+function toToolCallPart(block: ContentBlock): ToolCallPart {
+  type Args = ToolCallPart['args']
+  let args: Args = {} as Args
+  const argsText = block.args ?? ''
+  if (argsText) {
+    try {
+      const parsed = JSON.parse(argsText)
+      if (parsed && typeof parsed === 'object') args = parsed as Args
+    } catch {
+      // Partial/invalid JSON mid-stream: leave args empty, keep argsText.
+    }
+  }
+  const done = block.status === 'completed' || block.status === 'failed'
+  const part: ToolCallPartWithKind = {
+    type: 'tool-call',
+    toolCallId: block.toolCallId ?? '',
+    toolName: block.toolName ?? '',
+    kind: block.kind || 'other',
+    args,
+    argsText,
+    ...(done ? { result: block.output ?? '' } : {}),
+    ...(block.status === 'failed' ? { isError: true } : {}),
+  }
+  return part
+}
+
+export function toThreadMessage(m: ConvMessage, index: number): ThreadMessageLike {
+  const content: Part[] = []
+  for (const block of m.content) {
+    if (block.type === 'tool_call') {
+      content.push(toToolCallPart(block))
+      continue
+    }
+    const text = block.text ?? ''
+    if (!text) continue
+    if (block.type === 'thinking') {
+      content.push({ type: 'reasoning', text })
+    } else if (block.type === 'text') {
+      content.push({ type: 'text', text })
+    }
+    // Unknown block types are ignored rather than mis-rendered.
+  }
+  // assistant-ui requires non-empty content; a just-opened assistant message
+  // with no delta yet gets an empty text part so the bubble can render.
+  if (content.length === 0) content.push({ type: 'text', text: '' })
+
+  return {
+    // Stable id: the streaming messageId when present, else positional. Ids
+    // must be stable across renders so assistant-ui doesn't remount bubbles.
+    id: m.messageId ?? `msg-${index}`,
+    role: m.role,
+    content,
+  }
+}
+
+export function toThreadMessages(messages: ConvMessage[]): ThreadMessageLike[] {
+  return messages.map(toThreadMessage)
+}
+
+/**
+ * An optimistic user turn shown before the server echoes it back. `after` is the
+ * number of store messages that existed when the turn was sent, so the echo is
+ * inserted at that position rather than always appended.
+ */
+export interface EchoTurn {
+  /** Store-message count at send time → the echo's insertion index. */
+  after: number
+  message: ConvMessage
+}
+
+/**
+ * Splice optimistic echoes into the authoritative store messages at their
+ * recorded positions.
+ *
+ * The naive `[...stored, ...echoes]` is wrong: the live ACP stream carries only
+ * assistant deltas, so an assistant reply lands in `stored` *after* the echo was
+ * created and — concatenated at the end — the user's turn wrongly renders below
+ * the reply. Anchoring each echo at the store length it was sent at keeps it
+ * above the assistant message that answers it. Equal-position echoes preserve
+ * their array order. Positions are clamped to the current store length (e.g.
+ * after a shrinking reload), though the island clears echoes on load anyway.
+ */
+export function interleaveEchoes(
+  stored: readonly ConvMessage[],
+  echoes: readonly EchoTurn[],
+): ConvMessage[] {
+  const out = [...stored]
+  if (echoes.length === 0) return out
+  const items = echoes.map((e, i) => ({
+    pos: Math.min(Math.max(e.after, 0), stored.length),
+    order: i,
+    message: e.message,
+  }))
+  items.sort((a, b) => a.pos - b.pos || a.order - b.order)
+  let added = 0
+  for (const it of items) {
+    out.splice(it.pos + added, 0, it.message)
+    added++
+  }
+  return out
+}

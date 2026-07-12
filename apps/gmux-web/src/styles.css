@@ -3438,3 +3438,481 @@ body {
   gap: 8px;
   justify-content: center;
 }
+
+/* ACP conversation panel (ADR 0021 tracer #1: streaming assistant text).
+   A full-panel view that replaces the terminal surface, toggled with ?conv.
+   Rendered by the assistant-ui React island (that renderer decision is made). */
+/* Header toggle: reuses .session-menu-trigger; active = panel open. */
+.conversation-toggle.active {
+  background: var(--bg-selected);
+  color: var(--accent);
+}
+
+.conversation-panel {
+  /* Full main-panel view, replacing the terminal (not an overlay). */
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* the island's viewport scrolls, not the panel */
+  /* Match the terminal surface (DEFAULT_THEME_COLORS bg/fg). */
+  background: var(--term-bg, #0f141a);
+  color: var(--term-fg, #d3d8de);
+  font-size: 14px;
+  line-height: 1.5;
+}
+/* Mount host (Preact div holding the React island) + the island's Thread
+   root both fill the panel so the composer pins to the bottom. */
+.conversation-view,
+.conversation-thread {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.conversation-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+}
+.conversation-empty {
+  color: var(--text-muted, #7a828e);
+  font-style: italic;
+}
+.conversation-message {
+  margin-bottom: 12px;
+  word-break: break-word;
+}
+/* User turns get a distinct surface bubble; assistant text stays full-width
+   prose. No vertical bars. */
+.conversation-message--user {
+  background: var(--bg-surface, #19191f);
+  border: 1px solid var(--border, #2a2f37);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--text, #e6e6e6);
+}
+.conversation-message--user .conversation-markdown {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Working indicator: sits just above the composer (replaces the header
+   "Working…" chip, ADR 0021). Muted, with a gently pulsing dot — mirrors the
+   old header chip's language. */
+.conversation-working {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 16px 4px;
+  font-size: 12px;
+  color: var(--fg-muted, #7a828e);
+}
+.conversation-working-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-muted, #7a828e);
+  animation: conversation-pulse 1.3s ease-in-out infinite;
+}
+@keyframes conversation-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Composer: a single rounded shell (assistant-ui / hakanai shape) — the input
+   is borderless inside it, actions are compact icon buttons. */
+.conversation-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin: 8px 14px 12px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid var(--border, #2a2f37);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--bg-elevated, #1b1f26) 35%, var(--bg, #14171c));
+}
+.conversation-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent, #6ea8fe) 55%, var(--border, #2a2f37));
+}
+.conversation-composer-input {
+  flex: 1;
+  resize: none;
+  min-height: 24px;
+  max-height: 160px;
+  padding: 4px 2px;
+  color: var(--text, #e6e6e6);
+  background: transparent;
+  border: 0;
+  outline: none;
+  font: inherit;
+}
+.conversation-composer-send {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  min-width: 30px;
+  padding: 0 10px;
+  color: var(--bg, #14171c);
+  background: var(--accent, #6ea8fe);
+  border: 0;
+  border-radius: 15px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.conversation-composer-send:hover {
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 85%, #fff);
+}
+
+/* Attachments: the dropzone wraps the whole composer interior; chips sit above
+   the input row. Kept visually quiet (muted pills) to match the composer. */
+.conversation-composer-dropzone {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+}
+.conversation-composer-dropzone[data-dragging] {
+  outline: 2px dashed color-mix(in srgb, var(--accent, #6ea8fe) 60%, transparent);
+  outline-offset: 2px;
+  border-radius: 12px;
+}
+.conversation-composer-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.conversation-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.conversation-composer-add {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  width: 30px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text, #e6e6e6);
+  background: transparent;
+  border: 0;
+  border-radius: 15px;
+  cursor: pointer;
+}
+.conversation-composer-add:hover {
+  background: var(--bg-hover, #21242b);
+}
+/* Chips flow in a wrapping row and hug their content (assistant-ui's default
+   Attachments container is a column flex, which would otherwise stretch each
+   chip to full width). */
+.conversation-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.conversation-attachments:empty {
+  display: none;
+}
+.conversation-attachment {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 4px 2px 9px;
+  font-size: 12px;
+  color: var(--text-muted, #9aa4b2);
+  background: var(--bg-elevated, #1b1f26);
+  border: 1px solid var(--border, #2a2f37);
+  border-radius: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.conversation-attachment-remove {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted, #9aa4b2);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.conversation-attachment-remove:hover {
+  color: var(--text, #e6e6e6);
+  background: var(--bg-hover, #21242b);
+}
+.conversation-attach-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 14px 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--status-error, #e5484d);
+  background: color-mix(in srgb, var(--status-error, #e5484d) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-error, #e5484d) 40%, transparent);
+  border-radius: 10px;
+}
+.conversation-attach-error-dismiss {
+  flex: none;
+  margin-left: auto;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+/* Slice #2: markdown-rendered content + distinct thinking blocks. */
+.conversation-markdown > *:first-child {
+  margin-top: 0;
+}
+.conversation-markdown > *:last-child {
+  margin-bottom: 0;
+}
+.conversation-markdown p {
+  margin: 0 0 8px;
+}
+.conversation-markdown pre {
+  background: var(--bg-elevated, #1b1f26);
+  border: 1px solid var(--border, #2a2f37);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.conversation-markdown :not(pre) > code {
+  background: var(--bg-elevated, #1b1f26);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 0.92em;
+}
+.conversation-markdown pre code {
+  padding: 0;
+  background: none;
+}
+.conversation-markdown a {
+  color: var(--accent, #6ea8fe);
+}
+.conversation-markdown ul,
+.conversation-markdown ol {
+  margin: 0 0 8px;
+  padding-left: 1.4em;
+}
+.conversation-markdown blockquote {
+  margin: 0 0 8px;
+  padding-left: 10px;
+  border-left: 3px solid var(--border, #2a2f37);
+  color: var(--fg-muted, #7a828e);
+}
+
+/* Thinking + tool calls are secondary: dim, quiet log lines, not UI chrome.
+   No dots, chevrons, boxes, or hover fills — muted text carries the weight, and
+   both share `.conversation-disclosure` so they read identically. */
+.conversation-disclosure {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  color: var(--fg-muted, #7a828e);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conversation-disclosure::-webkit-details-marker {
+  display: none;
+}
+
+/* Text-shimmer for the active verb ("Thinking", "Executing…") while a block is
+   streaming: a bright band sweeps across the muted text. Plain-CSS translation
+   of assistant-ui's tw-shimmer. Honors reduced-motion. */
+@keyframes conversation-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.conversation-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--fg-muted, #7a828e) 0%,
+    var(--fg-muted, #7a828e) 35%,
+    var(--term-fg, #d3d8de) 50%,
+    var(--fg-muted, #7a828e) 65%,
+    var(--fg-muted, #7a828e) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: conversation-shimmer 2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .conversation-shimmer {
+    animation: none;
+    background: none;
+    color: var(--fg-muted, #7a828e);
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
+/* Thinking + tool rows share the prose vertical rhythm (8px), so text,
+   reasoning, and tool blocks in one message are evenly spaced; adjacent
+   margins collapse so a run of tool calls stays evenly spaced too. */
+.conversation-thinking {
+  margin: 8px 0;
+}
+.conversation-thinking-body {
+  margin: 3px 0 8px;
+  color: var(--fg-muted, #7a828e);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.conversation-tool {
+  margin: 8px 0;
+  font-size: 13px;
+}
+/* Collapsed row: "<verb> <target>". Everything muted; the bash command is the
+   only emphasized token (mono + bold) so it stands out as what actually ran. */
+.conversation-tool-verb {
+  color: var(--fg-muted, #7a828e);
+}
+.conversation-tool-arg,
+.conversation-tool-cmd {
+  margin-left: 0.5ch;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--fg-muted, #7a828e);
+}
+.conversation-tool-cmd {
+  font-weight: 600;
+}
+/* When a bash row is open the command moves into the ❯ body, so drop it from
+   the summary to avoid showing it twice. */
+.conversation-tool[open] .conversation-tool-cmd {
+  display: none;
+}
+/* Failure: a single subtle red dot at the end of the line. */
+.conversation-tool-fail {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 0.6ch;
+  border-radius: 50%;
+  background: #c65b5b;
+  vertical-align: middle;
+}
+.conversation-tool-body {
+  margin: 3px 0 8px;
+}
+/* Bash open state: pi-style prompt line then output, all muted. */
+.conversation-tool-cmdline {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--fg-muted, #7a828e);
+  font-weight: 600;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.conversation-tool-prompt {
+  opacity: 0.6;
+  font-weight: 400;
+}
+.conversation-tool-pre {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--fg-muted, #7a828e);
+  max-height: 360px;
+  overflow: auto;
+}
+.conversation-tool-hint {
+  color: var(--fg-muted, #7a828e);
+  font-style: italic;
+}
+.conversation-tool-more {
+  margin-top: 4px;
+  padding: 0;
+  font-size: 11px;
+  color: var(--fg-muted, #7a828e);
+  background: transparent;
+  border: 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.conversation-tool-more:hover {
+  color: var(--term-fg, #d3d8de);
+}
+.conversation-tool-args {
+  margin-top: 6px;
+}
+.conversation-tool-args-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Prism token colors (same minimal dark palette as the prior hljs block;
+   react-syntax-highlighter emits `.token.<type>` class names). */
+.conversation-markdown .token.keyword,
+.conversation-markdown .token.selector,
+.conversation-markdown .token.builtin {
+  color: #c586c0;
+}
+.conversation-markdown .token.string,
+.conversation-markdown .token.attr-value {
+  color: #ce9178;
+}
+.conversation-markdown .token.number,
+.conversation-markdown .token.boolean {
+  color: #b5cea8;
+}
+.conversation-markdown .token.comment {
+  color: #6a9955;
+  font-style: italic;
+}
+.conversation-markdown .token.function,
+.conversation-markdown .token.class-name {
+  color: #dcdcaa;
+}
+.conversation-markdown .token.attr-name,
+.conversation-markdown .token.property {
+  color: #9cdcfe;
+}
+.conversation-markdown .token.operator,
+.conversation-markdown .token.punctuation {
+  color: var(--text-secondary, #b8c0cc);
+}

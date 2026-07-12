@@ -17,6 +17,20 @@
 //   { op: "turn", phase: "start" }                       on agent loop start
 //   { op: "turn", phase: "end", outcome, title }         on agent loop end
 //
+// Events posted to POST /acp/ingest (ADR 0021 streaming conversation schema):
+//   { op: "message_start", messageId }        on assistant message_start
+//   { op: "chunk", messageId, delta }         per assistant text token
+//   { op: "thinking_chunk", messageId, delta } per assistant reasoning token
+//   { op: "tool_call", messageId, toolCallId, toolName, kind, args }  on tool start
+//   { op: "tool_call_update", toolCallId, status, output }            on tool end
+//   { op: "message_end" }                     on assistant message_end
+//
+// The /acp/ingest channel is the token-level assistant-text feed the runner
+// turns into ACP session/update notifications. It is one-way and read-only
+// (the extension only observes; the write path is keystrokes, per ADR 0021 §6)
+// and, like /hook/event, fire-and-forget — but ordered (see postACP). The full
+// contract is documented in docs/acp-conversation-stream.md.
+//
 // `name`/`title` is pi's session name when it has one; until pi titles the
 // conversation we fall back to its first user message (truncated), so a working
 // session is identifiable by what it's about rather than a bare cwd. This
@@ -101,6 +115,84 @@ export default function (pi) {
   // normalize it. The runner decides what each outcome means for the sidebar.
   pi.on("agent_start", () => post(sock, { op: "turn", phase: "start" }));
 
+  // --- streaming assistant text (ADR 0021) --------------------------------
+  // Forward token-level assistant text to the runner's ACP ingest channel.
+  // message_start/message_end bound the assistant message; message_update
+  // carries the token-by-token stream via event.assistantMessageEvent, whose
+  // text_delta variant holds incremental visible text and whose thinking_delta
+  // variant holds incremental reasoning — both in `.delta` (verified against
+  // pi-ai's AssistantMessageEvent union, pi 0.80.3). We forward text as `chunk`
+  // and thinking as `thinking_chunk`; toolcall deltas are a later slice.
+  //
+  // messageId correlates the deltas of one assistant message so the runner and
+  // frontend can group them (thinking and text share the message's id, ordered
+  // by arrival). pi's in-memory AssistantMessage has no id field, so we mint a
+  // monotonic per-turn counter on each assistant message_start. message_update
+  // fires only for assistant messages (per pi's event protocol).
+  let acpMsgId = "";
+  let acpMsgSeq = 0;
+
+  pi.on("message_start", (ev) => {
+    if (ev?.message?.role !== "assistant") return;
+    acpMsgId = `m${++acpMsgSeq}`;
+    postACP(sock, { op: "message_start", messageId: acpMsgId });
+  });
+
+  pi.on("message_update", (ev) => {
+    const ame = ev?.assistantMessageEvent;
+    if (!ame || !ame.delta) return;
+    const op =
+      ame.type === "text_delta" ? "chunk" : ame.type === "thinking_delta" ? "thinking_chunk" : null;
+    if (!op) return; // ignore start/end/toolcall/other stream events
+    // Open a message implicitly if a delta somehow precedes message_start.
+    if (!acpMsgId) acpMsgId = `m${++acpMsgSeq}`;
+    postACP(sock, { op, messageId: acpMsgId, delta: ame.delta });
+  });
+
+  pi.on("message_end", (ev) => {
+    if (ev?.message?.role !== "assistant") return;
+    postACP(sock, { op: "message_end", messageId: acpMsgId });
+    acpMsgId = "";
+  });
+
+  // --- streaming tool calls (ADR 0021) ------------------------------------
+  // pi surfaces tool execution as dedicated events (verified against pi's
+  // extension API, @earendil-works/pi-coding-agent): tool_execution_start
+  // carries { toolCallId, toolName, args }, tool_execution_end carries
+  // { toolCallId, result, isError } where result is an AgentToolResult whose
+  // `.content` is an array of text/image blocks. We forward the start as a
+  // `tool_call` (in progress) and the end as a `tool_call_update` (terminal
+  // status + textual output), keyed by toolCallId so the runner mutates the
+  // existing block rather than appending. Tool calls belong to the current
+  // assistant message, so they carry acpMsgId to interleave with its text.
+  pi.on("tool_execution_start", (ev) => {
+    if (!ev?.toolCallId) return;
+    if (!acpMsgId) acpMsgId = `m${++acpMsgSeq}`;
+    let args = "";
+    try {
+      args = ev.args === undefined ? "" : JSON.stringify(ev.args);
+    } catch {}
+    postACP(sock, {
+      op: "tool_call",
+      messageId: acpMsgId,
+      toolCallId: ev.toolCallId,
+      toolName: ev.toolName || "",
+      kind: kindForToolName(ev.toolName),
+      args,
+    });
+  });
+
+  pi.on("tool_execution_end", (ev) => {
+    if (!ev?.toolCallId) return;
+    postACP(sock, {
+      op: "tool_call_update",
+      messageId: acpMsgId,
+      toolCallId: ev.toolCallId,
+      status: ev.isError ? "failed" : "completed",
+      output: toolResultText(ev.result),
+    });
+  });
+
   pi.on("agent_end", (ev, ctx) => {
     const msgs = ev.messages ?? [];
     let stopReason;
@@ -138,6 +230,47 @@ export default function (pi) {
   });
 }
 
+// kindForToolName maps a pi tool name to an ACP ToolKind (the semantic category
+// the frontend switches on for icon/header/body). Mirrors Go's
+// acp.KindForToolName (history path) so the live and durable snapshots agree;
+// unknown tools fall back to "other". Translation lives here, at the typed pi
+// access point (ADR 0015).
+function kindForToolName(name) {
+  switch (name) {
+    case "bash":
+      return "execute";
+    case "read":
+    case "ls":
+      return "read";
+    case "edit":
+    case "write":
+      return "edit";
+    case "grep":
+    case "find":
+    case "glob":
+      return "search";
+    default:
+      return "other";
+  }
+}
+
+// toolResultText flattens a pi AgentToolResult into plain text for the ACP
+// stream. result.content is an array of typed blocks (text/image); only text
+// is surfaced. Tolerates a bare string or missing content.
+function toolResultText(result) {
+  if (!result) return "";
+  if (typeof result === "string") return result;
+  const c = result.content;
+  if (typeof c === "string") return c;
+  if (Array.isArray(c)) {
+    return c
+      .filter((b) => b && b.type === "text" && typeof b.text === "string")
+      .map((b) => b.text)
+      .join("");
+  }
+  return "";
+}
+
 // extractUserText pulls the text of a pi user message. content is either a
 // plain string or an array of typed blocks; mirrors pi.go's extractFirstUserText.
 function extractUserText(msg) {
@@ -169,11 +302,55 @@ function truncateTitle(s) {
 }
 
 function post(socketPath, event) {
+  postTo(socketPath, "/hook/event", event);
+}
+
+// postACP forwards a streaming-conversation event to the runner's ACP ingest
+// channel. Unlike /hook/event (low-frequency, order-independent facts), token
+// deltas MUST arrive in order: independent fire-and-forget requests can
+// complete out of order and corrupt the reassembled text. So ACP posts are
+// serialized through a promise chain — each request is issued only after the
+// previous one has completed. Still fire-and-forget: errors are swallowed and
+// never surface into pi. Ordering is per-message and cheap over a local
+// socket.
+let acpChain = Promise.resolve();
+function postACP(socketPath, event) {
+  acpChain = acpChain.then(() => postToAwait(socketPath, "/acp/ingest", event)).catch(() => {});
+}
+
+// postToAwait issues a POST and resolves when the request completes (response
+// received or error), so callers can chain to preserve ordering.
+function postToAwait(socketPath, path, event) {
+  return new Promise((resolve) => {
+    try {
+      const body = Buffer.from(JSON.stringify(event), "utf8");
+      const req = http.request(
+        {
+          socketPath,
+          path,
+          method: "POST",
+          headers: { "content-type": "application/json", "content-length": body.length },
+        },
+        (res) => {
+          res.on("end", resolve);
+          res.on("error", resolve);
+          res.resume(); // drain
+        },
+      );
+      req.on("error", resolve); // never surface transport errors into pi
+      req.end(body);
+    } catch {
+      resolve();
+    }
+  });
+}
+
+function postTo(socketPath, path, event) {
   try {
     const body = Buffer.from(JSON.stringify(event), "utf8");
     const req = http.request({
       socketPath,
-      path: "/hook/event",
+      path,
       method: "POST",
       headers: { "content-type": "application/json", "content-length": body.length },
     });
