@@ -111,6 +111,10 @@ func TestRemoveDeadByConversationRefOpaque(t *testing.T) {
 	s.Upsert(Session{ID: "dead", Adapter: "dbtool", Alive: false, ConversationRef: "row:42"})
 	s.Upsert(Session{ID: "near", Adapter: "dbtool", Alive: false, ConversationRef: "row:421"})
 	s.Upsert(Session{ID: "other-adapter", Adapter: "othertool", Alive: false, ConversationRef: "row:42"})
+	// Distinct opaque refs that a path-Clean would conflate: the daemon
+	// must not canonicalize non-rooted refs (they're not paths).
+	s.Upsert(Session{ID: "plain", Adapter: "dbtool", Alive: false, ConversationRef: "b"})
+	s.Upsert(Session{ID: "dotted", Adapter: "dbtool", Alive: false, ConversationRef: "a/../b"})
 
 	removed := s.RemoveDeadByConversationRef("dbtool", "row:42")
 	if len(removed) != 1 || removed[0] != "dead" {
@@ -121,6 +125,16 @@ func TestRemoveDeadByConversationRefOpaque(t *testing.T) {
 	}
 	if _, ok := s.Get("other-adapter"); !ok {
 		t.Error("another adapter's session with the same ref string must survive")
+	}
+
+	// Removing "a/../b" must not conflate with "b": opaque refs compare
+	// exactly, never path-normalized.
+	removed = s.RemoveDeadByConversationRef("dbtool", "a/../b")
+	if len(removed) != 1 || removed[0] != "dotted" {
+		t.Fatalf("expected exactly [dotted] removed, got %v", removed)
+	}
+	if _, ok := s.Get("plain"); !ok {
+		t.Error("opaque ref \"b\" must survive removal of \"a/../b\"")
 	}
 }
 

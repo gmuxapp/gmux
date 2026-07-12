@@ -73,6 +73,11 @@ inside `packages/adapter/adapters` and its tests.
   callback, so two adapters using the same ref string can never delete
   each other's conversations. (Absolute file paths made this collision
   impossible by accident; opaque refs make the scoping explicit.)
+  Ref comparison itself is exact; only refs that are *rooted paths* (the
+  file adapters' spelling) are `filepath.Clean`-normalized, because the
+  hook-reported and watcher-reported spellings of the same transcript can
+  differ cosmetically. An opaque ref is never normalized — an adapter may
+  legitimately use "a/../b" and "b" as distinct locators.
 - `store.Session.ConversationFile` → **`ConversationRef`**. The wire and
   persisted JSON key stays `conversation_file`, and the runner's
   `conversation_file` /events event (payload key `path`) stays, purely for
@@ -112,10 +117,11 @@ is untouched.
   `ConversationOpener.OpenConversation(ref)`. Content bytes are
   adapter-native; a consumer needing a normalized schema translates per
   ADR 0021.
-- **Freshness-from-mtime is now an adapter detail.** Daemon-side proposals
-  that stat `ConversationFile` (PR #393's `activitySeedFor`) should instead
-  ask the adapter (`DescribeConversation(...).LastActivity`), falling back to
-  runner-owned signals (scrollback tee) that the daemon legitimately owns.
+- **Freshness-from-mtime is now an adapter detail.** The activity reseed
+  (PR #393's `activitySeedFor`) asks the adapter
+  (`DescribeConversation(...).LastActivity`) instead of statting the ref,
+  falling back to the runner's scrollback tee — a daemon-owned cache
+  (ADR 0016) that a direct stat is legitimate for.
 - Wire and on-disk formats are unchanged (`conversation_file` key, event
   name, meta.json) — pure Go-level refactor, no migration.
 

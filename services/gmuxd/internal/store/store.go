@@ -563,25 +563,27 @@ func (s *Store) Reconcile(assignFn func(Session) (slug string, index int)) {
 //   - all matches: the conversation→session mapping is N:1 (a conversation
 //     can be resumed in several runners), so every dead match is retired.
 //
-// Refs are compared after filepath.Clean: for file-backed adapters this
-// keeps a cosmetic difference (trailing slash, "./") between the
-// source-reported ref and the hook-reported ConversationRef from defeating
-// the match; for non-path refs (no separators) Clean is the identity, so
-// the comparison degrades to exact equality. Symlinks are not resolved:
-// the file is already gone, so EvalSymlinks couldn't run, and both paths
-// derive from the same real $HOME in practice.
+// Refs are compared by canonicalRef: exact equality, except that refs
+// which are rooted paths (today's file-backed adapters) are compared
+// after filepath.Clean so a cosmetic difference (trailing slash, "./")
+// between the source-reported ref and the hook-reported ConversationRef
+// doesn't defeat the match. Opaque refs are never normalized — an
+// adapter may legitimately use "a/../b" and "b" as distinct locators.
+// Symlinks are not resolved: the file is already gone, so EvalSymlinks
+// couldn't run, and both paths derive from the same real $HOME in
+// practice.
 func (s *Store) RemoveDeadByConversationRef(adapterName, ref string) []string {
 	if adapterName == "" || ref == "" {
 		return nil
 	}
-	target := filepath.Clean(ref)
+	target := canonicalRef(ref)
 	s.mu.Lock()
 	var removed []string
 	for id, sess := range s.sessions {
 		if sess.Adapter != adapterName || sess.Peer != "" || sess.Alive || sess.ConversationRef == "" {
 			continue
 		}
-		if filepath.Clean(sess.ConversationRef) != target {
+		if canonicalRef(sess.ConversationRef) != target {
 			continue
 		}
 		delete(s.sessions, id)
@@ -593,6 +595,21 @@ func (s *Store) RemoveDeadByConversationRef(adapterName, ref string) []string {
 		s.broadcast(Event{Type: "session-remove", ID: id})
 	}
 	return removed
+}
+
+// canonicalRef returns the comparison form of a conversation ref (ADR
+// 0022). Refs are opaque, so the daemon must not interpret them — with
+// one narrow, deliberate exception: a ref that is a rooted path is a
+// file-backed adapter's transcript path, where the hook-reported and
+// watcher-reported spellings can differ cosmetically ("./", trailing
+// slash), so those are compared after filepath.Clean. Anything else is
+// returned verbatim: normalizing an opaque ref could conflate locators
+// the adapter considers distinct (e.g. "a/../b" vs "b").
+func canonicalRef(ref string) string {
+	if filepath.IsAbs(ref) {
+		return filepath.Clean(ref)
+	}
+	return ref
 }
 
 // RemoveByPeer removes all sessions belonging to a peer and broadcasts
