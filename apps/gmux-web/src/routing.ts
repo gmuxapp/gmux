@@ -73,7 +73,13 @@ export function sessionPath(
   session: { adapter: string; slug?: string; id: string; peer?: string },
   projectPeer?: string,
 ): string {
-  const slug = session.slug || session.id.slice(0, 8)
+  // Fallback for an untitled session (no slug yet): the full gmux session
+  // id. It's already short and URL-safe (`sess-<8 hex>`) and unique, unlike
+  // a truncation — `id.slice(0, 8)` would keep only `sess-` + 3 hex (~4096
+  // values), and resolveSessionFromPath's prefix match returns the first
+  // hit, so two untitled sessions could collide onto one URL. Resolution
+  // still works: `s.id.startsWith(slug)` matches the full id exactly.
+  const slug = session.slug || session.id
   const ownerPrefix = projectPeer ? `/@${projectPeer}` : ''
   // Mid-path session-host segment is needed only when the session
   // lives on a different host than the project owner.

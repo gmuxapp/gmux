@@ -255,8 +255,8 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			// A slug key is only ever present on a deliberate SetSlug (the
 			// general meta emission omits it), so honor it verbatim — including
 			// an explicit empty, which clears a stale slug when a session
-			// re-binds to an untitled conversation (web then falls back to
-			// id.slice(0,8)). A title-only meta update has meta.Slug == nil and
+			// re-binds to an untitled conversation (web then falls back to the
+			// gmux session id). A title-only meta update has meta.Slug == nil and
 			// leaves the recorded slug untouched.
 			if meta.Slug != nil {
 				sess.Slug = *meta.Slug

@@ -284,7 +284,7 @@ func TestConversationFileEventEmptyPathIgnored(t *testing.T) {
 //   - slug present, non-empty → record it (the web builds URLs from it);
 //   - slug key ABSENT (a title-only meta update) → leave the slug untouched;
 //   - slug present but EMPTY → clear it (session re-bound to an untitled
-//     conversation; the web falls back to id.slice(0,8)).
+//     conversation; the web falls back to the gmux session id).
 func TestMetaEventSlugSemantics(t *testing.T) {
 	sessions := store.New()
 	sessions.Upsert(store.Session{ID: "sess-1", Alive: true})

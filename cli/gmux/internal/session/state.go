@@ -221,13 +221,28 @@ func (s *State) SetShellTitle(title string) {
 	s.emitMetaLocked()
 }
 
-// SetSlug sets the URL-safe session identifier.
+// SetSlug sets the URL-safe session identifier, emitting a meta event only
+// when it changes. Use on same-conversation refreshes, where the runner's
+// state and the daemon's store are known to agree.
 func (s *State) SetSlug(slug string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.Slug == slug {
 		return
 	}
+	s.Slug = slug
+	s.emit(Event{Type: "meta", Data: map[string]string{"slug": slug}})
+}
+
+// BindSlug sets the slug on an authoritative session bind and ALWAYS emits,
+// even when the value is unchanged. On a re-register the daemon may have
+// preserved a stale slug that diverges from this (fresh, possibly empty)
+// runner state; a dedup'd SetSlug would then never tell the daemon to
+// converge. Re-binds (switch/new/resume/fork) are infrequent, so the extra
+// event is cheap. See handleHookEvent's session case.
+func (s *State) BindSlug(slug string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.Slug = slug
 	s.emit(Event{Type: "meta", Data: map[string]string{"slug": slug}})
 }

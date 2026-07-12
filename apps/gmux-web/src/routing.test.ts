@@ -75,9 +75,12 @@ describe('sessionPath', () => {
       .toBe('/gmux/pi/fix-auth')
   })
 
-  it('falls back to ID prefix when slug missing', () => {
-    expect(sessionPath('gmux', { adapter: 'pi', id: 'abcdef12-3456-7890' }))
-      .toBe('/gmux/pi/abcdef12')
+  it('falls back to the full session id when slug missing', () => {
+    // Untitled session: no slug yet. Use the whole `sess-<hex>` id, not a
+    // truncation — `slice(0, 8)` would leave only 3 hex of entropy and
+    // collide across untitled sessions (resolveSessionFromPath prefix-matches).
+    expect(sessionPath('gmux', { adapter: 'pi', id: 'sess-a1b2c3d4' }))
+      .toBe('/gmux/pi/sess-a1b2c3d4')
   })
 
   it('includes @peer for remote sessions', () => {

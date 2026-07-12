@@ -178,3 +178,53 @@ func TestEmitActivityThrottles(t *testing.T) {
 		// good, throttled
 	}
 }
+
+// TestBindSlugAlwaysEmits pins the divergence-recovery contract behind the
+// runner→daemon slug sync. SetSlug dedups (no event when unchanged), which is
+// right for a same-conversation refresh where runner and daemon agree. But on
+// an authoritative re-bind after a daemon re-register — where the daemon may
+// hold a STALE slug while this fresh runner state is empty — a dedup'd clear
+// would never reach the daemon. BindSlug therefore always emits, even when the
+// value is unchanged, so the daemon converges.
+func TestBindSlugAlwaysEmits(t *testing.T) {
+	s := New(Config{ID: "sess-x", Adapter: "pi", SocketPath: "/tmp/x.sock"})
+	ch := s.Subscribe()
+	defer s.Unsubscribe(ch)
+
+	slugEvents := func() []string {
+		var got []string
+		for {
+			select {
+			case e := <-ch:
+				if e.Type != "meta" {
+					continue
+				}
+				if m, ok := e.Data.(map[string]string); ok {
+					if v, present := m["slug"]; present {
+						got = append(got, v)
+					}
+				}
+			default:
+				return got
+			}
+		}
+	}
+
+	// SetSlug on an unchanged (empty→empty) value must NOT emit.
+	s.SetSlug("")
+	if got := slugEvents(); len(got) != 0 {
+		t.Fatalf("SetSlug(unchanged) emitted %v, want nothing", got)
+	}
+
+	// BindSlug on the same unchanged empty value MUST emit — this is the
+	// re-register clear that would otherwise be lost.
+	s.BindSlug("")
+	if got := slugEvents(); len(got) != 1 || got[0] != "" {
+		t.Fatalf("BindSlug(\"\") emitted %v, want one empty-slug event", got)
+	}
+
+	// And it keeps runner state consistent.
+	if s.SlugSnapshot() != "" {
+		t.Fatalf("SlugSnapshot = %q, want empty", s.SlugSnapshot())
+	}
+}

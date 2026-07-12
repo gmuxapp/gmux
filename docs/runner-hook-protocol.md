@@ -63,7 +63,7 @@ One JSON object per event, discriminated by `op`. Unknown ops/values are ignored
 |-----------|----------|---------|
 | `path`    | session  | The held conversation's ref — adapter-opaque above the runner (ADR 0022); today's file-backed agents report the transcript's absolute path. |
 | `id`      | session  | Adapter's session id. Informational — the runner keys on the gmux session id, and never derives a slug from this (it's a UUID for real adapters). |
-| `slug`    | session  | Slug source, slugified by the runner. Send only once the session has a title; while omitted the runner leaves the slug empty and the web layer falls back to a short `id.slice(0,8)` of the gmux session id. |
+| `slug`    | session  | Slug source, slugified by the runner. Send only once the session has a title; while omitted the runner leaves the slug empty and the web layer falls back to the gmux session id itself for the URL. |
 | `name`    | session  | Display title at bind time. |
 | `cwd`     | session  | Project dir. Accepted for forward-compat but not applied — the runner knows the launch cwd. |
 | `reason`  | session  | Why the bind happened; informational. |

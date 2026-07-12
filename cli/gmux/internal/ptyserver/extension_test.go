@@ -107,6 +107,69 @@ func TestReconnectReplaysConversationRef(t *testing.T) {
 	}
 	t.Error("reconnecting subscriber did not receive replayed conversation_file")
 }
+
+// TestReconnectReplaysSlug pins that a (re)connecting /events subscriber
+// re-learns the authoritative slug — so a slug set/rename/clear emitted while
+// the daemon was down is not lost (SetSlug dedups, so it never re-emits on its
+// own). Without the replay the store keeps a stale slug across a daemon
+// restart.
+func TestReconnectReplaysSlug(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not available")
+	}
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "test.sock")
+	sessFile := filepath.Join(dir, "2026-06-19_sess-slugreplay.jsonl")
+
+	st := session.New(session.Config{ID: "s1", Adapter: "pi", SocketPath: sockPath})
+	srv, err := New(Config{
+		Command:    []string{node, "-e", "setTimeout(()=>{},3000)"},
+		Cwd:        dir,
+		Listener:   mustBindSocket(t, sockPath),
+		SocketPath: sockPath,
+		Adapter:    adapters.NewPi(),
+		State:      st,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// Bind a titled conversation, then wait for the slug to land.
+	postSessionEvent(t, sockPath,
+		`{"op":"session","path":`+strconv.Quote(sessFile)+`,"id":"id-x","slug":"fix the auth bug"}`)
+	deadline := time.After(5 * time.Second)
+	for st.SlugSnapshot() != "fix-the-auth-bug" {
+		select {
+		case <-deadline:
+			t.Fatalf("runner never recorded slug; got %q", st.SlugSnapshot())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return net.Dial("unix", sockPath)
+		},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", "http://unix/events", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("connect /events: %v", err)
+	}
+	defer resp.Body.Close()
+
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		if strings.Contains(sc.Text(), "fix-the-auth-bug") {
+			return // success: slug replayed on subscribe
+		}
+	}
+	t.Error("reconnecting subscriber did not receive replayed slug")
+}
 func TestSessionEventIsAuthoritative(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -231,8 +294,8 @@ func TestTurnEventDrivesState(t *testing.T) {
 // handler, that the runner sets the slug ONLY from an explicit title-derived
 // source and never synthesizes one from the adapter session id: ev.ID is a
 // UUID for every real adapter, and slugifying it produces an unreadable
-// full-UUID URL that also defeats the web's short id.slice(0,8) fallback
-// (the pre-title-window regression behind #360's follow-up). With no slug
+// full-UUID URL that also defeats the web's session-id fallback (the
+// pre-title-window regression behind #360's follow-up). With no slug
 // source the runner leaves Slug empty for the web layer to fill.
 func TestSessionSlugFromExplicitSourceOnly(t *testing.T) {
 	node, err := exec.LookPath("node")
@@ -285,6 +348,72 @@ func TestSessionSlugFromExplicitSourceOnly(t *testing.T) {
 		for {
 			if got := st.SlugSnapshot(); got != "" {
 				t.Fatalf("slug = %q, want empty (no title source → web owns the fallback)", got)
+			}
+			select {
+			case <-deadline:
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	})
+
+	// An untitled re-bind must EMIT the empty-slug clear even when the runner
+	// state is already empty (fresh runner after a daemon re-register that
+	// preserved a stale slug). A dedup'd SetSlug would emit nothing and leave
+	// the daemon stale; BindSlug on the rebind path fixes it.
+	t.Run("untitled-rebind-emits-clear-even-when-state-empty", func(t *testing.T) {
+		_, st, sockPath := newSrv(t)
+		ch := st.Subscribe()
+		defer st.Unsubscribe(ch)
+		// First bind, untitled: runner state is already "" here.
+		postSessionEvent(t, sockPath,
+			`{"op":"session","path":"/fresh.jsonl","id":"019f2c75-5279-7012-b054-ce2a71441a4e"}`)
+		deadline := time.After(2 * time.Second)
+		for {
+			select {
+			case <-deadline:
+				t.Fatal("no empty-slug meta event emitted on untitled bind")
+			case e := <-ch:
+				if e.Type != "meta" {
+					continue
+				}
+				m, ok := e.Data.(map[string]string)
+				if !ok {
+					continue
+				}
+				if v, present := m["slug"]; present {
+					if v != "" {
+						t.Fatalf("slug event = %q, want empty clear", v)
+					}
+					return // success
+				}
+			}
+		}
+	})
+
+	// A same-conversation refresh (claude/codex re-send the bind on every turn
+	// end) with a transiently empty slug source must NOT clear an established
+	// slug — that would flap the URL on a parse hiccup. Re-bind is detected by
+	// a changed conversation path, so the same path must preserve the slug.
+	t.Run("same-conversation-refresh-keeps-slug", func(t *testing.T) {
+		_, st, sockPath := newSrv(t)
+		postSessionEvent(t, sockPath,
+			`{"op":"session","path":"/c.jsonl","id":"id-c","slug":"fix the auth bug"}`)
+		deadline := time.After(2 * time.Second)
+		for st.SlugSnapshot() != "fix-the-auth-bug" {
+			select {
+			case <-deadline:
+				t.Fatalf("setup: slug = %q, want %q", st.SlugSnapshot(), "fix-the-auth-bug")
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+		// Same path, no slug source (transient title-derivation failure).
+		postSessionEvent(t, sockPath,
+			`{"op":"session","path":"/c.jsonl","id":"id-c","reason":"activity"}`)
+		deadline = time.After(500 * time.Millisecond)
+		for {
+			if got := st.SlugSnapshot(); got != "fix-the-auth-bug" {
+				t.Fatalf("slug = %q, want %q preserved on same-conversation refresh", got, "fix-the-auth-bug")
 			}
 			select {
 			case <-deadline:
