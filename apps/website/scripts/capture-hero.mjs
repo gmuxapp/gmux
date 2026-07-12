@@ -91,10 +91,13 @@ try {
   // ── Mobile: session terminal with the key row ─────────────────────
   {
     const ctx = await browser.newContext({
-      // 326 CSS px fits exactly 38 xterm columns (13px Fira Code ≈
+      // 310 CSS px fits exactly 38 xterm columns (13px Fira Code ≈
       // 7.8px cells), matching the mock session's 38-char content so
-      // the terminal reads edge-to-edge like a real phone session.
-      viewport: { width: 326, height: 596 },
+      // the terminal reads edge-to-edge like a real phone session; 540
+      // tall yields 23 rows, so the terminal ends just under the key
+      // row's top edge (one row tucked behind the translucent keys,
+      // key borders visible) instead of painting under the whole bar.
+      viewport: { width: 310, height: 540 },
       deviceScaleFactor: 2,
       isMobile: true,
       hasTouch: true,
@@ -106,7 +109,14 @@ try {
     // The claude "design landing page" session from the mock fixture.
     await page.goto(`${base}/my-project/claude/sess-cla?mock=clean`)
     await page.waitForSelector('.xterm')
-    await page.waitForTimeout(1500)
+    await page.waitForTimeout(1000)
+    // Nudge the viewport to force a bar-aware refit: the initial mock fit
+    // can run before the mobile control bar has laid out, leaving the
+    // terminal sized to the full shell height.
+    await page.setViewportSize({ width: 310, height: 541 })
+    await page.waitForTimeout(200)
+    await page.setViewportSize({ width: 310, height: 540 })
+    await page.waitForTimeout(800)
     await page.screenshot({ path: join(outDir, 'hero-mobile.png') })
     await ctx.close()
   }
