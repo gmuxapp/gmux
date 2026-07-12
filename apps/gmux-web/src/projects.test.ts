@@ -578,12 +578,12 @@ describe('reorderKeysForFolder', () => {
     expect(reorderKeysForFolder(sessions, 'tower')).toEqual(['a', 'b'])
   })
 
-  it('peer folder: keeps slug as-is for slugged sessions', () => {
+  it('peer folder: strips @<peer> namespace from titled session ids', () => {
     const sessions = [
       makeSession({ id: 'a@tower', cwd: '/x', slug: 'fix-auth', peer: 'tower' }),
       makeSession({ id: 'b@tower', cwd: '/x', slug: 'login-page', peer: 'tower' }),
     ]
-    expect(reorderKeysForFolder(sessions, 'tower')).toEqual(['fix-auth', 'login-page'])
+    expect(reorderKeysForFolder(sessions, 'tower')).toEqual(['a', 'b'])
   })
 
   it('local folder: drops adopted peer-owned sessions', () => {
@@ -597,7 +597,7 @@ describe('reorderKeysForFolder', () => {
       makeSession({ id: 'local-2', cwd: '/x', slug: '' }),
     ]
     expect(reorderKeysForFolder(sessions, undefined))
-      .toEqual(['fix-auth', 'local-2'])
+      .toEqual(['local-1', 'local-2'])
   })
 
   it('returns empty when no session matches the folder owner', () => {
@@ -624,15 +624,13 @@ describe('reorderKeysForFolder', () => {
       .toEqual(['sess-1', 'sess-2@container'])
   })
 
-  it('local folder + Local peer: slug takes precedence over namespaced id', () => {
-    // A container session that's been attribution-resolved (e.g.
-    // claude/codex) keys by slug, not id, in projects.json.
+  it('local folder + Local peer: keeps namespaced id for titled sessions', () => {
     const sessions = [
       makeSession({ id: 'sess-1@container', cwd: '/x', slug: 'claude-fix', peer: 'container' }),
     ]
     const isLocal = (n: string) => n === 'container'
     expect(reorderKeysForFolder(sessions, undefined, isLocal))
-      .toEqual(['claude-fix'])
+      .toEqual(['sess-1@container'])
   })
 })
 
