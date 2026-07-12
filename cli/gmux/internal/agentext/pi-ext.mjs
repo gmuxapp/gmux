@@ -62,12 +62,12 @@ export default function (pi) {
     }
     if (!file) return; // nothing to attribute yet
     const title = name || firstUserTitle;
-    // Report the title as the slug source too. pi's session id is a UUID that
-    // slugifies into an unreadable URL; without an explicit slug the runner
-    // falls back to Slugify(id) and session URLs become UUIDs. The runner
-    // slugifies whatever we send, so the raw title is fine here. Mirrors the
-    // codex and claude hooks, which send a title-derived slug for the same
-    // reason.
+    // Report the title as the slug source too (runner slugifies it). Until the
+    // session has a title we send no slug: pi's session id is a UUID, and the
+    // runner deliberately won't synthesize a slug from it — it leaves the slug
+    // empty so the web layer falls back to a short id.slice(0,8). Mirrors the
+    // codex and claude hooks, which also send a title-derived slug only once
+    // they have a title.
     post(sock, {
       op: "session",
       path: String(file),

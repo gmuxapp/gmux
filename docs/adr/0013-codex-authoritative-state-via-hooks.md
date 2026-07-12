@@ -52,8 +52,13 @@ protocol unchanged. Concretely:
    `session_id` is a UUID that slugifies into an unreadable URL. The hook parses
    the transcript's first user prompt (reusing `ParseSessionFile`) and reports a
    human title plus an explicit title-derived **`slug`** — a small, tool-neutral
-   addition to the protocol (the runner prefers an explicit `slug` over
-   `Slugify(id)`; pi is unchanged).
+   addition to the protocol.
+
+   > **Update (#360, #394):** the runner no longer synthesizes a slug from the
+   > session id at all — `Slugify(id)` produced unreadable full-UUID URLs in the
+   > pre-title window. The slug is set only from an explicit title-derived
+   > source (else left empty for the web to fall back to the short gmux session
+   > id), and pi now sends a `slug` the same way (it was *not* unchanged).
 
 4. **Trust scoped to our own hooks via injected `trusted_hash`.** A CLI-injected
    hook is non-managed and therefore `Untrusted`, which codex silently skips.

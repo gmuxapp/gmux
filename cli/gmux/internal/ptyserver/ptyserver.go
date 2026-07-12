@@ -586,8 +586,8 @@ type hookEvent struct {
 	Path string `json:"path"`
 	Pid  int    `json:"pid"`
 
-	ID      string `json:"id,omitempty"`
-	Slug    string `json:"slug,omitempty"` // slug source (runner slugifies); preferred over Slugify(ID)
+	ID      string `json:"id,omitempty"`   // adapter session id; informational (the runner keys on the gmux id)
+	Slug    string `json:"slug,omitempty"` // slug source (runner slugifies); empty until the session has a title
 	Name    string `json:"name,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Title   string `json:"title,omitempty"`
@@ -612,19 +612,45 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 	case "session":
 		// Authoritative bind (e.g. pi's session_start): the file the
 		// agent holds, named and slugged.
+		// Snapshot the currently-bound conversation before SetConversationRef
+		// overwrites it, so the slug logic below can tell a genuine re-bind
+		// (different conversation) from a same-conversation refresh.
+		priorRef := s.state.ConversationRefSnapshot()
 		if ev.Path != "" {
 			s.state.SetConversationRef(ev.Path)
 		}
 		if ev.Name != "" {
 			s.state.SetAdapterTitle(ev.Name)
 		}
-		// Slug source, in order of preference: an explicit slug the agent
-		// reports (codex and pi session ids are UUIDs that slugify badly, so
-		// their hooks send a title-derived slug), else the identity to slugify.
-		if ev.Slug != "" {
-			s.state.SetSlug(adapter.Slugify(ev.Slug))
-		} else if ev.ID != "" {
-			s.state.SetSlug(adapter.Slugify(ev.ID))
+		// The slug is the session's URL identity. Prefer a real title-derived
+		// source the agent reports; we NEVER synthesize one from ev.ID (the
+		// adapter's session id, a UUID for every real adapter that slugifies
+		// into an unreadable URL). With no source, leave the slug empty so the
+		// web owns the fallback — the *gmux* session id itself (routing.ts
+		// sessionPath), which the runner doesn't know.
+		//
+		// Clear only on a genuine re-bind to a *different* conversation (pi
+		// re-binds through the same runner on switch/new/resume/fork): switching
+		// from a titled conversation to a fresh untitled one must drop the old
+		// slug. A same-conversation refresh (claude/codex re-send the bind on
+		// every turn end) with a transiently empty source must NOT clear an
+		// established slug — that would flap the URL on a parse hiccup.
+		//
+		// A genuine re-bind uses BindSlug (always emits): after a re-register
+		// the daemon may hold a stale slug that diverges from this fresh runner
+		// state, so a dedup'd SetSlug could leave the store stale. A refresh
+		// uses SetSlug (dedup) — runner and store agree there.
+		rebind := ev.Path != "" && ev.Path != priorRef
+		switch {
+		case ev.Slug != "":
+			slug := adapter.Slugify(ev.Slug)
+			if rebind {
+				s.state.BindSlug(slug)
+			} else {
+				s.state.SetSlug(slug)
+			}
+		case rebind:
+			s.state.BindSlug("")
 		}
 	case "turn":
 		// Agent-loop transition. The extension reports phase + outcome; the
@@ -787,6 +813,17 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if file := s.state.ConversationRefSnapshot(); file != "" {
 		if data, err := json.Marshal(map[string]string{"path": file}); err == nil {
 			fmt.Fprintf(w, "event: conversation_file\ndata: %s\n\n", data)
+		}
+		// Replay the slug too (the runner owns it, ADR 0011). Once a
+		// conversation is bound the slug snapshot is authoritative for it,
+		// including an *empty* slug (untitled) — which the daemon honors as an
+		// explicit clear. Without this, a slug set/rename/clear emitted while
+		// the daemon was down is never re-learned (SetSlug dedups, so it won't
+		// re-emit) and the store keeps a stale value. Gated on a bound
+		// conversation so a just-started runner (no bind yet) can't transiently
+		// clear a good persisted slug before its session hook fires.
+		if data, err := json.Marshal(map[string]string{"slug": s.state.SlugSnapshot()}); err == nil {
+			fmt.Fprintf(w, "event: meta\ndata: %s\n\n", data)
 		}
 	}
 

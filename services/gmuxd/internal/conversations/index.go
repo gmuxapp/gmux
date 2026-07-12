@@ -249,7 +249,8 @@ func (idx *Index) LookupBySlug(slug string) (Info, bool) {
 
 // FindByPrefix returns conversations whose slug starts with the given
 // prefix, within an adapter. Used for URL resolution when the frontend
-// provides a partial slug (e.g. from session.id.slice(0, 8)).
+// provides a partial slug (e.g. an abbreviated or legacy session-id
+// prefix); an exact/full id is just the degenerate prefix case.
 func (idx *Index) FindByPrefix(adapterName, prefix string) (Info, bool) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()

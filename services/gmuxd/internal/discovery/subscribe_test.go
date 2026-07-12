@@ -277,12 +277,15 @@ func TestConversationFileEventEmptyPathIgnored(t *testing.T) {
 	}
 }
 
-// TestMetaEventUpdatesSlugAndIgnoresEmpty pins the daemon half of the
-// session-URL slug chain: a runner "meta" event carrying a slug updates
-// the store (the web UI builds session URLs from it), and a later meta
-// event without a slug — the runner emits other meta fields
-// independently — must not clobber the one already recorded.
-func TestMetaEventUpdatesSlugAndIgnoresEmpty(t *testing.T) {
+// TestMetaEventSlugSemantics pins the daemon half of the session-URL slug
+// chain. The runner emits a slug key only on a deliberate SetSlug (the
+// general meta emission omits it), so the daemon distinguishes:
+//
+//   - slug present, non-empty → record it (the web builds URLs from it);
+//   - slug key ABSENT (a title-only meta update) → leave the slug untouched;
+//   - slug present but EMPTY → clear it (session re-bound to an untitled
+//     conversation; the web falls back to the gmux session id).
+func TestMetaEventSlugSemantics(t *testing.T) {
 	sessions := store.New()
 	sessions.Upsert(store.Session{ID: "sess-1", Alive: true})
 	subs := NewSubscriptions(sessions)
@@ -292,13 +295,18 @@ func TestMetaEventUpdatesSlugAndIgnoresEmpty(t *testing.T) {
 		t.Fatalf("Slug = %q, want %q", got.Slug, "fix-the-login-bug")
 	}
 
-	// Unrelated meta update (title only) and an explicit empty slug: both
-	// must leave the recorded slug intact.
+	// Title-only update (no slug key): the recorded slug must survive.
 	subs.handleEvent("sess-1", "/sock", "meta", []byte(`{"adapter_title":"Fix the login bug"}`))
+	if got, _ := sessions.Get("sess-1"); got.Slug != "fix-the-login-bug" {
+		t.Errorf("Slug after title-only meta = %q, want %q preserved", got.Slug, "fix-the-login-bug")
+	}
+
+	// Explicit empty slug (re-bind to an untitled conversation): must clear,
+	// so the web falls back to the short session-id prefix.
 	subs.handleEvent("sess-1", "/sock", "meta", []byte(`{"slug":""}`))
 	got, _ := sessions.Get("sess-1")
-	if got.Slug != "fix-the-login-bug" {
-		t.Errorf("Slug after slug-less meta events = %q, want %q preserved", got.Slug, "fix-the-login-bug")
+	if got.Slug != "" {
+		t.Errorf("Slug after explicit empty = %q, want cleared", got.Slug)
 	}
 	if got.AdapterTitle != "Fix the login bug" {
 		t.Errorf("AdapterTitle = %q, want %q", got.AdapterTitle, "Fix the login bug")

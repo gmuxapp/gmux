@@ -269,9 +269,12 @@ func Register(sessions *store.Store, subs *Subscriptions, socketPath string, onD
 		// Re-registration. The runner reports fresh runtime state;
 		// the store has the historical and attribution-derived
 		// state from before the seam. Merge by overwriting only the
-		// runtime-owned fields so anything the runner doesn't know
-		// about (slug, created_at, hook-reported title / subtitle,
-		// workspace metadata) survives.
+		// runtime-owned fields so the rest (created_at, hook-reported
+		// title / subtitle, workspace metadata, and the slug) survives
+		// this handshake. The slug is runner-owned (ADR 0011) but its
+		// /register /meta snapshot may predate the session hook, so we
+		// keep the stored value here and let the /events replay converge
+		// it (handleEvents replays the authoritative slug on subscribe).
 		existing.Alive = newSess.Alive
 		existing.Pid = newSess.Pid
 		existing.SocketPath = socketPath
