@@ -364,11 +364,10 @@ func (s *Store) Remove(id string) error {
 // after every store removal, not just the dismiss / resume-merge
 // paths that have explicit Remove calls.
 //
-// Catches the slug-takeover case: when a fresh live session
-// shadows a dead one with the same (adapter, peer, slug), the store
-// silently evicts the dead record and broadcasts session-remove.
-// Without this loop those orphan meta.json files accumulate — the
-// next Sweep would re-load them and the next slug collision would
+// Catches conversation-lineage takeover: when a fresh live session
+// resumes a dead conversation, the store silently evicts the dead record and
+// broadcasts session-remove. Without this loop those orphan meta.json files
+// accumulate — the next Sweep would re-load them and the next takeover would
 // re-orphan, indefinitely.
 //
 // Errors from Remove are logged; failure to clean up one entry

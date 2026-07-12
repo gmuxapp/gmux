@@ -2,6 +2,8 @@ package store
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -71,8 +73,10 @@ func TestRemoveDeadByConversationRef(t *testing.T) {
 	// Two dead sessions share the file (N:1, e.g. resumed in two tabs).
 	s.Upsert(Session{ID: "dead-1", Adapter: "claude", Alive: false, ConversationRef: file})
 	s.Upsert(Session{ID: "dead-2", Adapter: "claude", Alive: false, ConversationRef: file})
-	// A live session on the same file must survive (runner still writing).
-	s.Upsert(Session{ID: "live", Adapter: "claude", Alive: true, ConversationRef: file})
+	// An unrelated live session must survive (runner still writing). (A live
+	// session on the SAME ref would legitimately take the dead rows over
+	// before this removal runs — that's conversation-lineage takeover.)
+	s.Upsert(Session{ID: "live", Adapter: "claude", Alive: true, ConversationRef: "/home/u/.claude/projects/abc/live.jsonl"})
 	// A peer-owned dead session on the same file is not ours to retire.
 	s.Upsert(Session{ID: "peer", Adapter: "claude", Alive: false, Peer: "box2", ConversationRef: file})
 	// An unrelated dead session must be untouched.
@@ -476,94 +480,68 @@ func TestUpdateBroadcasts(t *testing.T) {
 	}
 }
 
-func TestUpsertAliveSessionRemovesDeadShadowWithSameSlug(t *testing.T) {
+func TestConversationTakeoverSameFileAndUntitled(t *testing.T) {
 	s := New()
-	s.Upsert(Session{
-		ID: "dead-abc", Adapter: "pi", Alive: false,
-		Command: []string{"pi"}, Slug: "rk-1", AdapterTitle: "shadow",
-	})
-	s.Upsert(Session{
-		ID: "sess-123", Adapter: "pi", Alive: true,
-		Slug: "rk-1", AdapterTitle: "live",
-	})
-
-	items := s.List()
-	if len(items) != 1 {
-		t.Fatalf("expected 1 session, got %d: %+v", len(items), items)
-	}
-	if items[0].ID != "sess-123" {
-		t.Fatalf("expected live session to remain, got %q", items[0].ID)
+	file := "/tmp/pi/conversation.jsonl"
+	s.Upsert(Session{ID: "dead", Adapter: "pi", Alive: false, ConversationRef: file})
+	s.Upsert(Session{ID: "live", Adapter: "pi", Alive: true, ConversationRef: file})
+	if _, ok := s.Get("dead"); ok {
+		t.Fatal("live binder should evict its dead same-file predecessor")
 	}
 }
 
-func TestUpsertDeadShadowSkippedWhenAliveSessionExists(t *testing.T) {
-	s := New()
-	s.Upsert(Session{
-		ID: "sess-123", Adapter: "pi", Alive: true,
-		Slug: "rk-1", AdapterTitle: "live",
-	})
-	s.Upsert(Session{
-		ID: "dead-abc", Adapter: "pi", Alive: false,
-		Command: []string{"pi"}, Slug: "rk-1", AdapterTitle: "shadow",
-	})
-
-	items := s.List()
-	if len(items) != 1 {
-		t.Fatalf("expected 1 session, got %d: %+v", len(items), items)
+func TestConversationTakeoverClaudeLineage(t *testing.T) {
+	const ancestor = "11111111-1111-4111-8111-111111111111"
+	const resumed = "22222222-2222-4222-8222-222222222222"
+	dir := t.TempDir()
+	newFile := filepath.Join(dir, resumed+".jsonl")
+	if err := os.WriteFile(newFile, []byte(`{"type":"user","sessionId":"`+ancestor+`","message":{"role":"user","content":"hello"}}`), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if items[0].ID != "sess-123" {
-		t.Fatalf("expected live session to remain, got %q", items[0].ID)
+	// The dead row's transcript exists on disk (it's a resumable session);
+	// its identity comes from DescribeConversation, never from the ref
+	// string — refs are adapter-opaque (ADR 0022).
+	ancestorFile := filepath.Join(dir, ancestor+".jsonl")
+	if err := os.WriteFile(ancestorFile, []byte(`{"type":"user","sessionId":"`+ancestor+`","message":{"role":"user","content":"hello"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := New()
+	s.Upsert(Session{ID: "dead", Adapter: "claude", Alive: false, ConversationRef: ancestorFile})
+	s.Upsert(Session{ID: "live", Adapter: "claude", Alive: true, ConversationRef: newFile})
+	if _, ok := s.Get("dead"); ok {
+		t.Fatal("live Claude resume should evict a dead ancestor")
 	}
 }
 
-func TestUpdateSlugOnAliveSessionRemovesDeadShadow(t *testing.T) {
+func TestConversationTakeoverIgnoresSameSlug(t *testing.T) {
 	s := New()
-	s.Upsert(Session{
-		ID: "dead-abc", Adapter: "pi", Alive: false,
-		Command: []string{"pi"}, Slug: "rk-1", AdapterTitle: "shadow",
-	})
-	s.Upsert(Session{
-		ID: "sess-123", Adapter: "pi", Alive: true, AdapterTitle: "live",
-	})
-
-	ok := s.Update("sess-123", func(sess *Session) {
-		sess.Slug = "rk-1"
-	})
-	if !ok {
-		t.Fatal("expected update to succeed")
-	}
-
-	items := s.List()
-	if len(items) != 1 {
-		t.Fatalf("expected 1 session, got %d: %+v", len(items), items)
-	}
-	if items[0].ID != "sess-123" {
-		t.Fatalf("expected live session to remain, got %q", items[0].ID)
-	}
-}
-
-func TestSlugDedup_ScopedToKindAndPeer(t *testing.T) {
-	s := New()
-	// Dead pi session with slug "fix-auth".
-	s.Upsert(Session{ID: "dead-1", Adapter: "pi", Alive: false, Command: []string{"pi"}, Slug: "fix-auth"})
-	// Live claude session with the same slug — different adapter, should NOT remove the dead pi session.
-	s.Upsert(Session{ID: "live-1", Adapter: "claude", Alive: true, Slug: "fix-auth"})
-
+	s.Upsert(Session{ID: "dead", Adapter: "pi", Alive: false, Slug: "same-title", ConversationRef: "/tmp/a.jsonl"})
+	s.Upsert(Session{ID: "live", Adapter: "pi", Alive: true, Slug: "same-title", ConversationRef: "/tmp/b.jsonl"})
 	if len(s.List()) != 2 {
-		t.Fatalf("expected 2 sessions (different kinds coexist), got %d", len(s.List()))
+		t.Fatal("different conversations with the same title must coexist")
 	}
+}
 
-	// Now a live pi session arrives — should remove the dead pi session.
-	s.Upsert(Session{ID: "live-2", Adapter: "pi", Alive: true, Slug: "fix-auth"})
-
-	items := s.List()
-	if len(items) != 2 {
-		t.Fatalf("expected 2 sessions (claude + live pi), got %d", len(items))
+func TestConversationTakeoverLiveLiveAndDeadShadow(t *testing.T) {
+	file := "/tmp/pi/conversation.jsonl"
+	s := New()
+	s.Upsert(Session{ID: "live-1", Adapter: "pi", Alive: true, ConversationRef: file})
+	s.Upsert(Session{ID: "live-2", Adapter: "pi", Alive: true, ConversationRef: file})
+	if len(s.List()) != 2 {
+		t.Fatal("live sessions on one conversation must coexist")
 	}
-	for _, item := range items {
-		if item.ID == "dead-1" {
-			t.Error("dead pi session should have been replaced by live pi session")
-		}
+	s.Upsert(Session{ID: "dead", Adapter: "pi", Alive: false, ConversationRef: file})
+	if _, ok := s.Get("dead"); ok {
+		t.Fatal("dead write shadowed by a live conversation owner must be skipped")
+	}
+}
+
+func TestConversationTakeoverDoesNotApplyToShells(t *testing.T) {
+	s := New()
+	s.Upsert(Session{ID: "dead", Adapter: "shell", Alive: false, Slug: "same"})
+	s.Upsert(Session{ID: "live", Adapter: "shell", Alive: true, Slug: "same"})
+	if len(s.List()) != 2 {
+		t.Fatal("sessions without conversation files must not take over")
 	}
 }
 

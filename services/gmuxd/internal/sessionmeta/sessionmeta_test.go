@@ -383,7 +383,7 @@ func TestSweepReturnsEmptyForMissingDir(t *testing.T) {
 // on-disk record; events of other types do not; the loop terminates
 // cleanly when the channel closes.
 //
-// This is the catch-all for slug-takeover orphans (and any other
+// This is the catch-all for conversation-takeover orphans (and any other
 // store removal not paired with an explicit Remove call). A
 // regression here would silently leak per-session directories.
 func TestWatchRemovalsRemovesOnSessionRemoveEvent(t *testing.T) {
