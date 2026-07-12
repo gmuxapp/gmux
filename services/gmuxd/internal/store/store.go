@@ -192,6 +192,12 @@ type Store struct {
 	sessions       map[string]Session
 	subscribers    map[*subscriber]struct{}
 	commandTitlers map[string]func([]string) string
+	// activitySeed, when set, supplies a durable last-activity floor
+	// (RFC3339) for a session that arrives with no LastActivityAt —
+	// the rehydrate/re-register case after a daemon restart, where the
+	// in-memory stamp was never persisted. Returns "" when no seed is
+	// available. See SetActivitySeed.
+	activitySeed func(Session) string
 }
 
 func New() *Store {
@@ -206,6 +212,19 @@ func New() *Store {
 // shell title is set (e.g. "codex" instead of "codex resume <id>").
 func (s *Store) SetCommandTitlers(titlers map[string]func([]string) string) {
 	s.commandTitlers = titlers
+}
+
+// SetActivitySeed installs a hook that reseeds LastActivityAt from a
+// durable on-disk activity proxy (conversation-file / scrollback mtime)
+// when a locally-owned session is upserted with an empty stamp. This
+// recovers "last activity" across a daemon restart: an alive session's
+// LastActivityAt is never persisted, so on re-register it would
+// otherwise reset to (effectively) creation time. The hook is applied
+// only as a seed/floor — a session that already carries a stamp (a live
+// value, or a persisted one restored from sessionmeta) is never
+// overwritten. seed may return "" to decline.
+func (s *Store) SetActivitySeed(seed func(Session) string) {
+	s.activitySeed = seed
 }
 
 func (s *Store) List() []Session {
@@ -292,6 +311,17 @@ func (s *Store) UpsertRemote(sess Session) {
 func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
 	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
 	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
+	// Compute the activity seed BEFORE taking the lock. The hook stats
+	// an adapter-supplied path that may live on a remote/FUSE filesystem;
+	// a hung stat under s.mu would stall the whole store (all reads, the
+	// SSE snapshot fan-out), not just this upsert. It's only relevant when
+	// the incoming stamp is empty (the rehydrate/fresh case), and it's
+	// applied under the lock only if the stamp is still empty after
+	// carry-forward — so it stays a pure floor.
+	var seed string
+	if bumpLocally && sess.LastActivityAt == "" && s.activitySeed != nil {
+		seed = s.activitySeed(sess)
+	}
 	s.mu.Lock()
 	prev, hadPrev := s.sessions[sess.ID]
 	if bumpLocally {
@@ -305,6 +335,14 @@ func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
 			// a routine title/cwd refresh would silently zero out
 			// the field and drop the session from Recent.
 			sess.LastActivityAt = prev.LastActivityAt
+		}
+		// Reseed from a durable on-disk proxy when we still have no
+		// stamp — the alive-across-restart case, where neither a live
+		// value nor a persisted one exists. Gated on empty so it acts
+		// purely as a floor and never clobbers a newer value; and only
+		// on locally-owned sessions (peers carry the owner's stamp).
+		if sess.LastActivityAt == "" && seed != "" {
+			sess.LastActivityAt = seed
 		}
 	}
 	removed, skip, unchanged := s.commitLocked(prev, hadPrev, &sess)

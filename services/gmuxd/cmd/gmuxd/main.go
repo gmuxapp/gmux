@@ -518,6 +518,14 @@ func serve(stderr io.Writer) int {
 	// Resume merge / slug takeover drop the corresponding directory.
 	// See sessionmeta package doc for the full lifecycle.
 	metaStore := sessionmeta.New(sessionmeta.DefaultDir(), sessionmeta.WithRetention(sessionmeta.DefaultRetention()))
+	// Reseed last_activity_at from durable file mtimes when a session is
+	// (re-)registered without a stamp — the alive-across-restart case, where
+	// the in-memory value was never persisted. Installed before Sweep so it
+	// applies to every rehydrate path; dead sessions restored with a
+	// persisted stamp are left untouched (the store gates the seed on empty).
+	sessions.SetActivitySeed(func(sess store.Session) string {
+		return activitySeedFor(sess, metaStore.SessionDir)
+	})
 	// persistedKeys records the id and slug of every session sessionmeta
 	// holds on disk at startup (the post-retention sweep survivors). The
 	// startup CleanupSessions unions this with the live store so a project
