@@ -349,12 +349,14 @@ func TestWaitTimesOut(t *testing.T) {
 	}
 }
 
-// TestWaitRejectsShellSessions pins the allowlist: shell sessions
-// don't emit Working transitions, so `gmux --wait` against them
-// would return immediately with reason=idle and silently do the
-// wrong thing for `gmux make build && gmux --wait <id>`-style
-// composition. 422 surfaces the limitation explicitly.
-func TestWaitRejectsShellSessions(t *testing.T) {
+// TestWaitRejectsShellSessionsWithoutPromptMarks pins the evidence
+// gate: a shell session that has never emitted a status transition
+// (nil Status — no OSC 133 prompt marks observed by the runner) has
+// no idle signal, so `gmux wait` against it would either return
+// immediately with a bogus "idle" or hang forever. 422 surfaces the
+// limitation explicitly, keeping `gmux make build && gmux wait <id>`
+// from silently doing nothing.
+func TestWaitRejectsShellSessionsWithoutPromptMarks(t *testing.T) {
 	srv, st, _ := waitTestServer(t)
 	st.Upsert(store.Session{
 		ID:      "sess-shell",
@@ -365,6 +367,79 @@ func TestWaitRejectsShellSessions(t *testing.T) {
 	resp, _ := postWait(t, srv, "sess-shell")
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Errorf("status = %d, want 422", resp.StatusCode)
+	}
+}
+
+// TestWaitShellWithPromptMarksReturnsWhenIdle: a shell session whose
+// runner has observed OSC 133 prompt marks carries a non-nil Status,
+// which is the per-session evidence that an idle signal exists
+// (issue #373). A shell sitting at its prompt (Working=false) is
+// idle; wait returns immediately, same as an idle agent.
+func TestWaitShellWithPromptMarksReturnsWhenIdle(t *testing.T) {
+	srv, st, _ := waitTestServer(t)
+	st.Upsert(store.Session{
+		ID:      "sess-shell-prompt",
+		Adapter: "shell",
+		Alive:   true,
+		Status:  &store.Status{Working: false},
+	})
+
+	resp, body := postWait(t, srv, "sess-shell-prompt")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "idle" {
+		t.Errorf("reason = %v, want idle", got)
+	}
+}
+
+// TestWaitShellBlocksUntilPromptReturns: a shell mid-command
+// (Working=true from the OSC 133 command-start mark) blocks the wait;
+// the prompt-start mark flipping Working=false unblocks it. This is
+// the shell counterpart of TestWaitBlocksUntilWorkingFlipsFalse and
+// fails with a 422 without the per-session evidence gate.
+func TestWaitShellBlocksUntilPromptReturns(t *testing.T) {
+	srv, st, _ := waitTestServer(t)
+	st.Upsert(store.Session{
+		ID:      "sess-shell-busy",
+		Adapter: "shell",
+		Alive:   true,
+		Status:  &store.Status{Working: true},
+	})
+
+	done := make(chan struct{})
+	var resp *http.Response
+	var body map[string]any
+	go func() {
+		resp, body = postWait(t, srv, "sess-shell-busy")
+		close(done)
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("wait returned while the shell was still running its command")
+	default:
+	}
+
+	// The prompt returns: runner-tracked OSC 133;A flips Working=false.
+	st.Upsert(store.Session{
+		ID:      "sess-shell-busy",
+		Adapter: "shell",
+		Alive:   true,
+		Status:  &store.Status{Working: false},
+	})
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("wait did not return after the prompt returned")
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "idle" {
+		t.Errorf("reason = %v, want idle", got)
 	}
 }
 

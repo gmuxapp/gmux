@@ -29,16 +29,19 @@ import (
 // scrollback cap, not the poll interval). See waitForOutput.
 //
 // The single signal we wait on is the per-session Status.Working flag
-// the adapters emit. That's a precise, debounced signal: each adapter
-// flips it false once its agent has finished its turn (claude /
-// codex / pi all emit a Working transition). Falling back to "no
-// output bytes for N seconds" would race ad-hoc against tool-call
-// progress prints; the explicit Working flag is what we already use
-// in the UI's idle indicator and is the right thing to consume here.
+// the adapters emit. That's a precise, debounced signal: the agent
+// adapters flip it false once their agent has finished its turn
+// (claude / codex / pi all emit a Working transition), and shell
+// sessions flip it via runner-tracked OSC 133 prompt marks (busy on
+// command start, idle when the prompt returns — issue #373). Falling
+// back to "no output bytes for N seconds" would race ad-hoc against
+// tool-call progress prints; the explicit Working flag is what we
+// already use in the UI's idle indicator and is the right thing to
+// consume here.
 //
-// Sessions whose adapter doesn't emit Working (notably the shell
-// adapter) are rejected with 422 rather than silently returning
-// "idle" immediately, which would foot-trap the obvious composition
+// Sessions with no idle signal (see sessionHasIdleSignal) are
+// rejected with 422 rather than silently returning "idle"
+// immediately, which would foot-trap the obvious composition
 // `gmux make build && gmux --wait <id>` into doing nothing.
 //
 // Reasons returned in the response body:
@@ -84,9 +87,8 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 
 	// Output conditions don't need the idle signal: they read the
 	// scrollback tee, which every adapter (including shell) produces.
-	if forText == "" && forRegex == "" && !adapterEmitsIdleSignal(sess.Adapter) {
-		writeError(w, http.StatusUnprocessableEntity, "no_idle_signal",
-			"the "+sess.Adapter+" adapter does not emit an idle signal; --wait is only supported for agent sessions")
+	if forText == "" && forRegex == "" && !sessionHasIdleSignal(sess) {
+		writeError(w, http.StatusUnprocessableEntity, "no_idle_signal", noIdleSignalMessage(sess))
 		return
 	}
 
@@ -425,9 +427,8 @@ func handleInputWait(w http.ResponseWriter, r *http.Request, sessions *store.Sto
 			"unsupported wait mode "+strconv.Quote(mode)+`; expected "idle"`)
 		return
 	}
-	if !adapterEmitsIdleSignal(sess.Adapter) {
-		writeError(w, http.StatusUnprocessableEntity, "no_idle_signal",
-			"the "+sess.Adapter+" adapter does not emit an idle signal; --wait is only supported for agent sessions")
+	if !sessionHasIdleSignal(sess) {
+		writeError(w, http.StatusUnprocessableEntity, "no_idle_signal", noIdleSignalMessage(sess))
 		return
 	}
 	if !inputSubmits(body) {
@@ -684,14 +685,55 @@ func hasRunEvidence(s store.Session, seenAlive bool) bool {
 	return seenAlive || s.ExitCode != nil || s.StartedAt != ""
 }
 
+// sessionHasIdleSignal reports whether --wait can observe a
+// meaningful idle transition for this session. Two sources:
+//
+//   - Adapter allowlist: the agent adapters always emit Working via
+//     their turn hooks, so their sessions are waitable from the moment
+//     they register — even before the first status event lands (a nil
+//     Status there means "turn in flight, hook not fired yet", and
+//     terminalReason correctly holds the wait for it).
+//
+//   - Per-session evidence: any other session whose Status is non-nil
+//     has demonstrably emitted a status transition. This is how shell
+//     sessions qualify (issue #373): the runner derives Working from
+//     OSC 133 prompt marks, so a shell whose integration emits them
+//     carries a non-nil Status from its first prompt on. A shell
+//     without that integration keeps a nil Status forever and is
+//     rejected up front, instead of accepting a wait that can never
+//     end. The cost of the evidence gate is a small startup window:
+//     a wait issued before the shell has drawn its first prompt is
+//     rejected even if the integration would have emitted marks.
+func sessionHasIdleSignal(sess store.Session) bool {
+	if adapterEmitsIdleSignal(sess.Adapter) {
+		return true
+	}
+	return sess.Status != nil
+}
+
+// noIdleSignalMessage explains a no_idle_signal rejection. Shell
+// sessions get an actionable message (the fix is enabling OSC 133
+// shell integration); everything else gets the generic adapter
+// limitation.
+func noIdleSignalMessage(sess store.Session) string {
+	if sess.Adapter == "shell" {
+		return "this shell session has not reported a prompt yet (no OSC 133 prompt marks observed); " +
+			"idle wait needs shell integration that emits them (fish does by default; bash/zsh need an integration snippet) — " +
+			"or wait on output with --for-text/--for-regex"
+	}
+	return "the " + sess.Adapter + " adapter does not emit an idle signal; --wait is only supported for agent and shell sessions"
+}
+
 // adapterEmitsIdleSignal reports whether sessions of the given
-// adapter ever transition Status.Working — i.e. whether --wait can
-// observe a meaningful idle event for them. Currently the agent
-// adapters (claude, codex, pi) all emit Working; the shell adapter
-// doesn't. Kept as an explicit allowlist so adding a new agent
-// adapter requires a deliberate update here, and so unknown adapters
-// (peer sessions whose adapter we don't know about, future adapters)
-// fail loudly instead of silently degrading to "always idle."
+// adapter always emit Status.Working transitions, regardless of
+// per-session evidence. Currently the agent adapters (claude, codex,
+// pi), whose hooks flip Working on every turn. Kept as an explicit
+// allowlist so adding a new agent adapter requires a deliberate
+// update here, and so unknown adapters (peer sessions whose adapter
+// we don't know about, future adapters) fail loudly instead of
+// silently degrading to "always idle." Shell sessions are not listed:
+// their signal depends on the user's shell integration, so they
+// qualify per-session via sessionHasIdleSignal's evidence check.
 func adapterEmitsIdleSignal(adapter string) bool {
 	switch adapter {
 	case "claude", "codex", "pi":
