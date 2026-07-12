@@ -80,6 +80,18 @@ describe('conversation store', () => {
     expect(messageText(msgs[1])).toBe('hello')
   })
 
+  it('bumps loadEpoch on each snapshot so the island can drop stale echoes', () => {
+    const s = createConversationStore()
+    expect(s.getLoadEpoch()).toBe(0)
+    s.applyFrame(loadFrame([{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]))
+    expect(s.getLoadEpoch()).toBe(1)
+    // Streaming deltas must NOT bump the epoch (only authoritative loads do).
+    s.applyFrame(chunkFrame('x', 'm1'))
+    expect(s.getLoadEpoch()).toBe(1)
+    s.applyFrame(loadFrame([]))
+    expect(s.getLoadEpoch()).toBe(2)
+  })
+
   it('coalesces token deltas of the same messageId into one assistant message', () => {
     const s = createConversationStore()
     s.applyFrame(chunkFrame('Hel', 'm1'))

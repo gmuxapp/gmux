@@ -1,6 +1,18 @@
 import { describe, it, expect } from 'vitest'
-import { toThreadMessage, toThreadMessages } from './conversation-adapter'
+import { toThreadMessage, toThreadMessages, interleaveEchoes } from './conversation-adapter'
+import type { EchoTurn } from './conversation-adapter'
 import type { ConvMessage } from './conversation'
+
+const user = (text: string, messageId?: string): ConvMessage => ({
+  role: 'user',
+  ...(messageId ? { messageId } : {}),
+  content: [{ type: 'text', text }],
+})
+const assistant = (text: string, messageId?: string): ConvMessage => ({
+  role: 'assistant',
+  ...(messageId ? { messageId } : {}),
+  content: [{ type: 'text', text }],
+})
 
 describe('conversation-adapter: ConvMessage → ThreadMessageLike', () => {
   it('maps a user text message', () => {
@@ -158,5 +170,53 @@ describe('conversation-adapter: ConvMessage → ThreadMessageLike', () => {
       { role: 'user', content: [{ type: 'text', text: 'b' }] },
     ]
     expect(toThreadMessages(msgs).map((m) => m.id)).toEqual(['msg-0', 'msg-1'])
+  })
+})
+
+describe('interleaveEchoes (optimistic user echo ordering)', () => {
+  it('renders the echoed user turn ABOVE the assistant reply that lands after it (regression: P1-1)', () => {
+    // At send time the store held one prior assistant message, so the echo is
+    // anchored at index 1. The reply then streams in as a NEW store message.
+    const stored = [assistant('prev reply', 'm0'), assistant('new reply', 'm1')]
+    const echoes: EchoTurn[] = [{ after: 1, message: user('my question', 'echo-0') }]
+    expect(interleaveEchoes(stored, echoes).map((m) => m.content[0].text)).toEqual([
+      'prev reply',
+      'my question',
+      'new reply',
+    ])
+  })
+
+  it('no-ops when there are no echoes (returns a copy)', () => {
+    const stored = [assistant('a')]
+    const out = interleaveEchoes(stored, [])
+    expect(out).toEqual(stored)
+    expect(out).not.toBe(stored)
+  })
+
+  it('appends an echo sent against an empty store', () => {
+    expect(interleaveEchoes([], [{ after: 0, message: user('hi') }]).map((m) => m.content[0].text)).toEqual([
+      'hi',
+    ])
+  })
+
+  it('keeps multiple echoes at the same anchor in send order', () => {
+    const echoes: EchoTurn[] = [
+      { after: 0, message: user('first', 'e0') },
+      { after: 0, message: user('second', 'e1') },
+    ]
+    expect(interleaveEchoes([assistant('reply')], echoes).map((m) => m.content[0].text)).toEqual([
+      'first',
+      'second',
+      'reply',
+    ])
+  })
+
+  it('clamps an out-of-range anchor to the store length', () => {
+    // Store shrank (e.g. after a reload) below the echo's original anchor.
+    expect(
+      interleaveEchoes([assistant('only')], [{ after: 5, message: user('late') }]).map(
+        (m) => m.content[0].text,
+      ),
+    ).toEqual(['only', 'late'])
   })
 })

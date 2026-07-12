@@ -69,7 +69,9 @@ export function ConversationView({ sessionId, working, store: injected, connect 
         store: storeRef.current!,
         working,
         sessionId,
-        onSend: (data: string) => void sendSessionInput(sessionId, data),
+        // Return the promise (don't swallow it) so the island can catch a failed
+        // send, roll back the optimistic echo, and restore the composer text.
+        onSend: (data: string) => sendSessionInput(sessionId, data),
       }),
     )
   }, [sessionId, working])

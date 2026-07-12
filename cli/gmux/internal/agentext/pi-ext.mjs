@@ -219,17 +219,25 @@ export default function (pi) {
     });
   });
 
+  // pi has no persistent message id, so mint one for each streamed assistant
+  // message. These variables are shared by the turn-boundary and ACP handlers
+  // because pi permits only one callback per event name.
+  let acpMsgId = "";
+  let acpMsgSeq = 0;
+
   // A user message entering a RUNNING loop extends that turn and changes what
   // its answer means — whether gmux delivered it, another agent steered, or a
   // human typed it into the TUI. It is reported as a boundary on the open
   // turn, never as a new turn (pi has one loop, hence one turn).
   pi.on("message_start", (ev) => {
-    if (!runOpen) return;
     const msg = ev?.message;
     if (msg?.role === "assistant") {
-      sawAssistant = true;
+      if (runOpen) sawAssistant = true;
+      acpMsgId = `m${++acpMsgSeq}`;
+      postACP(sock, { op: "message_start", messageId: acpMsgId });
       return;
     }
+    if (!runOpen) return;
     const text = extractUserText(msg);
     if (!text) return;
     if (!sawAssistant && !triggerNoted) {
@@ -255,14 +263,6 @@ export default function (pi) {
     });
   });
 
-  // Every completed assistant/model response is one iteration, including
-  // tool-use responses and attempts that pi later retries.
-  pi.on("message_end", (ev) => {
-    if (runOpen && ev?.message?.role === "assistant") {
-      post(sock, { op: "turn", phase: "iteration", turn_seq: turnSeq });
-    }
-  });
-
   // --- streaming assistant text (ADR 0021) --------------------------------
   // Forward token-level assistant text to the runner's ACP ingest channel.
   // message_start/message_end bound the assistant message; message_update
@@ -277,15 +277,6 @@ export default function (pi) {
   // by arrival). pi's in-memory AssistantMessage has no id field, so we mint a
   // monotonic per-turn counter on each assistant message_start. message_update
   // fires only for assistant messages (per pi's event protocol).
-  let acpMsgId = "";
-  let acpMsgSeq = 0;
-
-  pi.on("message_start", (ev) => {
-    if (ev?.message?.role !== "assistant") return;
-    acpMsgId = `m${++acpMsgSeq}`;
-    postACP(sock, { op: "message_start", messageId: acpMsgId });
-  });
-
   pi.on("message_update", (ev) => {
     const ame = ev?.assistantMessageEvent;
     if (!ame || !ame.delta) return;
@@ -299,6 +290,7 @@ export default function (pi) {
 
   pi.on("message_end", (ev) => {
     if (ev?.message?.role !== "assistant") return;
+    if (runOpen) post(sock, { op: "turn", phase: "iteration", turn_seq: turnSeq });
     postACP(sock, { op: "message_end", messageId: acpMsgId });
     acpMsgId = "";
   });

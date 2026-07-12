@@ -35,7 +35,7 @@ func TestACPWebSocketSnapshotThenStream(t *testing.T) {
 	}
 
 	st := session.New(session.Config{ID: "s1", Adapter: "pi", SocketPath: sockPath})
-	st.SetConversationFile(convFile)
+	st.SetConversationRef(convFile)
 	srv, err := New(Config{
 		Command:    []string{node, "-e", "setTimeout(()=>{},5000)"},
 		Cwd:        dir,

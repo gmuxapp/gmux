@@ -23,7 +23,7 @@
  * session/load). We optimistically render sent messages locally; de-duping
  * against a future live user echo (or a `user_message_chunk` variant) is open.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
@@ -49,13 +49,21 @@ import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown'
 // also reads like content mid-prose. Typographic markdown styling isn't shipped
 // either (it's Tailwind `prose`); that stays in our .conversation-markdown CSS.
 import { makePrismAsyncLightSyntaxHighlighter } from '@assistant-ui/react-syntax-highlighter'
-import type { ConversationStore, ConvMessage } from './conversation'
-import { toThreadMessage, toolCallKind } from './conversation-adapter'
+import type { ConversationStore } from './conversation'
+import {
+  toThreadMessage,
+  toolCallKind,
+  interleaveEchoes,
+  type EchoTurn,
+} from './conversation-adapter'
 
 export interface ConversationIslandProps {
   store: ConversationStore
-  /** Send raw bytes to the session's PTY (the §6 keystroke actuator). */
-  onSend?: (data: string) => void
+  /**
+   * Send raw bytes to the session's PTY (the §6 keystroke actuator). Rejects on
+   * a failed send so the island can roll back the optimistic echo.
+   */
+  onSend?: (data: string) => void | Promise<void>
   /** gmux session "working" status — drives the composer indicator + isRunning. */
   working?: boolean
   /** Session id — needed to upload composer attachments to the owning gmuxd. */
@@ -261,12 +269,24 @@ const AssistantMessage = () => (
 
 export function ConversationIsland({ store, onSend, working, sessionId }: ConversationIslandProps) {
   const [tick, setTick] = useState(0)
-  // Optimistic local echo of sent user turns (see SPIKE TODO above).
-  const [echoes, setEchoes] = useState<ConvMessage[]>([])
-  // Visible surface for an attachment-upload failure (chip-level error copy).
-  const [attachError, setAttachError] = useState<string | null>(null)
+  // Optimistic local echoes of sent user turns, positioned by store length at
+  // send time so they render above the assistant reply (see interleaveEchoes).
+  const [echoes, setEchoes] = useState<EchoTurn[]>([])
+  // Monotonic id for echo bubbles so their assistant-ui key stays stable as
+  // store messages land around them (avoids remounts).
+  const echoSeq = useRef(0)
+  // Visible surface for a composer failure (attachment upload or send).
+  const [composerError, setComposerError] = useState<string | null>(null)
 
   useEffect(() => store.subscribe(() => setTick((n) => n + 1)), [store])
+
+  // Drop optimistic echoes once an authoritative snapshot arrives: the real
+  // user turns are now in the store, so keeping echoes would double them. Also
+  // clears any cross-reconnect residue.
+  const loadEpoch = store.getLoadEpoch()
+  useEffect(() => {
+    setEchoes([])
+  }, [loadEpoch])
 
   // Upload-on-add attachment adapter, rebuilt when the session changes so the
   // upload always targets the gmuxd that owns the current PTY. Omitted when we
@@ -277,7 +297,7 @@ export function ConversationIsland({ store, onSend, working, sessionId }: Conver
   )
 
   const messages: ThreadMessageLike[] = useMemo(
-    () => [...store.getMessages(), ...echoes].map(toThreadMessage),
+    () => interleaveEchoes(store.getMessages(), echoes).map(toThreadMessage),
     // Re-derive on every store notification (tick) and when a new echo lands.
     [store, echoes, tick],
   )
@@ -302,14 +322,27 @@ export function ConversationIsland({ store, onSend, working, sessionId }: Conver
       const paths = attachmentPaths(message.attachments)
       const composed = composeMessageWithAttachments(text, paths)
       if (!composed) return
-      // Echo exactly what we send (text + spliced paths) so the local echo
-      // matches the turn pi receives.
-      setEchoes((prev) => [
-        ...prev,
-        { role: 'user', content: [{ type: 'text', text: composed.trimEnd() }] },
-      ])
-      // §6: composed text reaches pi as keystrokes + Enter.
-      onSend?.(composed + '\r')
+      // Echo exactly what we send (text + spliced paths), anchored at the
+      // current store length so it renders above the assistant reply.
+      const echo: EchoTurn = {
+        after: store.getMessages().length,
+        message: {
+          role: 'user',
+          messageId: `echo-${echoSeq.current++}`,
+          content: [{ type: 'text', text: composed.trimEnd() }],
+        },
+      }
+      setEchoes((prev) => [...prev, echo])
+      try {
+        // §6: composed text reaches pi as keystrokes + Enter.
+        await onSend?.(composed + '\r')
+      } catch {
+        // Send failed (dead session, network): roll back the optimistic echo,
+        // restore the composer text so the user doesn't lose it, and surface it.
+        setEchoes((prev) => prev.filter((e) => e !== echo))
+        setComposerError('Message not sent — the session may be unavailable.')
+        runtime.thread.composer.setText(text)
+      }
     },
   })
 
@@ -318,7 +351,7 @@ export function ConversationIsland({ store, onSend, working, sessionId }: Conver
   useEffect(
     () =>
       runtime.thread.composer.unstable_on('attachmentAddError', (e) => {
-        setAttachError(e.message || 'Attachment failed')
+        setComposerError(e.message || 'Attachment failed')
       }),
     [runtime],
   )
@@ -340,14 +373,14 @@ export function ConversationIsland({ store, onSend, working, sessionId }: Conver
             Working…
           </div>
         ) : null}
-        {attachError ? (
+        {composerError ? (
           <div className="conversation-attach-error" role="alert">
-            {attachError}
+            {composerError}
             <button
               type="button"
               className="conversation-attach-error-dismiss"
               aria-label="Dismiss"
-              onClick={() => setAttachError(null)}
+              onClick={() => setComposerError(null)}
             >
               ×
             </button>

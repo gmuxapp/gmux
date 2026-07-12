@@ -9,8 +9,9 @@ import { applyArmedModifiers } from './keyboard'
 import { isTouchDevice } from './touch'
 import { ReplayView } from './replay-view'
 import { TerminalView } from './terminal'
-// Lazy: the conversation panel pulls markdown-it + highlight.js (~104KB gzip),
-// and it's opt-in via ?conv, so keep it out of the main bundle until opened.
+// Lazy: the conversation panel pulls the assistant-ui React island (react-dom +
+// @assistant-ui/* + Prism, ~178KB gzip in its own chunk), and it's opt-in via
+// ?conv, so keep it out of the main bundle until opened.
 const ConversationView = lazy(() => import('./conversation-view').then((m) => m.ConversationView))
 import { Sidebar } from './sidebar'
 import { usePresence } from './use-presence'
@@ -815,15 +816,12 @@ function App() {
               Retry
             </button>
           </div>
-        ) : viewVal?.kind === 'project' ? (
-          <ProjectHub
-            projectSlug={viewVal.projectSlug}
-            projectPeer={viewVal.projectPeer}
-            onCloseSession={handleCloseSession}
-          />
         ) : showConversation ? (
           <div class="conversation-panel">
             <ConversationView
+              // Key by session so switching sessions fully remounts the store,
+              // WS, and island — no stale messages or echoes bleed across.
+              key={selectedVal!.id}
               sessionId={selectedVal!.id}
               working={!!(selectedVal!.alive && selectedVal!.status?.active)}
             />

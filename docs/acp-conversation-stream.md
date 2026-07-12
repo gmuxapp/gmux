@@ -119,7 +119,9 @@ reconstructs it from the JSONL `text` / `thinking` / `toolCall` content blocks,
 correlating each `toolResult` record back to its `toolCall` by id.
 
 Assistant text and thinking are rendered as **markdown with fenced-code syntax
-highlighting** by the one frontend client (see `apps/gmux-web/src/markdown.ts`).
+highlighting** by the one frontend client — the assistant-ui React island (see
+`apps/gmux-web/src/conversation-island.tsx`, which uses
+`@assistant-ui/react-markdown` + `@assistant-ui/react-syntax-highlighter`).
 Rendering escapes raw HTML and tolerates the incomplete markdown that arrives
 mid-stream.
 

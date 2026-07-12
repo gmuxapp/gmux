@@ -267,7 +267,7 @@ func (s *Server) handleACP(w http.ResponseWriter, r *http.Request) {
 
 	convFile := ""
 	if s.state != nil {
-		convFile = s.state.ConversationFileSnapshot()
+		convFile = s.state.ConversationRefSnapshot()
 	}
 
 	snapshot, ch, snapErr := s.acp.attach(convFile)

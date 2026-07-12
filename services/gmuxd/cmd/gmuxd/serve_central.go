@@ -747,6 +747,16 @@ func serveCentral(stderr io.Writer, replace bool) int {
 		mux.HandleFunc("/v1/sessions/", func(w http.ResponseWriter, r *http.Request) {
 			handleCentralSessionAction(w, r, boot, fanout, converter, peerManager, sessionDirs, gmuxBin)
 		})
+		resolveRunner := func(sessionID string) (string, error) {
+			if e, ok := registryRuntime(boot.Registry, centralstore.SessionID(sessionID)); ok {
+				return e.Endpoint, nil
+			}
+			if _, ok := visibleSession(fanout.Current().Sessions, sessionID); ok {
+				return "", fmt.Errorf("session %s has no socket", sessionID)
+			}
+			return "", fmt.Errorf("session %s not found", sessionID)
+		}
+		proxy := wsproxy.New(resolveRunner, centralSizer{fanout: fanout})
 		mux.HandleFunc("/ws/{sessionID}", func(w http.ResponseWriter, r *http.Request) {
 			sessionID := r.PathValue("sessionID")
 			if peerManager != nil {
@@ -755,16 +765,36 @@ func serveCentral(stderr io.Writer, replace bool) int {
 					return
 				}
 			}
-			proxy := wsproxy.New(func(sessionID string) (string, error) {
-				if e, ok := registryRuntime(boot.Registry, centralstore.SessionID(sessionID)); ok {
-					return e.Endpoint, nil
-				}
-				if _, ok := visibleSession(fanout.Current().Sessions, sessionID); ok {
-					return "", fmt.Errorf("session %s has no socket", sessionID)
-				}
-				return "", fmt.Errorf("session %s not found", sessionID)
-			}, centralSizer{fanout: fanout})
 			proxy.Handler()(w, r)
+		})
+		mux.HandleFunc("/acp/{sessionID}", func(w http.ResponseWriter, r *http.Request) {
+			sessionID := r.PathValue("sessionID")
+			if peerManager != nil {
+				if peer, _ := peerManager.FindPeer(sessionID); peer != nil {
+					http.Error(w, "conversation stream not yet proxied for remote sessions", http.StatusNotImplemented)
+					return
+				}
+			}
+			proxy.ACPHandler()(w, r)
+		})
+		mux.HandleFunc("POST /input/{sessionID}", func(w http.ResponseWriter, r *http.Request) {
+			sessionID := r.PathValue("sessionID")
+			if peerManager != nil {
+				if peer, _ := peerManager.FindPeer(sessionID); peer != nil {
+					http.Error(w, "input not yet proxied for remote sessions", http.StatusNotImplemented)
+					return
+				}
+			}
+			sockPath, err := resolveRunner(sessionID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			if err := discovery.SendInput(r.Context(), sockPath, io.LimitReader(r.Body, 1<<20)); err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 		})
 		mux.HandleFunc("/v1/presence", func(w http.ResponseWriter, r *http.Request) {
 			conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
