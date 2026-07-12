@@ -57,7 +57,7 @@ type command struct {
 
 	// tail
 	tailLines int
-	raw       bool
+	raw       bool // --raw/-e: PTY scrollback instead of conversation markdown
 
 	// send
 	sendText   *string  // literal text to type (nil = none)
@@ -256,12 +256,20 @@ func parseRefOnly(m mode, name string, args []string) (*command, error) {
 	return &command{mode: m, ref: args[0]}, nil
 }
 
+// parseTail handles `gmux tail [-n N] [--raw] <id>`.
+//
+// Default output is the conversation transcript when the session's
+// adapter persists one (markdown from the conversation file), falling
+// back to PTY scrollback otherwise. --raw forces the PTY scrollback
+// view (plain text; the broker renders tail requests through a
+// terminal emulator, so escapes never survive server-side). -e stays
+// as an alias for tmux capture-pane muscle memory.
 func parseTail(args []string) (*command, error) {
 	c := &command{mode: modeTail, tailLines: 100}
 	fs := newFlagSet("tail")
-	fs.IntVar(&c.tailLines, "n", 100, "number of lines to show")
-	fs.BoolVar(&c.raw, "raw", false, "preserve ANSI escapes")
-	fs.BoolVar(&c.raw, "e", false, "preserve ANSI escapes (short)")
+	fs.IntVar(&c.tailLines, "n", 100, "number of lines (or conversation messages) to show")
+	fs.BoolVar(&c.raw, "raw", false, "PTY scrollback instead of conversation markdown")
+	fs.BoolVar(&c.raw, "e", false, "alias of --raw")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return nil, err
@@ -561,7 +569,7 @@ Run a command:
 Sessions (local by default; address a peer with <id>@<peer>):
   gmux ls [--all] [--json]          list sessions
   gmux attach <id>                  reattach to a session
-  gmux tail <id> [-n N] [--raw]     print recent output (snapshot)
+  gmux tail <id> [-n N] [--raw]     print conversation or recent output (snapshot)
   gmux send <id> <text> [Key...]    type text and/or send keys (e.g. Enter, C-c)
   gmux send --wait [--timeout N] <id> <text> [Key...]
                                     ... and block until the triggered turn ends

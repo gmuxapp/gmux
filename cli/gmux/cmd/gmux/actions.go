@@ -360,13 +360,25 @@ func cmdKill(ref string) int {
 
 // cmdTail implements `gmux tail <id> [-n N] [--raw]`.
 //
-// Routes through gmuxd's scrollback broker rather than the per-session
-// Unix socket so the same code path serves four cases uniformly:
-// local-live (broker reads from disk; the runner tees output there),
-// local-dead (broker still reads from disk), peer-live (broker forwards
-// to the owning gmuxd), and peer-dead (forward-then-disk on the peer).
-// Output is raw PTY bytes including ANSI; pipe through your favorite
-// stripper if you want plain text.
+// Default view: when the session's adapter persists a structured
+// conversation file (pi's JSONL under ~/.pi/agent/sessions/), gmuxd
+// reconstructs clean markdown from it — the actual user/assistant
+// exchange — which beats the PTY rendering of a TUI (box-drawing,
+// spinners, viewport truncation) for humans and for agents driving
+// via the CLI. Sessions without a renderable conversation (shell,
+// deleted file, no messages yet) fall back to PTY scrollback
+// transparently, keyed on the daemon's no_conversation error code.
+//
+// --raw (alias -e) forces the PTY scrollback view — the pre-2.1
+// default output. It is plain text either way: tail requests are
+// rendered through a terminal emulator in the broker, so ANSI
+// escapes never survive the server side.
+//
+// Everything routes through gmuxd rather than the per-session Unix
+// socket so the same code path serves local-live, local-dead,
+// peer-live, and peer-dead uniformly (conversation and scrollback
+// requests are forwarded to the owning gmuxd for peer sessions, which
+// is also where the conversation file lives).
 func cmdTail(ref string, n int, raw bool) int {
 	sess, err := resolveSession(ref)
 	if err != nil {
@@ -374,18 +386,109 @@ func cmdTail(ref string, n int, raw bool) int {
 		return 1
 	}
 
+	if !raw {
+		md, outcome := fetchConversation(sess, n)
+		switch outcome {
+		case convServe:
+			if _, err := os.Stdout.Write(md); err != nil {
+				fmt.Fprintln(os.Stderr, "gmux:", err)
+				return 1
+			}
+			return 0
+		case convError:
+			return 1
+		}
+		// convFallback: no renderable conversation — use scrollback.
+	}
+
 	data, code := fetchScrollback(sess, n)
 	if code != 0 {
 		return code
 	}
-	if !raw {
-		data = stripANSI(data)
-	}
+	data = stripANSI(data)
 	if _, err := os.Stdout.Write(data); err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return 1
 	}
 	return 0
+}
+
+// convOutcome is what a /conversation response tells cmdTail to do.
+type convOutcome int
+
+const (
+	convServe    convOutcome = iota // 200: print the markdown body
+	convFallback                    // no conversation: use PTY scrollback
+	convError                       // reported to the user; exit nonzero
+)
+
+// classifyConversationResponse maps gmuxd's /conversation status+body
+// to a tail action. Pure so the fallback contract is unit-testable
+// without a daemon.
+//
+// Every 404 EXCEPT an explicit not_found (session vanished mid-flight)
+// means fallback: no_conversation is the designed signal, and a plain
+// non-JSON 404 is an older gmuxd (or peer) without the endpoint —
+// falling back preserves pre-2.1 tail behavior across version skew
+// instead of failing the command.
+func classifyConversationResponse(status int, body []byte) convOutcome {
+	switch {
+	case status == http.StatusOK:
+		return convServe
+	case status == http.StatusNotFound && errorCode(body) == "not_found":
+		return convError
+	case status == http.StatusNotFound:
+		return convFallback
+	default:
+		return convError
+	}
+}
+
+// errorCode extracts the machine-readable code from a gmuxd error
+// envelope ({"ok":false,"error":{"code":...}}); "" if the body isn't one.
+func errorCode(body []byte) string {
+	var env struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return ""
+	}
+	return env.Error.Code
+}
+
+// fetchConversation asks gmuxd for the session's markdown transcript
+// (last n messages). On convError the user-facing message has already
+// been printed.
+func fetchConversation(sess cliSession, n int) ([]byte, convOutcome) {
+	client := gmuxdClient()
+	url := fmt.Sprintf("%s/v1/sessions/%s/conversation?tail=%d", gmuxdBaseURL(), sess.ID, n)
+	resp, err := client.Get(url)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return nil, convError
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil && !errors.Is(err, io.EOF) {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return nil, convError
+	}
+	outcome := classifyConversationResponse(resp.StatusCode, body)
+	switch outcome {
+	case convServe:
+		return body, convServe
+	case convError:
+		if resp.StatusCode == http.StatusNotFound {
+			fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", displayID(sess))
+		} else {
+			fmt.Fprintf(os.Stderr, "gmux: tail failed: %s: %s\n", resp.Status, extractMessage(body))
+		}
+		return nil, convError
+	default:
+		return nil, convFallback
+	}
 }
 
 // fetchScrollback pulls the last n lines of a session's scrollback from
@@ -645,8 +748,10 @@ func emitSessionsJSON(sessions []cliSession) int {
 }
 
 // stripANSI removes ANSI/VT escape sequences from PTY output so the
-// default `gmux tail` is grep-friendly plain text. `--raw` bypasses
-// this. Handles CSI (ESC [ ... letter), OSC (ESC ] ... BEL/ST), and
+// scrollback view of `gmux tail` is grep-friendly plain text. The
+// broker already renders tail responses through a terminal emulator,
+// so this is belt-and-braces for whatever survives that pass.
+// Handles CSI (ESC [ ... letter), OSC (ESC ] ... BEL/ST), and
 // lone two-byte escapes; this is a pragmatic stripper, not a full
 // terminal emulator.
 func stripANSI(b []byte) []byte {
