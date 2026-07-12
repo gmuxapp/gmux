@@ -256,6 +256,7 @@ A session's displayed state can come from multiple places:
 
 - process lifecycle defaults from gmux itself
 - adapter PTY monitoring via `Monitor()` (a no-op for the hooked agent adapters)
+- runner-tracked OSC 133 prompt marks for `PromptSignaler` adapters (shell: busy on command start, idle when the prompt returns)
 - authoritative agent-hook reports (held file, title, status)
 - direct child callbacks via `PUT /status`
 

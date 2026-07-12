@@ -570,7 +570,7 @@ Sessions (local by default; address a peer with <id>@<peer>):
                                     (--follow-up queues after the current turn;
                                      --steering interjects now; composes with --wait)
   gmux send-keys -t <id> <keys...>  tmux-compatible key sending
-  gmux wait <id> [--timeout N]      block until an agent session is idle
+  gmux wait <id> [--timeout N]      block until the session is idle
        [--for-text S|--for-regex P] ... or until output matches S / P
   gmux kill <id>                    terminate a session
 

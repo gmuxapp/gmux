@@ -214,6 +214,18 @@ Optional lifecycle callbacks: `OnRegister` runs at registration time (return a s
 
 Optional. Marks one-shot invocations (e.g. `pi update`, `pi --version`) that should be exec'd directly instead of wrapped in a session. Implement this for CLI tools with management subcommands.
 
+### `PromptSignaler`
+
+```go
+type PromptSignaler interface {
+    StatusFromPromptMarks() bool
+}
+```
+
+Optional. Opt in to have the **runner** derive the session's busy/idle `Status` from OSC 133 prompt marks ("semantic prompt" sequences) in the PTY output: `Working` flips true when a command starts executing (`133;C`) and false when the command finishes / the next prompt is drawn (`133;D` / `133;A`). The shell adapter implements this — it's what gives shell sessions an idle signal for `gmux wait` and `gmux send --wait`.
+
+Don't combine this with hook- or `Monitor()`-driven status: the two sources would fight over `Status`. The marks come from the user's shell integration, so sessions only report status once marks are actually observed; the tracking lives in the runner (not `Monitor()`) so that a fast command's busy and idle marks arriving in a single PTY read still emit both transitions.
+
 ### `Resumer`
 
 ```go
@@ -260,7 +272,7 @@ An adapter implements only what it needs:
 
 | Adapter | Base | Launchable | ConversationDescriber | ConversationSource | Resumer | Other |
 |---------|------|------------|-----------------------|--------------------|---------|-------|
-| Shell | ✓ | ✓ | ✓ | — | ✓ | CommandTitler, SessionRegistrar, SessionFinalizer |
+| Shell | ✓ | ✓ | ✓ | — | ✓ | CommandTitler, SessionRegistrar, SessionFinalizer, PromptSignaler |
 | Editor | ✓ | ✓ | — | — | — | CommandTitler, SessionRegistrar |
 | Claude | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationOpener, ConversationProber, SessionHookCommand |
 | Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationOpener, ConversationProber, SessionHookCommand |

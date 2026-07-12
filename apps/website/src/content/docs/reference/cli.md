@@ -176,7 +176,10 @@ gmux send --wait a3f20187 'do the thing' Enter        # block until the reply la
 gmux send --wait --timeout 600 a3f20187 'go' Enter    # ...or fail after 600s
 ```
 
-Like `gmux wait`, `--wait` is agent-only and local-only for now.
+Like `gmux wait`, `--wait` works for agent sessions and for shell sessions
+whose shell integration emits OSC 133 prompt marks (see [`gmux
+wait`](#gmux-wait-id)); for a shell it blocks until the command you sent
+finishes and the prompt returns. Local sessions only for now.
 
 For verbatim tmux compatibility there's also `gmux send-keys -t <id> <keys...>`
 (all arguments are key names by default; `-l` sends them as literal text).
@@ -190,8 +193,10 @@ authenticated proxy.
 
 ### `gmux wait <id>`
 
-Block until an **agent** session finishes its current turn (its spinner stops),
-optionally bounded by `--timeout N`.
+Block until the session is **idle**, optionally bounded by `--timeout N`. For
+an agent session, idle means its current turn finished (the spinner stops);
+for a shell session, it means the command finished and the shell is back at a
+fresh prompt.
 
 ```bash
 gmux send a3f20187 'do the thing' Enter
@@ -199,9 +204,10 @@ gmux wait a3f20187
 gmux wait a3f20187 --timeout 600   # or fail after 600s
 ```
 
-The idle signal is the same `Status.Working` flag the UI's spinner consumes,
-so `wait` returns the moment the agent emits its closing message. Exit codes
-(so scripts can branch on the outcome):
+The idle signal is the same `Status.Working` flag the UI's spinner consumes.
+Agents source it from their turn hooks, so `wait` returns the moment the agent
+emits its closing message; shells source it from OSC 133 prompt marks (see
+below). Exit codes (so scripts can branch on the outcome):
 
 - `0` — the agent reached idle, or the output condition matched
 - `2` — the session exited before becoming idle / before its output matched
@@ -222,10 +228,19 @@ unseen between polls (loss is bounded by the scrollback cap, not a poll
 interval). Output conditions work for **every** adapter, shell sessions
 included — unlike the idle wait below.
 
-Plain **shell** sessions have no idle signal, so a plain `gmux wait` (no output
-condition) rejects them with a clear error; use `--for-text`/`--for-regex`, or
-run the command through the blocking piped form (`gmux -- make build <
-/dev/null`) instead. Idle wait is local-only for now (peer support is pending).
+**Shell sessions.** A shell's idle signal comes from OSC 133 prompt marks
+("semantic prompt" sequences): the runner flips the session busy when a
+command starts executing and idle when the next prompt is drawn. The marks
+come from your shell's integration — **fish** emits them out of the box;
+bash and zsh need an integration snippet (the same one used by kitty, VS
+Code, or WezTerm semantic prompts — e.g. for zsh, emit `\e]133;A\a` in
+`precmd` and `\e]133;C\a` in `preexec`). A shell session that has not yet
+emitted any prompt mark has no idle signal, so a plain `gmux wait` (no output
+condition) rejects it with a clear error rather than hanging forever; use
+`--for-text`/`--for-regex`, or run the command through the blocking piped
+form (`gmux -- make build < /dev/null`) instead. The same applies to one-shot
+`gmux -- <cmd>` sessions, which never draw a prompt. Idle wait is local-only
+for now (peer support is pending).
 
 ### `gmux kill <id>`
 

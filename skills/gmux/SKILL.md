@@ -20,7 +20,7 @@ gmux send <id> C-c           # send a control key (interrupt), no text
 gmux send --wait <id> 'text' Enter  # send AND block until the reply is done
 gmux send --follow-up <id> 'text'   # queue a prompt for after the current turn
 gmux send --steering <id> 'text'    # interject a prompt into the current turn
-gmux wait <id>               # block until the agent finishes its turn
+gmux wait <id>               # block until idle (agent turn done / shell at prompt)
 gmux wait <id> --for-text S  # block until S appears in the output
 gmux tail <id> [-n N]        # last N lines of output (ANSI stripped; default 100)
 gmux ls [--json]             # list sessions (--json for machine parsing)
@@ -112,16 +112,21 @@ done
 
 ## Waiting
 
-`gmux wait <id>` blocks until an **agent** session goes idle (turn finished) or
-the session exits, optionally bounded by `--timeout N`. Exit codes:
+`gmux wait <id>` blocks until the session goes **idle** — an agent finishing
+its turn, or a shell finishing its command and returning to a fresh prompt —
+optionally bounded by `--timeout N`. Exit codes:
 
-- `0` agent reached idle
+- `0` session reached idle
 - `2` session exited/died before going idle
 - `3` `--timeout` elapsed
 
-Plain **shell** commands don't emit an idle signal and are rejected, so run
-those blocking instead: `gmux -- make build < /dev/null` exits with the
-command's own status.
+**Shell sessions** are waitable when the shell emits OSC 133 prompt marks
+(fish does by default; bash/zsh need shell integration). `gmux send --wait
+<id> 'make build' Enter` then blocks until the command finishes and the
+prompt returns. A shell that has never emitted a prompt mark has no idle
+signal and is rejected — that includes one-shot `gmux -- <cmd>` sessions —
+so run those blocking instead (`gmux -- make build < /dev/null` exits with
+the command's own status) or use an output condition below.
 
 To wait for specific **output** instead of idle, use `--for-text <substr>` or
 `--for-regex <pattern>` (works for shell sessions too — no grep loop needed):
