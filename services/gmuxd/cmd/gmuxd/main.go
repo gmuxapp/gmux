@@ -535,12 +535,19 @@ func serve(stderr io.Writer) int {
 	// cleanup time keeps the guard correct regardless of whether the swept
 	// dead sessions are still populated in the store by then.
 	persistedKeys := make(map[string]bool)
+	// legacySlugToID resolves v3 projects.json membership keys during the
+	// one-shot v4 migration. Only swept dead/resumable sessions need this:
+	// live sessions re-auto-assign after startup.
+	legacySlugToID := make(map[string]string)
 	if loaded, err := metaStore.Sweep(); err != nil {
 		log.Printf("sessionmeta: sweep failed: %v", err)
 	} else {
 		for _, sess := range loaded {
 			sessions.Upsert(sess)
 			persistedKeys[sess.ID] = true
+			if sess.Slug != "" {
+				legacySlugToID[sess.Slug] = sess.ID
+			}
 		}
 		if n := len(loaded); n > 0 {
 			log.Printf("sessionmeta: restored %d session(s) from %s", n, metaStore.Dir())
@@ -757,7 +764,7 @@ func serve(stderr io.Writer) int {
 
 	// Project manager handles concurrent access to projects.json and
 	// auto-assignment of sessions to projects.
-	projectMgr := projects.NewManager(stateDir)
+	projectMgr := projects.NewManager(stateDir, legacySlugToID)
 	projectRemovalEvents, cancelProjectRemovalEvents := sessions.Subscribe()
 	defer cancelProjectRemovalEvents()
 	go projectMgr.WatchRemovals(projectRemovalEvents)

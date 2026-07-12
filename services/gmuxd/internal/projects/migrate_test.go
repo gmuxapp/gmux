@@ -40,7 +40,11 @@ func TestMigrateV1ToV2(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state, err := Load(dir)
+	state, err := Load(dir, map[string]string{
+		"hub-protocol": "sess-hub",
+		"gmux":         "sess-gmux",
+		"new":          "sess-new",
+	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -66,8 +70,8 @@ func TestMigrateV1ToV2(t *testing.T) {
 	if gmux.Match[1].Path != "~/dev/gmux" {
 		t.Errorf("gmux rule 1: path = %q, want ~/dev/gmux", gmux.Match[1].Path)
 	}
-	if len(gmux.Sessions) != 2 || gmux.Sessions[0] != "hub-protocol" {
-		t.Errorf("gmux sessions = %v", gmux.Sessions)
+	if got, want := fmt.Sprint(gmux.Sessions), "[sess-hub sess-gmux]"; got != want {
+		t.Errorf("gmux sessions = %v, want %s", gmux.Sessions, want)
 	}
 
 	// Item 1: tmp — path outside $HOME stays absolute.
@@ -226,6 +230,56 @@ func TestMigrateRoundtrip(t *testing.T) {
 	b, _ := json.Marshal(loaded)
 	if string(a) != string(b) {
 		t.Errorf("roundtrip mismatch:\n  original: %s\n  loaded:   %s", a, b)
+	}
+}
+
+func TestLoadMigratesV3SessionSlugsToIDs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, fileName)
+	v3 := `{
+  "version": 3,
+  "items": [{
+    "slug": "gmux",
+    "match": [{"path": "~/dev/gmux"}],
+    "sessions": ["sess-existing", "old-slug", "missing-slug", "duplicate-slug", "01234567-89ab-cdef-0123-456789abcdef"]
+  }]
+}`
+	if err := os.WriteFile(path, []byte(v3), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := Load(dir, map[string]string{
+		"old-slug":       "sess-resolved",
+		"duplicate-slug": "sess-existing",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := "[sess-existing sess-resolved 01234567-89ab-cdef-0123-456789abcdef]"
+	if got := fmt.Sprint(state.Items[0].Sessions); got != want {
+		t.Errorf("sessions = %s, want %s", got, want)
+	}
+	backup, err := os.ReadFile(path + ".bak")
+	if err != nil {
+		t.Fatalf("reading migration backup: %v", err)
+	}
+	if string(backup) != v3 {
+		t.Errorf("backup = %q, want original v3 bytes", backup)
+	}
+}
+
+func TestLoadV4DoesNotConvertSessionSlugs(t *testing.T) {
+	dir := t.TempDir()
+	v4 := `{"version":4,"items":[{"slug":"gmux","match":[{"path":"~/dev/gmux"}],"sessions":["typed-slug"]}]}`
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte(v4), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Load(dir, map[string]string{"typed-slug": "sess-resolved"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := fmt.Sprint(state.Items[0].Sessions); got != "[typed-slug]" {
+		t.Errorf("sessions = %s, want [typed-slug]", got)
 	}
 }
 

@@ -23,8 +23,9 @@ func (e *ValidationError) Unwrap() error { return e.Err }
 // auto-assignment of sessions to projects. All mutations go through
 // Manager to ensure atomic load+modify+save.
 type Manager struct {
-	mu       sync.Mutex
-	stateDir string
+	mu             sync.Mutex
+	stateDir       string
+	legacySlugToID map[string]string
 
 	// Broadcast is called after every state mutation that should be
 	// synced to connected clients (via SSE). The caller receives the
@@ -35,15 +36,21 @@ type Manager struct {
 	Broadcast func(state *State)
 }
 
-func NewManager(stateDir string) *Manager {
-	return &Manager{stateDir: stateDir}
+// NewManager creates a manager. legacySlugToID is the slug-to-session-ID
+// table from sessionmeta's startup sweep, used only while loading v3 files.
+func NewManager(stateDir string, legacySlugToID ...map[string]string) *Manager {
+	var resolver map[string]string
+	if len(legacySlugToID) > 0 {
+		resolver = legacySlugToID[0]
+	}
+	return &Manager{stateDir: stateDir, legacySlugToID: resolver}
 }
 
 // Load returns the current project state. Thread-safe.
 func (m *Manager) Load() (*State, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return Load(m.stateDir)
+	return Load(m.stateDir, m.legacySlugToID)
 }
 
 // SeedIfEmpty creates a default "home" project when no projects exist.
@@ -113,7 +120,7 @@ func (m *Manager) Update(fn func(s *State) bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	state, err := Load(m.stateDir)
+	state, err := Load(m.stateDir, m.legacySlugToID)
 	if err != nil {
 		return err
 	}

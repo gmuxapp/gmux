@@ -25,7 +25,7 @@ const fileName = "projects.json"
 
 // currentVersion is the latest projects.json schema version.
 // See migrateState for the evolution history.
-const currentVersion = 3
+const currentVersion = 4
 
 // MatchRule is a single criterion for matching sessions to a project.
 // Exactly one of Path or Remote should be set.
@@ -56,10 +56,12 @@ type MatchRule struct {
 //
 // Validate enforces exactly one of {Match present, Peer present}.
 type Item struct {
-	Slug     string      `json:"slug"`
-	Peer     string      `json:"peer,omitempty"`
-	Match    []MatchRule `json:"match,omitempty"`
-	Sessions []string    `json:"sessions,omitempty"`
+	Slug  string      `json:"slug"`
+	Peer  string      `json:"peer,omitempty"`
+	Match []MatchRule `json:"match,omitempty"`
+	// Sessions holds ordered session IDs only (v4). Hand-edited slug keys are
+	// unsupported; legacy slug keys are converted once during v3 → v4 Load.
+	Sessions []string `json:"sessions,omitempty"`
 	// NodeID is the referenced peer's stable opaque identity (ADR 0007).
 	// Peer (the display name) is the runtime key; NodeID is only the
 	// viewer's liveness anchor (ADR 0017): it keeps a reference matching
@@ -84,8 +86,9 @@ type State struct {
 // Load reads the project state from stateDir/projects.json.
 // Returns an empty state if the file doesn't exist.
 // Older schema versions are migrated in memory; the migrated form is
-// written back on the next Save.
-func Load(stateDir string) (*State, error) {
+// written back on the next Save. legacySlugToID is the slug-to-session-ID
+// table from sessionmeta's startup sweep, used only by the v3 → v4 migration.
+func Load(stateDir string, legacySlugToID ...map[string]string) (*State, error) {
 	path := filepath.Join(stateDir, fileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -98,9 +101,10 @@ func Load(stateDir string) (*State, error) {
 	// Before a real schema upgrade rewrites the file, snapshot the
 	// pre-migration bytes to projects.json.bak so the change is
 	// recoverable (notably across the 2.0 upgrade). Best-effort.
+	onDisk := onDiskVersion(data)
 	original := data
 	backedUp := false
-	if onDiskVersion(data) < currentVersion {
+	if onDisk < currentVersion {
 		backupFile(path, original)
 		backedUp = true
 	}
@@ -116,6 +120,17 @@ func Load(stateDir string) (*State, error) {
 	var s State
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("projects: parsing %s: %w", path, err)
+	}
+
+	if onDisk < 4 {
+		var slugToID map[string]string
+		if len(legacySlugToID) > 0 {
+			slugToID = legacySlugToID[0]
+		}
+		converted, dropped := s.migrateLegacySessionKeys(slugToID)
+		if converted > 0 || dropped > 0 {
+			log.Printf("projects: migrated v3 → v4 session keys (%d converted, %d dropped)", converted, dropped)
+		}
 	}
 
 	// Drop invalid items (e.g. a hand-edited "match": null) instead of
@@ -137,6 +152,41 @@ func Load(stateDir string) (*State, error) {
 		}
 	}
 	return &s, nil
+}
+
+var conversationUUIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// migrateLegacySessionKeys converts v3 slug membership keys to session IDs.
+// It preserves order and keeps only the first occurrence of each resulting ID.
+func (s *State) migrateLegacySessionKeys(slugToID map[string]string) (converted, dropped int) {
+	knownIDs := make(map[string]bool, len(slugToID))
+	for _, id := range slugToID {
+		knownIDs[id] = true
+	}
+	for i := range s.Items {
+		seen := make(map[string]bool, len(s.Items[i].Sessions))
+		keys := s.Items[i].Sessions[:0]
+		for _, key := range s.Items[i].Sessions {
+			id := key
+			if !knownIDs[key] && !paths.IsValidSessionID(key) && !conversationUUIDRe.MatchString(key) {
+				var ok bool
+				id, ok = slugToID[key]
+				if !ok {
+					dropped++
+					continue
+				}
+				converted++
+			}
+			if seen[id] {
+				dropped++
+				continue
+			}
+			seen[id] = true
+			keys = append(keys, id)
+		}
+		s.Items[i].Sessions = keys
+	}
+	return converted, dropped
 }
 
 // sanitize removes items that fail validation, keeping the rest in
