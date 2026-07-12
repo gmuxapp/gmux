@@ -184,6 +184,35 @@ func TestRehydrateProjects_FallbackForMissingSessionmeta(t *testing.T) {
 // projects.json references a key that resolves nowhere: neither
 // sessionmeta nor convIndex knows about it. The function must leave
 // the store untouched and not panic.
+func TestRehydrateProjects_UntitledConversationDoesNotSurfaceUUIDSlug(t *testing.T) {
+	sessions := store.New()
+	const id = "7e41c769-5efc-4d31-b5f4-4b2a7e800a81"
+
+	idx := conversations.New()
+	idx.Upsert(conversations.Info{
+		ConversationID: id,
+		Key:            id,
+		Adapter:        "pi",
+		Cwd:            "/work",
+		Created:        time.Date(2023, 6, 1, 0, 0, 0, 0, time.UTC),
+		ResumeCommand:  []string{"pi", "--resume", id},
+	})
+	state := &projects.State{Items: []projects.Item{{
+		Slug:     "proj",
+		Sessions: []string{id},
+	}}}
+
+	rehydrateProjects(sessions, idx, state)
+
+	got, ok := sessions.Get(id)
+	if !ok {
+		t.Fatal("fallback rehydration did not populate store")
+	}
+	if got.Slug != "" {
+		t.Errorf("Slug = %q, want empty for untitled conversation", got.Slug)
+	}
+}
+
 func TestRehydrateProjects_SkipsUnknownKey(t *testing.T) {
 	sessions := store.New()
 	idx := conversations.New()

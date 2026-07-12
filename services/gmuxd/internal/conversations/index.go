@@ -23,7 +23,8 @@ import (
 // Info holds metadata for a single stored conversation.
 type Info struct {
 	ConversationID string    // adapter-native conversation ID (typically a UUID)
-	Slug           string    // human-readable URL identifier, unique within (adapter)
+	Key            string    // internal lookup key, unique within (adapter)
+	Slug           string    // human-readable URL identifier; empty until titled
 	Adapter        string    // adapter name (claude, codex, pi, shell)
 	Title          string    // display title
 	Cwd            string    // working directory
@@ -34,15 +35,14 @@ type Info struct {
 }
 
 // Index is a concurrency-safe lookup table for stored conversations.
-// It is the authority on slug uniqueness: when two conversations
-// produce the same slug within the same adapter, the index assigns
+// It is the authority on internal-key uniqueness: when two conversations
+// produce the same key within the same adapter, the index assigns
 // -2, -3 suffixes.
 type Index struct {
 	mu sync.RWMutex
-	// byKey maps "adapter/slug" → Info.
+	// byKey maps "adapter/key" → Info.
 	byKey map[string]Info
-	// byConversationID maps "adapter/conversationID" → slug for reverse lookup
-	// (e.g., finding a conversation's slug from the agent's conversation UUID).
+	// byConversationID maps "adapter/conversationID" → internal key for reverse lookup.
 	byConversationID map[string]string
 }
 
@@ -62,46 +62,52 @@ func convKey(adapterName, conversationID string) string {
 	return adapterName + "/" + conversationID
 }
 
-// Lookup returns the conversation info for an (adapter, slug) pair.
+// Lookup returns the conversation info for an (adapter, key) pair.
 // Returns ok=false if no matching conversation exists.
-func (idx *Index) Lookup(adapterName, slug string) (Info, bool) {
+func (idx *Index) Lookup(adapterName, key string) (Info, bool) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	info, ok := idx.byKey[indexKey(adapterName, slug)]
+	info, ok := idx.byKey[indexKey(adapterName, key)]
 	return info, ok
 }
 
-// LookupByConversationID returns the slug for a conversation identified by
-// its agent-native conversation ID. Returns empty string if unknown.
+// LookupByConversationID returns the internal key for a conversation identified
+// by its agent-native conversation ID. Returns empty string if unknown.
 func (idx *Index) LookupByConversationID(adapterName, conversationID string) string {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return idx.byConversationID[convKey(adapterName, conversationID)]
 }
 
-// Upsert adds or updates a conversation in the index. If the slug
+// Upsert adds or updates a conversation in the index. If the internal key
 // collides with an existing entry of the same adapter (but different
 // conversation ID), a -2, -3, ... suffix is appended. Returns the final
-// (possibly suffixed) slug.
+// (possibly suffixed) key.
 func (idx *Index) Upsert(info Info) string {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	// If this conversation ID already has a slug, update in place.
+	// Callers that construct Info directly historically supplied only Slug.
+	// Keep that shorthand for titled conversations.
+	if info.Key == "" {
+		info.Key = info.Slug
+	}
+
+	// If this conversation ID already has a key, update in place.
 	tk := convKey(info.Adapter, info.ConversationID)
 	if existing, ok := idx.byConversationID[tk]; ok {
 		ik := indexKey(info.Adapter, existing)
-		info.Slug = existing
+		info.Key = existing
 		idx.byKey[ik] = info
 		return existing
 	}
 
-	// Assign a unique slug.
-	info.Slug = idx.uniqueSlugLocked(info.Adapter, info.Slug, info.ConversationID)
-	ik := indexKey(info.Adapter, info.Slug)
+	// Assign a unique internal key.
+	info.Key = idx.uniqueSlugLocked(info.Adapter, info.Key, info.ConversationID)
+	ik := indexKey(info.Adapter, info.Key)
 	idx.byKey[ik] = info
-	idx.byConversationID[tk] = info.Slug
-	return info.Slug
+	idx.byConversationID[tk] = info.Key
+	return info.Key
 }
 
 // uniqueSlugLocked returns a slug that doesn't collide within the
@@ -155,9 +161,12 @@ func (idx *Index) Scan(a adapter.Adapter, ref string) string {
 		return ""
 	}
 
-	slug := convInfo.Slug
-	if slug == "" {
-		slug = adapter.Slugify(convInfo.ID)
+	displaySlug := convInfo.Slug
+	key := displaySlug
+	if key == "" {
+		// Untitled conversations still need an internal unique lookup key
+		// for UUID deep links, but that fallback must not surface as a URL slug.
+		key = adapter.Slugify(convInfo.ID)
 	}
 
 	var cmd []string
@@ -170,7 +179,8 @@ func (idx *Index) Scan(a adapter.Adapter, ref string) string {
 
 	info := Info{
 		ConversationID: convInfo.ID,
-		Slug:           slug,
+		Key:            key,
+		Slug:           displaySlug,
 		Adapter:        a.Name(),
 		Title:          convInfo.Title,
 		Cwd:            convInfo.Cwd,
@@ -188,12 +198,12 @@ func (idx *Index) Remove(adapterName, conversationID string) bool {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	tk := convKey(adapterName, conversationID)
-	slug, ok := idx.byConversationID[tk]
+	key, ok := idx.byConversationID[tk]
 	if !ok {
 		return false
 	}
 	delete(idx.byConversationID, tk)
-	delete(idx.byKey, indexKey(adapterName, slug))
+	delete(idx.byKey, indexKey(adapterName, key))
 	return true
 }
 
@@ -224,30 +234,30 @@ func (idx *Index) RemoveByRef(adapterName, ref string) bool {
 	return false
 }
 
-// SlugExists reports whether a slug is taken within an adapter.
-func (idx *Index) SlugExists(adapterName, slug string) bool {
+// SlugExists reports whether an internal key is taken within an adapter.
+func (idx *Index) SlugExists(adapterName, key string) bool {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	_, ok := idx.byKey[indexKey(adapterName, slug)]
+	_, ok := idx.byKey[indexKey(adapterName, key)]
 	return ok
 }
 
-// LookupBySlug searches for a conversation by slug across all kinds.
+// LookupBySlug searches for a conversation by internal key across all kinds.
 // Returns the first match. Used when the caller doesn't know the adapter
-// (e.g., project session arrays that store bare slugs).
-func (idx *Index) LookupBySlug(slug string) (Info, bool) {
+// (e.g., project session arrays that store bare legacy slugs or UUID keys).
+func (idx *Index) LookupBySlug(lookupKey string) (Info, bool) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	for key, info := range idx.byKey {
-		// key is "adapter/slug"; check if the slug suffix matches.
-		if i := len(key) - len(slug); i > 0 && key[i-1] == '/' && key[i:] == slug {
+	for indexedKey, info := range idx.byKey {
+		// indexedKey is "adapter/internal-key"; check its suffix.
+		if i := len(indexedKey) - len(lookupKey); i > 0 && indexedKey[i-1] == '/' && indexedKey[i:] == lookupKey {
 			return info, true
 		}
 	}
 	return Info{}, false
 }
 
-// FindByPrefix returns conversations whose slug starts with the given
+// FindByPrefix returns conversations whose internal key starts with the given
 // prefix, within an adapter. Used for URL resolution when the frontend
 // provides a partial slug (e.g. an abbreviated or legacy session-id
 // prefix); an exact/full id is just the degenerate prefix case.

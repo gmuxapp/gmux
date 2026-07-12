@@ -193,6 +193,30 @@ func TestSlugExists(t *testing.T) {
 	}
 }
 
+func TestUntitledConversationKeepsUUIDKeyButNoDisplaySlug(t *testing.T) {
+	idx := New()
+	const id = "7e41c769-5efc-4d31-b5f4-4b2a7e800a81"
+	key := idx.Upsert(Info{
+		ConversationID: id,
+		Key:            id,
+		Adapter:        "pi",
+	})
+	if key != id {
+		t.Fatalf("Key = %q, want %q", key, id)
+	}
+	info, ok := idx.Lookup("pi", id)
+	if !ok {
+		t.Fatal("Lookup by UUID key failed")
+	}
+	if info.Slug != "" {
+		t.Errorf("Slug = %q, want empty for untitled conversation", info.Slug)
+	}
+	info, ok = idx.FindByPrefix("pi", "7e41c769")
+	if !ok || info.ConversationID != id {
+		t.Errorf("FindByPrefix(UUID) = %+v, %v; want conversation %q", info, ok, id)
+	}
+}
+
 func TestFindByPrefix(t *testing.T) {
 	idx := New()
 	idx.Upsert(Info{ConversationID: "abc-123", Slug: "fix-auth-bug", Adapter: "pi"})
