@@ -1,6 +1,7 @@
 ---
 import heroDesktop from '../assets/hero-desktop.png'
 import heroMobile from '../assets/hero-mobile.png'
+import Ledger from '../components/Ledger.astro'
 import PostHog from '../components/posthog.astro'
 import Topology from '../components/Topology.astro'
 ---
@@ -128,13 +129,13 @@ alias pi='gmux -- pi'</code></pre>
         <p class="section-lead">Agent managers tend to grow inward — built-in tabs, built-in editors, built-in browsers — until they replace your desktop. gmux grows outward: each job goes to a tool you already chose, and everything gmux builds goes into the one job nobody else does.</p>
       </div>
       <div class="two-col-visual">
-        <div class="ledger">
-          <div class="ledger-row"><span class="ledger-what">Tabs, splits, layouts</span><span class="ledger-who">your browser</span></div>
-          <div class="ledger-row"><span class="ledger-what">Editing<code class="ledger-code">gmux edit</code></span><span class="ledger-who">your <code>$EDITOR</code></span></div>
-          <div class="ledger-row"><span class="ledger-what">Network &amp; identity</span><span class="ledger-who">your tailnet</span></div>
-          <div class="ledger-row"><span class="ledger-what">The mobile app</span><span class="ledger-who">the web app</span></div>
-          <div class="ledger-row ledger-row-accent"><span class="ledger-what">Every agent, alive &amp; visible</span><span class="ledger-who">gmux</span></div>
-        </div>
+        <Ledger rows={[
+          { what: 'Tabs, splits, layouts', who: 'your browser' },
+          { what: 'Editing', code: 'gmux edit', who: 'your', whoCode: '$EDITOR' },
+          { what: 'Network & identity', who: 'your tailnet' },
+          { what: 'The mobile app', who: 'the web app' },
+          { what: 'Every agent, alive & visible', who: 'gmux', accent: true },
+        ]} />
       </div>
     </div>
   </section>
@@ -777,65 +778,6 @@ gmux -- &lt;command&gt;</code></pre>
 
   .code-comment {
     color: var(--text-muted);
-  }
-
-  /* Ledger — "fewer things, done well" */
-  .ledger {
-    display: flex;
-    flex-direction: column;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--code-bg);
-    overflow: hidden;
-    min-width: 300px;
-    max-width: 400px;
-    width: 100%;
-  }
-
-  .ledger-row {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.7rem 1.1rem;
-    font-size: 0.92rem;
-  }
-
-  .ledger-row + .ledger-row {
-    border-top: 1px solid var(--border-subtle);
-  }
-
-  .ledger-what {
-    color: var(--text-secondary);
-    display: inline-flex;
-    align-items: baseline;
-    gap: 0.5rem;
-  }
-
-  .ledger-code {
-    font-size: 0.72rem;
-    color: var(--text-muted);
-  }
-
-  .ledger-who {
-    color: var(--text);
-    font-weight: 500;
-    white-space: nowrap;
-  }
-
-  .ledger-row-accent {
-    background: oklch(20% 0.025 195 / 0.35);
-  }
-
-  .ledger-row-accent .ledger-what {
-    color: var(--text);
-  }
-
-  .ledger-row-accent .ledger-who {
-    color: var(--accent);
-    font-family: 'Instrument Sans', sans-serif;
-    font-weight: 700;
-    letter-spacing: -0.04em;
   }
 
   /* Mock notification */
