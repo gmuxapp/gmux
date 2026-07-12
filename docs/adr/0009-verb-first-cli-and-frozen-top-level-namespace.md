@@ -271,7 +271,12 @@ resolved CLI-side from the session's adapter name; adapters that don't
 distinguish the modes fall back to `Enter` for both (shells; agents
 like claude/codex whose `Enter` submits when idle and queues when
 busy). Nothing changes on the wire — the daemon still receives raw
-bytes.
+bytes. pi's follow-up is encoded as Kitty CSI-u Alt+Enter
+(`\x1b[13;3u`) rather than legacy ESC CR, because pi parses CSI-u
+under either negotiated keyboard protocol while ESC CR misparses as
+shift+enter (no submit) on sessions started in the foreground of a
+Kitty-protocol terminal; gmuxd's `--wait` input-must-submit guard
+recognizes the CSI-u Enter alongside `\r`.
 
 Grammar consequences: like `--wait`, the flags are recognized **only
 before the session ref** (the verbatim-content rule above). Because

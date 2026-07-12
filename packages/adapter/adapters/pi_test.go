@@ -193,18 +193,21 @@ func TestPiMonitorNoOp(t *testing.T) {
 
 // TestPiSubmitSeq pins the composer keybinds `gmux send
 // --steering/--follow-up` relies on: steering is Enter (delivered into
-// the current turn immediately), follow-up is Alt+Enter (ESC CR — what
-// xterm-class terminals and the gmux web terminal emit), queued until
-// the current turn ends. Changing these bytes changes what agents
-// receive on those flags, so any intentional change must update this
-// test and the CLI docs together.
+// the current turn immediately), follow-up is Alt+Enter (queued until
+// the current turn ends). Follow-up MUST be the Kitty CSI-u encoding,
+// not legacy ESC CR (\x1b\r): pi parses CSI-u under either negotiated
+// keyboard protocol, while ESC CR turns into shift+enter (newline, no
+// submit) on sessions started in the foreground of a Kitty-protocol
+// terminal. Changing these bytes changes what agents receive on those
+// flags AND must stay in sync with gmuxd's inputSubmits guard — update
+// this test, the daemon guard test, and the CLI docs together.
 func TestPiSubmitSeq(t *testing.T) {
 	pi := NewPi()
 	if seq, ok := pi.SubmitSeq(adapter.SubmitSteering); !ok || seq != "\r" {
 		t.Errorf("SubmitSeq(SubmitSteering) = %q, %v; want \\r, true", seq, ok)
 	}
-	if seq, ok := pi.SubmitSeq(adapter.SubmitFollowUp); !ok || seq != "\x1b\r" {
-		t.Errorf("SubmitSeq(SubmitFollowUp) = %q, %v; want ESC CR, true", seq, ok)
+	if seq, ok := pi.SubmitSeq(adapter.SubmitFollowUp); !ok || seq != "\x1b[13;3u" {
+		t.Errorf("SubmitSeq(SubmitFollowUp) = %q, %v; want Kitty CSI-u alt+enter, true", seq, ok)
 	}
 }
 

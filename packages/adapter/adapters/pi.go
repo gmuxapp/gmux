@@ -147,17 +147,29 @@ func (p *Pi) Launchers() []adapter.Launcher {
 }
 
 // SubmitSeq maps gmux's submit modes to pi's composer keybinds:
-// steering is Enter (\r) — delivered into the current turn immediately —
-// and follow-up is Alt+Enter (ESC CR, \x1b\r) — queued until the current
-// turn ends. Both act as a plain submit when pi is idle. The encodings
-// match what an xterm-class terminal (and the gmux web terminal, see
-// keyboard.ts) emits for those keystrokes.
+// steering is Enter — delivered into the current turn immediately — and
+// follow-up is Alt+Enter — queued until the current turn ends. Both act
+// as a plain submit when pi is idle.
+//
+// Encodings are chosen to parse correctly regardless of which keyboard
+// protocol pi negotiated with its startup-attached terminal:
+//
+//   - Enter is "\r": pi-tui parses a bare CR as "enter" in both its
+//     legacy and Kitty-protocol modes.
+//   - Alt+Enter is the Kitty CSI-u encoding "\x1b[13;3u" (codepoint 13,
+//     modifier 3 = 1+alt), NOT the legacy ESC CR ("\x1b\r"): pi-tui
+//     tries CSI-u parsing unconditionally, so this reads as alt+enter
+//     in both modes — whereas ESC CR is misparsed as shift+enter
+//     (newline, no submit) whenever pi negotiated the Kitty protocol,
+//     which happens for any `gmux -- pi` started in the foreground of a
+//     Kitty-protocol terminal (kitty, ghostty, wezterm, foot). Both
+//     behaviors verified against pi-tui's parseKey and live sessions.
 func (p *Pi) SubmitSeq(mode adapter.SubmitMode) (string, bool) {
 	switch mode {
 	case adapter.SubmitSteering:
 		return "\r", true
 	case adapter.SubmitFollowUp:
-		return "\x1b\r", true
+		return "\x1b[13;3u", true
 	}
 	return "", false
 }

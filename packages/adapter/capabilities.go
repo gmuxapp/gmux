@@ -197,8 +197,12 @@ const (
 // the wrong meaning.
 type PromptSubmitter interface {
 	// SubmitSeq returns the PTY byte sequence that submits a composed
-	// prompt in the given mode, exactly as an xterm-class terminal
-	// would emit for the corresponding keystroke.
+	// prompt in the given mode — the encoding of the corresponding
+	// keystroke that the adapter's tool parses most robustly (which
+	// may differ from what an xterm-class terminal emits; see the pi
+	// adapter's Kitty CSI-u choice). Sequences without a carriage
+	// return must be kept in sync with gmuxd's inputSubmits guard so
+	// `send --wait` keeps accepting them as submitting input.
 	SubmitSeq(mode SubmitMode) (seq string, ok bool)
 }
 

@@ -173,8 +173,8 @@ func TestBuildSendBody(t *testing.T) {
 			name:   "text + follow-up submit seq (pi Alt+Enter)",
 			text:   stringPtr("also do X"),
 			stdin:  noStdin,
-			submit: "\x1b\r",
-			want:   "also do X\x1b\r",
+			submit: "\x1b[13;3u",
+			want:   "also do X\x1b[13;3u",
 		},
 		{
 			name:   "piped stdin + steering submit seq",
@@ -217,7 +217,7 @@ func TestSubmitSeqFor(t *testing.T) {
 		want    string
 	}{
 		{"pi", "steering", "\r"},
-		{"pi", "follow-up", "\x1b\r"}, // Alt+Enter = ESC CR
+		{"pi", "follow-up", "\x1b[13;3u"}, // Alt+Enter, Kitty CSI-u encoding
 		{"shell", "steering", "\r"},
 		{"shell", "follow-up", "\r"},
 		{"claude", "follow-up", "\r"},
