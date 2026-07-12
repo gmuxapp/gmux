@@ -11,9 +11,9 @@ import Topology from '../components/Topology.astro'
   <PostHog />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>gmux — a session manager for AI coding agents</title>
-  <meta name="description" content="Prefix any command with gmux and it shows up in a live browser dashboard. See what every agent is doing at a glance, from your desktop or your phone." />
+  <meta name="description" content="Run your coding agents in persistent gmux sessions and watch them all — every machine, one live dashboard, from your terminal, browser, or phone. Know the moment one is waiting on you." />
   <meta property="og:title" content="gmux — a session manager for AI coding agents" />
-  <meta property="og:description" content="Prefix any command with gmux and it shows up in a live browser dashboard. See what every agent is doing at a glance, from your desktop or your phone." />
+  <meta property="og:description" content="Run your coding agents in persistent gmux sessions and watch them all — every machine, one live dashboard, from your terminal, browser, or phone. Know the moment one is waiting on you." />
   <meta property="og:image" content="https://gmux.app/og.png" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
@@ -47,10 +47,11 @@ import Topology from '../components/Topology.astro'
   <section class="hero">
     <div class="hero-content">
       <div class="hero-text">
-        <h1>Steer every agent from any device</h1>
+        <h1>See every agent. Know who&rsquo;s waiting.</h1>
         <p class="hero-sub">
-          Prefix any command with <code>gmux</code> to open the same live session
-          in your terminal and any number of browsers.
+          <code>gmux -- claude</code> puts the session on a live dashboard.
+          Steer it from your terminal, any browser, or your phone —
+          and see the moment an agent needs you.
         </p>
         <div class="hero-install">
           <div class="install-box">
@@ -104,44 +105,82 @@ import Topology from '../components/Topology.astro'
     </div>
   </section>
 
-  <!-- Networking (Tailscale) -->
+  <!-- Device continuity -->
   <section class="section section-alt">
     <div class="section-inner two-col">
       <div class="two-col-text">
+        <h2>Sessions outlive every screen</h2>
+        <p class="section-lead">Alias your agents once and every run lands in gmux. Close the terminal — the session keeps working. Answer a question from your phone in the checkout line, and the same conversation is back in your terminal when you sit down.</p>
+      </div>
+      <div class="two-col-visual">
+        <pre class="code-snippet"><code>alias claude='gmux -- claude'
+alias codex='gmux -- codex'
+alias pi='gmux -- pi'</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Philosophy: fewer things, done well -->
+  <section class="section">
+    <div class="section-inner two-col two-col-reverse">
+      <div class="two-col-text">
+        <h2>Fewer things, done well</h2>
+        <p class="section-lead">Agent managers tend to grow inward — built-in tabs, built-in editors, built-in browsers — until they replace your desktop. gmux grows outward: each job goes to a tool you already chose, and everything gmux builds goes into the one job nobody else does.</p>
+      </div>
+      <div class="two-col-visual">
+        <div class="ledger">
+          <div class="ledger-row"><span class="ledger-what">Tabs, splits, layouts</span><span class="ledger-who">your browser</span></div>
+          <div class="ledger-row"><span class="ledger-what">Editing<code class="ledger-code">gmux edit</code></span><span class="ledger-who">your <code>$EDITOR</code></span></div>
+          <div class="ledger-row"><span class="ledger-what">Network &amp; identity</span><span class="ledger-who">your tailnet</span></div>
+          <div class="ledger-row"><span class="ledger-what">The mobile app</span><span class="ledger-who">the web app</span></div>
+          <div class="ledger-row ledger-row-accent"><span class="ledger-what">Every agent, alive &amp; visible</span><span class="ledger-who">gmux</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Agents driving agents -->
+  <section class="section section-alt">
+    <div class="section-inner two-col">
+      <div class="two-col-text">
+        <h2>Delegation you can watch</h2>
+        <p class="section-lead">There's no orchestration API to learn — an agent spawns a sub-agent with the same command you'd type. The child shows up on your dashboard like any other session: live, steerable, and interruptible from any device.</p>
+      </div>
+      <div class="two-col-visual">
+        <pre class="code-snippet"><code><span class="code-comment"># an agent hands off a task…</span>
+gmux -d -- pi "Read handoff.md and go."
+
+<span class="code-comment"># …drives it to completion…</span>
+gmux send --wait &lt;id&gt; 'run the tests' Enter
+
+<span class="code-comment"># …while you watch, from anywhere</span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Networking (Tailscale) -->
+  <section class="section">
+    <div class="section-inner two-col two-col-reverse">
+      <div class="two-col-text">
         <h2>Tailscale handles the network</h2>
-        <p class="section-lead">Run <code>gmuxd remote</code> once to enable the built-in Tailscale listener. No open ports to manage, no auth to configure. Only your devices can reach your sessions, over encrypted tunnels.</p>
+        <p class="section-lead">Run <code>gmuxd remote</code> once to enable the built-in Tailscale listener. No open ports, no reverse proxy, no cert dance. Your tailnet gets a device to the door; a per-host token gets it in.</p>
       </div>
       <div class="two-col-visual">
         <pre class="code-snippet"><code><span class="code-comment"># one-time setup</span>
 gmuxd remote
 
 <span class="code-comment"># any time after</span>
-gmux &lt;command&gt;</code></pre>
+gmux -- &lt;command&gt;</code></pre>
       </div>
     </div>
   </section>
 
-  <!-- Terminal compat + persistence -->
-  <section class="section">
-    <div class="section-inner two-col two-col-reverse">
-      <div class="two-col-text">
-        <h2>Sessions outlive your terminal</h2>
-        <p class="section-lead">Add <code>gmux</code> to your shell aliases and start a session from any terminal. Close the terminal whenever you want; the session keeps running headless, available from any browser.</p>
-      </div>
-      <div class="two-col-visual">
-        <pre class="code-snippet"><code>alias claude = "gmux claude"
-alias codex  = "gmux codex"
-alias pi     = "gmux pi"</code></pre>
-      </div>
-    </div>
-  </section>
-
-  <!-- Adapters + notifications -->
+  <!-- Notifications -->
   <section class="section section-alt">
     <div class="section-inner two-col">
       <div class="two-col-text">
         <h2>Know exactly when to check in</h2>
-        <p class="section-lead">Adapters read live state from each agent (codex, Claude, pi, shell) and surface it as status dots. When an agent finishes or needs input, gmux fires a notification on whichever device you're using.</p>
+        <p class="section-lead">gmux tells <em>working</em> apart from <em>waiting on you</em> — across Claude&nbsp;Code, codex, pi, and plain shells. The moment an agent finishes or asks a question, a notification lands on whichever device you're holding.</p>
       </div>
       <div class="two-col-visual">
         <div class="mock-notif">
@@ -703,6 +742,10 @@ alias pi     = "gmux pi"</code></pre>
   .two-col-visual {
     display: flex;
     justify-content: flex-end;
+    /* Grid items default to min-width:auto (= content width), which lets
+       a long snippet line push the whole column wider than the viewport
+       on phones. Allow shrinking; snippets scroll internally instead. */
+    min-width: 0;
   }
 
   .two-col-reverse .two-col-visual {
@@ -722,7 +765,7 @@ alias pi     = "gmux pi"</code></pre>
     margin: 0;
     overflow-x: auto;
     max-width: 100%;
-    min-width: 290px;
+    min-width: min(290px, 100%);
   }
 
   .code-snippet code {
@@ -734,6 +777,65 @@ alias pi     = "gmux pi"</code></pre>
 
   .code-comment {
     color: var(--text-muted);
+  }
+
+  /* Ledger — "fewer things, done well" */
+  .ledger {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--code-bg);
+    overflow: hidden;
+    min-width: 300px;
+    max-width: 400px;
+    width: 100%;
+  }
+
+  .ledger-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.7rem 1.1rem;
+    font-size: 0.92rem;
+  }
+
+  .ledger-row + .ledger-row {
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .ledger-what {
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+
+  .ledger-code {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+
+  .ledger-who {
+    color: var(--text);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .ledger-row-accent {
+    background: oklch(20% 0.025 195 / 0.35);
+  }
+
+  .ledger-row-accent .ledger-what {
+    color: var(--text);
+  }
+
+  .ledger-row-accent .ledger-who {
+    color: var(--accent);
+    font-family: 'Instrument Sans', sans-serif;
+    font-weight: 700;
+    letter-spacing: -0.04em;
   }
 
   /* Mock notification */

@@ -73,13 +73,16 @@ try {
   // ── Desktop: home dashboard ────────────────────────────────────────
   {
     const ctx = await browser.newContext({
-      viewport: { width: 1100, height: 894 },
+      viewport: { width: 1100, height: 830 },
       deviceScaleFactor: 2,
       colorScheme: 'dark',
     })
     const page = await ctx.newPage()
     await page.goto(`${base}/?mock=clean`)
     await page.waitForSelector('.home-section')
+    // The version footer would show the mock fixture's version string;
+    // it's noise in a marketing shot.
+    await page.addStyleTag({ content: '.home-footer { display: none }' })
     await page.waitForTimeout(1200) // fonts + status dots settle
     await page.screenshot({ path: join(outDir, 'hero-desktop.png') })
     await ctx.close()
