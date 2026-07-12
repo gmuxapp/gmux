@@ -208,8 +208,8 @@ func TestReadLegacyPreV2Keys(t *testing.T) {
 	if got.Adapter != "pi" {
 		t.Errorf("Adapter = %q, want %q (legacy \"kind\" fallback)", got.Adapter, "pi")
 	}
-	if want := "/home/u/.pi/agent/sessions/x/conv.jsonl"; got.ConversationFile != want {
-		t.Errorf("SessionFile = %q, want %q (legacy \"session_file\" fallback)", got.ConversationFile, want)
+	if want := "/home/u/.pi/agent/sessions/x/conv.jsonl"; got.ConversationRef != want {
+		t.Errorf("SessionFile = %q, want %q (legacy \"session_file\" fallback)", got.ConversationRef, want)
 	}
 }
 
@@ -218,7 +218,7 @@ func TestReadLegacyPreV2Keys(t *testing.T) {
 func TestWriteEmitsOnlyNewKeys(t *testing.T) {
 	s := newStore(t)
 	sess := sampleSession()
-	sess.ConversationFile = "/tmp/conv.jsonl"
+	sess.ConversationRef = "/tmp/conv.jsonl"
 	if err := s.Write(sess); err != nil {
 		t.Fatalf("Write: %v", err)
 	}

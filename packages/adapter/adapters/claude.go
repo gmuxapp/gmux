@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,11 +18,12 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ adapter.ConversationSource = (*Claude)(nil)
-	_ adapter.ConversationProber = (*Claude)(nil)
-	_ adapter.Launchable         = (*Claude)(nil)
-	_ adapter.ConversationFiler  = (*Claude)(nil)
-	_ adapter.Resumer            = (*Claude)(nil)
+	_ adapter.ConversationSource    = (*Claude)(nil)
+	_ adapter.ConversationProber    = (*Claude)(nil)
+	_ adapter.Launchable            = (*Claude)(nil)
+	_ adapter.ConversationDescriber = (*Claude)(nil)
+	_ adapter.ConversationOpener    = (*Claude)(nil)
+	_ adapter.Resumer               = (*Claude)(nil)
 )
 
 func init() {
@@ -72,7 +74,7 @@ func (c *Claude) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
 
-// --- ConversationFiler ---
+// --- Conversation storage (file-backed: refs are absolute JSONL paths) ---
 
 // ConversationRootDir returns Claude Code's per-project sessions directory.
 func (c *Claude) ConversationRootDir() string {
@@ -85,9 +87,10 @@ func (c *Claude) ConversationRootDir() string {
 
 // ConversationGone anchors deletion detection on ConversationRootDir
 // (~/.claude/projects): if that tree is present, a missing transcript
-// was deleted; if it's absent, the storage is unavailable.
-func (c *Claude) ConversationGone(path string) (gone bool, ok bool) {
-	return adapter.ConversationGoneAtRoot(path, c.ConversationRootDir())
+// was deleted; if it's absent, the storage is unavailable. Refs are
+// conversation-file paths for claude.
+func (c *Claude) ConversationGone(ref string) (gone bool, ok bool) {
+	return adapter.ConversationGoneAtRoot(ref, c.ConversationRootDir())
 }
 
 // encodeClaudeCwd encodes a working directory into Claude Code's directory
@@ -122,11 +125,12 @@ type claudeFirstLine struct {
 	} `json:"message"`
 }
 
-// ParseConversationFile reads a Claude Code JSONL conversation file and returns
-// display metadata.
+// DescribeConversation reads a Claude Code JSONL conversation file (the ref
+// is the absolute file path) and returns display metadata.
 // Title priority: custom-title line > first user message text > "" (no
 // conversation-derived title yet; callers fall back to cwd/adapter).
-func (c *Claude) ParseConversationFile(path string) (*adapter.ConversationInfo, error) {
+func (c *Claude) DescribeConversation(ref string) (*adapter.ConversationInfo, error) {
+	path := ref
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -193,8 +197,9 @@ func (c *Claude) ParseConversationFile(path string) (*adapter.ConversationInfo, 
 			ID:           header.SessionID,
 			Title:        "", // header only, no messages yet
 			Created:      created,
+			LastActivity: fileLastActivity(path),
 			MessageCount: messageCount,
-			FilePath:     path,
+			Ref:          path,
 		}, nil
 	}
 
@@ -204,8 +209,9 @@ func (c *Claude) ParseConversationFile(path string) (*adapter.ConversationInfo, 
 		ID:           firstUser.SessionID,
 		Cwd:          firstUser.Cwd,
 		Created:      created,
+		LastActivity: fileLastActivity(path),
 		MessageCount: messageCount,
-		FilePath:     path,
+		Ref:          path,
 	}
 
 	firstUserText := extractClaudeUserText(firstUser.Message.Content)
@@ -236,13 +242,18 @@ func (c *Claude) ResumeCommand(info *adapter.ConversationInfo) []string {
 	return []string{"claude", "--resume", info.ID}
 }
 
-// CanResume checks if a conversation file has user messages worth resuming.
-func (c *Claude) CanResume(path string) bool {
-	info, err := c.ParseConversationFile(path)
+// CanResume checks if a conversation has user messages worth resuming.
+func (c *Claude) CanResume(ref string) bool {
+	info, err := c.DescribeConversation(ref)
 	if err != nil {
 		return false
 	}
 	return info.MessageCount > 0
+}
+
+// OpenConversation streams the raw JSONL transcript at ref.
+func (c *Claude) OpenConversation(ref string) (io.ReadCloser, error) {
+	return os.Open(ref)
 }
 
 // --- Helpers ---

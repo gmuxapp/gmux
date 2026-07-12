@@ -14,9 +14,9 @@ import (
 type Client struct {
 	ID                     string
 	Conn                   *websocket.Conn
-	DeviceType             string  // "desktop" | "mobile"
-	NotificationPermission string  // "granted" | "denied" | "default" | "unavailable"
-	Visibility             string  // "visible" | "hidden"
+	DeviceType             string // "desktop" | "mobile"
+	NotificationPermission string // "granted" | "denied" | "default" | "unavailable"
+	Visibility             string // "visible" | "hidden"
 	Focused                bool
 	SelectedSessionID      string
 	LastInteraction        float64 // Unix timestamp (seconds)

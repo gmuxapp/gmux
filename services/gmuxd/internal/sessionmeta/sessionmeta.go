@@ -29,9 +29,9 @@
 //     session is dismissed; never on a timer.
 //
 //  2. meta.json mirrors conversation existence. A dead session whose
-//     backing conversation file disappears (the conversations index
+//     backing conversation disappears (the conversations index
 //     reports the removal) has its whole dir retired. Dead sessions
-//     that never had a conversation file (shells) can't key off that
+//     that never had a conversation (shells) can't key off that
 //     signal, so they fall back to an age/count cap on the whole dir.
 //
 // Peer-owned sessions are excluded: the hub re-receives them from
@@ -79,7 +79,7 @@ const (
 const (
 	// DefaultMaxAge / DefaultMaxCount age/count out *conversation-less*
 	// dead sessions (shells): they keep meta + scrollback under the
-	// sessions dir but have no conversation file whose removal could
+	// sessions dir but have no conversation whose removal could
 	// retire them, so they need their own lifecycle.
 	DefaultMaxAge   = 30 * 24 * time.Hour
 	DefaultMaxCount = 200
@@ -102,9 +102,9 @@ const (
 // RetentionPolicy bounds the disk footprint of dead sessions. A zero
 // value for any field disables that limit.
 type RetentionPolicy struct {
-	// MaxAge ages out conversation-less dead sessions (ConversationFile == "")
+	// MaxAge ages out conversation-less dead sessions (ConversationRef == "")
 	// whose effective timestamp is older than now-MaxAge. Sessions with a
-	// conversation file are exempt: their lifecycle is the conversation's
+	// conversation are exempt: their lifecycle is the conversation's
 	// (index-driven removal). Zero means no age limit.
 	MaxAge time.Duration
 	// MaxCount keeps only the newest MaxCount conversation-less dead
@@ -326,7 +326,7 @@ func (s *Store) Read(id string) (store.Session, error) {
 	// meta.json has no schema version, so fall back to the old keys when
 	// the new ones are absent. Write emits only the new keys.
 	// TODO(v2.1): drop this shim.
-	if ps.Adapter == "" || ps.ConversationFile == "" {
+	if ps.Adapter == "" || ps.ConversationRef == "" {
 		var legacy struct {
 			Kind        string `json:"kind"`
 			SessionFile string `json:"session_file"`
@@ -335,8 +335,8 @@ func (s *Store) Read(id string) (store.Session, error) {
 			if ps.Adapter == "" {
 				ps.Adapter = legacy.Kind
 			}
-			if ps.ConversationFile == "" {
-				ps.ConversationFile = legacy.SessionFile
+			if ps.ConversationRef == "" {
+				ps.ConversationRef = legacy.SessionFile
 			}
 		}
 	}
@@ -403,10 +403,10 @@ func (s *Store) WatchRemovals(events <-chan store.Event) {
 //   - non-directory entries under the base dir are ignored
 //
 // After loading, the whole-dir retention cap is applied to
-// conversation-less dead sessions (ConversationFile == ""): corpses older
+// conversation-less dead sessions (ConversationRef == ""): corpses older
 // than MaxAge are aged out, then only the newest MaxCount survive.
-// Sessions with a conversation file are exempt — they are retired only
-// when their conversation file disappears (see the conversations index
+// Sessions with a conversation ref are exempt — they are retired only
+// when their conversation disappears (see the conversations index
 // wiring in cmd/gmuxd). Pruned sessions are not returned. Scrollback
 // space is reclaimed separately by PruneScrollback.
 //
@@ -484,18 +484,18 @@ func effectiveTime(sess store.Session) (time.Time, bool) {
 
 // prune applies the whole-dir age/count cap to conversation-less dead
 // sessions and returns the survivors plus every session that has a
-// conversation file (exempt). Removes the on-disk dir of each loser.
+// conversation ref (exempt). Removes the on-disk dir of each loser.
 // A no-op when the policy disables both limits.
 func (s *Store) prune(loaded []store.Session) []store.Session {
 	if s.retention.MaxAge <= 0 && s.retention.MaxCount <= 0 {
 		return loaded
 	}
 
-	// Partition: sessions with a conversation file are never whole-dir
+	// Partition: sessions with a conversation ref are never whole-dir
 	// pruned here; their lifecycle is index-driven.
 	var exempt, corpses []store.Session
 	for _, sess := range loaded {
-		if sess.ConversationFile != "" {
+		if sess.ConversationRef != "" {
 			exempt = append(exempt, sess)
 		} else {
 			corpses = append(corpses, sess)

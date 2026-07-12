@@ -7,17 +7,18 @@ import (
 )
 
 // ResolveResumeCommand derives the resume command for a dead session from its
-// authoritative conversation file (store.Session.ConversationFile, reported by the agent
-// hook). Returns nil if the session has no recorded file or isn't resumable.
+// authoritative conversation ref (store.Session.ConversationRef, reported by
+// the agent hook). Returns nil if the session has no recorded conversation
+// or isn't resumable.
 func ResolveResumeCommand(sess *store.Session) []string {
-	if sess.ConversationFile == "" {
+	if sess.ConversationRef == "" {
 		return nil
 	}
 	a := adapters.FindByAdapter(sess.Adapter)
 	if a == nil {
 		return nil
 	}
-	filer, ok := a.(adapter.ConversationFiler)
+	desc, ok := a.(adapter.ConversationDescriber)
 	if !ok {
 		return nil
 	}
@@ -25,7 +26,7 @@ func ResolveResumeCommand(sess *store.Session) []string {
 	if !ok {
 		return nil
 	}
-	info, err := filer.ParseConversationFile(sess.ConversationFile)
+	info, err := desc.DescribeConversation(sess.ConversationRef)
 	if err != nil {
 		return nil
 	}

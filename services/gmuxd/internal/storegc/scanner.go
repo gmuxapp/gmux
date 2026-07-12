@@ -1,10 +1,10 @@
-// Package sessionfiles provides periodic maintenance for the session
+// Package storegc provides periodic maintenance for the session
 // store: purging ephemeral dead sessions that were never attributed
-// to a conversation file.
+// to a conversation.
 //
-// File-backed conversation discovery is handled by the conversations
-// package. This package only handles cleanup.
-package sessionfiles
+// Conversation discovery is handled by the conversations package (fed
+// by adapter ConversationSources). This package only handles cleanup.
+package storegc
 
 import (
 	"log"
@@ -51,7 +51,7 @@ func (sc *Scanner) Run(interval time.Duration, stop <-chan struct{}) {
 
 // PurgeStaleSessions removes dead sessions that have no slug and
 // are older than maxAge. These are short-lived sessions that exited
-// without ever being attributed to a conversation file.
+// without ever being attributed to a conversation.
 func (sc *Scanner) PurgeStaleSessions(maxAge time.Duration) {
 	now := time.Now().UTC()
 	for _, s := range sc.store.List() {
@@ -63,7 +63,7 @@ func (sc *Scanner) PurgeStaleSessions(maxAge time.Duration) {
 			continue
 		}
 		if now.Sub(exited) > maxAge {
-			log.Printf("sessionfiles: purging stale session %s (exited %s ago)", s.ID, now.Sub(exited).Round(time.Second))
+			log.Printf("storegc: purging stale session %s (exited %s ago)", s.ID, now.Sub(exited).Round(time.Second))
 			sc.store.Remove(s.ID)
 		}
 	}

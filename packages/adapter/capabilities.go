@@ -2,18 +2,36 @@ package adapter
 
 import (
 	"context"
+	"io"
 	"time"
 )
 
-// ConversationInfo holds metadata extracted from a tool's conversation file.
+// Conversation refs.
+//
+// A conversation ref is an opaque, adapter-scoped locator for one stored
+// conversation. Where a conversation lives is an adapter implementation
+// detail (ADR 0014): today's file-backed adapters (pi, claude, codex) use
+// the absolute conversation-file path as their ref, but a future adapter
+// may store conversations in a database and use a row key or UUID. The
+// daemon MUST treat refs as opaque strings — store them, compare them for
+// equality, and hand them back to the owning adapter — never parse them,
+// stat them, or assume they name a file.
+
+// ConversationInfo holds adapter-parsed metadata for one stored
+// conversation, returned by ConversationDescriber.DescribeConversation.
 type ConversationInfo struct {
-	ID           string
-	Title        string
-	Slug         string // Human-readable, URL-safe session identity. Set by the adapter.
-	Cwd          string
-	Created      time.Time
+	ID      string // adapter-native conversation ID (typically a UUID)
+	Title   string
+	Slug    string // Human-readable, URL-safe session identity. Set by the adapter.
+	Cwd     string
+	Created time.Time
+	// LastActivity is the adapter-reported time of the most recent
+	// activity in this conversation. File-backed adapters derive it from
+	// the conversation file's mtime; that is their implementation detail —
+	// consumers must not stat anything themselves. Zero when unknown.
+	LastActivity time.Time
 	MessageCount int
-	FilePath     string
+	Ref          string // the opaque conversation ref this info was described from
 }
 
 // Event is a partial session state update emitted by an adapter from observed
@@ -37,32 +55,38 @@ type Launchable interface {
 	Launchers() []Launcher
 }
 
-// ConversationFiler is implemented by adapters whose tools write
-// conversation files to disk (pi, claude-code, etc). Used by gmuxd for
-// resumable-conversation discovery and conversation file attribution.
-type ConversationFiler interface {
-	// ConversationRootDir returns the parent directory containing all per-cwd
-	// conversation subdirectories (e.g. ~/.pi/agent/sessions/).
-	// Used by the scanner to enumerate all known working directories.
-	ConversationRootDir() string
-
-	// ConversationDir returns the directory where this tool stores
-	// conversation files for the given cwd. Returns "" if not applicable.
-	ConversationDir(cwd string) string
-
-	// ParseConversationFile reads a conversation file and returns display metadata.
-	// Called by gmuxd to index conversations and resolve resume commands.
-	ParseConversationFile(path string) (*ConversationInfo, error)
+// ConversationDescriber is implemented by adapters whose tool persists
+// conversations (pi, claude-code, codex, ...). It is the daemon's only way
+// to turn an opaque conversation ref into display metadata; how the
+// adapter reads its storage (JSONL file, database row, ...) is private to
+// the adapter.
+type ConversationDescriber interface {
+	// DescribeConversation resolves an opaque conversation ref to display
+	// metadata. Called by gmuxd to index conversations and resolve resume
+	// commands.
+	DescribeConversation(ref string) (*ConversationInfo, error)
 }
 
-// ConversationSink receives conversation-file changes from a ConversationSource.
-// Paths are absolute conversation-file paths the daemon resolves via the adapter's
-// ParseConversationFile.
+// ConversationOpener is implemented by adapters that can stream a stored
+// conversation's raw, adapter-native content (e.g. the JSONL transcript).
+// This is the content seam for derived consumers such as the fulltext
+// search index: enumerate refs via ConversationSource, then open each ref
+// for indexing. The byte format is adapter-specific; consumers that need a
+// normalized schema translate per ADR 0021.
+type ConversationOpener interface {
+	// OpenConversation returns a reader over the conversation's raw
+	// content. The caller must Close it.
+	OpenConversation(ref string) (io.ReadCloser, error)
+}
+
+// ConversationSink receives conversation-ref changes from a ConversationSource.
+// Refs are opaque adapter-scoped locators the daemon resolves via the
+// owning adapter's DescribeConversation.
 type ConversationSink interface {
-	// Upsert reports a conversation file that exists, was created, or changed.
-	Upsert(path string)
-	// Remove reports a conversation file that no longer exists.
-	Remove(path string)
+	// Upsert reports a conversation that exists, was created, or changed.
+	Upsert(ref string)
+	// Remove reports a conversation that no longer exists.
+	Remove(ref string)
 }
 
 // ConversationSource is implemented by adapters that expose a set of
@@ -80,13 +104,13 @@ type ConversationSource interface {
 	WatchConversations(ctx context.Context, sink ConversationSink) error
 }
 
-// ConversationProber is implemented by ConversationFiler adapters that can
-// tell a *deleted* conversation file apart from one whose storage is
+// ConversationProber is implemented by conversation-storing adapters that
+// can tell a *deleted* conversation apart from one whose storage is
 // merely *unavailable* (unmounted home, a tool dir that doesn't exist
-// yet). The startup retention reconcile (services/gmuxd) uses it to
-// retire dead sessions whose backing conversation is genuinely gone
-// without nuking entries when the tool's on-disk layout simply isn't
-// reachable.
+// yet, an unreachable database). The startup retention reconcile
+// (services/gmuxd) uses it to retire dead sessions whose backing
+// conversation is genuinely gone without nuking entries when the tool's
+// storage simply isn't reachable.
 //
 // The distinction is adapter-owned because only the adapter knows which
 // directory anchors "storage is present" for its layout — e.g. the
@@ -95,12 +119,12 @@ type ConversationSource interface {
 // implements the common root-anchored rule; adapters with quirkier
 // layouts may answer differently.
 type ConversationProber interface {
-	// ConversationGone reports whether the conversation file at path was
-	// deleted. ok=false means the answer is undeterminable (storage
-	// unavailable), in which case the caller MUST NOT treat the
-	// conversation as gone. When the file is present, returns
+	// ConversationGone reports whether the conversation identified by the
+	// opaque ref was deleted. ok=false means the answer is undeterminable
+	// (storage unavailable), in which case the caller MUST NOT treat the
+	// conversation as gone. When the conversation is present, returns
 	// (false, true).
-	ConversationGone(path string) (gone bool, ok bool)
+	ConversationGone(ref string) (gone bool, ok bool)
 }
 
 // SessionExtender marks adapters whose agent exposes a native extension/hook
@@ -185,7 +209,8 @@ type Resumer interface {
 	// ResumeCommand returns the command to resume the given session.
 	ResumeCommand(info *ConversationInfo) []string
 
-	// CanResume returns whether a conversation file represents a resumable
-	// session (vs a corrupted/empty/incompatible one).
-	CanResume(path string) bool
+	// CanResume returns whether the conversation identified by the opaque
+	// ref represents a resumable session (vs a corrupted/empty/incompatible
+	// one).
+	CanResume(ref string) bool
 }

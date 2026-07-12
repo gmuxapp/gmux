@@ -278,4 +278,3 @@ func Dir() string {
 func Path() string {
 	return filepath.Join(Dir(), "host.toml")
 }
-

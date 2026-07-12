@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,12 +23,13 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ adapter.ConversationSource = (*Codex)(nil)
-	_ adapter.ConversationProber = (*Codex)(nil)
-	_ adapter.Launchable         = (*Codex)(nil)
-	_ adapter.ConversationFiler  = (*Codex)(nil)
-	_ adapter.SessionHookCommand = (*Codex)(nil)
-	_ adapter.Resumer            = (*Codex)(nil)
+	_ adapter.ConversationSource    = (*Codex)(nil)
+	_ adapter.ConversationProber    = (*Codex)(nil)
+	_ adapter.Launchable            = (*Codex)(nil)
+	_ adapter.ConversationDescriber = (*Codex)(nil)
+	_ adapter.ConversationOpener    = (*Codex)(nil)
+	_ adapter.SessionHookCommand    = (*Codex)(nil)
+	_ adapter.Resumer               = (*Codex)(nil)
 )
 
 func init() {
@@ -89,7 +91,7 @@ func (c *Codex) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
 
-// --- ConversationFiler ---
+// --- Conversation storage (file-backed: refs are absolute JSONL paths) ---
 
 // ConversationRootDir returns Codex's sessions directory.
 func (c *Codex) ConversationRootDir() string {
@@ -103,9 +105,10 @@ func (c *Codex) ConversationRootDir() string {
 // ConversationGone anchors deletion detection on ConversationRootDir
 // (~/.codex/sessions). The date-nested YYYY/MM/DD subtree may be
 // cleaned up around a deleted transcript, so the stable root — not the
-// file's immediate parent — is the right availability anchor.
-func (c *Codex) ConversationGone(path string) (gone bool, ok bool) {
-	return adapter.ConversationGoneAtRoot(path, c.ConversationRootDir())
+// file's immediate parent — is the right availability anchor. Refs are
+// conversation-file paths for codex.
+func (c *Codex) ConversationGone(ref string) (gone bool, ok bool) {
+	return adapter.ConversationGoneAtRoot(ref, c.ConversationRootDir())
 }
 
 // ConversationDir returns today's date-nested directory where Codex writes new
@@ -127,11 +130,12 @@ type codexSessionMeta struct {
 	Cwd       string `json:"cwd"`
 }
 
-// ParseConversationFile reads a Codex JSONL conversation file and returns display
-// metadata.
+// DescribeConversation reads a Codex JSONL conversation file (the ref is the
+// absolute file path) and returns display metadata.
 // Title priority: first user prompt text > "" (no conversation-derived title
 // yet; callers fall back to cwd/adapter).
-func (c *Codex) ParseConversationFile(path string) (*adapter.ConversationInfo, error) {
+func (c *Codex) DescribeConversation(ref string) (*adapter.ConversationInfo, error) {
+	path := ref
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -158,10 +162,11 @@ func (c *Codex) ParseConversationFile(path string) (*adapter.ConversationInfo, e
 	created, _ := time.Parse(time.RFC3339Nano, meta.Timestamp)
 
 	info := &adapter.ConversationInfo{
-		ID:       meta.ID,
-		Cwd:      meta.Cwd,
-		Created:  created,
-		FilePath: path,
+		ID:           meta.ID,
+		Cwd:          meta.Cwd,
+		Created:      created,
+		LastActivity: fileLastActivity(path),
+		Ref:          path,
 	}
 
 	// Scan for user prompts and message count.
@@ -395,7 +400,7 @@ func shellQuote(s string) string {
 // stdin (its SessionStart/Stop input carries session_id, transcript_path, cwd).
 //
 // codex has no title/slug field of its own, so this derives them by parsing the
-// transcript's first user prompt (reusing ParseConversationFile) and reports them as
+// transcript's first user prompt (reusing DescribeConversation) and reports them as
 // the session title + an explicit slug — codex's session_id is a UUID that would
 // slugify into an unreadable URL.
 func CodexHookBodies(eventName string, input []byte) [][]byte {
@@ -461,7 +466,7 @@ func codexSessionBody(input []byte) ([]byte, bool) {
 // codexHookTitle returns a codex session's display title — the first non-system
 // user prompt, truncated — or "" if the transcript has none yet.
 //
-// Unlike ParseConversationFile it early-exits at the first user message instead of
+// Unlike DescribeConversation it early-exits at the first user message instead of
 // reading the whole file. This matters because the hook derives the title on
 // every turn-end (codex blocks on the Stop hook), the title never changes after
 // the first prompt, and the transcript grows each turn: a full re-parse would be
@@ -575,13 +580,18 @@ func (c *Codex) ResumeCommand(info *adapter.ConversationInfo) []string {
 	return []string{"codex", "resume", info.ID}
 }
 
-// CanResume checks if a conversation file has user messages worth resuming.
-func (c *Codex) CanResume(path string) bool {
-	info, err := c.ParseConversationFile(path)
+// CanResume checks if a conversation has user messages worth resuming.
+func (c *Codex) CanResume(ref string) bool {
+	info, err := c.DescribeConversation(ref)
 	if err != nil {
 		return false
 	}
 	return info.MessageCount > 0
+}
+
+// OpenConversation streams the raw JSONL transcript at ref.
+func (c *Codex) OpenConversation(ref string) (io.ReadCloser, error) {
+	return os.Open(ref)
 }
 
 // --- Helpers ---

@@ -49,10 +49,10 @@ func postSessionEvent(t *testing.T, sockPath, body string) {
 	resp.Body.Close()
 }
 
-// TestReconnectReplaysConversationFile checks that a newly-connected /events
+// TestReconnectReplaysConversationRef checks that a newly-connected /events
 // subscriber (a reconnecting daemon) is replayed the bound conversation file, so
 // attribution survives a daemon restart without persisted state.
-func TestReconnectReplaysConversationFile(t *testing.T) {
+func TestReconnectReplaysConversationRef(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not available")
@@ -77,10 +77,10 @@ func TestReconnectReplaysConversationFile(t *testing.T) {
 
 	postSessionEvent(t, sockPath, `{"op":"session","path":`+strconv.Quote(sessFile)+`}`)
 	deadline := time.After(5 * time.Second)
-	for st.ConversationFileSnapshot() != sessFile {
+	for st.ConversationRefSnapshot() != sessFile {
 		select {
 		case <-deadline:
-			t.Fatalf("runner never recorded conversation file; got %q", st.ConversationFileSnapshot())
+			t.Fatalf("runner never recorded conversation file; got %q", st.ConversationRefSnapshot())
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
@@ -150,10 +150,10 @@ func TestSessionEventIsAuthoritative(t *testing.T) {
 	waitFor := func(want string) {
 		t.Helper()
 		deadline := time.After(2 * time.Second)
-		for st.ConversationFileSnapshot() != want {
+		for st.ConversationRefSnapshot() != want {
 			select {
 			case <-deadline:
-				t.Fatalf("runner did not bind to %q; got %q", want, st.ConversationFileSnapshot())
+				t.Fatalf("runner did not bind to %q; got %q", want, st.ConversationRefSnapshot())
 			case <-time.After(20 * time.Millisecond):
 			}
 		}

@@ -212,7 +212,7 @@ func ClaudeHookBodies(input []byte) [][]byte {
 	case "UserPromptSubmit":
 		// /rename fires no hook of its own — it only appends a custom-title
 		// line to the transcript. Refresh the title here (custom-title wins in
-		// ParseConversationFile) so a mid-session rename shows up at the next
+		// DescribeConversation) so a mid-session rename shows up at the next
 		// prompt instead of waiting for the turn to end.
 		if b, ok := claudeSessionBody(in.TranscriptPath, in.SessionID, "", in.SessionTitle); ok {
 			return [][]byte{b, turn("start", "")}
@@ -262,7 +262,7 @@ func claudeTitleSlug(transcriptPath, sessionTitle string) (title, slug string) {
 	if t := strings.TrimSpace(sessionTitle); t != "" {
 		return t, adapter.Slugify(t)
 	}
-	info, err := NewClaude().ParseConversationFile(transcriptPath)
+	info, err := NewClaude().DescribeConversation(transcriptPath)
 	if err != nil || info == nil || info.Title == "" {
 		return "", ""
 	}

@@ -1,10 +1,14 @@
-// Package conversations maintains an index of conversation files
-// discovered on disk. It maps (adapter, slug) to file metadata, enabling
-// URL resolution for dead conversations and (future) fulltext search.
+// Package conversations maintains an index of the conversations each
+// adapter's tool has stored. It maps (adapter, slug) to conversation
+// metadata, enabling URL resolution for dead conversations and (future)
+// fulltext search.
 //
 // The index is populated and kept current by adapter ConversationSources
-// (snapshot at startup, incremental thereafter). It never writes to the
-// session store.
+// (snapshot at startup, incremental thereafter), which emit opaque
+// conversation refs; the index resolves each ref to metadata via the
+// owning adapter's DescribeConversation and never interprets the ref
+// itself (for file-backed adapters it happens to be a path — that is the
+// adapter's detail). It never writes to the session store.
 package conversations
 
 import (
@@ -16,19 +20,20 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter"
 )
 
-// Info holds metadata for a single conversation file.
+// Info holds metadata for a single stored conversation.
 type Info struct {
-	ConversationID string    // full UUID from the conversation file header
+	ConversationID string    // adapter-native conversation ID (typically a UUID)
 	Slug           string    // human-readable URL identifier, unique within (adapter)
 	Adapter        string    // adapter name (claude, codex, pi, shell)
 	Title          string    // display title
 	Cwd            string    // working directory
-	FilePath       string    // absolute path to the conversation file
+	Ref            string    // opaque adapter-scoped conversation ref (a file path for file-backed adapters)
 	ResumeCommand  []string  // command to resume this conversation
 	Created        time.Time // when the conversation started
+	LastActivity   time.Time // adapter-reported most recent activity (zero when unknown)
 }
 
-// Index is a concurrency-safe lookup table for conversation files.
+// Index is a concurrency-safe lookup table for stored conversations.
 // It is the authority on slug uniqueness: when two conversations
 // produce the same slug within the same adapter, the index assigns
 // -2, -3 suffixes.
@@ -132,45 +137,47 @@ func (idx *Index) All() []Info {
 	return out
 }
 
-// ScanFile indexes a single conversation file (snapshot or live update
-// from an adapter ConversationSource). Returns the assigned slug.
-func (idx *Index) ScanFile(a adapter.Adapter, path string) string {
-	sf, ok := a.(adapter.ConversationFiler)
+// Scan indexes a single conversation ref (snapshot or live update from an
+// adapter ConversationSource), resolving it to metadata via the owning
+// adapter's DescribeConversation. Returns the assigned slug.
+func (idx *Index) Scan(a adapter.Adapter, ref string) string {
+	desc, ok := a.(adapter.ConversationDescriber)
 	if !ok {
 		return ""
 	}
 
-	fileInfo, err := sf.ParseConversationFile(path)
+	convInfo, err := desc.DescribeConversation(ref)
 	if err != nil {
 		return ""
 	}
 
-	if fileInfo.Cwd == "" {
+	if convInfo.Cwd == "" {
 		return ""
 	}
 
-	slug := fileInfo.Slug
+	slug := convInfo.Slug
 	if slug == "" {
-		slug = adapter.Slugify(fileInfo.ID)
+		slug = adapter.Slugify(convInfo.ID)
 	}
 
 	var cmd []string
 	if resumer, ok := a.(adapter.Resumer); ok {
-		if !resumer.CanResume(path) {
+		if !resumer.CanResume(ref) {
 			return ""
 		}
-		cmd = resumer.ResumeCommand(fileInfo)
+		cmd = resumer.ResumeCommand(convInfo)
 	}
 
 	info := Info{
-		ConversationID: fileInfo.ID,
+		ConversationID: convInfo.ID,
 		Slug:           slug,
 		Adapter:        a.Name(),
-		Title:          fileInfo.Title,
-		Cwd:            fileInfo.Cwd,
-		FilePath:       path,
+		Title:          convInfo.Title,
+		Cwd:            convInfo.Cwd,
+		Ref:            ref,
 		ResumeCommand:  cmd,
-		Created:        fileInfo.Created,
+		Created:        convInfo.Created,
+		LastActivity:   convInfo.LastActivity,
 	}
 	return idx.Upsert(info)
 }
@@ -190,22 +197,24 @@ func (idx *Index) Remove(adapterName, conversationID string) bool {
 	return true
 }
 
-// RemoveByPath deletes any conversation whose FilePath matches path.
-// Used when a ConversationSource observes a deletion event and we don't have the
-// (adapter, conversationID) handy. Linear walk over the index; that's fine
-// because Remove events are rare (manual `rm`, file rotation) and
-// the index size stays in the hundreds-to-low-thousands range.
-// Returns true if an entry was removed.
+// RemoveByRef deletes the conversation whose (Adapter, Ref) matches.
+// Used when a ConversationSource observes a removal event and we don't have
+// the (adapter, conversationID) handy. Refs are only unique within an
+// adapter (ADR 0022: opaque, adapter-scoped), so the match is scoped to the
+// reporting adapter — two adapters may legitimately use the same ref string.
+// Linear walk over the index; that's fine because Remove events are rare
+// (manual `rm`, file rotation) and the index size stays in the
+// hundreds-to-low-thousands range. Returns true if an entry was removed.
 //
-// Session retirement on file-gone deliberately does NOT hang off this
-// method: an unindexed conversation (parse failure, CanResume=false,
-// empty cwd) still needs retiring when its file disappears, so the
-// watcher-level sink (sources.go) owns that signal instead.
-func (idx *Index) RemoveByPath(path string) bool {
+// Session retirement on conversation-gone deliberately does NOT hang off
+// this method: an unindexed conversation (describe failure,
+// CanResume=false, empty cwd) still needs retiring when it disappears, so
+// the source-level sink (sources.go) owns that signal instead.
+func (idx *Index) RemoveByRef(adapterName, ref string) bool {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	for key, info := range idx.byKey {
-		if info.FilePath != path {
+		if info.Adapter != adapterName || info.Ref != ref {
 			continue
 		}
 		delete(idx.byKey, key)

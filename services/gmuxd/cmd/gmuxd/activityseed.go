@@ -5,26 +5,29 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/packages/scrollback"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
 // activitySeedFor returns an RFC3339 timestamp to seed a rehydrated
-// session's LastActivityAt from the newest durable on-disk activity
-// proxy. Two sources, newest wins:
+// session's LastActivityAt from the newest durable activity proxy. Two
+// sources, newest wins:
 //
-//   - the adapter's conversation file (primary): appended on every
-//     message, so its mtime is an accurate, restart-surviving proxy for
-//     when the session last did something. The path is adapter-supplied
-//     (session.ConversationFile, reported by the agent hook per ADR
-//     0011); the daemon only stats it, so no adapter-specific reseed
-//     logic is needed.
+//   - the adapter-reported conversation freshness (primary): the owning
+//     adapter's DescribeConversation(sess.ConversationRef).LastActivity
+//     (ADR 0022). For file-backed adapters that is the transcript's
+//     mtime — updated on every message — but that is the adapter's
+//     detail; the daemon never stats the ref itself, so a DB-backed
+//     adapter reseeds identically.
 //   - the runner's scrollback tee (generic fallback): every session has
-//     one under the per-session dir, written live by the runner. Covers
-//     plain shells and agent sessions whose conversation file hasn't
-//     appeared yet.
+//     one under the per-session dir, written live by the runner and
+//     owned by the daemon (ADR 0016), so a direct stat is legitimate.
+//     Covers plain shells and agent sessions whose conversation hasn't
+//     been reported yet.
 //
-// Returns "" when neither file yields a usable mtime.
+// Returns "" when neither source yields a usable timestamp.
 //
 // This recovers "last activity" across a daemon restart. An alive
 // session's LastActivityAt is never persisted (only dead sessions land
@@ -35,37 +38,33 @@ import (
 //
 // Note: the store can't tell a restart-rehydrate from a first-ever
 // registration — both arrive with an empty stamp — so a brand-new
-// session is seeded too. That is harmless: its files' mtimes are ~now,
-// which is the same instant the UI would show via the created_at
+// session is seeded too. That is harmless: its activity proxies are
+// ~now, which is the same instant the UI would show via the created_at
 // fallback anyway, and the first real state transition bumps the stamp
 // forward. The one visibly-odd case is resuming an *old* conversation
 // when the scrollback tee failed to open: the seed would then be the old
-// conversation file's mtime (days ago) until the first transition
+// conversation's LastActivity (days ago) until the first transition
 // corrects it. Rare and self-healing, so we accept rather than guard —
 // there is no reliable restart-vs-fresh signal at this layer.
 func activitySeedFor(sess store.Session, sessionDir func(string) string) string {
 	var newest time.Time
-	consider := func(path string) {
-		if path == "" {
-			return
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return
-		}
-		if mt := info.ModTime(); mt.After(newest) {
-			newest = mt
+	if sess.ConversationRef != "" {
+		if desc, ok := adapters.FindByAdapter(sess.Adapter).(adapter.ConversationDescriber); ok {
+			if info, err := desc.DescribeConversation(sess.ConversationRef); err == nil && info.LastActivity.After(newest) {
+				newest = info.LastActivity
+			}
 		}
 	}
-	consider(sess.ConversationFile)
 	if sessionDir != nil && sess.ID != "" {
-		consider(filepath.Join(sessionDir(sess.ID), scrollback.ActiveName))
+		if fi, err := os.Stat(filepath.Join(sessionDir(sess.ID), scrollback.ActiveName)); err == nil && fi.ModTime().After(newest) {
+			newest = fi.ModTime()
+		}
 	}
 	if newest.IsZero() {
 		return ""
 	}
-	// Cap at now: a conversation file with a skewed clock (or one on a
-	// remote filesystem) must not stamp activity in the future.
+	// Cap at now: a conversation on a skewed clock (or a remote
+	// filesystem) must not stamp activity in the future.
 	if now := time.Now(); newest.After(now) {
 		newest = now
 	}

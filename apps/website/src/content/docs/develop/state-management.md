@@ -53,7 +53,7 @@ This means discovery can never race with Register to create duplicate sessions.
 
 ### Agent hook: authoritative live state
 
-Live session state is reported by the agent itself, not inferred by the daemon. The runner injects a gmux hook into the agent (`pi -e`, or codex/claude hooks), and the agent POSTs the held conversation file, title, and status to the runner socket; the runner forwards them over SSE. `gmuxd` records the file on the session (`ConversationFile`). A `/resume` rebind to a different file is just another report. Tools that can't be hooked run without daemon-reported live state — there is no metadata-matching fallback.
+Live session state is reported by the agent itself, not inferred by the daemon. The runner injects a gmux hook into the agent (`pi -e`, or codex/claude hooks), and the agent POSTs the held conversation, title, and status to the runner socket; the runner forwards them over SSE. `gmuxd` records the conversation's ref on the session (`ConversationRef`). A `/resume` rebind to a different conversation is just another report. Tools that can't be hooked run without daemon-reported live state — there is no metadata-matching fallback.
 
 ### Conversation sources: index updates
 

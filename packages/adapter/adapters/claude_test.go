@@ -87,8 +87,8 @@ func TestClaudeImplementsCapabilities(t *testing.T) {
 	if _, ok := a.(adapter.Launchable); !ok {
 		t.Fatal("should implement Launchable")
 	}
-	if _, ok := a.(adapter.ConversationFiler); !ok {
-		t.Fatal("should implement ConversationFiler")
+	if _, ok := a.(adapter.ConversationDescriber); !ok {
+		t.Fatal("should implement ConversationDescriber")
 	}
 	if _, ok := a.(adapter.Resumer); !ok {
 		t.Fatal("should implement Resumer")
@@ -152,7 +152,7 @@ func TestEncodeClaudeCwd(t *testing.T) {
 	}
 }
 
-// --- ParseConversationFile ---
+// --- DescribeConversation ---
 
 func writeClaudeJSONL(t *testing.T, lines ...string) string {
 	t.Helper()
@@ -166,12 +166,12 @@ func writeClaudeJSONL(t *testing.T, lines ...string) string {
 	return path
 }
 
-func TestClaudeParseConversationFileFirstUserMessage(t *testing.T) {
+func TestClaudeDescribeConversationFirstUserMessage(t *testing.T) {
 	path := writeClaudeJSONL(t,
 		`{"parentUuid":null,"type":"user","sessionId":"abc-123","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test","message":{"role":"user","content":[{"type":"text","text":"Fix the auth bug in login.go"}]},"uuid":"u1"}`,
 		`{"parentUuid":"u1","type":"assistant","sessionId":"abc-123","timestamp":"2026-03-15T10:01:00Z","message":{"role":"assistant","content":[{"type":"text","text":"I'll fix that for you."}],"stop_reason":null},"uuid":"a1"}`,
 	)
-	info, err := NewClaude().ParseConversationFile(path)
+	info, err := NewClaude().DescribeConversation(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,13 +192,13 @@ func TestClaudeParseConversationFileFirstUserMessage(t *testing.T) {
 	}
 }
 
-func TestClaudeParseConversationFileCustomTitle(t *testing.T) {
+func TestClaudeDescribeConversationCustomTitle(t *testing.T) {
 	path := writeClaudeJSONL(t,
 		`{"parentUuid":null,"type":"user","sessionId":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp","message":{"role":"user","content":[{"type":"text","text":"Fix the bug"}]},"uuid":"u1"}`,
 		`{"parentUuid":"u1","type":"assistant","sessionId":"abc","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]},"uuid":"a1"}`,
 		`{"type":"custom-title","customTitle":"  Auth refactor  ","sessionId":"abc"}`,
 	)
-	info, _ := NewClaude().ParseConversationFile(path)
+	info, _ := NewClaude().DescribeConversation(path)
 	if info.Title != "Auth refactor" {
 		t.Errorf("expected custom title, got %q", info.Title)
 	}
@@ -209,11 +209,11 @@ func TestClaudeParseConversationFileCustomTitle(t *testing.T) {
 	}
 }
 
-func TestClaudeParseConversationFileQueueOnly(t *testing.T) {
+func TestClaudeDescribeConversationQueueOnly(t *testing.T) {
 	path := writeClaudeJSONL(t,
 		`{"type":"queue-operation","operation":"dequeue","timestamp":"2026-03-15T10:00:00Z","sessionId":"q-123"}`,
 	)
-	info, err := NewClaude().ParseConversationFile(path)
+	info, err := NewClaude().DescribeConversation(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,51 +225,51 @@ func TestClaudeParseConversationFileQueueOnly(t *testing.T) {
 	}
 }
 
-func TestClaudeParseConversationFileStringContent(t *testing.T) {
+func TestClaudeDescribeConversationStringContent(t *testing.T) {
 	path := writeClaudeJSONL(t,
 		`{"type":"user","sessionId":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp","message":{"role":"user","content":"Help me debug this"},"uuid":"u1"}`,
 	)
-	info, _ := NewClaude().ParseConversationFile(path)
+	info, _ := NewClaude().DescribeConversation(path)
 	if info.Title != "Help me debug this" {
 		t.Errorf("expected string content as title, got %q", info.Title)
 	}
 }
 
-func TestClaudeParseConversationFileLongTitleTruncated(t *testing.T) {
+func TestClaudeDescribeConversationLongTitleTruncated(t *testing.T) {
 	long := "Please help me with this very long request that goes on and on about many different things and really should be truncated for the sidebar"
 	path := writeClaudeJSONL(t,
 		`{"type":"user","sessionId":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp","message":{"role":"user","content":[{"type":"text","text":"`+long+`"}]},"uuid":"u1"}`,
 	)
-	info, _ := NewClaude().ParseConversationFile(path)
+	info, _ := NewClaude().DescribeConversation(path)
 	if len(info.Title) > 85 {
 		t.Errorf("title too long: %q", info.Title)
 	}
 }
 
-func TestClaudeParseConversationFileContextRefStripped(t *testing.T) {
+func TestClaudeDescribeConversationContextRefStripped(t *testing.T) {
 	path := writeClaudeJSONL(t,
 		`{"type":"user","sessionId":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp","message":{"role":"user","content":[{"type":"text","text":"@file.go\n<context ref=\"file:///tmp/file.go#L1:10\">\nfunc main() {}\n</context>\nFix the bug in main()"}]},"uuid":"u1"}`,
 	)
-	info, _ := NewClaude().ParseConversationFile(path)
+	info, _ := NewClaude().DescribeConversation(path)
 	// Context block removed, leaves @file.go reference + trailing text
 	if info.Title != "@file.go Fix the bug in main()" {
 		t.Errorf("expected context stripped from title, got %q", info.Title)
 	}
 }
 
-func TestClaudeParseConversationFileEmpty(t *testing.T) {
+func TestClaudeDescribeConversationEmpty(t *testing.T) {
 	path := writeClaudeJSONL(t)
-	_, err := NewClaude().ParseConversationFile(path)
+	_, err := NewClaude().DescribeConversation(path)
 	if err == nil {
 		t.Fatal("expected error for empty file")
 	}
 }
 
-func TestClaudeParseConversationFileNoSessionID(t *testing.T) {
+func TestClaudeDescribeConversationNoSessionID(t *testing.T) {
 	path := writeClaudeJSONL(t,
 		`{"type":"unknown","data":"something"}`,
 	)
-	_, err := NewClaude().ParseConversationFile(path)
+	_, err := NewClaude().DescribeConversation(path)
 	if err != errNotSession {
 		t.Errorf("expected errNotSession, got %v", err)
 	}

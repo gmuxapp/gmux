@@ -156,21 +156,17 @@ Implement this if the adapter should contribute launch presets to the UI.
 - return none by not implementing the interface at all
 - remember that launch availability is controlled separately by the required `Discover()` method
 
-### `ConversationFiler`
+### `ConversationDescriber`
 
 ```go
-type ConversationFiler interface {
-    ConversationRootDir() string
-    ConversationDir(cwd string) string
-    ParseConversationFile(path string) (*ConversationInfo, error)
+type ConversationDescriber interface {
+    DescribeConversation(ref string) (*ConversationInfo, error)
 }
 ```
 
-Implement this if your tool writes session or conversation files to disk.
+Implement this if your tool persists conversations gmux should be able to inspect. Conversations are located by an opaque, adapter-scoped **ref** string: *you* pick the locator (the file-backed adapters use the transcript's absolute path; a database-backed tool would use a row key or UUID), and gmux never interprets it — it only stores refs and hands them back to you.
 
-- `ConversationRootDir()` returns the root containing all session directories
-- `ConversationDir(cwd)` returns the directory for a particular working directory
-- `ParseConversationFile(path)` extracts display metadata from one file
+`DescribeConversation(ref)` resolves a ref to display metadata: ID, title, slug, cwd, created time, `LastActivity` (freshness — file-backed adapters report the transcript's mtime), and message count. Set `Ref` to the ref you were given so resume commands that embed a locator can use it.
 
 ### `ConversationSource`
 
@@ -181,11 +177,11 @@ type ConversationSource interface {
 }
 ```
 
-Implement this if your tool's conversations live in files (or anywhere else) that gmux should index for URL resolution and search. The adapter owns *how* it discovers them: `SnapshotConversations` reports everything that exists now (synchronous, at startup), and `WatchConversations` streams changes until `ctx` is cancelled. Both report absolute paths to a `ConversationSink` (`Upsert(path)` / `Remove(path)`); the daemon parses each via your `ParseConversationFile`.
+Implement this if your tool's conversations live in files (or anywhere else) that gmux should index for URL resolution and search. The adapter owns *how* it discovers them: `SnapshotConversations` reports everything that exists now (synchronous, at startup), and `WatchConversations` streams changes until `ctx` is cancelled. Both report opaque refs to a `ConversationSink` (`Upsert(ref)` / `Remove(ref)`); the daemon resolves each via your `DescribeConversation`.
 
 File-backed adapters build both on `packages/adapter/filewatch`, a reusable recursive tree watcher, in a few lines each — see `pi.go`. A non-file source (e.g. a database) implements the same interface with a poller or subscription instead.
 
-Note: live session state — title, status, and the held conversation file — is **not** reported here. That flows authoritatively from the agent hook (`SessionExtender` for pi, `SessionHookCommand` for codex/claude); see below and [Adapter Architecture](/develop/adapter-architecture).
+Note: live session state — title, status, and the held conversation — is **not** reported here. That flows authoritatively from the agent hook (`SessionExtender` for pi, `SessionHookCommand` for codex/claude); see below and [Adapter Architecture](/develop/adapter-architecture).
 
 ### `SessionExtender` / `SessionHookCommand`
 
@@ -198,7 +194,17 @@ Only opt in if gmux fully controls the argv — a shell-wrapped launch (`bash -c
 
 ### `ConversationProber`
 
-Optional. Lets the startup retention reconcile distinguish a *deleted* conversation file from *unavailable* storage, so dead sessions are only retired when their conversation is genuinely gone (ADR 0016). The agent adapters implement it via the shared `ConversationGoneAtRoot` helper.
+Optional. Lets the startup retention reconcile distinguish a *deleted* conversation from *unavailable* storage, so dead sessions are only retired when their conversation is genuinely gone (ADR 0016). The file-backed agent adapters implement it via the shared `ConversationGoneAtRoot` helper.
+
+### `ConversationOpener`
+
+```go
+type ConversationOpener interface {
+    OpenConversation(ref string) (io.ReadCloser, error)
+}
+```
+
+Optional. Streams a conversation's raw, adapter-native content (e.g. the JSONL transcript) for derived consumers such as the fulltext search index. The file-backed adapters implement it as `os.Open(ref)`.
 
 ### `SessionRegistrar` / `SessionFinalizer`
 
@@ -213,16 +219,16 @@ Optional. Marks one-shot invocations (e.g. `pi update`, `pi --version`) that sho
 ```go
 type Resumer interface {
     ResumeCommand(info *ConversationInfo) []string
-    CanResume(path string) bool
+    CanResume(ref string) bool
 }
 ```
 
 Implement this if your tool supports resuming previous sessions.
 
-- `CanResume()` filters out invalid or empty files
+- `CanResume(ref)` filters out invalid or empty conversations
 - `ResumeCommand()` tells gmux how to resume a valid session
 
-All dead sessions are resumable. When a session exits, gmuxd checks whether the adapter implements `Resumer` **and** the session has a recorded conversation file (`ConversationFile`, reported by the agent hook). If so, the session's command is replaced with the adapter's resume command (e.g. `["claude", "--resume", "abc"]`). If not, the original launch command is kept as-is, so "resume" simply re-runs the command in the same working directory.
+All dead sessions are resumable. When a session exits, gmuxd checks whether the adapter implements `Resumer` **and** the session has a recorded conversation ref (`ConversationRef`, reported by the agent hook). If so, the session's command is replaced with the adapter's resume command (e.g. `["claude", "--resume", "abc"]`). If not, the original launch command is kept as-is, so "resume" simply re-runs the command in the same working directory.
 
 This means adapters that don't implement `Resumer` still get resume for free: the user clicks resume, a new session starts with the same command and cwd. This is the right behavior for simple tools. Only implement `Resumer` when your tool has native resume support that you want to use instead.
 
@@ -236,19 +242,19 @@ type CommandTitler interface {
 
 Implement this to customize the fallback title derived from the command array. Without it, the store joins the full command (e.g. `pytest -x`). Adapters that use resume commands implement this to avoid titles like `codex resume 019cfb54-…`; the editor adapter shows the edited file's basename.
 
-This only matters when no adapter or shell title has been set yet, which is rare for agent adapters (titles come from the agent hook or conversation file) but common for plain shell sessions.
+This only matters when no adapter or shell title has been set yet, which is rare for agent adapters (titles come from the agent hook or stored conversation) but common for plain shell sessions.
 
 ### Capability composition
 
 An adapter implements only what it needs:
 
-| Adapter | Base | Launchable | ConversationFiler | ConversationSource | Resumer | Other |
-|---------|------|------------|-------------------|--------------------|---------|-------|
+| Adapter | Base | Launchable | ConversationDescriber | ConversationSource | Resumer | Other |
+|---------|------|------------|-----------------------|--------------------|---------|-------|
 | Shell | ✓ | ✓ | ✓ | — | ✓ | CommandTitler, SessionRegistrar, SessionFinalizer |
 | Editor | ✓ | ✓ | — | — | — | CommandTitler, SessionRegistrar |
-| Claude | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationProber, SessionHookCommand |
-| Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationProber, SessionHookCommand |
-| Pi | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationProber, SessionExtender, PassthroughDetector |
+| Claude | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationOpener, ConversationProber, SessionHookCommand |
+| Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationOpener, ConversationProber, SessionHookCommand |
+| Pi | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationOpener, ConversationProber, SessionExtender, PassthroughDetector |
 
 Shell writes a small JSON state file per session under `~/.local/state/gmux/shell-sessions/` and resumes by launching `$SHELL` in the original cwd. The editor adapter (backing `gmux edit`) is a good minimal non-agent example: it matches an internal sentinel command and is ephemeral (auto-dismissed on close).
 
@@ -260,7 +266,7 @@ Write unit tests in `myapp_test.go` next to your adapter. Test `Match()` with di
 
 If the adapter implements `Launchable`, test the returned launcher IDs, labels, and commands.
 
-For adapters with `ConversationFiler`, create temp files in your tool's format and verify `ParseConversationFile()` extracts the expected metadata.
+For adapters with `ConversationDescriber`, create temp conversations in your tool's format and verify `DescribeConversation()` extracts the expected metadata.
 
 For the full end-to-end pipeline (launch → file attribution → title → resume), add integration tests that run real processes through gmuxd. See [Integration Tests](/develop/integration-tests) for the harness, patterns, and gotchas.
 

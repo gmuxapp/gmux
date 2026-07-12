@@ -28,10 +28,10 @@ That split is why the adapter system is a set of small interfaces instead of one
 | PTY output monitoring | `gmux` | `Adapter.Monitor()` |
 | Child self-report API | `gmux` | Unix socket HTTP endpoints |
 | Launch menu discovery | `gmuxd` | `Launchable` + compiled adapter set |
-| Conversation file discovery | `gmuxd` | `ConversationFiler` |
+| Conversation metadata resolution | `gmuxd` | `ConversationDescriber` |
 | Live session state | runner → `gmuxd` | agent hook (`SessionExtender` / `SessionHookCommand`) |
 | Conversation discovery | `gmuxd` | `ConversationSource` (snapshot + watch) |
-| Resume command derivation | `gmuxd` | `ConversationFiler` + `Resumer` on the session's `ConversationFile` |
+| Resume command derivation | `gmuxd` | `ConversationDescriber` + `Resumer` on the session's `ConversationRef` |
 
 ## Launch lifecycle
 
@@ -111,25 +111,19 @@ The current built-in launcher ordering is simple:
 - non-fallback adapters contribute launchers in adapter registration order
 - shell is appended last
 
-## File-backed adapters
+## Conversation-storing adapters
 
-Some tools write session or conversation files to disk. Those integrations use optional capabilities discovered by `gmuxd`.
+Some tools persist conversations (pi/claude/codex write JSONL files; a future tool might use a database). Those integrations use optional capabilities discovered by `gmuxd`, all keyed by an opaque, adapter-scoped **conversation ref** (ADR 0022): the adapter picks the locator — file-backed adapters use the transcript's absolute path — and everything above the adapter just stores and round-trips the string.
 
-### `ConversationFiler`
+### `ConversationDescriber`
 
 ```go
-type ConversationFiler interface {
-    ConversationRootDir() string
-    ConversationDir(cwd string) string
-    ParseConversationFile(path string) (*ConversationInfo, error)
+type ConversationDescriber interface {
+    DescribeConversation(ref string) (*ConversationInfo, error)
 }
 ```
 
-Use this when a tool stores session state on disk and gmux should be able to discover or inspect it.
-
-- `ConversationRootDir()` returns the root containing all per-project conversation directories
-- `ConversationDir(cwd)` returns the directory for one working directory
-- `ParseConversationFile(path)` extracts display metadata such as ID, title, cwd, created time, and message count
+Use this when a tool stores conversations that gmux should be able to inspect. `DescribeConversation(ref)` resolves a ref to display metadata: ID, title, cwd, created time, last activity, and message count. How the adapter reads its storage (JSONL file, database row) is private to the adapter — including freshness: file-backed adapters report `LastActivity` from the transcript's mtime.
 
 ### `ConversationSource`
 
@@ -140,21 +134,31 @@ type ConversationSource interface {
 }
 ```
 
-Use this so `gmuxd` can index your tool's conversations (for URL resolution and search). The adapter owns discovery: `SnapshotConversations` reports everything that exists now, `WatchConversations` streams changes until `ctx` ends. File-backed adapters build on the shared `filewatch` tree watcher; the daemon parses each reported path via `ParseConversationFile`.
+Use this so `gmuxd` can index your tool's conversations (for URL resolution and search). The adapter owns discovery: `SnapshotConversations` reports everything that exists now, `WatchConversations` streams changes until `ctx` ends. Both report refs to a `ConversationSink` (`Upsert(ref)` / `Remove(ref)`); the daemon resolves each via `DescribeConversation`. File-backed adapters build on the shared `filewatch` tree watcher; a database-backed adapter would poll or subscribe instead.
+
+### `ConversationOpener`
+
+```go
+type ConversationOpener interface {
+    OpenConversation(ref string) (io.ReadCloser, error)
+}
+```
+
+Use this to let derived consumers (e.g. the fulltext search index) stream a conversation's raw, adapter-native content.
 
 ### `Resumer`
 
 ```go
 type Resumer interface {
     ResumeCommand(info *ConversationInfo) []string
-    CanResume(path string) bool
+    CanResume(ref string) bool
 }
 ```
 
 Use this when a finished session can be resumed later.
 
-- `CanResume(path)` filters out invalid or empty files
-- `ResumeCommand(info)` tells gmux how to resume the session when the user clicks it
+- `CanResume(ref)` filters out invalid or empty conversations
+- `ResumeCommand(info)` tells gmux how to resume the session when the user clicks it — if the command embeds a locator (pi's `--session <path>`), take it from `info.Ref`
 
 ## Live state and conversation discovery
 
@@ -162,23 +166,23 @@ These are two separate concerns, with two different owners.
 
 ### Live session state comes from the agent hook
 
-Which running session holds which conversation file — and its title and status —
+Which running session holds which conversation — and its title and status —
 is **not** inferred by the daemon. The runner injects a gmux agent hook
 (`SessionExtender` for pi's `-e` extension; `SessionHookCommand` for codex/claude
-hooks), and the agent reports the held file, title, and status authoritatively
-over the runner socket (`POST /hook/event`; see `docs/runner-hook-protocol.md`
-in the repo). `gmuxd` records the file on the session (`ConversationFile`);
-a `/resume` rebind to a different file is just another hook report. When a tool
-can't be hooked, the session runs without daemon-reported live state — there is
-no metadata-matching fallback.
+hooks), and the agent reports the held conversation, title, and status
+authoritatively over the runner socket (`POST /hook/event`; see
+`docs/runner-hook-protocol.md` in the repo). `gmuxd` records the ref on the
+session (`ConversationRef`); a `/resume` rebind to a different conversation is
+just another hook report. When a tool can't be hooked, the session runs without
+daemon-reported live state — there is no metadata-matching fallback.
 
 ### Conversation discovery via `ConversationSource`
 
-Independently, `gmuxd` indexes every conversation file on disk — including dead
+Independently, `gmuxd` indexes every stored conversation — including dead
 conversations with no running session — for URL resolution and search. Each
-`ConversationFiler` adapter also implements `ConversationSource`: it reports a
-startup snapshot and then streams changes, and the daemon parses each path via
-`ParseConversationFile` into the index. File-backed adapters share the `filewatch`
+`ConversationDescriber` adapter also implements `ConversationSource`: it reports
+a startup snapshot and then streams changes, and the daemon resolves each ref via
+`DescribeConversation` into the index. File-backed adapters share the `filewatch`
 tree watcher; a database-backed tool would poll or subscribe instead. There is
 no daemon-global file monitor.
 
@@ -188,14 +192,14 @@ Sessions transition seamlessly between alive and resumable states.
 
 ### Live → resumable transition
 
-When a session exits, `gmuxd` checks whether its adapter implements `ConversationFiler` + `Resumer` and whether the session has a recorded `ConversationFile` (reported by the agent hook). If so:
+When a session exits, `gmuxd` checks whether its adapter implements `ConversationDescriber` + `Resumer` and whether the session has a recorded `ConversationRef` (reported by the agent hook). If so:
 
 1. the resume command is derived from the adapter's `ResumeCommand()`
 2. `command` is set to the resume command
 3. `resumable` is derived automatically (`!alive && command present`)
 4. the session appears in the sidebar as clickable to resume — no intermediate "exited" state
 
-Sessions without a conversation file keep their original command, so "resume" re-runs it.
+Sessions without a recorded conversation keep their original command, so "resume" re-runs it.
 
 ### Dead sessions survive daemon restarts
 

@@ -351,7 +351,6 @@ func TestListenAddrIPv6(t *testing.T) {
 	}
 }
 
-
 // ── [[peers]] ──
 
 func TestLoadDiscoveryDefaults(t *testing.T) {

@@ -1,6 +1,7 @@
 # ADR 0014: conversation discovery is adapter-owned; no daemon-global file monitor
 
-**Status:** Accepted
+**Status:** Accepted (amended by ADR 0022: the sink/index/session plumbing now
+carries adapter-opaque conversation refs instead of file paths)
 **Date:** 2026-06-21
 **Related:** ADR 0011 (runner-owned session state), ADR 0013 (codex hooks), ADR 0012 (relational storage a non-goal)
 

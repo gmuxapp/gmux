@@ -46,9 +46,11 @@ parts TEXT NOT NULL default '[]',  -- JSON array
 finished_at INTEGER
 ```
 
-The adapter would implement `ConversationFiler` by:
-- Querying `SELECT id, title, message_count, created_at FROM sessions ORDER BY updated_at DESC`
-- Mapping results to `ConversationInfo` structs
+The adapter would implement `ConversationDescriber` (with the session row's `id` as the opaque conversation ref — ADR 0022) by:
+- Querying `SELECT id, title, message_count, updated_at, created_at FROM sessions WHERE id = ?`
+- Mapping results to `ConversationInfo` structs (`updated_at` → `LastActivity`)
+
+Enumeration comes from a `ConversationSource` that snapshots the sessions table and watches the WAL for changes, emitting row-id refs to the sink.
 
 This requires a SQLite dependency. `modernc.org/sqlite` (pure Go, no CGo) is preferred to avoid requiring a C compiler in the build chain.
 

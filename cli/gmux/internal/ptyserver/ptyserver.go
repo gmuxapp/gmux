@@ -572,7 +572,7 @@ const maxInputBytes = 1 << 20 // 1 MiB
 // per-adapter assumptions. The agent reports facts about itself; the runner
 // maps them to sidebar state:
 //
-//	op "session"          — the bound conversation file, id, name (on bind)
+//	op "session"          — the bound conversation ref, id, name (on bind)
 //	op "turn" phase start — the agent loop began (→ working)
 //	op "turn" phase end   — the loop ended with Outcome + title
 //
@@ -596,11 +596,11 @@ type hookEvent struct {
 }
 
 // handleHookEvent applies the authoritative session state an agent's gmux hook
-// reports: the bound conversation file + title + slug on every bind, and
+// reports: the bound conversation ref + title + slug on every bind, and
 // busy/idle/unread/error on every agent-loop transition. There is no
 // inference and no per-adapter branching — the agent tells us exactly what it
 // holds and does, and the runner relays those facts (ADR 0011). State written
-// here (SetConversationFile et al.) is a relay snapshot for /events replay, not
+// here (SetConversationRef et al.) is a relay snapshot for /events replay, not
 // derived or sticky.
 func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 	var ev hookEvent
@@ -613,7 +613,7 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 		// Authoritative bind (e.g. pi's session_start): the file the
 		// agent holds, named and slugged.
 		if ev.Path != "" {
-			s.state.SetConversationFile(ev.Path)
+			s.state.SetConversationRef(ev.Path)
 		}
 		if ev.Name != "" {
 			s.state.SetAdapterTitle(ev.Name)
@@ -781,10 +781,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch := s.state.Subscribe()
 	defer s.state.Unsubscribe(ch)
 
-	// Replay the bound conversation file to this (possibly reconnecting) subscriber
+	// Replay the bound conversation ref to this (possibly reconnecting) subscriber
 	// so a restarted daemon re-learns attribution with no persisted state. A
 	// concurrent update may also arrive on ch; harmless (idempotent).
-	if file := s.state.ConversationFileSnapshot(); file != "" {
+	if file := s.state.ConversationRefSnapshot(); file != "" {
 		if data, err := json.Marshal(map[string]string{"path": file}); err == nil {
 			fmt.Fprintf(w, "event: conversation_file\ndata: %s\n\n", data)
 		}

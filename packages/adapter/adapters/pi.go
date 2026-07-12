@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,13 +17,14 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ adapter.ConversationSource  = (*Pi)(nil)
-	_ adapter.ConversationProber  = (*Pi)(nil)
-	_ adapter.Launchable          = (*Pi)(nil)
-	_ adapter.ConversationFiler   = (*Pi)(nil)
-	_ adapter.Resumer             = (*Pi)(nil)
-	_ adapter.SessionExtender     = (*Pi)(nil)
-	_ adapter.PassthroughDetector = (*Pi)(nil)
+	_ adapter.ConversationSource    = (*Pi)(nil)
+	_ adapter.ConversationProber    = (*Pi)(nil)
+	_ adapter.Launchable            = (*Pi)(nil)
+	_ adapter.ConversationDescriber = (*Pi)(nil)
+	_ adapter.ConversationOpener    = (*Pi)(nil)
+	_ adapter.Resumer               = (*Pi)(nil)
+	_ adapter.SessionExtender       = (*Pi)(nil)
+	_ adapter.PassthroughDetector   = (*Pi)(nil)
 )
 
 // piSubcommands are pi's one-shot CLI verbs (`pi <verb> ...`). pi recognizes
@@ -150,7 +152,7 @@ func (p *Pi) Monitor(_ []byte) *adapter.Event {
 	return nil
 }
 
-// --- ConversationFiler ---
+// --- Conversation storage (file-backed: refs are absolute JSONL paths) ---
 
 // ConversationRootDir returns pi's top-level sessions directory.
 // Respects PI_CODING_AGENT_DIR (pi's own env var for overriding the
@@ -170,9 +172,9 @@ func (p *Pi) ConversationRootDir() string {
 // ConversationGone anchors deletion detection on ConversationRootDir
 // (PI_CODING_AGENT_DIR/sessions or ~/.pi/agent/sessions): present root
 // means a missing conversation file was deleted; absent root means the
-// storage is unavailable.
-func (p *Pi) ConversationGone(path string) (gone bool, ok bool) {
-	return adapter.ConversationGoneAtRoot(path, p.ConversationRootDir())
+// storage is unavailable. Refs are conversation-file paths for pi.
+func (p *Pi) ConversationGone(ref string) (gone bool, ok bool) {
+	return adapter.ConversationGoneAtRoot(ref, p.ConversationRootDir())
 }
 
 // ConversationDir returns pi's session directory for a given cwd.
@@ -189,10 +191,12 @@ func (p *Pi) ConversationDir(cwd string) string {
 	return filepath.Join(root, encoded)
 }
 
-// ParseConversationFile reads a pi JSONL conversation file and returns display metadata.
+// DescribeConversation reads a pi JSONL conversation file (the ref is the
+// absolute file path) and returns display metadata.
 // Title priority: session_info.name > first user message > "" (no
 // conversation-derived title yet; callers fall back to cwd/adapter).
-func (p *Pi) ParseConversationFile(path string) (*adapter.ConversationInfo, error) {
+func (p *Pi) DescribeConversation(ref string) (*adapter.ConversationInfo, error) {
+	path := ref
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -219,10 +223,11 @@ func (p *Pi) ParseConversationFile(path string) (*adapter.ConversationInfo, erro
 	created, _ := time.Parse(time.RFC3339Nano, header.Timestamp)
 
 	info := &adapter.ConversationInfo{
-		ID:       header.ID,
-		Cwd:      header.Cwd,
-		Created:  created,
-		FilePath: path,
+		ID:           header.ID,
+		Cwd:          header.Cwd,
+		Created:      created,
+		LastActivity: fileLastActivity(path),
+		Ref:          path,
 	}
 
 	var name string
@@ -270,16 +275,21 @@ func (p *Pi) ParseConversationFile(path string) (*adapter.ConversationInfo, erro
 }
 
 func (p *Pi) ResumeCommand(info *adapter.ConversationInfo) []string {
-	return []string{"pi", "--session", info.FilePath, "-c"}
+	return []string{"pi", "--session", info.Ref, "-c"}
 }
 
-// CanResume checks if a conversation file is valid and has content worth resuming.
-func (p *Pi) CanResume(path string) bool {
-	info, err := p.ParseConversationFile(path)
+// CanResume checks if a conversation is valid and has content worth resuming.
+func (p *Pi) CanResume(ref string) bool {
+	info, err := p.DescribeConversation(ref)
 	if err != nil {
 		return false
 	}
 	return info.MessageCount > 0
+}
+
+// OpenConversation streams the raw JSONL transcript at ref.
+func (p *Pi) OpenConversation(ref string) (io.ReadCloser, error) {
+	return os.Open(ref)
 }
 
 // --- Helpers ---

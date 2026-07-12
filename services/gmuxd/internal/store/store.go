@@ -65,17 +65,21 @@ type Session struct {
 	TerminalCols   uint16 `json:"terminal_cols,omitempty"`
 	TerminalRows   uint16 `json:"terminal_rows,omitempty"`
 	// Slug is a human-readable stable identifier derived from the
-	// adapter's conversation file slug. Used for URL routing (the frontend
+	// adapter's conversation-derived slug. Used for URL routing (the frontend
 	// falls back to id[:8] when empty) and for matching dead sessions
 	// to project membership arrays. Unique within (adapter, peer).
 	Slug string `json:"slug,omitempty"`
 
-	// ConversationFile is the conversation file this runner authoritatively
-	// writes, as reported by the agent hook (session → file; ADR 0011).
-	// Two live sessions may carry the same ConversationFile when the same
+	// ConversationRef is the opaque, adapter-scoped ref of the conversation
+	// this runner authoritatively writes, as reported by the agent hook
+	// (session → conversation; ADR 0011). The daemon never interprets it —
+	// only the owning adapter does (today's file-backed adapters use the
+	// transcript's absolute path; a DB-backed adapter may use a row key).
+	// Two live sessions may carry the same ConversationRef when the same
 	// conversation is resumed in more than one tab; the frontend groups
 	// by this to warn about a conversation open in multiple runners.
-	ConversationFile string `json:"conversation_file,omitempty"`
+	// The wire/persisted key stays "conversation_file" for compatibility.
+	ConversationRef string `json:"conversation_file,omitempty"`
 
 	// RunnerVersion is the version string of the gmux runner binary that
 	// launched this session. Set by the runner at startup. The frontend
@@ -121,35 +125,35 @@ type Session struct {
 // fields (ShellTitle, AdapterTitle) that are resolved into Title before sending.
 func (s Session) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		ID               string            `json:"id"`
-		Peer             string            `json:"peer,omitempty"`
-		CreatedAt        string            `json:"created_at,omitempty"`
-		Command          []string          `json:"command,omitempty"`
-		Cwd              string            `json:"cwd,omitempty"`
-		Adapter          string            `json:"adapter"`
-		WorkspaceRoot    string            `json:"workspace_root,omitempty"`
-		Remotes          map[string]string `json:"remotes,omitempty"`
-		ParentSessionID  string            `json:"parent_session_id,omitempty"`
-		Alive            bool              `json:"alive"`
-		Pid              int               `json:"pid,omitempty"`
-		ExitCode         *int              `json:"exit_code,omitempty"`
-		StartedAt        string            `json:"started_at,omitempty"`
-		ExitedAt         string            `json:"exited_at,omitempty"`
-		Title            string            `json:"title,omitempty"`
-		Subtitle         string            `json:"subtitle,omitempty"`
-		Status           *Status           `json:"status"`
-		Unread           bool              `json:"unread"`
-		Resumable        bool              `json:"resumable,omitempty"`
-		SocketPath       string            `json:"socket_path,omitempty"`
-		TerminalCols     uint16            `json:"terminal_cols,omitempty"`
-		TerminalRows     uint16            `json:"terminal_rows,omitempty"`
-		Slug             string            `json:"slug,omitempty"`
-		ConversationFile string            `json:"conversation_file,omitempty"`
-		RunnerVersion    string            `json:"runner_version,omitempty"`
-		BinaryHash       string            `json:"binary_hash,omitempty"`
-		ProjectSlug      string            `json:"project_slug,omitempty"`
-		ProjectIndex     int               `json:"project_index,omitempty"`
-		LastActivityAt   string            `json:"last_activity_at,omitempty"`
+		ID              string            `json:"id"`
+		Peer            string            `json:"peer,omitempty"`
+		CreatedAt       string            `json:"created_at,omitempty"`
+		Command         []string          `json:"command,omitempty"`
+		Cwd             string            `json:"cwd,omitempty"`
+		Adapter         string            `json:"adapter"`
+		WorkspaceRoot   string            `json:"workspace_root,omitempty"`
+		Remotes         map[string]string `json:"remotes,omitempty"`
+		ParentSessionID string            `json:"parent_session_id,omitempty"`
+		Alive           bool              `json:"alive"`
+		Pid             int               `json:"pid,omitempty"`
+		ExitCode        *int              `json:"exit_code,omitempty"`
+		StartedAt       string            `json:"started_at,omitempty"`
+		ExitedAt        string            `json:"exited_at,omitempty"`
+		Title           string            `json:"title,omitempty"`
+		Subtitle        string            `json:"subtitle,omitempty"`
+		Status          *Status           `json:"status"`
+		Unread          bool              `json:"unread"`
+		Resumable       bool              `json:"resumable,omitempty"`
+		SocketPath      string            `json:"socket_path,omitempty"`
+		TerminalCols    uint16            `json:"terminal_cols,omitempty"`
+		TerminalRows    uint16            `json:"terminal_rows,omitempty"`
+		Slug            string            `json:"slug,omitempty"`
+		ConversationRef string            `json:"conversation_file,omitempty"`
+		RunnerVersion   string            `json:"runner_version,omitempty"`
+		BinaryHash      string            `json:"binary_hash,omitempty"`
+		ProjectSlug     string            `json:"project_slug,omitempty"`
+		ProjectIndex    int               `json:"project_index,omitempty"`
+		LastActivityAt  string            `json:"last_activity_at,omitempty"`
 	}
 	return json.Marshal(wire{
 		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,
@@ -161,8 +165,8 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		Unread: s.Unread, Resumable: s.Resumable,
 		SocketPath: s.SocketPath, TerminalCols: s.TerminalCols,
 		TerminalRows: s.TerminalRows, Slug: s.Slug,
-		ConversationFile: s.ConversationFile,
-		RunnerVersion:    s.RunnerVersion, BinaryHash: s.BinaryHash,
+		ConversationRef: s.ConversationRef,
+		RunnerVersion:   s.RunnerVersion, BinaryHash: s.BinaryHash,
 		ProjectSlug: s.ProjectSlug, ProjectIndex: s.ProjectIndex,
 		LastActivityAt: s.LastActivityAt,
 	})
@@ -540,38 +544,46 @@ func (s *Store) Reconcile(assignFn func(Session) (slug string, index int)) {
 	}
 }
 
-// RemoveDeadByConversationFile retires every locally-owned, dead session
-// whose ConversationFile points at path, broadcasting session-remove for
-// each and returning the removed IDs. Used when the conversations
-// index reports a conversation file has disappeared: meta.json mirrors
-// conversation existence (ADR 0016), so the backing file going away
-// retires the sidebar entry.
+// RemoveDeadByConversationRef retires every locally-owned, dead session
+// of the given adapter whose ConversationRef matches ref, broadcasting
+// session-remove for each and returning the removed IDs. Used when the
+// conversations index reports a conversation has disappeared: meta.json
+// mirrors conversation existence (ADR 0016), so the backing conversation
+// going away retires the sidebar entry.
 //
 // Guards, all load-bearing:
+//   - Adapter match: refs are only unique within an adapter (ADR 0022:
+//     opaque, adapter-scoped), so adapter A reporting ref "x" deleted must
+//     never retire adapter B's session that happens to carry the same
+//     ref string.
 //   - !Alive: a live runner may still be writing this conversation; its
 //     record is authoritative and must not be torn down here.
 //   - Peer == "": peer-owned records are re-received from the spoke; the
 //     hub doesn't own their lifecycle.
-//   - all matches: the file→session mapping is N:1 (a conversation can be
-//     resumed in several runners), so every dead match is retired.
+//   - all matches: the conversation→session mapping is N:1 (a conversation
+//     can be resumed in several runners), so every dead match is retired.
 //
-// Paths are compared after filepath.Clean so a cosmetic difference
-// (trailing slash, "./") between the watcher-reported path and the
-// hook-reported ConversationFile doesn't defeat the match. Symlinks are not
-// resolved: the file is already gone, so EvalSymlinks couldn't run, and
-// both paths derive from the same real $HOME in practice.
-func (s *Store) RemoveDeadByConversationFile(path string) []string {
-	if path == "" {
+// Refs are compared by canonicalRef: exact equality, except that refs
+// which are rooted paths (today's file-backed adapters) are compared
+// after filepath.Clean so a cosmetic difference (trailing slash, "./")
+// between the source-reported ref and the hook-reported ConversationRef
+// doesn't defeat the match. Opaque refs are never normalized — an
+// adapter may legitimately use "a/../b" and "b" as distinct locators.
+// Symlinks are not resolved: the file is already gone, so EvalSymlinks
+// couldn't run, and both paths derive from the same real $HOME in
+// practice.
+func (s *Store) RemoveDeadByConversationRef(adapterName, ref string) []string {
+	if adapterName == "" || ref == "" {
 		return nil
 	}
-	target := filepath.Clean(path)
+	target := canonicalRef(ref)
 	s.mu.Lock()
 	var removed []string
 	for id, sess := range s.sessions {
-		if sess.Peer != "" || sess.Alive || sess.ConversationFile == "" {
+		if sess.Adapter != adapterName || sess.Peer != "" || sess.Alive || sess.ConversationRef == "" {
 			continue
 		}
-		if filepath.Clean(sess.ConversationFile) != target {
+		if canonicalRef(sess.ConversationRef) != target {
 			continue
 		}
 		delete(s.sessions, id)
@@ -583,6 +595,21 @@ func (s *Store) RemoveDeadByConversationFile(path string) []string {
 		s.broadcast(Event{Type: "session-remove", ID: id})
 	}
 	return removed
+}
+
+// canonicalRef returns the comparison form of a conversation ref (ADR
+// 0022). Refs are opaque, so the daemon must not interpret them — with
+// one narrow, deliberate exception: a ref that is a rooted path is a
+// file-backed adapter's transcript path, where the hook-reported and
+// watcher-reported spellings can differ cosmetically ("./", trailing
+// slash), so those are compared after filepath.Clean. Anything else is
+// returned verbatim: normalizing an opaque ref could conflate locators
+// the adapter considers distinct (e.g. "a/../b" vs "b").
+func canonicalRef(ref string) string {
+	if filepath.IsAbs(ref) {
+		return filepath.Clean(ref)
+	}
+	return ref
 }
 
 // RemoveByPeer removes all sessions belonging to a peer and broadcasts

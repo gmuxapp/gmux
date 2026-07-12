@@ -10,8 +10,8 @@ import (
 
 func TestShellImplementsInterfaces(t *testing.T) {
 	var s adapter.Adapter = NewShell()
-	if _, ok := s.(adapter.ConversationFiler); !ok {
-		t.Fatal("Shell should implement ConversationFiler")
+	if _, ok := s.(adapter.ConversationDescriber); !ok {
+		t.Fatal("Shell should implement ConversationDescriber")
 	}
 	if _, ok := s.(adapter.Resumer); !ok {
 		t.Fatal("Shell should implement Resumer")
@@ -42,9 +42,9 @@ func TestShellWriteAndParseStateFile(t *testing.T) {
 	}
 
 	sh := NewShell()
-	info, err := sh.ParseConversationFile(path)
+	info, err := sh.DescribeConversation(path)
 	if err != nil {
-		t.Fatalf("ParseConversationFile: %v", err)
+		t.Fatalf("DescribeConversation: %v", err)
 	}
 
 	if info.ID != "sess-abc123" {
@@ -56,8 +56,8 @@ func TestShellWriteAndParseStateFile(t *testing.T) {
 	if info.Title != "fish" {
 		t.Errorf("Title = %q, want %q", info.Title, "fish")
 	}
-	if info.FilePath != path {
-		t.Errorf("FilePath = %q, want %q", info.FilePath, path)
+	if info.Ref != path {
+		t.Errorf("FilePath = %q, want %q", info.Ref, path)
 	}
 	// Slug derived from cwd basename.
 	if info.Slug != "project" {
