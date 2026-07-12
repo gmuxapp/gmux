@@ -234,13 +234,15 @@ command starts executing and idle when the next prompt is drawn. The marks
 come from your shell's integration — **fish** emits them out of the box;
 bash and zsh need an integration snippet (the same one used by kitty, VS
 Code, or WezTerm semantic prompts — e.g. for zsh, emit `\e]133;A\a` in
-`precmd` and `\e]133;C\a` in `preexec`). A shell session that has not yet
-emitted any prompt mark has no idle signal, so a plain `gmux wait` (no output
-condition) rejects it with a clear error rather than hanging forever; use
-`--for-text`/`--for-regex`, or run the command through the blocking piped
+`precmd` and `\e]133;C\a` in `preexec`). A *running* shell session that has not
+yet emitted any prompt mark has no idle signal, so a plain `gmux wait` (no
+output condition) rejects it with a clear error rather than hanging forever;
+use `--for-text`/`--for-regex`, or run the command through the blocking piped
 form (`gmux -- make build < /dev/null`) instead. The same applies to one-shot
-`gmux -- <cmd>` sessions, which never draw a prompt. Idle wait is local-only
-for now (peer support is pending).
+`gmux -- <cmd>` sessions, which never draw a prompt — though once any session
+has *exited*, `wait` resolves immediately with exit code `2` (idle includes
+process exit) instead of rejecting. Idle wait is local-only for now (peer
+support is pending).
 
 ### `gmux kill <id>`
 

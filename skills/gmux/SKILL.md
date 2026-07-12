@@ -123,10 +123,11 @@ optionally bounded by `--timeout N`. Exit codes:
 **Shell sessions** are waitable when the shell emits OSC 133 prompt marks
 (fish does by default; bash/zsh need shell integration). `gmux send --wait
 <id> 'make build' Enter` then blocks until the command finishes and the
-prompt returns. A shell that has never emitted a prompt mark has no idle
-signal and is rejected — that includes one-shot `gmux -- <cmd>` sessions —
-so run those blocking instead (`gmux -- make build < /dev/null` exits with
-the command's own status) or use an output condition below.
+prompt returns. A *running* shell that has never emitted a prompt mark has no
+idle signal and is rejected — that includes one-shot `gmux -- <cmd>` sessions
+— so run those blocking instead (`gmux -- make build < /dev/null` exits with
+the command's own status) or use an output condition below. Waiting on any
+session that already *exited* returns `2` immediately.
 
 To wait for specific **output** instead of idle, use `--for-text <substr>` or
 `--for-regex <pattern>` (works for shell sessions too — no grep loop needed):

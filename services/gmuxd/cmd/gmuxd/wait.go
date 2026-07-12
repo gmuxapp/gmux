@@ -59,8 +59,12 @@ import (
 //   - 200 with {reason}: terminal state reached (caller maps to its
 //     own exit code)
 //   - 408 Request Timeout: --timeout deadline elapsed
-//   - 422: session adapter has no idle signal (idle mode only;
-//     output conditions work for every adapter, including shell)
+//   - 422: session has no idle signal (idle mode only; output
+//     conditions work for every adapter, including shell). Only
+//     *live* sessions are rejected — the 422 exists to prevent waits
+//     that could hang forever, and a session that already exited
+//     resolves immediately as "died" instead (idle includes process
+//     exit)
 //   - 404: session not found
 //   - 400: bad timeout, bad regex, or both output conditions at once
 //
@@ -88,6 +92,17 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 	// Output conditions don't need the idle signal: they read the
 	// scrollback tee, which every adapter (including shell) produces.
 	if forText == "" && forRegex == "" && !sessionHasIdleSignal(sess) {
+		// A session that already exited is a resolved wait, not a
+		// missing capability: idle includes process exit, so answer
+		// "died" (same as a dead agent) instead of rejecting with
+		// shell-integration advice that can't help a dead session.
+		// The 422 below only fires for sessions that could otherwise
+		// hang the wait forever — live (or startup-window) sessions
+		// that have never demonstrated an idle signal.
+		if reason, done := terminalReason(sess, false); done {
+			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
+			return
+		}
 		writeError(w, http.StatusUnprocessableEntity, "no_idle_signal", noIdleSignalMessage(sess))
 		return
 	}
@@ -408,7 +423,9 @@ func timeoutChan(r *http.Request) (<-chan time.Time, error) {
 // the input delivery.
 //
 // Contract mirrors handleWait: 200 {reason: idle|died}, 408 on
-// ?timeout=N elapsing, 422 for adapters with no idle signal. One
+// ?timeout=N elapsing, 422 for sessions with no idle signal (the
+// input handler's !Alive => 409 check runs first, so unlike
+// handleWait there is no dead-session case to resolve here). One
 // additional 422 ("input_no_submit") rejects bodies that carry no
 // carriage return: input that doesn't submit never starts a turn, so
 // waiting on it would only ever time out — fail loudly at the edge

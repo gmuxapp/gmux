@@ -370,6 +370,33 @@ func TestWaitRejectsShellSessionsWithoutPromptMarks(t *testing.T) {
 	}
 }
 
+// TestWaitDeadShellWithoutMarksReturnsDied: a shell session that
+// already exited — the one-shot `gmux -d -- make && gmux wait $id`
+// arriving after the command finished — must resolve as "died"
+// (exit code 2, same as a dead agent), not 422 with shell-integration
+// advice that can't help a dead session. The no-idle-signal rejection
+// exists to prevent waits that could hang forever; a dead session
+// resolves immediately, so there is nothing to protect against.
+func TestWaitDeadShellWithoutMarksReturnsDied(t *testing.T) {
+	srv, st, _ := waitTestServer(t)
+	exitCode := 0
+	st.Upsert(store.Session{
+		ID:        "sess-shell-dead",
+		Adapter:   "shell",
+		Alive:     false,
+		ExitCode:  &exitCode,
+		StartedAt: "2026-07-11T00:00:00Z",
+	})
+
+	resp, body := postWait(t, srv, "sess-shell-dead")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "died" {
+		t.Errorf("reason = %v, want died", got)
+	}
+}
+
 // TestWaitShellWithPromptMarksReturnsWhenIdle: a shell session whose
 // runner has observed OSC 133 prompt marks carries a non-nil Status,
 // which is the per-session evidence that an idle signal exists
