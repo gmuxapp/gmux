@@ -255,6 +255,39 @@ could only time out.
 
 [#218]: https://github.com/gmuxapp/gmux/issues/218
 
+## Amendment (2026-07-12): `send --follow-up` / `--steering` — adapter-aware submit
+
+`gmux send` gains two mutually-exclusive behavior modifiers that
+auto-append the session adapter's *submit* keystroke ([#385]):
+`--follow-up` for the queued submit (delivered after the agent's
+current turn; pi: `Alt+Enter`) and `--steering` for the immediate one
+(delivered into the current turn; pi: `Enter`). This keeps submission
+explicit (decision 10) while removing the need to know per-adapter key
+encodings — the follow-up distinction is undiscoverable, and pi's
+`Alt+Enter` (ESC CR) isn't even expressible as a `send` key token.
+
+The mapping is an adapter capability (`adapter.PromptSubmitter`),
+resolved CLI-side from the session's adapter name; adapters that don't
+distinguish the modes fall back to `Enter` for both (shells; agents
+like claude/codex whose `Enter` submits when idle and queues when
+busy). Nothing changes on the wire — the daemon still receives raw
+bytes. pi's follow-up is encoded as Kitty CSI-u Alt+Enter
+(`\x1b[13;3u`) rather than legacy ESC CR, because pi parses CSI-u
+under either negotiated keyboard protocol while ESC CR misparses as
+shift+enter (no submit) on sessions started in the foreground of a
+Kitty-protocol terminal; gmuxd's `--wait` input-must-submit guard
+recognizes the CSI-u Enter alongside `\r`.
+
+Grammar consequences: like `--wait`, the flags are recognized **only
+before the session ref** (the verbatim-content rule above). Because
+the flag owns submission, combining it with trailing key tokens is a
+usage error — `--follow-up … Enter` would double-submit. The flags
+compose with `--wait`; on pi the queued follow-up is processed within
+the same agent loop before idle is reported, so `--wait --follow-up`
+blocks until the queued prompt's reply, per the issue's contract.
+
+[#385]: https://github.com/gmuxapp/gmux/issues/385
+
 ## Amendment (2026-07-06): `edit` joins the top-level namespace
 
 `gmux edit [file]` is added as a top-level verb. It cannot live under a

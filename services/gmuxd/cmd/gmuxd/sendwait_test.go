@@ -207,6 +207,59 @@ func TestSendWaitRejectsNonSubmittingInput(t *testing.T) {
 	}
 }
 
+// TestSendWaitAcceptsKittyEnterSubmit is the regression test for
+// `gmux send --follow-up --wait` on pi: the follow-up submit is the
+// Kitty CSI-u encoding of Alt+Enter (\x1b[13;3u), which contains no
+// carriage return. The input_no_submit guard must recognize it as a
+// submit — rejecting it would break the flag composition the pi
+// adapter's SubmitSeq deliberately produces.
+func TestSendWaitAcceptsKittyEnterSubmit(t *testing.T) {
+	const id = "sess-kitty"
+	srv, st := sendWaitTestServer(t, func(st *store.Store) {
+		upsertAgent(st, id, true, &store.Status{Working: true})
+		upsertAgent(st, id, true, &store.Status{Working: false})
+	})
+	upsertAgent(st, id, true, &store.Status{Working: false})
+
+	resp, body := postInput(t, srv, id+"/input?wait=idle&timeout=2&body=prompt%1B%5B13%3B3u")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (CSI-u Enter must count as a submit)", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "idle" {
+		t.Errorf("reason = %v, want idle", got)
+	}
+}
+
+// TestInputSubmits pins the daemon's definition of "this input can
+// start a turn": a carriage return anywhere (xterm Enter, legacy
+// Alt+Enter = ESC CR) or a Kitty CSI-u Enter sequence (any modifier /
+// event-type shape). Non-Enter CSI-u keys and bare newlines must NOT
+// count — they never submit, so a --wait on them could only time out.
+func TestInputSubmits(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"plain Enter", "prompt\r", true},
+		{"legacy alt+enter (ESC CR)", "prompt\x1b\r", true},
+		{"kitty alt+enter", "prompt\x1b[13;3u", true},
+		{"kitty bare enter", "prompt\x1b[13u", true},
+		{"kitty enter with event type", "prompt\x1b[13;3:1u", true},
+		{"bare newline is literal text", "prompt\n", false},
+		{"no submit at all", "prompt", false},
+		{"kitty non-enter key (alt+a)", "prompt\x1b[97;3u", false},
+		{"csi-u-looking text without ESC", "prompt[13;3u", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := inputSubmits([]byte(tc.body)); got != tc.want {
+				t.Errorf("inputSubmits(%q) = %v, want %v", tc.body, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestSendWaitRejectsUnknownWaitMode: a typo'd wait mode (wait=true,
 // wait=1, ...) must fail loudly rather than silently degrading to
 // fire-and-forget — the caller believes it waited for the reply.

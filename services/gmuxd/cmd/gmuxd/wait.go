@@ -430,9 +430,9 @@ func handleInputWait(w http.ResponseWriter, r *http.Request, sessions *store.Sto
 			"the "+sess.Adapter+" adapter does not emit an idle signal; --wait is only supported for agent sessions")
 		return
 	}
-	if !bytes.ContainsRune(body, '\r') {
+	if !inputSubmits(body) {
 		writeError(w, http.StatusUnprocessableEntity, "input_no_submit",
-			"input does not submit (no carriage return \\r; a bare newline \\n is treated as literal text, not a submit); "+
+			"input does not submit (no carriage return \\r or Enter key sequence; a bare newline \\n is treated as literal text, not a submit); "+
 				"add a trailing Enter key or drop --wait")
 		return
 	}
@@ -462,6 +462,24 @@ func handleInputWait(w http.ResponseWriter, r *http.Request, sessions *store.Sto
 		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
 		// reason == "" and !timedOut: client disconnected; nothing to write.
 	}
+}
+
+// kittyEnterRe matches the Kitty keyboard protocol's CSI-u encoding of
+// the Enter key (codepoint 13) with optional modifier and event-type
+// fields: ESC [ 13 [;mod[:event]] u. `gmux send --follow-up` on a pi
+// session sends Alt+Enter in this encoding (\x1b[13;3u) because pi
+// parses it correctly under either negotiated keyboard protocol — see
+// the pi adapter's SubmitSeq.
+var kittyEnterRe = regexp.MustCompile(`\x1b\[13(?:;[0-9]+(?::[0-9]+)?)?u`)
+
+// inputSubmits reports whether the input bytes contain a submit
+// keystroke — something that can start a turn. A carriage return is
+// what xterm-class terminals send for Enter (bare or Alt-modified); the
+// CSI-u form is Enter under the Kitty keyboard protocol. Anything else
+// is text the agent just buffers, so a --wait on it could only ever
+// time out; handleInputWait rejects it up front.
+func inputSubmits(body []byte) bool {
+	return bytes.ContainsRune(body, '\r') || kittyEnterRe.Match(body)
 }
 
 // awaitTurn blocks until the session completes a turn: a Working=true

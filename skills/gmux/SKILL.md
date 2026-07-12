@@ -18,6 +18,8 @@ gmux -d -- <cmd> [args]      # run detached; prints the session id on stdout
 gmux send <id> 'text' Enter  # type text and submit (Enter is explicit)
 gmux send <id> C-c           # send a control key (interrupt), no text
 gmux send --wait <id> 'text' Enter  # send AND block until the reply is done
+gmux send --follow-up <id> 'text'   # queue a prompt for after the current turn
+gmux send --steering <id> 'text'    # interject a prompt into the current turn
 gmux wait <id>               # block until the agent finishes its turn
 gmux wait <id> --for-text S  # block until S appears in the output
 gmux tail <id> [-n N]        # last N lines of output (ANSI stripped; default 100)
@@ -51,7 +53,25 @@ Key names follow tmux: `Enter`, `Tab`, `Escape`, `Up`/`Down`/`Left`/`Right`,
 
 **Everything after the id is verbatim** — including dash-leading tokens, so
 `gmux send $id -v` sends a literal `-v` with no `--` guard needed. `send`'s own
-flags (`--wait`, `--timeout`) only work *before* the id.
+flags (`--wait`, `--timeout`, `--follow-up`, `--steering`) only work *before*
+the id.
+
+### Prompting a busy agent: `--follow-up` vs `--steering`
+
+When the target is an AI agent mid-turn, plain `Enter` vs the adapter's
+queued-submit keystroke mean different things. Instead of memorizing
+per-agent keybinds, use the mode flags — gmux appends the right submit
+keystroke for the session's adapter (mutually exclusive; no trailing key
+tokens; text only):
+
+```bash
+gmux send --follow-up $id 'then also update the changelog'  # runs after this turn
+gmux send --steering $id 'stop — wrong branch, use main'    # delivered right now
+gmux send --wait --follow-up $id 'next task'  # waits for the queued turn's reply
+```
+
+On an idle agent both are a plain submit. For agents whose Enter already
+queues while busy (claude, codex) and for shells, both flags map to `Enter`.
 
 ## Sequential orchestration
 

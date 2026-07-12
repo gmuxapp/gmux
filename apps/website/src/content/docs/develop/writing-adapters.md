@@ -232,6 +232,16 @@ All dead sessions are resumable. When a session exits, gmuxd checks whether the 
 
 This means adapters that don't implement `Resumer` still get resume for free: the user clicks resume, a new session starts with the same command and cwd. This is the right behavior for simple tools. Only implement `Resumer` when your tool has native resume support that you want to use instead.
 
+### `PromptSubmitter`
+
+```go
+type PromptSubmitter interface {
+    SubmitSeq(mode SubmitMode) (seq string, ok bool)
+}
+```
+
+Optional. Maps `gmux send --steering` / `--follow-up` to the keystroke that submits a composed prompt in that mode: `SubmitSteering` delivers into the current turn immediately, `SubmitFollowUp` queues until the current turn ends. pi implements it (`Enter` vs `Alt+Enter`); adapters without it default to `Enter` for both modes, which is right for shells and for agents whose `Enter` submits when idle and queues when busy (claude, codex). Return `ok=false` to reject a mode your tool can't honor — the CLI surfaces that as a usage error.
+
 ### `CommandTitler`
 
 ```go
@@ -254,7 +264,7 @@ An adapter implements only what it needs:
 | Editor | ✓ | ✓ | — | — | — | CommandTitler, SessionRegistrar |
 | Claude | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationOpener, ConversationProber, SessionHookCommand |
 | Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationOpener, ConversationProber, SessionHookCommand |
-| Pi | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationOpener, ConversationProber, SessionExtender, PassthroughDetector |
+| Pi | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationOpener, ConversationProber, SessionExtender, PassthroughDetector, PromptSubmitter |
 
 Shell writes a small JSON state file per session under `~/.local/state/gmux/shell-sessions/` and resumes by launching `$SHELL` in the original cwd. The editor adapter (backing `gmux edit`) is a good minimal non-agent example: it matches an internal sentinel command and is ephemeral (auto-dismissed on close).
 

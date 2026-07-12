@@ -116,7 +116,7 @@ gmux tail --raw a3f20187      # keep ANSI escapes (-e also works)
 It's a snapshot, not a stream — to watch a session live, attach to it or open
 it in the browser.
 
-### `gmux send [--wait [--timeout N]] <id> [text] [Key...]`
+### `gmux send [--wait [--timeout N]] [--follow-up|--steering] <id> [text] [Key...]`
 
 Inject input into a running session as if typed at the keyboard. The text is
 sent literally; any trailing arguments that name keys (`Enter`, `C-c`,
@@ -134,6 +134,28 @@ echo "$body" | gmux send a3f20187 Enter         # pipe stdin, then submit
 When no text is given and stdin is a pipe, gmux reads stdin until EOF (capped
 at 1 MiB) and sends it — the natural shape for files and heredocs. Include a
 trailing `Enter` to submit piped input.
+
+**`--follow-up` / `--steering`** auto-append the session adapter's *submit*
+keystroke, so callers don't need to know adapter-specific key encodings:
+
+- `--follow-up` — the adapter's **queued** submit: the prompt is delivered
+  after the agent finishes what it's doing (pi: `Alt+Enter`).
+- `--steering` — the adapter's **immediate** submit: the prompt is delivered
+  into the current turn right away (pi: `Enter`).
+
+```bash
+gmux send --follow-up a3f20187 'then also update the docs'   # queue for after this turn
+gmux send --steering a3f20187 'stop — wrong file, use api.ts' # interject mid-turn
+```
+
+On an idle agent both act as a plain submit. Adapters that don't distinguish
+the two modes (shells; agents like claude/codex whose `Enter` submits when
+idle and queues when busy) map both to `Enter`. The two flags are mutually
+exclusive, and — because they own submission — cannot be combined with
+trailing key tokens. They compose with `--wait`: `send --wait --follow-up`
+blocks until the turn the queued prompt triggers completes (pi processes
+queued follow-ups before reporting idle, so the wait covers the queued reply,
+not just the current turn).
 
 **Everything after the session id is verbatim** — including tokens that start
 with a dash. `gmux send abc -v` sends the literal `-v`, and no `--` guard is

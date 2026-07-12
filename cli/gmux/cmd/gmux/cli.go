@@ -60,9 +60,10 @@ type command struct {
 	raw       bool
 
 	// send
-	sendText *string  // literal text to type (nil = none)
-	sendKeys []string // trailing key-name tokens (Enter, C-c, ...)
-	sendWait bool     // --wait: block until the triggered turn completes
+	sendText   *string  // literal text to type (nil = none)
+	sendKeys   []string // trailing key-name tokens (Enter, C-c, ...)
+	sendWait   bool     // --wait: block until the triggered turn completes
+	sendSubmit string   // --follow-up/--steering: auto-append the adapter's submit key ("" = neither)
 
 	// send-keys (tmux-compat)
 	keysLiteral bool     // -l: treat args as literal text, not key names
@@ -275,10 +276,16 @@ func parseTail(args []string) (*command, error) {
 	return c, nil
 }
 
-// parseSend handles `gmux send [--wait] [--timeout N] [--] <id> [text]
-// [Key...]`. The first positional is the session ref; an optional
-// second positional is the literal text; any further bare tokens are
-// key-name tokens. With no text and no keys, stdin supplies the text.
+// parseSend handles `gmux send [--wait] [--timeout N]
+// [--follow-up|--steering] [--] <id> [text] [Key...]`. The first
+// positional is the session ref; an optional second positional is the
+// literal text; any further bare tokens are key-name tokens. With no
+// text and no keys, stdin supplies the text.
+//
+// --follow-up and --steering auto-append the session adapter's submit
+// keystroke (pi: Alt+Enter vs Enter), so they are mutually exclusive
+// with each other AND with trailing key tokens: the flag owns
+// submission, and `--follow-up ... Enter` would double-submit.
 //
 // Grammar (ADR 0009 decision 9, verbatim-content rule): behavior
 // modifiers precede the session ref; the ref is the first non-flag
@@ -305,6 +312,12 @@ func parseSend(args []string) (*command, error) {
 		switch {
 		case a == "--wait":
 			c.sendWait = true
+		case a == "--follow-up" || a == "--steering":
+			mode := strings.TrimPrefix(a, "--")
+			if c.sendSubmit != "" && c.sendSubmit != mode {
+				return nil, errors.New("send: --follow-up and --steering are mutually exclusive")
+			}
+			c.sendSubmit = mode
 		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
 			val := strings.TrimPrefix(a, "--timeout")
 			if val == "" {
@@ -344,6 +357,9 @@ func parseSend(args []string) (*command, error) {
 			rest = rest[1:]
 		}
 		c.sendKeys = rest
+	}
+	if c.sendSubmit != "" && len(c.sendKeys) > 0 {
+		return nil, fmt.Errorf("send: --%s appends the adapter's submit keystroke itself; pass the message as a single argument with no trailing key tokens", c.sendSubmit)
 	}
 	return c, nil
 }
@@ -549,6 +565,10 @@ Sessions (local by default; address a peer with <id>@<peer>):
   gmux send <id> <text> [Key...]    type text and/or send keys (e.g. Enter, C-c)
   gmux send --wait [--timeout N] <id> <text> [Key...]
                                     ... and block until the triggered turn ends
+  gmux send --follow-up|--steering <id> <text>
+                                    ... auto-append the adapter's submit key
+                                    (--follow-up queues after the current turn;
+                                     --steering interjects now; composes with --wait)
   gmux send-keys -t <id> <keys...>  tmux-compatible key sending
   gmux wait <id> [--timeout N]      block until an agent session is idle
        [--for-text S|--for-regex P] ... or until output matches S / P
