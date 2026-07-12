@@ -73,7 +73,7 @@ try {
   // ── Desktop: home dashboard ────────────────────────────────────────
   {
     const ctx = await browser.newContext({
-      viewport: { width: 1100, height: 830 },
+      viewport: { width: 940, height: 710 },
       deviceScaleFactor: 2,
       colorScheme: 'dark',
     })
@@ -91,7 +91,10 @@ try {
   // ── Mobile: session terminal with the key row ─────────────────────
   {
     const ctx = await browser.newContext({
-      viewport: { width: 390, height: 712 },
+      // 326 CSS px fits exactly 38 xterm columns (13px Fira Code ≈
+      // 7.8px cells), matching the mock session's 38-char content so
+      // the terminal reads edge-to-edge like a real phone session.
+      viewport: { width: 326, height: 596 },
       deviceScaleFactor: 2,
       isMobile: true,
       hasTouch: true,

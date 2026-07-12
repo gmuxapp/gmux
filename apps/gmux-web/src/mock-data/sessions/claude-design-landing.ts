@@ -27,8 +27,9 @@ export default {
   project_slug: 'my-project',
   last_activity_at: ago(3),
   socket_path: '/tmp/gmux-sessions/sess-claude-01.sock',
-  // Sized to ~42 columns so it renders cleanly on a phone-width
-  // terminal too (the landing page's mobile hero uses this session).
+  // Sized to 38 columns: the landing page's mobile hero captures this
+  // session at a viewport that fits exactly 38 xterm columns, so lines
+  // must stay ≤38 chars to fill the terminal without wrapping.
   terminal: `${C1}╭─ Claude Code ${C2}v2.1.76 ${C1}──────────────╮${RST}
 ${C1}│${RST}   ${BOLD}Welcome back!${RST}                    ${C1}│${RST}
 ${C1}│${RST}   ${C2}~/dev/my-project${RST}                 ${C1}│${RST}
@@ -39,8 +40,8 @@ ${C2}❯ update the landing page for 2.0${RST}
 ${C10}● ${RST}I'll rework the hero section and
   tighten the copy.
 
-  ⎿  ${C2}Read ${BOLD}src/pages/index.astro${RST}
-  ⎿  ${C2}Edit ${BOLD}src/pages/index.astro${RST} ${C2}(+41 -18)${RST}
+  ⎿  ${C2}Read ${BOLD}pages/index.astro${RST}
+  ⎿  ${C2}Edit ${BOLD}pages/index.astro${RST} ${C2}(+41 -18)${RST}
   ⎿  ${C2}Bash ${BOLD}pnpm build${RST} ${C2}✓${RST}
 
 ${C10}● ${RST}The new hero is in. Want me to
