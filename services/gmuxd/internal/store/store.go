@@ -311,6 +311,17 @@ func (s *Store) UpsertRemote(sess Session) {
 func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
 	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
 	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
+	// Compute the activity seed BEFORE taking the lock. The hook stats
+	// an adapter-supplied path that may live on a remote/FUSE filesystem;
+	// a hung stat under s.mu would stall the whole store (all reads, the
+	// SSE snapshot fan-out), not just this upsert. It's only relevant when
+	// the incoming stamp is empty (the rehydrate/fresh case), and it's
+	// applied under the lock only if the stamp is still empty after
+	// carry-forward — so it stays a pure floor.
+	var seed string
+	if bumpLocally && sess.LastActivityAt == "" && s.activitySeed != nil {
+		seed = s.activitySeed(sess)
+	}
 	s.mu.Lock()
 	prev, hadPrev := s.sessions[sess.ID]
 	if bumpLocally {
@@ -330,10 +341,8 @@ func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
 		// value nor a persisted one exists. Gated on empty so it acts
 		// purely as a floor and never clobbers a newer value; and only
 		// on locally-owned sessions (peers carry the owner's stamp).
-		if sess.LastActivityAt == "" && s.activitySeed != nil {
-			if seed := s.activitySeed(sess); seed != "" {
-				sess.LastActivityAt = seed
-			}
+		if sess.LastActivityAt == "" && seed != "" {
+			sess.LastActivityAt = seed
 		}
 	}
 	removed, skip, unchanged := s.commitLocked(prev, hadPrev, &sess)

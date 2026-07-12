@@ -32,6 +32,17 @@ import (
 // empty and the UI would fall back to created_at ("3 days ago"). The
 // store applies this value only as a floor for empty stamps, so it can
 // never overwrite a live or persisted timestamp.
+//
+// Note: the store can't tell a restart-rehydrate from a first-ever
+// registration — both arrive with an empty stamp — so a brand-new
+// session is seeded too. That is harmless: its files' mtimes are ~now,
+// which is the same instant the UI would show via the created_at
+// fallback anyway, and the first real state transition bumps the stamp
+// forward. The one visibly-odd case is resuming an *old* conversation
+// when the scrollback tee failed to open: the seed would then be the old
+// conversation file's mtime (days ago) until the first transition
+// corrects it. Rare and self-healing, so we accept rather than guard —
+// there is no reliable restart-vs-fresh signal at this layer.
 func activitySeedFor(sess store.Session, sessionDir func(string) string) string {
 	var newest time.Time
 	consider := func(path string) {
