@@ -73,7 +73,7 @@ try {
   // ── Desktop: home dashboard ────────────────────────────────────────
   {
     const ctx = await browser.newContext({
-      viewport: { width: 940, height: 710 },
+      viewport: { width: 820, height: 620 },
       deviceScaleFactor: 2,
       colorScheme: 'dark',
     })
