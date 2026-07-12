@@ -1,7 +1,6 @@
 ---
 import heroDesktop from '../assets/hero-desktop.png'
 import heroMobile from '../assets/hero-mobile.png'
-import Ledger from '../components/Ledger.astro'
 import PostHog from '../components/posthog.astro'
 import Topology from '../components/Topology.astro'
 ---
@@ -11,10 +10,10 @@ import Topology from '../components/Topology.astro'
   <meta charset="utf-8" />
   <PostHog />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>gmux — a session manager for AI coding agents</title>
-  <meta name="description" content="Run your coding agents in persistent gmux sessions and watch them all — every machine, one live dashboard, from your terminal, browser, or phone. Know the moment one is waiting on you." />
-  <meta property="og:title" content="gmux — a session manager for AI coding agents" />
-  <meta property="og:description" content="Run your coding agents in persistent gmux sessions and watch them all — every machine, one live dashboard, from your terminal, browser, or phone. Know the moment one is waiting on you." />
+  <title>gmux — your coding agents, from any device</title>
+  <meta name="description" content="Run coding agents in persistent sessions on any of your machines. Watch and steer them from your terminal, browser, or phone, and get notified the moment one needs you." />
+  <meta property="og:title" content="gmux — your coding agents, from any device" />
+  <meta property="og:description" content="Run coding agents in persistent sessions on any of your machines. Watch and steer them from your terminal, browser, or phone, and get notified the moment one needs you." />
   <meta property="og:image" content="https://gmux.app/og.png" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
@@ -48,11 +47,11 @@ import Topology from '../components/Topology.astro'
   <section class="hero">
     <div class="hero-content">
       <div class="hero-text">
-        <h1>See every agent. Know who&rsquo;s waiting.</h1>
+        <h1>Start at your desk.<br />Steer from your phone.</h1>
         <p class="hero-sub">
-          <code>gmux -- claude</code> puts the session on a live dashboard.
-          Steer it from your terminal, any browser, or your phone —
-          and see the moment an agent needs you.
+          Every agent, every machine, one live view.
+          Pick up any session wherever you are.
+          Get notified when an agent needs you.
         </p>
         <div class="hero-install">
           <div class="install-box">
@@ -108,34 +107,21 @@ import Topology from '../components/Topology.astro'
 
   <!-- Device continuity -->
   <section class="section section-alt">
-    <div class="section-inner two-col">
-      <div class="two-col-text">
-        <h2>Sessions outlive every screen</h2>
-        <p class="section-lead">Alias your agents once and every run lands in gmux. Close the terminal — the session keeps working. Answer a question from your phone in the checkout line, and the same conversation is back in your terminal when you sit down.</p>
+    <div class="section-inner">
+      <div class="section-header">
+        <h2>Close the laptop. The agents keep going.</h2>
+        <p class="section-lead">Sessions live on the host, not in your terminal. Close the lid, lose the wi-fi, switch devices: the run doesn't notice. Answer a question from the checkout line and the same conversation is waiting in your terminal when you sit back down.</p>
+        <pre class="code-snippet code-snippet-inline"><code>alias claude='gmux -- claude'  <span class="code-comment"># alias once, automatic after that</span></code></pre>
       </div>
-      <div class="two-col-visual">
-        <pre class="code-snippet"><code>alias claude='gmux -- claude'
-alias codex='gmux -- codex'
-alias pi='gmux -- pi'</code></pre>
-      </div>
-    </div>
-  </section>
-
-  <!-- Philosophy: fewer things, done well -->
-  <section class="section">
-    <div class="section-inner two-col two-col-reverse">
-      <div class="two-col-text">
-        <h2>Fewer things, done well</h2>
-        <p class="section-lead">Agent managers tend to grow inward — built-in tabs, built-in editors, built-in browsers — until they replace your desktop. gmux grows outward: each job goes to a tool you already chose, and everything gmux builds goes into the one job nobody else does.</p>
-      </div>
-      <div class="two-col-visual">
-        <Ledger rows={[
-          { what: 'Tabs, splits, layouts', who: 'your browser' },
-          { what: 'Editing', code: 'gmux edit', who: 'your', whoCode: '$EDITOR' },
-          { what: 'Network & identity', who: 'your tailnet' },
-          { what: 'The mobile app', who: 'the web app' },
-          { what: 'Every agent, alive & visible', who: 'gmux', accent: true },
-        ]} />
+      <div class="diptych">
+        <figure class="diptych-panel">
+          <div class="diptych-img diptych-placeholder">photo: laptop carried half-open,<br />because closing it kills the run</div>
+          <figcaption class="diptych-caption">don't close it. don't lose wi-fi. don't leave.</figcaption>
+        </figure>
+        <figure class="diptych-panel">
+          <div class="diptych-img diptych-placeholder">photo: phone in the grass,<br />gmux notification on screen</div>
+          <figcaption class="diptych-caption">the laptop is at home. it'll text you.</figcaption>
+        </figure>
       </div>
     </div>
   </section>
@@ -145,7 +131,7 @@ alias pi='gmux -- pi'</code></pre>
     <div class="section-inner two-col">
       <div class="two-col-text">
         <h2>Delegation you can watch</h2>
-        <p class="section-lead">There's no orchestration API to learn — an agent spawns a sub-agent with the same command you'd type. The child shows up on your dashboard like any other session: live, steerable, and interruptible from any device.</p>
+        <p class="section-lead">There's no orchestration API to learn. An agent spawns a sub-agent with the same command you'd type, and the child shows up like any other session: live, steerable, and interruptible from any device.</p>
       </div>
       <div class="two-col-visual">
         <pre class="code-snippet"><code><span class="code-comment"># an agent hands off a task…</span>
@@ -164,7 +150,7 @@ gmux send --wait &lt;id&gt; 'run the tests' Enter
     <div class="section-inner two-col two-col-reverse">
       <div class="two-col-text">
         <h2>Tailscale handles the network</h2>
-        <p class="section-lead">Run <code>gmuxd remote</code> once to enable the built-in Tailscale listener. No open ports, no reverse proxy, no cert dance. Your tailnet gets a device to the door; a per-host token gets it in.</p>
+        <p class="section-lead">Run <code>gmuxd remote</code> once. If a device is on your tailnet and has the token, it's in. No open ports, nothing else to set up.</p>
       </div>
       <div class="two-col-visual">
         <pre class="code-snippet"><code><span class="code-comment"># one-time setup</span>
@@ -180,8 +166,8 @@ gmux -- &lt;command&gt;</code></pre>
   <section class="section section-alt">
     <div class="section-inner two-col">
       <div class="two-col-text">
-        <h2>Know exactly when to check in</h2>
-        <p class="section-lead">gmux tells <em>working</em> apart from <em>waiting on you</em> — across Claude&nbsp;Code, codex, pi, and plain shells. The moment an agent finishes or asks a question, a notification lands on whichever device you're holding.</p>
+        <h2>Stop babysitting terminals</h2>
+        <p class="section-lead">Agents work in bursts: minutes of progress, then a question for you. The moment one finishes or gets stuck, gmux pings whichever device you're holding. You don't watch. You get told.</p>
       </div>
       <div class="two-col-visual">
         <div class="mock-notif">
@@ -438,7 +424,7 @@ gmux -- &lt;command&gt;</code></pre>
   }
 
   .hero h1 {
-    font-size: clamp(2.1rem, 4vw, 3.4rem);
+    font-size: clamp(1.9rem, 2.7vw, 2.4rem);
     font-weight: 700;
     color: var(--text);
     margin-bottom: 1rem;
@@ -713,6 +699,70 @@ gmux -- &lt;command&gt;</code></pre>
     font-size: 1.05rem;
     margin-bottom: 2rem;
     max-width: 50ch;
+  }
+
+  /* Centered header for full-width sections */
+  .section-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    margin-bottom: 2.5rem;
+  }
+
+  .section-header .section-lead {
+    margin-bottom: 1.5rem;
+  }
+
+  .code-snippet-inline {
+    font-size: 0.85rem;
+  }
+
+  /* Diptych: the tether vs. the grass */
+  .diptych {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: clamp(1rem, 2.5vw, 2rem);
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .diptych-panel {
+    margin: 0;
+  }
+
+  .diptych-img {
+    aspect-ratio: 5 / 4;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .diptych-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    border: 1px dashed var(--border);
+    background: var(--code-bg);
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.6;
+    padding: 1rem;
+  }
+
+  .diptych-caption {
+    margin-top: 0.8rem;
+    font-family: 'Fira Code', 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-align: center;
+  }
+
+  @media (max-width: 700px) {
+    .diptych {
+      grid-template-columns: 1fr;
+      max-width: 420px;
+    }
   }
 
   .topo-heading {
