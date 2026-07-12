@@ -66,6 +66,34 @@ type ConversationOpener interface {
 	OpenConversation(ref string) (io.ReadCloser, error)
 }
 
+// ConversationMessage is one message of a conversation transcript,
+// reconstructed from an adapter's stored conversation. Text is markdown:
+// the adapter renders its native content blocks (text, tool calls,
+// images) into a readable body; internal noise (thinking blocks, tool
+// result payloads) is omitted. Consumers add role headings and message
+// separation — the adapter owns only per-message content.
+type ConversationMessage struct {
+	Role string // "user", "assistant", ... (lowercase, adapter-reported)
+	Text string // markdown body, non-empty
+}
+
+// ConversationRenderer is implemented by adapters that can reconstruct a
+// clean transcript from a stored conversation — the actual user/assistant
+// exchange rather than the PTY rendering of a TUI. Where
+// ConversationOpener exposes the raw adapter-native bytes, this is the
+// normalized-content seam: the adapter translates its own format into
+// messages. gmuxd's /v1/sessions/{id}/conversation endpoint (backing the
+// default `gmux tail` view) uses it; adapters without it fall back to
+// scrollback.
+type ConversationRenderer interface {
+	// RenderConversation resolves an opaque conversation ref (ADR 0022)
+	// and returns its messages oldest-first. Messages that render to
+	// nothing (e.g. thinking-only turns) are omitted. Returns an error
+	// satisfying errors.Is(err, fs.ErrNotExist) when the conversation is
+	// gone (the same convention the ConversationProber helpers use).
+	RenderConversation(ref string) ([]ConversationMessage, error)
+}
+
 // ConversationSink receives conversation-ref changes from a ConversationSource.
 // Refs are opaque adapter-scoped locators the daemon resolves via the
 // owning adapter's DescribeConversation.
