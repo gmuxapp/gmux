@@ -674,7 +674,6 @@ func TestProxyWS_NoCompressionToBrowser(t *testing.T) {
 	}
 }
 
-
 // TestForwardAction_PreservesQueryString locks in the contract that
 // action endpoints with query parameters (e.g. /scrollback?tail=N)
 // work the same against peer sessions as against local ones.

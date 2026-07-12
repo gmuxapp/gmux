@@ -276,5 +276,3 @@ func (m *Manager) HasPeers() bool {
 	defer m.mu.RUnlock()
 	return len(m.peers) > 0
 }
-
-

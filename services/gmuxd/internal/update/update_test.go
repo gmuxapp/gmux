@@ -13,9 +13,9 @@ func TestNewer(t *testing.T) {
 		{"v0.4.6", "v0.4.6", false},
 		{"v0.4.5", "v0.4.6", false},
 		{"v0.3.0", "v0.4.6", false},
-		{"0.5.0", "0.4.6", true},    // no prefix
-		{"dev", "v0.4.6", false},     // unparseable
-		{"v0.4.6", "dev", false},     // unparseable
+		{"0.5.0", "0.4.6", true}, // no prefix
+		{"dev", "v0.4.6", false}, // unparseable
+		{"v0.4.6", "dev", false}, // unparseable
 	}
 	for _, tt := range tests {
 		got := newer(tt.a, tt.b)

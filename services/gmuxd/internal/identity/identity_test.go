@@ -4,10 +4,10 @@ import "testing"
 
 func TestResolve(t *testing.T) {
 	tests := []struct {
-		name     string
-		fqdn     string
-		osHost   string
-		want     string
+		name   string
+		fqdn   string
+		osHost string
+		want   string
 	}{
 		{"tailscale fqdn wins over os hostname", "gmux-laptop.tailnet.ts.net", "ca75413aec31", "gmux-laptop"},
 		{"fqdn without dot used as-is", "gmux-laptop", "host", "gmux-laptop"},

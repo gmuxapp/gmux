@@ -33,8 +33,8 @@ func DefaultConfig() Config {
 
 // NotifyMessage is sent to the browser over the presence WebSocket.
 type NotifyMessage struct {
-	Type      string `json:"type"`       // "notify"
-	ID        string `json:"id"`         // daemon-assigned notification ID
+	Type      string `json:"type"` // "notify"
+	ID        string `json:"id"`   // daemon-assigned notification ID
 	SessionID string `json:"session_id"`
 	Title     string `json:"title"`
 	Body      string `json:"body"`

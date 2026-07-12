@@ -58,9 +58,9 @@ const httpActionTimeout = 10 * time.Second
 // Client is an authenticated HTTP + WebSocket client pointed at one
 // gmuxd instance (the "spoke" from the hub's perspective).
 type Client struct {
-	baseURL          string
-	token            string
-	transport        http.RoundTripper
+	baseURL           string
+	token             string
+	transport         http.RoundTripper
 	streamIdleTimeout time.Duration
 
 	// httpClient is a long-lived client with no Timeout so SSE

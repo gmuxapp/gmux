@@ -518,7 +518,8 @@ func serve(stderr io.Writer) int {
 	// Resume merge / slug takeover drop the corresponding directory.
 	// See sessionmeta package doc for the full lifecycle.
 	metaStore := sessionmeta.New(sessionmeta.DefaultDir(), sessionmeta.WithRetention(sessionmeta.DefaultRetention()))
-	// Reseed last_activity_at from durable file mtimes when a session is
+	// Reseed last_activity_at from durable activity proxies (adapter-reported
+	// conversation freshness, scrollback tee mtime) when a session is
 	// (re-)registered without a stamp — the alive-across-restart case, where
 	// the in-memory value was never persisted. Installed before Sweep so it
 	// applies to every rehydrate path; dead sessions restored with a

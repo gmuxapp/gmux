@@ -247,4 +247,3 @@ func TestMigrateV1EmptyItems(t *testing.T) {
 		t.Errorf("expected 0 items, got %d", len(state.Items))
 	}
 }
-

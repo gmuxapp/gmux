@@ -17,9 +17,9 @@ import (
 type sseServer struct {
 	*httptest.Server
 	mu         sync.Mutex
-	frames     []string   // frames queued for the next connection
-	expectAuth string     // if set, requires "Authorization: Bearer <expectAuth>"
-	clients    chan int   // signals "client connected" by sending 1
+	frames     []string      // frames queued for the next connection
+	expectAuth string        // if set, requires "Authorization: Bearer <expectAuth>"
+	clients    chan int      // signals "client connected" by sending 1
 	hold       chan struct{} // if set, server holds the stream open until closed
 }
 

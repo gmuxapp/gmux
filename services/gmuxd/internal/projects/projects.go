@@ -383,7 +383,6 @@ func NormalizePath(p string) string {
 	return paths.NormalizePath(p)
 }
 
-
 // --- Remote normalization ---
 
 // NormalizeRemote converts a git remote URL to a canonical form.
