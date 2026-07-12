@@ -47,6 +47,7 @@ var (
 	_ adapter.CommandTitler         = (*Shell)(nil)
 	_ adapter.SessionRegistrar      = (*Shell)(nil)
 	_ adapter.SessionFinalizer      = (*Shell)(nil)
+	_ adapter.PromptSignaler        = (*Shell)(nil)
 )
 
 // Shell is the fallback adapter. It matches all commands and parses
@@ -88,6 +89,20 @@ func (g *Shell) Monitor(_ []byte) *adapter.Event {
 	// can use terminal titles as a fallback, not just shell sessions.
 	return nil
 }
+
+// StatusFromPromptMarks opts shell sessions into runner-side OSC 133
+// prompt-mark tracking: Working flips true when a command starts
+// executing and false when the command finishes / the next prompt is
+// drawn. That busy/idle signal is what lets `gmux wait` and `gmux send
+// --wait` work on shell sessions (issue #373). Shells whose
+// integration doesn't emit the marks simply never report Status, and
+// the daemon rejects idle waits on them.
+//
+// The tracking lives in the runner (not Monitor) because a fast
+// command's busy and idle marks can arrive in one PTY read, and
+// Monitor can only return a single collapsed Event per chunk — which
+// would swallow the working→idle pulse that send --wait keys on.
+func (g *Shell) StatusFromPromptMarks() bool { return true }
 
 // --- Conversation storage (file-backed: refs are shell state-file paths) ---
 

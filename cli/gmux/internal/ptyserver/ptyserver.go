@@ -192,6 +192,11 @@ type Server struct {
 	screenDrainDone chan struct{} // closed when the DSR drain goroutine exits
 	adapter         adapter.Adapter
 	state           *session.State
+	// promptMarks derives Status from OSC 133 prompt marks for adapters
+	// that opt in via adapter.PromptSignaler (the shell adapter). Nil for
+	// everything else. Fed exclusively from readPTY's flush, so it needs
+	// no locking.
+	promptMarks *adapter.PromptMarkTracker
 
 	shutdownOnce sync.Once
 
@@ -362,6 +367,19 @@ func New(cfg Config) (*Server, error) {
 	s.screen, s.screenDrainDone = newScreen(int(cfg.Cols), int(cfg.Rows), func(visible bool) {
 		s.cursorHidden = !visible
 	})
+
+	// Adapters that opt in (shell) get their busy/idle Status derived
+	// from OSC 133 prompt marks in the output stream: Working=true when
+	// a command starts executing, false when the next prompt returns.
+	// Each transition is a separate SetStatus call, so a fast command
+	// whose marks land in a single PTY read still emits the full
+	// working→idle pulse downstream — the daemon's send --wait requires
+	// observing both edges (issue #373).
+	if ps, ok := cfg.Adapter.(adapter.PromptSignaler); ok && ps.StatusFromPromptMarks() && cfg.State != nil {
+		s.promptMarks = adapter.NewPromptMarkTracker(func(working bool) {
+			s.state.SetStatus(&adapter.Status{Working: working})
+		})
+	}
 
 	go s.readPTY()
 	go s.waitChild()
@@ -1104,6 +1122,9 @@ func (s *Server) readPTY() {
 					s.state.SetStatus(ev.Status)
 				}
 			}
+		}
+		if s.promptMarks != nil {
+			s.promptMarks.Feed(data)
 		}
 
 		// Queue data for the virtual terminal emulator (processed by

@@ -159,6 +159,27 @@ type SessionHookCommand interface {
 	HookCommand(args []string, selfBin string) (out []string, ok bool)
 }
 
+// PromptSignaler marks adapters whose sessions derive their busy/idle
+// Status from OSC 133 prompt marks ("semantic prompt" sequences) in the
+// PTY output stream, rather than from an agent hook or Monitor. The
+// runner watches the output for the marks and flips Status.Working
+// itself: busy when a command starts executing (133;C), idle when the
+// command finishes / the next prompt is drawn (133;D / 133;A). This is
+// what gives shell sessions the same crisp busy→idle signal that agent
+// sessions get from their turn hooks, so `gmux wait` and `gmux send
+// --wait` work on them (issue #373).
+//
+// The marks come from the user's shell integration (fish emits them by
+// default; bash/zsh need an integration snippet), so a session of a
+// PromptSignaler adapter only reports Status once marks are actually
+// observed. Sessions that never emit marks simply keep a nil Status.
+type PromptSignaler interface {
+	// StatusFromPromptMarks reports whether the runner should track
+	// OSC 133 prompt marks in this adapter's PTY output and derive
+	// session Status from them.
+	StatusFromPromptMarks() bool
+}
+
 // PassthroughDetector marks adapters that recognize invocations which are NOT
 // interactive sessions — one-shot subcommands like `pi update` or `pi list`.
 // gmux execs these directly (inheriting the tty, returning their exit code)
