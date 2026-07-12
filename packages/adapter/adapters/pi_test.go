@@ -295,6 +295,9 @@ func TestDescribeConversationFirstUserMessage(t *testing.T) {
 	if info.Slug != "fix-the-auth-bug-in-login-go" {
 		t.Errorf("expected slug from title, got %q", info.Slug)
 	}
+	if len(info.AncestorIDs) != 0 {
+		t.Errorf("expected no ancestors for in-place pi resume, got %v", info.AncestorIDs)
+	}
 }
 
 func TestDescribeConversationNameOverrides(t *testing.T) {

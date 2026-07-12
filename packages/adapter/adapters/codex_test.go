@@ -134,6 +134,9 @@ func TestCodexDescribeConversationBasic(t *testing.T) {
 	if info.MessageCount != 2 {
 		t.Errorf("expected 2 messages, got %d", info.MessageCount)
 	}
+	if len(info.AncestorIDs) != 0 {
+		t.Errorf("expected no ancestors for in-place codex resume, got %v", info.AncestorIDs)
+	}
 }
 
 func TestCodexDescribeConversationSkipsSystemContext(t *testing.T) {
