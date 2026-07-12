@@ -3440,8 +3440,8 @@ body {
 }
 
 /* ACP conversation panel (ADR 0021 tracer #1: streaming assistant text).
-   A floating overlay over the terminal surface, toggled with ?conv. Minimal
-   by design — the assistant-ui vs. native renderer decision is deferred. */
+   A full-panel view that replaces the terminal surface, toggled with ?conv.
+   Rendered by the assistant-ui React island (that renderer decision is made). */
 /* Header toggle: reuses .session-menu-trigger; active = panel open. */
 .conversation-toggle.active {
   background: var(--bg-selected);
@@ -3553,7 +3553,6 @@ body {
   outline: none;
   font: inherit;
 }
-.conversation-composer-mic,
 .conversation-composer-send {
   flex: none;
   display: inline-flex;
@@ -3562,25 +3561,15 @@ body {
   height: 30px;
   min-width: 30px;
   padding: 0 10px;
-  color: var(--text, #e6e6e6);
-  background: transparent;
-  border: 0;
-  border-radius: 15px;
-  cursor: pointer;
-}
-.conversation-composer-mic:hover {
-  background: var(--bg-hover, #21242b);
-}
-.conversation-composer-send {
   color: var(--bg, #14171c);
   background: var(--accent, #6ea8fe);
+  border: 0;
+  border-radius: 15px;
   font-weight: 500;
+  cursor: pointer;
 }
 .conversation-composer-send:hover {
   background: color-mix(in srgb, var(--accent, #6ea8fe) 85%, #fff);
-}
-.conversation-composer-mic[data-dictating] {
-  color: var(--status-error, #e5484d);
 }
 
 /* Attachments: the dropzone wraps the whole composer interior; chips sit above

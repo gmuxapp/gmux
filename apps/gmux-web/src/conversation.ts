@@ -72,6 +72,12 @@ export interface ConversationStore {
   applyFrame(frame: unknown): void
   getMessages(): ConvMessage[]
   subscribe(listener: Listener): () => void
+  /**
+   * Monotonic counter bumped on each `session/load` snapshot. The island uses
+   * it to drop optimistic echoes once the authoritative history arrives (the
+   * real user turns are then in `getMessages()`), avoiding duplicate bubbles.
+   */
+  getLoadEpoch(): number
 }
 
 function textOf(content: ContentBlock[]): string {
@@ -83,6 +89,7 @@ function textOf(content: ContentBlock[]): string {
 
 export function createConversationStore(): ConversationStore {
   let messages: ConvMessage[] = []
+  let loadEpoch = 0
   const listeners = new Set<Listener>()
   let notifyScheduled = false
 
@@ -108,6 +115,7 @@ export function createConversationStore(): ConversationStore {
       messageId: m.messageId,
       content: [...m.content],
     }))
+    loadEpoch++
     notify()
   }
 
@@ -204,6 +212,9 @@ export function createConversationStore(): ConversationStore {
     },
     getMessages() {
       return messages
+    },
+    getLoadEpoch() {
+      return loadEpoch
     },
     subscribe(listener: Listener) {
       listeners.add(listener)

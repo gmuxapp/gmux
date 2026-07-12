@@ -94,3 +94,46 @@ export function toThreadMessage(m: ConvMessage, index: number): ThreadMessageLik
 export function toThreadMessages(messages: ConvMessage[]): ThreadMessageLike[] {
   return messages.map(toThreadMessage)
 }
+
+/**
+ * An optimistic user turn shown before the server echoes it back. `after` is the
+ * number of store messages that existed when the turn was sent, so the echo is
+ * inserted at that position rather than always appended.
+ */
+export interface EchoTurn {
+  /** Store-message count at send time → the echo's insertion index. */
+  after: number
+  message: ConvMessage
+}
+
+/**
+ * Splice optimistic echoes into the authoritative store messages at their
+ * recorded positions.
+ *
+ * The naive `[...stored, ...echoes]` is wrong: the live ACP stream carries only
+ * assistant deltas, so an assistant reply lands in `stored` *after* the echo was
+ * created and — concatenated at the end — the user's turn wrongly renders below
+ * the reply. Anchoring each echo at the store length it was sent at keeps it
+ * above the assistant message that answers it. Equal-position echoes preserve
+ * their array order. Positions are clamped to the current store length (e.g.
+ * after a shrinking reload), though the island clears echoes on load anyway.
+ */
+export function interleaveEchoes(
+  stored: readonly ConvMessage[],
+  echoes: readonly EchoTurn[],
+): ConvMessage[] {
+  const out = [...stored]
+  if (echoes.length === 0) return out
+  const items = echoes.map((e, i) => ({
+    pos: Math.min(Math.max(e.after, 0), stored.length),
+    order: i,
+    message: e.message,
+  }))
+  items.sort((a, b) => a.pos - b.pos || a.order - b.order)
+  let added = 0
+  for (const it of items) {
+    out.splice(it.pos + added, 0, it.message)
+    added++
+  }
+  return out
+}
