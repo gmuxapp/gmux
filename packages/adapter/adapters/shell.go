@@ -51,8 +51,9 @@ var (
 )
 
 // Shell is the fallback adapter. It matches all commands and parses
-// OSC 0/2 title sequences for live sidebar titles. It does not report
-// running/idle status — that's for agent adapters, not plain shells.
+// OSC 0/2 title sequences for live sidebar titles. Busy/idle status
+// comes from runner-tracked OSC 133 prompt marks (see
+// StatusFromPromptMarks), not from Monitor.
 type Shell struct{}
 
 func NewShell() *Shell { return &Shell{} }
