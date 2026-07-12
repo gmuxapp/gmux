@@ -40,10 +40,10 @@ One JSON object per event, discriminated by `op`. Unknown ops/values are ignored
 // op "session" — authoritative bind. Sent on startup and on every rebind
 // (switch/new/resume/fork). "session" here denotes the agent's own session
 // (its conversation) — the agent's language, per ADR 0015; gmux calls the
-// bound artifact a conversation file.
+// bound artifact's locator a conversation ref (ADR 0022).
 {
   "op":     "session",
-  "path":   "/abs/path/to/conversation-file",  // required
+  "path":   "/abs/path/to/conversation-file",  // required; the conversation ref (a transcript path for today's file-backed agents)
   "id":     "session-id",                       // optional; slugified for the URL if no slug
   "slug":   "human-title",                      // optional; slug source (runner slugifies), preferred over id
   "name":   "human title",                      // optional; sets the adapter title
@@ -61,7 +61,7 @@ One JSON object per event, discriminated by `op`. Unknown ops/values are ignored
 
 | Field     | Op       | Meaning |
 |-----------|----------|---------|
-| `path`    | session  | Absolute path of the held conversation file. |
+| `path`    | session  | The held conversation's ref — adapter-opaque above the runner (ADR 0022); today's file-backed agents report the transcript's absolute path. |
 | `id`      | session  | Session identity; slugified into the URL when no `slug`. |
 | `slug`    | session  | Slug source, slugified by the runner; preferred over `id` (codex/pi session ids are UUIDs that slugify badly). |
 | `name`    | session  | Display title at bind time. |

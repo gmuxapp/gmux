@@ -135,7 +135,7 @@ test.describe('conversation discovery (watcher-driven)', () => {
 
     await awaitIndexed('pi', expectedSlug)
 
-    // Remove triggers fsnotify Remove -> RemoveByPath.
+    // Remove triggers fsnotify Remove -> RemoveByRef.
     fs.unlinkSync(filePath)
 
     await awaitRemoved('pi', expectedSlug)
