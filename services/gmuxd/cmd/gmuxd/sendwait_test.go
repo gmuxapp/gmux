@@ -171,19 +171,51 @@ func TestSendWaitTimesOut(t *testing.T) {
 	}
 }
 
-// TestSendWaitRejectsShellSessionsWithoutPromptMarks mirrors
-// handleWait's gate: a shell session with a nil Status has never
-// emitted an OSC 133 prompt mark, so no idle signal exists and the
-// wait contract can't be honored — fail loudly, don't deliver.
-func TestSendWaitRejectsShellSessionsWithoutPromptMarks(t *testing.T) {
-	srv, st := sendWaitTestServer(t, func(st *store.Store) {
-		t.Error("input must not be delivered when the wait contract can't be honored")
-	})
-	st.Upsert(store.Session{ID: "sess-shell", Adapter: "shell", Alive: true})
+// TestSendWaitMarklessShellBlocksUntilTimeout: a shell session whose
+// integration emits no prompt marks stays on the lifetime turn —
+// Working=true from launch — so its triggered "turn" can only close
+// at process exit. send --wait on it is accepted (no gate) and blocks
+// honestly until exit or ?timeout.
+func TestSendWaitMarklessShellBlocksUntilTimeout(t *testing.T) {
+	const id = "sess-shell-markless"
+	srv, st := sendWaitTestServer(t, nil)
+	upsertShell(st, id, true, &store.Status{Working: true})
 
-	resp, _ := postInput(t, srv, "sess-shell/input?wait=idle")
-	if resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Errorf("status = %d, want 422", resp.StatusCode)
+	start := time.Now()
+	resp, _ := postInput(t, srv, id+"/input?wait=idle&timeout=1")
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusRequestTimeout {
+		t.Fatalf("status = %d, want 408", resp.StatusCode)
+	}
+	if elapsed < 900*time.Millisecond || elapsed > 2*time.Second {
+		t.Errorf("elapsed = %v, want ~1s", elapsed)
+	}
+}
+
+// TestSendWaitOneShotExitResolvesIdle: input to a lifetime-turn
+// session (one-shot command, Working=true since launch) resolves
+// "idle" when the runner closes the turn at exit — the close status
+// precedes the exit event, and the persisted Status keeps the verdict
+// stable whichever event the wait observes.
+func TestSendWaitOneShotExitResolvesIdle(t *testing.T) {
+	const id = "sess-oneshot"
+	srv, st := sendWaitTestServer(t, func(st *store.Store) {
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			// Runner order: turn-close status, then exit.
+			upsertShell(st, id, true, &store.Status{Working: false})
+			upsertShell(st, id, false, &store.Status{Working: false})
+		}()
+	})
+	upsertShell(st, id, true, &store.Status{Working: true})
+
+	resp, body := postInput(t, srv, id+"/input?wait=idle&timeout=2")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "idle" {
+		t.Errorf("reason = %v, want idle", got)
 	}
 }
 
@@ -253,9 +285,11 @@ func TestSendWaitShellFastCommandPulse(t *testing.T) {
 }
 
 // TestSendWaitShellDiesOnExit: `gmux send <id> 'exit' Enter --wait`
-// ends the session instead of returning to a prompt. The wait must
-// unblock with "died" rather than hang — process exit always
-// satisfies a wait, just with a distinct reason/exit code.
+// on a prompt-cycle shell ends the session mid-turn: the command-start
+// mark flips Working=true and no prompt ever returns, so the persisted
+// turn state at death is open — the wait unblocks with "died" rather
+// than hang. (Contrast TestSendWaitOneShotExitResolvesIdle, where the
+// turn closes at exit.)
 func TestSendWaitShellDiesOnExit(t *testing.T) {
 	const id = "sess-shell-exit"
 	srv, st := sendWaitTestServer(t, func(st *store.Store) {
@@ -263,7 +297,7 @@ func TestSendWaitShellDiesOnExit(t *testing.T) {
 			time.Sleep(50 * time.Millisecond)
 			upsertShell(st, id, true, &store.Status{Working: true})
 			time.Sleep(50 * time.Millisecond)
-			upsertShell(st, id, false, nil)
+			upsertShell(st, id, false, &store.Status{Working: true})
 		}()
 	})
 	upsertShell(st, id, true, &store.Status{Working: false})

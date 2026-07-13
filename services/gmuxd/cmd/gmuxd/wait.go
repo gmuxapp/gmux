@@ -29,42 +29,36 @@ import (
 // scrollback cap, not the poll interval). See waitForOutput.
 //
 // The single signal we wait on is the per-session Status.Working flag
-// the adapters emit. That's a precise, debounced signal: the agent
-// adapters flip it false once their agent has finished its turn
-// (claude / codex / pi all emit a Working transition), and shell
-// sessions flip it via runner-tracked OSC 133 prompt marks (busy on
-// command start, idle when the prompt returns — issue #373). Falling
-// back to "no output bytes for N seconds" would race ad-hoc against
-// tool-call progress prints; the explicit Working flag is what we
-// already use in the UI's idle indicator and is the right thing to
-// consume here.
+// — the turn state every session carries under the unified turn model:
+// agent adapters flip it via their turn hooks, shell sessions via
+// runner-tracked OSC 133 prompt marks, and sessions without either
+// (one-shot commands) are Working from launch until their exit closes
+// the lifetime turn (issue #373). Falling back to "no output bytes for
+// N seconds" would race ad-hoc against tool-call progress prints; the
+// explicit Working flag is what we already use in the UI's idle
+// indicator and is the right thing to consume here.
 //
-// Sessions with no idle signal (see sessionHasIdleSignal) are
-// rejected with 422 rather than silently returning "idle"
-// immediately, which would foot-trap the obvious composition
-// `gmux make build && gmux --wait <id>` into doing nothing.
+// Every session is waitable. A markless interactive shell is Working
+// for its whole life, so a wait on it blocks until the session exits —
+// honest "never provably idle" behavior, bounded by --timeout.
 //
 // Reasons returned in the response body:
 //
-//   - "idle": session reached Status.Working == false
-//   - "died": session is no longer reachable before becoming idle.
-//     This covers Alive flipping to false (the session crashed or its
-//     adapter exited) and the session being removed from the store
-//     (UI dismiss, or any other code path calling sessions.Remove).
-//     Both surface to the CLI as exit code 2; --wait callers don't
-//     need to distinguish them.
+//   - "idle": the session's turn closed — Status.Working == false,
+//     whether observed live or (via the Status persisted across death)
+//     because the turn was already closed when the process exited: a
+//     one-shot command completing, a shell exiting at its prompt, an
+//     agent exiting after finishing its turn.
+//   - "died": the session became unreachable with its turn still open
+//     (crash mid-command / mid-turn), never demonstrated a turn state
+//     at all, or was removed from the store (UI dismiss). Surfaces to
+//     the CLI as exit code 2.
 //
 // HTTP status codes:
 //
 //   - 200 with {reason}: terminal state reached (caller maps to its
 //     own exit code)
 //   - 408 Request Timeout: --timeout deadline elapsed
-//   - 422: session has no idle signal (idle mode only; output
-//     conditions work for every adapter, including shell). Only
-//     *live* sessions are rejected — the 422 exists to prevent waits
-//     that could hang forever, and a session that already exited
-//     resolves immediately as "died" instead (idle includes process
-//     exit)
 //   - 404: session not found
 //   - 400: bad timeout, bad regex, or both output conditions at once
 //
@@ -76,8 +70,7 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 		return
 	}
 
-	sess, ok := sessions.Get(sessionID)
-	if !ok {
+	if _, ok := sessions.Get(sessionID); !ok {
 		writeError(w, http.StatusNotFound, "not_found", "session not found")
 		return
 	}
@@ -86,27 +79,6 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 	forRegex := r.URL.Query().Get("for_regex")
 	if forText != "" && forRegex != "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "for_text and for_regex are mutually exclusive")
-		return
-	}
-
-	// Output conditions don't need the idle signal: they read the
-	// scrollback tee, which every adapter (including shell) produces.
-	if forText == "" && forRegex == "" && !sessionHasIdleSignal(sess) {
-		// A session that already exited is a resolved wait, not a
-		// missing capability: idle includes process exit, so answer
-		// "died" (same as a dead agent) instead of rejecting with
-		// shell-integration advice that can't help a dead session.
-		// Strictly death, though — NOT terminalReason, whose idle arm
-		// would let a live no-signal session with a stale one-off
-		// Status silently return "idle", the exact foot-gun this 422
-		// exists to prevent. The 422 below fires only for sessions
-		// that could otherwise hang the wait forever — live (or
-		// startup-window) sessions with no demonstrated idle signal.
-		if !sess.Alive && hasRunEvidence(sess, false) {
-			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "died"}})
-			return
-		}
-		writeError(w, http.StatusUnprocessableEntity, "no_idle_signal", noIdleSignalMessage(sess))
 		return
 	}
 
@@ -426,13 +398,12 @@ func timeoutChan(r *http.Request) (<-chan time.Time, error) {
 // the input delivery.
 //
 // Contract mirrors handleWait: 200 {reason: idle|died}, 408 on
-// ?timeout=N elapsing, 422 for sessions with no idle signal (the
-// input handler's !Alive => 409 check runs first, so unlike
-// handleWait there is no dead-session case to resolve here). One
-// additional 422 ("input_no_submit") rejects bodies that carry no
-// carriage return: input that doesn't submit never starts a turn, so
-// waiting on it would only ever time out — fail loudly at the edge
-// instead.
+// ?timeout=N elapsing. A 422 ("input_no_submit") rejects bodies that
+// carry no carriage return: input that doesn't submit never starts a
+// turn, so waiting on it would only ever time out — fail loudly at
+// the edge instead. Every session is otherwise accepted; on a session
+// that never closes its turn (markless interactive shell) the wait
+// blocks until exit or --timeout, same as handleWait.
 //
 // send is a closure over the runner delivery (discovery.SendInput)
 // so this handler — and its tests — stay independent of the socket
@@ -445,10 +416,6 @@ func handleInputWait(w http.ResponseWriter, r *http.Request, sessions *store.Sto
 		// degrading to fire-and-forget.
 		writeError(w, http.StatusBadRequest, "bad_request",
 			"unsupported wait mode "+strconv.Quote(mode)+`; expected "idle"`)
-		return
-	}
-	if !sessionHasIdleSignal(sess) {
-		writeError(w, http.StatusUnprocessableEntity, "no_idle_signal", noIdleSignalMessage(sess))
 		return
 	}
 	if !inputSubmits(body) {
@@ -525,7 +492,16 @@ func awaitTurn(ctx context.Context, sessions *store.Store, evCh <-chan store.Eve
 			// No #216 startup-window gate here (unlike terminalReason /
 			// hasRunEvidence): handleInputWait only runs after the input
 			// handler's `!sess.Alive => 409` check, so we enter with a
-			// live session and any Alive==false is a genuine death.
+			// live session and any Alive==false is a genuine exit. Like
+			// terminalReason, the exit resolves by turn state: if a fresh
+			// Working pulse was observed and the turn is closed at death
+			// (the runner emits the close before the exit event), the
+			// input's turn completed — e.g. input to a one-shot whose
+			// processing ended when the process exited. Otherwise the
+			// session died mid-turn.
+			if seenWorking && s.Status != nil && !s.Status.Working {
+				return "idle", true
+			}
 			return "died", true
 		}
 		if s.Status != nil && s.Status.Working {
@@ -662,15 +638,25 @@ func waitForSessionExit(sessions *store.Store, evCh <-chan store.Event, sessionI
 // The Alive flag needs the symmetric treatment: right after launch
 // the session exists in the store with Alive == false until the
 // runner's first upsert lands, and reporting "died" during that
-// window is a phantom death (issue #216). "died" therefore requires
-// hasRunEvidence(s, seenAlive) — see that helper for the three signals
-// that count as "this session actually ran."
+// window is a phantom death (issue #216). A dead-session verdict
+// therefore requires hasRunEvidence(s, seenAlive) — see that helper
+// for the three signals that count as "this session actually ran."
+//
+// Death itself resolves by turn state (the Status the exit handling
+// persists across death): a closed turn at exit means the session
+// reached idle — a one-shot command completing, a shell exiting at
+// its prompt, an agent exiting after its turn — and reports "idle"
+// whether the wait watched it live or arrived afterwards. An open (or
+// never-demonstrated) turn at death is a genuine "died".
 func terminalReason(s store.Session, seenAlive bool) (string, bool) {
 	if !s.Alive {
-		if hasRunEvidence(s, seenAlive) {
-			return "died", true
+		if !hasRunEvidence(s, seenAlive) {
+			return "", false
 		}
-		return "", false
+		if s.Status != nil && !s.Status.Working {
+			return "idle", true
+		}
+		return "died", true
 	}
 	if s.Status != nil && !s.Status.Working {
 		return "idle", true
@@ -705,68 +691,3 @@ func hasRunEvidence(s store.Session, seenAlive bool) bool {
 	return seenAlive || s.ExitCode != nil || s.StartedAt != ""
 }
 
-// sessionHasIdleSignal reports whether --wait can observe a
-// meaningful idle transition for this session. Two sources:
-//
-//   - Adapter allowlist: the agent adapters always emit Working via
-//     their turn hooks, so their sessions are waitable from the moment
-//     they register — even before the first status event lands (a nil
-//     Status there means "turn in flight, hook not fired yet", and
-//     terminalReason correctly holds the wait for it).
-//
-//   - Per-session evidence, for shell sessions only (issue #373): the
-//     runner derives Working from OSC 133 prompt marks, so a shell
-//     whose integration emits them carries a non-nil Status from its
-//     first prompt on — evidence of a real busy/idle cycle. A shell
-//     without that integration keeps a nil Status forever and is
-//     rejected up front, instead of accepting a wait that can never
-//     end. The cost of the evidence gate is a small startup window:
-//     a wait issued before the shell has drawn its first prompt is
-//     rejected even if the integration would have emitted marks.
-//
-// The evidence check is deliberately NOT generalized to other
-// adapters: a non-nil Status only proves *some* status was emitted
-// (a one-off Monitor event, a child's single PUT /status, even a
-// status *clear*), not that the session produces the busy→idle turn
-// pulse send --wait requires — accepting those would trade the loud
-// 422 for a silent timeout. For the shell adapter the runner itself
-// owns the semantics (prompt marks are the only Status writer), so
-// the evidence is trustworthy. New adapter kinds should be admitted
-// deliberately, matching adapterEmitsIdleSignal's allowlist stance.
-func sessionHasIdleSignal(sess store.Session) bool {
-	if adapterEmitsIdleSignal(sess.Adapter) {
-		return true
-	}
-	return sess.Adapter == "shell" && sess.Status != nil
-}
-
-// noIdleSignalMessage explains a no_idle_signal rejection. Shell
-// sessions get an actionable message (the fix is enabling OSC 133
-// shell integration); everything else gets the generic adapter
-// limitation.
-func noIdleSignalMessage(sess store.Session) string {
-	if sess.Adapter == "shell" {
-		return "this shell session has not reported a prompt yet (no OSC 133 prompt marks observed); " +
-			"idle wait needs shell integration that emits them (fish does by default; bash/zsh need an integration snippet) — " +
-			"or wait on output with --for-text/--for-regex"
-	}
-	return "the " + sess.Adapter + " adapter does not emit an idle signal; --wait is only supported for agent and shell sessions"
-}
-
-// adapterEmitsIdleSignal reports whether sessions of the given
-// adapter always emit Status.Working transitions, regardless of
-// per-session evidence. Currently the agent adapters (claude, codex,
-// pi), whose hooks flip Working on every turn. Kept as an explicit
-// allowlist so adding a new agent adapter requires a deliberate
-// update here, and so unknown adapters (peer sessions whose adapter
-// we don't know about, future adapters) fail loudly instead of
-// silently degrading to "always idle." Shell sessions are not listed:
-// their signal depends on the user's shell integration, so they
-// qualify per-session via sessionHasIdleSignal's evidence check.
-func adapterEmitsIdleSignal(adapter string) bool {
-	switch adapter {
-	case "claude", "codex", "pi":
-		return true
-	}
-	return false
-}

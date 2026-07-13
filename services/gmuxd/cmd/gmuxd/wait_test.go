@@ -349,36 +349,38 @@ func TestWaitTimesOut(t *testing.T) {
 	}
 }
 
-// TestWaitRejectsShellSessionsWithoutPromptMarks pins the evidence
-// gate: a shell session that has never emitted a status transition
-// (nil Status — no OSC 133 prompt marks observed by the runner) has
-// no idle signal, so `gmux wait` against it would either return
-// immediately with a bogus "idle" or hang forever. 422 surfaces the
-// limitation explicitly, keeping `gmux make build && gmux wait <id>`
-// from silently doing nothing.
-func TestWaitRejectsShellSessionsWithoutPromptMarks(t *testing.T) {
+// TestWaitMarklessLiveShellBlocks pins the "hangs honestly" contract
+// that replaced the old no_idle_signal 422: a live shell on the
+// lifetime turn (Working=true since launch, no prompt marks) is never
+// provably idle, so the wait blocks until exit or ?timeout — it must
+// neither reject nor return a bogus immediate "idle".
+func TestWaitMarklessLiveShellBlocks(t *testing.T) {
 	srv, st, _ := waitTestServer(t)
 	st.Upsert(store.Session{
 		ID:      "sess-shell",
 		Adapter: "shell",
 		Alive:   true,
+		Status:  &store.Status{Working: true},
 	})
 
-	resp, _ := postWait(t, srv, "sess-shell")
-	if resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Errorf("status = %d, want 422", resp.StatusCode)
+	start := time.Now()
+	resp, _ := postWaitQuery(t, srv, "sess-shell", "timeout=1")
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusRequestTimeout {
+		t.Fatalf("status = %d, want 408", resp.StatusCode)
+	}
+	if elapsed < 900*time.Millisecond || elapsed > 2*time.Second {
+		t.Errorf("elapsed = %v, want ~1s", elapsed)
 	}
 }
 
-// TestWaitRejectsNonShellStatusEvidence pins the scope of the
-// per-session evidence gate: a non-agent, non-shell session with a
-// non-nil Status (a one-off Monitor event, a child's single
-// PUT /status — even a status clear round-trips as a non-nil zero
-// value) is NOT waitable. Such a status proves something was emitted
-// once, not that the session produces the busy→idle pulse the wait
-// contract needs; admitting it would trade the loud 422 for a silent
-// timeout. New adapter kinds must be allowlisted deliberately.
-func TestWaitRejectsNonShellStatusEvidence(t *testing.T) {
+// TestWaitAnyAdapterWithTurnStateIsWaitable pins the removal of the
+// adapter allowlist/evidence gate: under the unified turn model every
+// session carries turn state (the runner's default model covers
+// non-hook-driven adapters like editor), so an idle Status resolves
+// the wait regardless of adapter name.
+func TestWaitAnyAdapterWithTurnStateIsWaitable(t *testing.T) {
 	srv, st, _ := waitTestServer(t)
 	st.Upsert(store.Session{
 		ID:      "sess-editor",
@@ -387,36 +389,53 @@ func TestWaitRejectsNonShellStatusEvidence(t *testing.T) {
 		Status:  &store.Status{Working: false},
 	})
 
-	resp, _ := postWait(t, srv, "sess-editor")
-	if resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Errorf("status = %d, want 422", resp.StatusCode)
-	}
-}
-
-// TestWaitDeadShellWithoutMarksReturnsDied: a shell session that
-// already exited — the one-shot `gmux -d -- make && gmux wait $id`
-// arriving after the command finished — must resolve as "died"
-// (exit code 2, same as a dead agent), not 422 with shell-integration
-// advice that can't help a dead session. The no-idle-signal rejection
-// exists to prevent waits that could hang forever; a dead session
-// resolves immediately, so there is nothing to protect against.
-func TestWaitDeadShellWithoutMarksReturnsDied(t *testing.T) {
-	srv, st, _ := waitTestServer(t)
-	exitCode := 0
-	st.Upsert(store.Session{
-		ID:        "sess-shell-dead",
-		Adapter:   "shell",
-		Alive:     false,
-		ExitCode:  &exitCode,
-		StartedAt: "2026-07-11T00:00:00Z",
-	})
-
-	resp, body := postWait(t, srv, "sess-shell-dead")
+	resp, body := postWait(t, srv, "sess-editor")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	if got := body["data"].(map[string]any)["reason"]; got != "died" {
-		t.Errorf("reason = %v, want died", got)
+	if got := body["data"].(map[string]any)["reason"]; got != "idle" {
+		t.Errorf("reason = %v, want idle", got)
+	}
+}
+
+// TestWaitDeadSessionResolvesByTurnState pins turn-state-at-death: the
+// Status persisted across the exit event records whether the session's
+// turn was closed when it exited, and a wait arriving after the death
+// answers the same as one that watched it live — "idle" for a closed
+// turn (one-shot completed, shell exited at its prompt, agent exited
+// after its turn), "died" for an open turn (mid-command crash) or for
+// a session that never demonstrated any turn state (nil Status).
+func TestWaitDeadSessionResolvesByTurnState(t *testing.T) {
+	exitCode := 0
+	cases := []struct {
+		name   string
+		status *store.Status
+		want   string
+	}{
+		{"closed turn → idle", &store.Status{Working: false}, "idle"},
+		{"open turn → died", &store.Status{Working: true}, "died"},
+		{"no turn state → died", nil, "died"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st, _ := waitTestServer(t)
+			st.Upsert(store.Session{
+				ID:        "sess-dead",
+				Adapter:   "shell",
+				Alive:     false,
+				ExitCode:  &exitCode,
+				StartedAt: "2026-07-11T00:00:00Z",
+				Status:    tc.status,
+			})
+
+			resp, body := postWait(t, srv, "sess-dead")
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200", resp.StatusCode)
+			}
+			if got := body["data"].(map[string]any)["reason"]; got != tc.want {
+				t.Errorf("reason = %v, want %s", got, tc.want)
+			}
+		})
 	}
 }
 

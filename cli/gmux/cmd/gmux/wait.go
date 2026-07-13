@@ -117,15 +117,16 @@ func cmdWait(ref string, timeoutSecs int, forText, forRegex string) int {
 		fmt.Fprintf(os.Stderr, "gmux: wait timed out after %ds\n", timeoutSecs)
 		return waitExitTimeout
 	case http.StatusUnprocessableEntity:
-		// Adapter doesn't emit an idle signal. Surface the
-		// daemon's message so the user knows which adapter they hit.
+		// Current daemons only send 422 on the send --wait path
+		// (input_no_submit); older daemons also rejected sessions
+		// without an idle signal here. Surface the daemon's message
+		// either way — it explains what to change.
 		body, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "gmux: wait not supported for this session: %s\n",
 			extractMessage(body))
 		return 1
 	case http.StatusNotFound:
-		// Distinct from "no idle signal": means the session id is
-		// unknown to gmuxd entirely.
+		// Means the session id is unknown to gmuxd entirely.
 		fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", displayID(sess))
 		return 1
 	default:

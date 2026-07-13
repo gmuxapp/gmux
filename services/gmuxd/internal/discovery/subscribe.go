@@ -282,18 +282,18 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		sess.ExitCode = &exit.ExitCode
 		sess.ExitedAt = time.Now().UTC().Format(time.RFC3339)
 		// Let the OnExit hook set the resume command before upsert.
-		// If it returns true, the session transitioned to resumable,
-		// so don't overwrite with exit status.
-		resumed := false
 		if sub.OnExit != nil {
-			resumed = sub.OnExit(&sess)
+			sub.OnExit(&sess)
 		}
-		if !resumed {
-			// Status carries only live working/error state; on exit it's
-			// meaningless. The frontend derives any "exited (N)" text from
-			// exit_code, so just clear it.
-			sess.Status = nil
-		}
+		// The last Status is deliberately kept across death: it records
+		// whether the session's turn was closed when the process exited,
+		// which is what lets a wait issued after the exit resolve the
+		// same way as one that watched it live — "idle" for a closed
+		// turn (one-shot completed, shell exited at its prompt, agent
+		// exited after its turn), "died" for an open one (mid-command /
+		// mid-turn crash). See terminalReason. The frontend keys its
+		// working/error dots on Alive and derives "exited (N)" from
+		// exit_code, so a persisted Status doesn't disturb it.
 		if !sub.store.Update(sessionID, func(current *store.Session) {
 			*current = sess
 		}) {
