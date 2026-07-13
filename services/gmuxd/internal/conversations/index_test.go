@@ -90,16 +90,27 @@ func TestUpsert_SlugCollisionAcrossKinds(t *testing.T) {
 	}
 }
 
-func TestUpsert_UpdatePreservesSlug(t *testing.T) {
+func TestUpsert_RenameFollowsSlug(t *testing.T) {
 	idx := New()
 	idx.Upsert(Info{ConversationID: "aaa", Slug: "say-hi", Adapter: "claude"})
 	idx.Upsert(Info{ConversationID: "bbb", Slug: "say-hi", Adapter: "claude"})
 
-	// Update the second one with a different base slug (e.g., title changed).
-	// It should keep its assigned slug "say-hi-2", not get a new one.
+	// A title change re-keys so the displayed slug always resolves (ADR
+	// 0023 §5, the #348 slug-follows-rename semantics). The old suffixed
+	// key is released; conversation-ID lookups track the move.
 	s := idx.Upsert(Info{ConversationID: "bbb", Slug: "hello", Adapter: "claude", Title: "updated"})
-	if s != "say-hi-2" {
-		t.Errorf("update should preserve assigned slug, got %q", s)
+	if s != "hello" {
+		t.Errorf("rename should re-key to the new slug, got %q", s)
+	}
+	if _, ok := idx.Lookup("claude", "say-hi-2"); ok {
+		t.Error("old suffixed key should be released on rename")
+	}
+	if info, ok := idx.Lookup("claude", "bbb"); !ok || info.Key != "hello" {
+		t.Errorf("conversation-ID lookup should track the rename, got %+v ok=%v", info, ok)
+	}
+	// The first conversation's key is untouched.
+	if info, ok := idx.Lookup("claude", "say-hi"); !ok || info.ConversationID != "aaa" {
+		t.Errorf("unrelated conversation must keep its key, got %+v ok=%v", info, ok)
 	}
 }
 
@@ -345,5 +356,26 @@ func TestUpsertUpgradesUntitledKeyWhenTitled(t *testing.T) {
 	// conversation could claim it), yet resolution above still works.
 	if n := len(idx.All()); n != 1 {
 		t.Fatalf("index should hold exactly 1 conversation, got %d", n)
+	}
+
+	// A RENAME re-keys again: the displayed slug must always resolve.
+	key = idx.Upsert(Info{ConversationID: conv, Key: "ship-the-fix", Slug: "ship-the-fix", Adapter: "pi", Title: "Ship the fix"})
+	if key != "ship-the-fix" {
+		t.Fatalf("renamed key = %q, want re-keyed slug", key)
+	}
+	if info, ok := idx.Lookup("pi", "ship-the-fix"); !ok || info.ConversationID != conv {
+		t.Fatalf("Lookup by renamed slug failed: ok=%v info=%+v", ok, info)
+	}
+	if _, ok := idx.Lookup("pi", "fix-the-bug"); ok {
+		t.Fatal("old titled key should be released on rename")
+	}
+	if info, ok := idx.Lookup("pi", conv); !ok || info.Key != "ship-the-fix" {
+		t.Fatal("conversation-ID lookup should track the renamed key")
+	}
+
+	// A transiently empty slug (parse hiccup) must NOT downgrade the key.
+	key = idx.Upsert(Info{ConversationID: conv, Key: "", Adapter: "pi"})
+	if key != "ship-the-fix" {
+		t.Fatalf("untitled refresh re-keyed to %q, want stable ship-the-fix", key)
 	}
 }

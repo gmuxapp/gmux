@@ -101,16 +101,17 @@ func (idx *Index) Upsert(info Info) string {
 		info.Key = info.Slug
 	}
 
-	// If this conversation ID already has a key, update in place — unless
-	// the conversation has since gained a titled slug while the stored key
-	// is still the untitled UUID fallback. Keys and display slugs are
-	// separate (ADR 0023 §5), but a titled conversation must be reachable
-	// through its displayed slug, so the key upgrades once when the title
-	// arrives. Old UUID deep links keep resolving via the conversation-ID
-	// fallbacks in Lookup/FindByPrefix.
+	// If this conversation ID already has a key, update in place — but a
+	// TITLED conversation must stay reachable through its displayed slug
+	// (keys and display slugs are otherwise separate, ADR 0023 §5). So the
+	// key follows the slug: it upgrades from the untitled UUID fallback
+	// when a title first arrives, and re-keys again on rename — the same
+	// slug-follows-rename semantics session URLs have (#348). Conversation-
+	// ID deep links keep resolving via the fallbacks in Lookup/FindByPrefix.
+	// A transiently empty slug (a parse hiccup) keeps the existing key.
 	tk := convKey(info.Adapter, info.ConversationID)
 	if existing, ok := idx.byConversationID[tk]; ok {
-		if info.Slug != "" && existing != info.Slug && existing == adapter.Slugify(info.ConversationID) {
+		if info.Slug != "" && existing != info.Slug {
 			delete(idx.byKey, indexKey(info.Adapter, existing))
 			info.Key = idx.uniqueSlugLocked(info.Adapter, info.Slug, info.ConversationID)
 			idx.byKey[indexKey(info.Adapter, info.Key)] = info
