@@ -379,3 +379,34 @@ func TestUpsertUpgradesUntitledKeyWhenTitled(t *testing.T) {
 		t.Fatalf("untitled refresh re-keyed to %q, want stable ship-the-fix", key)
 	}
 }
+
+// TestRenameIntoCollidingSlugKeepsDisplayResolvable pins the PR #405 review
+// finding "Collision Key Diverges From Slug": renaming a conversation onto a
+// slug another conversation already holds must suffix BOTH the key and the
+// displayed slug — otherwise the row advertises a URL that resolves the other
+// conversation.
+func TestRenameIntoCollidingSlugKeepsDisplayResolvable(t *testing.T) {
+	idx := New()
+	idx.Upsert(Info{ConversationID: "aaa", Slug: "fix-auth", Adapter: "pi"})
+	idx.Upsert(Info{ConversationID: "bbb", Slug: "hello", Adapter: "pi"})
+
+	key := idx.Upsert(Info{ConversationID: "bbb", Slug: "fix-auth", Adapter: "pi", Title: "fix auth"})
+	if key != "fix-auth-2" {
+		t.Fatalf("colliding rename key = %q, want fix-auth-2", key)
+	}
+	info, ok := idx.Lookup("pi", "fix-auth-2")
+	if !ok || info.ConversationID != "bbb" {
+		t.Fatalf("suffixed key lookup: ok=%v info=%+v", ok, info)
+	}
+	if info.Slug != "fix-auth-2" {
+		t.Fatalf("displayed slug = %q, must equal the deduped key", info.Slug)
+	}
+	// The unsuffixed URL still resolves the ORIGINAL holder.
+	if orig, ok := idx.Lookup("pi", "fix-auth"); !ok || orig.ConversationID != "aaa" {
+		t.Fatalf("unsuffixed slug must keep resolving aaa: ok=%v info=%+v", ok, orig)
+	}
+	// A same-content refresh is a stable no-op (no key churn).
+	if again := idx.Upsert(Info{ConversationID: "bbb", Slug: "fix-auth", Adapter: "pi", Title: "fix auth"}); again != "fix-auth-2" {
+		t.Fatalf("refresh re-keyed to %q, want stable fix-auth-2", again)
+	}
+}

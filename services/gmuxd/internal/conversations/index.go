@@ -111,12 +111,22 @@ func (idx *Index) Upsert(info Info) string {
 	// A transiently empty slug (a parse hiccup) keeps the existing key.
 	tk := convKey(info.Adapter, info.ConversationID)
 	if existing, ok := idx.byConversationID[tk]; ok {
-		if info.Slug != "" && existing != info.Slug {
-			delete(idx.byKey, indexKey(info.Adapter, existing))
-			info.Key = idx.uniqueSlugLocked(info.Adapter, info.Slug, info.ConversationID)
-			idx.byKey[indexKey(info.Adapter, info.Key)] = info
-			idx.byConversationID[tk] = info.Key
-			return info.Key
+		if info.Slug != "" {
+			// Dedup FIRST (with the old key still in place, so a refresh
+			// that resolves to the same suffixed key is a no-op), then
+			// re-key only on genuine change. Display slug = final key,
+			// always: a collision-suffixed key must be the URL the row
+			// advertises, or the unsuffixed URL resolves a DIFFERENT
+			// conversation.
+			final := idx.uniqueSlugLocked(info.Adapter, info.Slug, info.ConversationID)
+			info.Key = final
+			info.Slug = final
+			if final != existing {
+				delete(idx.byKey, indexKey(info.Adapter, existing))
+				idx.byConversationID[tk] = final
+			}
+			idx.byKey[indexKey(info.Adapter, final)] = info
+			return final
 		}
 		ik := indexKey(info.Adapter, existing)
 		info.Key = existing
@@ -124,8 +134,12 @@ func (idx *Index) Upsert(info Info) string {
 		return existing
 	}
 
-	// Assign a unique internal key.
+	// Assign a unique internal key; a titled conversation's displayed slug
+	// is the final deduped key, so URLs and display never diverge.
 	info.Key = idx.uniqueSlugLocked(info.Adapter, info.Key, info.ConversationID)
+	if info.Slug != "" {
+		info.Slug = info.Key
+	}
 	ik := indexKey(info.Adapter, info.Key)
 	idx.byKey[ik] = info
 	idx.byConversationID[tk] = info.Key
