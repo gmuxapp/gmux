@@ -58,8 +58,6 @@ func (e *Editor) Match(command []string) bool {
 
 func (e *Editor) Env(_ adapter.EnvContext) []string { return nil }
 
-func (e *Editor) Monitor(_ []byte) *adapter.Event { return nil }
-
 // editFilePath extracts the file argument from a matched
 // `gmux __edit-child [path]` command; empty when launched without a
 // path (the child prompts for one interactively).

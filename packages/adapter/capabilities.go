@@ -34,19 +34,6 @@ type ConversationInfo struct {
 	Ref          string // the opaque conversation ref this info was described from
 }
 
-// Event is a partial session state update emitted by an adapter from observed
-// PTY bytes (via Monitor). Zero/nil fields are no-ops; the system only applies
-// fields that are explicitly set.
-type Event struct {
-	Title  string  // non-empty: update the adapter title
-	Status *Status // non-nil: update status; &Status{} clears it
-	Unread *bool   // non-nil: set or clear the unread flag
-	Cwd    string  // non-empty: update the session's canonical directory
-}
-
-// BoolPtr returns a pointer to v. Convenience for setting Event.Unread.
-func BoolPtr(v bool) *bool { return &v }
-
 // Launchable is implemented by adapters that want to expose one or more
 // launch presets in the UI.
 type Launchable interface {

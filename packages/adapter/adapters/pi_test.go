@@ -164,7 +164,7 @@ func TestPiNoMatchOther(t *testing.T) {
 	}
 }
 
-// --- Env / Monitor ---
+// --- Env ---
 
 func TestPiEnvNil(t *testing.T) {
 	if env := NewPi().Env(adapter.EnvContext{}); env != nil {
@@ -178,17 +178,6 @@ func TestPiDiscover(t *testing.T) {
 	}
 	// LookPath-based: result depends on the test machine.
 	_ = NewPi().Discover()
-}
-
-func TestPiMonitorNoOp(t *testing.T) {
-	// Pi Monitor is a no-op — status is driven by the agent hook.
-	pi := NewPi()
-	if pi.Monitor([]byte("⠋ Working...")) != nil {
-		t.Fatal("should return nil (file-driven, not PTY)")
-	}
-	if pi.Monitor([]byte("some output")) != nil {
-		t.Fatal("should return nil")
-	}
 }
 
 // TestPiSubmitSeq pins the composer keybinds `gmux send

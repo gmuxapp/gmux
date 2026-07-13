@@ -190,7 +190,6 @@ type Server struct {
 	listener        net.Listener
 	screen          *vt.Emulator  // virtual terminal for replay snapshots (guarded by mu)
 	screenDrainDone chan struct{} // closed when the DSR drain goroutine exits
-	adapter         adapter.Adapter
 	state           *session.State
 	// promptMarks derives Status from OSC 133 prompt marks for adapters
 	// that opt in via adapter.PromptSignaler (the shell adapter). Nil for
@@ -352,7 +351,6 @@ func New(cfg Config) (*Server, error) {
 		sockPath:   cfg.SocketPath,
 		listener:   listener,
 		screen:     nil, // set below after s is constructed
-		adapter:    cfg.Adapter,
 		state:      cfg.State,
 		clients:    make(map[*wsClient]struct{}),
 		localOut:   cfg.LocalOut,   // wired before readPTY starts so early output is never lost
@@ -1112,16 +1110,6 @@ func (s *Server) readPTY() {
 		// Process adapter/title hooks on the accumulated chunk.
 		if title := adapters.ParseOSCTitle(data); title != "" {
 			s.state.SetShellTitle(title)
-		}
-		if s.adapter != nil {
-			if ev := s.adapter.Monitor(data); ev != nil {
-				if ev.Title != "" {
-					s.state.SetAdapterTitle(ev.Title)
-				}
-				if ev.Status != nil {
-					s.state.SetStatus(ev.Status)
-				}
-			}
 		}
 		if s.promptMarks != nil {
 			s.promptMarks.Feed(data)

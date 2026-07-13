@@ -69,11 +69,6 @@ func (c *Claude) Launchers() []adapter.Launcher {
 	}}
 }
 
-// Monitor is a no-op — status is driven by the agent hook.
-func (c *Claude) Monitor(_ []byte) *adapter.Event {
-	return nil
-}
-
 // --- Conversation storage (file-backed: refs are absolute JSONL paths) ---
 
 // ConversationRootDir returns Claude Code's per-project sessions directory.

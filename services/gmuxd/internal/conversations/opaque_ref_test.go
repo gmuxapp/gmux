@@ -27,7 +27,6 @@ func (d *dbAdapter) Name() string {
 func (d *dbAdapter) Discover() bool                    { return true }
 func (d *dbAdapter) Match(_ []string) bool             { return false }
 func (d *dbAdapter) Env(_ adapter.EnvContext) []string { return nil }
-func (d *dbAdapter) Monitor(_ []byte) *adapter.Event   { return nil }
 
 func (d *dbAdapter) DescribeConversation(ref string) (*adapter.ConversationInfo, error) {
 	row, ok := d.rows[ref]

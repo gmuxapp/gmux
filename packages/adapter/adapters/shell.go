@@ -85,12 +85,6 @@ func (g *Shell) Launchers() []adapter.Launcher {
 	}}
 }
 
-func (g *Shell) Monitor(_ []byte) *adapter.Event {
-	// Shell title parsing is handled centrally in gmux so all sessions
-	// can use terminal titles as a fallback, not just shell sessions.
-	return nil
-}
-
 // StatusFromPromptMarks opts shell sessions into runner-side OSC 133
 // prompt-mark tracking: Working flips true when a command starts
 // executing and false when the command finishes / the next prompt is

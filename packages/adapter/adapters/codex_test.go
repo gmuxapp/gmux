@@ -59,18 +59,11 @@ func TestCodexNoMatchOther(t *testing.T) {
 	}
 }
 
-// --- Env / Monitor ---
+// --- Env ---
 
 func TestCodexEnvNil(t *testing.T) {
 	if env := NewCodex().Env(adapter.EnvContext{}); env != nil {
 		t.Fatalf("expected nil, got %v", env)
-	}
-}
-
-func TestCodexMonitorNoOp(t *testing.T) {
-	c := NewCodex()
-	if c.Monitor([]byte("⠋ Thinking...")) != nil {
-		t.Fatal("should return nil (file-driven)")
 	}
 }
 

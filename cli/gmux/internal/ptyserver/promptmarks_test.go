@@ -86,7 +86,6 @@ func (plainAdapter) Name() string                      { return "plain" }
 func (plainAdapter) Discover() bool                    { return true }
 func (plainAdapter) Match(_ []string) bool             { return true }
 func (plainAdapter) Env(_ adapter.EnvContext) []string { return nil }
-func (plainAdapter) Monitor(_ []byte) *adapter.Event   { return nil }
 
 // TestPromptMarksIgnoredForNonSignalerAdapters guards the capability
 // gate: OSC 133 marks in the output of an adapter that doesn't opt in

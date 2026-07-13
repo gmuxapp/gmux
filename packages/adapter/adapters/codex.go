@@ -86,11 +86,6 @@ func (c *Codex) Launchers() []adapter.Launcher {
 	}}
 }
 
-// Monitor is a no-op — status is driven by the agent hook.
-func (c *Codex) Monitor(_ []byte) *adapter.Event {
-	return nil
-}
-
 // --- Conversation storage (file-backed: refs are absolute JSONL paths) ---
 
 // ConversationRootDir returns Codex's sessions directory.
