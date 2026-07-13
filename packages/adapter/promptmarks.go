@@ -4,9 +4,12 @@ import "bytes"
 
 // PromptMarkTracker derives a busy/idle signal from OSC 133 prompt
 // marks ("semantic prompt" / FinalTerm sequences) in a raw PTY byte
-// stream. It is the runner-side machinery behind the PromptSignaler
-// capability: shells with an emitting integration get the same crisp
-// busy→idle Status transitions that agent adapters report via hooks.
+// stream. The runner tracks marks on every session whose adapter is
+// not hook-driven (see HookDriven): shells with an emitting
+// integration get the same crisp busy→idle Status transitions that
+// agent adapters report via hooks, upgrading the session from the
+// default lifetime-as-turn model (active from launch to exit) to
+// per-command prompt-cycle turns.
 //
 // Mark semantics (terminator is BEL or ST, extra params after the mark
 // letter — "133;D;0", kitty's ";k=s" — are ignored):
@@ -41,6 +44,15 @@ type PromptMarkTracker struct {
 	working bool // last reported polarity
 	seen    bool // whether any transition has been reported yet
 }
+
+// SawMark reports whether any actionable prompt mark (133;A/C/D) has
+// been observed. The runner uses this as the upgrade signal: once a
+// session demonstrates prompt cycles, its turns are delimited by the
+// marks and process exit no longer closes a turn by itself.
+//
+// Like Feed, not safe for concurrent use; the runner reads it only
+// after the final PTY flush (PTYDone) has completed.
+func (t *PromptMarkTracker) SawMark() bool { return t.seen }
 
 type promptParseState uint8
 

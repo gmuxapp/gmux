@@ -146,25 +146,29 @@ type SessionHookCommand interface {
 	HookCommand(args []string, selfBin string) (out []string, ok bool)
 }
 
-// PromptSignaler marks adapters whose sessions derive their busy/idle
-// Status from OSC 133 prompt marks ("semantic prompt" sequences) in the
-// PTY output stream, rather than from an agent hook or Monitor. The
-// runner watches the output for the marks and flips Status.Working
-// itself: busy when a command starts executing (133;C), idle when the
-// command finishes / the next prompt is drawn (133;D / 133;A). This is
-// what gives shell sessions the same crisp busy→idle signal that agent
-// sessions get from their turn hooks, so `gmux wait` and `gmux send
-// --wait` work on them (issue #373).
+// HookDriven reports whether sessions of this adapter derive their
+// turn state (Status.Working, unread, error) from an agent-side hook
+// (SessionExtender or SessionHookCommand — ADR 0011/0015): the agent
+// itself reports turn start/end over the runner socket, and the
+// runner applies no turn inference of its own.
 //
-// The marks come from the user's shell integration (fish emits them by
-// default; bash/zsh need an integration snippet), so a session of a
-// PromptSignaler adapter only reports Status once marks are actually
-// observed. Sessions that never emit marks simply keep a nil Status.
-type PromptSignaler interface {
-	// StatusFromPromptMarks reports whether the runner should track
-	// OSC 133 prompt marks in this adapter's PTY output and derive
-	// session Status from them.
-	StatusFromPromptMarks() bool
+// Every other adapter gets the runner's default turn model instead:
+// the session is active (Working=true) from launch, OSC 133 prompt
+// marks in the PTY output — when the child's shell integration emits
+// them — upgrade it to per-command prompt-cycle turns, and for
+// sessions that never emit marks the process exit closes the one
+// lifetime-long turn.
+func HookDriven(a Adapter) bool {
+	if a == nil {
+		return false
+	}
+	if _, ok := a.(SessionExtender); ok {
+		return true
+	}
+	if _, ok := a.(SessionHookCommand); ok {
+		return true
+	}
+	return false
 }
 
 // PassthroughDetector marks adapters that recognize invocations which are NOT

@@ -78,29 +78,34 @@ func TestShellPromptMarksDriveStatus(t *testing.T) {
 	}
 }
 
-// plainAdapter is a minimal adapter that does NOT implement
-// adapter.PromptSignaler, standing in for any non-shell adapter.
-type plainAdapter struct{}
+// hookedAdapter is a minimal hook-driven adapter (SessionExtender),
+// standing in for the agent adapters whose turn state is owned by
+// their hooks.
+type hookedAdapter struct{}
 
-func (plainAdapter) Name() string                      { return "plain" }
-func (plainAdapter) Discover() bool                    { return true }
-func (plainAdapter) Match(_ []string) bool             { return true }
-func (plainAdapter) Env(_ adapter.EnvContext) []string { return nil }
+func (hookedAdapter) Name() string                      { return "hooked" }
+func (hookedAdapter) Discover() bool                    { return true }
+func (hookedAdapter) Match(_ []string) bool             { return true }
+func (hookedAdapter) Env(_ adapter.EnvContext) []string { return nil }
+func (hookedAdapter) ExtendCommand(args []string, _ string) []string {
+	return args
+}
 
-// TestPromptMarksIgnoredForNonSignalerAdapters guards the capability
-// gate: OSC 133 marks in the output of an adapter that doesn't opt in
-// via PromptSignaler must not touch Status (agent adapters own their
-// Status via hooks; a stray mark must not fight them).
-func TestPromptMarksIgnoredForNonSignalerAdapters(t *testing.T) {
+// TestPromptMarksIgnoredForHookDrivenAdapters guards the turn-source
+// split: OSC 133 marks in the output of a hook-driven (agent) adapter
+// must not touch Status — the agent's hook is the sole owner of its
+// turn state, and a stray mark (e.g. printed by a tool the agent ran)
+// must not fight it.
+func TestPromptMarksIgnoredForHookDrivenAdapters(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
-	st := session.New(session.Config{ID: "sess-nomarks", Adapter: "plain"})
+	st := session.New(session.Config{ID: "sess-nomarks", Adapter: "hooked"})
 
 	srv, err := New(Config{
 		Command:    []string{"bash", "-c", `printf '\e]133;C\a\e]133;A\a'`},
 		Cwd:        "/tmp",
 		Listener:   mustBindSocket(t, sockPath),
 		SocketPath: sockPath,
-		Adapter:    plainAdapter{},
+		Adapter:    hookedAdapter{},
 		State:      st,
 	})
 	if err != nil {
@@ -114,6 +119,89 @@ func TestPromptMarksIgnoredForNonSignalerAdapters(t *testing.T) {
 		t.Fatal("child did not exit in time")
 	}
 	if got := st.StatusSnapshot(); got != nil {
-		t.Errorf("Status = %+v, want nil for a non-PromptSignaler adapter", got)
+		t.Errorf("Status = %+v, want nil for a hook-driven adapter", got)
+	}
+	if srv.LifetimeTurnOpen() {
+		t.Error("LifetimeTurnOpen() = true for a hook-driven session; the default turn model must not apply")
+	}
+}
+
+// TestPromptCycleSetsUnreadOnCommandCompletion pins the "waiting on
+// you" parity rule: a genuine working→idle prompt cycle flags the
+// session unread (like an agent's completed turn), while the shell's
+// initial prompt — also an idle transition — does not.
+func TestPromptCycleSetsUnreadOnCommandCompletion(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	st := session.New(session.Config{ID: "sess-unread", Adapter: "shell"})
+
+	ch := st.Subscribe()
+	defer st.Unsubscribe(ch)
+
+	srv, err := New(Config{
+		Command: []string{"bash", "-c",
+			// First prompt, pause (flush), then a full command cycle.
+			`printf '\e]133;A\a$ '; sleep 0.3; printf '\e]133;C\adone\n\e]133;D;0\a\e]133;A\a$ '`},
+		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
+		SocketPath: sockPath,
+		Adapter:    adapters.NewShell(),
+		State:      st,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// After the first idle transition (initial prompt): no unread.
+	if got := collectStatusEvents(t, ch, 1, 3*time.Second); len(got) != 1 || got[0] {
+		t.Fatalf("first transition = %v, want [false]", got)
+	}
+	if st.UnreadSnapshot() {
+		t.Error("unread = true after initial prompt; want false (no command completed yet)")
+	}
+
+	// After the full working→idle cycle: unread.
+	if got := collectStatusEvents(t, ch, 2, 3*time.Second); len(got) != 2 || got[0] != true || got[1] != false {
+		t.Fatalf("cycle transitions = %v, want [true false]", got)
+	}
+	if !st.UnreadSnapshot() {
+		t.Error("unread = false after a completed prompt cycle; want true (waiting on you)")
+	}
+	if srv.LifetimeTurnOpen() {
+		t.Error("LifetimeTurnOpen() = true after prompt marks were observed; session should be upgraded")
+	}
+}
+
+// TestLifetimeTurnStaysOpenWithoutMarks pins the default turn model's
+// upgrade signal: a session whose output never carries prompt marks
+// keeps its lifetime turn open (run.go closes it at exit — that's what
+// resolves waits on one-shot commands as "idle").
+func TestLifetimeTurnStaysOpenWithoutMarks(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	st := session.New(session.Config{ID: "sess-lifetime", Adapter: "shell"})
+
+	srv, err := New(Config{
+		Command:    []string{"bash", "-c", `echo plain output, no marks`},
+		Cwd:        "/tmp",
+		Listener:   mustBindSocket(t, sockPath),
+		SocketPath: sockPath,
+		Adapter:    adapters.NewShell(),
+		State:      st,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	select {
+	case <-srv.PTYDone():
+	case <-time.After(3 * time.Second):
+		t.Fatal("child did not exit in time")
+	}
+	if !srv.LifetimeTurnOpen() {
+		t.Error("LifetimeTurnOpen() = false for a markless session; want true (exit closes the turn)")
+	}
+	if st.UnreadSnapshot() {
+		t.Error("unread = true without any completed turn; want false (exit-close is run.go's job)")
 	}
 }
