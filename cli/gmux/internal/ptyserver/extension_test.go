@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
+	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 )
 
@@ -477,4 +478,62 @@ func TestApplyTurnEnd(t *testing.T) {
 			t.Errorf("%s: error=%v want %v", tc.outcome, status.Error, tc.wantError)
 		}
 	}
+}
+
+// TestReconnectReplaysStatus pins that a (re)connecting /events
+// subscriber is replayed the current Status snapshot. Status emitted
+// before the daemon subscribed would otherwise be invisible until the
+// next transition — which for the default turn model's launch-time
+// Working=true (one transition per lifetime) means never: the daemon
+// would see every one-shot as stateless until it exited.
+func TestReconnectReplaysStatus(t *testing.T) {
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "test.sock")
+
+	st := session.New(session.Config{ID: "s1", Adapter: "shell", SocketPath: sockPath})
+	srv, err := New(Config{
+		Command:    []string{"sleep", "3"},
+		Cwd:        dir,
+		Listener:   mustBindSocket(t, sockPath),
+		SocketPath: sockPath,
+		Adapter:    adapters.NewShell(),
+		State:      st,
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// Status set BEFORE anyone subscribes — as run.go does at launch.
+	// No other writer exists in this test, so the only way a subscriber
+	// can learn it is the replay.
+	st.SetStatus(&adapter.Status{Working: true})
+
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return net.Dial("unix", sockPath)
+		},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", "http://unix/events", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("connect /events: %v", err)
+	}
+	defer resp.Body.Close()
+
+	sc := bufio.NewScanner(resp.Body)
+	sawStatusEvent := false
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.HasPrefix(line, "event: status") {
+			sawStatusEvent = true
+			continue
+		}
+		if sawStatusEvent && strings.Contains(line, `"working":true`) {
+			return // success: status snapshot replayed on subscribe
+		}
+	}
+	t.Error("reconnecting subscriber did not receive the replayed status snapshot")
 }

@@ -401,25 +401,14 @@ func runSession(args []string, attach bool, dir runDirectives) {
 
 	exitCode := srv.ExitCode()
 
-	// Close the lifetime turn before announcing the exit. For sessions
-	// that never emitted prompt marks the exit IS the turn end (`gmux --
-	// pnpm test`): emit idle (+error on non-zero exit) and flag unread,
-	// so waits resolve as "idle" and the sidebar shows "waiting on you"
-	// — exactly like an agent finishing its turn. Sessions upgraded to
-	// prompt-cycle turns keep their last mark-derived state: exiting at
-	// the prompt already reads idle, dying mid-command stays working and
-	// resolves as "died". Wait for the final PTY flush first so a mark
-	// in the child's last bytes still counts (bounded; idempotent with
-	// the interactive path's earlier drain).
+	// Wait for the final PTY flush before reading LifetimeTurnOpen, so a
+	// prompt mark in the child's last bytes still counts (bounded;
+	// idempotent with the interactive path's earlier drain).
 	select {
 	case <-srv.PTYDone():
 	case <-time.After(ptyDrainTimeout):
 	}
-	if srv.LifetimeTurnOpen() {
-		state.SetStatus(&adapter.Status{Working: false, Error: exitCode != 0})
-		state.SetUnread(true)
-	}
-	state.SetExited(exitCode)
+	finalizeSessionState(state, srv.LifetimeTurnOpen(), exitCode)
 
 	// Wait for the register/handshake goroutine to finish before we
 	// touch deregister or exit. Otherwise a fast-exiting command
@@ -437,6 +426,29 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		fmt.Printf("exited:   %d\n", exitCode)
 	}
 	os.Exit(exitCode)
+}
+
+// finalizeSessionState records the child's exit on the session state,
+// closing the lifetime turn first when it is still open. For sessions
+// that never emitted prompt marks the exit IS the turn end (`gmux --
+// pnpm test`): emit idle (+error on a non-zero exit code) and flag
+// unread, so waits resolve as "idle" and the sidebar shows "waiting on
+// you" — exactly like an agent finishing its turn. Sessions upgraded
+// to prompt-cycle turns keep their last mark-derived state: exiting at
+// the prompt already reads idle, dying mid-command stays working and
+// resolves as "died" (ADR 0023).
+//
+// The ordering is load-bearing: the turn-close status and unread
+// events must be emitted before the exit event, so a subscriber (the
+// daemon's wait machinery) that resolves on the first terminal signal
+// it sees observes the closed turn, and the store's exit handling
+// persists the final Status rather than a stale mid-turn one.
+func finalizeSessionState(state *session.State, lifetimeTurnOpen bool, exitCode int) {
+	if lifetimeTurnOpen {
+		state.SetStatus(&adapter.Status{Working: false, Error: exitCode != 0})
+		state.SetUnread(true)
+	}
+	state.SetExited(exitCode)
 }
 
 // sessionEditorEnv returns EDITOR/VISUAL entries pointing at `gmux
