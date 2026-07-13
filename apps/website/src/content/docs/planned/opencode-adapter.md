@@ -19,7 +19,7 @@ Implement the core `Adapter` and `Launchable` interfaces.
 - **Binary**: `opencode`
 - **Match**: scan command args for `opencode` (same pattern as claude/codex)
 - **Discover**: `exec.LookPath("opencode")`
-- **Monitor**: no-op. OpenCode uses a full-screen bubbletea TUI with animated spinners, making PTY byte parsing unreliable for status detection.
+- **Turn state**: no PTY parsing (OpenCode's animated bubbletea TUI makes byte inference unreliable); until a hook exists, sessions run the runner's default turn model.
 - **Launcher**: `{ id: "opencode", label: "OpenCode", command: ["opencode"], description: "Coding Agent" }`
 
 This is enough for sessions to appear in gmux and be launchable from the UI. No working/idle status, no session discovery, no resume.

@@ -25,7 +25,7 @@ That split is why the adapter system is a set of small interfaces instead of one
 | Adapter availability detection | `gmuxd` | `Adapter.Discover()` |
 | Command matching | `gmux` | `Adapter.Match()` |
 | Child env injection | `gmux` | `Adapter.Env()` |
-| PTY output monitoring | `gmux` | `Adapter.Monitor()` |
+| Turn state (default model) | `gmux` | launch/exit lifecycle + OSC 133 prompt marks (non-hook-driven adapters) |
 | Child self-report API | `gmux` | Unix socket HTTP endpoints |
 | Launch menu discovery | `gmuxd` | `Launchable` + compiled adapter set |
 | Conversation metadata resolution | `gmuxd` | `ConversationDescriber` |
@@ -43,7 +43,7 @@ When you run a command through `gmux`:
    - otherwise shell fallback
 2. `gmux` starts the child under a PTY
 3. `gmux` injects the standard `GMUX_*` environment variables
-4. `gmux` feeds PTY output into `Adapter.Monitor()`
+4. `gmux` applies the default turn model for non-hook-driven adapters (active from launch; OSC 133 prompt marks upgrade to per-command turns)
 5. `gmux` serves the session on its Unix socket (`/meta`, `/events`, terminal attach, child callbacks)
 6. `gmuxd` discovers the runner socket (the runner registers itself; a periodic scan is the fallback), queries `/meta`, and subscribes to `/events`
 
@@ -71,7 +71,6 @@ type Adapter interface {
     Discover() bool
     Match(command []string) bool
     Env(ctx EnvContext) []string
-    Monitor(output []byte) *Event // partial update: title, status, unread, cwd
 }
 ```
 
@@ -254,11 +253,11 @@ This is the escape hatch for tools that want native gmux integration without nee
 
 A session's displayed state can come from multiple places:
 
-- process lifecycle defaults from gmux itself
-- adapter PTY monitoring via `Monitor()` (a no-op for the hooked agent adapters)
-- runner-tracked OSC 133 prompt marks for `PromptSignaler` adapters (shell: busy on command start, idle when the prompt returns)
-- authoritative agent-hook reports (held file, title, status)
+- the runner's default turn model for non-hook-driven adapters: active from launch, per-command turns once OSC 133 prompt marks are observed (shell: busy on command start, idle when the prompt returns), turn closed by process exit otherwise
+- authoritative agent-hook reports (held file, title, status) for hook-driven adapters
 - direct child callbacks via `PUT /status`
+
+There is deliberately no per-byte PTY inference by adapter code; status sources are declarative (hooks, marks, lifecycle) so they cannot flicker on TUI redraws.
 
 The important design point is that adapters do not own the whole session model. They contribute structured hints into a runner-owned session state that `gmuxd` then aggregates and serves.
 

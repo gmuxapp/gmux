@@ -113,21 +113,25 @@ done
 ## Waiting
 
 `gmux wait <id>` blocks until the session goes **idle** — an agent finishing
-its turn, or a shell finishing its command and returning to a fresh prompt —
-optionally bounded by `--timeout N`. Exit codes:
+its turn, a shell finishing its command and returning to a fresh prompt, or
+a one-shot command's process exiting — optionally bounded by `--timeout N`.
+Exit codes:
 
-- `0` session reached idle
-- `2` session exited/died before going idle
+- `0` session reached idle (including a one-shot completing / a shell
+  exiting at its prompt)
+- `2` session exited with its turn still open (crash mid-command/mid-turn)
 - `3` `--timeout` elapsed
 
-**Shell sessions** are waitable when the shell emits OSC 133 prompt marks
-(fish does by default; bash/zsh need shell integration). `gmux send --wait
-<id> 'make build' Enter` then blocks until the command finishes and the
-prompt returns. A *running* shell that has never emitted a prompt mark has no
-idle signal and is rejected — that includes one-shot `gmux -- <cmd>` sessions
-— so run those blocking instead (`gmux -- make build < /dev/null` exits with
-the command's own status) or use an output condition below. Waiting on any
-session that already *exited* returns `2` immediately.
+Every session is waitable. **Shell sessions** get per-command idle from OSC
+133 prompt marks (fish emits them by default; bash/zsh need shell
+integration): `gmux send --wait <id> 'make build' Enter` blocks until the
+command finishes and the prompt returns. Sessions that never emit marks —
+one-shot `gmux -d -- <cmd>` runs, or shells without integration — are one
+lifetime-long turn: `wait` blocks until the process exits (`gmux -d -- pnpm
+test; gmux wait $id` waits for the test run). Careful: an interactive shell
+without integration never exits on its own, so bound that wait with
+`--timeout` or use an output condition below. Waits issued after the exit
+answer the same as live ones.
 
 To wait for specific **output** instead of idle, use `--for-text <substr>` or
 `--for-regex <pattern>` (works for shell sessions too — no grep loop needed):
