@@ -306,7 +306,7 @@ func (m *Manager) DismissSession(id string) string {
 // Errors are logged so a failed cleanup does not stop the event loop.
 func (m *Manager) WatchRemovals(events <-chan store.Event) {
 	for ev := range events {
-		if ev.Type != "session-remove" {
+		if ev.Type != store.EventSessionRemove {
 			continue
 		}
 		if err := m.RemoveSessionFromAll(ev.ID); err != nil {

@@ -23,7 +23,7 @@ import (
 //     the struct field is gone and the JSON decoder silently drops it.
 //   - 4: Sessions contains session IDs only. v3 → v4 is a structural
 //     pass-through here; Load resolves legacy slug keys with sessionmeta's
-//     startup sweep before decoding (ADR 0023). Hand-edited slug keys are
+//     startup sweep before decoding (ADR 0024). Hand-edited slug keys are
 //     unsupported.
 func migrateState(data []byte) ([]byte, error) {
 	var doc map[string]any

@@ -114,7 +114,7 @@ test.describe('conversation discovery (watcher-driven)', () => {
     // Append a `custom-title` line. Claude's parser prefers
     // custom-title over first-user-message text, so the indexed
     // title should update on re-parse. The lookup key FOLLOWS the
-    // displayed slug (ADR 0023 §5, the #348 slug-follows-rename
+    // displayed slug (ADR 0024 §5, the #348 slug-follows-rename
     // semantics), so the retitled conversation resolves under its
     // new slug; conversation-ID URLs keep resolving across renames.
     const newTitle = 'claude custom retitled'

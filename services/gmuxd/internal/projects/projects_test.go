@@ -1110,8 +1110,11 @@ func TestManagerWatchRemovals(t *testing.T) {
 	events := make(chan store.Event)
 	done := make(chan struct{})
 	go func() { mgr.WatchRemovals(events); close(done) }()
-	events <- store.Event{Type: "session-remove", ID: "sess-1"}
-	events <- store.Event{Type: "session-remove", ID: "sess-1"} // idempotent after dismiss/removal
+	// Activity pulses (#399's turn model) share the bus but are not
+	// removals — membership must survive them.
+	events <- store.Event{Type: store.EventSessionActivity, ID: "sess-1"}
+	events <- store.Event{Type: store.EventSessionRemove, ID: "sess-1"}
+	events <- store.Event{Type: store.EventSessionRemove, ID: "sess-1"} // idempotent after dismiss/removal
 	close(events)
 	select {
 	case <-done:

@@ -1,4 +1,4 @@
-# ADR 0023: Project membership keyed by session ID; conversation-lineage takeover
+# ADR 0024: Project membership keyed by session ID; conversation-lineage takeover
 
 **Status:** Accepted
 **Date:** 2026-07-12

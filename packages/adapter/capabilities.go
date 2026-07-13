@@ -33,7 +33,7 @@ type ConversationInfo struct {
 	MessageCount int
 	Ref          string // the opaque conversation ref this info was described from
 	// AncestorIDs are IDs of conversations this one was resumed from, oldest-first
-	// when that order is derivable; empty when the adapter resumes in place (ADR 0023 §2).
+	// when that order is derivable; empty when the adapter resumes in place (ADR 0024 §2).
 	AncestorIDs []string
 }
 

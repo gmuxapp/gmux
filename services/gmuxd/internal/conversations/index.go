@@ -103,7 +103,7 @@ func (idx *Index) Upsert(info Info) string {
 
 	// If this conversation ID already has a key, update in place — but a
 	// TITLED conversation must stay reachable through its displayed slug
-	// (keys and display slugs are otherwise separate, ADR 0023 §5). So the
+	// (keys and display slugs are otherwise separate, ADR 0024 §5). So the
 	// key follows the slug: it upgrades from the untitled UUID fallback
 	// when a title first arrives, and re-keys again on rename — the same
 	// slug-follows-rename semantics session URLs have (#348). Conversation-
