@@ -50,10 +50,18 @@ Rules:
 3. **Turn close ⇒ unread.** Every genuine working→idle transition sets
    "waiting on you", exactly like an agent's completed turn. The initial
    prompt (launch phase ending) does not. Lifetime-turn exits also set
-   `Status.Error` on a non-zero exit code.
+   `Status.Error` on a non-zero exit code. Viewing acknowledges: live
+   sessions clear unread through the runner (WS attach), and — because
+   every one-shot now dies unread and has no runner — the daemon clears
+   unread (and the error dot) on *dead* sessions when a client selects
+   them (presence `OnSessionSelected`). `Working` survives the view: it
+   is the turn state at death.
 4. **Turn-state-at-death.** The exit event no longer clears `Status`; the
    persisted flag records whether the turn was closed when the process
-   exited. `wait` resolves death by it: closed turn → `idle` (rc 0: one-shot
+   exited. This holds across *every* exit path — in particular the
+   resume-command derivation hook must not clear Status for "clean
+   resumable display" (it once did, which silently made the wait verdict
+   timing-dependent for agents). `wait` resolves death by it: closed turn → `idle` (rc 0: one-shot
    completed, shell exited at its prompt, agent exited after its turn); open
    or never-demonstrated turn → `died` (rc 2). This makes the verdict
    timing-independent — a wait issued after the death answers the same as
