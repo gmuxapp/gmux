@@ -157,17 +157,25 @@ func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, s
 			if ev.ID != sessionID {
 				continue
 			}
-			if ev.Session == nil {
-				// session-remove: the session was dismissed (UI close)
-				// or otherwise dropped from the store. From --wait's
-				// perspective this is indistinguishable from a crash:
-				// the agent is no longer reachable and won't ever
-				// reach idle. Without this case --wait would hang
-				// forever (the ticker fallback also returns no-op for
-				// missing sessions), which is exactly the failure mode
-				// no-default-timeout was meant to avoid.
+			if ev.Type == store.EventSessionRemove {
+				// The session was dismissed (UI close) or otherwise
+				// dropped from the store. From --wait's perspective this
+				// is indistinguishable from a crash: the session is no
+				// longer reachable and won't ever reach idle. Without
+				// this case --wait would hang forever (the ticker
+				// fallback also returns no-op for missing sessions),
+				// which is exactly the failure mode no-default-timeout
+				// was meant to avoid.
 				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "died"}})
 				return
+			}
+			if ev.Session == nil {
+				// Not a state change: session-activity (and any future
+				// payload-less signal) carries no Session. Dispatching on
+				// the event type matters here — treating every nil-Session
+				// event as a removal turned an unwatched session's output
+				// pulse into a spurious "died".
+				continue
 			}
 			seenAlive = seenAlive || ev.Session.Alive
 			if reason, done := terminalReason(*ev.Session, seenAlive); done {
@@ -540,9 +548,13 @@ func awaitTurn(ctx context.Context, sessions *store.Store, evCh <-chan store.Eve
 			if ev.ID != sessionID {
 				continue
 			}
-			if ev.Session == nil {
-				// session-remove: dismissed mid-wait. See handleWait.
+			if ev.Type == store.EventSessionRemove {
+				// Dismissed mid-wait. See handleWait.
 				return "died", false
+			}
+			if ev.Session == nil {
+				// session-activity: transient pulse, not a state change.
+				continue
 			}
 			if reason, done := check(*ev.Session); done {
 				return reason, false
@@ -601,12 +613,15 @@ func waitForSessionExit(sessions *store.Store, evCh <-chan store.Event, sessionI
 			if ev.ID != sessionID {
 				continue
 			}
-			if ev.Session == nil {
-				// session-remove for our id: the store dropped the
-				// session (a remove is never followed by a transient
-				// re-upsert of the same id; shadow eviction only
-				// removes other ids).
+			if ev.Type == store.EventSessionRemove {
+				// The store dropped the session (a remove is never
+				// followed by a transient re-upsert of the same id;
+				// shadow eviction only removes other ids).
 				return store.Session{}, errExitWaitRemoved
+			}
+			if ev.Session == nil {
+				// session-activity: transient pulse, not a state change.
+				continue
 			}
 			if ev.Session.Resumable {
 				return *ev.Session, nil

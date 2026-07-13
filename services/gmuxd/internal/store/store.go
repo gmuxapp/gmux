@@ -179,8 +179,17 @@ type Status struct {
 	Error   bool `json:"error,omitempty"`
 }
 
+// Event types on the store's subscriber bus. Only EventSessionUpsert
+// carries a Session payload; consumers must dispatch on Type, not on
+// Session == nil (an activity pulse is not a removal).
+const (
+	EventSessionUpsert   = "session-upsert"   // state change; Session present
+	EventSessionRemove   = "session-remove"   // session dropped from the store
+	EventSessionActivity = "session-activity" // transient output pulse; no Session
+)
+
 type Event struct {
-	Type string `json:"type"` // "session-upsert" | "session-remove"
+	Type string `json:"type"` // EventSessionUpsert | EventSessionRemove | EventSessionActivity
 	ID   string `json:"id"`
 
 	// Present for session-upsert

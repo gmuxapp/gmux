@@ -203,8 +203,10 @@ func TestSendWaitOneShotExitResolvesIdle(t *testing.T) {
 	srv, st := sendWaitTestServer(t, func(st *store.Store) {
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			// Runner order: turn-close status, then exit.
-			upsertShell(st, id, true, &store.Status{Working: false})
+			// Worst case for the wait: it only ever observes the session
+			// already dead (the live turn-close event was coalesced into
+			// the exit upsert). The persisted closed-turn Status must
+			// still resolve "idle", not "died".
 			upsertShell(st, id, false, &store.Status{Working: false})
 		}()
 	})
