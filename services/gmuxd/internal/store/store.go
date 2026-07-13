@@ -401,13 +401,13 @@ func (s *Store) commitLocked(prev Session, hadPrev bool, sess *Session) (removed
 // unless the write was skipped or a no-op. Caller must NOT hold s.mu.
 func (s *Store) broadcastCommit(sess Session, removed []string, skip, unchanged bool) {
 	for _, id := range removed {
-		s.broadcast(Event{Type: "session-remove", ID: id})
+		s.broadcast(Event{Type: EventSessionRemove, ID: id})
 	}
 	if skip || unchanged {
 		return
 	}
 	s.broadcast(Event{
-		Type:    "session-upsert",
+		Type:    EventSessionUpsert,
 		ID:      sess.ID,
 		Session: &sess,
 	})
@@ -474,7 +474,7 @@ func (s *Store) SetTerminalSize(id string, cols, rows uint16) bool {
 	s.mu.Unlock()
 
 	s.broadcast(Event{
-		Type:    "session-upsert",
+		Type:    EventSessionUpsert,
 		ID:      sess.ID,
 		Session: &sess,
 	})
@@ -519,7 +519,7 @@ func (s *Store) Remove(id string) bool {
 
 	if ok {
 		s.broadcast(Event{
-			Type: "session-remove",
+			Type: EventSessionRemove,
 			ID:   id,
 		})
 	}
@@ -601,7 +601,7 @@ func (s *Store) RemoveDeadByConversationRef(adapterName, ref string) []string {
 	s.mu.Unlock()
 
 	for _, id := range removed {
-		s.broadcast(Event{Type: "session-remove", ID: id})
+		s.broadcast(Event{Type: EventSessionRemove, ID: id})
 	}
 	return removed
 }
@@ -635,7 +635,7 @@ func (s *Store) RemoveByPeer(peer string) []string {
 	s.mu.Unlock()
 
 	for _, id := range removed {
-		s.broadcast(Event{Type: "session-remove", ID: id})
+		s.broadcast(Event{Type: EventSessionRemove, ID: id})
 	}
 	return removed
 }

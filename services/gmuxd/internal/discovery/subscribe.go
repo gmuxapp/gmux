@@ -30,10 +30,12 @@ type Subscriptions struct {
 	mu     sync.Mutex
 	active map[string]*subEntry // sessionID → entry
 	store  *store.Store
-	// OnExit is called after a session exit event is processed.
-	// Returns true if the session was transitioned to resumable
-	// (caller should not set exit status).
-	OnExit func(sess *store.Session) bool
+	// OnExit is called while a session exit event is being processed,
+	// before the dead session is written back to the store. The hook may
+	// mutate the session (gmuxd derives the resume command here) but must
+	// leave Status alone: the last Status is the session's turn state at
+	// death, which post-mortem waits resolve by (ADR 0023).
+	OnExit func(sess *store.Session)
 	// OnDead fires after the store Upsert that records an exit
 	// event. The session passed is the post-Upsert snapshot,
 	// including any Title / Resumable derivation the store applied
@@ -249,7 +251,11 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 			if meta.Unread != nil {
 				sess.Unread = *meta.Unread
 				if !*meta.Unread && sess.Status != nil && sess.Status.Error {
-					sess.Status.Error = false
+					// Replace, don't mutate: store.Update's copy is shallow,
+					// so writing through the shared *Status would also
+					// rewrite the store's previous snapshot and defeat its
+					// no-op change detection.
+					sess.Status = &store.Status{Working: sess.Status.Working}
 				}
 			}
 			// A slug key is only ever present on a deliberate SetSlug (the
@@ -333,7 +339,7 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		// Transient signal: terminal produced output with no attached clients.
 		// Forward to the store's subscribers without mutating state.
 		sub.store.Broadcast(store.Event{
-			Type: "session-activity",
+			Type: store.EventSessionActivity,
 			ID:   sessionID,
 		})
 

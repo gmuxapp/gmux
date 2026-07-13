@@ -376,7 +376,7 @@ func (s *Store) Remove(id string) error {
 // (i.e., when the store subscription is cancelled at shutdown).
 func (s *Store) WatchRemovals(events <-chan store.Event) {
 	for ev := range events {
-		if ev.Type != "session-remove" {
+		if ev.Type != store.EventSessionRemove {
 			continue
 		}
 		if err := s.Remove(ev.ID); err != nil {
