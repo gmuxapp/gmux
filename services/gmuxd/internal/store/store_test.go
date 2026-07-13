@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -1673,5 +1674,55 @@ func TestLastActivityAt_UpsertRemotePreserves(t *testing.T) {
 	got2, _ := s.Get("s1")
 	if got2.LastActivityAt != wired {
 		t.Fatalf("UpsertRemote alive→false should preserve peer-supplied timestamp (want %q, got %q)", wired, got2.LastActivityAt)
+	}
+}
+
+// TestUpdateBindDoesNotResurrectRemovedSession pins the fix for a race in
+// Update's first-bind path: describing a conversation (adapter I/O) must not
+// run under s.mu, but dropping the lock and writing the pre-drop copy back
+// afterwards could resurrect a session dismissed during the window. Update now
+// warms the lineage cache outside the lock and RETRIES from fresh state, so a
+// concurrent Remove wins.
+//
+// A FIFO makes the race deterministic: claude's DescribeConversation blocks
+// reading it, and opening the write end succeeds exactly when the reader has
+// the FIFO open — i.e. while Update is inside the unlocked window.
+func TestUpdateBindDoesNotResurrectRemovedSession(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "33333333-3333-4333-8333-333333333333.jsonl")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("mkfifo unavailable: %v", err)
+	}
+
+	s := New()
+	s.Upsert(Session{ID: "sess-race", Adapter: "claude", Alive: true})
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- s.Update("sess-race", func(sess *Session) {
+			sess.ConversationRef = fifo
+		})
+	}()
+
+	// Blocks until the describe's ReadFile has the FIFO open for reading —
+	// Update is now past the unlock.
+	w, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open fifo writer: %v", err)
+	}
+
+	// Dismiss the session while Update is stuck describing.
+	if !s.Remove("sess-race") {
+		t.Fatal("remove should have found the session")
+	}
+
+	// Unblock the describe (EOF → parse failure → cached), letting Update
+	// retry and observe the removal.
+	w.Close()
+	if got := <-done; got {
+		t.Fatal("Update should report false after a concurrent Remove")
+	}
+	if _, ok := s.Get("sess-race"); ok {
+		t.Fatal("removed session must not be resurrected by a stale bind write-back")
 	}
 }

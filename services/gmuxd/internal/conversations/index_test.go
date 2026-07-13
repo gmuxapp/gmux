@@ -310,3 +310,40 @@ func TestSinkRemoveFiresOnRemovedEvenWhenUnindexed(t *testing.T) {
 	// nil callback must not panic.
 	indexSink{idx: idx, a: &dbAdapter{name: "pi"}}.Remove("/x/whatever.jsonl")
 }
+
+// TestUpsertUpgradesUntitledKeyWhenTitled pins the titled-key upgrade
+// (PR #405 review): a conversation first indexed untitled gets the UUID
+// fallback key; when the title arrives, the key must upgrade so the displayed
+// slug resolves — while old UUID deep links keep working through the
+// conversation-ID fallbacks in Lookup and FindByPrefix.
+func TestUpsertUpgradesUntitledKeyWhenTitled(t *testing.T) {
+	idx := New()
+	const conv = "44444444-4444-4444-8444-444444444444"
+
+	key := idx.Upsert(Info{ConversationID: conv, Key: conv, Adapter: "pi"})
+	if key != conv {
+		t.Fatalf("untitled key = %q, want UUID fallback", key)
+	}
+
+	key = idx.Upsert(Info{ConversationID: conv, Key: "fix-the-bug", Slug: "fix-the-bug", Adapter: "pi", Title: "Fix the bug"})
+	if key != "fix-the-bug" {
+		t.Fatalf("titled key = %q, want upgraded slug key", key)
+	}
+
+	// The displayed slug resolves.
+	if info, ok := idx.Lookup("pi", "fix-the-bug"); !ok || info.ConversationID != conv {
+		t.Fatalf("Lookup by titled slug failed: ok=%v info=%+v", ok, info)
+	}
+	// Old UUID deep links keep resolving (exact and prefix).
+	if info, ok := idx.Lookup("pi", conv); !ok || info.Key != "fix-the-bug" {
+		t.Fatalf("Lookup by conversation ID failed: ok=%v info=%+v", ok, info)
+	}
+	if info, ok := idx.FindByPrefix("pi", conv[:8]); !ok || info.Key != "fix-the-bug" {
+		t.Fatalf("FindByPrefix by conversation-ID prefix failed: ok=%v info=%+v", ok, info)
+	}
+	// The stale UUID key entry is gone from the key namespace (a NEW
+	// conversation could claim it), yet resolution above still works.
+	if n := len(idx.All()); n != 1 {
+		t.Fatalf("index should hold exactly 1 conversation, got %d", n)
+	}
+}

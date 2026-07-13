@@ -67,8 +67,16 @@ func convKey(adapterName, conversationID string) string {
 func (idx *Index) Lookup(adapterName, key string) (Info, bool) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	info, ok := idx.byKey[indexKey(adapterName, key)]
-	return info, ok
+	if info, ok := idx.byKey[indexKey(adapterName, key)]; ok {
+		return info, true
+	}
+	// A conversation ID (or its old untitled fallback key) keeps resolving
+	// after the key upgraded to a titled slug — deep links must not break.
+	if k, ok := idx.byConversationID[convKey(adapterName, key)]; ok {
+		info, ok := idx.byKey[indexKey(adapterName, k)]
+		return info, ok
+	}
+	return Info{}, false
 }
 
 // LookupByConversationID returns the internal key for a conversation identified
@@ -93,9 +101,22 @@ func (idx *Index) Upsert(info Info) string {
 		info.Key = info.Slug
 	}
 
-	// If this conversation ID already has a key, update in place.
+	// If this conversation ID already has a key, update in place — unless
+	// the conversation has since gained a titled slug while the stored key
+	// is still the untitled UUID fallback. Keys and display slugs are
+	// separate (ADR 0023 §5), but a titled conversation must be reachable
+	// through its displayed slug, so the key upgrades once when the title
+	// arrives. Old UUID deep links keep resolving via the conversation-ID
+	// fallbacks in Lookup/FindByPrefix.
 	tk := convKey(info.Adapter, info.ConversationID)
 	if existing, ok := idx.byConversationID[tk]; ok {
+		if info.Slug != "" && existing != info.Slug && existing == adapter.Slugify(info.ConversationID) {
+			delete(idx.byKey, indexKey(info.Adapter, existing))
+			info.Key = idx.uniqueSlugLocked(info.Adapter, info.Slug, info.ConversationID)
+			idx.byKey[indexKey(info.Adapter, info.Key)] = info
+			idx.byConversationID[tk] = info.Key
+			return info.Key
+		}
 		ik := indexKey(info.Adapter, existing)
 		info.Key = existing
 		idx.byKey[ik] = info
@@ -268,6 +289,14 @@ func (idx *Index) FindByPrefix(adapterName, prefix string) (Info, bool) {
 	for key, info := range idx.byKey {
 		if strings.HasPrefix(key, keyPrefix) {
 			return info, true
+		}
+	}
+	// Conversation-ID prefixes keep resolving after a titled-key upgrade.
+	for ck, key := range idx.byConversationID {
+		if strings.HasPrefix(ck, keyPrefix) {
+			if info, ok := idx.byKey[indexKey(adapterName, key)]; ok {
+				return info, true
+			}
 		}
 	}
 	return Info{}, false

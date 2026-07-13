@@ -438,33 +438,51 @@ func (s *Store) broadcastCommit(sess Session, removed []string, skip, unchanged 
 // (e.g. the file monitor and the SSE subscriber goroutines).
 // Returns false if the session doesn't exist.
 func (s *Store) Update(id string, fn func(*Session)) bool {
-	s.mu.Lock()
-	prev, ok := s.sessions[id]
-	if !ok {
-		s.mu.Unlock()
-		return false
-	}
-	prevSnap := snapshotActivity(prev)
-	sess := prev
-	fn(&sess)
-	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
-	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
-	sess.Title = s.resolveTitle(sess)
-	sess.Resumable = !sess.Alive && len(sess.Command) > 0
-	if shouldBumpActivity(prevSnap, true, snapshotActivity(sess)) {
-		sess.LastActivityAt = nowRFC3339()
-	}
-	// Conversation attribution arrives through Update. Only a new local bind
-	// needs adapter I/O; routine updates retain Update's atomic critical section.
-	if sess.Peer == "" && sess.ConversationRef != "" && sess.ConversationRef != prev.ConversationRef {
-		s.mu.Unlock()
-		s.prepareConversationLineage(&sess)
+	// A new conversation bind needs adapter I/O (DescribeConversation) that
+	// must not run under s.mu. Rather than dropping the lock mid-update —
+	// which could write a stale copy back over a concurrent dismiss or
+	// update — warm the lineage cache OUTSIDE the critical section and
+	// retry the whole update from fresh state. The loop is bounded: the
+	// cache records failures too, so the second pass always hits it.
+	for {
 		s.mu.Lock()
+		prev, ok := s.sessions[id]
+		if !ok {
+			s.mu.Unlock()
+			return false
+		}
+		prevSnap := snapshotActivity(prev)
+		sess := prev
+		fn(&sess)
+		sess.Cwd = paths.CanonicalizePath(sess.Cwd)
+		sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
+		sess.Title = s.resolveTitle(sess)
+		sess.Resumable = !sess.Alive && len(sess.Command) > 0
+		if shouldBumpActivity(prevSnap, true, snapshotActivity(sess)) {
+			sess.LastActivityAt = nowRFC3339()
+		}
+		if sess.Peer == "" && sess.ConversationRef != "" && sess.ConversationRef != prev.ConversationRef {
+			if !s.lineagePrepared(sess.ConversationRef) {
+				s.mu.Unlock()
+				s.prepareConversationLineage(&sess)
+				continue
+			}
+			s.prepareConversationLineage(&sess)
+		}
+		removed, skip, unchanged := s.commitLocked(prev, true, &sess)
+		s.mu.Unlock()
+		s.broadcastCommit(sess, removed, skip, unchanged)
+		return true
 	}
-	removed, skip, unchanged := s.commitLocked(prev, true, &sess)
-	s.mu.Unlock()
-	s.broadcastCommit(sess, removed, skip, unchanged)
-	return true
+}
+
+// lineagePrepared reports whether the lineage cache already covers ref, i.e.
+// prepareConversationLineage will not perform adapter I/O for it.
+func (s *Store) lineagePrepared(ref string) bool {
+	s.lineageMu.Lock()
+	defer s.lineageMu.Unlock()
+	_, known := s.lineageByRef[ref]
+	return known
 }
 
 // GetTerminalSize returns the current terminal dimensions for a session.
