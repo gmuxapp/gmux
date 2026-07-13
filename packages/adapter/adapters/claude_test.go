@@ -62,21 +62,11 @@ func TestClaudeNoMatchOther(t *testing.T) {
 	}
 }
 
-// --- Env / Monitor ---
+// --- Env ---
 
 func TestClaudeEnvNil(t *testing.T) {
 	if env := NewClaude().Env(adapter.EnvContext{}); env != nil {
 		t.Fatalf("expected nil, got %v", env)
-	}
-}
-
-func TestClaudeMonitorNoOp(t *testing.T) {
-	c := NewClaude()
-	if c.Monitor([]byte("⠋ Thinking...")) != nil {
-		t.Fatal("should return nil (file-driven, not PTY)")
-	}
-	if c.Monitor([]byte("some output")) != nil {
-		t.Fatal("should return nil")
 	}
 }
 

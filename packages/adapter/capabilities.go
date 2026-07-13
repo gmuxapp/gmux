@@ -34,19 +34,6 @@ type ConversationInfo struct {
 	Ref          string // the opaque conversation ref this info was described from
 }
 
-// Event is a partial session state update emitted by an adapter from observed
-// PTY bytes (via Monitor). Zero/nil fields are no-ops; the system only applies
-// fields that are explicitly set.
-type Event struct {
-	Title  string  // non-empty: update the adapter title
-	Status *Status // non-nil: update status; &Status{} clears it
-	Unread *bool   // non-nil: set or clear the unread flag
-	Cwd    string  // non-empty: update the session's canonical directory
-}
-
-// BoolPtr returns a pointer to v. Convenience for setting Event.Unread.
-func BoolPtr(v bool) *bool { return &v }
-
 // Launchable is implemented by adapters that want to expose one or more
 // launch presets in the UI.
 type Launchable interface {
@@ -157,6 +144,31 @@ type SessionHookCommand interface {
 	// args unchanged) when the agent version doesn't support hooks, so the
 	// runner launches unmodified and the daemon's fallback attribution applies.
 	HookCommand(args []string, selfBin string) (out []string, ok bool)
+}
+
+// HookDriven reports whether sessions of this adapter derive their
+// turn state (Status.Working, unread, error) from an agent-side hook
+// (SessionExtender or SessionHookCommand — ADR 0011/0015): the agent
+// itself reports turn start/end over the runner socket, and the
+// runner applies no turn inference of its own.
+//
+// Every other adapter gets the runner's default turn model instead:
+// the session is active (Working=true) from launch, OSC 133 prompt
+// marks in the PTY output — when the child's shell integration emits
+// them — upgrade it to per-command prompt-cycle turns, and for
+// sessions that never emit marks the process exit closes the one
+// lifetime-long turn.
+func HookDriven(a Adapter) bool {
+	if a == nil {
+		return false
+	}
+	if _, ok := a.(SessionExtender); ok {
+		return true
+	}
+	if _, ok := a.(SessionHookCommand); ok {
+		return true
+	}
+	return false
 }
 
 // PassthroughDetector marks adapters that recognize invocations which are NOT

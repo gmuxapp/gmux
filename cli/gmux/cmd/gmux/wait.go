@@ -13,10 +13,11 @@ import (
 // Exit codes from cmdWait. Distinct codes let scripts dispatch on the
 // reason a wait ended without parsing strings.
 //
-//   - waitExitOK (0): session reached a Working == false state (idle
-//     wait) or its output matched --for-text/--for-regex
-//   - waitExitDied (2): session crashed, was killed, or exited before
-//     going idle / before its output matched
+//   - waitExitOK (0): the session's turn closed (idle wait — including
+//     a one-shot command completing or a shell exiting at its prompt)
+//     or its output matched --for-text/--for-regex
+//   - waitExitDied (2): session crashed / was killed / exited with its
+//     turn still open, or exited before its output matched
 //   - waitExitTimeout (3): --timeout elapsed
 //
 // Any other usage / network error returns 1, matching the rest of the
@@ -33,9 +34,8 @@ const (
 // The wait itself happens server-side: gmuxd already subscribes to
 // per-session events for its own bookkeeping, so we just hand it the
 // session id and block on the HTTP response. That keeps the CLI free
-// of SSE-parsing logic and ensures the idle-detection rules (which
-// adapter kinds emit Status.Working, what counts as "died") live in
-// one place. Output conditions equally belong server-side: the bytes
+// of SSE-parsing logic and ensures the idle-detection rules (how turn
+// state resolves, what counts as "died") live in one place. Output conditions equally belong server-side: the bytes
 // live in the daemon's scrollback tee, and matching there can't miss
 // output the way client-side scrollback polling could.
 //
@@ -117,15 +117,16 @@ func cmdWait(ref string, timeoutSecs int, forText, forRegex string) int {
 		fmt.Fprintf(os.Stderr, "gmux: wait timed out after %ds\n", timeoutSecs)
 		return waitExitTimeout
 	case http.StatusUnprocessableEntity:
-		// Adapter doesn't emit an idle signal. Surface the
-		// daemon's message so the user knows which adapter they hit.
+		// Current daemons only send 422 on the send --wait path
+		// (input_no_submit); older daemons also rejected sessions
+		// without an idle signal here. Surface the daemon's message
+		// either way — it explains what to change.
 		body, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "gmux: wait not supported for this session: %s\n",
 			extractMessage(body))
 		return 1
 	case http.StatusNotFound:
-		// Distinct from "no idle signal": means the session id is
-		// unknown to gmuxd entirely.
+		// Means the session id is unknown to gmuxd entirely.
 		fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", displayID(sess))
 		return 1
 	default:

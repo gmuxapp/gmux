@@ -632,14 +632,17 @@ func serve(stderr io.Writer) int {
 	var resumeMu sync.Mutex
 
 	// When a session exits, derive the resume command so it transitions
-	// to resumable immediately — no "exited" limbo state.
-	subs.OnExit = func(sess *store.Session) bool {
+	// to resumable immediately — no "exited" limbo state. Only Command is
+	// touched: the last Status must survive death regardless of
+	// resumability, because it records whether the turn was closed at
+	// exit — what lets a wait issued after the death resolve identically
+	// to one that watched it live (ADR 0023). The frontend keys its
+	// working/error dots on Alive, so a persisted Status doesn't bleed
+	// into the resumable display.
+	subs.OnExit = func(sess *store.Session) {
 		if cmd := discovery.ResolveResumeCommand(sess); cmd != nil {
 			sess.Command = cmd
-			sess.Status = nil // clear exit status for clean resumable display
-			return true
 		}
-		return false
 	}
 	// Start socket-based discovery (scans paths.SessionSocketDir() — plus
 	// paths.LegacySessionSocketDirs() for pre-upgrade runners — for *.sock).
@@ -705,6 +708,13 @@ func serve(stderr io.Writer) int {
 			if notifRouter != nil {
 				notifRouter.CancelForSession(sessionID)
 			}
+			// Viewing clears "waiting on you". Live sessions clear it
+			// through the runner (WS attach → SetUnread(false) → meta
+			// event); a dead session has no runner, and under the unified
+			// turn model every one-shot dies unread (exit closes its
+			// turn, ADR 0023) — without this daemon-side clear that dot
+			// could only be removed by dismissing the session.
+			clearDeadSessionUnread(sessions, sessionID)
 		},
 	})
 	notifRouter = notify.New(presenceTable, sessions, notify.DefaultConfig())
@@ -854,7 +864,7 @@ func serve(stderr io.Writer) int {
 	defer unsubSessionEvents()
 	go func() {
 		for ev := range sessionEvents {
-			if ev.Type != "session-upsert" || ev.Session == nil {
+			if ev.Type != store.EventSessionUpsert || ev.Session == nil {
 				continue
 			}
 			s := ev.Session
@@ -2124,14 +2134,14 @@ func serve(stderr io.Writer) int {
 					return
 				}
 				switch ev.Type {
-				case "session-activity":
+				case store.EventSessionActivity:
 					// Peer subscribers (?as=peer) get activity for owned
 					// sessions only; browser subscribers see everything so
 					// peer-owned session indicators update.
 					if !shouldForwardActivity(asPeer, ev.ID, isLocalPeer) {
 						continue
 					}
-					if err := sendFrame("session-activity", ev); err != nil {
+					if err := sendFrame(store.EventSessionActivity, ev); err != nil {
 						return
 					}
 				case "projects-update":
@@ -2604,7 +2614,7 @@ func runAuth(stdout, stderr io.Writer) int {
 //     change.
 func snapshotPumpRoute(eventType string) (pushSessions, pushWorld bool) {
 	switch eventType {
-	case "session-upsert", "session-remove":
+	case store.EventSessionUpsert, store.EventSessionRemove:
 		return true, false
 	case "peer-status":
 		return false, true

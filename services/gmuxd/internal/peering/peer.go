@@ -479,7 +479,7 @@ func (p *Peer) handleEvent(ctx context.Context, eventType string, data []byte) {
 		}
 		p.applySessionsSnapshot(payload.Sessions)
 
-	case "session-activity":
+	case store.EventSessionActivity:
 		var ev sseActivity
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return
@@ -489,7 +489,7 @@ func (p *Peer) handleEvent(ctx context.Context, eventType string, data []byte) {
 		}
 		namespacedID := NamespaceID(ev.ID, p.Config.Name)
 		p.store.Broadcast(store.Event{
-			Type: "session-activity",
+			Type: store.EventSessionActivity,
 			ID:   namespacedID,
 		})
 

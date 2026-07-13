@@ -190,8 +190,13 @@ type Server struct {
 	listener        net.Listener
 	screen          *vt.Emulator  // virtual terminal for replay snapshots (guarded by mu)
 	screenDrainDone chan struct{} // closed when the DSR drain goroutine exits
-	adapter         adapter.Adapter
 	state           *session.State
+	// promptMarks derives Status from OSC 133 prompt marks for every
+	// session whose adapter is not hook-driven (adapter.HookDriven — the
+	// agent adapters own their turn state via hooks; everything else gets
+	// the runner's default turn model). Nil for hook-driven sessions. Fed
+	// exclusively from readPTY's flush, so it needs no locking.
+	promptMarks *adapter.PromptMarkTracker
 
 	shutdownOnce sync.Once
 
@@ -347,7 +352,6 @@ func New(cfg Config) (*Server, error) {
 		sockPath:   cfg.SocketPath,
 		listener:   listener,
 		screen:     nil, // set below after s is constructed
-		adapter:    cfg.Adapter,
 		state:      cfg.State,
 		clients:    make(map[*wsClient]struct{}),
 		localOut:   cfg.LocalOut,   // wired before readPTY starts so early output is never lost
@@ -363,12 +367,46 @@ func New(cfg Config) (*Server, error) {
 		s.cursorHidden = !visible
 	})
 
+	// Non-hook-driven sessions get their busy/idle Status derived from
+	// OSC 133 prompt marks in the output stream: Working=true when a
+	// command starts executing, false when the next prompt returns.
+	// Each transition is a separate SetStatus call, so a fast command
+	// whose marks land in a single PTY read still emits the full
+	// working→idle pulse downstream — the daemon's send --wait requires
+	// observing both edges (issue #373).
+	//
+	// A genuine working→idle transition is a completed turn, so it also
+	// flags the session unread ("waiting on you") — the same policy
+	// applyTurnEnd implements for agent turns. The first idle mark (the
+	// shell's initial prompt) closes only the launch phase, not a
+	// command the user is waiting on, so it does not set unread.
+	if !adapter.HookDriven(cfg.Adapter) && cfg.State != nil {
+		sawWorking := false
+		s.promptMarks = adapter.NewPromptMarkTracker(func(working bool) {
+			s.state.SetStatus(&adapter.Status{Working: working})
+			if working {
+				sawWorking = true
+			} else if sawWorking {
+				s.state.SetUnread(true)
+			}
+		})
+	}
+
 	go s.readPTY()
 	go s.waitChild()
 	go s.processScreen()
 	go s.serve()
 
 	return s, nil
+}
+
+// LifetimeTurnOpen reports whether this session is still on the
+// default lifetime-as-turn model (no prompt marks ever observed), so
+// the process exit is what closes its single turn. The caller (run.go)
+// emits the closing status/unread before SetExited. Only meaningful
+// after the final PTY flush — read it after PTYDone.
+func (s *Server) LifetimeTurnOpen() bool {
+	return s.promptMarks != nil && !s.promptMarks.SawMark()
 }
 
 // drainScreenLocked feeds all pending raw PTY data to the virtual terminal
@@ -810,6 +848,18 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// Replay the bound conversation ref to this (possibly reconnecting) subscriber
 	// so a restarted daemon re-learns attribution with no persisted state. A
 	// concurrent update may also arrive on ch; harmless (idempotent).
+	// Replay the current status snapshot so a (re)connecting daemon
+	// starts from the session's actual turn state. Without this, any
+	// status emitted before the subscription — the launch-time
+	// Working=true of the default turn model, or an agent turn that
+	// started while the daemon was down — would be invisible until the
+	// next transition.
+	if st := s.state.StatusSnapshot(); st != nil {
+		if data, err := json.Marshal(st); err == nil {
+			fmt.Fprintf(w, "event: status\ndata: %s\n\n", data)
+		}
+	}
+
 	if file := s.state.ConversationRefSnapshot(); file != "" {
 		if data, err := json.Marshal(map[string]string{"path": file}); err == nil {
 			fmt.Fprintf(w, "event: conversation_file\ndata: %s\n\n", data)
@@ -1095,15 +1145,8 @@ func (s *Server) readPTY() {
 		if title := adapters.ParseOSCTitle(data); title != "" {
 			s.state.SetShellTitle(title)
 		}
-		if s.adapter != nil {
-			if ev := s.adapter.Monitor(data); ev != nil {
-				if ev.Title != "" {
-					s.state.SetAdapterTitle(ev.Title)
-				}
-				if ev.Status != nil {
-					s.state.SetStatus(ev.Status)
-				}
-			}
+		if s.promptMarks != nil {
+			s.promptMarks.Feed(data)
 		}
 
 		// Queue data for the virtual terminal emulator (processed by

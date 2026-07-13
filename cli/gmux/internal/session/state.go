@@ -265,6 +265,9 @@ func (s *State) SlugSnapshot() string {
 
 // StatusSnapshot returns a copy of the current status (nil if unset), safe to
 // read from another goroutine while the runner concurrently updates state.
+// Also replayed to every (re)connecting /events subscriber: status emitted
+// before the daemon subscribed (the launch-time Working=true of the default
+// turn model, or a turn started during a daemon restart) must not be lost.
 func (s *State) StatusSnapshot() *adapter.Status {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

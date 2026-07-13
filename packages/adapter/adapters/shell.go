@@ -50,8 +50,11 @@ var (
 )
 
 // Shell is the fallback adapter. It matches all commands and parses
-// OSC 0/2 title sequences for live sidebar titles. It does not report
-// running/idle status — that's for agent adapters, not plain shells.
+// OSC 0/2 title sequences for live sidebar titles. Busy/idle status
+// comes from the runner's default turn model (adapter.HookDriven):
+// active from launch, upgraded to per-command turns by OSC 133 prompt
+// marks when the shell integration emits them, closed by process exit
+// otherwise.
 type Shell struct{}
 
 func NewShell() *Shell { return &Shell{} }
@@ -81,12 +84,6 @@ func (g *Shell) Launchers() []adapter.Launcher {
 		Command:     nil,
 		Description: "Default shell",
 	}}
-}
-
-func (g *Shell) Monitor(_ []byte) *adapter.Event {
-	// Shell title parsing is handled centrally in gmux so all sessions
-	// can use terminal titles as a fallback, not just shell sessions.
-	return nil
 }
 
 // --- Conversation storage (file-backed: refs are shell state-file paths) ---

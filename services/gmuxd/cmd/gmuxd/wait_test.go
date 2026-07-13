@@ -349,22 +349,198 @@ func TestWaitTimesOut(t *testing.T) {
 	}
 }
 
-// TestWaitRejectsShellSessions pins the allowlist: shell sessions
-// don't emit Working transitions, so `gmux --wait` against them
-// would return immediately with reason=idle and silently do the
-// wrong thing for `gmux make build && gmux --wait <id>`-style
-// composition. 422 surfaces the limitation explicitly.
-func TestWaitRejectsShellSessions(t *testing.T) {
+// TestWaitMarklessLiveShellBlocks pins the "hangs honestly" contract
+// that replaced the old no_idle_signal 422: a live shell on the
+// lifetime turn (Working=true since launch, no prompt marks) is never
+// provably idle, so the wait blocks until exit or ?timeout — it must
+// neither reject nor return a bogus immediate "idle".
+func TestWaitMarklessLiveShellBlocks(t *testing.T) {
 	srv, st, _ := waitTestServer(t)
 	st.Upsert(store.Session{
 		ID:      "sess-shell",
 		Adapter: "shell",
 		Alive:   true,
+		Status:  &store.Status{Working: true},
 	})
 
-	resp, _ := postWait(t, srv, "sess-shell")
-	if resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Errorf("status = %d, want 422", resp.StatusCode)
+	start := time.Now()
+	resp, _ := postWaitQuery(t, srv, "sess-shell", "timeout=1")
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusRequestTimeout {
+		t.Fatalf("status = %d, want 408", resp.StatusCode)
+	}
+	if elapsed < 900*time.Millisecond || elapsed > 2*time.Second {
+		t.Errorf("elapsed = %v, want ~1s", elapsed)
+	}
+}
+
+// TestWaitIgnoresActivityPulse guards the event dispatch: a
+// session-activity broadcast (transient output pulse) carries no
+// Session payload, and the wait loop must skip it — not mistake it
+// for a session-remove and report a spurious "died". Regression test
+// for the bug where any unwatched session that produced output while
+// a wait was pending resolved the wait as died.
+func TestWaitIgnoresActivityPulse(t *testing.T) {
+	srv, st, _ := waitTestServer(t)
+	st.Upsert(store.Session{
+		ID:      "sess-pulse",
+		Adapter: "shell",
+		Alive:   true,
+		Status:  &store.Status{Working: true},
+	})
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		st.Broadcast(store.Event{Type: store.EventSessionActivity, ID: "sess-pulse"})
+	}()
+
+	start := time.Now()
+	resp, _ := postWaitQuery(t, srv, "sess-pulse", "timeout=1")
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusRequestTimeout {
+		t.Fatalf("status = %d, want 408 (activity pulse must not resolve the wait)", resp.StatusCode)
+	}
+	if elapsed < 900*time.Millisecond {
+		t.Errorf("wait returned after %v — resolved by the activity pulse", elapsed)
+	}
+}
+
+// TestWaitAnyAdapterWithTurnStateIsWaitable pins the removal of the
+// adapter allowlist/evidence gate: under the unified turn model every
+// session carries turn state (the runner's default model covers
+// non-hook-driven adapters like editor), so an idle Status resolves
+// the wait regardless of adapter name.
+func TestWaitAnyAdapterWithTurnStateIsWaitable(t *testing.T) {
+	srv, st, _ := waitTestServer(t)
+	st.Upsert(store.Session{
+		ID:      "sess-editor",
+		Adapter: "editor",
+		Alive:   true,
+		Status:  &store.Status{Working: false},
+	})
+
+	resp, body := postWait(t, srv, "sess-editor")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "idle" {
+		t.Errorf("reason = %v, want idle", got)
+	}
+}
+
+// TestWaitDeadSessionResolvesByTurnState pins turn-state-at-death: the
+// Status persisted across the exit event records whether the session's
+// turn was closed when it exited, and a wait arriving after the death
+// answers the same as one that watched it live — "idle" for a closed
+// turn (one-shot completed, shell exited at its prompt, agent exited
+// after its turn), "died" for an open turn (mid-command crash) or for
+// a session that never demonstrated any turn state (nil Status).
+func TestWaitDeadSessionResolvesByTurnState(t *testing.T) {
+	exitCode := 0
+	cases := []struct {
+		name   string
+		status *store.Status
+		want   string
+	}{
+		{"closed turn → idle", &store.Status{Working: false}, "idle"},
+		{"open turn → died", &store.Status{Working: true}, "died"},
+		{"no turn state → died", nil, "died"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st, _ := waitTestServer(t)
+			st.Upsert(store.Session{
+				ID:        "sess-dead",
+				Adapter:   "shell",
+				Alive:     false,
+				ExitCode:  &exitCode,
+				StartedAt: "2026-07-11T00:00:00Z",
+				Status:    tc.status,
+			})
+
+			resp, body := postWait(t, srv, "sess-dead")
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200", resp.StatusCode)
+			}
+			if got := body["data"].(map[string]any)["reason"]; got != tc.want {
+				t.Errorf("reason = %v, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWaitShellWithPromptMarksReturnsWhenIdle: a shell session whose
+// runner has observed OSC 133 prompt marks carries a non-nil Status,
+// which is the per-session evidence that an idle signal exists
+// (issue #373). A shell sitting at its prompt (Working=false) is
+// idle; wait returns immediately, same as an idle agent.
+func TestWaitShellWithPromptMarksReturnsWhenIdle(t *testing.T) {
+	srv, st, _ := waitTestServer(t)
+	st.Upsert(store.Session{
+		ID:      "sess-shell-prompt",
+		Adapter: "shell",
+		Alive:   true,
+		Status:  &store.Status{Working: false},
+	})
+
+	resp, body := postWait(t, srv, "sess-shell-prompt")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "idle" {
+		t.Errorf("reason = %v, want idle", got)
+	}
+}
+
+// TestWaitShellBlocksUntilPromptReturns: a shell mid-command
+// (Working=true from the OSC 133 command-start mark) blocks the wait;
+// the prompt-start mark flipping Working=false unblocks it. This is
+// the shell counterpart of TestWaitBlocksUntilWorkingFlipsFalse and
+// fails with a 422 without the per-session evidence gate.
+func TestWaitShellBlocksUntilPromptReturns(t *testing.T) {
+	srv, st, _ := waitTestServer(t)
+	st.Upsert(store.Session{
+		ID:      "sess-shell-busy",
+		Adapter: "shell",
+		Alive:   true,
+		Status:  &store.Status{Working: true},
+	})
+
+	done := make(chan struct{})
+	var resp *http.Response
+	var body map[string]any
+	go func() {
+		resp, body = postWait(t, srv, "sess-shell-busy")
+		close(done)
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("wait returned while the shell was still running its command")
+	default:
+	}
+
+	// The prompt returns: runner-tracked OSC 133;A flips Working=false.
+	st.Upsert(store.Session{
+		ID:      "sess-shell-busy",
+		Adapter: "shell",
+		Alive:   true,
+		Status:  &store.Status{Working: false},
+	})
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("wait did not return after the prompt returned")
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "idle" {
+		t.Errorf("reason = %v, want idle", got)
 	}
 }
 

@@ -139,9 +139,9 @@ func snapshotOf(s store.Session) sessionSnapshot {
 }
 
 func (r *Router) handleEvent(ev store.Event) {
-	if ev.Type != "session-upsert" || ev.Session == nil {
+	if ev.Type != store.EventSessionUpsert || ev.Session == nil {
 		// session-remove: clean up prevState
-		if ev.Type == "session-remove" {
+		if ev.Type == store.EventSessionRemove {
 			r.mu.Lock()
 			delete(r.prevState, ev.ID)
 			r.mu.Unlock()

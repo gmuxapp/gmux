@@ -171,17 +171,145 @@ func TestSendWaitTimesOut(t *testing.T) {
 	}
 }
 
-// TestSendWaitRejectsShellSessions mirrors handleWait's allowlist:
-// adapters without an idle signal can't answer "turn finished".
-func TestSendWaitRejectsShellSessions(t *testing.T) {
-	srv, st := sendWaitTestServer(t, func(st *store.Store) {
-		t.Error("input must not be delivered when the wait contract can't be honored")
-	})
-	st.Upsert(store.Session{ID: "sess-shell", Adapter: "shell", Alive: true})
+// TestSendWaitMarklessShellBlocksUntilTimeout: a shell session whose
+// integration emits no prompt marks stays on the lifetime turn —
+// Working=true from launch — so its triggered "turn" can only close
+// at process exit. send --wait on it is accepted (no gate) and blocks
+// honestly until exit or ?timeout.
+func TestSendWaitMarklessShellBlocksUntilTimeout(t *testing.T) {
+	const id = "sess-shell-markless"
+	srv, st := sendWaitTestServer(t, nil)
+	upsertShell(st, id, true, &store.Status{Working: true})
 
-	resp, _ := postInput(t, srv, "sess-shell/input?wait=idle")
-	if resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Errorf("status = %d, want 422", resp.StatusCode)
+	start := time.Now()
+	resp, _ := postInput(t, srv, id+"/input?wait=idle&timeout=1")
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusRequestTimeout {
+		t.Fatalf("status = %d, want 408", resp.StatusCode)
+	}
+	if elapsed < 900*time.Millisecond || elapsed > 2*time.Second {
+		t.Errorf("elapsed = %v, want ~1s", elapsed)
+	}
+}
+
+// TestSendWaitOneShotExitResolvesIdle: input to a lifetime-turn
+// session (one-shot command, Working=true since launch) resolves
+// "idle" when the runner closes the turn at exit — the close status
+// precedes the exit event, and the persisted Status keeps the verdict
+// stable whichever event the wait observes.
+func TestSendWaitOneShotExitResolvesIdle(t *testing.T) {
+	const id = "sess-oneshot"
+	srv, st := sendWaitTestServer(t, func(st *store.Store) {
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			// Worst case for the wait: it only ever observes the session
+			// already dead (the live turn-close event was coalesced into
+			// the exit upsert). The persisted closed-turn Status must
+			// still resolve "idle", not "died".
+			upsertShell(st, id, false, &store.Status{Working: false})
+		}()
+	})
+	upsertShell(st, id, true, &store.Status{Working: true})
+
+	resp, body := postInput(t, srv, id+"/input?wait=idle&timeout=2")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "idle" {
+		t.Errorf("reason = %v, want idle", got)
+	}
+}
+
+// upsertShell mirrors upsertAgent for shell sessions, whose Status
+// comes from runner-tracked OSC 133 prompt marks (issue #373).
+func upsertShell(st *store.Store, id string, alive bool, status *store.Status) {
+	st.Upsert(store.Session{ID: id, Adapter: "shell", Alive: alive, Status: status})
+}
+
+// TestSendWaitShellPromptCycle: `gmux send --wait` on a shell sitting
+// at its prompt (idle Status from the last OSC 133;A mark) must hold
+// through the command it triggers — busy on the command-start mark,
+// idle again when the prompt returns — exactly like an agent turn.
+// Without the per-session evidence gate this 422s; without honoring
+// the pulse it would return off the stale pre-send idle.
+func TestSendWaitShellPromptCycle(t *testing.T) {
+	const id = "sess-shell-cycle"
+	srv, st := sendWaitTestServer(t, func(st *store.Store) {
+		// Simulate the runner's prompt-mark tracking after the bytes
+		// land: 133;C flips busy, the next 133;A flips idle.
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			upsertShell(st, id, true, &store.Status{Working: true})
+			time.Sleep(150 * time.Millisecond)
+			upsertShell(st, id, true, &store.Status{Working: false})
+		}()
+	})
+	// Stale state: at the prompt since the previous command.
+	upsertShell(st, id, true, &store.Status{Working: false})
+
+	start := time.Now()
+	resp, body := postInput(t, srv, id+"/input?wait=idle")
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "idle" {
+		t.Errorf("reason = %v, want idle", got)
+	}
+	if elapsed < 200*time.Millisecond {
+		t.Errorf("returned in %v — observed the stale pre-send prompt idle instead of the triggered command's cycle", elapsed)
+	}
+}
+
+// TestSendWaitShellFastCommandPulse: a fast shell command's busy and
+// idle marks can arrive in a single PTY read; the runner still emits
+// both Status transitions, and because the subscription predates the
+// delivery, send --wait observes the full pulse. This pins the
+// daemon half of that contract (the runner half lives in
+// ptyserver's prompt-mark tests).
+func TestSendWaitShellFastCommandPulse(t *testing.T) {
+	const id = "sess-shell-fast"
+	srv, st := sendWaitTestServer(t, func(st *store.Store) {
+		upsertShell(st, id, true, &store.Status{Working: true})
+		upsertShell(st, id, true, &store.Status{Working: false})
+	})
+	upsertShell(st, id, true, &store.Status{Working: false})
+
+	resp, body := postInput(t, srv, id+"/input?wait=idle&timeout=2")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "idle" {
+		t.Errorf("reason = %v, want idle", got)
+	}
+}
+
+// TestSendWaitShellDiesOnExit: `gmux send <id> 'exit' Enter --wait`
+// on a prompt-cycle shell ends the session mid-turn: the command-start
+// mark flips Working=true and no prompt ever returns, so the persisted
+// turn state at death is open — the wait unblocks with "died" rather
+// than hang. (Contrast TestSendWaitOneShotExitResolvesIdle, where the
+// turn closes at exit.)
+func TestSendWaitShellDiesOnExit(t *testing.T) {
+	const id = "sess-shell-exit"
+	srv, st := sendWaitTestServer(t, func(st *store.Store) {
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			upsertShell(st, id, true, &store.Status{Working: true})
+			time.Sleep(50 * time.Millisecond)
+			upsertShell(st, id, false, &store.Status{Working: true})
+		}()
+	})
+	upsertShell(st, id, true, &store.Status{Working: false})
+
+	resp, body := postInput(t, srv, id+"/input?wait=idle")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := body["data"].(map[string]any)["reason"]; got != "died" {
+		t.Errorf("reason = %v, want died", got)
 	}
 }
 

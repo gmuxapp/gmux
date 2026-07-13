@@ -174,13 +174,6 @@ func (p *Pi) SubmitSeq(mode adapter.SubmitMode) (string, bool) {
 	return "", false
 }
 
-// Monitor is a no-op for the pi adapter — status is reported by the gmux pi
-// extension (turn events over the runner socket), not inferred from PTY
-// output. This avoids flicker from spinner redraws.
-func (p *Pi) Monitor(_ []byte) *adapter.Event {
-	return nil
-}
-
 // --- Conversation storage (file-backed: refs are absolute JSONL paths) ---
 
 // ConversationRootDir returns pi's top-level sessions directory.

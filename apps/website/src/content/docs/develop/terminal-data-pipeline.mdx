@@ -43,7 +43,7 @@ The bytes pass through the kernel's PTY layer before reaching the master file de
 
 The `readPTY()` goroutine reads chunks from the PTY master fd. It coalesces rapid bursts (up to 8ms or 32KB) into a single chunk to reduce WebSocket message count, then:
 
-1. Runs adapter hooks (OSC title parsing, `Adapter.Monitor`)
+1. Runs output hooks (OSC title parsing; OSC 133 prompt-mark turn tracking for sessions of non-hook-driven adapters)
 2. Appends the chunk to a pending buffer that feeds the **virtual terminal emulator** (drained asynchronously every 100ms, and synchronously when a client connects)
 3. Emits an activity signal when no client is watching
 4. Copies the chunk to the **local TTY** output (if attached)

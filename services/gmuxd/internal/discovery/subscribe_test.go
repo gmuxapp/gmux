@@ -201,11 +201,10 @@ func TestExitEventDoesNotResurrectDismissedSession(t *testing.T) {
 	subs := NewSubscriptions(sessions)
 	onExitStarted := make(chan struct{})
 	allowOnExit := make(chan struct{})
-	subs.OnExit = func(sess *store.Session) bool {
+	subs.OnExit = func(sess *store.Session) {
 		close(onExitStarted)
 		<-allowOnExit
 		sess.Command = []string{"bash", "-l"}
-		return true
 	}
 
 	exitDone := make(chan struct{})
@@ -233,6 +232,46 @@ func TestExitEventDoesNotResurrectDismissedSession(t *testing.T) {
 
 	if got, ok := sessions.Get(id); ok {
 		t.Fatalf("dismissed session was resurrected by late exit event: %+v", got)
+	}
+}
+
+// TestExitEventPreservesTurnStateThroughResumeDerivation pins the
+// turn-state-at-death contract (ADR 0023) at the exit seam: the last
+// Status must survive the exit event even when the OnExit hook
+// transitions the session to resumable. Nil-ing it there ("clean
+// resumable display", as gmuxd once did) silently split the wait
+// contract by timing — a live wait on a cleanly-exited agent resolved
+// "idle" while a wait issued a moment later resolved "died".
+func TestExitEventPreservesTurnStateThroughResumeDerivation(t *testing.T) {
+	const id = "sess-exit-turn-state"
+	sessions := store.New()
+	sessions.Upsert(store.Session{
+		ID:      id,
+		Adapter: "pi",
+		Alive:   true,
+		Command: []string{"pi"},
+		Status:  &store.Status{Working: false}, // turn closed before exit
+	})
+
+	subs := NewSubscriptions(sessions)
+	subs.OnExit = func(sess *store.Session) {
+		sess.Command = []string{"pi", "--resume", "abc"} // resumable
+	}
+
+	subs.handleEvent(id, "", "exit", []byte(`{"exit_code":0}`))
+
+	got, ok := sessions.Get(id)
+	if !ok {
+		t.Fatal("session missing after exit event")
+	}
+	if got.Alive {
+		t.Error("session still alive after exit event")
+	}
+	if !got.Resumable {
+		t.Error("session not resumable despite OnExit setting a resume command")
+	}
+	if got.Status == nil || got.Status.Working {
+		t.Errorf("Status = %+v after exit, want the pre-exit closed-turn state to survive", got.Status)
 	}
 }
 

@@ -35,12 +35,6 @@ type Adapter interface {
 	// Common GMUX_* vars are set automatically by the runner.
 	// Return nil if no extra env is needed.
 	Env(ctx EnvContext) []string
-
-	// Monitor receives PTY output and optionally returns an Event describing
-	// what changed (title, status, cwd). Called on every PTY read with raw
-	// bytes. Must be cheap — no allocations or regex compilation per call.
-	// Return nil for no change.
-	Monitor(output []byte) *Event
 }
 
 // EnvContext provides launch context to Env().

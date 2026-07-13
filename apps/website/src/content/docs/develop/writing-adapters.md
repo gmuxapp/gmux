@@ -40,8 +40,6 @@ func (m *MyApp) Match(cmd []string) bool {
 }
 
 func (m *MyApp) Env(_ adapter.EnvContext) []string { return nil }
-
-func (m *MyApp) Monitor(output []byte) *adapter.Event { return nil }
 ```
 
 That's enough for a valid adapter. It:
@@ -49,8 +47,12 @@ That's enough for a valid adapter. It:
 - reports whether the tool is available on this machine with `Discover()`
 - activates when the command matches `myapp`
 - contributes no extra environment yet
-- reports no events yet
 - is available for richer optional capabilities later
+
+Sessions of a minimal adapter automatically get the runner's **default turn
+model**: active (`Working=true`) from launch, upgraded to per-command turns
+if the output ever carries OSC 133 prompt marks, otherwise idle when the
+process exits — which is what makes `gmux wait` work on them out of the box.
 
 Write tests in `myapp_test.go` alongside it.
 
@@ -79,7 +81,7 @@ Adapters may expose zero, one, or many launch presets. The built-in shell fallba
 
 ## The base interface
 
-Every adapter implements five methods:
+Every adapter implements four methods:
 
 ```go
 type Adapter interface {
@@ -87,7 +89,6 @@ type Adapter interface {
     Discover() bool
     Match(command []string) bool
     Env(ctx EnvContext) []string
-    Monitor(output []byte) *Event
 }
 ```
 
@@ -99,31 +100,22 @@ type Adapter interface {
 
 **`Env(ctx)`** returns extra environment variables for the child. The runner already sets `GMUX`, `GMUX_SOCKET`, `GMUX_SESSION_ID`, `GMUX_ADAPTER`, and `GMUX_RUNNER_VERSION`. Most adapters return `nil`.
 
-**`Monitor(output)`** receives raw PTY bytes on every read. Return a `*Event` when something meaningful happens, `nil` otherwise. This runs frequently, so keep it cheap. The built-in agent adapters (pi/claude/codex) return `nil` here — their status comes from the agent hook, not PTY parsing.
+Note there is deliberately **no per-byte PTY inference hook**: adapters never parse output to guess state. Session status comes from exactly three sources — agent hooks (for `SessionExtender`/`SessionHookCommand` adapters), the runner's default turn model (everything else: OSC 133 prompt marks when present, process lifetime otherwise), and the child's explicit `PUT /status` escape hatch.
 
 ### Important: adapters do not rewrite the user's command
 
 The command the user typed is what runs. `Env()` can add environment variables; adapters don't inject flags or wrap the process. The only sanctioned argv change is the hook-injection seam (`SessionExtender`/`SessionHookCommand`, below), which the runner drives.
 
-## Reporting events
-
-Return an `Event` from `Monitor()` to update the session. Zero/nil fields are no-ops — only explicitly set fields are applied:
+## Session status
 
 ```go
-type Event struct {
-    Title  string  // non-empty: update the adapter title
-    Status *Status // non-nil: update status; &Status{} clears it
-    Unread *bool   // non-nil: set or clear the unread flag (adapter.BoolPtr)
-    Cwd    string  // non-empty: update the session's canonical directory
-}
-
 type Status struct {
     Working bool // true while the tool is busy (pulsing dot)
     Error   bool // true on a retryable error (red dot)
 }
 ```
 
-Status carries only booleans; any display text is derived by the frontend from these plus the exit code.
+Status carries only booleans; any display text is derived by the frontend from these plus the exit code. `Status.Working` is the session's **turn state**: hooks flip it for agents, and the runner's default turn model flips it for everything else.
 
 ## Adapter resolution
 
@@ -214,6 +206,10 @@ Optional lifecycle callbacks: `OnRegister` runs at registration time (return a s
 
 Optional. Marks one-shot invocations (e.g. `pi update`, `pi --version`) that should be exec'd directly instead of wrapped in a session. Implement this for CLI tools with management subcommands.
 
+### Turn state: hooks or the default model
+
+There is no capability for status. Sessions of adapters that implement `SessionExtender` or `SessionHookCommand` (`adapter.HookDriven`) get their turn state exclusively from the agent hook. Every other adapter's sessions run the runner's default turn model: `Working=true` from launch; OSC 133 prompt marks ("semantic prompt" sequences) in the output — `133;C` busy, `133;A`/`133;D` idle — upgrade the session to per-command turns; without marks, the process exit closes the single lifetime turn (idle + unread, error on non-zero exit). The upgrade is evidence-based rather than declared, so `bash -c script` one-shots and mark-emitting `ssh` sessions both classify correctly, whatever adapter matched them.
+
 ### `Resumer`
 
 ```go
@@ -272,7 +268,7 @@ A house pattern worth copying: assert your capabilities at compile time — `var
 
 ## Testing
 
-Write unit tests in `myapp_test.go` next to your adapter. Test `Match()` with different command shapes and `Monitor()` with representative output (if it does anything).
+Write unit tests in `myapp_test.go` next to your adapter. Test `Match()` with different command shapes, and any capability methods with representative inputs.
 
 If the adapter implements `Launchable`, test the returned launcher IDs, labels, and commands.
 
