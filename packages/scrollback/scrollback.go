@@ -271,18 +271,29 @@ func RenderTail(r io.Reader, cols, rows, n int) ([]string, error) {
 	// The emulator writes back responses (e.g. DSR cursor position
 	// reports) into a pipe. Nothing reads them here, and a blocked
 	// write would deadlock our Write below. Drain in the background,
-	// and close the emulator on the way out so the drain goroutine
-	// sees EOF and exits — without the Close it blocks on the pipe
-	// forever, leaking one goroutine per render. One-shot tail
-	// requests barely noticed; the output-condition wait re-renders
-	// on a ticker and would accumulate them.
+	// and unblock the drain on the way out so it sees EOF and exits —
+	// otherwise it blocks on the pipe forever, leaking one goroutine
+	// per render. One-shot tail requests barely noticed; the
+	// output-condition wait re-renders on a ticker and would
+	// accumulate them.
+	//
+	// The unblocking deliberately closes the response pipe's write end
+	// (InputPipe) instead of calling e.Close(): Close sets an
+	// unsynchronized bool that the drain goroutine's concurrent Read
+	// also checks — a data race in the vt package. Closing the
+	// *io.PipeWriter is everything Close does minus that bool, and
+	// io.Pipe is safe for concurrent use.
 	drainDone := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(io.Discard, e)
 		close(drainDone)
 	}()
 	defer func() {
-		_ = e.Close()
+		if c, ok := e.InputPipe().(io.Closer); ok {
+			_ = c.Close()
+		} else {
+			_ = e.Close() // future-proof fallback; racy only if vt changes InputPipe
+		}
 		<-drainDone
 	}()
 	if _, err := e.Write(raw); err != nil {

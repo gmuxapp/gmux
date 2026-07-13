@@ -629,3 +629,23 @@ func TestRenderTailDoesNotLeakGoroutines(t *testing.T) {
 		t.Fatalf("goroutines grew from %d to %d across %d renders; drain goroutine is leaking", before, after, n)
 	}
 }
+
+// TestRenderTailRaceFreeWithResponses replays input that makes the
+// emulator emit responses into its output pipe (a DSR cursor-position
+// query), which is what forces the concurrent drain goroutine to be
+// mid-Read when RenderTail tears the emulator down. Run under -race
+// this pins the teardown path that closes the response pipe directly
+// instead of calling Emulator.Close, whose unsynchronized closed-flag
+// races with the drain's Read.
+func TestRenderTailRaceFreeWithResponses(t *testing.T) {
+	raw := "before\x1b[6nafter\r\n" // ESC[6n = DSR: emulator writes a report back
+	for i := 0; i < 50; i++ {
+		lines, err := RenderTail(strings.NewReader(raw), 80, 24, 5)
+		if err != nil {
+			t.Fatalf("RenderTail: %v", err)
+		}
+		if len(lines) == 0 {
+			t.Fatal("no lines rendered")
+		}
+	}
+}
