@@ -22,7 +22,9 @@ gmux send --follow-up <id> 'text'   # queue a prompt for after the current turn
 gmux send --steering <id> 'text'    # interject a prompt into the current turn
 gmux wait <id>               # block until idle (agent turn done / shell at prompt)
 gmux wait <id> --for-text S  # block until S appears in the output
-gmux tail <id> [-n N]        # last N lines of output (ANSI stripped; default 100)
+gmux tail <id> [-n N]        # conversation as markdown (agents) or last N
+                             # lines of output (shells); default N=100
+gmux tail --raw <id>         # force the terminal-output view (plain text)
 gmux ls [--json]             # list sessions (--json for machine parsing)
 gmux kill <id>               # SIGTERM the runner
 ```
@@ -143,8 +145,23 @@ gmux wait $id --for-regex 'tests? passed: \d+' --timeout 120
 
 Same exit codes (`0` matched, `2` session exited first, `3` timeout). Matching
 is line-wise against the rendered terminal output (ANSI stripped, same text
-`gmux tail` shows), including output that appeared before the wait started, so
-the pattern must fit on one terminal line.
+`gmux tail --raw` shows), including output that appeared before the wait
+started, so the pattern must fit on one terminal line.
+
+## Reading a session's conversation
+
+For agent sessions backed by a conversation file (pi), `gmux tail` prints the
+conversation itself as markdown — `## User` / `## Assistant` messages with
+compact `[tool] …` one-liners — instead of the TUI's terminal rendering.
+`-n` counts messages there, not lines; thinking blocks and tool outputs are
+omitted. This is the best way to read another agent's answer:
+
+```bash
+gmux send --wait $id 'summarize your findings' Enter
+gmux tail $id -n 2           # the prompt and the reply, clean markdown
+```
+
+Shell sessions (and `--raw`) show terminal output instead.
 
 ## Other agents have one-shot modes
 

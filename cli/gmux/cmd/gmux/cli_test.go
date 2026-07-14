@@ -104,6 +104,15 @@ func TestParseCLI(t *testing.T) {
 					t.Errorf("tailLines=%d raw=%v", c.tailLines, c.raw)
 				}
 			}},
+		// -e (tmux capture-pane muscle memory) stays an alias of --raw:
+		// both mean "PTY scrollback view" and both bypass the
+		// conversation transcript (issue #384).
+		{name: "tail -e is an alias of --raw", args: []string{"tail", "-e", "abc"}, wantMode: modeTail,
+			check: func(t *testing.T, c *command) {
+				if !c.raw {
+					t.Errorf("raw=%v, want true", c.raw)
+				}
+			}},
 
 		{name: "send text + Enter", args: []string{"send", "abc", "pytest -q", "Enter"}, wantMode: modeSend,
 			check: func(t *testing.T, c *command) {

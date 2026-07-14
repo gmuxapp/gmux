@@ -1782,6 +1782,9 @@ func serve(stderr io.Writer) int {
 		case "scrollback":
 			scrollbackBrokerHandler(w, r, sessionID, sessions, metaStore.SessionDir)
 
+		case "conversation":
+			conversationHandler(w, r, sessionID, sessions)
+
 		case "clipboard":
 			// Materialize a clipboard binary payload as a file in this
 			// gmuxd's os.TempDir() and return the absolute path. For

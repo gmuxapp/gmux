@@ -104,14 +104,26 @@ gmux attach a3f20187@desktop  # a session on a peer
 
 ### `gmux tail <id>`
 
-Print recent output as plain text. ANSI escapes are stripped by default so the
-output is grep-friendly.
+Print the session's conversation as clean markdown. For agents that persist a
+structured conversation file (pi), the transcript is reconstructed from that
+file — the actual user/assistant messages plus compact one-line tool calls —
+rather than the terminal rendering of the TUI, so the output is readable and
+pipe-friendly. Thinking blocks and tool outputs are omitted.
+
+Sessions without a conversation file (shells, plain commands) print recent PTY
+output as plain text instead, exactly as before.
 
 ```bash
-gmux tail a3f20187            # last 100 lines (default)
-gmux tail -n 500 a3f20187     # last 500 lines
-gmux tail --raw a3f20187      # keep ANSI escapes (-e also works)
+gmux tail a3f20187            # conversation markdown (last 100 messages),
+                              # or last 100 lines of output for shells
+gmux tail -n 5 a3f20187       # last 5 messages (or lines)
+gmux tail --raw a3f20187      # force the PTY view: last N lines of terminal
+                              # output, plain text (-e also works)
 ```
+
+`-n` counts messages in the conversation view and lines in the PTY view. The
+transcript is read from the conversation file the agent has flushed to disk,
+so an assistant message that is still streaming appears once it completes.
 
 It's a snapshot, not a stream — to watch a session live, attach to it or open
 it in the browser.
