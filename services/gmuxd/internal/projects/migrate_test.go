@@ -40,10 +40,10 @@ func TestMigrateV1ToV2(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state, err := Load(dir, map[string]string{
-		"hub-protocol": "sess-hub",
-		"gmux":         "sess-gmux",
-		"new":          "sess-new",
+	state, err := Load(dir, map[string][]string{
+		"hub-protocol": {"sess-hub"},
+		"gmux":         {"sess-gmux"},
+		"new":          {"sess-new"},
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -248,9 +248,9 @@ func TestLoadMigratesV3SessionSlugsToIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state, err := Load(dir, map[string]string{
-		"old-slug":       "sess-resolved",
-		"duplicate-slug": "sess-existing",
+	state, err := Load(dir, map[string][]string{
+		"old-slug":       {"sess-resolved"},
+		"duplicate-slug": {"sess-existing"},
 	})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -274,7 +274,7 @@ func TestLoadV4DoesNotConvertSessionSlugs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, fileName), []byte(v4), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	state, err := Load(dir, map[string]string{"typed-slug": "sess-resolved"})
+	state, err := Load(dir, map[string][]string{"typed-slug": {"sess-resolved"}})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -299,5 +299,31 @@ func TestMigrateV1EmptyItems(t *testing.T) {
 	}
 	if len(state.Items) != 0 {
 		t.Errorf("expected 0 items, got %d", len(state.Items))
+	}
+}
+
+
+// TestMigrateV3ExpandsCrossAdapterDuplicateSlug pins the adversarial-review
+// P2: a v3 membership key that resolved to MORE THAN ONE dead session (slugs
+// were unique only within (adapter, peer), but a key spanned adapters) must
+// expand to every ID in sweep order — not collapse to one, silently dropping
+// the other dead session from the sidebar.
+func TestMigrateV3ExpandsCrossAdapterDuplicateSlug(t *testing.T) {
+	dir := t.TempDir()
+	v3 := `{"version":3,"items":[{"slug":"proj","match":[{"path":"~/p"}],"sessions":["fix-auth","keep"]}]}`
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte(v3), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// "fix-auth" was held by a Claude AND a Codex dead session.
+	state, err := Load(dir, map[string][]string{
+		"fix-auth": {"sess-claude", "sess-codex"},
+		"keep":     {"sess-keep"},
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := "[sess-claude sess-codex sess-keep]"
+	if got := fmt.Sprint(state.Items[0].Sessions); got != want {
+		t.Errorf("sessions = %s, want %s (both dead sessions must survive)", got, want)
 	}
 }

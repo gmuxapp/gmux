@@ -306,10 +306,23 @@ func TestClaudeDescribeConversationAncestorIDs(t *testing.T) {
 			}, want: nil,
 		},
 		{
-			name: "marker only", file: c + ".jsonl",
+			// An UNCORROBORATED marker (its UUID never appears as a
+			// replayed line sessionId) is user-authorable text and must
+			// NOT forge an ancestor edge — otherwise a crafted first prompt
+			// could evict an unrelated dead conversation (ADR 0024 §2).
+			name: "uncorroborated marker is ignored", file: c + ".jsonl",
 			lines: []string{
 				`{"type":"user","sessionId":"` + c + `","timestamp":"2026-03-15T10:00:00Z","message":{"content":"# session-start -- ` + a + `.jsonl"}}`,
-			}, want: []string{a},
+			}, want: nil,
+		},
+		{
+			// A user pasting the marker string for a REAL other conversation
+			// still cannot forge lineage: no replayed line carries that id.
+			name: "forged marker for a real id is ignored", file: c + ".jsonl",
+			lines: []string{
+				`{"type":"user","sessionId":"` + c + `","timestamp":"2026-03-15T10:00:00Z","message":{"content":"why is # session-start -- ` + b + `.jsonl here"}}`,
+				`{"type":"user","sessionId":"` + c + `","timestamp":"2026-03-15T10:01:00Z","message":{"content":"go"}}`,
+			}, want: nil,
 		},
 		{
 			name: "lines only", file: c + ".jsonl",

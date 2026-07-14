@@ -292,9 +292,14 @@ func validClaudeConversationID(id string) (string, bool) {
 	return strings.ToLower(id), true
 }
 
-// claudeAncestorIDs unions the first-user resume marker with replayed line
-// session IDs. The marker leads when it is new; this makes the result stable
-// even when Claude's replay ordering changes.
+// claudeAncestorIDs derives resume lineage from the replayed per-line session
+// IDs. The `# session-start -- <uuid>.jsonl` marker in the first user message
+// is used ONLY to order the result (lead with it) — never as an independent
+// source: that text is user-authorable, so trusting it alone would let a
+// crafted first prompt forge an ancestor edge and drive a false takeover of an
+// unrelated dead conversation (ADR 0024 §2 — a false link must be impossible;
+// only a missed link is acceptable). Claude stamps every replayed line with
+// the genuine ancestor's sessionId, so a real resume is always corroborated.
 func claudeAncestorIDs(firstUserContent json.RawMessage, ownID string, lineSessionIDs []string) []string {
 	ancestors := make([]string, 0, len(lineSessionIDs)+1)
 	seen := make(map[string]struct{})
@@ -308,10 +313,19 @@ func claudeAncestorIDs(firstUserContent json.RawMessage, ownID string, lineSessi
 		}
 	}
 
+	// Line IDs are the trusted source. The marker only promotes a
+	// corroborated ID to the front; an uncorroborated marker contributes
+	// nothing.
+	lineSet := make(map[string]struct{}, len(lineSessionIDs))
+	for _, id := range lineSessionIDs {
+		lineSet[id] = struct{}{}
+	}
 	content := extractClaudeUserText(firstUserContent)
 	if match := claudeSessionStartPattern.FindStringSubmatch(content); len(match) == 2 {
 		if id, ok := validClaudeConversationID(match[1]); ok {
-			add(id)
+			if _, corroborated := lineSet[id]; corroborated {
+				add(id)
+			}
 		}
 	}
 	for _, id := range lineSessionIDs {

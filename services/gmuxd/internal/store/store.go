@@ -223,7 +223,7 @@ type Store struct {
 	activitySeed func(Session) string
 
 	lineageMu    sync.Mutex
-	lineageByRef map[string]lineageEntry
+	lineageByRef map[string]lineageEntry // key: adapter\x00ref (refs are unique only within an adapter, ADR 0022)
 }
 
 func New() *Store {
@@ -444,6 +444,11 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 	// update — warm the lineage cache OUTSIDE the critical section and
 	// retry the whole update from fresh state. The loop is bounded: the
 	// cache records failures too, so the second pass always hits it.
+	// describedRef guards the unlock-describe-retry so it runs at most once
+	// per distinct ref this call: termination is independent of whether the
+	// describe succeeded or was cached (a transient describe failure is not
+	// cached, so a cache-presence gate would livelock here).
+	describedRef := ""
 	for {
 		s.mu.Lock()
 		prev, ok := s.sessions[id]
@@ -462,11 +467,16 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 			sess.LastActivityAt = nowRFC3339()
 		}
 		if sess.Peer == "" && sess.ConversationRef != "" && sess.ConversationRef != prev.ConversationRef {
-			if !s.lineagePrepared(sess.ConversationRef) {
+			if describedRef != sess.ConversationRef {
 				s.mu.Unlock()
 				s.prepareConversationLineage(&sess)
+				describedRef = sess.ConversationRef
 				continue
 			}
+			// Second pass for this ref: re-apply the lineage onto the
+			// fresh copy (cache hit when the describe succeeded; a
+			// re-describe of a still-missing ref just yields empty again
+			// and we proceed — no loop).
 			s.prepareConversationLineage(&sess)
 		}
 		removed, skip, unchanged := s.commitLocked(prev, true, &sess)
@@ -474,15 +484,6 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 		s.broadcastCommit(sess, removed, skip, unchanged)
 		return true
 	}
-}
-
-// lineagePrepared reports whether the lineage cache already covers ref, i.e.
-// prepareConversationLineage will not perform adapter I/O for it.
-func (s *Store) lineagePrepared(ref string) bool {
-	s.lineageMu.Lock()
-	defer s.lineageMu.Unlock()
-	_, known := s.lineageByRef[ref]
-	return known
 }
 
 // GetTerminalSize returns the current terminal dimensions for a session.
@@ -526,6 +527,13 @@ func (s *Store) SetTerminalSize(id string, cols, rows uint16) bool {
 	return true
 }
 
+// lineageKey scopes the lineage cache to a single adapter: opaque refs are
+// unique only within an adapter (ADR 0022), so two adapters that happen to
+// use the same ref string must not share a cache entry.
+func lineageKey(adapterName, ref string) string {
+	return adapterName + "\x00" + ref
+}
+
 // prepareConversationLineage describes the bound conversation at bind time,
 // outside the store mutex. Its per-ref cache means recurring writes (notably
 // peer snapshots) never re-describe. Peer (including Local-peer) refs are
@@ -536,24 +544,33 @@ func (s *Store) prepareConversationLineage(sess *Session) {
 	if sess.Peer != "" || sess.ConversationRef == "" {
 		return
 	}
+	key := lineageKey(sess.Adapter, sess.ConversationRef)
 	s.lineageMu.Lock()
 	defer s.lineageMu.Unlock()
-	if cached, known := s.lineageByRef[sess.ConversationRef]; known {
+	if cached, known := s.lineageByRef[key]; known {
 		sess.conversationID = cached.id
 		sess.conversationAncestors = cached.ancestors
 		return
 	}
-	// Cache describe failures too: ref-equality takeover needs no describe,
-	// and repeatedly trying a missing/bad ref on status updates is pointless.
+	// A describe FAILURE (ref absent/unreadable — e.g. a resumed transcript
+	// not yet on disk at first bind) is NOT cached: caching it would poison
+	// the ref permanently and silently defeat takeover once the file lands.
+	// A successful describe is stable (ancestors never disappear) and cached.
 	var entry lineageEntry
+	cache := false
 	if a := adapters.FindByAdapter(sess.Adapter); a != nil {
 		if describer, ok := a.(adapter.ConversationDescriber); ok {
 			if info, err := describer.DescribeConversation(sess.ConversationRef); err == nil {
 				entry = lineageEntry{id: info.ID, ancestors: info.AncestorIDs}
+				cache = true
 			}
 		}
+	} else {
+		cache = true // no describer for this adapter: nothing to learn later
 	}
-	s.lineageByRef[sess.ConversationRef] = entry
+	if cache {
+		s.lineageByRef[key] = entry
+	}
 	sess.conversationID = entry.id
 	sess.conversationAncestors = entry.ancestors
 }

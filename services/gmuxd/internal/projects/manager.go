@@ -25,7 +25,7 @@ func (e *ValidationError) Unwrap() error { return e.Err }
 type Manager struct {
 	mu             sync.Mutex
 	stateDir       string
-	legacySlugToID map[string]string
+	legacySlugToID map[string][]string
 
 	// Broadcast is called after every state mutation that should be
 	// synced to connected clients (via SSE). The caller receives the
@@ -38,8 +38,8 @@ type Manager struct {
 
 // NewManager creates a manager. legacySlugToID is the slug-to-session-ID
 // table from sessionmeta's startup sweep, used only while loading v3 files.
-func NewManager(stateDir string, legacySlugToID ...map[string]string) *Manager {
-	var resolver map[string]string
+func NewManager(stateDir string, legacySlugToID ...map[string][]string) *Manager {
+	var resolver map[string][]string
 	if len(legacySlugToID) > 0 {
 		resolver = legacySlugToID[0]
 	}

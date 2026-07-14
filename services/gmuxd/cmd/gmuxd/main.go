@@ -537,8 +537,11 @@ func serve(stderr io.Writer) int {
 	persistedKeys := make(map[string]bool)
 	// legacySlugToID resolves v3 projects.json membership keys during the
 	// one-shot v4 migration. Only swept dead/resumable sessions need this:
-	// live sessions re-auto-assign after startup.
-	legacySlugToID := make(map[string]string)
+	// live sessions re-auto-assign after startup. A slug maps to a SLICE of
+	// IDs: slugs were unique only within (adapter, peer), but a v3 membership
+	// key spanned adapters, so one key could legitimately match several dead
+	// sessions — all must survive the migration.
+	legacySlugToID := make(map[string][]string)
 	if loaded, err := metaStore.Sweep(); err != nil {
 		log.Printf("sessionmeta: sweep failed: %v", err)
 	} else {
@@ -546,7 +549,7 @@ func serve(stderr io.Writer) int {
 			sessions.Upsert(sess)
 			persistedKeys[sess.ID] = true
 			if sess.Slug != "" {
-				legacySlugToID[sess.Slug] = sess.ID
+				legacySlugToID[sess.Slug] = append(legacySlugToID[sess.Slug], sess.ID)
 			}
 		}
 		if n := len(loaded); n > 0 {

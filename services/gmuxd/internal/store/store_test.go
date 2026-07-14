@@ -1726,3 +1726,68 @@ func TestUpdateBindDoesNotResurrectRemovedSession(t *testing.T) {
 		t.Fatal("removed session must not be resurrected by a stale bind write-back")
 	}
 }
+
+// TestLineageRecoversAfterLateTranscriptFlush pins the fix for permanent
+// negative caching: a resumed transcript that is absent at first bind (describe
+// fails) must NOT poison the ref — once the file lands, a later bind learns the
+// lineage and takeover fires. Regression for the adversarial-review P1.
+func TestLineageRecoversAfterLateTranscriptFlush(t *testing.T) {
+	const ancestor = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const resumed = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	dir := t.TempDir()
+	ancestorFile := filepath.Join(dir, ancestor+".jsonl")
+	if err := os.WriteFile(ancestorFile, []byte(`{"type":"user","sessionId":"`+ancestor+`","message":{"role":"user","content":"hi"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	newFile := filepath.Join(dir, resumed+".jsonl") // not on disk yet
+
+	s := New()
+	s.Upsert(Session{ID: "dead", Adapter: "claude", Alive: false, ConversationRef: ancestorFile})
+	s.Upsert(Session{ID: "live", Adapter: "claude", Alive: true})
+
+	// First bind: the resumed transcript hasn't been flushed — describe fails.
+	s.Update("live", func(sess *Session) { sess.ConversationRef = newFile })
+	if _, ok := s.Get("dead"); !ok {
+		t.Fatal("dead row should survive a bind whose transcript is not yet readable")
+	}
+
+	// Claude flushes the replayed history + the ancestor's line id.
+	if err := os.WriteFile(newFile, []byte(`{"type":"user","sessionId":"`+ancestor+`","message":{"role":"user","content":"hi"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A later genuine bind to the same ref (e.g. switch away and back) must
+	// now learn the lineage and evict the ancestor.
+	s.Update("live", func(sess *Session) { sess.ConversationRef = "" })
+	s.Update("live", func(sess *Session) { sess.ConversationRef = newFile })
+	if _, ok := s.Get("dead"); ok {
+		t.Fatal("takeover should fire once the transcript is readable (no permanent negative cache)")
+	}
+}
+
+// TestLineageCacheScopedByAdapter pins that the lineage cache is keyed by
+// (adapter, ref): two adapters sharing an opaque ref string must not inherit
+// each other's cached identity. Regression for the adversarial-review P2.
+func TestLineageCacheScopedByAdapter(t *testing.T) {
+	dir := t.TempDir()
+	// Same bare ref string, different adapters, different content.
+	ref := filepath.Join(dir, "shared.jsonl")
+	if err := os.WriteFile(ref, []byte(`{"type":"user","sessionId":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","message":{"role":"user","content":"x"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := New()
+	// pi binds the ref first (pi's describer sees pi content; here it just
+	// populates the pi-scoped cache entry).
+	s.Upsert(Session{ID: "pi-live", Adapter: "pi", Alive: true, ConversationRef: ref})
+	// A claude dead row with a DIFFERENT ref must not be evicted by a claude
+	// live bind to the shared ref just because pi cached something for it.
+	claudeDead := filepath.Join(dir, "dddddddd-dddd-4ddd-8ddd-dddddddddddd.jsonl")
+	if err := os.WriteFile(claudeDead, []byte(`{"type":"user","sessionId":"dddddddd-dddd-4ddd-8ddd-dddddddddddd","message":{"role":"user","content":"y"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.Upsert(Session{ID: "claude-dead", Adapter: "claude", Alive: false, ConversationRef: claudeDead})
+	s.Upsert(Session{ID: "claude-live", Adapter: "claude", Alive: true})
+	s.Update("claude-live", func(sess *Session) { sess.ConversationRef = ref })
+	if _, ok := s.Get("claude-dead"); !ok {
+		t.Fatal("claude dead row must survive: pi's cache entry for the shared ref must not leak into claude's identity")
+	}
+}

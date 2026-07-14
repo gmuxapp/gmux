@@ -88,7 +88,7 @@ type State struct {
 // Older schema versions are migrated in memory; the migrated form is
 // written back on the next Save. legacySlugToID is the slug-to-session-ID
 // table from sessionmeta's startup sweep, used only by the v3 → v4 migration.
-func Load(stateDir string, legacySlugToID ...map[string]string) (*State, error) {
+func Load(stateDir string, legacySlugToID ...map[string][]string) (*State, error) {
 	path := filepath.Join(stateDir, fileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -123,7 +123,7 @@ func Load(stateDir string, legacySlugToID ...map[string]string) (*State, error) 
 	}
 
 	if onDisk < 4 {
-		var slugToID map[string]string
+		var slugToID map[string][]string
 		if len(legacySlugToID) > 0 {
 			slugToID = legacySlugToID[0]
 		}
@@ -157,32 +157,45 @@ func Load(stateDir string, legacySlugToID ...map[string]string) (*State, error) 
 var conversationUUIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // migrateLegacySessionKeys converts v3 slug membership keys to session IDs.
-// It preserves order and keeps only the first occurrence of each resulting ID.
-func (s *State) migrateLegacySessionKeys(slugToID map[string]string) (converted, dropped int) {
+// Order is preserved and each resulting ID is kept once. A slug that resolved
+// to several dead sessions (slugs were unique only within (adapter, peer), but
+// a membership key spanned adapters) expands to ALL of them in sweep order, so
+// no dead session silently loses its sidebar slot.
+func (s *State) migrateLegacySessionKeys(slugToID map[string][]string) (converted, dropped int) {
 	knownIDs := make(map[string]bool, len(slugToID))
-	for _, id := range slugToID {
-		knownIDs[id] = true
+	for _, ids := range slugToID {
+		for _, id := range ids {
+			knownIDs[id] = true
+		}
 	}
 	for i := range s.Items {
 		seen := make(map[string]bool, len(s.Items[i].Sessions))
-		keys := s.Items[i].Sessions[:0]
-		for _, key := range s.Items[i].Sessions {
-			id := key
-			if !knownIDs[key] && !paths.IsValidSessionID(key) && !conversationUUIDRe.MatchString(key) {
-				var ok bool
-				id, ok = slugToID[key]
-				if !ok {
-					dropped++
-					continue
-				}
-				converted++
-			}
+		// A fresh slice, NOT Sessions[:0]: one key can expand to several IDs
+		// (a cross-adapter duplicate slug), and in-place aliasing would
+		// overwrite not-yet-read entries.
+		keys := make([]string, 0, len(s.Items[i].Sessions))
+		emit := func(id string) {
 			if seen[id] {
 				dropped++
-				continue
+				return
 			}
 			seen[id] = true
 			keys = append(keys, id)
+		}
+		for _, key := range s.Items[i].Sessions {
+			if knownIDs[key] || paths.IsValidSessionID(key) || conversationUUIDRe.MatchString(key) {
+				emit(key)
+				continue
+			}
+			ids, ok := slugToID[key]
+			if !ok {
+				dropped++
+				continue
+			}
+			for _, id := range ids {
+				converted++
+				emit(id)
+			}
 		}
 		s.Items[i].Sessions = keys
 	}
