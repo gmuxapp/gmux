@@ -98,94 +98,77 @@ import Topology from '../components/Topology.astro'
   </section>
 
   <!-- Topology -->
-  <section class="section">
+  <section class="section topology-section">
     <div class="section-inner">
       <h2 class="topo-heading">Every session, from every machine, in every&nbsp;browser</h2>
       <Topology />
+      <div class="remote-strip">
+        <span class="remote-strip-label">Already use Tailscale?</span>
+        <span>Run <code>gmuxd remote</code> once. No ports to open.</span>
+      </div>
     </div>
   </section>
 
   <!-- Device continuity -->
-  <section class="section section-alt">
-    <div class="section-inner">
-      <div class="section-header">
-        <h2>Close the laptop. The agents keep going.</h2>
-        <p class="section-lead">Sessions live on the host, not in your terminal. Close the lid, lose the wi-fi, switch devices: the run doesn't notice. Answer a question from the checkout line and the same conversation is waiting in your terminal when you sit back down.</p>
-        <pre class="code-snippet code-snippet-inline"><code>alias claude='gmux -- claude'  <span class="code-comment"># alias once, automatic after that</span></code></pre>
+  <section class="section continuity-section">
+    <div class="section-inner two-col continuity">
+      <div class="two-col-text">
+        <h2>Your agents stay put. You don't have to.</h2>
+        <p class="section-lead">Run agents on any machine. Pick up a session from your phone, then return to the same conversation when you sit back down.</p>
       </div>
       <div class="contrast">
         <div class="contrast-panel">
-          <div class="contrast-label">the old way</div>
-          <p class="contrast-line">don't close it.<br />don't lose wi-fi.<br />don't leave.</p>
+          <div class="contrast-label">without gmux</div>
+          <p class="contrast-line">Stay at the computer.<br />Keep checking.<br />Don't miss the question.</p>
         </div>
-        <div class="contrast-arrow" aria-hidden="true">&rarr;</div>
+        <div class="contrast-arrow" aria-hidden="true">&darr;</div>
         <div class="contrast-panel contrast-panel-accent">
           <div class="contrast-label">with gmux</div>
-          <p class="contrast-line">the laptop is at home.<br />it'll text you.</p>
+          <p class="contrast-line">Walk away.</p>
+          <div class="mock-notif mock-notif-compact">
+            <div class="mock-notif-header">
+              <span class="mock-notif-app">
+                <svg class="mock-notif-icon" viewBox="0 0 32 32" width="18" height="18" aria-hidden="true">
+                  <rect width="32" height="32" rx="6" fill="#0f141a"/>
+                  <rect x="3.5" y="3.5" width="25" height="25" rx="3.5" fill="none" stroke="#49b8b8" stroke-width="1.5"/>
+                  <polyline points="8,10 16,16 8,22" fill="none" stroke="#49b8b8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  <line x1="18" y1="22" x2="25" y2="22" stroke="#49b8b8" stroke-width="2.4" stroke-linecap="round"/>
+                </svg>
+                <span>gmux</span>
+              </span>
+              <span class="mock-notif-time">now</span>
+            </div>
+            <div class="mock-notif-title">codex · refactor adapters</div>
+            <div class="mock-notif-body">Needs your input.</div>
+          </div>
+          <p class="contrast-note">We'll notify you when you're needed.</p>
         </div>
       </div>
     </div>
   </section>
 
   <!-- Agents driving agents -->
-  <section class="section section-alt">
-    <div class="section-inner two-col">
-      <div class="two-col-text">
+  <section class="section delegation-section">
+    <div class="section-inner">
+      <div class="delegation-header">
         <h2>Delegation you can watch</h2>
-        <p class="section-lead">There's no orchestration API to learn. An agent spawns a sub-agent with the same command you'd type, and the child shows up like any other session: live, steerable, and interruptible from any device.</p>
+        <p class="section-lead">An agent starts a subagent with the same command you would. It appears in gmux as a live session that both of you can watch, steer, or interrupt.</p>
       </div>
-      <div class="two-col-visual">
-        <pre class="code-snippet"><code><span class="code-comment"># an agent hands off a task…</span>
-gmux -d -- pi "Read handoff.md and go."
-
-<span class="code-comment"># …drives it to completion…</span>
-gmux send --wait &lt;id&gt; 'run the tests' Enter
-
-<span class="code-comment"># …while you watch, from anywhere</span></code></pre>
-      </div>
-    </div>
-  </section>
-
-  <!-- Networking (Tailscale) -->
-  <section class="section">
-    <div class="section-inner two-col two-col-reverse">
-      <div class="two-col-text">
-        <h2>Tailscale handles the network</h2>
-        <p class="section-lead">Run <code>gmuxd remote</code> once. If a device is on your tailnet and has the token, it's in. No open ports, nothing else to set up.</p>
-      </div>
-      <div class="two-col-visual">
-        <pre class="code-snippet"><code><span class="code-comment"># one-time setup</span>
-gmuxd remote
-
-<span class="code-comment"># any time after</span>
-gmux -- &lt;command&gt;</code></pre>
-      </div>
-    </div>
-  </section>
-
-  <!-- Notifications -->
-  <section class="section section-alt">
-    <div class="section-inner two-col">
-      <div class="two-col-text">
-        <h2>Stop babysitting terminals</h2>
-        <p class="section-lead">Agents work in bursts: minutes of progress, then a question for you. The moment one finishes or gets stuck, gmux pings whichever device you're holding. You don't watch. You get told.</p>
-      </div>
-      <div class="two-col-visual">
-        <div class="mock-notif">
-          <div class="mock-notif-header">
-            <span class="mock-notif-app">
-              <svg class="mock-notif-icon" viewBox="0 0 32 32" width="18" height="18" aria-hidden="true">
-                <rect width="32" height="32" rx="6" fill="#0f141a"/>
-                <rect x="3.5" y="3.5" width="25" height="25" rx="3.5" fill="none" stroke="#49b8b8" stroke-width="1.5"/>
-                <polyline points="8,10 16,16 8,22" fill="none" stroke="#49b8b8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
-                <line x1="18" y1="22" x2="25" y2="22" stroke="#49b8b8" stroke-width="2.4" stroke-linecap="round"/>
-              </svg>
-              <span>gmux</span>
-            </span>
-            <span class="mock-notif-time">now</span>
-          </div>
-          <div class="mock-notif-title">codex · refactor adapters</div>
-          <div class="mock-notif-body">Finished. 4 files changed.</div>
+      <div class="command-flow">
+        <div class="command-step">
+          <span class="command-step-label">spawn subagent</span>
+          <code>gmux -d -- pi<br />"Read handoff.md and go."</code>
+        </div>
+        <span class="command-flow-arrow" aria-hidden="true">&rarr;</span>
+        <div class="command-step command-step-accent">
+          <span class="command-step-label">appears in gmux</span>
+          <span class="command-session"><i></i> handoff</span>
+          <span class="command-status">active · pi</span>
+        </div>
+        <span class="command-flow-arrow" aria-hidden="true">&rarr;</span>
+        <div class="command-step">
+          <span class="command-step-label">you or the agent can steer</span>
+          <code>gmux send --wait &lt;id&gt;<br />'run the tests' Enter</code>
         </div>
       </div>
     </div>
@@ -683,6 +666,20 @@ gmux -- &lt;command&gt;</code></pre>
     background: var(--bg-alt);
   }
 
+  .topology-section {
+    background: oklch(13.5% 0.014 250);
+    border-block: 1px solid var(--border-subtle);
+  }
+
+  .continuity-section {
+    background: var(--bg);
+  }
+
+  .delegation-section {
+    background: var(--bg-alt);
+    border-top: 1px solid var(--border-subtle);
+  }
+
   .section-inner {
     max-width: 1040px;
     margin: 0 auto;
@@ -693,10 +690,12 @@ gmux -- &lt;command&gt;</code></pre>
     font-size: clamp(1.5rem, 2.5vw, 2rem);
     font-weight: 700;
     margin-bottom: 0.5rem;
+    text-wrap: balance;
   }
 
   .section-lead {
     color: var(--text-secondary);
+    text-wrap: pretty;
     font-size: 1.05rem;
     margin-bottom: 2rem;
     max-width: 50ch;
@@ -715,28 +714,22 @@ gmux -- &lt;command&gt;</code></pre>
     margin-bottom: 1.5rem;
   }
 
-  .code-snippet-inline {
-    font-size: 0.85rem;
-  }
-
   /* Before/after contrast: the tether vs. gmux.
      Placeholder for a future photo diptych (laptop half-open in a bag
      vs. phone in the grass) — swap this block back when the shots exist. */
   .contrast {
     display: flex;
-    align-items: stretch;
-    justify-content: center;
-    gap: clamp(1rem, 2.5vw, 2rem);
-    max-width: 760px;
-    margin: 0 auto;
+    flex-direction: column;
+    gap: 0.75rem;
+    width: min(100%, 400px);
+    margin-left: auto;
   }
 
   .contrast-panel {
-    flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 0.9rem;
-    padding: 1.75rem;
+    gap: 0.75rem;
+    padding: 1.4rem 1.6rem;
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--code-bg);
@@ -761,9 +754,10 @@ gmux -- &lt;command&gt;</code></pre>
 
   .contrast-line {
     margin: 0;
-    font-family: 'Fira Code', 'JetBrains Mono', monospace;
-    font-size: 1rem;
-    line-height: 1.7;
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 1.08rem;
+    font-weight: 500;
+    line-height: 1.55;
     color: var(--text-secondary);
   }
 
@@ -774,24 +768,162 @@ gmux -- &lt;command&gt;</code></pre>
   .contrast-arrow {
     align-self: center;
     color: var(--text-muted);
-    font-size: 1.5rem;
-    flex: none;
+    font-size: 1rem;
+    line-height: 1;
   }
 
-  @media (max-width: 700px) {
-    .contrast {
-      flex-direction: column;
-      max-width: 340px;
-    }
-
-    .contrast-arrow {
-      transform: rotate(90deg);
+  @media (max-width: 900px) {
+    .continuity .contrast {
+      margin-inline: auto;
+      text-align: left;
     }
   }
 
   .topo-heading {
     text-align: center;
     margin-bottom: 0.5rem;
+  }
+
+  .remote-strip {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.45rem 0.8rem;
+    width: fit-content;
+    max-width: 100%;
+    margin: 1.5rem auto 0;
+    padding: 0.7rem 1rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+  }
+
+  .remote-strip-label {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .contrast-note {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+  }
+
+  .mock-notif-compact {
+    margin-top: 0.15rem;
+    max-width: none;
+    box-shadow: none;
+  }
+
+  /* Delegation command flow */
+  .delegation-header {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 2.5rem;
+  }
+
+  .delegation-header h2 {
+    margin-bottom: 0.75rem;
+  }
+
+  .delegation-header .section-lead {
+    margin-bottom: 0;
+    max-width: 62ch;
+  }
+
+  .command-flow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 0.82fr) auto minmax(0, 1fr);
+    align-items: stretch;
+    gap: clamp(0.65rem, 1.6vw, 1.25rem);
+    max-width: 980px;
+    margin: 0 auto;
+  }
+
+  .command-step {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.8rem;
+    min-width: 0;
+    padding: 1.3rem 1.4rem;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--code-bg);
+  }
+
+  .command-step-accent {
+    border-color: color-mix(in oklch, var(--accent) 40%, var(--border));
+    background: oklch(20% 0.025 195 / 0.35);
+  }
+
+  .command-step-label {
+    color: var(--text-muted);
+    font-family: 'Fira Code', 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .command-step-accent .command-step-label {
+    color: var(--accent);
+  }
+
+  .command-step code {
+    padding: 0;
+    background: none;
+    color: var(--text);
+    font-size: clamp(0.68rem, 0.85vw, 0.82rem);
+    line-height: 1.65;
+    white-space: nowrap;
+  }
+
+  .command-session {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .command-session i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px oklch(65% 0.12 195 / 0.12);
+  }
+
+  .command-status {
+    color: var(--text-muted);
+    font-family: 'Fira Code', 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+  }
+
+  .command-flow-arrow {
+    align-self: center;
+    color: var(--text-muted);
+  }
+
+  @media (max-width: 760px) {
+    .command-flow {
+      grid-template-columns: 1fr;
+      max-width: 360px;
+    }
+
+    .command-flow-arrow {
+      justify-self: center;
+      transform: rotate(90deg);
+    }
+
+    .command-step code {
+      font-size: 0.75rem;
+      overflow-x: auto;
+    }
   }
 
   /* Two-column content sections */
@@ -911,7 +1043,17 @@ gmux -- &lt;command&gt;</code></pre>
   }
 
   /* --- Closing CTA --- */
+  .cta-section {
+    position: relative;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 50% 25%, oklch(45% 0.08 195 / 0.12), transparent 42%),
+      oklch(17% 0.016 250);
+    border-top: 1px solid color-mix(in oklch, var(--accent) 18%, var(--border));
+  }
+
   .cta-inner {
+    position: relative;
     text-align: center;
     display: flex;
     flex-direction: column;
