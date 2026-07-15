@@ -4,8 +4,11 @@ This package is an isolated SQLite implementation slice related to ADR 0026. It
 is **not** wired into gmuxd and is **not an authoritative domain kernel yet**.
 The current public surface provides schema-backed session fact/version
 primitives, a conditional dead-session acknowledgement tracer, an atomic
-nonproduction runner-registration operation, bootstrap project-catalog
-construction, and collision-safe placement ordering primitives.
+nonproduction runner-registration and runner-observation operations, bootstrap
+project-catalog construction, and collision-safe placement ordering primitives.
+The sibling `sessioncoord` package provides a test-only subscribe-first
+coordinator and runtime-only generation registry; neither package is wired to
+production.
 
 Important scope limits:
 
@@ -28,7 +31,9 @@ Important scope limits:
   resume/restart, dismissal, and event ordering. Production integration,
   recursive dismissal, reconciliation batching, and lifecycle liveness checks
   remain future work. Callers must not fill those gaps with raw
-  access to the private generated queries.
+  access to the private generated queries. `ApplyRunnerObservation` uses the
+  coordinator's observed row-version token, preserves daemon-owned history,
+  and advances activity only for runner activity/death transitions.
 - Peer snapshots, tokens, waits/notifications, adapter batching/takeover, and
   dynamic CWD reporting remain outside this slice.
 

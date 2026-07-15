@@ -393,6 +393,40 @@ func applyNullable[T any](dst **T, p NullablePatch[T]) error {
 	return nil
 }
 func (s *Store) ApplyCommonFacts(ctx context.Context, id SessionID, observed RowVersion, p CommonFactsPatch) (MutationResult, error) {
+	return s.applyCommonFacts(ctx, id, observed, p, nil)
+}
+
+// RunnerObservation is one ordered event from the currently installed runner
+// generation. ObservedVersion is the coordinator's durable coordination token.
+// ObservedAt is evidence for activity transitions, not an unconditional write.
+type RunnerObservation struct {
+	ID              SessionID
+	ObservedVersion RowVersion
+	ObservedAt      UnixMillis
+	Facts           RunnerFacts
+}
+
+// ApplyRunnerObservation conditionally projects runner-owned facts. The
+// coordinator must first prove that the event's generation is current.
+func (s *Store) ApplyRunnerObservation(ctx context.Context, o RunnerObservation) (MutationResult, error) {
+	if o.ID == "" || o.ObservedAt < 0 {
+		return MutationResult{}, errors.New("centralstore: invalid runner observation")
+	}
+	if err := validateRunnerFacts(o.Facts); err != nil {
+		return MutationResult{}, err
+	}
+	p := CommonFactsPatch{
+		ConversationRef: o.Facts.ConversationRef, CWD: o.Facts.CWD, WorkspaceRoot: o.Facts.WorkspaceRoot,
+		Slug: o.Facts.Slug, ShellTitle: o.Facts.ShellTitle, AdapterTitle: o.Facts.AdapterTitle,
+		Subtitle: o.Facts.Subtitle, Command: o.Facts.Command, Remotes: o.Facts.Remotes,
+		Working: o.Facts.Working, Unread: o.Facts.Unread, Error: o.Facts.Error,
+		StartedAt: o.Facts.StartedAt, ExitedAt: o.Facts.ExitedAt, ExitCode: o.Facts.ExitCode,
+		TerminalSize: o.Facts.TerminalSize,
+	}
+	return s.applyCommonFacts(ctx, o.ID, o.ObservedVersion, p, &o.ObservedAt)
+}
+
+func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed RowVersion, p CommonFactsPatch, runnerObservedAt *UnixMillis) (MutationResult, error) {
 	tx, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
 		return MutationResult{}, err
@@ -453,6 +487,12 @@ func (s *Store) ApplyCommonFacts(ctx context.Context, id SessionID, observed Row
 	if p.Error != nil {
 		v.Error = *p.Error
 	}
+	if runnerObservedAt != nil && ((!before.Working && v.Working) || (!before.Unread && v.Unread) || (!before.Error && v.Error)) {
+		if v.LastActivityAt == nil || *runnerObservedAt > *v.LastActivityAt {
+			x := *runnerObservedAt
+			v.LastActivityAt = &x
+		}
+	}
 	if err = applyNullable(&v.StartedAt, p.StartedAt); err != nil {
 		return MutationResult{}, err
 	}
@@ -464,6 +504,10 @@ func (s *Store) ApplyCommonFacts(ctx context.Context, id SessionID, observed Row
 	}
 	if err = applyNullable(&v.ExitCode, p.ExitCode); err != nil {
 		return MutationResult{}, err
+	}
+	if runnerObservedAt != nil && before.ExitedAt == nil && v.ExitedAt != nil && (v.LastActivityAt == nil || *runnerObservedAt > *v.LastActivityAt) {
+		x := *runnerObservedAt
+		v.LastActivityAt = &x
 	}
 	if p.TerminalSize.Set != nil && p.TerminalSize.Clear {
 		return MutationResult{}, errors.New("centralstore: terminal patch cannot set and clear")
