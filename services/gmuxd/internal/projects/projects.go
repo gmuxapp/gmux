@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/gmuxapp/gmux/packages/paths"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/projectmatch"
 )
 
 const fileName = "projects.json"
@@ -372,70 +373,23 @@ type MatchParams struct {
 // Among all matching projects, the one with the longest matching path
 // wins. If no path rule matches, the first remote-matched project wins.
 func (s *State) Match(p MatchParams) *Item {
-	normCwd := NormalizePath(p.Cwd)
-	normWS := NormalizePath(p.WorkspaceRoot)
-
-	var bestPath *Item
-	bestPathLen := 0
-	var firstRemote *Item
-
-	for i := range s.Items {
-		item := &s.Items[i]
-		// Skip reference items: their content is driven by peer
-		// stamps, not local rules. Match() returns owned projects
-		// only.
-		if item.IsReference() {
-			continue
-		}
-		for _, rule := range item.Match {
-			if rule.Remote != "" {
-				normRemote := NormalizeRemote(rule.Remote)
-				for _, url := range p.Remotes {
-					if NormalizeRemote(url) == normRemote {
-						if firstRemote == nil {
-							firstRemote = item
-						}
-						break
-					}
-				}
-			}
-
-			if rule.Path != "" {
-				norm := NormalizePath(rule.Path)
-				if norm == "" {
-					continue
-				}
-				var matched bool
-				if rule.Exact {
-					matched = normCwd == norm || normWS == norm
-				} else {
-					matched = pathUnder(normCwd, norm) || pathUnder(normWS, norm)
-				}
-				if matched && len(norm) > bestPathLen {
-					bestPathLen = len(norm)
-					bestPath = item
-				}
+	entries := make([]projectmatch.Entry, len(s.Items))
+	for i, item := range s.Items {
+		entries[i].Reference = item.IsReference()
+		entries[i].Rules = make([]projectmatch.Rule, len(item.Match))
+		for j, rule := range item.Match {
+			entries[i].Rules[j] = projectmatch.Rule{
+				Path: rule.Path, Remote: rule.Remote, Exact: rule.Exact,
 			}
 		}
 	}
-
-	// Path match is more specific; prefer it when available.
-	if bestPath != nil {
-		return bestPath
+	index, ok := projectmatch.Match(entries, projectmatch.Inputs{
+		CWD: p.Cwd, WorkspaceRoot: p.WorkspaceRoot, Remotes: p.Remotes,
+	})
+	if !ok {
+		return nil
 	}
-	return firstRemote
-}
-
-// pathUnder returns true if candidate is equal to or a subdirectory of base.
-// Both must be cleaned paths (no trailing slashes except root).
-func pathUnder(candidate, base string) bool {
-	if candidate == "" || base == "" {
-		return false
-	}
-	if candidate == base {
-		return true
-	}
-	return strings.HasPrefix(candidate, base+"/")
+	return &s.Items[index]
 }
 
 // --- Path normalization ---
@@ -443,7 +397,7 @@ func pathUnder(candidate, base string) bool {
 // NormalizePath expands a stored path to an absolute form for comparison.
 // Expands ~ prefix to $HOME and calls filepath.Clean.
 func NormalizePath(p string) string {
-	return paths.NormalizePath(p)
+	return projectmatch.NormalizePath(p)
 }
 
 // --- Remote normalization ---
@@ -458,23 +412,7 @@ func NormalizePath(p string) string {
 //	git@github.com:org/repo.git      -> github.com/org/repo
 //	ssh://git@github.com/org/repo    -> github.com/org/repo
 func NormalizeRemote(url string) string {
-	// Strip protocol prefix.
-	for _, prefix := range []string{"https://", "http://", "ssh://", "git://"} {
-		url = strings.TrimPrefix(url, prefix)
-	}
-	// Strip user@ prefix (e.g. "git@github.com:..." -> "github.com:...").
-	if at := strings.Index(url, "@"); at >= 0 {
-		url = url[at+1:]
-	}
-	// Convert SCP-style colon to slash (github.com:org/repo -> github.com/org/repo).
-	// Only if there's no slash before the colon (avoids mangling port numbers in URLs
-	// that already had their protocol stripped, like "host:8080/repo").
-	if colon := strings.Index(url, ":"); colon > 0 && !strings.Contains(url[:colon], "/") {
-		url = url[:colon] + "/" + url[colon+1:]
-	}
-	url = strings.TrimSuffix(url, ".git")
-	url = strings.TrimRight(url, "/")
-	return url
+	return projectmatch.NormalizeRemote(url)
 }
 
 // --- Slug helpers ---
