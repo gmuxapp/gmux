@@ -6,6 +6,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
+import { needsReveal } from './sidebar-reveal'
 import { sessionPath } from './routing'
 import { reorderKeysForFolder } from './projects'
 import { LaunchButton } from './launcher'
@@ -350,17 +351,30 @@ export function Sidebar({
   // scrolls when the row is actually outside the viewport (a visible
   // row stays put), and centers it so neighbors give context. Desktop
   // is unaffected: there `open` never transitions to true.
+  //
+  // The row may not exist yet: the drawer can open before the session
+  // list renders, and selection can change while it stays open. So we
+  // key on selId too and retry across a few animation frames until the
+  // row appears (or we give up), rather than fire once and miss it.
   const scrollRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!open) return
-    const container = scrollRef.current
-    const el = container?.querySelector<HTMLElement>('.session-item.selected')
-    if (!container || !el) return
-    const c = container.getBoundingClientRect()
-    const r = el.getBoundingClientRect()
-    const fullyVisible = r.top >= c.top && r.bottom <= c.bottom
-    if (!fullyVisible) el.scrollIntoView({ block: 'center' })
-  }, [open])
+    let raf = 0
+    let tries = 0
+    const attempt = () => {
+      const container = scrollRef.current
+      const el = container?.querySelector<HTMLElement>('.session-item.selected')
+      if (container && el) {
+        if (needsReveal(container.getBoundingClientRect(), el.getBoundingClientRect()))
+          el.scrollIntoView({ block: 'center' })
+        return
+      }
+      // ~20 frames (~1/3s at 60fps) covers list render + drawer slide-in.
+      if (tries++ < 20) raf = requestAnimationFrame(attempt)
+    }
+    raf = requestAnimationFrame(attempt)
+    return () => cancelAnimationFrame(raf)
+  }, [open, selId])
 
   const totalVisible = foldersVal.reduce(
     (n, f) => n + f.sessions.filter(s => s.alive || s.resumable).length, 0,
