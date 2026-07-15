@@ -1122,7 +1122,17 @@ export function MockTerminal({ sessionId }: { sessionId: string }) {
     term.loadAddon(fit)
     term.open(containerRef.current)
     loadWebglRenderer(term)
-    fit.fit()
+    // Fit like the real terminal: measureTerminalFit reserves the mobile
+    // control bar's height (rounding rows up so one row tucks behind the
+    // translucent keys) instead of FitAddon's naive full-shell fit, which
+    // would paint the terminal background underneath the whole key grid.
+    const refit = () => {
+      const shell = containerRef.current?.closest<HTMLElement>('.terminal-shell')
+      const dims = shell ? measureTerminalFit(term, shell) : null
+      if (dims) term.resize(dims.cols, dims.rows)
+      else fit.fit()
+    }
+    refit()
 
     const mock = MOCK_BY_ID[sessionId]
     if (mock?.terminal) {
@@ -1137,7 +1147,7 @@ export function MockTerminal({ sessionId }: { sessionId: string }) {
     // Expose for debug: window.__gmuxTerm
     ;(window as any).__gmuxTerm = term
 
-    const onResize = () => fit.fit()
+    const onResize = () => refit()
     window.addEventListener('resize', onResize)
 
     return () => {

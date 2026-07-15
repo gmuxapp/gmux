@@ -24,19 +24,38 @@ export default {
   subtitle: '',
   status: { working: false },
   unread: true,
+  project_slug: 'my-project',
+  last_activity_at: ago(3),
   socket_path: '/tmp/gmux-sessions/sess-claude-01.sock',
-  peer: 'laptop',
-  terminal: `${C1}╭─── Claude Code ${C2}v2.1.76 ${C1}──────────────────────────────────────╮${RST}
-${C1}│${RST}      ${BOLD}Welcome back!${RST}                                       ${C1}│${RST}
-${C1}│${RST}      ${C2}~/dev/my-project${RST}                                     ${C1}│${RST}
-${C1}╰──────────────────────────────────────────────────────────────╯${RST}
+  // Sized to 34 columns: the landing page's mobile hero captures this
+  // session at a viewport that fits exactly 34 xterm columns, so lines
+  // must stay ≤34 chars to fill the terminal without wrapping. The
+  // blank lines above the input box pad the content to 23 rows so the
+  // box's bottom border sits flush with the terminal's bottom edge
+  // (the hero viewport fits 23 rows — see capture-hero.mjs).
+  terminal: `${C1}╭─ Claude Code ${C2}v2.1.76 ${C1}──────────╮${RST}
+${C1}│${RST}   ${BOLD}Welcome back!${RST}                ${C1}│${RST}
+${C1}│${RST}   ${C2}~/dev/my-project${RST}             ${C1}│${RST}
+${C1}╰────────────────────────────────╯${RST}
 
-${C10}● ${RST}I'll redesign the landing page hero section. Let me read the
-  current layout first.
+${C2}❯ update the landing page for 2.0${RST}
 
-  ⎿  ${C2}Read ${BOLD}apps/website/src/pages/index.astro${RST} ${C2}(12.4KB)${RST}
+${C10}● ${RST}I'll rework the hero section and
+  tighten the copy.
 
-${C11}──────────────────────────────────────────────────────────────${RST}
-❯ Looks good, go ahead
-${C11}──────────────────────────────────────────────────────────────${RST}`,
+  ⎿  ${C2}Read ${BOLD}index.astro${RST}
+  ⎿  ${C2}Edit ${BOLD}index.astro${RST} ${C2}(+41 -18)${RST}
+  ⎿  ${C2}Bash ${BOLD}pnpm build${RST} ${C2}✓${RST}
+
+${C10}● ${RST}The new hero is in. Want me to
+  regenerate the screenshots too?
+
+
+
+
+${C11}─────────────────────────────────${RST}
+❯ 
+${C11}─────────────────────────────────${RST}`,
+  cursorX: 2,
+  cursorY: 22,
 } satisfies MockSession

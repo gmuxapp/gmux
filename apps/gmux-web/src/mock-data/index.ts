@@ -46,6 +46,41 @@ export const MOCK_HEALTH: HealthData = {
   peers: MOCK_PEERS,
 }
 
+/** Per-peer project ownership (host-authoritative discovery, #305).
+ *  Lets reference folders resolve launch_cwd so root sessions render
+ *  without a redundant cwd token. */
+export const MOCK_PEER_PROJECTS: Record<string, { slug: string; launch_cwd?: string }[]> = {
+  server: [{ slug: 'api', launch_cwd: '/home/user/dev/api' }],
+}
+
+/**
+ * World payload for mock mode.
+ *
+ * `?mock` keeps every QA fixture (offline hosts, auth failures,
+ * unresolved references). `?mock=clean` drops the deliberately broken
+ * ones — a healthy-looking world for demos and screenshots.
+ */
+export function mockWorld(search: string): {
+  projects: ProjectItem[]
+  peers: PeerInfo[]
+  health: HealthData
+  peerProjects: Record<string, { slug: string; launch_cwd?: string }[]>
+} {
+  const clean = /[?&]mock=clean(&|$)/.test(search)
+  if (!clean) {
+    return { projects: MOCK_PROJECTS, peers: MOCK_PEERS, health: MOCK_HEALTH, peerProjects: MOCK_PEER_PROJECTS }
+  }
+  const peers = MOCK_PEERS.filter(p => p.status === 'connected')
+  const connected = new Set(peers.map(p => p.name))
+  const projects = MOCK_PROJECTS.filter(p => !p.peer || connected.has(p.peer))
+  return {
+    projects,
+    peers,
+    health: { ...MOCK_HEALTH, peers },
+    peerProjects: MOCK_PEER_PROJECTS,
+  }
+}
+
 /** Session ID → mock session (for terminal content + cursor lookup). */
 export const MOCK_BY_ID: Record<string, MockSession> = Object.fromEntries(
   MOCK_SESSIONS.map(m => [m.id, m]),
@@ -61,14 +96,14 @@ export const MOCK_PROJECTS: ProjectItem[] = [
     slug: 'my-project',
     match: [
       { remote: 'github.com/acme/my-project' },
-      { path: '~/dev/my-project' },
+      { path: '/home/user/dev/my-project' },
     ],
   },
   {
     slug: 'openclaw',
     match: [
       { remote: 'github.com/acme/openclaw' },
-      { path: '~/dev/openclaw' },
+      { path: '/home/user/dev/openclaw' },
     ],
   },
   // A resolved reference to a roster peer (server).

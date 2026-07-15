@@ -23,7 +23,7 @@ import { referencePresence, unresolvedReferences, removeReferenceItems, removeHo
 import { pushError } from './toasts'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
-import { MOCK_SESSIONS, MOCK_PROJECTS, MOCK_PEERS, MOCK_HEALTH } from './mock-data/index'
+import { MOCK_SESSIONS, mockWorld } from './mock-data/index'
 import type { ResolvedTerminalOptions } from './settings-schema'
 import type { Session as ProtocolSession } from '@gmux/protocol'
 
@@ -1431,7 +1431,7 @@ export function initStore(): () => void {
       ? MOCK_SESSIONS.map(s => s.peer === localHost ? { ...s, peer: undefined } : s)
       : [...MOCK_SESSIONS]
     batch(() => {
-      _setRawWorld({ projects: MOCK_PROJECTS, peers: MOCK_PEERS, health: MOCK_HEALTH })
+      _setRawWorld(mockWorld(location.search))
       _rawSessions.value = mockSessions
       sessionsLoaded.value = true
       worldLoaded.value = true

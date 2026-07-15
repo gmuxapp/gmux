@@ -1,0 +1,113 @@
+---
+/**
+ * Ledger: a two-column "job → who owns it" list, used by the landing
+ * page's "Fewer things, done well" section. Deliberately NOT a
+ * comparison table — each row assigns a job to a tool the visitor
+ * already owns; the single accent row is the job gmux keeps.
+ */
+interface Row {
+  /** The job (left side). */
+  what: string
+  /** Optional small code chip after the job label (e.g. a subcommand). */
+  code?: string
+  /** Who owns the job (right side). */
+  who: string
+  /** Optional code chip appended to the owner (e.g. $EDITOR). */
+  whoCode?: string
+  /** Accent row: the job gmux itself keeps. */
+  accent?: boolean
+}
+
+interface Props {
+  rows: Row[]
+}
+
+const { rows } = Astro.props
+---
+
+<div class="ledger">
+  {rows.map(row => (
+    <div class:list={['ledger-row', { 'ledger-row-accent': row.accent }]}>
+      <span class="ledger-what">
+        {row.what}
+        {row.code && <code class="ledger-code">{row.code}</code>}
+      </span>
+      <span class="ledger-who">
+        {row.who}
+        {row.whoCode && <> <code>{row.whoCode}</code></>}
+      </span>
+    </div>
+  ))}
+</div>
+
+<style>
+  .ledger {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--code-bg);
+    overflow: hidden;
+    min-width: min(300px, 100%);
+    max-width: 400px;
+    width: 100%;
+  }
+
+  .ledger-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.7rem 1.1rem;
+    font-size: 0.92rem;
+  }
+
+  .ledger-row + .ledger-row {
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .ledger-what {
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+
+  /* Page styles are Astro-scoped, so the component carries its own
+     base `code` treatment (matches index.astro's). */
+  code {
+    font-family: 'Fira Code', 'JetBrains Mono', monospace;
+    font-size: 0.85em;
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+  }
+
+  .ledger-code {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    background: none;
+    padding: 0;
+  }
+
+  .ledger-who {
+    color: var(--text);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .ledger-row-accent {
+    background: oklch(20% 0.025 195 / 0.35);
+  }
+
+  .ledger-row-accent .ledger-what {
+    color: var(--text);
+  }
+
+  .ledger-row-accent .ledger-who {
+    color: var(--accent);
+    font-family: 'Instrument Sans', sans-serif;
+    font-weight: 700;
+    letter-spacing: -0.04em;
+  }
+</style>

@@ -783,7 +783,7 @@ function App() {
 
         {keyBarShown && (
           <MobileTerminalBar
-            canSend={canAttach}
+            canSend={canAttach || USE_MOCK}
             ctrlArmed={ctrlArmed}
             altArmed={altArmed}
             onMenu={openSidebar}
