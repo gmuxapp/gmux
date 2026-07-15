@@ -141,7 +141,7 @@ Dismissed sessions have no placement or preserved order. If they register again,
 
 ### 8. Parent-child provenance supports arbitrary depth
 
-A nullable self-reference records the session that launched a session. Every genuinely new nested `gmux` launch automatically captures the inherited `GMUX_SESSION_ID`; resume/restart retain their existing identity semantics.
+A nullable parent-session ID records the session that launched a session. Every genuinely new nested `gmux` launch automatically captures the inherited `GMUX_SESSION_ID`; resume/restart retain their existing identity semantics. This is intentionally not a foreign key: the PTY child starts before the parent's asynchronous daemon registration completes, so a child may durably register first. The private domain API keeps the relationship immutable, rejects cycles as missing parents arrive, and owns deletion repair.
 
 The adjacency model permits arbitrary depth because subagents may launch subagents. Initial product behavior only passively groups recorded relationships; no closure table, materialized path, or general subtree editor is introduced.
 
@@ -153,7 +153,7 @@ Parentage records launch provenance while both rows are retained; it is immutabl
 
 A parent and child derive projects independently; parentage does not override CWD/workspace matching. Dragging can reorder siblings and promote/unpromote relative to the original parent, but arbitrary adoption under an unrelated parent is out of scope.
 
-Dismissing a parent recursively dismisses its descendants. Permanently reconciling away a parent does not delete resumable descendants; `ON DELETE SET NULL` makes its direct children genuine roots and intentionally forgets that deleted relationship. Their own descendant relationships remain intact.
+Dismissing a parent recursively dismisses its descendants. Permanently reconciling away a parent does not delete resumable descendants; the deletion transaction explicitly clears its direct children's parent IDs, makes them genuine roots, and intentionally forgets that deleted relationship. Their own descendant relationships remain intact.
 
 ### 9. Cross-entity changes are domain transactions
 
