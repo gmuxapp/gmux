@@ -1713,11 +1713,7 @@ func serve(stderr io.Writer) int {
 			if sess.SocketPath != "" && sess.Alive {
 				if err := discovery.KillSession(sess.SocketPath); err != nil {
 					log.Printf("kill: %s: runner unreachable, forcing dead: %v", sessionID, err)
-					sess.Alive = false
-					sess.Status = nil
-					if cmd := discovery.ResolveResumeCommand(&sess); cmd != nil {
-						sess.Command = cmd
-					}
+					sess = forceKillDead(sess)
 					sessions.Upsert(sess)
 					persistDead(sess)
 					subs.Unsubscribe(sessionID)
@@ -2381,6 +2377,23 @@ func serve(stderr io.Writer) int {
 
 	log.Printf("gmuxd stopped")
 	return 0
+}
+
+// forceKillDead builds the force-dead session state for the /kill path
+// when the runner can't be reached to perform a graceful exit. It marks
+// the session not-alive and resolves its resume command, but PRESERVES
+// the last observed Status. Per ADR 0023 §4 ("Turn-state-at-death"),
+// the turn state at death is the wait verdict and must hold across every
+// exit path — a forced death must not erase a Status we already saw, or
+// `gmux wait` would resolve differently depending on how the death was
+// detected (a closed turn would wrongly become "died"). A nil Status
+// (session never reported one) legitimately stays nil.
+func forceKillDead(sess store.Session) store.Session {
+	sess.Alive = false
+	if cmd := discovery.ResolveResumeCommand(&sess); cmd != nil {
+		sess.Command = cmd
+	}
+	return sess
 }
 
 // runStatus queries the running daemon via Unix socket and prints health info.

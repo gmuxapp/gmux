@@ -461,3 +461,92 @@ func TestRegisterRejectsInvalidSessionID(t *testing.T) {
 		t.Errorf("invalid-id session was added to the store; must be rejected")
 	}
 }
+
+// TestScanForcedDeathPreservesClosedTurnStatus pins the ADR 0023
+// invariant (docs/adr/0023-unified-turn-model.md §4 "Turn-state-at-
+// death") for the stale-socket sweep: a session whose runner vanished
+// (socket gone, no live subscription) but whose turn had already
+// CLOSED must keep its Status{Working:false} so a post-death `gmux
+// wait` resolves "idle" — the same verdict a live wait watching the
+// clean exit would return. Phase 2 previously hard-cleared Status to
+// nil, which terminalReason maps to "died": the verdict became
+// timing-dependent on how the death was detected.
+func TestScanForcedDeathPreservesClosedTurnStatus(t *testing.T) {
+	sockDir := t.TempDir()
+	t.Setenv("GMUX_SOCKET_DIR", sockDir)
+
+	const id = "sess-closed-turn"
+	// Socket path that does NOT exist: Phase 1 discovers no sockets,
+	// Phase 2 stats this path, fails, and force-marks the session dead.
+	sockPath := filepath.Join(sockDir, id+".sock")
+
+	sessions := store.New()
+	sessions.Upsert(store.Session{
+		ID:         id,
+		Adapter:    "shell",
+		Alive:      true,
+		SocketPath: sockPath,
+		StartedAt:  "2026-01-02T03:04:05Z",
+		Status:     &store.Status{Working: false},
+	})
+
+	subs := NewSubscriptions(sessions)
+	t.Cleanup(func() { subs.UnsubscribeAll() })
+
+	Scan(sessions, subs, nil)
+
+	got, ok := sessions.Get(id)
+	if !ok {
+		t.Fatalf("session %s missing after Scan", id)
+	}
+	if got.Alive {
+		t.Fatalf("Alive = true, want false (stale socket must force death)")
+	}
+	if got.Status == nil {
+		t.Fatalf("Status = nil after forced death; want preserved closed turn (ADR 0023): a cleanly-exited session reaped via stale socket must still resolve 'idle'")
+	}
+	if got.Status.Working {
+		t.Errorf("Status.Working = true, want false (closed turn must be preserved)")
+	}
+}
+
+// TestScanForcedDeathPreservesOpenTurnStatus is the mid-turn crash
+// counterpart: a session that died with its turn still OPEN
+// (Working:true) must keep that evidence so `gmux wait` resolves
+// "died" rather than losing the open-turn state to a nil Status.
+func TestScanForcedDeathPreservesOpenTurnStatus(t *testing.T) {
+	sockDir := t.TempDir()
+	t.Setenv("GMUX_SOCKET_DIR", sockDir)
+
+	const id = "sess-open-turn"
+	sockPath := filepath.Join(sockDir, id+".sock")
+
+	sessions := store.New()
+	sessions.Upsert(store.Session{
+		ID:         id,
+		Adapter:    "shell",
+		Alive:      true,
+		SocketPath: sockPath,
+		StartedAt:  "2026-01-02T03:04:05Z",
+		Status:     &store.Status{Working: true},
+	})
+
+	subs := NewSubscriptions(sessions)
+	t.Cleanup(func() { subs.UnsubscribeAll() })
+
+	Scan(sessions, subs, nil)
+
+	got, ok := sessions.Get(id)
+	if !ok {
+		t.Fatalf("session %s missing after Scan", id)
+	}
+	if got.Alive {
+		t.Fatalf("Alive = true, want false (stale socket must force death)")
+	}
+	if got.Status == nil {
+		t.Fatalf("Status = nil after forced death; want preserved open turn (ADR 0023): a mid-turn crash must keep Working=true to resolve 'died'")
+	}
+	if !got.Status.Working {
+		t.Errorf("Status.Working = false, want true (open turn evidence must be preserved)")
+	}
+}
