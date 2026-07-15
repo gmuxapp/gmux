@@ -7,7 +7,143 @@ package db
 
 import (
 	"context"
+	"database/sql"
 )
+
+const clearDirectChildParents = `-- name: ClearDirectChildParents :execrows
+UPDATE local_sessions
+SET launch_parent_id = NULL, row_version = row_version + 1
+WHERE launch_parent_id = ?
+`
+
+func (q *Queries) ClearDirectChildParents(ctx context.Context, launchParentID sql.NullString) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearDirectChildParents, launchParentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteLocalPeerPlacements = `-- name: DeleteLocalPeerPlacements :execrows
+DELETE FROM project_placements WHERE local_peer_key = ?
+`
+
+func (q *Queries) DeleteLocalPeerPlacements(ctx context.Context, localPeerKey sql.NullString) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteLocalPeerPlacements, localPeerKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteProjectEntry = `-- name: DeleteProjectEntry :execrows
+DELETE FROM project_entries WHERE id = ?
+`
+
+func (q *Queries) DeleteProjectEntry(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteProjectEntry, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteProjectRules = `-- name: DeleteProjectRules :exec
+DELETE FROM project_match_rules WHERE project_entry_id = ?
+`
+
+func (q *Queries) DeleteProjectRules(ctx context.Context, projectEntryID int64) error {
+	_, err := q.db.ExecContext(ctx, deleteProjectRules, projectEntryID)
+	return err
+}
+
+const deleteSessionAtVersion = `-- name: DeleteSessionAtVersion :execrows
+DELETE FROM local_sessions WHERE id = ? AND row_version = ?
+`
+
+type DeleteSessionAtVersionParams struct {
+	ID         string
+	RowVersion int64
+}
+
+func (q *Queries) DeleteSessionAtVersion(ctx context.Context, arg DeleteSessionAtVersionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteSessionAtVersion, arg.ID, arg.RowVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const finalizeLocalPeerPlacement = `-- name: FinalizeLocalPeerPlacement :execrows
+UPDATE project_placements
+SET project_entry_id = ?, peer_parent_session_id = ?, sibling_scope = ?, position = ?
+WHERE id = ? AND local_session_id IS NULL
+`
+
+type FinalizeLocalPeerPlacementParams struct {
+	ProjectEntryID      int64
+	PeerParentSessionID sql.NullString
+	SiblingScope        string
+	Position            int64
+	ID                  int64
+}
+
+func (q *Queries) FinalizeLocalPeerPlacement(ctx context.Context, arg FinalizeLocalPeerPlacementParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finalizeLocalPeerPlacement,
+		arg.ProjectEntryID,
+		arg.PeerParentSessionID,
+		arg.SiblingScope,
+		arg.Position,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const finalizeLocalPlacement = `-- name: FinalizeLocalPlacement :execrows
+UPDATE project_placements
+SET project_entry_id = ?, sibling_scope = ?, position = ?
+WHERE id = ? AND local_session_id IS NOT NULL
+`
+
+type FinalizeLocalPlacementParams struct {
+	ProjectEntryID int64
+	SiblingScope   string
+	Position       int64
+	ID             int64
+}
+
+func (q *Queries) FinalizeLocalPlacement(ctx context.Context, arg FinalizeLocalPlacementParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finalizeLocalPlacement,
+		arg.ProjectEntryID,
+		arg.SiblingScope,
+		arg.Position,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const finalizeProjectEntryOrder = `-- name: FinalizeProjectEntryOrder :execrows
+UPDATE project_entries SET sidebar_order = ? WHERE id = ?
+`
+
+type FinalizeProjectEntryOrderParams struct {
+	SidebarOrder int64
+	ID           int64
+}
+
+func (q *Queries) FinalizeProjectEntryOrder(ctx context.Context, arg FinalizeProjectEntryOrderParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finalizeProjectEntryOrder, arg.SidebarOrder, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
 
 const getMetadata = `-- name: GetMetadata :one
 SELECT value FROM centralstore_metadata WHERE key = ?
@@ -18,6 +154,513 @@ func (q *Queries) GetMetadata(ctx context.Context, key string) (string, error) {
 	var value string
 	err := row.Scan(&value)
 	return value, err
+}
+
+const getSession = `-- name: GetSession :one
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root FROM local_sessions WHERE id = ?
+`
+
+func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, error) {
+	row := q.db.QueryRowContext(ctx, getSession, id)
+	var i LocalSession
+	err := row.Scan(
+		&i.ID,
+		&i.RowVersion,
+		&i.Adapter,
+		&i.ConversationRef,
+		&i.CommandJson,
+		&i.Cwd,
+		&i.WorkspaceRoot,
+		&i.RemotesJson,
+		&i.Slug,
+		&i.ShellTitle,
+		&i.AdapterTitle,
+		&i.Subtitle,
+		&i.Working,
+		&i.Unread,
+		&i.HasError,
+		&i.CreatedAtMs,
+		&i.StartedAtMs,
+		&i.ExitedAtMs,
+		&i.LastActivityAtMs,
+		&i.DismissedAtMs,
+		&i.ExitCode,
+		&i.TerminalCols,
+		&i.TerminalRows,
+		&i.LaunchParentID,
+		&i.PromotedToRoot,
+	)
+	return i, err
+}
+
+const insertLocalPeerPlacement = `-- name: InsertLocalPeerPlacement :one
+INSERT INTO project_placements
+(project_entry_id, local_peer_key, peer_session_id, peer_parent_session_id,
+ sibling_scope, position)
+VALUES (?, ?, ?, ?, ?, ?)
+RETURNING id
+`
+
+type InsertLocalPeerPlacementParams struct {
+	ProjectEntryID      int64
+	LocalPeerKey        sql.NullString
+	PeerSessionID       sql.NullString
+	PeerParentSessionID sql.NullString
+	SiblingScope        string
+	Position            int64
+}
+
+func (q *Queries) InsertLocalPeerPlacement(ctx context.Context, arg InsertLocalPeerPlacementParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertLocalPeerPlacement,
+		arg.ProjectEntryID,
+		arg.LocalPeerKey,
+		arg.PeerSessionID,
+		arg.PeerParentSessionID,
+		arg.SiblingScope,
+		arg.Position,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertLocalPlacement = `-- name: InsertLocalPlacement :one
+INSERT INTO project_placements
+(project_entry_id, local_session_id, sibling_scope, position)
+VALUES (?, ?, ?, ?)
+RETURNING id
+`
+
+type InsertLocalPlacementParams struct {
+	ProjectEntryID int64
+	LocalSessionID sql.NullString
+	SiblingScope   string
+	Position       int64
+}
+
+func (q *Queries) InsertLocalPlacement(ctx context.Context, arg InsertLocalPlacementParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertLocalPlacement,
+		arg.ProjectEntryID,
+		arg.LocalSessionID,
+		arg.SiblingScope,
+		arg.Position,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertProjectEntry = `-- name: InsertProjectEntry :one
+INSERT INTO project_entries
+(sidebar_order, entry_kind, slug, peer_key, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?)
+RETURNING id
+`
+
+type InsertProjectEntryParams struct {
+	SidebarOrder int64
+	EntryKind    string
+	Slug         string
+	PeerKey      sql.NullString
+	CreatedAtMs  int64
+	UpdatedAtMs  int64
+}
+
+func (q *Queries) InsertProjectEntry(ctx context.Context, arg InsertProjectEntryParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, insertProjectEntry,
+		arg.SidebarOrder,
+		arg.EntryKind,
+		arg.Slug,
+		arg.PeerKey,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertProjectRule = `-- name: InsertProjectRule :exec
+INSERT INTO project_match_rules
+(project_entry_id, rule_order, path, remote, exact)
+VALUES (?, ?, ?, ?, ?)
+`
+
+type InsertProjectRuleParams struct {
+	ProjectEntryID int64
+	RuleOrder      int64
+	Path           sql.NullString
+	Remote         sql.NullString
+	Exact          int64
+}
+
+func (q *Queries) InsertProjectRule(ctx context.Context, arg InsertProjectRuleParams) error {
+	_, err := q.db.ExecContext(ctx, insertProjectRule,
+		arg.ProjectEntryID,
+		arg.RuleOrder,
+		arg.Path,
+		arg.Remote,
+		arg.Exact,
+	)
+	return err
+}
+
+const insertSession = `-- name: InsertSession :one
+INSERT INTO local_sessions (
+    id, adapter, conversation_ref, command_json, cwd, workspace_root,
+    remotes_json, slug, shell_title, adapter_title, subtitle,
+    working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms,
+    last_activity_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root
+`
+
+type InsertSessionParams struct {
+	ID               string
+	Adapter          string
+	ConversationRef  sql.NullString
+	CommandJson      string
+	Cwd              string
+	WorkspaceRoot    sql.NullString
+	RemotesJson      string
+	Slug             sql.NullString
+	ShellTitle       sql.NullString
+	AdapterTitle     sql.NullString
+	Subtitle         sql.NullString
+	Working          int64
+	Unread           int64
+	HasError         int64
+	CreatedAtMs      int64
+	StartedAtMs      sql.NullInt64
+	ExitedAtMs       sql.NullInt64
+	LastActivityAtMs sql.NullInt64
+	ExitCode         sql.NullInt64
+	TerminalCols     sql.NullInt64
+	TerminalRows     sql.NullInt64
+	LaunchParentID   sql.NullString
+}
+
+func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (LocalSession, error) {
+	row := q.db.QueryRowContext(ctx, insertSession,
+		arg.ID,
+		arg.Adapter,
+		arg.ConversationRef,
+		arg.CommandJson,
+		arg.Cwd,
+		arg.WorkspaceRoot,
+		arg.RemotesJson,
+		arg.Slug,
+		arg.ShellTitle,
+		arg.AdapterTitle,
+		arg.Subtitle,
+		arg.Working,
+		arg.Unread,
+		arg.HasError,
+		arg.CreatedAtMs,
+		arg.StartedAtMs,
+		arg.ExitedAtMs,
+		arg.LastActivityAtMs,
+		arg.ExitCode,
+		arg.TerminalCols,
+		arg.TerminalRows,
+		arg.LaunchParentID,
+	)
+	var i LocalSession
+	err := row.Scan(
+		&i.ID,
+		&i.RowVersion,
+		&i.Adapter,
+		&i.ConversationRef,
+		&i.CommandJson,
+		&i.Cwd,
+		&i.WorkspaceRoot,
+		&i.RemotesJson,
+		&i.Slug,
+		&i.ShellTitle,
+		&i.AdapterTitle,
+		&i.Subtitle,
+		&i.Working,
+		&i.Unread,
+		&i.HasError,
+		&i.CreatedAtMs,
+		&i.StartedAtMs,
+		&i.ExitedAtMs,
+		&i.LastActivityAtMs,
+		&i.DismissedAtMs,
+		&i.ExitCode,
+		&i.TerminalCols,
+		&i.TerminalRows,
+		&i.LaunchParentID,
+		&i.PromotedToRoot,
+	)
+	return i, err
+}
+
+const listPlacements = `-- name: ListPlacements :many
+SELECT p.id, p.project_entry_id, p.local_session_id, p.local_peer_key,
+       p.peer_session_id, p.peer_parent_session_id, p.sibling_scope, p.position,
+       COALESCE(s.created_at_ms, 0) AS local_created_at_ms,
+       COALESCE(s.promoted_to_root, 0) AS local_promoted_to_root,
+       s.launch_parent_id
+FROM project_placements p
+LEFT JOIN local_sessions s ON s.id = p.local_session_id
+ORDER BY p.project_entry_id, p.sibling_scope, p.position, p.id
+`
+
+type ListPlacementsRow struct {
+	ID                  int64
+	ProjectEntryID      int64
+	LocalSessionID      sql.NullString
+	LocalPeerKey        sql.NullString
+	PeerSessionID       sql.NullString
+	PeerParentSessionID sql.NullString
+	SiblingScope        string
+	Position            int64
+	LocalCreatedAtMs    int64
+	LocalPromotedToRoot int64
+	LaunchParentID      sql.NullString
+}
+
+func (q *Queries) ListPlacements(ctx context.Context) ([]ListPlacementsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPlacements)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPlacementsRow
+	for rows.Next() {
+		var i ListPlacementsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectEntryID,
+			&i.LocalSessionID,
+			&i.LocalPeerKey,
+			&i.PeerSessionID,
+			&i.PeerParentSessionID,
+			&i.SiblingScope,
+			&i.Position,
+			&i.LocalCreatedAtMs,
+			&i.LocalPromotedToRoot,
+			&i.LaunchParentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectEntries = `-- name: ListProjectEntries :many
+SELECT id, sidebar_order, entry_kind, slug, peer_key, created_at_ms, updated_at_ms FROM project_entries ORDER BY sidebar_order
+`
+
+func (q *Queries) ListProjectEntries(ctx context.Context) ([]ProjectEntry, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectEntries)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectEntry
+	for rows.Next() {
+		var i ProjectEntry
+		if err := rows.Scan(
+			&i.ID,
+			&i.SidebarOrder,
+			&i.EntryKind,
+			&i.Slug,
+			&i.PeerKey,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectRules = `-- name: ListProjectRules :many
+SELECT id, project_entry_id, rule_order, path, remote, exact FROM project_match_rules ORDER BY project_entry_id, rule_order
+`
+
+func (q *Queries) ListProjectRules(ctx context.Context) ([]ProjectMatchRule, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectRules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectMatchRule
+	for rows.Next() {
+		var i ProjectMatchRule
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectEntryID,
+			&i.RuleOrder,
+			&i.Path,
+			&i.Remote,
+			&i.Exact,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessions = `-- name: ListSessions :many
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root FROM local_sessions ORDER BY id
+`
+
+func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
+	rows, err := q.db.QueryContext(ctx, listSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LocalSession
+	for rows.Next() {
+		var i LocalSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.RowVersion,
+			&i.Adapter,
+			&i.ConversationRef,
+			&i.CommandJson,
+			&i.Cwd,
+			&i.WorkspaceRoot,
+			&i.RemotesJson,
+			&i.Slug,
+			&i.ShellTitle,
+			&i.AdapterTitle,
+			&i.Subtitle,
+			&i.Working,
+			&i.Unread,
+			&i.HasError,
+			&i.CreatedAtMs,
+			&i.StartedAtMs,
+			&i.ExitedAtMs,
+			&i.LastActivityAtMs,
+			&i.DismissedAtMs,
+			&i.ExitCode,
+			&i.TerminalCols,
+			&i.TerminalRows,
+			&i.LaunchParentID,
+			&i.PromotedToRoot,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const localSessionPlacementFacts = `-- name: LocalSessionPlacementFacts :one
+SELECT created_at_ms, promoted_to_root, launch_parent_id
+FROM local_sessions WHERE id = ?
+`
+
+type LocalSessionPlacementFactsRow struct {
+	CreatedAtMs    int64
+	PromotedToRoot int64
+	LaunchParentID sql.NullString
+}
+
+func (q *Queries) LocalSessionPlacementFacts(ctx context.Context, id string) (LocalSessionPlacementFactsRow, error) {
+	row := q.db.QueryRowContext(ctx, localSessionPlacementFacts, id)
+	var i LocalSessionPlacementFactsRow
+	err := row.Scan(&i.CreatedAtMs, &i.PromotedToRoot, &i.LaunchParentID)
+	return i, err
+}
+
+const ownedProjectExists = `-- name: OwnedProjectExists :one
+SELECT EXISTS(
+    SELECT 1 FROM project_entries WHERE id = ? AND entry_kind = 'owned'
+)
+`
+
+func (q *Queries) OwnedProjectExists(ctx context.Context, id int64) (bool, error) {
+	row := q.db.QueryRowContext(ctx, ownedProjectExists, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const parkPlacement = `-- name: ParkPlacement :execrows
+UPDATE project_placements SET sibling_scope = ?, position = 0 WHERE id = ?
+`
+
+type ParkPlacementParams struct {
+	SiblingScope string
+	ID           int64
+}
+
+func (q *Queries) ParkPlacement(ctx context.Context, arg ParkPlacementParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, parkPlacement, arg.SiblingScope, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const parkProjectEntries = `-- name: ParkProjectEntries :exec
+UPDATE project_entries SET sidebar_order = sidebar_order + ?
+`
+
+func (q *Queries) ParkProjectEntries(ctx context.Context, sidebarOrder int64) error {
+	_, err := q.db.ExecContext(ctx, parkProjectEntries, sidebarOrder)
+	return err
+}
+
+const parkProjectEntrySlug = `-- name: ParkProjectEntrySlug :execrows
+UPDATE project_entries SET slug = ? WHERE id = ?
+`
+
+type ParkProjectEntrySlugParams struct {
+	Slug string
+	ID   int64
+}
+
+func (q *Queries) ParkProjectEntrySlug(ctx context.Context, arg ParkProjectEntrySlugParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, parkProjectEntrySlug, arg.Slug, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const placementCount = `-- name: PlacementCount :one
+SELECT COUNT(*) FROM project_placements
+`
+
+func (q *Queries) PlacementCount(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, placementCount)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const putMetadata = `-- name: PutMetadata :exec
@@ -33,4 +676,137 @@ type PutMetadataParams struct {
 func (q *Queries) PutMetadata(ctx context.Context, arg PutMetadataParams) error {
 	_, err := q.db.ExecContext(ctx, putMetadata, arg.Key, arg.Value)
 	return err
+}
+
+const sessionVersion = `-- name: SessionVersion :one
+SELECT row_version FROM local_sessions WHERE id = ?
+`
+
+func (q *Queries) SessionVersion(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, sessionVersion, id)
+	var row_version int64
+	err := row.Scan(&row_version)
+	return row_version, err
+}
+
+const setPromotion = `-- name: SetPromotion :execrows
+UPDATE local_sessions
+SET promoted_to_root = ?, row_version = row_version + 1
+WHERE id = ? AND promoted_to_root <> ?
+`
+
+type SetPromotionParams struct {
+	PromotedToRoot   int64
+	ID               string
+	PromotedToRoot_2 int64
+}
+
+func (q *Queries) SetPromotion(ctx context.Context, arg SetPromotionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setPromotion, arg.PromotedToRoot, arg.ID, arg.PromotedToRoot_2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const temporaryPlacementCount = `-- name: TemporaryPlacementCount :one
+SELECT COUNT(*) FROM project_placements WHERE sibling_scope LIKE '~:%'
+`
+
+func (q *Queries) TemporaryPlacementCount(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, temporaryPlacementCount)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const updateCommonFacts = `-- name: UpdateCommonFacts :execrows
+UPDATE local_sessions SET
+    row_version = row_version + 1,
+    adapter = ?, conversation_ref = ?, command_json = ?, cwd = ?,
+    workspace_root = ?, remotes_json = ?, slug = ?, shell_title = ?,
+    adapter_title = ?, subtitle = ?, working = ?, unread = ?, has_error = ?,
+    started_at_ms = ?, exited_at_ms = ?, last_activity_at_ms = ?, exit_code = ?,
+    terminal_cols = ?, terminal_rows = ?
+WHERE id = ? AND row_version = ?
+`
+
+type UpdateCommonFactsParams struct {
+	Adapter          string
+	ConversationRef  sql.NullString
+	CommandJson      string
+	Cwd              string
+	WorkspaceRoot    sql.NullString
+	RemotesJson      string
+	Slug             sql.NullString
+	ShellTitle       sql.NullString
+	AdapterTitle     sql.NullString
+	Subtitle         sql.NullString
+	Working          int64
+	Unread           int64
+	HasError         int64
+	StartedAtMs      sql.NullInt64
+	ExitedAtMs       sql.NullInt64
+	LastActivityAtMs sql.NullInt64
+	ExitCode         sql.NullInt64
+	TerminalCols     sql.NullInt64
+	TerminalRows     sql.NullInt64
+	ID               string
+	RowVersion       int64
+}
+
+func (q *Queries) UpdateCommonFacts(ctx context.Context, arg UpdateCommonFactsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateCommonFacts,
+		arg.Adapter,
+		arg.ConversationRef,
+		arg.CommandJson,
+		arg.Cwd,
+		arg.WorkspaceRoot,
+		arg.RemotesJson,
+		arg.Slug,
+		arg.ShellTitle,
+		arg.AdapterTitle,
+		arg.Subtitle,
+		arg.Working,
+		arg.Unread,
+		arg.HasError,
+		arg.StartedAtMs,
+		arg.ExitedAtMs,
+		arg.LastActivityAtMs,
+		arg.ExitCode,
+		arg.TerminalCols,
+		arg.TerminalRows,
+		arg.ID,
+		arg.RowVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateProjectEntry = `-- name: UpdateProjectEntry :execrows
+UPDATE project_entries
+SET sidebar_order = ?, slug = ?, updated_at_ms = ?
+WHERE id = ?
+`
+
+type UpdateProjectEntryParams struct {
+	SidebarOrder int64
+	Slug         string
+	UpdatedAtMs  int64
+	ID           int64
+}
+
+func (q *Queries) UpdateProjectEntry(ctx context.Context, arg UpdateProjectEntryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateProjectEntry,
+		arg.SidebarOrder,
+		arg.Slug,
+		arg.UpdatedAtMs,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

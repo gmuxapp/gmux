@@ -4,7 +4,69 @@
 
 package db
 
+import (
+	"database/sql"
+)
+
 type CentralstoreMetadatum struct {
 	Key   string
 	Value string
+}
+
+type LocalSession struct {
+	ID               string
+	RowVersion       int64
+	Adapter          string
+	ConversationRef  sql.NullString
+	CommandJson      string
+	Cwd              string
+	WorkspaceRoot    sql.NullString
+	RemotesJson      string
+	Slug             sql.NullString
+	ShellTitle       sql.NullString
+	AdapterTitle     sql.NullString
+	Subtitle         sql.NullString
+	Working          int64
+	Unread           int64
+	HasError         int64
+	CreatedAtMs      int64
+	StartedAtMs      sql.NullInt64
+	ExitedAtMs       sql.NullInt64
+	LastActivityAtMs sql.NullInt64
+	DismissedAtMs    sql.NullInt64
+	ExitCode         sql.NullInt64
+	TerminalCols     sql.NullInt64
+	TerminalRows     sql.NullInt64
+	LaunchParentID   sql.NullString
+	PromotedToRoot   int64
+}
+
+type ProjectEntry struct {
+	ID           int64
+	SidebarOrder int64
+	EntryKind    string
+	Slug         string
+	PeerKey      sql.NullString
+	CreatedAtMs  int64
+	UpdatedAtMs  int64
+}
+
+type ProjectMatchRule struct {
+	ID             int64
+	ProjectEntryID int64
+	RuleOrder      int64
+	Path           sql.NullString
+	Remote         sql.NullString
+	Exact          int64
+}
+
+type ProjectPlacement struct {
+	ID                  int64
+	ProjectEntryID      int64
+	LocalSessionID      sql.NullString
+	LocalPeerKey        sql.NullString
+	PeerSessionID       sql.NullString
+	PeerParentSessionID sql.NullString
+	SiblingScope        string
+	Position            int64
 }

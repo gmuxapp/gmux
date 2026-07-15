@@ -1,8 +1,25 @@
-# Central store foundation
+# Central store schema and ordering primitives
 
-This package is the isolated SQLite foundation described by ADR 0026. It is not
-used by gmuxd startup yet. The initial schema contains only a small metadata
-key/value table; durable sessions, projects, and peers belong to later slices.
+This package is an isolated SQLite implementation slice related to ADR 0026. It
+is **not** wired into gmuxd and is **not an authoritative domain kernel yet**.
+The current public surface provides schema-backed session fact/version
+primitives, bootstrap project-catalog construction, and collision-safe placement
+ordering primitives.
+
+Important scope limits:
+
+- `ReplaceProjectCatalog` is bootstrap-only. It returns
+  `ErrCatalogHasPlacements` once any local or Local-peer placement exists,
+  because this slice does not own the match inputs needed to rematch subjects
+  authoritatively after rule changes.
+- Direct caller-selected placement is an ordering primitive, not proof of
+  derived project membership.
+- Registration/re-registration, acknowledgement, recursive dismissal,
+  reconciliation batching, matching/rematching, lifecycle liveness checks, and
+  production integration remain future work. Callers must not fill those gaps
+  with raw access to the private generated queries.
+- Peer snapshots, tokens, waits/notifications, adapter batching/takeover, and
+  dynamic CWD reporting remain outside this slice.
 
 From the repository root:
 
@@ -25,6 +42,7 @@ The `check-centralstore-generated` and `check-centralstore-cross-build` tasks
 are not yet reachable from the CI task graph; wiring them into CI belongs to
 the operational integration slice.
 
-Migrations under `migrations/` are immutable schema source. Query SQL and
-checked-in generated files live under `internal/db`, so Go structurally prevents
-imports from outside `centralstore`.
+Migrations under `migrations/` are immutable schema source. Stable query SQL and
+checked-in generated files live under `internal/db`; transaction orchestration
+uses generated `Queries.WithTx`, and Go structurally prevents imports of those
+primitives from outside `centralstore`.

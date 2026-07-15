@@ -1,5 +1,6 @@
-// Package centralstore provides the future SQLite authority for daemon-owned
-// state. It is intentionally not wired into gmuxd yet.
+// Package centralstore provides private SQLite schema and ordering primitives.
+// It is intentionally not wired into gmuxd and is not yet an authoritative
+// lifecycle or project-membership boundary.
 package centralstore
 
 import (
@@ -28,6 +29,10 @@ var migrationFiles embed.FS
 type Store struct {
 	database *sql.DB
 	queries  *db.Queries
+
+	// beforePlacementFinalize is a test-only fault-injection seam. Production
+	// construction leaves it nil.
+	beforePlacementFinalize func() error
 }
 
 // Open creates (when absent), configures, and migrates the database in dir.
