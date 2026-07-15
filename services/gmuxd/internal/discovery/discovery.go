@@ -195,9 +195,15 @@ func Scan(sessions *store.Store, subs *Subscriptions, onDead OnDeadFunc) {
 		if _, err := os.Stat(s.SocketPath); err == nil && probeSocket(s.SocketPath) {
 			continue // path exists and responds — subscription will reconnect
 		}
-		// Socket gone or unresponsive — mark dead.
+		// Socket gone or unresponsive — mark dead. Preserve the last
+		// observed Status: the turn state at death is the wait verdict
+		// (ADR 0023 §invariant) and must not depend on how death was
+		// detected. Clearing it here made a cleanly-closed turn reaped
+		// via stale socket resolve as "died", and lost the open-turn
+		// evidence a mid-turn crash needs. A nil Status (session never
+		// reported) legitimately stays nil — terminalReason treats that
+		// as "died" already.
 		s.Alive = false
-		s.Status = nil
 		if cmd := ResolveResumeCommand(&s); cmd != nil {
 			s.Command = cmd
 		}
