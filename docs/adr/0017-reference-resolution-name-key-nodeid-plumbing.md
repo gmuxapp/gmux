@@ -1,14 +1,14 @@
 # ADR 0017: References identify by name; node_id is a liveness anchor
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-23
-**Related:** ADR 0005 (references), ADR 0007 (host identity)
+**Related:** ADR 0025 (references), ADR 0007 (host identity)
 **Supersedes:** the ad-hoc reference resolver from refs #270
 **Target:** gmux 2.0
 
 ## Context
 
-A *reference* (ADR 0005) is a `projects.json` entry `{slug, peer}`
+A *reference* (ADR 0025) is a `projects.json` entry `{slug, peer}`
 pointing at a peer-owned project. ADR 0007 made the peer **name** a
 viewer-owned label and added a stable opaque **`node_id`**.
 

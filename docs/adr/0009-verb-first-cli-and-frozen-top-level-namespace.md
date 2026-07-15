@@ -1,6 +1,6 @@
 # ADR 0009: Verb-first CLI, explicit run syntax, and a frozen top-level namespace
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-15
 **Supersedes (in part):** the flag-based action surface of ADR 0005 (the
 *transport* decision in 0005 stands; only the user-facing flag grammar changes)

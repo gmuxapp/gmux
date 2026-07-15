@@ -167,7 +167,7 @@ export function mostCommonRemote(sessions: Session[]): string {
 
 /** Discover suggested projects from the viewer's OWN (local) sessions.
  *
- * Discovery is host-authoritative (ADR 0002/0005): each host runs its
+ * Discovery is host-authoritative (ADR 0002/0025): each host runs its
  * own match rules over its own sessions and decides which are unclaimed.
  * This function therefore handles local sessions only — peer sessions
  * are discovered by their owning host and relayed verbatim (merged in
@@ -175,7 +175,7 @@ export function mostCommonRemote(sessions: Session[]): string {
  *
  * A session is in scope iff it is local (`s.peer` empty, or a Local
  * peer / devcontainer whose project assignment the parent owns — see
- * ADR 0005), it is disclaimed (`s.project_slug` empty), and it doesn't
+ * ADR 0025), it is disclaimed (`s.project_slug` empty), and it doesn't
  * match a local owned project (those get stamped imminently by
  * auto-assign, so surfacing them as discovered would just flicker).
  *
@@ -191,10 +191,10 @@ export function discoverProjects(
   const byKey = new Map<string, { peer: string; dir: string; group: Session[] }>()
   for (const s of sessions) {
     if (s.project_slug) continue // claimed by origin
-    // Discovery is host-authoritative (ADR 0002/0005): this viewer only
+    // Discovery is host-authoritative (ADR 0002/0025): this viewer only
     // discovers its OWN (local) sessions. Peer sessions are discovered
     // by their owning host and relayed verbatim (see store.discovered).
-    // Local-peer/devcontainer sessions count as local: per ADR 0005
+    // Local-peer/devcontainer sessions count as local: per ADR 0025
     // their project assignment is owned by the parent's rules, so they
     // flow through the parent's local discovery, not the container's.
     const rawPeer = s.peer ?? ''

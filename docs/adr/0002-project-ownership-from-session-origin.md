@@ -1,8 +1,18 @@
 # ADR 0002: Project ownership from session origin
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-04-25
-**Related:** ADR 0001 (Snapshot push protocol)
+**Related:** ADR 0001 (Snapshot push protocol), ADR 0025 (references and the Local-peer exception)
+
+> **Extended by ADR 0025 (2026-07).** This ADR establishes the core rule
+> — a session's project assignment is owned by and stamped on its origin
+> host. ADR 0025 is the current, canonical model for the rest of the story:
+> it removes this ADR's disclaimed-session viewer *fallback*, introduces
+> explicit **references**, and defines the **Local-peer** (devcontainer)
+> exception under which the parent host may be the authority. Read ADR 0002
+> for the origin-authority rationale and ADR 0025 for how membership is
+> resolved today; the fallback-adoption behavior described below no longer
+> applies.
 
 ## Context
 

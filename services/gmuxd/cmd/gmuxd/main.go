@@ -2518,7 +2518,7 @@ func composePeerProjects(mgr *peering.Manager) map[string][]peering.SpokeProject
 
 // composePeerDiscovered gathers each connected peer's self-advertised
 // discovered list into a map keyed by peer name. Discovery is
-// host-authoritative (ADR 0002/0005): the viewer renders each peer's
+// host-authoritative (ADR 0002/0025): the viewer renders each peer's
 // own discovered rows verbatim instead of recomputing them blind. Local
 // peers are skipped (their sessions flow through the parent's local
 // discovery). Peers not yet fetched appear with an empty list.

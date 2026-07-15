@@ -969,7 +969,7 @@ describe('discoverProjects', () => {
   })
 
   it('excludes ALL peer sessions (discovery is host-authoritative)', () => {
-    // Discovery is owned by the originating host (ADR 0002/0005): the
+    // Discovery is owned by the originating host (ADR 0002/0025): the
     // viewer computes discovery only for its own local sessions. Peer
     // sessions — connected or not — are discovered by their owning
     // host and relayed verbatim (merged in store.discovered), never
@@ -985,7 +985,7 @@ describe('discoverProjects', () => {
   })
 
   it('treats local-peer (devcontainer) sessions as local', () => {
-    // Per ADR 0005 a Local peer's project assignment is owned by the
+    // Per ADR 0025 a Local peer's project assignment is owned by the
     // parent, so its disclaimed sessions flow through the parent's
     // local discovery rather than the container's own.
     const sessions = [

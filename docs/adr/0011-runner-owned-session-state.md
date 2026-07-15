@@ -3,6 +3,17 @@
 **Status:** Accepted
 **Date:** 2026-06-16
 **Related:** ADR 0004 (SessionStream), ADR 0010 (the agent-shim this supersedes)
+**Partially superseded by:** ADR 0013 (codex authoritative state via hooks) and ADR 0014 (adapter-owned conversation sources)
+
+> **Superseded prose (2026-07):** references below to the **daemon's**
+> `FileMonitor` / inotify file-watch and to codex as "the only remaining
+> file-watch consumer" are historical. ADR 0013 moved codex onto
+> authoritative hooks, and ADR 0014 deleted daemon-global attribution
+> entirely — conversation watching now lives in the adapter
+> (`packages/adapter/filewatch`) and the daemon consumes adapter
+> `ConversationSource`s (there is **no** daemon file-watch fallback). The
+> core decision of this ADR — runner/adapter owns state, daemon is a read
+> cache — stands; only the file-watch ownership detail changed.
 
 > **Outcome.** Built and shipped. The decisive change beyond the original plan:
 > the fragile fs signal (ADR 0010's shim) was replaced by an **agent-hook** —

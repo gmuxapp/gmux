@@ -246,7 +246,7 @@ func (p *Peer) fetchProjects(ctx context.Context) {
 	}
 	// The spoke's discovered list is host-authoritative: it ran its
 	// own match rules over its own sessions, so we cache it verbatim
-	// rather than recomputing peer discovery blind (ADR 0002/0005).
+	// rather than recomputing peer discovery blind (ADR 0002/0025).
 	discovered := envelope.Discovered
 	if discovered == nil {
 		discovered = []SpokeDiscovered{}

@@ -37,9 +37,18 @@ type managedPeer struct {
 // NewManager creates a manager but does not start connections.
 // Call Start() to begin subscribing to peers.
 //
-// selfName is the local machine's hostname, used to detect (and drop)
-// sessions that are our own data echoed back through a mutual peer
-// subscription.
+// selfName is the local machine's hostname, used by isKnownOrigin as a
+// defensive backstop against our own data echoed back through a mutual
+// peer. NOTE: this is a backstop only, not the load-bearing guard. The
+// actual protection against re-forwarding a network peer's sessions is
+// the ADR 0002 owned-only filter on `?as=peer` streams (see isOwned in
+// cmd/gmuxd/main.go): a spoke only ever ships sessions it owns
+// (Peer=="" or a Local/devcontainer peer), so a well-behaved peer never
+// echoes our own sessions back here. Consequently selfName is *not*
+// required to match this node's tailscale/URL identity (ADR 0007); the
+// two can legitimately diverge (e.g. os.Hostname()==container-id) with
+// no observable effect. Do not "fix" this into a load-bearing check
+// without also revisiting the owned-only filter.
 func NewManager(configs []config.PeerConfig, st *store.Store, selfName string, opts ...PeerOption) *Manager {
 	m := &Manager{
 		peers:       make(map[string]*managedPeer, len(configs)),
