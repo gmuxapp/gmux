@@ -2833,6 +2833,13 @@ body {
     border-bottom: none;
   }
   .sidebar-scroll { order: 1; }
+
+  /* The header sits at the bottom of the screen here, so the view menu
+   * opens upward instead of downward — otherwise it drops off-screen. */
+  .view-menu {
+    top: auto;
+    bottom: calc(100% + 4px);
+  }
 }
 
 /* Collapse the session header while the on-screen keyboard is open on
