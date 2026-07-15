@@ -25,7 +25,7 @@ const fileName = "projects.json"
 
 // currentVersion is the latest projects.json schema version.
 // See migrateState for the evolution history.
-const currentVersion = 3
+const currentVersion = 4
 
 // MatchRule is a single criterion for matching sessions to a project.
 // Exactly one of Path or Remote should be set.
@@ -47,7 +47,7 @@ type MatchRule struct {
 //
 //   - Owned: Slug + Match[] + Sessions[]. This is a project owned by
 //     this host. Match drives session attribution; Sessions[] holds
-//     the ordered list of session keys for sidebar order.
+//     the ordered list of session IDs for sidebar order.
 //   - Reference: Slug + Peer. This is a viewer-side reference to a
 //     project owned by a peer. Match and Sessions are unused: the
 //     peer's projects.json is the source of truth for both. The viewer
@@ -56,10 +56,12 @@ type MatchRule struct {
 //
 // Validate enforces exactly one of {Match present, Peer present}.
 type Item struct {
-	Slug     string      `json:"slug"`
-	Peer     string      `json:"peer,omitempty"`
-	Match    []MatchRule `json:"match,omitempty"`
-	Sessions []string    `json:"sessions,omitempty"`
+	Slug  string      `json:"slug"`
+	Peer  string      `json:"peer,omitempty"`
+	Match []MatchRule `json:"match,omitempty"`
+	// Sessions holds ordered session IDs only (v4). Hand-edited slug keys are
+	// unsupported; legacy slug keys are converted once during v3 → v4 Load.
+	Sessions []string `json:"sessions,omitempty"`
 	// NodeID is the referenced peer's stable opaque identity (ADR 0007).
 	// Peer (the display name) is the runtime key; NodeID is only the
 	// viewer's liveness anchor (ADR 0017): it keeps a reference matching
@@ -84,8 +86,9 @@ type State struct {
 // Load reads the project state from stateDir/projects.json.
 // Returns an empty state if the file doesn't exist.
 // Older schema versions are migrated in memory; the migrated form is
-// written back on the next Save.
-func Load(stateDir string) (*State, error) {
+// written back on the next Save. legacySlugToID is the slug-to-session-ID
+// table from sessionmeta's startup sweep, used only by the v3 → v4 migration.
+func Load(stateDir string, legacySlugToID ...map[string][]string) (*State, error) {
 	path := filepath.Join(stateDir, fileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -98,9 +101,10 @@ func Load(stateDir string) (*State, error) {
 	// Before a real schema upgrade rewrites the file, snapshot the
 	// pre-migration bytes to projects.json.bak so the change is
 	// recoverable (notably across the 2.0 upgrade). Best-effort.
+	onDisk := onDiskVersion(data)
 	original := data
 	backedUp := false
-	if onDiskVersion(data) < currentVersion {
+	if onDisk < currentVersion {
 		backupFile(path, original)
 		backedUp = true
 	}
@@ -116,6 +120,17 @@ func Load(stateDir string) (*State, error) {
 	var s State
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("projects: parsing %s: %w", path, err)
+	}
+
+	if onDisk < 4 {
+		var slugToID map[string][]string
+		if len(legacySlugToID) > 0 {
+			slugToID = legacySlugToID[0]
+		}
+		converted, dropped := s.migrateLegacySessionKeys(slugToID)
+		if converted > 0 || dropped > 0 {
+			log.Printf("projects: migrated v3 → v4 session keys (%d converted, %d dropped)", converted, dropped)
+		}
 	}
 
 	// Drop invalid items (e.g. a hand-edited "match": null) instead of
@@ -137,6 +152,54 @@ func Load(stateDir string) (*State, error) {
 		}
 	}
 	return &s, nil
+}
+
+var conversationUUIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// migrateLegacySessionKeys converts v3 slug membership keys to session IDs.
+// Order is preserved and each resulting ID is kept once. A slug that resolved
+// to several dead sessions (slugs were unique only within (adapter, peer), but
+// a membership key spanned adapters) expands to ALL of them in sweep order, so
+// no dead session silently loses its sidebar slot.
+func (s *State) migrateLegacySessionKeys(slugToID map[string][]string) (converted, dropped int) {
+	knownIDs := make(map[string]bool, len(slugToID))
+	for _, ids := range slugToID {
+		for _, id := range ids {
+			knownIDs[id] = true
+		}
+	}
+	for i := range s.Items {
+		seen := make(map[string]bool, len(s.Items[i].Sessions))
+		// A fresh slice, NOT Sessions[:0]: one key can expand to several IDs
+		// (a cross-adapter duplicate slug), and in-place aliasing would
+		// overwrite not-yet-read entries.
+		keys := make([]string, 0, len(s.Items[i].Sessions))
+		emit := func(id string) {
+			if seen[id] {
+				dropped++
+				return
+			}
+			seen[id] = true
+			keys = append(keys, id)
+		}
+		for _, key := range s.Items[i].Sessions {
+			if knownIDs[key] || paths.IsValidSessionID(key) || conversationUUIDRe.MatchString(key) {
+				emit(key)
+				continue
+			}
+			ids, ok := slugToID[key]
+			if !ok {
+				dropped++
+				continue
+			}
+			for _, id := range ids {
+				converted++
+				emit(id)
+			}
+		}
+		s.Items[i].Sessions = keys
+	}
+	return converted, dropped
 }
 
 // sanitize removes items that fail validation, keeping the rest in
@@ -578,15 +641,11 @@ type Assignment struct {
 	Index int
 }
 
-// AssignmentsByKey returns a flat map from session key to the
-// project Assignment claiming it. Pure derivation from State; the
-// caller is expected to use the result to stamp sessions (see
-// store.Store.Reconcile).
-//
-// First occurrence wins on duplicate keys: a key appearing in two
-// items would point at the first item's Assignment. This shouldn't
-// happen because dismiss/auto-assign keep entries unique, but the
-// behaviour is at least defined.
+// AssignmentsByKey returns a flat map from session ID to the project
+// Assignment claiming it. Pure derivation from State; the caller is expected
+// to use the result to stamp sessions (see store.Store.Reconcile). IDs are
+// unique by construction because auto-assignment never adds an ID already
+// present in a project.
 func (s *State) AssignmentsByKey() map[string]Assignment {
 	out := make(map[string]Assignment)
 	for _, item := range s.Items {
@@ -613,16 +672,6 @@ func (s *State) FindSessionProject(key string) string {
 	return ""
 }
 
-// SessionKey returns the key used to identify a session in project arrays.
-// Uses Slug if available (stable across restarts), falls back to
-// session ID (ephemeral, for sessions without attribution).
-func SessionKey(id, slug string) string {
-	if slug != "" {
-		return slug
-	}
-	return id
-}
-
 // --- Discovery (offered projects) ---
 
 // SessionInfo contains the session fields needed for matching and discovery.
@@ -639,7 +688,6 @@ type SessionInfo struct {
 	LocalHost bool
 	Alive     bool
 	Resumable bool // dead but has a resume command persisted
-	Slug      string
 	// LastActive is an RFC3339 timestamp of the session's most recent
 	// noteworthy activity (last_activity_at, falling back to
 	// created_at). Used to sort discovered suggestions by recency so a
@@ -680,7 +728,7 @@ func (s *State) UnmatchedActiveCount(sessions []SessionInfo) int {
 		if !sess.Alive {
 			continue
 		}
-		key := SessionKey(sess.ID, sess.Slug)
+		key := sess.ID
 		if s.FindSessionProject(key) != "" {
 			continue
 		}

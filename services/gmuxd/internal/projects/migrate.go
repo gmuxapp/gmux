@@ -21,6 +21,10 @@ import (
 //     is dropped (replaced by ownership). v2 → v3 is a pass-through:
 //     existing items remain owned-style; rule.hosts evaporates because
 //     the struct field is gone and the JSON decoder silently drops it.
+//   - 4: Sessions contains session IDs only. v3 → v4 is a structural
+//     pass-through here; Load resolves legacy slug keys with sessionmeta's
+//     startup sweep before decoding (ADR 0024). Hand-edited slug keys are
+//     unsupported.
 func migrateState(data []byte) ([]byte, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(data, &doc); err != nil {
@@ -35,11 +39,14 @@ func migrateState(data []byte) ([]byte, error) {
 	if version < 2 {
 		migrateV1toV2(doc)
 	}
+	if version < 4 {
+		migrateV3toV4(doc)
+	}
 	// v2 → v3 is structural only: rule.hosts is silently dropped on
 	// load (unknown field), peer references didn't exist before so
-	// nothing to transform. The version bump alone signals "saved by
-	// a v3-aware daemon" so any future migrations downstream see the
-	// right starting point.
+	// nothing to transform. v3 → v4 is likewise structural here: its
+	// session-key conversion requires sessionmeta data and runs in Load.
+	// The version bump signals the resulting schema to future migrations.
 
 	doc["version"] = float64(currentVersion)
 	return json.Marshal(doc)
@@ -57,6 +64,10 @@ func migrateState(data []byte) ([]byte, error) {
 //	{"slug": "gmux", "match": [{"remote": "github.com/gmuxapp/gmux"}, {"path": "~/dev/gmux"}]}
 //
 // The "remote" and "paths" fields are removed. Sessions are preserved as-is.
+// migrateV3toV4 is intentionally a pass-through. Converting Sessions keys
+// needs sessionmeta's slug-to-ID table, which only Load has at startup.
+func migrateV3toV4(doc map[string]any) {}
+
 func migrateV1toV2(doc map[string]any) {
 	items, ok := doc["items"].([]any)
 	if !ok {

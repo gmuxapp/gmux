@@ -6,6 +6,7 @@ import {
   type AdapterName,
   type FixtureSpec,
   appendToSession,
+  slugify,
   writeFakeSession,
 } from '../fixtures'
 
@@ -112,20 +113,27 @@ test.describe('conversation discovery (watcher-driven)', () => {
 
     // Append a `custom-title` line. Claude's parser prefers
     // custom-title over first-user-message text, so the indexed
-    // title should update on re-parse. The slug stays stable across
-    // updates (Upsert preserves it via byToolID, so existing URLs
-    // don't break) — we query the same slug and expect a new title.
+    // title should update on re-parse. The lookup key FOLLOWS the
+    // displayed slug (ADR 0024 §5, the #348 slug-follows-rename
+    // semantics), so the retitled conversation resolves under its
+    // new slug; conversation-ID URLs keep resolving across renames.
     const newTitle = 'claude custom retitled'
+    const newSlug = slugify(newTitle)
     appendToSession(filePath, { type: 'custom-title', customTitle: newTitle })
 
     await pollUntil(
       async () => {
-        const { status, body } = await apiGet<ConvBody>(`/v1/conversations/claude/${expectedSlug}`)
+        const { status, body } = await apiGet<ConvBody>(`/v1/conversations/claude/${newSlug}`)
         if (status !== 200) return null
         return body.data.title === newTitle ? body.data : null
       },
-      { description: `claude/${expectedSlug} title updated to ${newTitle}` },
+      { description: `claude/${newSlug} title updated to ${newTitle}` },
     )
+
+    // The conversation-ID deep link tracks the rename.
+    const byId = await apiGet<ConvBody>(`/v1/conversations/claude/${spec.conversationID}`)
+    expect(byId.status).toBe(200)
+    expect(byId.body.data.title).toBe(newTitle)
   })
 
   test('pi: deleting session file -> 404 within 2s', async () => {

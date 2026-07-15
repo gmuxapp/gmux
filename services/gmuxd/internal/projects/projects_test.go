@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
 // --- Load / Save ---
@@ -796,10 +799,10 @@ func TestReorderSessions(t *testing.T) {
 		}
 	})
 
-	t.Run("keys not in existing list are appended at request positions", func(t *testing.T) {
-		// New session `z` arrives in the request before the daemon
-		// has stamped it. ReorderSessions accepts it and inserts it
-		// at the requested position.
+	t.Run("store-validated keys not in existing list are appended", func(t *testing.T) {
+		// The HTTP handler filters unknown IDs against the store before
+		// calling this store-agnostic method. A newly known session can
+		// still be inserted at its requested position.
 		s := State{Items: []Item{
 			{Slug: "gmux", Sessions: []string{"a", "b"}},
 		}}
@@ -873,15 +876,6 @@ func TestFindSessionProject(t *testing.T) {
 	}
 }
 
-func TestSessionKey(t *testing.T) {
-	if key := SessionKey("sess-123", "resume-abc"); key != "resume-abc" {
-		t.Errorf("expected slug, got %q", key)
-	}
-	if key := SessionKey("sess-123", ""); key != "sess-123" {
-		t.Errorf("expected session ID, got %q", key)
-	}
-}
-
 func TestDiscoveredActiveCount(t *testing.T) {
 	s := State{Items: []Item{
 		{Slug: "gmux", Match: []MatchRule{{Remote: "github.com/gmuxapp/gmux"}, {Path: "/dev/gmux"}}},
@@ -948,7 +942,30 @@ func TestManagerAutoAssign(t *testing.T) {
 	}
 }
 
-func TestManagerAutoAssignSlugUpgrade(t *testing.T) {
+func TestManagerAutoAssignDistinctIDsDoNotCollide(t *testing.T) {
+	mgr := NewManager(t.TempDir())
+	if err := mgr.Update(func(s *State) bool {
+		s.Items = []Item{{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}}}
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr.AutoAssignAll([]SessionInfo{
+		{ID: "sess-adapter-a", Cwd: "/dev/gmux", Alive: true},
+		{ID: "sess-adapter-b", Cwd: "/dev/gmux", Alive: true},
+	})
+	state, err := mgr.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"sess-adapter-a", "sess-adapter-b"}
+	if !equalStrings(state.Items[0].Sessions, want) {
+		t.Errorf("distinct IDs must not collide: got %v, want %v", state.Items[0].Sessions, want)
+	}
+}
+
+func TestManagerAutoAssignKeepsIDOnDisplayNameChange(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)
 
@@ -969,18 +986,12 @@ func TestManagerAutoAssignSlugUpgrade(t *testing.T) {
 		t.Fatalf("expected sess-1, got %v", state.Items[0].Sessions)
 	}
 
-	// Session gets a slug (file attributed).
-	mgr.AutoAssignSession(SessionInfo{
-		ID: "sess-1", Cwd: "/dev/gmux", Alive: true,
-		Slug: "2026-04-03_abc123.jsonl",
-	})
+	// A later upsert must leave the membership ID and its position unchanged.
+	mgr.AutoAssignSession(SessionInfo{ID: "sess-1", Cwd: "/dev/gmux", Alive: true})
 
 	state, _ = mgr.Load()
-	if len(state.Items[0].Sessions) != 1 {
-		t.Fatalf("expected 1 session after upgrade, got %d", len(state.Items[0].Sessions))
-	}
-	if state.Items[0].Sessions[0] != "2026-04-03_abc123.jsonl" {
-		t.Errorf("expected slug, got %q", state.Items[0].Sessions[0])
+	if len(state.Items[0].Sessions) != 1 || state.Items[0].Sessions[0] != "sess-1" {
+		t.Errorf("expected [sess-1], got %v", state.Items[0].Sessions)
 	}
 }
 
@@ -990,12 +1001,12 @@ func TestManagerDismissSession(t *testing.T) {
 
 	mgr.Update(func(s *State) bool {
 		s.Items = []Item{
-			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"key-1", "key-2"}},
+			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"sess-x", "key-2"}},
 		}
 		return true
 	})
 
-	slug := mgr.DismissSession("sess-x", "key-1")
+	slug := mgr.DismissSession("sess-x")
 	if slug != "gmux" {
 		t.Errorf("expected 'gmux', got %q", slug)
 	}
@@ -1043,7 +1054,7 @@ func TestManagerDeadResumableNotAutoAssigned(t *testing.T) {
 	})
 
 	assigned := mgr.AutoAssignSession(SessionInfo{
-		ID: "sess-1", Cwd: "/dev/gmux", Alive: false, Resumable: true, Slug: "fix-sidebar",
+		ID: "sess-1", Cwd: "/dev/gmux", Alive: false, Resumable: true,
 	})
 	if assigned != "" {
 		t.Fatalf("dead/resumable session should not be auto-assigned, got %q", assigned)
@@ -1087,28 +1098,34 @@ func TestUnmatchedActiveCountAllMatched(t *testing.T) {
 	}
 }
 
-// --- DismissSession with ID fallback ---
-
-func TestManagerDismissSessionByIDFallback(t *testing.T) {
-	dir := t.TempDir()
-	mgr := NewManager(dir)
-
-	// Array stores session by ID (no slug at assignment time).
-	mgr.Update(func(s *State) bool {
-		s.Items = []Item{
-			{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"sess-1"}},
-		}
+func TestManagerWatchRemovals(t *testing.T) {
+	mgr := NewManager(t.TempDir())
+	if err := mgr.Update(func(s *State) bool {
+		s.Items = []Item{{Slug: "gmux", Match: []MatchRule{{Path: "/dev/gmux"}}, Sessions: []string{"sess-1"}}}
 		return true
-	})
-
-	// Dismiss provides slug, but array has the session by ID.
-	// DismissSession should fall back to trying the ID.
-	slug := mgr.DismissSession("sess-1", "resume-key-abc")
-	if slug != "gmux" {
-		t.Errorf("expected 'gmux', got %q", slug)
+	}); err != nil {
+		t.Fatal(err)
 	}
 
-	state, _ := mgr.Load()
+	events := make(chan store.Event)
+	done := make(chan struct{})
+	go func() { mgr.WatchRemovals(events); close(done) }()
+	// Activity pulses (#399's turn model) share the bus but are not
+	// removals — membership must survive them.
+	events <- store.Event{Type: store.EventSessionActivity, ID: "sess-1"}
+	events <- store.Event{Type: store.EventSessionRemove, ID: "sess-1"}
+	events <- store.Event{Type: store.EventSessionRemove, ID: "sess-1"} // idempotent after dismiss/removal
+	close(events)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("WatchRemovals did not return after channel close")
+	}
+
+	state, err := mgr.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(state.Items[0].Sessions) != 0 {
 		t.Errorf("expected empty sessions, got %v", state.Items[0].Sessions)
 	}

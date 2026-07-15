@@ -527,14 +527,21 @@ func serve(stderr io.Writer) int {
 	sessions.SetActivitySeed(func(sess store.Session) string {
 		return activitySeedFor(sess, metaStore.SessionDir)
 	})
-	// persistedKeys records the id and slug of every session sessionmeta
-	// holds on disk at startup (the post-retention sweep survivors). The
-	// startup CleanupSessions unions this with the live store so a project
-	// membership key is pruned only when it is neither live nor persisted.
+	// persistedKeys records the ID of every session sessionmeta holds on disk
+	// at startup (the post-retention sweep survivors). The startup
+	// CleanupSessions unions this with the live store so a project membership
+	// ID is pruned only when it is neither live nor persisted.
 	// Capturing it here rather than re-deriving it from the store at
 	// cleanup time keeps the guard correct regardless of whether the swept
 	// dead sessions are still populated in the store by then.
 	persistedKeys := make(map[string]bool)
+	// legacySlugToID resolves v3 projects.json membership keys during the
+	// one-shot v4 migration. Only swept dead/resumable sessions need this:
+	// live sessions re-auto-assign after startup. A slug maps to a SLICE of
+	// IDs: slugs were unique only within (adapter, peer), but a v3 membership
+	// key spanned adapters, so one key could legitimately match several dead
+	// sessions — all must survive the migration.
+	legacySlugToID := make(map[string][]string)
 	if loaded, err := metaStore.Sweep(); err != nil {
 		log.Printf("sessionmeta: sweep failed: %v", err)
 	} else {
@@ -542,7 +549,7 @@ func serve(stderr io.Writer) int {
 			sessions.Upsert(sess)
 			persistedKeys[sess.ID] = true
 			if sess.Slug != "" {
-				persistedKeys[sess.Slug] = true
+				legacySlugToID[sess.Slug] = append(legacySlugToID[sess.Slug], sess.ID)
 			}
 		}
 		if n := len(loaded); n > 0 {
@@ -605,7 +612,7 @@ func serve(stderr io.Writer) int {
 	}
 
 	// Drive the persister's removal loop off store events so every
-	// session-remove (dismiss, slug takeover, peer disconnect, etc.)
+	// session-remove (dismiss, lineage takeover, peer disconnect, etc.)
 	// drops the matching meta dir. The explicit forgetMeta call in
 	// the dismiss handler is redundant but cheap. Resume is an
 	// alive=false→true Upsert under the same id (ADR 0003) and
@@ -760,7 +767,10 @@ func serve(stderr io.Writer) int {
 
 	// Project manager handles concurrent access to projects.json and
 	// auto-assignment of sessions to projects.
-	projectMgr := projects.NewManager(stateDir)
+	projectMgr := projects.NewManager(stateDir, legacySlugToID)
+	projectRemovalEvents, cancelProjectRemovalEvents := sessions.Subscribe()
+	defer cancelProjectRemovalEvents()
+	go projectMgr.WatchRemovals(projectRemovalEvents)
 
 	// One-time upgrade: ADR 0008 removed tailscale autodiscovery, so the
 	// hosts it surfaced automatically would otherwise vanish (orphaning
@@ -800,8 +810,7 @@ func serve(stderr io.Writer) int {
 			}
 			// Local sessions and Local-peer (devcontainer) sessions:
 			// parent owns assignment, stamp from its projects.json.
-			key := projects.SessionKey(s.ID, s.Slug)
-			a := assignments[key]
+			a := assignments[s.ID]
 			return a.Slug, a.Index
 		})
 	}
@@ -844,9 +853,6 @@ func serve(stderr io.Writer) int {
 		}
 		for _, s := range sessions.List() {
 			known[s.ID] = true
-			if s.Slug != "" {
-				known[s.Slug] = true
-			}
 		}
 		projectMgr.CleanupSessions(known)
 	}
@@ -859,7 +865,7 @@ func serve(stderr io.Writer) int {
 	// overflow, add an explicit reconcile hook — don't reintroduce the
 	// periodic ticker.
 
-	// Auto-assign sessions to projects when they appear or get a Slug.
+	// Auto-assign sessions to projects when they appear.
 	sessionEvents, unsubSessionEvents := sessions.Subscribe()
 	defer unsubSessionEvents()
 	go func() {
@@ -883,7 +889,6 @@ func serve(stderr io.Writer) int {
 				LocalHost:     s.Peer != "" && peerManager != nil && peerManager.IsLocalPeer(s.Peer),
 				Alive:         s.Alive,
 				Resumable:     s.Resumable,
-				Slug:          s.Slug,
 			})
 		}
 	}()
@@ -1144,9 +1149,19 @@ func serve(stderr io.Writer) int {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
 			return
 		}
+		known := make(map[string]bool)
+		for _, session := range sessions.List() {
+			known[session.ID] = true
+		}
+		filtered := make([]string, 0, len(req.Sessions))
+		for _, id := range req.Sessions {
+			if known[id] {
+				filtered = append(filtered, id)
+			}
+		}
 		found := false
 		err = projectMgr.Update(func(state *projects.State) bool {
-			found = state.ReorderSessions(slug, req.Sessions)
+			found = state.ReorderSessions(slug, filtered)
 			return found
 		})
 		if err != nil {
@@ -1372,7 +1387,7 @@ func serve(stderr io.Writer) int {
 		// keeping a dead session around. A general "ephemeral session"
 		// flag is future work; for now the adapter kind is the marker.
 		if sess, ok := sessions.Get(req.SessionID); ok && sess.Adapter == "editor" {
-			projectMgr.DismissSession(req.SessionID, sess.Slug)
+			projectMgr.DismissSession(req.SessionID)
 			sessions.Remove(req.SessionID)
 			forgetMeta(req.SessionID)
 			log.Printf("deregister: auto-dismissed editor session %s", req.SessionID)
@@ -1821,7 +1836,7 @@ func serve(stderr io.Writer) int {
 				}
 			}
 			// Remove session from its project's sessions array.
-			projectMgr.DismissSession(sessionID, sess.Slug)
+			projectMgr.DismissSession(sessionID)
 			// Remove from store — broadcasts session-remove to all clients
 			// (which the cleanup goroutine catches to drop meta), then
 			// also drop meta synchronously to defeat any subscriber lag.
@@ -2710,7 +2725,6 @@ func buildSessionInfos(sessions *store.Store, isLocalPeer func(string) bool) []p
 			LocalHost:     s.Peer != "" && isLocalPeer != nil && isLocalPeer(s.Peer),
 			Alive:         s.Alive,
 			Resumable:     s.Resumable,
-			Slug:          s.Slug,
 			LastActive:    sessionLastActive(s),
 		}
 	}

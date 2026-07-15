@@ -1201,7 +1201,7 @@ export async function updateProjects(items: ProjectItem[]): Promise<void> {
 
 /**
  * Persist a new session order for a project. The `sessionKeys` array
- * contains session keys (slug or id) in the desired display order.
+ * contains session IDs in the desired display order.
  *
  * Local projects (peer === undefined) get an optimistic overlay via
  * `_pendingMutations` so the sidebar re-renders immediately, before

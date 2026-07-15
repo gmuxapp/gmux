@@ -3,6 +3,7 @@ package adapters
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -146,8 +147,13 @@ func TestEncodeClaudeCwd(t *testing.T) {
 
 func writeClaudeJSONL(t *testing.T, lines ...string) string {
 	t.Helper()
+	return writeNamedClaudeJSONL(t, "test-session.jsonl", lines...)
+}
+
+func writeNamedClaudeJSONL(t *testing.T, name string, lines ...string) string {
+	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "test-session.jsonl")
+	path := filepath.Join(dir, name)
 	var content string
 	for _, l := range lines {
 		content += l + "\n"
@@ -262,6 +268,87 @@ func TestClaudeDescribeConversationNoSessionID(t *testing.T) {
 	_, err := NewClaude().DescribeConversation(path)
 	if err != errNotSession {
 		t.Errorf("expected errNotSession, got %v", err)
+	}
+}
+
+func TestClaudeDescribeConversationAncestorIDs(t *testing.T) {
+	const (
+		a = "11111111-1111-1111-1111-111111111111"
+		b = "22222222-2222-2222-2222-222222222222"
+		c = "33333333-3333-3333-3333-333333333333"
+	)
+	tests := []struct {
+		name  string
+		file  string
+		lines []string
+		want  []string
+	}{
+		{
+			name: "resumed transcript deduplicates marker and replay", file: c + ".jsonl",
+			lines: []string{
+				`{"type":"user","sessionId":"` + a + `","timestamp":"2026-03-15T10:00:00Z","message":{"content":"# session-start -- ` + a + `.jsonl\nContinue work"}}`,
+				`{"type":"assistant","sessionId":"` + a + `"}`,
+				`{"type":"user","sessionId":"` + c + `","timestamp":"2026-03-15T10:01:00Z","message":{"content":"new prompt"}}`,
+			}, want: []string{a},
+		},
+		{
+			name: "chained resume preserves replay order", file: c + ".jsonl",
+			lines: []string{
+				`{"type":"user","sessionId":"` + a + `","timestamp":"2026-03-15T10:00:00Z","message":{"content":"first"}}`,
+				`{"type":"assistant","sessionId":"` + b + `"}`,
+				`{"type":"user","sessionId":"` + c + `","timestamp":"2026-03-15T10:01:00Z","message":{"content":"latest"}}`,
+			}, want: []string{a, b},
+		},
+		{
+			name: "single session", file: c + ".jsonl",
+			lines: []string{
+				`{"type":"user","sessionId":"` + c + `","timestamp":"2026-03-15T10:00:00Z","message":{"content":"only"}}`,
+			}, want: nil,
+		},
+		{
+			// An UNCORROBORATED marker (its UUID never appears as a
+			// replayed line sessionId) is user-authorable text and must
+			// NOT forge an ancestor edge — otherwise a crafted first prompt
+			// could evict an unrelated dead conversation (ADR 0024 §2).
+			name: "uncorroborated marker is ignored", file: c + ".jsonl",
+			lines: []string{
+				`{"type":"user","sessionId":"` + c + `","timestamp":"2026-03-15T10:00:00Z","message":{"content":"# session-start -- ` + a + `.jsonl"}}`,
+			}, want: nil,
+		},
+		{
+			// A user pasting the marker string for a REAL other conversation
+			// still cannot forge lineage: no replayed line carries that id.
+			name: "forged marker for a real id is ignored", file: c + ".jsonl",
+			lines: []string{
+				`{"type":"user","sessionId":"` + c + `","timestamp":"2026-03-15T10:00:00Z","message":{"content":"why is # session-start -- ` + b + `.jsonl here"}}`,
+				`{"type":"user","sessionId":"` + c + `","timestamp":"2026-03-15T10:01:00Z","message":{"content":"go"}}`,
+			}, want: nil,
+		},
+		{
+			name: "lines only", file: c + ".jsonl",
+			lines: []string{
+				`{"type":"user","sessionId":"` + a + `","timestamp":"2026-03-15T10:00:00Z","message":{"content":"replayed"}}`,
+				`{"type":"user","sessionId":"` + c + `","timestamp":"2026-03-15T10:01:00Z","message":{"content":"new"}}`,
+			}, want: []string{a},
+		},
+		{
+			name: "malformed values are ignored", file: c + ".jsonl",
+			lines: []string{
+				`{"type":"user","sessionId":"not-a-uuid","timestamp":"2026-03-15T10:00:00Z","message":{"content":"# session-start -- definitely-not-a-uuid.jsonl"}}`,
+				`{"type":"assistant","sessionId":"also-not-a-uuid"}`,
+			}, want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info, err := NewClaude().DescribeConversation(writeNamedClaudeJSONL(t, tt.file, tt.lines...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(tt.want, info.AncestorIDs) {
+				t.Errorf("AncestorIDs = %v, want %v", info.AncestorIDs, tt.want)
+			}
+		})
 	}
 }
 

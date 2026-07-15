@@ -547,16 +547,15 @@ export function parseSessionHostPath(sessionId: string): { originalId: string; p
  *     sending them would add phantom entries on the daemon's next
  *     ReorderSessions merge.
  *
- *  2. Key sessions appropriately for the owning daemon's projects.json:
+ *  2. Key sessions by the owning daemon's session IDs:
  *     - For references (folder.peer set, not a Local peer): the peer's
  *       projects.json keys by the original (unnamespaced) id, so we
- *       strip `@<peer>` from slugless ids before sending.
+ *       strip `@<peer>` before sending.
  *     - For local folders (folder.peer absent or Local): the parent's
  *       projects.json keys may include namespaced ids for Local-peer
  *       sessions, since the parent owns project assignment for them.
  *       We keep `@<peer>` for those sessions and strip nothing for
  *       genuinely local sessions.
- *     Slugged sessions always key by `s.slug`, which is never namespaced.
  *
  * Returns an empty array when no session in the request belongs to
  * the folder owner: caller should skip the PATCH entirely so the
@@ -579,7 +578,6 @@ export function reorderKeysForFolder(
       return sessionPeer === folderPeer
     })
     .map(s => {
-      if (s.slug) return s.slug
       const sessionPeer = s.peer ?? ''
       // For Local-peer sessions in a local folder, the parent keys by
       // the namespaced id since the namespace is part of the session's

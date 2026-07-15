@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/packages/paths"
 )
 
@@ -66,8 +68,8 @@ type Session struct {
 	TerminalRows   uint16 `json:"terminal_rows,omitempty"`
 	// Slug is a human-readable stable identifier derived from the
 	// adapter's conversation-derived slug. Used for URL routing (the frontend
-	// falls back to id[:8] when empty) and for matching dead sessions
-	// to project membership arrays. Unique within (adapter, peer).
+	// falls back to the session id when empty). It is display-only and unique
+	// within (adapter, peer).
 	Slug string `json:"slug,omitempty"`
 
 	// ConversationRef is the opaque, adapter-scoped ref of the conversation
@@ -119,6 +121,14 @@ type Session struct {
 	// can never be observed stale.
 	ProjectSlug  string `json:"project_slug,omitempty"`
 	ProjectIndex int    `json:"project_index,omitempty"`
+
+	// conversationID and conversationAncestors are described once when a
+	// local runner binds a conversation ref (prepareConversationLineage) and
+	// drive lineage takeover. The daemon treats the ref itself as opaque
+	// (ADR 0022); identity comes from the adapter's DescribeConversation.
+	// Both are unexported: in-memory matching state, never marshaled.
+	conversationID        string
+	conversationAncestors []string
 }
 
 // MarshalJSON serializes a Session for the frontend API, excluding internal
@@ -211,12 +221,16 @@ type Store struct {
 	// in-memory stamp was never persisted. Returns "" when no seed is
 	// available. See SetActivitySeed.
 	activitySeed func(Session) string
+
+	lineageMu    sync.Mutex
+	lineageByRef map[string]lineageEntry // key: adapter\x00ref (refs are unique only within an adapter, ADR 0022)
 }
 
 func New() *Store {
 	return &Store{
-		sessions:    make(map[string]Session),
-		subscribers: make(map[*subscriber]struct{}),
+		sessions:     make(map[string]Session),
+		subscribers:  make(map[*subscriber]struct{}),
+		lineageByRef: make(map[string]lineageEntry),
 	}
 }
 
@@ -335,6 +349,12 @@ func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
 	if bumpLocally && sess.LastActivityAt == "" && s.activitySeed != nil {
 		seed = s.activitySeed(sess)
 	}
+
+	// Describing adapter conversations can be expensive. Do it before taking
+	// the store mutex, and only once per local conversation ref; peer
+	// snapshots arrive frequently and their refs belong to another host.
+	s.prepareConversationLineage(&sess)
+
 	s.mu.Lock()
 	prev, hadPrev := s.sessions[sess.ID]
 	if bumpLocally {
@@ -364,15 +384,15 @@ func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
 }
 
 // commitLocked finalizes sess into the store and reports what the write
-// did. It resolves duplicate slugs (which may evict shadowed sessions),
-// assigns a unique slug, and stores the result. The caller must hold
+// did. It resolves conversation takeovers (which may evict shadowed
+// sessions), assigns a unique display/URL slug, and stores the result. The caller must hold
 // s.mu.
 //
 // Returns:
-//   - removed: ids evicted by duplicate-slug resolution (a live session
-//     shadows a dead one with the same slug).
-//   - skip: the write was dropped entirely (a dead session shadowed by a
-//     live one); nothing was stored.
+//   - removed: ids evicted by conversation-lineage takeover (a live session
+//     shadows a dead conversation it resumes).
+//   - skip: the write was dropped entirely (a dead conversation shadowed by a
+//     live session that owns it); nothing was stored.
 //   - unchanged: the stored session is byte-identical to prev, so this
 //     was a no-op that must NOT broadcast session-upsert.
 //
@@ -386,7 +406,7 @@ func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
 // and unique-slug renumbering), not the caller's raw input, is what
 // makes the comparison correct. See ADR 0001.
 func (s *Store) commitLocked(prev Session, hadPrev bool, sess *Session) (removed []string, skip, unchanged bool) {
-	removed, skip = s.resolveDuplicateSlugsLocked(*sess)
+	removed, skip = s.resolveConversationTakeoverLocked(*sess)
 	if skip {
 		return removed, true, false
 	}
@@ -418,26 +438,52 @@ func (s *Store) broadcastCommit(sess Session, removed []string, skip, unchanged 
 // (e.g. the file monitor and the SSE subscriber goroutines).
 // Returns false if the session doesn't exist.
 func (s *Store) Update(id string, fn func(*Session)) bool {
-	s.mu.Lock()
-	prev, ok := s.sessions[id]
-	if !ok {
+	// A new conversation bind needs adapter I/O (DescribeConversation) that
+	// must not run under s.mu. Rather than dropping the lock mid-update —
+	// which could write a stale copy back over a concurrent dismiss or
+	// update — warm the lineage cache OUTSIDE the critical section and
+	// retry the whole update from fresh state. The loop is bounded: the
+	// cache records failures too, so the second pass always hits it.
+	// describedRef guards the unlock-describe-retry so it runs at most once
+	// per distinct ref this call: termination is independent of whether the
+	// describe succeeded or was cached (a transient describe failure is not
+	// cached, so a cache-presence gate would livelock here).
+	describedRef := ""
+	for {
+		s.mu.Lock()
+		prev, ok := s.sessions[id]
+		if !ok {
+			s.mu.Unlock()
+			return false
+		}
+		prevSnap := snapshotActivity(prev)
+		sess := prev
+		fn(&sess)
+		sess.Cwd = paths.CanonicalizePath(sess.Cwd)
+		sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
+		sess.Title = s.resolveTitle(sess)
+		sess.Resumable = !sess.Alive && len(sess.Command) > 0
+		if shouldBumpActivity(prevSnap, true, snapshotActivity(sess)) {
+			sess.LastActivityAt = nowRFC3339()
+		}
+		if sess.Peer == "" && sess.ConversationRef != "" && sess.ConversationRef != prev.ConversationRef {
+			if describedRef != sess.ConversationRef {
+				s.mu.Unlock()
+				s.prepareConversationLineage(&sess)
+				describedRef = sess.ConversationRef
+				continue
+			}
+			// Second pass for this ref: re-apply the lineage onto the
+			// fresh copy (cache hit when the describe succeeded; a
+			// re-describe of a still-missing ref just yields empty again
+			// and we proceed — no loop).
+			s.prepareConversationLineage(&sess)
+		}
+		removed, skip, unchanged := s.commitLocked(prev, true, &sess)
 		s.mu.Unlock()
-		return false
+		s.broadcastCommit(sess, removed, skip, unchanged)
+		return true
 	}
-	prevSnap := snapshotActivity(prev)
-	sess := prev
-	fn(&sess)
-	sess.Cwd = paths.CanonicalizePath(sess.Cwd)
-	sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
-	sess.Title = s.resolveTitle(sess)
-	sess.Resumable = !sess.Alive && len(sess.Command) > 0
-	if shouldBumpActivity(prevSnap, true, snapshotActivity(sess)) {
-		sess.LastActivityAt = nowRFC3339()
-	}
-	removed, skip, unchanged := s.commitLocked(prev, true, &sess)
-	s.mu.Unlock()
-	s.broadcastCommit(sess, removed, skip, unchanged)
-	return true
 }
 
 // GetTerminalSize returns the current terminal dimensions for a session.
@@ -481,29 +527,114 @@ func (s *Store) SetTerminalSize(id string, cols, rows uint16) bool {
 	return true
 }
 
-// resolveDuplicateSlugsLocked deduplicates sessions that share a Slug
-// within the same (adapter, peer) scope. When a live session arrives and
-// a dead session with the same slug exists, the dead one is removed.
-// When a dead session arrives and a live one exists, the dead one is
-// skipped.
-func (s *Store) resolveDuplicateSlugsLocked(sess Session) (removed []string, skip bool) {
-	if sess.Slug == "" {
+// lineageKey scopes the lineage cache to a single adapter: opaque refs are
+// unique only within an adapter (ADR 0022), so two adapters that happen to
+// use the same ref string must not share a cache entry.
+func lineageKey(adapterName, ref string) string {
+	return adapterName + "\x00" + ref
+}
+
+// prepareConversationLineage describes the bound conversation at bind time,
+// outside the store mutex. Its per-ref cache means recurring writes (notably
+// peer snapshots) never re-describe. Peer (including Local-peer) refs are
+// owned by another daemon, so they deliberately get no local takeover
+// behavior. The ref is opaque to the daemon (ADR 0022): both the
+// conversation's own ID and its ancestors come from the adapter.
+func (s *Store) prepareConversationLineage(sess *Session) {
+	if sess.Peer != "" || sess.ConversationRef == "" {
+		return
+	}
+	key := lineageKey(sess.Adapter, sess.ConversationRef)
+	s.lineageMu.Lock()
+	defer s.lineageMu.Unlock()
+	if cached, known := s.lineageByRef[key]; known {
+		sess.conversationID = cached.id
+		sess.conversationAncestors = cached.ancestors
+		return
+	}
+	// A describe FAILURE (ref absent/unreadable — e.g. a resumed transcript
+	// not yet on disk at first bind) is NOT cached: caching it would poison
+	// the ref permanently and silently defeat takeover once the file lands.
+	// A successful describe is stable (ancestors never disappear) and cached.
+	var entry lineageEntry
+	cache := false
+	if a := adapters.FindByAdapter(sess.Adapter); a != nil {
+		if describer, ok := a.(adapter.ConversationDescriber); ok {
+			if info, err := describer.DescribeConversation(sess.ConversationRef); err == nil {
+				entry = lineageEntry{id: info.ID, ancestors: info.AncestorIDs}
+				cache = true
+			}
+		}
+	} else {
+		cache = true // no describer for this adapter: nothing to learn later
+	}
+	if cache {
+		s.lineageByRef[key] = entry
+	}
+	sess.conversationID = entry.id
+	sess.conversationAncestors = entry.ancestors
+}
+
+// lineageEntry caches what the adapter said about a conversation ref.
+type lineageEntry struct {
+	id        string
+	ancestors []string
+}
+
+// conversationLineage is the set of conversation IDs a session's bound
+// conversation covers: its own ID plus every ancestor it was resumed from.
+// Empty when the adapter could not describe the ref — ref equality still
+// applies then.
+func conversationLineage(sess *Session) map[string]struct{} {
+	lineage := make(map[string]struct{}, len(sess.conversationAncestors)+1)
+	if sess.conversationID != "" {
+		lineage[sess.conversationID] = struct{}{}
+	}
+	for _, id := range sess.conversationAncestors {
+		lineage[id] = struct{}{}
+	}
+	return lineage
+}
+
+// coversConversation reports whether owner's bound conversation is, or
+// descends from, other's: same opaque ref (adapter-scoped equality is
+// daemon-legal even without a describe), or other's conversation ID is in
+// owner's lineage.
+func coversConversation(owner, other *Session) bool {
+	if owner.ConversationRef == other.ConversationRef {
+		return true
+	}
+	if other.conversationID == "" {
+		return false
+	}
+	_, owns := conversationLineage(owner)[other.conversationID]
+	return owns
+}
+
+// resolveConversationTakeoverLocked applies continuity only to local
+// sessions bound to conversation refs. Within one adapter/peer scope, a live
+// binder evicts dead rows whose conversation it covers (same ref, or an
+// ancestor per the adapter's lineage); a dead write is skipped when a live
+// row covers its conversation. Live rows always coexist. The caller must
+// hold s.mu.
+func (s *Store) resolveConversationTakeoverLocked(sess Session) (removed []string, skip bool) {
+	if sess.Peer != "" || sess.ConversationRef == "" {
 		return nil, false
 	}
 	for id, other := range s.sessions {
-		if id == sess.ID || other.Slug != sess.Slug {
-			continue
-		}
-		// Same (adapter, peer) scope check.
-		if other.Adapter != sess.Adapter || other.Peer != sess.Peer {
+		if id == sess.ID || other.Adapter != sess.Adapter || other.Peer != sess.Peer || other.ConversationRef == "" {
 			continue
 		}
 		switch {
 		case sess.Alive && !other.Alive:
-			delete(s.sessions, id)
-			removed = append(removed, id)
+			if coversConversation(&sess, &other) {
+				delete(s.sessions, id)
+				removed = append(removed, id)
+			}
 		case !sess.Alive && other.Alive:
-			return removed, true
+			if coversConversation(&other, &sess) {
+				return removed, true
+			}
 		}
 	}
 	return removed, false
@@ -692,8 +823,8 @@ func NowUnix() float64 {
 	return float64(time.Now().UnixNano()) / float64(time.Second)
 }
 
-// ensureUniqueSlug appends "-2", "-3" suffixes to the session's
-// Slug when another session in the same (adapter, peer) scope already
+// ensureUniqueSlug keeps display/URL slugs distinct by appending "-2",
+// "-3" suffixes when another session in the same (adapter, peer) scope already
 // uses that key. Sessions without a Slug (fresh launches before
 // file attribution) are left alone; the frontend falls back to the
 // session ID prefix for URL routing.

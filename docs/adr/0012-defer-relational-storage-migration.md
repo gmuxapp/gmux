@@ -1,6 +1,9 @@
 # ADR 0012: Relational (SQLite) storage is a non-goal
 
-**Status:** Accepted
+**Status:** Accepted (partially superseded by ADR 0024: the "`SessionKey`
+(slug-or-id) membership … unchanged" freeze below no longer holds —
+membership is keyed by session ID and takeover by conversation lineage.
+The storage decision itself — no relational store — stands.)
 **Date:** 2026-06-16
 **Related:** ADR 0002 (project ownership; share-nothing peering), ADR 0010 /
 ADR 0011 (authoritative attribution + runner-owned state)

@@ -136,12 +136,31 @@ func (c *Claude) DescribeConversation(ref string) (*adapter.ConversationInfo, er
 		return nil, errEmpty
 	}
 
+	// A resumed Claude transcript has a new UUID filename, while replayed
+	// history retains the original per-line sessionId. Keep every valid ID in
+	// first-appearance order; malformed values must not create a false link.
+	ownID := claudeConversationIDFromPath(path)
+	lineSessionIDs := make([]string, 0)
+	seenLineSessionIDs := make(map[string]struct{})
+
 	// Find the first user line for session metadata.
 	var firstUser *claudeFirstLine
 	var customTitle string
 	messageCount := 0
 
 	for _, line := range lines {
+		var session struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.Unmarshal([]byte(line), &session); err == nil {
+			if id, ok := validClaudeConversationID(session.SessionID); ok && id != ownID {
+				if _, exists := seenLineSessionIDs[id]; !exists {
+					seenLineSessionIDs[id] = struct{}{}
+					lineSessionIDs = append(lineSessionIDs, id)
+				}
+			}
+		}
+
 		if line == "" {
 			continue
 		}
@@ -195,6 +214,7 @@ func (c *Claude) DescribeConversation(ref string) (*adapter.ConversationInfo, er
 			LastActivity: fileLastActivity(path),
 			MessageCount: messageCount,
 			Ref:          path,
+			AncestorIDs:  claudeAncestorIDs(nil, ownID, lineSessionIDs),
 		}, nil
 	}
 
@@ -226,6 +246,7 @@ func (c *Claude) DescribeConversation(ref string) (*adapter.ConversationInfo, er
 	// matching pi and the hook path (claudeTitleSlug already slugs
 	// session_title when the payload carries it).
 	info.Slug = adapter.Slugify(info.Title)
+	info.AncestorIDs = claudeAncestorIDs(firstUser.Message.Content, ownID, lineSessionIDs)
 
 	return info, nil
 }
@@ -252,6 +273,69 @@ func (c *Claude) OpenConversation(ref string) (io.ReadCloser, error) {
 }
 
 // --- Helpers ---
+
+var (
+	claudeUUIDPattern         = regexp.MustCompile(`(?i)^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$`)
+	claudeSessionStartPattern = regexp.MustCompile(`(?i)# session-start -- ([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\.jsonl`)
+)
+
+// claudeConversationIDFromPath returns the canonical UUID filename stem, if any.
+func claudeConversationIDFromPath(path string) string {
+	id, _ := validClaudeConversationID(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
+	return id
+}
+
+func validClaudeConversationID(id string) (string, bool) {
+	if !claudeUUIDPattern.MatchString(id) {
+		return "", false
+	}
+	return strings.ToLower(id), true
+}
+
+// claudeAncestorIDs derives resume lineage from the replayed per-line session
+// IDs. The `# session-start -- <uuid>.jsonl` marker in the first user message
+// is used ONLY to order the result (lead with it) — never as an independent
+// source: that text is user-authorable, so trusting it alone would let a
+// crafted first prompt forge an ancestor edge and drive a false takeover of an
+// unrelated dead conversation (ADR 0024 §2 — a false link must be impossible;
+// only a missed link is acceptable). Claude stamps every replayed line with
+// the genuine ancestor's sessionId, so a real resume is always corroborated.
+func claudeAncestorIDs(firstUserContent json.RawMessage, ownID string, lineSessionIDs []string) []string {
+	ancestors := make([]string, 0, len(lineSessionIDs)+1)
+	seen := make(map[string]struct{})
+	add := func(id string) {
+		if id == "" || id == ownID {
+			return
+		}
+		if _, exists := seen[id]; !exists {
+			seen[id] = struct{}{}
+			ancestors = append(ancestors, id)
+		}
+	}
+
+	// Line IDs are the trusted source. The marker only promotes a
+	// corroborated ID to the front; an uncorroborated marker contributes
+	// nothing.
+	lineSet := make(map[string]struct{}, len(lineSessionIDs))
+	for _, id := range lineSessionIDs {
+		lineSet[id] = struct{}{}
+	}
+	content := extractClaudeUserText(firstUserContent)
+	if match := claudeSessionStartPattern.FindStringSubmatch(content); len(match) == 2 {
+		if id, ok := validClaudeConversationID(match[1]); ok {
+			if _, corroborated := lineSet[id]; corroborated {
+				add(id)
+			}
+		}
+	}
+	for _, id := range lineSessionIDs {
+		add(id)
+	}
+	if len(ancestors) == 0 {
+		return nil
+	}
+	return ancestors
+}
 
 // extractClaudeUserText extracts the first text block from a Claude Code
 // user message content field. Content can be a string or array of blocks.

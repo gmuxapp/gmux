@@ -470,7 +470,7 @@ func (p *Peer) handleEvent(ctx context.Context, eventType string, data []byte) {
 		// Authoritative replacement: the spoke's view of its owned
 		// sessions. We mirror it into the local store namespaced by
 		// peer name and remove any local entries for this peer that
-		// no longer appear (handles dismiss, kill, slug takeover that
+		// no longer appear (handles dismiss, kill, conversation takeover that
 		// happened on the spoke).
 		var payload sseSnapshotSessions
 		if err := json.Unmarshal(data, &payload); err != nil {

@@ -127,8 +127,7 @@ sessions.Reconcile(func(s store.Session) (string, int) {
     if s.Peer != "" && !peerManager.IsLocalPeer(s.Peer) {
         return s.ProjectSlug, s.ProjectIndex // network peer: preserve
     }
-    key := projects.SessionKey(s.ID, s.Slug)
-    a := assignments[key]
+    a := assignments[s.ID]
     return a.Slug, a.Index
 })
 ```

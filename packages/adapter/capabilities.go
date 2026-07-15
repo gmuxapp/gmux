@@ -32,6 +32,9 @@ type ConversationInfo struct {
 	LastActivity time.Time
 	MessageCount int
 	Ref          string // the opaque conversation ref this info was described from
+	// AncestorIDs are IDs of conversations this one was resumed from, oldest-first
+	// when that order is derivable; empty when the adapter resumes in place (ADR 0024 §2).
+	AncestorIDs []string
 }
 
 // Launchable is implemented by adapters that want to expose one or more

@@ -124,7 +124,7 @@ export interface MatchRule {
  *
  *   - Owned: `slug` + `match[]` (+ `sessions[]` maintained by server)
  *     A project owned by this host. Match rules drive session
- *     attribution; `sessions[]` is the ordered list of session keys
+ *     attribution; `sessions[]` is the ordered list of session IDs
  *     for sidebar order.
  *   - Reference: `slug` + `peer`
  *     A pointer to a project owned by a peer. The peer's projects.json
