@@ -3,8 +3,9 @@
 This package is an isolated SQLite implementation slice related to ADR 0026. It
 is **not** wired into gmuxd and is **not an authoritative domain kernel yet**.
 The current public surface provides schema-backed session fact/version
-primitives, a conditional dead-session acknowledgement tracer, bootstrap
-project-catalog construction, and collision-safe placement ordering primitives.
+primitives, a conditional dead-session acknowledgement tracer, an atomic
+nonproduction runner-registration operation, bootstrap project-catalog
+construction, and collision-safe placement ordering primitives.
 
 Important scope limits:
 
@@ -16,11 +17,18 @@ Important scope limits:
   derived project membership.
 - `AcknowledgeDeadSession` is an isolated, nonproduction tracer. SQLite cannot
   determine runner liveness: a lifecycle coordinator must establish that no
-  runner is live immediately before calling it. Registration/re-registration,
-  that production coordinator and integration, recursive dismissal,
-  reconciliation batching, matching/rematching, and lifecycle liveness checks
-  remain future work. Callers must not fill those gaps with raw access to the
-  private generated queries.
+  runner is live immediately before calling it.
+- `RegisterRunner` atomically merges a caller-proven runner observation with
+  durable history and derived owned-project placement. It performs no runner
+  I/O. Immediately before calling it, the singleton lifecycle coordinator must
+  hold lifecycle serialization, validate that its reserved runtime generation
+  is still current, and supply `NewGeneration` provenance for replacement,
+  resume, or restart observations. Generation is deliberately not persisted.
+  The operation is nonproduction until that coordinator owns registration,
+  resume/restart, dismissal, and event ordering. Production integration,
+  recursive dismissal, reconciliation batching, and lifecycle liveness checks
+  remain future work. Callers must not fill those gaps with raw
+  access to the private generated queries.
 - Peer snapshots, tokens, waits/notifications, adapter batching/takeover, and
   dynamic CWD reporting remain outside this slice.
 

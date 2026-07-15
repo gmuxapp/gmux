@@ -55,6 +55,18 @@ func (q *Queries) DeleteLocalPeerPlacements(ctx context.Context, localPeerKey sq
 	return result.RowsAffected()
 }
 
+const deleteLocalSessionPlacement = `-- name: DeleteLocalSessionPlacement :execrows
+DELETE FROM project_placements WHERE local_session_id = ?
+`
+
+func (q *Queries) DeleteLocalSessionPlacement(ctx context.Context, localSessionID sql.NullString) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteLocalSessionPlacement, localSessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteProjectEntry = `-- name: DeleteProjectEntry :execrows
 DELETE FROM project_entries WHERE id = ?
 `
@@ -823,6 +835,69 @@ func (q *Queries) UpdateProjectEntry(ctx context.Context, arg UpdateProjectEntry
 		arg.Slug,
 		arg.UpdatedAtMs,
 		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateRunnerRegistration = `-- name: UpdateRunnerRegistration :execrows
+UPDATE local_sessions SET
+    row_version = row_version + 1,
+    conversation_ref = ?, command_json = ?, cwd = ?, workspace_root = ?,
+    remotes_json = ?, slug = ?, shell_title = ?, adapter_title = ?, subtitle = ?,
+    working = ?, unread = ?, has_error = ?, started_at_ms = ?, exited_at_ms = ?,
+    last_activity_at_ms = ?, exit_code = ?, terminal_cols = ?, terminal_rows = ?,
+    dismissed_at_ms = NULL
+WHERE id = ? AND row_version = ?
+`
+
+type UpdateRunnerRegistrationParams struct {
+	ConversationRef  sql.NullString
+	CommandJson      string
+	Cwd              string
+	WorkspaceRoot    sql.NullString
+	RemotesJson      string
+	Slug             sql.NullString
+	ShellTitle       sql.NullString
+	AdapterTitle     sql.NullString
+	Subtitle         sql.NullString
+	Working          int64
+	Unread           int64
+	HasError         int64
+	StartedAtMs      sql.NullInt64
+	ExitedAtMs       sql.NullInt64
+	LastActivityAtMs sql.NullInt64
+	ExitCode         sql.NullInt64
+	TerminalCols     sql.NullInt64
+	TerminalRows     sql.NullInt64
+	ID               string
+	RowVersion       int64
+}
+
+func (q *Queries) UpdateRunnerRegistration(ctx context.Context, arg UpdateRunnerRegistrationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateRunnerRegistration,
+		arg.ConversationRef,
+		arg.CommandJson,
+		arg.Cwd,
+		arg.WorkspaceRoot,
+		arg.RemotesJson,
+		arg.Slug,
+		arg.ShellTitle,
+		arg.AdapterTitle,
+		arg.Subtitle,
+		arg.Working,
+		arg.Unread,
+		arg.HasError,
+		arg.StartedAtMs,
+		arg.ExitedAtMs,
+		arg.LastActivityAtMs,
+		arg.ExitCode,
+		arg.TerminalCols,
+		arg.TerminalRows,
+		arg.ID,
+		arg.RowVersion,
 	)
 	if err != nil {
 		return 0, err

@@ -38,6 +38,19 @@ UPDATE local_sessions SET
     terminal_cols = ?, terminal_rows = ?
 WHERE id = ? AND row_version = ?;
 
+-- name: UpdateRunnerRegistration :execrows
+UPDATE local_sessions SET
+    row_version = row_version + 1,
+    conversation_ref = ?, command_json = ?, cwd = ?, workspace_root = ?,
+    remotes_json = ?, slug = ?, shell_title = ?, adapter_title = ?, subtitle = ?,
+    working = ?, unread = ?, has_error = ?, started_at_ms = ?, exited_at_ms = ?,
+    last_activity_at_ms = ?, exit_code = ?, terminal_cols = ?, terminal_rows = ?,
+    dismissed_at_ms = NULL
+WHERE id = ? AND row_version = ?;
+
+-- name: DeleteLocalSessionPlacement :execrows
+DELETE FROM project_placements WHERE local_session_id = ?;
+
 -- name: ClearDirectChildParents :execrows
 UPDATE local_sessions
 SET launch_parent_id = NULL, row_version = row_version + 1
