@@ -3,8 +3,8 @@
 This package is an isolated SQLite implementation slice related to ADR 0026. It
 is **not** wired into gmuxd and is **not an authoritative domain kernel yet**.
 The current public surface provides schema-backed session fact/version
-primitives, bootstrap project-catalog construction, and collision-safe placement
-ordering primitives.
+primitives, a conditional dead-session acknowledgement tracer, bootstrap
+project-catalog construction, and collision-safe placement ordering primitives.
 
 Important scope limits:
 
@@ -14,10 +14,13 @@ Important scope limits:
   authoritatively after rule changes.
 - Direct caller-selected placement is an ordering primitive, not proof of
   derived project membership.
-- Registration/re-registration, acknowledgement, recursive dismissal,
-  reconciliation batching, matching/rematching, lifecycle liveness checks, and
-  production integration remain future work. Callers must not fill those gaps
-  with raw access to the private generated queries.
+- `AcknowledgeDeadSession` is an isolated, nonproduction tracer. SQLite cannot
+  determine runner liveness: a lifecycle coordinator must establish that no
+  runner is live immediately before calling it. Registration/re-registration,
+  that production coordinator and integration, recursive dismissal,
+  reconciliation batching, matching/rematching, and lifecycle liveness checks
+  remain future work. Callers must not fill those gaps with raw access to the
+  private generated queries.
 - Peer snapshots, tokens, waits/notifications, adapter batching/takeover, and
   dynamic CWD reporting remain outside this slice.
 

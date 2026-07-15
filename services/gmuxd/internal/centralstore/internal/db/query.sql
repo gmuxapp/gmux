@@ -23,6 +23,11 @@ SELECT * FROM local_sessions ORDER BY id;
 -- name: SessionVersion :one
 SELECT row_version FROM local_sessions WHERE id = ?;
 
+-- name: AcknowledgeSessionAtVersion :execrows
+UPDATE local_sessions
+SET unread = 0, has_error = 0, row_version = row_version + 1
+WHERE id = ? AND row_version = ? AND (unread <> 0 OR has_error <> 0);
+
 -- name: UpdateCommonFacts :execrows
 UPDATE local_sessions SET
     row_version = row_version + 1,

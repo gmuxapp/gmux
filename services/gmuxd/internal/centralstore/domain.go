@@ -512,6 +512,50 @@ func (s *Store) ApplyCommonFacts(ctx context.Context, id SessionID, observed Row
 	return MutationResult{Changed: true, SessionVersion: observed + 1, SessionsDirty: true}, nil
 }
 
+// AcknowledgeDeadSession clears the user-facing unread and error indicators.
+// Runner liveness is deliberately outside SQLite: the lifecycle coordinator
+// must establish that no runner is live immediately before calling this
+// conditional operation.
+func (s *Store) AcknowledgeDeadSession(ctx context.Context, id SessionID, observed RowVersion) (MutationResult, error) {
+	tx, err := s.database.BeginTx(ctx, nil)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	defer tx.Rollback()
+	q := s.queries.WithTx(tx)
+	raw, err := q.GetSession(ctx, string(id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return MutationResult{}, ErrSessionNotFound
+	}
+	if err != nil {
+		return MutationResult{}, err
+	}
+	current, err := sessionFromDB(raw)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if current.Version != observed {
+		return MutationResult{SessionVersion: current.Version}, ErrStaleVersion
+	}
+	if !current.Unread && !current.Error {
+		if err = tx.Commit(); err != nil {
+			return MutationResult{}, err
+		}
+		return MutationResult{SessionVersion: observed}, nil
+	}
+	n, err := q.AcknowledgeSessionAtVersion(ctx, db.AcknowledgeSessionAtVersionParams{ID: string(id), RowVersion: int64(observed)})
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if n != 1 {
+		return MutationResult{SessionVersion: current.Version}, ErrStaleVersion
+	}
+	if err = tx.Commit(); err != nil {
+		return MutationResult{}, err
+	}
+	return MutationResult{Changed: true, SessionVersion: observed + 1, SessionsDirty: true}, nil
+}
+
 func (s *Store) RemoveSessionAtVersion(ctx context.Context, id SessionID, observed RowVersion) (MutationResult, error) {
 	tx, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
