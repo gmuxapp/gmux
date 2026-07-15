@@ -107,7 +107,7 @@ try {
     })
     const page = await ctx.newPage()
     // The claude "design landing page" session from the mock fixture.
-    await page.goto(`${base}/my-project/claude/sess-cla?mock=clean`)
+    await page.goto(`${base}/my-project/claude/sess-claude-01?mock=clean`)
     await page.waitForSelector('.xterm')
     await page.waitForTimeout(1000)
     // Nudge the viewport to force a bar-aware refit: the initial mock fit
