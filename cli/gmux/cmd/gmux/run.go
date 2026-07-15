@@ -194,7 +194,8 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		RunnerVersion:   version,
 	})
 
-	// Common env vars — set for every child, per ADR-0005
+	// Common env vars — set for every child so nested gmux invocations can
+	// discover their session context (see ADR 0003 for GMUX_SESSION_ID).
 	env := []string{
 		"GMUX=1",
 		"GMUX_SOCKET=" + sockPath,

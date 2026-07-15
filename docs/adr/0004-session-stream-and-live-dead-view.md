@@ -1,11 +1,24 @@
 # ADR 0004: `SessionStream` and the live↔dead view abstraction
 
-**Status:** Proposed
+**Status:** Superseded / not adopted (2026-07)
 **Date:** 2026-05-04
 **Related:** ADR 0003 (Daemon-initiated resume passes Session.ID to the runner)
 
-> **Note (2026-06, CLI 2.0):** Decision stands; any pre-2.0 command syntax in
-> the examples (e.g. `--tail`) is superseded by ADR 0009's verb-first grammar.
+> **Not adopted (2026-07).** This design was never implemented and the
+> shipped web contradicts it in its load-bearing details. `main` has **no**
+> `SessionStream`, pooled byte buffers, or always-on per-session WebSockets.
+> Instead the frontend selects `TerminalView` for live/attachable sessions
+> and a separate `ReplayView` (dead-session xterm, no WebSocket) — the split
+> this ADR set out to remove — with a single `TerminalView` xterm reused
+> across switches among live sessions (reset + reconnect `/ws/{id}` on
+> switch) that is unmounted on the live→dead transition (`apps/gmux-web/src/main.tsx`,
+> `terminal.tsx`, `replay-view.tsx`). The document is retained for its
+> problem statement and rejected alternatives; do **not** read it as the
+> current architecture. If the seamless live↔dead seam is revisited, open a
+> fresh ADR rather than reviving this one in place.
+
+> **Note (2026-06, CLI 2.0):** Any pre-2.0 command syntax in the examples
+> (e.g. `--tail`) is superseded by ADR 0009's verb-first grammar.
 
 ## Context
 

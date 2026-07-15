@@ -1,8 +1,14 @@
-# ADR 0005: Project references and the Local-peer exception
+# ADR 0025: Project references and the Local-peer exception
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-05-22
 **Related:** ADR 0002 (Project ownership from session origin)
+
+> **Note (2026-07):** Renumbered from ADR 0005 → 0025 to resolve a number
+> collision with "ADR 0005: CLI routes session actions through gmuxd" (two
+> files claimed 0005). This document's decision and date are unchanged; it
+> extends ADR 0002 and is the canonical record for the reference /
+> Local-peer model. Cross-references in ADRs 0007 and 0017 were updated.
 
 ## Context
 

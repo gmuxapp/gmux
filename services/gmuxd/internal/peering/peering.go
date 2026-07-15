@@ -104,7 +104,7 @@ type SpokeProject struct {
 
 // SpokeDiscovered is the hub's verbatim copy of a single entry from a
 // spoke's authoritative `discovered` list (GET /v1/projects). Discovery
-// is host-authoritative (ADR 0002/0005): only the owning host runs its
+// is host-authoritative (ADR 0002/0025): only the owning host runs its
 // own match rules over its own sessions, so the hub re-broadcasts the
 // spoke's self-advertised discovered rows under
 // peer_discovered[<peerName>][] rather than recomputing them blind.

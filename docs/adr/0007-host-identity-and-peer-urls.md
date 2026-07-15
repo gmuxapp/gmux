@@ -1,8 +1,8 @@
 # ADR 0007: Host identity, naming, and peer URLs
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-05-29
-**Related:** ADR 0002 (project ownership from session origin), ADR 0005 (references and the local-peer exception)
+**Related:** ADR 0002 (project ownership from session origin), ADR 0025 (references and the local-peer exception)
 **Target:** gmux 2.0 (breaking; no backwards compatibility)
 
 ## Context

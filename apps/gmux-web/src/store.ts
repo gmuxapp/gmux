@@ -70,7 +70,7 @@ export interface RawWorld {
   peerProjects: Record<string, PeerProject[]>
   /**
    * Per-peer authoritative discovered list, keyed by peer name.
-   * Discovery is host-authoritative (ADR 0002/0005): each connected
+   * Discovery is host-authoritative (ADR 0002/0025): each connected
    * peer advertises the sessions it owns but no project of its own
    * claims, and the viewer renders these rows verbatim rather than
    * recomputing peer discovery blind. The viewer's own (local) sessions
@@ -276,7 +276,7 @@ export const worldLoaded = signal(false)
 // 'error'        — initial connect failed (full-screen + Retry)
 export const connState = signal<'connecting' | 'connected' | 'reconnecting' | 'error'>('connecting')
 
-// Discovered is host-authoritative (ADR 0002/0005): each host runs its
+// Discovered is host-authoritative (ADR 0002/0025): each host runs its
 // own match rules over its own sessions and decides which are
 // unclaimed. So this viewer computes discovery only for its OWN (local)
 // sessions, and merges in each connected peer's self-advertised

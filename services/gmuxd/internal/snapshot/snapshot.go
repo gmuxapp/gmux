@@ -76,7 +76,7 @@ type WorldPayload struct {
 	// PeerDiscovered carries each connected peer's self-advertised
 	// discovered list (sessions the peer owns but no project of its own
 	// claims), keyed by peer name. Discovery is host-authoritative
-	// (ADR 0002/0005): the owning host runs its own match rules over
+	// (ADR 0002/0025): the owning host runs its own match rules over
 	// its own sessions, so the viewer renders these rows verbatim
 	// rather than recomputing peer discovery blind (which could offer a
 	// project the peer already owns by a rule the viewer can't see).
