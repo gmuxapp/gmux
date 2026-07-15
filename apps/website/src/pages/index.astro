@@ -113,15 +113,16 @@ import Topology from '../components/Topology.astro'
         <p class="section-lead">Sessions live on the host, not in your terminal. Close the lid, lose the wi-fi, switch devices: the run doesn't notice. Answer a question from the checkout line and the same conversation is waiting in your terminal when you sit back down.</p>
         <pre class="code-snippet code-snippet-inline"><code>alias claude='gmux -- claude'  <span class="code-comment"># alias once, automatic after that</span></code></pre>
       </div>
-      <div class="diptych">
-        <figure class="diptych-panel">
-          <div class="diptych-img diptych-placeholder">photo: laptop carried half-open,<br />because closing it kills the run</div>
-          <figcaption class="diptych-caption">don't close it. don't lose wi-fi. don't leave.</figcaption>
-        </figure>
-        <figure class="diptych-panel">
-          <div class="diptych-img diptych-placeholder">photo: phone in the grass,<br />gmux notification on screen</div>
-          <figcaption class="diptych-caption">the laptop is at home. it'll text you.</figcaption>
-        </figure>
+      <div class="contrast">
+        <div class="contrast-panel">
+          <div class="contrast-label">the old way</div>
+          <p class="contrast-line">don't close it.<br />don't lose wi-fi.<br />don't leave.</p>
+        </div>
+        <div class="contrast-arrow" aria-hidden="true">&rarr;</div>
+        <div class="contrast-panel contrast-panel-accent">
+          <div class="contrast-label">with gmux</div>
+          <p class="contrast-line">the laptop is at home.<br />it'll text you.</p>
+        </div>
       </div>
     </div>
   </section>
@@ -718,50 +719,73 @@ gmux -- &lt;command&gt;</code></pre>
     font-size: 0.85rem;
   }
 
-  /* Diptych: the tether vs. the grass */
-  .diptych {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* Before/after contrast: the tether vs. gmux.
+     Placeholder for a future photo diptych (laptop half-open in a bag
+     vs. phone in the grass) — swap this block back when the shots exist. */
+  .contrast {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
     gap: clamp(1rem, 2.5vw, 2rem);
-    max-width: 900px;
+    max-width: 760px;
     margin: 0 auto;
   }
 
-  .diptych-panel {
-    margin: 0;
-  }
-
-  .diptych-img {
-    aspect-ratio: 5 / 4;
-    border-radius: 10px;
-    overflow: hidden;
-  }
-
-  .diptych-placeholder {
+  .contrast-panel {
+    flex: 1;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    border: 1px dashed var(--border);
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 1.75rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
     background: var(--code-bg);
-    color: var(--text-muted);
-    font-size: 0.9rem;
-    line-height: 1.6;
-    padding: 1rem;
   }
 
-  .diptych-caption {
-    margin-top: 0.8rem;
+  .contrast-panel-accent {
+    border-color: color-mix(in oklch, var(--accent) 40%, var(--border));
+    background: oklch(20% 0.025 195 / 0.35);
+  }
+
+  .contrast-label {
     font-family: 'Fira Code', 'JetBrains Mono', monospace;
-    font-size: 0.8rem;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: var(--text-muted);
-    text-align: center;
+  }
+
+  .contrast-panel-accent .contrast-label {
+    color: var(--accent);
+  }
+
+  .contrast-line {
+    margin: 0;
+    font-family: 'Fira Code', 'JetBrains Mono', monospace;
+    font-size: 1rem;
+    line-height: 1.7;
+    color: var(--text-secondary);
+  }
+
+  .contrast-panel-accent .contrast-line {
+    color: var(--text);
+  }
+
+  .contrast-arrow {
+    align-self: center;
+    color: var(--text-muted);
+    font-size: 1.5rem;
+    flex: none;
   }
 
   @media (max-width: 700px) {
-    .diptych {
-      grid-template-columns: 1fr;
-      max-width: 420px;
+    .contrast {
+      flex-direction: column;
+      max-width: 340px;
+    }
+
+    .contrast-arrow {
+      transform: rotate(90deg);
     }
   }
 
