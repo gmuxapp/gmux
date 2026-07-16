@@ -105,6 +105,25 @@ func (q *Queries) DeleteSessionAtVersion(ctx context.Context, arg DeleteSessionA
 	return result.RowsAffected()
 }
 
+const dismissSession = `-- name: DismissSession :execrows
+UPDATE local_sessions
+SET dismissed_at_ms = ?1, row_version = row_version + 1
+WHERE id = ?2 AND dismissed_at_ms IS NULL
+`
+
+type DismissSessionParams struct {
+	DismissedAtMs sql.NullInt64
+	ID            string
+}
+
+func (q *Queries) DismissSession(ctx context.Context, arg DismissSessionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, dismissSession, arg.DismissedAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const finalizeLocalPeerPlacement = `-- name: FinalizeLocalPeerPlacement :execrows
 UPDATE project_placements
 SET project_entry_id = ?, peer_parent_session_id = ?, sibling_scope = ?, position = ?

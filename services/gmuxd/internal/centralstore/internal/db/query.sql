@@ -55,6 +55,11 @@ SET exited_at_ms = sqlc.arg(swept_at_ms),
     row_version = row_version + 1
 WHERE id = sqlc.arg(id) AND exited_at_ms IS NULL;
 
+-- name: DismissSession :execrows
+UPDATE local_sessions
+SET dismissed_at_ms = sqlc.arg(dismissed_at_ms), row_version = row_version + 1
+WHERE id = sqlc.arg(id) AND dismissed_at_ms IS NULL;
+
 -- name: DeleteLocalSessionPlacement :execrows
 DELETE FROM project_placements WHERE local_session_id = ?;
 
