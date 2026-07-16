@@ -927,21 +927,14 @@ body {
 .sidebar-scroll .session-row.selected {
   background: var(--bg-selected);
 }
-.sidebar-scroll .session-row-title { font-size: 13px; font-weight: 400; }
-.sidebar-scroll .session-row-meta {
-  margin-top: 1px;
-  font-size: 11px;
-  flex-wrap: nowrap;
-  overflow: hidden;
-}
-.sidebar-scroll .session-row-project { font-weight: 500; color: var(--text-muted); }
-.sidebar-scroll .session-row-age { font-weight: 400; color: var(--text-muted); }
+.sidebar-scroll .session-row-content { font-size: 13px; }
+.sidebar-scroll .session-row-title { font-weight: 400; }
 
 /* ── Wide session row (dashboard / project page) ────────────────────── */
-/* Two-line variant of the sidebar's SessionItem. Same dot conventions
-   and close-button behavior; line 2 carries optional project / cwd /
-   status / age metadata. The host suffix uses the existing
-   .host-suffix styling. */
+/* Single-line `project · title` row for the activity feed (home +
+   sidebar Activity). Same dot conventions and close-button behavior as
+   the sidebar's Projects-view SessionItem. The host suffix uses the
+   existing .host-suffix styling. */
 
 .session-row {
   display: flex;
@@ -967,56 +960,58 @@ body {
   opacity: 0.55;
 }
 
+/* Single flex line: project · title · cwd · status. The title is the
+ * anchor and shrinks/ellipsizes first when the row is tight; project
+ * and trailing badges keep their size. */
 .session-row-content {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: baseline;
+  font-size: 13px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .session-row-title {
-  font-size: 13px;
   font-weight: 500;
   color: var(--text);
-  white-space: nowrap;
+  /* Shrinks (ellipsizes) on a tight row but doesn't grow, so segments
+   * stay left-packed instead of pushing trailing cwd/status to the edge. */
+  flex: 0 1 auto;
+  min-width: 2.5em;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.session-row-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-muted);
-  min-width: 0;
-}
 .session-row-sep {
   color: var(--text-muted);
-  opacity: 0.6;
-  margin: 0 0.4em; /* air so the meta line doesn't read as a run-on */
+  opacity: 0.5;
+  margin: 0 0.4em;
+  flex: 0 0 auto;
 }
 .session-row-project {
-  /* Bold, matching the sidebar folder header (.folder-name). */
-  color: var(--text);
-  font-weight: 600;
-}
-.session-row-cwd {
-  /* No monospace: the ./ ~/ / prefix already marks it as a folder, and
-   * the shared font keeps the meta line one size. Ellipsizes only when
-   * a path exceeds the line (full path is in the title). */
-  max-width: 100%;
+  /* Muted leading context; the title carries the emphasis. */
+  color: var(--text-muted);
+  font-weight: 400;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+.session-row-cwd {
+  /* No monospace: the ./ ~/ / prefix already marks it as a folder.
+   * Ellipsizes only when it exceeds the line (full path in the title). */
+  color: var(--text-muted);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .session-row-status {
   font-style: italic;
-}
-.session-row-age {
-  font-variant-numeric: tabular-nums;
-  /* Weight + colour matched to the project so the time reads as its peer. */
-  font-weight: 600;
-  color: var(--text);
+  flex: 0 0 auto;
 }
 .session-row-dup,
 .session-dup-warning {

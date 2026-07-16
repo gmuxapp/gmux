@@ -1,12 +1,15 @@
-// Wide session row used on the home dashboard. Companion to the
-// sidebar's compact SessionItem: same data, more room to breathe. Two
-// lines, optional metadata (project / host / cwd / age), shared
-// dot-state and unavailability logic via store helpers.
+// Single-line session row for the activity feed (home dashboard + the
+// sidebar's Activity view). Reads `project · title`, with the project
+// leading as muted context and optional host / cwd / status trailing.
+// No per-row time: the day headings carry recency and the order within
+// a day says the rest, so a timestamp would just duplicate the heading
+// (and used to contradict it). Shared dot-state / unavailability logic
+// via store helpers.
 //
-// Kept deliberately separate from SessionItem rather than unified
-// behind a density prop: the sidebar variant is dense, drag-aware,
-// and folder-scoped; this variant is loose and standalone. A single
-// component would accumulate flags faster than it would save code.
+// Kept deliberately separate from the sidebar's Projects-view
+// SessionItem rather than unified behind a density prop: that variant
+// is drag-aware and folder-scoped; a single component would accumulate
+// flags faster than it would save code.
 
 import { Fragment } from 'preact'
 import type { Session } from './types'
@@ -44,23 +47,6 @@ export interface SessionRowProps {
   onClose?: () => void
 }
 
-/** Compact "Nm" / "Nh" / "Nd" relative-time formatter for ages on the
- *  dashboard. Sub-minute ages collapse to "now" so the recently-
- *  transitioned row doesn't visibly change every second. */
-function formatAge(stampIso: string | undefined, now: number): string | null {
-  if (!stampIso) return null
-  const t = Date.parse(stampIso)
-  if (!Number.isFinite(t)) return null
-  const secs = Math.max(0, Math.floor((now - t) / 1000))
-  if (secs < 60) return 'now'
-  const mins = Math.floor(secs / 60)
-  if (mins < 60) return `${mins}m`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h`
-  const days = Math.floor(hours / 24)
-  return `${days}d`
-}
-
 export function SessionRow({
   session,
   href,
@@ -86,12 +72,6 @@ export function SessionRow({
   const dot = (selected && (rawDot === 'error' || rawDot === 'unread')) ? 'none' : rawDot
   const arrival = useArrivalPulse(dot)
 
-  // Age sourced from the same field that drives Recent partitioning:
-  // last_output_at is the canonical "when did anything notable
-  // happen here" timestamp. Falls back to created_at for sessions
-  // that haven't transitioned yet (matches the dashboard sort).
-  const age = formatAge(session.last_output_at ?? session.created_at, Date.now())
-
   // Exit code: dead sessions surface "exited (N)" so the row never goes
   // silent about why a session is dead. Live status (working/error) is
   // conveyed by the dot, not text.
@@ -105,35 +85,33 @@ export function SessionRow({
     unavailable ? 'unavailable' : '',
   ].filter(Boolean).join(' ')
 
-  // Line-2 metadata, in reading order: time · project on host · folder.
-  // The bold project → muted host rhythm mirrors the sidebar folder
-  // header. Only requested segments render; empty ones add no separator.
-  const metaSegments: preact.ComponentChildren[] = []
-  if (age) {
-    metaSegments.push(<span class="session-row-age">{age}</span>)
-  }
+  // Single line, in reading order: project on host · title · cwd ·
+  // status. Project leads as muted context; the title is the anchor.
+  // Only requested segments render; empty ones add no separator.
+  const segments: preact.ComponentChildren[] = []
   const hostEl = showHost && session.peer
     ? <HostSuffix peer={session.peer} connective="on" />
     : null
   if (showProject && projectName) {
     // Grouped so the host joins the project with "on" and no dot between.
-    metaSegments.push(
+    segments.push(
       <span class="session-row-project">{projectName}{hostEl && <> {hostEl}</>}</span>,
     )
   } else if (hostEl) {
-    metaSegments.push(hostEl)
+    segments.push(hostEl)
   }
+  segments.push(<span class="session-row-title">{session.title}</span>)
   if (showCwd && cwdLabel) {
     // Truncated in CSS; the title carries the full absolute cwd so a
     // hover/long-press reveals the path the relative label abbreviates.
-    metaSegments.push(<span class="session-row-cwd" title={session.cwd || cwdLabel}>{cwdLabel}</span>)
+    segments.push(<span class="session-row-cwd" title={session.cwd || cwdLabel}>{cwdLabel}</span>)
   }
   if (statusText) {
-    metaSegments.push(<span class="session-row-status">{statusText}</span>)
+    segments.push(<span class="session-row-status">{statusText}</span>)
   }
   // Same conversation file open in another live runner (ADR 0011 N:1).
   if (session.conversation_file && duplicateConversationFiles.value.has(session.conversation_file)) {
-    metaSegments.push(
+    segments.push(
       <span class="session-row-dup" title="This conversation is open in more than one tab">⚠ open elsewhere</span>,
     )
   }
@@ -154,23 +132,16 @@ export function SessionRow({
         : <span class={`session-dot-indicator ${dot}${arrival ? ` ${arrival}` : ''}`} />
       }
       <div class="session-row-content">
-        <div class="session-row-title">{session.title}</div>
-        {metaSegments.length > 0 && (
-          <div class="session-row-meta">
-            {metaSegments.map((seg, i) => (
-              // Long-form Fragment carries a key: the shorthand `<>`
-              // can't, and without one Preact falls back to index
-              // diffing across renders. The visible content here is
-              // entirely positional (segment N is whatever segment N
-              // happens to be this render), so index is the honest
-              // key.
-              <Fragment key={i}>
-                {i > 0 && <span class="session-row-sep"> · </span>}
-                {seg}
-              </Fragment>
-            ))}
-          </div>
-        )}
+        {segments.map((seg, i) => (
+          // Long-form Fragment carries a key: the shorthand `<>` can't,
+          // and without one Preact falls back to index diffing across
+          // renders. The content is positional (segment N is whatever
+          // segment N happens to be this render), so index is honest.
+          <Fragment key={i}>
+            {i > 0 && <span class="session-row-sep"> · </span>}
+            {seg}
+          </Fragment>
+        ))}
       </div>
       {onClose && (
         <button
