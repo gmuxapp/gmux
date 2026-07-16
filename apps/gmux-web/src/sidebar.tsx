@@ -72,6 +72,24 @@ const IconChevron = ({ className }: { className?: string }) => (
   </svg>
 )
 
+/** Animate an element's scrollTop to 0 over ~0.5s. The native
+ *  scrollTo({behavior:'smooth'}) has an uncontrollable (often sluggish)
+ *  duration for long distances, so we drive it ourselves with an
+ *  easeOutCubic ramp. */
+function animateScrollToTop(el: HTMLElement | null, duration = 500) {
+  if (!el) return
+  const start = el.scrollTop
+  if (start === 0) return
+  const t0 = performance.now()
+  const step = (now: number) => {
+    const p = Math.min(1, (now - t0) / duration)
+    const ease = 1 - (1 - p) ** 3
+    el.scrollTop = start * (1 - ease)
+    if (p < 1) requestAnimationFrame(step)
+  }
+  requestAnimationFrame(step)
+}
+
 // ── Drag helpers ──
 
 /** True on devices with a pointer (mouse/trackpad). Touch-only devices
@@ -582,6 +600,29 @@ export function Sidebar({
   // The view menu shouldn't outlive the sidebar on mobile.
   useEffect(() => { if (!open) setMenuOpen(false) }, [open])
 
+  // Scroll-to-top pill (Activity view only): show once you're a decent
+  // way into the *content*, so the top items are one tap away without a
+  // long scroll back. Measured relative to the first section rather than
+  // a fixed scrollTop, because the top thumb gap is itself hundreds of px
+  // on tall phones — a fixed threshold would fire while still scrolling
+  // through the blank gap.
+  const [scrolledDown, setScrolledDown] = useState(false)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onScroll = () => {
+      const first = el.querySelector('.sidebar-activity-section')
+      setScrolledDown(
+        first
+          ? first.getBoundingClientRect().top < el.getBoundingClientRect().top - 240
+          : el.scrollTop > 240,
+      )
+    }
+    onScroll()
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [mode])
+
   // folder.sessions is already the shown set (see store.ts
   // sidebarSessions), so this is just the visible session count.
   const totalVisible = foldersVal.reduce((n, f) => n + f.sessions.length, 0)
@@ -678,6 +719,17 @@ export function Sidebar({
             </div>
           )}
         </div>
+        {mode === 'activity' && scrolledDown && (
+          <button
+            type="button"
+            class="scroll-top-btn"
+            aria-label="Scroll to top"
+            title="Scroll to top"
+            onClick={() => animateScrollToTop(scrollRef.current)}
+          >
+            Top ↑
+          </button>
+        )}
       </aside>
     </>
   )

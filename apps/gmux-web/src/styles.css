@@ -139,6 +139,8 @@ body {
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   overflow: hidden;
+  /* Positioning context for the floating scroll-to-top pill. */
+  position: relative;
 }
 
 .sidebar-header {
@@ -940,6 +942,13 @@ body {
   letter-spacing: 0.08em;
   color: var(--text-muted);
   padding: 4px 14px;
+  /* Pin the day label while its rows scroll underneath (mirrors the
+   * Projects view's sticky .folder-header). Opaque bg so rows don't
+   * bleed through; above the rows (position:relative). */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-sidebar);
 }
 
 .sidebar-scroll .session-row {
@@ -1014,6 +1023,8 @@ body {
 
 /* Full (today): two lines — title, then "age · project on host · cwd". */
 .session-row-full .session-row-title {
+  /* block so overflow/text-overflow apply — an inline span won't ellipsize. */
+  display: block;
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
@@ -2259,10 +2270,14 @@ body {
   z-index: 10;
 }
 
-.terminal-scroll-end {
+/* Shared floating "scroll to edge" button skin: the terminal's scroll-
+ * to-bottom (normal + replay/resume views) and the sidebar Activity
+ * scroll-to-top. One visual source of truth; each sets its own anchor
+ * position (see below). */
+.terminal-scroll-end,
+.jump-to-bottom,
+.scroll-top-btn {
   position: absolute;
-  bottom: 12px;
-  right: 16px;
   padding: 8px 12px;
   border-radius: 8px;
   border: 1px solid oklch(from var(--border-strong) l c h / 0.7);
@@ -2280,10 +2295,14 @@ body {
   pointer-events: auto;
 }
 
-.terminal-scroll-end:hover {
+.terminal-scroll-end:hover,
+.jump-to-bottom:hover,
+.scroll-top-btn:hover {
   background: oklch(from var(--bg-surface) l c h / 0.92);
   color: oklch(76% 0.012 250);
 }
+
+.terminal-scroll-end { bottom: 12px; right: 16px; }
 
 /* Use JetBrains Mono for italic glyphs since Fira Code has no italic variant.
    The bundled JetBrains Mono italic files (from fonts.css) are referenced here
@@ -3269,29 +3288,22 @@ body {
 
 /* Floating "jump to bottom" overlay for any xterm-hosting view (replay,
    live terminal). Anchors to the nearest positioned ancestor, which
-   .terminal-shell already establishes (position: relative). */
-.jump-to-bottom {
-  position: absolute;
-  right: 16px;
-  bottom: 16px;
-  z-index: 5;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--bg-surface);
-  color: var(--text);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  line-height: 1;
-  box-shadow: 0 2px 8px oklch(0% 0 0 / 0.35);
-  transition: background 0.1s, transform 0.1s;
+   .terminal-shell already establishes (position: relative). Skin shared
+   with .terminal-scroll-end (see above). */
+.jump-to-bottom { right: 16px; bottom: 16px; }
+
+/* Sidebar scroll-to-top: top-right on desktop, bottom-right (thumb
+ * reach) on touch. */
+.scroll-top-btn {
+  right: 12px;
+  top: calc(var(--header-height) + 10px);
 }
-.jump-to-bottom:hover { background: oklch(28% 0.015 250); }
-.jump-to-bottom:active { transform: translateY(1px); }
+@media (pointer: coarse) {
+  .scroll-top-btn {
+    top: auto;
+    bottom: calc(var(--header-height) + env(safe-area-inset-bottom) + 12px);
+  }
+}
 
 /* ── Link action sheet (long-press a link on touch devices) ────────
    Reuses the modal backdrop/panel conventions; the panel is a narrow
