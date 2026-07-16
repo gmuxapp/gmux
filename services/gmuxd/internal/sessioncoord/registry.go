@@ -28,6 +28,10 @@ type registryEntry struct {
 	Runtime
 	cancel context.CancelFunc
 	stream EventStream
+	// dead is closed exactly when this entry leaves the registry map (remove,
+	// or replacement by install). Lifecycle operations wait on it to observe
+	// this generation's death through the ordinary observation path.
+	dead chan struct{}
 	// superseded marks the entry as fenced during a replacement's
 	// commit-to-install window: the coordinator has committed (or is about to
 	// commit) a replacement registration, so no observation for this
@@ -98,6 +102,9 @@ func (r *Registry) install(e registryEntry) (old registryEntry, replaced bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	old, replaced = r.entries[e.SessionID]
+	if replaced && old.dead != nil {
+		close(old.dead)
+	}
 	r.entries[e.SessionID] = e
 	return
 }
@@ -122,6 +129,9 @@ func (r *Registry) remove(id centralstore.SessionID, generation uint64) (registr
 		return registryEntry{}, false
 	}
 	delete(r.entries, id)
+	if e.dead != nil {
+		close(e.dead)
+	}
 	return e, true
 }
 

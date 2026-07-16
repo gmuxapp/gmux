@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 )
@@ -27,6 +28,9 @@ type RunnerClient interface {
 type Durable interface {
 	RegisterRunner(context.Context, centralstore.RunnerRegistration) (centralstore.Session, centralstore.MutationResult, error)
 	ApplyRunnerObservation(context.Context, centralstore.RunnerObservation) (centralstore.MutationResult, error)
+	// Session backs the lifecycle operations' durable-row checks (resume
+	// candidacy, exit-convergence repair). See lifecycle.go.
+	Session(context.Context, centralstore.SessionID) (centralstore.Session, bool, error)
 	// ListSessions and SweepDeadSessions back the startup convergence
 	// barrier (see convergence.go).
 	ListSessions(context.Context) ([]centralstore.Session, error)
@@ -72,6 +76,13 @@ type RegisterRequest struct {
 	// Replace is explicit resume/restart/replacement provenance. Without it,
 	// registration never displaces an installed working generation.
 	Replace bool
+	// ExpectedID, when set, scopes the request to one session: if the
+	// runner's meta reports a different ID, registration aborts before any
+	// commit or fence with ErrResumeIdentityMismatch. Replace provenance is
+	// authorized for a specific session, not for whatever ID a spawned
+	// runner happens to claim — without this check a mis-claiming runner
+	// could supersede an unrelated live session's generation.
+	ExpectedID centralstore.SessionID
 }
 
 type Coordinator struct {
@@ -82,6 +93,15 @@ type Coordinator struct {
 	durable  Durable
 	dirty    DirtySink
 	errSink  ErrorSink
+	control  RunnerControl
+	spawner  RunnerSpawner
+	now      func() centralstore.UnixMillis
+
+	// ops tracks per-session in-flight lifecycle operations (stop, resume,
+	// restart). Guarded by mu; held across those operations' runner I/O so a
+	// concurrent lifecycle op for the same session fails fast instead of
+	// double-spawning or double-killing. See lifecycle.go.
+	ops map[centralstore.SessionID]string
 
 	// Startup convergence barrier state (see convergence.go). Guarded by mu.
 	convergeCandidates map[centralstore.SessionID]struct{}
@@ -89,11 +109,37 @@ type Coordinator struct {
 	converged          chan struct{}
 }
 
-func New(registry *Registry, runners RunnerClient, durable Durable, dirty DirtySink, errSink ErrorSink) *Coordinator {
+// Option configures optional coordinator collaborators.
+type Option func(*Coordinator)
+
+// WithRunnerControl injects the process-termination boundary used by Stop
+// and Restart.
+func WithRunnerControl(rc RunnerControl) Option { return func(c *Coordinator) { c.control = rc } }
+
+// WithRunnerSpawner injects the process-launch boundary used by Resume and
+// Restart.
+func WithRunnerSpawner(rs RunnerSpawner) Option { return func(c *Coordinator) { c.spawner = rs } }
+
+// WithClock injects the timestamp source for synthesized exits. The default
+// is the wall clock in Unix milliseconds.
+func WithClock(now func() centralstore.UnixMillis) Option {
+	return func(c *Coordinator) { c.now = now }
+}
+
+func New(registry *Registry, runners RunnerClient, durable Durable, dirty DirtySink, errSink ErrorSink, opts ...Option) *Coordinator {
 	if registry == nil {
 		registry = NewRegistry()
 	}
-	return &Coordinator{registry: registry, runners: runners, durable: durable, dirty: dirty, errSink: errSink, converged: make(chan struct{})}
+	c := &Coordinator{
+		registry: registry, runners: runners, durable: durable, dirty: dirty, errSink: errSink,
+		now:       func() centralstore.UnixMillis { return centralstore.UnixMillis(time.Now().UnixMilli()) },
+		ops:       make(map[centralstore.SessionID]string),
+		converged: make(chan struct{}),
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 func (c *Coordinator) Registry() *Registry { return c.registry }
 
@@ -168,6 +214,10 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 		return Runtime{}, err
 	}
 	id := meta.Registration.ID
+	if req.ExpectedID != "" && id != req.ExpectedID {
+		// Abort before the mutex/fence/commit: no registration side effects.
+		return Runtime{}, fmt.Errorf("%w: expected %s, runner reported %s", ErrResumeIdentityMismatch, req.ExpectedID, id)
+	}
 
 	// ── Phase 2: lifecycle mutex ──────────────────────────────────────────
 	// Holding the mutex across the short DB transaction is acceptable.
@@ -262,7 +312,7 @@ loop:
 		installMu.Lock()
 		installed = true
 		installMu.Unlock()
-		replacedEntry, replaced := c.registry.install(registryEntry{Runtime: runtime, cancel: streamCancel, stream: stream})
+		replacedEntry, replaced := c.registry.install(registryEntry{Runtime: runtime, cancel: streamCancel, stream: stream, dead: make(chan struct{})})
 		streamInstalled = true
 		if replaced {
 			closeEntry(replacedEntry)
@@ -359,6 +409,12 @@ func mergeFacts(dst *centralstore.RunnerFacts, src centralstore.RunnerFacts) err
 // the registry's own lock. The generation check in registry.advance and
 // registry.remove prevents stale-generation writes from reaching the store.
 func (c *Coordinator) drain(ctx context.Context, id centralstore.SessionID, generation uint64, events <-chan RunnerEvent) {
+	// exitObserved is an optimization only: it avoids a pointless synthesized
+	// apply after a stream that already carried exit facts (whose apply
+	// removed the entry). Correctness never depends on it — a synthesized
+	// exit for a generation that is no longer installed is dropped by apply's
+	// generation check regardless.
+	exitObserved := false
 	defer func() {
 		// Remove and close this generation's entry if still current. If
 		// apply already removed it (Alive=false event) remove returns false
@@ -373,7 +429,28 @@ func (c *Coordinator) drain(ctx context.Context, id centralstore.SessionID, gene
 			return
 		case ev, ok := <-events:
 			if !ok {
+				// Mid-life stream drop. A generation's death must always land
+				// durably: if no exit fact was observed on this stream,
+				// synthesize one (same contract as the fast-dead registration
+				// synthesis and the startup convergence sweep: explicit exit
+				// timestamp, no exit code, turn state preserved). Routing it
+				// through apply gives it the ordinary fence-wait, generation
+				// check, stale retry, commit-before-liveness-removal ordering,
+				// and post-commit publish — so a drop of a replaced generation
+				// can never write onto the replacement's row.
+				if !exitObserved {
+					at := c.now()
+					alive := false
+					c.apply(ctx, id, generation, RunnerEvent{
+						ObservedAt: at,
+						Alive:      &alive,
+						Facts:      centralstore.RunnerFacts{ExitedAt: centralstore.NullablePatch[centralstore.UnixMillis]{Set: &at}},
+					})
+				}
 				return
+			}
+			if ev.Facts.ExitedAt.Set != nil {
+				exitObserved = true
 			}
 			c.apply(ctx, id, generation, ev)
 		}

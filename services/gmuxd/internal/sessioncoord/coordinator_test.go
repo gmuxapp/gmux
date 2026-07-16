@@ -95,6 +95,8 @@ type fakeDurable struct {
 	// applied records all ApplyRunnerObservation calls.
 	applied []centralstore.RunnerObservation
 
+	// session backs Session for lifecycle tests.
+	session func(centralstore.SessionID) (centralstore.Session, bool, error)
 	// listSessions backs ListSessions for convergence tests.
 	listSessions func() ([]centralstore.Session, error)
 	// sweepResult backs SweepDeadSessions; swept records its calls.
@@ -132,6 +134,15 @@ func (d *fakeDurable) ApplyRunnerObservation(ctx context.Context, obs centralsto
 	defer d.mu.Unlock()
 	d.applied = append(d.applied, obs)
 	return d.applyResult(obs)
+}
+
+func (d *fakeDurable) Session(ctx context.Context, id centralstore.SessionID) (centralstore.Session, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.session == nil {
+		return centralstore.Session{}, false, nil
+	}
+	return d.session(id)
 }
 
 func (d *fakeDurable) ListSessions(ctx context.Context) ([]centralstore.Session, error) {
@@ -420,6 +431,7 @@ func TestStaleCloseDoesNotRemoveCurrentGeneration(t *testing.T) {
 type scheduledDurable struct {
 	register func(centralstore.RunnerRegistration) (centralstore.Session, centralstore.MutationResult, error)
 	apply    func(centralstore.RunnerObservation) (centralstore.MutationResult, error)
+	session  func(centralstore.SessionID) (centralstore.Session, bool, error)
 }
 
 func (d *scheduledDurable) RegisterRunner(_ context.Context, reg centralstore.RunnerRegistration) (centralstore.Session, centralstore.MutationResult, error) {
@@ -427,6 +439,12 @@ func (d *scheduledDurable) RegisterRunner(_ context.Context, reg centralstore.Ru
 }
 func (d *scheduledDurable) ApplyRunnerObservation(_ context.Context, obs centralstore.RunnerObservation) (centralstore.MutationResult, error) {
 	return d.apply(obs)
+}
+func (d *scheduledDurable) Session(_ context.Context, id centralstore.SessionID) (centralstore.Session, bool, error) {
+	if d.session == nil {
+		return centralstore.Session{}, false, nil
+	}
+	return d.session(id)
 }
 func (d *scheduledDurable) ListSessions(context.Context) ([]centralstore.Session, error) {
 	return nil, nil
