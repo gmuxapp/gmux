@@ -101,6 +101,13 @@ type Coordinator struct {
 	spawner  RunnerSpawner
 	now      func() centralstore.UnixMillis
 
+	// takeover/resolver/lineage back conversation takeover (takeover.go).
+	// The lineage cache has its own lock; warming is adapter I/O and never
+	// runs under mu.
+	takeover bool
+	resolver ConversationResolver
+	lineage  lineageCache
+
 	// ops tracks per-session in-flight lifecycle operations (stop, resume,
 	// restart). Guarded by mu; held across those operations' runner I/O so a
 	// concurrent lifecycle op for the same session fails fast instead of
@@ -228,6 +235,29 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 		return Runtime{}, fmt.Errorf("%w: expected %s, runner reported %s", ErrResumeIdentityMismatch, req.ExpectedID, id)
 	}
 
+	// Takeover preparation (still I/O phase): read the durable rows and warm
+	// the lineage cache for every same-adapter ref, so the coverage
+	// computation under the mutex needs no I/O. A failed list read degrades
+	// this registration to no takeover (availability beats eviction
+	// completeness; the next reconciliation pass converges leftovers). The
+	// list may be stale by commit time — registrations serialize on the
+	// lifecycle mutex and evictions are version-conditional, so staleness
+	// yields a missed eviction, never a wrong one.
+	var takeoverList []centralstore.Session
+	if c.takeover {
+		list, listErr := c.durable.ListSessions(ctx)
+		if listErr != nil {
+			c.reportError(ctx, fmt.Errorf("sessioncoord: takeover list for %s: %w", id, listErr))
+		} else {
+			takeoverList = list
+			metaRef := ""
+			if meta.Registration.Facts.ConversationRef != nil {
+				metaRef = *meta.Registration.Facts.ConversationRef
+			}
+			c.lineage.warm(ctx, c.resolver, meta.Registration.Adapter, takeoverRefs(list, meta.Registration.Adapter, metaRef))
+		}
+	}
+
 	// ── Phase 2: lifecycle mutex ──────────────────────────────────────────
 	// Holding the mutex across the short DB transaction is acceptable.
 	// Runner I/O (Subscribe, Meta) must not run inside this section.
@@ -283,6 +313,44 @@ loop:
 		// ErrGenerationExitRequired.
 		x := reg.ObservedAt
 		reg.Facts.ExitedAt = centralstore.NullablePatch[centralstore.UnixMillis]{Set: &x}
+	}
+
+	// Conversation takeover (ADR 0026 §9). The post-drain merged ref decides
+	// coverage; an event-bound ref that was never described degrades to ref
+	// equality for this registration (the reconcile pass converges
+	// lineage-only losers later). A live binder evicts covered dead rows in
+	// the same RegisterRunner transaction; a genuinely new fast-dead
+	// registration covered by a live row is skipped entirely (production
+	// dead-write-skip parity) — no durable write, no registry change.
+	if c.takeover && takeoverList != nil {
+		ref := ""
+		if reg.Facts.ConversationRef != nil {
+			ref = *reg.Facts.ConversationRef
+		} else {
+			for _, s := range takeoverList {
+				if s.ID == id {
+					ref = s.ConversationRef
+					break
+				}
+			}
+		}
+		if reg.Alive {
+			reg.Evict = c.takeoverEvictions(id, reg.Adapter, ref, takeoverList)
+		} else if c.coveredByLive(id, reg.Adapter, ref, takeoverList) {
+			// The skip applies only to genuinely new rows: an existing row's
+			// dead re-registration owns its identity (or already lost it to
+			// the winner's eviction). The list was read before the mutex, so
+			// confirm absence against the durable row under the mutex.
+			_, exists, rowErr := c.durable.Session(ctx, id)
+			if rowErr != nil {
+				c.mu.Unlock()
+				return Runtime{}, rowErr
+			}
+			if !exists {
+				c.mu.Unlock()
+				return Runtime{}, fmt.Errorf("%w: %s", ErrConversationOwnedByLive, id)
+			}
+		}
 	}
 
 	// Fence the old generation before committing the replacement. From this
