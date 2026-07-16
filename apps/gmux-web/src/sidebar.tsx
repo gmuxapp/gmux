@@ -614,6 +614,12 @@ export function Sidebar({
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
+    // Selecting Activity jumps back to the top (the most-recent items).
+    // This deliberately runs after the reveal effect above (declared
+    // first, so it fires first on a mode change), overriding its
+    // scroll-selected-into-view for the view switch — within Activity a
+    // later selId change still reveals normally.
+    if (mode === 'activity') el.scrollTop = 0
     const onScroll = () => {
       const first = el.querySelector('.sidebar-activity-section')
       setScrolledDown(
