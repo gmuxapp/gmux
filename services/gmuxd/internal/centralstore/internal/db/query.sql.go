@@ -740,6 +740,27 @@ func (q *Queries) SetPromotion(ctx context.Context, arg SetPromotionParams) (int
 	return result.RowsAffected()
 }
 
+const sweepSessionDead = `-- name: SweepSessionDead :execrows
+UPDATE local_sessions
+SET exited_at_ms = ?1,
+    last_activity_at_ms = MAX(COALESCE(last_activity_at_ms, 0), ?1),
+    row_version = row_version + 1
+WHERE id = ?2 AND exited_at_ms IS NULL
+`
+
+type SweepSessionDeadParams struct {
+	SweptAtMs sql.NullInt64
+	ID        string
+}
+
+func (q *Queries) SweepSessionDead(ctx context.Context, arg SweepSessionDeadParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, sweepSessionDead, arg.SweptAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const temporaryPlacementCount = `-- name: TemporaryPlacementCount :one
 SELECT COUNT(*) FROM project_placements WHERE sibling_scope LIKE '~:%'
 `

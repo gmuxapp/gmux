@@ -27,6 +27,10 @@ type RunnerClient interface {
 type Durable interface {
 	RegisterRunner(context.Context, centralstore.RunnerRegistration) (centralstore.Session, centralstore.MutationResult, error)
 	ApplyRunnerObservation(context.Context, centralstore.RunnerObservation) (centralstore.MutationResult, error)
+	// ListSessions and SweepDeadSessions back the startup convergence
+	// barrier (see convergence.go).
+	ListSessions(context.Context) ([]centralstore.Session, error)
+	SweepDeadSessions(context.Context, []centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error)
 }
 
 // DirtySink receives committed outcomes only. It is always called after the
@@ -78,13 +82,18 @@ type Coordinator struct {
 	durable  Durable
 	dirty    DirtySink
 	errSink  ErrorSink
+
+	// Startup convergence barrier state (see convergence.go). Guarded by mu.
+	convergeCandidates map[centralstore.SessionID]struct{}
+	convergeClosed     bool
+	converged          chan struct{}
 }
 
 func New(registry *Registry, runners RunnerClient, durable Durable, dirty DirtySink, errSink ErrorSink) *Coordinator {
 	if registry == nil {
 		registry = NewRegistry()
 	}
-	return &Coordinator{registry: registry, runners: runners, durable: durable, dirty: dirty, errSink: errSink}
+	return &Coordinator{registry: registry, runners: runners, durable: durable, dirty: dirty, errSink: errSink, converged: make(chan struct{})}
 }
 func (c *Coordinator) Registry() *Registry { return c.registry }
 

@@ -21,7 +21,7 @@ type fakeStream struct {
 	closed atomic.Bool
 }
 
-func newFakeStream() *fakeStream { return &fakeStream{ch: make(chan RunnerEvent, 64)} }
+func newFakeStream() *fakeStream                 { return &fakeStream{ch: make(chan RunnerEvent, 64)} }
 func (s *fakeStream) Events() <-chan RunnerEvent { return s.ch }
 func (s *fakeStream) Close() error {
 	if s.closed.CompareAndSwap(false, true) {
@@ -35,11 +35,11 @@ func (s *fakeStream) close()              { s.Close() } //nolint:unused
 // fakeRunnerClient returns a fixed stream and meta. subscribeBlock/metaBlock
 // let tests inject delays to verify lock-free I/O.
 type fakeRunnerClient struct {
-	mu          sync.Mutex
-	stream      *fakeStream
-	meta        RunnerMeta
+	mu           sync.Mutex
+	stream       *fakeStream
+	meta         RunnerMeta
 	subscribeErr error
-	metaErr     error
+	metaErr      error
 	// subscribeBlock is closed by the test when Subscribe may proceed.
 	subscribeBlock chan struct{}
 	// metaBlock is closed by the test when Meta may proceed.
@@ -94,6 +94,12 @@ type fakeDurable struct {
 	registered []centralstore.RunnerRegistration
 	// applied records all ApplyRunnerObservation calls.
 	applied []centralstore.RunnerObservation
+
+	// listSessions backs ListSessions for convergence tests.
+	listSessions func() ([]centralstore.Session, error)
+	// sweepResult backs SweepDeadSessions; swept records its calls.
+	sweepResult func([]centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error)
+	swept       [][]centralstore.SessionID
 }
 
 func newFakeDurable(version centralstore.RowVersion) *fakeDurable {
@@ -128,6 +134,25 @@ func (d *fakeDurable) ApplyRunnerObservation(ctx context.Context, obs centralsto
 	return d.applyResult(obs)
 }
 
+func (d *fakeDurable) ListSessions(ctx context.Context) ([]centralstore.Session, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.listSessions == nil {
+		return nil, nil
+	}
+	return d.listSessions()
+}
+
+func (d *fakeDurable) SweepDeadSessions(ctx context.Context, candidates []centralstore.SessionID, at centralstore.UnixMillis) (centralstore.MutationResult, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.swept = append(d.swept, append([]centralstore.SessionID(nil), candidates...))
+	if d.sweepResult == nil {
+		return centralstore.MutationResult{Changed: len(candidates) > 0, SessionsDirty: len(candidates) > 0}, nil
+	}
+	return d.sweepResult(candidates, at)
+}
+
 // fakeErrorSink collects reported errors.
 type fakeErrorSink struct {
 	mu   sync.Mutex
@@ -156,9 +181,9 @@ func (s *fakeErrorSink) last() error {
 // fakeDirtySink collects committed outcomes. It can optionally block until
 // unblocked, enabling re-entry and blocking tests.
 type fakeDirtySink struct {
-	mu       sync.Mutex
-	results  []centralstore.MutationResult
-	block    chan struct{} // if non-nil, Committed blocks until closed
+	mu      sync.Mutex
+	results []centralstore.MutationResult
+	block   chan struct{} // if non-nil, Committed blocks until closed
 }
 
 func (s *fakeDirtySink) Committed(_ context.Context, r centralstore.MutationResult) {
@@ -390,7 +415,6 @@ func TestStaleCloseDoesNotRemoveCurrentGeneration(t *testing.T) {
 	}
 }
 
-
 // scheduledDurable is a Durable whose behavior is fully test-controlled,
 // used for deterministic replacement schedules.
 type scheduledDurable struct {
@@ -403,6 +427,12 @@ func (d *scheduledDurable) RegisterRunner(_ context.Context, reg centralstore.Ru
 }
 func (d *scheduledDurable) ApplyRunnerObservation(_ context.Context, obs centralstore.RunnerObservation) (centralstore.MutationResult, error) {
 	return d.apply(obs)
+}
+func (d *scheduledDurable) ListSessions(context.Context) ([]centralstore.Session, error) {
+	return nil, nil
+}
+func (d *scheduledDurable) SweepDeadSessions(context.Context, []centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error) {
+	return centralstore.MutationResult{}, nil
 }
 
 // TestReplacementFencesInFlightOldApply forces the HIGH-severity schedule
