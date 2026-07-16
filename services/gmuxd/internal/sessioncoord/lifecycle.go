@@ -200,6 +200,7 @@ func (c *Coordinator) ensureDurableExit(ctx context.Context, id centralstore.Ses
 		c.mu.Unlock()
 		if err == nil {
 			c.publish(ctx, result)
+			c.emitOutcomes(ctx, id)
 			return nil
 		}
 		if errors.Is(err, centralstore.ErrSessionNotFound) {

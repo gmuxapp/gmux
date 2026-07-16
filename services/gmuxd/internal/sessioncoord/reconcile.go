@@ -348,5 +348,6 @@ func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, 
 	for _, r := range outcomes {
 		c.publish(ctx, r)
 	}
+	c.emitOutcomes(ctx, removed...)
 	return removed, verdictsChanged, nil
 }

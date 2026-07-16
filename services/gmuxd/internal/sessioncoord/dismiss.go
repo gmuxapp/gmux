@@ -95,6 +95,7 @@ func (c *Coordinator) Dismiss(ctx context.Context, root centralstore.SessionID) 
 	// Publish the committed outcome outside the mutex, same as every other
 	// lifecycle operation.
 	c.publish(ctx, result)
+	c.emitOutcomes(ctx, dismissed...)
 	return dismissed, nil
 }
 
@@ -140,5 +141,6 @@ func (c *Coordinator) Remove(ctx context.Context, id centralstore.SessionID, obs
 		return err
 	}
 	c.publish(ctx, result)
+	c.emitOutcomes(ctx, id)
 	return nil
 }

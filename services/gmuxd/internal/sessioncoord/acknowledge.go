@@ -51,6 +51,7 @@ func (c *Coordinator) AcknowledgeDead(ctx context.Context, id centralstore.Sessi
 		c.mu.Unlock()
 		if err == nil {
 			c.publish(ctx, result)
+			c.emitOutcomes(ctx, id)
 			return nil
 		}
 		if errors.Is(err, centralstore.ErrSessionNotFound) {

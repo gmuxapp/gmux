@@ -66,6 +66,9 @@ type Durable interface {
 	RemoveSessionAtVersion(context.Context, centralstore.SessionID, centralstore.RowVersion) (centralstore.MutationResult, error)
 }
 
+// The production store satisfies the coordinator's durable seam.
+var _ Durable = (*centralstore.Store)(nil)
+
 // DirtySink receives committed outcomes only. It is always called after the
 // store transaction has returned and without any coordinator lock held. A
 // sink that blocks delays later lifecycle transitions; a re-entrant sink (one
@@ -169,6 +172,10 @@ type Coordinator struct {
 	// called immediately before Dismiss attempts the lifecycle mutex, letting
 	// serialization tests deterministically observe "blocked at the mutex".
 	beforeDismissLock func()
+
+	// outcomes is the post-commit outcome bus (see outcomes.go). It has its
+	// own lock; publishing never runs under the lifecycle mutex.
+	outcomes outcomeBus
 
 	// Startup convergence barrier state (see convergence.go). Guarded by mu.
 	convergeCandidates map[centralstore.SessionID]struct{}
@@ -494,6 +501,15 @@ loop:
 	// Publish committed outcome outside the mutex so a blocking or
 	// re-entrant dirty sink cannot stall lifecycle transitions.
 	c.publish(ctx, outcome)
+	session.ID = id // the store echoes it; make the outcome self-describing even for sparse fakes
+	c.emitUpserted(session)
+	if len(reg.Evict) > 0 {
+		evicted := make([]centralstore.SessionID, len(reg.Evict))
+		for i, ev := range reg.Evict {
+			evicted[i] = ev.ID
+		}
+		c.emitOutcomes(ctx, evicted...)
+	}
 	return runtime, nil
 }
 
@@ -687,6 +703,9 @@ func (c *Coordinator) apply(ctx context.Context, id centralstore.SessionID, gene
 		// level-triggered, making publication of a committed outcome always
 		// safe, and it must not depend on the replacement's own publish.
 		c.publish(ctx, result)
+		if result.Changed {
+			c.emitOutcomes(ctx, id)
+		}
 		return
 	}
 
@@ -708,6 +727,9 @@ func (c *Coordinator) apply(ctx context.Context, id centralstore.SessionID, gene
 	// Publish outside all locks so a blocking or re-entrant sink cannot
 	// stall the coordinator or deadlock.
 	c.publish(ctx, result)
+	if result.Changed {
+		c.emitOutcomes(ctx, id)
+	}
 }
 
 // invalidateVerdict clears a reconciliation verdict and, while a reconcile

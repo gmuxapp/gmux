@@ -95,6 +95,9 @@ func (c *Coordinator) FinishConvergence(ctx context.Context, at centralstore.Uni
 	c.mu.Unlock()
 
 	c.publish(ctx, result)
+	if result.Changed {
+		c.emitOutcomes(ctx, sweep...)
+	}
 	return result, nil
 }
 
