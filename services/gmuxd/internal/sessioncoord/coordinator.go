@@ -56,6 +56,10 @@ type Durable interface {
 	SweepDeadSessions(context.Context, []centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error)
 	// AcknowledgeDeadSession backs AcknowledgeDead (see acknowledge.go).
 	AcknowledgeDeadSession(context.Context, centralstore.SessionID, centralstore.RowVersion) (centralstore.MutationResult, error)
+	// ReplaceProjectCatalogAndRematch and PlaceUnplacedSessions back the
+	// catalog-replacement operation (see catalog.go).
+	ReplaceProjectCatalogAndRematch(context.Context, []centralstore.ProjectEntrySpec, []centralstore.LocalPeerMatchInput, centralstore.UnixMillis) (centralstore.ProjectCatalog, centralstore.MutationResult, error)
+	PlaceUnplacedSessions(context.Context, []centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error)
 	// DismissSessionTree and RemoveSessionAtVersion back the dismissal and
 	// hard-deletion coordinator operations (see dismiss.go).
 	DismissSessionTree(context.Context, centralstore.SessionID, centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error)
@@ -141,6 +145,10 @@ type Coordinator struct {
 	// reconciler/reconcileBatch/reconcileInFlight/verdicts back adapter
 	// reconciliation (reconcile.go). verdicts is guarded by mu; it is
 	// runtime-only (never persisted) and re-populated by probing.
+	// localPeerInputs backs ReplaceCatalog's point-in-time Local-peer match
+	// input snapshot (see catalog.go).
+	localPeerInputs LocalPeerInputSource
+
 	reconciler        AdapterReconciler
 	reconcileBatch    int
 	reconcileInFlight bool

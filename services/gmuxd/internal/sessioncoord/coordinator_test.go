@@ -111,6 +111,14 @@ type fakeDurable struct {
 	// ackResult backs AcknowledgeDeadSession; ackCalls records its calls.
 	ackResult func(centralstore.SessionID, centralstore.RowVersion) (centralstore.MutationResult, error)
 	ackCalls  []centralstore.RowVersion
+	// replaceCatalogResult backs ReplaceProjectCatalogAndRematch;
+	// replaceCatalogCalls records the peer inputs of each call.
+	replaceCatalogResult func([]centralstore.ProjectEntrySpec, []centralstore.LocalPeerMatchInput, centralstore.UnixMillis) (centralstore.ProjectCatalog, centralstore.MutationResult, error)
+	replaceCatalogCalls  [][]centralstore.LocalPeerMatchInput
+	// placeUnplacedResult backs PlaceUnplacedSessions; placeUnplacedCalls
+	// records the candidate sets of each call.
+	placeUnplacedResult func([]centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error)
+	placeUnplacedCalls  [][]centralstore.SessionID
 }
 
 func newFakeDurable(version centralstore.RowVersion) *fakeDurable {
@@ -162,6 +170,26 @@ func (d *fakeDurable) AcknowledgeDeadSession(ctx context.Context, id centralstor
 		return centralstore.MutationResult{Changed: true, SessionsDirty: true, SessionVersion: observed + 1}, nil
 	}
 	return d.ackResult(id, observed)
+}
+
+func (d *fakeDurable) ReplaceProjectCatalogAndRematch(ctx context.Context, specs []centralstore.ProjectEntrySpec, peers []centralstore.LocalPeerMatchInput, at centralstore.UnixMillis) (centralstore.ProjectCatalog, centralstore.MutationResult, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.replaceCatalogCalls = append(d.replaceCatalogCalls, peers)
+	if d.replaceCatalogResult == nil {
+		return centralstore.ProjectCatalog{}, centralstore.MutationResult{Changed: true, SessionsDirty: true, WorldDirty: true}, nil
+	}
+	return d.replaceCatalogResult(specs, peers, at)
+}
+
+func (d *fakeDurable) PlaceUnplacedSessions(ctx context.Context, ids []centralstore.SessionID, at centralstore.UnixMillis) (centralstore.MutationResult, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.placeUnplacedCalls = append(d.placeUnplacedCalls, append([]centralstore.SessionID(nil), ids...))
+	if d.placeUnplacedResult == nil {
+		return centralstore.MutationResult{}, nil
+	}
+	return d.placeUnplacedResult(ids, at)
 }
 
 func (d *fakeDurable) ListSessions(ctx context.Context) ([]centralstore.Session, error) {
@@ -499,6 +527,12 @@ func (d *scheduledDurable) SweepDeadSessions(context.Context, []centralstore.Ses
 	return centralstore.MutationResult{}, nil
 }
 func (d *scheduledDurable) AcknowledgeDeadSession(context.Context, centralstore.SessionID, centralstore.RowVersion) (centralstore.MutationResult, error) {
+	return centralstore.MutationResult{}, nil
+}
+func (d *scheduledDurable) ReplaceProjectCatalogAndRematch(context.Context, []centralstore.ProjectEntrySpec, []centralstore.LocalPeerMatchInput, centralstore.UnixMillis) (centralstore.ProjectCatalog, centralstore.MutationResult, error) {
+	return nil, centralstore.MutationResult{}, nil
+}
+func (d *scheduledDurable) PlaceUnplacedSessions(context.Context, []centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error) {
 	return centralstore.MutationResult{}, nil
 }
 func (d *scheduledDurable) DismissSessionTree(context.Context, centralstore.SessionID, centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error) {

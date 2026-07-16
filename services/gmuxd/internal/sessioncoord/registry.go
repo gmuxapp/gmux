@@ -147,6 +147,25 @@ func (r *Registry) Snapshot() []Runtime {
 	return out
 }
 
+// liveSessionIDs returns the IDs of entries with an installed, non-fenced
+// generation, sorted. Unlike Snapshot it excludes superseded (fenced)
+// entries — a fenced entry is mid-replacement and must not be treated as
+// live by callers that act on liveness (e.g. ReplaceCatalog's auto-assign
+// pass).
+func (r *Registry) liveSessionIDs() []centralstore.SessionID {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]centralstore.SessionID, 0, len(r.entries))
+	for id, e := range r.entries {
+		if e.superseded {
+			continue
+		}
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
 func closeEntry(e registryEntry) {
 	if e.cancel != nil {
 		e.cancel()

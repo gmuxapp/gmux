@@ -190,6 +190,12 @@ func (d *gateDurable) SweepDeadSessions(context.Context, []centralstore.SessionI
 func (d *gateDurable) AcknowledgeDeadSession(context.Context, centralstore.SessionID, centralstore.RowVersion) (centralstore.MutationResult, error) {
 	return centralstore.MutationResult{}, nil
 }
+func (d *gateDurable) ReplaceProjectCatalogAndRematch(context.Context, []centralstore.ProjectEntrySpec, []centralstore.LocalPeerMatchInput, centralstore.UnixMillis) (centralstore.ProjectCatalog, centralstore.MutationResult, error) {
+	return nil, centralstore.MutationResult{}, nil
+}
+func (d *gateDurable) PlaceUnplacedSessions(context.Context, []centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error) {
+	return centralstore.MutationResult{}, nil
+}
 func (d *gateDurable) DismissSessionTree(_ context.Context, root centralstore.SessionID, at centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error) {
 	return d.dismiss(root, at)
 }
