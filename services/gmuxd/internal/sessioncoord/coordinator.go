@@ -35,6 +35,10 @@ type Durable interface {
 	// barrier (see convergence.go).
 	ListSessions(context.Context) ([]centralstore.Session, error)
 	SweepDeadSessions(context.Context, []centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error)
+	// DismissSessionTree and RemoveSessionAtVersion back the dismissal and
+	// hard-deletion coordinator operations (see dismiss.go).
+	DismissSessionTree(context.Context, centralstore.SessionID, centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error)
+	RemoveSessionAtVersion(context.Context, centralstore.SessionID, centralstore.RowVersion) (centralstore.MutationResult, error)
 }
 
 // DirtySink receives committed outcomes only. It is always called after the
@@ -102,6 +106,11 @@ type Coordinator struct {
 	// concurrent lifecycle op for the same session fails fast instead of
 	// double-spawning or double-killing. See lifecycle.go.
 	ops map[centralstore.SessionID]string
+
+	// beforeDismissLock is a test-only synchronization seam: when set, it is
+	// called immediately before Dismiss attempts the lifecycle mutex, letting
+	// serialization tests deterministically observe "blocked at the mutex".
+	beforeDismissLock func()
 
 	// Startup convergence barrier state (see convergence.go). Guarded by mu.
 	convergeCandidates map[centralstore.SessionID]struct{}

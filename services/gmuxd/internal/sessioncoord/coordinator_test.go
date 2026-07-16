@@ -102,6 +102,12 @@ type fakeDurable struct {
 	// sweepResult backs SweepDeadSessions; swept records its calls.
 	sweepResult func([]centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error)
 	swept       [][]centralstore.SessionID
+	// dismissResult backs DismissSessionTree; dismissCalls records its calls.
+	dismissResult func(centralstore.SessionID, centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error)
+	dismissCalls  []centralstore.SessionID
+	// removeResult backs RemoveSessionAtVersion; removeCalls records its calls.
+	removeResult func(centralstore.SessionID, centralstore.RowVersion) (centralstore.MutationResult, error)
+	removeCalls  []centralstore.SessionID
 }
 
 func newFakeDurable(version centralstore.RowVersion) *fakeDurable {
@@ -162,6 +168,26 @@ func (d *fakeDurable) SweepDeadSessions(ctx context.Context, candidates []centra
 		return centralstore.MutationResult{Changed: len(candidates) > 0, SessionsDirty: len(candidates) > 0}, nil
 	}
 	return d.sweepResult(candidates, at)
+}
+
+func (d *fakeDurable) DismissSessionTree(ctx context.Context, root centralstore.SessionID, at centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.dismissCalls = append(d.dismissCalls, root)
+	if d.dismissResult == nil {
+		return []centralstore.SessionID{root}, centralstore.MutationResult{Changed: true, SessionsDirty: true, WorldDirty: true}, nil
+	}
+	return d.dismissResult(root, at)
+}
+
+func (d *fakeDurable) RemoveSessionAtVersion(ctx context.Context, id centralstore.SessionID, observed centralstore.RowVersion) (centralstore.MutationResult, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.removeCalls = append(d.removeCalls, id)
+	if d.removeResult == nil {
+		return centralstore.MutationResult{Changed: true, SessionsDirty: true, WorldDirty: true}, nil
+	}
+	return d.removeResult(id, observed)
 }
 
 // fakeErrorSink collects reported errors.
@@ -450,6 +476,12 @@ func (d *scheduledDurable) ListSessions(context.Context) ([]centralstore.Session
 	return nil, nil
 }
 func (d *scheduledDurable) SweepDeadSessions(context.Context, []centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error) {
+	return centralstore.MutationResult{}, nil
+}
+func (d *scheduledDurable) DismissSessionTree(context.Context, centralstore.SessionID, centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error) {
+	return nil, centralstore.MutationResult{}, nil
+}
+func (d *scheduledDurable) RemoveSessionAtVersion(context.Context, centralstore.SessionID, centralstore.RowVersion) (centralstore.MutationResult, error) {
 	return centralstore.MutationResult{}, nil
 }
 
