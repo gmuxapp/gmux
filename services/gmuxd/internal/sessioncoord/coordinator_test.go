@@ -1381,3 +1381,92 @@ func TestMetaDeadRegistrationNotSubscribed(t *testing.T) {
 		t.Fatal("expected the stream to be closed")
 	}
 }
+
+// TestExitApplyStaleRetryBudget verifies that an exit-carrying event gets the
+// ensureDurableExit-sized stale-retry budget (up to three retries) instead of
+// the ordinary single retry: three stale responses followed by success still
+// land the exit durably with no error reported.
+func TestExitApplyStaleRetryBudget(t *testing.T) {
+	id := sid(203)
+	meta := RunnerMeta{
+		Registration: centralstore.RunnerRegistration{ID: id, Alive: true},
+	}
+	client := newFakeClient(meta)
+	errSink := &fakeErrorSink{}
+	dur := newFakeDurable(0)
+
+	var callCount atomic.Int32
+	dur.applyResult = func(obs centralstore.RunnerObservation) (centralstore.MutationResult, error) {
+		n := callCount.Add(1)
+		if n <= 3 {
+			return centralstore.MutationResult{SessionVersion: obs.ObservedVersion + 1}, centralstore.ErrStaleVersion
+		}
+		return centralstore.MutationResult{Changed: true, SessionsDirty: true, SessionVersion: obs.ObservedVersion + 1}, nil
+	}
+	sink := &fakeDirtySink{}
+	coord := newCoord(client, dur, sink, errSink)
+
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep203"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	client.stream.send(RunnerEvent{ObservedAt: ts(100), Alive: aliveFalse, Facts: centralstore.RunnerFacts{ExitedAt: exitedAt(100)}})
+
+	// The successful apply removes the entry (exit); wait for that.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if callCount.Load() >= 4 && len(coord.Registry().Snapshot()) == 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := callCount.Load(); n != 4 {
+		t.Fatalf("expected 4 apply calls (3 stale retries + success), got %d", n)
+	}
+	if errSink.count() != 0 {
+		t.Fatalf("unexpected error reported: %v", errSink.last())
+	}
+	if len(coord.Registry().Snapshot()) != 0 {
+		t.Fatal("expected entry removed after durable exit")
+	}
+}
+
+// TestExitApplyStaleRetryExhausted verifies that a permanently stale
+// exit-carrying apply gives up after three retries and reports the failure.
+func TestExitApplyStaleRetryExhausted(t *testing.T) {
+	id := sid(204)
+	meta := RunnerMeta{
+		Registration: centralstore.RunnerRegistration{ID: id, Alive: true},
+	}
+	client := newFakeClient(meta)
+	errSink := &fakeErrorSink{}
+	dur := newFakeDurable(0)
+	var callCount atomic.Int32
+	dur.applyResult = func(obs centralstore.RunnerObservation) (centralstore.MutationResult, error) {
+		callCount.Add(1)
+		return centralstore.MutationResult{SessionVersion: obs.ObservedVersion + 1}, centralstore.ErrStaleVersion
+	}
+	coord := newCoord(client, dur, &fakeDirtySink{}, errSink)
+
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep204"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	client.stream.send(RunnerEvent{ObservedAt: ts(100), Alive: aliveFalse, Facts: centralstore.RunnerFacts{ExitedAt: exitedAt(100)}})
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if errSink.count() > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if errSink.count() == 0 {
+		t.Fatal("expected error after exhausted exit-apply retries")
+	}
+	if !errors.Is(errSink.last(), centralstore.ErrStaleVersion) {
+		t.Fatalf("expected ErrStaleVersion in reported error, got %v", errSink.last())
+	}
+	if n := callCount.Load(); n != 4 {
+		t.Fatalf("expected 4 apply calls (initial + 3 retries), got %d", n)
+	}
+}

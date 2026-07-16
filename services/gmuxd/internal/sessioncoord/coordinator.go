@@ -560,9 +560,14 @@ func (c *Coordinator) drain(ctx context.Context, id centralstore.SessionID, gene
 
 // apply persists one ordered event for the given generation. It does not hold
 // the lifecycle mutex across the DB call or the dirty sink. On ErrStaleVersion
-// it advances the local row-version token and retries once. Malformed exit
-// events (Alive=false without ExitedAt) are reported but still remove liveness
-// so the registry cannot remain stuck.
+// it advances the local row-version token and retries: once for ordinary
+// events, and up to three times for exit-carrying events (an exit fact or a
+// death), mirroring ensureDurableExit's budget — a generation's death must
+// always land durably, and version churn alone must not drop it. Retry
+// exhaustion is reported to the ErrorSink; the row remains repairable by
+// Stop's ensureDurableExit or the startup sweep. Malformed exit events
+// (Alive=false without ExitedAt) are reported but still remove liveness so
+// the registry cannot remain stuck.
 func (c *Coordinator) apply(ctx context.Context, id centralstore.SessionID, generation uint64, ev RunnerEvent) {
 	// Read the current RowVersion under the registry's own lock. No
 	// lifecycle mutex needed on the fast path.
@@ -597,23 +602,25 @@ func (c *Coordinator) apply(ctx context.Context, id centralstore.SessionID, gene
 		Facts:           ev.Facts,
 	}
 
+	staleRetries := 1
+	if ev.Facts.ExitedAt.Set != nil || (ev.Alive != nil && !*ev.Alive) {
+		staleRetries = 3
+	}
 	result, err := c.durable.ApplyRunnerObservation(ctx, obs)
+	for retry := 0; err != nil && errors.Is(err, centralstore.ErrStaleVersion) && result.SessionVersion > 0 && retry < staleRetries; retry++ {
+		// The store returned the current version. Advance the local token and
+		// retry with the refreshed version.
+		c.registry.advance(id, generation, result.SessionVersion)
+		e2, ok2 := c.registry.current(id)
+		if !ok2 || e2.Generation != generation {
+			return // generation replaced while retrying
+		}
+		obs.ObservedVersion = e2.RowVersion
+		result, err = c.durable.ApplyRunnerObservation(ctx, obs)
+	}
 	if err != nil {
-		if errors.Is(err, centralstore.ErrStaleVersion) && result.SessionVersion > 0 {
-			// The store returned the current version. Advance the local
-			// token and retry once with the refreshed version.
-			c.registry.advance(id, generation, result.SessionVersion)
-			if e2, ok2 := c.registry.current(id); ok2 && e2.Generation == generation {
-				obs.ObservedVersion = e2.RowVersion
-				result, err = c.durable.ApplyRunnerObservation(ctx, obs)
-			} else {
-				return // generation replaced while retrying
-			}
-		}
-		if err != nil {
-			c.reportError(ctx, fmt.Errorf("sessioncoord: observation failed for session %s gen %d: %w", id, generation, err))
-			return
-		}
+		c.reportError(ctx, fmt.Errorf("sessioncoord: observation failed for session %s gen %d: %w", id, generation, err))
+		return
 	}
 
 	if !c.registry.advance(id, generation, result.SessionVersion) {
