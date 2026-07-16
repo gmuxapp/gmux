@@ -94,6 +94,56 @@ type VerdictSourceFunc func() map[centralstore.SessionID]ResumeVerdict
 
 func (f VerdictSourceFunc) ResumeVerdicts() map[centralstore.SessionID]ResumeVerdict { return f() }
 
+// LocalPeerSessionKey identifies one Local-peer session projection:
+// namespaced by the peer key because peer session IDs are only unique per
+// peer.
+type LocalPeerSessionKey struct {
+	PeerKey   centralstore.PeerKey
+	SessionID string
+}
+
+// PeerWorld is one point-in-time copy of every runtime/peer-manager input
+// to the world payload. Field-for-field it mirrors production
+// snapshot.WorldPayload (internal/snapshot/snapshot.go) minus the durable
+// Projects: peers/health are runtime status, launchers are startup adapter
+// discovery (pure derived config — deliberately not SQLite state), and
+// peer projects/discovered are cached network-peer projections re-broadcast
+// verbatim (ADR 0002/0025 host-authoritative discovery). The concrete types
+// live in peering/cmd and must not be imported here, hence `any`.
+type PeerWorld struct {
+	Peers           any
+	Health          any
+	Launchers       any
+	DefaultLauncher any
+	PeerProjects    any
+	PeerDiscovered  any
+
+	// LocalPeerSessions holds the currently CONNECTED Local-peer session
+	// projections. Presence in this map is what "connected" means for the
+	// placement join: a durable Local-peer placement row whose key is
+	// absent is dropped from the payload (parent-owned placement is
+	// metadata, never an offline replica of the peer's snapshot).
+	LocalPeerSessions map[LocalPeerSessionKey]any
+}
+
+// PeerSource provides a point-in-time copy of the peer-manager world
+// inputs. Implementations must not perform I/O; the composer calls it once
+// per projects-kind pass.
+//
+// Same eventual-consistency contract as RuntimeSource: the composer only
+// re-reads this view during a pass, so the peer manager MUST follow every
+// connect, disconnect, and cache update with MarkDirty(false, true) (or an
+// Invalidate carrying WorldDirty). A peer change without a subsequent dirty
+// signal would leave the last emitted world payload stale forever.
+type PeerSource interface {
+	PeerWorld() PeerWorld
+}
+
+// PeerSourceFunc adapts a function to PeerSource.
+type PeerSourceFunc func() PeerWorld
+
+func (f PeerSourceFunc) PeerWorld() PeerWorld { return f() }
+
 // SessionRow is one composed session: the durable projection plus the
 // runtime overlay.
 type SessionRow struct {
@@ -116,12 +166,33 @@ type SessionsPayload struct {
 	Sessions []SessionRow
 }
 
-// ProjectsPayload is the composed projects-kind payload (the local durable
-// input to the production snapshot.world; peers/health/launchers are runtime
-// projections merged at cutover).
+// LocalPeerPlacementRow is one durable parent-owned Local-peer placement
+// joined onto its live session projection. Only placements with a
+// currently connected session are emitted.
+type LocalPeerPlacementRow struct {
+	centralstore.LocalPeerPlacementView
+
+	// Session is the peer manager's ephemeral projection for this subject,
+	// passed through verbatim (peer-owned facts are never rematched or
+	// persisted locally).
+	Session any
+}
+
+// ProjectsPayload is the composed world-kind payload: the durable catalog
+// and Local-peer placement join, plus the runtime/peer-manager overlay
+// supplied by the PeerSource. With a nil PeerSource the overlay fields are
+// zero and every Local-peer placement row is dropped (no connected
+// sessions), which is the conservative reading of the join rule.
 type ProjectsPayload struct {
 	Projects            centralstore.ProjectCatalog
-	LocalPeerPlacements []centralstore.LocalPeerPlacementView
+	LocalPeerPlacements []LocalPeerPlacementRow
+
+	Peers           any
+	Health          any
+	Launchers       any
+	DefaultLauncher any
+	PeerProjects    any
+	PeerDiscovered  any
 }
 
 // Batch is one composition result. When a cross-kind invalidation triggered
@@ -156,6 +227,7 @@ type Composer struct {
 	reader   Reader
 	runtime  RuntimeSource
 	verdicts VerdictSource
+	peers    PeerSource
 	sink     Sink
 	errSink  ErrorSink
 	// retryDelay throttles retries after a composition failure so a
@@ -183,6 +255,11 @@ func WithRetryDelay(d time.Duration) Option { return func(c *Composer) { c.retry
 // WithVerdictSource installs the adapter-reconciliation verdict overlay for
 // dead rows' Resumable derivation.
 func WithVerdictSource(s VerdictSource) Option { return func(c *Composer) { c.verdicts = s } }
+
+// WithPeerSource installs the peer-manager world overlay: connected peers,
+// health, launchers, cached peer projections, and the connected Local-peer
+// session projections the durable placement rows are joined onto.
+func WithPeerSource(s PeerSource) Option { return func(c *Composer) { c.peers = s } }
 
 func New(reader Reader, runtime RuntimeSource, sink Sink, opts ...Option) *Composer {
 	c := &Composer{
@@ -289,11 +366,15 @@ func (c *Composer) takeDirty() (sessions, projects bool) {
 func (c *Composer) compose(ctx context.Context, sessions, projects bool) (Batch, error) {
 	var runtime map[centralstore.SessionID]RuntimeFacts
 	var verdicts map[centralstore.SessionID]ResumeVerdict
+	var peerWorld PeerWorld
 	if sessions && c.runtime != nil {
 		runtime = c.runtime.RuntimeFacts()
 	}
 	if sessions && c.verdicts != nil {
 		verdicts = c.verdicts.ResumeVerdicts()
+	}
+	if projects && c.peers != nil {
+		peerWorld = c.peers.PeerWorld()
 	}
 	snap, err := c.reader.ReadSnapshot(ctx, centralstore.SnapshotQuery{
 		IncludeSessions: sessions,
@@ -319,9 +400,27 @@ func (c *Composer) compose(ctx context.Context, sessions, projects bool) (Batch,
 		out.Sessions = &SessionsPayload{Sessions: rows}
 	}
 	if projects {
+		// Join durable Local-peer placement rows onto the point-in-time peer
+		// projections: a row without a connected session is not emitted.
+		// Placement is parent-owned metadata; the peer's session facts stay
+		// connection-owned (ADR 0025/0026 §7).
+		joined := make([]LocalPeerPlacementRow, 0, len(snap.LocalPeerPlacements))
+		for _, view := range snap.LocalPeerPlacements {
+			session, connected := peerWorld.LocalPeerSessions[LocalPeerSessionKey{PeerKey: view.PeerKey, SessionID: view.SessionID}]
+			if !connected {
+				continue
+			}
+			joined = append(joined, LocalPeerPlacementRow{LocalPeerPlacementView: view, Session: session})
+		}
 		out.Projects = &ProjectsPayload{
 			Projects:            snap.Projects,
-			LocalPeerPlacements: snap.LocalPeerPlacements,
+			LocalPeerPlacements: joined,
+			Peers:               peerWorld.Peers,
+			Health:              peerWorld.Health,
+			Launchers:           peerWorld.Launchers,
+			DefaultLauncher:     peerWorld.DefaultLauncher,
+			PeerProjects:        peerWorld.PeerProjects,
+			PeerDiscovered:      peerWorld.PeerDiscovered,
 		}
 	}
 	return out, nil
