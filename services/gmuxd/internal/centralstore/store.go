@@ -100,8 +100,19 @@ func Open(ctx context.Context, dir string) (*Store, error) {
 	if err := migrate(ctx, database, migrations); err != nil {
 		return closeOnError(err)
 	}
+	// Post-migration integrity gate (ADR 0026 §10): a corrupt page that
+	// migration didn't touch must still stop startup fail-closed.
+	if err := quickCheck(ctx, database); err != nil {
+		return closeOnError(err)
+	}
 	return &Store{database: database, queries: db.New(database)}, nil
 }
+
+// gooseVersionTable is goose's migration-bookkeeping table. The provider
+// below uses goose's default name; Verify's read-only schema sanity read
+// queries the same table through this constant — if the provider is ever
+// configured with a custom table name, change both here.
+const gooseVersionTable = "goose_db_version"
 
 func migrate(ctx context.Context, database *sql.DB, files fs.FS) error {
 	provider, err := goose.NewProvider(goose.DialectSQLite3, database, files)
