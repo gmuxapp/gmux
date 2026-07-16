@@ -260,6 +260,32 @@ body {
   content: '';
   flex: 0 0 6px;
 }
+/* Touch: the header sits at the bottom (thumb zone), so the list's top
+ * items are the hardest to reach. Grow the scrollable top spacer into a
+ * blank "thumb reach" gap so the first item never hugs the top edge —
+ * reachable at rest, and it just scrolls away once you start browsing
+ * (costs nothing mid-scroll). Deliberately undecorated: on mobile the
+ * chrome is all at the bottom, so top whitespace reads as balance.
+ *
+ * Sized so the *shown* area (first item → bottom header) is ~350px
+ * rather than a fraction of the screen — the gap is "whatever's left
+ * after reserving the shown area at the bottom". Shown never drops below
+ * 40% of the viewport, so on tall screens it grows instead of leaving an
+ * absurd gap. px keeps the 350 independent of device-pixel-ratio and
+ * font scaling; --app-height is the JS-measured, address-bar-aware
+ * viewport the drawer itself uses. The outer max() floors the gap so it
+ * shrinks (rather than going negative) on very short screens. */
+@media (pointer: coarse) {
+  .sidebar-scroll::before {
+    flex-basis: max(
+      8px,
+      calc(
+        var(--app-height, 100dvh) - var(--header-height)
+        - max(350px, var(--app-height, 100dvh) * 0.4)
+      )
+    );
+  }
+}
 
 /* ── Folder ── */
 
