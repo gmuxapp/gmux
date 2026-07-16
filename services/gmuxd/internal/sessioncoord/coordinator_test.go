@@ -1470,3 +1470,32 @@ func TestExitApplyStaleRetryExhausted(t *testing.T) {
 		t.Fatalf("expected 4 apply calls (initial + 3 retries), got %d", n)
 	}
 }
+
+// TestRegisterRejectsInvalidSessionID verifies that a runner reporting a
+// malformed session ID (a potential path-traversal vector — the ID becomes a
+// filesystem path segment) is rejected before any commit, fence, or registry
+// change, for every Register caller.
+func TestRegisterRejectsInvalidSessionID(t *testing.T) {
+	for _, bad := range []string{"", "no-prefix", "sess-", "sess-../../etc", "sess-a/b", "../sess-x"} {
+		meta := RunnerMeta{
+			Registration: centralstore.RunnerRegistration{ID: centralstore.SessionID(bad), Alive: true},
+		}
+		client := newFakeClient(meta)
+		dur := newFakeDurable(0)
+		coord := newCoord(client, dur, &fakeDirtySink{}, nil)
+
+		_, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep205"})
+		if !errors.Is(err, ErrInvalidSessionID) {
+			t.Fatalf("id %q: expected ErrInvalidSessionID, got %v", bad, err)
+		}
+		if len(dur.registered) != 0 {
+			t.Fatalf("id %q: RegisterRunner must not be called", bad)
+		}
+		if len(coord.Registry().Snapshot()) != 0 {
+			t.Fatalf("id %q: registry must stay empty", bad)
+		}
+		if !client.stream.closed.Load() {
+			t.Fatalf("id %q: expected the subscribed stream to be closed", bad)
+		}
+	}
+}

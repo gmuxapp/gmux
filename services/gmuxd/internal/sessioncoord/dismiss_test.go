@@ -28,7 +28,7 @@ func treeSessions(exitless ...centralstore.SessionID) []centralstore.Session {
 		}
 		return s
 	}
-	return []centralstore.Session{mk("p", ""), mk("c", "p"), mk("g", "c"), mk("x", "")}
+	return []centralstore.Session{mk("sess-p", ""), mk("sess-c", "sess-p"), mk("sess-g", "sess-c"), mk("sess-x", "")}
 }
 
 func newDismissCoord(t *testing.T, dur *fakeDurable, sink *fakeDirtySink) *Coordinator {
@@ -43,19 +43,19 @@ func TestDismissDeadSubtreeCommitsAndPublishes(t *testing.T) {
 	var gotAt centralstore.UnixMillis
 	dur.dismissResult = func(root centralstore.SessionID, at centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error) {
 		gotAt = at
-		return []centralstore.SessionID{"p", "c", "g"}, centralstore.MutationResult{Changed: true, SessionsDirty: true, WorldDirty: true}, nil
+		return []centralstore.SessionID{"sess-p", "sess-c", "sess-g"}, centralstore.MutationResult{Changed: true, SessionsDirty: true, WorldDirty: true}, nil
 	}
 	sink := &fakeDirtySink{}
 	coord := newDismissCoord(t, dur, sink)
 
-	dismissed, err := coord.Dismiss(context.Background(), "p")
+	dismissed, err := coord.Dismiss(context.Background(), "sess-p")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(dismissed, []centralstore.SessionID{"p", "c", "g"}) {
+	if !reflect.DeepEqual(dismissed, []centralstore.SessionID{"sess-p", "sess-c", "sess-g"}) {
 		t.Fatalf("dismissed=%v", dismissed)
 	}
-	if len(dur.dismissCalls) != 1 || dur.dismissCalls[0] != "p" || gotAt != 777 {
+	if len(dur.dismissCalls) != 1 || dur.dismissCalls[0] != "sess-p" || gotAt != 777 {
 		t.Fatalf("calls=%v at=%d", dur.dismissCalls, gotAt)
 	}
 	if sink.count() != 1 {
@@ -65,19 +65,19 @@ func TestDismissDeadSubtreeCommitsAndPublishes(t *testing.T) {
 
 func TestDismissBlockedByLiveSubtreeMember(t *testing.T) {
 	dur := newFakeDurable(0)
-	dur.listSessions = func() ([]centralstore.Session, error) { return treeSessions("g"), nil }
+	dur.listSessions = func() ([]centralstore.Session, error) { return treeSessions("sess-g"), nil }
 	sink := &fakeDirtySink{}
 	coord := newDismissCoord(t, dur, sink)
-	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: "g", Generation: 1}, dead: make(chan struct{})})
+	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: "sess-g", Generation: 1}, dead: make(chan struct{})})
 
-	if _, err := coord.Dismiss(context.Background(), "p"); !errors.Is(err, ErrSessionAlive) {
+	if _, err := coord.Dismiss(context.Background(), "sess-p"); !errors.Is(err, ErrSessionAlive) {
 		t.Fatalf("err=%v", err)
 	}
 	if len(dur.dismissCalls) != 0 || sink.count() != 0 {
 		t.Fatalf("blocked dismissal reached the store: calls=%v published=%d", dur.dismissCalls, sink.count())
 	}
 	// A live runner outside the subtree does not block.
-	if _, err := coord.Dismiss(context.Background(), "x"); err != nil {
+	if _, err := coord.Dismiss(context.Background(), "sess-x"); err != nil {
 		t.Fatalf("unrelated live runner blocked dismissal: %v", err)
 	}
 }
@@ -87,10 +87,10 @@ func TestDismissBlockedByInFlightSubtreeClaim(t *testing.T) {
 	dur.listSessions = func() ([]centralstore.Session, error) { return treeSessions(), nil }
 	coord := newDismissCoord(t, dur, &fakeDirtySink{})
 	coord.mu.Lock()
-	coord.ops["c"] = "resume"
+	coord.ops["sess-c"] = "resume"
 	coord.mu.Unlock()
 
-	_, err := coord.Dismiss(context.Background(), "p")
+	_, err := coord.Dismiss(context.Background(), "sess-p")
 	// ErrSubtreeBusy wraps ErrLifecycleOpInFlight: one sentinel suffices for
 	// UI busy-retry mapping, and errors.Is matches both.
 	if !errors.Is(err, ErrSubtreeBusy) || !errors.Is(err, ErrLifecycleOpInFlight) {
@@ -104,14 +104,14 @@ func TestDismissBlockedByInFlightSubtreeClaim(t *testing.T) {
 func TestDismissBlockedDuringConvergenceWindowForExitlessMember(t *testing.T) {
 	ctx := context.Background()
 	dur := newFakeDurable(0)
-	dur.listSessions = func() ([]centralstore.Session, error) { return treeSessions("c"), nil }
+	dur.listSessions = func() ([]centralstore.Session, error) { return treeSessions("sess-c"), nil }
 	sink := &fakeDirtySink{}
 	coord := newDismissCoord(t, dur, sink)
 	if err := coord.BeginConvergence(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := coord.Dismiss(ctx, "p"); !errors.Is(err, ErrConvergencePending) {
+	if _, err := coord.Dismiss(ctx, "sess-p"); !errors.Is(err, ErrConvergencePending) {
 		t.Fatalf("err=%v", err)
 	}
 	if len(dur.dismissCalls) != 0 {
@@ -119,15 +119,15 @@ func TestDismissBlockedDuringConvergenceWindowForExitlessMember(t *testing.T) {
 	}
 	// A fully exited subtree is dismissable even while the window is open.
 	dur.listSessions = func() ([]centralstore.Session, error) { return treeSessions(), nil }
-	if _, err := coord.Dismiss(ctx, "p"); err != nil {
+	if _, err := coord.Dismiss(ctx, "sess-p"); err != nil {
 		t.Fatalf("exited subtree blocked during window: %v", err)
 	}
 	// After the barrier closes, the exit-less member no longer blocks.
-	dur.listSessions = func() ([]centralstore.Session, error) { return treeSessions("c"), nil }
+	dur.listSessions = func() ([]centralstore.Session, error) { return treeSessions("sess-c"), nil }
 	if _, err := coord.FinishConvergence(ctx, 500); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := coord.Dismiss(ctx, "p"); err != nil {
+	if _, err := coord.Dismiss(ctx, "sess-p"); err != nil {
 		t.Fatalf("dismissal blocked after barrier: %v", err)
 	}
 }
@@ -146,7 +146,7 @@ func TestDismissUnknownRootAndDurableFailure(t *testing.T) {
 	dur.dismissResult = func(centralstore.SessionID, centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error) {
 		return nil, centralstore.MutationResult{}, boom
 	}
-	if _, err := coord.Dismiss(ctx, "p"); !errors.Is(err, boom) {
+	if _, err := coord.Dismiss(ctx, "sess-p"); !errors.Is(err, boom) {
 		t.Fatalf("err=%v", err)
 	}
 	if sink.count() != 0 {
@@ -203,9 +203,9 @@ func TestDismissSerializesWithRegisterCommitWindow(t *testing.T) {
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 		listed:  make(chan struct{}),
-		list:    func() ([]centralstore.Session, error) { return treeSessions("c"), nil },
+		list:    func() ([]centralstore.Session, error) { return treeSessions("sess-c"), nil },
 	}
-	client := newFakeClient(RunnerMeta{Registration: centralstore.RunnerRegistration{ID: "c", Alive: true}})
+	client := newFakeClient(RunnerMeta{Registration: centralstore.RunnerRegistration{ID: "sess-c", Alive: true}})
 	coord := New(nil, client, dur, &fakeDirtySink{}, nil,
 		WithClock(func() centralstore.UnixMillis { return 777 }))
 	atMutex := make(chan struct{})
@@ -220,7 +220,7 @@ func TestDismissSerializesWithRegisterCommitWindow(t *testing.T) {
 
 	dismissErr := make(chan error, 1)
 	go func() {
-		_, err := coord.Dismiss(context.Background(), "p")
+		_, err := coord.Dismiss(context.Background(), "sess-p")
 		dismissErr <- err
 	}()
 
@@ -256,10 +256,10 @@ func TestRemoveCommitsAndPublishes(t *testing.T) {
 	sink := &fakeDirtySink{}
 	coord := newDismissCoord(t, dur, sink)
 
-	if err := coord.Remove(context.Background(), "p", 4); err != nil {
+	if err := coord.Remove(context.Background(), "sess-p", 4); err != nil {
 		t.Fatal(err)
 	}
-	if len(dur.removeCalls) != 1 || dur.removeCalls[0] != "p" || gotVersion != 4 {
+	if len(dur.removeCalls) != 1 || dur.removeCalls[0] != "sess-p" || gotVersion != 4 {
 		t.Fatalf("calls=%v version=%d", dur.removeCalls, gotVersion)
 	}
 	if sink.count() != 1 {
@@ -273,39 +273,39 @@ func TestRemoveBlockedByLivenessClaimAndWindow(t *testing.T) {
 	sink := &fakeDirtySink{}
 	coord := newDismissCoord(t, dur, sink)
 
-	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: "p", Generation: 1}, dead: make(chan struct{})})
-	if err := coord.Remove(ctx, "p", 1); !errors.Is(err, ErrSessionAlive) {
+	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: "sess-p", Generation: 1}, dead: make(chan struct{})})
+	if err := coord.Remove(ctx, "sess-p", 1); !errors.Is(err, ErrSessionAlive) {
 		t.Fatalf("err=%v", err)
 	}
-	coord.registry.remove("p", 1)
+	coord.registry.remove("sess-p", 1)
 
 	coord.mu.Lock()
-	coord.ops["p"] = "stop"
+	coord.ops["sess-p"] = "stop"
 	coord.mu.Unlock()
-	if err := coord.Remove(ctx, "p", 1); !errors.Is(err, ErrLifecycleOpInFlight) {
+	if err := coord.Remove(ctx, "sess-p", 1); !errors.Is(err, ErrLifecycleOpInFlight) {
 		t.Fatalf("err=%v", err)
 	}
 	coord.mu.Lock()
-	delete(coord.ops, "p")
+	delete(coord.ops, "sess-p")
 	coord.mu.Unlock()
 
 	// Exit-less row during the open convergence window: liveness unknown.
 	dur.session = func(centralstore.SessionID) (centralstore.Session, bool, error) {
-		return centralstore.Session{ID: "p", Version: 1}, true, nil
+		return centralstore.Session{ID: "sess-p", Version: 1}, true, nil
 	}
 	dur.listSessions = func() ([]centralstore.Session, error) { return nil, nil }
 	if err := coord.BeginConvergence(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := coord.Remove(ctx, "p", 1); !errors.Is(err, ErrConvergencePending) {
+	if err := coord.Remove(ctx, "sess-p", 1); !errors.Is(err, ErrConvergencePending) {
 		t.Fatalf("err=%v", err)
 	}
 	// An exited row is removable during the window.
 	at := centralstore.UnixMillis(9)
 	dur.session = func(centralstore.SessionID) (centralstore.Session, bool, error) {
-		return centralstore.Session{ID: "p", Version: 1, ExitedAt: &at}, true, nil
+		return centralstore.Session{ID: "sess-p", Version: 1, ExitedAt: &at}, true, nil
 	}
-	if err := coord.Remove(ctx, "p", 1); err != nil {
+	if err := coord.Remove(ctx, "sess-p", 1); err != nil {
 		t.Fatalf("exited row blocked during window: %v", err)
 	}
 	if len(dur.removeCalls) != 1 || sink.count() != 1 {

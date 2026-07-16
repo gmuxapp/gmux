@@ -7,10 +7,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 )
 
-var ErrGenerationActive = errors.New("sessioncoord: a working generation is already installed")
+var (
+	ErrGenerationActive = errors.New("sessioncoord: a working generation is already installed")
+	// ErrInvalidSessionID marks a runner whose meta reported a session ID
+	// that fails paths.IsValidSessionID. The ID is used as a filesystem path
+	// segment, so this is security-relevant and enforced for every caller
+	// (discovery, /v1/register, startup convergence, resume/restart
+	// registrations). It is a permanent verdict: registration aborts before
+	// any commit, fence, or registry change.
+	ErrInvalidSessionID = errors.New("sessioncoord: invalid session id")
+)
 
 // EventStream is already ordered by the runner transport. Subscribe must not
 // return until the subscription is established, so replay/live events can be
@@ -244,6 +254,9 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 		return Runtime{}, err
 	}
 	id := meta.Registration.ID
+	if !paths.IsValidSessionID(string(id)) {
+		return Runtime{}, fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
+	}
 	if req.ExpectedID != "" && id != req.ExpectedID {
 		// Abort before the mutex/fence/commit: no registration side effects.
 		return Runtime{}, fmt.Errorf("%w: expected %s, runner reported %s", ErrResumeIdentityMismatch, req.ExpectedID, id)
