@@ -463,7 +463,9 @@ function ActivityList({
     for (const s of f.sessions) folderBySessionId.set(s.id, f)
   }
 
-  const renderRow = (s: Session) => {
+  // compact=false for today (two-line with age), true for older buckets
+  // (single-line project · title — the day heading carries the time).
+  const renderRow = (s: Session, compact: boolean) => {
     const folder = folderBySessionId.get(s.id)
     if (!folder) return null
     return (
@@ -473,6 +475,7 @@ function ActivityList({
         href={tabHref(sessionPath(folder.slug, s, folder.peer))}
         selected={selId === s.id}
         resuming={resumingId === s.id}
+        compact={compact}
         showProject
         projectName={folder.name}
         onClick={onClick}
@@ -503,7 +506,7 @@ function ActivityList({
       {sections.map(sec => (
         <div class="sidebar-activity-section" key={sec.label ?? 'today'}>
           {sec.label !== null && <div class="sidebar-section-title">{sec.label}</div>}
-          {sec.sessions.map(renderRow)}
+          {sec.sessions.map(s => renderRow(s, sec.label !== null))}
         </div>
       ))}
     </>

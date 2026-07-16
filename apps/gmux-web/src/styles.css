@@ -927,8 +927,9 @@ body {
 .sidebar-scroll .session-row.selected {
   background: var(--bg-selected);
 }
-.sidebar-scroll .session-row-content { font-size: 13px; }
+.sidebar-scroll .session-row-compact .session-row-content { font-size: 13px; }
 .sidebar-scroll .session-row-title { font-weight: 400; }
+.sidebar-scroll .session-row-meta { font-size: 11px; margin-top: 1px; }
 
 /* ── Wide session row (dashboard / project page) ────────────────────── */
 /* Single-line `project · title` row for the activity feed (home +
@@ -960,12 +961,15 @@ body {
   opacity: 0.55;
 }
 
-/* Single flex line: project · title · cwd · status. The title is the
- * anchor and shrinks/ellipsizes first when the row is tight; project
- * and trailing badges keep their size. */
 .session-row-content {
   flex: 1;
   min-width: 0;
+}
+
+/* Compact (older buckets): one flex line — project · title · cwd. The
+ * title is the anchor and shrinks/ellipsizes first when tight; project
+ * and badges keep their size, so the row packs left with no variable gap. */
+.session-row-compact .session-row-content {
   display: flex;
   align-items: baseline;
   font-size: 13px;
@@ -973,16 +977,32 @@ body {
   white-space: nowrap;
   overflow: hidden;
 }
-
-.session-row-title {
+.session-row-compact .session-row-title {
   font-weight: 500;
   color: var(--text);
-  /* Shrinks (ellipsizes) on a tight row but doesn't grow, so segments
-   * stay left-packed instead of pushing trailing cwd/status to the edge. */
   flex: 0 1 auto;
   min-width: 2.5em;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Full (today): two lines — title, then "age · project on host · cwd". */
+.session-row-full .session-row-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-row-meta {
+  display: flex;
+  align-items: baseline;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .session-row-sep {
@@ -992,13 +1012,18 @@ body {
   flex: 0 0 auto;
 }
 .session-row-project {
-  /* Muted leading context; the title carries the emphasis. */
+  /* Muted leading context. Middle-truncated in JS, so it never shrinks
+   * via flex: a short name like "gmux" always shows whole, and the width
+   * is stable row-to-row (no variable gap before the separator). */
   color: var(--text-muted);
   font-weight: 400;
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.session-row-age {
+  color: var(--text-muted);
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
 }
 .session-row-cwd {
   /* No monospace: the ./ ~/ / prefix already marks it as a folder.
@@ -1008,10 +1033,7 @@ body {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.session-row-status {
-  font-style: italic;
-  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .session-row-dup,
 .session-dup-warning {

@@ -1,15 +1,21 @@
-// Single-line session row for the activity feed (home dashboard + the
-// sidebar's Activity view). Reads `project · title`, with the project
-// leading as muted context and optional host / cwd / status trailing.
-// No per-row time: the day headings carry recency and the order within
-// a day says the rest, so a timestamp would just duplicate the heading
-// (and used to contradict it). Shared dot-state / unavailability logic
-// via store helpers.
+// Session row for the activity feed (home dashboard + the sidebar's
+// Activity view). Two layouts, chosen by the caller per day bucket:
+//
+//   - full (compact=false): today's sessions. Two lines — title, then
+//     "age · project on host · cwd". The age is worth the room for the
+//     things you're actively working on.
+//   - compact (compact=true): older buckets. One line, "project · title",
+//     project leading as muted context. No age: the day heading (and the
+//     order within it) already carry recency, so a per-row time would
+//     duplicate — and used to contradict — the heading.
+//
+// Dead sessions never surface an "exited (N)" label here: the sleep /
+// dot indicator already conveys the state, and the text was noise in a
+// list. Shared dot-state / unavailability logic via store helpers.
 //
 // Kept deliberately separate from the sidebar's Projects-view
-// SessionItem rather than unified behind a density prop: that variant
-// is drag-aware and folder-scoped; a single component would accumulate
-// flags faster than it would save code.
+// SessionItem rather than unified behind more flags: that variant is
+// drag-aware and folder-scoped.
 
 import { Fragment } from 'preact'
 import type { Session } from './types'
@@ -29,13 +35,16 @@ export interface SessionRowProps {
   selected?: boolean
   /** Currently resuming: forces the dot into a working state. */
   resuming?: boolean
-  /** Show the project name on line 2. */
+  /** Single-line `project · title` layout (older day buckets). When
+   *  false/omitted: the two-line layout with a relative age (today). */
+  compact?: boolean
+  /** Show the project name. */
   showProject?: boolean
   /** Project display name to render when showProject is true. */
   projectName?: string
-  /** Show the owning peer's host suffix on line 2. */
+  /** Show the owning peer's host suffix next to the project. */
   showHost?: boolean
-  /** Show the session's cwd on line 2. */
+  /** Show the session's cwd. */
   showCwd?: boolean
   /** Pre-formatted cwd string. Pass-through; caller decides whether
    *  to render full path or project-relative. */
@@ -47,11 +56,39 @@ export interface SessionRowProps {
   onClose?: () => void
 }
 
+/** Compact "Nm" / "Nh" / "Nd" relative-time for the full row's age.
+ *  Sub-minute collapses to "now" so a fresh row doesn't tick every
+ *  second. */
+function formatAge(stampIso: string | undefined, now: number): string | null {
+  if (!stampIso) return null
+  const t = Date.parse(stampIso)
+  if (!Number.isFinite(t)) return null
+  const secs = Math.max(0, Math.floor((now - t) / 1000))
+  if (secs < 60) return 'now'
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins}m`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
+/** Middle-truncate a project name so a long one keeps its head and tail
+ *  (…) instead of vanishing behind a flex ellipsis — you can still tell
+ *  `review-coordinator` from `review-controller`. Keeps ≥3 chars each
+ *  side; names within `max` are untouched. */
+export function middleTruncate(s: string, max = 20): string {
+  if (s.length <= max) return s
+  const head = Math.max(3, Math.ceil((max - 1) / 2))
+  const tail = Math.max(3, Math.floor((max - 1) / 2))
+  return `${s.slice(0, head)}…${s.slice(s.length - tail)}`
+}
+
 export function SessionRow({
   session,
   href,
   selected,
   resuming,
+  compact,
   showProject,
   projectName,
   showHost,
@@ -66,55 +103,70 @@ export function SessionRow({
   const sleeping = !session.alive && session.resumable
 
   const rawDot = resuming ? 'working' : sessionDotState(session, am)
-  // Selection mutes attention-grabbing dots (mirrors sidebar
-  // behavior): if you're already looking at it, "unread" / "error"
-  // are no longer useful signals.
+  // Selection mutes attention-grabbing dots (mirrors sidebar behavior):
+  // if you're already looking at it, "unread" / "error" aren't useful.
   const dot = (selected && (rawDot === 'error' || rawDot === 'unread')) ? 'none' : rawDot
   const arrival = useArrivalPulse(dot)
 
-  // Exit code: dead sessions surface "exited (N)" so the row never goes
-  // silent about why a session is dead. Live status (working/error) is
-  // conveyed by the dot, not text.
-  const statusText = !session.alive && session.exit_code != null
-    ? `exited (${session.exit_code})`
-    : null
-
   const cls = [
     'session-row',
+    compact ? 'session-row-compact' : 'session-row-full',
     selected ? 'selected' : '',
     unavailable ? 'unavailable' : '',
   ].filter(Boolean).join(' ')
 
-  // Single line, in reading order: project on host · title · cwd ·
-  // status. Project leads as muted context; the title is the anchor.
-  // Only requested segments render; empty ones add no separator.
-  const segments: preact.ComponentChildren[] = []
   const hostEl = showHost && session.peer
     ? <HostSuffix peer={session.peer} connective="on" />
     : null
+  // Project (middle-truncated) with the host grouped on via "on" and no
+  // dot between. Falls back to a host-only segment when no project.
+  let projectSeg: preact.ComponentChildren = null
   if (showProject && projectName) {
-    // Grouped so the host joins the project with "on" and no dot between.
-    segments.push(
-      <span class="session-row-project">{projectName}{hostEl && <> {hostEl}</>}</span>,
+    const shown = middleTruncate(projectName)
+    projectSeg = (
+      <span class="session-row-project" title={shown !== projectName ? projectName : undefined}>
+        {shown}{hostEl && <> {hostEl}</>}
+      </span>
     )
   } else if (hostEl) {
-    segments.push(hostEl)
+    projectSeg = hostEl
   }
-  segments.push(<span class="session-row-title">{session.title}</span>)
-  if (showCwd && cwdLabel) {
+  const titleSeg = <span class="session-row-title">{session.title}</span>
+  const cwdSeg = showCwd && cwdLabel
     // Truncated in CSS; the title carries the full absolute cwd so a
     // hover/long-press reveals the path the relative label abbreviates.
-    segments.push(<span class="session-row-cwd" title={session.cwd || cwdLabel}>{cwdLabel}</span>)
-  }
-  if (statusText) {
-    segments.push(<span class="session-row-status">{statusText}</span>)
-  }
+    ? <span class="session-row-cwd" title={session.cwd || cwdLabel}>{cwdLabel}</span>
+    : null
   // Same conversation file open in another live runner (ADR 0011 N:1).
-  if (session.conversation_file && duplicateConversationFiles.value.has(session.conversation_file)) {
-    segments.push(
-      <span class="session-row-dup" title="This conversation is open in more than one tab">⚠ open elsewhere</span>,
-    )
-  }
+  const dupSeg = session.conversation_file && duplicateConversationFiles.value.has(session.conversation_file)
+    ? <span class="session-row-dup" title="This conversation is open in more than one tab">⚠ open elsewhere</span>
+    : null
+
+  const withSeps = (segs: preact.ComponentChildren[]) =>
+    segs.filter(Boolean).map((seg, i) => (
+      // Long-form Fragment carries a key; content is positional so index
+      // is the honest key.
+      <Fragment key={i}>
+        {i > 0 && <span class="session-row-sep"> · </span>}
+        {seg}
+      </Fragment>
+    ))
+
+  const content = compact
+    ? <div class="session-row-content">{withSeps([projectSeg, titleSeg, cwdSeg, dupSeg])}</div>
+    : (() => {
+        const age = formatAge(session.last_output_at ?? session.created_at, Date.now())
+        const meta = withSeps([
+          age ? <span class="session-row-age">{age}</span> : null,
+          projectSeg, cwdSeg, dupSeg,
+        ])
+        return (
+          <div class="session-row-content">
+            {titleSeg}
+            {meta.length > 0 && <div class="session-row-meta">{meta}</div>}
+          </div>
+        )
+      })()
 
   return (
     <a
@@ -131,18 +183,7 @@ export function SessionRow({
         ? <svg class="session-sleep-icon" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><title>Resumable</title><path d="M7 1h4l-4 4h4" /><path d="M1 5h5l-5 6h5" /></svg>
         : <span class={`session-dot-indicator ${dot}${arrival ? ` ${arrival}` : ''}`} />
       }
-      <div class="session-row-content">
-        {segments.map((seg, i) => (
-          // Long-form Fragment carries a key: the shorthand `<>` can't,
-          // and without one Preact falls back to index diffing across
-          // renders. The content is positional (segment N is whatever
-          // segment N happens to be this render), so index is honest.
-          <Fragment key={i}>
-            {i > 0 && <span class="session-row-sep"> · </span>}
-            {seg}
-          </Fragment>
-        ))}
-      </div>
+      {content}
       {onClose && (
         <button
           class="session-row-close"

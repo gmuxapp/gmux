@@ -52,7 +52,8 @@ export function Home({
     .map(b => ({ label: b.label, sessions: placed(b.sessions) }))
     .filter(b => b.sessions.length > 0)
 
-  const renderRow = (s: Session) => {
+  // compact=false for today (two-line with age), true for older buckets.
+  const renderRow = (s: Session, compact: boolean) => {
     const folder = folderBySessionId.get(s.id)
     // Guarded by `placed()` above; the fallback stays as a defensive
     // guard against a mid-arrival race.
@@ -66,6 +67,7 @@ export function Home({
         key={s.id}
         session={s}
         href={tabHref(sessionPath(folder.slug, s, folder.peer))}
+        compact={compact}
         showProject
         projectName={folder.name}
         showHost
@@ -91,7 +93,7 @@ export function Home({
       </header>
       {shown.map(b => (
         <Section key={b.label ?? 'today'} title={b.label ?? undefined}>
-          {b.sessions.map(renderRow)}
+          {b.sessions.map(s => renderRow(s, b.label !== null))}
         </Section>
       ))}
 
