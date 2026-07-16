@@ -108,6 +108,9 @@ type fakeDurable struct {
 	// removeResult backs RemoveSessionAtVersion; removeCalls records its calls.
 	removeResult func(centralstore.SessionID, centralstore.RowVersion) (centralstore.MutationResult, error)
 	removeCalls  []centralstore.SessionID
+	// ackResult backs AcknowledgeDeadSession; ackCalls records its calls.
+	ackResult func(centralstore.SessionID, centralstore.RowVersion) (centralstore.MutationResult, error)
+	ackCalls  []centralstore.RowVersion
 }
 
 func newFakeDurable(version centralstore.RowVersion) *fakeDurable {
@@ -149,6 +152,16 @@ func (d *fakeDurable) Session(ctx context.Context, id centralstore.SessionID) (c
 		return centralstore.Session{}, false, nil
 	}
 	return d.session(id)
+}
+
+func (d *fakeDurable) AcknowledgeDeadSession(ctx context.Context, id centralstore.SessionID, observed centralstore.RowVersion) (centralstore.MutationResult, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.ackCalls = append(d.ackCalls, observed)
+	if d.ackResult == nil {
+		return centralstore.MutationResult{Changed: true, SessionsDirty: true, SessionVersion: observed + 1}, nil
+	}
+	return d.ackResult(id, observed)
 }
 
 func (d *fakeDurable) ListSessions(ctx context.Context) ([]centralstore.Session, error) {
@@ -483,6 +496,9 @@ func (d *scheduledDurable) ListSessions(context.Context) ([]centralstore.Session
 	return nil, nil
 }
 func (d *scheduledDurable) SweepDeadSessions(context.Context, []centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error) {
+	return centralstore.MutationResult{}, nil
+}
+func (d *scheduledDurable) AcknowledgeDeadSession(context.Context, centralstore.SessionID, centralstore.RowVersion) (centralstore.MutationResult, error) {
 	return centralstore.MutationResult{}, nil
 }
 func (d *scheduledDurable) DismissSessionTree(context.Context, centralstore.SessionID, centralstore.UnixMillis) ([]centralstore.SessionID, centralstore.MutationResult, error) {
