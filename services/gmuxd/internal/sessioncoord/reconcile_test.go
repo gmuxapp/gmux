@@ -63,18 +63,18 @@ func TestReconcilePreconditions(t *testing.T) {
 	ctx := context.Background()
 	dur := newFakeDurable(0)
 	coord := newCoord(newFakeClient(RunnerMeta{}), dur, &fakeDirtySink{}, nil)
-	if _, err := coord.Reconcile(ctx); !errors.Is(err, ErrNoAdapterReconciler) {
+	if _, _, err := coord.Reconcile(ctx); !errors.Is(err, ErrNoAdapterReconciler) {
 		t.Fatalf("no reconciler: %v", err)
 	}
 
 	coord = New(nil, newFakeClient(RunnerMeta{}), dur, &fakeDirtySink{}, nil, WithAdapterReconciler(&fakeReconciler{}))
-	if _, err := coord.Reconcile(ctx); !errors.Is(err, ErrConvergencePending) {
+	if _, _, err := coord.Reconcile(ctx); !errors.Is(err, ErrConvergencePending) {
 		t.Fatalf("open barrier: %v", err)
 	}
 	if err := coord.BeginConvergence(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := coord.Reconcile(ctx); !errors.Is(err, ErrConvergencePending) {
+	if _, _, err := coord.Reconcile(ctx); !errors.Is(err, ErrConvergencePending) {
 		t.Fatalf("window still open: %v", err)
 	}
 }
@@ -104,7 +104,7 @@ func TestReconcileAppliesDispositions(t *testing.T) {
 	installLive(coord, "live-one", "ep-live")
 	closeBarrier(t, coord)
 
-	removed, err := coord.Reconcile(ctx)
+	removed, _, err := coord.Reconcile(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestReconcileProbeFailureRetainsAndClearsVerdicts(t *testing.T) {
 	coord := New(nil, newFakeClient(RunnerMeta{}), dur, &fakeDirtySink{}, errs, WithAdapterReconciler(rec))
 	closeBarrier(t, coord)
 
-	if _, err := coord.Reconcile(ctx); err != nil {
+	if _, _, err := coord.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if coord.ResumeVerdicts()["a"] != VerdictResumable {
@@ -164,7 +164,7 @@ func TestReconcileProbeFailureRetainsAndClearsVerdicts(t *testing.T) {
 		return nil, errors.New("storage unplugged")
 	}
 	rec.mu.Unlock()
-	removed, err := coord.Reconcile(ctx)
+	removed, _, err := coord.Reconcile(ctx)
 	if err != nil || len(removed) != 0 {
 		t.Fatalf("removed=%v err=%v", removed, err)
 	}
@@ -195,7 +195,7 @@ func TestReconcileRemoveConditionalOnVersion(t *testing.T) {
 	coord := New(nil, newFakeClient(RunnerMeta{}), dur, sink, nil, WithAdapterReconciler(rec))
 	closeBarrier(t, coord)
 
-	removed, err := coord.Reconcile(ctx)
+	removed, _, err := coord.Reconcile(ctx)
 	if err != nil || len(removed) != 0 {
 		t.Fatalf("removed=%v err=%v", removed, err)
 	}
@@ -229,7 +229,7 @@ func TestReconcileAdapterConfirmedRemoveDBFailureKeepsGoneVerdict(t *testing.T) 
 	coord := New(nil, newFakeClient(RunnerMeta{}), dur, &fakeDirtySink{}, errs, WithAdapterReconciler(rec))
 	closeBarrier(t, coord)
 
-	if _, err := coord.Reconcile(ctx); err != nil {
+	if _, _, err := coord.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if errs.count() != 1 {
@@ -265,7 +265,7 @@ func TestReconcileCoveredRowRemoveDBFailureLeavesUnknown(t *testing.T) {
 	installLive(coord, "owner", "ep-owner")
 	closeBarrier(t, coord)
 
-	if _, err := coord.Reconcile(ctx); err != nil {
+	if _, _, err := coord.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if errs.count() != 1 {
@@ -301,7 +301,7 @@ func TestReconcileCoverageInvalidatedWhenOwnerDiesMidProbe(t *testing.T) {
 	installLive(coord, "owner", "ep-owner")
 	closeBarrier(t, coord)
 
-	removed, err := coord.Reconcile(ctx)
+	removed, _, err := coord.Reconcile(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestReconcileSkipsVerdictWritesInvalidatedMidPass(t *testing.T) {
 	coord = New(nil, client, dur, &fakeDirtySink{}, &fakeErrorSink{}, WithAdapterReconciler(rec))
 	closeBarrier(t, coord)
 
-	if _, err := coord.Reconcile(ctx); err != nil {
+	if _, _, err := coord.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if v, ok := coord.ResumeVerdicts()[id]; ok {
@@ -374,7 +374,7 @@ func TestReconcileSkipsRowThatWentLiveOrClaimedDuringProbe(t *testing.T) {
 	coord = New(nil, newFakeClient(RunnerMeta{}), dur, &fakeDirtySink{}, nil, WithAdapterReconciler(rec))
 	closeBarrier(t, coord)
 
-	removed, err := coord.Reconcile(ctx)
+	removed, _, err := coord.Reconcile(ctx)
 	if err != nil || len(removed) != 0 {
 		t.Fatalf("removed=%v err=%v", removed, err)
 	}
@@ -399,7 +399,7 @@ func TestReconcileClaimedRowIsNotACandidate(t *testing.T) {
 	coord.ops["claimed"] = &LifecycleClaim{op: "resume"}
 	coord.mu.Unlock()
 
-	if _, err := coord.Reconcile(ctx); err != nil {
+	if _, _, err := coord.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if rec.callCount() != 0 {
@@ -423,7 +423,7 @@ func TestReconcileBatchesPerAdapterInOrder(t *testing.T) {
 		WithAdapterReconciler(rec), WithReconcileBatchSize(2))
 	closeBarrier(t, coord)
 
-	if _, err := coord.Reconcile(ctx); err != nil {
+	if _, _, err := coord.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if len(rec.calls) != 3 {
@@ -454,11 +454,11 @@ func TestReconcileSingleFlight(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := coord.Reconcile(ctx)
+		_, _, err := coord.Reconcile(ctx)
 		done <- err
 	}()
 	<-entered
-	if _, err := coord.Reconcile(ctx); !errors.Is(err, ErrReconcileInFlight) {
+	if _, _, err := coord.Reconcile(ctx); !errors.Is(err, ErrReconcileInFlight) {
 		t.Fatalf("second pass: %v", err)
 	}
 	close(release)
@@ -469,7 +469,7 @@ func TestReconcileSingleFlight(t *testing.T) {
 	rec.mu.Lock()
 	rec.fn = nil
 	rec.mu.Unlock()
-	if _, err := coord.Reconcile(ctx); err != nil {
+	if _, _, err := coord.Reconcile(ctx); err != nil {
 		t.Fatalf("third pass: %v", err)
 	}
 }
@@ -502,7 +502,7 @@ func TestReconcileTakeoverConvergenceEvictsCoveredDeadRows(t *testing.T) {
 	installLive(coord, "owner", "ep-owner")
 	closeBarrier(t, coord)
 
-	removed, err := coord.Reconcile(ctx)
+	removed, _, err := coord.Reconcile(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +532,7 @@ func TestRegistrationInvalidatesVerdict(t *testing.T) {
 	coord := New(nil, client, dur, &fakeDirtySink{}, nil, WithAdapterReconciler(rec))
 	closeBarrier(t, coord)
 
-	if _, err := coord.Reconcile(ctx); err != nil {
+	if _, _, err := coord.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if coord.ResumeVerdicts()[id] != VerdictResumable {
@@ -543,5 +543,52 @@ func TestRegistrationInvalidatesVerdict(t *testing.T) {
 	}
 	if _, ok := coord.ResumeVerdicts()[id]; ok {
 		t.Fatal("registration must invalidate the verdict")
+	}
+}
+
+// TestReconcileReportsVerdictChanges pins the verdict-change signal used by
+// production wiring to mark the sessions overlay dirty: a pass that sets or
+// clears verdicts reports true; an identical follow-up pass reports false.
+func TestReconcileReportsVerdictChanges(t *testing.T) {
+	ctx := context.Background()
+	dur := newFakeDurable(0)
+	dur.listSessions = func() ([]centralstore.Session, error) {
+		return []centralstore.Session{deadSession("keep", "pi", "c-keep", 3)}, nil
+	}
+	rec := &fakeReconciler{fn: func(adapter string, batch []ReconcileCandidate) ([]ReconcileDecision, error) {
+		return decide(DispositionRetain, "keep"), nil
+	}}
+	coord := New(nil, newFakeClient(RunnerMeta{}), dur, &fakeDirtySink{}, nil, WithAdapterReconciler(rec))
+	closeBarrier(t, coord)
+
+	_, changed, err := coord.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("first pass set VerdictResumable: expected changed=true")
+	}
+
+	// Identical pass: same disposition, same verdict — no change.
+	_, changed, err = coord.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("identical pass must report changed=false")
+	}
+
+	// The adapter now says gone; the removal clears the verdict — changed.
+	rec.mu.Lock()
+	rec.fn = func(adapter string, batch []ReconcileCandidate) ([]ReconcileDecision, error) {
+		return decide(DispositionRemove, "keep"), nil
+	}
+	rec.mu.Unlock()
+	removed, changed, err := coord.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 1 || !changed {
+		t.Fatalf("removal pass: removed=%v changed=%v", removed, changed)
 	}
 }

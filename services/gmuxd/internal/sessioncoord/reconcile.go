@@ -112,16 +112,22 @@ func (c *Coordinator) ResumeVerdicts() map[centralstore.SessionID]ResumeVerdict 
 	return out
 }
 
-// setVerdict records a verdict under the lifecycle mutex (caller holds it).
-func (c *Coordinator) setVerdict(id centralstore.SessionID, v ResumeVerdict) {
+// setVerdict records a verdict under the lifecycle mutex (caller holds it)
+// and reports whether the stored verdict actually changed.
+func (c *Coordinator) setVerdict(id centralstore.SessionID, v ResumeVerdict) bool {
 	if v == VerdictUnknown {
+		_, had := c.verdicts[id]
 		delete(c.verdicts, id)
-		return
+		return had
 	}
 	if c.verdicts == nil {
 		c.verdicts = make(map[centralstore.SessionID]ResumeVerdict)
 	}
+	if c.verdicts[id] == v {
+		return false
+	}
 	c.verdicts[id] = v
+	return true
 }
 
 // Reconcile runs one adapter reconciliation pass: gather dead retained
@@ -142,20 +148,26 @@ func (c *Coordinator) setVerdict(id centralstore.SessionID, v ResumeVerdict) {
 // Lock discipline matches every other lifecycle operation: adapter I/O never
 // runs under the mutex; each conditional removal is a short DB transaction
 // under it; committed outcomes publish outside it.
-func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, error) {
+//
+// The second return value reports whether the pass changed any runtime
+// resume verdict (set, narrowed, or cleared). Verdicts are runtime overlay
+// state — no committed outcome invalidates the snapshot for them — so
+// production wiring uses this to mark the sessions payload dirty when the
+// overlay moved (design §4 item 2).
+func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, bool, error) {
 	if c.reconciler == nil {
-		return nil, ErrNoAdapterReconciler
+		return nil, false, ErrNoAdapterReconciler
 	}
 
 	// ── Gather (mutex) ────────────────────────────────────────────────────
 	c.mu.Lock()
 	if !c.convergeClosed {
 		c.mu.Unlock()
-		return nil, fmt.Errorf("%w: reconciliation waits for the convergence barrier", ErrConvergencePending)
+		return nil, false, fmt.Errorf("%w: reconciliation waits for the convergence barrier", ErrConvergencePending)
 	}
 	if c.reconcileInFlight {
 		c.mu.Unlock()
-		return nil, ErrReconcileInFlight
+		return nil, false, ErrReconcileInFlight
 	}
 	c.reconcileInFlight = true
 	// While the pass is in flight, verdict invalidations (registration,
@@ -173,7 +185,7 @@ func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, 
 	sessions, err := c.durable.ListSessions(ctx)
 	if err != nil {
 		c.mu.Unlock()
-		return nil, err
+		return nil, false, err
 	}
 	type liveRef struct {
 		owner        centralstore.SessionID
@@ -272,6 +284,7 @@ func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, 
 	// ── Apply (mutex per decision, short DB tx; publish outside) ─────────
 	var removed []centralstore.SessionID
 	var outcomes []centralstore.MutationResult
+	verdictsChanged := false
 	for _, cand := range candidates {
 		// VerdictGone means ADAPTER-confirmed non-resumable, nothing else. A
 		// covered row is removed because a live binder owns its conversation;
@@ -285,7 +298,7 @@ func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, 
 			// The row changed hands while probing: the verdict no longer
 			// describes it. Skip; any registration already cleared the
 			// verdict, and a claim owner re-triggers reconciliation policy.
-			c.setVerdict(cand.ID, VerdictUnknown)
+			verdictsChanged = c.setVerdict(cand.ID, VerdictUnknown) || verdictsChanged
 			c.mu.Unlock()
 			continue
 		}
@@ -301,18 +314,18 @@ func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, 
 		switch {
 		case adapterConfirmed || coverageValid:
 			if adapterConfirmed && !invalidated {
-				c.setVerdict(cand.ID, VerdictGone)
+				verdictsChanged = c.setVerdict(cand.ID, VerdictGone) || verdictsChanged
 			}
 			result, removeErr := c.durable.RemoveSessionAtVersion(ctx, cand.ID, cand.Version)
 			switch {
 			case removeErr == nil:
-				delete(c.verdicts, cand.ID)
+				verdictsChanged = c.setVerdict(cand.ID, VerdictUnknown) || verdictsChanged
 				removed = append(removed, cand.ID)
 				outcomes = append(outcomes, result)
 			case errors.Is(removeErr, centralstore.ErrStaleVersion), errors.Is(removeErr, centralstore.ErrSessionNotFound):
 				// The decision went stale (any conditional mutation landed)
 				// or the row vanished: skip silently, next pass re-probes.
-				delete(c.verdicts, cand.ID)
+				verdictsChanged = c.setVerdict(cand.ID, VerdictUnknown) || verdictsChanged
 			default:
 				// Database failure: an adapter-confirmed Gone verdict (set
 				// above, unless invalidated mid-pass) survives to narrow the
@@ -324,10 +337,10 @@ func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, 
 			}
 		case dispositions[cand.ID] == DispositionRetain:
 			if !invalidated {
-				c.setVerdict(cand.ID, VerdictResumable)
+				verdictsChanged = c.setVerdict(cand.ID, VerdictResumable) || verdictsChanged
 			}
 		default:
-			c.setVerdict(cand.ID, VerdictUnknown)
+			verdictsChanged = c.setVerdict(cand.ID, VerdictUnknown) || verdictsChanged
 		}
 		c.mu.Unlock()
 	}
@@ -335,5 +348,5 @@ func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, 
 	for _, r := range outcomes {
 		c.publish(ctx, r)
 	}
-	return removed, nil
+	return removed, verdictsChanged, nil
 }
