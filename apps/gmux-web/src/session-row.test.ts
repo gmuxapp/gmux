@@ -17,4 +17,14 @@ describe('middleTruncate', () => {
     expect(middleTruncate('review-coordinator')).toBe('review-coo…nator') // 18
     expect(middleTruncate('review-controller')).toBe('review-con…oller') // 17
   })
+
+  it('does not split surrogate pairs at the cut points', () => {
+    // Non-BMP emoji at both the head boundary (10th cp) and tail
+    // boundary. Counting UTF-16 units would slice mid-surrogate and
+    // emit a lone \uFFFD; counting code points keeps them whole.
+    const out = middleTruncate('aaaaaaaaa😀bbbbbbbbbb😀cccc')
+    expect(out).toBe('aaaaaaaaa😀…😀cccc')
+    expect(out).not.toContain('�')
+    expect([...out]).toHaveLength(16)
+  })
 })

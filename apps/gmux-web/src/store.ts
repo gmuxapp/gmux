@@ -917,12 +917,18 @@ export function partitionByDay(all: readonly Session[], now: number): DayBucket[
   const daysAgo = (t: number) => Math.round((todayMid - localMidnight(t)) / MS_PER_DAY)
 
   // Bucket key: days-ago (0–7) for the named window, or the day's
-  // midnight for the dated tail (each old day its own bucket). Midnight
-  // timestamps are always ≫ 7, so the two key spaces never collide.
+  // midnight for the dated tail (each old day its own bucket). A real
+  // timestamp's midnight is always ≫ 7, so the two key spaces never
+  // collide. An unparseable stamp (outputTimeMs === 0 sentinel) is the
+  // exception: localMidnight(0) is 0 in UTC but negative east of it,
+  // which would miss both the 0–7 window and the >7 dated tail —
+  // silently dropping the session and breaking Projects/Activity parity.
+  // Pin those to Today (byActivityDesc still sorts them last within it).
   const byKey = new Map<number, Session[]>()
   for (const s of all) {
-    const ago = daysAgo(outputTimeMs(s))
-    const key = ago <= 7 ? Math.max(ago, 0) : localMidnight(outputTimeMs(s))
+    const t = outputTimeMs(s)
+    const ago = t > 0 ? daysAgo(t) : 0
+    const key = ago <= 7 ? Math.max(ago, 0) : localMidnight(t)
     const list = byKey.get(key)
     if (list) list.push(s)
     else byKey.set(key, [s])

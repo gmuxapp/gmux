@@ -76,10 +76,13 @@ function formatAge(stampIso: string | undefined, now: number): string | null {
  *  (…) instead of vanishing behind a flex ellipsis — you can still tell
  *  `review-coordinator` from `review-controller`. Keeps the first
  *  `head` and last `tail` chars (10 + … + 5 = 16 by default); names
- *  within that budget are untouched. */
+ *  within that budget are untouched. Counts by code point (spread, not
+ *  .slice) so an emoji or other non-BMP char at a cut point can't be
+ *  split into a lone surrogate (�). */
 export function middleTruncate(s: string, head = 10, tail = 5): string {
-  if (s.length <= head + tail + 1) return s
-  return `${s.slice(0, head)}…${s.slice(s.length - tail)}`
+  const cp = [...s]
+  if (cp.length <= head + tail + 1) return s
+  return `${cp.slice(0, head).join('')}…${cp.slice(cp.length - tail).join('')}`
 }
 
 export function SessionRow({

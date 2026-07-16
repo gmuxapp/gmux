@@ -162,4 +162,19 @@ describe('partitionByDay', () => {
     const got = buckets.flatMap(b => b.sessions.map(s => s.id)).sort()
     expect(got).toEqual(sessions.map(s => s.id).sort())
   })
+
+  it('keeps a session with an unparseable stamp (no drop, no garbage day)', () => {
+    // Both last_output_at and created_at unparseable → outputTimeMs
+    // returns the 0 sentinel. Must still land in exactly one bucket
+    // (Today) rather than being silently dropped east of UTC.
+    const corrupt = makeSession({
+      id: 'corrupt', cwd: '/x', alive: true,
+      last_output_at: 'not-a-date', created_at: '',
+    })
+    const buckets = partitionByDay([idle('t', HOUR), corrupt], NOW)
+    const got = buckets.flatMap(b => b.sessions.map(s => s.id))
+    expect(got).toContain('corrupt')
+    const home = buckets.find(b => b.sessions.some(s => s.id === 'corrupt'))
+    expect(home?.kind).toBe('today')
+  })
 })

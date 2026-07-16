@@ -70,10 +70,10 @@ type Session struct {
 	// Peer sessions arrive over the wire with this already set by
 	// the owning daemon; UpsertRemote preserves it as-received.
 	LastOutputAt string `json:"last_output_at,omitempty"`
-	Resumable      bool   `json:"resumable,omitempty"`
-	SocketPath     string `json:"socket_path,omitempty"`
-	TerminalCols   uint16 `json:"terminal_cols,omitempty"`
-	TerminalRows   uint16 `json:"terminal_rows,omitempty"`
+	Resumable    bool   `json:"resumable,omitempty"`
+	SocketPath   string `json:"socket_path,omitempty"`
+	TerminalCols uint16 `json:"terminal_cols,omitempty"`
+	TerminalRows uint16 `json:"terminal_rows,omitempty"`
 	// Slug is a human-readable stable identifier derived from the
 	// adapter's conversation-derived slug. Used for URL routing (the frontend
 	// falls back to the session id when empty). It is display-only and unique
@@ -171,7 +171,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		BinaryHash      string            `json:"binary_hash,omitempty"`
 		ProjectSlug     string            `json:"project_slug,omitempty"`
 		ProjectIndex    int               `json:"project_index,omitempty"`
-		LastOutputAt  string            `json:"last_output_at,omitempty"`
+		LastOutputAt    string            `json:"last_output_at,omitempty"`
 	}
 	return json.Marshal(wire{
 		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,

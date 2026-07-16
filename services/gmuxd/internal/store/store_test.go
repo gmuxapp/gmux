@@ -1155,7 +1155,7 @@ func fullyPopulatedSession() Session {
 		Subtitle:        "s",
 		Status:          &Status{Working: true, Error: true},
 		Unread:          true,
-		LastOutputAt:  "2026-01-01T00:00:03Z",
+		LastOutputAt:    "2026-01-01T00:00:03Z",
 		Resumable:       true,
 		SocketPath:      "/tmp/sock",
 		TerminalCols:    80,
