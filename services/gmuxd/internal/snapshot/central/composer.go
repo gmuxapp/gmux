@@ -60,6 +60,40 @@ type RuntimeSourceFunc func() map[centralstore.SessionID]RuntimeFacts
 
 func (f RuntimeSourceFunc) RuntimeFacts() map[centralstore.SessionID]RuntimeFacts { return f() }
 
+// ResumeVerdict is the adapter-reconciliation verdict for one retained dead
+// row. Verdicts are runtime-only (ADR 0026 forbids persisting resumability);
+// a fresh daemon re-probes.
+type ResumeVerdict int
+
+const (
+	// VerdictUnknown means no probe result (never probed, probe failed, or
+	// storage unreachable). The overlay applies the conservative default.
+	VerdictUnknown ResumeVerdict = iota
+	// VerdictResumable means the owning adapter confirmed the session's
+	// conversation exists and is resumable.
+	VerdictResumable
+	// VerdictGone means the owning adapter confirmed the conversation is
+	// gone: the row is non-resumable and pending removal.
+	VerdictGone
+)
+
+// VerdictSource provides a point-in-time copy of the reconciliation verdict
+// map. Like RuntimeSource it performs no I/O and is read once per pass — but
+// unlike runtime facts, verdict-only changes carry no committed
+// MutationResult and therefore trigger no invalidation by themselves: a
+// changed verdict becomes visible on the NEXT composition pass, whenever one
+// happens. Production wiring that wants prompt narrowing must mark the
+// sessions kind dirty after a reconciliation pass that changed verdicts
+// (cutover checklist). A nil source means every dead row uses the default.
+type VerdictSource interface {
+	ResumeVerdicts() map[centralstore.SessionID]ResumeVerdict
+}
+
+// VerdictSourceFunc adapts a function to VerdictSource.
+type VerdictSourceFunc func() map[centralstore.SessionID]ResumeVerdict
+
+func (f VerdictSourceFunc) ResumeVerdicts() map[centralstore.SessionID]ResumeVerdict { return f() }
+
 // SessionRow is one composed session: the durable projection plus the
 // runtime overlay.
 type SessionRow struct {
@@ -67,9 +101,12 @@ type SessionRow struct {
 
 	// Alive is derived from the runtime registry, never from SQLite.
 	Alive bool
-	// Resumable marks a retained dead row as a resume candidate. Adapter
-	// reconciliation (a later slice) may narrow this; until then every
-	// retained row without a live runner is a candidate.
+	// Resumable marks a retained dead row as a resume candidate. It is
+	// derived, never persisted: dead + a recorded command (production
+	// parity: a row with no command cannot be respawned) + not narrowed to
+	// VerdictGone by adapter reconciliation. Unknown verdicts stay resumable
+	// (conservative default: the resume affordance is never gated on
+	// probing).
 	Resumable bool
 	Runtime   *RuntimeFacts
 }
@@ -116,10 +153,11 @@ type ErrorSink interface {
 // Composer owns the level-triggered dirty state and the single composition
 // goroutine. Construct with New, start with Run, stop with Close.
 type Composer struct {
-	reader  Reader
-	runtime RuntimeSource
-	sink    Sink
-	errSink ErrorSink
+	reader   Reader
+	runtime  RuntimeSource
+	verdicts VerdictSource
+	sink     Sink
+	errSink  ErrorSink
 	// retryDelay throttles retries after a composition failure so a
 	// persistent store error cannot become a hot loop.
 	retryDelay time.Duration
@@ -141,6 +179,10 @@ func WithErrorSink(s ErrorSink) Option { return func(c *Composer) { c.errSink = 
 
 // WithRetryDelay overrides the failure retry throttle (tests use ~0).
 func WithRetryDelay(d time.Duration) Option { return func(c *Composer) { c.retryDelay = d } }
+
+// WithVerdictSource installs the adapter-reconciliation verdict overlay for
+// dead rows' Resumable derivation.
+func WithVerdictSource(s VerdictSource) Option { return func(c *Composer) { c.verdicts = s } }
 
 func New(reader Reader, runtime RuntimeSource, sink Sink, opts ...Option) *Composer {
 	c := &Composer{
@@ -246,8 +288,12 @@ func (c *Composer) takeDirty() (sessions, projects bool) {
 // invalidation, so a skewed overlay is always followed by a corrected pass.
 func (c *Composer) compose(ctx context.Context, sessions, projects bool) (Batch, error) {
 	var runtime map[centralstore.SessionID]RuntimeFacts
+	var verdicts map[centralstore.SessionID]ResumeVerdict
 	if sessions && c.runtime != nil {
 		runtime = c.runtime.RuntimeFacts()
+	}
+	if sessions && c.verdicts != nil {
+		verdicts = c.verdicts.ResumeVerdicts()
 	}
 	snap, err := c.reader.ReadSnapshot(ctx, centralstore.SnapshotQuery{
 		IncludeSessions: sessions,
@@ -266,7 +312,7 @@ func (c *Composer) compose(ctx context.Context, sessions, projects bool) (Batch,
 				f := facts
 				row.Runtime = &f
 			} else {
-				row.Resumable = true
+				row.Resumable = len(v.Command) > 0 && verdicts[v.ID] != VerdictGone
 			}
 			rows = append(rows, row)
 		}

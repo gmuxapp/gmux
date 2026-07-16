@@ -234,8 +234,8 @@ func TestCompositionFailureRetainsDirtAndRetries(t *testing.T) {
 func TestRuntimeOverlayDerivesAliveAndResumable(t *testing.T) {
 	reader := &fakeReader{result: func(centralstore.SnapshotQuery) (centralstore.StoreSnapshot, error) {
 		return centralstore.StoreSnapshot{Sessions: []centralstore.SessionView{
-			{Session: centralstore.Session{ID: "live"}},
-			{Session: centralstore.Session{ID: "dead"}},
+			{Session: centralstore.Session{ID: "live", Command: []string{"sh"}}},
+			{Session: centralstore.Session{ID: "dead", Command: []string{"sh"}}},
 		}}, nil
 	}}
 	runtime := RuntimeSourceFunc(func() map[centralstore.SessionID]RuntimeFacts {
@@ -367,5 +367,72 @@ func TestCloseStopsRunAndContextCancelStopsRun(t *testing.T) {
 	case <-done2:
 	case <-time.After(5 * time.Second):
 		t.Fatal("context cancel did not stop Run")
+	}
+}
+
+// TestVerdictOverlayNarrowsResumability pins the adapter-reconciliation
+// verdict overlay: VerdictGone narrows a dead row to non-resumable; unknown
+// and VerdictResumable keep the conservative default; a row without a
+// recorded command is never resumable (production parity: it cannot be
+// respawned); verdicts never affect live rows.
+func TestVerdictOverlayNarrowsResumability(t *testing.T) {
+	reader := &fakeReader{result: func(centralstore.SnapshotQuery) (centralstore.StoreSnapshot, error) {
+		return centralstore.StoreSnapshot{Sessions: []centralstore.SessionView{
+			{Session: centralstore.Session{ID: "confirmed", Command: []string{"sh"}}},
+			{Session: centralstore.Session{ID: "gone", Command: []string{"sh"}}},
+			{Session: centralstore.Session{ID: "live", Command: []string{"sh"}}},
+			{Session: centralstore.Session{ID: "no-command", Command: []string{}}},
+			{Session: centralstore.Session{ID: "unprobed", Command: []string{"sh"}}},
+		}}, nil
+	}}
+	runtime := RuntimeSourceFunc(func() map[centralstore.SessionID]RuntimeFacts {
+		return map[centralstore.SessionID]RuntimeFacts{"live": {PID: 1}}
+	})
+	verdicts := VerdictSourceFunc(func() map[centralstore.SessionID]ResumeVerdict {
+		return map[centralstore.SessionID]ResumeVerdict{
+			"confirmed": VerdictResumable,
+			"gone":      VerdictGone,
+			"live":      VerdictGone, // stale verdict must not narrow a live row
+		}
+	})
+	sink := &blockingSink{out: make(chan Batch, 8)}
+	c := New(reader, runtime, sink, WithVerdictSource(verdicts))
+	startComposer(t, c)
+
+	c.MarkDirty(true, false)
+	b := recvBatch(t, sink.out)
+	got := map[centralstore.SessionID][2]bool{} // alive, resumable
+	for _, row := range b.Sessions.Sessions {
+		got[row.ID] = [2]bool{row.Alive, row.Resumable}
+	}
+	want := map[centralstore.SessionID][2]bool{
+		"confirmed":  {false, true},
+		"gone":       {false, false},
+		"live":       {true, false},
+		"no-command": {false, false},
+		"unprobed":   {false, true},
+	}
+	for id, w := range want {
+		if got[id] != w {
+			t.Fatalf("%s: got alive/resumable=%v want %v", id, got[id], w)
+		}
+	}
+}
+
+// TestNilVerdictSourceKeepsDefault: without a VerdictSource every dead row
+// with a command stays a resume candidate.
+func TestNilVerdictSourceKeepsDefault(t *testing.T) {
+	reader := &fakeReader{result: func(centralstore.SnapshotQuery) (centralstore.StoreSnapshot, error) {
+		return centralstore.StoreSnapshot{Sessions: []centralstore.SessionView{
+			{Session: centralstore.Session{ID: "dead", Command: []string{"sh"}}},
+		}}, nil
+	}}
+	sink := &blockingSink{out: make(chan Batch, 8)}
+	c := New(reader, nil, sink)
+	startComposer(t, c)
+	c.MarkDirty(true, false)
+	b := recvBatch(t, sink.out)
+	if row := b.Sessions.Sessions[0]; row.Alive || !row.Resumable {
+		t.Fatalf("row=%#v", row)
 	}
 }
