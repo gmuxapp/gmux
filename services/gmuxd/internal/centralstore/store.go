@@ -33,6 +33,12 @@ type Store struct {
 	// beforePlacementFinalize is a test-only fault-injection seam. Production
 	// construction leaves it nil.
 	beforePlacementFinalize func() error
+
+	// betweenSnapshotQueries is a test-only seam invoked inside ReadSnapshot's
+	// read transaction, between component queries, to prove the transaction
+	// isolates the composition from concurrent writers. Production
+	// construction leaves it nil.
+	betweenSnapshotQueries func()
 }
 
 // Open creates (when absent), configures, and migrates the database in dir.
