@@ -72,24 +72,6 @@ const IconChevron = ({ className }: { className?: string }) => (
   </svg>
 )
 
-/** Animate an element's scrollTop to 0 over ~0.5s. The native
- *  scrollTo({behavior:'smooth'}) has an uncontrollable (often sluggish)
- *  duration for long distances, so we drive it ourselves with an
- *  easeOutCubic ramp. */
-function animateScrollToTop(el: HTMLElement | null, duration = 500) {
-  if (!el) return
-  const start = el.scrollTop
-  if (start === 0) return
-  const t0 = performance.now()
-  const step = (now: number) => {
-    const p = Math.min(1, (now - t0) / duration)
-    const ease = 1 - (1 - p) ** 3
-    el.scrollTop = start * (1 - ease)
-    if (p < 1) requestAnimationFrame(step)
-  }
-  requestAnimationFrame(step)
-}
-
 // ── Drag helpers ──
 
 /** True on devices with a pointer (mouse/trackpad). Touch-only devices
@@ -306,9 +288,31 @@ function FolderGroup({
   // sessions agree, per-row markers are noise.
   const folderPeers = new Set(visible.map(s => s.peer ?? ''))
   const mixedHosts = folderPeers.size > 1
+
+  const headerRef = useRef<HTMLDivElement>(null)
+  // Collapsing removes the rows below the header. Because headers are
+  // sticky, if you're scrolled down inside this folder its box can end
+  // up entirely above the viewport once its rows vanish — the header you
+  // just clicked disappears upward, which is disorienting. So when (and
+  // only when) collapsing would push the clicked header off the top,
+  // pull the scroll position back so it stays where it was.
+  const handleToggleCollapse = () => {
+    const el = headerRef.current
+    const scroll = el?.closest('.sidebar-scroll') as HTMLElement | null
+    const wasCollapsed = collapsed
+    const beforeTop = el && scroll
+      ? el.getBoundingClientRect().top - scroll.getBoundingClientRect().top
+      : 0
+    toggleFolderCollapsed(folder.key)
+    if (wasCollapsed || !el || !scroll) return // only correct when collapsing
+    requestAnimationFrame(() => {
+      const afterTop = el.getBoundingClientRect().top - scroll.getBoundingClientRect().top
+      if (afterTop < 0) scroll.scrollTop += afterTop - beforeTop
+    })
+  }
   return (
     <div class="folder">
-      <div class="folder-header">
+      <div class="folder-header" ref={headerRef}>
         <button
           type="button"
           class={`folder-name${folder.missing ? ' missing' : ''}${folder.unresolved ? ' unresolved' : ''}`}
@@ -318,7 +322,7 @@ function FolderGroup({
             : folder.missing
             ? `${folder.name} no longer exists on ${folder.peer} — remove this reference in Settings → Projects.`
             : collapsed ? `Expand ${folder.name}` : `Collapse ${folder.name}`}
-          onClick={() => toggleFolderCollapsed(folder.key)}
+          onClick={handleToggleCollapse}
         >
           <IconChevron className={`folder-chevron${collapsed ? ' collapsed' : ''}`} />
           <span class="folder-name-label">{folder.name}</span>
@@ -725,7 +729,7 @@ export function Sidebar({
             class="scroll-top-btn"
             aria-label="Scroll to top"
             title="Scroll to top"
-            onClick={() => animateScrollToTop(scrollRef.current)}
+            onClick={() => { if (scrollRef.current) scrollRef.current.scrollTop = 0 }}
           >
             Top ↑
           </button>
