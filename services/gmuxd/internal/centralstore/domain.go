@@ -774,8 +774,9 @@ func sameProjectShape(a, b ProjectEntry) bool {
 
 // ReplaceProjectCatalog is a bootstrap ordering primitive, not an
 // authoritative project-membership operation. It is deliberately restricted
-// to stores with zero placements because this slice has no match inputs with
-// which to rematch local and connected Local-peer subjects.
+// to stores with zero placements because it carries no match inputs with
+// which to rematch local and connected Local-peer subjects; use
+// ReplaceProjectCatalogAndRematch once placement exists.
 func (s *Store) ReplaceProjectCatalog(ctx context.Context, input []ProjectEntrySpec, at UnixMillis) (ProjectCatalog, MutationResult, error) {
 	if at < 0 {
 		return nil, MutationResult{}, errors.New("centralstore: catalog timestamp must be non-negative")
@@ -797,9 +798,36 @@ func (s *Store) ReplaceProjectCatalog(ctx context.Context, input []ProjectEntryS
 	if placementCount != 0 {
 		return nil, MutationResult{}, ErrCatalogHasPlacements
 	}
-	current, err := catalogFromQueries(ctx, q)
+	out, changed, err := replaceCatalogInTx(ctx, q, in, at)
 	if err != nil {
 		return nil, MutationResult{}, err
+	}
+	if !changed {
+		if err = tx.Commit(); err != nil {
+			return nil, MutationResult{}, err
+		}
+		return out, MutationResult{}, nil
+	}
+	if count, e := q.PlacementCount(ctx); e != nil {
+		return nil, MutationResult{}, e
+	} else if count != 0 {
+		return nil, MutationResult{}, errors.New("centralstore: placement appeared during bootstrap catalog replacement")
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, MutationResult{}, err
+	}
+	return out, MutationResult{Changed: true, WorldDirty: true}, nil
+}
+
+// replaceCatalogInTx applies one normalized catalog specification inside an
+// open transaction: identity-immutability validation, order/slug parking,
+// removal, insertion, in-place updates, and rule-set replacement. It reports
+// changed=false (and performs no write) when the specification is identical
+// to the stored catalog. Placement consequences are the caller's business.
+func replaceCatalogInTx(ctx context.Context, q *db.Queries, in []ProjectEntrySpec, at UnixMillis) (ProjectCatalog, bool, error) {
+	current, err := catalogFromQueries(ctx, q)
+	if err != nil {
+		return nil, false, err
 	}
 	byID := map[ProjectEntryID]ProjectEntry{}
 	oldIndex := map[ProjectEntryID]int{}
@@ -815,14 +843,14 @@ func (s *Store) ReplaceProjectCatalog(ctx context.Context, input []ProjectEntryS
 		if e.ID != 0 {
 			old, ok := byID[e.ID]
 			if !ok {
-				return nil, MutationResult{}, errors.New("centralstore: unknown project id")
+				return nil, false, errors.New("centralstore: unknown project id")
 			}
 			// A reference entry's slug is half its identity (ADR 0026 §7:
 			// references are identified by peer identity plus remote slug), so
 			// rebinding it in place is rejected; use delete+insert instead.
 			if old.Kind != want.Kind || old.PeerKey != want.PeerKey ||
 				(want.Kind == ProjectEntryReference && old.Slug != want.Slug) {
-				return nil, MutationResult{}, errors.New("centralstore: project identity is immutable")
+				return nil, false, errors.New("centralstore: project identity is immutable")
 			}
 			changedEntry[e.ID] = oldIndex[e.ID] != i || old.Slug != want.Slug || !reflect.DeepEqual(old.Rules, want.Rules)
 			changedRules[e.ID] = !reflect.DeepEqual(old.Rules, want.Rules)
@@ -832,15 +860,12 @@ func (s *Store) ReplaceProjectCatalog(ctx context.Context, input []ProjectEntryS
 		}
 	}
 	if unchanged {
-		if err = tx.Commit(); err != nil {
-			return nil, MutationResult{}, err
-		}
-		return current, MutationResult{}, nil
+		return current, false, nil
 	}
 	if len(current) > 0 {
 		offset := int64(len(current) + len(in) + 1)
 		if err = q.ParkProjectEntries(ctx, offset); err != nil {
-			return nil, MutationResult{}, err
+			return nil, false, err
 		}
 	}
 	// Delete removed entries and park changed entries' slugs before the
@@ -859,15 +884,15 @@ func (s *Store) ReplaceProjectCatalog(ctx context.Context, input []ProjectEntryS
 		}
 		n, er := q.DeleteProjectEntry(ctx, int64(e.ID))
 		if er != nil {
-			return nil, MutationResult{}, er
+			return nil, false, er
 		}
 		if n != 1 {
-			return nil, MutationResult{}, errors.New("centralstore: project delete lost identity")
+			return nil, false, errors.New("centralstore: project delete lost identity")
 		}
 	}
 	slugNonce, err := nonce()
 	if err != nil {
-		return nil, MutationResult{}, err
+		return nil, false, err
 	}
 	parkedSlugs := 0
 	for _, e := range in {
@@ -876,10 +901,10 @@ func (s *Store) ReplaceProjectCatalog(ctx context.Context, input []ProjectEntryS
 		}
 		n, er := q.ParkProjectEntrySlug(ctx, db.ParkProjectEntrySlugParams{Slug: fmt.Sprintf("~:%s:%d", slugNonce, parkedSlugs), ID: int64(e.ID)})
 		if er != nil {
-			return nil, MutationResult{}, er
+			return nil, false, er
 		}
 		if n != 1 {
-			return nil, MutationResult{}, errors.New("centralstore: project slug parking lost identity")
+			return nil, false, errors.New("centralstore: project slug parking lost identity")
 		}
 		parkedSlugs++
 	}
@@ -888,7 +913,7 @@ func (s *Store) ReplaceProjectCatalog(ctx context.Context, input []ProjectEntryS
 		if e.ID == 0 {
 			id, er := q.InsertProjectEntry(ctx, db.InsertProjectEntryParams{SidebarOrder: int64(i), EntryKind: string(entry.Kind), Slug: entry.Slug, PeerKey: nullString(string(entry.PeerKey)), CreatedAtMs: int64(at), UpdatedAtMs: int64(at)})
 			if er != nil {
-				return nil, MutationResult{}, er
+				return nil, false, er
 			}
 			e.ID = ProjectEntryID(id)
 			in[i].ID = e.ID
@@ -897,18 +922,18 @@ func (s *Store) ReplaceProjectCatalog(ctx context.Context, input []ProjectEntryS
 		} else if changedEntry[e.ID] {
 			n, er := q.UpdateProjectEntry(ctx, db.UpdateProjectEntryParams{SidebarOrder: int64(i), Slug: entry.Slug, UpdatedAtMs: int64(at), ID: int64(e.ID)})
 			if er != nil {
-				return nil, MutationResult{}, er
+				return nil, false, er
 			}
 			if n != 1 {
-				return nil, MutationResult{}, errors.New("centralstore: project update lost identity")
+				return nil, false, errors.New("centralstore: project update lost identity")
 			}
 		} else {
 			n, er := q.FinalizeProjectEntryOrder(ctx, db.FinalizeProjectEntryOrderParams{SidebarOrder: int64(i), ID: int64(e.ID)})
 			if er != nil {
-				return nil, MutationResult{}, er
+				return nil, false, er
 			}
 			if n != 1 {
-				return nil, MutationResult{}, errors.New("centralstore: project order finalization lost identity")
+				return nil, false, errors.New("centralstore: project order finalization lost identity")
 			}
 		}
 	}
@@ -917,7 +942,7 @@ func (s *Store) ReplaceProjectCatalog(ctx context.Context, input []ProjectEntryS
 	for _, e := range in {
 		if e.Owned != nil && changedRules[e.ID] {
 			if err = q.DeleteProjectRules(ctx, int64(e.ID)); err != nil {
-				return nil, MutationResult{}, err
+				return nil, false, err
 			}
 		}
 	}
@@ -927,29 +952,21 @@ func (s *Store) ReplaceProjectCatalog(ctx context.Context, input []ProjectEntryS
 		}
 		for j, r := range e.Owned.Rules {
 			if err = q.InsertProjectRule(ctx, db.InsertProjectRuleParams{ProjectEntryID: int64(e.ID), RuleOrder: int64(j), Path: nullString(r.Path), Remote: nullString(r.Remote), Exact: boolInt(r.Exact)}); err != nil {
-				return nil, MutationResult{}, err
+				return nil, false, err
 			}
 		}
 	}
 	out, err := catalogFromQueries(ctx, q)
 	if err != nil {
-		return nil, MutationResult{}, err
+		return nil, false, err
 	}
 	if len(out) != len(in) {
-		return nil, MutationResult{}, errors.New("centralstore: project cardinality invariant failed")
+		return nil, false, errors.New("centralstore: project cardinality invariant failed")
 	}
 	if err = assertCatalogOrder(ctx, q); err != nil {
-		return nil, MutationResult{}, err
+		return nil, false, err
 	}
-	if count, e := q.PlacementCount(ctx); e != nil {
-		return nil, MutationResult{}, e
-	} else if count != 0 {
-		return nil, MutationResult{}, errors.New("centralstore: placement appeared during bootstrap catalog replacement")
-	}
-	if err = tx.Commit(); err != nil {
-		return nil, MutationResult{}, err
-	}
-	return out, MutationResult{Changed: true, WorldDirty: true}, nil
+	return out, true, nil
 }
 
 func subjectKey(s SubjectRef) string {

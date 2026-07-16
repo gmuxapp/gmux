@@ -445,6 +445,26 @@ func valueBool(observed *bool, fallback bool) bool {
 	return *observed
 }
 
+// matchCatalog is the single project-attribution entry point shared by the
+// registration-time rematch and the catalog-replacement rematch
+// (ReplaceProjectCatalogAndRematch): both derive membership from the same
+// projectmatch policy over the same catalog DTO, so they provably agree.
+func matchCatalog(catalog ProjectCatalog, in projectmatch.Inputs) (ProjectEntryID, bool) {
+	entries := make([]projectmatch.Entry, len(catalog))
+	for i, entry := range catalog {
+		entries[i].Reference = entry.Kind == ProjectEntryReference
+		entries[i].Rules = make([]projectmatch.Rule, len(entry.Rules))
+		for j, rule := range entry.Rules {
+			entries[i].Rules[j] = projectmatch.Rule{Path: rule.Path, Remote: rule.Remote, Exact: rule.Exact}
+		}
+	}
+	index, ok := projectmatch.Match(entries, in)
+	if !ok {
+		return 0, false
+	}
+	return catalog[index].ID, true
+}
+
 func rematchRegistration(ctx context.Context, q *db.Queries, fault func() error, current, before Session, isNew, dismissed bool) (bool, error) {
 	placementChanged := false
 	all, err := placements(ctx, q)
@@ -469,15 +489,7 @@ func rematchRegistration(ctx context.Context, q *db.Queries, fault func() error,
 	if err != nil {
 		return false, err
 	}
-	entries := make([]projectmatch.Entry, len(catalog))
-	for i, entry := range catalog {
-		entries[i].Reference = entry.Kind == ProjectEntryReference
-		entries[i].Rules = make([]projectmatch.Rule, len(entry.Rules))
-		for j, rule := range entry.Rules {
-			entries[i].Rules[j] = projectmatch.Rule{Path: rule.Path, Remote: rule.Remote, Exact: rule.Exact}
-		}
-	}
-	index, matched := projectmatch.Match(entries, projectmatch.Inputs{CWD: current.CWD, WorkspaceRoot: current.WorkspaceRoot, Remotes: current.Remotes})
+	project64, matched := matchCatalog(catalog, projectmatch.Inputs{CWD: current.CWD, WorkspaceRoot: current.WorkspaceRoot, Remotes: current.Remotes})
 
 	if target != nil && (!matched || dismissed) {
 		n, deleteErr := q.DeleteLocalSessionPlacement(ctx, nullString(string(current.ID)))
@@ -510,7 +522,7 @@ func rematchRegistration(ctx context.Context, q *db.Queries, fault func() error,
 		normalized, normalizeErr := normalizePlacements(ctx, q, fault)
 		return placementChanged || normalized, normalizeErr
 	}
-	project := int64(catalog[index].ID)
+	project := int64(project64)
 	if target == nil {
 		target = &placementRec{project: project, local: string(current.ID), parent: func() string {
 			if current.LaunchParentID == nil {

@@ -164,6 +164,10 @@ RETURNING id;
 -- name: DeleteLocalPeerPlacements :execrows
 DELETE FROM project_placements WHERE local_peer_key = ?;
 
+-- name: DeleteLocalPeerPlacement :execrows
+DELETE FROM project_placements
+WHERE local_peer_key = ? AND peer_session_id = ?;
+
 -- name: TemporaryPlacementCount :one
 SELECT COUNT(*) FROM project_placements WHERE sibling_scope LIKE '~:%';
 

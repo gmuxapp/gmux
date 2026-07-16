@@ -43,6 +43,24 @@ func (q *Queries) ClearDirectChildParents(ctx context.Context, launchParentID sq
 	return result.RowsAffected()
 }
 
+const deleteLocalPeerPlacement = `-- name: DeleteLocalPeerPlacement :execrows
+DELETE FROM project_placements
+WHERE local_peer_key = ? AND peer_session_id = ?
+`
+
+type DeleteLocalPeerPlacementParams struct {
+	LocalPeerKey  sql.NullString
+	PeerSessionID sql.NullString
+}
+
+func (q *Queries) DeleteLocalPeerPlacement(ctx context.Context, arg DeleteLocalPeerPlacementParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteLocalPeerPlacement, arg.LocalPeerKey, arg.PeerSessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteLocalPeerPlacements = `-- name: DeleteLocalPeerPlacements :execrows
 DELETE FROM project_placements WHERE local_peer_key = ?
 `
