@@ -41,6 +41,17 @@ type LocalSession struct {
 	PromotedToRoot   int64
 }
 
+type ManualPeer struct {
+	ID          int64
+	RowVersion  int64
+	Name        string
+	Url         string
+	Token       sql.NullString
+	NodeID      sql.NullString
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
 type ProjectEntry struct {
 	ID           int64
 	SidebarOrder int64

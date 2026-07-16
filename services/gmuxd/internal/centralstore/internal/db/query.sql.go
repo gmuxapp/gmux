@@ -85,6 +85,18 @@ func (q *Queries) DeleteLocalSessionPlacement(ctx context.Context, localSessionI
 	return result.RowsAffected()
 }
 
+const deleteManualPeerByName = `-- name: DeleteManualPeerByName :execrows
+DELETE FROM manual_peers WHERE name = ?
+`
+
+func (q *Queries) DeleteManualPeerByName(ctx context.Context, name string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteManualPeerByName, name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteProjectEntry = `-- name: DeleteProjectEntry :execrows
 DELETE FROM project_entries WHERE id = ?
 `
@@ -318,6 +330,44 @@ func (q *Queries) InsertLocalPlacement(ctx context.Context, arg InsertLocalPlace
 	return id, err
 }
 
+const insertManualPeer = `-- name: InsertManualPeer :one
+INSERT INTO manual_peers (name, url, token, node_id, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?)
+RETURNING id, row_version, name, url, token, node_id, created_at_ms, updated_at_ms
+`
+
+type InsertManualPeerParams struct {
+	Name        string
+	Url         string
+	Token       sql.NullString
+	NodeID      sql.NullString
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) InsertManualPeer(ctx context.Context, arg InsertManualPeerParams) (ManualPeer, error) {
+	row := q.db.QueryRowContext(ctx, insertManualPeer,
+		arg.Name,
+		arg.Url,
+		arg.Token,
+		arg.NodeID,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+	)
+	var i ManualPeer
+	err := row.Scan(
+		&i.ID,
+		&i.RowVersion,
+		&i.Name,
+		&i.Url,
+		&i.Token,
+		&i.NodeID,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const insertProjectEntry = `-- name: InsertProjectEntry :one
 INSERT INTO project_entries
 (sidebar_order, entry_kind, slug, peer_key, created_at_ms, updated_at_ms)
@@ -462,6 +512,42 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 		&i.PromotedToRoot,
 	)
 	return i, err
+}
+
+const listManualPeers = `-- name: ListManualPeers :many
+SELECT id, row_version, name, url, token, node_id, created_at_ms, updated_at_ms FROM manual_peers ORDER BY id
+`
+
+func (q *Queries) ListManualPeers(ctx context.Context) ([]ManualPeer, error) {
+	rows, err := q.db.QueryContext(ctx, listManualPeers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ManualPeer
+	for rows.Next() {
+		var i ManualPeer
+		if err := rows.Scan(
+			&i.ID,
+			&i.RowVersion,
+			&i.Name,
+			&i.Url,
+			&i.Token,
+			&i.NodeID,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listPlacements = `-- name: ListPlacements :many
@@ -865,6 +951,42 @@ func (q *Queries) UpdateCommonFacts(ctx context.Context, arg UpdateCommonFactsPa
 		arg.ExitCode,
 		arg.TerminalCols,
 		arg.TerminalRows,
+		arg.ID,
+		arg.RowVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateManualPeer = `-- name: UpdateManualPeer :execrows
+UPDATE manual_peers
+SET url = ?, token = ?, node_id = ?, updated_at_ms = ?,
+    row_version = row_version + 1
+WHERE id = ? AND row_version = ?
+`
+
+type UpdateManualPeerParams struct {
+	Url         string
+	Token       sql.NullString
+	NodeID      sql.NullString
+	UpdatedAtMs int64
+	ID          int64
+	RowVersion  int64
+}
+
+// UpdateManualPeer sets token and node_id UNCONDITIONALLY. The
+// unknown-not-clear merge policy (empty spec value preserves the stored
+// one) lives in Go (UpsertManualPeer), which must always pass the merged
+// values here; adding an explicit token-clearing flow requires revisiting
+// that seam, not just the Go caller (sql review L-01).
+func (q *Queries) UpdateManualPeer(ctx context.Context, arg UpdateManualPeerParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateManualPeer,
+		arg.Url,
+		arg.Token,
+		arg.NodeID,
+		arg.UpdatedAtMs,
 		arg.ID,
 		arg.RowVersion,
 	)

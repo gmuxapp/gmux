@@ -171,3 +171,25 @@ WHERE local_peer_key = ? AND peer_session_id = ?;
 -- name: TemporaryPlacementCount :one
 SELECT COUNT(*) FROM project_placements WHERE sibling_scope LIKE '~:%';
 
+-- name: ListManualPeers :many
+SELECT * FROM manual_peers ORDER BY id;
+
+-- name: InsertManualPeer :one
+INSERT INTO manual_peers (name, url, token, node_id, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?)
+RETURNING *;
+
+-- UpdateManualPeer sets token and node_id UNCONDITIONALLY. The
+-- unknown-not-clear merge policy (empty spec value preserves the stored
+-- one) lives in Go (UpsertManualPeer), which must always pass the merged
+-- values here; adding an explicit token-clearing flow requires revisiting
+-- that seam, not just the Go caller (sql review L-01).
+-- name: UpdateManualPeer :execrows
+UPDATE manual_peers
+SET url = ?, token = ?, node_id = ?, updated_at_ms = ?,
+    row_version = row_version + 1
+WHERE id = ? AND row_version = ?;
+
+-- name: DeleteManualPeerByName :execrows
+DELETE FROM manual_peers WHERE name = ?;
+
