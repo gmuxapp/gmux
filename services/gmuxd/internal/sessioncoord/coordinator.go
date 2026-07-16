@@ -108,6 +108,19 @@ type Coordinator struct {
 	resolver ConversationResolver
 	lineage  lineageCache
 
+	// reconciler/reconcileBatch/reconcileInFlight/verdicts back adapter
+	// reconciliation (reconcile.go). verdicts is guarded by mu; it is
+	// runtime-only (never persisted) and re-populated by probing.
+	reconciler        AdapterReconciler
+	reconcileBatch    int
+	reconcileInFlight bool
+	verdicts          map[centralstore.SessionID]ResumeVerdict
+	// verdictsInvalidated is non-nil exactly while a reconcile pass is in
+	// flight; it records IDs whose verdicts were invalidated (registration,
+	// Remove) after the pass gathered its candidates, so the pass never
+	// re-sets a stale verdict on them.
+	verdictsInvalidated map[centralstore.SessionID]bool
+
 	// ops tracks per-session in-flight lifecycle operations (stop, resume,
 	// restart). Guarded by mu; held across those operations' runner I/O so a
 	// concurrent lifecycle op for the same session fails fast instead of
@@ -148,9 +161,10 @@ func New(registry *Registry, runners RunnerClient, durable Durable, dirty DirtyS
 	}
 	c := &Coordinator{
 		registry: registry, runners: runners, durable: durable, dirty: dirty, errSink: errSink,
-		now:       func() centralstore.UnixMillis { return centralstore.UnixMillis(time.Now().UnixMilli()) },
-		ops:       make(map[centralstore.SessionID]string),
-		converged: make(chan struct{}),
+		now:            func() centralstore.UnixMillis { return centralstore.UnixMillis(time.Now().UnixMilli()) },
+		ops:            make(map[centralstore.SessionID]string),
+		converged:      make(chan struct{}),
+		reconcileBatch: 32,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -369,6 +383,14 @@ loop:
 		}
 		c.mu.Unlock()
 		return Runtime{}, err
+	}
+
+	// Any committed registration invalidates reconciliation verdicts: the
+	// merged facts (possibly a new conversation ref) supersede the probe that
+	// produced them, and evicted losers no longer exist.
+	c.invalidateVerdict(id)
+	for _, ev := range reg.Evict {
+		c.invalidateVerdict(ev.ID)
 	}
 
 	runtime := Runtime{
@@ -619,6 +641,16 @@ func (c *Coordinator) apply(ctx context.Context, id centralstore.SessionID, gene
 	// Publish outside all locks so a blocking or re-entrant sink cannot
 	// stall the coordinator or deadlock.
 	c.publish(ctx, result)
+}
+
+// invalidateVerdict clears a reconciliation verdict and, while a reconcile
+// pass is in flight, records the invalidation so that pass cannot re-set a
+// stale verdict. Caller must hold c.mu.
+func (c *Coordinator) invalidateVerdict(id centralstore.SessionID) {
+	delete(c.verdicts, id)
+	if c.verdictsInvalidated != nil {
+		c.verdictsInvalidated[id] = true
+	}
 }
 
 func (c *Coordinator) publish(ctx context.Context, r centralstore.MutationResult) {

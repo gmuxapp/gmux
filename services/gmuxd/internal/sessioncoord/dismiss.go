@@ -132,6 +132,9 @@ func (c *Coordinator) Remove(ctx context.Context, id centralstore.SessionID, obs
 		}
 	}
 	result, err := c.durable.RemoveSessionAtVersion(ctx, id, observed)
+	if err == nil {
+		c.invalidateVerdict(id) // the row is gone; its reconciliation verdict with it
+	}
 	c.mu.Unlock()
 	if err != nil {
 		return err
