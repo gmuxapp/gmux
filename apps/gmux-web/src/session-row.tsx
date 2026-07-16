@@ -74,12 +74,11 @@ function formatAge(stampIso: string | undefined, now: number): string | null {
 
 /** Middle-truncate a project name so a long one keeps its head and tail
  *  (…) instead of vanishing behind a flex ellipsis — you can still tell
- *  `review-coordinator` from `review-controller`. Keeps ≥3 chars each
- *  side; names within `max` are untouched. */
-export function middleTruncate(s: string, max = 20): string {
-  if (s.length <= max) return s
-  const head = Math.max(3, Math.ceil((max - 1) / 2))
-  const tail = Math.max(3, Math.floor((max - 1) / 2))
+ *  `review-coordinator` from `review-controller`. Keeps the first
+ *  `head` and last `tail` chars (10 + … + 5 = 16 by default); names
+ *  within that budget are untouched. */
+export function middleTruncate(s: string, head = 10, tail = 5): string {
+  if (s.length <= head + tail + 1) return s
   return `${s.slice(0, head)}…${s.slice(s.length - tail)}`
 }
 
@@ -186,7 +185,7 @@ export function SessionRow({
       {content}
       {onClose && (
         <button
-          class="session-row-close"
+          class="session-close-btn"
           onClick={(e) => { e.stopPropagation(); e.preventDefault(); onClose() }}
           title={session.alive ? 'Kill session' : 'Dismiss'}
         >

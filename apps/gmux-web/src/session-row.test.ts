@@ -2,28 +2,19 @@ import { describe, it, expect } from 'vitest'
 import { middleTruncate } from './session-row'
 
 describe('middleTruncate', () => {
-  it('leaves names within the limit untouched', () => {
+  it('leaves names within 16 chars untouched', () => {
     expect(middleTruncate('gmux')).toBe('gmux')
-    expect(middleTruncate('review-coordinator')).toBe('review-coordinator') // 18 ≤ 20
-    expect(middleTruncate('x'.repeat(20))).toBe('x'.repeat(20))
+    expect(middleTruncate('sixteen-chars-16')).toBe('sixteen-chars-16') // exactly 16
   })
 
-  it('middle-truncates longer names, keeping head and tail', () => {
-    const out = middleTruncate('registration-snapshot-service', 20) // 29 chars
-    expect(out).toContain('…')
-    expect(out).toMatch(/^regi/) // head preserved
-    expect(out).toMatch(/vice$/) // tail preserved
-    // One … replaces the middle; the result never exceeds the budget.
-    expect(out.length).toBeLessThanOrEqual(20)
+  it('middle-truncates longer names to first 10 + … + last 5', () => {
+    const out = middleTruncate('registration-snapshot-service') // 29 chars
+    expect(out).toBe('registrati…rvice')
+    expect(out.length).toBe(16)
   })
 
-  it('always keeps at least three chars each side (per the spec)', () => {
-    // Even at an absurdly small budget the head/tail floors hold.
-    const out = middleTruncate('abcdefghijklmnop', 4)
-    const [head, tail] = out.split('…')
-    expect(head.length).toBeGreaterThanOrEqual(3)
-    expect(tail.length).toBeGreaterThanOrEqual(3)
-    expect(out.startsWith('abc')).toBe(true)
-    expect(out.endsWith('nop')).toBe(true)
+  it('keeps head and tail so similar names stay distinguishable', () => {
+    expect(middleTruncate('review-coordinator')).toBe('review-coo…nator') // 18
+    expect(middleTruncate('review-controller')).toBe('review-con…oller') // 17
   })
 })
