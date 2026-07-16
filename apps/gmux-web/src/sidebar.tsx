@@ -455,7 +455,7 @@ function ActivityList({
   onCloseSession: (session: Session) => void
   onClick?: () => void
 }) {
-  const { needsAttention, running, buckets, older } = sidebarActivity.value
+  const buckets = sidebarActivity.value
   const foldersVal = folders.value
 
   const folderBySessionId = new Map<string, Folder>()
@@ -481,12 +481,12 @@ function ActivityList({
     )
   }
 
-  const sections: { label: string; sessions: Session[] }[] = [
-    { label: 'Waiting', sessions: needsAttention },
-    { label: 'Active', sessions: running },
-    ...buckets.map(b => ({ label: b.label, sessions: b.sessions })),
-    { label: 'Older', sessions: older },
-  ].filter(sec => sec.sessions.length > 0)
+  // Drop folderless sessions per bucket (the brief post-restart window
+  // where recovered sessions arrive unstamped) so a day heading never
+  // renders with no rows. partitionByDay never emits empty buckets.
+  const sections = buckets
+    .map(b => ({ label: b.label, sessions: b.sessions.filter(s => folderBySessionId.has(s.id)) }))
+    .filter(sec => sec.sessions.length > 0)
 
   if (sections.length === 0) {
     return (
@@ -501,8 +501,8 @@ function ActivityList({
   return (
     <>
       {sections.map(sec => (
-        <div class="sidebar-activity-section" key={sec.label}>
-          <div class="sidebar-section-title">{sec.label}</div>
+        <div class="sidebar-activity-section" key={sec.label ?? 'today'}>
+          {sec.label !== null && <div class="sidebar-section-title">{sec.label}</div>}
           {sec.sessions.map(renderRow)}
         </div>
       ))}
