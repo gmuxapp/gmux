@@ -35,13 +35,15 @@ export const SessionSchema = z.object({
   // conversation_file means the same conversation is open in multiple tabs;
   // the UI surfaces that as an "open elsewhere" warning.
   conversation_file: z.string().optional(),
-  // RFC3339 timestamp of the most recent noteworthy state transition
-  // (exited, unread on, working on, error on). Set by the owning
-  // daemon; the UI uses it to populate the "Recent" section on the
-  // home dashboard and as a sort key. Brand-new sessions arrive with
-  // this unset; the first follow-up transition stamps it. See the
-  // store.Session docstring on LastActivityAt for the exact bump set.
-  last_activity_at: z.string().optional(),
+  // RFC3339 timestamp of the last time this session produced *unseen*
+  // output (read -> unread). Set by the owning daemon; the UI uses it
+  // as the activity-feed sort key so sessions float up when the agent
+  // (or shell/editor) produces something you haven't looked at.
+  // Deliberately NOT bumped by your own input (working on) or by exit/
+  // error. Brand-new sessions arrive unset; the first unread transition
+  // stamps it. A future last_input_at could track the user side. See
+  // the store.Session docstring on LastOutputAt for the exact bump set.
+  last_output_at: z.string().optional(),
   socket_path: z.string().optional(),
   terminal_cols: z.number().int().positive().optional(),
   terminal_rows: z.number().int().positive().optional(),

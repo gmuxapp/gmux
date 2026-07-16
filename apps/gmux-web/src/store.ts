@@ -840,7 +840,7 @@ export const unreadCount = computed(() => {
 // The home page surfaces sessions in three sections. Each session
 // appears in at most one section; priority is Needs attention >
 // Running > Recent. Sort within every section is newest-first by
-// last_activity_at (falling back to created_at for sessions that
+// last_output_at (falling back to created_at for sessions that
 // have not transitioned yet, so a brand-new idle session shows at
 // the top of Running and an old quiet one drops to the bottom).
 //
@@ -860,21 +860,21 @@ export interface RecentBucket {
   sessions: Session[]
 }
 
-function activityTimeMs(s: Session): number {
-  // last_activity_at is canonical when present (daemon-stamped on
-  // noteworthy transitions). For never-transitioned sessions, fall
-  // back to created_at so they sort relative to peers rather than
-  // landing at the epoch.
-  const stamp = s.last_activity_at ?? s.created_at
+function outputTimeMs(s: Session): number {
+  // last_output_at is canonical when present (daemon-stamped when the
+  // session last produced unseen output). For sessions that never went
+  // unread, fall back to created_at so they sort relative to peers
+  // rather than landing at the epoch.
+  const stamp = s.last_output_at ?? s.created_at
   const t = Date.parse(stamp)
   return Number.isFinite(t) ? t : 0
 }
 
 function byActivityDesc(a: Session, b: Session): number {
-  const dt = activityTimeMs(b) - activityTimeMs(a)
+  const dt = outputTimeMs(b) - outputTimeMs(a)
   if (dt !== 0) return dt
   // Stable tiebreaker on id. Sessions with identical timestamps
-  // (notably corpses persisted before last_activity_at existed,
+  // (notably corpses persisted before last_output_at existed,
   // which all fall back to created_at) must sort identically
   // across re-renders. Without this, every SSE event rebuilds
   // sessions.value in a different order and the section visibly
@@ -953,7 +953,7 @@ export function partitionForHome(
   const yesterday: Session[] = []
   const earlierWeek: Session[] = []
   for (const s of leftover) {
-    const t = activityTimeMs(s)
+    const t = outputTimeMs(s)
     if (t >= hourAgo) lastHour.push(s)
     else if (t >= todayMidnight) earlierToday.push(s)
     else if (t >= yesterdayMidnight) yesterday.push(s)
@@ -1002,7 +1002,7 @@ export function toUISession(s: ProtocolSession): Session {
     unread: s.unread ?? false,
     resumable: s.resumable ?? false,
     conversation_file: s.conversation_file ?? undefined,
-    last_activity_at: s.last_activity_at ?? undefined,
+    last_output_at: s.last_output_at ?? undefined,
     socket_path: s.socket_path ?? '',
     terminal_cols: s.terminal_cols ?? undefined,
     terminal_rows: s.terminal_rows ?? undefined,

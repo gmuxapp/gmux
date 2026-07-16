@@ -68,11 +68,11 @@ describe('partitionForHome', () => {
       const sessions = [
         makeSession({
           id: 'dead', cwd: '/x', alive: false,
-          last_activity_at: stamp(-5 * 60 * 1000),
+          last_output_at: stamp(-5 * 60 * 1000),
         }),
         makeSession({
           id: 'dead-unread', cwd: '/x', alive: false, unread: true,
-          last_activity_at: stamp(-5 * 60 * 1000),
+          last_output_at: stamp(-5 * 60 * 1000),
         }),
       ]
       const { needsAttention, running, buckets } = partitionForHome(sessions, NOW)
@@ -85,26 +85,26 @@ describe('partitionForHome', () => {
   describe('sort order', () => {
     const working = { working: true, error: false }
 
-    it('sorts each section newest-first by last_activity_at', () => {
-      const a = makeSession({ id: 'a', cwd: '/x', alive: true, status: working, last_activity_at: stamp(-10_000) })
-      const b = makeSession({ id: 'b', cwd: '/x', alive: true, status: working, last_activity_at: stamp(-1_000) })
-      const c = makeSession({ id: 'c', cwd: '/x', alive: true, status: working, last_activity_at: stamp(-5_000) })
+    it('sorts each section newest-first by last_output_at', () => {
+      const a = makeSession({ id: 'a', cwd: '/x', alive: true, status: working, last_output_at: stamp(-10_000) })
+      const b = makeSession({ id: 'b', cwd: '/x', alive: true, status: working, last_output_at: stamp(-1_000) })
+      const c = makeSession({ id: 'c', cwd: '/x', alive: true, status: working, last_output_at: stamp(-5_000) })
       const { running } = partitionForHome([a, b, c], NOW)
       expect(running.map(s => s.id)).toEqual(['b', 'c', 'a'])
     })
 
-    it('falls back to created_at when last_activity_at is missing', () => {
-      // A brand-new working session has no last_activity_at (per the
+    it('falls back to created_at when last_output_at is missing', () => {
+      // A brand-new working session has no last_output_at (per the
       // daemon's rule: creation doesn't bump). The sort still needs
       // to place it somewhere sensible. created_at fallback puts new
       // sessions at the top, where they belong.
       const old = makeSession({
         id: 'old', cwd: '/x', alive: true, status: working,
-        created_at: stamp(-3600_000), last_activity_at: stamp(-3600_000),
+        created_at: stamp(-3600_000), last_output_at: stamp(-3600_000),
       })
       const fresh = makeSession({
         id: 'fresh', cwd: '/x', alive: true, status: working,
-        created_at: stamp(-1_000), // no last_activity_at
+        created_at: stamp(-1_000), // no last_output_at
       })
       const { running } = partitionForHome([old, fresh], NOW)
       expect(running.map(s => s.id)).toEqual(['fresh', 'old'])
@@ -112,7 +112,7 @@ describe('partitionForHome', () => {
 
     it('breaks timestamp ties by id (deterministic, no flicker)', () => {
       // Sessions with identical timestamps (notably the corpses
-      // persisted before last_activity_at existed, all falling back
+      // persisted before last_output_at existed, all falling back
       // to a similar created_at) must sort the same way every time.
       // Without a stable tiebreaker, the input order from
       // sessions.value rebuilding on each SSE event would re-order
@@ -120,7 +120,7 @@ describe('partitionForHome', () => {
       // must not affect output.
       const same = stamp(-1000)
       const make = (id: string) => makeSession({
-        id, cwd: '/x', alive: true, status: working, last_activity_at: same,
+        id, cwd: '/x', alive: true, status: working, last_output_at: same,
       })
       const a = make('a')
       const b = make('b')
@@ -138,7 +138,7 @@ describe('partitionForHome', () => {
     // working/unread). Dead sessions never reach them since home
     // filters them out at the input.
     const idle = (id: string, ageMs: number) => makeSession({
-      id, cwd: '/x', alive: true, last_activity_at: stamp(-ageMs),
+      id, cwd: '/x', alive: true, last_output_at: stamp(-ageMs),
     })
 
     it('groups idle-alive sessions into the four recency buckets', () => {
@@ -214,10 +214,10 @@ describe('partitionForHome', () => {
 
     it('sorts `older` newest-first (dead + stale mixed)', () => {
       const dead = makeSession({
-        id: 'dead', cwd: '/x', alive: false, last_activity_at: stamp(-2 * HOUR),
+        id: 'dead', cwd: '/x', alive: false, last_output_at: stamp(-2 * HOUR),
       })
       const stale = makeSession({
-        id: 'stale', cwd: '/x', alive: true, last_activity_at: stamp(-10 * DAY),
+        id: 'stale', cwd: '/x', alive: true, last_output_at: stamp(-10 * DAY),
       })
       const { older } = partitionForHome([stale, dead], NOW)
       // dead was active 2h ago, stale 10d ago -> dead is newer.

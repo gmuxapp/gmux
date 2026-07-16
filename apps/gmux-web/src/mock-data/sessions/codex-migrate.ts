@@ -25,7 +25,7 @@ export default {
   status: { working: false },
   unread: true,
   project_slug: 'api',
-  last_activity_at: ago(9),
+  last_output_at: ago(9),
   socket_path: '/tmp/gmux-sessions/mock.sock',
   peer: 'server',
   terminal: [

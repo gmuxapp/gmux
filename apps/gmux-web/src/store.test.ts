@@ -266,7 +266,7 @@ describe('sidebar views share one membership (Projects == Activity)', () => {
     // dropped dead sessions, so a resumable corpse was open in the
     // terminal but had no row in Activity view. Now it lands in `older`.
     _rawSessions.value = [
-      makeSession({ id: 'live', cwd: '/p', adapter: 'shell', slug: 'lv', alive: true, last_activity_at: new Date().toISOString(), project_slug: 'proj' }),
+      makeSession({ id: 'live', cwd: '/p', adapter: 'shell', slug: 'lv', alive: true, last_output_at: new Date().toISOString(), project_slug: 'proj' }),
       makeSession({ id: 'corpse', cwd: '/p', adapter: 'shell', slug: 'cp', alive: false, resumable: true, project_slug: 'proj' }),
     ]
     expect(sidebarActivity.value.older.map(s => s.id)).toEqual(['corpse'])
@@ -324,20 +324,20 @@ describe('toUISession project stamp passthrough', () => {
     expect(ui.project_slug).toBeUndefined()
   })
 
-  it('passes last_activity_at through from the wire', () => {
+  it('passes last_output_at through from the wire', () => {
     // The owning daemon stamps this; the UI uses it for the home
     // dashboard's Recent section sort. Pure passthrough at the
     // boundary; no client-side derivation.
     const ui = toUISession({
       id: 'sess-1', alive: true,
-      last_activity_at: '2026-01-15T08:00:00Z',
+      last_output_at: '2026-01-15T08:00:00Z',
     } as any)
-    expect(ui.last_activity_at).toBe('2026-01-15T08:00:00Z')
+    expect(ui.last_output_at).toBe('2026-01-15T08:00:00Z')
   })
 
-  it('leaves last_activity_at undefined when the wire omits it', () => {
+  it('leaves last_output_at undefined when the wire omits it', () => {
     const ui = toUISession({ id: 'sess-1', alive: true } as any)
-    expect(ui.last_activity_at).toBeUndefined()
+    expect(ui.last_output_at).toBeUndefined()
   })
 
   it('treats empty-string project_slug as unstamped', () => {

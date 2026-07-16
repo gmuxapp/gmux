@@ -33,42 +33,42 @@ function demo(over: Partial<MockSession> & Pick<MockSession, 'id' | 'title'>): M
 export const DEMO_ACTIVITY: MockSession[] = [
   demo({
     id: 'sess-demo-unread', title: 'fix flaky e2e test',
-    unread: true, last_activity_at: ago(3),
+    unread: true, last_output_at: ago(3),
   }),
   demo({
     id: 'sess-demo-unread2', title: 'review PR feedback',
     cwd: '/home/user/dev/openclaw', workspace_root: '/home/user/dev/openclaw',
     remotes: { origin: 'github.com/acme/openclaw' },
     project_slug: 'openclaw',
-    unread: true, last_activity_at: ago(14),
+    unread: true, last_output_at: ago(14),
   }),
   demo({
     id: 'sess-demo-working', title: 'migrate settings schema',
-    status: { working: true }, last_activity_at: ago(1), mockActive: true,
+    status: { working: true }, last_output_at: ago(1), mockActive: true,
   }),
   demo({
     id: 'sess-demo-idle-recent', title: 'spike: webgl renderer',
-    last_activity_at: ago(25),
+    last_output_at: ago(25),
   }),
   demo({
     id: 'sess-demo-idle-today', title: 'update changelog',
     cwd: '/home/user/dev/openclaw', workspace_root: '/home/user/dev/openclaw',
     remotes: { origin: 'github.com/acme/openclaw' },
     project_slug: 'openclaw',
-    last_activity_at: ago(60 * 5),
+    last_output_at: ago(60 * 5),
   }),
   demo({
     id: 'sess-demo-idle-yday', title: 'debug ws reconnect',
-    last_activity_at: ago(60 * 26),
+    last_output_at: ago(60 * 26),
   }),
   demo({
     id: 'sess-demo-idle-week', title: 'shell: profiling',
     adapter: 'shell', command: ['bash'],
-    last_activity_at: ago(60 * 24 * 4),
+    last_output_at: ago(60 * 24 * 4),
   }),
   demo({
     id: 'sess-demo-resumable', title: 'refactor launcher',
     alive: false, resumable: true, pid: null, exit_code: 0,
-    exited_at: ago(60 * 30), last_activity_at: ago(60 * 30),
+    exited_at: ago(60 * 30), last_output_at: ago(60 * 30),
   }),
 ]

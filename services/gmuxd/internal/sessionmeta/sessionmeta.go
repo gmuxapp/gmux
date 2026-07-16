@@ -466,11 +466,11 @@ func (s *Store) Sweep() ([]store.Session, error) {
 
 // effectiveTime returns the timestamp used to rank a dead session for
 // retention: ExitedAt (when it died) is preferred, falling back to
-// LastActivityAt then CreatedAt. The bool is false when none parse, in
+// LastOutputAt then CreatedAt. The bool is false when none parse, in
 // which case the session is treated conservatively (never aged out,
 // kept as if newest) so an undatable record is never evicted.
 func effectiveTime(sess store.Session) (time.Time, bool) {
-	for _, ts := range []string{sess.ExitedAt, sess.LastActivityAt, sess.CreatedAt} {
+	for _, ts := range []string{sess.ExitedAt, sess.LastOutputAt, sess.CreatedAt} {
 		if ts == "" {
 			continue
 		}

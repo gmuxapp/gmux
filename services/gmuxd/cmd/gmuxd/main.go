@@ -518,7 +518,7 @@ func serve(stderr io.Writer) int {
 	// Resume merge / slug takeover drop the corresponding directory.
 	// See sessionmeta package doc for the full lifecycle.
 	metaStore := sessionmeta.New(sessionmeta.DefaultDir(), sessionmeta.WithRetention(sessionmeta.DefaultRetention()))
-	// Reseed last_activity_at from durable activity proxies (adapter-reported
+	// Reseed last_output_at from durable activity proxies (adapter-reported
 	// conversation freshness, scrollback tee mtime) when a session is
 	// (re-)registered without a stamp — the alive-across-restart case, where
 	// the in-memory value was never persisted. Installed before Sweep so it
@@ -2715,11 +2715,11 @@ func isAllowedPeerProxyPath(method, sub string) bool {
 }
 
 // sessionLastActive returns the timestamp used to sort discovered
-// suggestions by recency: the session's last_activity_at, falling back
+// suggestions by recency: the session's last_output_at, falling back
 // to created_at when no activity has been recorded yet.
 func sessionLastActive(s store.Session) string {
-	if s.LastActivityAt != "" {
-		return s.LastActivityAt
+	if s.LastOutputAt != "" {
+		return s.LastOutputAt
 	}
 	return s.CreatedAt
 }

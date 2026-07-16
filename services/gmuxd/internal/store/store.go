@@ -44,24 +44,32 @@ type Session struct {
 	Status          *Status `json:"status"`
 	Unread          bool    `json:"unread"`
 
-	// LastActivityAt timestamps the most recent noteworthy state
-	// transition for this session, used by the UI to surface
-	// recently-relevant sessions (the home dashboard's "Recent"
-	// section, sort keys, etc.). RFC3339, set by the owning daemon.
+	// LastOutputAt timestamps the last time this session produced
+	// *unseen* output — the read→unread transition. Used by the UI as
+	// the activity-feed sort key so a session floats up the moment the
+	// agent (or shell/editor) produces something the user hasn't looked
+	// at. RFC3339, set by the owning daemon.
 	//
 	// Bumped on (and only on):
-	//   - alive: true → false  (the session exited)
 	//   - unread: false → true  (new output the user hasn't seen)
-	//   - status.working: false → true  (adapter started a task)
-	//   - status.error: false → true  (status went into error)
 	//
-	// Not bumped on: new session creation (the first follow-up
-	// transition does it), title/cwd/slug/stamp changes, no-op status
-	// updates, sessionmeta rehydrate at startup.
+	// Deliberately NOT bumped by the user's own input: status.working
+	// false→true happens when you send / start a task, and reshuffling
+	// the session you just acted on is exactly the jitter we avoid.
+	// Exit and error aren't bumped either — in practice they arrive with
+	// output that already trips unread, and the status dot covers the
+	// rare silent case, so keeping the key output-only keeps it honest.
+	//
+	// Not bumped on: new session creation (the first unread transition
+	// does it), title/cwd/slug/stamp changes, no-op status updates,
+	// sessionmeta rehydrate at startup.
+	//
+	// A future last_input_at could track the user side (last send /
+	// interaction) for an IM-style "recently used" ordering; not today.
 	//
 	// Peer sessions arrive over the wire with this already set by
 	// the owning daemon; UpsertRemote preserves it as-received.
-	LastActivityAt string `json:"last_activity_at,omitempty"`
+	LastOutputAt string `json:"last_output_at,omitempty"`
 	Resumable      bool   `json:"resumable,omitempty"`
 	SocketPath     string `json:"socket_path,omitempty"`
 	TerminalCols   uint16 `json:"terminal_cols,omitempty"`
@@ -163,7 +171,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		BinaryHash      string            `json:"binary_hash,omitempty"`
 		ProjectSlug     string            `json:"project_slug,omitempty"`
 		ProjectIndex    int               `json:"project_index,omitempty"`
-		LastActivityAt  string            `json:"last_activity_at,omitempty"`
+		LastOutputAt  string            `json:"last_output_at,omitempty"`
 	}
 	return json.Marshal(wire{
 		ID: s.ID, Peer: s.Peer, CreatedAt: s.CreatedAt, Command: s.Command,
@@ -178,7 +186,7 @@ func (s Session) MarshalJSON() ([]byte, error) {
 		ConversationRef: s.ConversationRef,
 		RunnerVersion:   s.RunnerVersion, BinaryHash: s.BinaryHash,
 		ProjectSlug: s.ProjectSlug, ProjectIndex: s.ProjectIndex,
-		LastActivityAt: s.LastActivityAt,
+		LastOutputAt: s.LastOutputAt,
 	})
 }
 
@@ -216,7 +224,7 @@ type Store struct {
 	subscribers    map[*subscriber]struct{}
 	commandTitlers map[string]func([]string) string
 	// activitySeed, when set, supplies a durable last-activity floor
-	// (RFC3339) for a session that arrives with no LastActivityAt —
+	// (RFC3339) for a session that arrives with no LastOutputAt —
 	// the rehydrate/re-register case after a daemon restart, where the
 	// in-memory stamp was never persisted. Returns "" when no seed is
 	// available. See SetActivitySeed.
@@ -241,11 +249,11 @@ func (s *Store) SetCommandTitlers(titlers map[string]func([]string) string) {
 	s.commandTitlers = titlers
 }
 
-// SetActivitySeed installs a hook that reseeds LastActivityAt from a
+// SetActivitySeed installs a hook that reseeds LastOutputAt from a
 // durable on-disk activity proxy (conversation-file / scrollback mtime)
 // when a locally-owned session is upserted with an empty stamp. This
 // recovers "last activity" across a daemon restart: an alive session's
-// LastActivityAt is never persisted, so on re-register it would
+// LastOutputAt is never persisted, so on re-register it would
 // otherwise reset to (effectively) creation time. The hook is applied
 // only as a seed/floor — a session that already carries a stamp (a live
 // value, or a persisted one restored from sessionmeta) is never
@@ -332,7 +340,7 @@ func (s *Store) UpsertRemote(sess Session) {
 }
 
 // upsertCommon is the shared body of Upsert and UpsertRemote.
-// bumpLocally controls whether LastActivityAt is recomputed from
+// bumpLocally controls whether LastOutputAt is recomputed from
 // the prev→next transition: true for locally-owned sessions, false
 // for peer payloads (where the owning daemon already stamped it).
 func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
@@ -346,7 +354,7 @@ func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
 	// applied under the lock only if the stamp is still empty after
 	// carry-forward — so it stays a pure floor.
 	var seed string
-	if bumpLocally && sess.LastActivityAt == "" && s.activitySeed != nil {
+	if bumpLocally && sess.LastOutputAt == "" && s.activitySeed != nil {
 		seed = s.activitySeed(sess)
 	}
 
@@ -358,24 +366,24 @@ func (s *Store) upsertCommon(sess Session, bumpLocally bool) {
 	s.mu.Lock()
 	prev, hadPrev := s.sessions[sess.ID]
 	if bumpLocally {
-		if shouldBumpActivity(snapshotActivity(prev), hadPrev, snapshotActivity(sess)) {
-			sess.LastActivityAt = nowRFC3339()
-		} else if hadPrev && sess.LastActivityAt == "" {
+		if bumpsOutput(prev, sess, hadPrev) {
+			sess.LastOutputAt = nowRFC3339()
+		} else if hadPrev && sess.LastOutputAt == "" {
 			// Preserve the previously stamped timestamp across
 			// no-bump Upserts. Adapters call Upsert with fresh
 			// Session structs built from runner state, which never
-			// includes LastActivityAt; without this carry-forward,
+			// includes LastOutputAt; without this carry-forward,
 			// a routine title/cwd refresh would silently zero out
 			// the field and drop the session from Recent.
-			sess.LastActivityAt = prev.LastActivityAt
+			sess.LastOutputAt = prev.LastOutputAt
 		}
 		// Reseed from a durable on-disk proxy when we still have no
 		// stamp — the alive-across-restart case, where neither a live
 		// value nor a persisted one exists. Gated on empty so it acts
 		// purely as a floor and never clobbers a newer value; and only
 		// on locally-owned sessions (peers carry the owner's stamp).
-		if sess.LastActivityAt == "" && seed != "" {
-			sess.LastActivityAt = seed
+		if sess.LastOutputAt == "" && seed != "" {
+			sess.LastOutputAt = seed
 		}
 	}
 	removed, skip, unchanged := s.commitLocked(prev, hadPrev, &sess)
@@ -456,15 +464,17 @@ func (s *Store) Update(id string, fn func(*Session)) bool {
 			s.mu.Unlock()
 			return false
 		}
-		prevSnap := snapshotActivity(prev)
+		// prev is a by-value copy from the map, so prev.Unread is
+		// unaffected by fn mutating sess — no pre-snapshot needed for a
+		// plain bool (unlike the old Status-pointer path).
 		sess := prev
 		fn(&sess)
 		sess.Cwd = paths.CanonicalizePath(sess.Cwd)
 		sess.WorkspaceRoot = paths.CanonicalizePath(sess.WorkspaceRoot)
 		sess.Title = s.resolveTitle(sess)
 		sess.Resumable = !sess.Alive && len(sess.Command) > 0
-		if shouldBumpActivity(prevSnap, true, snapshotActivity(sess)) {
-			sess.LastActivityAt = nowRFC3339()
+		if bumpsOutput(prev, sess, true) {
+			sess.LastOutputAt = nowRFC3339()
 		}
 		if sess.Peer == "" && sess.ConversationRef != "" && sess.ConversationRef != prev.ConversationRef {
 			if describedRef != sess.ConversationRef {
@@ -850,52 +860,14 @@ func (s *Store) ensureUniqueSlug(sess *Session) {
 	}
 }
 
-// activitySnapshot captures the four scalar bits that determine
-// whether a session transition bumps LastActivityAt. Snapshotting
-// upfront (rather than dereferencing Session.Status during the
-// comparison) is load-bearing: Update callers do `sess := prev`
-// before running their mutator, which shallow-copies the Session
-// but leaves prev.Status and sess.Status pointing at the same
-// Status struct. A mutator that writes through that pointer
-// (e.g. `sess.Status.Working = true`) would silently mutate prev
-// too, hiding the transition from the bump check. Capturing the
-// booleans before fn runs sidesteps the aliasing entirely.
-type activitySnapshot struct {
-	alive, unread, working, errored bool
-}
-
-func snapshotActivity(s Session) activitySnapshot {
-	return activitySnapshot{
-		alive:   s.Alive,
-		unread:  s.Unread,
-		working: s.Status != nil && s.Status.Working,
-		errored: s.Status != nil && s.Status.Error,
-	}
-}
-
-// shouldBumpActivity reports whether the prev→next session transition
-// is noteworthy enough to refresh LastActivityAt. See the field's
-// docstring for the exact bump set. Brand-new sessions (hadPrev=false)
-// never bump: their first follow-up transition does, which avoids
-// timestamping every sessionmeta-rehydrated dead session at daemon
-// startup.
-func shouldBumpActivity(prev activitySnapshot, hadPrev bool, next activitySnapshot) bool {
-	if !hadPrev {
-		return false
-	}
-	if prev.alive && !next.alive {
-		return true
-	}
-	if !prev.unread && next.unread {
-		return true
-	}
-	if !prev.working && next.working {
-		return true
-	}
-	if !prev.errored && next.errored {
-		return true
-	}
-	return false
+// bumpsOutput reports whether a prev→next transition is new unseen
+// output (read → unread) — the sole trigger that stamps LastOutputAt.
+// Intentionally output-only: the user's own input (working false→true),
+// exit, and error do NOT bump (see the LastOutputAt docstring). New
+// sessions (hadPrev=false) never bump; their first unread transition
+// does, so a batch of dead sessions rehydrated at startup stays unstamped.
+func bumpsOutput(prev, next Session, hadPrev bool) bool {
+	return hadPrev && !prev.Unread && next.Unread
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }

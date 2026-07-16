@@ -87,10 +87,10 @@ export function SessionRow({
   const arrival = useArrivalPulse(dot)
 
   // Age sourced from the same field that drives Recent partitioning:
-  // last_activity_at is the canonical "when did anything notable
+  // last_output_at is the canonical "when did anything notable
   // happen here" timestamp. Falls back to created_at for sessions
   // that haven't transitioned yet (matches the dashboard sort).
-  const age = formatAge(session.last_activity_at ?? session.created_at, Date.now())
+  const age = formatAge(session.last_output_at ?? session.created_at, Date.now())
 
   // Exit code: dead sessions surface "exited (N)" so the row never goes
   // silent about why a session is dead. Live status (working/error) is

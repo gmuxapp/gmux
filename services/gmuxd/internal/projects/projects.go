@@ -689,7 +689,7 @@ type SessionInfo struct {
 	Alive     bool
 	Resumable bool // dead but has a resume command persisted
 	// LastActive is an RFC3339 timestamp of the session's most recent
-	// noteworthy activity (last_activity_at, falling back to
+	// noteworthy activity (last_output_at, falling back to
 	// created_at). Used to sort discovered suggestions by recency so a
 	// peer-advertised discovered row sorts consistently against the
 	// viewer's own local discovery.

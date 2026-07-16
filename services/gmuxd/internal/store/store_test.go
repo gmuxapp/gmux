@@ -1085,7 +1085,7 @@ var internalSessionFields = map[string]struct{}{
 // TestSessionMarshalJSON_AllFieldsAppearOnWire is the gotcha-catcher
 // for "someone added a field to Session with a json tag, but forgot
 // to plumb it through the explicit `wire` struct in MarshalJSON."
-// This is exactly how `last_activity_at` was almost silently dropped
+// This is exactly how `last_output_at` was almost silently dropped
 // during PR #229: the field had a tag on the struct but wasn't
 // enumerated in the wire literal, so it would never have reached
 // any API consumer.
@@ -1155,7 +1155,7 @@ func fullyPopulatedSession() Session {
 		Subtitle:        "s",
 		Status:          &Status{Working: true, Error: true},
 		Unread:          true,
-		LastActivityAt:  "2026-01-01T00:00:03Z",
+		LastOutputAt:  "2026-01-01T00:00:03Z",
 		Resumable:       true,
 		SocketPath:      "/tmp/sock",
 		TerminalCols:    80,
@@ -1171,16 +1171,16 @@ func fullyPopulatedSession() Session {
 	}
 }
 
-// TestSessionMarshalJSON_LastActivityAt pins that LastActivityAt
+// TestSessionMarshalJSON_LastOutputAt pins that LastOutputAt
 // makes it onto the wire. The Session type has a custom MarshalJSON
 // (an explicit `wire` struct, not the default struct-tag reflection),
 // so adding a field to the struct alone is silently insufficient:
 // the field has to be enumerated in the wire struct and the
 // json.Marshal call. This test exists specifically to catch that
 // class of regression, not to test the std library's JSON encoder.
-func TestSessionMarshalJSON_LastActivityAt(t *testing.T) {
+func TestSessionMarshalJSON_LastOutputAt(t *testing.T) {
 	ts := "2026-05-23T10:30:00Z"
-	s := Session{ID: "sess-1", Adapter: "pi", Alive: true, LastActivityAt: ts}
+	s := Session{ID: "sess-1", Adapter: "pi", Alive: true, LastOutputAt: ts}
 	b, err := json.Marshal(s)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -1189,8 +1189,8 @@ func TestSessionMarshalJSON_LastActivityAt(t *testing.T) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got := m["last_activity_at"]; got != ts {
-		t.Fatalf("last_activity_at on wire = %v, want %q", got, ts)
+	if got := m["last_output_at"]; got != ts {
+		t.Fatalf("last_output_at on wire = %v, want %q", got, ts)
 	}
 
 	// And: when unset, the field is omitted (omitempty), not sent as
@@ -1201,21 +1201,21 @@ func TestSessionMarshalJSON_LastActivityAt(t *testing.T) {
 	b2, _ := json.Marshal(s2)
 	var m2 map[string]any
 	json.Unmarshal(b2, &m2)
-	if _, present := m2["last_activity_at"]; present {
-		t.Errorf("unset LastActivityAt should be omitted, got %v", m2["last_activity_at"])
+	if _, present := m2["last_output_at"]; present {
+		t.Errorf("unset LastOutputAt should be omitted, got %v", m2["last_output_at"])
 	}
 }
 
-// TestSessionRoundTrip_LastActivityAt pins the peer-payload path:
+// TestSessionRoundTrip_LastOutputAt pins the peer-payload path:
 // the hub receives a peer session as JSON and json.Unmarshals into
 // store.Session, then UpsertRemote stores it. The default tag-based
-// unmarshal populates LastActivityAt from the wire; this test exists
+// unmarshal populates LastOutputAt from the wire; this test exists
 // because the symmetry between MarshalJSON (custom) and Unmarshal
 // (default) is the kind of asymmetry that breaks silently when
 // someone adds an UnmarshalJSON later.
-func TestSessionRoundTrip_LastActivityAt(t *testing.T) {
+func TestSessionRoundTrip_LastOutputAt(t *testing.T) {
 	ts := "2026-05-23T10:30:00Z"
-	original := Session{ID: "sess-1", Adapter: "pi", Alive: true, LastActivityAt: ts}
+	original := Session{ID: "sess-1", Adapter: "pi", Alive: true, LastOutputAt: ts}
 	b, err := json.Marshal(original)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -1224,8 +1224,8 @@ func TestSessionRoundTrip_LastActivityAt(t *testing.T) {
 	if err := json.Unmarshal(b, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if decoded.LastActivityAt != ts {
-		t.Fatalf("round-trip LastActivityAt = %q, want %q", decoded.LastActivityAt, ts)
+	if decoded.LastOutputAt != ts {
+		t.Fatalf("round-trip LastOutputAt = %q, want %q", decoded.LastOutputAt, ts)
 	}
 }
 
@@ -1413,21 +1413,21 @@ func TestSession_WireRoundTripPreservesStamps(t *testing.T) {
 	}
 }
 
-// TestLastActivityAt_NewSessionDoesNotBump pins option (a): brand-new
-// sessions arrive with LastActivityAt unset. This is what keeps
+// TestLastOutputAt_NewSessionDoesNotBump pins option (a): brand-new
+// sessions arrive with LastOutputAt unset. This is what keeps
 // sessionmeta rehydrate at daemon startup from timestamping every
 // resumable dead session to "now".
-func TestLastActivityAt_NewSessionDoesNotBump(t *testing.T) {
+func TestLastOutputAt_NewSessionDoesNotBump(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Adapter: "pi", Alive: true})
 	got, _ := s.Get("s1")
-	if got.LastActivityAt != "" {
-		t.Fatalf("new session should not bump LastActivityAt, got %q", got.LastActivityAt)
+	if got.LastOutputAt != "" {
+		t.Fatalf("new session should not bump LastOutputAt, got %q", got.LastOutputAt)
 	}
 }
 
 // TestActivitySeed_ReseedsEmptyStamp pins the restart-recovery fix: a
-// session upserted with no LastActivityAt (the alive-across-restart
+// session upserted with no LastOutputAt (the alive-across-restart
 // re-register case) is seeded from the activitySeed hook. This is the
 // regression — without the hook the stamp stays empty and the UI falls
 // back to created_at ("3 days ago").
@@ -1437,8 +1437,8 @@ func TestActivitySeed_ReseedsEmptyStamp(t *testing.T) {
 	s.SetActivitySeed(func(Session) string { return seed })
 	s.Upsert(Session{ID: "s1", Adapter: "pi", Alive: true})
 	got, _ := s.Get("s1")
-	if got.LastActivityAt != seed {
-		t.Fatalf("expected reseed to %q, got %q", seed, got.LastActivityAt)
+	if got.LastOutputAt != seed {
+		t.Fatalf("expected reseed to %q, got %q", seed, got.LastOutputAt)
 	}
 }
 
@@ -1449,10 +1449,10 @@ func TestActivitySeed_DoesNotOverwriteExistingStamp(t *testing.T) {
 	existing := "2026-05-05T05:05:05Z"
 	s := New()
 	s.SetActivitySeed(func(Session) string { return "2020-01-01T00:00:00Z" })
-	s.Upsert(Session{ID: "s1", Adapter: "pi", Alive: true, LastActivityAt: existing})
+	s.Upsert(Session{ID: "s1", Adapter: "pi", Alive: true, LastOutputAt: existing})
 	got, _ := s.Get("s1")
-	if got.LastActivityAt != existing {
-		t.Fatalf("expected existing stamp %q preserved, got %q", existing, got.LastActivityAt)
+	if got.LastOutputAt != existing {
+		t.Fatalf("expected existing stamp %q preserved, got %q", existing, got.LastOutputAt)
 	}
 }
 
@@ -1464,53 +1464,57 @@ func TestActivitySeed_SkippedForPeer(t *testing.T) {
 	s.SetActivitySeed(func(Session) string { return "2026-01-02T03:04:05Z" })
 	s.UpsertRemote(Session{ID: "s1", Adapter: "pi", Alive: true, Peer: "host2"})
 	got, _ := s.Get("s1")
-	if got.LastActivityAt != "" {
-		t.Fatalf("peer session should not be reseeded, got %q", got.LastActivityAt)
+	if got.LastOutputAt != "" {
+		t.Fatalf("peer session should not be reseeded, got %q", got.LastOutputAt)
 	}
 }
 
-// TestLastActivityAt_BumpOnTransitions pins the exact set of state
-// transitions that bump: exited, unread on, working on, error on.
-// Each subtest starts from an alive-and-idle baseline and applies
-// one transition.
-func TestLastActivityAt_BumpOnTransitions(t *testing.T) {
+// TestLastOutputAt_BumpOnTransitions pins the output-only bump policy:
+// only unread false→true stamps LastOutputAt. The user's own input
+// (working on), exit, and error deliberately do NOT bump — see the
+// LastOutputAt docstring. Each subtest starts from an alive-and-idle
+// baseline and applies one transition.
+func TestLastOutputAt_BumpOnTransitions(t *testing.T) {
 	cases := []struct {
-		name string
-		next func(*Session)
+		name     string
+		next     func(*Session)
+		wantBump bool
 	}{
-		{"exited", func(s *Session) { s.Alive = false }},
-		{"unread", func(s *Session) { s.Unread = true }},
-		{"working", func(s *Session) { s.Status = &Status{Working: true} }},
-		{"error", func(s *Session) { s.Status = &Status{Error: true} }},
+		{"unread", func(s *Session) { s.Unread = true }, true},
+		{"exited", func(s *Session) { s.Alive = false }, false},
+		{"working", func(s *Session) { s.Status = &Status{Working: true} }, false},
+		{"error", func(s *Session) { s.Status = &Status{Error: true} }, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := New()
 			s.Upsert(Session{ID: "s1", Adapter: "pi", Alive: true})
 			before, _ := s.Get("s1")
-			if before.LastActivityAt != "" {
-				t.Fatalf("baseline should be unset, got %q", before.LastActivityAt)
+			if before.LastOutputAt != "" {
+				t.Fatalf("baseline should be unset, got %q", before.LastOutputAt)
 			}
-			ok := s.Update("s1", tc.next)
-			if !ok {
+			if ok := s.Update("s1", tc.next); !ok {
 				t.Fatal("update failed")
 			}
 			after, _ := s.Get("s1")
-			if after.LastActivityAt == "" {
-				t.Fatalf("transition %q should bump LastActivityAt", tc.name)
+			bumped := after.LastOutputAt != ""
+			if bumped != tc.wantBump {
+				t.Fatalf("transition %q: bumped=%v, want %v (got %q)", tc.name, bumped, tc.wantBump, after.LastOutputAt)
 			}
-			if _, err := time.Parse(time.RFC3339, after.LastActivityAt); err != nil {
-				t.Fatalf("LastActivityAt %q is not RFC3339: %v", after.LastActivityAt, err)
+			if tc.wantBump {
+				if _, err := time.Parse(time.RFC3339, after.LastOutputAt); err != nil {
+					t.Fatalf("LastOutputAt %q is not RFC3339: %v", after.LastOutputAt, err)
+				}
 			}
 		})
 	}
 }
 
-// TestLastActivityAt_NoBumpOnNoise pins that benign updates do not
+// TestLastOutputAt_NoBumpOnNoise pins that benign updates do not
 // bump: title changes, slug changes, cwd changes, no-op status
 // changes. Without this, the recency list would jitter on every
 // adapter title refresh.
-func TestLastActivityAt_NoBumpOnNoise(t *testing.T) {
+func TestLastOutputAt_NoBumpOnNoise(t *testing.T) {
 	cases := []struct {
 		name string
 		next func(*Session)
@@ -1524,10 +1528,10 @@ func TestLastActivityAt_NoBumpOnNoise(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := New()
 			s.Upsert(Session{ID: "s1", Adapter: "pi", Alive: true, AdapterTitle: "orig"})
-			// Pre-seed a LastActivityAt by transitioning to unread.
+			// Pre-seed a LastOutputAt by transitioning to unread.
 			s.Update("s1", func(sess *Session) { sess.Unread = true })
 			seeded, _ := s.Get("s1")
-			stamp := seeded.LastActivityAt
+			stamp := seeded.LastOutputAt
 			if stamp == "" {
 				t.Fatal("expected baseline bump from unread transition")
 			}
@@ -1536,18 +1540,18 @@ func TestLastActivityAt_NoBumpOnNoise(t *testing.T) {
 			time.Sleep(1100 * time.Millisecond)
 			s.Update("s1", tc.next)
 			after, _ := s.Get("s1")
-			if after.LastActivityAt != stamp {
-				t.Fatalf("noise update %q should not bump (was %q, now %q)", tc.name, stamp, after.LastActivityAt)
+			if after.LastOutputAt != stamp {
+				t.Fatalf("noise update %q should not bump (was %q, now %q)", tc.name, stamp, after.LastOutputAt)
 			}
 		})
 	}
 }
 
-// TestLastActivityAt_OnlyTransitionEdgeBumps pins that staying in
+// TestLastOutputAt_OnlyTransitionEdgeBumps pins that staying in
 // the same noteworthy state does not re-bump on every Update. A
 // session that is unread, gets another Update while still unread,
 // should keep its existing timestamp.
-func TestLastActivityAt_OnlyTransitionEdgeBumps(t *testing.T) {
+func TestLastOutputAt_OnlyTransitionEdgeBumps(t *testing.T) {
 	s := New()
 	s.Upsert(Session{ID: "s1", Adapter: "pi", Alive: true})
 	s.Update("s1", func(sess *Session) { sess.Unread = true })
@@ -1555,25 +1559,26 @@ func TestLastActivityAt_OnlyTransitionEdgeBumps(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 	s.Update("s1", func(sess *Session) { sess.AdapterTitle = "still unread" })
 	second, _ := s.Get("s1")
-	if second.LastActivityAt != first.LastActivityAt {
-		t.Fatalf("staying unread should not re-bump (was %q, now %q)", first.LastActivityAt, second.LastActivityAt)
+	if second.LastOutputAt != first.LastOutputAt {
+		t.Fatalf("staying unread should not re-bump (was %q, now %q)", first.LastOutputAt, second.LastOutputAt)
 	}
 }
 
-// TestLastActivityAt_UpsertOnExistingBumps pins that the bump
+// TestLastOutputAt_UpsertOnExistingBumps pins that the bump
 // machinery fires on Upsert (not just Update). Adapters call Upsert
 // repeatedly with the same ID as they refresh metadata; when one of
 // those refreshes carries a noteworthy transition (e.g. status going
-// to working), it must stamp LastActivityAt the same way Update does.
-func TestLastActivityAt_UpsertOnExistingBumps(t *testing.T) {
+// to working), it must stamp LastOutputAt the same way Update does.
+func TestLastOutputAt_UpsertOnExistingBumps(t *testing.T) {
 	cases := []struct {
-		name   string
-		mutate func(*Session)
+		name     string
+		mutate   func(*Session)
+		wantBump bool
 	}{
-		{"exited", func(s *Session) { s.Alive = false }},
-		{"unread", func(s *Session) { s.Unread = true }},
-		{"working", func(s *Session) { s.Status = &Status{Working: true} }},
-		{"error", func(s *Session) { s.Status = &Status{Error: true} }},
+		{"unread", func(s *Session) { s.Unread = true }, true},
+		{"exited", func(s *Session) { s.Alive = false }, false},
+		{"working", func(s *Session) { s.Status = &Status{Working: true} }, false},
+		{"error", func(s *Session) { s.Status = &Status{Error: true} }, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1581,99 +1586,68 @@ func TestLastActivityAt_UpsertOnExistingBumps(t *testing.T) {
 			baseline := Session{ID: "s1", Adapter: "pi", Alive: true}
 			s.Upsert(baseline)
 			before, _ := s.Get("s1")
-			if before.LastActivityAt != "" {
-				t.Fatalf("baseline should be unset, got %q", before.LastActivityAt)
+			if before.LastOutputAt != "" {
+				t.Fatalf("baseline should be unset, got %q", before.LastOutputAt)
 			}
 			next := baseline
 			tc.mutate(&next)
 			s.Upsert(next)
 			after, _ := s.Get("s1")
-			if after.LastActivityAt == "" {
-				t.Fatalf("Upsert transition %q should bump LastActivityAt", tc.name)
+			bumped := after.LastOutputAt != ""
+			if bumped != tc.wantBump {
+				t.Fatalf("Upsert transition %q: bumped=%v, want %v (got %q)", tc.name, bumped, tc.wantBump, after.LastOutputAt)
 			}
-			if _, err := time.Parse(time.RFC3339, after.LastActivityAt); err != nil {
-				t.Fatalf("LastActivityAt %q is not RFC3339: %v", after.LastActivityAt, err)
+			if tc.wantBump {
+				if _, err := time.Parse(time.RFC3339, after.LastOutputAt); err != nil {
+					t.Fatalf("LastOutputAt %q is not RFC3339: %v", after.LastOutputAt, err)
+				}
 			}
 		})
 	}
 }
 
-// TestLastActivityAt_UpsertNoBumpPreservesStamp pins that a no-bump
+// TestLastOutputAt_UpsertNoBumpPreservesStamp pins that a no-bump
 // Upsert (routine title / cwd / slug refresh from an adapter) does
-// NOT clobber a previously stamped LastActivityAt. Adapters build
-// fresh Session structs from runner state without LastActivityAt;
+// NOT clobber a previously stamped LastOutputAt. Adapters build
+// fresh Session structs from runner state without LastOutputAt;
 // without an explicit carry-forward we'd silently zero the field on
 // every metadata refresh and break Recent ordering.
-func TestLastActivityAt_UpsertNoBumpPreservesStamp(t *testing.T) {
+func TestLastOutputAt_UpsertNoBumpPreservesStamp(t *testing.T) {
 	s := New()
 	// Seed with a stamped session via a transition.
 	s.Upsert(Session{ID: "s1", Adapter: "pi", Alive: true})
 	s.Update("s1", func(sess *Session) { sess.Unread = true })
 	before, _ := s.Get("s1")
-	stamp := before.LastActivityAt
+	stamp := before.LastOutputAt
 	if stamp == "" {
-		t.Fatal("baseline transition should have stamped LastActivityAt")
+		t.Fatal("baseline transition should have stamped LastOutputAt")
 	}
 	// Routine refresh: same state, only adapter title changed. No
-	// transition fires; LastActivityAt is absent from the payload.
+	// transition fires; LastOutputAt is absent from the payload.
 	s.Upsert(Session{ID: "s1", Adapter: "pi", Alive: true, Unread: true, AdapterTitle: "renamed"})
 	after, _ := s.Get("s1")
-	if after.LastActivityAt != stamp {
-		t.Fatalf("no-bump Upsert must preserve LastActivityAt (was %q, now %q)", stamp, after.LastActivityAt)
+	if after.LastOutputAt != stamp {
+		t.Fatalf("no-bump Upsert must preserve LastOutputAt (was %q, now %q)", stamp, after.LastOutputAt)
 	}
 }
 
-// TestLastActivityAt_PointerAliasingDoesNotHideTransition is a
-// regression test for a real bug in an earlier draft: Update did
-// `sess := prev` (shallow copy), so prev.Status and sess.Status
-// pointed to the same Status struct. A mutator that wrote through
-// the pointer (e.g. flipped sess.Status.Working from false to true)
-// would silently mutate prev too, hiding the false→true transition
-// from the bump check. This test pins that the bump fires correctly
-// when a mutator constructs a new Status pointer in place of a nil
-// one (the common pattern in subscribe.go), AND would have failed
-// under the previous implementation if the mutator modified the
-// pointer's pointee directly. Snapshotting the activity booleans
-// before fn runs sidesteps the alias entirely.
-func TestLastActivityAt_PointerAliasingDoesNotHideTransition(t *testing.T) {
-	s := New()
-	// Seed with a non-working Status pointer present.
-	s.Upsert(Session{ID: "s1", Adapter: "pi", Alive: true, Status: &Status{}})
-
-	// Mutator writes Working=true through the existing Status pointer
-	// rather than allocating a new Status. This is the alias-risk
-	// shape.
-	ok := s.Update("s1", func(sess *Session) {
-		if sess.Status != nil {
-			sess.Status.Working = true
-		}
-	})
-	if !ok {
-		t.Fatal("update failed")
-	}
-	after, _ := s.Get("s1")
-	if after.LastActivityAt == "" {
-		t.Fatal("working false→true through aliased pointer must still bump LastActivityAt")
-	}
-}
-
-// TestLastActivityAt_UpsertRemotePreserves pins that peer payloads
-// (UpsertRemote) carry through LastActivityAt as-received: the
+// TestLastOutputAt_UpsertRemotePreserves pins that peer payloads
+// (UpsertRemote) carry through LastOutputAt as-received: the
 // owning daemon stamped it, the hub must not recompute.
-func TestLastActivityAt_UpsertRemotePreserves(t *testing.T) {
+func TestLastOutputAt_UpsertRemotePreserves(t *testing.T) {
 	s := New()
 	wired := "2026-01-01T12:00:00Z"
-	s.UpsertRemote(Session{ID: "s1", Adapter: "pi", Peer: "remote", Alive: true, LastActivityAt: wired})
+	s.UpsertRemote(Session{ID: "s1", Adapter: "pi", Peer: "remote", Alive: true, LastOutputAt: wired})
 	got, _ := s.Get("s1")
-	if got.LastActivityAt != wired {
-		t.Fatalf("UpsertRemote should preserve LastActivityAt (want %q, got %q)", wired, got.LastActivityAt)
+	if got.LastOutputAt != wired {
+		t.Fatalf("UpsertRemote should preserve LastOutputAt (want %q, got %q)", wired, got.LastOutputAt)
 	}
 	// Even a transition arriving via UpsertRemote must not recompute:
 	// it's the spoke's job to stamp, not ours.
-	s.UpsertRemote(Session{ID: "s1", Adapter: "pi", Peer: "remote", Alive: false, LastActivityAt: wired})
+	s.UpsertRemote(Session{ID: "s1", Adapter: "pi", Peer: "remote", Alive: false, LastOutputAt: wired})
 	got2, _ := s.Get("s1")
-	if got2.LastActivityAt != wired {
-		t.Fatalf("UpsertRemote alive→false should preserve peer-supplied timestamp (want %q, got %q)", wired, got2.LastActivityAt)
+	if got2.LastOutputAt != wired {
+		t.Fatalf("UpsertRemote alive→false should preserve peer-supplied timestamp (want %q, got %q)", wired, got2.LastOutputAt)
 	}
 }
 
