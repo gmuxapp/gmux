@@ -66,17 +66,30 @@ type RunnerSpawner interface {
 	Spawn(ctx context.Context, session centralstore.Session) (endpoint string, err error)
 }
 
+// LifecycleClaim identifies one held per-session lifecycle claim. It is an
+// opaque identity token: a Replace/ExpectedID registration must present the
+// token of the claim it runs under (RegisterRequest.Claim), and Register
+// verifies pointer identity against the installed claim — holding *a* claim
+// for the ID is not enough, it must be the caller's own. This closes the
+// stray-Replace-during-unrelated-Stop window (review M-1).
+type LifecycleClaim struct {
+	id centralstore.SessionID
+	op string
+}
+
 // claim reserves the per-session lifecycle slot. It fails fast when another
 // lifecycle operation for the same session is in flight. The returned release
-// must be called exactly once.
-func (c *Coordinator) claim(id centralstore.SessionID, op string) (func(), error) {
+// must be called exactly once; the returned token authorizes Replace
+// registrations issued under this claim.
+func (c *Coordinator) claim(id centralstore.SessionID, op string) (*LifecycleClaim, func(), error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if current, busy := c.ops[id]; busy {
-		return nil, fmt.Errorf("%w (%s)", ErrLifecycleOpInFlight, current)
+		return nil, nil, fmt.Errorf("%w (%s)", ErrLifecycleOpInFlight, current.op)
 	}
-	c.ops[id] = op
-	return func() {
+	cl := &LifecycleClaim{id: id, op: op}
+	c.ops[id] = cl
+	return cl, func() {
 		c.mu.Lock()
 		delete(c.ops, id)
 		c.mu.Unlock()
@@ -92,7 +105,7 @@ func (c *Coordinator) Stop(ctx context.Context, id centralstore.SessionID) error
 	if c.control == nil {
 		return ErrNoRunnerControl
 	}
-	release, err := c.claim(id, "stop")
+	_, release, err := c.claim(id, "stop")
 	if err != nil {
 		return err
 	}
@@ -216,15 +229,15 @@ func (c *Coordinator) Resume(ctx context.Context, id centralstore.SessionID) (Ru
 	if c.spawner == nil {
 		return Runtime{}, ErrNoRunnerSpawner
 	}
-	release, err := c.claim(id, "resume")
+	cl, release, err := c.claim(id, "resume")
 	if err != nil {
 		return Runtime{}, err
 	}
 	defer release()
-	return c.resumeClaimed(ctx, id)
+	return c.resumeClaimed(ctx, id, cl)
 }
 
-func (c *Coordinator) resumeClaimed(ctx context.Context, id centralstore.SessionID) (Runtime, error) {
+func (c *Coordinator) resumeClaimed(ctx context.Context, id centralstore.SessionID, cl *LifecycleClaim) (Runtime, error) {
 	if _, live := c.registry.current(id); live {
 		return Runtime{}, fmt.Errorf("%w: %s", ErrSessionAlive, id)
 	}
@@ -264,7 +277,7 @@ func (c *Coordinator) resumeClaimed(ctx context.Context, id centralstore.Session
 	// commit or fence. Register failure here means the spawned runner never
 	// converged; nothing durable changed and a later discovery pass may
 	// still pick the process up.
-	runtime, err := c.Register(ctx, RegisterRequest{Endpoint: endpoint, Replace: true, ExpectedID: id})
+	runtime, err := c.Register(ctx, RegisterRequest{Endpoint: endpoint, Replace: true, ExpectedID: id, Claim: cl})
 	if err != nil {
 		return Runtime{}, fmt.Errorf("sessioncoord: resume registration for %s: %w", id, err)
 	}
@@ -281,7 +294,7 @@ func (c *Coordinator) Restart(ctx context.Context, id centralstore.SessionID) (R
 	if c.spawner == nil {
 		return Runtime{}, ErrNoRunnerSpawner
 	}
-	release, err := c.claim(id, "restart")
+	cl, release, err := c.claim(id, "restart")
 	if err != nil {
 		return Runtime{}, err
 	}
@@ -291,5 +304,5 @@ func (c *Coordinator) Restart(ctx context.Context, id centralstore.SessionID) (R
 			return Runtime{}, err
 		}
 	}
-	return c.resumeClaimed(ctx, id)
+	return c.resumeClaimed(ctx, id, cl)
 }

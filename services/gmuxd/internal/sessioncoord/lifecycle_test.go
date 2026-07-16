@@ -281,9 +281,14 @@ func TestStreamDropDuringFailedReplacementSynthesizes(t *testing.T) {
 	oldStream := client.stream
 
 	client.stream = newFakeStream()
+	cl, release, claimErr := coord.claim(id, "test")
+	if claimErr != nil {
+		t.Fatalf("claim: %v", claimErr)
+	}
+	defer release()
 	regDone := make(chan error, 1)
 	go func() {
-		_, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep303", Replace: true})
+		_, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep303", Replace: true, Claim: cl})
 		regDone <- err
 	}()
 	<-registerEntered
@@ -1041,15 +1046,12 @@ func TestStopSupersededByReplacement(t *testing.T) {
 	go func() { done <- coord.Stop(context.Background(), id) }()
 	<-entered // Stop is waiting on the dead channel
 
-	// A Replace registration (e.g. external discovery of a restarted runner)
-	// supersedes the awaited generation and installs a live replacement,
-	// closing the old dead channel via install.
-	client.mu.Lock()
-	client.stream = newFakeStream()
-	client.mu.Unlock()
-	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep361", Replace: true}); err != nil {
-		t.Fatalf("replacement: %v", err)
-	}
+	// A live replacement generation is installed while Stop waits (in
+	// production this is a claimed Resume/Restart of a racing caller; a bare
+	// Replace registration cannot pass the claim-token guard while Stop's
+	// own claim is held, so the replacement is installed directly at the
+	// registry seam). install closes the old dead channel.
+	coord.registry.install(registryEntry{Runtime: Runtime{SessionID: id, Generation: 99, Endpoint: "ep361b", Subscribed: true}, dead: make(chan struct{})})
 
 	if err := <-done; !errors.Is(err, ErrStopSuperseded) {
 		t.Fatalf("expected ErrStopSuperseded, got %v", err)

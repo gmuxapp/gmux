@@ -99,7 +99,7 @@ func TestReapOrphansSkipsClaimedSession(t *testing.T) {
 	coord := reapCoord(t, client, control)
 	installLive(coord, id, "ep-winner")
 	coord.mu.Lock()
-	coord.ops[id] = "restart"
+	coord.ops[id] = &LifecycleClaim{op: "restart"}
 	coord.mu.Unlock()
 
 	reaped, err := coord.ReapOrphans(context.Background(), []string{"ep-orphan"})

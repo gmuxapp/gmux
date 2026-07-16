@@ -87,7 +87,7 @@ func TestDismissBlockedByInFlightSubtreeClaim(t *testing.T) {
 	dur.listSessions = func() ([]centralstore.Session, error) { return treeSessions(), nil }
 	coord := newDismissCoord(t, dur, &fakeDirtySink{})
 	coord.mu.Lock()
-	coord.ops["sess-c"] = "resume"
+	coord.ops["sess-c"] = &LifecycleClaim{op: "resume"}
 	coord.mu.Unlock()
 
 	_, err := coord.Dismiss(context.Background(), "sess-p")
@@ -280,7 +280,7 @@ func TestRemoveBlockedByLivenessClaimAndWindow(t *testing.T) {
 	coord.registry.remove("sess-p", 1)
 
 	coord.mu.Lock()
-	coord.ops["sess-p"] = "stop"
+	coord.ops["sess-p"] = &LifecycleClaim{op: "stop"}
 	coord.mu.Unlock()
 	if err := coord.Remove(ctx, "sess-p", 1); !errors.Is(err, ErrLifecycleOpInFlight) {
 		t.Fatalf("err=%v", err)

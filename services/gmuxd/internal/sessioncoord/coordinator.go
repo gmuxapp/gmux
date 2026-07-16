@@ -20,6 +20,15 @@ var (
 	// registrations). It is a permanent verdict: registration aborts before
 	// any commit, fence, or registry change.
 	ErrInvalidSessionID = errors.New("sessioncoord: invalid session id")
+	// ErrReplaceWithoutClaim marks a registration carrying Replace or
+	// ExpectedID provenance without presenting the token of the lifecycle
+	// claim it runs under (or presenting a token that is not the installed
+	// claim for that session). Replace provenance is only legal inside
+	// claimed operations (Resume/Restart); discovery and /v1/register never
+	// set these fields. This turns the wiring convention into a checked
+	// invariant: a stray Replace registration can never displace a live
+	// generation — not even while an unrelated operation's claim is held.
+	ErrReplaceWithoutClaim = errors.New("sessioncoord: replace provenance requires a held lifecycle claim")
 )
 
 // EventStream is already ordered by the runner transport. Subscribe must not
@@ -97,6 +106,12 @@ type RegisterRequest struct {
 	// runner happens to claim — without this check a mis-claiming runner
 	// could supersede an unrelated live session's generation.
 	ExpectedID centralstore.SessionID
+	// Claim is the lifecycle claim token authorizing Replace/ExpectedID
+	// provenance. Register verifies token identity against the installed
+	// claim for the runner's ID under the lifecycle mutex — the caller must
+	// hold its OWN claim, not merely observe that some claim exists
+	// (otherwise a stray Replace during an unrelated Stop would pass).
+	Claim *LifecycleClaim
 }
 
 type Coordinator struct {
@@ -117,6 +132,9 @@ type Coordinator struct {
 	takeover bool
 	resolver ConversationResolver
 	lineage  lineageCache
+	// takeoverWarnOnce rate-limits the takeover-unconfigured warning to once
+	// per process.
+	takeoverWarnOnce sync.Once
 
 	// reconciler/reconcileBatch/reconcileInFlight/verdicts back adapter
 	// reconciliation (reconcile.go). verdicts is guarded by mu; it is
@@ -135,7 +153,7 @@ type Coordinator struct {
 	// restart). Guarded by mu; held across those operations' runner I/O so a
 	// concurrent lifecycle op for the same session fails fast instead of
 	// double-spawning or double-killing. See lifecycle.go.
-	ops map[centralstore.SessionID]string
+	ops map[centralstore.SessionID]*LifecycleClaim
 
 	// beforeDismissLock is a test-only synchronization seam: when set, it is
 	// called immediately before Dismiss attempts the lifecycle mutex, letting
@@ -172,7 +190,7 @@ func New(registry *Registry, runners RunnerClient, durable Durable, dirty DirtyS
 	c := &Coordinator{
 		registry: registry, runners: runners, durable: durable, dirty: dirty, errSink: errSink,
 		now:            func() centralstore.UnixMillis { return centralstore.UnixMillis(time.Now().UnixMilli()) },
-		ops:            make(map[centralstore.SessionID]string),
+		ops:            make(map[centralstore.SessionID]*LifecycleClaim),
 		converged:      make(chan struct{}),
 		reconcileBatch: 32,
 	}
@@ -294,6 +312,13 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 	if err := ctx.Err(); err != nil {
 		c.mu.Unlock()
 		return Runtime{}, err
+	}
+
+	if req.Replace || req.ExpectedID != "" {
+		if req.Claim == nil || c.ops[id] != req.Claim {
+			c.mu.Unlock()
+			return Runtime{}, fmt.Errorf("%w: %s", ErrReplaceWithoutClaim, id)
+		}
 	}
 
 	old, hadOld := c.registry.current(id)
@@ -445,6 +470,16 @@ loop:
 	}
 
 	c.mu.Unlock()
+
+	// Silent-loss guard: a conversation-bearing registration in an embedding
+	// that never configured takeover would silently forfeit conversation
+	// lineage takeover. Warn prominently, once per process (production always
+	// configures WithConversationTakeover).
+	if !c.takeover && reg.Facts.ConversationRef != nil && *reg.Facts.ConversationRef != "" {
+		c.takeoverWarnOnce.Do(func() {
+			c.reportError(ctx, fmt.Errorf("sessioncoord: session %s carries a conversation ref but conversation takeover is not configured (WithConversationTakeover); duplicate retained rows will not be taken over", id))
+		})
+	}
 
 	// Publish committed outcome outside the mutex so a blocking or
 	// re-entrant dirty sink cannot stall lifecycle transitions.

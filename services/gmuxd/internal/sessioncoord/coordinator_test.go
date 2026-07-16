@@ -255,6 +255,10 @@ func exitedAt(ms int64) centralstore.NullablePatch[centralstore.UnixMillis] {
 
 // newCoord is a test constructor with sensible defaults.
 func newCoord(client *fakeRunnerClient, durable *fakeDurable, dirty *fakeDirtySink, errSink *fakeErrorSink) *Coordinator {
+	if errSink == nil {
+		// Avoid a typed-nil ErrorSink interface value.
+		return New(nil, client, durable, dirty, nil)
+	}
 	return New(nil, client, durable, dirty, errSink)
 }
 
@@ -430,9 +434,12 @@ func TestStaleCloseDoesNotRemoveCurrentGeneration(t *testing.T) {
 	}
 	oldStream := client.stream
 
-	// Replace with a second generation.
+	// Replace with a second generation (under a lifecycle claim, like
+	// Resume/Restart).
 	client.stream = newFakeStream()
-	_, err = coord.Register(context.Background(), RegisterRequest{Endpoint: "ep4", Replace: true})
+	cl, release := testClaim(t, coord, id)
+	_, err = coord.Register(context.Background(), RegisterRequest{Endpoint: "ep4", Replace: true, Claim: cl})
+	release()
 	if err != nil {
 		t.Fatalf("Register gen2: %v", err)
 	}
@@ -549,9 +556,11 @@ func TestReplacementFencesInFlightOldApply(t *testing.T) {
 
 	// Replacement registration; blocks in the commit-to-install window.
 	client.stream = newFakeStream()
+	cl, release := testClaim(t, coord, id)
+	defer release()
 	regDone := make(chan error, 1)
 	go func() {
-		_, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep5", Replace: true})
+		_, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep5", Replace: true, Claim: cl})
 		regDone <- err
 	}()
 	<-registerCommitted
@@ -636,9 +645,11 @@ func TestFailedReplacementCommitsInFlightOldApply(t *testing.T) {
 	// Start the failing replacement; wait until it is inside the fence
 	// window (fence set under c.mu before RegisterRunner runs).
 	client.stream = newFakeStream()
+	cl, release := testClaim(t, coord, id)
+	defer release()
 	regDone := make(chan error, 1)
 	go func() {
-		_, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep8f", Replace: true})
+		_, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep8f", Replace: true, Claim: cl})
 		regDone <- err
 	}()
 	<-registerEntered
@@ -733,9 +744,11 @@ func TestReplacementDiscardsOldEvents(t *testing.T) {
 	<-applyEntered
 
 	client.stream = newFakeStream()
-	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep6", Replace: true}); err != nil {
+	cl, release := testClaim(t, coord, id)
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep6", Replace: true, Claim: cl}); err != nil {
 		t.Fatalf("Register gen2: %v", err)
 	}
+	release()
 
 	// Release the old apply; the stale retry must be discarded because the
 	// installed generation is no longer the event's generation.
@@ -779,7 +792,9 @@ func TestFastDeadReplacementSynthesizesExitAndRemovesOldEntry(t *testing.T) {
 	// Replacement stream closes before Register runs.
 	client.stream = newFakeStream()
 	client.stream.Close()
-	runtime, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep7f", Replace: true})
+	cl, release := testClaim(t, coord, id)
+	defer release()
+	runtime, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep7f", Replace: true, Claim: cl})
 	if err != nil {
 		t.Fatalf("Register replacement: %v", err)
 	}
@@ -1497,5 +1512,133 @@ func TestRegisterRejectsInvalidSessionID(t *testing.T) {
 		if !client.stream.closed.Load() {
 			t.Fatalf("id %q: expected the subscribed stream to be closed", bad)
 		}
+	}
+}
+
+// testClaim reserves the per-session lifecycle slot exactly like
+// Resume/Restart do, so tests can exercise Replace registrations under the
+// checked ErrReplaceWithoutClaim invariant. It returns the claim token (to
+// be threaded into RegisterRequest.Claim) and the release.
+func testClaim(t *testing.T, coord *Coordinator, id centralstore.SessionID) (*LifecycleClaim, func()) {
+	t.Helper()
+	cl, release, err := coord.claim(id, "test")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	return cl, release
+}
+
+// TestReplaceRequiresClaim verifies that Replace/ExpectedID provenance is a
+// checked invariant: a registration carrying either aborts with
+// ErrReplaceWithoutClaim unless it presents the token of the caller's own
+// held claim — no token, a foreign token, and an unrelated operation's
+// concurrent claim all fail, with no commit, fence, or registry change.
+func TestReplaceRequiresClaim(t *testing.T) {
+	id := sid(206)
+	meta := RunnerMeta{Registration: centralstore.RunnerRegistration{ID: id, Alive: true}}
+
+	expectRejected := func(t *testing.T, coord *Coordinator, dur *fakeDurable, req RegisterRequest) {
+		t.Helper()
+		if _, err := coord.Register(context.Background(), req); !errors.Is(err, ErrReplaceWithoutClaim) {
+			t.Fatalf("req %+v: expected ErrReplaceWithoutClaim, got %v", req, err)
+		}
+		if len(dur.registered) != 0 {
+			t.Fatal("RegisterRunner must not be called without the caller's claim")
+		}
+		if len(coord.Registry().Snapshot()) != 0 {
+			t.Fatal("registry must stay empty")
+		}
+	}
+
+	for _, req := range []RegisterRequest{
+		{Endpoint: "ep206", Replace: true},
+		{Endpoint: "ep206", ExpectedID: id},
+	} {
+		client := newFakeClient(meta)
+		dur := newFakeDurable(0)
+		coord := newCoord(client, dur, &fakeDirtySink{}, nil)
+		expectRejected(t, coord, dur, req)
+	}
+
+	// A concurrent UNRELATED claim (e.g. a Stop in its long terminate/wait
+	// window) must not authorize a stray tokenless Replace — the fable M-1
+	// loophole.
+	{
+		client := newFakeClient(meta)
+		dur := newFakeDurable(0)
+		coord := newCoord(client, dur, &fakeDirtySink{}, nil)
+		_, release, err := coord.claim(id, "stop")
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		defer release()
+		expectRejected(t, coord, dur, RegisterRequest{Endpoint: "ep206", Replace: true})
+		// A foreign token (another session's claim) must fail identity too.
+		foreign, releaseForeign, err := coord.claim(sid(299), "test")
+		if err != nil {
+			t.Fatalf("foreign claim: %v", err)
+		}
+		defer releaseForeign()
+		expectRejected(t, coord, dur, RegisterRequest{Endpoint: "ep206", Replace: true, Claim: foreign})
+	}
+
+	// Under the caller's own claim token the same request commits.
+	client := newFakeClient(meta)
+	dur := newFakeDurable(0)
+	coord := newCoord(client, dur, &fakeDirtySink{}, nil)
+	cl, release := testClaim(t, coord, id)
+	defer release()
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep206", Replace: true, ExpectedID: id, Claim: cl}); err != nil {
+		t.Fatalf("claimed Replace registration: %v", err)
+	}
+	if len(dur.registered) != 1 {
+		t.Fatalf("expected 1 registration, got %d", len(dur.registered))
+	}
+}
+
+// TestTakeoverUnconfiguredWarning verifies the silent-loss guard: a
+// registration whose merged facts carry a conversation ref while takeover is
+// not configured warns through the ErrorSink exactly once per process.
+func TestTakeoverUnconfiguredWarning(t *testing.T) {
+	ref := "conv-1"
+	mkMeta := func(n int) RunnerMeta {
+		return RunnerMeta{Registration: centralstore.RunnerRegistration{
+			ID: sid(207 + n), Alive: true,
+			Facts: centralstore.RunnerFacts{ConversationRef: &ref},
+		}}
+	}
+	errSink := &fakeErrorSink{}
+	dur := newFakeDurable(0)
+	client := newFakeClient(mkMeta(0))
+	coord := newCoord(client, dur, &fakeDirtySink{}, errSink)
+
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep207"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if errSink.count() != 1 {
+		t.Fatalf("expected 1 warning, got %d", errSink.count())
+	}
+	if !strings.Contains(errSink.last().Error(), "takeover") {
+		t.Fatalf("warning should mention takeover: %v", errSink.last())
+	}
+
+	// Second conversation-bearing registration: no second warning.
+	coord.runners = newFakeClient(mkMeta(1))
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep208"}); err != nil {
+		t.Fatalf("Register 2: %v", err)
+	}
+	if errSink.count() != 1 {
+		t.Fatalf("warning must fire once per process, got %d", errSink.count())
+	}
+
+	// A takeover-configured coordinator never warns.
+	errSink2 := &fakeErrorSink{}
+	coord2 := New(nil, newFakeClient(mkMeta(2)), newFakeDurable(0), &fakeDirtySink{}, errSink2,
+		WithConversationTakeover(nil))
+	if _, err := coord2.Register(context.Background(), RegisterRequest{Endpoint: "ep209"}); err != nil {
+		t.Fatalf("Register 3: %v", err)
+	}
+	if errSink2.count() != 0 {
+		t.Fatalf("takeover-configured coordinator must not warn: %v", errSink2.last())
 	}
 }

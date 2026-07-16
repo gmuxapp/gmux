@@ -59,7 +59,7 @@ func (c *Coordinator) ReapOrphans(ctx context.Context, endpoints []string) ([]st
 		if id == "" {
 			continue
 		}
-		release, err := c.claim(id, "reap")
+		_, release, err := c.claim(id, "reap")
 		if err != nil {
 			continue // a lifecycle op owns this session right now: skip
 		}

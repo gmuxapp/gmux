@@ -367,7 +367,7 @@ func TestReconcileSkipsRowThatWentLiveOrClaimedDuringProbe(t *testing.T) {
 		// Between gather and apply: one row goes live, one gains a claim.
 		installLive(coord, "went-live", "ep-x")
 		coord.mu.Lock()
-		coord.ops["got-claimed"] = "resume"
+		coord.ops["got-claimed"] = &LifecycleClaim{op: "resume"}
 		coord.mu.Unlock()
 		return decide(DispositionRemove, "went-live", "got-claimed"), nil
 	}
@@ -396,7 +396,7 @@ func TestReconcileClaimedRowIsNotACandidate(t *testing.T) {
 	coord := New(nil, newFakeClient(RunnerMeta{}), dur, &fakeDirtySink{}, nil, WithAdapterReconciler(rec))
 	closeBarrier(t, coord)
 	coord.mu.Lock()
-	coord.ops["claimed"] = "resume"
+	coord.ops["claimed"] = &LifecycleClaim{op: "resume"}
 	coord.mu.Unlock()
 
 	if _, err := coord.Reconcile(ctx); err != nil {
