@@ -220,12 +220,12 @@ export function discoverProjects(
     let suggested = remote ? slugFromRemote(remote) : ''
     if (!suggested) suggested = slugFromPath(dir)
     if (!suggested) suggested = 'project'
-    // Mirror the server-side sessionLastActive: prefer last_activity_at,
+    // Mirror the server-side sessionLastActive: prefer last_output_at,
     // fall back to created_at, so local rows sort consistently against
     // peer-advertised ones.
     let lastActive = ''
     for (const s of group) {
-      const t = s.last_activity_at || s.created_at
+      const t = s.last_output_at || s.created_at
       if (t > lastActive) lastActive = t
     }
     const dp: DiscoveredProject = {

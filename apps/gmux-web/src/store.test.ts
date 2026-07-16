@@ -214,11 +214,8 @@ describe('filter never evicts the selected session', () => {
 })
 
 describe('sidebar views share one membership (Projects == Activity)', () => {
-  const ids = (p: { needsAttention: { id: string }[]; running: { id: string }[]; buckets: { sessions: { id: string }[] }[]; older: { id: string }[] }) =>
-    [
-      ...p.needsAttention, ...p.running,
-      ...p.buckets.flatMap(b => b.sessions), ...p.older,
-    ].map(s => s.id).sort()
+  const ids = (buckets: { sessions: { id: string }[] }[]) =>
+    buckets.flatMap(b => b.sessions).map(s => s.id).sort()
   const folderIds = () => folders.value.flatMap(f => f.sessions.map(s => s.id)).sort()
 
   beforeEach(() => {
@@ -261,16 +258,15 @@ describe('sidebar views share one membership (Projects == Activity)', () => {
     expect(ids(sidebarActivity.value)).toEqual(['recovered'])
   })
 
-  it('a resumable-dead session is reachable in Activity via `older` (Finding 1)', () => {
+  it('keeps a resumable-dead session reachable in Activity (Finding 1)', () => {
     // The original bug: Activity ran through partitionForHome, which
-    // dropped dead sessions, so a resumable corpse was open in the
-    // terminal but had no row in Activity view. Now it lands in `older`.
+    // dropped dead sessions, so a resumable corpse open in the terminal
+    // had no Activity row. partitionByDay day-buckets it like anything
+    // else (dead included), so both views agree on membership.
     _rawSessions.value = [
-      makeSession({ id: 'live', cwd: '/p', adapter: 'shell', slug: 'lv', alive: true, last_activity_at: new Date().toISOString(), project_slug: 'proj' }),
+      makeSession({ id: 'live', cwd: '/p', adapter: 'shell', slug: 'lv', alive: true, last_output_at: new Date().toISOString(), project_slug: 'proj' }),
       makeSession({ id: 'corpse', cwd: '/p', adapter: 'shell', slug: 'cp', alive: false, resumable: true, project_slug: 'proj' }),
     ]
-    expect(sidebarActivity.value.older.map(s => s.id)).toEqual(['corpse'])
-    // And both views still agree on membership.
     expect(ids(sidebarActivity.value)).toEqual(folderIds())
     expect(ids(sidebarActivity.value)).toEqual(['corpse', 'live'])
   })
@@ -324,20 +320,20 @@ describe('toUISession project stamp passthrough', () => {
     expect(ui.project_slug).toBeUndefined()
   })
 
-  it('passes last_activity_at through from the wire', () => {
+  it('passes last_output_at through from the wire', () => {
     // The owning daemon stamps this; the UI uses it for the home
     // dashboard's Recent section sort. Pure passthrough at the
     // boundary; no client-side derivation.
     const ui = toUISession({
       id: 'sess-1', alive: true,
-      last_activity_at: '2026-01-15T08:00:00Z',
+      last_output_at: '2026-01-15T08:00:00Z',
     } as any)
-    expect(ui.last_activity_at).toBe('2026-01-15T08:00:00Z')
+    expect(ui.last_output_at).toBe('2026-01-15T08:00:00Z')
   })
 
-  it('leaves last_activity_at undefined when the wire omits it', () => {
+  it('leaves last_output_at undefined when the wire omits it', () => {
     const ui = toUISession({ id: 'sess-1', alive: true } as any)
-    expect(ui.last_activity_at).toBeUndefined()
+    expect(ui.last_output_at).toBeUndefined()
   })
 
   it('treats empty-string project_slug as unstamped', () => {
@@ -1086,7 +1082,7 @@ describe('tab-identity params (?filter=, ?sidebar=)', () => {
       makeSession({ id: 'out', alive: true, unread: true, project_slug: 'other', peer: 'server' }),
     ]
     urlSearch.value = '?filter=proj'
-    expect(homePartition.value.needsAttention.map(s => s.id)).toEqual(['in'])
+    expect(homePartition.value.flatMap(b => b.sessions.map(s => s.id))).toEqual(['in'])
   })
 })
 

@@ -139,6 +139,8 @@ body {
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   overflow: hidden;
+  /* Positioning context for the floating scroll-to-top pill. */
+  position: relative;
 }
 
 .sidebar-header {
@@ -259,6 +261,32 @@ body {
 .sidebar-scroll::before {
   content: '';
   flex: 0 0 6px;
+}
+/* Touch: the header sits at the bottom (thumb zone), so the list's top
+ * items are the hardest to reach. Grow the scrollable top spacer into a
+ * blank "thumb reach" gap so the first item never hugs the top edge —
+ * reachable at rest, and it just scrolls away once you start browsing
+ * (costs nothing mid-scroll). Deliberately undecorated: on mobile the
+ * chrome is all at the bottom, so top whitespace reads as balance.
+ *
+ * Sized so the *shown* area (first item → bottom header) is ~350px
+ * rather than a fraction of the screen — the gap is "whatever's left
+ * after reserving the shown area at the bottom". Shown never drops below
+ * 40% of the viewport, so on tall screens it grows instead of leaving an
+ * absurd gap. px keeps the 350 independent of device-pixel-ratio and
+ * font scaling; --app-height is the JS-measured, address-bar-aware
+ * viewport the drawer itself uses. The outer max() floors the gap so it
+ * shrinks (rather than going negative) on very short screens. */
+@media (pointer: coarse) {
+  .sidebar-scroll::before {
+    flex-basis: max(
+      8px,
+      calc(
+        var(--app-height, 100dvh) - var(--header-height)
+        - max(350px, var(--app-height, 100dvh) * 0.4)
+      )
+    );
+  }
 }
 
 /* ── Folder ── */
@@ -776,7 +804,9 @@ body {
   padding: 0;
 }
 .session-item:hover .session-close-btn,
-.session-item.selected .session-close-btn {
+.session-item.selected .session-close-btn,
+.session-row:hover .session-close-btn,
+.session-row.selected .session-close-btn {
   opacity: 1;
   background: oklch(22% 0.01 250 / 0.45);
 }
@@ -789,11 +819,9 @@ body {
 /* Mock mode (landing page screenshots): hide per-session close
  * buttons. Previously chained to the .session-dragging rule below
  * via a stray comma, so mock mode left them at opacity 0.4 instead
- * of hiding them. Both the compact sidebar item (.session-close-btn)
- * and the wide dashboard row (.session-row-close) need hiding so
- * neither variant leaks into screenshots. */
-.mock-mode .session-close-btn,
-.mock-mode .session-row-close {
+ * of hiding them. Sidebar items and activity-feed rows share the
+ * .session-close-btn class, so one rule hides both in screenshots. */
+.mock-mode .session-close-btn {
   display: none;
 }
 
@@ -914,6 +942,13 @@ body {
   letter-spacing: 0.08em;
   color: var(--text-muted);
   padding: 4px 14px;
+  /* Pin the day label while its rows scroll underneath (mirrors the
+   * Projects view's sticky .folder-header). Opaque bg so rows don't
+   * bleed through; above the rows (position:relative). */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-sidebar);
 }
 
 .sidebar-scroll .session-row {
@@ -927,21 +962,15 @@ body {
 .sidebar-scroll .session-row.selected {
   background: var(--bg-selected);
 }
-.sidebar-scroll .session-row-title { font-size: 13px; font-weight: 400; }
-.sidebar-scroll .session-row-meta {
-  margin-top: 1px;
-  font-size: 11px;
-  flex-wrap: nowrap;
-  overflow: hidden;
-}
-.sidebar-scroll .session-row-project { font-weight: 500; color: var(--text-muted); }
-.sidebar-scroll .session-row-age { font-weight: 400; color: var(--text-muted); }
+.sidebar-scroll .session-row-compact .session-row-content { font-size: 13px; }
+.sidebar-scroll .session-row-title { font-weight: 400; }
+.sidebar-scroll .session-row-meta { font-size: 11px; margin-top: 1px; }
 
 /* ── Wide session row (dashboard / project page) ────────────────────── */
-/* Two-line variant of the sidebar's SessionItem. Same dot conventions
-   and close-button behavior; line 2 carries optional project / cwd /
-   status / age metadata. The host suffix uses the existing
-   .host-suffix styling. */
+/* Single-line `project · title` row for the activity feed (home +
+   sidebar Activity). Same dot conventions and close-button behavior as
+   the sidebar's Projects-view SessionItem. The host suffix uses the
+   existing .host-suffix styling. */
 
 .session-row {
   display: flex;
@@ -972,7 +1001,30 @@ body {
   min-width: 0;
 }
 
-.session-row-title {
+/* Compact (older buckets): one flex line — project · title · cwd. The
+ * title is the anchor and shrinks/ellipsizes first when tight; project
+ * and badges keep their size, so the row packs left with no variable gap. */
+.session-row-compact .session-row-content {
+  display: flex;
+  align-items: baseline;
+  font-size: 13px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.session-row-compact .session-row-title {
+  font-weight: 500;
+  color: var(--text);
+  flex: 0 1 auto;
+  min-width: 2.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Full (today): two lines — title, then "age · project on host · cwd". */
+.session-row-full .session-row-title {
+  /* block so overflow/text-overflow apply — an inline span won't ellipsize. */
+  display: block;
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
@@ -980,72 +1032,50 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
 .session-row-meta {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
-  margin-top: 4px;
+  margin-top: 3px;
   font-size: 12px;
   color: var(--text-muted);
-  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
 }
+
 .session-row-sep {
   color: var(--text-muted);
-  opacity: 0.6;
-  margin: 0 0.4em; /* air so the meta line doesn't read as a run-on */
+  opacity: 0.5;
+  margin: 0 0.4em;
+  flex: 0 0 auto;
 }
 .session-row-project {
-  /* Bold, matching the sidebar folder header (.folder-name). */
-  color: var(--text);
-  font-weight: 600;
+  /* Muted leading context. Middle-truncated in JS, so it never shrinks
+   * via flex: a short name like "gmux" always shows whole, and the width
+   * is stable row-to-row (no variable gap before the separator). */
+  color: var(--text-muted);
+  font-weight: 400;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.session-row-age {
+  color: var(--text-muted);
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
 }
 .session-row-cwd {
-  /* No monospace: the ./ ~/ / prefix already marks it as a folder, and
-   * the shared font keeps the meta line one size. Ellipsizes only when
-   * a path exceeds the line (full path is in the title). */
-  max-width: 100%;
+  /* No monospace: the ./ ~/ / prefix already marks it as a folder.
+   * Ellipsizes only when it exceeds the line (full path in the title). */
+  color: var(--text-muted);
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.session-row-status {
-  font-style: italic;
-}
-.session-row-age {
-  font-variant-numeric: tabular-nums;
-  /* Weight + colour matched to the project so the time reads as its peer. */
-  font-weight: 600;
-  color: var(--text);
 }
 .session-row-dup,
 .session-dup-warning {
   color: var(--warning, #d08770);
   font-weight: 500;
-}
-
-.session-row-close {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 18px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  opacity: 0;
-  transition: opacity 0.1s, color 0.1s, background 0.1s;
-}
-.session-row:hover .session-row-close,
-.session-row.selected .session-row-close {
-  opacity: 1;
-}
-.session-row-close:hover {
-  color: var(--text);
-  background: var(--bg-active);
-}
-@media (hover: none) {
-  .session-row-close { opacity: 1; }
 }
 
 /* On touch devices (no hover), show interactive buttons permanently */
@@ -2240,10 +2270,14 @@ body {
   z-index: 10;
 }
 
-.terminal-scroll-end {
+/* Shared floating "scroll to edge" button skin: the terminal's scroll-
+ * to-bottom (normal + replay/resume views) and the sidebar Activity
+ * scroll-to-top. One visual source of truth; each sets its own anchor
+ * position (see below). */
+.terminal-scroll-end,
+.jump-to-bottom,
+.scroll-top-btn {
   position: absolute;
-  bottom: 12px;
-  right: 16px;
   padding: 8px 12px;
   border-radius: 8px;
   border: 1px solid oklch(from var(--border-strong) l c h / 0.7);
@@ -2261,10 +2295,14 @@ body {
   pointer-events: auto;
 }
 
-.terminal-scroll-end:hover {
+.terminal-scroll-end:hover,
+.jump-to-bottom:hover,
+.scroll-top-btn:hover {
   background: oklch(from var(--bg-surface) l c h / 0.92);
   color: oklch(76% 0.012 250);
 }
+
+.terminal-scroll-end { bottom: 12px; right: 16px; }
 
 /* Use JetBrains Mono for italic glyphs since Fira Code has no italic variant.
    The bundled JetBrains Mono italic files (from fonts.css) are referenced here
@@ -3250,29 +3288,22 @@ body {
 
 /* Floating "jump to bottom" overlay for any xterm-hosting view (replay,
    live terminal). Anchors to the nearest positioned ancestor, which
-   .terminal-shell already establishes (position: relative). */
-.jump-to-bottom {
-  position: absolute;
-  right: 16px;
-  bottom: 16px;
-  z-index: 5;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--bg-surface);
-  color: var(--text);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  line-height: 1;
-  box-shadow: 0 2px 8px oklch(0% 0 0 / 0.35);
-  transition: background 0.1s, transform 0.1s;
+   .terminal-shell already establishes (position: relative). Skin shared
+   with .terminal-scroll-end (see above). */
+.jump-to-bottom { right: 16px; bottom: 16px; }
+
+/* Sidebar scroll-to-top: top-right on desktop, bottom-right (thumb
+ * reach) on touch. */
+.scroll-top-btn {
+  right: 12px;
+  top: calc(var(--header-height) + 10px);
 }
-.jump-to-bottom:hover { background: oklch(28% 0.015 250); }
-.jump-to-bottom:active { transform: translateY(1px); }
+@media (pointer: coarse) {
+  .scroll-top-btn {
+    top: auto;
+    bottom: calc(var(--header-height) + env(safe-area-inset-bottom) + 12px);
+  }
+}
 
 /* ── Link action sheet (long-press a link on touch devices) ────────
    Reuses the modal backdrop/panel conventions; the panel is a narrow

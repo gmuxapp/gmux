@@ -288,9 +288,31 @@ function FolderGroup({
   // sessions agree, per-row markers are noise.
   const folderPeers = new Set(visible.map(s => s.peer ?? ''))
   const mixedHosts = folderPeers.size > 1
+
+  const headerRef = useRef<HTMLDivElement>(null)
+  // Collapsing removes the rows below the header. Because headers are
+  // sticky, if you're scrolled down inside this folder its box can end
+  // up entirely above the viewport once its rows vanish — the header you
+  // just clicked disappears upward, which is disorienting. So when (and
+  // only when) collapsing would push the clicked header off the top,
+  // pull the scroll position back so it stays where it was.
+  const handleToggleCollapse = () => {
+    const el = headerRef.current
+    const scroll = el?.closest('.sidebar-scroll') as HTMLElement | null
+    const wasCollapsed = collapsed
+    const beforeTop = el && scroll
+      ? el.getBoundingClientRect().top - scroll.getBoundingClientRect().top
+      : 0
+    toggleFolderCollapsed(folder.key)
+    if (wasCollapsed || !el || !scroll) return // only correct when collapsing
+    requestAnimationFrame(() => {
+      const afterTop = el.getBoundingClientRect().top - scroll.getBoundingClientRect().top
+      if (afterTop < 0) scroll.scrollTop += afterTop - beforeTop
+    })
+  }
   return (
     <div class="folder">
-      <div class="folder-header">
+      <div class="folder-header" ref={headerRef}>
         <button
           type="button"
           class={`folder-name${folder.missing ? ' missing' : ''}${folder.unresolved ? ' unresolved' : ''}`}
@@ -300,7 +322,7 @@ function FolderGroup({
             : folder.missing
             ? `${folder.name} no longer exists on ${folder.peer} — remove this reference in Settings → Projects.`
             : collapsed ? `Expand ${folder.name}` : `Collapse ${folder.name}`}
-          onClick={() => toggleFolderCollapsed(folder.key)}
+          onClick={handleToggleCollapse}
         >
           <IconChevron className={`folder-chevron${collapsed ? ' collapsed' : ''}`} />
           <span class="folder-name-label">{folder.name}</span>
@@ -455,7 +477,7 @@ function ActivityList({
   onCloseSession: (session: Session) => void
   onClick?: () => void
 }) {
-  const { needsAttention, running, buckets, older } = sidebarActivity.value
+  const buckets = sidebarActivity.value
   const foldersVal = folders.value
 
   const folderBySessionId = new Map<string, Folder>()
@@ -463,7 +485,9 @@ function ActivityList({
     for (const s of f.sessions) folderBySessionId.set(s.id, f)
   }
 
-  const renderRow = (s: Session) => {
+  // compact=false for today (two-line with age), true for older buckets
+  // (single-line project · title — the day heading carries the time).
+  const renderRow = (s: Session, compact: boolean) => {
     const folder = folderBySessionId.get(s.id)
     if (!folder) return null
     return (
@@ -473,6 +497,7 @@ function ActivityList({
         href={tabHref(sessionPath(folder.slug, s, folder.peer))}
         selected={selId === s.id}
         resuming={resumingId === s.id}
+        compact={compact}
         showProject
         projectName={folder.name}
         onClick={onClick}
@@ -481,12 +506,12 @@ function ActivityList({
     )
   }
 
-  const sections: { label: string; sessions: Session[] }[] = [
-    { label: 'Waiting', sessions: needsAttention },
-    { label: 'Active', sessions: running },
-    ...buckets.map(b => ({ label: b.label, sessions: b.sessions })),
-    { label: 'Older', sessions: older },
-  ].filter(sec => sec.sessions.length > 0)
+  // Drop folderless sessions per bucket (the brief post-restart window
+  // where recovered sessions arrive unstamped) so a day heading never
+  // renders with no rows. partitionByDay never emits empty buckets.
+  const sections = buckets
+    .map(b => ({ label: b.label, sessions: b.sessions.filter(s => folderBySessionId.has(s.id)) }))
+    .filter(sec => sec.sessions.length > 0)
 
   if (sections.length === 0) {
     return (
@@ -501,9 +526,9 @@ function ActivityList({
   return (
     <>
       {sections.map(sec => (
-        <div class="sidebar-activity-section" key={sec.label}>
-          <div class="sidebar-section-title">{sec.label}</div>
-          {sec.sessions.map(renderRow)}
+        <div class="sidebar-activity-section" key={sec.label ?? 'today'}>
+          {sec.label !== null && <div class="sidebar-section-title">{sec.label}</div>}
+          {sec.sessions.map(s => renderRow(s, sec.label !== null))}
         </div>
       ))}
     </>
@@ -578,6 +603,39 @@ export function Sidebar({
 
   // The view menu shouldn't outlive the sidebar on mobile.
   useEffect(() => { if (!open) setMenuOpen(false) }, [open])
+
+  // Scroll-to-top pill (Activity view only): show once you're a decent
+  // way into the *content*, so the top items are one tap away without a
+  // long scroll back. Measured relative to the first section rather than
+  // a fixed scrollTop, because the top thumb gap is itself hundreds of px
+  // on tall phones — a fixed threshold would fire while still scrolling
+  // through the blank gap.
+  const [scrolledDown, setScrolledDown] = useState(false)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    // Projects view has no scroll-to-top button, so don't track scroll
+    // there (avoids a querySelector-miss on every wheel tick and stale
+    // state nothing renders).
+    if (mode !== 'activity') { setScrolledDown(false); return }
+    // Selecting Activity jumps back to the top (the most-recent items).
+    // This deliberately runs after the reveal effect above (declared
+    // first, so it fires first on a mode change), overriding its
+    // scroll-selected-into-view for the view switch — within Activity a
+    // later selId change still reveals normally.
+    el.scrollTop = 0
+    const onScroll = () => {
+      const first = el.querySelector('.sidebar-activity-section')
+      setScrolledDown(
+        first
+          ? first.getBoundingClientRect().top < el.getBoundingClientRect().top - 240
+          : el.scrollTop > 240,
+      )
+    }
+    onScroll()
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [mode])
 
   // folder.sessions is already the shown set (see store.ts
   // sidebarSessions), so this is just the visible session count.
@@ -675,6 +733,17 @@ export function Sidebar({
             </div>
           )}
         </div>
+        {mode === 'activity' && scrolledDown && (
+          <button
+            type="button"
+            class="scroll-top-btn"
+            aria-label="Scroll to top"
+            title="Scroll to top"
+            onClick={() => { if (scrollRef.current) scrollRef.current.scrollTop = 0 }}
+          >
+            Top ↑
+          </button>
+        )}
       </aside>
     </>
   )

@@ -1,184 +1,127 @@
-// Pins the home dashboard's section partition. The partition is the
-// only piece of dashboard logic with non-trivial behavior (the row
-// component is visual, the section layout is presentation); these
-// tests guard the behavior contracts the design conversation pinned
-// down: section priority, sort key, and the recency-bucket boundaries.
+// Pins partitionByDay — the activity feed's day-grouping. It's the only
+// piece of feed logic with non-trivial behavior (rows are visual, the
+// section layout is presentation). These guard the contracts the design
+// conversation pinned down: plain recency grouping (no status hoist),
+// the Today/Yesterday/Last-<weekday>/date label tiers, newest-first sort
+// with created_at fallback and a stable id tiebreaker, and totality.
 
 import { describe, it, expect } from 'vitest'
-import {
-  partitionForHome,
-} from './store'
+import { partitionByDay } from './store'
 import { makeSession } from './test-helpers'
 
-// Constructed from LOCAL date parts (not a UTC string) so the
-// calendar-day bucket boundaries — which partitionForHome computes in
-// local time — line up deterministically regardless of the test
-// runner's timezone. Noon leaves a comfortable 12h gap to local
-// midnight, keeping the "earlier today" / "yesterday" splits crisp.
+// Constructed from LOCAL date parts (not a UTC string) so the calendar-
+// day boundaries — which partitionByDay computes in local time — line up
+// deterministically regardless of the runner's timezone. Noon leaves a
+// 12h gap to midnight, keeping day splits crisp.
 const NOW = new Date(2026, 5, 1, 12, 0, 0).getTime()
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
+const NOW_YEAR = new Date(NOW).getFullYear()
 
 function stamp(offsetMs: number): string {
   return new Date(NOW + offsetMs).toISOString()
 }
+// Mirror the implementation's localized labels so assertions stay
+// timezone/locale-agnostic while still pinning the structure + prefix.
+const weekdayLabel = (offsetMs: number) =>
+  `Last ${new Intl.DateTimeFormat(undefined, { weekday: 'long' }).format(new Date(NOW + offsetMs))}`
+const dateLabel = (offsetMs: number) => {
+  const day = new Date(NOW + offsetMs)
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
+  if (day.getFullYear() !== NOW_YEAR) opts.year = 'numeric'
+  return new Intl.DateTimeFormat(undefined, opts).format(day)
+}
 
-describe('partitionForHome', () => {
-  describe('section assignment', () => {
-    it('puts unread alive sessions in needsAttention', () => {
-      const s = makeSession({ id: 's1', cwd: '/x', alive: true, unread: true })
-      const { needsAttention, running, buckets } = partitionForHome([s], NOW)
-      expect(needsAttention.map(s => s.id)).toEqual(['s1'])
-      expect(running).toEqual([])
-      expect(buckets).toEqual([])
+const idle = (id: string, ageMs: number) =>
+  makeSession({ id, cwd: '/x', alive: true, last_output_at: stamp(-ageMs) })
+
+describe('partitionByDay', () => {
+  describe('day labels', () => {
+    it('leaves today unlabeled (kind today)', () => {
+      const buckets = partitionByDay([idle('t', 2 * HOUR)], NOW)
+      expect(buckets).toHaveLength(1)
+      expect(buckets[0].label).toBeNull()
+      expect(buckets[0].kind).toBe('today')
     })
 
-    it('does NOT escalate error-only sessions to needsAttention', () => {
-      // status.error mostly fires from background subcommands that
-      // exited non-zero without the agent itself halting, so it
-      // doesn't earn the "needs attention" slot. The per-row error
-      // dot still surfaces the state. This test pins the predicate
-      // and prevents a regression to the old `unread || error`
-      // shape that lit up the section on every failed subcommand.
-      // We deliberately don't assert which fallthrough bucket the
-      // session lands in; that's covered by other tests.
-      const s = makeSession({
-        id: 's1', cwd: '/x', alive: true,
-        status: { working: false, error: true },
-      })
-      const { needsAttention } = partitionForHome([s], NOW)
-      expect(needsAttention).toEqual([])
+    it('labels yesterday', () => {
+      // NOW is noon; -15h lands at 21:00 the previous calendar day.
+      const buckets = partitionByDay([idle('y', 15 * HOUR)], NOW)
+      expect(buckets[0]).toMatchObject({ label: 'Yesterday', kind: 'named' })
     })
 
-    it('puts alive+working sessions in running', () => {
-      const s = makeSession({
-        id: 's1', cwd: '/x', alive: true,
-        status: { working: true, error: false },
-      })
-      const { needsAttention, running } = partitionForHome([s], NOW)
-      expect(needsAttention).toEqual([])
-      expect(running.map(s => s.id)).toEqual(['s1'])
-    })
-
-    it('excludes dead sessions from every home bucket', () => {
-      // Home is alive-only: dead sessions live exclusively in the
-      // project page's "All sessions" section. This pins the
-      // contract so a regression that lets dead sessions leak into
-      // a recency bucket (the historical behavior) fails loudly.
-      const sessions = [
-        makeSession({
-          id: 'dead', cwd: '/x', alive: false,
-          last_activity_at: stamp(-5 * 60 * 1000),
-        }),
-        makeSession({
-          id: 'dead-unread', cwd: '/x', alive: false, unread: true,
-          last_activity_at: stamp(-5 * 60 * 1000),
-        }),
-      ]
-      const { needsAttention, running, buckets } = partitionForHome(sessions, NOW)
-      expect(needsAttention).toEqual([])
-      expect(running).toEqual([])
-      expect(buckets).toEqual([])
-    })
-  })
-
-  describe('sort order', () => {
-    const working = { working: true, error: false }
-
-    it('sorts each section newest-first by last_activity_at', () => {
-      const a = makeSession({ id: 'a', cwd: '/x', alive: true, status: working, last_activity_at: stamp(-10_000) })
-      const b = makeSession({ id: 'b', cwd: '/x', alive: true, status: working, last_activity_at: stamp(-1_000) })
-      const c = makeSession({ id: 'c', cwd: '/x', alive: true, status: working, last_activity_at: stamp(-5_000) })
-      const { running } = partitionForHome([a, b, c], NOW)
-      expect(running.map(s => s.id)).toEqual(['b', 'c', 'a'])
-    })
-
-    it('falls back to created_at when last_activity_at is missing', () => {
-      // A brand-new working session has no last_activity_at (per the
-      // daemon's rule: creation doesn't bump). The sort still needs
-      // to place it somewhere sensible. created_at fallback puts new
-      // sessions at the top, where they belong.
-      const old = makeSession({
-        id: 'old', cwd: '/x', alive: true, status: working,
-        created_at: stamp(-3600_000), last_activity_at: stamp(-3600_000),
-      })
-      const fresh = makeSession({
-        id: 'fresh', cwd: '/x', alive: true, status: working,
-        created_at: stamp(-1_000), // no last_activity_at
-      })
-      const { running } = partitionForHome([old, fresh], NOW)
-      expect(running.map(s => s.id)).toEqual(['fresh', 'old'])
-    })
-
-    it('breaks timestamp ties by id (deterministic, no flicker)', () => {
-      // Sessions with identical timestamps (notably the corpses
-      // persisted before last_activity_at existed, all falling back
-      // to a similar created_at) must sort the same way every time.
-      // Without a stable tiebreaker, the input order from
-      // sessions.value rebuilding on each SSE event would re-order
-      // the visible list. We use id as the tiebreaker; input order
-      // must not affect output.
-      const same = stamp(-1000)
-      const make = (id: string) => makeSession({
-        id, cwd: '/x', alive: true, status: working, last_activity_at: same,
-      })
-      const a = make('a')
-      const b = make('b')
-      const c = make('c')
-      const orderings = [[a, b, c], [c, b, a], [b, a, c], [c, a, b]]
-      for (const arr of orderings) {
-        const { running } = partitionForHome(arr, NOW)
-        expect(running.map(s => s.id)).toEqual(['a', 'b', 'c'])
+    it('names days 2–7 ago as "Last <weekday>"', () => {
+      for (const d of [2, 3, 7]) {
+        const buckets = partitionByDay([idle(`d${d}`, d * DAY)], NOW)
+        expect(buckets[0]).toMatchObject({
+          label: weekdayLabel(-d * DAY),
+          kind: 'named',
+        })
       }
     })
+
+    it('falls back to a short date at 8+ days ago', () => {
+      const buckets = partitionByDay([idle('old', 8 * DAY)], NOW)
+      expect(buckets[0]).toMatchObject({ label: dateLabel(-8 * DAY), kind: 'dated' })
+    })
+
+    it('shows the year in dated labels only when it differs from now', () => {
+      const buckets = partitionByDay([idle('same', 10 * DAY), idle('prev', 210 * DAY)], NOW)
+      const label = (id: string) => buckets.find(b => b.sessions.some(s => s.id === id))!.label!
+      expect(label('same')).not.toMatch(/\d{4}/) // May 2026 → no year
+      expect(label('prev')).toMatch(/2025/) // ~Nov 2025 → year shown
+    })
   })
 
-  describe('recency buckets', () => {
-    // Buckets hold idle-alive sessions (live but not currently
-    // working/unread). Dead sessions never reach them since home
-    // filters them out at the input.
-    const idle = (id: string, ageMs: number) => makeSession({
-      id, cwd: '/x', alive: true, last_activity_at: stamp(-ageMs),
+  describe('grouping is plain recency (no status hoist)', () => {
+    it('groups unread / working sessions by time, not by status', () => {
+      // The whole point of the redesign: a "waiting" (unread) session
+      // from days ago sinks to its day bucket instead of being pinned
+      // to the top. Status lives on the dot, not the position.
+      const unreadOld = makeSession({
+        id: 'u', cwd: '/x', alive: true, unread: true, last_output_at: stamp(-3 * DAY),
+      })
+      const workingToday = makeSession({
+        id: 'w', cwd: '/x', alive: true,
+        status: { working: true, error: false }, last_output_at: stamp(-2 * HOUR),
+      })
+      const buckets = partitionByDay([unreadOld, workingToday], NOW)
+      expect(buckets.map(b => b.kind)).toEqual(['today', 'named'])
+      expect(buckets[0].sessions.map(s => s.id)).toEqual(['w'])
+      expect(buckets[1]).toMatchObject({ label: weekdayLabel(-3 * DAY) })
+      expect(buckets[1].sessions.map(s => s.id)).toEqual(['u'])
     })
 
-    it('groups idle-alive sessions into the four recency buckets', () => {
+    it('includes dead sessions, bucketed by time (sidebar totality)', () => {
+      // partitionByDay itself never drops dead sessions — the home
+      // dashboard filters them at the input; the sidebar keeps them so
+      // Activity membership matches Projects.
+      const buckets = partitionByDay([idle('yst', 15 * HOUR), makeSession({
+        id: 'd', cwd: '/x', alive: false, last_output_at: stamp(-15 * HOUR),
+      })], NOW)
+      expect(buckets[0].label).toBe('Yesterday')
+      expect(buckets[0].sessions.map(s => s.id).sort()).toEqual(['d', 'yst'])
+    })
+  })
+
+  describe('bucket ordering', () => {
+    it('orders newest-first: today, yesterday, named, then dated oldest-last', () => {
       const sessions = [
-        idle('h', 30 * 60 * 1000), // 30m ago  → Last hour
-        idle('t', 3 * HOUR),       // 09:00     → Earlier today
-        idle('y', 15 * HOUR),      // prev 21:00 → Yesterday
-        idle('w', 3 * DAY),        // 3 days     → Earlier this week
+        idle('d40', 40 * DAY),
+        idle('n3', 3 * DAY),
+        idle('t', 2 * HOUR),
+        idle('d10', 10 * DAY),
+        idle('y', 15 * HOUR),
       ]
-      const { buckets } = partitionForHome(sessions, NOW)
-      expect(buckets.map(b => b.label)).toEqual([
-        'Last hour', 'Earlier today', 'Yesterday', 'Earlier this week',
-      ])
-      expect(buckets.map(b => b.sessions.map(s => s.id))).toEqual([
-        ['h'], ['t'], ['y'], ['w'],
-      ])
+      const buckets = partitionByDay(sessions, NOW)
+      expect(buckets.map(b => b.kind)).toEqual(['today', 'named', 'named', 'dated', 'dated'])
+      expect(buckets.map(b => b.sessions[0].id)).toEqual(['t', 'y', 'n3', 'd10', 'd40'])
     })
+  })
 
-    it('prioritizes the rolling Last hour window over the calendar day', () => {
-      // A session 40m ago is "Last hour" even though it is also part
-      // of "today". The rolling window wins.
-      const { buckets } = partitionForHome([idle('a', 40 * 60 * 1000)], NOW)
-      expect(buckets).toHaveLength(1)
-      expect(buckets[0].label).toBe('Last hour')
-    })
-
-    it('drops sessions older than a week', () => {
-      const { buckets } = partitionForHome([idle('ancient', 8 * DAY)], NOW)
-      expect(buckets).toEqual([])
-    })
-
-    it('omits empty buckets', () => {
-      // Only an earlier-this-week session present: the three newer
-      // buckets don't render at all.
-      const { buckets } = partitionForHome([idle('w', 3 * DAY)], NOW)
-      expect(buckets.map(b => b.label)).toEqual(['Earlier this week'])
-    })
-
-    it('sorts newest-first within a bucket', () => {
-      const { buckets } = partitionForHome(
+  describe('sort within a bucket', () => {
+    it('sorts newest-first by last_output_at', () => {
+      const buckets = partitionByDay(
         [idle('older', 50 * 60 * 1000), idle('newer', 10 * 60 * 1000)],
         NOW,
       )
@@ -186,43 +129,52 @@ describe('partitionForHome', () => {
       expect(buckets[0].sessions.map(s => s.id)).toEqual(['newer', 'older'])
     })
 
-    it('returns no buckets when every session is working or unread', () => {
-      const working = { working: true, error: false }
-      const sessions = [
-        makeSession({ id: 'a', cwd: '/x', alive: true, status: working }),
-        makeSession({ id: 'b', cwd: '/x', alive: true, unread: true }),
-      ]
-      const { buckets } = partitionForHome(sessions, NOW)
-      expect(buckets).toEqual([])
+    it('falls back to created_at when last_output_at is missing', () => {
+      const old = makeSession({
+        id: 'old', cwd: '/x', alive: true,
+        created_at: stamp(-40 * 60 * 1000), last_output_at: stamp(-40 * 60 * 1000),
+      })
+      const fresh = makeSession({
+        id: 'fresh', cwd: '/x', alive: true, created_at: stamp(-1_000), // no last_output_at
+      })
+      const buckets = partitionByDay([old, fresh], NOW)
+      expect(buckets[0].sessions.map(s => s.id)).toEqual(['fresh', 'old'])
+    })
+
+    it('breaks timestamp ties by id (deterministic, no flicker)', () => {
+      const same = stamp(-1000)
+      const make = (id: string) => makeSession({ id, cwd: '/x', alive: true, last_output_at: same })
+      const [a, b, c] = [make('a'), make('b'), make('c')]
+      for (const arr of [[a, b, c], [c, b, a], [b, a, c], [c, a, b]]) {
+        const buckets = partitionByDay(arr, NOW)
+        expect(buckets[0].sessions.map(s => s.id)).toEqual(['a', 'b', 'c'])
+      }
     })
   })
 
-  describe('older catch-all (totality)', () => {
-    // The partition is total: every input session lands somewhere.
-    // Dead sessions and stale-idle ones fall to `older` instead of
-    // being dropped, so the sidebar's Activity view (which renders
-    // `older`) shows exactly the sessions the Projects view does.
-    it('routes dead sessions to `older`, keeping them out of the live sections', () => {
-      const dead = makeSession({ id: 'd', cwd: '/x', alive: false, unread: true })
-      const live = makeSession({ id: 'l', cwd: '/x', alive: true, unread: true })
-      const { needsAttention, running, buckets, older } = partitionForHome([dead, live], NOW)
-      expect(needsAttention.map(s => s.id)).toEqual(['l'])
-      expect(running).toEqual([])
-      expect(buckets).toEqual([])
-      expect(older.map(s => s.id)).toEqual(['d'])
-    })
+  it('is total: every session lands in exactly one bucket', () => {
+    const sessions = [
+      idle('t', HOUR), idle('y', 15 * HOUR), idle('n', 4 * DAY),
+      idle('d', 12 * DAY), idle('dd', 90 * DAY),
+      makeSession({ id: 'dead', cwd: '/x', alive: false, last_output_at: stamp(-2 * DAY) }),
+    ]
+    const buckets = partitionByDay(sessions, NOW)
+    const got = buckets.flatMap(b => b.sessions.map(s => s.id)).sort()
+    expect(got).toEqual(sessions.map(s => s.id).sort())
+  })
 
-    it('sorts `older` newest-first (dead + stale mixed)', () => {
-      const dead = makeSession({
-        id: 'dead', cwd: '/x', alive: false, last_activity_at: stamp(-2 * HOUR),
-      })
-      const stale = makeSession({
-        id: 'stale', cwd: '/x', alive: true, last_activity_at: stamp(-10 * DAY),
-      })
-      const { older } = partitionForHome([stale, dead], NOW)
-      // dead was active 2h ago, stale 10d ago -> dead is newer.
-      expect(older.map(s => s.id)).toEqual(['dead', 'stale'])
+  it('keeps a session with an unparseable stamp (no drop, no garbage day)', () => {
+    // Both last_output_at and created_at unparseable → outputTimeMs
+    // returns the 0 sentinel. Must still land in exactly one bucket
+    // (Today) rather than being silently dropped east of UTC.
+    const corrupt = makeSession({
+      id: 'corrupt', cwd: '/x', alive: true,
+      last_output_at: 'not-a-date', created_at: '',
     })
+    const buckets = partitionByDay([idle('t', HOUR), corrupt], NOW)
+    const got = buckets.flatMap(b => b.sessions.map(s => s.id))
+    expect(got).toContain('corrupt')
+    const home = buckets.find(b => b.sessions.some(s => s.id === 'corrupt'))
+    expect(home?.kind).toBe('today')
   })
 })
-

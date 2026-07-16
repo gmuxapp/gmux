@@ -40,7 +40,7 @@ export interface Session {
    * and acts as a stable sort key for activity-ordered views.
    * Unset for brand-new sessions until their first transition.
    */
-  last_activity_at?: string
+  last_output_at?: string
   socket_path: string
   terminal_cols?: number
   terminal_rows?: number
@@ -170,7 +170,7 @@ export interface DiscoveredProject {
    */
   peer?: string
   /**
-   * Most-recent last_activity_at (falling back to created_at) among the
+   * Most-recent last_output_at (falling back to created_at) among the
    * sessions in this group, as an RFC3339 string. Used to sort
    * suggestions by recency.
    */

@@ -33,7 +33,7 @@ export default {
   status: { working: true },
   unread: false,
   project_slug: 'my-project',
-  last_activity_at: ago(0),
+  last_output_at: ago(0),
   socket_path: '/tmp/gmux-sessions/sess-4ab4995b.sock',
   cursorX: 2,
   cursorY: 70,

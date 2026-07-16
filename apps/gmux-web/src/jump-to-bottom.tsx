@@ -41,7 +41,7 @@ export function JumpToBottom({ term }: { term: Terminal | null }) {
       title="Jump to bottom"
       onClick={() => term.scrollToBottom()}
     >
-      ↓
+      End ↓
     </button>
   )
 }

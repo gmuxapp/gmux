@@ -25,7 +25,7 @@ export default {
   status: { working: false },
   unread: true,
   project_slug: 'my-project',
-  last_activity_at: ago(3),
+  last_output_at: ago(3),
   socket_path: '/tmp/gmux-sessions/sess-claude-01.sock',
   // Sized to 34 columns: the landing page's mobile hero captures this
   // session at a viewport that fits exactly 34 xterm columns, so lines

@@ -119,7 +119,7 @@ func TestActivitySeedWiring_ReseedsRehydratedSession(t *testing.T) {
 	})
 
 	// A surviving runner re-registering after a daemon restart lands here
-	// via discovery.Register → Upsert, with no LastActivityAt (runner /meta
+	// via discovery.Register → Upsert, with no LastOutputAt (runner /meta
 	// never carries it).
 	sessions.Upsert(store.Session{ID: "sess-abc", Adapter: "pi", Alive: true})
 
@@ -127,9 +127,9 @@ func TestActivitySeedWiring_ReseedsRehydratedSession(t *testing.T) {
 	if !ok {
 		t.Fatal("session missing after upsert")
 	}
-	if got.LastActivityAt != want.UTC().Format(time.RFC3339) {
+	if got.LastOutputAt != want.UTC().Format(time.RFC3339) {
 		t.Fatalf("rehydrated stamp = %q, want scrollback mtime %q",
-			got.LastActivityAt, want.UTC().Format(time.RFC3339))
+			got.LastOutputAt, want.UTC().Format(time.RFC3339))
 	}
 }
 

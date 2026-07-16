@@ -650,10 +650,10 @@ export const folders = computed(() => foldersFrom(sidebarSessions.value))
  *  keeps both views' membership identical through that reconnect window
  *  (and makes every Activity row's folder lookup total).
  *
- *  Renders the `older` catch-all too, so resumable sessions remain
- *  reachable in both views. */
+ *  Day-groups the full set (alive + dead/resumable, any age), so the
+ *  Activity view lists exactly what Projects does. */
 export const sidebarActivity = computed(() =>
-  partitionForHome(folders.value.flatMap(folder => folder.sessions), Date.now()),
+  partitionByDay(folders.value.flatMap(folder => folder.sessions), Date.now()),
 )
 
 // ── Sidebar view mode ───────────────────────────────────────────────────────
@@ -837,44 +837,54 @@ export const unreadCount = computed(() => {
 
 // ── Home dashboard partitioning ─────────────────────────────────────────────
 //
-// The home page surfaces sessions in three sections. Each session
-// appears in at most one section; priority is Needs attention >
-// Running > Recent. Sort within every section is newest-first by
-// last_activity_at (falling back to created_at for sessions that
-// have not transitioned yet, so a brand-new idle session shows at
-// the top of Running and an old quiet one drops to the bottom).
+// The activity feed groups sessions by the calendar day of their last
+// output (last_output_at, falling back to created_at). It's a plain
+// recency feed — no status buckets. Status lives on the per-row dot;
+// pulling "waiting"/"active" sessions to a pinned top would reshuffle
+// the list every time you act on one. A session floats up only when it
+// produces new unseen output, so the queue stays stable as you work
+// down it.
 //
-// The idle-alive remainder is grouped into recency buckets (Last
-// hour / Earlier today / Yesterday / Earlier this week) rather than a
-// single capped list. Buckets give structure so the section can grow
-// without truncation; anything older than a week drops off home (find
-// it in the sidebar, which lists every session). Dead sessions are NOT
-// included on home (the sidebar still lists resumable ones).
-export const RECENT_WINDOW_DAYS = 7
+// Two surfaces share the grouping, differing only in their input:
+//   - The sidebar's Activity view feeds it every session (alive + dead/
+//     resumable), so it lists exactly what the Projects view does.
+//   - The home dashboard feeds it only alive sessions and renders just
+//     the named-day window (Today … Last <weekday>), leaving the dated
+//     tail to the sidebar — home stays a recent-activity dashboard.
 const MS_PER_DAY = 24 * 60 * 60 * 1000
-const MS_PER_HOUR = 60 * 60 * 1000
 
-/** One recency bucket on the home dashboard. */
-export interface RecentBucket {
-  label: string
+export type DayBucketKind = 'today' | 'named' | 'dated'
+
+/** One day-grouped section of the activity feed. `label` is null for
+ *  today (rendered with no heading). `kind` lets the home dashboard
+ *  drop the `dated` tail while the sidebar keeps it. */
+export interface DayBucket {
+  label: string | null
+  kind: DayBucketKind
   sessions: Session[]
 }
 
-function activityTimeMs(s: Session): number {
-  // last_activity_at is canonical when present (daemon-stamped on
-  // noteworthy transitions). For never-transitioned sessions, fall
-  // back to created_at so they sort relative to peers rather than
-  // landing at the epoch.
-  const stamp = s.last_activity_at ?? s.created_at
+/** Local calendar midnight (ms) for a timestamp. */
+function localMidnight(t: number): number {
+  const d = new Date(t)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+}
+
+function outputTimeMs(s: Session): number {
+  // last_output_at is canonical when present (daemon-stamped when the
+  // session last produced unseen output). For sessions that never went
+  // unread, fall back to created_at so they sort relative to peers
+  // rather than landing at the epoch.
+  const stamp = s.last_output_at ?? s.created_at
   const t = Date.parse(stamp)
   return Number.isFinite(t) ? t : 0
 }
 
 function byActivityDesc(a: Session, b: Session): number {
-  const dt = activityTimeMs(b) - activityTimeMs(a)
+  const dt = outputTimeMs(b) - outputTimeMs(a)
   if (dt !== 0) return dt
   // Stable tiebreaker on id. Sessions with identical timestamps
-  // (notably corpses persisted before last_activity_at existed,
+  // (notably corpses persisted before last_output_at existed,
   // which all fall back to created_at) must sort identically
   // across re-renders. Without this, every SSE event rebuilds
   // sessions.value in a different order and the section visibly
@@ -883,101 +893,79 @@ function byActivityDesc(a: Session, b: Session): number {
 }
 
 /**
- * Pure partition of a session list into activity sections: Waiting
- * (unread), Active (working), recency buckets for the idle-alive
- * remainder, and an `older` catch-all (dead sessions + idle sessions
- * past the recency window). Total: every input session lands in
- * exactly one section, nothing is dropped. Exported so tests can drive
- * it with fixtures and `now` injected (real wall-clock time would
- * otherwise make the day boundaries untestable).
- *
- * Two surfaces arrange the result differently:
- *   - The home dashboard renders Waiting / Active / recency buckets and
- *     ignores `older`, so dead and stale sessions stay off the triage
- *     surface (they'd dilute "what can I act on right now").
- *   - The sidebar's Activity view renders every section including
- *     `older`, so it lists exactly the sessions the Projects view does
- *     — same set, different arrangement.
+ * Group sessions into an ordered, newest-first list of day buckets:
+ *   - Today            (unlabeled)
+ *   - Yesterday
+ *   - Last <weekday>   for 2–7 days ago. The `Last ` prefix keeps
+ *     day-7 distinct from today's own weekday, so we name a full week
+ *     before falling back to dates.
+ *   - <short date>     for 8+ days ago — localized via Intl, with the
+ *     year shown only when it differs from the current one.
+ * Sessions sort newest-first within each bucket. Total: every input
+ * session lands in exactly one bucket, so the sidebar can rely on it
+ * for full Projects/Activity membership parity. `now` is injected so
+ * tests can pin the day boundaries.
  */
-export function partitionForHome(
-  all: readonly Session[],
-  now: number,
-): { needsAttention: Session[]; running: Session[]; buckets: RecentBucket[]; older: Session[] } {
-  const needsAttention: Session[] = []
-  const running: Session[] = []
-  const leftover: Session[] = []
-  const older: Session[] = []
+export function partitionByDay(all: readonly Session[], now: number): DayBucket[] {
+  const nd = new Date(now)
+  const y = nd.getFullYear()
+  const m = nd.getMonth()
+  const d = nd.getDate()
+  const todayMid = new Date(y, m, d).getTime()
+  // Round, not floor: a calendar day is 24h ±1h across DST, so rounding
+  // the ms delta keeps the day count correct through the transition.
+  const daysAgo = (t: number) => Math.round((todayMid - localMidnight(t)) / MS_PER_DAY)
 
+  // Bucket key: days-ago (0–7) for the named window, or the day's
+  // midnight for the dated tail (each old day its own bucket). A real
+  // timestamp's midnight is always ≫ 7, so the two key spaces never
+  // collide. An unparseable stamp (outputTimeMs === 0 sentinel) is the
+  // exception: localMidnight(0) is 0 in UTC but negative east of it,
+  // which would miss both the 0–7 window and the >7 dated tail —
+  // silently dropping the session and breaking Projects/Activity parity.
+  // Pin those to Today (byActivityDesc still sorts them last within it).
+  const byKey = new Map<number, Session[]>()
   for (const s of all) {
-    // Dead sessions can't be "waiting on you" or "active" anymore, so
-    // they skip those sections and fall to `older`.
-    if (!s.alive) {
-      older.push(s)
-      continue
-    }
-    // status.error is intentionally NOT escalated here: most error
-    // states come from background subcommands that exited non-zero
-    // without the agent itself halting, so flagging them as "needs
-    // attention" produces false alarms. The per-row error dot still
-    // shows individually.
-    if (s.unread) {
-      needsAttention.push(s)
-    } else if (s.status?.working) {
-      running.push(s)
-    } else {
-      // Idle-alive: not unread, not working. Bucketed by recency below.
-      leftover.push(s)
-    }
+    const t = outputTimeMs(s)
+    const ago = t > 0 ? daysAgo(t) : 0
+    const key = ago <= 7 ? Math.max(ago, 0) : localMidnight(t)
+    const list = byKey.get(key)
+    if (list) list.push(s)
+    else byKey.set(key, [s])
   }
-  needsAttention.sort(byActivityDesc)
-  running.sort(byActivityDesc)
-  leftover.sort(byActivityDesc)
 
-  // Recency buckets. "Last hour" is a rolling 60-minute window and
-  // takes priority; "Earlier today" / "Yesterday" use local-midnight
-  // calendar boundaries (so an 11pm session reads as "yesterday", not
-  // "20 hours ago"); "Earlier this week" is the rolling 2–7 day tail.
-  // Sessions older than a week (or without a parseable timestamp) are
-  // omitted from home.
-  const d = new Date(now)
-  const todayMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
-  // Let the Date constructor normalize the day rollover so the
-  // boundary stays correct across DST transitions (a subtraction of
-  // a fixed 24h would drift by an hour on spring-forward / fall-back).
-  const yesterdayMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1).getTime()
-  const hourAgo = now - MS_PER_HOUR
-  const weekAgo = now - RECENT_WINDOW_DAYS * MS_PER_DAY
-
-  const lastHour: Session[] = []
-  const earlierToday: Session[] = []
-  const yesterday: Session[] = []
-  const earlierWeek: Session[] = []
-  for (const s of leftover) {
-    const t = activityTimeMs(s)
-    if (t >= hourAgo) lastHour.push(s)
-    else if (t >= todayMidnight) earlierToday.push(s)
-    else if (t >= yesterdayMidnight) yesterday.push(s)
-    else if (t >= weekAgo) earlierWeek.push(s)
-    else older.push(s) // past the week window, or no parseable timestamp
+  const weekday = new Intl.DateTimeFormat(undefined, { weekday: 'long' })
+  const labelFor = (key: number): { label: string | null; kind: DayBucketKind } => {
+    if (key === 0) return { label: null, kind: 'today' }
+    if (key === 1) return { label: 'Yesterday', kind: 'named' }
+    if (key <= 7) return { label: `Last ${weekday.format(new Date(y, m, d - key))}`, kind: 'named' }
+    const day = new Date(key)
+    const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
+    if (day.getFullYear() !== y) opts.year = 'numeric'
+    return { label: new Intl.DateTimeFormat(undefined, opts).format(day), kind: 'dated' }
   }
-  older.sort(byActivityDesc)
 
-  const buckets: RecentBucket[] = [
-    { label: 'Last hour', sessions: lastHour },
-    { label: 'Earlier today', sessions: earlierToday },
-    { label: 'Yesterday', sessions: yesterday },
-    { label: 'Earlier this week', sessions: earlierWeek },
-  ].filter(b => b.sessions.length > 0)
-
-  return { needsAttention, running, buckets, older }
+  const out: DayBucket[] = []
+  const add = (key: number) => {
+    const sessions = byKey.get(key)
+    if (!sessions) return
+    sessions.sort(byActivityDesc)
+    out.push({ ...labelFor(key), sessions })
+  }
+  // Named window first, in order: Today, Yesterday, Last <weekday>.
+  for (let k = 0; k <= 7; k++) add(k)
+  // Then the dated tail, newest day → oldest.
+  for (const k of [...byKey.keys()].filter(k => k > 7).sort((a, b) => b - a)) add(k)
+  return out
 }
 
 export const homePartition = computed(() =>
-  // The home dashboard is its own curated surface: scoped to the tab's
-  // `?filter=` but independent of the sidebar's list rules (alive-only,
-  // selected-pin). It ignores the `older` bucket, so dead and stale
-  // sessions stay off the triage view.
-  partitionForHome(filteredSessions.value, Date.now()),
+  // Home is its own curated surface: scoped to the tab's `?filter=` but
+  // independent of the sidebar's list rules (alive-only, selected-pin).
+  // Alive only — dead/resumable corpses live in the sidebar's Activity
+  // view, not the dashboard. Home renders only the non-`dated` buckets
+  // (see home.tsx), keeping it a recent-activity view.
+  partitionByDay(filteredSessions.value.filter(s => s.alive), Date.now()),
 )
 
 // ── Mutators ────────────────────────────────────────────────────────────────
@@ -1002,7 +990,7 @@ export function toUISession(s: ProtocolSession): Session {
     unread: s.unread ?? false,
     resumable: s.resumable ?? false,
     conversation_file: s.conversation_file ?? undefined,
-    last_activity_at: s.last_activity_at ?? undefined,
+    last_output_at: s.last_output_at ?? undefined,
     socket_path: s.socket_path ?? '',
     terminal_cols: s.terminal_cols ?? undefined,
     terminal_rows: s.terminal_rows ?? undefined,

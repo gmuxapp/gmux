@@ -4,8 +4,8 @@
 // remove) lives in Settings → Projects; project navigation lives in
 // the sidebar. The home page is purely an overview surface.
 //
-// Section semantics, sort order, and the recency-bucket boundaries
-// live in store.ts:partitionForHome. This file is presentation.
+// Day-bucket grouping, sort order, and the label boundaries live in
+// store.ts:partitionByDay. This file is presentation.
 
 import {
   health, folders, homePartition, dismissSession, tabHref,
@@ -27,7 +27,7 @@ export function Home({
 }) {
   const foldersVal = folders.value
   const hasProjects = folders.value.length > 0
-  const { needsAttention, running, buckets } = homePartition.value
+  const buckets = homePartition.value
 
   // Cheap session→folder lookup: the SessionRow needs a project name
   // and the folder's owning peer to build a correct href. Building a
@@ -42,14 +42,18 @@ export function Home({
   // brief window after a daemon restart where recovered sessions arrive
   // before their project stamp does. Drop them here so a section only
   // shows when it has rows to render.
+  // Home shows only the named-day window; the dated tail (8+ days ago)
+  // lives in the sidebar's full Activity list. `placed()` drops folderless
+  // sessions so a day heading never renders with no rows (the brief
+  // post-restart window where recovered sessions arrive unstamped).
   const placed = (arr: readonly Session[]) => arr.filter(s => folderBySessionId.has(s.id))
-  const waiting = placed(needsAttention)
-  const active = placed(running)
-  const recency = buckets
+  const shown = buckets
+    .filter(b => b.kind !== 'dated')
     .map(b => ({ label: b.label, sessions: placed(b.sessions) }))
     .filter(b => b.sessions.length > 0)
 
-  const renderRow = (s: Session) => {
+  // compact=false for today (two-line with age), true for older buckets.
+  const renderRow = (s: Session, compact: boolean) => {
     const folder = folderBySessionId.get(s.id)
     // Guarded by `placed()` above; the fallback stays as a defensive
     // guard against a mid-arrival race.
@@ -63,6 +67,7 @@ export function Home({
         key={s.id}
         session={s}
         href={tabHref(sessionPath(folder.slug, s, folder.peer))}
+        compact={compact}
         showProject
         projectName={folder.name}
         showHost
@@ -73,7 +78,7 @@ export function Home({
     )
   }
 
-  const anyActivity = waiting.length > 0 || active.length > 0 || recency.length > 0
+  const anyActivity = shown.length > 0
 
   return (
     <div class="page">
@@ -86,21 +91,9 @@ export function Home({
           />
         </div>
       </header>
-      {waiting.length > 0 && (
-        <Section title="Waiting">
-          {waiting.map(renderRow)}
-        </Section>
-      )}
-
-      {active.length > 0 && (
-        <Section title="Active">
-          {active.map(renderRow)}
-        </Section>
-      )}
-
-      {recency.map(b => (
-        <Section key={b.label} title={b.label}>
-          {b.sessions.map(renderRow)}
+      {shown.map(b => (
+        <Section key={b.label ?? 'today'} title={b.label ?? undefined}>
+          {b.sessions.map(s => renderRow(s, b.label !== null))}
         </Section>
       ))}
 
@@ -156,12 +149,12 @@ export function Section({
   title,
   children,
 }: {
-  title: string
+  title?: string
   children: preact.ComponentChildren
 }) {
   return (
     <section class="home-section">
-      <h2 class="home-section-title">{title}</h2>
+      {title && <h2 class="home-section-title">{title}</h2>}
       <div class="home-section-body">{children}</div>
     </section>
   )
