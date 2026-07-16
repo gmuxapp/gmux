@@ -28,6 +28,25 @@ type RunnerRegistration struct {
 	LaunchParentID *SessionID
 	ObservedAt     UnixMillis
 	Facts          RunnerFacts
+	// Evict is the conversation-takeover loser set: dead retained rows whose
+	// conversation the registering live runner covers (same opaque ref, or an
+	// ancestor per the adapter's lineage — resolved by the coordinator, which
+	// owns liveness and adapter I/O; SQLite never knows either). Each eviction
+	// is applied conditionally at its observed row version inside this same
+	// transaction (ADR 0026 §9 "conversation-lineage takeover plus placement
+	// cleanup"): a stale or vanished loser is skipped, never fatal — the
+	// registration must land and a later reconciliation pass converges the
+	// leftover. Deletion consequences match RemoveSessionAtVersion: the
+	// loser's direct children become genuine roots and every affected sibling
+	// scope is renormalized. Evictions are only legal on a live registration
+	// (only a live binder takes over) and never target the registering ID.
+	Evict []TakeoverEviction
+}
+
+// TakeoverEviction is one conditional conversation-takeover deletion.
+type TakeoverEviction struct {
+	ID      SessionID
+	Version RowVersion
 }
 
 // RunnerFacts is tri-state: nil/zero patch means unobserved, a pointer stores
@@ -44,7 +63,11 @@ type RunnerFacts struct {
 }
 
 var (
-	ErrAdapterMismatch           = errors.New("centralstore: runner adapter mismatch")
+	ErrAdapterMismatch = errors.New("centralstore: runner adapter mismatch")
+	// ErrInvalidEviction marks a takeover eviction that is structurally
+	// illegal: an eviction on a dead registration (only a live binder may
+	// take over), an empty loser ID, or a self-eviction.
+	ErrInvalidEviction           = errors.New("centralstore: invalid takeover eviction")
 	ErrGenerationExitRequired    = errors.New("centralstore: new dead runner generation requires exited timestamp")
 	ErrUnexpectedGenerationClaim = errors.New("centralstore: new generation claim requires an existing row")
 )
@@ -67,6 +90,14 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 	}
 	if err := validateRunnerFacts(reg.Facts); err != nil {
 		return Session{}, MutationResult{}, err
+	}
+	for _, ev := range reg.Evict {
+		if !reg.Alive {
+			return Session{}, MutationResult{}, fmt.Errorf("%w: eviction requires a live registration", ErrInvalidEviction)
+		}
+		if ev.ID == "" || ev.ID == reg.ID {
+			return Session{}, MutationResult{}, fmt.Errorf("%w: loser id %q", ErrInvalidEviction, ev.ID)
+		}
 	}
 
 	tx, err := s.database.BeginTx(ctx, nil)
@@ -200,19 +231,75 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 		}
 	}
 
+	// Takeover evictions run before placement rematching so scope
+	// normalization sees the post-eviction state. Each is conditional on the
+	// version the coordinator observed; skips are silent by design.
+	evicted := false
+	for _, ev := range reg.Evict {
+		applied, evictErr := evictSessionInTx(ctx, q, ev)
+		if evictErr != nil {
+			return Session{}, MutationResult{}, evictErr
+		}
+		evicted = evicted || applied
+		// The winner may itself be a direct child of an evicted loser (a live
+		// session taking over the conversation of the dead session that
+		// launched it). ClearDirectChildParents just nulled the winner's
+		// launch parent and bumped its row_version; mirror both on the
+		// returned session so it matches the committed row — otherwise the
+		// coordinator would install a stale registry version token and the
+		// generation's first observation would burn a stale-retry round trip.
+		if applied && current.LaunchParentID != nil && *current.LaunchParentID == ev.ID {
+			current.LaunchParentID = nil
+			current.Version++
+		}
+	}
+
 	placementChanged, err := rematchRegistration(ctx, q, s.beforePlacementFinalize, current, before, isNew, dismissed)
 	if err != nil {
 		return Session{}, MutationResult{}, err
 	}
+	// Belt-and-suspenders: normalizePlacements inside rematchRegistration
+	// already detects the loser's cascade-deleted placement, but WorldDirty
+	// must not silently depend on that internal — an eviction always deleted
+	// a session row and (when placed) its placement, so both payloads are
+	// recomposed regardless.
+	placementChanged = placementChanged || evicted
 	if err = tx.Commit(); err != nil {
 		return Session{}, MutationResult{}, err
 	}
 	current.Title = deriveTitle(current)
-	changed := rowChanged || placementChanged
+	changed := rowChanged || placementChanged || evicted
 	return current, MutationResult{
 		Changed: changed, SessionVersion: current.Version,
 		SessionsDirty: changed, WorldDirty: placementChanged,
 	}, nil
+}
+
+// evictSessionInTx applies one conditional takeover eviction inside the
+// registration transaction. It mirrors RemoveSessionAtVersion's consequences
+// (direct children become genuine roots via a cleared launch parent; the
+// FK cascade removes placement; the caller renormalizes scopes afterwards)
+// but skips instead of failing when the loser vanished or its version moved:
+// takeover must never abort the winner's registration.
+func evictSessionInTx(ctx context.Context, q *db.Queries, ev TakeoverEviction) (bool, error) {
+	ver, err := q.SessionVersion(ctx, string(ev.ID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil // loser already gone
+	}
+	if err != nil {
+		return false, err
+	}
+	if RowVersion(ver) != ev.Version {
+		return false, nil // loser changed since the coordinator's decision
+	}
+	if _, err = q.ClearDirectChildParents(ctx, nullString(string(ev.ID))); err != nil {
+		return false, err
+	}
+	n, err := q.DeleteSessionAtVersion(ctx, db.DeleteSessionAtVersionParams{ID: string(ev.ID), RowVersion: ver})
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
 func cloneSessionID(v *SessionID) *SessionID {
