@@ -400,7 +400,9 @@ loop:
 		PID:           meta.PID,
 		RunnerVersion: meta.RunnerVersion,
 		BinaryHash:    meta.BinaryHash,
-		Subscribed:    reg.Alive && !closed,
+		// A closed pre-drain stream already forced reg.Alive=false above, so
+		// liveness alone decides subscription.
+		Subscribed:    reg.Alive,
 		RowVersion:    session.Version,
 	}
 

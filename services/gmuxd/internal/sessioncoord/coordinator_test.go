@@ -1346,3 +1346,38 @@ func TestFastDeadRegistration(t *testing.T) {
 		t.Fatal("expected empty registry for fast-dead registration")
 	}
 }
+
+// TestMetaDeadRegistrationNotSubscribed pins the Subscribed derivation:
+// a runner whose meta reports Alive=false (open stream, no exit fact) is
+// registered fast-dead — Subscribed=false, exit synthesized, no drain — even
+// though the stream never closed. This is the case the removed dead
+// `!closed` term could never distinguish from liveness.
+func TestMetaDeadRegistrationNotSubscribed(t *testing.T) {
+	id := sid(202)
+	meta := RunnerMeta{
+		Registration: centralstore.RunnerRegistration{ID: id, Alive: false, ObservedAt: ts(7)},
+	}
+	client := newFakeClient(meta)
+	dur := newFakeDurable(0)
+	coord := newCoord(client, dur, &fakeDirtySink{}, nil)
+
+	runtime, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep202"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if runtime.Subscribed {
+		t.Fatal("expected Subscribed=false for meta-dead registration")
+	}
+	if len(dur.registered) != 1 || dur.registered[0].Alive {
+		t.Fatal("expected Alive=false in RegisterRunner call")
+	}
+	if dur.registered[0].Facts.ExitedAt.Set == nil {
+		t.Fatal("expected synthesized ExitedAt for meta-dead registration")
+	}
+	if len(coord.Registry().Snapshot()) != 0 {
+		t.Fatal("expected empty registry for meta-dead registration")
+	}
+	if !client.stream.closed.Load() {
+		t.Fatal("expected the stream to be closed")
+	}
+}
