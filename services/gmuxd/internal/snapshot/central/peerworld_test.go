@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 )
 
 // fakePeerSource returns a swappable point-in-time PeerWorld and counts
@@ -44,8 +45,8 @@ func placementView(peer, session, slug string, pos int) centralstore.LocalPeerPl
 
 // TestPeerWorldJoinDropsDisconnectedLocalPeerRows: a durable Local-peer
 // placement row is emitted only when the PeerSource reports a connected
-// session for it, carrying that live projection verbatim; stale placement
-// rows (peer gone, session gone) are invisible.
+// session for it; stale placement rows (peer gone, session gone) are
+// invisible. The projection itself joins at the wire layer.
 func TestPeerWorldJoinDropsDisconnectedLocalPeerRows(t *testing.T) {
 	reader := &fakeReader{result: func(q centralstore.SnapshotQuery) (centralstore.StoreSnapshot, error) {
 		return centralstore.StoreSnapshot{
@@ -58,8 +59,8 @@ func TestPeerWorldJoinDropsDisconnectedLocalPeerRows(t *testing.T) {
 		}, nil
 	}}
 	source := &fakePeerSource{world: PeerWorld{
-		LocalPeerSessions: map[LocalPeerSessionKey]any{
-			{PeerKey: "box", SessionID: "connected"}: "live-projection",
+		LocalPeerSessions: map[LocalPeerSessionKey]struct{}{
+			{PeerKey: "box", SessionID: "connected"}: {},
 		},
 	}}
 	sink := &blockingSink{out: make(chan Batch, 1)}
@@ -72,7 +73,7 @@ func TestPeerWorldJoinDropsDisconnectedLocalPeerRows(t *testing.T) {
 		t.Fatalf("batch=%#v", b)
 	}
 	rows := b.Projects.LocalPeerPlacements
-	if len(rows) != 1 || rows[0].SessionID != "connected" || rows[0].Session != "live-projection" {
+	if len(rows) != 1 || rows[0].SessionID != "connected" {
 		t.Fatalf("joined rows=%#v", rows)
 	}
 	if rows[0].ProjectSlug != "p" || rows[0].Position != 0 {
@@ -91,14 +92,14 @@ func TestPeerWorldOverlayPassesThroughAndResets(t *testing.T) {
 		}, nil
 	}}
 	full := PeerWorld{
-		Peers:           []string{"box"},
-		Health:          map[string]any{"hostname": "hub"},
-		Launchers:       []string{"shell", "claude"},
+		Peers:           []peering.PeerInfo{{Name: "box", Status: "connected", Local: true}},
+		Health:          &HealthInfo{Hostname: "hub"},
+		Launchers:       []peering.LauncherDef{{ID: "shell"}, {ID: "claude"}},
 		DefaultLauncher: "shell",
-		PeerProjects:    map[string][]string{"net-peer": {"remote-project"}},
-		PeerDiscovered:  map[string][]string{"net-peer": {"suggestion"}},
-		LocalPeerSessions: map[LocalPeerSessionKey]any{
-			{PeerKey: "box", SessionID: "s"}: "proj",
+		PeerProjects:    map[string][]peering.SpokeProject{"net-peer": {{Slug: "remote-project"}}},
+		PeerDiscovered:  map[string][]peering.SpokeDiscovered{"net-peer": {{SuggestedSlug: "suggestion"}}},
+		LocalPeerSessions: map[LocalPeerSessionKey]struct{}{
+			{PeerKey: "box", SessionID: "s"}: {},
 		},
 	}
 	source := &fakePeerSource{world: full}
@@ -133,14 +134,14 @@ func TestPeerWorldOverlayPassesThroughAndResets(t *testing.T) {
 	// through verbatim and still drops every Local-peer row: an empty
 	// LocalPeerSessions map means nothing is connected.
 	source.set(PeerWorld{
-		Peers:             []string{},
-		PeerProjects:      map[string][]string{},
-		LocalPeerSessions: map[LocalPeerSessionKey]any{},
+		Peers:             []peering.PeerInfo{},
+		PeerProjects:      map[string][]peering.SpokeProject{},
+		LocalPeerSessions: map[LocalPeerSessionKey]struct{}{},
 	})
 	c.MarkDirty(false, true)
 	b = recvBatch(t, sink.out)
 	p = b.Projects
-	if !reflect.DeepEqual(p.Peers, []string{}) || !reflect.DeepEqual(p.PeerProjects, map[string][]string{}) {
+	if !reflect.DeepEqual(p.Peers, []peering.PeerInfo{}) || !reflect.DeepEqual(p.PeerProjects, map[string][]peering.SpokeProject{}) {
 		t.Fatalf("empty overlay values not passed through: %#v", p)
 	}
 	if len(p.LocalPeerPlacements) != 0 || p.LocalPeerPlacements == nil {

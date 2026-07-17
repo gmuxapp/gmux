@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 )
 
 // Reader is the transaction-consistent durable read seam, satisfied by
@@ -108,22 +109,34 @@ type LocalPeerSessionKey struct {
 // Projects: peers/health are runtime status, launchers are startup adapter
 // discovery (pure derived config — deliberately not SQLite state), and
 // peer projects/discovered are cached network-peer projections re-broadcast
-// verbatim (ADR 0002/0025 host-authoritative discovery). The concrete types
-// live in peering/cmd and must not be imported here, hence `any`.
+// verbatim (ADR 0002/0025 host-authoritative discovery).
+//
+// Type-tightening note (cutover checklist 4): the peer-status types live in
+// internal/peering, which this package may import (peering never imports the
+// snapshot stack — production adapts peering.Manager to PeerSource from
+// cmd/gmuxd, so no cycle). The full per-session peer PROJECTIONS, whose
+// shape is exactly the ADR 0001 session wire shape, deliberately do NOT
+// flow through here: they are supplied to the wire conversion layer
+// (internal/snapshot/wire, which imports this package) directly, keeping
+// the composer free of wire shapes and breaking the import cycle the
+// projects slice flagged. This payload only needs connectivity, hence the
+// presence-set LocalPeerSessions.
 type PeerWorld struct {
-	Peers           any
-	Health          any
-	Launchers       any
-	DefaultLauncher any
-	PeerProjects    any
-	PeerDiscovered  any
+	Peers           []peering.PeerInfo
+	Health          *HealthInfo
+	Launchers       []peering.LauncherDef
+	DefaultLauncher string
+	PeerProjects    map[string][]peering.SpokeProject
+	PeerDiscovered  map[string][]peering.SpokeDiscovered
 
-	// LocalPeerSessions holds the currently CONNECTED Local-peer session
-	// projections. Presence in this map is what "connected" means for the
-	// placement join: a durable Local-peer placement row whose key is
-	// absent is dropped from the payload (parent-owned placement is
-	// metadata, never an offline replica of the peer's snapshot).
-	LocalPeerSessions map[LocalPeerSessionKey]any
+	// LocalPeerSessions holds the key of every currently CONNECTED
+	// Local-peer session projection. Presence in this set is what
+	// "connected" means for the placement join: a durable Local-peer
+	// placement row whose key is absent is dropped from the payload
+	// (parent-owned placement is metadata, never an offline replica of the
+	// peer's snapshot). The projections themselves ride the wire layer's
+	// peer-session overlay, not this payload.
+	LocalPeerSessions map[LocalPeerSessionKey]struct{}
 }
 
 // PeerSource provides a point-in-time copy of the peer-manager world
@@ -167,15 +180,12 @@ type SessionsPayload struct {
 }
 
 // LocalPeerPlacementRow is one durable parent-owned Local-peer placement
-// joined onto its live session projection. Only placements with a
-// currently connected session are emitted.
+// row that is currently connected (its key is present in the PeerSource's
+// LocalPeerSessions set). The peer's ephemeral session projection itself is
+// joined at the wire conversion layer, keyed by (PeerKey, SessionID) —
+// peer-owned facts are never rematched or persisted locally.
 type LocalPeerPlacementRow struct {
 	centralstore.LocalPeerPlacementView
-
-	// Session is the peer manager's ephemeral projection for this subject,
-	// passed through verbatim (peer-owned facts are never rematched or
-	// persisted locally).
-	Session any
 }
 
 // ProjectsPayload is the composed world-kind payload: the durable catalog
@@ -187,12 +197,12 @@ type ProjectsPayload struct {
 	Projects            centralstore.ProjectCatalog
 	LocalPeerPlacements []LocalPeerPlacementRow
 
-	Peers           any
-	Health          any
-	Launchers       any
-	DefaultLauncher any
-	PeerProjects    any
-	PeerDiscovered  any
+	Peers           []peering.PeerInfo
+	Health          *HealthInfo
+	Launchers       []peering.LauncherDef
+	DefaultLauncher string
+	PeerProjects    map[string][]peering.SpokeProject
+	PeerDiscovered  map[string][]peering.SpokeDiscovered
 }
 
 // Batch is one composition result. When a cross-kind invalidation triggered
@@ -406,11 +416,10 @@ func (c *Composer) compose(ctx context.Context, sessions, projects bool) (Batch,
 		// connection-owned (ADR 0025/0026 §7).
 		joined := make([]LocalPeerPlacementRow, 0, len(snap.LocalPeerPlacements))
 		for _, view := range snap.LocalPeerPlacements {
-			session, connected := peerWorld.LocalPeerSessions[LocalPeerSessionKey{PeerKey: view.PeerKey, SessionID: view.SessionID}]
-			if !connected {
+			if _, connected := peerWorld.LocalPeerSessions[LocalPeerSessionKey{PeerKey: view.PeerKey, SessionID: view.SessionID}]; !connected {
 				continue
 			}
-			joined = append(joined, LocalPeerPlacementRow{LocalPeerPlacementView: view, Session: session})
+			joined = append(joined, LocalPeerPlacementRow{LocalPeerPlacementView: view})
 		}
 		out.Projects = &ProjectsPayload{
 			Projects:            snap.Projects,

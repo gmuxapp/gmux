@@ -218,12 +218,27 @@ func (c *Coordinator) emitUpserted(session centralstore.Session) {
 // blocks). Read failures are reported and the outcome is skipped; consumers
 // converge on the next outcome for that row.
 //
-// Known residual (documented, not fixable locally): a Removed outcome
-// followed by a stale captured-row Upserted for the SAME pre-removal
-// generation (only reachable via a fast-dead Register racing a Remove) can
-// deliver the stale row after the watermark reset. The durable read sites
-// cannot produce it (their read happens after the removal), and production
-// consumers treat rows with exit facts as dead either way.
+// Known residual (documented, not fixable locally with per-ID watermarks;
+// it exists in BOTH directions across a removal boundary, fable delta
+// review R-2):
+//
+//   - Removed then stale Upserted: a Removed outcome followed by a stale
+//     captured-row Upserted for the SAME pre-removal generation (reachable
+//     via a fast-dead Register racing a Remove) can deliver the stale row
+//     after the watermark reset. Production consumers treat rows with exit
+//     facts as dead either way.
+//   - Upserted then late Removed: the durable read sites CAN produce the
+//     inverse — a Remove commits, its post-commit read observes absence,
+//     and before that Removed publishes, a re-registration commits and
+//     publishes its fresh Upserted; the late Removed (never version-gated,
+//     and it resets the watermark) then lands last, leaving a ghost
+//     removal for a live session. A live session self-heals on its next
+//     runner event; only a fast-dead re-registration immediately after a
+//     Remove can leave the ghost as final state.
+//
+// Consumers keyed on Removed must therefore tolerate a row reappearing via
+// the next Upserted (S5 consumer-wiring checklist). A real fix needs
+// commit-ordered sequence stamping.
 func (c *Coordinator) emitOutcomes(ctx context.Context, ids ...centralstore.SessionID) {
 	if len(ids) == 0 || !c.outcomes.hasSubscribers() {
 		return
