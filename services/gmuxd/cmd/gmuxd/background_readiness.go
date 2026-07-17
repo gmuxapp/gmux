@@ -21,6 +21,21 @@ type backgroundStartSeams struct {
 	Poll     time.Duration
 }
 
+// startBackgroundSpawnFirst is the complete, still-unselected production
+// policy wrapper. It captures the incumbent before spawning, applies the 60s
+// ownership/takeover budget, and delegates identity-keyed readiness and lock
+// retries to awaitSpawnedDaemon. The incumbent observation is returned for
+// caller messaging; it can never satisfy child readiness.
+func startBackgroundSpawnFirst(parent context.Context, s backgroundStartSeams) (pid int, incumbent unixipc.DaemonIdentity, replaced bool, err error) {
+	if s.Identity != nil {
+		incumbent, replaced = s.Identity()
+	}
+	ctx, cancel := context.WithTimeout(parent, backgroundStartupBudget)
+	defer cancel()
+	pid, err = awaitSpawnedDaemon(ctx, s)
+	return
+}
+
 // awaitSpawnedDaemon is the prelanded spawn-first readiness policy. A healthy
 // incumbent is never success: readiness belongs to the exact child PID. Retry
 // performs bounded ownership/takeover work and may report lock contention.

@@ -383,12 +383,15 @@ type TriggerConfig struct {
 	ConversationDeleted <-chan struct{}
 	PeerSessionsChanged <-chan struct{}
 	PeerWorldChanged    <-chan struct{}
+	// Activity forwards transient runner activity to the concrete SSE/cache
+	// fan-out. It is deliberately not folded into durable dirty state.
+	Activity func(sessioncoord.Outcome)
 }
 
 // StartTriggers wires every asynchronous post-convergence path. All workers
 // are joined before return; callers run this in the bootstrap lifetime group.
 func (b *Bootstrap) StartTriggers(ctx context.Context, cfg TriggerConfig) error {
-	_, outcomes, unsubscribe, err := b.SubscribeOutcomes(ctx)
+	seed, outcomes, unsubscribe, err := b.SubscribeOutcomes(ctx)
 	if err != nil {
 		return err
 	}
@@ -421,6 +424,28 @@ func (b *Bootstrap) StartTriggers(ctx context.Context, cfg TriggerConfig) error 
 	})
 	run(cfg.PeerSessionsChanged, func() { b.Composer.MarkDirty(true, false) })
 	run(cfg.PeerWorldChanged, func() { b.Composer.MarkDirty(false, true) })
+	// Reconciliation can perform adapter I/O. Keep the outcome subscriber
+	// bounded and non-blocking by coalescing death into one level-triggered
+	// slot; this prevents a slow adapter from backpressuring coordinator
+	// commits. Seed is processed through the same path, closing the
+	// snapshot/subscribe race.
+	death := make(chan struct{}, 1)
+	noteDeath := func(o sessioncoord.Outcome) {
+		if o.Type == sessioncoord.OutcomeUpserted && o.Session != nil && !o.Alive {
+			select {
+			case death <- struct{}{}:
+			default:
+			}
+		}
+	}
+	for _, o := range seed {
+		noteDeath(o)
+	}
+	run(death, func() {
+		if e := b.Reconcile(ctx); e != nil && b.cfg.Errors != nil {
+			b.cfg.Errors.Error(ctx, e)
+		}
+	})
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -432,10 +457,9 @@ func (b *Bootstrap) StartTriggers(ctx context.Context, cfg TriggerConfig) error 
 				if !ok {
 					return
 				}
-				if o.Type == sessioncoord.OutcomeUpserted && o.Session != nil && !o.Alive {
-					if e := b.Reconcile(ctx); e != nil && b.cfg.Errors != nil {
-						b.cfg.Errors.Error(ctx, e)
-					}
+				noteDeath(o)
+				if o.Type == sessioncoord.OutcomeActivity && cfg.Activity != nil {
+					cfg.Activity(o)
 				}
 			}
 		}

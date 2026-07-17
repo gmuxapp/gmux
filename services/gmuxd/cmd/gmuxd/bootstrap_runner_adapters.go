@@ -7,17 +7,21 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/paths"
+	"github.com/gmuxapp/gmux/packages/sessionenv"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
@@ -208,34 +212,132 @@ func storeFacts(s store.Session) centralstore.RunnerFacts {
 	return f
 }
 
-type productionRunnerSpawner struct {
-	Projects *projects.Manager
-	GmuxBin  string
-	Launch   func(string, []string, string, string, uint16, uint16) (int, error)
+type runnerLaunchRequest struct {
+	GmuxBin           string
+	Command           []string
+	CWD, ResumeID     string
+	InitialCols, Rows uint16
+	Endpoint          string
 }
 
-func (s productionRunnerSpawner) Spawn(ctx context.Context, row centralstore.Session) (string, error) {
+type runnerLaunchResult struct {
+	Endpoint  string
+	PID       int
+	Wait      <-chan error
+	Terminate func(context.Context) error
+}
+
+type productionRunnerSpawner struct {
+	Projects       *projects.Manager
+	GmuxBin        string
+	ResolveDir     func(centralstore.Session) (string, error)
+	ResolveCommand func(centralstore.Session) []string
+	Launch         func(context.Context, runnerLaunchRequest) (runnerLaunchResult, error)
+	mu             sync.Mutex
+	launched       map[string]runnerLaunchResult
+}
+
+func (s *productionRunnerSpawner) Spawn(ctx context.Context, row centralstore.Session) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	legacy := store.Session{ID: string(row.ID), Cwd: row.CWD, WorkspaceRoot: row.WorkspaceRoot, Remotes: row.Remotes, Command: row.Command, ProjectSlug: ""}
-	if s.Projects == nil {
-		return "", fmt.Errorf("runner spawn: projects unavailable")
+	legacy := store.Session{ID: string(row.ID), Adapter: row.Adapter, ConversationRef: row.ConversationRef, Cwd: row.CWD, WorkspaceRoot: row.WorkspaceRoot, Remotes: row.Remotes, Command: append([]string(nil), row.Command...)}
+	var cwd string
+	var err error
+	if s.ResolveDir != nil {
+		cwd, err = s.ResolveDir(row)
+	} else {
+		if s.Projects == nil {
+			return "", fmt.Errorf("runner spawn: projects unavailable")
+		}
+		cwd, _ = resolveResumeDir(s.Projects, legacy)
 	}
-	cwd, _ := resolveResumeDir(s.Projects, legacy)
+	if err != nil {
+		return "", err
+	}
 	if cwd == "" {
 		return "", fmt.Errorf("runner spawn: no usable directory")
 	}
-	discovery.ResolveResumeCommand(&legacy)
+	if s.ResolveCommand != nil {
+		legacy.Command = s.ResolveCommand(row)
+	} else {
+		legacy.Command = discovery.ResolveResumeCommand(&legacy)
+	}
+	if len(legacy.Command) == 0 {
+		return "", fmt.Errorf("runner spawn: session %s is not resumable", row.ID)
+	}
+	endpoint := filepath.Join(paths.SessionSocketDir(), legacy.ID+".sock")
 	launch := s.Launch
 	if launch == nil {
-		launch = launchGmux
+		launch = launchRunnerProcess
 	}
-	if _, err := launch(s.GmuxBin, legacy.Command, cwd, legacy.ID, value16(row.TerminalCols), value16(row.TerminalRows)); err != nil {
+	result, err := launch(ctx, runnerLaunchRequest{GmuxBin: s.GmuxBin, Command: legacy.Command, CWD: cwd, ResumeID: legacy.ID, InitialCols: value16(row.TerminalCols), Rows: value16(row.TerminalRows), Endpoint: endpoint})
+	if err != nil {
 		return "", err
 	}
-	return filepath.Join(paths.SessionSocketDir(), legacy.ID+".sock"), nil
+	if result.Endpoint == "" {
+		result.Endpoint = endpoint
+	}
+	if result.Terminate == nil {
+		return "", fmt.Errorf("runner spawn: launch result has no termination handle")
+	}
+	s.mu.Lock()
+	if s.launched == nil {
+		s.launched = make(map[string]runnerLaunchResult)
+	}
+	s.launched[result.Endpoint] = result
+	s.mu.Unlock()
+	return result.Endpoint, nil
 }
+
+func (s *productionRunnerSpawner) CleanupSpawn(ctx context.Context, endpoint string) error {
+	s.mu.Lock()
+	result, ok := s.launched[endpoint]
+	delete(s.launched, endpoint)
+	s.mu.Unlock()
+	if !ok || result.Terminate == nil {
+		return nil
+	}
+	return result.Terminate(ctx)
+}
+func launchRunnerProcess(ctx context.Context, req runnerLaunchRequest) (runnerLaunchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return runnerLaunchResult{}, err
+	}
+	cmd := exec.Command(req.GmuxBin, buildLaunchArgs(req.ResumeID, req.InitialCols, req.Rows, req.Command)...)
+	cmd.Dir = req.CWD
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Env = sessionenv.Strip(captureLoginEnv(req.GmuxBin, req.CWD))
+	if err := cmd.Start(); err != nil {
+		if req.CWD != "" && !projects.IsDir(req.CWD) {
+			return runnerLaunchResult{}, fmt.Errorf("working directory %q does not exist: %w", req.CWD, err)
+		}
+		return runnerLaunchResult{}, err
+	}
+	wait := make(chan error, 1)
+	go func() { wait <- cmd.Wait(); close(wait) }()
+	terminate := func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if cmd.Process == nil {
+			return nil
+		}
+		err := cmd.Process.Signal(syscall.SIGTERM)
+		if err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
+		select {
+		case <-wait:
+			return nil
+		case <-ctx.Done():
+			_ = cmd.Process.Kill()
+			return ctx.Err()
+		}
+	}
+	return runnerLaunchResult{Endpoint: req.Endpoint, PID: cmd.Process.Pid, Wait: wait, Terminate: terminate}, nil
+}
+
 func value16(v *uint16) uint16 {
 	if v == nil {
 		return 0
@@ -244,5 +346,5 @@ func value16(v *uint16) uint16 {
 }
 
 var _ sessioncoord.RunnerClient = productionRunnerClient{}
-var _ sessioncoord.RunnerSpawner = productionRunnerSpawner{}
-var _ = os.ErrNotExist
+var _ sessioncoord.RunnerSpawner = (*productionRunnerSpawner)(nil)
+var _ sessioncoord.RunnerSpawnCleaner = (*productionRunnerSpawner)(nil)

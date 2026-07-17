@@ -180,37 +180,11 @@ func launcherStates(ls []adapter.Launcher) []string {
 // honours the legacy GMUX_RESUME_ID env var as a fallback for
 // rolling upgrades, but this code path no longer sets it.
 func launchGmux(gmuxBin string, command []string, cwd, resumeID string, initialCols, initialRows uint16) (int, error) {
-	cmd := exec.Command(gmuxBin, buildLaunchArgs(resumeID, initialCols, initialRows, command)...)
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	cmd.Stdin = nil
-
-	// Source a fresh interactive-login environment for the session
-	// (see ADR 0006), so dotfile changes and the Restart button take
-	// effect without a daemon restart. Falls back to the daemon's own
-	// env when no login shell is available (headless daemons) or the
-	// probe fails. Strip gmux session-identity vars either way so child
-	// processes don't inherit a parent session's identity (a leaked
-	// GMUX_SESSION_ID/GMUX_SOCKET/GMUX_ADAPTER would otherwise be
-	// stamped onto every launched session). See packages/sessionenv.
-	cmd.Env = sessionenv.Strip(captureLoginEnv(gmuxBin, cwd))
-
-	if err := cmd.Start(); err != nil {
-		// Go surfaces the child's chdir ENOENT against argv0, so a
-		// missing cwd reads as "fork/exec .../gmux: no such file or
-		// directory" — as if the gmux binary were gone. Callers Stat
-		// their target first (resolveResumeDir, the /launch guard), but
-		// the directory can still vanish between that check and Start.
-		// Disambiguate here so the misleading message can never escape.
-		if cwd != "" && !projects.IsDir(cwd) {
-			return 0, fmt.Errorf("working directory %q does not exist: %w", cwd, err)
-		}
+	result, err := launchRunnerProcess(context.Background(), runnerLaunchRequest{GmuxBin: gmuxBin, Command: command, CWD: cwd, ResumeID: resumeID, InitialCols: initialCols, Rows: initialRows})
+	if err != nil {
 		return 0, err
 	}
-	go cmd.Wait()
-	return cmd.Process.Pid, nil
+	return result.PID, nil
 }
 
 // resolveResumeDir picks the directory to (re)launch a runner in for a

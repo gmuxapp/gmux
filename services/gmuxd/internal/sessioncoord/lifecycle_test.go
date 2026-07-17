@@ -52,6 +52,7 @@ func (f *fakeControl) count() int {
 type fakeSpawner struct {
 	mu       sync.Mutex
 	calls    []centralstore.Session
+	cleanups []string
 	endpoint string
 	err      error
 	block    chan struct{} // if non-nil, Spawn blocks until closed
@@ -77,6 +78,13 @@ func (f *fakeSpawner) Spawn(ctx context.Context, s centralstore.Session) (string
 		return "", f.err
 	}
 	return f.endpoint, nil
+}
+
+func (f *fakeSpawner) CleanupSpawn(_ context.Context, endpoint string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cleanups = append(f.cleanups, endpoint)
+	return nil
 }
 func (f *fakeSpawner) count() int {
 	f.mu.Lock()
@@ -637,6 +645,11 @@ func TestResumeRegistrationFailureReleasesClaim(t *testing.T) {
 	if len(dur.registered) != 0 || len(coord.Registry().Snapshot()) != 0 {
 		t.Fatal("registration failure must leave DB and registry untouched")
 	}
+	spawner.mu.Lock()
+	if len(spawner.cleanups) != 1 || spawner.cleanups[0] != "ep326" {
+		t.Fatalf("registration failure cleanup=%v", spawner.cleanups)
+	}
+	spawner.mu.Unlock()
 	client.mu.Lock()
 	client.subscribeErr = nil
 	client.mu.Unlock()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 )
@@ -64,6 +65,15 @@ type RunnerControl interface {
 // database transaction.
 type RunnerSpawner interface {
 	Spawn(ctx context.Context, session centralstore.Session) (endpoint string, err error)
+}
+
+// RunnerSpawnCleaner is an optional extension implemented by spawners that
+// retain an exact process handle. It is invoked when replacement registration
+// fails, so a child that never became coordinator-owned cannot leak. Cleanup
+// must be idempotent; implementations should use a context independent of the
+// failed registration request when necessary.
+type RunnerSpawnCleaner interface {
+	CleanupSpawn(ctx context.Context, endpoint string) error
 }
 
 // LifecycleClaim identifies one held per-session lifecycle claim. It is an
@@ -280,6 +290,14 @@ func (c *Coordinator) resumeClaimed(ctx context.Context, id centralstore.Session
 	// still pick the process up.
 	runtime, err := c.Register(ctx, RegisterRequest{Endpoint: endpoint, Replace: true, ExpectedID: id, Claim: cl})
 	if err != nil {
+		if cleaner, ok := c.spawner.(RunnerSpawnCleaner); ok {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			cleanupErr := cleaner.CleanupSpawn(cleanupCtx, endpoint)
+			cancel()
+			if cleanupErr != nil {
+				c.reportError(ctx, fmt.Errorf("sessioncoord: cleanup failed spawn for %s: %w", id, cleanupErr))
+			}
+		}
 		return Runtime{}, fmt.Errorf("sessioncoord: resume registration for %s: %w", id, err)
 	}
 	return runtime, nil

@@ -9,6 +9,21 @@ import (
 	"time"
 )
 
+func TestStartBackgroundSpawnFirstCapturesIncumbentAndWaitsForChild(t *testing.T) {
+	done := make(chan error)
+	var probes atomic.Int32
+	seams := backgroundStartSeams{Spawn: func() (spawnedDaemon, error) { return spawnedDaemon{PID: 22, Done: done}, nil }, Identity: func() (unixipc.DaemonIdentity, bool) {
+		if probes.Add(1) < 3 {
+			return unixipc.DaemonIdentity{PID: 11, Version: "old"}, true
+		}
+		return unixipc.DaemonIdentity{PID: 22, Version: "new"}, true
+	}, Poll: time.Millisecond}
+	pid, incumbent, replaced, err := startBackgroundSpawnFirst(context.Background(), seams)
+	if err != nil || pid != 22 || !replaced || incumbent.PID != 11 {
+		t.Fatalf("pid=%d incumbent=%+v replaced=%v err=%v", pid, incumbent, replaced, err)
+	}
+}
+
 func TestAwaitSpawnedDaemonIdentityAware(t *testing.T) {
 	var probes atomic.Int32
 	done := make(chan error)
