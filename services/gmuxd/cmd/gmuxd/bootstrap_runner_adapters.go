@@ -152,7 +152,7 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 		f.ExitedAt = centralstore.NullablePatch[centralstore.UnixMillis]{Set: &now}
 		return sessioncoord.RunnerEvent{ObservedAt: now, Facts: f, Alive: &alive}, true
 	case "activity":
-		return sessioncoord.RunnerEvent{ObservedAt: now}, true
+		return sessioncoord.RunnerEvent{ObservedAt: now, TransientActivity: true}, true
 	default:
 		return sessioncoord.RunnerEvent{}, false
 	}

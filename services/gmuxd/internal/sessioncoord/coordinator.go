@@ -98,9 +98,10 @@ type RunnerMeta struct {
 }
 
 type RunnerEvent struct {
-	ObservedAt centralstore.UnixMillis
-	Facts      centralstore.RunnerFacts
-	Alive      *bool
+	ObservedAt        centralstore.UnixMillis
+	Facts             centralstore.RunnerFacts
+	Alive             *bool
+	TransientActivity bool // lossy signal; never persisted as a fact
 }
 
 type RegisterRequest struct {
@@ -457,8 +458,8 @@ loop:
 		BinaryHash:    meta.BinaryHash,
 		// A closed pre-drain stream already forced reg.Alive=false above, so
 		// liveness alone decides subscription.
-		Subscribed:    reg.Alive,
-		RowVersion:    session.Version,
+		Subscribed: reg.Alive,
+		RowVersion: session.Version,
 	}
 
 	if runtime.Subscribed {
@@ -623,6 +624,12 @@ func (c *Coordinator) drain(ctx context.Context, id centralstore.SessionID, gene
 					})
 				}
 				return
+			}
+			if ev.TransientActivity {
+				// The runner protocol's activity frame is explicitly transient;
+				// publish it without manufacturing a durable mutation.
+				c.PublishActivity(id)
+				continue
 			}
 			if ev.Facts.ExitedAt.Set != nil {
 				exitObserved = true
