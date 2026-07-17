@@ -162,7 +162,7 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			ID: string(current.ID), Adapter: current.Adapter, ConversationRef: nullString(current.ConversationRef),
 			CommandJson: cmd, Cwd: current.CWD, WorkspaceRoot: nullString(current.WorkspaceRoot), RemotesJson: rem,
 			Slug: nullString(current.Slug), ShellTitle: nullString(current.ShellTitle), AdapterTitle: nullString(current.AdapterTitle), Subtitle: nullString(current.Subtitle),
-			Working: boolInt(current.Working), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), CreatedAtMs: int64(current.CreatedAt),
+			Working: boolInt(current.Working), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), CreatedAtMs: int64(current.CreatedAt),
 			StartedAtMs: nullMillis(current.StartedAt), ExitedAtMs: nullMillis(current.ExitedAt), LastActivityAtMs: nullMillis(current.LastActivityAt), ExitCode: nullInt(current.ExitCode),
 			TerminalCols: nullUint(current.TerminalCols), TerminalRows: nullUint(current.TerminalRows), LaunchParentID: func() sql.NullString {
 				if current.LaunchParentID == nil {
@@ -186,13 +186,22 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			// A replacement generation must never inherit the previous
 			// generation's generation-scoped facts: exit code (ExitedAt is
 			// required above for dead replacements), turn state, error state,
-			// and start time all describe the dead process, not the new one.
-			// Unread is user-facing attention state and is deliberately kept.
-			// Facts observed for the new generation are merged on top below;
-			// activity transitions are computed against this reset baseline.
+			// the status-reported provenance marker, and start time all
+			// describe the dead process, not the new one. StatusReported
+			// resets WITH working/error (delta review Δ-1): the bit is those
+			// facts' provenance marker, and production re-registration
+			// replaces Status wholesale from the new runner's /meta — nil
+			// until the new process reports (discovery.go:290) — so a
+			// resumed generation that dies before reporting must render
+			// "status": null and wait-verdict "died", not inherit the dead
+			// generation's report. Unread is user-facing attention state and
+			// is deliberately kept. Facts observed for the new generation
+			// are merged on top below; activity transitions are computed
+			// against this reset baseline.
 			current.ExitCode = nil
 			current.Working = false
 			current.Error = false
+			current.StatusReported = false
 			current.StartedAt = nil
 		}
 		genBaseline := current
@@ -217,7 +226,7 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			n, updateErr := q.UpdateRunnerRegistration(ctx, db.UpdateRunnerRegistrationParams{
 				ConversationRef: nullString(current.ConversationRef), CommandJson: cmd, Cwd: current.CWD, WorkspaceRoot: nullString(current.WorkspaceRoot), RemotesJson: rem,
 				Slug: nullString(current.Slug), ShellTitle: nullString(current.ShellTitle), AdapterTitle: nullString(current.AdapterTitle), Subtitle: nullString(current.Subtitle),
-				Working: boolInt(current.Working), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), StartedAtMs: nullMillis(current.StartedAt), ExitedAtMs: nullMillis(current.ExitedAt),
+				Working: boolInt(current.Working), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), StartedAtMs: nullMillis(current.StartedAt), ExitedAtMs: nullMillis(current.ExitedAt),
 				LastActivityAtMs: nullMillis(current.LastActivityAt), ExitCode: nullInt(current.ExitCode), TerminalCols: nullUint(current.TerminalCols), TerminalRows: nullUint(current.TerminalRows),
 				ID: string(reg.ID), RowVersion: int64(before.Version),
 			})
@@ -377,6 +386,14 @@ func mergeRunnerFacts(v *Session, f RunnerFacts) error {
 	if f.Error != nil {
 		v.Error = *f.Error
 	}
+	// Status-reported fact (runner-authoritative): observing a
+	// working/error fact proves a status was reported. Sticky WITHIN a
+	// generation (the daemon's SSE path flattens an in-generation null
+	// status to {working:false}, subscribe.go:219–226); the generation
+	// boundary resets it in RegisterRunner's NewGeneration block, because
+	// production re-registration replaces Status wholesale from the new
+	// runner's /meta — nil until the new process reports (discovery.go:290).
+	v.StatusReported = v.StatusReported || f.Working != nil || f.Error != nil
 	if err := applyNullable(&v.StartedAt, f.StartedAt); err != nil {
 		return err
 	}

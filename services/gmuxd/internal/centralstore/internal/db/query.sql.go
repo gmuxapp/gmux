@@ -237,7 +237,7 @@ func (q *Queries) GetMetadata(ctx context.Context, key string) (string, error) {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root FROM local_sessions WHERE id = ?
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, status_reported FROM local_sessions WHERE id = ?
 `
 
 func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, error) {
@@ -269,6 +269,7 @@ func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, erro
 		&i.TerminalRows,
 		&i.LaunchParentID,
 		&i.PromotedToRoot,
+		&i.StatusReported,
 	)
 	return i, err
 }
@@ -370,8 +371,8 @@ func (q *Queries) InsertManualPeer(ctx context.Context, arg InsertManualPeerPara
 
 const insertProjectEntry = `-- name: InsertProjectEntry :one
 INSERT INTO project_entries
-(sidebar_order, entry_kind, slug, peer_key, created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, ?, ?, ?)
+(sidebar_order, entry_kind, slug, peer_key, node_id, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 RETURNING id
 `
 
@@ -380,6 +381,7 @@ type InsertProjectEntryParams struct {
 	EntryKind    string
 	Slug         string
 	PeerKey      sql.NullString
+	NodeID       sql.NullString
 	CreatedAtMs  int64
 	UpdatedAtMs  int64
 }
@@ -390,6 +392,7 @@ func (q *Queries) InsertProjectEntry(ctx context.Context, arg InsertProjectEntry
 		arg.EntryKind,
 		arg.Slug,
 		arg.PeerKey,
+		arg.NodeID,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
 	)
@@ -427,10 +430,11 @@ const insertSession = `-- name: InsertSession :one
 INSERT INTO local_sessions (
     id, adapter, conversation_ref, command_json, cwd, workspace_root,
     remotes_json, slug, shell_title, adapter_title, subtitle,
-    working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms,
-    last_activity_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root
+    working, unread, has_error, status_reported, created_at_ms, started_at_ms,
+    exited_at_ms, last_activity_at_ms, exit_code, terminal_cols, terminal_rows,
+    launch_parent_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, status_reported
 `
 
 type InsertSessionParams struct {
@@ -448,6 +452,7 @@ type InsertSessionParams struct {
 	Working          int64
 	Unread           int64
 	HasError         int64
+	StatusReported   int64
 	CreatedAtMs      int64
 	StartedAtMs      sql.NullInt64
 	ExitedAtMs       sql.NullInt64
@@ -474,6 +479,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 		arg.Working,
 		arg.Unread,
 		arg.HasError,
+		arg.StatusReported,
 		arg.CreatedAtMs,
 		arg.StartedAtMs,
 		arg.ExitedAtMs,
@@ -510,6 +516,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 		&i.TerminalRows,
 		&i.LaunchParentID,
 		&i.PromotedToRoot,
+		&i.StatusReported,
 	)
 	return i, err
 }
@@ -611,7 +618,7 @@ func (q *Queries) ListPlacements(ctx context.Context) ([]ListPlacementsRow, erro
 }
 
 const listProjectEntries = `-- name: ListProjectEntries :many
-SELECT id, sidebar_order, entry_kind, slug, peer_key, created_at_ms, updated_at_ms FROM project_entries ORDER BY sidebar_order
+SELECT id, sidebar_order, entry_kind, slug, peer_key, created_at_ms, updated_at_ms, node_id FROM project_entries ORDER BY sidebar_order
 `
 
 func (q *Queries) ListProjectEntries(ctx context.Context) ([]ProjectEntry, error) {
@@ -631,6 +638,7 @@ func (q *Queries) ListProjectEntries(ctx context.Context) ([]ProjectEntry, error
 			&i.PeerKey,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.NodeID,
 		); err != nil {
 			return nil, err
 		}
@@ -680,7 +688,7 @@ func (q *Queries) ListProjectRules(ctx context.Context) ([]ProjectMatchRule, err
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root FROM local_sessions ORDER BY id
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, status_reported FROM local_sessions ORDER BY id
 `
 
 func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
@@ -718,6 +726,7 @@ func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
 			&i.TerminalRows,
 			&i.LaunchParentID,
 			&i.PromotedToRoot,
+			&i.StatusReported,
 		); err != nil {
 			return nil, err
 		}
@@ -901,8 +910,8 @@ UPDATE local_sessions SET
     adapter = ?, conversation_ref = ?, command_json = ?, cwd = ?,
     workspace_root = ?, remotes_json = ?, slug = ?, shell_title = ?,
     adapter_title = ?, subtitle = ?, working = ?, unread = ?, has_error = ?,
-    started_at_ms = ?, exited_at_ms = ?, last_activity_at_ms = ?, exit_code = ?,
-    terminal_cols = ?, terminal_rows = ?
+    status_reported = ?, started_at_ms = ?, exited_at_ms = ?,
+    last_activity_at_ms = ?, exit_code = ?, terminal_cols = ?, terminal_rows = ?
 WHERE id = ? AND row_version = ?
 `
 
@@ -920,6 +929,7 @@ type UpdateCommonFactsParams struct {
 	Working          int64
 	Unread           int64
 	HasError         int64
+	StatusReported   int64
 	StartedAtMs      sql.NullInt64
 	ExitedAtMs       sql.NullInt64
 	LastActivityAtMs sql.NullInt64
@@ -945,6 +955,7 @@ func (q *Queries) UpdateCommonFacts(ctx context.Context, arg UpdateCommonFactsPa
 		arg.Working,
 		arg.Unread,
 		arg.HasError,
+		arg.StatusReported,
 		arg.StartedAtMs,
 		arg.ExitedAtMs,
 		arg.LastActivityAtMs,
@@ -998,13 +1009,14 @@ func (q *Queries) UpdateManualPeer(ctx context.Context, arg UpdateManualPeerPara
 
 const updateProjectEntry = `-- name: UpdateProjectEntry :execrows
 UPDATE project_entries
-SET sidebar_order = ?, slug = ?, updated_at_ms = ?
+SET sidebar_order = ?, slug = ?, node_id = ?, updated_at_ms = ?
 WHERE id = ?
 `
 
 type UpdateProjectEntryParams struct {
 	SidebarOrder int64
 	Slug         string
+	NodeID       sql.NullString
 	UpdatedAtMs  int64
 	ID           int64
 }
@@ -1013,6 +1025,7 @@ func (q *Queries) UpdateProjectEntry(ctx context.Context, arg UpdateProjectEntry
 	result, err := q.db.ExecContext(ctx, updateProjectEntry,
 		arg.SidebarOrder,
 		arg.Slug,
+		arg.NodeID,
 		arg.UpdatedAtMs,
 		arg.ID,
 	)
@@ -1027,9 +1040,9 @@ UPDATE local_sessions SET
     row_version = row_version + 1,
     conversation_ref = ?, command_json = ?, cwd = ?, workspace_root = ?,
     remotes_json = ?, slug = ?, shell_title = ?, adapter_title = ?, subtitle = ?,
-    working = ?, unread = ?, has_error = ?, started_at_ms = ?, exited_at_ms = ?,
-    last_activity_at_ms = ?, exit_code = ?, terminal_cols = ?, terminal_rows = ?,
-    dismissed_at_ms = NULL
+    working = ?, unread = ?, has_error = ?, status_reported = ?,
+    started_at_ms = ?, exited_at_ms = ?, last_activity_at_ms = ?, exit_code = ?,
+    terminal_cols = ?, terminal_rows = ?, dismissed_at_ms = NULL
 WHERE id = ? AND row_version = ?
 `
 
@@ -1046,6 +1059,7 @@ type UpdateRunnerRegistrationParams struct {
 	Working          int64
 	Unread           int64
 	HasError         int64
+	StatusReported   int64
 	StartedAtMs      sql.NullInt64
 	ExitedAtMs       sql.NullInt64
 	LastActivityAtMs sql.NullInt64
@@ -1070,6 +1084,7 @@ func (q *Queries) UpdateRunnerRegistration(ctx context.Context, arg UpdateRunner
 		arg.Working,
 		arg.Unread,
 		arg.HasError,
+		arg.StatusReported,
 		arg.StartedAtMs,
 		arg.ExitedAtMs,
 		arg.LastActivityAtMs,

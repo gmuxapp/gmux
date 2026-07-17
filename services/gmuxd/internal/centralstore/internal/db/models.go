@@ -39,6 +39,7 @@ type LocalSession struct {
 	TerminalRows     sql.NullInt64
 	LaunchParentID   sql.NullString
 	PromotedToRoot   int64
+	StatusReported   int64
 }
 
 type ManualPeer struct {
@@ -60,6 +61,7 @@ type ProjectEntry struct {
 	PeerKey      sql.NullString
 	CreatedAtMs  int64
 	UpdatedAtMs  int64
+	NodeID       sql.NullString
 }
 
 type ProjectMatchRule struct {

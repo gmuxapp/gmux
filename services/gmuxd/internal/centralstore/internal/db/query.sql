@@ -9,9 +9,10 @@ SELECT value FROM centralstore_metadata WHERE key = ?;
 INSERT INTO local_sessions (
     id, adapter, conversation_ref, command_json, cwd, workspace_root,
     remotes_json, slug, shell_title, adapter_title, subtitle,
-    working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms,
-    last_activity_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    working, unread, has_error, status_reported, created_at_ms, started_at_ms,
+    exited_at_ms, last_activity_at_ms, exit_code, terminal_cols, terminal_rows,
+    launch_parent_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: GetSession :one
@@ -34,8 +35,8 @@ UPDATE local_sessions SET
     adapter = ?, conversation_ref = ?, command_json = ?, cwd = ?,
     workspace_root = ?, remotes_json = ?, slug = ?, shell_title = ?,
     adapter_title = ?, subtitle = ?, working = ?, unread = ?, has_error = ?,
-    started_at_ms = ?, exited_at_ms = ?, last_activity_at_ms = ?, exit_code = ?,
-    terminal_cols = ?, terminal_rows = ?
+    status_reported = ?, started_at_ms = ?, exited_at_ms = ?,
+    last_activity_at_ms = ?, exit_code = ?, terminal_cols = ?, terminal_rows = ?
 WHERE id = ? AND row_version = ?;
 
 -- name: UpdateRunnerRegistration :execrows
@@ -43,9 +44,9 @@ UPDATE local_sessions SET
     row_version = row_version + 1,
     conversation_ref = ?, command_json = ?, cwd = ?, workspace_root = ?,
     remotes_json = ?, slug = ?, shell_title = ?, adapter_title = ?, subtitle = ?,
-    working = ?, unread = ?, has_error = ?, started_at_ms = ?, exited_at_ms = ?,
-    last_activity_at_ms = ?, exit_code = ?, terminal_cols = ?, terminal_rows = ?,
-    dismissed_at_ms = NULL
+    working = ?, unread = ?, has_error = ?, status_reported = ?,
+    started_at_ms = ?, exited_at_ms = ?, last_activity_at_ms = ?, exit_code = ?,
+    terminal_cols = ?, terminal_rows = ?, dismissed_at_ms = NULL
 WHERE id = ? AND row_version = ?;
 
 -- name: SweepSessionDead :execrows
@@ -87,13 +88,13 @@ UPDATE project_entries SET sidebar_order = sidebar_order + ?;
 
 -- name: InsertProjectEntry :one
 INSERT INTO project_entries
-(sidebar_order, entry_kind, slug, peer_key, created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, ?, ?, ?)
+(sidebar_order, entry_kind, slug, peer_key, node_id, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 RETURNING id;
 
 -- name: UpdateProjectEntry :execrows
 UPDATE project_entries
-SET sidebar_order = ?, slug = ?, updated_at_ms = ?
+SET sidebar_order = ?, slug = ?, node_id = ?, updated_at_ms = ?
 WHERE id = ?;
 
 -- name: ParkProjectEntrySlug :execrows

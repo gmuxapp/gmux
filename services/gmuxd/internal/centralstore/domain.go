@@ -23,14 +23,23 @@ type ProjectEntryID int64
 type PeerKey string
 
 type Session struct {
-	ID                                               SessionID
-	Version                                          RowVersion
-	Adapter, ConversationRef                         string
-	Command                                          []string
-	CWD, WorkspaceRoot                               string
-	Remotes                                          map[string]string
-	Slug, ShellTitle, AdapterTitle, Subtitle, Title  string
-	Working, Unread, Error                           bool
+	ID                                              SessionID
+	Version                                         RowVersion
+	Adapter, ConversationRef                        string
+	Command                                         []string
+	CWD, WorkspaceRoot                              string
+	Remotes                                         map[string]string
+	Slug, ShellTitle, AdapterTitle, Subtitle, Title string
+	Working, Unread, Error                          bool
+	// StatusReported records whether the CURRENT runner generation ever
+	// reported a working/error status for this row (runner-authoritative,
+	// generation-scoped; the production model's Status != nil, which
+	// re-registration replaces wholesale from the new runner's /meta).
+	// Sticky within a generation; a replacement generation resets it
+	// alongside working/error/started_at. The wire emits "status": null
+	// while it is false, and gmux wait's terminalReason keys its died/idle
+	// verdict on the distinction (ADR 0023).
+	StatusReported                                   bool
 	CreatedAt                                        UnixMillis
 	StartedAt, ExitedAt, LastActivityAt, DismissedAt *UnixMillis
 	ExitCode                                         *int
@@ -50,12 +59,15 @@ type NewSession struct {
 	Slug, ShellTitle, AdapterTitle string
 	Subtitle                       string
 	Working, Unread, Error         bool
-	CreatedAt                      UnixMillis
-	StartedAt, ExitedAt            *UnixMillis
-	LastActivityAt                 *UnixMillis
-	ExitCode                       *int
-	TerminalCols, TerminalRows     *uint16
-	LaunchParentID                 *SessionID
+	// StatusReported marks the status facts as runner-reported. Implied
+	// (and forced true at insert) when Working or Error is set.
+	StatusReported             bool
+	CreatedAt                  UnixMillis
+	StartedAt, ExitedAt        *UnixMillis
+	LastActivityAt             *UnixMillis
+	ExitCode                   *int
+	TerminalCols, TerminalRows *uint16
+	LaunchParentID             *SessionID
 }
 
 // NullablePatch has three states: zero means unchanged, Set stores a value,
@@ -106,6 +118,11 @@ type OwnedProjectSpec struct {
 type ProjectReference struct {
 	PeerKey PeerKey
 	Slug    string
+	// NodeID is the referenced peer's stable opaque identity (ADR 0007/
+	// 0017): the viewer's liveness anchor, stamped at creation. Empty for
+	// references created against pre-ADR-0007 daemons (name-only fallback).
+	// Mutable metadata, not identity (identity is PeerKey + Slug).
+	NodeID string
 }
 type ProjectEntrySpec struct {
 	ID        ProjectEntryID
@@ -120,10 +137,12 @@ const (
 )
 
 type ProjectEntry struct {
-	ID                   ProjectEntryID
-	Kind                 ProjectEntryKind
-	Slug                 string
-	PeerKey              PeerKey
+	ID      ProjectEntryID
+	Kind    ProjectEntryKind
+	Slug    string
+	PeerKey PeerKey
+	// NodeID is set only on references (ADR 0017 liveness anchor).
+	NodeID               string
 	Rules                []MatchRule
 	CreatedAt, UpdatedAt UnixMillis
 }
@@ -239,7 +258,7 @@ func sessionFromDB(v db.LocalSession) (Session, error) {
 	if v.RowVersion < 1 || v.CreatedAtMs < 0 {
 		return Session{}, errors.New("centralstore: corrupt session numeric value")
 	}
-	for name, x := range map[string]int64{"working": v.Working, "unread": v.Unread, "error": v.HasError, "promotion": v.PromotedToRoot} {
+	for name, x := range map[string]int64{"working": v.Working, "unread": v.Unread, "error": v.HasError, "promotion": v.PromotedToRoot, "status-reported": v.StatusReported} {
 		if x != 0 && x != 1 {
 			return Session{}, fmt.Errorf("centralstore: corrupt %s boolean", name)
 		}
@@ -248,6 +267,10 @@ func sessionFromDB(v db.LocalSession) (Session, error) {
 	out.Unread = v.Unread == 1
 	out.Error = v.HasError == 1
 	out.PromotedToRoot = v.PromotedToRoot == 1
+	out.StatusReported = v.StatusReported == 1
+	if (out.Working || out.Error) && !out.StatusReported {
+		return Session{}, errors.New("centralstore: status facts without status-reported bit")
+	}
 	if err := json.Unmarshal([]byte(v.CommandJson), &out.Command); err != nil {
 		return Session{}, fmt.Errorf("centralstore: decode command: %w", err)
 	}
@@ -331,7 +354,7 @@ func (s *Store) InsertSession(ctx context.Context, v NewSession) (Session, Mutat
 	}
 	defer tx.Rollback()
 	q := s.queries.WithTx(tx)
-	row, err := q.InsertSession(ctx, db.InsertSessionParams{ID: string(v.ID), Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Working: boolInt(v.Working), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), CreatedAtMs: int64(v.CreatedAt), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), LaunchParentID: func() sql.NullString {
+	row, err := q.InsertSession(ctx, db.InsertSessionParams{ID: string(v.ID), Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Working: boolInt(v.Working), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported || v.Working || v.Error), CreatedAtMs: int64(v.CreatedAt), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), LaunchParentID: func() sql.NullString {
 		if v.LaunchParentID == nil {
 			return sql.NullString{}
 		}
@@ -487,6 +510,10 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	if p.Error != nil {
 		v.Error = *p.Error
 	}
+	// Sticky status-reported fact: any patch carrying a working/error fact
+	// proves a status was reported for this row (runner-authoritative; the
+	// acknowledgement path uses its own query and never sets it).
+	v.StatusReported = v.StatusReported || p.Working != nil || p.Error != nil
 	if runnerObservedAt != nil && ((!before.Working && v.Working) || (!before.Unread && v.Unread) || (!before.Error && v.Error)) {
 		if v.LastActivityAt == nil || *runnerObservedAt > *v.LastActivityAt {
 			x := *runnerObservedAt
@@ -543,7 +570,7 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	if err != nil {
 		return MutationResult{}, err
 	}
-	n, err := q.UpdateCommonFacts(ctx, db.UpdateCommonFactsParams{Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Working: boolInt(v.Working), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), ID: string(id), RowVersion: int64(observed)})
+	n, err := q.UpdateCommonFacts(ctx, db.UpdateCommonFactsParams{Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Working: boolInt(v.Working), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), ID: string(id), RowVersion: int64(observed)})
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -699,7 +726,7 @@ func specEntry(e ProjectEntrySpec) ProjectEntry {
 	if e.Owned != nil {
 		return ProjectEntry{ID: e.ID, Kind: ProjectEntryOwned, Slug: e.Owned.Slug, Rules: e.Owned.Rules}
 	}
-	return ProjectEntry{ID: e.ID, Kind: ProjectEntryReference, Slug: e.Reference.Slug, PeerKey: e.Reference.PeerKey}
+	return ProjectEntry{ID: e.ID, Kind: ProjectEntryReference, Slug: e.Reference.Slug, PeerKey: e.Reference.PeerKey, NodeID: e.Reference.NodeID}
 }
 func catalogFromQueries(ctx context.Context, q *db.Queries) (ProjectCatalog, error) {
 	entries, err := q.ListProjectEntries(ctx)
@@ -723,14 +750,14 @@ func catalogFromQueries(ctx context.Context, q *db.Queries) (ProjectCatalog, err
 	}
 	out := make(ProjectCatalog, 0, len(entries))
 	for _, e := range entries {
-		x := ProjectEntry{ID: ProjectEntryID(e.ID), Kind: ProjectEntryKind(e.EntryKind), Slug: e.Slug, PeerKey: PeerKey(e.PeerKey.String), Rules: by[e.ID], CreatedAt: UnixMillis(e.CreatedAtMs), UpdatedAt: UnixMillis(e.UpdatedAtMs)}
+		x := ProjectEntry{ID: ProjectEntryID(e.ID), Kind: ProjectEntryKind(e.EntryKind), Slug: e.Slug, PeerKey: PeerKey(e.PeerKey.String), NodeID: e.NodeID.String, Rules: by[e.ID], CreatedAt: UnixMillis(e.CreatedAtMs), UpdatedAt: UnixMillis(e.UpdatedAtMs)}
 		if e.ID <= 0 || e.SidebarOrder < 0 || e.CreatedAtMs < 0 || e.UpdatedAtMs < 0 || x.Slug == "" {
 			return nil, errors.New("centralstore: corrupt project value")
 		}
 		if x.Kind != ProjectEntryOwned && x.Kind != ProjectEntryReference {
 			return nil, errors.New("centralstore: corrupt project kind")
 		}
-		if x.Kind == ProjectEntryOwned && (x.PeerKey != "" || len(x.Rules) == 0) {
+		if x.Kind == ProjectEntryOwned && (x.PeerKey != "" || x.NodeID != "" || len(x.Rules) == 0) {
 			return nil, errors.New("centralstore: corrupt owned project")
 		}
 		if x.Kind == ProjectEntryReference && (x.PeerKey == "" || len(x.Rules) != 0) {
@@ -769,7 +796,7 @@ func assertCatalogOrder(ctx context.Context, q *db.Queries) error {
 }
 
 func sameProjectShape(a, b ProjectEntry) bool {
-	return a.ID == b.ID && a.Kind == b.Kind && a.Slug == b.Slug && a.PeerKey == b.PeerKey && reflect.DeepEqual(a.Rules, b.Rules)
+	return a.ID == b.ID && a.Kind == b.Kind && a.Slug == b.Slug && a.PeerKey == b.PeerKey && a.NodeID == b.NodeID && reflect.DeepEqual(a.Rules, b.Rules)
 }
 
 // ReplaceProjectCatalog is a bootstrap ordering primitive, not an
@@ -852,7 +879,7 @@ func replaceCatalogInTx(ctx context.Context, q *db.Queries, in []ProjectEntrySpe
 				(want.Kind == ProjectEntryReference && old.Slug != want.Slug) {
 				return nil, false, errors.New("centralstore: project identity is immutable")
 			}
-			changedEntry[e.ID] = oldIndex[e.ID] != i || old.Slug != want.Slug || !reflect.DeepEqual(old.Rules, want.Rules)
+			changedEntry[e.ID] = oldIndex[e.ID] != i || old.Slug != want.Slug || old.NodeID != want.NodeID || !reflect.DeepEqual(old.Rules, want.Rules)
 			changedRules[e.ID] = !reflect.DeepEqual(old.Rules, want.Rules)
 			unchanged = unchanged && oldIndex[e.ID] == i && sameProjectShape(old, want)
 		} else {
@@ -911,7 +938,7 @@ func replaceCatalogInTx(ctx context.Context, q *db.Queries, in []ProjectEntrySpe
 	for i, e := range in {
 		entry := specEntry(e)
 		if e.ID == 0 {
-			id, er := q.InsertProjectEntry(ctx, db.InsertProjectEntryParams{SidebarOrder: int64(i), EntryKind: string(entry.Kind), Slug: entry.Slug, PeerKey: nullString(string(entry.PeerKey)), CreatedAtMs: int64(at), UpdatedAtMs: int64(at)})
+			id, er := q.InsertProjectEntry(ctx, db.InsertProjectEntryParams{SidebarOrder: int64(i), EntryKind: string(entry.Kind), Slug: entry.Slug, PeerKey: nullString(string(entry.PeerKey)), NodeID: nullString(entry.NodeID), CreatedAtMs: int64(at), UpdatedAtMs: int64(at)})
 			if er != nil {
 				return nil, false, er
 			}
@@ -920,7 +947,7 @@ func replaceCatalogInTx(ctx context.Context, q *db.Queries, in []ProjectEntrySpe
 			changedEntry[e.ID] = true
 			changedRules[e.ID] = e.Owned != nil
 		} else if changedEntry[e.ID] {
-			n, er := q.UpdateProjectEntry(ctx, db.UpdateProjectEntryParams{SidebarOrder: int64(i), Slug: entry.Slug, UpdatedAtMs: int64(at), ID: int64(e.ID)})
+			n, er := q.UpdateProjectEntry(ctx, db.UpdateProjectEntryParams{SidebarOrder: int64(i), Slug: entry.Slug, NodeID: nullString(entry.NodeID), UpdatedAtMs: int64(at), ID: int64(e.ID)})
 			if er != nil {
 				return nil, false, er
 			}
