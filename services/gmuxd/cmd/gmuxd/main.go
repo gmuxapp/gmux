@@ -298,6 +298,7 @@ Commands:
   stop               Stop the running daemon
   restart            Restart the daemon (stops then starts)
   status             Show daemon health, listeners, and sessions
+  state              Check, back up, or export the daemon state database
   auth               Show the auth URL and token
   remote             Set up or check remote access via Tailscale
   log-path           Print the daemon log file path
@@ -357,6 +358,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintf(stdout, "gmuxd: no running daemon found\n")
 		}
 		return 0
+	case "state":
+		return runState(args, stdout, stderr)
 	case "status":
 		if len(args) > 0 {
 			_, _ = fmt.Fprintf(stderr, "gmuxd status: unexpected arguments: %s\n", strings.Join(args, " "))
