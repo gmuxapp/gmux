@@ -46,7 +46,7 @@ func (productionRunnerControl) Terminate(ctx context.Context, endpoint string) e
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return discovery.KillSession(endpoint)
+	return discovery.KillSessionContext(ctx, endpoint)
 }
 
 // productionConversationResolver dispatches opaque refs to the adapter registry.
