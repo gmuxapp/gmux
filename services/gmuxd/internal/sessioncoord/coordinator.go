@@ -13,6 +13,11 @@ import (
 
 var (
 	ErrGenerationActive = errors.New("sessioncoord: a working generation is already installed")
+	// ErrRunnerTransportNoncompliant means Subscribe returned a stream after
+	// its lifetime context had already been cancelled. Such a transport can
+	// neither establish the subscribe-before-meta fence nor satisfy bounded
+	// bootstrap shutdown, so callers must withhold readiness.
+	ErrRunnerTransportNoncompliant = errors.New("sessioncoord: runner transport ignored cancellation")
 	// ErrInvalidSessionID marks a runner whose meta reported a session ID
 	// that fails paths.IsValidSessionID. The ID is used as a filesystem path
 	// segment, so this is security-relevant and enforced for every caller
@@ -274,6 +279,12 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 	stream, err := c.runners.Subscribe(streamCtx, req.Endpoint)
 	if err != nil {
 		return Runtime{}, err
+	}
+	if streamCtx.Err() != nil {
+		if stream != nil {
+			_ = stream.Close()
+		}
+		return Runtime{}, fmt.Errorf("%w: %v", ErrRunnerTransportNoncompliant, streamCtx.Err())
 	}
 	streamCleaned := false
 	defer func() {

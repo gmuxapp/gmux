@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -249,6 +250,7 @@ func (b *Bootstrap) Converge(ctx context.Context) ([]string, error) {
 	global, cancel := context.WithTimeout(ctx, globalBudget)
 	defer cancel()
 	var wg sync.WaitGroup
+	var transportViolatedDeadline atomic.Bool
 	for _, ep := range endpoints {
 		ep := ep
 		wg.Add(1)
@@ -256,7 +258,19 @@ func (b *Bootstrap) Converge(ctx context.Context) ([]string, error) {
 			defer wg.Done()
 			probe, stop := context.WithTimeout(global, runnerBudget)
 			defer stop()
-			if _, e := b.Coordinator.Register(probe, sessioncoord.RegisterRequest{Endpoint: ep}); e != nil && b.cfg.Errors != nil {
+			_, e := b.Coordinator.Register(probe, sessioncoord.RegisterRequest{Endpoint: ep})
+			// A transport that returns success after its budget expired did not
+			// honor cancellation. It may have committed a row, but it must not
+			// release startup readiness: doing so would make the global deadline
+			// advisory and allow an arbitrarily wedged transport to report ready.
+			if e == nil && probe.Err() != nil {
+				transportViolatedDeadline.Store(true)
+				e = fmt.Errorf("runner transport ignored deadline: %w", probe.Err())
+			}
+			if errors.Is(e, sessioncoord.ErrRunnerTransportNoncompliant) {
+				transportViolatedDeadline.Store(true)
+			}
+			if e != nil && b.cfg.Errors != nil {
 				class := "unreachable"
 				if errors.Is(e, sessioncoord.ErrInvalidSessionID) || errors.Is(e, sessioncoord.ErrResumeIdentityMismatch) || errors.Is(e, sessioncoord.ErrReplaceWithoutClaim) {
 					class = "permanent"
@@ -274,6 +288,9 @@ func (b *Bootstrap) Converge(ctx context.Context) ([]string, error) {
 		// FinishConvergence is a join point: no registration may still be
 		// approaching its commit after the sweep closes the window.
 		<-done
+	}
+	if transportViolatedDeadline.Load() {
+		return nil, errors.New("bootstrap: runner transport ignored cancellation; readiness withheld")
 	}
 	for {
 		_, err = b.Coordinator.FinishConvergence(ctx, b.cfg.Clock())
