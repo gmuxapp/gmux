@@ -21,6 +21,13 @@ import (
 
 const databaseName = "state.db"
 
+// DatabaseName is the central store filename within the state directory.
+// Admin/offline tooling must use this instead of duplicating the name.
+const DatabaseName = databaseName
+
+// DatabasePath returns the central store path in dir.
+func DatabasePath(dir string) string { return filepath.Join(dir, DatabaseName) }
+
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
@@ -39,6 +46,10 @@ type Store struct {
 	// isolates the composition from concurrent writers. Production
 	// construction leaves it nil.
 	betweenSnapshotQueries func()
+
+	// beforeBackupLink is a test-only seam for manufacturing the target-
+	// appears-after-Stat race. Production construction leaves it nil.
+	beforeBackupLink func()
 }
 
 // Open creates (when absent), configures, and migrates the database in dir.
@@ -56,7 +67,7 @@ func Open(ctx context.Context, dir string) (*Store, error) {
 		return nil, fmt.Errorf("centralstore: secure state directory: %w", err)
 	}
 
-	path := filepath.Join(dir, databaseName)
+	path := DatabasePath(dir)
 	// Pre-create the database file with owner-only permissions so the driver
 	// never creates it with a umask-derived mode (removing the
 	// created-then-chmod TOCTOU window), then tighten unconditionally so a

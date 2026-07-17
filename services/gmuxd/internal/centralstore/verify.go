@@ -35,7 +35,7 @@ func Verify(ctx context.Context, dir string) error {
 	if dir == "" {
 		return errors.New("centralstore: empty state directory")
 	}
-	path := filepath.Join(dir, databaseName)
+	path := DatabasePath(dir)
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: %s", ErrDatabaseMissing, path)
 	} else if err != nil {
