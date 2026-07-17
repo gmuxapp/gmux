@@ -78,31 +78,44 @@ func Healthy(sockPath string) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// HealthVersion checks health and returns the running daemon's version.
-// Returns ("", false) if the daemon is unreachable.
-func HealthVersion(sockPath string) (string, bool) {
+// DaemonIdentity distinguishes a newly spawned daemon from an incumbent,
+// including same-version restarts.
+type DaemonIdentity struct {
+	Version string
+	PID     int
+}
+
+// HealthIdentity checks health and returns the running daemon identity.
+func HealthIdentity(sockPath string) (DaemonIdentity, bool) {
 	client := Client(sockPath)
 	resp, err := client.Get("http://localhost/v1/health")
 	if err != nil {
-		return "", false
+		return DaemonIdentity{}, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", false
+		return DaemonIdentity{}, false
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", false
+		return DaemonIdentity{}, false
 	}
 	var health struct {
 		Data struct {
 			Version string `json:"version"`
+			PID     int    `json:"pid"`
 		} `json:"data"`
 	}
 	if json.Unmarshal(body, &health) != nil {
-		return "", true // healthy but can't parse version
+		return DaemonIdentity{}, true
 	}
-	return health.Data.Version, true
+	return DaemonIdentity{Version: health.Data.Version, PID: health.Data.PID}, true
+}
+
+// HealthVersion is the compatibility projection used by the pre-cutover path.
+func HealthVersion(sockPath string) (string, bool) {
+	id, ok := HealthIdentity(sockPath)
+	return id.Version, ok
 }
 
 // Shutdown asks a running gmuxd to shut down via its Unix socket,

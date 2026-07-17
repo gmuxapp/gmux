@@ -136,6 +136,10 @@ func TestHealthVersionReturnsVersion(t *testing.T) {
 	if ver != "0.9.0" {
 		t.Errorf("version = %q, want %q", ver, "0.9.0")
 	}
+	identity, ok := HealthIdentity(sockPath)
+	if !ok || identity.Version != "0.9.0" || identity.PID != 4242 {
+		t.Fatalf("identity = %+v, ok=%v", identity, ok)
+	}
 }
 
 func TestShutdownStopsDaemon(t *testing.T) {
@@ -204,7 +208,7 @@ func startTestDaemon(t *testing.T, version string) (sockPath string, cleanup fun
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"ok":   true,
-			"data": map[string]any{"version": version, "status": "ready"},
+			"data": map[string]any{"version": version, "pid": 4242, "status": "ready"},
 		})
 	})
 	srv := &http.Server{Handler: mux}

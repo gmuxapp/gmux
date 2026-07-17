@@ -912,6 +912,7 @@ func serve(stderr io.Writer) int {
 		data := map[string]any{
 			"service": "gmuxd",
 			"version": version,
+			"pid":     os.Getpid(),
 			"node_id": nodeID,
 			"status":  "ready",
 		}
