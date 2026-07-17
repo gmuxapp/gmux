@@ -187,6 +187,9 @@ type Coordinator struct {
 	convergeCandidates map[centralstore.SessionID]struct{}
 	convergeClosed     bool
 	converged          chan struct{}
+
+	closing bool
+	drains  sync.WaitGroup
 }
 
 // Option configures optional coordinator collaborators.
@@ -338,6 +341,10 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 
 	c.mu.Lock()
 
+	if c.closing {
+		c.mu.Unlock()
+		return Runtime{}, errors.New("sessioncoord: coordinator closed")
+	}
 	if err := ctx.Err(); err != nil {
 		c.mu.Unlock()
 		return Runtime{}, err
@@ -485,7 +492,11 @@ loop:
 		if replaced {
 			closeEntry(replacedEntry)
 		}
-		go c.drain(streamCtx, id, generation, events)
+		c.drains.Add(1)
+		go func() {
+			defer c.drains.Done()
+			c.drain(streamCtx, id, generation, events)
+		}()
 	} else {
 		streamCleaned = true
 		_ = stream.Close()
@@ -595,6 +606,24 @@ func mergeFacts(dst *centralstore.RunnerFacts, src centralstore.RunnerFacts) err
 // The drain loop does not hold the lifecycle mutex. Registry operations use
 // the registry's own lock. The generation check in registry.advance and
 // registry.remove prevents stale-generation writes from reaching the store.
+// Close prevents new installed streams, cancels every current stream, and
+// joins all drain workers. Cancellation never synthesizes runner death.
+func (c *Coordinator) Close() {
+	c.mu.Lock()
+	if c.closing {
+		c.mu.Unlock()
+		c.drains.Wait()
+		return
+	}
+	c.closing = true
+	entries := c.registry.removeAll()
+	for _, e := range entries {
+		closeEntry(e)
+	}
+	c.mu.Unlock()
+	c.drains.Wait()
+}
+
 func (c *Coordinator) drain(ctx context.Context, id centralstore.SessionID, generation uint64, events <-chan RunnerEvent) {
 	// exitObserved is an optimization only: it avoids a pointless synthesized
 	// apply after a stream that already carried exit facts (whose apply
@@ -616,6 +645,11 @@ func (c *Coordinator) drain(ctx context.Context, id centralstore.SessionID, gene
 			return
 		case ev, ok := <-events:
 			if !ok {
+				// Coordinator shutdown owns cancellation and must not manufacture
+				// runner death merely because it closed the local stream.
+				if ctx.Err() != nil {
+					return
+				}
 				// Mid-life stream drop. A generation's death must always land
 				// durably: if no exit fact was observed on this stream,
 				// synthesize one (same contract as the fast-dead registration

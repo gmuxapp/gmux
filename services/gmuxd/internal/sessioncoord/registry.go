@@ -135,6 +135,20 @@ func (r *Registry) remove(id centralstore.SessionID, generation uint64) (registr
 	return e, true
 }
 
+func (r *Registry) removeAll() []registryEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]registryEntry, 0, len(r.entries))
+	for id, e := range r.entries {
+		delete(r.entries, id)
+		if e.dead != nil {
+			close(e.dead)
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 // Snapshot returns a deep, copy-safe runtime-only view.
 func (r *Registry) Snapshot() []Runtime {
 	r.mu.RLock()

@@ -210,6 +210,11 @@ func newBootstrap(cfg BootstrapConfig) (*Bootstrap, error) {
 	return b, nil
 }
 
+// Close is the joined daemon boundary for coordinator-owned stream drains.
+// Lifetime-scoped trigger/composer workers must be canceled by their caller
+// before Close; after it returns no runner drain can touch Store.
+func (b *Bootstrap) Close() { b.Coordinator.Close() }
+
 type centralErrorAdapter struct{ sink sessioncoord.ErrorSink }
 
 func (a centralErrorAdapter) Error(ctx context.Context, err error) {

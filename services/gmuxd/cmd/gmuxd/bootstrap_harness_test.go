@@ -163,16 +163,25 @@ func TestHarnessRestartMidConvergenceSweepsOnlyMissingRunner(t *testing.T) {
 	if _, err := first.Converge(firstCtx); err != nil {
 		t.Fatal(err)
 	}
-	// Stop the daemon while both durable rows are still exit-less. Installed
-	// streams deliberately outlive request contexts, so releasing the daemon
-	// store is the down boundary; only then does the runner disappear.
+	// Fully join the first daemon while both runners still exist. Closing the
+	// endpoint only after this barrier proves no drain can observe its death.
 	stopFirst()
+	first.Close()
+	for _, id := range []centralstore.SessionID{"sess-harness-000", "sess-harness-001"} {
+		row, ok, err := s.Session(context.Background(), id)
+		if err != nil || !ok || row.ExitedAt != nil {
+			t.Fatalf("joined boundary row %s=%+v ok=%v err=%v", id, row, ok, err)
+		}
+	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, st := range fleet.streams {
-		_ = st.Close()
-	}
+	fleet.mu.Lock()
+	delete(fleet.metas, "runner-001")
+	missingStream := fleet.streams["runner-001"]
+	delete(fleet.streams, "runner-001")
+	fleet.mu.Unlock()
+	_ = missingStream.Close()
 
 	// Remove one endpoint only while no daemon owns the store. The second
 	// daemon then dies after BeginConvergence; its in-memory window must not
