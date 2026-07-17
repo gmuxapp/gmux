@@ -60,6 +60,21 @@ type bootstrapSpawner struct{}
 
 func (bootstrapSpawner) Spawn(context.Context, centralstore.Session) (string, error) { return "", nil }
 
+func TestBootstrapOwnershipVerifiesBeforeTakeover(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, centralstore.DatabaseName), []byte("not sqlite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	_, _, err := bootstrapOwnership(context.Background(), dir, func(context.Context) error { called = true; return nil })
+	if err == nil {
+		t.Fatal("corrupt database passed verification")
+	}
+	if called {
+		t.Fatal("incumbent takeover ran before verification failed")
+	}
+}
+
 func TestBootstrapOwnershipUsesPersistentLifetimeLock(t *testing.T) {
 	dir := t.TempDir()
 	store, lock, err := bootstrapOwnership(context.Background(), dir, nil)
@@ -118,6 +133,15 @@ func TestBootstrapConvergenceClassifiesCandidatesAndSeedsBus(t *testing.T) {
 	default:
 		t.Fatal("readiness barrier withheld after durable finish")
 	}
+	if err := b.StartPostConvergence(ctx, []string{"good"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-b.firstPair:
+	default:
+		t.Fatal("post-convergence returned before matched pair")
+	}
+
 	seed, events, unsubscribe, err := b.SubscribeOutcomes(ctx)
 	if err != nil {
 		t.Fatal(err)
