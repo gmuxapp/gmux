@@ -118,12 +118,13 @@ func TestBootstrapConvergenceClassifiesCandidatesAndSeedsBus(t *testing.T) {
 	default:
 		t.Fatal("readiness barrier withheld after durable finish")
 	}
-	seed, err := b.SeedOutcomes(ctx)
+	seed, events, unsubscribe, err := b.SubscribeOutcomes(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(seed) != 1 || seed[0].ID != "sess-bootstrap" || !seed[0].Alive || seed[0].Generation == 0 {
-		t.Fatalf("seed=%+v", seed)
+	defer unsubscribe()
+	if events == nil || len(seed) != 1 || seed[0].ID != "sess-bootstrap" || !seed[0].Alive || seed[0].Generation == 0 {
+		t.Fatalf("seed=%+v events=%v", seed, events)
 	}
 }
 

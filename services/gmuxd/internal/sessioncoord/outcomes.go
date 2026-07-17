@@ -123,18 +123,25 @@ func (b *outcomeBus) publish(o Outcome) {
 // subscription — initial state comes from a durable read plus a registry
 // snapshot, never from replay (design §2.1 startup seeding).
 func (c *Coordinator) SubscribeOutcomes() (<-chan Outcome, func()) {
-	sub := &outcomeSub{
-		signal: make(chan struct{}, 1),
-		done:   make(chan struct{}),
-		ch:     make(chan Outcome),
-	}
+	sub := newOutcomeSub()
 	c.outcomes.mu.Lock()
+	c.installOutcomeSubLocked(sub)
+	c.outcomes.mu.Unlock()
+	return startOutcomeSub(c, sub)
+}
+
+func newOutcomeSub() *outcomeSub {
+	return &outcomeSub{signal: make(chan struct{}, 1), done: make(chan struct{}), ch: make(chan Outcome), seen: make(map[centralstore.SessionID]centralstore.RowVersion)}
+}
+
+func (c *Coordinator) installOutcomeSubLocked(sub *outcomeSub) {
 	if c.outcomes.subs == nil {
 		c.outcomes.subs = make(map[*outcomeSub]struct{})
 	}
 	c.outcomes.subs[sub] = struct{}{}
-	c.outcomes.mu.Unlock()
+}
 
+func startOutcomeSub(c *Coordinator, sub *outcomeSub) (<-chan Outcome, func()) {
 	go func() {
 		defer close(sub.ch)
 		for {
@@ -171,6 +178,37 @@ func (c *Coordinator) SubscribeOutcomes() (<-chan Outcome, func()) {
 		})
 	}
 	return sub.ch, cancel
+}
+
+// SubscribeOutcomesSeed installs a subscription and takes its durable/runtime
+// seed under one lifecycle/publication fence. Commits cannot cross the seed,
+// and publishers for already-reflected commits are deduplicated by the
+// subscriber's row-version watermark. Consumers apply Seed first, then Events.
+func (c *Coordinator) SubscribeOutcomesSeed(ctx context.Context) (seed []Outcome, events <-chan Outcome, cancel func(), err error) {
+	sub := newOutcomeSub()
+	c.mu.Lock()
+	c.outcomes.mu.Lock()
+	c.installOutcomeSubLocked(sub)
+	rows, readErr := c.durable.ListSessions(ctx)
+	if readErr == nil {
+		seed = make([]Outcome, 0, len(rows))
+		for i := range rows {
+			row := rows[i]
+			alive, generation := c.livenessOf(row.ID)
+			sub.seen[row.ID] = row.Version
+			seed = append(seed, Outcome{Type: OutcomeUpserted, ID: row.ID, Session: &row, Alive: alive, Generation: generation})
+		}
+	}
+	c.outcomes.mu.Unlock()
+	c.mu.Unlock()
+	if readErr != nil {
+		c.outcomes.mu.Lock()
+		delete(c.outcomes.subs, sub)
+		c.outcomes.mu.Unlock()
+		return nil, nil, nil, readErr
+	}
+	events, cancel = startOutcomeSub(c, sub)
+	return seed, events, cancel, nil
 }
 
 // PublishActivity forwards one transient session-activity signal onto the

@@ -257,7 +257,11 @@ func (b *Bootstrap) Converge(ctx context.Context) ([]string, error) {
 			probe, stop := context.WithTimeout(global, runnerBudget)
 			defer stop()
 			if _, e := b.Coordinator.Register(probe, sessioncoord.RegisterRequest{Endpoint: ep}); e != nil && b.cfg.Errors != nil {
-				b.cfg.Errors.Error(probe, fmt.Errorf("bootstrap register %s: %w", ep, e))
+				class := "unreachable"
+				if errors.Is(e, sessioncoord.ErrInvalidSessionID) || errors.Is(e, sessioncoord.ErrResumeIdentityMismatch) || errors.Is(e, sessioncoord.ErrReplaceWithoutClaim) {
+					class = "permanent"
+				}
+				b.cfg.Errors.Error(context.WithoutCancel(ctx), fmt.Errorf("bootstrap register %s (%s): %w", ep, class, e))
 			}
 		}()
 	}
@@ -266,6 +270,10 @@ func (b *Bootstrap) Converge(ctx context.Context) ([]string, error) {
 	select {
 	case <-done:
 	case <-global.Done():
+		cancel()
+		// FinishConvergence is a join point: no registration may still be
+		// approaching its commit after the sweep closes the window.
+		<-done
 	}
 	for {
 		_, err = b.Coordinator.FinishConvergence(ctx, b.cfg.Clock())
@@ -286,31 +294,43 @@ func (b *Bootstrap) Converge(ctx context.Context) ([]string, error) {
 	}
 }
 
-// StartPostConvergence starts composition, publishes the initial matched
-// snapshot, then runs initial orphan/reconciliation passes. Callers create
-// listeners only after this returns.
+// StartPostConvergence repairs runtime state before publishing the first
+// subscriber-visible matched pair. Callers create listeners only after return.
 func (b *Bootstrap) StartPostConvergence(ctx context.Context, endpoints []string) error {
+	if _, err := b.Coordinator.ReapOrphans(ctx, endpoints); err != nil {
+		return fmt.Errorf("bootstrap initial reap: %w", err)
+	}
+	if err := b.Reconcile(ctx); err != nil {
+		return err
+	}
 	go b.Composer.Run(ctx)
 	b.Composer.MarkDirty(true, true)
 	select {
 	case <-b.firstPair:
+		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	_, _ = b.Coordinator.ReapOrphans(ctx, endpoints)
-	return b.Reconcile(ctx)
 }
 
 // Reconcile is the common startup/death/deletion/periodic trigger seam.
 func (b *Bootstrap) Reconcile(ctx context.Context) error {
-	_, changed, err := b.Coordinator.Reconcile(ctx)
-	if changed {
-		b.Composer.MarkDirty(true, false)
+	for {
+		_, changed, err := b.Coordinator.Reconcile(ctx)
+		if changed {
+			b.Composer.MarkDirty(true, false)
+		}
+		if !errors.Is(err, sessioncoord.ErrReconcileInFlight) {
+			return err
+		}
+		// An overlapping trigger is level-triggered, never lost. Wait for the
+		// current pass to release single-flight and perform the promised pass.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
-	if errors.Is(err, sessioncoord.ErrReconcileInFlight) {
-		return nil
-	}
-	return err
 }
 
 // Scan is the periodic discovery trigger: register candidates, then piggyback
@@ -321,39 +341,130 @@ func (b *Bootstrap) Scan(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	rb, _, _, _ := b.bounds()
+	rb, globalBudget, _, _ := b.bounds()
+	scanCtx, stop := context.WithTimeout(ctx, globalBudget)
+	defer stop()
+	workers := 8
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
 	for _, ep := range eps {
-		p, cancel := context.WithTimeout(ctx, rb)
-		_, e := b.Coordinator.Register(p, sessioncoord.RegisterRequest{Endpoint: ep})
-		cancel()
-		if e != nil && b.cfg.Errors != nil {
-			b.cfg.Errors.Error(ctx, e)
-		}
+		ep := ep
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-scanCtx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			p, cancel := context.WithTimeout(scanCtx, rb)
+			_, e := b.Coordinator.Register(p, sessioncoord.RegisterRequest{Endpoint: ep})
+			cancel()
+			if e != nil && b.cfg.Errors != nil {
+				b.cfg.Errors.Error(ctx, fmt.Errorf("bootstrap periodic register %s: %w", ep, e))
+			}
+		}()
 	}
-	_, _ = b.Coordinator.ReapOrphans(ctx, eps)
+	wg.Wait()
+	if _, err := b.Coordinator.ReapOrphans(ctx, eps); err != nil {
+		if b.cfg.Errors != nil {
+			b.cfg.Errors.Error(ctx, fmt.Errorf("bootstrap periodic reap: %w", err))
+		}
+		return err
+	}
 	return b.Reconcile(ctx)
 }
 
-// SeedOutcomes supplies the post-barrier startup snapshot required by bounded
-// notification/wait/activity consumers before they subscribe to outcomes.
-func (b *Bootstrap) SeedOutcomes(ctx context.Context) ([]sessioncoord.Outcome, error) {
-	rows, err := b.Store.ListSessions(ctx)
+// TriggerConfig is the inert production trigger graph. Tick is supplied by
+// the discovery scheduler; conversation deletions come from WatchSources.
+type TriggerConfig struct {
+	Tick                <-chan time.Time
+	ConversationDeleted <-chan struct{}
+	PeerSessionsChanged <-chan struct{}
+	PeerWorldChanged    <-chan struct{}
+}
+
+// StartTriggers wires every asynchronous post-convergence path. All workers
+// are joined before return; callers run this in the bootstrap lifetime group.
+func (b *Bootstrap) StartTriggers(ctx context.Context, cfg TriggerConfig) error {
+	_, outcomes, unsubscribe, err := b.SubscribeOutcomes(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	runtime := make(map[centralstore.SessionID]sessioncoord.Runtime)
-	for _, rt := range b.Registry.Snapshot() {
-		runtime[rt.SessionID] = rt
-	}
-	out := make([]sessioncoord.Outcome, 0, len(rows))
-	for i := range rows {
-		r := rows[i]
-		o := sessioncoord.Outcome{Type: sessioncoord.OutcomeUpserted, ID: r.ID, Session: &r}
-		if rt, ok := runtime[r.ID]; ok {
-			o.Alive = true
-			o.Generation = rt.Generation
+	defer unsubscribe()
+	var wg sync.WaitGroup
+	run := func(ch <-chan struct{}, fn func()) {
+		if ch == nil {
+			return
 		}
-		out = append(out, o)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case _, ok := <-ch:
+					if !ok {
+						return
+					}
+					fn()
+				}
+			}
+		}()
 	}
-	return out, nil
+	run(cfg.ConversationDeleted, func() {
+		if e := b.Reconcile(ctx); e != nil && b.cfg.Errors != nil {
+			b.cfg.Errors.Error(ctx, e)
+		}
+	})
+	run(cfg.PeerSessionsChanged, func() { b.Composer.MarkDirty(true, false) })
+	run(cfg.PeerWorldChanged, func() { b.Composer.MarkDirty(false, true) })
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case o, ok := <-outcomes:
+				if !ok {
+					return
+				}
+				if o.Type == sessioncoord.OutcomeUpserted && o.Session != nil && !o.Alive {
+					if e := b.Reconcile(ctx); e != nil && b.cfg.Errors != nil {
+						b.cfg.Errors.Error(ctx, e)
+					}
+				}
+			}
+		}
+	}()
+	if cfg.Tick != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case _, ok := <-cfg.Tick:
+					if !ok {
+						return
+					}
+					if e := b.Scan(ctx); e != nil && b.cfg.Errors != nil {
+						b.cfg.Errors.Error(ctx, e)
+					}
+				}
+			}
+		}()
+	}
+	<-ctx.Done()
+	wg.Wait()
+	return ctx.Err()
+}
+
+// SubscribeOutcomes atomically establishes the post-barrier consumer fence.
+func (b *Bootstrap) SubscribeOutcomes(ctx context.Context) ([]sessioncoord.Outcome, <-chan sessioncoord.Outcome, func(), error) {
+	return b.Coordinator.SubscribeOutcomesSeed(ctx)
 }
