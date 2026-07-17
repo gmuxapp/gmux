@@ -27,7 +27,7 @@ const (
 	modeWait                   // gmux wait <id>
 	modeEdit                   // gmux edit [file]
 	modeEditChild              // (internal) gmux __edit-child [file]
-	modeDaemon                 // gmux daemon <start|stop|restart|status|log-path>
+	modeDaemon                 // gmux daemon <start|stop|restart|status|log-path|state ...>
 	modeAuth                   // gmux auth
 	modeRemote                 // gmux remote
 	modeDumpEnv                // (internal) gmux __dump-env
@@ -78,7 +78,8 @@ type command struct {
 	editFile string // file path to open
 
 	// daemon
-	daemonSub string // start|stop|restart|status|log-path
+	daemonSub  string   // start|stop|restart|status|log-path|state
+	daemonArgs []string // full argument list forwarded to gmuxd verbatim
 
 	// codex hook (internal __codex-hook)
 	codexHookEvent string // the codex hook event name (SessionStart, ...)
@@ -447,11 +448,26 @@ var daemonSubs = map[string]bool{
 	"start": true, "stop": true, "restart": true, "status": true, "log-path": true,
 }
 
+var daemonStateSubs = map[string]bool{"check": true, "backup": true, "export": true}
+
 func parseDaemon(args []string) (*command, error) {
-	if len(args) != 1 || !daemonSubs[args[0]] {
-		return nil, errors.New("daemon requires one of: start, stop, restart, status, log-path")
+	if len(args) > 0 && args[0] == "state" {
+		// `gmux daemon state check|backup|export [...]` forwards to gmuxd
+		// verbatim (validation and help live server-side in the gmuxd
+		// binary, mirroring the other daemon verbs). Accept -h/--help and
+		// backup's target path as pass-through arguments.
+		if len(args) >= 2 && (args[1] == "-h" || args[1] == "--help") {
+			return &command{mode: modeDaemon, daemonSub: "state", daemonArgs: args}, nil
+		}
+		if len(args) < 2 || !daemonStateSubs[args[1]] {
+			return nil, errors.New("daemon state requires one of: check, backup <path>, export")
+		}
+		return &command{mode: modeDaemon, daemonSub: "state", daemonArgs: args}, nil
 	}
-	return &command{mode: modeDaemon, daemonSub: args[0]}, nil
+	if len(args) != 1 || !daemonSubs[args[0]] {
+		return nil, errors.New("daemon requires one of: start, stop, restart, status, log-path, state")
+	}
+	return &command{mode: modeDaemon, daemonSub: args[0], daemonArgs: args}, nil
 }
 
 // parseInternalRun handles the hidden `gmux __run [directives] -- <cmd>`
@@ -593,6 +609,8 @@ UI & pairing:
 
 Daemon:
   gmux daemon start|stop|restart|status|log-path
+  gmux daemon state check|backup|export
+                                    inspect, back up, or export daemon state
 
   gmux version · gmux help [verb]
 
