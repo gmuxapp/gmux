@@ -200,22 +200,24 @@ func parseMillis(v string) centralstore.UnixMillis {
 }
 
 type runnerMetaWire struct {
-	ID, Adapter, Kind string
-	Alive             bool              `json:"alive"`
-	CreatedAt         string            `json:"created_at"`
-	PID               int               `json:"pid"`
-	RunnerVersion     string            `json:"runner_version"`
-	BinaryHash        string            `json:"binary_hash"`
-	ConversationRef   string            `json:"conversation_file"`
-	CWD               string            `json:"cwd"`
-	WorkspaceRoot     string            `json:"workspace_root"`
-	Slug              string            `json:"slug"`
-	ShellTitle        string            `json:"shell_title"`
-	AdapterTitle      string            `json:"adapter_title"`
-	Subtitle          string            `json:"subtitle"`
-	Command           []string          `json:"command"`
-	Remotes           map[string]string `json:"remotes"`
-	Status            *struct {
+	ID              string            `json:"id"`
+	Adapter         string            `json:"adapter"`
+	Kind            string            `json:"kind"`
+	Alive           bool              `json:"alive"`
+	CreatedAt       string            `json:"created_at"`
+	PID             int               `json:"pid"`
+	RunnerVersion   string            `json:"runner_version"`
+	BinaryHash      string            `json:"binary_hash"`
+	ConversationRef string            `json:"conversation_file"`
+	CWD             string            `json:"cwd"`
+	WorkspaceRoot   string            `json:"workspace_root"`
+	Slug            string            `json:"slug"`
+	ShellTitle      string            `json:"shell_title"`
+	AdapterTitle    string            `json:"adapter_title"`
+	Subtitle        string            `json:"subtitle"`
+	Command         []string          `json:"command"`
+	Remotes         map[string]string `json:"remotes"`
+	Status          *struct {
 		Working bool `json:"working"`
 		Error   bool `json:"error"`
 	} `json:"status"`

@@ -159,18 +159,24 @@ func TestHarnessRestartMidConvergenceSweepsOnlyMissingRunner(t *testing.T) {
 	dir := t.TempDir()
 	fleet := newHarnessFleet(2)
 	s, first := openHarness(t, dir, fleet, nil)
-	if _, err := first.Converge(context.Background()); err != nil {
+	firstCtx, stopFirst := context.WithCancel(context.Background())
+	if _, err := first.Converge(firstCtx); err != nil {
+		t.Fatal(err)
+	}
+	// Stop the daemon while both durable rows are still exit-less. Installed
+	// streams deliberately outlive request contexts, so releasing the daemon
+	// store is the down boundary; only then does the runner disappear.
+	stopFirst()
+	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
 	for _, st := range fleet.streams {
 		_ = st.Close()
 	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
 
-	// The second daemon dies after BeginConvergence. Its in-memory window must
-	// not poison the third daemon's fresh convergence.
+	// Remove one endpoint only while no daemon owns the store. The second
+	// daemon then dies after BeginConvergence; its in-memory window must not
+	// poison the third daemon's fresh convergence.
 	fleet2 := newHarnessFleet(1)
 	s, second := openHarness(t, dir, fleet2, nil)
 	if err := second.Coordinator.BeginConvergence(context.Background()); err != nil {
