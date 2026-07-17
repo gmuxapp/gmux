@@ -83,6 +83,10 @@ func scanRunnerEvents(ctx context.Context, r io.Reader, out chan<- sessioncoord.
 	var typ string
 	for sc.Scan() {
 		line := sc.Text()
+		if line == "" {
+			typ = ""
+			continue
+		}
 		if strings.HasPrefix(line, "event:") {
 			typ = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 			continue
@@ -176,30 +180,52 @@ func (productionRunnerClient) Meta(ctx context.Context, endpoint string) (sessio
 	if err != nil {
 		return sessioncoord.RunnerMeta{}, err
 	}
-	var s store.Session
+	var s runnerMetaWire
 	if err = json.Unmarshal(body, &s); err != nil {
 		return sessioncoord.RunnerMeta{}, err
 	}
 	if s.Adapter == "" {
-		var l struct {
-			Kind string `json:"kind"`
-		}
-		_ = json.Unmarshal(body, &l)
-		s.Adapter = l.Kind
+		s.Adapter = s.Kind
 	}
 	if s.ID == "" || s.Adapter == "" {
 		return sessioncoord.RunnerMeta{}, fmt.Errorf("runner /meta: missing id or adapter")
 	}
 	reg := centralstore.RunnerRegistration{ID: centralstore.SessionID(s.ID), Adapter: s.Adapter, Alive: s.Alive, CreatedAt: parseMillis(s.CreatedAt), ObservedAt: centralstore.UnixMillis(time.Now().UnixMilli())}
-	reg.Facts = storeFacts(s)
-	return sessioncoord.RunnerMeta{Registration: reg, PID: s.Pid, RunnerVersion: s.RunnerVersion, BinaryHash: s.BinaryHash}, nil
+	reg.Facts = runnerMetaFacts(s)
+	return sessioncoord.RunnerMeta{Registration: reg, PID: s.PID, RunnerVersion: s.RunnerVersion, BinaryHash: s.BinaryHash}, nil
 }
 func parseMillis(v string) centralstore.UnixMillis {
 	t, _ := time.Parse(time.RFC3339, v)
 	return centralstore.UnixMillis(t.UnixMilli())
 }
-func storeFacts(s store.Session) centralstore.RunnerFacts {
-	f := centralstore.RunnerFacts{ConversationRef: &s.ConversationRef, CWD: &s.Cwd, WorkspaceRoot: &s.WorkspaceRoot, Slug: &s.Slug, ShellTitle: &s.ShellTitle, AdapterTitle: &s.AdapterTitle, Subtitle: &s.Subtitle, Command: &s.Command, Remotes: &s.Remotes}
+
+type runnerMetaWire struct {
+	ID, Adapter, Kind string
+	Alive             bool              `json:"alive"`
+	CreatedAt         string            `json:"created_at"`
+	PID               int               `json:"pid"`
+	RunnerVersion     string            `json:"runner_version"`
+	BinaryHash        string            `json:"binary_hash"`
+	ConversationRef   string            `json:"conversation_file"`
+	CWD               string            `json:"cwd"`
+	WorkspaceRoot     string            `json:"workspace_root"`
+	Slug              string            `json:"slug"`
+	ShellTitle        string            `json:"shell_title"`
+	AdapterTitle      string            `json:"adapter_title"`
+	Subtitle          string            `json:"subtitle"`
+	Command           []string          `json:"command"`
+	Remotes           map[string]string `json:"remotes"`
+	Status            *struct {
+		Working bool `json:"working"`
+		Error   bool `json:"error"`
+	} `json:"status"`
+	Unread       bool   `json:"unread"`
+	TerminalCols uint16 `json:"terminal_cols"`
+	TerminalRows uint16 `json:"terminal_rows"`
+}
+
+func runnerMetaFacts(s runnerMetaWire) centralstore.RunnerFacts {
+	f := centralstore.RunnerFacts{ConversationRef: &s.ConversationRef, CWD: &s.CWD, WorkspaceRoot: &s.WorkspaceRoot, Slug: &s.Slug, ShellTitle: &s.ShellTitle, AdapterTitle: &s.AdapterTitle, Subtitle: &s.Subtitle, Command: &s.Command, Remotes: &s.Remotes}
 	if s.Status != nil {
 		f.Working = &s.Status.Working
 		f.Error = &s.Status.Error
@@ -299,6 +325,14 @@ func (s *productionRunnerSpawner) CleanupSpawn(ctx context.Context, endpoint str
 		return nil
 	}
 	return result.Terminate(ctx)
+}
+
+// FinalizeSpawn transfers process ownership to the registered runtime and
+// drops launch closures without signalling the child.
+func (s *productionRunnerSpawner) FinalizeSpawn(endpoint string) {
+	s.mu.Lock()
+	delete(s.launched, endpoint)
+	s.mu.Unlock()
 }
 func launchRunnerProcess(ctx context.Context, req runnerLaunchRequest) (runnerLaunchResult, error) {
 	if err := ctx.Err(); err != nil {

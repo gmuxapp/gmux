@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,6 +10,17 @@ import (
 )
 
 const backgroundStartupBudget = 60 * time.Second
+
+// errBackgroundTakeoverRetry marks temporary ownership/lock contention.
+// Every other Retry error is terminal and is returned immediately.
+var errBackgroundTakeoverRetry = errors.New("background takeover retryable")
+
+func retryableBackgroundTakeover(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %v", errBackgroundTakeoverRetry, err)
+}
 
 type spawnedDaemon struct {
 	PID  int
@@ -67,8 +79,13 @@ func awaitSpawnedDaemon(ctx context.Context, s backgroundStartSeams) (int, error
 			return 0, ctx.Err()
 		case <-ticker.C:
 			if s.Retry != nil {
-				if err := s.Retry(ctx); err != nil && ctx.Err() != nil {
-					return 0, ctx.Err()
+				if err := s.Retry(ctx); err != nil {
+					if ctx.Err() != nil {
+						return 0, ctx.Err()
+					}
+					if !errors.Is(err, errBackgroundTakeoverRetry) {
+						return 0, fmt.Errorf("background start: takeover: %w", err)
+					}
 				}
 			}
 		}

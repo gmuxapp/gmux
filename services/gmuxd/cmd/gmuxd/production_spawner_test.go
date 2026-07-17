@@ -39,6 +39,19 @@ func TestProductionSpawnerLaunchPolicyAndCleanup(t *testing.T) {
 	if got.ResumeID != "sess-spawn" || got.CWD != "/fallback" || got.InitialCols != cols || got.Rows != rows || !reflect.DeepEqual(got.Command, []string{"pi", "--resume", "conv-ref"}) {
 		t.Fatalf("launch request=%+v", got)
 	}
+	spawner.FinalizeSpawn(ep)
+	if len(spawner.launched) != 0 || terminated {
+		t.Fatalf("successful finalization retained=%d terminated=%v", len(spawner.launched), terminated)
+	}
+	// Cleanup after ownership transfer is a no-op and must not kill the child.
+	if err := spawner.CleanupSpawn(context.Background(), ep); err != nil || terminated {
+		t.Fatalf("cleanup after finalize err=%v terminated=%v", err, terminated)
+	}
+	// Launch again to pin failed-registration cleanup termination.
+	ep, err = spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-spawn", Adapter: "pi", ConversationRef: "conv-ref", CWD: "/gone", TerminalCols: &cols, TerminalRows: &rows})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := spawner.CleanupSpawn(context.Background(), ep); err != nil || !terminated {
 		t.Fatalf("cleanup err=%v terminated=%v", err, terminated)
 	}

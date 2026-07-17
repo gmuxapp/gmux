@@ -59,6 +59,36 @@ func TestLocalPeerConnectDisconnectHooks(t *testing.T) {
 	}
 }
 
+func TestAuthorityNeutralActivityAndDisconnectProjection(t *testing.T) {
+	var activity string
+	dirty, pruned := 0, 0
+	m := NewProjectionManager([]config.PeerConfig{{Name: "box", Local: true}}, "self", nil, EventHooks{
+		SessionActivity:       func(id string) { activity = id },
+		PeerSessionsDirty:     func() { dirty++ },
+		LocalPeerDisconnected: func(string) { pruned++ },
+	})
+	m.managerSink().ReplacePeerSessions("box", []SessionProjection{{ID: "s@box", Peer: "box"}})
+	dirty = 0
+	m.managerSink().SessionActivity("s@box")
+	m.onStatus("box", StatusDisconnected)
+	if activity != "s@box" || len(m.SessionProjections()) != 0 || dirty != 1 || pruned != 1 {
+		t.Fatalf("activity=%q rows=%d dirty=%d pruned=%d", activity, len(m.SessionProjections()), dirty, pruned)
+	}
+}
+
+func TestAddPeerBeforeStartInstallsAndReplacesConfig(t *testing.T) {
+	m := NewProjectionManager(nil, "self", nil, EventHooks{})
+	m.AddPeer(config.PeerConfig{Name: "box", URL: "old", Token: "one"})
+	if p := m.GetPeer("box"); p == nil || p.Config.Token != "one" || m.baseCtx != nil {
+		t.Fatalf("pre-start peer=%v baseCtx=%v", p, m.baseCtx)
+	}
+	m.RemovePeer("box")
+	m.AddPeer(config.PeerConfig{Name: "box", URL: "new", Token: "two"})
+	if p := m.GetPeer("box"); p == nil || p.Config.URL != "new" || p.Config.Token != "two" {
+		t.Fatalf("replacement=%v", p)
+	}
+}
+
 func TestLegacyConstructorPreservesStoreBehavior(t *testing.T) {
 	st := store.New()
 	m := NewManager(nil, st, "self")

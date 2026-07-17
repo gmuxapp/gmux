@@ -6,10 +6,21 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 )
+
+func TestScanRunnerEventsResetsTypeAtFrameBoundary(t *testing.T) {
+	out := make(chan sessioncoord.RunnerEvent, 1)
+	scanRunnerEvents(context.Background(), strings.NewReader("event: status\n\ndata: {\"working\":true}\n"), out)
+	if len(out) != 0 {
+		t.Fatal("typeless frame inherited prior event type")
+	}
+}
 
 func unixRunner(t *testing.T, h http.Handler) string {
 	t.Helper()

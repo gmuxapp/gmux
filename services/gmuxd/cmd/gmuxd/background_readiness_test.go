@@ -48,12 +48,25 @@ func TestAwaitSpawnedDaemonChildExitDespiteIncumbent(t *testing.T) {
 		t.Fatal("child exit mistaken for incumbent health")
 	}
 }
+func TestAwaitSpawnedDaemonTerminalTakeoverErrorImmediate(t *testing.T) {
+	done := make(chan error)
+	start := time.Now()
+	_, err := awaitSpawnedDaemon(context.Background(), backgroundStartSeams{
+		Spawn:    func() (spawnedDaemon, error) { return spawnedDaemon{PID: 22, Done: done}, nil },
+		Identity: func() (unixipc.DaemonIdentity, bool) { return unixipc.DaemonIdentity{PID: 11}, true },
+		Retry:    func(context.Context) error { return errors.New("terminal") }, Poll: time.Millisecond,
+	})
+	if err == nil || time.Since(start) > time.Second {
+		t.Fatalf("terminal takeover err=%v elapsed=%v", err, time.Since(start))
+	}
+}
+
 func TestAwaitSpawnedDaemonBoundedLockRetry(t *testing.T) {
 	done := make(chan error)
 	var retries atomic.Int32
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
 	defer cancel()
-	_, err := awaitSpawnedDaemon(ctx, backgroundStartSeams{Spawn: func() (spawnedDaemon, error) { return spawnedDaemon{PID: 22, Done: done}, nil }, Identity: func() (unixipc.DaemonIdentity, bool) { return unixipc.DaemonIdentity{PID: 11}, true }, Retry: func(context.Context) error { retries.Add(1); return errors.New("locked") }, Poll: time.Millisecond})
+	_, err := awaitSpawnedDaemon(ctx, backgroundStartSeams{Spawn: func() (spawnedDaemon, error) { return spawnedDaemon{PID: 22, Done: done}, nil }, Identity: func() (unixipc.DaemonIdentity, bool) { return unixipc.DaemonIdentity{PID: 11}, true }, Retry: func(context.Context) error { retries.Add(1); return retryableBackgroundTakeover(errors.New("locked")) }, Poll: time.Millisecond})
 	if !errors.Is(err, context.DeadlineExceeded) || retries.Load() == 0 {
 		t.Fatalf("err=%v retries=%d", err, retries.Load())
 	}

@@ -21,6 +21,7 @@ type centralPeerAdapter struct {
 	manager   *peering.Manager
 	store     *centralstore.Store
 	dirty     func(bool, bool)
+	activity  func(centralstore.SessionID)
 	health    func() central.HealthInfo
 	tailscale *tsauth.Listener
 	now       func() centralstore.UnixMillis
@@ -82,6 +83,11 @@ func localPresence(rows []peering.SessionProjection, m *peering.Manager) map[cen
 func (a *centralPeerAdapter) hooks() peering.EventHooks {
 	return peering.EventHooks{
 		PeerWorldDirty: func() { a.dirty(false, true) }, PeerSessionsDirty: func() { a.dirty(true, false) },
+		SessionActivity: func(id string) {
+			if a.activity != nil {
+				a.activity(centralstore.SessionID(id))
+			}
+		},
 		LocalPeerConnected: func(_ string, rows []peering.SessionProjection) { a.assign(rows) },
 		LocalPeerDisconnected: func(name string) {
 			r, err := a.store.PruneLocalPeer(context.Background(), centralstore.PeerKey(name))

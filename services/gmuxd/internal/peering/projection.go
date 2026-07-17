@@ -74,8 +74,11 @@ type ProjectionSink interface {
 }
 
 type EventHooks struct {
-	PeerWorldDirty        func()
-	PeerSessionsDirty     func()
+	PeerWorldDirty    func()
+	PeerSessionsDirty func()
+	// SessionActivity forwards the lossy protocol activity pulse without
+	// requiring the legacy ProjectionSink authority.
+	SessionActivity       func(string)
 	LocalPeerConnected    func(string, []SessionProjection)
 	LocalPeerDisconnected func(string)
 }

@@ -86,6 +86,7 @@ func (f *fakeSpawner) CleanupSpawn(_ context.Context, endpoint string) error {
 	f.cleanups = append(f.cleanups, endpoint)
 	return nil
 }
+func (f *fakeSpawner) FinalizeSpawn(string) {}
 func (f *fakeSpawner) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

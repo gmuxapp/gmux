@@ -74,6 +74,9 @@ type RunnerSpawner interface {
 // failed registration request when necessary.
 type RunnerSpawnCleaner interface {
 	CleanupSpawn(ctx context.Context, endpoint string) error
+	// FinalizeSpawn releases the spawner's temporary ownership after a
+	// successful registration. It must not terminate the registered child.
+	FinalizeSpawn(endpoint string)
 }
 
 // LifecycleClaim identifies one held per-session lifecycle claim. It is an
@@ -299,6 +302,9 @@ func (c *Coordinator) resumeClaimed(ctx context.Context, id centralstore.Session
 			}
 		}
 		return Runtime{}, fmt.Errorf("sessioncoord: resume registration for %s: %w", id, err)
+	}
+	if cleaner, ok := c.spawner.(RunnerSpawnCleaner); ok {
+		cleaner.FinalizeSpawn(endpoint)
 	}
 	return runtime, nil
 }

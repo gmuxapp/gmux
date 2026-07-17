@@ -59,13 +59,14 @@ func (m *Manager) onStatus(name string, status Status) {
 	if m.hooks.PeerWorldDirty != nil {
 		m.hooks.PeerWorldDirty()
 	}
-	if m.IsLocalPeer(name) {
-		if status == StatusConnected && m.hooks.LocalPeerConnected != nil {
-			m.hooks.LocalPeerConnected(name, m.peerSessions(name))
-		}
-		if status == StatusDisconnected && m.hooks.LocalPeerDisconnected != nil {
-			m.hooks.LocalPeerDisconnected(name)
-		}
+	if m.IsLocalPeer(name) && status == StatusConnected && m.hooks.LocalPeerConnected != nil {
+		m.hooks.LocalPeerConnected(name, m.peerSessions(name))
+	}
+	// A transport disconnect invalidates the runtime snapshot before durable
+	// Local-peer placements are pruned. removePeerSessions performs that
+	// ordered transition and emits each dirty/prune callback once.
+	if status == StatusDisconnected && m.sink == nil {
+		m.removePeerSessions(name)
 	}
 }
 
@@ -93,11 +94,21 @@ func (m *Manager) IsLocalPeer(name string) bool {
 
 // Start begins background goroutines that connect to each peer.
 func (m *Manager) Start() {
+	m.mu.Lock()
+	if m.baseCtx != nil {
+		m.mu.Unlock()
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.baseCtx = ctx
 	m.cancel = cancel
-
+	peers := make(map[string]*managedPeer, len(m.peers))
 	for name, mp := range m.peers {
+		peers[name] = mp
+	}
+	m.mu.Unlock()
+
+	for name, mp := range peers {
 		m.startPeer(name, mp)
 	}
 }
@@ -177,19 +188,20 @@ func (m *Manager) AddPeer(cfg config.PeerConfig, opts ...PeerOption) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.baseCtx == nil {
-		return // manager not started
-	}
 	if _, exists := m.peers[cfg.Name]; exists {
 		return
 	}
 
-	allOpts := append(m.defaultOpts, opts...)
+	allOpts := append(append([]PeerOption(nil), m.defaultOpts...), opts...)
 	p := newPeer(cfg, m.managerSink(), m.onStatus, allOpts...)
 	p.isKnownOrigin = m.isKnownOrigin
 	mp := &managedPeer{peer: p}
 	m.peers[cfg.Name] = mp
-	m.startPeer(cfg.Name, mp)
+	// Pre-Start reconciliation installs configuration only. Start owns all
+	// connection goroutine creation.
+	if m.baseCtx != nil {
+		m.startPeer(cfg.Name, mp)
+	}
 }
 
 // RemovePeer stops a peer connection, waits for its goroutine to finish,
@@ -214,6 +226,9 @@ func (m *Manager) RemovePeer(name string) {
 		<-mp.done
 	}
 	m.removePeerSessions(name)
+	if wasLocal && m.hooks.LocalPeerDisconnected != nil {
+		m.hooks.LocalPeerDisconnected(name)
+	}
 	if m.OnPeerRemoved != nil {
 		m.OnPeerRemoved(name, wasLocal)
 	}
@@ -348,18 +363,26 @@ func (s managerProjectionSink) SessionActivity(id string) {
 	if s.m.sink != nil {
 		s.m.sink.SessionActivity(id)
 	}
+	if s.m.hooks.SessionActivity != nil {
+		s.m.hooks.SessionActivity(id)
+	}
 }
 func (m *Manager) removePeerSessions(name string) {
 	m.mu.Lock()
+	_, hadProjection := m.sessions[name]
 	delete(m.sessions, name)
+	local := false
+	if mp := m.peers[name]; mp != nil {
+		local = mp.peer.Config.Local
+	}
 	m.mu.Unlock()
 	if m.sink != nil {
 		m.sink.RemovePeerSessions(name)
 	}
-	if m.hooks.PeerSessionsDirty != nil {
+	if hadProjection && m.hooks.PeerSessionsDirty != nil {
 		m.hooks.PeerSessionsDirty()
 	}
-	if m.hooks.LocalPeerDisconnected != nil {
+	if local && m.hooks.LocalPeerDisconnected != nil {
 		m.hooks.LocalPeerDisconnected(name)
 	}
 }
