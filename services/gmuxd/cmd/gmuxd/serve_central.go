@@ -287,6 +287,7 @@ func serveCentral(stderr io.Writer) int {
 				writeError(w, http.StatusBadRequest, "validation_error", err.Error())
 				return
 			}
+			log.Printf("gmuxd: projects-replace-pending")
 			if _, err := boot.Coordinator.ReplaceCatalog(r.Context(), projectSpecsFromState(incoming)); err != nil {
 				log.Printf("projects replace: %v", err)
 				writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
@@ -413,6 +414,7 @@ func serveCentral(stderr io.Writer) int {
 				writeError(w, http.StatusBadGateway, "unreachable", err.Error())
 				return
 			}
+			log.Printf("gmuxd: peer-upsert-pending")
 			rec, outcome, result, err := storeHandle.UpsertManualPeer(r.Context(), centralstore.ManualPeerSpec{Name: name, URL: req.URL, Token: req.Token, NodeID: nodeID}, centralstore.UnixMillis(time.Now().UnixMilli()))
 			if err != nil {
 				writeError(w, http.StatusBadRequest, "bad_request", err.Error())

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/statetool"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 	"nhooyr.io/websocket"
 )
@@ -46,6 +47,8 @@ func TestProductionContainerE2E(t *testing.T) {
 	t.Run("death_before_apply_crash_repair", func(t *testing.T) { scenarioDeathBarrier(t, bin) })
 	t.Run("verify_failure_preserves_incumbent", func(t *testing.T) { scenarioVerifyFailure(t, bin) })
 	t.Run("ownership_contention", func(t *testing.T) { scenarioContention(t, bin) })
+	t.Run("restart_survival", func(t *testing.T) { scenarioRestartSurvival(t, bin) })
+	t.Run("route_crash_consistency", func(t *testing.T) { scenarioRouteCrashConsistency(t, bin) })
 	t.Run("backup_export_and_restart_stress", func(t *testing.T) { scenarioAdminStress(t, bin) })
 }
 
@@ -244,17 +247,26 @@ func waitFor(t *testing.T, why string, fn func() bool) {
 }
 func post(t *testing.T, e *prodEnv, path string, body string) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodPost, "http://localhost"+path, strings.NewReader(body))
+	request(t, e, http.MethodPost, path, body)
+}
+func request(t *testing.T, e *prodEnv, method, path, body string) []byte {
+	t.Helper()
+	req, _ := http.NewRequest(method, "http://localhost"+path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := unixipc.Client(e.socket()).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode/100 != 2 {
-		b, _ := io.ReadAll(resp.Body)
-		t.Fatalf("POST %s: %d %s", path, resp.StatusCode, b)
+		t.Fatalf("%s %s: %d %s", method, path, resp.StatusCode, b)
 	}
+	return b
+}
+func waitVerdict(t *testing.T, e *prodEnv, id string) string {
+	t.Helper()
+	return string(request(t, e, http.MethodPost, "/v1/sessions/"+id+"/wait?timeout=1", ""))
 }
 
 func scenarioUnreadRestart(t *testing.T, bin string) {
@@ -287,7 +299,7 @@ func scenarioUnreadRestart(t *testing.T, bin string) {
 func selectDeadSession(t *testing.T, e *prodEnv, id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	conn, _, err := websocket.Dial(ctx, "ws://localhost/v1/ws", &websocket.DialOptions{HTTPClient: unixipc.Client(e.socket())})
+	conn, _, err := websocket.Dial(ctx, "ws://localhost/v1/presence", &websocket.DialOptions{HTTPClient: unixipc.Client(e.socket())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +431,12 @@ func scenarioDeathBarrier(t *testing.T, bin string) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("exit event was not delivered")
 	}
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the daemon to actually attempt the durable apply and fail
+	// with a busy-timeout error. This proves gmuxd parsed the exit and
+	// reached the write path (not just flushed bytes to the socket).
+	waitFor(t, "daemon observation-failed log", func() bool {
+		return strings.Contains(d.log.String(), "observation failed")
+	})
 	roBefore, err := centralstore.OpenReadOnly(context.Background(), e.stateDir())
 	if err != nil {
 		t.Fatal(err)
@@ -537,6 +554,242 @@ func scenarioContention(t *testing.T, bin string) {
 		t.Fatal("incumbent exited")
 	}
 }
+func scenarioRestartSurvival(t *testing.T, bin string) {
+	e := newProdEnv(t)
+	a := startProdRunner(t, e, "sess-place-a", false)
+	defer a.close()
+	b := startProdRunner(t, e, "sess-place-b", false)
+	defer b.close()
+	c := startProdRunner(t, e, "sess-dismiss", false)
+	defer c.close()
+	sweep := startProdRunner(t, e, "sess-sweep-status", false)
+	defer sweep.close()
+	d := startDaemon(t, bin, e)
+	waitFor(t, "restart fixtures live", func() bool { return len(sessions(t, e)) == 4 })
+	catalog := fmt.Sprintf(`{"version":4,"items":[{"slug":"persist","match":[{"path":%q}],"sessions":[%q,%q,%q,%q]}]}`, e.home, a.id, b.id, c.id, sweep.id)
+	request(t, e, http.MethodPut, "/v1/projects", catalog)
+	waitFor(t, "placements applied", func() bool { return session(t, e, b.id)["project_slug"] == "persist" })
+	exportNow := func() statetool.ExportDoc {
+		cmd := exec.Command(bin, "state", "export")
+		cmd.Env = e.vars()
+		raw, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var x statetool.ExportDoc
+		if err = json.Unmarshal(raw, &x); err != nil {
+			t.Fatal(err)
+		}
+		return x
+	}
+	b.exit(true)
+	c.exit(false)
+	waitFor(t, "dead persistence fixtures", func() bool { return session(t, e, b.id)["alive"] == false && session(t, e, c.id)["alive"] == false })
+	deadVerdict := waitVerdict(t, e, b.id)
+	b.close()
+	post(t, e, "/v1/sessions/"+c.id+"/dismiss", "")
+	waitFor(t, "dismiss hidden", func() bool {
+		for _, s := range sessions(t, e) {
+			if s["id"] == c.id {
+				return false
+			}
+		}
+		return true
+	})
+	c.close()
+	// Capture the complete placement sequence before restart.
+	before := exportNow()
+	beforePlacements := make(map[string]statetool.ExportPlacement)
+	for _, p := range before.Placements {
+		beforePlacements[p.LocalSessionID] = p
+	}
+	if _, ok := beforePlacements[a.id]; !ok {
+		t.Fatal("survivor unplaced before restart")
+	}
+	if _, ok := beforePlacements[b.id]; !ok {
+		t.Fatal("dead session unplaced before restart")
+	}
+	if _, ok := beforePlacements[sweep.id]; !ok {
+		t.Fatal("sweep session unplaced before restart")
+	}
+	stopDaemon(t, d, e)
+	sweep.close() // no exit event: startup sweep must preserve its reported status.
+	d = startDaemon(t, bin, e)
+	defer d.kill()
+	waitFor(t, "exit-less sweep", func() bool { return session(t, e, sweep.id)["alive"] == false })
+	if got := session(t, e, a.id); got["alive"] != true || got["project_slug"] != "persist" {
+		t.Fatalf("survivor registration lost project: %v", got)
+	}
+	// Compare the entire surviving placement sequence: parents/scopes and dense
+	// positions must be identical before/after (accounting for C's dismissal).
+	after := exportNow()
+	afterPlacements := make(map[string]statetool.ExportPlacement)
+	for _, p := range after.Placements {
+		afterPlacements[p.LocalSessionID] = p
+	}
+	// A, B, sweep must survive with identical placements.
+	for _, id := range []string{a.id, b.id, sweep.id} {
+		beforeP, bOk := beforePlacements[id]
+		afterP, aOk := afterPlacements[id]
+		if !bOk || !aOk || afterP != beforeP {
+			t.Fatalf("placement churn for %s: before=%+v after=%+v bOk=%v aOk=%v", id, beforeP, afterP, bOk, aOk)
+		}
+	}
+	// C (dismissed) must not appear in placements after restart.
+	if _, ok := afterPlacements[c.id]; ok {
+		t.Fatal("dismissed session placement survived restart")
+	}
+	// Verify dense positions are contiguous for surviving placements.
+	survivingPositions := make(map[int64]string)
+	for _, p := range after.Placements {
+		if p.LocalSessionID != "" {
+			survivingPositions[p.Position] = p.LocalSessionID
+		}
+	}
+	expectedCount := 3 // A, B, sweep
+	if len(survivingPositions) != expectedCount {
+		t.Fatalf("expected %d surviving placements, got %d: %v", expectedCount, len(survivingPositions), survivingPositions)
+	}
+	if got := session(t, e, b.id); got["exit_code"] != float64(0) || got["status"] == nil || got["project_slug"] != "persist" {
+		t.Fatalf("dead turn/exit/placement lost: %v", got)
+	}
+	for _, s := range sessions(t, e) {
+		if s["id"] == c.id {
+			t.Fatalf("dismissed session resurfaced: %v", s)
+		}
+	}
+	if got := waitVerdict(t, e, b.id); got != deadVerdict {
+		t.Fatalf("dead wait verdict changed across restart: before=%s after=%s", deadVerdict, got)
+	}
+	ro, err := centralstore.OpenReadOnly(context.Background(), e.stateDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	hidden, _, _ := ro.Session(context.Background(), centralstore.SessionID(c.id))
+	if hidden.DismissedAt == nil {
+		t.Fatalf("dismissal not durable: %+v", hidden)
+	}
+	swept, _, _ := ro.Session(context.Background(), centralstore.SessionID(sweep.id))
+	if swept.ExitedAt == nil || !swept.StatusReported || swept.Working {
+		t.Fatalf("sweep corrupted status: %+v", swept)
+	}
+}
+
+func scenarioRouteCrashConsistency(t *testing.T, bin string) {
+	e := newProdEnv(t)
+	runners := []*prodRunner{startProdRunner(t, e, "sess-atomic-a", false), startProdRunner(t, e, "sess-atomic-b", false), startProdRunner(t, e, "sess-atomic-c", false)}
+	for _, r := range runners {
+		defer r.close()
+	}
+	d := startDaemon(t, bin, e)
+	old := fmt.Sprintf(`{"version":4,"items":[{"slug":"old","match":[{"path":%q}],"sessions":[%q,%q,%q]}]}`, e.home, runners[0].id, runners[1].id, runners[2].id)
+	newState := fmt.Sprintf(`{"version":4,"items":[{"slug":"new","match":[{"path":%q}],"sessions":[%q,%q,%q]}]}`, e.home, runners[2].id, runners[1].id, runners[0].id)
+	request(t, e, http.MethodPut, "/v1/projects", old)
+	// Race a real whole-catalog/multi-placement route commit against SIGKILL.
+	// Wait for the daemon's operational log marker that proves it passed
+	// request validation/decomposition and is about to enter the coordinator
+	// mutation (not a fixed sleep that could fire before handler dispatch).
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req, _ := http.NewRequest(http.MethodPut, "http://localhost/v1/projects", strings.NewReader(newState))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := unixipc.Client(e.socket()).Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}()
+	waitFor(t, "projects-replace-pending log", func() bool {
+		return strings.Contains(d.log.String(), "projects-replace-pending")
+	})
+	d.kill()
+	<-done
+	d = startDaemon(t, bin, e)
+	export := func() statetool.ExportDoc {
+		cmd := exec.Command(bin, "state", "export")
+		cmd.Env = e.vars()
+		raw, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var x statetool.ExportDoc
+		if err = json.Unmarshal(raw, &x); err != nil {
+			t.Fatal(err)
+		}
+		return x
+	}
+	x := export()
+	if len(x.Projects) != 1 || len(x.Placements) != 3 {
+		t.Fatalf("partial catalog transaction: %+v", x)
+	}
+	slug := x.Projects[0].Slug
+	if slug != "old" && slug != "new" {
+		t.Fatalf("neither old nor new catalog: %+v", x.Projects)
+	}
+	positions := map[int64]bool{}
+	for _, p := range x.Placements {
+		if p.ProjectSlug != slug {
+			t.Fatalf("mixed project scopes: %+v", x.Placements)
+		}
+		positions[p.Position] = true
+	}
+	if len(positions) != 3 {
+		t.Fatalf("partial reorder positions: %+v", x.Placements)
+	}
+	// Race the real manual-peer transaction. Its row must be absent or complete.
+	// Wait for the daemon's operational log marker that proves the health probe
+	// completed and the handler is about to enter UpsertManualPeer.
+	peer := http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/health" {
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": map[string]any{"service": "gmuxd", "node_id": "atomic-node", "hostname": "atomic-peer"}})
+			return
+		}
+		http.NotFound(w, r)
+	})}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go peer.Serve(ln)
+	defer peer.Close()
+	secret := "atomic-token-secret"
+	peerBody := fmt.Sprintf(`{"URL":%q,"Token":%q}`, "http://user:atomic-url-secret@"+ln.Addr().String(), secret)
+	peerDone := make(chan struct{})
+	go func() {
+		defer close(peerDone)
+		req, _ := http.NewRequest(http.MethodPost, "http://localhost/v1/peers", strings.NewReader(peerBody))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := unixipc.Client(e.socket()).Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}()
+	waitFor(t, "peer-upsert-pending log", func() bool {
+		return strings.Contains(d.log.String(), "peer-upsert-pending")
+	})
+	d.kill()
+	<-peerDone
+	d = startDaemon(t, bin, e)
+	defer d.kill()
+	x = export()
+	if len(x.Peers) > 1 {
+		t.Fatalf("partial peer rows: %+v", x.Peers)
+	}
+	if len(x.Peers) == 1 {
+		p := x.Peers[0]
+		if p.Name != "atomic-peer" || p.URL == "" || !p.TokenPresent || p.CreatedAtMs == 0 || p.UpdatedAtMs == 0 {
+			t.Fatalf("incomplete peer row: %+v", p)
+		}
+	}
+	raw, _ := json.Marshal(x)
+	for _, s := range []string{secret, "atomic-url-secret"} {
+		if bytes.Contains(raw, []byte(s)) {
+			t.Fatalf("secret leaked from export: %s", raw)
+		}
+	}
+}
+
 func scenarioAdminStress(t *testing.T, bin string) {
 	e := newProdEnv(t)
 	var d *daemonProc
