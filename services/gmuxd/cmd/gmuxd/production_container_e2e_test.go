@@ -24,6 +24,7 @@ import (
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
+	"nhooyr.io/websocket"
 )
 
 func TestProductionContainerE2E(t *testing.T) {
@@ -144,11 +145,12 @@ func stopDaemon(t *testing.T, d *daemonProc, e *prodEnv) {
 // runner is the real HTTP-over-Unix runner transport, including a persistent
 // SSE connection and controllable exit. Closing it models process death.
 type prodRunner struct {
-	ln       net.Listener
-	srv      *http.Server
-	events   chan string
-	id, sock string
-	once     sync.Once
+	ln        net.Listener
+	srv       *http.Server
+	events    chan string
+	delivered chan struct{}
+	id, sock  string
+	once      sync.Once
 }
 
 func startProdRunner(t *testing.T, e *prodEnv, id string, unread bool) *prodRunner {
@@ -162,7 +164,7 @@ func startProdRunner(t *testing.T, e *prodEnv, id string, unread bool) *prodRunn
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &prodRunner{ln: ln, events: make(chan string, 16), id: id, sock: sock}
+	r := &prodRunner{ln: ln, events: make(chan string, 16), delivered: make(chan struct{}, 16), id: id, sock: sock}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /meta", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "adapter": "shell", "alive": true, "created_at": time.Unix(1, 0).UTC().Format(time.RFC3339), "pid": os.Getpid(), "runner_version": "e2e", "binary_hash": "e2e", "cwd": e.home, "command": []string{"/bin/sh"}, "remotes": map[string]string{"credential_fixture": "alice:remote-secret@example.invalid/repo.git"}, "status": map[string]any{"working": false}, "unread": unread, "terminal_cols": 93, "terminal_rows": 31})
@@ -176,6 +178,7 @@ func startProdRunner(t *testing.T, e *prodEnv, id string, unread bool) *prodRunn
 			case s := <-r.events:
 				fmt.Fprint(w, s)
 				w.(http.Flusher).Flush()
+				r.delivered <- struct{}{}
 			case <-q.Context().Done():
 				return
 			}
@@ -261,8 +264,8 @@ func scenarioUnreadRestart(t *testing.T, bin string) {
 	d := startDaemon(t, bin, e)
 	r.exit(true)
 	waitFor(t, "dead unread", func() bool { s := session(t, e, r.id); return s["alive"] == false && s["unread"] == true })
-	post(t, e, "/v1/sessions/"+r.id+"/read", "")
-	waitFor(t, "read ack", func() bool { return session(t, e, r.id)["unread"] == false })
+	selectDeadSession(t, e, r.id)
+	waitFor(t, "presence read ack", func() bool { return session(t, e, r.id)["unread"] == false })
 	stopDaemon(t, d, e)
 	r.close()
 	d = startDaemon(t, bin, e)
@@ -281,6 +284,23 @@ func scenarioUnreadRestart(t *testing.T, bin string) {
 		t.Fatalf("sqlite row=%+v ok=%v err=%v", row, ok, err)
 	}
 }
+func selectDeadSession(t *testing.T, e *prodEnv, id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws://localhost/v1/ws", &websocket.DialOptions{HTTPClient: unixipc.Client(e.socket())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	if err = conn.Write(ctx, websocket.MessageText, []byte(`{"type":"client-hello","device_type":"desktop"}`)); err != nil {
+		t.Fatal(err)
+	}
+	msg := fmt.Sprintf(`{"type":"client-state","visibility":"visible","focused":true,"selected_session_id":%q,"last_interaction":1}`, id)
+	if err = conn.Write(ctx, websocket.MessageText, []byte(msg)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func assertInitialSSE(t *testing.T, e *prodEnv, id string, unread bool) {
 	req, _ := http.NewRequest(http.MethodGet, "http://localhost/v1/events", nil)
 	ctx, c := context.WithTimeout(context.Background(), 3*time.Second)
@@ -291,19 +311,57 @@ func assertInitialSSE(t *testing.T, e *prodEnv, id string, unread bool) {
 	}
 	defer resp.Body.Close()
 	sc := bufio.NewScanner(resp.Body)
-	names := []string{}
+	name, data := readSSE(t, sc)
+	if name != "snapshot.sessions" {
+		t.Fatalf("first SSE=%q", name)
+	}
+	var sf struct {
+		Sessions []struct {
+			ID     string `json:"id"`
+			Unread bool   `json:"unread"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(data, &sf); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, s := range sf.Sessions {
+		if s.ID == id {
+			found = true
+			if s.Unread != unread {
+				t.Fatalf("SSE unread=%v want %v", s.Unread, unread)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("first sessions frame omitted %s: %s", id, data)
+	}
+	name, data = readSSE(t, sc)
+	if name != "snapshot.world" {
+		t.Fatalf("second SSE=%q", name)
+	}
+	var world map[string]json.RawMessage
+	if err := json.Unmarshal(data, &world); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := world["projects"]; !ok {
+		t.Fatalf("unmatched world frame: %s", data)
+	}
+}
+func readSSE(t *testing.T, sc *bufio.Scanner) (string, []byte) {
+	t.Helper()
+	var name string
 	for sc.Scan() {
 		line := sc.Text()
 		if strings.HasPrefix(line, "event:") {
-			names = append(names, strings.TrimSpace(strings.TrimPrefix(line, "event:")))
+			name = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		}
-		if len(names) == 2 {
-			break
+		if strings.HasPrefix(line, "data:") {
+			return name, []byte(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
 	}
-	if len(names) != 2 || names[0] != "snapshot.sessions" || names[1] != "snapshot.world" {
-		t.Fatalf("initial SSE=%v", names)
-	}
+	t.Fatalf("SSE ended: %v", sc.Err())
+	return "", nil
 }
 func scenarioDaemonDown(t *testing.T, bin string) {
 	e := newProdEnv(t)
@@ -321,21 +379,60 @@ func scenarioDaemonDown(t *testing.T, bin string) {
 	if session(t, e, a.id)["alive"] != true {
 		t.Fatal("surviving runner stamped dead")
 	}
+	ro, err := centralstore.OpenReadOnly(context.Background(), e.stateDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	missing, _, err := ro.Session(context.Background(), centralstore.SessionID(b.id))
+	if err != nil || missing.ExitedAt == nil {
+		t.Fatalf("missing row not swept: %+v %v", missing, err)
+	}
+	survivor, _, err := ro.Session(context.Background(), centralstore.SessionID(a.id))
+	if err != nil || survivor.ExitedAt != nil {
+		t.Fatalf("survivor incorrectly swept: %+v %v", survivor, err)
+	}
 }
 func scenarioDeathBarrier(t *testing.T, bin string) {
 	e := newProdEnv(t)
 	r := startProdRunner(t, e, "sess-barrier", true)
-	barrier := filepath.Join(e.root, "barrier")
-	old := os.Getenv("GMUX_E2E_BEFORE_EXIT_APPLY")
-	_ = os.Setenv("GMUX_E2E_BEFORE_EXIT_APPLY", barrier)
 	d := startDaemon(t, bin, e)
-	_ = os.Setenv("GMUX_E2E_BEFORE_EXIT_APPLY", old)
 	if s := session(t, e, r.id); s["terminal_cols"] != float64(93) || s["terminal_rows"] != float64(31) {
 		t.Fatalf("initial dimensions=%v", s)
 	}
-	r.crashClose()
-	waitFor(t, "pre-apply barrier", func() bool { _, err := os.Stat(barrier); return err == nil })
+	// Hold SQLite's external writer lock so the real observation pipeline
+	// receives the exit but cannot durably apply it before the crash.
+	lockDB, err := sql.Open("sqlite", centralstore.DatabasePath(e.stateDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := lockDB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec("UPDATE local_sessions SET row_version=row_version WHERE id=?", r.id); err != nil {
+		t.Fatal(err)
+	}
+	r.exit(true)
+	select {
+	case <-r.delivered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("exit event was not delivered")
+	}
+	time.Sleep(100 * time.Millisecond)
+	roBefore, err := centralstore.OpenReadOnly(context.Background(), e.stateDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := roBefore.Session(context.Background(), centralstore.SessionID(r.id))
+	_ = roBefore.Close()
+	if err != nil || before.ExitedAt != nil {
+		t.Fatalf("apply was not blocked: %+v %v", before, err)
+	}
 	d.kill()
+	_ = tx.Rollback()
+	_ = lockDB.Close()
+	r.crashClose()
 	d = startDaemon(t, bin, e)
 	defer d.kill()
 	waitFor(t, "startup repair", func() bool { return session(t, e, r.id)["alive"] == false })
@@ -362,12 +459,34 @@ func scenarioVerifyFailure(t *testing.T, bin string) {
 	if !ok {
 		t.Fatal("incumbent unhealthy")
 	}
+	// A separate corrupt state DB shares the incumbent's private runtime/socket:
+	// if Verify were bypassed this replacement would attempt takeover.
+	badState := filepath.Join(e.root, "corrupt-state")
+	badDir := filepath.Join(badState, "gmux")
+	if err := os.MkdirAll(badDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(centralstore.DatabasePath(badDir), []byte("not sqlite"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	child := exec.Command(bin, "run")
-	child.Env = append(e.vars(), "GMUX_E2E_VERIFY_FAIL=1")
+	child.Env = append(e.vars(), "XDG_STATE_HOME="+badState)
 	var log bytes.Buffer
 	child.Stderr = &log
-	if err := child.Run(); err == nil {
-		t.Fatal("verify-failed replacement succeeded")
+	child.Stdout = &log
+	done := make(chan error, 1)
+	go func() { done <- child.Run() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("corrupt replacement succeeded")
+		}
+	case <-time.After(8 * time.Second):
+		_ = child.Process.Kill()
+		t.Fatal("verify failure was not bounded")
+	}
+	if !strings.Contains(strings.ToLower(log.String()), "verify") {
+		t.Fatalf("replacement did not fail Verify: %s", log.String())
 	}
 	after, ok := unixipc.HealthIdentity(e.socket())
 	if !ok || after.PID != before.PID {
@@ -407,8 +526,12 @@ func scenarioContention(t *testing.T, bin string) {
 		_ = loser.Process.Kill()
 		t.Fatal("lock loser did not exit boundedly")
 	}
-	if !unixipc.Healthy(e.socket()) {
-		t.Fatalf("incumbent lost contention: %s", out.String())
+	if !strings.Contains(out.String(), "acquiring gmuxd.lock") {
+		t.Fatalf("loser did not fail on flock contention: %s", out.String())
+	}
+	after, ok := unixipc.HealthIdentity(e.socket())
+	if !ok || after.PID != d.cmd.Process.Pid {
+		t.Fatalf("incumbent changed after contention: %+v log=%s", after, out.String())
 	}
 	if d.cmd.ProcessState != nil {
 		t.Fatal("incumbent exited")
@@ -428,6 +551,7 @@ func scenarioAdminStress(t *testing.T, bin string) {
 		r.exit(true)
 		waitFor(t, "stress runner dead", func() bool { return session(t, e, r.id)["alive"] == false })
 		post(t, e, "/v1/sessions/"+r.id+"/read", "")
+		waitFor(t, "stress read durable", func() bool { return session(t, e, r.id)["unread"] == false })
 		r.close()
 		if i%2 == 0 {
 			d.kill()
@@ -437,6 +561,15 @@ func scenarioAdminStress(t *testing.T, bin string) {
 	}
 	d = startDaemon(t, bin, e)
 	defer d.kill()
+	all := sessions(t, e)
+	if len(all) != cycles {
+		t.Fatalf("final rows=%d want %d", len(all), cycles)
+	}
+	for _, s := range all {
+		if s["alive"] != false || s["unread"] != false || s["exit_code"] != float64(0) {
+			t.Fatalf("bad final stress row: %v", s)
+		}
+	}
 	backup := filepath.Join(e.root, "backup.sqlite")
 	cmd := exec.Command(bin, "state", "backup", backup)
 	cmd.Env = e.vars()
@@ -489,7 +622,12 @@ func scenarioAdminStress(t *testing.T, bin string) {
 	if d.cmd.Process == nil {
 		t.Fatal("daemon missing")
 	}
-	_ = syscall.Kill(d.cmd.Process.Pid, syscall.Signal(0))
-	entries, _ := os.ReadDir("/proc")
-	_ = entries
+	if err := syscall.Kill(d.cmd.Process.Pid, syscall.Signal(0)); err != nil {
+		t.Fatalf("daemon unexpectedly absent: %v", err)
+	}
+	for _, r := range sessions(t, e) {
+		if r["alive"] == true {
+			t.Fatalf("runner leaked alive: %v", r)
+		}
+	}
 }

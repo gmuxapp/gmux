@@ -84,9 +84,6 @@ func acquireDaemonStateLock(ctx context.Context, stateDir string, budget time.Du
 // bootstrapOwnership performs phase 1 in its load-bearing order. takeover
 // probes/shuts down the incumbent and waits for socket disappearance.
 func bootstrapOwnership(ctx context.Context, stateDir string, takeover func(context.Context) error) (*centralstore.Store, *daemonStateLock, error) {
-	if os.Getenv("GMUX_E2E_CONTAINER_GUARD") == "isolated-v1" && os.Getenv("GMUX_E2E_VERIFY_FAIL") == "1" {
-		return nil, nil, errors.New("bootstrap verify: deterministic container E2E failure")
-	}
 	if err := centralstore.Verify(ctx, stateDir); err != nil && !errors.Is(err, centralstore.ErrDatabaseMissing) {
 		return nil, nil, fmt.Errorf("bootstrap verify: %w", err)
 	}

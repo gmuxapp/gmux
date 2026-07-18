@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -740,20 +739,6 @@ func (c *Coordinator) apply(ctx context.Context, id centralstore.SessionID, gene
 	staleRetries := 1
 	if ev.Facts.ExitedAt.Set != nil || (ev.Alive != nil && !*ev.Alive) {
 		staleRetries = 3
-	}
-	// Container E2E crash barrier. It is inert unless both explicit E2E
-	// variables are present; production has no timing or filesystem seam.
-	if ev.Facts.ExitedAt.Set != nil && os.Getenv("GMUX_E2E_CONTAINER_GUARD") == "isolated-v1" {
-		if barrier := os.Getenv("GMUX_E2E_BEFORE_EXIT_APPLY"); barrier != "" {
-			_ = os.WriteFile(barrier, []byte("observed\n"), 0o600)
-			for os.Getenv("GMUX_E2E_BEFORE_EXIT_APPLY") != "" {
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(10 * time.Millisecond):
-				}
-			}
-		}
 	}
 	result, err := c.durable.ApplyRunnerObservation(ctx, obs)
 	for retry := 0; err != nil && errors.Is(err, centralstore.ErrStaleVersion) && result.SessionVersion > 0 && retry < staleRetries; retry++ {
