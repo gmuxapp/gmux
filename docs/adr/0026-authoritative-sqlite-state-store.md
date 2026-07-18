@@ -192,6 +192,8 @@ gmux daemon state export
 
 `check` verifies migration status, SQLite integrity, and foreign keys; it may operate offline only after confirming the daemon does not own the database. `backup` uses a consistent SQLite backup mechanism rather than blindly copying a live main file. `export` emits deterministic JSON and redacts secrets by default. Exact online/offline mechanics are implementation details.
 
+For operational procedures (fresh 2.0 state, fail-closed recovery, backup secrets, E2E commands), see [Operator: State Management](../operator-state-management.md).
+
 ## Consequences
 
 ### Positive
