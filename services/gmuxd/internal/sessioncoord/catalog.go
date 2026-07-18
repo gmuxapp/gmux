@@ -38,6 +38,23 @@ func WithLocalPeerMatchInputs(src LocalPeerInputSource) Option {
 // auto-assign still publishes the replace outcome — the catalog change is
 // durable regardless; the error surfaces to the caller and the next
 // registration or catalog change converges placement.
+func (c *Coordinator) ReorderSiblingScopes(ctx context.Context, scopes []centralstore.SiblingReorder) (centralstore.MutationResult, error) {
+	c.mu.Lock()
+	reorderer, ok := c.durable.(interface {
+		ReorderSiblingScopes(context.Context, []centralstore.SiblingReorder) (centralstore.MutationResult, error)
+	})
+	if !ok {
+		c.mu.Unlock()
+		return centralstore.MutationResult{}, fmt.Errorf("sessioncoord: durable store does not support sibling reorder")
+	}
+	result, err := reorderer.ReorderSiblingScopes(ctx, scopes)
+	c.mu.Unlock()
+	if err == nil {
+		c.publish(ctx, result)
+	}
+	return result, err
+}
+
 func (c *Coordinator) ReplaceCatalog(ctx context.Context, specs []centralstore.ProjectEntrySpec) (centralstore.ProjectCatalog, error) {
 	c.mu.Lock()
 	var peers []centralstore.LocalPeerMatchInput

@@ -363,14 +363,14 @@ func serveCentral(stderr io.Writer) int {
 				writeError(w, http.StatusNotFound, "not_found", "project not found")
 				return
 			}
+			scopes := make([]centralstore.SiblingReorder, 0, len(orders))
 			for _, order := range orders {
-				result, err := storeHandle.ReorderSiblings(r.Context(), order.Project, order.Parent, order.Order)
-				if err != nil {
-					log.Printf("projects reorder: %v", err)
-					writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
-					return
-				}
-				boot.Composer.Invalidate(result)
+				scopes = append(scopes, centralstore.SiblingReorder{Project: order.Project, Parent: order.Parent, Order: order.Order})
+			}
+			if _, err := boot.Coordinator.ReorderSiblingScopes(r.Context(), scopes); err != nil {
+				log.Printf("projects reorder: %v", err)
+				writeError(w, http.StatusInternalServerError, "internal", "failed to save projects")
+				return
 			}
 			writeJSON(w, map[string]any{"ok": true})
 		})
@@ -421,11 +421,15 @@ func serveCentral(stderr io.Writer) int {
 			if result.Changed {
 				boot.Composer.Invalidate(result)
 			}
+			if outcome == centralstore.PeerUnchanged {
+				writeJSON(w, manualPeerResponse(rec, outcome))
+				return
+			}
 			if err := reconcileManualPeers(r.Context(), storeHandle, peerManager); err != nil {
 				writeError(w, http.StatusBadGateway, "reconcile_failed", err.Error())
 				return
 			}
-			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"peer": rec, "updated": outcome == centralstore.PeerUpdated}})
+			writeJSON(w, manualPeerResponse(rec, outcome))
 		})
 		mux.HandleFunc("DELETE /v1/peers/{name}", func(w http.ResponseWriter, r *http.Request) {
 			result, err := storeHandle.RemoveManualPeer(r.Context(), r.PathValue("name"))
@@ -467,17 +471,20 @@ func serveCentral(stderr io.Writer) int {
 				writeError(w, http.StatusBadRequest, "bad_request", "read error")
 				return
 			}
-			var req struct{ SessionID, SocketPath string }
+			var req struct {
+				SessionID  string `json:"session_id"`
+				SocketPath string `json:"socket_path"`
+			}
 			if err := json.Unmarshal(body, &req); err != nil {
 				writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
 				return
 			}
-			if req.SocketPath == "" {
+			if req.SessionID == "" || req.SocketPath == "" {
 				writeError(w, http.StatusBadRequest, "bad_request", "session_id and socket_path required")
 				return
 			}
-			if _, err := boot.Coordinator.Register(r.Context(), sessioncoord.RegisterRequest{Endpoint: req.SocketPath}); err != nil {
-				if errors.Is(err, sessioncoord.ErrInvalidSessionID) {
+			if _, err := boot.Coordinator.Register(r.Context(), sessioncoord.RegisterRequest{Endpoint: req.SocketPath, AssertedID: centralstore.SessionID(req.SessionID)}); err != nil {
+				if errors.Is(err, sessioncoord.ErrInvalidSessionID) || errors.Is(err, sessioncoord.ErrAssertedIdentityMismatch) {
 					writeError(w, http.StatusBadRequest, "invalid_session_id", err.Error())
 					return
 				}

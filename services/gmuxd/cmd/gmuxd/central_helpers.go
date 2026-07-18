@@ -414,3 +414,10 @@ func sessionTreeRows(ctx context.Context, st *centralstore.Store, root centralst
 	}
 	return out, nil
 }
+
+func manualPeerResponse(peer centralstore.ManualPeer, outcome centralstore.PeerUpsertOutcome) map[string]any {
+	if outcome == centralstore.PeerUnchanged {
+		return map[string]any{"peer": peer, "already_connected": true}
+	}
+	return map[string]any{"peer": peer, "updated": outcome == centralstore.PeerUpdated}
+}

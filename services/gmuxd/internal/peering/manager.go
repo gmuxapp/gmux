@@ -10,16 +10,17 @@ import (
 
 // Manager orchestrates connections to all configured spoke peers.
 type Manager struct {
-	mu          sync.RWMutex
-	peers       map[string]*managedPeer
-	sink        ProjectionSink
-	sessions    map[string][]SessionProjection
-	hooks       EventHooks
-	selfName    string // this machine's hostname, for self-echo detection
-	defaultOpts []PeerOption
-	baseCtx     context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
+	mu                 sync.RWMutex
+	peers              map[string]*managedPeer
+	sink               ProjectionSink
+	sessions           map[string][]SessionProjection
+	hooks              EventHooks
+	selfName           string // this machine's hostname, for self-echo detection
+	defaultOpts        []PeerOption
+	baseCtx            context.Context
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
+	beforeSleepRestart func(string) // deterministic race-test seam
 
 	// OnPeerRemoved fires after RemovePeer has stopped the peer's
 	// goroutine and pruned its sessions from the store. wasLocal
@@ -138,13 +139,25 @@ func (m *Manager) OnSleep() {
 	m.mu.RUnlock()
 
 	for name, mp := range peers {
-		if mp.cancel != nil {
-			mp.cancel()
+		m.mu.RLock()
+		cancel, done := mp.cancel, mp.done
+		m.mu.RUnlock()
+		if cancel != nil {
+			cancel()
 		}
-		if mp.done != nil {
-			<-mp.done
+		if done != nil {
+			<-done
 		}
-		m.startPeer(name, mp)
+		if m.beforeSleepRestart != nil {
+			m.beforeSleepRestart(name)
+		}
+		m.mu.Lock()
+		// RemovePeer may have deleted this exact generation while we waited
+		// for its old worker. Never resurrect a removed/replaced peer.
+		if current, ok := m.peers[name]; ok && current == mp && m.baseCtx != nil {
+			m.startPeer(name, mp)
+		}
+		m.mu.Unlock()
 	}
 }
 
@@ -217,13 +230,14 @@ func (m *Manager) RemovePeer(name string) {
 	}
 	delete(m.peers, name)
 	wasLocal := mp.peer.Config.Local
+	cancel, done := mp.cancel, mp.done
 	m.mu.Unlock()
 
-	if mp.cancel != nil {
-		mp.cancel()
+	if cancel != nil {
+		cancel()
 	}
-	if mp.done != nil {
-		<-mp.done
+	if done != nil {
+		<-done
 	}
 	m.removePeerSessions(name)
 	if wasLocal && m.hooks.LocalPeerDisconnected != nil {

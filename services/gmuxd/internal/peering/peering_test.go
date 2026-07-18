@@ -61,9 +61,10 @@ func TestParseID_Roundtrip(t *testing.T) {
 // spoke is a test HTTP server that behaves like a gmuxd spoke.
 type spoke struct {
 	*httptest.Server
-	mu         sync.Mutex
-	sessions   []store.Session
-	sseClients []chan string
+	mu          sync.Mutex
+	sessions    []store.Session
+	sseClients  []chan string
+	sseConnects int
 }
 
 // push sends a raw SSE frame to all connected SSE clients.
@@ -120,6 +121,9 @@ func spokeServer(t *testing.T, token string, sessions []store.Session) *spoke {
 
 		switch r.URL.Path {
 		case "/v1/events":
+			sk.mu.Lock()
+			sk.sseConnects++
+			sk.mu.Unlock()
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
 			flusher := w.(http.Flusher)
@@ -1204,6 +1208,40 @@ func TestForwardingFilter_UnknownPeerSessionKept(t *testing.T) {
 		t.Error("expected sess-d@devcontainer@remote (devcontainer session should be kept)")
 	}
 
+	mgr.Stop()
+}
+
+func TestOnSleepDoesNotRestartPeerRemovedWhileOldWorkerDrains(t *testing.T) {
+	st := store.New()
+	sk := spokeServer(t, "", []store.Session{{ID: "s", Adapter: "shell", Alive: true}})
+	mgr := NewManager([]config.PeerConfig{{Name: "remote", URL: sk.URL}}, st, "host")
+	mgr.Start()
+	waitForSessions(t, st, "remote", 1)
+	sk.mu.Lock()
+	beforeConnects := sk.sseConnects
+	sk.mu.Unlock()
+	reached := make(chan struct{})
+	release := make(chan struct{})
+	mgr.beforeSleepRestart = func(string) { close(reached); <-release }
+	done := make(chan struct{})
+	go func() { mgr.OnSleep(); close(done) }()
+	<-reached
+	mgr.RemovePeer("remote")
+	close(release)
+	<-done
+	time.Sleep(20 * time.Millisecond)
+	sk.mu.Lock()
+	connects := sk.sseConnects
+	sk.mu.Unlock()
+	mgr.mu.RLock()
+	_, member := mgr.peers["remote"]
+	mgr.mu.RUnlock()
+	if member {
+		t.Fatal("removed peer remains a member")
+	}
+	if connects != beforeConnects {
+		t.Fatalf("ghost peer restarted: connections %d -> %d", beforeConnects, connects)
+	}
 	mgr.Stop()
 }
 

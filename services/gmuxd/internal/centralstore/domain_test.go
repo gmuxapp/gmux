@@ -665,6 +665,35 @@ func TestReorderValidatesProjectParentAndDuplicates(t *testing.T) {
 	}
 }
 
+func TestReorderSiblingScopesRollsBackAllScopes(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	cat, _, err := s.ReplaceProjectCatalog(ctx, []ProjectEntrySpec{owned("one", "/one")}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cat[0].ID
+	addSession(t, s, "a", "")
+	addSession(t, s, "b", "")
+	if _, err = s.PlaceLocalSession(ctx, "a", p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.PlaceLocalSession(ctx, "b", p); err != nil {
+		t.Fatal(err)
+	}
+	before := rootOrder(t, s, p)
+	_, err = s.ReorderSiblingScopes(ctx, []SiblingReorder{
+		{Project: p, Order: []SubjectRef{{LocalSessionID: "b"}, {LocalSessionID: "a"}}},
+		{Project: p, Order: []SubjectRef{{LocalSessionID: "missing"}}},
+	})
+	if err == nil {
+		t.Fatal("invalid second scope accepted")
+	}
+	if got := rootOrder(t, s, p); !reflect.DeepEqual(got, before) {
+		t.Fatalf("first scope committed despite rollback: got %v want %v", got, before)
+	}
+}
+
 func TestPromotionAndParentProjectTransitions(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)

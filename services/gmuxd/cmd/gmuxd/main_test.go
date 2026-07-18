@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
@@ -764,5 +765,31 @@ func TestSSEFrameDeadlineAndErrorPropagation(t *testing.T) {
 	}
 	if err := sendSSEComment(rc, fw); err == nil {
 		t.Error("heartbeat flush error not propagated")
+	}
+}
+
+func TestManualPeerResponsePreservesBareWebContract(t *testing.T) {
+	peer := centralstore.ManualPeer{Name: "host"}
+	for _, tc := range []struct {
+		outcome centralstore.PeerUpsertOutcome
+		key     string
+	}{
+		{centralstore.PeerUnchanged, "already_connected"},
+		{centralstore.PeerUpdated, "updated"},
+	} {
+		b, err := json.Marshal(manualPeerResponse(peer, tc.outcome))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]json.RawMessage
+		if err := json.Unmarshal(b, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["peer"] == nil || got[tc.key] == nil {
+			t.Fatalf("response=%s", b)
+		}
+		if got["ok"] != nil || got["data"] != nil {
+			t.Fatalf("wrapped response=%s", b)
+		}
 	}
 }

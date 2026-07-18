@@ -119,6 +119,7 @@ type fakeDurable struct {
 	// records the candidate sets of each call.
 	placeUnplacedResult func([]centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error)
 	placeUnplacedCalls  [][]centralstore.SessionID
+	reorderResult       func([]centralstore.SiblingReorder) (centralstore.MutationResult, error)
 }
 
 func newFakeDurable(version centralstore.RowVersion) *fakeDurable {
@@ -151,6 +152,13 @@ func (d *fakeDurable) ApplyRunnerObservation(ctx context.Context, obs centralsto
 	defer d.mu.Unlock()
 	d.applied = append(d.applied, obs)
 	return d.applyResult(obs)
+}
+
+func (d *fakeDurable) ReorderSiblingScopes(_ context.Context, scopes []centralstore.SiblingReorder) (centralstore.MutationResult, error) {
+	if d.reorderResult != nil {
+		return d.reorderResult(scopes)
+	}
+	return centralstore.MutationResult{Changed: true, WorldDirty: true}, nil
 }
 
 func (d *fakeDurable) Session(ctx context.Context, id centralstore.SessionID) (centralstore.Session, bool, error) {
@@ -307,6 +315,27 @@ func newCoord(client *fakeRunnerClient, durable *fakeDurable, dirty *fakeDirtySi
 
 // TestSubscribeBeforeMetaReplayOrder verifies that events buffered between
 // Subscribe and Meta are replayed in order over the meta baseline.
+func TestRegisterAssertedIdentityMismatchHasNoSideEffects(t *testing.T) {
+	meta := RunnerMeta{Registration: centralstore.RunnerRegistration{ID: sid(1), Alive: true}}
+	client := newFakeClient(meta)
+	dur := newFakeDurable(0)
+	sink := &fakeDirtySink{}
+	coord := newCoord(client, dur, sink, nil)
+	_, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep", AssertedID: sid(2)})
+	if !errors.Is(err, ErrAssertedIdentityMismatch) {
+		t.Fatalf("Register error=%v", err)
+	}
+	if len(dur.registered) != 0 {
+		t.Fatalf("durable calls=%d", len(dur.registered))
+	}
+	if len(coord.registry.Snapshot()) != 0 {
+		t.Fatal("registry changed")
+	}
+	if sink.count() != 0 {
+		t.Fatal("invalidation published")
+	}
+}
+
 func TestSubscribeBeforeMetaReplayOrder(t *testing.T) {
 	slug1 := "slug-one"
 	slug2 := "slug-two"
@@ -448,7 +477,7 @@ func TestCurrentCloseRemovesGeneration(t *testing.T) {
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if snap := coord.Registry().Snapshot(); len(snap) == 0 {
+		if snap := coord.registry.Snapshot(); len(snap) == 0 {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -484,17 +513,17 @@ func TestStaleCloseDoesNotRemoveCurrentGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register gen2: %v", err)
 	}
-	if snap := coord.Registry().Snapshot(); len(snap) != 1 {
+	if snap := coord.registry.Snapshot(); len(snap) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(snap))
 	}
-	gen2 := coord.Registry().Snapshot()[0].Generation
+	gen2 := coord.registry.Snapshot()[0].Generation
 
 	// Close the old stream (generation 1).
 	oldStream.Close()
 	time.Sleep(20 * time.Millisecond)
 
 	// Current generation must still be installed.
-	snap := coord.Registry().Snapshot()
+	snap := coord.registry.Snapshot()
 	if len(snap) != 1 || snap[0].Generation != gen2 {
 		t.Fatalf("expected gen2 still installed, got %+v", snap)
 	}
@@ -690,7 +719,7 @@ func TestFailedReplacementCommitsInFlightOldApply(t *testing.T) {
 		t.Fatalf("Register gen1: %v", err)
 	}
 	oldStream := client.stream
-	gen1 := coord.Registry().Snapshot()[0].Generation
+	gen1 := coord.registry.Snapshot()[0].Generation
 
 	// Start the failing replacement; wait until it is inside the fence
 	// window (fence set under c.mu before RegisterRunner runs).
@@ -740,7 +769,7 @@ func TestFailedReplacementCommitsInFlightOldApply(t *testing.T) {
 	if errSink.count() != 0 {
 		t.Fatalf("unexpected error: %v", errSink.last())
 	}
-	snap := coord.Registry().Snapshot()
+	snap := coord.registry.Snapshot()
 	if len(snap) != 1 || snap[0].Generation != gen1 {
 		t.Fatalf("old generation not still installed: %+v", snap)
 	}
@@ -835,7 +864,7 @@ func TestFastDeadReplacementSynthesizesExitAndRemovesOldEntry(t *testing.T) {
 	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "ep7f"}); err != nil {
 		t.Fatalf("Register gen1: %v", err)
 	}
-	if len(coord.Registry().Snapshot()) != 1 {
+	if len(coord.registry.Snapshot()) != 1 {
 		t.Fatal("expected gen1 installed")
 	}
 
@@ -861,7 +890,7 @@ func TestFastDeadReplacementSynthesizesExitAndRemovesOldEntry(t *testing.T) {
 	if reg.Facts.ExitedAt.Set == nil || *reg.Facts.ExitedAt.Set != ts(42) {
 		t.Fatalf("expected synthesized ExitedAt=42, got %+v", reg.Facts.ExitedAt)
 	}
-	if len(coord.Registry().Snapshot()) != 0 {
+	if len(coord.registry.Snapshot()) != 0 {
 		t.Fatal("old generation entry not removed after fast-dead replacement")
 	}
 }
@@ -907,7 +936,7 @@ func TestSubscribeFailureCleanup(t *testing.T) {
 	if len(dur.registered) != 0 {
 		t.Fatal("RegisterRunner should not be called after Subscribe failure")
 	}
-	if len(coord.Registry().Snapshot()) != 0 {
+	if len(coord.registry.Snapshot()) != 0 {
 		t.Fatal("registry should be empty after Subscribe failure")
 	}
 }
@@ -955,7 +984,7 @@ func TestRegisterFailureCleanup(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "db failure") {
 		t.Fatalf("expected db failure, got %v", err)
 	}
-	if len(coord.Registry().Snapshot()) != 0 {
+	if len(coord.registry.Snapshot()) != 0 {
 		t.Fatal("registry should be empty after RegisterRunner failure")
 	}
 }
@@ -1008,7 +1037,7 @@ func TestDirtyPostCommitOutsideLock(t *testing.T) {
 	var coord *Coordinator
 	reentrantSink := DirtySinkFunc(func(ctx context.Context, r centralstore.MutationResult) {
 		// Must not deadlock: coordinator must not hold c.mu when calling this.
-		snap := coord.Registry().Snapshot()
+		snap := coord.registry.Snapshot()
 		_ = snap
 	})
 	coord = New(nil, client, dur, reentrantSink, nil)
@@ -1218,7 +1247,7 @@ func TestMalformedExitHandling(t *testing.T) {
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if errSink.count() > 0 && len(coord.Registry().Snapshot()) == 0 {
+		if errSink.count() > 0 && len(coord.registry.Snapshot()) == 0 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -1226,7 +1255,7 @@ func TestMalformedExitHandling(t *testing.T) {
 	if errSink.count() == 0 {
 		t.Fatal("expected error for malformed exit event")
 	}
-	if len(coord.Registry().Snapshot()) != 0 {
+	if len(coord.registry.Snapshot()) != 0 {
 		t.Fatal("registry entry should be removed despite malformed exit")
 	}
 }
@@ -1265,12 +1294,12 @@ func TestExitFactsCommitBeforeLivenessRemoved(t *testing.T) {
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if len(coord.Registry().Snapshot()) == 0 {
+		if len(coord.registry.Snapshot()) == 0 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if len(coord.Registry().Snapshot()) != 0 {
+	if len(coord.registry.Snapshot()) != 0 {
 		t.Fatal("expected registry entry removed after exit event")
 	}
 	if errSink.count() != 0 {
@@ -1302,7 +1331,7 @@ func TestContextGoroutineCleanup(t *testing.T) {
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if len(coord.Registry().Snapshot()) == 0 {
+		if len(coord.registry.Snapshot()) == 0 {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -1360,7 +1389,7 @@ func TestCopyRuntimeSnapshot(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	snap := coord.Registry().Snapshot()
+	snap := coord.registry.Snapshot()
 	if len(snap) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(snap))
 	}
@@ -1369,7 +1398,7 @@ func TestCopyRuntimeSnapshot(t *testing.T) {
 	snap[0].PID = 99999
 	snap[0].RunnerVersion = "mutated"
 
-	snap2 := coord.Registry().Snapshot()
+	snap2 := coord.registry.Snapshot()
 	if len(snap2) != 1 {
 		t.Fatalf("expected 1 entry after mutation, got %d", len(snap2))
 	}
@@ -1407,7 +1436,7 @@ func TestFastDeadRegistration(t *testing.T) {
 		t.Fatal("expected synthesized ExitedAt for fast-dead registration")
 	}
 	// No drain goroutine; registry should be empty.
-	if len(coord.Registry().Snapshot()) != 0 {
+	if len(coord.registry.Snapshot()) != 0 {
 		t.Fatal("expected empty registry for fast-dead registration")
 	}
 }
@@ -1439,7 +1468,7 @@ func TestMetaDeadRegistrationNotSubscribed(t *testing.T) {
 	if dur.registered[0].Facts.ExitedAt.Set == nil {
 		t.Fatal("expected synthesized ExitedAt for meta-dead registration")
 	}
-	if len(coord.Registry().Snapshot()) != 0 {
+	if len(coord.registry.Snapshot()) != 0 {
 		t.Fatal("expected empty registry for meta-dead registration")
 	}
 	if !client.stream.closed.Load() {
@@ -1480,7 +1509,7 @@ func TestExitApplyStaleRetryBudget(t *testing.T) {
 	// The successful apply removes the entry (exit); wait for that.
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if callCount.Load() >= 4 && len(coord.Registry().Snapshot()) == 0 {
+		if callCount.Load() >= 4 && len(coord.registry.Snapshot()) == 0 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -1491,7 +1520,7 @@ func TestExitApplyStaleRetryBudget(t *testing.T) {
 	if errSink.count() != 0 {
 		t.Fatalf("unexpected error reported: %v", errSink.last())
 	}
-	if len(coord.Registry().Snapshot()) != 0 {
+	if len(coord.registry.Snapshot()) != 0 {
 		t.Fatal("expected entry removed after durable exit")
 	}
 }
@@ -1556,7 +1585,7 @@ func TestRegisterRejectsInvalidSessionID(t *testing.T) {
 		if len(dur.registered) != 0 {
 			t.Fatalf("id %q: RegisterRunner must not be called", bad)
 		}
-		if len(coord.Registry().Snapshot()) != 0 {
+		if len(coord.registry.Snapshot()) != 0 {
 			t.Fatalf("id %q: registry must stay empty", bad)
 		}
 		if !client.stream.closed.Load() {
@@ -1595,7 +1624,7 @@ func TestReplaceRequiresClaim(t *testing.T) {
 		if len(dur.registered) != 0 {
 			t.Fatal("RegisterRunner must not be called without the caller's claim")
 		}
-		if len(coord.Registry().Snapshot()) != 0 {
+		if len(coord.registry.Snapshot()) != 0 {
 			t.Fatal("registry must stay empty")
 		}
 	}

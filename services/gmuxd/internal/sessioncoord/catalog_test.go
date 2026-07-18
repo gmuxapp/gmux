@@ -5,9 +5,40 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 )
+
+func TestReorderSiblingScopesSerializesAndPublishesOnce(t *testing.T) {
+	dur := newFakeDurable(0)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls int
+	dur.reorderResult = func([]centralstore.SiblingReorder) (centralstore.MutationResult, error) {
+		calls++
+		if calls == 1 {
+			close(entered)
+			<-release
+		}
+		return centralstore.MutationResult{Changed: true, WorldDirty: true}, nil
+	}
+	sink := &fakeDirtySink{}
+	coord := newCoord(newFakeClient(RunnerMeta{}), dur, sink, nil)
+	done := make(chan struct{}, 2)
+	go func() { _, _ = coord.ReorderSiblingScopes(context.Background(), nil); done <- struct{}{} }()
+	<-entered
+	go func() { _, _ = coord.ReorderSiblingScopes(context.Background(), nil); done <- struct{}{} }()
+	time.Sleep(20 * time.Millisecond)
+	if calls != 1 {
+		t.Fatalf("concurrent reorder interleaved: calls=%d", calls)
+	}
+	close(release)
+	<-done
+	<-done
+	if sink.count() != 2 {
+		t.Fatalf("invalidations=%d, want one per atomic call", sink.count())
+	}
+}
 
 func TestReplaceCatalogCommitsRematchAndAutoAssignsLive(t *testing.T) {
 	dur := newFakeDurable(0)

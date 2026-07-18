@@ -1372,90 +1372,104 @@ func (s *Store) place(ctx context.Context, sub SubjectRef, project ProjectEntryI
 	return MutationResult{Changed: changed, WorldDirty: changed}, nil
 }
 
+type SiblingReorder struct {
+	Project ProjectEntryID
+	Parent  ParentRef
+	Order   []SubjectRef
+}
+
 func (s *Store) ReorderSiblings(ctx context.Context, project ProjectEntryID, parent ParentRef, order []SubjectRef) (MutationResult, error) {
+	return s.ReorderSiblingScopes(ctx, []SiblingReorder{{Project: project, Parent: parent, Order: order}})
+}
+
+// ReorderSiblingScopes applies all requested scopes in one transaction.
+func (s *Store) ReorderSiblingScopes(ctx context.Context, reorders []SiblingReorder) (MutationResult, error) {
 	tx, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
 		return MutationResult{}, err
 	}
 	defer tx.Rollback()
 	q := s.queries.WithTx(tx)
-	owned, err := q.OwnedProjectExists(ctx, int64(project))
-	if err != nil {
-		return MutationResult{}, err
-	}
-	if !owned {
-		return MutationResult{}, errors.New("centralstore: reorder requires an owned project")
-	}
-	all, err := placements(ctx, q)
-	if err != nil {
-		return MutationResult{}, err
-	}
-	scope := "r"
-	if parent.Subject != nil {
-		if err = validateSubject(*parent.Subject); err != nil {
+	changedAny := false
+	for _, reorder := range reorders {
+		project, parent, order := reorder.Project, reorder.Parent, reorder.Order
+
+		owned, err := q.OwnedProjectExists(ctx, int64(project))
+		if err != nil {
 			return MutationResult{}, err
 		}
-		parentKey := subjectKey(*parent.Subject)
-		found := false
+		if !owned {
+			return MutationResult{}, errors.New("centralstore: reorder requires an owned project")
+		}
+		all, err := placements(ctx, q)
+		if err != nil {
+			return MutationResult{}, err
+		}
+		scope := "r"
+		if parent.Subject != nil {
+			if err = validateSubject(*parent.Subject); err != nil {
+				return MutationResult{}, err
+			}
+			parentKey := subjectKey(*parent.Subject)
+			found := false
+			for _, r := range all {
+				if r.project == int64(project) && recKey(r) == parentKey {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return MutationResult{}, errors.New("centralstore: reorder parent is not placed in project")
+			}
+			scope = "c:" + parentKey
+		}
+		k := scopeKey{int64(project), scope}
+		by := map[string]*placementRec{}
+		var current []*placementRec
 		for _, r := range all {
-			if r.project == int64(project) && recKey(r) == parentKey {
-				found = true
-				break
+			if r.project == k.project && desiredScope(all, r) == scope {
+				by[recKey(r)] = r
+				current = append(current, r)
 			}
 		}
-		if !found {
-			return MutationResult{}, errors.New("centralstore: reorder parent is not placed in project")
+		if len(current) != len(order) {
+			return MutationResult{}, errors.New("centralstore: reorder must contain every sibling")
 		}
-		scope = "c:" + parentKey
-	}
-	k := scopeKey{int64(project), scope}
-	by := map[string]*placementRec{}
-	var current []*placementRec
-	for _, r := range all {
-		if r.project == k.project && desiredScope(all, r) == scope {
-			by[recKey(r)] = r
-			current = append(current, r)
+		desired := make([]*placementRec, len(order))
+		seen := map[string]bool{}
+		for i, sub := range order {
+			if err = validateSubject(sub); err != nil {
+				return MutationResult{}, err
+			}
+			key := subjectKey(sub)
+			if seen[key] {
+				return MutationResult{}, errors.New("centralstore: duplicate reorder subject")
+			}
+			seen[key] = true
+			r, ok := by[key]
+			if !ok {
+				return MutationResult{}, errors.New("centralstore: reorder subject outside scope")
+			}
+			desired[i] = r
 		}
-	}
-	if len(current) != len(order) {
-		return MutationResult{}, errors.New("centralstore: reorder must contain every sibling")
-	}
-	desired := make([]*placementRec, len(order))
-	seen := map[string]bool{}
-	for i, sub := range order {
-		if err = validateSubject(sub); err != nil {
+		sort.Slice(current, func(i, j int) bool { return current[i].oldPos < current[j].oldPos })
+		same := len(current) == len(desired)
+		for i := range current {
+			same = same && current[i] == desired[i]
+		}
+		if same {
+			continue
+		}
+		changed, err := rewritePlacements(ctx, q, all, map[scopeKey][]*placementRec{k: desired}, s.beforePlacementFinalize)
+		if err != nil {
 			return MutationResult{}, err
 		}
-		key := subjectKey(sub)
-		if seen[key] {
-			return MutationResult{}, errors.New("centralstore: duplicate reorder subject")
-		}
-		seen[key] = true
-		r, ok := by[key]
-		if !ok {
-			return MutationResult{}, errors.New("centralstore: reorder subject outside scope")
-		}
-		desired[i] = r
-	}
-	sort.Slice(current, func(i, j int) bool { return current[i].oldPos < current[j].oldPos })
-	same := len(current) == len(desired)
-	for i := range current {
-		same = same && current[i] == desired[i]
-	}
-	if same {
-		if err = tx.Commit(); err != nil {
-			return MutationResult{}, err
-		}
-		return MutationResult{}, nil
-	}
-	changed, err := rewritePlacements(ctx, q, all, map[scopeKey][]*placementRec{k: desired}, s.beforePlacementFinalize)
-	if err != nil {
-		return MutationResult{}, err
+		changedAny = changedAny || changed
 	}
 	if err = tx.Commit(); err != nil {
 		return MutationResult{}, err
 	}
-	return MutationResult{Changed: changed, WorldDirty: changed}, nil
+	return MutationResult{Changed: changedAny, WorldDirty: changedAny}, nil
 }
 
 func (s *Store) SetPromotion(ctx context.Context, id SessionID, promoted bool, index *int) (MutationResult, error) {

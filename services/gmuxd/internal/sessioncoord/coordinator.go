@@ -33,7 +33,8 @@ var (
 	// set these fields. This turns the wiring convention into a checked
 	// invariant: a stray Replace registration can never displace a live
 	// generation — not even while an unrelated operation's claim is held.
-	ErrReplaceWithoutClaim = errors.New("sessioncoord: replace provenance requires a held lifecycle claim")
+	ErrReplaceWithoutClaim      = errors.New("sessioncoord: replace provenance requires a held lifecycle claim")
+	ErrAssertedIdentityMismatch = errors.New("sessioncoord: asserted session id does not match runner meta")
 )
 
 // EventStream is already ordered by the runner transport. Subscribe must not
@@ -111,6 +112,9 @@ type RunnerEvent struct {
 
 type RegisterRequest struct {
 	Endpoint string
+	// AssertedID is caller-supplied identity for ordinary registration. Unlike
+	// ExpectedID it carries no replacement provenance and needs no claim.
+	AssertedID centralstore.SessionID
 	// Replace is explicit resume/restart/replacement provenance. Without it,
 	// registration never displaces an installed working generation.
 	Replace bool
@@ -306,6 +310,10 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 	id := meta.Registration.ID
 	if !paths.IsValidSessionID(string(id)) {
 		return Runtime{}, fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
+	}
+	if req.AssertedID != "" && id != req.AssertedID {
+		_ = stream.Close()
+		return Runtime{}, fmt.Errorf("%w: asserted %s, runner reported %s", ErrAssertedIdentityMismatch, req.AssertedID, id)
 	}
 	if req.ExpectedID != "" && id != req.ExpectedID {
 		// Abort before the mutex/fence/commit: no registration side effects.

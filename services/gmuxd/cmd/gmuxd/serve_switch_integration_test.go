@@ -87,9 +87,8 @@ func waitUntil(t *testing.T, timeout time.Duration, fn func() bool, msg string) 
 	t.Fatal(msg)
 }
 
-func readFirstSSEEvent(t *testing.T, body io.Reader) (string, []byte) {
+func readFirstSSEEvent(t *testing.T, sc *bufio.Scanner) (string, []byte) {
 	t.Helper()
-	sc := bufio.NewScanner(body)
 	var event string
 	var data bytes.Buffer
 	for sc.Scan() {
@@ -219,7 +218,8 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	event, data := readFirstSSEEvent(t, resp.Body)
+	scanner := bufio.NewScanner(resp.Body)
+	event, data := readFirstSSEEvent(t, scanner)
 	if event != "snapshot.sessions" {
 		t.Fatalf("first SSE event=%q, want snapshot.sessions", event)
 	}
@@ -233,6 +233,17 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 	}
 	if len(sessionsFrame.Sessions) != 1 || sessionsFrame.Sessions[0].ID != "sess-switch-test" {
 		t.Fatalf("unexpected snapshot.sessions frame: %s", data)
+	}
+	event, data = readFirstSSEEvent(t, scanner)
+	if event != "snapshot.world" {
+		t.Fatalf("second SSE event=%q, want matched snapshot.world", event)
+	}
+	var worldFrame map[string]json.RawMessage
+	if err := json.Unmarshal(data, &worldFrame); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := worldFrame["projects"]; !ok {
+		t.Fatalf("snapshot.world omitted projects: %s", data)
 	}
 
 	if !unixipc.Shutdown(sock) {
