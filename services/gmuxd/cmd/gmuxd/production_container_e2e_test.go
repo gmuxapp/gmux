@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,6 +42,8 @@ func TestProductionContainerE2E(t *testing.T) {
 	}
 	t.Run("unread_restart_sse_sqlite", func(t *testing.T) { scenarioUnreadRestart(t, bin) })
 	t.Run("daemon_down_runner_death", func(t *testing.T) { scenarioDaemonDown(t, bin) })
+	t.Run("death_before_apply_crash_repair", func(t *testing.T) { scenarioDeathBarrier(t, bin) })
+	t.Run("verify_failure_preserves_incumbent", func(t *testing.T) { scenarioVerifyFailure(t, bin) })
 	t.Run("ownership_contention", func(t *testing.T) { scenarioContention(t, bin) })
 	t.Run("backup_export_and_restart_stress", func(t *testing.T) { scenarioAdminStress(t, bin) })
 }
@@ -162,7 +165,7 @@ func startProdRunner(t *testing.T, e *prodEnv, id string, unread bool) *prodRunn
 	r := &prodRunner{ln: ln, events: make(chan string, 16), id: id, sock: sock}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /meta", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "adapter": "shell", "alive": true, "created_at": time.Unix(1, 0).UTC().Format(time.RFC3339), "pid": os.Getpid(), "runner_version": "e2e", "binary_hash": "e2e", "cwd": e.home, "command": []string{"/bin/sh"}, "remotes": map[string]string{}, "status": map[string]any{"working": false}, "unread": unread, "terminal_cols": 93, "terminal_rows": 31})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "adapter": "shell", "alive": true, "created_at": time.Unix(1, 0).UTC().Format(time.RFC3339), "pid": os.Getpid(), "runner_version": "e2e", "binary_hash": "e2e", "cwd": e.home, "command": []string{"/bin/sh"}, "remotes": map[string]string{"credential_fixture": "alice:remote-secret@example.invalid/repo.git"}, "status": map[string]any{"working": false}, "unread": unread, "terminal_cols": 93, "terminal_rows": 31})
 	})
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, q *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -184,6 +187,9 @@ func startProdRunner(t *testing.T, e *prodEnv, id string, unread bool) *prodRunn
 }
 func (r *prodRunner) exit(unread bool) {
 	r.events <- fmt.Sprintf("event: status\ndata: {\"working\":false,\"unread\":%v}\n\nevent: exit\ndata: {\"exit_code\":0}\n\n", unread)
+}
+func (r *prodRunner) crashClose() {
+	r.once.Do(func() { _ = r.srv.Close(); _ = r.ln.Close(); _ = os.Remove(r.sock) })
 }
 func (r *prodRunner) close() {
 	r.once.Do(func() {
@@ -316,6 +322,59 @@ func scenarioDaemonDown(t *testing.T, bin string) {
 		t.Fatal("surviving runner stamped dead")
 	}
 }
+func scenarioDeathBarrier(t *testing.T, bin string) {
+	e := newProdEnv(t)
+	r := startProdRunner(t, e, "sess-barrier", true)
+	barrier := filepath.Join(e.root, "barrier")
+	old := os.Getenv("GMUX_E2E_BEFORE_EXIT_APPLY")
+	_ = os.Setenv("GMUX_E2E_BEFORE_EXIT_APPLY", barrier)
+	d := startDaemon(t, bin, e)
+	_ = os.Setenv("GMUX_E2E_BEFORE_EXIT_APPLY", old)
+	if s := session(t, e, r.id); s["terminal_cols"] != float64(93) || s["terminal_rows"] != float64(31) {
+		t.Fatalf("initial dimensions=%v", s)
+	}
+	r.crashClose()
+	waitFor(t, "pre-apply barrier", func() bool { _, err := os.Stat(barrier); return err == nil })
+	d.kill()
+	d = startDaemon(t, bin, e)
+	defer d.kill()
+	waitFor(t, "startup repair", func() bool { return session(t, e, r.id)["alive"] == false })
+	s := session(t, e, r.id)
+	if s["unread"] != true || s["terminal_cols"] != float64(93) || s["terminal_rows"] != float64(31) {
+		t.Fatalf("facts corrupted: %v", s)
+	}
+	ro, err := centralstore.OpenReadOnly(context.Background(), e.stateDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	row, _, err := ro.Session(context.Background(), centralstore.SessionID(r.id))
+	if err != nil || row.ExitedAt == nil || !row.Unread || row.TerminalCols == nil || *row.TerminalCols != 93 || row.TerminalRows == nil || *row.TerminalRows != 31 {
+		t.Fatalf("repaired row=%+v err=%v", row, err)
+	}
+}
+
+func scenarioVerifyFailure(t *testing.T, bin string) {
+	e := newProdEnv(t)
+	d := startDaemon(t, bin, e)
+	defer d.kill()
+	before, ok := unixipc.HealthIdentity(e.socket())
+	if !ok {
+		t.Fatal("incumbent unhealthy")
+	}
+	child := exec.Command(bin, "run")
+	child.Env = append(e.vars(), "GMUX_E2E_VERIFY_FAIL=1")
+	var log bytes.Buffer
+	child.Stderr = &log
+	if err := child.Run(); err == nil {
+		t.Fatal("verify-failed replacement succeeded")
+	}
+	after, ok := unixipc.HealthIdentity(e.socket())
+	if !ok || after.PID != before.PID {
+		t.Fatalf("incumbent changed: before=%+v after=%+v log=%s", before, after, log.String())
+	}
+}
+
 func scenarioContention(t *testing.T, bin string) {
 	e := newProdEnv(t)
 	d := startDaemon(t, bin, e)
@@ -363,7 +422,13 @@ func scenarioAdminStress(t *testing.T, bin string) {
 		cycles = 50
 	}
 	for i := 0; i < cycles; i++ {
+		r := startProdRunner(t, e, fmt.Sprintf("sess-stress-%03d", i), true)
 		d = startDaemon(t, bin, e)
+		waitFor(t, "stress runner live", func() bool { return session(t, e, r.id)["alive"] == true })
+		r.exit(true)
+		waitFor(t, "stress runner dead", func() bool { return session(t, e, r.id)["alive"] == false })
+		post(t, e, "/v1/sessions/"+r.id+"/read", "")
+		r.close()
 		if i%2 == 0 {
 			d.kill()
 		} else {
@@ -380,6 +445,41 @@ func scenarioAdminStress(t *testing.T, bin string) {
 	}
 	if info, err := os.Stat(backup); err != nil || info.Size() == 0 {
 		t.Fatalf("backup missing/empty: info=%v err=%v", info, err)
+	}
+	db, err := sql.Open("sqlite", backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var quick string
+	if err = db.QueryRow("PRAGMA quick_check").Scan(&quick); err != nil || quick != "ok" {
+		t.Fatalf("backup quick_check=%q err=%v", quick, err)
+	}
+	db.Close()
+	peer := http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/health" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": map[string]any{"service": "gmuxd", "node_id": "peer-node", "hostname": "secret-peer"}})
+			return
+		}
+		http.NotFound(w, r)
+	})}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go peer.Serve(ln)
+	defer peer.Close()
+	url := "http://urluser:urlpass@" + ln.Addr().String()
+	post(t, e, "/v1/peers", fmt.Sprintf(`{"URL":%q,"Token":"peer-token-secret"}`, url))
+	ex := exec.Command(bin, "state", "export")
+	ex.Env = e.vars()
+	raw, err := ex.CombinedOutput()
+	if err != nil {
+		t.Fatalf("export: %v %s", err, raw)
+	}
+	for _, secret := range []string{"peer-token-secret", "urlpass", "remote-secret"} {
+		if bytes.Contains(raw, []byte(secret)) {
+			t.Fatalf("export leaked %q: %s", secret, raw)
+		}
 	}
 	check := exec.Command(bin, "state", "check")
 	check.Env = e.vars()
