@@ -1,7 +1,8 @@
 # ADR 0026: Authoritative SQLite store for daemon-owned state
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-15
+**Accepted:** 2026-07-18
 **Supersedes:** ADR 0012's decision to retain JSON stores
 **Partially supersedes:** ADR 0016 (per-session `meta.json` lifecycle), ADR 0024 (`projects.json` membership representation)
 **Related:** ADR 0001 (snapshot push protocol), ADR 0002 (share-nothing peers), ADR 0009 (CLI namespace), ADR 0011 (runner-owned session state), ADR 0022 (adapter-opaque conversation refs), ADR 0023 (unified turn model)
@@ -47,6 +48,8 @@ Generated sqlc models and generic query methods remain private to `centralstore`
 Two independent spikes validated this direction. `modernc.org/sqlite` built with `CGO_ENABLED=0` for Linux and Darwin on amd64 and arm64, enforced foreign keys/WAL, and passed concurrent domain transactions under the race detector. sqlc and Goose additionally validated reproducible module-pinned generation, embedded fresh and upgrade migrations, rollback, DB-backed snapshots, and a much smaller generated surface than Ent. Ent and Atlas were rejected for this model: Ent generated a broad entity framework while the important ordered-membership invariant still required specialized SQL, and the tested Atlas CLI workflow was not source-pinnable through the expected Go module path.
 
 Production starts with one database connection. Additional read pooling is introduced only if snapshot profiling demonstrates contention.
+
+The accepted production boundary is `sessioncoord.Coordinator` for serialized lifecycle/domain operations, `centralstore.Store` for durable authority, and the central snapshot composer plus wire cache/fan-out for query-backed HTTP/SSE projections. The live registry and peering manager remain runtime projections only.
 
 ### 2. Query-backed snapshot protocol; no durable-state projection map
 

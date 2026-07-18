@@ -62,8 +62,8 @@ import (
 //   - 404: session not found
 //   - 400: bad timeout, bad regex, or both output conditions at once
 //
-// dirFor maps a session id to its per-session state dir (production:
-// sessionmeta.Store.SessionDir); only output-condition waits read it.
+// dirFor maps a session id to its per-session state dir; only
+// output-condition waits read it.
 func handleWait(w http.ResponseWriter, r *http.Request, sessions *store.Store, sessionID string, dirFor func(string) string) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
@@ -594,8 +594,8 @@ var (
 // be dropped. Mirroring handleWait, we re-poll the store every tick so a
 // dropped event delays the result by at most one tick instead of
 // timing out with a spurious kill_timeout — and, also like handleWait,
-// we fail fast when the session is removed (UI dismiss, retention
-// prune) rather than hanging out the full deadline for a session that
+// we fail fast when the session is removed (UI dismiss, lifecycle
+// pruning) rather than hanging out the full deadline for a session that
 // can never become resumable.
 func waitForSessionExit(sessions *store.Store, evCh <-chan store.Event, sessionID string, timeout, tick time.Duration) (store.Session, error) {
 	deadline := time.After(timeout)
@@ -692,8 +692,8 @@ func terminalReason(s store.Session, seenAlive bool) (string, bool) {
 //     (SetExited) — definitive even if this wait never saw it alive;
 //   - StartedAt != "": the runner stamped SetRunning at some point.
 //     Force-marked-dead sessions (unreachable runner on kill,
-//     stale-socket sweep) and sessions restored from sessionmeta after
-//     a daemon restart carry their historical StartedAt with no live
+//     stale-socket sweep) and sessions restored from prior durable state
+//     after a daemon restart carry their historical StartedAt with no live
 //     ExitCode, so a wait on them must fail fast rather than block for
 //     a resurrection that can't come.
 //
@@ -705,4 +705,3 @@ func terminalReason(s store.Session, seenAlive bool) (string, bool) {
 func hasRunEvidence(s store.Session, seenAlive bool) bool {
 	return seenAlive || s.ExitCode != nil || s.StartedAt != ""
 }
-
