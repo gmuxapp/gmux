@@ -2,7 +2,6 @@ package peering
 
 import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"testing"
 )
 
@@ -86,19 +85,5 @@ func TestAddPeerBeforeStartInstallsAndReplacesConfig(t *testing.T) {
 	m.AddPeer(config.PeerConfig{Name: "box", URL: "new", Token: "two"})
 	if p := m.GetPeer("box"); p == nil || p.Config.URL != "new" || p.Config.Token != "two" {
 		t.Fatalf("replacement=%v", p)
-	}
-}
-
-func TestLegacyConstructorPreservesStoreBehavior(t *testing.T) {
-	st := store.New()
-	m := NewManager(nil, st, "self")
-	sink := m.managerSink()
-	sink.ReplacePeerSessions("box", []SessionProjection{{ID: "s@box", Peer: "box", Alive: true, Adapter: "shell"}})
-	if got, ok := st.Get("s@box"); !ok || !got.Alive || got.Peer != "box" {
-		t.Fatalf("legacy projection missing: %#v %v", got, ok)
-	}
-	sink.RemovePeerSessions("box")
-	if _, ok := st.Get("s@box"); ok {
-		t.Fatal("legacy removal did not prune")
 	}
 }

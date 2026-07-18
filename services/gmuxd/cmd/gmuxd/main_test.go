@@ -18,7 +18,6 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 )
 
@@ -507,10 +506,10 @@ func TestComposePeerProjectsSkipsLocalPeers(t *testing.T) {
 	}))
 	defer spoke.Close()
 
-	mgr := peering.NewManager([]config.PeerConfig{
+	mgr := peering.NewProjectionManager([]config.PeerConfig{
 		{Name: "tower", URL: spoke.URL},
 		{Name: "devcontainer", URL: spoke.URL, Local: true},
-	}, store.New(), "test-host")
+	}, "test-host", nil, peering.EventHooks{})
 	mgr.Start()
 	defer mgr.Stop()
 
