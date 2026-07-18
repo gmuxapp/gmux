@@ -248,9 +248,11 @@ type Composer struct {
 	dirtySessions bool
 	dirtyProjects bool
 
-	wake chan struct{}
-	done chan struct{}
-	once sync.Once
+	wake    chan struct{}
+	done    chan struct{}
+	once    sync.Once
+	runOnce sync.Once
+	runDone chan struct{}
 }
 
 // Option configures a Composer.
@@ -277,6 +279,7 @@ func New(reader Reader, runtime RuntimeSource, sink Sink, opts ...Option) *Compo
 		retryDelay: 100 * time.Millisecond,
 		wake:       make(chan struct{}, 1),
 		done:       make(chan struct{}),
+		runDone:    make(chan struct{}),
 	}
 	for _, o := range opts {
 		o(c)
@@ -297,6 +300,12 @@ func (c *Composer) MarkDirty(sessions, projects bool) {
 		return
 	}
 	c.mu.Lock()
+	select {
+	case <-c.done:
+		c.mu.Unlock()
+		return
+	default:
+	}
 	c.dirtySessions = c.dirtySessions || sessions
 	c.dirtyProjects = c.dirtyProjects || projects
 	c.mu.Unlock()
@@ -309,6 +318,13 @@ func (c *Composer) MarkDirty(sessions, projects bool) {
 // Run is the composition loop. It blocks until ctx is canceled or Close is
 // called. At most one composition is in flight at any time.
 func (c *Composer) Run(ctx context.Context) {
+	started := false
+	c.runOnce.Do(func() { started = true })
+	if !started {
+		<-c.runDone
+		return
+	}
+	defer close(c.runDone)
 	for {
 		select {
 		case <-ctx.Done():
@@ -353,8 +369,20 @@ func (c *Composer) Run(ctx context.Context) {
 	}
 }
 
-// Close stops Run. Safe to call multiple times.
-func (c *Composer) Close() { c.once.Do(func() { close(c.done) }) }
+// Close stops Run and joins the composition worker. Safe to call multiple
+// times and concurrently with invalidation. If Run was never started, Close
+// establishes the completed join itself.
+func (c *Composer) Close() {
+	c.once.Do(func() {
+		close(c.done)
+		started := false
+		c.runOnce.Do(func() { started = true })
+		if started {
+			close(c.runDone)
+		}
+	})
+	<-c.runDone
+}
 
 func (c *Composer) takeDirty() (sessions, projects bool) {
 	c.mu.Lock()

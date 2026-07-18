@@ -146,6 +146,11 @@ type Bootstrap struct {
 	cfg         BootstrapConfig
 	firstPair   chan struct{}
 	firstOnce   sync.Once
+	lifetimeCtx context.Context
+	cancel      context.CancelFunc
+	workers     sync.WaitGroup
+	closeOnce   sync.Once
+	bridge      *composerDirtyBridge
 }
 
 type composerDirtyBridge struct {
@@ -177,7 +182,8 @@ func newBootstrap(cfg BootstrapConfig) (*Bootstrap, error) {
 	}
 	coord := sessioncoord.New(registry, cfg.Runners, cfg.Store, bridge, cfg.Errors, opts...)
 	cache := wire.NewCache(cfg.Converter, cfg.PeerSessions)
-	b := &Bootstrap{Store: cfg.Store, Registry: registry, Coordinator: coord, Cache: cache, cfg: cfg, firstPair: make(chan struct{})}
+	lifetimeCtx, cancel := context.WithCancel(context.Background())
+	b := &Bootstrap{Store: cfg.Store, Registry: registry, Coordinator: coord, Cache: cache, cfg: cfg, firstPair: make(chan struct{}), lifetimeCtx: lifetimeCtx, cancel: cancel, bridge: bridge}
 	sink := central.SinkFunc(func(ctx context.Context, batch central.Batch) {
 		frames := cache.Apply(batch)
 		if frames.Sessions != nil && frames.World != nil {
@@ -210,10 +216,21 @@ func newBootstrap(cfg BootstrapConfig) (*Bootstrap, error) {
 	return b, nil
 }
 
-// Close is the joined daemon boundary for coordinator-owned stream drains.
-// Lifetime-scoped trigger/composer workers must be canceled by their caller
-// before Close; after it returns no runner drain can touch Store.
-func (b *Bootstrap) Close() { b.Coordinator.Close() }
+// Close is the idempotent joined daemon boundary. It first prevents new
+// committed mutations from reaching the composer, cancels and joins trigger
+// workers, joins coordinator drains, and finally closes/joins the composer.
+// After it returns no bootstrap-owned worker can touch Store.
+func (b *Bootstrap) Close() {
+	b.closeOnce.Do(func() {
+		b.bridge.mu.Lock()
+		b.bridge.c = nil
+		b.bridge.mu.Unlock()
+		b.cancel()
+		b.workers.Wait()
+		b.Coordinator.Close()
+		b.Composer.Close()
+	})
+}
 
 type centralErrorAdapter struct{ sink sessioncoord.ErrorSink }
 
@@ -325,7 +342,11 @@ func (b *Bootstrap) StartPostConvergence(ctx context.Context, endpoints []string
 	if err := b.Reconcile(ctx); err != nil {
 		return err
 	}
-	go b.Composer.Run(ctx)
+	b.workers.Add(1)
+	go func() {
+		defer b.workers.Done()
+		b.Composer.Run(b.lifetimeCtx)
+	}()
 	b.Composer.MarkDirty(true, true)
 	select {
 	case <-b.firstPair:
@@ -411,7 +432,8 @@ type TriggerConfig struct {
 }
 
 // StartTriggers wires every asynchronous post-convergence path. All workers
-// are joined before return; callers run this in the bootstrap lifetime group.
+// are joined before return. Production should use StartOwnedTriggers so Close
+// owns cancellation and joining.
 func (b *Bootstrap) StartTriggers(ctx context.Context, cfg TriggerConfig) error {
 	seed, outcomes, unsubscribe, err := b.SubscribeOutcomes(ctx)
 	if err != nil {
@@ -508,6 +530,16 @@ func (b *Bootstrap) StartTriggers(ctx context.Context, cfg TriggerConfig) error 
 	<-ctx.Done()
 	wg.Wait()
 	return ctx.Err()
+}
+
+// StartOwnedTriggers starts the production trigger graph under Bootstrap's
+// lifetime. Close cancels and joins it before coordinator/composer shutdown.
+func (b *Bootstrap) StartOwnedTriggers(cfg TriggerConfig) {
+	b.workers.Add(1)
+	go func() {
+		defer b.workers.Done()
+		_ = b.StartTriggers(b.lifetimeCtx, cfg)
+	}()
 }
 
 // SubscribeOutcomes atomically establishes the post-barrier consumer fence.

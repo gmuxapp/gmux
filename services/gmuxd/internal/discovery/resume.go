@@ -11,10 +11,15 @@ import (
 // the agent hook). Returns nil if the session has no recorded conversation
 // or isn't resumable.
 func ResolveResumeCommand(sess *store.Session) []string {
-	if sess.ConversationRef == "" {
+	return ResolveResumeCommandFor(sess.Adapter, sess.ConversationRef)
+}
+
+// ResolveResumeCommandFor is the authority-neutral resume policy seam.
+func ResolveResumeCommandFor(adapterName, conversationRef string) []string {
+	if conversationRef == "" {
 		return nil
 	}
-	a := adapters.FindByAdapter(sess.Adapter)
+	a := adapters.FindByAdapter(adapterName)
 	if a == nil {
 		return nil
 	}
@@ -26,7 +31,7 @@ func ResolveResumeCommand(sess *store.Session) []string {
 	if !ok {
 		return nil
 	}
-	info, err := desc.DescribeConversation(sess.ConversationRef)
+	info, err := desc.DescribeConversation(conversationRef)
 	if err != nil {
 		return nil
 	}

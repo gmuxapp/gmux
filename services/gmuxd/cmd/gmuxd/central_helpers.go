@@ -14,7 +14,6 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
 type fanoutMessage struct {
@@ -226,12 +225,12 @@ func projectSpecsFromState(state projects.State) []centralstore.ProjectEntrySpec
 	return specs
 }
 
-func centralSessionToLegacy(row centralstore.Session) store.Session {
-	var status *store.Status
+func centralSessionToLegacy(row centralstore.Session) compatSession {
+	var status *compatStatus
 	if row.StatusReported {
-		status = &store.Status{Working: row.Working, Error: row.Error}
+		status = &compatStatus{Working: row.Working, Error: row.Error}
 	}
-	return store.Session{
+	return compatSession{
 		ID:              string(row.ID),
 		CreatedAt:       fmtMillis(row.CreatedAt),
 		Command:         append([]string(nil), row.Command...),
@@ -255,12 +254,12 @@ func centralSessionToLegacy(row centralstore.Session) store.Session {
 	}
 }
 
-func legacySessionFromWire(s wire.Session) store.Session {
-	var status *store.Status
+func legacySessionFromWire(s wire.Session) compatSession {
+	var status *compatStatus
 	if s.Status != nil {
-		status = &store.Status{Working: s.Status.Working, Error: s.Status.Error}
+		status = &compatStatus{Working: s.Status.Working, Error: s.Status.Error}
 	}
-	return store.Session{
+	return compatSession{
 		ID:              s.ID,
 		Peer:            s.Peer,
 		CreatedAt:       s.CreatedAt,
@@ -293,7 +292,7 @@ func legacySessionFromWire(s wire.Session) store.Session {
 	}
 }
 
-func legacySessionFromOutcome(o centralstore.Session, alive bool) store.Session {
+func legacySessionFromOutcome(o centralstore.Session, alive bool) compatSession {
 	s := centralSessionToLegacy(o)
 	s.Alive = alive
 	return s

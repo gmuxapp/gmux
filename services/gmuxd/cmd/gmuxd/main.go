@@ -18,8 +18,6 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 	qrterminal "github.com/mdp/qrterminal/v3"
 )
@@ -176,33 +174,6 @@ func launchGmux(gmuxBin string, command []string, cwd, resumeID string, initialC
 //
 // Every candidate is Stat'd via projects.IsDir, so a missing target can
 // never reach exec.
-func resolveResumeDir(mgr *projects.Manager, sess store.Session) (string, bool) {
-	cwd := projects.NormalizePath(sess.Cwd)
-	canonical := ""
-	if state, err := mgr.Load(); err != nil {
-		// Don't fail the resume over unreadable project state: the
-		// canonical-dir candidate just drops out and we fall through to
-		// cwd/$HOME. Log it so a surprise $HOME resume is explained.
-		log.Printf("resolveResumeDir: %s: load projects: %v (canonical dir unavailable)", sess.ID, err)
-	} else {
-		canonical = state.CanonicalDirForSession(sess.ProjectSlug, projects.MatchParams{
-			Cwd:           sess.Cwd,
-			WorkspaceRoot: sess.WorkspaceRoot,
-			Remotes:       sess.Remotes,
-		})
-	}
-	dir, idx := projects.ResolveLaunchDir(projects.IsDir, cwd, canonical, os.Getenv("HOME"))
-	if dir == "" {
-		return "", false
-	}
-	return dir, idx > 0
-}
-
-// relaunchData builds the success payload for /resume and /restart. On
-// a fallback (cwd was gone), it carries original_cwd + fallback_cwd so
-// the frontend can surface an info toast ("original folder gone; resumed
-// in <fallback_cwd>") without re-deriving anything. Omitted on the
-// common path where the original cwd was used.
 func relaunchData(sessionID string, pid int, originalCwd, usedCwd string, fellBack bool) map[string]any {
 	data := map[string]any{"pid": pid, "session_id": sessionID}
 	if fellBack {
@@ -643,7 +614,7 @@ func runAuth(stdout, stderr io.Writer) int {
 //     change.
 func snapshotPumpRoute(eventType string) (pushSessions, pushWorld bool) {
 	switch eventType {
-	case store.EventSessionUpsert, store.EventSessionRemove:
+	case "session-upsert", "session-remove":
 		return true, false
 	case "peer-status":
 		return false, true
@@ -715,50 +686,8 @@ func isAllowedPeerProxyPath(method, sub string) bool {
 // sessionLastActive returns the timestamp used to sort discovered
 // suggestions by recency: the session's last_output_at, falling back
 // to created_at when no activity has been recorded yet.
-func sessionLastActive(s store.Session) string {
-	if s.LastOutputAt != "" {
-		return s.LastOutputAt
-	}
-	return s.CreatedAt
-}
-
-// buildSessionInfos converts store sessions to project SessionInfo structs.
-func buildSessionInfos(sessions *store.Store, isLocalPeer func(string) bool) []projects.SessionInfo {
-	list := sessions.List()
-	infos := make([]projects.SessionInfo, len(list))
-	for i, s := range list {
-		infos[i] = projects.SessionInfo{
-			ID:            s.ID,
-			Cwd:           s.Cwd,
-			WorkspaceRoot: s.WorkspaceRoot,
-			Remotes:       s.Remotes,
-			Host:          s.Peer,
-			LocalHost:     s.Peer != "" && isLocalPeer != nil && isLocalPeer(s.Peer),
-			Alive:         s.Alive,
-			Resumable:     s.Resumable,
-			LastActive:    sessionLastActive(s),
-		}
-	}
-	return infos
-}
-
-// sseWriteTimeout bounds every SSE write so the daemon reacts to its
-// own failed writes instead of delegating all client-liveness
-// detection to OS TCP keepalive (#243). Without it, a half-dead client
-// (peer gone, no FIN/RST seen) is only reaped when the kernel exhausts
-// TCP retransmits — non-deterministic and dependent on host tunables.
-//
-// This governs how long a Write blocks waiting for kernel send-buffer
-// space, not end-to-end delivery: it fires only if the client drains
-// nothing for the full window, which is exactly a dead peer. A healthy
-// slow client whose frame fits the send buffer is never affected, and
-// the deadline is re-armed before every write so it can't fire on an
-// idle-but-live connection between frames.
 const sseWriteTimeout = 10 * time.Second
 
-// sendSSEFrame writes one event frame with a fresh write deadline and
-// flushes it. Any write or flush error means the client is gone; the
-// caller must treat it as a disconnect and tear the subscriber down.
 func sendSSEFrame(rc *http.ResponseController, w io.Writer, event string, payload any) error {
 	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
 	if err := sendSSE(w, event, payload); err != nil {

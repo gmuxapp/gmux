@@ -436,3 +436,52 @@ func TestNilVerdictSourceKeepsDefault(t *testing.T) {
 		t.Fatalf("row=%#v", row)
 	}
 }
+
+func TestCloseJoinsInFlightComposeAndRejectsLaterInvalidation(t *testing.T) {
+	gate := make(chan struct{})
+	reader := &fakeReader{gate: gate}
+	c := New(reader, RuntimeSourceFunc(func() map[centralstore.SessionID]RuntimeFacts { return nil }), SinkFunc(func(context.Context, Batch) {}))
+	go c.Run(context.Background())
+	c.MarkDirty(true, false)
+	deadline := time.Now().Add(time.Second)
+	for len(reader.calls()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	closed := make(chan struct{})
+	go func() { c.Close(); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while store read was in flight")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(gate)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not join composer")
+	}
+	before := len(reader.calls())
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Add(1)
+		go func() { defer wg.Done(); c.MarkDirty(true, true) }()
+	}
+	wg.Wait()
+	time.Sleep(20 * time.Millisecond)
+	if got := len(reader.calls()); got != before {
+		t.Fatalf("post-Close reads=%d, want %d", got, before)
+	}
+}
+
+func TestCloseBeforeRunIsJoinedAndIdempotent(t *testing.T) {
+	c := New(&fakeReader{}, RuntimeSourceFunc(func() map[centralstore.SessionID]RuntimeFacts { return nil }), SinkFunc(func(context.Context, Batch) {}))
+	c.Close()
+	c.Close()
+	done := make(chan struct{})
+	go func() { c.Run(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Run after Close did not return")
+	}
+}

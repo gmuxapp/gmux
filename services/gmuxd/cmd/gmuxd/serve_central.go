@@ -15,7 +15,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -43,7 +42,6 @@ import (
 	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/statetool"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/tsauth"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/update"
@@ -166,8 +164,8 @@ func serveCentral(stderr io.Writer) int {
 	}
 
 	converter := &wire.Converter{Titlers: make(map[string]func([]string) string), ResumeCommand: func(adapterName, ref string) []string {
-		legacy := &store.Session{Adapter: adapterName, ConversationRef: ref}
-		return discovery.ResolveResumeCommand(legacy)
+		legacy := &compatSession{Adapter: adapterName, ConversationRef: ref}
+		return discovery.ResolveResumeCommandFor(legacy.Adapter, legacy.ConversationRef)
 	}, IsLocalPeer: func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) }}
 	for _, a := range adapters.All {
 		if titler, ok := a.(adapter.CommandTitler); ok {
@@ -185,7 +183,7 @@ func serveCentral(stderr io.Writer) int {
 		return dir, err
 	}, ResolveCommand: func(row centralstore.Session) []string {
 		legacy := centralSessionToLegacy(row)
-		return discovery.ResolveResumeCommand(&legacy)
+		return discovery.ResolveResumeCommandFor(legacy.Adapter, legacy.ConversationRef)
 	}}
 
 	boot, err = newBootstrap(BootstrapConfig{Store: storeHandle, Runners: productionRunnerClient{}, Control: productionRunnerControl{}, Spawner: spawner, Resolver: productionConversationResolver{}, Reconciler: productionAdapterReconciler{}, LocalPeers: peerAdapter.LocalPeerMatchInputs, Peers: peerAdapter, PeerSessions: peerAdapter, Converter: converter, Endpoints: productionEndpointSource{}, Errors: sessioncoord.ErrorSinkFunc(func(_ context.Context, err error) { log.Printf("gmuxd: %v", err) }), Frames: func(_ context.Context, frames wire.Frames) { fanout.BroadcastFrames(frames) }})
@@ -727,7 +725,7 @@ func serveCentral(stderr io.Writer) int {
 						if !shouldForwardActivity(asPeer, msg.ActivityID, isLocalPeer) {
 							continue
 						}
-						if err := sendSSEFrame(rc, w, store.EventSessionActivity, map[string]any{"type": store.EventSessionActivity, "id": msg.ActivityID}); err != nil {
+						if err := sendSSEFrame(rc, w, "session-activity", map[string]any{"type": "session-activity", "id": msg.ActivityID}); err != nil {
 							return
 						}
 						continue
@@ -761,12 +759,7 @@ func serveCentral(stderr io.Writer) int {
 		go daemonCancel()
 	})
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		_ = boot.StartTriggers(daemonCtx, TriggerConfig{Tick: productionEndpointSchedule(daemonCtx, 30*time.Second), ConversationDeleted: productionConversationDeletionSource(daemonCtx, convIndex), PeerSessionsChanged: nil, PeerWorldChanged: nil, Activity: func(o sessioncoord.Outcome) { fanout.BroadcastActivity(string(o.ID)) }})
-	}()
+	boot.StartOwnedTriggers(TriggerConfig{Tick: productionEndpointSchedule(daemonCtx, 30*time.Second), ConversationDeleted: productionConversationDeletionSource(daemonCtx, convIndex), PeerSessionsChanged: nil, PeerWorldChanged: nil, Activity: func(o sessioncoord.Outcome) { fanout.BroadcastActivity(string(o.ID)) }})
 
 	authedHandler := netauth.Middleware(authToken, commonMux)
 	sock := paths.SocketPath()
@@ -774,7 +767,6 @@ func serveCentral(stderr io.Writer) int {
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
 		daemonCancel()
-		wg.Wait()
 		return 1
 	}
 	defer unixipc.Cleanup(sock)
@@ -788,7 +780,6 @@ func serveCentral(stderr io.Writer) int {
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: tcp listener on %s: %v\n", tcpAddr, err)
 		daemonCancel()
-		wg.Wait()
 		return 1
 	}
 	tcpSrv := &http.Server{Addr: tcpAddr, Handler: authedHandler}
@@ -840,8 +831,6 @@ func serveCentral(stderr io.Writer) int {
 	defer cancelShutdown()
 	_ = sockSrv.Shutdown(shutdownCtx)
 	_ = tcpSrv.Shutdown(shutdownCtx)
-	boot.Close()
-	wg.Wait()
 	return 0
 }
 
@@ -1369,7 +1358,7 @@ func handleInputWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootst
 
 func awaitTurnCentral(ctx context.Context, fanout *sseFanout, outcomes <-chan sessioncoord.Outcome, sessionID string, deadline <-chan time.Time) (string, bool) {
 	seenWorking := false
-	check := func(s store.Session) (string, bool) {
+	check := func(s compatSession) (string, bool) {
 		if !s.Alive {
 			if seenWorking && s.Status != nil && !s.Status.Working {
 				return "idle", true

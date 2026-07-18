@@ -24,9 +24,7 @@ import (
 	"github.com/gmuxapp/gmux/packages/sessionenv"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
 type productionRunnerClient struct{}
@@ -256,7 +254,6 @@ type runnerLaunchResult struct {
 }
 
 type productionRunnerSpawner struct {
-	Projects       *projects.Manager
 	GmuxBin        string
 	ResolveDir     func(centralstore.Session) (string, error)
 	ResolveCommand func(centralstore.Session) []string
@@ -269,16 +266,13 @@ func (s *productionRunnerSpawner) Spawn(ctx context.Context, row centralstore.Se
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	legacy := store.Session{ID: string(row.ID), Adapter: row.Adapter, ConversationRef: row.ConversationRef, Cwd: row.CWD, WorkspaceRoot: row.WorkspaceRoot, Remotes: row.Remotes, Command: append([]string(nil), row.Command...)}
+	legacy := compatSession{ID: string(row.ID), Adapter: row.Adapter, ConversationRef: row.ConversationRef, Cwd: row.CWD, WorkspaceRoot: row.WorkspaceRoot, Remotes: row.Remotes, Command: append([]string(nil), row.Command...)}
 	var cwd string
 	var err error
 	if s.ResolveDir != nil {
 		cwd, err = s.ResolveDir(row)
 	} else {
-		if s.Projects == nil {
-			return "", fmt.Errorf("runner spawn: projects unavailable")
-		}
-		cwd, _ = resolveResumeDir(s.Projects, legacy)
+		return "", fmt.Errorf("runner spawn: directory resolver unavailable")
 	}
 	if err != nil {
 		return "", err
@@ -289,7 +283,7 @@ func (s *productionRunnerSpawner) Spawn(ctx context.Context, row centralstore.Se
 	if s.ResolveCommand != nil {
 		legacy.Command = s.ResolveCommand(row)
 	} else {
-		legacy.Command = discovery.ResolveResumeCommand(&legacy)
+		legacy.Command = discovery.ResolveResumeCommandFor(legacy.Adapter, legacy.ConversationRef)
 	}
 	if len(legacy.Command) == 0 {
 		return "", fmt.Errorf("runner spawn: session %s is not resumable", row.ID)
@@ -345,7 +339,7 @@ func launchRunnerProcess(ctx context.Context, req runnerLaunchRequest) (runnerLa
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Env = sessionenv.Strip(captureLoginEnv(req.GmuxBin, req.CWD))
 	if err := cmd.Start(); err != nil {
-		if req.CWD != "" && !projects.IsDir(req.CWD) {
+		if info, statErr := os.Stat(req.CWD); req.CWD != "" && (statErr != nil || !info.IsDir()) {
 			return runnerLaunchResult{}, fmt.Errorf("working directory %q does not exist: %w", req.CWD, err)
 		}
 		return runnerLaunchResult{}, err
