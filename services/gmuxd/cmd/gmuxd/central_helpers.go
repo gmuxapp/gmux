@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -15,6 +17,19 @@ import (
 	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/wire"
 )
+
+var errInvalidProjectJSON = errors.New("invalid project JSON")
+
+func decodeProjectState(body []byte) (projects.State, error) {
+	var state projects.State
+	if err := json.Unmarshal(body, &state); err != nil {
+		return projects.State{}, fmt.Errorf("%w: %v", errInvalidProjectJSON, err)
+	}
+	if err := state.Validate(); err != nil {
+		return projects.State{}, err
+	}
+	return state, nil
+}
 
 type fanoutMessage struct {
 	Frames         wire.Frames

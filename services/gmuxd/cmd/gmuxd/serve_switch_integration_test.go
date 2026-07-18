@@ -209,6 +209,40 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 		t.Fatalf("unexpected sqlite rows: %+v", rows)
 	}
 
+	// Validate through the installed production route. This deliberately
+	// catches a handler that bypasses decodeProjectState/State.Validate.
+	invalidProjects := `{"version":4,"items":[{"slug":"duplicate"},{"slug":"duplicate"}]}`
+	putReq, err := http.NewRequest(http.MethodPut, "http://localhost/v1/projects", strings.NewReader(invalidProjects))
+	if err != nil {
+		t.Fatal(err)
+	}
+	putReq.Header.Set("Content-Type", "application/json")
+	putResp, err := client.Do(putReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var putEnvelope struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(putResp.Body).Decode(&putEnvelope); err != nil {
+		putResp.Body.Close()
+		t.Fatal(err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusBadRequest || putEnvelope.OK || putEnvelope.Error.Code != "validation_error" {
+		t.Fatalf("invalid PUT status=%d envelope=%+v", putResp.StatusCode, putEnvelope)
+	}
+	catalog, err := ro.ReadSnapshot(context.Background(), centralstore.SnapshotQuery{IncludeProjects: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Projects) != 0 {
+		t.Fatalf("invalid PUT changed catalog: %+v", catalog.Projects)
+	}
+
 	req, err := http.NewRequest(http.MethodGet, "http://localhost/v1/events", nil)
 	if err != nil {
 		t.Fatal(err)

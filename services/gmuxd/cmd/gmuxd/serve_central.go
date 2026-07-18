@@ -278,12 +278,12 @@ func serveCentral(stderr io.Writer) int {
 				writeError(w, http.StatusBadRequest, "bad_request", "read error")
 				return
 			}
-			var incoming projects.State
-			if err := json.Unmarshal(body, &incoming); err != nil {
-				writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
-				return
-			}
-			if err := incoming.Validate(); err != nil {
+			incoming, err := decodeProjectState(body)
+			if err != nil {
+				if errors.Is(err, errInvalidProjectJSON) {
+					writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+					return
+				}
 				writeError(w, http.StatusBadRequest, "validation_error", err.Error())
 				return
 			}
