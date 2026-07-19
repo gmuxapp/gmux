@@ -1,0 +1,31 @@
+name: Central store E2E (nightly, extended)
+
+# The extended production container E2E runs the fast acceptance scenarios
+# plus a 50-cycle create/kill/restart stress loop against the real gmuxd
+# binary. It is too heavy for every PR (see ci.yml for the fast profile that
+# gates PRs), so it runs nightly and on demand. A failure here means a
+# lifecycle/crash-consistency regression that the fast profile did not surface.
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # ~06:00 UTC nightly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: central-store-e2e-nightly
+  cancel-in-progress: true
+
+jobs:
+  extended:
+    name: Extended production container E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      # No host Go/Node needed: the Dockerfile builds gmuxd inside the image.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Extended production container E2E (50-cycle stress)
+        run: GMUX_E2E_PROFILE=extended services/gmuxd/tools/production-e2e.sh
