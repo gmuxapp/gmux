@@ -180,19 +180,20 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	// `data` MUST be a flat JSON array, matching the legacy daemon contract
+	// and what the gmux CLI decodes in fetchSessions ([]cliSession). A wrapped
+	// {"sessions":[...]} envelope here breaks `gmux ls`/`kill`/`attach`/etc.
 	var sessionsEnv struct {
 		OK   bool `json:"ok"`
-		Data struct {
-			Sessions []struct {
-				ID    string `json:"id"`
-				Alive bool   `json:"alive"`
-			} `json:"sessions"`
+		Data []struct {
+			ID    string `json:"id"`
+			Alive bool   `json:"alive"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&sessionsEnv); err != nil {
 		t.Fatal(err)
 	}
-	if !sessionsEnv.OK || len(sessionsEnv.Data.Sessions) != 1 || sessionsEnv.Data.Sessions[0].ID != "sess-switch-test" || !sessionsEnv.Data.Sessions[0].Alive {
+	if !sessionsEnv.OK || len(sessionsEnv.Data) != 1 || sessionsEnv.Data[0].ID != "sess-switch-test" || !sessionsEnv.Data[0].Alive {
 		t.Fatalf("unexpected /v1/sessions payload: %+v", sessionsEnv)
 	}
 

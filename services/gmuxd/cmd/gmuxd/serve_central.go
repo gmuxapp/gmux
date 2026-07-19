@@ -455,7 +455,15 @@ func serveCentral(stderr io.Writer) int {
 			if frames.Sessions == nil {
 				frames = boot.Cache.Current()
 			}
-			writeJSON(w, map[string]any{"ok": true, "data": frames.Sessions})
+			// The CLI (`gmux ls`/`kill`/`attach`/... via fetchSessions) and the
+			// legacy daemon contract expect `data` to be a flat JSON array of
+			// sessions, not the SSE snapshot's {"sessions":[...]} envelope. Unwrap
+			// so `data` is the array. See tools/dev-container regression.
+			sessions := []wire.Session{}
+			if frames.Sessions != nil {
+				sessions = frames.Sessions.Sessions
+			}
+			writeJSON(w, map[string]any{"ok": true, "data": sessions})
 		})
 		mux.HandleFunc("GET /v1/conversations/{adapter}/{slug}", func(w http.ResponseWriter, r *http.Request) {
 			adapterName := r.PathValue("adapter")
