@@ -280,6 +280,38 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 	if _, ok := worldFrame["projects"]; !ok {
 		t.Fatalf("snapshot.world omitted projects: %s", data)
 	}
+	// The web UI's "+" launcher menu reads top-level world.launchers /
+	// world.default_launcher (not world.health.launchers). The converter only
+	// fills health, so serveCentral must inject the static launch config into
+	// every world frame. A null/empty top-level launchers leaves the UI menu
+	// empty (no shell, no pi).
+	var launchers []struct {
+		ID string `json:"id"`
+	}
+	if raw, ok := worldFrame["launchers"]; !ok {
+		t.Fatalf("snapshot.world omitted launchers: %s", data)
+	} else if err := json.Unmarshal(raw, &launchers); err != nil {
+		t.Fatal(err)
+	}
+	if len(launchers) == 0 {
+		t.Fatalf("snapshot.world top-level launchers empty (UI + menu would be blank): %s", data)
+	}
+	hasShell := false
+	for _, l := range launchers {
+		if l.ID == "shell" {
+			hasShell = true
+		}
+	}
+	if !hasShell {
+		t.Fatalf("snapshot.world launchers missing shell: %s", data)
+	}
+	var defLauncher string
+	if raw, ok := worldFrame["default_launcher"]; ok {
+		_ = json.Unmarshal(raw, &defLauncher)
+	}
+	if defLauncher != "shell" {
+		t.Fatalf("snapshot.world default_launcher=%q, want shell: %s", defLauncher, data)
+	}
 
 	if !unixipc.Shutdown(sock) {
 		t.Fatal("failed to shut daemon down")

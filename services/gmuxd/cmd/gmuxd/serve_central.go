@@ -186,7 +186,19 @@ func serveCentral(stderr io.Writer) int {
 		return discovery.ResolveResumeCommandFor(legacy.Adapter, legacy.ConversationRef)
 	}}
 
-	boot, err = newBootstrap(BootstrapConfig{Store: storeHandle, Runners: productionRunnerClient{}, Control: productionRunnerControl{}, Spawner: spawner, Resolver: productionConversationResolver{}, Reconciler: productionAdapterReconciler{}, LocalPeers: peerAdapter.LocalPeerMatchInputs, Peers: peerAdapter, PeerSessions: peerAdapter, Converter: converter, Endpoints: productionEndpointSource{}, Errors: sessioncoord.ErrorSinkFunc(func(_ context.Context, err error) { log.Printf("gmuxd: %v", err) }), Frames: func(_ context.Context, frames wire.Frames) { fanout.BroadcastFrames(frames) }})
+	boot, err = newBootstrap(BootstrapConfig{Store: storeHandle, Runners: productionRunnerClient{}, Control: productionRunnerControl{}, Spawner: spawner, Resolver: productionConversationResolver{}, Reconciler: productionAdapterReconciler{}, LocalPeers: peerAdapter.LocalPeerMatchInputs, Peers: peerAdapter, PeerSessions: peerAdapter, Converter: converter, Endpoints: productionEndpointSource{}, Errors: sessioncoord.ErrorSinkFunc(func(_ context.Context, err error) { log.Printf("gmuxd: %v", err) }), Frames: func(_ context.Context, frames wire.Frames) {
+		// The converter builds world.health.launchers but not the top-level
+		// world.launchers/default_launcher that the web UI's "+" menu reads
+		// (parity with the legacy composeWorld). Inject the static launch
+		// config onto a shallow World copy so every broadcast carries it.
+		if frames.World != nil {
+			w := *frames.World
+			w.Launchers = peerLaunchers
+			w.DefaultLauncher = launchConfig.DefaultLauncher
+			frames.World = &w
+		}
+		fanout.BroadcastFrames(frames)
+	}})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
 		return 1
