@@ -12,7 +12,8 @@ import (
 func TestRunnerMetaWireJSONFieldTable(t *testing.T) {
 	want := []struct{ field, tag string }{
 		{"ID", "id"}, {"Adapter", "adapter"}, {"Kind", "kind"},
-		{"Alive", "alive"}, {"CreatedAt", "created_at"}, {"PID", "pid"},
+		{"Alive", "alive"}, {"CreatedAt", "created_at"},
+		{"StartedAt", "started_at"}, {"PID", "pid"},
 		{"RunnerVersion", "runner_version"}, {"BinaryHash", "binary_hash"},
 		{"ConversationRef", "conversation_file"}, {"CWD", "cwd"},
 		{"WorkspaceRoot", "workspace_root"}, {"Slug", "slug"},
@@ -31,7 +32,7 @@ func TestRunnerMetaWireJSONFieldTable(t *testing.T) {
 			t.Errorf("field[%d]=%s json:%q, want %s json:%q", i, field.Name, field.Tag.Get("json"), entry.field, entry.tag)
 		}
 	}
-	status := typeOf.Field(17).Type.Elem()
+	status := typeOf.Field(18).Type.Elem()
 	if status.NumField() != 2 || status.Field(0).Name != "Working" || status.Field(0).Tag.Get("json") != "working" || status.Field(1).Name != "Error" || status.Field(1).Tag.Get("json") != "error" {
 		t.Fatalf("status wire fields=%v, want explicit working/error JSON fields", status)
 	}

@@ -203,6 +203,7 @@ type runnerMetaWire struct {
 	Kind            string            `json:"kind"`
 	Alive           bool              `json:"alive"`
 	CreatedAt       string            `json:"created_at"`
+	StartedAt       string            `json:"started_at"`
 	PID             int               `json:"pid"`
 	RunnerVersion   string            `json:"runner_version"`
 	BinaryHash      string            `json:"binary_hash"`
@@ -231,6 +232,17 @@ func runnerMetaFacts(s runnerMetaWire) centralstore.RunnerFacts {
 		f.Error = &s.Status.Error
 	}
 	f.Unread = &s.Unread
+	// started_at is the runner's SetRunning stamp — the persisted "this session
+	// was actually observed running" proxy (legacy store.go:40). It is the
+	// only source of this fact; dropping it (as the initial cutover did) leaves
+	// started_at null forever, breaking the CLI/UI started_at field and the
+	// wait "ever alive" check (wait_pure.go:149).
+	if s.StartedAt != "" {
+		if t, perr := time.Parse(time.RFC3339, s.StartedAt); perr == nil {
+			at := centralstore.UnixMillis(t.UnixMilli())
+			f.StartedAt.Set = &at
+		}
+	}
 	if s.TerminalCols > 0 && s.TerminalRows > 0 {
 		x := centralstore.TerminalSize{Cols: s.TerminalCols, Rows: s.TerminalRows}
 		f.TerminalSize.Set = &x
