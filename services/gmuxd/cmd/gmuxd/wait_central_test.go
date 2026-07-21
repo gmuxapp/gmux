@@ -184,9 +184,17 @@ func TestCentralWaitHandlerAlreadyIdleDeadArrivalNoPhantomAndTimeout(t *testing.
 		t.Fatal(err)
 	}
 	defer st.Close()
+	// The wait handler uses a store-direct existence check; seed the
+	// session so it passes.
+	if _, _, err := st.InsertSession(ctx, centralstore.NewSession{
+		ID: "s", Adapter: "shell", Command: []string{"sh"},
+		CreatedAt: centralstore.UnixMillis(1),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	coord := sessioncoord.New(nil, &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{}, blocked: map[string]bool{}}, st, nil, nil)
 	defer coord.Close()
-	boot := &Bootstrap{Coordinator: coord}
+	boot := &Bootstrap{Store: st, Coordinator: coord}
 	for _, tc := range []struct {
 		name   string
 		s      wire.Session
@@ -216,7 +224,7 @@ func TestCentralInputWaitKittyAcceptedAndTimesOut(t *testing.T) {
 	defer st.Close()
 	coord := sessioncoord.New(nil, &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{}, blocked: map[string]bool{}}, st, nil, nil)
 	defer coord.Close()
-	boot := &Bootstrap{Coordinator: coord}
+	boot := &Bootstrap{Store: st, Coordinator: coord}
 	f := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Working: false}})
 	sent := false
 	rec := httptest.NewRecorder()

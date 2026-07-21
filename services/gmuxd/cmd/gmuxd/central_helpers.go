@@ -433,6 +433,58 @@ func sessionTreeRows(ctx context.Context, st *centralstore.Store, root centralst
 // copySlice returns a non-nil shallow copy of s. When s is empty the
 // result is an allocated empty slice so JSON marshaling produces []
 // instead of null — the nil-vs-empty bug class (ADR 0026 FD-3).
+// renderStoreDirect renders the full wire Frames from SQLite at request
+// time. This is the store-direct read path (ADR 0026 §2a): one SQLite read
+// txn + runtime overlay + wire conversion. The result is identical to what
+// the next composed fanout frame would produce, but fresher.
+func renderStoreDirect(ctx context.Context, boot *Bootstrap, converter *wire.Converter, peerAdapter *centralPeerAdapter) (wire.Frames, error) {
+	batch, err := central.RenderAll(
+		ctx,
+		boot.Store,
+		boot.Runtime,
+		boot.Verdicts,
+		central.PeerSourceFunc(peerAdapter.PeerWorld),
+	)
+	if err != nil {
+		return wire.Frames{}, err
+	}
+	var peerRows []wire.Session
+	if boot.cfg.PeerSessions != nil {
+		peerRows = boot.cfg.PeerSessions.PeerSessions()
+	}
+	var out wire.Frames
+	if batch.Sessions != nil {
+		p := converter.Sessions(batch.Sessions, batch.Projects, peerRows)
+		out.Sessions = &p
+	}
+	if batch.Projects != nil {
+		w := converter.World(batch.Sessions, batch.Projects, peerRows)
+		out.World = &w
+	}
+	return out, nil
+}
+
+// wireSessionFromStore builds a minimal wire.Session from a store row and
+// the live registry. Used for store-direct lookups in scrollback/attach.
+func wireSessionFromStore(row centralstore.Session, reg *sessioncoord.Registry) wire.Session {
+	out := wire.Session{
+		ID:        string(row.ID),
+		CreatedAt: fmtMillis(row.CreatedAt),
+		Adapter:   row.Adapter,
+	}
+	if row.TerminalCols != nil {
+		out.TerminalCols = *row.TerminalCols
+	}
+	if row.TerminalRows != nil {
+		out.TerminalRows = *row.TerminalRows
+	}
+	if runtime, live := registryRuntime(reg, row.ID); live {
+		out.Alive = true
+		out.SocketPath = runtime.Endpoint
+	}
+	return out
+}
+
 func copySlice[T any](s []T) []T {
 	out := make([]T, len(s))
 	copy(out, s)

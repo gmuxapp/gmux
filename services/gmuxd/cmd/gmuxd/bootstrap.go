@@ -143,6 +143,8 @@ type Bootstrap struct {
 	Coordinator *sessioncoord.Coordinator
 	Composer    *central.Composer
 	Cache       *wire.Cache
+	Runtime     central.RuntimeSource
+	Verdicts    central.VerdictSource
 	cfg         BootstrapConfig
 	firstPair   chan struct{}
 	firstOnce   sync.Once
@@ -210,6 +212,8 @@ func newBootstrap(cfg BootstrapConfig) (*Bootstrap, error) {
 	})
 	composer := central.New(cfg.Store, runtimeSource, sink, central.WithVerdictSource(verdictSource), central.WithPeerSource(cfg.Peers), central.WithErrorSink(centralErrorAdapter{cfg.Errors}))
 	b.Composer = composer
+	b.Runtime = runtimeSource
+	b.Verdicts = verdictSource
 	bridge.mu.Lock()
 	bridge.c = composer
 	bridge.mu.Unlock()

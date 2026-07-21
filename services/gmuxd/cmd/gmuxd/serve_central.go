@@ -240,21 +240,17 @@ func serveCentral(stderr io.Writer) int {
 	unixMux := http.NewServeMux()
 	registerCommon := func(mux *http.ServeMux, unixOnly bool) {
 		mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
-			frames := fanout.Current()
+			// Store-direct read (ADR 0026 §2a): render from SQLite so
+			// session counts are always fresh. Subsumes the
+			// freshHealthCounts point-fix from 41de2a28.
+			frames, renderErr := renderStoreDirect(r.Context(), boot, converter, peerAdapter)
 			health := peerAdapter.health()
-			if frames.World != nil && frames.World.Health != nil {
+			if renderErr == nil && frames.World != nil && frames.World.Health != nil {
 				h := *frames.World.Health
 				health.Sessions = h.Sessions
 				if len(h.Peers) > 0 {
 					health.Peers = append([]peering.PeerInfo(nil), h.Peers...)
 				}
-			}
-			// The cached world frame is only recomposed on project/peer
-			// batches, so its embedded session counts go stale across
-			// liveness changes. Legacy composed health at request time;
-			// derive the counts fresh from the current sessions frame.
-			if counts, ok := freshHealthCounts(frames); ok {
-				health.Sessions = counts
 			}
 			peers := health.Peers
 			if peers == nil {
@@ -294,7 +290,12 @@ func serveCentral(stderr io.Writer) int {
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"theme": theme, "settings": settings}})
 		})
 		mux.HandleFunc("GET /v1/projects", func(w http.ResponseWriter, r *http.Request) {
-			frames := fanout.Current()
+			// Store-direct read (ADR 0026 §2a).
+			frames, err := renderStoreDirect(r.Context(), boot, converter, peerAdapter)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "internal", "snapshot unavailable")
+				return
+			}
 			state := projectStateFromWorld(frames.World)
 			infos := buildSessionInfosWire(frames.Sessions, func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) })
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"configured": state.Items, "discovered": state.Discovered(infos), "unmatched_active_count": state.UnmatchedActiveCount(infos)}})
@@ -351,8 +352,13 @@ func serveCentral(stderr io.Writer) int {
 			if req.Remote != "" {
 				slug = projects.SlugFromRemote(req.Remote)
 			}
-			frames := fanout.Current()
-			state := projectStateFromWorld(frames.World)
+			// Store-direct project read for slug uniqueness check.
+			snap, snapErr := boot.Store.ReadSnapshot(r.Context(), centralstore.SnapshotQuery{IncludeProjects: true})
+			if snapErr != nil {
+				writeError(w, http.StatusInternalServerError, "internal", "failed to load projects")
+				return
+			}
+			state := *ownedProjectStateFromCatalog(snap.Projects)
 			item := projects.Item{Slug: projects.UniqueSlug(slug, state.Items), Match: rules}
 			state.Items = append(state.Items, item)
 			if err := state.Validate(); err != nil {
@@ -478,14 +484,16 @@ func serveCentral(stderr io.Writer) int {
 			writeJSON(w, map[string]any{"ok": true})
 		})
 		mux.HandleFunc("GET /v1/sessions", func(w http.ResponseWriter, r *http.Request) {
-			frames := fanout.Current()
-			if frames.Sessions == nil {
-				frames = boot.Cache.Current()
+			// Store-direct read (ADR 0026 §2a): render from SQLite at
+			// request time so REST clients get read-your-writes.
+			frames, err := renderStoreDirect(r.Context(), boot, converter, peerAdapter)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "internal", "snapshot unavailable")
+				return
 			}
 			// The CLI (`gmux ls`/`kill`/`attach`/... via fetchSessions) and the
 			// legacy daemon contract expect `data` to be a flat JSON array of
-			// sessions, not the SSE snapshot's {"sessions":[...]} envelope. Unwrap
-			// so `data` is the array. See tools/dev-container regression.
+			// sessions, not the SSE snapshot's {"sessions":[...]} envelope.
 			sessions := []wire.Session{}
 			if frames.Sessions != nil {
 				sessions = frames.Sessions.Sessions
@@ -929,13 +937,12 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 			writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
 			return
 		}
-		if !ok {
-			if _, found, err := boot.Store.Session(r.Context(), sid); err != nil || !found {
-				writeError(w, http.StatusNotFound, "not_found", "session not found")
-				return
-			}
+		// Store-direct existence check (ADR 0026 §2a).
+		if _, found, err := boot.Store.Session(r.Context(), sid); err != nil || !found {
+			writeError(w, http.StatusNotFound, "not_found", "session not found")
+			return
 		}
-		socketPath := sess.SocketPath
+		socketPath := ""
 		if e, live := registryRuntime(boot.Registry, sid); live {
 			socketPath = e.Endpoint
 		}
@@ -1052,15 +1059,22 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case "scrollback":
+		// Store-direct session lookup (ADR 0026 §2a).
+		if !ok {
+			row, found, storeErr := boot.Store.Session(r.Context(), sid)
+			if storeErr == nil && found {
+				ok = true
+				sess = wireSessionFromStore(row, boot.Registry)
+			}
+		}
 		scrollbackBrokerHandlerCentral(w, r, sessionID, sess, ok, sessionDirs.SessionDir)
 	case "conversation":
 		conversationHandlerCentral(w, r, sessionID, boot.Store)
 	case "clipboard":
-		if !ok {
-			if _, found, err := boot.Store.Session(r.Context(), sid); err != nil || !found {
-				writeError(w, http.StatusNotFound, "not_found", "session not found")
-				return
-			}
+		// Store-direct existence check (ADR 0026 §2a).
+		if _, found, err := boot.Store.Session(r.Context(), sid); err != nil || !found {
+			writeError(w, http.StatusNotFound, "not_found", "session not found")
+			return
 		}
 		clipboardHandler(clipfile.NewLocalWriter(os.TempDir())).ServeHTTP(w, r)
 	case "dismiss":
@@ -1210,10 +1224,8 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 		writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
 		return
 	}
-	if _, ok := visibleSession(fanout.Current().Sessions, sessionID); !ok {
-		writeError(w, http.StatusNotFound, "not_found", "session not found")
-		return
-	}
+	// Validate parameters before the existence check so cheap rejections
+	// don't need a store round-trip.
 	forText := r.URL.Query().Get("for_text")
 	forRegex := r.URL.Query().Get("for_regex")
 	if forText != "" && forRegex != "" {
@@ -1223,6 +1235,18 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 	deadline, err := timeoutChan(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if forRegex != "" {
+		if _, err := regexp.Compile(forRegex); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid regex: "+err.Error())
+			return
+		}
+	}
+	// Store-direct existence check (ADR 0026 §2a): a just-registered
+	// session is visible immediately without waiting for a compose pass.
+	if _, found, err := boot.Store.Session(r.Context(), centralstore.SessionID(sessionID)); err != nil || !found {
+		writeError(w, http.StatusNotFound, "not_found", "session not found")
 		return
 	}
 	if forText != "" || forRegex != "" {
