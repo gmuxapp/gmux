@@ -445,3 +445,28 @@ func manualPeerResponse(peer centralstore.ManualPeer, outcome centralstore.PeerU
 	}
 	return map[string]any{"peer": peer, "updated": outcome == centralstore.PeerUpdated}
 }
+
+// freshHealthCounts derives the FD-6 health session summary from the current
+// sessions frame. The world frame (which embeds SessionCounts) is only
+// recomposed on project/peer batches, so counts cached there go stale across
+// liveness-only changes; read paths that promise request-time freshness
+// (matching legacy's compose-at-emit behavior) recompute them from the
+// sessions frame, which IS rebuilt on every liveness batch. Semantics mirror
+// wire.deriveCounts: alive locals, alive peer rows, everything else dead.
+func freshHealthCounts(frames wire.Frames) (central.SessionCounts, bool) {
+	if frames.Sessions == nil {
+		return central.SessionCounts{}, false
+	}
+	var counts central.SessionCounts
+	for _, s := range frames.Sessions.Sessions {
+		switch {
+		case s.Alive && s.Peer == "":
+			counts.LocalAlive++
+		case s.Alive:
+			counts.RemoteAlive++
+		default:
+			counts.Dead++
+		}
+	}
+	return counts, true
+}

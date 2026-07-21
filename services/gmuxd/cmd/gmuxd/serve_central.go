@@ -249,6 +249,13 @@ func serveCentral(stderr io.Writer) int {
 					health.Peers = append([]peering.PeerInfo(nil), h.Peers...)
 				}
 			}
+			// The cached world frame is only recomposed on project/peer
+			// batches, so its embedded session counts go stale across
+			// liveness changes. Legacy composed health at request time;
+			// derive the counts fresh from the current sessions frame.
+			if counts, ok := freshHealthCounts(frames); ok {
+				health.Sessions = counts
+			}
 			peers := health.Peers
 			if peers == nil {
 				peers = []peering.PeerInfo{}
@@ -740,6 +747,15 @@ func serveCentral(stderr io.Writer) int {
 				return
 			}
 			if !asPeer && initial.World != nil {
+				// Same staleness as /v1/health: the cached world frame's
+				// health counts predate any liveness-only batches. Legacy
+				// composed the initial snapshot at subscribe time; refresh
+				// the counts (on the fanout's private copy) to match.
+				if counts, ok := freshHealthCounts(initial); ok && initial.World.Health != nil {
+					h := *initial.World.Health
+					h.Sessions = counts
+					initial.World.Health = &h
+				}
 				if err := sendSSEFrame(rc, w, "snapshot.world", initial.World); err != nil {
 					return
 				}
