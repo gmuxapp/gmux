@@ -64,6 +64,12 @@ Transient `session-activity` remains a lossy direct event. The database replaces
 
 A session-only or world-only invalidation may compose only its affected payload. A project or other cross-kind invalidation performs one composition pass that reads both session and world payloads in one SQLite read transaction, then queues/sends that matched pair in protocol order; a commit between the two network writes cannot change either payload. The existing invalidation mechanism remains level-triggered and coalescing: commit marks the affected snapshot kinds dirty; concurrent commits while a snapshot is composed leave another pass pending; dirty state is cleared only after a successful read/dispatch decision. No durable outbox or wire-visible revision is introduced because reconnect always receives a fresh initial snapshot.
 
+### 2a. REST reads are store-direct; SSE reads are cache-composed
+
+The coalesced async composer (§2) serves SSE subscriptions and their initial snapshots. REST GET endpoints that serve structured state (`/v1/sessions`, `/v1/projects`, `/v1/health`) read from the store directly at request time, applying the same runtime overlay and wire conversion as the composer. This ensures read-your-writes semantics for request-response clients (CLI, imperative web fetches, peering probes) without sacrificing SSE coalescing.
+
+The composed fanout cache is not the authoritative read path for REST; it is an SSE delivery optimization. REST handlers must not read from the fanout cache for structured state that mutations have committed to the store.
+
 ### 3. Ownership determines persistence
 
 SQLite contains only daemon-owned structured state.
@@ -203,6 +209,7 @@ For operational procedures (fresh 2.0 state, fail-closed recovery, backup secret
 - Foreign keys prevent stale project membership.
 - Versioned SQL migrations replace several bespoke format migrations.
 - Snapshot reads remain simple and compatible with the current frontend protocol.
+- REST reads provide read-your-writes consistency by construction; the eventual-consistency window is confined to the SSE push channel where it is the expected delivery model.
 - The domain API contains SQLite/sqlc details and remains replaceable.
 - The schema naturally supports future nested-agent sidebar grouping.
 
