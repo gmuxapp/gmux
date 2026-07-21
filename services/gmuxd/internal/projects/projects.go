@@ -18,7 +18,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projectmatch"
 )
 
@@ -86,10 +85,7 @@ type State struct {
 
 // Load reads the project state from stateDir/projects.json.
 // Returns an empty state if the file doesn't exist.
-// Older schema versions are migrated in memory; the migrated form is
-// written back on the next Save. legacySlugToID is the slug-to-session-ID
-// table from sessionmeta's startup sweep, used only by the v3 → v4 migration.
-func Load(stateDir string, legacySlugToID ...map[string][]string) (*State, error) {
+func Load(stateDir string) (*State, error) {
 	path := filepath.Join(stateDir, fileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -99,55 +95,17 @@ func Load(stateDir string, legacySlugToID ...map[string][]string) (*State, error
 		return nil, fmt.Errorf("projects: reading %s: %w", path, err)
 	}
 
-	// Before a real schema upgrade rewrites the file, snapshot the
-	// pre-migration bytes to projects.json.bak so the change is
-	// recoverable (notably across the 2.0 upgrade). Best-effort.
-	onDisk := onDiskVersion(data)
-	original := data
-	backedUp := false
-	if onDisk < currentVersion {
-		backupFile(path, original)
-		backedUp = true
-	}
-
-	// Run migrations on the raw JSON before unmarshaling into the
-	// current struct layout. This keeps each migration self-contained
-	// and independent of the Go types.
-	data, err = migrateState(data)
-	if err != nil {
-		return nil, fmt.Errorf("projects: migrating %s: %w", path, err)
-	}
-
 	var s State
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("projects: parsing %s: %w", path, err)
 	}
 
-	if onDisk < 4 {
-		var slugToID map[string][]string
-		if len(legacySlugToID) > 0 {
-			slugToID = legacySlugToID[0]
-		}
-		converted, dropped := s.migrateLegacySessionKeys(slugToID)
-		if converted > 0 || dropped > 0 {
-			log.Printf("projects: migrated v3 → v4 session keys (%d converted, %d dropped)", converted, dropped)
-		}
-	}
-
 	// Drop invalid items (e.g. a hand-edited "match": null) instead of
 	// letting them poison the whole state: Manager.Update validates the
 	// full state before every save, so one bad on-disk entry would make
-	// every future mutation fail. The repair is in-memory only: the
-	// on-disk file is untouched until the next Save persists the
-	// sanitized form, so repeated loads of a still-invalid file re-drop
-	// the same items (and re-write an identical backup, since the file
-	// hasn't changed). Snapshot the original bytes before dropping —
-	// unless the migration path above already did, in which case the
-	// pre-migration backup must not be clobbered with migrated bytes.
+	// every future mutation fail.
 	if dropped := s.sanitize(); len(dropped) > 0 {
-		if !backedUp {
-			backupFile(path, original)
-		}
+		backupFile(path, data)
 		for _, err := range dropped {
 			log.Printf("projects: dropping invalid item in %s: %v", path, err)
 		}
@@ -155,53 +113,6 @@ func Load(stateDir string, legacySlugToID ...map[string][]string) (*State, error
 	return &s, nil
 }
 
-var conversationUUIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-
-// migrateLegacySessionKeys converts v3 slug membership keys to session IDs.
-// Order is preserved and each resulting ID is kept once. A slug that resolved
-// to several dead sessions (slugs were unique only within (adapter, peer), but
-// a membership key spanned adapters) expands to ALL of them in sweep order, so
-// no dead session silently loses its sidebar slot.
-func (s *State) migrateLegacySessionKeys(slugToID map[string][]string) (converted, dropped int) {
-	knownIDs := make(map[string]bool, len(slugToID))
-	for _, ids := range slugToID {
-		for _, id := range ids {
-			knownIDs[id] = true
-		}
-	}
-	for i := range s.Items {
-		seen := make(map[string]bool, len(s.Items[i].Sessions))
-		// A fresh slice, NOT Sessions[:0]: one key can expand to several IDs
-		// (a cross-adapter duplicate slug), and in-place aliasing would
-		// overwrite not-yet-read entries.
-		keys := make([]string, 0, len(s.Items[i].Sessions))
-		emit := func(id string) {
-			if seen[id] {
-				dropped++
-				return
-			}
-			seen[id] = true
-			keys = append(keys, id)
-		}
-		for _, key := range s.Items[i].Sessions {
-			if knownIDs[key] || paths.IsValidSessionID(key) || conversationUUIDRe.MatchString(key) {
-				emit(key)
-				continue
-			}
-			ids, ok := slugToID[key]
-			if !ok {
-				dropped++
-				continue
-			}
-			for _, id := range ids {
-				converted++
-				emit(id)
-			}
-		}
-		s.Items[i].Sessions = keys
-	}
-	return converted, dropped
-}
 
 // sanitize removes items that fail validation, keeping the rest in
 // order. Each item is checked against the already-accepted prefix, so
@@ -220,17 +131,6 @@ func (s *State) sanitize() []error {
 	}
 	s.Items = valid.Items
 	return dropped
-}
-
-// onDiskVersion peeks at the schema version of a raw projects.json
-// document. A missing or invalid version field is the original
-// pre-version format (0).
-func onDiskVersion(data []byte) int {
-	var doc struct {
-		Version int `json:"version"`
-	}
-	_ = json.Unmarshal(data, &doc)
-	return doc.Version
 }
 
 // backupFile writes the pre-migration bytes to path+".bak" (0600),
