@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -142,6 +143,16 @@ func runPi(t *testing.T, argv []string) (string, int) {
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + t.TempDir(),
 		"NO_COLOR=1",
+	}
+	// The isolated HOME breaks proto-shimmed runtimes: pi's `#!/usr/bin/env
+	// node` can resolve to ~/.proto/shims/node (moon prepends proto to PATH),
+	// and the shim locates its toolchain via $PROTO_HOME or $HOME/.proto —
+	// with a fresh HOME it blocks trying to bootstrap a toolchain and every
+	// subtest times out. Point PROTO_HOME at the real one so the shim works.
+	if ph := os.Getenv("PROTO_HOME"); ph != "" {
+		cmd.Env = append(cmd.Env, "PROTO_HOME="+ph)
+	} else if realHome, err := os.UserHomeDir(); err == nil {
+		cmd.Env = append(cmd.Env, "PROTO_HOME="+filepath.Join(realHome, ".proto"))
 	}
 	// Stdin nil → /dev/null, so any interactive prompt gets EOF instead of
 	// hanging the test.
