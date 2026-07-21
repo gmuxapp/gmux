@@ -402,14 +402,14 @@ func (c *Composer) takeDirty() (sessions, projects bool) {
 // publish-after-remove contract: any registry change triggers another
 // invalidation, so a skewed overlay is always followed by a corrected pass.
 func (c *Composer) compose(ctx context.Context, sessions, projects bool) (Batch, error) {
-	var runtime map[centralstore.SessionID]RuntimeFacts
-	var verdicts map[centralstore.SessionID]ResumeVerdict
+	var runtimeFacts map[centralstore.SessionID]RuntimeFacts
+	var verdictMap map[centralstore.SessionID]ResumeVerdict
 	var peerWorld PeerWorld
 	if sessions && c.runtime != nil {
-		runtime = c.runtime.RuntimeFacts()
+		runtimeFacts = c.runtime.RuntimeFacts()
 	}
 	if sessions && c.verdicts != nil {
-		verdicts = c.verdicts.ResumeVerdicts()
+		verdictMap = c.verdicts.ResumeVerdicts()
 	}
 	if projects && c.peers != nil {
 		peerWorld = c.peers.PeerWorld()
@@ -423,53 +423,10 @@ func (c *Composer) compose(ctx context.Context, sessions, projects bool) (Batch,
 	}
 	var out Batch
 	if sessions {
-		rows := make([]SessionRow, 0, len(snap.Sessions))
-		for _, v := range snap.Sessions {
-			row := SessionRow{SessionView: v}
-			if facts, live := runtime[v.ID]; live {
-				row.Alive = true
-				f := facts
-				row.Runtime = &f
-			} else {
-				// Ever-alive gate: a dead row only surfaces as a resume
-				// candidate (and only carries unread) if the session was at
-				// some point observed running — started_at is the runner's
-				// durable SetRunning stamp. A row whose runner died before
-				// ever reporting running (failed spawn, instant exec error)
-				// must not appear as a resumable conversation or demand
-				// attention with an unread badge.
-				everRan := v.StartedAt != nil
-				row.Resumable = everRan && len(v.Command) > 0 && verdicts[v.ID] != VerdictGone
-				if !everRan {
-					row.Unread = false
-				}
-			}
-			rows = append(rows, row)
-		}
-		out.Sessions = &SessionsPayload{Sessions: rows}
+		out.Sessions = composeSessions(snap.Sessions, runtimeFacts, verdictMap)
 	}
 	if projects {
-		// Join durable Local-peer placement rows onto the point-in-time peer
-		// projections: a row without a connected session is not emitted.
-		// Placement is parent-owned metadata; the peer's session facts stay
-		// connection-owned (ADR 0025/0026 §7).
-		joined := make([]LocalPeerPlacementRow, 0, len(snap.LocalPeerPlacements))
-		for _, view := range snap.LocalPeerPlacements {
-			if _, connected := peerWorld.LocalPeerSessions[LocalPeerSessionKey{PeerKey: view.PeerKey, SessionID: view.SessionID}]; !connected {
-				continue
-			}
-			joined = append(joined, LocalPeerPlacementRow{LocalPeerPlacementView: view})
-		}
-		out.Projects = &ProjectsPayload{
-			Projects:            snap.Projects,
-			LocalPeerPlacements: joined,
-			Peers:               peerWorld.Peers,
-			Health:              peerWorld.Health,
-			Launchers:           peerWorld.Launchers,
-			DefaultLauncher:     peerWorld.DefaultLauncher,
-			PeerProjects:        peerWorld.PeerProjects,
-			PeerDiscovered:      peerWorld.PeerDiscovered,
-		}
+		out.Projects = composeProjects(snap, peerWorld)
 	}
 	return out, nil
 }
