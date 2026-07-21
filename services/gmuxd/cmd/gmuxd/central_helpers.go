@@ -56,14 +56,14 @@ func (f *sseFanout) currentLocked() wire.Frames {
 	var out wire.Frames
 	if f.sessions != nil {
 		copy := *f.sessions
-		copy.Sessions = append([]wire.Session(nil), f.sessions.Sessions...)
+		copy.Sessions = copySlice(f.sessions.Sessions)
 		out.Sessions = &copy
 	}
 	if f.world != nil {
 		copy := *f.world
-		copy.Projects = append([]wire.ProjectItem(nil), f.world.Projects...)
-		copy.Peers = append([]peering.PeerInfo(nil), f.world.Peers...)
-		copy.Launchers = append([]peering.LauncherDef(nil), f.world.Launchers...)
+		copy.Projects = copySlice(f.world.Projects)
+		copy.Peers = copySlice(f.world.Peers)
+		copy.Launchers = copySlice(f.world.Launchers)
 		if f.world.PeerProjects != nil {
 			copy.PeerProjects = make(map[string][]peering.SpokeProject, len(f.world.PeerProjects))
 			for k, v := range f.world.PeerProjects {
@@ -108,14 +108,14 @@ func (f *sseFanout) BroadcastFrames(frames wire.Frames) {
 	defer f.mu.Unlock()
 	if frames.Sessions != nil {
 		copy := *frames.Sessions
-		copy.Sessions = append([]wire.Session(nil), frames.Sessions.Sessions...)
+		copy.Sessions = copySlice(frames.Sessions.Sessions)
 		f.sessions = &copy
 	}
 	if frames.World != nil {
 		copy := *frames.World
-		copy.Projects = append([]wire.ProjectItem(nil), frames.World.Projects...)
-		copy.Peers = append([]peering.PeerInfo(nil), frames.World.Peers...)
-		copy.Launchers = append([]peering.LauncherDef(nil), frames.World.Launchers...)
+		copy.Projects = copySlice(frames.World.Projects)
+		copy.Peers = copySlice(frames.World.Peers)
+		copy.Launchers = copySlice(frames.World.Launchers)
 		if frames.World.PeerProjects != nil {
 			copy.PeerProjects = make(map[string][]peering.SpokeProject, len(frames.World.PeerProjects))
 			for k, v := range frames.World.PeerProjects {
@@ -428,6 +428,15 @@ func sessionTreeRows(ctx context.Context, st *centralstore.Store, root centralst
 		}
 	}
 	return out, nil
+}
+
+// copySlice returns a non-nil shallow copy of s. When s is empty the
+// result is an allocated empty slice so JSON marshaling produces []
+// instead of null — the nil-vs-empty bug class (ADR 0026 FD-3).
+func copySlice[T any](s []T) []T {
+	out := make([]T, len(s))
+	copy(out, s)
+	return out
 }
 
 func manualPeerResponse(peer centralstore.ManualPeer, outcome centralstore.PeerUpsertOutcome) map[string]any {

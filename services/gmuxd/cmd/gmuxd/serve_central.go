@@ -249,7 +249,15 @@ func serveCentral(stderr io.Writer) int {
 					health.Peers = append([]peering.PeerInfo(nil), h.Peers...)
 				}
 			}
-			data := map[string]any{"service": health.Service, "version": health.Version, "pid": os.Getpid(), "node_id": health.NodeID, "status": health.Status, "hostname": health.Hostname, "listen": health.Listen, "peers": health.Peers, "sessions": health.Sessions, "runner_hash": health.RunnerHash, "default_launcher": health.DefaultLauncher, "launchers": health.Launchers}
+			peers := health.Peers
+			if peers == nil {
+				peers = []peering.PeerInfo{}
+			}
+			launchers := health.Launchers
+			if launchers == nil {
+				launchers = []peering.LauncherDef{}
+			}
+			data := map[string]any{"service": health.Service, "version": health.Version, "pid": os.Getpid(), "node_id": health.NodeID, "status": health.Status, "hostname": health.Hostname, "listen": health.Listen, "peers": peers, "sessions": health.Sessions, "runner_hash": health.RunnerHash, "default_launcher": health.DefaultLauncher, "launchers": launchers}
 			if health.TailscaleURL != "" {
 				data["tailscale_url"] = health.TailscaleURL
 			}

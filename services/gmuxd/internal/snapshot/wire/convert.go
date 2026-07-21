@@ -197,7 +197,9 @@ func (c *Converter) Sessions(local *central.SessionsPayload, world *central.Proj
 		}
 	}
 
-	merged := append(localRows, peers...)
+	merged := make([]Session, 0, len(localRows)+len(peers))
+	merged = append(merged, localRows...)
+	merged = append(merged, peers...)
 	sort.Slice(merged, func(i, j int) bool { return merged[i].ID < merged[j].ID })
 	return SessionsPayload{Sessions: merged}
 }
@@ -207,7 +209,11 @@ func (c *Converter) Sessions(local *central.SessionsPayload, world *central.Proj
 // wire payload.
 func (c *Converter) World(local *central.SessionsPayload, world *central.ProjectsPayload, peerRows []Session) WorldPayload {
 	if world == nil {
-		return WorldPayload{}
+		return WorldPayload{
+			Projects:  []ProjectItem{},
+			Peers:     []peering.PeerInfo{},
+			Launchers: []peering.LauncherDef{},
+		}
 	}
 	var views []central.SessionRow
 	if local != nil {
@@ -234,8 +240,8 @@ func (c *Converter) World(local *central.SessionsPayload, world *central.Project
 
 	out := WorldPayload{
 		Projects:        items,
-		Peers:           world.Peers,
-		Launchers:       world.Launchers,
+		Peers:           ensurePeerSlice(world.Peers),
+		Launchers:       ensureLauncherSlice(world.Launchers),
 		DefaultLauncher: world.DefaultLauncher,
 		PeerProjects:    world.PeerProjects,
 		PeerDiscovered:  world.PeerDiscovered,
@@ -378,4 +384,21 @@ func escapeScope(s string) string {
 
 func unescapeScope(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "%3A", ":"), "%25", "%")
+}
+
+// ensurePeerSlice returns a non-nil empty slice when the input is nil,
+// so JSON marshaling produces [] instead of null.
+func ensurePeerSlice(s []peering.PeerInfo) []peering.PeerInfo {
+	if s == nil {
+		return []peering.PeerInfo{}
+	}
+	return s
+}
+
+// ensureLauncherSlice returns a non-nil empty slice when the input is nil.
+func ensureLauncherSlice(s []peering.LauncherDef) []peering.LauncherDef {
+	if s == nil {
+		return []peering.LauncherDef{}
+	}
+	return s
 }

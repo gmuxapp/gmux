@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	central "github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot/central"
 )
 
@@ -229,5 +230,92 @@ func TestProjectSlugEdgeCases(t *testing.T) {
 				t.Errorf("DecomposeReorder(%q) = ok=%v, want %v", tc.slug, ok, tc.wantOK)
 			}
 		})
+	}
+}
+
+// TestNilVsEmptyWireArrays retires the nil-vs-empty JSON bug class:
+// every protocol array field must marshal as [] (not null) even when the
+// underlying data is empty/sparse. A null array crashes frontend code
+// that iterates with Object.entries / for-of.
+func TestNilVsEmptyWireArrays(t *testing.T) {
+	conv := &Converter{IsLocalPeer: func(string) bool { return false }}
+
+	cases := []struct {
+		name  string
+		local *central.SessionsPayload
+		world *central.ProjectsPayload
+		peers []Session
+	}{
+		{
+			name:  "all nil inputs",
+			local: nil,
+			world: nil,
+			peers: nil,
+		},
+		{
+			name:  "empty payloads",
+			local: &central.SessionsPayload{Sessions: []central.SessionRow{}},
+			world: &central.ProjectsPayload{
+				Projects: centralstore.ProjectCatalog{},
+			},
+			peers: []Session{},
+		},
+		{
+			name:  "world with nil peer/launcher slices",
+			local: &central.SessionsPayload{Sessions: []central.SessionRow{}},
+			world: &central.ProjectsPayload{
+				Projects:  centralstore.ProjectCatalog{},
+				Peers:     nil,
+				Launchers: nil,
+			},
+			peers: nil,
+		},
+		{
+			name: "project with no sessions or rules",
+			local: &central.SessionsPayload{Sessions: []central.SessionRow{}},
+			world: &central.ProjectsPayload{
+				Projects: centralstore.ProjectCatalog{
+					{ID: 1, Kind: centralstore.ProjectEntryOwned, Slug: "empty-proj"},
+				},
+				Peers:     []peering.PeerInfo{},
+				Launchers: []peering.LauncherDef{},
+			},
+			peers: []Session{},
+		},
+	}
+
+	sessionsArrayKeys := []string{"sessions"}
+	worldArrayKeys := []string{"projects", "peers", "launchers"}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sp := conv.Sessions(tc.local, tc.world, tc.peers)
+			assertNoNullArrays(t, "sessions", sp, sessionsArrayKeys)
+
+			wp := conv.World(tc.local, tc.world, tc.peers)
+			assertNoNullArrays(t, "world", wp, worldArrayKeys)
+		})
+	}
+}
+
+func assertNoNullArrays(t *testing.T, label string, v any, keys []string) {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("%s: marshal: %v", label, err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("%s: unmarshal: %v", label, err)
+	}
+	for _, key := range keys {
+		val, ok := m[key]
+		if !ok {
+			t.Errorf("%s: key %q missing from payload", label, key)
+			continue
+		}
+		if string(val) == "null" {
+			t.Errorf("%s: key %q is null, want [] — nil-vs-empty bug class", label, key)
+		}
 	}
 }
