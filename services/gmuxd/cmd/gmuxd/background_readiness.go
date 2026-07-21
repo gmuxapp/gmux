@@ -54,7 +54,7 @@ func startBackgroundProduction(parent context.Context, exe, sockPath, stateDir s
 	ctx, cancel := context.WithTimeout(parent, backgroundStartupBudget)
 	defer cancel()
 	seams := backgroundStartSeams{Identity: identity, Spawn: func() (spawnedDaemon, error) {
-		child := exec.Command(exe, "run")
+		child := exec.Command(exe, "run", "--replace")
 		child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		child.Stderr = childStderr
 		child.Env = sessionenv.Strip(os.Environ())

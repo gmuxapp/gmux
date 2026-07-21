@@ -83,7 +83,16 @@ func acquireDaemonStateLock(ctx context.Context, stateDir string, budget time.Du
 
 // bootstrapOwnership performs phase 1 in its load-bearing order. takeover
 // probes/shuts down the incumbent and waits for socket disappearance.
-func bootstrapOwnership(ctx context.Context, stateDir string, takeover func(context.Context) error) (*centralstore.Store, *daemonStateLock, error) {
+func bootstrapOwnership(ctx context.Context, stateDir string, precheck, takeover func(context.Context) error) (*centralstore.Store, *daemonStateLock, error) {
+	// precheck runs before Verify touches the database: a candidate that is
+	// going to yield to a healthy incumbent must do so without opening
+	// SQLite at all (autostart candidates fire under load; their DB opens
+	// would only add contention to the incumbent they're yielding to).
+	if precheck != nil {
+		if err := precheck(ctx); err != nil {
+			return nil, nil, err
+		}
+	}
 	if err := centralstore.Verify(ctx, stateDir); err != nil && !errors.Is(err, centralstore.ErrDatabaseMissing) {
 		return nil, nil, fmt.Errorf("bootstrap verify: %w", err)
 	}

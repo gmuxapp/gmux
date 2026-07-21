@@ -49,7 +49,12 @@ import (
 	"nhooyr.io/websocket"
 )
 
-func serveCentral(stderr io.Writer) int {
+// errIncumbentHealthy reports that serve declined to start because a healthy
+// daemon of the same version already owns the socket and no explicit
+// replacement was requested.
+var errIncumbentHealthy = errors.New("gmuxd: already running")
+
+func serveCentral(stderr io.Writer, replace bool) int {
 	gmuxBin := resolveGmux()
 	if gmuxBin != "" {
 		log.Printf("gmux: %s", gmuxBin)
@@ -89,18 +94,58 @@ func serveCentral(stderr io.Writer) int {
 		return 1
 	}
 
+	// A healthy incumbent of the SAME version is never shut down implicitly.
+	// This path is reached by `gmux`'s daemon autostart whenever a health
+	// probe times out (500ms budget) — on a loaded host that spawned daemons
+	// which killed the healthy incumbent, re-bootstrapped for seconds, and
+	// were killed in turn by the next autostart: a rolling production outage
+	// (registrations timing out, /v1/health dead) that looked like a store
+	// wedge. Replacement must be explicit (`gmuxd start`/`restart` pass
+	// --replace) or an actual version upgrade (release CLI replacing an
+	// outdated daemon).
+	//
+	// The yield check runs as bootstrapOwnership's precheck — BEFORE Verify
+	// opens the database — so a pointless autostart bounces off the incumbent
+	// without touching SQLite at all.
+	precheck := func(context.Context) error {
+		if replace {
+			return nil
+		}
+		sock := paths.SocketPath()
+		ident, ok := unixipc.HealthIdentity(sock)
+		if !ok {
+			return nil
+		}
+		if ident.Version == version {
+			return fmt.Errorf("%w: healthy daemon %s (pid %d) owns %s", errIncumbentHealthy, ident.Version, ident.PID, sock)
+		}
+		return nil
+	}
 	takeover := func(context.Context) error {
 		sock := paths.SocketPath()
-		if _, ok := unixipc.HealthIdentity(sock); !ok {
+		ident, ok := unixipc.HealthIdentity(sock)
+		if !ok {
 			return nil
+		}
+		if !replace && ident.Version == version {
+			// Re-check: an incumbent may have become healthy between the
+			// precheck and here (e.g. it was mid-bootstrap during precheck).
+			return fmt.Errorf("%w: healthy daemon %s (pid %d) owns %s", errIncumbentHealthy, ident.Version, ident.PID, sock)
 		}
 		if !unixipc.Shutdown(sock) {
 			return fmt.Errorf("existing daemon at %s did not shut down", sock)
 		}
 		return nil
 	}
-	storeHandle, storeLock, err := bootstrapOwnership(context.Background(), stateDir, takeover)
+	storeHandle, storeLock, err := bootstrapOwnership(context.Background(), stateDir, precheck, takeover)
 	if err != nil {
+		if errors.Is(err, errIncumbentHealthy) {
+			// Idempotent success: the daemon this invocation wanted is
+			// already there. Exit code 0 so autostart callers and service
+			// managers treat it as "nothing to do", not a crash loop.
+			_, _ = fmt.Fprintf(stderr, "%v\n", err)
+			return 0
+		}
 		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
 		return 1
 	}

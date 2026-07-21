@@ -252,17 +252,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return startBackground(stdout, stderr)
 	case "run":
+		replace := false
 		for _, arg := range args {
 			switch arg {
 			case "-h", "--help":
-				_, _ = fmt.Fprintf(stdout, "Usage: gmuxd run\n\nRuns the daemon in the foreground (for systemd, Docker, or debugging).\n")
+				_, _ = fmt.Fprintf(stdout, "Usage: gmuxd run [--replace]\n\nRuns the daemon in the foreground (for systemd, Docker, or debugging).\n\n  --replace   shut down a healthy same-version daemon instead of\n              exiting with \"already running\"\n")
 				return 0
+			case "--replace":
+				replace = true
 			default:
 				_, _ = fmt.Fprintf(stderr, "gmuxd run: unknown option %q\n", arg)
 				return 2
 			}
 		}
-		return serve(stderr)
+		return serve(stderr, replace)
 	case "stop":
 		if len(args) > 0 {
 			_, _ = fmt.Fprintf(stderr, "gmuxd stop: unexpected arguments: %s\n", strings.Join(args, " "))
@@ -362,8 +365,8 @@ func startBackground(stdout, stderr io.Writer) int {
 	return 0
 }
 
-func serve(stderr io.Writer) int {
-	return serveCentral(stderr)
+func serve(stderr io.Writer, replace bool) int {
+	return serveCentral(stderr, replace)
 }
 
 func runStatus(stdout, stderr io.Writer) int {

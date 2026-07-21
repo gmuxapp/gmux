@@ -66,7 +66,7 @@ func TestBootstrapOwnershipVerifiesBeforeTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
-	_, _, err := bootstrapOwnership(context.Background(), dir, func(context.Context) error { called = true; return nil })
+	_, _, err := bootstrapOwnership(context.Background(), dir, nil, func(context.Context) error { called = true; return nil })
 	if err == nil {
 		t.Fatal("corrupt database passed verification")
 	}
@@ -77,7 +77,7 @@ func TestBootstrapOwnershipVerifiesBeforeTakeover(t *testing.T) {
 
 func TestBootstrapOwnershipUsesPersistentLifetimeLock(t *testing.T) {
 	dir := t.TempDir()
-	store, lock, err := bootstrapOwnership(context.Background(), dir, nil)
+	store, lock, err := bootstrapOwnership(context.Background(), dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

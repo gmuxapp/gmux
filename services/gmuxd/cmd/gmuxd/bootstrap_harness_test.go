@@ -209,7 +209,7 @@ func TestHarnessRestartMidConvergenceSweepsOnlyMissingRunner(t *testing.T) {
 
 func TestHarnessPostOpenPreListenReopensCleanly(t *testing.T) {
 	dir := t.TempDir()
-	s, lock, err := bootstrapOwnership(context.Background(), dir, nil)
+	s, lock, err := bootstrapOwnership(context.Background(), dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestHarnessPostOpenPreListenReopensCleanly(t *testing.T) {
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s, lock, err = bootstrapOwnership(context.Background(), dir, nil)
+	s, lock, err = bootstrapOwnership(context.Background(), dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

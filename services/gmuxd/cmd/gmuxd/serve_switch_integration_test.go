@@ -160,7 +160,7 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 	defer runner.Close()
 
 	done := make(chan int, 1)
-	go func() { done <- serveCentral(io.Discard) }()
+	go func() { done <- serveCentral(io.Discard, true) }()
 
 	sock := paths.SocketPath()
 	if unixipc.Healthy(sock) {
