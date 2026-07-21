@@ -203,15 +203,15 @@ func TestRegisterRunnerGenerationProvenance(t *testing.T) {
 		if _, _, err := s.RegisterRunner(ctx, live); err != nil {
 			t.Fatal(err)
 		}
-		working := true
+		unread := true
 		active := registration("generation", "shell", "/ignored", true, 5)
-		active.Facts = RunnerFacts{Working: &working}
+		active.Facts = RunnerFacts{Unread: &unread}
 		if _, _, err := s.RegisterRunner(ctx, active); err != nil {
 			t.Fatal(err)
 		}
 		dead := registration("generation", "shell", "/ignored", false, 6)
 		dead.Facts = RunnerFacts{
-			Working:  ptr(false),
+			Unread:   ptr(true),
 			ExitedAt: NullablePatch[UnixMillis]{Set: ptr(UnixMillis(6))},
 			ExitCode: NullablePatch[int]{Set: ptr(6)},
 		}
@@ -238,7 +238,7 @@ func TestRegisterRunnerGenerationProvenance(t *testing.T) {
 		}
 	})
 
-	t.Run("new fast-dead generation replaces exit and bumps activity", func(t *testing.T) {
+	t.Run("new fast-dead generation replaces exit without bumping activity", func(t *testing.T) {
 		s, before := makeDead(t)
 		reg := registration("generation", "shell", "/ignored", false, 20)
 		reg.NewGeneration = true
@@ -247,7 +247,9 @@ func TestRegisterRunnerGenerationProvenance(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.ExitedAt == nil || *got.ExitedAt != 19 || got.ExitCode != nil || got.LastActivityAt == nil || *got.LastActivityAt != 20 || got.Version != before.Version+1 || !result.SessionsDirty {
+		// Output-only last_output_at: a resume seam / fast death is not
+		// unseen output, so activity keeps the stamp from makeDead (5).
+		if got.ExitedAt == nil || *got.ExitedAt != 19 || got.ExitCode != nil || got.LastActivityAt == nil || *got.LastActivityAt != 5 || got.Version != before.Version+1 || !result.SessionsDirty {
 			t.Fatalf("new dead=%#v result=%#v", got, result)
 		}
 	})

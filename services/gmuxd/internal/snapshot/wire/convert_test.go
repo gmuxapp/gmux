@@ -351,7 +351,7 @@ func TestWireSessionShapeMatchesProduction(t *testing.T) {
 		Title: "T", Subtitle: "sub", Status: &Status{Working: true, Error: true}, Unread: true,
 		Resumable: true, SocketPath: "/s.sock", TerminalCols: 80, TerminalRows: 24,
 		Slug: "slug", ConversationRef: "/conv", RunnerVersion: "v", BinaryHash: "h",
-		ProjectSlug: "proj", ProjectIndex: 2, LastActivityAt: "2023-11-14T22:13:23Z",
+		ProjectSlug: "proj", ProjectIndex: 2, LastOutputAt: "2023-11-14T22:13:23Z",
 	}
 	prod := store.Session{
 		ID: "s", Peer: "p", CreatedAt: "2023-11-14T22:13:20Z", Command: []string{"bash", "-l"},
@@ -361,7 +361,7 @@ func TestWireSessionShapeMatchesProduction(t *testing.T) {
 		Title: "T", Subtitle: "sub", Status: &store.Status{Working: true, Error: true}, Unread: true,
 		Resumable: true, SocketPath: "/s.sock", TerminalCols: 80, TerminalRows: 24,
 		Slug: "slug", ConversationRef: "/conv", RunnerVersion: "v", BinaryHash: "h",
-		ProjectSlug: "proj", ProjectIndex: 2, LastActivityAt: "2023-11-14T22:13:23Z",
+		ProjectSlug: "proj", ProjectIndex: 2, LastOutputAt: "2023-11-14T22:13:23Z",
 	}
 	wj, _ := json.Marshal(w)
 	pj, _ := json.Marshal(prod)

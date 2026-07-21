@@ -875,7 +875,6 @@ func (q *Queries) SetPromotion(ctx context.Context, arg SetPromotionParams) (int
 const sweepSessionDead = `-- name: SweepSessionDead :execrows
 UPDATE local_sessions
 SET exited_at_ms = ?1,
-    last_activity_at_ms = MAX(COALESCE(last_activity_at_ms, 0), ?1),
     row_version = row_version + 1
 WHERE id = ?2 AND exited_at_ms IS NULL
 `

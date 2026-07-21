@@ -179,8 +179,8 @@ func RenderProduction(w *World) (snapshot.SessionsPayload, snapshot.WorldPayload
 			Subtitle: f.Subtitle, Status: fixtureStatus(f),
 			Unread: f.Unread, TerminalCols: f.TerminalCols, TerminalRows: f.TerminalRows,
 			Slug: f.Slug, ConversationRef: f.ConversationRef,
-			LastOutputAt:   rfc3339(f.LastActivity),
-			ShellTitle:     f.ShellTitle, AdapterTitle: f.AdapterTitle,
+			LastOutputAt: rfc3339(f.LastActivity),
+			ShellTitle:   f.ShellTitle, AdapterTitle: f.AdapterTitle,
 		}
 		if f.Alive {
 			sess.Pid = f.Pid
@@ -447,7 +447,7 @@ func peerFixtureRow(w *World, f FixtureSession) wire.Session {
 		Resumable: !f.Alive && len(f.Command) > 0,
 		Slug:      f.Slug, ConversationRef: f.ConversationRef,
 		TerminalCols: f.TerminalCols, TerminalRows: f.TerminalRows,
-		LastActivityAt: rfc3339(f.LastActivity),
+		LastOutputAt: rfc3339(f.LastActivity),
 	}
 	if f.Alive {
 		row.Pid = f.Pid

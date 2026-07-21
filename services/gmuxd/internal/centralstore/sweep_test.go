@@ -48,8 +48,11 @@ func TestSweepDeadSessionsMarksUnclaimedRowsDead(t *testing.T) {
 	if !after.Working || !after.Unread {
 		t.Fatalf("turn state lost: %#v", after)
 	}
-	if after.LastActivityAt == nil || *after.LastActivityAt != 500 {
-		t.Fatalf("death transition must bump activity: %#v", after.LastActivityAt)
+	// Output-only last_output_at semantics: a synthesized death does not
+	// bump activity — the row keeps the stamp from its last unread
+	// transition (10) so the feed doesn't reshuffle on sweeps.
+	if after.LastActivityAt == nil || *after.LastActivityAt != 10 {
+		t.Fatalf("sweep must not bump activity: %#v", after.LastActivityAt)
 	}
 	if after.Version != before.Version+1 {
 		t.Fatalf("version %d, want %d", after.Version, before.Version+1)
@@ -169,8 +172,8 @@ func TestSweepDeadSessionsActivityNeverMovesBackwards(t *testing.T) {
 	registrationCatalog(t, s)
 
 	live := registration("busy", "shell", "/one", true, 10)
-	live.Facts.Working = ptr(true)
-	live.ObservedAt = 900 // activity bumped to 900 by the working transition
+	live.Facts.Unread = ptr(true)
+	live.ObservedAt = 900 // activity bumped to 900 by the unread transition
 	row, _, err := s.RegisterRunner(ctx, live)
 	if err != nil {
 		t.Fatal(err)

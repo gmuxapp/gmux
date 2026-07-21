@@ -12,10 +12,10 @@ func TestApplyRunnerObservationAdvancesVersionActivityAndRejectsStale(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	working := true
+	unread := true
 	result, err := s.ApplyRunnerObservation(context.Background(), RunnerObservation{
 		ID: row.ID, ObservedVersion: row.Version, ObservedAt: 20,
-		Facts: RunnerFacts{Working: &working},
+		Facts: RunnerFacts{Unread: &unread},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -429,21 +429,18 @@ func validateMergedSession(v Session) error {
 }
 
 func initialActivity(existing *UnixMillis, reg RunnerRegistration, hadRow bool, before Session) *UnixMillis {
+	// last_output_at is bumped on (and only on) the unread false→true
+	// transition — output the user hasn't seen. Working/error transitions,
+	// generation seams, and deaths deliberately don't bump it (activity-feed
+	// sort key; see store.Session LastOutputAt docstring).
 	var bump bool
 	if hadRow {
-		bump = (!before.Working && valueBool(reg.Facts.Working, before.Working)) ||
-			(!before.Unread && valueBool(reg.Facts.Unread, before.Unread)) ||
-			(!before.Error && valueBool(reg.Facts.Error, before.Error)) ||
-			(reg.NewGeneration && !reg.Alive)
+		bump = !before.Unread && valueBool(reg.Facts.Unread, before.Unread)
 	} else {
 		// A brand-new row collapses transitions that previously landed on an
-		// existing row into one insert; the activity bump those transitions
-		// would have produced must not be lost. A fast-dead insert counts as
-		// a death transition.
-		bump = valueBool(reg.Facts.Working, false) ||
-			valueBool(reg.Facts.Unread, false) ||
-			valueBool(reg.Facts.Error, false) ||
-			!reg.Alive
+		// existing row into one insert; the unread bump that transition would
+		// have produced must not be lost.
+		bump = valueBool(reg.Facts.Unread, false)
 	}
 	if !bump {
 		return existing

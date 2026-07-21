@@ -22,7 +22,7 @@ func fdExcluded(path string) bool {
 	case strings.HasSuffix(path, ".project_index"):
 		return true
 	case strings.HasSuffix(path, ".created_at"), strings.HasSuffix(path, ".started_at"),
-		strings.HasSuffix(path, ".exited_at"), strings.HasSuffix(path, ".last_activity_at"):
+		strings.HasSuffix(path, ".exited_at"), strings.HasSuffix(path, ".last_output_at"):
 		return true
 	case strings.HasPrefix(path, "world.health.sessions"):
 		return true
@@ -196,7 +196,7 @@ func TestFD2DismissedSessionsVanishFromTheWire(t *testing.T) {
 	}
 }
 
-// TestFD3DurableActivityStampSurvives: last_activity_at on the wire equals
+// TestFD3DurableActivityStampSurvives: last_output_at on the wire equals
 // the seeded durable stamp (no activity-seed heuristic in the new path).
 func TestFD3DurableActivityStampSurvives(t *testing.T) {
 	w := DefaultWorld()
@@ -206,9 +206,9 @@ func TestFD3DurableActivityStampSurvives(t *testing.T) {
 			continue
 		}
 		want := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC) // base-30m, truncated
-		got, err := time.Parse(time.RFC3339, s.LastActivityAt)
+		got, err := time.Parse(time.RFC3339, s.LastOutputAt)
 		if err != nil || !got.Equal(want) {
-			t.Fatalf("last_activity_at=%q err=%v want %v", s.LastActivityAt, err, want)
+			t.Fatalf("last_output_at=%q err=%v want %v", s.LastOutputAt, err, want)
 		}
 		return
 	}
@@ -250,7 +250,7 @@ func TestFD4TimestampsParseAndCompare(t *testing.T) {
 		check(s.ID, "created_at", s.CreatedAt, f.Created)
 		check(s.ID, "started_at", s.StartedAt, f.Started)
 		check(s.ID, "exited_at", s.ExitedAt, f.Exited)
-		check(s.ID, "last_activity_at", s.LastActivityAt, f.LastActivity)
+		check(s.ID, "last_output_at", s.LastOutputAt, f.LastActivity)
 	}
 }
 

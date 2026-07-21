@@ -72,7 +72,7 @@ type Session struct {
 	BinaryHash      string            `json:"binary_hash,omitempty"`
 	ProjectSlug     string            `json:"project_slug,omitempty"`
 	ProjectIndex    int               `json:"project_index,omitempty"`
-	LastActivityAt  string            `json:"last_activity_at,omitempty"`
+	LastOutputAt    string            `json:"last_output_at,omitempty"`
 }
 
 // SessionsPayload is the body of a snapshot.sessions SSE event and the

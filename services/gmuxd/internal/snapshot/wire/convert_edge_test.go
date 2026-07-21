@@ -16,11 +16,11 @@ func TestDecomposeReorderEdgeCases(t *testing.T) {
 
 	local := &central.SessionsPayload{Sessions: []central.SessionRow{
 		{SessionView: centralstore.SessionView{
-			Session: centralstore.Session{ID: "sess-a", Adapter: "shell", Command: []string{"bash"}, CreatedAt: 1, StatusReported: true},
+			Session:   centralstore.Session{ID: "sess-a", Adapter: "shell", Command: []string{"bash"}, CreatedAt: 1, StatusReported: true},
 			Placement: &centralstore.SessionPlacement{ProjectSlug: "proj", SiblingScope: "r", Position: 0},
 		}},
 		{SessionView: centralstore.SessionView{
-			Session: centralstore.Session{ID: "sess-b", Adapter: "pi", Command: []string{"pi"}, CreatedAt: 2, StatusReported: true},
+			Session:   centralstore.Session{ID: "sess-b", Adapter: "pi", Command: []string{"pi"}, CreatedAt: 2, StatusReported: true},
 			Placement: &centralstore.SessionPlacement{ProjectSlug: "proj", SiblingScope: "r", Position: 1},
 		}},
 	}}
@@ -37,8 +37,8 @@ func TestDecomposeReorderEdgeCases(t *testing.T) {
 		wantOK   bool
 	}{
 		{"unknown project", "unknown", []string{"sess-a"}, false},
-		{"empty order", "proj", []string{}, true},   // empty is valid: no-op reorder
-		{"missing session", "proj", []string{"sess-missing"}, true}, // silently dropped
+		{"empty order", "proj", []string{}, true},                         // empty is valid: no-op reorder
+		{"missing session", "proj", []string{"sess-missing"}, true},       // silently dropped
 		{"duplicate session", "proj", []string{"sess-a", "sess-a"}, true}, // deduped
 		{"valid reorder", "proj", []string{"sess-b", "sess-a"}, true},
 	}
@@ -123,16 +123,16 @@ func TestLargePayloadNoPanic(t *testing.T) {
 		sessions[i] = central.SessionRow{
 			SessionView: centralstore.SessionView{
 				Session: centralstore.Session{
-					ID: centralstore.SessionID("sess-" + string(rune('a'+i%26))),
-					Adapter: "shell",
-					Command: []string{"bash"},
-					CreatedAt: centralstore.UnixMillis(1000 + i),
+					ID:             centralstore.SessionID("sess-" + string(rune('a'+i%26))),
+					Adapter:        "shell",
+					Command:        []string{"bash"},
+					CreatedAt:      centralstore.UnixMillis(1000 + i),
 					StatusReported: true,
 				},
 				Placement: &centralstore.SessionPlacement{
-					ProjectSlug: "proj",
+					ProjectSlug:  "proj",
 					SiblingScope: "r",
-					Position: i,
+					Position:     i,
 				},
 			},
 		}
@@ -168,7 +168,7 @@ func TestInvalidSessionID(t *testing.T) {
 
 	local := &central.SessionsPayload{Sessions: []central.SessionRow{
 		{SessionView: centralstore.SessionView{
-			Session: centralstore.Session{ID: "sess-a", Adapter: "shell", Command: []string{"bash"}, CreatedAt: 1, StatusReported: true},
+			Session:   centralstore.Session{ID: "sess-a", Adapter: "shell", Command: []string{"bash"}, CreatedAt: 1, StatusReported: true},
 			Placement: &centralstore.SessionPlacement{ProjectSlug: "proj", SiblingScope: "r", Position: 0},
 		}},
 	}}
@@ -197,7 +197,7 @@ func TestProjectSlugEdgeCases(t *testing.T) {
 
 	local := &central.SessionsPayload{Sessions: []central.SessionRow{
 		{SessionView: centralstore.SessionView{
-			Session: centralstore.Session{ID: "sess-a", Adapter: "shell", Command: []string{"bash"}, CreatedAt: 1, StatusReported: true},
+			Session:   centralstore.Session{ID: "sess-a", Adapter: "shell", Command: []string{"bash"}, CreatedAt: 1, StatusReported: true},
 			Placement: &centralstore.SessionPlacement{ProjectSlug: "my-proj", SiblingScope: "r", Position: 0},
 		}},
 	}}

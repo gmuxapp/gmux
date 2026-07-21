@@ -84,7 +84,7 @@ func (c *Converter) session(row central.SessionRow) Session {
 		Unread:          v.Unread,
 		Slug:            v.Slug,
 		ConversationRef: v.ConversationRef,
-		LastActivityAt:  fmtMillisPtr(v.LastActivityAt),
+		LastOutputAt:    fmtMillisPtr(v.LastActivityAt),
 	}
 	// "status": null until the runner reports one — the durable
 	// status_reported fact carries production's Status-pointer nil-ness

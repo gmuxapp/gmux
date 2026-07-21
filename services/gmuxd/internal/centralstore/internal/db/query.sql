@@ -52,7 +52,6 @@ WHERE id = ? AND row_version = ?;
 -- name: SweepSessionDead :execrows
 UPDATE local_sessions
 SET exited_at_ms = sqlc.arg(swept_at_ms),
-    last_activity_at_ms = MAX(COALESCE(last_activity_at_ms, 0), sqlc.arg(swept_at_ms)),
     row_version = row_version + 1
 WHERE id = sqlc.arg(id) AND exited_at_ms IS NULL;
 

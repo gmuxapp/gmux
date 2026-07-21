@@ -514,7 +514,12 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	// proves a status was reported for this row (runner-authoritative; the
 	// acknowledgement path uses its own query and never sets it).
 	v.StatusReported = v.StatusReported || p.Working != nil || p.Error != nil
-	if runnerObservedAt != nil && ((!before.Working && v.Working) || (!before.Unread && v.Unread) || (!before.Error && v.Error)) {
+	// last_output_at semantics (wire name; column keeps last_activity_at_ms):
+	// bumped on (and only on) the unread false→true transition — the moment
+	// the session produced output the user hasn't seen. Deliberately NOT
+	// bumped by working/error transitions or exit; see store.Session
+	// LastOutputAt docstring for the rationale (activity-feed sort key).
+	if runnerObservedAt != nil && !before.Unread && v.Unread {
 		if v.LastActivityAt == nil || *runnerObservedAt > *v.LastActivityAt {
 			x := *runnerObservedAt
 			v.LastActivityAt = &x
@@ -531,10 +536,6 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	}
 	if err = applyNullable(&v.ExitCode, p.ExitCode); err != nil {
 		return MutationResult{}, err
-	}
-	if runnerObservedAt != nil && before.ExitedAt == nil && v.ExitedAt != nil && (v.LastActivityAt == nil || *runnerObservedAt > *v.LastActivityAt) {
-		x := *runnerObservedAt
-		v.LastActivityAt = &x
 	}
 	if p.TerminalSize.Set != nil && p.TerminalSize.Clear {
 		return MutationResult{}, errors.New("centralstore: terminal patch cannot set and clear")

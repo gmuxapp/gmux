@@ -181,8 +181,8 @@ func visibleSession(payload *wire.SessionsPayload, id string) (wire.Session, boo
 }
 
 func sessionLastActiveWire(s wire.Session) string {
-	if s.LastActivityAt != "" {
-		return s.LastActivityAt
+	if s.LastOutputAt != "" {
+		return s.LastOutputAt
 	}
 	return s.CreatedAt
 }
@@ -303,7 +303,7 @@ func legacySessionFromWire(s wire.Session) compatSession {
 		BinaryHash:      s.BinaryHash,
 		ProjectSlug:     s.ProjectSlug,
 		ProjectIndex:    s.ProjectIndex,
-		LastOutputAt:    s.LastActivityAt,
+		LastOutputAt:    s.LastOutputAt,
 	}
 }
 
