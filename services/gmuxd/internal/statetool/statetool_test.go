@@ -104,6 +104,33 @@ func TestExportIsRedactedAndDeterministic(t *testing.T) {
 		t.Fatalf("projects/placements = %+v / %+v", doc.Projects, doc.Placements)
 	}
 
+	// Verify started_at_ms and exited_at_ms round-trip through export
+	// when populated (pins the export shape against the schema).
+	started := centralstore.UnixMillis(1000)
+	exited := centralstore.UnixMillis(2000)
+	if _, err := s.ApplyCommonFacts(ctx, "alpha", 1, centralstore.CommonFactsPatch{
+		StartedAt: centralstore.NullablePatch[centralstore.UnixMillis]{Set: &started},
+		ExitedAt:  centralstore.NullablePatch[centralstore.UnixMillis]{Set: &exited},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	doc, err = Export(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alpha := doc.Sessions[0] // sorted: alpha < beta
+	if alpha.ID != "alpha" {
+		t.Fatalf("expected alpha first, got %s", alpha.ID)
+	}
+	if alpha.StartedAtMs == nil || *alpha.StartedAtMs != 1000 {
+		t.Fatalf("started_at_ms = %v, want 1000", alpha.StartedAtMs)
+	}
+	if alpha.ExitedAtMs == nil || *alpha.ExitedAtMs != 2000 {
+		t.Fatalf("exited_at_ms = %v, want 2000", alpha.ExitedAtMs)
+	}
+	// Refresh raw for the determinism check below.
+	raw, _ = json.Marshal(doc)
+
 	// Deterministic: a second export marshals byte-identically.
 	doc2, err := Export(ctx, s)
 	if err != nil {
