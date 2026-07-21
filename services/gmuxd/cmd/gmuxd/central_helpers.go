@@ -67,13 +67,13 @@ func (f *sseFanout) currentLocked() wire.Frames {
 		if f.world.PeerProjects != nil {
 			copy.PeerProjects = make(map[string][]peering.SpokeProject, len(f.world.PeerProjects))
 			for k, v := range f.world.PeerProjects {
-				copy.PeerProjects[k] = append([]peering.SpokeProject(nil), v...)
+				copy.PeerProjects[k] = append([]peering.SpokeProject{}, v...)
 			}
 		}
 		if f.world.PeerDiscovered != nil {
 			copy.PeerDiscovered = make(map[string][]peering.SpokeDiscovered, len(f.world.PeerDiscovered))
 			for k, v := range f.world.PeerDiscovered {
-				copy.PeerDiscovered[k] = append([]peering.SpokeDiscovered(nil), v...)
+				copy.PeerDiscovered[k] = append([]peering.SpokeDiscovered{}, v...)
 			}
 		}
 		if f.world.Health != nil {
@@ -119,13 +119,13 @@ func (f *sseFanout) BroadcastFrames(frames wire.Frames) {
 		if frames.World.PeerProjects != nil {
 			copy.PeerProjects = make(map[string][]peering.SpokeProject, len(frames.World.PeerProjects))
 			for k, v := range frames.World.PeerProjects {
-				copy.PeerProjects[k] = append([]peering.SpokeProject(nil), v...)
+				copy.PeerProjects[k] = append([]peering.SpokeProject{}, v...)
 			}
 		}
 		if frames.World.PeerDiscovered != nil {
 			copy.PeerDiscovered = make(map[string][]peering.SpokeDiscovered, len(frames.World.PeerDiscovered))
 			for k, v := range frames.World.PeerDiscovered {
-				copy.PeerDiscovered[k] = append([]peering.SpokeDiscovered(nil), v...)
+				copy.PeerDiscovered[k] = append([]peering.SpokeDiscovered{}, v...)
 			}
 		}
 		if frames.World.Health != nil {

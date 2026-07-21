@@ -26,11 +26,15 @@ func (m *Manager) WorldProjection() WorldProjection {
 			i.NodeID = h.NodeID
 		}
 		w.Peers = append(w.Peers, i)
+		// Normalize nil caches to empty slices: these map values reach the
+		// browser as JSON, and the UI iterates them (a nil slice marshals to
+		// null and crashes Object.entries iteration — legacy
+		// composePeerDiscovered normalized the same way).
 		if p, ok := mp.peer.CachedProjects(); ok {
-			w.PeerProjects[name] = append([]SpokeProject(nil), p...)
+			w.PeerProjects[name] = append([]SpokeProject{}, p...)
 		}
 		if d, ok := mp.peer.CachedDiscovered(); ok {
-			w.PeerDiscovered[name] = append([]SpokeDiscovered(nil), d...)
+			w.PeerDiscovered[name] = append([]SpokeDiscovered{}, d...)
 		}
 	}
 	return w
