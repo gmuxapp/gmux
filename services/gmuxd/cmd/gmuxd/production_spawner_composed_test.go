@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -94,6 +95,12 @@ func insertRetainedDead(t *testing.T, st *centralstore.Store, id centralstore.Se
 }
 
 func TestProductionSpawnerResumeComposedWithRealUnixRunner(t *testing.T) {
+	// The spawner derives runner socket endpoints from paths.SessionSocketDir();
+	// pin it to a temp dir so the test doesn't depend on the host's state dir
+	// existing (fresh CI runners have no ~/.local/state/gmux/run/sessions).
+	// t.TempDir() embeds the test name and can push socket paths past the
+	// 108-byte sun_path limit, so use a short mkdtemp instead.
+	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
 	ctx := context.Background()
 	st, err := centralstore.Open(ctx, t.TempDir())
 	if err != nil {
@@ -148,6 +155,7 @@ func TestProductionSpawnerResumeComposedWithRealUnixRunner(t *testing.T) {
 }
 
 func TestProductionSpawnerResumeRegistrationFailureCleansAndReleasesClaim(t *testing.T) {
+	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
 	ctx := context.Background()
 	st, err := centralstore.Open(ctx, t.TempDir())
 	if err != nil {
@@ -194,4 +202,15 @@ func TestProductionSpawnerResumeRegistrationFailureCleansAndReleasesClaim(t *tes
 	if errors.Is(ctx.Err(), context.Canceled) {
 		t.Fatal("unexpected cancellation")
 	}
+}
+
+// shortSocketDir returns a temp dir short enough for Unix socket paths.
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("", "gsock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(d) })
+	return d
 }
