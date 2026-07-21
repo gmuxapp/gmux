@@ -235,7 +235,7 @@ func TestRuntimeOverlayDerivesAliveAndResumable(t *testing.T) {
 	reader := &fakeReader{result: func(centralstore.SnapshotQuery) (centralstore.StoreSnapshot, error) {
 		return centralstore.StoreSnapshot{Sessions: []centralstore.SessionView{
 			{Session: centralstore.Session{ID: "live", Command: []string{"sh"}}},
-			{Session: centralstore.Session{ID: "dead", Command: []string{"sh"}}},
+			{Session: centralstore.Session{ID: "dead", Command: []string{"sh"}, StartedAt: ptrMillis(1)}},
 		}}, nil
 	}}
 	runtime := RuntimeSourceFunc(func() map[centralstore.SessionID]RuntimeFacts {
@@ -378,11 +378,11 @@ func TestCloseStopsRunAndContextCancelStopsRun(t *testing.T) {
 func TestVerdictOverlayNarrowsResumability(t *testing.T) {
 	reader := &fakeReader{result: func(centralstore.SnapshotQuery) (centralstore.StoreSnapshot, error) {
 		return centralstore.StoreSnapshot{Sessions: []centralstore.SessionView{
-			{Session: centralstore.Session{ID: "confirmed", Command: []string{"sh"}}},
-			{Session: centralstore.Session{ID: "gone", Command: []string{"sh"}}},
+			{Session: centralstore.Session{ID: "confirmed", Command: []string{"sh"}, StartedAt: ptrMillis(1)}},
+			{Session: centralstore.Session{ID: "gone", Command: []string{"sh"}, StartedAt: ptrMillis(1)}},
 			{Session: centralstore.Session{ID: "live", Command: []string{"sh"}}},
-			{Session: centralstore.Session{ID: "no-command", Command: []string{}}},
-			{Session: centralstore.Session{ID: "unprobed", Command: []string{"sh"}}},
+			{Session: centralstore.Session{ID: "no-command", Command: []string{}, StartedAt: ptrMillis(1)}},
+			{Session: centralstore.Session{ID: "unprobed", Command: []string{"sh"}, StartedAt: ptrMillis(1)}},
 		}}, nil
 	}}
 	runtime := RuntimeSourceFunc(func() map[centralstore.SessionID]RuntimeFacts {
@@ -424,7 +424,7 @@ func TestVerdictOverlayNarrowsResumability(t *testing.T) {
 func TestNilVerdictSourceKeepsDefault(t *testing.T) {
 	reader := &fakeReader{result: func(centralstore.SnapshotQuery) (centralstore.StoreSnapshot, error) {
 		return centralstore.StoreSnapshot{Sessions: []centralstore.SessionView{
-			{Session: centralstore.Session{ID: "dead", Command: []string{"sh"}}},
+			{Session: centralstore.Session{ID: "dead", Command: []string{"sh"}, StartedAt: ptrMillis(1)}},
 		}}, nil
 	}}
 	sink := &blockingSink{out: make(chan Batch, 8)}
@@ -434,6 +434,36 @@ func TestNilVerdictSourceKeepsDefault(t *testing.T) {
 	b := recvBatch(t, sink.out)
 	if row := b.Sessions.Sessions[0]; row.Alive || !row.Resumable {
 		t.Fatalf("row=%#v", row)
+	}
+}
+
+func ptrMillis(v centralstore.UnixMillis) *centralstore.UnixMillis { return &v }
+
+// TestNeverAliveDeadRowIsNotResumableAndDropsUnread pins the ever-alive
+// gate: a dead row whose runner never reported running (started_at null —
+// failed spawn / instant exec error) must not surface as a resume candidate
+// and must not carry an unread badge, even with a command and no verdict.
+func TestNeverAliveDeadRowIsNotResumableAndDropsUnread(t *testing.T) {
+	reader := &fakeReader{result: func(centralstore.SnapshotQuery) (centralstore.StoreSnapshot, error) {
+		return centralstore.StoreSnapshot{Sessions: []centralstore.SessionView{
+			{Session: centralstore.Session{ID: "never-ran", Command: []string{"sh"}, Unread: true}},
+			{Session: centralstore.Session{ID: "ran", Command: []string{"sh"}, Unread: true, StartedAt: ptrMillis(1)}},
+		}}, nil
+	}}
+	sink := &blockingSink{out: make(chan Batch, 8)}
+	c := New(reader, nil, sink)
+	startComposer(t, c)
+	c.MarkDirty(true, false)
+	b := recvBatch(t, sink.out)
+	rows := b.Sessions.Sessions
+	if len(rows) != 2 {
+		t.Fatalf("rows=%#v", rows)
+	}
+	if never := rows[0]; never.Resumable || never.Unread {
+		t.Fatalf("never-ran row must be gated: %#v", never)
+	}
+	if ran := rows[1]; !ran.Resumable || !ran.Unread {
+		t.Fatalf("ever-ran row must keep resumable+unread: %#v", ran)
 	}
 }
 

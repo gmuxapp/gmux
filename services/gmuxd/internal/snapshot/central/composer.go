@@ -431,7 +431,18 @@ func (c *Composer) compose(ctx context.Context, sessions, projects bool) (Batch,
 				f := facts
 				row.Runtime = &f
 			} else {
-				row.Resumable = len(v.Command) > 0 && verdicts[v.ID] != VerdictGone
+				// Ever-alive gate: a dead row only surfaces as a resume
+				// candidate (and only carries unread) if the session was at
+				// some point observed running — started_at is the runner's
+				// durable SetRunning stamp. A row whose runner died before
+				// ever reporting running (failed spawn, instant exec error)
+				// must not appear as a resumable conversation or demand
+				// attention with an unread badge.
+				everRan := v.StartedAt != nil
+				row.Resumable = everRan && len(v.Command) > 0 && verdicts[v.ID] != VerdictGone
+				if !everRan {
+					row.Unread = false
+				}
 			}
 			rows = append(rows, row)
 		}
