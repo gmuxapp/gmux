@@ -170,7 +170,7 @@ func startProdRunner(t *testing.T, e *prodEnv, id string, unread bool) *prodRunn
 	r := &prodRunner{ln: ln, events: make(chan string, 16), delivered: make(chan struct{}, 16), id: id, sock: sock}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /meta", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "adapter": "shell", "alive": true, "created_at": time.Unix(1, 0).UTC().Format(time.RFC3339), "pid": os.Getpid(), "runner_version": "e2e", "binary_hash": "e2e", "cwd": e.home, "command": []string{"/bin/sh"}, "remotes": map[string]string{"credential_fixture": "alice:remote-secret@example.invalid/repo.git"}, "status": map[string]any{"working": false}, "unread": unread, "terminal_cols": 93, "terminal_rows": 31})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "adapter": "shell", "alive": true, "created_at": time.Unix(1, 0).UTC().Format(time.RFC3339), "started_at": time.Unix(1, 0).UTC().Format(time.RFC3339), "pid": os.Getpid(), "runner_version": "e2e", "binary_hash": "e2e", "cwd": e.home, "command": []string{"/bin/sh"}, "remotes": map[string]string{"credential_fixture": "alice:remote-secret@example.invalid/repo.git"}, "status": map[string]any{"working": false}, "unread": unread, "terminal_cols": 93, "terminal_rows": 31})
 	})
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, q *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -214,15 +214,17 @@ func sessions(t *testing.T, e *prodEnv) []map[string]any {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	// The wire shape is {"ok":true,"data":[...]}: data is the FLAT session
+	// array (the legacy protocol the web client and CLI both consume), not a
+	// {sessions:[...]} wrapper — restoring that flat shape was cutover
+	// regression fix #1, and this harness must pin it.
 	var env struct {
-		Data struct {
-			Sessions []map[string]any `json:"sessions"`
-		} `json:"data"`
+		Data []map[string]any `json:"data"`
 	}
 	if err = json.NewDecoder(resp.Body).Decode(&env); err != nil {
 		t.Fatal(err)
 	}
-	return env.Data.Sessions
+	return env.Data
 }
 func session(t *testing.T, e *prodEnv, id string) map[string]any {
 	t.Helper()
