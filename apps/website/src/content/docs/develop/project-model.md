@@ -4,7 +4,7 @@ description: The design behind gmux's user-curated project list, VCS-aware match
 ---
 
 :::note[Design record]
-This is the design rationale behind gmux's project model, which shipped in 2.0. For current behavior and configuration see [Using the UI](/using-the-ui/) and the [projects.json reference](/reference/projects-json/). Terminology note: `kind` throughout this document is now `adapter`.
+This is the design rationale behind gmux's project model, which shipped in 2.0. For current behavior and configuration see [Using the UI](/using-the-ui/) and the [project model reference](/reference/projects-json/). Terminology note: `kind` throughout this document is now `adapter`.
 :::
 
 Before this model, folders appeared in the sidebar automatically when sessions started, and a scanner walked all adapter session directories to discover every resumable session across all projects. That created noise, didn't sync between clients, and prevented adapters with per-project storage (like OpenCode's SQLite) from integrating cleanly.
@@ -50,9 +50,9 @@ When a session could match multiple projects, the most specific match wins:
 
 Two projects claiming the exact same normalized path is a validation error. Nesting (one path under another) is valid and intentional, with longest prefix winning.
 
-### State file
+### State representation
 
-Stored at `~/.local/state/gmux/projects.json`:
+Projects are stored in the daemon’s SQLite database (`state.db`, ADR 0026). The REST API (`GET /v1/projects`, `PUT /v1/projects`) uses the same JSON shape shown below:
 
 ```json
 {

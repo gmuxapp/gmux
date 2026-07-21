@@ -202,7 +202,7 @@ Sessions without a recorded conversation keep their original command, so "resume
 
 ### Dead sessions survive daemon restarts
 
-Dead sessions are not rediscovered from conversation files. Instead, `gmuxd` persists a `meta.json` per session (`~/.local/state/gmux/sessions/<id>/`) when it dies and sweeps those back into the store at startup. Retention follows ADR 0016: `meta.json` mirrors conversation existence (retired when the adapter's `ConversationProber` says the file is genuinely gone; conversation-less sessions age out), and dead-session scrollback is an evictable cache. The conversations index (from `ConversationSource`) serves URL resolution and search, not sidebar entries.
+Dead sessions are not rediscovered from conversation files. Instead, dead sessions are rows in the SQLite database (`state.db`, ADR 0026) and survive daemon restarts by construction. Adapters own retention policy: each adapter reconciles its retained candidates and returns a disposition (retain, remove, or unknown). Dead-session scrollback is an evictable cache on disk. The conversations index (from `ConversationSource`) serves URL resolution and search, not sidebar entries.
 
 For concrete examples, see [Claude Code](/integrations/claude-code), [Codex](/integrations/codex), or [pi](/integrations/pi).
 

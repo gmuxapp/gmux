@@ -29,6 +29,14 @@ gmuxd run
 
 This runs the daemon in the foreground so you can see errors directly. Use `gmux daemon start` for normal background operation.
 
+**Check database integrity:**
+
+```bash
+gmux daemon state check
+```
+
+Verifies migration status, SQLite integrity, and foreign keys. If the daemon won’t start due to a database problem, the error log will say so — `state check` can run offline for diagnosis. Use `gmux daemon state backup <path>` to take a consistent backup before attempting recovery.
+
 ## Sessions don't appear in the sidebar
 
 - **No project configured.** gmux discovers sessions but doesn't add them to the sidebar automatically. Open **Settings → Projects** (gear button) and add the project from the *Discovered* list, or click **Add a project** in the empty state.

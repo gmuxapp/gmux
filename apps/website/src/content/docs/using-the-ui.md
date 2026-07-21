@@ -62,7 +62,7 @@ In **Settings → Hosts**, each host shows an explicit status:
 
 Removing a host also clears the project references that pointed at it, so it leaves nothing behind under **Referenced but not found**.
 
-**Upgrading to 2.0:** hosts you had projects on — that earlier versions auto-discovered on your tailnet — are migrated into the roster as **Auth needed**. Click **Add token** on each and paste its token (run `gmux auth` on that host) to bring it back online. Other tailnet machines aren't carried over; re-add them with **Connect to host** if you want them. Your `projects.json` is backed up to `projects.json.bak` before the upgrade rewrites it. See the [migration guide](/migrating-to-2/) for the full 2.0 upgrade story.
+**Upgrading to 2.0:** hosts you had projects on — that earlier versions auto-discovered on your tailnet — are migrated into the roster as **Auth needed**. Click **Add token** on each and paste its token (run `gmux auth` on that host) to bring it back online. Other tailnet machines aren't carried over; re-add them with **Connect to host** if you want them. 2.0 uses a clean SQLite database (`state.db`); old JSON state files are ignored. See the [migration guide](/migrating-to-2/) for the full 2.0 upgrade story.
 
 ## Projects
 
@@ -70,7 +70,7 @@ Sessions don't appear in the sidebar until you add a project. The first time you
 
 In the sidebar, sessions are grouped into a **folder** per project. Click a **project name** to collapse or expand its folder (a chevron shows the state); the header stays pinned to the top of the list while you scroll through its sessions. Collapsed state is remembered per browser tab.
 
-Each project has **match rules** that determine which sessions belong to it. Rules can match by filesystem path (`~/dev/gmux` and its subdirectories) or by git remote URL (grouping clones across machines). See [`projects.json`](/reference/projects-json/) for the full reference on rules, precedence, and advanced options like exact matching.
+Each project has **match rules** that determine which sessions belong to it. Rules can match by filesystem path (`~/dev/gmux` and its subdirectories) or by git remote URL (grouping clones across machines). See the [project model reference](/reference/projects-json/) for the full reference on rules, precedence, and advanced options like exact matching.
 
 You can manage projects at any time in **Settings → Projects** (gear button in the sidebar header, or the `?settings` URL parameter):
 
