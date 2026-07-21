@@ -377,7 +377,7 @@ func (s *Store) InsertSession(ctx context.Context, v NewSession) (Session, Mutat
 }
 
 func (s *Store) Session(ctx context.Context, id SessionID) (Session, bool, error) {
-	v, err := s.queries.GetSession(ctx, string(id))
+	v, err := s.readQ.GetSession(ctx, string(id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, false, nil
 	}
@@ -388,7 +388,7 @@ func (s *Store) Session(ctx context.Context, id SessionID) (Session, bool, error
 	return out, err == nil, err
 }
 func (s *Store) ListSessions(ctx context.Context) ([]Session, error) {
-	rows, err := s.queries.ListSessions(ctx)
+	rows, err := s.readQ.ListSessions(ctx)
 	if err != nil {
 		return nil, err
 	}

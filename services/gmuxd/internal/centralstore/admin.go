@@ -65,7 +65,9 @@ func OpenReadOnly(ctx context.Context, dir string) (*Store, error) {
 		_ = database.Close()
 		return nil, fmt.Errorf("centralstore: connect read-only: %w", err)
 	}
-	return &Store{database: database, queries: db.New(database)}, nil
+	// OpenReadOnly is a single-purpose offline handle; share the same pool
+	// for both read and write queries (the entire handle is read-only).
+	return &Store{database: database, readDB: database, queries: db.New(database), readQ: db.New(database)}, nil
 }
 
 // EmbeddedSchemaVersion returns the highest migration version compiled into

@@ -60,12 +60,12 @@ func (s *Store) ReadSnapshot(ctx context.Context, query SnapshotQuery) (StoreSna
 	if !query.IncludeSessions && !query.IncludeProjects {
 		return StoreSnapshot{}, errors.New("centralstore: snapshot query selects no kind")
 	}
-	tx, err := s.database.BeginTx(ctx, nil)
+	tx, err := s.readDB.BeginTx(ctx, nil)
 	if err != nil {
 		return StoreSnapshot{}, err
 	}
 	defer tx.Rollback()
-	q := s.queries.WithTx(tx)
+	q := s.readQ.WithTx(tx)
 
 	var out StoreSnapshot
 	// The catalog is needed by both kinds (sessions join project slugs), so

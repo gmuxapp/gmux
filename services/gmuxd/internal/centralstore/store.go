@@ -33,9 +33,22 @@ var migrationFiles embed.FS
 
 // Store owns the database handle. Its generated models and queries remain
 // private implementation details.
+//
+// The store maintains two connection pools:
+//   - database (write pool): single connection for all mutations. SQLite
+//     serializes writers anyway; a pool of 1 avoids SQLITE_BUSY retries.
+//   - readDB (read pool): up to 4 connections opened in WAL read-only mode
+//     (query_only pragma) for ReadSnapshot, Session, ListSessions, and other
+//     pure-read methods. WAL mode allows concurrent readers alongside the
+//     single writer, so read-only queries never block mutations and vice
+//     versa. This separation eliminates the connection-pool-level
+//     serialization that caused lifecycle starvation under REST read load
+//     (see §2a incident report).
 type Store struct {
 	database *sql.DB
+	readDB   *sql.DB
 	queries  *db.Queries
+	readQ    *db.Queries
 
 	// beforePlacementFinalize is a test-only fault-injection seam. Production
 	// construction leaves it nil.
@@ -97,12 +110,30 @@ func Open(ctx context.Context, dir string) (*Store, error) {
 	database.SetMaxOpenConns(1)
 	database.SetMaxIdleConns(1)
 
+	// Read-only pool: WAL readers never block the single writer and vice
+	// versa. query_only(ON) prevents accidental mutation. 4 connections
+	// covers REST handlers + the composer without excessive file-handle
+	// overhead.
+	readDSN := (&url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}).String() +
+		"?_pragma=journal_mode(WAL)&_pragma=query_only(ON)&_pragma=busy_timeout(5000)"
+	readDB, err := sql.Open("sqlite", readDSN)
+	if err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("centralstore: open read database: %w", err)
+	}
+	readDB.SetMaxOpenConns(4)
+	readDB.SetMaxIdleConns(4)
+
 	closeOnError := func(openErr error) (*Store, error) {
+		_ = readDB.Close()
 		_ = database.Close()
 		return nil, openErr
 	}
 	if err := database.PingContext(ctx); err != nil {
 		return closeOnError(fmt.Errorf("centralstore: connect: %w", err))
+	}
+	if err := readDB.PingContext(ctx); err != nil {
+		return closeOnError(fmt.Errorf("centralstore: connect read pool: %w", err))
 	}
 	migrations, err := fs.Sub(migrationFiles, "migrations")
 	if err != nil {
@@ -116,7 +147,7 @@ func Open(ctx context.Context, dir string) (*Store, error) {
 	if err := quickCheck(ctx, database); err != nil {
 		return closeOnError(err)
 	}
-	return &Store{database: database, queries: db.New(database)}, nil
+	return &Store{database: database, readDB: readDB, queries: db.New(database), readQ: db.New(readDB)}, nil
 }
 
 // gooseVersionTable is goose's migration-bookkeeping table. The provider
@@ -136,8 +167,17 @@ func migrate(ctx context.Context, database *sql.DB, files fs.FS) error {
 	return nil
 }
 
-// Close releases the database connection.
-func (s *Store) Close() error { return s.database.Close() }
+// Close releases both connection pools. When the read pool is the same
+// handle as the write pool (OpenReadOnly), only one close is performed.
+func (s *Store) Close() error {
+	if s.readDB != s.database {
+		if err := s.readDB.Close(); err != nil {
+			_ = s.database.Close()
+			return err
+		}
+	}
+	return s.database.Close()
+}
 
 // SchemaVersion returns the current embedded migration version.
 func (s *Store) SchemaVersion(ctx context.Context) (int64, error) {
