@@ -120,9 +120,17 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 		f.Working = &v.Working
 		f.Error = &v.Error
 	case "meta":
+		// Field tags are load-bearing: the runner emits snake_case keys, and
+		// Go's case-insensitive fallback does NOT bridge snake_case to camel
+		// case — untagged fields here silently dropped every live title
+		// update (sessions only got titles from the tagged /meta struct at
+		// registration/convergence time).
 		var v struct {
-			ShellTitle, AdapterTitle, Subtitle, Slug *string
-			Unread                                   *bool `json:"unread"`
+			ShellTitle   *string `json:"shell_title"`
+			AdapterTitle *string `json:"adapter_title"`
+			Subtitle     *string `json:"subtitle"`
+			Slug         *string `json:"slug"`
+			Unread       *bool   `json:"unread"`
 		}
 		if json.Unmarshal(raw, &v) != nil {
 			return sessioncoord.RunnerEvent{}, false
