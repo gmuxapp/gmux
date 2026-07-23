@@ -232,6 +232,9 @@ func validateNewSession(v NewSession) error {
 			return err
 		}
 	}
+	if v.ExitCode != nil && v.ExitedAt == nil {
+		return errors.New("centralstore: exit_code requires exited_at")
+	}
 	return validateTerminal(v.TerminalCols, v.TerminalRows)
 }
 
@@ -555,6 +558,9 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 		if err = validateMillis(name, x); err != nil {
 			return MutationResult{}, err
 		}
+	}
+	if v.ExitCode != nil && v.ExitedAt == nil {
+		return MutationResult{}, errors.New("centralstore: exit_code requires exited_at")
 	}
 	if v.Adapter == "" {
 		return MutationResult{}, errors.New("centralstore: adapter required")

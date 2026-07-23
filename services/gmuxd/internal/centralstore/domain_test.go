@@ -983,3 +983,59 @@ func assertKernelInvariants(t *testing.T, s *Store) {
 	}
 }
 func stringsHasPrefixTemp(s string) bool { return len(s) >= 2 && s[:2] == "~:" }
+
+func TestExitCodeRequiresExitedAt(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	code := 1
+	ts := UnixMillis(100)
+
+	// Insert: exit_code without exited_at must be rejected.
+	_, _, err := s.InsertSession(ctx, NewSession{
+		ID: "bad-insert", Adapter: "shell", Command: []string{"sh"}, CWD: "/",
+		Remotes: map[string]string{}, CreatedAt: 1,
+		ExitCode: &code,
+		// ExitedAt intentionally nil
+	})
+	if err == nil {
+		t.Fatal("insert with exit_code but no exited_at accepted")
+	}
+
+	// Insert with both fields set must succeed.
+	_, _, err = s.InsertSession(ctx, NewSession{
+		ID: "good-insert", Adapter: "shell", Command: []string{"sh"}, CWD: "/",
+		Remotes: map[string]string{}, CreatedAt: 1,
+		ExitedAt: &ts,
+		ExitCode: &code,
+	})
+	if err != nil {
+		t.Fatalf("insert with exit_code and exited_at rejected: %v", err)
+	}
+
+	// Patch: setting exit_code while exited_at is absent must be rejected.
+	plain := addSession(t, s, "plain", "")
+	_, err = s.ApplyCommonFacts(ctx, plain.ID, plain.Version, CommonFactsPatch{
+		ExitCode: NullablePatch[int]{Set: &code},
+	})
+	if err == nil {
+		t.Fatal("patch exit_code without exited_at accepted")
+	}
+
+	// Patch: setting exit_code together with exited_at must succeed.
+	_, err = s.ApplyCommonFacts(ctx, plain.ID, plain.Version, CommonFactsPatch{
+		ExitedAt: NullablePatch[UnixMillis]{Set: &ts},
+		ExitCode: NullablePatch[int]{Set: &code},
+	})
+	if err != nil {
+		t.Fatalf("patch exit_code with exited_at rejected: %v", err)
+	}
+
+	// Patch: clearing exited_at while exit_code is present must be rejected.
+	exited, _, _ := s.Session(ctx, plain.ID)
+	_, err = s.ApplyCommonFacts(ctx, plain.ID, exited.Version, CommonFactsPatch{
+		ExitedAt: NullablePatch[UnixMillis]{Clear: true},
+	})
+	if err == nil {
+		t.Fatal("clearing exited_at while exit_code present accepted")
+	}
+}
