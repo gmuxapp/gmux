@@ -92,11 +92,12 @@ func (c *Coordinator) FinishConvergence(ctx context.Context, at centralstore.Uni
 	c.convergeClosed = true
 	c.convergeCandidates = nil
 	close(c.converged)
+	seq := c.outcomes.allocSeq() // stamp before releasing c.mu
 	c.mu.Unlock()
 
 	c.publish(ctx, result)
 	if result.Changed {
-		c.emitOutcomes(ctx, sweep...)
+		c.emitOutcomes(ctx, seq, sweep...)
 	}
 	return result, nil
 }

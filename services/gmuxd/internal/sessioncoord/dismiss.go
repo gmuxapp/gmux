@@ -88,6 +88,7 @@ func (c *Coordinator) Dismiss(ctx context.Context, root centralstore.SessionID) 
 	}
 
 	dismissed, result, err := c.durable.DismissSessionTree(ctx, root, c.now())
+	seq := c.outcomes.allocSeq() // stamp before releasing c.mu
 	c.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -95,7 +96,7 @@ func (c *Coordinator) Dismiss(ctx context.Context, root centralstore.SessionID) 
 	// Publish the committed outcome outside the mutex, same as every other
 	// lifecycle operation.
 	c.publish(ctx, result)
-	c.emitOutcomes(ctx, dismissed...)
+	c.emitOutcomes(ctx, seq, dismissed...)
 	return dismissed, nil
 }
 
@@ -136,11 +137,12 @@ func (c *Coordinator) Remove(ctx context.Context, id centralstore.SessionID, obs
 	if err == nil {
 		c.invalidateVerdict(id) // the row is gone; its reconciliation verdict with it
 	}
+	seq := c.outcomes.allocSeq() // stamp before releasing c.mu
 	c.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	c.publish(ctx, result)
-	c.emitOutcomes(ctx, id)
+	c.emitOutcomes(ctx, seq, id)
 	return nil
 }

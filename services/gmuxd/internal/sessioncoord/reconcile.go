@@ -283,6 +283,7 @@ func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, 
 
 	// ── Apply (mutex per decision, short DB tx; publish outside) ─────────
 	var removed []centralstore.SessionID
+	var removedSeqs []uint64 // per-removal commit-seq stamps (allocated under c.mu)
 	var outcomes []centralstore.MutationResult
 	verdictsChanged := false
 	for _, cand := range candidates {
@@ -321,6 +322,7 @@ func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, 
 			case removeErr == nil:
 				verdictsChanged = c.setVerdict(cand.ID, VerdictUnknown) || verdictsChanged
 				removed = append(removed, cand.ID)
+				removedSeqs = append(removedSeqs, c.outcomes.allocSeq()) // stamp under c.mu
 				outcomes = append(outcomes, result)
 			case errors.Is(removeErr, centralstore.ErrStaleVersion), errors.Is(removeErr, centralstore.ErrSessionNotFound):
 				// The decision went stale (any conditional mutation landed)
@@ -348,6 +350,8 @@ func (c *Coordinator) Reconcile(ctx context.Context) ([]centralstore.SessionID, 
 	for _, r := range outcomes {
 		c.publish(ctx, r)
 	}
-	c.emitOutcomes(ctx, removed...)
+	for i, id := range removed {
+		c.emitOutcomes(ctx, removedSeqs[i], id)
+	}
 	return removed, verdictsChanged, nil
 }

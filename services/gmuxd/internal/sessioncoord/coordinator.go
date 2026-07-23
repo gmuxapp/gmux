@@ -517,6 +517,7 @@ loop:
 		}
 	}
 
+	seq := c.outcomes.allocSeq() // stamp commit order before releasing c.mu
 	c.mu.Unlock()
 
 	// Silent-loss guard: a conversation-bearing registration in an embedding
@@ -533,13 +534,13 @@ loop:
 	// re-entrant dirty sink cannot stall lifecycle transitions.
 	c.publish(ctx, outcome)
 	session.ID = id // the store echoes it; make the outcome self-describing even for sparse fakes
-	c.emitUpserted(session)
+	c.emitUpserted(session, seq)
 	if len(reg.Evict) > 0 {
 		evicted := make([]centralstore.SessionID, len(reg.Evict))
 		for i, ev := range reg.Evict {
 			evicted[i] = ev.ID
 		}
-		c.emitOutcomes(ctx, evicted...)
+		c.emitOutcomes(ctx, seq, evicted...)
 	}
 	return runtime, nil
 }
@@ -764,7 +765,7 @@ func (c *Coordinator) apply(ctx context.Context, id centralstore.SessionID, gene
 		// safe, and it must not depend on the replacement's own publish.
 		c.publish(ctx, result)
 		if result.Changed {
-			c.emitOutcomes(ctx, id)
+			c.emitOutcomes(ctx, c.outcomes.allocSeq(), id)
 		}
 		return
 	}
@@ -788,7 +789,7 @@ func (c *Coordinator) apply(ctx context.Context, id centralstore.SessionID, gene
 	// stall the coordinator or deadlock.
 	c.publish(ctx, result)
 	if result.Changed {
-		c.emitOutcomes(ctx, id)
+		c.emitOutcomes(ctx, c.outcomes.allocSeq(), id)
 	}
 }
 

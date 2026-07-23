@@ -225,7 +225,7 @@ func TestOutcomeBusNoSubscribersSkipsReads(t *testing.T) {
 		return centralstore.Session{}, false, nil
 	}
 	coord := New(nil, newFakeClient(RunnerMeta{}), dur, &fakeDirtySink{}, nil)
-	coord.emitOutcomes(context.Background(), "sess-a", "sess-b")
+	coord.emitOutcomes(context.Background(), 0, "sess-a", "sess-b")
 	if reads != 0 {
 		t.Fatalf("expected no reads without subscribers, got %d", reads)
 	}
@@ -330,5 +330,77 @@ func TestOutcomeBusRemovedResetsWatermark(t *testing.T) {
 	}
 	if o := recvOutcome(t, ch); o.Type != OutcomeUpserted || o.Session.Version != 1 {
 		t.Fatalf("fresh sequence after removal must deliver: %+v", o)
+	}
+}
+
+// TestOutcomeBusLateRemovedDroppedAfterNewerUpserted is a deterministic
+// regression for R-2: an older Removed (commit-seq=N) that arrives AFTER a
+// newer re-registration Upserted (commit-seq=N+1) for the same session must
+// be dropped by the per-session commit-seq watermark.
+//
+// The schedule reproduced here (publish order differs from commit order):
+//
+//	1. Remove commits (seq=1).
+//	2. Register commits (seq=2) and publishes its Upserted immediately.
+//	3. Remove's post-commit read finishes late; its Removed is published last.
+//
+// Without the watermark the subscriber's final state is "removed" (wrong).
+// With the watermark the late seq=1 Removed is dropped (correct).
+func TestOutcomeBusLateRemovedDroppedAfterNewerUpserted(t *testing.T) {
+	dur := newFakeDurable(0)
+	coord := New(nil, newFakeClient(RunnerMeta{}), dur, &fakeDirtySink{}, nil)
+
+	ch, cancel := coord.SubscribeOutcomes()
+	defer cancel()
+
+	id := centralstore.SessionID("sess-r2")
+	v1 := centralstore.Session{ID: id, Version: 1}
+
+	// Publish in arrival order: newer Upserted (seq=2) first, stale Removed
+	// (seq=1) second — exactly the out-of-order window the fix closes.
+	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &v1, Sequence: 2})
+	coord.outcomes.publish(Outcome{Type: OutcomeRemoved, ID: id, Sequence: 1})
+
+	// Must receive the Upserted.
+	if o := recvOutcome(t, ch); o.Type != OutcomeUpserted || o.Sequence != 2 {
+		t.Fatalf("expected Upserted seq=2, got %+v", o)
+	}
+
+	// The stale Removed (seq=1 < seenSeq=2) must be dropped; the next
+	// delivery must be the Activity sentinel, not the Removed.
+	coord.PublishActivity(id)
+	if o := recvOutcome(t, ch); o.Type != OutcomeActivity {
+		t.Fatalf("stale Removed seq=1 delivered after Upserted seq=2 (got %+v)", o)
+	}
+}
+
+// TestOutcomeBusLateRemovedNormalOrderDelivered verifies that a Removed
+// with a higher commit-seq than the preceding Upserted is delivered normally
+// (i.e. the watermark only drops truly stale outcomes).
+func TestOutcomeBusLateRemovedNormalOrderDelivered(t *testing.T) {
+	dur := newFakeDurable(0)
+	coord := New(nil, newFakeClient(RunnerMeta{}), dur, &fakeDirtySink{}, nil)
+
+	ch, cancel := coord.SubscribeOutcomes()
+	defer cancel()
+
+	id := centralstore.SessionID("sess-r2b")
+	v1 := centralstore.Session{ID: id, Version: 1}
+
+	// Normal order: Upserted (seq=1) then Removed (seq=2).
+	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &v1, Sequence: 1})
+	coord.outcomes.publish(Outcome{Type: OutcomeRemoved, ID: id, Sequence: 2})
+
+	if o := recvOutcome(t, ch); o.Type != OutcomeUpserted {
+		t.Fatalf("expected Upserted, got %+v", o)
+	}
+	if o := recvOutcome(t, ch); o.Type != OutcomeRemoved {
+		t.Fatalf("expected Removed, got %+v", o)
+	}
+	// After a delivered Removed, a fresh v1 re-registration must still pass.
+	v1b := centralstore.Session{ID: id, Version: 1}
+	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &v1b, Sequence: 3})
+	if o := recvOutcome(t, ch); o.Type != OutcomeUpserted || o.Session.Version != 1 {
+		t.Fatalf("fresh re-registration must deliver after Removed: %+v", o)
 	}
 }
