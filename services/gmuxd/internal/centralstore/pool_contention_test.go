@@ -100,7 +100,9 @@ func TestWritesSurviveHeldReadConnections(t *testing.T) {
 }
 
 // TestReadPoolConcurrentReadWrite runs concurrent readers and writers under
-// -race to verify the separate pools don't introduce data races.
+// -race to verify the separate pools don't introduce data races. Every
+// goroutine error is collected via t.Error so failures surface clearly,
+// and the final store state is checked for consistency.
 func TestReadPoolConcurrentReadWrite(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -109,7 +111,12 @@ func TestReadPoolConcurrentReadWrite(t *testing.T) {
 	const readers = 4
 	const iterations = 50
 
-	var wg sync.WaitGroup
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		writeErrs []string
+		readErrs  []string
+	)
 	wg.Add(writers + readers)
 
 	for w := range writers {
@@ -117,23 +124,53 @@ func TestReadPoolConcurrentReadWrite(t *testing.T) {
 			defer wg.Done()
 			for i := range iterations {
 				id := SessionID(fmt.Sprintf("rw-%d-%d", w, i))
-				_, _, _ = s.RegisterRunner(ctx, RunnerRegistration{
+				_, _, err := s.RegisterRunner(ctx, RunnerRegistration{
 					ID: id, Adapter: "test", Alive: true,
 					CreatedAt: UnixMillis(int64(w*1000 + i)), ObservedAt: UnixMillis(int64(w*1000 + i)),
 					Facts: RunnerFacts{CWD: strPtr("/tmp")},
 				})
+				if err != nil {
+					mu.Lock()
+					writeErrs = append(writeErrs, fmt.Sprintf("writer %d iter %d: %v", w, i, err))
+					mu.Unlock()
+				}
 			}
 		}()
 	}
-	for range readers {
+	for r := range readers {
 		go func() {
 			defer wg.Done()
-			for range iterations {
-				_, _ = s.ReadSnapshot(ctx, SnapshotQuery{IncludeSessions: true, IncludeProjects: true})
+			for i := range iterations {
+				_, err := s.ReadSnapshot(ctx, SnapshotQuery{IncludeSessions: true, IncludeProjects: true})
+				if err != nil {
+					mu.Lock()
+					readErrs = append(readErrs, fmt.Sprintf("reader %d iter %d: %v", r, i, err))
+					mu.Unlock()
+				}
 			}
 		}()
 	}
 	wg.Wait()
+
+	for _, e := range writeErrs {
+		t.Error("write error:", e)
+	}
+	for _, e := range readErrs {
+		t.Error("read error:", e)
+	}
+	if t.Failed() {
+		return
+	}
+
+	// Verify final store state: all writers * iterations unique IDs were registered.
+	snap, err := s.ReadSnapshot(ctx, SnapshotQuery{IncludeSessions: true})
+	if err != nil {
+		t.Fatalf("final ReadSnapshot: %v", err)
+	}
+	const want = writers * iterations
+	if got := len(snap.Sessions); got != want {
+		t.Errorf("expected %d registered runners, got %d", want, got)
+	}
 }
 
 func openTestStoreInDir(t *testing.T, dir string) *Store {
