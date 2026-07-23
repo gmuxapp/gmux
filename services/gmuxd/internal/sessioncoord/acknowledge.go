@@ -48,10 +48,11 @@ func (c *Coordinator) AcknowledgeDead(ctx context.Context, id centralstore.Sessi
 			version = s.Version
 		}
 		result, err := c.durable.AcknowledgeDeadSession(ctx, id, version)
+		seq := c.outcomes.allocSeq() // stamp before releasing c.mu
 		c.mu.Unlock()
 		if err == nil {
 			c.publish(ctx, result)
-			c.emitOutcomes(ctx, id)
+			c.emitOutcomes(ctx, seq, id)
 			return nil
 		}
 		if errors.Is(err, centralstore.ErrSessionNotFound) {
