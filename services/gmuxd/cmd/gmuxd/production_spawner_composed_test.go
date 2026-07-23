@@ -155,6 +155,7 @@ func TestProductionSpawnerResumeComposedWithRealUnixRunner(t *testing.T) {
 }
 
 func TestProductionSpawnerWaitsForRunnerSocketBeforeRegistration(t *testing.T) {
+	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
 	ctx := context.Background()
 	st, err := centralstore.Open(ctx, t.TempDir())
 	if err != nil {
