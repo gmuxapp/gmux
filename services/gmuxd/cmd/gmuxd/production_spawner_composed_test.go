@@ -154,6 +154,56 @@ func TestProductionSpawnerResumeComposedWithRealUnixRunner(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestProductionSpawnerWaitsForRunnerSocketBeforeRegistration(t *testing.T) {
+	ctx := context.Background()
+	st, err := centralstore.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	row := insertRetainedDead(t, st, "sess-delayed-runner")
+
+	childReady := make(chan *unixFakeRunner, 1)
+	prod := &productionRunnerSpawner{
+		ResolveDir:     func(centralstore.Session) (string, error) { return t.TempDir(), nil },
+		ResolveCommand: func(centralstore.Session) []string { return []string{"shell"} },
+		ReadyTimeout:   time.Second,
+	}
+	prod.Launch = func(_ context.Context, req runnerLaunchRequest) (runnerLaunchResult, error) {
+		processWait := make(chan error)
+		go func() {
+			time.Sleep(75 * time.Millisecond)
+			childReady <- startUnixFakeRunner(t, req.Endpoint, string(row.ID), http.StatusOK)
+		}()
+		return runnerLaunchResult{
+			Endpoint: req.Endpoint,
+			PID:      4321,
+			Wait:     processWait,
+			Terminate: func(ctx context.Context) error {
+				select {
+				case child := <-childReady:
+					return child.terminate(ctx)
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			},
+		}, nil
+	}
+
+	coord := sessioncoord.New(nil, productionRunnerClient{}, st, nil, nil, sessioncoord.WithRunnerSpawner(prod))
+	started := time.Now()
+	rt, err := coord.Resume(ctx, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed < 75*time.Millisecond {
+		t.Fatalf("resume returned before delayed socket was ready: %s", elapsed)
+	}
+	if rt.SessionID != row.ID {
+		t.Fatalf("replacement runtime=%+v", rt)
+	}
+}
+
 func TestProductionSpawnerResumeRegistrationFailureCleansAndReleasesClaim(t *testing.T) {
 	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
 	ctx := context.Background()

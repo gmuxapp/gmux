@@ -278,6 +278,7 @@ type productionRunnerSpawner struct {
 	ResolveDir     func(centralstore.Session) (string, error)
 	ResolveCommand func(centralstore.Session) []string
 	Launch         func(context.Context, runnerLaunchRequest) (runnerLaunchResult, error)
+	ReadyTimeout   time.Duration
 	mu             sync.Mutex
 	launched       map[string]runnerLaunchResult
 }
@@ -323,6 +324,24 @@ func (s *productionRunnerSpawner) Spawn(ctx context.Context, row centralstore.Se
 	if result.Terminate == nil {
 		return "", fmt.Errorf("runner spawn: launch result has no termination handle")
 	}
+	// A real process launch returns a Wait channel. Do not hand the endpoint to
+	// registration until that process has actually bound its socket; cmd.Start
+	// only confirms exec and otherwise races the immediate /events request.
+	if result.Wait != nil {
+		readyTimeout := s.ReadyTimeout
+		if readyTimeout <= 0 {
+			readyTimeout = 5 * time.Second
+		}
+		if err := waitRunnerSocket(ctx, result.Endpoint, result.Wait, readyTimeout); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			cleanupErr := result.Terminate(cleanupCtx)
+			cancel()
+			if cleanupErr != nil {
+				return "", errors.Join(err, fmt.Errorf("runner spawn cleanup: %w", cleanupErr))
+			}
+			return "", err
+		}
+	}
 	s.mu.Lock()
 	if s.launched == nil {
 		s.launched = make(map[string]runnerLaunchResult)
@@ -330,6 +349,33 @@ func (s *productionRunnerSpawner) Spawn(ctx context.Context, row centralstore.Se
 	s.launched[result.Endpoint] = result
 	s.mu.Unlock()
 	return result.Endpoint, nil
+}
+
+func waitRunnerSocket(ctx context.Context, endpoint string, exited <-chan error, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		conn, err := net.DialTimeout("unix", endpoint, 50*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		select {
+		case waitErr, ok := <-exited:
+			if !ok || waitErr == nil {
+				return fmt.Errorf("runner spawn: process exited before socket became ready")
+			}
+			return fmt.Errorf("runner spawn: process exited before socket became ready: %w", waitErr)
+		case <-ticker.C:
+		case <-deadline.C:
+			return fmt.Errorf("runner spawn: socket %s not ready after %s: %w", endpoint, timeout, err)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 func (s *productionRunnerSpawner) CleanupSpawn(ctx context.Context, endpoint string) error {
