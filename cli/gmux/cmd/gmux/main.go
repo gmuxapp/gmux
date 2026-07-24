@@ -14,6 +14,9 @@ import (
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 2 && os.Args[1] == "__detached-target" {
+		os.Exit(runDetachedTarget(os.Args[2:]))
+	}
 	log.SetPrefix("gmux: ")
 	log.SetFlags(0)
 
