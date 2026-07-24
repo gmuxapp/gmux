@@ -320,6 +320,28 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 		return Runtime{}, fmt.Errorf("%w: expected %s, runner reported %s", ErrResumeIdentityMismatch, req.ExpectedID, id)
 	}
 
+	// Ordinary discovery has now verified the endpoint's claimed identity.
+	// Reject an already-installed generation before durable reads or lineage
+	// resolver I/O. A different endpoint claiming the same ID remains visible
+	// as ErrGenerationActive; replacement operations bypass this check and are
+	// authorized by their lifecycle claim at the commit fence below.
+	if !req.Replace && req.ExpectedID == "" {
+		c.mu.Lock()
+		if c.closing {
+			c.mu.Unlock()
+			return Runtime{}, errors.New("sessioncoord: coordinator closed")
+		}
+		if err := ctx.Err(); err != nil {
+			c.mu.Unlock()
+			return Runtime{}, err
+		}
+		old, hadOld := c.registry.current(id)
+		c.mu.Unlock()
+		if hadOld {
+			return old.Runtime, ErrGenerationActive
+		}
+	}
+
 	// Takeover preparation (still I/O phase): read the durable rows and warm
 	// the lineage cache for every same-adapter ref, so the coverage
 	// computation under the mutex needs no I/O. A failed list read degrades
@@ -365,6 +387,8 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 		}
 	}
 
+	// Re-check at the commit fence: two genuine registrations may both pass
+	// the pre-I/O absence check, but only one generation may install.
 	old, hadOld := c.registry.current(id)
 	if hadOld && !req.Replace {
 		c.mu.Unlock()

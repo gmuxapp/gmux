@@ -126,7 +126,11 @@ func (f EndpointSourceFunc) Endpoints(ctx context.Context) ([]string, error) { r
 // harness boundary. None may perform network I/O while holding cache/store
 // locks; PeerSessionSource in particular must return a copy.
 type BootstrapConfig struct {
-	Store                          *centralstore.Store
+	Store *centralstore.Store
+	// Durable overrides Store only at the coordinator boundary. Production
+	// leaves it nil; composition tests use it to count durable operations while
+	// retaining the real central store for all other bootstrap components.
+	Durable                        sessioncoord.Durable
 	Runners                        sessioncoord.RunnerClient
 	Control                        sessioncoord.RunnerControl
 	Spawner                        sessioncoord.RunnerSpawner
@@ -191,7 +195,11 @@ func newBootstrap(cfg BootstrapConfig) (*Bootstrap, error) {
 	if cfg.LocalPeers != nil {
 		opts = append(opts, sessioncoord.WithLocalPeerMatchInputs(cfg.LocalPeers))
 	}
-	coord := sessioncoord.New(registry, cfg.Runners, cfg.Store, bridge, cfg.Errors, opts...)
+	durable := cfg.Durable
+	if durable == nil {
+		durable = cfg.Store
+	}
+	coord := sessioncoord.New(registry, cfg.Runners, durable, bridge, cfg.Errors, opts...)
 	cache := wire.NewCache(cfg.Converter, cfg.PeerSessions)
 	lifetimeCtx, cancel := context.WithCancel(context.Background())
 	b := &Bootstrap{Store: cfg.Store, Registry: registry, Coordinator: coord, Cache: cache, cfg: cfg, firstPair: make(chan struct{}), lifetimeCtx: lifetimeCtx, cancel: cancel, bridge: bridge}

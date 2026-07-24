@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -22,12 +23,15 @@ func (s *bootstrapStream) Events() <-chan sessioncoord.RunnerEvent { return s.ev
 func (s *bootstrapStream) Close() error                            { return nil }
 
 type bootstrapRunners struct {
-	mu      sync.Mutex
-	metas   map[string]sessioncoord.RunnerMeta
-	blocked map[string]bool
+	mu             sync.Mutex
+	metas          map[string]sessioncoord.RunnerMeta
+	blocked        map[string]bool
+	subscribeCalls atomic.Int64
+	metaCalls      atomic.Int64
 }
 
 func (r *bootstrapRunners) Subscribe(ctx context.Context, ep string) (sessioncoord.EventStream, error) {
+	r.subscribeCalls.Add(1)
 	if r.blocked[ep] {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -35,6 +39,7 @@ func (r *bootstrapRunners) Subscribe(ctx context.Context, ep string) (sessioncoo
 	return &bootstrapStream{events: make(chan sessioncoord.RunnerEvent)}, nil
 }
 func (r *bootstrapRunners) Meta(ctx context.Context, ep string) (sessioncoord.RunnerMeta, error) {
+	r.metaCalls.Add(1)
 	if r.blocked[ep] {
 		<-ctx.Done()
 		return sessioncoord.RunnerMeta{}, ctx.Err()
@@ -44,6 +49,79 @@ func (r *bootstrapRunners) Meta(ctx context.Context, ep string) (sessioncoord.Ru
 		return sessioncoord.RunnerMeta{}, errors.New("missing")
 	}
 	return m, nil
+}
+
+type bootstrapCountingDurable struct {
+	sessioncoord.Durable
+	listCalls atomic.Int64
+}
+
+func (d *bootstrapCountingDurable) ListSessions(ctx context.Context) ([]centralstore.Session, error) {
+	d.listCalls.Add(1)
+	return d.Durable.ListSessions(ctx)
+}
+
+type bootstrapCountingResolver struct{ calls atomic.Int64 }
+
+func (r *bootstrapCountingResolver) DescribeConversation(context.Context, string, string) (sessioncoord.ConversationInfo, error) {
+	r.calls.Add(1)
+	return sessioncoord.ConversationInfo{ID: "conversation"}, nil
+}
+
+func TestPeriodicScansRejectBeforeConversationTakeoverIO(t *testing.T) {
+	ctx := context.Background()
+	store, err := centralstore.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	const endpoint = "runner"
+	ref := "multi-megabyte-transcript"
+	meta := sessioncoord.RunnerMeta{Registration: centralstore.RunnerRegistration{
+		ID: "sess-periodic", Adapter: "pi", Alive: true, CreatedAt: 1, ObservedAt: 1,
+	}}
+	meta.Registration.Facts.ConversationRef = &ref
+	runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{endpoint: meta}, blocked: map[string]bool{}}
+	resolver := &bootstrapCountingResolver{}
+	durable := &bootstrapCountingDurable{Durable: store}
+	var reported atomic.Int64
+	boot, err := newBootstrap(BootstrapConfig{
+		Store: store, Durable: durable, Runners: runners, Control: bootstrapControl{}, Spawner: bootstrapSpawner{},
+		Resolver: resolver, Reconciler: bootstrapReconciler{}, Converter: &wire.Converter{},
+		Endpoints: EndpointSourceFunc(func(context.Context) ([]string, error) { return []string{endpoint}, nil }),
+		Errors:    sessioncoord.ErrorSinkFunc(func(context.Context, error) { reported.Add(1) }),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer boot.Close()
+	if _, err := boot.Converge(ctx); err != nil {
+		t.Fatal(err)
+	}
+	baseResolves := resolver.calls.Load()
+	baseLists := durable.listCalls.Load()
+	for range 300 {
+		if err := boot.Scan(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := runners.subscribeCalls.Load(); got != 301 {
+		t.Fatalf("Subscribe calls=%d, want 301", got)
+	}
+	if got := runners.metaCalls.Load(); got != 601 {
+		t.Fatalf("Meta calls=%d, want 601 (register verification + orphan probe)", got)
+	}
+	// Scan's trailing Reconcile performs one expected ListSessions call. Any
+	// additional call is registration takeover preparation and is forbidden.
+	if got, want := durable.listCalls.Load(), baseLists+300; got != want {
+		t.Fatalf("ListSessions calls=%d, want %d (reconcile only; zero takeover lists)", got, want)
+	}
+	if got := resolver.calls.Load(); got != baseResolves {
+		t.Fatalf("resolver/rchar proxy calls=%d, want unchanged %d", got, baseResolves)
+	}
+	if got := reported.Load(); got != 300 {
+		t.Fatalf("observable ErrGenerationActive reports=%d, want 300", got)
+	}
 }
 
 type bootstrapReconciler struct{}

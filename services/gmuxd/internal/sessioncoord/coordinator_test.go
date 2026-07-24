@@ -43,7 +43,9 @@ type fakeRunnerClient struct {
 	// subscribeBlock is closed by the test when Subscribe may proceed.
 	subscribeBlock chan struct{}
 	// metaBlock is closed by the test when Meta may proceed.
-	metaBlock chan struct{}
+	metaBlock      chan struct{}
+	subscribeCalls atomic.Int64
+	metaCalls      atomic.Int64
 }
 
 func newFakeClient(meta RunnerMeta) *fakeRunnerClient {
@@ -51,6 +53,7 @@ func newFakeClient(meta RunnerMeta) *fakeRunnerClient {
 }
 
 func (c *fakeRunnerClient) Subscribe(ctx context.Context, _ string) (EventStream, error) {
+	c.subscribeCalls.Add(1)
 	if c.subscribeBlock != nil {
 		select {
 		case <-ctx.Done():
@@ -67,6 +70,7 @@ func (c *fakeRunnerClient) Subscribe(ctx context.Context, _ string) (EventStream
 }
 
 func (c *fakeRunnerClient) Meta(ctx context.Context, _ string) (RunnerMeta, error) {
+	c.metaCalls.Add(1)
 	if c.metaBlock != nil {
 		select {
 		case <-ctx.Done():
@@ -80,6 +84,88 @@ func (c *fakeRunnerClient) Meta(ctx context.Context, _ string) (RunnerMeta, erro
 		return RunnerMeta{}, c.metaErr
 	}
 	return c.meta, nil
+}
+
+type freshRunnerClient struct {
+	meta       RunnerMeta
+	subscribes atomic.Int64
+	metas      atomic.Int64
+}
+
+func (c *freshRunnerClient) Subscribe(context.Context, string) (EventStream, error) {
+	c.subscribes.Add(1)
+	return newFakeStream(), nil
+}
+func (c *freshRunnerClient) Meta(context.Context, string) (RunnerMeta, error) {
+	c.metas.Add(1)
+	return c.meta, nil
+}
+
+func TestRegisterRejectsInstalledGenerationBeforeTakeoverIO(t *testing.T) {
+	ref := "large-transcript"
+	meta := liveMeta("sess-prededup", "pi", ref)
+	client := &freshRunnerClient{meta: meta}
+	dur := newFakeDurable(1)
+	dur.listSessions = func() ([]centralstore.Session, error) {
+		return []centralstore.Session{{ID: "sess-prededup", Adapter: "pi", ConversationRef: ref}}, nil
+	}
+	resolver := &fakeResolver{infos: map[string]ConversationInfo{lineageKey("pi", ref): {ID: "conversation"}}}
+	coord := New(nil, client, dur, &fakeDirtySink{}, nil, WithConversationTakeover(resolver))
+	defer coord.Close()
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "installed"}); err != nil {
+		t.Fatal(err)
+	}
+	dur.mu.Lock()
+	lists := dur.listSessionCalls
+	dur.mu.Unlock()
+	resolver.mu.Lock()
+	resolves := resolver.calls
+	resolver.mu.Unlock()
+
+	for range 500 {
+		if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "installed"}); !errors.Is(err, ErrGenerationActive) {
+			t.Fatalf("repeat registration error=%v", err)
+		}
+	}
+	if got := client.subscribes.Load(); got != 501 {
+		t.Fatalf("Subscribe calls=%d, want 501", got)
+	}
+	if got := client.metas.Load(); got != 501 {
+		t.Fatalf("Meta calls=%d, want 501", got)
+	}
+	dur.mu.Lock()
+	if dur.listSessionCalls != lists {
+		t.Fatalf("ListSessions calls=%d, want %d", dur.listSessionCalls, lists)
+	}
+	dur.mu.Unlock()
+	resolver.mu.Lock()
+	if resolver.calls != resolves {
+		t.Fatalf("resolver calls=%d, want %d", resolver.calls, resolves)
+	}
+	resolver.mu.Unlock()
+
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "collision"}); !errors.Is(err, ErrGenerationActive) {
+		t.Fatalf("collision error=%v", err)
+	}
+	// ExpectedID is replacement provenance even if Replace was omitted. It
+	// must reach authorization rather than return an occupancy-dependent
+	// generation collision.
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "unauthorized", ExpectedID: "sess-prededup"}); !errors.Is(err, ErrReplaceWithoutClaim) {
+		t.Fatalf("ExpectedID without claim error=%v", err)
+	}
+
+	claim, release, err := coord.claim("sess-prededup", "test-replace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	beforeLists := dur.listSessionCalls
+	if _, err := coord.Register(context.Background(), RegisterRequest{Endpoint: "replacement", Replace: true, ExpectedID: "sess-prededup", Claim: claim}); err != nil {
+		t.Fatal(err)
+	}
+	if dur.listSessionCalls != beforeLists+1 {
+		t.Fatalf("replacement ListSessions calls=%d, want %d", dur.listSessionCalls, beforeLists+1)
+	}
 }
 
 // fakeDurable records calls and can simulate errors or stale-version
@@ -98,7 +184,8 @@ type fakeDurable struct {
 	// session backs Session for lifecycle tests.
 	session func(centralstore.SessionID) (centralstore.Session, bool, error)
 	// listSessions backs ListSessions for convergence tests.
-	listSessions func() ([]centralstore.Session, error)
+	listSessions     func() ([]centralstore.Session, error)
+	listSessionCalls int
 	// sweepResult backs SweepDeadSessions; swept records its calls.
 	sweepResult func([]centralstore.SessionID, centralstore.UnixMillis) (centralstore.MutationResult, error)
 	swept       [][]centralstore.SessionID
@@ -203,6 +290,7 @@ func (d *fakeDurable) PlaceUnplacedSessions(ctx context.Context, ids []centralst
 func (d *fakeDurable) ListSessions(ctx context.Context) ([]centralstore.Session, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.listSessionCalls++
 	if d.listSessions == nil {
 		return nil, nil
 	}
