@@ -1370,7 +1370,7 @@ func (s *Store) place(ctx context.Context, sub SubjectRef, project ProjectEntryI
 	if err = tx.Commit(); err != nil {
 		return MutationResult{}, err
 	}
-	return MutationResult{Changed: changed, WorldDirty: changed}, nil
+	return MutationResult{Changed: changed, SessionsDirty: changed && sub.LocalSessionID != "", WorldDirty: changed}, nil
 }
 
 type SiblingReorder struct {

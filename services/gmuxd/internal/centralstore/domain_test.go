@@ -409,6 +409,35 @@ func TestLaunchParentUpdateTriggerRejectsRebind(t *testing.T) {
 	}
 }
 
+func TestPlaceLocalSessionSetsBothDirtyFlags(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	p := addProject(t, s)
+	addSession(t, s, "s1", "")
+	// first placement: both SessionsDirty and WorldDirty must be set
+	r, err := s.PlaceLocalSession(ctx, "s1", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Changed || !r.SessionsDirty || !r.WorldDirty {
+		t.Fatalf("PlaceLocalSession first: want Changed+SessionsDirty+WorldDirty, got %+v", r)
+	}
+	// repeat is a no-op
+	r, err = s.PlaceLocalSession(ctx, "s1", p)
+	if err != nil || r.Changed {
+		t.Fatalf("PlaceLocalSession repeat: want no change, got %+v err=%v", r, err)
+	}
+	// peer placement should NOT set SessionsDirty
+	peer := LocalPeerSubject{PeerKey: "dev", SessionID: "px"}
+	r, err = s.UpsertLocalPeerPlacement(ctx, peer, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Changed || r.SessionsDirty || !r.WorldDirty {
+		t.Fatalf("UpsertLocalPeerPlacement: want Changed+WorldDirty only, got %+v", r)
+	}
+}
+
 func TestRepeatedLocalAndPeerPlacementPreservesOrder(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)
