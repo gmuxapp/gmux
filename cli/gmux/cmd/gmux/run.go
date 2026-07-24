@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -25,12 +28,29 @@ import (
 	"github.com/gmuxapp/gmux/packages/workspace"
 )
 
-// handshakeTimeout bounds how long the parent end of spawnDetached
-// waits for the child to finish registering with gmuxd. The child's
-// registerWithGmuxd loops up to 5 times with 500ms backoff, so the
-// realistic worst case is ~2.5s plus child startup. 5s is a
-// comfortable ceiling: any longer and something is genuinely wrong.
-const handshakeTimeout = 5 * time.Second
+// detachedStartupBudget is the single end-to-end budget for explicit -d.
+// Its absolute deadline is handed to the child, so process startup, daemon
+// health/autostart, registration requests, backoff, and acknowledgement all
+// consume the same clock.
+const detachedStartupBudget = 30 * time.Second
+
+// foregroundRegistrationBudget is the best-effort registration window for
+// foreground and nested-gmux launches. These runners are not gate-blocked:
+// the user's command is already running and the local terminal is attached.
+// Registration is opportunistic — a short window avoids a visible hang at
+// the shell when gmuxd is unreachable, while still giving a healthy daemon
+// time to accept the POST. Explicit detach (-d) uses detachedStartupBudget
+// because its registration context is shared with the user command's start
+// gate and the parent waits for the full ack before printing the session id.
+const foregroundRegistrationBudget = 3 * time.Second
+
+// maxHandshakeFrameBytes caps each line read from the control pipe, preventing
+// a wedged writer from growing parent memory indefinitely.
+const maxHandshakeFrameBytes = 512
+
+const detachedCleanupGrace = 3 * time.Second
+
+const detachedTargetCleanupGrace = 2 * time.Second
 
 // ptyDrainTimeout bounds the wait for the PTY to fully flush after the
 // child exits. A well-behaved child has its PTY slave closed by the
@@ -63,25 +83,86 @@ type runDirectives struct {
 	ParentSessionID string
 }
 
-// reapOnFatalRegistration reports whether a runner should tear itself
-// down because registration with gmuxd failed permanently.
+// reapOnRegistrationFailure reports whether a runner should tear itself
+// down because registration with gmuxd failed in a way it cannot recover
+// from. Two distinct conditions qualify:
 //
-// Only the combination of a fatal (4xx) verdict and a headless runner
-// qualifies:
+//   - outcome == registerFatal: gmuxd understood the request and refused it
+//     permanently (4xx), e.g. its IsValidSessionID guard rejected the id.
+//     Retrying or waiting changes nothing.
+//   - handshakeOwned && outcome != registerOK: the runner is gate-blocking
+//     an explicit -d launch; any non-success outcome (including the transient
+//     registerUnavailable) means the parent will time out waiting for the
+//     ack. Tearing down immediately and sending the failure ack is cleaner
+//     than forcing the parent to sit the full 30 s deadline.
 //
-//   - registerFatal means gmuxd understood the request and refused it
-//     for good (e.g. its IsValidSessionID guard rejected the id) —
-//     retrying or waiting changes nothing. registerUnavailable, by
-//     contrast, is a transient "gmuxd not ready" and must NOT reap: the
-//     runner keeps serving so a later discovery scan can pick it up.
-//   - !interactive means no local terminal is attached, so gmuxd is the
-//     only consumer; once gmuxd has permanently rejected it, the
-//     process is a pure orphan (the convIndex-rehydrate resume bug,
-//     where a session keyed by its conversation UUID could never
-//     register). An interactive runner is spared: the user's terminal
-//     is still usefully attached even if gmux never tracks the session.
-func reapOnFatalRegistration(outcome registerOutcome, interactive bool) bool {
-	return outcome == registerFatal && !interactive
+// In both cases, !interactive is required: the runner is headless (no local
+// terminal attached), making gmuxd the only consumer. An interactive runner
+// is spared even on a fatal verdict because its terminal is still usefully
+// attached. The convIndex-rehydrate resume bug (a session keyed by its
+// conversation UUID that could never register) is the canonical orphan example.
+func reapOnRegistrationFailure(outcome registerOutcome, interactive, handshakeOwned bool) bool {
+	return !interactive && (outcome == registerFatal || (handshakeOwned && outcome != registerOK))
+}
+
+// shutdownDetachedTarget closes the runner and explicitly supervises the PTY
+// child's separate process group. The PTY library gives the target its own
+// session, so killing only the runner's setsid group is insufficient when a
+// target ignores terminal-close SIGHUP.
+func shutdownDetachedTarget(srv *ptyserver.Server) {
+	srv.Shutdown()
+	pid := srv.Pid()
+	terminateProcessGroup(pid, detachedTargetCleanupGrace)
+	drainStructChan(srv.Done(), detachedTargetCleanupGrace)
+}
+
+// drainErrorChan waits for done within grace. If the timer fires first (e.g.
+// a process stuck in uninterruptible kernel sleep that SIGKILL cannot wake),
+// it returns and lets the goroutine feeding done reap the process
+// asynchronously. This bounds cleanup time while preserving the single
+// Wait-owner invariant.
+func drainErrorChan(done <-chan error, grace time.Duration) {
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
+}
+
+// drainStructChan is the same as drainErrorChan for <-chan struct{} (e.g.
+// srv.Done()).
+func drainStructChan(done <-chan struct{}, grace time.Duration) {
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
+}
+
+func terminateProcessGroup(pgid int, grace time.Duration) {
+	_ = syscall.Kill(-pgid, syscall.SIGHUP)
+	deadline := time.Now().Add(grace)
+	for processGroupExists(pgid) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if processGroupExists(pgid) {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		// Bound the post-SIGKILL loop: a zombie-only group returns EPERM
+		// from kill(2), which processGroupExists treats as "still exists".
+		// After the deadline, treat any remainder as done — a zombie has
+		// no further harm potential; a recycled group is not ours to track.
+		killDeadline := time.Now().Add(grace)
+		for processGroupExists(pgid) && time.Now().Before(killDeadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+func processGroupExists(pgid int) bool {
+	err := syscall.Kill(-pgid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // runSession launches a new managed session for the given command.
@@ -122,6 +203,21 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	if !attach {
 		spawnDetached(args, "", true)
 		return
+	}
+
+	registrationCtx, cancelRegistration, handshakeOwned := handshakeContext()
+	defer cancelRegistration()
+	if handshakeOwned && registrationCtx.Err() != nil {
+		handshakeAck("", false)
+		return
+	}
+	// Foreground and nested launches use a short best-effort budget rather
+	// than the 30 s detach deadline: the user's command is already running
+	// and the terminal is attached, so a 30 s hang on daemon-unavailable
+	// would be visibly user-hostile. See foregroundRegistrationBudget.
+	if !handshakeOwned {
+		registrationCtx, cancelRegistration = context.WithTimeout(context.Background(), foregroundRegistrationBudget)
+		defer cancelRegistration()
 	}
 
 	// Honour the legacy GMUX_RESUME_ID env var when --resume-id
@@ -229,6 +325,40 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		State:      state,
 		Version:    version,
 	}
+	var (
+		controlFile    *os.File
+		targetGateFile *os.File
+	)
+	if handshakeOwned {
+		self, err := os.Executable()
+		if err != nil {
+			handshakeAck("", false)
+			return
+		}
+		// Dup capturedHandshakeFD so the target wrapper's ExtraFiles entry owns
+		// a separate fd; handshakeAck retains the original as the sole owner.
+		// Without the dup, both ExtraFiles and handshakeAck would wrap the same
+		// raw fd, creating two *os.File finalizers on one fd (the aliasing
+		// footgun documented in handshake.go).
+		controlDupFD, err := syscall.Dup(capturedHandshakeFD)
+		if err != nil {
+			handshakeAck("", false)
+			return
+		}
+		// Set CLOEXEC on the dup for defence in depth; exec.Cmd ExtraFiles
+		// re-dups with dup2 in the child regardless, so this does not prevent
+		// the target wrapper from receiving fd 3.
+		syscall.CloseOnExec(controlDupFD)
+		controlFile = os.NewFile(uintptr(controlDupFD), "gmux-target-control")
+		targetGateFile = os.NewFile(uintptr(capturedHandshakeGateFD), "gmux-target-gate")
+		if controlFile == nil || targetGateFile == nil {
+			handshakeAck("", false)
+			return
+		}
+		ptyCfg.CommandWrapper = []string{self, "__detached-target"}
+		ptyCfg.ExtraFiles = []*os.File{controlFile, targetGateFile}
+		ptyCfg.Env = append(ptyCfg.Env, targetControlFDEnv+"=3", targetGateFDEnv+"=4")
+	}
 	// Conditional assignment: a typed nil *scrollback.Writer
 	// stored in ptyCfg.Scrollback (an io.WriteCloser) would
 	// satisfy != nil checks downstream and panic on the first
@@ -298,6 +428,18 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	// Start PTY server. The socket is already bound to `listener`
 	// (above); ptyserver.New takes ownership and serves on it.
 	srv, err = ptyserver.New(ptyCfg)
+	// Close the runner's ExtraFiles copies now that the target wrapper has
+	// been forked. controlFile wraps the dup'd fd (not capturedHandshakeFD),
+	// so closing it does not affect handshakeAck's use of the original.
+	// capturedHandshakeGateFD is cleared so a subsequent captureHandshakeFD
+	// call (e.g. from a nested runner) cannot misuse a stale value.
+	if controlFile != nil {
+		_ = controlFile.Close()
+	}
+	if targetGateFile != nil {
+		_ = targetGateFile.Close() // only the parent and target retain the gate
+		capturedHandshakeGateFD = -1
+	}
 	if err != nil {
 		if localTty != nil {
 			// Restore cooked mode before fataling out; otherwise the
@@ -325,22 +467,31 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		fmt.Println("serving...")
 	}
 
+	var detachedSigCh chan os.Signal
+	if handshakeOwned && !interactive {
+		detachedSigCh = make(chan os.Signal, 1)
+		signal.Notify(detachedSigCh, syscall.SIGINT, syscall.SIGTERM)
+		defer signal.Stop(detachedSigCh)
+	}
+
 	// Auto-start gmuxd if not running (one-shot, never retried), then
 	// register. The goroutine signals regDone when the registration
 	// HTTP call has completed (succeeded or exhausted retries) and the
 	// handshake — if any — has been delivered to the parent. We block
 	// on regDone before exit so a fast-exiting command (echo, true,
 	// false) can't lose the registration race.
-	ensureGmuxd()
+	ensureGmuxdContext(registrationCtx)
 	regDone := make(chan struct{})
 	go func() {
 		defer close(regDone)
-		outcome := registerWithGmuxd(sessionID, sockPath)
-		handshakeAck(sessionID, outcome.ok())
-		if reapOnFatalRegistration(outcome, interactive) {
-			log.Printf("gmux: registration permanently rejected for %s; shutting down orphaned runner", sessionID)
-			srv.Shutdown()
+		outcome := registerWithGmuxd(registrationCtx, sessionID, sockPath)
+		if reapOnRegistrationFailure(outcome, interactive, handshakeOwned) {
+			log.Printf("gmux: registration failed for %s; shutting down orphaned runner", sessionID)
+			shutdownDetachedTarget(srv)
+			handshakeAck(sessionID, false)
+			return
 		}
+		handshakeAck(sessionID, outcome.ok())
 	}()
 
 	if interactive {
@@ -388,15 +539,22 @@ func runSession(args []string, attach bool, dir runDirectives) {
 		}
 	} else {
 		// Non-interactive: original behavior
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		sigCh := detachedSigCh
+		if sigCh == nil {
+			sigCh = make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		}
 
 		select {
 		case <-srv.Done():
 			// Child exited
 		case sig := <-sigCh:
 			fmt.Printf("\nreceived %v, shutting down...\n", sig)
-			srv.Shutdown()
+			if handshakeOwned {
+				shutdownDetachedTarget(srv)
+			} else {
+				srv.Shutdown()
+			}
 		}
 	}
 
@@ -417,7 +575,8 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	// (no-op, not registered yet), then the register arrives, then
 	// the child exits, leaving a stale registered session.
 	//
-	// Bounded by registerWithGmuxd's retry budget (≤2.5s).
+	// Bounded by the registration context (the shared explicit-detach
+	// deadline, or the separate best-effort foreground/nested budget).
 	<-regDone
 
 	// Deregister from gmuxd (best-effort)
@@ -426,6 +585,7 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	if !interactive {
 		fmt.Printf("exited:   %d\n", exitCode)
 	}
+	waitForHandshakeRelease()
 	os.Exit(exitCode)
 }
 
@@ -515,6 +675,41 @@ func reexecRunArgs(args []string) []string {
 	return append([]string{"__run", "--"}, args...)
 }
 
+// runDetachedTarget publishes its separately-sessioned process-group ID before
+// allowing the user command to exec. The parent owns the gate fd, so even if
+// the runner dies in the fork/publication window, the command cannot start
+// without the parent first learning which group it must supervise.
+func runDetachedTarget(args []string) int {
+	controlFD, err1 := strconv.Atoi(os.Getenv(targetControlFDEnv))
+	gateFD, err2 := strconv.Atoi(os.Getenv(targetGateFDEnv))
+	_ = os.Unsetenv(targetControlFDEnv)
+	_ = os.Unsetenv(targetGateFDEnv)
+	if err1 != nil || err2 != nil || controlFD < 3 || gateFD < 3 || len(args) == 0 {
+		return 125
+	}
+	control := os.NewFile(uintptr(controlFD), "gmux-target-control")
+	gate := os.NewFile(uintptr(gateFD), "gmux-target-gate")
+	if control == nil || gate == nil {
+		return 125
+	}
+	_, _ = fmt.Fprintf(control, "TARGET %d\n", os.Getpid())
+	_ = control.Close()
+	var token [1]byte
+	_, err := io.ReadFull(gate, token[:])
+	_ = gate.Close()
+	if err != nil || token[0] != 'G' {
+		return 125
+	}
+	bin, err := exec.LookPath(args[0])
+	if err != nil {
+		return 127
+	}
+	if err := syscall.Exec(bin, args, os.Environ()); err != nil {
+		return 126
+	}
+	return 0
+}
+
 // spawnDetached re-execs gmux with the given args as a setsid'd
 // background process, disconnected from the current terminal. Used
 // for both detached (-d) and nested-gmux scenarios: the child registers
@@ -554,26 +749,37 @@ func spawnDetached(args []string, msg string, waitForRegistration bool) {
 	cmd.Stdout = devNull
 	cmd.Stderr = devNull
 
-	var handshakeRead, handshakeWrite *os.File
+	var handshakeRead, handshakeWrite, gateRead, gateWrite, holdRead, holdWrite *os.File
 	if waitForRegistration {
 		var err error
 		handshakeRead, handshakeWrite, err = os.Pipe()
 		if err != nil {
 			log.Fatalf("failed to create handshake pipe: %v", err)
 		}
-		// Parent reads, child writes. cmd.ExtraFiles[0] becomes fd 3
-		// in the child; GMUX_HANDSHAKE_FD tells the child which fd to
-		// write to.
-		cmd.ExtraFiles = []*os.File{handshakeWrite}
-		cmd.Env = append(os.Environ(), handshakeFDEnv+"=3")
+		gateRead, gateWrite, err = os.Pipe()
+		if err != nil {
+			log.Fatalf("failed to create target gate pipe: %v", err)
+		}
+		holdRead, holdWrite, err = os.Pipe()
+		if err != nil {
+			log.Fatalf("failed to create runner hold pipe: %v", err)
+		}
+		// Parent reads acknowledgements and owns the target-start gate.
+		deadline := time.Now().Add(detachedStartupBudget)
+		cmd.ExtraFiles = []*os.File{handshakeWrite, gateRead, holdRead}
+		cmd.Env = append(os.Environ(),
+			handshakeFDEnv+"=3",
+			handshakeGateFDEnv+"=4",
+			handshakeHoldFDEnv+"=5",
+			handshakeDeadlineEnv+"="+fmt.Sprint(deadline.UnixNano()),
+		)
 	}
 
 	if err := cmd.Start(); err != nil {
 		log.Fatalf("failed to start background session: %v", err)
 	}
-	cmd.Process.Release()
-
 	if !waitForRegistration {
+		_ = cmd.Process.Release()
 		if msg != "" {
 			fmt.Fprintln(os.Stderr, msg)
 		}
@@ -584,14 +790,144 @@ func spawnDetached(args []string, msg string, waitForRegistration bool) {
 	// now the child; if it dies without writing, our read returns
 	// EOF with zero bytes — the unambiguous "child failed" signal.
 	_ = handshakeWrite.Close()
+	_ = gateRead.Close()
+	_ = holdRead.Close()
 	defer handshakeRead.Close()
+	defer gateWrite.Close()
+	defer holdWrite.Close()
 
-	id, err := readHandshake(handshakeRead, handshakeTimeout)
+	deadlineNanos, _ := strconv.ParseInt(envValue(cmd.Env, handshakeDeadlineEnv), 10, 64)
+	id, err := awaitDetachedHandshake(cmd, handshakeRead, gateWrite, holdWrite, time.Unix(0, deadlineNanos), detachedCleanupGrace)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to start background session: %s\n", explainHandshakeFailure(err))
 		os.Exit(1)
 	}
 	fmt.Println(id)
+}
+
+func envValue(env []string, name string) string {
+	prefix := name + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return strings.TrimPrefix(env[i], prefix)
+		}
+	}
+	return ""
+}
+
+// awaitDetachedHandshake retains ownership until acknowledgement. Every
+// failure kills the setsid process group and waits, escalating if graceful
+// runner shutdown does not complete.
+// readHandshakeFrame reads one newline-terminated frame from reader using
+// ReadSlice, which returns at most reader's buffer capacity (maxHandshakeFrameBytes+1)
+// of data before returning bufio.ErrBufferFull — so allocation is strictly
+// bounded regardless of how much the child writes without a newline.
+// ErrBufferFull is mapped to a descriptive error; other errors are passed through.
+func readHandshakeFrame(reader *bufio.Reader) (string, error) {
+	line, err := reader.ReadSlice('\n')
+	if err == bufio.ErrBufferFull {
+		return "", fmt.Errorf("handshake frame too large (>%d bytes without newline)", maxHandshakeFrameBytes)
+	}
+	return strings.TrimSpace(string(line)), err
+}
+
+func awaitDetachedHandshake(cmd *exec.Cmd, r, gate, hold *os.File, deadline time.Time, grace time.Duration) (string, error) {
+	// One goroutine owns Wait for every outcome. On success it remains until the
+	// detached runner exits (or this short-lived CLI parent exits); on failure
+	// cleanup joins it. This avoids both Release-on-zombie and double Wait races.
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	targetPGID := 0
+	id := ""
+	var readErr error
+	// Use a fixed-size buffer so ReadSlice can enforce the frame cap without
+	// accumulating the full frame first. The +1 lets a frame of exactly
+	// maxHandshakeFrameBytes bytes plus its newline fit before ErrBufferFull.
+	reader := bufio.NewReaderSize(r, maxHandshakeFrameBytes+1)
+	if err := r.SetReadDeadline(deadline); err != nil {
+		// Route through the common cleanup path so cmd.Wait is always joined and
+		// the target group is signalled — preserving the ownership invariant.
+		readErr = err
+	} else {
+		for targetPGID == 0 || id == "" {
+			line, err := readHandshakeFrame(reader)
+			if err != nil {
+				readErr = err
+				break
+			}
+			if strings.HasPrefix(line, "TARGET ") {
+				targetPGID, _ = strconv.Atoi(strings.TrimPrefix(line, "TARGET "))
+				if targetPGID <= 0 {
+					readErr = errors.New("invalid target process group")
+					break
+				}
+			} else if line == "" {
+				// Prompt error: silently skipping would wait out the full
+				// deadline instead of surfacing the issue immediately.
+				readErr = errors.New("empty session id from child")
+				break
+			} else {
+				if !paths.IsValidSessionID(line) {
+					readErr = fmt.Errorf("invalid session id %q", line)
+					break
+				}
+				id = line
+			}
+		}
+	}
+	if readErr == nil {
+		if _, err := gate.Write([]byte{'G'}); err != nil {
+			readErr = err
+		} else {
+			_ = hold.Close()
+			return id, nil
+		}
+	}
+
+	// Signal before closing: while the gate is still open the target is
+	// gate-blocked and its PGID is guaranteed valid, removing the reuse
+	// window that opens when the gate closes first (wrapper exits → reaped
+	// → PGID recycled before the signal fires). Closing the gate afterward
+	// prevents exec even if the signal is delayed.
+	if targetPGID > 0 {
+		_ = syscall.Kill(-targetPGID, syscall.SIGHUP)
+	}
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	_ = gate.Close()
+	_ = hold.Close()
+	timer := time.NewTimer(grace)
+	select {
+	case <-done:
+	case <-timer.C:
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		// Bounded: a D-state process may not become waitable after SIGKILL;
+		// the Wait goroutine continues asynchronously once the kernel allows it.
+		drainErrorChan(done, grace)
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	if targetPGID == 0 {
+		_ = r.SetReadDeadline(time.Now().Add(grace))
+		for {
+			// The same fixed-size reader caps the rescan too.
+			line, err := readHandshakeFrame(reader)
+			if err != nil {
+				break
+			}
+			if strings.HasPrefix(line, "TARGET ") {
+				targetPGID, _ = strconv.Atoi(strings.TrimPrefix(line, "TARGET "))
+				break
+			}
+		}
+	}
+	if targetPGID > 0 {
+		terminateProcessGroup(targetPGID, grace)
+	}
+	return "", readErr
 }
 
 // explainHandshakeFailure converts a readHandshake error into a
@@ -600,7 +936,7 @@ func spawnDetached(args []string, msg string, waitForRegistration bool) {
 func explainHandshakeFailure(err error) string {
 	switch {
 	case errors.Is(err, os.ErrDeadlineExceeded):
-		return fmt.Sprintf("registration timed out after %s", handshakeTimeout)
+		return fmt.Sprintf("registration timed out after %s", detachedStartupBudget)
 	case errors.Is(err, io.EOF):
 		return "child process exited before registering"
 	default:

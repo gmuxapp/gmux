@@ -232,9 +232,11 @@ func (c *wsClient) write(typ websocket.MessageType, data []byte) error {
 
 // Config for creating a new PTY server.
 type Config struct {
-	Command []string
-	Cwd     string
-	Env     []string
+	Command        []string
+	CommandWrapper []string // internal argv prefix applied after adapter command extension
+	Cwd            string
+	Env            []string
+	ExtraFiles     []*os.File // inherited control fds for internal command wrappers
 	// Listener is the pre-bound Unix socket the server serves
 	// HTTP/WebSocket on. Required. Callers obtain one via
 	// BindSocket so they can react to ErrSocketInUse (e.g.,
@@ -300,6 +302,7 @@ func New(cfg Config) (*Server, error) {
 	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
 	cmd.Dir = cfg.Cwd
 	cmd.Env = buildChildEnv(os.Environ(), cfg.Env, cfg.Version)
+	cmd.ExtraFiles = cfg.ExtraFiles
 
 	// Inject the gmux session hook for adapters with a native extension/hook
 	// API: it reports session/title/status authoritatively over POST
@@ -333,6 +336,15 @@ func New(cfg Config) (*Server, error) {
 			cmd.Args = extended
 			cmd.Env = append(cmd.Env, "GMUX_SESSION_SOCK="+cfg.SocketPath)
 		}
+	}
+
+	if len(cfg.CommandWrapper) > 0 {
+		wrapped := append(append([]string{}, cfg.CommandWrapper...), cmd.Args...)
+		wrappedEnv := cmd.Env
+		cmd = exec.Command(wrapped[0], wrapped[1:]...)
+		cmd.Dir = cfg.Cwd
+		cmd.Env = wrappedEnv
+		cmd.ExtraFiles = cfg.ExtraFiles
 	}
 
 	// Start command in a new PTY

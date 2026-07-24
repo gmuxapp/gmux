@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // startStubGmuxd binds a Unix socket at the path registerWithGmuxd
@@ -56,7 +58,9 @@ func TestRegisterWithGmuxdOutcomes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			startStubGmuxd(t, tc.status)
-			got := registerWithGmuxd("sess-test", "/tmp/whatever.sock")
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			defer cancel()
+			got := registerWithGmuxd(ctx, "sess-test", "/tmp/whatever.sock")
 			if got != tc.want {
 				t.Errorf("registerWithGmuxd outcome = %d, want %d", got, tc.want)
 			}
@@ -64,29 +68,42 @@ func TestRegisterWithGmuxdOutcomes(t *testing.T) {
 	}
 }
 
-// TestReapOnFatalRegistration pins the orphan-reap decision: only a
-// fatal (permanent) rejection of a headless runner tears the process
-// down. Transient failures must never reap (gmuxd may still be coming
-// up), and an interactive runner is spared even on a fatal verdict
-// because its local terminal is still attached.
-func TestReapOnFatalRegistration(t *testing.T) {
+// TestReapOnRegistrationFailure pins the reap decision for all three outcome ×
+// interactive × handshakeOwned combinations:
+//
+//   - Fatal (4xx) + headless always reaps (permanent daemon rejection).
+//   - Transient + headless + no handshake keeps serving (daemon may still start).
+//   - Any non-OK + headless + handshakeOwned reaps (parent is gate-blocked;
+//     waiting the full 30 s is worse than a prompt failure ack).
+//   - Interactive runners are always spared (local terminal is attached).
+func TestReapOnRegistrationFailure(t *testing.T) {
 	cases := []struct {
-		name        string
-		outcome     registerOutcome
-		interactive bool
-		want        bool
+		name           string
+		outcome        registerOutcome
+		interactive    bool
+		handshakeOwned bool
+		want           bool
 	}{
-		{"fatal_headless_reaps", registerFatal, false, true},
-		{"fatal_interactive_spared", registerFatal, true, false},
-		{"unavailable_headless_keeps_serving", registerUnavailable, false, false},
-		{"unavailable_interactive_keeps_serving", registerUnavailable, true, false},
-		{"ok_headless", registerOK, false, false},
-		{"ok_interactive", registerOK, true, false},
+		// Non-handshake paths (handshakeOwned=false)
+		{"fatal_headless_reaps", registerFatal, false, false, true},
+		{"fatal_interactive_spared", registerFatal, true, false, false},
+		{"unavailable_headless_keeps_serving", registerUnavailable, false, false, false},
+		{"unavailable_interactive_keeps_serving", registerUnavailable, true, false, false},
+		{"ok_headless_keeps", registerOK, false, false, false},
+		{"ok_interactive_keeps", registerOK, true, false, false},
+		// Handshake-owned paths (handshakeOwned=true): any non-OK reaps the
+		// headless runner so the parent's gate doesn't exhaust the full deadline.
+		{"handshake_owned_unavailable_headless_reaps", registerUnavailable, false, true, true},
+		{"handshake_owned_fatal_headless_reaps", registerFatal, false, true, true},
+		{"handshake_owned_ok_headless_keeps", registerOK, false, true, false},
+		{"handshake_owned_unavailable_interactive_spared", registerUnavailable, true, true, false},
+		{"handshake_owned_fatal_interactive_spared", registerFatal, true, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := reapOnFatalRegistration(tc.outcome, tc.interactive); got != tc.want {
-				t.Errorf("reapOnFatalRegistration(%d, %v) = %v, want %v", tc.outcome, tc.interactive, got, tc.want)
+			if got := reapOnRegistrationFailure(tc.outcome, tc.interactive, tc.handshakeOwned); got != tc.want {
+				t.Errorf("reapOnRegistrationFailure(outcome=%v, interactive=%v, owned=%v) = %v, want %v",
+					tc.outcome, tc.interactive, tc.handshakeOwned, got, tc.want)
 			}
 		})
 	}

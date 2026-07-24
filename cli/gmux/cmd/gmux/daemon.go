@@ -23,8 +23,10 @@ import (
 // so the child process always talks to a compatible daemon.
 // Called once at startup — if gmuxd dies later, we don't restart it.
 // Returns true if gmuxd was started (or replaced) by this call.
-func ensureGmuxd() bool {
-	if !gmuxdNeedsStart() {
+func ensureGmuxd() bool { return ensureGmuxdContext(context.Background()) }
+
+func ensureGmuxdContext(ctx context.Context) bool {
+	if !gmuxdNeedsStartContext(ctx) || ctx.Err() != nil {
 		return false
 	}
 
@@ -45,13 +47,15 @@ func ensureGmuxd() bool {
 // "down" verdict spawns a daemon. (Spawning is no longer destructive — a
 // healthy same-version incumbent refuses replacement since the autostart
 // takeover incident — but pointless spawns still burn a full bootstrap.)
-func gmuxdNeedsStart() bool {
+func gmuxdNeedsStart() bool { return gmuxdNeedsStartContext(context.Background()) }
+
+func gmuxdNeedsStartContext(ctx context.Context) bool {
 	// "dev" builds never replace — avoids churn during development.
 	if version == "dev" {
-		return !gmuxdHealthyRetry()
+		return !gmuxdHealthyRetryContext(ctx)
 	}
 
-	resp, err := gmuxdHealthGet()
+	resp, err := gmuxdHealthGetContext(ctx)
 	if err != nil {
 		return true // not running
 	}
@@ -133,7 +137,7 @@ func gmuxdClient() *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return net.DialTimeout("unix", sockPath, 2*time.Second)
+				return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "unix", sockPath)
 			},
 		},
 		Timeout: 5 * time.Second,
@@ -146,10 +150,12 @@ func gmuxdBaseURL() string {
 	return "http://localhost"
 }
 
-func gmuxdHealthy(timeout time.Duration) bool {
+func gmuxdHealthyContext(ctx context.Context, timeout time.Duration) bool {
+	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	client := gmuxdClient()
-	client.Timeout = timeout
-	resp, err := client.Get(gmuxdBaseURL() + "/v1/health")
+	req, _ := http.NewRequestWithContext(attemptCtx, http.MethodGet, gmuxdBaseURL()+"/v1/health", nil)
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
@@ -159,9 +165,11 @@ func gmuxdHealthy(timeout time.Duration) bool {
 
 // gmuxdHealthyRetry probes health with growing budgets (500ms, 1s, 2s) so a
 // momentarily busy daemon isn't misdiagnosed as down.
-func gmuxdHealthyRetry() bool {
+func gmuxdHealthyRetry() bool { return gmuxdHealthyRetryContext(context.Background()) }
+
+func gmuxdHealthyRetryContext(ctx context.Context) bool {
 	for _, timeout := range []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second} {
-		if gmuxdHealthy(timeout) {
+		if gmuxdHealthyContext(ctx, timeout) {
 			return true
 		}
 	}
@@ -170,14 +178,26 @@ func gmuxdHealthyRetry() bool {
 
 // gmuxdHealthGet fetches /v1/health with the same growing budgets, returning
 // the last error if all attempts fail. Callers own resp.Body.
-func gmuxdHealthGet() (*http.Response, error) {
+func gmuxdHealthGet() (*http.Response, error) { return gmuxdHealthGetContext(context.Background()) }
+
+func gmuxdHealthGetContext(ctx context.Context) (*http.Response, error) {
 	var lastErr error
 	for _, timeout := range []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second} {
+		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
 		client := gmuxdClient()
-		client.Timeout = timeout
-		resp, err := client.Get(gmuxdBaseURL() + "/v1/health")
+		req, _ := http.NewRequestWithContext(attemptCtx, http.MethodGet, gmuxdBaseURL()+"/v1/health", nil)
+		resp, err := client.Do(req)
 		if err == nil {
-			return resp, nil
+			body, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			cancel()
+			if readErr == nil {
+				resp.Body = io.NopCloser(bytes.NewReader(body))
+				return resp, nil
+			}
+			err = readErr
+		} else {
+			cancel()
 		}
 		lastErr = err
 	}
@@ -210,44 +230,48 @@ func (o registerOutcome) ok() bool { return o == registerOK }
 
 // registerWithGmuxd posts the session's registration to gmuxd and
 // reports the outcome. Transient failures (gmuxd still starting) are
-// retried a handful of times; a 4xx is fatal and returned immediately
+// retried until the caller's context ends; a 4xx is returned immediately
 // without burning the retry budget. Callers that care about the
 // outcome (the detached (-d) handshake, the orphan-reap path) branch
 // on the returned registerOutcome.
-func registerWithGmuxd(sessionID, socketPath string) registerOutcome {
-	baseURL := gmuxdBaseURL()
+func registerWithGmuxd(ctx context.Context, sessionID, socketPath string) registerOutcome {
+	return registerWithClient(ctx, gmuxdClient(), sessionID, socketPath, 500*time.Millisecond)
+}
 
-	payload, _ := json.Marshal(map[string]string{
-		"session_id":  sessionID,
-		"socket_path": socketPath,
-	})
-
-	// Retry a few times — gmux may start before the HTTP server is ready
-	for i := 0; i < 5; i++ {
-		if i > 0 {
-			time.Sleep(500 * time.Millisecond)
-		}
-		client := gmuxdClient()
-		resp, err := client.Post(baseURL+"/v1/register", "application/json", bytes.NewReader(payload))
+func registerWithClient(ctx context.Context, client *http.Client, sessionID, socketPath string, backoff time.Duration) registerOutcome {
+	payload, _ := json.Marshal(map[string]string{"session_id": sessionID, "socket_path": socketPath})
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, gmuxdBaseURL()+"/v1/register", bytes.NewReader(payload))
 		if err != nil {
-			continue
-		}
-		status := resp.StatusCode
-		resp.Body.Close()
-		if status == http.StatusOK {
-			return registerOK
-		}
-		// A 4xx is a permanent verdict on this id — the daemon
-		// understood the request and refused it (invalid session id,
-		// malformed body). No amount of retrying changes the answer, so
-		// short-circuit instead of wasting the budget. 5xx (and any
-		// other status) stays in the transient bucket: gmuxd may still
-		// be coming up.
-		if status >= 400 && status < 500 {
 			return registerFatal
 		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err == nil {
+			status := resp.StatusCode
+			resp.Body.Close()
+			switch {
+			case status == http.StatusOK:
+				return registerOK
+			case status >= 400 && status < 500:
+				return registerFatal
+			case status < 500 || status >= 600:
+				return registerFatal // redirects, informational, and non-HTTP protocol statuses
+			}
+		}
+		if ctx.Err() != nil {
+			return registerUnavailable
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return registerUnavailable
+		case <-timer.C:
+		}
 	}
-	return registerUnavailable
 }
 
 func deregisterFromGmuxd(sessionID string) {

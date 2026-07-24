@@ -6,16 +6,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
+	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/scrollback"
 	"nhooyr.io/websocket"
 )
@@ -1755,4 +1758,138 @@ func TestShutdownIdempotent(t *testing.T) {
 
 	// A further call after the child has exited must also be safe.
 	srv.Shutdown()
+}
+
+// ── CommandWrapper + ExtraFiles + adapter argv extension ──
+
+// hookTestAdapter extends the command argv with a deterministic marker via the
+// SessionHookCommand path. The marker is recognisable in the subprocess output
+// without embedding a path-dependent binary reference.
+type hookTestAdapter struct{}
+
+func (hookTestAdapter) Name() string                            { return "test-hook" }
+func (hookTestAdapter) Discover() bool                          { return false }
+func (hookTestAdapter) Match([]string) bool                     { return false }
+func (hookTestAdapter) Env(adapter.EnvContext) []string         { return nil }
+func (hookTestAdapter) HookCommand(args []string, _ string) ([]string, bool) {
+	// Append a fixed marker that does NOT start with '-' so Go flag.Parse in
+	// the subprocess helper treats it as a non-flag positional argument.
+	return append(args, "HOOK_MARKER"), true
+}
+
+// TestPTYServerCommandWrapperAndExtraFiles exercises the production wiring of
+// Config.CommandWrapper + Config.ExtraFiles through ptyserver.New, including
+// the adapter argv extension that happens before wrapping. It verifies:
+//
+//  1. The final subprocess argv is [wrapper..., extended-command...] in the
+//     correct order (extension before wrapping, both before exec).
+//  2. ExtraFiles are inherited by the subprocess as open pipe fds at
+//     positions 3 and 4.
+//
+// Mutation resistance:
+//   - Dropping Config.ExtraFiles: the subprocess sees FD3/FD4 as non-pipe,
+//     failing the pipe assertions.
+//   - Removing CommandWrapper: the subprocess binary is not the test binary
+//     and the helper role check never runs, making the result pipe empty.
+//   - Removing adapter extension: HOOK_MARKER is absent from the result,
+//     failing the argv assertion.
+func TestPTYServerCommandWrapperAndExtraFiles(t *testing.T) {
+	const roleEnv = "PTYSERVER_WRAPPER_ROLE"
+	if os.Getenv(roleEnv) == "check" {
+		// Subprocess helper: write check results to fd 3 (the result pipe)
+		// then exit. os.Args[2:] contains the "command" portion passed via
+		// Config.Command plus any adapter-extended args.
+		resultFD := os.NewFile(3, "result")
+		var fd3Pipe, fd4Pipe bool
+		var st syscall.Stat_t
+		if syscall.Fstat(3, &st) == nil && st.Mode&syscall.S_IFMT == syscall.S_IFIFO {
+			fd3Pipe = true
+		}
+		if syscall.Fstat(4, &st) == nil && st.Mode&syscall.S_IFMT == syscall.S_IFIFO {
+			fd4Pipe = true
+		}
+		cmdArgs := os.Args[2:] // wrapper consumed os.Args[0..1]; command starts at [2]
+		fmt.Fprintf(resultFD, "ARGS=%s\nFD3=%v\nFD4=%v\n",
+			strings.Join(cmdArgs, ","), fd3Pipe, fd4Pipe)
+		_ = resultFD.Close()
+		os.Exit(0)
+	}
+
+	// Parent: create result pipe (fd 3 in subprocess) and an extra pipe
+	// for fd 4. Both are passed via Config.ExtraFiles so the subprocess
+	// receives them as open, usable file descriptors.
+	resultR, resultW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resultR.Close()
+	pipe4R, pipe4W, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pipe4R.Close()
+	defer pipe4W.Close()
+
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+
+	// Config.CommandWrapper is the argv prefix prepended AFTER adapter
+	// extension. Using the test binary as the wrapper lets the subprocess
+	// role check run inside the helper and write its results.
+	// Config.Command provides the "user command" that appears after the
+	// wrapper prefix in the final argv.
+	// The hookTestAdapter extends Config.Command with HOOK_MARKER before
+	// wrapping, so the expected subprocess os.Args[2:] is:
+	//   [user-cmd, user-arg, HOOK_MARKER]
+	srv, err := New(Config{
+		CommandWrapper: []string{os.Args[0], "-test.run=^TestPTYServerCommandWrapperAndExtraFiles$"},
+		Command:        []string{"user-cmd", "user-arg"},
+		Cwd:            "/tmp",
+		Env:            []string{roleEnv + "=check", "GMUX_NO_AGENT_HOOK=0"},
+		ExtraFiles:     []*os.File{resultW, pipe4R}, // fd 3=resultW, fd 4=pipe4R
+		Listener:       mustBindSocket(t, sockPath),
+		SocketPath:     sockPath,
+		Adapter:        hookTestAdapter{},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// Close the parent's copies of the ExtraFiles write-ends so the
+	// subprocess is the sole owner. resultW must be closed so io.ReadAll
+	// returns when the subprocess closes its end.
+	_ = resultW.Close()
+	_ = pipe4R.Close()
+
+	// Read result from the subprocess. Deadline guards against test hangs.
+	_ = resultR.SetReadDeadline(time.Now().Add(10 * time.Second))
+	data, _ := io.ReadAll(resultR)
+	result := string(data)
+
+	// Wait for the subprocess to finish.
+	select {
+	case <-srv.Done():
+	case <-time.After(12 * time.Second):
+		t.Fatal("timeout waiting for subprocess to exit")
+	}
+
+	if result == "" {
+		t.Fatal("subprocess wrote nothing to result pipe (check ExtraFiles or CommandWrapper)")
+	}
+
+	// (1) Argv order: user-cmd comes first, then user-arg, then the
+	//     adapter-extended HOOK_MARKER. This exact string fails if the
+	//     wrapper and command are reversed, or if extension is dropped.
+	wantArgs := "ARGS=user-cmd,user-arg,HOOK_MARKER"
+	if !strings.Contains(result, wantArgs) {
+		t.Errorf("argv order wrong; want %q in %q", wantArgs, result)
+	}
+
+	// (2) ExtraFiles: both fd 3 and fd 4 must be open pipes.
+	if !strings.Contains(result, "FD3=true") {
+		t.Errorf("fd 3 not a pipe in subprocess (ExtraFiles[0] not passed): %q", result)
+	}
+	if !strings.Contains(result, "FD4=true") {
+		t.Errorf("fd 4 not a pipe in subprocess (ExtraFiles[1] not passed): %q", result)
+	}
 }
