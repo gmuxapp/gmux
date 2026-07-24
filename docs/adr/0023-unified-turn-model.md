@@ -2,7 +2,13 @@
 
 **Status:** Accepted
 **Date:** 2026-07-13
-**Related:** ADR 0011 (runner-owned session state), ADR 0013 (codex hooks), ADR 0015 (hook translation at the agent side), issue #373 (shell idle waits)
+**Related:** ADR 0011 (runner-owned session state), ADR 0013 (codex hooks), ADR 0015 (hook translation at the agent side), ADR 0027 (semantic agent CLI and result-bearing wait), issue #373 (shell idle waits)
+
+> **Terminology and CLI amendment (2026-07-24):** ADR 0027 names the common
+> public status axis **active / inactive** (turn open / closed), keeps runner
+> liveness separate, and makes `gmux wait` render the adapter-defined turn
+> result by default. This ADR's state machine and signal-source rules stand;
+> its use of *idle* means *inactive*.
 
 ## Context
 

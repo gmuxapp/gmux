@@ -2,7 +2,17 @@
 
 **Status:** Proposed
 **Date:** 2026-07-06
-**Related:** ADR 0004 (SessionStream, live↔dead view), ADR 0009 (verb-first CLI, universal per-adapter verbs), ADR 0011 (runner-owned state; daemon is a read cache; agent-hook), ADR 0015 (hook translation at the agent side), ADR 0016 (retention/scrollback as cache)
+**Related:** ADR 0004 (SessionStream, live↔dead view), ADR 0009 (verb-first CLI, universal per-adapter verbs), ADR 0011 (runner-owned state; daemon is a read cache; agent-hook), ADR 0015 (hook translation at the agent side), ADR 0016 (retention/scrollback as cache), ADR 0027 (semantic agent CLI and result-bearing wait)
+
+> **CLI/write-path amendment (2026-07-26):** ADR 0027 replaces §8's
+> lightweight-only CLI conclusion with an experimental `gmux agent` namespace,
+> semantic reads, and result-bearing universal `gmux wait`. It also supersedes
+> §6's requirement that every semantic write be reduced to raw `/input` above
+> the runner: semantic `/prompt` and `/cancel` intent now reaches the runner,
+> which chooses PTY encoding or native ACP delivery. Terminal pi's extension
+> remains read-only. This ADR's normalized conversation schema, streaming
+> transport, and content-ownership decisions otherwise remain unchanged; gmux
+> still does not commit to a spec-complete endpoint for foreign ACP clients.
 
 ## Context & Problem
 
