@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -115,6 +116,42 @@ func TestClientConnectsToSocket(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestOneShotClientsCloseConnections(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "gmuxd.sock")
+	ln, err := Listen(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var open atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": map[string]any{"version": "1.0.0", "pid": 42}})
+	})
+	srv := &http.Server{Handler: mux, ConnState: func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			open.Add(1)
+		case http.StateClosed, http.StateHijacked:
+			open.Add(-1)
+		}
+	}}
+	go srv.Serve(ln)
+	defer srv.Close()
+
+	for range 100 {
+		if _, ok := HealthIdentity(sockPath); !ok {
+			t.Fatal("health probe failed")
+		}
+		deadline := time.Now().Add(time.Second)
+		for open.Load() != 0 {
+			if time.Now().After(deadline) {
+				t.Fatalf("open unix IPC connections=%d, want 0", open.Load())
+			}
+			time.Sleep(time.Millisecond)
+		}
 	}
 }
 

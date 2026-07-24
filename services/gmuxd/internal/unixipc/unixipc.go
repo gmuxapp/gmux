@@ -59,6 +59,9 @@ func Cleanup(sockPath string) {
 func Client(sockPath string) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
+			// Callers commonly create a client for one probe and discard it.
+			// Do not strand that connection in the abandoned transport's idle pool.
+			DisableKeepAlives: true,
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				return net.DialTimeout("unix", sockPath, 2*time.Second)
 			},
