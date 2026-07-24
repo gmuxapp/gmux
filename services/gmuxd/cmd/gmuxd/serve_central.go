@@ -54,6 +54,20 @@ import (
 // replacement was requested.
 var errIncumbentHealthy = errors.New("gmuxd: already running")
 
+// registerGetProjectsRoute installs the production GET /v1/projects handler.
+// Keeping registration and ownership projection together lets contract tests
+// exercise the same mux path peers consume.
+func registerGetProjectsRoute(mux *http.ServeMux, render func(*http.Request) (wire.Frames, error), isLocalPeer func(string) bool) {
+	mux.HandleFunc("GET /v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		frames, err := render(r)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "snapshot unavailable")
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "data": projectDiscoveryData(frames, isLocalPeer)})
+	})
+}
+
 func serveCentral(stderr io.Writer, replace bool) int {
 	gmuxBin := resolveGmux()
 	if gmuxBin != "" {
@@ -334,17 +348,10 @@ func serveCentral(stderr io.Writer, replace bool) int {
 			}
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"theme": theme, "settings": settings}})
 		})
-		mux.HandleFunc("GET /v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		registerGetProjectsRoute(mux, func(r *http.Request) (wire.Frames, error) {
 			// Store-direct read (ADR 0026 §2a).
-			frames, err := renderStoreDirect(r.Context(), boot, converter, peerAdapter)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "internal", "snapshot unavailable")
-				return
-			}
-			state := projectStateFromWorld(frames.World)
-			infos := buildSessionInfosWire(frames.Sessions, func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) })
-			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"configured": state.Items, "discovered": state.Discovered(infos), "unmatched_active_count": state.UnmatchedActiveCount(infos)}})
-		})
+			return renderStoreDirect(r.Context(), boot, converter, peerAdapter)
+		}, func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) })
 		mux.HandleFunc("PUT /v1/projects", func(w http.ResponseWriter, r *http.Request) {
 			body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
 			if err != nil {

@@ -224,6 +224,32 @@ func projectStateFromWorld(world *wire.WorldPayload) projects.State {
 	return state
 }
 
+// advertisingHostSessions returns native sessions and Local peers whose
+// project assignment this host owns. Network peers advertise themselves.
+func advertisingHostSessions(sessions []projects.SessionInfo) []projects.SessionInfo {
+	owned := make([]projects.SessionInfo, 0, len(sessions))
+	for _, session := range sessions {
+		if session.Host == "" || session.LocalHost {
+			owned = append(owned, session)
+		}
+	}
+	return owned
+}
+
+// projectDiscoveryData builds the GET /v1/projects payload. Discovery and its
+// active count deliberately share one ownership-scoped input so the endpoint
+// cannot re-advertise a network peer's sessions under this spoke's identity.
+func projectDiscoveryData(frames wire.Frames, isLocalPeer func(string) bool) map[string]any {
+	state := projectStateFromWorld(frames.World)
+	infos := buildSessionInfosWire(frames.Sessions, isLocalPeer)
+	owned := advertisingHostSessions(infos)
+	return map[string]any{
+		"configured":             state.Items,
+		"discovered":             state.Discovered(owned),
+		"unmatched_active_count": state.UnmatchedActiveCount(owned),
+	}
+}
+
 func projectSpecsFromState(state projects.State) []centralstore.ProjectEntrySpec {
 	specs := make([]centralstore.ProjectEntrySpec, 0, len(state.Items))
 	for _, item := range state.Items {
