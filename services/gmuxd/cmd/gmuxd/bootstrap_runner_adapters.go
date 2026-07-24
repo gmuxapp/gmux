@@ -44,9 +44,14 @@ func (s *productionEventStream) Close() error {
 }
 
 func runnerHTTPClient(endpoint string) *http.Client {
-	return &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", endpoint)
-	}}}
+	return &http.Client{Transport: &http.Transport{
+		// Each client owns exactly one request or stream and is then discarded.
+		// Never leave its connection in an unreachable idle pool.
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", endpoint)
+		},
+	}}
 }
 func runnerRequestContext(ctx context.Context, endpoint, method, path string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, "http://runner"+path, nil)

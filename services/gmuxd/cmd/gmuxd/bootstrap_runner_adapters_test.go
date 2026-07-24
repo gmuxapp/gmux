@@ -35,6 +35,77 @@ func unixRunner(t *testing.T, h http.Handler) string {
 	return p
 }
 
+type runnerConnTracker struct {
+	open atomic.Int64
+}
+
+func (c *runnerConnTracker) track(_ net.Conn, state http.ConnState) {
+	switch state {
+	case http.StateNew:
+		c.open.Add(1)
+	case http.StateClosed, http.StateHijacked:
+		c.open.Add(-1)
+	}
+}
+
+func trackedUnixRunner(t *testing.T, h http.Handler) (string, *runnerConnTracker) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "runner.sock")
+	ln, err := net.Listen("unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := &runnerConnTracker{}
+	srv := &http.Server{Handler: h, ConnState: tracker.track}
+	go srv.Serve(ln)
+	t.Cleanup(func() { _ = srv.Close() })
+	return p, tracker
+}
+
+func waitForRunnerConns(t *testing.T, tracker *runnerConnTracker, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for tracker.open.Load() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("open runner connections=%d, want %d", tracker.open.Load(), want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestProductionRunnerMetaClosesConnections(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/meta", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"id":"sess-abc","adapter":"shell","alive":true,"created_at":"2026-01-01T00:00:00Z"}`)
+	})
+	ep, tracker := trackedUnixRunner(t, mux)
+	client := productionRunnerClient{}
+	for range 100 {
+		if _, err := client.Meta(context.Background(), ep); err != nil {
+			t.Fatal(err)
+		}
+		waitForRunnerConns(t, tracker, 0)
+	}
+}
+
+func TestProductionRunnerSubscriptionCloseClosesConnection(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	ep, tracker := trackedUnixRunner(t, mux)
+	stream, err := (productionRunnerClient{}).Subscribe(context.Background(), ep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRunnerConns(t, tracker, 1)
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunnerConns(t, tracker, 0)
+}
+
 func TestProductionRunnerSubscribeFirstBuffersPreMeta(t *testing.T) {
 	release := make(chan struct{})
 	mux := http.NewServeMux()
