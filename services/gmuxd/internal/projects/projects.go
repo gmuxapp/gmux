@@ -113,7 +113,6 @@ func Load(stateDir string) (*State, error) {
 	return &s, nil
 }
 
-
 // sanitize removes items that fail validation, keeping the rest in
 // order. Each item is checked against the already-accepted prefix, so
 // cross-item rules (duplicate slugs, duplicate paths) resolve
