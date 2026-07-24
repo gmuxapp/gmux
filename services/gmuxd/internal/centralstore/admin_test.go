@@ -142,10 +142,13 @@ func TestCheckStateDismissalAndExitContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A dismissed row must not hold a placement; an exit code requires an
-	// exit stamp. Both manufactured with direct SQL (FK/trigger-free).
+	// exit stamp. Manufacture bad state by temporarily dropping the exit
+	// invariant trigger (a corrupt on-disk database has no such guarantee).
 	exec(t, s,
 		"UPDATE local_sessions SET dismissed_at_ms = 10 WHERE id = 'a'",
+		"DROP TRIGGER local_sessions_exit_invariant_update",
 		"UPDATE local_sessions SET exit_code = 1, exited_at_ms = NULL WHERE id = 'a'",
+		"CREATE TRIGGER local_sessions_exit_invariant_update BEFORE UPDATE ON local_sessions WHEN NEW.exit_code IS NOT NULL AND NEW.exited_at_ms IS NULL BEGIN SELECT RAISE(ABORT, 'exit_code requires exited_at_ms'); END",
 	)
 	findings := checkFindings(t, s)
 	requireFinding(t, findings, "dismissed_placement")
