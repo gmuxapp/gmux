@@ -30,7 +30,7 @@
 | **Turn**                | One unit of "the session is doing something": an agent turn (hook-delimited), a shell command (prompt-mark-delimited), or — default — the whole process lifetime. `Status.Working` is its open/closed state | Task, job              |
 | **Turn source**         | Where a session's turn boundaries come from: agent hook for `HookDriven` adapters, otherwise the runner's default model (lifetime, upgraded by observed OSC 133 prompt marks) | —                      |
 | **Active**              | Turn open (`Status.Working == true`); the blue dot. Distinct from *Alive* (process exists) and from the transient output-activity pulse | Busy, working (in prose) |
-| **Idle**                | Turn closed; what `gmux wait` waits for. Includes a closed turn at process exit (one-shot completed, shell exited at its prompt) | Done, finished         |
+| **Inactive**            | Turn closed; what `gmux wait` waits for. Includes a closed turn at process exit (one-shot completed, shell exited at its prompt). Called *idle* in older code/docs; it is not a third state or a claim about runner liveness | Idle, done, finished |
 | **Waiting on you**      | Unread flag set by a turn close; cleared when the session is viewed                                 | Unread (in UI prose)   |
 | **Upgrade**             | A default-model session's switch from lifetime-as-turn to per-command turns on the first observed OSC 133 prompt mark; permanent for the session's life | Promotion              |
 
