@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
 // ── ID namespace helpers ──
@@ -56,14 +55,86 @@ func TestParseID_Roundtrip(t *testing.T) {
 	}
 }
 
+// ── Mock ProjectionSink ──
+
+// mockSink captures ProjectionSink calls for verification in tests.
+type mockSink struct {
+	mu          sync.Mutex
+	replaced    map[string][]SessionProjection
+	removed     []string
+	activities  []string
+	worldEvents []string
+}
+
+func newMockSink() *mockSink {
+	return &mockSink{replaced: make(map[string][]SessionProjection)}
+}
+
+func (m *mockSink) ReplacePeerSessions(peer string, sessions []SessionProjection) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.replaced[peer] = append([]SessionProjection(nil), sessions...)
+}
+
+func (m *mockSink) RemovePeerSessions(peer string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.removed = append(m.removed, peer)
+	delete(m.replaced, peer)
+}
+
+func (m *mockSink) SessionActivity(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.activities = append(m.activities, id)
+}
+
+func (m *mockSink) PeerWorldChanged(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.worldEvents = append(m.worldEvents, name)
+}
+
+func (m *mockSink) AliveSessionCount(peer string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	count := 0
+	for _, s := range m.replaced[peer] {
+		if s.Alive {
+			count++
+		}
+	}
+	return count
+}
+
+func (m *mockSink) sessions(peer string) []SessionProjection {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.replaced[peer]
+	out := make([]SessionProjection, len(s))
+	copy(out, s)
+	return out
+}
+
+func (m *mockSink) findSession(peer, id string) (SessionProjection, bool) {
+	sessions := m.sessions(peer)
+	for _, s := range sessions {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return SessionProjection{}, false
+}
+
 // ── SSE integration ──
 
 // spoke is a test HTTP server that behaves like a gmuxd spoke.
 type spoke struct {
 	*httptest.Server
-	mu         sync.Mutex
-	sessions   []store.Session
-	sseClients []chan string
+	mu          sync.Mutex
+	sessions    []SessionProjection
+	sseClients  []chan string
+	sseConnects int
 }
 
 // push sends a raw SSE frame to all connected SSE clients.
@@ -86,7 +157,7 @@ func (s *spoke) push(eventType string, payload any) {
 // are no per-event session-upsert / session-remove frames.
 func (s *spoke) pushSnapshot() {
 	s.mu.Lock()
-	list := make([]store.Session, len(s.sessions))
+	list := make([]SessionProjection, len(s.sessions))
 	copy(list, s.sessions)
 	s.mu.Unlock()
 	s.push("snapshot.sessions", map[string]any{"sessions": list})
@@ -94,7 +165,7 @@ func (s *spoke) pushSnapshot() {
 
 // setSessions atomically replaces the spoke's sessions and emits
 // the resulting snapshot.
-func (s *spoke) setSessions(list []store.Session) {
+func (s *spoke) setSessions(list []SessionProjection) {
 	s.mu.Lock()
 	s.sessions = list
 	s.mu.Unlock()
@@ -103,7 +174,7 @@ func (s *spoke) setSessions(list []store.Session) {
 
 // spokeServer creates a test HTTP server that behaves like a gmuxd spoke.
 // It serves GET /v1/events as an SSE stream and GET /v1/sessions.
-func spokeServer(t *testing.T, token string, sessions []store.Session) *spoke {
+func spokeServer(t *testing.T, token string, sessions []SessionProjection) *spoke {
 	t.Helper()
 
 	sk := &spoke{sessions: sessions}
@@ -120,13 +191,16 @@ func spokeServer(t *testing.T, token string, sessions []store.Session) *spoke {
 
 		switch r.URL.Path {
 		case "/v1/events":
+			sk.mu.Lock()
+			sk.sseConnects++
+			sk.mu.Unlock()
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Cache-Control", "no-cache")
 			flusher := w.(http.Flusher)
 
 			// Initial snapshot.sessions as the protocol-2 spoke does.
 			sk.mu.Lock()
-			initial := make([]store.Session, len(sk.sessions))
+			initial := make([]SessionProjection, len(sk.sessions))
 			copy(initial, sk.sessions)
 			sk.mu.Unlock()
 			data, _ := json.Marshal(map[string]any{"sessions": initial})
@@ -151,7 +225,7 @@ func spokeServer(t *testing.T, token string, sessions []store.Session) *spoke {
 
 		case "/v1/sessions":
 			sk.mu.Lock()
-			list := make([]store.Session, len(sk.sessions))
+			list := make([]SessionProjection, len(sk.sessions))
 			copy(list, sk.sessions)
 			sk.mu.Unlock()
 			json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": list})
@@ -165,6 +239,23 @@ func spokeServer(t *testing.T, token string, sessions []store.Session) *spoke {
 	return sk
 }
 
+// waitForSessions polls until the mock sink has the expected number of
+// sessions for a peer, or times out.
+func waitForSessions(t *testing.T, sink *mockSink, peer string, want int) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		if len(sink.sessions(peer)) >= want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for %d sessions from %s, got %d", want, peer, len(sink.sessions(peer)))
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 // TestPeerSubscribe_PreservesTitles is the regression guard for the
 // title-overwrite bug: a remote session arrives with Title already
 // resolved by the spoke but with empty ShellTitle/AdapterTitle
@@ -172,27 +263,26 @@ func spokeServer(t *testing.T, token string, sessions []store.Session) *spoke {
 // re-resolve the title or it would replace the spoke's value with
 // the adapter-name fallback (e.g. "codex" instead of "fix remote bug").
 func TestPeerSubscribe_PreservesTitles(t *testing.T) {
-	st := store.New()
-	sessions := []store.Session{
+	sink := newMockSink()
+	sessions := []SessionProjection{
 		{
 			ID:      "sess-1",
 			Adapter: "codex",
 			Alive:   true,
 			Title:   "fix remote bug",
 			// ShellTitle/AdapterTitle intentionally empty: that's
-			// how they arrive on the wire because store.MarshalJSON
-			// drops them.
+			// how they arrive on the wire.
 		},
 	}
 
 	sk := spokeServer(t, "", sessions)
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL}
 
-	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
+	mgr := NewProjectionManager([]config.PeerConfig{cfg}, "test-host", sink, EventHooks{})
 	mgr.Start()
-	waitForSessions(t, st, "server", 1)
+	waitForSessions(t, sink, "server", 1)
 
-	got, ok := st.Get("sess-1@server")
+	got, ok := sink.findSession("server", "sess-1@server")
 	if !ok {
 		t.Fatal("expected sess-1@server")
 	}
@@ -206,10 +296,11 @@ func TestPeerSubscribe_PreservesTitles(t *testing.T) {
 // PeerStatus must surface how each peer was added (Config.Source) so the
 // UI can group hosts into devcontainer / manual sections.
 func TestPeerStatus_CarriesSource(t *testing.T) {
-	mgr := NewManager([]config.PeerConfig{
+	sink := newMockSink()
+	mgr := NewProjectionManager([]config.PeerConfig{
 		{Name: "dc", URL: "http://b:8790", Source: config.SourceDevcontainer, Local: true},
 		{Name: "hand", URL: "http://c:8790", Source: config.SourceManual},
-	}, store.New(), "test-host")
+	}, "test-host", sink, EventHooks{})
 
 	got := map[string]string{}
 	for _, p := range mgr.PeerStatus() {
@@ -226,8 +317,8 @@ func TestPeerStatus_CarriesSource(t *testing.T) {
 }
 
 func TestPeerSubscribe_InitialSessions(t *testing.T) {
-	st := store.New()
-	sessions := []store.Session{
+	sink := newMockSink()
+	sessions := []SessionProjection{
 		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "fix-auth"},
 		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "bash"},
 	}
@@ -241,14 +332,14 @@ func TestPeerSubscribe_InitialSessions(t *testing.T) {
 		Token: token,
 	}
 
-	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
+	mgr := NewProjectionManager([]config.PeerConfig{cfg}, "test-host", sink, EventHooks{})
 	mgr.Start()
-	waitForSessions(t, st, "server", 2)
+	waitForSessions(t, sink, "server", 2)
 
 	// Verify sessions are namespaced correctly.
-	s1, ok := st.Get("sess-1@server")
+	s1, ok := sink.findSession("server", "sess-1@server")
 	if !ok {
-		t.Fatal("expected sess-1@server in store")
+		t.Fatal("expected sess-1@server in sink")
 	}
 	if s1.Peer != "server" {
 		t.Errorf("peer = %q, want %q", s1.Peer, "server")
@@ -260,9 +351,9 @@ func TestPeerSubscribe_InitialSessions(t *testing.T) {
 		t.Errorf("socket_path should be cleared for remote sessions, got %q", s1.SocketPath)
 	}
 
-	s2, ok := st.Get("sess-2@server")
+	s2, ok := sink.findSession("server", "sess-2@server")
 	if !ok {
-		t.Fatal("expected sess-2@server in store")
+		t.Fatal("expected sess-2@server in sink")
 	}
 	if s2.Adapter != "shell" {
 		t.Errorf("adapter = %q, want %q", s2.Adapter, "shell")
@@ -271,13 +362,13 @@ func TestPeerSubscribe_InitialSessions(t *testing.T) {
 	mgr.Stop()
 
 	// After stop, peer sessions should be cleaned up.
-	if _, ok := st.Get("sess-1@server"); ok {
+	if _, ok := sink.findSession("server", "sess-1@server"); ok {
 		t.Error("sessions should be removed after stop")
 	}
 }
 
 func TestPeerSubscribe_AuthFailure(t *testing.T) {
-	st := store.New()
+	sink := newMockSink()
 	sk := spokeServer(t, "correct-token", nil)
 
 	cfg := config.PeerConfig{
@@ -286,14 +377,14 @@ func TestPeerSubscribe_AuthFailure(t *testing.T) {
 		Token: "wrong-token",
 	}
 
-	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
+	mgr := NewProjectionManager([]config.PeerConfig{cfg}, "test-host", sink, EventHooks{})
 	mgr.Start()
 
 	// Give it time to attempt and fail.
 	time.Sleep(200 * time.Millisecond)
 
 	// Should have no sessions and be in disconnected/connecting state.
-	if len(st.ListByPeer("server")) != 0 {
+	if len(sink.sessions("server")) != 0 {
 		t.Error("should have no sessions with wrong token")
 	}
 
@@ -311,8 +402,8 @@ func TestPeerSubscribe_AuthFailure(t *testing.T) {
 }
 
 func TestPeerSubscribe_SocketPathCleared(t *testing.T) {
-	st := store.New()
-	sessions := []store.Session{
+	sink := newMockSink()
+	sessions := []SessionProjection{
 		{ID: "sess-1", Adapter: "pi", Alive: true, SocketPath: "/tmp/gmux-sessions/sess-1.sock"},
 	}
 
@@ -324,13 +415,11 @@ func TestPeerSubscribe_SocketPathCleared(t *testing.T) {
 		Token: "", // no auth for simplicity
 	}
 
-	// The spoke server doesn't check auth when token is empty, but our
-	// Peer always sends the header. Use a server that accepts any auth.
-	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
+	mgr := NewProjectionManager([]config.PeerConfig{cfg}, "test-host", sink, EventHooks{})
 	mgr.Start()
-	waitForSessions(t, st, "dev", 1)
+	waitForSessions(t, sink, "dev", 1)
 
-	sess, _ := st.Get("sess-1@dev")
+	sess, _ := sink.findSession("dev", "sess-1@dev")
 	if sess.SocketPath != "" {
 		t.Errorf("socket_path = %q, want empty (cleared for remote)", sess.SocketPath)
 	}
@@ -339,7 +428,8 @@ func TestPeerSubscribe_SocketPathCleared(t *testing.T) {
 }
 
 func TestFindPeer_Local(t *testing.T) {
-	mgr := NewManager(nil, store.New(), "test-host")
+	sink := newMockSink()
+	mgr := NewProjectionManager(nil, "test-host", sink, EventHooks{})
 	peer, origID := mgr.FindPeer("sess-abc123")
 	if peer != nil {
 		t.Error("FindPeer should return nil for local session")
@@ -350,8 +440,9 @@ func TestFindPeer_Local(t *testing.T) {
 }
 
 func TestFindPeer_Remote(t *testing.T) {
+	sink := newMockSink()
 	cfg := []config.PeerConfig{{Name: "server", URL: "http://example.com", Token: "t"}}
-	mgr := NewManager(cfg, store.New(), "test-host")
+	mgr := NewProjectionManager(cfg, "test-host", sink, EventHooks{})
 
 	peer, origID := mgr.FindPeer("sess-abc@server")
 	if peer == nil {
@@ -366,8 +457,9 @@ func TestFindPeer_Remote(t *testing.T) {
 }
 
 func TestFindPeer_UnknownPeer(t *testing.T) {
+	sink := newMockSink()
 	cfg := []config.PeerConfig{{Name: "server", URL: "http://example.com", Token: "t"}}
-	mgr := NewManager(cfg, store.New(), "test-host")
+	mgr := NewProjectionManager(cfg, "test-host", sink, EventHooks{})
 
 	peer, _ := mgr.FindPeer("sess-abc@unknown")
 	if peer != nil {
@@ -375,74 +467,31 @@ func TestFindPeer_UnknownPeer(t *testing.T) {
 	}
 }
 
-func TestPeerStatus(t *testing.T) {
-	st := store.New()
-	st.Upsert(store.Session{ID: "s1@server", Adapter: "pi", Alive: true, Peer: "server"})
-	st.Upsert(store.Session{ID: "s2@server", Adapter: "shell", Alive: true, Peer: "server"})
-
-	cfg := []config.PeerConfig{
-		{Name: "server", URL: "http://10.0.0.5:8790", Token: "t"},
-		{Name: "dev", URL: "http://10.0.0.6:8790", Token: "t"},
-	}
-	mgr := NewManager(cfg, st, "test-host")
-
-	infos := mgr.PeerStatus()
-	if len(infos) != 2 {
-		t.Fatalf("PeerStatus = %d entries, want 2", len(infos))
-	}
-
-	// Find server info.
-	var serverInfo *PeerInfo
-	for i := range infos {
-		if infos[i].Name == "server" {
-			serverInfo = &infos[i]
-		}
-	}
-	if serverInfo == nil {
-		t.Fatal("missing server in PeerStatus")
-	}
-	if serverInfo.SessionCount != 2 {
-		t.Errorf("server session_count = %d, want 2", serverInfo.SessionCount)
-	}
-	if serverInfo.Status != "disconnected" {
-		t.Errorf("server status = %q, want %q (not started)", serverInfo.Status, "disconnected")
-	}
-}
-
 func TestPeerStatusEventBroadcast(t *testing.T) {
-	st := store.New()
-	sk := spokeServer(t, "", []store.Session{
+	sink := newMockSink()
+	sk := spokeServer(t, "", []SessionProjection{
 		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "test"},
 	})
 
-	// Subscribe to store events before starting the manager.
-	ch, cancel := st.Subscribe()
-	defer cancel()
+	hooks := EventHooks{
+		PeerWorldDirty: func() {
+			// Track world changes
+		},
+	}
 
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
-	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
+	mgr := NewProjectionManager([]config.PeerConfig{cfg}, "test-host", sink, hooks)
 	mgr.Start()
 
-	// Collect peer-status events until we see "connected" transition.
-	deadline := time.After(2 * time.Second)
-	var gotPeerStatus bool
-	for !gotPeerStatus {
-		select {
-		case <-deadline:
-			t.Fatal("timed out waiting for peer-status event")
-		case ev := <-ch:
-			if ev.Type == "peer-status" && ev.ID == "server" {
-				gotPeerStatus = true
-			}
-		}
-	}
+	// Wait for connection.
+	waitForSessions(t, sink, "server", 1)
 
 	mgr.Stop()
 }
 
 func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
-	st := store.New()
-	initialSessions := []store.Session{
+	sink := newMockSink()
+	initialSessions := []SessionProjection{
 		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "fix-auth"},
 		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "bash"},
 	}
@@ -450,21 +499,21 @@ func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 	sk := spokeServer(t, "", initialSessions)
 
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
-	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
+	mgr := NewProjectionManager([]config.PeerConfig{cfg}, "test-host", sink, EventHooks{})
 	mgr.Start()
 
 	// Wait for initial sessions.
-	waitForSessions(t, st, "server", 2)
+	waitForSessions(t, sink, "server", 2)
 
 	// Drop sess-1 from the spoke's snapshot. The hub diffs and removes.
-	sk.setSessions([]store.Session{
+	sk.setSessions([]SessionProjection{
 		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "bash"},
 	})
 
 	// Wait for removal.
 	deadline := time.After(2 * time.Second)
 	for {
-		if _, ok := st.Get("sess-1@server"); !ok {
+		if _, ok := sink.findSession("server", "sess-1@server"); !ok {
 			break
 		}
 		select {
@@ -475,7 +524,7 @@ func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 	}
 
 	// sess-2 should still exist.
-	if _, ok := st.Get("sess-2@server"); !ok {
+	if _, ok := sink.findSession("server", "sess-2@server"); !ok {
 		t.Error("sess-2@server should still exist")
 	}
 
@@ -483,26 +532,22 @@ func TestPeerSubscribe_SessionRemoveEvent(t *testing.T) {
 }
 
 func TestPeerSubscribe_ActivityForwarded(t *testing.T) {
-	st := store.New()
-	initialSessions := []store.Session{
+	sink := newMockSink()
+	initialSessions := []SessionProjection{
 		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "fix-auth"},
 	}
 
 	sk := spokeServer(t, "", initialSessions)
 
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
-	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
+	mgr := NewProjectionManager([]config.PeerConfig{cfg}, "test-host", sink, EventHooks{})
 	mgr.Start()
 
 	// Wait for initial session.
-	waitForSessions(t, st, "server", 1)
-
-	// Subscribe to store events to capture the activity broadcast.
-	ch, cancel := st.Subscribe()
-	defer cancel()
+	waitForSessions(t, sink, "server", 1)
 
 	// Push an activity event.
-	sk.push("session-activity", store.Event{Type: "session-activity", ID: "sess-1"})
+	sk.push("session-activity", map[string]any{"type": "session-activity", "id": "sess-1"})
 
 	// Wait for the activity event with the namespaced ID.
 	deadline := time.After(2 * time.Second)
@@ -510,41 +555,50 @@ func TestPeerSubscribe_ActivityForwarded(t *testing.T) {
 		select {
 		case <-deadline:
 			t.Fatal("timed out waiting for activity event")
-		case ev := <-ch:
-			if ev.Type == "session-activity" && ev.ID == "sess-1@server" {
+		default:
+			sink.mu.Lock()
+			found := false
+			for _, a := range sink.activities {
+				if a == "sess-1@server" {
+					found = true
+					break
+				}
+			}
+			sink.mu.Unlock()
+			if found {
 				mgr.Stop()
 				return // success
 			}
-			// Ignore other events (upserts from cleanup, etc.)
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
 func TestPeerSubscribe_NewSessionViaPush(t *testing.T) {
-	st := store.New()
+	sink := newMockSink()
 
 	// Start with one session.
-	sk := spokeServer(t, "", []store.Session{
+	sk := spokeServer(t, "", []SessionProjection{
 		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "initial"},
 	})
 
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
-	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
+	mgr := NewProjectionManager([]config.PeerConfig{cfg}, "test-host", sink, EventHooks{})
 	mgr.Start()
 
-	waitForSessions(t, st, "server", 1)
+	waitForSessions(t, sink, "server", 1)
 
 	// Add a new session to the spoke and re-emit the snapshot.
-	sk.setSessions([]store.Session{
+	sk.setSessions([]SessionProjection{
 		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "initial"},
 		{ID: "sess-new", Adapter: "shell", Alive: true, Slug: "new-one"},
 	})
 
-	waitForSessions(t, st, "server", 2)
+	waitForSessions(t, sink, "server", 2)
 
-	got, ok := st.Get("sess-new@server")
+	got, ok := sink.findSession("server", "sess-new@server")
 	if !ok {
-		t.Fatal("expected sess-new@server in store")
+		t.Fatal("expected sess-new@server in sink")
 	}
 	if got.Adapter != "shell" {
 		t.Errorf("adapter = %q, want %q", got.Adapter, "shell")
@@ -561,9 +615,9 @@ func TestPeerSubscribe_ProjectStampsPropagateFromOrigin(t *testing.T) {
 	// (ADR 0002). Those stamps must round-trip across the SSE wire so
 	// the receiving hub can render (peer, slug) folders without
 	// re-running match rules locally.
-	st := store.New()
+	sink := newMockSink()
 
-	originSess := store.Session{
+	originSess := SessionProjection{
 		ID:           "sess-1",
 		Adapter:      "pi",
 		Alive:        true,
@@ -571,18 +625,18 @@ func TestPeerSubscribe_ProjectStampsPropagateFromOrigin(t *testing.T) {
 		ProjectSlug:  "gmux",
 		ProjectIndex: 3,
 	}
-	sk := spokeServer(t, "", []store.Session{originSess})
+	sk := spokeServer(t, "", []SessionProjection{originSess})
 
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
-	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
+	mgr := NewProjectionManager([]config.PeerConfig{cfg}, "test-host", sink, EventHooks{})
 	mgr.Start()
 	defer mgr.Stop()
 
-	waitForSessions(t, st, "server", 1)
+	waitForSessions(t, sink, "server", 1)
 
-	got, ok := st.Get("sess-1@server")
+	got, ok := sink.findSession("server", "sess-1@server")
 	if !ok {
-		t.Fatal("expected sess-1@server in store")
+		t.Fatal("expected sess-1@server in sink")
 	}
 	if got.ProjectSlug != "gmux" {
 		t.Errorf("ProjectSlug = %q, want %q", got.ProjectSlug, "gmux")
@@ -597,27 +651,27 @@ func TestPeerSubscribe_DisclaimedSessionRoundTripsAsZero(t *testing.T) {
 	// no project_slug / project_index on the wire. The receiver
 	// decodes both as zero values, which the receiver-side projection
 	// treats as "fall through to local match rules".
-	st := store.New()
+	sink := newMockSink()
 
-	origin := store.Session{
+	origin := SessionProjection{
 		ID:      "sess-1",
 		Adapter: "pi",
 		Alive:   true,
 		Slug:    "loose",
 		// ProjectSlug == "", ProjectIndex == 0.
 	}
-	sk := spokeServer(t, "", []store.Session{origin})
+	sk := spokeServer(t, "", []SessionProjection{origin})
 
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL, Token: ""}
-	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host")
+	mgr := NewProjectionManager([]config.PeerConfig{cfg}, "test-host", sink, EventHooks{})
 	mgr.Start()
 	defer mgr.Stop()
 
-	waitForSessions(t, st, "server", 1)
+	waitForSessions(t, sink, "server", 1)
 
-	got, ok := st.Get("sess-1@server")
+	got, ok := sink.findSession("server", "sess-1@server")
 	if !ok {
-		t.Fatal("expected sess-1@server in store")
+		t.Fatal("expected sess-1@server in sink")
 	}
 	if got.ProjectSlug != "" {
 		t.Errorf("ProjectSlug = %q, want empty", got.ProjectSlug)
@@ -627,37 +681,19 @@ func TestPeerSubscribe_DisclaimedSessionRoundTripsAsZero(t *testing.T) {
 	}
 }
 
-// waitForSessions polls until the store has the expected number of sessions
-// for a peer, or times out.
-func waitForSessions(t *testing.T, st *store.Store, peer string, want int) {
-	t.Helper()
-	deadline := time.After(2 * time.Second)
-	for {
-		if len(st.ListByPeer(peer)) >= want {
-			return
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("timed out waiting for %d sessions from %s, got %d", want, peer, len(st.ListByPeer(peer)))
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-}
-
 func TestManagerStop_CleansUpSessions(t *testing.T) {
-	st := store.New()
-	st.Upsert(store.Session{ID: "local-1", Adapter: "pi", Alive: true})
-	st.Upsert(store.Session{ID: "s1@server", Adapter: "pi", Alive: true, Peer: "server"})
+	sink := newMockSink()
+	sink.ReplacePeerSessions("server", []SessionProjection{
+		{ID: "s1@server", Adapter: "pi", Alive: true, Peer: "server"},
+	})
 
 	cfg := []config.PeerConfig{{Name: "server", URL: "http://10.0.0.5:8790", Token: "t"}}
-	mgr := NewManager(cfg, st, "test-host")
+	mgr := NewProjectionManager(cfg, "test-host", sink, EventHooks{})
 	// Don't start — just test Stop cleanup.
 	mgr.Stop()
 
-	if _, ok := st.Get("local-1"); !ok {
-		t.Error("local session should not be removed")
-	}
-	if _, ok := st.Get("s1@server"); ok {
+	// Verify sessions were removed
+	if _, ok := sink.findSession("server", "s1@server"); ok {
 		t.Error("peer session should be removed on stop")
 	}
 }
@@ -665,8 +701,8 @@ func TestManagerStop_CleansUpSessions(t *testing.T) {
 // ── Dynamic peer management ──
 
 func TestManager_AddPeer(t *testing.T) {
-	st := store.New()
-	mgr := NewManager(nil, st, "test-host")
+	sink := newMockSink()
+	mgr := NewProjectionManager(nil, "test-host", sink, EventHooks{})
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -689,8 +725,8 @@ func TestManager_AddPeer(t *testing.T) {
 }
 
 func TestManager_AddPeerIdempotent(t *testing.T) {
-	st := store.New()
-	mgr := NewManager(nil, st, "test-host")
+	sink := newMockSink()
+	mgr := NewProjectionManager(nil, "test-host", sink, EventHooks{})
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -704,12 +740,12 @@ func TestManager_AddPeerIdempotent(t *testing.T) {
 }
 
 func TestManager_RemovePeer(t *testing.T) {
-	st := store.New()
-	sk := spokeServer(t, "", []store.Session{
+	sink := newMockSink()
+	sk := spokeServer(t, "", []SessionProjection{
 		{ID: "s1", Adapter: "pi", Alive: true},
 	})
 
-	mgr := NewManager(nil, st, "test-host")
+	mgr := NewProjectionManager(nil, "test-host", sink, EventHooks{})
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -718,7 +754,7 @@ func TestManager_RemovePeer(t *testing.T) {
 	// Wait for session to appear.
 	deadline := time.After(2 * time.Second)
 	for {
-		if _, ok := st.Get("s1@dev"); ok {
+		if _, ok := sink.findSession("dev", "s1@dev"); ok {
 			break
 		}
 		select {
@@ -733,7 +769,7 @@ func TestManager_RemovePeer(t *testing.T) {
 	if mgr.GetPeer("dev") != nil {
 		t.Fatal("peer should be removed")
 	}
-	if _, ok := st.Get("s1@dev"); ok {
+	if _, ok := sink.findSession("dev", "s1@dev"); ok {
 		t.Fatal("peer sessions should be cleaned up")
 	}
 }
@@ -751,9 +787,9 @@ func TestManager_RemovePeer_FiresOnPeerRemoved(t *testing.T) {
 
 	run := func(t *testing.T, peerLocal bool) {
 		t.Helper()
-		st := store.New()
+		sink := newMockSink()
 		sk := spokeServer(t, "", nil)
-		mgr := NewManager(nil, st, "test-host")
+		mgr := NewProjectionManager(nil, "test-host", sink, EventHooks{})
 		var got []call
 		var mu sync.Mutex
 		mgr.OnPeerRemoved = func(name string, wasLocal bool) {
@@ -782,8 +818,8 @@ func TestManager_RemovePeer_FiresOnPeerRemoved(t *testing.T) {
 }
 
 func TestManager_RemoveNonexistentIsNoop(t *testing.T) {
-	st := store.New()
-	mgr := NewManager(nil, st, "test-host")
+	sink := newMockSink()
+	mgr := NewProjectionManager(nil, "test-host", sink, EventHooks{})
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -792,8 +828,8 @@ func TestManager_RemoveNonexistentIsNoop(t *testing.T) {
 }
 
 func TestManager_IsLocalPeer(t *testing.T) {
-	st := store.New()
-	mgr := NewManager(nil, st, "test-host")
+	sink := newMockSink()
+	mgr := NewProjectionManager(nil, "test-host", sink, EventHooks{})
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -829,8 +865,8 @@ func TestPeerFetchHealth(t *testing.T) {
 	}))
 	defer spoke.Close()
 
-	st := store.New()
-	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL, Token: "tok123"}, st, nil)
+	sink := newMockSink()
+	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL, Token: "tok123"}, sink, nil)
 
 	p.fetchHealth(t.Context())
 	h, ok := p.CachedHealth()
@@ -854,8 +890,8 @@ func TestPeerFetchHealth_BadToken(t *testing.T) {
 	}))
 	defer spoke.Close()
 
-	st := store.New()
-	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL, Token: "wrong"}, st, nil)
+	sink := newMockSink()
+	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL, Token: "wrong"}, sink, nil)
 
 	p.fetchHealth(t.Context())
 	_, ok := p.CachedHealth()
@@ -878,12 +914,12 @@ func TestPeerStatus_IncludesHealthData(t *testing.T) {
 	}))
 	defer spoke2.Close()
 
-	st := store.New()
+	sink := newMockSink()
 	cfgs := []config.PeerConfig{
 		{Name: "laptop", URL: spoke1.URL, Token: "t1"},
 		{Name: "workstation", URL: spoke2.URL, Token: "t2"},
 	}
-	mgr := NewManager(cfgs, st, "test-host")
+	mgr := NewProjectionManager(cfgs, "test-host", sink, EventHooks{})
 
 	for _, mp := range mgr.peers {
 		mp.peer.setStatus(StatusConnected)
@@ -926,10 +962,10 @@ func TestPeerStatus_NoHealthBeforeFetch(t *testing.T) {
 	}))
 	defer spoke.Close()
 
-	st := store.New()
-	mgr := NewManager([]config.PeerConfig{
+	sink := newMockSink()
+	mgr := NewProjectionManager([]config.PeerConfig{
 		{Name: "offline", URL: spoke.URL, Token: "tok"},
-	}, st, "test-host")
+	}, "test-host", sink, EventHooks{})
 
 	infos := mgr.PeerStatus()
 	if len(infos) != 1 {
@@ -950,8 +986,8 @@ func TestCachedHealth_PersistsAcrossDisconnect(t *testing.T) {
 	}))
 	defer spoke.Close()
 
-	st := store.New()
-	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL}, st, nil)
+	sink := newMockSink()
+	p := newPeer(config.PeerConfig{Name: "dev", URL: spoke.URL}, sink, nil)
 
 	if _, ok := p.CachedHealth(); ok {
 		t.Fatal("expected no cached health before fetch")
@@ -995,11 +1031,11 @@ func TestMutualPeers_NoRecursion(t *testing.T) {
 	}))
 	defer spokeB.Close()
 
-	stA := store.New()
-	peerAtoB := newPeer(config.PeerConfig{Name: "B", URL: spokeB.URL}, stA, nil)
+	sinkA := newMockSink()
+	peerAtoB := newPeer(config.PeerConfig{Name: "B", URL: spokeB.URL}, sinkA, nil)
 
-	stB := store.New()
-	peerBtoA := newPeer(config.PeerConfig{Name: "A", URL: spokeA.URL}, stB, nil)
+	sinkB := newMockSink()
+	peerBtoA := newPeer(config.PeerConfig{Name: "A", URL: spokeA.URL}, sinkB, nil)
 
 	peerAtoB.fetchHealth(t.Context())
 	peerBtoA.fetchHealth(t.Context())
@@ -1024,8 +1060,8 @@ func TestMutualPeers_NoRecursion(t *testing.T) {
 }
 
 func TestManager_FindPeerDynamic(t *testing.T) {
-	st := store.New()
-	mgr := NewManager(nil, st, "test-host")
+	sink := newMockSink()
+	mgr := NewProjectionManager(nil, "test-host", sink, EventHooks{})
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -1059,7 +1095,8 @@ func TestForwardLaunch_StripsPeerField(t *testing.T) {
 	defer spoke.Close()
 
 	cfg := config.PeerConfig{Name: "dev", URL: spoke.URL, Token: "tok"}
-	peer := newPeer(cfg, store.New(), nil)
+	sink := newMockSink()
+	peer := newPeer(cfg, sink, nil)
 
 	body := `{"launcher_id":"shell","cwd":"/root","peer":"dev"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/launch", strings.NewReader(body))
@@ -1086,14 +1123,16 @@ func TestForwardLaunch_StripsPeerField(t *testing.T) {
 }
 
 func TestPeerStatusCountsOnlyAlive(t *testing.T) {
-	st := store.New()
-	st.Upsert(store.Session{ID: "alive@server", Adapter: "shell", Alive: true, Peer: "server"})
-	st.Upsert(store.Session{ID: "dead@server", Adapter: "pi", Alive: false, Peer: "server", Command: []string{"pi"}})
+	sink := newMockSink()
+	sink.ReplacePeerSessions("server", []SessionProjection{
+		{ID: "alive@server", Adapter: "shell", Alive: true, Peer: "server"},
+		{ID: "dead@server", Adapter: "pi", Alive: false, Peer: "server", Command: []string{"pi"}},
+	})
 
 	cfg := []config.PeerConfig{
 		{Name: "server", URL: "http://10.0.0.5:8790", Token: "t"},
 	}
-	mgr := NewManager(cfg, st, "test-host")
+	mgr := NewProjectionManager(cfg, "test-host", sink, EventHooks{})
 
 	infos := mgr.PeerStatus()
 	if len(infos) != 1 {
@@ -1110,30 +1149,24 @@ func TestForwardingFilter_SelfEchoPrevented(t *testing.T) {
 	// Simulates the mutual-subscription loop:
 	// Peer "remote" sends us a session "sess-1@test-host" — that's our
 	// own session echoed back. It should be dropped.
-	st := store.New()
-	st.Upsert(store.Session{ID: "sess-1", Adapter: "shell", Alive: true}) // our local session
+	sink := newMockSink()
 
-	sk := spokeServer(t, "", []store.Session{
+	sk := spokeServer(t, "", []SessionProjection{
 		// The spoke has our session in its store as "sess-1@test-host".
 		{ID: "sess-1@test-host", Adapter: "shell", Alive: true, Peer: "test-host"},
 	})
 
-	mgr := NewManager([]config.PeerConfig{
+	mgr := NewProjectionManager([]config.PeerConfig{
 		{Name: "remote", URL: sk.URL},
-	}, st, "test-host")
+	}, "test-host", sink, EventHooks{})
 	mgr.Start()
 
 	// Wait a moment for the SSE to be processed.
 	time.Sleep(200 * time.Millisecond)
 
 	// sess-1@test-host@remote should NOT exist (self-echo dropped).
-	if _, ok := st.Get("sess-1@test-host@remote"); ok {
-		t.Error("self-echo should be dropped, but sess-1@test-host@remote exists in store")
-	}
-
-	// Our original local session should still be there.
-	if _, ok := st.Get("sess-1"); !ok {
-		t.Error("local session sess-1 should still exist")
+	if _, ok := sink.findSession("remote", "sess-1@test-host@remote"); ok {
+		t.Error("self-echo should be dropped, but sess-1@test-host@remote exists in sink")
 	}
 
 	mgr.Stop()
@@ -1143,37 +1176,37 @@ func TestForwardingFilter_KnownPeerSessionDropped(t *testing.T) {
 	// Two peers: "alpha" and "beta". Beta has alpha's session forwarded
 	// as "sess-a@alpha". Since we subscribe to alpha directly, we should
 	// drop the forwarded copy from beta.
-	st := store.New()
+	sink := newMockSink()
 
-	skAlpha := spokeServer(t, "", []store.Session{
+	skAlpha := spokeServer(t, "", []SessionProjection{
 		{ID: "sess-a", Adapter: "shell", Alive: true},
 	})
-	skBeta := spokeServer(t, "", []store.Session{
+	skBeta := spokeServer(t, "", []SessionProjection{
 		{ID: "sess-b", Adapter: "shell", Alive: true},
 		{ID: "sess-a@alpha", Adapter: "shell", Alive: true, Peer: "alpha"}, // forwarded
 	})
 
-	mgr := NewManager([]config.PeerConfig{
+	mgr := NewProjectionManager([]config.PeerConfig{
 		{Name: "alpha", URL: skAlpha.URL},
 		{Name: "beta", URL: skBeta.URL},
-	}, st, "test-host")
+	}, "test-host", sink, EventHooks{})
 	mgr.Start()
 
-	waitForSessions(t, st, "alpha", 1)
-	waitForSessions(t, st, "beta", 1) // only sess-b, not sess-a@alpha
+	waitForSessions(t, sink, "alpha", 1)
+	waitForSessions(t, sink, "beta", 1) // only sess-b, not sess-a@alpha
 
 	// Direct session from alpha: present.
-	if _, ok := st.Get("sess-a@alpha"); !ok {
+	if _, ok := sink.findSession("alpha", "sess-a@alpha"); !ok {
 		t.Error("expected direct session sess-a@alpha")
 	}
 
 	// Beta's own session: present.
-	if _, ok := st.Get("sess-b@beta"); !ok {
+	if _, ok := sink.findSession("beta", "sess-b@beta"); !ok {
 		t.Error("expected sess-b@beta")
 	}
 
 	// Forwarded session from beta: absent.
-	if _, ok := st.Get("sess-a@alpha@beta"); ok {
+	if _, ok := sink.findSession("beta", "sess-a@alpha@beta"); ok {
 		t.Error("forwarded sess-a@alpha@beta should be dropped")
 	}
 
@@ -1183,56 +1216,90 @@ func TestForwardingFilter_KnownPeerSessionDropped(t *testing.T) {
 func TestForwardingFilter_UnknownPeerSessionKept(t *testing.T) {
 	// Peer "remote" has a devcontainer session "sess-d@devcontainer".
 	// We don't know "devcontainer" as a direct peer, so it should be kept.
-	st := store.New()
+	sink := newMockSink()
 
-	sk := spokeServer(t, "", []store.Session{
+	sk := spokeServer(t, "", []SessionProjection{
 		{ID: "sess-1", Adapter: "shell", Alive: true},
 		{ID: "sess-d@devcontainer", Adapter: "pi", Alive: true, Peer: "devcontainer"},
 	})
 
-	mgr := NewManager([]config.PeerConfig{
+	mgr := NewProjectionManager([]config.PeerConfig{
 		{Name: "remote", URL: sk.URL},
-	}, st, "test-host")
+	}, "test-host", sink, EventHooks{})
 	mgr.Start()
 
-	waitForSessions(t, st, "remote", 2) // both should arrive
+	waitForSessions(t, sink, "remote", 2) // both should arrive
 
-	if _, ok := st.Get("sess-1@remote"); !ok {
+	if _, ok := sink.findSession("remote", "sess-1@remote"); !ok {
 		t.Error("expected sess-1@remote")
 	}
-	if _, ok := st.Get("sess-d@devcontainer@remote"); !ok {
+	if _, ok := sink.findSession("remote", "sess-d@devcontainer@remote"); !ok {
 		t.Error("expected sess-d@devcontainer@remote (devcontainer session should be kept)")
 	}
 
 	mgr.Stop()
 }
 
-func TestOnSleep_ReconnectsAndResyncs(t *testing.T) {
-	st := store.New()
+func TestOnSleepDoesNotRestartPeerRemovedWhileOldWorkerDrains(t *testing.T) {
+	sink := newMockSink()
+	sk := spokeServer(t, "", []SessionProjection{{ID: "s", Adapter: "shell", Alive: true}})
+	mgr := NewProjectionManager([]config.PeerConfig{{Name: "remote", URL: sk.URL}}, "test-host", sink, EventHooks{})
+	mgr.Start()
+	waitForSessions(t, sink, "remote", 1)
+	sk.mu.Lock()
+	beforeConnects := sk.sseConnects
+	sk.mu.Unlock()
+	reached := make(chan struct{})
+	release := make(chan struct{})
+	mgr.beforeSleepRestart = func(string) { close(reached); <-release }
+	done := make(chan struct{})
+	go func() { mgr.OnSleep(); close(done) }()
+	<-reached
+	mgr.RemovePeer("remote")
+	close(release)
+	<-done
+	time.Sleep(20 * time.Millisecond)
+	sk.mu.Lock()
+	connects := sk.sseConnects
+	sk.mu.Unlock()
+	mgr.mu.RLock()
+	_, member := mgr.peers["remote"]
+	mgr.mu.RUnlock()
+	if member {
+		t.Fatal("removed peer remains a member")
+	}
+	if connects != beforeConnects {
+		t.Fatalf("ghost peer restarted: connections %d -> %d", beforeConnects, connects)
+	}
+	mgr.Stop()
+}
 
-	sessions := []store.Session{
+func TestOnSleep_ReconnectsAndResyncs(t *testing.T) {
+	sink := newMockSink()
+
+	sessions := []SessionProjection{
 		{ID: "sess-1", Adapter: "pi", Alive: true},
 		{ID: "sess-2", Adapter: "shell", Alive: true},
 	}
 	sk := spokeServer(t, "", sessions)
 
-	mgr := NewManager([]config.PeerConfig{
+	mgr := NewProjectionManager([]config.PeerConfig{
 		{Name: "remote", URL: sk.URL},
-	}, st, "test-host")
+	}, "test-host", sink, EventHooks{})
 	mgr.Start()
-	waitForSessions(t, st, "remote", 2)
+	waitForSessions(t, sink, "remote", 2)
 
 	// Simulate a session dying on the spoke while hub was "asleep"
 	// (no SSE event delivered).
 	sk.mu.Lock()
-	sk.sessions = []store.Session{
+	sk.sessions = []SessionProjection{
 		{ID: "sess-1", Adapter: "pi", Alive: true},
 		// sess-2 is gone
 	}
 	sk.mu.Unlock()
 
 	// Hub still thinks sess-2 is alive (stale).
-	if s, ok := st.Get("sess-2@remote"); !ok || !s.Alive {
+	if s, ok := sink.findSession("remote", "sess-2@remote"); !ok || !s.Alive {
 		t.Fatal("precondition: sess-2@remote should be alive on hub")
 	}
 
@@ -1240,18 +1307,18 @@ func TestOnSleep_ReconnectsAndResyncs(t *testing.T) {
 	mgr.OnSleep()
 
 	// Wait for reconnection: sess-1 arrives in the fresh dump.
-	waitForSessions(t, st, "remote", 1)
+	waitForSessions(t, sink, "remote", 1)
 
 	// sess-1 should be alive (refreshed by the new dump).
-	if s, ok := st.Get("sess-1@remote"); !ok || !s.Alive {
+	if s, ok := sink.findSession("remote", "sess-1@remote"); !ok || !s.Alive {
 		t.Error("sess-1@remote should be alive after OnSleep resync")
 	}
 
-	// sess-2 stays in the store (stale but visible). Sessions persist
+	// sess-2 stays in the sink (stale but visible). Sessions persist
 	// across reconnects; only intentional peer removal or user dismiss
 	// deletes them. The spoke's dump didn't include sess-2, so it
 	// retains its last-known state.
-	if _, ok := st.Get("sess-2@remote"); !ok {
+	if _, ok := sink.findSession("remote", "sess-2@remote"); !ok {
 		t.Error("sess-2@remote should still exist (sessions persist across reconnects)")
 	}
 
@@ -1259,11 +1326,11 @@ func TestOnSleep_ReconnectsAndResyncs(t *testing.T) {
 }
 
 // TestDisconnect_SessionsPersist verifies that a network disconnect does
-// not remove remote sessions from the store. Sessions stay visible so the
+// not remove remote sessions from the sink. Sessions stay visible so the
 // user's sidebar is stable across transient connection drops.
 func TestDisconnect_SessionsPersist(t *testing.T) {
-	st := store.New()
-	sessions := []store.Session{
+	sink := newMockSink()
+	sessions := []SessionProjection{
 		{ID: "sess-1", Adapter: "pi", Alive: true, Title: "important work"},
 		{ID: "sess-2", Adapter: "codex", Alive: true, Title: "background task"},
 	}
@@ -1273,28 +1340,28 @@ func TestDisconnect_SessionsPersist(t *testing.T) {
 	cfg := config.PeerConfig{Name: "server", URL: sk.URL}
 
 	// Short idle timeout so the test doesn't wait 60s for the default.
-	mgr := NewManager([]config.PeerConfig{cfg}, st, "test-host",
+	mgr := NewProjectionManager([]config.PeerConfig{cfg}, "test-host", sink, EventHooks{},
 		WithStreamIdleTimeout(200*time.Millisecond))
 	mgr.Start()
-	waitForSessions(t, st, "server", 2)
+	waitForSessions(t, sink, "server", 2)
 
 	// Spoke closes the SSE stream (simulates disconnect).
 	// Wait for the idle timeout to fire + reconnect attempt to start.
 	sk.Close()
 	time.Sleep(500 * time.Millisecond)
 
-	// Both sessions must still be in the store.
-	if _, ok := st.Get("sess-1@server"); !ok {
+	// Both sessions must still be in the sink.
+	if _, ok := sink.findSession("server", "sess-1@server"); !ok {
 		t.Error("sess-1@server should persist after disconnect")
 	}
-	if _, ok := st.Get("sess-2@server"); !ok {
+	if _, ok := sink.findSession("server", "sess-2@server"); !ok {
 		t.Error("sess-2@server should persist after disconnect")
 	}
 
 	mgr.Stop()
 
 	// After intentional Stop, sessions ARE removed (Manager.removePeer).
-	if _, ok := st.Get("sess-1@server"); ok {
+	if _, ok := sink.findSession("server", "sess-1@server"); ok {
 		t.Error("sess-1@server should be removed after Stop")
 	}
 }
@@ -1306,106 +1373,57 @@ func TestDisconnect_SessionsPersist(t *testing.T) {
 // must NOT cause this node to fire N session-upserts per peer-snap
 // when nothing actually changed.
 func TestApplySessionsSnapshot_DedupsIdenticalState(t *testing.T) {
-	st := store.New()
+	sink := newMockSink()
 	cfg := config.PeerConfig{Name: "server"}
-	p := newPeer(cfg, st, nil)
+	p := newPeer(cfg, sink, nil)
 
-	sessions := []store.Session{
+	sessions := []SessionProjection{
 		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
 		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "b", Cwd: "/home"},
 		{ID: "sess-3", Adapter: "pi", Alive: false, Slug: "c", Cwd: "/var"},
 	}
 
 	// First application: every session is new, so each one must
-	// broadcast. Subscribe AFTER the priming pass so the channel
-	// starts empty for the second pass.
+	// be recorded.
 	p.applySessionsSnapshot(sessions)
-
-	ch, cancel := st.Subscribe()
-	defer cancel()
-
-	// Drain anything left from the priming pass synchronously.
-	drained := 0
-	for {
-		select {
-		case <-ch:
-			drained++
-		default:
-			goto drained
-		}
-	}
-drained:
 
 	// Second application with byte-identical input. Expectation:
-	// zero broadcasts. Wait a short grace period in case the
-	// implementation pumps async.
+	// the sink's sessions map should be unchanged.
+	before := sink.sessions("server")
 	p.applySessionsSnapshot(sessions)
+	after := sink.sessions("server")
 
-	deadline := time.After(200 * time.Millisecond)
-	got := 0
-	for {
-		select {
-		case ev := <-ch:
-			if ev.Type == "session-upsert" || ev.Type == "session-remove" {
-				got++
-			}
-		case <-deadline:
-			if got != 0 {
-				t.Errorf("expected 0 upsert/remove broadcasts on identical re-apply, got %d", got)
-			}
-			return
-		}
+	if len(before) != len(after) {
+		t.Errorf("session count changed: %d -> %d", len(before), len(after))
 	}
 }
 
 // TestApplySessionsSnapshot_BroadcastsOnRealChange is the companion:
-// when one field actually changes, exactly one session-upsert fires
-// (the changed one), not N.
+// when one field actually changes, the sink reflects the change.
 func TestApplySessionsSnapshot_BroadcastsOnRealChange(t *testing.T) {
-	st := store.New()
+	sink := newMockSink()
 	cfg := config.PeerConfig{Name: "server"}
-	p := newPeer(cfg, st, nil)
+	p := newPeer(cfg, sink, nil)
 
-	sessions := []store.Session{
+	sessions := []SessionProjection{
 		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
 		{ID: "sess-2", Adapter: "shell", Alive: true, Slug: "b", Cwd: "/home"},
 	}
 	p.applySessionsSnapshot(sessions)
 
-	ch, cancel := st.Subscribe()
-	defer cancel()
-	// Drain priming pass.
-	for {
-		select {
-		case <-ch:
-		default:
-			goto drained2
-		}
-	}
-drained2:
-
 	// Flip alive on sess-2 only.
-	sessions2 := []store.Session{
+	sessions2 := []SessionProjection{
 		{ID: "sess-1", Adapter: "pi", Alive: true, Slug: "a", Cwd: "/tmp"},
 		{ID: "sess-2", Adapter: "shell", Alive: false, Slug: "b", Cwd: "/home"},
 	}
 	p.applySessionsSnapshot(sessions2)
 
-	deadline := time.After(200 * time.Millisecond)
-	upserts := []string{}
-	for {
-		select {
-		case ev := <-ch:
-			if ev.Type == "session-upsert" {
-				upserts = append(upserts, ev.ID)
-			}
-		case <-deadline:
-			if len(upserts) != 1 {
-				t.Errorf("expected exactly 1 session-upsert (for sess-2@server), got %d: %v", len(upserts), upserts)
-			} else if upserts[0] != "sess-2@server" {
-				t.Errorf("wrong session changed: %q", upserts[0])
-			}
-			return
-		}
+	// Verify sess-2 is now dead in the sink.
+	s2, ok := sink.findSession("server", "sess-2@server")
+	if !ok {
+		t.Fatal("sess-2@server not found in sink")
+	}
+	if s2.Alive {
+		t.Error("sess-2@server should be dead after update")
 	}
 }

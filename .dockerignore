@@ -1,0 +1,13 @@
+# Keep Docker build contexts small. No Dockerfile in this repo needs these:
+# builds either compile Go from source dirs (production-e2e) or copy the
+# host-built static binaries in bin/ (tools/dev-container). node_modules alone
+# is ~540M of otherwise-irrelevant context.
+node_modules
+**/node_modules
+.jj
+.git
+.grove
+.memory
+test-results
+playwright-report
+**/dist

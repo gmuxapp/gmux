@@ -85,7 +85,7 @@ Before, passing the Tailscale allow list granted the full API. Now tailnet ident
 
 Before, gmux machines on your tailnet appeared as hosts automatically. Now peers are explicit: run `gmux auth` on the host, paste its connect URL into **Settings → Hosts → Connect to host**.
 
-**Automatic migration on first 2.0 start:** hosts you had project references on are imported from the old discovery cache as **Auth needed** rows — click **Add token** on each to bring it back online (references keep resolving throughout). Unreferenced machines are dropped; re-add them on demand. The legacy cache is deleted, and `projects.json` is backed up to `projects.json.bak` first.
+**Automatic migration on first 2.0 start:** hosts you had project references on are imported from the old discovery cache as **Auth needed** rows — click **Add token** on each to bring it back online (references keep resolving throughout). Unreferenced machines are dropped; re-add them on demand. The legacy cache is deleted. 2.0 uses a clean SQLite database (`state.db`); old JSON state files are ignored.
 
 ### Removed `host.toml` keys
 
@@ -94,7 +94,7 @@ These are **ignored with a warning** (not fatal), so an old config won't brick t
 | Key | Replacement |
 |-----|-------------|
 | `tailscale.hostname` | Name derives from the OS hostname (`gmux-<hostname>`) and is then owned by Tailscale. Seed a different name *before first registration* with `GMUXD_TS_HOSTNAME`, or rename in the Tailscale admin console. |
-| `[[peers]]` | Runtime state in `peers.json`, managed via **Settings → Hosts**. |
+| `[[peers]]` | Runtime state in the daemon’s SQLite database (`state.db`), managed via **Settings → Hosts**. |
 | `discovery.tailscale` | Gone — add tailnet hosts via **Connect to host**. |
 
 ### Host renames no longer follow automatically
@@ -105,7 +105,7 @@ A peer's name is now frozen at first contact (ADR 0017): renaming a machine does
 
 ## API & schema: terminology rename
 
-**Who:** anyone parsing `gmux ls --json`, the REST API, SSE payloads, or `meta.json` files.
+**Who:** anyone parsing `gmux ls --json`, the REST API, or SSE payloads.
 
 | Before | After |
 |--------|-------|
@@ -116,7 +116,7 @@ A peer's name is now frozen at first contact (ADR 0017): renaming a machine does
 | `resume_key` field | gone — use `conversation_file` (resume identity) and `slug` (membership/URLs) |
 | `stale` field | gone — derive from `runner_version`/`binary_hash` vs `GET /v1/health` |
 
-The daemon reads legacy `meta.json` keys and accepts the legacy runner `session_file` event for one release (dropped in v2.1) but writes/emits only the new names. The `GMUX_ADAPTER` env var is unchanged (it was already named that in 1.6). URL path segments (`/project/pi/slug`) are unchanged, so bookmarks keep working — though a Claude `/rename` now moves the slug with the title.
+The daemon accepts the legacy runner `session_file` event for one release (dropped in v2.1) but writes/emits only the new names. The `GMUX_ADAPTER` env var is unchanged (it was already named that in 1.6). URL path segments (`/project/pi/slug`) are unchanged, so bookmarks keep working — though a Claude `/rename` now moves the slug with the title.
 
 ### Wire protocol v2
 
@@ -152,7 +152,7 @@ pi, Claude Code, and Codex now report status/titles/attribution through injected
 
 ### Sessions and retention
 
-- **Dead sessions persist across daemon restarts** (from `~/.local/state/gmux/sessions/<id>/meta.json`), and **dismiss is now permanent** — restarting the daemon no longer resurfaces dismissed sessions.
+- **Dead sessions persist across daemon restarts** (as rows in the SQLite database `state.db`), and **dismiss is now permanent** — restarting the daemon no longer resurfaces dismissed sessions.
 - gmux no longer surfaces conversations it never saw by scanning `~/.claude`/`~/.codex`/`~/.pi` into resumable sidebar entries; those files still power URL resolution and resume of known sessions.
 - Retention caps apply: conversation-less dead sessions age out (30 days / 200 max), dead-session scrollback is capped at 256 MB aggregate. Override with `GMUX_SESSION_RETENTION_DAYS` / `GMUX_SESSION_RETENTION_MAX` / `GMUX_SCROLLBACK_CACHE_MB`.
 
@@ -168,9 +168,9 @@ Daemon-initiated launches (UI launcher, resume, restart) source a fresh `$SHELL 
 
 Containers are only auto-discovered when they carry the `devcontainer.local_folder` label (set by the devcontainer CLI / VS Code) in addition to `GMUXD_LISTEN`. Plain `docker run` containers with `GMUXD_LISTEN` set are no longer picked up — add them as manual peers, or use the [Running in Docker](/running-in-docker/) flow.
 
-### projects.json schema v3
+### Project model
 
-Migrated automatically (with a `.bak` backup). The `hosts` match-rule field is dropped; cross-host projects are peer **reference items** (`{slug, peer, node_id}`). Tools that read or write `projects.json` must handle items without `match`. See [projects.json](/reference/projects-json/).
+Projects are now stored in the daemon’s SQLite database (`state.db`, ADR 0026). The `hosts` match-rule field is dropped; cross-host projects are peer **reference items** (`{slug, peer, node_id}`). The REST API (`GET /v1/projects`, `PUT /v1/projects`) uses the same JSON shape. See [Project model](/reference/projects-json/).
 
 ---
 

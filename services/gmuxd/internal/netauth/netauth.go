@@ -73,9 +73,12 @@ func Middleware(token string, next http.Handler) http.Handler {
 			return
 		}
 
-		// Shutdown is a local-only operation (available via Unix socket).
-		// Block it entirely on the TCP listener regardless of auth.
-		if r.URL.Path == "/v1/shutdown" {
+		// Shutdown and the admin state routes (check/backup/export) are
+		// local-only operations (available via Unix socket). Block them
+		// entirely on network listeners regardless of auth: backup writes
+		// daemon-local files and export contains machine-private inventory
+		// even redacted (cutover design §5).
+		if r.URL.Path == "/v1/shutdown" || strings.HasPrefix(r.URL.Path, "/v1/state/") {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}

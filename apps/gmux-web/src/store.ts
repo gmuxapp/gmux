@@ -1048,10 +1048,12 @@ function selectedSlugRewrite(prev: Session[], next: Session[]): string | null {
   if (!id) return null
   const old = prev.find(s => s.id === id)
   const cur = next.find(s => s.id === id)
-  if (!old || !cur || old.slug === cur.slug) return null
-  // viewToPath routes peer-owned sessions through `/@<peer>/...` (ADR 0002)
-  // just like every other URL serializer.
-  return viewToPath({ kind: 'session', sessionId: id }, projects.value, next)
+  if (!old || !cur) return null
+  // Recompute canonical serialization even when this row's slug did not
+  // change: arrival of a duplicate can make the old slug route ambiguous,
+  // in which case viewToPath switches the selected row to its full ID.
+  const canonical = viewToPath({ kind: 'session', sessionId: id }, projects.value, next)
+  return canonical && canonical !== urlPath.value ? canonical : null
 }
 
 /**

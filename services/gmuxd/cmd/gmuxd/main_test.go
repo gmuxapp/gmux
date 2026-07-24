@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 )
 
@@ -506,10 +506,10 @@ func TestComposePeerProjectsSkipsLocalPeers(t *testing.T) {
 	}))
 	defer spoke.Close()
 
-	mgr := peering.NewManager([]config.PeerConfig{
+	mgr := peering.NewProjectionManager([]config.PeerConfig{
 		{Name: "tower", URL: spoke.URL},
 		{Name: "devcontainer", URL: spoke.URL, Local: true},
-	}, store.New(), "test-host")
+	}, "test-host", nil, peering.EventHooks{})
 	mgr.Start()
 	defer mgr.Stop()
 
@@ -767,48 +767,28 @@ func TestSSEFrameDeadlineAndErrorPropagation(t *testing.T) {
 	}
 }
 
-// TestForceKillDeadPreservesClosedTurnStatus pins the ADR 0023 §4
-// invariant for the /kill force-dead path (runner unreachable): a
-// session whose turn had already CLOSED must keep Status{Working:false}
-// so a post-death `gmux wait` resolves "idle" (see terminalReason in
-// wait.go) — the same verdict a live wait watching the clean exit would
-// give. The path previously hard-cleared Status to nil, which wait.go
-// maps to "died", making the verdict depend on how death was detected.
-func TestForceKillDeadPreservesClosedTurnStatus(t *testing.T) {
-	sess := store.Session{
-		ID:     "sess-kill-closed",
-		Alive:  true,
-		Status: &store.Status{Working: false},
-	}
-	got := forceKillDead(sess)
-	if got.Alive {
-		t.Fatalf("Alive = true, want false (force-dead must mark not-alive)")
-	}
-	if got.Status == nil {
-		t.Fatalf("Status = nil after force-dead; want preserved closed turn (ADR 0023 §4)")
-	}
-	if got.Status.Working {
-		t.Errorf("Status.Working = true, want false (closed turn must be preserved)")
-	}
-}
-
-// TestForceKillDeadPreservesOpenTurnStatus is the mid-turn counterpart:
-// killing a session whose turn was still OPEN must keep Working=true so
-// the wait resolves "died" rather than losing the evidence to nil.
-func TestForceKillDeadPreservesOpenTurnStatus(t *testing.T) {
-	sess := store.Session{
-		ID:     "sess-kill-open",
-		Alive:  true,
-		Status: &store.Status{Working: true},
-	}
-	got := forceKillDead(sess)
-	if got.Alive {
-		t.Fatalf("Alive = true, want false")
-	}
-	if got.Status == nil {
-		t.Fatalf("Status = nil after force-dead; want preserved open turn (ADR 0023 §4)")
-	}
-	if !got.Status.Working {
-		t.Errorf("Status.Working = false, want true (open turn evidence must be preserved)")
+func TestManualPeerResponsePreservesBareWebContract(t *testing.T) {
+	peer := centralstore.ManualPeer{Name: "host"}
+	for _, tc := range []struct {
+		outcome centralstore.PeerUpsertOutcome
+		key     string
+	}{
+		{centralstore.PeerUnchanged, "already_connected"},
+		{centralstore.PeerUpdated, "updated"},
+	} {
+		b, err := json.Marshal(manualPeerResponse(peer, tc.outcome))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]json.RawMessage
+		if err := json.Unmarshal(b, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["peer"] == nil || got[tc.key] == nil {
+			t.Fatalf("response=%s", b)
+		}
+		if got["ok"] != nil || got["data"] != nil {
+			t.Fatalf("wrapped response=%s", b)
+		}
 	}
 }

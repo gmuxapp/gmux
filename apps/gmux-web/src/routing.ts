@@ -72,6 +72,7 @@ export function sessionPath(
   projectSlug: string,
   session: { adapter: string; slug?: string; id: string; peer?: string },
   projectPeer?: string,
+  forceId = false,
 ): string {
   // Fallback for an untitled session (no slug yet): the full gmux session
   // id. It's already short and URL-safe (`sess-<8 hex>`) and unique, unlike
@@ -79,7 +80,7 @@ export function sessionPath(
   // values), and resolveSessionFromPath's prefix match returns the first
   // hit, so two untitled sessions could collide onto one URL. Resolution
   // still works: `s.id.startsWith(slug)` matches the full id exactly.
-  const slug = session.slug || session.id
+  const slug = !forceId && session.slug ? session.slug : session.id
   const ownerPrefix = projectPeer ? `/@${projectPeer}` : ''
   // Mid-path session-host segment is needed only when the session
   // lives on a different host than the project owner.
@@ -169,13 +170,16 @@ export function resolveSessionFromPath(
     return alive?.id ?? adapterSessions[0]?.id ?? null
   }
 
-  // Full match: /:project/:adapter/:slug
-  // Try exact slug match first, then prefix match on session ID.
-  const exact = adapterSessions.find(s => s.slug === parsed.slug)
-  if (exact) return exact.id
+  // Full match: /:project/:adapter/:slug. Exact immutable IDs take
+  // precedence over human slugs, including a slug-vs-ID cross-collision.
+  const fullId = adapterSessions.find(s => s.id === parsed.slug)
+  if (fullId) return fullId.id
 
-  const byId = adapterSessions.find(s => s.id.startsWith(parsed.slug!))
-  return byId?.id ?? null
+  const exact = adapterSessions.filter(s => s.slug === parsed.slug)
+  if (exact.length === 1) return exact[0].id
+  if (exact.length > 1) return null
+  const byId = adapterSessions.filter(s => s.id.startsWith(parsed.slug!))
+  return byId.length === 1 ? byId[0].id : null
 }
 
 // --- View state model ---
@@ -238,6 +242,20 @@ export function resolveViewFromPath(
  * serialized (e.g., session view pointing at a session we no longer have
  * in the store). Callers should leave the URL alone in that case.
  */
+export function hasSessionSlugCollision(session: Session, sessions: Session[], projects: ProjectItem[]): boolean {
+  if (!session.slug) return false
+  const namespace = session.peer && session.project_slug
+    ? `peer:${session.peer}:${session.project_slug}`
+    : `local:${session.project_slug ?? matchSession(session, projects)?.slug ?? ''}`
+  return sessions.some(s => {
+    if (s.id === session.id || s.peer !== session.peer || s.adapter !== session.adapter || s.slug !== session.slug) return false
+    const otherNamespace = s.peer && s.project_slug
+      ? `peer:${s.peer}:${s.project_slug}`
+      : `local:${s.project_slug ?? matchSession(s, projects)?.slug ?? ''}`
+    return namespace === otherNamespace
+  })
+}
+
 export function viewToPath(
   view: View,
   projects: ProjectItem[],
@@ -252,16 +270,16 @@ export function viewToPath(
       // Peer-owned project (ADR 0002): URL is peer-prefixed; session
       // lives on the project's owner.
       if (sess.project_slug && sess.peer) {
-        return sessionPath(sess.project_slug, sess, sess.peer)
+        return sessionPath(sess.project_slug, sess, sess.peer, hasSessionSlugCollision(sess, sessions, projects))
       }
       // Local-claimed: project owner is the viewer.
       if (sess.project_slug && !sess.peer) {
-        return sessionPath(sess.project_slug, sess)
+        return sessionPath(sess.project_slug, sess, undefined, hasSessionSlugCollision(sess, sessions, projects))
       }
       // Disclaimed: viewer's match rules decide the local folder.
       const project = matchSession(sess, projects)
       if (!project) return null
-      return sessionPath(project.slug, sess)
+      return sessionPath(project.slug, sess, undefined, hasSessionSlugCollision(sess, sessions, projects))
     }
   }
 }

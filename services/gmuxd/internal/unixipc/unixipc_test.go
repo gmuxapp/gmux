@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -118,6 +119,42 @@ func TestClientConnectsToSocket(t *testing.T) {
 	}
 }
 
+func TestOneShotClientsCloseConnections(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "gmuxd.sock")
+	ln, err := Listen(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var open atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": map[string]any{"version": "1.0.0", "pid": 42}})
+	})
+	srv := &http.Server{Handler: mux, ConnState: func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			open.Add(1)
+		case http.StateClosed, http.StateHijacked:
+			open.Add(-1)
+		}
+	}}
+	go srv.Serve(ln)
+	defer srv.Close()
+
+	for range 100 {
+		if _, ok := HealthIdentity(sockPath); !ok {
+			t.Fatal("health probe failed")
+		}
+		deadline := time.Now().Add(time.Second)
+		for open.Load() != 0 {
+			if time.Now().After(deadline) {
+				t.Fatalf("open unix IPC connections=%d, want 0", open.Load())
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
 func TestHealthyReturnsFalseWhenNoSocket(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "nonexistent.sock")
 	if Healthy(sockPath) {
@@ -135,6 +172,10 @@ func TestHealthVersionReturnsVersion(t *testing.T) {
 	}
 	if ver != "0.9.0" {
 		t.Errorf("version = %q, want %q", ver, "0.9.0")
+	}
+	identity, ok := HealthIdentity(sockPath)
+	if !ok || identity.Version != "0.9.0" || identity.PID != 4242 {
+		t.Fatalf("identity = %+v, ok=%v", identity, ok)
 	}
 }
 
@@ -204,7 +245,7 @@ func startTestDaemon(t *testing.T, version string) (sockPath string, cleanup fun
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"ok":   true,
-			"data": map[string]any{"version": version, "status": "ready"},
+			"data": map[string]any{"version": version, "pid": 4242, "status": "ready"},
 		})
 	})
 	srv := &http.Server{Handler: mux}

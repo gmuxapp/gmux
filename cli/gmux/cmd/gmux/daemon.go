@@ -39,15 +39,19 @@ func ensureGmuxd() bool {
 }
 
 // gmuxdNeedsStart checks the running daemon.
+//
+// The probe retries with growing budgets before concluding the daemon is
+// down: a single 500ms probe is a hair trigger on a loaded host, and a false
+// "down" verdict spawns a daemon. (Spawning is no longer destructive — a
+// healthy same-version incumbent refuses replacement since the autostart
+// takeover incident — but pointless spawns still burn a full bootstrap.)
 func gmuxdNeedsStart() bool {
 	// "dev" builds never replace — avoids churn during development.
 	if version == "dev" {
-		return !gmuxdHealthy(500 * time.Millisecond)
+		return !gmuxdHealthyRetry()
 	}
 
-	client := gmuxdClient()
-	client.Timeout = 500 * time.Millisecond
-	resp, err := client.Get(gmuxdBaseURL() + "/v1/health")
+	resp, err := gmuxdHealthGet()
 	if err != nil {
 		return true // not running
 	}
@@ -151,6 +155,33 @@ func gmuxdHealthy(timeout time.Duration) bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// gmuxdHealthyRetry probes health with growing budgets (500ms, 1s, 2s) so a
+// momentarily busy daemon isn't misdiagnosed as down.
+func gmuxdHealthyRetry() bool {
+	for _, timeout := range []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second} {
+		if gmuxdHealthy(timeout) {
+			return true
+		}
+	}
+	return false
+}
+
+// gmuxdHealthGet fetches /v1/health with the same growing budgets, returning
+// the last error if all attempts fail. Callers own resp.Body.
+func gmuxdHealthGet() (*http.Response, error) {
+	var lastErr error
+	for _, timeout := range []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second} {
+		client := gmuxdClient()
+		client.Timeout = timeout
+		resp, err := client.Get(gmuxdBaseURL() + "/v1/health")
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 // registerOutcome classifies the result of a registration attempt so

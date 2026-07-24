@@ -1,0 +1,11 @@
+version: "2"
+sql:
+  - engine: sqlite
+    schema: internal/centralstore/migrations
+    queries: internal/centralstore/internal/db/query.sql
+    gen:
+      go:
+        package: db
+        out: internal/centralstore/internal/db
+        emit_json_tags: false
+        emit_interface: false

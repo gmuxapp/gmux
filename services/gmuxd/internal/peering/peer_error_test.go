@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
 func TestCategorizeError(t *testing.T) {
@@ -81,7 +80,7 @@ func runFailingPeer(t *testing.T, minAttempts int, errs ...error) string {
 	defer log.SetOutput(prev)
 
 	ft := &failingTransport{errs: errs}
-	p := newPeer(config.PeerConfig{Name: "down", URL: "http://spoke.invalid"}, store.New(), nil,
+	p := newPeer(config.PeerConfig{Name: "down", URL: "http://spoke.invalid"}, newMockSink(), nil,
 		WithTransport(ft))
 	p.reconnectBackoff = time.Millisecond
 
@@ -179,7 +178,7 @@ func TestRun_LogsAgainAfterReconnect(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := newPeer(config.PeerConfig{Name: "flappy", URL: srv.URL}, store.New(), nil)
+	p := newPeer(config.PeerConfig{Name: "flappy", URL: srv.URL}, newMockSink(), nil)
 	p.reconnectBackoff = time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -212,7 +211,7 @@ func TestRun_LogsAgainAfterReconnect(t *testing.T) {
 // retry promptly instead of waiting out the full interval.
 func TestReconnect_ShortcutsBackoffWait(t *testing.T) {
 	ft := &failingTransport{errs: []error{errors.New("connection refused")}}
-	p := newPeer(config.PeerConfig{Name: "down", URL: "http://spoke.invalid"}, store.New(), nil,
+	p := newPeer(config.PeerConfig{Name: "down", URL: "http://spoke.invalid"}, newMockSink(), nil,
 		WithTransport(ft))
 	// Large backoff: without a nudge the second attempt would be ~30s away.
 	p.reconnectBackoff = 30 * time.Second
@@ -241,7 +240,7 @@ func TestReconnect_ShortcutsBackoffWait(t *testing.T) {
 // TestReconnect_NonBlockingAndCoalesced verifies Reconnect() never
 // blocks and repeated calls collapse to at most one pending wake.
 func TestReconnect_NonBlockingAndCoalesced(t *testing.T) {
-	p := newPeer(config.PeerConfig{Name: "x", URL: "http://spoke.invalid"}, store.New(), nil)
+	p := newPeer(config.PeerConfig{Name: "x", URL: "http://spoke.invalid"}, newMockSink(), nil)
 	// No run loop consuming the channel: every call must still return.
 	for i := 0; i < 100; i++ {
 		p.Reconnect()
