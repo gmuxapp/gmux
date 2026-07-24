@@ -340,9 +340,9 @@ func TestOutcomeBusRemovedResetsWatermark(t *testing.T) {
 //
 // The schedule reproduced here (publish order differs from commit order):
 //
-//	1. Remove commits (seq=1).
-//	2. Register commits (seq=2) and publishes its Upserted immediately.
-//	3. Remove's post-commit read finishes late; its Removed is published last.
+//  1. Remove commits (seq=1).
+//  2. Register commits (seq=2) and publishes its Upserted immediately.
+//  3. Remove's post-commit read finishes late; its Removed is published last.
 //
 // Without the watermark the subscriber's final state is "removed" (wrong).
 // With the watermark the late seq=1 Removed is dropped (correct).
@@ -371,6 +371,43 @@ func TestOutcomeBusLateRemovedDroppedAfterNewerUpserted(t *testing.T) {
 	coord.PublishActivity(id)
 	if o := recvOutcome(t, ch); o.Type != OutcomeActivity {
 		t.Fatalf("stale Removed seq=1 delivered after Upserted seq=2 (got %+v)", o)
+	}
+}
+
+// TestOutcomeBusOldGenerationUpsertDroppedAfterReregistered deterministically
+// reproduces a three-publish composition of the removal-boundary race:
+//
+//  1. a fresh re-registration Upserted (v1, seq=2) arrives first;
+//  2. the old generation's late Removed (seq=1) is dropped;
+//  3. an even later captured old-generation Upserted (v5, seq=1) arrives.
+//
+// The stale Removed must not reset either watermark, and the stale Upserted
+// must also be sequence-gated; otherwise v5 becomes the subscriber's final
+// state despite belonging to the removed generation.
+func TestOutcomeBusOldGenerationUpsertDroppedAfterReregistered(t *testing.T) {
+	dur := newFakeDurable(0)
+	coord := New(nil, newFakeClient(RunnerMeta{}), dur, &fakeDirtySink{}, nil)
+
+	ch, cancel := coord.SubscribeOutcomes()
+	defer cancel()
+
+	id := centralstore.SessionID("sess-r2-old-upsert")
+	fresh := centralstore.Session{ID: id, Version: 1}
+	old := centralstore.Session{ID: id, Version: 5}
+
+	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &fresh, Sequence: 2})
+	coord.outcomes.publish(Outcome{Type: OutcomeRemoved, ID: id, Sequence: 1})
+	coord.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &old, Sequence: 1})
+
+	if o := recvOutcome(t, ch); o.Type != OutcomeUpserted || o.Session == nil || o.Session.Version != 1 || o.Sequence != 2 {
+		t.Fatalf("expected fresh re-registration only, got %+v", o)
+	}
+
+	// Non-vacuously prove both stale domain outcomes were rejected: the next
+	// delivery must be this sentinel rather than Removed or old-generation v5.
+	coord.PublishActivity(id)
+	if o := recvOutcome(t, ch); o.Type != OutcomeActivity {
+		t.Fatalf("old-generation outcome delivered after re-registration: %+v", o)
 	}
 }
 
