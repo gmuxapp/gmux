@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 )
@@ -35,6 +36,7 @@ type Outcome struct {
 	Session    *centralstore.Session // committed row for Upserted; nil otherwise
 	Alive      bool                  // registry liveness at publish time
 	Generation uint64                // 0 when not alive
+	Sequence   uint64                // monotonic commit sequence; non-zero for post-commit Upserted/Removed outcomes
 }
 
 // outcomeActivityBacklog bounds how many undelivered outcomes a subscriber
@@ -59,11 +61,27 @@ type outcomeSub struct {
 	// version-gated and resets the watermark, because a post-removal
 	// re-registration starts a fresh version sequence at 1.
 	seen map[centralstore.SessionID]centralstore.RowVersion
+	// seenSeq is the per-session max commit-sequence watermark. It is updated
+	// on every delivered domain outcome (Upserted and Removed) and gates both
+	// types: an outcome whose Sequence < seenSeq[id] was committed before a
+	// later outcome already in the queue (or delivered), so it is dropped
+	// without changing either watermark. This prevents either half of an old
+	// generation (a Remove or a captured-row Upsert) from overwriting a live
+	// re-registration.
+	seenSeq map[centralstore.SessionID]uint64
 }
 
 type outcomeBus struct {
-	mu   sync.Mutex
-	subs map[*outcomeSub]struct{}
+	mu        sync.Mutex
+	subs      map[*outcomeSub]struct{}
+	commitSeq atomic.Uint64 // monotone per-commit sequence; allocate under c.mu
+}
+
+// allocSeq returns the next commit-sequence stamp. Callers that hold the
+// lifecycle mutex (c.mu) when committing should call this before releasing
+// c.mu so the sequence reflects commit order.
+func (b *outcomeBus) allocSeq() uint64 {
+	return b.commitSeq.Add(1)
 }
 
 func (b *outcomeBus) hasSubscribers() bool {
@@ -83,6 +101,12 @@ func (b *outcomeBus) publish(o Outcome) {
 	defer b.mu.Unlock()
 	for sub := range b.subs {
 		sub.mu.Lock()
+		if o.Type != OutcomeActivity && o.Sequence > 0 && sub.seenSeq != nil {
+			if seq := sub.seenSeq[o.ID]; seq > 0 && o.Sequence < seq {
+				sub.mu.Unlock()
+				continue // stale domain outcome: do not mutate either watermark
+			}
+		}
 		switch o.Type {
 		case OutcomeActivity:
 			if len(sub.queue) >= outcomeActivityBacklog {
@@ -101,10 +125,17 @@ func (b *outcomeBus) publish(o Outcome) {
 				sub.seen[o.ID] = o.Session.Version
 			}
 		case OutcomeRemoved:
-			// Never dropped by an older version; reset the watermark so a
-			// post-removal re-registration's fresh version sequence (starting
-			// over at 1) is not shadowed by the removed row's versions.
+			// A delivered removal ends the row-version generation. A stale
+			// removal was rejected above and must not reset this watermark.
 			delete(sub.seen, o.ID)
+		}
+		if o.Type != OutcomeActivity && o.Sequence > 0 {
+			if sub.seenSeq == nil {
+				sub.seenSeq = make(map[centralstore.SessionID]uint64)
+			}
+			if o.Sequence > sub.seenSeq[o.ID] {
+				sub.seenSeq[o.ID] = o.Sequence
+			}
 		}
 		sub.queue = append(sub.queue, o)
 		sub.mu.Unlock()
@@ -131,7 +162,13 @@ func (c *Coordinator) SubscribeOutcomes() (<-chan Outcome, func()) {
 }
 
 func newOutcomeSub() *outcomeSub {
-	return &outcomeSub{signal: make(chan struct{}, 1), done: make(chan struct{}), ch: make(chan Outcome), seen: make(map[centralstore.SessionID]centralstore.RowVersion)}
+	return &outcomeSub{
+		signal:  make(chan struct{}, 1),
+		done:    make(chan struct{}),
+		ch:      make(chan Outcome),
+		seen:    make(map[centralstore.SessionID]centralstore.RowVersion),
+		seenSeq: make(map[centralstore.SessionID]uint64),
+	}
 }
 
 func (c *Coordinator) installOutcomeSubLocked(sub *outcomeSub) {
@@ -230,54 +267,41 @@ func (c *Coordinator) livenessOf(id centralstore.SessionID) (bool, uint64) {
 }
 
 // emitUpserted publishes an Upserted outcome for a row the caller already
-// holds (the committed registration row). Callers must not hold the
-// lifecycle mutex. Liveness is stamped at publish time (design M-3); the
-// row may be older than the stamped world when a newer commit raced this
-// publish, but then that newer commit's own outcome either already set the
-// watermark (this one is dropped) or is still queued behind it (delivered
-// after) — the subscriber's final state is the newest row either way
-// (review M-2 rides the H-1 watermark).
-func (c *Coordinator) emitUpserted(session centralstore.Session) {
+// holds (the committed registration row). seq must be the commit-sequence
+// stamp allocated under c.mu before releasing the lifecycle mutex. Callers
+// must not hold the lifecycle mutex at call time. Liveness is stamped at
+// publish time (design M-3); the row may be older than the stamped world
+// when a newer commit raced this publish, but then that newer commit's own
+// outcome either already set the watermark (this one is dropped) or is
+// still queued behind it (delivered after) — the subscriber's final state
+// is the newest row either way (review M-2 rides the H-1 watermark).
+func (c *Coordinator) emitUpserted(session centralstore.Session, seq uint64) {
 	if !c.outcomes.hasSubscribers() {
 		return
 	}
 	alive, generation := c.livenessOf(session.ID)
 	s := session
-	c.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: session.ID, Session: &s, Alive: alive, Generation: generation})
+	c.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: session.ID, Session: &s, Alive: alive, Generation: generation, Sequence: seq})
 }
 
 // emitOutcomes publishes one outcome per ID after a commit: a post-commit
 // row read decides Upserted (row present, committed state attached) versus
-// Removed (row absent). The read races later commits by design — a newer
-// row is safe to deliver, and the per-subscriber version watermark drops
-// any older row published late, so delivery is monotone per session even
-// though publishes run outside the lifecycle mutex. Callers must not hold
-// the lifecycle mutex (the read is a short DB transaction; publish never
-// blocks). Read failures are reported and the outcome is skipped; consumers
-// converge on the next outcome for that row.
+// Removed (row absent). seq must be the commit-sequence stamp allocated
+// under c.mu (or via outcomeBus.allocSeq) before releasing the lifecycle
+// mutex, so the sequence reflects commit order. The per-subscriber
+// commit-seq watermark (seenSeq) uses this stamp to drop any domain outcome
+// that arrives after a newer outcome for the same session was already
+// delivered (R-2 fix: prevents either a late Remove or a captured old row
+// from overwriting a live re-registration).
 //
-// Known residual (documented, not fixable locally with per-ID watermarks;
-// it exists in BOTH directions across a removal boundary, fable delta
-// review R-2):
-//
-//   - Removed then stale Upserted: a Removed outcome followed by a stale
-//     captured-row Upserted for the SAME pre-removal generation (reachable
-//     via a fast-dead Register racing a Remove) can deliver the stale row
-//     after the watermark reset. Production consumers treat rows with exit
-//     facts as dead either way.
-//   - Upserted then late Removed: the durable read sites CAN produce the
-//     inverse — a Remove commits, its post-commit read observes absence,
-//     and before that Removed publishes, a re-registration commits and
-//     publishes its fresh Upserted; the late Removed (never version-gated,
-//     and it resets the watermark) then lands last, leaving a ghost
-//     removal for a live session. A live session self-heals on its next
-//     runner event; only a fast-dead re-registration immediately after a
-//     Remove can leave the ghost as final state.
-//
-// Consumers keyed on Removed must therefore tolerate a row reappearing via
-// the next Upserted (S5 consumer-wiring checklist). A real fix needs
-// commit-ordered sequence stamping.
-func (c *Coordinator) emitOutcomes(ctx context.Context, ids ...centralstore.SessionID) {
+// The read races later commits by design — a newer row is safe to deliver,
+// and the per-subscriber version watermark drops any older row published
+// late, so delivery is monotone per session even though publishes run
+// outside the lifecycle mutex. Callers must not hold the lifecycle mutex
+// (the read is a short DB transaction; publish never blocks). Read failures
+// are reported and the outcome is skipped; consumers converge on the next
+// outcome for that row.
+func (c *Coordinator) emitOutcomes(ctx context.Context, seq uint64, ids ...centralstore.SessionID) {
 	if len(ids) == 0 || !c.outcomes.hasSubscribers() {
 		return
 	}
@@ -289,10 +313,10 @@ func (c *Coordinator) emitOutcomes(ctx context.Context, ids ...centralstore.Sess
 		}
 		alive, generation := c.livenessOf(id)
 		if !ok {
-			c.outcomes.publish(Outcome{Type: OutcomeRemoved, ID: id, Alive: alive, Generation: generation})
+			c.outcomes.publish(Outcome{Type: OutcomeRemoved, ID: id, Alive: alive, Generation: generation, Sequence: seq})
 			continue
 		}
 		row := s
-		c.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &row, Alive: alive, Generation: generation})
+		c.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &row, Alive: alive, Generation: generation, Sequence: seq})
 	}
 }

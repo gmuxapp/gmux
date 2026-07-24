@@ -210,10 +210,11 @@ func (c *Coordinator) ensureDurableExit(ctx context.Context, id centralstore.Ses
 			ID: id, ObservedVersion: version, ObservedAt: at,
 			Facts: centralstore.RunnerFacts{ExitedAt: centralstore.NullablePatch[centralstore.UnixMillis]{Set: &at}},
 		})
+		seq := c.outcomes.allocSeq() // stamp before releasing c.mu
 		c.mu.Unlock()
 		if err == nil {
 			c.publish(ctx, result)
-			c.emitOutcomes(ctx, id)
+			c.emitOutcomes(ctx, seq, id)
 			return nil
 		}
 		if errors.Is(err, centralstore.ErrSessionNotFound) {
