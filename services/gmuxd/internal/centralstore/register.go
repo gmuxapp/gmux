@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore/internal/db"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projectmatch"
@@ -139,13 +140,55 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 		return Session{}, MutationResult{}, ErrGenerationExitRequired
 	}
 
+	// Delete the exact successful takeover set before allocating the winner,
+	// so released slugs are genuinely absent and skipped/stale losers still
+	// reserve theirs. Descendants are attempted before ancestors: deleting a
+	// parent clears direct-child parentage and advances child row versions, so
+	// the opposite order could make an initially matching child turn stale.
+	orderedEvictions, err := orderTakeoverEvictions(ctx, q, reg.Evict)
+	if err != nil {
+		return Session{}, MutationResult{}, err
+	}
+	evicted := false
+	evictedIDs := make(map[SessionID]bool, len(orderedEvictions))
+	for _, ev := range orderedEvictions {
+		applied, evictErr := evictSessionInTx(ctx, q, ev)
+		if evictErr != nil {
+			return Session{}, MutationResult{}, evictErr
+		}
+		evicted = evicted || applied
+		if applied {
+			evictedIDs[ev.ID] = true
+		}
+	}
+	if !isNew {
+		// An evicted parent may have cleared this winner's parent and advanced
+		// its row version. Continue registration from the post-eviction row.
+		raw, err = q.GetSession(ctx, string(reg.ID))
+		if err != nil {
+			return Session{}, MutationResult{}, err
+		}
+		before, err = sessionFromDB(raw)
+		if err != nil {
+			return Session{}, MutationResult{}, err
+		}
+	}
+
 	if isNew {
 		current = Session{
 			ID: reg.ID, Adapter: reg.Adapter, CreatedAt: reg.CreatedAt,
 			Command: []string{}, Remotes: map[string]string{}, LaunchParentID: cloneSessionID(reg.LaunchParentID),
 		}
+		if current.LaunchParentID != nil && evictedIDs[*current.LaunchParentID] {
+			current.LaunchParentID = nil
+		}
 		if err = mergeRunnerFacts(&current, reg.Facts); err != nil {
 			return Session{}, MutationResult{}, err
+		}
+		if reg.Facts.Slug != nil {
+			if err = allocateSessionSlug(ctx, q, &current, "", *reg.Facts.Slug); err != nil {
+				return Session{}, MutationResult{}, err
+			}
 		}
 		if reg.Alive {
 			current.ExitedAt, current.ExitCode = nil, nil
@@ -161,7 +204,7 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 		raw, err = q.InsertSession(ctx, db.InsertSessionParams{
 			ID: string(current.ID), Adapter: current.Adapter, ConversationRef: nullString(current.ConversationRef),
 			CommandJson: cmd, Cwd: current.CWD, WorkspaceRoot: nullString(current.WorkspaceRoot), RemotesJson: rem,
-			Slug: nullString(current.Slug), ShellTitle: nullString(current.ShellTitle), AdapterTitle: nullString(current.AdapterTitle), Subtitle: nullString(current.Subtitle),
+			Slug: nullString(current.Slug), SlugBase: nullString(current.SlugBase), ShellTitle: nullString(current.ShellTitle), AdapterTitle: nullString(current.AdapterTitle), Subtitle: nullString(current.Subtitle),
 			Working: boolInt(current.Working), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), CreatedAtMs: int64(current.CreatedAt),
 			StartedAtMs: nullMillis(current.StartedAt), ExitedAtMs: nullMillis(current.ExitedAt), LastActivityAtMs: nullMillis(current.LastActivityAt), ExitCode: nullInt(current.ExitCode),
 			TerminalCols: nullUint(current.TerminalCols), TerminalRows: nullUint(current.TerminalRows), LaunchParentID: func() sql.NullString {
@@ -205,8 +248,14 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			current.StartedAt = nil
 		}
 		genBaseline := current
+		previousSlugBase := current.SlugBase
 		if err = mergeRunnerFacts(&current, reg.Facts); err != nil {
 			return Session{}, MutationResult{}, err
+		}
+		if reg.Facts.Slug != nil {
+			if err = allocateSessionSlug(ctx, q, &current, previousSlugBase, *reg.Facts.Slug); err != nil {
+				return Session{}, MutationResult{}, err
+			}
 		}
 		if reg.Alive {
 			current.ExitedAt, current.ExitCode = nil, nil
@@ -225,7 +274,7 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			}
 			n, updateErr := q.UpdateRunnerRegistration(ctx, db.UpdateRunnerRegistrationParams{
 				ConversationRef: nullString(current.ConversationRef), CommandJson: cmd, Cwd: current.CWD, WorkspaceRoot: nullString(current.WorkspaceRoot), RemotesJson: rem,
-				Slug: nullString(current.Slug), ShellTitle: nullString(current.ShellTitle), AdapterTitle: nullString(current.AdapterTitle), Subtitle: nullString(current.Subtitle),
+				Slug: nullString(current.Slug), SlugBase: nullString(current.SlugBase), ShellTitle: nullString(current.ShellTitle), AdapterTitle: nullString(current.AdapterTitle), Subtitle: nullString(current.Subtitle),
 				Working: boolInt(current.Working), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), StartedAtMs: nullMillis(current.StartedAt), ExitedAtMs: nullMillis(current.ExitedAt),
 				LastActivityAtMs: nullMillis(current.LastActivityAt), ExitCode: nullInt(current.ExitCode), TerminalCols: nullUint(current.TerminalCols), TerminalRows: nullUint(current.TerminalRows),
 				ID: string(reg.ID), RowVersion: int64(before.Version),
@@ -236,29 +285,6 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			if n != 1 {
 				return Session{}, MutationResult{}, ErrStaleVersion
 			}
-			current.Version++
-		}
-	}
-
-	// Takeover evictions run before placement rematching so scope
-	// normalization sees the post-eviction state. Each is conditional on the
-	// version the coordinator observed; skips are silent by design.
-	evicted := false
-	for _, ev := range reg.Evict {
-		applied, evictErr := evictSessionInTx(ctx, q, ev)
-		if evictErr != nil {
-			return Session{}, MutationResult{}, evictErr
-		}
-		evicted = evicted || applied
-		// The winner may itself be a direct child of an evicted loser (a live
-		// session taking over the conversation of the dead session that
-		// launched it). ClearDirectChildParents just nulled the winner's
-		// launch parent and bumped its row_version; mirror both on the
-		// returned session so it matches the committed row — otherwise the
-		// coordinator would install a stale registry version token and the
-		// generation's first observation would burn a stale-retry round trip.
-		if applied && current.LaunchParentID != nil && *current.LaunchParentID == ev.ID {
-			current.LaunchParentID = nil
 			current.Version++
 		}
 	}
@@ -282,6 +308,48 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 		Changed: changed, SessionVersion: current.Version,
 		SessionsDirty: changed, WorldDirty: placementChanged,
 	}, nil
+}
+
+// orderTakeoverEvictions returns a true descendants-before-ancestors
+// topological order. Durable ancestry depth is the primary key and caller
+// order is the stable tie-break for unrelated targets. Unlike an ancestry
+// comparator (a partial order), depth sorting moves descendants across any
+// number of unrelated entries. Cycle detection is explicit even though the
+// schema rejects launch-parent cycles, so corrupt state fails closed.
+func orderTakeoverEvictions(ctx context.Context, q *db.Queries, evictions []TakeoverEviction) ([]TakeoverEviction, error) {
+	if len(evictions) == 0 {
+		return nil, nil
+	}
+	rows, err := q.ListSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	parent := make(map[SessionID]SessionID, len(rows))
+	for _, row := range rows {
+		if row.LaunchParentID.Valid {
+			parent[SessionID(row.ID)] = SessionID(row.LaunchParentID.String)
+		}
+	}
+	depths := make(map[SessionID]int, len(evictions))
+	for _, ev := range evictions {
+		seen := map[SessionID]bool{}
+		depth := 0
+		for id := ev.ID; id != ""; id = parent[id] {
+			if seen[id] {
+				return nil, fmt.Errorf("centralstore: launch parent cycle while ordering takeover eviction %s", ev.ID)
+			}
+			seen[id] = true
+			if parent[id] != "" {
+				depth++
+			}
+		}
+		depths[ev.ID] = depth
+	}
+	ordered := append([]TakeoverEviction(nil), evictions...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return depths[ordered[i].ID] > depths[ordered[j].ID]
+	})
+	return ordered, nil
 }
 
 // evictSessionInTx applies one conditional takeover eviction inside the
@@ -309,6 +377,45 @@ func evictSessionInTx(ctx context.Context, q *db.Queries, ev TakeoverEviction) (
 		return false, err
 	}
 	return n == 1, nil
+}
+
+// allocateSessionSlug turns a runner-owned base proposal into the stable,
+// store-owned URL slug. It runs in the caller's write transaction. Replaying
+// the same base is a no-op even when the allocated slug carries a suffix.
+func allocateSessionSlug(ctx context.Context, q *db.Queries, current *Session, previousBase, proposed string) error {
+	current.SlugBase = proposed
+	if proposed == "" {
+		current.Slug = ""
+		return nil
+	}
+	if proposed == previousBase && current.Slug != "" {
+		return nil
+	}
+	rows, err := q.ListSessions(ctx)
+	if err != nil {
+		return err
+	}
+	occupied := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if row.ID != string(current.ID) && row.Adapter == current.Adapter && row.Slug.Valid && row.Slug.String != "" {
+			occupied[row.Slug.String] = struct{}{}
+		}
+	}
+	candidate := proposed
+	for suffix := 1; ; suffix++ {
+		if suffix > 1 {
+			tail := fmt.Sprintf("-%d", suffix)
+			base := proposed
+			if len(base)+len(tail) > 40 {
+				base = base[:40-len(tail)]
+			}
+			candidate = base + tail
+		}
+		if _, exists := occupied[candidate]; !exists {
+			current.Slug = candidate
+			return nil
+		}
+	}
 }
 
 func cloneSessionID(v *SessionID) *SessionID {
@@ -351,7 +458,7 @@ func mergeRunnerFacts(v *Session, f RunnerFacts) error {
 		v.WorkspaceRoot = *f.WorkspaceRoot
 	}
 	if f.Slug != nil {
-		v.Slug = *f.Slug
+		v.SlugBase = *f.Slug
 	}
 	if f.ShellTitle != nil {
 		v.ShellTitle = *f.ShellTitle

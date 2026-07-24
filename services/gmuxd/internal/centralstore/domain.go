@@ -23,14 +23,14 @@ type ProjectEntryID int64
 type PeerKey string
 
 type Session struct {
-	ID                                              SessionID
-	Version                                         RowVersion
-	Adapter, ConversationRef                        string
-	Command                                         []string
-	CWD, WorkspaceRoot                              string
-	Remotes                                         map[string]string
-	Slug, ShellTitle, AdapterTitle, Subtitle, Title string
-	Working, Unread, Error                          bool
+	ID                                                        SessionID
+	Version                                                   RowVersion
+	Adapter, ConversationRef                                  string
+	Command                                                   []string
+	CWD, WorkspaceRoot                                        string
+	Remotes                                                   map[string]string
+	Slug, SlugBase, ShellTitle, AdapterTitle, Subtitle, Title string
+	Working, Unread, Error                                    bool
 	// StatusReported records whether the CURRENT runner generation ever
 	// reported a working/error status for this row (runner-authoritative,
 	// generation-scoped; the production model's Status != nil, which
@@ -51,14 +51,14 @@ type Session struct {
 // NewSession contains only facts legal at registration. New registrations are
 // always visible, unpromoted, and start at row version one.
 type NewSession struct {
-	ID                             SessionID
-	Adapter, ConversationRef       string
-	Command                        []string
-	CWD, WorkspaceRoot             string
-	Remotes                        map[string]string
-	Slug, ShellTitle, AdapterTitle string
-	Subtitle                       string
-	Working, Unread, Error         bool
+	ID                                       SessionID
+	Adapter, ConversationRef                 string
+	Command                                  []string
+	CWD, WorkspaceRoot                       string
+	Remotes                                  map[string]string
+	Slug, SlugBase, ShellTitle, AdapterTitle string
+	Subtitle                                 string
+	Working, Unread, Error                   bool
 	// StatusReported marks the status facts as runner-reported. Implied
 	// (and forced true at insert) when Working or Error is set.
 	StatusReported             bool
@@ -80,13 +80,13 @@ type NullablePatch[T any] struct {
 type TerminalSize struct{ Cols, Rows uint16 }
 
 type CommonFactsPatch struct {
-	Adapter, ConversationRef, CWD, WorkspaceRoot, Slug, ShellTitle, AdapterTitle, Subtitle *string
-	Command                                                                                *[]string
-	Remotes                                                                                *map[string]string
-	Working, Unread, Error                                                                 *bool
-	StartedAt, ExitedAt, LastActivityAt                                                    NullablePatch[UnixMillis]
-	ExitCode                                                                               NullablePatch[int]
-	TerminalSize                                                                           NullablePatch[TerminalSize]
+	ConversationRef, CWD, WorkspaceRoot, Slug, ShellTitle, AdapterTitle, Subtitle *string
+	Command                                                                       *[]string
+	Remotes                                                                       *map[string]string
+	Working, Unread, Error                                                        *bool
+	StartedAt, ExitedAt, LastActivityAt                                           NullablePatch[UnixMillis]
+	ExitCode                                                                      NullablePatch[int]
+	TerminalSize                                                                  NullablePatch[TerminalSize]
 }
 
 type MutationResult struct {
@@ -254,7 +254,7 @@ func marshalWhole(command []string, remotes map[string]string) (string, string, 
 }
 
 func sessionFromDB(v db.LocalSession) (Session, error) {
-	out := Session{ID: SessionID(v.ID), Version: RowVersion(v.RowVersion), Adapter: v.Adapter, ConversationRef: v.ConversationRef.String, CWD: v.Cwd, WorkspaceRoot: v.WorkspaceRoot.String, Slug: v.Slug.String, ShellTitle: v.ShellTitle.String, AdapterTitle: v.AdapterTitle.String, Subtitle: v.Subtitle.String, CreatedAt: UnixMillis(v.CreatedAtMs)}
+	out := Session{ID: SessionID(v.ID), Version: RowVersion(v.RowVersion), Adapter: v.Adapter, ConversationRef: v.ConversationRef.String, CWD: v.Cwd, WorkspaceRoot: v.WorkspaceRoot.String, Slug: v.Slug.String, SlugBase: v.SlugBase.String, ShellTitle: v.ShellTitle.String, AdapterTitle: v.AdapterTitle.String, Subtitle: v.Subtitle.String, CreatedAt: UnixMillis(v.CreatedAtMs)}
 	if v.RowVersion < 1 || v.CreatedAtMs < 0 {
 		return Session{}, errors.New("centralstore: corrupt session numeric value")
 	}
@@ -354,7 +354,16 @@ func (s *Store) InsertSession(ctx context.Context, v NewSession) (Session, Mutat
 	}
 	defer tx.Rollback()
 	q := s.queries.WithTx(tx)
-	row, err := q.InsertSession(ctx, db.InsertSessionParams{ID: string(v.ID), Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Working: boolInt(v.Working), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported || v.Working || v.Error), CreatedAtMs: int64(v.CreatedAt), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), LaunchParentID: func() sql.NullString {
+	candidate := Session{ID: v.ID, Adapter: v.Adapter, SlugBase: v.SlugBase, Slug: v.Slug}
+	proposal := v.SlugBase
+	if proposal == "" {
+		proposal = v.Slug
+	}
+	if err = allocateSessionSlug(ctx, q, &candidate, "", proposal); err != nil {
+		return Session{}, MutationResult{}, err
+	}
+	v.SlugBase, v.Slug = candidate.SlugBase, candidate.Slug
+	row, err := q.InsertSession(ctx, db.InsertSessionParams{ID: string(v.ID), Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Working: boolInt(v.Working), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported || v.Working || v.Error), CreatedAtMs: int64(v.CreatedAt), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), LaunchParentID: func() sql.NullString {
 		if v.LaunchParentID == nil {
 			return sql.NullString{}
 		}
@@ -471,9 +480,7 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 		return MutationResult{SessionVersion: v.Version}, ErrStaleVersion
 	}
 	before := v
-	if p.Adapter != nil {
-		v.Adapter = *p.Adapter
-	}
+	previousSlugBase := v.SlugBase
 	if p.ConversationRef != nil {
 		v.ConversationRef = *p.ConversationRef
 	}
@@ -484,7 +491,9 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 		v.WorkspaceRoot = *p.WorkspaceRoot
 	}
 	if p.Slug != nil {
-		v.Slug = *p.Slug
+		if err = allocateSessionSlug(ctx, q, &v, previousSlugBase, *p.Slug); err != nil {
+			return MutationResult{}, err
+		}
 	}
 	if p.ShellTitle != nil {
 		v.ShellTitle = *p.ShellTitle
@@ -571,7 +580,7 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	if err != nil {
 		return MutationResult{}, err
 	}
-	n, err := q.UpdateCommonFacts(ctx, db.UpdateCommonFactsParams{Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Working: boolInt(v.Working), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), ID: string(id), RowVersion: int64(observed)})
+	n, err := q.UpdateCommonFacts(ctx, db.UpdateCommonFactsParams{Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Working: boolInt(v.Working), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), ID: string(id), RowVersion: int64(observed)})
 	if err != nil {
 		return MutationResult{}, err
 	}

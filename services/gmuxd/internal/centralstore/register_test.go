@@ -3,7 +3,9 @@ package centralstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -596,5 +598,296 @@ func TestRegisterRunnerRollbackAtPlacementFault(t *testing.T) {
 	}
 	if p := localPlacement(t, s, "rollback"); p != nil {
 		t.Fatalf("rolled-back placement=%#v", p)
+	}
+}
+
+func TestSessionSlugAllocationAndReplayIdempotence(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	base := "fix410-socket"
+
+	first := registration("sess-11111111", "pi", "/work", true, 10)
+	first.Facts.Slug = &base
+	got1, _, err := s.RegisterRunner(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := registration("sess-22222222", "pi", "/work", false, 20)
+	second.Facts.Slug = &base
+	second.Facts.ExitedAt.Set = ptr(UnixMillis(21))
+	got2, _, err := s.RegisterRunner(ctx, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got1.Slug != base || got1.SlugBase != base || got2.Slug != base+"-2" || got2.SlugBase != base {
+		t.Fatalf("allocations: first=%#v second=%#v", got1, got2)
+	}
+
+	// The runner continues to report its base proposal, not the allocated URL.
+	out, err := s.ApplyRunnerObservation(ctx, RunnerObservation{ID: got2.ID, ObservedVersion: got2.Version, ObservedAt: 30, Facts: RunnerFacts{Slug: &base}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Changed || out.SessionVersion != got2.Version {
+		t.Fatalf("same-base replay mutated row: %#v", out)
+	}
+	replayed, ok, err := s.Session(ctx, got2.ID)
+	if err != nil || !ok || replayed.Slug != base+"-2" {
+		t.Fatalf("replayed=%#v ok=%v err=%v", replayed, ok, err)
+	}
+
+	rename := "other"
+	out, err = s.ApplyRunnerObservation(ctx, RunnerObservation{ID: got2.ID, ObservedVersion: replayed.Version, ObservedAt: 31, Facts: RunnerFacts{Slug: &rename}})
+	if err != nil || !out.Changed {
+		t.Fatalf("rename outcome=%#v err=%v", out, err)
+	}
+	renamed, _, _ := s.Session(ctx, got2.ID)
+	if renamed.Slug != rename || renamed.SlugBase != rename {
+		t.Fatalf("renamed=%#v", renamed)
+	}
+}
+
+func TestConcurrentSessionSlugAllocation(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	base := "concurrent"
+	const count = 12
+	var wg sync.WaitGroup
+	errCh := make(chan error, count)
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			reg := registration(fmt.Sprintf("sess-%08d", i), "pi", "/work", true, UnixMillis(i+1))
+			reg.Facts.Slug = &base
+			_, _, err := s.RegisterRunner(ctx, reg)
+			errCh <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.ListSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		if seen[row.Slug] {
+			t.Fatalf("duplicate allocation %q", row.Slug)
+		}
+		seen[row.Slug] = true
+	}
+	if len(seen) != count || !seen[base] || !seen[base+"-2"] {
+		t.Fatalf("allocations=%v", seen)
+	}
+}
+
+func TestSessionSlugScopeIncludesAdapter(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	base := "same"
+	for _, adapter := range []string{"pi", "shell"} {
+		reg := registration("sess-"+adapter, adapter, "/work", true, 1)
+		reg.Facts.Slug = &base
+		got, _, err := s.RegisterRunner(ctx, reg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Slug != base {
+			t.Fatalf("%s slug=%q", adapter, got.Slug)
+		}
+	}
+}
+
+func TestTakeoverSlugAllocationUsesPostEvictionNamespace(t *testing.T) {
+	ctx := context.Background()
+	t.Run("applied eviction releases base", func(t *testing.T) {
+		s := openKernelStore(t)
+		base := "foo"
+		loserReg := registration("loser", "pi", "/work", false, 1)
+		loserReg.Facts.Slug = &base
+		loserReg.Facts.ExitedAt.Set = ptr(UnixMillis(2))
+		loser, _, err := s.RegisterRunner(ctx, loserReg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		winnerReg := registration("winner", "pi", "/work", true, 3)
+		winnerReg.Facts.Slug = &base
+		winnerReg.Evict = []TakeoverEviction{{ID: loser.ID, Version: loser.Version}}
+		winner, _, err := s.RegisterRunner(ctx, winnerReg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if winner.Slug != base {
+			t.Fatalf("winner slug=%q, want released base", winner.Slug)
+		}
+		if _, ok, err := s.Session(ctx, loser.ID); err != nil || ok {
+			t.Fatalf("loser remains: ok=%v err=%v", ok, err)
+		}
+	})
+
+	t.Run("stale eviction keeps base reserved", func(t *testing.T) {
+		s := openKernelStore(t)
+		base := "foo"
+		loserReg := registration("loser", "pi", "/work", false, 1)
+		loserReg.Facts.Slug = &base
+		loserReg.Facts.ExitedAt.Set = ptr(UnixMillis(2))
+		loser, _, err := s.RegisterRunner(ctx, loserReg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		winnerReg := registration("winner", "pi", "/work", true, 3)
+		winnerReg.Facts.Slug = &base
+		winnerReg.Evict = []TakeoverEviction{{ID: loser.ID, Version: loser.Version + 1}}
+		winner, _, err := s.RegisterRunner(ctx, winnerReg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if winner.Slug != base+"-2" {
+			t.Fatalf("winner slug=%q, want suffixed slug", winner.Slug)
+		}
+		kept, ok, err := s.Session(ctx, loser.ID)
+		if err != nil || !ok || kept.Slug != base {
+			t.Fatalf("loser=%#v ok=%v err=%v", kept, ok, err)
+		}
+	})
+}
+
+func TestTakeoverSlugAllocationInteractingEvictionsNeverLeaveClearedSurvivor(t *testing.T) {
+	for _, order := range []string{"parent-first", "child-first"} {
+		t.Run(order, func(t *testing.T) {
+			ctx := context.Background()
+			s := openKernelStore(t)
+			aBase, bBase := "parent-slug", "child-slug"
+			aReg := registration("loser-a", "pi", "/work", false, 1)
+			aReg.Facts.Slug = &aBase
+			aReg.Facts.ExitedAt.Set = ptr(UnixMillis(2))
+			a, _, err := s.RegisterRunner(ctx, aReg)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			bReg := registration("loser-b", "pi", "/work", false, 3)
+			bReg.LaunchParentID = &a.ID
+			bReg.Facts.Slug = &bBase
+			bReg.Facts.ExitedAt.Set = ptr(UnixMillis(4))
+			b, _, err := s.RegisterRunner(ctx, bReg)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			evA := TakeoverEviction{ID: a.ID, Version: a.Version}
+			evB := TakeoverEviction{ID: b.ID, Version: b.Version}
+			evictions := []TakeoverEviction{evA, evB}
+			if order == "child-first" {
+				evictions = []TakeoverEviction{evB, evA}
+			}
+			winnerReg := registration("winner", "pi", "/work", true, 5)
+			winnerReg.Facts.Slug = &bBase
+			winnerReg.Evict = evictions
+			winner, _, err := s.RegisterRunner(ctx, winnerReg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if winner.Slug != bBase {
+				t.Fatalf("winner slug=%q, want %q", winner.Slug, bBase)
+			}
+			for _, loser := range []Session{a, b} {
+				if got, ok, err := s.Session(ctx, loser.ID); err != nil || ok {
+					t.Fatalf("loser %s survived: %#v ok=%v err=%v", loser.ID, got, ok, err)
+				}
+			}
+		})
+	}
+}
+
+func TestTakeoverSlugAllocationTopologicalEvictions(t *testing.T) {
+	tests := []struct {
+		name  string
+		order []string
+	}{
+		{name: "interleaved-unrelated", order: []string{"a", "x", "b", "y", "c"}},
+		{name: "deep-reversed-with-barriers", order: []string{"a", "y", "b", "x", "c"}},
+		{name: "deep-scrambled", order: []string{"x", "c", "a", "y", "b"}},
+		{name: "duplicates-and-missing", order: []string{"a", "missing", "x", "b", "b", "c", "y"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := openKernelStore(t)
+			registered := map[string]Session{}
+			registerLoser := func(id, slug string, parent *SessionID, at UnixMillis) {
+				t.Helper()
+				reg := registration(id, "pi", "/work", false, at)
+				reg.LaunchParentID = parent
+				reg.Facts.Slug = &slug
+				reg.Facts.ExitedAt.Set = ptr(at + 1)
+				row, _, err := s.RegisterRunner(ctx, reg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				registered[id] = row
+			}
+			registerLoser("a", "slug-a", nil, 1)
+			aID := registered["a"].ID
+			registerLoser("b", "slug-b", &aID, 3)
+			bID := registered["b"].ID
+			registerLoser("c", "slug-c", &bID, 5)
+			registerLoser("x", "slug-x", nil, 7)
+			registerLoser("y", "slug-y", nil, 9)
+
+			evictions := make([]TakeoverEviction, 0, len(tc.order))
+			for _, id := range tc.order {
+				if id == "missing" {
+					evictions = append(evictions, TakeoverEviction{ID: "missing", Version: 1})
+					continue
+				}
+				row := registered[id]
+				evictions = append(evictions, TakeoverEviction{ID: row.ID, Version: row.Version})
+			}
+			base := "slug-c"
+			winnerReg := registration("winner", "pi", "/work", true, 20)
+			winnerReg.Facts.Slug = &base
+			winnerReg.Evict = evictions
+			winner, _, err := s.RegisterRunner(ctx, winnerReg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if winner.Slug != base {
+				t.Fatalf("winner slug=%q, want released %q", winner.Slug, base)
+			}
+			for id, loser := range registered {
+				if got, ok, err := s.Session(ctx, loser.ID); err != nil || ok {
+					t.Fatalf("loser %s survived: %#v ok=%v err=%v", id, got, ok, err)
+				}
+			}
+		})
+	}
+}
+
+func TestOrderTakeoverEvictionsRejectsCorruptParentCycle(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	for i, id := range []string{"cycle-a", "cycle-b"} {
+		reg := registration(id, "pi", "/work", false, UnixMillis(i+1))
+		reg.Facts.ExitedAt.Set = ptr(UnixMillis(i + 2))
+		if _, _, err := s.RegisterRunner(ctx, reg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.database.ExecContext(ctx, `DROP TRIGGER local_sessions_launch_parent_immutable_update`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.database.ExecContext(ctx, `UPDATE local_sessions SET launch_parent_id = CASE id WHEN 'cycle-a' THEN 'cycle-b' ELSE 'cycle-a' END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := orderTakeoverEvictions(ctx, s.queries, []TakeoverEviction{{ID: "cycle-a", Version: 1}, {ID: "cycle-b", Version: 1}})
+	if err == nil {
+		t.Fatal("corrupt launch-parent cycle was accepted")
 	}
 }

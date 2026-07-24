@@ -23,6 +23,7 @@ type LocalSession struct {
 	WorkspaceRoot    sql.NullString
 	RemotesJson      string
 	Slug             sql.NullString
+	SlugBase         sql.NullString
 	ShellTitle       sql.NullString
 	AdapterTitle     sql.NullString
 	Subtitle         sql.NullString

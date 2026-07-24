@@ -237,7 +237,7 @@ func (q *Queries) GetMetadata(ctx context.Context, key string) (string, error) {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, status_reported FROM local_sessions WHERE id = ?
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, status_reported FROM local_sessions WHERE id = ?
 `
 
 func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, error) {
@@ -253,6 +253,7 @@ func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, erro
 		&i.WorkspaceRoot,
 		&i.RemotesJson,
 		&i.Slug,
+		&i.SlugBase,
 		&i.ShellTitle,
 		&i.AdapterTitle,
 		&i.Subtitle,
@@ -429,12 +430,12 @@ func (q *Queries) InsertProjectRule(ctx context.Context, arg InsertProjectRulePa
 const insertSession = `-- name: InsertSession :one
 INSERT INTO local_sessions (
     id, adapter, conversation_ref, command_json, cwd, workspace_root,
-    remotes_json, slug, shell_title, adapter_title, subtitle,
+    remotes_json, slug, slug_base, shell_title, adapter_title, subtitle,
     working, unread, has_error, status_reported, created_at_ms, started_at_ms,
     exited_at_ms, last_activity_at_ms, exit_code, terminal_cols, terminal_rows,
     launch_parent_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, status_reported
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, status_reported
 `
 
 type InsertSessionParams struct {
@@ -446,6 +447,7 @@ type InsertSessionParams struct {
 	WorkspaceRoot    sql.NullString
 	RemotesJson      string
 	Slug             sql.NullString
+	SlugBase         sql.NullString
 	ShellTitle       sql.NullString
 	AdapterTitle     sql.NullString
 	Subtitle         sql.NullString
@@ -473,6 +475,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 		arg.WorkspaceRoot,
 		arg.RemotesJson,
 		arg.Slug,
+		arg.SlugBase,
 		arg.ShellTitle,
 		arg.AdapterTitle,
 		arg.Subtitle,
@@ -500,6 +503,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 		&i.WorkspaceRoot,
 		&i.RemotesJson,
 		&i.Slug,
+		&i.SlugBase,
 		&i.ShellTitle,
 		&i.AdapterTitle,
 		&i.Subtitle,
@@ -688,7 +692,7 @@ func (q *Queries) ListProjectRules(ctx context.Context) ([]ProjectMatchRule, err
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, status_reported FROM local_sessions ORDER BY id
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, status_reported FROM local_sessions ORDER BY id
 `
 
 func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
@@ -710,6 +714,7 @@ func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
 			&i.WorkspaceRoot,
 			&i.RemotesJson,
 			&i.Slug,
+			&i.SlugBase,
 			&i.ShellTitle,
 			&i.AdapterTitle,
 			&i.Subtitle,
@@ -907,7 +912,7 @@ const updateCommonFacts = `-- name: UpdateCommonFacts :execrows
 UPDATE local_sessions SET
     row_version = row_version + 1,
     adapter = ?, conversation_ref = ?, command_json = ?, cwd = ?,
-    workspace_root = ?, remotes_json = ?, slug = ?, shell_title = ?,
+    workspace_root = ?, remotes_json = ?, slug = ?, slug_base = ?, shell_title = ?,
     adapter_title = ?, subtitle = ?, working = ?, unread = ?, has_error = ?,
     status_reported = ?, started_at_ms = ?, exited_at_ms = ?,
     last_activity_at_ms = ?, exit_code = ?, terminal_cols = ?, terminal_rows = ?
@@ -922,6 +927,7 @@ type UpdateCommonFactsParams struct {
 	WorkspaceRoot    sql.NullString
 	RemotesJson      string
 	Slug             sql.NullString
+	SlugBase         sql.NullString
 	ShellTitle       sql.NullString
 	AdapterTitle     sql.NullString
 	Subtitle         sql.NullString
@@ -948,6 +954,7 @@ func (q *Queries) UpdateCommonFacts(ctx context.Context, arg UpdateCommonFactsPa
 		arg.WorkspaceRoot,
 		arg.RemotesJson,
 		arg.Slug,
+		arg.SlugBase,
 		arg.ShellTitle,
 		arg.AdapterTitle,
 		arg.Subtitle,
@@ -1038,7 +1045,7 @@ const updateRunnerRegistration = `-- name: UpdateRunnerRegistration :execrows
 UPDATE local_sessions SET
     row_version = row_version + 1,
     conversation_ref = ?, command_json = ?, cwd = ?, workspace_root = ?,
-    remotes_json = ?, slug = ?, shell_title = ?, adapter_title = ?, subtitle = ?,
+    remotes_json = ?, slug = ?, slug_base = ?, shell_title = ?, adapter_title = ?, subtitle = ?,
     working = ?, unread = ?, has_error = ?, status_reported = ?,
     started_at_ms = ?, exited_at_ms = ?, last_activity_at_ms = ?, exit_code = ?,
     terminal_cols = ?, terminal_rows = ?, dismissed_at_ms = NULL
@@ -1052,6 +1059,7 @@ type UpdateRunnerRegistrationParams struct {
 	WorkspaceRoot    sql.NullString
 	RemotesJson      string
 	Slug             sql.NullString
+	SlugBase         sql.NullString
 	ShellTitle       sql.NullString
 	AdapterTitle     sql.NullString
 	Subtitle         sql.NullString
@@ -1077,6 +1085,7 @@ func (q *Queries) UpdateRunnerRegistration(ctx context.Context, arg UpdateRunner
 		arg.WorkspaceRoot,
 		arg.RemotesJson,
 		arg.Slug,
+		arg.SlugBase,
 		arg.ShellTitle,
 		arg.AdapterTitle,
 		arg.Subtitle,

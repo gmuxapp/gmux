@@ -18,6 +18,8 @@ CREATE TABLE local_sessions (
                           ),
 
     slug                  TEXT,
+    -- Runner-owned naming proposal; slug is the allocated URL key.
+    slug_base             TEXT,
     shell_title           TEXT,
     adapter_title         TEXT,
     subtitle              TEXT,
@@ -43,6 +45,9 @@ CREATE TABLE local_sessions (
     CHECK ((terminal_cols IS NULL) = (terminal_rows IS NULL))
 ) STRICT;
 
+CREATE UNIQUE INDEX local_sessions_adapter_slug_unique_idx
+    ON local_sessions(adapter, slug)
+    WHERE slug IS NOT NULL AND slug <> '';
 CREATE INDEX local_sessions_adapter_candidate_idx
     ON local_sessions(adapter, dismissed_at_ms, row_version, id);
 CREATE INDEX local_sessions_parent_idx
