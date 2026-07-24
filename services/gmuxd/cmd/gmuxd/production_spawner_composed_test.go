@@ -155,6 +155,9 @@ func TestProductionSpawnerResumeComposedWithRealUnixRunner(t *testing.T) {
 }
 
 func TestProductionSpawnerWaitsForRunnerSocketBeforeRegistration(t *testing.T) {
+	// The spawner derives runner endpoints from the configured socket dir;
+	// fresh CI runners do not have the real state directory yet.
+	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
 	ctx := context.Background()
 	st, err := centralstore.Open(ctx, t.TempDir())
 	if err != nil {
