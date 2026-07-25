@@ -166,6 +166,13 @@ func serveCentral(stderr io.Writer, replace bool) int {
 	defer storeHandle.Close()
 	defer storeLock.Close()
 
+	// Bound the log only now: ownership is settled, so this process is the
+	// daemon and no incumbent is writing to the same file. An invocation that
+	// yielded above returned without touching it.
+	if bounded := installBoundedLog(stderr, paths.DaemonLogPath(), defaultLogLimit); bounded != nil {
+		defer bounded.Stop()
+	}
+
 	var peerManager *peering.Manager
 	var tsListener *tsauth.Listener
 	var notifier *centralNotifyRouter

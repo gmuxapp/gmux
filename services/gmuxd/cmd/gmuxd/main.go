@@ -310,7 +310,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintf(stderr, "gmuxd log-path: unexpected arguments: %s\n", strings.Join(args, " "))
 			return 2
 		}
-		_, _ = fmt.Fprintf(stdout, "%s\n", filepath.Join(paths.StateDir(), "gmuxd.log"))
+		_, _ = fmt.Fprintf(stdout, "%s\n", paths.DaemonLogPath())
 		return 0
 	case "help", "-h", "--help":
 		printUsage(stdout)
@@ -326,6 +326,27 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+// openDaemonLog opens the daemon log for the child process to inherit as its
+// stdout and stderr.
+//
+// Append, never truncate. This runs before the child has had a chance to check
+// for a healthy incumbent, and most invocations that reach here are autostarts
+// that will bounce straight off one: truncating would destroy the running
+// daemon's log every time a health probe was a little slow.
+//
+// O_APPEND matters for the same reason, from the other end: this descriptor may
+// be one of several the log has at once -- the child's stdout and stderr, plus
+// whatever a previous daemon still holds while it exits -- and appending is what
+// keeps concurrent writers from overwriting each other at a remembered offset.
+//
+// The serving process bounds this file by renaming it and moving its descriptor
+// onto a fresh one, never by truncating it (logbound.go explains why that
+// distinction is the whole design), so nothing here depends on truncation
+// semantics.
+func openDaemonLog(logPath string) (*os.File, error) {
+	return os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+}
+
 // startBackground is a pure spawn-first exact-child supervisor. The child
 // owns verification, incumbent shutdown, the lifetime lock, and database open.
 func startBackground(stdout, stderr io.Writer) int {
@@ -335,12 +356,12 @@ func startBackground(stdout, stderr io.Writer) int {
 		return 1
 	}
 	stateDir := paths.StateDir()
-	logPath := filepath.Join(stateDir, "gmuxd.log")
+	logPath := paths.DaemonLogPath()
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: cannot create state dir %s: %v\n", stateDir, err)
 		return 1
 	}
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	logFile, err := openDaemonLog(logPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "gmuxd: cannot open log %s: %v\n", logPath, err)
 		return 1

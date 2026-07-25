@@ -436,6 +436,15 @@ func launchRunnerProcess(ctx context.Context, req runnerLaunchRequest) (runnerLa
 	cmd.Dir = req.CWD
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Env = sessionenv.Strip(captureLoginEnv(req.GmuxBin, req.CWD))
+	// Stdio is wired explicitly, and to nothing.
+	//
+	// A runner outlives the daemon that spawned it, so a runner holding the
+	// daemon's log descriptor would keep writing to whatever inode it names --
+	// after one rotation the archive, after the next an unlinked file. exec
+	// already gives a nil field /dev/null, and the log descriptors are marked
+	// close-on-exec, but a runner is exactly the long-lived child where the
+	// invariant matters, so say it here rather than leave it to two defaults.
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 	if err := cmd.Start(); err != nil {
 		if info, statErr := os.Stat(req.CWD); req.CWD != "" && (statErr != nil || !info.IsDir()) {
 			return runnerLaunchResult{}, fmt.Errorf("working directory %q does not exist: %w", req.CWD, err)
