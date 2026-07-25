@@ -582,6 +582,21 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	// Deregister from gmuxd (best-effort)
 	deregisterFromGmuxd(sessionID)
 
+	// Give up the socket pathname while this process is still alive. Process
+	// exit releases the ownership lease (the kernel drops flock with the fd)
+	// but does NOT unlink the pathname, so without this call every short
+	// `gmux -- cmd` leaves a canonical socket file behind that the daemon then
+	// dials — and logs a refusal for — on every discovery tick, forever.
+	//
+	// Shutdown is idempotent (shutdownOnce) and its removal is
+	// identity-checked, so the /kill, signal and detached-cleanup paths that
+	// already released ownership make this a no-op and it can never unlink a
+	// replacement runner's socket.
+	//
+	// Ordering: PTY drain → exit event → <-regDone → deregister → Shutdown
+	// (pathname unlinked, lease released) → os.Exit.
+	srv.Shutdown()
+
 	if !interactive {
 		fmt.Printf("exited:   %d\n", exitCode)
 	}

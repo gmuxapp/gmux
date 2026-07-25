@@ -4,6 +4,8 @@ package ptyserver
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +28,7 @@ import (
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/adapter/adapters"
+	"github.com/gmuxapp/gmux/packages/socklease"
 	"nhooyr.io/websocket"
 )
 
@@ -34,54 +37,283 @@ import (
 const maxScrollback = 2000
 
 // ErrSocketInUse is returned by BindSocket when the requested socket
-// path is already owned by a live listener (a probe at that path got
-// a response). Callers that received this error from New should pick
-// a different session id and retry. See ADR 0003 "Collision
-// handling".
+// path is already owned by a live listener. Callers should pick a
+// different session id and retry. See ADR 0003 "Collision handling".
 var ErrSocketInUse = errors.New("socket path already in use by a live runner")
 
-// BindSocket creates and listens on a Unix socket at sockPath. The
-// parent directory is created with mode 0o700 if missing, and the
-// socket file itself is owner-only via umask 0o077.
+// BoundSocket is the result of BindSocket. It implements net.Listener and
+// additionally carries the socket ownership lease (see packages/socklease)
+// plus the physical identity of the socket file it created.
 //
-// It distinguishes a stale leftover socket file from a live owner:
-//
-//   - If a live owner answers a probe connection, returns
-//     ErrSocketInUse without touching the file. The caller should
-//     pick a different path.
-//   - Otherwise, removes any stale file and listens.
-//
-// The TOCTOU window between the probe and the listen is harmless in
-// practice: only gmux runners write to socketDir, and a runner that
-// could win the race would itself be subject to this same probe on
-// its next bind attempt.
-func BindSocket(sockPath string) (net.Listener, error) {
-	if probeSocket(sockPath) {
-		return nil, ErrSocketInUse
-	}
-	if err := os.MkdirAll(filepath.Dir(sockPath), 0o700); err != nil {
-		return nil, fmt.Errorf("BindSocket: mkdir %s: %w", filepath.Dir(sockPath), err)
-	}
-	_ = os.Remove(sockPath)
-	oldUmask := syscall.Umask(0o077)
-	defer syscall.Umask(oldUmask)
-	return net.Listen("unix", sockPath)
+// Ownership rule, enforced by every removal path in this package: the
+// canonical pathname may only be unlinked while the lease is held and only
+// while it still names the very socket this process bound. Once ownership is
+// released the pathname belongs to whoever leases it next, and this process
+// must never touch it again -- its listener stays alive on the (now unnamed)
+// inode so in-flight SSE/WebSocket connections can drain.
+type BoundSocket struct {
+	net.Listener
+	lease *socklease.Lease
+	// pin holds the socket file this process bound, so ownership can be given
+	// up by asking "is this still my file?" rather than "does the pathname
+	// still look like it did?". Inode numbers are recycled -- on some
+	// filesystems immediately -- so the second question has a wrong answer
+	// available to it, and the wrong answer unlinks a live replacement.
+	pin          *socklease.Pin
+	sockPath     string
+	releaseOnce  sync.Once
+	releaseError error
 }
 
-// probeSocket returns true if a Unix socket at sockPath accepts
-// connections within a short timeout. Used to distinguish stale
-// socket files from live runners.
-func probeSocket(sockPath string) bool {
-	if _, err := os.Stat(sockPath); err != nil {
-		return false
+// LockPath returns the path of the lease's lock file.
+func (b *BoundSocket) LockPath() string { return socklease.LockPath(b.sockPath) }
+
+// ReleaseOwnership unlinks the canonical pathname -- but only while it still
+// names the socket this BoundSocket bound -- and then drops the lease. It is
+// idempotent and safe to call from several goroutines.
+//
+// It deliberately does not close the listener: after ownership is released the
+// listener lives on as an unnamed socket so already-established connections
+// (notably the daemon's exit-event subscription) can drain, while a
+// replacement runner is free to lease and bind the pathname immediately.
+func (b *BoundSocket) ReleaseOwnership() error {
+	if b == nil {
+		return nil
 	}
-	conn, err := net.DialTimeout("unix", sockPath, 250*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
+	b.releaseOnce.Do(func() {
+		rmErr := b.lease.RemoveSocket(b.pin)
+		b.releaseError = errors.Join(rmErr, b.pin.Close(), b.lease.Release())
+	})
+	return b.releaseError
 }
+
+// leaseWaitBudget bounds how long BindSocket waits for a lease somebody else
+// holds. It exists for the daemon's stale-socket reaper, which holds the lease
+// for the length of one inspection; without the wait, a runner that starts
+// inside that window falls back to a fresh session id and a restart loses its
+// identity to a bookkeeping sweep.
+const leaseWaitBudget = 750 * time.Millisecond
+
+// bindAttempts bounds the bind/clean-up/retry loop. Each extra iteration
+// requires another actor to have taken the pathname in the microseconds
+// between our unlink and our listen.
+const bindAttempts = 8
+
+// bindBarrierHook is a barrier hook for the mixed-version bind tests: it runs at
+// each named phase of BindSocket so a test can drive a pre-lease runner into the
+// exact window it wants. It is unset in production.
+//
+// It carries the socket pathname, and is read under a mutex, for the same
+// reasons the daemon's reaper barrier does: binds happen on several goroutines
+// (and in several tests) at once, so a hook that fired for any pathname would be
+// driven by whichever bind reached the phase first, and a plain variable would be
+// a data race between one test's install and another's read. The hook is copied
+// out before it is called, so a barrier that blocks never holds the lock.
+var bindBarrierHook struct {
+	mu sync.Mutex
+	fn func(sockPath, phase string)
+}
+
+func bindBarrier(sockPath, phase string) {
+	bindBarrierHook.mu.Lock()
+	fn := bindBarrierHook.fn
+	bindBarrierHook.mu.Unlock()
+	if fn != nil {
+		fn(sockPath, phase)
+	}
+}
+
+// setBindBarrier installs the barrier hook, replacing any previous one.
+func setBindBarrier(fn func(sockPath, phase string)) {
+	bindBarrierHook.mu.Lock()
+	bindBarrierHook.fn = fn
+	bindBarrierHook.mu.Unlock()
+}
+
+// BindSocket creates and listens on a Unix socket at sockPath under the socket
+// ownership lease.
+//
+// The lease makes stale-socket cleanup safe *between lease-aware processes*:
+// holding it excludes every other runner and the daemon's reaper, so the
+// pathname cannot change owner while we work on it. It says nothing at all
+// about a runner from before the protocol, which holds no lease and is
+// excluded by nothing. That asymmetry decides the whole algorithm:
+//
+//	bind first, and only clean up after a generation we can prove was
+//	lease-aware.
+//
+// Concretely:
+//
+//  1. Take the lease (waiting briefly if the reaper holds it).
+//  2. Try to listen *without unlinking anything*. A free pathname binds here,
+//     which is the overwhelmingly common case.
+//  3. EADDRINUSE means something occupies the pathname. If we had to create
+//     the lock file, no lease-aware generation ever owned this pathname: its
+//     occupant is an unleased runner, possibly one that is mid-startup right
+//     now, and unlinking it would disconnect a live listener. Refuse with
+//     ErrSocketInUse and let the caller pick a different id (ADR 0003).
+//  4. If the lock file already existed, a lease-aware generation owned this
+//     pathname and is provably not running (we hold its lease). Probe anyway
+//     -- an unleased runner may have taken the pathname over since -- and only
+//     if nothing answers, unlink the exact inode we probed and try again.
+//
+// What this buys, and it is the property the earlier probe-then-unlink version
+// could not claim: no pathname belonging to a live pre-lease runner is ever
+// unlinked, at any interleaving.
+func BindSocket(sockPath string) (*BoundSocket, error) {
+	// The lease protocol assumes a directory only this user can write in; if
+	// that is not true, nothing below proves anything (see socklease's threat
+	// model). Establish it here, where the directory is created.
+	if err := socklease.RequireOwnedDir(filepath.Dir(sockPath)); err != nil {
+		return nil, fmt.Errorf("BindSocket: %w", err)
+	}
+	lease, err := socklease.AcquireWait(sockPath, leaseWaitBudget)
+	if errors.Is(err, socklease.ErrHeld) {
+		return nil, ErrSocketInUse
+	}
+	if err != nil {
+		return nil, fmt.Errorf("BindSocket: lease: %w", err)
+	}
+	bindBarrier(sockPath, "lease-held")
+
+	for range bindAttempts {
+		ln, listenErr := listenUnixOwnerOnly(sockPath)
+		if listenErr == nil {
+			// Pin the socket we just bound, and hold the pin for as long as we
+			// own the pathname: it is what lets Shutdown unlink our own socket
+			// and nobody else's, even if the number is handed out again.
+			pin, pinErr := lease.PinSocket()
+			if pinErr != nil {
+				// The pathname we just bound is not a socket any more.
+				// Something outside the protocol is rewriting the directory;
+				// refuse to own a pathname we cannot identify rather than
+				// unlink it later on a guess.
+				_ = ln.Close()
+				releaseAfterFailedBind(lease, false)
+				return nil, fmt.Errorf("BindSocket: %s vanished or is not a socket right after listen: %w", sockPath, pinErr)
+			}
+			return &BoundSocket{Listener: ln, lease: lease, pin: pin, sockPath: sockPath}, nil
+		}
+		if !errors.Is(listenErr, syscall.EADDRINUSE) {
+			releaseAfterFailedBind(lease, false)
+			return nil, fmt.Errorf("BindSocket: listen: %w", listenErr)
+		}
+		bindBarrier(sockPath, "address-in-use")
+
+		if lease.CreatedLockFile() {
+			// No lease-aware generation ever owned this pathname, so its
+			// occupant is outside the protocol. Never unlink it.
+			releaseAfterFailedBind(lease, true)
+			return nil, ErrSocketInUse
+		}
+
+		// A lease-aware generation owned this pathname and is gone. Confirm
+		// nothing answers before touching it: an unleased runner may have
+		// taken the pathname over in the meantime, and it is not ours to
+		// remove.
+		// Pin the occupant *before* probing it, so the removal below can be
+		// conditioned on the file we probed rather than on a description of it.
+		// A pre-lease runner may replace the pathname between the two, and on a
+		// filesystem that recycles inodes its socket can carry the very same
+		// device and inode -- which is how an identity check came to unlink a
+		// live runner.
+		stale, pinErr := socklease.PinSocket(sockPath)
+		if pinErr != nil {
+			// Whatever occupies the pathname now, it is not the socket the
+			// lease-aware generation left: that history is stale.
+			releaseAfterFailedBind(lease, true)
+			return nil, fmt.Errorf("BindSocket: %s is occupied by something that is not a socket: %w", sockPath, pinErr)
+		}
+		bindBarrier(sockPath, "before-probe")
+		// Only an explicit refusal authorises the removal below. A timeout, a
+		// permission error, or a successful connect all mean the occupant is
+		// not provably gone -- and a timeout in particular is a live owner
+		// with a full backlog, not a dead one. This is the same predicate the
+		// daemon's reaper uses, deliberately: an asymmetry here is how a live
+		// socket gets unlinked by one side and spared by the other.
+		//
+		// Probed through the pin rather than the pathname: pin-then-probe is
+		// the load-bearing order, and passing the pin is what makes the other
+		// order unexpressible (socklease.ProbeRefusedPinned).
+		probeErr := probeRefusedUnderPin(sockPath, stale)
+		if probeErr != nil {
+			// A live occupant with a free lease is an unleased runner that
+			// took this pathname over, so the lease history describes a dead
+			// generation rather than the occupant: drop it. Anything else
+			// taught us nothing, so keep it.
+			_ = stale.Close()
+			releaseAfterFailedBind(lease, errors.Is(probeErr, socklease.ErrSocketLive))
+			return nil, ErrSocketInUse
+		}
+		bindBarrier(sockPath, "before-remove")
+		// Identity-checked: if the pathname was rebound since the probe, the
+		// removal is declined and the next iteration probes the newcomer
+		// instead of unlinking it.
+		rmErr := lease.RemoveSocket(stale)
+		_ = stale.Close()
+		if rmErr != nil && !errors.Is(rmErr, socklease.ErrIdentityChanged) {
+			releaseAfterFailedBind(lease, false)
+			return nil, fmt.Errorf("BindSocket: removing stale socket: %w", rmErr)
+		}
+	}
+	releaseAfterFailedBind(lease, false)
+	return nil, fmt.Errorf("BindSocket: %s was re-taken on every attempt", sockPath)
+}
+
+// releaseAfterFailedBind drops a lease taken by a bind that did not happen.
+//
+// The lock file is removed when this attempt created it -- leaving it would
+// invent a lease-aware history for a pathname that never had one -- or when
+// the attempt proved the current occupant is not lease-aware, which makes any
+// existing history false. Otherwise the lock file is left exactly as found:
+// erasing it would make a genuinely reclaimable leftover permanently
+// unreclaimable.
+func releaseAfterFailedBind(lease *socklease.Lease, occupantProvenUnleased bool) {
+	if lease.CreatedLockFile() || occupantProvenUnleased {
+		_ = lease.Release()
+		return
+	}
+	_ = lease.ReleaseKeepingLockFile()
+}
+
+// listenUnixOwnerOnly binds sockPath with an owner-only mode and without Go's
+// automatic unlink-on-close: in this package every removal of a canonical
+// pathname is explicit, leased and identity-checked.
+func listenUnixOwnerOnly(sockPath string) (net.Listener, error) {
+	oldUmask := syscall.Umask(0o077)
+	ln, err := net.Listen("unix", sockPath)
+	syscall.Umask(oldUmask)
+	if err != nil {
+		return nil, err
+	}
+	if ul, ok := ln.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
+	return ln, nil
+}
+
+// probeRefusedUnderPin probes the leftover the pin holds.
+//
+// The pin is a parameter, not something this function takes for itself, because
+// pin-then-probe is the load-bearing order and a signature guards an order
+// better than a comment does: there is nothing to pass if the pin has not been
+// taken yet.
+//
+// The barrier fires here, at the end of the probe step, rather than at the call
+// site. That placement is deliberate -- it is the only point a caller cannot get
+// in front of. A caller that pinned *after* probing would have its pin land
+// after this line, so a test can hand the pathname to a live unleased runner
+// here and watch such a caller pin, and then unlink, the newcomer.
+func probeRefusedUnderPin(sockPath string, pin *socklease.Pin) error {
+	err := socklease.ProbeRefusedPinned(pin, probeTimeout)
+	bindBarrier(sockPath, "probed")
+	return err
+}
+
+// probeTimeout bounds the connect used to decide whether a leftover pathname
+// is abandoned. It runs while the lease is held, so it also bounds how long a
+// replacement runner can be kept waiting.
+const probeTimeout = 250 * time.Millisecond
 
 // newScreen builds the replay emulator and starts the DSR drain goroutine. It
 // returns the emulator and a channel that is closed when the drain goroutine
@@ -184,10 +416,14 @@ type ResizeMsg struct {
 
 // Server holds a PTY and serves WebSocket connections.
 type Server struct {
-	cmd             *exec.Cmd
-	ptmx            *os.File
-	sockPath        string
-	listener        net.Listener
+	cmd      *exec.Cmd
+	ptmx     *os.File
+	sockPath string
+	listener net.Listener
+	// bound carries socket pathname ownership (lease + bound identity). It is
+	// nil when a test injected a bare listener; such a server owns no
+	// pathname and must never unlink one.
+	bound           *BoundSocket
 	screen          *vt.Emulator  // virtual terminal for replay snapshots (guarded by mu)
 	screenDrainDone chan struct{} // closed when the DSR drain goroutine exits
 	state           *session.State
@@ -197,6 +433,11 @@ type Server struct {
 	// the runner's default turn model). Nil for hook-driven sessions. Fed
 	// exclusively from readPTY's flush, so it needs no locking.
 	promptMarks *adapter.PromptMarkTracker
+
+	// incarnation is this runner's ephemeral identity: a random value minted
+	// once per process, exposed on every HTTP response and in /meta, and
+	// required as proof by /kill. See newIncarnation.
+	incarnation string
 
 	shutdownOnce sync.Once
 
@@ -354,24 +595,36 @@ func New(cfg Config) (*Server, error) {
 	})
 	if err != nil {
 		listener.Close()
-		os.Remove(cfg.SocketPath)
+		if bs, ok := listener.(*BoundSocket); ok {
+			// Leased removal: the pathname is only unlinked while it still
+			// names the socket we bound.
+			if relErr := bs.ReleaseOwnership(); relErr != nil {
+				log.Printf("ptyserver: releasing %s after failed pty start: %v", cfg.SocketPath, relErr)
+			}
+		}
 		return nil, fmt.Errorf("start pty: %w", err)
 	}
 
 	s := &Server{
-		cmd:        cmd,
-		ptmx:       ptmx,
-		sockPath:   cfg.SocketPath,
-		listener:   listener,
-		screen:     nil, // set below after s is constructed
-		state:      cfg.State,
-		clients:    make(map[*wsClient]struct{}),
-		localOut:   cfg.LocalOut,   // wired before readPTY starts so early output is never lost
-		scrollback: cfg.Scrollback, // same: wired pre-readPTY so fast-exit output is never lost
-		ptyCols:    cfg.Cols,
-		ptyRows:    cfg.Rows,
-		done:       make(chan struct{}),
-		ptyDone:    make(chan struct{}),
+		cmd:         cmd,
+		ptmx:        ptmx,
+		sockPath:    cfg.SocketPath,
+		listener:    listener,
+		screen:      nil, // set below after s is constructed
+		state:       cfg.State,
+		clients:     make(map[*wsClient]struct{}),
+		localOut:    cfg.LocalOut,   // wired before readPTY starts so early output is never lost
+		scrollback:  cfg.Scrollback, // same: wired pre-readPTY so fast-exit output is never lost
+		ptyCols:     cfg.Cols,
+		ptyRows:     cfg.Rows,
+		done:        make(chan struct{}),
+		ptyDone:     make(chan struct{}),
+		incarnation: newIncarnation(),
+	}
+	// Retain the ownership handle from BindSocket. Tests may inject a bare
+	// net.Listener; those servers own no pathname and never unlink one.
+	if bs, ok := listener.(*BoundSocket); ok {
+		s.bound = bs
 	}
 
 	// The callback fires under s.mu (held during drainScreenLocked → screen.Write).
@@ -532,14 +785,48 @@ func (s *Server) Resize(cols, rows uint16) {
 	s.resize(ResizeMsg{Cols: cols, Rows: rows, Source: "local_tty"})
 }
 
-// Shutdown closes the listener and all connections.
+// releaseSocketOwnership gives up the canonical socket pathname: it unlinks
+// the pathname while the lease still names this server's own socket, then
+// releases the lease so a replacement runner can bind immediately.
+//
+// It is idempotent, and it is the *only* place in the runner that unlinks a
+// canonical pathname. Both callers (the /kill handler, which releases early so
+// a restart's replacement runner never has to wait, and Shutdown, which covers
+// every other exit) may run concurrently.
+func (s *Server) releaseSocketOwnership(reason string) {
+	if s.bound == nil {
+		return // test-injected listener: this server owns no pathname
+	}
+	if err := s.bound.ReleaseOwnership(); err != nil {
+		log.Printf("ptyserver: %s: releasing socket %s: %v", reason, s.sockPath, err)
+	}
+}
+
+// Shutdown releases socket ownership, then closes the listener and all
+// connections.
+//
+// Ownership protocol:
+//
+//  1. Unlink the canonical pathname while holding the lease and only while it
+//     still names this server's socket, then drop the lease. A concurrent
+//     BindSocket cannot observe a half-released pathname: it either fails to
+//     take the lease (pathname still ours) or takes it after the unlink.
+//  2. Close the listener. Existing connections are unaffected by the unlink;
+//     closing the listener only stops new ones.
+//
+// Ordering note (resume/restart safety): the daemon learns a session died from
+// the runner's exit event, which run.go emits *before* it deregisters and
+// calls Shutdown. A restart therefore spawns the replacement runner while this
+// process is still finishing up -- which is exactly why /kill releases
+// ownership before it responds instead of waiting for Shutdown.
 func (s *Server) Shutdown() {
 	// Idempotent: Shutdown can now be invoked from more than one
 	// goroutine — a signal handler and the registration goroutine's
 	// fatal-rejection reap can race — so the whole teardown runs once.
 	s.shutdownOnce.Do(func() {
+		s.releaseSocketOwnership("shutdown")
+		// Close the listener. Existing connections are not affected.
 		s.listener.Close()
-		os.Remove(s.sockPath)
 
 		s.mu.Lock()
 		// Close ptmx and mark it closed under mu. pty.Setsize (setPtySize) calls
@@ -570,6 +857,55 @@ func (s *Server) setPtySize(ws *pty.Winsize) {
 	_ = pty.Setsize(s.ptmx, ws)
 }
 
+// IncarnationHeader carries the runner's ephemeral incarnation on every
+// response, so a client learns which runner answered without a second request.
+// ExpectIncarnationHeader carries a client's requirement back: /kill acts only
+// if the value names this runner.
+const (
+	IncarnationHeader       = "X-Gmux-Incarnation"
+	ExpectIncarnationHeader = "X-Gmux-Expect-Incarnation"
+)
+
+// newIncarnation mints a runner's ephemeral identity.
+//
+// It exists because a socket pathname, and even a socket inode, cannot
+// identify the process behind an endpoint. A pathname is reusable; an inode
+// can be hard-linked, unlinked and restored. A daemon that talks to an
+// endpoint twice -- Subscribe, then Meta -- has no filesystem evidence that
+// both calls reached the same runner, and stat-bracketing the pair only proves
+// the pathname looked the same before and after.
+//
+// The nonce closes that: it is minted once per runner process and returned
+// with every response, so two calls that report the same incarnation provably
+// reached the same runner. It is deliberately ephemeral -- never persisted,
+// never reused across restarts -- because its whole job is to distinguish this
+// process from its own successor at the same pathname.
+//
+// A failure to read the system CSPRNG degrades to the empty string, which
+// every consumer treats as "unknown", exactly like a runner that predates the
+// protocol: conservative, never a match.
+func newIncarnation() string {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		log.Printf("ptyserver: cannot mint an incarnation (%v); the daemon will treat this runner as unidentifiable", err)
+		return ""
+	}
+	return hex.EncodeToString(buf[:])
+}
+
+// Incarnation returns this runner's ephemeral identity.
+func (s *Server) Incarnation() string { return s.incarnation }
+
+// withIncarnation stamps every response with the runner's identity.
+func (s *Server) withIncarnation(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.incarnation != "" {
+			w.Header().Set(IncarnationHeader, s.incarnation)
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) serve() {
 	mux := http.NewServeMux()
 
@@ -581,11 +917,12 @@ func (s *Server) serve() {
 	mux.HandleFunc("PUT /slug", s.handlePutSlug)
 	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("POST /kill", s.handleKill)
+	mux.HandleFunc("POST /reap", s.handleReap)
 
 	// WebSocket terminal attach (fallback for / with Upgrade header)
 	mux.HandleFunc("/", s.handleWS)
 
-	server := &http.Server{Handler: mux}
+	server := &http.Server{Handler: s.withIncarnation(mux)}
 	server.Serve(s.listener)
 }
 
@@ -594,6 +931,19 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// Splice the incarnation in rather than adding it to session.State: the
+	// nonce belongs to this runner process, not to the session, and State is
+	// the session's own document. Decoding to RawMessage keeps every existing
+	// field byte-identical.
+	if s.incarnation != "" {
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(data, &obj) == nil {
+			obj["incarnation"], _ = json.Marshal(s.incarnation)
+			if merged, mErr := json.Marshal(obj); mErr == nil {
+				data = merged
+			}
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
@@ -797,7 +1147,55 @@ func (s *Server) handlePutSlug(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleReap is termination conditional on identity, and it exists as a
+// separate route from /kill for one reason: a runner that predates this
+// protocol must be *unable* to obey it.
+//
+// The daemon's orphan reaper decides about one specific process and then has
+// to address it by pathname. Pathnames are reusable, so the occupant at
+// delivery time may be somebody else. Asking /kill and adding a header does
+// not solve that in a mixed-version fleet: a pre-protocol runner ignores
+// unknown headers and dies for a verdict passed on a different process. A
+// route it does not serve, by contrast, answers 404 and does nothing at all.
+// So the reaper only ever calls this route, and 404 is a safe, informative
+// answer that no legacy runner can get wrong.
+//
+// The expectation is mandatory here -- an unconditional reap is not a thing
+// this endpoint offers.
+func (s *Server) handleReap(w http.ResponseWriter, r *http.Request) {
+	want := r.Header.Get(ExpectIncarnationHeader)
+	if want == "" {
+		http.Error(w, "reap requires "+ExpectIncarnationHeader, http.StatusBadRequest)
+		return
+	}
+	if want != s.incarnation {
+		log.Printf("ptyserver: refusing a reap meant for incarnation %s; this runner is %s", want, s.incarnation)
+		http.Error(w, "incarnation mismatch: this pathname is owned by a different runner", http.StatusConflict)
+		return
+	}
+	s.terminateChild(w)
+}
+
 func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
+	// /kill is the compatibility route: an explicit, user-initiated stop of
+	// whoever owns this endpoint. It honours an expectation when one is given
+	// -- a caller that knows which runner it means gets the stronger
+	// behaviour -- but an absent header keeps the original semantics, which
+	// `gmux kill` and every pre-protocol client rely on.
+	//
+	// A caller whose decision was made about one specific process earlier must
+	// not use this route at all: see handleReap.
+	if want := r.Header.Get(ExpectIncarnationHeader); want != "" && want != s.incarnation {
+		log.Printf("ptyserver: refusing /kill meant for incarnation %s; this runner is %s", want, s.incarnation)
+		http.Error(w, "incarnation mismatch: this pathname is owned by a different runner", http.StatusConflict)
+		return
+	}
+	s.terminateChild(w)
+}
+
+// terminateChild is the shared body of /kill and /reap: signal the child, wait
+// for it, hand the socket pathname over, and answer.
+func (s *Server) terminateChild(w http.ResponseWriter) {
 	if s.cmd.Process == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -812,7 +1210,7 @@ func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
 	log.Printf("ptyserver: sent SIGHUP to child pid %d", pid)
 
 	// Block until the child actually exits (or escalate). Dismiss/restart
-	// callers rely on this: once /kill returns, gmuxd immediately removes
+	// callers rely on this: once this returns, gmuxd immediately removes
 	// the session and expects the runner's socket path to be free.
 	// Returning early while a shell (e.g. fish) ignores SIGHUP causes
 	// the next discovery scan to re-register the dead session.
@@ -824,22 +1222,21 @@ func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
 		<-s.done
 	}
 
-	// Release the canonical socket path before responding. The runner
-	// process will linger briefly for state.SetExited / deregister /
-	// scrollback close, and its listener stays up on the inode for the
-	// existing SSE/WS connections that need to drain (notably the
-	// daemon's exit-event subscription). But the path is unreachable
-	// to new dialers, so a daemon launching a replacement runner under
-	// the same id (resume / restart, see ADR 0003) can BindSocket
-	// without racing against this runner's shutdown sequence.
+	// Release the canonical socket path — and the lease with it — before
+	// responding. The runner process will linger briefly for
+	// state.SetExited / deregister / scrollback close, and its listener stays
+	// up on the (now unnamed) inode for the existing SSE/WS connections that
+	// need to drain, notably the daemon's exit-event subscription.
 	//
-	// Idempotent: a later os.Remove on the missing path is harmless;
-	// any normal-exit code path that also tries to clean up the path
-	// (Server.Shutdown's signal-handler call, or the kernel on
-	// process exit) finds it already gone.
-	if err := os.Remove(s.sockPath); err != nil && !os.IsNotExist(err) {
-		log.Printf("ptyserver: kill: remove sockfile %s: %v", s.sockPath, err)
-	}
+	// Releasing the lease here, rather than in Shutdown, is load-bearing: the
+	// daemon's restart path observes death from the exit event this runner is
+	// about to emit and spawns the replacement immediately. If the dying
+	// runner still held the lease at that moment, the replacement's
+	// BindSocket would fail with ErrSocketInUse and fall back to a fresh
+	// session id (ADR 0003), silently breaking restart identity. Once
+	// released, this process never touches the pathname again: Shutdown's
+	// removal is idempotent and cannot unlink the replacement's socket.
+	s.releaseSocketOwnership("terminate")
 	w.WriteHeader(http.StatusNoContent)
 }
 
