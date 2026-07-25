@@ -19,9 +19,13 @@ import (
 type fakeStream struct {
 	ch     chan RunnerEvent
 	closed atomic.Bool
+	// incarnation mirrors the production transport, which carries the
+	// runner's identity out of the subscription response.
+	incarnation string
 }
 
 func newFakeStream() *fakeStream                 { return &fakeStream{ch: make(chan RunnerEvent, 64)} }
+func (s *fakeStream) Incarnation() string        { return s.incarnation }
 func (s *fakeStream) Events() <-chan RunnerEvent { return s.ch }
 func (s *fakeStream) Close() error {
 	if s.closed.CompareAndSwap(false, true) {
@@ -43,13 +47,20 @@ type fakeRunnerClient struct {
 	// subscribeBlock is closed by the test when Subscribe may proceed.
 	subscribeBlock chan struct{}
 	// metaBlock is closed by the test when Meta may proceed.
-	metaBlock      chan struct{}
+	metaBlock chan struct{}
+	// onMeta runs inside Meta, before it returns. Tests use it as a barrier
+	// to perturb the filesystem in the middle of a registration's or a reap
+	// probe's runner I/O.
+	onMeta         func()
 	subscribeCalls atomic.Int64
 	metaCalls      atomic.Int64
 }
 
 func newFakeClient(meta RunnerMeta) *fakeRunnerClient {
-	return &fakeRunnerClient{stream: newFakeStream(), meta: meta}
+	stream := newFakeStream()
+	// A real runner answers both calls with the same identity.
+	stream.incarnation = meta.Incarnation
+	return &fakeRunnerClient{stream: stream, meta: meta}
 }
 
 func (c *fakeRunnerClient) Subscribe(ctx context.Context, _ string) (EventStream, error) {
@@ -77,6 +88,9 @@ func (c *fakeRunnerClient) Meta(ctx context.Context, _ string) (RunnerMeta, erro
 			return RunnerMeta{}, ctx.Err()
 		case <-c.metaBlock:
 		}
+	}
+	if c.onMeta != nil {
+		c.onMeta()
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

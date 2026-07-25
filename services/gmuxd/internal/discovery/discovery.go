@@ -370,22 +370,113 @@ func queryMeta(socketPath string) (*store.Session, error) {
 // to SIGTERM its child process. The runner's normal exit lifecycle
 // handles the rest.
 func KillSession(socketPath string) error {
-	return KillSessionContext(context.Background(), socketPath)
+	return KillSessionContext(context.Background(), socketPath, "")
 }
 
-// KillSessionContext is the cancellation-aware production runner control
-// transport. Endpoint mapping is deliberately fixed to POST /kill.
-func KillSessionContext(ctx context.Context, socketPath string) error {
-	resp, err := runnerRequest(ctx, socketPath, http.MethodPost, "/kill", nil)
+// KillSessionContext is the cancellation-aware production transport for an
+// explicit stop. Endpoint mapping is deliberately fixed to POST /kill.
+//
+// expectIncarnation, when set, names the runner process the caller means. A
+// runner that understands the protocol compares it with its own identity and
+// answers 409 Conflict rather than dying for somebody else's verdict; a runner
+// that predates the protocol ignores the header and stops, which is the
+// behaviour `gmux kill` has always had. That is why a decision made earlier
+// about one specific process must use ReapSessionContext instead: this route
+// cannot refuse on behalf of a runner that has never heard of it.
+func KillSessionContext(ctx context.Context, socketPath, expectIncarnation string) error {
+	var header http.Header
+	if expectIncarnation != "" {
+		header = http.Header{expectIncarnationHeader: []string{expectIncarnation}}
+	}
+	resp, err := runnerRequestHeaders(ctx, socketPath, http.MethodPost, "/kill", nil, header)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return fmt.Errorf("%w: %s", ErrRunnerIncarnationMismatch, resp.Status)
+	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("runner /kill: %s", resp.Status)
 	}
 	return nil
 }
+
+// ReapSessionContext asks the runner at socketPath to terminate itself, but
+// only if it is the named incarnation. Endpoint mapping is deliberately fixed
+// to POST /reap, a route that exists precisely so that a runner predating the
+// protocol cannot act on the request at all: the safety of a delayed reap
+// decision cannot rest on an occupant honouring a header it has never heard
+// of.
+//
+// It reports ErrRunnerReapUnsupported for the statuses that mean "no such
+// operation here" (see reapUnsupportedStatus -- a real pre-protocol runner
+// answers 426, not 404, because its WebSocket catch-all handles the path),
+// ErrRunnerIncarnationMismatch for a 409, and leaves the occupant untouched in
+// both cases. An empty expectIncarnation is a programming error: an
+// unconditional reap is not an operation this transport offers.
+func ReapSessionContext(ctx context.Context, socketPath, expectIncarnation string) error {
+	if expectIncarnation == "" {
+		return fmt.Errorf("discovery: reap of %s requires an expected incarnation", socketPath)
+	}
+	header := http.Header{expectIncarnationHeader: []string{expectIncarnation}}
+	resp, err := runnerRequestHeaders(ctx, socketPath, http.MethodPost, "/reap", nil, header)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return fmt.Errorf("%w: %s", ErrRunnerIncarnationMismatch, resp.Status)
+	}
+	if reapUnsupportedStatus(resp.StatusCode) {
+		return fmt.Errorf("%w: %s", ErrRunnerReapUnsupported, resp.Status)
+	}
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("runner /reap: %s", resp.Status)
+	}
+	return nil
+}
+
+// reapUnsupportedStatus reports whether a status means "this endpoint has no
+// conditional reap", as opposed to "the reap was refused" or "something went
+// wrong".
+//
+// 404 is the obvious one, but it is not what a real pre-protocol runner
+// answers: those register a catch-all "/" route for the WebSocket terminal, so
+// POST /reap reaches the WebSocket handshake, which rejects a request without
+// the upgrade headers -- 426 Upgrade Required from nhooyr.io/websocket, and 405
+// or 501 from other plausible shapes of the same "wrong protocol at this path"
+// verdict.
+//
+// Every status here shares two properties, which is what makes lumping them
+// together honest: the runner reported that it cannot perform this operation,
+// and it demonstrably did not perform it. 409 is deliberately excluded -- that
+// is a runner that understands the request and refuses it -- and so is 400,
+// which is this transport's own fault for sending no expectation.
+func reapUnsupportedStatus(code int) bool {
+	switch code {
+	case http.StatusNotFound, // no such route
+		http.StatusMethodNotAllowed, // route exists, not for POST
+		http.StatusUpgradeRequired,  // route exists only as a WebSocket upgrade
+		http.StatusNotImplemented:   // route exists, operation does not
+		return true
+	}
+	return false
+}
+
+// ErrRunnerIncarnationMismatch reports that the runner answering an endpoint
+// refused because it is not the process the caller named. It is a success for
+// the safety property, not a transport failure: the intended target is already
+// gone and its pathname belongs to somebody else.
+var ErrRunnerIncarnationMismatch = errors.New("discovery: runner declined a request meant for another incarnation")
+
+// ErrRunnerReapUnsupported reports that the runner answering an endpoint does
+// not implement conditional reaping, i.e. it predates the protocol. It was left
+// untouched.
+var ErrRunnerReapUnsupported = errors.New("discovery: runner does not implement conditional reaping")
+
+// expectIncarnationHeader must match ptyserver.ExpectIncarnationHeader.
+const expectIncarnationHeader = "X-Gmux-Expect-Incarnation"
 
 // SendInput POSTs body bytes to a runner's /input endpoint, delivering
 // them to the child PTY as if typed at the terminal. Backs the

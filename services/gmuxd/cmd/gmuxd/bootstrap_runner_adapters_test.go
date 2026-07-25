@@ -194,7 +194,7 @@ func TestProductionRunnerControlUsesKillAndContext(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	ep := unixRunner(t, mux)
-	if err := (productionRunnerControl{}).Terminate(context.Background(), ep); err != nil {
+	if err := (productionRunnerControl{}).Terminate(context.Background(), ep, ""); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 1 {
@@ -202,7 +202,17 @@ func TestProductionRunnerControlUsesKillAndContext(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := (productionRunnerControl{}).Terminate(ctx, ep); err == nil {
+	if err := (productionRunnerControl{}).Terminate(ctx, ep, ""); err == nil {
 		t.Fatal("cancel ignored")
+	}
+}
+
+// The runner protocol's header names, pinned as literals. The runner lives in
+// another module (cli/gmux, ptyserver.IncarnationHeader /
+// ExpectIncarnationHeader, pinned by its own test), so the two sides cannot
+// share a constant; they can only agree on the wire.
+func TestRunnerIncarnationHeaderNamesAreStable(t *testing.T) {
+	if runnerIncarnationHeader != "X-Gmux-Incarnation" {
+		t.Errorf("runnerIncarnationHeader = %q; the runner stamps X-Gmux-Incarnation", runnerIncarnationHeader)
 	}
 }

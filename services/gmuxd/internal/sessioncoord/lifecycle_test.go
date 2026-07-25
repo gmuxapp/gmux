@@ -19,15 +19,36 @@ import (
 type fakeControl struct {
 	mu        sync.Mutex
 	calls     []string
+	expects   []string
+	routes    []string
+	reapErr   error
 	err       error
 	onKill    func(endpoint string)
 	entered   chan struct{} // closed on first Terminate, if non-nil
 	enterOnce sync.Once
 }
 
-func (f *fakeControl) Terminate(_ context.Context, endpoint string) error {
+func (f *fakeControl) Terminate(ctx context.Context, endpoint, expectIncarnation string) error {
+	return f.record(ctx, "kill", endpoint, expectIncarnation)
+}
+
+// Reap is the conditional route. A test can make it decline the way a
+// pre-protocol occupant does by setting reapErr.
+func (f *fakeControl) Reap(ctx context.Context, endpoint, expectIncarnation string) error {
+	if f.reapErr != nil {
+		f.mu.Lock()
+		f.routes = append(f.routes, "reap-declined")
+		f.mu.Unlock()
+		return f.reapErr
+	}
+	return f.record(ctx, "reap", endpoint, expectIncarnation)
+}
+
+func (f *fakeControl) record(_ context.Context, route, endpoint, expectIncarnation string) error {
 	f.mu.Lock()
 	f.calls = append(f.calls, endpoint)
+	f.expects = append(f.expects, expectIncarnation)
+	f.routes = append(f.routes, route)
 	err := f.err
 	kill := f.onKill
 	f.mu.Unlock()
@@ -46,6 +67,20 @@ func (f *fakeControl) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.calls)
+}
+
+// expectations returns the incarnations the coordinator named on each request.
+func (f *fakeControl) expectations() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.expects...)
+}
+
+// requestRoutes returns which control route each request used.
+func (f *fakeControl) requestRoutes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.routes...)
 }
 
 // fakeSpawner returns a fixed endpoint and can fail or block.

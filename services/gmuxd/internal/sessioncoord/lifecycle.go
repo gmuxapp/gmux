@@ -23,6 +23,11 @@ var (
 	// ErrNoRunnerControl / ErrNoRunnerSpawner mark operations whose injected
 	// I/O boundary was not configured.
 	ErrNoRunnerControl = errors.New("sessioncoord: no runner control configured")
+	// ErrReapUnsupported marks an endpoint whose occupant does not implement
+	// conditional reaping: a runner that predates the protocol. It is not a
+	// failure -- it is the protocol working. The occupant is left alone and
+	// discovery converges it the ordinary way.
+	ErrReapUnsupported = errors.New("sessioncoord: endpoint does not support conditional reaping")
 	ErrNoRunnerSpawner = errors.New("sessioncoord: no runner spawner configured")
 	// ErrConvergencePending marks a resume of an exit-less row while the
 	// startup convergence window is open: its liveness is unknown until a
@@ -54,8 +59,28 @@ var (
 // ordinary observation path (exit event or stream drop). Terminate must be
 // idempotent. It is I/O and is never called under any coordinator lock or
 // inside a database transaction.
+//
+// Terminate is the explicit, user-initiated stop of whoever owns an endpoint.
+// expectIncarnation names the installed generation when the daemon knows it,
+// which makes a runner that understands the protocol refuse if the pathname
+// changed hands; an empty expectation keeps the original semantics, which is
+// all that is possible against a runner predating the protocol.
+//
+// Reap is termination conditional on identity, and it is a *different
+// operation*, not Terminate with a flag. A reap decision is made about one
+// specific process, from a probe, and executed later against a pathname that
+// may by then belong to somebody else. Adding a header to Terminate cannot
+// make that safe in a mixed-version fleet: a pre-protocol occupant ignores
+// unknown headers and dies for a verdict about another process. Reap must
+// therefore address a facility such an occupant does not implement at all, so
+// that "I cannot do this" is the answer rather than "done".
+//
+// Implementations must report ErrReapUnsupported when the occupant does not
+// implement conditional reaping, and must leave it strictly untouched in that
+// case.
 type RunnerControl interface {
-	Terminate(ctx context.Context, endpoint string) error
+	Terminate(ctx context.Context, endpoint, expectIncarnation string) error
+	Reap(ctx context.Context, endpoint, expectIncarnation string) error
 }
 
 // RunnerSpawner launches a new runner process for a retained dead session and
@@ -148,7 +173,11 @@ func (c *Coordinator) stopClaimed(ctx context.Context, id centralstore.SessionID
 	endpoint, dead := e.Endpoint, e.dead
 
 	// ── runner I/O; no locks, no DB transaction ──────────────────────────
-	if err := c.control.Terminate(ctx, endpoint); err != nil {
+	// Name the generation we are stopping when we know it. An explicit stop
+	// of a runner that predates the protocol carries no expectation, which
+	// preserves the old behaviour for exactly the population that cannot
+	// verify one.
+	if err := c.control.Terminate(ctx, endpoint, e.Incarnation); err != nil {
 		return fmt.Errorf("sessioncoord: terminate %s: %w", id, err)
 	}
 	select {

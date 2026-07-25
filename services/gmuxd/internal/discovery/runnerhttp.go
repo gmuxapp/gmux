@@ -53,9 +53,18 @@ const runnerRequestTimeout = 3 * time.Second
 // (earlier deadline wins) and cancels its internal timer when the
 // body is closed. body may be nil for parameterless GET / POST.
 func runnerRequest(ctx context.Context, socketPath, method, urlPath string, body io.Reader) (*http.Response, error) {
+	return runnerRequestHeaders(ctx, socketPath, method, urlPath, body, nil)
+}
+
+func runnerRequestHeaders(ctx context.Context, socketPath, method, urlPath string, body io.Reader, header http.Header) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, "http://unix"+urlPath, body)
 	if err != nil {
 		return nil, err
+	}
+	for k, vs := range header {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
 	}
 	// Mark the connection for closure after the response. With
 	// this set, the transport closes the underlying FD when the
