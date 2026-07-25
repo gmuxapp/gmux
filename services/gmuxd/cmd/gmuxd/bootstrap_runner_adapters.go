@@ -27,16 +27,29 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 )
 
+// runnerIncarnationHeader must match ptyserver.IncarnationHeader. It is
+// duplicated rather than imported because the runner and the daemon are
+// separate modules with no shared HTTP surface; the value is part of the
+// runner protocol and is covered by a contract test.
+const runnerIncarnationHeader = "X-Gmux-Incarnation"
+
 type productionRunnerClient struct{}
 
 type productionEventStream struct {
-	events chan sessioncoord.RunnerEvent
-	cancel context.CancelFunc
-	body   io.ReadCloser
-	once   sync.Once
+	events      chan sessioncoord.RunnerEvent
+	cancel      context.CancelFunc
+	body        io.ReadCloser
+	incarnation string
+	once        sync.Once
 }
 
 func (s *productionEventStream) Events() <-chan sessioncoord.RunnerEvent { return s.events }
+
+// Incarnation reports which runner served this subscription, from the header
+// the runner stamps on every response. It implements
+// sessioncoord.StreamIncarnation; an empty value means the runner predates the
+// protocol.
+func (s *productionEventStream) Incarnation() string { return s.incarnation }
 func (s *productionEventStream) Close() error {
 	var err error
 	s.once.Do(func() { s.cancel(); err = s.body.Close() })
@@ -76,7 +89,12 @@ func (productionRunnerClient) Subscribe(ctx context.Context, endpoint string) (s
 		cancel()
 		return nil, fmt.Errorf("runner /events: %s", resp.Status)
 	}
-	s := &productionEventStream{events: make(chan sessioncoord.RunnerEvent, 64), cancel: cancel, body: resp.Body}
+	s := &productionEventStream{
+		events:      make(chan sessioncoord.RunnerEvent, 64),
+		cancel:      cancel,
+		body:        resp.Body,
+		incarnation: resp.Header.Get(runnerIncarnationHeader),
+	}
 	go func() { defer close(s.events); defer s.Close(); scanRunnerEvents(streamCtx, resp.Body, s.events) }()
 	return s, nil
 }
@@ -203,7 +221,15 @@ func (productionRunnerClient) Meta(ctx context.Context, endpoint string) (sessio
 	}
 	reg := centralstore.RunnerRegistration{ID: centralstore.SessionID(s.ID), Adapter: s.Adapter, Alive: s.Alive, CreatedAt: parseMillis(s.CreatedAt), ObservedAt: centralstore.UnixMillis(time.Now().UnixMilli())}
 	reg.Facts = runnerMetaFacts(s)
-	return sessioncoord.RunnerMeta{Registration: reg, PID: s.PID, RunnerVersion: s.RunnerVersion, BinaryHash: s.BinaryHash}, nil
+	// Prefer the header: it is stamped by the same middleware that stamps the
+	// subscription response, so the two comparisons cannot disagree because
+	// of a body-serialisation quirk. The body field is the fallback for a
+	// transport (or proxy) that drops headers.
+	incarnation := resp.Header.Get(runnerIncarnationHeader)
+	if incarnation == "" {
+		incarnation = s.Incarnation
+	}
+	return sessioncoord.RunnerMeta{Registration: reg, PID: s.PID, RunnerVersion: s.RunnerVersion, BinaryHash: s.BinaryHash, Incarnation: incarnation}, nil
 }
 func parseMillis(v string) centralstore.UnixMillis {
 	t, _ := time.Parse(time.RFC3339, v)
@@ -212,6 +238,7 @@ func parseMillis(v string) centralstore.UnixMillis {
 
 type runnerMetaWire struct {
 	ID              string            `json:"id"`
+	Incarnation     string            `json:"incarnation"`
 	Adapter         string            `json:"adapter"`
 	Kind            string            `json:"kind"`
 	Alive           bool              `json:"alive"`

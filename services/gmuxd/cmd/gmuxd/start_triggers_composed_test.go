@@ -39,7 +39,11 @@ type controlledEndpoints struct {
 }
 type barrierControl struct{ calls chan string }
 
-func (c *barrierControl) Terminate(ctx context.Context, endpoint string) error {
+func (c *barrierControl) Reap(ctx context.Context, endpoint, expect string) error {
+	return c.Terminate(ctx, endpoint, expect)
+}
+
+func (c *barrierControl) Terminate(ctx context.Context, endpoint, _ string) error {
 	select {
 	case c.calls <- endpoint:
 		return nil

@@ -17,10 +17,18 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/statetool"
 )
 
-type bootstrapStream struct{ events chan sessioncoord.RunnerEvent }
+type bootstrapStream struct {
+	events      chan sessioncoord.RunnerEvent
+	incarnation string
+}
 
 func (s *bootstrapStream) Events() <-chan sessioncoord.RunnerEvent { return s.events }
 func (s *bootstrapStream) Close() error                            { return nil }
+
+// Incarnation makes this double behave like the production transport, which
+// carries the runner's identity out of the subscription response. A double
+// that omitted it would exercise only the "unidentifiable runner" path.
+func (s *bootstrapStream) Incarnation() string { return s.incarnation }
 
 type bootstrapRunners struct {
 	mu             sync.Mutex
@@ -36,7 +44,7 @@ func (r *bootstrapRunners) Subscribe(ctx context.Context, ep string) (sessioncoo
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	return &bootstrapStream{events: make(chan sessioncoord.RunnerEvent)}, nil
+	return &bootstrapStream{events: make(chan sessioncoord.RunnerEvent), incarnation: r.metas[ep].Incarnation}, nil
 }
 func (r *bootstrapRunners) Meta(ctx context.Context, ep string) (sessioncoord.RunnerMeta, error) {
 	r.metaCalls.Add(1)
@@ -79,7 +87,7 @@ func TestPeriodicScansRejectBeforeConversationTakeoverIO(t *testing.T) {
 	ref := "multi-megabyte-transcript"
 	meta := sessioncoord.RunnerMeta{Registration: centralstore.RunnerRegistration{
 		ID: "sess-periodic", Adapter: "pi", Alive: true, CreatedAt: 1, ObservedAt: 1,
-	}}
+	}, Incarnation: "incarnation-periodic"}
 	meta.Registration.Facts.ConversationRef = &ref
 	runners := &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{endpoint: meta}, blocked: map[string]bool{}}
 	resolver := &bootstrapCountingResolver{}
@@ -132,7 +140,8 @@ func (bootstrapReconciler) ReconcileRetained(context.Context, string, []sessionc
 
 type bootstrapControl struct{}
 
-func (bootstrapControl) Terminate(context.Context, string) error { return nil }
+func (bootstrapControl) Terminate(context.Context, string, string) error { return nil }
+func (bootstrapControl) Reap(context.Context, string, string) error      { return nil }
 
 type bootstrapSpawner struct{}
 

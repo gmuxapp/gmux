@@ -24,19 +24,25 @@ type harnessFleet struct {
 }
 
 type harnessStream struct {
-	events chan sessioncoord.RunnerEvent
-	once   sync.Once
+	events      chan sessioncoord.RunnerEvent
+	incarnation string
+	once        sync.Once
 }
 
 func (s *harnessStream) Events() <-chan sessioncoord.RunnerEvent { return s.events }
-func (s *harnessStream) Close() error                            { s.once.Do(func() { close(s.events) }); return nil }
+
+// Incarnation mirrors the production transport: the runner's identity comes
+// out of the subscription response.
+func (s *harnessStream) Incarnation() string { return s.incarnation }
+func (s *harnessStream) Close() error        { s.once.Do(func() { close(s.events) }); return nil }
 
 func newHarnessFleet(n int) *harnessFleet {
 	f := &harnessFleet{metas: make(map[string]sessioncoord.RunnerMeta), streams: make(map[string]*harnessStream), ignore: make(map[string]chan struct{})}
 	for i := 0; i < n; i++ {
 		ep, id := fmt.Sprintf("runner-%03d", i), centralstore.SessionID(fmt.Sprintf("sess-harness-%03d", i))
-		f.metas[ep] = sessioncoord.RunnerMeta{PID: 1000 + i, Registration: centralstore.RunnerRegistration{ID: id, Adapter: "shell", Alive: true, CreatedAt: 1, ObservedAt: 1}}
-		f.streams[ep] = &harnessStream{events: make(chan sessioncoord.RunnerEvent, 32)}
+		incarnation := fmt.Sprintf("incarnation-%s", id)
+		f.metas[ep] = sessioncoord.RunnerMeta{PID: 1000 + i, Registration: centralstore.RunnerRegistration{ID: id, Adapter: "shell", Alive: true, CreatedAt: 1, ObservedAt: 1}, Incarnation: incarnation}
+		f.streams[ep] = &harnessStream{events: make(chan sessioncoord.RunnerEvent, 32), incarnation: incarnation}
 	}
 	return f
 }

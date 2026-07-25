@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/paths"
+	"github.com/gmuxapp/gmux/packages/socklease"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 )
 
@@ -35,6 +36,15 @@ var (
 	// generation — not even while an unrelated operation's claim is held.
 	ErrReplaceWithoutClaim      = errors.New("sessioncoord: replace provenance requires a held lifecycle claim")
 	ErrAssertedIdentityMismatch = errors.New("sessioncoord: asserted session id does not match runner meta")
+	// ErrRunnerIncarnationMismatch marks a registration whose subscription and
+	// metadata were served by different runner processes. An endpoint is a
+	// reusable pathname, so two calls to it are two calls to a location, not
+	// to a process: without agreeing incarnations there is no evidence that
+	// the stream being installed belongs to the runner whose facts are being
+	// committed. Registration aborts before any commit, fence or registry
+	// change; the next discovery pass converges whoever actually owns the
+	// endpoint.
+	ErrRunnerIncarnationMismatch = errors.New("sessioncoord: subscription and metadata came from different runners")
 )
 
 // EventStream is already ordered by the runner transport. Subscribe must not
@@ -43,6 +53,27 @@ var (
 type EventStream interface {
 	Events() <-chan RunnerEvent
 	Close() error
+}
+
+// StreamIncarnation is an optional EventStream capability: a transport that
+// learned which runner answered the subscription reports it here.
+//
+// It is optional rather than part of EventStream so that a transport, a test
+// double, or a runner from before the incarnation protocol can simply not
+// implement it. Absence means "unknown", which every consumer resolves in its
+// own conservative direction.
+type StreamIncarnation interface {
+	// Incarnation returns the ephemeral identity of the runner that served
+	// this stream, or the empty string when the transport could not learn it.
+	Incarnation() string
+}
+
+// streamIncarnation extracts a stream's incarnation, or the empty string.
+func streamIncarnation(stream EventStream) string {
+	if si, ok := stream.(StreamIncarnation); ok {
+		return si.Incarnation()
+	}
+	return ""
 }
 
 type RunnerClient interface {
@@ -101,6 +132,11 @@ type RunnerMeta struct {
 	PID           int
 	RunnerVersion string
 	BinaryHash    string
+	// Incarnation is the ephemeral identity of the runner process that served
+	// this response, or empty for a runner that predates the protocol. It is
+	// never persisted: it exists to tell one process from its own successor at
+	// the same endpoint, which is a question about right now.
+	Incarnation string
 }
 
 type RunnerEvent struct {
@@ -254,6 +290,12 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 	// stream. Once the entry is installed (setupDone closed without cancel)
 	// streamCtx is detached from ctx.
 
+	// Capture the endpoint's physical identity before any runner I/O, so the
+	// installed Runtime describes the socket this registration actually talked
+	// to rather than whatever the pathname names once the dust settles. It is
+	// re-checked at install time (settledIdent).
+	preSocket := socketIdent(req.Endpoint)
+
 	streamCtx, streamCancel := context.WithCancel(context.Background())
 	setupDone := make(chan struct{})
 	// installMu makes install-vs-cancel atomic: the bridge goroutine may only
@@ -306,6 +348,21 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 	meta, err := c.runners.Meta(ctx, req.Endpoint)
 	if err != nil {
 		return Runtime{}, err
+	}
+	// Both runner calls addressed a pathname, not a process. Require them to
+	// report the same runner before treating either as evidence about the
+	// other: a pathname can change hands between the two, and then the stream
+	// we are about to install and the facts we are about to commit describe
+	// different processes.
+	//
+	// Two empty incarnations mean neither call could identify its runner --
+	// a pre-protocol runner, or a transport that does not carry the field.
+	// That is not a mismatch, it is an absence of evidence, and it is handled
+	// by refusing to claim an identity for the installed generation (below).
+	subIncarnation := streamIncarnation(stream)
+	if subIncarnation != meta.Incarnation {
+		return Runtime{}, fmt.Errorf("%w: subscription %q, metadata %q",
+			ErrRunnerIncarnationMismatch, subIncarnation, meta.Incarnation)
 	}
 	id := meta.Registration.ID
 	if !paths.IsValidSessionID(string(id)) {
@@ -499,10 +556,33 @@ loop:
 		c.invalidateVerdict(ev.ID)
 	}
 
+	// Settle this generation's endpoint identity.
+	//
+	// Two independent facts have to hold before the installed Runtime may
+	// claim to know which socket it is subscribed to:
+	//
+	//  1. The pathname named the same inode before Subscribe and after the
+	//     commit (settledIdent). Without this, a pathname rebound mid-flight
+	//     would be recorded as ours.
+	//  2. Both runner calls reported the same, known incarnation. Stat
+	//     bracketing alone cannot establish this: a bound AF_UNIX node can be
+	//     hard-linked, so an inode can leave a pathname and come back to it
+	//     (A -> B -> A) with every stat agreeing while the two calls reached
+	//     different runners.
+	//
+	// Fail either and the identity is unknown, which suppresses nothing and
+	// authorises nothing.
+	socketIdent := settledIdent(preSocket, req.Endpoint)
+	if meta.Incarnation == "" {
+		socketIdent = socklease.Ident{}
+	}
+
 	runtime := Runtime{
 		SessionID:     id,
 		Generation:    generation,
 		Endpoint:      req.Endpoint,
+		Socket:        socketIdent,
+		Incarnation:   meta.Incarnation,
 		PID:           meta.PID,
 		RunnerVersion: meta.RunnerVersion,
 		BinaryHash:    meta.BinaryHash,
@@ -836,4 +916,34 @@ func (c *Coordinator) reportError(ctx context.Context, err error) {
 	if c.errSink != nil {
 		c.errSink.Error(ctx, err)
 	}
+}
+
+// socketIdent returns the current physical identity of an endpoint pathname,
+// or the unknown identity when the pathname is not a filesystem socket (a
+// synthetic test endpoint, a vanished pathname, or something that is not a
+// socket at all).
+func socketIdent(ep string) socklease.Ident {
+	id, ok := socklease.StatSocket(ep)
+	if !ok {
+		return socklease.Ident{}
+	}
+	return id
+}
+
+// settledIdent returns the identity of ep only if it still matches the one
+// observed earlier, and the unknown identity otherwise. "The pathname named
+// the same socket before and after" is the strongest claim available without
+// holding the runner's lease, which the daemon deliberately cannot take while
+// the runner is alive.
+//
+// Residual: a pathname rebound to a new inode and back to a recycled one
+// inside the window would compare equal. That needs an inode number to be
+// reused within a single registration on the same device, and its
+// consequence is a suppressed probe that the next rebind (a new inode)
+// immediately un-suppresses.
+func settledIdent(before socklease.Ident, ep string) socklease.Ident {
+	if !before.Same(socketIdent(ep)) {
+		return socklease.Ident{}
+	}
+	return before
 }

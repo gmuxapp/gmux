@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,11 +43,26 @@ func (productionEndpointSource) Endpoints(context.Context) ([]string, error) {
 // productionRunnerControl retains the existing runner kill transport.
 type productionRunnerControl struct{}
 
-func (productionRunnerControl) Terminate(ctx context.Context, endpoint string) error {
+func (productionRunnerControl) Terminate(ctx context.Context, endpoint, expectIncarnation string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return discovery.KillSessionContext(ctx, endpoint)
+	return discovery.KillSessionContext(ctx, endpoint, expectIncarnation)
+}
+
+// Reap maps the coordinator's conditional reap onto the runner's /reap route
+// and translates "this runner has no such route" into the coordinator's own
+// sentinel, so the reap loop can treat a pre-protocol occupant as a decline
+// rather than a failure.
+func (productionRunnerControl) Reap(ctx context.Context, endpoint, expectIncarnation string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := discovery.ReapSessionContext(ctx, endpoint, expectIncarnation)
+	if errors.Is(err, discovery.ErrRunnerReapUnsupported) {
+		return fmt.Errorf("%w: %v", sessioncoord.ErrReapUnsupported, err)
+	}
+	return err
 }
 
 // productionConversationResolver dispatches opaque refs to the adapter registry.

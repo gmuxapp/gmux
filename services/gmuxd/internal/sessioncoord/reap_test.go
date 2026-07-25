@@ -13,18 +13,30 @@ import (
 type multiClient struct {
 	mu    sync.Mutex
 	metas map[string]RunnerMeta
+	// afterMeta runs once a Meta call has been answered, so a test can hand
+	// the endpoint to a different runner in the window between a
+	// classification and the action taken on it.
+	afterMeta func(endpoint string)
 }
 
-func (c *multiClient) Subscribe(context.Context, string) (EventStream, error) {
-	return newFakeStream(), nil
+func (c *multiClient) Subscribe(_ context.Context, endpoint string) (EventStream, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	stream := newFakeStream()
+	stream.incarnation = c.metas[endpoint].Incarnation
+	return stream, nil
 }
 
 func (c *multiClient) Meta(_ context.Context, endpoint string) (RunnerMeta, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	m, ok := c.metas[endpoint]
+	after := c.afterMeta
+	c.mu.Unlock()
 	if !ok {
 		return RunnerMeta{}, errors.New("unreachable")
+	}
+	if after != nil {
+		after(endpoint)
 	}
 	return m, nil
 }
@@ -39,7 +51,7 @@ func reapCoord(t *testing.T, client RunnerClient, control *fakeControl) *Coordin
 func TestReapOrphansTerminatesSupersededDuplicate(t *testing.T) {
 	id := sid(1)
 	client := &multiClient{metas: map[string]RunnerMeta{
-		"ep-orphan": {Registration: centralstore.RunnerRegistration{ID: id, Adapter: "pi", Alive: true}},
+		"ep-orphan": {Registration: centralstore.RunnerRegistration{ID: id, Adapter: "pi", Alive: true}, Incarnation: "incarnation-" + string(id)},
 	}}
 	control := &fakeControl{}
 	coord := reapCoord(t, client, control)
@@ -72,8 +84,8 @@ func TestReapOrphansNeverKillsTheRegisteredEndpointOrUnclaimedRunners(t *testing
 	registered := sid(2)
 	unclaimed := sid(3)
 	client := &multiClient{metas: map[string]RunnerMeta{
-		"ep-registered": {Registration: centralstore.RunnerRegistration{ID: registered, Adapter: "pi", Alive: true}},
-		"ep-unclaimed":  {Registration: centralstore.RunnerRegistration{ID: unclaimed, Adapter: "pi", Alive: true}},
+		"ep-registered": {Registration: centralstore.RunnerRegistration{ID: registered, Adapter: "pi", Alive: true}, Incarnation: "incarnation-" + string(registered)},
+		"ep-unclaimed":  {Registration: centralstore.RunnerRegistration{ID: unclaimed, Adapter: "pi", Alive: true}, Incarnation: "incarnation-" + string(unclaimed)},
 		"ep-anonymous":  {},
 	}}
 	control := &fakeControl{}
@@ -93,7 +105,7 @@ func TestReapOrphansNeverKillsTheRegisteredEndpointOrUnclaimedRunners(t *testing
 func TestReapOrphansSkipsClaimedSession(t *testing.T) {
 	id := sid(4)
 	client := &multiClient{metas: map[string]RunnerMeta{
-		"ep-orphan": {Registration: centralstore.RunnerRegistration{ID: id, Adapter: "pi", Alive: true}},
+		"ep-orphan": {Registration: centralstore.RunnerRegistration{ID: id, Adapter: "pi", Alive: true}, Incarnation: "incarnation-" + string(id)},
 	}}
 	control := &fakeControl{}
 	coord := reapCoord(t, client, control)
@@ -114,7 +126,7 @@ func TestReapOrphansSkipsClaimedSession(t *testing.T) {
 func TestReapOrphansTerminateFailureIsReportedAndSkipped(t *testing.T) {
 	id := sid(5)
 	client := &multiClient{metas: map[string]RunnerMeta{
-		"ep-orphan": {Registration: centralstore.RunnerRegistration{ID: id, Adapter: "pi", Alive: true}},
+		"ep-orphan": {Registration: centralstore.RunnerRegistration{ID: id, Adapter: "pi", Alive: true}, Incarnation: "incarnation-" + string(id)},
 	}}
 	control := &fakeControl{err: errors.New("kill failed")}
 	errs := &fakeErrorSink{}

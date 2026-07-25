@@ -8,15 +8,38 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/gmuxapp/gmux/packages/socklease"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 )
 
 // Runtime is the registry's runtime-only value. Durable common session facts
 // must never be added here.
 type Runtime struct {
-	SessionID     centralstore.SessionID
-	Generation    uint64
-	Endpoint      string
+	SessionID  centralstore.SessionID
+	Generation uint64
+	Endpoint   string
+	// Socket is the physical identity (device + inode) the endpoint pathname
+	// named while this generation registered. Endpoint alone cannot identify
+	// a runner: a pathname is reusable, and a replacement runner binding the
+	// same pathname is a different socket, a different process, and a
+	// different generation, while the old one may still be draining.
+	//
+	// Consumers must treat an unknown (zero) identity as "cannot prove
+	// anything": never as a match, and never as licence to suppress a probe
+	// or to terminate a process. It is unknown when the endpoint is not a
+	// filesystem socket (synthetic test endpoints) or when the pathname was
+	// rebound while this registration was in flight, in which case the
+	// registration's stream and the pathname's current inode may disagree.
+	Socket socklease.Ident
+	// Incarnation is the runner process that served this registration, as
+	// reported by both its subscription and its metadata. Empty means the
+	// runner could not be identified (it predates the protocol, or the
+	// transport does not carry the field), which is never treated as a match.
+	//
+	// It is runtime-only and deliberately never persisted: it distinguishes a
+	// process from its own successor at the same endpoint, a question that
+	// only has meaning while both are in living memory.
+	Incarnation   string
 	PID           int
 	RunnerVersion string
 	BinaryHash    string
