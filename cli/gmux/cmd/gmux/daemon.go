@@ -92,14 +92,36 @@ func findGmuxdBin() string {
 	return ""
 }
 
+// autostartLogFile opens the daemon log the autostarted child will inherit as
+// its stderr.
+//
+// The path is paths.DaemonLogPath -- the same file `gmuxd start` uses, the
+// same file `gmuxd log-path` prints, and the same file the daemon bounds. It
+// used to be $TMPDIR/gmuxd.log, which split the daemon's diagnostics in two by
+// launcher: the CLI-autostarted daemon (the overwhelmingly common one) wrote
+// somewhere `gmuxd log-path` never mentions, and, because the daemon only
+// bounds a log it can confirm is its own, that copy grew without limit.
+//
+// Append, never truncate: this runs before the child has checked for a healthy
+// incumbent, and most autostarts bounce straight off one.
+func autostartLogFile() *os.File {
+	logPath := paths.DaemonLogPath()
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		log.Printf("warning: cannot create the state dir for %s: %v", logPath, err)
+		return nil
+	}
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		log.Printf("warning: cannot open %s: %v", logPath, err)
+		return nil
+	}
+	return f
+}
+
 // startGmuxd launches gmuxd in the background with the given args.
 func startGmuxd(gmuxdBin string, args []string) bool {
 	// Log gmuxd output to a file so users can diagnose startup failures.
-	logPath := filepath.Join(os.TempDir(), "gmuxd.log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		logFile = nil
-	}
+	logFile := autostartLogFile()
 
 	cmd := exec.Command(gmuxdBin, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}

@@ -88,6 +88,20 @@ func StateDir() string {
 	return filepath.Join(home, ".local", "state", "gmux")
 }
 
+// DaemonLogPath returns the daemon's log file. It is a single source of truth
+// on purpose: both launchers (`gmuxd start` and the gmux CLI's autostart) open
+// it, the serving process bounds it by rotating this exact pathname, and
+// `gmuxd log-path` prints it. A disagreement between any two of those would
+// mean the daemon bounding a file nobody reads, or rotating one somebody else
+// owns.
+//
+// Bounding is a rename plus a descriptor move rather than a truncation, so
+// nothing written to the log is ever destroyed in place -- see logbound.go for
+// why that distinction matters.
+func DaemonLogPath() string {
+	return filepath.Join(StateDir(), "gmuxd.log")
+}
+
 // SessionsDir returns the directory under StateDir that holds
 // per-session subdirectories (meta.json, scrollback). Both the
 // runner (writing scrollback) and gmuxd (writing meta.json,

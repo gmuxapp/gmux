@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"time"
+
+	"github.com/gmuxapp/gmux/packages/paths"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
@@ -128,7 +130,7 @@ func openUI() {
 		time.Sleep(200 * time.Millisecond)
 	}
 	if !ready {
-		log.Fatalf("gmuxd is not running (check %s/gmuxd.log for errors)", os.TempDir())
+		log.Fatalf("gmuxd is not running (check %s for errors)", paths.DaemonLogPath())
 	}
 
 	// Parse health response for TCP address and auth token.
