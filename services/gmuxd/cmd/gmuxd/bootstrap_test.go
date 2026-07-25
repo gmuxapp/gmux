@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -76,6 +77,15 @@ func (r *bootstrapCountingResolver) DescribeConversation(context.Context, string
 	return sessioncoord.ConversationInfo{ID: "conversation"}, nil
 }
 
+// A healthy, unchanged fleet must cost nothing per tick. The endpoint here is
+// a real socket file, so discovery can identify it: the installed generation
+// is subscribed to exactly that socket, so 300 further scans must perform no
+// runner I/O at all -- no Subscribe, no Meta (neither for registration nor for
+// the orphan probe) -- and produce no diagnostics.
+//
+// The takeover-I/O assertions are the original point of this test and still
+// hold: a rejected registration must not read the session list or resolve
+// conversations.
 func TestPeriodicScansRejectBeforeConversationTakeoverIO(t *testing.T) {
 	ctx := context.Background()
 	store, err := centralstore.Open(ctx, t.TempDir())
@@ -83,7 +93,12 @@ func TestPeriodicScansRejectBeforeConversationTakeoverIO(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	const endpoint = "runner"
+	endpoint := filepath.Join(t.TempDir(), "sess-periodic.sock")
+	ln, err := net.Listen("unix", endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
 	ref := "multi-megabyte-transcript"
 	meta := sessioncoord.RunnerMeta{Registration: centralstore.RunnerRegistration{
 		ID: "sess-periodic", Adapter: "pi", Alive: true, CreatedAt: 1, ObservedAt: 1,
@@ -113,11 +128,11 @@ func TestPeriodicScansRejectBeforeConversationTakeoverIO(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := runners.subscribeCalls.Load(); got != 301 {
-		t.Fatalf("Subscribe calls=%d, want 301", got)
+	if got := runners.subscribeCalls.Load(); got != 1 {
+		t.Fatalf("Subscribe calls=%d, want 1 (convergence only; the installed socket is skipped)", got)
 	}
-	if got := runners.metaCalls.Load(); got != 601 {
-		t.Fatalf("Meta calls=%d, want 601 (register verification + orphan probe)", got)
+	if got := runners.metaCalls.Load(); got != 1 {
+		t.Fatalf("Meta calls=%d, want 1 (convergence only; neither registration nor the orphan probe re-runs)", got)
 	}
 	// Scan's trailing Reconcile performs one expected ListSessions call. Any
 	// additional call is registration takeover preparation and is forbidden.
@@ -127,8 +142,11 @@ func TestPeriodicScansRejectBeforeConversationTakeoverIO(t *testing.T) {
 	if got := resolver.calls.Load(); got != baseResolves {
 		t.Fatalf("resolver/rchar proxy calls=%d, want unchanged %d", got, baseResolves)
 	}
-	if got := reported.Load(); got != 300 {
-		t.Fatalf("observable ErrGenerationActive reports=%d, want 300", got)
+	if got := reported.Load(); got != 0 {
+		t.Fatalf("diagnostics reported=%d, want 0 for an unchanged healthy fleet", got)
+	}
+	if got := boot.diag.size(); got != 0 {
+		t.Fatalf("diagnostic entries retained=%d, want 0", got)
 	}
 }
 
