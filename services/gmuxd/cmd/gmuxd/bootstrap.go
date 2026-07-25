@@ -130,18 +130,22 @@ type BootstrapConfig struct {
 	// Durable overrides Store only at the coordinator boundary. Production
 	// leaves it nil; composition tests use it to count durable operations while
 	// retaining the real central store for all other bootstrap components.
-	Durable                        sessioncoord.Durable
-	Runners                        sessioncoord.RunnerClient
-	Control                        sessioncoord.RunnerControl
-	Spawner                        sessioncoord.RunnerSpawner
-	Resolver                       sessioncoord.ConversationResolver
-	Reconciler                     sessioncoord.AdapterReconciler
-	LocalPeers                     sessioncoord.LocalPeerInputSource
-	Peers                          central.PeerSource
-	PeerSessions                   wire.PeerSessionSource
-	Converter                      *wire.Converter
-	Endpoints                      EndpointSource
-	Errors                         sessioncoord.ErrorSink
+	Durable      sessioncoord.Durable
+	Runners      sessioncoord.RunnerClient
+	Control      sessioncoord.RunnerControl
+	Spawner      sessioncoord.RunnerSpawner
+	Resolver     sessioncoord.ConversationResolver
+	Reconciler   sessioncoord.AdapterReconciler
+	LocalPeers   sessioncoord.LocalPeerInputSource
+	Peers        central.PeerSource
+	PeerSessions wire.PeerSessionSource
+	Converter    *wire.Converter
+	Endpoints    EndpointSource
+	Errors       sessioncoord.ErrorSink
+	// Notices receives discovery events that are not errors but must be
+	// visible exactly once: a stale socket reaped, an endpoint recovered.
+	// Production leaves it nil, which logs; tests capture it.
+	Notices                        func(context.Context, string)
 	Frames                         func(context.Context, wire.Frames)
 	Clock                          func() centralstore.UnixMillis
 	RunnerBudget, ConvergeDeadline time.Duration
@@ -166,6 +170,9 @@ type Bootstrap struct {
 	workers     sync.WaitGroup
 	closeOnce   sync.Once
 	bridge      *composerDirtyBridge
+	// diag remembers the last reported diagnosis per endpoint incarnation so
+	// discovery reports transitions rather than steady states.
+	diag *endpointDiag
 }
 
 type composerDirtyBridge struct {
@@ -202,7 +209,7 @@ func newBootstrap(cfg BootstrapConfig) (*Bootstrap, error) {
 	coord := sessioncoord.New(registry, cfg.Runners, durable, bridge, cfg.Errors, opts...)
 	cache := wire.NewCache(cfg.Converter, cfg.PeerSessions)
 	lifetimeCtx, cancel := context.WithCancel(context.Background())
-	b := &Bootstrap{Store: cfg.Store, Registry: registry, Coordinator: coord, Cache: cache, cfg: cfg, firstPair: make(chan struct{}), lifetimeCtx: lifetimeCtx, cancel: cancel, bridge: bridge}
+	b := &Bootstrap{Store: cfg.Store, Registry: registry, Coordinator: coord, Cache: cache, cfg: cfg, firstPair: make(chan struct{}), lifetimeCtx: lifetimeCtx, cancel: cancel, bridge: bridge, diag: newEndpointDiag()}
 	sink := central.SinkFunc(func(ctx context.Context, batch central.Batch) {
 		frames := cache.Apply(batch)
 		if frames.Sessions != nil && frames.World != nil {
@@ -301,7 +308,8 @@ func (b *Bootstrap) Converge(ctx context.Context) ([]string, error) {
 			defer wg.Done()
 			probe, stop := context.WithTimeout(global, runnerBudget)
 			defer stop()
-			_, e := b.Coordinator.Register(probe, sessioncoord.RegisterRequest{Endpoint: ep})
+			ident := endpointIdent(ep)
+			rt, e := b.Coordinator.Register(probe, sessioncoord.RegisterRequest{Endpoint: ep})
 			// A transport that returns success after its budget expired did not
 			// honor cancellation. It may have committed a row, but it must not
 			// release startup readiness: doing so would make the global deadline
@@ -313,13 +321,14 @@ func (b *Bootstrap) Converge(ctx context.Context) ([]string, error) {
 			if errors.Is(e, sessioncoord.ErrRunnerTransportNoncompliant) {
 				transportViolatedDeadline.Store(true)
 			}
-			if e != nil && b.cfg.Errors != nil {
+			if e != nil {
 				class := "unreachable"
 				if errors.Is(e, sessioncoord.ErrInvalidSessionID) || errors.Is(e, sessioncoord.ErrResumeIdentityMismatch) || errors.Is(e, sessioncoord.ErrReplaceWithoutClaim) {
 					class = "permanent"
 				}
-				b.cfg.Errors.Error(context.WithoutCancel(ctx), fmt.Errorf("bootstrap register %s (%s): %w", ep, class, e))
+				e = fmt.Errorf("(%s): %w", class, e)
 			}
+			b.classifyRegister(context.WithoutCancel(ctx), "bootstrap converge", ep, ident, rt, e)
 		}()
 	}
 	done := make(chan struct{})
@@ -400,6 +409,13 @@ func (b *Bootstrap) Reconcile(ctx context.Context) error {
 // Scan is the periodic discovery trigger: register candidates, then piggyback
 // orphan reaping and reconciliation. Registration itself deduplicates active
 // generations safely.
+//
+// An endpoint whose socket is exactly the one an installed generation is
+// subscribed to is skipped outright. That is the whole steady state of a
+// healthy machine, and it must cost nothing: no Subscribe, no Meta, no log.
+// Skipping is keyed on the socket's physical identity, never its pathname, so
+// a pathname rebound by a new runner is still probed and a second endpoint
+// claiming an installed session id is still visible as a collision.
 func (b *Bootstrap) Scan(ctx context.Context) error {
 	eps, err := b.cfg.Endpoints.Endpoints(ctx)
 	if err != nil {
@@ -408,11 +424,16 @@ func (b *Bootstrap) Scan(ctx context.Context) error {
 	rb, globalBudget, _, _ := b.bounds()
 	scanCtx, stop := context.WithTimeout(ctx, globalBudget)
 	defer stop()
+	installed := b.installedSockets()
 	workers := 8
 	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup
 	for _, ep := range eps {
 		ep := ep
+		ident := endpointIdent(ep)
+		if _, skip := installed[ident]; skip && ident.Known() {
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -423,14 +444,15 @@ func (b *Bootstrap) Scan(ctx context.Context) error {
 			}
 			defer func() { <-sem }()
 			p, cancel := context.WithTimeout(scanCtx, rb)
-			_, e := b.Coordinator.Register(p, sessioncoord.RegisterRequest{Endpoint: ep})
+			rt, e := b.Coordinator.Register(p, sessioncoord.RegisterRequest{Endpoint: ep})
 			cancel()
-			if e != nil && b.cfg.Errors != nil {
-				b.cfg.Errors.Error(ctx, fmt.Errorf("bootstrap periodic register %s: %w", ep, e))
-			}
+			b.classifyRegister(ctx, "bootstrap periodic", ep, ident, rt, e)
 		}()
 	}
 	wg.Wait()
+	// Endpoints that vanished (reaped, or unlinked by their runner) will never
+	// clear their own diagnostic state, so drop it here.
+	b.diag.retain(eps)
 	if _, err := b.Coordinator.ReapOrphans(ctx, eps); err != nil {
 		if b.cfg.Errors != nil {
 			b.cfg.Errors.Error(ctx, fmt.Errorf("bootstrap periodic reap: %w", err))

@@ -61,6 +61,8 @@ func (c *Coordinator) ReapOrphans(ctx context.Context, endpoints []string) ([]st
 	}
 	c.mu.Unlock()
 
+	installed := c.registry.InstalledSockets()
+
 	var reaped []string
 	for _, endpoint := range endpoints {
 		// ── probe: I/O, no locks ─────────────────────────────────────────
@@ -68,6 +70,12 @@ func (c *Coordinator) ReapOrphans(ctx context.Context, endpoints []string) ([]st
 		// the socket that actually answered Meta, or is unknown when the
 		// pathname moved underneath the probe.
 		preProbe := socketIdent(endpoint)
+		if _, isInstalled := installed[preProbe]; isInstalled && preProbe.Known() {
+			// This pathname names a socket an installed generation is
+			// subscribed to. It cannot be an orphan, so skip the probe
+			// entirely: an unchanged fleet must cost no runner I/O per tick.
+			continue
+		}
 		meta, err := c.runners.Meta(ctx, endpoint)
 		if err != nil {
 			continue // unreachable/unknown: discovery's problem, not reaping's

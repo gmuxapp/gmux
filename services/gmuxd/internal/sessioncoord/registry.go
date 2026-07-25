@@ -184,6 +184,28 @@ func (r *Registry) Snapshot() []Runtime {
 	return out
 }
 
+// InstalledSockets returns the set of physical socket identities that
+// currently have an installed, subscribed, non-fenced generation. It is the
+// authority for "this socket is already installed": the registry itself, not
+// a cache maintained alongside it, so an entry that leaves the registry stops
+// suppressing work in the same instant.
+//
+// Unknown identities are excluded. They prove nothing, and an unknown identity
+// that suppressed a probe would hide every runner the daemon could not
+// identify -- the opposite of the intent.
+func (r *Registry) InstalledSockets() map[socklease.Ident]struct{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[socklease.Ident]struct{}, len(r.entries))
+	for _, e := range r.entries {
+		if e.superseded || !e.Subscribed || !e.Socket.Known() {
+			continue
+		}
+		out[e.Socket] = struct{}{}
+	}
+	return out
+}
+
 // liveSessionIDs returns the IDs of entries with an installed, non-fenced
 // generation, sorted. Unlike Snapshot it excludes superseded (fenced)
 // entries — a fenced entry is mid-replacement and must not be treated as
