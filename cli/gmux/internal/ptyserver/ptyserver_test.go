@@ -33,6 +33,10 @@ func mustBindSocket(t *testing.T, sockPath string) net.Listener {
 	if err != nil {
 		t.Fatalf("BindSocket %s: %v", sockPath, err)
 	}
+	// Release the lease at the end of the test even when the test never
+	// shuts the server down, so a leaked lease cannot make an unrelated
+	// later test see ErrSocketInUse.
+	t.Cleanup(func() { _ = ln.ReleaseOwnership() })
 	return ln
 }
 
@@ -1474,19 +1478,26 @@ func TestNewSpawnsChildWithComposedEnv(t *testing.T) {
 }
 
 func TestBindSocketStaleFile(t *testing.T) {
-	// A leftover socket file with no listener is not a real owner;
-	// BindSocket should remove it and listen successfully.
+	// A leftover pathname whose lease-aware owner is gone (socket file plus
+	// its lock file, the state a SIGKILLed runner leaves) is reclaimable:
+	// holding the lease proves that owner is not running.
+	//
+	// Note the change of premise from the pre-lease version of this test,
+	// which cleared *any* occupant. An occupant with no lock file is no
+	// longer removed at all, because nothing proves it is not a live runner
+	// from before this protocol -- see TestBindSocketRefusesUnleasedOccupant.
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "stale.sock")
-	if err := os.WriteFile(sockPath, []byte("not a socket"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	stale := crashedLeaseAwareSocket(t, sockPath)
 
 	ln, err := BindSocket(sockPath)
 	if err != nil {
-		t.Fatalf("BindSocket on stale file: %v", err)
+		t.Fatalf("BindSocket on a lease-aware stale socket: %v", err)
 	}
 	defer ln.Close()
+	if fresh := mustIdent(t, sockPath); fresh.Same(stale) {
+		t.Fatal("BindSocket reused the stale socket instead of rebinding")
+	}
 
 	// A second bind on the same path should now see a live owner
 	// (the first listener) and refuse with ErrSocketInUse.
@@ -1576,14 +1587,17 @@ func TestKillReleasesSocketPathBeforeResponding(t *testing.T) {
 	if _, err := os.Stat(sockPath); !os.IsNotExist(err) {
 		t.Errorf("socket path still exists after /kill returned 204: %v", err)
 	}
-
-	// And a fresh BindSocket on the same path must succeed:
-	// path is gone, no live owner.
+	// And a fresh BindSocket on the same path must succeed *without* waiting
+	// for the old runner's Shutdown: the daemon spawns the restart
+	// replacement as soon as it sees the exit event, which the old runner
+	// emits well before it shuts down. /kill therefore has to hand over the
+	// lease, not just unlink the pathname.
 	ln, err := BindSocket(sockPath)
 	if err != nil {
-		t.Fatalf("BindSocket after /kill: %v", err)
+		t.Fatalf("BindSocket after /kill: %v (the dying runner still owns the socket lease)", err)
 	}
-	ln.Close()
+	ln.Listener.Close()
+	_ = ln.ReleaseOwnership()
 }
 
 // TestBuildChildEnv_StripsResumeID guards the runner→child boundary
@@ -1767,10 +1781,10 @@ func TestShutdownIdempotent(t *testing.T) {
 // without embedding a path-dependent binary reference.
 type hookTestAdapter struct{}
 
-func (hookTestAdapter) Name() string                            { return "test-hook" }
-func (hookTestAdapter) Discover() bool                          { return false }
-func (hookTestAdapter) Match([]string) bool                     { return false }
-func (hookTestAdapter) Env(adapter.EnvContext) []string         { return nil }
+func (hookTestAdapter) Name() string                    { return "test-hook" }
+func (hookTestAdapter) Discover() bool                  { return false }
+func (hookTestAdapter) Match([]string) bool             { return false }
+func (hookTestAdapter) Env(adapter.EnvContext) []string { return nil }
 func (hookTestAdapter) HookCommand(args []string, _ string) ([]string, bool) {
 	// Append a fixed marker that does NOT start with '-' so Go flag.Parse in
 	// the subprocess helper treats it as a non-flag positional argument.
