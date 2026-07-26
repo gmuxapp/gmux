@@ -340,17 +340,50 @@ func (s managerProjectionSink) ReplacePeerSessions(peer string, rows []SessionPr
 		copyRows[i] = cloneProjection(rows[i])
 	}
 	s.m.mu.Lock()
+	prev, hadPrev := s.m.sessions[peer]
 	s.m.sessions[peer] = copyRows
 	local := false
 	if mp := s.m.peers[peer]; mp != nil {
 		local = mp.peer.Config.Local
 	}
 	s.m.mu.Unlock()
+	// No-op suppression (reciprocal-peering feedback loop). A spoke
+	// re-ships its full snapshot on every change and at its coalescer
+	// cadence, so most deliveries carry a projection we already hold.
+	// Propagating those as dirty made two mutually-peered nodes ping-pong
+	// identical snapshots forever: A's dirty hook recomposes and
+	// broadcasts to B's ?as=peer stream, B replaces an equal projection,
+	// marks dirty, broadcasts back. The legacy store had the equivalent
+	// guard in upsertCommon's `unchanged` check; the authority-neutral
+	// projection path (ADR 0026) lost it, so it lives here — at the one
+	// place that owns the peer projection cache, before any sink write or
+	// hook. State transitions (connect/disconnect/removal) still fire via
+	// onStatus/removePeerSessions, which do not route through here.
+	if hadPrev && projectionsEqual(prev, copyRows) {
+		return
+	}
 	if s.m.sink != nil {
 		s.m.sink.ReplacePeerSessions(peer, copyRows)
 	}
 	if s.m.hooks.PeerSessionsDirty != nil {
 		s.m.hooks.PeerSessionsDirty()
+	}
+	// The sessions hook only marks the sessions kind dirty, but part of the
+	// world payload is derived from this same projection: peers[].session_count
+	// (world.go) and PeerWorld.LocalPeerSessions. Before no-op suppression the
+	// reciprocal storm kept the world recomposing continuously so those stayed
+	// accidentally fresh; now the only other world triggers are peer status
+	// transitions and catalog/projects deltas, so a peer whose session set
+	// changes would show a stale count until an unrelated event. Ask for the
+	// world recompose explicitly, and only for the changes that can actually
+	// move those fields.
+	//
+	// This does not reopen a loop: it is reachable only from a real projection
+	// change (the equality gate above already returned for no-ops), and the
+	// world frame it produces reaches the peer as projects-update, which
+	// fetchProjects absorbs unless the fetched catalog really differs.
+	if s.m.hooks.PeerWorldDirty != nil && worldRelevantSessionChange(prev, copyRows) {
+		s.m.hooks.PeerWorldDirty()
 	}
 	if local && s.m.hooks.LocalPeerConnected != nil {
 		s.m.hooks.LocalPeerConnected(peer, copyRows)
