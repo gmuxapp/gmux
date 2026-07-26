@@ -149,15 +149,14 @@ Use this to let derived consumers (e.g. the fulltext search index) stream a conv
 
 ```go
 type Resumer interface {
+    // nil means the described conversation is not resumable.
     ResumeCommand(info *ConversationInfo) []string
-    CanResume(ref string) bool
 }
 ```
 
 Use this when a finished session can be resumed later.
 
-- `CanResume(ref)` filters out invalid or empty conversations
-- `ResumeCommand(info)` tells gmux how to resume the session when the user clicks it — if the command embeds a locator (pi's `--session <path>`), take it from `info.Ref`
+- `ResumeCommand(info)` tells gmux how to resume the session when the user clicks it, and returns `nil` for invalid or empty conversations — if the command embeds a locator (pi's `--session <path>`), take it from `info.Ref`
 
 ## Live state and conversation discovery
 
@@ -194,11 +193,13 @@ Sessions transition seamlessly between alive and resumable states.
 When a session exits, `gmuxd` checks whether its adapter implements `ConversationDescriber` + `Resumer` and whether the session has a recorded `ConversationRef` (reported by the agent hook). If so:
 
 1. the resume command is derived from the adapter's `ResumeCommand()`
-2. `command` is set to the resume command
-3. `resumable` is derived automatically (`!alive && command present`)
-4. the session appears in the sidebar as clickable to resume — no intermediate "exited" state
+2. `command` is set to the derived resume command — including when that command is empty, which is the adapter's "not resumable" verdict
+3. `resumable` is derived automatically (`!alive && command present`), so an empty derivation presents the session as not resumable
+4. otherwise the session appears in the sidebar as clickable to resume — no intermediate "exited" state
 
-Sessions without a recorded conversation keep their original command, so "resume" re-runs it.
+The daemon applies the same derivation when it spawns the resumed runner, which is why presentation never falls back to the durable launch command for a session that has a conversation ref.
+
+Sessions without a recorded conversation ref do not go through this derivation and keep their original command.
 
 ### Dead sessions survive daemon restarts
 

@@ -14,8 +14,12 @@ import (
 // DB-backed adapter needs only ConversationDescriber (+ Resumer) — no
 // directory layout, no stat, no path semantics anywhere in the daemon.
 type dbAdapter struct {
-	name string                              // adapter name; "dbtool" when empty
-	rows map[string]adapter.ConversationInfo // ref → row
+	name      string                              // adapter name; "dbtool" when empty
+	rows      map[string]adapter.ConversationInfo // ref → row
+	describes int                                 // DescribeConversation call count
+	// zeroLenResume makes the non-resumable verdict a non-nil empty slice
+	// instead of nil — a legal adapter return the contract treats the same.
+	zeroLenResume bool
 }
 
 func (d *dbAdapter) Name() string {
@@ -29,6 +33,7 @@ func (d *dbAdapter) Match(_ []string) bool             { return false }
 func (d *dbAdapter) Env(_ adapter.EnvContext) []string { return nil }
 
 func (d *dbAdapter) DescribeConversation(ref string) (*adapter.ConversationInfo, error) {
+	d.describes++
 	row, ok := d.rows[ref]
 	if !ok {
 		return nil, errors.New("no such row")
@@ -37,13 +42,16 @@ func (d *dbAdapter) DescribeConversation(ref string) (*adapter.ConversationInfo,
 	return &row, nil
 }
 
+// ResumeCommand carries the adapter's resumability verdict: an empty
+// conversation yields no command (adapter.Resumer contract).
 func (d *dbAdapter) ResumeCommand(info *adapter.ConversationInfo) []string {
+	if info == nil || info.MessageCount == 0 {
+		if d.zeroLenResume {
+			return []string{}
+		}
+		return nil
+	}
 	return []string{"dbtool", "resume", info.ID}
-}
-
-func (d *dbAdapter) CanResume(ref string) bool {
-	_, ok := d.rows[ref]
-	return ok
 }
 
 var (
@@ -111,5 +119,81 @@ func TestScan_DescribeFailureNotIndexed(t *testing.T) {
 	}
 	if idx.Count() != 0 {
 		t.Errorf("index count = %d, want 0", idx.Count())
+	}
+}
+
+// TestScan_NonResumableNotIndexed pins the caller side of the Resumer
+// contract: a conversation that describes cleanly but whose adapter returns
+// no resume command is not indexed and yields no slug. It also pins the
+// single-Describe property the CanResume removal bought — Scan must not
+// re-describe the ref to ask about resumability.
+func TestScan_NonResumableNotIndexed(t *testing.T) {
+	a := &dbAdapter{rows: map[string]adapter.ConversationInfo{
+		"row:empty": {
+			ID:           "conv-empty",
+			Title:        "started, never used",
+			Slug:         "started-never-used",
+			Cwd:          "/home/u/proj",
+			MessageCount: 0,
+		},
+	}}
+
+	idx := New()
+	if slug := idx.Scan(a, "row:empty"); slug != "" {
+		t.Fatalf("Scan of non-resumable conversation returned slug %q, want empty", slug)
+	}
+	if idx.Count() != 0 {
+		t.Errorf("index Count = %d, want 0", idx.Count())
+	}
+	if _, ok := idx.Lookup("dbtool", "started-never-used"); ok {
+		t.Error("non-resumable conversation is reachable by slug")
+	}
+	if a.describes != 1 {
+		t.Errorf("DescribeConversation called %d times, want exactly 1", a.describes)
+	}
+}
+
+// TestScan_ResumableDescribesOnce is the positive half of the same property.
+func TestScan_ResumableDescribesOnce(t *testing.T) {
+	a := &dbAdapter{rows: map[string]adapter.ConversationInfo{
+		"row:7": {ID: "conv-7", Slug: "seven", Cwd: "/home/u/proj", MessageCount: 2},
+	}}
+	idx := New()
+	if slug := idx.Scan(a, "row:7"); slug != "seven" {
+		t.Fatalf("Scan slug = %q, want seven", slug)
+	}
+	if a.describes != 1 {
+		t.Errorf("DescribeConversation called %d times, want exactly 1", a.describes)
+	}
+}
+
+// TestScan_ZeroLengthResumeCommandNotIndexed pins the len-based reading of the
+// Resumer contract: an adapter may signal "not resumable" with a non-nil empty
+// slice, and Scan must exclude it exactly as it excludes nil. A consumer that
+// checked `cmd == nil` instead of `len(cmd) == 0` would index a row whose
+// resume command cannot be executed.
+func TestScan_ZeroLengthResumeCommandNotIndexed(t *testing.T) {
+	a := &dbAdapter{zeroLenResume: true, rows: map[string]adapter.ConversationInfo{
+		"row:empty": {
+			ID:           "conv-empty",
+			Title:        "started, never used",
+			Slug:         "started-never-used",
+			Cwd:          "/home/u/proj",
+			MessageCount: 0,
+		},
+	}}
+	if got := a.ResumeCommand(&adapter.ConversationInfo{}); got == nil || len(got) != 0 {
+		t.Fatalf("fake must return a non-nil zero-length command, got %#v", got)
+	}
+
+	idx := New()
+	if slug := idx.Scan(a, "row:empty"); slug != "" {
+		t.Fatalf("Scan of zero-length resume command returned slug %q, want empty", slug)
+	}
+	if idx.Count() != 0 {
+		t.Errorf("index Count = %d, want 0", idx.Count())
+	}
+	if _, ok := idx.Lookup("dbtool", "started-never-used"); ok {
+		t.Error("zero-length-resume conversation is reachable by slug")
 	}
 }

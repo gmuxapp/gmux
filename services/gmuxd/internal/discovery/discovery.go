@@ -204,7 +204,7 @@ func Scan(sessions *store.Store, subs *Subscriptions, onDead OnDeadFunc) {
 		// reported) legitimately stays nil — terminalReason treats that
 		// as "died" already.
 		s.Alive = false
-		if cmd := ResolveResumeCommand(&s); cmd != nil {
+		if cmd := ResolveResumeCommand(&s); len(cmd) > 0 {
 			s.Command = cmd
 		}
 		sessions.Upsert(s)

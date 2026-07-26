@@ -203,8 +203,14 @@ func RenderProduction(w *World) (snapshot.SessionsPayload, snapshot.WorldPayload
 		}
 		if !f.Alive {
 			// subs.OnExit parity: the resume form replaces the launch
-			// command at death.
-			if cmd := ResumeCommand(f.Adapter, f.ConversationRef); cmd != nil {
+			// command at death. This legacy model keeps the launch
+			// command when derivation yields nothing; the wire converter
+			// deliberately does NOT (a ref that resolves to no command is
+			// non-resumable there, matching the spawner). No fixture
+			// currently carries a ref that fails to resolve, so the two
+			// models stay equivalent — add one only together with the
+			// legacy-side expectation.
+			if cmd := ResumeCommand(f.Adapter, f.ConversationRef); len(cmd) > 0 {
 				sess.Command = cmd
 			}
 		}

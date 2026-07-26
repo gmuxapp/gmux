@@ -112,10 +112,14 @@ func (c *Converter) session(row central.SessionRow) Session {
 		// durable state: the row keeps the launch command, the wire shows
 		// the resume form (design §3.1). RunnerSpawner applies the same
 		// pure function at spawn.
+		// The adapter is authoritative for a row that has a conversation
+		// ref: an empty derived command means that conversation cannot be
+		// resumed, and RunnerSpawner — which resolves the same way and
+		// ignores the durable command — will refuse to spawn. Falling back
+		// to the durable launch command here would advertise a resume the
+		// daemon cannot execute, so the row shows no command instead.
 		if c.ResumeCommand != nil && v.ConversationRef != "" {
-			if cmd := c.ResumeCommand(v.Adapter, v.ConversationRef); cmd != nil {
-				out.Command = cmd
-			}
+			out.Command = c.ResumeCommand(v.Adapter, v.ConversationRef)
 		}
 		// Narrowing: the composer's Resumable already folds in the verdict
 		// (dead ∧ durable command ∧ verdict ≠ Gone). Recompute the command

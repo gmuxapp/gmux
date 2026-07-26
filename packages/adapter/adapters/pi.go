@@ -296,17 +296,13 @@ func (p *Pi) DescribeConversation(ref string) (*adapter.ConversationInfo, error)
 	return info, nil
 }
 
+// ResumeCommand returns the command to resume a pi session, or nil when the
+// conversation has no messages worth resuming.
 func (p *Pi) ResumeCommand(info *adapter.ConversationInfo) []string {
-	return []string{"pi", "--session", info.Ref, "-c"}
-}
-
-// CanResume checks if a conversation is valid and has content worth resuming.
-func (p *Pi) CanResume(ref string) bool {
-	info, err := p.DescribeConversation(ref)
-	if err != nil {
-		return false
+	if info == nil || info.MessageCount == 0 {
+		return nil
 	}
-	return info.MessageCount > 0
+	return []string{"pi", "--session", info.Ref, "-c"}
 }
 
 // OpenConversation streams the raw JSONL transcript at ref.

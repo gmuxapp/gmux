@@ -253,18 +253,13 @@ func (c *Claude) DescribeConversation(ref string) (*adapter.ConversationInfo, er
 
 // --- Resumer ---
 
-// ResumeCommand returns the command to resume a Claude Code session.
+// ResumeCommand returns the command to resume a Claude Code session, or nil
+// when the conversation has no user messages worth resuming.
 func (c *Claude) ResumeCommand(info *adapter.ConversationInfo) []string {
-	return []string{"claude", "--resume", info.ID}
-}
-
-// CanResume checks if a conversation has user messages worth resuming.
-func (c *Claude) CanResume(ref string) bool {
-	info, err := c.DescribeConversation(ref)
-	if err != nil {
-		return false
+	if info == nil || info.MessageCount == 0 {
+		return nil
 	}
-	return info.MessageCount > 0
+	return []string{"claude", "--resume", info.ID}
 }
 
 // OpenConversation streams the raw JSONL transcript at ref.

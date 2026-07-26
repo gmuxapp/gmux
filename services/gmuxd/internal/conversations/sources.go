@@ -11,7 +11,7 @@ import (
 
 // indexSink bridges one adapter's ConversationSource to the index.
 // onRemoved, if set, additionally observes every conversation-gone event —
-// including refs the index never held (describe failure, CanResume=false,
+// including refs the index never held (describe failure, non-resumable,
 // empty cwd), which is why retirement hangs here and not off
 // Index.RemoveByRef: a dead session bound to an unindexed conversation
 // must still retire when that conversation is deleted.

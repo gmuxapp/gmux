@@ -90,7 +90,7 @@ function codexFile(home: string, spec: FixtureSpec): string {
 function piContent(spec: FixtureSpec): string {
   const ts = new Date().toISOString()
   // Header line + session_info (sets title directly) + a user message
-  // (so `MessageCount > 0` and the conversation passes `CanResume`).
+  // (so `MessageCount > 0` and the adapter yields a resume command).
   const header = JSON.stringify({
     type: 'session',
     id: spec.conversationID,
