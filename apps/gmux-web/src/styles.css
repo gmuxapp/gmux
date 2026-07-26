@@ -51,6 +51,11 @@ code {
   --sidebar-width: 272px;
   --header-height: 44px;
   --radius: 6px;
+  /* Tap target of the inline "+" launch button. It's the tallest thing
+   * in a folder header, so the header's own min-height derives from it
+   * — that keeps headers *without* a "+" (unresolved-host references)
+   * exactly as tall as the rest. */
+  --launch-btn-size: 24px;
 }
 
 * {
@@ -255,6 +260,15 @@ body {
   display: flex;
   flex-direction: column;
 }
+/* Rows live on their own element so the scrollport's background can sit
+ * behind them (see the touch cavity below). No paint of its own on
+ * desktop; it must not shrink, or a long list would compress instead of
+ * scrolling. */
+.sidebar-list {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+}
 /* Keep the initial breathing room as scrollable content, not scrollport
  * padding. Top padding remains visible while scrolling, so a sticky header
  * pinned below it leaves a strip where rows can bleed through. */
@@ -262,30 +276,173 @@ body {
   content: '';
   flex: 0 0 6px;
 }
-/* Touch: the header sits at the bottom (thumb zone), so the list's top
- * items are the hardest to reach. Grow the scrollable top spacer into a
- * blank "thumb reach" gap so the first item never hugs the top edge —
- * reachable at rest, and it just scrolls away once you start browsing
- * (costs nothing mid-scroll). Deliberately undecorated: on mobile the
- * chrome is all at the bottom, so top whitespace reads as balance.
+/* Touch: the header sits at the bottom (thumb zone), so a top-aligned
+ * list puts its first items where the thumb can't go. One rule fixes
+ * that, expressed by the top spacer: on open, the list occupies
+ * `min(list height, thumb reach)` at the bottom of the drawer.
  *
- * Sized so the *shown* area (first item → bottom header) is ~350px
- * rather than a fraction of the screen — the gap is "whatever's left
- * after reserving the shown area at the bottom". Shown never drops below
- * 40% of the viewport, so on tall screens it grows instead of leaving an
- * absurd gap. px keeps the 350 independent of device-pixel-ratio and
- * font scaling; --app-height is the JS-measured, address-bar-aware
- * viewport the drawer itself uses. The outer max() floors the gap so it
- * shrinks (rather than going negative) on very short screens. */
+ *   - Shorter than the thumb zone — the spacer grows (flex) and the list
+ *     rests on the header. Nothing scrolls; the drawer can't be scrolled
+ *     past its own content.
+ *   - Taller — the spacer stops at the reserve (min-height), so the first
+ *     item lands exactly at the top of the thumb zone and the remainder
+ *     overflows below the fold, scrolled to as usual.
+ *
+ * The reserve is everything above the thumb zone: the drawer's height
+ * less the chrome below the list (header + home-indicator inset) less
+ * the reach itself. max() floors it so it degrades to a sliver rather
+ * than going negative on very short screens.
+ *
+ * The spacer itself paints nothing — it only reserves the space that the
+ * cavity below shows through. */
 @media (pointer: coarse) {
+  /* Thumb reach: how much list a thumb can cover from the bottom bar.
+   * 350px measured, raised to 40% of the viewport on tall screens so the
+   * zone scales instead of leaving an absurd cavity. px, not vh, so it
+   * stays put across device-pixel-ratio and font scaling; --app-height is
+   * the JS-measured, address-bar-aware viewport the drawer itself uses. */
+  .sidebar {
+    --thumb-reach: max(350px, var(--app-height, 100dvh) * 0.4);
+  }
+
   .sidebar-scroll::before {
-    flex-basis: max(
+    flex: 1 1 0;
+    min-height: max(
       8px,
       calc(
         var(--app-height, 100dvh) - var(--header-height)
-        - max(350px, var(--app-height, 100dvh) * 0.4)
+        - env(safe-area-inset-bottom) - var(--thumb-reach)
       )
     );
+  }
+
+  /* The cavity is the scrollport's own back plane, not a block of
+   * content: painted on the scroll container, it stays put while the
+   * list slides in front of it. That's what makes it read as depth
+   * rather than as a dark first row — and it means the well shows
+   * wherever the slab doesn't reach: above the first row, in the strip
+   * below the last one, and in the momentary gap an overscroll bounce
+   * opens at either end (iOS rubber-banding moves the content, never
+   * the backdrop).
+   *
+   * Only the two horizontal walls are shaded — the side walls would
+   * frame the list itself, and the list is the surface in front, not
+   * something sunk into the well. They're built exactly like the slab's
+   * contact shadows below: stacked layers with decaying opacity and
+   * growing reach (an exponential-ish falloff rather than one linear
+   * ramp), plus small radial pools in the four corners where a second
+   * wall blocks the light. Gradients rather than inset box-shadows,
+   * which blur around a *box* and so thin out at the left and right
+   * ends.
+   *
+   * The gradient runs light-to-dark *downward*: a well lit from above
+   * catches light high on its back wall and pools shadow in the corner
+   * the slab sits in, so the darkest point is the contact line, not the
+   * top edge. The hue stays on the app's 250 — a warmer or cooler well
+   * reads as a different material, not a deeper one. A fine noise tile
+   * over the gradient gives the light something to sit in and keeps a
+   * near-flat 450px from banding on OLED. */
+  .sidebar-scroll {
+    background:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.15'/%3E%3C/svg%3E"),
+      radial-gradient(72px 40px at 0% 0%, rgb(0 0 0 / 0.2), rgb(0 0 0 / 0) 72%),
+      radial-gradient(72px 40px at 100% 0%, rgb(0 0 0 / 0.2), rgb(0 0 0 / 0) 72%),
+      radial-gradient(56px 26px at 0% 100%, rgb(0 0 0 / 0.14), rgb(0 0 0 / 0) 72%),
+      radial-gradient(56px 26px at 100% 100%, rgb(0 0 0 / 0.14), rgb(0 0 0 / 0) 72%),
+      linear-gradient(to bottom, rgb(0 0 0 / 0.22), rgb(0 0 0 / 0) 14px),
+      linear-gradient(to bottom, rgb(0 0 0 / 0.14), rgb(0 0 0 / 0) 40px),
+      linear-gradient(to bottom, rgb(0 0 0 / 0.09), rgb(0 0 0 / 0) 96px),
+      linear-gradient(to top, rgb(0 0 0 / 0.14), rgb(0 0 0 / 0) 10px),
+      linear-gradient(to top, rgb(0 0 0 / 0.09), rgb(0 0 0 / 0) 26px),
+      linear-gradient(to top, rgb(0 0 0 / 0.05), rgb(0 0 0 / 0) 56px),
+      linear-gradient(
+        to bottom,
+        oklch(16% 0.015 250),
+        oklch(12.5% 0.015 250)
+      );
+    /* The strip of cavity the list rests above; replaces the desktop
+     * end-of-list padding, which said the same thing with whitespace.
+     * Deep enough for the contact shadow and the bottom wall to resolve
+     * — much shallower and the two overlap into a flat dark bar. */
+    padding-bottom: 32px;
+  }
+
+  /* The raised surface. Opaque so it occludes the cavity as it scrolls
+   * over it. Its top edge is the only place the two planes meet, so it
+   * carries the depth: a hard 1px dark line (the corner itself, which
+   * no soft shadow can render at this scale), a contact shadow spilling
+   * up into the well, and a lit lip on the slab where it catches the
+   * light. Three cues on one edge — and none of them a frame around the
+   * list. */
+  .sidebar-list {
+    background: var(--bg-sidebar);
+    /* A border, not an inset shadow: the first .folder-header is sticky
+     * and opaque, so it paints over anything drawn inside the slab's top
+     * edge. The border box is outside its reach. Same token as the
+     * drawer's own edges — this is the same kind of line, so it should
+     * not be its own colour. */
+    border-top: 1px solid var(--border);
+    /* The bottom edge is the same joint seen from the other side, so the
+     * two tones swap places: the slab's underside faces away from the
+     * light and goes dark, and the lit line lands *below* it, on the
+     * strip of floor the light still grazes. Both are dimmer than the
+     * top edge — that face is in the slab's own shadow. */
+    border-bottom: 1px solid rgb(0 0 0 / 0.55);
+    /* Hard 1px lines only — unblurred, so they stay true corner to
+     * corner. The soft part of each joint is a gradient below. */
+    box-shadow:
+      0 -1px 0 0 rgb(0 0 0 / 0.95),
+      0 1px 0 0 color-mix(in oklch, var(--border) 55%, transparent);
+    position: relative;
+  }
+
+  /* The contact shadows the slab casts into the well, one per edge.
+   * Pseudo-elements sitting just outside the slab, for the same reason
+   * the walls are gradients: uniform full-bleed falloff instead of a
+   * box-shadow's corner rounding. They ride with the slab as it scrolls,
+   * which is what a cast shadow should do.
+   *
+   * The band is built the way a real contact shadow falls off: several
+   * stacked layers, each weaker and reaching further, so the darkness
+   * decays roughly exponentially away from the joint instead of the
+   * linear ramp a single gradient gives. It stays flat and horizontal
+   * across the full width — that's the dominant read.
+   *
+   * The corner occlusion is then two small radial pools anchored in the
+   * bottom corners, where light is blocked by the side wall as well as
+   * by the slab. Radial, because they have to fade out in *every*
+   * direction: the previous full-height linear pools ended abruptly at
+   * the top of the strip and left a visible seam. They only reach ~56px
+   * in, so the band reads as horizontal with darker corners, not as a
+   * curve. */
+  .sidebar-list::before,
+  .sidebar-list::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    pointer-events: none;
+  }
+  .sidebar-list::before {
+    bottom: 100%;
+    height: 26px;
+    background:
+      radial-gradient(56px 22px at 0% 100%, rgb(0 0 0 / 0.26), rgb(0 0 0 / 0) 72%),
+      radial-gradient(56px 22px at 100% 100%, rgb(0 0 0 / 0.26), rgb(0 0 0 / 0) 72%),
+      linear-gradient(to top, rgb(0 0 0 / 0.26), rgb(0 0 0 / 0) 5px),
+      linear-gradient(to top, rgb(0 0 0 / 0.16), rgb(0 0 0 / 0) 12px),
+      linear-gradient(to top, rgb(0 0 0 / 0.1), rgb(0 0 0 / 0) 26px);
+  }
+  /* Shallower and weaker: this face is already in the slab's shadow. */
+  .sidebar-list::after {
+    top: 100%;
+    height: 18px;
+    background:
+      radial-gradient(48px 16px at 0% 0%, rgb(0 0 0 / 0.18), rgb(0 0 0 / 0) 72%),
+      radial-gradient(48px 16px at 100% 0%, rgb(0 0 0 / 0.18), rgb(0 0 0 / 0) 72%),
+      linear-gradient(to bottom, rgb(0 0 0 / 0.2), rgb(0 0 0 / 0) 4px),
+      linear-gradient(to bottom, rgb(0 0 0 / 0.12), rgb(0 0 0 / 0) 10px),
+      linear-gradient(to bottom, rgb(0 0 0 / 0.08), rgb(0 0 0 / 0) 18px);
   }
 }
 
@@ -313,6 +470,8 @@ body {
   display: flex;
   align-items: center;
   padding: 5px 12px 5px 14px;
+  /* Height comes from the "+" button, not from whether it's rendered. */
+  min-height: calc(var(--launch-btn-size) + 10px);
   user-select: none;
   gap: 6px;
   cursor: pointer;
@@ -378,8 +537,8 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 24px;
-  min-height: 24px;
+  min-width: var(--launch-btn-size);
+  min-height: var(--launch-btn-size);
 }
 
 .launch-btn:hover {
