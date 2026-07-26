@@ -7,7 +7,7 @@ import {
   sessionStaleness, peers, peerAppearance, peerStatusByName,
   isSessionUnavailable, urlPath, urlSearch, filteredSessions, sidebarSessions, selectedId, folders,
   navigateToSession, setNavigate,
-  applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
+  applyPending, _rawSessions, _setRawWorld, _pendingMutations,
   applySessionsSnapshot,
   toUISession, localHostLabel, parseConnectURL, unreadCount, discovered,
   view, duplicateConversationFiles,
@@ -144,7 +144,7 @@ describe('reorder failures are surfaced, never silent', () => {
   beforeEach(() => { toasts.value = []; _pendingMutations.value = [] })
   afterEach(() => { vi.unstubAllGlobals(); toasts.value = []; _pendingMutations.value = [] })
 
-  it('toasts and retracts the overlay when the server rejects a local reorder', async () => {
+  it('toasts when the server rejects a local reorder', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false, status: 500, statusText: 'Internal Server Error',
       text: () => Promise.resolve(JSON.stringify({ error: { message: 'failed to save projects' } })),
@@ -153,10 +153,12 @@ describe('reorder failures are surfaced, never silent', () => {
     expect(toasts.value[0]).toMatchObject({
       kind: 'error', message: 'Reorder failed: failed to save projects',
     })
+    // No overlay to retract: the UI still shows the server's order, which
+    // after a rejection is still the truth.
     expect(_pendingMutations.value).toHaveLength(0)
   })
 
-  it('toasts when a peer reorder is rejected (no overlay to retract)', async () => {
+  it('toasts when a peer reorder is rejected', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false, status: 502, statusText: 'Bad Gateway',
       text: () => Promise.resolve(''),
@@ -1187,10 +1189,7 @@ describe('pending mutations overlay', () => {
   describe('applyPending (pure function)', () => {
     it('returns raw unchanged when there are no mutations', () => {
       const sess = [makeSession({ id: 'a' })]
-      const projs: ProjectItem[] = [{ slug: 'p', match: [] }]
-      const out = applyPending(sess, projs, [])
-      expect(out.sessions).toBe(sess)
-      expect(out.projects).toBe(projs)
+      expect(applyPending(sess, [])).toBe(sess)
     })
 
     it('mark-read clears unread and status.error on the targeted session', () => {
@@ -1199,32 +1198,27 @@ describe('pending mutations overlay', () => {
         makeSession({ id: 'b', unread: true }),
       ]
       const m: PendingMutation = { kind: 'mark-read', id: 'a', at: 0 }
-      const out = applyPending(sess, [], [m])
-      expect(out.sessions[0].unread).toBe(false)
-      expect(out.sessions[0].status?.error).toBe(false)
+      const out = applyPending(sess, [m])
+      expect(out[0].unread).toBe(false)
+      expect(out[0].status?.error).toBe(false)
       // Untouched session keeps its flags.
-      expect(out.sessions[1].unread).toBe(true)
+      expect(out[1].unread).toBe(true)
     })
 
     it('dismiss removes the targeted session', () => {
       const sess = [makeSession({ id: 'a' }), makeSession({ id: 'b' })]
-      const out = applyPending(sess, [], [{ kind: 'dismiss', id: 'a', at: 0 }])
-      expect(out.sessions.map(s => s.id)).toEqual(['b'])
-    })
-
-    it('reorder replaces a project sessions array', () => {
-      const projs: ProjectItem[] = [{ slug: 'p', match: [], sessions: ['x', 'y'] }]
-      const out = applyPending([], projs, [{ kind: 'reorder', slug: 'p', sessions: ['y', 'x'], at: 0 }])
-      expect(out.projects[0].sessions).toEqual(['y', 'x'])
+      const out = applyPending(sess, [{ kind: 'dismiss', id: 'a', at: 0 }])
+      expect(out.map(s => s.id)).toEqual(['b'])
     })
 
     it('stacks multiple mutations in order', () => {
-      const projs: ProjectItem[] = [{ slug: 'p', match: [], sessions: ['x'] }]
-      const out = applyPending([], projs, [
-        { kind: 'reorder', slug: 'p', sessions: ['a', 'b'], at: 0 },
-        { kind: 'reorder', slug: 'p', sessions: ['b', 'a'], at: 0 },
+      const sess = [makeSession({ id: 'a', unread: true }), makeSession({ id: 'b' })]
+      const out = applyPending(sess, [
+        { kind: 'mark-read', id: 'a', at: 0 },
+        { kind: 'dismiss', id: 'b', at: 0 },
       ])
-      expect(out.projects[0].sessions).toEqual(['b', 'a'])
+      expect(out.map(s => s.id)).toEqual(['a'])
+      expect(out[0].unread).toBe(false)
     })
   })
 
@@ -1243,14 +1237,6 @@ describe('pending mutations overlay', () => {
       dismissSession('a')
       expect(sessions.value.map(s => s.id)).toEqual(['b'])
       expect(_rawSessions.value.map(s => s.id)).toEqual(['a', 'b'])
-    })
-
-    it('reorderSessions reflects via the projects overlay', () => {
-      _setRawWorld({ projects: [{ slug: 'p', match: [], sessions: ['x', 'y'] }] })
-      reorderSessions('p', ['y', 'x'])
-      expect(projects.value[0].sessions).toEqual(['y', 'x'])
-      // Raw is untouched.
-      expect(_rawWorld.value.projects[0].sessions).toEqual(['x', 'y'])
     })
 
     it('reorderSessions for a local project hits /v1/projects/{slug}/sessions', () => {
@@ -1272,13 +1258,15 @@ describe('pending mutations overlay', () => {
       )
     })
 
-    it('peer reorder does not add a local optimistic overlay', () => {
-      // The local pending-mutations overlay is keyed by local project
-      // slug; applying it to a peer reorder would clobber the peer
-      // folder's session order with the viewer's local-projects view.
-      const before = _pendingMutations.value.length
-      reorderSessions('gmux', ['y', 'x'], 'tower')
-      expect(_pendingMutations.value.length).toBe(before)
+    it('reorder adds no optimistic overlay, local or peer', () => {
+      // Order reaches the UI only as server-stamped project_index, so
+      // there is no local array an overlay could pre-write: the owning
+      // daemon's echo is the only thing that moves a row.
+      _setRawWorld({ projects: [{ slug: 'p', match: [], sessions: ['x', 'y'] }] })
+      reorderSessions('p', ['y', 'x'])
+      reorderSessions('p', ['y', 'x'], 'tower')
+      expect(_pendingMutations.value).toHaveLength(0)
+      expect(projects.value[0].sessions).toEqual(['x', 'y'])
     })
   })
 
@@ -1297,14 +1285,6 @@ describe('pending mutations overlay', () => {
       dismissSession('a')
       expect(_pendingMutations.value).toHaveLength(1)
       _rawSessions.value = []
-      expect(_pendingMutations.value).toHaveLength(0)
-    })
-
-    it('drops a reorder mutation once raw matches the requested order', () => {
-      _setRawWorld({ projects: [{ slug: 'p', match: [], sessions: ['x', 'y'] }] })
-      reorderSessions('p', ['y', 'x'])
-      expect(_pendingMutations.value).toHaveLength(1)
-      _setRawWorld({ projects: [{ slug: 'p', match: [], sessions: ['y', 'x'] }] })
       expect(_pendingMutations.value).toHaveLength(0)
     })
 
