@@ -251,6 +251,10 @@ pi implements it (`Enter`, Kitty CSI-u `Alt+Enter`, Kitty CSI-u `Escape`, 10s). 
 
 Semantic actions travel gmux's semantic path, which stays permanently separate from raw input, so your encodings are never checked against the raw `gmux send --wait` submit guard — there is nothing to keep in sync.
 
+Encoding an action is only half of the capability: the runner will not deliver a single byte of a semantic action until your agent's hook reports `{"op":"ready"}` (see the [runner hook protocol](https://github.com/gmuxapp/gmux/blob/main/docs/runner-hook-protocol.md)). Report readiness as soon as the agent's composer accepts input, independently of any conversation bind, or the first `gmux agent prompt` of a fresh session waits out `ActionReadyTimeout` and fails. A readiness timeout delivers nothing at all, so it stays safe to retry.
+
+Your hook's `turn` **start** event matters for the same reason: after delivering a prompt the runner refuses further prompts that need an idle agent until it sees a fresh active turn, so an agent that reports only turn ends accepts one semantic prompt per session and refuses the rest.
+
 Two caveats worth copying if your agent is keystroke-driven like pi's. pi's interrupt is not a clean stop: the same handler restores queued follow-ups into the composer, so text the user never retyped can be left there. And the non-`Enter` keybinds are user-configurable, so a user who remaps `alt+enter` or `escape` silently loses semantic follow-up / interrupt support — the bytes still arrive, they just no longer mean that action.
 
 ### `CommandTitler`

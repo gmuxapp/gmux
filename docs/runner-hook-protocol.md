@@ -37,6 +37,10 @@ One JSON object per event, discriminated by `op`. Unknown ops/values are ignored
 (forward-compatible); zero-value fields are no-ops.
 
 ```jsonc
+// op "ready" — the agent can accept input (its composer/input handlers are
+// installed). Gates gmux's semantic agent actions (ADR 0027); see below.
+{ "op": "ready" }
+
 // op "session" — authoritative bind. Sent on startup and on every rebind
 // (switch/new/resume/fork). "session" here denotes the agent's own session
 // (its conversation) — the agent's language, per ADR 0015; gmux calls the
@@ -67,6 +71,7 @@ One JSON object per event, discriminated by `op`. Unknown ops/values are ignored
 | `name`    | session  | Display title at bind time. |
 | `cwd`     | session  | Project dir. Accepted for forward-compat but not applied — the runner knows the launch cwd. |
 | `reason`  | session  | Why the bind happened; informational. |
+| —         | ready    | No fields. |
 | `phase`   | turn     | `"start"` or `"end"`. |
 | `outcome` | turn end | Normalized terminal state — see below. |
 | `title`   | turn end | Display title at turn end. |
@@ -99,6 +104,75 @@ blocking — `Stop` is awaited, while `StopFailure` output is documented as
 ignored — so ordering between a turn end and a near-simultaneous `SessionEnd`
 is not guaranteed there. An agent that cannot guarantee ordering needs a turn
 token, which this protocol does not have yet.
+
+## Readiness (`op: "ready"`)
+
+The runner's semantic action routes (`POST /prompt`, `POST /cancel` — ADR 0027)
+refuse to write a single byte until the agent has reported `ready`, then wait up
+to the adapter's `ActionReadyTimeout` (pi: 10s) and give up **without
+delivering anything**, so a caller's retry cannot duplicate a prompt.
+Raw `POST /input` is unaffected: raw input is unconditional and always
+immediately available.
+
+Both semantic routes also require the caller to name the runner process it means,
+in `X-Gmux-Expect-Incarnation` (the value the runner reports as
+`X-Gmux-Incarnation`). A socket pathname is reusable, so the process answering it
+may not be the one the caller decided about; a mismatch is refused with
+`409 incarnation_mismatch` **before anything is written**, which makes it the one
+delivery failure that is a guaranteed non-delivery and therefore safe to retry
+against the current occupant. A missing header is a caller bug
+(`400 invalid_request`), not an older client: `/prompt` and `/cancel` shipped
+together with this check, so a runner that serves them at all enforces it, and an
+older runner answers 404/426 instead.
+
+Rules for hook authors:
+
+- **Report it as early as the composer is genuinely usable**, and *independently
+  of the conversation*. A brand-new session usually has no conversation file
+  yet; gating readiness on a bind would deadlock the session's first prompt.
+  pi's extension posts `ready` first thing in `session_start`, which pi fires
+  after installing the editor, key handlers and submit handler.
+- **Repeat it freely.** The runner is idempotent about it and releases every
+  waiting request at once. Reporting on every bind is the recommended shape:
+  a rebind is evidence the composer is alive.
+- **It is generation-local.** The runner never persists readiness, never emits
+  it as session status, and never resets it on a conversation rebind (same
+  process, same composer). Only a new runner process starts unready.
+
+### `turn` start is load-bearing for prompt delivery
+
+Once the runner delivers a semantic prompt, it holds a **delivery reservation**
+and refuses further prompts that require an idle agent, so a caller cannot
+duplicate text into the same composer. The reservation is released by exactly
+one thing: an **inactive→active edge that happens after the delivery** — in
+practice a fresh `{"op":"turn","phase":"start"}` reported while the session was
+idle.
+
+The precision matters:
+
+- a **repeated** `active` report about a turn that was already running (a hook
+  re-reporting, a script's `PUT /status` mid-turn) is not new information and
+  releases nothing — which is what lets a queued `after_turn` prompt keep its
+  reservation until its *own* turn starts;
+- an edge that happened **before** the delivery belongs to another turn and is
+  never counted for it;
+- **inactive** reports — a turn end, an idle `PUT /status`, a cleared status —
+  are not evidence that the delivered prompt was consumed;
+- there is deliberately **no timeout**: the passage of time proves nothing about
+  whether the agent received the text.
+
+Scope, so the guarantee is not overread: it holds **among gmux's semantic
+requests, absent concurrent raw input**. Raw `POST /input` and a human at the
+terminal write unconditionally and take part in none of this, so a turn a human
+starts while a delivery is in flight can be credited to that delivery — the edge
+is causally ambiguous without a turn token, and gmux resolves the ambiguity
+toward availability rather than wedging the common case where the edge really is
+the delivered prompt's turn.
+
+So a hook that reports turn ends but never turn starts will accept one semantic
+prompt per runner generation and refuse the rest with `delivery_pending`. Report
+the start. (Raw `POST /input` stays unconditional throughout, and is the escape
+hatch for a session in that state.)
 
 ## The runner does NOT, for hooked sessions
 

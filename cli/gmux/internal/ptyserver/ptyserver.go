@@ -452,6 +452,36 @@ type Server struct {
 	// exclusively from readPTY's flush, so it needs no locking.
 	promptMarks *adapter.PromptMarkTracker
 
+	// adapter is the session's adapter, retained for the semantic action
+	// layer (actions.go): POST /prompt and /cancel ask it to encode an
+	// AgentAction and for its readiness deadline.
+	adapter adapter.Adapter
+
+	// Semantic-action state (ADR 0027), all runner-generation-local and
+	// never persisted or projected as session status. See actions.go.
+	//
+	// readyCh is closed once the agent reports {"op":"ready"}; readyOnce
+	// makes repeated ready events free and keeps the close race-free.
+	readyCh   chan struct{}
+	readyOnce sync.Once
+	// deliverSlot is a capacity-1, context-aware semaphore serializing
+	// semantic deliveries against each other — and nothing else. Raw /input
+	// never takes it, and neither does any status writer. A channel rather
+	// than a Mutex so a queued request can be abandoned by its caller with a
+	// guarantee that it wrote nothing.
+	deliverSlot chan struct{}
+	// deliverBytes is the semantic layer's transport: the ONE place a
+	// semantic action's bytes leave the runner. Production is WritePTY;
+	// tests substitute a recorder, which is what makes "exactly one ordered
+	// write of exactly these bytes" and "zero bytes on a refusal" assertable
+	// rather than inferred from a child's echo.
+	deliverBytes func(p []byte) (int, error)
+	// barrier, when set by a test, runs while a semantic delivery holds the
+	// delivery slot and nothing has been decided yet, so a schedule can be
+	// driven deterministically (e.g. land a status transition before the
+	// commit). Unset in production, and installed before any request is served.
+	barrier func()
+
 	// incarnation is this runner's ephemeral identity: a random value minted
 	// once per process, exposed on every HTTP response and in /meta, and
 	// required as proof by /kill. See newIncarnation.
@@ -638,7 +668,12 @@ func New(cfg Config) (*Server, error) {
 		done:        make(chan struct{}),
 		ptyDone:     make(chan struct{}),
 		incarnation: newIncarnation(),
+
+		adapter:     cfg.Adapter,
+		readyCh:     make(chan struct{}),
+		deliverSlot: make(chan struct{}, 1),
 	}
+	s.deliverBytes = s.WritePTY
 	// Retain the ownership handle from BindSocket. Tests may inject a bare
 	// net.Listener; those servers own no pathname and never unlink one.
 	if bs, ok := listener.(*BoundSocket); ok {
@@ -931,6 +966,9 @@ func (s *Server) serve() {
 	mux.HandleFunc("GET /meta", s.handleMeta)
 	mux.HandleFunc("POST /hook/event", s.handleHookEvent)
 	mux.HandleFunc("POST /input", s.handleInput)
+	// Semantic agent actions, permanently separate from raw /input (ADR 0027).
+	mux.HandleFunc("POST /prompt", s.handlePrompt)
+	mux.HandleFunc("POST /cancel", s.handleCancel)
 	mux.HandleFunc("PUT /status", s.handlePutStatus)
 	mux.HandleFunc("PUT /slug", s.handlePutSlug)
 	mux.HandleFunc("GET /events", s.handleEvents)
@@ -990,6 +1028,7 @@ const maxInputBytes = 1 << 20 // 1 MiB
 // per-adapter assumptions. The agent reports facts about itself; the runner
 // maps them to sidebar state:
 //
+//	op "ready"            — the agent can accept input (semantic actions)
 //	op "session"          — the bound conversation ref, id, name (on bind)
 //	op "turn" phase start — the agent loop began (→ active)
 //	op "turn" phase end   — the loop ended with Outcome + title
@@ -1027,6 +1066,12 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch ev.Op {
+	case "ready":
+		// The agent can accept semantic input now (its composer/input
+		// handlers are installed). Deliberately independent of any
+		// conversation bind: a brand-new session has no conversation file
+		// yet, and gating readiness on one would deadlock the first prompt.
+		s.markReady()
 	case "session":
 		// Authoritative bind (e.g. pi's session_start): the file the
 		// agent holds, named and slugged.

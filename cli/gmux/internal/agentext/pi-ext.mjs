@@ -12,6 +12,8 @@
 // Socket: GMUX_SESSION_SOCK, set by the runner.
 //
 // Events posted to POST /hook/event on the runner socket:
+//   { op: "ready" }                                      on session_start, before
+//                                                         anything else
 //   { op: "session", path, id, name, slug, cwd, reason } on bind (session_start)
 //                                                         and rename (session_info_changed)
 //   { op: "turn", phase: "start" }                       on agent loop start
@@ -85,6 +87,20 @@ export default function (pi) {
   // startup | new | resume | fork. This is what catches a cache-served
   // /resume-select, where no file is read for an fs probe to observe.
   pi.on("session_start", (ev, ctx) => {
+    // Readiness: pi can accept input. Reported FIRST and UNCONDITIONALLY —
+    // before reportSession, and regardless of whether pi has a conversation
+    // file yet. gmux's semantic actions (`gmux agent prompt/cancel`) block on
+    // this event, so tying it to conversation availability would deadlock the
+    // first prompt of a brand-new session, whose file is not written until a
+    // turn runs. It is safe here because pi installs the editor, key handlers
+    // and submit handler and starts its UI *before* it initializes extensions
+    // and fires session_start: by the time this runs, keystrokes we deliver
+    // land in the composer.
+    //
+    // Sent on every bind, not just the first. The runner treats repeats as
+    // idempotent, and a rebind (switch/new/resume/fork) reaching here is
+    // positive evidence the composer is alive.
+    post(sock, { op: "ready" });
     firstUserTitle = ""; // new bind → forget the previous conversation's fallback
     reportSession(ev?.reason ?? "start", ctx);
   });
