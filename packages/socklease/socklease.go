@@ -367,6 +367,59 @@ func (l *Lease) SockPath() string { return l.sockPath }
 // LockPath returns the lock pathname backing this lease.
 func (l *Lease) LockPath() string { return LockPath(l.sockPath) }
 
+// DuplicateForExec duplicates the held lease descriptor for an explicitly
+// coordinated child process. The duplicate refers to the same flock-owning
+// open file description, so the lease remains continuously held while parent
+// ownership is transferred to the child across exec.
+func (l *Lease) DuplicateForExec() (*os.File, error) {
+	fd, _, errno := syscall.Syscall(syscall.SYS_FCNTL, l.f.Fd(), syscall.F_DUPFD_CLOEXEC, 0)
+	if errno != 0 {
+		return nil, fmt.Errorf("socklease: duplicate lease: %w", errno)
+	}
+	return os.NewFile(fd, l.f.Name()), nil
+}
+
+// AdoptInherited adopts a descriptor inherited from a coordinating parent.
+// It verifies that the descriptor still names the current sidecar before
+// allowing the child to use it as its lease.
+func AdoptInherited(sockPath string, f *os.File) (*Lease, error) {
+	return adoptInherited(sockPath, f, nil)
+}
+
+func adoptInherited(sockPath string, f *os.File, beforeLock func()) (*Lease, error) {
+	if f == nil {
+		return nil, errors.New("socklease: adopt nil lease descriptor")
+	}
+	if same, ok := sameFile(f, LockPath(sockPath)); !ok || !same {
+		_ = f.Close()
+		return nil, fmt.Errorf("socklease: inherited lease no longer names %s", LockPath(sockPath))
+	}
+	if beforeLock != nil {
+		beforeLock()
+	}
+	// Reassert the lock rather than trusting the environment-selected fd. On
+	// the duplicated open-file description inherited from the parent this is a
+	// no-op; on an unlocked descriptor it establishes real exclusivity before
+	// the caller can act as an owner.
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, ErrHeld
+		}
+		return nil, fmt.Errorf("socklease: lock inherited lease: %w", err)
+	}
+	// The sidecar may have been replaced between the first identity check and
+	// flock. Verify after locking, just like acquire(), so adoption can never
+	// return ownership of an unlinked predecessor while another process owns
+	// the current pathname.
+	if same, ok := sameFile(f, LockPath(sockPath)); !ok || !same {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+		return nil, fmt.Errorf("socklease: inherited lease changed before lock: %w", ErrIdentityChanged)
+	}
+	return &Lease{f: f, sockPath: sockPath}, nil
+}
+
 // RemoveSocket unlinks the socket pathname, but only while it still names the
 // file the pin holds.
 //
@@ -431,6 +484,18 @@ func (l *Lease) Release() error { return l.release(true) }
 // thing that ever makes the leftover socket reclaimable (see
 // CreatedLockFile).
 func (l *Lease) ReleaseKeepingLockFile() error { return l.release(false) }
+
+// ReleaseForTransfer closes this process's descriptor without explicitly
+// unlocking it. It is valid only after DuplicateForExec: the inherited
+// duplicate keeps the shared open-file-description lock held continuously.
+func (l *Lease) ReleaseForTransfer() error {
+	if l == nil || l.f == nil {
+		return nil
+	}
+	err := l.f.Close()
+	l.f = nil
+	return err
+}
 
 func (l *Lease) release(removeLockFile bool) error {
 	if l == nil || l.f == nil {

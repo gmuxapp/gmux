@@ -3,9 +3,16 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/gmuxapp/gmux/packages/paths"
+	"github.com/gmuxapp/gmux/packages/socklease"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 )
 
@@ -87,6 +94,185 @@ func TestProductionSpawnerLaunchPolicyAndCleanup(t *testing.T) {
 	}
 	if err := spawner.CleanupSpawn(context.Background(), ep); err != nil {
 		t.Fatalf("idempotent cleanup: %v", err)
+	}
+}
+
+func TestProductionSpawnerExecTransfersPreparedLease(t *testing.T) {
+	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
+	endpoint := filepath.Join(paths.SessionSocketDir(), "sess-exec.sock")
+	dir := t.TempDir()
+	script := filepath.Join(dir, "lease-runner")
+	body := fmt.Sprintf(`#!/usr/bin/python3
+import os, socket, time
+fd = int(os.environ["GMUX_SOCKET_LEASE_FD"])
+os.fstat(fd)
+s = socket.socket(socket.AF_UNIX)
+s.bind(%q)
+s.listen(1)
+time.sleep(30)
+`, endpoint)
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	spawner := &productionRunnerSpawner{
+		GmuxBin:        script,
+		ResolveDir:     func(centralstore.Session) (string, error) { return dir, nil },
+		ResolveCommand: func(centralstore.Session) []string { return []string{"x"} },
+		ReadyTimeout:   2 * time.Second,
+	}
+	ep, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-exec"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spawner.CleanupSpawn(context.Background(), ep)
+	if ep != endpoint {
+		t.Fatalf("endpoint=%q, want %q", ep, endpoint)
+	}
+	if contender, err := socklease.AcquireExisting(endpoint); !errors.Is(err, socklease.ErrHeld) {
+		if err == nil {
+			_ = contender.ReleaseKeepingLockFile()
+		}
+		t.Fatalf("exec child did not retain lease: %v", err)
+	}
+}
+
+func TestProductionSpawnerLiveSocketAbortsBeforeLaunch(t *testing.T) {
+	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
+	endpoint := filepath.Join(paths.SessionSocketDir(), "sess-live.sock")
+	listener, err := net.Listen("unix", endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	launched := false
+	spawner := &productionRunnerSpawner{
+		ResolveDir:     func(centralstore.Session) (string, error) { return t.TempDir(), nil },
+		ResolveCommand: func(centralstore.Session) []string { return []string{"x"} },
+		Launch: func(context.Context, runnerLaunchRequest) (runnerLaunchResult, error) {
+			launched = true
+			return runnerLaunchResult{}, nil
+		},
+	}
+	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-live"}); !errors.Is(err, socklease.ErrSocketLive) {
+		t.Fatalf("Spawn error=%v, want live-socket refusal", err)
+	}
+	if launched {
+		t.Fatal("live endpoint allowed child launch")
+	}
+	conn, err := net.Dial("unix", endpoint)
+	if err != nil {
+		t.Fatalf("live endpoint was unlinked: %v", err)
+	}
+	conn.Close()
+	if _, err := os.Stat(endpoint + socklease.Suffix); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fabricated lease history retained: %v", err)
+	}
+}
+
+func TestProductionSpawnerIdentityChangeAbortsBeforeLaunch(t *testing.T) {
+	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
+	endpoint := filepath.Join(paths.SessionSocketDir(), "sess-rebound.sock")
+	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: endpoint, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.SetUnlinkOnClose(false)
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var replacement net.Listener
+	launched := false
+	spawner := &productionRunnerSpawner{
+		ResolveDir:     func(centralstore.Session) (string, error) { return t.TempDir(), nil },
+		ResolveCommand: func(centralstore.Session) []string { return []string{"x"} },
+		prepareBeforeRemove: func(path string) {
+			if err := os.Rename(path, path+".parked"); err != nil {
+				t.Fatal(err)
+			}
+			replacement, err = net.Listen("unix", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+		},
+		Launch: func(context.Context, runnerLaunchRequest) (runnerLaunchResult, error) {
+			launched = true
+			return runnerLaunchResult{}, nil
+		},
+	}
+	defer func() {
+		if replacement != nil {
+			replacement.Close()
+		}
+	}()
+	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-rebound"}); !errors.Is(err, socklease.ErrIdentityChanged) {
+		t.Fatalf("Spawn error=%v, want identity change", err)
+	}
+	if launched {
+		t.Fatal("ambiguous replacement allowed child launch")
+	}
+	conn, err := net.Dial("unix", endpoint)
+	if err != nil {
+		t.Fatalf("replacement socket was removed: %v", err)
+	}
+	conn.Close()
+}
+
+func TestProductionSpawnerLaunchFailureDropsPreparedHistory(t *testing.T) {
+	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
+	spawner := &productionRunnerSpawner{ResolveDir: func(centralstore.Session) (string, error) { return t.TempDir(), nil }, ResolveCommand: func(centralstore.Session) []string { return []string{"x"} }, Launch: func(_ context.Context, req runnerLaunchRequest) (runnerLaunchResult, error) {
+		if lease, err := socklease.AcquireExisting(req.Endpoint); !errors.Is(err, socklease.ErrHeld) {
+			if err == nil {
+				_ = lease.ReleaseKeepingLockFile()
+			}
+			t.Fatalf("prepared lease not held across launch: %v", err)
+		}
+		return runnerLaunchResult{}, errors.New("fork failed")
+	}}
+	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-no-launch"}); err == nil {
+		t.Fatal("launch failure swallowed")
+	}
+	lock := filepath.Join(paths.SessionSocketDir(), "sess-no-launch.sock") + socklease.Suffix
+	if _, err := os.Stat(lock); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed launch retained fabricated history: %v", err)
+	}
+}
+
+func TestProductionSpawnerLaunchFailurePreservesExistingHistory(t *testing.T) {
+	t.Setenv("GMUX_SOCKET_DIR", shortSocketDir(t))
+	endpoint := filepath.Join(paths.SessionSocketDir(), "sess-existing.sock")
+	seed, err := socklease.Acquire(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.ReleaseKeepingLockFile(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(endpoint + socklease.Suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spawner := &productionRunnerSpawner{
+		ResolveDir:     func(centralstore.Session) (string, error) { return t.TempDir(), nil },
+		ResolveCommand: func(centralstore.Session) []string { return []string{"x"} },
+		Launch: func(_ context.Context, req runnerLaunchRequest) (runnerLaunchResult, error) {
+			if lease, err := socklease.AcquireExisting(req.Endpoint); !errors.Is(err, socklease.ErrHeld) {
+				if err == nil {
+					_ = lease.ReleaseKeepingLockFile()
+				}
+				t.Fatalf("existing lease not held across launch: %v", err)
+			}
+			return runnerLaunchResult{}, errors.New("fork failed")
+		},
+	}
+	if _, err := spawner.Spawn(context.Background(), centralstore.Session{ID: "sess-existing"}); err == nil {
+		t.Fatal("launch failure swallowed")
+	}
+	after, err := os.Stat(endpoint + socklease.Suffix)
+	if err != nil {
+		t.Fatalf("pre-existing history removed: %v", err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("pre-existing history was replaced")
 	}
 }
 

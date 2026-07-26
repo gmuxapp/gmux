@@ -174,6 +174,24 @@ func BindSocket(sockPath string) (*BoundSocket, error) {
 	if err != nil {
 		return nil, fmt.Errorf("BindSocket: lease: %w", err)
 	}
+	return bindSocketWithLease(sockPath, lease)
+}
+
+// BindSocketWithInheritedLease binds using a lease descriptor transferred by
+// the spawning daemon. Ownership is continuous across exec, so child startup
+// never races a wall-clock lease acquisition timeout against its parent.
+func BindSocketWithInheritedLease(sockPath string, leaseFile *os.File) (*BoundSocket, error) {
+	if err := socklease.RequireOwnedDir(filepath.Dir(sockPath)); err != nil {
+		return nil, fmt.Errorf("BindSocket: %w", err)
+	}
+	lease, err := socklease.AdoptInherited(sockPath, leaseFile)
+	if err != nil {
+		return nil, fmt.Errorf("BindSocket: inherited lease: %w", err)
+	}
+	return bindSocketWithLease(sockPath, lease)
+}
+
+func bindSocketWithLease(sockPath string, lease *socklease.Lease) (*BoundSocket, error) {
 	bindBarrier(sockPath, "lease-held")
 
 	for range bindAttempts {

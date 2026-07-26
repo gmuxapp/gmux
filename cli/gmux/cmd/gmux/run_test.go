@@ -1,12 +1,26 @@
 package main
 
 import (
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/gmuxapp/gmux/cli/gmux/internal/ptyserver"
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 	"github.com/gmuxapp/gmux/packages/adapter"
 )
+
+func TestExplicitResumeIDNeverFallsBackToPhantomSession(t *testing.T) {
+	if mayRetrySessionID("sess-retained", ptyserver.ErrSocketInUse) {
+		t.Fatal("explicit resume collision would mint an unrelated session id")
+	}
+	if !mayRetrySessionID("", ptyserver.ErrSocketInUse) {
+		t.Fatal("ordinary generated-id collision should remain retryable")
+	}
+	if mayRetrySessionID("", errors.New("bind failed")) {
+		t.Fatal("non-collision bind error became retryable")
+	}
+}
 
 // collectEvents drains n events from ch (or times out), returning the
 // event types in arrival order plus the payloads for inspection.

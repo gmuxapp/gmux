@@ -249,14 +249,25 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	sockPath := filepath.Join(socketDir, sessionID+".sock")
 
 	// Bind the socket BEFORE any sessionID-dependent setup
-	// (scrollback path, env, state). On collision with a live
-	// runner — which typically only happens when a daemon-supplied
-	// GMUX_RESUME_ID lands in a window where the targeted session
-	// is actually still alive — fall back to a fresh id and bind
-	// that instead. See ADR 0003 "Collision handling".
-	listener, err := ptyserver.BindSocket(sockPath)
-	if errors.Is(err, ptyserver.ErrSocketInUse) {
-		log.Printf("gmux: requested session id %s is in use; falling back to a fresh id", sessionID)
+	// (scrollback path, env, state). Ordinary new sessions may recover from an
+	// unexpected generated-id collision by minting another id. An explicit
+	// resume id is an identity contract with gmuxd: silently changing it starts
+	// an unrelated durable session, which a failed resume then exposes as a
+	// phantom resumable entry.
+	var listener *ptyserver.BoundSocket
+	if rawFD := os.Getenv("GMUX_SOCKET_LEASE_FD"); rawFD != "" {
+		_ = os.Unsetenv("GMUX_SOCKET_LEASE_FD")
+		fd, parseErr := strconv.Atoi(rawFD)
+		if parseErr != nil || fd < 3 {
+			err = fmt.Errorf("invalid inherited socket lease fd %q", rawFD)
+		} else {
+			listener, err = ptyserver.BindSocketWithInheritedLease(sockPath, os.NewFile(uintptr(fd), "gmux-socket-lease"))
+		}
+	} else {
+		listener, err = ptyserver.BindSocket(sockPath)
+	}
+	if mayRetrySessionID(dir.ResumeID, err) {
+		log.Printf("gmux: generated session id %s is in use; falling back to a fresh id", sessionID)
 		sessionID = naming.SessionID()
 		sockPath = filepath.Join(socketDir, sessionID+".sock")
 		listener, err = ptyserver.BindSocket(sockPath)
@@ -943,6 +954,10 @@ func awaitDetachedHandshake(cmd *exec.Cmd, r, gate, hold *os.File, deadline time
 		terminateProcessGroup(targetPGID, grace)
 	}
 	return "", readErr
+}
+
+func mayRetrySessionID(resumeID string, bindErr error) bool {
+	return resumeID == "" && errors.Is(bindErr, ptyserver.ErrSocketInUse)
 }
 
 // explainHandshakeFailure converts a readHandshake error into a
