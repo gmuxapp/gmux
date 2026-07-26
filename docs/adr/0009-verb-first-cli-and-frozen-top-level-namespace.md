@@ -257,6 +257,8 @@ could only time out.
 
 ## Amendment (2026-07-12): `send --follow-up` / `--steering` — adapter-aware submit
 
+> **Superseded (2026-07-26) by [ADR 0027](0027-semantic-agent-cli-and-result-bearing-wait.md):** both flags were removed before release and `gmux send` is unconditionally raw; semantic submission moves to the `gmux agent` namespace, and `adapter.PromptSubmitter` becomes `adapter.AgentActionEncoder`.
+
 `gmux send` gains two mutually-exclusive behavior modifiers that
 auto-append the session adapter's *submit* keystroke ([#385]):
 `--follow-up` for the queued submit (delivered after the agent's

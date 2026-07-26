@@ -157,40 +157,16 @@ func TestParseCLI(t *testing.T) {
 					t.Errorf("sendWait=%v timeout=%d", c.sendWait, c.timeout)
 				}
 			}},
-		{name: "send --follow-up before ref", args: []string{"send", "--follow-up", "abc", "also do X"}, wantMode: modeSend,
+		{name: "send --follow-up is no longer a flag: literal text after ref", args: []string{"send", "abc", "--follow-up"}, wantMode: modeSend,
 			check: func(t *testing.T, c *command) {
-				if c.sendSubmit != "follow-up" {
-					t.Errorf("sendSubmit = %q, want follow-up", c.sendSubmit)
+				if c.sendText == nil || *c.sendText != "--follow-up" {
+					t.Errorf("text = %v, want literal --follow-up", c.sendText)
 				}
+			}},
+		{name: "send prompt with no keys stays unsubmitted", args: []string{"send", "abc", "also do X"}, wantMode: modeSend,
+			check: func(t *testing.T, c *command) {
 				if c.ref != "abc" || c.sendText == nil || *c.sendText != "also do X" || len(c.sendKeys) != 0 {
 					t.Errorf("ref=%q text=%v keys=%v", c.ref, c.sendText, c.sendKeys)
-				}
-			}},
-		{name: "send --steering before ref", args: []string{"send", "--steering", "abc", "stop, wrong file"}, wantMode: modeSend,
-			check: func(t *testing.T, c *command) {
-				if c.sendSubmit != "steering" {
-					t.Errorf("sendSubmit = %q, want steering", c.sendSubmit)
-				}
-			}},
-		{name: "send --wait --follow-up compose", args: []string{"send", "--wait", "--follow-up", "--timeout", "60", "abc", "go"}, wantMode: modeSend,
-			check: func(t *testing.T, c *command) {
-				if !c.sendWait || c.sendSubmit != "follow-up" || c.timeout != 60 {
-					t.Errorf("sendWait=%v sendSubmit=%q timeout=%d", c.sendWait, c.sendSubmit, c.timeout)
-				}
-			}},
-		{name: "send --follow-up with stdin form (ref only)", args: []string{"send", "--follow-up", "abc"}, wantMode: modeSend,
-			check: func(t *testing.T, c *command) {
-				if c.sendSubmit != "follow-up" || c.sendText != nil || len(c.sendKeys) != 0 {
-					t.Errorf("sendSubmit=%q text=%v keys=%v", c.sendSubmit, c.sendText, c.sendKeys)
-				}
-			}},
-		{name: "send literal --steering after ref is text", args: []string{"send", "abc", "--steering"}, wantMode: modeSend,
-			check: func(t *testing.T, c *command) {
-				if c.sendSubmit != "" {
-					t.Error("--steering after the ref must be literal text, not a flag")
-				}
-				if c.sendText == nil || *c.sendText != "--steering" {
-					t.Errorf("text = %v, want literal --steering", c.sendText)
 				}
 			}},
 		{name: "send dash-leading text after ref is literal (no guard)", args: []string{"send", "abc", "-v"}, wantMode: modeSend,
@@ -327,9 +303,8 @@ func TestParseCLIErrors(t *testing.T) {
 		{"send", "--wait", "--timeout", "0", "abc", "x"},       // non-positive timeout
 		{"send", "--frob", "abc"},                              // unknown leading flag
 		{"send", "--wait"},                                     // missing id (only a flag given)
-		{"send", "--follow-up", "--steering", "abc", "x"},      // submit modes are mutually exclusive
-		{"send", "--follow-up", "abc", "x", "Enter"},           // submit flag owns submission; no key tokens
-		{"send", "--steering", "abc", "C-c"},                   // keys-only form conflicts with submit flag too
+		{"send", "--follow-up", "abc", "x"},                    // removed semantic flag, not silently accepted
+		{"send", "--steering", "abc", "x"},                     // removed semantic flag, not silently accepted
 		{"daemon"},                                             // missing subcommand
 		{"daemon", "frobnicate"},                               // unknown subcommand
 		{"daemon", "state"},                                    // missing state subcommand

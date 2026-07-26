@@ -80,6 +80,14 @@ func TestCodexImplementsCapabilities(t *testing.T) {
 	if _, ok := a.(adapter.Resumer); !ok {
 		t.Fatal("should implement Resumer")
 	}
+	// Deliberately NOT an AgentActionEncoder: gmux's semantic agent
+	// actions (ADR 0027) ship for pi only. codex's turn-control
+	// keystrokes are unverified, and guessing them would send
+	// wrong-meaning bytes under a semantic label. Raw `gmux send`
+	// remains available.
+	if _, ok := a.(adapter.AgentActionEncoder); ok {
+		t.Fatal("should NOT implement AgentActionEncoder yet")
+	}
 }
 
 // --- Launchers ---

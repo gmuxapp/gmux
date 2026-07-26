@@ -181,23 +181,56 @@ func TestPiDiscover(t *testing.T) {
 	_ = NewPi().Discover()
 }
 
-// TestPiSubmitSeq pins the composer keybinds `gmux send
-// --steering/--follow-up` relies on: steering is Enter (delivered into
-// the current turn immediately), follow-up is Alt+Enter (queued until
-// the current turn ends). Follow-up MUST be the Kitty CSI-u encoding,
-// not legacy ESC CR (\x1b\r): pi parses CSI-u under either negotiated
-// keyboard protocol, while ESC CR turns into shift+enter (newline, no
-// submit) on sessions started in the foreground of a Kitty-protocol
-// terminal. Changing these bytes changes what agents receive on those
-// flags AND must stay in sync with gmuxd's inputSubmits guard — update
-// this test, the daemon guard test, and the CLI docs together.
-func TestPiSubmitSeq(t *testing.T) {
+// TestPiEncodeAction pins the exact terminal encodings pi's semantic
+// turn-control actions map to. Changing these bytes changes what the
+// agent receives; keep in sync with the adapter docs.
+//
+// Why not the obvious legacy encodings: pi-tui tries Kitty CSI-u
+// parsing unconditionally, so CSI-u works under either negotiated
+// keyboard protocol, whereas ESC CR (alt+enter) is read as shift+enter
+// — a newline, no submit — whenever pi negotiated the Kitty protocol,
+// and a lone ESC byte is the prefix of every escape sequence, so it is
+// only unambiguous when nothing follows it in the same read.
+func TestPiEncodeAction(t *testing.T) {
 	pi := NewPi()
-	if seq, ok := pi.SubmitSeq(adapter.SubmitSteering); !ok || seq != "\r" {
-		t.Errorf("SubmitSeq(SubmitSteering) = %q, %v; want \\r, true", seq, ok)
+	cases := []struct {
+		name   string
+		action adapter.AgentAction
+		want   string
+	}{
+		{"send is Enter", adapter.ActionSend, "\r"},
+		{"send-after-turn is Kitty CSI-u alt+enter", adapter.ActionSendAfterTurn, "\x1b[13;3u"},
+		{"interrupt is Kitty CSI-u escape", adapter.ActionInterrupt, "\x1b[27u"},
 	}
-	if seq, ok := pi.SubmitSeq(adapter.SubmitFollowUp); !ok || seq != "\x1b[13;3u" {
-		t.Errorf("SubmitSeq(SubmitFollowUp) = %q, %v; want Kitty CSI-u alt+enter, true", seq, ok)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := pi.EncodeAction(tc.action)
+			if !ok || got != tc.want {
+				t.Errorf("EncodeAction(%d) = %q, %v; want %q, true", tc.action, got, ok, tc.want)
+			}
+		})
+	}
+}
+
+// TestPiEncodeActionUnknown pins that an out-of-vocabulary action is
+// rejected rather than silently encoded as something plausible: a
+// future action added to the enum must fail loudly here until pi
+// actually maps it.
+func TestPiEncodeActionUnknown(t *testing.T) {
+	pi := NewPi()
+	for _, action := range []adapter.AgentAction{adapter.ActionInterrupt + 1, -1, 99} {
+		if seq, ok := pi.EncodeAction(action); ok || seq != "" {
+			t.Errorf("EncodeAction(%d) = %q, %v; want \"\", false", action, seq, ok)
+		}
+	}
+}
+
+// TestPiActionReadyTimeout pins the adapter-owned readiness bound. pi
+// is a Node program: cold start is seconds, so a short timeout would
+// spuriously fail freshly launched or resumed sessions.
+func TestPiActionReadyTimeout(t *testing.T) {
+	if got := NewPi().ActionReadyTimeout(); got != 10*time.Second {
+		t.Errorf("ActionReadyTimeout() = %v, want 10s", got)
 	}
 }
 
@@ -213,6 +246,9 @@ func TestPiImplementsCapabilities(t *testing.T) {
 	}
 	if _, ok := a.(adapter.Resumer); !ok {
 		t.Fatal("should implement Resumer")
+	}
+	if _, ok := a.(adapter.AgentActionEncoder); !ok {
+		t.Fatal("should implement AgentActionEncoder")
 	}
 }
 

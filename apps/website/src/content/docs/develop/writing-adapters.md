@@ -230,15 +230,28 @@ A conversation that your adapter declares non-resumable is also left out of the 
 
 Sessions that never recorded a conversation ref are outside this path; do not rely on `Resumer` to describe their behavior. Only implement `Resumer` when your tool has native resume support you want gmux to use.
 
-### `PromptSubmitter`
+### `AgentActionEncoder`
 
 ```go
-type PromptSubmitter interface {
-    SubmitSeq(mode SubmitMode) (seq string, ok bool)
+type AgentActionEncoder interface {
+    EncodeAction(action AgentAction) (input string, ok bool)
+    ActionReadyTimeout() time.Duration
 }
 ```
 
-Optional. Maps `gmux send --steering` / `--follow-up` to the keystroke that submits a composed prompt in that mode: `SubmitSteering` delivers into the current turn immediately, `SubmitFollowUp` queues until the current turn ends. pi implements it (`Enter` vs `Alt+Enter`); adapters without it default to `Enter` for both modes, which is right for shells and for agents whose `Enter` submits when idle and queues when busy (claude, codex). Return `ok=false` to reject a mode your tool can't honor — the CLI surfaces that as a usage error.
+Optional. Encodes gmux's semantic turn-control actions as terminal input for your agent:
+
+- `ActionSend` — submit the composed prompt now (steers the current turn when the agent is busy);
+- `ActionSendAfterTurn` — queue the composed prompt until the current turn ends;
+- `ActionInterrupt` — abort the current turn.
+
+It is a pure, stateless encoding: prompt text is *not* part of an action (it is delivered as ordinary input first), and the adapter holds no session state. `ActionReadyTimeout` only *states* the deadline policy for your agent's startup — observing readiness and enforcing the deadline are gmux's job, not yours.
+
+pi implements it (`Enter`, Kitty CSI-u `Alt+Enter`, Kitty CSI-u `Escape`, 10s). There is deliberately **no default** — an adapter without this capability has no semantic action support, and callers must fail loudly rather than guess a keystroke. Raw `gmux send` works for every adapter regardless. Return `ok=false` for an action your tool can't express.
+
+Semantic actions travel gmux's semantic path, which stays permanently separate from raw input, so your encodings are never checked against the raw `gmux send --wait` submit guard — there is nothing to keep in sync.
+
+Two caveats worth copying if your agent is keystroke-driven like pi's. pi's interrupt is not a clean stop: the same handler restores queued follow-ups into the composer, so text the user never retyped can be left there. And the non-`Enter` keybinds are user-configurable, so a user who remaps `alt+enter` or `escape` silently loses semantic follow-up / interrupt support — the bytes still arrive, they just no longer mean that action.
 
 ### `CommandTitler`
 
@@ -262,7 +275,7 @@ An adapter implements only what it needs:
 | Editor | ✓ | ✓ | — | — | — | CommandTitler, SessionRegistrar |
 | Claude | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationOpener, ConversationProber, SessionHookCommand |
 | Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationOpener, ConversationProber, SessionHookCommand |
-| Pi | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationOpener, ConversationProber, SessionExtender, PassthroughDetector, PromptSubmitter |
+| Pi | ✓ | ✓ | ✓ | ✓ | ✓ | ConversationOpener, ConversationProber, SessionExtender, PassthroughDetector, AgentActionEncoder |
 
 Shell writes a small JSON state file per session under `~/.local/state/gmux/shell-sessions/` and resumes by launching `$SHELL` in the original cwd. The editor adapter (backing `gmux edit`) is a good minimal non-agent example: it matches an internal sentinel command and is ephemeral (auto-dismissed on close).
 

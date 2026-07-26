@@ -215,50 +215,59 @@ type PassthroughDetector interface {
 	IsPassthrough(args []string) bool
 }
 
-// SubmitMode selects which submit keystroke ends a prompt typed into an
-// agent's composer. `gmux send --steering / --follow-up` resolves the
-// mode to concrete PTY bytes via SubmitSeqFor, so callers never need to
-// know adapter-specific key encodings (issue #385).
-type SubmitMode int
+// AgentAction is one of the parameterless turn-control actions gmux's
+// semantic agent layer (ADR 0027) asks an adapter to perform on a
+// running agent. It is deliberately a closed, tiny vocabulary: prompt
+// text is NOT part of an action — it is delivered as ordinary input
+// before the action's encoding.
+type AgentAction int
 
 const (
-	// SubmitSteering delivers the prompt into the current turn
-	// immediately (pi: Enter). On an idle agent it simply submits.
-	SubmitSteering SubmitMode = iota
-	// SubmitFollowUp queues the prompt until the current turn ends
-	// (pi: Alt+Enter). On an idle agent it degrades to a plain submit.
-	SubmitFollowUp
+	// ActionSend submits the composed prompt into the agent now
+	// (pi: Enter). On an active agent this steers the current turn.
+	ActionSend AgentAction = iota
+	// ActionSendAfterTurn queues the composed prompt until the current
+	// turn ends (pi: Alt+Enter). On an inactive agent it degrades to a
+	// plain submit.
+	ActionSendAfterTurn
+	// ActionInterrupt aborts the agent's current turn (pi: Escape).
+	ActionInterrupt
 )
 
-// PromptSubmitter is optionally implemented by adapters whose agent
-// distinguishes submit keystrokes by mode. Adapters that don't
-// implement it get the universal default (see SubmitSeqFor): Enter for
-// both modes — correct for shells and for agents like claude/codex,
-// where Enter both submits when idle and queues when busy. An
-// implementer may reject a mode it can't honor by returning ok=false;
-// the CLI surfaces that as a usage error instead of sending bytes with
-// the wrong meaning.
-type PromptSubmitter interface {
-	// SubmitSeq returns the PTY byte sequence that submits a composed
-	// prompt in the given mode — the encoding of the corresponding
-	// keystroke that the adapter's tool parses most robustly (which
-	// may differ from what an xterm-class terminal emits; see the pi
-	// adapter's Kitty CSI-u choice). Sequences without a carriage
-	// return must be kept in sync with gmuxd's inputSubmits guard so
-	// `send --wait` keeps accepting them as submitting input.
-	SubmitSeq(mode SubmitMode) (seq string, ok bool)
-}
+// AgentActionEncoder is optionally implemented by adapters whose agent
+// exposes these turn-control actions as keystrokes. It is a stateless
+// semantic-action → terminal-input encoding plus the deadline policy
+// that encoding needs — NOT a runtime controller: it holds no session
+// state and performs no I/O. It supplies the adapter-specific readiness
+// deadline; observing readiness and activity, and enforcing that
+// deadline, are the runner's and gmuxd's job.
+//
+// Adapters that do not implement it have no semantic action support at
+// all; callers must fail loudly rather than substituting a guessed
+// keystroke. (Historically `gmux send --steering/--follow-up` defaulted
+// unknown adapters to Enter; that silently mislabeled raw input as a
+// semantic mode, so the default is gone with the flags.) Raw input via
+// `gmux send` remains available for every adapter.
+type AgentActionEncoder interface {
+	// EncodeAction returns the terminal input that performs action —
+	// the encoding of the corresponding keystroke that the adapter's
+	// tool parses most robustly, which may differ from what an
+	// xterm-class terminal emits (see the pi adapter's Kitty CSI-u
+	// choices). ok=false means this adapter cannot express the action;
+	// callers must not send anything in that case.
+	//
+	// These encodings are delivered through gmux's semantic action path,
+	// which ADR 0027 keeps permanently separate from raw input: they are
+	// never subject to the raw `gmux send --wait` submit guard, so this
+	// interface imposes no constraint about matching it.
+	EncodeAction(action AgentAction) (input string, ok bool)
 
-// SubmitSeqFor resolves the submit byte sequence for a session's
-// adapter. Nil adapters (names FindByAdapter doesn't know, e.g. a peer
-// session created by a newer gmux) and adapters without the
-// PromptSubmitter capability fall back to "\r" — Enter, the single
-// submit keystroke of every PTY application — for both modes.
-func SubmitSeqFor(a Adapter, mode SubmitMode) (string, bool) {
-	if ps, ok := a.(PromptSubmitter); ok {
-		return ps.SubmitSeq(mode)
-	}
-	return "\r", true
+	// ActionReadyTimeout is how long a caller should wait for the agent
+	// to report itself ready to accept semantic input before giving up
+	// without delivering anything. Adapter-owned because it bounds that
+	// agent's startup, not gmux's; the encoder only states the policy,
+	// it does not observe readiness or enforce the deadline.
+	ActionReadyTimeout() time.Duration
 }
 
 // CommandTitler is optionally implemented by adapters that want to

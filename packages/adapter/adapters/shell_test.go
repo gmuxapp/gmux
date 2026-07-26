@@ -25,6 +25,11 @@ func TestShellImplementsInterfaces(t *testing.T) {
 	if _, ok := s.(adapter.SessionFinalizer); !ok {
 		t.Fatal("Shell should implement SessionFinalizer")
 	}
+	// A shell has no agent turn to steer, queue behind, or interrupt,
+	// so it has no semantic actions at all (ADR 0027).
+	if _, ok := s.(adapter.AgentActionEncoder); ok {
+		t.Fatal("Shell should NOT implement AgentActionEncoder")
+	}
 }
 
 func TestShellWriteAndParseStateFile(t *testing.T) {
