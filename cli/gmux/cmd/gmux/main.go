@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/paths"
@@ -37,6 +38,10 @@ func main() {
 
 	switch cmd.mode {
 	case modeHelp:
+		if strings.HasPrefix(cmd.helpTopic, "agent") {
+			printAgentUsage(os.Stdout, cmd.helpTopic)
+			break
+		}
 		printUsage(os.Stdout)
 	case modeVersion:
 		fmt.Println(version)
@@ -62,6 +67,8 @@ func main() {
 		os.Exit(cmdSendKeys(cmd.ref, cmd.keys, cmd.keysLiteral))
 	case modeWait:
 		os.Exit(cmdWait(cmd.ref, cmd.timeout, cmd.forText, cmd.forRegex))
+	case modeAgent:
+		os.Exit(cmdAgent(cmd))
 	case modeEdit:
 		runEdit(cmd.editFile)
 	case modeEditChild:

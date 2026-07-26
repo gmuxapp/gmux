@@ -25,6 +25,7 @@ const (
 	modeSend                   // gmux send <id> <text> [keys...]
 	modeSendKeys               // gmux send-keys -t <id> ... (tmux-compat)
 	modeWait                   // gmux wait <id>
+	modeAgent                  // gmux agent prompt|cancel|output <id>
 	modeEdit                   // gmux edit [file]
 	modeEditChild              // (internal) gmux __edit-child [file]
 	modeDaemon                 // gmux daemon <start|stop|restart|status|log-path|state ...>
@@ -68,6 +69,15 @@ type command struct {
 	keysLiteral bool     // -l: treat args as literal text, not key names
 	keys        []string // key/text arguments
 
+	// agent (modeAgent)
+	agentSub    string  // prompt|cancel|output
+	agentMode   string  // prompt|follow_up|steer (prompt verb only)
+	agentNoWait bool    // --no-wait: return at the admission boundary
+	promptText  *string // inline prompt text (nil = read stdin)
+
+	// help
+	helpTopic string // "agent", "agent prompt", ... ("" = full usage)
+
 	// wait
 	timeout  int    // --timeout seconds (0 = none)
 	forText  string // --for-text: wait for substring in output
@@ -88,9 +98,13 @@ type command struct {
 // happens under namespace groups, not new top-level verbs. Used to give
 // "did you mean?" hints and to distinguish a removed flag from a stray
 // command in the error-only migration shim.
+//
+// `agent` is a namespace group, not a new bare verb: it grows under
+// `gmux agent <verb>` exactly as decision 9 prescribes, which is why adding it
+// does not reopen the frozen top-level list — it extends it by one group.
 var reservedVerbs = []string{
 	"open", "ls", "attach", "tail", "kill", "send", "send-keys",
-	"wait", "edit", "daemon", "auth", "remote", "version", "help",
+	"wait", "agent", "edit", "daemon", "auth", "remote", "version", "help",
 }
 
 // removedFlags maps every pre-2.0 action flag to the verb that replaced
@@ -146,10 +160,13 @@ func parseCLI(args []string) (*command, error) {
 
 	switch head {
 	case "help", "-h", "--help":
-		// Lenient: `gmux help` and `gmux help <anything>` both print the
-		// full usage. Per-verb help is intentionally not implemented (see
-		// ADR 0009); accepting a trailing word avoids an error on the
-		// natural `gmux help send`.
+		// Lenient: `gmux help` and `gmux help <anything>` print the full
+		// usage, so the natural `gmux help send` is never an error. The one
+		// exception is the `agent` namespace, whose verbs take flags and
+		// therefore have real per-verb help to show.
+		if len(rest) > 0 && rest[0] == "agent" {
+			return &command{mode: modeHelp, helpTopic: strings.TrimSpace("agent " + strings.Join(rest[1:], " "))}, nil
+		}
 		return &command{mode: modeHelp}, nil
 	case "version", "--version":
 		return &command{mode: modeVersion}, nil
@@ -172,6 +189,8 @@ func parseCLI(args []string) (*command, error) {
 		return parseSendKeys(rest)
 	case "wait":
 		return parseWait(rest)
+	case "agent":
+		return parseAgent(rest)
 	case "edit":
 		return parseEdit(rest)
 	case "daemon":
@@ -334,6 +353,13 @@ func parseSend(args []string) (*command, error) {
 				return nil, errors.New("--timeout must be a positive number of seconds")
 			}
 			c.timeout = n
+		case a == "--steering" || strings.HasPrefix(a, "--steering="):
+			// Removed in favour of the semantic verb, and named rather than
+			// reported as "unknown": the replacement is one rename away, and
+			// every script that learned the old flag deserves to be told it.
+			return nil, errors.New("send: --steering was replaced by: gmux agent prompt --steer <id> <prompt>")
+		case a == "--follow-up" || strings.HasPrefix(a, "--follow-up="):
+			return nil, errors.New("send: --follow-up was replaced by: gmux agent prompt --follow-up <id> <prompt>")
 		default:
 			return nil, fmt.Errorf("send: unknown flag %q (flags go before the session id; text after the id is literal)", a)
 		}
@@ -581,6 +607,12 @@ Sessions (local by default; address a peer with <id>@<peer>):
   gmux wait <id> [--timeout N]      block until the session is idle
        [--for-text S|--for-regex P] ... or until output matches S / P
   gmux kill <id>                    terminate a session
+
+Agent sessions (semantic turn control; see 'gmux help agent'):
+  gmux agent prompt <id> <prompt>   prompt an agent and wait for its turn
+       [--no-wait] [--follow-up|--steer] [--timeout N]
+  gmux agent cancel <id>            interrupt the running turn
+  gmux agent output <id>            print the agent's latest message
 
 Editing (usable as $EDITOR; blocks until the editor closes):
   gmux edit [file]                  open a file in a managed editor session

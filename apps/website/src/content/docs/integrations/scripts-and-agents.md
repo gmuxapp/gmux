@@ -49,6 +49,37 @@ id=$(gmux -d -- pi "build the feature")
 
 Capture that id and pass it to `send`, `wait`, `tail`, and `kill`.
 
+## Prompting an agent
+
+For **agent sessions on this host** (pi today), `gmux agent` is the verb to script against: it waits until the agent can accept input, submits the way that agent expects, and reports what the daemon observed instead of just "the bytes went out".
+
+```bash
+id=$(gmux -d -- pi)
+gmux agent prompt --timeout 600 "$id" 'run the suite and fix what fails'
+gmux agent output "$id"                 # the agent's answer, verbatim
+```
+
+`agent prompt` blocks until the turn ends. Exit codes: `0` completed, `2` interrupted, `3` `--timeout` elapsed, `1` anything else (a failed turn or a dead runner included — note `2` here means "interrupted", unlike `gmux wait`'s "died"). Success is quiet — read the answer with `gmux agent output <id>`, which prints only the latest final message (no `[tool]` lines) straight from the agent's stored conversation, and works even after the session has died.
+
+The other shapes:
+
+```bash
+git diff | gmux agent prompt "$id"                  # prompt from stdin, one prompt
+gmux agent prompt --no-wait "$id" 'start the long refactor'
+gmux agent prompt --follow-up "$id" 'then update the docs'   # queue behind the current turn
+gmux agent prompt --steer "$id" 'stop, use the sqlite path'  # redirect the running turn
+gmux agent prompt --no-wait --steer "$id" 'and skip the migration'   # --no-wait composes with either mode
+gmux agent cancel "$id"; gmux wait "$id"; [ $? = 2 ] && echo stopped   # interrupt, then wait
+```
+
+Note the `;` rather than `&&`: an interrupted turn exits `2`, so chaining the wait with `&&` "fails" on the outcome you asked for.
+
+Flags go before the id; everything after the id is the prompt, verbatim. A plain prompt restarts a dead retained session to deliver it; `--steer` and `cancel` require a live, active turn and never resume.
+
+Errors name a stable code. Treat `admission_timeout`, `delivery_timeout`, `queued_turn_unobserved` and `transport_error` as **indeterminate** — the prompt may already have landed, so a blind retry can duplicate it — and treat a bare transport failure with no code (a dropped connection to gmuxd, a daemon restarted mid-prompt) the same way: the request may have been delivered before the connection went away. `runner_outdated`, `precondition_failed`, `delivery_pending`, `not_ready`, `not_running` and `incarnation_mismatch` (the runner was replaced mid-flight, and the replacement refused an action meant for its predecessor) all guarantee that nothing was delivered, so they are safe to retry. `unsupported_adapter` means the session's agent has no semantic support yet: use raw `send`/`tail` for those, as below.
+
+For pi, `agent cancel` also restores queued follow-ups into the composer, so after a cancel the composer may hold text nobody retyped — the next prompt submits it together with the new one. `--follow-up` and `cancel` also depend on pi's default alt+enter/escape keybindings; a session whose user remapped them loses both silently.
+
 ## Sending input
 
 `gmux send <id> [text] [keys]` pushes input into a running session, as if typed at the keyboard. Text is sent literally; trailing key names (`Enter`, `C-c`, …) are sent as keys. **Submission is explicit** — add a trailing `Enter` to dispatch a line:
@@ -103,7 +134,7 @@ gmux ls --json     # machine-readable, for parsing in scripts
 gmux kill <id>     # SIGTERM the runner, normal exit lifecycle
 ```
 
-`send`, `tail`, and `kill` accept `<id>@<peer>` ids; `wait` does not (local only).
+`send`, `tail`, and `kill` accept `<id>@<peer>` ids; `wait` and `gmux agent` do not (local only — run `gmux agent` in a session on the owning host instead).
 
 Every verb accepts id prefixes, full session ids, or slugs, so the eight-character short form `ls` prints passes straight back to `kill`, `send`, `tail`, or `wait`.
 
