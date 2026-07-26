@@ -675,6 +675,10 @@ export function Sidebar({
         </div>
         <FilterChips selectors={selectors} />
         <div class="sidebar-scroll" ref={scrollRef} onClick={() => menuOpen && setMenuOpen(false)}>
+          {/* Every row lives on one opaque slab so the scrollport's own
+            * background can act as a fixed backdrop behind it (see the
+            * cavity in styles.css). Purely presentational. */}
+          <div class="sidebar-list">
           {mode === 'projects' && selectors.length > 0
             && foldersVal.every(f => f.sessions.length === 0
               && !folderMatchesFilter(f, selectors, health.value?.hostname)) && (
@@ -732,6 +736,7 @@ export function Sidebar({
               </button> to organize sessions by repo.
             </div>
           )}
+          </div>
         </div>
         {mode === 'activity' && scrolledDown && (
           <button
