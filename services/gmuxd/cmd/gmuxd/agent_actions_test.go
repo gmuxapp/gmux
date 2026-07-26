@@ -80,6 +80,19 @@ type agentHarness struct {
 	// modelling a runner wedged on a PTY write.
 	blockPrompt bool
 	blockCancel bool
+	// resultText stands in for the agent's latest final message. Empty means
+	// "use the real store-backed selector", which is what the majority of
+	// tests want: no rendered conversation on disk ⇒ no output field.
+	resultText string
+	// resultCalls counts result selections, so a test can prove a
+	// non-completed outcome never even LOOKS for a result to print.
+	resultCalls atomic.Int64
+	// markCalls counts result-window captures (pre-delivery plus one per
+	// observed turn-start edge), and resultWindows records the window each
+	// selection was made with, so a test can prove the answer was bound to the
+	// turn it reports rather than to whatever the file said at read time.
+	markCalls     atomic.Int64
+	resultWindows []resultWindow
 
 	mu         sync.Mutex
 	subscribed bool
@@ -296,6 +309,24 @@ func (h *agentHarness) deps() agentDeps {
 			tm := &fakeTimer{d: d, ch: make(chan time.Time, 1)}
 			h.timers <- tm
 			return tm.ch
+		},
+		result: func(ctx context.Context, id string, window resultWindow) string {
+			h.resultCalls.Add(1)
+			h.mu.Lock()
+			h.resultWindows = append(h.resultWindows, window)
+			h.mu.Unlock()
+			if h.resultText != "" {
+				return h.resultText
+			}
+			return latestAgentMessageIn(ctx, h.store, id, window)
+		},
+		markWindow: func(ctx context.Context, id string, turnInProgress bool) resultWindow {
+			// Count AFTER the read: a test that appends as soon as the counter
+			// moves would otherwise race the render it is trying to order
+			// itself against.
+			w := markResultWindow(ctx, h.store, id, turnInProgress)
+			h.markCalls.Add(1)
+			return w
 		},
 		resumeGuardError: func(ctx context.Context, row centralstore.Session) (int, string, string) {
 			if h.guardError != nil {

@@ -154,8 +154,12 @@ recognized *before* the id (the first non-flag token). A `--` before the id is
 accepted as an explicit end-of-flags marker.
 
 **`--wait`** fuses send-and-wait into one race-free step: deliver the input,
-then block until the turn it triggers completes, with the same exit codes as
-[`gmux wait`](#gmux-wait-id) (`0` idle, `2` died, `3` timeout). Bound it with
+then block until the turn it triggers completes, with the same three exit codes as
+[`gmux wait`](#gmux-wait-id): `0` the turn completed, `2` it was **intentionally
+interrupted**, `1` anything else (an errored turn, a death, a timeout, a transport
+failure). `send --wait` reports that shared conclusion but prints no agent result;
+use
+[`gmux agent prompt`](#gmux-agent-prompt-flags-id-prompt) or `gmux wait` for those. Bound it with
 `--timeout N`. Because gmuxd subscribes to the session's events *before*
 forwarding the bytes, it can't mistake the previous turn's idle state for the
 reply — unlike the racy `gmux send X Enter && gmux wait X` composition. The
@@ -184,6 +188,10 @@ authenticated proxy.
 
 ### `gmux wait <id>`
 
+```
+gmux wait [--quiet] [--timeout N] [--for-text S|--for-regex P] <id>
+```
+
 Block until the session is **idle**, optionally bounded by `--timeout N`. For
 an agent session, idle means its current turn finished (the spinner stops);
 for a shell session, that the command finished and the shell is back at a
@@ -200,18 +208,65 @@ The idle signal is the same `Status.Active` flag the UI's spinner consumes
 — the session's **turn state**. Agents source it from their turn hooks, so
 `wait` returns the moment the agent emits its closing message; shells source
 it from OSC 133 prompt marks (see below); every other session is one
-lifetime-long turn that closes when the process exits. Exit codes (so
-scripts can branch on the outcome):
+lifetime-long turn that closes when the process exits.
 
-- `0` — the session reached idle (turn finished — including a one-shot
-  command completing or a shell exiting at its prompt), or the output
-  condition matched
-- `2` — the session exited with its turn still open (crashed mid-command /
-  mid-turn) / exited before its output matched
-- `3` — `--timeout` elapsed
+Exit codes are gmux's global taxonomy — the same three codes every verb that
+reports a gmux verdict uses. (Three verbs deliberately don't: `gmux -- <cmd>`
+and `gmux edit` propagate the child's own exit code, and
+`gmux daemon|auth|remote` forward gmuxd's, whose usage and state failures still
+use its own codes.)
+
+- `0` — the turn completed normally (including a one-shot command that exited
+  **successfully**, or a shell returning to its prompt), or the output condition
+  matched
+- `2` — the turn was **intentionally interrupted** (a human or another agent
+  stopped it)
+- `1` — anything else: the turn ended in an error, the session died, the
+  `--timeout` elapsed, the session exited before its output matched, or the
+  command was misused. The stderr line names which.
+
+**A failed command fails its wait — only for lifetime turns.** A session whose
+turn is its whole lifetime (`gmux -d -- make build`, a shell *without* OSC 133
+integration) closes that turn with an error when the child exits non-zero, so
+`gmux wait` on it exits `1`: `gmux wait $id && deploy.sh` cannot deploy a failed
+build there. Use the exit code, not the wait, if you only care that the process
+*finished*: `gmux -- make build` propagates the child's own code, and
+`gmux ls --json` reports `exit_code`.
+
+**Per-command turns carry no success or failure.** In a shell whose integration
+emits OSC 133 prompt marks (fish does by default), each command is its own turn,
+and gmux uses the marks only as busy/idle transitions — the exit code the `D`
+mark carries is deliberately not consumed. So `gmux wait` exits `0` when the
+prompt comes back, whether the command succeeded or failed, and
+`gmux wait $shell_id && deploy.sh` deploys after a failed build. To gate on a
+shell command's result, run it as its own session (`gmux -- make build`, whose
+exit code is propagated) rather than typing it into an interactive shell.
 
 The verdict is stable across timing: a `wait` issued after the session
-already exited answers the same as one that watched it live.
+already exited answers the same as one that watched it live. It is a verdict
+about the **most recent** turn, though — a bare `wait` on an already-idle
+session returns immediately and reports the conclusion (and the result) of the
+turn that has already finished, not of a turn yet to come. To gate on a turn you
+are about to trigger, use `gmux agent prompt` or `gmux send --wait`, which arm
+the wait before delivering anything.
+
+**Results.** When the session is an agent whose conversation gmux can read
+(pi today) and its turn **completed normally**, `wait` prints the agent's
+latest final message on stdout — the same text
+[`gmux agent output`](#gmux-agent-output-id) returns, untruncated:
+
+```bash
+answer=$(gmux wait a3f20187)      # the agent's reply, or empty for a shell
+gmux wait --quiet a3f20187        # synchronize only, print nothing
+```
+
+Nothing is printed when the turn ended in an error, was interrupted, or the
+session died: the newest stored message would belong to a previous or partial
+turn, and presenting it as this turn's answer would be worse than silence. The
+condition is reported on stderr, and `gmux agent output <id>` still reads
+whatever exists. Shell/process sessions, agents gmux cannot read semantically
+(Claude, Codex), and output-condition waits stay synchronization-only and print
+nothing — they are still perfectly waitable.
 
 **Output conditions.** Instead of the idle signal, wait until specific text
 appears in the session's output:
@@ -291,11 +346,16 @@ line). Prompts are capped at 1 MiB, and an oversized prompt or one that isn't
 valid UTF-8 is refused before anything is sent — never truncated, never
 re-encoded.
 
-Exit codes: `0` the turn completed, `2` the turn was **interrupted**, `3`
-`--timeout` elapsed, `1` anything else (including a turn that ended in an error
-and a runner that died). Note `2` differs from [`gmux wait`](#gmux-wait-id),
-where it means the session died. A successful prompt is quiet — the agent's
-answer is read separately with `gmux agent output`.
+Exit codes are the global taxonomy shared with [`gmux wait`](#gmux-wait-id):
+`0` the turn completed, `2` the turn was **intentionally interrupted**, `1`
+anything else (a turn that ended in an error, a `--timeout`, a dead runner, a
+transport failure). Timeouts have no code of their own — the stable error code
+on stderr says far more than a number could.
+
+On normal completion the agent's answer is printed on stdout, exactly as
+`gmux agent output` would return it. A turn that failed or was interrupted
+prints **nothing**: the newest stored message would be a previous or partial
+turn's. Read what exists with `gmux agent output <id>`.
 
 Failures name a stable code, and the wording distinguishes what is known about
 delivery. `admission_timeout`, `delivery_timeout`, `queued_turn_unobserved` and

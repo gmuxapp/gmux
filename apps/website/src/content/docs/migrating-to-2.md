@@ -64,7 +64,8 @@ Note the **inverted `send` semantics**: 1.x auto-appended a newline unless `--no
 
 - `gmux edit [file]` — managed editor sessions, usable as `$EDITOR`. Inside gmux sessions, `EDITOR`/`VISUAL` now default to `gmux edit` when your dotfiles don't set them — scripts that branch on `EDITOR` being empty inside sessions will see a value.
 - `gmux send-keys -t <id> …` — tmux-compatible key sending.
-- `gmux wait --timeout N` with exit codes `0` (idle/matched) / `2` (died) / `3` (timeout). `gmux wait --for-text S` / `--for-regex P` wait until output appears instead of the idle signal, and work for shell sessions too.
+- `gmux wait [--quiet] [--timeout N]` with the global exit codes `0` (the turn completed / the output matched) / `2` (the turn was intentionally interrupted) / `1` (anything else — error, death, timeout). A **failed** one-shot or mark-less shell command closes its turn with an error, so waiting on it now exits `1` rather than `0` — deliberate, so `gmux wait $id && next-step` cannot run after a failed build. For a pi session that completed, `wait` also prints the agent's latest final message; `--quiet` suppresses it. `gmux wait --for-text S` / `--for-regex P` wait until output appears instead of the idle signal, work for shell sessions too, and print no result.
+- `gmux agent prompt|cancel|output` — semantic turn control for agent sessions, sharing the same exit codes.
 - `gmux send --wait [--timeout N]` fuses send-and-wait race-free (subscribes before delivering the input). Note `send`'s grammar: flags go **before** the id; everything after the id is verbatim, so `gmux send abc -v` sends a literal `-v` with no `--` guard needed.
 
 ---

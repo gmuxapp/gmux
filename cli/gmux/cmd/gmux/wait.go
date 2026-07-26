@@ -8,28 +8,53 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 )
 
-// Exit codes from cmdWait. Distinct codes let scripts dispatch on the
-// reason a wait ended without parsing strings.
+// The global gmux exit taxonomy (ADR 0027 §8). It is deliberately small
+// and shared by every verb — wait, send --wait, agent — because a
+// per-verb code space forces a script that composes them to learn
+// several dialects, and the old wait-specific codes (2 = died,
+// 3 = timeout) collided with `gmux agent`'s need to report an
+// intentional interruption distinctly.
 //
-//   - waitExitOK (0): the session's turn closed (idle wait — including
-//     a one-shot command completing or a shell exiting at its prompt)
-//     or its output matched --for-text/--for-regex
-//   - waitExitDied (2): session crashed / was killed / exited with its
-//     turn still open, or exited before its output matched
-//   - waitExitTimeout (3): --timeout elapsed
+//   - waitExitOK (0): success. The turn closed normally, or the output
+//     matched --for-text/--for-regex.
+//   - waitExitError (1): any error. Usage, transport, unsupported
+//     operation, --timeout elapsing, the session dying, and a turn that
+//     ended in a terminal failure are the same class of bad news to a
+//     caller: what it asked for did not happen. Scripts that need to
+//     tell them apart read the stderr line, which names the condition.
+//   - waitExitInterrupted (2): the turn was intentionally stopped by a
+//     human or another agent. Separate from 1 because it is expected
+//     coordination rather than a fault, and it is the one non-success
+//     case a caller routinely handles differently.
 //
-// Any other usage / network error returns 1, matching the rest of the
-// CLI.
+// This is an intentional, pre-release break: there is no 3 any more,
+// and 2 no longer means "died".
 const (
-	waitExitOK      = 0
-	waitExitDied    = 2
-	waitExitTimeout = 3
+	waitExitOK          = 0
+	waitExitError       = 1
+	waitExitInterrupted = 2
 )
 
-// cmdWait implements `gmux wait <id> [--timeout N] [--for-text S |
-// --for-regex P]`.
+// exitUsage is the exit code for a command line gmux could not parse. It is
+// the error code, named separately only because main.go's parse failure is far
+// from this file: under the previous taxonomy it exited 2, which now means
+// "intentionally interrupted".
+const exitUsage = waitExitError
+
+// Turn conclusions the daemon reports alongside a wait's reason. Same
+// vocabulary as the synchronous prompt response — one taxonomy, derived
+// once server-side (classifyTurnClose).
+const (
+	waitOutcomeCompleted   = "completed"
+	waitOutcomeError       = "error"
+	waitOutcomeInterrupted = "interrupted"
+)
+
+// cmdWait implements `gmux wait <id> [--quiet] [--timeout N]
+// [--for-text S | --for-regex P]`.
 //
 // The wait itself happens server-side: gmuxd already subscribes to
 // per-session events for its own bookkeeping, so we just hand it the
@@ -39,22 +64,38 @@ const (
 // live in the daemon's scrollback tee, and matching there can't miss
 // output the way client-side scrollback polling could.
 //
+// A wait is also conditionally RESULT-BEARING (ADR 0027 §11 and its
+// "where a result-bearing answer comes from" amendment): when a
+// renderer-capable agent session completes its turn normally, the
+// daemon returns the same latest-final-message `gmux agent output`
+// selects and this prints it on stdout. Deliberate omissions:
+//
+//   - --quiet suppresses it (pure synchronization);
+//   - an error, an interruption or a death prints NO result. The newest
+//     stored message would belong to a previous or partial turn, and
+//     presenting it as this turn's answer is worse than silence; the
+//     condition goes to stderr instead. `gmux agent output` remains
+//     available for explicit inspection;
+//   - predicate waits (--for-text/--for-regex) and shell/process
+//     sessions stay synchronization-only, exactly as before: the daemon
+//     sends no output for them.
+//
 // Local sessions only: the daemon's wait handler resolves the session
 // against its local store and consults the adapter allowlist; remote
 // peer sessions are out of scope until peer subscriptions stream
 // Status events back to the hub.
-func cmdWait(ref string, timeoutSecs int, forText, forRegex string) int {
+func cmdWait(ref string, timeoutSecs int, forText, forRegex string, quiet bool) int {
 	sess, err := resolveSession(ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return 1
+		return waitExitError
 	}
 	if sess.Peer != "" {
 		// Use the bare shortID here: the message already names the peer
 		// separately, so displayID's "shortID@peer" would just repeat it.
 		fmt.Fprintf(os.Stderr, "gmux: wait is only supported for local sessions (%s is on peer %q)\n",
 			shortID(sess.ID), sess.Peer)
-		return 1
+		return waitExitError
 	}
 
 	query := url.Values{}
@@ -83,39 +124,24 @@ func cmdWait(ref string, timeoutSecs int, forText, forRegex string) int {
 	resp, err := client.Post(endpoint, "", http.NoBody)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return 1
+		return waitExitError
 	}
 	defer resp.Body.Close()
 
+	predicate := forText != "" || forRegex != ""
 	switch resp.StatusCode {
 	case http.StatusOK:
-		// Body is { ok: true, data: { reason: "idle" | "matched" | "died" } }
 		var env struct {
-			Data struct {
-				Reason string `json:"reason"`
-			} `json:"data"`
+			Data waitResult `json:"data"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
 			fmt.Fprintln(os.Stderr, "gmux: decode wait response:", err)
-			return 1
+			return waitExitError
 		}
-		switch env.Data.Reason {
-		case "idle", "matched":
-			return waitExitOK
-		case "died":
-			if forText != "" || forRegex != "" {
-				fmt.Fprintf(os.Stderr, "gmux: session %s exited before its output matched\n", displayID(sess))
-			} else {
-				fmt.Fprintf(os.Stderr, "gmux: session %s died before becoming idle\n", displayID(sess))
-			}
-			return waitExitDied
-		default:
-			fmt.Fprintf(os.Stderr, "gmux: unexpected wait reason %q\n", env.Data.Reason)
-			return 1
-		}
+		return reportWaitResult(sess, "gmux wait", env.Data, predicate, quiet, os.Stdout)
 	case http.StatusRequestTimeout:
 		fmt.Fprintf(os.Stderr, "gmux: wait timed out after %ds\n", timeoutSecs)
-		return waitExitTimeout
+		return waitExitError
 	case http.StatusUnprocessableEntity:
 		// Current daemons only send 422 on the send --wait path
 		// (input_no_submit); older daemons also rejected sessions
@@ -124,16 +150,126 @@ func cmdWait(ref string, timeoutSecs int, forText, forRegex string) int {
 		body, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "gmux: wait not supported for this session: %s\n",
 			extractMessage(body))
-		return 1
+		return waitExitError
 	case http.StatusNotFound:
 		// Means the session id is unknown to gmuxd entirely.
 		fmt.Fprintf(os.Stderr, "gmux: session %s not found\n", displayID(sess))
-		return 1
+		return waitExitError
 	default:
 		body, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "gmux: wait failed: %s: %s\n", resp.Status, extractMessage(body))
-		return 1
+		return waitExitError
 	}
+}
+
+// waitResult is the daemon's resolved-wait payload.
+//
+// Reason is the synchronization fact ("idle", "matched", "died");
+// Outcome is the turn's conclusion, present whenever a turn boundary was
+// observed; Output carries the agent's answer and is present only for a
+// completed turn on a renderer-capable session.
+type waitResult struct {
+	Reason  string `json:"reason"`
+	Outcome string `json:"outcome"`
+	Cause   string `json:"cause"`
+	Output  string `json:"output"`
+	// ConversationReadable says whether `gmux agent output` can answer for
+	// this session at all. Shells, one-shot commands and Claude/Codex
+	// sessions have no semantic conversation, and pointing them at that verb
+	// would send the caller to a route that answers 404.
+	ConversationReadable bool `json:"conversation_readable"`
+}
+
+// reportWaitResult turns a resolved wait into output and an exit code.
+//
+// verb names the command being reported so a diagnostic can be honest about
+// which one hit a limitation: `send --wait` shares every exit decision here but
+// is deliberately result-free, so telling its caller the daemon "predates
+// result-bearing waits" would describe a feature they did not ask for.
+func reportWaitResult(sess cliSession, verb string, res waitResult, predicate, quiet bool, stdout io.Writer) int {
+	switch res.Reason {
+	case "matched":
+		// Predicate wait: synchronization only, by design. The matched
+		// bytes are terminal output the caller can read with gmux tail;
+		// they are not an agent result.
+		return waitExitOK
+	case "died":
+		if predicate {
+			fmt.Fprintf(os.Stderr, "gmux: session %s exited before its output matched\n", displayID(sess))
+		} else {
+			fmt.Fprintf(os.Stderr, "gmux: session %s died before its turn ended\n", displayID(sess))
+		}
+		return waitExitError
+	case "idle":
+		if predicate {
+			// A predicate wait resolves on "matched" or "died" only;
+			// "idle" would mean the daemon answered a different question.
+			fmt.Fprintf(os.Stderr, "gmux: unexpected wait reason %q for an output condition\n", res.Reason)
+			return waitExitError
+		}
+		return reportTurnConclusion(sess, verb, res, quiet, stdout)
+	default:
+		fmt.Fprintf(os.Stderr, "gmux: unexpected wait reason %q\n", res.Reason)
+		return waitExitError
+	}
+}
+
+// reportTurnConclusion renders a closed turn's conclusion.
+//
+// A missing outcome is version skew, not a completion: a daemon that
+// predates turn conclusions always resolves a closed turn as bare "idle", and
+// silently treating that as success would report a failed or interrupted turn as
+// a clean one — under exit 0, with no result. Fail loudly and name the fix.
+func reportTurnConclusion(sess cliSession, verb string, res waitResult, quiet bool, stdout io.Writer) int {
+	switch res.Outcome {
+	case "":
+		fmt.Fprintf(os.Stderr, "gmux: this gmuxd predates the turn conclusions '%s' needs (it reported no turn outcome); restart the daemon with 'gmux daemon restart'\n", verb)
+		return waitExitError
+	case waitOutcomeCompleted:
+		if quiet || res.Output == "" {
+			// Nothing to print: --quiet, a shell/process session, or an
+			// agent whose conversation gmux cannot read. Silence here is
+			// the pre-existing synchronization behavior, not a failure.
+			return waitExitOK
+		}
+		// Verbatim and untruncated, with exactly one trailing newline so
+		// the output is usable in a shell without swallowing a final one.
+		if _, err := io.WriteString(stdout, strings.TrimRight(res.Output, "\n")+"\n"); err != nil {
+			fmt.Fprintln(os.Stderr, "gmux:", err)
+			return waitExitError
+		}
+		return waitExitOK
+	case waitOutcomeInterrupted:
+		fmt.Fprintf(os.Stderr, "gmux: the turn was interrupted before it finished (session %s); %s\n",
+			displayID(sess), inspectHint(sess, res.ConversationReadable))
+		return waitExitInterrupted
+	case waitOutcomeError:
+		if res.Cause != "" {
+			fmt.Fprintf(os.Stderr, "gmux: the turn ended in an error (%s); %s\n",
+				res.Cause, inspectHint(sess, res.ConversationReadable))
+		} else {
+			fmt.Fprintf(os.Stderr, "gmux: the turn ended in an error (session %s); %s\n",
+				displayID(sess), inspectHint(sess, res.ConversationReadable))
+		}
+		return waitExitError
+	default:
+		fmt.Fprintf(os.Stderr, "gmux: unexpected turn outcome %q\n", res.Outcome)
+		return waitExitError
+	}
+}
+
+// inspectHint names the verb that can actually show what happened.
+//
+// `gmux agent output` only exists for sessions with a readable agent
+// conversation. A failed one-shot command (`gmux -d -- make build`, whose
+// non-zero exit closes its lifetime turn with Error=true) or a Claude/Codex
+// session has none, and sending the caller there would answer 404 — for those,
+// the terminal output is the record.
+func inspectHint(sess cliSession, conversationReadable bool) string {
+	if conversationReadable {
+		return "read what exists with 'gmux agent output " + shortID(sess.ID) + "'"
+	}
+	return "see its output with 'gmux tail " + shortID(sess.ID) + "'"
 }
 
 // extractMessage pulls the .error.message field out of gmuxd's

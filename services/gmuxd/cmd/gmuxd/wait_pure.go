@@ -99,27 +99,78 @@ func inputSubmits(body []byte) bool {
 //
 // Returns ("", false) when ctx is cancelled and ("", true) on deadline.
 //
-// Like handleWait, events are complemented by a periodic re-poll: the
-// 64-slot subscriber buffers drop events under load, so both edges of
-// the pulse could theoretically be missed. The poll recovers the
-// Active=true edge whenever the turn outlasts one tick; a sub-tick
-// turn whose both edge events were dropped is the one (vanishingly
-// unlikely) case that rides out the deadline.
+// Like handleWait, events are complemented by a periodic re-poll. The
+// poll is defence against a missed *activity* pulse only:
+// sessioncoord's outcome bus keeps OutcomeUpserted/OutcomeRemoved on an
+// unbounded, lossless queue (it is OutcomeActivity, at 256, that drops
+// under load), and the semantic prompt path's edge detection depends on
+// that losslessness. So do not read this as licence to distrust
+// event-driven edge detection, or to re-add polling defences where
+// Upserted outcomes are the evidence.
 
-func terminalReason(s compatSession, seenAlive bool) (string, bool) {
+// waitConclusion is what a universal wait resolved to: the historical
+// synchronization reason plus, for a wait that observed a turn close, the
+// turn's conclusion in the SAME vocabulary the semantic prompt path reports
+// (ADR 0027 §8/§11). Callers that only need synchronization can keep reading
+// Reason; a caller that needs to know whether the turn actually succeeded
+// reads Outcome.
+type waitConclusion struct {
+	// Reason is "idle", "died" or "matched" — unchanged from before.
+	Reason string
+	// Outcome is completed/error/interrupted, or "" for a wait that resolved
+	// without observing a turn boundary (predicate waits).
+	Outcome string
+	// Cause names WHY an error outcome happened when the turn itself did not
+	// report the failure (today: runner_died).
+	Cause string
+}
+
+// classifyTurnClose maps a closed turn's status flags onto the public outcome
+// vocabulary. Shared with runAgentWait so the generic wait and the synchronous
+// prompt can never disagree about what "completed" means: error wins over
+// interruption (a turn that failed is not a clean stop), and neither flag means
+// the turn completed.
+func classifyTurnClose(hasError, interrupted bool) string {
+	switch {
+	case hasError:
+		return outcomeError
+	case interrupted:
+		return outcomeInterrupted
+	}
+	return outcomeCompleted
+}
+
+// diedConclusion is the verdict for a session that went away: an error
+// outcome caused by the death, never a fourth outcome and never "completed".
+// A wait that resolves this way must not render a result — the newest stored
+// message belongs to whatever ran before the death.
+func diedConclusion() waitConclusion {
+	return waitConclusion{Reason: "died", Outcome: outcomeError, Cause: causeRunnerDied}
+}
+
+func terminalReason(s compatSession, seenAlive bool) (waitConclusion, bool) {
+	closed := func() waitConclusion {
+		return waitConclusion{Reason: "idle", Outcome: classifyTurnClose(s.Status.Error, s.Status.Interrupted)}
+	}
 	if !s.Alive {
 		if !hasRunEvidence(s, seenAlive) {
-			return "", false
+			return waitConclusion{}, false
 		}
+		// A session that died with its last turn closed still has a real
+		// conclusion: the terminal flags of that turn. Dying mid-turn (or
+		// before ever reporting a status, which proves neither a turn nor its
+		// absence) is an error with a cause.
 		if s.Status != nil && !s.Status.Active {
-			return "idle", true
+			return closed(), true
 		}
-		return "died", true
+		return diedConclusion(), true
 	}
 	if s.Status != nil && !s.Status.Active {
-		return "idle", true
+		return closed(), true
 	}
-	return "", false
+	// Still active — including active+error, which is an attention-worthy
+	// retry state and not a finished turn.
+	return waitConclusion{}, false
 }
 
 // hasRunEvidence reports whether a not-Alive session ever actually

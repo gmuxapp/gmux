@@ -597,8 +597,11 @@ func cmdSend(ref string, text *string, keys []string, wait bool, timeoutSecs int
 	// `gmux send X && gmux wait X` composition it cannot mistake the
 	// previous turn's idle state for the reply (#218).
 	//
-	// Exit codes mirror `gmux wait`: 0 idle, 2 died, 3 timeout, 1
-	// usage/transport errors.
+	// Exit codes are `gmux wait`'s, through the same mapping (ADR 0027 §8):
+	// 0 the turn completed, 2 it was intentionally interrupted, 1 anything
+	// else — a failed turn, a death, a timeout, a usage/transport error.
+	// Unlike `gmux wait`, no result is printed: raw input makes no claim
+	// about which agent turn the bytes belong to.
 	if sess.Peer != "" {
 		// Same scope rule as `gmux wait`: the wait half needs the
 		// owning daemon's event stream, which peers don't expose to
@@ -665,7 +668,9 @@ func postInput(sess cliSession, body io.Reader, query string) int {
 			fmt.Fprintf(os.Stderr, "gmux: session %s is not running\n", displayID(sess))
 		case http.StatusRequestTimeout:
 			fmt.Fprintln(os.Stderr, "gmux: session did not become idle within --timeout")
-			return waitExitTimeout
+			// A timeout is an error under the global taxonomy (ADR 0027 §8);
+			// it no longer has a code of its own.
+			return waitExitError
 		case http.StatusUnprocessableEntity:
 			fmt.Fprintf(os.Stderr, "gmux: %s\n", extractMessage(msg))
 		default:
@@ -676,26 +681,20 @@ func postInput(sess cliSession, body io.Reader, query string) int {
 	if query == "" {
 		return 0
 	}
-	// wait=idle response: { ok: true, data: { reason: "idle" | "died" } }
+	// wait=idle response: the same conclusion payload `gmux wait` gets
+	// ({reason, outcome, cause}), minus any result. Mapping it with the same
+	// function is what keeps an intentionally interrupted turn from exiting 0
+	// through this path while `gmux wait` exits 2 for the identical turn.
+	// io.Discard + quiet is not a stylistic choice: it is how this path stays
+	// result-free while sharing every exit decision.
 	var env struct {
-		Data struct {
-			Reason string `json:"reason"`
-		} `json:"data"`
+		Data waitResult `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
 		fmt.Fprintln(os.Stderr, "gmux: decode send --wait response:", err)
 		return 1
 	}
-	switch env.Data.Reason {
-	case "idle":
-		return waitExitOK
-	case "died":
-		fmt.Fprintf(os.Stderr, "gmux: session %s died before becoming idle\n", displayID(sess))
-		return waitExitDied
-	default:
-		fmt.Fprintf(os.Stderr, "gmux: unexpected send --wait reason %q\n", env.Data.Reason)
-		return 1
-	}
+	return reportWaitResult(sess, "gmux send --wait", env.Data, false, true, io.Discard)
 }
 
 // maxSendBytes caps the number of bytes read from stdin for a single

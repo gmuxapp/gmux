@@ -82,6 +82,7 @@ type command struct {
 	timeout  int    // --timeout seconds (0 = none)
 	forText  string // --for-text: wait for substring in output
 	forRegex string // --for-regex: wait for regex match in output
+	quiet    bool   // --quiet: synchronize only, print no result
 
 	// edit
 	editFile string // file path to open
@@ -413,6 +414,7 @@ func parseWait(args []string) (*command, error) {
 	fs.IntVar(&c.timeout, "timeout", 0, "fail after N seconds")
 	fs.StringVar(&c.forText, "for-text", "", "wait for this substring in the session's output")
 	fs.StringVar(&c.forRegex, "for-regex", "", "wait for a regex match in the session's output")
+	fs.BoolVar(&c.quiet, "quiet", false, "do not print the agent's result; synchronize only")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return nil, err
@@ -604,7 +606,8 @@ Sessions (local by default; address a peer with <id>@<peer>):
   gmux send --wait [--timeout N] <id> <text> [Key...]
                                     ... and block until the triggered turn ends
   gmux send-keys -t <id> <keys...>  tmux-compatible key sending
-  gmux wait <id> [--timeout N]      block until the session is idle
+  gmux wait <id> [--timeout N]      block until the turn ends; print an agent's
+       [--quiet]                    result on normal completion (--quiet: don't)
        [--for-text S|--for-regex P] ... or until output matches S / P
   gmux kill <id>                    terminate a session
 

@@ -1370,11 +1370,42 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 	}
 	defer cancel()
 	seenAlive := false
+	// The result window is captured when this wait first sees ITS turn open (a
+	// fresh inactive→active edge, or the very first observation if the turn is
+	// already running when we subscribe). A wait that never sees a turn open —
+	// one that finds the turn already closed — keeps snapshot semantics, because
+	// there is no turn of ours to bind the answer to.
+	//
+	// Whether the turn was ALREADY RUNNING when we first saw it decides which
+	// bound is taken: a mid-turn attachment must include the prose that turn has
+	// already produced (or a completed wait whose tail is tool-only reports
+	// nothing), while a turn seen starting must exclude everything before it.
+	window := snapshotWindow()
+	active := false
+	firstLook := true
+	observe := func(s compatSession) {
+		// firstLook is consumed by the act of LOOKING, not by finding a status.
+		// A statusless first observation (a resumed runner that has not reported
+		// yet) still means "we were here before the turn opened", so the genuine
+		// turn-start edge that follows must bind as STARTING. Leaving it true
+		// would bind that edge to the previous turn's user boundary and report a
+		// pre-resume answer as this turn's result, under exit 0.
+		wasFirst := firstLook
+		firstLook = false
+		if s.Status == nil {
+			return
+		}
+		if s.Status.Active && !active {
+			window = markWaitWindow(r.Context(), boot.Store, sessionID, wasFirst)
+		}
+		active = s.Status.Active
+	}
 	if cur, ok := visibleSession(fanout.Current().Sessions, sessionID); ok {
 		legacy := legacySessionFromWire(cur)
 		seenAlive = seenAlive || cur.Alive
-		if reason, done := terminalReason(legacy, seenAlive); done {
-			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
+		observe(legacy)
+		if verdict, done := terminalReason(legacy, seenAlive); done {
+			writeWaitConclusion(w, r, boot, sessionID, verdict, window, true)
 			return
 		}
 	}
@@ -1392,7 +1423,7 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 				continue
 			}
 			if outcome.Type == sessioncoord.OutcomeRemoved {
-				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "died"}})
+				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), window, true)
 				return
 			}
 			if outcome.Type != sessioncoord.OutcomeUpserted || outcome.Session == nil {
@@ -1400,24 +1431,74 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 			}
 			legacy := legacySessionFromOutcome(*outcome.Session, outcome.Alive)
 			seenAlive = seenAlive || outcome.Alive
-			if reason, done := terminalReason(legacy, seenAlive); done {
-				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
+			observe(legacy)
+			if verdict, done := terminalReason(legacy, seenAlive); done {
+				writeWaitConclusion(w, r, boot, sessionID, verdict, window, true)
 				return
 			}
 		case <-ticker.C:
 			cur, ok := visibleSession(fanout.Current().Sessions, sessionID)
 			if !ok {
-				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": "died"}})
+				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), window, true)
 				return
 			}
 			legacy := legacySessionFromWire(cur)
 			seenAlive = seenAlive || cur.Alive
-			if reason, done := terminalReason(legacy, seenAlive); done {
-				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
+			observe(legacy)
+			if verdict, done := terminalReason(legacy, seenAlive); done {
+				writeWaitConclusion(w, r, boot, sessionID, verdict, window, true)
 				return
 			}
 		}
 	}
+}
+
+// writeWaitConclusion answers a resolved turn wait, attaching the agent's
+// latest final message when — and only when — the turn completed normally.
+//
+// The result is selected HERE, at the moment the wait resolves, rather than
+// left to a follow-up read by the client: between a wait returning and a
+// client reading the conversation, another actor can start a new turn, and the
+// client would then print that turn's partial content as this wait's result.
+// The read is store-only — no runner, no resume — exactly like
+// `gmux agent output`, and uses the same selector.
+//
+// An error, interruption or death carries no output field at all: the newest
+// stored message would be from a previous turn or a partial one, and
+// presenting it as this turn's answer is the failure mode ADR 0027 §11
+// forbids. Nothing to render (non-renderer adapter, no conversation, no prose
+// in our window) also omits the field — the session is still legitimately
+// waitable.
+//
+// conversation_readable travels with every turn conclusion so the CLI can pick
+// an actionable hint: pointing a failed shell or Claude/Codex session at
+// `gmux agent output` sends the caller at a route that answers 404 for them.
+// markWaitWindow is the wait handler's watermark capture. It is indirected
+// through a variable because the guarantee under test is an ORDERING (mark
+// before the interfering append, read after it), and a test cannot assert an
+// ordering it has no way to observe.
+//
+// Tests reassign it (restoring it with t.Cleanup), so it is parallel-unsafe:
+// no test touching it may call t.Parallel. Production never writes it.
+var markWaitWindow = markResultWindow
+
+func writeWaitConclusion(w http.ResponseWriter, r *http.Request, boot *Bootstrap, sessionID string, verdict waitConclusion, window resultWindow, withResult bool) {
+	data := map[string]any{"reason": verdict.Reason}
+	if verdict.Outcome != "" {
+		data["outcome"] = verdict.Outcome
+		if boot != nil {
+			data["conversation_readable"] = conversationReadable(r.Context(), boot.Store, sessionID)
+		}
+	}
+	if verdict.Cause != "" {
+		data["cause"] = verdict.Cause
+	}
+	if withResult && verdict.Outcome == outcomeCompleted && boot != nil {
+		if text := latestAgentMessageIn(r.Context(), boot.Store, sessionID, window); text != "" {
+			data["output"] = text
+		}
+	}
+	writeJSON(w, map[string]any{"ok": true, "data": data})
 }
 
 func waitForOutputCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, fanout *sseFanout, sessionID, dir string, match func(string) bool, deadline <-chan time.Time) {
@@ -1523,66 +1604,77 @@ func handleInputWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootst
 		writeError(w, http.StatusBadGateway, "runner_unreachable", err.Error())
 		return
 	}
-	reason, timedOut := awaitTurnCentral(r.Context(), fanout, outcomes, sessionID, deadline)
+	verdict, timedOut := awaitTurnCentral(r.Context(), fanout, outcomes, sessionID, deadline)
 	switch {
 	case timedOut:
 		writeError(w, http.StatusRequestTimeout, "timeout", "session did not become idle within timeout")
-	case reason != "":
-		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"reason": reason}})
+	case verdict.Reason != "":
+		// Raw send --wait reports the turn's CONCLUSION but never a result: the
+		// bytes it delivered are keystrokes, and it makes no claim about which
+		// agent turn (if any) they belong to. The conclusion is still needed —
+		// without it an intentionally interrupted turn would exit 0 through the
+		// composition the docs call preferred, while `gmux wait` exits 2.
+		writeWaitConclusion(w, r, boot, sessionID, verdict, snapshotWindow(), false)
 	}
 }
 
-func awaitTurnCentral(ctx context.Context, fanout *sseFanout, outcomes <-chan sessioncoord.Outcome, sessionID string, deadline <-chan time.Time) (string, bool) {
+func awaitTurnCentral(ctx context.Context, fanout *sseFanout, outcomes <-chan sessioncoord.Outcome, sessionID string, deadline <-chan time.Time) (waitConclusion, bool) {
 	seenActive := false
-	check := func(s compatSession) (string, bool) {
+	// Turn-close classification is the shared one (classifyTurnClose), so a
+	// fused send --wait and a plain `gmux wait` cannot disagree about whether a
+	// turn completed, failed or was intentionally stopped.
+	closed := func(s compatSession) waitConclusion {
+		return waitConclusion{Reason: "idle", Outcome: classifyTurnClose(s.Status.Error, s.Status.Interrupted)}
+	}
+	check := func(s compatSession) (waitConclusion, bool) {
 		if !s.Alive {
 			if seenActive && s.Status != nil && !s.Status.Active {
-				return "idle", true
+				return closed(s), true
 			}
-			return "died", true
+			return diedConclusion(), true
 		}
 		if s.Status != nil && s.Status.Active {
 			seenActive = true
-			return "", false
+			return waitConclusion{}, false
 		}
 		if seenActive && s.Status != nil && !s.Status.Active {
-			return "idle", true
+			return closed(s), true
 		}
-		return "", false
+		return waitConclusion{}, false
 	}
 	if cur, ok := visibleSession(fanout.Current().Sessions, sessionID); !ok {
-		return "died", false
-	} else if reason, done := check(legacySessionFromWire(cur)); done {
-		return reason, false
+		return diedConclusion(), false
+	} else if verdict, done := check(legacySessionFromWire(cur)); done {
+		return verdict, false
 	}
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return "", false
+			return waitConclusion{}, false
 		case <-deadline:
-			return "", true
+			return waitConclusion{}, true
 		case outcome, ok := <-outcomes:
 			if !ok || string(outcome.ID) != sessionID {
 				continue
 			}
 			if outcome.Type == sessioncoord.OutcomeRemoved {
-				return "died", false
+				return diedConclusion(), false
 			}
 			if outcome.Type != sessioncoord.OutcomeUpserted || outcome.Session == nil {
 				continue
 			}
-			if reason, done := check(legacySessionFromOutcome(*outcome.Session, outcome.Alive)); done {
-				return reason, false
+			if verdict, done := check(legacySessionFromOutcome(*outcome.Session, outcome.Alive)); done {
+				return verdict, false
 			}
 		case <-ticker.C:
 			cur, ok := visibleSession(fanout.Current().Sessions, sessionID)
 			if !ok {
-				return "died", false
+				return diedConclusion(), false
 			}
-			if reason, done := check(legacySessionFromWire(cur)); done {
-				return reason, false
+			if verdict, done := check(legacySessionFromWire(cur)); done {
+				return verdict, false
 			}
 		}
 	}

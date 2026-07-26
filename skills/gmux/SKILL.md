@@ -21,7 +21,8 @@ gmux agent cancel <id>          # interrupt the running turn
 gmux send <id> 'text' Enter  # RAW: type text and submit (Enter is explicit)
 gmux send <id> C-c           # send a control key (interrupt), no text
 gmux send --wait <id> 'text' Enter  # raw send AND block until the reply is done
-gmux wait <id>               # block until idle (agent turn done / shell at prompt)
+gmux wait <id>               # block until the turn ends; prints an agent's answer
+gmux wait --quiet <id>       # ...synchronize only, print nothing
 gmux wait <id> --for-text S  # block until S appears in the output
 gmux tail <id> [-n N]        # conversation as markdown (agents) or last N
                              # lines of output (shells); default N=100
@@ -74,13 +75,16 @@ gmux agent output $id                     # the answer, verbatim, no [tool] line
 git diff | gmux agent prompt $id           # prompt from stdin (stays one prompt)
 ```
 
-`agent prompt` blocks until the turn ends. Exit codes: `0` completed,
-`2` interrupted, `3` `--timeout` elapsed, `1` everything else (failed turn, dead
-runner, usage/transport error). Careful: `gmux wait`'s `2` means "died", while
-`agent`'s `2` means "intentionally interrupted". Success prints
-nothing — read the reply with `gmux agent output <id>` (latest final message,
-untruncated, straight from the agent's stored conversation; works even after
-the session died). Use `gmux tail` when you want the whole transcript.
+`agent prompt` blocks until the turn ends and **prints the agent's answer** on
+stdout (latest final message, untruncated, no `[tool]` lines). Exit codes are
+gmux's global taxonomy, identical for every verb that reports a gmux verdict:
+`0` completed, `2` intentionally interrupted, `1` everything else (failed turn,
+`--timeout`, dead runner, usage/transport error). The exceptions pass a code
+through instead: `gmux -- <cmd>` and `gmux edit` return the child's, and
+`gmux daemon|auth|remote` return gmuxd's. A turn that did not complete prints **no**
+answer — a previous turn's reply must never be presented as this one's; read
+what exists with `gmux agent output <id>` (works even after the session died).
+Use `gmux tail` when you want the whole transcript.
 
 Other shapes, all with the flags **before** the id (text after the id is
 verbatim):
@@ -162,12 +166,36 @@ done
 `gmux wait <id>` blocks until the session goes **idle** — an agent finishing
 its turn, a shell finishing its command and returning to a fresh prompt, or
 a one-shot command's process exiting — optionally bounded by `--timeout N`.
-Exit codes:
+Exit codes (the same global taxonomy `gmux agent` uses). A bare `wait` on an
+already-idle session returns at once and reports the **last** turn's conclusion
+and result — to gate on a turn you are about to trigger, use `gmux agent prompt`
+or `gmux send --wait`, which arm the wait before delivering:
 
-- `0` session reached idle (including a one-shot completing / a shell
-  exiting at its prompt)
-- `2` session exited with its turn still open (crash mid-command/mid-turn)
-- `3` `--timeout` elapsed
+- `0` the turn completed normally (a one-shot that exited **0**, a shell back at
+  its prompt)
+- `2` the turn was intentionally interrupted
+- `1` everything else: the turn ended in an error, the session died mid-turn,
+  or `--timeout` elapsed
+
+**A failed command fails its wait — for lifetime turns only**: a session whose
+turn is its whole lifetime (`gmux -d -- pnpm test`, a shell *without* OSC 133
+integration) closes that turn with an error on a non-zero child exit, so
+`gmux wait` exits 1, and `gmux wait $id && next-step` cannot run after a failed
+build. If you only need "it finished", read `exit_code` from `gmux ls --json` or
+run it in the foreground (`gmux -- pnpm test`), which propagates the child's code.
+
+**Per-command turns carry no result.** In a shell whose integration emits OSC 133
+prompt marks (fish, out of the box), every command is its own turn and gmux reads
+the marks purely as busy/idle — the exit code in the `D` mark is not consumed. So
+`gmux wait` exits 0 when the prompt returns, pass or fail: `gmux wait $shell_id &&
+deploy.sh` **will** deploy after a failed build. Run the command as its own
+session (`gmux -- make build`) if you need its result.
+
+For a pi session whose turn completed, `wait` also **prints the agent's latest
+final message** — the same text `gmux agent output` returns — so
+`answer=$(gmux wait $id)` works. `--quiet` suppresses it. A failed, interrupted
+or dead turn prints nothing (the stderr line says which); shell sessions,
+Claude/Codex sessions and output-condition waits are synchronization-only.
 
 Every session is waitable. **Shell sessions** get per-command idle from OSC
 133 prompt marks (fish emits them by default; bash/zsh need shell
@@ -188,7 +216,8 @@ gmux wait $id --for-text 'listening on' --timeout 60
 gmux wait $id --for-regex 'tests? passed: \d+' --timeout 120
 ```
 
-Same exit codes (`0` matched, `2` session exited first, `3` timeout). Matching
+Same exit codes (`0` matched, `1` the session exited first or the timeout
+elapsed), and no result is printed. Matching
 is line-wise against the rendered terminal output (ANSI stripped, same text
 `gmux tail --raw` shows), including output that appeared before the wait
 started, so the pattern must fit on one terminal line.

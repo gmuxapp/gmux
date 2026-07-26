@@ -165,9 +165,13 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
 
 13. **`gmux wait` waits for agent idle, bounded by `--timeout`.**
     `gmux wait <id>` blocks until the session goes **idle** (agent turn
-    end) or exits; `--timeout <secs>` bounds it (exit 0 idle, 2 died,
-    3 timeout). Cross-peer `wait` returns "not supported across peers
-    yet" (ADR 0005 deferral).
+    end) or exits; `--timeout <secs>` bounds it. Exit codes were
+    originally wait-specific (0 idle, 2 died, 3 timeout) and were
+    replaced by ADR 0027 §8's global taxonomy: **0** the turn completed,
+    **2** it was intentionally interrupted, **1** everything else (a
+    failed turn, a death, a timeout, misuse). ADR 0027 §11 also makes
+    the wait conditionally result-bearing. Cross-peer `wait` returns
+    "not supported across peers yet" (ADR 0005 deferral).
 
     Output-condition variants (`--for-text` / `--for-regex` — "block
     until this text appears") were designed but initially **deferred**:
@@ -177,7 +181,9 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
     ([#313](https://github.com/gmuxapp/gmux/issues/313)): gmuxd's wait
     handler polls the on-disk scrollback tee and matches per rendered
     (ANSI-stripped) line, so shell sessions are supported too (exit 0
-    matched, 2 exited first, 3 timeout).
+    matched, 1 the session exited first or the timeout elapsed —
+    originally 2 and 3, see ADR 0027 §8). Predicate waits print no
+    agent result.
 
 ## Considered alternatives
 
@@ -226,7 +232,10 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
 
 `gmux send` gains a `--wait` behavior modifier (with `--timeout N`):
 deliver the input and block until the turn it triggers completes, with
-`gmux wait`'s exit codes (0 idle, 2 died, 3 timeout).
+`gmux wait`'s exit codes — originally (0 idle, 2 died, 3 timeout), now
+ADR 0027 §8's global 0/1/2 taxonomy, through the same mapping so an
+interrupted turn cannot exit 0 here while `gmux wait` exits 2. Raw
+`send --wait` prints no result.
 
 This exists because the obvious composition `gmux send <id> … &&
 gmux wait <id>` is inherently racy: `wait`'s initial snapshot can

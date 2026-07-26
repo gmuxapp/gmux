@@ -21,10 +21,14 @@ package main
 //     kept through active→inactive completion, so a turn that starts and ends
 //     faster than the daemon can resubscribe cannot be missed.
 //
-// Deliberately absent in this slice: no CLI, no conversation/output rendering
-// (the synchronous response carries a structured outcome and no output field),
-// no peer forwarding, no durable operation records or phases. Peer-owned
-// sessions are refused, not silently routed.
+// A completed synchronous turn now also carries an `output` field: the latest
+// final assistant message, selected at turn close by the same selector
+// `gmux agent output` and the generic wait use. It is present only for
+// `outcome:"completed"`, and omitted (never empty) when there is nothing to
+// show.
+//
+// Deliberately absent: no peer forwarding, no durable operation records or
+// phases. Peer-owned sessions are refused, not silently routed.
 //
 // Honesty rules that shape the response contract:
 //
@@ -206,6 +210,31 @@ type agentDeps struct {
 	deliveryTimeout  time.Duration
 	after            func(d time.Duration) <-chan time.Time
 	resumeGuardError func(ctx context.Context, row centralstore.Session) (int, string, string)
+	// result reads the agent's latest final message for a completed turn, bound
+	// to the turn's result window. Substitutable so tests can drive the response
+	// shape without a rendered conversation on disk; nil falls back to the real
+	// store read.
+	result func(ctx context.Context, sessionID string, window resultWindow) string
+	// markWindow captures a turn's starting watermark. Substitutable for the
+	// same reason; nil falls back to the real store read.
+	markWindow func(ctx context.Context, sessionID string, turnInProgress bool) resultWindow
+}
+
+// resultText selects the agent's answer for a completed synchronous turn.
+func (d agentDeps) resultText(ctx context.Context, sessionID string, window resultWindow) string {
+	if d.result != nil {
+		return d.result(ctx, sessionID, window)
+	}
+	return latestAgentMessageIn(ctx, d.store, sessionID, window)
+}
+
+// markWindowFor captures the result window for a turn about to start (or
+// already running).
+func (d agentDeps) markWindowFor(ctx context.Context, sessionID string, turnInProgress bool) resultWindow {
+	if d.markWindow != nil {
+		return d.markWindow(ctx, sessionID, turnInProgress)
+	}
+	return markResultWindow(ctx, d.store, sessionID, turnInProgress)
 }
 
 func productionAgentDeps(boot *Bootstrap, gmuxBin string) agentDeps {
@@ -440,6 +469,28 @@ func handleAgentPromptCentral(w http.ResponseWriter, r *http.Request, deps agent
 	}
 	deliveredGen := runtime.Generation
 	baselineActive := seedBaseline(seed, sid, deliveredGen)
+	// The result window opens BEFORE delivery, bounded to the turn already in
+	// flight when there is one (a steer, or a follow-up queued behind a running
+	// turn), and to the conversation's length otherwise.
+	//
+	// A plain prompt is bounded by the message count REGARDLESS of the seed's
+	// activity bit, and that exception is load-bearing rather than tidy. The seed
+	// can lag the runner: a turn that has already closed may still read as active
+	// here. The runner, meanwhile, admits a plain prompt only against
+	// authoritative idle, so if these bytes went in at all, no turn was running
+	// — the seed bit says nothing about THIS turn. Taking the turn-in-progress
+	// bound on that stale bit would open the window at the PREVIOUS turn's user
+	// boundary, putting that turn's answer inside it, and a plain prompt whose own
+	// tail is tool-only would then print the prior answer as its result. (Steer
+	// and queued follow-up genuinely do join a running turn, so for them an
+	// active baseline is a fact about the turn being reported.)
+	//
+	// A detached caller gets no result, so it costs no render: marking only
+	// happens for a request that will actually report an answer.
+	window := snapshotWindow()
+	if req.Wait {
+		window = deps.markWindowFor(r.Context(), sessionID, baselineActive && req.Mode != modePrompt)
+	}
 	spec := agentWaitSpec{
 		baselineActive: baselineActive,
 		// A plain prompt is admitted by the runner only against an inactive
@@ -456,6 +507,24 @@ func handleAgentPromptCentral(w http.ResponseWriter, r *http.Request, deps agent
 		generation:        deliveredGen,
 		generationLost:    func() bool { return deps.generationLost(sid, deliveredGen) },
 	}
+	if req.Wait && spec.spanQueuedTurn {
+		// Re-marking is load-bearing for exactly one mode. A follow-up queued
+		// behind a running turn opened its window BEFORE that turn closed, so
+		// the pre-delivery window contains the running turn's answer; the
+		// queued turn's own start edge is the only point at which the right
+		// bound is knowable. A turn seen STARTING is bounded by the message
+		// count, never by the previous turn's user boundary.
+		//
+		// Every other mode deliberately does NOT re-mark. The re-mark can only
+		// move the bound LATER — it runs after the edge has travelled hook →
+		// runner → /events → store commit — so for a plain prompt or a steer,
+		// whose pre-delivery bound is already correct, it can only push content
+		// the turn had already persisted outside the reported window. A
+		// tool-only tail would then report `completed` with no output: an answer
+		// silently dropped under exit 0, which is the failure this bound exists
+		// to prevent.
+		spec.markResult = func() { window = deps.markWindowFor(r.Context(), sessionID, false) }
+	}
 
 	// The runner call gets a bounded context of its own (see deps.delivery):
 	// ctx-only would let a wedged PTY write park this request for as long as
@@ -467,7 +536,7 @@ func handleAgentPromptCentral(w http.ResponseWriter, r *http.Request, deps agent
 		writeAgentDeliveryError(w, r, dctx, opPrompt, err)
 		return
 	}
-	finishAgentAction(w, r, deps, outcomes, sessionID, spec, resumed)
+	finishAgentAction(w, r, deps, outcomes, sessionID, spec, resumed, &window)
 }
 
 // seedBaseline derives this session's admission baseline from the atomic
@@ -559,7 +628,7 @@ func handleAgentCancelCentral(w http.ResponseWriter, r *http.Request, deps agent
 
 // finishAgentAction runs the admission and (optionally) the fused execution
 // wait, then writes the response.
-func finishAgentAction(w http.ResponseWriter, r *http.Request, deps agentDeps, outcomes <-chan sessioncoord.Outcome, sessionID string, spec agentWaitSpec, resumed bool) {
+func finishAgentAction(w http.ResponseWriter, r *http.Request, deps agentDeps, outcomes <-chan sessioncoord.Outcome, sessionID string, spec agentWaitSpec, resumed bool, window *resultWindow) {
 	res := runAgentWait(r.Context(), outcomes, sessionID, spec, deps.timer)
 	switch res.Failure {
 	case "":
@@ -603,12 +672,21 @@ func finishAgentAction(w http.ResponseWriter, r *http.Request, deps agentDeps, o
 		writeAgentJSON(w, http.StatusAccepted, data)
 		return
 	}
-	// No conversation output in this slice: the outcome is structured and the
-	// output field is deliberately absent rather than empty, so a client
-	// cannot mistake "not implemented yet" for "the agent said nothing".
 	data["outcome"] = res.Outcome
 	if res.Cause != "" {
 		data["cause"] = res.Cause
+	}
+	// A completed turn carries the agent's answer, selected here at turn close
+	// by the same selector `gmux agent output` and the generic wait use. Any
+	// other outcome carries no output field: the newest stored message would be
+	// a previous or partial turn's, and presenting it as this prompt's result is
+	// exactly the staleness ADR 0027 §11 forbids. An absent field also still
+	// means "nothing to show" (non-renderer agent, no prose yet), never "the
+	// agent answered with silence" — the field is omitted, not empty.
+	if res.Outcome == outcomeCompleted {
+		if text := deps.resultText(r.Context(), sessionID, *window); text != "" {
+			data["output"] = text
+		}
 	}
 	writeAgentJSON(w, http.StatusOK, data)
 }
@@ -635,6 +713,10 @@ type agentWaitSpec struct {
 	// the runtime carried none. Observations that demonstrably belong to a
 	// different live generation are ignored.
 	generation uint64
+	// markResult re-opens the result window at each turn-start edge, so the
+	// answer reported for a turn is selected from content that turn produced.
+	// nil disables re-marking (nothing but the pre-delivery window is used).
+	markResult func()
 	// generationLost consults the registry for the ambiguous liveness signals:
 	// an outcome removal can race a replacement registration, and an outcome
 	// stamped Alive=false can be stale by the time it is delivered. It is
@@ -775,6 +857,9 @@ func runAgentWait(ctx context.Context, outcomes <-chan sessioncoord.Outcome, ses
 			}
 			if row.Active && !active {
 				active, sawActive = true, true
+				if spec.markResult != nil {
+					spec.markResult()
+				}
 				if !admitted {
 					admitted = true
 					admissionDeadline = nil
@@ -801,14 +886,9 @@ func runAgentWait(ctx context.Context, outcomes <-chan sessioncoord.Outcome, ses
 				// nothing of ours to have completed.
 				continue
 			}
-			// Turn closed.
-			outcome := outcomeCompleted
-			switch {
-			case row.Error:
-				outcome = outcomeError
-			case row.Interrupted:
-				outcome = outcomeInterrupted
-			}
+			// Turn closed. Classification is shared with the generic wait
+			// (classifyTurnClose) so the two paths cannot drift.
+			outcome := classifyTurnClose(row.Error, row.Interrupted)
 			if spec.spanQueuedTurn && !spanUsed {
 				spanUsed = true
 				awaitingQueued = true
