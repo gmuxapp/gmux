@@ -70,6 +70,29 @@ type State struct {
 	BinaryHash    string `json:"binary_hash,omitempty"`
 	RunnerVersion string `json:"runner_version,omitempty"`
 
+	// reservation tracks a semantic prompt gmux has delivered (or is
+	// delivering) whose turn has not been observed yet (ADR 0027; see
+	// AdmitAction). It lives here, next to Status and under the same mutex,
+	// because that mutex is the runner's ONE ordering mechanism for turn
+	// state: every authoritative status writer in the runner — agent hooks,
+	// OSC 133 prompt marks, PUT /status, the launch/exit lifetime turn —
+	// goes through SetStatus/CloseTurn, so putting the semantic layer's
+	// check-and-reserve in the same critical section makes it atomic
+	// against all of them with no second lock to invert.
+	//
+	// activeEdges counts inactive→active transitions. A *transition* is the
+	// only thing that can be evidence that a delivered prompt started a
+	// turn: repeated Active=true writes (a hook that re-reports a running
+	// turn, a script's `PUT /status` during one) say nothing new, and an
+	// edge that happened before the delivery belongs to somebody else's
+	// turn. Counting edges makes both distinctions expressible without turn
+	// tokens or operation IDs.
+	//
+	// Both are unexported and never serialized: runner-generation-local
+	// state about an in-flight delivery, not part of the session's document.
+	reservation reservation
+	activeEdges uint64
+
 	// SSE subscribers (not serialized)
 	subs []chan Event
 
@@ -195,7 +218,9 @@ func (s *State) EmitActivity() {
 func (s *State) SetStatus(status *adapter.Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	prev := s.Status
 	s.Status = status
+	s.noteStatusWriteLocked(prev, status)
 	s.emit(Event{Type: "status", Data: status})
 }
 
@@ -222,7 +247,9 @@ func (s *State) CloseTurn(status *adapter.Status) bool {
 	if s.Status == nil || !s.Status.Active {
 		return false
 	}
+	prev := s.Status
 	s.Status = status
+	s.noteStatusWriteLocked(prev, status)
 	s.emit(Event{Type: "status", Data: status})
 	return true
 }
@@ -304,6 +331,243 @@ func (s *State) StatusSnapshot() *adapter.Status {
 	}
 	cp := *s.Status
 	return &cp
+}
+
+// TurnRequirement is the activity precondition a semantic agent action
+// requires of the agent (ADR 0027): a plain prompt needs an idle agent, a
+// steer needs a running turn, a follow-up needs neither.
+type TurnRequirement int
+
+const (
+	RequireAny TurnRequirement = iota
+	RequireInactive
+	RequireActive
+)
+
+// ReservePolicy says whether a successful delivery should reserve the turn it
+// is expected to produce. See AdmitAction.
+type ReservePolicy int
+
+const (
+	// ReserveNever: the action joins a turn that is already running (a
+	// steer) or starts none at all (an interrupt), so there is no future
+	// turn to reserve.
+	ReserveNever ReservePolicy = iota
+	// ReserveIfInactive: a submit-now reserves only when it was delivered
+	// to an idle agent, because only then is it the thing that starts the
+	// next turn.
+	ReserveIfInactive
+	// ReserveAlways: a queued submit (send-after-turn) reserves the future
+	// turn even though the agent is busy now — the queued text will run
+	// when the current turn ends.
+	ReserveAlways
+)
+
+// Admission is the verdict of AdmitAction.
+type Admission int
+
+const (
+	Admitted Admission = iota
+	// RefusedActive: the caller required an idle agent; a turn is running.
+	RefusedActive
+	// RefusedInactive: the caller required a running turn; none is.
+	RefusedInactive
+	// RefusedPending: no turn is running, but gmux already delivered a
+	// prompt whose turn has not been observed yet. Admitting a second one
+	// would duplicate input into the same composer.
+	RefusedPending
+)
+
+// reservation is the generation-local phase of one delivered semantic prompt.
+//
+// Phases:
+//
+//	none                      held=false
+//	unconfirmed (in flight)   held=true, inFlight=true   — committed, transport running
+//	awaiting evidence         held=true, inFlight=false  — delivered, no qualifying edge yet
+//
+// A reservation is never released by the passage of time, and never by an
+// inactive status write: neither is evidence that the agent consumed the text
+// gmux delivered. It is released by a qualifying active edge — one that
+// happens strictly after the reservation was committed (sinceEdges) — or by the
+// delivering request itself when its transport fails.
+type reservation struct {
+	held     bool
+	inFlight bool
+	// sinceEdges is the activeEdges count at commit time. Only edges beyond
+	// it can resolve this reservation, which is what stops an active edge
+	// that predates the transport (e.g. an unrelated turn that started AND
+	// finished while this request was queued) from being consumed as
+	// evidence for it.
+	sinceEdges uint64
+}
+
+// AdmitAction is the semantic layer's transport-start boundary: it evaluates a
+// semantic action's activity requirement against the authoritative status AND
+// the outstanding delivery reservation and, when it admits, commits the
+// reservation the policy asks for. It reports whether it reserved, so the
+// delivering request can confirm or undo exactly what it did
+// (ConfirmDelivery / ClearReservation).
+//
+// Callers must call it IMMEDIATELY before the transport write, with nothing in
+// between. That is what makes the requirement check meaningful: the check, the
+// commit and every status write in the runner share one critical section, so no
+// transition can land between the check and the decision, and a request that
+// sat in a queue for a second is decided on the state it is actually delivering
+// into rather than on the state it saw when it arrived.
+//
+// Activity is exactly Status.Active: an errored-but-still-running turn is
+// active, while a terminal error, an interruption and "nothing reported yet"
+// are all inactive.
+func (s *State) AdmitAction(req TurnRequirement, pol ReservePolicy) (verdict Admission, reserved bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	active := s.Status != nil && s.Status.Active
+	switch req {
+	case RequireActive:
+		if !active {
+			return RefusedInactive, false
+		}
+	case RequireInactive:
+		if active {
+			return RefusedActive, false
+		}
+		// An unresolved delivery of ours means a prompt is sitting in the
+		// agent's composer (or in flight to it) that the agent has not
+		// reported a turn for yet. It is NOT idle in the sense the caller
+		// means, even though the status says so.
+		if s.reservation.held {
+			return RefusedPending, false
+		}
+	}
+	switch pol {
+	case ReserveAlways:
+		s.reserveLocked()
+		return Admitted, true
+	case ReserveIfInactive:
+		if !active {
+			s.reserveLocked()
+			return Admitted, true
+		}
+	}
+	return Admitted, false
+}
+
+// reserveLocked commits an unconfirmed reservation whose evidence watermark is
+// the current edge count: only an inactive→active transition from here on can
+// resolve it. Caller must hold s.mu.
+func (s *State) reserveLocked() {
+	s.reservation = reservation{held: true, inFlight: true, sinceEdges: s.activeEdges}
+}
+
+// ConfirmDelivery ends the in-flight phase of the reservation this caller took,
+// after its transport wrote the whole payload. It releases the reservation only
+// if a qualifying active edge was already observed while the write was in
+// flight; otherwise the reservation stays held, waiting for one.
+//
+// Why the phase exists at all: an agent can start its turn — and its hook can
+// report it — before the runner's write call returns, so the evidence and the
+// delivery genuinely race. Resolving such an edge immediately would discard the
+// reservation before anyone knows whether the write succeeded, and a write that
+// then failed would leave the session with no reservation and no delivery.
+// Recording the edge and consulting it here keeps both orders correct.
+//
+// An edge that raced the write is ASSUMED to belong to this delivery. Without a
+// turn token it is causally ambiguous: a human typing at the terminal (or any
+// raw writer) could have started that turn instead, and consuming their edge
+// releases our reservation early. That ambiguity is resolved toward
+// availability on purpose — the alternative wedges the common successful case,
+// where our own prompt is exactly what started the turn, for the rest of the
+// runner generation. Concurrent raw/human input is outside what ADR 0027's
+// semantic layer guarantees anything against.
+func (s *State) ConfirmDelivery() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.reservation.held {
+		return
+	}
+	s.reservation.inFlight = false
+	if s.activeEdges > s.reservation.sinceEdges {
+		s.reservation = reservation{}
+	}
+}
+
+// ClearReservation undoes a reservation whose delivery did not happen or was
+// truncated. Only the caller that took the reservation may call it, and only
+// while it still holds the runner's delivery slot — otherwise it could erase
+// somebody else's.
+func (s *State) ClearReservation() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reservation = reservation{}
+}
+
+// AbandonInFlightReservation drops a reservation that is still in flight, and
+// only then. It is the safety net for a delivering request that never reaches
+// ConfirmDelivery or ClearReservation — a panic in the transport, or any other
+// unexpected unwind: an orphaned in-flight reservation would refuse every later
+// prompt for the rest of the runner generation, with no request left to resolve
+// it.
+//
+// Deliberately conditional on the in-flight phase, so it is a no-op after a
+// normal outcome: ConfirmDelivery ends that phase (leaving a legitimately held
+// reservation that is still waiting for its turn), and ClearReservation empties
+// it. Like the other two, it may only be called by the request that took the
+// reservation, while it still holds the delivery slot.
+func (s *State) AbandonInFlightReservation() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reservation.held && s.reservation.inFlight {
+		s.reservation = reservation{}
+	}
+}
+
+// ReservationHeld reports whether a delivered (or in-flight) prompt is still
+// waiting for its turn to be observed. Diagnostics and tests only — admission
+// decisions must use AdmitAction, which reads it in the same breath as the
+// status.
+func (s *State) ReservationHeld() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.reservation.held
+}
+
+// noteStatusWriteLocked records what an authoritative status write means for
+// the delivery reservation. Caller must hold s.mu and must pass the status that
+// was in place before the write, because the distinction that matters is a
+// TRANSITION, not a value.
+//
+// Only an inactive→active edge counts:
+//
+//   - a repeated Active=true write (a hook re-reporting a running turn, a
+//     script's `PUT /status` mid-turn, a follow-up's own turn still going) is
+//     not new information and must not resolve a reservation for a turn that
+//     has not started;
+//   - an inactive write — a turn end, an idle `PUT /status`, a cleared status,
+//     an interruption — is not evidence that the prompt gmux delivered was
+//     consumed, so it must not re-open the door to a second one;
+//   - and an edge that predates the reservation (sinceEdges) belongs to
+//     somebody else's turn.
+//
+// There is deliberately NO timeout: a delivered prompt that never produces a
+// turn stays unresolved for the rest of the runner generation, because nothing
+// about the passage of time proves the agent did not receive it. Duplicating a
+// prompt is worse than refusing one, and raw input remains available as the
+// unconditional escape hatch.
+//
+// While the delivering write is still in flight the edge is only *recorded*
+// (the counter advances); ConfirmDelivery consults it once the write is known
+// to have completed. See ConfirmDelivery.
+func (s *State) noteStatusWriteLocked(prev, next *adapter.Status) {
+	prevActive := prev != nil && prev.Active
+	nextActive := next != nil && next.Active
+	if !nextActive || prevActive {
+		return // not an inactive→active edge
+	}
+	s.activeEdges++
+	if s.reservation.held && !s.reservation.inFlight && s.activeEdges > s.reservation.sinceEdges {
+		s.reservation = reservation{}
+	}
 }
 
 // UnreadSnapshot returns the current unread flag under lock.
