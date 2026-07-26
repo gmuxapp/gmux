@@ -295,11 +295,11 @@ type SessionFinalizer interface {
 // Resumer is implemented by adapters whose sessions can be resumed
 // after the process exits.
 type Resumer interface {
-	// ResumeCommand returns the command to resume the given session.
+	// ResumeCommand returns the command to resume the described
+	// conversation. Adapters return nil when that conversation is not
+	// resumable (empty, corrupted or incompatible); consumers treat any
+	// empty command (len == 0) as the same verdict. The caller has already
+	// described the conversation, so resumability is decided here rather
+	// than by a separate probe.
 	ResumeCommand(info *ConversationInfo) []string
-
-	// CanResume returns whether the conversation identified by the opaque
-	// ref represents a resumable session (vs a corrupted/empty/incompatible
-	// one).
-	CanResume(ref string) bool
 }

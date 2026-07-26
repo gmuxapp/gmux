@@ -65,7 +65,7 @@ func TestShellWriteAndParseStateFile(t *testing.T) {
 	}
 }
 
-func TestShellCanResume(t *testing.T) {
+func TestShellResumeCommandResumability(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", tmp)
 
@@ -75,13 +75,21 @@ func TestShellCanResume(t *testing.T) {
 	}
 
 	sh := NewShell()
-	if !sh.CanResume(path) {
-		t.Error("CanResume should return true for valid state file")
+	info, err := sh.DescribeConversation(path)
+	if err != nil {
+		t.Fatalf("DescribeConversation: %v", err)
+	}
+	if cmd := sh.ResumeCommand(info); len(cmd) != 1 {
+		t.Errorf("valid state file should be resumable, got %v", cmd)
 	}
 
+	// A missing state file never describes, so there is no info to resume.
 	badPath := filepath.Join(tmp, "nonexistent.json")
-	if sh.CanResume(badPath) {
-		t.Error("CanResume should return false for missing file")
+	if _, err := sh.DescribeConversation(badPath); err == nil {
+		t.Error("missing state file should not describe")
+	}
+	if cmd := sh.ResumeCommand(nil); cmd != nil {
+		t.Errorf("nil info should not be resumable, got %v", cmd)
 	}
 }
 

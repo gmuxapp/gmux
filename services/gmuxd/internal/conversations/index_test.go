@@ -294,7 +294,7 @@ func TestAll(t *testing.T) {
 // TestSinkRemoveFiresOnRemovedEvenWhenUnindexed pins the retirement
 // seam: the watcher-level sink reports every file-gone event to
 // onRemoved — including files the index never held (parse failure,
-// CanResume=false, empty cwd) — because a dead session bound to an
+// non-resumable, empty cwd) — because a dead session bound to an
 // unindexed conversation must still retire when its file is deleted.
 // It also still removes indexed entries from the index.
 func TestSinkRemoveFiresOnRemovedEvenWhenUnindexed(t *testing.T) {

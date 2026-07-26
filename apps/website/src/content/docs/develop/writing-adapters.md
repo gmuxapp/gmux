@@ -214,19 +214,20 @@ There is no capability for status. Sessions of adapters that implement `SessionE
 
 ```go
 type Resumer interface {
+    // An empty command means the described conversation is not resumable.
     ResumeCommand(info *ConversationInfo) []string
-    CanResume(ref string) bool
 }
 ```
 
 Implement this if your tool supports resuming previous sessions.
 
-- `CanResume(ref)` filters out invalid or empty conversations
-- `ResumeCommand()` tells gmux how to resume a valid session
+- `ResumeCommand(info)` tells gmux how to resume the described conversation, and returns `nil` for an invalid, empty or incompatible one. There is no separate resumability probe: the empty command **is** the "not resumable" verdict, and gmux treats nil and a zero-length slice identically.
 
-All dead sessions are resumable. When a session exits, gmuxd checks whether the adapter implements `Resumer` **and** the session has a recorded conversation ref (`ConversationRef`, reported by the agent hook). If so, the session's command is replaced with the adapter's resume command (e.g. `["claude", "--resume", "abc"]`). If not, the original launch command is kept as-is, so "resume" simply re-runs the command in the same working directory.
+When a session dies **with** a recorded conversation ref (`ConversationRef`, reported by the agent hook), your adapter is the authority for that session's resume: gmux derives the command from `ResumeCommand` and shows the session as resumable only if the derivation is non-empty. Return an empty command and the session is presented as not resumable rather than falling back to its original launch command — the daemon resolves the same way when it actually spawns, so anything else would advertise a resume it would then refuse.
 
-This means adapters that don't implement `Resumer` still get resume for free: the user clicks resume, a new session starts with the same command and cwd. This is the right behavior for simple tools. Only implement `Resumer` when your tool has native resume support that you want to use instead.
+A conversation that your adapter declares non-resumable is also left out of the conversation index (no URL slug, no search entry).
+
+Sessions that never recorded a conversation ref are outside this path; do not rely on `Resumer` to describe their behavior. Only implement `Resumer` when your tool has native resume support you want gmux to use.
 
 ### `PromptSubmitter`
 

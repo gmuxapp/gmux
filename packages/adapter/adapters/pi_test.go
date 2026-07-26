@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -353,27 +354,41 @@ func TestDescribeConversationStringContent(t *testing.T) {
 
 func TestResumeCommand(t *testing.T) {
 	cmd := NewPi().ResumeCommand(&adapter.ConversationInfo{
-		Ref: "/tmp/test.jsonl",
+		Ref:          "/tmp/test.jsonl",
+		MessageCount: 1,
 	})
-	if len(cmd) != 4 || cmd[0] != "pi" || cmd[1] != "--session" || cmd[3] != "-c" {
-		t.Errorf("unexpected resume command: %v", cmd)
+	want := []string{"pi", "--session", "/tmp/test.jsonl", "-c"}
+	if !slices.Equal(cmd, want) {
+		t.Errorf("resume command = %v, want %v", cmd, want)
 	}
 }
 
-func TestCanResume(t *testing.T) {
+func TestResumeCommandResumability(t *testing.T) {
+	p := NewPi()
 	valid := writeTempJSONL(t,
 		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp"}`,
 		`{"type":"message","id":"u1","timestamp":"2026-03-15T10:01:00Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
 	)
-	if !NewPi().CanResume(valid) {
-		t.Fatal("should be resumable")
+	info, err := p.DescribeConversation(valid)
+	if err != nil {
+		t.Fatalf("DescribeConversation: %v", err)
+	}
+	if cmd := p.ResumeCommand(info); !slices.Equal(cmd, []string{"pi", "--session", valid, "-c"}) {
+		t.Fatalf("should resume by its own ref, got %v", cmd)
 	}
 
 	empty := writeTempJSONL(t,
 		`{"type":"session","version":3,"id":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp"}`,
 	)
-	if NewPi().CanResume(empty) {
-		t.Fatal("empty session should not be resumable")
+	info, err = p.DescribeConversation(empty)
+	if err != nil {
+		t.Fatalf("DescribeConversation: %v", err)
+	}
+	if cmd := p.ResumeCommand(info); cmd != nil {
+		t.Fatalf("empty session should not be resumable, got %v", cmd)
+	}
+	if cmd := p.ResumeCommand(nil); cmd != nil {
+		t.Fatalf("nil info should not be resumable, got %v", cmd)
 	}
 }
 

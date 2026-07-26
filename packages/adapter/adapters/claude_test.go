@@ -356,27 +356,42 @@ func TestClaudeDescribeConversationAncestorIDs(t *testing.T) {
 
 func TestClaudeResumeCommand(t *testing.T) {
 	cmd := NewClaude().ResumeCommand(&adapter.ConversationInfo{
-		ID: "abc-123-def",
+		ID:           "abc-123-def",
+		MessageCount: 1,
 	})
 	if len(cmd) != 3 || cmd[0] != "claude" || cmd[1] != "--resume" || cmd[2] != "abc-123-def" {
 		t.Errorf("unexpected resume command: %v", cmd)
 	}
 }
 
-func TestClaudeCanResume(t *testing.T) {
+// Resumability lives in ResumeCommand: a described-but-empty conversation
+// yields no command.
+func TestClaudeResumeCommandResumability(t *testing.T) {
+	c := NewClaude()
 	valid := writeClaudeJSONL(t,
 		`{"type":"user","sessionId":"abc","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp","message":{"role":"user","content":"hello"},"uuid":"u1"}`,
 	)
-	if !NewClaude().CanResume(valid) {
-		t.Fatal("should be resumable")
+	info, err := c.DescribeConversation(valid)
+	if err != nil {
+		t.Fatalf("DescribeConversation: %v", err)
+	}
+	if cmd := c.ResumeCommand(info); len(cmd) != 3 {
+		t.Fatalf("should be resumable, got %v", cmd)
 	}
 
 	// Queue-only file has no messages
 	queueOnly := writeClaudeJSONL(t,
 		`{"type":"queue-operation","operation":"dequeue","timestamp":"2026-03-15T10:00:00Z","sessionId":"q-123"}`,
 	)
-	if NewClaude().CanResume(queueOnly) {
-		t.Fatal("queue-only session should not be resumable")
+	info, err = c.DescribeConversation(queueOnly)
+	if err != nil {
+		t.Fatalf("DescribeConversation: %v", err)
+	}
+	if cmd := c.ResumeCommand(info); cmd != nil {
+		t.Fatalf("queue-only session should not be resumable, got %v", cmd)
+	}
+	if cmd := c.ResumeCommand(nil); cmd != nil {
+		t.Fatalf("nil info should not be resumable, got %v", cmd)
 	}
 }
 

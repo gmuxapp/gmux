@@ -114,9 +114,12 @@ func TestSessionConversionOverlays(t *testing.T) {
 }
 
 // TestResumeCommandRewrite: dead rows show the resume form derived from
-// (adapter, ref); the durable command is untouched; a nil resolver or nil
-// resolution keeps the launch command; resumability follows the rewritten
-// command and the composer's verdict narrowing.
+// (adapter, ref); the durable command is untouched; a nil resolver keeps the
+// launch command, but an empty resolution for a row that HAS a conversation
+// ref clears the command and resumability (spawner parity: the spawner
+// resolves the same way, ignores the durable command, and refuses to spawn);
+// resumability follows the rewritten command and the composer's verdict
+// narrowing.
 func TestResumeCommandRewrite(t *testing.T) {
 	resolver := func(adapter, ref string) []string {
 		if ref == "known-ref" {
@@ -139,9 +142,22 @@ func TestResumeCommandRewrite(t *testing.T) {
 		t.Fatalf("live row rewritten: %+v", got)
 	}
 
+	// Non-resumable conversation: presentation must agree with execution.
 	unresolved := localRow("sess-u", false, func(r *central.SessionRow) { r.Session.ConversationRef = "gone-ref" })
-	if got := conv.session(unresolved); !reflect.DeepEqual(got.Command, []string{"bash"}) || !got.Resumable {
-		t.Fatalf("nil resolution must keep launch command: %+v", got)
+	if got := conv.session(unresolved); len(got.Command) != 0 || got.Resumable {
+		t.Fatalf("empty resolution must not advertise a resume: %+v", got)
+	}
+
+	// No conversation ref at all: nothing to derive from, so the durable
+	// launch command stands (unchanged behavior).
+	noRef := localRow("sess-n", false)
+	if got := conv.session(noRef); !reflect.DeepEqual(got.Command, []string{"bash"}) || !got.Resumable {
+		t.Fatalf("ref-less row must keep launch command: %+v", got)
+	}
+
+	// Nil resolver (converter without resume policy): launch command stands.
+	if got := (&Converter{}).session(unresolved); !reflect.DeepEqual(got.Command, []string{"bash"}) || !got.Resumable {
+		t.Fatalf("nil resolver must keep launch command: %+v", got)
 	}
 
 	// Verdict narrowing (composer Resumable=false despite durable command)

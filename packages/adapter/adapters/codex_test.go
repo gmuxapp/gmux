@@ -197,7 +197,8 @@ func TestCodexDescribeConversationNotSessionMeta(t *testing.T) {
 
 func TestCodexResumeCommand(t *testing.T) {
 	cmd := NewCodex().ResumeCommand(&adapter.ConversationInfo{
-		ID: "019cf93a-c782-7942-ab76-010c81df6744",
+		ID:           "019cf93a-c782-7942-ab76-010c81df6744",
+		MessageCount: 1,
 	})
 	expected := []string{"codex", "resume", "019cf93a-c782-7942-ab76-010c81df6744"}
 	if len(cmd) != 3 || cmd[0] != expected[0] || cmd[1] != expected[1] || cmd[2] != expected[2] {
@@ -205,20 +206,32 @@ func TestCodexResumeCommand(t *testing.T) {
 	}
 }
 
-func TestCodexCanResume(t *testing.T) {
+func TestCodexResumeCommandResumability(t *testing.T) {
+	c := NewCodex()
 	valid := writeCodexJSONL(t,
 		`{"timestamp":"2026-03-17T01:00:00Z","type":"session_meta","payload":{"id":"abc","timestamp":"2026-03-17T01:00:00Z","cwd":"/tmp"}}`,
 		`{"timestamp":"2026-03-17T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}`,
 	)
-	if !NewCodex().CanResume(valid) {
-		t.Fatal("should be resumable")
+	info, err := c.DescribeConversation(valid)
+	if err != nil {
+		t.Fatalf("DescribeConversation: %v", err)
+	}
+	if cmd := c.ResumeCommand(info); len(cmd) != 3 {
+		t.Fatalf("should be resumable, got %v", cmd)
 	}
 
 	empty := writeCodexJSONL(t,
 		`{"timestamp":"2026-03-17T01:00:00Z","type":"session_meta","payload":{"id":"abc","timestamp":"2026-03-17T01:00:00Z","cwd":"/tmp"}}`,
 	)
-	if NewCodex().CanResume(empty) {
-		t.Fatal("empty session should not be resumable")
+	info, err = c.DescribeConversation(empty)
+	if err != nil {
+		t.Fatalf("DescribeConversation: %v", err)
+	}
+	if cmd := c.ResumeCommand(info); cmd != nil {
+		t.Fatalf("empty session should not be resumable, got %v", cmd)
+	}
+	if cmd := c.ResumeCommand(nil); cmd != nil {
+		t.Fatalf("nil info should not be resumable, got %v", cmd)
 	}
 }
 

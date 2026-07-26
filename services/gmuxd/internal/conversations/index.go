@@ -207,10 +207,12 @@ func (idx *Index) Scan(a adapter.Adapter, ref string) string {
 
 	var cmd []string
 	if resumer, ok := a.(adapter.Resumer); ok {
-		if !resumer.CanResume(ref) {
+		// An empty command means the adapter considers this conversation
+		// non-resumable (empty/corrupted), so it stays out of the index.
+		cmd = resumer.ResumeCommand(convInfo)
+		if len(cmd) == 0 {
 			return ""
 		}
-		cmd = resumer.ResumeCommand(convInfo)
 	}
 
 	info := Info{
@@ -254,7 +256,7 @@ func (idx *Index) Remove(adapterName, conversationID string) bool {
 //
 // Session retirement on conversation-gone deliberately does NOT hang off
 // this method: an unindexed conversation (describe failure,
-// CanResume=false, empty cwd) still needs retiring when it disappears, so
+// non-resumable, empty cwd) still needs retiring when it disappears, so
 // the source-level sink (sources.go) owns that signal instead.
 func (idx *Index) RemoveByRef(adapterName, ref string) bool {
 	idx.mu.Lock()

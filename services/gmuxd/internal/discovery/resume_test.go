@@ -25,10 +25,15 @@ func TestResolveResumeCommand(t *testing.T) {
 	dir := t.TempDir()
 	good := filepath.Join(dir, "good.jsonl")
 	writePiSession(t, good)
+	// Parses fine, has no messages: the adapter itself declares it
+	// non-resumable, so derivation yields nil.
+	empty := filepath.Join(dir, "empty.jsonl")
+	if err := os.WriteFile(empty, []byte(`{"type":"session","version":3,"id":"e-1","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	// Note: resolution does not gate on Resumer.CanResume — that's the
-	// conversations index's concern. A dead session the daemon tracked is
-	// resumed on explicit user action; here we only derive its command.
+	// Note: resumability is the adapter's own call inside ResumeCommand —
+	// a described-but-empty conversation yields nil here too.
 	tests := []struct {
 		name    string
 		sess    store.Session
@@ -37,6 +42,7 @@ func TestResolveResumeCommand(t *testing.T) {
 		{"no conversation file", store.Session{Adapter: "pi"}, true},
 		{"unknown adapter", store.Session{Adapter: "nope", ConversationRef: good}, true},
 		{"unparseable file", store.Session{Adapter: "pi", ConversationRef: filepath.Join(dir, "ghost.jsonl")}, true},
+		{"described but empty pi", store.Session{Adapter: "pi", ConversationRef: empty}, true},
 		{"resumable pi", store.Session{Adapter: "pi", ConversationRef: good}, false},
 	}
 	for _, tc := range tests {

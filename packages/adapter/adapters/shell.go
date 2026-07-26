@@ -146,7 +146,12 @@ func (g *Shell) DescribeConversation(ref string) (*adapter.ConversationInfo, err
 
 // --- Resumer ---
 
+// ResumeCommand returns the shell to relaunch, or nil when there is no
+// described shell state to resume.
 func (g *Shell) ResumeCommand(info *adapter.ConversationInfo) []string {
+	if info == nil {
+		return nil
+	}
 	// Resume a shell session by launching the user's default shell in the
 	// original cwd. The cwd is passed via the session metadata, not the
 	// command itself.
@@ -155,11 +160,6 @@ func (g *Shell) ResumeCommand(info *adapter.ConversationInfo) []string {
 		shell = "/bin/sh"
 	}
 	return []string{shell}
-}
-
-func (g *Shell) CanResume(ref string) bool {
-	_, err := g.DescribeConversation(ref)
-	return err == nil
 }
 
 // --- SessionRegistrar ---
