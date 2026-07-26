@@ -102,10 +102,15 @@ export function _setRawWorld(patch: Partial<RawWorld>) {
 //
 // The wire delivers atomic snapshots that overwrite `_rawSessions` /
 // `_rawWorld` wholesale. Optimistic UI mutations (mark-as-read,
-// dismiss, reorder) need to survive that overwrite until the server
-// echoes them back. We do that by stacking mutations in
-// `_pendingMutations` and replaying them on top of raw in the public
-// projections.
+// dismiss) need to survive that overwrite until the server echoes them
+// back. We do that by stacking mutations in `_pendingMutations` and
+// replaying them on top of raw in the public projection.
+//
+// Session *order* deliberately has no overlay. It reaches the UI only as
+// server-stamped `project_index` (the daemon owns placement for local,
+// Local-peer and peer sessions alike), so the only honest local preview
+// is the in-drag one the sidebar renders from its own drag state; the
+// commit is the server's to make. See `reorderSessions`.
 //
 // Each mutation is auto-cleared two ways:
 //   1. when raw state already reflects the mutation
@@ -116,22 +121,19 @@ export function _setRawWorld(patch: Partial<RawWorld>) {
 export type PendingMutation =
   | { kind: 'mark-read'; id: string; at: number }
   | { kind: 'dismiss'; id: string; at: number }
-  | { kind: 'reorder'; slug: string; sessions: string[]; at: number }
 
 export const _pendingMutations = signal<PendingMutation[]>([])
 
 const PENDING_TTL_MS = 5_000
 
-/** Replay pending mutations on top of a raw sessions/projects pair.
+/** Replay pending mutations on top of a raw sessions array.
  * Pure; safe to call from `computed`. */
 export function applyPending(
   rawSessions: Session[],
-  rawProjects: ProjectItem[],
   pending: PendingMutation[],
-): { sessions: Session[]; projects: ProjectItem[] } {
-  if (pending.length === 0) return { sessions: rawSessions, projects: rawProjects }
+): Session[] {
+  if (pending.length === 0) return rawSessions
   let sess = rawSessions
-  let projs = rawProjects
   for (const m of pending) {
     switch (m.kind) {
       case 'mark-read':
@@ -144,22 +146,15 @@ export function applyPending(
       case 'dismiss':
         sess = sess.filter(s => s.id !== m.id)
         break
-      case 'reorder':
-        projs = projs.map(p => p.slug !== m.slug ? p : ({ ...p, sessions: m.sessions }))
-        break
     }
   }
-  return { sessions: sess, projects: projs }
+  return sess
 }
 
 /** True when the raw state already reflects the mutation, so replaying
  * it would be a no-op. The auto-clear effect uses this to drop
  * mutations the server has acknowledged. */
-function isResolved(
-  m: PendingMutation,
-  rawSessions: Session[],
-  rawProjects: ProjectItem[],
-): boolean {
+function isResolved(m: PendingMutation, rawSessions: Session[]): boolean {
   switch (m.kind) {
     case 'mark-read': {
       const s = rawSessions.find(x => x.id === m.id)
@@ -168,12 +163,6 @@ function isResolved(
     }
     case 'dismiss':
       return !rawSessions.some(s => s.id === m.id)
-    case 'reorder': {
-      const p = rawProjects.find(x => x.slug === m.slug)
-      if (!p) return true
-      const cur = p.sessions ?? []
-      return cur.length === m.sessions.length && cur.every((v, i) => v === m.sessions[i])
-    }
   }
 }
 
@@ -193,8 +182,8 @@ function addPending(m: PendingMutation): () => void {
 /**
  * Run an optimistic mutation: apply it locally now, fire `action`, and
  * retract immediately if the action reports failure (rather than letting
- * the row/order linger until the TTL sweeps it). `action` returns whether
- * the server accepted it. Shared by `dismissSession` and `reorderSessions`;
+ * the row linger until the TTL sweeps it). `action` returns whether
+ * the server accepted it. Used by `dismissSession`;
  * `mark-read` deliberately opts out (it's fire-and-forget — a failed
  * mark-read silently self-heals on the next snapshot and needs no toast
  * or eager rollback).
@@ -210,11 +199,9 @@ async function optimistic(m: PendingMutation, action: () => Promise<boolean>): P
 // Everything is `computed`, so writes go through the raw signals only.
 
 export const sessions = computed<Session[]>(() =>
-  applyPending(_rawSessions.value, _rawWorld.value.projects, _pendingMutations.value).sessions,
+  applyPending(_rawSessions.value, _pendingMutations.value),
 )
-export const projects = computed<ProjectItem[]>(() =>
-  applyPending(_rawSessions.value, _rawWorld.value.projects, _pendingMutations.value).projects,
-)
+export const projects = computed<ProjectItem[]>(() => _rawWorld.value.projects)
 
 /** Conversation files that are live in more than one runner (session → file
  *  is authoritative per-runner; ADR 0011). Two alive sessions sharing a
@@ -246,10 +233,9 @@ export const peerProjects = computed<Record<string, PeerProject[]>>(
 // every raw update; uses .peek() to avoid re-triggering itself.
 effect(() => {
   const rs = _rawSessions.value
-  const rw = _rawWorld.value
   const pending = _pendingMutations.peek()
   if (pending.length === 0) return
-  const filtered = pending.filter(m => !isResolved(m, rs, rw.projects))
+  const filtered = pending.filter(m => !isResolved(m, rs))
   if (filtered.length !== pending.length) {
     _pendingMutations.value = filtered
   }
@@ -1323,18 +1309,20 @@ export async function updateProjects(items: ProjectItem[]): Promise<void> {
  * Persist a new session order for a project. The `sessionKeys` array
  * contains session IDs in the desired display order.
  *
- * Local projects (peer === undefined) get an optimistic overlay via
- * `_pendingMutations` so the sidebar re-renders immediately, before
- * the snapshot.world round-trip echoes the new order back.
+ * Fire-and-report, with no optimistic overlay for either ownership case:
+ * the sidebar derives folder order solely from server-stamped
+ * project_index, so there is no local array an overlay could usefully
+ * pre-write. The owning daemon re-stamps and re-emits snapshot.sessions,
+ * which lands in the same tick as the response for a local write; the
+ * round-trip is the cost of honesty about who owns the data.
  *
  * Peer-owned projects route through the generic peer-write proxy at
  * `/v1/peers/{peer}/v1/projects/{slug}/sessions` (ADR 0002): the peer
- * owns its own projects.json and re-stamps each session's
- * project_index, which arrives over the snapshot stream. We don't
- * apply a local optimistic overlay for peer reorders because the
- * sidebar derives peer-folder order from those stamps, not from any
- * local projects array; the round-trip latency is the cost of
- * honesty about who owns the data.
+ * owns its own catalog and its own stamps.
+ *
+ * A rejection toasts (the drag then visibly snaps back to the
+ * server-stamped order, which is the truth); a network reject stays
+ * silent — connectivity is the reconnecting pill's story to tell.
  */
 export async function reorderSessions(
   projectSlug: string,
@@ -1345,38 +1333,19 @@ export async function reorderSessions(
     ? `/v1/peers/${encodeURIComponent(peer)}/v1/projects/${encodeURIComponent(projectSlug)}/sessions`
     : `/v1/projects/${encodeURIComponent(projectSlug)}/sessions`
 
-  // PATCH the new order. Returns whether the server accepted it; a
-  // received error toasts, a network reject stays silent (connectivity,
-  // owned by the reconnecting pill) — same contract as postAction.
-  const patch = async (): Promise<boolean> => {
-    try {
-      const resp = await fetch(url, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessions: sessionKeys }),
-      })
-      if (!resp.ok) {
-        pushError(`Reorder failed: ${await errorMessageFromResponse(resp)}`)
-        return false
-      }
-      return true
-    } catch {
-      console.debug(`${url}: network error (suppressed toast)`)
-      return false
+  // Same reporting contract as postAction: a received error toasts, a
+  // network reject only logs.
+  try {
+    const resp = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessions: sessionKeys }),
+    })
+    if (!resp.ok) {
+      pushError(`Reorder failed: ${await errorMessageFromResponse(resp)}`)
     }
-  }
-
-  // Local reorders get an optimistic overlay that retracts on failure.
-  // Peer reorders have no local overlay (the sidebar derives peer-folder
-  // order from server-stamped project_index, not a local array), so
-  // there's nothing to roll back — just fire and let the toast report.
-  if (peer === undefined) {
-    await optimistic(
-      { kind: 'reorder', slug: projectSlug, sessions: sessionKeys, at: Date.now() },
-      patch,
-    )
-  } else {
-    await patch()
+  } catch {
+    console.debug(`${url}: network error (suppressed toast)`)
   }
 }
 
