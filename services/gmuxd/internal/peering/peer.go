@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -19,8 +20,9 @@ import (
 // defaultStreamIdleTimeout is the maximum time the SSE stream can be
 // silent before we assume the connection is dead and reconnect. 60s
 // is conservative: real events flow every few seconds on an active
-// spoke, and on an idle spoke the reconnect is invisible (sessions
-// stay in the store, the initial dump produces no-op upserts).
+// spoke, and on an idle spoke the reconnect is cheap (the disconnect
+// prunes this peer's projection and the initial dump on the next
+// connect refills it).
 const defaultStreamIdleTimeout = 60 * time.Second
 
 // Peer manages the connection to a single remote gmuxd instance.
@@ -252,10 +254,22 @@ func (p *Peer) fetchProjects(ctx context.Context) {
 		discovered = []SpokeDiscovered{}
 	}
 	p.mu.Lock()
+	unchanged := p.projectsLoaded &&
+		reflect.DeepEqual(p.cachedProjects, projects) &&
+		reflect.DeepEqual(p.cachedDiscovered, discovered)
 	p.cachedProjects = projects
 	p.cachedDiscovered = discovered
 	p.projectsLoaded = true
 	p.mu.Unlock()
+	// Second reciprocal feedback loop: the hub sets projects-update on
+	// every world frame it ships to ?as=peer subscribers, so a mutual
+	// peer re-fetches /v1/projects, re-broadcasts peer-status, recomposes
+	// its own world, and ships projects-update back. Only signal when the
+	// cached projection actually changed; a re-fetch that produced the
+	// same projects/discovered lists is not externally visible state.
+	if unchanged {
+		return
+	}
 	// Signal a status change so the hub's world coalescer re-emits
 	// snapshot.world with the updated peer_projects entry. Reusing
 	// peer-status keeps the wire surface minimal; the type-name is
@@ -344,12 +358,12 @@ func (p *Peer) run(ctx context.Context) {
 		wasConnected := false
 		err := p.subscribe(ctx, func() { wasConnected = true })
 
-		// Sessions stay in the store across reconnects. The spoke's
-		// initial dump on the next successful connect will upsert
-		// current state; anything the spoke no longer reports stays
-		// as stale-but-visible until the user dismisses it.
-		// RemoveByPeer only runs on intentional peer removal (see
-		// Manager.removePeer).
+		// A disconnect prunes this peer's projection
+		// (Manager.onStatus -> removePeerSessions), so nothing stale
+		// survives the gap and the spoke's initial dump on the next
+		// successful connect is always treated as a first delivery
+		// (no previous projection, so the no-op gate in
+		// managerProjectionSink.ReplacePeerSessions cannot suppress it).
 
 		if err != nil && ctx.Err() == nil {
 			p.mu.Lock()
@@ -520,14 +534,18 @@ func (p *Peer) handleEvent(ctx context.Context, eventType string, data []byte) {
 // removed.
 //
 // A spoke re-ships its full snapshot on every change (and at its
-// coalescer cadence), so the common case is that most sessions in a
-// snapshot are identical to what we already hold. We still call
-// UpsertRemote for each one; the store suppresses the redundant
-// session-upsert broadcast when nothing actually changed (see
-// upsertCommon). That dedup lives in the store rather than here
-// because only the store sees the fully-normalized session — after
-// path canonicalization and unique-slug renumbering — which is what
-// a correct equality check has to compare against.
+// coalescer cadence), so the common case is that the whole snapshot is
+// identical to what we already hold. We still hand every delivery down
+// unconditionally; the no-op dedup lives one layer below, in
+// managerProjectionSink.ReplacePeerSessions (see projectionsEqual),
+// because that is the only place that holds both the previous and the
+// new projection. Dropping that guard makes two mutually-peered nodes
+// ping-pong identical snapshots forever — it is load-bearing, not an
+// optimization.
+//
+// What this function must do first is normalize identity, since the
+// gate below compares whole rows: IDs are namespaced, Peer is stamped,
+// and SocketPath is cleared, so nothing peer-local can read as a change.
 func (p *Peer) applySessionsSnapshot(input any) {
 	var remote []SessionProjection
 	switch rows := input.(type) {
