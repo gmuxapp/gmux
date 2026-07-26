@@ -25,7 +25,7 @@ var (
 	_ adapter.Resumer               = (*Pi)(nil)
 	_ adapter.SessionExtender       = (*Pi)(nil)
 	_ adapter.PassthroughDetector   = (*Pi)(nil)
-	_ adapter.PromptSubmitter       = (*Pi)(nil)
+	_ adapter.AgentActionEncoder    = (*Pi)(nil)
 )
 
 // piSubcommands are pi's one-shot CLI verbs (`pi <verb> ...`). pi recognizes
@@ -146,10 +146,36 @@ func (p *Pi) Launchers() []adapter.Launcher {
 	}}
 }
 
-// SubmitSeq maps gmux's submit modes to pi's composer keybinds:
-// steering is Enter — delivered into the current turn immediately — and
-// follow-up is Alt+Enter — queued until the current turn ends. Both act
-// as a plain submit when pi is idle.
+// piActionReadyTimeout bounds how long a caller waits for pi to report
+// itself ready before abandoning a semantic action. pi is a Node.js
+// program: cold start (interpreter boot, module load, TUI setup) is
+// seconds, not milliseconds, so a short timeout would spuriously fail
+// freshly launched or resumed sessions.
+const piActionReadyTimeout = 10 * time.Second
+
+// EncodeAction maps gmux's semantic turn-control actions to pi's
+// composer keybinds:
+//
+//   - ActionSend is Enter — submits, delivering into the current turn
+//     immediately when pi is streaming;
+//   - ActionSendAfterTurn is Alt+Enter — queues until the current turn
+//     ends, and acts as a plain submit when pi is idle;
+//   - ActionInterrupt is Escape — pi's interactive-mode onEscape aborts
+//     the streaming turn (dist/modes/interactive/interactive-mode.js
+//     restoreQueuedMessagesToEditor({abort:true})).
+//
+// Two pi-specific limitations callers should know about:
+//
+//   - Interrupt is not a clean stop: the same pi handler *restores any
+//     queued follow-ups into the composer*, so after a cancel the
+//     composer may hold text the user never retyped, which a
+//     subsequent submit would send along with the new prompt.
+//   - Both non-Enter encodings target pi's *default* keybindings.
+//     Composer keybinds are user-configurable, so a session whose user
+//     remapped alt+enter or escape silently loses semantic follow-up /
+//     interrupt support: the bytes still arrive, they just no longer
+//     mean that action. Enter is not realistically remappable, so
+//     ActionSend is safe.
 //
 // Encodings are chosen to parse correctly regardless of which keyboard
 // protocol pi negotiated with its startup-attached terminal:
@@ -164,15 +190,27 @@ func (p *Pi) Launchers() []adapter.Launcher {
 //     which happens for any `gmux -- pi` started in the foreground of a
 //     Kitty-protocol terminal (kitty, ghostty, wezterm, foot). Both
 //     behaviors verified against pi-tui's parseKey and live sessions.
-func (p *Pi) SubmitSeq(mode adapter.SubmitMode) (string, bool) {
-	switch mode {
-	case adapter.SubmitSteering:
+//   - Escape is the Kitty CSI-u encoding "\x1b[27u" (codepoint 27, no
+//     modifier), not a bare "\x1b". pi-tui's escape matcher accepts
+//     both in both modes (`data === "\x1b" || matchesKittySequence(data,
+//     27, 0)` in keys.js), but a lone ESC byte is the prefix of every
+//     escape sequence: if any bytes follow in the same read, pi parses
+//     the combination as some other key. CSI-u is self-delimiting and
+//     therefore unambiguous.
+func (p *Pi) EncodeAction(action adapter.AgentAction) (string, bool) {
+	switch action {
+	case adapter.ActionSend:
 		return "\r", true
-	case adapter.SubmitFollowUp:
+	case adapter.ActionSendAfterTurn:
 		return "\x1b[13;3u", true
+	case adapter.ActionInterrupt:
+		return "\x1b[27u", true
 	}
 	return "", false
 }
+
+// ActionReadyTimeout implements adapter.AgentActionEncoder.
+func (p *Pi) ActionReadyTimeout() time.Duration { return piActionReadyTimeout }
 
 // --- Conversation storage (file-backed: refs are absolute JSONL paths) ---
 
