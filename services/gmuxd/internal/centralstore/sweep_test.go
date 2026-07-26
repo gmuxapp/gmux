@@ -14,13 +14,38 @@ func mustSession(t *testing.T, s *Store, id SessionID) Session {
 	return v
 }
 
+// TestSweepPreservesInterruptedTurnState: the turn state at death is what a
+// wait on the dead generation reads, and an intentional stop is part of it —
+// the sweep must not launder an interrupted closure into a plain idle one.
+// Runner death itself is never interruption; this row was already interrupted
+// before the sweep synthesized its exit.
+func TestSweepPreservesInterruptedTurnState(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	registrationCatalog(t, s)
+
+	reg := registration("stopped", "pi", "/one", true, 10)
+	reg.Facts.Active = ptr(false)
+	reg.Facts.Interrupted = ptr(true)
+	if _, _, err := s.RegisterRunner(ctx, reg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SweepDeadSessions(ctx, []SessionID{"stopped"}, 500); err != nil {
+		t.Fatal(err)
+	}
+	after := mustSession(t, s, "stopped")
+	if after.ExitedAt == nil || after.Active || !after.Interrupted || !after.StatusReported {
+		t.Fatalf("interruption lost across sweep: %#v", after)
+	}
+}
+
 func TestSweepDeadSessionsMarksUnclaimedRowsDead(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)
 	registrationCatalog(t, s)
 
 	live := registration("gone", "shell", "/one", true, 10)
-	live.Facts.Working = ptr(true)
+	live.Facts.Active = ptr(true)
 	live.Facts.Unread = ptr(true)
 	before, _, err := s.RegisterRunner(ctx, live)
 	if err != nil {
@@ -45,7 +70,7 @@ func TestSweepDeadSessionsMarksUnclaimedRowsDead(t *testing.T) {
 		t.Fatalf("exit code must stay unknown, got %#v", after.ExitCode)
 	}
 	// Turn state at death is the wait verdict and is preserved.
-	if !after.Working || !after.Unread {
+	if !after.Active || !after.Unread {
 		t.Fatalf("turn state lost: %#v", after)
 	}
 	// Output-only last_output_at semantics: a synthesized death does not
@@ -86,7 +111,7 @@ func TestSweepDeadSessionsSweepsRowsWhoseVersionChurnedWithoutExit(t *testing.T)
 		t.Fatal(err)
 	}
 	rereg := registration("dropped", "shell", "/one/deeper", true, 20)
-	rereg.Facts.Working = ptr(true)
+	rereg.Facts.Active = ptr(true)
 	if _, _, err = s.RegisterRunner(ctx, rereg); err != nil {
 		t.Fatal(err)
 	}

@@ -170,7 +170,7 @@ func startProdRunner(t *testing.T, e *prodEnv, id string, unread bool) *prodRunn
 	r := &prodRunner{ln: ln, events: make(chan string, 16), delivered: make(chan struct{}, 16), id: id, sock: sock}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /meta", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "adapter": "shell", "alive": true, "created_at": time.Unix(1, 0).UTC().Format(time.RFC3339), "started_at": time.Unix(1, 0).UTC().Format(time.RFC3339), "pid": os.Getpid(), "runner_version": "e2e", "binary_hash": "e2e", "cwd": e.home, "command": []string{"/bin/sh"}, "remotes": map[string]string{"credential_fixture": "alice:remote-secret@example.invalid/repo.git"}, "status": map[string]any{"working": false}, "unread": unread, "terminal_cols": 93, "terminal_rows": 31})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "adapter": "shell", "alive": true, "created_at": time.Unix(1, 0).UTC().Format(time.RFC3339), "started_at": time.Unix(1, 0).UTC().Format(time.RFC3339), "pid": os.Getpid(), "runner_version": "e2e", "binary_hash": "e2e", "cwd": e.home, "command": []string{"/bin/sh"}, "remotes": map[string]string{"credential_fixture": "alice:remote-secret@example.invalid/repo.git"}, "status": map[string]any{"active": false}, "unread": unread, "terminal_cols": 93, "terminal_rows": 31})
 	})
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, q *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -192,7 +192,7 @@ func startProdRunner(t *testing.T, e *prodEnv, id string, unread bool) *prodRunn
 	return r
 }
 func (r *prodRunner) exit(unread bool) {
-	r.events <- fmt.Sprintf("event: status\ndata: {\"working\":false,\"unread\":%v}\n\nevent: exit\ndata: {\"exit_code\":0}\n\n", unread)
+	r.events <- fmt.Sprintf("event: status\ndata: {\"active\":false,\"unread\":%v}\n\nevent: exit\ndata: {\"exit_code\":0}\n\n", unread)
 }
 func (r *prodRunner) crashClose() {
 	r.once.Do(func() { _ = r.srv.Close(); _ = r.ln.Close(); _ = os.Remove(r.sock) })
@@ -673,7 +673,7 @@ func scenarioRestartSurvival(t *testing.T, bin string) {
 		t.Fatalf("dismissal not durable: %+v", hidden)
 	}
 	swept, _, _ := ro.Session(context.Background(), centralstore.SessionID(sweep.id))
-	if swept.ExitedAt == nil || !swept.StatusReported || swept.Working {
+	if swept.ExitedAt == nil || !swept.StatusReported || swept.Active {
 		t.Fatalf("sweep corrupted status: %+v", swept)
 	}
 }

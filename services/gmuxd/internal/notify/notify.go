@@ -70,9 +70,10 @@ type Router struct {
 }
 
 type sessionSnapshot struct {
-	Working bool
-	Unread  bool
-	Alive   bool
+	Active      bool
+	Interrupted bool
+	Unread      bool
+	Alive       bool
 }
 
 type activeNotif struct {
@@ -127,14 +128,15 @@ func (r *Router) Run(ctx context.Context) {
 }
 
 func snapshotOf(s store.Session) sessionSnapshot {
-	working := false
+	active, interrupted := false, false
 	if s.Status != nil {
-		working = s.Status.Working
+		active, interrupted = s.Status.Active, s.Status.Interrupted
 	}
 	return sessionSnapshot{
-		Working: working,
-		Unread:  s.Unread,
-		Alive:   s.Alive,
+		Active:      active,
+		Interrupted: interrupted,
+		Unread:      s.Unread,
+		Alive:       s.Alive,
 	}
 }
 
@@ -161,8 +163,11 @@ func (r *Router) handleEvent(ev store.Event) {
 		return // new session, no transition to detect
 	}
 
-	// Transition: working → idle on a live session
-	if prev.Working && !cur.Working && cur.Alive {
+	// Transition: active → idle on a live session. An intentional stop is
+	// not a completion: the user already knows the turn ended, so ADR 0027
+	// suppresses the "finished" notification for it. The unread transition
+	// below is unaffected — an interrupted turn sets no unread anyway.
+	if prev.Active && !cur.Active && cur.Alive && !cur.Interrupted {
 		body := formatFinishedBody(sess)
 		r.scheduleNotification(sess.ID, "finished", sess.Title, body)
 	}

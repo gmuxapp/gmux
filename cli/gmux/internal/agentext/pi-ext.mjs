@@ -24,7 +24,7 @@
 // from pi's events to the gmux protocol lives here, at the typed-access point.
 //
 // outcome is pi's terminal state normalized to a stable vocabulary
-// ("completed" | "aborted" | "error"); the runner owns what each means for the
+// ("completed" | "interrupted" | "error"); the runner owns what each means for the
 // sidebar (e.g. completed → unread). The extension reports pi facts, not gmux
 // policy.
 //
@@ -96,7 +96,7 @@ export default function (pi) {
   pi.on("session_info_changed", (_ev, ctx) => reportSession("rename", ctx));
 
   // --- turn lifecycle: drive the sidebar busy/idle without parsing the file -
-  // pi's agent loop bounds map onto the sidebar's working/idle; agent_end
+  // pi's agent loop bounds map onto the sidebar's active/idle; agent_end
   // carries the final messages so we read the terminal stopReason off-disk and
   // normalize it. The runner decides what each outcome means for the sidebar.
   pi.on("agent_start", () => post(sock, { op: "turn", phase: "start" }));
@@ -125,17 +125,37 @@ export default function (pi) {
     try {
       name = ctx.sessionManager.getSessionName();
     } catch {}
-    // Normalize pi's stopReason to a stable outcome vocabulary:
-    //   stop  → completed (turn finished on its own)
-    //   error → error     (pi exhausted retries and gave up)
-    //   else  → aborted   (user Esc, or any other non-completion)
-    const outcome =
-      stopReason === "stop" ? "completed" : stopReason === "error" ? "error" : "aborted";
+    const outcome = normalizeOutcome(stopReason);
     const title = name || firstUserTitle;
     post(sock, { op: "turn", phase: "end", outcome, title: title || undefined });
     // A brand-new session's file exists by now; make sure it's attributed.
     reportSession("activity", ctx);
   });
+}
+
+// normalizeOutcome maps pi's StopReason vocabulary onto gmux's stable, agent-
+// agnostic outcome vocabulary (ADR 0027). pi's reasons are:
+//
+//   stop     → completed   the agent finished its own turn
+//   aborted  → interrupted pi's explicit abort path (user Esc)
+//   error    → error       pi gave up
+//   length   → error       the turn was cut off; the answer is not complete
+//   toolUse  → error       terminal toolUse is not a finished turn
+//   anything else / missing → error
+//
+// Only pi's ONE explicit abort reason becomes an interruption: interruption is
+// durable state that suppresses the completion notification, so an unknown or
+// truncated terminal state must not masquerade as an intentional stop. Exported
+// for direct unit testing.
+export function normalizeOutcome(stopReason) {
+  switch (stopReason) {
+    case "stop":
+      return "completed";
+    case "aborted":
+      return "interrupted";
+    default:
+      return "error";
+  }
 }
 
 // extractUserText pulls the text of a pi user message. content is either a
@@ -168,18 +188,71 @@ function truncateTitle(s) {
   return bytes.subarray(0, cut).toString("utf8") + "…";
 }
 
-function post(socketPath, event) {
-  try {
-    const body = Buffer.from(JSON.stringify(event), "utf8");
-    const req = http.request({
-      socketPath,
-      path: "/hook/event",
-      method: "POST",
-      headers: { "content-type": "application/json", "content-length": body.length },
-    });
-    req.on("error", () => {}); // never surface transport errors into pi
-    req.end(body);
-  } catch {
-    // swallow — the extension must never break pi
-  }
+// --- delivery ---------------------------------------------------------------
+// Hook events are ORDER-SENSITIVE: the runner closes a turn only while one is
+// open (polarity, not identity), so a turn end that overtakes a later turn
+// start would close the wrong turn. Independent fire-and-forget HTTP requests
+// give no ordering guarantee, so delivery is serialized here: every post is
+// appended to a promise chain and request N+1 is not issued until N has
+// settled.
+//
+// Non-negotiables kept intact:
+//   - pi's own handlers are never delayed — post() returns synchronously and
+//     the chain advances on the microtask queue;
+//   - the chain can never block permanently: the request's "close" event (which
+//     follows a response, a transport error and a destroyed socket alike) or the
+//     overall deadline settles each link exactly once;
+//   - transport failures never surface into pi.
+const POST_TIMEOUT_MS = 2000;
+
+let deliveryChain = Promise.resolve();
+
+function sendOne(socketPath, event) {
+  return new Promise((resolve) => {
+    let done = false;
+    const settle = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(deadline);
+      resolve();
+    };
+    // The one case "close" cannot cover: a socket that accepts and then never
+    // answers or closes must not stall the chain.
+    const deadline = setTimeout(settle, POST_TIMEOUT_MS);
+    if (typeof deadline.unref === "function") deadline.unref(); // never hold pi open
+    try {
+      const body = Buffer.from(JSON.stringify(event), "utf8");
+      const req = http.request({
+        socketPath,
+        path: "/hook/event",
+        method: "POST",
+        timeout: POST_TIMEOUT_MS,
+        headers: { "content-type": "application/json", "content-length": body.length },
+      });
+      req.on("response", (res) => res.resume()); // drain so the socket can close
+      req.on("timeout", () => req.destroy());
+      // Two settle paths, not six: "close" fires after response end, after a
+      // transport error and after a destroy, so it subsumes them all, and the
+      // unref'd deadline above covers the one case it cannot (a socket that
+      // accepts and never answers or closes).
+      req.on("close", settle);
+      req.end(body);
+    } catch {
+      settle(); // swallow — the extension must never break pi
+    }
+  });
+}
+
+// post queues one event for in-order delivery. Fire-and-forget: it returns
+// immediately and never throws. Exported for delivery-ordering tests.
+//
+// The terminal catch is load-bearing in two ways: it stops one rejected link
+// from poisoning the chain (every later event would skip delivery), and it
+// guarantees no unhandled rejection reaches pi's process — node's default is
+// to abort on those. sendOne resolves on every known path; the catch exists so
+// an unforeseen throw degrades to "this one event was lost" instead of "hook
+// reporting stops for the rest of the session".
+export function post(socketPath, event) {
+  deliveryChain = deliveryChain.then(() => sendOne(socketPath, event)).catch(() => {});
+  return deliveryChain;
 }

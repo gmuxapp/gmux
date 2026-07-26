@@ -467,9 +467,9 @@ func runSession(args []string, attach bool, dir runDirectives) {
 	// integration emits them — upgrade it to per-command turns inside
 	// the ptyserver; otherwise this one lifetime-long turn is closed by
 	// the exit handling below. Agent adapters skip this: their hooks own
-	// Working, and a launch-time true would misreport an idle agent.
+	// Active, and a launch-time true would misreport an idle agent.
 	if !adapter.HookDriven(a) {
-		state.SetStatus(&adapter.Status{Working: true})
+		state.SetStatus(&adapter.Status{Active: true})
 	}
 
 	if !interactive {
@@ -622,7 +622,7 @@ func runSession(args []string, attach bool, dir runDirectives) {
 // unread, so waits resolve as "idle" and the sidebar shows "waiting on
 // you" — exactly like an agent finishing its turn. Sessions upgraded
 // to prompt-cycle turns keep their last mark-derived state: exiting at
-// the prompt already reads idle, dying mid-command stays working and
+// the prompt already reads idle, dying mid-command stays active and
 // resolves as "died" (ADR 0023).
 //
 // The ordering is load-bearing: the turn-close status and unread
@@ -632,7 +632,7 @@ func runSession(args []string, attach bool, dir runDirectives) {
 // persists the final Status rather than a stale mid-turn one.
 func finalizeSessionState(state *session.State, lifetimeTurnOpen bool, exitCode int) {
 	if lifetimeTurnOpen {
-		state.SetStatus(&adapter.Status{Working: false, Error: exitCode != 0})
+		state.SetStatus(&adapter.Status{Active: false, Error: exitCode != 0})
 		state.SetUnread(true)
 	}
 	state.SetExited(exitCode)

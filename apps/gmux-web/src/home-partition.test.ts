@@ -74,18 +74,18 @@ describe('partitionByDay', () => {
   })
 
   describe('grouping is plain recency (no status hoist)', () => {
-    it('groups unread / working sessions by time, not by status', () => {
+    it('groups unread / active sessions by time, not by status', () => {
       // The whole point of the redesign: a "waiting" (unread) session
       // from days ago sinks to its day bucket instead of being pinned
       // to the top. Status lives on the dot, not the position.
       const unreadOld = makeSession({
         id: 'u', cwd: '/x', alive: true, unread: true, last_output_at: stamp(-3 * DAY),
       })
-      const workingToday = makeSession({
+      const activeToday = makeSession({
         id: 'w', cwd: '/x', alive: true,
-        status: { working: true, error: false }, last_output_at: stamp(-2 * HOUR),
+        status: { active: true, error: false }, last_output_at: stamp(-2 * HOUR),
       })
-      const buckets = partitionByDay([unreadOld, workingToday], NOW)
+      const buckets = partitionByDay([unreadOld, activeToday], NOW)
       expect(buckets.map(b => b.kind)).toEqual(['today', 'named'])
       expect(buckets[0].sessions.map(s => s.id)).toEqual(['w'])
       expect(buckets[1]).toMatchObject({ label: weekdayLabel(-3 * DAY) })

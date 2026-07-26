@@ -199,6 +199,34 @@ func (s *State) SetStatus(status *adapter.Status) {
 	s.emit(Event{Type: "status", Data: status})
 }
 
+// CloseTurn atomically closes an OPEN turn with a terminal status, and
+// reports whether it did. A terminal turn end is only meaningful while a turn
+// is open: an end delivered against an already-closed turn is stale (a
+// duplicate, or a hook that fires unconditionally on exit, like Claude's
+// SessionEnd after Stop) and must not rewrite a good closure — Interrupted and
+// Error are durable facts.
+//
+// The check and the write share one critical section on purpose. The caller
+// cannot do StatusSnapshot-then-SetStatus: two concurrent ends (hook POSTs are
+// independent HTTP requests served on their own goroutines) could both observe
+// the open turn and both write, and a concurrent turn start could be
+// interleaved between the check and the write.
+//
+// This is polarity, not turn identity: it cannot recognize a *logically* stale
+// end that arrives after a NEW turn already started. Excluding that ordering is
+// the sender's job — see the delivery serialization in pi-ext.mjs and Claude's
+// sequential hook execution.
+func (s *State) CloseTurn(status *adapter.Status) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Status == nil || !s.Status.Active {
+		return false
+	}
+	s.Status = status
+	s.emit(Event{Type: "status", Data: status})
+	return true
+}
+
 // SetAdapterTitle sets the high-priority title from the adapter (agent hook / conversation file).
 func (s *State) SetAdapterTitle(title string) {
 	s.mu.Lock()
@@ -266,7 +294,7 @@ func (s *State) SlugSnapshot() string {
 // StatusSnapshot returns a copy of the current status (nil if unset), safe to
 // read from another goroutine while the runner concurrently updates state.
 // Also replayed to every (re)connecting /events subscriber: status emitted
-// before the daemon subscribed (the launch-time Working=true of the default
+// before the daemon subscribed (the launch-time Active=true of the default
 // turn model, or a turn started during a daemon restart) must not be lost.
 func (s *State) StatusSnapshot() *adapter.Status {
 	s.mu.RLock()

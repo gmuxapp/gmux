@@ -49,7 +49,7 @@ func newLoopNode(t *testing.T, name string, ownedCount int) *loopNode {
 			Alive:   true,
 			Cwd:     "/home/u/work",
 			Command: []string{"claude", "--resume"},
-			Status:  &SessionStatus{Working: false},
+			Status:  &SessionStatus{Active: false},
 		})
 	}
 	if n.owned == nil {
@@ -230,7 +230,7 @@ func TestReplacePeerSessionsSuppressesEqualSnapshot(t *testing.T) {
 	rows := []SessionProjection{{
 		ID: "s1@p", Peer: "p", Adapter: "claude", Alive: true,
 		Command: []string{"claude"}, Remotes: map[string]string{"origin": "git@x"},
-		Status: &SessionStatus{Working: true},
+		Status: &SessionStatus{Active: true},
 	}}
 	m.ReplacePeerSessions("p", rows)
 	if dirty.Load() != 1 {
@@ -240,7 +240,7 @@ func TestReplacePeerSessionsSuppressesEqualSnapshot(t *testing.T) {
 	again := []SessionProjection{{
 		ID: "s1@p", Peer: "p", Adapter: "claude", Alive: true,
 		Command: []string{"claude"}, Remotes: map[string]string{"origin": "git@x"},
-		Status: &SessionStatus{Working: true},
+		Status: &SessionStatus{Active: true},
 	}}
 	m.ReplacePeerSessions("p", again)
 	if dirty.Load() != 1 {
@@ -250,7 +250,7 @@ func TestReplacePeerSessionsSuppressesEqualSnapshot(t *testing.T) {
 	changed := []SessionProjection{{
 		ID: "s1@p", Peer: "p", Adapter: "claude", Alive: false,
 		Command: []string{"claude"}, Remotes: map[string]string{"origin": "git@x"},
-		Status: &SessionStatus{Working: true},
+		Status: &SessionStatus{Active: true},
 	}}
 	m.ReplacePeerSessions("p", changed)
 	if dirty.Load() != 2 {

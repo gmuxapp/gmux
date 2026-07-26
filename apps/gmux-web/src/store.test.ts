@@ -636,7 +636,7 @@ describe('markSessionRead', () => {
   it('clears error flag from status', () => {
     _rawSessions.value = [makeSession({
       id: 'sess-1',
-      status: { working: false, error: true },
+      status: { active: false, error: true },
     })]
     markSessionRead('sess-1')
     expect(sessions.value[0].status?.error).toBe(false)
@@ -1194,7 +1194,7 @@ describe('pending mutations overlay', () => {
 
     it('mark-read clears unread and status.error on the targeted session', () => {
       const sess = [
-        makeSession({ id: 'a', unread: true, status: { working: false, error: true } }),
+        makeSession({ id: 'a', unread: true, status: { active: false, error: true } }),
         makeSession({ id: 'b', unread: true }),
       ]
       const m: PendingMutation = { kind: 'mark-read', id: 'a', at: 0 }

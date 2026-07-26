@@ -250,7 +250,7 @@ func TestExitEventPreservesTurnStateThroughResumeDerivation(t *testing.T) {
 		Adapter: "pi",
 		Alive:   true,
 		Command: []string{"pi"},
-		Status:  &store.Status{Working: false}, // turn closed before exit
+		Status:  &store.Status{Active: false}, // turn closed before exit
 	})
 
 	subs := NewSubscriptions(sessions)
@@ -270,7 +270,7 @@ func TestExitEventPreservesTurnStateThroughResumeDerivation(t *testing.T) {
 	if !got.Resumable {
 		t.Error("session not resumable despite OnExit setting a resume command")
 	}
-	if got.Status == nil || got.Status.Working {
+	if got.Status == nil || got.Status.Active {
 		t.Errorf("Status = %+v after exit, want the pre-exit closed-turn state to survive", got.Status)
 	}
 }

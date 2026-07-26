@@ -9,10 +9,10 @@ SELECT value FROM centralstore_metadata WHERE key = ?;
 INSERT INTO local_sessions (
     id, adapter, conversation_ref, command_json, cwd, workspace_root,
     remotes_json, slug, slug_base, shell_title, adapter_title, subtitle,
-    working, unread, has_error, status_reported, created_at_ms, started_at_ms,
+    active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms,
     exited_at_ms, last_activity_at_ms, exit_code, terminal_cols, terminal_rows,
     launch_parent_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: GetSession :one
@@ -34,7 +34,7 @@ UPDATE local_sessions SET
     row_version = row_version + 1,
     adapter = ?, conversation_ref = ?, command_json = ?, cwd = ?,
     workspace_root = ?, remotes_json = ?, slug = ?, slug_base = ?, shell_title = ?,
-    adapter_title = ?, subtitle = ?, working = ?, unread = ?, has_error = ?,
+    adapter_title = ?, subtitle = ?, active = ?, interrupted = ?, unread = ?, has_error = ?,
     status_reported = ?, started_at_ms = ?, exited_at_ms = ?,
     last_activity_at_ms = ?, exit_code = ?, terminal_cols = ?, terminal_rows = ?
 WHERE id = ? AND row_version = ?;
@@ -44,7 +44,7 @@ UPDATE local_sessions SET
     row_version = row_version + 1,
     conversation_ref = ?, command_json = ?, cwd = ?, workspace_root = ?,
     remotes_json = ?, slug = ?, slug_base = ?, shell_title = ?, adapter_title = ?, subtitle = ?,
-    working = ?, unread = ?, has_error = ?, status_reported = ?,
+    active = ?, interrupted = ?, unread = ?, has_error = ?, status_reported = ?,
     started_at_ms = ?, exited_at_ms = ?, last_activity_at_ms = ?, exit_code = ?,
     terminal_cols = ?, terminal_rows = ?, dismissed_at_ms = NULL
 WHERE id = ? AND row_version = ?;

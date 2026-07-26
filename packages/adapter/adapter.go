@@ -13,8 +13,15 @@ import (
 // It carries only granular booleans; any display text is the
 // frontend's concern, derived from these plus exit_code.
 type Status struct {
-	Working bool `json:"working"`         // true while adapter is busy (spinner, building)
-	Error   bool `json:"error,omitempty"` // true when the adapter hit a retryable error (red dot)
+	Active bool `json:"active"` // true while the agent is working on a turn (spinner, building)
+	// Error is orthogonal to Active: an active retry/rate-limit condition
+	// is Active=true, Error=true; a terminal failure is Active=false,
+	// Error=true.
+	Error bool `json:"error,omitempty"`
+	// Interrupted records that the last turn ended because a human or
+	// agent intentionally stopped it — distinct from a terminal failure
+	// (Error) so waits can exit nonzero without a red error state.
+	Interrupted bool `json:"interrupted,omitempty"`
 }
 
 // Adapter teaches gmux how to work with a specific child process.

@@ -49,7 +49,8 @@ type FixtureSession struct {
 	ExitCode                   *int
 	Created, Started, Exited   time.Time
 	LastActivity               time.Time
-	Working, Error, Unread     bool
+	Active, Error, Unread      bool
+	Interrupted                bool
 	TerminalCols, TerminalRows uint16
 
 	Parent string // launch-parent session ID ("" = root)
@@ -58,7 +59,7 @@ type FixtureSession struct {
 	Promoted bool
 	// StatusNeverReported seeds the production Status == nil /
 	// status_reported = 0 state: the runner never reported a status
-	// (must not be combined with Working/Error).
+	// (must not be combined with Active/Error/Interrupted).
 	StatusNeverReported bool
 
 	// Peer marks a peer-owned projection: "" = local. Local peers (per
@@ -281,7 +282,7 @@ func fixtureStatus(f FixtureSession) *store.Status {
 	if f.StatusNeverReported {
 		return nil
 	}
-	return &store.Status{Working: f.Working, Error: f.Error}
+	return &store.Status{Active: f.Active, Error: f.Error, Interrupted: f.Interrupted}
 }
 
 func deriveFixtureTitle(f FixtureSession) string {
@@ -363,7 +364,7 @@ func RenderCentral(t *testing.T, w *World) (wire.Frames, *wire.Cache) {
 			ID: centralstore.SessionID(f.ID), Adapter: f.Adapter, ConversationRef: f.ConversationRef,
 			Command: f.Command, CWD: f.Cwd, WorkspaceRoot: f.WorkspaceRoot, Remotes: f.Remotes,
 			Slug: f.Slug, ShellTitle: f.ShellTitle, AdapterTitle: f.AdapterTitle, Subtitle: f.Subtitle,
-			Working: f.Working, Unread: f.Unread, Error: f.Error,
+			Active: f.Active, Unread: f.Unread, Error: f.Error, Interrupted: f.Interrupted,
 			StatusReported: !f.StatusNeverReported,
 			CreatedAt:      centralstore.UnixMillis(f.Created.UnixMilli()),
 			StartedAt:      millisPtr(f.Started), ExitedAt: millisPtr(f.Exited),
@@ -449,7 +450,7 @@ func peerFixtureRow(w *World, f FixtureSession) wire.Session {
 		ParentSessionID: f.Parent, Alive: f.Alive, ExitCode: f.ExitCode,
 		StartedAt: rfc3339(f.Started), ExitedAt: rfc3339(f.Exited),
 		Title: deriveFixtureTitle(f), Subtitle: f.Subtitle,
-		Status: &wire.Status{Working: f.Working, Error: f.Error}, Unread: f.Unread,
+		Status: &wire.Status{Active: f.Active, Error: f.Error, Interrupted: f.Interrupted}, Unread: f.Unread,
 		Resumable: !f.Alive && len(f.Command) > 0,
 		Slug:      f.Slug, ConversationRef: f.ConversationRef,
 		TerminalCols: f.TerminalCols, TerminalRows: f.TerminalRows,
@@ -485,7 +486,7 @@ func DefaultWorld() *World {
 				Cwd: "/work/app", WorkspaceRoot: "/work/app", Remotes: map[string]string{"origin": "git@x:app"},
 				AdapterTitle: "Fix auth flow", Subtitle: "3 files", Slug: "fix-auth",
 				ConversationRef: "/conv/live.jsonl", Alive: true, Pid: 101, SocketPath: "/tmp/sess-live.sock",
-				RunnerVersion: "2.0.0", BinaryHash: "hash-a", Working: true,
+				RunnerVersion: "2.0.0", BinaryHash: "hash-a", Active: true,
 				Created: base, Started: base.Add(time.Second), LastActivity: base.Add(time.Minute),
 				TerminalCols: 120, TerminalRows: 40,
 			},
@@ -504,6 +505,28 @@ func DefaultWorld() *World {
 				Alive: false, ExitCode: &exit, Unread: true, Error: true,
 				Created: base.Add(-time.Hour), Started: base.Add(-time.Hour), Exited: base.Add(-30 * time.Minute),
 				LastActivity: base.Add(-30 * time.Minute),
+			},
+			{
+				// Intentionally interrupted turn (ADR 0027): a durable
+				// third status fact that must survive every projection —
+				// inactive, NOT an error, and never unread.
+				ID: "sess-interrupted", Adapter: "pi", Command: []string{"pi"},
+				Cwd: "/work/app", AdapterTitle: "Stopped mid-thought",
+				ConversationRef: "/conv/interrupted.jsonl",
+				Alive:           true, Pid: 105, SocketPath: "/tmp/sess-interrupted.sock",
+				RunnerVersion: "2.0.0", BinaryHash: "hash-a", Interrupted: true,
+				Created: base.Add(8 * time.Second), Started: base.Add(9 * time.Second),
+				LastActivity: base.Add(10 * time.Second),
+			},
+			{
+				// Active AND error: a retry/rate-limit condition is an
+				// attention state on an OPEN turn — the orthogonality the
+				// status model has to keep representable end to end.
+				ID: "sess-retrying", Adapter: "codex", Command: []string{"codex"},
+				Cwd: "/work/lib", AdapterTitle: "Rate limited",
+				Alive: true, Pid: 106, SocketPath: "/tmp/sess-retrying.sock",
+				RunnerVersion: "2.0.0", BinaryHash: "hash-a", Active: true, Error: true,
+				Created: base.Add(11 * time.Second), Started: base.Add(12 * time.Second),
 			},
 			{
 				// Empty-title edge: no titles, no command → adapter name.

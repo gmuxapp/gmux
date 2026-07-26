@@ -14,14 +14,14 @@ describe('protocol schemas', () => {
       alive: true,
       pid: 12345,
       title: 'test session',
-      status: { working: true },
+      status: { active: true },
       terminal_cols: 120,
       terminal_rows: 40,
     })
 
     expect(result.id).toBe('sess-1')
     expect(result.alive).toBe(true)
-    expect(result.status?.working).toBe(true)
+    expect(result.status?.active).toBe(true)
     expect(result.terminal_cols).toBe(120)
     expect(result.terminal_rows).toBe(40)
   })
@@ -46,7 +46,7 @@ describe('protocol schemas', () => {
         id: 'sess-1',
         kind: 'pi',
         alive: true,
-        status: { working: true },
+        status: { active: true },
       },
     })
 
@@ -54,6 +54,13 @@ describe('protocol schemas', () => {
     if (event.type === 'session-upsert') {
       expect(event.session.alive).toBe(true)
     }
+  })
+
+  it('defaults the orthogonal status facts', () => {
+    const status = SessionStatusSchema.parse({ active: true })
+    expect(status).toEqual({ active: true, error: false, interrupted: false })
+    const stopped = SessionStatusSchema.parse({ active: false, interrupted: true })
+    expect(stopped?.interrupted).toBe(true)
   })
 
   it('validates session-remove event', () => {
@@ -66,7 +73,7 @@ describe('protocol schemas', () => {
 
   it('builds typed success envelopes', () => {
     const Schema = successEnvelope(SessionStatusSchema)
-    const parsed = Schema.parse({ ok: true, data: { working: false } })
-    expect(parsed.data.working).toBe(false)
+    const parsed = Schema.parse({ ok: true, data: { active: false } })
+    expect(parsed.data.active).toBe(false)
   })
 })

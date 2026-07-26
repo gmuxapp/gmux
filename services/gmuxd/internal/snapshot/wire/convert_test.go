@@ -71,7 +71,7 @@ func TestSessionConversionOverlays(t *testing.T) {
 	conv := &Converter{}
 	alive := localRow("sess-a", true, func(r *central.SessionRow) {
 		r.Session.StartedAt = ms(1700000001500) // sub-second component truncated
-		r.Session.Working = true
+		r.Session.Active = true
 		cols, rows := uint16(80), uint16(24)
 		r.Session.TerminalCols, r.Session.TerminalRows = &cols, &rows
 	})
@@ -82,7 +82,7 @@ func TestSessionConversionOverlays(t *testing.T) {
 	if got.CreatedAt != "2023-11-14T22:13:20Z" || got.StartedAt != "2023-11-14T22:13:21Z" {
 		t.Fatalf("timestamps: created=%q started=%q", got.CreatedAt, got.StartedAt)
 	}
-	if got.Status == nil || !got.Status.Working || got.Status.Error {
+	if got.Status == nil || !got.Status.Active || got.Status.Error {
 		t.Fatalf("status: %+v", got.Status)
 	}
 	if got.TerminalCols != 80 || got.TerminalRows != 24 {
@@ -364,7 +364,7 @@ func TestWireSessionShapeMatchesProduction(t *testing.T) {
 		Cwd: "/x", Adapter: "shell", WorkspaceRoot: "/w", Remotes: map[string]string{"origin": "git@x"},
 		ParentSessionID: "par", Alive: true, Pid: 9, ExitCode: &code,
 		StartedAt: "2023-11-14T22:13:21Z", ExitedAt: "2023-11-14T22:13:22Z",
-		Title: "T", Subtitle: "sub", Status: &Status{Working: true, Error: true}, Unread: true,
+		Title: "T", Subtitle: "sub", Status: &Status{Active: true, Error: true}, Unread: true,
 		Resumable: true, SocketPath: "/s.sock", TerminalCols: 80, TerminalRows: 24,
 		Slug: "slug", ConversationRef: "/conv", RunnerVersion: "v", BinaryHash: "h",
 		ProjectSlug: "proj", ProjectIndex: 2, LastOutputAt: "2023-11-14T22:13:23Z",
@@ -374,7 +374,7 @@ func TestWireSessionShapeMatchesProduction(t *testing.T) {
 		Cwd: "/x", Adapter: "shell", WorkspaceRoot: "/w", Remotes: map[string]string{"origin": "git@x"},
 		ParentSessionID: "par", Alive: true, Pid: 9, ExitCode: &code,
 		StartedAt: "2023-11-14T22:13:21Z", ExitedAt: "2023-11-14T22:13:22Z",
-		Title: "T", Subtitle: "sub", Status: &store.Status{Working: true, Error: true}, Unread: true,
+		Title: "T", Subtitle: "sub", Status: &store.Status{Active: true, Error: true}, Unread: true,
 		Resumable: true, SocketPath: "/s.sock", TerminalCols: 80, TerminalRows: 24,
 		Slug: "slug", ConversationRef: "/conv", RunnerVersion: "v", BinaryHash: "h",
 		ProjectSlug: "proj", ProjectIndex: 2, LastOutputAt: "2023-11-14T22:13:23Z",

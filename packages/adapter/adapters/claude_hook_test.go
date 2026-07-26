@@ -71,8 +71,8 @@ func TestClaudeHookBodies_TurnLifecycle(t *testing.T) {
 		t.Fatalf("UserPromptSubmit → turn start, got %v", start)
 	}
 	end := decodeBodies(t, ClaudeHookBodies([]byte(`{"hook_event_name":"SessionEnd"}`)))
-	if len(end) != 1 || end[0]["phase"] != "end" || end[0]["outcome"] != "aborted" {
-		t.Fatalf("SessionEnd → turn end aborted, got %v", end)
+	if len(end) != 1 || end[0]["phase"] != "end" || end[0]["outcome"] != "interrupted" {
+		t.Fatalf("SessionEnd → turn end interrupted, got %v", end)
 	}
 }
 
@@ -111,6 +111,25 @@ func TestClaudeHookBodies_StopRefreshesThenEnds(t *testing.T) {
 	got := decodeBodies(t, ClaudeHookBodies(in))
 	if len(got) != 2 || got[0]["op"] != "session" || got[1]["op"] != "turn" || got[1]["outcome"] != "completed" {
 		t.Fatalf("Stop → [session, turn end completed], got %v", got)
+	}
+}
+
+// StopFailure replaces Stop when the turn ends on an API error (rate limit,
+// auth failure, …). It is a failed turn, not an intentional stop.
+func TestClaudeHookBodies_StopFailureIsTerminalError(t *testing.T) {
+	tr := writeClaudeTranscript(t)
+	in, _ := json.Marshal(map[string]string{
+		"hook_event_name": "StopFailure", "transcript_path": tr,
+		"error": "rate_limit", "error_details": "429 Too Many Requests",
+	})
+	got := decodeBodies(t, ClaudeHookBodies(in))
+	if len(got) != 2 || got[0]["op"] != "session" || got[1]["outcome"] != "error" {
+		t.Fatalf("StopFailure → [session, turn end error], got %v", got)
+	}
+	// Without a transcript there is nothing to bind, but the turn still ends.
+	bare := decodeBodies(t, ClaudeHookBodies([]byte(`{"hook_event_name":"StopFailure"}`)))
+	if len(bare) != 1 || bare[0]["phase"] != "end" || bare[0]["outcome"] != "error" {
+		t.Fatalf("bare StopFailure → turn end error, got %v", bare)
 	}
 }
 
@@ -165,8 +184,13 @@ func TestClaudeHookCommand_Splices(t *testing.T) {
 		t.Fatalf("settings not JSON: %v", err)
 	}
 	hooks, _ := settings["hooks"].(map[string]any)
-	if _, has := hooks["SessionStart"]; !has {
-		t.Fatalf("missing SessionStart hook: %v", settings)
+	// Every turn-state event gmux depends on must be registered: without
+	// StopFailure an API-failed turn would fall through to SessionEnd and be
+	// recorded as an intentional interruption.
+	for _, ev := range []string{"SessionStart", "UserPromptSubmit", "Stop", "StopFailure", "SessionEnd"} {
+		if _, has := hooks[ev]; !has {
+			t.Fatalf("missing %s hook: %v", ev, settings)
+		}
 	}
 	if out[len(out)-2] != "--model" || out[len(out)-1] != "opus" {
 		t.Fatalf("user args dropped: %v", out)

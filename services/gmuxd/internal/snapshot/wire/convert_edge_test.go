@@ -62,7 +62,7 @@ func TestSessionJSONRoundTrip(t *testing.T) {
 		s    Session
 	}{
 		{"minimal", Session{ID: "sess-1", Adapter: "shell"}},
-		{"with status", Session{ID: "sess-1", Adapter: "shell", Status: &Status{Working: true}}},
+		{"with status", Session{ID: "sess-1", Adapter: "shell", Status: &Status{Active: true}}},
 		{"with nil status", Session{ID: "sess-1", Adapter: "shell", Status: nil}},
 		{"with remotes", Session{ID: "sess-1", Adapter: "shell", Remotes: map[string]string{"origin": "https://github.com"}}},
 		{"with empty remotes", Session{ID: "sess-1", Adapter: "shell", Remotes: map[string]string{}}},
@@ -271,7 +271,7 @@ func TestNilVsEmptyWireArrays(t *testing.T) {
 			peers: nil,
 		},
 		{
-			name: "project with no sessions or rules",
+			name:  "project with no sessions or rules",
 			local: &central.SessionsPayload{Sessions: []central.SessionRow{}},
 			world: &central.ProjectsPayload{
 				Projects: centralstore.ProjectCatalog{

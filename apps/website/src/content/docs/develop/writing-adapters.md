@@ -50,7 +50,7 @@ That's enough for a valid adapter. It:
 - is available for richer optional capabilities later
 
 Sessions of a minimal adapter automatically get the runner's **default turn
-model**: active (`Working=true`) from launch, upgraded to per-command turns
+model**: active (`Active=true`) from launch, upgraded to per-command turns
 if the output ever carries OSC 133 prompt marks, otherwise idle when the
 process exits — which is what makes `gmux wait` work on them out of the box.
 
@@ -110,12 +110,13 @@ The command the user typed is what runs. `Env()` can add environment variables; 
 
 ```go
 type Status struct {
-    Working bool // true while the tool is busy (pulsing dot)
-    Error   bool // true on a retryable error (red dot)
+    Active      bool // true while a turn is open (pulsing dot)
+    Error       bool // true on a retryable or terminal error (red dot)
+    Interrupted bool // true when the last turn was stopped on purpose
 }
 ```
 
-Status carries only booleans; any display text is derived by the frontend from these plus the exit code. `Status.Working` is the session's **turn state**: hooks flip it for agents, and the runner's default turn model flips it for everything else.
+Status carries only booleans; any display text is derived by the frontend from these plus the exit code. `Status.Active` is the session's **turn state**: hooks flip it for agents, and the runner's default turn model flips it for everything else.
 
 ## Adapter resolution
 
@@ -208,7 +209,7 @@ Optional. Marks one-shot invocations (e.g. `pi update`, `pi --version`) that sho
 
 ### Turn state: hooks or the default model
 
-There is no capability for status. Sessions of adapters that implement `SessionExtender` or `SessionHookCommand` (`adapter.HookDriven`) get their turn state exclusively from the agent hook. Every other adapter's sessions run the runner's default turn model: `Working=true` from launch; OSC 133 prompt marks ("semantic prompt" sequences) in the output — `133;C` busy, `133;A`/`133;D` idle — upgrade the session to per-command turns; without marks, the process exit closes the single lifetime turn (idle + unread, error on non-zero exit). The upgrade is evidence-based rather than declared, so `bash -c script` one-shots and mark-emitting `ssh` sessions both classify correctly, whatever adapter matched them.
+There is no capability for status. Sessions of adapters that implement `SessionExtender` or `SessionHookCommand` (`adapter.HookDriven`) get their turn state exclusively from the agent hook. Every other adapter's sessions run the runner's default turn model: `Active=true` from launch; OSC 133 prompt marks ("semantic prompt" sequences) in the output — `133;C` busy, `133;A`/`133;D` idle — upgrade the session to per-command turns; without marks, the process exit closes the single lifetime turn (idle + unread, error on non-zero exit). The upgrade is evidence-based rather than declared, so `bash -c script` one-shots and mark-emitting `ssh` sessions both classify correctly, whatever adapter matched them.
 
 ### `Resumer`
 

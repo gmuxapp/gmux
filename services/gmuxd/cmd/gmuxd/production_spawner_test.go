@@ -41,8 +41,11 @@ func TestRunnerMetaWireJSONFieldTable(t *testing.T) {
 		}
 	}
 	status := typeOf.Field(19).Type.Elem()
-	if status.NumField() != 2 || status.Field(0).Name != "Working" || status.Field(0).Tag.Get("json") != "working" || status.Field(1).Name != "Error" || status.Field(1).Tag.Get("json") != "error" {
-		t.Fatalf("status wire fields=%v, want explicit working/error JSON fields", status)
+	if status.NumField() != 3 ||
+		status.Field(0).Name != "Active" || status.Field(0).Tag.Get("json") != "active" ||
+		status.Field(1).Name != "Error" || status.Field(1).Tag.Get("json") != "error" ||
+		status.Field(2).Name != "Interrupted" || status.Field(2).Tag.Get("json") != "interrupted" {
+		t.Fatalf("status wire fields=%v, want explicit active/error/interrupted JSON fields", status)
 	}
 }
 

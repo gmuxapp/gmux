@@ -11,6 +11,20 @@ Session state flows one way: runners (and their agent hooks) produce it, `gmuxd`
 
 After a domain transaction commits, it signals a coalesced invalidation. gmuxd queries a complete snapshot from SQLite and sends `snapshot.sessions` and/or `snapshot.world` to connected browsers (protocol 2, ADR 0001). REST GET endpoints read from the store directly at request time (read-your-writes); SSE snapshots come from a coalesced composer cache.
 
+### Schema changes before 2.0
+
+The SQLite schema is still pre-release: unreleased migrations are edited **in
+place** rather than superseded by a new migration. goose only records the
+migration *version*, so an already-migrated development database at that
+version is not upgraded and cannot be detected as stale — a renamed or added
+column surfaces as a query error at runtime.
+
+If gmuxd fails against an existing `state.db` after pulling a schema change,
+reset the local database (stop gmuxd, remove `~/.local/state/gmux/state.db`) or
+repair the columns by hand. Live sessions are runner-owned and re-register; the
+loss is dead-session history. Once 2.0 ships, schema changes become additive
+migrations and this note goes away.
+
 A byte-identical snapshot is detected in the composition path and never broadcast — this no-op dedup is load-bearing for the snapshot protocol. Cross-entity operations (registration + project assignment, dismissal + recursive placement removal, etc.) execute in one transaction.
 
 ### `Upsert` vs `UpsertRemote`
@@ -91,7 +105,7 @@ These are computed in `Upsert()` and `Update()`, never set manually:
 |---|---|
 | `title` | `adapter_title` > `shell_title` > `CommandTitler` > adapter name |
 | `resumable` | `!alive && has command` |
-| `last_activity_at` | stamped on noteworthy transitions (exit, unread on, working/error on) |
+| `last_activity_at` | stamped on noteworthy transitions (exit, unread on, active/error on) |
 
 Staleness (the "outdated" badge) is **frontend-derived**: the UI compares each session's `runner_version`/`binary_hash` against `/v1/health`. There is no `stale` store field.
 
@@ -136,13 +150,13 @@ The terminal renders when `selected.alive && (selected.socket_path || selected.p
 
 ## Status
 
-Status carries only granular booleans (`working`, `error`) and is **null by default**. It describes *live* state; display text is the frontend's concern, derived from these plus `exit_code`.
+Status carries only granular booleans (`active`, `error`, `interrupted`) and is **null by default**. It describes *live* state; display text is the frontend's concern, derived from these plus `exit_code`.
 
 | State | What the UI shows | Status field |
 |---|---|---|
 | Alive, idle | Steady dot | `null` |
-| Alive, working | Pulsing dot + header "Working…" | `{ working: true }` |
-| Alive, error | Red dot + header "Error" | `{ working: false, error: true }` |
+| Alive, active | Pulsing dot + header "Working…" | `{ active: true }` |
+| Alive, error | Red dot + header "Error" | `{ active: false, error: true }` |
 | Dead, clean exit | Dimmed row, "Session ended" | `null` |
 | Dead, non-zero exit | Dimmed row, "exited (N)" from `exit_code` | `null` |
 | Resumable | Normal row, clickable | `null` |

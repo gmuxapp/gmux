@@ -9,7 +9,7 @@ gmux has built-in support for [Claude Code](https://docs.anthropic.com/en/docs/c
 
 ### Live status
 
-The sidebar shows when Claude Code is actively working. gmux injects a small hook configuration (via `--settings`) when it launches `claude`; the hooks report turn boundaries directly to gmux, so status is authoritative rather than inferred from output or file writes. A user prompt sets the status to **working** (pulsing cyan dot); the end of the turn clears it.
+The sidebar shows when Claude Code is actively working. gmux injects a small hook configuration (via `--settings`) when it launches `claude`; the hooks report turn boundaries directly to gmux, so status is authoritative rather than inferred from output or file writes. A user prompt sets the status to **active** (pulsing cyan dot); the end of the turn clears it.
 
 ### Session titles
 
@@ -62,9 +62,10 @@ When gmux owns the launch, it appends a `--settings` argument registering Claude
 | Hook event | Effect |
 |---|---|
 | `SessionStart` | Binds the session to its conversation file, ID, and title (also fires on `/resume`, `/clear`, compaction — gmux follows the new transcript) |
-| `UserPromptSubmit` | Working (cyan dot); also refreshes the title, so a `/rename` shows up at your next prompt |
+| `UserPromptSubmit` | Active (cyan dot); also refreshes the title, so a `/rename` shows up at your next prompt |
 | `Stop` | Idle — turn completed |
-| `SessionEnd` | Idle — session ended/aborted (Ctrl+C, exit) |
+| `StopFailure` | Fires **instead of** `Stop` when the turn ends on an API error (rate limit, overloaded, auth failure): idle + error dot. A failed turn, not an interruption |
+| `SessionEnd` | Ends an *open* turn as interrupted (Ctrl+C / exit mid-turn). After `Stop` has already closed the turn it changes nothing, so a normal exit stays "completed" |
 
 Because turn state is authoritative, `gmux wait <id>` works reliably with Claude Code for scripting.
 
@@ -87,5 +88,5 @@ gmuxd's Claude adapter watches these directories to discover past conversations 
 
 ## Limitations
 
-- **Status is coarse.** gmux doesn't distinguish thinking/tool-use sub-states — all are shown as "working". An Esc-interrupted turn stays "working" until the next prompt (Claude's `Stop` hook only fires on a clean finish).
+- **Status is coarse.** gmux doesn't distinguish thinking/tool-use sub-states — all are shown as active. An Esc-interrupted turn stays active until the next prompt (Claude's `Stop` hook only fires on a clean finish); only exiting mid-turn is recorded as an interruption.
 - **Hook injection needs a visible `claude` binary.** A shell-wrapped launch (`gmux -- bash -c 'claude'`, or `claude` after a `--`) can't be extended, so that session runs without live status.

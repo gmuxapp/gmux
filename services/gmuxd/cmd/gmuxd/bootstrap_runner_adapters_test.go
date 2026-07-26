@@ -16,7 +16,7 @@ import (
 
 func TestScanRunnerEventsResetsTypeAtFrameBoundary(t *testing.T) {
 	out := make(chan sessioncoord.RunnerEvent, 1)
-	scanRunnerEvents(context.Background(), strings.NewReader("event: status\n\ndata: {\"working\":true}\n"), out)
+	scanRunnerEvents(context.Background(), strings.NewReader("event: status\n\ndata: {\"active\":true}\n"), out)
 	if len(out) != 0 {
 		t.Fatal("typeless frame inherited prior event type")
 	}
@@ -111,7 +111,7 @@ func TestProductionRunnerSubscribeFirstBuffersPreMeta(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "event: status\ndata: {\"working\":true}\n\n")
+		fmt.Fprint(w, "event: status\ndata: {\"active\":true}\n\n")
 		w.(http.Flusher).Flush()
 		<-release
 	})
@@ -136,7 +136,7 @@ func TestProductionRunnerSubscribeFirstBuffersPreMeta(t *testing.T) {
 	}
 	select {
 	case e := <-s.Events():
-		if e.Facts.Working == nil || !*e.Facts.Working {
+		if e.Facts.Active == nil || !*e.Facts.Active {
 			t.Fatalf("event=%#v", e)
 		}
 	case <-time.After(time.Second):

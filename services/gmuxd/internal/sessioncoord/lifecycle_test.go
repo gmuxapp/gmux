@@ -180,7 +180,7 @@ func TestStreamDropSynthesizesDurableExit(t *testing.T) {
 		if obs.Facts.ExitedAt.Set == nil || *obs.Facts.ExitedAt.Set != ts(777) {
 			t.Fatalf("expected synthesized ExitedAt=777, got %+v", obs.Facts.ExitedAt)
 		}
-		if obs.Facts.ExitCode.Set != nil || obs.Facts.Working != nil || obs.Facts.Unread != nil || obs.Facts.Error != nil {
+		if obs.Facts.ExitCode.Set != nil || obs.Facts.Active != nil || obs.Facts.Unread != nil || obs.Facts.Error != nil {
 			t.Fatalf("synthesized exit must not carry exit code or turn state: %+v", obs.Facts)
 		}
 	case <-time.After(time.Second):

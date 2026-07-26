@@ -22,7 +22,7 @@ export default {
   exited_at: null,
   title: 'migrate to convex',
   subtitle: '',
-  status: { working: false },
+  status: { active: false },
   unread: true,
   project_slug: 'api',
   last_output_at: ago(9),

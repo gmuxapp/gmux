@@ -651,25 +651,25 @@ func New(cfg Config) (*Server, error) {
 	})
 
 	// Non-hook-driven sessions get their busy/idle Status derived from
-	// OSC 133 prompt marks in the output stream: Working=true when a
+	// OSC 133 prompt marks in the output stream: Active=true when a
 	// command starts executing, false when the next prompt returns.
 	// Each transition is a separate SetStatus call, so a fast command
 	// whose marks land in a single PTY read still emits the full
-	// working→idle pulse downstream — the daemon's send --wait requires
+	// active→idle pulse downstream — the daemon's send --wait requires
 	// observing both edges (issue #373).
 	//
-	// A genuine working→idle transition is a completed turn, so it also
+	// A genuine active→idle transition is a completed turn, so it also
 	// flags the session unread ("waiting on you") — the same policy
 	// applyTurnEnd implements for agent turns. The first idle mark (the
 	// shell's initial prompt) closes only the launch phase, not a
 	// command the user is waiting on, so it does not set unread.
 	if !adapter.HookDriven(cfg.Adapter) && cfg.State != nil {
-		sawWorking := false
-		s.promptMarks = adapter.NewPromptMarkTracker(func(working bool) {
-			s.state.SetStatus(&adapter.Status{Working: working})
-			if working {
-				sawWorking = true
-			} else if sawWorking {
+		sawActive := false
+		s.promptMarks = adapter.NewPromptMarkTracker(func(active bool) {
+			s.state.SetStatus(&adapter.Status{Active: active})
+			if active {
+				sawActive = true
+			} else if sawActive {
 				s.state.SetUnread(true)
 			}
 		})
@@ -991,10 +991,10 @@ const maxInputBytes = 1 << 20 // 1 MiB
 // maps them to sidebar state:
 //
 //	op "session"          — the bound conversation ref, id, name (on bind)
-//	op "turn" phase start — the agent loop began (→ working)
+//	op "turn" phase start — the agent loop began (→ active)
 //	op "turn" phase end   — the loop ended with Outcome + title
 //
-// Outcome is a stable, agent-agnostic vocabulary ("completed" | "aborted" |
+// Outcome is a stable, agent-agnostic vocabulary ("completed" | "interrupted" |
 // "error"); each agent's hook normalizes its own terminal state into it, and
 // the runner owns what each means for the sidebar (see applyTurnEnd). The full
 // wire contract is documented in docs/runner-hook-protocol.md. pi's hook
@@ -1010,7 +1010,7 @@ type hookEvent struct {
 	Reason  string `json:"reason,omitempty"`
 	Title   string `json:"title,omitempty"`
 	Phase   string `json:"phase,omitempty"`   // "start" | "end" (op "turn")
-	Outcome string `json:"outcome,omitempty"` // "completed" | "aborted" | "error"
+	Outcome string `json:"outcome,omitempty"` // "completed" | "interrupted" | "error"
 }
 
 // handleHookEvent applies the authoritative session state an agent's gmux hook
@@ -1074,7 +1074,7 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 		// Agent-loop transition. The extension reports phase + outcome; the
 		// sidebar policy (what an outcome means) lives here, in testable Go.
 		if ev.Phase == "start" {
-			s.state.SetStatus(&adapter.Status{Working: true})
+			s.state.SetStatus(&adapter.Status{Active: true})
 			break
 		}
 		s.applyTurnEnd(ev.Outcome, ev.Title)
@@ -1085,16 +1085,62 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 // applyTurnEnd maps a normalized turn outcome to sidebar state. This is the
 // one place gmux decides what an agent's terminal state means:
 //
-//	completed — the agent finished on its own; the reply is unread.
-//	error     — the agent gave up (e.g. exhausted retries); show a red dot.
-//	aborted   — the user interrupted; just go idle, nothing unread.
+//	completed   — the agent finished on its own; the reply is unread.
+//	error       — the agent gave up (e.g. exhausted retries); show a red dot.
+//	interrupted — a human or agent intentionally stopped the turn: idle,
+//	              nothing unread, but recorded so a synchronous wait can
+//	              report the stop instead of a completion or a failure.
+//
+// SetStatus replaces the status wholesale, so a terminal outcome clears the
+// previous turn's interruption exactly like a "turn" start does.
+//
+// A terminal end only closes an OPEN turn (State.CloseTurn, atomic under the
+// state lock). The runner owns turn open/closed state, so an end against an
+// already-closed turn is stale — and now that interruption is durable,
+// applying it would rewrite a good closure. Claude is the concrete case: a
+// clean turn is UserPromptSubmit → Stop → SessionEnd, and SessionEnd (which
+// covers exiting mid-turn, where neither Stop nor StopFailure fires) would
+// otherwise overwrite the Stop/StopFailure closure with an interruption on
+// every normal session exit. The
+// hook translator cannot dedupe it: each event is a fresh, stateless
+// `gmux __claude-hook` process (ADR 0015), so the runner — the one component
+// holding turn state — is the right boundary. Repeated ends become idempotent
+// for every agent.
+//
+// LIMIT, stated explicitly: this is turn POLARITY, not turn IDENTITY. Without
+// a turn token the runner cannot tell a logically stale end (end₁ arriving
+// after start₂) from a legitimate end of turn 2, so such an end would close
+// the new turn. Excluding that ordering is the sender's responsibility, and
+// how completely it is excluded differs per agent:
+//
+//   - pi: guaranteed. The extension serializes hook delivery on one promise
+//     chain, so request N+1 is never issued before N settles
+//     (cli/gmux/internal/agentext/pi-ext.mjs).
+//   - Claude: partial. `Stop` hooks are awaited, so a clean turn's end lands
+//     before whatever follows. `StopFailure`'s output and exit code are
+//     documented as ignored, so it is not evidently awaited: a session exiting
+//     at almost the same moment could deliver `SessionEnd` first and record an
+//     API-failed turn as interrupted instead of error. Narrow, accepted here.
+//
+// A turn token/generation is the durable fix for an agent that cannot
+// guarantee ordering; it is deliberately not introduced here.
+//
+// The title refresh is not turn state and is applied either way: a late end
+// carrying a fresher title (Claude's Stop refresh, pi's session name) should
+// still land.
 func (s *Server) applyTurnEnd(outcome, title string) {
-	s.state.SetStatus(&adapter.Status{Working: false, Error: outcome == "error"})
-	if outcome == "completed" {
-		s.state.SetUnread(true)
-	}
 	if title != "" {
 		s.state.SetAdapterTitle(title)
+	}
+	// One atomic check-and-close: concurrent hook POSTs are served on
+	// independent goroutines, so a snapshot-then-set would race.
+	closed := s.state.CloseTurn(&adapter.Status{
+		Active:      false,
+		Error:       outcome == "error",
+		Interrupted: outcome == "interrupted",
+	})
+	if closed && outcome == "completed" {
+		s.state.SetUnread(true)
 	}
 }
 
@@ -1115,6 +1161,12 @@ func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handlePutStatus is the generic child self-report channel (`PUT /status` on
+// $GMUX_SOCKET). It deliberately does NOT go through the turn gate: it is a raw
+// whole-status write, not a turn-lifecycle event, so a script can set any
+// combination (including clearing to null) without gmux second-guessing it.
+// The gate only constrains hook-reported terminal turn ends, whose stale
+// duplicates gmux must ignore.
 func (s *Server) handlePutStatus(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
 	if err != nil {
@@ -1278,7 +1330,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// Replay the current status snapshot so a (re)connecting daemon
 	// starts from the session's actual turn state. Without this, any
 	// status emitted before the subscription — the launch-time
-	// Working=true of the default turn model, or an agent turn that
+	// Active=true of the default turn model, or an agent turn that
 	// started while the daemon was down — would be invisible until the
 	// next transition.
 	if st := s.state.StatusSnapshot(); st != nil {

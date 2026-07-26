@@ -22,7 +22,7 @@ export default {
   exited_at: null,
   title: 'autoresearch benchmark',
   subtitle: '',
-  status: { working: true },
+  status: { active: true },
   unread: false,
   project_slug: 'api',
   last_output_at: ago(1),

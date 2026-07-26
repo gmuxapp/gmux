@@ -27,7 +27,7 @@ var piModel = []string{"pi", "--model", "claude-haiku-4-5"}
 // sendAndWaitForTurn sends a message and waits for the assistant response to
 // complete. Pi writes user+assistant messages to the JSONL as a batch after
 // the turn finishes, so we detect completion via file attribution + title
-// rather than transient working status.
+// rather than transient active status.
 func sendAndWaitForTurn(t *testing.T, g *testutil.Gmuxd, send func(string), sessID string) {
 	t.Helper()
 	// Brief pause for TUI input handler to be fully ready after render.

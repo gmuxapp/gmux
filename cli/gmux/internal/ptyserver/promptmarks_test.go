@@ -13,7 +13,7 @@ import (
 
 // collectStatusEvents drains status events from ch until want
 // transitions arrived or the deadline passed, returning the observed
-// Working sequence.
+// Active sequence.
 func collectStatusEvents(t *testing.T, ch chan session.Event, want int, deadline time.Duration) []bool {
 	t.Helper()
 	var got []bool
@@ -31,7 +31,7 @@ func collectStatusEvents(t *testing.T, ch chan session.Event, want int, deadline
 			if !ok || status == nil {
 				t.Fatalf("status event with unexpected payload %#v", ev.Data)
 			}
-			got = append(got, status.Working)
+			got = append(got, status.Active)
 		case <-timeout:
 			return got
 		}
@@ -44,7 +44,7 @@ func collectStatusEvents(t *testing.T, ch chan session.Event, want int, deadline
 // marks gets busy/idle Status transitions derived by the runner. The
 // fast second phase prints the command-start and prompt-start marks in
 // one burst (a single PTY read), pinning the property that the full
-// working→idle pulse is emitted as two distinct status events — that
+// active→idle pulse is emitted as two distinct status events — that
 // pulse is what the daemon's send --wait keys on.
 func TestShellPromptMarksDriveStatus(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
@@ -127,7 +127,7 @@ func TestPromptMarksIgnoredForHookDrivenAdapters(t *testing.T) {
 }
 
 // TestPromptCycleSetsUnreadOnCommandCompletion pins the "waiting on
-// you" parity rule: a genuine working→idle prompt cycle flags the
+// you" parity rule: a genuine active→idle prompt cycle flags the
 // session unread (like an agent's completed turn), while the shell's
 // initial prompt — also an idle transition — does not.
 func TestPromptCycleSetsUnreadOnCommandCompletion(t *testing.T) {
@@ -160,7 +160,7 @@ func TestPromptCycleSetsUnreadOnCommandCompletion(t *testing.T) {
 		t.Error("unread = true after initial prompt; want false (no command completed yet)")
 	}
 
-	// After the full working→idle cycle: unread.
+	// After the full active→idle cycle: unread.
 	if got := collectStatusEvents(t, ch, 2, 3*time.Second); len(got) != 2 || got[0] != true || got[1] != false {
 		t.Fatalf("cycle transitions = %v, want [true false]", got)
 	}

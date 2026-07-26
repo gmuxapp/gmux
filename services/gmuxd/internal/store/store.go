@@ -53,7 +53,7 @@ type Session struct {
 	// Bumped on (and only on):
 	//   - unread: false → true  (new output the user hasn't seen)
 	//
-	// Deliberately NOT bumped by the user's own input: status.working
+	// Deliberately NOT bumped by the user's own input: status.active
 	// false→true happens when you send / start a task, and reshuffling
 	// the session you just acted on is exactly the jitter we avoid.
 	// Exit and error aren't bumped either — in practice they arrive with
@@ -193,8 +193,9 @@ func (s Session) MarshalJSON() ([]byte, error) {
 // Status is the application-reported status. Carries only granular
 // booleans; display text is derived in the frontend.
 type Status struct {
-	Working bool `json:"working"`
-	Error   bool `json:"error,omitempty"`
+	Active      bool `json:"active"`
+	Error       bool `json:"error,omitempty"`
+	Interrupted bool `json:"interrupted,omitempty"`
 }
 
 // Event types on the store's subscriber bus. Only EventSessionUpsert
@@ -862,7 +863,7 @@ func (s *Store) ensureUniqueSlug(sess *Session) {
 
 // bumpsOutput reports whether a prev→next transition is new unseen
 // output (read → unread) — the sole trigger that stamps LastOutputAt.
-// Intentionally output-only: the user's own input (working false→true),
+// Intentionally output-only: the user's own input (active false→true),
 // exit, and error do NOT bump (see the LastOutputAt docstring). New
 // sessions (hadPrev=false) never bump; their first unread transition
 // does, so a batch of dead sessions rehydrated at startup stays unstamped.

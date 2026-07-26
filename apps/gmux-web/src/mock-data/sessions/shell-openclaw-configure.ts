@@ -19,7 +19,7 @@ export default {
   exited_at: null,
   title: 'openclaw configure',
   subtitle: '',
-  status: { working: false },
+  status: { active: false },
   unread: false,
   project_slug: 'openclaw',
   last_output_at: ago(38),

@@ -90,7 +90,7 @@ gmux tail $id -n 100
 prompt and wait for the reply": the two-command composition can observe the
 *previous* turn's idle state and return before the agent has even started,
 while `--wait` is race-free (the daemon arms the wait before delivering the
-input and requires a fresh working→idle transition). `--wait` requires the
+input and requires a fresh active→idle transition). `--wait` requires the
 input to submit (a trailing `Enter` or a `\r` in piped stdin) and accepts
 `--timeout N`; exit codes match `gmux wait` below.
 

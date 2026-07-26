@@ -25,7 +25,7 @@ that show what the daemon tells them to.
 
 | Event | Condition |
 |---|---|
-| **Session finished** | `status.working` true → false on a live session |
+| **Session finished** | `status.active` true → false on a live session |
 | **New output** | `unread` false → true |
 
 Both are skipped if any client is focused on gmux or viewing the session.

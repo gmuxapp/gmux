@@ -111,7 +111,7 @@ func TestMyAppTurnAndTitle(t *testing.T) {
 
 - **Trust prompts.** Claude Code and Codex both ask "do you trust this directory?" on first launch in a new workspace. Dismiss them by waiting for `"trust"` in the scrollback, then sending `\r`.
 - **TUI readiness.** Ink-based TUIs (pi, codex) need a moment after rendering before they accept input. A 2-second sleep after `WaitForOutput` is usually enough.
-- **Batch file writes.** Some tools write user + assistant messages in one batch after the turn completes (pi does this). You can't reliably observe transient `working=true` status via polling — wait for the final state instead.
+- **Batch file writes.** Some tools write user + assistant messages in one batch after the turn completes (pi does this). You can't reliably observe transient `active=true` status via polling — wait for the final state instead.
 - **Hook-driven adapters attribute fast.** Claude and Codex report session identity through an injected hook (ADR 0010/0011), so attribution appears as soon as the hook fires — no file-watcher race. The long attribution timeout is only needed for file-watch adapters like pi.
 - **Not every adapter needs these tests.** Shell and editor sessions have no API cost and are covered by cheaper lifecycle tests; the API-cost suite is for agent adapters.
 

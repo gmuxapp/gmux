@@ -104,11 +104,16 @@ func buildClaudeSettings(selfBin string, userSettings []string) (string, error) 
 //
 //   - SessionStart    → bind held transcript + id + title/slug; fires on
 //     startup AND resume/clear/compact, so it rebinds on /resume.
-//   - UserPromptSubmit → title refresh + turn start (working); the refresh
+//   - UserPromptSubmit → title refresh + turn start (active); the refresh
 //     picks up a /rename, which fires no hook of its own.
 //   - Stop             → rebind + turn end completed.
-//   - SessionEnd       → turn end aborted; covers Ctrl+C / exit where Stop
-//     does not fire.
+//   - StopFailure      → rebind + turn end error; Claude fires it INSTEAD of
+//     Stop when a turn ends on an API error (rate_limit, overloaded,
+//     authentication_failed, …). An API failure is a failed turn, not a user
+//     interruption.
+//   - SessionEnd       → turn end interrupted; covers Ctrl+C / exit mid-turn,
+//     where neither Stop nor StopFailure fires. The runner ignores it when the
+//     turn is already closed, so a normal exit after Stop stays completed.
 func claudeGmuxHooks(selfBin string) map[string]any {
 	cmd := shellQuote(selfBin) + " __claude-hook"
 	entry := func(timeout int) []any {
@@ -125,6 +130,7 @@ func claudeGmuxHooks(selfBin string) map[string]any {
 			"SessionStart":     entry(10),
 			"UserPromptSubmit": entry(10),
 			"Stop":             entry(10),
+			"StopFailure":      entry(10),
 			"SessionEnd":       entry(5),
 		},
 	}
@@ -218,17 +224,25 @@ func ClaudeHookBodies(input []byte) [][]byte {
 			return [][]byte{b, turn("start", "")}
 		}
 		return [][]byte{turn("start", "")}
-	case "Stop":
-		// Stop fires only on a clean finish — Claude routes interrupts/API errors
-		// elsewhere (StopFailure, which we don't wire) — so "completed" is
-		// accurate here (unlike codex, whose Stop can't tell completion from
-		// abort). An Esc-interrupted turn stays working until the next prompt.
-		if b, ok := claudeSessionBody(in.TranscriptPath, in.SessionID, "", in.SessionTitle); ok {
-			return [][]byte{b, turn("end", "completed")} // refresh title/slug, then end the turn
+	case "Stop", "StopFailure":
+		// Claude fires exactly one of these per turn: Stop on a clean finish,
+		// StopFailure instead when the turn ends on an API error. So "completed"
+		// is accurate for Stop (unlike codex, whose Stop can't tell completion
+		// from abort), and StopFailure is a terminal error — NOT an intentional
+		// interruption: nobody chose to stop a rate-limited turn.
+		outcome := "completed"
+		if in.HookEventName == "StopFailure" {
+			outcome = "error"
 		}
-		return [][]byte{turn("end", "completed")}
+		if b, ok := claudeSessionBody(in.TranscriptPath, in.SessionID, "", in.SessionTitle); ok {
+			return [][]byte{b, turn("end", outcome)} // refresh title/slug, then end the turn
+		}
+		return [][]byte{turn("end", outcome)}
 	case "SessionEnd":
-		return [][]byte{turn("end", "aborted")}
+		// Only reaches durable state when the turn is still OPEN (the runner
+		// gates terminal ends on turn polarity), i.e. the session was exited
+		// mid-turn. After Stop/StopFailure closed the turn this is a no-op.
+		return [][]byte{turn("end", "interrupted")}
 	}
 	return nil
 }

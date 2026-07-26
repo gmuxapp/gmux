@@ -7,11 +7,11 @@ import (
 )
 
 // feedAll runs one Feed call per chunk and returns the reported
-// transition sequence (true = working).
+// transition sequence (true = active).
 func feedAll(t *testing.T, chunks ...string) []bool {
 	t.Helper()
 	var got []bool
-	tr := NewPromptMarkTracker(func(working bool) { got = append(got, working) })
+	tr := NewPromptMarkTracker(func(active bool) { got = append(got, active) })
 	for _, c := range chunks {
 		tr.Feed([]byte(c))
 	}
@@ -128,7 +128,7 @@ func TestPromptMarkTrackerTransitions(t *testing.T) {
 func TestPromptMarkTrackerByteAtATime(t *testing.T) {
 	stream := "\x1b]133;A\x07$ \x1b]133;C\x07work\x1b]133;D;0\x1b\\\x1b]133;A\x07$ "
 	var got []bool
-	tr := NewPromptMarkTracker(func(working bool) { got = append(got, working) })
+	tr := NewPromptMarkTracker(func(active bool) { got = append(got, active) })
 	for i := 0; i < len(stream); i++ {
 		tr.Feed([]byte{stream[i]})
 	}

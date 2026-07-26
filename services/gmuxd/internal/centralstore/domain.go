@@ -30,13 +30,13 @@ type Session struct {
 	CWD, WorkspaceRoot                                        string
 	Remotes                                                   map[string]string
 	Slug, SlugBase, ShellTitle, AdapterTitle, Subtitle, Title string
-	Working, Unread, Error                                    bool
+	Active, Unread, Error, Interrupted                        bool
 	// StatusReported records whether the CURRENT runner generation ever
-	// reported a working/error status for this row (runner-authoritative,
+	// reported an active/error status for this row (runner-authoritative,
 	// generation-scoped; the production model's Status != nil, which
 	// re-registration replaces wholesale from the new runner's /meta).
 	// Sticky within a generation; a replacement generation resets it
-	// alongside working/error/started_at. The wire emits "status": null
+	// alongside active/error/started_at. The wire emits "status": null
 	// while it is false, and gmux wait's terminalReason keys its died/idle
 	// verdict on the distinction (ADR 0023).
 	StatusReported                                   bool
@@ -58,9 +58,9 @@ type NewSession struct {
 	Remotes                                  map[string]string
 	Slug, SlugBase, ShellTitle, AdapterTitle string
 	Subtitle                                 string
-	Working, Unread, Error                   bool
+	Active, Unread, Error, Interrupted       bool
 	// StatusReported marks the status facts as runner-reported. Implied
-	// (and forced true at insert) when Working or Error is set.
+	// (and forced true at insert) when Active, Error or Interrupted is set.
 	StatusReported             bool
 	CreatedAt                  UnixMillis
 	StartedAt, ExitedAt        *UnixMillis
@@ -83,7 +83,7 @@ type CommonFactsPatch struct {
 	ConversationRef, CWD, WorkspaceRoot, Slug, ShellTitle, AdapterTitle, Subtitle *string
 	Command                                                                       *[]string
 	Remotes                                                                       *map[string]string
-	Working, Unread, Error                                                        *bool
+	Active, Unread, Error, Interrupted                                            *bool
 	StartedAt, ExitedAt, LastActivityAt                                           NullablePatch[UnixMillis]
 	ExitCode                                                                      NullablePatch[int]
 	TerminalSize                                                                  NullablePatch[TerminalSize]
@@ -267,17 +267,18 @@ func sessionFromDB(v db.LocalSession) (Session, error) {
 	if v.RowVersion < 1 || v.CreatedAtMs < 0 {
 		return Session{}, errors.New("centralstore: corrupt session numeric value")
 	}
-	for name, x := range map[string]int64{"working": v.Working, "unread": v.Unread, "error": v.HasError, "promotion": v.PromotedToRoot, "status-reported": v.StatusReported} {
+	for name, x := range map[string]int64{"active": v.Active, "interrupted": v.Interrupted, "unread": v.Unread, "error": v.HasError, "promotion": v.PromotedToRoot, "status-reported": v.StatusReported} {
 		if x != 0 && x != 1 {
 			return Session{}, fmt.Errorf("centralstore: corrupt %s boolean", name)
 		}
 	}
-	out.Working = v.Working == 1
+	out.Active = v.Active == 1
+	out.Interrupted = v.Interrupted == 1
 	out.Unread = v.Unread == 1
 	out.Error = v.HasError == 1
 	out.PromotedToRoot = v.PromotedToRoot == 1
 	out.StatusReported = v.StatusReported == 1
-	if (out.Working || out.Error) && !out.StatusReported {
+	if (out.Active || out.Error || out.Interrupted) && !out.StatusReported {
 		return Session{}, errors.New("centralstore: status facts without status-reported bit")
 	}
 	if err := json.Unmarshal([]byte(v.CommandJson), &out.Command); err != nil {
@@ -375,7 +376,7 @@ func (s *Store) InsertSession(ctx context.Context, v NewSession) (Session, Mutat
 		return Session{}, MutationResult{}, err
 	}
 	v.SlugBase, v.Slug = candidate.SlugBase, candidate.Slug
-	row, err := q.InsertSession(ctx, db.InsertSessionParams{ID: string(v.ID), Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Working: boolInt(v.Working), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported || v.Working || v.Error), CreatedAtMs: int64(v.CreatedAt), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), LaunchParentID: func() sql.NullString {
+	row, err := q.InsertSession(ctx, db.InsertSessionParams{ID: string(v.ID), Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Active: boolInt(v.Active), Interrupted: boolInt(v.Interrupted), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported || v.Active || v.Error || v.Interrupted), CreatedAtMs: int64(v.CreatedAt), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), LaunchParentID: func() sql.NullString {
 		if v.LaunchParentID == nil {
 			return sql.NullString{}
 		}
@@ -463,7 +464,7 @@ func (s *Store) ApplyRunnerObservation(ctx context.Context, o RunnerObservation)
 		ConversationRef: o.Facts.ConversationRef, CWD: o.Facts.CWD, WorkspaceRoot: o.Facts.WorkspaceRoot,
 		Slug: o.Facts.Slug, ShellTitle: o.Facts.ShellTitle, AdapterTitle: o.Facts.AdapterTitle,
 		Subtitle: o.Facts.Subtitle, Command: o.Facts.Command, Remotes: o.Facts.Remotes,
-		Working: o.Facts.Working, Unread: o.Facts.Unread, Error: o.Facts.Error,
+		Active: o.Facts.Active, Unread: o.Facts.Unread, Error: o.Facts.Error, Interrupted: o.Facts.Interrupted,
 		StartedAt: o.Facts.StartedAt, ExitedAt: o.Facts.ExitedAt, ExitCode: o.Facts.ExitCode,
 		TerminalSize: o.Facts.TerminalSize,
 	}
@@ -522,8 +523,11 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	if p.Remotes != nil {
 		v.Remotes = *p.Remotes
 	}
-	if p.Working != nil {
-		v.Working = *p.Working
+	if p.Active != nil {
+		v.Active = *p.Active
+	}
+	if p.Interrupted != nil {
+		v.Interrupted = *p.Interrupted
 	}
 	if p.Unread != nil {
 		v.Unread = *p.Unread
@@ -531,14 +535,14 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	if p.Error != nil {
 		v.Error = *p.Error
 	}
-	// Sticky status-reported fact: any patch carrying a working/error fact
+	// Sticky status-reported fact: any patch carrying an active/error fact
 	// proves a status was reported for this row (runner-authoritative; the
 	// acknowledgement path uses its own query and never sets it).
-	v.StatusReported = v.StatusReported || p.Working != nil || p.Error != nil
+	v.StatusReported = v.StatusReported || p.Active != nil || p.Error != nil || p.Interrupted != nil
 	// last_output_at semantics (wire name; column keeps last_activity_at_ms):
 	// bumped on (and only on) the unread false→true transition — the moment
 	// the session produced output the user hasn't seen. Deliberately NOT
-	// bumped by working/error transitions or exit; see store.Session
+	// bumped by active/error transitions or exit; see store.Session
 	// LastOutputAt docstring for the rationale (activity-feed sort key).
 	if runnerObservedAt != nil && !before.Unread && v.Unread {
 		if v.LastActivityAt == nil || *runnerObservedAt > *v.LastActivityAt {
@@ -595,7 +599,7 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	if err != nil {
 		return MutationResult{}, err
 	}
-	n, err := q.UpdateCommonFacts(ctx, db.UpdateCommonFactsParams{Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Working: boolInt(v.Working), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), ID: string(id), RowVersion: int64(observed)})
+	n, err := q.UpdateCommonFacts(ctx, db.UpdateCommonFactsParams{Adapter: v.Adapter, ConversationRef: nullString(v.ConversationRef), CommandJson: cmd, Cwd: v.CWD, WorkspaceRoot: nullString(v.WorkspaceRoot), RemotesJson: rem, Slug: nullString(v.Slug), SlugBase: nullString(v.SlugBase), ShellTitle: nullString(v.ShellTitle), AdapterTitle: nullString(v.AdapterTitle), Subtitle: nullString(v.Subtitle), Active: boolInt(v.Active), Interrupted: boolInt(v.Interrupted), Unread: boolInt(v.Unread), HasError: boolInt(v.Error), StatusReported: boolInt(v.StatusReported), StartedAtMs: nullMillis(v.StartedAt), ExitedAtMs: nullMillis(v.ExitedAt), LastActivityAtMs: nullMillis(v.LastActivityAt), ExitCode: nullInt(v.ExitCode), TerminalCols: nullUint(v.TerminalCols), TerminalRows: nullUint(v.TerminalRows), ID: string(id), RowVersion: int64(observed)})
 	if err != nil {
 		return MutationResult{}, err
 	}

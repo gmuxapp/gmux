@@ -616,7 +616,7 @@ func cmdSend(ref string, text *string, keys []string, submit string, wait bool, 
 	// previous turn's idle state for the reply (#218). With --follow-up
 	// on a busy pi session this also waits for the queued prompt's
 	// reply, not just the current turn: pi drains its follow-up queue
-	// inside the same agent loop, so Working stays true until the
+	// inside the same agent loop, so Active stays true until the
 	// queued turn is done.
 	//
 	// Exit codes mirror `gmux wait`: 0 idle, 2 died, 3 timeout, 1

@@ -399,9 +399,10 @@ func TestFD6HealthCountsDeriveFromRegistryAndRows(t *testing.T) {
 	// alive; sess-dead + sess-bare dead; sess-hidden dismissed → uncounted.
 	// Deliberately asymmetric (tests review H-1: symmetric counts masked
 	// an alive/dead classification swap): local alive = sess-live,
-	// sess-child, sess-nostatus, sess-promoted; remote alive = cont-1,
-	// cont-2, remote-1; dead = sess-dead, sess-bare; dismissed uncounted.
-	want := central.SessionCounts{LocalAlive: 4, RemoteAlive: 3, Dead: 2}
+	// sess-child, sess-nostatus, sess-promoted, sess-interrupted,
+	// sess-retrying; remote alive = cont-1, cont-2, remote-1; dead =
+	// sess-dead, sess-bare; dismissed uncounted.
+	want := central.SessionCounts{LocalAlive: 6, RemoteAlive: 3, Dead: 2}
 	if got != want {
 		t.Fatalf("FD-6 counts: %+v want %+v", got, want)
 	}

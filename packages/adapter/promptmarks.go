@@ -14,7 +14,7 @@ import "bytes"
 // Mark semantics (terminator is BEL or ST, extra params after the mark
 // letter — "133;D;0", kitty's ";k=s" — are ignored):
 //
-//	OSC 133;C → working (command execution started)
+//	OSC 133;C → active (command execution started)
 //	OSC 133;D → idle    (command finished)
 //	OSC 133;A → idle    (a fresh prompt is being drawn)
 //	OSC 133;B → ignored (prompt end / input start: the shell is idle,
@@ -28,7 +28,7 @@ import "bytes"
 // (PTY reads chunk arbitrarily) are handled, and — critically — every
 // transition inside a single chunk is reported in order. A fast command
 // whose C and A marks arrive in one PTY read still produces the full
-// working→idle pulse, which is what `gmux send --wait` keys on.
+// active→idle pulse, which is what `gmux send --wait` keys on.
 //
 // Not safe for concurrent use; the runner feeds it from the single
 // readPTY flush path.
@@ -36,13 +36,13 @@ type PromptMarkTracker struct {
 	// onTransition is invoked once per busy/idle transition, in stream
 	// order. The first observed mark always fires (there is no prior
 	// state to dedupe against).
-	onTransition func(working bool)
+	onTransition func(active bool)
 
 	state   promptParseState
 	payload []byte // first bytes of the current OSC payload (capped)
 
-	working bool // last reported polarity
-	seen    bool // whether any transition has been reported yet
+	active bool // last reported polarity
+	seen   bool // whether any transition has been reported yet
 }
 
 // SawMark reports whether any actionable prompt mark (133;A/C/D) has
@@ -71,7 +71,7 @@ const promptPayloadCap = 8
 
 // NewPromptMarkTracker returns a tracker that calls onTransition for
 // every busy/idle transition derived from the fed bytes.
-func NewPromptMarkTracker(onTransition func(working bool)) *PromptMarkTracker {
+func NewPromptMarkTracker(onTransition func(active bool)) *PromptMarkTracker {
 	return &PromptMarkTracker{
 		onTransition: onTransition,
 		payload:      make([]byte, 0, promptPayloadCap),
@@ -166,13 +166,13 @@ func (t *PromptMarkTracker) finishOSC() {
 // mark always reports: a session's initial prompt (133;A) is what
 // establishes "this shell emits marks" downstream, so it must surface
 // even though nothing changed relative to the zero value.
-func (t *PromptMarkTracker) transition(working bool) {
-	if t.seen && t.working == working {
+func (t *PromptMarkTracker) transition(active bool) {
+	if t.seen && t.active == active {
 		return
 	}
 	t.seen = true
-	t.working = working
+	t.active = active
 	if t.onTransition != nil {
-		t.onTransition(working)
+		t.onTransition(active)
 	}
 }

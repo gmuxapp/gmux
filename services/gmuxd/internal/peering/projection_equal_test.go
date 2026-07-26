@@ -76,7 +76,7 @@ func TestProjectionEqualComparesPointerFieldsByValue(t *testing.T) {
 	exited := func(code int) SessionProjection {
 		return SessionProjection{
 			ID: "s1", Adapter: "claude", Alive: false, ExitedAt: "t2",
-			ExitCode: intPtr(code), Status: &SessionStatus{Working: false},
+			ExitCode: intPtr(code), Status: &SessionStatus{Active: false},
 		}
 	}
 	if !projectionEqual(exited(137), exited(137)) {
@@ -91,7 +91,7 @@ func TestProjectionEqualComparesPointerFieldsByValue(t *testing.T) {
 		t.Errorf("nil vs &0 ExitCode reported as equal: the exit transition would be hidden")
 	}
 	working := exited(1)
-	working.Status = &SessionStatus{Working: true}
+	working.Status = &SessionStatus{Active: true}
 	if projectionEqual(exited(1), working) {
 		t.Errorf("differing Status values reported as equal")
 	}

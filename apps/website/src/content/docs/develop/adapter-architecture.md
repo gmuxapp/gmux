@@ -243,10 +243,10 @@ Example:
 ```bash
 curl --unix-socket "$GMUX_SOCKET" http://localhost/status \
   -X PUT -H 'Content-Type: application/json' \
-  -d '{"working":true}'
+  -d '{"active":true}'
 ```
 
-`Status` carries only `working`/`error` booleans; display text is derived in the frontend.
+`Status` carries only `active`/`error`/`interrupted` booleans; display text is derived in the frontend.
 
 This is the escape hatch for tools that want native gmux integration without needing a custom PTY parser.
 

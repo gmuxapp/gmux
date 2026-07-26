@@ -57,13 +57,13 @@ func timeoutChan(r *http.Request) (<-chan time.Time, error) {
 //
 // The bare composition `gmux send <id> ... && gmux wait <id>` has an
 // inherent race: `wait`'s initial snapshot can observe the *previous*
-// turn's idle state before the send-induced Working=true has propagated
+// turn's idle state before the send-induced Active=true has propagated
 // from the runner's adapter into the store, returning "idle"
 // immediately with stale output. The fix is ordering, done here where
 // both halves live in one process: subscribe to the store BEFORE
-// forwarding the input bytes, then require a fresh Working=true
-// observation before any Working=false counts as "this turn is done".
-// The Working pulse cannot be missed because the subscription predates
+// forwarding the input bytes, then require a fresh Active=true
+// observation before any Active=false counts as "this turn is done".
+// The Active pulse cannot be missed because the subscription predates
 // the input delivery.
 //
 // Contract mirrors handleWait: 200 {reason: idle|died}, 408 on
@@ -90,10 +90,10 @@ func inputSubmits(body []byte) bool {
 	return bytes.ContainsRune(body, '\r') || kittyEnterRe.Match(body)
 }
 
-// awaitTurn blocks until the session completes a turn: a Working=true
-// observation followed by Working=false ("idle"), or the session dying
+// awaitTurn blocks until the session completes a turn: an Active=true
+// observation followed by Active=false ("idle"), or the session dying
 // or being removed at any point ("died"). Unlike terminalReason, a
-// Working=false state observed before any Working=true does NOT
+// Active=false state observed before any Active=true does NOT
 // terminate — that's exactly the stale previous-turn idle the caller
 // subscribed early to skip past.
 //
@@ -102,7 +102,7 @@ func inputSubmits(body []byte) bool {
 // Like handleWait, events are complemented by a periodic re-poll: the
 // 64-slot subscriber buffers drop events under load, so both edges of
 // the pulse could theoretically be missed. The poll recovers the
-// Working=true edge whenever the turn outlasts one tick; a sub-tick
+// Active=true edge whenever the turn outlasts one tick; a sub-tick
 // turn whose both edge events were dropped is the one (vanishingly
 // unlikely) case that rides out the deadline.
 
@@ -111,12 +111,12 @@ func terminalReason(s compatSession, seenAlive bool) (string, bool) {
 		if !hasRunEvidence(s, seenAlive) {
 			return "", false
 		}
-		if s.Status != nil && !s.Status.Working {
+		if s.Status != nil && !s.Status.Active {
 			return "idle", true
 		}
 		return "died", true
 	}
-	if s.Status != nil && !s.Status.Working {
+	if s.Status != nil && !s.Status.Active {
 		return "idle", true
 	}
 	return "", false

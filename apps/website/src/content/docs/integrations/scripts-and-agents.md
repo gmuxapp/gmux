@@ -72,9 +72,9 @@ gmux send --wait <id> Enter < step-2.txt
 gmux tail <id> -n 2            # the prompt and the reply, clean markdown
 ```
 
-The idle signal is the same `Status.Working` flag the UI's spinner consumes, so `wait` returns the moment the agent emits its closing message. Exit codes: `0` idle (or matched), `2` the session died first, `3` `--timeout N` elapsed.
+The idle signal is the same `Status.Active` flag the UI's spinner consumes, so `wait` returns the moment the agent emits its closing message. Exit codes: `0` idle (or matched), `2` the session died first, `3` `--timeout N` elapsed.
 
-**Prefer `send --wait` over `send` then `wait`.** The two-command form is subtly racy: `wait`'s opening snapshot can catch the *previous* turn's idle state before the send-induced `Working=true` has propagated, returning immediately. `gmux send --wait <id> … Enter` subscribes before delivering the input, so it always gates on a fresh turn. Bound it with `--timeout N`; exit codes match `wait`. A standalone `gmux wait <id>` is still the right tool when you're waiting on a turn you didn't just trigger.
+**Prefer `send --wait` over `send` then `wait`.** The two-command form is subtly racy: `wait`'s opening snapshot can catch the *previous* turn's idle state before the send-induced `Active=true` has propagated, returning immediately. `gmux send --wait <id> … Enter` subscribes before delivering the input, so it always gates on a fresh turn. Bound it with `--timeout N`; exit codes match `wait`. A standalone `gmux wait <id>` is still the right tool when you're waiting on a turn you didn't just trigger.
 
 **Waiting on output.** `gmux wait <id> --for-text 'DONE'` (or `--for-regex 'error: \d+'`) blocks until text appears in the session's output instead of on the idle signal. The match runs server-side against gmuxd's scrollback (per rendered line), and — unlike the idle wait — works for **shell** sessions too:
 
@@ -82,7 +82,7 @@ The idle signal is the same `Status.Working` flag the UI's spinner consumes, so 
 gmux wait <id> --for-text 'Listening on' --timeout 30   # wait for a server to come up
 ```
 
-`wait` (idle mode) is for agent sessions (`claude`, `codex`, `pi`); shell sessions have no working signal and are rejected with a clear error unless you give an output condition. `wait` only works for sessions on the local host — peer sessions (`<id>@<peer>`) are rejected. To wait for a shell *command* to finish, run it through the blocking piped flow above (`gmux -- make build < /dev/null`) — that's exactly the shape `gmux -- <cmd>` already provides.
+`wait` (idle mode) is for agent sessions (`claude`, `codex`, `pi`); shell sessions have no active/idle signal and are rejected with a clear error unless you give an output condition. `wait` only works for sessions on the local host — peer sessions (`<id>@<peer>`) are rejected. To wait for a shell *command* to finish, run it through the blocking piped flow above (`gmux -- make build < /dev/null`) — that's exactly the shape `gmux -- <cmd>` already provides.
 
 ## Reading output
 

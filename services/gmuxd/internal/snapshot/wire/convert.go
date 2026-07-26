@@ -90,7 +90,7 @@ func (c *Converter) session(row central.SessionRow) Session {
 	// status_reported fact carries production's Status-pointer nil-ness
 	// (gmux wait derives died-vs-idle from exactly this, ADR 0023).
 	if v.StatusReported {
-		out.Status = &Status{Working: v.Working, Error: v.Error}
+		out.Status = &Status{Active: v.Active, Error: v.Error, Interrupted: v.Interrupted}
 	}
 	if v.LaunchParentID != nil {
 		out.ParentSessionID = string(*v.LaunchParentID)

@@ -37,11 +37,12 @@ func defaultNotifyConfig() notifyConfig {
 }
 
 type notifySessionSnapshot struct {
-	Working bool
-	Unread  bool
-	Alive   bool
-	Title   string
-	Start   string
+	Active      bool
+	Interrupted bool
+	Unread      bool
+	Alive       bool
+	Title       string
+	Start       string
 }
 
 type pendingCentralNotif struct {
@@ -98,7 +99,8 @@ func (r *centralNotifyRouter) Run(ctx context.Context, seed []sessioncoord.Outco
 func notifySnapshot(o sessioncoord.Outcome) notifySessionSnapshot {
 	snap := notifySessionSnapshot{Alive: o.Alive}
 	if o.Session != nil {
-		snap.Working = o.Session.StatusReported && o.Session.Working
+		snap.Active = o.Session.StatusReported && o.Session.Active
+		snap.Interrupted = o.Session.StatusReported && o.Session.Interrupted
 		snap.Unread = o.Session.Unread
 		snap.Title = o.Session.Title
 		snap.Start = fmtMillisPtr(o.Session.StartedAt)
@@ -125,7 +127,9 @@ func (r *centralNotifyRouter) handleOutcome(o sessioncoord.Outcome) {
 	if !existed {
 		return
 	}
-	if prev.Working && !cur.Working && cur.Alive {
+	// An intentional stop is not a completion (ADR 0027): no "finished"
+	// notification for a turn the user themselves ended.
+	if prev.Active && !cur.Active && cur.Alive && !cur.Interrupted {
 		r.scheduleNotification(id, "finished", cur.Title, formatFinishedBodyCentral(cur.Start))
 	}
 	if !prev.Unread && cur.Unread {

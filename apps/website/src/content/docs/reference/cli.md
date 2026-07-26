@@ -218,7 +218,7 @@ gmux wait a3f20187
 gmux wait a3f20187 --timeout 600   # or fail after 600s
 ```
 
-The idle signal is the same `Status.Working` flag the UI's spinner consumes
+The idle signal is the same `Status.Active` flag the UI's spinner consumes
 — the session's **turn state**. Agents source it from their turn hooks, so
 `wait` returns the moment the agent emits its closing message; shells source
 it from OSC 133 prompt marks (see below); every other session is one

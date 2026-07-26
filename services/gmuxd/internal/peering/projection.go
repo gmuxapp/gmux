@@ -38,8 +38,9 @@ type SessionProjection struct {
 }
 
 type SessionStatus struct {
-	Working bool `json:"working"`
-	Error   bool `json:"error,omitempty"`
+	Active      bool `json:"active"`
+	Error       bool `json:"error,omitempty"`
+	Interrupted bool `json:"interrupted,omitempty"`
 }
 
 func cloneProjection(s SessionProjection) SessionProjection {

@@ -440,7 +440,7 @@ func TestUpdatePreservesOtherFields(t *testing.T) {
 	s.Upsert(Session{
 		ID: "s1", Adapter: "pi",
 		AdapterTitle: "my title",
-		Status:       &Status{Working: true},
+		Status:       &Status{Active: true},
 	})
 	// Update only the title — status should be preserved.
 	s.Update("s1", func(sess *Session) {
@@ -450,8 +450,8 @@ func TestUpdatePreservesOtherFields(t *testing.T) {
 	if got.AdapterTitle != "new title" {
 		t.Fatalf("expected 'new title', got %q", got.AdapterTitle)
 	}
-	if got.Status == nil || !got.Status.Working {
-		t.Fatal("expected working status to be preserved")
+	if got.Status == nil || !got.Status.Active {
+		t.Fatal("expected active status to be preserved")
 	}
 }
 
@@ -1153,7 +1153,7 @@ func fullyPopulatedSession() Session {
 		ExitedAt:        "2026-01-01T00:00:02Z",
 		Title:           "t",
 		Subtitle:        "s",
-		Status:          &Status{Working: true, Error: true},
+		Status:          &Status{Active: true, Error: true},
 		Unread:          true,
 		LastOutputAt:    "2026-01-01T00:00:03Z",
 		Resumable:       true,
@@ -1471,7 +1471,7 @@ func TestActivitySeed_SkippedForPeer(t *testing.T) {
 
 // TestLastOutputAt_BumpOnTransitions pins the output-only bump policy:
 // only unread false→true stamps LastOutputAt. The user's own input
-// (working on), exit, and error deliberately do NOT bump — see the
+// (active on), exit, and error deliberately do NOT bump — see the
 // LastOutputAt docstring. Each subtest starts from an alive-and-idle
 // baseline and applies one transition.
 func TestLastOutputAt_BumpOnTransitions(t *testing.T) {
@@ -1482,7 +1482,7 @@ func TestLastOutputAt_BumpOnTransitions(t *testing.T) {
 	}{
 		{"unread", func(s *Session) { s.Unread = true }, true},
 		{"exited", func(s *Session) { s.Alive = false }, false},
-		{"working", func(s *Session) { s.Status = &Status{Working: true} }, false},
+		{"active", func(s *Session) { s.Status = &Status{Active: true} }, false},
 		{"error", func(s *Session) { s.Status = &Status{Error: true} }, false},
 	}
 	for _, tc := range cases {
@@ -1568,7 +1568,7 @@ func TestLastOutputAt_OnlyTransitionEdgeBumps(t *testing.T) {
 // machinery fires on Upsert (not just Update). Adapters call Upsert
 // repeatedly with the same ID as they refresh metadata; when one of
 // those refreshes carries a noteworthy transition (e.g. status going
-// to working), it must stamp LastOutputAt the same way Update does.
+// to active), it must stamp LastOutputAt the same way Update does.
 func TestLastOutputAt_UpsertOnExistingBumps(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -1577,7 +1577,7 @@ func TestLastOutputAt_UpsertOnExistingBumps(t *testing.T) {
 	}{
 		{"unread", func(s *Session) { s.Unread = true }, true},
 		{"exited", func(s *Session) { s.Alive = false }, false},
-		{"working", func(s *Session) { s.Status = &Status{Working: true} }, false},
+		{"active", func(s *Session) { s.Status = &Status{Active: true} }, false},
 		{"error", func(s *Session) { s.Status = &Status{Error: true} }, false},
 	}
 	for _, tc := range cases {

@@ -688,8 +688,11 @@ func mergeFacts(dst *centralstore.RunnerFacts, src centralstore.RunnerFacts) err
 	if src.Remotes != nil {
 		dst.Remotes = src.Remotes
 	}
-	if src.Working != nil {
-		dst.Working = src.Working
+	if src.Active != nil {
+		dst.Active = src.Active
+	}
+	if src.Interrupted != nil {
+		dst.Interrupted = src.Interrupted
 	}
 	if src.Unread != nil {
 		dst.Unread = src.Unread

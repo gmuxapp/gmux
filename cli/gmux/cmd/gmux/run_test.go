@@ -46,10 +46,10 @@ func collectEvents(t *testing.T, ch chan session.Event, n int) []session.Event {
 // first terminal signal it sees must observe the closed turn, and the
 // store's exit handling must persist the final Status — emitting the
 // exit first would resolve waits as "died" and persist a stale
-// mid-turn Working=true.
+// mid-turn Active=true.
 func TestFinalizeSessionStateClosesLifetimeTurnBeforeExit(t *testing.T) {
 	st := session.New(session.Config{ID: "sess-finalize", Adapter: "shell"})
-	st.SetStatus(&adapter.Status{Working: true}) // launch state, pre-subscription
+	st.SetStatus(&adapter.Status{Active: true}) // launch state, pre-subscription
 	ch := st.Subscribe()
 	defer st.Unsubscribe(ch)
 
@@ -63,8 +63,8 @@ func TestFinalizeSessionStateClosesLifetimeTurnBeforeExit(t *testing.T) {
 		}
 	}
 	status, ok := got[0].Data.(*adapter.Status)
-	if !ok || status == nil || status.Working {
-		t.Errorf("turn-close status = %#v, want Working=false", got[0].Data)
+	if !ok || status == nil || status.Active {
+		t.Errorf("turn-close status = %#v, want Active=false", got[0].Data)
 	}
 	if !status.Error {
 		t.Error("Error = false for exit code 3, want true (failed one-shot shows the error dot)")
@@ -77,11 +77,11 @@ func TestFinalizeSessionStateClosesLifetimeTurnBeforeExit(t *testing.T) {
 // TestFinalizeSessionStateLeavesUpgradedTurnAlone: a session whose
 // turns are mark-delimited (lifetimeTurnOpen == false) must get only
 // the exit event — its last mark-derived Status is the truth. A shell
-// killed mid-command stays Working=true and resolves as "died"; one
+// killed mid-command stays Active=true and resolves as "died"; one
 // that exited at its prompt already reads idle.
 func TestFinalizeSessionStateLeavesUpgradedTurnAlone(t *testing.T) {
 	st := session.New(session.Config{ID: "sess-upgraded", Adapter: "shell"})
-	st.SetStatus(&adapter.Status{Working: true}) // mid-command
+	st.SetStatus(&adapter.Status{Active: true}) // mid-command
 	ch := st.Subscribe()
 	defer st.Unsubscribe(ch)
 
@@ -91,8 +91,8 @@ func TestFinalizeSessionStateLeavesUpgradedTurnAlone(t *testing.T) {
 	if got[0].Type != "exit" {
 		t.Fatalf("first event = %q, want exit (and nothing before it)", got[0].Type)
 	}
-	if s := st.StatusSnapshot(); s == nil || !s.Working {
-		t.Errorf("Status = %+v, want the mark-derived Working=true preserved", s)
+	if s := st.StatusSnapshot(); s == nil || !s.Active {
+		t.Errorf("Status = %+v, want the mark-derived Active=true preserved", s)
 	}
 	if st.UnreadSnapshot() {
 		t.Error("unread set on a mid-turn death; nothing completed")

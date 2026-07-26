@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -95,10 +96,72 @@ func TestSetExited(t *testing.T) {
 
 func TestSetStatus(t *testing.T) {
 	s := New(Config{ID: "s", Command: []string{"echo"}, Adapter: "generic"})
-	s.SetStatus(&adapter.Status{Working: true, Error: true})
+	s.SetStatus(&adapter.Status{Active: true, Error: true})
 
-	if s.Status == nil || !s.Status.Working || !s.Status.Error {
-		t.Fatalf("expected working+error, got %v", s.Status)
+	if s.Status == nil || !s.Status.Active || !s.Status.Error {
+		t.Fatalf("expected active+error, got %v", s.Status)
+	}
+}
+
+// TestCloseTurnIsAtomic: the terminal-end check and write are one critical
+// section. Hook POSTs are served on independent goroutines, so a
+// StatusSnapshot-then-SetStatus caller could let two ends both observe an open
+// turn and both write — and now that Interrupted/Error are durable, the loser
+// would rewrite the winner's closure. Exactly one close may win, and the
+// surviving status must be that winner's.
+func TestCloseTurnIsAtomic(t *testing.T) {
+	for range 200 {
+		s := New(Config{ID: "s", Command: []string{"pi"}, Adapter: "pi"})
+		s.SetStatus(&adapter.Status{Active: true})
+
+		const racers = 8
+		var start, done sync.WaitGroup
+		start.Add(1)
+		done.Add(racers)
+		won := make([]bool, racers)
+		for i := range racers {
+			go func() {
+				defer done.Done()
+				start.Wait()
+				// Each racer writes a distinguishable closure.
+				won[i] = s.CloseTurn(&adapter.Status{Interrupted: i%2 == 0, Error: i%2 == 1})
+			}()
+		}
+		start.Done()
+		done.Wait()
+
+		winners := 0
+		for _, w := range won {
+			if w {
+				winners++
+			}
+		}
+		if winners != 1 {
+			t.Fatalf("CloseTurn winners = %d, want exactly 1", winners)
+		}
+		got := s.StatusSnapshot()
+		if got == nil || got.Active {
+			t.Fatalf("status = %+v, want a closed turn", got)
+		}
+		if got.Interrupted == got.Error {
+			t.Fatalf("status = %+v, want exactly one racer's closure", got)
+		}
+		// A closed turn stays closed for every later end.
+		if s.CloseTurn(&adapter.Status{}) {
+			t.Fatal("CloseTurn succeeded against an already-closed turn")
+		}
+	}
+}
+
+// TestCloseTurnRequiresReportedOpenTurn: a session whose runner never reported
+// a status has no open turn, so an end must not fabricate one.
+func TestCloseTurnRequiresReportedOpenTurn(t *testing.T) {
+	s := New(Config{ID: "s", Command: []string{"pi"}, Adapter: "pi"})
+	if s.CloseTurn(&adapter.Status{Interrupted: true}) {
+		t.Fatal("CloseTurn must fail with no reported status")
+	}
+	if s.StatusSnapshot() != nil {
+		t.Fatalf("status = %+v, want it left unreported", s.StatusSnapshot())
 	}
 }
 
@@ -134,7 +197,7 @@ func TestSubscribeEvents(t *testing.T) {
 	ch := s.Subscribe()
 	defer s.Unsubscribe(ch)
 
-	s.SetStatus(&adapter.Status{Working: true})
+	s.SetStatus(&adapter.Status{Active: true})
 
 	evt := <-ch
 	if evt.Type != "status" {

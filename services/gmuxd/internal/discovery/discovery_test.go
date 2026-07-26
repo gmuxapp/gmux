@@ -466,7 +466,7 @@ func TestRegisterRejectsInvalidSessionID(t *testing.T) {
 // invariant (docs/adr/0023-unified-turn-model.md §4 "Turn-state-at-
 // death") for the stale-socket sweep: a session whose runner vanished
 // (socket gone, no live subscription) but whose turn had already
-// CLOSED must keep its Status{Working:false} so a post-death `gmux
+// CLOSED must keep its Status{Active:false} so a post-death `gmux
 // wait` resolves "idle" — the same verdict a live wait watching the
 // clean exit would return. Phase 2 previously hard-cleared Status to
 // nil, which terminalReason maps to "died": the verdict became
@@ -487,7 +487,7 @@ func TestScanForcedDeathPreservesClosedTurnStatus(t *testing.T) {
 		Alive:      true,
 		SocketPath: sockPath,
 		StartedAt:  "2026-01-02T03:04:05Z",
-		Status:     &store.Status{Working: false},
+		Status:     &store.Status{Active: false},
 	})
 
 	subs := NewSubscriptions(sessions)
@@ -505,14 +505,14 @@ func TestScanForcedDeathPreservesClosedTurnStatus(t *testing.T) {
 	if got.Status == nil {
 		t.Fatalf("Status = nil after forced death; want preserved closed turn (ADR 0023): a cleanly-exited session reaped via stale socket must still resolve 'idle'")
 	}
-	if got.Status.Working {
-		t.Errorf("Status.Working = true, want false (closed turn must be preserved)")
+	if got.Status.Active {
+		t.Errorf("Status.Active = true, want false (closed turn must be preserved)")
 	}
 }
 
 // TestScanForcedDeathPreservesOpenTurnStatus is the mid-turn crash
 // counterpart: a session that died with its turn still OPEN
-// (Working:true) must keep that evidence so `gmux wait` resolves
+// (Active:true) must keep that evidence so `gmux wait` resolves
 // "died" rather than losing the open-turn state to a nil Status.
 func TestScanForcedDeathPreservesOpenTurnStatus(t *testing.T) {
 	sockDir := t.TempDir()
@@ -528,7 +528,7 @@ func TestScanForcedDeathPreservesOpenTurnStatus(t *testing.T) {
 		Alive:      true,
 		SocketPath: sockPath,
 		StartedAt:  "2026-01-02T03:04:05Z",
-		Status:     &store.Status{Working: true},
+		Status:     &store.Status{Active: true},
 	})
 
 	subs := NewSubscriptions(sessions)
@@ -544,9 +544,9 @@ func TestScanForcedDeathPreservesOpenTurnStatus(t *testing.T) {
 		t.Fatalf("Alive = true, want false (stale socket must force death)")
 	}
 	if got.Status == nil {
-		t.Fatalf("Status = nil after forced death; want preserved open turn (ADR 0023): a mid-turn crash must keep Working=true to resolve 'died'")
+		t.Fatalf("Status = nil after forced death; want preserved open turn (ADR 0023): a mid-turn crash must keep Active=true to resolve 'died'")
 	}
-	if !got.Status.Working {
-		t.Errorf("Status.Working = false, want true (open turn evidence must be preserved)")
+	if !got.Status.Active {
+		t.Errorf("Status.Active = false, want true (open turn evidence must be preserved)")
 	}
 }

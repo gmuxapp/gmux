@@ -47,7 +47,7 @@ graph LR
     gmuxd -- "HTTP · SSE · WS" --> web
 ```
 
-**`gmux`** wraps any command in a managed session. It allocates a PTY, serves a WebSocket for terminal access, and runs an **adapter** that understands what the child process is doing. For agent tools (pi, Claude Code, Codex), gmux installs a small hook into the agent so the agent itself reports its state — working, idle, which conversation it holds — authoritatively, with no output scraping. A generic command gets alive/dead/activity tracking out of the box.
+**`gmux`** wraps any command in a managed session. It allocates a PTY, serves a WebSocket for terminal access, and runs an **adapter** that understands what the child process is doing. For agent tools (pi, Claude Code, Codex), gmux installs a small hook into the agent so the agent itself reports its state — active, idle, which conversation it holds — authoritatively, with no output scraping. A generic command gets alive/dead/activity tracking out of the box.
 
 **`gmuxd`** runs once per machine (auto-started by `gmux`). It discovers sessions via their Unix sockets, caches their state, proxies WebSocket connections, and pushes real-time updates to the browser via SSE. Session state lives with each runner, so gmuxd's session cache rebuilds on restart; projects, peers, and the auth token persist in `~/.local/state/gmux`.
 
@@ -93,7 +93,7 @@ Sessions are grouped into **projects** by working directory — manage the proje
 Adapters teach gmux how to work with specific tools. They're compiled into the binary and selected automatically by command name.
 
 - **Auto-detection** — `gmux -- pi` recognizes pi and activates the pi adapter. No flags needed.
-- **Authoritative agent status** — pi, Claude Code, and Codex report session identity, titles, and working/idle state through the tools' own hook mechanisms, injected per launch
+- **Authoritative agent status** — pi, Claude Code, and Codex report session identity, titles, and active/idle state through the tools' own hook mechanisms, injected per launch
 - **Child awareness** — any tool can self-report status via `PUT /status` on `$GMUX_SOCKET`, no adapter required
 - **Graceful fallback** — unknown commands get the shell adapter
 
@@ -128,7 +128,7 @@ Run gmux on each machine, then connect them: `gmux auth` on the remote host prin
 ## Extensibility
 
 - **Adapters** (Go, compiled in) — recognize commands, launch presets, titles, resume, hook-driven status
-- **Child self-reporting** — any process can `PUT /status` on `$GMUX_SOCKET` to set working/error state, no adapter required
+- **Child self-reporting** — any process can `PUT /status` on `$GMUX_SOCKET` to set active/error state, no adapter required
 
 ## Development
 

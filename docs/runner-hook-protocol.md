@@ -52,7 +52,7 @@ One JSON object per event, discriminated by `op`. Unknown ops/values are ignored
 }
 
 // op "turn" — agent loop boundary.
-{ "op": "turn", "phase": "start" }                            // → working
+{ "op": "turn", "phase": "start" }                            // → active
 { "op": "turn", "phase": "end", "outcome": "completed",       // see vocabulary
   "title": "human title" }                                    // optional
 ```
@@ -77,11 +77,28 @@ Stable and agent-agnostic; each hook normalizes its native state into one. The
 outcome→sidebar mapping is gmux policy in the runner (`applyTurnEnd`), not the
 agent's concern.
 
-| Outcome     | Meaning                          | Sidebar              |
-|-------------|----------------------------------|----------------------|
-| `completed` | Agent finished its own turn.     | idle + **unread**    |
-| `aborted`   | User interrupted (Esc).          | idle                 |
-| `error`     | Agent gave up.                   | idle + **error**     |
+| Outcome       | Meaning                          | Sidebar                |
+|---------------|----------------------------------|------------------------|
+| `completed`   | Agent finished its own turn.     | idle + **unread**      |
+| `interrupted` | Human or agent stopped the turn. | idle + **interrupted** |
+| `error`       | Agent gave up.                   | idle + **error**       |
+
+### Ordering requirement
+
+A terminal end applies **only while a turn is open**: the runner ignores an end
+that arrives against an already-closed turn, so a duplicate or an
+unconditional-on-exit hook (Claude's `SessionEnd` after `Stop`) cannot rewrite a
+good closure. This is turn *polarity*, not turn *identity* — the runner cannot
+recognize a logically stale end that arrives after the next turn already
+started, and would close the new turn with it.
+
+Hooks must therefore deliver events **in order**: never issue event N+1 before
+N has been delivered. pi's extension serializes its POSTs on a single promise
+chain. Claude's own hook execution is the agent's business and is not uniformly
+blocking — `Stop` is awaited, while `StopFailure` output is documented as
+ignored — so ordering between a turn end and a near-simultaneous `SessionEnd`
+is not guaranteed there. An agent that cannot guarantee ordering needs a turn
+token, which this protocol does not have yet.
 
 ## The runner does NOT, for hooked sessions
 
