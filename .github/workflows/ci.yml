@@ -56,6 +56,39 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # Central-store (ADR 0026) gates that the pnpm test/build/lint fan-out
+      # does not cover: they live under distinct moon task names, so they
+      # must be invoked explicitly. All are Docker-free and fast.
+      - name: Central store — generated code up to date
+        run: pnpm exec moon run gmuxd:check-centralstore-generated
+
+      - name: Central store — CGO-free cross-build (linux/darwin × amd64/arm64)
+        run: pnpm exec moon run gmuxd:check-centralstore-cross-build
+
+      # Race detector on the concurrency-critical central-store machinery
+      # (coordinator, snapshot composer, peering projection, daemon entry).
+      # These packages carried the bulk of the lifecycle/ordering review;
+      # the plain `pnpm test` run above is race-free.
+      - name: Central store — race detector (hot packages)
+        working-directory: services/gmuxd
+        run: go test -race ./internal/sessioncoord ./internal/snapshot/central ./internal/peering ./cmd/gmuxd
+
+  central-store-e2e:
+    name: Central store E2E (container, fast)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      # No host Go/Node needed: the Dockerfile builds gmuxd inside the image.
+      # Runs the built production gmuxd binary and a fake runner inside a
+      # networkless, private-tmpfs Docker container (host isolation is
+      # enforced by the harness guard). This is the real acceptance gate,
+      # including the original unread-on-restart bug. The extended 50-cycle
+      # stress profile runs nightly (central-store-e2e-nightly.yml), not here.
+      - name: Fast production container E2E
+        run: services/gmuxd/tools/production-e2e.sh
+
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest

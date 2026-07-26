@@ -29,9 +29,9 @@ One per machine. It:
 - Manages session launch, kill, dismiss, and resume
 - Optionally connects to other gmuxd instances (peers) and aggregates their sessions into a single UI (see [Multi-Machine](/multi-machine/))
 
-`gmuxd` holds no authoritative live state — live sessions are rediscovered from runner sockets on restart. It does persist lightweight per-session metadata (`~/.local/state/gmux/sessions/<id>/meta.json`) so dead sessions remain visible and resumable across restarts; scrollback for dead sessions is treated as an evictable cache (ADR 0016). On startup it hashes the `gmux` binary it ships with; sessions running a different build are marked **stale** so the UI can flag them.
+All daemon-owned structured state — sessions, projects, peers — lives in a single SQLite database (`~/.local/state/gmux/state.db`, ADR 0026). Dead sessions survive daemon restarts because they are rows in the database, not ephemeral in-memory entries. Scrollback for dead sessions is treated as an evictable cache on disk (ADR 0016). On startup gmuxd rediscovers surviving runner sockets, merges their live state into the database, and hashes the `gmux` binary it ships with; sessions running a different build are marked **stale** so the UI can flag them.
 
-`gmux` auto-starts `gmuxd` if it isn't already running. If a daemon from an older version is detected, `gmux` automatically replaces it so the child process always talks to a compatible daemon.
+`gmux` auto-starts `gmuxd` if it isn't already running. If a daemon from an older version is detected, `gmux` automatically replaces it so the child process always talks to a compatible daemon. `gmuxd run` refuses to replace a healthy same-version daemon (exits 0 "already running"); use `gmuxd restart` (or `gmuxd run --replace`) to replace it deliberately.
 
 Configuration lives in `~/.config/gmux/host.toml`. See [Configuration](/configuration) for the full file layout, or [Security](/security) and [Remote Access](/remote-access) for details on those topics.
 

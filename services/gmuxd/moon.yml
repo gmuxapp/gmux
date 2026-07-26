@@ -17,3 +17,33 @@ tasks:
     command: go test ./...
   lint:
     command: go vet ./...
+  generate-centralstore:
+    command: ./tools/generate.sh
+    inputs:
+      - "sqlc.yaml"
+      - "internal/centralstore/internal/db/query.sql"
+      - "internal/centralstore/migrations/*.sql"
+      - "tools/go.mod"
+    outputs:
+      - "internal/centralstore/internal/db/*.go"
+  check-centralstore-generated:
+    command: ./tools/check-centralstore-generated.sh
+    inputs:
+      - "sqlc.yaml"
+      - "internal/centralstore/internal/db/query.sql"
+      - "internal/centralstore/internal/db/*.go"
+      - "internal/centralstore/migrations/*.sql"
+      - "tools/go.mod"
+  check-centralstore-cross-build:
+    command: ./tools/check-centralstore-cross-build.sh
+  # Container E2E targets. Run inside Docker with no network access.
+  # Fast profile: core scenarios, ~11s. Extended: adds 50 stress cycles, ~14s.
+  # Opt-in CI; not forced on ordinary unit test runs.
+  e2e-fast:
+    command: GMUX_E2E_PROFILE=fast ./tools/production-e2e.sh
+    env:
+      GMUX_E2E_PROFILE: fast
+  e2e-extended:
+    command: GMUX_E2E_PROFILE=extended ./tools/production-e2e.sh
+    env:
+      GMUX_E2E_PROFILE: extended

@@ -397,3 +397,23 @@ func TestTokenWithWhitespaceAccepted(t *testing.T) {
 		t.Errorf("status = %d, want 303 (whitespace should be trimmed)", rr.Code)
 	}
 }
+
+func TestStateRoutesBlockedOnNetworkListener(t *testing.T) {
+	h := Middleware(testToken, okHandler())
+
+	// The admin state routes are Unix-socket-only (cutover design §5):
+	// forbidden on network listeners even with valid bearer auth.
+	for _, tc := range []struct{ method, path string }{
+		{"GET", "/v1/state/check"},
+		{"POST", "/v1/state/backup"},
+		{"GET", "/v1/state/export"},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusForbidden {
+			t.Errorf("%s %s: status = %d, want 403 (state routes blocked on network listener)", tc.method, tc.path, rr.Code)
+		}
+	}
+}

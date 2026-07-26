@@ -322,6 +322,9 @@ gmux daemon start      # start in the background (replaces a running instance)
 gmux daemon stop       # stop the running daemon
 gmux daemon restart    # restart; active sessions survive and are rediscovered
 gmux daemon log-path   # print the log file path (for scripting)
+gmux daemon state check       # verify database integrity (migrations, FK, SQLite integrity)
+gmux daemon state backup <path>  # consistent online backup (contains peer tokens — treat as secret)
+gmux daemon state export      # redacted JSON dump for bug reports
 ```
 
 `gmux daemon status` example:
@@ -355,9 +358,11 @@ auto-starts it) and `gmux daemon …`. Invoke `gmuxd` directly only when a servi
 manager needs to own the process:
 
 ```bash
-gmuxd          # run in the foreground (for systemd, Docker, debugging)
-gmuxd run      # same thing, explicit
+gmuxd run      # run in the foreground (for systemd, Docker, debugging)
+gmuxd run --replace  # shut down a healthy same-version daemon first
 ```
+
+`gmuxd run` refuses to replace a healthy same-version daemon (exits 0 "already running"). Use `--replace` to force replacement. Version upgrades still replace automatically.
 
 Foreground `gmuxd` reads [`host.toml`](/reference/host-toml/), binds
 `127.0.0.1` on the configured port (default 8790), and creates a Unix socket

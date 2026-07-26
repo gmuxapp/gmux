@@ -1,0 +1,56 @@
+# Interactive test harness for the locally-built gmux 2.0 (central-store) stack.
+#
+# Fully isolated from the host gmux daemon: its own state volume, its own token,
+# and mapped to host port 8795 (the host daemon owns 8790). Nothing here talks
+# to the host daemon.
+#
+# Usage (from repo root):
+#   ./scripts/build.sh                        # build bin/gmuxd + bin/gmux first
+#   docker compose -f tools/dev-container/compose.yaml up -d --build
+#   open http://127.0.0.1:8795/               # token below
+#
+# Rebuild after a code change:
+#   ./scripts/build.sh && docker compose -f tools/dev-container/compose.yaml up -d --build
+services:
+  gmux-2x:
+    build:
+      # Build context is the repo root so the Dockerfile can COPY bin/*.
+      context: ../..
+      dockerfile: tools/dev-container/Dockerfile
+    image: gmux-2x-devtest:local
+    container_name: gmux-2x
+    hostname: gmux-2x
+    restart: unless-stopped
+    ports:
+      # Host loopback only. Host gmux daemon owns 8790; we use 8795.
+      - "127.0.0.1:8795:8790"
+    environment:
+      - TERM=xterm-256color
+      - GMUXD_LISTEN=0.0.0.0
+      # Fixed 64-hex token so both of us can authenticate without docker exec.
+      # Dev-only value; do not reuse anywhere real.
+      - GMUXD_TOKEN=d04b098ce128dcd49c189816a907a01a53b1b2fcb19552a79a2577d97fd7a56d
+      # Tailscale device name for remote access (gmux remote / [tailscale]).
+      # Without this the tsnet name would be gmux-<hostname> = gmux-gmux-2x.
+      - GMUXD_TS_HOSTNAME=gmux-2x
+    volumes:
+      # Persistent so we can test unread-on-restart / crash-recovery across
+      # `docker compose restart` and `down`/`up`.
+      - gmux2x-state:/root/.local/state/gmux
+      - gmux2x-work:/workspace
+      # Persist host.toml (Tailscale remote-access config) across restarts.
+      - gmux2x-config:/root/.config/gmux
+      # Persist pi's agent config/auth (seeded from the host, see README).
+      - gmux2x-pi:/root/.pi
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8790/ >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  gmux2x-state:
+  gmux2x-work:
+  gmux2x-config:
+  gmux2x-pi:

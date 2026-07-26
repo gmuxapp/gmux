@@ -8,10 +8,10 @@
 // store.ts:partitionByDay. This file is presentation.
 
 import {
-  health, folders, homePartition, dismissSession, tabHref,
+  health, folders, sessions, projects, homePartition, dismissSession, tabHref,
 } from './store'
 import { SessionRow } from './session-row'
-import { sessionPath } from './routing'
+import { hasSessionSlugCollision, sessionPath } from './routing'
 import { cwdBadge } from './cwd-format'
 import { IconBell, type NotifPermission } from './sidebar'
 import type { Folder, Session } from './types'
@@ -66,7 +66,7 @@ export function Home({
       <SessionRow
         key={s.id}
         session={s}
-        href={tabHref(sessionPath(folder.slug, s, folder.peer))}
+        href={tabHref(sessionPath(folder.slug, s, folder.peer, hasSessionSlugCollision(s, sessions.value, projects.value)))}
         compact={compact}
         showProject
         projectName={folder.name}

@@ -10,7 +10,6 @@ import (
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
 // fakeDocker implements dockerRunner for testing. Mutations must go
@@ -79,7 +78,7 @@ func (c *callbackDocker) events(_ context.Context) (<-chan struct{}, error) {
 
 func setupManager(t *testing.T) *peering.Manager {
 	t.Helper()
-	mgr := peering.NewManager(nil, store.New(), "test-host")
+	mgr := peering.NewProjectionManager(nil, "test-host", nil, peering.EventHooks{})
 	mgr.Start()
 	t.Cleanup(mgr.Stop)
 	return mgr
@@ -383,10 +382,9 @@ func TestScan_UniqueNamesForDuplicateProjects(t *testing.T) {
 }
 
 func TestScan_DoesNotConflictWithManualPeer(t *testing.T) {
-	st := store.New()
-	mgr := peering.NewManager([]config.PeerConfig{
+	mgr := peering.NewProjectionManager([]config.PeerConfig{
 		{Name: "server", URL: "http://10.0.0.5:8790", Token: "manual-tok"},
-	}, st, "test-host")
+	}, "test-host", nil, peering.EventHooks{})
 	mgr.Start()
 	t.Cleanup(mgr.Stop)
 

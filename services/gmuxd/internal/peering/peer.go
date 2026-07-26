@@ -14,7 +14,6 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/apiclient"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sseclient"
-	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
 // defaultStreamIdleTimeout is the maximum time the SSE stream can be
@@ -32,7 +31,7 @@ const defaultStreamIdleTimeout = 60 * time.Second
 // policy, and status reporting.
 type Peer struct {
 	Config config.PeerConfig
-	store  *store.Store
+	sink   ProjectionSink
 	api    *apiclient.Client
 
 	mu             sync.RWMutex
@@ -82,10 +81,11 @@ type Peer struct {
 	wake chan struct{}
 }
 
-func newPeer(cfg config.PeerConfig, st *store.Store, onStatus func(string, Status), opts ...PeerOption) *Peer {
+func newPeer(cfg config.PeerConfig, sinkArg any, onStatus func(string, Status), opts ...PeerOption) *Peer {
+	sink := projectionSink(sinkArg)
 	p := &Peer{
 		Config:   cfg,
-		store:    st,
+		sink:     sink,
 		status:   StatusDisconnected,
 		onStatus: onStatus,
 		wake:     make(chan struct{}, 1),
@@ -450,7 +450,7 @@ type sseActivity struct {
 
 // sseSnapshotSessions is the wire format for snapshot.sessions.
 type sseSnapshotSessions struct {
-	Sessions []store.Session `json:"sessions"`
+	Sessions []SessionProjection `json:"sessions"`
 }
 
 // isForwardedFromKnownOrigin checks whether a session ID (before
@@ -479,7 +479,7 @@ func (p *Peer) handleEvent(ctx context.Context, eventType string, data []byte) {
 		}
 		p.applySessionsSnapshot(payload.Sessions)
 
-	case store.EventSessionActivity:
+	case "session-activity":
 		var ev sseActivity
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return
@@ -488,10 +488,9 @@ func (p *Peer) handleEvent(ctx context.Context, eventType string, data []byte) {
 			return
 		}
 		namespacedID := NamespaceID(ev.ID, p.Config.Name)
-		p.store.Broadcast(store.Event{
-			Type: store.EventSessionActivity,
-			ID:   namespacedID,
-		})
+		if p.sink != nil {
+			p.sink.SessionActivity(namespacedID)
+		}
 
 	case "projects-update":
 		// Spoke's projects.json changed. Refresh the cached
@@ -529,38 +528,28 @@ func (p *Peer) handleEvent(ctx context.Context, eventType string, data []byte) {
 // because only the store sees the fully-normalized session — after
 // path canonicalization and unique-slug renumbering — which is what
 // a correct equality check has to compare against.
-func (p *Peer) applySessionsSnapshot(remote []store.Session) {
-	seen := make(map[string]bool, len(remote))
-	for i := range remote {
-		sess := remote[i]
-		if p.isForwardedFromKnownOrigin(sess.ID) {
-			// A→B→A loop: B is shipping us back a session whose
-			// origin we already reach directly. Skip.
-			continue
-		}
-		namespacedID := NamespaceID(sess.ID, p.Config.Name)
-		seen[namespacedID] = true
-		sess.ID = namespacedID
-		sess.Peer = p.Config.Name
-		sess.SocketPath = "" // meaningless on hub side
-		// UpsertRemote (not Upsert) because the spoke already resolved
-		// Title and Resumable. Upsert would re-run resolveTitle against
-		// the wire session where ShellTitle/AdapterTitle are absent
-		// (they're internal fields, intentionally off the wire) and
-		// overwrite the correct title with the adapter-name fallback.
-		p.store.UpsertRemote(sess)
+func (p *Peer) applySessionsSnapshot(input any) {
+	var remote []SessionProjection
+	switch rows := input.(type) {
+	case []SessionProjection:
+		remote = rows
+	default:
+		b, _ := json.Marshal(rows)
+		_ = json.Unmarshal(b, &remote)
 	}
-
-	// Removal pass: anything we still have for this peer that the
-	// snapshot omitted has either been dismissed, killed, or slug-
-	// renamed on the origin side.
-	for _, s := range p.store.List() {
-		if s.Peer != p.Config.Name {
+	out := make([]SessionProjection, 0, len(remote))
+	for i := range remote {
+		sess := cloneProjection(remote[i])
+		if p.isForwardedFromKnownOrigin(sess.ID) {
 			continue
 		}
-		if !seen[s.ID] {
-			p.store.Remove(s.ID)
-		}
+		sess.ID = NamespaceID(sess.ID, p.Config.Name)
+		sess.Peer = p.Config.Name
+		sess.SocketPath = ""
+		out = append(out, sess)
+	}
+	if p.sink != nil {
+		p.sink.ReplacePeerSessions(p.Config.Name, out)
 	}
 }
 

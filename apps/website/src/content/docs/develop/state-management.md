@@ -7,13 +7,11 @@ Session state flows one way: runners (and their agent hooks) produce it, `gmuxd`
 
 ## The store
 
-`gmuxd` holds all sessions in an in-memory store. Every mutation goes through `store.Upsert(session)`, which:
+`gmuxd` holds all daemon-owned structured state in a single SQLite database (`~/.local/state/gmux/state.db`, ADR 0026). Every domain mutation commits to SQLite before any snapshot invalidation or side effect is published. The database is the authoritative source for sessions, projects, peers, and their relationships.
 
-1. Derives computed fields (`title`, `resumable`, `last_activity_at`)
-2. Writes the session under a lock
-3. Notifies in-process subscribers with a `session-upsert` event. The SSE layer coalesces these into full `snapshot.sessions` payloads for browsers (protocol 2, ADR 0001).
+After a domain transaction commits, it signals a coalesced invalidation. gmuxd queries a complete snapshot from SQLite and sends `snapshot.sessions` and/or `snapshot.world` to connected browsers (protocol 2, ADR 0001). REST GET endpoints read from the store directly at request time (read-your-writes); SSE snapshots come from a coalesced composer cache.
 
-A byte-identical write is detected in the commit path and never broadcast — this no-op dedup is load-bearing for the snapshot protocol. `store.Remove(id)` notifies with `session-remove`. Other writers (`Update`, `UpsertRemote`, `Reconcile`, peer removals) all route through the same commit path, which is where dedup and slug resolution live.
+A byte-identical snapshot is detected in the composition path and never broadcast — this no-op dedup is load-bearing for the snapshot protocol. Cross-entity operations (registration + project assignment, dismissal + recursive placement removal, etc.) execute in one transaction.
 
 ### `Upsert` vs `UpsertRemote`
 
@@ -28,7 +26,7 @@ Each field on a session has a single owner. No two subsystems write the same fie
 | Transition | Owner | Trigger |
 |---|---|---|
 | Session appears (live) | **Register** | Runner calls `POST /v1/register` |
-| Session reappears after restart (dead) | **sessionmeta Sweep** | `meta.json` loaded at startup |
+| Session reappears after restart (dead) | **SQLite row** | Persisted in `state.db`; survives restart by construction |
 | Metadata updates | **Subscription** | Runner SSE `status` / `meta` events |
 | Held file + title + status | **Agent hook** | runner SSE `conversation_file` / `status` events |
 | Session dies (clean exit) | **Subscription** | Runner SSE `exit` event |
@@ -59,9 +57,11 @@ Live session state is reported by the agent itself, not inferred by the daemon. 
 
 Separately, each file-backed adapter implements `ConversationSource` to keep the conversations index (URL resolution + search) current: a snapshot at startup, then incremental create/change/remove events via the shared `filewatch` watcher. This covers dead conversations that have no running session, which the hook path cannot.
 
-### sessionmeta: dead-session persistence
+### Dead-session persistence
 
-Dead sessions survive daemon restarts. When a session lands alive→dead, gmuxd writes `$XDG_STATE_HOME/gmux/sessions/<id>/meta.json`; at startup a Sweep loads those back into the store as `Alive=false`. Retention (ADR 0016): `meta.json` mirrors conversation-file existence, conversation-less sessions (shells) age out (30 days / 200 max by default), and dead-session scrollback is a cache with an aggregate byte cap. A separate 30-second maintenance pass purges ephemeral dead sessions that never bound a conversation file. There is no periodic scan of adapter conversation directories creating sessions — that mechanism was retired; the conversations index handles dead-conversation URL resolution.
+Dead sessions survive daemon restarts because they are rows in the SQLite database. When a session exits, its state is committed to `state.db`; on startup gmuxd rediscovers surviving runners and merges their live state, then serves the first snapshot. There is no separate sweep or JSON file to synchronize.
+
+Retention: adapters own resumability and retention policy. Each adapter reconciles its retained candidates and returns a disposition (retain, remove, or unknown). Conversation-less sessions (shells) age out (30 days / 200 max by default), and dead-session scrollback is a cache with an aggregate byte cap. There is no periodic scan of adapter conversation directories creating sessions — that mechanism was retired; the conversations index handles dead-conversation URL resolution.
 
 ## Session lifecycle
 
@@ -70,7 +70,7 @@ Dead sessions survive daemon restarts. When a session lands alive→dead, gmuxd 
 stateDiagram-v2
     direction LR
     [*] --> alive : Register\n(new launch)
-    [*] --> resumable : sessionmeta Sweep\n(daemon restart)
+    [*] --> resumable : SQLite row\n(daemon restart)
     alive --> resumable : exit
     resumable --> alive : user clicks resume\n(Register merges)
     resumable --> [*] : dismiss

@@ -7,13 +7,13 @@
 
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks'
 import { needsReveal } from './sidebar-reveal'
-import { sessionPath } from './routing'
+import { hasSessionSlugCollision, sessionPath } from './routing'
 import { selectorLabel, folderMatchesFilter, type Selector } from './tab-filter'
 import { reorderKeysForFolder } from './projects'
 import { LaunchButton } from './launcher'
 import { useArrivalPulse } from './use-arrival-pulse'
 import {
-  folders, selectedId,
+  folders, selectedId, sessions,
   activityMap, projects, connState, health, peers,
   collapsedFolders, toggleFolderCollapsed,
   updateProjects, reorderSessions,
@@ -350,7 +350,7 @@ function FolderGroup({
           <SessionItem
             key={s.id}
             session={s}
-            href={tabHref(sessionPath(folder.slug, s, folder.peer))}
+            href={tabHref(sessionPath(folder.slug, s, folder.peer, hasSessionSlugCollision(s, sessions.value, projects.value)))}
             selected={selId === s.id}
             resuming={resumingId === s.id}
             dotState={sessionDotState(s, am)}
@@ -494,7 +494,7 @@ function ActivityList({
       <SessionRow
         key={s.id}
         session={s}
-        href={tabHref(sessionPath(folder.slug, s, folder.peer))}
+        href={tabHref(sessionPath(folder.slug, s, folder.peer, hasSessionSlugCollision(s, sessions.value, projects.value)))}
         selected={selId === s.id}
         resuming={resumingId === s.id}
         compact={compact}

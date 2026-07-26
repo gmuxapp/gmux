@@ -62,7 +62,7 @@ func main() {
 	case modeEditChild:
 		os.Exit(editChild(cmd.editFile))
 	case modeDaemon:
-		os.Exit(execGmuxd(cmd.daemonSub))
+		os.Exit(execGmuxd(cmd.daemonArgs...))
 	case modeAuth:
 		os.Exit(execGmuxd("auth"))
 	case modeRemote:

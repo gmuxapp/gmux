@@ -47,7 +47,7 @@ The host gmuxd detects the container via Docker events, reads the auth token, an
 
 Open **Settings → Hosts → Connect to host**. Paste the connect URL from `gmux auth` (it splits into the URL and token fields automatically), or enter the host's URL (e.g. `https://gmux-server.your-tailnet.ts.net`) and its token separately. A token is required for every host, tailnet or not.
 
-gmux probes the host, adopts the name it reports about itself (no name to assign), and saves the connection to `peers.json` in the state directory. If a different host already uses that name, gmux suffixes it (`server-2`) for you. The hub connects immediately and reconnects with exponential backoff on failure; every peer uses the same token-authenticated protocol.
+gmux probes the host, adopts the name it reports about itself (no name to assign), and saves the connection to the daemon’s SQLite database (`state.db`). If a different host already uses that name, gmux suffixes it (`server-2`) for you. The hub connects immediately and reconnects with exponential backoff on failure; every peer uses the same token-authenticated protocol.
 
 There is no `[[peers]]` config block (removed in [ADR 0007](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0007-host-identity-and-peer-urls.md)) — peers are runtime state managed from the UI.
 
@@ -65,7 +65,7 @@ Removing a host clears the references that pointed at it, so a deliberate remova
 
 ## Upgrading from a version with tailnet autodiscovery
 
-Earlier versions auto-discovered gmux machines on your tailnet. [ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md) removed that, so on first start the daemon migrates the hosts **you had projects on** into the roster as **Auth needed** (it imports the old discovery cache, then deletes it). Click **Add token** on each in **Settings → Hosts** and paste its token (`gmux auth` on that host) to bring it online. Machines you never pinned a project on aren't carried over — add them with **Connect to host** if you want them. `projects.json` is backed up to `projects.json.bak` before any schema migration.
+Earlier versions auto-discovered gmux machines on your tailnet. [ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md) removed that, so on first start the daemon migrates the hosts **you had projects on** into the roster as **Auth needed** (it imports the old discovery cache, then deletes it). Click **Add token** on each in **Settings → Hosts** and paste its token (`gmux auth` on that host) to bring it online. Machines you never pinned a project on aren't carried over — add them with **Connect to host** if you want them. 2.0 uses a clean SQLite database; there is no migration from 1.x JSON files.
 
 ## Session namespacing
 

@@ -8,6 +8,7 @@ import {
   viewToPath,
   viewsEqual,
   withTabParams,
+  hasSessionSlugCollision,
 } from './routing'
 import { makeSession } from './test-helpers'
 
@@ -145,6 +146,18 @@ describe('resolveSessionFromPath', () => {
     expect(id).toBe('sess-1')
   })
 
+  it('refuses an ambiguous exact slug and links colliding rows by full ID', () => {
+    const duplicate = makeSession({ id: 'sess-dead', cwd: '/dev/gmux', adapter: 'pi', slug: 'fix-auth', alive: false,
+      remotes: { origin: 'github.com/gmuxapp/gmux' } })
+    const colliding = [localSessions[0], duplicate]
+    expect(resolveSessionFromPath(
+      { project: 'gmux', adapter: 'pi', slug: 'fix-auth' }, projects, colliding,
+    )).toBeNull()
+    expect(hasSessionSlugCollision(localSessions[0], colliding, projects)).toBe(true)
+    expect(sessionPath('gmux', localSessions[0], undefined, true)).toBe('/gmux/pi/sess-1')
+    expect(sessionPath('gmux', duplicate, undefined, true)).toBe('/gmux/pi/sess-dead')
+  })
+
   it('resolves project-only to first alive session', () => {
     const id = resolveSessionFromPath({ project: 'gmux' }, projects, localSessions)
     expect(id).toBe('sess-1')
@@ -194,6 +207,38 @@ describe('resolveSessionFromPath', () => {
       projects, mixedSessions,
     )
     expect(id).toBe('sess-r1@server')
+  })
+
+  it('prefers an exact full ID over another session slug', () => {
+    const crossCollision = [
+      makeSession({ id: 'sess-target', cwd: '/dev/gmux', adapter: 'pi' }),
+      makeSession({ id: 'sess-other', cwd: '/dev/gmux', adapter: 'pi', slug: 'sess-target' }),
+    ]
+    expect(resolveSessionFromPath(
+      { project: 'gmux', adapter: 'pi', slug: 'sess-target' }, projects, crossCollision,
+    )).toBe('sess-target')
+  })
+
+  it('does not flag equal slugs in different project route namespaces', () => {
+    const scopedProjects: ProjectItem[] = [
+      { slug: 'one', match: [{ path: '/one' }] },
+      { slug: 'two', match: [{ path: '/two' }] },
+    ]
+    const scoped = [
+      makeSession({ id: 'sess-one', cwd: '/one', adapter: 'pi', slug: 'same', project_slug: 'one' }),
+      makeSession({ id: 'sess-two', cwd: '/two', adapter: 'pi', slug: 'same', project_slug: 'two' }),
+    ]
+    expect(hasSessionSlugCollision(scoped[0], scoped, scopedProjects)).toBe(false)
+  })
+
+  it('refuses an ambiguous ID prefix', () => {
+    const unattributed = [
+      makeSession({ id: 'sess-abc11111', cwd: '/dev/gmux', adapter: 'pi' }),
+      makeSession({ id: 'sess-abc22222', cwd: '/dev/gmux', adapter: 'pi' }),
+    ]
+    expect(resolveSessionFromPath(
+      { project: 'gmux', adapter: 'pi', slug: 'sess-abc' }, projects, unattributed,
+    )).toBeNull()
   })
 
   it('resolves by ID prefix when session has no slug', () => {

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gmuxapp/gmux/cli/gmux/internal/localterm"
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -66,12 +67,44 @@ func fetchSessions() ([]cliSession, error) {
 // resolveSession fetches the session list from gmuxd and finds the one
 // the user's reference points to. See matchSession for the matching
 // rules.
+//
+// A just-launched session may not yet be visible in the composed
+// snapshot served by GET /v1/sessions (the compose loop runs
+// asynchronously after the registration commit). To close this
+// read-your-writes window, resolveSession retries a few times with
+// short backoff when the first attempt yields "no session matches".
+// The retry is bounded (≤600ms total) so interactive commands stay
+// snappy, and only fires on a clean miss — ambiguous/malformed refs
+// fail immediately.
 func resolveSession(ref string) (cliSession, error) {
-	sessions, err := fetchSessions()
-	if err != nil {
-		return cliSession{}, err
+	const (
+		maxRetries = 6
+		retryDelay = 100 * time.Millisecond
+	)
+	for attempt := 0; ; attempt++ {
+		sessions, err := fetchSessions()
+		if err != nil {
+			return cliSession{}, err
+		}
+		sess, err := matchSession(sessions, ref)
+		if err == nil {
+			return sess, nil
+		}
+		// Only retry on a clean miss ("no session matches"). Ambiguous
+		// refs, empty refs, and peer-hint misses are not transient.
+		if attempt >= maxRetries || !isNoMatchError(err) {
+			return cliSession{}, err
+		}
+		time.Sleep(retryDelay)
 	}
-	return matchSession(sessions, ref)
+}
+
+// isNoMatchError returns true when the error is the specific "no
+// session matches" sentinel from matchSession — the only case where
+// a retry can help (the session exists in the store but the composed
+// snapshot hasn't caught up yet).
+func isNoMatchError(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "no session matches")
 }
 
 // matchSession resolves a user-supplied reference to a single session.

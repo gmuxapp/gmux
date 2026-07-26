@@ -35,7 +35,7 @@ To seed a specific name at first registration — e.g. when running several daem
 
 ## Connecting to other hosts
 
-There is **no `[[peers]]` config**. Add a host you want to aggregate sessions from at runtime via **Settings → Hosts → Connect to host** (paste the connect URL from `gmux auth`, or enter the host's URL and token). A token is required for every host, tailnet or not ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)). Connected hosts are saved to `peers.json` in the state directory, and the peer's name is taken from the host itself — you don't assign one.
+There is **no `[[peers]]` config**. Add a host you want to aggregate sessions from at runtime via **Settings → Hosts → Connect to host** (paste the connect URL from `gmux auth`, or enter the host’s URL and token). A token is required for every host, tailnet or not ([ADR 0008](https://github.com/gmuxapp/gmux/blob/main/docs/adr/0008-peer-authentication-via-token.md)). Connected hosts are stored in the daemon’s SQLite database (`state.db`), and the peer’s name is taken from the host itself — you don’t assign one.
 
 ## Fields
 
@@ -77,5 +77,5 @@ This is intentional. Silent fallback to defaults is dangerous for security setti
 Three keys were **removed** (ADR 0007 / ADR 0008) and are now **ignored with a deprecation warning** (rather than failing startup), so upgrading a host that still has an old config doesn't brick the daemon. Remove them to silence the warning:
 
 - **`tailscale.hostname`** (ADR 0007) — the node name now comes from Tailscale / the OS hostname.
-- **`[[peers]]`** (ADR 0007) — manual peers are runtime state; add them via *Connect to host* (stored in `peers.json`).
+- **`[[peers]]`** (ADR 0007) — manual peers are runtime state; add them via *Connect to host* (stored in `state.db`).
 - **`discovery.tailscale`** (ADR 0008) — tailnet autodiscovery was removed; add tailnet hosts via *Connect to host*.

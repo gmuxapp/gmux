@@ -256,8 +256,26 @@ func TestParseCLI(t *testing.T) {
 
 		{name: "daemon status", args: []string{"daemon", "status"}, wantMode: modeDaemon,
 			check: func(t *testing.T, c *command) {
-				if c.daemonSub != "status" {
-					t.Errorf("daemonSub = %q", c.daemonSub)
+				if c.daemonSub != "status" || len(c.daemonArgs) != 1 || c.daemonArgs[0] != "status" {
+					t.Errorf("daemonSub = %q daemonArgs = %v", c.daemonSub, c.daemonArgs)
+				}
+			}},
+		{name: "daemon state check", args: []string{"daemon", "state", "check"}, wantMode: modeDaemon,
+			check: func(t *testing.T, c *command) {
+				if c.daemonSub != "state" || strings.Join(c.daemonArgs, " ") != "state check" {
+					t.Errorf("daemonArgs = %v", c.daemonArgs)
+				}
+			}},
+		{name: "daemon state backup with path", args: []string{"daemon", "state", "backup", "/tmp/b.db"}, wantMode: modeDaemon,
+			check: func(t *testing.T, c *command) {
+				if strings.Join(c.daemonArgs, " ") != "state backup /tmp/b.db" {
+					t.Errorf("daemonArgs = %v", c.daemonArgs)
+				}
+			}},
+		{name: "daemon state help", args: []string{"daemon", "state", "--help"}, wantMode: modeDaemon,
+			check: func(t *testing.T, c *command) {
+				if strings.Join(c.daemonArgs, " ") != "state --help" {
+					t.Errorf("daemonArgs = %v", c.daemonArgs)
 				}
 			}},
 		{name: "auth", args: []string{"auth"}, wantMode: modeAuth},
@@ -314,6 +332,8 @@ func TestParseCLIErrors(t *testing.T) {
 		{"send", "--steering", "abc", "C-c"},                   // keys-only form conflicts with submit flag too
 		{"daemon"},                                             // missing subcommand
 		{"daemon", "frobnicate"},                               // unknown subcommand
+		{"daemon", "state"},                                    // missing state subcommand
+		{"daemon", "state", "frobnicate"},                      // unknown state subcommand
 		{"ls", "stray"},                                        // ls takes no positional
 		{"edit", "a", "b"},                                     // too many files
 		{"edit", "--wait"},                                     // no flags on edit (yet)

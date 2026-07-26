@@ -480,6 +480,19 @@ describe('applySessionsSnapshot: /resume keeps the terminal mounted', () => {
     expect(navCalls).toContainEqual(['/myproject/pi/refactor-login', true])
   })
 
+  it('atomically switches the selected row to its full ID when a duplicate slug arrives', () => {
+    expect(view.value).toEqual({ kind: 'session', sessionId: 'sess-1' })
+
+    applySessionsSnapshot([
+      makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', alive: true }),
+      makeSession({ id: 'sess-dead', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', alive: false }),
+    ])
+
+    expect(urlPath.value).toBe('/myproject/pi/sess-1')
+    expect(view.value).toEqual({ kind: 'session', sessionId: 'sess-1' })
+    expect(navCalls).toContainEqual(['/myproject/pi/sess-1', true])
+  })
+
   it('leaves the URL untouched when the selected slug is unchanged', () => {
     applySessionsSnapshot([
       makeSession({ id: 'sess-1', cwd: '/dev/project', adapter: 'pi', slug: 'fix-auth', title: 'now working' }),

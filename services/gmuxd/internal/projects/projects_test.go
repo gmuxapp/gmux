@@ -108,36 +108,7 @@ func TestLoadDropsInvalidItems(t *testing.T) {
 	}
 }
 
-func TestLoadMigrationBackupNotClobberedByRepair(t *testing.T) {
-	// When a legacy file both needs migration and contains an invalid
-	// item, projects.json.bak must hold the original pre-migration
-	// bytes, not the migrated form: the backup exists so the user can
-	// roll back the schema upgrade.
-	dir := t.TempDir()
-	raw := []byte(`{"items": [
-		{"slug": "good", "paths": ["/home/user/good"]},
-		{"slug": "broken"}
-	]}`)
-	if err := os.WriteFile(filepath.Join(dir, fileName), raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
 
-	s, err := Load(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(s.Items) != 1 || s.Items[0].Slug != "good" {
-		t.Fatalf("items = %+v", s.Items)
-	}
-
-	bak, err := os.ReadFile(filepath.Join(dir, fileName+".bak"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(bak) != string(raw) {
-		t.Errorf("backup = %s, want original pre-migration bytes", bak)
-	}
-}
 
 func TestSaveCreatesNestedDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "state", "gmux")

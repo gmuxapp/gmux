@@ -361,3 +361,37 @@ func TestStripANSI(t *testing.T) {
 		})
 	}
 }
+
+func TestIsNoMatchError(t *testing.T) {
+	// The specific "no session matches" error from matchSession is retryable.
+	sessions := []cliSession{{ID: "sess-abcd1234"}}
+	_, err := matchSession(sessions, "zzzz")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !isNoMatchError(err) {
+		t.Errorf("expected isNoMatchError=true for %q", err)
+	}
+
+	// Ambiguous errors are NOT retryable.
+	sessions = []cliSession{
+		{ID: "sess-abcd1234"},
+		{ID: "sess-abcd5678"},
+	}
+	_, err = matchSession(sessions, "abcd")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if isNoMatchError(err) {
+		t.Errorf("ambiguous error should not be retryable: %q", err)
+	}
+
+	// Empty ref errors are NOT retryable.
+	_, err = matchSession(nil, "")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if isNoMatchError(err) {
+		t.Errorf("empty ref error should not be retryable: %q", err)
+	}
+}

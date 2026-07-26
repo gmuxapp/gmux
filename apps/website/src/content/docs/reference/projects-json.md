@@ -1,13 +1,11 @@
 ---
-title: projects.json
-description: Reference for ~/.local/state/gmux/projects.json — project definitions and match rules.
+title: Project model
+description: Reference for project definitions, match rules, and the REST API.
 tableOfContents:
   maxHeadingLevel: 3
 ---
 
-`~/.local/state/gmux/projects.json` (or `$XDG_STATE_HOME/gmux/projects.json`)
-
-Projects control which sessions appear in the sidebar and how they're grouped. gmuxd reads and writes this file. You can also edit it directly — gmuxd re-reads the file on every access, so manual edits take effect immediately (open UIs won't refresh until the next change made through gmux, and a daemon-side mutation racing your edit will overwrite it). **Settings → Projects** is the primary editing interface. gmuxd seeds a default `home` project when the file is empty or missing.
+Projects control which sessions appear in the sidebar and how they’re grouped. They are stored in the daemon’s SQLite database (`state.db`, ADR 0026) and managed via **Settings → Projects** or the REST API (`GET /v1/projects`, `PUT /v1/projects`, `POST /v1/projects/add`). gmuxd seeds a default `home` project when no projects exist.
 
 ## Example
 
@@ -47,7 +45,7 @@ Projects control which sessions appear in the sidebar and how they're grouped. g
 
 ## Item fields
 
-An item is either an **owned project** (`slug` + `match`, optionally `sessions`) or a **peer reference** (`slug` + `peer`, optionally `node_id`). References carry no `match` or `sessions` — the peer's own `projects.json` is the source of truth.
+An item is either an **owned project** (`slug` + `match`, optionally `sessions`) or a **peer reference** (`slug` + `peer`, optionally `node_id`). References carry no `match` or `sessions` — the peer’s own project store is the source of truth.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -99,9 +97,9 @@ This matches sessions started from `$HOME` itself, but not `~/dev/gmux` or any o
 
 ## Peer references
 
-Match rules are local to the host that owns the project. Another host's project is pinned into your sidebar as a **reference item** (`{ "slug": …, "peer": …, "node_id": … }`); its match rules and session order live in that peer's own `projects.json`. See [Multi-machine](/multi-machine/) for how references resolve and recover.
+Match rules are local to the host that owns the project. Another host’s project is pinned into your sidebar as a **reference item** (`{ "slug": …, "peer": …, "node_id": … }`); its match rules and session order live in that peer’s own project store. See [Multi-machine](/multi-machine/) for how references resolve and recover.
 
-The pre-2.0 `hosts` match-rule field is gone: it decodes silently for compatibility and is dropped the next time the file is saved. Host scoping is now implicit in ownership — each project is owned by exactly one host, and other hosts see it via a reference.
+The pre-2.0 `hosts` match-rule field is gone. Host scoping is now implicit in ownership — each project is owned by exactly one host, and other hosts see it via a reference.
 
 ## Match precedence
 
@@ -141,7 +139,7 @@ The remote catches sessions in any clone on any machine. The path catches sessio
 
 ## Validation
 
-gmuxd validates the file on load. A file that can't be parsed as JSON is a hard error, but individual items that fail the rules below are **dropped** on load (each logged) rather than rejecting the whole file — one hand-edited bad entry can't poison the roster and block every later mutation. The original bytes are snapshotted to `projects.json.bak` before the sanitized form is written back on the next save. Rules:
+gmuxd validates projects on every mutation. Individual items that fail the rules below are **dropped** (each logged) rather than rejecting the whole operation — one bad entry can’t poison the roster and block every later mutation. Rules:
 
 - Every item must have a non-empty `slug` matching `^[a-z0-9]+(-[a-z0-9]+)*$`
 - No duplicate slugs among owned projects; no duplicate `peer`+`slug` pairs among references (an owned project and a peer reference may share a slug)
@@ -151,8 +149,4 @@ gmuxd validates the file on load. A file that can't be parsed as JSON is a hard 
 - `exact` is only valid on path rules
 - No duplicate normalized paths across items (nesting is allowed)
 
-All API mutations are validated the same way, but here the whole mutation is rejected (4xx) and nothing is written — the drop-invalid-items repair applies only to what's already on disk at load time.
-
-## Migration
-
-Older projects.json files are migrated automatically on load: unversioned files' `remote`/`paths` fields become `match` rules (paths canonicalized to `~/...` form), and version-2 files pass through with the removed `hosts` field dropped. Before any schema upgrade rewrites the file, the pre-migration bytes are snapshotted to `projects.json.bak`. The migrated version is written back on the next save.
+API mutations that violate these rules are rejected (4xx) and nothing is written.

@@ -370,11 +370,20 @@ func queryMeta(socketPath string) (*store.Session, error) {
 // to SIGTERM its child process. The runner's normal exit lifecycle
 // handles the rest.
 func KillSession(socketPath string) error {
-	resp, err := runnerRequest(context.Background(), socketPath, http.MethodPost, "/kill", nil)
+	return KillSessionContext(context.Background(), socketPath)
+}
+
+// KillSessionContext is the cancellation-aware production runner control
+// transport. Endpoint mapping is deliberately fixed to POST /kill.
+func KillSessionContext(ctx context.Context, socketPath string) error {
+	resp, err := runnerRequest(ctx, socketPath, http.MethodPost, "/kill", nil)
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("runner /kill: %s", resp.Status)
+	}
 	return nil
 }
 
