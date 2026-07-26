@@ -979,6 +979,16 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 	}
 	if peerManager != nil && action != "" {
 		if peer, originalID := peerManager.FindPeer(sessionID); peer != nil {
+			// Semantic agent actions are local-only in this slice (ADR 0027).
+			// Refusing is not a limitation to paper over: forwarding would run
+			// an agent on another host under a contract (readiness, admission,
+			// transparent resume) that has not been validated across the peer
+			// boundary, and silently doing it is worse than saying no.
+			if agentAction(action) {
+				writeError(w, http.StatusBadRequest, codeLocalOnly, fmt.Sprintf(
+					"%s is only available for sessions owned by this host; run gmux on the owning host", action))
+				return
+			}
 			if action == "attach" {
 				writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"transport": "websocket", "ws_path": "/ws/" + sessionID}})
 				return
@@ -1165,6 +1175,10 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
 	case "wait":
 		handleWaitCentral(w, r, boot, fanout, sessionID, sessionDirs.SessionDir)
+	case "prompt":
+		handleAgentPromptCentral(w, r, productionAgentDeps(boot, gmuxBin), sessionID)
+	case "cancel":
+		handleAgentCancelCentral(w, r, productionAgentDeps(boot, gmuxBin), sessionID)
 	default:
 		http.NotFound(w, r)
 	}

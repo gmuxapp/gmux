@@ -99,6 +99,8 @@ Served by `gmuxd` on a Unix socket (local IPC) and a TCP listener (default `127.
 | `POST /v1/sessions/{id}/dismiss` | Kill + remove |
 | `POST /v1/sessions/{id}/resume` | Resume a resumable session |
 | `POST /v1/sessions/{id}/{input,read,scrollback,wait,...}` | Other session actions (input injection, tail, wait-for-idle, …) |
+| `POST /v1/sessions/{id}/prompt` | Semantic agent prompt: mode `prompt`/`follow_up`/`steer`, transparent resume, admission + fused wait (ADR 0027; local sessions only) |
+| `POST /v1/sessions/{id}/cancel` | Semantic agent interrupt; live active session only, never resumes (ADR 0027) |
 | `GET /v1/conversations/{adapter}/{slug}` | Conversation lookup for resume |
 | `POST /v1/peers` / `DELETE /v1/peers/{name}` | Add / remove a peer host |
 | `POST /v1/register` / `POST /v1/deregister` | Runner registration fast path |
