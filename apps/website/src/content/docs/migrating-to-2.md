@@ -134,7 +134,7 @@ Cookie-authenticated mutations and WebSocket upgrades are now rejected cross-ori
 
 - **Renames:** `SessionFiler` → `ConversationFiler`, `ParseSessionFile` → `ParseConversationFile`, `SessionFileInfo` → `ConversationInfo`, `SessionRootDir`/`SessionDir` → `ConversationRootDir`/`ConversationDir`; internal `Kind` → `Adapter`.
 - **Removed capabilities:** `FileMonitor`, `FileAttributor`, `SessionFileLister`. Daemon-side file attribution and live tailing were replaced by runner-owned agent hooks (`SessionExtender` / `SessionHookCommand` + `POST /hook/event`) and adapter-owned `ConversationSource`s. There is no metadata-matching fallback: an unhookable tool runs without daemon-reported live state.
-- **`Status.label` removed:** `Status` is only `{working, error}` booleans. Scripts that `PUT /status` with a `label` should drop it — display text is derived in the frontend.
+- **`Status.label` removed:** `Status` is only `{active, error, interrupted}` booleans. Scripts that `PUT /status` with a `label` should drop it — display text is derived in the frontend.
 - **Runner endpoints removed:** `GET /scrollback/text` and `GET /scrollback/tail` are gone from the runner socket. Use `gmux tail <id>` or gmuxd's `GET /v1/sessions/<id>/scrollback?tail=N` (works for dead sessions too).
 - **New surface:** `GMUX_SESSION_SOCK` env var, `POST /hook/event` hook protocol (`docs/runner-hook-protocol.md`), `GMUX_NO_AGENT_HOOK` opt-out, `ConversationProber`, `PassthroughDetector`, `SessionRegistrar`/`SessionFinalizer`.
 

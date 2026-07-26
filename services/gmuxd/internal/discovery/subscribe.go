@@ -255,7 +255,7 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 					// so writing through the shared *Status would also
 					// rewrite the store's previous snapshot and defeat its
 					// no-op change detection.
-					sess.Status = &store.Status{Working: sess.Status.Working}
+					sess.Status = &store.Status{Active: sess.Status.Active, Interrupted: sess.Status.Interrupted}
 				}
 			}
 			// A slug key is only ever present on a deliberate SetSlug (the
@@ -298,7 +298,7 @@ func (sub *Subscriptions) handleEvent(sessionID, socketPath, eventType string, d
 		// turn (one-shot completed, shell exited at its prompt, agent
 		// exited after its turn), "died" for an open one (mid-command /
 		// mid-turn crash). See terminalReason. The frontend keys its
-		// working/error dots on Alive and derives "exited (N)" from
+		// active/error dots on Alive and derives "exited (N)" from
 		// exit_code, so a persisted Status doesn't disturb it.
 		if !sub.store.Update(sessionID, func(current *store.Session) {
 			*current = sess

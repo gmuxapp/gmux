@@ -3,8 +3,9 @@ import { z } from 'zod'
 // Schema v2 — matches gmuxd's API response (GET /v1/sessions, session-upsert SSE)
 
 export const SessionStatusSchema = z.object({
-  working: z.boolean(),
+  active: z.boolean(),
   error: z.boolean().optional().default(false),
+  interrupted: z.boolean().optional().default(false),
 }).nullable()
 
 export const SessionSchema = z.object({
@@ -39,7 +40,7 @@ export const SessionSchema = z.object({
   // output (read -> unread). Set by the owning daemon; the UI uses it
   // as the activity-feed sort key so sessions float up when the agent
   // (or shell/editor) produces something you haven't looked at.
-  // Deliberately NOT bumped by your own input (working on) or by exit/
+  // Deliberately NOT bumped by your own input (going active) or by exit/
   // error. Brand-new sessions arrive unset; the first unread transition
   // stamps it. A future last_input_at could track the user side. See
   // the store.Session docstring on LastOutputAt for the exact bump set.

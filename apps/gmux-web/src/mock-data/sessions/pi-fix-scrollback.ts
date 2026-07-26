@@ -22,7 +22,7 @@ export default {
   exited_at: null,
   title: 'fix scrollback',
   subtitle: '',
-  status: { working: false },
+  status: { active: false },
   unread: false,
   project_slug: 'my-project',
   last_output_at: ago(24),

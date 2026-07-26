@@ -231,7 +231,7 @@ func TestSessionEventIsAuthoritative(t *testing.T) {
 }
 
 // TestTurnEventDrivesState checks the extension turn path: a "turn" start goes
-// working, and a "turn" end with outcome "completed" goes idle + unread and
+// active, and a "turn" end with outcome "completed" goes idle + unread and
 // applies the title — no file parsing. The outcome→state policy lives in the
 // runner (applyTurnEnd), so this is also its mapping test.
 func TestTurnEventDrivesState(t *testing.T) {
@@ -268,10 +268,10 @@ func TestTurnEventDrivesState(t *testing.T) {
 
 	post(`{"op":"turn","phase":"start"}`)
 	deadline := time.After(2 * time.Second)
-	for s := st.StatusSnapshot(); s == nil || !s.Working; s = st.StatusSnapshot() {
+	for s := st.StatusSnapshot(); s == nil || !s.Active; s = st.StatusSnapshot() {
 		select {
 		case <-deadline:
-			t.Fatalf("status never went working; got %+v", st.StatusSnapshot())
+			t.Fatalf("status never went active; got %+v", st.StatusSnapshot())
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
@@ -280,7 +280,7 @@ func TestTurnEventDrivesState(t *testing.T) {
 	deadline = time.After(2 * time.Second)
 	for {
 		s := st.StatusSnapshot()
-		if s != nil && !s.Working && st.Title() == "my chat" && st.UnreadSnapshot() {
+		if s != nil && !s.Active && st.Title() == "my chat" && st.UnreadSnapshot() {
 			break
 		}
 		select {
@@ -455,20 +455,22 @@ func TestSessionSlugFromExplicitSourceOnly(t *testing.T) {
 // TestApplyTurnEnd pins the outcome→sidebar-state policy directly (no node).
 func TestApplyTurnEnd(t *testing.T) {
 	cases := []struct {
-		outcome    string
-		wantUnread bool
-		wantError  bool
+		outcome         string
+		wantUnread      bool
+		wantError       bool
+		wantInterrupted bool
 	}{
-		{"completed", true, false},
-		{"aborted", false, false},
-		{"error", false, true},
+		{"completed", true, false, false},
+		{"interrupted", false, false, true},
+		{"error", false, true, false},
 	}
 	for _, tc := range cases {
 		st := session.New(session.Config{ID: "s1", Adapter: "pi"})
 		srv := &Server{state: st}
+		st.SetStatus(&adapter.Status{Active: true}) // open the turn first
 		srv.applyTurnEnd(tc.outcome, "")
 		status := st.StatusSnapshot()
-		if status == nil || status.Working {
+		if status == nil || status.Active {
 			t.Errorf("%s: expected idle, got %+v", tc.outcome, status)
 		}
 		if st.UnreadSnapshot() != tc.wantUnread {
@@ -477,6 +479,35 @@ func TestApplyTurnEnd(t *testing.T) {
 		if status != nil && status.Error != tc.wantError {
 			t.Errorf("%s: error=%v want %v", tc.outcome, status.Error, tc.wantError)
 		}
+		if status != nil && status.Interrupted != tc.wantInterrupted {
+			t.Errorf("%s: interrupted=%v want %v", tc.outcome, status.Interrupted, tc.wantInterrupted)
+		}
+	}
+}
+
+// TestTurnStartClearsInterruption pins that a new turn wipes the previous
+// turn's terminal facts: an interrupted turn must not leave a stale
+// "interrupted" (or error) on the session once the agent starts working
+// again. SetStatus replaces the status wholesale, so this is a property of
+// the runner's turn policy, not of a per-field merge.
+func TestTurnStartClearsInterruption(t *testing.T) {
+	st := session.New(session.Config{ID: "s1", Adapter: "pi"})
+	srv := &Server{state: st}
+	st.SetStatus(&adapter.Status{Active: true})
+	srv.applyTurnEnd("interrupted", "")
+	if s := st.StatusSnapshot(); s == nil || !s.Interrupted {
+		t.Fatalf("status = %+v, want interrupted after an intentional stop", s)
+	}
+	st.SetStatus(&adapter.Status{Active: true}) // op "turn" phase start
+	if s := st.StatusSnapshot(); s == nil || !s.Active || s.Interrupted || s.Error {
+		t.Fatalf("status = %+v, want a clean active turn", s)
+	}
+	srv.applyTurnEnd("completed", "")
+	if s := st.StatusSnapshot(); s == nil || s.Active || s.Interrupted || s.Error {
+		t.Fatalf("status = %+v, want completion to clear interruption", s)
+	}
+	if !st.UnreadSnapshot() {
+		t.Error("completed turn must set unread")
 	}
 }
 
@@ -484,7 +515,7 @@ func TestApplyTurnEnd(t *testing.T) {
 // subscriber is replayed the current Status snapshot. Status emitted
 // before the daemon subscribed would otherwise be invisible until the
 // next transition — which for the default turn model's launch-time
-// Working=true (one transition per lifetime) means never: the daemon
+// Active=true (one transition per lifetime) means never: the daemon
 // would see every one-shot as stateless until it exited.
 func TestReconnectReplaysStatus(t *testing.T) {
 	dir := t.TempDir()
@@ -507,7 +538,7 @@ func TestReconnectReplaysStatus(t *testing.T) {
 	// Status set BEFORE anyone subscribes — as run.go does at launch.
 	// No other writer exists in this test, so the only way a subscriber
 	// can learn it is the replay.
-	st.SetStatus(&adapter.Status{Working: true})
+	st.SetStatus(&adapter.Status{Active: true})
 
 	client := &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -531,7 +562,7 @@ func TestReconnectReplaysStatus(t *testing.T) {
 			sawStatusEvent = true
 			continue
 		}
-		if sawStatusEvent && strings.Contains(line, `"working":true`) {
+		if sawStatusEvent && strings.Contains(line, `"active":true`) {
 			return // success: status snapshot replayed on subscribe
 		}
 	}

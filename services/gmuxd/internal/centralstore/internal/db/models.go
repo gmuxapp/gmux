@@ -27,9 +27,11 @@ type LocalSession struct {
 	ShellTitle       sql.NullString
 	AdapterTitle     sql.NullString
 	Subtitle         sql.NullString
-	Working          int64
+	Active           int64
+	Interrupted      int64
 	Unread           int64
 	HasError         int64
+	StatusReported   int64
 	CreatedAtMs      int64
 	StartedAtMs      sql.NullInt64
 	ExitedAtMs       sql.NullInt64
@@ -40,7 +42,6 @@ type LocalSession struct {
 	TerminalRows     sql.NullInt64
 	LaunchParentID   sql.NullString
 	PromotedToRoot   int64
-	StatusReported   int64
 }
 
 type ManualPeer struct {
@@ -60,9 +61,9 @@ type ProjectEntry struct {
 	EntryKind    string
 	Slug         string
 	PeerKey      sql.NullString
+	NodeID       sql.NullString
 	CreatedAtMs  int64
 	UpdatedAtMs  int64
-	NodeID       sql.NullString
 }
 
 type ProjectMatchRule struct {

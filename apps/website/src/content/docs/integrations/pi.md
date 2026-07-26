@@ -9,7 +9,7 @@ gmux has built-in support for [pi](https://github.com/mariozechner/pi-coding-age
 
 ### Live status
 
-The sidebar shows when pi is actively working. gmux loads a small extension into pi at launch which reports each turn boundary, so the agent shows as **working** (pulsing cyan dot) while it is processing and clears when the turn completes — no PTY scraping or log parsing.
+The sidebar shows when pi is actively working. gmux loads a small extension into pi at launch which reports each turn boundary, so the agent shows as **active** (pulsing cyan dot) while it is processing and clears when the turn completes — no PTY scraping or log parsing.
 
 ### Session titles from conversations
 
@@ -79,10 +79,10 @@ When gmux owns the launch, it injects the gmux session extension into pi (`pi -e
 
 The extension reports each turn with a normalized, agent-agnostic outcome; gmux maps it to the sidebar:
 
-- **turn start** → working (pulsing cyan dot)
+- **turn start** → active (pulsing cyan dot)
 - **completed** → idle, marked unread
-- **aborted** (you pressed Esc) → idle
-- **error** (pi exhausted its auto-retries) → red dot; clears when you view the session or send a new message
+- **interrupted** (pi's `aborted` stop reason — you pressed Esc) → idle, recorded as an intentional stop: no "finished" notification, and a synchronous wait reports the stop rather than a completion
+- **error** (pi exhausted its auto-retries, or the turn was cut off by a length/tool-use limit) → red dot; clears when you view the session or send a new message
 
 ### Disabling the extension
 

@@ -30,7 +30,7 @@ export default {
   exited_at: null,
   title: "refactor adapters",
   subtitle: "",
-  status: { working: true },
+  status: { active: true },
   unread: false,
   project_slug: 'my-project',
   last_output_at: ago(0),

@@ -67,13 +67,13 @@ func (e *testEnv) addClient(id, deviceType string) {
 }
 
 // upsertSession creates or updates a session in the store.
-func (e *testEnv) upsertSession(id string, working, unread, alive bool) {
-	var status *store.Status
-	if working {
-		status = &store.Status{Working: true}
-	} else {
-		status = &store.Status{Working: false}
-	}
+func (e *testEnv) upsertSession(id string, active, unread, alive bool) {
+	e.upsertStatus(id, &store.Status{Active: active}, unread, alive)
+}
+
+// upsertStatus is upsertSession with an explicit status object, for the
+// orthogonal Error/Interrupted facts.
+func (e *testEnv) upsertStatus(id string, status *store.Status, unread, alive bool) {
 	e.store.Upsert(store.Session{
 		ID:        id,
 		Title:     "test-" + id,
@@ -84,7 +84,7 @@ func (e *testEnv) upsertSession(id string, working, unread, alive bool) {
 	})
 }
 
-func TestTransition_WorkingToIdle_SchedulesNotification(t *testing.T) {
+func TestTransition_ActiveToIdle_SchedulesNotification(t *testing.T) {
 	env := newTestEnv(t)
 	env.addClient("c1", "desktop")
 	// Client is not focused → notifications should fire.
@@ -93,7 +93,7 @@ func TestTransition_WorkingToIdle_SchedulesNotification(t *testing.T) {
 		LastInteraction: nowSecs(),
 	})
 
-	// Seed session as working.
+	// Seed session as active.
 	env.upsertSession("s1", true, false, true)
 	time.Sleep(20 * time.Millisecond) // let router process
 
@@ -106,7 +106,41 @@ func TestTransition_WorkingToIdle_SchedulesNotification(t *testing.T) {
 	env.router.mu.Unlock()
 
 	if !hasPending {
-		t.Fatal("expected a pending notification for s1 after working→idle transition")
+		t.Fatal("expected a pending notification for s1 after active→idle transition")
+	}
+}
+
+// An intentional stop is not a completion (ADR 0027): the user ended the turn
+// themselves, so the active→inactive edge must not raise a "finished"
+// notification. An ordinary completion on the same router still does.
+func TestTransition_ActiveToInterrupted_SuppressesFinishedNotification(t *testing.T) {
+	env := newTestEnv(t)
+	env.addClient("c1", "desktop")
+	env.presence.Update("c1", presence.ClientState{Focused: false, LastInteraction: nowSecs()})
+
+	env.upsertStatus("s1", &store.Status{Active: true}, false, true)
+	time.Sleep(20 * time.Millisecond)
+	env.upsertStatus("s1", &store.Status{Interrupted: true}, false, true)
+	time.Sleep(20 * time.Millisecond)
+
+	env.router.mu.Lock()
+	_, hasPending := env.router.pending["s1"]
+	env.router.mu.Unlock()
+	if hasPending {
+		t.Fatal("interrupted turn must not schedule a finished notification")
+	}
+
+	// Control: a second, ordinary turn on the same session still notifies.
+	env.upsertStatus("s1", &store.Status{Active: true}, false, true)
+	time.Sleep(20 * time.Millisecond)
+	env.upsertStatus("s1", &store.Status{Active: false}, false, true)
+	time.Sleep(20 * time.Millisecond)
+
+	env.router.mu.Lock()
+	_, hasPending = env.router.pending["s1"]
+	env.router.mu.Unlock()
+	if !hasPending {
+		t.Fatal("a completed turn after an interrupted one must still notify")
 	}
 }
 
@@ -305,7 +339,7 @@ func TestFinishedPreferredOverUnread(t *testing.T) {
 		LastInteraction: nowSecs(),
 	})
 
-	// Start working.
+	// Start active.
 	env.upsertSession("s1", true, false, true)
 	time.Sleep(20 * time.Millisecond)
 

@@ -155,7 +155,7 @@ func TestServeCentralWaitsForConvergenceBeforeListenersAndServesSQLiteState(t *t
 		"cwd":            home,
 		"command":        []string{"/bin/sh"},
 		"remotes":        map[string]string{},
-		"status":         map[string]any{"working": true},
+		"status":         map[string]any{"active": true},
 	})
 	defer runner.Close()
 

@@ -135,14 +135,16 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 	switch typ {
 	case "status":
 		var v struct {
-			Working bool `json:"working"`
-			Error   bool `json:"error"`
+			Active      bool `json:"active"`
+			Error       bool `json:"error"`
+			Interrupted bool `json:"interrupted"`
 		}
 		if json.Unmarshal(raw, &v) != nil {
 			return sessioncoord.RunnerEvent{}, false
 		}
-		f.Working = &v.Working
+		f.Active = &v.Active
 		f.Error = &v.Error
+		f.Interrupted = &v.Interrupted
 	case "meta":
 		// Field tags are load-bearing: the runner emits snake_case keys, and
 		// Go's case-insensitive fallback does NOT bridge snake_case to camel
@@ -258,8 +260,9 @@ type runnerMetaWire struct {
 	Command         []string          `json:"command"`
 	Remotes         map[string]string `json:"remotes"`
 	Status          *struct {
-		Working bool `json:"working"`
-		Error   bool `json:"error"`
+		Active      bool `json:"active"`
+		Error       bool `json:"error"`
+		Interrupted bool `json:"interrupted"`
 	} `json:"status"`
 	Unread       bool   `json:"unread"`
 	TerminalCols uint16 `json:"terminal_cols"`
@@ -269,8 +272,9 @@ type runnerMetaWire struct {
 func runnerMetaFacts(s runnerMetaWire) centralstore.RunnerFacts {
 	f := centralstore.RunnerFacts{ConversationRef: &s.ConversationRef, CWD: &s.CWD, WorkspaceRoot: &s.WorkspaceRoot, Slug: &s.Slug, ShellTitle: &s.ShellTitle, AdapterTitle: &s.AdapterTitle, Subtitle: &s.Subtitle, Command: &s.Command, Remotes: &s.Remotes}
 	if s.Status != nil {
-		f.Working = &s.Status.Working
+		f.Active = &s.Status.Active
 		f.Error = &s.Status.Error
+		f.Interrupted = &s.Status.Interrupted
 	}
 	f.Unread = &s.Unread
 	// started_at is the runner's SetRunning stamp — the persisted "this session

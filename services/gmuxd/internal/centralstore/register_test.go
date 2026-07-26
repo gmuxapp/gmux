@@ -51,12 +51,12 @@ func TestRegisterRunnerNewLiveAndFastDead(t *testing.T) {
 	s := openKernelStore(t)
 	cat := registrationCatalog(t, s)
 	live := registration("live", "shell", "/one/src", true, 10)
-	live.Facts.Working = ptr(true)
+	live.Facts.Active = ptr(true)
 	got, result, err := s.RegisterRunner(ctx, live)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Version != 1 || got.CreatedAt != 10 || got.ExitedAt != nil || !got.Working || !result.Changed || !result.SessionsDirty || !result.WorldDirty {
+	if got.Version != 1 || got.CreatedAt != 10 || got.ExitedAt != nil || !got.Active || !result.Changed || !result.SessionsDirty || !result.WorldDirty {
 		t.Fatalf("live=%#v result=%#v", got, result)
 	}
 	if p := localPlacement(t, s, "live"); p == nil || p.project != int64(cat[0].ID) || p.pos != 0 {
@@ -64,7 +64,7 @@ func TestRegisterRunnerNewLiveAndFastDead(t *testing.T) {
 	}
 
 	dead := registration("dead", "shell", "/one", false, 20)
-	dead.Facts.Working = ptr(false)
+	dead.Facts.Active = ptr(false)
 	dead.Facts.Unread = ptr(true)
 	dead.Facts.Error = ptr(true)
 	dead.Facts.ExitedAt = NullablePatch[UnixMillis]{Set: ptr(UnixMillis(21))}
@@ -159,18 +159,18 @@ func TestRegisterRunnerTriStateFactsAndActivityTransitions(t *testing.T) {
 	}
 
 	empty := ""
-	working, unread, hasError := true, true, true
+	active, unread, hasError := true, true, true
 	clear := registration("facts", "shell", "/ignored", true, 10)
 	clear.Facts = RunnerFacts{
 		ConversationRef: &empty, WorkspaceRoot: &empty, Slug: &empty, ShellTitle: &empty, AdapterTitle: &empty, Subtitle: &empty,
-		Working: &working, Unread: &unread, Error: &hasError,
+		Active: &active, Unread: &unread, Error: &hasError,
 		StartedAt: NullablePatch[UnixMillis]{Clear: true}, TerminalSize: NullablePatch[TerminalSize]{Clear: true},
 	}
 	got, result, err := s.RegisterRunner(ctx, clear)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ConversationRef != "" || got.WorkspaceRoot != "" || got.Slug != "" || got.StartedAt != nil || got.ExitedAt != nil || got.ExitCode != nil || got.TerminalCols != nil || !got.Working || !got.Unread || !got.Error {
+	if got.ConversationRef != "" || got.WorkspaceRoot != "" || got.Slug != "" || got.StartedAt != nil || got.ExitedAt != nil || got.ExitCode != nil || got.TerminalCols != nil || !got.Active || !got.Unread || !got.Error {
 		t.Fatalf("tri-state merge=%#v", got)
 	}
 	if got.LastActivityAt == nil || *got.LastActivityAt != 10 || result.SessionVersion != 2 {
@@ -182,7 +182,7 @@ func TestRegisterRunnerTriStateFactsAndActivityTransitions(t *testing.T) {
 	// synthesize a lifecycle transition.
 	f := false
 	fall := registration("facts", "shell", "/ignored", true, 5)
-	fall.Facts = RunnerFacts{Working: &f, Unread: &f, Error: &f}
+	fall.Facts = RunnerFacts{Active: &f, Unread: &f, Error: &f}
 	got, _, err = s.RegisterRunner(ctx, fall)
 	if err != nil || got.LastActivityAt == nil || *got.LastActivityAt != 10 {
 		t.Fatalf("fall=%#v err=%v", got, err)
@@ -351,14 +351,14 @@ func TestRegisterRunnerGenerationProvenance(t *testing.T) {
 		s := openKernelStore(t)
 		registrationCatalog(t, s)
 		live := registration("reset", "shell", "/one", true, 1)
-		live.Facts.Working = ptr(true)
+		live.Facts.Active = ptr(true)
 		live.Facts.Error = ptr(true)
 		live.Facts.Unread = ptr(true)
 		live.Facts.StartedAt = NullablePatch[UnixMillis]{Set: ptr(UnixMillis(1))}
 		if _, _, err := s.RegisterRunner(ctx, live); err != nil {
 			t.Fatal(err)
 		}
-		// Prior generation dies mid-turn: working/started_at/error stay set.
+		// Prior generation dies mid-turn: active/started_at/error stay set.
 		dead := registration("reset", "shell", "/ignored", false, 5)
 		dead.Facts = RunnerFacts{ExitedAt: NullablePatch[UnixMillis]{Set: ptr(UnixMillis(5))}}
 		if _, _, err := s.RegisterRunner(ctx, dead); err != nil {
@@ -372,7 +372,7 @@ func TestRegisterRunnerGenerationProvenance(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Working || got.Error || got.StartedAt != nil {
+		if got.Active || got.Error || got.StartedAt != nil {
 			t.Fatalf("generation-scoped facts leaked into replacement: %#v", got)
 		}
 		if !got.Unread {

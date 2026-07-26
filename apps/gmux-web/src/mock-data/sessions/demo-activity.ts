@@ -21,7 +21,7 @@ function demo(over: Partial<MockSession> & Pick<MockSession, 'id' | 'title'>): M
     started_at: ago(120),
     exited_at: null,
     subtitle: '',
-    status: { working: false },
+    status: { active: false },
     unread: false,
     socket_path: '/tmp/gmux-sessions/mock.sock',
     peer: 'laptop',
@@ -44,7 +44,7 @@ export const DEMO_ACTIVITY: MockSession[] = [
   }),
   demo({
     id: 'sess-demo-working', title: 'migrate settings schema',
-    status: { working: true }, last_output_at: ago(1), mockActive: true,
+    status: { active: true }, last_output_at: ago(1), mockActive: true,
   }),
   demo({
     id: 'sess-demo-idle-recent', title: 'spike: webgl renderer',

@@ -362,7 +362,9 @@ export const peerStatusByName = computed<ReadonlyMap<string, string>>(() => {
 /**
  * Single source of truth for the visual dot state of a session, used
  * by both the sidebar row and the wide dashboard row. Encodes the
- * precedence: error > working > unread > recent terminal activity.
+ * precedence: error > active > unread > recent terminal activity.
+ * The 'working' DotState token is UI/CSS vocabulary for the active dot;
+ * the session fact behind it is `status.active`.
  * Selection-aware muting ("unread is suppressed when you're already
  * viewing the session") lives at the call site, not here.
  */
@@ -371,7 +373,7 @@ export function sessionDotState(
   am: ReadonlyMap<string, 'active' | 'fading'>,
 ): DotState {
   if (session.alive && session.status?.error)   return 'error'
-  if (session.alive && session.status?.working) return 'working'
+  if (session.alive && session.status?.active) return 'working'
   if (session.unread)                            return 'unread'
   const act = am.get(session.id)
   if (act === 'active') return 'active'
@@ -789,7 +791,7 @@ export const backgroundActivity = computed((): DotState => {
   const am = activityMap.value
   const others = sessions.value.filter(s => s.id !== sel && s.alive)
   if (others.some(s => s.status?.error))          return 'error'
-  if (others.some(s => s.status?.working))        return 'working'
+  if (others.some(s => s.status?.active))        return 'working'
   if (others.some(s => s.unread))                 return 'unread'
   if (others.some(s => am.get(s.id) === 'active')) return 'active'
   if (others.some(s => am.get(s.id) === 'fading')) return 'fading'

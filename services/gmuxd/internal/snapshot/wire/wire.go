@@ -34,8 +34,9 @@ import (
 // status_reported fact preserves the distinction gmux wait's died/idle
 // verdict depends on (ADR 0023; review fable M-1).
 type Status struct {
-	Working bool `json:"working"`
-	Error   bool `json:"error,omitempty"`
+	Active      bool `json:"active"`
+	Error       bool `json:"error,omitempty"`
+	Interrupted bool `json:"interrupted,omitempty"`
 }
 
 // Session is the exact ADR 0001 session wire shape — field-for-field the

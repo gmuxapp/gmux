@@ -29,7 +29,7 @@ Two paths: the runner's `GET /meta` endpoint (polled by discovery) and its SSE `
 
 | Event | Fields |
 |-------|--------|
-| `status` | `working`, `error` |
+| `status` | `active`, `error`, `interrupted` |
 | `meta` | `shell_title`, `adapter_title`, `subtitle`, `unread`, `slug` |
 | `exit` | `exit_code` |
 | `conversation_file` | `path` (legacy name `session_file` accepted until v2.1) |
@@ -113,7 +113,7 @@ Internal fields are inputs to derived fields. The API only exposes the derived o
 | `exit_code` | number? | Exit code when dead |
 | `started_at` | ISO 8601 | When the process was started |
 | `exited_at` | ISO 8601? | When the process exited |
-| `last_activity_at` | ISO 8601? | Stamped by the owning daemon on noteworthy transitions (exit, unread on, working on, error on). Powers the home screen's recency buckets. |
+| `last_activity_at` | ISO 8601? | Stamped by the owning daemon on noteworthy transitions (exit, unread on, active on, error on). Powers the home screen's recency buckets. |
 
 ### Resume & conversations
 
@@ -160,16 +160,18 @@ Status is **null by default** and should only be set when it carries meaningful 
 
 ```typescript
 interface Status {
-  working: boolean // Pulsing dot animation.
-  error?: boolean  // Red dot, treated as enhanced unread.
+  active: boolean       // Pulsing dot animation: a turn is open.
+  error?: boolean       // Red dot, treated as enhanced unread.
+  interrupted?: boolean // Last turn was intentionally stopped.
 }
 ```
 
 **Design principle: no status is the default.**
 
 - **`null`** — normal. Alive sessions show a steady dot, dead sessions are dimmed.
-- **`working: true`** — pulsing dot. The animation says "something is happening."
+- **`active: true`** — pulsing dot. The animation says "something is happening."
 - **`error: true`** — red dot; the agent gave up and needs attention. A turn-end `unread` report clears it — error is treated as enhanced unread.
+- **`interrupted: true`** — the last turn was stopped on purpose (human or agent). Not an error: the sidebar just goes idle, but a synchronous wait reports the stop.
 - Display text is the frontend's concern: it derives "Working…"/"Error" from the booleans and `exited (N)` from `exit_code`.
 
 ### How Children Set Status
@@ -177,7 +179,7 @@ interface Status {
 **Option A — the agent hook** (agents; primary): gmux injects a hook into pi/claude/codex launches. The hook `POST`s to `/hook/event` on `$GMUX_SESSION_SOCK`:
 
 - `op: "session"` — binds the session: `path` (conversation file), `name` (title), `slug`/`id`.
-- `op: "turn"` — `phase: "start"` sets working; `phase: "end"` + `outcome` (`completed` → idle + unread, `error` → red dot, `aborted` → idle).
+- `op: "turn"` — `phase: "start"` sets active; `phase: "end"` + `outcome` (`completed` → idle + unread, `error` → red dot, `interrupted` → idle + interrupted).
 
 See `docs/runner-hook-protocol.md` in the repo and ADRs 0010/0011/0013/0015.
 
@@ -188,7 +190,7 @@ GMUX_SOCKET=~/.local/state/gmux/run/sessions/sess-abc123.sock
 
 # Child (or a wrapper script) sets status via HTTP on the socket
 curl --unix-socket $GMUX_SOCKET http://localhost/status \
-  -X PUT -d '{"working":true}'    # 'null' clears
+  -X PUT -d '{"active":true}'    # 'null' clears
 ```
 
 There is no OSC status channel; the PTY reader parses only OSC 0/2 titles (which set `shell_title`).
@@ -210,7 +212,7 @@ As served by `GET /meta` on a runner's Unix socket (runner → gmuxd):
   "title": "fix auth bug",
   "shell_title": "user@host:~/dev/gmux",
   "adapter_title": "fix auth bug",
-  "status": { "working": true },
+  "status": { "active": true },
   "unread": false,
   "socket_path": "~/.local/state/gmux/run/sessions/sess-abc123.sock",
   "conversation_file": "/home/user/.pi/agent/sessions/…/abc.jsonl",
@@ -232,7 +234,7 @@ As served by `GET /v1/sessions` (gmuxd → frontend):
   "pid": 12345,
   "started_at": "2026-03-14T10:00:01Z",
   "title": "fix auth bug",
-  "status": { "working": true },
+  "status": { "active": true },
   "unread": false,
   "socket_path": "~/.local/state/gmux/run/sessions/sess-abc123.sock",
   "slug": "fix-auth-bug",
@@ -255,4 +257,4 @@ Pre-2.0 docs and payloads used `kind` (now `adapter`), `session_file` (now `conv
 - **Cost/tokens** — same
 - **Git branch / PR status** — could be a future Status extension, not core
 - **Conversation history** — belongs to the application, not the multiplexer
-- **Progress bar** — deferred; Status carries only `working`/`error` booleans today
+- **Progress bar** — deferred; Status carries only `active`/`error`/`interrupted` booleans today

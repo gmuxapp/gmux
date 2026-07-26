@@ -178,13 +178,13 @@ type SessionHookCommand interface {
 }
 
 // HookDriven reports whether sessions of this adapter derive their
-// turn state (Status.Working, unread, error) from an agent-side hook
+// turn state (Status.Active, unread, error) from an agent-side hook
 // (SessionExtender or SessionHookCommand — ADR 0011/0015): the agent
 // itself reports turn start/end over the runner socket, and the
 // runner applies no turn inference of its own.
 //
 // Every other adapter gets the runner's default turn model instead:
-// the session is active (Working=true) from launch, OSC 133 prompt
+// the session is active (Active=true) from launch, OSC 133 prompt
 // marks in the PTY output — when the child's shell integration emits
 // them — upgrade it to per-command prompt-cycle turns, and for
 // sessions that never emit marks the process exit closes the one

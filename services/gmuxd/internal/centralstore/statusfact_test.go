@@ -7,7 +7,7 @@ import (
 
 // TestStatusReportedFactLifecycle pins the runner-authoritative,
 // generation-scoped status-reported bit (review fable M-1 / FD-7 decision
-// + delta review Δ-1): unset until a working/error fact is observed, set
+// + delta review Δ-1): unset until an active/error fact is observed, set
 // by any observation carrying one (including an explicit false), never
 // set by acknowledgement, RESET by a replacement generation alongside the
 // other generation-scoped facts (re-set when the new generation's own
@@ -35,13 +35,13 @@ func TestStatusReportedFactLifecycle(t *testing.T) {
 		t.Fatal("acknowledgement must not set status-reported")
 	}
 
-	// An observation carrying an explicit working=false IS a report.
+	// An observation carrying an explicit active=false IS a report.
 	v, _, _ := s.Session(ctx, "sess-s")
-	if _, err = s.ApplyRunnerObservation(ctx, RunnerObservation{ID: "sess-s", ObservedVersion: v.Version, ObservedAt: 20, Facts: RunnerFacts{Working: ptr(false)}}); err != nil {
+	if _, err = s.ApplyRunnerObservation(ctx, RunnerObservation{ID: "sess-s", ObservedVersion: v.Version, ObservedAt: 20, Facts: RunnerFacts{Active: ptr(false)}}); err != nil {
 		t.Fatal(err)
 	}
 	v, _, _ = s.Session(ctx, "sess-s")
-	if !v.StatusReported || v.Working {
+	if !v.StatusReported || v.Active {
 		t.Fatalf("explicit false status must set reported: %+v", v)
 	}
 
@@ -55,17 +55,17 @@ func TestStatusReportedFactLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.StatusReported || got.Working {
+	if got.StatusReported || got.Active {
 		t.Fatalf("replacement generation must reset the reported bit: %+v", got)
 	}
 
 	// ...and the new generation's own status facts re-set it (Δ-3: a
 	// reported all-false status is a valid re-entered state).
 	v, _, _ = s.Session(ctx, "sess-s")
-	if _, err = s.ApplyRunnerObservation(ctx, RunnerObservation{ID: "sess-s", ObservedVersion: v.Version, ObservedAt: 35, Facts: RunnerFacts{Working: ptr(false)}}); err != nil {
+	if _, err = s.ApplyRunnerObservation(ctx, RunnerObservation{ID: "sess-s", ObservedVersion: v.Version, ObservedAt: 35, Facts: RunnerFacts{Active: ptr(false)}}); err != nil {
 		t.Fatal(err)
 	}
-	if v, _, _ = s.Session(ctx, "sess-s"); !v.StatusReported || v.Working {
+	if v, _, _ = s.Session(ctx, "sess-s"); !v.StatusReported || v.Active {
 		t.Fatalf("new generation's report must re-set the bit: %+v", v)
 	}
 
@@ -73,11 +73,11 @@ func TestStatusReportedFactLifecycle(t *testing.T) {
 	// reported from the start (merge runs after the reset).
 	replacement2 := registration("sess-s", "shell", "/tmp", true, 40)
 	replacement2.NewGeneration = true
-	replacement2.Facts.Working = ptr(true)
+	replacement2.Facts.Active = ptr(true)
 	if got, _, err = s.RegisterRunner(ctx, replacement2); err != nil {
 		t.Fatal(err)
 	}
-	if !got.StatusReported || !got.Working {
+	if !got.StatusReported || !got.Active {
 		t.Fatalf("replacement with status facts must be reported: %+v", got)
 	}
 
@@ -97,13 +97,13 @@ func TestStatusReportedFactLifecycle(t *testing.T) {
 		t.Fatalf("sweep must preserve status facts: %+v", v)
 	}
 
-	// InsertSession derives the bit from working/error when unset.
-	ins, _, err := s.InsertSession(ctx, NewSession{ID: "sess-i", Adapter: "shell", CWD: "/tmp", CreatedAt: 60, Working: true})
+	// InsertSession derives the bit from active/error when unset.
+	ins, _, err := s.InsertSession(ctx, NewSession{ID: "sess-i", Adapter: "shell", CWD: "/tmp", CreatedAt: 60, Active: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ins.StatusReported {
-		t.Fatal("insert with working=true must be reported")
+		t.Fatal("insert with active=true must be reported")
 	}
 }
 
@@ -165,4 +165,91 @@ func specs2(cat ProjectCatalog) []ProjectEntrySpec {
 		}
 	}
 	return out
+}
+
+// TestInterruptedFactRoundTrip pins the third canonical status fact: an
+// intentional stop is durable, orthogonal to Error, counts as a reported
+// status, and is reset by a replacement generation with the other
+// generation-scoped facts.
+func TestInterruptedFactRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	if _, _, err := s.RegisterRunner(ctx, registration("sess-i", "pi", "/tmp", true, 10)); err != nil {
+		t.Fatal(err)
+	}
+	v, _, _ := s.Session(ctx, "sess-i")
+	obs := RunnerObservation{ID: "sess-i", ObservedVersion: v.Version, ObservedAt: 20,
+		Facts: RunnerFacts{Active: ptr(false), Error: ptr(false), Interrupted: ptr(true)}}
+	if _, err := s.ApplyRunnerObservation(ctx, obs); err != nil {
+		t.Fatal(err)
+	}
+	v, _, _ = s.Session(ctx, "sess-i")
+	if !v.Interrupted || v.Active || v.Error || !v.StatusReported {
+		t.Fatalf("interrupted turn end = %+v, want interrupted-only reported status", v)
+	}
+
+	// A new turn clears the interruption (the runner replaces the status
+	// wholesale; the store must not make it sticky).
+	obs = RunnerObservation{ID: "sess-i", ObservedVersion: v.Version, ObservedAt: 30,
+		Facts: RunnerFacts{Active: ptr(true), Error: ptr(false), Interrupted: ptr(false)}}
+	if _, err := s.ApplyRunnerObservation(ctx, obs); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, _ = s.Session(ctx, "sess-i"); v.Interrupted || !v.Active {
+		t.Fatalf("new turn = %+v, want active without interruption", v)
+	}
+
+	// Active+Error is representable: an active retry/rate-limit condition
+	// is not a terminal failure and must not close the turn.
+	obs = RunnerObservation{ID: "sess-i", ObservedVersion: v.Version, ObservedAt: 40,
+		Facts: RunnerFacts{Active: ptr(true), Error: ptr(true)}}
+	if _, err := s.ApplyRunnerObservation(ctx, obs); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, _ = s.Session(ctx, "sess-i"); !v.Active || !v.Error {
+		t.Fatalf("active error = %+v, want Active and Error together", v)
+	}
+
+	// Replacement generation resets it with the other generation-scoped facts.
+	repl := registration("sess-i", "pi", "/tmp", true, 50)
+	repl.NewGeneration = true
+	repl.Facts.Interrupted = nil
+	got, _, err := s.RegisterRunner(ctx, repl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Interrupted || got.StatusReported {
+		t.Fatalf("replacement generation = %+v, want interruption reset", got)
+	}
+}
+
+// TestStatusFactsWithoutReportedBitAreCorrupt: the status facts and the
+// status-reported provenance bit are one invariant. A row carrying any of
+// active/error/interrupted with status_reported = 0 could not have been
+// written by this package, so reading it is a hard corruption error rather
+// than a silent "status": null that would flip gmux wait's died/idle verdict.
+// Written through the raw handle because the domain layer cannot produce it.
+func TestStatusFactsWithoutReportedBitAreCorrupt(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	for _, column := range []string{"active", "error_column", "interrupted"} {
+		col := column
+		if col == "error_column" {
+			col = "has_error"
+		}
+		id := "corrupt-" + col
+		if _, _, err := s.InsertSession(ctx, NewSession{
+			ID: SessionID(id), Adapter: "shell", Command: []string{"sh"}, CWD: "/tmp",
+			Remotes: map[string]string{}, CreatedAt: 1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.database.ExecContext(ctx,
+			"UPDATE local_sessions SET "+col+" = 1, status_reported = 0 WHERE id = ?", id); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.Session(ctx, SessionID(id)); err == nil {
+			t.Errorf("%s = 1 with status_reported = 0 must be rejected", col)
+		}
+	}
 }

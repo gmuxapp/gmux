@@ -21,11 +21,11 @@ func wf(s wire.Session) *sseFanout {
 	f.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: []wire.Session{s}}})
 	return f
 }
-func outcome(id string, alive bool, working *bool, exit *int) sessioncoord.Outcome {
+func outcome(id string, alive bool, active *bool, exit *int) sessioncoord.Outcome {
 	started := centralstore.UnixMillis(1)
-	row := centralstore.Session{ID: centralstore.SessionID(id), StartedAt: &started, ExitCode: exit, StatusReported: working != nil}
-	if working != nil {
-		row.Working = *working
+	row := centralstore.Session{ID: centralstore.SessionID(id), StartedAt: &started, ExitCode: exit, StatusReported: active != nil}
+	if active != nil {
+		row.Active = *active
 	}
 	return sessioncoord.Outcome{Type: sessioncoord.OutcomeUpserted, ID: row.ID, Session: &row, Alive: alive}
 }
@@ -44,7 +44,14 @@ func TestTerminalReasonAndRunEvidenceTable(t *testing.T) {
 		{"startup phantom", compatSession{}, false, "", false},
 		{"dead on arrival", compatSession{StartedAt: "x"}, false, "died", true},
 		{"clean death", compatSession{ExitCode: &exit, Status: &compatStatus{}}, false, "idle", true},
-		{"mid turn death", compatSession{ExitCode: &exit, Status: &compatStatus{Working: true}}, false, "died", true},
+		{"mid turn death", compatSession{ExitCode: &exit, Status: &compatStatus{Active: true}}, false, "died", true},
+		// An intentional stop closes the turn: the wait resolves on the
+		// inactive edge exactly like a completion. Reporting the stop to
+		// the user is the result-bearing wait's job (ADR 0027); the exit
+		// taxonomy is deliberately unchanged here.
+		{"interrupted live", compatSession{Alive: true, Status: &compatStatus{Interrupted: true}}, false, "idle", true},
+		{"interrupted then death", compatSession{ExitCode: &exit, Status: &compatStatus{Interrupted: true}}, false, "idle", true},
+		{"active error keeps waiting", compatSession{Alive: true, Status: &compatStatus{Active: true, Error: true}}, false, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -74,7 +81,7 @@ func TestInputSubmitsTable(t *testing.T) {
 
 func TestAwaitTurnCentralSchedules(t *testing.T) {
 	t.Run("block to idle cannot miss pulse", func(t *testing.T) {
-		f := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Working: false}})
+		f := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false}})
 		ch := make(chan sessioncoord.Outcome, 2)
 		ch <- outcome("s", true, boolp(true), nil)
 		ch <- outcome("s", true, boolp(false), nil)
@@ -95,7 +102,7 @@ func TestAwaitTurnCentralSchedules(t *testing.T) {
 		}
 	})
 	t.Run("timeout stale idle ignored", func(t *testing.T) {
-		f := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Working: false}})
+		f := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false}})
 		r, to := awaitTurnCentral(context.Background(), f, make(chan sessioncoord.Outcome), "s", time.After(10*time.Millisecond))
 		if r != "" || !to {
 			t.Fatalf("%q %v", r, to)
@@ -111,11 +118,11 @@ func TestAwaitTurnCentralSchedules(t *testing.T) {
 		}
 	})
 	t.Run("dropped event repoll", func(t *testing.T) {
-		f := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Working: true}})
+		f := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: true}})
 		ch := make(chan sessioncoord.Outcome)
 		go func() {
 			time.Sleep(20 * time.Millisecond)
-			f.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Working: false}}}}})
+			f.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Active: false}}}}})
 		}()
 		r, to := awaitTurnCentral(context.Background(), f, ch, "s", time.After(time.Second))
 		if r != "idle" || to {
@@ -200,7 +207,7 @@ func TestCentralWaitHandlerAlreadyIdleDeadArrivalNoPhantomAndTimeout(t *testing.
 		s      wire.Session
 		want   int
 		reason string
-	}{{"already idle", wire.Session{ID: "s", Alive: true, Status: &wire.Status{Working: false}}, 200, "idle"}, {"dead arrival", wire.Session{ID: "s", Alive: false, StartedAt: "x"}, 200, "died"}, {"no phantom death timeout", wire.Session{ID: "s", Alive: false}, 408, ""}} {
+	}{{"already idle", wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false}}, 200, "idle"}, {"dead arrival", wire.Session{ID: "s", Alive: false, StartedAt: "x"}, 200, "died"}, {"no phantom death timeout", wire.Session{ID: "s", Alive: false}, 408, ""}} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := wf(tc.s)
 			rec := httptest.NewRecorder()
@@ -225,7 +232,7 @@ func TestCentralInputWaitKittyAcceptedAndTimesOut(t *testing.T) {
 	coord := sessioncoord.New(nil, &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{}, blocked: map[string]bool{}}, st, nil, nil)
 	defer coord.Close()
 	boot := &Bootstrap{Store: st, Coordinator: coord}
-	f := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Working: false}})
+	f := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false}})
 	sent := false
 	rec := httptest.NewRecorder()
 	handleInputWaitCentral(rec, httptest.NewRequest(http.MethodPost, "/input?wait=idle&timeout=1", nil), boot, f, "s", []byte("x\x1b[13u"), func() error { sent = true; return nil })

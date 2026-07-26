@@ -235,7 +235,8 @@ function generateFile(session: Session, terminal: string, cursorX: number, curso
   lines.push(`  subtitle: ${JSON.stringify(session.subtitle)},`)
   if (session.status) {
     const errorPart = session.status.error ? ', error: true' : ''
-    lines.push(`  status: { working: ${session.status.working}${errorPart} },`)
+    const interruptedPart = session.status.interrupted ? ', interrupted: true' : ''
+    lines.push(`  status: { active: ${session.status.active}${errorPart}${interruptedPart} },`)
   } else {
     lines.push(`  status: null,`)
   }

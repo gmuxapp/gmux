@@ -10,7 +10,7 @@ description: "Runtime structure: runner, daemon, and embedded web UI."
 One per session. It:
 
 - Launches the child process under a PTY
-- Owns the live session state (title, status, working flag)
+- Owns the live session state (title, status, active flag)
 - Persists PTY output to an on-disk scrollback file for session replay on reconnect
 - Exposes the session on a Unix socket (metadata, events, terminal attach)
 - Runs the session's adapter: agents report authoritative state (conversation binding, turn phase, title) to the runner via a tool-neutral hook protocol; OSC title parsing over child output remains for everything else

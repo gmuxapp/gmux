@@ -41,8 +41,8 @@ type Session struct {
 }
 
 type Status struct {
-	Label   string `json:"label"`
-	Working bool   `json:"working"`
+	Label  string `json:"label"`
+	Active bool   `json:"active"`
 }
 
 // Gmuxd manages a gmuxd process for testing.

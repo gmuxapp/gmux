@@ -269,4 +269,3 @@ func (s *Store) RemoveManualPeer(ctx context.Context, name string) (MutationResu
 	}
 	return MutationResult{Changed: true, WorldDirty: true}, nil
 }
-

@@ -57,7 +57,7 @@ type RunnerFacts struct {
 	ConversationRef, CWD, WorkspaceRoot, Slug, ShellTitle, AdapterTitle, Subtitle *string
 	Command                                                                       *[]string
 	Remotes                                                                       *map[string]string
-	Working, Unread, Error                                                        *bool
+	Active, Unread, Error, Interrupted                                            *bool
 	StartedAt, ExitedAt                                                           NullablePatch[UnixMillis]
 	ExitCode                                                                      NullablePatch[int]
 	TerminalSize                                                                  NullablePatch[TerminalSize]
@@ -205,7 +205,7 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			ID: string(current.ID), Adapter: current.Adapter, ConversationRef: nullString(current.ConversationRef),
 			CommandJson: cmd, Cwd: current.CWD, WorkspaceRoot: nullString(current.WorkspaceRoot), RemotesJson: rem,
 			Slug: nullString(current.Slug), SlugBase: nullString(current.SlugBase), ShellTitle: nullString(current.ShellTitle), AdapterTitle: nullString(current.AdapterTitle), Subtitle: nullString(current.Subtitle),
-			Working: boolInt(current.Working), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), CreatedAtMs: int64(current.CreatedAt),
+			Active: boolInt(current.Active), Interrupted: boolInt(current.Interrupted), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), CreatedAtMs: int64(current.CreatedAt),
 			StartedAtMs: nullMillis(current.StartedAt), ExitedAtMs: nullMillis(current.ExitedAt), LastActivityAtMs: nullMillis(current.LastActivityAt), ExitCode: nullInt(current.ExitCode),
 			TerminalCols: nullUint(current.TerminalCols), TerminalRows: nullUint(current.TerminalRows), LaunchParentID: func() sql.NullString {
 				if current.LaunchParentID == nil {
@@ -231,7 +231,7 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			// required above for dead replacements), turn state, error state,
 			// the status-reported provenance marker, and start time all
 			// describe the dead process, not the new one. StatusReported
-			// resets WITH working/error (delta review Δ-1): the bit is those
+			// resets WITH active/error (delta review Δ-1): the bit is those
 			// facts' provenance marker, and production re-registration
 			// replaces Status wholesale from the new runner's /meta — nil
 			// until the new process reports (discovery.go:290) — so a
@@ -242,8 +242,9 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			// are merged on top below; activity transitions are computed
 			// against this reset baseline.
 			current.ExitCode = nil
-			current.Working = false
+			current.Active = false
 			current.Error = false
+			current.Interrupted = false
 			current.StatusReported = false
 			current.StartedAt = nil
 		}
@@ -275,7 +276,7 @@ func (s *Store) RegisterRunner(ctx context.Context, reg RunnerRegistration) (Ses
 			n, updateErr := q.UpdateRunnerRegistration(ctx, db.UpdateRunnerRegistrationParams{
 				ConversationRef: nullString(current.ConversationRef), CommandJson: cmd, Cwd: current.CWD, WorkspaceRoot: nullString(current.WorkspaceRoot), RemotesJson: rem,
 				Slug: nullString(current.Slug), SlugBase: nullString(current.SlugBase), ShellTitle: nullString(current.ShellTitle), AdapterTitle: nullString(current.AdapterTitle), Subtitle: nullString(current.Subtitle),
-				Working: boolInt(current.Working), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), StartedAtMs: nullMillis(current.StartedAt), ExitedAtMs: nullMillis(current.ExitedAt),
+				Active: boolInt(current.Active), Interrupted: boolInt(current.Interrupted), Unread: boolInt(current.Unread), HasError: boolInt(current.Error), StatusReported: boolInt(current.StatusReported), StartedAtMs: nullMillis(current.StartedAt), ExitedAtMs: nullMillis(current.ExitedAt),
 				LastActivityAtMs: nullMillis(current.LastActivityAt), ExitCode: nullInt(current.ExitCode), TerminalCols: nullUint(current.TerminalCols), TerminalRows: nullUint(current.TerminalRows),
 				ID: string(reg.ID), RowVersion: int64(before.Version),
 			})
@@ -484,8 +485,11 @@ func mergeRunnerFacts(v *Session, f RunnerFacts) error {
 			v.Remotes = map[string]string{}
 		}
 	}
-	if f.Working != nil {
-		v.Working = *f.Working
+	if f.Active != nil {
+		v.Active = *f.Active
+	}
+	if f.Interrupted != nil {
+		v.Interrupted = *f.Interrupted
 	}
 	if f.Unread != nil {
 		v.Unread = *f.Unread
@@ -494,13 +498,13 @@ func mergeRunnerFacts(v *Session, f RunnerFacts) error {
 		v.Error = *f.Error
 	}
 	// Status-reported fact (runner-authoritative): observing a
-	// working/error fact proves a status was reported. Sticky WITHIN a
+	// active/error fact proves a status was reported. Sticky WITHIN a
 	// generation (the daemon's SSE path flattens an in-generation null
-	// status to {working:false}, subscribe.go:219–226); the generation
+	// status to {active:false}, subscribe.go:219–226); the generation
 	// boundary resets it in RegisterRunner's NewGeneration block, because
 	// production re-registration replaces Status wholesale from the new
 	// runner's /meta — nil until the new process reports (discovery.go:290).
-	v.StatusReported = v.StatusReported || f.Working != nil || f.Error != nil
+	v.StatusReported = v.StatusReported || f.Active != nil || f.Error != nil || f.Interrupted != nil
 	if err := applyNullable(&v.StartedAt, f.StartedAt); err != nil {
 		return err
 	}
@@ -540,7 +544,7 @@ func validateMergedSession(v Session) error {
 
 func initialActivity(existing *UnixMillis, reg RunnerRegistration, hadRow bool, before Session) *UnixMillis {
 	// last_output_at is bumped on (and only on) the unread false→true
-	// transition — output the user hasn't seen. Working/error transitions,
+	// transition — output the user hasn't seen. Active/error transitions,
 	// generation seams, and deaths deliberately don't bump it (activity-feed
 	// sort key; see store.Session LastOutputAt docstring).
 	var bump bool

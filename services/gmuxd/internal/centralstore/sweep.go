@@ -14,7 +14,7 @@ import (
 //   - ExitedAt is synthesized from the sweep time (the dead-generation
 //     contract: every dead row carries an explicit exit timestamp);
 //   - ExitCode stays NULL — the daemon never observed the exit;
-//   - working/unread/error are preserved: the turn state at death is the
+//   - active/unread/error are preserved: the turn state at death is the
 //     wait verdict and must not depend on how death was detected;
 //   - last activity bumps on the alive→dead transition and never moves
 //     backwards.

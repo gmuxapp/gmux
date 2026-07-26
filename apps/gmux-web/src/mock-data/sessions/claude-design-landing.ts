@@ -22,7 +22,7 @@ export default {
   exited_at: null,
   title: 'design landing page',
   subtitle: '',
-  status: { working: false },
+  status: { active: false },
   unread: true,
   project_slug: 'my-project',
   last_output_at: ago(3),

@@ -1493,19 +1493,19 @@ func handleInputWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootst
 }
 
 func awaitTurnCentral(ctx context.Context, fanout *sseFanout, outcomes <-chan sessioncoord.Outcome, sessionID string, deadline <-chan time.Time) (string, bool) {
-	seenWorking := false
+	seenActive := false
 	check := func(s compatSession) (string, bool) {
 		if !s.Alive {
-			if seenWorking && s.Status != nil && !s.Status.Working {
+			if seenActive && s.Status != nil && !s.Status.Active {
 				return "idle", true
 			}
 			return "died", true
 		}
-		if s.Status != nil && s.Status.Working {
-			seenWorking = true
+		if s.Status != nil && s.Status.Active {
+			seenActive = true
 			return "", false
 		}
-		if seenWorking && s.Status != nil && !s.Status.Working {
+		if seenActive && s.Status != nil && !s.Status.Active {
 			return "idle", true
 		}
 		return "", false

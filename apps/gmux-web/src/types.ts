@@ -3,8 +3,14 @@
 // Pure interfaces for the frontend data model. No logic, no imports.
 
 export interface SessionStatus {
-  working: boolean
+  /** The agent is working on a turn. */
+  active: boolean
+  /** Orthogonal to `active`: a retryable/attention condition while active,
+   *  or a terminal failure once inactive. */
   error?: boolean
+  /** The last turn was intentionally stopped by a human or agent. Not an
+   *  error: waits report it separately, the sidebar just goes idle. */
+  interrupted?: boolean
 }
 
 export interface Session {

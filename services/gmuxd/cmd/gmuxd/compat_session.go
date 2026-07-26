@@ -4,7 +4,7 @@ package main
 // HTTP boundary. It deliberately has no store behavior.
 type compatSession struct {
 	ID, Peer, CreatedAt, Cwd, Adapter, WorkspaceRoot, ParentSessionID string
-	StartedAt, ExitedAt, Title, Subtitle, LastOutputAt              string
+	StartedAt, ExitedAt, Title, Subtitle, LastOutputAt                string
 	SocketPath, Slug, ConversationRef, RunnerVersion, BinaryHash      string
 	ShellTitle, AdapterTitle, ProjectSlug                             string
 	Command                                                           []string
@@ -16,4 +16,4 @@ type compatSession struct {
 	TerminalCols, TerminalRows                                        uint16
 }
 
-type compatStatus struct{ Working, Error bool }
+type compatStatus struct{ Active, Error, Interrupted bool }

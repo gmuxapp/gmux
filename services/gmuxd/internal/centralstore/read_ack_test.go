@@ -19,7 +19,7 @@ func TestAcknowledgeDeadSessionClearsUnreadAndErrorOnly(t *testing.T) {
 		ID: "dead", Adapter: "shell", ConversationRef: "conversation",
 		Command: []string{"sh", "-l"}, CWD: "/work", WorkspaceRoot: "/work",
 		Remotes: map[string]string{"origin": "git@example/repo"}, Slug: "slug",
-		ShellTitle: "title", Subtitle: "subtitle", Working: true, Unread: true,
+		ShellTitle: "title", Subtitle: "subtitle", Active: true, Unread: true,
 		Error: true, CreatedAt: 1, StartedAt: &started, ExitedAt: &exited,
 		TerminalCols: &cols, TerminalRows: &rows,
 	})
@@ -89,8 +89,8 @@ func TestAcknowledgeDeadSessionRejectsStaleAndMissingRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	working := true
-	advanced, err := s.ApplyCommonFacts(ctx, row.ID, row.Version, CommonFactsPatch{Working: &working})
+	active := true
+	advanced, err := s.ApplyCommonFacts(ctx, row.ID, row.Version, CommonFactsPatch{Active: &active})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestDeadSessionAcknowledgementDurableTracer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row, _, err := s.InsertSession(ctx, NewSession{ID: "dead", Adapter: "shell", Command: []string{"sh"}, CWD: "/work", Remotes: map[string]string{}, Working: true, Unread: true, Error: true, CreatedAt: 1})
+	row, _, err := s.InsertSession(ctx, NewSession{ID: "dead", Adapter: "shell", Command: []string{"sh"}, CWD: "/work", Remotes: map[string]string{}, Active: true, Unread: true, Error: true, CreatedAt: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestDeadSessionAcknowledgementDurableTracer(t *testing.T) {
 		t.Fatalf("dead acknowledgement result=%#v attempted=%v err=%v", result, attempted, err)
 	}
 	snapshot, err := s.ListSessions(ctx)
-	if err != nil || len(snapshot) != 1 || snapshot[0].Unread || snapshot[0].Error || !snapshot[0].Working {
+	if err != nil || len(snapshot) != 1 || snapshot[0].Unread || snapshot[0].Error || !snapshot[0].Active {
 		t.Fatalf("committed snapshot=%#v err=%v", snapshot, err)
 	}
 

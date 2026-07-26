@@ -237,7 +237,7 @@ func (q *Queries) GetMetadata(ctx context.Context, key string) (string, error) {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, status_reported FROM local_sessions WHERE id = ?
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root FROM local_sessions WHERE id = ?
 `
 
 func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, error) {
@@ -257,9 +257,11 @@ func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, erro
 		&i.ShellTitle,
 		&i.AdapterTitle,
 		&i.Subtitle,
-		&i.Working,
+		&i.Active,
+		&i.Interrupted,
 		&i.Unread,
 		&i.HasError,
+		&i.StatusReported,
 		&i.CreatedAtMs,
 		&i.StartedAtMs,
 		&i.ExitedAtMs,
@@ -270,7 +272,6 @@ func (q *Queries) GetSession(ctx context.Context, id string) (LocalSession, erro
 		&i.TerminalRows,
 		&i.LaunchParentID,
 		&i.PromotedToRoot,
-		&i.StatusReported,
 	)
 	return i, err
 }
@@ -431,11 +432,11 @@ const insertSession = `-- name: InsertSession :one
 INSERT INTO local_sessions (
     id, adapter, conversation_ref, command_json, cwd, workspace_root,
     remotes_json, slug, slug_base, shell_title, adapter_title, subtitle,
-    working, unread, has_error, status_reported, created_at_ms, started_at_ms,
+    active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms,
     exited_at_ms, last_activity_at_ms, exit_code, terminal_cols, terminal_rows,
     launch_parent_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, status_reported
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root
 `
 
 type InsertSessionParams struct {
@@ -451,7 +452,8 @@ type InsertSessionParams struct {
 	ShellTitle       sql.NullString
 	AdapterTitle     sql.NullString
 	Subtitle         sql.NullString
-	Working          int64
+	Active           int64
+	Interrupted      int64
 	Unread           int64
 	HasError         int64
 	StatusReported   int64
@@ -479,7 +481,8 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 		arg.ShellTitle,
 		arg.AdapterTitle,
 		arg.Subtitle,
-		arg.Working,
+		arg.Active,
+		arg.Interrupted,
 		arg.Unread,
 		arg.HasError,
 		arg.StatusReported,
@@ -507,9 +510,11 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 		&i.ShellTitle,
 		&i.AdapterTitle,
 		&i.Subtitle,
-		&i.Working,
+		&i.Active,
+		&i.Interrupted,
 		&i.Unread,
 		&i.HasError,
+		&i.StatusReported,
 		&i.CreatedAtMs,
 		&i.StartedAtMs,
 		&i.ExitedAtMs,
@@ -520,7 +525,6 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (L
 		&i.TerminalRows,
 		&i.LaunchParentID,
 		&i.PromotedToRoot,
-		&i.StatusReported,
 	)
 	return i, err
 }
@@ -622,7 +626,7 @@ func (q *Queries) ListPlacements(ctx context.Context) ([]ListPlacementsRow, erro
 }
 
 const listProjectEntries = `-- name: ListProjectEntries :many
-SELECT id, sidebar_order, entry_kind, slug, peer_key, created_at_ms, updated_at_ms, node_id FROM project_entries ORDER BY sidebar_order
+SELECT id, sidebar_order, entry_kind, slug, peer_key, node_id, created_at_ms, updated_at_ms FROM project_entries ORDER BY sidebar_order
 `
 
 func (q *Queries) ListProjectEntries(ctx context.Context) ([]ProjectEntry, error) {
@@ -640,9 +644,9 @@ func (q *Queries) ListProjectEntries(ctx context.Context) ([]ProjectEntry, error
 			&i.EntryKind,
 			&i.Slug,
 			&i.PeerKey,
+			&i.NodeID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
-			&i.NodeID,
 		); err != nil {
 			return nil, err
 		}
@@ -692,7 +696,7 @@ func (q *Queries) ListProjectRules(ctx context.Context) ([]ProjectMatchRule, err
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, working, unread, has_error, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root, status_reported FROM local_sessions ORDER BY id
+SELECT id, row_version, adapter, conversation_ref, command_json, cwd, workspace_root, remotes_json, slug, slug_base, shell_title, adapter_title, subtitle, active, interrupted, unread, has_error, status_reported, created_at_ms, started_at_ms, exited_at_ms, last_activity_at_ms, dismissed_at_ms, exit_code, terminal_cols, terminal_rows, launch_parent_id, promoted_to_root FROM local_sessions ORDER BY id
 `
 
 func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
@@ -718,9 +722,11 @@ func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
 			&i.ShellTitle,
 			&i.AdapterTitle,
 			&i.Subtitle,
-			&i.Working,
+			&i.Active,
+			&i.Interrupted,
 			&i.Unread,
 			&i.HasError,
+			&i.StatusReported,
 			&i.CreatedAtMs,
 			&i.StartedAtMs,
 			&i.ExitedAtMs,
@@ -731,7 +737,6 @@ func (q *Queries) ListSessions(ctx context.Context) ([]LocalSession, error) {
 			&i.TerminalRows,
 			&i.LaunchParentID,
 			&i.PromotedToRoot,
-			&i.StatusReported,
 		); err != nil {
 			return nil, err
 		}
@@ -913,7 +918,7 @@ UPDATE local_sessions SET
     row_version = row_version + 1,
     adapter = ?, conversation_ref = ?, command_json = ?, cwd = ?,
     workspace_root = ?, remotes_json = ?, slug = ?, slug_base = ?, shell_title = ?,
-    adapter_title = ?, subtitle = ?, working = ?, unread = ?, has_error = ?,
+    adapter_title = ?, subtitle = ?, active = ?, interrupted = ?, unread = ?, has_error = ?,
     status_reported = ?, started_at_ms = ?, exited_at_ms = ?,
     last_activity_at_ms = ?, exit_code = ?, terminal_cols = ?, terminal_rows = ?
 WHERE id = ? AND row_version = ?
@@ -931,7 +936,8 @@ type UpdateCommonFactsParams struct {
 	ShellTitle       sql.NullString
 	AdapterTitle     sql.NullString
 	Subtitle         sql.NullString
-	Working          int64
+	Active           int64
+	Interrupted      int64
 	Unread           int64
 	HasError         int64
 	StatusReported   int64
@@ -958,7 +964,8 @@ func (q *Queries) UpdateCommonFacts(ctx context.Context, arg UpdateCommonFactsPa
 		arg.ShellTitle,
 		arg.AdapterTitle,
 		arg.Subtitle,
-		arg.Working,
+		arg.Active,
+		arg.Interrupted,
 		arg.Unread,
 		arg.HasError,
 		arg.StatusReported,
@@ -1046,7 +1053,7 @@ UPDATE local_sessions SET
     row_version = row_version + 1,
     conversation_ref = ?, command_json = ?, cwd = ?, workspace_root = ?,
     remotes_json = ?, slug = ?, slug_base = ?, shell_title = ?, adapter_title = ?, subtitle = ?,
-    working = ?, unread = ?, has_error = ?, status_reported = ?,
+    active = ?, interrupted = ?, unread = ?, has_error = ?, status_reported = ?,
     started_at_ms = ?, exited_at_ms = ?, last_activity_at_ms = ?, exit_code = ?,
     terminal_cols = ?, terminal_rows = ?, dismissed_at_ms = NULL
 WHERE id = ? AND row_version = ?
@@ -1063,7 +1070,8 @@ type UpdateRunnerRegistrationParams struct {
 	ShellTitle       sql.NullString
 	AdapterTitle     sql.NullString
 	Subtitle         sql.NullString
-	Working          int64
+	Active           int64
+	Interrupted      int64
 	Unread           int64
 	HasError         int64
 	StatusReported   int64
@@ -1089,7 +1097,8 @@ func (q *Queries) UpdateRunnerRegistration(ctx context.Context, arg UpdateRunner
 		arg.ShellTitle,
 		arg.AdapterTitle,
 		arg.Subtitle,
-		arg.Working,
+		arg.Active,
+		arg.Interrupted,
 		arg.Unread,
 		arg.HasError,
 		arg.StatusReported,

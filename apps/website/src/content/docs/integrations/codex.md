@@ -3,7 +3,7 @@ title: Codex
 description: How gmux works with OpenAI Codex CLI.
 ---
 
-gmux has built-in support for [Codex CLI](https://developers.openai.com/codex/cli). No configuration is needed — launch Codex through gmux and everything works automatically. Live status requires Codex CLI **0.135.0 or newer**; older versions still launch, resume, and get titles from the transcript, but show no working/idle status.
+gmux has built-in support for [Codex CLI](https://developers.openai.com/codex/cli). No configuration is needed — launch Codex through gmux and everything works automatically. Live status requires Codex CLI **0.135.0 or newer**; older versions still launch, resume, and get titles from the transcript, but show no active/idle status.
 
 ## What you get
 
@@ -55,7 +55,7 @@ When gmux owns the launch (and codex ≥ 0.135.0), it appends per-launch `-c hoo
 | Codex hook event | Effect |
 |---|---|
 | `SessionStart` | Binds the session (transcript path, title, slug) |
-| `UserPromptSubmit` | Working (cyan dot) |
+| `UserPromptSubmit` | Active (cyan dot) |
 | `Stop` | Idle + unread; title refreshed |
 
 The hook also reports an explicit URL slug derived from your first prompt (codex's UUID session ids would make unreadable URLs), and refreshes the title at each turn end.
@@ -90,7 +90,7 @@ Each line is a JSON object with a `type` field:
 
 ## Limitations
 
-- **Requires codex ≥ 0.135.0 for live status.** Below that, no hooks are injected and the session runs without working/idle status (there is no file-watch fallback).
+- **Requires codex ≥ 0.135.0 for live status.** Below that, no hooks are injected and the session runs without active/idle status (there is no file-watch fallback).
 - **No custom titles.** Codex doesn't generate session titles like Claude Code does. gmux uses the first user prompt as the title.
 - **Date-based storage.** Sessions aren't grouped by project. gmux scans all conversation files and matches them to working directories by reading the `session_meta` header.
-- **Status is coarse.** gmux doesn't distinguish between "thinking", "running a command", or "writing code" — all are shown as "working". Codex's `Stop` hook carries no exit reason, so an interrupted turn is reported as completed (idle + unread) rather than aborted.
+- **Status is coarse.** gmux doesn't distinguish between "thinking", "running a command", or "writing code" — all are shown as active. Codex's `Stop` hook carries no exit reason, so an interrupted turn is reported as completed (idle + unread) rather than interrupted.

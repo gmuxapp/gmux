@@ -269,7 +269,7 @@ func projectSpecsFromState(state projects.State) []centralstore.ProjectEntrySpec
 func centralSessionToLegacy(row centralstore.Session) compatSession {
 	var status *compatStatus
 	if row.StatusReported {
-		status = &compatStatus{Working: row.Working, Error: row.Error}
+		status = &compatStatus{Active: row.Active, Error: row.Error, Interrupted: row.Interrupted}
 	}
 	return compatSession{
 		ID:              string(row.ID),
@@ -298,7 +298,7 @@ func centralSessionToLegacy(row centralstore.Session) compatSession {
 func legacySessionFromWire(s wire.Session) compatSession {
 	var status *compatStatus
 	if s.Status != nil {
-		status = &compatStatus{Working: s.Status.Working, Error: s.Status.Error}
+		status = &compatStatus{Active: s.Status.Active, Error: s.Status.Error, Interrupted: s.Status.Interrupted}
 	}
 	return compatSession{
 		ID:              s.ID,
