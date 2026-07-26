@@ -325,7 +325,7 @@ func TestAgentPromptSendsMultibytePromptByteExact(t *testing.T) {
 			} else {
 				code = agentPromptWithStdin(nil, prompt)
 			}
-			if code != agentExitOK {
+			if code != waitExitOK {
 				t.Fatalf("exit = %d, want 0", code)
 			}
 			var got map[string]any
@@ -394,7 +394,7 @@ func TestAgentPromptRefusesInvalidUTF8BeforeSending(t *testing.T) {
 			})
 			stderr := captureStderr(t, func() {
 				code := agentPromptWithStdin(tt.text, tt.stdin)
-				if code != agentExitError {
+				if code != waitExitError {
 					t.Errorf("exit = %d, want 1", code)
 				}
 			})
@@ -450,7 +450,7 @@ func TestAgentEnvelopeLessNotFoundIsVersionSkew(t *testing.T) {
 				http.NotFound(w, r)
 			})
 			stderr := captureStderr(t, func() {
-				if code := tt.run(); code != agentExitError {
+				if code := tt.run(); code != waitExitError {
 					t.Errorf("exit = %d, want 1", code)
 				}
 			})
@@ -469,7 +469,7 @@ func TestAgentEnvelopeLessNotFoundIsVersionSkew(t *testing.T) {
 		writeErrEnvelope(w, http.StatusNotFound, "not_found", "session not found")
 	})
 	stderr := captureStderr(t, func() {
-		if code := cmdAgentCancel("abcd1234"); code != agentExitError {
+		if code := cmdAgentCancel("abcd1234"); code != waitExitError {
 			t.Errorf("exit = %d, want 1", code)
 		}
 	})
@@ -490,7 +490,7 @@ func TestAgentOutputRejectsMarkedEmptyBody(t *testing.T) {
 	})
 	stderr := captureStderr(t, func() {
 		out := captureStdout(t, func() {
-			if code := cmdAgentOutput("abcd1234"); code != agentExitError {
+			if code := cmdAgentOutput("abcd1234"); code != waitExitError {
 				t.Errorf("exit = %d, want 1", code)
 			}
 		})
@@ -515,7 +515,7 @@ func TestAgentPromptAcceptedWithoutNoWait(t *testing.T) {
 	})
 	stderr := captureStderr(t, func() {
 		text := "go"
-		if code := cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text); code != agentExitOK {
+		if code := cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text); code != waitExitOK {
 			t.Errorf("exit = %d, want 0", code)
 		}
 	})
@@ -528,40 +528,6 @@ func TestAgentPromptAcceptedWithoutNoWait(t *testing.T) {
 	}
 	if body["wait"] != true {
 		t.Errorf("wait = %v, want true (the caller did not pass --no-wait)", body["wait"])
-	}
-}
-
-// TestAgentExitForCode pins the exit-code mapping. The load-bearing claim is
-// that the indeterminate-delivery codes are errors, not timeouts: scripts
-// retry timeouts, and retrying these can duplicate a prompt.
-func TestAgentExitForCode(t *testing.T) {
-	// 2 is interrupted-only in this namespace. If a dead runner shared it, a
-	// script could not distinguish the one case it most needs to branch on,
-	// and the documented meaning of 2 would be a lie.
-	if agentExitInterrupted == agentExitError || agentExitInterrupted == agentExitTimeout {
-		t.Fatalf("interrupted (%d) must be distinct from error (%d) and timeout (%d)",
-			agentExitInterrupted, agentExitError, agentExitTimeout)
-	}
-	cases := map[string]int{
-		codeExecutionTimeout:     agentExitTimeout,
-		codeRunnerDied:           agentExitError,
-		codeAdmissionTimeout:     agentExitError,
-		codeDeliveryTimeout:      agentExitError,
-		codeQueuedTurnUnobserved: agentExitError,
-		codeRunnerOutdated:       agentExitError,
-		codeUnsupportedAdapter:   agentExitError,
-		codeUnsupportedAction:    agentExitError,
-		"not_running":            agentExitError,
-		"delivery_pending":       agentExitError,
-		"precondition_failed":    agentExitError,
-		"not_ready":              agentExitError,
-		"local_only":             agentExitError,
-		"":                       agentExitError,
-	}
-	for code, want := range cases {
-		if got := agentExitForCode(code); got != want {
-			t.Errorf("agentExitForCode(%q) = %d, want %d", code, got, want)
-		}
 	}
 }
 
@@ -699,7 +665,7 @@ func TestAgentPromptRequestBody(t *testing.T) {
 				})
 			})
 			text := "review this branch"
-			if code := cmdAgentPrompt("abcd1234", tt.mode, tt.noWait, tt.timeout, &text); code != agentExitOK {
+			if code := cmdAgentPrompt("abcd1234", tt.mode, tt.noWait, tt.timeout, &text); code != waitExitOK {
 				t.Fatalf("exit = %d, want 0", code)
 			}
 			req := d.lastRequest(t)
@@ -735,11 +701,11 @@ func TestAgentPromptOutcomeExits(t *testing.T) {
 		data map[string]any
 		want int
 	}{
-		{"completed", map[string]any{"admission": "accepted", "outcome": "completed"}, agentExitOK},
-		{"interrupted", map[string]any{"admission": "accepted", "outcome": "interrupted"}, agentExitInterrupted},
-		{"error", map[string]any{"admission": "accepted", "outcome": "error"}, agentExitError},
-		{"error with cause", map[string]any{"admission": "delivered", "outcome": "error", "cause": "runner_died"}, agentExitError},
-		{"unknown outcome", map[string]any{"admission": "accepted", "outcome": "banana"}, agentExitError},
+		{"completed", map[string]any{"admission": "accepted", "outcome": "completed"}, waitExitOK},
+		{"interrupted", map[string]any{"admission": "accepted", "outcome": "interrupted"}, waitExitInterrupted},
+		{"error", map[string]any{"admission": "accepted", "outcome": "error"}, waitExitError},
+		{"error with cause", map[string]any{"admission": "delivered", "outcome": "error", "cause": "runner_died"}, waitExitError},
+		{"unknown outcome", map[string]any{"admission": "accepted", "outcome": "banana"}, waitExitError},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -764,7 +730,7 @@ func TestAgentPromptDetachedIsQuietSuccess(t *testing.T) {
 	})
 	stderr := captureStderr(t, func() {
 		text := "go"
-		if code := cmdAgentPrompt("abcd1234", agentModePrompt, true, 0, &text); code != agentExitOK {
+		if code := cmdAgentPrompt("abcd1234", agentModePrompt, true, 0, &text); code != waitExitOK {
 			t.Errorf("exit = %d, want 0", code)
 		}
 	})
@@ -784,19 +750,19 @@ func TestAgentErrorCodeSurfacing(t *testing.T) {
 		status int
 		want   int
 	}{
-		{codeRunnerOutdated, http.StatusBadGateway, agentExitError},
-		{codeAdmissionTimeout, http.StatusGatewayTimeout, agentExitError},
-		{codeDeliveryTimeout, http.StatusGatewayTimeout, agentExitError},
-		{codeExecutionTimeout, http.StatusGatewayTimeout, agentExitTimeout},
-		{codeQueuedTurnUnobserved, http.StatusGatewayTimeout, agentExitError},
-		{codeRunnerDied, http.StatusBadGateway, agentExitError},
-		{"precondition_failed", http.StatusConflict, agentExitError},
-		{"delivery_pending", http.StatusConflict, agentExitError},
-		{"not_ready", http.StatusGatewayTimeout, agentExitError},
-		{codeUnsupportedAdapter, http.StatusUnprocessableEntity, agentExitError},
-		{codeUnsupportedAction, http.StatusUnprocessableEntity, agentExitError},
-		{"not_running", http.StatusConflict, agentExitError},
-		{"local_only", http.StatusUnprocessableEntity, agentExitError},
+		{"runner_outdated", http.StatusBadGateway, waitExitError},
+		{"admission_timeout", http.StatusGatewayTimeout, waitExitError},
+		{"delivery_timeout", http.StatusGatewayTimeout, waitExitError},
+		{"execution_timeout", http.StatusGatewayTimeout, waitExitError},
+		{"queued_turn_unobserved", http.StatusGatewayTimeout, waitExitError},
+		{"runner_died", http.StatusBadGateway, waitExitError},
+		{"precondition_failed", http.StatusConflict, waitExitError},
+		{"delivery_pending", http.StatusConflict, waitExitError},
+		{"not_ready", http.StatusGatewayTimeout, waitExitError},
+		{codeUnsupportedAdapter, http.StatusUnprocessableEntity, waitExitError},
+		{codeUnsupportedAction, http.StatusUnprocessableEntity, waitExitError},
+		{"not_running", http.StatusConflict, waitExitError},
+		{"local_only", http.StatusUnprocessableEntity, waitExitError},
 	}
 	for _, tt := range tests {
 		t.Run(tt.code, func(t *testing.T) {
@@ -827,7 +793,7 @@ func TestAgentCancelRequest(t *testing.T) {
 	})
 	var stderr string
 	stderr = captureStderr(t, func() {
-		if code := cmdAgentCancel("abcd1234"); code != agentExitOK {
+		if code := cmdAgentCancel("abcd1234"); code != waitExitOK {
 			t.Errorf("exit = %d, want 0", code)
 		}
 	})
@@ -847,7 +813,7 @@ func TestAgentCancelRequest(t *testing.T) {
 		writeErrEnvelope(w, http.StatusConflict, "not_running", "session is not running")
 	})
 	stderr = captureStderr(t, func() {
-		if code := cmdAgentCancel("abcd1234"); code != agentExitError {
+		if code := cmdAgentCancel("abcd1234"); code != waitExitError {
 			t.Errorf("exit = %d, want 1", code)
 		}
 	})
@@ -867,7 +833,7 @@ func TestAgentOutput(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	})
 	stdout := captureStdout(t, func() {
-		if code := cmdAgentOutput("abcd1234"); code != agentExitOK {
+		if code := cmdAgentOutput("abcd1234"); code != waitExitOK {
 			t.Errorf("exit = %d, want 0", code)
 		}
 	})
@@ -893,7 +859,7 @@ func TestAgentOutput(t *testing.T) {
 		})
 		stderr := captureStderr(t, func() {
 			out := captureStdout(t, func() {
-				if code := cmdAgentOutput("abcd1234"); code != agentExitError {
+				if code := cmdAgentOutput("abcd1234"); code != waitExitError {
 					t.Errorf("%s: exit = %d, want 1", tt.code, code)
 				}
 			})
@@ -921,7 +887,7 @@ func TestAgentOutput(t *testing.T) {
 	})
 	stderr := captureStderr(t, func() {
 		out := captureStdout(t, func() {
-			if code := cmdAgentOutput("abcd1234"); code != agentExitError {
+			if code := cmdAgentOutput("abcd1234"); code != waitExitError {
 				t.Errorf("skewed daemon: exit = %d, want 1", code)
 			}
 		})
@@ -950,7 +916,7 @@ func TestAgentRefusesPeerSessions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			d := startStubDaemon(t, peer)
 			stderr := captureStderr(t, func() {
-				if code := tt.run(); code != agentExitError {
+				if code := tt.run(); code != waitExitError {
 					t.Errorf("exit = %d, want 1", code)
 				}
 			})
@@ -997,4 +963,54 @@ func captureStream(t *testing.T, target **os.File, fn func()) string {
 	out := <-done
 	_ = r.Close()
 	return out
+}
+
+// TestAgentPromptPrintsTheResultOnlyOnCompletion: a synchronous prompt now
+// prints the agent's answer (the daemon selects it at turn close with the same
+// selector `gmux agent output` and `gmux wait` use), and prints nothing for any
+// other conclusion — a stale prior-turn answer must never be presented as this
+// turn's result.
+func TestAgentPromptPrintsTheResultOnlyOnCompletion(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		data       map[string]any
+		wantExit   int
+		wantStdout string
+	}{
+		{"completed", map[string]any{"admission": "accepted", "outcome": "completed", "output": "All green."},
+			waitExitOK, "All green.\n"},
+		{"completed multi-line untruncated",
+			map[string]any{"admission": "accepted", "outcome": "completed", "output": "a\nb\n\nc"},
+			waitExitOK, "a\nb\n\nc\n"},
+		{"completed with nothing to render", map[string]any{"admission": "accepted", "outcome": "completed"},
+			waitExitOK, ""},
+		{"interrupted", map[string]any{"admission": "accepted", "outcome": "interrupted", "output": "stale"},
+			waitExitInterrupted, ""},
+		{"error", map[string]any{"admission": "accepted", "outcome": "error", "output": "stale"},
+			waitExitError, ""},
+		{"detached", map[string]any{"admission": "accepted", "output": "stale"}, waitExitOK, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := startStubDaemon(t, localSession())
+			status := http.StatusOK
+			noWait := false
+			if tt.name == "detached" {
+				status, noWait = http.StatusAccepted, true
+			}
+			d.on(func(w http.ResponseWriter, r *http.Request) { writeEnvelope(w, status, tt.data) })
+			var code int
+			out := captureStdout(t, func() {
+				captureStderr(t, func() {
+					text := "go"
+					code = cmdAgentPrompt("abcd1234", agentModePrompt, noWait, 0, &text)
+				})
+			})
+			if code != tt.wantExit {
+				t.Errorf("exit = %d, want %d", code, tt.wantExit)
+			}
+			if out != tt.wantStdout {
+				t.Errorf("stdout = %q, want %q", out, tt.wantStdout)
+			}
+		})
+	}
 }

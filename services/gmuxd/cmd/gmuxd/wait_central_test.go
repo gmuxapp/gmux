@@ -34,32 +34,55 @@ func boolp(v bool) *bool { return &v }
 func TestTerminalReasonAndRunEvidenceTable(t *testing.T) {
 	exit := 0
 	cases := []struct {
-		name   string
-		s      compatSession
-		seen   bool
-		reason string
-		done   bool
+		name string
+		s    compatSession
+		seen bool
+		want waitConclusion
+		done bool
 	}{
-		{"already idle", compatSession{Alive: true, Status: &compatStatus{}}, false, "idle", true},
-		{"startup phantom", compatSession{}, false, "", false},
-		{"dead on arrival", compatSession{StartedAt: "x"}, false, "died", true},
-		{"clean death", compatSession{ExitCode: &exit, Status: &compatStatus{}}, false, "idle", true},
-		{"mid turn death", compatSession{ExitCode: &exit, Status: &compatStatus{Active: true}}, false, "died", true},
+		{"already idle", compatSession{Alive: true, Status: &compatStatus{}}, false,
+			waitConclusion{Reason: "idle", Outcome: "completed"}, true},
+		{"startup phantom", compatSession{}, false, waitConclusion{}, false},
+		// Death before any status report proves neither a turn nor its
+		// absence, so it is an error with a cause, never a completion.
+		{"dead on arrival", compatSession{StartedAt: "x"}, false,
+			waitConclusion{Reason: "died", Outcome: "error", Cause: "runner_died"}, true},
+		{"clean death", compatSession{ExitCode: &exit, Status: &compatStatus{}}, false,
+			waitConclusion{Reason: "idle", Outcome: "completed"}, true},
+		{"mid turn death", compatSession{ExitCode: &exit, Status: &compatStatus{Active: true}}, false,
+			waitConclusion{Reason: "died", Outcome: "error", Cause: "runner_died"}, true},
 		// An intentional stop closes the turn: the wait resolves on the
-		// inactive edge exactly like a completion. Reporting the stop to
-		// the user is the result-bearing wait's job (ADR 0027); the exit
-		// taxonomy is deliberately unchanged here.
-		{"interrupted live", compatSession{Alive: true, Status: &compatStatus{Interrupted: true}}, false, "idle", true},
-		{"interrupted then death", compatSession{ExitCode: &exit, Status: &compatStatus{Interrupted: true}}, false, "idle", true},
-		{"active error keeps waiting", compatSession{Alive: true, Status: &compatStatus{Active: true, Error: true}}, false, "", false},
+		// inactive edge exactly like a completion, but its conclusion is
+		// `interrupted`, which the CLI reports as exit 2 with no result.
+		{"interrupted live", compatSession{Alive: true, Status: &compatStatus{Interrupted: true}}, false,
+			waitConclusion{Reason: "idle", Outcome: "interrupted"}, true},
+		{"interrupted then death", compatSession{ExitCode: &exit, Status: &compatStatus{Interrupted: true}}, false,
+			waitConclusion{Reason: "idle", Outcome: "interrupted"}, true},
+		{"terminal failure", compatSession{Alive: true, Status: &compatStatus{Error: true}}, false,
+			waitConclusion{Reason: "idle", Outcome: "error"}, true},
+		// Error wins over interruption: a turn that failed is not a clean
+		// stop, and an interrupted flag left over from a prior stop must not
+		// downgrade a failure.
+		{"failure with interrupt flag", compatSession{Alive: true, Status: &compatStatus{Error: true, Interrupted: true}}, false,
+			waitConclusion{Reason: "idle", Outcome: "error"}, true},
+		{"active error keeps waiting", compatSession{Alive: true, Status: &compatStatus{Active: true, Error: true}}, false,
+			waitConclusion{}, false},
+		{"dead mid turn with error keeps its cause", compatSession{ExitCode: &exit, Status: &compatStatus{Active: true, Error: true}}, false,
+			waitConclusion{Reason: "died", Outcome: "error", Cause: "runner_died"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r, d := terminalReason(tc.s, tc.seen)
-			if r != tc.reason || d != tc.done {
-				t.Fatalf("got %q,%v", r, d)
+			if r != tc.want || d != tc.done {
+				t.Fatalf("got %+v,%v want %+v,%v", r, d, tc.want, tc.done)
 			}
 		})
+	}
+	if got := classifyTurnClose(false, false); got != "completed" {
+		t.Fatalf("classify clean: %q", got)
+	}
+	if got := diedConclusion(); got.Outcome != "error" || got.Cause != "runner_died" || got.Reason != "died" {
+		t.Fatalf("died conclusion: %+v", got)
 	}
 	if !hasRunEvidence(compatSession{}, true) || !hasRunEvidence(compatSession{StartedAt: "x"}, false) || hasRunEvidence(compatSession{}, false) {
 		t.Fatal("run evidence table")
@@ -86,8 +109,8 @@ func TestAwaitTurnCentralSchedules(t *testing.T) {
 		ch <- outcome("s", true, boolp(true), nil)
 		ch <- outcome("s", true, boolp(false), nil)
 		r, to := awaitTurnCentral(context.Background(), f, ch, "s", time.After(time.Second))
-		if r != "idle" || to {
-			t.Fatalf("%q %v", r, to)
+		if r.Reason != "idle" || r.Outcome != outcomeCompleted || to {
+			t.Fatalf("%+v %v", r, to)
 		}
 	})
 	t.Run("mid turn death", func(t *testing.T) {
@@ -97,15 +120,15 @@ func TestAwaitTurnCentralSchedules(t *testing.T) {
 		x := 1
 		ch <- outcome("s", false, boolp(true), &x)
 		r, _ := awaitTurnCentral(context.Background(), f, ch, "s", time.After(time.Second))
-		if r != "died" {
-			t.Fatal(r)
+		if r.Reason != "died" || r.Outcome != outcomeError || r.Cause != causeRunnerDied {
+			t.Fatalf("%+v", r)
 		}
 	})
 	t.Run("timeout stale idle ignored", func(t *testing.T) {
 		f := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false}})
 		r, to := awaitTurnCentral(context.Background(), f, make(chan sessioncoord.Outcome), "s", time.After(10*time.Millisecond))
-		if r != "" || !to {
-			t.Fatalf("%q %v", r, to)
+		if r.Reason != "" || !to {
+			t.Fatalf("%+v %v", r, to)
 		}
 	})
 	t.Run("removal", func(t *testing.T) {
@@ -113,8 +136,8 @@ func TestAwaitTurnCentralSchedules(t *testing.T) {
 		ch := make(chan sessioncoord.Outcome, 1)
 		ch <- sessioncoord.Outcome{Type: sessioncoord.OutcomeRemoved, ID: "s"}
 		r, _ := awaitTurnCentral(context.Background(), f, ch, "s", time.After(time.Second))
-		if r != "died" {
-			t.Fatal(r)
+		if r.Reason != "died" || r.Outcome != outcomeError {
+			t.Fatalf("%+v", r)
 		}
 	})
 	t.Run("dropped event repoll", func(t *testing.T) {
@@ -125,10 +148,47 @@ func TestAwaitTurnCentralSchedules(t *testing.T) {
 			f.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Active: false}}}}})
 		}()
 		r, to := awaitTurnCentral(context.Background(), f, ch, "s", time.After(time.Second))
-		if r != "idle" || to {
-			t.Fatalf("%q %v", r, to)
+		if r.Reason != "idle" || r.Outcome != outcomeCompleted || to {
+			t.Fatalf("%+v %v", r, to)
 		}
 	})
+	// send --wait must observe an intentional stop, not just idleness: without
+	// it the composition the docs call preferred exits 0 for a turn that
+	// `gmux wait` reports as exit 2.
+	t.Run("interrupted turn is reported as interrupted", func(t *testing.T) {
+		f := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false}})
+		ch := make(chan sessioncoord.Outcome, 2)
+		ch <- outcome("s", true, boolp(true), nil)
+		ch <- interruptedOutcome("s")
+		r, _ := awaitTurnCentral(context.Background(), f, ch, "s", time.After(time.Second))
+		if r.Reason != "idle" || r.Outcome != outcomeInterrupted {
+			t.Fatalf("%+v", r)
+		}
+	})
+	t.Run("failed turn is reported as an error", func(t *testing.T) {
+		f := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false}})
+		ch := make(chan sessioncoord.Outcome, 2)
+		ch <- outcome("s", true, boolp(true), nil)
+		ch <- erroredOutcome("s")
+		r, _ := awaitTurnCentral(context.Background(), f, ch, "s", time.After(time.Second))
+		if r.Reason != "idle" || r.Outcome != outcomeError || r.Cause != "" {
+			t.Fatalf("%+v", r)
+		}
+	})
+}
+
+// interruptedOutcome/erroredOutcome are closed-turn reports carrying the
+// terminal flags the shared classification reads.
+func interruptedOutcome(id string) sessioncoord.Outcome {
+	started := centralstore.UnixMillis(1)
+	row := centralstore.Session{ID: centralstore.SessionID(id), StartedAt: &started, StatusReported: true, Interrupted: true}
+	return sessioncoord.Outcome{Type: sessioncoord.OutcomeUpserted, ID: row.ID, Session: &row, Alive: true}
+}
+
+func erroredOutcome(id string) sessioncoord.Outcome {
+	started := centralstore.UnixMillis(1)
+	row := centralstore.Session{ID: centralstore.SessionID(id), StartedAt: &started, StatusReported: true, Error: true}
+	return sessioncoord.Outcome{Type: sessioncoord.OutcomeUpserted, ID: row.ID, Session: &row, Alive: true}
 }
 
 func TestWaitOutputExistingBlockingRegexAndExitWinner(t *testing.T) {

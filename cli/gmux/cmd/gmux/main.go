@@ -33,7 +33,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		fmt.Fprintln(os.Stderr)
 		printUsage(os.Stderr)
-		os.Exit(2)
+		// 1, not 2: under the global taxonomy (ADR 0027 §8) 2 means an
+		// intentional interruption, and a mistyped command line is an error
+		// like any other. Runtime usage errors already exit 1, so parse-time
+		// and runtime usage failures now agree.
+		os.Exit(exitUsage)
 	}
 
 	switch cmd.mode {
@@ -66,7 +70,7 @@ func main() {
 	case modeSendKeys:
 		os.Exit(cmdSendKeys(cmd.ref, cmd.keys, cmd.keysLiteral))
 	case modeWait:
-		os.Exit(cmdWait(cmd.ref, cmd.timeout, cmd.forText, cmd.forRegex))
+		os.Exit(cmdWait(cmd.ref, cmd.timeout, cmd.forText, cmd.forRegex, cmd.quiet))
 	case modeAgent:
 		os.Exit(cmdAgent(cmd))
 	case modeEdit:

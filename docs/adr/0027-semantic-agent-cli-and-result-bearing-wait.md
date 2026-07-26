@@ -396,26 +396,6 @@ reacting. Later waiters should be told that another waiter may own coordination.
 This is runtime-only waiter presence, not stored ownership or a lifecycle
 phase. It is explicitly outside the initial implementation.
 
-## Required implementation capabilities
-
-The initial work must provide, without one broad stateful adapter interface:
-
-1. **Resume derivation:** an already-described conversation returns a resume
-   command or nil when non-resumable; the redundant `CanResume` probe is
-   removed.
-2. **Action translation:** adapter semantic send/send-after-turn/interrupt to
-   its terminal or native mechanism, including readiness policy.
-3. **Authoritative readiness and turn events:** ready, active/inactive, error,
-   and intentional interruption.
-4. **Result barrier and rendering:** terminal turn-end releases only after the
-   adapter-owned final message is readable.
-5. **Explicit unsupported behavior:** semantic endpoints reject unsupported
-   adapters/actions and old runners; they never fall back to guessed keys or
-   raw input.
-
-Prefer small optional capabilities. Adapters remain stateless translators and
-storage interpreters; runner and gmuxd own runtime truth and orchestration.
-
 ## Consequences
 
 - Parent agents can prompt, steer, queue, cancel, wait for, and consume pi
@@ -477,3 +457,92 @@ session facts.
 Rejected as the eventual default because parent agents routinely omit the
 second read. `--quiet` preserves synchronization-only use; initial result
 rendering is intentionally limited to supported agent adapters.
+
+## Amendment: where a result-bearing answer comes from
+
+Recorded when §8/§11 were implemented. The decisions themselves stand; this
+fixes two things the decision text left open.
+
+**The result is selected server-side, at turn close, and bound to the turn that
+closed.** Both the resolved universal wait (`POST /v1/sessions/{id}/wait`) and
+the synchronous prompt response carry an `output` field holding the final
+assistant message of *their* turn, produced by the same selector
+`GET …/conversation?scope=message` uses. Having the CLI read the conversation
+after the wait returns was rejected because it reopens the staleness hole the
+barrier (§9) closes: between a wait resolving and a second request landing,
+another actor can start a new turn. Selecting inside the resolving request also
+keeps the read store-only (no runner, no resume), so it is safe on a session
+that has just died.
+
+Server-side selection alone is **not** sufficient, because "newest prose" still
+carries no turn identity: a turn that lands between the close observation and
+the read would have its answer reported as ours, and a newer turn that has so
+far produced only a user message would make the snapshot selector report
+nothing at all. The binding is therefore a **conversation watermark** taken when
+the waiter first observes its turn, and which index it records depends on what
+was observed:
+
+- a turn seen **starting** (a fresh inactive→active edge, or a prompt delivered
+  into an idle agent) is bounded by the **message count**: its content is what
+  comes after, and the previous turn's answer — which a user-boundary bound would
+  admit whenever our own user message has not been persisted yet — stays out;
+- a turn **already in progress** (a wait that subscribes mid-turn, a steer, a
+  follow-up queued behind a running turn) is bounded by that turn's **user
+  boundary**, the index just past the newest user message. Prose the turn has
+  already persisted is inside the window, which it must be: bounding such a wait
+  by the message count loses the answer of any turn whose tail is tool-only, and
+  reports nothing for a wait that completed perfectly well.
+
+At close, the selector considers only messages after the bound and stops at the
+first user message beyond it, so neither a later turn's prose nor an earlier
+turn's can be reported. A window with no prose omits the field, like every other
+"nothing to show" case. This needs no message IDs, no turn tokens and no stored
+turn metadata — an index is enough.
+
+A conversation that cannot be read **at mark time** offers no safe boundary, and
+is recorded as such: no result is attributed, because binding it to 0 would admit
+an earlier turn's answer as soon as storage became readable.
+
+A wait that finds the turn already closed has no turn to bind to and keeps
+snapshot semantics, as does `gmux agent output`, which is explicitly a snapshot.
+Such a wait therefore reports the conclusion and result of the turn that has
+**already** finished — correct, but a reason to arm waits before delivering
+(`agent prompt`, `send --wait`) when gating on a turn yet to start.
+
+A request that will not be shown a result marks nothing: a detached
+(`--no-wait`) prompt and raw `send --wait` never render a conversation.
+
+`output` is present only for `outcome: "completed"`, and is **omitted rather
+than empty** when there is nothing to show (non-renderer adapter, no
+conversation, no assistant prose in the current turn). Absence therefore never
+reads as "the agent answered with silence".
+
+**One classification, two waits.** The generic wait's terminal verdict and the
+semantic prompt's outcome are computed by one function
+(`classifyTurnClose`): terminal error → `error`, otherwise intentional stop →
+`interrupted`, otherwise `completed`. Death while a turn was open — or before
+any status was ever reported — is `error` with cause `runner_died`, never a
+fourth outcome and never a completion. The two wait *endpoints* remain
+separate: the generic wait gains no admission/reservation machinery.
+
+**Exit codes** are now global (§8): `0` success, `1` error (usage, unsupported,
+transport, timeout, death, terminal turn failure), `2` intentional
+interruption. This retired `gmux wait`'s `2 = died` / `3 = timeout` and
+`gmux agent`'s `3 = execution_timeout`, and moved parse-time CLI usage errors
+from `2` to `1`. ADR 0009's decision 13 and its `send --wait` amendment are
+superseded accordingly.
+
+`send --wait` reports the same **conclusion** as `gmux wait` (through the same
+classification and the same exit mapping), because an intentionally interrupted
+turn must not exit 0 through the composition the docs recommend. It remains
+result-free: raw keystrokes make no claim about which agent turn they belong to.
+
+The taxonomy covers verdicts gmux itself reaches. Three verbs deliberately pass
+a code through instead: `gmux -- <cmd>` and `gmux edit` return the child's, and
+`gmux daemon|auth|remote` exec gmuxd and return its.
+
+One consequence is deliberate and documented: a session whose turn is its whole
+lifetime closes that turn with `Error` when the child exits non-zero, so
+`gmux wait` on a failed `gmux -d -- make build` exits 1. "Finished" and
+"succeeded" are the same question for such sessions, and a wait that returned 0
+for a failed build would be the more dangerous answer.

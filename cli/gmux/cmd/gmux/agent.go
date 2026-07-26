@@ -15,11 +15,11 @@ package main
 // silently degrades into keystrokes is precisely the failure mode ADR 0027's
 // readiness gate and delivery reservation exist to prevent.
 //
-// This slice is deliberately local-and-pi-only, and deliberately quiet: the
-// daemon's synchronous prompt response carries no output field yet (see
-// agent_actions.go), so a completed prompt prints nothing rather than
-// inventing a result. `gmux agent output` is the way to read what the agent
-// said until the next slice makes waits result-bearing.
+// This namespace is deliberately local-and-pi-only. A synchronous prompt that
+// completes prints the agent's answer (the daemon selects it at turn close);
+// a failed or interrupted turn prints nothing, because the newest stored
+// message would be a previous or partial turn's. `gmux agent output` reads it
+// explicitly in those cases.
 
 import (
 	"encoding/json"
@@ -51,27 +51,12 @@ const (
 // prompt is a different instruction than the one that was typed.
 const maxPromptBytes = 1 << 20 // 1 MiB
 
-// agentExit maps a daemon answer onto a process exit code.
-//
-// Mostly today's repo-wide wait codes (0 ok, 3 timeout, 1 everything else),
-// reused so `gmux agent` does not introduce a second taxonomy mid-stack. Two
-// deliberate departures:
-//
-//   - 2 means INTENTIONAL INTERRUPTION here, not "died". `gmux wait`'s 2 is
-//     the death code, but a namespace that reports both a cancelled turn and a
-//     dead runner as 2 cannot distinguish the one case scripts most need to
-//     branch on. A dead runner is an error under both the current and the next
-//     taxonomy, so it maps to 1 and nothing regresses.
-//   - a turn that ends in `error` is 1, not 2.
-//
-// When the global 0/1/2 rework lands, the only change here is
-// execution_timeout 3→1; interruption already exits 2.
-const (
-	agentExitOK          = 0
-	agentExitError       = 1
-	agentExitInterrupted = 2
-	agentExitTimeout     = 3
-)
+// Exit codes here are the global taxonomy defined in wait.go (waitExit*, ADR
+// 0027 §8), shared verbatim with `gmux wait` and `send --wait`: 0 success,
+// 1 error (usage, unsupported, transport, timeout, death, terminal turn
+// failure), 2 intentional interruption. There is no timeout code: a timeout is
+// an error, and a caller that needs to tell timeouts apart reads the daemon's
+// stable error code on stderr, which says far more than a number could.
 
 // parseAgent handles `gmux agent <verb> ...`.
 //
@@ -251,7 +236,7 @@ func cmdAgent(c *command) int {
 		return cmdAgentOutput(c.ref)
 	}
 	fmt.Fprintf(os.Stderr, "gmux: unknown agent verb %q\n", c.agentSub)
-	return agentExitError
+	return waitExitError
 }
 
 // resolveAgentSession resolves a ref and refuses peer-owned sessions.
@@ -278,11 +263,11 @@ func cmdAgentPrompt(ref, mode string, noWait bool, timeoutSecs int, text *string
 	prompt, err := readPromptText(text, os.Stdin, localterm.IsInteractive())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return agentExitError
+		return waitExitError
 	}
 	sess, ok := resolveAgentSession(ref, "prompt")
 	if !ok {
-		return agentExitError
+		return waitExitError
 	}
 	body, err := json.Marshal(map[string]any{
 		"prompt":          prompt,
@@ -292,7 +277,7 @@ func cmdAgentPrompt(ref, mode string, noWait bool, timeoutSecs int, text *string
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return agentExitError
+		return waitExitError
 	}
 
 	client := gmuxdClient()
@@ -304,7 +289,7 @@ func cmdAgentPrompt(ref, mode string, noWait bool, timeoutSecs int, text *string
 	resp, err := client.Post(url, "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return agentExitError
+		return waitExitError
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -363,23 +348,36 @@ type agentPromptResult struct {
 	Outcome   string `json:"outcome"`
 	Cause     string `json:"cause"`
 	Resumed   bool   `json:"resumed"`
+	// Output is the agent's latest final message, present only for a
+	// completed turn on a session whose conversation gmux can read.
+	Output string `json:"output"`
 }
 
 // reportAgentPromptSuccess turns a 2xx prompt response into output and an exit
 // code.
 //
-// Quiet on success by design. The daemon does not return the agent's answer
-// yet, and printing a cheerful "ok" for a turn whose text nobody has seen
-// trains callers to trust an absence of information. `resumed` is worth a
-// stderr line because it says the session was dead and has been restarted —
-// a state change the caller did not ask for.
+// A completed turn prints the agent's answer, which the daemon selected at turn
+// close with the same selector `gmux agent output` and `gmux wait` use. Every
+// other conclusion prints NO result — a stale prior-turn answer must never be
+// presented as this turn's — and reports the condition on stderr instead.
+// `resumed` is worth a stderr line because it says the session was dead and has
+// been restarted: a state change the caller did not ask for.
+//
+// One coupling to know about: the error hint below names `gmux agent output`
+// unconditionally, where reportWaitResult decides from the response's
+// `conversation_readable` whether to hint at `gmux tail` instead. The two agree
+// today only because a session that can be prompted has an AgentActionEncoder,
+// and the only adapter with one (pi) is also a ConversationRenderer. The moment
+// an adapter implements EncodeAction without RenderConversation, this hint starts
+// naming a route that 404s, and the prompt payload needs `conversation_readable`
+// too.
 func reportAgentPromptSuccess(sess cliSession, status int, body []byte, noWait bool) int {
 	var env struct {
 		Data agentPromptResult `json:"data"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
 		fmt.Fprintln(os.Stderr, "gmux: decode prompt response:", err)
-		return agentExitError
+		return waitExitError
 	}
 	res := env.Data
 	if res.Resumed {
@@ -387,25 +385,35 @@ func reportAgentPromptSuccess(sess cliSession, status int, body []byte, noWait b
 	}
 	if noWait || status == http.StatusAccepted {
 		// Detached: admission is all that is known, and it is not a result.
-		return agentExitOK
+		return waitExitOK
 	}
 	switch res.Outcome {
-	case "completed":
-		return agentExitOK
-	case "interrupted":
+	case waitOutcomeCompleted:
+		if res.Output != "" {
+			// Verbatim and untruncated, with exactly one trailing newline.
+			// An absent field means "nothing gmux can read" (a non-renderer
+			// agent, or a turn with no prose), which stays quiet: the turn
+			// really did complete.
+			if _, err := io.WriteString(os.Stdout, strings.TrimRight(res.Output, "\n")+"\n"); err != nil {
+				fmt.Fprintln(os.Stderr, "gmux:", err)
+				return waitExitError
+			}
+		}
+		return waitExitOK
+	case waitOutcomeInterrupted:
 		fmt.Fprintf(os.Stderr, "gmux: the turn was interrupted before it finished (session %s)\n", displayID(sess))
-		return agentExitInterrupted
-	case "error":
+		return waitExitInterrupted
+	case waitOutcomeError:
 		if res.Cause != "" {
 			fmt.Fprintf(os.Stderr, "gmux: the turn ended in an error (%s); see gmux agent output %s\n",
 				res.Cause, shortID(sess.ID))
 		} else {
 			fmt.Fprintf(os.Stderr, "gmux: the turn ended in an error; see gmux agent output %s\n", shortID(sess.ID))
 		}
-		return agentExitError
+		return waitExitError
 	default:
 		fmt.Fprintf(os.Stderr, "gmux: unexpected prompt outcome %q\n", res.Outcome)
-		return agentExitError
+		return waitExitError
 	}
 }
 
@@ -416,7 +424,7 @@ func reportAgentPromptSuccess(sess cliSession, status int, body []byte, noWait b
 func cmdAgentCancel(ref string) int {
 	sess, ok := resolveAgentSession(ref, "cancel")
 	if !ok {
-		return agentExitError
+		return waitExitError
 	}
 	client := gmuxdClient()
 	client.Timeout = 0
@@ -424,7 +432,7 @@ func cmdAgentCancel(ref string) int {
 	resp, err := client.Post(url, "application/json", strings.NewReader("{}"))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return agentExitError
+		return waitExitError
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -434,7 +442,7 @@ func cmdAgentCancel(ref string) int {
 	// Delivered, not stopped: saying "cancelled" would claim more than the
 	// daemon reported.
 	fmt.Fprintf(os.Stderr, "gmux: interrupt delivered to %s\n", displayID(sess))
-	return agentExitOK
+	return waitExitOK
 }
 
 // cmdAgentOutput implements `gmux agent output`: print the agent's latest
@@ -444,7 +452,7 @@ func cmdAgentCancel(ref string) int {
 func cmdAgentOutput(ref string) int {
 	sess, ok := resolveAgentSession(ref, "output")
 	if !ok {
-		return agentExitError
+		return waitExitError
 	}
 	client := gmuxdClient()
 	// No client deadline: the daemon re-reads and renders the agent's whole
@@ -456,17 +464,17 @@ func cmdAgentOutput(ref string) int {
 	resp, err := client.Get(url)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return agentExitError
+		return waitExitError
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil && !errors.Is(err, io.EOF) {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return agentExitError
+		return waitExitError
 	}
 	if msg := agentOutputSkewError(resp.StatusCode, resp.Header.Get(conversationScopeHeader)); msg != "" {
 		fmt.Fprintln(os.Stderr, "gmux:", msg)
-		return agentExitError
+		return waitExitError
 	}
 	if resp.StatusCode >= 300 {
 		return reportAgentError(sess, "output", resp.StatusCode, raw)
@@ -478,13 +486,13 @@ func cmdAgentOutput(ref string) int {
 		// agent answered with silence, which is the one thing the message scope
 		// exists to never say.
 		fmt.Fprintf(os.Stderr, "gmux: the daemon reported a message for %s but sent no content\n", displayID(sess))
-		return agentExitError
+		return waitExitError
 	}
 	if _, err := os.Stdout.Write(raw); err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return agentExitError
+		return waitExitError
 	}
-	return agentExitOK
+	return waitExitOK
 }
 
 // conversationScopeHeader must match the daemon's marker header.
@@ -535,7 +543,14 @@ func reportAgentError(sess cliSession, verb string, status int, body []byte) int
 	if hint := agentErrorHint(code, verb, sess); hint != "" {
 		fmt.Fprintln(os.Stderr, "gmux:", hint)
 	}
-	return agentExitForCode(code)
+	// Every failure code is 1 under the global taxonomy, timeout-shaped ones
+	// included. That loses nothing a number could carry: admission_timeout,
+	// delivery_timeout and queued_turn_unobserved describe an INDETERMINATE
+	// delivery (retrying may duplicate the prompt) while execution_timeout means
+	// the turn is still running — three meanings one "timeout" code would have
+	// flattened into the bucket scripts blindly retry. The stable code printed
+	// above separates them.
+	return waitExitError
 }
 
 // agentErrorHint adds the one actionable next step the daemon's message does
@@ -562,36 +577,11 @@ func agentErrorHint(code, verb string, sess cliSession) string {
 // through verbatim with exit 1 — an unknown code is still the daemon's answer,
 // and inventing a friendlier interpretation of it is how optimism leaks in.
 const (
-	codeRunnerOutdated       = "runner_outdated"
-	codeAdmissionTimeout     = "admission_timeout"
-	codeDeliveryTimeout      = "delivery_timeout"
-	codeExecutionTimeout     = "execution_timeout"
-	codeQueuedTurnUnobserved = "queued_turn_unobserved"
-	codeRunnerDied           = "runner_died"
-	codeUnsupportedAdapter   = "unsupported_adapter"
-	codeUnsupportedAction    = "unsupported_action"
-	codeNoMessage            = "no_message"
-	codeNoConversation       = "no_conversation"
+	codeUnsupportedAdapter = "unsupported_adapter"
+	codeUnsupportedAction  = "unsupported_action"
+	codeNoMessage          = "no_message"
+	codeNoConversation     = "no_conversation"
 )
-
-// agentExitForCode maps a daemon error code to an exit code under the current
-// (pre-taxonomy-rework) conventions.
-//
-// Only execution_timeout is a timeout: the other timeout-shaped codes
-// (admission_timeout, delivery_timeout, queued_turn_unobserved) describe an
-// INDETERMINATE delivery, and mapping them to the timeout code would put them
-// in the same bucket scripts routinely retry. They are errors, and their
-// messages say why retrying can duplicate work.
-//
-// runner_died is 1, not 2: 2 is reserved for intentional interruption in this
-// namespace (see the agentExit* block), and a runner dying is the opposite of
-// intentional.
-func agentExitForCode(code string) int {
-	if code == codeExecutionTimeout {
-		return agentExitTimeout
-	}
-	return agentExitError
-}
 
 // printAgentUsage writes help for the namespace, or for one verb when topic
 // names it ("agent prompt").
@@ -610,10 +600,10 @@ func printAgentUsage(w io.Writer, topic string) {
 
 --follow-up and --steer are mutually exclusive; --no-wait composes with either.
 
-Waits by default: the command returns when the turn ends. Exit status is 0 for
-a completed turn, 2 for an interrupted one, 3 on --timeout, 1 otherwise (a
-failed turn or a dead runner included). The agent's answer is not printed yet —
-read it with 'gmux agent output <id>'.
+Waits by default: the command returns when the turn ends and prints the agent's
+answer. Exit status is 0 for a completed turn, 2 for an interrupted one, and 1
+for anything else (a failed turn, a --timeout, a dead runner). A turn that did
+not complete prints no answer — read what exists with 'gmux agent output <id>'.
 
 A plain prompt (no flag) restarts a dead retained session to deliver the
 prompt; --steer never does. Local sessions only.
