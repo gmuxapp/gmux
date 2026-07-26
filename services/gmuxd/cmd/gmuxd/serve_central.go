@@ -1220,6 +1220,32 @@ func conversationHandlerCentral(w http.ResponseWriter, r *http.Request, sessionI
 		writeError(w, http.StatusNotFound, "not_found", "session not found")
 		return
 	}
+	// scope selects WHAT is read, not how much: absent (or the explicit
+	// "transcript") is the pre-existing markdown transcript every current
+	// caller expects, byte for byte. "message" is ADR 0027's semantic read
+	// behind `gmux agent output`. Validation is strict because a mistyped
+	// scope silently served as a transcript would hand a script the whole
+	// conversation where it asked for one answer.
+	//
+	// Presence is judged on the query KEY, not on the value: `?scope=` is a
+	// caller who meant to name a scope and produced an empty variable, and
+	// `?scope=message&scope=transcript` is two callers' worth of intent in one
+	// URL. Both are refused rather than resolved by Get()'s "first value wins".
+	scope, err := singleQueryValue(r.URL.Query(), "scope")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	switch scope {
+	case "", "transcript":
+	case conversationScopeMessage:
+		conversationMessageScopeCentral(w, r, sess)
+		return
+	default:
+		writeError(w, http.StatusBadRequest, "bad_request",
+			fmt.Sprintf("unknown scope %q; expected transcript or message", scope))
+		return
+	}
 	tailN := 0
 	if v := r.URL.Query().Get("tail"); v != "" {
 		n, err := strconv.Atoi(v)

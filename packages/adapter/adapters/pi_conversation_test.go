@@ -29,10 +29,13 @@ func TestRenderConversationTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Prose is the tool-free subset of Text: it is what `gmux agent output`
+	// reports as the agent's answer, so the tool line must be absent from it
+	// while remaining in the transcript rendering.
 	want := []adapter.ConversationMessage{
-		{Role: "user", Text: "Fix the auth bug"},
-		{Role: "assistant", Text: "Looking now.\n\n[tool] bash {\"command\":\"go test ./...\"}"},
-		{Role: "assistant", Text: "All green."},
+		{Role: "user", Text: "Fix the auth bug", Prose: "Fix the auth bug"},
+		{Role: "assistant", Text: "Looking now.\n\n[tool] bash {\"command\":\"go test ./...\"}", Prose: "Looking now."},
+		{Role: "assistant", Text: "All green.", Prose: "All green."},
 	}
 	if len(msgs) != len(want) {
 		t.Fatalf("message count: want %d, got %d (%+v)", len(want), len(msgs), msgs)
@@ -148,5 +151,55 @@ func TestFormatPiToolCallTruncatesArgs(t *testing.T) {
 	}
 	if got := formatPiToolCall("ls", []byte(`{}`)); got != "[tool] ls" {
 		t.Fatalf("empty args: got %q", got)
+	}
+}
+
+// TestRenderConversationProseExcludesToolAndImageRenderings pins the Prose
+// field that the semantic "what did the agent answer" read depends on. pi
+// routinely mixes text blocks with toolCall blocks inside ONE assistant
+// message, so a consumer scanning for the last assistant message cannot
+// separate answer from activity by itself — only the renderer knows which of
+// its own lines were tool renderings.
+func TestRenderConversationProseExcludesToolAndImageRenderings(t *testing.T) {
+	path := writeTempJSONL(t,
+		`{"type":"session","version":3,"id":"abc-123","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/test"}`,
+		`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"ls"}},{"type":"image","source":{}},{"type":"text","text":"Two files."}]}}`,
+		`{"type":"message","id":"a2","message":{"role":"assistant","content":[{"type":"toolCall","id":"t2","name":"bash","arguments":{"command":"pwd"}}]}}`,
+	)
+
+	msgs, err := NewPi().RenderConversation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("message count = %d (%+v)", len(msgs), msgs)
+	}
+	if msgs[0].Prose != "Two files." {
+		t.Errorf("mixed message prose = %q, want just the text block", msgs[0].Prose)
+	}
+	if !strings.Contains(msgs[0].Text, "[tool] bash") || !strings.Contains(msgs[0].Text, "[image]") {
+		t.Errorf("transcript rendering lost its tool/image lines: %q", msgs[0].Text)
+	}
+	// A tool-only message has no prose at all. Empty (not Text) is the
+	// contract: it is how the consumer knows to keep looking instead of
+	// presenting `[tool] bash {...}` as the agent's reply.
+	if msgs[1].Prose != "" {
+		t.Errorf("tool-only message prose = %q, want empty", msgs[1].Prose)
+	}
+}
+
+// TestRenderConversationStringContentIsAllProse: pi's old whole-string content
+// format has no block types to separate, so it is prose by construction.
+func TestRenderConversationStringContentIsAllProse(t *testing.T) {
+	path := writeTempJSONL(t,
+		`{"type":"session","version":3,"id":"abc-123","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp"}`,
+		`{"type":"message","id":"a1","message":{"role":"assistant","content":"plain old string"}}`,
+	)
+	msgs, err := NewPi().RenderConversation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].Prose != "plain old string" || msgs[0].Text != msgs[0].Prose {
+		t.Fatalf("msgs = %+v", msgs)
 	}
 }

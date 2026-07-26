@@ -343,3 +343,21 @@ session/tab types (of which the editor is the first; more are expected)
 warrant top-level verbs when the verb is itself an external interface
 contract like `$EDITOR`. Each such addition still requires an explicit
 amendment here.
+
+## Amendment (2026-07-26): `agent` is a namespace group
+
+`gmux agent prompt|cancel|output` (ADR 0027) is added as a **namespace
+group**, which is exactly the growth path decision 5 prescribes ("future
+groups (e.g. `gmux peer …`) as needed") — not a new top-level verb, so
+the frozen-verb rule is untouched: `agent` alone is a usage error, and
+every capability lives behind a sub-verb.
+
+It is also the first group whose sub-verbs take flags, so `gmux help
+agent [verb]` (and `--help` on any of them) prints per-verb help. That
+narrows decision 9's "per-verb help is intentionally not implemented"
+to the flagless verbs it was written for; the generic `gmux help <verb>`
+remains lenient and prints the full usage for everything else.
+
+`send` stays raw and adapter-blind (its semantic `--steering`/
+`--follow-up` flags are gone); intent-carrying submission is `agent`'s
+job. The two are permanently separate surfaces, not layers of one.

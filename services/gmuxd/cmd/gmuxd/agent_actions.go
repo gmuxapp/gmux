@@ -573,8 +573,11 @@ func finishAgentAction(w http.ResponseWriter, r *http.Request, deps agentDeps, o
 		// queued. Reporting its completed/error/interrupted verdict as this
 		// request's outcome would attribute somebody else's turn to this
 		// prompt, so the honest answer is that execution was never observed.
+		// Same retry warning as admission_timeout, for the same reason: the
+		// bytes are known to have been delivered, so resending duplicates the
+		// prompt. Only the execution is unknown.
 		writeError(w, http.StatusGatewayTimeout, codeQueuedTurnUnobserved, fmt.Sprintf(
-			"follow-up was delivered and the running turn closed, but no queued turn started within %s; the queued prompt's execution was not observed (the closed turn's result is not this prompt's)",
+			"follow-up was delivered and the running turn closed, but no queued turn started within %s; the queued prompt's execution was not observed (the closed turn's result is not this prompt's), and since delivery already happened, retrying may duplicate the queued prompt (inspect the session before resending)",
 			spec.admission))
 		return
 	case codeExecutionTimeout:

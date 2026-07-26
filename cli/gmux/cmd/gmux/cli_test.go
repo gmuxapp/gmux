@@ -305,6 +305,7 @@ func TestParseCLIErrors(t *testing.T) {
 		{"send", "--wait"},                                     // missing id (only a flag given)
 		{"send", "--follow-up", "abc", "x"},                    // removed semantic flag, not silently accepted
 		{"send", "--steering", "abc", "x"},                     // removed semantic flag, not silently accepted
+		{"send", "--steering=s1", "abc", "x"},                   // ...in its =value spelling too
 		{"daemon"},                                             // missing subcommand
 		{"daemon", "frobnicate"},                               // unknown subcommand
 		{"daemon", "state"},                                    // missing state subcommand
@@ -337,6 +338,11 @@ func TestParseCLIMigrationShim(t *testing.T) {
 		{[]string{"--no-attach", "x"}, "gmux -d"},
 		{[]string{"--host=laptop"}, "@<peer>"},
 		{[]string{"pytest", "-q"}, "gmux -- pytest"},
+		// send's two removed semantic flags have a named replacement one
+		// rename away, so "unknown flag" is the least actionable of the
+		// available errors: name the verb that replaced them.
+		{[]string{"send", "--steering", "s1", "hi"}, "gmux agent prompt --steer"},
+		{[]string{"send", "--follow-up", "s1", "hi"}, "gmux agent prompt --follow-up"},
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.args, "_"), func(t *testing.T) {

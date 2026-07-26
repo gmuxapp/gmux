@@ -15,9 +15,12 @@ the command begins.
 ```bash
 gmux -- <cmd> [args]         # run blocking; exits with the child's exit code
 gmux -d -- <cmd> [args]      # run detached; prints the session id on stdout
-gmux send <id> 'text' Enter  # type text and submit (Enter is explicit)
+gmux agent prompt <id> 'text'   # prompt an AGENT session; blocks until the turn ends
+gmux agent output <id>          # print that agent's latest message
+gmux agent cancel <id>          # interrupt the running turn
+gmux send <id> 'text' Enter  # RAW: type text and submit (Enter is explicit)
 gmux send <id> C-c           # send a control key (interrupt), no text
-gmux send --wait <id> 'text' Enter  # send AND block until the reply is done
+gmux send --wait <id> 'text' Enter  # raw send AND block until the reply is done
 gmux wait <id>               # block until idle (agent turn done / shell at prompt)
 gmux wait <id> --for-text S  # block until S appears in the output
 gmux tail <id> [-n N]        # conversation as markdown (agents) or last N
@@ -27,8 +30,15 @@ gmux ls [--json]             # list sessions (--json for machine parsing)
 gmux kill <id>               # SIGTERM the runner
 ```
 
+**For agent sessions (pi), prompt with `gmux agent prompt`, not `gmux send`.**
+`send` types raw keystrokes and cannot tell you whether the agent accepted
+them; `agent prompt` waits until the agent can accept input, submits the way
+that agent expects, and reports the turn's real outcome. Keep `send` for
+shells, TUIs, and agents without semantic support (Claude Code, Codex — they
+fail with `unsupported_adapter`).
+
 `ls` IDs are 8-character prefixes; pass them directly to
-`send` / `wait` / `tail` / `kill`. Tip: `alias gm='gmux --'` makes
+`agent` / `send` / `wait` / `tail` / `kill`. Tip: `alias gm='gmux --'` makes
 `gm pytest` shorthand for `gmux -- pytest`.
 
 Because `gmux -- <cmd>` propagates the child's exit code, it composes:
@@ -55,18 +65,73 @@ Key names follow tmux: `Enter`, `Tab`, `Escape`, `Up`/`Down`/`Left`/`Right`,
 `gmux send $id -v` sends a literal `-v` with no `--` guard needed. `send`'s own
 flags (`--wait`, `--timeout`) only work *before* the id.
 
+## Prompting an agent session
+
+```bash
+id=$(gmux -d -- pi)
+gmux agent prompt --timeout 600 $id 'run the suite and fix what fails'
+gmux agent output $id                     # the answer, verbatim, no [tool] lines
+git diff | gmux agent prompt $id           # prompt from stdin (stays one prompt)
+```
+
+`agent prompt` blocks until the turn ends. Exit codes: `0` completed,
+`2` interrupted, `3` `--timeout` elapsed, `1` everything else (failed turn, dead
+runner, usage/transport error). Careful: `gmux wait`'s `2` means "died", while
+`agent`'s `2` means "intentionally interrupted". Success prints
+nothing — read the reply with `gmux agent output <id>` (latest final message,
+untruncated, straight from the agent's stored conversation; works even after
+the session died). Use `gmux tail` when you want the whole transcript.
+
+Other shapes, all with the flags **before** the id (text after the id is
+verbatim):
+
+```bash
+gmux agent prompt --no-wait $id 'start the long refactor'   # return once admitted
+gmux agent prompt --follow-up $id 'then update the docs'    # queue after this turn
+gmux agent prompt --steer $id 'stop, use the sqlite path'   # redirect the live turn
+gmux agent prompt --no-wait --steer $id 'and skip the migration'  # --no-wait composes
+gmux agent cancel $id; gmux wait $id; [ $? = 2 ] && echo stopped   # interrupt, then wait
+```
+
+Do **not** chain cancel with `&& gmux wait`: an interrupted turn exits `2`, so the
+wait "fails" on exactly the outcome you asked for (and aborts the script under
+`set -e`).
+
+`--follow-up` and `--steer` are mutually exclusive; `--no-wait` composes with
+either (it only decides whether you block, so `--no-wait --timeout N` is a usage
+error). A plain prompt restarts a dead retained session to deliver it; `--steer` and
+`cancel` need a live, active turn and never resume. `cancel` returns when the
+interrupt is *delivered*, so follow it with `gmux wait` if the next step needs
+the turn actually stopped.
+
+For pi, `cancel` also **restores queued follow-ups into the composer**: after a
+cancel the composer may hold text nobody retyped, and the next prompt submits it
+together with the new one. And `--follow-up`/`cancel` depend on pi's default
+alt+enter/escape keybindings — a session whose user remapped them loses both
+silently.
+
+Errors carry a stable code. `admission_timeout`, `delivery_timeout`,
+`queued_turn_unobserved` and `transport_error` are **indeterminate** — the prompt
+may already have landed, so do not blindly retry; inspect with `gmux agent
+output`/`gmux tail` first. So is a bare transport failure with no code (a dropped
+connection to gmuxd): the request may have been delivered before the connection
+went away. `runner_outdated` (the session predates semantic actions: restart it),
+`precondition_failed`, `delivery_pending`, `not_ready`, `not_running` and
+`incarnation_mismatch` (the runner was replaced mid-flight and the replacement
+refused an action meant for its predecessor) all guarantee nothing was delivered
+and are safe to retry. Local sessions only (peer ids are refused).
+
 ## Sequential orchestration
 
 ```bash
 id=$(gmux -d -- pi "implement the feature")
 gmux wait $id
 
-gmux send --wait $id "$(cat review.txt)" Enter
-
-gmux tail $id -n 100
+gmux agent prompt --timeout 900 $id "$(cat review.txt)"
+gmux agent output $id
 ```
 
-**Prefer `gmux send --wait` over `gmux send … && gmux wait`** for "send a
+For **raw** (non-agent) sessions, **prefer `gmux send --wait` over `gmux send … && gmux wait`** for "send a
 prompt and wait for the reply": the two-command composition can observe the
 *previous* turn's idle state and return before the agent has even started,
 while `--wait` is race-free (the daemon arms the wait before delivering the
@@ -88,7 +153,7 @@ done
 
 for id in "${ids[@]}"; do
   echo "=== $id ==="
-  gmux tail "$id" -n 100
+  gmux agent output "$id"      # each agent's final answer (gmux tail for the transcript)
 done
 ```
 
@@ -137,7 +202,8 @@ compact `[tool] …` one-liners — instead of the TUI's terminal rendering.
 omitted. This is the best way to read another agent's answer:
 
 ```bash
-gmux send --wait $id 'summarize your findings' Enter
+gmux agent prompt $id 'summarize your findings'
+gmux agent output $id        # just the reply
 gmux tail $id -n 2           # the prompt and the reply, clean markdown
 ```
 

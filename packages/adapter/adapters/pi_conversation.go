@@ -56,22 +56,33 @@ func (p *Pi) RenderConversation(ref string) ([]adapter.ConversationMessage, erro
 		if role != "user" && role != "assistant" {
 			continue // toolResult and any future roles
 		}
-		text := renderPiContent(entry.Message.Content)
+		text, prose := renderPiContent(entry.Message.Content)
 		if text == "" {
 			continue // e.g. thinking-only assistant turn
 		}
-		out = append(out, adapter.ConversationMessage{Role: role, Text: text})
+		out = append(out, adapter.ConversationMessage{Role: role, Text: text, Prose: prose})
 	}
 	return out, nil
 }
 
-// renderPiContent renders a message's content to markdown. pi encodes
-// content either as a plain string (old format) or as an array of
-// typed blocks: text, thinking, toolCall, image.
-func renderPiContent(content json.RawMessage) string {
+// renderPiContent renders a message's content to markdown, returning the
+// full rendering and its prose-only subset (see
+// adapter.ConversationMessage.Prose). pi encodes content either as a
+// plain string (old format) or as an array of typed blocks: text,
+// thinking, toolCall, image.
+//
+// The two results are built in one pass because they differ only by
+// which blocks contribute: a pi assistant message routinely mixes text
+// blocks with toolCall blocks, so "the last assistant message" and "the
+// last thing the agent said" are not the same string, and only the
+// renderer knows which of its own output lines were tool renderings.
+func renderPiContent(content json.RawMessage) (text, prose string) {
 	var s string
 	if err := json.Unmarshal(content, &s); err == nil {
-		return strings.TrimSpace(s)
+		s = strings.TrimSpace(s)
+		// A whole-string content has no block types to separate: it is
+		// prose by construction.
+		return s, s
 	}
 
 	var blocks []struct {
@@ -81,15 +92,17 @@ func renderPiContent(content json.RawMessage) string {
 		Arguments json.RawMessage `json:"arguments"` // toolCall
 	}
 	if err := json.Unmarshal(content, &blocks); err != nil {
-		return ""
+		return "", ""
 	}
 
 	parts := make([]string, 0, len(blocks))
+	proseParts := make([]string, 0, len(blocks))
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
 			if t := strings.TrimSpace(b.Text); t != "" {
 				parts = append(parts, t)
+				proseParts = append(proseParts, t)
 			}
 		case "toolCall":
 			parts = append(parts, formatPiToolCall(b.Name, b.Arguments))
@@ -98,7 +111,7 @@ func renderPiContent(content json.RawMessage) string {
 		}
 		// thinking (and unknown block types): skipped.
 	}
-	return strings.Join(parts, "\n\n")
+	return strings.Join(parts, "\n\n"), strings.Join(proseParts, "\n\n")
 }
 
 // maxToolArgChars caps the rendered tool-call arguments. Tool calls are

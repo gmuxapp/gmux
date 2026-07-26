@@ -10,8 +10,8 @@ sidebar:
 ## Overview
 
 **`gmux`** — the command you use. It runs commands in managed sessions and
-drives them (list, attach, tail, send, wait, kill), plus daemon control and
-pairing. It auto-starts the daemon when needed.
+drives them (list, attach, tail, send, wait, kill), prompts agent sessions
+(`gmux agent`), plus daemon control and pairing. It auto-starts the daemon when needed.
 
 **`gmuxd`** — the daemon process. Serves the web UI, session history, and
 optional remote access. You rarely invoke it directly; `gmux` starts it for
@@ -240,6 +240,119 @@ blocks until the process exits. For an interactive shell that can mean
 "forever" (it is never provably idle), so bound the wait with `--timeout`
 or use `--for-text`/`--for-regex`. Idle wait is local-only for now (peer
 support is pending).
+
+## Agent sessions
+
+`gmux send` types bytes at a terminal. The `gmux agent` verbs speak to the
+agent itself: they wait until it can accept input, submit the way that agent
+expects, and report what the daemon actually observed. Use them for agent
+sessions and keep `send`/`send-keys` for raw keystrokes.
+
+Agent sessions on **this host** only, and **pi** only for now. Other agents
+(Claude Code, Codex) report an explicit "unsupported" error rather than
+quietly typing something — drive those with `gmux send` and read them with
+`gmux tail`.
+
+### `gmux agent prompt [flags] <id> [prompt]`
+
+Send a prompt to an agent session and, by default, block until the turn it
+starts has ended.
+
+```bash
+gmux agent prompt a3f20187 'review the diff on this branch'
+gmux agent prompt --timeout 600 a3f20187 'run the full suite'
+gmux agent prompt --no-wait a3f20187 'start the refactor'   # return once admitted
+gmux agent prompt --follow-up a3f20187 'then update the docs'
+gmux agent prompt --steer a3f20187 'stop, use the sqlite path instead'
+gmux agent prompt --no-wait --steer a3f20187 'and skip the migration'
+git diff | gmux agent prompt a3f20187                        # prompt from stdin
+```
+
+- **no flag** — start a fresh turn. Requires an idle agent; a dead but retained
+  session is restarted transparently to deliver the prompt (you'll see a note
+  on stderr when that happens).
+- `--follow-up` — queue the prompt so it submits after the current turn ends.
+  On an idle agent it behaves like a plain prompt.
+- `--steer` — redirect the turn that is running *right now*. Fails if the agent
+  is idle or dead; steering nothing is not a thing.
+- `--no-wait` — return as soon as the prompt is admitted instead of waiting for
+  the turn.
+- `--timeout N` — stop waiting after N seconds (the turn keeps running). Absent
+  or `0` waits indefinitely. It bounds *your* wait, so `--no-wait --timeout N` is
+  refused as a usage error rather than silently ignored.
+
+`--follow-up` and `--steer` are mutually exclusive — each names a different
+delivery. `--no-wait` composes with either: it only decides whether *you* block.
+No flag may be repeated. Flags go **before** the id; everything after the id is
+the prompt, verbatim, so `gmux agent prompt a3f20187 --steer` prompts with the
+literal text `--steer`. The prompt is one argument — quote it — or pipe it on
+stdin (multi-line piped input stays one prompt and is not submitted line by
+line). Prompts are capped at 1 MiB, and an oversized prompt or one that isn't
+valid UTF-8 is refused before anything is sent — never truncated, never
+re-encoded.
+
+Exit codes: `0` the turn completed, `2` the turn was **interrupted**, `3`
+`--timeout` elapsed, `1` anything else (including a turn that ended in an error
+and a runner that died). Note `2` differs from [`gmux wait`](#gmux-wait-id),
+where it means the session died. A successful prompt is quiet — the agent's
+answer is read separately with `gmux agent output`.
+
+Failures name a stable code, and the wording distinguishes what is known about
+delivery. `admission_timeout`, `delivery_timeout`, `queued_turn_unobserved` and
+`transport_error` mean the prompt may already have reached the agent: inspect the
+session before resending, because a retry can duplicate it. A transport failure
+with no code at all — a dropped connection to gmuxd, a daemon restarted
+mid-prompt — is indeterminate for the same reason: the request may have been
+delivered before the connection went away.
+
+The codes that guarantee **nothing** was delivered, and are therefore safe to
+retry as-is: `runner_outdated` (the session started before semantic actions
+existed — restart it, or drive it with `gmux send`), `precondition_failed`,
+`delivery_pending`, `not_ready`, `not_running`, and `incarnation_mismatch` (the
+session's runner was replaced while the prompt was on its way, and the
+replacement refused an action meant for its predecessor).
+
+### `gmux agent cancel <id>`
+
+Interrupt the turn an agent is running.
+
+```bash
+gmux agent cancel a3f20187
+
+# ...and wait for it to stop. `wait` exits 2 for an interrupted turn — which is
+# exactly what you asked for — so do not chain it with `&&`.
+gmux agent cancel a3f20187
+gmux wait a3f20187; [ $? = 2 ] && echo stopped
+```
+
+Returns once the interrupt is **delivered**, not once the agent has stopped —
+otherwise a wedged agent would hang the command. Follow with `gmux wait` when
+the next step needs the turn to be over. Requires a live, active session.
+
+**Two pi-specific caveats.** Cancelling is not a clean stop: pi's interrupt
+handler *restores any queued follow-ups into the composer*, so after a cancel the
+composer may hold text nobody retyped — and the next `gmux agent prompt` submits
+that text along with the new prompt, as one turn. Check with `gmux tail` if a
+session has queued follow-ups you did not see run. And `--follow-up` and `cancel`
+ride pi's *default* keybindings (alt+enter, escape); a session whose user remapped
+those loses both silently — the bytes still arrive, they just no longer mean that
+action. Plain prompts (Enter) are unaffected.
+
+### `gmux agent output <id>`
+
+Print the agent's latest message — its answer, verbatim and untruncated,
+without the compact `[tool]` lines that appear in the transcript.
+
+```bash
+gmux agent prompt a3f20187 'summarize the failures' && gmux agent output a3f20187
+```
+
+Read from the agent's own stored conversation, so it never starts, resumes or
+touches a process, and it works on a dead session. Exits `1` with a stable code
+when there is nothing to print: `no_message` (the agent hasn't produced one
+yet), `no_conversation` (no conversation on record), `unsupported_adapter`
+(this agent has no conversation gmux can read). Use `gmux tail` for the whole
+transcript.
 
 ### `gmux kill <id>`
 

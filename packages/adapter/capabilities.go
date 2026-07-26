@@ -78,6 +78,19 @@ type ConversationOpener interface {
 type ConversationMessage struct {
 	Role string // "user", "assistant", ... (lowercase, adapter-reported)
 	Text string // markdown body, non-empty
+	// Prose is Text with the adapter's non-prose renderings removed —
+	// compact tool-call lines, image placeholders and anything else that
+	// is activity context rather than something the agent said. It exists
+	// for the semantic "what did the agent answer" read behind
+	// `gmux agent output`, which must not surface a `[tool]` line as the
+	// agent's reply. Empty when the message carries no prose at all (a
+	// tool-only assistant message).
+	//
+	// Contract for renderers: always set it. When a message's rendering
+	// is prose-only, set it equal to Text. A renderer that leaves it
+	// empty declares the message has nothing the agent said, and the
+	// semantic read will skip the message rather than guess.
+	Prose string
 }
 
 // ConversationRenderer is implemented by adapters that can reconstruct a

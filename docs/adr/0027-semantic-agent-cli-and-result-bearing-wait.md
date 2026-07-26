@@ -47,13 +47,21 @@ endpoint.
 Reserve `agent` as a top-level namespace under ADR 0009's closed grammar:
 
 ```sh
-gmux agent prompt [--no-wait|--follow-up|--steer] [--timeout N] <ref> [prompt]
+gmux agent prompt [--no-wait] [--follow-up|--steer] [--timeout N] <ref> [prompt]
 gmux agent cancel <ref>
 gmux agent output <ref>
 ```
 
+`--follow-up` and `--steer` are mutually exclusive: each names a different
+delivery, and only one can happen. `--no-wait` is orthogonal to both — it
+chooses whether the caller blocks, not what is delivered — so `--no-wait
+--steer` ("redirect the turn, don't wait for it") is valid and maps onto the
+same `{mode, wait}` pair the wire model already carries.
+
 Prompt text may come from piped stdin when the positional prompt is omitted.
-An interactive missing prompt and empty input are usage errors.
+An interactive missing prompt and empty input are usage errors. Prompt bytes
+that are not valid UTF-8 are refused rather than re-encoded: substituting
+U+FFFD would run different text than the caller supplied.
 
 `agent` names the user-facing domain, not a transport. A terminal adapter and
 a future ACP-native runner expose the same CLI. ADR 0021's ACP-shaped schema
