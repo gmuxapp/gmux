@@ -22,6 +22,7 @@ import (
 
 	"github.com/gmuxapp/gmux/packages/paths"
 	"github.com/gmuxapp/gmux/packages/sessionenv"
+	"github.com/gmuxapp/gmux/packages/socklease"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/discovery"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
@@ -296,6 +297,7 @@ type runnerLaunchRequest struct {
 	CWD, ResumeID     string
 	InitialCols, Rows uint16
 	Endpoint          string
+	LeaseFile         *os.File
 }
 
 type runnerLaunchResult struct {
@@ -311,8 +313,10 @@ type productionRunnerSpawner struct {
 	ResolveCommand func(centralstore.Session) []string
 	Launch         func(context.Context, runnerLaunchRequest) (runnerLaunchResult, error)
 	ReadyTimeout   time.Duration
-	mu             sync.Mutex
-	launched       map[string]runnerLaunchResult
+	// prepareBeforeRemove is a test-only schedule seam for replacement races.
+	prepareBeforeRemove func(string)
+	mu                  sync.Mutex
+	launched            map[string]runnerLaunchResult
 }
 
 func (s *productionRunnerSpawner) Spawn(ctx context.Context, row centralstore.Session) (string, error) {
@@ -342,14 +346,38 @@ func (s *productionRunnerSpawner) Spawn(ctx context.Context, row centralstore.Se
 		return "", fmt.Errorf("runner spawn: session %s is not resumable", row.ID)
 	}
 	endpoint := filepath.Join(paths.SessionSocketDir(), legacy.ID+".sock")
+	// A retained session may predate the socket lease protocol and therefore
+	// have a refused socket but no lock-file history. BindSocket deliberately
+	// will not remove that shape on its own, because an ordinary runner cannot
+	// know whether an unleased owner is starting concurrently. Resume has the
+	// stronger identity contract and prepares the exact canonical endpoint:
+	// pin, probe, and conditionally remove only the refused inode, then leave
+	// lease history for the child. A live occupant aborts before any process (or
+	// session-scoped state) is created.
+	prepared, err := prepareResumeSocket(endpoint, s.prepareBeforeRemove)
+	if err != nil {
+		return "", fmt.Errorf("runner spawn: prepare socket: %w", err)
+	}
 	launch := s.Launch
 	if launch == nil {
 		launch = launchRunnerProcess
 	}
-	result, err := launch(ctx, runnerLaunchRequest{GmuxBin: s.GmuxBin, Command: legacy.Command, CWD: cwd, ResumeID: legacy.ID, InitialCols: value16(row.TerminalCols), Rows: value16(row.TerminalRows), Endpoint: endpoint})
+	leaseFile, err := prepared.lease.DuplicateForExec()
 	if err != nil {
+		prepared.rollback()
+		return "", fmt.Errorf("runner spawn: transfer socket lease: %w", err)
+	}
+	result, err := launch(ctx, runnerLaunchRequest{GmuxBin: s.GmuxBin, Command: legacy.Command, CWD: cwd, ResumeID: legacy.ID, InitialCols: value16(row.TerminalCols), Rows: value16(row.TerminalRows), Endpoint: endpoint, LeaseFile: leaseFile})
+	_ = leaseFile.Close()
+	if err != nil {
+		prepared.rollback()
 		return "", err
 	}
+	// cmd.Start is the ownership-transfer point. Keep the exact sidecar lease
+	// held until then: failed launch can remove the file it created without a
+	// pathname reacquisition race, while a successful child cannot acquire and
+	// bind until the parent publishes the prepared history here.
+	prepared.transfer()
 	if result.Endpoint == "" {
 		result.Endpoint = endpoint
 	}
@@ -381,6 +409,67 @@ func (s *productionRunnerSpawner) Spawn(ctx context.Context, row centralstore.Se
 	s.launched[result.Endpoint] = result
 	s.mu.Unlock()
 	return result.Endpoint, nil
+}
+
+type preparedResumeSocket struct {
+	lease   *socklease.Lease
+	created bool
+}
+
+func (p *preparedResumeSocket) transfer() {
+	_ = p.lease.ReleaseForTransfer()
+	p.lease = nil
+}
+
+func (p *preparedResumeSocket) rollback() {
+	if p.created {
+		_ = p.lease.Release()
+	} else {
+		_ = p.lease.ReleaseKeepingLockFile()
+	}
+	p.lease = nil
+}
+
+func prepareResumeSocket(endpoint string, beforeRemove func(string)) (*preparedResumeSocket, error) {
+	if err := socklease.RequireOwnedDir(filepath.Dir(endpoint)); err != nil {
+		return nil, err
+	}
+	lease, err := socklease.Acquire(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	prepared := &preparedResumeSocket{lease: lease, created: lease.CreatedLockFile()}
+	fail := func(err error, discardHistory bool) (*preparedResumeSocket, error) {
+		if prepared.created || discardHistory {
+			_ = lease.Release()
+		} else {
+			_ = lease.ReleaseKeepingLockFile()
+		}
+		return nil, err
+	}
+
+	if _, err := os.Lstat(endpoint); errors.Is(err, os.ErrNotExist) {
+		return prepared, nil
+	} else if err != nil {
+		return fail(err, false)
+	}
+	pin, err := socklease.PinSocket(endpoint)
+	if err != nil {
+		return fail(err, false)
+	}
+	defer pin.Close()
+	if err := socklease.ProbeRefusedPinned(pin, 200*time.Millisecond); err != nil {
+		// A successful connection is an unleased live owner, so existing lease
+		// history describes an older generation and must not survive either.
+		return fail(err, errors.Is(err, socklease.ErrSocketLive))
+	}
+	if beforeRemove != nil {
+		beforeRemove(endpoint)
+	}
+	if err := lease.RemoveSocket(pin); err != nil {
+		return fail(err, false)
+	}
+	return prepared, nil
 }
 
 func waitRunnerSocket(ctx context.Context, endpoint string, exited <-chan error, timeout time.Duration) error {
@@ -436,6 +525,10 @@ func launchRunnerProcess(ctx context.Context, req runnerLaunchRequest) (runnerLa
 	cmd.Dir = req.CWD
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Env = sessionenv.Strip(captureLoginEnv(req.GmuxBin, req.CWD))
+	if req.LeaseFile != nil {
+		cmd.ExtraFiles = append(cmd.ExtraFiles, req.LeaseFile)
+		cmd.Env = append(cmd.Env, "GMUX_SOCKET_LEASE_FD=3")
+	}
 	// Stdio is wired explicitly, and to nothing.
 	//
 	// A runner outlives the daemon that spawned it, so a runner holding the

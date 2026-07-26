@@ -7,12 +7,15 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gmuxapp/gmux/packages/paths"
+	"github.com/gmuxapp/gmux/packages/socklease"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
 )
@@ -108,11 +111,33 @@ func TestProductionSpawnerResumeComposedWithRealUnixRunner(t *testing.T) {
 	}
 	defer st.Close()
 	row := insertRetainedDead(t, st, "sess-resume-composed")
+	// Simulate a runner from before the lease protocol crashing: the canonical
+	// socket refuses connections and has no sidecar lock file. This was the
+	// production regression shape: BindSocket refused to reclaim it, silently
+	// chose a new id, and the spawner waited on this pathname until timeout.
+	stalePath := filepath.Join(paths.SessionSocketDir(), string(row.ID)+".sock")
+	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: stalePath, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.SetUnlinkOnClose(false)
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stalePath + socklease.Suffix); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("test did not create a pre-lease stale socket: %v", err)
+	}
 	var got runnerLaunchRequest
 	var child *unixFakeRunner
 	prod := &productionRunnerSpawner{ResolveDir: func(centralstore.Session) (string, error) { return "/chosen", nil }, ResolveCommand: func(centralstore.Session) []string { return []string{"shell", "--resume", "conversation"} }}
 	prod.Launch = func(_ context.Context, req runnerLaunchRequest) (runnerLaunchResult, error) {
 		got = req
+		if _, err := os.Stat(stalePath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stale socket still present at launch: %v", err)
+		}
+		if _, err := os.Stat(stalePath + socklease.Suffix); err != nil {
+			t.Fatalf("resume did not seed lease history for child: %v", err)
+		}
 		child = startUnixFakeRunner(t, req.Endpoint, string(row.ID), http.StatusOK)
 		return runnerLaunchResult{Endpoint: req.Endpoint, PID: 4321, Terminate: child.terminate}, nil
 	}
