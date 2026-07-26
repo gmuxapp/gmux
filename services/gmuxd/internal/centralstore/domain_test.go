@@ -569,18 +569,25 @@ func TestPromotionNoopVersionAndExplicitOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Every no-op below must also stay clean on both dirty kinds: placement
+	// now dirties sessions as well as world, so a mutation that reported
+	// dirtiness unconditionally would republish on every idle promotion or
+	// re-assert of the current order.
 	r, err := s.SetPromotion(ctx, "a", false, nil)
-	if err != nil || r.Changed || r.SessionVersion != 1 {
+	if err != nil || r.Changed || r.SessionsDirty || r.WorldDirty || r.SessionVersion != 1 {
 		t.Fatalf("promotion noop=%#v err=%v", r, err)
 	}
 	idx := 0
 	r, err = s.SetPromotion(ctx, "a", false, &idx)
-	if err != nil || r.Changed || r.SessionVersion != 1 {
+	if err != nil || r.Changed || r.SessionsDirty || r.WorldDirty || r.SessionVersion != 1 {
 		t.Fatalf("order noop=%#v err=%v", r, err)
 	}
 	idx = 1
 	r, err = s.SetPromotion(ctx, "a", false, &idx)
-	if err != nil || !r.Changed || r.SessionsDirty || !r.WorldDirty || r.SessionVersion != 1 {
+	// Order-only: the row version doesn't move (no session-row fact
+	// changed) but the sessions kind is still dirty, because positions
+	// reach the wire as session-row project_index stamps.
+	if err != nil || !r.Changed || !r.SessionsDirty || !r.WorldDirty || r.SessionVersion != 1 {
 		t.Fatalf("order-only=%#v err=%v", r, err)
 	}
 	r, err = s.SetPromotion(ctx, "a", true, nil)
@@ -588,7 +595,7 @@ func TestPromotionNoopVersionAndExplicitOrder(t *testing.T) {
 		t.Fatalf("promotion=%#v err=%v", r, err)
 	}
 	r, err = s.SetPromotion(ctx, "a", true, nil)
-	if err != nil || r.Changed || r.SessionVersion != 2 {
+	if err != nil || r.Changed || r.SessionsDirty || r.WorldDirty || r.SessionVersion != 2 {
 		t.Fatalf("second noop=%#v err=%v", r, err)
 	}
 	bad := 9
@@ -663,6 +670,64 @@ func TestReorderValidatesProjectParentAndDuplicates(t *testing.T) {
 	if _, err = s.ReorderSiblings(ctx, p1, ParentRef{Subject: &deleted}, nil); err == nil {
 		t.Fatal("deleted reorder parent accepted")
 	}
+}
+
+// Placement facts ride the session rows on the wire (project_slug /
+// project_index), so every mutation that touches the placement table has to
+// report SessionsDirty as well as WorldDirty. Regression: reorder reported
+// world-only, the composer recomposed the sessions frame from its stale
+// cached sessions payload, and the sidebar kept the pre-reorder order until
+// an unrelated session event happened to refresh it (silent no-op drag).
+func TestPlacementMutationsDirtyBothKinds(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	p := addProject(t, s)
+	for _, id := range []string{"a", "b"} {
+		addSession(t, s, id, "")
+		r, err := s.PlaceLocalSession(ctx, SessionID(id), p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.Changed || !r.SessionsDirty || !r.WorldDirty {
+			t.Fatalf("place %s=%#v", id, r)
+		}
+		// Re-placing into the project it already occupies changes no
+		// row and must not republish either kind.
+		if again, e := s.PlaceLocalSession(ctx, SessionID(id), p); e != nil {
+			t.Fatal(e)
+		} else if again.Changed || again.SessionsDirty || again.WorldDirty {
+			t.Fatalf("re-place %s=%#v", id, again)
+		}
+	}
+	peer := LocalPeerSubject{PeerKey: "dev", SessionID: "peer"}
+	if r, err := s.UpsertLocalPeerPlacement(ctx, peer, p); err != nil {
+		t.Fatal(err)
+	} else if !r.Changed || !r.SessionsDirty || !r.WorldDirty {
+		t.Fatalf("place local-peer=%#v", r)
+	}
+
+	order := []SubjectRef{{LocalSessionID: "b"}, {LocalSessionID: "a"}, {LocalPeer: &peer}}
+	r, err := s.ReorderSiblings(ctx, p, ParentRef{}, order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Changed || !r.SessionsDirty || !r.WorldDirty {
+		t.Fatalf("reorder=%#v", r)
+	}
+	// A no-op reorder stays clean: nothing to re-emit.
+	if r, err = s.ReorderSiblings(ctx, p, ParentRef{}, order); err != nil {
+		t.Fatal(err)
+	} else if r.Changed || r.SessionsDirty || r.WorldDirty {
+		t.Fatalf("no-op reorder=%#v", r)
+	}
+
+	// Pruning a Local peer renumbers the surviving local siblings.
+	if r, err = s.PruneLocalPeer(ctx, "dev"); err != nil {
+		t.Fatal(err)
+	} else if !r.Changed || !r.SessionsDirty || !r.WorldDirty {
+		t.Fatalf("prune=%#v", r)
+	}
+	assertKernelInvariants(t, s)
 }
 
 func TestReorderSiblingScopesRollsBackAllScopes(t *testing.T) {

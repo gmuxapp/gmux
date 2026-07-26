@@ -1379,7 +1379,14 @@ func (s *Store) place(ctx context.Context, sub SubjectRef, project ProjectEntryI
 	if err = tx.Commit(); err != nil {
 		return MutationResult{}, err
 	}
-	return MutationResult{Changed: changed, WorldDirty: changed}, nil
+	// Placement is world state, but it *rides the session rows* on the
+	// wire (project_slug / project_index, FD-1). A projects-only
+	// recomposition rebuilds the sessions frame from the composer's last
+	// sessions payload, whose placement join is exactly the state this
+	// mutation just invalidated — so a placement change must dirty both
+	// kinds or subscribers keep the pre-mutation stamps until an
+	// unrelated session event happens to refresh them.
+	return MutationResult{Changed: changed, SessionsDirty: changed, WorldDirty: changed}, nil
 }
 
 type SiblingReorder struct {
@@ -1479,7 +1486,9 @@ func (s *Store) ReorderSiblingScopes(ctx context.Context, reorders []SiblingReor
 	if err = tx.Commit(); err != nil {
 		return MutationResult{}, err
 	}
-	return MutationResult{Changed: changedAny, WorldDirty: changedAny}, nil
+	// Both kinds: the new positions are read back as session-row
+	// project_index stamps (see the note in place()).
+	return MutationResult{Changed: changedAny, SessionsDirty: changedAny, WorldDirty: changedAny}, nil
 }
 
 func (s *Store) SetPromotion(ctx context.Context, id SessionID, promoted bool, index *int) (MutationResult, error) {
@@ -1553,7 +1562,11 @@ func (s *Store) SetPromotion(ctx context.Context, id SessionID, promoted bool, i
 		version++
 		changed = true
 	}
-	return MutationResult{Changed: changed, SessionVersion: version, SessionsDirty: n == 1, WorldDirty: changed}, nil
+	// A promoted-flag write (n == 1) has already set changed above, and an
+	// order-only change sets it too — so both kinds follow changed: the flag
+	// lives on the session row, and positions ride session rows as
+	// project_index stamps (see the note in place()). No-ops returned early.
+	return MutationResult{Changed: changed, SessionVersion: version, SessionsDirty: changed, WorldDirty: changed}, nil
 }
 
 func (s *Store) PruneLocalPeer(ctx context.Context, key PeerKey) (MutationResult, error) {
@@ -1578,5 +1591,7 @@ func (s *Store) PruneLocalPeer(ctx context.Context, key PeerKey) (MutationResult
 	if err = tx.Commit(); err != nil {
 		return MutationResult{}, err
 	}
-	return MutationResult{Changed: n > 0, WorldDirty: n > 0}, nil
+	// Pruning renumbers surviving siblings, including local sessions whose
+	// positions ride their session rows (see the note in place()).
+	return MutationResult{Changed: n > 0, SessionsDirty: n > 0, WorldDirty: n > 0}, nil
 }

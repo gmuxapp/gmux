@@ -140,6 +140,39 @@ describe('optimistic dismiss retracts on failure', () => {
   })
 })
 
+describe('reorder failures are surfaced, never silent', () => {
+  beforeEach(() => { toasts.value = []; _pendingMutations.value = [] })
+  afterEach(() => { vi.unstubAllGlobals(); toasts.value = []; _pendingMutations.value = [] })
+
+  it('toasts and retracts the overlay when the server rejects a local reorder', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false, status: 500, statusText: 'Internal Server Error',
+      text: () => Promise.resolve(JSON.stringify({ error: { message: 'failed to save projects' } })),
+    }))
+    await reorderSessions('gmux', ['y', 'x'])
+    expect(toasts.value[0]).toMatchObject({
+      kind: 'error', message: 'Reorder failed: failed to save projects',
+    })
+    expect(_pendingMutations.value).toHaveLength(0)
+  })
+
+  it('toasts when a peer reorder is rejected (no overlay to retract)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false, status: 502, statusText: 'Bad Gateway',
+      text: () => Promise.resolve(''),
+    }))
+    await reorderSessions('gmux', ['y', 'x'], 'tower')
+    expect(toasts.value[0].message).toBe('Reorder failed: Bad Gateway')
+  })
+
+  it('stays silent on a network reject (owned by the reconnecting pill)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    await reorderSessions('gmux', ['y', 'x'])
+    expect(toasts.value).toHaveLength(0)
+    expect(_pendingMutations.value).toHaveLength(0)
+  })
+})
+
 describe('filteredSessions reactivity to the URL query string', () => {
   it('recomputes when urlSearch flips, without an SSE session update', () => {
     _rawSessions.value = [
