@@ -130,10 +130,11 @@ it in the browser.
 
 ### `gmux send [--wait [--timeout N]] <id> [text] [Key...]`
 
-Inject input into a running session as if typed at the keyboard. The text is
-sent literally; any trailing arguments that name keys (`Enter`, `C-c`,
-`Escape`, `Up`, …) are sent as those keys. **Submission is explicit** — add a
-trailing `Enter` to dispatch a line; omit it to leave the input unsent.
+Inject input into a running session as if typed at the keyboard. The first
+argument after the id is literal text (unless it names a key); every argument
+after it must name a key (`Enter`, `C-c`, `Escape`, `Up`, …) and is sent as
+that key. **Submission is explicit** — add a trailing `Enter` to dispatch a
+line; omit it to leave the input unsent.
 
 ```bash
 gmux send a3f20187 'describe yourself' Enter   # type and submit
@@ -146,6 +147,14 @@ echo "$body" | gmux send a3f20187 Enter         # pipe stdin, then submit
 When no text is given and stdin is a pipe, gmux reads stdin until EOF (capped
 at 1 MiB) and sends it — the natural shape for files and heredocs. Include a
 trailing `Enter` to submit piped input.
+
+**An unrecognized name in key position is an error**, not text: `gmux send abc
+'make test' Etner` fails naming `Etner` instead of typing it, so a typo (or a
+key gmux deliberately does not encode) can never be delivered as prose under a
+success exit code. Literal text belongs in the text argument — quote it as one
+argument — and `gmux send-keys` keeps tmux's literal fallback for scripts that
+rely on it. `gmux send --help` lists the full key vocabulary, including which
+modified keys are unsupported and why.
 
 **Everything after the session id is verbatim** — including tokens that start
 with a dash. `gmux send abc -v` sends the literal `-v`, and no `--` guard is

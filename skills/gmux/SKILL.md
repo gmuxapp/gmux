@@ -58,9 +58,17 @@ gmux send $id Escape              # send Escape
 echo "$body" | gmux send $id Enter  # pipe stdin, then submit (Enter optional)
 ```
 
-Key names follow tmux: `Enter`, `Tab`, `Escape`, `Up`/`Down`/`Left`/`Right`,
-`C-c`, `C-d`, etc. For verbatim tmux compatibility there is also
-`gmux send-keys -t <id> <keys...>` (with `-l` for literal text).
+Key names follow tmux: `Enter`, `Tab`, `BTab`/`S-Tab`, `Escape`,
+`Up`/`Down`/`Left`/`Right`, `Home`/`End`, `PageUp`/`PageDown`, `Insert`,
+`Delete`, `F1`-`F12`, `C-c`, `M-x`, `C-M-a`, and modified special keys like
+`C-Left` or `C-S-Home`. Run `gmux send --help` for the full list — including
+the combinations gmux refuses (`C-Tab`, `M-Enter`, `F13`+ …) because no single
+terminal encoding exists for them.
+
+**Only the first token after the id is text; every later token must be a key.**
+An unrecognized key name is an error, so a typo is never silently typed into
+the session as prose. For verbatim tmux compatibility (unknown tokens typed
+literally) there is `gmux send-keys -t <id> <keys...>`, with `-l` to force it.
 
 **Everything after the id is verbatim** — including dash-leading tokens, so
 `gmux send $id -v` sends a literal `-v` with no `--` guard needed. `send`'s own

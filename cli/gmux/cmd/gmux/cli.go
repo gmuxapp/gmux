@@ -307,7 +307,9 @@ func parseLs(args []string) (*command, error) {
 	c := &command{mode: modeList}
 	fs := newFlagSet("ls")
 	fs.BoolVar(&c.all, "all", false, "include sessions from all peers")
+	fs.BoolVar(&c.all, "a", false, "alias of --all")
 	fs.BoolVar(&c.json, "json", false, "emit a JSON array")
+	fs.BoolVar(&c.json, "j", false, "alias of --json")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -324,7 +326,7 @@ func parseRefOnly(m mode, name string, args []string) (*command, error) {
 	return &command{mode: m, ref: args[0]}, nil
 }
 
-// parseTail handles `gmux tail [-n N] [--raw] <id>`.
+// parseTail handles `gmux tail [-n N] [--raw|-r] <id>`.
 //
 // Default output is the conversation transcript when the session's
 // adapter persists one (markdown from the conversation file), falling
@@ -337,7 +339,8 @@ func parseTail(args []string) (*command, error) {
 	fs := newFlagSet("tail")
 	fs.IntVar(&c.tailLines, "n", 100, "number of lines (or conversation messages) to show")
 	fs.BoolVar(&c.raw, "raw", false, "PTY scrollback instead of conversation markdown")
-	fs.BoolVar(&c.raw, "e", false, "alias of --raw")
+	fs.BoolVar(&c.raw, "r", false, "alias of --raw")
+	fs.BoolVar(&c.raw, "e", false, "tmux-compat alias of --raw")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return nil, err
@@ -384,10 +387,13 @@ func parseSend(args []string) (*command, error) {
 			break
 		}
 		switch {
-		case a == "--wait":
+		case a == "--wait" || a == "-w":
 			c.sendWait = true
-		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
-			val := strings.TrimPrefix(a, "--timeout")
+		case a == "--timeout" || strings.HasPrefix(a, "--timeout=") ||
+			a == "-t" || strings.HasPrefix(a, "-t="):
+			// -t takes its value the same three ways --timeout does:
+			// separate argument, --timeout=N, -t=N.
+			val := strings.TrimPrefix(strings.TrimPrefix(a, "--timeout"), "-t")
 			if val == "" {
 				i++
 				if i >= len(args) {
@@ -399,7 +405,14 @@ func parseSend(args []string) (*command, error) {
 			}
 			n, err := strconv.Atoi(val)
 			if err != nil || n <= 0 {
-				return nil, errors.New("--timeout must be a positive number of seconds")
+				// -t is a universal tmux habit for "target session", and on this
+				// verb it is --timeout, so a non-numeric value is far more likely
+				// a misremembered target than a typo'd duration. Say which flag
+				// the caller actually reached.
+				if strings.HasPrefix(a, "-t") {
+					return nil, fmt.Errorf("send: -t is --timeout here and takes a positive number of seconds (got %q); the session id is positional: gmux send <id> ... (tmux's '-t <id>' target is on 'gmux send-keys')", val)
+				}
+				return nil, errors.New("send: --timeout must be a positive number of seconds")
 			}
 			c.timeout = n
 		case a == "--steering" || strings.HasPrefix(a, "--steering="):
@@ -431,6 +444,20 @@ func parseSend(args []string) (*command, error) {
 			c.sendText = &t
 			rest = rest[1:]
 		}
+		// Past the text, every token must name a key. Typing an unrecognized
+		// name as literal text (which is what tmux send-keys does, and what
+		// this verb used to do) is the worst available outcome: `send <id>
+		// 'make test' Etner` would type "Etner" into the terminal, exit 0, and
+		// report the input as delivered — a silent text injection presented as
+		// success, for exactly the tokens a caller is most likely to get wrong
+		// (a typo, or a key gmux deliberately does not encode). Refusing costs
+		// nothing: literal text belongs in the text argument, and send-keys -l
+		// still exists for the tmux contract.
+		for _, k := range rest {
+			if !isKeyName(k) {
+				return nil, fmt.Errorf("send: %q is not a key name (only the first token after the id is literal text; run 'gmux send --help' for the key vocabulary)", k)
+			}
+		}
 		c.sendKeys = rest
 	}
 	return c, nil
@@ -460,9 +487,11 @@ func parseWait(args []string) (*command, error) {
 	c := &command{mode: modeWait}
 	fs := newFlagSet("wait")
 	fs.IntVar(&c.timeout, "timeout", 0, "fail after N seconds")
+	fs.IntVar(&c.timeout, "t", 0, "alias of --timeout")
 	fs.StringVar(&c.forText, "for-text", "", "wait for this substring in the session's output")
 	fs.StringVar(&c.forRegex, "for-regex", "", "wait for a regex match in the session's output")
 	fs.BoolVar(&c.quiet, "quiet", false, "do not print the agent's result; synchronize only")
+	fs.BoolVar(&c.quiet, "q", false, "alias of --quiet")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return nil, err
