@@ -24,9 +24,8 @@ gmux send --wait <id> 'text' Enter  # raw send AND block until the reply is done
 gmux wait <id>               # block until the turn ends; prints an agent's answer
 gmux wait --quiet <id>       # ...synchronize only, print nothing
 gmux wait <id> --for-text S  # block until S appears in the output
-gmux tail <id> [-n N]        # conversation as markdown (agents) or last N
-                             # lines of output (shells); default N=100
-gmux tail --raw <id>         # force the terminal-output view (plain text)
+gmux tail <id> [-n N]        # RAW: last N lines of terminal output (N=100)
+gmux agent logs <id> [-n N]  # an agent's conversation as markdown (N messages)
 gmux ls [--json]             # list sessions (--json for machine parsing)
 gmux kill <id>               # SIGTERM the runner
 ```
@@ -92,7 +91,7 @@ through instead: `gmux -- <cmd>` and `gmux edit` return the child's, and
 `gmux daemon|auth|remote` return gmuxd's. A turn that did not complete prints **no**
 answer — a previous turn's reply must never be presented as this one's; read
 what exists with `gmux agent output <id>` (works even after the session died).
-Use `gmux tail` when you want the whole transcript.
+Use `gmux agent logs <id>` when you want the whole conversation.
 
 Other shapes, all with the flags **before** the id (text after the id is
 verbatim):
@@ -125,7 +124,7 @@ silently.
 Errors carry a stable code. `admission_timeout`, `delivery_timeout`,
 `queued_turn_unobserved` and `transport_error` are **indeterminate** — the prompt
 may already have landed, so do not blindly retry; inspect with `gmux agent
-output`/`gmux tail` first. So is a bare transport failure with no code (a dropped
+output`/`gmux agent logs` first. So is a bare transport failure with no code (a dropped
 connection to gmuxd): the request may have been delivered before the connection
 went away. `runner_outdated` (the session predates semantic actions: restart it),
 `precondition_failed`, `delivery_pending`, `not_ready`, `not_running` and
@@ -165,7 +164,7 @@ done
 
 for id in "${ids[@]}"; do
   echo "=== $id ==="
-  gmux agent output "$id"      # each agent's final answer (gmux tail for the transcript)
+  gmux agent output "$id"      # each agent's final answer (agent logs for the conversation)
 done
 ```
 
@@ -227,24 +226,36 @@ gmux wait $id --for-regex 'tests? passed: \d+' --timeout 120
 Same exit codes (`0` matched, `1` the session exited first or the timeout
 elapsed), and no result is printed. Matching
 is line-wise against the rendered terminal output (ANSI stripped, same text
-`gmux tail --raw` shows), including output that appeared before the wait
+`gmux tail` shows), including output that appeared before the wait
 started, so the pattern must fit on one terminal line.
 
-## Reading a session's conversation
+## Reading a session: three questions, three commands
 
-For agent sessions backed by a conversation file (pi), `gmux tail` prints the
-conversation itself as markdown — `## User` / `## Assistant` messages with
-compact `[tool] …` one-liners — instead of the TUI's terminal rendering.
-`-n` counts messages there, not lines; thinking blocks and tool outputs are
-omitted. This is the best way to read another agent's answer:
+| Question | Command | `-n` counts |
+| --- | --- | --- |
+| What is on its screen? | `gmux tail <id>` (any session) | lines |
+| What has it been doing? | `gmux agent logs <id>` (agents) | messages |
+| What is the answer? | `gmux agent output <id>` | — |
+
+`gmux tail` is always raw: the last N lines of rendered terminal output, plain
+text, for shells, one-shot commands and agents alike.
+
+For agent sessions backed by a conversation file (pi), `gmux agent logs` prints
+the conversation itself as markdown — `## User` / `## Assistant` messages with
+compact `[tool] …` one-liners — instead of the TUI's terminal rendering. `-n`
+counts messages there, not lines; thinking blocks and tool outputs are omitted.
+Like `agent output` it reads the stored conversation, so it never starts or
+resumes anything and works on a dead session (local sessions only). This is the
+best way to read another agent's work:
 
 ```bash
 gmux agent prompt $id 'summarize your findings'
 gmux agent output $id        # just the reply
-gmux tail $id -n 2           # the prompt and the reply, clean markdown
+gmux agent logs $id -n 2     # the prompt and the reply, clean markdown
 ```
 
-Shell sessions (and `--raw`) show terminal output instead.
+Shell sessions, and agents with no readable conversation (`unsupported_adapter`),
+are read with `gmux tail` instead.
 
 ## Other agents have one-shot modes
 

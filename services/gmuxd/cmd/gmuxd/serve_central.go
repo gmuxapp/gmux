@@ -1255,14 +1255,22 @@ func conversationHandlerCentral(w http.ResponseWriter, r *http.Request, sessionI
 		}
 		tailN = n
 	}
-	if sess.ConversationRef == "" {
-		writeError(w, http.StatusNotFound, "no_conversation", "session has no conversation")
+	// Adapter first, then the ref — the same ordering (and the same reason) as
+	// the message scope: "this adapter has no conversation model" is permanent
+	// and actionable, while "no conversation ref yet" is transient, and
+	// reporting the transient shape for a shell session would suggest waiting
+	// for something that can never arrive. Until `gmux agent logs` took this
+	// read over, both collapsed into no_conversation because `gmux tail` keyed
+	// its scrollback fallback on that one code; tail is raw-only now, so the
+	// distinction is finally observable by the caller who can act on it.
+	renderer, ok := adapters.FindByAdapter(sess.Adapter).(adapter.ConversationRenderer)
+	if !ok {
+		writeError(w, http.StatusUnprocessableEntity, codeUnsupportedAdapter,
+			fmt.Sprintf("adapter %q does not render conversations", sess.Adapter))
 		return
 	}
-	a := adapters.FindByAdapter(sess.Adapter)
-	renderer, ok := a.(adapter.ConversationRenderer)
-	if !ok {
-		writeError(w, http.StatusNotFound, "no_conversation", "adapter does not render conversations")
+	if sess.ConversationRef == "" {
+		writeError(w, http.StatusNotFound, "no_conversation", "session has no conversation")
 		return
 	}
 	msgs, err := renderer.RenderConversation(sess.ConversationRef)

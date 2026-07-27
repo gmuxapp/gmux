@@ -95,23 +95,14 @@ func TestParseCLI(t *testing.T) {
 
 		{name: "tail defaults to 100 lines", args: []string{"tail", "abc"}, wantMode: modeTail,
 			check: func(t *testing.T, c *command) {
-				if c.tailLines != 100 || c.raw {
-					t.Errorf("tailLines=%d raw=%v", c.tailLines, c.raw)
+				if c.tailLines != 100 {
+					t.Errorf("tailLines=%d", c.tailLines)
 				}
 			}},
-		{name: "tail -n and --raw", args: []string{"tail", "-n", "500", "--raw", "abc"}, wantMode: modeTail,
+		{name: "tail -n", args: []string{"tail", "-n", "500", "abc"}, wantMode: modeTail,
 			check: func(t *testing.T, c *command) {
-				if c.tailLines != 500 || !c.raw {
-					t.Errorf("tailLines=%d raw=%v", c.tailLines, c.raw)
-				}
-			}},
-		// -e (tmux capture-pane muscle memory) stays an alias of --raw:
-		// both mean "PTY scrollback view" and both bypass the
-		// conversation transcript (issue #384).
-		{name: "tail -e is an alias of --raw", args: []string{"tail", "-e", "abc"}, wantMode: modeTail,
-			check: func(t *testing.T, c *command) {
-				if !c.raw {
-					t.Errorf("raw=%v, want true", c.raw)
+				if c.tailLines != 500 || c.ref != "abc" {
+					t.Errorf("tailLines=%d ref=%q", c.tailLines, c.ref)
 				}
 			}},
 

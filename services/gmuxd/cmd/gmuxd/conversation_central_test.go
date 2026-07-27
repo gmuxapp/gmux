@@ -159,8 +159,8 @@ func TestConversationTailParamRejectsBadValue(t *testing.T) {
 }
 
 // TestConversationUnknownSession404 keeps "session never existed"
-// (code not_found, CLI reports an error) distinct from "session has no
-// conversation" (code no_conversation, CLI falls back to scrollback).
+// (code not_found) distinct from "session has no conversation"
+// (code no_conversation): different causes, different answers.
 func TestConversationUnknownSession404(t *testing.T) {
 	f := newConversationFixture(t)
 	resp := f.do(http.MethodGet, "sess-ghost", "")
@@ -172,12 +172,18 @@ func TestConversationUnknownSession404(t *testing.T) {
 	}
 }
 
-// TestConversationFallbackSignals enumerates every "no renderable
-// conversation" shape and pins them all to 404/no_conversation — the
-// single signal the CLI keys its scrollback fallback on. If any of
-// these leaked a different code, `gmux tail` would either error out or
-// misreport the session as missing instead of showing PTY output.
-func TestConversationFallbackSignals(t *testing.T) {
+// TestConversationNothingToRenderSignals enumerates every "no renderable
+// conversation" shape and splits them the way the caller can act on them:
+// an adapter with no conversation model at all is PERMANENT
+// (422/unsupported_adapter — `gmux agent logs` tells the caller to use
+// `gmux tail` instead), while a session that merely has nothing rendered
+// yet is TRANSIENT (404/no_conversation — look again later). Neither may
+// ever surface as not_found: the session exists.
+//
+// Before `gmux agent logs` owned this read, all four collapsed into
+// no_conversation because `gmux tail` keyed its scrollback fallback on that
+// one code; tail is raw-only now and never calls here.
+func TestConversationNothingToRenderSignals(t *testing.T) {
 	f := newConversationFixture(t)
 
 	// A shell session: no conversation file at all.
@@ -198,7 +204,21 @@ func TestConversationFallbackSignals(t *testing.T) {
 	// A fresh pi session: header line only, no messages yet.
 	f.addPiSession(t, "sess-fresh", piSessionHeader)
 
-	for _, id := range []string{"sess-shell", "sess-norender", "sess-deleted", "sess-fresh"} {
+	// The permanent shape: shell is not a ConversationRenderer, with or
+	// without a conversation file on record.
+	for _, id := range []string{"sess-shell", "sess-norender"} {
+		resp := f.do(http.MethodGet, id, "")
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status: want 422, got %d", id, resp.StatusCode)
+			continue
+		}
+		if code := errCode(t, resp); code != codeUnsupportedAdapter {
+			t.Errorf("%s: code: want %s, got %q", id, codeUnsupportedAdapter, code)
+		}
+	}
+	// The transient shapes: a renderer adapter whose conversation is gone or
+	// has produced nothing yet.
+	for _, id := range []string{"sess-deleted", "sess-fresh"} {
 		resp := f.do(http.MethodGet, id, "")
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("%s: status: want 404, got %d", id, resp.StatusCode)

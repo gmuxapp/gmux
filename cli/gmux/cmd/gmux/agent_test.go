@@ -213,6 +213,7 @@ func TestParseAgentHelp(t *testing.T) {
 		{[]string{"agent", "prompt", "--help"}, "agent prompt"},
 		{[]string{"agent", "cancel", "--help"}, "agent cancel"},
 		{[]string{"agent", "output", "-h"}, "agent output"},
+		{[]string{"agent", "logs", "--help"}, "agent logs"},
 		{[]string{"help", "agent"}, "agent"},
 		{[]string{"help", "agent", "prompt"}, "agent prompt"},
 	}
@@ -234,13 +235,13 @@ func TestParseAgentHelp(t *testing.T) {
 	printAgentUsage(&b, "agent")
 	guide := b.String()
 	for _, want := range []string{
-		"agent prompt", "agent cancel", "agent output",
+		"agent prompt", "agent cancel", "agent output", "agent logs",
 		"--no-wait", "--follow-up", "--steer", "--timeout",
 		"stdin",
 		"0 completed", "2 intentionally interrupted",
 		"indeterminate", "admission_timeout", "transport_error",
 		"safe to retry", "incarnation_mismatch",
-		"store-only snapshot", "never starts or resumes",
+		"store-only snapshot", "never start or resume",
 		"this host only", "pi only",
 		"gmux send", "gmux tail",
 		"--help",

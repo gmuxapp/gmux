@@ -10,7 +10,7 @@ sidebar:
 ## Overview
 
 **`gmux`** — the command you use. It runs commands in managed sessions and
-drives them (list, attach, tail, send, wait, kill), prompts agent sessions
+drives them (list, attach, tail, send, wait, kill), drives agent sessions
 (`gmux agent`), plus daemon control and pairing. It auto-starts the daemon when needed.
 
 **`gmuxd`** — the daemon process. Serves the web UI, session history, and
@@ -104,29 +104,32 @@ gmux attach a3f20187@desktop  # a session on a peer
 
 ### `gmux tail <id>`
 
-Print the session's conversation as clean markdown. For agents that persist a
-structured conversation file (pi), the transcript is reconstructed from that
-file — the actual user/assistant messages plus compact one-line tool calls —
-rather than the terminal rendering of the TUI, so the output is readable and
-pipe-friendly. Thinking blocks and tool outputs are omitted.
-
-Sessions without a conversation file (shells, plain commands) print recent PTY
-output as plain text instead, exactly as before.
+Print the last lines of the session's **terminal output** as plain text — what
+is on its screen. Always the raw view, for every kind of session: shell,
+one-shot command, or agent.
 
 ```bash
-gmux tail a3f20187            # conversation markdown (last 100 messages),
-                              # or last 100 lines of output for shells
-gmux tail -n 5 a3f20187       # last 5 messages (or lines)
-gmux tail --raw a3f20187      # force the PTY view: last N lines of terminal
-                              # output, plain text (-e also works)
+gmux tail a3f20187            # last 100 lines of terminal output
+gmux tail -n 5 a3f20187       # last 5 lines
 ```
 
-`-n` counts messages in the conversation view and lines in the PTY view. The
-transcript is read from the conversation file the agent has flushed to disk,
-so an assistant message that is still streaming appears once it completes.
+`-n` counts lines (default 100). ANSI escapes are stripped: the daemon renders
+scrollback through a terminal emulator, so what you get is the visible text.
 
 It's a snapshot, not a stream — to watch a session live, attach to it or open
 it in the browser.
+
+For an agent session, the semantic views usually answer the question better:
+[`gmux agent logs`](#gmux-agent-logs-id) prints the conversation as markdown
+(what it has been doing) and [`gmux agent output`](#gmux-agent-output-id)
+prints just its latest answer.
+
+:::note[Changed]
+`gmux tail` briefly defaulted to the conversation transcript for agent
+sessions. That view now has its own command, `gmux agent logs`, and `--raw`
+(with its `-e`/`-r` aliases) is gone — tail is raw by definition. The flags
+still print an error naming the replacement.
+:::
 
 ### `gmux send [--wait [--timeout N]] <id> [text] [Key...]`
 
@@ -318,6 +321,15 @@ quietly typing something — drive those with `gmux send` and read them with
 `gmux tail`. `gmux agent help` prints the namespace guide in the terminal;
 each verb also answers `--help`.
 
+Three reading commands answer three different questions, and no word does
+double duty across the raw/semantic boundary:
+
+| Question | Command | Unit of `-n` |
+| --- | --- | --- |
+| What is on its screen? | [`gmux tail <id>`](#gmux-tail-id) (any session) | lines |
+| What has it been doing? | [`gmux agent logs <id>`](#gmux-agent-logs-id) | messages |
+| What is the answer? | [`gmux agent output <id>`](#gmux-agent-output-id) | — |
+
 ### `gmux agent prompt [flags] <id> [prompt]`
 
 Send a prompt to an agent session and, by default, block until the turn it
@@ -402,11 +414,38 @@ the next step needs the turn to be over. Requires a live, active session.
 **Two pi-specific caveats.** Cancelling is not a clean stop: pi's interrupt
 handler *restores any queued follow-ups into the composer*, so after a cancel the
 composer may hold text nobody retyped — and the next `gmux agent prompt` submits
-that text along with the new prompt, as one turn. Check with `gmux tail` if a
+that text along with the new prompt, as one turn. Check with `gmux agent logs` if a
 session has queued follow-ups you did not see run. And `--follow-up` and `cancel`
 ride pi's *default* keybindings (alt+enter, escape); a session whose user remapped
 those loses both silently — the bytes still arrive, they just no longer mean that
 action. Plain prompts (Enter) are unaffected.
+
+### `gmux agent logs <id>`
+
+Print what the agent has been doing: its conversation as clean markdown. For
+agents that persist a structured conversation file (pi), the transcript is
+reconstructed from that file — the actual user/assistant messages plus compact
+one-line tool calls — rather than the terminal rendering of the TUI, so the
+output is readable and pipe-friendly. Thinking blocks and tool outputs are
+omitted.
+
+```bash
+gmux agent logs a3f20187          # last 100 messages
+gmux agent logs -n 2 a3f20187     # the prompt and the reply
+gmux agent prompt a3f20187 'fix the failing test' && gmux agent logs -n 4 a3f20187
+```
+
+`-n` counts **messages** (default 100), not lines — that is the unit difference
+that earned this view its own command. The transcript is read from the
+conversation file the agent has flushed to disk, so an assistant message that is
+still streaming appears once it completes.
+
+Read from the agent's own stored conversation, so like `gmux agent output` it
+never starts, resumes or touches a process, and it works on a dead retained
+session. Local sessions only. Exits `1` with a stable code when there is nothing
+to print: `no_conversation` (nothing rendered yet) or `unsupported_adapter` (this
+agent has no conversation gmux can read) — use `gmux tail <id>` for those, which
+shows the terminal itself.
 
 ### `gmux agent output <id>`
 
@@ -421,8 +460,8 @@ Read from the agent's own stored conversation, so it never starts, resumes or
 touches a process, and it works on a dead session. Exits `1` with a stable code
 when there is nothing to print: `no_message` (the agent hasn't produced one
 yet), `no_conversation` (no conversation on record), `unsupported_adapter`
-(this agent has no conversation gmux can read). Use `gmux tail` for the whole
-transcript.
+(this agent has no conversation gmux can read). Use `gmux agent logs` for the
+whole conversation, or `gmux tail` for the terminal itself.
 
 ### `gmux kill <id>`
 
