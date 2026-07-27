@@ -96,6 +96,13 @@ Consequently the pi extension is a pure **observer/producer** of `session/update
 
 ### 8. CLI relation
 
+> **Note (2026-07-27):** the verb names below predate ADR 0027. The
+> conversation-shaped CLI view is now **`gmux agent logs`** (`gmux tail` is the
+> raw terminal view only, and `send --follow-up` became
+> `gmux agent prompt --follow-up`), so a future structured/streaming
+> conversation read belongs on `agent logs`, not on `tail`. The schema relation
+> this section describes is unaffected.
+
 The lightweight verbs are the CLI view of the same schema, not a second implementation:
 
 - **`tail --clean` / `--json`** emits the `session/update` stream (ADR-pending B-lite tail).

@@ -56,9 +56,9 @@ type command struct {
 	all  bool
 	json bool
 
-	// tail
+	// tail (raw PTY output) and `agent logs` (conversation markdown).
+	// One field, two units: tail counts lines, agent logs counts messages.
 	tailLines int
-	raw       bool // --raw/-e: PTY scrollback instead of conversation markdown
 
 	// send
 	sendText *string  // literal text to type (nil = none)
@@ -274,7 +274,7 @@ func parseCLI(args []string) (*command, error) {
 	// Agent verbs typed without their namespace get the namespace guide:
 	// `gmux prompt <id> ...` is far more likely a missing `agent` than a
 	// program named prompt.
-	if head == "prompt" || head == "cancel" || head == "output" {
+	if head == "prompt" || head == "cancel" || head == "output" || head == "logs" {
 		return nil, &usageError{topic: "agent", err: fmt.Errorf(
 			"unknown command %q; agent commands are namespaced: gmux agent %s ... (%s)", head, head, runHint)}
 	}
@@ -326,21 +326,26 @@ func parseRefOnly(m mode, name string, args []string) (*command, error) {
 	return &command{mode: m, ref: args[0]}, nil
 }
 
-// parseTail handles `gmux tail [-n N] [--raw|-r] <id>`.
+// parseTail handles `gmux tail [-n N] <id>`: always the raw PTY view,
+// -n counting lines.
 //
-// Default output is the conversation transcript when the session's
-// adapter persists one (markdown from the conversation file), falling
-// back to PTY scrollback otherwise. --raw forces the PTY scrollback
-// view (plain text; the broker renders tail requests through a
-// terminal emulator, so escapes never survive server-side). -e stays
-// as an alias for tmux capture-pane muscle memory.
+// tail answers "what is on its screen" and nothing else. The
+// conversation-markdown view it used to default to moved to
+// `gmux agent logs` ("what has it been doing"), so no flag on this verb
+// crosses the raw/semantic boundary any more — and the flags that used
+// to select the view are refused by name rather than reported as
+// unknown, in the spirit of the top-level removedFlags shim.
 func parseTail(args []string) (*command, error) {
 	c := &command{mode: modeTail, tailLines: 100}
+	for _, a := range args {
+		switch strings.SplitN(a, "=", 2)[0] {
+		case "--raw", "-r", "-e":
+			return nil, fmt.Errorf("tail: %s was removed; tail is always the raw terminal view, and the conversation view moved to: gmux agent logs <id>",
+				strings.SplitN(a, "=", 2)[0])
+		}
+	}
 	fs := newFlagSet("tail")
-	fs.IntVar(&c.tailLines, "n", 100, "number of lines (or conversation messages) to show")
-	fs.BoolVar(&c.raw, "raw", false, "PTY scrollback instead of conversation markdown")
-	fs.BoolVar(&c.raw, "r", false, "alias of --raw")
-	fs.BoolVar(&c.raw, "e", false, "tmux-compat alias of --raw")
+	fs.IntVar(&c.tailLines, "n", 100, "number of terminal lines to show")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return nil, err

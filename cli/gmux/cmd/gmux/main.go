@@ -63,7 +63,7 @@ func main() {
 	case modeKill:
 		os.Exit(cmdKill(cmd.ref))
 	case modeTail:
-		os.Exit(cmdTail(cmd.ref, cmd.tailLines, cmd.raw))
+		os.Exit(cmdTail(cmd.ref, cmd.tailLines))
 	case modeAttach:
 		os.Exit(cmdAttach(cmd.ref))
 	case modeSend:

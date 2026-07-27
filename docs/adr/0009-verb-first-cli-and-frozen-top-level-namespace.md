@@ -301,6 +301,8 @@ blocks until the queued prompt's reply, per the issue's contract.
 
 ## Amendment (2026-07-12): `tail` defaults to the conversation transcript
 
+> **Superseded (2026-07-27) by [ADR 0027](0027-semantic-agent-cli-and-result-bearing-wait.md):** the view was right, the verb was wrong. `gmux tail` reverts to decision 13a's unconditional raw PTY view (`-n` in lines, no `--raw`/`-e`/`-r` — the flags are refused by name), and the conversation-markdown view moves to `gmux agent logs <id> [-n N]` (`-n` in messages) inside the semantic namespace. Making one verb's *output shape* depend on the session's adapter meant a script could not know what it would get without first knowing what was running; the three reading questions now have three commands. 13a's ban on a top-level `logs` verb stands — `agent logs` is namespace growth under decision 9, not a new bare verb. Server-side the transcript read (`?tail=N`) is unchanged, but its non-renderer answer is now 422 `unsupported_adapter` instead of 404 `no_conversation`, because no fallback keys on that code any more.
+
 `gmux tail` (decision 13a) changes its default view for sessions whose
 adapter persists a structured conversation file (pi's JSONL; the
 adapter capability is `ConversationRenderer`): it prints clean markdown

@@ -34,12 +34,6 @@ func TestShortFlagAliases(t *testing.T) {
 					t.Errorf("all=%v json=%v", c.all, c.json)
 				}
 			}},
-		{"tail --raw", []string{"tail", "--raw", "abc"}, []string{"tail", "-r", "abc"},
-			func(t *testing.T, c *command) {
-				if !c.raw || c.ref != "abc" {
-					t.Errorf("raw=%v ref=%q", c.raw, c.ref)
-				}
-			}},
 		{"wait --quiet", []string{"wait", "--quiet", "s1"}, []string{"wait", "-q", "s1"},
 			func(t *testing.T, c *command) {
 				if !c.quiet || c.ref != "s1" {
@@ -172,7 +166,6 @@ func TestPerVerbShortsDoNotCollideWithRemovedFlags(t *testing.T) {
 func TestHelpPagesShowShortAliases(t *testing.T) {
 	pairs := map[string][]string{
 		"ls":   {"--all/-a", "--json/-j"},
-		"tail": {"--raw/-r"},
 		"wait": {"--timeout/-t", "--quiet/-q"},
 		"send": {"--wait/-w", "--timeout/-t"},
 	}

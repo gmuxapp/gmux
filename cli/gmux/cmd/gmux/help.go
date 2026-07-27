@@ -23,12 +23,13 @@ Run a command:
 
 Drive an agent (semantic turn control):
   gmux agent prompt <id> <prompt>   prompt an agent, wait, print its answer
-  gmux agent --help                 all agent commands and options
+  gmux agent --help                 all options, and the reads: logs (what it
+                                    has been doing), output (its answer)
 
 Sessions (local by default; address a peer with <id>@<peer>):
   gmux ls [--all|-a] [--json|-j]    list sessions
   gmux attach <id>                  reattach your terminal to a session
-  gmux tail <id> [-n N] [--raw|-r]  print conversation or recent output
+  gmux tail <id> [-n N]             print the last N lines of terminal output
   gmux send <id> <text> [Key...]    type text and keys into the terminal (raw)
   gmux wait <id> [--timeout|-t N]   block until the turn ends; print the result
   gmux kill <id>                    terminate a session
@@ -103,20 +104,24 @@ session) when your terminal closes. Requires an interactive terminal.
 Peer sessions (<id>@<peer>) attach transparently through the daemon.
 `,
 
-	"tail": `gmux tail: print a snapshot of a session's conversation or output
+	"tail": `gmux tail: print a snapshot of a session's terminal output
 
-  gmux tail <id> [-n N] [--raw|-r]
+  gmux tail <id> [-n N]
 
-  -n N         how much to print (default 100)
-  --raw/-r     force the terminal-output view (-e is a tmux-compat alias)
+  -n N         how many lines to print (default 100)
 
-For agent sessions that persist a conversation (pi), prints the
-conversation as markdown: '## User' / '## Assistant' messages with compact
-[tool] one-liners; -n counts messages. For everything else (and with
---raw), prints the last N lines of rendered terminal output, ANSI
-stripped.
+Always the raw view: the last N lines of rendered terminal output, ANSI
+stripped, for every kind of session — shell, one-shot command or agent.
+tail answers "what is on its screen".
 
-To read just an agent's latest answer, prefer 'gmux agent output <id>'.
+For an agent session you usually want a semantic view instead:
+
+  gmux agent logs <id> [-n N]    what it has been doing (the conversation
+                                 as markdown; -n counts messages)
+  gmux agent output <id>         just its latest answer
+
+('gmux tail --raw' and its -e/-r aliases are gone: tail is raw by
+definition, and the conversation view moved to 'gmux agent logs'.)
 `,
 
 	"send": `gmux send: type raw text and keys into a session's terminal

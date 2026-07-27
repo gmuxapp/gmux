@@ -358,6 +358,8 @@ conversation scopes, tool inclusion, and ACP content blocks are deferred. No
 public message IDs are introduced. Output is not truncated by gmux.
 
 `gmux tail` remains the universal transcript/terminal debugging view.
+*(Amended 2026-07-27: tail is the universal **terminal** view; the transcript
+view is `gmux agent logs` — see the amendment below.)*
 
 ### 11. `gmux wait` remains universal and becomes conditionally result-bearing
 
@@ -546,3 +548,69 @@ lifetime closes that turn with `Error` when the child exits non-zero, so
 `gmux wait` on a failed `gmux -d -- make build` exits 1. "Finished" and
 "succeeded" are the same question for such sessions, and a wait that returned 0
 for a failed build would be the more dangerous answer.
+
+## Amendment (2026-07-27): `gmux agent logs`, and `tail` goes back to raw
+
+The conversation-markdown view that ADR 0009's 2026-07-12 amendment made
+`gmux tail`'s default for renderer-backed sessions moves into this namespace as
+**`gmux agent logs <id> [-n N]`** (`-n` counts messages, default 100), and
+**`gmux tail <id> [-n N]` reverts to decision 13a's unconditional raw PTY
+view** (`-n` counts lines). `--raw` and its `-e`/`-r` aliases are removed from
+`tail`; like the pre-2.0 action flags they are refused **by name**, with an
+error naming `gmux agent logs`, rather than reported as unknown.
+
+### Why: three questions, three verbs, no word doing double duty
+
+| Question | Command | `-n` |
+| --- | --- | --- |
+| What is on its screen? | `gmux tail <id>` — any session | lines |
+| What has it been doing? | `gmux agent logs <id>` — agents | messages |
+| What is the answer? | `gmux agent output <id>` | — |
+
+The old arrangement failed the same test this ADR applies to `send`: one verb
+whose **output shape depended on the session's adapter** could not be scripted
+without first knowing what was running inside the session — and `-n` silently
+changed unit with it. That is the raw/semantic boundary this namespace exists
+to draw, crossed by a flag. Splitting the views puts the adapter-aware read
+where every other adapter-aware read already lives (local-only, pi-only,
+store-only), and leaves `tail` a single answer it can give for a shell, a
+one-shot command and an agent alike.
+
+`logs` is the word the neighbours use for "what has this thing been doing"
+(`docker logs`, `kubectl logs`), which also reserves the obvious next step:
+`--follow` is deliberately **not** implemented, but the name now has a home
+that can grow one, whereas ADR 0009 decision 13a had to ban a top-level `logs`
+verb outright. 13a's ban stands: this is namespace growth under decision 9, not
+a new bare verb. `gmux logs <id>` therefore prints the same
+"agent commands are namespaced" hint `prompt`/`cancel`/`output` print.
+
+### Shape
+
+`agent logs` is a **store-only** read, exactly like `agent output`: one GET, no
+runner, so it works on a dead retained session and can never start or resume
+one. Local sessions only. Its error taxonomy is `agent output`'s verbatim — the
+daemon's code and message printed as-is, an envelope-less 404 reported as
+version skew rather than a missing session, and `unsupported_adapter` /
+`no_conversation` carrying the read-side `gmux tail <id>` hint, because the raw
+view is exactly what a caller who cannot have a transcript should reach for.
+
+Unlike `agent output` it needs **no marker-header guard**: that guard exists
+because an old daemon ignoring `scope=message` would answer with the whole
+transcript, and the whole transcript is precisely what this verb asked for. The
+only skew that can bite is a daemon with no `/conversation` route at all, which
+arrives as the envelope-less 404 above.
+
+### Server-side
+
+The read is gmuxd's existing transcript scope, unchanged:
+`GET /v1/sessions/{id}/conversation?tail=N`. One answer did change: a session
+whose adapter is not a `ConversationRenderer` now gets **422
+`unsupported_adapter`** instead of 404 `no_conversation`, with the adapter
+check ordered before the conversation-ref check — the same ordering, and the
+same reason, as the message scope. "This adapter has no conversation model" is
+permanent and actionable; "nothing rendered yet" is transient. The two
+collapsed into one code only because `gmux tail` keyed its scrollback fallback
+on `no_conversation`, and that fallback no longer exists. Peers and older
+daemons still answer `no_conversation` for the permanent case; the CLI treats
+both identically (exit 1, `gmux tail` hint), so skew costs precision, not
+correctness.

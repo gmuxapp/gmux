@@ -100,7 +100,7 @@ When no text argument is given and stdin is a pipe, gmux reads stdin until EOF (
 gmux agent prompt <id> < step-1.txt      # agent session: prompt, wait, print the answer
 gmux send --wait <id> Enter < step-2.txt # raw session: type, submit, wait
 
-gmux tail <id> -n 2            # the prompt and the reply, clean markdown
+gmux agent logs <id> -n 2      # the prompt and the reply, clean markdown
 ```
 
 The idle signal is the same `Status.Active` flag the UI's spinner consumes, so `wait` returns the moment the agent emits its closing message. On an already-idle session it returns immediately and reports the **last** turn's conclusion and result — to gate on a turn you are about to trigger, use `gmux agent prompt` or `send --wait` (below), which arm the wait before delivering anything. Exit codes: `0` the turn completed (or the output condition matched), `2` the turn was intentionally interrupted, `1` anything else — a failed turn, a death, or `--timeout N` elapsing.
@@ -130,7 +130,17 @@ Every session is waitable: agents get their idle signal from turn hooks, shells 
 
 ## Reading output
 
-`gmux tail <id>` prints the session's conversation as clean markdown when the agent persists a conversation file (pi): `## User` / `## Assistant` messages with compact `[tool] …` one-liners — the actual exchange, not the TUI's box-drawing and spinners. `-n N` counts messages there (default 100). Sessions without a conversation file (shells, plain commands) print recent terminal output as plain text instead, where `-n` counts lines; `--raw` forces that terminal view for any session. Pair it with `wait` to capture an agent's final answer:
+Three commands answer three different questions, so a script never has to know what is running in a session to know what shape its output will be:
+
+```bash
+gmux tail <id> -n 50           # what is on its screen: raw terminal text, any session
+gmux agent logs <id> -n 10     # what it has been doing: conversation markdown (agents)
+gmux agent output <id>         # what the answer is: the latest message
+```
+
+`gmux tail <id>` is always the raw view: the last `-n N` **lines** of rendered terminal output as plain text (default 100), for shells, one-shot commands and agents alike.
+
+`gmux agent logs <id>` prints the session's conversation as clean markdown for agents that persist a conversation file (pi): `## User` / `## Assistant` messages with compact `[tool] …` one-liners — the actual exchange, not the TUI's box-drawing and spinners. Here `-n N` counts **messages** (default 100). It reads the agent's stored conversation, so it never starts or resumes anything and works on a dead session; agents with no readable conversation answer `unsupported_adapter`, where `gmux tail` is the fallback. Pair the reads with `wait` to capture an agent's final answer:
 
 ```bash
 gmux agent prompt --timeout 600 <id> < ship-prompt.txt   # prints the reply
@@ -147,7 +157,7 @@ gmux ls --json     # machine-readable, for parsing in scripts
 gmux kill <id>     # SIGTERM the runner, normal exit lifecycle
 ```
 
-`send`, `tail`, and `kill` accept `<id>@<peer>` ids; `wait` and `gmux agent` do not (local only — run `gmux agent` in a session on the owning host instead).
+`send`, `tail`, and `kill` accept `<id>@<peer>` ids; `wait` and `gmux agent` (including `agent logs`) do not (local only — run `gmux agent` in a session on the owning host instead).
 
 Every verb accepts id prefixes, full session ids, or slugs, so the eight-character short form `ls` prints passes straight back to `kill`, `send`, `tail`, or `wait`.
 
@@ -167,7 +177,7 @@ done
 
 for id in "${ids[@]}"; do
   echo "=== $id ==="
-  gmux tail "$id" -n 100
+  gmux agent logs "$id" -n 100
 done
 ```
 
