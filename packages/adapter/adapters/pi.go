@@ -26,6 +26,7 @@ var (
 	_ adapter.SessionExtender       = (*Pi)(nil)
 	_ adapter.PassthroughDetector   = (*Pi)(nil)
 	_ adapter.AgentActionEncoder    = (*Pi)(nil)
+	_ adapter.AgentLauncher         = (*Pi)(nil)
 )
 
 // piSubcommands are pi's one-shot CLI verbs (`pi <verb> ...`). pi recognizes
@@ -211,6 +212,32 @@ func (p *Pi) EncodeAction(action adapter.AgentAction) (string, bool) {
 
 // ActionReadyTimeout implements adapter.AgentActionEncoder.
 func (p *Pi) ActionReadyTimeout() time.Duration { return piActionReadyTimeout }
+
+// LaunchCommand implements adapter.AgentLauncher: a bare interactive pi,
+// plus the two knobs `gmux agent prompt --new` exposes.
+//
+// The flags are pi's own long spellings, verified against `pi --help`:
+// `--model <pattern>` takes a model pattern or id, `--name <name>` sets the
+// session display name. Long forms deliberately — pi's `-n` is --name but a
+// single-letter flag is the kind of thing an agent reshuffles between
+// releases, and this argv is stored on the session forever.
+//
+// No prompt is ever encoded here: the first prompt travels the same
+// readiness-gated semantic path as every later one, so a freshly launched
+// session has one health event (admission) rather than a launch-shaped
+// special case. An empty option is omitted entirely rather than passed empty:
+// `--model ""` asks pi for a model named "", which is not the same request as
+// asking for pi's default.
+func (p *Pi) LaunchCommand(opts adapter.LaunchOptions) ([]string, bool) {
+	argv := []string{"pi"}
+	if opts.Model != "" {
+		argv = append(argv, "--model", opts.Model)
+	}
+	if opts.Name != "" {
+		argv = append(argv, "--name", opts.Name)
+	}
+	return argv, true
+}
 
 // --- Conversation storage (file-backed: refs are absolute JSONL paths) ---
 

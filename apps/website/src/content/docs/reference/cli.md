@@ -345,6 +345,7 @@ starts has ended.
 
 ```bash
 gmux agent prompt a3f20187 'review the diff on this branch'
+gmux agent prompt --new 'review the diff on this branch'     # launch, then prompt
 gmux agent prompt --timeout 600 a3f20187 'run the full suite'
 gmux agent prompt --no-wait a3f20187 'start the refactor'   # return once admitted
 gmux agent prompt --follow-up a3f20187 'then update the docs'
@@ -401,6 +402,73 @@ existed — restart it, or drive it with `gmux send`), `precondition_failed`,
 `delivery_pending`, `not_ready`, `not_running`, and `incarnation_mismatch` (the
 session's runner was replaced while the prompt was on its way, and the
 replacement refused an action meant for its predecessor).
+
+#### `--new`: launch a session and prompt it in one command
+
+```bash
+gmux agent prompt --new [--model M] [--name N] [--timeout N] [--no-wait] [prompt|-]
+
+# handoff pattern, one command instead of two
+id=$(gmux agent prompt --new --no-wait --name review 'review the diff on this branch')
+gmux wait "$id" && gmux agent output "$id"
+
+# synchronous: the id, then the answer
+gmux agent prompt --new --model anthropic/sonnet 'summarize this repo'
+```
+
+`--new` launches a **new pi session** the same way `gmux -d -- pi` does — from
+this shell's env and cwd, on the local daemon only — and sends the prompt as
+its first turn. Pass either a session id or `--new`, never both.
+
+- `--model M` / `--name N` — pi's `--model` and `--name`. Valid **only** with
+  `--new`; without it they are usage errors.
+- `--follow-up` and `--steer` are **refused** with `--new`: a session that does
+  not exist yet has no turn to queue behind or steer.
+- `--no-wait` and `--timeout` mean what they always mean. `--timeout` bounds
+  your wait, never the launch: agent readiness runs on pi's own fixed 10 s
+  window.
+- The prompt is the single positional argument, or `-`/nothing to read stdin.
+- `--new` must come **before** the prompt. After a session id it is prompt text
+  like any other token, so `gmux agent prompt a3f20187 --new` prompts that
+  session with the literal text `--new`. The `-`-means-stdin spelling is
+  likewise `--new`-only: after a session id, `-` is a literal prompt.
+- Other agents answer `unsupported_adapter`: launch those with `gmux -d -- <cmd>`
+  and prompt the id it prints. That two-step route stays valid for pi too.
+
+**The session id is stdout line 1**, printed the moment the session exists and
+*before* the prompt is delivered — so a watcher can attach or tail while the
+agent is still coming up, and so you can always address the session you just
+paid for even when admission or the turn then fails.
+
+The line means exactly one thing: **the session exists and is addressable.** It
+is not an admission receipt, not a readiness signal, and not a claim that the
+prompt was delivered — the exit code carries all of those. Two consequences
+worth pinning:
+
+- Under `--new`, **the completion signal is the exit code, not non-empty
+  stdout.** A successful synchronous run prints the id, then the answer; a
+  failed one prints the id and exits non-zero. This differs from a plain sync
+  prompt, where stdout is the answer alone.
+- With `--no-wait`, the bare id is the only output and exit `0` means the
+  prompt was admitted.
+
+One wrinkle, inherited rather than introduced: the **first** turn of a freshly
+launched session often completes with no inline answer, because the daemon has
+not resolved the agent's conversation file yet at turn close. It behaves
+identically for `gmux -d -- pi` followed by a prompt. The turn really did
+complete (exit `0`); read the reply with `gmux agent output "$id"`.
+
+If anything fails **after** the launch — admission, readiness, the turn itself —
+the session stays behind and it is **yours**: gmux does not tear it down, and it
+may still be running. Retry against the printed id, read it with `gmux agent
+logs`, or `gmux kill <id>` it.
+
+If the launch itself fails (nothing registered with gmuxd), **nothing** is
+printed on stdout and the command exits `1`: there is no session to address.
+The rule scripts can rely on is that stdout line 1 is a session id whenever a
+session exists, and stdout is empty whenever one does not. A prompt that is
+empty, oversized or not valid UTF-8 is refused before anything is spawned, so a
+usage error never leaves an orphan session behind.
 
 ### `gmux agent cancel <id>`
 

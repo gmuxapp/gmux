@@ -74,6 +74,9 @@ type command struct {
 	agentMode   string  // prompt|follow_up|steer (prompt verb only)
 	agentNoWait bool    // --no-wait: return at the admission boundary
 	promptText  *string // inline prompt text (nil = read stdin)
+	agentNew    bool    // --new: launch the session this prompt starts
+	agentModel  string  // --new only: model selector for the launch
+	agentName   string  // --new only: session display name for the launch
 
 	// help
 	helpTopic string // "agent", "agent prompt", ... ("" = full usage)

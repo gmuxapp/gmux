@@ -16,6 +16,7 @@ the command begins.
 gmux -- <cmd> [args]         # run blocking; exits with the child's exit code
 gmux -d -- <cmd> [args]      # run detached; prints the session id on stdout
 gmux agent prompt <id> 'text'   # prompt an AGENT session; blocks until the turn ends
+gmux agent prompt --new 'text'  # launch a new pi session AND prompt it (prints the id first)
 gmux agent output <id>          # print that agent's latest message
 gmux agent cancel <id>          # interrupt the running turn
 gmux send <id> 'text' Enter  # RAW: type text and submit (Enter is explicit)
@@ -81,6 +82,41 @@ gmux agent prompt --timeout 600 $id 'run the suite and fix what fails'
 gmux agent output $id                     # the answer, verbatim, no [tool] lines
 git diff | gmux agent prompt $id           # prompt from stdin (stays one prompt)
 ```
+
+### Launch and prompt in one command: `--new`
+
+```bash
+id=$(gmux agent prompt --new --no-wait --name review 'review the diff on this branch')
+gmux wait $id && gmux agent output $id
+
+gmux agent prompt --new --model anthropic/sonnet 'summarize this repo'
+```
+
+`--new` launches a new **pi** session (same machinery as `gmux -d -- pi`, from
+your env and cwd) and sends the prompt as its first turn. Pass either an id or
+`--new`, never both.
+
+**The session id is stdout line 1**, printed the moment the session exists and
+before the prompt is delivered — so you can always address a session you just
+created, even if admission or the turn then fails. It means only "this session
+exists and is addressable": not admitted, not ready, not delivered — the exit
+code says those. A failure after the launch leaves the session behind and **you
+own it** (it may still be running): retry against the id, or `gmux kill $id`. Under `--new` the completion
+signal is therefore the **exit code**, not non-empty stdout: a sync run prints
+the id and then the answer; `--no-wait` prints the bare id only and exits 0 once
+admitted. A launch that never registers prints nothing on stdout and exits 1.
+
+The **first** turn of a brand-new session often prints no answer even though it
+completed (the daemon has not resolved the conversation file yet at turn close;
+`gmux -d -- pi` + prompt behaves the same). Read it with `gmux agent output $id`.
+
+`--new` must come **before** the prompt: after an id it is prompt text like
+anything else (`gmux agent prompt $id --new` sends the literal `--new`).
+
+`--model`/`--name` are valid only with `--new`; `--follow-up`/`--steer` are
+refused with it (there is no turn yet); `--timeout` bounds your wait, not the
+launch. `--new` is pi-only — for any other command the two-step
+`id=$(gmux -d -- <cmd>)` then `gmux agent prompt $id …` is still fully valid.
 
 `agent prompt` blocks until the turn ends and **prints the agent's answer** on
 stdout (latest final message, untruncated, no `[tool]` lines). Exit codes are
@@ -155,7 +191,7 @@ input to submit (a trailing `Enter` or a `\r` in piped stdin) and accepts
 ```bash
 ids=()
 for ticket in fa-48 fa-49 fa-52; do
-  ids+=( "$(gmux -d -- pi "Implement $ticket. Return when done.")" )
+  ids+=( "$(gmux agent prompt --new --no-wait --name "$ticket" "Implement $ticket. Return when done.")" )
 done
 
 for id in "${ids[@]}"; do

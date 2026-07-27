@@ -283,6 +283,39 @@ type AgentActionEncoder interface {
 	ActionReadyTimeout() time.Duration
 }
 
+// LaunchOptions carries the launch knobs `gmux agent prompt --new`
+// exposes. Every field is optional; an empty field means "the agent's
+// own default" and must not appear in the argv at all — passing an
+// empty --model is a different request than passing none.
+type LaunchOptions struct {
+	// Model is the agent's model selector, in whatever vocabulary that
+	// agent's own flag accepts (gmux does not normalize model names).
+	Model string
+	// Name is the session display name to hand the agent at startup.
+	Name string
+}
+
+// AgentLauncher is optionally implemented by adapters that can be
+// started from a set of semantic options rather than a hand-written
+// command line. It is the launch-side twin of AgentActionEncoder:
+// stateless translation, no I/O, no session state — the caller spawns
+// the returned argv through the ordinary detached-run machinery.
+//
+// The argv is a BARE launch: it never carries a prompt. gmux delivers
+// the first prompt over the same readiness-gated semantic path as every
+// later one (ADR 0027), so a new session has exactly one health event —
+// admission — instead of a launch-shaped special case.
+//
+// Adapters that do not implement it have no launch support; callers
+// must fail loudly with unsupported_adapter rather than guessing a
+// command line.
+type AgentLauncher interface {
+	// LaunchCommand returns the argv that starts a fresh interactive
+	// session for this agent with opts applied. ok=false means this
+	// adapter cannot express the request.
+	LaunchCommand(opts LaunchOptions) (argv []string, ok bool)
+}
+
 // CommandTitler is optionally implemented by adapters that want to
 // control how a command array is displayed as a fallback title.
 // Without it, the store joins the full command (e.g. "pytest -x").

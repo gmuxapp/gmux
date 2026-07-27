@@ -35,6 +35,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/gmuxapp/gmux/cli/gmux/internal/localterm"
+	"github.com/gmuxapp/gmux/packages/adapter"
+	"github.com/gmuxapp/gmux/packages/adapter/adapters"
 )
 
 // Public prompt modes, mirroring the daemon's wire vocabulary. Duplicated as
@@ -170,6 +172,7 @@ func parseAgentPrompt(args []string) (*command, error) {
 	c := &command{mode: modeAgent, agentSub: "prompt", agentMode: agentModePrompt}
 	modeSet := ""
 	noWaitSet, timeoutSet := false, false
+	newSet, modelSet, nameSet := false, false, false
 	// A leading help token asks about the verb. Only the leading position:
 	// after the ref, every token is verbatim prompt text, so
 	// `agent prompt s1 ?` prompts with a literal `?`.
@@ -186,6 +189,15 @@ func parseAgentPrompt(args []string) (*command, error) {
 		if !strings.HasPrefix(a, "-") { // first non-flag token is the ref
 			break
 		}
+		// A bare `-` means "the prompt is on stdin" — but ONLY under --new,
+		// where there is no ref and the positional is the prompt. On the ref
+		// path `-` keeps its pre-existing meanings exactly: an unknown flag
+		// before the ref, and verbatim prompt text after it. Treating it as a
+		// positional here would let `agent prompt - x` resolve `-` as a
+		// session ref, which the ref path never did.
+		if a == "-" && newSet {
+			break
+		}
 		switch {
 		case a == "-h" || a == "--help":
 			return &command{mode: modeHelp, helpTopic: "agent prompt"}, nil
@@ -195,6 +207,32 @@ func parseAgentPrompt(args []string) (*command, error) {
 			}
 			noWaitSet = true
 			c.agentNoWait = true
+		case a == "--new":
+			if newSet {
+				return nil, agentRepeatedFlag(a)
+			}
+			newSet = true
+			c.agentNew = true
+		case a == "--model" || strings.HasPrefix(a, "--model="):
+			if modelSet {
+				return nil, agentRepeatedFlag("--model")
+			}
+			modelSet = true
+			v, next, err := agentFlagValue(args, i, "--model")
+			if err != nil {
+				return nil, err
+			}
+			c.agentModel, i = v, next
+		case a == "--name" || strings.HasPrefix(a, "--name="):
+			if nameSet {
+				return nil, agentRepeatedFlag("--name")
+			}
+			nameSet = true
+			v, next, err := agentFlagValue(args, i, "--name")
+			if err != nil {
+				return nil, err
+			}
+			c.agentName, i = v, next
 		case a == "--follow-up":
 			if err := agentSetMode(&modeSet, a); err != nil {
 				return nil, err
@@ -234,7 +272,24 @@ func parseAgentPrompt(args []string) (*command, error) {
 		}
 		i++
 	}
-	if i >= len(args) {
+	// --new launches the session this prompt starts, so it conflicts with
+	// everything that presumes an existing one. Each conflict is refused by
+	// name rather than resolved: a new session has no running turn to steer
+	// and no queue to sit behind, and picking a winner between a ref and
+	// --new would address a session the caller did not name.
+	if c.agentNew {
+		if modeSet != "" {
+			return nil, fmt.Errorf("agent prompt: %s needs a turn to act on, so it cannot be combined with --new", modeSet)
+		}
+	} else {
+		if modelSet {
+			return nil, errors.New("agent prompt: --model only applies to a session gmux is launching; pass it with --new")
+		}
+		if nameSet {
+			return nil, errors.New("agent prompt: --name only applies to a session gmux is launching; pass it with --new")
+		}
+	}
+	if i >= len(args) && !c.agentNew {
 		return nil, errors.New("agent prompt requires a session id")
 	}
 	// --timeout bounds the wait, so it means nothing without one. Refusing the
@@ -246,8 +301,22 @@ func parseAgentPrompt(args []string) (*command, error) {
 	if c.agentNoWait && timeoutSet {
 		return nil, errors.New("agent prompt: --timeout bounds the wait, so it cannot be combined with --no-wait")
 	}
-	c.ref = args[i]
-	rest := args[i+1:]
+	var rest []string
+	if c.agentNew {
+		// No ref to consume: everything left is the prompt.
+		rest = args[i:]
+	} else {
+		c.ref = args[i]
+		rest = args[i+1:]
+	}
+	if c.agentNew && len(rest) == 1 && rest[0] == "-" {
+		// The conventional spelling of "the prompt is on stdin". Only
+		// meaningful as the whole prompt: a literal "-" prompt is not a
+		// prompt anyone means. Scoped to --new: on the ref path everything
+		// after the id is verbatim prompt text, `-` included, and that
+		// promise predates this flag.
+		rest = nil
+	}
 	switch len(rest) {
 	case 0:
 		// Prompt text comes from piped stdin; the tty case is rejected at
@@ -256,6 +325,12 @@ func parseAgentPrompt(args []string) (*command, error) {
 		t := rest[0]
 		c.promptText = &t
 	default:
+		if c.agentNew {
+			// The overwhelmingly likely typo: a caller who wrote
+			// `--new <id> <prompt>` out of habit. --new IS the session
+			// selection, so naming one alongside it addresses two sessions.
+			return nil, errors.New("agent prompt: --new starts a new session, so it takes no session id — pass only the prompt (quote the whole prompt), or pipe it on stdin")
+		}
 		// Joining the words would guess at whitespace the shell already ate.
 		// A prompt is one argument; quote it.
 		return nil, errors.New("agent prompt takes a single prompt argument (quote the whole prompt), or pipe it on stdin")
@@ -280,6 +355,30 @@ func agentSetMode(current *string, flag string) error {
 	return fmt.Errorf("agent prompt: %s and %s are mutually exclusive", *current, flag)
 }
 
+// agentFlagValue reads the value of a `--flag value` / `--flag=value` pair at
+// args[i], returning the value and the index of the token it consumed.
+//
+// An empty value is refused rather than treated as absence: `--model=` asks
+// for a model named "", which the adapter would silently drop, leaving the
+// caller believing they had pinned a model.
+func agentFlagValue(args []string, i int, name string) (string, int, error) {
+	a := args[i]
+	val := ""
+	if strings.HasPrefix(a, name+"=") {
+		val = strings.TrimPrefix(a, name+"=")
+	} else {
+		i++
+		if i >= len(args) {
+			return "", i, fmt.Errorf("%s requires a value", name)
+		}
+		val = args[i]
+	}
+	if strings.TrimSpace(val) == "" {
+		return "", i, fmt.Errorf("%s requires a non-empty value", name)
+	}
+	return val, i, nil
+}
+
 func agentRepeatedFlag(flag string) error {
 	return fmt.Errorf("agent prompt: %s given more than once", flag)
 }
@@ -288,6 +387,9 @@ func agentRepeatedFlag(flag string) error {
 func cmdAgent(c *command) int {
 	switch c.agentSub {
 	case "prompt":
+		if c.agentNew {
+			return cmdAgentPromptNew(c.agentModel, c.agentName, c.agentNoWait, c.timeout, c.promptText)
+		}
 		return cmdAgentPrompt(c.ref, c.agentMode, c.agentNoWait, c.timeout, c.promptText)
 	case "cancel":
 		return cmdAgentCancel(c.ref)
@@ -319,7 +421,7 @@ func resolveAgentSession(ref, verb string) (cliSession, bool) {
 	return sess, true
 }
 
-// cmdAgentPrompt implements `gmux agent prompt`.
+// cmdAgentPrompt implements `gmux agent prompt <ref>`.
 func cmdAgentPrompt(ref, mode string, noWait bool, timeoutSecs int, text *string) int {
 	prompt, err := readPromptText(text, os.Stdin, localterm.IsInteractive())
 	if err != nil {
@@ -330,6 +432,92 @@ func cmdAgentPrompt(ref, mode string, noWait bool, timeoutSecs int, text *string
 	if !ok {
 		return waitExitError
 	}
+	return deliverPrompt(sess, mode, noWait, timeoutSecs, prompt)
+}
+
+// agentLaunchSession spawns a detached session and returns its id. A variable
+// so tests can drive `--new`'s output contract without forking a real agent.
+var agentLaunchSession = launchDetachedSession
+
+// agentLaunchAdapter is the adapter `--new` launches through. The launch is
+// pi-only for now (there is no --adapter flag), exactly like the rest of this
+// namespace; a variable so tests can substitute a non-launcher adapter.
+var agentLaunchAdapter adapter.Adapter = adapters.NewPi()
+
+// cmdAgentPromptNew implements `gmux agent prompt --new`: launch a session and
+// send it its first prompt, in one command.
+//
+// Ordering is the whole design. The prompt is read and the argv translated
+// BEFORE anything is spawned, so a usage error never leaves an orphan session
+// behind. Once the spawn succeeds the session id is written to stdout
+// immediately — before the prompt is even delivered — because from that
+// moment the caller owns a session they must be able to address no matter
+// what happens next. Everything after that point (admission failure, a turn
+// that errors, a --timeout) reports on stderr and exits per the taxonomy,
+// leaving stdout's first line exactly one bare session id.
+//
+// So the id line means one thing only: the session exists and is addressable.
+// It is not an admission receipt, not a readiness signal and not a claim that
+// the prompt was delivered. A post-spawn failure leaves that session alive (or
+// dead-retained) and the caller owning it: retry against the printed id, or
+// kill it.
+//
+// The prompt itself travels the ordinary readiness-gated /prompt transport, so
+// a session that never becomes ready fails its first prompt exactly as it
+// would fail its tenth: admission is the single health event, and there is no
+// launch-shaped special case to keep in sync.
+func cmdAgentPromptNew(model, name string, noWait bool, timeoutSecs int, text *string) int {
+	prompt, err := readPromptText(text, os.Stdin, localterm.IsInteractive())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return waitExitError
+	}
+	argv, ok := agentLaunchArgv(agentLaunchAdapter, adapter.LaunchOptions{Model: model, Name: name})
+	if !ok {
+		fmt.Fprintf(os.Stderr, "gmux: %s: %s cannot be launched by gmux agent prompt --new\n",
+			codeUnsupportedAdapter, agentLaunchAdapter.Name())
+		fmt.Fprintln(os.Stderr, "gmux: start it yourself with 'gmux -d -- <command>' and prompt the id it prints")
+		return waitExitError
+	}
+	id, err := agentLaunchSession(argv)
+	if err != nil {
+		// Nothing was registered, so there is no id to hand back: the caller
+		// paid for nothing and has nothing to clean up.
+		fmt.Fprintf(os.Stderr, "gmux: could not start %s: %s\n", strings.Join(argv, " "), err)
+		return waitExitError
+	}
+	// Line 1 of stdout, unconditionally and before delivery (ADR 0027, the
+	// 2026-07-27 --new amendment: "stdout line 1 means the session exists and
+	// is addressable"). It asserts NOTHING about admission, readiness or the
+	// turn — the exit code carries every one of those verdicts. Printing it
+	// here rather than at admission is what makes the guarantee
+	// unconditional: whatever fails next, the caller can address, retry
+	// against or kill the session it just paid for. os.Stdout is unbuffered,
+	// so a watcher reading the pipe can attach or tail during readiness.
+	if _, err := fmt.Fprintln(os.Stdout, id); err != nil {
+		fmt.Fprintln(os.Stderr, "gmux:", err)
+		return waitExitError
+	}
+	return deliverPrompt(cliSession{ID: id}, agentModePrompt, noWait, timeoutSecs, prompt)
+}
+
+// agentLaunchArgv translates launch options into an argv, or reports that this
+// adapter has no launch support.
+func agentLaunchArgv(a adapter.Adapter, opts adapter.LaunchOptions) ([]string, bool) {
+	l, ok := a.(adapter.AgentLauncher)
+	if !ok {
+		return nil, false
+	}
+	argv, ok := l.LaunchCommand(opts)
+	if !ok || len(argv) == 0 {
+		return nil, false
+	}
+	return argv, true
+}
+
+// deliverPrompt performs the POST /prompt round trip shared by both prompt
+// shapes. sess must already be known local.
+func deliverPrompt(sess cliSession, mode string, noWait bool, timeoutSecs int, prompt string) int {
 	body, err := json.Marshal(map[string]any{
 		"prompt":          prompt,
 		"mode":            mode,
@@ -714,14 +902,48 @@ func printAgentUsage(w io.Writer, topic string) {
 		fmt.Fprint(w, `gmux agent prompt — send a prompt to an agent session and wait for the turn
 
   gmux agent prompt [--no-wait] [--follow-up|--steer] [--timeout|-t N] <id> [prompt]
+  gmux agent prompt --new [--model M] [--name N] [--no-wait] [--timeout N] [prompt]
 
   <prompt>          the prompt text; omit it to read the prompt from stdin
+                    (under --new, a lone - means stdin too; after a session
+                    id, - is literal prompt text like everything else)
+  --new             launch a new pi session and send this as its first prompt
+  --model M         --new only: the model to launch with (pi's --model)
+  --name N          --new only: the session display name (pi's --name)
   --no-wait         return as soon as the prompt is admitted, without waiting
   --follow-up       queue the prompt to submit after the current turn ends
   --steer           redirect the turn that is running right now (fails if idle)
   --timeout/-t N    give up waiting after N seconds (0/absent: wait indefinitely)
 
 --follow-up and --steer are mutually exclusive; --no-wait composes with either.
+Pass either a session id or --new, never both. --new rejects --follow-up and
+--steer (a session that does not exist yet has no turn to queue behind or
+steer), and --model/--name mean nothing without it.
+
+Launching (--new). gmux starts the session the same way 'gmux -d -- pi' does,
+from this shell's env and cwd (local daemon only), then delivers the prompt
+over the ordinary readiness-gated path — so a session that never becomes
+ready fails its first prompt exactly like any later one.
+
+  THE SESSION ID IS ALWAYS STDOUT LINE 1, printed the moment the session
+  exists and before the prompt is delivered. It means exactly one thing:
+  the session exists and is addressable. It is NOT an admission receipt,
+  not a readiness signal and not a claim that the prompt was delivered —
+  the exit code carries all of those. Under --new the completion signal is
+  therefore the EXIT CODE, not non-empty stdout: a successful sync run
+  prints the id, then the answer. With --no-wait the bare id is the only
+  output, and exit 0 does mean the prompt was admitted.
+
+  A failure AFTER the launch leaves the session behind, and it is yours:
+  it may still be running. Retry against the printed id, or 'gmux kill' it.
+  A failed launch prints no id, because no session exists.
+
+  --new must come before the prompt. After a session id it is prompt text
+  like any other token, so 'gmux agent prompt s1 --new' prompts s1 with the
+  literal text '--new'.
+
+  --timeout still bounds only the wait, never the launch: readiness runs on
+  the adapter's own fixed window (10s for pi).
 
 Waits by default: the command returns when the turn ends and prints the agent's
 answer. Exit status is 0 for a completed turn, 2 for an interrupted one, and 1
@@ -778,6 +1000,8 @@ The three reading verbs answer three different questions:
 
   gmux agent prompt [--no-wait] [--follow-up|--steer] [--timeout|-t N] <id> [prompt]
                                     send a prompt and wait for the turn to end
+  gmux agent prompt --new [--model M] [--name N] [prompt]
+                                    launch a session and send its first prompt
   gmux agent cancel <id>            interrupt the running turn
   gmux agent logs <id> [-n N]       print the conversation as markdown
   gmux agent output <id>            print the agent's latest message
@@ -788,11 +1012,13 @@ submit the way that agent expects, and report what the daemon observed. logs
 and output are store-only snapshots: they never start or resume the agent.
 
 Prompting. A plain prompt starts a fresh turn (restarting a dead retained
-session if needed); --steer redirects the turn running right now; --follow-up
-queues text to submit after the current turn. --follow-up and --steer are
-mutually exclusive; --no-wait composes with either and only decides whether
-you block. Flags go before the id; everything after the id is the prompt,
-verbatim. Omit the prompt to pipe it on stdin (it stays one prompt).
+session if needed); --new launches a new pi session first and prints its id as
+stdout line 1 before the answer; --steer redirects the turn running right now;
+--follow-up queues text to submit after the current turn (neither applies to
+--new). --follow-up and --steer are mutually exclusive; --no-wait composes
+with either and only decides whether you block. Flags go before the id;
+everything after the id is the prompt, verbatim. Omit the prompt to pipe it on
+stdin (it stays one prompt).
 
 Reading. Three questions, three verbs, no word doing double duty: 'gmux tail'
 shows what is on the session's screen (raw terminal, any session); 'gmux agent

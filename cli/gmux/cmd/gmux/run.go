@@ -754,15 +754,48 @@ func runDetachedTarget(args []string) int {
 // gmux session and sees the message at their prompt; the session
 // shows up in the UI when it registers.
 func spawnDetached(args []string, msg string, waitForRegistration bool) {
+	if waitForRegistration {
+		id, err := launchDetachedSession(args)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to start background session: %s\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(id)
+		return
+	}
+	if err := startDetachedNoWait(args); err != nil {
+		log.Fatalf("%v", err)
+	}
+	if msg != "" {
+		fmt.Fprintln(os.Stderr, msg)
+	}
+}
+
+// startDetachedNoWait spawns the fire-and-forget variant: no handshake pipes,
+// no registration wait, no session id. The nested-gmux path.
+func startDetachedNoWait(args []string) error {
+	cmd, devNull, err := detachedCommand(args)
+	if err != nil {
+		return err
+	}
+	defer devNull.Close()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start background session: %v", err)
+	}
+	return cmd.Process.Release()
+}
+
+// detachedCommand builds the setsid'd re-exec of gmux for args, with stdio on
+// /dev/null. The caller owns devNull and must close it after Start.
+func detachedCommand(args []string) (*exec.Cmd, *os.File, error) {
 	self, err := os.Executable()
 	if err != nil {
-		log.Fatalf("cannot find own binary: %v", err)
+		return nil, nil, fmt.Errorf("cannot find own binary: %v", err)
 	}
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {
-		log.Fatalf("cannot open %s: %v", os.DevNull, err)
+		return nil, nil, fmt.Errorf("cannot open %s: %v", os.DevNull, err)
 	}
-	defer devNull.Close()
 
 	// args is the command-remainder after gmux flag parsing. Re-exec via
 	// the internal `__run -- <cmd>` form (ADR 0009): the bare-command
@@ -774,42 +807,45 @@ func spawnDetached(args []string, msg string, waitForRegistration bool) {
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull
 	cmd.Stderr = devNull
+	return cmd, devNull, nil
+}
 
-	var handshakeRead, handshakeWrite, gateRead, gateWrite, holdRead, holdWrite *os.File
-	if waitForRegistration {
-		var err error
-		handshakeRead, handshakeWrite, err = os.Pipe()
-		if err != nil {
-			log.Fatalf("failed to create handshake pipe: %v", err)
-		}
-		gateRead, gateWrite, err = os.Pipe()
-		if err != nil {
-			log.Fatalf("failed to create target gate pipe: %v", err)
-		}
-		holdRead, holdWrite, err = os.Pipe()
-		if err != nil {
-			log.Fatalf("failed to create runner hold pipe: %v", err)
-		}
-		// Parent reads acknowledgements and owns the target-start gate.
-		deadline := time.Now().Add(detachedStartupBudget)
-		cmd.ExtraFiles = []*os.File{handshakeWrite, gateRead, holdRead}
-		cmd.Env = append(os.Environ(),
-			handshakeFDEnv+"=3",
-			handshakeGateFDEnv+"=4",
-			handshakeHoldFDEnv+"=5",
-			handshakeDeadlineEnv+"="+fmt.Sprint(deadline.UnixNano()),
-		)
+// launchDetachedSession spawns a detached runner for args and blocks until it
+// has registered with gmuxd, returning the session id. Every failure is
+// returned already explained (the string a script developer should read),
+// never printed and never fatal: callers other than `gmux -d` — notably
+// `gmux agent prompt --new` — need to report it in their own voice.
+func launchDetachedSession(args []string) (string, error) {
+	cmd, devNull, err := detachedCommand(args)
+	if err != nil {
+		return "", err
 	}
+	defer devNull.Close()
+
+	handshakeRead, handshakeWrite, err := os.Pipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create handshake pipe: %v", err)
+	}
+	gateRead, gateWrite, err := os.Pipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create target gate pipe: %v", err)
+	}
+	holdRead, holdWrite, err := os.Pipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create runner hold pipe: %v", err)
+	}
+	// Parent reads acknowledgements and owns the target-start gate.
+	deadline := time.Now().Add(detachedStartupBudget)
+	cmd.ExtraFiles = []*os.File{handshakeWrite, gateRead, holdRead}
+	cmd.Env = append(os.Environ(),
+		handshakeFDEnv+"=3",
+		handshakeGateFDEnv+"=4",
+		handshakeHoldFDEnv+"=5",
+		handshakeDeadlineEnv+"="+fmt.Sprint(deadline.UnixNano()),
+	)
 
 	if err := cmd.Start(); err != nil {
-		log.Fatalf("failed to start background session: %v", err)
-	}
-	if !waitForRegistration {
-		_ = cmd.Process.Release()
-		if msg != "" {
-			fmt.Fprintln(os.Stderr, msg)
-		}
-		return
+		return "", fmt.Errorf("failed to start background session: %v", err)
 	}
 
 	// Close the parent's copy of the write end. The only writer is
@@ -825,10 +861,9 @@ func spawnDetached(args []string, msg string, waitForRegistration bool) {
 	deadlineNanos, _ := strconv.ParseInt(envValue(cmd.Env, handshakeDeadlineEnv), 10, 64)
 	id, err := awaitDetachedHandshake(cmd, handshakeRead, gateWrite, holdWrite, time.Unix(0, deadlineNanos), detachedCleanupGrace)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to start background session: %s\n", explainHandshakeFailure(err))
-		os.Exit(1)
+		return "", errors.New(explainHandshakeFailure(err))
 	}
-	fmt.Println(id)
+	return id, nil
 }
 
 func envValue(env []string, name string) string {
