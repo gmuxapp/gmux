@@ -3,7 +3,7 @@ package main
 // agent.go — the `gmux agent` namespace (ADR 0027): semantic, adapter-aware
 // turn control for agent sessions.
 //
-//	gmux agent prompt [--no-wait] [--follow-up|--steer] [--timeout N] <ref> [prompt]
+//	gmux agent prompt [--no-wait] [--follow-up|--steer] [--timeout|-t N] <ref> [prompt]
 //	gmux agent cancel <ref>
 //	gmux agent output <ref>
 //
@@ -159,12 +159,16 @@ func parseAgentPrompt(args []string) (*command, error) {
 				return nil, err
 			}
 			c.agentMode = agentModeSteer
-		case a == "--timeout" || strings.HasPrefix(a, "--timeout="):
+		case a == "--timeout" || strings.HasPrefix(a, "--timeout=") ||
+			a == "-t" || strings.HasPrefix(a, "-t="):
+			// Single-use is a property of the FLAG, not of a spelling:
+			// `--timeout=5 -t 9` is the same disagreement as `--timeout`
+			// twice, and is reported under the canonical name.
 			if timeoutSet {
 				return nil, agentRepeatedFlag("--timeout")
 			}
 			timeoutSet = true
-			val := strings.TrimPrefix(a, "--timeout")
+			val := strings.TrimPrefix(strings.TrimPrefix(a, "--timeout"), "-t")
 			if val == "" {
 				i++
 				if i >= len(args) {
@@ -599,13 +603,13 @@ func printAgentUsage(w io.Writer, topic string) {
 	case "agent prompt":
 		fmt.Fprint(w, `gmux agent prompt — send a prompt to an agent session and wait for the turn
 
-  gmux agent prompt [--no-wait] [--follow-up|--steer] [--timeout N] <id> [prompt]
+  gmux agent prompt [--no-wait] [--follow-up|--steer] [--timeout|-t N] <id> [prompt]
 
   <prompt>          the prompt text; omit it to read the prompt from stdin
   --no-wait         return as soon as the prompt is admitted, without waiting
   --follow-up       queue the prompt to submit after the current turn ends
   --steer           redirect the turn that is running right now (fails if idle)
-  --timeout N       give up waiting after N seconds (0/absent: wait indefinitely)
+  --timeout/-t N    give up waiting after N seconds (0/absent: wait indefinitely)
 
 --follow-up and --steer are mutually exclusive; --no-wait composes with either.
 
@@ -638,7 +642,7 @@ works on a dead session. For the full transcript use 'gmux tail <id>'.
 	default:
 		fmt.Fprint(w, `gmux agent — drive an agent session by intent instead of keystrokes
 
-  gmux agent prompt [--no-wait] [--follow-up|--steer] [--timeout N] <id> [prompt]
+  gmux agent prompt [--no-wait] [--follow-up|--steer] [--timeout|-t N] <id> [prompt]
                                     send a prompt and wait for the turn to end
   gmux agent cancel <id>            interrupt the running turn
   gmux agent output <id>            print the agent's latest message

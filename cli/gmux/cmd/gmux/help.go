@@ -26,11 +26,11 @@ Drive an agent (semantic turn control):
   gmux agent --help                 all agent commands and options
 
 Sessions (local by default; address a peer with <id>@<peer>):
-  gmux ls [--all] [--json]          list sessions
+  gmux ls [--all|-a] [--json|-j]    list sessions
   gmux attach <id>                  reattach your terminal to a session
-  gmux tail <id> [-n N] [--raw]     print conversation or recent output
+  gmux tail <id> [-n N] [--raw|-r]  print conversation or recent output
   gmux send <id> <text> [Key...]    type text and keys into the terminal (raw)
-  gmux wait <id> [--timeout N]      block until the turn ends; print the result
+  gmux wait <id> [--timeout|-t N]   block until the turn ends; print the result
   gmux kill <id>                    terminate a session
 
 Editing (usable as $EDITOR; blocks until the editor closes):
@@ -50,9 +50,30 @@ Other:
 // send-keys pages: whoever lands on either page gets the full vocabulary
 // without being sent to a second help command.
 const keyVocabulary = `Key names (tmux vocabulary):
-  Enter  Tab  Space  Escape/Esc  BSpace/Backspace  Delete/DC
-  Up  Down  Left  Right  Home  End  PageUp  PageDown
-  C-<char>       control chord: C-c, C-d, C-z, C-Space ...
+  Enter  Tab  BTab/S-Tab  Space  Escape/Esc  BSpace/Backspace
+  Up  Down  Left  Right  Home  End
+  PageUp/PPage  PageDown/NPage  Insert/IC  Delete/DC  F1 ... F12
+  C-<letter>     control chord: C-a ... C-z (case-insensitive)
+  C-Space  C-@   NUL
+  C-[  C-\  C-]  C-^  C-_  C-?
+                 the remaining control bytes (ESC, SIGQUIT, GS, RS, US, DEL).
+                 Those are the whole control set: no control byte exists for
+                 a digit or for other punctuation, so C-1 and C-, are not
+                 keys — send them as text.
+  M-<char>       alt/meta chord, ESC + any single character: M-x, M-b, M-. ...
+  C-M-<same>     both: ESC + the control byte, for exactly the C- forms above
+
+Modifiers C-, M-, S- combine in any order on the keys that have a standard
+modified encoding — the arrows, Home, End, PageUp/PageDown, Insert, Delete
+and F1-F12:
+  C-Left  S-Up  M-PageUp  C-S-Home  C-M-End  M-F5  C-F12 ...
+
+Not supported, because no single encoding exists for them (they depend on
+the terminal and on keyboard-protocol negotiation): C-Tab, M-Enter,
+C-Enter, M-Escape, S-Space, F13 and up, the keypad. Shift on a plain
+character is just the upper-case character (A, not S-a). gmux refuses
+these rather than guessing bytes — see how each command treats an
+unrecognized name.
 `
 
 // verbHelpPages maps a top-level verb to its dedicated help page. Verbs
@@ -62,11 +83,11 @@ const keyVocabulary = `Key names (tmux vocabulary):
 var verbHelpPages = map[string]string{
 	"ls": `gmux ls: list sessions, alive first, newest first
 
-  gmux ls [--all] [--json]
+  gmux ls [--all|-a] [--json|-j]
 
-  --all      include sessions from every connected peer
+  --all/-a   include sessions from every connected peer
              (peer sessions print as <id>@<peer>)
-  --json     emit a JSON array instead of the table, for scripts and
+  --json/-j  emit a JSON array instead of the table, for scripts and
              agents; includes the exit_code of dead sessions
 
 IDs in the first column are the 8-character short form every other command
@@ -84,10 +105,10 @@ Peer sessions (<id>@<peer>) attach transparently through the daemon.
 
 	"tail": `gmux tail: print a snapshot of a session's conversation or output
 
-  gmux tail <id> [-n N] [--raw|-e]
+  gmux tail <id> [-n N] [--raw|-r]
 
   -n N         how much to print (default 100)
-  --raw/-e     force the terminal-output view
+  --raw/-r     force the terminal-output view (-e is a tmux-compat alias)
 
 For agent sessions that persist a conversation (pi), prints the
 conversation as markdown: '## User' / '## Assistant' messages with compact
@@ -100,7 +121,7 @@ To read just an agent's latest answer, prefer 'gmux agent output <id>'.
 
 	"send": `gmux send: type raw text and keys into a session's terminal
 
-  gmux send [--wait] [--timeout N] <id> [text] [Key...]
+  gmux send [--wait|-w] [--timeout|-t N] <id> [text] [Key...]
 
 send is raw: it types exactly the bytes you name, nothing more. Enter is
 never implied — append it to submit. For agent sessions prefer
@@ -113,11 +134,16 @@ never implied — append it to submit. For agent sessions prefer
 
 Flags go before the id; everything after the id is verbatim, so
 dash-leading text needs no guard. The first token after the id is the
-literal text (unless it is a key name); every further token must be a key.
+literal text (unless it is a key name); every further token must be a key
+— an unrecognized name there is an error, not text: 'gmux send a3f2 hi Etner'
+fails instead of typing 'Etner'. (send-keys differs: for tmux
+compatibility it types unknown tokens literally, and -l forces that.)
 
-  --wait         block until the turn this input triggers ends; requires
+  --wait/-w      block until the turn this input triggers ends; requires
                  the input to submit (trailing Enter, or \r in stdin)
-  --timeout N    with --wait: give up after N seconds
+  --timeout/-t N with --wait: give up after N seconds
+                 (-t is --timeout here; send's target is positional. The
+                 tmux-style '-t <id>' target lives on send-keys.)
 
 ` + keyVocabulary + `
 Exit codes: 0 delivered (with --wait: the turn completed), 2 with --wait
@@ -131,19 +157,21 @@ verbatim ('gmux send-keys --help').
 
   gmux send-keys -t <id> [-l] <keys...>
 
-  -t <id>    target session
+  -t <id>    target session (tmux's target flag; on 'gmux send', -t is
+             --timeout and the id is positional)
   -l         treat every argument as literal text, not key names
 
 Provided for tmux muscle memory and script compatibility; the native form
-is 'gmux send'.
+is 'gmux send'. Like tmux — and unlike 'gmux send' — an argument that is
+not a recognized key name is typed as literal text rather than refused.
 
 ` + keyVocabulary,
 
 	"wait": `gmux wait: block until a session's turn ends, or until output appears
 
-  gmux wait <id> [--timeout N] [--quiet]
-  gmux wait <id> --for-text <substring> [--timeout N]
-  gmux wait <id> --for-regex <pattern> [--timeout N]
+  gmux wait <id> [--timeout|-t N] [--quiet|-q]
+  gmux wait <id> --for-text <substring> [--timeout|-t N]
+  gmux wait <id> --for-regex <pattern> [--timeout|-t N]
 
 Blocks until the session goes idle: an agent finishing its turn, a shell
 back at its prompt (OSC 133 marks), or a one-shot command exiting. For
@@ -156,8 +184,8 @@ A wait on an already-idle session returns at once and reports the LAST
 turn's conclusion; to gate on a turn you are about to trigger, use
 'gmux agent prompt' or 'gmux send --wait', which arm the wait first.
 
-  --timeout N    give up after N seconds (exit 1)
-  --quiet        synchronize only; print no result
+  --timeout/-t N give up after N seconds (exit 1)
+  --quiet/-q     synchronize only; print no result
   --for-text S   resolve when S appears in the output instead of on idle
   --for-regex P  ... or when P (RE2, line-wise) matches; works for shell
                  sessions too, and prints no result
