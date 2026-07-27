@@ -142,10 +142,13 @@ func TestCheckStateDismissalAndExitContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A dismissed row must not hold a placement; an exit code requires an
-	// exit stamp. Both manufactured with direct SQL (FK/trigger-free).
+	// exit stamp. Ignore CHECK constraints to manufacture durable corruption
+	// that the administrative checker must still diagnose.
 	exec(t, s,
 		"UPDATE local_sessions SET dismissed_at_ms = 10 WHERE id = 'a'",
+		"PRAGMA ignore_check_constraints = ON",
 		"UPDATE local_sessions SET exit_code = 1, exited_at_ms = NULL WHERE id = 'a'",
+		"PRAGMA ignore_check_constraints = OFF",
 	)
 	findings := checkFindings(t, s)
 	requireFinding(t, findings, "dismissed_placement")

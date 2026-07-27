@@ -532,6 +532,9 @@ func validateMergedSession(v Session) error {
 			return err
 		}
 	}
+	if err := validateExitLifecycle(v.ExitedAt, v.ExitCode); err != nil {
+		return err
+	}
 	return validateTerminal(v.TerminalCols, v.TerminalRows)
 }
 
