@@ -634,11 +634,36 @@ works on a dead session. For the full transcript use 'gmux tail <id>'.
   gmux agent cancel <id>            interrupt the running turn
   gmux agent output <id>            print the agent's latest message
 
-Unlike 'gmux send', which types raw bytes at the terminal, these wait until
-the agent can accept input, submit the way that agent expects, and report what
-was actually observed. Agent sessions on this host only (pi today).
+Unlike 'gmux send', which types raw bytes at a terminal and cannot say whether
+the agent read them, prompt and cancel wait until the agent can accept input,
+submit the way that agent expects, and report what the daemon observed. Output
+is a store-only snapshot: it never starts or resumes the agent.
 
-  gmux help agent prompt|cancel|output   per-verb help
+Prompting. A plain prompt starts a fresh turn (restarting a dead retained
+session if needed); --steer redirects the turn running right now; --follow-up
+queues text to submit after the current turn. --follow-up and --steer are
+mutually exclusive; --no-wait composes with either and only decides whether
+you block. Flags go before the id; everything after the id is the prompt,
+verbatim. Omit the prompt to pipe it on stdin (it stays one prompt).
+
+Results. A synchronous prompt — and 'gmux wait' — prints the agent's answer
+when the turn completes. A failed or interrupted turn prints nothing (a stale
+answer is worse than none); 'gmux agent output <id>' reads what exists, even
+after the session died. Exit codes: 0 completed, 2 intentionally interrupted,
+1 anything else (failed turn, timeout, dead runner, usage, transport).
+
+Retrying. admission_timeout, delivery_timeout, queued_turn_unobserved, and
+transport_error are indeterminate: the prompt may already have landed, so
+inspect before resending. A dropped connection is indeterminate too. These
+codes guarantee nothing was delivered and are safe to retry: runner_outdated,
+precondition_failed, delivery_pending, not_ready, not_running, and
+incarnation_mismatch.
+
+Scope. Agent sessions on this host only, and pi only for now; other agents
+fail with unsupported_adapter — drive those with 'gmux send' and read them
+with 'gmux tail'.
+
+  gmux agent prompt|cancel|output --help   per-verb help
 `)
 	}
 }

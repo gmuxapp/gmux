@@ -94,11 +94,11 @@ When no text argument is given and stdin is a pipe, gmux reads stdin until EOF (
 
 ## Waiting
 
-`gmux wait <id>` blocks until an agent session finishes its current turn — the primitive that turns sequential orchestration into one line per step:
+`gmux wait <id>` blocks until a session's current turn ends — the primitive that turns sequential orchestration into one line per step. For agent sessions, `gmux agent prompt` bundles the send and the wait; for raw sessions, `send --wait` does:
 
 ```bash
-gmux send --wait <id> Enter < step-1.txt
-gmux send --wait <id> Enter < step-2.txt
+gmux agent prompt <id> < step-1.txt      # agent session: prompt, wait, print the answer
+gmux send --wait <id> Enter < step-2.txt # raw session: type, submit, wait
 
 gmux tail <id> -n 2            # the prompt and the reply, clean markdown
 ```
@@ -126,15 +126,15 @@ A failed, interrupted or dead turn prints nothing and reports the condition on s
 gmux wait <id> --for-text 'Listening on' --timeout 30   # wait for a server to come up
 ```
 
-`wait` (idle mode) is for agent sessions (`claude`, `codex`, `pi`); shell sessions have no active/idle signal and are rejected with a clear error unless you give an output condition. `wait` only works for sessions on the local host — peer sessions (`<id>@<peer>`) are rejected. To wait for a shell *command* to finish, run it through the blocking piped flow above (`gmux -- make build < /dev/null`) — that's exactly the shape `gmux -- <cmd>` already provides.
+Every session is waitable: agents get their idle signal from turn hooks, shells with OSC 133 prompt marks (fish out of the box) get per-command idle, and everything else — one-shot commands, shells without integration — is one lifetime-long turn that closes when the process exits. Careful with the last kind: an interactive shell without integration never exits on its own, so bound that wait with `--timeout` or an output condition. `wait` only works for sessions on the local host — peer sessions (`<id>@<peer>`) are rejected. To wait for a shell *command* to finish, running it as its own session through the blocking piped flow above (`gmux -- make build < /dev/null`) is still the simplest shape.
 
 ## Reading output
 
 `gmux tail <id>` prints the session's conversation as clean markdown when the agent persists a conversation file (pi): `## User` / `## Assistant` messages with compact `[tool] …` one-liners — the actual exchange, not the TUI's box-drawing and spinners. `-n N` counts messages there (default 100). Sessions without a conversation file (shells, plain commands) print recent terminal output as plain text instead, where `-n` counts lines; `--raw` forces that terminal view for any session. Pair it with `wait` to capture an agent's final answer:
 
 ```bash
-gmux send --wait --timeout 600 <id> Enter < ship-prompt.txt
-url=$(gmux tail <id> -n 1 | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1)
+gmux agent prompt --timeout 600 <id> < ship-prompt.txt   # prints the reply
+url=$(gmux agent output <id> | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1)
 echo "$url"
 ```
 
