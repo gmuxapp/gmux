@@ -163,6 +163,31 @@ For 2.0 we unify on a single **verb-first** grammar fronted by the
      tmux-style `-F`/`--format` is deferred (addable under the
      frozen-namespace policy).
 
+> **Amended (2026-07-27):** this decision's field list was never accurate and
+> drifted further as the domain language settled; the shipped output is
+> authoritative and is recorded here so scripts stop being written against a
+> schema that does not exist.
+>
+> - **`kind` is `adapter`.** The rename landed with the adapter plugin model;
+>   `UBIQUITOUS_LANGUAGE.md` already lists `kind` as "the old wire field name".
+> - **There is no `idle` field or column.** Idleness is a *turn* property read
+>   through `gmux wait` / `Status.Active` (ADR 0027 §8, §11), not a property of
+>   a row in a session list. A list is a snapshot of what exists; liveness in it
+>   is `alive` only.
+> - **Human columns are `ID  STATUS  ADAPTER  TITLE  (cwd)`**, where `STATUS` is
+>   `alive`/`dead` and `TITLE` falls back to the joined command when the adapter
+>   derived no title. There is no separate `command` or `age` column, and no
+>   `peer` column under `--all`: the peer is folded into the ID as `<id>@<peer>`
+>   so a copy-pasted cell stays addressable.
+> - **`--all` includes peers, not dead sessions.** Dead sessions are always
+>   listed (that is how `exit_code` is read); `--all` widens the *host* scope.
+> - **`--json` emits** `id, adapter, alive` always, plus `peer, cwd, pid,
+>   title, slug, parent_session_id, socket_path, command, started_at,
+>   exited_at, exit_code` when set. `parent_session_id` and `socket_path`
+>   postdate this ADR; the stable-schema promise stands, and
+>   `TestListJSONSchemaIsStable` now pins the key set so the next drift is a
+>   test failure rather than a documentation bug.
+
 13. **`gmux wait` waits for agent idle, bounded by `--timeout`.**
     `gmux wait <id>` blocks until the session goes **idle** (agent turn
     end) or exits; `--timeout <secs>` bounds it. Exit codes were
