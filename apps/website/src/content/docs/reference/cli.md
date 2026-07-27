@@ -306,7 +306,8 @@ sessions and keep `send`/`send-keys` for raw keystrokes.
 Agent sessions on **this host** only, and **pi** only for now. Other agents
 (Claude Code, Codex) report an explicit "unsupported" error rather than
 quietly typing something — drive those with `gmux send` and read them with
-`gmux tail`.
+`gmux tail`. `gmux agent help` prints the namespace guide in the terminal;
+each verb also answers `--help`.
 
 ### `gmux agent prompt [flags] <id> [prompt]`
 
@@ -500,7 +501,10 @@ Peers:
 ### `gmux version` · `gmux help`
 
 Print the version, or the usage summary. `gmux help` accepts a trailing verb
-name (it prints the full usage either way).
+name (it prints the full usage either way) — except the `agent` namespace,
+which has real per-verb help: `gmux agent help` prints the namespace guide,
+and `gmux agent prompt|cancel|output --help` (or `gmux help agent …`) prints
+per-verb detail.
 
 ## gmuxd
 

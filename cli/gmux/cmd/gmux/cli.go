@@ -611,11 +611,8 @@ Sessions (local by default; address a peer with <id>@<peer>):
        [--for-text S|--for-regex P] ... or until output matches S / P
   gmux kill <id>                    terminate a session
 
-Agent sessions (semantic turn control; see 'gmux help agent'):
-  gmux agent prompt <id> <prompt>   prompt an agent and wait for its turn
-       [--no-wait] [--follow-up|--steer] [--timeout N]
-  gmux agent cancel <id>            interrupt the running turn
-  gmux agent output <id>            print the agent's latest message
+Agent sessions:
+  gmux agent <command> ...          drive an agent by intent ('gmux agent help')
 
 Editing (usable as $EDITOR; blocks until the editor closes):
   gmux edit [file]                  open a file in a managed editor session

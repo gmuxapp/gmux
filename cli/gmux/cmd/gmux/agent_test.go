@@ -224,13 +224,26 @@ func TestParseAgentHelp(t *testing.T) {
 			}
 		})
 	}
-	// Every help surface must actually document the flags and the fact that
-	// the answer is read separately in this slice.
+	// The namespace guide is the one dedicated help page for the domain: it
+	// must cover the three verbs, the prompt modes, results/exit codes, the
+	// safety boundary of retries, the scope, and the raw-send escape hatch.
 	var b strings.Builder
 	printAgentUsage(&b, "agent")
-	for _, want := range []string{"agent prompt", "agent cancel", "agent output"} {
-		if !strings.Contains(b.String(), want) {
-			t.Errorf("namespace help missing %q:\n%s", want, b.String())
+	guide := b.String()
+	for _, want := range []string{
+		"agent prompt", "agent cancel", "agent output",
+		"--no-wait", "--follow-up", "--steer", "--timeout",
+		"stdin",
+		"0 completed", "2 intentionally interrupted",
+		"indeterminate", "admission_timeout", "transport_error",
+		"safe to retry", "incarnation_mismatch",
+		"store-only snapshot", "never starts or resumes",
+		"this host only", "pi only",
+		"gmux send", "gmux tail",
+		"--help",
+	} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("namespace guide missing %q:\n%s", want, guide)
 		}
 	}
 	b.Reset()
@@ -240,15 +253,39 @@ func TestParseAgentHelp(t *testing.T) {
 			t.Errorf("prompt help missing %q:\n%s", want, b.String())
 		}
 	}
-	// The generic usage must advertise the namespace, or nobody discovers it.
-	b.Reset()
-	printUsage(&b)
-	if !strings.Contains(b.String(), "gmux agent prompt") {
-		t.Errorf("printUsage does not mention the agent namespace:\n%s", b.String())
-	}
 	// `agent` is reserved so a typo suggests it instead of trying to run it.
 	if v := didYouMean("agen"); v != "agent" {
 		t.Errorf("didYouMean(agen) = %q, want agent", v)
+	}
+}
+
+// TestTopLevelUsageAgentLine pins the top-level presentation of the agent
+// namespace: exactly ONE concise line for the whole domain, pointing at the
+// dedicated guide. The old presentation — separate prompt/cancel/output lines
+// with the prompt flag soup inlined — must not come back: per-verb detail
+// lives in 'gmux agent help', and the top-level table stays scannable.
+func TestTopLevelUsageAgentLine(t *testing.T) {
+	var b strings.Builder
+	printUsage(&b)
+	usage := b.String()
+
+	var agentLines []string
+	for _, line := range strings.Split(usage, "\n") {
+		if strings.Contains(line, "gmux agent") {
+			agentLines = append(agentLines, line)
+		}
+	}
+	if len(agentLines) != 1 {
+		t.Errorf("top-level usage must mention 'gmux agent' on exactly one line, got %d:\n%s", len(agentLines), usage)
+	}
+	if !strings.Contains(usage, "gmux agent help") {
+		t.Errorf("top-level usage must point at 'gmux agent help':\n%s", usage)
+	}
+	// The old three-line block spelled the verbs out at top level.
+	for _, stale := range []string{"agent prompt", "agent cancel", "agent output", "--steer", "--follow-up", "--no-wait"} {
+		if strings.Contains(usage, stale) {
+			t.Errorf("top-level usage must not inline agent verb detail %q:\n%s", stale, usage)
+		}
 	}
 }
 
