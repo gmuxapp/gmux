@@ -116,7 +116,7 @@ var removedFlags = map[string]string{
 	"--attach": "gmux attach <id>", "-a": "gmux attach <id>",
 	"--tail": "gmux tail <id>", "-t": "gmux tail <id>",
 	"--kill": "gmux kill <id>", "-k": "gmux kill <id>",
-	"--send":      "gmux send <id> <text>",
+	"--send":      "gmux send <id> <text> Enter",
 	"--no-submit": "gmux send <id> <text>  (omit a trailing Enter to not submit)",
 	"--wait":      "gmux wait <id>",
 	"--no-attach": "gmux -d -- <cmd>",
@@ -160,16 +160,23 @@ func parseCLI(args []string) (*command, error) {
 	}
 
 	switch head {
-	case "help", "-h", "--help":
-		// Lenient: `gmux help` and `gmux help <anything>` print the full
-		// usage, so the natural `gmux help send` is never an error. The one
-		// exception is the `agent` namespace, whose verbs take flags and
-		// therefore have real per-verb help to show.
-		if len(rest) > 0 && rest[0] == "agent" {
-			return &command{mode: modeHelp, helpTopic: strings.TrimSpace("agent " + strings.Join(rest[1:], " "))}, nil
+	case "help", "-h", "--help", "?":
+		// `gmux help <command>` routes to that command's page when one
+		// exists; unknown topics stay lenient and print the synopsis, so
+		// `gmux help whatever` is never an error. Daemon help is served by
+		// the gmuxd binary so the two can never drift apart.
+		if len(rest) > 0 {
+			switch {
+			case rest[0] == "agent":
+				return &command{mode: modeHelp, helpTopic: strings.TrimSpace("agent " + strings.Join(rest[1:], " "))}, nil
+			case rest[0] == "daemon":
+				return &command{mode: modeDaemon, daemonArgs: []string{"help"}}, nil
+			case helpTopicExists(rest[0]):
+				return &command{mode: modeHelp, helpTopic: rest[0]}, nil
+			}
 		}
 		return &command{mode: modeHelp}, nil
-	case "version", "--version":
+	case "version", "--version", "-v":
 		return &command{mode: modeVersion}, nil
 	case "open":
 		if len(rest) > 0 {
@@ -177,24 +184,39 @@ func parseCLI(args []string) (*command, error) {
 		}
 		return &command{mode: modeOpen}, nil
 	case "ls":
-		return parseLs(rest)
+		return dispatchVerb("ls", rest, parseLs)
 	case "attach":
-		return parseRefOnly(modeAttach, "attach", rest)
+		return dispatchVerb("attach", rest, func(a []string) (*command, error) {
+			return parseRefOnly(modeAttach, "attach", a)
+		})
 	case "kill":
-		return parseRefOnly(modeKill, "kill", rest)
+		return dispatchVerb("kill", rest, func(a []string) (*command, error) {
+			return parseRefOnly(modeKill, "kill", a)
+		})
 	case "tail":
-		return parseTail(rest)
+		return dispatchVerb("tail", rest, parseTail)
 	case "send":
-		return parseSend(rest)
+		return dispatchVerb("send", rest, parseSend)
 	case "send-keys":
-		return parseSendKeys(rest)
+		return dispatchVerb("send-keys", rest, parseSendKeys)
 	case "wait":
-		return parseWait(rest)
+		return dispatchVerb("wait", rest, parseWait)
 	case "agent":
-		return parseAgent(rest)
+		c, err := parseAgent(rest)
+		if err != nil {
+			// A mistake inside the namespace prints the namespace guide,
+			// not the top-level synopsis.
+			return nil, &usageError{topic: "agent", err: err}
+		}
+		return c, nil
 	case "edit":
-		return parseEdit(rest)
+		return dispatchVerb("edit", rest, parseEdit)
 	case "daemon":
+		if len(rest) == 0 || isHelpToken(rest[0]) {
+			// gmuxd owns the daemon help page; forward so `gmux daemon`,
+			// `gmux daemon --help` and `gmuxd help` print the same text.
+			return &command{mode: modeDaemon, daemonArgs: []string{"help"}}, nil
+		}
 		return parseDaemon(rest)
 	case "auth":
 		if len(rest) > 0 {
@@ -249,10 +271,36 @@ func parseCLI(args []string) (*command, error) {
 	// suggestion only when one is close. Never replace the run hint with
 	// the suggestion alone — that misleads when the word is a real command.
 	runHint := "to run a command use: gmux -- " + strings.Join(args, " ")
+	// Agent verbs typed without their namespace get the namespace guide:
+	// `gmux prompt <id> ...` is far more likely a missing `agent` than a
+	// program named prompt.
+	if head == "prompt" || head == "cancel" || head == "output" {
+		return nil, &usageError{topic: "agent", err: fmt.Errorf(
+			"unknown command %q; agent commands are namespaced: gmux agent %s ... (%s)", head, head, runHint)}
+	}
 	if v := didYouMean(head); v != "" {
 		return nil, fmt.Errorf("unknown command %q; did you mean %q? (%s)", head, v, runHint)
 	}
 	return nil, fmt.Errorf("unknown command %q; %s", head, runHint)
+}
+
+// dispatchVerb gives a verb with a dedicated help page uniform help
+// handling: a leading help token (help, --help, -h, ?) prints the page, a
+// -h/--help caught by the flag parser anywhere does too, and any parse
+// error is tagged with the verb's topic so the error message is followed
+// by that page rather than the top-level synopsis.
+func dispatchVerb(topic string, args []string, parse func([]string) (*command, error)) (*command, error) {
+	if len(args) > 0 && isHelpToken(args[0]) {
+		return &command{mode: modeHelp, helpTopic: topic}, nil
+	}
+	c, err := parse(args)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return &command{mode: modeHelp, helpTopic: topic}, nil
+		}
+		return nil, &usageError{topic: topic, err: err}
+	}
+	return c, nil
 }
 
 func parseLs(args []string) (*command, error) {
@@ -587,49 +635,4 @@ func editDistanceLE1(a, b string) bool {
 		}
 	}
 	return true
-}
-
-// printUsage writes the gmux usage synopsis.
-func printUsage(w io.Writer) {
-	fmt.Fprint(w, `gmux — wrap any command in a managed session you watch in a browser
-
-Run a command:
-  gmux -- <cmd> [args]              run a command in a new session
-  gmux -d -- <cmd> [args]           ... detached; prints the session id
-  (tip: alias gm='gmux --')
-
-Sessions (local by default; address a peer with <id>@<peer>):
-  gmux ls [--all] [--json]          list sessions
-  gmux attach <id>                  reattach to a session
-  gmux tail <id> [-n N] [--raw]     print conversation or recent output (snapshot)
-  gmux send <id> <text> [Key...]    type text and/or send keys (e.g. Enter, C-c)
-  gmux send --wait [--timeout N] <id> <text> [Key...]
-                                    ... and block until the triggered turn ends
-  gmux send-keys -t <id> <keys...>  tmux-compatible key sending
-  gmux wait <id> [--timeout N]      block until the turn ends; print an agent's
-       [--quiet]                    result on normal completion (--quiet: don't)
-       [--for-text S|--for-regex P] ... or until output matches S / P
-  gmux kill <id>                    terminate a session
-
-Agent sessions:
-  gmux agent <command> ...          drive an agent by intent ('gmux agent help')
-
-Editing (usable as $EDITOR; blocks until the editor closes):
-  gmux edit [file]                  open a file in a managed editor session
-                                    (no file: prompts for a path)
-
-UI & pairing:
-  gmux open                         open the web UI
-  gmux remote                       set up / check remote access
-  gmux auth                         reveal this host's login token
-
-Daemon:
-  gmux daemon start|stop|restart|status|log-path
-  gmux daemon state check|backup|export
-                                    inspect, back up, or export daemon state
-
-  gmux version · gmux help [verb]
-
-For the daemon process itself, see 'gmuxd --help'.
-`)
 }

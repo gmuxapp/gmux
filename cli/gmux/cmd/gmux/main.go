@@ -1,12 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/paths"
@@ -30,9 +30,14 @@ func main() {
 
 	cmd, err := parseCLI(os.Args[1:])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "gmux:", err)
-		fmt.Fprintln(os.Stderr)
-		printUsage(os.Stderr)
+		// The error plus a one-line pointer at the right help page — never
+		// the page itself, so repeated mistakes don't flood the output.
+		topic := ""
+		var ue *usageError
+		if errors.As(err, &ue) {
+			topic = ue.topic
+		}
+		fmt.Fprintf(os.Stderr, "gmux: %v\n%s\n", err, helpHint(topic))
 		// 1, not 2: under the global taxonomy (ADR 0027 §8) 2 means an
 		// intentional interruption, and a mistyped command line is an error
 		// like any other. Runtime usage errors already exit 1, so parse-time
@@ -42,11 +47,7 @@ func main() {
 
 	switch cmd.mode {
 	case modeHelp:
-		if strings.HasPrefix(cmd.helpTopic, "agent") {
-			printAgentUsage(os.Stdout, cmd.helpTopic)
-			break
-		}
-		printUsage(os.Stdout)
+		printHelpTopic(os.Stdout, cmd.helpTopic)
 	case modeVersion:
 		fmt.Println(version)
 	case modeOpen:
