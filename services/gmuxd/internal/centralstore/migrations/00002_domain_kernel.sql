@@ -42,7 +42,8 @@ CREATE TABLE local_sessions (
 
     CHECK (launch_parent_id IS NULL OR
            (length(launch_parent_id) > 0 AND launch_parent_id <> id)),
-    CHECK ((terminal_cols IS NULL) = (terminal_rows IS NULL))
+    CHECK ((terminal_cols IS NULL) = (terminal_rows IS NULL)),
+    CHECK (exit_code IS NULL OR exited_at_ms IS NOT NULL)
 ) STRICT;
 
 CREATE UNIQUE INDEX local_sessions_adapter_slug_unique_idx

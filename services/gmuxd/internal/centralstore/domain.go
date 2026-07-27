@@ -217,6 +217,12 @@ func validateTerminal(cols, rows *uint16) error {
 	}
 	return nil
 }
+func validateExitLifecycle(exitedAt *UnixMillis, exitCode *int) error {
+	if exitCode != nil && exitedAt == nil {
+		return errors.New("centralstore: exit code requires exited timestamp")
+	}
+	return nil
+}
 func validateNewSession(v NewSession) error {
 	if v.ID == "" || v.Adapter == "" {
 		return errors.New("centralstore: session id and adapter required")
@@ -231,6 +237,9 @@ func validateNewSession(v NewSession) error {
 		if err := validateMillis(name, x); err != nil {
 			return err
 		}
+	}
+	if err := validateExitLifecycle(v.ExitedAt, v.ExitCode); err != nil {
+		return err
 	}
 	return validateTerminal(v.TerminalCols, v.TerminalRows)
 }
@@ -312,6 +321,9 @@ func sessionFromDB(v db.LocalSession) (Session, error) {
 		}
 		x := int(v.ExitCode.Int64)
 		out.ExitCode = &x
+	}
+	if err := validateExitLifecycle(out.ExitedAt, out.ExitCode); err != nil {
+		return Session{}, errors.New("centralstore: corrupt exit lifecycle")
 	}
 	toUint := func(n sql.NullInt64) (*uint16, error) {
 		if !n.Valid {
@@ -564,6 +576,9 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 		if err = validateMillis(name, x); err != nil {
 			return MutationResult{}, err
 		}
+	}
+	if err = validateExitLifecycle(v.ExitedAt, v.ExitCode); err != nil {
+		return MutationResult{}, err
 	}
 	if v.Adapter == "" {
 		return MutationResult{}, errors.New("centralstore: adapter required")

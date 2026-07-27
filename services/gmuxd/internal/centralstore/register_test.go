@@ -195,6 +195,57 @@ func TestRegisterRunnerTriStateFactsAndActivityTransitions(t *testing.T) {
 	}
 }
 
+func TestRegisterRunnerExitLifecycleValidatesMergedFinalState(t *testing.T) {
+	exited := UnixMillis(2)
+	code := 7
+	tests := []struct {
+		name                 string
+		initialExited        *UnixMillis
+		initialCode          *int
+		facts                RunnerFacts
+		valid                bool
+		wantExited, wantCode bool
+	}{
+		{name: "set-code-without-timestamp", facts: RunnerFacts{ExitCode: NullablePatch[int]{Set: &code}}},
+		{name: "clear-timestamp-retaining-code", initialExited: &exited, initialCode: &code, facts: RunnerFacts{ExitedAt: NullablePatch[UnixMillis]{Clear: true}}},
+		{name: "set-both-atomically", facts: RunnerFacts{ExitedAt: NullablePatch[UnixMillis]{Set: &exited}, ExitCode: NullablePatch[int]{Set: &code}}, valid: true, wantExited: true, wantCode: true},
+		{name: "clear-both-atomically", initialExited: &exited, initialCode: &code, facts: RunnerFacts{ExitedAt: NullablePatch[UnixMillis]{Clear: true}, ExitCode: NullablePatch[int]{Clear: true}}, valid: true},
+		{name: "timestamp-only", facts: RunnerFacts{ExitedAt: NullablePatch[UnixMillis]{Set: &exited}}, valid: true, wantExited: true},
+		{name: "add-code-to-timestamp", initialExited: &exited, facts: RunnerFacts{ExitCode: NullablePatch[int]{Set: &code}}, valid: true, wantExited: true, wantCode: true},
+		{name: "clear-code-retain-timestamp", initialExited: &exited, initialCode: &code, facts: RunnerFacts{ExitCode: NullablePatch[int]{Clear: true}}, valid: true, wantExited: true},
+		{name: "clear-timestamp-from-timestamp-only", initialExited: &exited, facts: RunnerFacts{ExitedAt: NullablePatch[UnixMillis]{Clear: true}}, valid: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := openKernelStore(t)
+			before, _, err := s.InsertSession(ctx, NewSession{ID: "merge", Adapter: "shell", Command: []string{}, CWD: "/", Remotes: map[string]string{}, CreatedAt: 1, ExitedAt: tc.initialExited, ExitCode: tc.initialCode})
+			if err != nil {
+				t.Fatal(err)
+			}
+			reg := registration("merge", "shell", "/", false, 3)
+			reg.Facts = tc.facts
+			got, _, err := s.RegisterRunner(ctx, reg)
+			if !tc.valid {
+				if err == nil || err.Error() != "centralstore: exit code requires exited timestamp" {
+					t.Fatalf("merged validation error = %v", err)
+				}
+				after, ok, readErr := s.Session(ctx, "merge")
+				if readErr != nil || !ok || !reflect.DeepEqual(after.ExitedAt, before.ExitedAt) || !reflect.DeepEqual(after.ExitCode, before.ExitCode) {
+					t.Fatalf("invalid merge changed row: after=%#v before=%#v ok=%v err=%v", after, before, ok, readErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("valid merge rejected: %v", err)
+			}
+			if (got.ExitedAt != nil) != tc.wantExited || (got.ExitCode != nil) != tc.wantCode {
+				t.Fatalf("merged state exited=%v code=%v", got.ExitedAt, got.ExitCode)
+			}
+		})
+	}
+}
+
 func TestRegisterRunnerGenerationProvenance(t *testing.T) {
 	makeDead := func(t *testing.T) (*Store, Session) {
 		t.Helper()

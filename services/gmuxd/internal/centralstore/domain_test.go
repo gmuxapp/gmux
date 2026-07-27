@@ -149,6 +149,87 @@ func TestDedicatedInsertAndTriStatePatch(t *testing.T) {
 	}
 }
 
+func TestExitLifecycleTypedValidationUsesFinalState(t *testing.T) {
+	ctx := context.Background()
+	exited := UnixMillis(2)
+	code := 7
+	type state struct {
+		name   string
+		exited *UnixMillis
+		code   *int
+		valid  bool
+	}
+	states := []state{
+		{name: "live", valid: true},
+		{name: "timestamp-only", exited: &exited, valid: true},
+		{name: "timestamp-and-code", exited: &exited, code: &code, valid: true},
+		{name: "code-only", code: &code},
+	}
+	for _, final := range states {
+		t.Run("new-session/"+final.name, func(t *testing.T) {
+			s := openKernelStore(t)
+			_, _, err := s.InsertSession(ctx, NewSession{ID: "new", Adapter: "shell", CWD: "/", CreatedAt: 1, ExitedAt: final.exited, ExitCode: final.code})
+			if final.valid && err != nil {
+				t.Fatalf("valid state rejected: %v", err)
+			}
+			if !final.valid && (err == nil || err.Error() != "centralstore: exit code requires exited timestamp") {
+				t.Fatalf("invalid state error = %v", err)
+			}
+		})
+	}
+
+	transitions := []struct {
+		name  string
+		start state
+		patch CommonFactsPatch
+		valid bool
+	}{
+		{"live-to-live", states[0], CommonFactsPatch{}, true},
+		{"live-to-timestamp", states[0], CommonFactsPatch{ExitedAt: NullablePatch[UnixMillis]{Set: &exited}}, true},
+		{"live-to-complete", states[0], CommonFactsPatch{ExitedAt: NullablePatch[UnixMillis]{Set: &exited}, ExitCode: NullablePatch[int]{Set: &code}}, true},
+		{"live-to-code-only", states[0], CommonFactsPatch{ExitCode: NullablePatch[int]{Set: &code}}, false},
+		{"timestamp-to-live", states[1], CommonFactsPatch{ExitedAt: NullablePatch[UnixMillis]{Clear: true}}, true},
+		{"timestamp-to-timestamp", states[1], CommonFactsPatch{}, true},
+		{"timestamp-add-code", states[1], CommonFactsPatch{ExitCode: NullablePatch[int]{Set: &code}}, true},
+		{"timestamp-to-code-only", states[1], CommonFactsPatch{ExitedAt: NullablePatch[UnixMillis]{Clear: true}, ExitCode: NullablePatch[int]{Set: &code}}, false},
+		{"complete-to-live", states[2], CommonFactsPatch{ExitedAt: NullablePatch[UnixMillis]{Clear: true}, ExitCode: NullablePatch[int]{Clear: true}}, true},
+		{"complete-clear-code", states[2], CommonFactsPatch{ExitCode: NullablePatch[int]{Clear: true}}, true},
+		{"complete-to-complete", states[2], CommonFactsPatch{}, true},
+		{"complete-clear-timestamp", states[2], CommonFactsPatch{ExitedAt: NullablePatch[UnixMillis]{Clear: true}}, false},
+	}
+	for _, tc := range transitions {
+		t.Run("patch/"+tc.name, func(t *testing.T) {
+			s := openKernelStore(t)
+			row, _, err := s.InsertSession(ctx, NewSession{ID: "patch", Adapter: "shell", CWD: "/", CreatedAt: 1, ExitedAt: tc.start.exited, ExitCode: tc.start.code})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = s.ApplyCommonFacts(ctx, row.ID, row.Version, tc.patch)
+			if tc.valid && err != nil {
+				t.Fatalf("valid transition rejected: %v", err)
+			}
+			if !tc.valid && (err == nil || err.Error() != "centralstore: exit code requires exited timestamp") {
+				t.Fatalf("invalid transition error = %v", err)
+			}
+		})
+	}
+}
+
+func TestSessionDecodeRejectsMalformedExitLifecycle(t *testing.T) {
+	ctx := context.Background()
+	s := openKernelStore(t)
+	addSession(t, s, "bad-exit", "")
+	if _, err := s.database.ExecContext(ctx, "PRAGMA ignore_check_constraints=ON"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.database.ExecContext(ctx, `UPDATE local_sessions SET exit_code=9 WHERE id='bad-exit'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Session(ctx, "bad-exit"); err == nil {
+		t.Fatal("malformed durable exit lifecycle was decoded")
+	}
+}
+
 func TestTitleNoopObservedVersionAndCorruptJSON(t *testing.T) {
 	ctx := context.Background()
 	s := openKernelStore(t)

@@ -46,6 +46,43 @@ func TestOpenFreshAndReopen(t *testing.T) {
 	}
 }
 
+func TestFreshSchemaExitLifecycleCheckGuardsInsertAndUpdate(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	insert := func(id string, exited any, code any) error {
+		_, err := store.database.ExecContext(ctx, `INSERT INTO local_sessions
+			(id, adapter, command_json, cwd, remotes_json, created_at_ms, exited_at_ms, exit_code)
+			VALUES (?, 'shell', '[]', '/', '{}', 1, ?, ?)`, id, exited, code)
+		return err
+	}
+	if err := insert("live", nil, nil); err != nil {
+		t.Fatalf("valid live insert: %v", err)
+	}
+	if err := insert("exited-no-code", 2, nil); err != nil {
+		t.Fatalf("valid timestamp-only insert: %v", err)
+	}
+	if err := insert("exited-with-code", 2, 7); err != nil {
+		t.Fatalf("valid complete exit insert: %v", err)
+	}
+	if err := insert("bad-insert", nil, 7); err == nil {
+		t.Fatal("fresh schema accepted malformed direct INSERT")
+	}
+
+	if _, err := store.database.ExecContext(ctx, `UPDATE local_sessions SET exited_at_ms=3, exit_code=9 WHERE id='live'`); err != nil {
+		t.Fatalf("valid atomic exit update: %v", err)
+	}
+	if _, err := store.database.ExecContext(ctx, `UPDATE local_sessions SET exited_at_ms=NULL, exit_code=NULL WHERE id='live'`); err != nil {
+		t.Fatalf("valid atomic clear update: %v", err)
+	}
+	if _, err := store.database.ExecContext(ctx, `UPDATE local_sessions SET exit_code=9 WHERE id='live'`); err == nil {
+		t.Fatal("fresh schema accepted malformed direct UPDATE")
+	}
+	if _, err := store.database.ExecContext(ctx, `UPDATE local_sessions SET exited_at_ms=NULL WHERE id='exited-with-code'`); err == nil {
+		t.Fatal("fresh schema accepted clearing exited timestamp while code remained")
+	}
+}
+
 func TestOpenUsesOwnerOnlyModes(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "new", "state")
