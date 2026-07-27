@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -285,6 +286,135 @@ func TestParseCLI(t *testing.T) {
 	}
 }
 
+// TestHelpAliases pins the interchangeable help spellings: help, --help,
+// -h and ? all work at the top level, per verb, and inside the agent
+// namespace, and `gmux help <verb>` routes to the verb's page. Nothing
+// here may error — a help request is a question, not a mistake.
+func TestHelpAliases(t *testing.T) {
+	tests := []struct {
+		args  []string
+		topic string
+	}{
+		{[]string{"help"}, ""},
+		{[]string{"--help"}, ""},
+		{[]string{"-h"}, ""},
+		{[]string{"?"}, ""},
+		{[]string{"help", "send"}, "send"},
+		{[]string{"help", "wait"}, "wait"},
+		{[]string{"help", "nonsense"}, ""}, // lenient: unknown topic prints the synopsis
+		{[]string{"send", "--help"}, "send"},
+		{[]string{"send", "-h"}, "send"},
+		{[]string{"send", "?"}, "send"},
+		{[]string{"send", "help"}, "send"},
+		{[]string{"wait", "--help"}, "wait"},
+		{[]string{"wait", "abc", "--help"}, "wait"}, // flag position also answers
+		{[]string{"tail", "?"}, "tail"},
+		{[]string{"ls", "-h"}, "ls"},
+		{[]string{"attach", "--help"}, "attach"},
+		{[]string{"kill", "?"}, "kill"},
+		{[]string{"edit", "--help"}, "edit"},
+		{[]string{"send-keys", "--help"}, "send-keys"},
+	}
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.args, "_"), func(t *testing.T) {
+			c, err := parseCLI(tt.args)
+			if err != nil {
+				t.Fatalf("parseCLI(%v): %v", tt.args, err)
+			}
+			if c.mode != modeHelp || c.helpTopic != tt.topic {
+				t.Fatalf("parseCLI(%v) = mode %v topic %q, want modeHelp/%q", tt.args, c.mode, c.helpTopic, tt.topic)
+			}
+		})
+	}
+
+	// Every topic those aliases can reach must have a page, and every page
+	// must present its verb's canonical form.
+	for topic, page := range verbHelpPages {
+		if !strings.Contains(page, "gmux "+topic) {
+			t.Errorf("help page %q does not show its own canonical form", topic)
+		}
+	}
+
+	// -v joins version/--version.
+	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}} {
+		c, err := parseCLI(args)
+		if err != nil || c.mode != modeVersion {
+			t.Errorf("parseCLI(%v) = (%v, %v), want modeVersion", args, c, err)
+		}
+	}
+
+	// Daemon help is forwarded to gmuxd (one help text, two front doors):
+	// bare, help-token and `gmux help daemon` spellings all exec `gmuxd help`.
+	for _, args := range [][]string{{"daemon"}, {"daemon", "--help"}, {"daemon", "?"}, {"help", "daemon"}} {
+		c, err := parseCLI(args)
+		if err != nil || c.mode != modeDaemon || len(c.daemonArgs) != 1 || c.daemonArgs[0] != "help" {
+			t.Errorf("parseCLI(%v) = (%+v, %v), want daemon forward of [help]", args, c, err)
+		}
+	}
+}
+
+// TestUsageErrorsCarryTheirTopic pins the error-help pairing: a mistake
+// inside a verb names that verb's help page, so main prints the page that
+// explains the mistake instead of the top-level synopsis. Agent verbs
+// typed without their namespace route to the agent guide.
+func TestUsageErrorsCarryTheirTopic(t *testing.T) {
+	tests := []struct {
+		args  []string
+		topic string
+	}{
+		{[]string{"wait"}, "wait"},
+		{[]string{"send", "--frob", "abc"}, "send"},
+		{[]string{"tail"}, "tail"},
+		{[]string{"agent", "frobnicate"}, "agent"},
+		{[]string{"agent", "prompt"}, "agent"},
+		{[]string{"prompt", "hi"}, "agent"},
+		{[]string{"cancel", "abc"}, "agent"},
+		{[]string{"output", "abc"}, "agent"},
+	}
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.args, "_"), func(t *testing.T) {
+			_, err := parseCLI(tt.args)
+			if err == nil {
+				t.Fatalf("parseCLI(%v) = nil error", tt.args)
+			}
+			var ue *usageError
+			if !errors.As(err, &ue) {
+				t.Fatalf("parseCLI(%v) error %q is not a usageError", tt.args, err)
+			}
+			if ue.topic != tt.topic {
+				t.Errorf("parseCLI(%v) topic = %q, want %q", tt.args, ue.topic, tt.topic)
+			}
+		})
+	}
+
+	// Errors with no verb home (unknown command, removed flag) stay plain
+	// so main points at the top-level synopsis.
+	for _, args := range [][]string{{"waitt", "abc"}, {"--list"}} {
+		_, err := parseCLI(args)
+		var ue *usageError
+		if err == nil || errors.As(err, &ue) {
+			t.Errorf("parseCLI(%v) = %v, want a plain (untagged) error", args, err)
+		}
+	}
+
+	// Errors are followed by a one-line pointer at the owning help page,
+	// never the page itself (repeated mistakes must not flood the output).
+	for topic, want := range map[string]string{
+		"":             "run 'gmux --help' for usage",
+		"wait":         "run 'gmux wait --help' for usage",
+		"send":         "run 'gmux send --help' for usage",
+		"agent":        "run 'gmux agent --help' for usage",
+		"agent prompt": "run 'gmux agent --help' for usage",
+	} {
+		if got := helpHint(topic); got != want {
+			t.Errorf("helpHint(%q) = %q, want %q", topic, got, want)
+		}
+		if got := helpHint(topic); strings.Contains(got, "\n") {
+			t.Errorf("helpHint(%q) must be a single line, got %q", topic, got)
+		}
+	}
+}
+
 func TestParseCLIErrors(t *testing.T) {
 	bad := [][]string{
 		{"-d"},                     // detach without command
@@ -305,8 +435,7 @@ func TestParseCLIErrors(t *testing.T) {
 		{"send", "--wait"},                                     // missing id (only a flag given)
 		{"send", "--follow-up", "abc", "x"},                    // removed semantic flag, not silently accepted
 		{"send", "--steering", "abc", "x"},                     // removed semantic flag, not silently accepted
-		{"send", "--steering=s1", "abc", "x"},                   // ...in its =value spelling too
-		{"daemon"},                                             // missing subcommand
+		{"send", "--steering=s1", "abc", "x"},                  // ...in its =value spelling too
 		{"daemon", "frobnicate"},                               // unknown subcommand
 		{"daemon", "state"},                                    // missing state subcommand
 		{"daemon", "state", "frobnicate"},                      // unknown state subcommand

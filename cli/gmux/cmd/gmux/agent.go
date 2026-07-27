@@ -67,13 +67,16 @@ const maxPromptBytes = 1 << 20 // 1 MiB
 // prompts the agent with the literal text `--help`.
 func parseAgent(args []string) (*command, error) {
 	if len(args) == 0 {
-		return nil, errors.New("agent requires one of: prompt, cancel, output")
+		// A bare `gmux agent` is a question, not a mistake: print the
+		// namespace guide, like `gmux` prints the synopsis.
+		return &command{mode: modeHelp, helpTopic: "agent"}, nil
 	}
 	head := args[0]
 	rest := args[1:]
-	switch head {
-	case "help", "-h", "--help":
+	if isHelpToken(head) {
 		return &command{mode: modeHelp, helpTopic: "agent"}, nil
+	}
+	switch head {
 	case "prompt":
 		return parseAgentPrompt(rest)
 	case "cancel", "output":
@@ -85,7 +88,7 @@ func parseAgent(args []string) (*command, error) {
 // parseAgentRefOnly handles the two ref-only verbs. Flags are rejected rather
 // than ignored, and a lone -h/--help prints the namespace help.
 func parseAgentRefOnly(sub string, args []string) (*command, error) {
-	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+	if len(args) == 1 && isHelpToken(args[0]) {
 		return &command{mode: modeHelp, helpTopic: "agent " + sub}, nil
 	}
 	// Report what is actually wrong. "requires a session id" for
@@ -121,6 +124,12 @@ func parseAgentPrompt(args []string) (*command, error) {
 	c := &command{mode: modeAgent, agentSub: "prompt", agentMode: agentModePrompt}
 	modeSet := ""
 	noWaitSet, timeoutSet := false, false
+	// A leading help token asks about the verb. Only the leading position:
+	// after the ref, every token is verbatim prompt text, so
+	// `agent prompt s1 ?` prompts with a literal `?`.
+	if len(args) > 0 && isHelpToken(args[0]) {
+		return &command{mode: modeHelp, helpTopic: "agent prompt"}, nil
+	}
 	i := 0
 	for i < len(args) {
 		a := args[i]
