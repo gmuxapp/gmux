@@ -614,3 +614,111 @@ on `no_conversation`, and that fallback no longer exists. Peers and older
 daemons still answer `no_conversation` for the permanent case; the CLI treats
 both identically (exit 1, `gmux tail` hint), so skew costs precision, not
 correctness.
+
+## Amendment (2026-07-27): `gmux agent prompt --new` launches the session
+
+`gmux agent prompt --new [--model M] [--name N] [--timeout S] [--no-wait]
+[<prompt>|-]` launches a session and sends it its first prompt in one command.
+Exactly one of a positional session ref or `--new` may be given. `--new`
+refuses `--follow-up` and `--steer` — a session that does not exist yet has no
+turn to queue behind or steer — and `--model` / `--name` are usage errors
+without it. There is no `--session` flag, no `--adapter` flag and no argv
+passthrough: the launch is pi-only for now, exactly like the rest of this
+namespace.
+
+### Bare launch, and admission as the single health event
+
+The spawned argv carries **no prompt**. gmux starts the session through the
+existing `gmux -d` machinery (from the caller's env and cwd, local daemon
+only — a remote-only daemon fails the way `gmux -d` fails), and then delivers
+the prompt over the ordinary readiness-gated `POST /prompt`.
+
+That is the whole point. A launch-time prompt would create a second, differently
+shaped health event: "did the agent start with my text?" answered by process
+exit and screen scraping, next to "was my prompt admitted?" answered by the
+delivery reservation this ADR already defines. With a bare launch there is one
+event. A session that never becomes ready fails its **first** prompt exactly as
+it fails its tenth — `admission_timeout`, same code, same indeterminacy rules,
+same retry advice — and the first turn needs no special case anywhere in the
+CLI, the daemon or the runner.
+
+`--timeout` keeps its meaning: it bounds the wait, never the launch. Readiness
+stays on the adapter's fixed `ActionReadyTimeout` (10 s for pi), which is a
+property of that agent's cold start, not of the caller's patience.
+
+### Output contract: the bare id is always stdout line 1
+
+Under `--new` the session id is written to stdout, on its own line, **the
+moment the session exists** — after the spawn registers and *before* the prompt
+is delivered. With `--no-wait` it is the only output and exit 0 means admitted:
+that is the launch line of the handoff pattern, `id=$(gmux agent prompt --new
+--no-wait 'go')`. Synchronously it is line 1 and the agent's answer follows, so
+under `--new` **the completion signal is the exit code, not non-empty stdout** —
+a deliberate difference from a plain sync prompt, where stdout is the answer
+alone, and one the help page and `reference/cli.md` state explicitly.
+
+**The id line means exactly one thing: this session exists and is
+addressable.** It is not an admission receipt, not a readiness signal, not a
+claim that the prompt was delivered, and not a promise that the turn will run.
+Every one of those verdicts is carried by the exit code, where the taxonomy in
+§8 already defines them. Stating the negative matters because the line is
+printed *before* the only event that could support those readings.
+
+Printing the id before delivery rather than at admission was a live design
+question — the slice brief said "at admission" — and is settled here in favour
+of the earlier print. With a single synchronous POST there is no
+client-observable admission moment for the `wait:true` shape at all; splitting
+it into admit-then-wait would buy no health signal (the exit code carries
+admission and completion either way, and `--no-wait`'s exit 0 remains
+202-gated) while costing a second request and its skew edges. The watcher
+use-case is served strictly better by the earlier id, which can attach or tail
+*during* readiness.
+
+It also resolves the pre-admission failure question. Anything can go wrong after the spawn: the
+agent never becomes ready, the runner dies, the turn errors. In every one of
+those cases the caller has already paid for a real session, and a session whose
+id was never reported is a leak nothing can clean up. So the id goes to stdout
+first, unconditionally and exactly once; failures after that point report on
+stderr and exit per the taxonomy in §8. A failed launch — nothing registered,
+no session — prints no id at all, because there is nothing to address. The rule
+a script can rely on: **stdout line 1 is a session id whenever a session
+exists, and stdout is empty whenever one does not.**
+
+One observed consequence of not special-casing the first turn: a freshly
+launched session's first prompt frequently completes with an **empty** result
+field, because the daemon has not yet resolved that session's conversation ref
+when the turn closes. This is pre-existing behaviour — `gmux -d -- pi` followed
+by a synchronous prompt does exactly the same — and it is left alone here
+rather than patched at the launch site, which would be precisely the
+launch-shaped special case this amendment exists to avoid. The turn completed,
+the exit code says so, and `gmux agent output <id>` reads the reply. Fixing it
+belongs where the gap is: conversation-ref discovery at turn close.
+
+**A post-spawn failure leaves the session behind, and the caller owns it.** The
+session keeps existing and may well keep running — gmux does not tear down a
+session because its first prompt failed, which would destroy the state and
+scrollback the caller needs to diagnose it. The printed id is what that
+ownership is made of: retry against it, read it, or `gmux kill` it.
+
+`--new` must appear **before** the prompt. After a session id it is prompt text
+like any other token — `gmux agent prompt s1 --new` prompts s1 with the literal
+text `--new` — because "everything after the ref is verbatim" is a rule of this
+grammar older than this flag, and a flag that clawed tokens back from it would
+make prompt text depend on gmux's flag vocabulary. The `-` spelling for "prompt
+on stdin" is scoped to `--new` for the same reason: on the ref path a trailing
+`-` is a literal prompt and a leading `-` is an unknown flag, both unchanged.
+
+Ordering follows from the same rule in the other direction: the prompt is
+validated (non-empty, UTF-8, within budget) and the argv translated *before*
+anything is spawned, so a usage error never leaves an orphan session behind.
+
+### Adapter translation
+
+`adapter.AgentLauncher` — `LaunchCommand(LaunchOptions) (argv []string, ok
+bool)` — sits next to `AgentActionEncoder` as the launch-side twin: stateless
+translation, no I/O, no session state. pi implements it (`pi [--model M]
+[--name N]`, pi's real long flags; an empty option is omitted entirely rather
+than passed empty, because `--model ""` is a different request than no
+`--model`). Every other adapter does not implement it and the CLI reports
+`unsupported_adapter` in the established style, pointing at `gmux -d -- <cmd>`
+plus a prompt as the two-step route that still works and always will.
