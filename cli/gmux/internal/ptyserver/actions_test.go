@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,6 +117,32 @@ type actionFixture struct {
 	state  *session.State
 	rec    *recorder
 	client *http.Client
+}
+
+// observedCancelContext exposes when code under test has started observing its
+// cancellation channel. It lets cancellation tests synchronize on the actual
+// wait instead of guessing with sleeps or an HTTP client's return timing.
+type observedCancelContext struct {
+	context.Context
+	observed chan struct{}
+	once     sync.Once
+}
+
+func (c *observedCancelContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.observed) })
+	return c.Context.Done()
+}
+
+type responseWriteTracker struct {
+	header http.Header
+	wrote  bool
+}
+
+func (w *responseWriteTracker) Header() http.Header { return w.header }
+func (w *responseWriteTracker) WriteHeader(int)     { w.wrote = true }
+func (w *responseWriteTracker) Write(p []byte) (int, error) {
+	w.wrote = true
+	return len(p), nil
 }
 
 // newActionFixture starts a runner with a long-lived, silent child and swaps the
@@ -1546,35 +1573,36 @@ func TestCancelWhileWaitingForReadinessDeliversNothing(t *testing.T) {
 		timeout: 30 * time.Second, // long enough that only cancellation ends the wait
 		encode:  map[adapter.AgentAction]string{adapter.ActionSend: "\r"},
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://session/prompt",
-		strings.NewReader(`{"prompt":"go","delivery":"now","require":"any"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	base, cancel := context.WithCancel(context.Background())
+	ctx := &observedCancelContext{Context: base, observed: make(chan struct{})}
+	req := httptest.NewRequest("POST", "http://session/prompt",
+		strings.NewReader(`{"prompt":"go","delivery":"now","require":"any"}`)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(ExpectIncarnationHeader, f.srv.Incarnation())
-	done := make(chan error, 1)
+	response := &responseWriteTracker{header: make(http.Header)}
+	done := make(chan struct{})
 	go func() {
-		resp, err := f.client.Do(req)
-		if resp != nil {
-			resp.Body.Close()
-		}
-		done <- err
+		f.srv.handlePrompt(response, req)
+		close(done)
 	}()
-	time.Sleep(150 * time.Millisecond)
+
+	// Wait until awaitReady has selected on this exact server-side context.
+	select {
+	case <-ctx.observed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("readiness wait never observed the request context")
+	}
 	cancel()
 	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("the canceled request got a response")
-		}
+	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("cancelling did not end the readiness wait")
 	}
-	// Becoming ready afterwards must not resurrect the abandoned request.
+	if response.wrote {
+		t.Fatal("canceled handler wrote an HTTP response")
+	}
+	// Becoming ready afterwards must not resurrect the completed request.
 	f.ready(t)
-	time.Sleep(150 * time.Millisecond)
 	if n := len(f.rec.snapshot()); n != 0 {
 		t.Fatalf("an abandoned request delivered %q", f.rec.bytes())
 	}
