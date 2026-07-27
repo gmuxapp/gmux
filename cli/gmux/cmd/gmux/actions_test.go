@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -357,4 +360,81 @@ func TestIsNoMatchError(t *testing.T) {
 	if isNoMatchError(err) {
 		t.Errorf("empty ref error should not be retryable: %q", err)
 	}
+}
+
+// TestListJSONSchemaIsStable pins the `gmux ls --json` key set. ADR 0009
+// decision 13b promised a "stable schema" and then described one the code never
+// emitted (`kind` for what is really `adapter`, plus an `idle` field that has
+// never existed, since idleness is a turn property read through `gmux wait`,
+// not a property of a list row). Scripts are written against this shape, so a
+// rename or a dropped field should fail here rather than in someone's pipeline.
+func TestListJSONSchemaIsStable(t *testing.T) {
+	exit := 0
+	full := cliSession{
+		ID: "sess-abcd1234", Peer: "laptop", Cwd: "/home/mg/dev/gmux",
+		Adapter: "pi", Alive: true, Pid: 4242, Title: "fix auth bug",
+		Slug: "fix-auth-bug", ParentSessionID: "sess-00001111",
+		SocketPath: "/run/gmux/sess-abcd1234.sock",
+		Command:    []string{"pi", "--model", "sonnet"},
+		StartedAt:  "2026-07-27T10:00:00Z", ExitedAt: "2026-07-27T10:05:00Z",
+		ExitCode: &exit,
+	}
+	wantAll := []string{
+		"id", "peer", "cwd", "adapter", "alive", "pid", "title", "slug",
+		"parent_session_id", "socket_path", "command", "started_at",
+		"exited_at", "exit_code",
+	}
+	got := jsonKeys(t, full)
+	for _, k := range wantAll {
+		if _, ok := got[k]; !ok {
+			t.Errorf("populated session omits documented key %q; keys: %v", k, sortedKeys(got))
+		}
+	}
+	for k := range got {
+		if !slices.Contains(wantAll, k) {
+			t.Errorf("undocumented key %q in ls --json; document it in ADR 0009 13b and reference/cli.md", k)
+		}
+	}
+
+	// A minimal session must still answer the three questions every script
+	// asks: which session, what is running, is it still running.
+	bare := jsonKeys(t, cliSession{ID: "sess-abcd1234"})
+	for _, k := range []string{"id", "adapter", "alive"} {
+		if _, ok := bare[k]; !ok {
+			t.Errorf("zero-value session omits always-present key %q; keys: %v", k, sortedKeys(bare))
+		}
+	}
+	for _, k := range []string{"peer", "cwd", "pid", "title", "slug", "parent_session_id", "socket_path", "command", "started_at", "exited_at", "exit_code"} {
+		if _, ok := bare[k]; ok {
+			t.Errorf("key %q should be omitempty but appears on a zero-value session", k)
+		}
+	}
+	if _, ok := got["kind"]; ok {
+		t.Error("`kind` is the pre-adapter wire name and must not come back (UBIQUITOUS_LANGUAGE.md)")
+	}
+	if _, ok := got["idle"]; ok {
+		t.Error("`idle` must not be a list field: idleness is a turn property, read via `gmux wait`")
+	}
+}
+
+func jsonKeys(t *testing.T, s cliSession) map[string]json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal cliSession: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal cliSession: %v", err)
+	}
+	return m
+}
+
+func sortedKeys(m map[string]json.RawMessage) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }

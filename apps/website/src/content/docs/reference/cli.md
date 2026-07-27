@@ -87,7 +87,15 @@ be14b052  alive   shell    bash          (/home/mg/dev/gmux)
 ```
 
 - `--all` — include sessions from every connected peer (ids print as `<id>@<peer>`).
-- `--json` — emit a JSON array instead of the table, for scripts and agents (the adapter field is `"adapter"`).
+  Dead sessions are listed either way; `--all` widens the host scope, not the
+  liveness filter.
+- `--json` — emit a JSON array instead of the table, for scripts and agents.
+
+The `--json` objects always carry `id`, `adapter` and `alive`, plus these when
+they are set: `peer`, `cwd`, `pid`, `title`, `slug`, `parent_session_id`,
+`socket_path`, `command`, `started_at`, `exited_at`, `exit_code`. Note there is
+no `idle` field — whether an agent is mid-turn is a question for `gmux wait`,
+not for a list snapshot.
 
 ### `gmux attach <id>`
 
