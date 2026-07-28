@@ -55,9 +55,17 @@ One JSON object per event, discriminated by `op`. Unknown ops/values are ignored
   "reason": "startup|new|resume|fork|activity"  // optional; informational
 }
 
-// op "turn" — agent loop boundary.
-{ "op": "turn", "phase": "start" }                            // → active
-{ "op": "turn", "phase": "end", "outcome": "completed",       // see vocabulary
+// op "turn" — agent loop boundary, and (for a result-bearing adapter) the
+// turn's asserted identity, inputs and result.
+{ "op": "turn", "phase": "start", "turn_seq": 7,              // → active
+  "trigger": "what is 2+2?" }                                 // optional excerpt
+{ "op": "turn", "phase": "steered", "turn_seq": 7,            // a user message
+  "text": "actually, stop" }                                  // entered the RUNNING loop
+{ "op": "turn", "phase": "end", "turn_seq": 7,
+  "outcome": "completed",                                     // see vocabulary
+  "output": "4",                                              // completed only; omit when none
+  "truncated": false,                                         // output was capped at the source
+  "diagnostic": "provider exploded",                          // error only; never a result
   "title": "human title" }                                    // optional
 ```
 
@@ -72,9 +80,113 @@ One JSON object per event, discriminated by `op`. Unknown ops/values are ignored
 | `cwd`     | session  | Project dir. Accepted for forward-compat but not applied — the runner knows the launch cwd. |
 | `reason`  | session  | Why the bind happened; informational. |
 | —         | ready    | No fields. |
-| `phase`   | turn     | `"start"` or `"end"`. |
+| `phase`   | turn     | `"start"`, `"steered"` or `"end"`. |
+| `turn_seq` | turn    | The adapter's monotonic turn identity, binding one turn's start, injections and close together. Omitted (0) by an adapter that asserts no identity, which makes its closes result-free (see below). |
+| `trigger` | turn start | Short excerpt of what started the turn (a prompt). Rides stderr reports, never stdout. |
+| `text`    | turn steered | Short excerpt of the user message that entered the running loop. |
 | `outcome` | turn end | Normalized terminal state — see below. |
+| `output`  | turn end | The settled turn's final assistant prose. `completed` only, and **omitted rather than empty**: absence means the turn produced no prose (a tool-only turn), never that the transport lost it. |
+| `truncated` | turn end | The adapter capped `output` at the source; the full text is in the conversation. |
+| `diagnostic` | turn end | Short reason for a non-completed close. The account channel — never presented as a result. |
 | `title`   | turn end | Display title at turn end. |
+
+### Result-bearing adapters and the turn frame
+
+ADR 0027's 2026-07-28 amendment makes **result-bearing** a testable adapter
+property: a result-bearing adapter *asserts its turn boundary, and delivers the
+turn's outcome, final assistant message and triggering excerpt in its own start
+and terminal events*. gmux never reconstructs a turn's answer from the
+conversation file, so there is no tape-read fallback when `output` is absent.
+
+The runner holds those facts in a **turn frame** and relays it exactly the way it
+relays status, conversation ref and slug: as a snapshot replayed to every
+`/events` subscriber on connect, so nothing depends on an edge-scoped payload
+surviving every hop. The frame looks like this:
+
+```jsonc
+{ "seq": 12,                                    // frame version, monotonic per runner
+  "current": { "turn_seq": 7, "trigger": "…",    // the turn running right now
+               "injections": ["…"] },
+  "last":    { "turn_seq": 6, "outcome": "completed",
+               "output": "…", "truncated": false,
+               "diagnostic": "…", "trigger": "…", "injections": ["…"] } }
+```
+
+It reaches `/events` subscribers two ways:
+
+- **On a turn edge, inside the `status` event.** A turn start or a turn close
+  emits ONE event carrying both the status transition and the frame that
+  transition belongs to, under the `turn_frame` key:
+
+  ```jsonc
+  // event: status
+  { "active": false, "error": false, "interrupted": false,
+    "turn_frame": { "seq": 12, "last": { "turn_seq": 7, "outcome": "completed", "output": "4" } } }
+  ```
+
+  The status fields are unchanged and in place, so a consumer that knows nothing
+  about frames sees exactly the status event it always saw.
+- **As `event: turn_frame`**, for a frame update with no status transition to
+  ride: a mid-turn injection, a rebind clear, and the connect-time replay of a
+  session that has a frame but has never reported a status.
+
+**Connect-time replay uses the same two shapes**, from one consistent snapshot:
+a session with a reported status is replayed as a single coupled `status` event
+carrying its frame, so a consumer parses one shape live and replayed. Replaying
+the two facts separately would let them straddle a turn edge, and that is exactly
+where it costs something — a wait armed in a reconnect window would learn no
+`turn_seq` and resolve result-free.
+
+Properties hook authors and consumers can rely on:
+
+- **Two records, kept apart.** A reader can never pair a running turn's trigger
+  with the previous turn's answer.
+- **A close is atomic, not merely ordered.** The frame update and the status
+  write share one critical section AND one event, so no subscriber can observe
+  the close without the frame that closed it. This matters because the runner's
+  fan-out is deliberately lossy — it drops into a full subscriber buffer rather
+  than stalling the runner — so two separate sends could have the frame dropped
+  and the edge delivered, producing a close nobody can attribute. Coupling them
+  makes the scoped delivery invariant a property of the transport instead of a
+  hope about buffer occupancy: a subscriber gets the edge with its frame, or
+  neither, and converges on the next edge or on reconnect replay.
+  The same applies to a turn START, whose frame carries the identity a consumer
+  needs to match the eventual close.
+- **A raw `PUT /status` close keeps the frame honest.** It belongs to no turn, so
+  it asserts no result — but if it closes a turn the adapter had opened, it drops
+  the frame's `current` record (leaving `last` alone). An idle session therefore
+  never advertises a running turn, while the close stays result-free because no
+  close record was invented for it.
+- **Identity, not polarity.** A consumer may serve a turn's result only when the
+  close's `turn_seq` matches the turn it observed. A `turn_seq` of 0 (an adapter
+  that asserts none: Claude, Codex, a raw `PUT /status` child) matches nothing,
+  so those closes resolve normally but **result-free** — never with another
+  turn's answer.
+- **Conversation-local.** An authoritative rebind (`op: "session"` with a
+  different `path`) clears both records atomically, ordered ahead of the
+  rebind's own events.
+- **Bounded.** `output` is capped at the source (pi: 256 KiB pre-escape),
+  excerpts at ~1 KiB, and the runner's hook-body and the daemon's SSE scanner
+  limits are sized for the worst-case escaped payload. The invariant: **an
+  oversized output never costs the close** — the event still closes the turn,
+  `truncated` is set, and the conversation read serves the full text.
+- **Live truth, not row state.** The frame is never persisted and dies with the
+  runner. A wait that arrives after a close keeps snapshot semantics.
+
+### One loop is one turn
+
+The boundary is the adapter's *settled* boundary, not any per-attempt one. pi
+emits `agent_end` once per retry attempt (and a fresh `agent_start` for each
+continuation) but `agent_settled` exactly once per run, so pi's extension opens
+the turn on the first `agent_start`, refreshes its captured message list on every
+`agent_end`, and closes on `agent_settled` with the final attempt's result. This
+also removes a status flap where a retried error read as error-then-active.
+
+pi merges queued follow-ups into the running loop, so a follow-up delivered
+mid-turn produces no second turn: it is reported as a `steered` injection on the
+open turn, and the merged close's answer is that turn's answer. A user message
+injected into a running turn — by gmux or typed by a human — changes what the
+turn's answer means, which is why injections are reported at all.
 
 ### Outcome vocabulary
 
@@ -90,7 +202,7 @@ agent's concern.
 
 ### Ordering requirement
 
-A terminal end applies **only while a turn is open**: the runner ignores an end
+A terminal end's status effect applies **only while a turn is open**: the runner ignores an end
 that arrives against an already-closed turn, so a duplicate or an
 unconditional-on-exit hook (Claude's `SessionEnd` after `Stop`) cannot rewrite a
 good closure. This is turn *polarity*, not turn *identity* — the runner cannot
@@ -177,8 +289,8 @@ hatch for a session in that state.)
 ## The runner does NOT, for hooked sessions
 
 Parse the conversation file, infer status from PTY/scrollback, apply per-adapter
-heuristics in `handleHookEvent`, or use the `conversation_file` snapshot for anything
-but `/events` replay.
+heuristics in `handleHookEvent`, use the `conversation_file` snapshot for anything
+but `/events` replay, or reconstruct a turn's result from the conversation.
 
 ## Implementing for a new agent
 

@@ -1030,8 +1030,17 @@ const maxInputBytes = 1 << 20 // 1 MiB
 //
 //	op "ready"            — the agent can accept input (semantic actions)
 //	op "session"          — the bound conversation ref, id, name (on bind)
-//	op "turn" phase start — the agent loop began (→ active)
-//	op "turn" phase end   — the loop ended with Outcome + title
+//	op "turn" phase start   — the agent loop began (→ active), with the turn's
+//	                          identity (TurnSeq) and Trigger excerpt
+//	op "turn" phase steered — a user message entered the RUNNING loop
+//	op "turn" phase end     — the turn settled: Outcome, Output, Truncated,
+//	                          Diagnostic, title
+//
+// The turn events are result-bearing (ADR 0027, 2026-07-28 amendment): a
+// result-bearing adapter asserts its own turn boundary and delivers the turn's
+// outcome, final assistant message and triggering excerpt. The runner relays
+// those facts in its turn frame (session.TurnFrame) and never reconstructs them
+// from the conversation.
 //
 // Outcome is a stable, agent-agnostic vocabulary ("completed" | "interrupted" |
 // "error"); each agent's hook normalizes its own terminal state into it, and
@@ -1048,9 +1057,28 @@ type hookEvent struct {
 	Name    string `json:"name,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Title   string `json:"title,omitempty"`
-	Phase   string `json:"phase,omitempty"`   // "start" | "end" (op "turn")
+	Phase   string `json:"phase,omitempty"`   // "start" | "steered" | "end" (op "turn")
 	Outcome string `json:"outcome,omitempty"` // "completed" | "interrupted" | "error"
+
+	// Turn identity and asserted result (op "turn"). TurnSeq is the adapter's
+	// monotonic turn counter binding start, injections and close together; an
+	// adapter that does not assert turn identity leaves it 0, and consumers
+	// treat 0 as "unknown" and serve no result for it.
+	TurnSeq    uint64 `json:"turn_seq,omitempty"`
+	Trigger    string `json:"trigger,omitempty"`    // phase start: what began the turn
+	Text       string `json:"text,omitempty"`       // phase steered: the injected message
+	Output     string `json:"output,omitempty"`     // phase end: the turn's final assistant prose
+	Truncated  bool   `json:"truncated,omitempty"`  // phase end: Output was capped at the source
+	Diagnostic string `json:"diagnostic,omitempty"` // phase end: short reason for a non-completed close
 }
+
+// maxHookEventBytes caps one POST /hook/event body. It is sized for the
+// worst-case ESCAPED settled event: the adapter caps `output` at 256 KiB
+// pre-escape and JSON escaping can expand a byte six-fold, so the limit must
+// leave that payload room to arrive intact. An oversized output must never cost
+// the close (ADR 0027), and the adapter's own cap is what guarantees the event
+// fits here.
+const maxHookEventBytes = 4 << 20
 
 // handleHookEvent applies the authoritative session state an agent's gmux hook
 // reports: the bound conversation ref + title + slug on every bind, and
@@ -1061,7 +1089,7 @@ type hookEvent struct {
 // derived or sticky.
 func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 	var ev hookEvent
-	if err := json.NewDecoder(io.LimitReader(r.Body, 512*1024)).Decode(&ev); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxHookEventBytes)).Decode(&ev); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -1079,6 +1107,13 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 		// overwrites it, so the slug logic below can tell a genuine re-bind
 		// (different conversation) from a same-conversation refresh.
 		priorRef := s.state.ConversationRefSnapshot()
+		// A rebind to a DIFFERENT conversation invalidates the turn frame: the
+		// previous conversation's answer cannot be attributed under the new ref.
+		// Cleared before the ref and slug are published so a subscriber that sees
+		// the new conversation can never still see the old result.
+		if ev.Path != "" && ev.Path != priorRef {
+			s.state.ClearTurnFrame()
+		}
 		if ev.Path != "" {
 			s.state.SetConversationRef(ev.Path)
 		}
@@ -1116,13 +1151,18 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 			s.state.BindSlug("")
 		}
 	case "turn":
-		// Agent-loop transition. The extension reports phase + outcome; the
+		// Agent-loop transition. The extension reports phase + facts; the
 		// sidebar policy (what an outcome means) lives here, in testable Go.
-		if ev.Phase == "start" {
-			s.state.SetStatus(&adapter.Status{Active: true})
-			break
+		switch ev.Phase {
+		case "start":
+			// One call, one critical section: the turn's identity and the active
+			// edge are published together and in that order.
+			s.state.OpenTurn(ev.TurnSeq, ev.Trigger)
+		case "steered":
+			s.state.NoteInjection(ev.TurnSeq, ev.Text)
+		default:
+			s.applyTurnEnd(ev)
 		}
-		s.applyTurnEnd(ev.Outcome, ev.Title)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1139,7 +1179,7 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 // SetStatus replaces the status wholesale, so a terminal outcome clears the
 // previous turn's interruption exactly like a "turn" start does.
 //
-// A terminal end only closes an OPEN turn (State.CloseTurn, atomic under the
+// A terminal end only closes an OPEN turn (State.CloseTurnFrame, atomic under the
 // state lock). The runner owns turn open/closed state, so an end against an
 // already-closed turn is stale — and now that interruption is durable,
 // applying it would rewrite a good closure. Claude is the concrete case: a
@@ -1173,13 +1213,27 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 // The title refresh is not turn state and is applied either way: a late end
 // carrying a fresher title (Claude's Stop refresh, pi's session name) should
 // still land.
-func (s *Server) applyTurnEnd(outcome, title string) {
+// The asserted result travels with the close as ONE event carrying both the
+// settled frame and the terminal status (State.CloseTurnFrame), so no subscriber
+// can observe the close without the result that closed it — not by reordering,
+// and not by the lossy fan-out dropping one of two sends. An adapter that asserts
+// no turn identity (Claude, Codex, a raw `PUT /status` child) leaves TurnSeq 0,
+// which no waiter can match, so those closes are served result-free instead of
+// with somebody else's answer.
+func (s *Server) applyTurnEnd(ev hookEvent) {
+	outcome, title := ev.Outcome, ev.Title
 	if title != "" {
 		s.state.SetAdapterTitle(title)
 	}
 	// One atomic check-and-close: concurrent hook POSTs are served on
 	// independent goroutines, so a snapshot-then-set would race.
-	closed := s.state.CloseTurn(&adapter.Status{
+	closed := s.state.CloseTurnFrame(session.TurnClose{
+		TurnSeq:    ev.TurnSeq,
+		Outcome:    outcome,
+		Output:     ev.Output,
+		Truncated:  ev.Truncated,
+		Diagnostic: ev.Diagnostic,
+	}, &adapter.Status{
 		Active:      false,
 		Error:       outcome == "error",
 		Interrupted: outcome == "interrupted",
@@ -1212,6 +1266,11 @@ func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 // combination (including clearing to null) without gmux second-guessing it.
 // The gate only constrains hook-reported terminal turn ends, whose stale
 // duplicates gmux must ignore.
+//
+// It does, however, keep the turn frame honest: a raw write that closes an open
+// turn abandons the frame's current record, so an idle session never advertises a
+// turn that has ended (see State.SetStatusAbandoningTurn). It asserts no result,
+// so the last-closed record is left alone and the close stays result-free.
 func (s *Server) handlePutStatus(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
 	if err != nil {
@@ -1221,7 +1280,7 @@ func (s *Server) handlePutStatus(w http.ResponseWriter, r *http.Request) {
 
 	// "null" clears the status
 	if string(body) == "null" {
-		s.state.SetStatus(nil)
+		s.state.SetStatusAbandoningTurn(nil)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -1232,7 +1291,7 @@ func (s *Server) handlePutStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.state.SetStatus(&status)
+	s.state.SetStatusAbandoningTurn(&status)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1369,18 +1428,23 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch := s.state.Subscribe()
 	defer s.state.Unsubscribe(ch)
 
-	// Replay the bound conversation ref to this (possibly reconnecting) subscriber
-	// so a restarted daemon re-learns attribution with no persisted state. A
-	// concurrent update may also arrive on ch; harmless (idempotent).
-	// Replay the current status snapshot so a (re)connecting daemon
-	// starts from the session's actual turn state. Without this, any
-	// status emitted before the subscription — the launch-time
-	// Active=true of the default turn model, or an agent turn that
-	// started while the daemon was down — would be invisible until the
-	// next transition.
-	if st := s.state.StatusSnapshot(); st != nil {
-		if data, err := json.Marshal(st); err == nil {
-			fmt.Fprintf(w, "event: status\ndata: %s\n\n", data)
+	// Replay the session's turn state to this (possibly reconnecting) subscriber
+	// so a restarted daemon re-learns it with no persisted state: any status
+	// emitted before the subscription — the launch-time Active=true of the default
+	// turn model, or an agent turn that started while the daemon was down — would
+	// otherwise be invisible until the next transition, and the turn frame is what
+	// lets a wait armed after the reconnect learn which turn is running and what
+	// the last one answered.
+	//
+	// Both facts are taken from ONE snapshot and sent in ONE event, the same
+	// coupled shape a live edge uses (session.ReplayTurnEdge). Two reads could
+	// straddle a turn edge, and a replay is exactly where that costs something: a
+	// wait armed in the reconnect window would bind turn_seq 0 and resolve
+	// result-free. Sent before the conversation ref so a subscriber never sees a
+	// ref newer than the frame that belongs to it.
+	if typ, payload, ok := session.ReplayTurnEdge(s.state.TurnEdgeSnapshot()); ok {
+		if data, err := json.Marshal(payload); err == nil {
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", typ, data)
 		}
 	}
 

@@ -35,7 +35,7 @@ package ptyserver
 //  2. session.State's status mutex, via State.AdmitAction — the runner's one
 //     ordering mechanism for turn state. Every authoritative status writer
 //     (agent hooks, OSC 133 prompt marks, PUT /status, the launch/exit
-//     lifetime turn) goes through SetStatus/CloseTurn, so the semantic
+//     lifetime turn) goes through SetStatus/CloseTurnFrame, so the semantic
 //     check-and-reserve is atomic against all of them.
 //
 // The linearization point of a semantic action is the AdmitAction that

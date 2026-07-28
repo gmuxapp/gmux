@@ -468,7 +468,7 @@ func TestApplyTurnEnd(t *testing.T) {
 		st := session.New(session.Config{ID: "s1", Adapter: "pi"})
 		srv := &Server{state: st}
 		st.SetStatus(&adapter.Status{Active: true}) // open the turn first
-		srv.applyTurnEnd(tc.outcome, "")
+		srv.applyTurnEnd(hookEvent{Outcome: tc.outcome})
 		status := st.StatusSnapshot()
 		if status == nil || status.Active {
 			t.Errorf("%s: expected idle, got %+v", tc.outcome, status)
@@ -494,7 +494,7 @@ func TestTurnStartClearsInterruption(t *testing.T) {
 	st := session.New(session.Config{ID: "s1", Adapter: "pi"})
 	srv := &Server{state: st}
 	st.SetStatus(&adapter.Status{Active: true})
-	srv.applyTurnEnd("interrupted", "")
+	srv.applyTurnEnd(hookEvent{Outcome: "interrupted"})
 	if s := st.StatusSnapshot(); s == nil || !s.Interrupted {
 		t.Fatalf("status = %+v, want interrupted after an intentional stop", s)
 	}
@@ -502,7 +502,7 @@ func TestTurnStartClearsInterruption(t *testing.T) {
 	if s := st.StatusSnapshot(); s == nil || !s.Active || s.Interrupted || s.Error {
 		t.Fatalf("status = %+v, want a clean active turn", s)
 	}
-	srv.applyTurnEnd("completed", "")
+	srv.applyTurnEnd(hookEvent{Outcome: "completed"})
 	if s := st.StatusSnapshot(); s == nil || s.Active || s.Interrupted || s.Error {
 		t.Fatalf("status = %+v, want completion to clear interruption", s)
 	}
