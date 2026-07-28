@@ -368,6 +368,28 @@ func (c *Coordinator) PublishActivity(id centralstore.SessionID) {
 	c.outcomes.publish(Outcome{Type: OutcomeActivity, ID: id, Alive: alive, Generation: generation})
 }
 
+// publishFrameSignal announces a frame that changed without the row changing —
+// today a mid-turn injection (a steer, a merged follow-up, a human typing).
+//
+// It rides the Activity type deliberately rather than inventing a fourth outcome
+// kind: an injection IS session activity, every existing consumer already
+// tolerates the type, and nothing durable is being claimed. The cost is that it
+// is lossy under deep backlog, which is acceptable because it is an OPTIMIZATION
+// of timing, not the correctness path: a waiter that misses the signal still
+// refuses to serve the merged answer, because the settled close carries the same
+// injection list (see injectionWatch.checkClose), and the generic wait's ticker
+// re-reads the retained frame within 500 ms either way.
+func (c *Coordinator) publishFrameSignal(id centralstore.SessionID, frame *TurnFrame) {
+	if frame == nil || frame.Current == nil || len(frame.Current.Injections) == 0 {
+		return // only an injection can resolve a wait early
+	}
+	if !c.outcomes.hasSubscribers() {
+		return
+	}
+	alive, generation := c.livenessOf(id)
+	c.outcomes.publish(Outcome{Type: OutcomeActivity, ID: id, Alive: alive, Generation: generation, Frame: frame})
+}
+
 func (c *Coordinator) livenessOf(id centralstore.SessionID) (bool, uint64) {
 	if e, ok := c.registry.current(id); ok {
 		return true, e.Generation

@@ -165,6 +165,12 @@ const maxPromptBytes = maxInputBytes
 // plus room for the field names and any future sibling fields.
 const maxPromptEnvelopeBytes = 8 << 20
 
+// maxDeliveryIDBytes caps the caller's delivery identity. It is an opaque token
+// gmuxd mints (a short random string), so anything longer is a caller mistake
+// and is refused rather than stored: the id is retained in runner memory for
+// the length of a turn.
+const maxDeliveryIDBytes = 128
+
 // Delivery modes accepted by POST /prompt. They map 1:1 onto the adapter's
 // submit-like actions; the plain/steer distinction is NOT here, it is the
 // `require` field, because both are the same keystroke (ADR 0027).
@@ -187,15 +193,22 @@ type promptRequest struct {
 	Prompt   string
 	Delivery string
 	Require  string
+	// DeliveryID is the caller's identity for this delivery, used to correlate
+	// the text with the injection the adapter reports when it enters a RUNNING
+	// loop (ADR 0027's steer self-exclusion). Optional: a caller that sends none
+	// simply cannot be told apart from a human typing, and its injections carry
+	// no id.
+	DeliveryID string
 }
 
 // promptWire is the on-the-wire shape. Prompt is decoded as a raw token so the
 // exact JSON string the caller sent can be validated before encoding/json gets
 // a chance to rewrite it (see validateJSONStringToken).
 type promptWire struct {
-	Prompt   *json.RawMessage `json:"prompt"`
-	Delivery string           `json:"delivery"`
-	Require  string           `json:"require"`
+	Prompt     *json.RawMessage `json:"prompt"`
+	Delivery   string           `json:"delivery"`
+	Require    string           `json:"require"`
+	DeliveryID string           `json:"delivery_id"`
 }
 
 var (
@@ -304,7 +317,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		action = adapter.ActionSendAfterTurn
 	}
 	require, reserve := admissionPolicy(req.Delivery, req.Require)
-	s.deliver(w, r, req.Prompt, action, require, reserve)
+	s.deliver(w, r, req.Prompt, req.DeliveryID, action, require, reserve)
 }
 
 // handleCancel aborts the agent's current turn.
@@ -322,7 +335,7 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// An interrupt starts no turn, so it reserves nothing.
-	s.deliver(w, r, "", adapter.ActionInterrupt, session.RequireActive, session.ReserveNever)
+	s.deliver(w, r, "", "", adapter.ActionInterrupt, session.RequireActive, session.ReserveNever)
 }
 
 // admissionPolicy maps a validated request onto the state layer's requirement
@@ -358,7 +371,7 @@ func admissionPolicy(delivery, require string) (session.TurnRequirement, session
 // deliver is the shared body of both semantic routes: capability → readiness →
 // slot → commit → one write. See this file's header for the ordering model and
 // for what is and is not guaranteed.
-func (s *Server) deliver(w http.ResponseWriter, r *http.Request, prompt string, action adapter.AgentAction, require session.TurnRequirement, reserve session.ReservePolicy) {
+func (s *Server) deliver(w http.ResponseWriter, r *http.Request, prompt, deliveryID string, action adapter.AgentAction, require session.TurnRequirement, reserve session.ReservePolicy) {
 	if err := s.requireIncarnation(w, r); err != nil {
 		return
 	}
@@ -433,6 +446,13 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, prompt string, 
 	// written verbatim, never parsed as key tokens, so a prompt that happens
 	// to contain "\r" or an escape sequence is the caller's text, not a
 	// second action.
+	// Arm the injection correlation window BEFORE the write, so the adapter's
+	// report of this text — which can arrive while the write's own goroutine is
+	// still unwinding — finds the record it belongs to. It is withdrawn below if
+	// the payload did not go out whole. Arming it unconditionally is safe: when
+	// the delivery starts a turn instead of joining one, the text becomes that
+	// turn's trigger and the window closes unmatched (State.OpenTurn).
+	s.state.NotePendingInjection(deliveryID, prompt)
 	payload := []byte(prompt + input)
 	n, err := s.deliverBytes(payload)
 	if err == nil && n != len(payload) {
@@ -440,6 +460,12 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, prompt string, 
 		// a prompt, possibly without its submit keystroke. Report it as a
 		// transport failure rather than 204.
 		err = fmt.Errorf("%w: wrote %d of %d bytes", errShortWrite, n, len(payload))
+	}
+	if err != nil {
+		// Nothing (or a fragment) reached the loop, so nothing of ours can be
+		// acknowledged as an injection; leaving the window armed could only
+		// mis-attribute a later message to this request.
+		s.state.DropPendingInjection(deliveryID)
 	}
 	if reserved {
 		if err != nil {
@@ -567,7 +593,10 @@ func decodePromptRequest(r *http.Request) (promptRequest, error) {
 	if dec.More() {
 		return req, errors.New("invalid JSON: trailing content after the request object")
 	}
-	req.Delivery, req.Require = wire.Delivery, wire.Require
+	req.Delivery, req.Require, req.DeliveryID = wire.Delivery, wire.Require, wire.DeliveryID
+	if len(req.DeliveryID) > maxDeliveryIDBytes {
+		return req, fmt.Errorf("delivery_id exceeds %d bytes", maxDeliveryIDBytes)
+	}
 	if wire.Prompt == nil {
 		return req, errors.New("prompt is empty")
 	}

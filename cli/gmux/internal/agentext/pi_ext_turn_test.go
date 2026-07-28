@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
 )
 
 // runExtDriver materializes the shipped extension, runs an inline node driver
@@ -197,8 +199,57 @@ func TestPiExtReportsInjections(t *testing.T) {
 	if evs[1]["phase"] != "steered" || evs[1]["text"] != "actually, stop" {
 		t.Errorf("steered event = %v", evs[1])
 	}
+	if _, ok := evs[1]["truncated"]; ok {
+		// A whole message must not claim to be an excerpt: `truncated` is what
+		// licenses the runner to match this text as a PREFIX of a delivery, so
+		// asserting it here would hand a shorter message a longer delivery's
+		// identity.
+		t.Errorf("an uncapped injection reported truncated: %v", evs[1])
+	}
 	if seqOf(t, evs[1]) != seqOf(t, evs[0]) {
 		t.Errorf("injection reported against another turn: %v", evs)
+	}
+}
+
+// TestPiExtInjectionReportsItsOwnTruncation: the adapter is the only party that
+// knows whether it capped an injection excerpt, so it says so as a FACT on the
+// event. The runner's correlation grants the prefix rule on that flag alone —
+// never on the text ending in an ellipsis, which a foreign message can also do.
+func TestPiExtInjectionReportsItsOwnTruncation(t *testing.T) {
+	// Longer than the extension's excerpt cap, so the report is genuinely a
+	// prefix; and a second injection that merely ENDS in an ellipsis, which is
+	// not one.
+	evs := turnEvents(runExtDriver(t, `
+		handlers.agent_start({}, ctx);
+		handlers.message_start({ message: { role: "assistant", content: [{ type: "text", text: "working" }] } }, ctx);
+		handlers.message_start({ message: { role: "user", content: "x".repeat(4000) } }, ctx);
+		handlers.message_start({ message: { role: "user", content: "wait\u2026" } }, ctx);
+		handlers.agent_end({ messages: [
+			{ role: "assistant", content: [{ type: "text", text: "ok" }], stopReason: "stop" },
+		] }, ctx);
+		handlers.agent_settled({}, ctx);
+	`))
+	var steers []map[string]any
+	for _, e := range evs {
+		if e["phase"] == "steered" {
+			steers = append(steers, e)
+		}
+	}
+	if len(steers) != 2 {
+		t.Fatalf("want two injections, got %v", evs)
+	}
+	capped, plain := steers[0], steers[1]
+	if capped["truncated"] != true {
+		t.Errorf("a capped excerpt did not report its truncation: %v", capped)
+	}
+	if text, _ := capped["text"].(string); !strings.HasSuffix(text, "\u2026") {
+		t.Errorf("a capped excerpt lost its ellipsis: %q", text)
+	}
+	if _, ok := plain["truncated"]; ok {
+		t.Errorf("a whole message ending in an ellipsis claimed truncation: %v", plain)
+	}
+	if plain["text"] != "wait\u2026" {
+		t.Errorf("text = %v", plain["text"])
 	}
 }
 
@@ -338,6 +389,67 @@ func TestPiExtProseHelpers(t *testing.T) {
 	for k, v := range want {
 		if got[k] != v {
 			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+// TestPiExtExcerptWhitespaceMatchesRunner pins the whitespace class as a
+// CROSS-RUNTIME CONTRACT rather than as each side's local habit.
+//
+// The runner decides whether an injection belongs to a given gmux request by
+// comparing the adapter's excerpt against the same normalization of the text it
+// delivered (ADR 0027's steer self-exclusion). The two runtimes disagree out of
+// the box — JavaScript's \s matches U+FEFF but not U+0085, Go's unicode.IsSpace
+// the reverse — so a prompt containing either character would normalize
+// differently on the two sides, fail to correlate, and silently downgrade its
+// injector to an indeterminate result. Both sides collapse the union; this test
+// is what keeps them collapsing the SAME union.
+func TestPiExtExcerptWhitespaceMatchesRunner(t *testing.T) {
+	nodeBin, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; skipping pi-ext behavior test")
+	}
+	dir := t.TempDir()
+	extPath := filepath.Join(dir, "pi-ext.mjs")
+	if err := os.WriteFile(extPath, extSource, 0o644); err != nil {
+		t.Fatalf("materialize extension: %v", err)
+	}
+	// One case per character the two runtimes disagree about, plus the ordinary
+	// ones both already agreed on.
+	inputs := []string{
+		"a\n\n b\tc  ",
+		"bom\uFEFFhere", // JS \s only
+		"nel\u0085here", // Go IsSpace only
+		"mixed\uFEFF\u0085 x",
+		"\uFEFFleading and trailing\u0085",
+	}
+	driver := `
+		const { excerpt } = await import(process.argv[2]);
+		process.stdout.write(JSON.stringify(JSON.parse(process.argv[3]).map(excerpt)));
+	`
+	driverPath := filepath.Join(dir, "driver.mjs")
+	if err := os.WriteFile(driverPath, []byte(driver), 0o644); err != nil {
+		t.Fatalf("write driver: %v", err)
+	}
+	payload, err := json.Marshal(inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(nodeBin, driverPath, extPath, string(payload)).Output()
+	if err != nil {
+		t.Fatalf("node driver: %v (%s)", err, out)
+	}
+	var got []string
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("decode %q: %v", out, err)
+	}
+	if len(got) != len(inputs) {
+		t.Fatalf("got %d excerpts for %d inputs", len(got), len(inputs))
+	}
+	for i, in := range inputs {
+		if want := session.NormalizeExcerpt(in); got[i] != want {
+			t.Errorf("excerpt(%q) = %q (node), but the runner normalizes it to %q; "+
+				"the correlation compares these two strings, so they must agree", in, got[i], want)
 		}
 	}
 }

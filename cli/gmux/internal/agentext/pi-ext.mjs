@@ -17,7 +17,8 @@
 //   { op: "session", path, id, name, slug, cwd, reason } on bind (session_start)
 //                                                         and rename (session_info_changed)
 //   { op: "turn", phase: "start", turn_seq, trigger }   on agent loop start
-//   { op: "turn", phase: "steered", turn_seq, text }    on a mid-turn user message
+//   { op: "turn", phase: "steered", turn_seq, text, truncated }
+//                                                       on a mid-turn user message
 //   { op: "turn", phase: "end", turn_seq, outcome,
 //     output, truncated, diagnostic, title }             on agent_settled
 //
@@ -206,7 +207,17 @@ export default function (pi) {
       if (!heldTrigger) heldTrigger = excerpt(text);
       return;
     }
-    post(sock, { op: "turn", phase: "steered", turn_seq: turnSeq, text: excerpt(text) });
+    // `truncated` travels with the excerpt because the runner may only match a
+    // PREFIX of what gmux delivered when this excerpt is genuinely a prefix of
+    // the message. See excerptParts.
+    const injected = excerptParts(text);
+    post(sock, {
+      op: "turn",
+      phase: "steered",
+      turn_seq: turnSeq,
+      text: injected.text,
+      truncated: injected.truncated || undefined,
+    });
   });
 
   pi.on("agent_end", (ev, ctx) => {
@@ -321,15 +332,39 @@ export function capOutput(s) {
   return { text: decodeWhole(bytes.subarray(0, maxOutputBytes)), truncated: true };
 }
 
-// excerpt collapses whitespace and caps a trigger/injection text. Excerpts are
-// diagnostics (they appear in stderr reports), so a byte cap with an ellipsis is
-// enough; they are never presented as the agent's answer.
-export function excerpt(s) {
-  const collapsed = String(s ?? "").replace(/\s+/g, " ").trim();
-  if (!collapsed) return "";
+// excerptParts collapses whitespace and caps a trigger/injection text, and
+// reports WHETHER it capped. Excerpts are diagnostics (they appear in stderr
+// reports), so a byte cap with an ellipsis is enough; they are never presented as
+// the agent's answer.
+//
+// The whitespace class is a CONTRACT with the runner, not a local convenience:
+// an injection excerpt is what the runner compares against the text gmux
+// delivered, to decide whether an injection is a given request's (ADR 0027's
+// steer self-exclusion). The two runtimes disagree by default — JavaScript's \s
+// matches U+FEFF but not U+0085, Go's unicode.IsSpace the reverse — so both
+// sides collapse the UNION: `\s` plus U+0085 here, IsSpace plus U+FEFF in
+// session.normalizeExcerpt. A prompt containing either character would otherwise
+// fail to correlate and silently downgrade its injector to an indeterminate
+// result.
+//
+// `truncated` is the second half of that contract, and it is reported as a FACT
+// rather than left to be inferred from the text. Truncation is the runner's only
+// licence to accept a prefix instead of an exact match, and this function is the
+// one place that knows whether it truncated — a reader sniffing the trailing
+// ellipsis cannot tell a capped excerpt from a message that simply ends in one,
+// which is enough to let a foreign message claim a pending delivery's identity.
+export function excerptParts(s) {
+  const collapsed = String(s ?? "").replace(/[\s\u0085]+/g, " ").trim();
+  if (!collapsed) return { text: "", truncated: false };
   const bytes = Buffer.from(collapsed, "utf8");
-  if (bytes.length <= maxExcerptBytes) return collapsed;
-  return decodeWhole(bytes.subarray(0, maxExcerptBytes - 3)) + "…";
+  if (bytes.length <= maxExcerptBytes) return { text: collapsed, truncated: false };
+  return { text: decodeWhole(bytes.subarray(0, maxExcerptBytes - 3)) + "…", truncated: true };
+}
+
+// excerpt is excerptParts' text alone, for the places where the cap is a
+// presentation detail (a trigger, an error diagnostic) rather than evidence.
+export function excerpt(s) {
+  return excerptParts(s).text;
 }
 
 // decodeWhole decodes a byte slice, dropping a trailing partial UTF-8 sequence

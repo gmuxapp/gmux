@@ -87,6 +87,7 @@ One JSON object per event, discriminated by `op`. Unknown ops/values are ignored
 | `outcome` | turn end | Normalized terminal state — see below. |
 | `output`  | turn end | The settled turn's final assistant prose. `completed` only, and **omitted rather than empty**: absence means the turn produced no prose (a tool-only turn), never that the transport lost it. |
 | `truncated` | turn end | The adapter capped `output` at the source; the full text is in the conversation. |
+| `truncated` | turn steered | The adapter capped `text`, so it is a PREFIX of the injected message. Evidence, not decoration: it is the only thing that lets the runner correlate the excerpt as a prefix of what gmux delivered (see below). Absent means the whole message. |
 | `diagnostic` | turn end | Short reason for a non-completed close. The account channel — never presented as a result. |
 | `title`   | turn end | Display title at turn end. |
 
@@ -106,10 +107,13 @@ surviving every hop. The frame looks like this:
 ```jsonc
 { "seq": 12,                                    // frame version, monotonic per runner
   "current": { "turn_seq": 7, "trigger": "…",    // the turn running right now
-               "injections": ["…"] },
+               "injections": [{ "text": "…", "delivery_id": "…" }],
+               "injection_count": 3 },
   "last":    { "turn_seq": 6, "outcome": "completed",
                "output": "…", "truncated": false,
-               "diagnostic": "…", "trigger": "…", "injections": ["…"] } }
+               "diagnostic": "…", "trigger": "…",
+               "injections": [{ "text": "…", "delivery_id": "…" }],
+               "injection_count": 3 } }
 ```
 
 It reaches `/events` subscribers two ways:
@@ -187,6 +191,63 @@ mid-turn produces no second turn: it is reported as a `steered` injection on the
 open turn, and the merged close's answer is that turn's answer. A user message
 injected into a running turn — by gmux or typed by a human — changes what the
 turn's answer means, which is why injections are reported at all.
+
+### Injections carry a delivery identity, and a count
+
+`injection_count` is the turn's **total** number of injections and never trims,
+while `injections` is a **bounded** list keeping the newest (report material).
+Consumers must decide "did anything new enter this loop since I started
+watching?" from the count: once the list saturates its length stops growing, and
+a length-based comparison would make every later injection invisible — handing a
+waiter the merged answer under exit 0, the one direction the steer rule may not
+fail in. A frame from a runner that reports no count falls back to the list
+length, which is worse but never zero.
+
+An injection's `delivery_id` is the identity of the gmux request that delivered
+its text, or **absent** for a message gmux did not deliver — a human typing into
+the TUI, raw `gmux send`, or a delivery that could not be told apart from
+another. It exists for exactly one rule (ADR 0027, "Steering interrupts waits"):
+an injection resolves every armed wait on that turn early, except the wait
+belonging to the request that injected it, and that exception holds only while
+its message is the loop's **last** injection.
+
+The daemon mints the id and passes it as `delivery_id` on `POST /prompt` when —
+and only when — the delivery joins a turn that is already running (a steer, or a
+follow-up merged into an active loop).
+
+**How the runner decides, and what it will not claim.** The adapter's injection
+report carries the message text and nothing else, so the correlation is textual
+and deliberately conservative:
+
+- an **uncapped** report must equal the delivered text exactly, after both sides
+  apply the same normalization (whitespace collapse over the union of Go's and
+  JavaScript's whitespace classes, so U+FEFF and U+0085 behave identically on
+  both sides);
+- a report the adapter **flagged as truncated** (`"truncated": true` on the
+  steered event) may match by prefix, because only then is it known to be a
+  prefix of the message. The flag is the licence, and it is a fact the adapter
+  asserts — never a shape read off the text. The trailing `…` an excerpt carries
+  is a display detail: a message can end in one without having been capped, so
+  sniffing it would let a foreign message buy the prefix rule and consume an
+  in-flight delivery's identity. An adapter that reports no flag is treated as
+  reporting whole messages, which is the safe reading;
+- the match must be **unique**. If two pending deliveries could explain the same
+  report (identical texts, or a truncated excerpt that prefixes both), the
+  injection is recorded with **no** id. Both callers then report an
+  indeterminate result and every bystander is interrupted, because an arbitrary
+  first match would be a coin flip on whose answer the close is.
+
+This is an acknowledgement correlated by text, not an identity carried through
+the agent: text cannot prove which source produced identical text. A human
+typing text byte-identical to an in-flight steer at that moment is
+indistinguishable, and that residue is accepted rather than papered over.
+
+For wire compatibility `injections` also decodes the bare `["…"]` form an earlier
+runner sent, as injections with no identity: refusing it would fail the whole
+frame's decode and cost every result in it. The opposite direction is **not**
+covered — a gmuxd older than these fields fails to decode the object form
+wholesale — so runner and daemon must be upgraded together, as they are by
+`gmux daemon restart` after an install.
 
 ### Outcome vocabulary
 

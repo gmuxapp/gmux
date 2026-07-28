@@ -682,12 +682,21 @@ func TestFirstPromptOfAFreshSessionReturnsItsAnswer(t *testing.T) {
 
 // A steer joins a turn that is already open, so its identity is knowable before
 // delivery: the steer may claim the merged close of THAT turn, and nothing else.
+//
+// Claiming it also requires the adapter to have acknowledged that the steer's
+// text entered the loop (ADR 0027's self-exclusion rule, added in the steer
+// slice), which is what the injection on the close record is: without it the
+// close might be the pre-injection answer, and that is reported as indeterminate
+// instead — see TestUnacknowledgedSteerReportsIndeterminate.
 func TestSteerClaimsTheTurnItJoined(t *testing.T) {
 	h := newAgentHarness(t, liveRow("s", true))
 	h.openTurn(5, "go")
 	get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "no, this way", "mode": modeSteer}))
 	<-h.prompts
-	h.closeTurn(5, outcomeCompleted, "post-steer answer")
+	h.setFrame(&sessioncoord.TurnFrame{Seq: 105, Last: &sessioncoord.TurnClose{
+		TurnSeq: 5, Outcome: outcomeCompleted, Output: "post-steer answer",
+		Injections: []sessioncoord.TurnInjection{{Text: "no, this way", DeliveryID: harnessDeliveryID}},
+	}})
 	h.publish(statusOutcome("s", false, false, false))
 	got := get()
 	if got.data()["output"] != "post-steer answer" {

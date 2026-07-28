@@ -824,7 +824,14 @@ func (c *Coordinator) drain(ctx context.Context, id centralstore.SessionID, gene
 				// the close reads the result asserted for that exact turn.
 				c.registry.setFrame(id, generation, ev.Frame)
 				if ev.FrameOnly {
-					continue // nothing durable to apply
+					// Nothing durable to apply — but an armed wait may have to
+					// resolve on it: a mid-turn injection changes what the turn's
+					// answer means and interrupts every other waiter (ADR 0027,
+					// "Steering interrupts waits"). It writes no row, so no domain
+					// outcome announces it; publish the frame as a transient signal
+					// so waiters see it without polling.
+					c.publishFrameSignal(id, ev.Frame)
+					continue
 				}
 			}
 			if ev.TransientActivity {

@@ -812,10 +812,17 @@ else is waiting on — a steer, or a follow-up merged into the active loop —
 changes the contract of the pending answer, so it resolves that wait early:
 exit 2, reason `steered`, report on stderr carrying the injected text. The
 turn itself keeps running; the waiter re-arms if it still cares. The injecting
-request's own sync wait is excluded by runner-local correlation with a real
-identity: the delivery carries an id, and the injector may claim the merged
-close **only after the correlated `message_start` steer event acknowledged
-that its text entered the loop**. If the turn settles before that
+request's own sync wait is excluded by runner-local correlation: the delivery
+carries an id, and the injector may claim the merged close **only after a
+`message_start` steer event was unambiguously correlated to it by text** —
+exact equality under one shared normalization, or an extension-marked
+truncation prefix. Ambiguity (identical pending texts, an unmarked prefix)
+credits the acknowledgement to nobody: the injectors resolve indeterminate and
+bystanders are interrupted by the id-less injection. One residue is accepted
+rather than closed: a human typing text byte-identical to an in-flight steer
+at the same moment is indistinguishable by construction — and the merged
+answer then reflects that identical instruction, a distinction without a
+difference. If the turn settles before that
 acknowledgement arrives, pi may have closed without consuming the injection —
 the injector's result is then indeterminate (reported as such), never the
 pre-injection answer under exit 0. And the claim holds only while the

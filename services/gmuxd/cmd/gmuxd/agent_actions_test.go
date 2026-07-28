@@ -55,7 +55,7 @@ type fakeTimer struct {
 
 func (t *fakeTimer) fire() { t.ch <- time.Now() }
 
-type promptCall struct{ endpoint, incarnation, prompt, delivery, require string }
+type promptCall struct{ endpoint, incarnation, prompt, delivery, require, deliveryID string }
 
 type agentHarness struct {
 	store    *centralstore.Store
@@ -126,9 +126,13 @@ func (h *agentHarness) currentLive(id centralstore.SessionID) (sessioncoord.Runt
 // and harnessIncarnation the identity of the runner process behind it. Every
 // semantic call is conditional on the latter, so a runtime a test hands the
 // handler must carry one or delivery is refused before it starts.
+// harnessDeliveryID is the identity the harness mints for a delivery into a
+// running turn, so a test can express "the adapter acknowledged THIS request's
+// injection" (steer self-exclusion) deterministically.
 const (
 	harnessGeneration  = uint64(7)
 	harnessIncarnation = "inc-A"
+	harnessDeliveryID  = "d-1"
 )
 
 func newAgentHarness(t *testing.T, rows ...centralstore.NewSession) *agentHarness {
@@ -264,6 +268,16 @@ func (h *agentHarness) closeTurn(seq uint64, outcome, output string) {
 	}})
 }
 
+// mergedClose is the settled frame of a turn that took THIS harness's injection
+// and then closed: the shape a steer or a merged follow-up must see before it may
+// claim the close as its own result.
+func mergedClose(seq uint64, outcome, output string) *sessioncoord.TurnFrame {
+	return &sessioncoord.TurnFrame{Seq: seq + 100, Last: &sessioncoord.TurnClose{
+		TurnSeq: seq, Outcome: outcome, Output: output,
+		Injections: []sessioncoord.TurnInjection{{Text: "injected", DeliveryID: harnessDeliveryID}},
+	}}
+}
+
 // seedActive overrides this session's seeded status without touching the store,
 // which is how a test expresses "the seed disagrees with the store read".
 func (h *agentHarness) seedStatus(id string, o sessioncoord.Outcome) {
@@ -302,7 +316,7 @@ func (h *agentHarness) deps() agentDeps {
 			h.setLive(func(centralstore.SessionID) (sessioncoord.Runtime, bool) { return rt, true })
 			return rt, nil
 		},
-		sendPrompt: func(ctx context.Context, endpoint, incarnation, prompt, delivery, require string) error {
+		sendPrompt: func(ctx context.Context, endpoint, incarnation, prompt, delivery, require, deliveryID string) error {
 			if err := h.checkOwner(endpoint, incarnation); err != nil {
 				return err
 			}
@@ -314,7 +328,7 @@ func (h *agentHarness) deps() agentDeps {
 				// the window; it is a bug, not a slower path.
 				return errors.New("harness: prompt delivered before any subscription existed")
 			}
-			h.prompts <- promptCall{endpoint, incarnation, prompt, delivery, require}
+			h.prompts <- promptCall{endpoint, incarnation, prompt, delivery, require, deliveryID}
 			if h.onPrompt != nil {
 				h.onPrompt()
 			}
@@ -340,6 +354,7 @@ func (h *agentHarness) deps() agentDeps {
 			h.timers <- tm
 			return tm.ch
 		},
+		newDeliveryID: func() string { return harnessDeliveryID },
 		frame: func(id centralstore.SessionID) *sessioncoord.TurnFrame {
 			h.frameReads.Add(1)
 			h.mu.Lock()
@@ -1088,7 +1103,11 @@ func TestFollowUpResolvesOnTheMergedClose(t *testing.T) {
 		h.openTurn(9, "first ask") // the loop the follow-up will merge into
 		get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "and then", "mode": modeFollowUp}))
 		<-h.prompts
-		h.closeTurn(9, outcomeCompleted, "merged answer")
+		// The adapter acknowledges that this follow-up's text entered the running
+		// loop, which is what entitles it to the merged close (ADR 0027's steer
+		// self-exclusion; without the acknowledgement the close might predate the
+		// injection and is reported indeterminate).
+		h.setFrame(mergedClose(9, outcomeCompleted, "merged answer"))
 		h.publish(statusOutcome("s", false, false, false))
 		got := get()
 		if got.data()["outcome"] != outcomeCompleted || got.data()["output"] != "merged answer" {
@@ -1100,7 +1119,7 @@ func TestFollowUpResolvesOnTheMergedClose(t *testing.T) {
 		h.openTurn(9, "first ask")
 		get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "and then", "mode": modeFollowUp}))
 		<-h.prompts
-		h.closeTurn(9, outcomeError, "")
+		h.setFrame(mergedClose(9, outcomeError, ""))
 		h.publish(statusOutcome("s", false, true, false))
 		got := get()
 		if got.data()["outcome"] != outcomeError {

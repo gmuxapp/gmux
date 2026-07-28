@@ -208,7 +208,7 @@ type agentDeps struct {
 	subscribe        func(ctx context.Context) ([]sessioncoord.Outcome, <-chan sessioncoord.Outcome, func(), error)
 	live             func(id centralstore.SessionID) (sessioncoord.Runtime, bool)
 	resume           func(ctx context.Context, id centralstore.SessionID) (sessioncoord.Runtime, error)
-	sendPrompt       func(ctx context.Context, endpoint, incarnation, prompt, delivery, require string) error
+	sendPrompt       func(ctx context.Context, endpoint, incarnation, prompt, delivery, require, deliveryID string) error
 	sendCancel       func(ctx context.Context, endpoint, incarnation string) error
 	admissionWindow  time.Duration
 	deliveryTimeout  time.Duration
@@ -220,6 +220,22 @@ type agentDeps struct {
 	// "this deployment retains no frames", under which every close is served
 	// result-free.
 	frame func(id centralstore.SessionID) *sessioncoord.TurnFrame
+	// newDeliveryID mints the identity a prompt delivered INTO A RUNNING TURN
+	// carries, so the runner can correlate the adapter's injection report back to
+	// this request and this request alone (ADR 0027's steer self-exclusion).
+	// Substituted in tests for a deterministic token.
+	newDeliveryID func() string
+}
+
+// deliveryID mints one delivery identity, or "" when this deployment has no
+// minter (tests that never exercise self-exclusion). An empty id is the safe
+// degradation: the injector then cannot recognize its own message and reports an
+// indeterminate result instead of claiming an answer.
+func (d agentDeps) deliveryID() string {
+	if d.newDeliveryID == nil {
+		return ""
+	}
+	return d.newDeliveryID()
 }
 
 // turnFrame reads the retained frame for a session, or nil.
@@ -239,6 +255,9 @@ func productionAgentDeps(boot *Bootstrap, gmuxBin string) agentDeps {
 		},
 		resume:     boot.Coordinator.Resume,
 		sendPrompt: discovery.SendPrompt,
+		newDeliveryID: func() string {
+			return newDeliveryID()
+		},
 		sendCancel: discovery.SendCancel,
 		frame: func(id centralstore.SessionID) *sessioncoord.TurnFrame {
 			return boot.Registry.Frame(id)
@@ -471,9 +490,25 @@ func handleAgentPromptCentral(w http.ResponseWriter, r *http.Request, deps agent
 	// it binds at the active edge instead (see runAgentWait) — binding it to
 	// whatever is running now would let a stale seed bit hand it the PREVIOUS
 	// turn's answer.
+	//
+	// The same condition decides whether this delivery needs an IDENTITY: only a
+	// request that injects into a running loop has a self-exclusion problem to
+	// solve, and only for it does the runner have to tell gmux's text from a
+	// human's. A plain prompt (and a follow-up to an idle agent) starts its own
+	// turn, so its text is that turn's trigger, not an injection into anyone's
+	// wait.
 	var observedSeq uint64
+	var watch injectionWatch
+	deliveryID := ""
 	if baselineActive && req.Mode != modePrompt {
-		observedSeq = deps.turnFrame(sid).CurrentTurnSeq()
+		frame := deps.turnFrame(sid)
+		observedSeq = frame.CurrentTurnSeq()
+		if observedSeq != 0 {
+			deliveryID = deps.deliveryID()
+			// Injections already on the turn predate this request and are not its
+			// business; only what enters the loop from here on can supersede it.
+			watch = injectionWatch{turnSeq: observedSeq, baseline: baselineInjections(frame, observedSeq), deliveryID: deliveryID}
+		}
 	}
 	spec := agentWaitSpec{
 		baselineActive: baselineActive,
@@ -493,6 +528,7 @@ func handleAgentPromptCentral(w http.ResponseWriter, r *http.Request, deps agent
 		execution:         req.ExecTimeout,
 		generation:        deliveredGen,
 		observedSeq:       observedSeq,
+		watch:             watch,
 		frame:             func() *sessioncoord.TurnFrame { return deps.turnFrame(sid) },
 		generationLost:    func() bool { return deps.generationLost(sid, deliveredGen) },
 	}
@@ -501,7 +537,7 @@ func handleAgentPromptCentral(w http.ResponseWriter, r *http.Request, deps agent
 	// ctx-only would let a wedged PTY write park this request for as long as
 	// the client tolerates.
 	dctx, releaseDelivery := context.WithTimeout(r.Context(), deps.delivery())
-	err = deps.sendPrompt(dctx, runtime.Endpoint, runtime.Incarnation, req.Prompt, delivery, require)
+	err = deps.sendPrompt(dctx, runtime.Endpoint, runtime.Incarnation, req.Prompt, delivery, require, deliveryID)
 	releaseDelivery()
 	if err != nil {
 		writeAgentDeliveryError(w, r, dctx, opPrompt, err)
@@ -635,6 +671,17 @@ func finishAgentAction(w http.ResponseWriter, r *http.Request, outcomes <-chan s
 	if res.Cause != "" {
 		data["cause"] = res.Cause
 	}
+	// The report fields, rendered by the CLI from RELAYED TURN FACTS only (ADR
+	// 0027, "Output routing"): the trigger excerpt names what the turn was asked
+	// to do, and steered_by carries the message that changed it. Absent rather
+	// than empty, so "no trigger was asserted" and "the trigger was blank" stay
+	// distinguishable.
+	if res.Trigger != "" {
+		data["trigger"] = res.Trigger
+	}
+	if res.SteeredBy != "" {
+		data["steered_by"] = res.SteeredBy
+	}
 	// A completed turn carries the answer the ADAPTER asserted for exactly this
 	// turn (res.Close is nil unless the settled frame's turn_seq matched the turn
 	// this request observed). Any other outcome carries no output: an interrupted
@@ -674,6 +721,11 @@ type agentWaitSpec struct {
 	// (a steer, a merged follow-up); otherwise it is learned at the turn-start
 	// edge. 0 means "no turn of ours is identified", which serves no result.
 	observedSeq uint64
+	// watch is this wait's injection watch on the turn it is bound to (see
+	// steer_watch.go). It is pre-armed for a request that injected into a running
+	// loop — carrying that request's delivery identity, so its own steer does not
+	// interrupt it — and armed at the turn-start edge otherwise.
+	watch injectionWatch
 	// frame reads the retained turn frame. It is the fallback for a resolution
 	// whose outcome carried no frame (a coalesced publish, a seeded look); nil
 	// makes every close result-free.
@@ -690,6 +742,13 @@ type agentWaitResult struct {
 	Admission string
 	Outcome   string
 	Cause     string
+	// Trigger is the excerpt of what started the turn this wait observed, from
+	// the runner-asserted frame. It is the report's "what was this turn asked to
+	// do", and it is never re-read from the conversation.
+	Trigger string
+	// SteeredBy is the injected excerpt that resolved this wait early, for
+	// Outcome steered.
+	SteeredBy string
 	// Close is the adapter's asserted record for the turn this wait observed,
 	// or nil when no matching settled frame was available (a non-asserting
 	// adapter, a raw PUT /status close, a version-skewed runner, or two
@@ -745,6 +804,7 @@ func runAgentWait(ctx context.Context, outcomes <-chan sessioncoord.Outcome, ses
 	active := spec.baselineActive
 	sawActive := active
 	observedSeq := spec.observedSeq
+	watch := spec.watch
 	// frameFor prefers the frame stamped on the resolving outcome (retained at
 	// apply time for the generation that published it) and falls back to the
 	// registry read for a resolution that carried none.
@@ -825,6 +885,17 @@ func runAgentWait(ctx context.Context, outcomes <-chan sessioncoord.Outcome, ses
 				}
 				return res
 			}
+			// An injection into the turn this wait is bound to resolves it early:
+			// the answer it was promised is not the answer the loop will now give
+			// (ADR 0027, "Steering interrupts waits"). Checked before the Upserted
+			// filter because an injection writes no row — it arrives as a transient
+			// frame signal, with no session attached.
+			if v := watch.check(frameFor(o)); v.Steered {
+				return agentWaitResult{
+					Admission: res.Admission, Outcome: outcomeSteered, Cause: v.Cause,
+					SteeredBy: v.Text, Trigger: frameFor(o).CurrentTurn(watch.turnSeq).TriggerExcerpt(),
+				}
+			}
 			if o.Type != sessioncoord.OutcomeUpserted || o.Session == nil {
 				continue
 			}
@@ -841,6 +912,12 @@ func runAgentWait(ctx context.Context, outcomes <-chan sessioncoord.Outcome, ses
 				// no turn until this edge.
 				if seq := frameFor(o).CurrentTurnSeq(); seq != 0 {
 					observedSeq = seq
+					// A turn this request STARTED carries no injections yet, and
+					// this request injected nothing into it: every injection from
+					// here on is somebody else's and interrupts this wait.
+					if watch.turnSeq == 0 {
+						watch = injectionWatch{turnSeq: seq}
+					}
 				}
 				if !admitted {
 					admitted = true
@@ -869,6 +946,18 @@ func runAgentWait(ctx context.Context, outcomes <-chan sessioncoord.Outcome, ses
 			// (classifyTurnClose) so the two paths cannot drift.
 			res.Outcome = classifyTurnClose(row.Error, row.Interrupted)
 			res.Close = frameFor(o).ClosedTurn(observedSeq)
+			res.Trigger = res.Close.TriggerExcerpt()
+			// The close carries the turn's whole injection list, so a steer whose
+			// transient signal never arrived (or arrived in this same look) is still
+			// caught here rather than answered with the merged result — and an
+			// injector whose own text the loop never acknowledged is told so instead
+			// of being handed the pre-injection answer.
+			if outcome, cause, text := watch.closeVerdict(res.Close); outcome != "" {
+				return agentWaitResult{
+					Admission: res.Admission, Outcome: outcome, Cause: cause,
+					SteeredBy: text, Trigger: res.Trigger,
+				}
+			}
 			return res
 		}
 	}
