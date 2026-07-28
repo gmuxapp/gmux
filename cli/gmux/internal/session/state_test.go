@@ -126,7 +126,7 @@ func TestCloseTurnIsAtomic(t *testing.T) {
 				defer done.Done()
 				start.Wait()
 				// Each racer writes a distinguishable closure.
-				won[i] = s.CloseTurn(&adapter.Status{Interrupted: i%2 == 0, Error: i%2 == 1})
+				won[i] = s.CloseTurnFrame(TurnClose{}, &adapter.Status{Interrupted: i%2 == 0, Error: i%2 == 1})
 			}()
 		}
 		start.Done()
@@ -139,7 +139,7 @@ func TestCloseTurnIsAtomic(t *testing.T) {
 			}
 		}
 		if winners != 1 {
-			t.Fatalf("CloseTurn winners = %d, want exactly 1", winners)
+			t.Fatalf("CloseTurnFrame winners = %d, want exactly 1", winners)
 		}
 		got := s.StatusSnapshot()
 		if got == nil || got.Active {
@@ -149,8 +149,8 @@ func TestCloseTurnIsAtomic(t *testing.T) {
 			t.Fatalf("status = %+v, want exactly one racer's closure", got)
 		}
 		// A closed turn stays closed for every later end.
-		if s.CloseTurn(&adapter.Status{}) {
-			t.Fatal("CloseTurn succeeded against an already-closed turn")
+		if s.CloseTurnFrame(TurnClose{}, &adapter.Status{}) {
+			t.Fatal("CloseTurnFrame succeeded against an already-closed turn")
 		}
 	}
 }
@@ -159,8 +159,8 @@ func TestCloseTurnIsAtomic(t *testing.T) {
 // a status has no open turn, so an end must not fabricate one.
 func TestCloseTurnRequiresReportedOpenTurn(t *testing.T) {
 	s := New(Config{ID: "s", Command: []string{"pi"}, Adapter: "pi"})
-	if s.CloseTurn(&adapter.Status{Interrupted: true}) {
-		t.Fatal("CloseTurn must fail with no reported status")
+	if s.CloseTurnFrame(TurnClose{}, &adapter.Status{Interrupted: true}) {
+		t.Fatal("CloseTurnFrame must fail with no reported status")
 	}
 	if s.StatusSnapshot() != nil {
 		t.Fatalf("status = %+v, want it left unreported", s.StatusSnapshot())
@@ -363,7 +363,7 @@ func TestAdmitActionReservation(t *testing.T) {
 			t.Fatalf("steer = %v/%v, want Admitted and no reservation", v, reserved)
 		}
 		// The steered turn ends; the next plain prompt is immediately fine.
-		s.CloseTurn(&adapter.Status{})
+		s.CloseTurnFrame(TurnClose{}, &adapter.Status{})
 		if v, _ := deliver(t, s, RequireInactive, ReserveIfInactive); v != Admitted {
 			t.Fatalf("prompt after a steered turn = %v, want Admitted", v)
 		}
@@ -397,7 +397,7 @@ func TestAdmitActionReservation(t *testing.T) {
 		// The CURRENT turn ending is not evidence about the QUEUED prompt
 		// either: it will start its own turn afterwards, so a plain prompt now
 		// would still be a duplicate.
-		s.CloseTurn(&adapter.Status{})
+		s.CloseTurnFrame(TurnClose{}, &adapter.Status{})
 		if v, _ := deliver(t, s, RequireInactive, ReserveIfInactive); v != RefusedPending {
 			t.Fatalf("prompt after the pre-existing turn ended = %v, want RefusedPending", v)
 		}
@@ -406,7 +406,7 @@ func TestAdmitActionReservation(t *testing.T) {
 		if s.ReservationHeld() {
 			t.Fatal("a fresh active edge must release the reservation")
 		}
-		s.CloseTurn(&adapter.Status{})
+		s.CloseTurnFrame(TurnClose{}, &adapter.Status{})
 		if v, _ := deliver(t, s, RequireInactive, ReserveIfInactive); v != Admitted {
 			t.Fatalf("prompt after the queued turn ran = %v, want Admitted", v)
 		}
@@ -421,7 +421,7 @@ func TestAdmitActionReservation(t *testing.T) {
 			func(s *State) { s.SetStatus(&adapter.Status{Error: true}) },
 			func(s *State) { s.SetStatus(&adapter.Status{Interrupted: true}) },
 			func(s *State) { s.SetStatus(nil) },
-			func(s *State) { s.CloseTurn(&adapter.Status{}) },
+			func(s *State) { s.CloseTurnFrame(TurnClose{}, &adapter.Status{}) },
 		} {
 			s := New(Config{ID: "s1"})
 			if _, reserved := deliver(t, s, RequireInactive, ReserveIfInactive); !reserved {
@@ -469,7 +469,7 @@ func TestAdmitActionReservation(t *testing.T) {
 			t.Fatal("a failed delivery left a reservation behind")
 		}
 		// And the recorded edge is not carried over to the NEXT delivery.
-		s.CloseTurn(&adapter.Status{})
+		s.CloseTurnFrame(TurnClose{}, &adapter.Status{})
 		if _, reserved := s.AdmitAction(RequireInactive, ReserveIfInactive); !reserved {
 			t.Fatal("expected the retry to reserve")
 		}
@@ -519,7 +519,7 @@ func TestAdmitActionIsAtomicAgainstStatusWrites(t *testing.T) {
 				runtime.Gosched()
 			}
 			s.SetStatus(&adapter.Status{Active: true}) // the only release
-			s.CloseTurn(&adapter.Status{})
+			s.CloseTurnFrame(TurnClose{}, &adapter.Status{})
 		}
 	}()
 

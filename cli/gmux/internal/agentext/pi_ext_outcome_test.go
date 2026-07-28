@@ -100,9 +100,10 @@ func TestPiExtNormalizeOutcome(t *testing.T) {
 	}
 }
 
-// TestPiExtAgentEndOutcomes drives the extension's real agent_end handler and
-// asserts the posted turn-end body, so the mapping is pinned where it is
-// actually consumed (the last assistant message's stopReason).
+// TestPiExtAgentEndOutcomes drives the extension's real agent_end +
+// agent_settled handlers and asserts the posted turn-end body, so the mapping is
+// pinned where it is actually consumed (the last assistant message's stopReason
+// from the message list captured at the last agent_end).
 func TestPiExtAgentEndOutcomes(t *testing.T) {
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
@@ -142,6 +143,7 @@ func TestPiExtAgentEndOutcomes(t *testing.T) {
 				{ role: "user", content: "go" },
 				{ role: "assistant", content: "done", stopReason: ` + tc.stopReason + ` },
 			] }, ctx);
+			handlers.agent_settled({}, ctx);
 			await new Promise((r) => setTimeout(r, 300));
 		`
 		driverPath := filepath.Join(dir, "driver.mjs")

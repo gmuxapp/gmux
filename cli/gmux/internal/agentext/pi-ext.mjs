@@ -16,14 +16,33 @@
 //                                                         anything else
 //   { op: "session", path, id, name, slug, cwd, reason } on bind (session_start)
 //                                                         and rename (session_info_changed)
-//   { op: "turn", phase: "start" }                       on agent loop start
-//   { op: "turn", phase: "end", outcome, title }         on agent loop end
+//   { op: "turn", phase: "start", turn_seq, trigger }   on agent loop start
+//   { op: "turn", phase: "steered", turn_seq, text }    on a mid-turn user message
+//   { op: "turn", phase: "end", turn_seq, outcome,
+//     output, truncated, diagnostic, title }             on agent_settled
+//
+// The turn events are the SOURCE ASSERTION of a turn's identity, boundary and
+// result (ADR 0027, 2026-07-28 amendment): gmux never reconstructs a turn's
+// answer from the conversation file. `turn_seq` is an extension-local monotonic
+// counter binding one turn's start, its injections and its close together, so
+// every downstream consumer pairs facts by it and can never pair a running
+// turn's trigger with the previous turn's answer.
 //
 // `name`/`title` is pi's session name when it has one; until pi titles the
 // conversation we fall back to its first user message (truncated), so a working
 // session is identifiable by what it's about rather than a bare cwd. This
 // mirrors what codex/claude hooks already report; per ADR 0015 the translation
 // from pi's events to the gmux protocol lives here, at the typed-access point.
+//
+// The boundary is `agent_settled`, not `agent_end`: pi emits `agent_end` per
+// retry attempt (a transient provider error emits an error-shaped agent_end and
+// pi then retries via agent.continue(), which emits a fresh agent_start), while
+// `agent_settled` fires exactly once per run, "after an agent run has fully
+// settled and no automatic retry, compaction, or queued continuation will run".
+// So: the FIRST agent_start of a run opens the turn, every agent_end refreshes
+// the captured message list, and agent_settled closes the turn using the last
+// captured list. pi merges queued follow-ups into the running loop, so one
+// settled run is exactly one gmux turn.
 //
 // outcome is pi's terminal state normalized to a stable vocabulary
 // ("completed" | "interrupted" | "error"); the runner owns what each means for the
@@ -46,6 +65,33 @@ export default function (pi) {
   // title until pi names the session. Reset on every bind (a switch/resume/fork
   // is a different conversation whose previous fallback no longer applies).
   let firstUserTitle = "";
+
+  // --- turn identity (source-asserted) -------------------------------------
+  // turnSeq is monotonic for the life of this extension instance and never
+  // reset, not even on a rebind: it is an identity, and reusing a number after
+  // a switch/resume would let a stale close match a fresh turn. The runner's
+  // frame is cleared on rebind instead.
+  let turnSeq = 0;
+  // runOpen is true from the FIRST agent_start of a run until agent_settled.
+  // pi emits agent_start again for every retry/continuation of the same run, so
+  // without this the retries would each look like a new turn.
+  let runOpen = false;
+  // heldTrigger is the prompt text captured at before_agent_start, which fires
+  // after pi's model/auth preflight and immediately before the loop starts. It
+  // is held rather than posted there because a throw between the two would
+  // otherwise report a turn that never ran; the active edge stays on
+  // agent_start and carries the trigger with it.
+  let heldTrigger = "";
+  // settledMessages is the message list of the LAST agent_end of the run — the
+  // final attempt's — which is what the settled turn's output and stop reason
+  // are read from.
+  let settledMessages = [];
+  // sawAssistant/triggerNoted separate the loop's own opening user message(s)
+  // from genuine mid-turn injections: pi emits message_start for the prompt
+  // right after agent_start, and for every steered/queued message as it enters
+  // the loop.
+  let sawAssistant = false;
+  let triggerNoted = false;
 
   // --- session identity: which conversation pi is bound to ----------------
   // getSessionFile() is the resolved absolute path of the active conversation,
@@ -102,6 +148,12 @@ export default function (pi) {
     // positive evidence the composer is alive.
     post(sock, { op: "ready" });
     firstUserTitle = ""; // new bind → forget the previous conversation's fallback
+    // A rebind abandons whatever run was open on the previous conversation: its
+    // settled event will never arrive, and reporting it against the new
+    // conversation would attribute the old turn's answer to the new one.
+    runOpen = false;
+    heldTrigger = "";
+    settledMessages = [];
     reportSession(ev?.reason ?? "start", ctx);
   });
 
@@ -115,17 +167,51 @@ export default function (pi) {
   // pi's agent loop bounds map onto the sidebar's active/idle; agent_end
   // carries the final messages so we read the terminal stopReason off-disk and
   // normalize it. The runner decides what each outcome means for the sidebar.
-  pi.on("agent_start", () => post(sock, { op: "turn", phase: "start" }));
+  // The prompt text of the run that is about to start. pi validates the model
+  // and credentials BEFORE emitting this (agent-session.js: the auth throw
+  // precedes emitBeforeAgentStart), and a queued steer/follow-up returns even
+  // earlier, so this fires once per real run and never for a prompt that fails
+  // preflight.
+  pi.on("before_agent_start", (ev) => {
+    heldTrigger = excerpt(ev?.prompt ?? "");
+  });
+
+  pi.on("agent_start", () => {
+    if (runOpen) return; // a retry or queued continuation of the SAME run
+    turnSeq++;
+    runOpen = true;
+    sawAssistant = false;
+    triggerNoted = false;
+    settledMessages = [];
+    post(sock, { op: "turn", phase: "start", turn_seq: turnSeq, trigger: heldTrigger || undefined });
+  });
+
+  // A user message entering a RUNNING loop extends that turn and changes what
+  // its answer means — whether gmux delivered it, another agent steered, or a
+  // human typed it into the TUI. It is reported as an injection on the open
+  // turn, never as a new turn (pi has one loop, hence one turn).
+  pi.on("message_start", (ev) => {
+    if (!runOpen) return;
+    const msg = ev?.message;
+    if (msg?.role === "assistant") {
+      sawAssistant = true;
+      return;
+    }
+    const text = extractUserText(msg);
+    if (!text) return;
+    if (!sawAssistant && !triggerNoted) {
+      // The loop's own opening prompt, replayed as a message_start right after
+      // agent_start. It is the trigger, not an injection.
+      triggerNoted = true;
+      if (!heldTrigger) heldTrigger = excerpt(text);
+      return;
+    }
+    post(sock, { op: "turn", phase: "steered", turn_seq: turnSeq, text: excerpt(text) });
+  });
 
   pi.on("agent_end", (ev, ctx) => {
     const msgs = ev.messages ?? [];
-    let stopReason;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i]?.role === "assistant") {
-        stopReason = msgs[i].stopReason;
-        break;
-      }
-    }
+    settledMessages = msgs;
     // Capture the first user message once, as the title fallback until pi names
     // the session. ev.messages on the first turn carries the opening prompt.
     if (!firstUserTitle) {
@@ -137,16 +223,120 @@ export default function (pi) {
         }
       }
     }
+    // A brand-new session's file exists by now; make sure it's attributed.
+    // Reported here rather than at settle so attribution does not wait out a
+    // retry sequence.
+    reportSession("activity", ctx);
+  });
+
+  // The turn boundary. It fires in a `finally` around pi's whole run
+  // (agent-session.js _runAgentPrompt), so it is reached for a clean stop, an
+  // abort and a thrown/errored run alike.
+  pi.on("agent_settled", (_ev, ctx) => {
+    if (!runOpen) return; // no run of ours is open (e.g. settled after a rebind)
+    runOpen = false;
+    const seq = turnSeq;
+    heldTrigger = "";
+    const msgs = settledMessages;
+    settledMessages = [];
+    const last = lastAssistant(msgs);
+    const outcome = normalizeOutcome(last?.stopReason);
     let name;
     try {
       name = ctx.sessionManager.getSessionName();
     } catch {}
-    const outcome = normalizeOutcome(stopReason);
     const title = name || firstUserTitle;
-    post(sock, { op: "turn", phase: "end", outcome, title: title || undefined });
-    // A brand-new session's file exists by now; make sure it's attributed.
-    reportSession("activity", ctx);
+    const ev = {
+      op: "turn",
+      phase: "end",
+      turn_seq: seq,
+      outcome,
+      title: title || undefined,
+    };
+    if (outcome === "completed") {
+      // Only a completed turn carries a result. An interrupted or errored turn
+      // has no answer to report, and reporting its partial prose as one is the
+      // staleness this design exists to prevent.
+      const capped = capOutput(assistantProse(last));
+      if (capped.text) {
+        ev.output = capped.text;
+        if (capped.truncated) ev.truncated = true;
+      }
+    } else if (outcome === "error") {
+      // The account channel, never the result: a short reason, if pi gave one.
+      const diag = excerpt(last?.errorMessage ?? "");
+      if (diag) ev.diagnostic = diag;
+    }
+    post(sock, ev);
   });
+}
+
+// lastAssistant returns the final assistant message of a settled run's message
+// list — the one carrying the run's terminal stopReason.
+function lastAssistant(msgs) {
+  for (let i = (msgs?.length ?? 0) - 1; i >= 0; i--) {
+    if (msgs[i]?.role === "assistant") return msgs[i];
+  }
+  return undefined;
+}
+
+// assistantProse extracts what the agent SAID from a pi assistant message: the
+// text blocks only. A pi assistant message routinely mixes prose with toolCall
+// and thinking blocks, so "the last assistant message" and "the last thing the
+// agent said" are different strings — this mirrors the Go renderer
+// (packages/adapter/adapters/pi_conversation.go renderPiContent) so a carried
+// result and a conversation read agree. A tool-only tail yields "": the turn
+// completed with no output, which is reported by OMITTING the field.
+export function assistantProse(msg) {
+  if (!msg) return "";
+  const c = msg.content;
+  if (typeof c === "string") return c.trim();
+  if (!Array.isArray(c)) return "";
+  const parts = [];
+  for (const b of c) {
+    if (b && b.type === "text" && typeof b.text === "string") {
+      const t = b.text.trim();
+      if (t) parts.push(t);
+    }
+  }
+  return parts.join("\n\n");
+}
+
+// Caps, applied HERE at the source and sized jointly against every hop (the
+// runner's hook body limit and the daemon's SSE scanner limit are sized for the
+// worst-case escaped payload of maxOutputBytes).
+//
+// The invariant: an oversized output NEVER costs the close. The event still
+// closes the turn, `truncated` records that the text was cut, and the full text
+// remains available through the conversation read.
+const maxOutputBytes = 256 * 1024;
+const maxExcerptBytes = 1024;
+
+// capOutput truncates at a UTF-8 boundary (never mid-rune: a lone surrogate
+// would make the close event unserializable, which is exactly the "oversized
+// output costs the close" failure).
+export function capOutput(s) {
+  const bytes = Buffer.from(s ?? "", "utf8");
+  if (bytes.length <= maxOutputBytes) return { text: s ?? "", truncated: false };
+  return { text: decodeWhole(bytes.subarray(0, maxOutputBytes)), truncated: true };
+}
+
+// excerpt collapses whitespace and caps a trigger/injection text. Excerpts are
+// diagnostics (they appear in stderr reports), so a byte cap with an ellipsis is
+// enough; they are never presented as the agent's answer.
+export function excerpt(s) {
+  const collapsed = String(s ?? "").replace(/\s+/g, " ").trim();
+  if (!collapsed) return "";
+  const bytes = Buffer.from(collapsed, "utf8");
+  if (bytes.length <= maxExcerptBytes) return collapsed;
+  return decodeWhole(bytes.subarray(0, maxExcerptBytes - 3)) + "…";
+}
+
+// decodeWhole decodes a byte slice, dropping a trailing partial UTF-8 sequence
+// rather than emitting U+FFFD for it.
+function decodeWhole(buf) {
+  const s = buf.toString("utf8");
+  return s.endsWith("\uFFFD") ? s.slice(0, -1) : s;
 }
 
 // normalizeOutcome maps pi's StopReason vocabulary onto gmux's stable, agent-

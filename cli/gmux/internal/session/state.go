@@ -76,7 +76,7 @@ type State struct {
 	// because that mutex is the runner's ONE ordering mechanism for turn
 	// state: every authoritative status writer in the runner — agent hooks,
 	// OSC 133 prompt marks, PUT /status, the launch/exit lifetime turn —
-	// goes through SetStatus/CloseTurn, so putting the semantic layer's
+	// goes through SetStatus/CloseTurnFrame, so putting the semantic layer's
 	// check-and-reserve in the same critical section makes it atomic
 	// against all of them with no second lock to invert.
 	//
@@ -92,6 +92,16 @@ type State struct {
 	// state about an in-flight delivery, not part of the session's document.
 	reservation reservation
 	activeEdges uint64
+
+	// turnFrame is the adapter-asserted turn record relayed to /events
+	// subscribers (see turnframe.go). Like reservation it lives under this
+	// mutex because that mutex is the runner's one ordering mechanism for turn
+	// state: the frame and the status write that closes a turn must be atomic
+	// and ordered against each other, and against every other status writer.
+	// Unexported and never serialized into the session document: it is live
+	// truth, not row state.
+	turnFrame *TurnFrame
+	frameSeq  uint64
 
 	// SSE subscribers (not serialized)
 	subs []chan Event
@@ -222,36 +232,6 @@ func (s *State) SetStatus(status *adapter.Status) {
 	s.Status = status
 	s.noteStatusWriteLocked(prev, status)
 	s.emit(Event{Type: "status", Data: status})
-}
-
-// CloseTurn atomically closes an OPEN turn with a terminal status, and
-// reports whether it did. A terminal turn end is only meaningful while a turn
-// is open: an end delivered against an already-closed turn is stale (a
-// duplicate, or a hook that fires unconditionally on exit, like Claude's
-// SessionEnd after Stop) and must not rewrite a good closure — Interrupted and
-// Error are durable facts.
-//
-// The check and the write share one critical section on purpose. The caller
-// cannot do StatusSnapshot-then-SetStatus: two concurrent ends (hook POSTs are
-// independent HTTP requests served on their own goroutines) could both observe
-// the open turn and both write, and a concurrent turn start could be
-// interleaved between the check and the write.
-//
-// This is polarity, not turn identity: it cannot recognize a *logically* stale
-// end that arrives after a NEW turn already started. Excluding that ordering is
-// the sender's job — see the delivery serialization in pi-ext.mjs and Claude's
-// sequential hook execution.
-func (s *State) CloseTurn(status *adapter.Status) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.Status == nil || !s.Status.Active {
-		return false
-	}
-	prev := s.Status
-	s.Status = status
-	s.noteStatusWriteLocked(prev, status)
-	s.emit(Event{Type: "status", Data: status})
-	return true
 }
 
 // SetAdapterTitle sets the high-priority title from the adapter (agent hook / conversation file).
