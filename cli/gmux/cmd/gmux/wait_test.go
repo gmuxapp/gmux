@@ -74,7 +74,7 @@ func TestWaitReportsConclusionAndSuppressesStaleResults(t *testing.T) {
 			var stdout bytes.Buffer
 			var code int
 			stderr := captureStderr(t, func() {
-				code = reportWaitResult(sess, "gmux wait", tc.res, false, tc.quiet, &stdout)
+				code = reportWaitResult(sess, "gmux wait", tc.res, false, tc.quiet, false, &stdout)
 			})
 			if code != tc.wantExit {
 				t.Errorf("exit = %d, want %d (stderr=%q)", code, tc.wantExit, stderr)
@@ -99,13 +99,13 @@ func TestWaitReportsConclusionAndSuppressesStaleResults(t *testing.T) {
 func TestWaitPredicateStaysQuiet(t *testing.T) {
 	sess := cliSession{ID: "sess-abcd1234", Adapter: "pi", Alive: true}
 	var stdout bytes.Buffer
-	code := reportWaitResult(sess, "gmux wait", waitResult{Reason: "matched", Output: "not mine to print"}, true, false, &stdout)
+	code := reportWaitResult(sess, "gmux wait", waitResult{Reason: "matched", Output: "not mine to print"}, true, false, false, &stdout)
 	if code != waitExitOK || stdout.Len() != 0 {
 		t.Fatalf("matched: exit=%d stdout=%q", code, stdout.String())
 	}
 	stdout.Reset()
 	stderr := captureStderr(t, func() {
-		code = reportWaitResult(sess, "gmux wait", waitResult{Reason: "died"}, true, false, &stdout)
+		code = reportWaitResult(sess, "gmux wait", waitResult{Reason: "died"}, true, false, false, &stdout)
 	})
 	if code != waitExitError || stdout.Len() != 0 || !strings.Contains(stderr, "before its output matched") {
 		t.Fatalf("died: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr)
@@ -114,7 +114,7 @@ func TestWaitPredicateStaysQuiet(t *testing.T) {
 	// answers "idle" here it answered a different question.
 	stdout.Reset()
 	stderr = captureStderr(t, func() {
-		code = reportWaitResult(sess, "gmux wait", waitResult{Reason: "idle", Outcome: "completed", Output: "x"}, true, false, &stdout)
+		code = reportWaitResult(sess, "gmux wait", waitResult{Reason: "idle", Outcome: "completed", Output: "x"}, true, false, false, &stdout)
 	})
 	if code != waitExitError || stdout.Len() != 0 || !strings.Contains(stderr, "output condition") {
 		t.Fatalf("idle on a predicate wait: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr)
@@ -133,7 +133,7 @@ func TestWaitEndToEndAgainstAStubDaemon(t *testing.T) {
 			})
 		})
 		var code int
-		out := captureStdout(t, func() { code = cmdWait("sess-abcd1234", 30, "", "", false) })
+		out := captureStdout(t, func() { code = cmdWait("sess-abcd1234", 30, "", "", false, false) })
 		if code != waitExitOK || out != "All green.\n" {
 			t.Fatalf("exit=%d stdout=%q", code, out)
 		}
@@ -150,7 +150,7 @@ func TestWaitEndToEndAgainstAStubDaemon(t *testing.T) {
 			})
 		})
 		var code int
-		out := captureStdout(t, func() { code = cmdWait("sess-abcd1234", 0, "", "", true) })
+		out := captureStdout(t, func() { code = cmdWait("sess-abcd1234", 0, "", "", true, false) })
 		if code != waitExitOK || out != "" {
 			t.Fatalf("exit=%d stdout=%q", code, out)
 		}
@@ -161,11 +161,13 @@ func TestWaitEndToEndAgainstAStubDaemon(t *testing.T) {
 			writeErrEnvelope(w, http.StatusRequestTimeout, "timeout", "session did not become idle within timeout")
 		})
 		var code int
-		stderr := captureStderr(t, func() { code = cmdWait("sess-abcd1234", 5, "", "", false) })
+		stderr := captureStderr(t, func() { code = cmdWait("sess-abcd1234", 5, "", "", false, false) })
 		if code != waitExitError {
 			t.Fatalf("exit=%d stderr=%q", code, stderr)
 		}
-		if !strings.Contains(stderr, "timed out after 5s") {
+		// The timeout is reported through the shared status-shaped report now, so
+		// it names the bound and says the turn outlived the wait.
+		if !strings.Contains(stderr, "did not complete: timeout") || !strings.Contains(stderr, "after 5s") {
 			t.Fatalf("stderr=%q", stderr)
 		}
 	})
@@ -179,7 +181,7 @@ func TestWaitEndToEndAgainstAStubDaemon(t *testing.T) {
 		var code int
 		var stderr string
 		out := captureStdout(t, func() {
-			stderr = captureStderr(t, func() { code = cmdWait("sess-abcd1234", 0, "", "", false) })
+			stderr = captureStderr(t, func() { code = cmdWait("sess-abcd1234", 0, "", "", false, false) })
 		})
 		if code != waitExitInterrupted || out != "" {
 			t.Fatalf("exit=%d stdout=%q stderr=%q", code, out, stderr)
@@ -191,7 +193,7 @@ func TestWaitEndToEndAgainstAStubDaemon(t *testing.T) {
 			writeEnvelope(w, http.StatusOK, map[string]any{"reason": "matched"})
 		})
 		var code int
-		out := captureStdout(t, func() { code = cmdWait("sess-abcd1234", 0, "BUILD DONE", "", false) })
+		out := captureStdout(t, func() { code = cmdWait("sess-abcd1234", 0, "BUILD DONE", "", false, false) })
 		if code != waitExitOK || out != "" {
 			t.Fatalf("exit=%d stdout=%q", code, out)
 		}
@@ -206,7 +208,7 @@ func TestWaitEndToEndAgainstAStubDaemon(t *testing.T) {
 				writeErrEnvelope(w, status, "nope", "no")
 			})
 			var code int
-			captureStderr(t, func() { code = cmdWait("sess-abcd1234", 0, "", "", false) })
+			captureStderr(t, func() { code = cmdWait("sess-abcd1234", 0, "", "", false, false) })
 			if code != waitExitError {
 				t.Fatalf("status %d gave exit %d", status, code)
 			}
@@ -310,7 +312,7 @@ func TestWaitHintMatchesWhatCanBeRead(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stdout.Reset()
-			stderr := captureStderr(t, func() { reportWaitResult(sess, "gmux wait", tc.res, false, false, &stdout) })
+			stderr := captureStderr(t, func() { reportWaitResult(sess, "gmux wait", tc.res, false, false, false, &stdout) })
 			if !strings.Contains(stderr, tc.wantSub) {
 				t.Errorf("stderr = %q, want it to mention %q", stderr, tc.wantSub)
 			}
@@ -379,7 +381,7 @@ func TestSkewMessageNamesTheCommand(t *testing.T) {
 		stdout.Reset()
 		var code int
 		stderr := captureStderr(t, func() {
-			code = reportWaitResult(sess, verb, waitResult{Reason: "idle"}, false, true, &stdout)
+			code = reportWaitResult(sess, verb, waitResult{Reason: "idle"}, false, true, false, &stdout)
 		})
 		if code != waitExitError {
 			t.Errorf("%s: exit = %d, want 1", verb, code)

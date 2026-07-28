@@ -371,7 +371,7 @@ func TestAgentPromptSendsMultibytePromptByteExact(t *testing.T) {
 			var code int
 			if tt.positional {
 				text := prompt
-				code = cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text)
+				code = cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text, false)
 			} else {
 				code = agentPromptWithStdin(nil, prompt)
 			}
@@ -466,7 +466,7 @@ func TestAgentPromptRefusesInvalidUTF8BeforeSending(t *testing.T) {
 // guard keys on the actual os.Stdin).
 func agentPromptWithStdin(text *string, raw string) int {
 	if text != nil {
-		return cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, text)
+		return cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, text, false)
 	}
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -476,7 +476,7 @@ func agentPromptWithStdin(text *string, raw string) int {
 	os.Stdin = r
 	go func() { _, _ = w.WriteString(raw); _ = w.Close() }()
 	defer func() { os.Stdin = orig; _ = r.Close() }()
-	return cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, nil)
+	return cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, nil, false)
 }
 
 // TestAgentEnvelopeLessNotFoundIsVersionSkew: a bare net/http 404 on an action
@@ -489,7 +489,7 @@ func TestAgentEnvelopeLessNotFoundIsVersionSkew(t *testing.T) {
 		name string
 		run  func() int
 	}{
-		{"prompt", func() int { text := "go"; return cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text) }},
+		{"prompt", func() int { text := "go"; return cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text, false) }},
 		{"cancel", func() int { return cmdAgentCancel("abcd1234") }},
 		{"status", func() int { return cmdAgentStatus("abcd1234", false) }},
 	} {
@@ -556,7 +556,7 @@ func TestAgentPromptAcceptedWithoutNoWait(t *testing.T) {
 	})
 	stderr := captureStderr(t, func() {
 		text := "go"
-		if code := cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text); code != waitExitOK {
+		if code := cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text, false); code != waitExitOK {
 			t.Errorf("exit = %d, want 0", code)
 		}
 	})
@@ -723,7 +723,7 @@ func TestAgentPromptRequestBody(t *testing.T) {
 				})
 			})
 			text := "review this branch"
-			if code := cmdAgentPrompt("abcd1234", tt.mode, tt.noWait, tt.timeout, &text); code != waitExitOK {
+			if code := cmdAgentPrompt("abcd1234", tt.mode, tt.noWait, tt.timeout, &text, false); code != waitExitOK {
 				t.Fatalf("exit = %d, want 0", code)
 			}
 			req := d.lastRequest(t)
@@ -771,7 +771,7 @@ func TestAgentPromptOutcomeExits(t *testing.T) {
 			d.on(func(w http.ResponseWriter, r *http.Request) { writeEnvelope(w, http.StatusOK, tt.data) })
 			captureStderr(t, func() {
 				text := "go"
-				if code := cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text); code != tt.want {
+				if code := cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text, false); code != tt.want {
 					t.Errorf("exit = %d, want %d", code, tt.want)
 				}
 			})
@@ -788,7 +788,7 @@ func TestAgentPromptDetachedIsQuietSuccess(t *testing.T) {
 	})
 	stderr := captureStderr(t, func() {
 		text := "go"
-		if code := cmdAgentPrompt("abcd1234", agentModePrompt, true, 0, &text); code != waitExitOK {
+		if code := cmdAgentPrompt("abcd1234", agentModePrompt, true, 0, &text, false); code != waitExitOK {
 			t.Errorf("exit = %d, want 0", code)
 		}
 	})
@@ -830,7 +830,7 @@ func TestAgentErrorCodeSurfacing(t *testing.T) {
 			})
 			stderr := captureStderr(t, func() {
 				text := "go"
-				if code := cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text); code != tt.want {
+				if code := cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text, false); code != tt.want {
 					t.Errorf("exit = %d, want %d", code, tt.want)
 				}
 			})
@@ -937,7 +937,10 @@ func TestAgentRefusesPeerSessions(t *testing.T) {
 		name string
 		run  func() int
 	}{
-		{"prompt", func() int { text := "go"; return cmdAgentPrompt("c0b3c1a1@laptop", agentModePrompt, false, 0, &text) }},
+		{"prompt", func() int {
+			text := "go"
+			return cmdAgentPrompt("c0b3c1a1@laptop", agentModePrompt, false, 0, &text, false)
+		}},
 		{"cancel", func() int { return cmdAgentCancel("c0b3c1a1@laptop") }},
 		{"status", func() int { return cmdAgentStatus("c0b3c1a1@laptop", false) }},
 	} {
@@ -1030,7 +1033,7 @@ func TestAgentPromptPrintsTheResultOnlyOnCompletion(t *testing.T) {
 			out := captureStdout(t, func() {
 				captureStderr(t, func() {
 					text := "go"
-					code = cmdAgentPrompt("abcd1234", agentModePrompt, noWait, 0, &text)
+					code = cmdAgentPrompt("abcd1234", agentModePrompt, noWait, 0, &text, false)
 				})
 			})
 			if code != tt.wantExit {

@@ -107,7 +107,7 @@ behind or steer); `--timeout` bounds your wait, never the launch. `--new`
 launches pi only — for any other command, the two-step `gmux -d -- <cmd>` plus
 a prompt remains fully supported and is the shape to use.
 
-`agent prompt` blocks until the turn ends and prints the agent's answer on stdout — the turn's final message only (no `[tool]` lines), as the agent asserted it for that turn (gmux does not reconstruct it from the transcript, so an answer is only ever attributed to the turn that produced it). Exit codes are gmux's global taxonomy, shared by every verb that reports a gmux verdict (`gmux -- <cmd>`/`gmux edit` pass the child's code through, and `gmux daemon|auth|remote` pass gmuxd's): `0` the turn completed, `2` it was intentionally interrupted, `1` anything else (a failed turn, a `--timeout`, a dead runner). A turn that did not complete prints **nothing**: a previous turn's answer must never be handed back as this one's. `gmux agent status <id>` shows whatever exists in that case (and `gmux agent logs --agent -n 1 <id>` the answer alone), and works even after the session has died — as a snapshot read it can be staler than the answer a wait carries.
+`agent prompt` blocks until the turn ends and prints the agent's answer on stdout — the turn's final message only (no `[tool]` lines), as the agent asserted it for that turn (gmux does not reconstruct it from the transcript, so an answer is only ever attributed to the turn that produced it). Exit codes are gmux's global taxonomy, shared by every verb that reports a gmux verdict (`gmux -- <cmd>`/`gmux edit` pass the child's code through, and `gmux daemon|auth|remote` pass gmuxd's): `0` the turn completed, `2` it was intentionally interrupted or the wait was resolved early because somebody steered the turn, `1` anything else (a failed turn, a `--timeout`, a dead runner, an injection the agent never acknowledged). A turn that did not complete prints **nothing on stdout** and a short status-shaped report on stderr instead — outcome, reason, the trigger excerpt, and the injected text when somebody steered — because a previous turn's answer must never be handed back as this one's, and a bare non-zero exit tells you nothing. `--json` swaps both for one stdout envelope (`{outcome, reason, output, trigger, steered_by, truncated, message}`, absent rather than empty) and keeps stderr silent. Every terminal path prints exactly one envelope, success included, so silence is never an outcome a script has to interpret; it is refused with `--quiet` (on `wait`) and with `--no-wait`. `gmux agent status <id>` shows whatever exists in that case (and `gmux agent logs --agent -n 1 <id>` the answer alone), and works even after the session has died — as a snapshot read it can be staler than the answer a wait carries.
 
 The other shapes:
 
@@ -121,6 +121,16 @@ gmux agent cancel "$id"; gmux wait "$id"; [ $? = 2 ] && echo stopped   # interru
 ```
 
 Note the `;` rather than `&&`: an interrupted turn exits `2`, so chaining the wait with `&&` "fails" on the outcome you asked for.
+
+**Steering interrupts waits.** A user message injected into a turn somebody is waiting on — a `--steer`, a `--follow-up` that merged into the running loop, or a human typing into the TUI — ends *their* wait early with exit `2` and reason `steered`: the answer they were promised now answers something else. The turn keeps running, so re-arm:
+
+```bash
+gmux wait "$id" || gmux wait "$id"    # first wait steered; the second gets the redirected answer
+```
+
+The injecting command keeps its own result: gmux matches the agent's report of a message entering the loop against the text it delivered, and hands that caller the merged close — but only while its message is the loop's **last** injection (a later one supersedes it, reason `steered_again`), and only if the agent acknowledged it before the turn settled (otherwise the result is `indeterminate`, exit `1`, never an answer that may predate the injection). The match is textual, since the agent's report carries the message and nothing else, so gmux requires an exact match — or a prefix, but only for an excerpt the agent explicitly reported as truncated — and credits an ambiguous report — two in-flight deliveries that could both explain it — to nobody, leaving both callers `indeterminate`.
+
+`--follow-up` therefore has two modes: delivered to an **idle** agent it starts an ordinary turn; delivered into a **running** turn it merges into that turn, so the merged close's answer is the follow-up's — and other waiters on that turn are interrupted exactly as by a steer.
 
 Flags go before the id; everything after the id is the prompt, verbatim. A plain prompt restarts a dead retained session to deliver it; `--steer` and `cancel` require a live, active turn and never resume.
 
