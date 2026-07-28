@@ -1223,7 +1223,7 @@ func conversationHandlerCentral(w http.ResponseWriter, r *http.Request, sessionI
 	// scope selects WHAT is read, not how much: absent (or the explicit
 	// "transcript") is the pre-existing markdown transcript every current
 	// caller expects, byte for byte. "message" is ADR 0027's semantic read
-	// behind `gmux agent output`. Validation is strict because a mistyped
+	// behind `gmux agent status`'s answer part. Validation is strict because a mistyped
 	// scope silently served as a transcript would hand a script the whole
 	// conversation where it asked for one answer.
 	//
@@ -1255,6 +1255,38 @@ func conversationHandlerCentral(w http.ResponseWriter, r *http.Request, sessionI
 		}
 		tailN = n
 	}
+	// types selects WHICH messages are read (`gmux agent logs`' filters);
+	// format selects how they are serialized. Both are validated strictly and
+	// judged on the query KEY for the same reason scope is: a mistyped filter
+	// silently served as the default would hand a caller a narrower or wider
+	// conversation than they asked for, and absence is indistinguishable from
+	// "the agent did none of that".
+	typesRaw := ""
+	if _, present := r.URL.Query()["types"]; present {
+		v, err := singleQueryValue(r.URL.Query(), "types")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+		typesRaw = v
+	}
+	allowedTypes, err := parseConversationTypes(typesRaw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	format, err := singleQueryValue(r.URL.Query(), "format")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	switch format {
+	case "", "markdown", "json":
+	default:
+		writeError(w, http.StatusBadRequest, "bad_request",
+			fmt.Sprintf("unknown format %q; expected markdown or json", format))
+		return
+	}
 	// Adapter first, then the ref — the same ordering (and the same reason) as
 	// the message scope: "this adapter has no conversation model" is permanent
 	// and actionable, while "no conversation ref yet" is transient, and
@@ -1274,6 +1306,14 @@ func conversationHandlerCentral(w http.ResponseWriter, r *http.Request, sessionI
 		return
 	}
 	msgs, err := renderer.RenderConversation(sess.ConversationRef)
+	// A missing file is a conversation with no messages yet, not a lost one: pi
+	// reports the path before it writes the first line, so a brand-new session
+	// (or one whose first turn is still running) lands here. Reporting it as
+	// "gone" told the caller their transcript had been destroyed.
+	if errors.Is(err, os.ErrNotExist) {
+		writeError(w, http.StatusNotFound, "no_conversation", "conversation has no messages yet")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusNotFound, "no_conversation", "conversation is gone")
 		return
@@ -1282,8 +1322,24 @@ func conversationHandlerCentral(w http.ResponseWriter, r *http.Request, sessionI
 		writeError(w, http.StatusNotFound, "no_conversation", "conversation has no messages yet")
 		return
 	}
+	// Filter BEFORE tail: tail counts the messages the caller asked to see, so
+	// `--tool -n 1` means the last tool message, not "the last message, if it
+	// happens to be a tool call".
+	msgs = filterConversationMessages(msgs, allowedTypes)
+	if len(msgs) == 0 {
+		// The conversation exists and is readable; nothing in it matches. That is
+		// codeNoMessage's exact meaning, and it must not be an empty 200:
+		// printing nothing under a success would say the agent has done none of
+		// this, which only an explicit code may claim.
+		writeError(w, http.StatusNotFound, codeNoMessage, "no messages of the requested type")
+		return
+	}
 	if tailN > 0 && len(msgs) > tailN {
 		msgs = msgs[len(msgs)-tailN:]
+	}
+	if format == "json" {
+		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"messages": conversationWireMessages(msgs)}})
+		return
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -1387,7 +1443,7 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 	// A wait that never identifies a turn — one that finds the turn already
 	// closed, or a session whose adapter asserts no turn identity — resolves
 	// result-free. It still reports the conclusion; it just does not claim an
-	// answer it cannot attribute, and `gmux agent output` remains the snapshot
+	// answer it cannot attribute, and `gmux agent status` remains the snapshot
 	// read for those.
 	var observedSeq uint64
 	active := false
@@ -1484,12 +1540,13 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 // An error or interruption carries no output either way: a partial or previous
 // turn's answer presented as this turn's is the failure mode ADR 0027 §11
 // forbids. Nothing is re-read from the conversation here — a re-read would reopen
-// the §9 staleness gap the source assertion closes; `gmux agent output`, the
+// the §9 staleness gap the source assertion closes; `gmux agent status`, the
 // snapshot verb, is the one that reads the tape.
 //
 // conversation_readable travels with every turn conclusion so the CLI can pick
 // an actionable hint: pointing a failed shell or Claude/Codex session at
-// `gmux agent output` sends the caller at a route that answers 404 for them.
+// `gmux agent status`'s conversation reads sends the caller at routes that
+// answer 404 for them.
 // retainedTurnFrame reads the turn frame gmuxd retains for a session's live
 // generation. It is indirected through a variable because the guarantee under
 // test is that the frame-less resolution paths (the initial fanout look and the

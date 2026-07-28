@@ -31,7 +31,7 @@ func TestTruncatedAnswerIsReportedOnStderr(t *testing.T) {
 	if got := stdout.String(); got != "half an answer\n" {
 		t.Fatalf("stdout=%q", got)
 	}
-	if !strings.Contains(stderr, "truncated") || !strings.Contains(stderr, "gmux agent output") {
+	if !strings.Contains(stderr, "truncated") || !strings.Contains(stderr, "gmux agent logs --agent -n 1") {
 		t.Fatalf("stderr=%q", stderr)
 	}
 

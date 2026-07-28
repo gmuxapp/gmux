@@ -23,8 +23,8 @@ Run a command:
 
 Drive an agent (semantic turn control):
   gmux agent prompt <id> <prompt>   prompt an agent, wait, print its answer
-  gmux agent --help                 all options, and the reads: logs (what it
-                                    has been doing), output (its answer)
+  gmux agent --help                 all options, and the reads: status (what
+                                    matters now), logs (the exact text)
 
 Sessions (local by default; address a peer with <id>@<peer>):
   gmux ls [--all|-a] [--json|-j]    list sessions
@@ -118,7 +118,7 @@ For an agent session you usually want a semantic view instead:
 
   gmux agent logs <id> [-n N]    what it has been doing (the conversation
                                  as markdown; -n counts messages)
-  gmux agent output <id>         just its latest answer
+  gmux agent status <id>         what matters now (state, trigger, answer)
 
 ('gmux tail --raw' and its -e/-r aliases are gone: tail is raw by
 definition, and the conversation view moved to 'gmux agent logs'.)
@@ -181,7 +181,7 @@ not a recognized key name is typed as literal text rather than refused.
 Blocks until the session goes idle: an agent finishing its turn, a shell
 back at its prompt (OSC 133 marks), or a one-shot command exiting. For
 agent sessions whose turn completed, prints the agent's latest final message
-on stdout — the same text 'gmux agent output' returns. --quiet suppresses
+on stdout — the same answer 'gmux agent status' reports. --quiet suppresses
 it. A failed, interrupted or dead turn prints nothing (richer failure
 detail is planned).
 

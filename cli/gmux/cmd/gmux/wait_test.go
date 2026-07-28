@@ -282,7 +282,7 @@ func TestNoRetiredExitCodesRemain(t *testing.T) {
 	}
 }
 
-// The hint must name a verb that can actually answer. `gmux agent output` is
+// The hint must name a verb that can actually answer. `gmux agent status` is
 // meaningless for a failed one-shot command or a Claude/Codex session (it 404s
 // there), which is exactly the population that now exits 1 because a non-zero
 // child exit closes its lifetime turn with Error=true.
@@ -295,18 +295,18 @@ func TestWaitHintMatchesWhatCanBeRead(t *testing.T) {
 		wantSub    string
 		notWantSub string
 	}{
-		{"readable agent points at agent output",
+		{"readable agent points at agent status",
 			waitResult{Reason: "idle", Outcome: "error", ConversationReadable: true},
-			"gmux agent output abcd1234", "gmux tail"},
+			"gmux agent status abcd1234", "gmux tail"},
 		{"failed one-shot points at tail",
 			waitResult{Reason: "idle", Outcome: "error"},
-			"gmux tail abcd1234", "gmux agent output"},
+			"gmux tail abcd1234", "gmux agent status"},
 		{"interrupted shell points at tail",
 			waitResult{Reason: "idle", Outcome: "interrupted"},
-			"gmux tail abcd1234", "gmux agent output"},
-		{"interrupted agent points at agent output",
+			"gmux tail abcd1234", "gmux agent status"},
+		{"interrupted agent points at agent status",
 			waitResult{Reason: "idle", Outcome: "interrupted", ConversationReadable: true},
-			"gmux agent output abcd1234", "gmux tail"},
+			"gmux agent status abcd1234", "gmux tail"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stdout.Reset()

@@ -8,7 +8,7 @@ import (
 )
 
 // TestParseAgentLogs covers the verb's grammar: it joins prompt/cancel/output
-// in the namespace, takes exactly one ref, and its only flag is -n — on
+// in the namespace, takes exactly one ref, and takes its flags — on
 // either side of the ref, since there is no verbatim trailing content here to
 // protect.
 func TestParseAgentLogs(t *testing.T) {
@@ -99,7 +99,7 @@ func TestAgentLogsHelpRouting(t *testing.T) {
 		"Local sessions only",
 		"unsupported_adapter",
 		"gmux tail <id>",
-		"gmux agent output <id>",
+		"gmux agent status <id>",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("agent logs page missing %q:\n%s", want, page)
@@ -142,7 +142,7 @@ func TestTopLevelSynopsisMatchesTheVerbs(t *testing.T) {
 	// The reading split is the headline change, so the agent pointer names the
 	// two semantic reads — without spending a third 'gmux agent' line, which
 	// TestTopLevelUsageAgentSection budgets.
-	for _, want := range []string{"logs", "output"} {
+	for _, want := range []string{"logs", "status"} {
 		if !strings.Contains(usage, want) {
 			t.Errorf("synopsis must surface the %q read:\n%s", want, usage)
 		}
@@ -162,7 +162,7 @@ func TestTopLevelSynopsisMatchesTheVerbs(t *testing.T) {
 		{"kill", "abc"},
 		{"agent", "prompt", "abc", "a prompt"},
 		{"agent", "logs", "abc"},
-		{"agent", "output", "abc"},
+		{"agent", "status", "abc"},
 	} {
 		if _, err := parseCLI(args); err != nil {
 			t.Errorf("the synopsis teaches %v, which does not parse: %v", args, err)
@@ -172,7 +172,7 @@ func TestTopLevelSynopsisMatchesTheVerbs(t *testing.T) {
 
 // TestAgentLogs covers the read end to end against the daemon stub: the
 // request shape (transcript scope with a message count), verbatim stdout, and
-// the failure taxonomy it shares with `agent output`.
+// the failure taxonomy it shares with the other conversation reads.
 func TestAgentLogs(t *testing.T) {
 	body := "## User\n\nfix the test\n\n## Assistant\n\n[tool] bash\n\ndone\n"
 	d := startStubDaemon(t, localSession())
@@ -181,7 +181,7 @@ func TestAgentLogs(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	})
 	stdout := captureStdout(t, func() {
-		if code := cmdAgentLogs("abcd1234", 7); code != waitExitOK {
+		if code := cmdAgentLogs("abcd1234", 7, nil, false); code != waitExitOK {
 			t.Errorf("exit = %d, want 0", code)
 		}
 	})
@@ -206,7 +206,7 @@ func TestAgentLogs(t *testing.T) {
 		})
 		stderr := captureStderr(t, func() {
 			out := captureStdout(t, func() {
-				if code := cmdAgentLogs("abcd1234", 100); code != waitExitError {
+				if code := cmdAgentLogs("abcd1234", 100, nil, false); code != waitExitError {
 					t.Errorf("%s: exit = %d, want 1", tt.code, code)
 				}
 			})
@@ -232,7 +232,7 @@ func TestAgentLogs(t *testing.T) {
 	// resolved through this same daemon.
 	d.on(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
 	stderr := captureStderr(t, func() {
-		if code := cmdAgentLogs("abcd1234", 100); code != waitExitError {
+		if code := cmdAgentLogs("abcd1234", 100, nil, false); code != waitExitError {
 			t.Errorf("skew: exit = %d, want 1", code)
 		}
 	})
@@ -247,7 +247,7 @@ func TestAgentLogs(t *testing.T) {
 	d.on(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	stderr = captureStderr(t, func() {
 		out := captureStdout(t, func() {
-			if code := cmdAgentLogs("abcd1234", 100); code != waitExitError {
+			if code := cmdAgentLogs("abcd1234", 100, nil, false); code != waitExitError {
 				t.Errorf("empty 200: exit = %d, want 1", code)
 			}
 		})
@@ -260,7 +260,7 @@ func TestAgentLogs(t *testing.T) {
 	}
 }
 
-// TestAgentLogsIsStoreOnly: like `agent output`, logs must work on a dead
+// TestAgentLogsIsStoreOnly: like `agent status`, logs must work on a dead
 // retained session and must never issue anything that could start or resume
 // one — one GET, no writes.
 func TestAgentLogsIsStoreOnly(t *testing.T) {
@@ -270,7 +270,7 @@ func TestAgentLogsIsStoreOnly(t *testing.T) {
 		_, _ = w.Write([]byte("## User\n\nhi\n"))
 	})
 	stdout := captureStdout(t, func() {
-		if code := cmdAgentLogs("abcd1234", 100); code != waitExitOK {
+		if code := cmdAgentLogs("abcd1234", 100, nil, false); code != waitExitOK {
 			t.Errorf("dead session: exit = %d, want 0", code)
 		}
 	})
@@ -295,7 +295,7 @@ func TestAgentLogsRefusesPeerSessions(t *testing.T) {
 	peer := []cliSession{{ID: "sess-c0b3c1a1", Peer: "laptop", Adapter: "pi", Alive: true}}
 	d := startStubDaemon(t, peer)
 	stderr := captureStderr(t, func() {
-		if code := cmdAgentLogs("c0b3c1a1@laptop", 100); code != waitExitError {
+		if code := cmdAgentLogs("c0b3c1a1@laptop", 100, nil, false); code != waitExitError {
 			t.Errorf("exit = %d, want 1", code)
 		}
 	})

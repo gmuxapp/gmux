@@ -82,7 +82,8 @@ type ConversationMessage struct {
 	// compact tool-call lines, image placeholders and anything else that
 	// is activity context rather than something the agent said. It exists
 	// for the semantic "what did the agent answer" read behind
-	// `gmux agent output`, which must not surface a `[tool]` line as the
+	// `gmux agent status` (and `gmux agent logs --agent`), which must not
+	// surface a `[tool]` line as the
 	// agent's reply. Empty when the message carries no prose at all (a
 	// tool-only assistant message).
 	//

@@ -115,13 +115,13 @@ func TestParseAgent(t *testing.T) {
 					t.Errorf("sub=%q ref=%q", c.agentSub, c.ref)
 				}
 			}},
-		{name: "output", args: []string{"agent", "output", "abc123"},
+		{name: "status", args: []string{"agent", "status", "abc123"},
 			check: func(t *testing.T, c *command) {
-				if c.agentSub != "output" || c.ref != "abc123" {
+				if c.agentSub != "status" || c.ref != "abc123" {
 					t.Errorf("sub=%q ref=%q", c.agentSub, c.ref)
 				}
 			}},
-		{name: "peer-qualified ref parses (rejected at execution)", args: []string{"agent", "output", "abc@laptop"},
+		{name: "peer-qualified ref parses (rejected at execution)", args: []string{"agent", "status", "abc@laptop"},
 			check: func(t *testing.T, c *command) {
 				if c.ref != "abc@laptop" {
 					t.Errorf("ref = %q", c.ref)
@@ -179,8 +179,13 @@ func TestParseAgentErrors(t *testing.T) {
 		// The message must name the real problem: a second id was given, not
 		// zero ids; and a trailing flag is a misplaced flag, not a missing id.
 		{"cancel with extra ref", []string{"agent", "cancel", "s1", "s2"}, "exactly one session id"},
-		{"output flag", []string{"agent", "output", "--json"}, "takes no flags"},
-		{"output ref then flag", []string{"agent", "output", "s1", "-h"}, "takes no flags"},
+		// The removed read verb fails by name, and the error names BOTH
+		// replacements: the report and the answer-only read.
+		{"output is removed", []string{"agent", "output", "s1"}, "gmux agent status <id>"},
+		{"output names the answer read", []string{"agent", "output", "s1"}, "logs --agent -n 1"},
+		{"status without ref", []string{"agent", "status"}, "requires a session id"},
+		{"status with extra ref", []string{"agent", "status", "s1", "s2"}, "exactly one session id"},
+		{"status unknown flag", []string{"agent", "status", "--raw", "s1"}, "agent status:"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -212,7 +217,7 @@ func TestParseAgentHelp(t *testing.T) {
 		{[]string{"agent", "cancel", "?"}, "agent cancel"},
 		{[]string{"agent", "prompt", "--help"}, "agent prompt"},
 		{[]string{"agent", "cancel", "--help"}, "agent cancel"},
-		{[]string{"agent", "output", "-h"}, "agent output"},
+		{[]string{"agent", "status", "-h"}, "agent status"},
 		{[]string{"agent", "logs", "--help"}, "agent logs"},
 		{[]string{"help", "agent"}, "agent"},
 		{[]string{"help", "agent", "prompt"}, "agent prompt"},
@@ -235,7 +240,7 @@ func TestParseAgentHelp(t *testing.T) {
 	printAgentUsage(&b, "agent")
 	guide := b.String()
 	for _, want := range []string{
-		"agent prompt", "agent cancel", "agent output", "agent logs",
+		"agent prompt", "agent cancel", "agent status", "agent logs",
 		"--no-wait", "--follow-up", "--steer", "--timeout",
 		"stdin",
 		"0 completed", "2 intentionally interrupted",
@@ -252,7 +257,7 @@ func TestParseAgentHelp(t *testing.T) {
 	}
 	b.Reset()
 	printAgentUsage(&b, "agent prompt")
-	for _, want := range []string{"--no-wait", "--follow-up", "--steer", "--timeout", "gmux agent output"} {
+	for _, want := range []string{"--no-wait", "--follow-up", "--steer", "--timeout", "gmux agent status"} {
 		if !strings.Contains(b.String(), want) {
 			t.Errorf("prompt help missing %q:\n%s", want, b.String())
 		}
@@ -267,7 +272,7 @@ func TestParseAgentHelp(t *testing.T) {
 // namespace: a prominent section surfacing the one command a first-time
 // caller wants (prompt) plus the pointer to the namespace guide — and
 // nothing else. Per-verb flag detail and the management verbs (cancel,
-// output) live in 'gmux agent --help', keeping the synopsis scannable.
+// status) live in 'gmux agent --help', keeping the synopsis scannable.
 func TestTopLevelUsageAgentSection(t *testing.T) {
 	var b strings.Builder
 	printUsage(&b)
@@ -486,7 +491,7 @@ func TestAgentEnvelopeLessNotFoundIsVersionSkew(t *testing.T) {
 	}{
 		{"prompt", func() int { text := "go"; return cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text) }},
 		{"cancel", func() int { return cmdAgentCancel("abcd1234") }},
-		{"output", func() int { return cmdAgentOutput("abcd1234") }},
+		{"status", func() int { return cmdAgentStatus("abcd1234", false) }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := startStubDaemon(t, localSession())
@@ -523,28 +528,19 @@ func TestAgentEnvelopeLessNotFoundIsVersionSkew(t *testing.T) {
 	}
 }
 
-// TestAgentOutputRejectsMarkedEmptyBody: a marked but empty 200 is not a
+// TestAgentAnswerRejectsMarkedEmptyBody: a marked but empty 200 is not a
 // silent success. The daemon cannot currently emit one (it answers
-// no_message), so this pins the contract rather than a known case: printing
-// nothing under exit 0 would tell a script the agent answered with silence.
-func TestAgentOutputRejectsMarkedEmptyBody(t *testing.T) {
+// no_message), so this pins the contract rather than a known case: treating
+// silence as the answer is the one thing the message scope must never do.
+func TestAgentAnswerRejectsMarkedEmptyBody(t *testing.T) {
 	d := startStubDaemon(t, localSession())
 	d.on(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(conversationScopeHeader, conversationScopeMessage)
 		w.WriteHeader(http.StatusOK)
 	})
-	stderr := captureStderr(t, func() {
-		out := captureStdout(t, func() {
-			if code := cmdAgentOutput("abcd1234"); code != waitExitError {
-				t.Errorf("exit = %d, want 1", code)
-			}
-		})
-		if out != "" {
-			t.Errorf("stdout = %q", out)
-		}
-	})
-	if !strings.Contains(stderr, "no content") {
-		t.Errorf("stderr = %q", stderr)
+	got := readAgentAnswer(cliSession{ID: "sess-abcd1234", Adapter: "pi", Alive: true})
+	if !got.Failed || !strings.Contains(got.Report, "no content") {
+		t.Errorf("readAgentAnswer = %+v, want a failed read naming the empty body", got)
 	}
 	_ = d
 }
@@ -599,6 +595,15 @@ type stubDaemon struct {
 	requests []recordedRequest
 	handler  func(w http.ResponseWriter, r *http.Request)
 	sessions []cliSession
+	// sessionsRequests counts GET /v1/sessions calls: `agent status` must
+	// classify liveness and turn flags from ONE listing, and a stub that only
+	// records the sub-routes cannot see a second one.
+	sessionsRequests int
+	// rows, when set, replaces the /v1/sessions payload with raw JSON objects.
+	// The session row carries fields cliSession deliberately does not (status,
+	// last_output_at), and `agent status` reads them: pinning them needs a row
+	// shape the CLI's pinned ls schema does not have.
+	rows []map[string]any
 }
 
 type recordedRequest struct {
@@ -627,6 +632,14 @@ func startStubDaemon(t *testing.T, sessions []cliSession) *stubDaemon {
 		_, _ = w.Write([]byte(`{"ok":true,"data":{"version":"dev"}}`))
 	})
 	mux.HandleFunc("/v1/sessions", func(w http.ResponseWriter, r *http.Request) {
+		d.mu.Lock()
+		d.sessionsRequests++
+		rows := d.rows
+		d.mu.Unlock()
+		if rows != nil {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": rows})
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": d.sessions})
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -866,9 +879,12 @@ func TestAgentCancelRequest(t *testing.T) {
 	}
 }
 
-// TestAgentOutput covers the semantic read: the request shape, verbatim
-// untruncated stdout, and the two distinguishable "nothing to show" answers.
-func TestAgentOutput(t *testing.T) {
+// TestAgentAnswerRead covers the semantic message-scope read that backs
+// `agent status`'s Answer part (and, in spirit, `logs --agent -n 1`): the
+// request shape, the verbatim text, and the three distinguishable "nothing to
+// show" answers, which are reasons rather than failures.
+func TestAgentAnswerRead(t *testing.T) {
+	sess := cliSession{ID: "sess-abcd1234", Adapter: "pi", Alive: true}
 	body := "Here is the answer.\n\n```go\nfunc main() {}\n```\n"
 	d := startStubDaemon(t, localSession())
 	d.on(func(w http.ResponseWriter, r *http.Request) {
@@ -876,71 +892,39 @@ func TestAgentOutput(t *testing.T) {
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		_, _ = w.Write([]byte(body))
 	})
-	stdout := captureStdout(t, func() {
-		if code := cmdAgentOutput("abcd1234"); code != waitExitOK {
-			t.Errorf("exit = %d, want 0", code)
-		}
-	})
-	if stdout != body {
-		t.Errorf("stdout = %q, want the message verbatim (%q)", stdout, body)
+	got := readAgentAnswer(sess)
+	if got.Failed || got.Code != "" || got.Text != strings.TrimRight(body, "\n") {
+		t.Errorf("readAgentAnswer = %+v, want the message verbatim", got)
 	}
 	req := d.lastRequest(t)
 	if req.method != http.MethodGet || req.path != "/v1/sessions/sess-abcd1234/conversation" || req.query != "scope=message" {
 		t.Fatalf("request = %s %s?%s", req.method, req.path, req.query)
 	}
 
-	for _, tt := range []struct{ code, status string }{
-		{codeNoMessage, ""},
-		{codeNoConversation, ""},
-		{codeUnsupportedAdapter, ""},
-	} {
+	// A daemon "nothing to read" code is a REASON, not a failure: status
+	// reports it as a note beside a perfectly good state line.
+	for _, code := range []string{codeNoMessage, codeNoConversation, codeUnsupportedAdapter} {
 		d.on(func(w http.ResponseWriter, r *http.Request) {
 			status := http.StatusNotFound
-			if tt.code == codeUnsupportedAdapter {
+			if code == codeUnsupportedAdapter {
 				status = http.StatusUnprocessableEntity
 			}
-			writeErrEnvelope(w, status, tt.code, "nothing for you")
+			writeErrEnvelope(w, status, code, "nothing for you")
 		})
-		stderr := captureStderr(t, func() {
-			out := captureStdout(t, func() {
-				if code := cmdAgentOutput("abcd1234"); code != waitExitError {
-					t.Errorf("%s: exit = %d, want 1", tt.code, code)
-				}
-			})
-			if out != "" {
-				t.Errorf("%s: stdout = %q, want nothing printed", tt.code, out)
-			}
-		})
-		if !strings.Contains(stderr, tt.code) {
-			t.Errorf("%s: stderr = %q", tt.code, stderr)
-		}
-		// The hint must be verb-aware: `output` is a READ, so telling the
-		// caller to send keystrokes answers a question they did not ask.
-		if !strings.Contains(stderr, "gmux tail abcd1234") {
-			t.Errorf("%s: stderr = %q, want the read-side 'gmux tail <id>' hint", tt.code, stderr)
-		}
-		if strings.Contains(stderr, "gmux send") {
-			t.Errorf("%s: stderr = %q, output must not suggest sending keystrokes", tt.code, stderr)
+		got := readAgentAnswer(sess)
+		if got.Failed || got.Code != code || got.Message == "" {
+			t.Errorf("%s: readAgentAnswer = %+v, want the daemon's code carried as a reason", code, got)
 		}
 	}
 
-	// Version skew: an unmarked 200 must fail loudly instead of printing a
+	// Version skew: an unmarked 200 must fail loudly instead of presenting a
 	// whole transcript as the latest message.
 	d.on(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("## User\n\nhi\n\n## Assistant\n\nhello\n"))
 	})
-	stderr := captureStderr(t, func() {
-		out := captureStdout(t, func() {
-			if code := cmdAgentOutput("abcd1234"); code != waitExitError {
-				t.Errorf("skewed daemon: exit = %d, want 1", code)
-			}
-		})
-		if out != "" {
-			t.Errorf("skewed daemon printed %q", out)
-		}
-	})
-	if !strings.Contains(stderr, "predates") {
-		t.Errorf("skew stderr = %q", stderr)
+	got = readAgentAnswer(sess)
+	if !got.Failed || !strings.Contains(got.Report, "predates") {
+		t.Errorf("skewed daemon: readAgentAnswer = %+v, want a version-skew failure", got)
 	}
 }
 
@@ -955,7 +939,7 @@ func TestAgentRefusesPeerSessions(t *testing.T) {
 	}{
 		{"prompt", func() int { text := "go"; return cmdAgentPrompt("c0b3c1a1@laptop", agentModePrompt, false, 0, &text) }},
 		{"cancel", func() int { return cmdAgentCancel("c0b3c1a1@laptop") }},
-		{"output", func() int { return cmdAgentOutput("c0b3c1a1@laptop") }},
+		{"status", func() int { return cmdAgentStatus("c0b3c1a1@laptop", false) }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := startStubDaemon(t, peer)

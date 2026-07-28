@@ -5,8 +5,8 @@ package main
 //
 //	gmux agent prompt [--no-wait] [--follow-up|--steer] [--timeout|-t N] <ref> [prompt]
 //	gmux agent cancel <ref>
-//	gmux agent output <ref>
-//	gmux agent logs <ref> [-n N]
+//	gmux agent status <ref> [--json]
+//	gmux agent logs <ref> [-n N] [--user|--agent|--tool|--all] [--json]
 //
 // The distinction from `gmux send` is the whole point of the namespace: send
 // types bytes at a terminal and tells you nothing about whether an agent read
@@ -19,8 +19,12 @@ package main
 // This namespace is deliberately local-and-pi-only. A synchronous prompt that
 // completes prints the agent's answer (the daemon selects it at turn close);
 // a failed or interrupted turn prints nothing, because the newest stored
-// message would be a previous or partial turn's. `gmux agent output` reads it
-// explicitly in those cases.
+// message would be a previous or partial turn's. `gmux agent status` shows
+// what is there in those cases.
+//
+// The reading verbs split cognitively, not by shape (ADR 0027's 2026-07-28
+// amendment): `status` is "I don't know what I want, show me what matters",
+// `logs` is "I know the exact text I want", `tail` is the raw screen.
 
 import (
 	"encoding/json"
@@ -83,12 +87,19 @@ func parseAgent(args []string) (*command, error) {
 	switch head {
 	case "prompt":
 		return parseAgentPrompt(rest)
-	case "cancel", "output":
+	case "cancel":
 		return parseAgentRefOnly(head, rest)
+	case "status":
+		return parseAgentStatus(rest)
 	case "logs":
 		return parseAgentLogs(rest)
+	case "output":
+		// Removed by name, with both replacements spelled out. Silently
+		// aliasing it to `status` would print a three-part report where a
+		// script expected one bare answer on stdout, so the verb fails.
+		return nil, errors.New("agent output was replaced by 'gmux agent status <id>' (the state, the trigger and the relevant content); for the answer alone use 'gmux agent logs --agent -n 1 <id>'")
 	}
-	return nil, fmt.Errorf("unknown agent verb %q; expected prompt, logs, cancel or output", head)
+	return nil, fmt.Errorf("unknown agent verb %q; expected prompt, logs, status or cancel", head)
 }
 
 // parseAgentRefOnly handles the two ref-only verbs. Flags are rejected rather
@@ -99,7 +110,7 @@ func parseAgentRefOnly(sub string, args []string) (*command, error) {
 	}
 	// Report what is actually wrong. "requires a session id" for
 	// `agent cancel s1 s2` is false (one was given) and for
-	// `agent output s1 -h` it hides the misplaced flag.
+	// `agent cancel s1 -h` it hides the misplaced flag.
 	if len(args) == 0 {
 		return nil, fmt.Errorf("agent %s requires a session id", sub)
 	}
@@ -115,17 +126,62 @@ func parseAgentRefOnly(sub string, args []string) (*command, error) {
 	return &command{mode: modeAgent, agentSub: sub, ref: args[0]}, nil
 }
 
-// parseAgentLogs handles `gmux agent logs <ref> [-n N]`.
+// parseAgentStatus handles `gmux agent status <ref> [--json]`.
 //
-// The only knob is how much to print, so unlike prompt this verb takes flags
-// on either side of the ref (the interspersed convention `tail` and `wait`
-// already use): there is no verbatim trailing content here to protect, and a
-// caller who typed `gmux agent logs s1 -n 5` meant the count.
+// Flags may sit on either side of the ref, like logs: there is no verbatim
+// trailing content to protect here.
+func parseAgentStatus(args []string) (*command, error) {
+	if len(args) == 1 && isHelpToken(args[0]) {
+		return &command{mode: modeHelp, helpTopic: "agent status"}, nil
+	}
+	c := &command{mode: modeAgent, agentSub: "status"}
+	fs := newFlagSet("agent status")
+	fs.BoolVar(&c.json, "json", false, "print the machine shape instead of the report")
+	pos, err := parseInterspersed(fs, args)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return &command{mode: modeHelp, helpTopic: "agent status"}, nil
+		}
+		return nil, fmt.Errorf("agent status: %v", err)
+	}
+	if len(pos) == 0 {
+		return nil, errors.New("agent status requires a session id")
+	}
+	if len(pos) > 1 {
+		return nil, fmt.Errorf("agent status takes exactly one session id (got %d: %s)", len(pos), strings.Join(pos, " "))
+	}
+	c.ref = pos[0]
+	return c, nil
+}
+
+// agentLogsTypes is the wire vocabulary of the transcript filter, shared with
+// the daemon's `types=` parameter.
+const (
+	agentLogTypeUser  = "user"
+	agentLogTypeAgent = "agent"
+	agentLogTypeTool  = "tool"
+)
+
+// parseAgentLogs handles
+// `gmux agent logs <ref> [-n N] [--user|--agent|--tool|--all] [--json]`.
+//
+// Flags sit on either side of the ref (the interspersed convention `tail` and
+// `wait` already use): there is no verbatim trailing content here to protect,
+// and a caller who typed `gmux agent logs s1 -n 5` meant the count.
 //
 // -n counts MESSAGES, not lines: the view is the rendered conversation, and
 // counting its lines would cut a message in half. That difference in unit
 // from `gmux tail -n` is the whole reason the two views stopped sharing one
-// verb.
+// verb. It counts POST-FILTER messages, because the filter is what the caller
+// asked to see: `--tool -n 1` is the last tool call, not "the last message if
+// it happens to be one".
+//
+// Type flags REPLACE the default set rather than adding to it, so the printed
+// view is always exactly the union of the types named — and `--all` is a name
+// for "every type gmux renders" rather than a magic widening of a default.
+// `--thinking` is refused by name: no adapter renders thinking blocks today
+// (pi's renderer drops them), so accepting it would answer with silence, which
+// reads as "the agent thought nothing".
 func parseAgentLogs(args []string) (*command, error) {
 	if len(args) == 1 && isHelpToken(args[0]) {
 		return &command{mode: modeHelp, helpTopic: "agent logs"}, nil
@@ -133,6 +189,13 @@ func parseAgentLogs(args []string) (*command, error) {
 	c := &command{mode: modeAgent, agentSub: "logs", tailLines: agentLogsDefaultMessages}
 	fs := newFlagSet("agent logs")
 	fs.IntVar(&c.tailLines, "n", agentLogsDefaultMessages, "number of conversation messages to show")
+	var user, agentProse, tool, all, thinking bool
+	fs.BoolVar(&user, "user", false, "show user messages")
+	fs.BoolVar(&agentProse, "agent", false, "show assistant messages that carry prose")
+	fs.BoolVar(&tool, "tool", false, "show tool-call-only messages")
+	fs.BoolVar(&all, "all", false, "show every rendered message type")
+	fs.BoolVar(&thinking, "thinking", false, "show thinking blocks (not rendered by any adapter)")
+	fs.BoolVar(&c.json, "json", false, "print the machine shape instead of markdown")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -148,6 +211,33 @@ func parseAgentLogs(args []string) (*command, error) {
 	}
 	if c.tailLines <= 0 {
 		return nil, errors.New("agent logs: -n must be a positive number of messages")
+	}
+	if thinking {
+		return nil, errors.New("agent logs: --thinking is not rendered by this adapter (pi's transcript drops thinking blocks); 'gmux tail <id>' shows whatever the TUI painted")
+	}
+	if all && (user || agentProse || tool) {
+		// --all IS the full set, so naming a subset beside it either repeats it
+		// or contradicts it. Picking a winner would print a view the caller did
+		// not ask for.
+		return nil, errors.New("agent logs: --all already selects every message type, so it cannot be combined with a type flag")
+	}
+	switch {
+	case all:
+		c.logTypes = []string{agentLogTypeUser, agentLogTypeAgent, agentLogTypeTool}
+	case user || agentProse || tool:
+		// Explicit types REPLACE the default pair.
+		if user {
+			c.logTypes = append(c.logTypes, agentLogTypeUser)
+		}
+		if agentProse {
+			c.logTypes = append(c.logTypes, agentLogTypeAgent)
+		}
+		if tool {
+			c.logTypes = append(c.logTypes, agentLogTypeTool)
+		}
+	default:
+		// The conversation without the machinery: what was asked and what was
+		// said. nil means "the daemon's default", which is this same pair.
 	}
 	c.ref = pos[0]
 	return c, nil
@@ -394,10 +484,10 @@ func cmdAgent(c *command) int {
 		return cmdAgentPrompt(c.ref, c.agentMode, c.agentNoWait, c.timeout, c.promptText)
 	case "cancel":
 		return cmdAgentCancel(c.ref)
-	case "output":
-		return cmdAgentOutput(c.ref)
+	case "status":
+		return cmdAgentStatus(c.ref, c.json)
 	case "logs":
-		return cmdAgentLogs(c.ref, c.tailLines)
+		return cmdAgentLogs(c.ref, c.tailLines, c.logTypes, c.json)
 	}
 	fmt.Fprintf(os.Stderr, "gmux: unknown agent verb %q\n", c.agentSub)
 	return waitExitError
@@ -615,13 +705,13 @@ type agentPromptResult struct {
 // code.
 //
 // A completed turn prints the agent's answer, which the daemon selected at turn
-// close with the same selector `gmux agent output` and `gmux wait` use. Every
+// close with the same selector `gmux agent status` and `gmux wait` use. Every
 // other conclusion prints NO result — a stale prior-turn answer must never be
 // presented as this turn's — and reports the condition on stderr instead.
 // `resumed` is worth a stderr line because it says the session was dead and has
 // been restarted: a state change the caller did not ask for.
 //
-// One coupling to know about: the error hint below names `gmux agent output`
+// One coupling to know about: the error hint below names `gmux agent status`
 // unconditionally, where reportWaitResult decides from the response's
 // `conversation_readable` whether to hint at `gmux tail` instead. The two agree
 // today only because a session that can be prompted has an AgentActionEncoder,
@@ -664,10 +754,10 @@ func reportAgentPromptSuccess(sess cliSession, status int, body []byte, noWait b
 		return waitExitInterrupted
 	case waitOutcomeError:
 		if res.Cause != "" {
-			fmt.Fprintf(os.Stderr, "gmux: the turn ended in an error (%s); see gmux agent output %s\n",
+			fmt.Fprintf(os.Stderr, "gmux: the turn ended in an error (%s); see gmux agent status %s\n",
 				res.Cause, shortID(sess.ID))
 		} else {
-			fmt.Fprintf(os.Stderr, "gmux: the turn ended in an error; see gmux agent output %s\n", shortID(sess.ID))
+			fmt.Fprintf(os.Stderr, "gmux: the turn ended in an error; see gmux agent status %s\n", shortID(sess.ID))
 		}
 		return waitExitError
 	default:
@@ -704,15 +794,30 @@ func cmdAgentCancel(ref string) int {
 	return waitExitOK
 }
 
-// cmdAgentOutput implements `gmux agent output`: print the agent's latest
-// final message, verbatim and untruncated, from the daemon's semantic
-// conversation read. It never resumes and never needs a live runner, so it
-// works on a dead retained session.
-func cmdAgentOutput(ref string) int {
-	sess, ok := resolveAgentSession(ref, "output")
-	if !ok {
-		return waitExitError
-	}
+// agentAnswerRead is the outcome of the daemon's semantic message-scope read:
+// the latest final assistant message, or the reason there is none.
+//
+// The reason is kept as the daemon's own code (and message) rather than
+// collapsed into an error: `status` reports "no answer yet" as part of a
+// perfectly good snapshot, while a transport failure is a failure.
+type agentAnswerRead struct {
+	Text string
+	// Code is the daemon's stable error code when there is no answer
+	// (no_message, no_conversation, unsupported_adapter, ...), "" on success.
+	Code string
+	// Message is the daemon's prose for Code.
+	Message string
+	// Failed marks a read that could not be performed at all (transport,
+	// version skew, an empty 200): not "there is no answer", but "gmux does not
+	// know". Report is the line to print for it.
+	Failed bool
+	Report string
+}
+
+// readAgentAnswer performs the store-only message-scope read for sess. It never
+// resumes and never needs a live runner, so it works on a dead retained
+// session.
+func readAgentAnswer(sess cliSession) agentAnswerRead {
 	client := gmuxdClient()
 	// No client deadline: the daemon re-reads and renders the agent's whole
 	// stored conversation to select one message, which on a long session and a
@@ -722,71 +827,88 @@ func cmdAgentOutput(ref string) int {
 	url := gmuxdBaseURL() + "/v1/sessions/" + sess.ID + "/conversation?scope=message"
 	resp, err := client.Get(url)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return waitExitError
+		return agentAnswerRead{Failed: true, Report: err.Error()}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil && !errors.Is(err, io.EOF) {
-		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return waitExitError
+		return agentAnswerRead{Failed: true, Report: err.Error()}
 	}
 	if msg := agentOutputSkewError(resp.StatusCode, resp.Header.Get(conversationScopeHeader)); msg != "" {
-		fmt.Fprintln(os.Stderr, "gmux:", msg)
-		return waitExitError
+		return agentAnswerRead{Failed: true, Report: msg}
 	}
 	if resp.StatusCode >= 300 {
-		return reportAgentError(sess, "output", resp.StatusCode, raw)
+		code, msg := errorCode(raw), extractMessage(raw)
+		if code == "" {
+			return agentAnswerRead{Failed: true, Report: agentSkewOrRawReport("status", resp.StatusCode, raw)}
+		}
+		return agentAnswerRead{Code: code, Message: msg}
 	}
 	if len(raw) == 0 {
 		// A marked but empty 200. The daemon cannot currently produce one (it
 		// answers no_message instead), so this is a contract guard rather than a
-		// known case: printing nothing under exit 0 would tell a script the
-		// agent answered with silence, which is the one thing the message scope
-		// exists to never say.
-		fmt.Fprintf(os.Stderr, "gmux: the daemon reported a message for %s but sent no content\n", displayID(sess))
-		return waitExitError
+		// known case: reporting silence as the answer is the one thing the
+		// message scope exists to never do.
+		return agentAnswerRead{Failed: true, Report: fmt.Sprintf("the daemon reported a message for %s but sent no content", displayID(sess))}
 	}
-	if _, err := os.Stdout.Write(raw); err != nil {
-		fmt.Fprintln(os.Stderr, "gmux:", err)
-		return waitExitError
+	return agentAnswerRead{Text: strings.TrimRight(string(raw), "\n")}
+}
+
+// agentSkewOrRawReport describes an envelope-less error response: a bare 404 is
+// a missing ROUTE (the session was resolved through this same daemon one
+// request earlier), i.e. version skew; anything else is passed through.
+func agentSkewOrRawReport(verb string, status int, body []byte) string {
+	if status == http.StatusNotFound {
+		return fmt.Sprintf("this gmuxd predates 'gmux agent %s' (no such route); restart the daemon with 'gmux daemon restart'", verb)
 	}
-	return waitExitOK
+	return fmt.Sprintf("agent %s failed: %s", verb, strings.TrimSpace(string(body)))
 }
 
 // cmdAgentLogs implements `gmux agent logs`: print the session's conversation
-// as markdown (last n messages), read from the agent's own stored
-// conversation.
+// as markdown (the last n messages of the requested types), read from the
+// agent's own stored conversation. With json, the same selection is printed as
+// the machine shape instead: a JSON array of {role, type, text, prose}.
 //
-// Store-only, exactly like `agent output`: it never starts, resumes or even
+// The filter travels as `types=` and the serialization as `format=`, so the
+// daemon serves exactly the messages asked for and -n counts them post-filter.
+// An empty types list means the daemon's default (user + prose-bearing agent
+// messages), which is deliberately the same default as no flags at all.
+//
+// Store-only, exactly like `agent status`: it never starts, resumes or even
 // touches a runner, so it works on a dead retained session, and it is
 // local-only for the same reason the rest of the namespace is. The daemon's
 // transcript scope is the read (`?tail=N`, no scope parameter — that IS the
 // transcript), so nothing new is asked of gmuxd.
 //
-// Error taxonomy is `agent output`'s, verbatim: the daemon's code and message
+// Error taxonomy is the message scope's, verbatim: the daemon's code and message
 // are printed as-is by reportAgentError, an envelope-less 404 is reported as
 // version skew rather than a missing session, and a non-renderer adapter's
 // refusal carries the read-side 'gmux tail' hint — the raw view is exactly
 // what a caller who cannot have a transcript should reach for.
 //
-// No marker-header guard here, unlike `agent output`: that guard exists
+// No marker-header guard here, unlike the message-scope read: that guard exists
 // because an old daemon ignoring `scope=message` would answer with the whole
 // transcript, and the whole transcript is precisely what this verb asked for.
 // The only skew that can bite is a daemon with no /conversation route at all,
 // which arrives as an envelope-less 404 and is reported as such.
-func cmdAgentLogs(ref string, n int) int {
+func cmdAgentLogs(ref string, n int, types []string, asJSON bool) int {
 	sess, ok := resolveAgentSession(ref, "logs")
 	if !ok {
 		return waitExitError
 	}
 	client := gmuxdClient()
-	// No client deadline, for the same reason `agent output` drops it: the
+	// No client deadline, for the same reason the message-scope read drops it: the
 	// daemon re-reads and renders the agent's whole stored conversation, which
 	// on a long session and a cold filesystem can outlast the default 5s and
 	// turn a readable transcript into a transport error.
 	client.Timeout = 0
 	url := fmt.Sprintf("%s/v1/sessions/%s/conversation?tail=%d", gmuxdBaseURL(), sess.ID, n)
+	if len(types) > 0 {
+		url += "&types=" + strings.Join(types, ",")
+	}
+	if asJSON {
+		url += "&format=json"
+	}
 	resp, err := client.Get(url)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
@@ -809,6 +931,30 @@ func cmdAgentLogs(ref string, n int) int {
 		fmt.Fprintf(os.Stderr, "gmux: the daemon reported a conversation for %s but sent no content\n", displayID(sess))
 		return waitExitError
 	}
+	if asJSON {
+		// The daemon wraps its JSON in the house envelope; the CLI's contract is
+		// the bare array, so the messages are unwrapped and re-emitted. An
+		// undecodable body is a contract breach, not an empty conversation.
+		var env struct {
+			Data struct {
+				Messages []json.RawMessage `json:"messages"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &env); err != nil || env.Data.Messages == nil {
+			fmt.Fprintf(os.Stderr, "gmux: this gmuxd cannot serve 'gmux agent logs --json' (it answered with something else); restart the daemon with 'gmux daemon restart'\n")
+			return waitExitError
+		}
+		out, err := json.MarshalIndent(env.Data.Messages, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "gmux:", err)
+			return waitExitError
+		}
+		if _, err := fmt.Fprintln(os.Stdout, string(out)); err != nil {
+			fmt.Fprintln(os.Stderr, "gmux:", err)
+			return waitExitError
+		}
+		return waitExitOK
+	}
 	if _, err := os.Stdout.Write(raw); err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return waitExitError
@@ -829,7 +975,7 @@ const conversationScopeHeader = "X-Gmux-Conversation-Scope"
 // envelope-less status as version skew too.
 func agentOutputSkewError(status int, scopeHeader string) string {
 	if status == http.StatusOK && scopeHeader != conversationScopeMessage {
-		return "this gmuxd predates 'gmux agent output' (it answered with the whole transcript); restart the daemon with 'gmux daemon restart', or use 'gmux tail'"
+		return "this gmuxd predates 'gmux agent status' (it answered with the whole transcript); restart the daemon with 'gmux daemon restart', or use 'gmux tail'"
 	}
 	return ""
 }
@@ -876,14 +1022,16 @@ func reportAgentError(sess cliSession, verb string, status int, body []byte) int
 // agentErrorHint adds the one actionable next step the daemon's message does
 // not already carry. Hints never soften an indeterminate outcome.
 //
-// The unsupported hint is verb-aware: on a write verb the fallback is raw
-// input, while on `output` the caller wants to READ, and telling them to send
-// keystrokes answers a question they did not ask.
+// The unsupported hint is verb-aware: on a write verb (prompt, cancel) the
+// fallback is raw input, while on the read verb the caller wants to READ, and
+// telling them to send keystrokes answers a question they did not ask.
+// `logs` is the only read that routes through here — `status` reports a
+// non-renderer adapter as part of its own report instead of as an error.
 func agentErrorHint(code, verb string, sess cliSession) string {
 	tailHint := "'gmux tail " + shortID(sess.ID) + "' shows this session directly"
 	switch code {
 	case codeUnsupportedAdapter, codeUnsupportedAction:
-		if verb == "output" || verb == "logs" {
+		if verb == "logs" {
 			return "this session's agent exposes no conversation gmux can read; " + tailHint
 		}
 		return "this session's agent has no semantic support yet; drive it with 'gmux send' and read it with 'gmux tail'"
@@ -980,7 +1128,7 @@ ready fails its first prompt exactly like any later one.
 Waits by default: the command returns when the turn ends and prints the agent's
 answer. Exit status is 0 for a completed turn, 2 for an interrupted one, and 1
 for anything else (a failed turn, a --timeout, a dead runner). A turn that did
-not complete prints no answer — read what exists with 'gmux agent output <id>'.
+not complete prints no answer — see what happened with 'gmux agent status <id>'.
 
 A plain prompt (no flag) restarts a dead retained session to deliver the
 prompt; --steer never does. Local sessions only.
@@ -994,38 +1142,99 @@ Delivers an interrupt to a live, active agent and returns once it is
 delivered — not once the agent has stopped. Follow with 'gmux wait <id>' when
 the next step needs the turn to be over. Local sessions only.
 `)
-	case "agent output":
-		fmt.Fprint(w, `gmux agent output — print an agent session's latest message
+	case "agent status":
+		fmt.Fprint(w, `gmux agent status — show what matters about an agent session right now
 
-  gmux agent output <id>
+  gmux agent status <id> [--json]
 
-Prints the agent's latest final message, verbatim and untruncated, read from
-the agent's own stored conversation. Never starts or resumes anything, so it
-works on a dead session. For the whole conversation use 'gmux agent logs <id>',
-and for the terminal itself 'gmux tail <id>'.
+  --json            print the machine shape instead of the report
+
+The verb for "I don't know what I want, show me what matters". Always the same
+three parts, whatever the session is doing:
+
+  ## State         short id and adapter, alive/dead, active/idle, and the last
+                   CLOSED turn's outcome (completed/interrupted/error) with a
+                   rough recency. A running turn has no outcome yet, and a
+                   session that died mid-turn reads "the turn never finished
+                   (runner died)" — the verdict 'gmux wait' reaches for that
+                   same row, never "completed"
+  ## Triggered by  the first lines of the user message that started the
+                   current (or last) turn — labeled so it can never be
+                   mistaken for the answer, and found however many tool
+                   calls the turn has made since
+  ## Answer        the agent's final message when the session is idle
+  ## Recent        instead of Answer while a turn is running: the last few
+                   messages and a working indicator
+
+A SNAPSHOT: store-only, no runner contact, no resume, so it works on a dead
+retained session — and it can be staler than the answer a 'gmux wait' or a
+synchronous 'gmux agent prompt' carries, because those report what the adapter
+asserted at turn close while this reads the stored conversation.
+
+The State part is adapter-independent, so a session whose conversation gmux
+cannot read (claude, codex, a shell) still gets it, with a note instead of the
+content rather than an error. Local sessions only.
+
+--json prints one object mirroring the three parts: {state:{...},
+trigger:{text,truncated}, content:{kind,...}}, where content.kind is "answer",
+"recent" or "none". Fields describing a turn that does not exist are ABSENT
+rather than empty: state.last_turn_outcome (and state.last_turn_cause, today
+only runner_died) appear only for a concluded turn, and trigger.code only when
+the conversation could not be read. That object is the machine contract for
+this read.
+
+The answer ALONE, for a script that wants nothing else:
+
+  gmux agent logs --agent -n 1 <id>
 `)
 	case "agent logs":
-		fmt.Fprint(w, `gmux agent logs — print what an agent session has been doing
+		fmt.Fprint(w, `gmux agent logs — print the exact conversation text you want
 
-  gmux agent logs <id> [-n N]
+  gmux agent logs <id> [-n N] [--user] [--agent] [--tool] [--all] [--json]
 
-  -n N              how many conversation messages to print (default 100)
+  -n N              how many messages to print (default 100), counted AFTER
+                    the type filter
+  --user            user messages (prompts, steers, merged follow-ups)
+  --agent           assistant messages that carry prose
+  --tool            messages that are only tool calls
+  --all             every type gmux renders
+  --json            print the machine shape instead of markdown
 
 Prints the agent's conversation as markdown, read from the agent's own stored
 conversation: '## User' / '## Assistant' messages with compact [tool]
 one-liners — the actual exchange, not the TUI's box-drawing and spinners.
 -n counts MESSAGES here, not lines.
 
-A store-only snapshot, like 'gmux agent output': it never starts or resumes
+With no type flag you get the conversation without the machinery: user
+messages and assistant messages that actually said something. Type flags
+REPLACE that default rather than adding to it, and they compose
+('--user --tool'), so the view is always exactly the types you named.
+
+  gmux agent logs --agent -n 1 <id>   the latest answer, alone
+  gmux agent logs --tool -n 20 <id>   what it has been running
+
+There is no --thinking: no adapter renders thinking blocks today (pi's own
+transcript drops them), so the flag is refused by name instead of answering
+with silence. 'gmux tail <id>' shows whatever the TUI painted.
+
+--json prints a JSON array of {role, type, text, prose} — the machine contract
+for this read.
+
+A store-only snapshot, like 'gmux agent status': it never starts or resumes
 anything, so it works on a dead retained session. Local sessions only, and
 only for agents whose conversation gmux can read — anything else answers
 unsupported_adapter, where 'gmux tail <id>' shows the terminal instead.
 
-The three reading verbs answer three different questions:
+The reading verbs split by what you know you want:
 
-  gmux tail <id>          what is on its screen (raw terminal, any session)
-  gmux agent logs <id>    what it has been doing (this command)
-  gmux agent output <id>  what the answer is (its latest message)
+  gmux tail <id>          the raw screen (any session)
+  gmux agent logs <id>    the exact text you want (this command)
+  gmux agent status <id>  show me what matters, I'll decide after
+
+'gmux agent logs --agent -n 1' approximates the old 'gmux agent output'. It is
+a snapshot read, so it can be staler than the answer a 'gmux wait' or a
+synchronous prompt carries — those report the adapter's assertion at turn
+close.
 `)
 	default:
 		fmt.Fprint(w, `gmux agent — drive an agent session by intent instead of keystrokes
@@ -1035,13 +1244,14 @@ The three reading verbs answer three different questions:
   gmux agent prompt --new [--model M] [--name N] [prompt]
                                     launch a session and send its first prompt
   gmux agent cancel <id>            interrupt the running turn
-  gmux agent logs <id> [-n N]       print the conversation as markdown
-  gmux agent output <id>            print the agent's latest message
+  gmux agent status <id> [--json]   state, trigger and the content that matters
+  gmux agent logs <id> [-n N] [--user|--agent|--tool|--all] [--json]
+                                    print the conversation, filtered
 
 Unlike 'gmux send', which types raw bytes at a terminal and cannot say whether
 the agent read them, prompt and cancel wait until the agent can accept input,
-submit the way that agent expects, and report what the daemon observed. logs
-and output are store-only snapshots: they never start or resume the agent.
+submit the way that agent expects, and report what the daemon observed. status
+and logs are store-only snapshots: they never start or resume the agent.
 
 Prompting. A plain prompt starts a fresh turn (restarting a dead retained
 session if needed); --new launches a new pi session first and prints its id as
@@ -1052,17 +1262,19 @@ with either and only decides whether you block. Flags go before the id;
 everything after the id is the prompt, verbatim. Omit the prompt to pipe it on
 stdin (it stays one prompt).
 
-Reading. Three questions, three verbs, no word doing double duty: 'gmux tail'
-shows what is on the session's screen (raw terminal, any session); 'gmux agent
-logs' shows what the agent has been doing (the conversation as markdown, -n in
-messages); 'gmux agent output' shows what the answer is (its latest message).
-logs and output are store-only snapshots: they never start or resume the agent
-and work on a dead retained session.
+Reading. The split is what you know you want, not what shape comes back:
+'gmux tail' is the raw screen (any session); 'gmux agent logs' is the exact
+text you want (filter by --user/--agent/--tool/--all, -n counts messages
+post-filter); 'gmux agent status' is "show me what matters" — state line,
+trigger excerpt, and the answer or the last few messages. Both agent reads are
+store-only snapshots: they never start or resume the agent, they work on a dead
+retained session, and both take --json for a stable machine shape.
 
 Results. A synchronous prompt — and 'gmux wait' — prints the agent's answer
 when the turn completes. A failed or interrupted turn prints nothing (a stale
-answer is worse than none); 'gmux agent output <id>' reads what exists, even
-after the session died. Exit codes: 0 completed, 2 intentionally interrupted,
+answer is worse than none); 'gmux agent status <id>' shows what exists, even
+after the session died — as a snapshot it can be staler than the answer a wait
+carries. Exit codes: 0 completed, 2 intentionally interrupted,
 1 anything else (failed turn, timeout, dead runner, usage, transport).
 
 Retrying. admission_timeout, delivery_timeout, and
@@ -1076,7 +1288,7 @@ Scope. Agent sessions on this host only, and pi only for now; other agents
 fail with unsupported_adapter — drive those with 'gmux send' and read them
 with 'gmux tail'.
 
-  gmux agent prompt|logs|cancel|output --help   per-verb help
+  gmux agent prompt|logs|status|cancel --help   per-verb help
 `)
 	}
 }

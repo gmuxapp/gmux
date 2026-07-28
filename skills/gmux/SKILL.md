@@ -17,7 +17,7 @@ gmux -- <cmd> [args]         # run blocking; exits with the child's exit code
 gmux -d -- <cmd> [args]      # run detached; prints the session id on stdout
 gmux agent prompt <id> 'text'   # prompt an AGENT session; blocks until the turn ends
 gmux agent prompt --new 'text'  # launch a new pi session AND prompt it (prints the id first)
-gmux agent output <id>          # print that agent's latest message
+gmux agent status <id>          # what matters now: state, trigger, answer
 gmux agent cancel <id>          # interrupt the running turn
 gmux send <id> 'text' Enter  # RAW: type text and submit (Enter is explicit)
 gmux send <id> C-c           # send a control key (interrupt), no text
@@ -26,7 +26,10 @@ gmux wait <id>               # block until the turn ends; prints an agent's answ
 gmux wait --quiet <id>       # ...synchronize only, print nothing
 gmux wait <id> --for-text S  # block until S appears in the output
 gmux tail <id> [-n N]        # RAW: last N lines of terminal output (N=100)
-gmux agent logs <id> [-n N]  # an agent's conversation as markdown (N messages)
+gmux agent logs <id> [-n N] [--user|--agent|--tool|--all] [--json]
+                             # an agent's conversation as markdown (N messages,
+                             # counted after the type filter)
+gmux agent logs --agent -n 1 <id>   # just the latest answer
 gmux ls [--json]             # list sessions (--json for machine parsing)
 gmux kill <id>               # SIGTERM the runner
 ```
@@ -79,7 +82,8 @@ flags (`--wait`, `--timeout`) only work *before* the id.
 ```bash
 id=$(gmux -d -- pi)
 gmux agent prompt --timeout 600 $id 'run the suite and fix what fails'
-gmux agent output $id                     # the answer, verbatim, no [tool] lines
+gmux agent status $id                     # state, trigger, and the answer
+gmux agent logs --agent -n 1 $id           # the answer alone, no [tool] lines
 git diff | gmux agent prompt $id           # prompt from stdin (stays one prompt)
 ```
 
@@ -87,7 +91,7 @@ git diff | gmux agent prompt $id           # prompt from stdin (stays one prompt
 
 ```bash
 id=$(gmux agent prompt --new --no-wait --name review 'review the diff on this branch')
-gmux wait $id && gmux agent output $id
+gmux wait $id && gmux agent status $id
 
 gmux agent prompt --new --model anthropic/sonnet 'summarize this repo'
 ```
@@ -124,15 +128,19 @@ launch. `--new` is pi-only — for any other command the two-step
 stdout (the turn's final message, no `[tool]` lines), as the agent asserted it
 for that exact turn. A turn nobody could identify as yours prints nothing rather
 than somebody else's answer, and a very long answer is capped at the agent with
-a note on stderr — `gmux agent output <id>` has the full text. Exit codes are
+a note on stderr — `gmux agent logs --agent -n 1 <id>` has the full text. Exit codes are
 gmux's global taxonomy, identical for every verb that reports a gmux verdict:
 `0` completed, `2` intentionally interrupted, `1` everything else (failed turn,
 `--timeout`, dead runner, usage/transport error). The exceptions pass a code
 through instead: `gmux -- <cmd>` and `gmux edit` return the child's, and
 `gmux daemon|auth|remote` return gmuxd's. A turn that did not complete prints **no**
 answer — a previous turn's reply must never be presented as this one's; read
-what exists with `gmux agent output <id>` (works even after the session died).
-Use `gmux agent logs <id>` when you want the whole conversation.
+what exists with `gmux agent status <id>` (works even after the session died).
+Use `gmux agent logs <id>` when you want specific text: no flag gives the
+conversation (user messages plus assistant prose), `--user`/`--agent`/`--tool`/
+`--all` **replace** that set, `-n` counts messages after the filter, and
+`--json` prints `{role, type, text, prose}` objects. Both reads are snapshots of
+the stored conversation, so they can be staler than the answer a wait carries.
 
 Other shapes, all with the flags **before** the id (text after the id is
 verbatim):
@@ -169,7 +177,7 @@ silently.
 Errors carry a stable code. `admission_timeout`, `delivery_timeout` and
 `transport_error` are **indeterminate** — the prompt
 may already have landed, so do not blindly retry; inspect with `gmux agent
-output`/`gmux agent logs` first. So is a bare transport failure with no code (a dropped
+status`/`gmux agent logs` first. So is a bare transport failure with no code (a dropped
 connection to gmuxd): the request may have been delivered before the connection
 went away. `runner_outdated` (the session predates semantic actions: restart it),
 `precondition_failed`, `delivery_pending`, `not_ready`, `not_running` and
@@ -184,7 +192,7 @@ id=$(gmux -d -- pi "implement the feature")
 gmux wait $id
 
 gmux agent prompt --timeout 900 $id "$(cat review.txt)"
-gmux agent output $id
+gmux agent status $id
 ```
 
 For **raw** (non-agent) sessions, **prefer `gmux send --wait` over `gmux send … && gmux wait`** for "send a
@@ -209,7 +217,8 @@ done
 
 for id in "${ids[@]}"; do
   echo "=== $id ==="
-  gmux agent output "$id"      # each agent's final answer (agent logs for the conversation)
+  gmux agent logs --agent -n 1 "$id"   # each agent's final answer
+  # ...or 'gmux agent status "$id"' for state + trigger + answer
 done
 ```
 
@@ -244,7 +253,7 @@ deploy.sh` **will** deploy after a failed build. Run the command as its own
 session (`gmux -- make build`) if you need its result.
 
 For a pi session whose turn completed, `wait` also **prints the agent's latest
-final message** — the same text `gmux agent output` returns — so
+final message** — the same answer `gmux agent status` reports — so
 `answer=$(gmux wait $id)` works. `--quiet` suppresses it. A failed, interrupted
 or dead turn prints nothing (the stderr line says which); shell sessions,
 Claude/Codex sessions and output-condition waits are synchronization-only.
@@ -274,13 +283,13 @@ is line-wise against the rendered terminal output (ANSI stripped, same text
 `gmux tail` shows), including output that appeared before the wait
 started, so the pattern must fit on one terminal line.
 
-## Reading a session: three questions, three commands
+## Reading a session: three commands, split by what you know you want
 
-| Question | Command | `-n` counts |
+| You want | Command | `-n` counts |
 | --- | --- | --- |
-| What is on its screen? | `gmux tail <id>` (any session) | lines |
-| What has it been doing? | `gmux agent logs <id>` (agents) | messages |
-| What is the answer? | `gmux agent output <id>` | — |
+| The raw screen | `gmux tail <id>` (any session) | lines |
+| The exact text you want | `gmux agent logs <id>` (agents) | messages (post-filter) |
+| "Show me what matters" | `gmux agent status <id>` (agents) | — |
 
 `gmux tail` is always raw: the last N lines of rendered terminal output, plain
 text, for shells, one-shot commands and agents alike.
@@ -289,14 +298,32 @@ For agent sessions backed by a conversation file (pi), `gmux agent logs` prints
 the conversation itself as markdown — `## User` / `## Assistant` messages with
 compact `[tool] …` one-liners — instead of the TUI's terminal rendering. `-n`
 counts messages there, not lines; thinking blocks and tool outputs are omitted.
-Like `agent output` it reads the stored conversation, so it never starts or
-resumes anything and works on a dead session (local sessions only). This is the
-best way to read another agent's work:
+Type filters pick what you get: no flag gives user messages plus assistant
+prose, and `--user`/`--agent`/`--tool`/`--all` **replace** that default set
+(`--json` prints `{role, type, text, prose}` objects). There is no `--thinking`:
+nothing renders thinking blocks today, so the flag is refused by name.
+
+`gmux agent status <id>` is the other end of the split — one fixed shape
+whatever the session is doing: a state line (alive/dead, active/idle, the last
+closed turn's outcome and rough recency), the triggering excerpt, and the
+relevant content (the answer when idle; the last few messages and a working
+indicator while a turn runs). A running turn reports no outcome, and a session
+that died mid-turn reports `the turn never finished (runner died)` — the same
+verdict `gmux wait` gives that row, never "completed". `--json` gives one object
+with those parts and a `content.kind` of `"answer"`, `"recent"` or `"none"`;
+fields for a turn that does not exist (`state.last_turn_outcome`,
+`state.last_turn_cause`) are absent rather than empty.
+
+Both agent reads are snapshots of the stored conversation: they never start or
+resume anything, they work on a dead session (local sessions only), and they can
+be staler than the answer a `wait` or a synchronous `prompt` carries. This is
+the best way to read another agent's work:
 
 ```bash
 gmux agent prompt $id 'summarize your findings'
-gmux agent output $id        # just the reply
-gmux agent logs $id -n 2     # the prompt and the reply, clean markdown
+gmux agent logs --agent -n 1 $id  # just the reply
+gmux agent logs $id -n 2          # the prompt and the reply, clean markdown
+gmux agent status $id             # state + trigger + answer, one report
 ```
 
 Shell sessions, and agents with no readable conversation (`unsupported_adapter`),
