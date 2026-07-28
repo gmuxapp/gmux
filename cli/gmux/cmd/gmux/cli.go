@@ -69,8 +69,12 @@ type command struct {
 	keysLiteral bool     // -l: treat args as literal text, not key names
 	keys        []string // key/text arguments
 
+	// agent logs message-type filter (nil = the daemon's default: user +
+	// prose-bearing agent messages). Explicit type flags replace that set.
+	logTypes []string
+
 	// agent (modeAgent)
-	agentSub    string  // prompt|cancel|output
+	agentSub    string  // prompt|cancel|status|logs
 	agentMode   string  // prompt|follow_up|steer (prompt verb only)
 	agentNoWait bool    // --no-wait: return at the admission boundary
 	promptText  *string // inline prompt text (nil = read stdin)
@@ -277,7 +281,14 @@ func parseCLI(args []string) (*command, error) {
 	// Agent verbs typed without their namespace get the namespace guide:
 	// `gmux prompt <id> ...` is far more likely a missing `agent` than a
 	// program named prompt.
-	if head == "prompt" || head == "cancel" || head == "output" || head == "logs" {
+	// The removed read verb keeps its own migration line, namespace or not: a
+	// caller typing it is following older docs, and "unknown command" would not
+	// say what replaced it.
+	if head == "output" {
+		return nil, &usageError{topic: "agent", err: errors.New(
+			"agent output was replaced by 'gmux agent status <id>'; for the answer alone use 'gmux agent logs --agent -n 1 <id>'")}
+	}
+	if head == "prompt" || head == "cancel" || head == "status" || head == "logs" {
 		return nil, &usageError{topic: "agent", err: fmt.Errorf(
 			"unknown command %q; agent commands are namespaced: gmux agent %s ... (%s)", head, head, runHint)}
 	}

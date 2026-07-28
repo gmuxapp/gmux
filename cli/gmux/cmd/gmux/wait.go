@@ -67,14 +67,14 @@ const (
 // A wait is also conditionally RESULT-BEARING (ADR 0027 §11 and its
 // "where a result-bearing answer comes from" amendment): when a
 // renderer-capable agent session completes its turn normally, the
-// daemon returns the same latest-final-message `gmux agent output`
+// daemon returns the same latest-final-message the message-scope read
 // selects and this prints it on stdout. Deliberate omissions:
 //
 //   - --quiet suppresses it (pure synchronization);
 //   - an error, an interruption or a death prints NO result. The newest
 //     stored message would belong to a previous or partial turn, and
 //     presenting it as this turn's answer is worse than silence; the
-//     condition goes to stderr instead. `gmux agent output` remains
+//     condition goes to stderr instead. `gmux agent status` remains
 //     available for explicit inspection;
 //   - predicate waits (--for-text/--for-regex) and shell/process
 //     sessions stay synchronization-only, exactly as before: the daemon
@@ -187,7 +187,7 @@ type waitResult struct {
 	// carries what there is (silently dropping the tail would be worse), and the
 	// fact goes to stderr where the account belongs.
 	Truncated bool `json:"truncated"`
-	// ConversationReadable says whether `gmux agent output` can answer for
+	// ConversationReadable says whether `gmux agent status` can answer for
 	// this session at all. Shells, one-shot commands and Claude/Codex
 	// sessions have no semantic conversation, and pointing them at that verb
 	// would send the caller to a route that answers 404.
@@ -281,20 +281,20 @@ func noteTruncatedAnswer(sess cliSession, truncated bool) {
 	if !truncated {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "gmux: the answer was truncated at the agent; read it in full with 'gmux agent output %s'\n",
+	fmt.Fprintf(os.Stderr, "gmux: the answer was truncated at the agent; read it in full with 'gmux agent logs --agent -n 1 %s'\n",
 		shortID(sess.ID))
 }
 
 // inspectHint names the verb that can actually show what happened.
 //
-// `gmux agent output` only exists for sessions with a readable agent
+// `gmux agent status` only exists for sessions with a readable agent
 // conversation. A failed one-shot command (`gmux -d -- make build`, whose
 // non-zero exit closes its lifetime turn with Error=true) or a Claude/Codex
 // session has none, and sending the caller there would answer 404 — for those,
 // the terminal output is the record.
 func inspectHint(sess cliSession, conversationReadable bool) string {
 	if conversationReadable {
-		return "read what exists with 'gmux agent output " + shortID(sess.ID) + "'"
+		return "see what happened with 'gmux agent status " + shortID(sess.ID) + "'"
 	}
 	return "see its output with 'gmux tail " + shortID(sess.ID) + "'"
 }

@@ -128,9 +128,11 @@ It's a snapshot, not a stream — to watch a session live, attach to it or open
 it in the browser.
 
 For an agent session, the semantic views usually answer the question better:
-[`gmux agent logs`](#gmux-agent-logs-id) prints the conversation as markdown
-(what it has been doing) and [`gmux agent output`](#gmux-agent-output-id)
-prints just its latest answer.
+[`gmux agent logs`](#gmux-agent-logs-id) prints the exact conversation text you
+ask for (filterable by message type) and
+[`gmux agent status`](#gmux-agent-status-id) shows what matters right now: state
+line, trigger excerpt, and the answer (or the last few messages while a turn is
+running).
 
 :::note[Changed]
 `gmux tail` briefly defaulted to the conversation transcript for agent
@@ -284,7 +286,7 @@ gmux wait --quiet a3f20187        # synchronize only, print nothing
 Nothing is printed when the turn ended in an error, was interrupted, or the
 session died: a previous or partial turn's message presented as this turn's
 answer would be worse than silence. The condition is reported on stderr, and
-`gmux agent output <id>` still reads whatever exists. Also result-free, and
+`gmux agent status <id>` still shows whatever exists. Also result-free, and
 perfectly waitable: shell/process sessions, agents that assert no turn identity
 (Claude, Codex), output-condition waits, and a wait that arrives after the turn
 has already closed — it never observed that turn, so it reports the conclusion
@@ -334,14 +336,20 @@ quietly typing something — drive those with `gmux send` and read them with
 `gmux tail`. `gmux agent help` prints the namespace guide in the terminal;
 each verb also answers `--help`.
 
-Three reading commands answer three different questions, and no word does
-double duty across the raw/semantic boundary:
+Three reading commands split by **what you know you want**, not by the shape
+that comes back:
 
-| Question | Command | Unit of `-n` |
+| You want | Command | Unit of `-n` |
 | --- | --- | --- |
-| What is on its screen? | [`gmux tail <id>`](#gmux-tail-id) (any session) | lines |
-| What has it been doing? | [`gmux agent logs <id>`](#gmux-agent-logs-id) | messages |
-| What is the answer? | [`gmux agent output <id>`](#gmux-agent-output-id) | — |
+| The raw screen | [`gmux tail <id>`](#gmux-tail-id) (any session) | lines |
+| The exact text you want | [`gmux agent logs <id>`](#gmux-agent-logs-id) | messages (post-filter) |
+| "Show me what matters" | [`gmux agent status <id>`](#gmux-agent-status-id) | — |
+
+:::note[Changed]
+`gmux agent output` was replaced by `gmux agent status` (the report) and
+`gmux agent logs --agent -n 1 <id>` (the answer alone). The old verb fails by
+name and prints both replacements.
+:::
 
 ### `gmux agent prompt [flags] <id> [prompt]`
 
@@ -400,8 +408,9 @@ close, not a conversation read: a result is only ever served to the turn it
 belongs to, and a turn nobody could identify is served none. A turn that failed
 or was interrupted prints **nothing** — a previous or partial turn's message
 presented as this one's answer is worse than silence. Read what exists with
-`gmux agent output <id>`, which is explicitly a snapshot read of the transcript
-and is also where a truncated answer's full text lives.
+`gmux agent status <id>`, or the answer alone with
+`gmux agent logs --agent -n 1 <id>` — both are snapshot reads of the transcript,
+and the latter is where a truncated answer's full text lives.
 
 Failures name a stable code, and the wording distinguishes what is known about
 delivery. `admission_timeout`, `delivery_timeout` and
@@ -425,7 +434,7 @@ gmux agent prompt --new [--model M] [--name N] [--timeout N] [--no-wait] [prompt
 
 # handoff pattern, one command instead of two
 id=$(gmux agent prompt --new --no-wait --name review 'review the diff on this branch')
-gmux wait "$id" && gmux agent output "$id"
+gmux wait "$id" && gmux agent status "$id"
 
 # synchronous: the id, then the answer
 gmux agent prompt --new --model anthropic/sonnet 'summarize this repo'
@@ -517,7 +526,7 @@ action. Plain prompts (Enter) are unaffected.
 
 ### `gmux agent logs <id>`
 
-Print what the agent has been doing: its conversation as clean markdown. For
+Print the exact conversation text you want, as clean markdown. For
 agents that persist a structured conversation file (pi), the transcript is
 reconstructed from that file — the actual user/assistant messages plus compact
 one-line tool calls — rather than the terminal rendering of the TUI, so the
@@ -525,38 +534,109 @@ output is readable and pipe-friendly. Thinking blocks and tool outputs are
 omitted.
 
 ```bash
-gmux agent logs a3f20187          # last 100 messages
-gmux agent logs -n 2 a3f20187     # the prompt and the reply
-gmux agent prompt a3f20187 'fix the failing test' && gmux agent logs -n 4 a3f20187
+gmux agent logs a3f20187              # last 100 messages (user + agent prose)
+gmux agent logs -n 2 a3f20187         # the prompt and the reply
+gmux agent logs --agent -n 1 a3f20187 # the latest answer, alone
+gmux agent logs --tool -n 20 a3f20187 # what it has been running
+gmux agent logs --all a3f20187        # every rendered message type
+gmux agent logs --json --user a3f20187
 ```
 
+**Message-type filters.** With no flag you get the conversation without the
+machinery: user messages and assistant messages that actually said something
+(tool-call-only messages and tool output are excluded). Explicit type flags
+**replace** that default set and compose with each other:
+
+| Flag | Shows |
+| --- | --- |
+| `--user` | user messages (prompts, steers, merged follow-ups) |
+| `--agent` | assistant messages that carry prose |
+| `--tool` | messages that are only tool calls |
+| `--all` | every type gmux renders |
+
+There is no `--thinking`: no adapter renders thinking blocks today (pi's own
+transcript drops them), so the flag is refused by name rather than answering
+with silence — `gmux tail <id>` shows whatever the TUI painted.
+
+`--json` prints a JSON array of `{role, type, text, prose}` on stdout. That
+array is the machine contract for this read; `text` is the message as rendered
+(tool one-liners included) and `prose` is only what the agent said.
+
 `-n` counts **messages** (default 100), not lines — that is the unit difference
-that earned this view its own command. The transcript is read from the
+that earned this view its own command — and it counts them **after** the type
+filter, so `--tool -n 1` is the last tool call rather than "the last message, if
+it happens to be one". The transcript is read from the
 conversation file the agent has flushed to disk, so an assistant message that is
 still streaming appears once it completes.
 
-Read from the agent's own stored conversation, so like `gmux agent output` it
+Read from the agent's own stored conversation, so like `gmux agent status` it
 never starts, resumes or touches a process, and it works on a dead retained
 session. Local sessions only. Exits `1` with a stable code when there is nothing
-to print: `no_conversation` (nothing rendered yet) or `unsupported_adapter` (this
-agent has no conversation gmux can read) — use `gmux tail <id>` for those, which
-shows the terminal itself.
+to print: `no_message` (nothing of the requested types), `no_conversation`
+(nothing rendered yet) or `unsupported_adapter` (this agent has no conversation
+gmux can read) — use `gmux tail <id>` for those, which shows the terminal itself.
 
-### `gmux agent output <id>`
+`gmux agent logs --agent -n 1 <id>` approximates the old `gmux agent output`. It
+is a **snapshot** read, so it can be staler than the answer a `gmux wait` or a
+synchronous `gmux agent prompt` carries: those report what the adapter asserted
+at turn close, while this reads the conversation the agent has flushed to disk.
 
-Print the agent's latest message — its answer, verbatim and untruncated,
-without the compact `[tool]` lines that appear in the transcript.
+### `gmux agent status <id>`
+
+Show what matters about an agent session right now — the verb for "I don't know
+what I want, show me what matters". Always the same three parts, whatever the
+session is doing:
 
 ```bash
-gmux agent prompt a3f20187 'summarize the failures' && gmux agent output a3f20187
+gmux agent status a3f20187
+gmux agent status --json a3f20187
 ```
 
-Read from the agent's own stored conversation, so it never starts, resumes or
-touches a process, and it works on a dead session. Exits `1` with a stable code
-when there is nothing to print: `no_message` (the agent hasn't produced one
-yet), `no_conversation` (no conversation on record), `unsupported_adapter`
-(this agent has no conversation gmux can read). Use `gmux agent logs` for the
-whole conversation, or `gmux tail` for the terminal itself.
+```
+## State
+
+a3f20187 pi — alive, idle; last turn completed 2m ago
+
+## Triggered by
+
+fix the failing test in internal/store
+
+## Answer
+
+Fixed: the fixture wrote the row before the migration ran.
+```
+
+- **State** — short id and adapter, alive/dead, active/idle, and the last
+  *closed* turn's outcome (`completed`, `interrupted`, `error`) with a rough
+  recency. A turn that is still running gets **no** outcome, in the report and
+  in `--json` alike: it has not concluded, and the flags describe the previous
+  turn. A session that **died mid-turn** reads `the turn never finished (runner
+  died)` — the same verdict `gmux wait` reaches for that row (`error`, cause
+  `runner_died`), never `completed`.
+- **Triggered by** — the first lines of the user message that started the
+  current (or last) turn, labeled so it can never be read as the answer. It is
+  the newest user message in the whole conversation, so a turn with hundreds of
+  tool calls cannot crowd it out. When gmux cannot read the conversation at all,
+  this part carries the daemon's reason instead of claiming nothing was asked.
+- **Answer** — the agent's final message when the session is idle. While a turn
+  is running this becomes **Recent**: the last few messages plus a working
+  indicator, because the previous turn's answer is not this turn's.
+
+A **snapshot**: store-only, no runner contact, no resume, so it works on a dead
+retained session — and it can be staler than the answer a `wait` or a
+synchronous prompt carries. The State part is adapter-independent, so a session
+whose conversation gmux cannot read (Claude, Codex, a shell) still gets it, with
+a note instead of the content rather than an error. Local sessions only.
+
+`--json` prints one object mirroring the three parts:
+`{state: {...}, trigger: {text, truncated}, content: {kind, ...}}`, where
+`content.kind` is `"answer"`, `"recent"` or `"none"`. Fields that describe a
+turn which does not exist are **absent** rather than empty:
+`state.last_turn_outcome` (and `state.last_turn_cause`, today only
+`runner_died`) appear only for a concluded turn, so `state.turn_recorded` and
+`state.active` are what a script branches on. `trigger.code` appears only when
+the conversation could not be read. That object is the machine contract for this
+read. For the answer and nothing else, use `gmux agent logs --agent -n 1 <id>`.
 
 ### `gmux kill <id>`
 
