@@ -20,7 +20,7 @@ func TestSendPromptDeliversTheRunnerContract(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.cleanup()
-	if err := SendPrompt(context.Background(), srv.socketPath, "inc-1", "review this\nbranch", "after_turn", "any"); err != nil {
+	if err := SendPrompt(context.Background(), srv.socketPath, "inc-1", "review this\nbranch", "after_turn", "any", ""); err != nil {
 		t.Fatalf("SendPrompt: %v", err)
 	}
 	if gotPath != "/prompt" || gotCT != "application/json" {
@@ -41,7 +41,7 @@ func TestSendPromptPassesEnumsThroughVerbatim(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.cleanup()
-	if err := SendPrompt(context.Background(), srv.socketPath, "inc-1", "x", "tomorrow", "whenever"); err != nil {
+	if err := SendPrompt(context.Background(), srv.socketPath, "inc-1", "x", "tomorrow", "whenever", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got.Delivery != "tomorrow" || got.Require != "whenever" {
@@ -77,7 +77,7 @@ func TestSemanticCallsAreConditionalOnTheRunnersIdentity(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		}))
 		defer srv.cleanup()
-		if err := SendPrompt(context.Background(), srv.socketPath, "inc-A", "x", "now", "inactive"); err != nil {
+		if err := SendPrompt(context.Background(), srv.socketPath, "inc-A", "x", "now", "inactive", ""); err != nil {
 			t.Fatal(err)
 		}
 		if err := SendCancel(context.Background(), srv.socketPath, "inc-A"); err != nil {
@@ -100,7 +100,7 @@ func TestSemanticCallsAreConditionalOnTheRunnersIdentity(t *testing.T) {
 				"code": "incarnation_mismatch", "error": "owned by a different runner"})
 		}))
 		defer srv.cleanup()
-		err := SendPrompt(context.Background(), srv.socketPath, "inc-A", "x", "now", "inactive")
+		err := SendPrompt(context.Background(), srv.socketPath, "inc-A", "x", "now", "inactive", "")
 		if !errors.Is(err, ErrRunnerIncarnationMismatch) {
 			t.Fatalf("SendPrompt = %v, want ErrRunnerIncarnationMismatch", err)
 		}
@@ -115,7 +115,7 @@ func TestSemanticCallsAreConditionalOnTheRunnersIdentity(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		}))
 		defer srv.cleanup()
-		if err := SendPrompt(context.Background(), srv.socketPath, "", "x", "now", "inactive"); err == nil {
+		if err := SendPrompt(context.Background(), srv.socketPath, "", "x", "now", "inactive", ""); err == nil {
 			t.Fatal("an unconditional prompt must not be sent at all")
 		}
 		if err := SendCancel(context.Background(), srv.socketPath, ""); err == nil {
@@ -135,7 +135,7 @@ func TestOldRunnerStatusesBecomeUnsupported(t *testing.T) {
 		srv := startUnixServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(code)
 		}))
-		err := SendPrompt(context.Background(), srv.socketPath, "inc-1", "x", "now", "inactive")
+		err := SendPrompt(context.Background(), srv.socketPath, "inc-1", "x", "now", "inactive", "")
 		srv.cleanup()
 		if !errors.Is(err, ErrRunnerSemanticActionsUnsupported) {
 			t.Fatalf("status %d: %v", code, err)
@@ -190,7 +190,7 @@ func TestUnparseableRefusalKeepsTheRunnersWords(t *testing.T) {
 		_, _ = w.Write([]byte("not json at all"))
 	}))
 	defer srv.cleanup()
-	err := SendPrompt(context.Background(), srv.socketPath, "inc-1", "x", "now", "inactive")
+	err := SendPrompt(context.Background(), srv.socketPath, "inc-1", "x", "now", "inactive", "")
 	var actErr *RunnerActionError
 	if !errors.As(err, &actErr) {
 		t.Fatalf("want structured error, got %v", err)
@@ -218,7 +218,7 @@ func TestSemanticCallsAreBoundedOnlyByContext(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if err := SendPrompt(ctx, srv.socketPath, "inc-1", "x", "now", "inactive"); err == nil {
+	if err := SendPrompt(ctx, srv.socketPath, "inc-1", "x", "now", "inactive", ""); err == nil {
 		t.Fatal("caller deadline must bound the call")
 	}
 }

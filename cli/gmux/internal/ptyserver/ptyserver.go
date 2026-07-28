@@ -1033,6 +1033,7 @@ const maxInputBytes = 1 << 20 // 1 MiB
 //	op "turn" phase start   — the agent loop began (→ active), with the turn's
 //	                          identity (TurnSeq) and Trigger excerpt
 //	op "turn" phase steered — a user message entered the RUNNING loop
+//	                          (text + truncated: whether that text is an excerpt)
 //	op "turn" phase end     — the turn settled: Outcome, Output, Truncated,
 //	                          Diagnostic, title
 //
@@ -1064,11 +1065,16 @@ type hookEvent struct {
 	// monotonic turn counter binding start, injections and close together; an
 	// adapter that does not assert turn identity leaves it 0, and consumers
 	// treat 0 as "unknown" and serve no result for it.
-	TurnSeq    uint64 `json:"turn_seq,omitempty"`
-	Trigger    string `json:"trigger,omitempty"`    // phase start: what began the turn
-	Text       string `json:"text,omitempty"`       // phase steered: the injected message
-	Output     string `json:"output,omitempty"`     // phase end: the turn's final assistant prose
-	Truncated  bool   `json:"truncated,omitempty"`  // phase end: Output was capped at the source
+	TurnSeq uint64 `json:"turn_seq,omitempty"`
+	Trigger string `json:"trigger,omitempty"` // phase start: what began the turn
+	Text    string `json:"text,omitempty"`    // phase steered: the injected message
+	Output  string `json:"output,omitempty"`  // phase end: the turn's final assistant prose
+	// Truncated says the adapter capped what it sent: Output on phase end, Text on
+	// phase steered. On a steered event it is EVIDENCE, not a display detail — it
+	// is the runner's only licence to match the excerpt as a prefix of the text
+	// gmux delivered (see session.matchPendingLocked). Absent means "this is the
+	// whole message", which is what an adapter predating the field also means.
+	Truncated  bool   `json:"truncated,omitempty"`
 	Diagnostic string `json:"diagnostic,omitempty"` // phase end: short reason for a non-completed close
 }
 
@@ -1159,7 +1165,7 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 			// edge are published together and in that order.
 			s.state.OpenTurn(ev.TurnSeq, ev.Trigger)
 		case "steered":
-			s.state.NoteInjection(ev.TurnSeq, ev.Text)
+			s.state.NoteInjection(ev.TurnSeq, ev.Text, ev.Truncated)
 		default:
 			s.applyTurnEnd(ev)
 		}

@@ -1446,6 +1446,14 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 	// answer it cannot attribute, and `gmux agent status` remains the snapshot
 	// read for those.
 	var observedSeq uint64
+	// watch is the injection watch on that same turn: a user message entering the
+	// loop this wait is bound to resolves it early with reason `steered`, because
+	// the answer it is waiting for no longer answers what it waited for (ADR 0027,
+	// "Steering interrupts waits"). A bare `gmux wait` injects nothing, so it
+	// carries no delivery identity and every injection is somebody else's — while
+	// injections that PREDATE the wait are part of the turn it chose to wait on,
+	// which is what the baseline records.
+	var watch injectionWatch
 	active := false
 	// frameFor prefers a frame stamped on the resolving outcome (retained at apply
 	// time for the generation that published it) and falls back to the frame
@@ -1463,8 +1471,10 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 			return
 		}
 		if s.Status.Active && !active {
-			if seq := frameFor(o).CurrentTurnSeq(); seq != 0 {
+			frame := frameFor(o)
+			if seq := frame.CurrentTurnSeq(); seq != 0 {
 				observedSeq = seq
+				watch = injectionWatch{turnSeq: seq, baseline: baselineInjections(frame, seq)}
 			}
 		}
 		active = s.Status.Active
@@ -1472,12 +1482,25 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 	closedTurn := func(o *sessioncoord.Outcome) *sessioncoord.TurnClose {
 		return frameFor(o).ClosedTurn(observedSeq)
 	}
+	// steered answers the wait early when the frame shows a foreign injection on
+	// the bound turn. Written once and used from all three observation paths (the
+	// initial look, the outcome stream, the ticker) so none of them can grow a
+	// different idea of what a steer means.
+	steered := func(o *sessioncoord.Outcome) bool {
+		frame := frameFor(o)
+		v := watch.check(frame)
+		if !v.Steered {
+			return false
+		}
+		writeSteeredWait(w, frame.CurrentTurn(watch.turnSeq).TriggerExcerpt(), v.Text, v.Cause)
+		return true
+	}
 	if cur, ok := visibleSession(fanout.Current().Sessions, sessionID); ok {
 		legacy := legacySessionFromWire(cur)
 		seenAlive = seenAlive || cur.Alive
 		observe(legacy, nil)
 		if verdict, done := terminalReason(legacy, seenAlive); done {
-			writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(nil))
+			writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(nil), watch)
 			return
 		}
 	}
@@ -1496,34 +1519,69 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 			}
 			if outcome.Type == sessioncoord.OutcomeRemoved {
 				// A death carries no result by contract, so no frame is consulted.
-				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), nil)
+				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), nil, injectionWatch{})
 				return
 			}
 			if outcome.Type != sessioncoord.OutcomeUpserted || outcome.Session == nil {
+				// An injection changes no row, so it arrives as a transient
+				// frame-bearing signal with no session attached. It can still end
+				// this wait.
+				if steered(&outcome) {
+					return
+				}
 				continue
 			}
 			legacy := legacySessionFromOutcome(*outcome.Session, outcome.Alive)
 			seenAlive = seenAlive || outcome.Alive
 			observe(legacy, &outcome)
+			if steered(&outcome) {
+				return
+			}
 			if verdict, done := terminalReason(legacy, seenAlive); done {
-				writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(&outcome))
+				writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(&outcome), watch)
 				return
 			}
 		case <-ticker.C:
 			cur, ok := visibleSession(fanout.Current().Sessions, sessionID)
 			if !ok {
-				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), nil)
+				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), nil, injectionWatch{})
 				return
 			}
 			legacy := legacySessionFromWire(cur)
 			seenAlive = seenAlive || cur.Alive
 			observe(legacy, nil)
+			// The ticker re-reads the RETAINED frame, which is what makes a steer
+			// observable even when its transient signal was dropped under backlog.
+			if steered(nil) {
+				return
+			}
 			if verdict, done := terminalReason(legacy, seenAlive); done {
-				writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(nil))
+				writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(nil), watch)
 				return
 			}
 		}
 	}
+}
+
+// writeSteeredWait answers a wait that a user message resolved early.
+//
+// It is deliberately a 200 with its own reason word rather than an error: the
+// wait was answered, correctly, with the one fact the caller needs — the turn it
+// was waiting on is not the turn that will answer. The turn itself keeps running
+// and re-arming is one command away, which is why nothing here suggests the
+// session is in trouble.
+func writeSteeredWait(w http.ResponseWriter, trigger, injected, cause string) {
+	data := map[string]any{"reason": outcomeSteered, "outcome": outcomeSteered}
+	if cause != "" {
+		data["cause"] = cause
+	}
+	if trigger != "" {
+		data["trigger"] = trigger
+	}
+	if injected != "" {
+		data["steered_by"] = injected
+	}
+	writeJSON(w, map[string]any{"ok": true, "data": data})
 }
 
 // writeWaitConclusion answers a resolved turn wait, attaching the turn's
@@ -1563,8 +1621,22 @@ var retainedTurnFrame = func(boot *Bootstrap, sessionID string) *sessioncoord.Tu
 	return boot.Registry.Frame(centralstore.SessionID(sessionID))
 }
 
-func writeWaitConclusion(w http.ResponseWriter, r *http.Request, boot *Bootstrap, sessionID string, verdict waitConclusion, close *sessioncoord.TurnClose) {
+func writeWaitConclusion(w http.ResponseWriter, r *http.Request, boot *Bootstrap, sessionID string, verdict waitConclusion, close *sessioncoord.TurnClose, watch injectionWatch) {
+	// The settled record carries the turn's whole injection list, so a steer this
+	// wait never saw live (a dropped transient signal, or one that arrived in the
+	// same look as the close) is still caught here: the merged answer does not
+	// answer what this wait asked, whenever gmux found out.
+	if outcome, cause, text := watch.closeVerdict(close); outcome == outcomeSteered {
+		writeSteeredWait(w, close.TriggerExcerpt(), text, cause)
+		return
+	}
 	data := map[string]any{"reason": verdict.Reason}
+	// The trigger excerpt travels with every turn conclusion so a non-completed
+	// resolution's stderr report can name what the turn was asked to do — from
+	// relayed facts, never a fresh conversation read.
+	if t := close.TriggerExcerpt(); t != "" {
+		data["trigger"] = t
+	}
 	if verdict.Outcome != "" {
 		data["outcome"] = verdict.Outcome
 		if boot != nil {
@@ -1697,7 +1769,7 @@ func handleInputWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootst
 		// without it an intentionally interrupted turn would exit 0 through the
 		// composition the docs call preferred, while `gmux wait` exits 2. Passing
 		// no close record is what keeps it result-free.
-		writeWaitConclusion(w, r, boot, sessionID, verdict, nil)
+		writeWaitConclusion(w, r, boot, sessionID, verdict, nil, injectionWatch{})
 	}
 }
 

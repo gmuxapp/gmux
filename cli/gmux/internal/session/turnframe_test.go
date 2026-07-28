@@ -172,7 +172,7 @@ func TestInjectionEmitsFrameOnly(t *testing.T) {
 	st.OpenTurn(3, "go")
 	drain(ch)
 
-	st.NoteInjection(3, "actually, stop")
+	st.NoteInjection(3, "actually, stop", false)
 	events := drain(ch)
 	if len(events) != 1 || events[0].Type != "turn_frame" {
 		t.Fatalf("injection emitted %+v", events)
