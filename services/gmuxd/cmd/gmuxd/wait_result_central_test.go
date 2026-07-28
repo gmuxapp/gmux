@@ -8,7 +8,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,11 +15,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/packages/scrollback"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessioncoord"
@@ -34,9 +33,34 @@ type waitFixture struct {
 	store *centralstore.Store
 	boot  *Bootstrap
 	dir   string
-	// marks counts result-window captures made by the handler under test, so a
-	// test can order its appends strictly after the mark.
-	marks atomic.Int64
+	// frame is the turn frame gmuxd retains for this session's live generation:
+	// the adapter's own assertion about its turns, which is the only thing a
+	// wait may report as a result. nil (the default) models every session whose
+	// adapter asserts nothing — a shell, Claude/Codex, a version-skewed runner —
+	// whose closes are served result-free.
+	frameMu sync.Mutex
+	frame   *sessioncoord.TurnFrame
+	// looks counts retained-frame reads, which is how a test orders itself
+	// against the handler having observed the open turn.
+	looks atomic.Int64
+}
+
+// setFrame installs the retained frame, as a runner's turn events would.
+func (f *waitFixture) setFrame(frame *sessioncoord.TurnFrame) {
+	f.frameMu.Lock()
+	defer f.frameMu.Unlock()
+	f.frame = frame
+}
+
+// openTurn/closeTurn are the two frame shapes every test needs.
+func (f *waitFixture) openTurn(seq uint64, trigger string) {
+	f.setFrame(&sessioncoord.TurnFrame{Seq: seq, Current: &sessioncoord.TurnCurrent{TurnSeq: seq, Trigger: trigger}})
+}
+
+func (f *waitFixture) closeTurn(seq uint64, outcome, output string, truncated bool) {
+	f.setFrame(&sessioncoord.TurnFrame{Seq: seq + 100, Last: &sessioncoord.TurnClose{
+		TurnSeq: seq, Outcome: outcome, Output: output, Truncated: truncated,
+	}})
 }
 
 func newWaitFixture(t *testing.T) *waitFixture {
@@ -49,13 +73,14 @@ func newWaitFixture(t *testing.T) *waitFixture {
 	coord := sessioncoord.New(nil, &bootstrapRunners{metas: map[string]sessioncoord.RunnerMeta{}, blocked: map[string]bool{}}, st, nil, nil)
 	t.Cleanup(coord.Close)
 	f := &waitFixture{store: st, boot: &Bootstrap{Store: st, Coordinator: coord}, dir: t.TempDir()}
-	prev := markWaitWindow
-	markWaitWindow = func(ctx context.Context, store *centralstore.Store, id string, turnInProgress bool) resultWindow {
-		w := prev(ctx, store, id, turnInProgress)
-		f.marks.Add(1)
-		return w
+	prev := retainedTurnFrame
+	retainedTurnFrame = func(boot *Bootstrap, id string) *sessioncoord.TurnFrame {
+		f.looks.Add(1)
+		f.frameMu.Lock()
+		defer f.frameMu.Unlock()
+		return f.frame
 	}
-	t.Cleanup(func() { markWaitWindow = prev })
+	t.Cleanup(func() { retainedTurnFrame = prev })
 	return f
 }
 
@@ -78,75 +103,20 @@ func (f *waitFixture) register(t *testing.T, id, adapterName string, lines ...st
 	}
 }
 
-// registerWithConversation registers a session pointing at a conversation file
-// the test can keep appending to, and returns the path.
-func (f *waitFixture) registerWithConversation(t *testing.T, id, adapterName string, lines ...string) string {
-	t.Helper()
-	path := filepath.Join(f.dir, id+".jsonl")
-	writeLines(t, path, lines...)
-	ref := path
-	if _, _, err := f.store.RegisterRunner(context.Background(), centralstore.RunnerRegistration{
-		ID: centralstore.SessionID(id), Adapter: adapterName, Alive: true, CreatedAt: 1, ObservedAt: 1,
-		Facts: centralstore.RunnerFacts{ConversationRef: &ref},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func writeLines(t *testing.T, path string, lines ...string) {
-	t.Helper()
-	var b strings.Builder
-	for _, l := range lines {
-		b.WriteString(l + "\n")
-	}
-	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func appendLines(t *testing.T, path string, lines ...string) {
-	t.Helper()
-	fh, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer fh.Close()
-	for _, l := range lines {
-		if _, err := fh.WriteString(l + "\n"); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-// waitForMark blocks until the handler under test has marked its result window,
-// which is observable as the conversation having been rendered at least once.
-// Polling a real signal beats sleeping: the interfering append must land
-// strictly AFTER the mark for the test to mean anything.
-func waitForMark(t *testing.T, f *waitFixture) {
+// waitForLook blocks until the handler under test has read the retained frame at
+// least once, i.e. has observed the open turn and recorded its identity. Polling
+// a real signal beats sleeping: the close must land strictly AFTER that
+// observation for the test to mean anything.
+func waitForLook(t *testing.T, f *waitFixture) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if f.marks.Load() > 0 {
+		if f.looks.Load() > 0 {
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatal("handler never marked a result window")
-}
-
-// waitForMarks blocks until the agent harness has captured n result windows
-// (one pre-delivery plus one per observed turn-start edge).
-func waitForMarks(t *testing.T, h *agentHarness, n int64) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if h.markCalls.Load() >= n {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("only %d result windows were marked, wanted %d", h.markCalls.Load(), n)
+	t.Fatal("handler never looked at the turn frame")
 }
 
 func decodeWaitData(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
@@ -206,8 +176,10 @@ func TestGenericWaitReportsTheTurnsConclusion(t *testing.T) {
 		wantOutput    bool
 		wantOutputStr string
 	}{
+		// A wait that finds the turn ALREADY CLOSED never identified a turn of
+		// its own, so it reports the conclusion without claiming an answer.
 		{"completed", wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false}},
-			"completed", "", true, "All green."},
+			"completed", "", false, ""},
 		{"terminal error", wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false, Error: true}},
 			"error", "", false, ""},
 		{"interrupted", wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false, Interrupted: true}},
@@ -334,18 +306,19 @@ func TestPredicateWaitDeathHasNoConclusion(t *testing.T) {
 	}
 }
 
-// latestAgentMessageIn under an unbound (snapshot) window is the SAME selector scope=message serves, and every
-// "nothing to show" shape collapses to "" so a result-bearing wait stays quiet
-// instead of failing a legitimate wait.
-func TestLatestAgentMessageIsTheSharedSelector(t *testing.T) {
+// The snapshot selector behind `gmux agent output` (scope=message) survives the
+// amendment untouched: it is explicitly a SNAPSHOT read of the tape, and it is
+// the documented recourse for everything the source assertion deliberately does
+// not serve (a late wait, a truncated answer's full text, a non-asserting
+// adapter). What it must not do is leak a previous turn's prose when the current
+// turn has produced none.
+func TestSnapshotSelectorStillAnswersForOutput(t *testing.T) {
 	f := newConversationFixture(t)
 	f.addPiSession(t, "sess-1", piResultLines...)
 	viaHandler, _ := io.ReadAll(f.do(http.MethodGet, "sess-1", "scope=message").Body)
-	direct := latestAgentMessageIn(context.Background(), f.sessions, "sess-1", snapshotWindow())
-	if strings.TrimRight(string(viaHandler), "\n") != direct || direct != "All green." {
-		t.Fatalf("selector drift: handler=%q direct=%q", viaHandler, direct)
+	if got := strings.TrimRight(string(viaHandler), "\n"); got != "All green." {
+		t.Fatalf("scope=message returned %q", got)
 	}
-
 	// Tool-only current turn: the previous turn's answer must NOT leak out.
 	f.addPiSession(t, "tool-only",
 		piSessionHeader,
@@ -353,19 +326,8 @@ func TestLatestAgentMessageIsTheSharedSelector(t *testing.T) {
 		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"again"}]}}`,
 		`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall","id":"t1","name":"bash","arguments":{}}]}}`,
 	)
-	if got := latestAgentMessageIn(context.Background(), f.sessions, "tool-only", snapshotWindow()); got != "" {
-		t.Fatalf("stale prose leaked: %q", got)
-	}
-	f.addSession(t, "shellish", "shell", "/tmp/whatever.jsonl")
-	f.addSession(t, "noref", "pi", "")
-	f.addSession(t, "badref", "pi", filepath.Join(t.TempDir(), "missing.jsonl"))
-	for _, id := range []string{"shellish", "noref", "badref", "no-such-session"} {
-		if got := latestAgentMessageIn(context.Background(), f.sessions, id, snapshotWindow()); got != "" {
-			t.Fatalf("%s: want quiet, got %q", id, got)
-		}
-	}
-	if got := latestAgentMessageIn(context.Background(), nil, "sess-1", snapshotWindow()); got != "" {
-		t.Fatalf("nil store: %q", got)
+	if code := f.do(http.MethodGet, "tool-only", "scope=message").StatusCode; code != http.StatusNotFound {
+		t.Fatalf("tool-only turn answered %d; stale prose must not be served", code)
 	}
 }
 
@@ -376,11 +338,12 @@ func TestLatestAgentMessageIsTheSharedSelector(t *testing.T) {
 func TestSynchronousPromptCarriesTheResultOnlyOnCompletion(t *testing.T) {
 	t.Run("completed", func(t *testing.T) {
 		h := newAgentHarness(t, liveRow("s", false))
-		h.resultText = "All green."
 		get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "hi", "mode": modePrompt}))
 		<-h.prompts
 		h.nextTimer(t)
+		h.openTurn(1, "hi")
 		h.publish(statusOutcome("s", true, false, false))
+		h.closeTurn(1, outcomeCompleted, "All green.")
 		h.publish(statusOutcome("s", false, false, false))
 		got := get()
 		if got.data()["outcome"] != outcomeCompleted || got.data()["output"] != "All green." {
@@ -397,11 +360,15 @@ func TestSynchronousPromptCarriesTheResultOnlyOnCompletion(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newAgentHarness(t, liveRow("s", false))
-			h.resultText = "stale prior answer"
 			get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "hi", "mode": modePrompt}))
 			<-h.prompts
 			h.nextTimer(t)
+			h.openTurn(1, "hi")
 			h.publish(statusOutcome("s", true, false, false))
+			// The adapter's close for a non-completed turn carries no output at
+			// all; a frame still holding a PRIOR turn's answer must not be
+			// mined for one either.
+			h.closeTurn(1, tc.outcome, "")
 			h.publish(statusOutcome("s", false, tc.errored, tc.interrupted))
 			got := get()
 			if got.data()["outcome"] != tc.outcome {
@@ -410,13 +377,10 @@ func TestSynchronousPromptCarriesTheResultOnlyOnCompletion(t *testing.T) {
 			if _, ok := got.data()["output"]; ok {
 				t.Fatalf("%s carried a result: %v", tc.name, got.body)
 			}
-			if n := h.resultCalls.Load(); n != 0 {
-				t.Fatalf("result was selected %d times for a non-completed turn", n)
-			}
 		})
 	}
-	t.Run("nothing to render stays quiet", func(t *testing.T) {
-		// No conversation on disk: the field is omitted, never empty.
+	t.Run("a turn with nothing to say stays quiet", func(t *testing.T) {
+		// The adapter asserted nothing: the field is omitted, never empty.
 		h := newAgentHarness(t, liveRow("s", false))
 		get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "hi", "mode": modePrompt}))
 		<-h.prompts
@@ -433,7 +397,6 @@ func TestSynchronousPromptCarriesTheResultOnlyOnCompletion(t *testing.T) {
 	})
 	t.Run("detached prompt carries neither outcome nor result", func(t *testing.T) {
 		h := newAgentHarness(t, liveRow("s", false))
-		h.resultText = "All green."
 		get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "hi", "mode": modePrompt, "wait": false}))
 		<-h.prompts
 		h.nextTimer(t)
@@ -484,144 +447,296 @@ func TestWaitAndPromptShareOneClassification(t *testing.T) {
 	}
 }
 
-// ── result windows: binding an answer to the turn that closed ──────────────
+// ── turn identity: serving an answer only to the turn that closed ──────────
 
-// The selector's two edges, in isolation. Every row is a way the unbounded
-// "newest prose in the current turn" selector gets attribution wrong.
-func TestAssistantProseInWindowBindsToOneTurn(t *testing.T) {
-	msg := func(role, prose string) adapter.ConversationMessage {
-		return adapter.ConversationMessage{Role: role, Text: prose, Prose: prose}
-	}
-	tool := func() adapter.ConversationMessage {
-		return adapter.ConversationMessage{Role: "assistant", Text: "[tool] bash {}"}
-	}
-	conv := []adapter.ConversationMessage{
-		msg("user", "first ask"), msg("assistant", "first answer"),
-		msg("user", "second ask"), msg("assistant", "second answer"),
-	}
+// The identity rule in isolation, on the frame itself: a result is served only
+// when the settled record names the exact turn the waiter observed. Every other
+// shape — an unknown turn, a different turn, no close at all — is result-free.
+func TestTurnFrameServesOnlyTheMatchingTurn(t *testing.T) {
+	frame := &sessioncoord.TurnFrame{Last: &sessioncoord.TurnClose{TurnSeq: 7, Outcome: outcomeCompleted, Output: "ours"}}
 	for _, tc := range []struct {
-		name  string
-		msgs  []adapter.ConversationMessage
-		start int
-		want  string
-		found bool
+		name     string
+		frame    *sessioncoord.TurnFrame
+		observed uint64
+		want     string
 	}{
-		{"our turn is the tail", conv, 2, "second answer", true},
-		// A newer turn landed before the read: its prose is NOT ours.
-		{"later turn is excluded", conv, 0, "first answer", true},
-		// Our turn produced nothing sayable; the previous turn's answer must
-		// not be promoted into the gap.
-		{"previous turn is excluded", []adapter.ConversationMessage{
-			msg("user", "ask"), msg("assistant", "old answer"), msg("user", "again"), tool(),
-		}, 2, "", false},
-		// The prompt path marks before delivery, so its own user message is the
-		// first thing inside the window and must not end it.
-		{"leading user message is skipped", []adapter.ConversationMessage{
-			msg("user", "old"), msg("assistant", "old answer"),
-			msg("user", "ours"), msg("assistant", "our answer"),
-		}, 2, "our answer", true},
-		{"tool-only tail falls back within the turn", []adapter.ConversationMessage{
-			msg("user", "ours"), msg("assistant", "our answer"), tool(),
-		}, 0, "our answer", true},
-		{"empty window", conv, len(conv), "", false},
-		// A rotated/truncated conversation can no longer prove what our turn
-		// said; silence beats a guess.
-		{"watermark past the end", conv, len(conv) + 3, "", false},
-		{"negative watermark is clamped", conv, -1, "first answer", true},
+		{"exact match", frame, 7, "ours"},
+		// Two back-to-back turns between looks: the newer close is not ours, and
+		// degrading to result-free is the whole point.
+		{"a later turn's close is not ours", frame, 6, ""},
+		{"an earlier turn's close is not ours", frame, 8, ""},
+		// 0 is "we never identified a turn" — an adapter that asserts no
+		// identity, a raw PUT /status close, a version-skewed runner.
+		{"unknown observed turn", frame, 0, ""},
+		{"no close yet", &sessioncoord.TurnFrame{Current: &sessioncoord.TurnCurrent{TurnSeq: 7}}, 7, ""},
+		{"no frame at all", nil, 7, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, found := assistantProseInWindow(tc.msgs, tc.start)
-			if got != tc.want || found != tc.found {
-				t.Fatalf("got %q,%v want %q,%v", got, found, tc.want, tc.found)
+			got := tc.frame.ClosedTurn(tc.observed)
+			if tc.want == "" {
+				if got != nil {
+					t.Fatalf("served %+v, want result-free", got)
+				}
+				return
+			}
+			if got == nil || got.Output != tc.want {
+				t.Fatalf("served %+v, want %q", got, tc.want)
 			}
 		})
 	}
+	if seq := frame.CurrentTurnSeq(); seq != 0 {
+		t.Fatalf("a frame with no open turn reported seq %d", seq)
+	}
+	var nilFrame *sessioncoord.TurnFrame
+	if seq := nilFrame.CurrentTurnSeq(); seq != 0 {
+		t.Fatalf("nil frame reported seq %d", seq)
+	}
 }
 
-// The race Sol identified, end to end through the real handler: a turn that
-// lands between the close observation and the result read must neither replace
-// our answer nor make us lose it.
+// The generic wait, end to end: it records the running turn's identity when it
+// first sees the turn open, and serves that turn's asserted answer at the close.
 //
-// The schedule is real, not simulated: the handler marks its window on the
-// initial Active=true observation, the test then rewrites the conversation, and
-// only afterwards does the fanout report the turn closed — so the read happens
-// strictly after the interfering append.
-func TestGenericWaitBindsResultToTheTurnItObserved(t *testing.T) {
-	const (
-		userLine   = `{"type":"message","id":"u%d","message":{"role":"user","content":[{"type":"text","text":"ask %d"}]}}`
-		answerLine = `{"type":"message","id":"a%d","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}`
-	)
-	for _, tc := range []struct {
-		name string
-		// appended between the close observation and the read
-		interfering []string
-		want        string
-	}{
-		{
-			// (b) a complete newer turn: its answer must not be reported as ours.
-			name: "a whole new turn cannot replace our answer",
-			interfering: []string{
-				fmt.Sprintf(userLine, 2, 2),
-				fmt.Sprintf(answerLine, 2, "second answer"),
-			},
-			want: "first answer",
-		},
-		{
-			// (a) only a new user message: the snapshot selector would stop at
-			// it and report nothing, silently losing our own answer.
-			name:        "a new user message cannot lose our answer",
-			interfering: []string{fmt.Sprintf(userLine, 2, 2)},
-			want:        "first answer",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newWaitFixture(t)
-			// At turn start the conversation holds the prompt only — the state
-			// the daemon actually sees when a turn opens.
-			path := f.registerWithConversation(t, "s", "pi", piSessionHeader, fmt.Sprintf(userLine, 1, 1))
-			fan := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: true}})
-
-			rec := httptest.NewRecorder()
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				handleWaitCentral(rec, httptest.NewRequest(http.MethodPost, "/wait?timeout=5", nil),
-					f.boot, fan, "s", func(string) string { return f.dir })
-			}()
-
-			// Let the handler observe the open turn and mark its window.
-			waitForMark(t, f)
-
-			// Our turn finishes, and a newer turn immediately lands.
-			appendLines(t, path, append([]string{fmt.Sprintf(answerLine, 1, "first answer")}, tc.interfering...)...)
-			fan.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{
-				Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Active: false}}},
-			}})
-
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("wait did not resolve")
-			}
-			data := decodeWaitData(t, rec)
-			if data["outcome"] != outcomeCompleted {
-				t.Fatalf("data=%v", data)
-			}
-			if data["output"] != tc.want {
-				t.Fatalf("output=%v want %q (data=%v)", data["output"], tc.want, data)
-			}
-		})
-	}
-}
-
-// A wait that finds the turn already closed has no turn of its own to bind to
-// and keeps snapshot semantics — the same answer `gmux agent output` gives.
-func TestAlreadyClosedTurnKeepsSnapshotSemantics(t *testing.T) {
+// Note which transport this exercises: the resolution arrives through the fanout
+// snapshot, which carries no event and no payload at all. That path is exactly
+// as result-bearing as the outcome path because the frame is RETAINED rather
+// than ridden on an edge — the failure mode ("completed, exit 0, no answer") this
+// design exists to kill.
+func TestGenericWaitServesTheAssertedResult(t *testing.T) {
 	f := newWaitFixture(t)
 	f.register(t, "s", "pi", piResultLines...)
-	data := f.wait(t, "s", "timeout=1", wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false}})
-	if data["output"] != "All green." {
+	f.openTurn(11, "run the tests")
+	fan := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: true}})
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleWaitCentral(rec, httptest.NewRequest(http.MethodPost, "/wait?timeout=5", nil),
+			f.boot, fan, "s", func(string) string { return f.dir })
+	}()
+	waitForLook(t, f)
+	// The turn settles. A truncated flag rides along: the caller must be able to
+	// tell a capped answer from a complete one.
+	f.closeTurn(11, outcomeCompleted, "All green.", true)
+	fan.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{
+		Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Active: false}}},
+	}})
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait did not resolve")
+	}
+	data := decodeWaitData(t, rec)
+	if data["outcome"] != outcomeCompleted || data["output"] != "All green." || data["truncated"] != true {
 		t.Fatalf("data=%v", data)
+	}
+}
+
+// A turn that closes while the frame's newest close names ANOTHER turn (a second
+// turn started and settled between the waiter's looks) resolves result-free. The
+// old reconstruction model reported the wrong turn's prose here; nothing is
+// worse than a confidently wrong answer under exit 0.
+func TestGenericWaitRefusesAnotherTurnsAnswer(t *testing.T) {
+	f := newWaitFixture(t)
+	f.register(t, "s", "pi", piResultLines...)
+	f.openTurn(11, "ours")
+	fan := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: true}})
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleWaitCentral(rec, httptest.NewRequest(http.MethodPost, "/wait?timeout=5", nil),
+			f.boot, fan, "s", func(string) string { return f.dir })
+	}()
+	waitForLook(t, f)
+	f.closeTurn(12, outcomeCompleted, "somebody else's answer", false)
+	fan.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{
+		Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Active: false}}},
+	}})
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait did not resolve")
+	}
+	data := decodeWaitData(t, rec)
+	if data["outcome"] != outcomeCompleted {
+		t.Fatalf("data=%v", data)
+	}
+	if got, ok := data["output"]; ok {
+		t.Fatalf("another turn's answer was served: %v", got)
+	}
+}
+
+// A generation that never asserted anything must still WAIT normally: shell
+// sessions, hook-driven agents and version-skewed runners complete result-free
+// rather than hanging on an invariant they cannot satisfy. This is the scope of
+// the delivery invariant, stated as a test.
+func TestFrameLessGenerationCompletesResultFree(t *testing.T) {
+	f := newWaitFixture(t)
+	f.register(t, "s", "pi", piResultLines...) // renderer adapter, but no frame ever sent
+	fan := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: true}})
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleWaitCentral(rec, httptest.NewRequest(http.MethodPost, "/wait?timeout=5", nil),
+			f.boot, fan, "s", func(string) string { return f.dir })
+	}()
+	waitForLook(t, f)
+	fan.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{
+		Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Active: false}}},
+	}})
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a frame-less close must resolve, not hang")
+	}
+	data := decodeWaitData(t, rec)
+	if data["outcome"] != outcomeCompleted {
+		t.Fatalf("data=%v", data)
+	}
+	if _, ok := data["output"]; ok {
+		t.Fatalf("a frame-less close carried a result: %v", data)
+	}
+}
+
+// A tool-only turn asserts `completed` with NO output, and that is reported as
+// an absent field rather than an empty one: absence means "the turn produced no
+// prose", never "the transport lost it".
+func TestToolOnlyTurnCompletesWithoutOutput(t *testing.T) {
+	f := newWaitFixture(t)
+	f.register(t, "s", "pi", piResultLines...)
+	f.openTurn(3, "do a thing")
+	fan := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: true}})
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleWaitCentral(rec, httptest.NewRequest(http.MethodPost, "/wait?timeout=5", nil),
+			f.boot, fan, "s", func(string) string { return f.dir })
+	}()
+	waitForLook(t, f)
+	f.closeTurn(3, outcomeCompleted, "", false)
+	fan.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{
+		Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Active: false}}},
+	}})
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait did not resolve")
+	}
+	data := decodeWaitData(t, rec)
+	if data["outcome"] != outcomeCompleted {
+		t.Fatalf("data=%v", data)
+	}
+	if got, ok := data["output"]; ok {
+		t.Fatalf("tool-only turn carried %q", got)
+	}
+}
+
+// The prompt path resolves from the frame stamped on the OUTCOME that declares
+// the close — the other carrier, and the one that matters when the retained frame
+// has already moved on to a newer turn.
+func TestPromptResolvesFromTheOutcomeCarriedFrame(t *testing.T) {
+	h := newAgentHarness(t, liveRow("s", false))
+	get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "hi", "mode": modePrompt}))
+	<-h.prompts
+	h.nextTimer(t)
+	open := statusOutcome("s", true, false, false)
+	open.Frame = &sessioncoord.TurnFrame{Current: &sessioncoord.TurnCurrent{TurnSeq: 21, Trigger: "hi"}}
+	h.publish(open)
+	// By the time the close is delivered the runner has moved on: the RETAINED
+	// frame describes a newer turn, and only the frame stamped on this outcome
+	// can attribute the answer correctly.
+	h.closeTurn(22, outcomeCompleted, "a newer turn's answer")
+	closed := statusOutcome("s", false, false, false)
+	closed.Frame = &sessioncoord.TurnFrame{Last: &sessioncoord.TurnClose{
+		TurnSeq: 21, Outcome: outcomeCompleted, Output: "our answer",
+	}}
+	h.publish(closed)
+	got := get()
+	if got.data()["output"] != "our answer" {
+		t.Fatalf("output=%v (body=%v)", got.data()["output"], got.body)
+	}
+}
+
+// The acceptance test of the whole amendment, at the daemon boundary: the FIRST
+// synchronous prompt of a fresh session returns its answer. Under the watermark
+// model this case failed by construction — the window was marked before pi had
+// even created the conversation file — and it is the reason attribution moved to
+// the source. Note there is no conversation on disk at all here: the answer can
+// only come from the adapter's assertion.
+func TestFirstPromptOfAFreshSessionReturnsItsAnswer(t *testing.T) {
+	h := newAgentHarness(t, liveRow("s", false))
+	get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "what is 2+2?", "mode": modePrompt}))
+	<-h.prompts
+	h.nextTimer(t)
+	h.openTurn(1, "what is 2+2?")
+	h.publish(statusOutcome("s", true, false, false))
+	h.closeTurn(1, outcomeCompleted, "4")
+	h.publish(statusOutcome("s", false, false, false))
+	got := get()
+	if got.data()["outcome"] != outcomeCompleted || got.data()["output"] != "4" {
+		t.Fatalf("the first prompt of a fresh session lost its answer: %v", got.body)
+	}
+}
+
+// A steer joins a turn that is already open, so its identity is knowable before
+// delivery: the steer may claim the merged close of THAT turn, and nothing else.
+func TestSteerClaimsTheTurnItJoined(t *testing.T) {
+	h := newAgentHarness(t, liveRow("s", true))
+	h.openTurn(5, "go")
+	get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "no, this way", "mode": modeSteer}))
+	<-h.prompts
+	h.closeTurn(5, outcomeCompleted, "post-steer answer")
+	h.publish(statusOutcome("s", false, false, false))
+	got := get()
+	if got.data()["output"] != "post-steer answer" {
+		t.Fatalf("output=%v (body=%v)", got.data()["output"], got.body)
+	}
+}
+
+// A plain prompt binds at the turn-start EDGE, never to whatever is running when
+// it is admitted. The seed can lag the runner (it still reads active here) while
+// the runner admits a plain prompt only against authoritative idle, so binding on
+// that stale bit would hand this prompt the PREVIOUS turn's answer under exit 0.
+func TestPlainPromptIgnoresAStaleActiveSeed(t *testing.T) {
+	h := newAgentHarness(t, liveRow("s", false))
+	h.seedStatus("s", statusOutcome("s", true, false, false))
+	h.openTurn(1, "old ask") // the previous turn, still described as running
+	get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "hi", "mode": modePrompt}))
+	<-h.prompts
+	h.nextTimer(t)
+	// The lagging close lands, then our turn genuinely opens.
+	h.closeTurn(1, outcomeCompleted, "old answer")
+	h.publish(statusOutcome("s", false, false, false))
+	h.openTurn(2, "hi")
+	h.publish(statusOutcome("s", true, false, false))
+	// Ours produces nothing sayable (a tool-only turn).
+	h.closeTurn(2, outcomeCompleted, "")
+	h.publish(statusOutcome("s", false, false, false))
+	got := get()
+	if got.data()["outcome"] != outcomeCompleted {
+		t.Fatalf("body=%v", got.body)
+	}
+	if out, ok := got.data()["output"]; ok {
+		t.Fatalf("the previous turn's answer was reported as this prompt's result: %v", out)
+	}
+}
+
+// A wait that arrives after the close never observed a turn of its own, so it
+// resolves result-free even though a settled frame is sitting right there: the
+// frame serves waits that observed their close through it, and nothing else.
+// `gmux agent output` is the snapshot read for this case, and says so.
+func TestAlreadyClosedTurnIsResultFree(t *testing.T) {
+	f := newWaitFixture(t)
+	f.register(t, "s", "pi", piResultLines...)
+	f.closeTurn(4, outcomeCompleted, "All green.", false)
+	data := f.wait(t, "s", "timeout=1", wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: false}})
+	if data["outcome"] != outcomeCompleted {
+		t.Fatalf("data=%v", data)
+	}
+	if got, ok := data["output"]; ok {
+		t.Fatalf("a late wait claimed a turn it never observed: %v", got)
 	}
 }
 
@@ -688,194 +803,14 @@ func TestFailedOneShotIsAnErrorConclusion(t *testing.T) {
 	}
 }
 
-// The synchronous prompt is bound the same way: its window opens before
-// delivery and is re-marked at its turn's start edge, so a turn appended before
-// the read cannot be reported as this prompt's answer.
-func TestSynchronousPromptBindsResultToItsTurn(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "conv.jsonl")
-	writeLines(t, path,
-		piSessionHeader,
-		`{"type":"message","id":"u0","message":{"role":"user","content":[{"type":"text","text":"old ask"}]}}`,
-		`{"type":"message","id":"a0","message":{"role":"assistant","content":[{"type":"text","text":"old answer"}]}}`,
-	)
-	row := liveRow("s", false)
-	row.ConversationRef = path
-	h := newAgentHarness(t, row)
-	get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "hi", "mode": modePrompt}))
-	<-h.prompts
-	h.nextTimer(t)
-	// Our turn opens, runs, and a THIRD turn lands before the daemon reads the
-	// result. The binding is the PRE-DELIVERY watermark (taken before the bytes
-	// went out, which <-h.prompts already proves happened): a plain prompt is
-	// admitted only against an idle agent, so everything after that watermark
-	// up to the next user message is our turn, and the third turn's answer sits
-	// outside it.
-	h.publish(statusOutcome("s", true, false, false))
-	appendLines(t, path,
-		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"ours"}]}}`,
-		`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"text","text":"our answer"}]}}`,
-		`{"type":"message","id":"u2","message":{"role":"user","content":[{"type":"text","text":"somebody else"}]}}`,
-		`{"type":"message","id":"a2","message":{"role":"assistant","content":[{"type":"text","text":"third answer"}]}}`,
-	)
-	h.publish(statusOutcome("s", false, false, false))
-	got := get()
-	if got.data()["output"] != "our answer" {
-		t.Fatalf("output=%v want %q (body=%v)", got.data()["output"], "our answer", got.body)
-	}
-}
-
-func TestFirstPromptBindsBeforePiCreatesConversationFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "not-created-yet.jsonl")
-	row := liveRow("s", false)
-	row.ConversationRef = path // pi reports the path before creating the file
-	h := newAgentHarness(t, row)
-	get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "hi", "mode": modePrompt}))
-	<-h.prompts
-	h.nextTimer(t)
-
-	// The pre-delivery watermark must treat the known-but-absent file as an
-	// empty conversation. The first turn then creates it and must return the
-	// answer synchronously, not only through a later `agent output` snapshot.
-	writeLines(t, path,
-		piSessionHeader,
-		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}`,
-		`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"text","text":"first answer"}]}}`,
-	)
-	h.publish(statusOutcome("s", true, false, false))
-	h.publish(statusOutcome("s", false, false, false))
-
-	got := get()
-	if got.data()["output"] != "first answer" {
-		t.Fatalf("output=%v want %q (body=%v)", got.data()["output"], "first answer", got.body)
-	}
-}
-
-// TestPlainPromptIgnoresAStaleActiveSeedWhenBinding is the regression for the
-// one place the seed's activity bit must NOT choose the bound.
-//
-// The seed can lag the runner: here it still reports active although the
-// previous turn has closed. The runner admits a plain prompt only against
-// authoritative idle, so the admission itself proves no turn was running — but
-// a window bound taken on the stale bit would open at the PREVIOUS turn's user
-// boundary, with that turn's answer inside it. With a tool-only tail of its own,
-// this prompt would then hand back "old answer" as its result: a previous turn's
-// reply presented as this one's, under exit 0.
-func TestPlainPromptIgnoresAStaleActiveSeedWhenBinding(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "conv.jsonl")
-	writeLines(t, path,
-		piSessionHeader,
-		`{"type":"message","id":"u0","message":{"role":"user","content":[{"type":"text","text":"old ask"}]}}`,
-		`{"type":"message","id":"a0","message":{"role":"assistant","content":[{"type":"text","text":"old answer"}]}}`,
-	)
-	row := liveRow("s", false)
-	row.ConversationRef = path
-	h := newAgentHarness(t, row)
-	// The seed lags: it still describes the closed turn as running.
-	h.seedStatus("s", statusOutcome("s", true, false, false))
-	get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "hi", "mode": modePrompt}))
-	<-h.prompts
-	h.nextTimer(t)
-	// The lagging close lands as a later-versioned outcome (this is what the
-	// seed was too old to have seen), and then our turn opens and produces
-	// nothing but a tool call.
-	h.publish(statusOutcome("s", false, false, false))
-	h.publish(statusOutcome("s", true, false, false))
-	appendLines(t, path,
-		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}`,
-		`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall","id":"t1","name":"bash","arguments":{}}]}}`,
-	)
-	h.publish(statusOutcome("s", false, false, false))
-	got := get()
-	if got.data()["outcome"] != outcomeCompleted {
-		t.Fatalf("body=%v", got.body)
-	}
-	if out, ok := got.data()["output"]; ok {
-		t.Fatalf("the previous turn's answer was reported as this prompt's result: %v", out)
-	}
-}
-
-// A steer joins a turn already in flight, so the binding is the pre-delivery
-// watermark taken at the RUNNING turn's user boundary. Note what that does and
-// does not exclude: pre-steer prose from the same turn is INSIDE the window (by
-// design — the amendment binds a steer to its turn, not to the instant of
-// delivery), so this test passes because the post-steer answer is newer, not
-// because earlier prose was excluded. A steer whose own tail is tool-only
-// therefore reports the pre-steer prose.
-func TestSteerBindsToContentAfterDelivery(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "conv.jsonl")
-	writeLines(t, path,
-		piSessionHeader,
-		`{"type":"message","id":"u0","message":{"role":"user","content":[{"type":"text","text":"go"}]}}`,
-		`{"type":"message","id":"a0","message":{"role":"assistant","content":[{"type":"text","text":"pre-steer prose"}]}}`,
-	)
-	row := liveRow("s", true) // a turn is already running
-	row.ConversationRef = path
-	h := newAgentHarness(t, row)
-	get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "no, this way", "mode": modeSteer}))
-	<-h.prompts
-	appendLines(t, path,
-		`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"text","text":"post-steer answer"}]}}`,
-	)
-	h.publish(statusOutcome("s", false, false, false))
-	got := get()
-	if got.data()["output"] != "post-steer answer" {
-		t.Fatalf("output=%v (body=%v)", got.data()["output"], got.body)
-	}
-}
-
-// A follow-up queued behind a running turn is bound to the QUEUED turn, which
-// is why the window is re-marked at each turn-start edge rather than only taken
-// before delivery: the running turn's own answer lands inside the pre-delivery
-// window and would otherwise be reported as the follow-up's.
-func TestQueuedFollowUpBindsToTheQueuedTurn(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "conv.jsonl")
-	writeLines(t, path,
-		piSessionHeader,
-		`{"type":"message","id":"u0","message":{"role":"user","content":[{"type":"text","text":"first ask"}]}}`,
-	)
-	row := liveRow("s", true) // a turn is already running
-	row.ConversationRef = path
-	h := newAgentHarness(t, row)
-	get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "and then", "mode": modeFollowUp}))
-	<-h.prompts
-	// The running turn finishes with its own answer.
-	appendLines(t, path,
-		`{"type":"message","id":"a0","message":{"role":"assistant","content":[{"type":"text","text":"running turn answer"}]}}`,
-	)
-	h.publish(statusOutcome("s", false, false, false))
-	h.nextTimer(t) // queued-turn admission window
-	// The queued turn opens (re-marking the window), then answers.
-	h.publish(statusOutcome("s", true, false, false))
-	waitForMarks(t, h, 2)
-	appendLines(t, path,
-		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"and then"}]}}`,
-		`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"text","text":"queued answer"}]}}`,
-	)
-	h.publish(statusOutcome("s", false, false, false))
-	got := get()
-	if got.data()["outcome"] != outcomeCompleted || got.data()["output"] != "queued answer" {
-		t.Fatalf("body=%v windows=%v", got.body, h.resultWindows)
-	}
-}
-
-// A wait that attaches to a turn ALREADY RUNNING must keep that turn's answer,
-// including when the turn's tail is tool-only. Binding such a wait to the
-// message count excluded prose the turn had already persisted, so a wait that
-// completed perfectly well reported nothing.
-func TestMidTurnWaitKeepsItsOwnTurnsProse(t *testing.T) {
+// A wait that attaches MID-TURN identifies that turn from the frame's current
+// record on its very first look, so it is served that turn's answer when it
+// settles. This is the case the watermark model had to special-case with a
+// second bind kind; identity makes it fall out.
+func TestMidTurnWaitClaimsTheRunningTurn(t *testing.T) {
 	f := newWaitFixture(t)
-	path := f.registerWithConversation(t, "s", "pi",
-		piSessionHeader,
-		`{"type":"message","id":"u0","message":{"role":"user","content":[{"type":"text","text":"older ask"}]}}`,
-		`{"type":"message","id":"a0","message":{"role":"assistant","content":[{"type":"text","text":"older answer"}]}}`,
-		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"ask"}]}}`,
-		// Prose this turn produced BEFORE the wait subscribed.
-		`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"text","text":"the answer"}]}}`,
-	)
+	f.register(t, "s", "pi", piResultLines...)
+	f.openTurn(8, "ask") // already running when the wait attaches
 	fan := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: true}})
 	rec := httptest.NewRecorder()
 	done := make(chan struct{})
@@ -884,11 +819,8 @@ func TestMidTurnWaitKeepsItsOwnTurnsProse(t *testing.T) {
 		handleWaitCentral(rec, httptest.NewRequest(http.MethodPost, "/wait?timeout=5", nil),
 			f.boot, fan, "s", func(string) string { return f.dir })
 	}()
-	waitForMark(t, f)
-	// The turn ends on a tool call, which carries no prose.
-	appendLines(t, path,
-		`{"type":"message","id":"a2","message":{"role":"assistant","content":[{"type":"toolCall","id":"t1","name":"bash","arguments":{}}]}}`,
-	)
+	waitForLook(t, f)
+	f.closeTurn(8, outcomeCompleted, "the answer", false)
 	fan.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{
 		Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Active: false}}},
 	}})
@@ -903,112 +835,34 @@ func TestMidTurnWaitKeepsItsOwnTurnsProse(t *testing.T) {
 	}
 }
 
-// ...and the previous turn still stays outside that window: a mid-turn
-// attachment to a turn that has said nothing yet reports nothing, not the answer
-// before it.
-func TestMidTurnWaitStillExcludesThePreviousTurn(t *testing.T) {
-	f := newWaitFixture(t)
-	path := f.registerWithConversation(t, "s", "pi",
-		piSessionHeader,
-		`{"type":"message","id":"u0","message":{"role":"user","content":[{"type":"text","text":"older ask"}]}}`,
-		`{"type":"message","id":"a0","message":{"role":"assistant","content":[{"type":"text","text":"older answer"}]}}`,
-		`{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"ask"}]}}`,
-	)
-	fan := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: true}})
-	rec := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		handleWaitCentral(rec, httptest.NewRequest(http.MethodPost, "/wait?timeout=5", nil),
-			f.boot, fan, "s", func(string) string { return f.dir })
-	}()
-	waitForMark(t, f)
-	appendLines(t, path,
-		`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall","id":"t1","name":"bash","arguments":{}}]}}`,
-	)
-	fan.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{
-		Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Active: false}}},
-	}})
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("wait did not resolve")
-	}
-	data := decodeWaitData(t, rec)
-	if data["outcome"] != outcomeCompleted {
-		t.Fatalf("data=%v", data)
-	}
-	if got, ok := data["output"]; ok {
-		t.Fatalf("previous turn's answer leaked: %v", got)
-	}
-}
-
-// A conversation that could not be read when the turn was first observed offers
-// no safe boundary, so no result is attributed even if storage becomes readable
-// (with history) before the read. Binding to 0 instead would hand back an
-// earlier turn's answer.
-func TestUnreadableConversationAtMarkYieldsNoResult(t *testing.T) {
-	f := newWaitFixture(t)
-	f.register(t, "s", "pi") // renderer adapter, but no conversation ref yet
-	fan := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: true}})
-	rec := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		handleWaitCentral(rec, httptest.NewRequest(http.MethodPost, "/wait?timeout=5", nil),
-			f.boot, fan, "s", func(string) string { return f.dir })
-	}()
-	waitForMark(t, f)
-	// Storage shows up late, carrying somebody else's turn.
-	f.registerWithConversation(t, "s", "pi",
-		piSessionHeader,
-		`{"type":"message","id":"u0","message":{"role":"user","content":[{"type":"text","text":"older ask"}]}}`,
-		`{"type":"message","id":"a0","message":{"role":"assistant","content":[{"type":"text","text":"older answer"}]}}`,
-	)
-	fan.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{
-		Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Active: false}}},
-	}})
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("wait did not resolve")
-	}
-	data := decodeWaitData(t, rec)
-	if data["outcome"] != outcomeCompleted {
-		t.Fatalf("data=%v", data)
-	}
-	if got, ok := data["output"]; ok {
-		t.Fatalf("unreadable-at-mark window produced a result: %v", got)
-	}
-	if got := latestAgentMessageIn(context.Background(), f.store, "s",
-		resultWindow{bound: true, unreadable: true}); got != "" {
-		t.Fatalf("unreadable window selected %q", got)
-	}
-}
-
-// Nobody renders a conversation for a caller who will not be shown one.
-func TestNoResultMeansNoRender(t *testing.T) {
-	t.Run("detached prompt marks nothing", func(t *testing.T) {
+// Two waits that make no claim about an agent turn stay result-free by contract,
+// however good a frame is sitting in the registry: a detached prompt (its caller
+// is never shown a result) and raw `send --wait` (keystrokes make no claim about
+// which turn they belong to).
+func TestResultFreeByContract(t *testing.T) {
+	t.Run("detached prompt", func(t *testing.T) {
 		h := newAgentHarness(t, liveRow("s", false))
 		get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{
 			"prompt": "hi", "mode": modePrompt, "wait": false,
 		}))
 		<-h.prompts
 		h.nextTimer(t)
+		h.openTurn(1, "hi")
 		h.publish(statusOutcome("s", true, false, false))
-		if got := get(); got.code != http.StatusAccepted {
+		got := get()
+		if got.code != http.StatusAccepted {
 			t.Fatalf("code=%d body=%v", got.code, got.body)
 		}
-		if n := h.markCalls.Load(); n != 0 {
-			t.Fatalf("detached prompt marked %d result windows", n)
+		for _, k := range []string{"outcome", "output"} {
+			if _, ok := got.data()[k]; ok {
+				t.Fatalf("detached response carried %q: %v", k, got.body)
+			}
 		}
 	})
-	t.Run("send --wait marks nothing", func(t *testing.T) {
+	t.Run("raw send --wait", func(t *testing.T) {
 		f := newWaitFixture(t)
 		f.register(t, "s", "pi", piResultLines...)
-		// The turn is already running when the raw wait attaches (the fused
-		// path's own subscribe-then-deliver ordering is covered elsewhere); it
-		// resolves on the close below.
+		f.openTurn(4, "typed by hand")
 		fan := wf(wire.Session{ID: "s", Alive: true, Status: &wire.Status{Active: true}})
 		rec := httptest.NewRecorder()
 		done := make(chan struct{})
@@ -1022,6 +876,7 @@ func TestNoResultMeansNoRender(t *testing.T) {
 		// published before delivery would be the stale pre-delivery state the
 		// fused path exists to skip.
 		<-delivered
+		f.closeTurn(4, outcomeCompleted, "an answer nobody may attribute to keystrokes", false)
 		fan.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{
 			Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Active: false}}},
 		}})
@@ -1037,61 +892,5 @@ func TestNoResultMeansNoRender(t *testing.T) {
 		if _, ok := data["output"]; ok {
 			t.Fatalf("raw send --wait carried a result: %v", data)
 		}
-		if n := f.marks.Load(); n != 0 {
-			t.Fatalf("raw send --wait marked %d result windows", n)
-		}
 	})
-}
-
-// A resumed runner's first observation carries no status yet. That still counts
-// as having looked BEFORE the turn opened, so the genuine turn-start edge that
-// follows must bind as "starting" — binding it to the previous turn's user
-// boundary would report a pre-resume answer as this turn's result, under exit 0.
-func TestStatuslessFirstLookStillBindsTheNextEdgeAsStarting(t *testing.T) {
-	f := newWaitFixture(t)
-	path := f.registerWithConversation(t, "s", "pi",
-		piSessionHeader,
-		`{"type":"message","id":"u0","message":{"role":"user","content":[{"type":"text","text":"before the restart"}]}}`,
-		`{"type":"message","id":"a0","message":{"role":"assistant","content":[{"type":"text","text":"pre-resume answer"}]}}`,
-	)
-	// First look: alive, but the resumed runner has published no status.
-	fan := wf(wire.Session{ID: "s", Alive: true})
-	rec := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		handleWaitCentral(rec, httptest.NewRequest(http.MethodPost, "/wait?timeout=5", nil),
-			f.boot, fan, "s", func(string) string { return f.dir })
-	}()
-	// Let the handler take its statusless first look before the turn opens.
-	// This barrier only prevents a flaky FAILURE, never a false pass: if the
-	// active frame won the race, the handler's first look would itself be the
-	// open turn, it would bind to the user boundary, and the assertion below
-	// would fire.
-	time.Sleep(300 * time.Millisecond)
-	// The turn genuinely starts now.
-	fan.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{
-		Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Active: true}}},
-	}})
-	waitForMark(t, f)
-	// It produces only a tool call, then closes: there is nothing of ITS OWN to
-	// report, and the pre-resume answer is not it.
-	appendLines(t, path,
-		`{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"toolCall","id":"t1","name":"bash","arguments":{}}]}}`,
-	)
-	fan.BroadcastFrames(wire.Frames{Sessions: &wire.SessionsPayload{
-		Sessions: []wire.Session{{ID: "s", Alive: true, Status: &wire.Status{Active: false}}},
-	}})
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("wait did not resolve")
-	}
-	data := decodeWaitData(t, rec)
-	if data["outcome"] != outcomeCompleted {
-		t.Fatalf("data=%v", data)
-	}
-	if got, ok := data["output"]; ok {
-		t.Fatalf("pre-resume answer reported as this turn's result: %v", got)
-	}
 }

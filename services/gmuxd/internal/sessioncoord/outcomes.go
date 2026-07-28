@@ -38,6 +38,16 @@ type Outcome struct {
 	Alive      bool                  // registry liveness at publish time
 	Generation uint64                // 0 when not alive
 	Sequence   uint64                // monotonic commit sequence; non-zero for post-commit Upserted/Removed outcomes
+	// Frame is the turn frame retained for the live generation at publish time,
+	// or nil. It is how a turn's asserted result reaches a waiter *with* the
+	// outcome that declares the turn closed: the runner emits the settled frame
+	// ahead of the status write, the drain retains it, and this stamp attaches
+	// it at apply time rather than leaving the payload to a post-commit re-read
+	// (which carries no turn identity and would lose the result whenever the
+	// row converged without this event being delivered).
+	//
+	// Runtime-only, like Alive and Generation: never a row column.
+	Frame *TurnFrame
 }
 
 // outcomeActivityBacklog bounds how many undelivered outcomes a subscriber
@@ -189,6 +199,11 @@ func (b *outcomeBus) publish(o Outcome) {
 	}
 }
 
+// sameUpsertProjection deliberately ignores Frame: it compares the DURABLE
+// projection plus liveness, and a differing frame alone is not a row change
+// worth redelivering. That is safe because a turn close always changes the row
+// (Active flips), so no close is ever deduplicated away — only a repeat of an
+// unchanged row, which announces nothing a waiter could resolve on.
 func sameUpsertProjection(a, b Outcome) bool {
 	return a.Type == OutcomeUpserted && b.Type == OutcomeUpserted &&
 		a.Alive == b.Alive && a.Generation == b.Generation &&
@@ -324,7 +339,7 @@ func (c *Coordinator) SubscribeOutcomesSeed(ctx context.Context) (seed []Outcome
 		for i := range rows {
 			row := rows[i]
 			alive, generation := c.livenessOf(row.ID)
-			seedOutcome := Outcome{Type: OutcomeUpserted, ID: row.ID, Session: &row, Alive: alive, Generation: generation}
+			seedOutcome := Outcome{Type: OutcomeUpserted, ID: row.ID, Session: &row, Alive: alive, Generation: generation, Frame: c.frameOf(row.ID)}
 			sub.seen[row.ID] = row.Version
 			sub.lastUpsert[row.ID] = snapshotUpsert(seedOutcome)
 			seed = append(seed, seedOutcome)
@@ -375,7 +390,7 @@ func (c *Coordinator) emitUpserted(session centralstore.Session, seq uint64) {
 	}
 	alive, generation := c.livenessOf(session.ID)
 	s := session
-	c.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: session.ID, Session: &s, Alive: alive, Generation: generation, Sequence: seq})
+	c.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: session.ID, Session: &s, Alive: alive, Generation: generation, Sequence: seq, Frame: c.frameOf(session.ID)})
 }
 
 // emitOutcomes publishes one outcome per ID after a commit: a post-commit
@@ -411,6 +426,6 @@ func (c *Coordinator) emitOutcomes(ctx context.Context, seq uint64, ids ...centr
 			continue
 		}
 		row := s
-		c.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &row, Alive: alive, Generation: generation, Sequence: seq})
+		c.outcomes.publish(Outcome{Type: OutcomeUpserted, ID: id, Session: &row, Alive: alive, Generation: generation, Sequence: seq, Frame: c.frameOf(id)})
 	}
 }

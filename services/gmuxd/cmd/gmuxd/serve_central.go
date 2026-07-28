@@ -1378,42 +1378,50 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 	}
 	defer cancel()
 	seenAlive := false
-	// The result window is captured when this wait first sees ITS turn open (a
-	// fresh inactive→active edge, or the very first observation if the turn is
-	// already running when we subscribe). A wait that never sees a turn open —
-	// one that finds the turn already closed — keeps snapshot semantics, because
-	// there is no turn of ours to bind the answer to.
+	// The turn this wait may report the result of is identified by the ADAPTER,
+	// through the runner's turn frame: the wait records the open turn's turn_seq
+	// when it first sees a turn (the very first look if one is already running, or
+	// a fresh inactive→active edge), and at the close it accepts the frame's
+	// settled record only when that record names the same turn.
 	//
-	// Whether the turn was ALREADY RUNNING when we first saw it decides which
-	// bound is taken: a mid-turn attachment must include the prose that turn has
-	// already produced (or a completed wait whose tail is tool-only reports
-	// nothing), while a turn seen starting must exclude everything before it.
-	window := snapshotWindow()
+	// A wait that never identifies a turn — one that finds the turn already
+	// closed, or a session whose adapter asserts no turn identity — resolves
+	// result-free. It still reports the conclusion; it just does not claim an
+	// answer it cannot attribute, and `gmux agent output` remains the snapshot
+	// read for those.
+	var observedSeq uint64
 	active := false
-	firstLook := true
-	observe := func(s compatSession) {
-		// firstLook is consumed by the act of LOOKING, not by finding a status.
-		// A statusless first observation (a resumed runner that has not reported
-		// yet) still means "we were here before the turn opened", so the genuine
-		// turn-start edge that follows must bind as STARTING. Leaving it true
-		// would bind that edge to the previous turn's user boundary and report a
-		// pre-resume answer as this turn's result, under exit 0.
-		wasFirst := firstLook
-		firstLook = false
+	// frameFor prefers a frame stamped on the resolving outcome (retained at apply
+	// time for the generation that published it) and falls back to the frame
+	// retained for the live generation — which is what makes the initial-fanout
+	// and 500ms-ticker paths, neither of which carries an event at all, exactly as
+	// result-bearing as the outcome path.
+	frameFor := func(o *sessioncoord.Outcome) *sessioncoord.TurnFrame {
+		if o != nil && o.Frame != nil {
+			return o.Frame
+		}
+		return retainedTurnFrame(boot, sessionID)
+	}
+	observe := func(s compatSession, o *sessioncoord.Outcome) {
 		if s.Status == nil {
 			return
 		}
 		if s.Status.Active && !active {
-			window = markWaitWindow(r.Context(), boot.Store, sessionID, wasFirst)
+			if seq := frameFor(o).CurrentTurnSeq(); seq != 0 {
+				observedSeq = seq
+			}
 		}
 		active = s.Status.Active
+	}
+	closedTurn := func(o *sessioncoord.Outcome) *sessioncoord.TurnClose {
+		return frameFor(o).ClosedTurn(observedSeq)
 	}
 	if cur, ok := visibleSession(fanout.Current().Sessions, sessionID); ok {
 		legacy := legacySessionFromWire(cur)
 		seenAlive = seenAlive || cur.Alive
-		observe(legacy)
+		observe(legacy, nil)
 		if verdict, done := terminalReason(legacy, seenAlive); done {
-			writeWaitConclusion(w, r, boot, sessionID, verdict, window, true)
+			writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(nil))
 			return
 		}
 	}
@@ -1431,7 +1439,8 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 				continue
 			}
 			if outcome.Type == sessioncoord.OutcomeRemoved {
-				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), window, true)
+				// A death carries no result by contract, so no frame is consulted.
+				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), nil)
 				return
 			}
 			if outcome.Type != sessioncoord.OutcomeUpserted || outcome.Session == nil {
@@ -1439,58 +1448,65 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 			}
 			legacy := legacySessionFromOutcome(*outcome.Session, outcome.Alive)
 			seenAlive = seenAlive || outcome.Alive
-			observe(legacy)
+			observe(legacy, &outcome)
 			if verdict, done := terminalReason(legacy, seenAlive); done {
-				writeWaitConclusion(w, r, boot, sessionID, verdict, window, true)
+				writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(&outcome))
 				return
 			}
 		case <-ticker.C:
 			cur, ok := visibleSession(fanout.Current().Sessions, sessionID)
 			if !ok {
-				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), window, true)
+				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), nil)
 				return
 			}
 			legacy := legacySessionFromWire(cur)
 			seenAlive = seenAlive || cur.Alive
-			observe(legacy)
+			observe(legacy, nil)
 			if verdict, done := terminalReason(legacy, seenAlive); done {
-				writeWaitConclusion(w, r, boot, sessionID, verdict, window, true)
+				writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(nil))
 				return
 			}
 		}
 	}
 }
 
-// writeWaitConclusion answers a resolved turn wait, attaching the agent's
-// latest final message when — and only when — the turn completed normally.
+// writeWaitConclusion answers a resolved turn wait, attaching the turn's
+// asserted answer when — and only when — the turn completed normally AND the
+// adapter's settled record names the turn this wait observed.
 //
-// The result is selected HERE, at the moment the wait resolves, rather than
-// left to a follow-up read by the client: between a wait returning and a
-// client reading the conversation, another actor can start a new turn, and the
-// client would then print that turn's partial content as this wait's result.
-// The read is store-only — no runner, no resume — exactly like
-// `gmux agent output`, and uses the same selector.
-//
-// An error, interruption or death carries no output field at all: the newest
-// stored message would be from a previous turn or a partial one, and
-// presenting it as this turn's answer is the failure mode ADR 0027 §11
-// forbids. Nothing to render (non-renderer adapter, no conversation, no prose
-// in our window) also omits the field — the session is still legitimately
+// close is that record, or nil for every result-free resolution: a death, a
+// session whose adapter asserts no turn identity (a shell, Claude, Codex), a raw
+// `PUT /status` close, a version-skewed runner that never sent a frame, or two
+// back-to-back turns between looks. Result-free is a normal, honest completion —
+// not an error and never a hang — because those sessions are legitimately
 // waitable.
+//
+// An error or interruption carries no output either way: a partial or previous
+// turn's answer presented as this turn's is the failure mode ADR 0027 §11
+// forbids. Nothing is re-read from the conversation here — a re-read would reopen
+// the §9 staleness gap the source assertion closes; `gmux agent output`, the
+// snapshot verb, is the one that reads the tape.
 //
 // conversation_readable travels with every turn conclusion so the CLI can pick
 // an actionable hint: pointing a failed shell or Claude/Codex session at
 // `gmux agent output` sends the caller at a route that answers 404 for them.
-// markWaitWindow is the wait handler's watermark capture. It is indirected
-// through a variable because the guarantee under test is an ORDERING (mark
-// before the interfering append, read after it), and a test cannot assert an
-// ordering it has no way to observe.
+// retainedTurnFrame reads the turn frame gmuxd retains for a session's live
+// generation. It is indirected through a variable because the guarantee under
+// test is that the frame-less resolution paths (the initial fanout look and the
+// 500 ms ticker, neither of which carries an event) serve results from the
+// RETAINED frame — and a test cannot install a frame through a registry it does
+// not own a runner for.
 //
-// Tests reassign it (restoring it with t.Cleanup), so it is parallel-unsafe:
-// no test touching it may call t.Parallel. Production never writes it.
-var markWaitWindow = markResultWindow
+// Tests reassign it (restoring it with t.Cleanup), so it is parallel-unsafe: no
+// test touching it may call t.Parallel. Production never writes it.
+var retainedTurnFrame = func(boot *Bootstrap, sessionID string) *sessioncoord.TurnFrame {
+	if boot == nil || boot.Registry == nil {
+		return nil
+	}
+	return boot.Registry.Frame(centralstore.SessionID(sessionID))
+}
 
-func writeWaitConclusion(w http.ResponseWriter, r *http.Request, boot *Bootstrap, sessionID string, verdict waitConclusion, window resultWindow, withResult bool) {
+func writeWaitConclusion(w http.ResponseWriter, r *http.Request, boot *Bootstrap, sessionID string, verdict waitConclusion, close *sessioncoord.TurnClose) {
 	data := map[string]any{"reason": verdict.Reason}
 	if verdict.Outcome != "" {
 		data["outcome"] = verdict.Outcome
@@ -1501,9 +1517,10 @@ func writeWaitConclusion(w http.ResponseWriter, r *http.Request, boot *Bootstrap
 	if verdict.Cause != "" {
 		data["cause"] = verdict.Cause
 	}
-	if withResult && verdict.Outcome == outcomeCompleted && boot != nil {
-		if text := latestAgentMessageIn(r.Context(), boot.Store, sessionID, window); text != "" {
-			data["output"] = text
+	if verdict.Outcome == outcomeCompleted && close != nil && close.Output != "" {
+		data["output"] = close.Output
+		if close.Truncated {
+			data["truncated"] = true
 		}
 	}
 	writeJSON(w, map[string]any{"ok": true, "data": data})
@@ -1621,8 +1638,9 @@ func handleInputWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootst
 		// bytes it delivered are keystrokes, and it makes no claim about which
 		// agent turn (if any) they belong to. The conclusion is still needed —
 		// without it an intentionally interrupted turn would exit 0 through the
-		// composition the docs call preferred, while `gmux wait` exits 2.
-		writeWaitConclusion(w, r, boot, sessionID, verdict, snapshotWindow(), false)
+		// composition the docs call preferred, while `gmux wait` exits 2. Passing
+		// no close record is what keeps it result-free.
+		writeWaitConclusion(w, r, boot, sessionID, verdict, nil)
 	}
 }
 

@@ -100,8 +100,17 @@ func (productionRunnerClient) Subscribe(ctx context.Context, endpoint string) (s
 	return s, nil
 }
 
+// maxRunnerEventLine bounds one SSE data line from a runner. It is sized for
+// the worst-case ESCAPED turn frame: the adapter caps a turn's output at 256 KiB
+// pre-escape and JSON escaping can expand a byte six-fold, so a smaller limit
+// would make a large answer kill the stream (bufio's default is 64 KiB, which a
+// perfectly ordinary answer can exceed). Sized jointly with the runner's
+// hook-body limit; see docs/runner-hook-protocol.md.
+const maxRunnerEventLine = 8 << 20
+
 func scanRunnerEvents(ctx context.Context, r io.Reader, out chan<- sessioncoord.RunnerEvent) {
 	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64<<10), maxRunnerEventLine)
 	var typ string
 	for sc.Scan() {
 		line := sc.Text()
@@ -134,10 +143,17 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 	f := centralstore.RunnerFacts{}
 	switch typ {
 	case "status":
+		// A turn edge carries the turn frame inside its status event, so the
+		// close and the result it asserted cannot be separated in transit (see
+		// docs/runner-hook-protocol.md). Absent for a status write that is not a
+		// turn edge — a raw PUT /status, a shell session's lifetime turn, or a
+		// runner too old to send one — which is exactly the frame-less case that
+		// resolves result-free.
 		var v struct {
-			Active      bool `json:"active"`
-			Error       bool `json:"error"`
-			Interrupted bool `json:"interrupted"`
+			Active      bool                    `json:"active"`
+			Error       bool                    `json:"error"`
+			Interrupted bool                    `json:"interrupted"`
+			Frame       *sessioncoord.TurnFrame `json:"turn_frame"`
 		}
 		if json.Unmarshal(raw, &v) != nil {
 			return sessioncoord.RunnerEvent{}, false
@@ -145,6 +161,9 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 		f.Active = &v.Active
 		f.Error = &v.Error
 		f.Interrupted = &v.Interrupted
+		if v.Frame != nil {
+			return sessioncoord.RunnerEvent{ObservedAt: now, Facts: f, Frame: v.Frame}, true
+		}
 	case "meta":
 		// Field tags are load-bearing: the runner emits snake_case keys, and
 		// Go's case-insensitive fallback does NOT bridge snake_case to camel
@@ -191,6 +210,16 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 		f.ExitCode = centralstore.NullablePatch[int]{Set: &v.ExitCode}
 		f.ExitedAt = centralstore.NullablePatch[centralstore.UnixMillis]{Set: &now}
 		return sessioncoord.RunnerEvent{ObservedAt: now, Facts: f, Alive: &alive}, true
+	case "turn_frame":
+		// A frame update with no status transition to ride: a mid-turn injection,
+		// a rebind clear, or the connect-time replay snapshot. Runtime-only — it
+		// carries no durable facts, so it is retained without a store write (see
+		// Coordinator.drain).
+		var v sessioncoord.TurnFrame
+		if json.Unmarshal(raw, &v) != nil {
+			return sessioncoord.RunnerEvent{}, false
+		}
+		return sessioncoord.RunnerEvent{ObservedAt: now, Frame: &v, FrameOnly: true}, true
 	case "activity":
 		return sessioncoord.RunnerEvent{ObservedAt: now, TransientActivity: true}, true
 	default:
