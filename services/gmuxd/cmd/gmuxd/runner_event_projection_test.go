@@ -40,3 +40,45 @@ func TestRunnerEventProjectionMetaParsesRunnerWireShape(t *testing.T) {
 		t.Fatal("unread meta event not parsed")
 	}
 }
+
+// TestRunnerEventProjectionStatusCarriesTheTurnFrame pins the coupled turn edge:
+// the runner puts a turn's frame INSIDE its status event so a close and the
+// result it asserted cannot be separated in transit
+// (docs/runner-hook-protocol.md; cli/gmux/internal/session/turnframe.go
+// turnEdge). Decoding the status fields but dropping the frame would resolve
+// every wait result-free — "completed, exit 0, no answer", the phenotype this
+// stack exists to kill — while every test that stamps frames by hand still
+// passed, so the wire shape is pinned here.
+func TestRunnerEventProjectionStatusCarriesTheTurnFrame(t *testing.T) {
+	raw := []byte(`{"active":false,"error":false,"interrupted":false,` +
+		`"turn_frame":{"seq":12,"last":{"turn_seq":7,"outcome":"completed","output":"4"}}}`)
+	ev, ok := runnerEventProjection("status", raw)
+	if !ok {
+		t.Fatal("coupled status event rejected")
+	}
+	if ev.Facts.Active == nil || *ev.Facts.Active {
+		t.Fatalf("status facts not parsed: %+v", ev.Facts)
+	}
+	if ev.FrameOnly {
+		t.Fatal("a turn edge must be applied durably, not treated as frame-only")
+	}
+	closed := ev.Frame.ClosedTurn(7)
+	if closed == nil || closed.Output != "4" {
+		t.Fatalf("the edge's frame did not survive projection: %+v", ev.Frame)
+	}
+
+	// A status write that is NOT a turn edge (a raw PUT /status, a shell
+	// session's lifetime turn, a runner too old to send a frame) carries none —
+	// the frame-less case that must still resolve, result-free.
+	ev, ok = runnerEventProjection("status", []byte(`{"active":true}`))
+	if !ok || ev.Frame != nil || ev.FrameOnly {
+		t.Fatalf("frame-less status event = %+v", ev)
+	}
+
+	// A frame-only event (injection, rebind clear, replay snapshot) is retained
+	// but must never produce a durable observation.
+	ev, ok = runnerEventProjection("turn_frame", []byte(`{"seq":3,"current":{"turn_seq":9}}`))
+	if !ok || !ev.FrameOnly || ev.Frame.CurrentTurnSeq() != 9 {
+		t.Fatalf("frame-only event = %+v (frameOnly=%v)", ev.Frame, ev.FrameOnly)
+	}
+}

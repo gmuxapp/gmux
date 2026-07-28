@@ -144,6 +144,20 @@ type RunnerEvent struct {
 	Facts             centralstore.RunnerFacts
 	Alive             *bool
 	TransientActivity bool // lossy signal; never persisted as a fact
+	// Frame carries a runner-asserted turn frame. It is runtime-only — never a
+	// durable fact and never a store write — and is retained in registry
+	// runtime for the generation that sent it.
+	//
+	// A turn EDGE carries the frame together with its status facts in one event,
+	// so a close and the result it asserted cannot be separated in transit; the
+	// frame is retained before those facts are applied, which is what lets the
+	// close's own outcome carry that frame.
+	Frame *TurnFrame
+	// FrameOnly marks an event that carries nothing but a frame (a mid-turn
+	// injection, a rebind clear, a replay snapshot). It is retained and NOT
+	// applied: a durable observation for it would churn the row version for a
+	// fact the store does not hold.
+	FrameOnly bool
 }
 
 type RegisterRequest struct {
@@ -462,6 +476,17 @@ func (c *Coordinator) Register(ctx context.Context, req RegisterRequest) (Runtim
 	// instantaneous. No goroutine contention: no drain goroutine is reading
 	// stream.Events() yet.
 	closed := false
+	// replayedFrame carries the turn frame out of this pre-registration window and
+	// into the installed Runtime.
+	//
+	// It is load-bearing for every RECONNECT: the runner's connect-time replay is
+	// the first thing on a fresh stream, so the frame describing the turn that is
+	// running right now lands HERE, before any drain goroutine exists. reduce()
+	// folds durable facts only — a frame is runtime state, not a fact — so without
+	// this the entry would install with no frame at all, and a wait armed in the
+	// reconnect window would learn no turn_seq and resolve result-free even though
+	// the runner told us everything we needed.
+	var replayedFrame *TurnFrame
 	drainCh := stream.Events()
 loop:
 	for {
@@ -470,6 +495,9 @@ loop:
 			if !ok {
 				closed = true
 				break loop
+			}
+			if ev.Frame != nil {
+				replayedFrame = ev.Frame // newest wins, like every other frame apply
 			}
 			reduce(&reg, ev)
 		default:
@@ -586,6 +614,9 @@ loop:
 		PID:           meta.PID,
 		RunnerVersion: meta.RunnerVersion,
 		BinaryHash:    meta.BinaryHash,
+		// The frame the runner replayed during the pre-registration drain (nil for
+		// a session that has asserted no turn, or a runner too old to send one).
+		Frame: replayedFrame,
 		// A closed pre-drain stream already forced reg.Alive=false above, so
 		// liveness alone decides subscription.
 		Subscribed: reg.Alive,
@@ -785,6 +816,16 @@ func (c *Coordinator) drain(ctx context.Context, id centralstore.SessionID, gene
 					})
 				}
 				return
+			}
+			if ev.Frame != nil {
+				// Retain BEFORE applying this event's facts: a turn edge's
+				// status commit publishes an outcome stamped with the frame
+				// retained here (see frameOf), which is how a waiter resolving
+				// the close reads the result asserted for that exact turn.
+				c.registry.setFrame(id, generation, ev.Frame)
+				if ev.FrameOnly {
+					continue // nothing durable to apply
+				}
 			}
 			if ev.TransientActivity {
 				// The runner protocol's activity frame is explicitly transient;

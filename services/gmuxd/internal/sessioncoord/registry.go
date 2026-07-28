@@ -39,7 +39,18 @@ type Runtime struct {
 	// It is runtime-only and deliberately never persisted: it distinguishes a
 	// process from its own successor at the same endpoint, a question that
 	// only has meaning while both are in living memory.
-	Incarnation   string
+	Incarnation string
+	// Frame is the newest turn frame this generation relayed, or nil for a
+	// generation that never sent one (a shell session, a hook-driven agent, a
+	// version-skewed runner). It is runtime-only and shared by pointer: the
+	// runner publishes immutable frame values, so retaining one costs one
+	// pointer per generation however many waiters read it.
+	//
+	// nil is load-bearing: it means "this generation asserts no turn results",
+	// which is what scopes the delivery invariant — such a close resolves
+	// normally and result-free instead of hanging on a guarantee the runner
+	// cannot satisfy.
+	Frame         *TurnFrame
 	PID           int
 	RunnerVersion string
 	BinaryHash    string

@@ -80,19 +80,15 @@ type agentHarness struct {
 	// modelling a runner wedged on a PTY write.
 	blockPrompt bool
 	blockCancel bool
-	// resultText stands in for the agent's latest final message. Empty means
-	// "use the real store-backed selector", which is what the majority of
-	// tests want: no rendered conversation on disk ⇒ no output field.
-	resultText string
-	// resultCalls counts result selections, so a test can prove a
-	// non-completed outcome never even LOOKS for a result to print.
-	resultCalls atomic.Int64
-	// markCalls counts result-window captures (pre-delivery plus one per
-	// observed turn-start edge), and resultWindows records the window each
-	// selection was made with, so a test can prove the answer was bound to the
-	// turn it reports rather than to whatever the file said at read time.
-	markCalls     atomic.Int64
-	resultWindows []resultWindow
+	// frame stands in for the turn frame gmuxd retains for this session's live
+	// generation — the adapter's own assertion about its turns. nil is the
+	// ordinary case for a session whose adapter asserts nothing (a shell, a
+	// hook-driven agent, a version-skewed runner): every close is then served
+	// result-free.
+	frame *sessioncoord.TurnFrame
+	// frameReads counts retained-frame lookups, so a test can prove a
+	// non-completed close never even asks for a result.
+	frameReads atomic.Int64
 
 	mu         sync.Mutex
 	subscribed bool
@@ -219,7 +215,20 @@ func (h *agentHarness) refusals() int {
 
 // publish delivers one outcome the way the coordinator would: into the seed
 // while nobody is subscribed, onto the event stream afterwards.
+// publish delivers one outcome, stamped with the frame retained at THIS moment —
+// which is what the coordinator does at apply time. Stamping here (rather than
+// letting the handler read the retained frame whenever it gets around to it) is
+// what makes a schedule deterministic: a test that installs a close frame before
+// the handler has processed the open edge would otherwise race itself.
+//
+// An outcome that already carries a frame keeps it: that is how a test drives the
+// case where the retained frame has moved on to a newer turn.
 func (h *agentHarness) publish(o sessioncoord.Outcome) {
+	h.mu.Lock()
+	if o.Frame == nil {
+		o.Frame = h.frame
+	}
+	h.mu.Unlock()
 	h.mu.Lock()
 	if !h.subscribed {
 		if o.Type == sessioncoord.OutcomeRemoved {
@@ -232,6 +241,27 @@ func (h *agentHarness) publish(o sessioncoord.Outcome) {
 	}
 	h.mu.Unlock()
 	h.outcomes <- o
+}
+
+// setFrame installs the retained turn frame the handler will read, the way a
+// runner's turn events would have. openTurn/closeTurn are the two shapes every
+// test needs.
+func (h *agentHarness) setFrame(f *sessioncoord.TurnFrame) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.frame = f
+}
+
+// openTurn installs a frame describing turn seq as running.
+func (h *agentHarness) openTurn(seq uint64, trigger string) {
+	h.setFrame(&sessioncoord.TurnFrame{Seq: seq, Current: &sessioncoord.TurnCurrent{TurnSeq: seq, Trigger: trigger}})
+}
+
+// closeTurn installs a frame describing turn seq as settled with this result.
+func (h *agentHarness) closeTurn(seq uint64, outcome, output string) {
+	h.setFrame(&sessioncoord.TurnFrame{Seq: seq + 100, Last: &sessioncoord.TurnClose{
+		TurnSeq: seq, Outcome: outcome, Output: output,
+	}})
 }
 
 // seedActive overrides this session's seeded status without touching the store,
@@ -310,23 +340,11 @@ func (h *agentHarness) deps() agentDeps {
 			h.timers <- tm
 			return tm.ch
 		},
-		result: func(ctx context.Context, id string, window resultWindow) string {
-			h.resultCalls.Add(1)
+		frame: func(id centralstore.SessionID) *sessioncoord.TurnFrame {
+			h.frameReads.Add(1)
 			h.mu.Lock()
-			h.resultWindows = append(h.resultWindows, window)
-			h.mu.Unlock()
-			if h.resultText != "" {
-				return h.resultText
-			}
-			return latestAgentMessageIn(ctx, h.store, id, window)
-		},
-		markWindow: func(ctx context.Context, id string, turnInProgress bool) resultWindow {
-			// Count AFTER the read: a test that appends as soon as the counter
-			// moves would otherwise race the render it is trying to order
-			// itself against.
-			w := markResultWindow(ctx, h.store, id, turnInProgress)
-			h.markCalls.Add(1)
-			return w
+			defer h.mu.Unlock()
+			return h.frame
 		},
 		resumeGuardError: func(ctx context.Context, row centralstore.Session) (int, string, string) {
 			if h.guardError != nil {
@@ -1059,54 +1077,39 @@ func TestSteerWaitsForTheCurrentTurnClosure(t *testing.T) {
 	})
 }
 
-// Follow-up into a running turn is queued: the fused wait spans the current
-// closure and the queued turn it starts. If no queued turn is observed, the
-// wait must NOT hand back the previous turn's verdict as this prompt's result;
-// delivery is known and execution is not.
-func TestFollowUpSpansTheQueuedTurn(t *testing.T) {
-	t.Run("queued turn is awaited", func(t *testing.T) {
+// A follow-up delivered into a RUNNING turn is merged into that loop by the
+// agent (pi's queue): one loop, one turn, one close, and that close's answer is
+// the follow-up's. There is no second turn to await — the old two-close model
+// (and its queued_turn_unobserved verdict) described a world pi does not
+// implement.
+func TestFollowUpResolvesOnTheMergedClose(t *testing.T) {
+	t.Run("the merged close is this prompt's result", func(t *testing.T) {
 		h := newAgentHarness(t, liveRow("s", true))
+		h.openTurn(9, "first ask") // the loop the follow-up will merge into
 		get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "and then", "mode": modeFollowUp}))
 		<-h.prompts
-		h.publish(statusOutcome("s", false, false, false)) // current turn closes
-		h.nextTimer(t)                                     // queued-turn window
-		h.publish(statusOutcome("s", true, false, false))  // queued turn opens
-		h.publish(statusOutcome("s", false, true, false))  // and fails
+		h.closeTurn(9, outcomeCompleted, "merged answer")
+		h.publish(statusOutcome("s", false, false, false))
+		got := get()
+		if got.data()["outcome"] != outcomeCompleted || got.data()["output"] != "merged answer" {
+			t.Fatalf("body=%v", got.body)
+		}
+	})
+	t.Run("a failed merged turn carries no answer", func(t *testing.T) {
+		h := newAgentHarness(t, liveRow("s", true))
+		h.openTurn(9, "first ask")
+		get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "and then", "mode": modeFollowUp}))
+		<-h.prompts
+		h.closeTurn(9, outcomeError, "")
+		h.publish(statusOutcome("s", false, true, false))
 		got := get()
 		if got.data()["outcome"] != outcomeError {
 			t.Fatalf("body=%v", got.body)
 		}
+		if _, ok := got.data()["output"]; ok {
+			t.Fatalf("failed turn carried a result: %v", got.body)
+		}
 	})
-	// Every terminal status of the PRIOR turn must produce the same honest
-	// answer: not completed, not error, not interrupted -- unobserved.
-	for _, tc := range []struct {
-		name                 string
-		errored, interrupted bool
-	}{
-		{"prior completed", false, false},
-		{"prior error", true, false},
-		{"prior interrupted", false, true},
-	} {
-		t.Run("no queued turn is unobserved ("+tc.name+")", func(t *testing.T) {
-			h := newAgentHarness(t, liveRow("s", true))
-			get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "and then", "mode": modeFollowUp}))
-			<-h.prompts
-			h.publish(statusOutcome("s", false, tc.errored, tc.interrupted))
-			h.nextTimer(t).fire()
-			got := get()
-			if got.code != http.StatusGatewayTimeout || got.errCode() != codeQueuedTurnUnobserved {
-				t.Fatalf("code=%d body=%v", got.code, got.body)
-			}
-			for _, banned := range []string{outcomeCompleted, outcomeError, outcomeInterrupted} {
-				if strings.Contains(got.errMessage(), `"`+banned+`"`) {
-					t.Fatalf("must not attribute an outcome: %q", got.errMessage())
-				}
-			}
-			if got.data() != nil {
-				t.Fatalf("no normal outcome may be returned: %v", got.body)
-			}
-		})
-	}
 	t.Run("idle follow-up is admitted like a submit", func(t *testing.T) {
 		h := newAgentHarness(t, liveRow("s", false))
 		get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "go", "mode": modeFollowUp, "wait": false}))
@@ -1882,6 +1885,69 @@ func TestProductionRoutingMapsARunnersIncarnationRefusal(t *testing.T) {
 			}
 			if !strings.Contains(got.errMessage(), "safe to retry") {
 				t.Fatalf("message must state the guarantee: %q", got.errMessage())
+			}
+		})
+	}
+}
+
+// TestDetachedReturnPointDependsOnWhoStartsTheTurn pins the mode split the CLI's
+// `--no-wait` help documents (cli/gmux TestAgentPromptHelpDistinguishesAdmission-
+// FromDelivery): whether a detached prompt returns at ADMISSION or at DELIVERY is
+// decided by whether it is the thing that starts a turn.
+//
+// Both halves are contract, and the contrast is what makes each meaningful:
+//
+//   - a plain prompt starts the turn, so a fresh active edge is observable and is
+//     the health event exit 0 buys. It ARMS THE ADMISSION TIMER and does not
+//     answer until the edge lands — arming that timer is the observable proof it
+//     is waiting for something rather than returning at delivery.
+//   - a steer joins a turn that was admitted before this request existed, so
+//     there is nothing to admit. It must NOT arm an admission timer and must not
+//     wait for an edge, or `--no-wait --steer` would block for the whole window
+//     on a session that is behaving perfectly.
+//
+// A follow-up sits on both sides of the split by design: idle → it starts the
+// turn (admission), active → the agent merges it into the running loop
+// (delivery), which is why the mode alone cannot decide this.
+func TestDetachedReturnPointDependsOnWhoStartsTheTurn(t *testing.T) {
+	t.Run("a prompt that starts the turn waits for admission", func(t *testing.T) {
+		h := newAgentHarness(t, liveRow("s", false))
+		get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{
+			"prompt": "hi", "mode": modePrompt, "wait": false,
+		}))
+		<-h.prompts
+		h.nextTimer(t) // the admission window: proof it is waiting for the turn
+		h.openTurn(1, "hi")
+		h.publish(statusOutcome("s", true, false, false))
+		got := get()
+		if got.code != http.StatusAccepted || got.data()["admission"] != admissionAccepted {
+			t.Fatalf("code=%d body=%v: a plain prompt's exit 0 must mean the turn started", got.code, got.body)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		mode string
+	}{
+		{"a steer joins an admitted turn and returns at delivery", modeSteer},
+		{"a follow-up merged into a running turn returns at delivery", modeFollowUp},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newAgentHarness(t, liveRow("s", true)) // a turn is already running
+			h.openTurn(9, "the running turn")
+			get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{
+				"prompt": "and this", "mode": tc.mode, "wait": false,
+			}))
+			<-h.prompts
+			// No edge is ever published: the answer must come anyway.
+			got := get()
+			if got.code != http.StatusAccepted || got.data()["admission"] != admissionDelivered {
+				t.Fatalf("code=%d body=%v: joining a running turn admits nothing beyond delivery", got.code, got.body)
+			}
+			select {
+			case tm := <-h.timers:
+				t.Fatalf("armed a %s wait (%s) for a turn that was already admitted", tc.mode, tm.d)
+			default:
 			}
 		})
 	}

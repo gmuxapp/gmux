@@ -21,11 +21,15 @@ package main
 //     kept through active→inactive completion, so a turn that starts and ends
 //     faster than the daemon can resubscribe cannot be missed.
 //
-// A completed synchronous turn now also carries an `output` field: the latest
-// final assistant message, selected at turn close by the same selector
-// `gmux agent output` and the generic wait use. It is present only for
-// `outcome:"completed"`, and omitted (never empty) when there is nothing to
-// show.
+// A completed synchronous turn also carries an `output` field, and it is the
+// ADAPTER'S OWN assertion about that turn, relayed through the runner's turn
+// frame (ADR 0027's 2026-07-28 amendment). This layer never reconstructs a
+// result from the conversation: it serves the frame's close record, and only
+// when that record's `turn_seq` matches the turn this request observed. A
+// mismatch (two back-to-back turns between looks) degrades to a result-free
+// close, never to the wrong turn's answer. `output` is present only for
+// `outcome:"completed"`, and omitted (never empty) when the turn produced no
+// prose — a tool-only turn, never transport loss.
 //
 // Deliberately absent: no peer forwarding, no durable operation records or
 // phases. Peer-owned sessions are refused, not silently routed.
@@ -114,11 +118,6 @@ const (
 	// what makes it the one delivery failure in this taxonomy that is safe to
 	// retry blindly.
 	codeIncarnationMismatch = "incarnation_mismatch"
-	// codeQueuedTurnUnobserved — a follow-up was delivered into a running
-	// turn, that turn closed, and no queued turn was observed within the
-	// span window. Delivery is known; execution is NOT. The previous turn's
-	// outcome is deliberately not reported as this follow-up's outcome.
-	codeQueuedTurnUnobserved = "queued_turn_unobserved"
 )
 
 // Public outcome vocabulary. Runner death is an `error` with a cause, never a
@@ -148,7 +147,12 @@ const (
 // property of how fast an agent's hook reports a turn start, not of the
 // caller's patience. Distinct from the caller's execution timeout, which
 // starts where this one ends.
-const defaultAdmissionWindow = 10 * time.Second
+//
+// 60s, widened from 10s on live evidence: a slow-loading model legitimately
+// takes more than ten seconds between delivery and its first agent event, and an
+// indeterminate answer for a healthy session is worse than a longer wait. The
+// timeout remains indeterminate either way (§7).
+const defaultAdmissionWindow = 60 * time.Second
 
 // deliveryDeadline bounds ONE runner call (/prompt or /cancel).
 //
@@ -210,31 +214,20 @@ type agentDeps struct {
 	deliveryTimeout  time.Duration
 	after            func(d time.Duration) <-chan time.Time
 	resumeGuardError func(ctx context.Context, row centralstore.Session) (int, string, string)
-	// result reads the agent's latest final message for a completed turn, bound
-	// to the turn's result window. Substitutable so tests can drive the response
-	// shape without a rendered conversation on disk; nil falls back to the real
-	// store read.
-	result func(ctx context.Context, sessionID string, window resultWindow) string
-	// markWindow captures a turn's starting watermark. Substitutable for the
-	// same reason; nil falls back to the real store read.
-	markWindow func(ctx context.Context, sessionID string, turnInProgress bool) resultWindow
+	// frame reads the turn frame retained for a session's live generation. It is
+	// the fallback carrier for every resolution path whose event did not bring
+	// one (an initial fanout look, the ticker, a coalesced publish); nil means
+	// "this deployment retains no frames", under which every close is served
+	// result-free.
+	frame func(id centralstore.SessionID) *sessioncoord.TurnFrame
 }
 
-// resultText selects the agent's answer for a completed synchronous turn.
-func (d agentDeps) resultText(ctx context.Context, sessionID string, window resultWindow) string {
-	if d.result != nil {
-		return d.result(ctx, sessionID, window)
+// turnFrame reads the retained frame for a session, or nil.
+func (d agentDeps) turnFrame(sid centralstore.SessionID) *sessioncoord.TurnFrame {
+	if d.frame == nil {
+		return nil
 	}
-	return latestAgentMessageIn(ctx, d.store, sessionID, window)
-}
-
-// markWindowFor captures the result window for a turn about to start (or
-// already running).
-func (d agentDeps) markWindowFor(ctx context.Context, sessionID string, turnInProgress bool) resultWindow {
-	if d.markWindow != nil {
-		return d.markWindow(ctx, sessionID, turnInProgress)
-	}
-	return markResultWindow(ctx, d.store, sessionID, turnInProgress)
+	return d.frame(sid)
 }
 
 func productionAgentDeps(boot *Bootstrap, gmuxBin string) agentDeps {
@@ -247,6 +240,9 @@ func productionAgentDeps(boot *Bootstrap, gmuxBin string) agentDeps {
 		resume:     boot.Coordinator.Resume,
 		sendPrompt: discovery.SendPrompt,
 		sendCancel: discovery.SendCancel,
+		frame: func(id centralstore.SessionID) *sessioncoord.TurnFrame {
+			return boot.Registry.Frame(id)
+		},
 		resumeGuardError: func(ctx context.Context, row centralstore.Session) (int, string, string) {
 			return agentResumeGuard(ctx, boot, gmuxBin, row)
 		},
@@ -469,27 +465,15 @@ func handleAgentPromptCentral(w http.ResponseWriter, r *http.Request, deps agent
 	}
 	deliveredGen := runtime.Generation
 	baselineActive := seedBaseline(seed, sid, deliveredGen)
-	// The result window opens BEFORE delivery, bounded to the turn already in
-	// flight when there is one (a steer, or a follow-up queued behind a running
-	// turn), and to the conversation's length otherwise.
-	//
-	// A plain prompt is bounded by the message count REGARDLESS of the seed's
-	// activity bit, and that exception is load-bearing rather than tidy. The seed
-	// can lag the runner: a turn that has already closed may still read as active
-	// here. The runner, meanwhile, admits a plain prompt only against
-	// authoritative idle, so if these bytes went in at all, no turn was running
-	// — the seed bit says nothing about THIS turn. Taking the turn-in-progress
-	// bound on that stale bit would open the window at the PREVIOUS turn's user
-	// boundary, putting that turn's answer inside it, and a plain prompt whose own
-	// tail is tool-only would then print the prior answer as its result. (Steer
-	// and queued follow-up genuinely do join a running turn, so for them an
-	// active baseline is a fact about the turn being reported.)
-	//
-	// A detached caller gets no result, so it costs no render: marking only
-	// happens for a request that will actually report an answer.
-	window := snapshotWindow()
-	if req.Wait {
-		window = deps.markWindowFor(r.Context(), sessionID, baselineActive && req.Mode != modePrompt)
+	// A steer, or a follow-up merged into a running loop, joins a turn that is
+	// ALREADY open: its identity is knowable now, from the frame, and that is the
+	// turn whose close this request may claim. A plain prompt has no turn yet, so
+	// it binds at the active edge instead (see runAgentWait) — binding it to
+	// whatever is running now would let a stale seed bit hand it the PREVIOUS
+	// turn's answer.
+	var observedSeq uint64
+	if baselineActive && req.Mode != modePrompt {
+		observedSeq = deps.turnFrame(sid).CurrentTurnSeq()
 	}
 	spec := agentWaitSpec{
 		baselineActive: baselineActive,
@@ -499,31 +483,18 @@ func handleAgentPromptCentral(w http.ResponseWriter, r *http.Request, deps agent
 		// §6: "acts like ordinary send"), so it too can be accepted. A steer,
 		// and a follow-up queued into a running turn, have no acknowledgement
 		// separate from delivery.
+		// A follow-up delivered to an IDLE agent starts an ordinary turn, so it
+		// too has an observable acceptance. A follow-up delivered into a running
+		// turn is merged into that loop by the agent (pi's queue): there is no
+		// second turn to be admitted, and the merged close is the answer.
 		requireAcceptance: req.Mode == modePrompt || (req.Mode == modeFollowUp && !baselineActive),
-		spanQueuedTurn:    req.Mode == modeFollowUp && baselineActive,
 		wait:              req.Wait,
 		admission:         deps.window(),
 		execution:         req.ExecTimeout,
 		generation:        deliveredGen,
+		observedSeq:       observedSeq,
+		frame:             func() *sessioncoord.TurnFrame { return deps.turnFrame(sid) },
 		generationLost:    func() bool { return deps.generationLost(sid, deliveredGen) },
-	}
-	if req.Wait && spec.spanQueuedTurn {
-		// Re-marking is load-bearing for exactly one mode. A follow-up queued
-		// behind a running turn opened its window BEFORE that turn closed, so
-		// the pre-delivery window contains the running turn's answer; the
-		// queued turn's own start edge is the only point at which the right
-		// bound is knowable. A turn seen STARTING is bounded by the message
-		// count, never by the previous turn's user boundary.
-		//
-		// Every other mode deliberately does NOT re-mark. The re-mark can only
-		// move the bound LATER — it runs after the edge has travelled hook →
-		// runner → /events → store commit — so for a plain prompt or a steer,
-		// whose pre-delivery bound is already correct, it can only push content
-		// the turn had already persisted outside the reported window. A
-		// tool-only tail would then report `completed` with no output: an answer
-		// silently dropped under exit 0, which is the failure this bound exists
-		// to prevent.
-		spec.markResult = func() { window = deps.markWindowFor(r.Context(), sessionID, false) }
 	}
 
 	// The runner call gets a bounded context of its own (see deps.delivery):
@@ -536,7 +507,7 @@ func handleAgentPromptCentral(w http.ResponseWriter, r *http.Request, deps agent
 		writeAgentDeliveryError(w, r, dctx, opPrompt, err)
 		return
 	}
-	finishAgentAction(w, r, deps, outcomes, sessionID, spec, resumed, &window)
+	finishAgentAction(w, r, outcomes, sessionID, spec, resumed, deps.timer)
 }
 
 // seedBaseline derives this session's admission baseline from the atomic
@@ -628,25 +599,13 @@ func handleAgentCancelCentral(w http.ResponseWriter, r *http.Request, deps agent
 
 // finishAgentAction runs the admission and (optionally) the fused execution
 // wait, then writes the response.
-func finishAgentAction(w http.ResponseWriter, r *http.Request, deps agentDeps, outcomes <-chan sessioncoord.Outcome, sessionID string, spec agentWaitSpec, resumed bool, window *resultWindow) {
-	res := runAgentWait(r.Context(), outcomes, sessionID, spec, deps.timer)
+func finishAgentAction(w http.ResponseWriter, r *http.Request, outcomes <-chan sessioncoord.Outcome, sessionID string, spec agentWaitSpec, resumed bool, after func(time.Duration) <-chan time.Time) {
+	res := runAgentWait(r.Context(), outcomes, sessionID, spec, after)
 	switch res.Failure {
 	case "":
 	case codeAdmissionTimeout:
 		writeError(w, http.StatusGatewayTimeout, codeAdmissionTimeout, fmt.Sprintf(
 			"prompt was delivered but the agent did not start a turn within %s; delivery is indeterminate, so retrying may duplicate the prompt (inspect the session before resending)",
-			spec.admission))
-		return
-	case codeQueuedTurnUnobserved:
-		// The observed turn was the one already running when the follow-up was
-		// queued. Reporting its completed/error/interrupted verdict as this
-		// request's outcome would attribute somebody else's turn to this
-		// prompt, so the honest answer is that execution was never observed.
-		// Same retry warning as admission_timeout, for the same reason: the
-		// bytes are known to have been delivered, so resending duplicates the
-		// prompt. Only the execution is unknown.
-		writeError(w, http.StatusGatewayTimeout, codeQueuedTurnUnobserved, fmt.Sprintf(
-			"follow-up was delivered and the running turn closed, but no queued turn started within %s; the queued prompt's execution was not observed (the closed turn's result is not this prompt's), and since delivery already happened, retrying may duplicate the queued prompt (inspect the session before resending)",
 			spec.admission))
 		return
 	case codeExecutionTimeout:
@@ -676,16 +635,17 @@ func finishAgentAction(w http.ResponseWriter, r *http.Request, deps agentDeps, o
 	if res.Cause != "" {
 		data["cause"] = res.Cause
 	}
-	// A completed turn carries the agent's answer, selected here at turn close
-	// by the same selector `gmux agent output` and the generic wait use. Any
-	// other outcome carries no output field: the newest stored message would be
-	// a previous or partial turn's, and presenting it as this prompt's result is
-	// exactly the staleness ADR 0027 §11 forbids. An absent field also still
-	// means "nothing to show" (non-renderer agent, no prose yet), never "the
-	// agent answered with silence" — the field is omitted, not empty.
-	if res.Outcome == outcomeCompleted {
-		if text := deps.resultText(r.Context(), sessionID, *window); text != "" {
-			data["output"] = text
+	// A completed turn carries the answer the ADAPTER asserted for exactly this
+	// turn (res.Close is nil unless the settled frame's turn_seq matched the turn
+	// this request observed). Any other outcome carries no output: an interrupted
+	// or errored turn has no answer, and a previous turn's would be the staleness
+	// ADR 0027 §11 forbids. An absent field still means "nothing to show" (a
+	// tool-only turn, a non-asserting adapter), never "the agent answered with
+	// silence" — the field is omitted, not empty.
+	if res.Outcome == outcomeCompleted && res.Close != nil && res.Close.Output != "" {
+		data["output"] = res.Close.Output
+		if res.Close.Truncated {
+			data["truncated"] = true
 		}
 	}
 	writeAgentJSON(w, http.StatusOK, data)
@@ -702,21 +662,22 @@ type agentWaitSpec struct {
 	// requireAcceptance demands a fresh inactive→active transition before the
 	// action counts as admitted.
 	requireAcceptance bool
-	// spanQueuedTurn covers the follow-up-into-a-running-turn case: the text
-	// is queued and runs after the current turn closes, so the wait continues
-	// across that closure into the queued turn when one opens promptly.
-	spanQueuedTurn bool
-	wait           bool
-	admission      time.Duration
-	execution      time.Duration // 0 = indefinite
+	wait              bool
+	admission         time.Duration
+	execution         time.Duration // 0 = indefinite
 	// generation is the registry generation that received the bytes, or 0 when
 	// the runtime carried none. Observations that demonstrably belong to a
 	// different live generation are ignored.
 	generation uint64
-	// markResult re-opens the result window at each turn-start edge, so the
-	// answer reported for a turn is selected from content that turn produced.
-	// nil disables re-marking (nothing but the pre-delivery window is used).
-	markResult func()
+	// observedSeq is the identity of the turn this request may claim the result
+	// of. It is pre-set only when the action joins a turn that is already open
+	// (a steer, a merged follow-up); otherwise it is learned at the turn-start
+	// edge. 0 means "no turn of ours is identified", which serves no result.
+	observedSeq uint64
+	// frame reads the retained turn frame. It is the fallback for a resolution
+	// whose outcome carried no frame (a coalesced publish, a seeded look); nil
+	// makes every close result-free.
+	frame func() *sessioncoord.TurnFrame
 	// generationLost consults the registry for the ambiguous liveness signals:
 	// an outcome removal can race a replacement registration, and an outcome
 	// stamped Alive=false can be stale by the time it is delivered. It is
@@ -729,6 +690,11 @@ type agentWaitResult struct {
 	Admission string
 	Outcome   string
 	Cause     string
+	// Close is the adapter's asserted record for the turn this wait observed,
+	// or nil when no matching settled frame was available (a non-asserting
+	// adapter, a raw PUT /status close, a version-skewed runner, or two
+	// back-to-back turns between looks). nil means result-free, never wrong.
+	Close *sessioncoord.TurnClose
 	// Failure is "" on success, otherwise a stable public error code (or
 	// "canceled" when the caller disconnected).
 	Failure string
@@ -740,7 +706,7 @@ type agentWaitResult struct {
 //
 // Phases:
 //
-//	admission (optional) → execution → [queued-turn span (follow-up only)]
+//	admission (optional) → execution
 //
 // Rules, each of which exists because the naive version is wrong:
 //
@@ -760,6 +726,16 @@ type agentWaitResult struct {
 //     after a takeover/restart, somebody else's turn is not this prompt's.
 //   - completion is never reported for an acceptance-required mode that was
 //     never admitted.
+//   - the RESULT is served only on a turn-identity match. The wait records the
+//     open turn's turn_seq (pre-set for a steer/merged follow-up, learned at the
+//     active edge otherwise) and, at the close, accepts the frame's settled
+//     record only when it names that same turn. There is no "newest answer"
+//     path: a mismatch is served result-free.
+//
+// There is deliberately no queued-turn span any more. pi merges a follow-up
+// delivered mid-turn into the running loop — one loop, one turn, one close whose
+// answer IS the follow-up's — so the old two-close model (and its
+// queued_turn_unobserved verdict) described a world the agent does not implement.
 func runAgentWait(ctx context.Context, outcomes <-chan sessioncoord.Outcome, sessionID string, spec agentWaitSpec, after func(time.Duration) <-chan time.Time) agentWaitResult {
 	admitted := !spec.requireAcceptance
 	res := agentWaitResult{Admission: admissionDelivered}
@@ -768,8 +744,19 @@ func runAgentWait(ctx context.Context, outcomes <-chan sessioncoord.Outcome, ses
 	}
 	active := spec.baselineActive
 	sawActive := active
-	spanUsed := false
-	awaitingQueued := false
+	observedSeq := spec.observedSeq
+	// frameFor prefers the frame stamped on the resolving outcome (retained at
+	// apply time for the generation that published it) and falls back to the
+	// registry read for a resolution that carried none.
+	frameFor := func(o sessioncoord.Outcome) *sessioncoord.TurnFrame {
+		if o.Frame != nil {
+			return o.Frame
+		}
+		if spec.frame == nil {
+			return nil
+		}
+		return spec.frame()
+	}
 
 	var admissionDeadline <-chan time.Time
 	if !admitted {
@@ -790,14 +777,6 @@ func runAgentWait(ctx context.Context, outcomes <-chan sessioncoord.Outcome, ses
 		case <-ctx.Done():
 			return agentWaitResult{Failure: "canceled"}
 		case <-admissionDeadline:
-			if awaitingQueued {
-				// The turn that closed was the one already running when this
-				// follow-up was queued, and no queued turn started. Returning
-				// that turn's verdict would attribute another prompt's result
-				// to this one; the truth is that delivery is known and
-				// execution was never observed.
-				return agentWaitResult{Admission: res.Admission, Failure: codeQueuedTurnUnobserved}
-			}
 			return agentWaitResult{Failure: codeAdmissionTimeout}
 		case <-execDeadline:
 			return agentWaitResult{Admission: res.Admission, Failure: codeExecutionTimeout}
@@ -857,8 +836,11 @@ func runAgentWait(ctx context.Context, outcomes <-chan sessioncoord.Outcome, ses
 			}
 			if row.Active && !active {
 				active, sawActive = true, true
-				if spec.markResult != nil {
-					spec.markResult()
+				// The turn that just opened is the one this request may claim.
+				// Learned here rather than pre-set, because a plain prompt has
+				// no turn until this edge.
+				if seq := frameFor(o).CurrentTurnSeq(); seq != 0 {
+					observedSeq = seq
 				}
 				if !admitted {
 					admitted = true
@@ -868,9 +850,6 @@ func runAgentWait(ctx context.Context, outcomes <-chan sessioncoord.Outcome, ses
 						return res
 					}
 					startExecution()
-				}
-				if awaitingQueued {
-					awaitingQueued, admissionDeadline = false, nil
 				}
 				continue
 			}
@@ -888,15 +867,8 @@ func runAgentWait(ctx context.Context, outcomes <-chan sessioncoord.Outcome, ses
 			}
 			// Turn closed. Classification is shared with the generic wait
 			// (classifyTurnClose) so the two paths cannot drift.
-			outcome := classifyTurnClose(row.Error, row.Interrupted)
-			if spec.spanQueuedTurn && !spanUsed {
-				spanUsed = true
-				awaitingQueued = true
-				sawActive = false
-				admissionDeadline = after(spec.admission)
-				continue
-			}
-			res.Outcome = outcome
+			res.Outcome = classifyTurnClose(row.Error, row.Interrupted)
+			res.Close = frameFor(o).ClosedTurn(observedSeq)
 			return res
 		}
 	}
