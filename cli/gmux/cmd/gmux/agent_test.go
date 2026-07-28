@@ -799,7 +799,6 @@ func TestAgentErrorCodeSurfacing(t *testing.T) {
 		{"admission_timeout", http.StatusGatewayTimeout, waitExitError},
 		{"delivery_timeout", http.StatusGatewayTimeout, waitExitError},
 		{"execution_timeout", http.StatusGatewayTimeout, waitExitError},
-		{"queued_turn_unobserved", http.StatusGatewayTimeout, waitExitError},
 		{"runner_died", http.StatusBadGateway, waitExitError},
 		{"precondition_failed", http.StatusConflict, waitExitError},
 		{"delivery_pending", http.StatusConflict, waitExitError},

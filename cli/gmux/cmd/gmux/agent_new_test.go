@@ -477,3 +477,56 @@ func TestAgentPromptNewHelpStatesTheIDContract(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentPromptHelpDistinguishesAdmissionFromDelivery pins the mode split in
+// `--no-wait`'s documented meaning, because the unqualified version of that
+// sentence was wrong for half the modes.
+//
+// What the daemon actually does (services/gmuxd agent_actions.go: runAgentWait's
+// `admitted := !spec.requireAcceptance`, and requireAcceptance is set only for a
+// plain prompt or a follow-up delivered to an idle agent):
+//
+//   - plain prompt / follow-up into an IDLE agent — a fresh turn is observable,
+//     so `--no-wait` blocks until the agent starts it and exit 0 is a claim about
+//     this session's health;
+//   - `--steer` / follow-up merged into a RUNNING turn — the turn was admitted
+//     before this prompt existed, so there is nothing to admit and the call
+//     returns at delivery.
+//
+// Both halves must be on the page. A caller who reads "returns once the agent has
+// actually started the turn" and applies it to `--steer` believes exit 0 proves
+// something about a turn nobody restarted; a page that drops the admission half
+// loses the guarantee the handoff pattern is built on. Deleting either clause
+// fails here.
+//
+// Matching is against the help text with its line wrapping collapsed, so
+// reflowing a paragraph is allowed but rewording a clause is not.
+func TestAgentPromptHelpDistinguishesAdmissionFromDelivery(t *testing.T) {
+	var sb strings.Builder
+	printAgentUsage(&sb, "agent prompt")
+	help := strings.Join(strings.Fields(sb.String()), " ")
+
+	for _, tt := range []struct {
+		clause string
+		why    string
+	}{
+		{"What --no-wait waits for depends on whether the prompt STARTS a turn",
+			"the split itself, named where the flag is documented"},
+		{"--no-wait returns once the agent has actually begun the turn",
+			"the admission half: what exit 0 buys for a plain prompt / idle follow-up"},
+		{"bounded by the 60s admission window",
+			"the cost of that stronger claim, and the current window"},
+		{"--steer, and --follow-up that merges into a RUNNING turn",
+			"names the modes the admission claim does NOT cover"},
+		{"There is nothing to admit beyond delivery",
+			"why those modes return early: the turn was already admitted"},
+		{"exit 0 claims delivery, not a fresh turn",
+			"what exit 0 means for those modes"},
+		{"--steer and --follow-up are refused with --new",
+			"why --new's unconditional admission claim stays true"},
+	} {
+		if !strings.Contains(help, tt.clause) {
+			t.Errorf("agent prompt help no longer states %q (%s)", tt.clause, tt.why)
+		}
+	}
+}

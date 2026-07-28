@@ -121,7 +121,17 @@ func cmdWait(ref string, timeoutSecs int, forText, forRegex string, quiet bool) 
 
 	// No request body; pass http.NoBody so we don't advertise a
 	// content-type for bytes that don't exist.
+	// A blocking wait says what a ^C does and does not mean: only the wait stops.
+	// The session and its turn keep running, and re-arming is one command away —
+	// without the notice, the interrupt reads like the agent was stopped.
+	//
+	// Installed around the blocking call ONLY, and torn down the moment the
+	// response is in hand: a notice printed after the wait already resolved (and
+	// printed its answer) would be a lie, and that window is reachable — a ^C
+	// pressed just as the turn ended lands there.
+	stopNotice := noticeInterruptedWait(os.Stderr, sess.ID)
 	resp, err := client.Post(endpoint, "", http.NoBody)
+	stopNotice()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return waitExitError
@@ -173,6 +183,10 @@ type waitResult struct {
 	Outcome string `json:"outcome"`
 	Cause   string `json:"cause"`
 	Output  string `json:"output"`
+	// Truncated says the adapter capped Output at the source. stdout still
+	// carries what there is (silently dropping the tail would be worse), and the
+	// fact goes to stderr where the account belongs.
+	Truncated bool `json:"truncated"`
 	// ConversationReadable says whether `gmux agent output` can answer for
 	// this session at all. Shells, one-shot commands and Claude/Codex
 	// sessions have no semantic conversation, and pointing them at that verb
@@ -232,12 +246,13 @@ func reportTurnConclusion(sess cliSession, verb string, res waitResult, quiet bo
 			// the pre-existing synchronization behavior, not a failure.
 			return waitExitOK
 		}
-		// Verbatim and untruncated, with exactly one trailing newline so
-		// the output is usable in a shell without swallowing a final one.
+		// Verbatim, with exactly one trailing newline so the output is usable
+		// in a shell without swallowing a final one.
 		if _, err := io.WriteString(stdout, strings.TrimRight(res.Output, "\n")+"\n"); err != nil {
 			fmt.Fprintln(os.Stderr, "gmux:", err)
 			return waitExitError
 		}
+		noteTruncatedAnswer(sess, res.Truncated)
 		return waitExitOK
 	case waitOutcomeInterrupted:
 		fmt.Fprintf(os.Stderr, "gmux: the turn was interrupted before it finished (session %s); %s\n",
@@ -256,6 +271,18 @@ func reportTurnConclusion(sess cliSession, verb string, res waitResult, quiet bo
 		fmt.Fprintf(os.Stderr, "gmux: unexpected turn outcome %q\n", res.Outcome)
 		return waitExitError
 	}
+}
+
+// noteTruncatedAnswer tells the caller on stderr that the answer they just got
+// on stdout is not the whole one. The adapter caps a turn's output at the source
+// so an enormous answer can never cost the turn's close; the full text is still
+// in the conversation, which is what the hint points at.
+func noteTruncatedAnswer(sess cliSession, truncated bool) {
+	if !truncated {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "gmux: the answer was truncated at the agent; read it in full with 'gmux agent output %s'\n",
+		shortID(sess.ID))
 }
 
 // inspectHint names the verb that can actually show what happened.
