@@ -462,6 +462,13 @@ rendering is intentionally limited to supported agent adapters.
 
 ## Amendment: where a result-bearing answer comes from
 
+> **Superseded in part (2026-07-28)** by the amendment below: the conversation
+> **watermark** described here is replaced by a source-asserted, event-carried
+> result. The
+> rest of this section — server-side selection at turn close inside the
+> resolving request, omit-rather-than-empty, one classification, global exit
+> codes — stands unchanged.
+
 Recorded when §8/§11 were implemented. The decisions themselves stand; this
 fixes two things the decision text left open.
 
@@ -548,6 +555,275 @@ lifetime closes that turn with `Error` when the child exits non-zero, so
 `gmux wait` on a failed `gmux -d -- make build` exits 1. "Finished" and
 "succeeded" are the same question for such sessions, and a wait that returned 0
 for a failed build would be the more dangerous answer.
+
+## Amendment (2026-07-28): the result is asserted at the source
+
+The watermark model above bound a turn's result window when the turn was first
+observed, and reconstructed attribution downstream from the conversation file.
+That decision is reversed: **the adapter asserts the turn's boundary, its
+result, and its trigger at the source**, and gmux never reconstructs
+attribution from the conversation at all.
+
+### Why reconstruction lost, twice
+
+The watermark forced gmuxd to bind **before the evidence existed**. Measured
+against pi's actual persistence model — a fresh conversation's file is not
+written at all until the turn's first assistant output, when pi writes the user message and assistant message
+together — a window marked at admission time points into a conversation that
+does not exist yet. For a fresh session the mark is taken before the adapter
+has even connected, so it loses the race with conversation-ref discovery by
+construction: the **first synchronous prompt of every fresh session completed
+with an empty answer** while `gmux agent output` could read it one second
+later. The machinery required to make early binding safe — two bind kinds, a
+re-mark for queued follow-ups, first-look consumption, the refless refusal —
+was itself the source of most of the defects found while hardening it.
+
+The first replacement considered was a stateless close-time read of the
+conversation file ("last completed exchange"). It fixes the first-turn bug and
+deletes the same machinery, but its correctness rests on a timing argument —
+no foreign assistant entry can persist within the sub-second close-to-read gap
+— which is true today and **unfalsifiable as an adapter contract** tomorrow,
+and it stays exposed to conversation-ref rotation in the gap and gives
+late-arriving waits only snapshot guesses.
+
+Both approaches reconstruct facts the adapter holds authoritatively at the
+moment they are needed. Translation at the agent side (ADR 0015) says that is
+where they should be extracted — and pi's extension API already carries all of
+them; no upstream change is required.
+
+### The boundary is `agent_settled`, and a turn is pi's merged loop
+
+Two facts about pi, verified in its source, reshape the turn model:
+
+- `agent_end` fires **per retry attempt**: a transient provider error emits an
+  error-shaped `agent_end`, then pi retries. It is not a logical boundary.
+  pi's **`agent_settled`** event — "fired after an agent run has fully settled
+  and no automatic retry, compaction, or queued continuation will run" — is.
+  The extension closes turns on `agent_settled`, using the message list
+  captured at the last `agent_end`. (This also fixes a pre-existing status
+  flap where a retried error briefly read as error-then-active.)
+- **pi merges queued follow-ups into the running agent loop.** A follow-up
+  delivered mid-turn is drained by the same loop at its would-stop boundary:
+  no second `agent_start`, no second close, one settled event whose output is
+  the *merged* turn's final prose. The previous model — two turns, a re-mark
+  at the queued turn's start, `queued_turn_unobserved` — describes a two-close
+  world pi does not implement, and its machinery (`spanQueuedTurn` and
+  friends) is deleted with the watermark.
+
+**One loop is one turn.** A user message injected into an *active* turn —
+whether a steer or a "queued" follow-up, whether delivered by gmux or typed by
+a human (observable via pi's `message_start`) — extends that turn and changes
+what its answer means. The steer rule in the follow-up slices below therefore
+covers both injection kinds; "a follow-up queued behind yours does not change
+your answer" is true only of follow-ups delivered to an idle agent, which are
+ordinary turns.
+
+### The wire
+
+The extension (ours, in-repo) reports; the runner forwards. Turn events gain
+content:
+
+```jsonc
+{ "op": "turn", "phase": "start", "turn_seq": 7, "trigger": "<excerpt>" }  // from before_agent_start.prompt
+{ "op": "turn", "phase": "steered", "turn_seq": 7, "text": "<excerpt>" }   // mid-turn user message_start
+{ "op": "turn", "phase": "end", "turn_seq": 7, "outcome": "completed",
+  "output": "<final assistant prose>", "truncated": false }                // on agent_settled
+```
+
+`turn_seq` is an extension-local monotonic counter binding one turn's start,
+injections, and close together; every consumer that pairs facts across events
+pairs them by it. Across a settled run's retries and continuations the facts
+accumulate independently — the trigger and injection list span the whole run,
+`output` and the stop reason come from the final attempt's message list —
+rather than being replaced wholesale per `agent_end`.
+
+- `output` is the settled turn's last assistant prose from its own message
+  list. A tool-only turn omits the field: `completed` with no output.
+- `interrupted` and `error` turns carry no `output`; an error close may carry
+  a short `diagnostic` instead (the reason/account channel, never the result).
+- Caps are applied **at the extension and sized jointly against every hop**:
+  `output` generously (256 KiB pre-escape), `trigger`/`text` as short
+  excerpts, and the runner body and daemon scanner limits are raised to fit
+  the worst-case escaped payload. The invariant: **an oversized output never
+  costs the close** — the event still closes the turn, `truncated` is set,
+  and the conversation read serves the full text.
+
+### The transport: a runner-held last-turn relay record
+
+The naive version of this design — "the payload rides the event pipe" — fails
+against what that pipe actually is: the coordinator's outcome publish re-reads
+the durable row post-commit, subscriber watermarks coalesce overtaken
+publishes, the runner's event fan-out drops under backlog, and the generic
+wait has a row-snapshot ticker path that carries no event at all. Every one of
+those is a place where an edge-scoped payload silently falls off while the row
+state still converges — producing "completed, exit 0, no answer", the exact
+phenotype this amendment exists to kill.
+
+The runner therefore keeps the turn facts the same way it already keeps
+status, conversation ref, and slug: a **turn frame**, replayed to every
+`/events` subscriber on connect as one atomic, sequence-bearing snapshot. The
+frame holds two records to keep the polarities apart — the **current turn**
+(`turn_seq`, trigger, injections so far) and the **last closed turn**
+(`turn_seq`, outcome, output, truncated, diagnostic) — so a reader can never
+pair a running turn's trigger with the previous turn's answer. It is
+**conversation-local, not merely generation-local**: an authoritative rebind
+(pi switch/new/resume/fork, reported at `session_start`) clears it atomically,
+ordered ahead of the rebind's `ready`/session replay, so a late subscriber can
+never see the previous conversation's answer under the new ref. It is not row
+state, not persistence (it dies with the runner), and not a tape read; it is
+ADR 0011's runner-owned live truth, extended by one structure.
+
+The frame does not travel alone: **a turn edge is one event carrying both the
+status transition and its frame** — the scoped invariant below is a transport
+property only because the close can never be delivered without the frame that
+closed it, so re-splitting them into separate sends reopens the lost-answer
+window this section exists to close. gmuxd retains the last applied frame per
+generation in registry runtime and attaches close facts to the outcome **at
+apply time** (not via the post-commit re-read). Every resolution path that can declare a wait closed — the outcome
+channel, the initial fanout check, the 500 ms ticker, a reconnect replay —
+serves from that retained frame, and **only when its `turn_seq` matches the
+close being resolved**; a mismatch (two back-to-back turns between looks)
+degrades honestly to a result-free close, never to an *earlier* turn's answer.
+The guarantee is directional: when the row lags the runner, a wait can bind
+the frame's newer turn and serve *that* turn's answer — the newest completed
+turn of a genuinely idle session, which snapshot semantics would also report.
+The dangerous direction — a stale answer presented as a newer turn's — is
+closed by construction.
+
+The delivery invariant is stated positively but **scoped**: for a live wait on
+a result-bearing, frame-capable generation, no path may resolve `completed`
+without the settled frame having been available — a genuinely absent `output`
+then always means a tool-only turn, never transport loss. Outside that scope
+the close is served result-free, exactly like a non-result-bearing adapter:
+shell and hook-driven sessions, raw `PUT /status` closes, and version-skewed
+runners that never sent a frame must complete normally, not hang on an
+invariant they cannot satisfy. Nothing is written to the central store: a wait
+that arrives after the close — even while the same runner still lives — keeps
+snapshot semantics, as does `gmux agent status`; the frame serves only waits
+that observed their close through it.
+
+Two operational notes stated rather than implied: the extension→runner post is
+fire-and-forget, so a lost settled post leaves the session semantically active
+until reconnect replay or runner death repairs it — replay makes daemon-side
+transport reliable, not the source hop, and the degraded state is visible as
+such (`active` with an idle screen) rather than as a false success. And the
+frame is bounded end-to-end: one capped frame per runner, one retained copy
+per generation in gmuxd, shared rather than duplicated into each subscriber
+queue, so the budget is per-session, not per-waiter.
+
+### Failures before the turn starts
+
+pi's prompt submission can fail before any agent loop event fires (no API
+key, no model): the TUI paints a banner and **no turn or failure event exists
+on that path** — the one fact in this design that cannot be source-asserted today. No
+heroics: the admission wait times out as before (indeterminate, §7), and the
+stderr report for that failure appends a **terminal-tail excerpt**, clearly
+labeled as the screen — best-effort diagnosis on the account channel, where
+impurity is allowed. If pi ever emits a prompt-failure event, this upgrades to
+a source-asserted `error` close with a `diagnostic`; nothing else changes.
+
+### Admission windows and interrupted waits
+
+Two operational adjustments from live testing:
+
+- **The admission window widens from 10s to 60s.** A slow-loading model can
+  legitimately take more than 10s between delivery and its first agent event;
+  a 10s indeterminate answer for a healthy session is worse than a longer
+  wait. Admission remains unstored and its timeout remains indeterminate (§7).
+- **`prompt --new` gates on admission even with `--no-wait`.** The launch
+  line's exit 0 is the health event the handoff pattern relies on; returning
+  at delivery let a session that never starts its turn masquerade as a
+  healthy launch. `--no-wait` still prints the bare id immediately and never
+  waits for the *turn*; it now waits for the turn to *begin*, bounded by the
+  same admission window. The cost is stated where the handoff pattern is
+  taught: `id=$(gmux agent prompt --new --no-wait …)` returns at process
+  exit, so on a sick session the launch line can now block up to the window
+  instead of returning at delivery — exit 0 buying the stronger claim is the
+  point.
+- **An interrupted `wait` says what it is not.** SIGINT/SIGTERM on a blocking
+  `wait` (or `prompt`) prints one stderr line stating that only the wait was
+  interrupted — the session and its turn keep running, and `gmux wait <id>`
+  re-arms — then dies from the signal (the shell's 128+N; a backstop path may
+exit with the same code rather than die signaled, so `$?` is the contract,
+`WIFSIGNALED` is not). The §8 taxonomy
+  deliberately does not apply: gmux reached no verdict about the turn, so both
+  `1` and `2` would be lies. Without the notice, ^C reads like the agent was
+  stopped.
+
+### Output routing: stdout is data, stderr is the account, the exit code is the verdict
+
+- **Completed** (exit 0): stdout is the answer, alone — `wait`, sync `prompt`,
+  and sync `--new` (after its id line) unchanged. Quiet success: no trigger
+  echo, no report.
+- **Non-completed** (exit 1/2): stdout empty, and a **status-shaped report on
+  stderr** — outcome, reason (`canceled`, `steered`, `runner_died`, `timeout`,
+  …), the trigger excerpt, and the injected text when a steer is the reason.
+  The account arrives exactly when the caller needs it, with no second
+  command.
+- **`--json`** on `wait` and sync `prompt`: a stable envelope on stdout
+  regardless of outcome (`outcome`, `reason`, `output`, `trigger`,
+  `steered_by`, `truncated`). This is the machine contract, and it releases
+  the human default from purity pressure.
+- Reports and envelopes are rendered **from the relayed turn facts only**,
+  never from a post-resolution conversation read — a re-read would reopen the
+  §9 gap this amendment closes. `status`, the snapshot verb, is the one that
+  reads the tape.
+- `--quiet` unchanged (verdict only).
+
+### The adapter contract
+
+Result-bearing becomes an adapter property with a testable definition: **a
+result-bearing adapter asserts its turn boundary, and delivers the turn's
+outcome, final assistant message, and triggering excerpt in its own terminal
+and start events.** pi implements it with existing API (`before_agent_start`,
+`agent_end` + `agent_settled`, `message_start`). claude/codex do not become
+result-bearing (unchanged). No tape-read fallback exists when the settled
+event lacks `output`: absent means tool-only, and the conversation read
+remains the explicit recourse.
+
+One scope **widening** is deliberate: the settled event reports every turn's
+result, however the turn started. An armed `gmux wait` is therefore
+result-bearing for turns a human typed into the TUI or raw `send` initiated,
+not only for semantically prompted ones. §11's condition widens accordingly.
+`send --wait` itself remains result-free by its own contract.
+
+### Follow-up slices recorded here, implemented separately
+
+**Retrieval verbs.** `gmux agent output` is renamed to **`gmux agent status`**
+and answers "whatever is relevant now" with a fixed three-part shape: a state
+line (alive/idle/active, last outcome), the triggering excerpt, and the
+relevant content (final answer when idle; recent messages when active).
+`gmux agent logs` gains message-type filters: no flags → user and agent
+prose-bearing messages; explicit type flags (`--user`, `--agent`, `--tool`,
+`--thinking` where rendered) **replace** the default set; `--all` is
+everything; `-n` counts post-filter messages. `logs --agent -n 1` approximates
+the old `output` read — as a snapshot it can be staler than a wait's carried
+result, and the docs say so rather than claiming equality. The verb split is
+cognitive, not shape-based: `status` = "I don't know what I want, show me what
+matters"; `logs` = "I know the exact text I want"; `tail` = raw screen.
+
+`--follow-up`'s help must state the mode split this model makes observable:
+delivered to an **idle** agent it starts an ordinary turn; delivered into an
+**active** turn it merges into that turn (pi's queue), which interrupts other
+waiters like a steer and makes the merged close's answer the follow-up's.
+
+**Steering interrupts waits.** A user message injected into a turn someone
+else is waiting on — a steer, or a follow-up merged into the active loop —
+changes the contract of the pending answer, so it resolves that wait early:
+exit 2, reason `steered`, report on stderr carrying the injected text. The
+turn itself keeps running; the waiter re-arms if it still cares. The injecting
+request's own sync wait is excluded by runner-local correlation with a real
+identity: the delivery carries an id, and the injector may claim the merged
+close **only after the correlated `message_start` steer event acknowledged
+that its text entered the loop**. If the turn settles before that
+acknowledgement arrives, pi may have closed without consuming the injection —
+the injector's result is then indeterminate (reported as such), never the
+pre-injection answer under exit 0. And the claim holds only while the
+injector's message is the loop's **last** injection: a later injection — human
+or semantic — supersedes it, and the earlier injector is interrupted like any
+other waiter, with the report saying the turn was steered again after its
+message. Human injections (detected via `message_start`) interrupt every
+waiter: a human grabbed the wheel.
 
 ## Amendment (2026-07-27): `gmux agent logs`, and `tail` goes back to raw
 
