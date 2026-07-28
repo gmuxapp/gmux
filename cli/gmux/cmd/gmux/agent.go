@@ -296,8 +296,9 @@ func parseAgentPrompt(args []string) (*command, error) {
 	// combination rather than ignoring the flag is the same rule the rest of this
 	// surface follows (a repeated flag, `?tail=` on a message scope): a caller who
 	// set a bound and got none would believe they had constrained something. It
-	// matters more here than elsewhere — `--no-wait` still waits internally for
-	// admission, on a fixed window this flag cannot move.
+	// matters more here than elsewhere — `--no-wait` still blocks internally,
+	// for admission (a plain prompt, an idle follow-up) or for delivery (a steer,
+	// a merged follow-up), and neither window is something this flag can move.
 	if c.agentNoWait && timeoutSet {
 		return nil, errors.New("agent prompt: --timeout bounds the wait, so it cannot be combined with --no-wait")
 	}
@@ -535,7 +536,13 @@ func deliverPrompt(sess cliSession, mode string, noWait bool, timeoutSecs int, p
 	// server-side.
 	client.Timeout = 0
 	url := gmuxdBaseURL() + "/v1/sessions/" + sess.ID + "/prompt"
+	// Same notice as `gmux wait`, around the blocking call only: a ^C here stops
+	// the wait, not the turn. `--no-wait` still blocks — on admission, or on
+	// delivery for a mode that joins a running turn — and the notice is just as
+	// true for it: the session keeps running either way.
+	stopNotice := noticeInterruptedWait(os.Stderr, sess.ID)
 	resp, err := client.Post(url, "application/json", strings.NewReader(string(body)))
+	stopNotice()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
 		return waitExitError
@@ -597,9 +604,11 @@ type agentPromptResult struct {
 	Outcome   string `json:"outcome"`
 	Cause     string `json:"cause"`
 	Resumed   bool   `json:"resumed"`
-	// Output is the agent's latest final message, present only for a
-	// completed turn on a session whose conversation gmux can read.
+	// Output is the turn's final assistant message as the adapter asserted it,
+	// present only for a completed turn on a result-bearing session.
 	Output string `json:"output"`
+	// Truncated says the adapter capped Output at the source.
+	Truncated bool `json:"truncated"`
 }
 
 // reportAgentPromptSuccess turns a 2xx prompt response into output and an exit
@@ -647,6 +656,7 @@ func reportAgentPromptSuccess(sess cliSession, status int, body []byte, noWait b
 				fmt.Fprintln(os.Stderr, "gmux:", err)
 				return waitExitError
 			}
+			noteTruncatedAnswer(sess, res.Truncated)
 		}
 		return waitExitOK
 	case waitOutcomeInterrupted:
@@ -856,11 +866,10 @@ func reportAgentError(sess cliSession, verb string, status int, body []byte) int
 	}
 	// Every failure code is 1 under the global taxonomy, timeout-shaped ones
 	// included. That loses nothing a number could carry: admission_timeout,
-	// delivery_timeout and queued_turn_unobserved describe an INDETERMINATE
-	// delivery (retrying may duplicate the prompt) while execution_timeout means
-	// the turn is still running — three meanings one "timeout" code would have
-	// flattened into the bucket scripts blindly retry. The stable code printed
-	// above separates them.
+	// delivery_timeout describe an INDETERMINATE delivery (retrying may duplicate
+	// the prompt) while execution_timeout means the turn is still running — three
+	// meanings one "timeout" code would have flattened into the bucket scripts
+	// blindly retry. The stable code printed above separates them.
 	return waitExitError
 }
 
@@ -911,6 +920,7 @@ func printAgentUsage(w io.Writer, topic string) {
   --model M         --new only: the model to launch with (pi's --model)
   --name N          --new only: the session display name (pi's --name)
   --no-wait         return as soon as the prompt is admitted, without waiting
+                    for the turn to finish (see "What --no-wait waits for")
   --follow-up       queue the prompt to submit after the current turn ends
   --steer           redirect the turn that is running right now (fails if idle)
   --timeout/-t N    give up waiting after N seconds (0/absent: wait indefinitely)
@@ -919,6 +929,17 @@ func printAgentUsage(w io.Writer, topic string) {
 Pass either a session id or --new, never both. --new rejects --follow-up and
 --steer (a session that does not exist yet has no turn to queue behind or
 steer), and --model/--name mean nothing without it.
+
+What --no-wait waits for depends on whether the prompt STARTS a turn:
+
+  - a plain prompt, and --follow-up delivered to an IDLE agent, start one, so
+    admission is an observable event: --no-wait returns once the agent has
+    actually begun the turn (bounded by the 60s admission window), and exit 0
+    is a health signal about this session.
+  - --steer, and --follow-up that merges into a RUNNING turn, join a turn that
+    is already under way. There is nothing to admit beyond delivery — the turn
+    was admitted before this prompt existed — so --no-wait returns as soon as
+    the text is delivered, and exit 0 claims delivery, not a fresh turn.
 
 Launching (--new). gmux starts the session the same way 'gmux -d -- pi' does,
 from this shell's env and cwd (local daemon only), then delivers the prompt
@@ -943,7 +964,18 @@ ready fails its first prompt exactly like any later one.
   literal text '--new'.
 
   --timeout still bounds only the wait, never the launch: readiness runs on
-  the adapter's own fixed window (10s for pi).
+  the adapter's own fixed window (10s for pi), and admission on the daemon's
+  (60s).
+
+  --no-wait gates exit 0 on ADMISSION, not on delivery: the id still prints
+  immediately, but the process returns only once the agent has actually
+  started the turn (or the admission window expires). That is the health
+  event the handoff pattern relies on — id=$(gmux agent prompt --new
+  --no-wait …) returns at process exit, so on a sick session the launch line
+  can block up to that window instead of returning at delivery. Exit 0 buying
+  the stronger claim is the point. It holds unconditionally here because a
+  --new prompt always starts the session's first turn; --steer and --follow-up
+  are refused with --new, so the delivery-only case above cannot arise.
 
 Waits by default: the command returns when the turn ends and prints the agent's
 answer. Exit status is 0 for a completed turn, 2 for an interrupted one, and 1
@@ -1033,7 +1065,7 @@ answer is worse than none); 'gmux agent output <id>' reads what exists, even
 after the session died. Exit codes: 0 completed, 2 intentionally interrupted,
 1 anything else (failed turn, timeout, dead runner, usage, transport).
 
-Retrying. admission_timeout, delivery_timeout, queued_turn_unobserved, and
+Retrying. admission_timeout, delivery_timeout, and
 transport_error are indeterminate: the prompt may already have landed, so
 inspect before resending. A dropped connection is indeterminate too. These
 codes guarantee nothing was delivered and are safe to retry: runner_outdated,

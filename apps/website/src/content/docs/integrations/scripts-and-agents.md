@@ -79,13 +79,16 @@ that: the session exists and is addressable. It is not an admission receipt and
 not a readiness signal — the exit code carries those. Under `--new`
 the completion signal is therefore the **exit code**, not non-empty stdout: a
 successful synchronous run prints the id and then the answer. With `--no-wait`
-the bare id is the only output and exit `0` means the prompt was admitted. If
-the launch itself fails, stdout stays empty — no session exists to address.
+the bare id is the only output and exit `0` means the turn was **admitted** — the
+agent actually started it. The id still prints immediately, but the process
+returns only once that happened (or the 60 s admission window expires), so on a
+sick session the launch line can block that long instead of returning at
+delivery. If the launch itself fails, stdout stays empty — no session exists to
+address.
 
-The first turn of a freshly launched session often completes with **no inline
-answer** (the daemon has not resolved the agent's conversation file yet at turn
-close — `gmux -d -- pi` plus a prompt behaves identically); the exit code still
-says it completed, and `gmux agent output "$id"` returns the reply.
+The first turn of a freshly launched session prints its answer like any other:
+the agent asserts its turn's result at the boundary, so there is no window in
+which the reply exists but gmux cannot attribute it.
 
 A failure after the launch leaves the session behind and **you own it**: gmux
 does not tear it down, and it may still be running. Retry against the printed
@@ -104,7 +107,7 @@ behind or steer); `--timeout` bounds your wait, never the launch. `--new`
 launches pi only — for any other command, the two-step `gmux -d -- <cmd>` plus
 a prompt remains fully supported and is the shape to use.
 
-`agent prompt` blocks until the turn ends and prints the agent's answer on stdout — the latest final message only (no `[tool]` lines), straight from the agent's stored conversation. Exit codes are gmux's global taxonomy, shared by every verb that reports a gmux verdict (`gmux -- <cmd>`/`gmux edit` pass the child's code through, and `gmux daemon|auth|remote` pass gmuxd's): `0` the turn completed, `2` it was intentionally interrupted, `1` anything else (a failed turn, a `--timeout`, a dead runner). A turn that did not complete prints **nothing**: a previous turn's answer must never be handed back as this one's. `gmux agent output <id>` reads whatever exists in that case, and works even after the session has died.
+`agent prompt` blocks until the turn ends and prints the agent's answer on stdout — the turn's final message only (no `[tool]` lines), as the agent asserted it for that turn (gmux does not reconstruct it from the transcript, so an answer is only ever attributed to the turn that produced it). Exit codes are gmux's global taxonomy, shared by every verb that reports a gmux verdict (`gmux -- <cmd>`/`gmux edit` pass the child's code through, and `gmux daemon|auth|remote` pass gmuxd's): `0` the turn completed, `2` it was intentionally interrupted, `1` anything else (a failed turn, a `--timeout`, a dead runner). A turn that did not complete prints **nothing**: a previous turn's answer must never be handed back as this one's. `gmux agent output <id>` reads whatever exists in that case, and works even after the session has died.
 
 The other shapes:
 
@@ -113,7 +116,7 @@ git diff | gmux agent prompt "$id"                  # prompt from stdin, one pro
 gmux agent prompt --no-wait "$id" 'start the long refactor'
 gmux agent prompt --follow-up "$id" 'then update the docs'   # queue behind the current turn
 gmux agent prompt --steer "$id" 'stop, use the sqlite path'  # redirect the running turn
-gmux agent prompt --no-wait --steer "$id" 'and skip the migration'   # --no-wait composes with either mode
+gmux agent prompt --no-wait --steer "$id" 'and skip the migration'   # --no-wait composes with either mode (returns at delivery here: the turn is already running)
 gmux agent cancel "$id"; gmux wait "$id"; [ $? = 2 ] && echo stopped   # interrupt, then wait
 ```
 
@@ -121,7 +124,7 @@ Note the `;` rather than `&&`: an interrupted turn exits `2`, so chaining the wa
 
 Flags go before the id; everything after the id is the prompt, verbatim. A plain prompt restarts a dead retained session to deliver it; `--steer` and `cancel` require a live, active turn and never resume.
 
-Errors name a stable code. Treat `admission_timeout`, `delivery_timeout`, `queued_turn_unobserved` and `transport_error` as **indeterminate** — the prompt may already have landed, so a blind retry can duplicate it — and treat a bare transport failure with no code (a dropped connection to gmuxd, a daemon restarted mid-prompt) the same way: the request may have been delivered before the connection went away. `runner_outdated`, `precondition_failed`, `delivery_pending`, `not_ready`, `not_running` and `incarnation_mismatch` (the runner was replaced mid-flight, and the replacement refused an action meant for its predecessor) all guarantee that nothing was delivered, so they are safe to retry. `unsupported_adapter` means the session's agent has no semantic support yet: use raw `send`/`tail` for those, as below.
+Errors name a stable code. Treat `admission_timeout`, `delivery_timeout` and `transport_error` as **indeterminate** — the prompt may already have landed, so a blind retry can duplicate it — and treat a bare transport failure with no code (a dropped connection to gmuxd, a daemon restarted mid-prompt) the same way: the request may have been delivered before the connection went away. `runner_outdated`, `precondition_failed`, `delivery_pending`, `not_ready`, `not_running` and `incarnation_mismatch` (the runner was replaced mid-flight, and the replacement refused an action meant for its predecessor) all guarantee that nothing was delivered, so they are safe to retry. `unsupported_adapter` means the session's agent has no semantic support yet: use raw `send`/`tail` for those, as below.
 
 For pi, `agent cancel` also restores queued follow-ups into the composer, so after a cancel the composer may hold text nobody retyped — the next prompt submits it together with the new one. `--follow-up` and `cancel` also depend on pi's default alt+enter/escape keybindings; a session whose user remapped them loses both silently.
 
@@ -150,7 +153,7 @@ gmux agent logs <id> -n 2      # the prompt and the reply, clean markdown
 
 The idle signal is the same `Status.Active` flag the UI's spinner consumes, so `wait` returns the moment the agent emits its closing message. On an already-idle session it returns immediately and reports the **last** turn's conclusion and result — to gate on a turn you are about to trigger, use `gmux agent prompt` or `send --wait` (below), which arm the wait before delivering anything. Exit codes: `0` the turn completed (or the output condition matched), `2` the turn was intentionally interrupted, `1` anything else — a failed turn, a death, or `--timeout N` elapsing.
 
-`wait` is also **result-bearing**: for an agent whose conversation gmux can read (pi today), a turn that completed normally prints the agent's latest final message, exactly like `gmux agent prompt`:
+`wait` is also **result-bearing**: for a result-bearing agent (pi today — one that asserts its own turn boundary and result), a turn that completed normally prints that turn's final message, exactly like `gmux agent prompt`. A wait that arrives after the turn already closed reports the conclusion but no answer: it never observed the turn, so it does not claim one — `gmux agent output` is the snapshot read for that.
 
 ```bash
 answer=$(gmux wait "$id")       # the reply, or empty for a shell/other agent

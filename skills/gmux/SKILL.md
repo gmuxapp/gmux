@@ -104,11 +104,13 @@ code says those. A failure after the launch leaves the session behind and **you
 own it** (it may still be running): retry against the id, or `gmux kill $id`. Under `--new` the completion
 signal is therefore the **exit code**, not non-empty stdout: a sync run prints
 the id and then the answer; `--no-wait` prints the bare id only and exits 0 once
-admitted. A launch that never registers prints nothing on stdout and exits 1.
+the turn was **admitted** (the agent started it) — so on a sick session that
+launch line can block up to the 60 s admission window rather than returning at
+delivery. A launch that never registers prints nothing on stdout and exits 1.
 
-The **first** turn of a brand-new session often prints no answer even though it
-completed (the daemon has not resolved the conversation file yet at turn close;
-`gmux -d -- pi` + prompt behaves the same). Read it with `gmux agent output $id`.
+The first turn of a brand-new session prints its answer like any other: the agent
+asserts its turn's result at the boundary, so gmux never has to reconstruct it
+from the conversation file.
 
 `--new` must come **before** the prompt: after an id it is prompt text like
 anything else (`gmux agent prompt $id --new` sends the literal `--new`).
@@ -119,7 +121,10 @@ launch. `--new` is pi-only — for any other command the two-step
 `id=$(gmux -d -- <cmd>)` then `gmux agent prompt $id …` is still fully valid.
 
 `agent prompt` blocks until the turn ends and **prints the agent's answer** on
-stdout (latest final message, untruncated, no `[tool]` lines). Exit codes are
+stdout (the turn's final message, no `[tool]` lines), as the agent asserted it
+for that exact turn. A turn nobody could identify as yours prints nothing rather
+than somebody else's answer, and a very long answer is capped at the agent with
+a note on stderr — `gmux agent output <id>` has the full text. Exit codes are
 gmux's global taxonomy, identical for every verb that reports a gmux verdict:
 `0` completed, `2` intentionally interrupted, `1` everything else (failed turn,
 `--timeout`, dead runner, usage/transport error). The exceptions pass a code
@@ -146,7 +151,11 @@ wait "fails" on exactly the outcome you asked for (and aborts the script under
 
 `--follow-up` and `--steer` are mutually exclusive; `--no-wait` composes with
 either (it only decides whether you block, so `--no-wait --timeout N` is a usage
-error). A plain prompt restarts a dead retained session to deliver it; `--steer` and
+error). What `--no-wait` returns at differs by mode: a plain prompt and a
+`--follow-up` to an idle agent start a turn, so it returns once the agent has
+actually begun it (exit 0 is a health event); `--steer` and a `--follow-up` that
+merges into a running turn join a turn already under way, so there is nothing to
+admit beyond delivery and it returns at delivery. A plain prompt restarts a dead retained session to deliver it; `--steer` and
 `cancel` need a live, active turn and never resume. `cancel` returns when the
 interrupt is *delivered*, so follow it with `gmux wait` if the next step needs
 the turn actually stopped.
@@ -157,8 +166,8 @@ together with the new one. And `--follow-up`/`cancel` depend on pi's default
 alt+enter/escape keybindings — a session whose user remapped them loses both
 silently.
 
-Errors carry a stable code. `admission_timeout`, `delivery_timeout`,
-`queued_turn_unobserved` and `transport_error` are **indeterminate** — the prompt
+Errors carry a stable code. `admission_timeout`, `delivery_timeout` and
+`transport_error` are **indeterminate** — the prompt
 may already have landed, so do not blindly retry; inspect with `gmux agent
 output`/`gmux agent logs` first. So is a bare transport failure with no code (a dropped
 connection to gmuxd): the request may have been delivered before the connection

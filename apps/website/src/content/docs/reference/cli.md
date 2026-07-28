@@ -270,10 +270,11 @@ turn that has already finished, not of a turn yet to come. To gate on a turn you
 are about to trigger, use `gmux agent prompt` or `gmux send --wait`, which arm
 the wait before delivering anything.
 
-**Results.** When the session is an agent whose conversation gmux can read
-(pi today) and its turn **completed normally**, `wait` prints the agent's
-latest final message on stdout — the same text
-[`gmux agent output`](#gmux-agent-output-id) returns, untruncated:
+**Results.** When the session is a **result-bearing** agent (pi today — one that
+asserts its own turn boundary, outcome and final message) and the turn it
+observed **completed normally**, `wait` prints that turn's final message on
+stdout. The answer comes from the agent's assertion for that exact turn, not
+from a transcript read, so it can never be another turn's:
 
 ```bash
 answer=$(gmux wait a3f20187)      # the agent's reply, or empty for a shell
@@ -281,12 +282,16 @@ gmux wait --quiet a3f20187        # synchronize only, print nothing
 ```
 
 Nothing is printed when the turn ended in an error, was interrupted, or the
-session died: the newest stored message would belong to a previous or partial
-turn, and presenting it as this turn's answer would be worse than silence. The
-condition is reported on stderr, and `gmux agent output <id>` still reads
-whatever exists. Shell/process sessions, agents gmux cannot read semantically
-(Claude, Codex), and output-condition waits stay synchronization-only and print
-nothing — they are still perfectly waitable.
+session died: a previous or partial turn's message presented as this turn's
+answer would be worse than silence. The condition is reported on stderr, and
+`gmux agent output <id>` still reads whatever exists. Also result-free, and
+perfectly waitable: shell/process sessions, agents that assert no turn identity
+(Claude, Codex), output-condition waits, and a wait that arrives after the turn
+has already closed — it never observed that turn, so it reports the conclusion
+without claiming its answer.
+
+Pressing `^C` on a blocking wait stops **the wait**, not the session: gmux says
+so on stderr, and `gmux wait <id>` re-arms.
 
 **Output conditions.** Instead of the idle signal, wait until specific text
 appears in the session's output:
@@ -361,8 +366,14 @@ git diff | gmux agent prompt a3f20187                        # prompt from stdin
   On an idle agent it behaves like a plain prompt.
 - `--steer` — redirect the turn that is running *right now*. Fails if the agent
   is idle or dead; steering nothing is not a thing.
-- `--no-wait` — return as soon as the prompt is admitted instead of waiting for
-  the turn.
+- `--no-wait` — return as soon as the prompt is **admitted** instead of waiting
+  for the turn to finish. What that means depends on whether the prompt starts a
+  turn: a plain prompt (and `--follow-up` to an *idle* agent) starts one, so
+  `--no-wait` returns once the agent has actually begun it and exit `0` is a
+  health event rather than a delivery receipt. `--steer` and a `--follow-up` that
+  merges into a *running* turn join a turn that was admitted before this prompt
+  existed, so there is nothing to admit beyond delivery and `--no-wait` returns
+  as soon as the text is delivered.
 - `--timeout N` — stop waiting after N seconds (the turn keeps running). Absent
   or `0` waits indefinitely. It bounds *your* wait, so `--no-wait --timeout N` is
   refused as a usage error rather than silently ignored.
@@ -383,13 +394,17 @@ anything else (a turn that ended in an error, a `--timeout`, a dead runner, a
 transport failure). Timeouts have no code of their own — the stable error code
 on stderr says far more than a number could.
 
-On normal completion the agent's answer is printed on stdout, exactly as
-`gmux agent output` would return it. A turn that failed or was interrupted
-prints **nothing**: the newest stored message would be a previous or partial
-turn's. Read what exists with `gmux agent output <id>`.
+On normal completion the agent's answer is printed on stdout. It is the
+agent's OWN assertion about that turn, carried out of the agent with the turn's
+close, not a conversation read: a result is only ever served to the turn it
+belongs to, and a turn nobody could identify is served none. A turn that failed
+or was interrupted prints **nothing** — a previous or partial turn's message
+presented as this one's answer is worse than silence. Read what exists with
+`gmux agent output <id>`, which is explicitly a snapshot read of the transcript
+and is also where a truncated answer's full text lives.
 
 Failures name a stable code, and the wording distinguishes what is known about
-delivery. `admission_timeout`, `delivery_timeout`, `queued_turn_unobserved` and
+delivery. `admission_timeout`, `delivery_timeout` and
 `transport_error` mean the prompt may already have reached the agent: inspect the
 session before resending, because a retry can duplicate it. A transport failure
 with no code at all — a dropped connection to gmuxd, a daemon restarted
@@ -426,7 +441,7 @@ its first turn. Pass either a session id or `--new`, never both.
   not exist yet has no turn to queue behind or steer.
 - `--no-wait` and `--timeout` mean what they always mean. `--timeout` bounds
   your wait, never the launch: agent readiness runs on pi's own fixed 10 s
-  window.
+  window, and admission on the daemon's fixed 60 s one.
 - The prompt is the single positional argument, or `-`/nothing to read stdin.
 - `--new` must come **before** the prompt. After a session id it is prompt text
   like any other token, so `gmux agent prompt a3f20187 --new` prompts that
@@ -449,14 +464,18 @@ worth pinning:
   stdout.** A successful synchronous run prints the id, then the answer; a
   failed one prints the id and exits non-zero. This differs from a plain sync
   prompt, where stdout is the answer alone.
-- With `--no-wait`, the bare id is the only output and exit `0` means the
-  prompt was admitted.
+- With `--no-wait`, the bare id is the only output and exit `0` means the turn
+  was **admitted**: the id prints immediately, but the process returns only once
+  the agent has started the turn (or the admission window expires). On a sick
+  session `id=$(gmux agent prompt --new --no-wait …)` can therefore block up to
+  that window instead of returning at delivery — exit `0` buying the stronger
+  claim is the point.
 
-One wrinkle, inherited rather than introduced: the **first** turn of a freshly
-launched session often completes with no inline answer, because the daemon has
-not resolved the agent's conversation file yet at turn close. It behaves
-identically for `gmux -d -- pi` followed by a prompt. The turn really did
-complete (exit `0`); read the reply with `gmux agent output "$id"`.
+The first turn of a freshly launched session prints its answer like any other.
+(It did not always: while a wait's answer was reconstructed from the transcript,
+the first turn of a fresh session completed with no inline answer because the
+conversation file did not exist yet when the boundary was set. The agent now
+asserts its own result, so there is no such window.)
 
 If anything fails **after** the launch — admission, readiness, the turn itself —
 the session stays behind and it is **yours**: gmux does not tear it down, and it
