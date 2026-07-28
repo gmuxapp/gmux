@@ -214,7 +214,7 @@ func TestAgentPromptNewUnsupportedAdapter(t *testing.T) {
 	text := "go"
 	var code int
 	stdout := captureStdout(t, func() {
-		stderr := captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text) })
+		stderr := captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text, false) })
 		if !strings.Contains(stderr, codeUnsupportedAdapter) {
 			t.Errorf("stderr = %q, want the %s code", stderr, codeUnsupportedAdapter)
 		}
@@ -242,7 +242,7 @@ func TestAgentPromptNewNoWaitPrintsBareID(t *testing.T) {
 	text := "start the refactor"
 	var code int
 	stdout := captureStdout(t, func() {
-		code = cmdAgentPromptNew("sonnet", "refactor", true, 0, &text)
+		code = cmdAgentPromptNew("sonnet", "refactor", true, 0, &text, false)
 	})
 	if code != waitExitOK {
 		t.Fatalf("exit = %d, want 0", code)
@@ -276,7 +276,7 @@ func TestAgentPromptNewSyncPrintsIDThenAnswer(t *testing.T) {
 
 	text := "do it"
 	var code int
-	stdout := captureStdout(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text) })
+	stdout := captureStdout(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text, false) })
 	if code != waitExitOK {
 		t.Fatalf("exit = %d, want 0", code)
 	}
@@ -313,7 +313,7 @@ func TestAgentPromptNewIDPrintedBeforeDelivery(t *testing.T) {
 	orig := os.Stdout
 	os.Stdout = w
 	text := "go"
-	code := cmdAgentPromptNew("", "", false, 0, &text)
+	code := cmdAgentPromptNew("", "", false, 0, &text, false)
 	os.Stdout = orig
 	_ = w.Close()
 	if code != waitExitOK {
@@ -352,7 +352,7 @@ func TestAgentPromptNewFailureAfterSpawnStillPrintsID(t *testing.T) {
 			var code int
 			var stderr string
 			stdout := captureStdout(t, func() {
-				stderr = captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text) })
+				stderr = captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text, false) })
 			})
 			if code != waitExitError {
 				t.Errorf("exit = %d, want %d", code, waitExitError)
@@ -376,7 +376,7 @@ func TestAgentPromptNewSpawnFailurePrintsNoID(t *testing.T) {
 	var code int
 	var stderr string
 	stdout := captureStdout(t, func() {
-		stderr = captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text) })
+		stderr = captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &text, false) })
 	})
 	if code != waitExitError {
 		t.Errorf("exit = %d, want %d", code, waitExitError)
@@ -399,7 +399,7 @@ func TestAgentPromptNewRejectsBadPromptBeforeSpawning(t *testing.T) {
 	argv := stubLaunch(t, "sess-abcd1234", nil)
 	empty := "   "
 	var code int
-	captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &empty) })
+	captureStderr(t, func() { code = cmdAgentPromptNew("", "", false, 0, &empty, false) })
 	if code != waitExitError {
 		t.Errorf("exit = %d, want %d", code, waitExitError)
 	}
@@ -419,7 +419,7 @@ func TestAgentPromptRefPathPrintsNoIDLine(t *testing.T) {
 	})
 	text := "go"
 	var code int
-	stdout := captureStdout(t, func() { code = cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text) })
+	stdout := captureStdout(t, func() { code = cmdAgentPrompt("abcd1234", agentModePrompt, false, 0, &text, false) })
 	if code != waitExitOK {
 		t.Fatalf("exit = %d", code)
 	}

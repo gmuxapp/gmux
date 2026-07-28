@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"os"
 	"strconv"
-	"strings"
 )
 
 // The global gmux exit taxonomy (ADR 0027 §8). It is deliberately small
@@ -84,7 +83,7 @@ const (
 // against its local store and consults the adapter allowlist; remote
 // peer sessions are out of scope until peer subscriptions stream
 // Status events back to the hub.
-func cmdWait(ref string, timeoutSecs int, forText, forRegex string, quiet bool) int {
+func cmdWait(ref string, timeoutSecs int, forText, forRegex string, quiet, asJSON bool) int {
 	sess, err := resolveSession(ref)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gmux:", err)
@@ -148,10 +147,20 @@ func cmdWait(ref string, timeoutSecs int, forText, forRegex string, quiet bool) 
 			fmt.Fprintln(os.Stderr, "gmux: decode wait response:", err)
 			return waitExitError
 		}
-		return reportWaitResult(sess, "gmux wait", env.Data, predicate, quiet, os.Stdout)
+		return reportWaitResult(sess, "gmux wait", env.Data, predicate, quiet, asJSON, os.Stdout)
 	case http.StatusRequestTimeout:
-		fmt.Fprintf(os.Stderr, "gmux: wait timed out after %ds\n", timeoutSecs)
-		return waitExitError
+		// The wait ended; the turn did not. Reported through the shared renderer so
+		// --json gets an envelope for it like every other outcome.
+		res := turnResolution{
+			Outcome: outcomeTimeout, Reason: outcomeTimeout,
+			Message: fmt.Sprintf("the wait ended after %ds; the session's turn is still running", timeoutSecs),
+			Note:    "wait for it again with 'gmux wait " + shortID(sess.ID) + "'",
+		}
+		if predicate {
+			res.Message = fmt.Sprintf("the session's output did not match within %ds", timeoutSecs)
+			res.Note = ""
+		}
+		return res.render(os.Stdout, os.Stderr, sess, "gmux wait", quiet, asJSON)
 	case http.StatusUnprocessableEntity:
 		// Current daemons only send 422 on the send --wait path
 		// (input_no_submit); older daemons also rejected sessions
@@ -183,6 +192,13 @@ type waitResult struct {
 	Outcome string `json:"outcome"`
 	Cause   string `json:"cause"`
 	Output  string `json:"output"`
+	// Trigger is the excerpt of what started the turn, and SteeredBy the message
+	// that entered it, both as the ADAPTER asserted them and relayed through the
+	// runner's turn frame. They are the material of a non-completed resolution's
+	// report, which is why they arrive with the resolution rather than being read
+	// back afterwards.
+	Trigger   string `json:"trigger"`
+	SteeredBy string `json:"steered_by"`
 	// Truncated says the adapter capped Output at the source. stdout still
 	// carries what there is (silently dropping the tail would be worse), and the
 	// fact goes to stderr where the account belongs.
@@ -200,20 +216,41 @@ type waitResult struct {
 // which one hit a limitation: `send --wait` shares every exit decision here but
 // is deliberately result-free, so telling its caller the daemon "predates
 // result-bearing waits" would describe a feature they did not ask for.
-func reportWaitResult(sess cliSession, verb string, res waitResult, predicate, quiet bool, stdout io.Writer) int {
+func reportWaitResult(sess cliSession, verb string, res waitResult, predicate, quiet, asJSON bool, stdout io.Writer) int {
 	switch res.Reason {
 	case "matched":
 		// Predicate wait: synchronization only, by design. The matched
 		// bytes are terminal output the caller can read with gmux tail;
 		// they are not an agent result.
-		return waitExitOK
-	case "died":
-		if predicate {
-			fmt.Fprintf(os.Stderr, "gmux: session %s exited before its output matched\n", displayID(sess))
-		} else {
-			fmt.Fprintf(os.Stderr, "gmux: session %s died before its turn ended\n", displayID(sess))
+		//
+		// Under --json it still gets an envelope. A machine contract that emits
+		// an object for every failure and SILENCE for success is the one shape a
+		// script cannot parse uniformly — it would have to treat "empty stdout"
+		// as a third, undocumented outcome. The envelope carries no output for the
+		// same reason the human shape prints none.
+		if asJSON {
+			return turnResolution{Outcome: waitOutcomeCompleted, Reason: "matched"}.
+				render(stdout, os.Stderr, sess, verb, quiet, true)
 		}
-		return waitExitError
+		return waitExitOK
+	case outcomeSteered:
+		// A user message entered the turn this wait was bound to. The turn is
+		// still running — this is coordination, not a fault — so the report says
+		// what went in and how to wait for the new answer.
+		return turnResolution{
+			Outcome: outcomeSteered, Reason: steeredReason(res.Cause),
+			Trigger: res.Trigger, SteeredBy: res.SteeredBy,
+			Note: steerNote(sess),
+		}.render(stdout, os.Stderr, sess, verb, quiet, asJSON)
+	case "died":
+		dead := turnResolution{Outcome: outcomeDied, Reason: causeRunnerDied, Trigger: res.Trigger}
+		if predicate {
+			dead.Message = "the session exited before its output matched"
+		} else {
+			dead.Message = "the session died before its turn ended"
+			dead.Note = inspectHint(sess, res.ConversationReadable)
+		}
+		return dead.render(stdout, os.Stderr, sess, verb, quiet, asJSON)
 	case "idle":
 		if predicate {
 			// A predicate wait resolves on "matched" or "died" only;
@@ -221,7 +258,7 @@ func reportWaitResult(sess cliSession, verb string, res waitResult, predicate, q
 			fmt.Fprintf(os.Stderr, "gmux: unexpected wait reason %q for an output condition\n", res.Reason)
 			return waitExitError
 		}
-		return reportTurnConclusion(sess, verb, res, quiet, stdout)
+		return reportTurnConclusion(sess, verb, res, quiet, asJSON, stdout)
 	default:
 		fmt.Fprintf(os.Stderr, "gmux: unexpected wait reason %q\n", res.Reason)
 		return waitExitError
@@ -234,56 +271,61 @@ func reportWaitResult(sess cliSession, verb string, res waitResult, predicate, q
 // predates turn conclusions always resolves a closed turn as bare "idle", and
 // silently treating that as success would report a failed or interrupted turn as
 // a clean one — under exit 0, with no result. Fail loudly and name the fix.
-func reportTurnConclusion(sess cliSession, verb string, res waitResult, quiet bool, stdout io.Writer) int {
+func reportTurnConclusion(sess cliSession, verb string, res waitResult, quiet, asJSON bool, stdout io.Writer) int {
 	switch res.Outcome {
 	case "":
 		fmt.Fprintf(os.Stderr, "gmux: this gmuxd predates the turn conclusions '%s' needs (it reported no turn outcome); restart the daemon with 'gmux daemon restart'\n", verb)
 		return waitExitError
-	case waitOutcomeCompleted:
-		if quiet || res.Output == "" {
-			// Nothing to print: --quiet, a shell/process session, or an
-			// agent whose conversation gmux cannot read. Silence here is
-			// the pre-existing synchronization behavior, not a failure.
-			return waitExitOK
-		}
-		// Verbatim, with exactly one trailing newline so the output is usable
-		// in a shell without swallowing a final one.
-		if _, err := io.WriteString(stdout, strings.TrimRight(res.Output, "\n")+"\n"); err != nil {
-			fmt.Fprintln(os.Stderr, "gmux:", err)
-			return waitExitError
-		}
-		noteTruncatedAnswer(sess, res.Truncated)
-		return waitExitOK
-	case waitOutcomeInterrupted:
-		fmt.Fprintf(os.Stderr, "gmux: the turn was interrupted before it finished (session %s); %s\n",
-			displayID(sess), inspectHint(sess, res.ConversationReadable))
-		return waitExitInterrupted
-	case waitOutcomeError:
-		if res.Cause != "" {
-			fmt.Fprintf(os.Stderr, "gmux: the turn ended in an error (%s); %s\n",
-				res.Cause, inspectHint(sess, res.ConversationReadable))
-		} else {
-			fmt.Fprintf(os.Stderr, "gmux: the turn ended in an error (session %s); %s\n",
-				displayID(sess), inspectHint(sess, res.ConversationReadable))
-		}
-		return waitExitError
+	case waitOutcomeCompleted, waitOutcomeInterrupted, waitOutcomeError, outcomeSteered, outcomeIndeterminate:
+		return turnResolutionOf(sess, res).render(stdout, os.Stderr, sess, verb, quiet, asJSON)
 	default:
 		fmt.Fprintf(os.Stderr, "gmux: unexpected turn outcome %q\n", res.Outcome)
 		return waitExitError
 	}
 }
 
-// noteTruncatedAnswer tells the caller on stderr that the answer they just got
-// on stdout is not the whole one. The adapter caps a turn's output at the source
-// so an enormous answer can never cost the turn's close; the full text is still
-// in the conversation, which is what the hint points at.
-func noteTruncatedAnswer(sess cliSession, truncated bool) {
-	if !truncated {
-		return
+// turnResolutionOf translates the daemon's payload into the shared resolution,
+// adding only the human advice (a re-arm command, an inspection verb) that the
+// daemon has no business choosing.
+func turnResolutionOf(sess cliSession, res waitResult) turnResolution {
+	out := turnResolution{
+		Outcome: res.Outcome, Reason: res.Cause, Output: res.Output,
+		Trigger: res.Trigger, SteeredBy: res.SteeredBy, Truncated: res.Truncated,
 	}
-	fmt.Fprintf(os.Stderr, "gmux: the answer was truncated at the agent; read it in full with 'gmux agent logs --agent -n 1 %s'\n",
-		shortID(sess.ID))
+	switch res.Outcome {
+	case outcomeSteered:
+		out.Reason = steeredReason(res.Cause)
+		out.Note = steerNote(sess)
+	case outcomeIndeterminate:
+		out.Message = "the turn settled without the agent acknowledging the text this command delivered, so it may never have entered the loop; the answer that turn produced is not this command's result"
+		out.Note = inspectHint(sess, res.ConversationReadable)
+	case waitOutcomeInterrupted:
+		out.Message = "the turn was intentionally stopped before it finished"
+		out.Note = inspectHint(sess, res.ConversationReadable)
+	case waitOutcomeError:
+		out.Message = "the turn ended in an error"
+		out.Note = inspectHint(sess, res.ConversationReadable)
+	}
+	return out
 }
+
+// steeredReason words WHY a steered wait ended. The superseded injector's case is
+// deliberately distinct: "somebody steered the turn" and "your steer went in and
+// was then overridden" call for different next moves.
+func steeredReason(cause string) string {
+	if cause == causeSteeredAgain {
+		return causeSteeredAgain
+	}
+	return outcomeSteered
+}
+
+// Reasons the daemon reports alongside a resolution that is not a turn
+// conclusion. Duplicated as constants rather than imported: gmuxd and the CLI
+// are separate modules and this is a wire vocabulary.
+const (
+	causeSteeredAgain            = "steered_again"
+	causeInjectionUnacknowledged = "injection_unacknowledged"
+)
 
 // inspectHint names the verb that can actually show what happened.
 //

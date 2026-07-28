@@ -174,29 +174,48 @@ not a recognized key name is typed as literal text rather than refused.
 
 	"wait": `gmux wait: block until a session's turn ends, or until output appears
 
-  gmux wait <id> [--timeout|-t N] [--quiet|-q]
+  gmux wait <id> [--timeout|-t N] [--quiet|-q] [--json]
   gmux wait <id> --for-text <substring> [--timeout|-t N]
   gmux wait <id> --for-regex <pattern> [--timeout|-t N]
 
 Blocks until the session goes idle: an agent finishing its turn, a shell
 back at its prompt (OSC 133 marks), or a one-shot command exiting. For
-agent sessions whose turn completed, prints the agent's latest final message
-on stdout — the same answer 'gmux agent status' reports. --quiet suppresses
-it. A failed, interrupted or dead turn prints nothing (richer failure
-detail is planned).
+agent sessions whose turn completed, prints the agent's answer on stdout —
+the one the adapter asserted when it closed the turn. --quiet suppresses it.
+
+A turn that did NOT complete prints nothing on stdout and a short report on
+stderr instead: the outcome, the reason, what the turn was asked to do, and
+the message that changed it when somebody steered. No second command needed.
 
 A wait on an already-idle session returns at once and reports the LAST
 turn's conclusion; to gate on a turn you are about to trigger, use
 'gmux agent prompt' or 'gmux send --wait', which arm the wait first.
 
+A user message injected into the turn you are waiting on — a steer, a
+follow-up merged into the running loop, or a human typing into the TUI —
+ends this wait early with exit 2 and reason 'steered': the answer it was
+holding out for now answers something else. The turn keeps running, so
+re-arm when you still care:
+
+  gmux wait "$id" || gmux wait "$id"   # first wait steered, second one waits
+                                       # for the redirected turn's answer
+
   --timeout/-t N give up after N seconds (exit 1)
   --quiet/-q     synchronize only; print no result
+  --json         print one envelope on stdout for every outcome instead —
+                 {outcome, reason, output, trigger, steered_by, truncated,
+                 message}, absent rather than empty — and no stderr report.
+                 Every terminal path prints exactly one envelope, success
+                 included (a matched output condition is {"outcome":
+                 "completed","reason":"matched"}), so silence is never an
+                 outcome. The machine contract for this verb. Not with --quiet.
   --for-text S   resolve when S appears in the output instead of on idle
   --for-regex P  ... or when P (RE2, line-wise) matches; works for shell
                  sessions too, and prints no result
 
 Exit codes: 0 the turn completed (or the output matched), 2 the turn was
-intentionally interrupted, 1 anything else (error, death, timeout).
+intentionally interrupted or steered, 1 anything else (error, death,
+timeout, an injection the agent never acknowledged).
 `,
 
 	"kill": `gmux kill: terminate a session

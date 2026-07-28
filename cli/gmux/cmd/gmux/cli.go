@@ -511,12 +511,16 @@ func parseWait(args []string) (*command, error) {
 	fs.StringVar(&c.forRegex, "for-regex", "", "wait for a regex match in the session's output")
 	fs.BoolVar(&c.quiet, "quiet", false, "do not print the agent's result; synchronize only")
 	fs.BoolVar(&c.quiet, "q", false, "alias of --quiet")
+	fs.BoolVar(&c.json, "json", false, "print one machine envelope for the resolution instead of answer-plus-report")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return nil, err
 	}
 	if len(pos) != 1 {
 		return nil, errors.New("wait requires a session id")
+	}
+	if err := refuseJSONWithQuiet(c.json, c.quiet, "wait"); err != nil {
+		return nil, err
 	}
 	if c.timeout < 0 {
 		return nil, errors.New("--timeout must be a non-negative number of seconds")
@@ -533,6 +537,18 @@ func parseWait(args []string) (*command, error) {
 	}
 	c.ref = pos[0]
 	return c, nil
+}
+
+// refuseJSONWithQuiet rejects `--json --quiet`. They are opposite answers to the
+// same question — one asks for the complete machine account, the other for no
+// output at all — and every resolution of the conflict silently ignores half of
+// what the caller asked for. The exit code alone is available without either
+// flag, so the caller who wants only a verdict has already got it.
+func refuseJSONWithQuiet(asJSON, quiet bool, verb string) error {
+	if asJSON && quiet {
+		return fmt.Errorf("%s: --json and --quiet ask for opposite things (the whole machine account, and no output at all); the exit code alone needs neither flag", verb)
+	}
+	return nil
 }
 
 // parseEdit handles `gmux edit [file]`: at most one file path. The verb

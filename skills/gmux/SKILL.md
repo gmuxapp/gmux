@@ -24,6 +24,7 @@ gmux send <id> C-c           # send a control key (interrupt), no text
 gmux send --wait <id> 'text' Enter  # raw send AND block until the reply is done
 gmux wait <id>               # block until the turn ends; prints an agent's answer
 gmux wait --quiet <id>       # ...synchronize only, print nothing
+gmux wait --json <id>        # ...one envelope for the resolution, whatever it is
 gmux wait <id> --for-text S  # block until S appears in the output
 gmux tail <id> [-n N]        # RAW: last N lines of terminal output (N=100)
 gmux agent logs <id> [-n N] [--user|--agent|--tool|--all] [--json]
@@ -156,6 +157,37 @@ gmux agent cancel $id; gmux wait $id; [ $? = 2 ] && echo stopped   # interrupt, 
 Do **not** chain cancel with `&& gmux wait`: an interrupted turn exits `2`, so the
 wait "fails" on exactly the outcome you asked for (and aborts the script under
 `set -e`).
+
+**Steering interrupts waits.** A user message injected into a turn somebody else
+is waiting on — your `--steer`, a `--follow-up` that merged into the running
+loop, or a human typing into the TUI — ends *their* wait early with exit `2` and
+reason `steered`, because the answer they were promised now answers something
+else. The turn keeps running, so re-arm when you still want the result:
+
+```bash
+gmux wait $id || gmux wait $id     # first wait steered; the second gets the new answer
+```
+
+Your own steer is not interrupted by itself: gmux matches the agent's report of
+a message entering the loop against the text it delivered for you, and hands you
+the merged close
+— but only while your message is the loop's **last** injection (a later one
+supersedes it: reason `steered_again`), and only if the agent acknowledged it
+before the turn settled (otherwise you get `indeterminate`, exit `1`, rather than
+an answer that may predate your text). `--follow-up` accordingly has two modes:
+to an **idle** agent it starts an ordinary turn; into a **running** turn it merges
+into that turn, and the merged close's answer is the follow-up's.
+
+A non-completed `wait`/`prompt` prints nothing on stdout and a short report on
+stderr — outcome, reason, the trigger excerpt, the injected text when steered —
+so you never need a second command to learn what a non-zero exit meant. Both
+verbs also take `--json`: one stdout envelope (`{outcome, reason, output,
+trigger, steered_by, truncated, message}`, fields absent rather than empty) and
+no stderr report — on every terminal path, success included, so silence is never
+an outcome. `--json` is refused with `--quiet` and with `--no-wait`. The match
+that excludes your own steer is textual (the agent reports the message, nothing
+else), so an ambiguous report — two in-flight deliveries that could both explain
+it — is credited to nobody and both callers get `indeterminate`.
 
 `--follow-up` and `--steer` are mutually exclusive; `--no-wait` composes with
 either (it only decides whether you block, so `--no-wait --timeout N` is a usage

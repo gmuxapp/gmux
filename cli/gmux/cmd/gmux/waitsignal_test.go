@@ -24,7 +24,7 @@ func TestTruncatedAnswerIsReportedOnStderr(t *testing.T) {
 	stderr := captureStderr(t, func() {
 		if code := reportWaitResult(sess, "gmux wait",
 			waitResult{Reason: "idle", Outcome: "completed", Output: "half an answer", Truncated: true},
-			false, false, &stdout); code != waitExitOK {
+			false, false, false, &stdout); code != waitExitOK {
 			t.Fatalf("exit=%d", code)
 		}
 	})
@@ -40,7 +40,7 @@ func TestTruncatedAnswerIsReportedOnStderr(t *testing.T) {
 	stderr = captureStderr(t, func() {
 		reportWaitResult(sess, "gmux wait",
 			waitResult{Reason: "idle", Outcome: "completed", Output: "the answer"},
-			false, false, &stdout)
+			false, false, false, &stdout)
 	})
 	if stderr != "" {
 		t.Fatalf("a clean completion wrote to stderr: %q", stderr)
