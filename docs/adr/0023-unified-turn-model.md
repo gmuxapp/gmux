@@ -9,6 +9,12 @@
 > liveness separate, and makes `gmux wait` render the adapter-defined turn
 > result by default. This ADR's state machine and signal-source rules stand;
 > its use of *idle* means *inactive*.
+>
+> **Vocabulary amendment (2026-07-29):** for agent sessions, ADR 0029 makes
+> active/inactive the *only* public semantic states (no resident runner reads
+> as inactive, never "dead"), and ADR 0030 names a hook-driven agent's turn a
+> **logical activity**, distinct from the **visible exchange** used for
+> rendering. This ADR's machine is the source layer underneath both.
 
 ## Context
 
@@ -69,7 +75,10 @@ Rules:
    resumable display" (it once did, which silently made the wait verdict
    timing-dependent for agents). `wait` resolves death by it: closed turn → `idle` (rc 0: one-shot
    completed, shell exited at its prompt, agent exited after its turn); open
-   or never-demonstrated turn → `died` (rc 2). This makes the verdict
+   or never-demonstrated turn → `died` (rc 2). *(Exit codes superseded by
+   ADR 0027 §8's global taxonomy: death during an open turn is `error`, rc 1,
+   never a distinct `died` code — and ADR 0029 words it as a failed activity
+   on semantic surfaces.)* This makes the verdict
    timing-independent — a wait issued after the death answers the same as
    one that watched it live. The child's own exit code remains a separate
    fact on the session.

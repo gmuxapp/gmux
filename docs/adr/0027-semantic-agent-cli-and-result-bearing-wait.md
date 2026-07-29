@@ -6,6 +6,18 @@
 **Related:** ADR 0003 (resume by ID), ADR 0005 (CLI routes through gmuxd), ADR 0009 (verb-first CLI), ADR 0014 (adapter-owned conversation sources), ADR 0015 (hook translation at the agent side), ADR 0021 (ACP as the normalized conversation schema), ADR 0022 (adapter-opaque conversation refs), ADR 0023 (unified turn model), ADR 0026 (authoritative SQLite state store)
 **Amends:** ADR 0009 (`agent` namespace, raw `send`, and `wait` output/exit contract), ADR 0021 (semantic write path and CLI relation), ADR 0023 (public active/inactive vocabulary)
 
+> **Superseded in part (2026-07-29)** by [ADR 0028](0028-cli-output-channels.md)
+> (output channels), [ADR 0029](0029-agent-sessions-abstract-runner-residency.md)
+> (runner residency abstraction), and
+> [ADR 0030](0030-exchange-oriented-agent-reads-and-observational-wait.md)
+> (exchange-oriented reads, observational wait). Superseded here: §10 (`agent
+> output`, later `status` — the verb is removed; `agent logs` is the semantic
+> read), §11's rendering bullets, the 2026-07-27 `logs` amendment's `-n`
+> unit/default, the `--new` amendment's output shape, and the 2026-07-28
+> amendment's output routing, `--json`, "Retrieval verbs", and "Steering
+> interrupts waits" sections. ADR 0030 lists the exact clauses. Inline notes
+> mark the affected sections below.
+
 ## Context
 
 gmux's generic CLI can launch and drive any terminal:
@@ -207,6 +219,13 @@ still race; gmux deliberately does not create an exclusive writer model.
 
 ### 6. Resume is transparent only for operations that need it
 
+> **Amended (2026-07-29) by ADR 0029:** the per-verb table below is
+> generalized to a principle — delivering work transparently resumes, reads
+> never do — and the "dead session" vocabulary is operational-only: on
+> semantic surfaces a runnerless session is *inactive*, steer/cancel fail
+> because **no activity is in progress**, and `output`'s row is inherited by
+> `agent logs` (ADR 0030).
+
 Plain and follow-up prompt transparently resume a retained dead session under
 its existing gmux session ID, wait for the new runner's adapter readiness, and
 then deliver. A dead row's historical active-at-death bit describes the prior
@@ -342,6 +361,11 @@ semantic verdicts.
 
 ### 10. `output` returns the latest final assistant message
 
+> **Superseded (2026-07-29) by ADR 0030:** the verb — and its later rename to
+> `agent status` — is removed. The semantic read is `gmux agent logs`, which
+> renders whole exchanges (default: the latest) rather than the bare final
+> assistant message.
+
 The initial semantic read is:
 
 ```sh
@@ -362,6 +386,13 @@ public message IDs are introduced. Output is not truncated by gmux.
 view is `gmux agent logs` — see the amendment below.)*
 
 ### 11. `gmux wait` remains universal and becomes conditionally result-bearing
+
+> **Superseded in part (2026-07-29) by ADR 0030:** a resolved wait renders the
+> exchange-structured report of the activity it observed — on stdout for every
+> outcome (ADR 0028) — not the bare final assistant message, and an
+> interrupted/failed activity's terminal partial prose is included, labeled,
+> when it ends the observed span. Universality, `--quiet`, predicate waits,
+> and shell/process behavior stand.
 
 Keep one top-level wait:
 
@@ -461,6 +492,12 @@ second read. `--quiet` preserves synchronization-only use; initial result
 rendering is intentionally limited to supported agent adapters.
 
 ## Amendment: where a result-bearing answer comes from
+
+> **Note (2026-07-29):** the surviving parts of this amendment (server-side
+> selection, one classification, global exit codes) stand, except that
+> "omit-rather-than-empty" is now rendered explicitly by ADR 0030's
+> `[Agent completed without a final response]` marker, and non-completed
+> reports go to stdout per ADR 0028.
 
 > **Superseded in part (2026-07-28)** by the amendment below: the conversation
 > **watermark** described here is replaced by a source-asserted, event-carried
@@ -740,7 +777,12 @@ Two operational adjustments from live testing:
   exit, so on a sick session the launch line can now block up to the window
   instead of returning at delivery — exit 0 buying the stronger claim is the
   point.
-- **An interrupted `wait` says what it is not.** SIGINT/SIGTERM on a blocking
+- **An interrupted `wait` says what it is not.** *(Superseded 2026-07-29 by
+  ADR 0028 decision 6: the first signal now emits a best-effort **stdout**
+  report ending `[Wait interrupted; agent remains active, …]`, then exits
+  128+N; a second signal terminates immediately. The "no verdict, so neither
+  1 nor 2" reasoning and the `$?`-is-the-contract rule stand.)*
+  SIGINT/SIGTERM on a blocking
   `wait` (or `prompt`) prints one stderr line stating that only the wait was
   interrupted — the session and its turn keep running, and `gmux wait <id>`
   re-arms — then dies from the signal (the shell's 128+N; a backstop path may
@@ -751,6 +793,11 @@ exit with the same code rather than die signaled, so `$?` is the contract,
   stopped.
 
 ### Output routing: stdout is data, stderr is the account, the exit code is the verdict
+
+> **Superseded (2026-07-29) by ADR 0028:** valid domain reports go to stdout
+> for every outcome; stderr is only for inability to produce the report;
+> `--json` is removed (unreleased) pending a designed machine contract.
+> `--quiet` stands.
 
 - **Completed** (exit 0): stdout is the answer, alone — `wait`, sync `prompt`,
   and sync `--new` (after its id line) unchanged. Quiet success: no trigger
@@ -788,6 +835,14 @@ not only for semantically prompted ones. §11's condition widens accordingly.
 `send --wait` itself remains result-free by its own contract.
 
 ### Follow-up slices recorded here, implemented separately
+
+> **Superseded (2026-07-29) by ADR 0030:** both slices below shipped
+> unreleased and are replaced. `agent status` and the `logs` message-type
+> filters are removed (`logs -n` counts exchanges, default 1), and waits are
+> **observational**: steering, merged follow-ups, and human messages never
+> resolve a wait early, so the delivery-identity claim rules below — and
+> their accepted ambiguity residue — are deleted with the ownership
+> semantics. Injection events survive as report material.
 
 **Retrieval verbs.** `gmux agent output` is renamed to **`gmux agent status`**
 and answers "whatever is relevant now" with a fixed three-part shape: a state
@@ -833,6 +888,13 @@ message. Human injections (detected via `message_start`) interrupt every
 waiter: a human grabbed the wheel.
 
 ## Amendment (2026-07-27): `gmux agent logs`, and `tail` goes back to raw
+
+> **Superseded in part (2026-07-29) by ADR 0030:** `logs` renders whole
+> exchanges with the shared renderer — `-n` counts **exchanges** and defaults
+> to **1**, not 100 messages — and the table's "What is the answer?" row is
+> answered by `gmux agent logs` itself (`agent output`/`status` is removed).
+> The verb's placement, store-only shape, error taxonomy, and the `tail`
+> reversion stand.
 
 The conversation-markdown view that ADR 0009's 2026-07-12 amendment made
 `gmux tail`'s default for renderer-backed sessions moves into this namespace as
@@ -939,6 +1001,9 @@ that is the launch line of the handoff pattern, `id=$(gmux agent prompt --new
 under `--new` **the completion signal is the exit code, not non-empty stdout** —
 a deliberate difference from a plain sync prompt, where stdout is the answer
 alone, and one the help page and `reference/cli.md` state explicitly.
+*(Amended 2026-07-29 by ADR 0030: what follows the id line is a blank line and
+the exchange report, and a plain sync prompt prints that report rather than
+the answer alone; the id-first rule and the exit-code contract stand.)*
 
 **The id line means exactly one thing: this session exists and is
 addressable.** It is not an admission receipt, not a readiness signal, not a

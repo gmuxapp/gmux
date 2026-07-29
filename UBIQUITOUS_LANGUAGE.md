@@ -16,8 +16,8 @@
 
 | Term                    | Definition                                                                                          | Aliases to avoid       |
 | ----------------------- | --------------------------------------------------------------------------------------------------- | ---------------------- |
-| **Alive**               | Has a live runner whose Unix socket is reachable                                                    | Running, active        |
-| **Dead**                | No live runner; record exists in the store and possibly on disk                                     | Stopped, exited        |
+| **Alive**               | Has a live runner whose Unix socket is reachable. Operational vocabulary: semantic agent surfaces never say it (ADR 0029) | Running, active        |
+| **Dead**                | No live runner; record exists in the store and possibly on disk. Operational vocabulary: on semantic agent surfaces a runnerless agent session is simply *Inactive*, never "dead" (ADR 0029) | Stopped, exited        |
 | **Resumable**           | Dead session whose `Command` is set so a new runner can be spawned from it                          | Restartable            |
 | **Pre-attribution**     | Transient phase for tool-backed sessions before their adapter file appears: has ID, no slug yet     | Ephemeral, unattributed |
 | **Attributed**          | Tool-backed session whose adapter file exists, giving it a real slug                                | Named                  |
@@ -35,6 +35,23 @@
 | **Error**               | Adapter-reported failure or attention condition (`Status.Error == true`); orthogonal to *Active*, so an active retry/rate-limit condition is both | Failed, stuck |
 | **Waiting on you**      | Unread flag set by a turn close; cleared when the session is viewed                                 | Unread (in UI prose)   |
 | **Upgrade**             | A default-model session's switch from lifetime-as-turn to per-command turns on the first observed OSC 133 prompt mark; permanent for the session's life | Promotion              |
+
+## Agent semantics (ADR 0029, ADR 0030)
+
+| Term                    | Definition                                                                                          | Aliases to avoid       |
+| ----------------------- | --------------------------------------------------------------------------------------------------- | ---------------------- |
+| **Agent session**       | The semantic handle addressed by `gmux agent …` / `gmux wait`: a **resumable conversation**, not a process. Publicly *Active* or *Inactive*; no resident runner means Inactive. Prompt transparently resumes; reads never do (ADR 0029) | Dead agent, agent process |
+| **Runner incarnation**  | One runner process generation serving an agent session. A hosting detail: the session handle, slug, and conversation identity are stable across incarnations, and incarnation boundaries are not semantic events. Residency is visible only on operational/raw surfaces | Generation (alone), the session's process |
+| **Logical activity**    | One **source-bounded** span of agent work: opens at the loop start, closes at the adapter's settled assertion (pi: `agent_settled`). What a live `gmux wait` observes. May contain several user messages (merged follow-ups, steers, human TUI input); its outcome is completed/interrupted/error | Turn (when the user boundary is meant), run |
+| **Visible exchange**    | One **user-bounded** display unit: a user message and all activity after it up to (not including) the next user message. The renderer's unit for `logs`, `wait`, and sync `prompt` reports. Deliberately *not* pi's `agent_settled` | Turn, thread           |
+| **Iteration**           | One completed assistant/model response — tool-use responses, retried/recovered attempts, and the terminal response all count. The unit of "how much work happened" in rendered reports (`[Agent worked for N iterations]`) | Step, turn, round      |
+
+**Activity vs exchange:** *activity* is the source boundary you **wait on**;
+*exchange* is the user boundary you **read**. They coincide only when no user
+message enters a running loop. `logs` reconstructs exchanges from the
+adapter's active conversation branch and does not promise historical activity
+(`agent_settled`) grouping; a wait's report is the activity-faithful view,
+available exactly when the activity is observed (ADR 0030).
 
 ## Components
 
@@ -135,5 +152,9 @@ The four stores have orthogonal concerns. Mixing them is a smell:
 - **"Local"** has two meanings: the local *machine* (where this gmuxd runs), and a **Local peer** (`PeerConfig.Local = true`, currently devcontainers only). Prefer **Local peer** for the latter to avoid collision with "the local daemon".
 
 - **"Session file"** is banned: say **conversation file** (gmux's term) — or use the agent's own term only at its API boundary (ADR 0015: agent-native JSON tags like `sessionId`/`transcript_path` keep the agent's language).
+
+- **"Turn"** names the generic ADR 0023 state-machine unit (shell commands, process lifetimes, agent runs alike). For agent-facing prose prefer the precise term: **logical activity** for the source-bounded span, **visible exchange** for the user-bounded display unit, **iteration** for one model response. "The agent's turn" is ambiguous across all three.
+
+- **"Dead"/"alive"** are scoped by surface, not banned globally (ADR 0029): operational/raw surfaces — `gmux ls`, `gmux tail`, `gmux kill`, daemon diagnostics, runner APIs — legitimately expose runner residency and keep the words. Semantic surfaces — `gmux agent …`, `gmux wait` reports — speak only **Active/Inactive** plus the last outcome; there, "the agent is dead" is a category error.
 
 - **"Broker"** was introduced for the scrollback endpoint. Reserve it for read-only daemon endpoints serving disk-backed state for dead sessions; not a synonym for the daemon as a whole.
