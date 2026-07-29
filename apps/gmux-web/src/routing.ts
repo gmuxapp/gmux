@@ -85,25 +85,6 @@ export function sessionPath(
   return `${ownerPrefix}/${projectSlug}${sessionHost}/${session.adapter}/${slug}`
 }
 
-/** Query params that define a tab's identity (its narrowing scope and
- *  sidebar view). In-app links must carry them so navigation within a
- *  pinned tab doesn't silently un-pin it. */
-const TAB_PARAMS = ['filter', 'sidebar'] as const
-
-/** Append the tab-identity params from `search` (a location.search
- *  string) onto `path`. Other params (e.g. ?settings) are not carried:
- *  they're transient UI state, not tab identity. */
-export function withTabParams(path: string, search: string): string {
-  const current = new URLSearchParams(search)
-  const carried = new URLSearchParams()
-  for (const key of TAB_PARAMS) {
-    const v = current.get(key)
-    if (v) carried.set(key, v)
-  }
-  const qs = carried.toString()
-  return qs ? `${path}?${qs}` : path
-}
-
 /**
  * Resolve a parsed URL path to a session ID.
  * Returns null if no matching session is found.

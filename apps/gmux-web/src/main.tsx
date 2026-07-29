@@ -1,6 +1,7 @@
 import { Component, Fragment, render, type ComponentChildren } from 'preact'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { LocationProvider, Router, Route, lazy, useLocation } from 'preact-iso'
+import { batch } from '@preact/signals'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
@@ -25,8 +26,8 @@ import {
   sessions, connState, selected, selectedId, view, health, peers,
   terminalOptions, keybinds, macCommandIsCtrl,
   keyboardOpen, terminalFindOpen, terminalScrolledUp, terminalScrollToBottom,
-  urlPath, urlSearch,
-  initStore, setNavigate, navigateToSession,
+  urlPath, urlSearch, urlHash,
+  initStore, setNavigate, navigate, navigateToSession,
   dismissSession, resumeSession, restartSession,
   sessionStaleness,
 } from './store'
@@ -552,12 +553,26 @@ function App() {
   // useLayoutEffect ensures urlPath updates before paint, so the view
   // computed reacts before the browser renders a stale frame.
   useLayoutEffect(() => {
-    urlPath.value = loc.path
-    // Derive the query string from loc.url (path+search) so query-only
-    // navigations (?project=, ?cwd=) reactively re-filter sessions.
-    const q = loc.url.indexOf('?')
-    urlSearch.value = q >= 0 ? loc.url.slice(q) : ''
+    // Publish one coherent location snapshot so repair effects cannot run
+    // against a new path with the previous entry's query or fragment. Read
+    // search/hash from the browser's parsed location: preact-iso's `loc.url`
+    // is not consistent about retaining fragments across initial and SPA
+    // navigation, and fragments must never be fed to URLSearchParams.
+    batch(() => {
+      urlPath.value = loc.path
+      urlSearch.value = location.search
+      urlHash.value = location.hash
+    })
   }, [loc.url])
+
+  // Preact-iso routes path/query changes but deliberately ignores hash-only
+  // navigation. Keep the fragment signal current for native hash links and
+  // hash-only Back/Forward entries as well.
+  useEffect(() => {
+    const syncHash = () => { urlHash.value = location.hash }
+    window.addEventListener('hashchange', syncHash)
+    return () => window.removeEventListener('hashchange', syncHash)
+  }, [])
 
   // Settings modal is driven by the `?settings` query param rather than
   // local state, so it's deep-linkable and shareable. It's read off the
@@ -574,13 +589,13 @@ function App() {
     // doesn't stack a duplicate history entry that Back has to clear.
     const alreadyActive = params.get('settings') === tab
     params.set('settings', tab)
-    loc.route(`${loc.path}?${params.toString()}`, replace || alreadyActive)
+    navigate(`${loc.path}?${params.toString()}${location.hash}`, replace || alreadyActive)
   }, [loc])
   const closeSettings = useCallback(() => {
     const params = new URLSearchParams(location.search)
     params.delete('settings')
     const qs = params.toString()
-    loc.route(qs ? `${loc.path}?${qs}` : loc.path, true)
+    navigate((qs ? `${loc.path}?${qs}` : loc.path) + location.hash, true)
   }, [loc])
 
   // Initialize the store (SSE, data fetching, effects).
