@@ -65,12 +65,6 @@ type promptBody struct {
 	Prompt   string `json:"prompt"`
 	Delivery string `json:"delivery"`
 	Require  string `json:"require"`
-	// DeliveryID identifies this delivery so the runner can correlate the text
-	// with the injection the adapter reports when it enters a running loop (ADR
-	// 0027's steer self-exclusion). Omitted when the caller has no wait to
-	// exclude; a runner that predates the field refuses unknown fields, so it is
-	// omitted rather than sent empty.
-	DeliveryID string `json:"delivery_id,omitempty"`
 }
 
 // SendPrompt delivers prompt text plus a submit-like action to the agent
@@ -95,8 +89,8 @@ type promptBody struct {
 // on an agent that declines to read, so the ordinary 3 s runner request
 // timeout would turn a legitimate slow admission into a transport error of
 // indeterminate delivery. Callers must supply a deadline of their own.
-func SendPrompt(ctx context.Context, socketPath, expectIncarnation, prompt, delivery, require, deliveryID string) error {
-	body, err := json.Marshal(promptBody{Prompt: prompt, Delivery: delivery, Require: require, DeliveryID: deliveryID})
+func SendPrompt(ctx context.Context, socketPath, expectIncarnation, prompt, delivery, require string, _ ...string) error {
+	body, err := json.Marshal(promptBody{Prompt: prompt, Delivery: delivery, Require: require})
 	if err != nil {
 		return err
 	}

@@ -1138,7 +1138,7 @@ func handleCentralSessionAction(w http.ResponseWriter, r *http.Request, boot *Bo
 		}
 		scrollbackBrokerHandlerCentral(w, r, sessionID, sess, ok, sessionDirs.SessionDir)
 	case "conversation":
-		conversationHandlerCentral(w, r, sessionID, boot.Store)
+		conversationHandlerCentral(w, r, sessionID, boot)
 	case "clipboard":
 		// Store-direct existence check (ADR 0026 §2a).
 		if _, found, err := boot.Store.Session(r.Context(), sid); err != nil || !found {
@@ -1210,140 +1210,115 @@ func writeCentralLifecycleError(w http.ResponseWriter, err error) {
 	}
 }
 
-func conversationHandlerCentral(w http.ResponseWriter, r *http.Request, sessionID string, sessions *centralstore.Store) {
+func conversationHandlerCentral(w http.ResponseWriter, r *http.Request, sessionID string, boot *Bootstrap) {
+	sessions := boot.Store
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
 		return
+	}
+	for key := range r.URL.Query() {
+		if key != "tail" {
+			writeError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("unknown conversation parameter %q; only tail is supported", key))
+			return
+		}
+	}
+	n := 1
+	if raw := r.URL.Query().Get("tail"); raw != "" {
+		var err error
+		n, err = strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "bad_request", "tail must be a positive number of exchanges")
+			return
+		}
 	}
 	sess, ok, err := sessions.Session(r.Context(), centralstore.SessionID(sessionID))
 	if err != nil || !ok {
 		writeError(w, http.StatusNotFound, "not_found", "session not found")
 		return
 	}
-	// scope selects WHAT is read, not how much: absent (or the explicit
-	// "transcript") is the pre-existing markdown transcript every current
-	// caller expects, byte for byte. "message" is ADR 0027's semantic read
-	// behind `gmux agent status`'s answer part. Validation is strict because a mistyped
-	// scope silently served as a transcript would hand a script the whole
-	// conversation where it asked for one answer.
-	//
-	// Presence is judged on the query KEY, not on the value: `?scope=` is a
-	// caller who meant to name a scope and produced an empty variable, and
-	// `?scope=message&scope=transcript` is two callers' worth of intent in one
-	// URL. Both are refused rather than resolved by Get()'s "first value wins".
-	scope, err := singleQueryValue(r.URL.Query(), "scope")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-		return
-	}
-	switch scope {
-	case "", "transcript":
-	case conversationScopeMessage:
-		conversationMessageScopeCentral(w, r, sess)
-		return
-	default:
-		writeError(w, http.StatusBadRequest, "bad_request",
-			fmt.Sprintf("unknown scope %q; expected transcript or message", scope))
-		return
-	}
-	tailN := 0
-	if v := r.URL.Query().Get("tail"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			writeError(w, http.StatusBadRequest, "bad_request", "tail must be a positive integer")
-			return
-		}
-		tailN = n
-	}
-	// types selects WHICH messages are read (`gmux agent logs`' filters);
-	// format selects how they are serialized. Both are validated strictly and
-	// judged on the query KEY for the same reason scope is: a mistyped filter
-	// silently served as the default would hand a caller a narrower or wider
-	// conversation than they asked for, and absence is indistinguishable from
-	// "the agent did none of that".
-	typesRaw := ""
-	if _, present := r.URL.Query()["types"]; present {
-		v, err := singleQueryValue(r.URL.Query(), "types")
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-			return
-		}
-		typesRaw = v
-	}
-	allowedTypes, err := parseConversationTypes(typesRaw)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-		return
-	}
-	format, err := singleQueryValue(r.URL.Query(), "format")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-		return
-	}
-	switch format {
-	case "", "markdown", "json":
-	default:
-		writeError(w, http.StatusBadRequest, "bad_request",
-			fmt.Sprintf("unknown format %q; expected markdown or json", format))
-		return
-	}
-	// Adapter first, then the ref — the same ordering (and the same reason) as
-	// the message scope: "this adapter has no conversation model" is permanent
-	// and actionable, while "no conversation ref yet" is transient, and
-	// reporting the transient shape for a shell session would suggest waiting
-	// for something that can never arrive. Until `gmux agent logs` took this
-	// read over, both collapsed into no_conversation because `gmux tail` keyed
-	// its scrollback fallback on that one code; tail is raw-only now, so the
-	// distinction is finally observable by the caller who can act on it.
-	renderer, ok := adapters.FindByAdapter(sess.Adapter).(adapter.ConversationRenderer)
+	renderer, ok := adapters.FindByAdapter(sess.Adapter).(adapter.ConversationExchangeRenderer)
 	if !ok {
 		writeError(w, http.StatusUnprocessableEntity, codeUnsupportedAdapter,
-			fmt.Sprintf("adapter %q does not render conversations", sess.Adapter))
+			fmt.Sprintf("adapter %q does not render conversation exchanges", sess.Adapter))
 		return
 	}
 	if sess.ConversationRef == "" {
-		writeError(w, http.StatusNotFound, "no_conversation", "session has no conversation")
+		writeError(w, http.StatusNotFound, "no_conversation", "session has no resolvable conversation")
 		return
 	}
-	msgs, err := renderer.RenderConversation(sess.ConversationRef)
-	// A missing file is a conversation with no messages yet, not a lost one: pi
-	// reports the path before it writes the first line, so a brand-new session
-	// (or one whose first turn is still running) lands here. Reporting it as
-	// "gone" told the caller their transcript had been destroyed.
+	exchanges, err := renderer.RenderConversationExchanges(sess.ConversationRef)
 	if errors.Is(err, os.ErrNotExist) {
-		writeError(w, http.StatusNotFound, "no_conversation", "conversation has no messages yet")
+		// A known ref can precede pi's first append. It is a resolvable empty
+		// timeline, not a failure to locate the conversation source.
+		exchanges = nil
+	} else if err != nil {
+		writeError(w, http.StatusNotFound, "no_conversation", "conversation cannot be read")
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusNotFound, "no_conversation", "conversation is gone")
-		return
+	outcome := adapter.ExchangeSnapshot
+	if sess.Active {
+		// Native persistence trails the runner edge. Reconcile by user boundaries
+		// before tailing so a pre-persistence read appends the live exchange rather
+		// than rewriting the previous completed exchange as active. Once pi has
+		// persisted a boundary, the overlap is merged instead of duplicated.
+		if frame := retainedTurnFrame(boot, sessionID); frame != nil && frame.Current != nil && len(frame.Current.Exchanges) > 0 {
+			exchanges = reconcileActiveExchanges(exchanges, frame.Current)
+			outcome = adapter.ExchangeActive
+		}
 	}
-	if len(msgs) == 0 {
-		writeError(w, http.StatusNotFound, "no_conversation", "conversation has no messages yet")
-		return
+	previous := 0
+	if len(exchanges) > n {
+		previous = len(exchanges) - n
+		exchanges = exchanges[previous:]
 	}
-	// Filter BEFORE tail: tail counts the messages the caller asked to see, so
-	// `--tool -n 1` means the last tool message, not "the last message, if it
-	// happens to be a tool call".
-	msgs = filterConversationMessages(msgs, allowedTypes)
-	if len(msgs) == 0 {
-		// The conversation exists and is readable; nothing in it matches. That is
-		// codeNoMessage's exact meaning, and it must not be an empty 200:
-		// printing nothing under a success would say the agent has done none of
-		// this, which only an explicit code may claim.
-		writeError(w, http.StatusNotFound, codeNoMessage, "no messages of the requested type")
-		return
-	}
-	if tailN > 0 && len(msgs) > tailN {
-		msgs = msgs[len(msgs)-tailN:]
-	}
-	if format == "json" {
-		writeJSON(w, map[string]any{"ok": true, "data": map[string]any{"messages": conversationWireMessages(msgs)}})
-		return
-	}
-	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(formatConversationMarkdown(msgs))
+	w.Header().Set(conversationScopeHeader, "exchanges")
+	report := adapter.ExchangeReport{Exchanges: exchanges, Previous: previous, PreviousKnown: true, Outcome: outcome}
+	if outcome == adapter.ExchangeActive {
+		if frame := retainedTurnFrame(boot, sessionID); frame != nil && frame.Current != nil {
+			report.OmittedExchanges = frame.Current.OmittedExchanges
+			report.OmittedBytes = frame.Current.OmittedBytes
+		}
+	}
+	_, _ = w.Write(adapter.RenderExchangeReport(report))
+}
+
+// reconcileActiveExchanges uses the adapter-asserted user-boundary position,
+// never text equality. Identical consecutive prompts therefore remain distinct.
+func reconcileActiveExchanges(native []adapter.Exchange, current *sessioncoord.TurnCurrent) []adapter.Exchange {
+	if current == nil || len(current.Exchanges) == 0 {
+		return append([]adapter.Exchange(nil), native...)
+	}
+	if current.PreviousExchanges == nil {
+		// A version-skewed frame cannot be reconciled safely. Prefer the source's
+		// current span over attaching it to an arbitrary persisted equal string.
+		out := append([]adapter.Exchange(nil), native...)
+		for _, ex := range current.Exchanges {
+			out = append(out, adapter.Exchange{Ordinal: ex.Ordinal, User: ex.User, Iterations: ex.Iterations})
+		}
+		return out
+	}
+	prior := max(0, *current.PreviousExchanges)
+	// The live slice starts after every exchange evicted from its front. Native
+	// history does not evict, so positional overlay begins at prior+omitted.
+	start := prior + max(0, current.OmittedExchanges)
+	out := append([]adapter.Exchange(nil), native...)
+	for i, live := range current.Exchanges {
+		idx := start + i
+		if idx < len(out) {
+			out[idx].Ordinal, out[idx].Iterations, out[idx].Terminal = live.Ordinal, live.Iterations, ""
+			continue
+		}
+		out = append(out, adapter.Exchange{Ordinal: live.Ordinal, User: live.User, Iterations: live.Iterations})
+	}
+	// Native can advance before the frame event is drained. Keep that tail, but
+	// never render persisted assistant prose as a completed terminal while the
+	// source still reports active.
+	if len(out) > 0 {
+		out[len(out)-1].Terminal = ""
+	}
+	return out
 }
 
 func scrollbackBrokerHandlerCentral(w http.ResponseWriter, r *http.Request, sessionID string, sess wire.Session, ok bool, dirFor func(string) string) {
@@ -1408,9 +1383,16 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 	}
 	// Store-direct existence check (ADR 0026 §2a): a just-registered
 	// session is visible immediately without waiting for a compose pass.
-	if _, found, err := boot.Store.Session(r.Context(), centralstore.SessionID(sessionID)); err != nil || !found {
+	stored, found, storeErr := boot.Store.Session(r.Context(), centralstore.SessionID(sessionID))
+	if storeErr != nil || !found {
 		writeError(w, http.StatusNotFound, "not_found", "session not found")
 		return
+	}
+	if forText == "" && forRegex == "" && !stored.Active {
+		if _, capable := adapters.FindByAdapter(stored.Adapter).(adapter.ConversationExchangeRenderer); capable {
+			writeLateExchangeWait(w, stored, retainedTurnFrame(boot, sessionID))
+			return
+		}
 	}
 	if forText != "" || forRegex != "" {
 		var match func(string) bool
@@ -1443,17 +1425,9 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 	// A wait that never identifies a turn — one that finds the turn already
 	// closed, or a session whose adapter asserts no turn identity — resolves
 	// result-free. It still reports the conclusion; it just does not claim an
-	// answer it cannot attribute, and `gmux agent status` remains the snapshot
-	// read for those.
+	// answer it cannot attribute.
 	var observedSeq uint64
-	// watch is the injection watch on that same turn: a user message entering the
-	// loop this wait is bound to resolves it early with reason `steered`, because
-	// the answer it is waiting for no longer answers what it waited for (ADR 0027,
-	// "Steering interrupts waits"). A bare `gmux wait` injects nothing, so it
-	// carries no delivery identity and every injection is somebody else's — while
-	// injections that PREDATE the wait are part of the turn it chose to wait on,
-	// which is what the baseline records.
-	var watch injectionWatch
+	var anchorOrdinal uint64
 	active := false
 	// frameFor prefers a frame stamped on the resolving outcome (retained at apply
 	// time for the generation that published it) and falls back to the frame
@@ -1472,9 +1446,11 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 		}
 		if s.Status.Active && !active {
 			frame := frameFor(o)
+			if anchorOrdinal == 0 && frame != nil && frame.Current != nil && len(frame.Current.Exchanges) > 0 {
+				anchorOrdinal = frame.Current.Exchanges[len(frame.Current.Exchanges)-1].Ordinal
+			}
 			if seq := frame.CurrentTurnSeq(); seq != 0 {
 				observedSeq = seq
-				watch = injectionWatch{turnSeq: seq, baseline: baselineInjections(frame, seq)}
 			}
 		}
 		active = s.Status.Active
@@ -1482,25 +1458,12 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 	closedTurn := func(o *sessioncoord.Outcome) *sessioncoord.TurnClose {
 		return frameFor(o).ClosedTurn(observedSeq)
 	}
-	// steered answers the wait early when the frame shows a foreign injection on
-	// the bound turn. Written once and used from all three observation paths (the
-	// initial look, the outcome stream, the ticker) so none of them can grow a
-	// different idea of what a steer means.
-	steered := func(o *sessioncoord.Outcome) bool {
-		frame := frameFor(o)
-		v := watch.check(frame)
-		if !v.Steered {
-			return false
-		}
-		writeSteeredWait(w, frame.CurrentTurn(watch.turnSeq).TriggerExcerpt(), v.Text, v.Cause)
-		return true
-	}
 	if cur, ok := visibleSession(fanout.Current().Sessions, sessionID); ok {
 		legacy := legacySessionFromWire(cur)
 		seenAlive = seenAlive || cur.Alive
 		observe(legacy, nil)
 		if verdict, done := terminalReason(legacy, seenAlive); done {
-			writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(nil), watch)
+			writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(nil), anchorOrdinal)
 			return
 		}
 	}
@@ -1511,77 +1474,52 @@ func handleWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootstrap, 
 		case <-r.Context().Done():
 			return
 		case <-deadline:
-			writeError(w, http.StatusRequestTimeout, "timeout", "session did not become idle within timeout")
+			data := map[string]any{"reason": "timeout", "outcome": "timeout", "cause": "timeout"}
+			if anchorOrdinal != 0 {
+				data["anchor_ordinal"] = anchorOrdinal
+			}
+			if frame := retainedTurnFrame(boot, sessionID); frame != nil && frame.Current != nil {
+				data["exchanges"] = frame.Current.Exchanges
+				data["omitted_exchanges"] = frame.Current.OmittedExchanges
+				data["omitted_bytes"] = frame.Current.OmittedBytes
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusRequestTimeout)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": data})
 			return
 		case outcome, ok := <-outcomes:
 			if !ok || string(outcome.ID) != sessionID {
 				continue
 			}
 			if outcome.Type == sessioncoord.OutcomeRemoved {
-				// A death carries no result by contract, so no frame is consulted.
-				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), nil, injectionWatch{})
+				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), runnerLossClose(retainedTurnFrame(boot, sessionID)), anchorOrdinal)
 				return
 			}
 			if outcome.Type != sessioncoord.OutcomeUpserted || outcome.Session == nil {
-				// An injection changes no row, so it arrives as a transient
-				// frame-bearing signal with no session attached. It can still end
-				// this wait.
-				if steered(&outcome) {
-					return
-				}
 				continue
 			}
 			legacy := legacySessionFromOutcome(*outcome.Session, outcome.Alive)
 			seenAlive = seenAlive || outcome.Alive
 			observe(legacy, &outcome)
-			if steered(&outcome) {
-				return
-			}
 			if verdict, done := terminalReason(legacy, seenAlive); done {
-				writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(&outcome), watch)
+				writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(&outcome), anchorOrdinal)
 				return
 			}
 		case <-ticker.C:
 			cur, ok := visibleSession(fanout.Current().Sessions, sessionID)
 			if !ok {
-				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), nil, injectionWatch{})
+				writeWaitConclusion(w, r, boot, sessionID, diedConclusion(), runnerLossClose(retainedTurnFrame(boot, sessionID)), anchorOrdinal)
 				return
 			}
 			legacy := legacySessionFromWire(cur)
 			seenAlive = seenAlive || cur.Alive
 			observe(legacy, nil)
-			// The ticker re-reads the RETAINED frame, which is what makes a steer
-			// observable even when its transient signal was dropped under backlog.
-			if steered(nil) {
-				return
-			}
 			if verdict, done := terminalReason(legacy, seenAlive); done {
-				writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(nil), watch)
+				writeWaitConclusion(w, r, boot, sessionID, verdict, closedTurn(nil), anchorOrdinal)
 				return
 			}
 		}
 	}
-}
-
-// writeSteeredWait answers a wait that a user message resolved early.
-//
-// It is deliberately a 200 with its own reason word rather than an error: the
-// wait was answered, correctly, with the one fact the caller needs — the turn it
-// was waiting on is not the turn that will answer. The turn itself keeps running
-// and re-arming is one command away, which is why nothing here suggests the
-// session is in trouble.
-func writeSteeredWait(w http.ResponseWriter, trigger, injected, cause string) {
-	data := map[string]any{"reason": outcomeSteered, "outcome": outcomeSteered}
-	if cause != "" {
-		data["cause"] = cause
-	}
-	if trigger != "" {
-		data["trigger"] = trigger
-	}
-	if injected != "" {
-		data["steered_by"] = injected
-	}
-	writeJSON(w, map[string]any{"ok": true, "data": data})
 }
 
 // writeWaitConclusion answers a resolved turn wait, attaching the turn's
@@ -1595,16 +1533,8 @@ func writeSteeredWait(w http.ResponseWriter, trigger, injected, cause string) {
 // not an error and never a hang — because those sessions are legitimately
 // waitable.
 //
-// An error or interruption carries no output either way: a partial or previous
-// turn's answer presented as this turn's is the failure mode ADR 0027 §11
-// forbids. Nothing is re-read from the conversation here — a re-read would reopen
-// the §9 staleness gap the source assertion closes; `gmux agent status`, the
-// snapshot verb, is the one that reads the tape.
-//
-// conversation_readable travels with every turn conclusion so the CLI can pick
-// an actionable hint: pointing a failed shell or Claude/Codex session at
-// `gmux agent status`'s conversation reads sends the caller at routes that
-// answer 404 for them.
+// Nothing is re-read from the conversation here: the bounded source frame is
+// the observed activity, including partial terminal prose and diagnostics.
 // retainedTurnFrame reads the turn frame gmuxd retains for a session's live
 // generation. It is indirected through a variable because the guarantee under
 // test is that the frame-less resolution paths (the initial fanout look and the
@@ -1621,35 +1551,82 @@ var retainedTurnFrame = func(boot *Bootstrap, sessionID string) *sessioncoord.Tu
 	return boot.Registry.Frame(centralstore.SessionID(sessionID))
 }
 
-func writeWaitConclusion(w http.ResponseWriter, r *http.Request, boot *Bootstrap, sessionID string, verdict waitConclusion, close *sessioncoord.TurnClose, watch injectionWatch) {
-	// The settled record carries the turn's whole injection list, so a steer this
-	// wait never saw live (a dropped transient signal, or one that arrived in the
-	// same look as the close) is still caught here: the merged answer does not
-	// answer what this wait asked, whenever gmux found out.
-	if outcome, cause, text := watch.closeVerdict(close); outcome == outcomeSteered {
-		writeSteeredWait(w, close.TriggerExcerpt(), text, cause)
-		return
-	}
+func writeWaitConclusion(w http.ResponseWriter, _ *http.Request, _ *Bootstrap, _ string, verdict waitConclusion, close *sessioncoord.TurnClose, anchorOrdinal uint64) {
 	data := map[string]any{"reason": verdict.Reason}
-	// The trigger excerpt travels with every turn conclusion so a non-completed
-	// resolution's stderr report can name what the turn was asked to do — from
-	// relayed facts, never a fresh conversation read.
-	if t := close.TriggerExcerpt(); t != "" {
-		data["trigger"] = t
+	if anchorOrdinal != 0 {
+		data["anchor_ordinal"] = anchorOrdinal
 	}
 	if verdict.Outcome != "" {
 		data["outcome"] = verdict.Outcome
-		if boot != nil {
-			data["conversation_readable"] = conversationReadable(r.Context(), boot.Store, sessionID)
-		}
 	}
 	if verdict.Cause != "" {
 		data["cause"] = verdict.Cause
 	}
-	if verdict.Outcome == outcomeCompleted && close != nil && close.Output != "" {
-		data["output"] = close.Output
-		if close.Truncated {
-			data["truncated"] = true
+	if close != nil {
+		if len(close.Exchanges) == 0 && close.Trigger != "" {
+			data["trigger"] = close.Trigger
+		}
+		if close.PreviousExchanges != nil {
+			data["previous_exchanges"] = *close.PreviousExchanges
+		}
+		data["exchanges"] = close.Exchanges
+		data["omitted_exchanges"] = close.OmittedExchanges
+		data["omitted_bytes"] = close.OmittedBytes
+		if close.Diagnostic != "" {
+			data["diagnostic"] = close.Diagnostic
+		}
+		if close.Output != "" {
+			data["output"] = close.Output
+			if close.Truncated {
+				data["truncated"] = true
+			}
+		}
+	}
+	writeJSON(w, map[string]any{"ok": true, "data": data})
+}
+
+func runnerLossClose(frame *sessioncoord.TurnFrame) *sessioncoord.TurnClose {
+	if frame == nil || frame.Current == nil {
+		return nil
+	}
+	cur := frame.Current
+	// Runner loss has no durable message identity with which to attribute native
+	// prose to this activity. Text equality is insufficient (a repeated prompt
+	// can select an old answer), so the honest degraded report carries no partial.
+	return &sessioncoord.TurnClose{TurnSeq: cur.TurnSeq, Outcome: outcomeError, PreviousExchanges: cur.PreviousExchanges,
+		Exchanges: append([]sessioncoord.TurnExchange(nil), cur.Exchanges...), OmittedExchanges: cur.OmittedExchanges,
+		OmittedBytes: cur.OmittedBytes, Diagnostic: "agent activity was lost"}
+}
+
+func writeLateExchangeWait(w http.ResponseWriter, sess centralstore.Session, frame *sessioncoord.TurnFrame) {
+	renderer, ok := adapters.FindByAdapter(sess.Adapter).(adapter.ConversationExchangeRenderer)
+	if !ok || sess.ConversationRef == "" {
+		writeError(w, http.StatusNotFound, "no_conversation", "session has no resolvable conversation")
+		return
+	}
+	exchanges, err := renderer.RenderConversationExchanges(sess.ConversationRef)
+	if errors.Is(err, os.ErrNotExist) {
+		exchanges = nil
+	} else if err != nil {
+		writeError(w, http.StatusNotFound, "no_conversation", "conversation cannot be read")
+		return
+	}
+	previous := 0
+	if len(exchanges) > 1 {
+		previous = len(exchanges) - 1
+		exchanges = exchanges[len(exchanges)-1:]
+	}
+	data := map[string]any{"reason": "idle", "outcome": string(adapter.ExchangeSnapshot), "exchanges": exchanges, "previous_exchanges": previous}
+	if sess.StatusReported {
+		outcome := classifyTurnClose(sess.Error, sess.Interrupted)
+		data["outcome"] = outcome
+		if outcome != outcomeCompleted {
+			if len(exchanges) > 0 && exchanges[len(exchanges)-1].Terminal != "" {
+				data["terminal_partial"] = true
+			}
+			if frame != nil && frame.Last != nil && frame.Last.Diagnostic != "" {
+				data["diagnostic"] = frame.Last.Diagnostic
+			}
 		}
 	}
 	writeJSON(w, map[string]any{"ok": true, "data": data})
@@ -1769,7 +1746,7 @@ func handleInputWaitCentral(w http.ResponseWriter, r *http.Request, boot *Bootst
 		// without it an intentionally interrupted turn would exit 0 through the
 		// composition the docs call preferred, while `gmux wait` exits 2. Passing
 		// no close record is what keeps it result-free.
-		writeWaitConclusion(w, r, boot, sessionID, verdict, nil, injectionWatch{})
+		writeWaitConclusion(w, r, boot, sessionID, verdict, nil, 0)
 	}
 }
 

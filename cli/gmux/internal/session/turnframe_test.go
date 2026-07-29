@@ -51,7 +51,7 @@ func TestTurnEdgeCarriesItsFrameInOneEvent(t *testing.T) {
 	ch := st.Subscribe()
 	defer st.Unsubscribe(ch)
 
-	st.OpenTurn(7, "what is 2+2?")
+	st.OpenTurn(7, "what is 2+2?", 0)
 	events := drain(ch)
 	if len(events) != 1 || events[0].Type != "status" {
 		t.Fatalf("open turn emitted %d event(s): %+v", len(events), events)
@@ -101,7 +101,7 @@ func TestFullSubscriberNeverSeesACloseWithoutItsFrame(t *testing.T) {
 	for i := 0; i < 32; i++ {
 		st.SetSubtitle(string(rune('a' + i%26)))
 	}
-	st.OpenTurn(1, "first")
+	st.OpenTurn(1, "first", 0)
 	st.CloseTurnFrame(TurnClose{TurnSeq: 1, Outcome: "completed", Output: "first answer"},
 		&adapter.Status{Active: false})
 
@@ -116,7 +116,7 @@ func TestFullSubscriberNeverSeesACloseWithoutItsFrame(t *testing.T) {
 	}
 
 	// And with room again, the next turn's close arrives whole.
-	st.OpenTurn(2, "second")
+	st.OpenTurn(2, "second", 0)
 	st.CloseTurnFrame(TurnClose{TurnSeq: 2, Outcome: "completed", Output: "second answer"},
 		&adapter.Status{Active: false})
 	var closes int
@@ -169,10 +169,10 @@ func TestInjectionEmitsFrameOnly(t *testing.T) {
 	st := New(Config{ID: "s1", Adapter: "pi"})
 	ch := st.Subscribe()
 	defer st.Unsubscribe(ch)
-	st.OpenTurn(3, "go")
+	st.OpenTurn(3, "go", 0)
 	drain(ch)
 
-	st.NoteInjection(3, "actually, stop", false)
+	st.NoteInjection(3, "actually, stop", 0)
 	events := drain(ch)
 	if len(events) != 1 || events[0].Type != "turn_frame" {
 		t.Fatalf("injection emitted %+v", events)
@@ -193,11 +193,11 @@ func TestRawCloseAbandonsTheCurrentTurn(t *testing.T) {
 	defer st.Unsubscribe(ch)
 
 	// A real turn ran and closed, so `last` holds a genuine result.
-	st.OpenTurn(1, "first")
+	st.OpenTurn(1, "first", 0)
 	st.CloseTurnFrame(TurnClose{TurnSeq: 1, Outcome: "completed", Output: "first answer"},
 		&adapter.Status{Active: false})
 	// A second turn is running when a script writes the status by hand.
-	st.OpenTurn(2, "second")
+	st.OpenTurn(2, "second", 0)
 	drain(ch)
 
 	st.SetStatusAbandoningTurn(&adapter.Status{Active: false})
@@ -226,7 +226,7 @@ func TestRawCloseAbandonsTheCurrentTurn(t *testing.T) {
 
 	// A raw write that keeps the session ACTIVE abandons nothing: the turn it
 	// describes is still running.
-	st.OpenTurn(3, "third")
+	st.OpenTurn(3, "third", 0)
 	drain(ch)
 	st.SetStatusAbandoningTurn(&adapter.Status{Active: true, Error: true})
 	if cur := st.TurnFrameSnapshot().Current; cur == nil || cur.TurnSeq != 3 {
@@ -258,7 +258,7 @@ func TestRawCloseAbandonsTheCurrentTurn(t *testing.T) {
 // bind turn_seq 0.
 func TestReplayUsesTheCoupledEdgeShape(t *testing.T) {
 	st := New(Config{ID: "s1", Adapter: "pi"})
-	st.OpenTurn(5, "ask")
+	st.OpenTurn(5, "ask", 0)
 	st.CloseTurnFrame(TurnClose{TurnSeq: 5, Outcome: "completed", Output: "the answer"},
 		&adapter.Status{Active: false})
 

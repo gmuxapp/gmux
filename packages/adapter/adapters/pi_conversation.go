@@ -11,7 +11,10 @@ import (
 
 // Compile-time interface check (the main var block lives in pi.go; this
 // one stays next to the implementation it guards).
-var _ adapter.ConversationRenderer = (*Pi)(nil)
+var (
+	_ adapter.ConversationRenderer         = (*Pi)(nil)
+	_ adapter.ConversationExchangeRenderer = (*Pi)(nil)
+)
 
 // RenderConversation reconstructs a clean transcript from a pi JSONL
 // conversation (the ref is the transcript's absolute path — pi's
@@ -35,20 +38,7 @@ func (p *Pi) RenderConversation(ref string) ([]adapter.ConversationMessage, erro
 	}
 
 	var out []adapter.ConversationMessage
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		if line == "" {
-			continue
-		}
-		var entry struct {
-			Type    string `json:"type"`
-			Message *struct {
-				Role    string          `json:"role"`
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			continue
-		}
+	for _, entry := range piActiveBranch(data) {
 		if entry.Type != "message" || entry.Message == nil {
 			continue
 		}
@@ -63,6 +53,129 @@ func (p *Pi) RenderConversation(ref string) ([]adapter.ConversationMessage, erro
 		out = append(out, adapter.ConversationMessage{Role: role, Text: text, Prose: prose})
 	}
 	return out, nil
+}
+
+// RenderConversationExchanges projects pi's latest persisted branch into user
+// bounded exchanges. Every assistant message counts, including thinking-only
+// and tool-only responses; only prose from the final assistant message is the
+// exchange's terminal response.
+func (p *Pi) RenderConversationExchanges(ref string) ([]adapter.Exchange, error) {
+	data, err := os.ReadFile(ref)
+	if err != nil {
+		return nil, err
+	}
+	var out []adapter.Exchange
+	for _, entry := range piActiveBranch(data) {
+		if entry.Type != "message" || entry.Message == nil {
+			continue
+		}
+		switch entry.Message.Role {
+		case "user":
+			text, _ := renderPiExchangeContent(entry.Message.Content)
+			out = append(out, adapter.Exchange{Ordinal: uint64(len(out) + 1), User: text})
+		case "assistant":
+			if len(out) == 0 {
+				continue
+			}
+			_, prose := renderPiExchangeContent(entry.Message.Content)
+			out[len(out)-1].Iterations++
+			// Deliberately replace, including with empty: prose from an earlier
+			// tool-use iteration is not the terminal response.
+			out[len(out)-1].Terminal = prose
+		}
+	}
+	return out, nil
+}
+
+type piConversationEntry struct {
+	Type     string `json:"type"`
+	ID       string `json:"id"`
+	ParentID string `json:"parentId"`
+	Message  *struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	} `json:"message"`
+}
+
+// piActiveBranch applies pi's on-open leaf rule: the final persisted entry is
+// the head and parentId links are walked to the root. Old/fixture transcripts
+// without parent links remain linear.
+func piActiveBranch(data []byte) []piConversationEntry {
+	var linear []piConversationEntry
+	hasParents := false
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var entry piConversationEntry
+		if json.Unmarshal([]byte(line), &entry) != nil {
+			continue
+		}
+		if entry.ParentID != "" {
+			hasParents = true
+		}
+		linear = append(linear, entry)
+	}
+	if !hasParents || len(linear) == 0 || linear[len(linear)-1].ID == "" {
+		return linear
+	}
+	byID := make(map[string]piConversationEntry, len(linear))
+	for _, entry := range linear {
+		if entry.ID != "" {
+			byID[entry.ID] = entry
+		}
+	}
+	var reverse []piConversationEntry
+	seen := map[string]bool{}
+	for cur := linear[len(linear)-1]; cur.ID != "" && !seen[cur.ID]; {
+		reverse = append(reverse, cur)
+		seen[cur.ID] = true
+		if cur.ParentID == "" {
+			break
+		}
+		next, ok := byID[cur.ParentID]
+		if !ok {
+			break
+		}
+		cur = next
+	}
+	for left, right := 0, len(reverse)-1; left < right; left, right = left+1, right-1 {
+		reverse[left], reverse[right] = reverse[right], reverse[left]
+	}
+	return reverse
+}
+
+// renderPiExchangeContent is the exchange-report variant: unlike the legacy
+// transcript renderer it preserves source text whitespace exactly.
+func renderPiExchangeContent(content json.RawMessage) (text, prose string) {
+	var s string
+	if json.Unmarshal(content, &s) == nil {
+		return s, s
+	}
+	var blocks []struct {
+		Type      string          `json:"type"`
+		Text      string          `json:"text"`
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if json.Unmarshal(content, &blocks) != nil {
+		return "", ""
+	}
+	var parts, proseParts []string
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			if b.Text != "" {
+				parts = append(parts, b.Text)
+				proseParts = append(proseParts, b.Text)
+			}
+		case "toolCall":
+			parts = append(parts, formatPiToolCall(b.Name, b.Arguments))
+		case "image":
+			parts = append(parts, "[image]")
+		}
+	}
+	return strings.Join(parts, "\n\n"), strings.Join(proseParts, "\n\n")
 }
 
 // renderPiContent renders a message's content to markdown, returning the

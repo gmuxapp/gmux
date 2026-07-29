@@ -102,11 +102,6 @@ type State struct {
 	// truth, not row state.
 	turnFrame *TurnFrame
 	frameSeq  uint64
-	// pendingInjections is the correlation window between a semantic delivery
-	// gmux wrote to the composer and the adapter reporting that text as an
-	// injection on the running loop (see NotePendingInjection). Generation-local
-	// and never serialized, like the reservation next to it.
-	pendingInjections []TurnInjection
 
 	// SSE subscribers (not serialized)
 	subs []chan Event

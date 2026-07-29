@@ -1,12 +1,13 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/gmuxapp/gmux/packages/adapter"
 )
 
 // noticeInterruptedWait installs the one thing a ^C on a blocking wait owes its
@@ -20,8 +21,8 @@ import (
 //
 // Deliberately narrow:
 //
-//   - stderr only. stdout belongs to the answer, and an interrupted wait has
-//     none to print.
+//   - stdout report. A signal is a semantic wait outcome and uses the same
+//     formatter as every other exchange report; stderr remains diagnostic-only.
 //
 //   - notice-then-die, not swallow-and-continue. A caller who pressed ^C wants
 //     out; a wait that printed a notice and then kept waiting would be strictly
@@ -47,15 +48,32 @@ import (
 //
 // The returned function uninstalls the handler; callers defer it so a
 // long-running process (the test binary) does not accumulate handlers.
-func noticeInterruptedWait(w io.Writer, ref string) func() {
-	ch := make(chan os.Signal, 1)
+func noticeInterruptedWait(w io.Writer, _ string, options ...any) func() {
+	out := w
+	quiet := false
+	if len(options) > 0 {
+		if v, ok := options[0].(io.Writer); ok {
+			out = v
+		}
+	}
+	if len(options) > 1 {
+		quiet, _ = options[1].(bool)
+	}
+	ch := make(chan os.Signal, 2)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	done := make(chan struct{})
 	go func() {
 		select {
 		case sig := <-ch:
-			fmt.Fprintf(w, "gmux: only the wait stopped; the session keeps running%s\n", reArmHint(ref))
-			dieFromSignal(sig)
+			if !quiet {
+				_, _ = out.Write(adapter.RenderExchangeReport(adapter.ExchangeReport{Outcome: adapter.ExchangeWaitSignal}))
+			}
+			go dieFromSignal(sig)
+			select {
+			case second := <-ch:
+				exitImmediately(exitSignaled(second))
+			case <-done:
+			}
 		case <-done:
 		}
 	}()
@@ -77,6 +95,8 @@ func noticeInterruptedWait(w io.Writer, ref string) func() {
 // what a supervisor inspecting `WaitStatus.Signaled()` expects to see.
 //
 // A variable so a test can observe the decision without killing the test binary.
+var exitImmediately = os.Exit
+
 var dieFromSignal = func(sig os.Signal) {
 	if s, ok := sig.(syscall.Signal); ok {
 		signal.Reset(s) // the correct undo of our Notify; see the note above
@@ -96,12 +116,4 @@ func exitSignaled(sig os.Signal) int {
 		return 128 + int(s)
 	}
 	return 128 + int(syscall.SIGINT)
-}
-
-// reArmHint names the command that resumes waiting, when there is an id to name.
-func reArmHint(ref string) string {
-	if ref == "" {
-		return "; re-arm with 'gmux wait <id>'"
-	}
-	return "; re-arm with 'gmux wait " + shortID(ref) + "'"
 }

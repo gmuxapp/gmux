@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/gmuxapp/gmux/cli/gmux/internal/session"
-	"github.com/gmuxapp/gmux/packages/adapter"
 )
 
 // TestTurnFrameAssertedFacts pins the whole source-asserted turn record as the
@@ -21,7 +20,7 @@ func TestTurnFrameAssertedFacts(t *testing.T) {
 
 	postHook(t, srv, []byte(`{"op":"turn","phase":"start","turn_seq":7,"trigger":"what is 2+2?"}`))
 	f := st.TurnFrameSnapshot()
-	if f == nil || f.Current == nil || f.Current.TurnSeq != 7 || f.Current.Trigger != "what is 2+2?" {
+	if f == nil || f.Current == nil || f.Current.TurnSeq != 7 || len(f.Current.Exchanges) != 1 || f.Current.Exchanges[0].User != "what is 2+2?" {
 		t.Fatalf("after start: %+v", f)
 	}
 	if f.Last != nil {
@@ -33,7 +32,7 @@ func TestTurnFrameAssertedFacts(t *testing.T) {
 
 	postHook(t, srv, []byte(`{"op":"turn","phase":"steered","turn_seq":7,"text":"actually, stop"}`))
 	f = st.TurnFrameSnapshot()
-	if f.Current == nil || len(f.Current.Injections) != 1 || f.Current.Injections[0].Text != "actually, stop" {
+	if f.Current == nil || len(f.Current.Exchanges) != 2 || f.Current.Exchanges[1].User != "actually, stop" {
 		t.Fatalf("after steer: %+v", f.Current)
 	}
 
@@ -47,7 +46,7 @@ func TestTurnFrameAssertedFacts(t *testing.T) {
 	}
 	// The closed record carries the turn's inputs so a report can name what the
 	// turn was asked to do without a second lookup.
-	if f.Last.Trigger != "what is 2+2?" || len(f.Last.Injections) != 1 {
+	if len(f.Last.Exchanges) != 2 || f.Last.Exchanges[0].User != "what is 2+2?" {
 		t.Fatalf("close lost the turn's inputs: %+v", f.Last)
 	}
 	if s := st.StatusSnapshot(); s == nil || s.Active {
@@ -63,8 +62,8 @@ func TestTurnFrameStaleInjectionIgnored(t *testing.T) {
 	srv := &Server{state: st}
 	postHook(t, srv, []byte(`{"op":"turn","phase":"start","turn_seq":2}`))
 	postHook(t, srv, []byte(`{"op":"turn","phase":"steered","turn_seq":1,"text":"late"}`))
-	if inj := st.TurnFrameSnapshot().Current.Injections; len(inj) != 0 {
-		t.Fatalf("stale injection landed: %v", inj)
+	if exchanges := st.TurnFrameSnapshot().Current.Exchanges; len(exchanges) != 1 {
+		t.Fatalf("stale boundary landed: %v", exchanges)
 	}
 }
 
@@ -91,7 +90,10 @@ func TestTurnFrameClearedOnRebind(t *testing.T) {
 	srv := &Server{state: st}
 	postHook(t, srv, []byte(`{"op":"session","path":"/tmp/a.jsonl"}`))
 	postHook(t, srv, []byte(`{"op":"turn","phase":"start","turn_seq":1}`))
-	postHook(t, srv, []byte(`{"op":"turn","phase":"end","turn_seq":1,"outcome":"completed","output":"old answer"}`))
+	postHook(t, srv, []byte(`{"op":"turn","phase":"end","turn_seq":1,"outcome":"error","output":"old answer","diagnostic":"A failed"}`))
+	if status := st.StatusSnapshot(); status == nil || !status.Error {
+		t.Fatalf("A failure was not retained before rebind: %+v", status)
+	}
 
 	// Same conversation, re-reported (claude/codex do this on every turn end):
 	// nothing is invalidated.
@@ -104,6 +106,9 @@ func TestTurnFrameClearedOnRebind(t *testing.T) {
 	f := st.TurnFrameSnapshot()
 	if f.Current != nil || f.Last != nil {
 		t.Fatalf("rebind must clear both records: %+v", f)
+	}
+	if status := st.StatusSnapshot(); status != nil {
+		t.Fatalf("B inherited A outcome status: %+v", status)
 	}
 }
 
@@ -293,91 +298,5 @@ func TestRawStatusCloseLeavesNoRunningTurnInTheFrame(t *testing.T) {
 	postHook(t, srv, []byte(`{"op":"turn","phase":"steered","turn_seq":4,"text":"too late"}`))
 	if cur := st.TurnFrameSnapshot().Current; cur != nil {
 		t.Fatalf("an injection resurrected the abandoned turn: %+v", cur)
-	}
-}
-
-// A steer's delivery identity travels from the daemon's POST /prompt into the
-// runner's correlation window, so the adapter's injection report can be matched
-// back to the request that caused it (ADR 0027's steer self-exclusion). Without
-// this hop the injecting caller could not tell its own message from a human's,
-// and would report every merged close as indeterminate.
-func TestPromptDeliveryIDReachesTheInjection(t *testing.T) {
-	f := newActionFixture(t, &fakeAgent{
-		encode: map[adapter.AgentAction]string{adapter.ActionSend: "\r"},
-	})
-	f.ready(t)
-	// A turn is running: this delivery joins it rather than starting one.
-	f.state.OpenTurn(4, "go")
-	if code, errCode := f.post(t, "/prompt",
-		`{"prompt":"use the other API","delivery":"now","require":"active","delivery_id":"d-77"}`); code != 204 {
-		t.Fatalf("steer refused: %d %s", code, errCode)
-	}
-	f.state.NoteInjection(4, "use the other API", false)
-	inj := f.state.TurnFrameSnapshot().Current.Injections
-	if len(inj) != 1 || inj[0].DeliveryID != "d-77" {
-		t.Fatalf("injections=%+v", inj)
-	}
-}
-
-// The adapter's truncation flag travels from the injection event into the
-// matcher, and it is the ONLY thing that licenses a prefix comparison there.
-//
-// The delta's D1: reading the marker off the text instead cannot tell a capped
-// excerpt from a message that merely ends in an ellipsis, so a foreign message
-// could buy itself the prefix rule and steal an in-flight delivery's identity —
-// after which that caller reads as "acknowledged and last" and is handed the
-// merged close under exit 0.
-func TestSteeredTruncationFlagGatesPrefixMatching(t *testing.T) {
-	post := func(t *testing.T, f *actionFixture, event string) session.TurnInjection {
-		t.Helper()
-		postHook(t, f.srv, []byte(event))
-		inj := f.state.TurnFrameSnapshot().Current.Injections
-		if len(inj) == 0 {
-			t.Fatal("no injection was recorded")
-		}
-		return inj[len(inj)-1]
-	}
-
-	t.Run("a flagged excerpt matches as a prefix", func(t *testing.T) {
-		f := newActionFixture(t, &fakeAgent{encode: map[adapter.AgentAction]string{adapter.ActionSend: "\r"}})
-		f.ready(t)
-		f.state.OpenTurn(1, "go")
-		if code, e := f.post(t, "/prompt",
-			`{"prompt":"please switch to the streaming endpoint and retry","delivery":"now","require":"active","delivery_id":"d-1"}`); code != 204 {
-			t.Fatalf("steer refused: %d %s", code, e)
-		}
-		got := post(t, f, `{"op":"turn","phase":"steered","turn_seq":1,"text":"please switch to the\u2026","truncated":true}`)
-		if got.DeliveryID != "d-1" {
-			t.Fatalf("a flagged excerpt lost its correlation: %+v", got)
-		}
-	})
-
-	t.Run("an unflagged message ending in an ellipsis does not", func(t *testing.T) {
-		f := newActionFixture(t, &fakeAgent{encode: map[adapter.AgentAction]string{adapter.ActionSend: "\r"}})
-		f.ready(t)
-		f.state.OpenTurn(1, "go")
-		if code, e := f.post(t, "/prompt",
-			`{"prompt":"please switch to the streaming endpoint and retry","delivery":"now","require":"active","delivery_id":"d-1"}`); code != 204 {
-			t.Fatalf("steer refused: %d %s", code, e)
-		}
-		// Same shape on the wire, minus the adapter's assertion that it capped.
-		got := post(t, f, `{"op":"turn","phase":"steered","turn_seq":1,"text":"please switch to the\u2026"}`)
-		if got.DeliveryID != "" {
-			t.Fatalf("a message that merely ends in an ellipsis claimed a pending delivery: %+v", got)
-		}
-	})
-}
-
-// An oversized identity is refused rather than stored: it is an opaque token the
-// daemon mints, and the runner holds it in memory for the length of a turn.
-func TestPromptRejectsAnOversizedDeliveryID(t *testing.T) {
-	f := newActionFixture(t, &fakeAgent{
-		encode: map[adapter.AgentAction]string{adapter.ActionSend: "\r"},
-	})
-	f.ready(t)
-	body := `{"prompt":"x","delivery":"now","require":"any","delivery_id":"` +
-		strings.Repeat("a", maxDeliveryIDBytes+1) + `"}`
-	if code, errCode := f.post(t, "/prompt", body); code != http.StatusBadRequest || errCode != CodeInvalidRequest {
-		t.Fatalf("code=%d err=%q", code, errCode)
 	}
 }

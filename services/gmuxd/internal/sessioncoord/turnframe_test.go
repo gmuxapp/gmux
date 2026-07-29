@@ -41,7 +41,7 @@ func TestTurnFrameIsRetainedNotPersisted(t *testing.T) {
 	// snapshot) is retained and writes NOTHING: a durable observation for it
 	// would churn the row version for a fact the store does not hold.
 	client.stream.send(RunnerEvent{ObservedAt: ts(10), FrameOnly: true, Frame: &TurnFrame{
-		Seq: 1, Current: &TurnCurrent{TurnSeq: 3, Trigger: "what is 2+2?"},
+		Seq: 1, Current: &TurnCurrent{TurnSeq: 3, Exchanges: []TurnExchange{{Ordinal: 1, User: "what is 2+2?"}}},
 	}})
 	frame := frameOfEventually(t, coord, id)
 	if frame.CurrentTurnSeq() != 3 {
@@ -178,7 +178,7 @@ func TestReplayedFrameSurvivesRegistration(t *testing.T) {
 	active := true
 	client.stream.send(RunnerEvent{ObservedAt: ts(5),
 		Facts: centralstore.RunnerFacts{Active: &active},
-		Frame: &TurnFrame{Seq: 3, Current: &TurnCurrent{TurnSeq: 8, Trigger: "ask"}},
+		Frame: &TurnFrame{Seq: 3, Current: &TurnCurrent{TurnSeq: 8, Exchanges: []TurnExchange{{Ordinal: 1, User: "ask"}}}},
 	})
 
 	coord := newCoord(client, newFakeDurable(0), &fakeDirtySink{}, nil)

@@ -22,9 +22,9 @@ Run a command:
   gmux -d -- <cmd> [args]           ... detached; prints the session id
 
 Drive an agent (semantic turn control):
-  gmux agent prompt <id> <prompt>   prompt an agent, wait, print its answer
-  gmux agent --help                 all options, and the reads: status (what
-                                    matters now), logs (the exact text)
+  gmux agent prompt <id> <prompt>   prompt an agent, wait, print its exchange report
+  gmux agent logs <id> [-n N]       read visible conversation exchanges
+  gmux agent --help                 all agent options
 
 Sessions (local by default; address a peer with <id>@<peer>):
   gmux ls [--all|-a] [--json|-j]    list sessions
@@ -116,9 +116,8 @@ tail answers "what is on its screen".
 
 For an agent session you usually want a semantic view instead:
 
-  gmux agent logs <id> [-n N]    what it has been doing (the conversation
-                                 as markdown; -n counts messages)
-  gmux agent status <id>         what matters now (state, trigger, answer)
+  gmux agent logs <id> [-n N]    visible conversation exchanges (-n counts
+                                 exchanges and defaults to one)
 
 ('gmux tail --raw' and its -e/-r aliases are gone: tail is raw by
 definition, and the conversation view moved to 'gmux agent logs'.)
@@ -172,50 +171,24 @@ not a recognized key name is typed as literal text rather than refused.
 
 ` + keyVocabulary,
 
-	"wait": `gmux wait: block until a session's turn ends, or until output appears
+	"wait": `gmux wait: observe activity until it settles
 
-  gmux wait <id> [--timeout|-t N] [--quiet|-q] [--json]
+  gmux wait <id> [--timeout|-t N] [--quiet|-q]
   gmux wait <id> --for-text <substring> [--timeout|-t N]
   gmux wait <id> --for-regex <pattern> [--timeout|-t N]
 
-Blocks until the session goes idle: an agent finishing its turn, a shell
-back at its prompt (OSC 133 marks), or a one-shot command exiting. For
-agent sessions whose turn completed, prints the agent's answer on stdout —
-the one the adapter asserted when it closed the turn. --quiet suppresses it.
+  --timeout/-t N  stop waiting after N seconds
+  --quiet/-q      suppress the report; return only the verdict
 
-A turn that did NOT complete prints nothing on stdout and a short report on
-stderr instead: the outcome, the reason, what the turn was asked to do, and
-the message that changed it when somebody steered. No second command needed.
+For renderer-capable agents, prints an exchange-structured report on stdout.
+Steers, follow-ups, and human instructions are additional user boundaries and
+do not end the wait. A late wait immediately reports the latest exchange.
+Timeout, interruption, and activity failure are valid stdout reports; the exit
+code is the verdict. --quiet suppresses reports. Predicate and non-agent waits
+keep synchronization-only behavior.
 
-A wait on an already-idle session returns at once and reports the LAST
-turn's conclusion; to gate on a turn you are about to trigger, use
-'gmux agent prompt' or 'gmux send --wait', which arm the wait first.
-
-A user message injected into the turn you are waiting on — a steer, a
-follow-up merged into the running loop, or a human typing into the TUI —
-ends this wait early with exit 2 and reason 'steered': the answer it was
-holding out for now answers something else. The turn keeps running, so
-re-arm when you still care:
-
-  gmux wait "$id" || gmux wait "$id"   # first wait steered, second one waits
-                                       # for the redirected turn's answer
-
-  --timeout/-t N give up after N seconds (exit 1)
-  --quiet/-q     synchronize only; print no result
-  --json         print one envelope on stdout for every outcome instead —
-                 {outcome, reason, output, trigger, steered_by, truncated,
-                 message}, absent rather than empty — and no stderr report.
-                 Every terminal path prints exactly one envelope, success
-                 included (a matched output condition is {"outcome":
-                 "completed","reason":"matched"}), so silence is never an
-                 outcome. The machine contract for this verb. Not with --quiet.
-  --for-text S   resolve when S appears in the output instead of on idle
-  --for-regex P  ... or when P (RE2, line-wise) matches; works for shell
-                 sessions too, and prints no result
-
-Exit codes: 0 the turn completed (or the output matched), 2 the turn was
-intentionally interrupted or steered, 1 anything else (error, death,
-timeout, an injection the agent never acknowledged).
+Exit codes: 0 completed/matched, 2 intentionally interrupted, 1 failure or
+timeout. A local signal prints '[Wait interrupted; agent remains active]' and exits 128+N.
 `,
 
 	"kill": `gmux kill: terminate a session

@@ -81,10 +81,8 @@ type ConversationMessage struct {
 	// Prose is Text with the adapter's non-prose renderings removed —
 	// compact tool-call lines, image placeholders and anything else that
 	// is activity context rather than something the agent said. It exists
-	// for the semantic "what did the agent answer" read behind
-	// `gmux agent status` (and `gmux agent logs --agent`), which must not
-	// surface a `[tool]` line as the
-	// agent's reply. Empty when the message carries no prose at all (a
+	// so semantic transcript consumers do not mistake a compact `[tool]`
+	// line for something the agent said. Empty when the message carries no prose at all (a
 	// tool-only assistant message).
 	//
 	// Contract for renderers: always set it. When a message's rendering

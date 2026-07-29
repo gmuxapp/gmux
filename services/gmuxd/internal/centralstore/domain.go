@@ -495,6 +495,9 @@ func (s *Store) applyCommonFacts(ctx context.Context, id SessionID, observed Row
 	before := v
 	previousSlugBase := v.SlugBase
 	if p.ConversationRef != nil {
+		if *p.ConversationRef != "" && *p.ConversationRef != v.ConversationRef {
+			v.Active, v.Error, v.Interrupted, v.StatusReported = false, false, false, false
+		}
 		v.ConversationRef = *p.ConversationRef
 	}
 	if p.CWD != nil {

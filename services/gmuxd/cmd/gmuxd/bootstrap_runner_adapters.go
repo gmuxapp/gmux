@@ -193,6 +193,9 @@ func runnerEventProjection(typ string, raw []byte) (sessioncoord.RunnerEvent, bo
 			return sessioncoord.RunnerEvent{}, false
 		}
 		f.ConversationRef = &v.Path
+		// Conversation-local status cannot cross a rebind. Clear it without
+		// claiming that the new conversation reported idle.
+		f.ResetStatus = true
 	case "terminal_resize":
 		var v centralstore.TerminalSize
 		if json.Unmarshal(raw, &v) != nil {
