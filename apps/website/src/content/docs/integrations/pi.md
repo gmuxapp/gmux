@@ -73,7 +73,7 @@ gmuxd watches this directory to discover resumable conversations and to notice w
 When gmux owns the launch, it injects the gmux session extension into pi (`pi -e <materialized-extension>`; extensions accumulate, so it coexists with your own). The extension subscribes to pi's own lifecycle and reports state to the runner authoritatively — no inference:
 
 - **`session_start`** (fires on startup *and* on every `/new`, `/resume`, and `/fork`) reports the active conversation file, id, and name. This is what binds a session to its file, and it's the only signal that survives selecting an already-loaded session from pi's `/resume` picker — pi serves that from memory without touching disk, so there is nothing for an external heuristic to observe. (This replaces the old scrollback content-matching; see ADR 0011.)
-- **`agent_start` / `agent_end`** report each turn, so gmux drives status without watching the file.
+- **`agent_start` / `agent_settled`** bound each span of work (pi may emit several `agent_end`s per run when it retries; `agent_settled` fires exactly once), so gmux drives status without watching the file. Each completed assistant response is also reported as an **iteration**, which is what `gmux wait` and `gmux agent logs` count in their exchange reports.
 
 ### Status
 
