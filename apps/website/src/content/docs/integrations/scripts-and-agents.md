@@ -55,9 +55,14 @@ For **agent sessions on this host** (pi today), `gmux agent` is the verb to scri
 
 ```bash
 id=$(gmux -d -- pi)
-answer=$(gmux agent prompt --timeout 600 "$id" 'run the suite and fix what fails')
-gmux agent status "$id"                 # what matters now: state, trigger, answer
+report=$(gmux agent prompt --timeout 600 "$id" 'run the suite and fix what fails')
+gmux agent logs "$id"                   # re-read the latest exchange later
 ```
+
+An agent session names a **conversation**, not a process: prompting an
+inactive conversation transparently resumes it, and reading one never starts
+anything. Semantic surfaces report the agent as **active** or **inactive** —
+your script never branches on whether a process happens to be resident.
 
 ### Launching and prompting in one command
 
@@ -67,32 +72,29 @@ sends the prompt as its first turn.
 
 ```bash
 id=$(gmux agent prompt --new --no-wait --name review 'review the diff on this branch')
-gmux wait "$id" && gmux agent status "$id"
+gmux wait "$id"
 
-gmux agent prompt --new --model anthropic/sonnet 'summarize this repo'   # id, then the answer
+gmux agent prompt --new --model anthropic/sonnet 'summarize this repo'   # id, blank line, report
 ```
 
 **The session id is stdout line 1**, written the moment the session exists —
 before the prompt is even delivered — so you can always address the session you
-just paid for, including when admission or the turn then fails. It means only
+just paid for, including when admission or the work then fails. It means only
 that: the session exists and is addressable. It is not an admission receipt and
 not a readiness signal — the exit code carries those. Under `--new`
 the completion signal is therefore the **exit code**, not non-empty stdout: a
-successful synchronous run prints the id and then the answer. With `--no-wait`
-the bare id is the only output and exit `0` means the turn was **admitted** — the
+successful synchronous run prints the id, a blank line, then the exchange
+report. With `--no-wait`
+the bare id is the only output and exit `0` means the work was **admitted** — the
 agent actually started it. The id still prints immediately, but the process
 returns only once that happened (or the 60 s admission window expires), so on a
 sick session the launch line can block that long instead of returning at
 delivery. If the launch itself fails, stdout stays empty — no session exists to
 address.
 
-The first turn of a freshly launched session prints its answer like any other:
-the agent asserts its turn's result at the boundary, so there is no window in
-which the reply exists but gmux cannot attribute it.
-
 A failure after the launch leaves the session behind and **you own it**: gmux
 does not tear it down, and it may still be running. Retry against the printed
-id, read it, or `gmux kill "$id"`.
+id, read it with `gmux agent logs "$id"`, or `gmux kill "$id"`.
 
 `--new` must come before the prompt — after a session id it is prompt text like
 anything else.
@@ -102,37 +104,43 @@ the same readiness-gated path as every later one, so an agent that never comes
 up fails its first prompt with the same `admission_timeout` as its tenth.
 
 `--model` and `--name` are valid only with `--new`; `--follow-up` and `--steer`
-are refused with it (a session that does not exist yet has no turn to queue
+are refused with it (a session that does not exist yet has no work to queue
 behind or steer); `--timeout` bounds your wait, never the launch. `--new`
 launches pi only — for any other command, the two-step `gmux -d -- <cmd>` plus
 a prompt remains fully supported and is the shape to use.
 
-`agent prompt` blocks until the turn ends and prints the agent's answer on stdout — the turn's final message only (no `[tool]` lines), as the agent asserted it for that turn (gmux does not reconstruct it from the transcript, so an answer is only ever attributed to the turn that produced it). Exit codes are gmux's global taxonomy, shared by every verb that reports a gmux verdict (`gmux -- <cmd>`/`gmux edit` pass the child's code through, and `gmux daemon|auth|remote` pass gmuxd's): `0` the turn completed, `2` it was intentionally interrupted or the wait was resolved early because somebody steered the turn, `1` anything else (a failed turn, a `--timeout`, a dead runner, an injection the agent never acknowledged). A turn that did not complete prints **nothing on stdout** and a short status-shaped report on stderr instead — outcome, reason, the trigger excerpt, and the injected text when somebody steered — because a previous turn's answer must never be handed back as this one's, and a bare non-zero exit tells you nothing. `--json` swaps both for one stdout envelope (`{outcome, reason, output, trigger, steered_by, truncated, message}`, absent rather than empty) and keeps stderr silent. Every terminal path prints exactly one envelope, success included, so silence is never an outcome a script has to interpret; it is refused with `--quiet` (on `wait`) and with `--no-wait`. `gmux agent status <id>` shows whatever exists in that case (and `gmux agent logs --agent -n 1 <id>` the answer alone), and works even after the session has died — as a snapshot read it can be staler than the answer a wait carries.
+`agent prompt` blocks until the activity its prompt started (or joined) settles, then prints the **exchange report** on stdout — what was asked, every further user message that entered the loop, `[Agent worked for N iterations]` markers, and the terminal response:
+
+```
+[USER]: run the suite and fix what fails…
+
+[Agent worked for 12 iterations]
+
+[AGENT]: All 212 tests pass. Two fixtures needed …
+```
+
+Your own prompt is abbreviated (you already know it); everything else prints in full within the live transport budget — an oversized activity's report marks its cuts (`[AGENT, truncated]:` on capped prose, `[N exchange(s) and M bytes omitted from live report]` when early user boundaries were dropped) and never loses the outcome. When a report carries either marker, read the full text with `gmux agent logs -n N`, which reads the complete native history. Exit codes are gmux's global taxonomy, shared by every verb that reports a gmux verdict (`gmux -- <cmd>`/`gmux edit` pass the child's code through, and `gmux daemon|auth|remote` pass gmuxd's): `0` the activity completed, `2` it was intentionally interrupted, `1` anything else (a failed activity, a `--timeout`), `128+N` for a first local signal — which prints only `[Wait interrupted; agent remains active]` and leaves the agent running.
+
+**The exit code is the verdict; stdout is the report.** The report is printed for every outcome — an interrupted activity's ends `[Agent interrupted]`, a failed one `[Agent failed: <reason>]`, a timeout `[Wait timed out after Ns; agent active, N iterations so far...]` — so `report=$(gmux agent prompt …)` captures the account even when `$?` is nonzero. stderr is reserved for gmux's inability to produce a report at all (unknown session, unsupported adapter, transport failure): those print nothing on stdout and exit 1. There is no `--json` on prompt/wait/logs today; script against the exit code and the report (`gmux ls --json` remains for session listings).
 
 The other shapes:
 
 ```bash
 git diff | gmux agent prompt "$id"                  # prompt from stdin, one prompt
 gmux agent prompt --no-wait "$id" 'start the long refactor'
-gmux agent prompt --follow-up "$id" 'then update the docs'   # queue behind the current turn
-gmux agent prompt --steer "$id" 'stop, use the sqlite path'  # redirect the running turn
-gmux agent prompt --no-wait --steer "$id" 'and skip the migration'   # --no-wait composes with either mode (returns at delivery here: the turn is already running)
+gmux agent prompt --follow-up "$id" 'then update the docs'   # queue behind the current work
+gmux agent prompt --steer "$id" 'stop, use the sqlite path'  # redirect the running work
+gmux agent prompt --no-wait --steer "$id" 'and skip the migration'   # --no-wait composes with either mode (returns at delivery here: work is already running)
 gmux agent cancel "$id"; gmux wait "$id"; [ $? = 2 ] && echo stopped   # interrupt, then wait
 ```
 
-Note the `;` rather than `&&`: an interrupted turn exits `2`, so chaining the wait with `&&` "fails" on the outcome you asked for.
+Note the `;` rather than `&&`: an interrupted activity exits `2`, so chaining the wait with `&&` "fails" on the outcome you asked for.
 
-**Steering interrupts waits.** A user message injected into a turn somebody is waiting on — a `--steer`, a `--follow-up` that merged into the running loop, or a human typing into the TUI — ends *their* wait early with exit `2` and reason `steered`: the answer they were promised now answers something else. The turn keeps running, so re-arm:
+**Steering never interrupts a wait.** A user message injected into an activity somebody is waiting on — a `--steer`, a `--follow-up` that merged into the running loop, or a human typing into the TUI — simply appears in their report as a new `[USER]:` boundary. Every wait on the activity runs to the agent's own settle and returns the same merged report, so there is no re-arm loop and no ownership to adjudicate: the report *is* the story of everything that entered the loop.
 
-```bash
-gmux wait "$id" || gmux wait "$id"    # first wait steered; the second gets the redirected answer
-```
+`--follow-up` has two modes: delivered to an **inactive** agent it starts ordinary work; delivered into **running** work it merges into that activity, which settles once for everybody.
 
-The injecting command keeps its own result: gmux matches the agent's report of a message entering the loop against the text it delivered, and hands that caller the merged close — but only while its message is the loop's **last** injection (a later one supersedes it, reason `steered_again`), and only if the agent acknowledged it before the turn settled (otherwise the result is `indeterminate`, exit `1`, never an answer that may predate the injection). The match is textual, since the agent's report carries the message and nothing else, so gmux requires an exact match — or a prefix, but only for an excerpt the agent explicitly reported as truncated — and credits an ambiguous report — two in-flight deliveries that could both explain it — to nobody, leaving both callers `indeterminate`.
-
-`--follow-up` therefore has two modes: delivered to an **idle** agent it starts an ordinary turn; delivered into a **running** turn it merges into that turn, so the merged close's answer is the follow-up's — and other waiters on that turn are interrupted exactly as by a steer.
-
-Flags go before the id; everything after the id is the prompt, verbatim. A plain prompt restarts a dead retained session to deliver it; `--steer` and `cancel` require a live, active turn and never resume.
+Flags go before the id; everything after the id is the prompt, verbatim. A plain prompt transparently resumes an inactive conversation to deliver it; `--steer` and `cancel` fail when no activity is in progress and never resume.
 
 Errors name a stable code. Treat `admission_timeout`, `delivery_timeout` and `transport_error` as **indeterminate** — the prompt may already have landed, so a blind retry can duplicate it — and treat a bare transport failure with no code (a dropped connection to gmuxd, a daemon restarted mid-prompt) the same way: the request may have been delivered before the connection went away. `runner_outdated`, `precondition_failed`, `delivery_pending`, `not_ready`, `not_running` and `incarnation_mismatch` (the runner was replaced mid-flight, and the replacement refused an action meant for its predecessor) all guarantee that nothing was delivered, so they are safe to retry. `unsupported_adapter` means the session's agent has no semantic support yet: use raw `send`/`tail` for those, as below.
 
@@ -152,25 +160,25 @@ When no text argument is given and stdin is a pipe, gmux reads stdin until EOF (
 
 ## Waiting
 
-`gmux wait <id>` blocks until a session's current turn ends — the primitive that turns sequential orchestration into one line per step. For agent sessions, `gmux agent prompt` bundles the send and the wait; for raw sessions, `send --wait` does:
+`gmux wait <id>` blocks until a session's current activity settles — the primitive that turns sequential orchestration into one line per step. For agent sessions, `gmux agent prompt` bundles the send and the wait; for raw sessions, `send --wait` does:
 
 ```bash
-gmux agent prompt <id> < step-1.txt      # agent session: prompt, wait, print the answer
+gmux agent prompt <id> < step-1.txt      # agent session: prompt, wait, print the report
 gmux send --wait <id> Enter < step-2.txt # raw session: type, submit, wait
 
-gmux agent logs <id> -n 2      # the prompt and the reply, clean markdown
+gmux agent logs <id> -n 2      # re-read the last two exchanges later
 ```
 
-The idle signal is the same `Status.Active` flag the UI's spinner consumes, so `wait` returns the moment the agent emits its closing message. On an already-idle session it returns immediately and reports the **last** turn's conclusion and result — to gate on a turn you are about to trigger, use `gmux agent prompt` or `send --wait` (below), which arm the wait before delivering anything. Exit codes: `0` the turn completed (or the output condition matched), `2` the turn was intentionally interrupted, `1` anything else — a failed turn, a death, or `--timeout N` elapsing.
+The signal is the same `Status.Active` flag the UI's spinner consumes, so `wait` returns the moment the agent asserts its work settled. Exit codes: `0` the activity completed (or the output condition matched), `2` it was intentionally interrupted, `1` anything else — a failed activity or `--timeout N` elapsing — and `128+N` when a first local signal stopped the wait itself (stdout is then exactly `[Wait interrupted; agent remains active]`: the agent keeps running, and the CLI has no exchange facts to report yet).
 
-`wait` is also **result-bearing**: for a result-bearing agent (pi today — one that asserts its own turn boundary and result), a turn that completed normally prints that turn's final message, exactly like `gmux agent prompt`. A wait that arrives after the turn already closed reports the conclusion but no answer: it never observed the turn, so it does not claim one — `gmux agent status` is the snapshot read for that.
+`wait` is **observational**: for a renderer-capable agent (pi today) it prints the exchange report of the activity it observed, whatever the verdict — steers and merged follow-ups show up as `[USER]:` boundaries in the report instead of ending the wait. A wait that arrives with no activity in progress returns immediately, renders the **latest visible exchange**, and exits by that activity's settled outcome (an empty conversation prints `[No exchanges yet]`, exit 0).
 
 ```bash
-answer=$(gmux wait "$id")       # the reply, or empty for a shell/other agent
+report=$(gmux wait "$id")       # the exchange report; empty for a shell/other agent
 gmux wait --quiet "$id"         # synchronize only
 ```
 
-A failed, interrupted or dead turn prints nothing and reports the condition on stderr; shell sessions, non-pi agents and output-condition waits are synchronization-only, as before.
+Timeout, interruption and failure are still stdout reports (the exit code is the verdict); stderr only ever says why no report could be produced. Shell sessions, non-pi agents and output-condition waits are synchronization-only, as before.
 
 **A failed command fails its wait — for lifetime turns only.** For sessions whose turn is their whole lifetime (`gmux -d -- make build`, shells *without* OSC 133 integration) a non-zero child exit closes the turn with an error, so `gmux wait` exits `1`. That is deliberate — `gmux wait "$id" && deploy.sh` must not deploy a failed build — but it means "did it finish?" and "did it succeed?" are the same question here. If you only need the former, run it in the foreground (`gmux -- make build`, which propagates the child's code) or read `exit_code` from `gmux ls --json`.
 
@@ -188,25 +196,21 @@ Every session is waitable: agents get their idle signal from turn hooks, shells 
 
 ## Reading output
 
-Three commands split by **what you know you want**, so a script never has to know what is running in a session to know what shape its output will be:
+Two commands split by **scope**:
 
 ```bash
-gmux tail <id> -n 50                # the raw screen: terminal text, any session
-gmux agent logs <id> --agent -n 1   # the exact text you want (here: the answer alone)
-gmux agent status <id>              # "show me what matters": state, trigger, content
+gmux tail <id> -n 50       # the raw screen: terminal text, any session
+gmux agent logs <id>       # the latest exchange: user message, work, response
+gmux agent logs <id> -n 5  # …the last five exchanges
 ```
 
 `gmux tail <id>` is always the raw view: the last `-n N` **lines** of rendered terminal output as plain text (default 100), for shells, one-shot commands and agents alike.
 
-`gmux agent logs <id>` prints the session's conversation as clean markdown for agents that persist a conversation file (pi): `## User` / `## Assistant` messages with compact `[tool] …` one-liners — the actual exchange, not the TUI's box-drawing and spinners. Here `-n N` counts **messages** (default 100), counted after the message-type filter: no flag gives user messages plus assistant prose, and `--user`/`--agent`/`--tool`/`--all` **replace** that set (`--agent -n 1` is the latest answer alone). `--json` prints a JSON array of `{role, type, text, prose}` — the machine contract for this read. There is no `--thinking`: no adapter renders thinking blocks, so the flag is refused by name instead of printing nothing.
-
-`gmux agent status <id>` answers "what is going on with this session" in a fixed three-part shape — a state line (alive/dead, active/idle, the last *closed* turn's outcome and rough recency), the triggering excerpt, and the relevant content (the final answer when idle; the last few messages and a working indicator while a turn runs). A running turn is reported with no outcome, and a session that died mid-turn reads `the turn never finished (runner died)` — the same verdict `gmux wait` reaches for that row (`error`, cause `runner_died`), so the two verbs never disagree. `--json` gives one object with those three parts and a `content.kind` of `"answer"`, `"recent"` or `"none"`; fields describing a turn that does not exist (`state.last_turn_outcome`, `state.last_turn_cause`, `trigger.code`) are absent rather than empty, so branch on `state.active`/`state.turn_recorded`.
-
-Both agent reads are snapshots of the agent's stored conversation: they never start or resume anything and work on a dead session, and they can be staler than the answer a `wait` or a synchronous `prompt` carries. Agents with no readable conversation answer `unsupported_adapter` for `logs`, while `status` still prints its (adapter-independent) state line with a note — `gmux tail` is the fallback for the content. Pair the reads with `wait` to capture an agent's final answer:
+`gmux agent logs <id>` renders the conversation as **visible exchanges** — the same document a wait report uses — read from the agent's own conversation file (pi), not the TUI's box-drawing and spinners. Here `-n N` counts exchanges (default 1, must be positive): each starts at a user message, the work it caused is summarized as `[Agent worked for N iterations]`, and only the terminal response prints in full; earlier history is one `[N previous exchanges]` line. While the agent is active the latest exchange ends `[Agent active, N iterations so far...]`, so `logs` is also the way to check on running work without waiting on it. `logs` never abbreviates and never starts or resumes anything — it is always safe to look, including on a settled conversation with no resident process. An empty but readable conversation prints `[No exchanges yet]` (exit 0); agents with no readable conversation answer `unsupported_adapter` — `gmux tail` is the fallback for those. Pair the reads with `wait` to capture an agent's final answer:
 
 ```bash
-gmux agent prompt --timeout 600 <id> < ship-prompt.txt   # prints the reply
-url=$(gmux agent logs --agent -n 1 <id> | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1)
+gmux agent prompt --timeout 600 <id> < ship-prompt.txt   # prints the report
+url=$(gmux agent logs <id> | grep -oE 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1)
 echo "$url"
 ```
 
@@ -239,11 +243,11 @@ done
 
 for id in "${ids[@]}"; do
   echo "=== $id ==="
-  gmux agent logs "$id" -n 100
+  gmux agent logs "$id"     # the latest exchange: prompt, work, final response
 done
 ```
 
-The agents run concurrently because `gmux -d -- pi <prompt>` returns as soon as the session registers and prints just the session id (no grep needed); the wait loop gates the harvest step on every agent reaching idle.
+The agents run concurrently because `gmux -d -- pi <prompt>` returns as soon as the session registers and prints just the session id (no grep needed); the wait loop gates the harvest step on every agent settling. (The `wait` calls print each agent's report too — redirect them to `/dev/null` or use `--quiet` if you only harvest at the end.)
 
 ## Nested gmux
 
