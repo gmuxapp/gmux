@@ -58,9 +58,12 @@ type RunnerFacts struct {
 	Command                                                                       *[]string
 	Remotes                                                                       *map[string]string
 	Active, Unread, Error, Interrupted                                            *bool
-	StartedAt, ExitedAt                                                           NullablePatch[UnixMillis]
-	ExitCode                                                                      NullablePatch[int]
-	TerminalSize                                                                  NullablePatch[TerminalSize]
+	// ResetStatus starts a new conversation binding without inventing an idle
+	// status report for it. It clears all prior outcome facts atomically.
+	ResetStatus         bool
+	StartedAt, ExitedAt NullablePatch[UnixMillis]
+	ExitCode            NullablePatch[int]
+	TerminalSize        NullablePatch[TerminalSize]
 }
 
 var (
@@ -450,6 +453,11 @@ func validateRunnerFacts(f RunnerFacts) error {
 
 func mergeRunnerFacts(v *Session, f RunnerFacts) error {
 	if f.ConversationRef != nil {
+		if *f.ConversationRef != "" && *f.ConversationRef != v.ConversationRef {
+			// Terminal status is conversation-local. Clear it on the authoritative
+			// rebind before applying any status facts carried by this same update.
+			v.Active, v.Error, v.Interrupted, v.StatusReported = false, false, false, false
+		}
 		v.ConversationRef = *f.ConversationRef
 	}
 	if f.CWD != nil {
@@ -484,6 +492,9 @@ func mergeRunnerFacts(v *Session, f RunnerFacts) error {
 		if v.Remotes == nil {
 			v.Remotes = map[string]string{}
 		}
+	}
+	if f.ResetStatus {
+		v.Active, v.Error, v.Interrupted, v.StatusReported = false, false, false, false
 	}
 	if f.Active != nil {
 		v.Active = *f.Active

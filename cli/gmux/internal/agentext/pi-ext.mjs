@@ -16,8 +16,10 @@
 //                                                         anything else
 //   { op: "session", path, id, name, slug, cwd, reason } on bind (session_start)
 //                                                         and rename (session_info_changed)
-//   { op: "turn", phase: "start", turn_seq, trigger }   on agent loop start
-//   { op: "turn", phase: "steered", turn_seq, text, truncated }
+//   { op: "turn", phase: "start", turn_seq, trigger, source_bytes,
+//     previous_exchanges }                              on agent loop start
+//   { op: "turn", phase: "iteration", turn_seq }       on assistant message_end
+//   { op: "turn", phase: "steered", turn_seq, text, source_bytes }
 //                                                       on a mid-turn user message
 //   { op: "turn", phase: "end", turn_seq, outcome,
 //     output, truncated, diagnostic, title }             on agent_settled
@@ -25,7 +27,7 @@
 // The turn events are the SOURCE ASSERTION of a turn's identity, boundary and
 // result (ADR 0027, 2026-07-28 amendment): gmux never reconstructs a turn's
 // answer from the conversation file. `turn_seq` is an extension-local monotonic
-// counter binding one turn's start, its injections and its close together, so
+// counter binding one activity's start, user boundaries and close together, so
 // every downstream consumer pairs facts by it and can never pair a running
 // turn's trigger with the previous turn's answer.
 //
@@ -83,12 +85,13 @@ export default function (pi) {
   // otherwise report a turn that never ran; the active edge stays on
   // agent_start and carries the trigger with it.
   let heldTrigger = "";
+  let heldTriggerBytes = 0;
   // settledMessages is the message list of the LAST agent_end of the run — the
   // final attempt's — which is what the settled turn's output and stop reason
   // are read from.
   let settledMessages = [];
   // sawAssistant/triggerNoted separate the loop's own opening user message(s)
-  // from genuine mid-turn injections: pi emits message_start for the prompt
+  // from additional mid-turn boundaries: pi emits message_start for the prompt
   // right after agent_start, and for every steered/queued message as it enters
   // the loop.
   let sawAssistant = false;
@@ -154,6 +157,7 @@ export default function (pi) {
     // conversation would attribute the old turn's answer to the new one.
     runOpen = false;
     heldTrigger = "";
+    heldTriggerBytes = 0;
     settledMessages = [];
     reportSession(ev?.reason ?? "start", ctx);
   });
@@ -174,22 +178,35 @@ export default function (pi) {
   // earlier, so this fires once per real run and never for a prompt that fails
   // preflight.
   pi.on("before_agent_start", (ev) => {
-    heldTrigger = excerpt(ev?.prompt ?? "");
+    const trigger = capUserText(ev?.prompt ?? "");
+    heldTrigger = trigger.text;
+    heldTriggerBytes = trigger.sourceBytes;
   });
 
-  pi.on("agent_start", () => {
+  pi.on("agent_start", (_ev, ctx) => {
     if (runOpen) return; // a retry or queued continuation of the SAME run
     turnSeq++;
     runOpen = true;
     sawAssistant = false;
     triggerNoted = false;
     settledMessages = [];
-    post(sock, { op: "turn", phase: "start", turn_seq: turnSeq, trigger: heldTrigger || undefined });
+    let previousExchanges;
+    try {
+      previousExchanges = ctx.sessionManager.getBranch().filter(
+        (entry) => entry?.type === "message" && entry?.message?.role === "user"
+      ).length;
+    } catch {}
+    post(sock, {
+      op: "turn", phase: "start", turn_seq: turnSeq,
+      trigger: heldTrigger,
+      source_bytes: heldTriggerBytes,
+      previous_exchanges: previousExchanges,
+    });
   });
 
   // A user message entering a RUNNING loop extends that turn and changes what
   // its answer means — whether gmux delivered it, another agent steered, or a
-  // human typed it into the TUI. It is reported as an injection on the open
+  // human typed it into the TUI. It is reported as a boundary on the open
   // turn, never as a new turn (pi has one loop, hence one turn).
   pi.on("message_start", (ev) => {
     if (!runOpen) return;
@@ -202,22 +219,33 @@ export default function (pi) {
     if (!text) return;
     if (!sawAssistant && !triggerNoted) {
       // The loop's own opening prompt, replayed as a message_start right after
-      // agent_start. It is the trigger, not an injection.
+      // agent_start. It is the opening boundary, not an additional one.
       triggerNoted = true;
-      if (!heldTrigger) heldTrigger = excerpt(text);
+      if (!heldTrigger) {
+        const trigger = capUserText(text);
+        heldTrigger = trigger.text;
+        heldTriggerBytes = trigger.sourceBytes;
+      }
       return;
     }
-    // `truncated` travels with the excerpt because the runner may only match a
-    // PREFIX of what gmux delivered when this excerpt is genuinely a prefix of
-    // the message. See excerptParts.
-    const injected = excerptParts(text);
+    // User boundaries are report content, not diagnostics: preserve whitespace
+    // verbatim up to the source-side live-frame cap.
+    const injected = capUserText(text);
     post(sock, {
       op: "turn",
       phase: "steered",
       turn_seq: turnSeq,
       text: injected.text,
-      truncated: injected.truncated || undefined,
+      source_bytes: injected.sourceBytes,
     });
+  });
+
+  // Every completed assistant/model response is one iteration, including
+  // tool-use responses and attempts that pi later retries.
+  pi.on("message_end", (ev) => {
+    if (runOpen && ev?.message?.role === "assistant") {
+      post(sock, { op: "turn", phase: "iteration", turn_seq: turnSeq });
+    }
   });
 
   pi.on("agent_end", (ev, ctx) => {
@@ -248,6 +276,7 @@ export default function (pi) {
     runOpen = false;
     const seq = turnSeq;
     heldTrigger = "";
+    heldTriggerBytes = 0;
     const msgs = settledMessages;
     settledMessages = [];
     const last = lastAssistant(msgs);
@@ -264,18 +293,17 @@ export default function (pi) {
       outcome,
       title: title || undefined,
     };
-    if (outcome === "completed") {
-      // Only a completed turn carries a result. An interrupted or errored turn
-      // has no answer to report, and reporting its partial prose as one is the
-      // staleness this design exists to prevent.
-      const capped = capOutput(assistantProse(last));
-      if (capped.text) {
-        ev.output = capped.text;
-        if (capped.truncated) ev.truncated = true;
-      }
-    } else if (outcome === "error") {
+    // The latest assistant prose is terminal for this observed span. On a
+    // non-completed outcome it is explicitly partial; carrying it is safe
+    // because it came from this run's final captured message list.
+    const capped = capOutput(assistantProse(last));
+    if (capped.text) {
+      ev.output = capped.text;
+      if (capped.truncated) ev.truncated = true;
+    }
+    if (outcome === "error") {
       // The account channel, never the result: a short reason, if pi gave one.
-      const diag = excerpt(last?.errorMessage ?? "");
+      const diag = boundedDiagnostic(last?.errorMessage ?? "");
       if (diag) ev.diagnostic = diag;
     }
     post(sock, ev);
@@ -301,13 +329,12 @@ function lastAssistant(msgs) {
 export function assistantProse(msg) {
   if (!msg) return "";
   const c = msg.content;
-  if (typeof c === "string") return c.trim();
+  if (typeof c === "string") return c;
   if (!Array.isArray(c)) return "";
   const parts = [];
   for (const b of c) {
     if (b && b.type === "text" && typeof b.text === "string") {
-      const t = b.text.trim();
-      if (t) parts.push(t);
+      parts.push(b.text);
     }
   }
   return parts.join("\n\n");
@@ -321,7 +348,18 @@ export function assistantProse(msg) {
 // closes the turn, `truncated` records that the text was cut, and the full text
 // remains available through the conversation read.
 const maxOutputBytes = 256 * 1024;
-const maxExcerptBytes = 1024;
+const maxDiagnosticBytes = 1024;
+const maxUserTextBytes = 8 * 1024;
+
+// capUserText preserves user content byte-for-byte up to a UTF-8-safe cap.
+// The ellipsis is an honest source marker and the omitted byte count is carried
+// by the runner when whole exchanges must later be dropped.
+export function capUserText(s) {
+  const text = String(s ?? "");
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= maxUserTextBytes) return { text, sourceBytes: bytes.length };
+  return { text: decodeWhole(bytes.subarray(0, maxUserTextBytes - 3)) + "…", sourceBytes: bytes.length };
+}
 
 // capOutput truncates at a UTF-8 boundary (never mid-rune: a lone surrogate
 // would make the close event unserializable, which is exactly the "oversized
@@ -332,39 +370,14 @@ export function capOutput(s) {
   return { text: decodeWhole(bytes.subarray(0, maxOutputBytes)), truncated: true };
 }
 
-// excerptParts collapses whitespace and caps a trigger/injection text, and
-// reports WHETHER it capped. Excerpts are diagnostics (they appear in stderr
-// reports), so a byte cap with an ellipsis is enough; they are never presented as
-// the agent's answer.
-//
-// The whitespace class is a CONTRACT with the runner, not a local convenience:
-// an injection excerpt is what the runner compares against the text gmux
-// delivered, to decide whether an injection is a given request's (ADR 0027's
-// steer self-exclusion). The two runtimes disagree by default — JavaScript's \s
-// matches U+FEFF but not U+0085, Go's unicode.IsSpace the reverse — so both
-// sides collapse the UNION: `\s` plus U+0085 here, IsSpace plus U+FEFF in
-// session.normalizeExcerpt. A prompt containing either character would otherwise
-// fail to correlate and silently downgrade its injector to an indeterminate
-// result.
-//
-// `truncated` is the second half of that contract, and it is reported as a FACT
-// rather than left to be inferred from the text. Truncation is the runner's only
-// licence to accept a prefix instead of an exact match, and this function is the
-// one place that knows whether it truncated — a reader sniffing the trailing
-// ellipsis cannot tell a capped excerpt from a message that simply ends in one,
-// which is enough to let a foreign message claim a pending delivery's identity.
-export function excerptParts(s) {
+// boundedDiagnostic collapses whitespace and returns a UTF-8-safe, bounded
+// account-channel reason. It is never user or assistant report content.
+export function boundedDiagnostic(s) {
   const collapsed = String(s ?? "").replace(/[\s\u0085]+/g, " ").trim();
-  if (!collapsed) return { text: "", truncated: false };
+  if (!collapsed) return "";
   const bytes = Buffer.from(collapsed, "utf8");
-  if (bytes.length <= maxExcerptBytes) return { text: collapsed, truncated: false };
-  return { text: decodeWhole(bytes.subarray(0, maxExcerptBytes - 3)) + "…", truncated: true };
-}
-
-// excerpt is excerptParts' text alone, for the places where the cap is a
-// presentation detail (a trigger, an error diagnostic) rather than evidence.
-export function excerpt(s) {
-  return excerptParts(s).text;
+  if (bytes.length <= maxDiagnosticBytes) return collapsed;
+  return decodeWhole(bytes.subarray(0, maxDiagnosticBytes - 3)) + "…";
 }
 
 // decodeWhole decodes a byte slice, dropping a trailing partial UTF-8 sequence

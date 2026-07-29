@@ -51,7 +51,7 @@ func TestRunnerEventProjectionMetaParsesRunnerWireShape(t *testing.T) {
 // passed, so the wire shape is pinned here.
 func TestRunnerEventProjectionStatusCarriesTheTurnFrame(t *testing.T) {
 	raw := []byte(`{"active":false,"error":false,"interrupted":false,` +
-		`"turn_frame":{"seq":12,"last":{"turn_seq":7,"outcome":"completed","output":"4"}}}`)
+		`"turn_frame":{"seq":12,"last":{"turn_seq":7,"outcome":"completed","trigger":"old ask","output":"4","truncated":true}}}`)
 	ev, ok := runnerEventProjection("status", raw)
 	if !ok {
 		t.Fatal("coupled status event rejected")
@@ -63,7 +63,7 @@ func TestRunnerEventProjectionStatusCarriesTheTurnFrame(t *testing.T) {
 		t.Fatal("a turn edge must be applied durably, not treated as frame-only")
 	}
 	closed := ev.Frame.ClosedTurn(7)
-	if closed == nil || closed.Output != "4" {
+	if closed == nil || closed.Output != "4" || closed.Trigger != "old ask" || !closed.Truncated || len(closed.Exchanges) != 0 {
 		t.Fatalf("the edge's frame did not survive projection: %+v", ev.Frame)
 	}
 

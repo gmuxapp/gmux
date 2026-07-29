@@ -55,7 +55,7 @@ type fakeTimer struct {
 
 func (t *fakeTimer) fire() { t.ch <- time.Now() }
 
-type promptCall struct{ endpoint, incarnation, prompt, delivery, require, deliveryID string }
+type promptCall struct{ endpoint, incarnation, prompt, delivery, require string }
 
 type agentHarness struct {
 	store    *centralstore.Store
@@ -123,16 +123,10 @@ func (h *agentHarness) currentLive(id centralstore.SessionID) (sessioncoord.Runt
 }
 
 // harnessGeneration is the registry generation of the harness's live runtime,
-// and harnessIncarnation the identity of the runner process behind it. Every
-// semantic call is conditional on the latter, so a runtime a test hands the
-// handler must carry one or delivery is refused before it starts.
-// harnessDeliveryID is the identity the harness mints for a delivery into a
-// running turn, so a test can express "the adapter acknowledged THIS request's
-// injection" (steer self-exclusion) deterministically.
+// and harnessIncarnation the identity of the runner process behind it.
 const (
 	harnessGeneration  = uint64(7)
 	harnessIncarnation = "inc-A"
-	harnessDeliveryID  = "d-1"
 )
 
 func newAgentHarness(t *testing.T, rows ...centralstore.NewSession) *agentHarness {
@@ -258,7 +252,7 @@ func (h *agentHarness) setFrame(f *sessioncoord.TurnFrame) {
 
 // openTurn installs a frame describing turn seq as running.
 func (h *agentHarness) openTurn(seq uint64, trigger string) {
-	h.setFrame(&sessioncoord.TurnFrame{Seq: seq, Current: &sessioncoord.TurnCurrent{TurnSeq: seq, Trigger: trigger}})
+	h.setFrame(&sessioncoord.TurnFrame{Seq: seq, Current: &sessioncoord.TurnCurrent{TurnSeq: seq, Exchanges: []sessioncoord.TurnExchange{{Ordinal: 1, User: trigger}}}})
 }
 
 // closeTurn installs a frame describing turn seq as settled with this result.
@@ -274,7 +268,6 @@ func (h *agentHarness) closeTurn(seq uint64, outcome, output string) {
 func mergedClose(seq uint64, outcome, output string) *sessioncoord.TurnFrame {
 	return &sessioncoord.TurnFrame{Seq: seq + 100, Last: &sessioncoord.TurnClose{
 		TurnSeq: seq, Outcome: outcome, Output: output,
-		Injections: []sessioncoord.TurnInjection{{Text: "injected", DeliveryID: harnessDeliveryID}},
 	}}
 }
 
@@ -316,7 +309,7 @@ func (h *agentHarness) deps() agentDeps {
 			h.setLive(func(centralstore.SessionID) (sessioncoord.Runtime, bool) { return rt, true })
 			return rt, nil
 		},
-		sendPrompt: func(ctx context.Context, endpoint, incarnation, prompt, delivery, require, deliveryID string) error {
+		sendPrompt: func(ctx context.Context, endpoint, incarnation, prompt, delivery, require string) error {
 			if err := h.checkOwner(endpoint, incarnation); err != nil {
 				return err
 			}
@@ -328,7 +321,7 @@ func (h *agentHarness) deps() agentDeps {
 				// the window; it is a bug, not a slower path.
 				return errors.New("harness: prompt delivered before any subscription existed")
 			}
-			h.prompts <- promptCall{endpoint, incarnation, prompt, delivery, require, deliveryID}
+			h.prompts <- promptCall{endpoint, incarnation, prompt, delivery, require}
 			if h.onPrompt != nil {
 				h.onPrompt()
 			}
@@ -354,7 +347,6 @@ func (h *agentHarness) deps() agentDeps {
 			h.timers <- tm
 			return tm.ch
 		},
-		newDeliveryID: func() string { return harnessDeliveryID },
 		frame: func(id centralstore.SessionID) *sessioncoord.TurnFrame {
 			h.frameReads.Add(1)
 			h.mu.Lock()
@@ -746,7 +738,7 @@ func TestActiveErrorDoesNotResolveTheWait(t *testing.T) {
 	exec.fire()
 	got := get()
 	// 504, not 408: 408 invites a replay, and replaying a prompt duplicates it.
-	if got.code != http.StatusGatewayTimeout || got.errCode() != codeExecutionTimeout {
+	if got.code != http.StatusGatewayTimeout || got.data()["outcome"] != "timeout" || got.data()["cause"] != codeExecutionTimeout {
 		t.Fatalf("code=%d body=%v", got.code, got.body)
 	}
 }
@@ -1103,10 +1095,8 @@ func TestFollowUpResolvesOnTheMergedClose(t *testing.T) {
 		h.openTurn(9, "first ask") // the loop the follow-up will merge into
 		get := runPromptAsync(t, h, promptBodyJSON(t, map[string]any{"prompt": "and then", "mode": modeFollowUp}))
 		<-h.prompts
-		// The adapter acknowledges that this follow-up's text entered the running
-		// loop, which is what entitles it to the merged close (ADR 0027's steer
-		// self-exclusion; without the acknowledgement the close might predate the
-		// injection and is reported indeterminate).
+		// The source closes the same turn identity this follow-up joined; no
+		// instruction event resolves the observer on its own.
 		h.setFrame(mergedClose(9, outcomeCompleted, "merged answer"))
 		h.publish(statusOutcome("s", false, false, false))
 		got := get()

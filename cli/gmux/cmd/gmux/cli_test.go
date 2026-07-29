@@ -360,7 +360,6 @@ func TestUsageErrorsCarryTheirTopic(t *testing.T) {
 		{[]string{"agent", "prompt"}, "agent"},
 		{[]string{"prompt", "hi"}, "agent"},
 		{[]string{"cancel", "abc"}, "agent"},
-		{[]string{"output", "abc"}, "agent"},
 	}
 	for _, tt := range tests {
 		t.Run(strings.Join(tt.args, "_"), func(t *testing.T) {

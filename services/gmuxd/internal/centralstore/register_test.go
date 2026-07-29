@@ -20,6 +20,17 @@ func registration(id, adapter, cwd string, alive bool, at UnixMillis) RunnerRegi
 	}
 }
 
+func TestConversationRebindClearsOutcomeMetadata(t *testing.T) {
+	row := Session{ConversationRef: "A", Error: true, Interrupted: true, StatusReported: true}
+	ref := "B"
+	if err := mergeRunnerFacts(&row, RunnerFacts{ConversationRef: &ref}); err != nil {
+		t.Fatal(err)
+	}
+	if row.ConversationRef != "B" || row.Active || row.Error || row.Interrupted || row.StatusReported {
+		t.Fatalf("rebound row retained A outcome: %+v", row)
+	}
+}
+
 func registrationCatalog(t *testing.T, s *Store) ProjectCatalog {
 	t.Helper()
 	cat, _, err := s.ReplaceProjectCatalog(context.Background(), []ProjectEntrySpec{

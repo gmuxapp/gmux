@@ -1030,16 +1030,17 @@ const maxInputBytes = 1 << 20 // 1 MiB
 //
 //	op "ready"            — the agent can accept input (semantic actions)
 //	op "session"          — the bound conversation ref, id, name (on bind)
-//	op "turn" phase start   — the agent loop began (→ active), with the turn's
-//	                          identity (TurnSeq) and Trigger excerpt
-//	op "turn" phase steered — a user message entered the RUNNING loop
-//	                          (text + truncated: whether that text is an excerpt)
+//	op "turn" phase start   — the agent loop began (→ active), with identity,
+//	                          capped user boundary, source bytes and history baseline
+//	op "turn" phase iteration — one assistant response completed
+//	op "turn" phase steered — an additional capped user boundary entered the loop,
+//	                          with its original source-byte length
 //	op "turn" phase end     — the turn settled: Outcome, Output, Truncated,
 //	                          Diagnostic, title
 //
 // The turn events are result-bearing (ADR 0027, 2026-07-28 amendment): a
 // result-bearing adapter asserts its own turn boundary and delivers the turn's
-// outcome, final assistant message and triggering excerpt. The runner relays
+// outcome, final assistant prose and user-bounded activity span. The runner relays
 // those facts in its turn frame (session.TurnFrame) and never reconstructs them
 // from the conversation.
 //
@@ -1058,22 +1059,20 @@ type hookEvent struct {
 	Name    string `json:"name,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Title   string `json:"title,omitempty"`
-	Phase   string `json:"phase,omitempty"`   // "start" | "steered" | "end" (op "turn")
+	Phase   string `json:"phase,omitempty"`   // "start" | "iteration" | "steered" | "end"
 	Outcome string `json:"outcome,omitempty"` // "completed" | "interrupted" | "error"
 
 	// Turn identity and asserted result (op "turn"). TurnSeq is the adapter's
-	// monotonic turn counter binding start, injections and close together; an
+	// monotonic turn counter binding start, additional boundaries and close; an
 	// adapter that does not assert turn identity leaves it 0, and consumers
 	// treat 0 as "unknown" and serve no result for it.
-	TurnSeq uint64 `json:"turn_seq,omitempty"`
-	Trigger string `json:"trigger,omitempty"` // phase start: what began the turn
-	Text    string `json:"text,omitempty"`    // phase steered: the injected message
-	Output  string `json:"output,omitempty"`  // phase end: the turn's final assistant prose
-	// Truncated says the adapter capped what it sent: Output on phase end, Text on
-	// phase steered. On a steered event it is EVIDENCE, not a display detail — it
-	// is the runner's only licence to match the excerpt as a prefix of the text
-	// gmux delivered (see session.matchPendingLocked). Absent means "this is the
-	// whole message", which is what an adapter predating the field also means.
+	TurnSeq           uint64 `json:"turn_seq,omitempty"`
+	Trigger           string `json:"trigger,omitempty"`      // phase start: what began the turn
+	Text              string `json:"text,omitempty"`         // phase steered: the injected message
+	SourceBytes       int    `json:"source_bytes,omitempty"` // start/steered: original UTF-8 byte length
+	PreviousExchanges *int   `json:"previous_exchanges,omitempty"`
+	Output            string `json:"output,omitempty"` // phase end: the turn's final assistant prose
+	// Truncated says the adapter capped terminal Output at the source.
 	Truncated  bool   `json:"truncated,omitempty"`
 	Diagnostic string `json:"diagnostic,omitempty"` // phase end: short reason for a non-completed close
 }
@@ -1118,7 +1117,7 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 		// Cleared before the ref and slug are published so a subscriber that sees
 		// the new conversation can never still see the old result.
 		if ev.Path != "" && ev.Path != priorRef {
-			s.state.ClearTurnFrame()
+			s.state.ClearConversationState()
 		}
 		if ev.Path != "" {
 			s.state.SetConversationRef(ev.Path)
@@ -1163,9 +1162,11 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 		case "start":
 			// One call, one critical section: the turn's identity and the active
 			// edge are published together and in that order.
-			s.state.OpenTurn(ev.TurnSeq, ev.Trigger)
+			s.state.OpenTurnSource(ev.TurnSeq, ev.Trigger, ev.SourceBytes, ev.PreviousExchanges)
 		case "steered":
-			s.state.NoteInjection(ev.TurnSeq, ev.Text, ev.Truncated)
+			s.state.NoteInjection(ev.TurnSeq, ev.Text, ev.SourceBytes)
+		case "iteration":
+			s.state.NoteIteration(ev.TurnSeq)
 		default:
 			s.applyTurnEnd(ev)
 		}

@@ -1,9 +1,6 @@
 package sessioncoord
 
 import (
-	"encoding/json"
-	"strings"
-
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/centralstore"
 )
 
@@ -24,82 +21,38 @@ type TurnFrame struct {
 	Last    *TurnClose   `json:"last,omitempty"`
 }
 
+type TurnExchange struct {
+	Ordinal     uint64 `json:"ordinal"`
+	User        string `json:"user"`
+	SourceBytes int    `json:"source_bytes,omitempty"`
+	Iterations  int    `json:"iterations,omitempty"`
+}
+
 // TurnCurrent is the open turn's identity and inputs so far.
 type TurnCurrent struct {
-	TurnSeq    uint64          `json:"turn_seq"`
-	Trigger    string          `json:"trigger,omitempty"`
-	Injections []TurnInjection `json:"injections,omitempty"`
-	// InjectionCount is the turn's TOTAL number of injections, which never
-	// trims, unlike the bounded Injections list. Novelty is decided against it
-	// (see InjectionsSeen).
-	InjectionCount uint64 `json:"injection_count,omitempty"`
-}
-
-// InjectionsSeen reports how many messages have entered this loop, from the
-// runner's monotonic counter when it sent one and from the retained list
-// otherwise.
-//
-// The fallback is for a runner that predates the counter: its list is bounded
-// too, so a saturated turn can still hide later injections there, but reading
-// the list is strictly better than reading zero — which would make every
-// injection invisible on that runner and hand waiters the merged answer.
-func (c *TurnCurrent) InjectionsSeen() uint64 {
-	if c == nil {
-		return 0
-	}
-	if c.InjectionCount > 0 {
-		return c.InjectionCount
-	}
-	return uint64(len(c.Injections))
-}
-
-// TurnInjection is one user message that entered the running loop: a steer, a
-// follow-up the agent merged into the turn, or a human typing into the TUI.
-//
-// DeliveryID is the identity of the gmux request that delivered it, correlated
-// at the runner. It is empty for an injection gmux did not deliver, and that
-// emptiness is load-bearing: a human grabbing the wheel interrupts every
-// waiter, including one that had just steered.
-type TurnInjection struct {
-	Text       string `json:"text,omitempty"`
-	DeliveryID string `json:"delivery_id,omitempty"`
-}
-
-// UnmarshalJSON accepts the bare excerpt string a runner predating delivery
-// identity sends, as well as the object shape. Refusing it would fail the whole
-// frame's decode and cost every result in it — the loss the frame exists to
-// prevent — so the old shape degrades to "an injection with no identity",
-// which is exactly what it is.
-func (t *TurnInjection) UnmarshalJSON(b []byte) error {
-	if strings.HasPrefix(strings.TrimSpace(string(b)), `"`) {
-		var s string
-		if err := json.Unmarshal(b, &s); err != nil {
-			return err
-		}
-		*t = TurnInjection{Text: s}
-		return nil
-	}
-	type raw TurnInjection
-	var v raw
-	if err := json.Unmarshal(b, &v); err != nil {
-		return err
-	}
-	*t = TurnInjection(v)
-	return nil
+	TurnSeq           uint64         `json:"turn_seq"`
+	PreviousExchanges *int           `json:"previous_exchanges,omitempty"`
+	Exchanges         []TurnExchange `json:"exchanges,omitempty"`
+	OmittedExchanges  int            `json:"omitted_exchanges,omitempty"`
+	OmittedBytes      int            `json:"omitted_bytes,omitempty"`
 }
 
 // TurnClose is a settled turn's asserted result. Output is present only for a
 // completed turn and is omitted rather than empty: absence means the turn
 // produced no prose, never that the transport lost it.
 type TurnClose struct {
-	TurnSeq        uint64          `json:"turn_seq"`
-	Outcome        string          `json:"outcome"`
-	Trigger        string          `json:"trigger,omitempty"`
-	Injections     []TurnInjection `json:"injections,omitempty"`
-	InjectionCount uint64          `json:"injection_count,omitempty"`
-	Output         string          `json:"output,omitempty"`
-	Truncated      bool            `json:"truncated,omitempty"`
-	Diagnostic     string          `json:"diagnostic,omitempty"`
+	TurnSeq uint64 `json:"turn_seq"`
+	Outcome string `json:"outcome"`
+	// Trigger is decoded only for rolling compatibility with pre-exchange
+	// runners, whose close had prose and a trigger but no Exchanges.
+	Trigger           string         `json:"trigger,omitempty"`
+	PreviousExchanges *int           `json:"previous_exchanges,omitempty"`
+	Exchanges         []TurnExchange `json:"exchanges,omitempty"`
+	OmittedExchanges  int            `json:"omitted_exchanges,omitempty"`
+	OmittedBytes      int            `json:"omitted_bytes,omitempty"`
+	Output            string         `json:"output,omitempty"`
+	Truncated         bool           `json:"truncated,omitempty"`
+	Diagnostic        string         `json:"diagnostic,omitempty"`
 }
 
 // CurrentTurnSeq reports the running turn's identity, or 0 when no turn is open
@@ -122,46 +75,6 @@ func (f *TurnFrame) ClosedTurn(turnSeq uint64) *TurnClose {
 		return nil
 	}
 	return f.Last
-}
-
-// TriggerExcerpt is the nil-safe read of an open turn's trigger, so a report can
-// name what the turn was asked to do without every caller re-checking for a
-// frame that does not exist.
-func (c *TurnCurrent) TriggerExcerpt() string {
-	if c == nil {
-		return ""
-	}
-	return c.Trigger
-}
-
-// TriggerExcerpt is the nil-safe read of a settled turn's trigger.
-func (t *TurnClose) TriggerExcerpt() string {
-	if t == nil {
-		return ""
-	}
-	return t.Trigger
-}
-
-// InjectionsSeen is the settled turn's total injection count, with the same
-// list fallback (and the same reason) as the open record's.
-func (t *TurnClose) InjectionsSeen() uint64 {
-	if t == nil {
-		return 0
-	}
-	if t.InjectionCount > 0 {
-		return t.InjectionCount
-	}
-	return uint64(len(t.Injections))
-}
-
-// CurrentTurn returns the open turn's record for turnSeq, or nil when no turn
-// with that identity is open. It is the injection-watch lookup: a waiter asks
-// about the turn IT is bound to, never about "whatever is running".
-func (f *TurnFrame) CurrentTurn(turnSeq uint64) *TurnCurrent {
-	if f == nil || f.Current == nil || turnSeq == 0 || f.Current.TurnSeq != turnSeq {
-		return nil
-	}
-	return f.Current
 }
 
 // setFrame retains a generation's newest frame in registry runtime. It reports

@@ -69,12 +69,8 @@ type command struct {
 	keysLiteral bool     // -l: treat args as literal text, not key names
 	keys        []string // key/text arguments
 
-	// agent logs message-type filter (nil = the daemon's default: user +
-	// prose-bearing agent messages). Explicit type flags replace that set.
-	logTypes []string
-
 	// agent (modeAgent)
-	agentSub    string  // prompt|cancel|status|logs
+	agentSub    string  // prompt|cancel|logs
 	agentMode   string  // prompt|follow_up|steer (prompt verb only)
 	agentNoWait bool    // --no-wait: return at the admission boundary
 	promptText  *string // inline prompt text (nil = read stdin)
@@ -281,14 +277,7 @@ func parseCLI(args []string) (*command, error) {
 	// Agent verbs typed without their namespace get the namespace guide:
 	// `gmux prompt <id> ...` is far more likely a missing `agent` than a
 	// program named prompt.
-	// The removed read verb keeps its own migration line, namespace or not: a
-	// caller typing it is following older docs, and "unknown command" would not
-	// say what replaced it.
-	if head == "output" {
-		return nil, &usageError{topic: "agent", err: errors.New(
-			"agent output was replaced by 'gmux agent status <id>'; for the answer alone use 'gmux agent logs --agent -n 1 <id>'")}
-	}
-	if head == "prompt" || head == "cancel" || head == "status" || head == "logs" {
+	if head == "prompt" || head == "cancel" || head == "logs" {
 		return nil, &usageError{topic: "agent", err: fmt.Errorf(
 			"unknown command %q; agent commands are namespaced: gmux agent %s ... (%s)", head, head, runHint)}
 	}
@@ -511,16 +500,12 @@ func parseWait(args []string) (*command, error) {
 	fs.StringVar(&c.forRegex, "for-regex", "", "wait for a regex match in the session's output")
 	fs.BoolVar(&c.quiet, "quiet", false, "do not print the agent's result; synchronize only")
 	fs.BoolVar(&c.quiet, "q", false, "alias of --quiet")
-	fs.BoolVar(&c.json, "json", false, "print one machine envelope for the resolution instead of answer-plus-report")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return nil, err
 	}
 	if len(pos) != 1 {
 		return nil, errors.New("wait requires a session id")
-	}
-	if err := refuseJSONWithQuiet(c.json, c.quiet, "wait"); err != nil {
-		return nil, err
 	}
 	if c.timeout < 0 {
 		return nil, errors.New("--timeout must be a non-negative number of seconds")
@@ -537,18 +522,6 @@ func parseWait(args []string) (*command, error) {
 	}
 	c.ref = pos[0]
 	return c, nil
-}
-
-// refuseJSONWithQuiet rejects `--json --quiet`. They are opposite answers to the
-// same question — one asks for the complete machine account, the other for no
-// output at all — and every resolution of the conflict silently ignores half of
-// what the caller asked for. The exit code alone is available without either
-// flag, so the caller who wants only a verdict has already got it.
-func refuseJSONWithQuiet(asJSON, quiet bool, verb string) error {
-	if asJSON && quiet {
-		return fmt.Errorf("%s: --json and --quiet ask for opposite things (the whole machine account, and no output at all); the exit code alone needs neither flag", verb)
-	}
-	return nil
 }
 
 // parseEdit handles `gmux edit [file]`: at most one file path. The verb

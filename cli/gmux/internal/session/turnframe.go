@@ -1,10 +1,6 @@
 package session
 
 import (
-	"encoding/json"
-	"strings"
-	"unicode"
-
 	"github.com/gmuxapp/gmux/packages/adapter"
 )
 
@@ -39,72 +35,32 @@ type TurnFrame struct {
 }
 
 // TurnCurrent is the open turn's identity and inputs so far.
+type TurnExchange struct {
+	Ordinal     uint64 `json:"ordinal"`
+	User        string `json:"user"`
+	SourceBytes int    `json:"source_bytes,omitempty"`
+	Iterations  int    `json:"iterations,omitempty"`
+}
+
 type TurnCurrent struct {
 	TurnSeq uint64 `json:"turn_seq"`
-	// Trigger is the excerpt of what started the turn.
-	Trigger string `json:"trigger,omitempty"`
-	// Injections are the user messages that entered the running loop after it
-	// started (steers, and follow-ups pi merged into the loop). They accumulate
-	// across the run: each one changes what the turn's answer means. The list is
-	// BOUNDED (maxTurnInjections) and keeps the newest, so it is report material,
-	// not a count.
-	Injections []TurnInjection `json:"injections,omitempty"`
-	// InjectionCount is how many messages have entered this loop in total, and it
-	// never trims. Novelty is decided against this number rather than against
-	// len(Injections): once the bounded list saturates, its length stops growing,
-	// and a length-based baseline would make every later injection invisible to a
-	// wait that armed at that point — which would serve it the merged answer under
-	// exit 0, the one direction this rule may not fail in.
-	InjectionCount uint64 `json:"injection_count,omitempty"`
-}
-
-// TurnInjection is one user message that entered a running loop.
-//
-// DeliveryID is the identity of the gmux request that delivered it, correlated
-// at the runner (see State.NotePendingInjection). It is what lets an injecting
-// caller be excluded from the interruption its own steer causes: the injector
-// may claim the merged close only while its message is the loop's LAST
-// injection (ADR 0027, "Steering interrupts waits"). It is empty for an
-// injection gmux did not deliver — a human typing into the TUI, or raw `gmux
-// send` — which is exactly the case that interrupts every waiter.
-type TurnInjection struct {
-	Text       string `json:"text,omitempty"`
-	DeliveryID string `json:"delivery_id,omitempty"`
-}
-
-// UnmarshalJSON accepts both the object shape and the bare excerpt string a
-// runner predating delivery identity sends. The lenient direction is the one
-// that matters: a frame that failed to decode wholesale would cost every result
-// in it, which is the loss the frame exists to prevent.
-func (t *TurnInjection) UnmarshalJSON(b []byte) error {
-	if strings.HasPrefix(strings.TrimSpace(string(b)), `"`) {
-		var s string
-		if err := json.Unmarshal(b, &s); err != nil {
-			return err
-		}
-		*t = TurnInjection{Text: s}
-		return nil
-	}
-	type raw TurnInjection
-	var v raw
-	if err := json.Unmarshal(b, &v); err != nil {
-		return err
-	}
-	*t = TurnInjection(v)
-	return nil
+	// PreviousExchanges is the active branch's exchange count before this
+	// activity. It permits boundary-based persistence reconciliation.
+	PreviousExchanges *int `json:"previous_exchanges,omitempty"`
+	// Exchanges is the source-observed, user-bounded activity span.
+	Exchanges        []TurnExchange `json:"exchanges,omitempty"`
+	OmittedExchanges int            `json:"omitted_exchanges,omitempty"`
+	OmittedBytes     int            `json:"omitted_bytes,omitempty"`
 }
 
 // TurnClose is a settled turn's asserted result.
 type TurnClose struct {
-	TurnSeq uint64 `json:"turn_seq"`
-	Outcome string `json:"outcome"`
-	// Trigger/Injections are carried over from the turn's open record so a
-	// report can name what the closed turn was asked to do.
-	Trigger    string          `json:"trigger,omitempty"`
-	Injections []TurnInjection `json:"injections,omitempty"`
-	// InjectionCount is the closed turn's total injection count, carried over
-	// from its open record for the same reason it exists there.
-	InjectionCount uint64 `json:"injection_count,omitempty"`
+	TurnSeq           uint64         `json:"turn_seq"`
+	Outcome           string         `json:"outcome"`
+	PreviousExchanges *int           `json:"previous_exchanges,omitempty"`
+	Exchanges         []TurnExchange `json:"exchanges,omitempty"`
+	OmittedExchanges  int            `json:"omitted_exchanges,omitempty"`
+	OmittedBytes      int            `json:"omitted_bytes,omitempty"`
 	// Output is the settled turn's final assistant prose, present only for a
 	// completed turn and OMITTED (never empty) when the turn produced none: an
 	// absent output means a tool-only turn, never transport loss.
@@ -116,18 +72,9 @@ type TurnClose struct {
 	Diagnostic string `json:"diagnostic,omitempty"`
 }
 
-// maxTurnInjections bounds the frame: a turn steered a pathological number of
-// times must not grow the runner's memory without limit. The newest injections
-// are the ones that matter (the last injection is the one that owns the
-// answer), so the oldest are dropped.
-const maxTurnInjections = 64
-
-// maxPendingInjections bounds the correlation window (see
-// NotePendingInjection). Semantic deliveries into one running turn are
-// serialized by the runner's delivery slot and acknowledged within a message
-// round trip, so the queue is short by construction; the cap only stops a
-// pathological caller from growing it.
-const maxPendingInjections = 8
+// maxLiveInstructions bounds the retained activity span. Together with the
+// opening boundary this keeps the newest 65 exchanges.
+const maxLiveInstructions = 64
 
 // turnEdge is the wire payload of a turn edge: a status transition and the turn
 // frame that transition belongs to, in ONE event.
@@ -154,16 +101,16 @@ type turnEdge struct {
 // event: a subscriber can never see the active edge without the turn identity
 // that edge belongs to (it would then have no seq to match the close against and
 // would resolve result-free), and never the identity without the edge.
-func (s *State) OpenTurn(turnSeq uint64, trigger string) {
+func (s *State) OpenTurn(turnSeq uint64, trigger string, sourceBytes int) {
+	s.OpenTurnSource(turnSeq, trigger, sourceBytes, nil)
+}
+
+// OpenTurnSource retains source facts asserted before user-boundary capping.
+func (s *State) OpenTurnSource(turnSeq uint64, trigger string, sourceBytes int, previousExchanges *int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// A delivery still armed when a turn STARTS was the thing that started it:
-	// its text is this turn's trigger, not an injection into it, so the
-	// correlation window closes here rather than waiting to match a message that
-	// can no longer arrive.
-	s.pendingInjections = nil
 	frame := s.publishFrameLocked(&TurnFrame{
-		Current: &TurnCurrent{TurnSeq: turnSeq, Trigger: trigger},
+		Current: &TurnCurrent{TurnSeq: turnSeq, PreviousExchanges: previousExchanges, Exchanges: []TurnExchange{{Ordinal: 1, User: trigger, SourceBytes: sourceBytes}}},
 		Last:    s.lastClosedLocked(),
 	})
 	status := &adapter.Status{Active: true}
@@ -174,180 +121,51 @@ func (s *State) OpenTurn(turnSeq uint64, trigger string) {
 }
 
 // NoteInjection records a user message that entered the running loop. It
-// applies only to the turn it names: an injection reported against a turn that
-// has already closed (or against a different one) is stale and dropped rather
-// than attached to the wrong answer.
-// The injection is correlated with a pending semantic delivery (by the text the
-// adapter reported, see matchPendingLocked) so the request that injected it can
-// tell its own message from somebody else's. excerpted is the adapter's own
-// assertion that `text` is a capped prefix of the message rather than the whole
-// of it — the one thing that licenses a prefix comparison.
-func (s *State) NoteInjection(turnSeq uint64, text string, excerpted bool) {
+// applies only to the turn it names: a message for a closed or different turn
+// is stale and is dropped. sourceBytes is the uncapped UTF-8 byte length
+// asserted by the adapter; it keeps omission accounting exact.
+func (s *State) NoteInjection(turnSeq uint64, text string, sourceBytes int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur := s.currentTurnLocked()
 	if cur == nil || cur.TurnSeq != turnSeq || text == "" {
 		return
 	}
-	next := &TurnCurrent{TurnSeq: cur.TurnSeq, Trigger: cur.Trigger, InjectionCount: cur.InjectionCount + 1}
-	inj := TurnInjection{Text: text, DeliveryID: s.matchPendingLocked(text, excerpted)}
-	next.Injections = append(append([]TurnInjection(nil), cur.Injections...), inj)
-	if len(next.Injections) > maxTurnInjections {
-		next.Injections = next.Injections[len(next.Injections)-maxTurnInjections:]
+	next := &TurnCurrent{TurnSeq: cur.TurnSeq, PreviousExchanges: cur.PreviousExchanges,
+		Exchanges: append([]TurnExchange(nil), cur.Exchanges...), OmittedExchanges: cur.OmittedExchanges, OmittedBytes: cur.OmittedBytes}
+	ordinal := uint64(1)
+	if n := len(next.Exchanges); n > 0 {
+		ordinal = next.Exchanges[n-1].Ordinal + 1
 	}
-	// No status transition accompanies an injection: the turn was already active
-	// and stays active, so this is the one frame update that travels alone. A
-	// dropped injection costs a report detail, never an attribution.
+	next.Exchanges = append(next.Exchanges, TurnExchange{Ordinal: ordinal, User: text, SourceBytes: sourceBytes})
+	// No status transition accompanies an additional user boundary: the activity
+	// stays open, so this frame update travels alone.
+	if len(next.Exchanges) > maxLiveInstructions+1 {
+		dropped := next.Exchanges[0]
+		next.Exchanges = next.Exchanges[1:]
+		next.OmittedExchanges++
+		if dropped.SourceBytes > 0 {
+			next.OmittedBytes += dropped.SourceBytes
+		} else {
+			next.OmittedBytes += len([]byte(dropped.User))
+		}
+	}
 	s.emitFrameLocked(s.publishFrameLocked(&TurnFrame{Current: next, Last: s.lastClosedLocked()}))
 }
 
-// NotePendingInjection arms the correlation window for one semantic delivery:
-// gmux wrote `text` to the agent's composer on behalf of the request identified
-// by deliveryID, and if that text turns up as an injection on the running loop,
-// the injection MAY be that request's — see matchPendingLocked for when gmux is
-// willing to say so.
-//
-// What this is NOT: a cryptographic identity carried through the agent. pi's
-// injection report contains the message text and nothing else, so the only
-// evidence available is textual, and text cannot prove which source produced
-// identical text. The correlation is therefore deliberately conservative and
-// biased toward refusing to answer: an ambiguous report is attributed to nobody,
-// and the injectors involved report an indeterminate result rather than one of
-// them claiming a close its own text may never have entered.
-func (s *State) NotePendingInjection(deliveryID, text string) {
-	if deliveryID == "" {
-		return
-	}
+// NoteIteration records one completed assistant/model response in the latest
+// visible exchange. It is a frame-only update: activity remains open.
+func (s *State) NoteIteration(turnSeq uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pendingInjections = append(s.pendingInjections, TurnInjection{Text: normalizeExcerpt(text), DeliveryID: deliveryID})
-	if len(s.pendingInjections) > maxPendingInjections {
-		s.pendingInjections = s.pendingInjections[len(s.pendingInjections)-maxPendingInjections:]
-	}
-}
-
-// DropPendingInjection withdraws a delivery whose write did not go out whole.
-// Nothing of it reached the loop, so leaving it armed could only mis-attribute
-// somebody else's later message to this request.
-func (s *State) DropPendingInjection(deliveryID string) {
-	if deliveryID == "" {
+	cur := s.currentTurnLocked()
+	if cur == nil || cur.TurnSeq != turnSeq || len(cur.Exchanges) == 0 {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	kept := s.pendingInjections[:0]
-	for _, p := range s.pendingInjections {
-		if p.DeliveryID != deliveryID {
-			kept = append(kept, p)
-		}
-	}
-	s.pendingInjections = kept
-}
-
-// matchPendingLocked consumes and returns the delivery id of the pending
-// delivery the adapter's injection report UNAMBIGUOUSLY names, or "" when there
-// is no such delivery. Caller must hold s.mu.
-//
-// Two rules, and both exist because the alternative fails in the one direction
-// this design promises never to fail — a caller being served a close its text
-// may never have entered:
-//
-//   - MATCHING IS EXACT, unless the adapter SAYS it truncated. Applying prefix
-//     tolerance unconditionally let any SHORTER message consume a longer pending
-//     delivery's identity: a human typing "stop" while "stop and say kiwi" was in
-//     flight would be recorded as that caller's injection, and the caller — now
-//     "acknowledged and last" — would be handed the merged answer under exit 0,
-//     which is precisely the settle-before-ack case that must read as
-//     indeterminate.
-//
-//     `excerpted` is the adapter's explicit flag on the injection event, not a
-//     shape read off the text. Sniffing the trailing ellipsis instead cannot
-//     distinguish a capped excerpt from a message that merely ends in one, so a
-//     foreign message ending in "…" — typed, pasted, or emitted by another tool —
-//     could still buy itself the prefix rule and steal an in-flight delivery's
-//     identity. The adapter is the only party that knows whether it capped, so it
-//     is the party that says so.
-//
-//   - MATCHING MUST BE UNIQUE. If two pending deliveries could explain the same
-//     report (identical texts, or a truncated excerpt that prefixes both), the
-//     report names nobody: no id is assigned and nothing is consumed. Both
-//     injectors then resolve indeterminate and every bystander is interrupted by
-//     an id-less injection. Ambiguity always degrades toward "nobody claims the
-//     close", never toward an arbitrary first match, because a first match is a
-//     coin flip on whose answer this is.
-//
-// The irreducible residue is a human typing text byte-identical to an in-flight
-// steer at that same moment: pi reports one message with one text, and no
-// evidence exists that could separate them. That is accepted and recorded in
-// ADR 0027 rather than papered over.
-func (s *State) matchPendingLocked(text string, excerpted bool) string {
-	reported := normalizeExcerpt(text)
-	if reported == "" {
-		return ""
-	}
-	// Only a report the adapter FLAGGED as capped is compared as a prefix, and
-	// only then is its ellipsis marker stripped: on an unflagged report the
-	// ellipsis is part of the message, and trimming it would compare a string the
-	// agent never saw.
-	prefix := reported
-	if excerpted {
-		prefix = strings.TrimSuffix(reported, excerptEllipsis)
-		if prefix == "" {
-			return ""
-		}
-	}
-	match := -1
-	for i, p := range s.pendingInjections {
-		var names bool
-		if excerpted {
-			names = strings.HasPrefix(p.Text, prefix)
-		} else {
-			names = p.Text == reported
-		}
-		if !names {
-			continue
-		}
-		if match >= 0 {
-			// Ambiguous. Consume nothing: leaving both records armed keeps them
-			// available for a later report that IS unambiguous, and costs only
-			// the (already safe) indeterminate answer in the meantime.
-			return ""
-		}
-		match = i
-	}
-	if match < 0 {
-		return ""
-	}
-	id := s.pendingInjections[match].DeliveryID
-	s.pendingInjections = append(s.pendingInjections[:match:match], s.pendingInjections[match+1:]...)
-	return id
-}
-
-// excerptEllipsis is the marker the adapter appends to an excerpt it capped. It
-// is a DISPLAY detail: what licenses a prefix comparison is the adapter's
-// explicit truncation flag, and this constant only strips the marker back off
-// before comparing a flagged excerpt against the delivered text.
-const excerptEllipsis = "\u2026"
-
-// normalizeExcerpt mirrors the adapter's excerpt normalization so both sides of
-// the correlation compare the same string.
-//
-// "Mirrors" is a contract, not a coincidence, and the two runtimes disagree by
-// default: JavaScript's \s matches U+FEFF but not U+0085, while Go's
-// unicode.IsSpace matches U+0085 but not U+FEFF. Both sides therefore collapse
-// the UNION (see pi-ext.mjs's excerpt()), so a prompt containing either
-// character still correlates instead of silently degrading its injector to an
-// indeterminate result.
-func normalizeExcerpt(s string) string {
-	return strings.Join(strings.FieldsFunc(s, isExcerptSpace), " ")
-}
-
-// NormalizeExcerpt exposes that normalization so the adapter-side test can pin
-// the two runtimes against each other rather than against a copy of the rule.
-func NormalizeExcerpt(s string) string { return normalizeExcerpt(s) }
-
-func isExcerptSpace(r rune) bool {
-	return unicode.IsSpace(r) || r == '\uFEFF'
+	next := *cur
+	next.Exchanges = append([]TurnExchange(nil), cur.Exchanges...)
+	next.Exchanges[len(next.Exchanges)-1].Iterations++
+	s.emitFrameLocked(s.publishFrameLocked(&TurnFrame{Current: &next, Last: s.lastClosedLocked()}))
 }
 
 // CloseTurnFrame atomically records a settled turn's asserted result and closes
@@ -390,13 +208,13 @@ func (s *State) CloseTurnFrame(close TurnClose, status *adapter.Status) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Whatever was armed can no longer enter this loop.
-	s.pendingInjections = nil
 	if cur := s.currentTurnLocked(); cur != nil && cur.TurnSeq == close.TurnSeq {
 		// Carry the turn's inputs into the close record so a report can say
 		// what the closed turn was asked to do without a second lookup. The count
 		// travels with them: a waiter that only learns of a steer at the close
 		// decides novelty the same way it would have live.
-		close.Trigger, close.Injections, close.InjectionCount = cur.Trigger, cur.Injections, cur.InjectionCount
+		close.PreviousExchanges = cur.PreviousExchanges
+		close.Exchanges, close.OmittedExchanges, close.OmittedBytes = cur.Exchanges, cur.OmittedExchanges, cur.OmittedBytes
 	}
 	frame := s.publishFrameLocked(&TurnFrame{Last: &close})
 	if s.Status == nil || !s.Status.Active {
@@ -416,10 +234,8 @@ func (s *State) CloseTurnFrame(close TurnClose, status *adapter.Status) bool {
 //
 // When such a write closes an open turn it ABANDONS the frame's current record
 // rather than leaving it. A frame that still advertises `current: {turn_seq: N}`
-// on an idle session is a lie about the present, and one that grows teeth: the
-// injection path gates on `current` (so a later steer would attach to a turn
-// nobody is running), and the report verbs read its trigger/injections. The
-// `last` record is deliberately untouched — this writer asserted no result, and
+// on an idle session is a lie about the present. The `last` record is
+// deliberately untouched — this writer asserted no result, and
 // inventing a close record for it would put a turn_seq into `last` that some
 // waiter could match against an answer that does not exist.
 //
@@ -446,15 +262,14 @@ func (s *State) SetStatusAbandoningTurn(status *adapter.Status) {
 	s.emitTurnEdgeLocked(status, s.publishFrameLocked(&TurnFrame{Last: s.lastClosedLocked()}))
 }
 
-// ClearTurnFrame drops both records. The frame is conversation-local, not
-// merely generation-local: an authoritative rebind (pi switch/new/resume/fork)
-// makes the previous conversation's answer unattributable under the new ref, so
-// it is cleared atomically and ordered AHEAD of the rebind's own events. A late
-// subscriber can then never read the old conversation's result as the new one's.
-func (s *State) ClearTurnFrame() {
+// ClearConversationState drops every conversation-local runtime fact before an
+// authoritative rebind is published. Outcome status and the frame must move
+// together: retaining either can classify conversation B with conversation A's
+// failed/interrupted close.
+func (s *State) ClearConversationState() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pendingInjections = nil
+	s.Status = nil
 	if s.turnFrame == nil || (s.turnFrame.Current == nil && s.turnFrame.Last == nil) {
 		return
 	}
@@ -507,7 +322,7 @@ func ReplayTurnEdge(status *adapter.Status, frame *TurnFrame) (typ string, paylo
 		return "status", turnEdge{Status: status, Frame: frame}, true
 	case frame != nil:
 		// No status was ever reported, so there is no edge to couple the frame
-		// to; it still travels, the way an injection or a rebind clear does.
+		// to; it still travels, the way a boundary update or rebind clear does.
 		return "turn_frame", frame, true
 	}
 	return "", nil, false
