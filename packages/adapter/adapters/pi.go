@@ -36,6 +36,10 @@ var (
 // prompt — so a verb missing here means `gmux -- pi <verb>` silently starts a
 // chat instead of running the command. Keep synced with `pi --help`.
 var piSubcommands = map[string]bool{
+	// auth was added after pi 0.82.1. Keeping it in the passthrough superset is
+	// harmless with older pi (where it is not a valid command) and prevents a
+	// newer pi's one-shot auth flow from being silently demoted to a chat prompt.
+	"auth":      true,
 	"install":   true,
 	"remove":    true,
 	"uninstall": true,

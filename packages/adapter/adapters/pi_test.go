@@ -15,7 +15,9 @@ import (
 )
 
 // TestPiSubcommandsMatchHelp is a drift-guard against real pi: it parses the
-// Commands block of `pi --help` and asserts it exactly matches piSubcommands.
+// Commands block of `pi --help` and asserts every advertised command is in our
+// passthrough set. Forward-compatible entries may remain in the set while CI's
+// installed pi is older than the release that introduced them.
 // This is the detector for the highest-risk drift — pi adding or renaming a
 // subcommand — which IsPassthrough would otherwise miss, silently demoting
 // `gmux -- pi <newverb>` to a chat prompt. CI runs it against pi@latest (PRs +
@@ -45,8 +47,12 @@ func TestPiSubcommandsMatchHelp(t *testing.T) {
 			t.Errorf("pi added subcommand %q not in piSubcommands — `gmux -- pi %s` would be demoted to a prompt; add it (pi.go)", verb, verb)
 		}
 	}
+	// `auth` first appears after pi 0.82.1. CI intentionally exercises multiple
+	// pi versions, so the production set is a forward-compatible superset rather
+	// than requiring every older help page to advertise every known command.
+	forwardCompatible := map[string]bool{"auth": true}
 	for verb := range piSubcommands {
-		if !got[verb] {
+		if !got[verb] && !forwardCompatible[verb] {
 			t.Errorf("piSubcommands has %q but `pi --help` no longer lists it — remove it (pi.go)", verb)
 		}
 	}
